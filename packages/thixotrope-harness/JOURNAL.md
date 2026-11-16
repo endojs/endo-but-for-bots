@@ -2268,3 +2268,41 @@ Evidence: J-9040..J-9050. Design consequences for the next design step (designs/
    "crashed while resuming" lines, which name the vat being waited for.
 Decision: for the next design step (architecture sections 2 D-5, 6, 9, 11 and the browser client).
 
+
+### J-9070 2026-11-16 PM spec - deviation
+Evidence: the plan (`designs/architecture.md`, `designs/milestones.md`) was written before M0 and
+still carried guessed causes (JS base64 and the polyfill decoder as the inbound cost; a `boot.rs`
+static-install defect for CORE-1a), unset settings ("until S1"), and budgets M0 measured against.
+Brought into line with J-0100..J-0198 and J-9000..J-9051; the measured summary is the new
+`designs/m0-results.md` (settings and margins, inbound causes, every change outside the harness by
+commit, confirmed decisions, PR 1667 semantics, core candidates C-1..C-15 with their cost to the
+harness, and the performance table). No measurement was taken for this entry; no code changed.
+Budget changes, each with old and new value and evidence in the "Changes after M0" table of
+`milestones.md`: tightened where M0 showed large slack (session create with a spare 1.5 s -> 750 ms
+and `exec.first` 1.5 s -> 750 ms, take 157-176 ms, J-9045; factory install 30 s -> 15 s, 11.6-14.0 s,
+J-0193; `template.start` 20 s -> 10 s, 5.6 s, J-9045). Kept and marked "depends on C-n" where a core
+defect is the cause: session create without pool 6 s (C-5; 6.4 s), `vat.evaluateProgram` 2 s (C-5;
+2.2-2.3 s), `exec.sends` 100 answered 8 s (C-7; 9.4-10.6 s in S1), restart with a crashing vat 15 s
+(C-8, C-9; 36-69 s). The restart budget is split into a healthy-restart gate (4.4-5.8 s measured) and
+the recorded crashing case. New bound: session program bundle <= 200 KB (cold create cost per byte,
+J-9045).
+Decision: plan updated in place (architecture sections 0, 1.1, 2 with new D-17, 3, 4.3, 4.4, 6, 7,
+9, 10, 11, 12 with new rules 12.10 and 12.11, 13 with decisions 16-18; milestones M0 marked done
+with its commit ranges, M1a with a first unit W1a.0 interface contract and its parallel order, M1a
+acceptance 8-10, M1b acceptance 10-11, M2, M3, M9 touch-ups, "Changes after M0" table); README
+rewritten for how the tooling works now.
+
+### J-9071 2026-11-16 PM spec - awkward
+Evidence: three design points found while writing the plan update, from code read, not measured.
+(1) The worker facade and controller (`pkg/src/core/daemon.js` `makeWorkerFacadeResource`,
+`makeWorkerAdmin`) offer `evaluate`, `retire`, `wake`, `sleep`, start notices and no failure
+reading, so a session cannot tell an exec vat that halted from one given up after crashes (J-9049
+read the `failure` text through the operator's `status()`); the exec scope-loss text therefore names
+both causes (architecture section 6) instead of the split J-9051 item 3 proposed. (2) Model-written
+tool arguments and provider JSON would become vat records with data-dependent keys if passed as
+objects; the plan now passes them as JSON text (architecture 4.3, section 9, rule 12.10), and the
+gateway refuses records with keys the method's declared shape does not name (section 7), because an
+exo guard runs only after decoding (J-0191). (3) A session vat given up after repeated crashes has
+no reinstate path (C-11); the factory keeps its row as `lost` and only `deleteSession` frees it.
+Decision: as written; (1) becomes a precise message if core adds a failure reading to the facade;
+(3) is open decision 17 for the owner and the core owner.

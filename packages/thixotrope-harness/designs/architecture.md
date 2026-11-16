@@ -1,9 +1,11 @@
 # Architecture: the Endo daemon harness on Thixotrope
 
-Status: plan, 2026-11-16. Author: architect step of the harness build workflow.
-Inputs: the six survey reports in `scratchpad/thix/survey/` (core, native, apps, tooling, reuse,
-spec-digest), the feasibility and coverage reviews in `scratchpad/thix/plan/critique-*.md` with the
-probe `scratchpad/thix/critique/probe.mjs`, spec Part I sections 1, 4 and 10, Appendix A.4 and
+Status: plan for M1a onward. M0 (groundwork) is built; its measurements are summarised in
+`m0-results.md` and recorded in `../JOURNAL.md` (entries J-0100..J-0198, J-9000..J-9051), and the facts,
+core changes, limits and budgets below are the measured ones.
+Inputs: the six survey reports in `survey/` (core, native, apps, tooling, reuse,
+spec-digest), the feasibility and coverage reviews `review-feasibility.md` and `review-coverage.md` with the
+probe `survey/feasibility-probe.mjs`, spec Part I sections 1, 4 and 10, Appendix A.4 and
 Appendix F of `endo-harness-spec.md` (called SPEC). Thixotrope paths are relative to
 `/Users/xyz/Development/endo-thixotrope-harness` (called T). `pkg/` = `packages/thixotrope/`.
 Endo reference paths are read from T's object store with `git -C T show 1315bef86:<path>`
@@ -14,55 +16,86 @@ Guesses are marked [inferred]. Decisions are numbered D-1.. so milestones and th
 
 ## 0. The facts that shape everything
 
-Measured (tooling.md section 4, native.md section 0, reuse.md section 3.2, the feasibility probe) and
-confirmed in code.
+Measured in the survey (tooling.md section 4, native.md section 0, reuse.md section 3.2, the
+feasibility probe) and in M0 (`m0-results.md`; journal entry ids in brackets), and confirmed in code.
+Numbers are for the release worker at the harness crank budget of 50 M.
 
-1. **A durable crank costs about 65 ms (82 ms in a workspace vat), one at a time per vat.** About
-   50 ms of it is the worker's full GC after every crank
-   (`rust/thixotrope-ironhorse-worker/src/main.rs:185-190,240-265`); treated as fixed (journal asks
-   whether a conditional GC is the largest available core speed-up). One vat handles about 15
-   deliveries per second. Pipelining gains nothing. An answered `E()` costs a second delivery when
-   the answer comes back; `E.sendOnly` does not.
-2. **Every byte of a message into a vat is decoded twice in metered JavaScript, and the decode can
-   halt the vat for good.** Inbound frames arrive as base64 inside JSON and are decoded by
-   `decodeBase64` (`pkg/src/core/worker-peer-xs.js:79`). `@endo/base64` uses the native
-   `Uint8Array.fromBase64` only if it exists when the module loads
-   (`packages/base64/src/decode.js:86,160`); in a vat it is `undefined` although the VM implements it
-   (`rust/engine/ironhorse-vm/src/interp/boot.rs:800-808`) and SES permits it
-   (`packages/ses/src/permits.js:1341`), so the pure-JS loop runs. Each Syrup string is then decoded
-   by the polyfill `TextDecoder` (`rust/endo/xsnap/src/polyfills.js:106-160`), which builds the
-   result with `out += String.fromCharCode(...)` per code point (line 156) and ignores `{fatal}` and
-   `{stream}`. With no GC inside a crank the polyfill is quadratic in heap: 16-20 k characters
-   quarantine the vat (`pkg/src/core/evaluate-source.js:4-10`). Even a linear JS decoder is metered
-   at about 100-150 computrons per byte, and the JS base64 loop at about 75-100: at the default
-   10 M-computron budget a linear UTF-8 decode alone halted at 96 KiB and the base64 decode alone at
-   128 KiB, and an array of 8 strings of 4,096 characters halted today (feasibility review B-1).
-   The ceiling is per frame, not per string. **Outbound frames are metered too**: a vat returning
-   60 k characters worked, 250 k killed it (the encoder is a JS loop, `polyfills.js:22-70`).
-3. **A crank is bounded by the crank budget (default 10 M computrons, about 600 k loop iterations)
-   and the heap ceilings; going over quarantines the vat for good**
-   (`pkg/src/ironhorse/ironhorse-limits.js:45-51`). The budget is a daemon-wide setting
-   (`THIXOTROPE_CRANK_BUDGET`, README 704-748) that may change in either direction across restarts.
-   More than about 250 eventual sends in one crank also MeterAborts at the default budget.
-4. **Answers owed by the host or an adapter break after a restart; guest-to-guest promises
-   survive.** At startup the hub forgets stale transient sessions (`pkg/src/core/daemon.js:825`) and
-   breaks every pending answer they owed with "ocapn hub: the target session has been retired"
-   (`pkg/src/net/hub.js:1932-1947`; also :1522, :1968); each break is a delivery that wakes the waiting vat. The error
-   text is the only discriminator. Sends to objects of a retired session break silently for
-   `E.sendOnly` (tombstoned rows, `hub.js:1917-1931`).
-5. **Startup replays every worker whose journal runs past its last snapshot**
+1. **A durable crank costs about 56 ms, one at a time per vat.** The ping floor is 55-57 ms
+   (J-0193, J-9024), about 44 ms of it engine time, most of that the worker's full GC after every
+   crank (`rust/thixotrope-ironhorse-worker/src/main.rs:185-190,240-265`; not re-measured in M0,
+   core candidate C-7). One vat handles about 15-18 deliveries per second. Pipelining gains nothing
+   (8 pipelined inbound frames cost what 8 separate calls cost, J-0142). An answered `E()` costs a
+   second delivery when the answer comes back (100 answered sends from one crank take 9.4-10.6 s
+   until every answer is back, J-0143); `E.sendOnly` does not. vat -> adapter -> vat costs 70-76 ms
+   per answered call; an adapter hop through the hub with no vat 20-25 ms (J-0161, J-9043).
+2. **Every byte of a message into a vat is hardened, and one message above about 94 KB halts the vat
+   for good.** The pipe hardens each inbound frame's bytes (`pkg/src/net/pipe-network.js` `deliver`);
+   SES `harden` allocates one descriptor object per byte. Inbound costs about 10 us per byte at steady
+   state (24 KiB in 312 ms including the floor; 16 / 32 / 48 / 64 KiB in 255 / 451 / 640 / 829 ms), and
+   a single message halts with `HeapExhausted` above 94,208 bytes at 50 M, on a fresh vat and on a vat
+   whose name table is full alike; at 10 M the meter halts first at about 51 KB (J-0190, J-0193,
+   J-0194). The ceiling is per message, not per string: 8 or 32 strings halt within 1 KB of one string
+   (J-0141). Base64 and UTF-8 decoding are native since M0 and cost almost nothing (J-0101, J-0110);
+   the cost the plan first blamed on them was the engine interning one property name per frame byte
+   inside `harden`, fixed in core (`d0fd6b1138`, J-0190; `m0-results.md` page 2). **Outbound is cheap**:
+   a vat returns 4 MiB in one answer, and 8 x 64 KiB `sendOnly` in one crank take about 560 ms; the
+   only outbound wall found is the control socket's 8 MiB frame (`pkg/src/control/local-control.js:15`)
+   (J-0142). A message one vat sends to another is that vat's inbound frame.
+3. **A crank is bounded by the crank budget and the heap ceilings; going over quarantines the vat for
+   good** (`pkg/src/ironhorse/ironhorse-limits.js:45-51`). The harness runs at 50 M computrons
+   (`config/defaults.js`, chosen by S1): a runaway loop ends in about 240-270 ms; above 50 M the heap
+   halts first, so a larger budget buys nothing (J-0143). The budget is daemon-wide
+   (`THIXOTROPE_CRANK_BUDGET`) and may be lowered only after a clean shutdown (`scripts/serve.mjs`
+   refuses otherwise). Answered sends halt at 250 per crank on a fresh vat and 300 on a used one
+   (`HeapExhausted`); `sendOnly` at 600 (J-0143, J-0194).
+4. **Each vat has a permanent table of about 57,000 property names** (J-0191). Every fresh record key
+   a vat ever receives or creates takes one for the vat's life (54,378 remain after a 250 k program);
+   when they run out the crank throws, the vat halts and is retired (core `63927edaba`; before it, the
+   vat silently stopped answering). A record with 1,500 fresh keys also costs about 700 ms to decode.
+   No data-dependent record key may cross into a vat (rule 12.10).
+5. **Answers owed by the host or an adapter break after a restart; guest-to-guest promises survive
+   with one exception.** At startup the hub forgets stale transient sessions
+   (`pkg/src/core/daemon.js:825`) and breaks every pending answer they owed with "ocapn hub: the target
+   session has been retired" (`pkg/src/net/hub.js:1932-1947`; also :1522, :1968); each break is a
+   delivery that wakes the waiting vat, and it is delivered **during startup, before the supervisor
+   reports serving** (S2, J-0160, J-9043). The error text is the only discriminator, and it is also
+   what every caller of a halted or given-up vat sees (fact 7). Sends to objects of a retired session
+   break silently for `E.sendOnly` (tombstoned rows, `hub.js:1917-1931`). The exception: a
+   guest-to-guest call pending into a vat that is given up during startup never breaks (J-9048, core
+   candidate C-10).
+6. **Startup replays every worker whose journal runs past its last snapshot**
    (`pkg/src/core/daemon.js:826-847`), independent of the application. Vats checkpoint at idle sleep
    (default 30 s, configurable as `idleSleepMs`, `pkg/src/control/supervisor.js:141`), every 256
-   deliveries, or clean shutdown.
-6. **Guests have no clock, randomness, timers, URL, fetch, console, WeakRef, and cannot pass bytes**
+   deliveries, or clean shutdown. A checkpointed sleeping vat costs startup about 1-17 ms and is not
+   woken (healthy restart with 50 sleeping vats 5.3 s, J-9045); an unsnapshotted suffix is replayed,
+   and repeated crashes make it grow (restart 11 -> 18 s over 24 SIGKILLs with idle sleep 1 h, J-9044,
+   J-0166).
+7. **A vat whose worker crashes is retried; one that halts is not** (upstream PR 1667, J-9040). A halt
+   (`MeterAbort`, `HeapExhausted`, name-table exhaustion) quarantines the vat at once. A crash (a
+   signal the host did not send, or a missed 60 s watchdog) is retried after 1, 2, 4, 8 ... s (capped
+   at 60 s) and given up after `maxDeliveryAttempts` (5) crashes in a row without progress; a given-up
+   vat is final, like a halted one (no reinstate, C-11). A starting supervisor waits for every crashing
+   vat to be retried to one end or the other **before** it opens the control socket and runs the start
+   notices that restore adapters (`daemon.js:853-922`), so nothing of the harness is reachable
+   meanwhile: 36-69 s with one such vat at bound 5 (J-9046, J-9047). Section 2 D-17 states what the
+   harness does about it.
+8. **Guests have no clock, randomness, timers, URL, fetch, console, WeakRef, and cannot pass bytes**
    (`Uint8Array` is not passable over OCapN in this build). The clock resource costs about 1 s per
-   alarm (`clock.after(0n)` p50 989 ms from the workspace, native.md section 0.2). Vat creation costs
-   about 4.4 s, 18 MB of snapshot and up to 160 MB resident while awake. There is no live code upgrade
-   (`pkg/src/control/supervisor.js:112` `WORKSPACE_VERSION = 21`).
-7. **The hub rewrites `hub.json` whole, with fsync, 1 + 2k times per delivery** (`pkg/src/net/hub.js:354-364`;
-   `pkg/designs/production-cost-model.md:341-347`), and every exo exported across the gateway is a
-   row in it. All journal and hub writes run on the supervisor's single Node thread (about 15 ms of
-   host time per delivery), which caps the daemon at roughly 60-70 deliveries per second [inferred].
+   alarm (`clock.after(0n)` p50 989 ms from the workspace, native.md section 0.2). Creating a worker
+   takes about 140 ms but the vat boots with its first message (about 3.5 s), and shipping a program
+   costs the inbound per-byte price: a vat loaded with a 246 KB program costs 6.4 s (J-9045). A
+   sleeping vat takes about 17 MB of disk; an awake one 120-136 MB resident while loading and about
+   63 MB after waking from its snapshot; its process exits when it sleeps (J-0183, J-0184). There is no
+   live code upgrade (`pkg/src/control/supervisor.js:112` `WORKSPACE_VERSION = 21`).
+9. **The hub rewrites `hub.json` whole, with fsync, about 2.6 times per answered adapter hop**
+   (`pkg/src/net/hub.js:354-364`; J-0163), and every exo exported across the gateway is a row in it.
+   All journal and hub writes run on the supervisor's single Node thread: adapter-to-adapter events
+   reach about 82 per second, a vat's batched `sendOnly` events 236 per second (J-0163). Frames bound
+   for an adapter are written to `hub.json` in clear (hex) while queued (J-0164, core candidate C-1),
+   so nothing secret may cross the hub.
+10. **State directories are path-independent** (S8, J-0180): a cleanly stopped state copied to a new
+    path serves there. Only the control-socket resource's heap names the old path until the next
+    start replaces it, so a running state must never be copied (J-0181).
 
 Everything below follows from one rule derived from these: **vats are the system of record and the
 decision makers; Node adapters are the data path.** A vat sees a coarse, small, already-parsed message
@@ -75,10 +108,12 @@ projection, large text, secrets and files never pass through a vat; a vat holds 
 
 **D-1. A new package `packages/thixotrope-harness` in T** (npm name `@endo/thixotrope-harness`,
 private). Nothing harness-specific goes into `packages/thixotrope`. The harness consumes Thixotrope
-through its public surface: `thix install`, `thix install-native`, the control socket
-(`pkg/src/control/local-control.js` `connectLocalControl`), the prelude globals
+through its public surface: `thix install`, `thix install-native`, the supervisor and the control
+socket (`@endo/thixotrope/supervisor.js` `serveThixotrope` and `@endo/thixotrope/local-control.js`
+`connectLocalControl`, exported by `042171c094`), the prelude globals
 (`pkg/src/guest/prelude.js:43-64`), `@endo/thixotrope/native-adapter.js` `makeAdapter`, and the
-worker-controller (`vats`) resource (`pkg/src/core/daemon.js:602-651`).
+worker-controller (`vats`) resource (`pkg/src/core/daemon.js:602-651`). The only deliberate reach into
+core internals is `pkg/src/core/evaluate-source.js` from tests and perf checks that measure it.
 
 Layout (each milestone owns named subtrees; see milestones.md):
 
@@ -97,7 +132,11 @@ packages/thixotrope-harness/
   ui/                        # browser client (Preact), built with esbuild into impl/ assets
   bin/harness.js             # admin CLI (attach-only, control socket)
   scripts/                   # bundle-guest.mjs, provision.mjs + provision-steps.js, serve.mjs, run-lock.mjs
+  config/defaults.js         # harness limit settings (section 9); Node side only
+  lint/guest-rules.js        # ESLint rules for guest/ (hooked into the root eslint.config.js)
   test/                      # unit (Node), adapter (Node), integration (real Ironhorse) tests
+  test/template/             # state-template helper for integration tests and perf (section 10)
+  test/spikes/               # M0 spikes S1-S9 (gated, THIX_HARNESS_SPIKES=1)
   test/fixtures/             # scripted provider scripts, SSE recordings, fake binaries
   perf/                      # <feature>.perf.mjs + _harness.mjs (section 11)
   tmp/                       # git-ignored state for tests and perf (short paths, 0700)
@@ -110,25 +149,40 @@ bundled by `scripts/bundle-guest.mjs` with compartment-mapper `makeBundle`. Pure
 as workspace dependencies, because `makeBundle` would bundle second copies of `@endo/*` libraries
 that the prelude already provides (reuse.md section 4). Node-side code imports Endo packages normally.
 
-### 1.1 Core changes to Thixotrope (each flagged; only these; each in its own commits)
+### 1.1 Changes outside the harness package (each in its own commits)
 
-| id | change | files | why unavoidable | when |
-|---|---|---|---|---|
-| **CORE-1a** | Make `Uint8Array.fromBase64` visible in vats before `@endo/base64` loads, so `decodeBase64` takes the native path. Trace where the static method is lost between VM boot and the vat compartment [inferred: an install defect for static methods pushed through `proto_methods`]. | `rust/engine/ironhorse-vm/src/interp/boot.rs:800-808` and/or the boot/lockdown path; rebuild worker | Removes the JS base64 half of the per-byte inbound cost (fact 2). | M0 |
-| **CORE-1** | Native UTF-8 decode and encode for the polyfills: a VM native `decodeUtf8(bytes, fatal) -> { text, consumed }` and `encodeUtf8Into(text, bytes)`; the `TextDecoder` polyfill keeps only the `{stream:true}` carry of an incomplete tail in JS and throws a `TypeError` on malformed input when constructed with `{fatal:true}` (Syrup does, `packages/ocapn/src/syrup/decode.js:28`), else emits U+FFFD; `TextEncoder.encode/encodeInto` call the native encoder. Rebuild `pkg/dist-ironhorse`. | `rust/endo/xsnap/src/polyfills.js:20-160`; a native in `rust/engine/ironhorse-vm`; `pkg/scripts/bundle-ironhorse-worker.mjs:8,35` | A linear JS decoder still halts below 96 KiB (fact 2). Without native decode no frame larger than about 32 KB can enter a vat, and every oversize frame is a permanent quarantine, including frames the harness does not control (settlements, admin calls). | M0 |
-| **CORE-1b** | Raise the staging chunk in `evaluateSource` from 1,024 characters to `frameBytes / 3` characters (section 9). | `pkg/src/core/evaluate-source.js:32` | Install stages about 1 delivery per KB: a 300 k factory bundle is 40-60 s (feasibility 4), the session program is shipped to every spare vat. | M0 (after CORE-1) |
-| CORE-2 | Kit `operate(fn)` verb for one-shot adapter operations. | `pkg/src/native/manager-kit.js`, `manager.js` | **Not planned.** D-7 uses the attach pattern. Becomes CORE-2 only if spike S2 fails. | conditional |
-| CORE-3 | Booted-image templates for fast vat creation. | `pkg/src/ironhorse/ironhorse-engine.js` | **Not planned.** D-4 uses a spare-vat pool. | conditional |
+What landed in M0, where, and why. `m0-results.md` page 3 is the commit-by-commit list for an
+upstream reviewer; page 6 lists the open core-change candidates C-1..C-15 that were not made.
 
-**Configuration, not core: the crank budget.** The harness serve wrapper (`scripts/serve.mjs`) sets
-`THIXOTROPE_CRANK_BUDGET`. M0 spike S1 measures frame cost, send ceiling and runaway-loop wall time at
-10 M, 50 M and 100 M and picks the value (planning value 50 M; at about 80 ms per 10 M computrons
-[inferred from `survey/perf-engine3.log`] a runaway exec crank still ends within about 0.5 s). The
-budget may be lowered only after a clean shutdown (README 747-748); the wrapper refuses to lower it
-otherwise.
+| id | change as landed | where (commit) | why |
+|---|---|---|---|
+| **CORE-1a** | `@endo/immutable-arraybuffer`'s emulated TypedArray constructors copy every other own static of the genuine constructor, so `Uint8Array.fromBase64`/`fromHex` reach vats and `@endo/base64` takes the native path. The plan's guess (a VM static-install defect in `boot.rs`) was wrong: the VM installs them, the shim hid them (J-0100). | `packages/immutable-arraybuffer/src/lib.js` (`b10254b252`); regression tests `rust/engine/ironhorse-vm/tests/ses_boot_intrinsics.rs`, `pkg/test/ironhorse/scenarios.js` (`e0f06cbb6d`) | Native base64; it saved only 5-8 % of inbound time (J-0102). |
+| **CORE-1** | Three Ironhorse-only statics on `%Uint8Array%`: `decodeUtf8(bytes, fatal) -> { text, consumed }`, `encodeUtf8(text)`, `encodeUtf8Into(text, bytes) -> { read, written }`; the boot polyfill captures and deletes them before any guest runs; `TextDecoder` honours `{fatal}` and `{stream}` and strips a leading BOM unless `ignoreBOM`; `TextEncoder` uses the natives; XS keeps its old classes. | `rust/engine/ironhorse-vm` natives (`1d44da02d0`), `rust/endo/xsnap/src/polyfills.js` (`54a42f5eec`), lane test `pkg/test/ironhorse/text-codec.js` (`c786909c1e`) | The polyfill decoder was quadratic and halted at 16 k characters; outbound 250 k killed a vat (J-0110, J-0111). |
+| **CORE-1b** | `evaluateSource` stages in chunks of `STAGING_FRAME_BYTES / 3` = 8,192 UTF-16 units (was 1,024), surrogate-safe, with a `chunkChars` option no caller passes yet. `STAGING_FRAME_BYTES` = 24,576 is a copy of `frameBytes`; `test/limits.test.js` keeps them equal. | `pkg/src/core/evaluate-source.js` (`b27ed72bda`) | Install of a 300 k bundle took 50 s (J-0120, J-0122). |
+| **CORE-4** | `getOwnPropertyDescriptors` keeps array indices as index keys (no interned names); each environment skips the intrinsic catch-up walk while nothing changed (a cache, not persisted). | `rust/engine/ironhorse-vm` (`d0fd6b1138`) | The dominant inbound cost: `harden` of each frame's bytes interned one name per byte; 24 KiB harden 3,830 -> 174 ms (J-0190). |
+| **CORE-5** | Both Syrup decoders are `{ fatal: true, ignoreBOM: true }`. | `packages/ocapn/src/syrup/{decode,codec}.js` (`5a73049032`) | A leading U+FEFF did not round-trip (J-0113, J-0192). |
+| **CORE-6** | A worker whose OCapN session to the host ended throws in the crank, so it halts visibly. | `pkg/src/net/pipe-network.js`, `pkg/src/core/worker-peer{,-xs}.js`, lane test `test/ironhorse/key-space.js` (`63927edaba`) | A vat whose name table ran out stopped answering without halting (J-0191). |
+| **CORE-7** | Export `serveThixotrope` and `connectLocalControl`. | `pkg/package.json`, `pkg/index.js`, `pkg/supervisor.js`, `pkg/local-control.js` (`042171c094`) | D-1's public surface (J-0132, J-9022). |
+| upstream | PR 1667, "bound a vat's crash loop": crash classification, persisted crash count with doubling retries, startup that waits out a crashing vat, `standDown()`, `THIXOTROPE_MAX_DELIVERY_ATTEMPTS`. | merge `3f2b90954e` | Not ours; merged without conflict with CORE-6 (J-9040). Semantics: fact 7, D-17. |
+| tests | Snapshot goldens re-pinned for CORE-1's boot statics. | `rust/engine/ironhorse-snapshot/tests` (`0a4bdb3826`) | `1d44da02d0` moved the boot fingerprint without re-pinning (J-9000). |
+| CORE-2 | Kit `operate(fn)` verb. | - | **Not needed**: S2 confirmed D-7 (J-0160). |
+| CORE-3 | Booted-image templates for fast vat creation. | - | **Not needed**: S6 confirmed D-4 (J-0184). |
 
-Changing the boot bundle changes the boot digest, so existing state directories are refused
-(README 770-790). Acceptable: nothing is in production. Every builder uses fresh state.
+Outside `pkg/` and the engine the harness also added one hook to the root `eslint.config.js`
+(`4180c69f2b`, the guest lint rules) and its `yarn.lock` entry (`0d35cbd569`).
+
+**Configuration, not core: the crank budget and the crash bound.** The serve wrapper
+(`scripts/serve.mjs`) sets `THIXOTROPE_CRANK_BUDGET` (50 M, chosen by S1, J-0143) and
+`THIXOTROPE_MAX_DELIVERY_ATTEMPTS` (5, D-17) from `config/defaults.js` on every serve path. The budget
+may be lowered only after a clean shutdown; the wrapper refuses otherwise (J-0133).
+
+Changing the boot bundle or the worker's boot natives changes the boot digest, so existing state
+directories are refused cleanly with `BootLayoutMismatch` (J-9001). Acceptable: nothing is in
+production; every builder uses fresh state or a template rebuilt for the current digest (the template
+key includes it). A change that adds natives or edits `INTRINSIC_KEY_ORDER` re-pins the snapshot
+goldens in the same commit: run the ignored `regenerate_persistence_identities` plain, then with
+`--features ironhorse-vm/deterministic-math`, then plain again, and check the last run changes nothing
+(J-9002).
 
 ---
 
@@ -175,12 +229,21 @@ Changing the boot bundle changes the boot digest, so existing state directories 
 
 **D-4. One durable vat per session, plus a lazily created exec vat; a factory-held spare pool hides
 creation cost.** A vat is the unit of quarantine and of serial execution. One harness vat for all
-sessions would serialize every session's cranks and one bad input would kill every session. Cost:
-4.4 s to create, about 18 MB of disk per vat (tooling.md 4.1). The factory keeps `poolSize` (default
-2) spare session vats already loaded with the session program and 1 spare exec vat, refilled in the
-background after each take, so `createSession` costs a wake plus one `make(config)` call. Spares are
-discarded when the program digest changes. Idle session vats sleep. The pool exposes
-`whenSettled()` so tests can wait for refills before a SIGKILL (fact 5).
+sessions would serialize every session's cranks and one bad input would kill every session.
+Confirmed by spike S6 (J-0183..J-0185, J-9045). Cost of a cold session vat: `E(vats).createWorker`
+(about 140 ms; the vat boots with its first message), the session program staged by
+`evaluateSource`, and one evaluating crank; 6.4 s for a 246 KB program, of which staging is about
+10 us per byte (fact 2) and the boot about 3.5 s [inferred from install times]. Disk 17.3 MB per
+sleeping vat. **The session program bundle is therefore bounded to 200 KB** (`bundle-guest.mjs`
+reports the size; section 11 `session.program`), which keeps a cold create near the 6 s budget. The
+factory keeps `poolSize` (default 2) spare session vats already loaded with the session program and 1
+spare exec vat, refilled in the background after each take with up to 4 creations in parallel (four
+lanes scale almost linearly: 50 spares in 108.7 s), so `createSession` costs a wake plus one
+`make(config)` call: 157-176 ms measured. A spare is the `SpareMaker` that the evaluating crank returns,
+kept in the factory's heap. The factory stages an ASCII bundle in `frameBytes`-unit chunks and anything
+else in `frameBytes / 3`-unit chunks (the `evaluateSource` default) (J-0186). Spares are discarded when
+the program digest changes. Idle session vats sleep, and a checkpointed sleeping vat is not woken at
+startup. The pool exposes `whenSettled()` so tests can wait for refills before a SIGKILL (fact 6).
 
 **D-5. Dormant after restart; sessions recover themselves (owner's decision, G-01).** No session vat
 registers a start notice, and nothing wakes idle sessions at startup. A session learns about a
@@ -188,12 +251,18 @@ restart only from its own pending calls:
 
 - **Turn lease.** Every running turn holds one answered call `E(endpoint).holdTurn(turnHandle)` that
   the adapter settles only when the session ends the turn (`E.sendOnly(endpoint).releaseTurn(...)`).
-  A restart breaks the lease (fact 4), and that break is a delivery that wakes the session, which then
-  runs `recoverAfterRestart()` (section 4.4). Cost: 1 extra delivery per turn.
+  A restart breaks the lease (fact 5), and that break is a delivery that wakes the session, which then
+  runs `recoverAfterRestart()` (section 4.4). The break arrives during startup, before the daemon
+  serves (S2), so a session with a turn in flight is awake and recovered when serving begins. Cost: 1
+  extra delivery per turn.
 - **Any adapter call on the turn path** (round dispatch handshake, `runCommand`, blob reads) that
   rejects with the retired text is classified `outcome-unknown` and routed to the same idempotent
   recovery; it is never recorded as an ordinary tool failure, and the session never calls a
   tombstoned Endpoint after it (feasibility section 3.1).
+- **Calls into guest vats are not restart signals.** A retired break from a guest vat (the exec vat,
+  a child session) means that vat is lost (halted or given up, D-17), never "restart". And a guest call
+  pending into a vat that is given up during startup may never settle (fact 5), so recovery abandons
+  every guest call the turn held open instead of waiting for it (section 4.4).
 
 The factory's only start listener (registered on the agent-host manager, whose `lifecycle.started()`
 runs at every start) refreshes the factory's channel publishers, restarts pool refills and completes
@@ -204,6 +273,43 @@ being current (coverage 22, feasibility A-3). Idle sessions stay asleep until a 
 mail that arrived before the restart is handled when the session is next woken. This departs from
 R4-65's "every session resumes serving its inbox at once" (owner decision, journal J-0015).
 
+**D-17. Crashes, halts and a waiting startup (upstream PR 1667; J-9040..J-9051).**
+
+- **Two kinds of vat failure.** A *halt* (`MeterAbort`, `HeapExhausted`, name-table exhaustion, a
+  session-ended throw) quarantines the vat at once; nothing retries it. A *crash* (its worker is killed
+  by a signal the supervisor did not send, or misses the 60 s request watchdog) is retried by the
+  supervisor after 1, 2, 4, 8 ... s (doubling, capped at 60 s), replaying the journal; frames that
+  arrive meanwhile queue. After `maxDeliveryAttempts` crashes in a row without progress the vat is
+  *given up*: its failure is recorded and it is treated exactly as a halted vat. The count is kept in
+  the vat's metadata, so a restart continues it. A status exit (including a worker panic), a crash
+  while snapshotting, and anything after `close()` began (`standDown()`) are not counted.
+- **The harness bound is 5** (`limits.maxDeliveryAttempts`, the upstream default; open decision 16).
+  Bound 2 would bring a crashing restart to 7.6-9.0 s but gives a vat up about one second after its
+  first crash, and a give-up is final; each step above 5 adds 16, 32, then 60 s of startup wait.
+  Progress is judged by the frame a crash interrupted, so under jittered kills the give-up comes after
+  32-64 s, not 15 s (J-9047, core candidate C-9).
+- **Our own kills are not crashes of a vat.** The harness SIGKILLs only the supervisor process; the
+  count lives in the supervisor, so a test SIGKILL never counts against a vat (J-9041). Never kill the
+  process group in tests: that would kill workers before the supervisor.
+- **Startup waits.** A starting supervisor waits for every vat that crashes while its journal is
+  replayed to be retried to one end or the other, in parallel, before it opens the control socket and
+  before the start notices restore any adapter (gateway included) (`pkg/src/core/daemon.js:853-922`).
+  During that wait nothing of the harness listens: the browser sees connection refused (31-64 s with one
+  such vat at bound 5; at least 315 s for a vat that misses the watchdog on every replay). The browser
+  client treats a refused connection as "server starting" and retries with backoff (section 7); the
+  restart budget is a healthy-restart budget, with the crashing case recorded against a target that
+  depends on a core change (section 11; C-8).
+- **What callers see.** Every caller of a halted or given-up vat gets "ocapn hub: the target session
+  has been retired", the same text as an adapter break at restart. A session therefore reads the text
+  by *who* broke: an adapter object on the turn path means restart (D-5); a guest vat means that vat is
+  lost. A lost exec vat is retired and replaced (section 6). A lost session vat is a lost session: its
+  journal stays on disk but there is no reinstate operation (core candidate C-11, open decision 17). The
+  factory marks its row `lost` when a call into it breaks with the retired text (a session vat is a
+guest vat, so that text never means a restart there), keeps
+  it listed (transcripts are never deleted by the harness), and frees it only through `deleteSession`
+  (M2), which retires the vat. `status()` through an operator path shows the `failure` text when the
+  reason matters (J-9049).
+
 ---
 
 ## 3. Object model (object-passing style)
@@ -212,8 +318,10 @@ Rules (Appendix F.1, spec-digest section 6): factories return objects; per-item 
 item; authority is passed as objects at construction; strings only for F.2 reasons (a)-(e). Interface
 sketches below are the contract builders implement; method sets grow per milestone. All are `makeExo`
 with `M.interface` guards that bound every string and array (sizes in section 9). **A guard does not
-protect a vat from an oversize frame** (decoding happens before the guard runs), so every path into a
-vat is also bounded on the sending side (section 9).
+protect a vat from an oversize frame or from fresh record keys** (decoding happens before the guard
+runs), so every path into a vat is also bounded on the sending side (section 9, rules 12.5 and 12.10).
+The guards and method names of every object that crosses between M1a's units are written once, in
+`guest/lib/interfaces.js`, with who calls what in which crank in `m1a-interfaces.md` (M1a W1a.0).
 
 ### 3.1 Factory vat
 
@@ -377,10 +485,19 @@ resource registers one service key whose spec carries a manager-owned `attach` s
 `opsFacet` and returns adapter-side objects (Endpoint, SecretWriter, BlobWriter, publishers, Shell
 ops) that the caller then uses directly, so the manager vat is on the path once per turn or per
 object, not per operation. After a restart those references are tombstones; calls break; callers
-re-`open()`. Spike S2 in M0 verifies (a) a durable vat can hold and call a transient-session
-reference, (b) it breaks cleanly after restart, (c) restore re-attaches, (d) the adapter sees one
-stable presence for one vat object within an incarnation (needed by the channel keying, D-8). If S2
-fails, fall back to CORE-2.
+re-`open()`. **Confirmed by spike S2** (J-0160, re-run after the PR merge J-9043): (a) a durable vat
+holds and calls a transient-session reference; (b) a call pending into it breaks after SIGKILL and
+restart with exactly the retired text, delivered during startup; (c) restore re-attaches a new
+incarnation 62-68 ms after serving, with no caller; (d) the adapter sees one stable presence for one
+vat object within an incarnation (`WeakMap` identity), so channels can be keyed by it (D-8). The
+pattern to copy is the fixture `test/spikes/fixtures/attach/{durable,ephemeral}.js`: `bind` awaits
+`E(spec.sink).attach(ops)`, so a manager reconcile that returns has a fresh facet, and `open()` retries
+once through `manager.register()` (same key, `same: () => true`) when the facet it holds is retired.
+Costs: first `open()` 0.9-1.2 s (it builds the adapter process); vat -> adapter -> vat 70-76 ms per
+answered call; reopen after restart 278-307 ms. No adapter process outlives a supervisor SIGKILL.
+Spike S7 (J-0162) confirmed that a registration spec may carry a consumer vat's remotable (the
+operator handler of `serveGateway`, sinks) across clean and SIGKILL restarts, although
+`pkg/src/native/contract.js` says specs hold only the manager's own remotables. CORE-2 is not needed.
 
 **D-14. Thin installed modules, implementation loaded at run time.** An installation's identity is
 its bundle digest pair (native.md section 1.2), and a reinstall breaks every reference into its
@@ -467,7 +584,10 @@ The heap is made durable by image + journal replay, and the hub commits a crank'
 before forwarding them (core.md 1.2-1.3; README 875-884). Therefore **state written to the heap in the
 same crank that emits an outbound call is durably recorded before the call can have any effect**: if
 the daemon dies, replay regenerates the crank (and its heap record) and the hub drops the duplicate
-output. M0 spike S9 verifies this for a call to a transient adapter session (coverage 17).
+output. M0 spike S9 confirmed this for a call to a transient adapter session (coverage 17; J-0165,
+J-9044): over 24 SIGKILLs at 0-600 ms after the crank, no effect ran twice and none ran without its
+record; a third of the effects that did run were answered with the retired break, so a retired break
+never means "not run".
 
 | Step | Recorded in the crank that... | Record |
 |---|---|---|
@@ -475,7 +595,7 @@ output. M0 spike S9 verifies this for a call to a transient adapter session (cov
 | First dispatch | receives `dispatching(0)` (adapter awaits the answer before HTTP) | `Dispatched { turnId, round: 0 }` |
 | Partial text | receives `progress` | replaces the single `Partial { round, blob, tail }` record |
 | Round result | receives `roundFinal` | `RoundSettled { message (inline or Blob), toolCalls, nativeContext: Blob, usage, servedBy }` |
-| Tool intents | same crank as round result, before issuing calls | one `ToolIntents { [{ opId: turnId/round/ordinal, name, args (inline or Blob) }] }` |
+| Tool intents | same crank as round result, before issuing calls | one `ToolIntents { [{ opId: turnId/round/ordinal, name, args (JSON text, inline or Blob; never a record, rule 12.10) }] }` |
 | Tool result | receives each answer | `ToolResult { opId, result (inline or Blob, cut to the tool limit), failed }` |
 | Compaction | `beforeRound` hook decides (M8) | `CompactionStarted { boundary }` before the summary round; `Compaction { summary, boundary }` after |
 | Turn end | receives final round / cancel / failure | `TurnSettled { status, error?, usage }` |
@@ -488,8 +608,10 @@ outcome-unknown although no HTTP request was sent (conservative, documented).
 
 ### 4.4 Restart with a turn in flight (P-14, R4-66)
 
-`recoverAfterRestart()` is idempotent and runs on the first retired break the session receives
-(D-5: the lease, or any adapter call on the turn path). It inspects the current turn:
+`recoverAfterRestart()` is idempotent and runs on the first retired break the session receives from an
+adapter object (D-5: the lease, or any adapter call on the turn path); a retired break from a guest vat
+is not a restart signal (D-17). The lease break is delivered during startup replay, before the daemon
+serves, so recovery normally runs before any client can connect. It inspects the current turn:
 
 - no `Dispatched` record: close it "Interrupted before dispatch; no backend execution was started."
   The input stays in the transcript, marked interrupted; nothing is re-queued (the entry was removed at
@@ -499,7 +621,14 @@ outcome-unknown although no HTTP request was sent (conservative, documented).
 - in-flight work that survives the restart is stopped or abandoned: child asks are cancelled with
   `E.sendOnly(childTurn).cancel()` and recorded (each child also recovers its own turn through its own
   lease, so a parent's ask settles as failed, R4-67); a pending exec call is abandoned by turn
-  generation (its late result is ignored; the exec vat is not retired).
+  generation (its late result is ignored; the exec vat is not retired). Recovery never waits for a
+  guest call to settle: a call pending into a vat that was given up during startup never breaks
+  (J-9048, core candidate C-10). The next exec call finds out instead: a call into a lost exec vat
+  breaks at once with the retired text, and the session then retires the handle and takes a fresh
+  vat (section 6).
+- a crash of the session vat's own worker during the restart is retried by the supervisor (D-17);
+  recovery runs when its replay completes. If the session vat is given up, the session is lost (D-17)
+  and nothing in it runs.
 - if the queue is non-empty, hold it `restart` (A.4 text, SPEC:1621; R4-56).
 - report the row change.
 
@@ -567,21 +696,31 @@ wrapped as an async function body so top-level `await` and `return` work; top-le
 are per call, `globalThis.name = v` persists. The R4-26 guest prompt text ("each call is a fresh
 function body") is rewritten to describe the persistent scope (M5; journal).
 
-The source travels inline when small; above `inlineBytes` the exec vat reads it from its Blob in
-pages; above `execSourceBytes` (default 262,144, S3 may lower it) the call fails with "exec source too
-large (N bytes; limit L)". A result over `inlineBytes` is cut to the tool limit (R4-46) inside the exec
-vat and written in pieces of at most `frameBytes / 2` to the `BlobWriter` passed with the call, one
-answered piece per crank.
+The source travels inline when it is at most `inlineBytes`; above that the exec vat reads it from its
+Blob in pages of at most `frameBytes` (one answered page per crank), joins them and evaluates in one
+crank. A source never travels in one message above `frameBytes`: one message of 150 k or more halts
+the receiving vat (S3, J-0195). `execSourceBytes` (262,144) is the bound on the staged source: S3
+staged and evaluated 262 k in 3.9 s (11 frames; evaluating crank 175 ms) and 400 k in 6.0 s; above it
+the call fails with "exec source too large (N bytes; limit L)". A result over `inlineBytes` is cut to
+the tool limit (R4-46) inside the exec vat and written in pieces of at most `frameBytes / 2` to the
+`BlobWriter` passed with the call, one answered piece per crank.
 
 Lifetimes:
 
-- **Synchronous runaway** exceeds the crank budget and quarantines the exec vat. The session sees
-  its pending call break (guest-to-guest calls survive restarts, so a retired break from the exec vat
-  means the exec vat halted, not a restart), records "exec scope terminated: it exceeded the per-step
-  compute budget; bindings from earlier calls are gone", **retires the quarantined vat explicitly**
-  through `ExecHandle.retire()` (18 MB or more each, feasibility A-4) and takes a fresh one on the next
-  call. The compute ceiling per crank is about 600 k simple iterations at 10 M computrons, more at the
-  configured budget (journal: weaker than Endo's exec).
+- **Synchronous runaway** exceeds the crank budget and halts the exec vat (`MeterAbort`, never
+  retried, D-17); at 50 M it ends in about 240-270 ms. The session sees its pending call break with the
+  retired text (from a guest vat this means the vat is lost, never a restart), records the scope loss,
+  **retires the lost vat explicitly** through `ExecHandle.retire()` (about 17 MB each; `retire()` also
+  cancels any retry the supervisor still owes it) and takes a fresh one on the next call. The session
+  cannot tell a halt from a crash give-up (both break with the same text, and the worker facade does
+  not expose the recorded `failure`; only the operator's `status()` does), so the tool result does not
+  claim a cause it cannot see (J-9051): "exec scope terminated: the exec vat stopped (it exceeded the
+  per-step compute budget or its worker failed repeatedly); bindings from earlier calls are gone". The
+  compute ceiling per crank is about 600 k simple iterations at
+  10 M computrons and about five times that at 50 M [inferred] (journal: weaker than Endo's exec).
+- **A crashing exec worker** (killed, or missing the 60 s watchdog) is retried by the supervisor
+  (D-17); the call stays pending meanwhile, so the execution deadline below still bounds it: a call that
+  misses the watchdog every time is retired by the deadline during its second attempt.
 - **Asynchronous runaway or hang** is bounded by `execDeadlineMs` (default 120 s, fixing G-18; a
   departure from R4-48, open decision 10): the session arms an adapter timer
   (`E.sendOnly(endpoint).armDeadline`) in the crank that issues the call; on `deadline(opId)` it
@@ -634,6 +773,11 @@ caches rebuild lazily per session (journal: blast radius).
 - **Frame guard:** the CapTP bridge measures every call it forwards to a vat (sum of string bytes,
   estimated as UTF-16 units x 3) and refuses one over `frameBytes` with "message too large; use the
   composer" before it reaches the hub. Max WS message 1 MiB.
+- **Key guard:** the bridge also refuses a call whose arguments contain a record with a key that the
+  target method's declared shape (`guest/lib/interfaces.js`) does not name, with "unexpected field";
+  every fresh record key a vat receives costs it one of its about 57,000 names for life, and running
+  out halts the session for good (fact 4). An exo guard cannot protect the vat from either: decoding
+  happens before the guard runs.
 - Objects the adapter owns (`Live`, `Content`, `Composer`, `SecretWriter`, audio streams) are local
   exports of the same process, so their traffic never leaves the adapter; a returned own export
   resolves to the local object (`pkg/src/net/hub.js:804-812`).
@@ -643,9 +787,11 @@ caches rebuild lazily per session (journal: blast radius).
   `floot-*.js` helpers from 1315bef86, replacing pet-name lookups with `Operator` methods and
   `watch()` pulls with `Live` subscriptions; extract client audio (l.2019-2774) into `ui/src/voice/`.
 
-Restart: sockets drop; the client shows the reconnect overlay (0, 1, 2, 5, 10, 30 s backoff),
-rebuilds from `watch` snapshots, re-subscribes and re-attaches a running turn through `getCurrentTurn`
-(R4-62).
+Restart: sockets drop; the client shows the reconnect overlay (0, 1, 2, 5, 10, 30 s backoff, then every
+30 s), rebuilds from `watch` snapshots, re-subscribes and re-attaches a running turn through
+`getCurrentTurn` (R4-62). A refused connection means "server starting": while a crashing vat holds
+startup (D-17) nothing listens for 30 s to several minutes, so the overlay says "Server starting..."
+and keeps retrying; no server-side page is needed.
 
 **D-13. Native reinstall indirection.** D-14 makes reinstalls rare. When one is needed, objects minted
 by the old manager vat (Secrets, Backends, Blobs, Routes) break; sessions receive their
@@ -663,7 +809,7 @@ in M13). During development builders use fresh state directories.
 - Time is data: every adapter-to-vat message carries `at` (ms), including `enqueueOnce`, which only the
   gateway's Composer calls, so the submission window check (24 h window, 5 min skew, R4-98) always has
   a fresh time (coverage 13). The session keeps `lastKnownTime` for other uses.
-- **Interactive timers are adapter timers**, not the clock resource (about 1 s per alarm, fact 6):
+- **Interactive timers are adapter timers**, not the clock resource (about 1 s per alarm, fact 8):
   exec deadlines, `sleep` in exec, turn deadline, subagent ask timeouts. They die with the adapter, which
   is correct because the turn they belong to dies too. The clock resource is used only for durable
   alarms that must outlive a restart (none planned before M9's mail backlog timers [inferred]); when
@@ -675,28 +821,39 @@ in M13). During development builders use fresh state directories.
 
 Every vat-facing input and output has a bound enforced **on the sending side** (adapter, gateway, or
 the vat's own message builders) and again by the exo guard. Sizes are **UTF-8 bytes** unless stated;
-guest code estimates a string's bytes as UTF-16 units x 3 (no per-character loop). Values are harness
-settings with these defaults.
+guest code estimates a string's bytes as UTF-16 units x 3 (no per-character loop).
 
-| Bound | Default | Spec default it replaces |
-|---|---|---|
-| `frameBytes`: string content of one message into or out of a vat | 24,576 until M0 S1 measures with CORE-1a/CORE-1 and the chosen crank budget; then half the measured halt point (target >= 196,608) | n/a |
-| `crankOutBytes`: all messages sent in one crank | 2 x `frameBytes` (S1 measures several messages in one crank) | n/a |
-| `inlineBytes`: larger text fields are Blobs | 8,192 | n/a |
-| previews (messages / tool calls and results) | 1,024 / 256 | n/a |
-| Message string (submission, through the Composer) | 200,000 characters (staged as a Blob; the limit is now WS message size and context, not frame cost) | 100,000,000 (R4-97) - lower; open decision 1 |
-| Tool output into the model | 32,768 UTF-16 units with the R4-46 marker, per-field for structured results; staged as a Blob when over `inlineBytes` | same (R4-100) |
-| Container output per stream (adapter) | 64 KiB, then per-field budget | same (R3-47) |
-| Tool calls per round / in flight | 64 / 16 | none - open decision 11 |
-| Live publish batch from a vat | 64 events and `frameBytes` | n/a |
-| Eventual sends per crank (guest code rule) | 100 | n/a (250 ok, 500 MeterAbort at 10 M) |
-| History page | 32 turns and `frameBytes` | 32 turns |
-| Context page to adapter, session list page | `frameBytes`; 50 rows | n/a |
-| Exec source | 262,144 (S3 may lower) | none |
-| Exec deadline | 120 s; compute bound = crank budget | none (G-18; R4-48) - open decision 10 |
-| Turn wall-clock deadline | off (configurable) | none (R4-48; G-06) |
-| Queue | 100 waiting, 4,096 receipts | same (R4-98) |
-| Crank budget (`THIXOTROPE_CRANK_BUDGET`, daemon-wide) | chosen in M0 S1 (planning value 50 M) | n/a |
+**Where the values live.** The measured settings are in `config/defaults.js` (`limits`, with the
+evidence in comments; `m0-results.md` page 1 gives the margins). Node code imports that file. Guest code
+cannot (bundles read only `guest/`): `guest/lib/limits.js` holds a copy and a unit test keeps it equal
+to `config/defaults.js`. The core's `STAGING_FRAME_BYTES` (`pkg/src/core/evaluate-source.js`) is a
+third copy of `frameBytes`, kept equal by `test/limits.test.js`; changing `frameBytes` is a core commit
+too. The other rows below are design settings, kept in the module that enforces them.
+
+| Bound | Value (file) | Measured basis | Spec default it replaces |
+|---|---|---|---|
+| `frameBytes`: string content of one message into or out of a vat | 24,576 (`config/defaults.js`) | one inbound message halts above 94,208 at 50 M, on fresh and full vats; 24,576 inbound in 312 ms (budget 357) (J-0193, J-0194). The plan's target of 196,608 is unreachable while `harden` costs per byte (C-5). | n/a |
+| `crankOutBytes`: all messages sent in one crank | 196,608 = 8 frames (`config/defaults.js`) | 8 x 64 KiB `sendOnly` in one crank 553-576 ms, no halt (J-0142) | n/a |
+| `inlineBytes`: larger text fields are Blobs | 8,192 (`config/defaults.js`) | plan value; about 80 ms of inbound per field at this size | n/a |
+| `vatKeyNames`: distinct record keys a vat may ever receive or create | 57,000 per vat, for life (`config/defaults.js`) | 57,075 after boot, 54,378 after a 250 k program; exhaustion halts (J-0191) | n/a |
+| Eventual sends per crank (guest code rule) | 100 (`config/defaults.js` `sendsPerCrank`) | answered sends halt at 250 (fresh vat) / 300 (used vat); `sendOnly` at 600 (J-0143, J-0194) | n/a |
+| Exec source, **staged** in `frameBytes` pages then evaluated in one crank | 262,144 (`config/defaults.js` `execSourceBytes`) | 262 k staged in 3.9 s, evaluating crank 175 ms; one message of 150 k halts (J-0195) | none |
+| Crank budget (`THIXOTROPE_CRANK_BUDGET`, daemon-wide) | 50,000,000 (`config/defaults.js` `crankBudget`, set by `scripts/serve.mjs`) | runaway ends in 242-271 ms; 100 M buys nothing (J-0143) | n/a |
+| Crashes in a row before a vat is given up (`THIXOTROPE_MAX_DELIVERY_ATTEMPTS`) | 5 (`config/defaults.js` `maxDeliveryAttempts`, set by `scripts/serve.mjs`) | D-17; J-9046, J-9051 | n/a |
+| Session program bundle | 200 KB (checked by `bundle-guest.mjs` output and the `session.program` perf row) | cold session vat 6.4 s for a 246 KB program (J-9045) | n/a |
+| Staging chunk for program sources | `frameBytes` units for ASCII, `frameBytes / 3` units otherwise | `evaluateSource` default 8,192 units (J-0186) | n/a |
+| previews (messages / tool calls and results) | 1,024 / 256 | | n/a |
+| Message string (submission, through the Composer) | 200,000 characters (staged as a Blob; the limit is WS message size and context, not frame cost) | | 100,000,000 (R4-97) - lower; open decision 1 |
+| Tool output into the model | 32,768 UTF-16 units with the R4-46 marker, per-field for structured results; staged as a Blob when over `inlineBytes` | | same (R4-100) |
+| Tool arguments into a vat | the model's JSON arguments travel as one string (inline or Blob), never as a record (`vatKeyNames`) | J-0191 | n/a |
+| Container output per stream (adapter) | 64 KiB, then per-field budget | | same (R3-47) |
+| Tool calls per round / in flight | 64 / 16 | | none - open decision 11 |
+| Live publish batch from a vat | 64 events and `frameBytes` | | n/a |
+| History page | 32 turns and `frameBytes` | | 32 turns |
+| Context page to adapter, session list page | `frameBytes`; 50 rows | | n/a |
+| Exec deadline | 120 s; compute bound = crank budget | | none (G-18; R4-48) - open decision 10 |
+| Turn wall-clock deadline | off (configurable) | | none (R4-48; G-06) |
+| Queue | 100 waiting, 4,096 receipts | | same (R4-98) |
 
 ---
 
@@ -719,19 +876,56 @@ settings with these defaults.
      ported Endo tests (reuse.md section 5). Fast; run often.
   2. Adapter (Node): providers against the fake server, secrets backend, blob store, channels,
      gateway auth and frame guard, fake container runtime, git via the real `git` binary.
-  3. Integration (real Ironhorse supervisor, `concurrency: 1`, state under
-     `packages/thixotrope-harness/tmp/<6-char>` mode 0700, deleted in `finally`, supervisor stopped and
-     awaited first): end-to-end turns, SIGKILL of the supervisor child and restart. Integration tests
-     start from a **pre-provisioned state template** copied per file (M0 spike S8; if state directories
-     are not path-independent, provision once per file) and run with `idleSleepMs: 2000` so idle
-     sessions checkpoint quickly (fact 5). Budget: **each integration file** under 5 minutes with the
-     template; at most 300 MB of state.
+  3. Integration (real Ironhorse supervisor, ava `test.serial`, gated by `THIX_HARNESS_INTEGRATION=1`):
+     end-to-end turns, SIGKILL of the supervisor and restart. Every file starts from a
+     **pre-provisioned state template** (spike S8 proved state directories path-independent, J-0180)
+     through the helper `test/template/index.js`:
+     - `ensureTemplate({ id, provision, crankBudget })` finds or builds a cached template
+       `tmp/t<key>`: a supervisor serves a throwaway `tmp/b<pid>`, workspace `w` is created, the
+       caller's `provision(context)` runs with `context.client` (a control client on `w`) and
+       `context.connect()`, the supervisor stops cleanly and the directory is renamed. The key covers the
+       worker binary, the boot bundles, `WORKSPACE_VERSION`, the crank budget, `TEMPLATE_VERSION` and
+       `id`, so a template is rebuilt whenever any of them changes. M1a passes its
+       `scripts/provision-steps.js` as `provision` with its own `id` (for example `m1a`).
+     - `startFromTemplate(template, { t, idleSleepMs = 2000, root })` clones it (APFS clone, about
+       0.1-0.35 s for 160 MB) to a new `tmp/<6 chars>` and starts the supervisor child; it returns
+       `{ root, client, pid(), timings, connect({ workspace }), kill(), stop(), restart(), cleanup(),
+       stderrTail() }`. `kill()` is a real SIGKILL of the supervisor process only (never its group, so
+       no vat crash is counted, D-17); `restart()` serves the same copy again; `cleanup()` runs from
+       `t.teardown`: stop, kill strays, delete the copy (`KEEP_STATE=1` keeps it).
+     - `takeIntegrationLock(test, label)` holds the run lock for the whole file; `integrationEnabled` is
+       true under `THIX_HARNESS_INTEGRATION=1` or `THIX_HARNESS_SPIKES=1`; `removeTemplates()` deletes
+       every cached template; `copyState`, `connect`, `processesUnder` and `killStrays` are exported for
+       perf and spikes.
+     Integration state uses `idleSleepMs: 2000` so idle vats checkpoint quickly (fact 6), and tests wait
+     for checkpoint and `pool.whenSettled()` before a SIGKILL. A template start costs 5.6 s against
+     about 35 s for a cold provision (J-9045). The control socket path
+     `tmp/<6 chars>/control.sock` is 98 bytes in this checkout against a 104-byte limit: keep 6-character
+     names directly under `tmp/`, or pass a shorter `root` (J-0182). Never copy a running state
+     (J-0181). Budget: **each integration file** under 5 minutes; at most 300 MB of state.
   4. Browser (Playwright from `packages/exo-playwright` or the built-in browser pane) against a local
      gateway with the scripted backend: reconnect, reload, phone width, voice with synthetic audio.
-- **Run lock.** Integration tests and perf checks take an exclusive lock (`scripts/run-lock.mjs`,
-  `H/tmp/.run.lock`, `O_EXCL`, holder pid recorded, stale lock broken only when the pid is gone).
-  Parallel builders wait on it; the PM holds it for milestone sign-off runs. Never run the full T suite
-  concurrently with integration tests (tooling.md 2.1).
+- **Supervisor process.** Every serve (the `scripts/serve.mjs` CLI, `serveHarness()`, the template
+  helper, the perf harness) runs the supervisor in a child process started by `spawnSupervisorChild`,
+  with only the allowlisted environment plus `THIXOTROPE_CRANK_BUDGET` and
+  `THIXOTROPE_MAX_DELIVERY_ATTEMPTS`; the child refuses to serve from any other environment. It holds a
+  pipe from its parent on fd 3 and closes the supervisor cleanly when the parent dies, even by SIGKILL
+  (J-9021). Its record is `<state>/harness-serve.json`.
+- **Run lock.** Integration tests, spikes, perf checks and the Ironhorse lane run under an exclusive
+  lock (`scripts/run-lock.mjs`, `tmp/.run.lock`), one Ironhorse workload at a time. The record holds a
+  random generation id, the taker's pid and start time and the workload's pid and start time; the lock
+  is held while either is alive (a reused pid with another start time counts as dead); a new lock is
+  hard-linked into place fully written; a stale generation is deleted only by the holder of that
+  generation's break token. A command run under the lock sees `THIX_HARNESS_RUN_LOCK=<generation>`
+  and nested takers in it pass through (J-9020). Parallel builders wait on it; the PM holds it for
+  milestone sign-off runs. Never run the full T suite concurrently with integration tests (tooling.md
+  2.1).
+- **Gates and their variables.** `THIX_HARNESS_INTEGRATION=1` enables integration files;
+  `THIX_HARNESS_SPIKES=1` enables `test/spikes/` (each spike takes the lock itself; per-spike knobs such
+  as `S1_BUDGETS`, `S1_PARTS`, `S6_COUNTS` are documented in each file); `THIXOTROPE_IRONHORSE_WORKER`
+  overrides the worker binary (default `target/release/thixotrope-ironhorse-worker`); `KEEP_STATE=1`
+  keeps state; `SPIKE_OUT` / `PERF_OUT` append JSON lines to a file. Without the gates `corepack yarn
+  test` runs the unit lane only.
 - Acceptance tests check observable behaviour through the public API, the browser or the network.
   Implementation counts (resident records, wake counters, journal contents) are perf/gate checks.
 
@@ -741,13 +935,19 @@ settings with these defaults.
 
 **Method** (adapted from tooling.md section 5):
 
-1. Scripts `packages/thixotrope-harness/perf/<feature>.perf.mjs`, sharing `perf/_harness.mjs`
-   (start supervisor via `serveThixotrope` with chosen `idleSleepMs`, provision from the template,
-   `stats`, `emit`, `restart`, engine counter deltas from `status().timings`, `hub.json` size,
-   a CapTP WebSocket client). Start from `scratchpad/thix/survey/baseline.mjs`.
+1. Scripts `packages/thixotrope-harness/perf/<feature>.perf.mjs`, sharing `perf/_harness.mjs`:
+   `runPerf(feature, fn)` takes the run lock and sets the exit code; `provision()` starts state in
+   `tmp/pf<pid>` through the template helper's supervisor child (fresh by default, or the cached base
+   template with `provision({ template: true })` or `PERF_TEMPLATE=1`, which saves about 17 s) and emits
+   `<feature>.provision`; `stats`, `single`, `timed`, `emit`, `hubJsonBytes`, `du`, `workerRss`, and
+   deliveries from `status().timings` deltas. Existing scripts: `frames`, `install`, `crash`
+   (`FRAMES_N`, `LOOP_N`, `INSTALL_N`, `CRASH_*` shorten them). A CapTP WebSocket client is added with
+   the gateway (M3).
 2. Run under the run lock, one at a time, release worker, fresh bundles, never alongside tests:
-   `cd packages/thixotrope-harness && node perf/<feature>.perf.mjs`. State in `tmp/pf<pid>`, removed in
-   `finally` (`KEEP_STATE=1` keeps it).
+   `cd packages/thixotrope-harness && node perf/<feature>.perf.mjs` (the script takes the lock itself;
+   `corepack yarn perf` runs every script in turn). State is removed in `finally` (`KEEP_STATE=1` keeps
+   it). Perf state is served with `IDLE_MS` (default 1 h, so nothing sleeps mid-measurement) unless the
+   check is about sleeping or restart, which sets 2,000 ms.
 3. Output: one JSON line per metric:
    `{"metric":"<feature>.<op>","unit":"ms","n","median","p95","p99","max","deliveries":{"count","perOp"},"hubJsonBytes","snapshot":{...},"budget":{"median","p95","deliveriesPerOp"},"pass","commit","workerSha256","crankBudget","loadAvg"}`.
    Exit 1 when a median exceeds 1.25 x budget or deliveries per op exceed the budget. At least 200
@@ -758,41 +958,51 @@ settings with these defaults.
 6. Bulk fixtures (hundreds of sessions or thousands of turns) are built with `importState` (one crank
    per `frameBytes` of records), never by running turns.
 
-**Budgets** (M3 Max class machine; deliveries = durable vat deliveries):
+**Budgets** (M3 Max class machine; deliveries = durable vat deliveries). The "M0 evidence" column
+gives what M0 measured where it bears on a budget; `m0-results.md` page 7 has every check. A budget
+marked **depends on C-n** is not reachable until that core candidate (`m0-results.md` page 6) is
+fixed: the check is run and recorded, a miss is journaled against C-n, and it does not block a
+milestone by itself.
 
-| Metric | Budget |
-|---|---|
-| `frames.inbound` / `frames.outbound` at `frameBytes` | no halt; <= 300 ms over the ping floor |
-| `frames.halt` (S1): halt point with and without CORE-1a/CORE-1, at each crank budget | recorded; sets `frameBytes` |
-| Turn start: submit accepted to provider request sent (scripted backend) | median <= 350 ms; <= 3 deliveries |
-| Live delta: provider chunk in adapter to WS frame out | median <= 5 ms; 0 deliveries per delta |
-| Deliveries per model round | <= 1 + ceil(round seconds / 10) + tool results |
-| Tool intents per round | in the round-final delivery, 0 extra |
-| Turn lease | 1 delivery per turn |
-| `exec` trivial call (session -> exec vat -> session) | median <= 250 ms |
-| `exec` first call in a session (spare exec vat) | <= 1.5 s |
-| `exec` 100 answered sends / 100 `sendOnly` | <= 8 s / <= 1 s |
-| Session create with spare pool / without | <= 1.5 s / <= 6 s |
-| Session list, 100 sessions | <= 200 ms per 50-row page; 0 session vats woken |
-| Session watch snapshot, 1,000-turn session | <= 300 ms; <= `frameBytes` |
-| History page (32 turns) | <= 300 ms |
-| Queue enqueue while a turn runs, round trip from the browser | median <= 150 ms |
-| Concurrent: 10 sessions streaming with tool rounds at once | per-session turn start <= 2 x single; crank p95 <= 200 ms; row push <= 500 ms |
-| Daemon throughput: deliveries per second at saturation | recorded; journal if < 50/s |
-| `hub.json` after 1,000 turns with a UI attached / after 50 sessions | <= 2 MB; ms per delivery <= 1.25 x fresh |
-| Checkpoint stall: turn latency while a busy session vat snapshots | p99 <= 1 s |
-| Restart to serving, 50 idle sessions (checkpointed) | <= 15 s; 0 idle session vats woken |
-| Restart with 20 sessions that have environments | <= 15 s; 0 containers started |
-| Clean shutdown, 50 sessions | <= 5 s |
-| Disk per idle session (session vat only / with exec vat) | <= 25 MB / <= 50 MB |
-| Session vat snapshot with 10,000 turns | <= 1 s; decides whether M13 builds an archive |
-| Secret read per round | in-process, <= 1 ms, 0 deliveries |
-| Container `runCommand(['true'])` harness overhead over runtime | <= 150 ms |
-| git `status` on 10 k-file repo through the capability | <= 1 s |
-| Asset request first byte | <= 20 ms; 0 deliveries |
-| Audio frame path | 0 deliveries; STT partial <= 300 ms after 0.5 s of new audio (real engine) |
-| TTS first audio after first sentence (warm) | <= 1 s (real engine) |
-| Factory install of the bundled program (CORE-1b) | <= 30 s |
+| Metric | Budget | M0 evidence |
+|---|---|---|
+| `frames.inbound` / `frames.outbound` at `frameBytes` | no halt; <= 300 ms over the ping floor | 312 / 69 ms with a 57 ms floor: pass (J-0193) |
+| `frames.halt` (S1) | `frameBytes` <= half the halt point on fresh and used vats | 94,208 / 98,304 at 50 M: pass (J-0194) |
+| `vat.evaluateProgram` 150 k source, staged | <= 2 s; no MeterAbort; **depends on C-5** | 2.2-2.3 s, 95 % of it staging (J-0193, J-9024) |
+| `loop.runaway` at the crank budget | <= 1 s | 242 ms (J-0193) |
+| Turn start: submit accepted to provider request sent (scripted backend) | median <= 350 ms; <= 3 deliveries | |
+| Live delta: provider chunk in adapter to WS frame out | median <= 5 ms; 0 deliveries per delta | |
+| Deliveries per model round | <= 1 + ceil(round seconds / 10) + tool results | |
+| Tool intents per round | in the round-final delivery, 0 extra | |
+| Turn lease | 1 delivery per turn | |
+| `exec` trivial call (session -> exec vat -> session) | median <= 250 ms | vat -> adapter -> vat 70-76 ms per answered call (J-9043) |
+| `exec` first call in a session (spare exec vat) | <= 750 ms | a spare take is 157-176 ms (J-9045); was 1.5 s |
+| `exec` 100 answered sends / 100 `sendOnly` | <= 8 s / <= 1 s; answered **depends on C-7** | S1 from a probe vat: 100 answered 9.4-10.6 s until all answers were back, 100 `sendOnly` 490-513 ms (J-0143, before CORE-4) |
+| Session create with spare pool / without | <= 750 ms / <= 6 s; without **depends on C-5** | take 157-176 ms (was 1.5 s); cold 6.4 s for a 246 KB program (J-9045) |
+| `session.program` session program bundle size | <= 200 KB | (new) |
+| Session list, 100 sessions | <= 200 ms per 50-row page; 0 session vats woken | |
+| Session watch snapshot, 1,000-turn session | <= 300 ms; <= `frameBytes` | |
+| History page (32 turns) | <= 300 ms | |
+| Queue enqueue while a turn runs, round trip from the browser | median <= 150 ms | |
+| Concurrent: 10 sessions streaming with tool rounds at once | per-session turn start <= 2 x single; crank p95 <= 200 ms; row push <= 500 ms | |
+| Daemon throughput: deliveries per second at saturation | recorded; journal if < 50/s | adapter-to-adapter 82 events/s; a vat's batched `sendOnly` 236/s (J-0163, C-2) |
+| `hub.json` after 1,000 turns with a UI attached / after 50 sessions | <= 2 MB; ms per delivery <= 1.25 x fresh | 43 KB -> 630-690 KB during 2,000 hops, 110 KB at rest (J-0163) |
+| Checkpoint stall: turn latency while a busy session vat snapshots | p99 <= 1 s | |
+| Restart to serving, 50 idle sessions (checkpointed), no vat crashing | <= 15 s; 0 idle session vats woken | 4.4-5.8 s with 0-50 sleeping vats, 0 woken (J-9045, J-9050) |
+| Restart to serving with one session vat crashing on every replay (bound 5) | <= 15 s; recorded; **depends on C-8, C-9** | 35.8 / 68.5 / 36.4 s (J-9046) |
+| Restart to serving after SIGKILL with unsnapshotted vats | recorded; **depends on C-3** for growth | 11.0 -> 18.2 s over 24 kills with idle sleep 1 h (J-9044) |
+| Restart with 20 sessions that have environments | <= 15 s; 0 containers started | |
+| Clean shutdown, 50 sessions | <= 5 s | small state closes in 1.9 s (J-0147) |
+| Disk per idle session (session vat only / with exec vat) | <= 25 MB / <= 50 MB | 17.3 MB per sleeping vat (J-9045) |
+| Session vat snapshot with 10,000 turns | <= 1 s; decides whether M13 builds an archive | |
+| Secret read per round | in-process, <= 1 ms, 0 deliveries | |
+| Container `runCommand(['true'])` harness overhead over runtime | <= 150 ms | |
+| git `status` on 10 k-file repo through the capability | <= 1 s | |
+| Asset request first byte | <= 20 ms; 0 deliveries | |
+| Audio frame path | 0 deliveries; STT partial <= 300 ms after 0.5 s of new audio (real engine) | |
+| TTS first audio after first sentence (warm) | <= 1 s (real engine) | |
+| Factory install of the bundled program, up to 300 k characters | <= 15 s (was 30 s) | 11.6 s ASCII, 14.0 s for 478 KB of mixed text (J-0193) |
+| `template.start` copy + start to serving | <= 10 s (was 20 s) | 5.6 s (J-9045) |
 
 ---
 
@@ -800,20 +1010,40 @@ settings with these defaults.
 
 1. No `Date`, `Math.random`, `setTimeout`, `console`, dynamic `import`, `WeakRef` in `guest/`.
 2. No string `+=` in loops; no unbounded `slice` chains; build with arrays and `join`.
-3. No more than 100 eventual sends per crank; fan-out to many receivers is an adapter's job.
-4. No suspended async generators or `Array.fromAsync` across deliveries (README 761-762 vs
-   `rust/engine/ironhorse-snapshot/tests/persist_gates.rs:458,496` disagree; spike S5 settles it).
+3. No more than 100 eventual sends per crank (`sendsPerCrank`; answered sends halt at 250-300);
+   fan-out to many receivers is an adapter's job.
+4. Suspended async generators and `Array.fromAsync` may span deliveries and clean restarts (spike S5,
+   J-0147; `pkg/README.md` is stale on this), but they are retained state and need a bound or a delete
+   path like any other (rule 6). Their survival of a SIGKILL replay is untested; do not hold turn state
+   only in one.
 5. Every exo method guard bounds string length and array size; every message builder checks
    `frameBytes` and `crankOutBytes` (estimate: units x 3) and splits or stages before sending.
+   **No single message over `frameBytes`**, in either direction: an outbound message from one vat is
+   another vat's inbound frame, and one inbound message above about 94 KB halts the receiver for good.
 6. Objects, not ids, except F.2 (a)-(e); every retained collection has a bound or a delete path
    (owner's PR 1248 rule: bound retained state, not lifetime counts).
 7. Durable vats never hold browser viewers or other per-connection objects; they publish to an
    adapter channel.
 8. A retired break from an adapter object on the turn path means "restart": route it to recovery,
-   never record it as a tool failure. Test with `isRetiredBreak(error)` (matches the hub text,
-   `pkg/src/net/hub.js:1947`), kept in one helper.
+   never record it as a tool failure. A retired break from a guest vat (exec vat, child session) means
+   that vat is lost (halted or given up, D-17): retire its handle and state the loss. After a restart,
+   never wait for a guest call to settle; abandon it by generation (J-9048). Test with
+   `isRetiredBreak(error)` (matches the hub text, `pkg/src/net/hub.js:1947`), kept in one helper
+   (`guest/lib/retired.js`).
 9. Code shipped into vats is frozen there: keep vat programs thin, state as plain records, so
-   `exportState`/`importState` (M2) can move it to a new program version.
+   `exportState`/`importState` (M2) can move it to a new program version. The session program bundle
+   stays at or below 200 KB: every spare vat pays about 10 us per byte to load it (D-4).
+10. **No data-dependent record keys crossing into a vat, and none created inside one.** Every distinct
+    property name a vat ever receives or creates takes one of its about 57,000 names for life
+    (`vatKeyNames`, fact 4). Keys of records sent to or built in a vat come from a fixed vocabulary
+    (the interface shapes in `guest/lib/interfaces.js`). Data-keyed collections cross as arrays of
+    `[key, value]` pairs and are kept inside the vat as `Map`s built there; JSON from models, providers
+    or tools crosses as a string. Adapters and the gateway enforce the same on their side (section 7
+    key guard).
+11. **Staged sources.** Program source and any text larger than `frameBytes` reach a vat in chunks of
+    at most `frameBytes` bytes (`frameBytes` units for ASCII, `frameBytes / 3` units otherwise) and are
+    joined and evaluated (or recorded) inside the vat; text larger than `inlineBytes` is a Blob, read in
+    pages when a vat needs it. Never send a source in one message.
 
 ---
 
@@ -845,4 +1075,15 @@ settings with these defaults.
 14. G-10 spending limits, G-11 voice preset pinning a model that may leave the catalogue (fall back to
     the factory default with a warning), G-15 date in the prompt, G-26 backend for agent-built apps.
     [none / fall back and warn / no date / none]
-15. Crank budget raised daemon-wide (M0 S1 picks the value). [50 M pending S1]
+15. Crank budget raised daemon-wide to 50 M (S1 chose it, J-0143: runaway ends in about 0.27 s; 100 M
+    buys nothing). [50 M]
+16. Crash bound `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` (D-17): 5 keeps a vat through about 15-60 s of host
+    trouble but holds startup 31-64 s when one vat crashes on every replay; 2 serves in under 10 s but
+    gives a vat up about 1 s after its first crash, for good. [5]
+17. A session vat given up after repeated crashes is lost with no reinstate operation in core (C-11),
+    which conflicts with keeping transcripts. Ask the core owner for a reinstate operation (clear
+    `failure`, keep the journal), and meanwhile keep the lost session listed and its state on disk until
+    the operator deletes it? [ask core; keep listed]
+18. BOM handling: Syrup now keeps a leading U+FEFF (`5a73049032`), and the Ironhorse `TextDecoder`
+    strips a leading BOM unless `ignoreBOM`, as the Encoding Standard requires (J-0111, J-0113,
+    J-0192). [as built]

@@ -6,7 +6,8 @@ section 9, budgets in its section 11). All code is written in
 `H/` = `packages/thixotrope-harness/`. `pkg/` = `packages/thixotrope/`. `AH/` =
 `H/resources/agent-host/impl/` (the run-time-loaded implementation, D-14).
 Endo reference files are read with `git -C <T> show 1315bef86:<path>`. Spec items are cited as
-SPEC:<line> in `endo-harness-spec.md`.
+SPEC:<line> in `endo-harness-spec.md`. M0 is done; what it measured and changed is in `m0-results.md`,
+and decisions or budgets changed because of it are listed in "Changes after M0" at the end of this file.
 
 ## Conventions for every milestone
 
@@ -29,8 +30,14 @@ SPEC:<line> in `endo-harness-spec.md`.
     M12 J-1400.., M13 J-1500.., PM J-9000...
   - **Ownership transfers** (sequential only): `H/guest/session/prompt.js` M2 -> M5;
     `H/scripts/provision.mjs` runner M1a -> M12 (the steps table stays append-only for everyone).
-- **Run lock.** Integration tests and perf checks run only under `H/scripts/run-lock.mjs`
-  (architecture section 10). Parallel builders wait for it; never run two Ironhorse workloads at once.
+- **Run lock.** Integration tests, spikes, perf checks and the Ironhorse lane run only under
+  `H/scripts/run-lock.mjs` (architecture section 10); integration files take it with
+  `takeIntegrationLock(test, label)`, perf scripts through `runPerf`, anything else with
+  `node scripts/run-lock.mjs --label L -- <command>`. Parallel builders wait for it; never run two
+  Ironhorse workloads at once.
+- **Integration gate.** Integration files are skipped unless `THIX_HARNESS_INTEGRATION=1`; they start
+  from the state template (`H/test/template/index.js`, architecture section 10) with `idleSleepMs`
+  2,000, and kill only the supervisor process (`state.kill()`).
 - **Done means:** unit + adapter tests pass; the milestone's integration files pass alone, each in
   under 5 minutes with the state template (M0 S8); every listed perf check has been run and its JSON
   lines pasted into `H/JOURNAL.md` with commit, crank budget and load average; at least one journal
@@ -62,6 +69,12 @@ check at the end lists every file and hook point each group touches.
 
 ## M0. Groundwork: frame cost, package skeleton, fit spikes
 
+**Status: done.** Build commits `0d35cbd569..7fa1a7057a`; PM follow-ups `3f2b90954e..6677f92fcc`
+(upstream PR 1667 merged, snapshot goldens re-pinned, run lock and serve fixes, perf through the
+template helper, restart re-validated). Journal J-0100..J-0198 and J-9000..J-9051; summary in
+`m0-results.md`. The work-unit table below is kept as the record of what M0 was asked to do; the
+outcome follows it.
+
 **Goal.** Make a vat survive the messages the harness needs, choose the frame and crank-budget
 settings with numbers, and prove the Thixotrope mechanisms the architecture rests on, before any
 harness code depends on them.
@@ -73,7 +86,8 @@ harness code depends on them.
   `pkg/src/core/evaluate-source.js` (CORE-1b), `pkg/test/ironhorse/text-codec.js` (new),
   `H/package.json`, `H/README.md`, `H/JOURNAL.md`, `H/scripts/{bundle-guest,run-lock,serve}.mjs`,
   `H/perf/_harness.mjs`, `H/perf/frames.perf.mjs`, `H/test/spikes/`, `H/test/template/`,
-  `H/.eslintrc` guest rules, root workspace registration of `H`.
+  `H/lint/guest-rules.js` guest rules (hooked into the root `eslint.config.js`; the repository has no
+  per-package `.eslintrc`), root workspace registration of `H`.
 
 **Work units**
 
@@ -106,11 +120,21 @@ harness code depends on them.
 | `loop.runaway` wall time until MeterAbort at the chosen budget | <= 1 s |
 | `template.start` copy + start to serving | <= 20 s |
 
-**Fit risk:** poor fit until CORE-1a/CORE-1 land: the per-byte cost of inbound frames is the largest
-single constraint on the design. If CORE-1 cannot land, the design still works at `frameBytes` =
-24,576 (everything large is staged), with slower installs and more pages.
+**Outcome.**
 
-**Deferred:** booted-image templates (CORE-3).
+| item | result | entries |
+|---|---|---|
+| Acceptance 1 (200 frames in and out; halt point >= 2 x `frameBytes`) | pass: 200 x 24,576 in (median 349 ms) and out (68 ms); halt at 94,208-98,304 on fresh and used vats | J-0194 |
+| Acceptance 2 (malformed UTF-8 refused by Node and vats) | pass: fatal decoding in both Syrup decoders and the vat polyfill; a crafted-frame vat test was not written | J-0192, J-0197 |
+| Acceptance 3 (`test:ironhorse` gate) | pass: 65/65 (55 original + 1 base64 scenario + 7 text-codec + 2 key-space), re-run after the PR merge | J-0196, J-9042 |
+| Acceptance 4 (spike verdicts) | S1 settings chosen (J-0141..J-0144, J-0194); S2 D-7 confirmed, CORE-2 not needed (J-0160); S3 sources must be staged (J-0146, J-0195); S4 hop 25 ms, `hub.json` holds transient frames in clear (J-0163, J-0164); S5 async generators persist (J-0147); S6 D-4 confirmed, CORE-3 not needed (J-0183..J-0185); S7 foreign remotables in specs survive (J-0162); S8 templates work (J-0180..J-0182); S9 intent before effect holds (J-0165) | |
+| Perf table | all pass; `vat.evaluateProgram` 2.2-2.3 s passes under the 1.25 x rule only (staging cost, C-5) | `m0-results.md` page 7 |
+| W0.1 CORE-1a | landed in `@endo/immutable-arraybuffer`, not in `boot.rs` (the shim hid the statics) | J-0100 |
+| W0.3 CORE-1b | the staging chunk is 8,192 units (`frameBytes / 3`); install 300 k in 11.6 s | J-0120, J-0193 |
+| Core changes beyond the plan | CORE-4 engine `getOwnPropertyDescriptors` index keys (`d0fd6b1138`), CORE-5 Syrup BOM (`5a73049032`), CORE-6 halt on session end (`63927edaba`), CORE-7 exports (`042171c094`) | architecture 1.1 |
+| Open | the core-change candidates C-1..C-15 | `m0-results.md` page 6 |
+
+**Deferred:** nothing from M0's scope; CORE-2 and CORE-3 are not needed.
 
 ---
 
@@ -126,27 +150,41 @@ transcript and queue intact with the in-flight turn marked outcome-unknown and n
   creating/ready), R4-10, R4-40, R4-43, R4-44, R4-45, R4-50, R4-52, R4-54, R4-60, R4-65 (as amended
   by D-5), R4-66, R4-67.
 - **Depends on:** M0.
-- **Owns:** `H/guest/lib/{turn-engine,reply-fold,transcript-records,bounded,retired}.js`,
+- **Owns:** `H/guest/lib/{interfaces,limits,turn-engine,reply-fold,transcript-records,bounded,retired}.js`,
+  `H/designs/m1a-interfaces.md`,
   `H/guest/session/{main,session,turn,turn-hooks,queue,records,live,recovery,tool-table}.js`,
   `H/guest/factory/{main,root,factory,services,session-options,rows}.js`,
   `H/resources/agent-host/{durable,ephemeral}.js`, `AH/{index,attach,endpoint,channels,channel-taps,live-service,composer,timers}.js`,
   `AH/providers/scripted.js`, `AH/tools/echo.js`, `H/scripts/{provision.mjs,provision-steps.js}`,
-  `H/test/{unit,adapter,integration}/m1a-*`, `H/test/fixtures/scripts/`, `H/perf/{turn,restart}.perf.mjs`.
+  `H/test/{unit,adapter,integration}/m1a-*`, `H/test/fixtures/scripts/`,
+  `H/perf/{turn,restart,session}.perf.mjs`.
 
 **Note for builders.** reuse.md:353 says an interrupted provider call should be re-issued; do not:
-R4-66 and architecture section 4.4 forbid it.
+R4-66 and architecture section 4.4 forbid it. Read `m0-results.md` first: in particular the frame
+ceiling (no single message over `frameBytes`), the per-vat name table (no data-dependent record keys,
+architecture rule 12.10), staged sources (rule 12.11), and crashes versus halts (D-17).
 
 **Work units**
 
 | id | files | behaviour | tests |
 |---|---|---|---|
-| W1a.1 guest lib | `H/guest/lib/*` copied from `fae/src/turn-engine.js`, `fae/session/reply-fold.js`, `hosted-agent/src/transcript-records.js` (subset); `bounded.js` (byte estimate units x 3, frame checks); `retired.js` (`isRetiredBreak`) | prelude globals only; injected ids and times | ported `fae/test/turn-engine.test.js`, `reply-fold.test.js`, `transcript-records.test.js` (Node, ses-ava) |
-| W1a.2 agent-host manager + attach | `durable.js`, `ephemeral.js` loader (D-14), `AH/{index,attach,endpoint}.js`, `AH/providers/scripted.js`, `AH/tools/echo.js`, `AH/timers.js` | attach pattern (D-7); `AgentHostAdmin.makeBackend({kind:'scripted', script})`, `forSession`, `onStart`; Endpoint with `holdTurn`/`releaseTurn` lease, `startRound`, `cancelRound`, `armDeadline`/`disarm`; `dispatching()` handshake before round 0; scripted provider (chunks with delays, tool calls, usage, errors, stall-until-cancel); `echo` adapter tool with `delayMs` and output size; outputs over `frameBytes` fail the round with "round output exceeds this build's frame limit" (no staging until M1b) | adapter tests with a fake vat sink: handshake order, lease settles at release, oversize refused |
+| W1a.0 interface contract | `H/guest/lib/interfaces.js`, `H/guest/lib/limits.js`, `H/designs/m1a-interfaces.md`, `H/test/unit/m1a-interfaces.test.js` | One subagent, first, alone. `interfaces.js` exports the `M.interface` guards and method names of every object that crosses between M1a's units, in object-passing style (objects as arguments, strings only for F.2 reasons): `Session`, `SessionInternal`, `Turn`, `QueueEntry` and `Receipt`, `Endpoint`, `TurnSink`, `ContextSource` (shape only; built in M1b), `Live` and `Composer`, the channel `Publisher` and `Subscriber` facets, the tool-table entry (`describe()`, `execute(args)`), `SessionServices`, `SessionHostFacet`, `RowReporter`, `AgentHostAdmin` and `Backend` (M1a subset of architecture 3.3), `HarnessRoot`, `Operator`, `SessionFactory`, `SpareMaker` (shape only; M1b), and the record shapes of architecture 4.3 (`TurnStarted`, `Dispatched`, `Partial`, `RoundSettled`, `ToolIntents`, `ToolResult`, `TurnSettled`) and of `SessionRow`. Every string and array in a guard is bounded from `limits.js`; every record shape is a closed `M.splitRecord` with a fixed key vocabulary (rule 12.10); tool arguments are JSON text. `limits.js` is the guest copy of `config/defaults.js` `limits` (frameBytes, crankOutBytes, inlineBytes, sendsPerCrank, execSourceBytes, previews, queue bounds, calls per round and window). `m1a-interfaces.md` says, for each method: who calls it (vat, adapter, gateway, test), in which crank of the turn sequence (architecture 4.1), answered or `sendOnly`, the largest message it can carry in bytes, and what a retired break from it means (restart or vat lost). | unit: every guard accepts a sample and refuses an unbounded string, an oversize array and an unknown record key; `limits.js` equals `config/defaults.js` `limits` for every shared name |
+| W1a.1 guest lib | `H/guest/lib/{turn-engine,reply-fold,transcript-records,bounded,retired}.js` copied from `fae/src/turn-engine.js`, `fae/session/reply-fold.js`, `hosted-agent/src/transcript-records.js` (subset); `bounded.js` (byte estimate units x 3, frame and crank-out checks, chunking of a text into `frameBytes` pieces); `retired.js` (`isRetiredBreak`) | prelude globals only; injected ids and times; imports `limits.js` and `interfaces.js`, never edits them | ported `fae/test/turn-engine.test.js`, `reply-fold.test.js`, `transcript-records.test.js` (Node, ses-ava); chunking keeps surrogate pairs |
+| W1a.2 agent-host manager + attach | `durable.js`, `ephemeral.js` loader (D-14), `AH/{index,attach,endpoint}.js`, `AH/providers/scripted.js`, `AH/tools/echo.js`, `AH/timers.js` | attach pattern exactly as the S2 fixture (`H/test/spikes/fixtures/attach/`: `bind` awaits `attach`; `open()` retries once through `register` when its facet is retired); `AgentHostAdmin.makeBackend({kind:'scripted', script})`, `forSession`, `onStart`; Endpoint with `holdTurn`/`releaseTurn` lease, `startRound`, `cancelRound`, `armDeadline`/`disarm`; `dispatching()` handshake before round 0; scripted provider (chunks with delays, tool calls, usage, errors, stall-until-cancel); `echo` adapter tool with `delayMs` and output size; tool-call arguments passed to the vat as JSON text; any message to a vat over `frameBytes` fails the round with "round output exceeds this build's frame limit" (no staging until M1b) | adapter tests with a fake vat sink: handshake order, lease settles at release, oversize refused before sending, no record built from model JSON |
 | W1a.3 channels | `AH/{channels,channel-taps,live-service,composer}.js` | session channel with publisher/subscriber facets (D-8), seq numbers, current-turn fold, subscriber dropped on close; `Live.subscribe(session, rev)`; `Composer.submit(session, text, requestId)` stamping `at` (no staging yet: text over `inlineBytes` refused); both reachable for tests through `AgentHostAdmin.live()` / `.composer()` (operator only) | adapter tests: fold equals replay; dropped subscriber; publish batch order |
-| W1a.4 session vat: turn | `H/guest/session/{session,turn,turn-hooks,records,live,tool-table}.js` | `Session`, `Turn`, records of section 4.3, atomic claim, lease, publish batching (sendOnly in a turn, answered outside), `watch()`, tool table with `echo`, results in call order, R4-43/R4-45 texts, round limit | unit tests with in-memory fakes: intent before result, call order, round limit, claim removes the entry |
-| W1a.5 session vat: queue + recovery | `H/guest/session/{queue,recovery}.js` | FIFO queue (`enqueueOnce` with receipt per request id, minimal), `restart` hold, `recoverAfterRestart()` (section 4.4) triggered by `isRetiredBreak` on the lease or any turn-path call; `startTurn` refusal text R4-10 | unit: every recovery case; a retired break on a tool call never becomes a tool failure |
-| W1a.6 factory + provisioning | `H/guest/factory/*`, `H/scripts/provision*.{mjs,js}` | `HarnessRoot`, `Operator.getFactory`, `createSession({title, preset, backend, modelId})` with the built-in preset `chat-only`, sessions created directly (no pool yet), `listSessions` paged, `findSession(key)`, per-session `RowReporter` (row-visible transitions only), start listener (pool none yet; completes or rolls back interrupted creations); provisioning steps table: `install-native agentHost`, `inventory.set('vats', vats)` in the workspace vat, `install harness ... grants` | integration: provision on a fresh state dir; re-running is a no-op |
-| W1a.7 slice tests + perf | `H/test/integration/m1a-slice.test.js`, `H/perf/{turn,restart}.perf.mjs` | the acceptance list below, with SIGKILL of the supervisor child; uses the S8 template and `idleSleepMs: 2000` | acceptance 1-8 |
+| W1a.4 session vat: turn | `H/guest/session/{main,session,turn,turn-hooks,records,live,tool-table}.js` | `Session`, `Turn`, records of section 4.3, atomic claim, lease, publish batching (sendOnly in a turn, answered outside), `watch()`, tool table with `echo`, results in call order, R4-43/R4-45 texts, round limit; data-keyed state in `Map`s only | unit tests with in-memory fakes: intent before result, call order, round limit, claim removes the entry |
+| W1a.5 session vat: queue + recovery | `H/guest/session/{queue,recovery}.js` | FIFO queue (`enqueueOnce` with receipt per request id, minimal), `restart` hold, `recoverAfterRestart()` (section 4.4) triggered by `isRetiredBreak` on the lease or any adapter call on the turn path, never by a guest-vat break; abandons guest calls by generation instead of awaiting them; `startTurn` refusal text R4-10 | unit: every recovery case; a retired break on a tool call never becomes a tool failure; recovery completes while a guest call stays pending forever |
+| W1a.6 factory + provisioning | `H/guest/factory/*`, `H/scripts/provision*.{mjs,js}` | `HarnessRoot`, `Operator.getFactory`, `createSession({title, preset, backend, modelId})` with the built-in preset `chat-only`; sessions created directly (no pool yet): `E(vats).createWorker`, the session bundle staged in `frameBytes`-unit chunks (ASCII) or `frameBytes / 3` (otherwise), one evaluating crank, then `make(config)`; `listSessions` paged, `findSession(key)`, per-session `RowReporter` (row-visible transitions only); a row becomes `lost` when a call into its session breaks with the retired text (D-17); start listener (pool none yet; completes or rolls back interrupted creations); provisioning steps table: `install-native agentHost`, `inventory.set('vats', vats)` in the workspace vat, `install harness ... grants`; `provision-steps.js` is also the `provision` of an `ensureTemplate({ id: 'm1a' })` template | integration: provision on a fresh state dir; re-running is a no-op; the bundle-size check |
+| W1a.7 slice tests + perf | `H/test/integration/m1a-slice.test.js`, `H/perf/{turn,restart,session}.perf.mjs` | the acceptance list below, from the `m1a` template with `idleSleepMs: 2000`, SIGKILL through `state.kill()` | acceptance 1-10 |
+
+**Order and parallelism inside M1a.** W1a.0 runs first, alone (one subagent); nothing else starts
+until its contract is committed. Then **W1a.1, W1a.2 and W1a.3 run in parallel**, then **W1a.4, W1a.5
+and W1a.6 run in parallel** (W1a.6 needs W1a.2's resource for its integration test, not for its unit
+tests), then W1a.7. Each unit owns exactly the files in its row; the sets are disjoint. No unit edits
+`interfaces.js` or `limits.js`: a unit that needs a contract change stops and asks the PM, who amends
+W1a.0's files in one commit and tells the other units. `turn-hooks.js` and `tool-table.js` are created
+by W1a.4; `services.js`, `session-options.js` and `provision-steps.js` by W1a.6; later milestones
+append to them (hook tables).
 
 **Acceptance tests (observable)**
 1. Provision a fresh state directory; `createSession({title:'t', preset: chatOnly, backend: scripted})`
@@ -158,17 +196,26 @@ R4-66 and architecture section 4.4 forbid it.
    such call; the history page shows one intent record before both results, results in call order.
 4. Submit while a turn runs: the message waits and runs next (FIFO). `startTurn` while a turn is
    active fails with "Session already has an active turn; observe or cancel it first" (R4-10).
-5. Stall-until-cancel script: SIGKILL after `Dispatched`, restart: session, transcript and queue are
-   there; the turn is `outcome-unknown`; the fake provider received exactly one request; a queued
-   message is held `restart` with the A.4 text; `turn.resolve(note)` works while idle.
+5. Stall-until-cancel script: SIGKILL after `Dispatched`, restart: as soon as the daemon serves,
+   session, transcript and queue are there and the turn is already `outcome-unknown` (the lease break
+   is delivered during startup); the fake provider received exactly one request; a queued message is
+   held `restart` with the A.4 text; `turn.resolve(note)` works while idle.
 6. SIGKILL before `dispatching()` was answered: the turn is closed "Interrupted before dispatch; no
    backend execution was started."; the user message appears **once** in history; sending a new
    message releases the hold and does not resend the old one (coverage 10).
 7. SIGKILL while an `echo` call is in flight: after restart its result reads "Tool outcome unknown; do
    not automatically retry.", the turn is outcome-unknown, no further round was requested, and the
    echo log shows the call ran at most once.
-8. A scripted reply of 64 KiB fails the turn with the recorded frame-limit reason; the session then
-   runs a normal turn.
+8. Frame limit: a scripted reply of 64 KiB, and an `echo` result of 64 KiB, each fail the turn with the
+   recorded reason "round output exceeds this build's frame limit" before any message reaches the vat;
+   the session then runs a normal turn (it was not halted).
+9. Record keys: a scripted tool call whose JSON arguments carry 2,000 distinct keys reaches `echo`
+   intact, is recorded as text, and the session then runs 3 more turns.
+10. Crashing session vat at restart (bound 2 through `--max-delivery-attempts 2`, to keep the test
+    short): SIGKILL with session A awake and unsnapshotted, then kill A's worker each time it appears
+    (the killer of `perf/crash.perf.mjs`). The daemon serves after A is given up; the factory and
+    session B answer; a call on A rejects with the retired text and does not hang; `listSessions` shows
+    A `lost`. No other vat was given up.
 
 **Perf checks**
 | check | budget |
@@ -176,11 +223,16 @@ R4-66 and architecture section 4.4 forbid it.
 | `turn.start` submit to scripted provider request | <= 350 ms; <= 3 deliveries |
 | `turn.delta` adapter chunk to subscriber | <= 5 ms; 0 deliveries per delta |
 | `turn.round` deliveries per round with 2 tool calls | <= 3, plus 1 lease delivery per turn |
+| `session.program` size of the bundled session program | <= 200 KB (record the bytes) |
+| `session.createCold` `createSession` without a pool | <= 6 s (6.4 s for a 246 KB program in M0, J-9045; depends on C-5) |
+| `install.factory` provisioning install of the factory bundle | <= 15 s |
 | `restart.serving` 10 checkpointed idle sessions + 1 in flight | <= 10 s; woken session vats = 1 (gate) |
-| too-big probe: 64 KiB round output; 300 k-char echo output | refused / cut in the callee; no vat halt |
+| `restart.crashingSession` as acceptance 10 with bound 5 | recorded; target 15 s depends on C-8, C-9 (M0: 36-69 s) |
+| too-big probes: 64 KiB round output; 300 k-char echo output; 2,000-key tool arguments | refused / cut in the callee / kept as text; no vat halt; the session answers afterwards |
 
 **Fit risk:** awkward. The loop maps well onto vats; the risks are the live-channel ordering across
-hub and process and relying on the retired text as the restart signal.
+hub and process, relying on the retired text as the restart signal (it also means "vat lost" from a
+guest vat), and the cold session create cost while there is no pool.
 
 **Deferred:** exec, spare pool, staging, context cache, list feed (M1b); real providers and the full
 queue (M2); UI (M3).
@@ -207,10 +259,10 @@ the first multi-session performance checks.
 |---|---|---|---|
 | W1b.1 blobs + staging | `AH/{blobs,content}.js`, `H/guest/session/staging.js`, Composer staging | D-15 pre-minted handles, fsync before handing out; `BlobWriter`; `Content.read(blob, offset, length)` in-process; staging of submissions, model messages, tool args, tool results and native context over `inlineBytes`; progress as `{partial: Blob, tail}` replacing one record | adapter: handle never handed out before fsync; resolve after restart; unit: partial record replaced |
 | W1b.2 context cache | `AH/{context-cache,projection,projection-hooks}.js`, `H/guest/session/context-source.js` | D-9: records in, projection in Node; `{count, epoch}` check; page pull from the latest compaction boundary; batched blob resolve; native context replayed from blob | adapter: rebuild equals incremental; integration: rebuild after restart |
-| W1b.3 exec vat | `H/guest/exec/main.js` | one persistent `Compartment`; async-body wrapper; endowments `E, harden, sleep, console(bounded), powers` (empty live facet until M5); `{busy}` answer while a call runs; large results cut (R4-46) and written to the passed `BlobWriter` in pieces; source read from blob when large; `execSourceBytes` refusal | unit (Node Compartment) |
-| W1b.4 exec tool | `H/guest/session/tools/exec.js` | `exec` in the tool table; adapter deadline armed with the call; MeterAbort break -> terminated result + explicit `retire()`; deadline -> timeout result + retire; cancel abandons by generation (no retire); busy at next call -> retire + "the previous exec call was still running; the scope was reset" | integration |
-| W1b.5 pool + list feed | `H/guest/factory/{pool,list-feed}.js` | spare pool (D-4) with `whenSettled()`; `ExecHandle` (run, retire); session list channel (one publish per crank of row changes, `rev`); `sessionListFeed()`; publisher refreshed in the start listener; calls-per-round cap and window in `turn.js` via `turn-hooks.js` settings | integration |
-| W1b.6 tests + perf | `H/test/integration/m1b-*.test.js`, `H/perf/{exec,pool,concurrency,hub}.perf.mjs` | acceptance below | acceptance 1-9 |
+| W1b.3 exec vat | `H/guest/exec/main.js` | one persistent `Compartment`; async-body wrapper; endowments `E, harden, sleep, console(bounded), powers` (empty live facet until M5); `{busy}` answer while a call runs; large results cut (R4-46) and written to the passed `BlobWriter` in pieces of at most `frameBytes / 2`; a source over `inlineBytes` read from its Blob in pages of at most `frameBytes`, joined and evaluated in one crank (never one message: S3); `execSourceBytes` refusal; no data-keyed records leave the vat (`console` lines and results are text) | unit (Node Compartment) |
+| W1b.4 exec tool | `H/guest/session/tools/exec.js` | `exec` in the tool table; adapter deadline armed with the call; a retired break from the exec vat (halt or crash give-up, D-17; indistinguishable from inside) -> the neutral terminated result of architecture section 6 + explicit `retire()`; deadline -> timeout result + retire (this also bounds a worker that misses the watchdog and is being retried); cancel abandons by generation (no retire); busy at next call -> retire + "the previous exec call was still running; the scope was reset"; after a restart the pending exec call is abandoned, never awaited (J-9048) | integration |
+| W1b.5 pool + list feed | `H/guest/factory/{pool,list-feed}.js` | spare pool (D-4) with `whenSettled()`: spares made as in S6 (`createWorker`, staged bundle, evaluating crank returning a `SpareMaker`), refilled with up to 4 creations in parallel; `ExecHandle` (run, retire); session list channel (one publish per crank of row changes, `rev`); `sessionListFeed()`; publisher refreshed in the start listener; calls-per-round cap and window in `turn.js` via `turn-hooks.js` settings | integration |
+| W1b.6 tests + perf | `H/test/integration/m1b-*.test.js`, `H/perf/{exec,pool,concurrency,hub}.perf.mjs` | acceptance below | acceptance 1-11 |
 
 **Acceptance tests (observable)**
 1. A second subscriber attached mid-turn receives a fold equal to the events so far, then the same live
@@ -231,19 +283,26 @@ the first multi-session performance checks.
    provider receives the same context as before the restart, including the scripted native context.
 9. Two list-feed subscribers see create, rename and delete within 500 ms; a closed subscriber is
    dropped and costs no further work.
+10. SIGKILL during a 30 s `exec` sleep, restart: the turn is outcome-unknown and recovery did not wait
+    for the exec call; the next turn's `exec` works and, when the exec vat survived, still sees
+    `globalThis` bindings from before.
+11. An exec vat whose worker is killed on every attempt while a call runs (live, no restart): the
+    call ends with the terminated result after the bound is spent, the lost exec vat is retired, and
+    the next `exec` gets a fresh scope.
 
 **Perf checks**
 | check | budget |
 |---|---|
 | `exec.trivial` | <= 250 ms |
-| `exec.first` (spare exec vat) | <= 1.5 s |
-| `exec.sends` 100 answered / 100 `sendOnly` from one body | <= 8 s / <= 1 s; no MeterAbort |
-| `session.create` with spare pool / without | <= 1.5 s / <= 6 s |
+| `exec.first` (spare exec vat) | <= 750 ms (spare take 157-176 ms in M0) |
+| `exec.sends` 100 answered / 100 `sendOnly` from one body | <= 8 s / <= 1 s; no MeterAbort (M0 probe: 9.4-10.6 s / 0.5 s; answered depends on C-7) |
+| `session.create` with spare pool / without | <= 750 ms / <= 6 s (without: depends on C-5) |
+| `pool.refill` 2 spares after 2 takes, 4 lanes | recorded (M0: 6.4 s per spare, 50 in 108.7 s) |
 | `context.rebuild` 1,000-turn session after restart | <= 5 s before the request is sent |
 | `concurrency.10` 10 sessions streaming with tool rounds | per-session turn start <= 2 x single; crank p95 <= 200 ms; row push <= 500 ms |
 | `hub.growth` `hub.json` bytes and ms per delivery after 1,000 turns with a subscriber, after 50 sessions | <= 2 MB; <= 1.25 x fresh |
-| `exec.retire` disk returned after a quarantined exec vat is retired | >= 15 MB |
-| too-big probes: 300 tool calls in one round; 1 MiB reply; 10 MiB echo output; 300 KiB exec body | no vat halt |
+| `exec.retire` disk returned after a lost exec vat is retired | >= 15 MB (M0: 17.3 MB per vat) |
+| too-big probes: 300 tool calls in one round; 1 MiB reply; 10 MiB echo output; 300 KiB exec body; an exec body building an object with 60,000 fresh keys | no session vat halt (the last halts only the exec vat, which is retired) |
 
 **Fit risk:** awkward. Persistent scope and guest-to-guest exec fit well; the cost is blob plumbing
 for anything over a few KB and the exec compute ceiling per crank.
@@ -286,7 +345,7 @@ delete with reclamation, data-only export/import, and fixed prompt composition.
 | W2.4 queue and submissions | `guest/session/{submissions,holds,holds-table}.js`, `guest/lib/pending-queue.js` (adapted, heap Map, no pet names) | bounded 100 waiting, 4,096 receipts, request-id window from the Composer's `at`, `QueueEntry.edit/cancel/sendNow` (edits go through the Composer for staging), holds `restart/stopped/refused/unavailable` with the A.4 texts (no `interrupted` state, section 4.3), release rule R4-56, duplicate detection | ported `fae/test/session/pending-queue.test.js`, `session-submissions.test.js` (minus `interrupted` cases, recorded) |
 | W2.5 history + snapshot measurement | `guest/session/history.js` | history pages of 32 turns and `frameBytes`, `getTurnContent(ref)`, `getCurrentTurn`; snapshot measured at 1,000 / 10,000 / 30,000 turns (fixtures by `importState`) to decide on an archive | 300-turn session pages back to turn 1 |
 | W2.6 turn completeness | `guest/session/{turn hooks,usage,prompt}.js` via `turn-hooks.js` | unknown tool / bad JSON texts (R4-43, R4-45), synthesized ids R4-42, round limit fallback R4-47, cancel tears down the stream (R4-7, R4-49) and records late results as ignored, usage five counts and context reading (R4-33, R4-83 "skipped if not read in time"), turn deadline setting (default off), fixed prompt composition (R4-26 parts 1-2, 7) | integration `m2-turns.test.js` |
-| W2.7 delete, rollback, export | `guest/factory/{delete,export}.js`, `guest/session/export.js` | `deleteSession` marks `deleting`, retires the session and exec vats, releases blobs (and later workspace/environment via `onSettle`-style hooks), completes after a restart (R4-9); failed creation rolls back including after a restart (R4-6); `exportState`/`importState` of factory and session records (exec bindings are not exportable: documented loss) | integration `m2-lifecycle.test.js` |
+| W2.7 delete, rollback, export | `guest/factory/{delete,export}.js`, `guest/session/export.js` | `deleteSession` marks `deleting`, retires the session and exec vats (also a `lost` session's, D-17: this is the only way its disk is returned), releases blobs (and later workspace/environment via `onSettle`-style hooks), completes after a restart (R4-9); failed creation rolls back including after a restart (R4-6); `exportState`/`importState` of factory and session records (exec bindings are not exportable: documented loss) | integration `m2-lifecycle.test.js` |
 
 **Acceptance tests**
 1. Against the fake server: an OpenRouter-format session streams more than one delta per reply.
@@ -324,7 +383,7 @@ delete with reclamation, data-only export/import, and fixed prompt composition.
 | `checkpoint.stall` turn latency while a busy session vat snapshots | p99 <= 1 s |
 | `provider.overhead` fake-server first byte to subscriber delta | <= 5 ms per delta; 0 deliveries |
 | `secrets.read` per round | <= 1 ms, in-process |
-| `restart.serving` 50 checkpointed sessions x 300 turns (built by `importState`) | <= 15 s; 0 idle vats woken (gate) |
+| `restart.serving` 50 checkpointed sessions x 300 turns (built by `importState`), no vat crashing | <= 15 s; 0 idle vats woken (gate) (M0: 5.3 s with 50 sleeping spares) |
 | `throughput` deliveries per second at saturation (20 sessions) | recorded; journal if < 50/s |
 | `disk.session` idle session after 300 turns; after delete | <= 25 MB plus blobs; returned on delete |
 | too-big probes: 200 k-char submission accepted through the Composer, 200 k + 1 refused; a 100 KiB string sent straight to a vat method through the admin path is refused by the client library before sending | no halt |
@@ -359,10 +418,10 @@ fragment secret, create sessions, chat with streaming, reload and reconnect with
 |---|---|---|---|
 | W3.0 UI shell + gateway skeleton | `ui/build.mjs`, `ui/src/{features.js,shell/}`, `AH/gateway/{server,routes}.js` | esbuild into `implDir` assets; shell with feature mount points; routes table; app shell for every non-upgrade GET | component smoke test; route table test |
 | W3.1 auth + limiter | `AH/gateway/{auth,csp,limiter}.js` | `serveGateway({port, operator, publicOrigin, trustedProxies})`; `/ws` upgrade only, Origin check; CSP; fragment secret checked over WS (`fetch(secret)`), +1,000 ms per failure per client address with trusted-proxy forwarding and a global ceiling; secret in the secrets store; `rotateSignIn` | adapter: wrong secret delays; two forwarded addresses limited independently; untrusted `X-Forwarded-For` ignored; Origin refused; query-string config refused |
-| W3.2 CapTP bridge | `AH/gateway/{captp-bridge,frame-guard}.js` | `@endo/captp` over WS; bootstrap `fetch` -> `{operator, live, content, composer}`; frame guard refuses calls over `frameBytes`; 1 MiB WS cap | adapter: browser-side captp client calls `E(factory).listSessions()` through a fake operator; oversize call refused |
+| W3.2 CapTP bridge | `AH/gateway/{captp-bridge,frame-guard}.js` | `@endo/captp` over WS; bootstrap `fetch` -> `{operator, live, content, composer}`; frame guard refuses calls over `frameBytes`; key guard refuses records with keys the target method's shape in `guest/lib/interfaces.js` does not declare (architecture section 7); 1 MiB WS cap | adapter: browser-side captp client calls `E(factory).listSessions()` through a fake operator; oversize call refused; undeclared-key call refused |
 | W3.3a sessions | `ui/src/sessions/` from `space-floot/src/*` and `chat/floot-*.js` at 1315bef86 | session list (live through the list feed), new-session flow (preset, backend, model from catalogue incl. "factory default") | component tests ported from `chat/test/component/floot*.test.js` |
 | W3.3b conversation | `ui/src/conversation/` | streaming bubble, thinking row, tool groups ("Thought for ..."), highlighted `exec` source, `</>` raw view, status rows, "Load earlier messages", large content through `Content` | component tests with a fake session |
-| W3.3c queue + recovery | `ui/src/conversation/`, `ui/src/shell/` | queue display with Send now / Edit / Delete (through the Composer), reconnect overlay (0,1,2,5,10,30 s), reload re-attach through `getCurrentTurn`, drawer at <= 640 px, recovery panel with "Record acknowledgement", usage status bar | component tests |
+| W3.3c queue + recovery | `ui/src/conversation/`, `ui/src/shell/` | queue display with Send now / Edit / Delete (through the Composer), reconnect overlay (0,1,2,5,10,30 s, then every 30 s; a refused connection shows "Server starting...", D-17), reload re-attach through `getCurrentTurn`, drawer at <= 640 px, recovery panel with "Record acknowledgement", usage status bar | component tests |
 | W3.4 browser e2e | `test/browser/m3-*.mjs` | Playwright/browser-pane scripts against a local gateway + scripted backend | acceptance below |
 
 **Acceptance tests**
@@ -373,7 +432,8 @@ fragment secret, create sessions, chat with streaming, reload and reconnect with
    secret never appears in an HTTP request (network log).
 3. Session list updates live across two tabs; rename and delete propagate.
 4. Kill the WS: "Reconnecting..." overlay, retries on the schedule; the running turn reattaches and
-   keeps streaming.
+   keeps streaming. With the gateway not listening for 60 s (daemon stopped), the overlay says
+   "Server starting..." and the page reconnects by itself within 30 s of the gateway's return.
 5. Close the tab mid-turn, reopen: the turn finished on the server and is in the transcript. Reload
    mid-turn: the page re-attaches to the running turn (R4-62).
 6. Drop the connection between send and ack; resend from the saved draft creates no duplicate.
@@ -382,8 +442,8 @@ fragment secret, create sessions, chat with streaming, reload and reconnect with
 8. Tool calls fold into "Thought for ..." groups; `exec` shows highlighted source; `</>` raw view;
    "Load earlier messages" pages history; a 1 MiB reply renders fully.
 9. At 640 px the sidebar becomes a drawer. `[real-browser]` on a phone is optional.
-10. A browser call carrying a 100 KiB string straight to a session method is refused by the gateway
-    and the session keeps working.
+10. A browser call carrying a 100 KiB string straight to a session method, and one carrying a record
+    with 2,000 invented keys, are both refused by the gateway, and the session keeps working.
 
 **Perf checks**
 | check | budget |
@@ -681,7 +741,9 @@ creates a hidden session from the spare pool inheriting backend, model, effort, 
 current network policy; tree limit 8 counting in-flight spawns and depth 2 with the R4-71 text; at most
 65,536 retained asks (R4-102); answer cap 16 Mi characters, staged, then the tool limit; `askSubagent`
 with an adapter-timer timeout; `stopSubagent` deletes depth-first; recovery cancels in-flight child
-asks (architecture 4.4).
+asks (architecture 4.4) and never waits for them to break: an ask pending into a child vat that was
+given up during startup never settles (J-9048); a retired break from a child session means the child
+is lost (D-17), not a restart.
 
 **Acceptance tests**
 1. The operator sends a package with an attachment; a turn starts from the inbox; the model `adopt`s
@@ -980,3 +1042,38 @@ delete in M2; tests restated as behaviour; new tests for R4-10, R4-56, R4-22, R4
 R4-57, R4-62, R4-83, P-04, P-29, P-35, P-45, P-49, P-52/P-54 mapping; spec-digest test texts copied
 into M9-M12; backlog heading states that parity is incomplete until decision 7; new open decisions
 10-15 and the G items raised.
+
+---
+
+## Changes after M0
+
+Decisions, settings and budgets that M0 and the PR 1667 integration changed. "Was" is the plan
+before M0; the evidence is in `JOURNAL.md` and `m0-results.md`.
+
+| what | was | now | evidence |
+|---|---|---|---|
+| `frameBytes` | 24,576 until S1, then half the halt point, target >= 196,608 | 24,576, settled; the target is dropped while `harden` costs per byte (C-5) | halt above 94,208 at 50 M; 24,576 inbound in 312 ms against a 357 ms budget (J-0193, J-0194) |
+| `crankOutBytes` | 2 x `frameBytes` | 196,608 (8 frames) | 8 x 64 KiB in one crank 553-576 ms (J-0142) |
+| Crank budget | planning value 50 M, S1 to choose | 50 M (`config/defaults.js`); open decision 15 settled | runaway 242-271 ms; 100 M buys nothing (J-0143) |
+| `execSourceBytes` | 262,144 in one message | 262,144 **staged** in `frameBytes` pages, evaluated in one crank (architecture 6, rule 12.11) | one message of 150 k halts; 262 k staged 3.9 s (J-0146, J-0195) |
+| Record keys into vats | not constrained | rule 12.10: fixed key vocabulary, data-keyed collections as pair arrays or in-vat Maps, model JSON as text; gateway key guard (architecture 7, M3 W3.2) | permanent name table of about 57,000 per vat (J-0191) |
+| Where limits live | section 9 named no file | `config/defaults.js`; guest copy `guest/lib/limits.js` (M1a W1a.0); core copy `STAGING_FRAME_BYTES` | J-0144, J-0122 |
+| Crash bound | not in the plan | `maxDeliveryAttempts` 5 (D-17, open decision 16) | J-9046, J-9051 |
+| Restart budget | "restart to serving, 50 idle sessions <= 15 s" | split: healthy restart <= 15 s (gate); restart with a vat crashing on every replay recorded against 15 s, depends on C-8, C-9 | healthy 4.4-5.8 s; crashing 36-69 s at bound 5 (J-9045, J-9046, J-9050) |
+| Session create with spare pool | <= 1.5 s | <= 750 ms | spare take 157-176 ms (J-9045) |
+| `exec.first` (spare exec vat) | <= 1.5 s | <= 750 ms | same mechanism as a spare take (J-9045) |
+| Factory install of the bundle | <= 30 s | <= 15 s for up to 300 k characters | 11.6 s ASCII, 14.0 s mixed (J-0193) |
+| `template.start` | <= 20 s | <= 10 s | 5.6 s (J-9045) |
+| Session create without pool | <= 6 s | <= 6 s kept, marked depends on C-5; new bound: session program <= 200 KB (`session.program`) | 6.4 s for a 246 KB program (J-9045) |
+| `vat.evaluateProgram` 150 k | <= 2 s | kept, marked depends on C-5 | 2.2-2.3 s, staging 95 % (J-0193) |
+| `exec.sends` 100 answered | <= 8 s | kept, marked depends on C-7 | 9.4-10.6 s from a probe vat before CORE-4 (J-0143) |
+| Guest rule 12.4 | no suspended async generators across deliveries | allowed, bounded like retained state; SIGKILL replay untested | S5 (J-0147) |
+| Meaning of the retired break | always "restart" on the turn path | from an adapter object: restart; from a guest vat: that vat is lost; recovery never waits for a guest call (D-5, D-17, section 4.4, rule 12.8) | J-9048, J-9049, J-9051 |
+| Exec scope-loss text | "exceeded the per-step compute budget" | neutral text naming both causes (a halt and a crash give-up look the same from inside) | J-9040, J-9051 |
+| Lost session vat | not in the plan | row `lost`, kept listed; `deleteSession` retires it (M2 W2.7); reinstate asked of core (open decision 17, C-11) | J-9049 |
+| Browser during startup | reconnect overlay | a refused connection shows "Server starting..." and keeps retrying (architecture 7, M3 W3.3c) | J-9051 |
+| Spare pool details | 2 spares, refilled in the background | refilled with up to 4 creations in parallel; ASCII bundles staged in `frameBytes` chunks | J-0183, J-0186, J-9045 |
+| Core changes (architecture 1.1) | CORE-1a in `boot.rs`; CORE-1; CORE-1b; CORE-2/3 conditional | CORE-1a landed in `@endo/immutable-arraybuffer`; CORE-4..CORE-7 added; CORE-2/3 not needed | J-0100, J-0190..J-0192, J-9022 |
+| Integration test method | template "if path-independent"; run lock by pid | template helper API and supervisor child as built; run lock by generation with workload tracking (architecture 10) | J-0180, J-9020, J-9021 |
+| M1a | 7 work units, 8 acceptance tests | W1a.0 interface contract first, then W1a.1-W1a.3 and W1a.4-W1a.6 in parallel; acceptance 8 (frame limit) widened, 9 (record keys) and 10 (crashing session at restart) added; perf `session.program`, `session.createCold`, `install.factory`, `restart.crashingSession` | this table |
+| M1b | 9 acceptance tests | 10 (exec call across a restart is not awaited) and 11 (exec worker crash give-up) added; exec staging and pool refill specified | J-9048, J-9051 |
