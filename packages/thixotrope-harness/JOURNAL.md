@@ -3303,3 +3303,112 @@ repeated on an outcome-unknown turn. (10) the start listener probes only `workin
 lost session stays `ready` until called. (18) tsconfig does not include `resources/**`. C-16 has no
 minimal reproduction; the turn path no longer moves array elements in place (J-0292).
 Decision: for the PM; (3), (5) and (7) are the cheapest next fixes, (6) and (7) need contract text.
+
+### J-9170 2026-11-17 M1a follow-ups adapter - good fit
+Evidence: QC advisory 4 (J-0292: a late older batch was still delivered after a newer one). The session
+vat already numbers its batches (`rev`, durable, one more per `publish`; guest/session/live.js), so the
+ordering rule needs no new number: `resources/agent-host/impl/channels.js` (`a88ecbf159`) delivers vat
+batches in rev order. The first batch a channel incarnation sees sets the expected rev; the expected rev
+goes out at once, then whatever was held behind it; a newer rev is held, and deltas arriving while
+something is held queue behind it (a turn's deltas cannot overtake its `turn-start`); a rev at or below
+the delivered one, or one already held, is dropped and counted; a missing rev is given up (a counted
+gap, then the held batches go out in rev order) after `reorderWaitMs` 1,000 ms or when more than 32
+batches / 4,096 deliveries are held. Clients see the rev jump and re-watch (section 5 rule, unchanged).
+Tests (`test/adapter/m1a-channel-bounds.test.js`, hand-fired timers): late older batch reordered with
+its held delta folded after `turn-start`; duplicates and stale revs dropped; gap by timeout, then the
+missing rev dropped; gap by full window; gap by backlog of deltas; 20 shuffled arrival orders of revs
+2..40 all delivered in rev order with no gap, rev non-decreasing and seq without a hole.
+Reading: an adapter restart starts a fresh channel, so if its first two batches arrive swapped the older
+one is dropped as stale (the base is the first seen); viewers re-watch on that rev jump. A gap leaves the
+channel's fold without the missing events, so a re-subscribe snapshot after a gap can differ from a
+replay; only `watch()`/`getCurrentTurn` repair it.
+Decision: done. `reorderWaitMs` (1 s) is chosen from the manager round trip (J-0272), not measured on the
+late-publish path.
+
+### J-9171 2026-11-17 M1a follow-ups adapter - perf
+Evidence: `node test/adapter/m1a-channels.bench.mjs` (Node only, no vat, no run lock; crank budget not
+applicable, recorded as 50 M). Before: commit `91458e17b5` (worktree dirty with other units' engine and
+guest files), load 2.5-2.9. After: the channel changes of `a88ecbf159` in the worktree before that commit
+(rows read `91458e17b5-dirty`), load 1.7-2.4.
+{"metric":"channels.next.batch256","unit":"ms","n":50,"median":13.527,"p95":28.283,"p99":31.912,"min":12.783,"max":31.912,"commit":"91458e17b5-dirty","crankBudget":"50000000","loadAvg":[2.93,2.73,2.39]}
+{"metric":"channels.next.batch256","unit":"ms","n":50,"median":0.103,"p95":0.122,"p99":0.479,"min":0.091,"max":0.479,"commit":"91458e17b5-dirty (a88ecbf159 content)","crankBudget":"50000000","loadAvg":[1.65,2.33,2.29]}
+{"metric":"channels.delta.e2e","subscribers":[1,3,10,32],"median":[0.057,0.073,0.152,0.402],"p95":[0.096,0.129,0.609,1.104],"before":{"subscribers":[1,3,10],"median":[0.116,0.23,0.693]},"budget":{"median":5},"pass":true}
+{"metric":"channels.delta.publish","subscribers":[0,1,3,10,32],"median":[0.028,0.031,0.03,0.032,0.029],"before":{"median":[0.027,0.029,0.03,0.029]},"budget":{"median":5},"pass":true}
+{"metric":"channels.fold.perDelta","median":0.037,"before":0.032,"budget":{"median":5},"pass":true}
+Reading: the `next()` return guard now checks the batch envelope only (`LIVE_SUBSCRIPTION_GUARD`: a
+record with at most 256 deliveries and optional `closed`); every delivery is still checked once where it
+is made (publisher guard, `publishDelta`'s `mustMatch`, the snapshot at `subscribe`). A 256-delivery read
+costs 0.10 ms instead of 13.5 ms (130 x), and a one-delta e2e halves (the 56 us per-delivery `M.or` is
+gone). The new byte accounting (`messageBytes` once per delivery, shared by all subscribers) adds about
+0.005 ms per delta to publish and fold. 32 waiting subscribers (the new per-session bound) get a delta in
+0.40 ms median, 1.1 ms p95.
+Decision: done; budgets unchanged.
+
+### J-9172 2026-11-17 M1a follow-ups adapter - deviation
+Evidence: four points where the fix stops at a file this unit does not own. (1) The subscriber facet uses
+an adapter-side interface guard (`LIVE_SUBSCRIPTION_GUARD`), not `interfaces.LiveSubscription`; what a
+client receives still matches `S.LiveBatch` (tested), but the contract text still says the return guard
+is `S.LiveBatch`. (2) Named bounds are adapter settings in `config/defaults.js` `channelLimits`
+(subscriberQueueDeliveries 4,096, subscriberQueueBytes 2 MiB, subscribersPerSession 32,
+reorderWindowBatches 32, reorderBacklogDeliveries 4,096, reorderWaitMs 1,000); a subscriber is dropped
+over either queue bound, and a subscribe beyond 32 drops the one with most queued bytes. The channel
+records each close reason (`closes()`), but `LiveBatch` has no field for it, so a dropped client sees
+only `closed: true`. The snapshot is not counted in the byte bound (the fold limits bound it; counting
+it would drop a subscriber of a large fold at once). (3) The unbounded chain of outside-a-turn publishes
+(J-0296 (3)) is in `guest/session/live.js` (`outsideTail`), a session-vat file outside this unit: not
+changed. Proposal: keep at most `publishBatchEvents`-sized pending outside batches and drop the oldest
+(the adapter now treats the resulting rev gap correctly: gap after 1 s, viewers re-watch). (4)
+`tsc` reports one error after this unit, in `test/unit/m1a-interfaces.test.js:802` (TS2769, a Session
+exo with two methods), from uncommitted `guest/lib/interfaces.js` edits of another unit; not mine.
+Decision: for the PM: contract text for (1) and an optional `reason` on `LiveBatch` for (2); (3) for the
+session-vat owner.
+
+### J-9173 2026-11-17 M1a follow-ups transport - perf
+Evidence: `TURN_N=50 STREAM_TURNS=5 ROUND_N=3 node perf/turn.perf.mjs` under the run lock (`perf turn`,
+02:17-02:19), commit `fd3fff8ba0` (worktree dirty: other units' engine sources and uncommitted guest
+files, provisioned into the template the script built), release worker `c2f65dbe...`, crank budget 50 M,
+load 2.1-3.0. The turn.start pairing now filters the provider log by a backend label unique to the run
+and refuses a turn id seen twice; `turn.delta` reads the channels' live probe (an in-process subscriber
+per channel in the adapter, `E(sub).next()`, `performance.now()` at publish and arrival).
+{"metric":"turn.start","unit":"ms","n":50,"median":263,"p95":385,"p99":7299,"min":219,"max":7299,"deliveries":{"count":458,"perOp":9.16},"sessionFramesPerTurn":4,"budget":{"median":350},"pass":true,"commit":"fd3fff8ba0-dirty","crankBudget":"50000000","loadAvg":[2.26,2.56,2.38]}
+{"metric":"turn.start.open","unit":"ms","n":50,"median":150,"p95":163,"min":128,"max":332,"commit":"fd3fff8ba0-dirty","crankBudget":"50000000"}
+{"metric":"turn.start.dispatch","unit":"ms","n":50,"median":113,"p95":124,"min":91,"max":7140,"commit":"fd3fff8ba0-dirty","crankBudget":"50000000"}
+{"metric":"turn.start.deliveries","unit":"frames","value":2,"budget":{"deliveriesPerOp":3},"pass":true,"commit":"fd3fff8ba0-dirty","crankBudget":"50000000"}
+{"metric":"turn.delta","unit":"ms","n":250,"median":0.147,"p95":0.236,"p99":5.257,"min":0.048,"max":6.023,"deliveries":{"count":0,"perOp":0},"subscriber":"in the adapter process (live probe; where the gateway subscribes)","clock":"performance.now() in the adapter","batchSizes":[1],"budget":{"median":5,"deliveriesPerOp":0},"pass":true,"commit":"fd3fff8ba0-dirty","crankBudget":"50000000","loadAvg":[2.11,2.5,2.36]}
+{"metric":"turn.delta.client","unit":"ms","n":250,"median":17,"p95":20,"p99":38,"min":12,"max":46,"subscriber":"control client through the hub","pass":null,"commit":"fd3fff8ba0-dirty","crankBudget":"50000000","loadAvg":[2.11,2.5,2.36]}
+{"metric":"turn.round","value":3,"budget":{"deliveriesPerOp":3},"pass":true,"metric2":"turn.lease","value2":0,"pass2":true,"commit":"fd3fff8ba0-dirty"}
+Reading: no negative sample any more (turn.start min 219 ms, open min 128, dispatch min 91; J-0293 had
+-3,391). On the path the gateway will use, a delta reaches a subscriber 0.15 ms median after its publish,
+0.24 ms p95 (budget 5 ms: pass, 34 x under); the p99 of 5.3 ms is two samples, not explained here. The
+control-client figure (17 ms median) is the hub hop J-0274 described. turn.start passing at 263 ms and
+4 frames is not this unit's work: open fell from 466 ms (J-0293) to 150 ms with the other units'
+uncommitted changes in the provisioned code; the p99 7.3 s is one dispatch stall, not investigated.
+n=50 (not 200) to keep the one Ironhorse run short.
+Decision: turn.delta now checks the 5 ms budget on the right path and passes. A full TURN_N=200 run at a
+clean commit is the next measurement for the PM.
+
+### J-9174 2026-11-17 M1a follow-ups tooling - awkward
+Evidence: (1) Guest lint (`1f02ca7082`): `no-ses-rejected-source` scans each guest module's whole text
+with the SES patterns (`import(`, `import` before a comment, `<!--`, `-->`; J-0244), and
+`ascii-outside-comments` refuses non-printable-ASCII outside comments; current guest code passes both
+(one guest file has em dashes, in comments only). (2) The U+034F comes from `@endo/module-source`
+src/hidden.js (`$h͏_`, `$c͏_` hidden binding names), 216 in the session program. The bundler
+(`scripts/bundle-guest.mjs`, `108a98052b`) now escapes every non-ASCII unit as `\uXXXX` and refuses the
+cases where an escape changes meaning (after a backslash, non-ASCII white space). Session program at the
+time: 148,777 -> 149,641 bytes, ASCII; staging pieces of `programPieceBytes` (23,552) 7 before and 7
+after: provisioning already cut by bytes (`chunkText`, W1a.6), so the "triples the pieces" of J-0244
+(frameBytes / 3 units per piece = 19) no longer applied. The escaped bundle provisioned and ran sessions
+in Ironhorse (m1a-provision 1/1 and the turn.perf run of J-9173). (3) `startFromTemplate` takes
+`maxDeliveryAttempts` and keeps `crashLog()`; the crash test and restart.perf use it and `copyWithBound`
+is gone; `test/spikes/_crash.js` starts its supervisor with `spawnSupervisorChild` (parent pipe)
+(`efb8a288c1`). None of these three integration paths was run after the change (the crash test, the
+template test, restart.perf, the spikes): type-checked and linted only. (4) `corepack yarn
+test:integration` (`3672138653`) runs every integration and template file under one lock with AVA
+`--serial --concurrency 1` (three 1 s probe files: back to back with the flags, side by side without);
+README documents it. (5) tsconfig includes `resources/**` (`d0887d73e1`); tsc found nothing new.
+Mistake: checking the new script, I started it for real; it ran m1a-provision under the run lock
+(1m45s, passed; it built an m1a template) before I stopped it. That was an Ironhorse run beyond the one
+this unit was allowed; nothing else ran meanwhile (the lock held). The two m1a templates my runs built
+(`tad010a43c6`, `t2360f21278`) are deleted; `t84716bde2b` is kept.
+Decision: done, with (3) unproven in Ironhorse; the next integration pass should run m1a-slice-crash and
+restart.perf.
