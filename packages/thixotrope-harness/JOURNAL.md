@@ -1,0 +1,508 @@
+# Harness-on-Thixotrope journal
+
+This file is the running journal of building the Endo daemon harness on Thixotrope
+(`packages/thixotrope-harness`). It records, as the build goes:
+
+- what fits Thixotrope well, what is awkward, what fits poorly, and what is incompatible;
+- every performance check, with its numbers and budget, so a regression can be traced to a commit;
+- the decision taken in response.
+
+It is the evidence base for the owner and for later changes to Thixotrope itself. It is not a
+changelog and not a design document (those are `architecture.md` and `milestones.md`, and the code).
+
+## How to write an entry
+
+Append entries at the end of your milestone's block, newest last. Never rewrite an old entry; if it
+turns out wrong, add a new entry that says so and links back (`supersedes J-0007`).
+
+```
+### J-<4-digit number> <YYYY-MM-DD> <milestone> <area> - <verdict>
+Evidence: what was measured or read, with file:line (paths relative to the repository root) or the
+  perf JSON line(s), the commit, the crank budget and the machine load average for measurements.
+Decision: what we do about it (design choice, workaround, core change, open question for the owner).
+```
+
+- **numbers**: each milestone has its own block so parallel builders never collide: M0 J-0100..,
+  M1a J-0200.., M1b J-0300.., M2 J-0400.., M3 J-0500.., M4 J-0600.., M5 J-0700.., M6 J-0800..,
+  M7 J-0900.., M8 J-1000.., M9 J-1100.., M10 J-1200.., M11 J-1300.., M12 J-1400.., M13 J-1500..,
+  PM J-9000... Entries J-0001..J-0099 are from the survey and plan review.
+- **milestone**: `M0`, `M1a`, `M1b`, `M2`..`M13`, or `survey` / `plan` for entries from before the build.
+- **area**: one of `engine`, `persistence`, `native`, `transport`, `ui`, `providers`, `secrets`,
+  `tools`, `containers`, `voice`, `admin`, `tooling`, `spec`.
+- **verdict**: `good fit` (Thixotrope makes it simpler than Endo), `awkward` (works with a pattern or
+  workaround), `poor fit` (works but costs a lot of time, memory or code), `incompatible` (cannot be
+  done without a core change or a spec deviation), `deviation` (the build departs from a spec item on
+  purpose), `perf` (a measurement entry).
+- Measurement entries paste the perf script's JSON lines unchanged, then one sentence of reading.
+- Mark guesses `[inferred]`. Keep host machine details (addresses, domain names, secret values,
+  account names) out of this file.
+
+---
+
+## Entries from the survey and plan review (2026-11-16)
+
+Paths are relative to the Thixotrope work tree root; `pkg/` = `packages/thixotrope/`.
+Numbers were measured on an Apple M3 Max (16 cores, Node 22.23.4) with the release Ironhorse worker at
+the default 10 M-computron crank budget, while other agents were running Ironhorse workloads (load
+average 2-5); treat absolute values as one machine's numbers. "Feasibility probe" means
+`scratchpad/thix/critique/probe.mjs` from the plan review.
+
+### Good fit
+
+### J-0001 2026-11-16 survey persistence - good fit
+Evidence: 2,000 records kept in closure state came back intact after close and restart with no
+serialization code (survey baseline (c)); Fae's 1,320-line pet-name journal (`fae/session/turn-journal.js`
+at 1315bef86), the pending queue's `E(host).storeValue/lookup` storage and the preset catalogue's
+host storage exist only for formula persistence (spec Appendix F).
+Decision: session state, queue, receipts, presets and turn records are plain heap Maps and arrays in
+vats; the queue and receipt logic is copied, the storage layer dropped.
+
+### J-0003 2026-11-16 survey spec - good fit
+Evidence: Fae's turn engine is 86 lines with every effect injected (`fae/src/turn-engine.js:17-29`);
+transcript records, projections, token usage, workload limits, compaction planning, the subscription
+pool and reply folding are pure (reuse survey section 3.3).
+Decision: copy these into `guest/lib/` (prelude globals, injected time and ids) or into the agent-host
+implementation (projection, compaction planning) and port their tests.
+
+### J-0005 2026-11-16 survey spec - good fit
+Evidence: Thixotrope workers have no names (README 30-36), mail takes contact objects (README 522-549),
+the HTTP resource takes a handler object (`pkg/resources/http/durable.js:72-93`), the agent-tools and
+exo-git modules take capabilities.
+Decision: the whole harness interface is object-passing (architecture section 3); strings only for
+Appendix F.2 reasons.
+
+### J-0007 2026-11-16 survey engine - good fit
+Evidence: batching inside one crank is cheap: 1,000 appends in one call 270 ms against 67 s for
+1,000 calls (baseline (c)).
+Decision: one record for all tool intents of a round; vat-originated live events are published in one
+batch per crank.
+
+### J-0029 2026-11-16 plan persistence - good fit
+Evidence: Endo's queue needs an `interrupted` entry state because claiming an entry and recording the
+turn's input are separate steps (A.4, `endo-harness-spec.md:1619-1620`; R4-54). In a vat both happen in
+one crank, and the heap plus journal make the crank atomic.
+Decision: atomic claim (architecture 4.3): the entry is removed in the crank that records `TurnStarted`;
+the `interrupted` state and hold never arise; a never-dispatched turn is closed with the R4-66 text and
+never re-queued, so a restart can never post a message twice.
+
+### J-0030 2026-11-16 plan persistence - good fit
+Evidence: a pending answer owed by an adapter breaks at startup, and the break is a delivery that wakes
+the waiting vat (`pkg/src/core/daemon.js:825`; `pkg/src/net/hub.js:1932-1947`).
+Decision: every running turn holds a lease (an answered `holdTurn` call on its Endpoint, settled at turn
+end); its break is the session's own restart signal (D-5), so recovery needs no start notice, no factory
+scan and no wake of idle sessions.
+
+### Awkward
+
+### J-0002 2026-11-16 survey persistence - awkward
+Evidence: guest-to-guest promises, `async` locals and `finally` persist across restarts
+(README 648-661); `facade.getEvaluator()` keeps answers guest-to-guest (`pkg/src/core/daemon.js:608-609`).
+The same property means child work keeps running for a turn that is dead: an `exec` call or a
+subagent ask survives a restart or a cancel and its result arrives for a turn already marked unknown or
+cancelled (plan review).
+Decision: the exec scope lives in its own durable vat and its calls are guest-to-guest (good); late
+results are ignored by turn generation; recovery cancels in-flight child asks; a still-busy exec vat is
+retired at the next call with a stated scope reset.
+
+### J-0004 2026-11-16 survey native - awkward
+Evidence: native resources keep desired registrations in a manager vat and restore them into a new
+adapter process at every start (`pkg/src/native/manager-kit.js:63-307`, `148-160`); the HTTP resource
+restores listeners on the same ports (README 340-345). But `restore` re-binds **every** desired
+registration at every start (native.md section 1 gap (c), section 3.4): if a registration meant
+"keep this container running", every development session's container would be restarted at boot,
+breaking the owner's dormant-after-restart decision and the 15 s restart budget.
+Decision: listeners and published routes are registrations restored at start (good). Containers are
+lazy desired state (D-16): `restore` starts nothing; the first `runCommand` starts a container; idle
+containers stop. Perf check `restart.environments` (20 sessions with environments, 0 containers
+started) in M6.
+
+### J-0006 2026-11-16 survey engine - awkward
+Evidence: 20 M characters of strings in a vat heap moved ping latency from 64.3 to 66.1 ms; idle
+sleep frees the worker and waking costs 46-63 ms (survey baseline (d), (h)). But the snapshot grows by
+about 3.3 bytes per character (84.5 MB for 20 M chars), the state directory roughly doubles while
+running (about 600 MB), and the chunk ceiling (256 MiB, at most 512 MiB) is a wall that quarantines.
+Decision: crank latency is not the limit, disk and snapshots are. Large text lives in blobs from the
+moment it arrives (D-10); turn records in the vat are a few KB; M2 measures snapshots at 1 k / 10 k /
+30 k turns before any archive is built.
+
+### J-0008 2026-11-16 survey native - awkward
+Evidence: the native kit is registration-only; the durable module never sees the adapter
+(`pkg/src/native/manager.js:31-39`, `pkg/src/native/contract.js:44-66`). There is no one-shot
+operation verb.
+Decision: D-7 attach pattern (one service registration whose spec carries a manager-owned sink; the
+adapter attaches its ops facet). Spike S2 in M0 must confirm it; fallback is a ~40-line kit addition
+(CORE-2).
+
+### J-0009 2026-11-16 survey persistence - awkward
+Evidence: answers owed by the host or an adapter reject after a restart (README 1201-1203,
+1257-1266; `pkg/src/net/hub.js:1892-1950`); in-flight provider streams and container execs are lost.
+Decision: intent is recorded in the same crank that emits each outbound call (the hub commits outbound
+frames before forwarding; spike S9 checks it against a transient adapter session); the first-round
+dispatch handshake distinguishes "never sent" from "outcome unknown"; recovery is triggered by the turn
+lease (J-0030).
+
+### J-0010 2026-11-16 survey engine - awkward
+Evidence: guests have no `Date.now`, `new Date()`, `Math.random`, `setTimeout`, `URL`, `fetch`,
+`console`, `crypto`, `WeakRef` (reuse survey 3.1, measured; feasibility probe: `typeof console` is
+`undefined`).
+Decision: ids are counters; tokens are minted in adapters; time is data stamped by adapters (the
+gateway's Composer stamps every submission). Modules with `now = Date.now` defaults get injected time.
+
+### J-0011 2026-11-16 survey engine - awkward
+Evidence: there is no live code upgrade; supervisor-shipped closures bump `WORKSPACE_VERSION`
+(`pkg/src/control/supervisor.js:112`, value 21); a changed native resource is a new installation and
+removing the old one breaks references into its manager vat (README 270-286, 347-359).
+Decision: vat programs stay thin over plain-record state; data-only `exportState`/`importState` exists
+from M2 (and builds bulk perf fixtures); M13 automates upgrade. Builders use fresh state directories
+until then.
+
+### J-0012 2026-11-16 survey native - awkward
+Evidence: the shipped `resources/http` is loopback-only, text-only, 64 KiB, fixed `text/plain` with
+`connection: close`, 5 s deadline, no request headers to the guest, and destroys WebSocket upgrades
+(`pkg/resources/http/ephemeral.js:60-71`, `listener.js:44-51,161,199-200`).
+Decision: a new gateway inside the agent-host native resource serves the UI and CapTP over WebSocket;
+`resources/http` is not used.
+
+### J-0013 2026-11-16 survey engine - awkward
+Evidence: a new vat costs 4.4 s, about 18 MB of snapshot and up to 160 MB resident while awake;
+there is no booted-image template (`pkg/src/ironhorse/ironhorse-engine.js`; baseline (a)).
+Decision: one vat per session plus a lazy exec vat, with a factory-held pool of pre-loaded spare
+vats (D-4). Disk per session is budgeted and checked; deleted sessions' vats are retired at delete (M2).
+
+### J-0014 2026-11-16 survey tooling - awkward
+Evidence: the control socket is not served until every worker has warmed up (README 139-141;
+`designs/production-cost-model.md:253-264`); socket paths are limited to 103 bytes
+(`pkg/src/control/supervisor.js:171`); state directories must be mode 0700 (`supervisor.js:179`).
+Decision: clients back off on ECONNREFUSED; test and perf state lives under
+`packages/thixotrope-harness/tmp/<short>` with mode 0700.
+
+### J-0015 2026-11-16 survey spec - deviation
+Evidence: the spec makes every ready session resume serving its inbox at once after a restart
+(R4-65), while the owner decided agents stay dormant after restart until a message (G-01).
+Decision: D-5: no session is woken at startup; sessions with a turn in flight recover themselves when
+their turn lease breaks; mail received before the restart waits for the session's next wake. Open
+decision 2 asks the owner to confirm.
+
+### J-0026 2026-11-16 survey engine - awkward
+Evidence: README 761-762 says suspended async generators and `Array.fromAsync` are refused by the
+persistence gate; `rust/engine/ironhorse-snapshot/tests/persist_gates.rs:458,496` says both persist.
+Decision: avoid them in guest code until spike S5 settles it for the shipped worker.
+
+### J-0027 2026-11-16 survey native - awkward
+Evidence: native adapters are unconfined Node with the daemon user's authority and can read every
+heap, journal and secrets file of the state directory (native survey section 5).
+Decision: adapters are operator-installed; the secrets key file is outside the state directory but
+readable by the same user, so W-4 is only partly fixed; recorded for the owner (open decision 4).
+
+### J-0028 2026-11-16 survey tooling - awkward
+Evidence: one GC finalizer wrote a worker journal after its test directory was removed (uncaught
+ENOENT at `pkg/src/platform/node/sync-files.js:46` via `packages/ocapn/src/codecs/gc-batch.js:19`);
+one mailbox scenario's temporary state reached 420 MB.
+Decision: harness tests stop the supervisor and await its exit before deleting state; disk use of
+every integration file is checked against a 300 MB ceiling.
+
+### J-0031 2026-11-16 plan engine - awkward
+Evidence: at startup every worker whose journal runs past its last snapshot cut is woken and
+replayed, whatever the application wants (`pkg/src/core/daemon.js:826-847`). Vats checkpoint only at
+idle sleep (default 30 s, `idleSleepMs`, `pkg/src/control/supervisor.js:141`), every 256 deliveries, or
+clean shutdown.
+Decision: "idle sessions are not woken" holds only for checkpointed vats; restart tests and perf
+checks run with `idleSleepMs: 2000`, wait for checkpoints and for `pool.whenSettled()` before SIGKILL,
+and count only checkpointed vats.
+
+### J-0032 2026-11-16 plan persistence - awkward
+Evidence: the only way a vat can tell "the adapter restarted" from other failures is the error text
+"ocapn hub: the target session has been retired" (`pkg/src/net/hub.js:1522,1947,1968`). A Fae-style turn
+engine would record such a break as an ordinary tool failure and then call a tombstoned Endpoint.
+Decision: one helper `isRetiredBreak(error)`; any such break on the turn path routes to recovery
+(guest rule 12.8). A structured error class from the hub would be a small, useful core change.
+
+### J-0033 2026-11-16 plan engine - awkward
+Evidence: the clock resource costs about 1 s per alarm (`clock.after(0n)` p50 989 ms from the
+workspace, native survey section 0.2), and `after()` without cancel leaves an alarm that wakes its
+owner later.
+Decision: interactive timers (exec deadlines, `sleep` in exec, ask timeouts) are adapter timers driven
+through the turn's Endpoint; they die with the turn. The clock resource is used only for alarms that
+must survive a restart, with `arm()` and cancel.
+
+### J-0034 2026-11-16 plan native - awkward
+Evidence: an installation's identity is its bundle digest pair (native survey section 1.2), and
+removing an installation breaks every reference into its manager vat (README 347-359). With the UI and
+providers bundled into the agent-host adapter, every UI or parser fix would be a reinstall that breaks
+Secrets, Backends, Blobs and Routes.
+Decision: D-14: `durable.js` thin and stable; `ephemeral.js` imports its implementation and assets at
+run time from an operator-owned directory. Cost: the implementation is no longer pinned by digest; the
+directory is trusted operator input.
+
+### J-0035 2026-11-16 plan tools - awkward
+Evidence: cancelling a turn while `exec` runs cannot interrupt the call (R4-49 also says a running
+tool is not interrupted), and the only way to stop a hung exec vat is to retire it, which loses every
+`globalThis` binding.
+Decision: cancel abandons the answer and keeps the scope; the exec vat is retired only on the exec
+deadline (120 s), a compute-budget halt, or when still busy at the next call, each time with a stated
+scope loss in the tool result.
+
+### J-0036 2026-11-16 plan spec - awkward
+Evidence: content lives in two places: small turn records in the session vat and large fields in blob
+files in the agent-host adapter (D-10). Blob handles are manager-minted so they survive restarts; a
+handle must never reach a vat before its file is fsynced.
+Decision: pre-minted handles bound to fsynced files (D-15); session delete releases blobs; the
+adapter's projection is the only place that joins the two.
+
+### J-0037 2026-11-16 plan native - awkward
+Evidence: one agent-host Node process holds the gateway, providers, channels, secrets, blobs and
+speech. A crash drops every socket, stream and context cache together, and audio decoding runs beside
+token-bearing code.
+Decision: errors caught per connection and per round; speech engines as supervised child processes;
+context caches rebuild lazily per session. Splitting speech into its own native resource is the next
+step if a crash is seen.
+
+### J-0038 2026-11-16 plan tooling - awkward
+Evidence: each integration test pays a supervisor cold start (about 32 s), workspace creation (12 s),
+`install-native` (about 13 s), the factory install (40-60 s without CORE-1b), vat creation (4.4 s
+each) and the idle wait; each run's state is 140-600 MB on a disk with about 21 GB free; parallel
+Ironhorse runs cause timeout flakes (tooling survey 2.1).
+Decision: a pre-provisioned state template copied per file (spike S8), short `idleSleepMs`, a run lock
+for every integration and perf run, and a 5-minute per-file budget.
+
+### Poor fit
+
+### J-0016 2026-11-16 survey engine - poor fit
+Evidence: one durable crank costs about 65 ms (82 ms in the workspace vat), one at a time per vat;
+about 50 ms of it is the full GC after every crank
+(`rust/thixotrope-ironhorse-worker/src/main.rs:185-190,240-265`); 300 pipelined pings took 19.06 s
+(baseline (b)). The mail path's 50 ms / 100 ms target is unmet at 145 ms
+(`pkg/designs/mail-performance-plan.md:6-7,174`).
+Decision: no per-token, per-record or per-frame traffic through a durable vat. Text deltas go provider
+adapter -> channel -> WebSocket inside one Node process (D-8); vats get one delivery per round final,
+per tool result, per progress checkpoint and per turn lease.
+
+### J-0017 2026-11-16 survey engine - poor fit
+Evidence: an answered `E()` costs one extra delivery when its answer returns: 10 events/s against
+215 events/s with `E.sendOnly` (baseline (e)). Model code in `exec` that awaits 100 answers costs
+about 100 deliveries (about 6.5 s).
+Decision: notification fan-out uses `E.sendOnly`; the `exec.sends` budget is 8 s for 100 answered sends
+and 1 s for 100 `sendOnly`; the guest prompt tells the model to batch.
+
+### J-0018 2026-11-16 survey engine - poor fit
+Evidence: the crank budget of 10 M computrons allows about 600 k loop iterations; more than about 250
+sends in one crank, an SSE parse of 400 events, or 10 k string appends quarantine the vat for good
+(`pkg/src/ironhorse/ironhorse-limits.js:45-51`; README 704-749; reuse survey 3.2; baseline (e)). For
+`exec`, ordinary model code (parsing a large tool result, sorting 100 k items) can exceed the per-crank
+ceiling and lose the scope: weaker than Endo's exec.
+Decision: parsing, SSE, base64, context projection and compaction planning run in Node adapters;
+guest code follows the coding rules (architecture section 12); model-written code runs in a separate
+exec vat; the crank budget is raised daemon-wide by configuration after M0 S1 measures it.
+
+### J-0019 2026-11-16 survey engine - poor fit
+Evidence: restart wakes vats eagerly when they have work to replay or a start notice; with 6 vats
+serving took 5.7 s and the first call 6.3 s (baseline (c)); `notifyOnStart` calls `started()` at every
+start (`pkg/src/core/daemon.js:414-445`; facade `pkg/src/core/daemon.js:617-622`).
+Decision: session vats never register start notices; only the agent-host manager's lifecycle runs
+and calls the factory's listener, which wakes no session. Budget: 50 idle checkpointed sessions restart
+in <= 15 s with 0 idle vats woken.
+
+### J-0020 2026-11-16 survey tooling - poor fit
+Evidence: install stages source in 1,024-character deliveries (`pkg/src/core/evaluate-source.js:32-41`):
+`installNative http` 13 s, a small app 9.7 s, a fresh supervisor start 107 s in one probe and 32 s in
+the baseline; a 300 k factory bundle would be 40-60 s; the full T suite takes 20 minutes and times out
+under parallel load (tooling survey 2.1).
+Decision: CORE-1b (staging chunk = `frameBytes / 3`) in M0, unconditionally, after the decoder fix;
+integration tests run under the run lock and never alongside the full suite.
+
+### J-0039 2026-11-16 plan engine - poor fit
+Evidence: `E.sendOnly` gives no feedback when its target is gone, and sends to objects of a retired
+session break silently (`pkg/src/net/hub.js:1917-1931`). A durable vat that pushes to browser viewers
+collects dead viewers on every reload, tab close or adapter restart; at about 250 sends in one crank it
+MeterAborts and is quarantined for good (baseline (e)).
+Decision: no durable vat holds a viewer (D-8, rule 12.7). Vats publish once per crank to an
+adapter-side channel; the gateway fans out and drops closed sockets; outside a turn the session
+publishes with an answered call so a stale publisher is noticed.
+
+### J-0040 2026-11-16 plan engine - poor fit
+Evidence: a round's tool calls are issued from one crank, and a model may return any number of them;
+more than about 250 sends in one crank MeterAborts (baseline (e)), so an unbounded round would
+quarantine the session vat for good.
+Decision: `maxCallsPerRound` 64 (extras get an error result) and `callWindow` 16 in flight (deviation:
+the spec has no bound, open decision 11); probe of 300 calls per round in M1b.
+
+### J-0041 2026-11-16 plan transport - poor fit
+Evidence: the hub rewrites `hub.json` whole with fsync 1 + 2k times per delivery
+(`pkg/src/net/hub.js:354-364`; `pkg/designs/production-cost-model.md:341-347`); in production it reached
+11.5 MB (`production-cost-model.md:19-20`); every exo exported across the gateway is a row until the
+importer's GC releases it [inferred: browser-side CapTP GC decides]. All journal and hub writes run on
+the supervisor's single Node thread, about 15 ms of host time per delivery, a ceiling of roughly 60-70
+deliveries per second for the whole daemon [inferred].
+Decision: gateway-local services (Live, Content, Composer) keep most browser traffic off the hub;
+pages return previews, not one exo per message; perf gates `hub.growth` (M1b, M3, M13) and `throughput`
+(M2); a hub that writes incrementally is a candidate core change if the gates fail.
+
+### J-0042 2026-11-16 plan engine - poor fit
+Evidence: about 50 ms of every 65 ms crank is the worker's full GC after the crank
+(`rust/thixotrope-ironhorse-worker/src/main.rs:185-190`), regardless of how much garbage the crank made.
+Decision: treated as fixed for the build. Open question for Thixotrope: a conditional GC (skip when the
+crank allocated little) is probably the largest available speed-up for every harness path; measure it
+before proposing.
+
+### Incompatible
+
+### J-0021 2026-11-16 survey engine - incompatible
+Evidence: any inbound frame of about 16 k characters or more halts the receiving vat with
+HeapExhausted and quarantines it: 4 k chars 0.5 s, 8 k 1.0 s, 12 k 1.3 s, 15 k 1.4 s, 20 k halt
+(baseline (f); native survey: 16 k halt). Cause: `rust/endo/xsnap/src/polyfills.js:156`
+(`out += String.fromCharCode(...)` per code point) with no GC inside a crank; documented at
+`pkg/src/core/evaluate-source.js:4-10`.
+Decision: replaced by native decoding (CORE-1, J-0043); everything large is staged as blobs anyway.
+
+### J-0022 2026-11-16 survey engine - incompatible
+Evidence: the guest `TextDecoder` with `{stream:true}` decodes a split multi-byte character wrongly
+(`e2 82 | ac` gives `"₀\u{100000}"`, not the euro sign) (reuse survey 3.1, measured), and it ignores
+`{fatal:true}`, which Syrup uses (`packages/ocapn/src/syrup/decode.js:28`), so a vat silently accepts
+malformed strings a Node peer would reject.
+Decision: CORE-1 honours both `stream` and `fatal`; until then nothing decodes streams in a guest (SSE
+stays in adapters anyway).
+
+### J-0023 2026-11-16 survey transport - incompatible
+Evidence: `Uint8Array` and emulated immutable `ArrayBuffer` are not passable into guests over OCapN in
+this build; frames travel as base64 inside JSON (reuse survey 3.1; `pkg/src/core/worker-peer-xs.js:61-91`).
+Decision: bytes never enter vats: images, audio, attachments and assets stay in adapters, and vats
+hold handles and text receipts.
+
+### J-0024 2026-11-16 survey secrets - incompatible
+Evidence: vat heaps are plaintext SQLite snapshots and every inbound frame is appended to
+`journal.jsonl` (`pkg/designs/production-cost-model.md:57-76`); frames toward transient sessions may
+sit in `hub.json` when it is persisted (`pkg/src/net/hub.js:928-937`) [inferred].
+Decision: D-6: secret values live only in the agent-host adapter's encrypted file with the key
+outside the state directory; browser writes stay inside the gateway process; CLI imports are sealed
+to the adapter's public key; spike S4 checks `hub.json`.
+
+### J-0025 2026-11-16 survey engine - incompatible
+Evidence: the XS engine has no `acquireStore`, which the supervisor requires
+(`pkg/src/control/supervisor.js:203-204`), and does not build here (missing `c/moddable` submodule).
+Decision: D-2: Ironhorse only.
+
+### J-0043 2026-11-16 plan engine - incompatible
+Evidence: even a linear JS decoder cannot carry large frames: inbound bytes are decoded twice in
+metered JS. `@endo/base64` takes the native `Uint8Array.fromBase64` only if it exists at load
+(`packages/base64/src/decode.js:86,160`), and in a vat it is `undefined` although the VM installs it
+(`rust/engine/ironhorse-vm/src/interp/boot.rs:800-808`) and SES permits it
+(`packages/ses/src/permits.js:1341`), so `decodeBase64` (`pkg/src/core/worker-peer-xs.js:79`) runs the JS
+loop. Feasibility probe, fresh vat, default budget, each step alone: JS base64 decode ok at 96 KiB,
+MeterAbort at 128 KiB; linear JS UTF-8 decode ok at 64 KiB, MeterAbort at 96 KiB; an array of 8 strings
+of 4,096 characters MeterAborted today (2 x 4,096 passed in 1.4 s). About 175-250 computrons per
+inbound byte in total.
+Decision: CORE-1a (make the native `fromBase64` reach vats) and CORE-1 (native UTF-8 decode and
+encode) in M0; the crank budget is chosen by measurement; all bounds are in bytes (`frameBytes`, default
+24,576 until S1 measures); anything over `inlineBytes` is staged as a blob, so the harness works even
+if the core changes are delayed.
+
+### J-0044 2026-11-16 plan engine - incompatible
+Evidence: outbound frames halt the sending vat too: a vat returning 60 k characters worked
+(127-170 ms), 250 k and 1 M killed it (feasibility probe); the outbound `TextEncoder` is a JS loop
+(`rust/endo/xsnap/src/polyfills.js:22-70`). A session vat sending a round's parallel tool results
+(8 x 32 k) to the adapter would quarantine itself.
+Decision: `frameBytes` and `crankOutBytes` bound vat outbound messages (guest rule 12.5); records hold
+blob handles, not large text; exec results go to a `BlobWriter` in pieces; CORE-1 makes encoding native.
+
+### J-0045 2026-11-16 plan transport - incompatible
+Evidence: a vat decodes a frame before any exo guard runs, so `M.string()` bounds cannot protect a vat
+from an oversize argument; a browser (or an admin client) that sends a large string to any session
+method would quarantine that session for good.
+Decision: the gateway's CapTP bridge refuses any call over `frameBytes` before it reaches the hub;
+large text goes through the gateway-local Composer, which stages it; the admin client library applies
+the same bound. A guard-before-decode (or a per-message size check in the worker peer) would be a
+useful core change.
+
+### Deviations from the spec forced or chosen by the fit
+
+### J-0046 2026-11-16 plan spec - deviation
+Evidence: R4-97 allows 100,000,000-character messages. Without staging, frame cost (J-0043) would force a
+limit far below 200,000; with staging the frame no longer limits it, but a submission still crosses one
+WebSocket message (1 MiB cap) and becomes model context.
+Decision: 200,000 characters by default, a setting; open decision 1.
+
+### J-0047 2026-11-16 plan spec - deviation
+Evidence: R4-26 part 2 tells the model "each call is a fresh function body, so nothing defined in one
+call is visible in the next"; with the persistent exec scope (Appendix F.1 #5) that is false. P-17 /
+R3-31 keep `store` and `remove`; Appendix F.4 (`endo-harness-spec.md:3308-3309`) suggests dropping them.
+Decision: the guest prompt is rewritten to describe the persistent scope; `store`/`remove` are kept as
+thin tools over the one label map, and exec reads that map through a live `powers` facet (no second
+store).
+
+### J-0048 2026-11-16 plan spec - deviation
+Evidence: R4-48 says a turn has no wall-clock limit and a tool call no generic timeout; G-18 lists the
+missing exec timeout as a defect; R4-76 says Claude subscription failures are not retried while G-05
+asks for an overload retry; R4-37 gives Claude and the Anthropic API no context window while G-04/G-05
+ask for one so compaction can fire.
+Decision: exec deadline 120 s, turn deadline off (open decision 10); Claude overload retried while
+nothing was delivered (open decision 12); configured window for Claude and Anthropic (open decision 13).
+
+---
+
+## Performance baseline (survey and plan review, before any harness code)
+
+Release Ironhorse worker, application vat unless noted, default crank budget, M3 Max, load average 2-5.
+
+| Measurement | Value | Source |
+|---|---|---|
+| `serveThixotrope` cold start on empty dir | 31.8-33.2 s | baseline (a) |
+| `createWorkspace` | 12.0-12.8 s | baseline (a) |
+| New application vat (`install`) | 4.37-4.55 s; ~18.2 MB snapshot; ~150-160 MB RSS awake | baseline (a) |
+| Trivial `E(x).ping()` app vat | median 66.8 ms, p95 72.0, p99 179.4 (n=300) | baseline (b) |
+| Trivial ping workspace vat | median 82.5 ms, p95 85.5, p99 303.3 (n=200) | baseline (b) |
+| Engine time per delivery | ~50 ms (full GC of the 18 MB base heap) | baseline (b) |
+| 300 pipelined pings | 19.06 s (no pipelining gain) | baseline (b) |
+| 1,000 single appends / one `appendMany(1000)` | 67.7 s / 270 ms | baseline (c) |
+| Close / restart to serving / first call | 1.89 s / 5.67 s / 6.27 s (6 vats) | baseline (c) |
+| Heap with 20 M chars: ping | 66 ms; snapshot 84.5 MB (~3.3 B/char); state dir ~600 MB while running | baseline (d) |
+| Events to a client, `E.sendOnly` 100/crank / 1/crank / answered `E()` | 215 / 15 / 10 events/s | baseline (e) |
+| Sends in one crank: 250 / 500 / 2,000 | ok 1.15 s / MeterAbort / HeapExhausted | baseline (e) |
+| String argument 1 k / 4 k / 8 k / 15 k / 20 k chars | 118-229 ms / 530 ms / 1,010 ms / 1,388 ms / quarantine | baseline (f) |
+| Inbound array 2 x 4,096 / 8 x 4,096 chars | ok 1.4 s / MeterAbort | feasibility probe |
+| In-vat JS base64 decode 96 KiB / 128 KiB | ok / MeterAbort | feasibility probe |
+| In-vat linear JS UTF-8 decode 64 KiB / 96 KiB | ok / MeterAbort | feasibility probe |
+| Outbound string 15 k / 30 k / 60 k / 250 k chars | 127-170 ms ok / ok / ok / vat killed | feasibility probe |
+| Wake from idle sleep + ping | 106-129 ms (wake 46-63 ms) | baseline (h) |
+| HTTP request through adapter into a vat and back | p50 128 ms, p95 158 ms | native survey |
+| `clock.after(0n)` from the workspace | p50 989 ms | native survey |
+| Loop in one crank: 600 k / 1 M iterations | ok / MeterAbort | native survey |
+| SSE parse in guest: 100 / 400 / 2,000 events | 369 ms / MeterAbort / HeapExhausted (Node: 0.8 / 1.5 / 11 ms) | reuse survey |
+| Mail send (design notes, after optimisation) | 145 ms median (133 ms append log); 129 ms of it VM time, 67 ms GC | `pkg/designs/mail-*.md` |
+| Ironhorse worker build / JS bundles | 46 s / 1.4 s each | tooling survey |
+| `test:ironhorse` lane | 55/55 in 1,394 s | tooling survey |
+
+## Budgets the harness is held to
+
+From `architecture.md` section 11 (the authoritative list). A check fails at more than 1.25 x the
+median budget or when deliveries per operation exceed the budget.
+
+| Metric | Budget |
+|---|---|
+| Frames at `frameBytes` in and out of a vat | no halt; <= 300 ms over the ping floor |
+| Turn start (submit accepted to provider request) | <= 350 ms; <= 3 deliveries |
+| Live delta, provider chunk to WebSocket frame | <= 5 ms; 0 deliveries per delta |
+| Deliveries per model round | <= 1 + ceil(seconds / 10) + tool results; 1 lease delivery per turn |
+| `exec` trivial / first in a session | <= 250 ms / <= 1.5 s |
+| `exec` 100 answered sends / 100 `sendOnly` | <= 8 s / <= 1 s |
+| Session create with / without spare pool | <= 1.5 s / <= 6 s |
+| Session list, 100 sessions | <= 200 ms per 50-row page; 0 session vats woken |
+| Session watch snapshot, 1,000 turns | <= 300 ms; <= `frameBytes` |
+| History page, 32 turns | <= 300 ms |
+| Queue enqueue while a turn runs, from the browser | <= 150 ms |
+| 10 concurrent streaming sessions with tool rounds | turn start <= 2 x single; crank p95 <= 200 ms; row push <= 500 ms |
+| `hub.json` after 1,000 turns with a UI / after 50 sessions | <= 2 MB; ms per delivery <= 1.25 x fresh |
+| Restart with 50 idle checkpointed sessions | <= 15 s; 0 idle vats woken |
+| Restart with 20 sessions that have environments | <= 15 s; 0 containers started |
+| Clean shutdown, 50 sessions | <= 5 s |
+| Disk per idle session (session vat / with exec vat) | <= 25 MB / <= 50 MB |
+| Session vat snapshot, 10,000 turns | <= 1 s |
+| Checkpoint stall under load | turn latency p99 <= 1 s |
+| Secret read per round | <= 1 ms; 0 deliveries |
+| Container command harness overhead | <= 150 ms |
+| git status, 10 k-file repo | <= 1 s |
+| Asset first byte | <= 20 ms; 0 deliveries |
+| Audio path | 0 deliveries; STT partial <= 300 ms; TTS first audio <= 1 s warm |
+
+## Build entries
+
+(Builders append from here, each in their milestone's number block, starting at J-0100 for M0.)
