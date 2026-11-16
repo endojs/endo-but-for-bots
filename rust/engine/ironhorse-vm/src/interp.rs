@@ -333,6 +333,15 @@ pub const STACK_SLOT_COUNT: usize = 4096;
 /// Ordinary runs use the arena and allocation-admission limits instead.
 const BOUNDED_RUN_SLOT_CEILING: u32 = 1_000_000;
 
+/// Longest environment property chain a `store`/`store_arrow` may walk to
+/// its tail under `run_bounded` before halting with `Halt::StepLimit`.
+/// Compiled bytecode appends one slot per captured variable to a fresh
+/// closure environment, so a real chain is the function's capture count; a
+/// longer one means malformed bytecode re-storing into one target in a loop,
+/// whose walks would otherwise grow quadratically with the step count.
+/// Ordinary runs walk without a ceiling, as XS does.
+const BOUNDED_RUN_STORE_CHAIN_CEILING: u32 = 4096;
+
 /// Dispatch budget for one opt-in guest render of an escaping thrown value
 /// ([`Interp::run_rendering_throws_in_guest`]). Generous by orders of
 /// magnitude for any `toString` a diagnostic would meet -- test262's is a

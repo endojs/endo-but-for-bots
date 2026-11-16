@@ -576,23 +576,49 @@ impl Interp {
             None => return Ok(()),
         };
         let src = self.locals[i];
+        // Append to the end of the environment's property chain.
+        let Some(tail) = self.store_chain_tail(env) else {
+            return Err(Step::Host(Halt::StepLimit(self.n_dispatched)));
+        };
         // fxNewSlot for the appended closure slot.
         self.meter.tick_slot_alloc();
         let mut stored = Slot::of(src.kind, src.value);
         stored.id = src.id;
         stored.flag = src.flag;
         let idx = self.slots.alloc(stored);
-        // Append to the end of the environment's property chain.
+        self.slots.get_mut(tail).next = idx;
+        Ok(())
+    }
+
+    /// The last slot of `env`'s property chain, where a `store` appends.
+    ///
+    /// XS walks the whole chain on every `XS_CODE_STORE` (xsRun.c), which is
+    /// linear only because compiled bytecode stores each capture once into a
+    /// fresh closure environment. Malformed bytecode can re-store into one
+    /// target in a loop, so each store walks a chain the loop keeps growing:
+    /// quadratic, unmetered host work (the `bytecode_decoder` fuzz timeout
+    /// `timeout-1015c4e9`, which stored into `this` with the global object on
+    /// top of the stack). Bounded mode ONLY, like the live-slot ceiling, a walk past
+    /// [`BOUNDED_RUN_STORE_CHAIN_CEILING`] returns `None` and the caller halts
+    /// with `Halt::StepLimit`; ordinary runs keep XS's unbounded walk.
+    pub(super) fn store_chain_tail(
+        &self,
+        env: crate::value::SlotIndex,
+    ) -> Option<crate::value::SlotIndex> {
+        let bounded = self.step_limit != u64::MAX;
         let mut tail = env;
+        let mut hops = 0u32;
         loop {
             let next = self.slots.get(tail).next;
             if next.is_null() {
-                break;
+                return Some(tail);
+            }
+            hops += 1;
+            if bounded && hops > BOUNDED_RUN_STORE_CHAIN_CEILING {
+                return None;
             }
             tail = next;
         }
-        self.slots.get_mut(tail).next = idx;
-        Ok(())
     }
 
     /// Append a lexical arrow capture to a function closure environment.

@@ -3099,6 +3099,11 @@ impl Interp {
         let (Some(env), Some(arrow)) = (env, arrow) else {
             return Flow::Exit(Step::Host(Halt::EngineInvariant("store_arrow:frame")));
         };
+        // The captures below append to `env`'s chain; bound the walk the
+        // same way `store` does before appending to it.
+        if self.store_chain_tail(env).is_none() {
+            return Flow::Exit(Step::Host(Halt::StepLimit(self.n_dispatched)));
+        }
         let home = self
             .functions
             .get(&self.cur_func)
