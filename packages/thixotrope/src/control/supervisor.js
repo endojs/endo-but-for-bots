@@ -670,6 +670,7 @@ export const serveThixotrope = async (
           workers: daemon.inspectWorkers(),
           timings: timings(),
           gc: daemon.inspectGc(),
+          hub: daemon.inspectHub(),
         }),
       /** @param {string} source */
       evaluate: async source => {

@@ -169,6 +169,9 @@ harden(makeGcFrameTest);
  *   handshake identity); required for the hub to RECEIVE third-party
  *   gifts on behalf of its sessions
  * @param {(...args: Array<unknown>) => void} [options.logError]
+ * @param {() => number} [options.now] a monotonic clock in milliseconds for
+ *   the process-local cost counters of `stats()`; without one they count
+ *   operations and read 0 ms
  */
 export const makeOcapnHub = ({
   codec,
@@ -177,6 +180,7 @@ export const makeOcapnHub = ({
   handoffs = undefined,
 
   logError = () => {},
+  now = () => 0,
 }) => {
   /**
    * One reference row, namespaced by its origin session's epoch. A row
@@ -422,6 +426,101 @@ export const makeOcapnHub = ({
     batch.send(message);
   };
 
+  // --- cost counters (process-local, never persisted) ---
+
+  /**
+   * @typedef {{
+   *   deliveries: number,
+   *   frames: number,
+   *   ms: number,
+   *   persists: number,
+   *   persistMs: number,
+   *   serializeMs: number,
+   *   sends: number,
+   *   sendMs: number,
+   * }} CostBucket
+   */
+  /** @returns {CostBucket} */
+  const makeCostBucket = () => ({
+    deliveries: 0,
+    frames: 0,
+    ms: 0,
+    persists: 0,
+    persistMs: 0,
+    serializeMs: 0,
+    sends: 0,
+    sendMs: 0,
+  });
+  /**
+   * Inbound deliveries (one `deliver` or `deliverBatch` call from outside the
+   * hub) by what they carried: GC frames only, or anything else. A
+   * delivery's `ms` is its whole synchronous cost: decoding, routing, the
+   * `persist()` calls and the sends to destinations (a durable worker's send
+   * is its journal append). `outside` counts persists and sends made outside
+   * any inbound delivery (attach, publish, retirement, flushes).
+   */
+  const costs = {
+    gcOnly: makeCostBucket(),
+    other: makeCostBucket(),
+    outside: makeCostBucket(),
+  };
+  /** @type {(CostBucket & { gc: number, nonGc: number, start: number }) | undefined} */
+  let measuring;
+  /**
+   * @template T
+   * @param {() => T} fn
+   * @returns {T}
+   */
+  const measureDelivery = fn => {
+    if (measuring !== undefined) return fn();
+    const current = { ...makeCostBucket(), gc: 0, nonGc: 0, start: now() };
+    measuring = current;
+    try {
+      return fn();
+    } finally {
+      measuring = undefined;
+      const bucket =
+        current.gc > 0 && current.nonGc === 0 ? costs.gcOnly : costs.other;
+      bucket.deliveries += 1;
+      bucket.frames += current.gc + current.nonGc;
+      bucket.ms += now() - current.start;
+      bucket.persists += current.persists;
+      bucket.persistMs += current.persistMs;
+      bucket.serializeMs += current.serializeMs;
+      bucket.sends += current.sends;
+      bucket.sendMs += current.sendMs;
+    }
+  };
+  /** @param {string} type the decoded operation of one inbound frame */
+  const countInbound = type => {
+    if (measuring === undefined) return;
+    if (type === 'op:gc-exports' || type === 'op:gc-answers') {
+      measuring.gc += 1;
+    } else {
+      measuring.nonGc += 1;
+    }
+  };
+  /**
+   * One send toward a session, timed (a durable worker's send journals the
+   * frame with an fsync before it returns).
+   *
+   * @param {SessionState} session
+   * @param {Uint8Array} bytes
+   * @param {string} [sequence]
+   */
+  const timedSend = (session, bytes, sequence) => {
+    const start = now();
+    try {
+      return sequence === undefined
+        ? session.send(bytes)
+        : session.send(bytes, sequence);
+    } finally {
+      const bucket = measuring ?? costs.outside;
+      bucket.sends += 1;
+      bucket.sendMs += now() - start;
+    }
+  };
+
   // --- persistence ---
 
   let deliveryDepth = 0;
@@ -430,9 +529,23 @@ export const makeOcapnHub = ({
     if (!dirty) {
       return;
     }
-    store.setState(
-      serializeHubState({ refs, sessions, publications, gifts, giftWaiters }),
-    );
+    const start = now();
+    const state = serializeHubState({
+      refs,
+      sessions,
+      publications,
+      gifts,
+      giftWaiters,
+    });
+    const serialized = now();
+    try {
+      store.setState(state);
+    } finally {
+      const bucket = measuring ?? costs.outside;
+      bucket.persists += 1;
+      bucket.serializeMs += serialized - start;
+      bucket.persistMs += now() - start;
+    }
     dirty = false;
   };
 
@@ -1010,7 +1123,7 @@ export const makeOcapnHub = ({
           for (const frame of frames) {
             if (!session.attached) break;
             try {
-              const accepted = session.send(decodeHex(frame));
+              const accepted = timedSend(session, decodeHex(frame));
               accepted !== false || Fail`Disposable observer closed`;
             } catch (error) {
               // This observer cannot resume. An ambiguous send ends its
@@ -1039,7 +1152,8 @@ export const makeOcapnHub = ({
         // Also commits removals accepted by the preceding iteration. Until
         // this succeeds, no new frame may escape and replay retains ownership.
         persist();
-        const accepted = session.send(
+        const accepted = timedSend(
+          session,
           decodeHex(session.queue[0]),
           session.queueSequences[0],
         );
@@ -1686,6 +1800,7 @@ export const makeOcapnHub = ({
    */
   const handleMessage = (sessionKey, message) => {
     const session = provideSessionState(sessionKey);
+    countInbound(message.type);
     switch (message.type) {
       case 'op:deliver': {
         const target = resolveTarget(message.to);
@@ -2193,6 +2308,53 @@ export const makeOcapnHub = ({
       prepareOutboxHead(session);
       persist();
       for (const key of sessions.keys()) flushOutbox(key);
+      /**
+       * One inbound frame: decoded, handled and committed with its
+       * watermark before any destination sees its effects (no commit or
+       * send while inside a batch: the batch commits once).
+       *
+       * @param {Uint8Array} bytes
+       * @param {number | bigint} [sequenceNumber]
+       */
+      const deliverFrame = (bytes, sequenceNumber = undefined) => {
+        if (
+          sequenceNumber !== undefined &&
+          BigInt(sequenceNumber) <= session.processedUpTo
+        ) {
+          // A prior attempt may have changed RAM but failed to commit.
+          persist();
+          for (const key of sessions.keys()) flushOutbox(key);
+          return;
+        }
+        deliveryDepth += 1;
+        try {
+          try {
+            const parsed = withRollback(() => {
+              const { readOcapnMessage } = provideCodecKit(sessionKey);
+              return readOcapnMessage(codec.makeReader(bytes));
+            });
+            handleMessage(sessionKey, parsed);
+          } catch (error) {
+            frameError(sessionKey, error);
+          }
+          if (sequenceNumber !== undefined) {
+            session.processedUpTo = BigInt(sequenceNumber);
+            dirty = true;
+          }
+        } finally {
+          deliveryDepth -= 1;
+        }
+        // Commit source watermark, reference changes, and every outgoing
+        // frame together before any destination can observe the delivery.
+        // Include each attached destination's head sequence in that same
+        // commit. Leave tails unassigned so gift-withdrawal ordering survives
+        // a blocked adapter and subsequent reattachment.
+        for (const destination of sessions.values()) {
+          prepareOutboxHead(destination);
+        }
+        persist();
+        for (const key of sessions.keys()) flushOutbox(key);
+      };
       const sink = harden({
         /**
          * @param {Uint8Array} bytes one inbound OCapN frame
@@ -2202,62 +2364,26 @@ export const makeOcapnHub = ({
          *   skipped, making processing exactly-once — the watermark
          *   commits atomically with the frame's effects
          */
-        deliver: (bytes, sequenceNumber = undefined) => {
-          if (
-            sequenceNumber !== undefined &&
-            BigInt(sequenceNumber) <= session.processedUpTo
-          ) {
-            // A prior attempt may have changed RAM but failed to commit.
-            persist();
-            for (const key of sessions.keys()) flushOutbox(key);
-            return;
-          }
-          deliveryDepth += 1;
-          try {
-            try {
-              const parsed = withRollback(() => {
-                const { readOcapnMessage } = provideCodecKit(sessionKey);
-                return readOcapnMessage(codec.makeReader(bytes));
-              });
-              handleMessage(sessionKey, parsed);
-            } catch (error) {
-              frameError(sessionKey, error);
-            }
-            if (sequenceNumber !== undefined) {
-              session.processedUpTo = BigInt(sequenceNumber);
-              dirty = true;
-            }
-          } finally {
-            deliveryDepth -= 1;
-          }
-          // Commit source watermark, reference changes, and every outgoing
-          // frame together before any destination can observe the delivery.
-          // Include each attached destination's head sequence in that same
-          // commit. Leave tails unassigned so gift-withdrawal ordering survives
-          // a blocked adapter and subsequent reattachment.
-          for (const destination of sessions.values()) {
-            prepareOutboxHead(destination);
-          }
-          persist();
-          for (const key of sessions.keys()) flushOutbox(key);
-        },
+        deliver: (bytes, sequenceNumber = undefined) =>
+          measureDelivery(() => deliverFrame(bytes, sequenceNumber)),
         /**
          * Commit a completed crank atomically, preserving frame order and
          * individual replay identities. Never publish an intermediate effect.
-         * @param {Array<{bytes: Uint8Array, sequenceNumber: number | bigint}>} frames
+         * @param {Array<{bytes: Uint8Array, sequenceNumber?: number | bigint}>} frames
          */
-        deliverBatch: frames => {
-          deliveryDepth += 1;
-          try {
-            for (const { bytes, sequenceNumber } of frames) {
-              sink.deliver(bytes, sequenceNumber);
+        deliverBatch: frames =>
+          measureDelivery(() => {
+            deliveryDepth += 1;
+            try {
+              for (const { bytes, sequenceNumber } of frames) {
+                deliverFrame(bytes, sequenceNumber);
+              }
+            } finally {
+              deliveryDepth -= 1;
             }
-          } finally {
-            deliveryDepth -= 1;
-          }
-          persist();
-          for (const key of sessions.keys()) flushOutbox(key);
-        },
+            persist();
+            for (const key of sessions.keys()) flushOutbox(key);
+          }),
         /** Retry retained outbox work when a destination becomes writable. */
         flush: () => {
           persist();
@@ -2425,6 +2551,20 @@ export const makeOcapnHub = ({
       }
       persist();
     },
+    /**
+     * Process-local cost counters, never persisted: inbound deliveries that
+     * carried only GC frames (`gcOnly`) or anything else (`other`), each
+     * with its frames, its whole synchronous time and the `persist()` calls
+     * (serialization included) and sends (a durable worker's journal
+     * append) inside it; `outside` counts persists and sends made outside
+     * any inbound delivery. Milliseconds read 0 without a `now` clock.
+     */
+    stats: () =>
+      harden({
+        gcOnly: { ...costs.gcOnly },
+        other: { ...costs.other },
+        outside: { ...costs.outside },
+      }),
     /**
      * GC frames and positions this process received and sent, by session:
      * `direction` `in` (from `from`) or `out` (to `to`, released because of

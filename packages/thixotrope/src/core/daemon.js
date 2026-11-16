@@ -125,6 +125,9 @@ import {
  *   is unaffected.
  * @property {(options?: { keep?: Array<string> }) => ReturnType<typeof inspectVatReachability>} inspectReachability
  * @property {() => ReturnType<ReturnType<typeof makeOcapnHub>['gcCounts']>} inspectGc
+ * @property {() => ReturnType<ReturnType<typeof makeOcapnHub>['stats']>} inspectHub
+ *   the hub's process-local cost counters (persists, sends, time per
+ *   inbound delivery)
  *   the GC frames and positions the hub received and sent in this process,
  *   by session (diagnostics)
  * @property {(options?: { keep?: Array<string> }) => Promise<Array<string>>} collectVats
@@ -219,6 +222,7 @@ const buildDaemon = async (
       getState: () => store.getHubState(),
       setState: (/** @type {any} */ state) => store.setHubState(state),
     }),
+    now: () => timers.monotonicNow(),
     cryptography,
     handoffs: harden({
       connect: (/** @type {any} */ location, /** @type {string} */ key) =>
@@ -1059,6 +1063,7 @@ const buildDaemon = async (
     },
     inspectReachability,
     inspectGc: () => hub.gcCounts(),
+    inspectHub: () => hub.stats(),
     collectVats: async ({ keep = [] } = {}) => {
       // A kept vat its owner retires meanwhile is no longer a vat to keep.
       const live = () => keep.filter(workerId => workers.has(workerId));
