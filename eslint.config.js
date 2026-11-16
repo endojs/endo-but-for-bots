@@ -8,6 +8,7 @@ import jessieNoNestedAwait from '@jessie.js/eslint-plugin/lib/rules/no-nested-aw
 import jessieSafeAwaitSeparator from '@jessie.js/eslint-plugin/lib/rules/safe-await-separator.js';
 import jessieUseJessieProcessor from '@jessie.js/eslint-plugin/lib/processors/use-jessie.js';
 import eslintPluginPlugin from 'eslint-plugin-eslint-plugin';
+import { makeHarnessLintConfigs } from './packages/thixotrope-harness/lint/guest-rules.js';
 
 // The published Jessie config eagerly constructs a legacy FlatCompat instance.
 // That instance cannot resolve Endo's restored `eslint:recommended` baseline
@@ -411,6 +412,11 @@ export default defineConfig(
       ],
     },
   },
+
+  // The Thixotrope harness: confined guest rules, script globals, ignores.
+  ...makeHarnessLintConfigs({
+    nodeGlobals: { ...hardenedGlobals, ...globals.node },
+  }),
 
   // Repository-wide ignores formerly provided by .eslintignore.
   {

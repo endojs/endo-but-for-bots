@@ -1,0 +1,7 @@
+{
+  "name": "thixotrope-harness-guest-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Confined code for Ironhorse vats. It has no dependencies on purpose: guest modules read the Thixotrope prelude from globalThis, so scripts/bundle-guest.mjs can never bundle a second copy of an @endo library.",
+  "type": "module"
+}

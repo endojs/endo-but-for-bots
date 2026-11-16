@@ -1,0 +1,4 @@
+# Test and perf state (short paths, mode 0700), deleted by the tests that make it.
+tmp/
+# Guest bundles written by scripts/bundle-guest.mjs.
+dist-guest/

@@ -31,7 +31,7 @@
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
-    "perf": "node scripts/run-lock.mjs --label perf -- node perf/run-all.mjs",
+    "perf": "node perf/_harness.mjs",
     "test": "ses-ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:xs": "exit 0"
