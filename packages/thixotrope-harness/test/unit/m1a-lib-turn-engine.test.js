@@ -1,0 +1,186 @@
+// @ts-check
+// Ported from Endo packages/fae/test/turn-engine.test.js at 1315bef86 (M1a
+// W1a.1). Changes: the guest prelude is installed first and the module is
+// imported from guest/lib/; the test bodies are the source's.
+import './_m1a-prelude.js';
+
+import test from '@endo/ses-ava/test.js';
+
+/* eslint-disable import/no-relative-packages */
+import {
+  DEFAULT_MAX_TOOL_ROUNDS,
+  runAgenticTurn,
+} from '../../guest/lib/turn-engine.js';
+/* eslint-enable import/no-relative-packages */
+test('Fae and Floot share a 1024-round default', t => {
+  t.is(DEFAULT_MAX_TOOL_ROUNDS, 1024);
+});
+
+test('turn engine commits every complete tool step before the final answer', async t => {
+  const trace = [];
+  const messages = [
+    harden({ id: 'assistant-1', calls: harden(['call-1']) }),
+    harden({ id: 'assistant-2', calls: harden([]) }),
+  ];
+  const outcome = await runAgenticTurn({
+    cursor: 'root',
+    maxRounds: 3,
+    getTools: async round => {
+      trace.push(`tools:${round}`);
+      return harden({ round });
+    },
+    getContext: async cursor => {
+      trace.push(`context:${cursor}`);
+      return harden({ cursor, messages: [cursor] });
+    },
+    invoke: async (context, tools, round) => {
+      trace.push(`invoke:${context[0]}:${tools.round}:${round}`);
+      return harden({ message: messages[round] });
+    },
+    getToolCalls: message => message.calls,
+    runTools: async (calls, tools, round) => {
+      trace.push(`run:${calls.join(',')}:${tools.round}:${round}`);
+      return harden(['result-1']);
+    },
+    commitStep: async (cursor, message, results) => {
+      trace.push(`step:${cursor}:${message.id}:${results.join(',')}`);
+      return 'step-1';
+    },
+    commitFinal: async (cursor, message) => {
+      trace.push(`final:${cursor}:${message.id}`);
+      return 'final-1';
+    },
+  });
+
+  t.deepEqual(trace, [
+    'tools:0',
+    'context:root',
+    'invoke:root:0:0',
+    'run:call-1:0:0',
+    'step:root:assistant-1:result-1',
+    'tools:1',
+    'context:step-1',
+    'invoke:step-1:1:1',
+    'final:step-1:assistant-2',
+  ]);
+  t.deepEqual(outcome, {
+    answered: true,
+    exhausted: false,
+    cursor: 'final-1',
+    message: messages[1],
+  });
+});
+
+test('turn engine reports empty and exhausted outcomes without a false final', async t => {
+  let finalCommits = 0;
+  const common = {
+    cursor: 'root',
+    getTools: async () => harden({}),
+    getContext: async cursor => harden({ cursor, messages: [] }),
+    getToolCalls: message => message.calls,
+    runTools: async () => harden([]),
+    commitStep: async () => 'next',
+    commitFinal: async () => {
+      finalCommits += 1;
+      return 'final';
+    },
+  };
+
+  const empty = await runAgenticTurn({
+    ...common,
+    maxRounds: 1,
+    invoke: async () => harden({}),
+  });
+  t.deepEqual(empty, {
+    answered: false,
+    exhausted: false,
+    cursor: 'root',
+  });
+
+  const exhausted = await runAgenticTurn({
+    ...common,
+    maxRounds: 2,
+    invoke: async () => harden({ message: harden({ calls: ['call'] }) }),
+  });
+  t.deepEqual(exhausted, {
+    answered: false,
+    exhausted: true,
+    cursor: 'next',
+  });
+  t.is(finalCommits, 0);
+});
+
+test('turn engine rejects an invalid round bound', async t => {
+  await t.throwsAsync(
+    () =>
+      runAgenticTurn({
+        cursor: 'root',
+        maxRounds: 0,
+        getTools: async () => undefined,
+        getContext: async cursor => ({ cursor, messages: [] }),
+        invoke: async () => ({}),
+        getToolCalls: () => [],
+        runTools: async () => [],
+        commitStep: async () => 'step',
+        commitFinal: async () => 'final',
+      }),
+    { message: /maxRounds must be a positive integer/ },
+  );
+});
+
+test('context selection advances the committed head before inference', async t => {
+  const outcome = await runAgenticTurn({
+    cursor: 'old',
+    maxRounds: 1,
+    getTools: async () => harden({}),
+    getContext: async () =>
+      harden({ cursor: 'checkpoint', messages: ['summary'] }),
+    invoke: async messages => {
+      t.deepEqual(messages, ['summary']);
+      return harden({ message: { content: 'done' } });
+    },
+    getToolCalls: () => [],
+    runTools: async () => [],
+    commitStep: async () => {
+      throw Error('unexpected tool step');
+    },
+    commitFinal: async cursor => {
+      t.is(cursor, 'checkpoint');
+      return 'final';
+    },
+  });
+  t.is(outcome.cursor, 'final');
+});
+
+test('a provider response that arrives after cancellation cannot admit tools or a final', async t => {
+  const controller = new AbortController();
+  const trace = [];
+  await t.throwsAsync(
+    () =>
+      runAgenticTurn({
+        cursor: 'root',
+        maxRounds: 1,
+        signal: controller.signal,
+        getTools: async () => ({}),
+        getContext: async cursor => ({ cursor, messages: [] }),
+        invoke: async () => {
+          controller.abort(Error('cancelled during inference'));
+          return { message: { calls: ['tool'] } };
+        },
+        getToolCalls: message => message.calls,
+        runTools: async () => {
+          trace.push('tools');
+        },
+        commitStep: async () => {
+          trace.push('step');
+          return 'step';
+        },
+        commitFinal: async () => {
+          trace.push('final');
+          return 'final';
+        },
+      }),
+    { message: /cancelled during inference/ },
+  );
+  t.deepEqual(trace, []);
+});
