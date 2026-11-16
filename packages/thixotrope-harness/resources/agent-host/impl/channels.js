@@ -12,20 +12,57 @@
  * - `publishDelta(event)`, called in-process by provider code for every text
  *   delta (zero vat deliveries per delta);
  * - **subscriber** facets (`LiveSubscription`), one per `subscribe()`, each
- *   with its own bounded queue; a subscriber that falls more than
- *   `subscriberQueueLimit` deliveries behind is dropped (closed) and must
- *   re-watch;
+ *   with its own bounded queue (see "Bounds");
  * - the **fold** of the current (or last) turn, with Fae's `reply-fold.js`
  *   (W1a.1 copy), from which every subscription's first delivery, the
  *   snapshot, is made.
  *
  * Numbering. `seq` counts every delivery of this channel incarnation from 1
- * (vat events and deltas alike, in the order they were published). A
+ * (vat events and deltas alike, in the order they are delivered). A
  * subscription's snapshot carries the `seq` of the last delivery it accounts
  * for (0 when the channel has had none), so the deliveries that follow it are
  * numbered `snapshot.seq + 1`, `+ 2`, ... with no gap. `rev` is the batch's
- * rev for vat events and the channel's latest vat rev for deltas and
- * snapshots (0 = no vat batch since the adapter started).
+ * rev for vat events and the channel's latest delivered vat rev for deltas
+ * and snapshots (0 = no vat batch since the adapter started).
+ *
+ * Ordering (QC advisory 4; JOURNAL J-9170). The session vat numbers its
+ * batches: `rev` is its durable revision, one more for every `publish` call
+ * (guest/session/live.js). The channel delivers vat batches in rev order
+ * and never out of it:
+ *
+ * - the first batch a channel incarnation sees sets the expected rev (an
+ *   adapter restart starts a fresh channel; earlier revs went to the old
+ *   incarnation);
+ * - a batch with the expected rev is delivered at once, then anything held
+ *   behind it;
+ * - a batch with a newer rev is held (a late older one is on its way: an
+ *   outside-a-turn publish that first fetched a publisher can arrive after
+ *   the next turn's in-turn batches); deltas that arrive while a batch is
+ *   held are held behind it, so a turn's deltas never overtake its
+ *   `turn-start`;
+ * - a batch at or below the last delivered rev, or one already held, is a
+ *   duplicate or arrived after its gap was declared: dropped and counted;
+ * - a gap: when the missing rev has not arrived within `reorderWaitMs`, or
+ *   the held batches or deliveries exceed `reorderWindowBatches` /
+ *   `reorderBacklogDeliveries`, the channel gives the missing revs up,
+ *   counts the gap and delivers what it holds in rev order. Subscribers see
+ *   the rev jump; the client rule (section 5) is to re-watch.
+ *
+ * Bounds (`config/defaults.js` `channelLimits`; rule 12.6). A subscriber is
+ * dropped (closed, with a reason the channel records) when it has more than
+ * `subscriberQueueDeliveries` undelivered deliveries or more than
+ * `subscriberQueueBytes` UTF-8 bytes of them (the snapshot is not counted:
+ * the fold bounds it); a subscribe beyond `subscribersPerSession` drops the
+ * subscriber with the most queued bytes first. `LiveBatch` has no field for
+ * the reason (a contract change), so a dropped client sees `closed: true`.
+ *
+ * Validation. Every delivery is checked once where it is made: vat events by
+ * the `LivePublisher` guard, deltas by `publishDelta`'s `mustMatch`, the
+ * snapshot by `mustMatch(shapes.SnapshotEvent)` at `subscribe()`. The
+ * subscriber facet's `next()` return guard therefore checks only the batch
+ * envelope (`LIVE_SUBSCRIPTION_GUARD`), not each delivery again: the
+ * contract's `S.LiveBatch` guard cost 14 ms per 256-delivery batch (J-0230,
+ * J-0231). What a client receives still matches `S.LiveBatch`.
  *
  * Fold. `turn-start` begins a fresh fold for its turn; `phase`, `delta`,
  * `final`, `tool_call`, `tool_result`, `usage`, `end` and `abort` of that turn
@@ -34,28 +71,46 @@
  * another turn are delivered but not folded. The fold is kept within
  * `limits.foldTextUnits` (streaming text: a prefix is kept) and
  * `limits.foldMessages` (the oldest messages are dropped): a turn that
- * exceeds them has a snapshot that no longer equals a replay; this bounds the
- * adapter's retained state (rule 12.6).
+ * exceeds them has a snapshot that no longer equals a replay.
+ *
+ * Live probe (perf only; `perf/turn.perf.mjs`): when the file
+ * `tmp/live-probe/enabled` exists under the harness package as the adapter
+ * makes its channel registry, every channel gets one more subscriber in this
+ * process, as a gateway would hold, that reads with `E(subscription).next()`
+ * and appends the time from each delta's publish to its arrival there
+ * (`performance.now()`, ms) to `tmp/live-probe/<pid>.jsonl`, one line per
+ * delta, written when the turn settles.
  *
  * Node module (adapter); reads the guest prelude (`makeExo`, `M`,
- * `mustMatch`, `makePromiseKit`) from `globalThis`, which the loader installs
- * before importing `impl/index.js` (m1a-interfaces.md section 1.8).
+ * `mustMatch`, `makePromiseKit`, `E`) from `globalThis`, which the loader
+ * installs before importing `impl/index.js` (m1a-interfaces.md section 1.8).
  */
+import { appendFileSync, existsSync } from 'node:fs';
+import path from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { pid } from 'node:process';
+import { clearTimeout, setTimeout } from 'node:timers';
+import url from 'node:url';
+
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
 import { interfaces, shapes } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
+import { messageBytes } from '../../../guest/lib/bounded.js';
 import {
   makeFoldableStatus,
   makeReplyFold,
 } from '../../../guest/lib/reply-fold.js';
 /* eslint-enable import/no-relative-packages */
+import { channelLimits } from '../../../config/defaults.js';
 import { channelTaps } from './channel-taps.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { ChannelTap } from './channel-taps.js' */
 /** @import { FoldableStatus } from '../../../guest/lib/reply-fold.js' */
 
-const { makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
+const { E, M, makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (
+  globalThis
+);
 /** @type {GuestGlobals['mustMatch']} */
 const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
 
@@ -63,7 +118,36 @@ const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
  * Undelivered deliveries one subscriber may have queued before it is dropped
  * (m1a-interfaces.md section 3.2, `LiveSubscription`).
  */
-export const SUBSCRIBER_QUEUE_LIMIT = 4096;
+export const SUBSCRIBER_QUEUE_LIMIT = channelLimits.subscriberQueueDeliveries;
+
+/**
+ * Why a subscriber was closed (recorded by the channel; see `closes()`).
+ */
+export const closeReasons = harden({
+  client: 'closed by its client',
+  queueDeliveries: 'too many undelivered deliveries',
+  queueBytes: 'too many undelivered bytes',
+  subscriberLimit: 'dropped for a new subscriber (subscribersPerSession)',
+});
+
+/**
+ * The subscriber facet's interface: the contract's `LiveSubscription`
+ * methods, with `next()` returning a guard on the batch envelope only (each
+ * delivery was checked once where it was made; see "Validation" above).
+ */
+export const LIVE_SUBSCRIPTION_GUARD = M.interface('LiveSubscription', {
+  next: M.callWhen().returns(
+    M.splitRecord(
+      {
+        deliveries: M.arrayOf(M.any(), {
+          arrayLengthLimit: limits.liveBatchDeliveries,
+        }),
+      },
+      { closed: M.boolean() },
+    ),
+  ),
+  close: M.call().returns(M.undefined()),
+});
 
 /** What a closed subscription answers to every `next()`. */
 const closedBatch = harden({ deliveries: [], closed: true });
@@ -76,7 +160,17 @@ const closedBatch = harden({ deliveries: [], closed: true });
  *   status: FoldableStatus,
  *   settled: boolean,
  * }} TurnFold
+ * @typedef {(fn: () => void, ms: number) => () => void} Schedule runs `fn`
+ *   once after `ms`; returns a cancel function
+ * @typedef {{ kind: 'batch', rev: number, events: readonly any[] } | { kind: 'delta', event: any }} Held
  */
+
+/** @type {Schedule} */
+const defaultSchedule = (fn, ms) => {
+  const timer = setTimeout(fn, ms);
+  timer.unref?.();
+  return () => clearTimeout(timer);
+};
 
 /**
  * Cut `text` to at most `units` UTF-16 units without leaving a lone high
@@ -118,19 +212,27 @@ const foldable = event => {
 /**
  * One subscriber: its queue, its pending `next()` callers and its facet.
  * @param {object} options
- * @param {number} options.queueLimit
- * @param {() => void} options.onClose removes it from its channel
+ * @param {number} options.queueLimit deliveries
+ * @param {number} options.queueBytes UTF-8 bytes of queued deliveries
+ * @param {(reason: string) => void} options.onClose removes it from its
+ *   channel and records the reason
  */
-const makeSubscriber = ({ queueLimit, onClose }) => {
+const makeSubscriber = ({ queueLimit, queueBytes, onClose }) => {
   /** @type {Delivery[]} */
   const queue = [];
+  /** @type {number[]} bytes of each queued delivery, in step with `queue` */
+  const sizes = [];
+  let bytes = 0;
   /** @type {ReturnType<typeof makePromiseKit>[]} */
   const waiters = [];
   let closed = false;
   let flushScheduled = false;
 
-  const take = () =>
-    harden({ deliveries: queue.splice(0, limits.liveBatchDeliveries) });
+  const take = () => {
+    const deliveries = queue.splice(0, limits.liveBatchDeliveries);
+    for (const size of sizes.splice(0, deliveries.length)) bytes -= size;
+    return harden({ deliveries });
+  };
 
   /** Answer the waiting `next()` callers, oldest first, while there is anything to give. */
   const flush = () => {
@@ -143,11 +245,14 @@ const makeSubscriber = ({ queueLimit, onClose }) => {
     }
   };
 
-  const close = () => {
+  /** @param {string} reason */
+  const close = reason => {
     if (closed) return;
     closed = true;
     queue.length = 0;
-    onClose();
+    sizes.length = 0;
+    bytes = 0;
+    onClose(reason);
     for (const waiter of waiters.splice(0)) waiter.resolve(closedBatch);
   };
 
@@ -155,12 +260,19 @@ const makeSubscriber = ({ queueLimit, onClose }) => {
    * Queue one delivery. A waiting `next()` is answered on a microtask, so the
    * events of one publish (or of one synchronous burst) arrive in one batch.
    * @param {Delivery} delivery
+   * @param {number} size its UTF-8 bytes (0 for the snapshot)
    */
-  const push = delivery => {
+  const push = (delivery, size) => {
     if (closed) return;
     queue.push(delivery);
+    sizes.push(size);
+    bytes += size;
     if (queue.length > queueLimit) {
-      close();
+      close(closeReasons.queueDeliveries);
+      return;
+    }
+    if (bytes > queueBytes) {
+      close(closeReasons.queueBytes);
       return;
     }
     if (waiters.length > 0 && !flushScheduled) {
@@ -169,7 +281,7 @@ const makeSubscriber = ({ queueLimit, onClose }) => {
     }
   };
 
-  const facet = makeExo('LiveSubscription', interfaces.LiveSubscription, {
+  const facet = makeExo('LiveSubscription', LIVE_SUBSCRIPTION_GUARD, {
     async next() {
       if (closed) return closedBatch;
       if (queue.length > 0 && waiters.length === 0) return take();
@@ -178,22 +290,78 @@ const makeSubscriber = ({ queueLimit, onClose }) => {
       return waiter.promise;
     },
     close() {
-      close();
+      close(closeReasons.client);
     },
   });
 
-  return harden({ push, close, facet, isClosed: () => closed });
+  return harden({
+    push,
+    close,
+    facet,
+    isClosed: () => closed,
+    queuedBytes: () => bytes,
+    queuedDeliveries: () => queue.length,
+  });
 };
 
 /**
- * @param {any} session the Session presence this channel belongs to
- * @param {object} options
- * @param {readonly ChannelTap[]} options.taps
- * @param {number} options.queueLimit
+ * @typedef {object} ChannelOptions
+ * @property {readonly ChannelTap[]} taps
+ * @property {number} queueLimit
+ * @property {number} queueBytes
+ * @property {number} maxSubscribers
+ * @property {number} reorderWindowBatches
+ * @property {number} reorderBacklogDeliveries
+ * @property {number} reorderWaitMs
+ * @property {Schedule} schedule
  */
-const makeChannel = (session, { taps, queueLimit }) => {
+
+/**
+ * @param {any} session the Session presence this channel belongs to
+ * @param {ChannelOptions} options
+ */
+const makeChannel = (
+  session,
+  {
+    taps,
+    queueLimit,
+    queueBytes,
+    maxSubscribers,
+    reorderWindowBatches,
+    reorderBacklogDeliveries,
+    reorderWaitMs,
+    schedule,
+  },
+) => {
   let seq = 0;
+  /** The last delivered vat rev (0 = none yet). */
   let latestRev = 0;
+  /** The rev the next vat batch must carry; undefined before the first. */
+  /** @type {number | undefined} */
+  let expectedRev;
+  /**
+   * What arrived behind a missing rev, in arrival order: vat batches newer
+   * than `expectedRev` and the deltas that came after the first of them.
+   * Empty, or its first entry is a batch.
+   * @type {Held[]}
+   */
+  const backlog = [];
+  let heldBatches = 0;
+  let heldDeliveries = 0;
+  /** @type {(() => void) | undefined} */
+  let cancelWait;
+  const counts = {
+    /** Batches delivered after a newer one had arrived (held, then in order). */
+    reordered: 0,
+    /** Batches dropped: at or below the delivered rev, or already held. */
+    dropped: 0,
+    /** Times the channel gave missing revs up. */
+    gaps: 0,
+    /** Revs given up in those gaps. */
+    missingRevs: 0,
+  };
+  /** @type {Map<string, number>} closed subscribers by reason */
+  const closes = new Map();
   /** @type {TurnFold | undefined} */
   let current;
   /** @type {Set<ReturnType<typeof makeSubscriber>>} */
@@ -241,6 +409,9 @@ const makeChannel = (session, { taps, queueLimit }) => {
     boundFold();
   };
 
+  /** @type {((delivery: Delivery) => void) | undefined} */
+  let onDeliver;
+
   /**
    * Number, fold, fan out and tap one event.
    * @param {any} event hardened
@@ -249,14 +420,93 @@ const makeChannel = (session, { taps, queueLimit }) => {
   const deliver = (event, rev) => {
     seq += 1;
     const delivery = harden({ seq, rev, event });
+    const size = messageBytes(delivery);
     foldEvent(event);
-    for (const subscriber of subscribers) subscriber.push(delivery);
+    if (onDeliver !== undefined) onDeliver(delivery);
+    for (const subscriber of subscribers) subscriber.push(delivery, size);
     for (const tap of taps) {
       try {
         tap(session, delivery);
       } catch {
         // A tap must not break the channel (channel-taps.js).
       }
+    }
+  };
+
+  /**
+   * @param {number} rev
+   * @param {readonly any[]} events
+   */
+  const deliverBatch = (rev, events) => {
+    latestRev = rev;
+    expectedRev = rev + 1;
+    for (const event of events) deliver(event, rev);
+  };
+
+  /**
+   * Deliver from the backlog what may go now: deltas at its head, and the
+   * batch with the expected rev wherever it is.
+   */
+  const drain = () => {
+    while (backlog.length > 0) {
+      const head = backlog[0];
+      if (head.kind === 'delta') {
+        backlog.shift();
+        heldDeliveries -= 1;
+        deliver(head.event, latestRev);
+      } else {
+        const at = backlog.findIndex(
+          item => item.kind === 'batch' && item.rev === expectedRev,
+        );
+        if (at < 0) break;
+        const [item] = backlog.splice(at, 1);
+        if (item.kind !== 'batch') break; // unreachable; narrows the type
+        heldBatches -= 1;
+        heldDeliveries -= item.events.length;
+        counts.reordered += 1;
+        deliverBatch(item.rev, item.events);
+      }
+    }
+    if (backlog.length === 0 && cancelWait !== undefined) {
+      cancelWait();
+      cancelWait = undefined;
+    }
+  };
+
+  /**
+   * Give up the missing revs before the oldest held batch: deliver from it
+   * on, in rev order.
+   */
+  const declareGap = () => {
+    let oldest = Infinity;
+    for (const item of backlog) {
+      if (item.kind === 'batch' && item.rev < oldest) oldest = item.rev;
+    }
+    if (oldest === Infinity) return;
+    counts.gaps += 1;
+    counts.missingRevs += oldest - /** @type {number} */ (expectedRev);
+    expectedRev = oldest;
+    drain();
+  };
+
+  /** (Re)arm the wait for the missing rev while anything is held. */
+  const armWait = () => {
+    if (cancelWait !== undefined || backlog.length === 0) return;
+    cancelWait = schedule(() => {
+      cancelWait = undefined;
+      declareGap();
+      armWait();
+    }, reorderWaitMs);
+  };
+
+  /** Give revs up while the held state is over its bounds. */
+  const enforceWindow = () => {
+    while (
+      backlog.length > 0 &&
+      (heldBatches > reorderWindowBatches ||
+        heldDeliveries > reorderBacklogDeliveries)
+    ) {
+      declareGap();
     }
   };
 
@@ -275,12 +525,24 @@ const makeChannel = (session, { taps, queueLimit }) => {
   const publisher = makeExo('LivePublisher', interfaces.LivePublisher, {
     /** @param {any} batch a PublishBatch (the guard checked it) */
     publish({ rev, events }) {
-      // An outside publish that first fetched a publisher can arrive after
-      // a newer in-turn batch: never move latestRev back (QC advisory 4).
-      // The late batch is still delivered, stamped with its own rev.
       const batchRev = /** @type {number} */ (rev);
-      if (batchRev > latestRev) latestRev = batchRev;
-      for (const event of events) deliver(event, rev);
+      if (expectedRev === undefined || batchRev === expectedRev) {
+        deliverBatch(batchRev, events);
+        drain();
+        return;
+      }
+      if (
+        batchRev < expectedRev ||
+        backlog.some(item => item.kind === 'batch' && item.rev === batchRev)
+      ) {
+        counts.dropped += 1;
+        return;
+      }
+      backlog.push({ kind: 'batch', rev: batchRev, events });
+      heldBatches += 1;
+      heldDeliveries += events.length;
+      enforceWindow();
+      armWait();
     },
   });
 
@@ -288,7 +550,31 @@ const makeChannel = (session, { taps, queueLimit }) => {
   const publishDelta = event => {
     mustMatch(event, shapes.DeltaEvent);
     const { turnId, round, text } = event;
-    deliver(harden({ type: 'delta', turnId, round, text }), latestRev);
+    const delta = harden({ type: 'delta', turnId, round, text });
+    if (backlog.length === 0) {
+      deliver(delta, latestRev);
+      return;
+    }
+    backlog.push({ kind: 'delta', event: delta });
+    heldDeliveries += 1;
+    enforceWindow();
+  };
+
+  /** The attached subscriber with the most queued bytes (then deliveries). */
+  const slowest = () => {
+    /** @type {ReturnType<typeof makeSubscriber> | undefined} */
+    let worst;
+    for (const subscriber of subscribers) {
+      if (
+        worst === undefined ||
+        subscriber.queuedBytes() > worst.queuedBytes() ||
+        (subscriber.queuedBytes() === worst.queuedBytes() &&
+          subscriber.queuedDeliveries() > worst.queuedDeliveries())
+      ) {
+        worst = subscriber;
+      }
+    }
+    return worst;
   };
 
   /**
@@ -297,13 +583,22 @@ const makeChannel = (session, { taps, queueLimit }) => {
    * @param {number} [_rev]
    */
   const subscribe = _rev => {
+    const first = snapshot();
+    mustMatch(first, shapes.SnapshotEvent);
+    while (subscribers.size >= maxSubscribers) {
+      slowest()?.close(closeReasons.subscriberLimit);
+    }
     /** @type {ReturnType<typeof makeSubscriber>} */
     const subscriber = makeSubscriber({
       queueLimit,
-      onClose: () => subscribers.delete(subscriber),
+      queueBytes,
+      onClose: reason => {
+        subscribers.delete(subscriber);
+        closes.set(reason, (closes.get(reason) ?? 0) + 1);
+      },
     });
     subscribers.add(subscriber);
-    subscriber.push(harden({ seq, rev: latestRev, event: snapshot() }));
+    subscriber.push(harden({ seq, rev: latestRev, event: first }), 0);
     return subscriber.facet;
   };
 
@@ -315,6 +610,24 @@ const makeChannel = (session, { taps, queueLimit }) => {
     latestRev: () => latestRev,
     /** Subscribers currently attached (tests, diagnostics). */
     subscriberCount: () => subscribers.size,
+    /** Ordering counters (tests, diagnostics). */
+    ordering: () =>
+      harden({
+        ...counts,
+        expectedRev: expectedRev ?? null,
+        heldBatches,
+        heldDeliveries,
+      }),
+    /** Closed subscribers by reason (tests, diagnostics). */
+    closes: () => harden(Object.fromEntries(closes)),
+    /**
+     * Observe every delivery as it is numbered, before the fan-out (the live
+     * probe; one observer).
+     * @param {(delivery: Delivery) => void} observer
+     */
+    setDeliveryObserver: observer => {
+      onDeliver = observer;
+    },
   });
 };
 
@@ -322,15 +635,107 @@ const makeChannel = (session, { taps, queueLimit }) => {
  * @typedef {ReturnType<typeof makeChannel>} Channel
  */
 
+/** The harness package's `tmp/live-probe` directory. */
+export const liveProbeDir = path.join(
+  path.dirname(url.fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  'tmp',
+  'live-probe',
+);
+
+/**
+ * The live probe (see the module comment): one in-process subscriber per
+ * channel that records each delta's publish-to-arrival time.
+ * @param {object} options
+ * @param {string} options.file the JSON-lines file to append to
+ * @param {() => number} [options.now] ms, monotonic
+ */
+export const makeLiveProbe = ({ file, now = () => performance.now() }) => {
+  let channelCount = 0;
+  /** @param {Channel} channel */
+  const attach = channel => {
+    channelCount += 1;
+    const channelNumber = channelCount;
+    /** @type {Map<number, number>} seq -> publish time of a delta */
+    const published = new Map();
+    /** @type {string[]} */
+    let lines = [];
+    channel.setDeliveryObserver(delivery => {
+      if (delivery.event.type === 'delta') published.set(delivery.seq, now());
+    });
+    const subscription = channel.subscribe();
+    const write = () => {
+      if (lines.length === 0) return;
+      const text = lines.join('');
+      lines = [];
+      try {
+        appendFileSync(file, text);
+      } catch {
+        // The probe must not break the adapter.
+      }
+    };
+    const loop = async () => {
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        const batch = await E(subscription).next();
+        const arrivedAt = now();
+        if (batch.closed) break;
+        for (const { seq, event } of batch.deliveries) {
+          const at = published.get(seq);
+          if (at !== undefined) {
+            published.delete(seq);
+            lines.push(
+              `${JSON.stringify({ kind: 'live-probe', pid, channel: channelNumber, turnId: event.turnId, round: event.round, seq, ms: +(arrivedAt - at).toFixed(3), batch: batch.deliveries.length })}\n`,
+            );
+          } else if (event.type === 'end' || event.type === 'abort') {
+            write();
+          }
+        }
+        if (lines.length >= limits.liveBatchDeliveries) write();
+      }
+      write();
+    };
+    void loop().catch(() => {});
+  };
+  return harden({ attach });
+};
+harden(makeLiveProbe);
+
+/**
+ * The probe the adapter's default registry uses: on only while
+ * `tmp/live-probe/enabled` exists.
+ */
+const probeFromSwitch = () =>
+  existsSync(path.join(liveProbeDir, 'enabled'))
+    ? makeLiveProbe({ file: path.join(liveProbeDir, `${pid}.jsonl`) })
+    : null;
+
 /**
  * The adapter's session channels: one per Session presence.
  * @param {object} [options]
  * @param {readonly ChannelTap[]} [options.taps] the hook table (default `channelTaps`)
- * @param {number} [options.subscriberQueueLimit] default `SUBSCRIBER_QUEUE_LIMIT`
+ * @param {number} [options.subscriberQueueLimit] deliveries (default `SUBSCRIBER_QUEUE_LIMIT`)
+ * @param {number} [options.subscriberQueueBytes]
+ * @param {number} [options.subscribersPerSession]
+ * @param {number} [options.reorderWindowBatches]
+ * @param {number} [options.reorderBacklogDeliveries]
+ * @param {number} [options.reorderWaitMs]
+ * @param {Schedule} [options.schedule] timers (tests pass their own)
+ * @param {ReturnType<typeof makeLiveProbe> | null} [options.probe] null for
+ *   none (default: the live probe while its switch file exists)
  */
 export const makeChannelRegistry = ({
   taps = channelTaps,
   subscriberQueueLimit = SUBSCRIBER_QUEUE_LIMIT,
+  subscriberQueueBytes = channelLimits.subscriberQueueBytes,
+  subscribersPerSession = channelLimits.subscribersPerSession,
+  reorderWindowBatches = channelLimits.reorderWindowBatches,
+  reorderBacklogDeliveries = channelLimits.reorderBacklogDeliveries,
+  reorderWaitMs = channelLimits.reorderWaitMs,
+  schedule = defaultSchedule,
+  probe = probeFromSwitch(),
 } = {}) => {
   /** @type {WeakMap<object, Channel>} */
   const channels = new WeakMap();
@@ -344,8 +749,15 @@ export const makeChannelRegistry = ({
       channel = makeChannel(session, {
         taps,
         queueLimit: subscriberQueueLimit,
+        queueBytes: subscriberQueueBytes,
+        maxSubscribers: subscribersPerSession,
+        reorderWindowBatches,
+        reorderBacklogDeliveries,
+        reorderWaitMs,
+        schedule,
       });
       channels.set(session, channel);
+      if (probe) probe.attach(channel);
     }
     return channel;
   };

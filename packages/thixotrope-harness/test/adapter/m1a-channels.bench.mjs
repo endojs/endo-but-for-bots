@@ -10,10 +10,10 @@
  *   node test/adapter/m1a-channels.bench.mjs
  *
  * Metrics:
- * - `channels.delta.e2e` (subscribers 1, 3, 10): one delta published while
+ * - `channels.delta.e2e` (subscribers 1, 3, 10, 32): one delta published while
  *   every subscriber has a `next()` waiting through `E()`; time until every
  *   subscriber's promise has settled with it. Budget: median 5 ms.
- * - `channels.delta.publish` (subscribers 0, 1, 3, 10): the synchronous cost
+ * - `channels.delta.publish` (subscribers 0, 1, 3, 10, 32): the synchronous cost
  *   of `publishDelta` (shape check, harden, fold, fan-out, taps), per delta,
  *   from blocks of 1,000 deltas.
  * - `channels.fold.turn5000`: a whole turn of 5,000 deltas (plus turn-start,
@@ -21,7 +21,8 @@
  *   subscriber; `channels.fold.perDelta` the same per delta;
  *   `channels.snapshot.turn5000` the snapshot of that turn.
  * - `channels.next.batch256`: one `next()` returning 256 queued deliveries
- *   (the return guard checks each).
+ *   (the return guard checks the envelope; before J-9172 it checked each
+ *   delivery against `S.Delivery`).
  *
  * BENCH_ROUNDS (default 200) sets the samples of the e2e and publish rows.
  */
@@ -46,8 +47,16 @@ const chunk = 'The quick brown fox jumps. '; // 27 units, a typical SSE text del
 const delta = i =>
   harden({ type: 'delta', turnId: 't1', round: 0, text: `${chunk}${i}` });
 
-const startTurn = (/** @type {any} */ channel, rev = 1) =>
-  channel.publisher.publish(
+/**
+ * The next vat rev of each channel: the channel delivers vat batches in rev
+ * order and drops a repeated rev, so every turn-start takes a new one.
+ * @type {WeakMap<object, number>}
+ */
+const revs = new WeakMap();
+const startTurn = (/** @type {any} */ channel) => {
+  const rev = (revs.get(channel) ?? 0) + 1;
+  revs.set(channel, rev);
+  return channel.publisher.publish(
     harden({
       rev,
       events: [
@@ -56,11 +65,12 @@ const startTurn = (/** @type {any} */ channel, rev = 1) =>
       ],
     }),
   );
+};
 
 const extra = { deliveriesPerDelta: 0, note: 'in-process; no vat involved' };
 
 // ---- end to end: publish -> every waiting next() settled
-for (const n of [1, 3, 10]) {
+for (const n of [1, 3, 10, 32]) {
   const channel = makeChannelRegistry().channelFor(Far('Session', {}));
   startTurn(channel);
   const subscriptions = Array.from({ length: n }, () => channel.subscribe(1));
@@ -91,7 +101,7 @@ for (const n of [1, 3, 10]) {
 }
 
 // ---- synchronous publish cost per delta
-for (const n of [0, 1, 3, 10]) {
+for (const n of [0, 1, 3, 10, 32]) {
   const channel = makeChannelRegistry().channelFor(Far('Session', {}));
   startTurn(channel);
   const subscriptions = Array.from({ length: n }, () => channel.subscribe(1));

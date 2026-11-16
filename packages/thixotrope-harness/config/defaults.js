@@ -68,3 +68,51 @@ export const limits = Object.freeze({
    */
   execSourceBytes: 262_144,
 });
+
+/**
+ * Bounds of the agent host's session channels (adapter side; M1a follow-ups
+ * J-0296 (5), QC advisory 4; JOURNAL J-9170..J-9189). The adapter process,
+ * not a vat, holds this state, so the values are adapter settings, not
+ * contract limits; `resources/agent-host/impl/channels.js` reads them.
+ */
+export const channelLimits = Object.freeze({
+  /**
+   * Undelivered deliveries one subscriber may have queued before it is
+   * dropped (m1a-interfaces.md section 3.2, `LiveSubscription`).
+   */
+  subscriberQueueDeliveries: 4096,
+  /**
+   * UTF-8 bytes of string content one subscriber may have queued (the
+   * deliveries published after its snapshot) before it is dropped. A
+   * delivery count alone allowed 4,096 frame-sized events, about 100 MB per
+   * subscriber; 2 MiB is about 85 frame-sized events or 60,000 typical text
+   * deltas.
+   */
+  subscriberQueueBytes: 2 * 1024 * 1024,
+  /**
+   * Subscribers attached to one session's channel. Fan-out cost grows with
+   * the count (0.7 ms per delta for 10 waiting subscribers, J-0230); when a
+   * new subscriber would exceed it, the subscriber with the most queued
+   * bytes is dropped.
+   */
+  subscribersPerSession: 32,
+  /**
+   * Vat batches a channel holds while it waits for a missing older rev. A
+   * held batch is delivered after the missing one arrives; when the window
+   * is full the channel gives up on the missing revs (a gap).
+   */
+  reorderWindowBatches: 32,
+  /**
+   * Deliveries (held batches' events and the deltas that arrived behind
+   * them) a channel holds while it waits for a missing rev.
+   */
+  reorderBacklogDeliveries: 4096,
+  /**
+   * How long a channel waits for a missing rev before it gives up on it and
+   * delivers what it holds (a gap; viewers see the rev jump and re-watch).
+   * The late batch is an outside-a-turn publish whose session first fetched
+   * a publisher through the manager vat; one manager round trip costs about
+   * 0.1-0.5 s (J-0272).
+   */
+  reorderWaitMs: 1000,
+});

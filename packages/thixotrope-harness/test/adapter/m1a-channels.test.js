@@ -235,26 +235,6 @@ test('publish batch order: seq numbers every delivery; rev per batch', async t =
   t.is(channel.latestRev(), 5);
 });
 
-test('latestRev never goes backwards when an older batch arrives late (QC advisory 4)', async t => {
-  const channel = makeChannelRegistry().channelFor(Far('Session', {}));
-  const subscription = channel.subscribe();
-  const pending = harden({ type: 'pending', pending: { entries: [] } });
-  channel.publisher.publish(harden({ rev: 5, events: [pending] }));
-  // An outside publish that waited for a publisher arrives after rev 5.
-  channel.publisher.publish(harden({ rev: 3, events: [pending] }));
-  t.is(channel.latestRev(), 5);
-  channel.publishDelta(
-    harden({ type: 'delta', turnId: 't1', round: 0, text: 'x' }),
-  );
-  const deliveries = await drain(subscription);
-  t.deepEqual(
-    deliveries.slice(1).map(({ rev }) => rev),
-    [5, 3, 5],
-    'a batch keeps its own rev; a delta takes the latest',
-  );
-  t.is(channel.snapshot().type, 'snapshot');
-});
-
 test('fold equals replay: early, mid-turn and late subscribers', async t => {
   const channel = makeChannelRegistry().channelFor(Far('Session', {}));
   const steps = scriptedTurn('t1', 1);
