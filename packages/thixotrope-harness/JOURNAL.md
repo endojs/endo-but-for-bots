@@ -4740,3 +4740,84 @@ A sleeping spare is 16.1-16.4 MiB of snapshot (7 spares, session and exec); the 
 is about 49 MiB at rest. The whole-state `du` delta (5.5 MiB per spare here) undercounts, as J-0353
 says. `session.create.pool` repeats J-0351 (median 1.26 s, miss).
 Decision: as J-0351 and J-0353.
+
+### J-0340 2026-11-17 M1b exec - good fit
+Evidence: W1b.4 exec tool (`guest/session/tools/exec.js`, `ad6e59008a`; tests `614cd894e3`). The
+entry calls the session's `ExecScope` directly (from `ExecHandle.scope()`, kept until retired);
+per-session state lives in a `WeakMap` keyed by the session's `ExecHandle`, so it persists with the
+vat heap and needs no record. Integration (m1b template, real session and exec programs, default
+pool 2 + 1, release worker `7cda4467...`, crank budget 50 M): `m1b-exec-tool.test.js` passed in
+1 m 42 s (`614cd894e3-dirty`, load 1.8-2.1; an earlier run at `ad6e59008a-dirty` 1 m 54 s) and
+`m1b-exec-tool-restart.test.js` in 1 m 22 s (`5ff30274df-dirty`, load 1.7-2.0). Acceptance at the
+tool level: 4 (`while (true) {}` -> "Error: exec scope terminated: ...", the turn completes, the
+next call sees `x` unset), 5 (`execDeadlineMs` 5 s: the timeout text after 5.17 s, next call
+fresh), 11 (the exec vat's worker SIGKILLed on every attempt, crash bound 2: the call ends with the
+terminated text 5.6 s after the first kill, the vat's row is gone (retired), the next call fresh),
+3 (`x = 5`, clean restart, `return x` = 5; cancel during a 30 s sleep: `execAbandoned`, no
+retire, after the sleep ended `return x` = 5; while it still sleeps: `busy`, retire, rerun with
+the reset notice, `x` unset), 10 (SIGKILL 2 s into a 30 s sleep: the turn reads
+`outcome-unknown` 1.9 s after serving, 12.8 s after the call, so recovery did not wait for it; the
+next exec returned 5: the vat survived and its sleep ended after the restart).
+Reading: every ending of contract 8.3 is a local decision of the session in one crank: a retired break
+from a guest vat means that vat is lost (D-17), recovery never touches a guest call, and orthogonal
+persistence keeps the scope across both kinds of restart with no code at all. The tool needs no
+record kind of its own.
+Decision: none.
+
+### J-0341 2026-11-17 M1b exec - perf
+Evidence: same runs. Times are `tool_call` to `tool_result` arrival at a live subscriber (client
+clock), i.e. crank D's publish to crank E's publish; `exec.first` is the first exec of a fresh
+session (`ExecHandle.scope()` takes a sleeping, checkpointed spare exec vat), measured after the
+pool settled and every exec vat slept; `exec.sends.answered` is one body sending 100
+`E(timer).sleep(0)` in one exec crank until all answers are back.
+{"metric":"exec.first","unit":"ms","n":3,"median":536,"p95":565,"p99":565,"min":528,"max":565,"what":"tool_call to tool_result at a live subscriber; first exec call of a fresh session: ExecHandle.scope() takes a sleeping spare exec vat, then run","budget":{"median":750},"pass":true,"commit":"614cd894e3-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.89,2.02,2.04]}
+{"metric":"exec.trivial","unit":"ms","n":20,"median":181,"p95":378,"p99":378,"min":167,"max":378,"what":"tool_call to tool_result at a live subscriber (crank D publish to crank E publish: run, one exec crank, answer)","budget":{"median":250},"pass":true,"commit":"614cd894e3-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[2.07,2.05,2.05]}
+{"metric":"exec.sends.answered","unit":"ms","n":3,"median":4091,"p95":4770,"p99":4770,"min":4068,"max":4770,"what":"100 E(timer).sleep(0) sent in one exec crank, until all answers are back and the body returned (tool_call to tool_result)","trivialMedianMs":181,"sendOnly":"not measurable from model code in M1b: powers is empty, so model code reaches no remote it could sendOnly to (M5)","budget":{"median":8000},"pass":true,"commit":"614cd894e3-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.83,2,2.03]}
+{"metric":"exec.runaway","unit":"ms","value":604,"what":"tool_call to tool_result: run, MeterAbort, the retired break, the terminated result","nextCallMs":558,"budget":{"value":1000},"commit":"614cd894e3-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[2.03,2.05,2.05]}
+{"metric":"exec.deadline","unit":"ms","value":5168,"deadlineMs":5000,"nextCallMs":554,"commit":"614cd894e3-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[2.03,2.05,2.05]}
+{"metric":"exec.workerKilled","unit":"ms","value":5570,"what":"from the first kill to the terminated result in the transcript","maxDeliveryAttempts":2,"kills":[{"pid":28694,"ms":31},{"pid":29447,"ms":4215.5},{"pid":29640,"ms":5300.9}],"execVatRetired":"yes","execRowAfter":null,"crashLog":[{"ms":97675.2,"text":"thixotrope worker transport spare exec 13(53671bc3): quarantined; crashed 2 times without progress, last while replaying journal frame 10: Ironhorse worker exited (signaled)"}],"nextCallMs":554,"commit":"614cd894e3-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[2.03,2.05,2.05]}
+{"metric":"m1b.exec.tool.file","unit":"ms","value":99929.2,"commit":"614cd894e3-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[2.03,2.05,2.05]}
+{"metric":"exec.restart.clean","unit":"ms","value":232,"what":"the first exec after a clean restart (tool_call to tool_result; the exec vat wakes)","servedMs":11810.9,"commit":"5ff30274df-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.7,1.98,2.03]}
+{"metric":"exec.busyReset","unit":"ms","value":895,"what":"busy answer, retire, a fresh scope (spare or cold), run again with the notice","commit":"5ff30274df-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.7,1.98,2.03]}
+{"metric":"exec.restart.sigkill","unit":"ms","value":8399.1,"what":"SIGKILL during a 30 s exec sleep: served, then the turn read outcome-unknown, then the next exec","turnStateAtFirstRead":"outcome-unknown","firstReadAfterServedMs":1881.9,"killAfterCallMs":2004,"firstReadSinceCallMs":12777,"nextResult":"5","nextCallMs":245,"commit":"5ff30274df-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.7,1.98,2.03]}
+{"metric":"m1b.exec.restart.file","unit":"ms","value":80425.1,"commit":"5ff30274df-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.7,1.98,2.03]}
+Reading: `exec.trivial` 181 ms (budget 250) and `exec.first` 536 ms (budget 750) pass; the first
+call costs about 355 ms more (the factory hop and the spare's wake). 100 answered sends take 4.1 s
+(budget 8 s; M0 9.4-10.6 s before CORE-4/C-20) with no MeterAbort. The runaway costs 604 ms end to
+end here (J-0332 saw 1.1 s from Node). A busy reset costs 0.9 s (the scope hop and a spare). In the
+first run at `ad6e59008a-dirty` `exec.first` was 1,338 ms median when the pooled session's
+refill (createWorker + staging) ran during the call (min 699): spare creation competes for the CPU
+with the call it serves; the test now waits for `whenSettled()` before the call.
+`exec.sends` 100 `sendOnly` was **not measured**: in M1b `powers` is empty, so model code
+reaches no remote object it could `sendOnly` to (M5 gives it some).
+Decision: `exec.trivial`, `exec.first` and `exec.sends` answered pass; sendOnly row deferred to M5.
+
+### J-0342 2026-11-17 M1b exec - deviation
+Evidence: decisions in `tools/exec.js` that contract 8.2-8.4 leaves open. (1) **One exec call at a
+time per session**: the turn engine issues up to 16 calls of a round at once, and two exec calls
+sent to one exec vat would make the second answer `busy` and retire the scope under the first.
+Calls queue in issue order; the deadline is armed when a call's `run` is sent, not when it is
+issued. (2) On cancel, a queued exec call that never ran gets "the turn was cancelled before this
+call ran" (turn.js's wording; exported as `NOT_RUN_TEXT`), not `execAbandoned`; recovery gives
+the queued ones the same and the running one `toolOutcomeUnknown` (recovery records the unknown
+result itself; the hook only frees the pending call). (3) After a busy reset, an inline outcome
+that does not start with the notice (the exec vat's argument failures) gets
+`execBusyReset\n\n` prefixed by the session. (4) A late retired break from an abandoned call
+whose scope is still current retires it (the vat is lost; otherwise the next call would get a
+spurious terminated result). (5) `available` also requires `ports.timer` (`ExecRequest`
+requires it). (6) `deadlineMs` is refreshed from every `scope()` answer, so
+`HarnessRoot.configure({ execDeadlineMs })` applies to a session from its next scope take.
+Decision: harness behaviour, not contract text; the PM may fold (1) and (2) into contract 8.2.
+
+### J-0343 2026-11-17 M1b exec - awkward
+Evidence: (1) The session program bundle is 198,339 of 200,000 bytes at `614cd894e3` (unit lane
+`session.program` row); `tools/exec.js` added about 9 KB with its comments; 1,661 bytes are left
+for anything else in the session vat. (2) A JSDoc `import('...')` type in a guest file makes SES
+refuse the bundle (`m1a-session-program` caught it); the `@import` tag form is fine. (3) The M1a
+unit test "M1a has no recovery steps of its own" snapshots `turnHooks.recoverySteps`; it now
+expects the exec step. (4) J-0333 (a 60,000-key flood does not halt the exec vat) is unchanged:
+the session has no way to tell the exhaustion from an ordinary failure without a contract text, so
+W1b.4 does not retire on it. (5) Unit lane at `614cd894e3`: one failure, W1b.1's
+`m1b-blobs-store` BlobWriter test, which passes alone (11/11) and failed under the full lane's load.
+Decision: (1) comment stripping in `bundle-guest.mjs` (J-0303) is now needed before any further
+session-vat code; (4) waits for the PM's J-0333 decision.
