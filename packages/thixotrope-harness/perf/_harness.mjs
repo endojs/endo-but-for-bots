@@ -24,7 +24,13 @@
  *
  * Environment: IDLE_MS (idleSleepMs, default 3,600,000 so nothing sleeps
  * during a measurement), SNAP_EVERY (default 256), THIXOTROPE_CRANK_BUDGET
- * (default scripts/serve.mjs DEFAULT_CRANK_BUDGET), KEEP_STATE, PERF_OUT.
+ * (default scripts/serve.mjs DEFAULT_CRANK_BUDGET), KEEP_STATE, PERF_OUT,
+ * PERF_TEMPLATE=1 (start from the cached base state template, as
+ * integration tests do, instead of fresh state).
+ *
+ * State starts as integration tests start it (test/template/index.js
+ * `copyState`/`ensureTemplate`, and the supervisor child of scripts/serve.mjs);
+ * each `provision()` emits `<feature>.provision` with how long that took.
  *
  * Run all perf scripts, one at a time under the run lock:
  *   node perf/_harness.mjs [feature ...]
@@ -33,7 +39,7 @@ import '../scripts/_init.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, createReadStream, readdirSync } from 'node:fs';
-import { cp, mkdir, rm, stat } from 'node:fs/promises';
+import { mkdir, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -344,36 +350,59 @@ export const workerRss = root => {
  * @property {any} client the workspace control client (`call`, `close`)
  * @property {() => Promise<Timings>} counters engine timings now
  * @property {(label: string) => Promise<{ serveMs: number }>} restart clean close and serve again, emitting `<label>.restart`
- * @property {() => Promise<void>} close
+ * @property {Record<string, unknown>} timings how the state was started:
+ *   copyMs (template), servedMs, createWorkspaceMs (fresh), totalMs, and
+ *   template / templateBuilt / templateBuildMs for `template: true`
+ * @property {() => Promise<void>} close clean stop, then SIGKILL any process still naming the root
  */
 
 /**
- * Start a supervisor through scripts/serve.mjs (so the crank-budget rule and
- * the environment allowlist apply) and connect a workspace client.
+ * Start state the way integration tests do (test/template/index.js): with a
+ * template, copy it with `copyState` (APFS clone, sockets skipped, root
+ * 0700) and select its workspace `w`; without one, serve a fresh directory
+ * and create `workspace`. Either way the supervisor is the child process of
+ * scripts/serve.mjs `spawnSupervisorChild` (through `serveHarness`): the
+ * crank-budget rule, the environment allowlist for adapters, and a stop if
+ * this process dies.
  * @param {object} options
- * @param {string} options.root state directory
- * @param {string} [options.workspace]
- * @param {string} [options.template] a provisioned state directory to copy first (M0 S8)
+ * @param {string} options.root state directory (must not exist with a template)
+ * @param {string} [options.workspace] for fresh state (default `bench`)
+ * @param {boolean | string | import('../test/template/index.js').Template} [options.template]
+ *   true: the base template (`ensureTemplate()`, built once and cached);
+ *   a Template from `ensureTemplate`; or a cleanly stopped state directory.
+ *   Default: PERF_TEMPLATE=1 means true.
  * @param {number} [options.idleSleepMs]
  * @param {number} [options.snapshotEveryDeliveries]
  * @returns {Promise<Provisioned>}
  */
 export const provision = async ({
   root,
-  workspace = 'bench',
-  template,
+  workspace: freshWorkspace = 'bench',
+  template = process.env.PERF_TEMPLATE === '1',
   idleSleepMs: idle = idleSleepMs,
   snapshotEveryDeliveries: snapshotEvery = snapshotEveryDeliveries,
 }) => {
-  // Not in @endo/thixotrope's exports (JOURNAL J-0132).
-  const [{ connectLocalControl }, { makeNodePowers }] = await Promise.all([
-    // eslint-disable-next-line import/no-relative-packages -- not exported (J-0132)
-    import('../../thixotrope/src/control/local-control.js'),
-    import('@endo/thixotrope/node-powers.js'),
-  ]);
-  const powers = makeNodePowers();
-  if (template) await cp(template, root, { recursive: true });
-  await mkdir(root, { recursive: true, mode: 0o700 });
+  const { TEMPLATE_WORKSPACE, connect, copyState, ensureTemplate, killStrays } =
+    await import('../test/template/index.js');
+  const tStart = performance.now();
+  /** @type {Record<string, unknown>} */
+  const timings = {};
+  /** @type {string | undefined} */
+  let templateDir;
+  if (template === true) {
+    const made = await ensureTemplate({ crankBudget: BigInt(crankBudget) });
+    templateDir = made.dir;
+    timings.template = made.key;
+    timings.templateBuilt = made.built;
+    if (made.built) timings.templateBuildMs = made.buildMs;
+  } else if (typeof template === 'string') templateDir = template;
+  else if (template) templateDir = template.dir;
+  const workspace = templateDir ? TEMPLATE_WORKSPACE : freshWorkspace;
+  if (templateDir) {
+    const tStep = performance.now();
+    await copyState(templateDir, root);
+    timings.copyMs = round3(performance.now() - tStep);
+  } else await mkdir(root, { recursive: true, mode: 0o700 });
   const serve = () =>
     serveHarness({
       statePath: root,
@@ -381,16 +410,21 @@ export const provision = async ({
       idleSleepMs: idle,
       snapshotEveryDeliveries: snapshotEvery,
     });
+  let tStep = performance.now();
   let served = await serve();
-  const socket = path.join(root, 'control.sock');
-  if (!template) {
-    const admin = await connectLocalControl(powers, socket);
+  timings.servedMs = round3(performance.now() - tStep);
+  if (!templateDir) {
+    tStep = performance.now();
+    const admin = await connect(root);
     await admin.call('createWorkspace', workspace);
     admin.close();
+    timings.createWorkspaceMs = round3(performance.now() - tStep);
   }
-  let client = await connectLocalControl(powers, socket, { workspace });
+  let client = await connect(root, { workspace });
+  timings.totalMs = round3(performance.now() - tStart);
   const self = {
     root,
+    timings,
     get client() {
       return client;
     },
@@ -404,7 +438,7 @@ export const provision = async ({
       const t1 = performance.now();
       served = await serve();
       const serveMs = performance.now() - t1;
-      client = await connectLocalControl(powers, socket, { workspace });
+      client = await connect(root, { workspace });
       await single(`${label}.restart`, serveMs, {
         extra: {
           closeMs: round3(closeMs),
@@ -416,7 +450,11 @@ export const provision = async ({
     },
     close: async () => {
       client.close();
-      await served.close();
+      try {
+        await served.close();
+      } finally {
+        await killStrays(root);
+      }
     },
   };
   return self;
@@ -443,6 +481,9 @@ export const runPerf = async (feature, fn) => {
       provision: async (options = {}) => {
         const run = await provision({ root, ...options });
         opened.push(run);
+        await single(`${feature}.provision`, Number(run.timings.totalMs), {
+          extra: { start: run.timings },
+        });
         return run;
       },
     });
