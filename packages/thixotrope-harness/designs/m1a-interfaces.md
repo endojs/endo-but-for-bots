@@ -439,8 +439,13 @@ crank B then sends nothing.
 
 ## 7. Restart, retired breaks and recovery
 
-`isRetiredBreak(error)` (`retired.js`) is true when the error's message contains "the target
-session has been retired" (`pkg/src/net/hub.js:1947`). The text means "the callee's session is
+`isRetiredBreak(error)` (`retired.js`) is true when the error's message is exactly
+`HUB_RETIRED_MESSAGE`, "ocapn hub: the target session has been retired" (`pkg/src/net/hub.js:1522`,
+`:1947`, `:1968`; the hub builds every such break as `Error(reason)` with that whole text). It is
+an exact match, not a substring test (QC finding 1, J-0290): an error that only quotes the text,
+such as an argument error naming a key the model chose, is not a break. Adapter tools answer their
+own failures as `{ status: 'failed', text }` (section 10), so a rejection from an adapter tool is a
+hub break or a defect in the tool, never model, user or provider text. The text means "the callee's session is
 gone": for an **adapter object** that is a restart (D-5); for a **guest vat** it is that vat lost
 (halted or given up, D-17). Classify by the call site, never by the text alone:
 
@@ -597,7 +602,7 @@ the inventory and the program digest first). Tests and perf find `agentHostAdmin
 fsynced, from the provider and from `echo` for calls made through this backend's ports:
 `{ kind, label, pid, at, turnId?, round?, opId?, args?, units? }` with `kind` one of `request`,
 `dispatch-refused`, `round-final`, `round-failed`, `frame-limit`, `cancelled`, `echo-start`,
-`echo-end`, `echo-frame-limit`, `delta`, `round-start`. `pid` identifies the adapter incarnation. "The provider received
+`echo-end`, `echo-frame-limit`, `echo-failed`, `delta`, `round-start`. `pid` identifies the adapter incarnation. "The provider received
 exactly one request" = one `request` line for the turn; "echo ran at most once" = at most one
 `echo-start` per op id. A `delta` line (`turnId`, `round`, `units`) is written for every delta the
 provider publishes; its `at` is the time of the publish, and it is written on a later turn of the
@@ -659,13 +664,16 @@ Behaviour per `startRound(req)`:
 scripted backends): `execute({ opId, args })`:
 
 1. log `echo-start` with `opId` and `args` (the text exactly as received);
-2. `JSON.parse(args)`; a parse error rejects with `Error(textOf.argumentsNotJson(e.message))`;
-   anything but a plain object rejects with `Error(textOf.invalidArgument('args', 'echo', 'a JSON
-   object'))`;
-3. the first key not in `echoArgumentNames` rejects with `Error(textOf.unexpectedArgument(key,
-   'echo', echoArgumentNames))`; `text` must be a string, `delayMs` a number in 0..`maxDelayMs`,
+2. `JSON.parse(args)`; a parse error fails with `textOf.argumentsNotJson(e.message)`;
+   anything but a plain object fails with `textOf.invalidArgument('args', 'echo', 'a JSON
+   object')`;
+3. the first key not in `echoArgumentNames` fails with `textOf.unexpectedArgument(key,
+   'echo', echoArgumentNames)`; `text` must be a string, `delayMs` a number in 0..`maxDelayMs`,
    `bytes` a number in 0..`echoMaxUnits`, else `textOf.invalidArgument(name, 'echo', expected)`;
-   `data` is anything and is ignored;
+   `data` is anything and is ignored. "Fails with" means: log `echo-failed` (`units`) and answer
+   `{ status: 'failed', text }` with the text bounded by `boundToolOutput` and, if still over the
+   frame, cut to `frameBytes - 1024` bytes; the session records `Error: <text>` (R4-45). Echo
+   never rejects for an argument error, because these texts quote model text (QC finding 1);
 4. wait `delayMs` (adapter timer; R4-49: cancel does not interrupt it);
 5. output = `bytes` given ? `(text || 'x')` repeated and cut to exactly `bytes` units
    (surrogate-safe) : `text ?? ''`; then `boundToolOutput(output)` (R4-46, `toolOutputUnits`);
