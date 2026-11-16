@@ -229,16 +229,26 @@ const noStringConcatInLoop = {
             context.report({ node, messageId: 'concat' });
           return;
         }
-        if (
-          node.operator === '=' &&
-          node.left.type === 'Identifier' &&
-          node.right.type === 'BinaryExpression' &&
-          node.right.operator === '+' &&
-          node.right.left.type === 'Identifier' &&
-          node.right.left.name === node.left.name &&
-          isStringGrowth(node.left, node.right.right) &&
-          inLoop(context, node)
-        )
+        if (node.operator !== '=' || node.left.type !== 'Identifier') return;
+        const { left, right } = node;
+        /** @param {any} n */
+        const isTarget = n => n.type === 'Identifier' && n.name === left.name;
+        // s = s + x and s = x + s (prepend).
+        const plusGrowth =
+          right.type === 'BinaryExpression' &&
+          right.operator === '+' &&
+          ((isTarget(right.left) && isStringGrowth(left, right.right)) ||
+            (isTarget(right.right) && isStringGrowth(left, right.left)));
+        // s = s.concat(x): concat is a string method only on a string, so
+        // the target must be known to be one.
+        const concatGrowth =
+          right.type === 'CallExpression' &&
+          right.callee.type === 'MemberExpression' &&
+          !right.callee.computed &&
+          right.callee.property.name === 'concat' &&
+          isTarget(right.callee.object) &&
+          isStringVariable(context, left);
+        if ((plusGrowth || concatGrowth) && inLoop(context, node))
           context.report({ node, messageId: 'concat' });
       },
     };
@@ -300,6 +310,35 @@ export const guestRules = {
         selector: `VariableDeclarator[init.name='globalThis'] > ObjectPattern > Property[key.name=${forbiddenNamePattern}]`,
         message:
           'Vats have no clock, timers, console or weak references; do not destructure them from globalThis.',
+      },
+      // The forms above name globalThis's property literally; these close
+      // the routes that hide the name (QC advisory 6).
+      {
+        selector: "MemberExpression[object.name='globalThis'][computed=true]",
+        message:
+          'Read prelude names from globalThis by name (globalThis.E or const { E } = globalThis), not by a computed key.',
+      },
+      {
+        selector:
+          "VariableDeclarator[init.name='globalThis'][id.type!='ObjectPattern'], AssignmentExpression[right.name='globalThis'], CallExpression > Identifier.arguments[name='globalThis'], NewExpression > Identifier.arguments[name='globalThis'], SpreadElement > Identifier.argument[name='globalThis']",
+        message:
+          'Do not alias or pass globalThis; destructure the prelude names you need (const { E } = globalThis).',
+      },
+      {
+        selector: `AssignmentExpression[right.name='globalThis'] > ObjectPattern > Property[key.name=${forbiddenNamePattern}]`,
+        message:
+          'Vats have no clock, timers, console or weak references; do not destructure them from globalThis.',
+      },
+      {
+        selector: "Identifier[name='eval']",
+        message:
+          'Guest code does not evaluate strings; code arrives as a bundle (direct or indirect eval).',
+      },
+      {
+        selector:
+          "NewExpression[callee.name='Function'], CallExpression[callee.name='Function']",
+        message:
+          'Guest code does not evaluate strings; do not construct a Function from source.',
       },
     ],
     'no-restricted-imports': [

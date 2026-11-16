@@ -49,14 +49,22 @@ const stats = (metric, samples, extra = {}) => {
 const timed = async (metric, fn, extra = {}) => {
   const t = performance.now();
   const value = await fn();
-  emit({ metric, unit: 'ms', value: +(performance.now() - t).toFixed(3), ...extra });
+  emit({
+    metric,
+    unit: 'ms',
+    value: +(performance.now() - t).toFixed(3),
+    ...extra,
+  });
   return value;
 };
 const du = () =>
   Number(execFileSync('du', ['-sk', root]).toString().split('\t')[0]);
 const duTree = () =>
   Object.fromEntries(
-    execFileSync('sh', ['-c', `du -sk "${root}"/* "${root}"/heaps/* 2>/dev/null | sort -rn | head -8`])
+    execFileSync('sh', [
+      '-c',
+      `du -sk "${root}"/* "${root}"/heaps/* 2>/dev/null | sort -rn | head -8`,
+    ])
       .toString()
       .trim()
       .split('\n')
@@ -285,7 +293,12 @@ try {
       try {
         await pushRun(n, 1, true);
       } catch (error) {
-        emit({ metric: 'e.pushSingle', events: n, ok: false, error: String(error?.message ?? error).slice(0, 300) });
+        emit({
+          metric: 'e.pushSingle',
+          events: n,
+          ok: false,
+          error: String(error?.message ?? error).slice(0, 300),
+        });
         break;
       }
     }
@@ -310,10 +323,17 @@ try {
           ps.push(performance.now() - tp);
         }
         ps.sort((a, b) => a - b);
-        pingAt.push({ chars: (c + 1) * step * size, pingMedianMs: +ps[15].toFixed(2), pingMaxMs: +ps[29].toFixed(2) });
+        pingAt.push({
+          chars: (c + 1) * step * size,
+          pingMedianMs: +ps[15].toFixed(2),
+          pingMaxMs: +ps[29].toFixed(2),
+        });
       }
     }
-    stats('d.grow200kChars.perCall', growSamples, { calls, chars: await E(bench).bigChars() });
+    stats('d.grow200kChars.perCall', growSamples, {
+      calls,
+      chars: await E(bench).bigChars(),
+    });
     emit({ metric: 'd.pingVsHeap', rows: pingAt });
     const c0 = await counters();
     const samples = [];
@@ -322,7 +342,10 @@ try {
       await E(bench).ping();
       samples.push(performance.now() - t);
     }
-    stats('d.pingWithBigHeap', samples, { engine: delta(c0, await counters()), ...workerRss() });
+    stats('d.pingWithBigHeap', samples, {
+      engine: delta(c0, await counters()),
+      ...workerRss(),
+    });
     bench = await restart('d');
     const s2 = [];
     for (let i = 0; i < 50; i += 1) {
@@ -341,7 +364,13 @@ try {
       const c0 = await counters();
       const t = performance.now();
       await E(bench).ping();
-      emit({ metric: 'h.pingAfterIdleSleep', unit: 'ms', value: +(performance.now() - t).toFixed(1), engine: delta(c0, await counters()), ...workerRss() });
+      emit({
+        metric: 'h.pingAfterIdleSleep',
+        unit: 'ms',
+        value: +(performance.now() - t).toFixed(1),
+        engine: delta(c0, await counters()),
+        ...workerRss(),
+      });
     }
   }
 
@@ -358,20 +387,35 @@ try {
       const t = performance.now();
       try {
         const len = await E(bench).echo(s);
-        emit({ metric: 'f.stringArg', unit: 'ms', chars: n, ok: len === n, value: +(performance.now() - t).toFixed(1) });
+        emit({
+          metric: 'f.stringArg',
+          unit: 'ms',
+          chars: n,
+          ok: len === n,
+          value: +(performance.now() - t).toFixed(1),
+        });
       } catch (error) {
-        emit({ metric: 'f.stringArg', unit: 'ms', chars: n, ok: false, error: String(error?.message ?? error).slice(0, 300), value: +(performance.now() - t).toFixed(1) });
+        emit({
+          metric: 'f.stringArg',
+          unit: 'ms',
+          chars: n,
+          ok: false,
+          error: String(error?.message ?? error).slice(0, 300),
+          value: +(performance.now() - t).toFixed(1),
+        });
         // A failed vat cannot continue; stop this phase.
         break;
       }
     }
   }
-
 } finally {
   try {
     client?.close();
-    await supervisor?.close().catch(error => emit({ metric: 'closeError', error: String(error) }));
+    await supervisor
+      ?.close()
+      .catch(error => emit({ metric: 'closeError', error: String(error) }));
   } finally {
-    if (!process.env.KEEP_STATE) await rm(root, { recursive: true, force: true });
+    if (!process.env.KEEP_STATE)
+      await rm(root, { recursive: true, force: true });
   }
 }

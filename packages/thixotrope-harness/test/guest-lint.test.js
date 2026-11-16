@@ -45,6 +45,10 @@ const clean = [
     "export const s = a => { let out = ''; out += a; return out; };\n",
   ],
   ['Math methods by name', 'export const m = a => Math.max(a, 1);\n'],
+  [
+    'array concat in a loop',
+    'export const c = xss => { let all = []; for (const xs of xss) all = all.concat(xs); return all; };\n',
+  ],
 ];
 
 const dirty = [
@@ -132,6 +136,46 @@ const dirty = [
   [
     'a template literal += on a property in forEach',
     'export const s = (o, xs) => { xs.forEach(x => { o.text += `${x}`; }); };\n',
+    'thixotrope-harness-guest/no-string-concat-in-loop',
+  ],
+  [
+    'globalThis indexed by a computed key',
+    "export const now = () => globalThis['Date'].now();\n",
+    'no-restricted-syntax',
+  ],
+  [
+    'an alias of globalThis',
+    'const g = globalThis;\nexport const now = () => g.Date.now();\n',
+    'no-restricted-syntax',
+  ],
+  [
+    'Reflect.get on globalThis',
+    "export const now = () => Reflect.get(globalThis, 'Date').now();\n",
+    'no-restricted-syntax',
+  ],
+  [
+    'Date destructured from globalThis by assignment',
+    'let D;\n({ Date: D } = globalThis);\nexport const now = () => D.now();\n',
+    'no-restricted-syntax',
+  ],
+  [
+    'indirect eval',
+    "export const now = () => (0, eval)('Date.now()');\n",
+    'no-restricted-syntax',
+  ],
+  [
+    'new Function',
+    "export const f = () => new Function('return 1');\n",
+    'no-restricted-syntax',
+  ],
+  [
+    's = x + s (prepend) in a loop',
+    "export const s = xs => { let out = ''; for (const x of xs) out = x + out; return out; };\n",
+    'thixotrope-harness-guest/no-string-concat-in-loop',
+  ],
+  [
+    's = s.concat(x) in a loop',
+    "export const s = xs => { let out = ''; for (const x of xs) out = out.concat(x); return out; };\n",
     'thixotrope-harness-guest/no-string-concat-in-loop',
   ],
 ];
