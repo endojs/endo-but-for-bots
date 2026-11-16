@@ -4613,3 +4613,117 @@ stays append-only (unit tests `test/unit/m1b-blobs-session.test.js`). Seams for 
 staged outcomes recorded unchanged). Remotable handles inside records cost the GC traffic of
 J-0312 only when many are minted and dropped (checkpoints).
 Decision: as built.
+
+### J-0350 2026-11-17 M1b pool - good fit
+Evidence: W1b.5 (`ba48c5e64f`, `6deb87d708`). A spare is a sleeping vat whose evaluating crank
+returned a `SpareMaker` (or an `ExecScope`); the factory heap keeps `{ facade, value, host, digest,
+label }` and nothing else, so taking one is handing an object over, and orthogonal persistence keeps
+the pool, the in-flight creation records and each session's `ExecHandle` across restarts with no
+code. A take is `make(config)` then `bindSession`, exactly the cold path, so the creation records,
+the start listener's complete-or-roll-back and the lost-row rule of M1a cover a pooled creation
+unchanged (SIGKILL after a take, J-0354). What Thixotrope makes awkward is all at the edges: the
+pool cannot tell from inside when a vat is asleep (idle sleep is the supervisor's), host answers
+owed to a creation in flight break at a restart (`onStart` abandons them by start epoch), and a
+spare's worker label is fixed at `createWorker`, so a pooled session's vat stays `spare session <n>`
+in worker rows (cold ones stay `session s<n>`). The pool stays passive until first asked
+(`configure`, `whenSettled`, a take, a start) so provisioning sets targets before any spare is made;
+M1a's states configure no spares (`M1A_POOL`) and keep their cold path and labels.
+Decision: as built; the label is recorded in `m1b-interfaces.md` 10.1 (`98b756dc38`).
+
+### J-0351 2026-11-17 M1b pool - perf
+Evidence: `session.create` with and without the pool (`test/integration/m1b-pool.test.js`, commit
+`6deb87d708`, release worker `7cda4467...`, crank budget 50 M, load average 2.0-2.4, other agents
+running; the session program is 186,021 bytes):
+{"metric":"session.create.pool","unit":"ms","n":3,"median":1291.246,"p95":1302.353,"min":1114.536,"max":1302.353,"spareAsleep":true,"budget":{"median":750},"pass":false,"commit":"6deb87d708","crankBudget":"50000000","loadAvg":[2.36,2.13,2.03]}
+{"metric":"session.create.cold","unit":"ms","n":2,"median":7090.796,"min":6985.774,"max":7090.796,"budget":{"median":6000},"pass":true,"commit":"6deb87d708","crankBudget":"50000000","loadAvg":[2.16,2.1,2.02]}
+Before the host facet was minted with the spare (`ba48c5e64f`): pool median 1,330 ms (1,322-1,651),
+cold 9,067 ms (7,263 / 9,067). Breakdown probe (`tmp/w1b5/probe2.mjs`, deleted; same commit and
+load): a take of a sleeping, checkpointed spare 1,134 / 1,235 / 1,241 ms, of a just-made awake one
+919 / 949 / 934 ms, so the wake from a 17 MB snapshot is about 270-300 ms; each pooled create costs
+5 factory, 4 manager and 2 spare cranks (6 / 5 / 2 before `6deb87d708`). The serial path is client
+-> factory -> manager `describe` -> factory -> spare `make` (wake) -> factory -> manager
+`bindSession` -> factory -> client: 7 vat cranks in series at about 75 ms each with their hub
+commits (a client `describe` round trip alone is 73 ms) plus the wake.
+Decision: **miss** (1.72 x the 750 ms budget; 1.25 x the budget even with an awake spare). The
+budget came from S6's 157-176 ms for `make()` on a spare alone (J-9045), not from `createSession`,
+which needs a `describe` and a `bindSession` hop around it. Escalated to the PM: re-base the budget
+on the whole call (about 1.0 s awake, 1.3 s asleep at today's crank and commit cost), or remove
+hops: (a) cache a Backend's description in the factory (one manager hop, about 150 ms;
+`session-options.js` is M1a's hook table, not changed here); (b) cheaper hub commits (C-2, J-9216
+(c)) shorten every hop; (c) a wake costs 270-300 ms whatever the program, so keeping one spare awake
+would trade 120-136 MB resident for it (not done: architecture D-4 says spares sleep). Cold create
+7.0-7.1 s is within 1.25 x 6 s but above M1a's 6.1 s (+29 KB of program and the machine's load).
+
+### J-0352 2026-11-17 M1b pool - perf
+Evidence: refill and fill, same run as J-0351:
+{"metric":"pool.refill","unit":"ms","value":5700.2,"spares":2,"lanes":4,"note":"from the second take answering to whenSettled; the first refill lane started at the first take","commit":"6deb87d708","crankBudget":"50000000","loadAvg":[1.99,2.06,2]}
+{"metric":"pool.fill4","unit":"ms","value":8256.4,"spares":4,"lanes":4,"perSpareMs":2064.1,"whileRefilling":{"samples":30,"maxRssKiB":606544,"maxWorkers":6},"commit":"6deb87d708","crankBudget":"50000000","loadAvg":[1.99,2.06,2]}
+{"metric":"m1b.pool.template","buildMs":49030.4,"steps":[{"name":"load session program","ms":3561.6},{"name":"load exec program","ms":1489.8},{"name":"pool","ms":7641.5,"detail":{"settleMs":7248.9}}],"commit":"6deb87d708"}
+(the template row cut to the pool's steps). The first run (`ba48c5e64f`): refill 4,743 ms, fill4
+7,923 ms, max 610 MB resident in 6 workers. Four lanes make four session spares in 8.3 s against 6.4
+s for one spare in M0 (J-9045), about 2.1 s per spare: the lanes overlap almost fully (each lane is
+about 11 answered factory sends, and the factory's cranks interleave). While refilling, the worker
+processes reach about 100 MB each (606 MB for 6 awake workers, the factory and manager included);
+they exit when the spares sleep. A creation during a refill shares the factory's cranks with the
+lanes (not measured separately).
+Decision: recorded (no budget for `pool.refill`).
+
+### J-0353 2026-11-17 M1b pool - perf
+Evidence: what a full pool costs at rest (`test/integration/m1b-pool-restart.test.js`, commit
+`6deb87d708`, idle sleep 2 s, load 1.7-2.3):
+{"metric":"pool.rest.restart","unit":"ms","value":5798,"runs":[{"how":"kill","servedMs":5704.8,"spares":3,"woken":[],"awake":[]},{"how":"kill","servedMs":5798,"spares":3,"woken":[],"awake":[]}],"commit":"6deb87d708","crankBudget":"50000000","loadAvg":[2.31,2.24,2.09]}
+A second invocation: 5,660 / 5,611 ms, none woken. In all 4 restarts with 2 session spares and 1
+exec spare asleep and checkpointed, no spare's worker row counted a wake (`wakes` 0) and none was
+awake after serving; the pool reported `{2, 1, refilling 0}` at once. Disk: the snapshot of a
+sleeping session spare is 17.1-17.4 MB and of the stand-in exec spare 16.5 MB (`heaps/snapshots`,
+probe2), as M0's 17 MB; the `du` delta of the whole state after 4 more spares read 1.0 MB in one run
+and 9.5 MB per spare in the other, depending on whether their snapshots had been written yet, so it
+is not a reliable row (`pool.rest.diskPerSpare` in the test is kept but should be read from the
+snapshot files). Start time with the pool full, 5.6-5.8 s, is in line with M1a's healthy restart
+(J-9192: 6.2 s with 10 sessions).
+Decision: pass for the gate (0 spares woken); about 52 MB of disk for the default pool.
+
+### J-0354 2026-11-17 M1b pool - good fit
+Evidence: acceptance 12's factory half, SIGKILL of the supervisor at 0, 50, 150, 300, 600, 1,000 and
+2,000 ms after `createSession` was sent with the pool full (two invocations, 7 cases, all pass):
+{"metric":"m1b.pool.killAfterTake","killDelayMs":150,"servedMs":7219.2,"listed":1,"state":"ready","pool":{"refilling":0,"spareExec":1,"spareSessions":2},"requests":1}
+At 0 and 50 ms the session is not listed (the call never reached the factory, or the start listener
+rolled the creation back and retired the taken spare); from 150 ms on it is listed once, `ready`
+(the start listener completed it: `make` had answered, `bindSession` ran after the restart), and its
+first turn reached the fake provider exactly once. The pool was back at 2 + 1 with nothing refilling
+after every restart; the taken spare was never put back; a refill lane in flight at the kill was
+abandoned and restarted (a fresh `spare session <n>` appears). Serving took 7.0-8.3 s against
+5.6-5.8 s for an idle restart (the factory and the taken spare replay their unsnapshotted journals).
+Decision: as built. The guest-to-guest `make` answer survives the restart, so a late answer to an
+abandoned creation is ignored by `ensureLive` and the vat retired, as in M1a.
+
+### J-0355 2026-11-17 M1b list feed - good fit
+Evidence: the factory publishes rows, it never holds viewers: the row table tells the feed of every
+change, the feed coalesces a crank's changes per row (a `Map` keyed by the row object) and sends one
+`E.sendOnly(publisher).publish({ rev, events })` on a microtask after the first change, split at
+64 events or `frameBytes` (unit test: 150 rows -> 3 batches, revs 1..3), at most 16 batches per
+flush. `rev` counts published batches and is what `listSessions().rev` and `sessionListFeed().rev`
+report. The adapter side (`AH/list-channel.js`) reuses the session channel's ordering rules (rev
+order, hold and reorder window, gaps after `reorderWaitMs`) and bounds, without a fold; the first
+delivery is `{ type: 'list-snapshot' }` with the latest rev. A tombstoned publisher after a restart
+drops sendOnly silently, and the start listener fetches the new one. Not end to end yet: the
+manager's attach handler for `listPublisher` (W1b.1's `attach.js`/`index.js`) is not wired to a list
+channel at this commit, so in a daemon `refresh()` gets a refusal and batches are numbered but not
+sent; the factory side and the channel are covered by unit and adapter tests only, and acceptance 9
+needs that wiring (W1b.1, or W1b.2 per contract 2.2).
+Decision: as built; wiring reported to the PM.
+
+### J-0356 2026-11-17 M1b pool - deviation
+Evidence: (1) The row's "calls-per-round cap and window through turn-hooks settings": nothing built;
+`turn.js` already runs at most `maxCallsPerRound` (64) with `callWindow` (16) in flight (contract
+2.1). (2) Files outside the W1b.5 row: `guest/factory/standin-exec.js` (new, a stand-in exec program
+for the pool's tests, never bundled by the factory), `test/integration/_m1b-pool.js`,
+`m1b-pool.test.js`, `m1b-pool-restart.test.js` (in W1b.6's `m1b-*` namespace; the task asked this
+unit for integration tests), and assertions in M1a tests that snapshot the hook tables
+(`m1a-provision-steps` and `m1a-provision` step lists, `m1a-factory` service builder count). (3) The
+measurements are emitted by the integration tests, not by `perf/pool.perf.mjs` (W1b.6's file).
+(4) `makePool` and `makeListFeed` signatures differ from contract 11 (both program stores, settings,
+staging sources, `mintHost`; `listed`/`isListed`): corrected in `98b756dc38`. (5) A spare that is
+discarded leaves its pre-minted, never-bound `SessionHostFacet` in the manager (one small exo per
+discarded spare).
+Decision: reported to the PM.
