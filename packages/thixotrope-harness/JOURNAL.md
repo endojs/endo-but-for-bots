@@ -1324,3 +1324,70 @@ Decision: crash restarts grow with the unsnapshotted journal; integration tests 
 run with a short `idleSleepMs` (the plan's 2,000 ms for tests) so vats checkpoint. The "restart to
 serving <= 15 s" budget (architecture 11) depends on it; to be measured in M1a/M13 with checkpointed
 sessions.
+
+### J-0120 2026-11-16 M0 engine - perf
+Evidence: W0.3 CORE-1b. `perf/install.perf.mjs` times the control `install` of a factory program of
+299,990 ASCII characters (3 installs, each into a fresh vat) and of one 299,979-unit program with a
+115,500-unit non-ASCII literal (478,479 UTF-8 bytes; runs of U+20AC and surrogate pairs; the vat
+checks the literal's length and checksum). Install goes registry -> installer `stage` ->
+`evaluateSource` (`packages/thixotrope/src/control/installer.js:79`). Release worker sha256
+13aa617b..., run under the run lock. "Before" is the 1,024-unit literal chunk; "after" is
+`STAGING_CHUNK_CHARS` = 24,576 / 3 = 8,192 (commit b27ed72bda). The before-10M rows carry commit
+98f47df896-dirty because the identity is read at the first row, after the edit landed; that process
+had loaded the old module (its rows say `stagingChunkChars: 1024`).
+```
+{"metric":"install.factory300k","unit":"ms","n":3,"median":50264.232,"p95":52543.019,"p99":52543.019,"min":50245.515,"max":52543.019,"deliveries":{"count":1066,"perOp":355.333},"engine":{"delivery":{"count":1066,"ms":129089.6},"snapshot":{"count":3,"ms":319.9},"wake":{"count":3,"ms":3029.5}},"hubJsonBytes":30733,"stagingChunkChars":1024,"sourceTarget":300000,"sourceChars":299990,"utf8Bytes":299990,"stagedMessages":293,"budget":{"median":30000,"max":30000},"pass":false,"exceeded":["median: 50264.232 > 1.25 x 30000","max: 52543.019 > 1.25 x 30000"],"commit":"5c4a140dec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[2.9,3.13,3.12]}
+{"metric":"install.factory300kMixed","unit":"ms","value":56830.942,"stagingChunkChars":1024,"sourceTarget":300000,"ok":true,"sourceChars":299979,"utf8Bytes":478479,"textChars":115500,"stagedMessages":293,"deliveries":{"count":346,"perOp":346},"budget":{"value":30000},"pass":false,"exceeded":["value: 56830.942 > 1.25 x 30000"],"commit":"5c4a140dec-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[3.69,3.29,3.18]}
+{"metric":"install.factory300k","unit":"ms","n":3,"median":50495.729,"p95":53974.352,"p99":53974.352,"min":50268.521,"max":53974.352,"deliveries":{"count":1062,"perOp":354},"engine":{"delivery":{"count":1062,"ms":130361.5},"snapshot":{"count":3,"ms":337.5},"wake":{"count":3,"ms":3030.7}},"hubJsonBytes":30733,"stagingChunkChars":1024,"sourceTarget":300000,"sourceChars":299990,"utf8Bytes":299990,"stagedMessages":293,"budget":{"median":30000,"max":30000},"pass":false,"exceeded":["median: 50495.729 > 1.25 x 30000","max: 53974.352 > 1.25 x 30000"],"commit":"98f47df896-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"10000000","loadAvg":[3.97,3.56,3.31]}
+{"metric":"install.factory300kMixed","unit":"ms","value":58596.783,"stagingChunkChars":1024,"sourceTarget":300000,"ok":true,"sourceChars":299979,"utf8Bytes":478479,"textChars":115500,"stagedMessages":293,"deliveries":{"count":350,"perOp":350},"budget":{"value":30000},"pass":false,"exceeded":["value: 58596.783 > 1.25 x 30000"],"commit":"98f47df896-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"10000000","loadAvg":[4.04,3.64,3.35]}
+{"metric":"install.factory300k","unit":"ms","n":3,"median":20015.651,"p95":20341.557,"p99":20341.557,"min":19696.023,"max":20341.557,"deliveries":{"count":270,"perOp":90},"engine":{"delivery":{"count":270,"ms":55324.4},"snapshot":{"count":0,"ms":0},"wake":{"count":3,"ms":3007.6}},"hubJsonBytes":31467,"stagingChunkChars":8192,"sourceTarget":300000,"sourceChars":299990,"utf8Bytes":299990,"stagedMessages":37,"budget":{"median":30000,"max":30000},"pass":true,"commit":"98f47df896-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[4.55,3.77,3.47]}
+{"metric":"install.factory300kMixed","unit":"ms","value":28055.605,"stagingChunkChars":8192,"sourceTarget":300000,"ok":true,"sourceChars":299979,"utf8Bytes":478479,"textChars":115500,"stagedMessages":37,"deliveries":{"count":80,"perOp":80},"budget":{"value":30000},"pass":true,"commit":"98f47df896-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"50000000","loadAvg":[4.25,3.79,3.49]}
+{"metric":"install.factory300k","unit":"ms","n":3,"median":19765.93,"p95":19772.472,"p99":19772.472,"min":19545.012,"max":19772.472,"deliveries":{"count":269,"perOp":89.667},"engine":{"delivery":{"count":269,"ms":54278.5},"snapshot":{"count":0,"ms":0},"wake":{"count":3,"ms":2987.6}},"hubJsonBytes":31467,"stagingChunkChars":8192,"sourceTarget":300000,"sourceChars":299990,"utf8Bytes":299990,"stagedMessages":37,"budget":{"median":30000,"max":30000},"pass":true,"commit":"98f47df896-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"10000000","loadAvg":[3.83,3.77,3.51]}
+{"metric":"install.factory300kMixed","unit":"ms","value":27990.204,"stagingChunkChars":8192,"sourceTarget":300000,"ok":true,"sourceChars":299979,"utf8Bytes":478479,"textChars":115500,"stagedMessages":37,"deliveries":{"count":81,"perOp":81},"budget":{"value":30000},"pass":true,"commit":"98f47df896-dirty","workerSha256":"13aa617bb70978ca0baa1b06d1e82f461fcddbca1e4a3e3d027474fe03f92170","crankBudget":"10000000","loadAvg":[4.03,3.84,3.55]}
+```
+Reading: the ASCII install drops from about 50.3-50.5 s to 19.8-20.0 s at both budgets (2.5x),
+and deliveries per install from about 355 to 90. The M0 budget (30 s) now passes; it failed at 1.7x
+before. The mixed program passes at 28.0 s, 0.93x of the budget. The crank budget makes no
+difference. Engine delivery time per install falls from about 43 s to about 18.4 s. All content
+checks passed, so no surrogate pair was split.
+Decision: CORE-1b is done at the S1 frame size; the M0 install budget passes.
+
+### J-0121 2026-11-16 M0 engine - poor fit
+Evidence: J-0120. After CORE-1b, install time still grows with UTF-8 bytes, not with message count:
+19.8 s for 300 KB ASCII (about 66 us/byte) and 28.0 s for 478 KB mixed (about 59 us/byte). Each
+staged delivery averages about 205 ms of engine time (55,324 ms / 270), against about 121 ms at
+1,024 units. This is the per-byte inbound cost of hardening frame bytes (J-0140), plus the first
+frame of each new size interning its index keys in a fresh vat. Larger chunks cannot help:
+`frameBytes` bounds them (J-0141), and the remaining cost is per byte. [inferred] A factory bundle
+over about 450 KB of UTF-8 (about 30 s / 66 us) misses the 30 s budget. Each spare vat pays this
+cost again when the session program is shipped to it (architecture D-4).
+Decision: the harness should keep the session/factory bundle well under 400 KB and record its size in
+the bundle-guest output. The real fix is the J-0140 core change: do not intern canonical index keys,
+or do not harden inbound frame bytes. After that, `STAGING_FRAME_BYTES` (and S1's `frameBytes`)
+should be measured again and raised. This is for the PM.
+
+### J-0122 2026-11-16 M0 tooling - deviation
+Evidence: W0.3's row owns only `packages/thixotrope/src/core/evaluate-source.js`. I also added:
+- `packages/thixotrope/test/evaluate-source.test.js`, 5 unit tests: the chunk is a third of the
+  frame; ASCII goes in full chunks; no chunk ends in a high surrogate; three-byte text fills a frame
+  exactly; and the `chunkChars` option, which rejects 0, 1, 2.5, NaN and Infinity.
+- `packages/thixotrope-harness/perf/install.perf.mjs`, the M0 check "install of a 300 k factory
+  bundle"; M0 Owns names only `_harness.mjs` and `frames.perf.mjs` under `perf/`.
+The core cannot import the harness's `config/defaults.js`. So `STAGING_FRAME_BYTES = 24_576` is a
+second copy of S1's `frameBytes` in `evaluate-source.js`, with a comment that points to J-0140/J-0141.
+`chunkChars` is an option of `evaluateSource`, but no caller (installer, workspaces, supervisor) passes
+it, so the harness cannot change it without a core edit. I also rewrote the module's doc comment,
+which still blamed the old quadratic text decoder for the 16 k bound.
+Decision: if S1's `frameBytes` changes, `STAGING_FRAME_BYTES` must change with it (one line,
+core commit). The PM can decide whether to give the supervisor a staging-frame option instead.
+
+### J-0123 2026-11-16 M0 engine - good fit
+Evidence: existing install-related tests after b27ed72bda, run under the run lock. Node, through
+`corepack yarn ses-ava` (three configs): `install-application`, `native-install`,
+`native-manager-recovery`, `workspaces`, `registry`, `shipped-factories`, `mailbox-integration` and the
+new `evaluate-source`: 50 tests passed in each config, exit 0. Ironhorse, through `corepack yarn ava
+--config ava.ironhorse.config.mjs` with `test/ironhorse/native-install.js`, `supervisor.js` and
+`mailbox.js`: 15 tests passed, exit 0, about 16:05-16:23 local, load average 2.4-3.1. The full
+`test:ironhorse` lane was not run. The change is one constant on the host side, so the worker and
+`dist-ironhorse` need no rebuild.
+Decision: none; CORE-1b behaves as before apart from message size.
