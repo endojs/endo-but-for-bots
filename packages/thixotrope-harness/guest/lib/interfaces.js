@@ -3,7 +3,8 @@
  * The M1a interface contract (milestones.md M1a W1a.0; architecture.md
  * sections 3, 4 and 9; `designs/m1a-interfaces.md` says who calls each method,
  * in which crank, answered or sendOnly, the largest message, and what a
- * retired break from it means).
+ * retired break from it means), and M1b's (W1b.0: `m1bShapes`,
+ * `m1bInterfaces`, in-place `staged(...)` widenings; `designs/m1b-interfaces.md`).
  *
  * Every object that crosses between M1a's units has its `M.interface` guard
  * here; every record that crosses has a closed `M.splitRecord` shape with a
@@ -68,6 +69,14 @@ const record = (required, optional = {}) =>
 
 /** Non-negative number: times in ms, counts, rounds, revisions. */
 const count = M.and(M.number(), M.gte(0));
+
+/**
+ * M1b: an inline text field (at most `inlineBytes` from M1b on, checked by
+ * the sender) or the StagedText that replaces it when larger (D-10, D-15).
+ * Called inside lazy builders only (`B` is defined below).
+ * @param {any} inline
+ */
+const staged = inline => M.or(inline, B.StagedText);
 
 /**
  * A hardened record whose properties are built on first read and then kept.
@@ -165,6 +174,29 @@ export const texts = harden({
   blankSubmission: 'A queued message must be non-empty text',
   /** Turn.resolve on a turn that was already resolved (one TurnResolved per turn). */
   turnAlreadyResolved: 'This turn was already resolved',
+
+  // ---- M1b (m1b-interfaces.md section 13) ----
+  /**
+   * Architecture 6: the exec vat halted or was given up (the session cannot
+   * tell which, J-9051); the vat is retired.
+   */
+  execTerminated:
+    'exec scope terminated: the exec vat stopped (it exceeded the per-step compute budget or its worker failed repeatedly); bindings from earlier calls are gone',
+  /** Architecture 6: the exec vat answered busy; it was retired. */
+  execBusyReset:
+    'the previous exec call was still running; the scope was reset',
+  /** R3-41 (Fae tool-makers.js:1650 at 1315bef86): `exec` returned undefined. */
+  execNoReturn:
+    'done (no return value). Use a top-level return to produce a result (for example: return await E(powers).list();). Final expressions and unreturned nested functions do not return a result; console output goes to daemon logs. Any effects already performed still happened: do not repeat them just to obtain output.',
+  /** Fae tool-makers.js:1617: empty `code`. */
+  execCodeRequired: 'code is required',
+  /** Harness (R4-49): the turn was cancelled while its exec call ran. */
+  execAbandoned:
+    'exec call abandoned: the turn was cancelled while it ran; the code may still be running and its effects may still happen',
+  /** Content.read with a handle that has no file. */
+  blobUnknown: 'Unknown blob',
+  /** BlobWriter.append or close after close or abort. */
+  writerClosed: 'This blob writer is closed',
 });
 
 /**
@@ -271,6 +303,31 @@ export const textOf = harden({
    * @param {number} ordinal
    */
   opId: (turnId, round, ordinal) => `${turnId}/r${round}/c${ordinal}`,
+
+  // ---- M1b ----
+  /**
+   * Architecture 6: the exec deadline fired; the vat was retired.
+   * @param {number} ms
+   */
+  execTimeout: ms =>
+    `exec call timed out after ${ms} ms; the exec vat was stopped and the scope was reset; bindings from earlier calls are gone`,
+  /**
+   * Architecture 6: exec arguments over execSourceBytes.
+   * @param {number} bytes
+   * @param {number} limit
+   */
+  execSourceTooLarge: (bytes, limit) =>
+    `exec source too large (${bytes} bytes; limit ${limit})`,
+  /**
+   * ExecHandle.scope failed (the factory could not provide an exec vat).
+   * @param {string} message
+   */
+  execUnavailable: message => `exec is unavailable: ${message}`,
+  /**
+   * Staging failed (blob store or manager); the round or submission fails.
+   * @param {string} message
+   */
+  stagingFailed: message => `could not stage large text: ${message}`,
 });
 
 // ---------------------------------------------------------------- shapes
@@ -336,14 +393,14 @@ export const shapes = lazyTable({
       },
       {},
     ),
-  /** A user submission. M1a: inline text only; M1b adds `{ blob, preview, bytes }`. */
-  Submission: () => record({ text: S.SubmissionText }),
-  /** A tool call as the model returned it; `args` is the model's JSON text. */
+  /** A user submission: inline text, or (M1b) a StagedText over inlineBytes. */
+  Submission: () => M.or(record({ text: S.SubmissionText }), B.StagedText),
+  /** A tool call as the model returned it; `args` is the model's JSON text (or staged). */
   ToolCall: () =>
     record({
       callId: text(limits.callIdUnits),
       name: S.ToolName,
-      args: S.Text,
+      args: staged(S.Text),
     }),
   /** One tool intent: a ToolCall with the op id the session assigned. */
   ToolIntent: () =>
@@ -351,7 +408,7 @@ export const shapes = lazyTable({
       opId: S.Id,
       callId: text(limits.callIdUnits),
       name: S.ToolName,
-      args: S.Text,
+      args: staged(S.Text),
     }),
   /** A tool as offered to the model; `parameters` is JSON Schema as text. */
   ToolDescription: () =>
@@ -366,7 +423,7 @@ export const shapes = lazyTable({
     record({
       kind: 'turn-started',
       turnId: S.Id,
-      input: S.SubmissionText,
+      input: staged(S.SubmissionText),
       at: count,
     }),
   Dispatched: () => record({ kind: 'dispatched', turnId: S.Id, round: count }),
@@ -375,7 +432,7 @@ export const shapes = lazyTable({
       kind: 'partial',
       turnId: S.Id,
       round: count,
-      text: S.Text,
+      text: staged(S.Text),
     }),
   RoundSettled: () =>
     record(
@@ -383,12 +440,12 @@ export const shapes = lazyTable({
         kind: 'round-settled',
         turnId: S.Id,
         round: count,
-        text: S.Text,
+        text: staged(S.Text),
         callCount: count,
         usage: S.Usage,
         at: count,
       },
-      { servedBy: S.ServedBy },
+      { servedBy: S.ServedBy, nativeContext: B.StagedText },
     ),
   ToolIntents: () =>
     record({
@@ -404,7 +461,7 @@ export const shapes = lazyTable({
         turnId: S.Id,
         opId: S.Id,
         name: S.ToolName,
-        result: text(limits.toolOutputUnits),
+        result: staged(text(limits.toolOutputUnits)),
         failed: M.boolean(),
       },
       { outcome: 'unknown' },
@@ -417,7 +474,7 @@ export const shapes = lazyTable({
         status: S.SettledStatus,
         at: count,
       },
-      { error: S.Reason, final: S.Text, usage: S.Usage },
+      { error: S.Reason, final: staged(S.Text), usage: S.Usage },
     ),
   TurnResolved: () =>
     record({
@@ -463,18 +520,18 @@ export const shapes = lazyTable({
     record(
       {
         round: count,
-        text: S.Text,
+        text: staged(S.Text),
         toolCalls: list(S.ToolCall, limits.maxCallsPerMessage),
         usage: S.Usage,
         at: count,
       },
-      { servedBy: S.ServedBy },
+      { servedBy: S.ServedBy, nativeContext: B.StagedText },
     ),
   /** `TurnSink.roundFailed` argument; `partial` is the text streamed so far. */
   RoundFailure: () =>
     record(
       { round: count, reason: S.Reason, at: count },
-      { partial: S.Text, usage: S.Usage },
+      { partial: staged(S.Text), usage: S.Usage },
     ),
   /** What `Backend.open(host)` returns: one adapter incarnation's turn ports. */
   AdapterToolEntry: () =>
@@ -490,24 +547,32 @@ export const shapes = lazyTable({
    * that were already dead (m1a-interfaces.md 6.1, 7).
    */
   TurnPorts: () =>
-    record({
-      endpoint: M.remotable('Endpoint'),
-      publisher: M.remotable('LivePublisher'),
-      tools: list(S.AdapterToolEntry, limits.maxToolsPerRound),
-      since: count,
-    }),
+    record(
+      {
+        endpoint: M.remotable('Endpoint'),
+        publisher: M.remotable('LivePublisher'),
+        tools: list(S.AdapterToolEntry, limits.maxToolsPerRound),
+        since: count,
+      },
+      // M1b: what the exec vat is handed per call (m1b-interfaces.md 3.2).
+      {
+        content: M.remotable('Content'),
+        writers: M.remotable('BlobWriters'),
+        timer: M.remotable('Timer'),
+      },
+    ),
   /** `AdapterTool.execute` argument. */
   ToolRequest: () => record({ opId: S.Id, args: S.Text }),
   /**
    * A tool outcome (adapter tools and the vat's tool-table entries alike).
    * `failed`: `text` is the error message (the session writes `Error: <text>`).
    * `frame-limit`: `text` is `texts.frameLimit`; the round fails after its
-   * other calls settle.
+   * other calls settle. M1b: `text` may be a StagedText (m1b-interfaces.md 5).
    */
   ToolOutcome: () =>
     record({
       status: M.or('ok', 'failed', 'frame-limit'),
-      text: text(limits.toolOutputUnits),
+      text: staged(text(limits.toolOutputUnits)),
     }),
   Hold: () => record({ reason: S.HoldReason, message: S.Reason }),
   PendingRow: () =>
@@ -576,7 +641,7 @@ export const shapes = lazyTable({
     ),
   CurrentTurn: () =>
     record({
-      input: S.SubmissionText,
+      input: staged(S.SubmissionText),
       turn: M.remotable('Turn'),
       history: S.TurnPreview,
     }),
@@ -598,7 +663,7 @@ export const shapes = lazyTable({
       record({
         type: 'turn-start',
         turnId: S.Id,
-        input: S.SubmissionText,
+        input: staged(S.SubmissionText),
         at: count,
       }),
       record({ type: 'phase', turnId: S.Id, phase: S.Phase }),
@@ -607,17 +672,17 @@ export const shapes = lazyTable({
         turnId: S.Id,
         id: S.Id,
         name: S.ToolName,
-        args: S.Text,
+        args: staged(S.Text),
       }),
       record({
         type: 'tool_result',
         turnId: S.Id,
         id: S.Id,
         name: S.ToolName,
-        result: text(limits.toolOutputUnits),
+        result: staged(text(limits.toolOutputUnits)),
         failed: M.boolean(),
       }),
-      record({ type: 'final', turnId: S.Id, text: S.Text }),
+      record({ type: 'final', turnId: S.Id, text: staged(S.Text) }),
       record({
         type: 'usage',
         turnId: S.Id,
@@ -691,7 +756,8 @@ export const shapes = lazyTable({
   LiveBatch: () =>
     record(
       { deliveries: list(S.Delivery, limits.liveBatchDeliveries) },
-      { closed: M.boolean() },
+      // `reason` (M1b, J-9172): why the channel closed this subscriber.
+      { closed: M.boolean(), reason: B.CloseReason },
     ),
   RowPatch: () =>
     record(
@@ -758,10 +824,14 @@ export const shapes = lazyTable({
       { reasoningEffort: text(limits.effortUnits) },
     ),
   SessionServices: () =>
-    record({
-      backend: M.remotable('Backend'),
-      host: M.remotable('SessionHostFacet'),
-    }),
+    record(
+      {
+        backend: M.remotable('Backend'),
+        host: M.remotable('SessionHostFacet'),
+      },
+      // M1b W1b.5: the session's exec vat lease (architecture 3.2).
+      { execVat: M.remotable('ExecHandle') },
+    ),
   MakeArgs: () =>
     record({
       config: S.SessionConfig,
@@ -785,7 +855,13 @@ export const shapes = lazyTable({
   ScriptToolCall: () =>
     record(
       { name: S.ToolName },
-      { callId: text(limits.callIdUnits), args: S.Text, argsKeys: count },
+      {
+        callId: text(limits.callIdUnits),
+        args: S.Text,
+        argsKeys: count,
+        // M1b: args = JSON.stringify({ code: text repeated }) (exec probes).
+        code: record({ text: S.Text }, { repeat: count }),
+      },
     ),
   ScriptRound: () =>
     record(
@@ -798,6 +874,8 @@ export const shapes = lazyTable({
         usage: S.Usage,
         error: S.Reason,
         stall: 'untilCancel',
+        // M1b: opaque native context for this round, staged as a Blob (R4-31).
+        nativeContext: S.Text,
       },
     ),
   ScriptTurn: () =>
@@ -879,7 +957,11 @@ const view = name => {
     );
     views.set(
       'CurrentTurn',
-      record({ input: S.SubmissionText, turn: R('Turn'), history: preview }),
+      record({
+        input: staged(S.SubmissionText),
+        turn: R('Turn'),
+        history: preview,
+      }),
     );
   }
   return views.get(name);
@@ -889,6 +971,46 @@ const view = name => {
  * Every interface guard by its interface name, built on first use and kept:
  * `makeExo('Session', interfaces.Session, methods)`.
  */
+/**
+ * Method guards of interfaces M1b extends, shared by `interfaces` (M1a) and
+ * `m1bInterfaces` (M1a's methods first, then M1b's).
+ */
+const methodsOf = harden({
+  Turn: () => ({
+    getStatus: M.call().returns(S.TurnStatus),
+    cancel: M.call().returns(done),
+    whenFinished: M.callWhen().returns(S.TurnStatus),
+    resolve: M.call(S.Reason).returns(done),
+  }),
+  TurnSink: () => ({
+    dispatching: M.call(count).returns(M.boolean()),
+    roundFinal: M.call(S.RoundResult).returns(done),
+    roundFailed: M.call(S.RoundFailure).returns(done),
+    deadline: M.call(record({ opId: S.Id })).returns(done),
+  }),
+  Live: () => ({
+    subscribe: M.callWhen(R('Session'))
+      .optional(count)
+      .returns(R('LiveSubscription')),
+  }),
+  AgentHostAdmin: () => ({
+    makeBackend: M.callWhen(S.BackendSpec).returns(R('Backend')),
+    forSession: M.call().returns(R('SessionHostFacet')),
+    bindSession: M.call(R('SessionHostFacet'), R('Session')).returns(done),
+    onStart: M.call(R('StartListener')).returns(R('Registration')),
+    live: M.callWhen().returns(R('Live')),
+    composer: M.callWhen().returns(R('Composer')),
+  }),
+  SessionFactory: () => ({
+    createSession: M.callWhen(S.CreateOptions).returns(R('Session')),
+    listSessions: M.call()
+      .optional(record({}, { after: S.Id, limit: count }))
+      .returns(S.SessionPage),
+    findSession: M.call(S.Id).returns(R('Session')),
+    listPresets: M.call().returns(list(R('Preset'), 64)),
+  }),
+});
+
 export const interfaces = lazyTable({
   // ---- session vat (W1a.4, W1a.5) ----
 
@@ -920,13 +1042,7 @@ export const interfaces = lazyTable({
     }),
 
   /** One turn (A.4 turn handle, object style). */
-  Turn: () =>
-    M.interface('Turn', {
-      getStatus: M.call().returns(S.TurnStatus),
-      cancel: M.call().returns(done),
-      whenFinished: M.callWhen().returns(S.TurnStatus),
-      resolve: M.call(S.Reason).returns(done),
-    }),
+  Turn: () => M.interface('Turn', methodsOf.Turn()),
 
   /** One waiting queue entry (A.4 queue; edit and sendNow arrive in M2). */
   QueueEntry: () =>
@@ -936,13 +1052,7 @@ export const interfaces = lazyTable({
     }),
 
   /** Passed in every startRound; the adapter reports the round through it. */
-  TurnSink: () =>
-    M.interface('TurnSink', {
-      dispatching: M.call(count).returns(M.boolean()),
-      roundFinal: M.call(S.RoundResult).returns(done),
-      roundFailed: M.call(S.RoundFailure).returns(done),
-      deadline: M.call(record({ opId: S.Id })).returns(done),
-    }),
+  TurnSink: () => M.interface('TurnSink', methodsOf.TurnSink()),
 
   /** Shape only in M1a; built in M1b (architecture 4.5, D-9). */
   ContextSource: () =>
@@ -991,12 +1101,7 @@ export const interfaces = lazyTable({
     }),
 
   /** Gateway-local subscription service (D-8); tests reach it through AgentHostAdmin.live(). */
-  Live: () =>
-    M.interface('Live', {
-      subscribe: M.callWhen(R('Session'))
-        .optional(count)
-        .returns(R('LiveSubscription')),
-    }),
+  Live: () => M.interface('Live', methodsOf.Live()),
 
   /** A channel's subscriber facet, one per subscriber. */
   LiveSubscription: () =>
@@ -1038,14 +1143,7 @@ export const interfaces = lazyTable({
 
   /** The manager's admin facet, installed as `agentHostAdmin`; held by the factory and the operator. */
   AgentHostAdmin: () =>
-    M.interface('AgentHostAdmin', {
-      makeBackend: M.callWhen(S.BackendSpec).returns(R('Backend')),
-      forSession: M.call().returns(R('SessionHostFacet')),
-      bindSession: M.call(R('SessionHostFacet'), R('Session')).returns(done),
-      onStart: M.call(R('StartListener')).returns(R('Registration')),
-      live: M.callWhen().returns(R('Live')),
-      composer: M.callWhen().returns(R('Composer')),
-    }),
+    M.interface('AgentHostAdmin', methodsOf.AgentHostAdmin()),
 
   // ---- factory vat (W1a.6) ----
 
@@ -1072,14 +1170,7 @@ export const interfaces = lazyTable({
 
   /** The session factory (architecture 3.1; A.4 factory, object style). */
   SessionFactory: () =>
-    M.interface('SessionFactory', {
-      createSession: M.callWhen(S.CreateOptions).returns(R('Session')),
-      listSessions: M.call()
-        .optional(record({}, { after: S.Id, limit: count }))
-        .returns(S.SessionPage),
-      findSession: M.call(S.Id).returns(R('Session')),
-      listPresets: M.call().returns(list(R('Preset'), 64)),
-    }),
+    M.interface('SessionFactory', methodsOf.SessionFactory()),
 
   /** The one object the gateway publishes (F.1 #10). */
   Operator: () =>
@@ -1162,4 +1253,325 @@ export const methodNames = harden({
   ],
   Operator: ['getFactory'],
   HarnessRoot: ['getOperator', 'status', 'loadSessionProgram'],
+});
+
+// ================================================================ M1b
+//
+// The M1b contract (W1b.0): m1b-interfaces.md section 1.3 says how these
+// tables relate to the M1a ones and when an implementer switches.
+
+/** `exec` as offered to the model (W1b.4); its argument names (R3-41, R4-43). */
+export const execArgumentNames = harden(['code']);
+export const execDescription = harden({
+  name: 'exec',
+  description:
+    'Run JavaScript in your persistent scope. The code is the body of an async function: top-level await works, and a top-level return gives the result (JSON-rendered). In scope: powers, E (eventual send: E(ref).method()), harden, console (output is discarded), sleep(ms). Top-level const and let are per call; globalThis.name = value persists across calls, turns and restarts, until the scope is reset (a reset is always stated in the result). No Date, Math.random, timers, import or require. A call that runs longer than the exec deadline is stopped and resets the scope.',
+  parameters: JSON.stringify({
+    type: 'object',
+    properties: {
+      code: {
+        type: 'string',
+        description:
+          'JavaScript; runs as an async function body. Return a result.',
+      },
+    },
+    required: ['code'],
+    additionalProperties: false,
+  }),
+});
+
+/** Every M1b shape, by name, built on first use (see `lazyTable`). */
+export const m1bShapes = lazyTable({
+  /** Text over inlineBytes (D-15; m1b-interfaces.md 4). */
+  StagedText: () =>
+    record({
+      blob: M.remotable('Blob'),
+      preview: text(limits.messagePreviewUnits),
+      bytes: count,
+    }),
+  /** `TurnSink.progress`: the round's whole text so far, staged; `tail` its last units. */
+  Progress: () =>
+    record({
+      round: count,
+      partial: B.StagedText,
+      tail: text(limits.messagePreviewUnits),
+      at: count,
+    }),
+  /** `Content.read` range: UTF-8 byte offset and the page budget. */
+  ContentRange: () =>
+    record({
+      offset: count,
+      maxBytes: M.and(count, M.lte(limits.blobPageBytes)),
+    }),
+  /** One page of a blob: whole code points; `next` is the byte offset after it. */
+  ContentPage: () =>
+    record({
+      text: text(limits.blobPageBytes),
+      next: count,
+      done: M.boolean(),
+    }),
+  /** `Timer.sleep` argument (exec `sleep(ms)`, clamped by the exec vat). */
+  SleepMs: () => M.and(count, M.lte(limits.maxDelayMs)),
+  /** `ExecHandle.scope()`: the session's current exec scope and its deadline. */
+  ExecLease: () =>
+    record({ scope: M.remotable('ExecScope'), deadlineMs: count }),
+  /** `ExecScope.run` argument (m1b-interfaces.md 3.4). */
+  ExecRequest: () =>
+    record(
+      {
+        args: staged(text(limits.inlineBytes)),
+        writers: M.remotable('BlobWriters'),
+        timer: M.remotable('Timer'),
+      },
+      { content: M.remotable('Content'), notice: S.Reason },
+    ),
+  /** `ExecScope.run` answer: a ToolOutcome, or `busy` at once while a call runs. */
+  ExecOutcome: () => M.or(S.ToolOutcome, record({ status: 'busy' })),
+  /** `ContextSource.page` answer: records from absolute index `from`. */
+  ContextPage: () =>
+    record(
+      { from: count, records: list(S.TurnRecord, limits.pageRecords) },
+      { next: S.Cursor },
+    ),
+  /** `Turn.getContent` answer: the turn's records in full, in log order. */
+  TurnContentPage: () =>
+    record(
+      { records: list(S.TurnRecord, limits.pageRecords) },
+      { next: S.Cursor },
+    ),
+  /** Manager sink (W1b.1 internal): a minted handle and its file key. */
+  BlobStockEntry: () => record({ blob: M.remotable('Blob'), key: S.Id }),
+  BlobStock: () => list(B.BlobStockEntry, limits.blobStockBatch),
+  /** Manager sink `resolveBlobs` answer: a key per handle, null if unknown. */
+  BlobKeys: () => list(M.or(null, S.Id), limits.blobResolveBatch),
+  /** M2 delete hook (shape only in M1b): one page of a session's blobs. */
+  BlobPage: () =>
+    record(
+      { blobs: list(M.remotable('Blob'), limits.blobResolveBatch) },
+      { next: S.Cursor },
+    ),
+  /** Why a channel closed a subscriber (`AH/channels.js` closeReasons keys). */
+  CloseReason: () =>
+    M.or('client', 'queueDeliveries', 'queueBytes', 'subscriberLimit'),
+  /** A session-list change (D-8; architecture 3.1). */
+  ListEvent: () =>
+    M.or(
+      record({ type: 'row', row: S.SessionRow }),
+      record({
+        type: 'row-removed',
+        session: M.remotable('Session'),
+        key: S.Id,
+      }),
+    ),
+  /** `ListPublisher.publish` argument: one batch per factory crank. */
+  ListPublishBatch: () =>
+    record({
+      rev: count,
+      events: list(B.ListEvent, limits.publishBatchEvents),
+    }),
+  ListSnapshotEvent: () => record({ type: 'list-snapshot' }),
+  ListDelivery: () =>
+    record({
+      seq: count,
+      rev: count,
+      event: M.or(B.ListSnapshotEvent, B.ListEvent),
+    }),
+  ListBatch: () =>
+    record(
+      { deliveries: list(B.ListDelivery, limits.liveBatchDeliveries) },
+      { closed: M.boolean(), reason: B.CloseReason },
+    ),
+  ListFeedInfo: () => record({ rev: count }),
+  PoolCounts: () =>
+    record({
+      spareSessions: M.and(count, M.lte(limits.maxSpares)),
+      spareExec: M.and(count, M.lte(limits.maxSpares)),
+    }),
+  /** `HarnessRoot.whenSettled()` / `status().pool`. */
+  PoolStatus: () =>
+    record({
+      spareSessions: count,
+      spareExec: count,
+      refilling: count,
+      target: B.PoolCounts,
+    }),
+  /** `HarnessRoot.configure` argument (operator settings, architecture 9). */
+  HarnessSettings: () =>
+    record(
+      {},
+      {
+        spareSessions: M.and(count, M.lte(limits.maxSpares)),
+        spareExec: M.and(count, M.lte(limits.maxSpares)),
+        execDeadlineMs: M.and(count, M.gte(1000), M.lte(limits.maxDelayMs)),
+      },
+    ),
+  ProgramInfo: () => record({ digest: text(64), bytes: count }),
+  HarnessStatus: () =>
+    record(
+      { sessions: count, program: B.ProgramInfo },
+      { execProgram: B.ProgramInfo, pool: B.PoolStatus },
+    ),
+});
+/** Shorthand inside this module. */
+const B = m1bShapes;
+
+/**
+ * Structural return guards of record pages (records as keys, J-9156).
+ * @type {Map<string, any>}
+ */
+const pageViews = new Map();
+/** @param {'ContextPage' | 'TurnContentPage'} name */
+const pageView = name => {
+  if (!pageViews.has(name)) {
+    const records = list(M.key(), limits.pageRecords);
+    pageViews.set(
+      'ContextPage',
+      record({ from: count, records }, { next: S.Cursor }),
+    );
+    pageViews.set('TurnContentPage', record({ records }, { next: S.Cursor }));
+  }
+  return pageViews.get(name);
+};
+
+/** Every M1b interface guard, built on first use. */
+export const m1bInterfaces = lazyTable({
+  // ---- blobs and content (W1b.1) ----
+
+  /** Manager-minted handle (D-15); no methods: read it through Content. */
+  Blob: () => M.interface('Blob', {}),
+  /** Adapter: opens a writer for one blob (TurnPorts.writers; the exec vat). */
+  BlobWriters: () =>
+    M.interface('BlobWriters', {
+      open: M.callWhen().returns(R('BlobWriter')),
+    }),
+  /** Adapter: one blob being written; `close` fsyncs and answers its StagedText. */
+  BlobWriter: () =>
+    M.interface('BlobWriter', {
+      append: M.callWhen(text(limits.blobPieceBytes)).returns(done),
+      close: M.callWhen().returns(B.StagedText),
+      abort: M.call().returns(done),
+    }),
+  /** Adapter: reads any blob whose handle the caller holds. */
+  Content: () =>
+    M.interface('Content', {
+      read: M.callWhen(R('Blob'), B.ContentRange).returns(B.ContentPage),
+    }),
+  /** Adapter timer (exec `sleep`). */
+  Timer: () =>
+    M.interface('Timer', {
+      sleep: M.callWhen(B.SleepMs).returns(done),
+    }),
+
+  // ---- session vat (W1b.1, W1b.2) ----
+
+  /** M1a TurnSink + `progress` (W1b.1). */
+  TurnSink: () =>
+    M.interface('TurnSink', {
+      ...methodsOf.TurnSink(),
+      progress: M.call(B.Progress).returns(done),
+    }),
+  /** M1a Turn + `getContent` (W1b.1). */
+  Turn: () =>
+    M.interface('Turn', {
+      ...methodsOf.Turn(),
+      getContent: M.call()
+        .optional(S.Cursor)
+        .returns(pageView('TurnContentPage')),
+    }),
+  /** The session's records for the adapter's context cache (W1b.2; D-9). */
+  ContextSource: () =>
+    M.interface('ContextSource', {
+      page: M.call().optional(S.Cursor).returns(pageView('ContextPage')),
+    }),
+
+  // ---- exec (W1b.3 vat, W1b.5 handle) ----
+
+  /** The exec vat's one persistent scope (architecture 6, D-11). */
+  ExecScope: () =>
+    M.interface('ExecScope', {
+      run: M.callWhen(B.ExecRequest).returns(B.ExecOutcome),
+    }),
+  /** Factory: the session's exec vat lease (architecture 3.2). */
+  ExecHandle: () =>
+    M.interface('ExecHandle', {
+      scope: M.callWhen().returns(B.ExecLease),
+      retire: M.call(R('ExecScope')).returns(done),
+    }),
+
+  // ---- session list feed (W1b.5) ----
+
+  /** Adapter: the session list channel's publisher (held by the factory). */
+  ListPublisher: () =>
+    M.interface('ListPublisher', {
+      publish: M.call(B.ListPublishBatch).returns(done),
+    }),
+  /** Adapter: one list subscriber. */
+  ListSubscription: () =>
+    M.interface('ListSubscription', {
+      next: M.callWhen().returns(B.ListBatch),
+      close: M.call().returns(done),
+    }),
+  /** M1a Live + `subscribeList`. */
+  Live: () =>
+    M.interface('Live', {
+      ...methodsOf.Live(),
+      subscribeList: M.callWhen()
+        .optional(count)
+        .returns(R('ListSubscription')),
+    }),
+
+  // ---- manager and factory (W1b.1, W1b.2, W1b.5) ----
+
+  /** M1a AgentHostAdmin + `content`, `listPublisher`. */
+  AgentHostAdmin: () =>
+    M.interface('AgentHostAdmin', {
+      ...methodsOf.AgentHostAdmin(),
+      content: M.callWhen().returns(R('Content')),
+      listPublisher: M.callWhen().returns(R('ListPublisher')),
+    }),
+  /** M1a SessionFactory + `sessionListFeed`. */
+  SessionFactory: () =>
+    M.interface('SessionFactory', {
+      ...methodsOf.SessionFactory(),
+      sessionListFeed: M.call().returns(B.ListFeedInfo),
+    }),
+  /** M1a HarnessRoot + exec program, pool settings and settling. */
+  HarnessRoot: () =>
+    M.interface('HarnessRoot', {
+      getOperator: M.call().returns(R('Operator')),
+      status: M.call().returns(B.HarnessStatus),
+      loadSessionProgram: M.call(S.ProgramPiece).returns(
+        record({ complete: M.boolean(), bytes: count }),
+      ),
+      loadExecProgram: M.call(S.ProgramPiece).returns(
+        record({ complete: M.boolean(), bytes: count }),
+      ),
+      configure: M.call(B.HarnessSettings).returns(B.PoolStatus),
+      whenSettled: M.callWhen().returns(B.PoolStatus),
+    }),
+});
+
+/** Method names per M1b interface, in declaration order. */
+export const m1bMethodNames = harden({
+  Blob: [],
+  BlobWriters: ['open'],
+  BlobWriter: ['append', 'close', 'abort'],
+  Content: ['read'],
+  Timer: ['sleep'],
+  TurnSink: [...methodNames.TurnSink, 'progress'],
+  Turn: [...methodNames.Turn, 'getContent'],
+  ContextSource: ['page'],
+  ExecScope: ['run'],
+  ExecHandle: ['scope', 'retire'],
+  ListPublisher: ['publish'],
+  ListSubscription: ['next', 'close'],
+  Live: [...methodNames.Live, 'subscribeList'],
+  AgentHostAdmin: [...methodNames.AgentHostAdmin, 'content', 'listPublisher'],
+  SessionFactory: [...methodNames.SessionFactory, 'sessionListFeed'],
+  HarnessRoot: [
+    ...methodNames.HarnessRoot,
+    'loadExecProgram',
+    'configure',
+    'whenSettled',
+  ],
 });

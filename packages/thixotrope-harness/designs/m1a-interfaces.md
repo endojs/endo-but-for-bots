@@ -46,7 +46,8 @@ contract made (deviations and open points).
    helper).
 5. **No staging in M1a.** Text fields are inline. The Composer refuses a submission over
    `inlineBytes` (8,192 bytes); the adapter refuses any message into a vat over `frameBytes` and
-   fails the round or the tool call with `texts.frameLimit` instead. M1b adds Blobs.
+   fails the round or the tool call with `texts.frameLimit` instead. M1b adds Blobs
+   (`m1b-interfaces.md` sections 1, 4 and 5; the shapes are widened in place).
 6. **Sends per crank.** No crank sends more than `callWindow` (16) tool calls plus four other
    messages (publish, row change, next round or lease release, open). Fan-out is the adapter's job.
 7. **Guest rules** (architecture 12) apply to `H/guest/**` and are linted.
@@ -185,7 +186,8 @@ that turn. Every call names its round; a call for a settled turn or another roun
 | `roundFailed(RoundFailure)` | adapter | D | sendOnly | <= frameBytes (`partial` cut to fit) | records `Partial` (if any text) and `TurnSettled{failed, error: reason}` |
 | `deadline({ opId })` | adapter timer | any | sendOnly | tiny | M1a: no armed deadline uses it (turn deadline off, exec in M1b); an unknown opId is ignored |
 
-**`ContextSource`** (shape only; M1b builds it): `page(cursor?) -> { records, next? }`.
+**`ContextSource`** (shape only; never built): superseded by `m1bInterfaces.ContextSource`,
+whose `page(cursor?)` answers `{ from, records, next? }` (`m1b-interfaces.md` 3.3, 9).
 
 **`SpareMaker`** — the completion value of the session program's evaluating crank
 (`makeSpareMaker()`, section 9); held by the factory. `make({ config, services, rowReporter }) ->
@@ -238,8 +240,9 @@ soon as at least one delivery is queued (at once if any is), with at most `liveB
 drops the subscriber. A subscriber is dropped (closed) and must re-watch and re-subscribe when
 its queue exceeds 4,096 undelivered deliveries or 2 MiB of queued bytes; a session holds at most
 32 subscribers, and a 33rd subscribe drops the one with the most queued bytes
-(`config/defaults.js` `channelLimits`, J-9172). A dropped client sees only `closed: true`:
-`LiveBatch` has no reason field (the channel records the reason in `closes()`). The facet's
+(`config/defaults.js` `channelLimits`, J-9172). A dropped client sees only `closed: true` in M1a;
+M1b adds an optional `reason` to `LiveBatch` (`m1b-interfaces.md` 14.2; the channel also records
+it in `closes()`). The facet's
 interface guard (`LIVE_SUBSCRIPTION_GUARD` in `AH/channels.js`) checks the batch envelope only:
 a record of at most 256 deliveries and an optional `closed`; each delivery was checked once where
 it was made (the publisher guard, `publishDelta`, the snapshot), so a 256-delivery `next()` costs
@@ -888,7 +891,7 @@ modules follow the guest rules; "Node" modules run in the adapter or in tests.
 | `guest/session/session.js` | `makeSession(makeArgs) -> { session, internal }` | builds `SessionCore` and passes it to `recovery.js` |
 | `guest/session/records.js` | `makeRecordLog() -> RecordLog` | `{ append(record) -> index, count(), since(index) -> records, ofTurn(turnId) -> records, messageCount() }`; `append` checks `shapes.TurnRecord` |
 | `guest/session/turn.js` | internal to W1a.4 | the turn loop over `runAgenticTurn`; W1a.5 reaches it only through `SessionCore` |
-| `guest/session/live.js` | `makeLivePublishing({ host, onStale? }) -> { inTurn(ports, events), outside(events) -> Promise<void>, rev(), forget(publisher) }` | rev counter and batching (section 5); `onStale(publisher)` on a retired break of an answered publish |
+| `guest/session/live.js` | `makeLivePublishing({ host, onStale? }) -> { inTurn(ports, events), outside(events) -> Promise<void>, rev(), forget(publisher), outsideState() }` | rev counter and batching (section 5); `onStale(publisher)` on a retired break of an answered publish; outside publishes bounded since M1b W1b.0 (`m1b-interfaces.md` 14.1) |
 | `guest/session/tool-table.js` | `toolTable` | hook table: `[ToolTableEntry]` (section 12) |
 | | `toolSetFor(ports) -> { descriptions: ToolDescription[], byName: Map<string, ToolTableEntry> }` | entries whose `available(ports)` is true |
 | `guest/session/turn-hooks.js` | `turnHooks` | `{ beforeRound: [], onCancel: [], onSettle: [], turnSources: [], recoverySteps: [] }` |
@@ -1039,5 +1042,5 @@ Micro costs in the vat (over the floor, 50 M): 100 `M.string` 113 ms; 100 `M.spl
   history pages (`TurnPreview.turn`) or receipts.
 - **Cancel waits for running tool calls** before settling `cancelled` (R4-44, R4-49).
 - **Not decided here** (left to later milestones, each a contract change): Blob-valued fields and
-  `TurnSink.progress` (M1b), `getTurnContent`, queue `edit`/`sendNow`, emergency stop, presets beyond
+  `TurnSink.progress` (M1b: `m1b-interfaces.md`), `getTurnContent` (M1b: `Turn.getContent`), queue `edit`/`sendNow`, emergency stop, presets beyond
   `chat-only`, system prompts, real backends' `listModels`.

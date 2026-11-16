@@ -23,7 +23,7 @@ export const limits = harden({
   frameBytes: 24_576,
   /** All messages one crank sends (J-0142). */
   crankOutBytes: 196_608,
-  /** A text field larger than this is a Blob from M1b; in M1a the Composer refuses it. */
+  /** A text field larger than this is staged as a Blob (M1b; M1a refused it). */
   inlineBytes: 8192,
   /** Distinct record keys a vat may ever receive or create (J-0191); rule 12.10. */
   vatKeyNames: 57_000,
@@ -117,6 +117,46 @@ export const limits = harden({
   liveBatchDeliveries: 256,
   /** The bundled session program (architecture D-4, perf `session.program`). */
   sessionProgramBytes: 200_000,
+
+  // ---- M1b contract settings (W1b.0; designs/m1b-interfaces.md) ----
+  /** A piece a vat appends to a BlobWriter, bytes (architecture 6: frameBytes / 2). */
+  blobPieceBytes: 12_288,
+  /** Text of one Content page read into a vat, bytes (a frame less its wrapper). */
+  blobPageBytes: 20_480,
+  /** A ContextSource page, bytes: vat to adapter only, never into a vat (4 frames). */
+  contextPageBytes: 98_304,
+  /** Records in one ContextSource or Turn.getContent page. */
+  pageRecords: 512,
+  /**
+   * A RoundResult the adapter sends, bytes: frameBytes less room for the op
+   * ids and keys its tool calls gain as ToolIntents (256 x 24 bytes).
+   */
+  roundResultBytes: 18_432,
+  /** Blob handles the manager mints per stock refill (D-15). */
+  blobStockBatch: 32,
+  /** Blob handles resolved per manager crank after a restart (D-15). */
+  blobResolveBatch: 64,
+  /** Partial text is staged after this many new bytes of a round ... */
+  progressEveryBytes: 16_384,
+  /** ... or this long after the last checkpoint (architecture 4.1). */
+  progressEveryMs: 10_000,
+  /** An open BlobWriter idle this long is aborted by the adapter. */
+  blobWriterIdleMs: 60_000,
+  /** Exec call deadline (architecture 6; open decision 10); HarnessRoot.configure changes it. */
+  execDeadlineMs: 120_000,
+  /** The bundled exec program (perf `exec.program`). */
+  execProgramBytes: 100_000,
+  /** Spare session vats, spare exec vats, creations in parallel (D-4). */
+  spareSessions: 2,
+  spareExec: 1,
+  poolLanes: 4,
+  /** Pool targets HarnessRoot.configure accepts. */
+  maxSpares: 16,
+  /**
+   * Outside-a-turn publishes waiting behind the one in flight: one batch's
+   * worth of events (and frameBytes); the oldest is dropped (J-9172).
+   */
+  outsidePendingEvents: 64,
 
   // ---- scripted provider script bounds (AH/providers/scripted.js) ----
   /** Rounds in one script. */
