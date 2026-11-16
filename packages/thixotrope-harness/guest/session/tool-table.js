@@ -21,6 +21,7 @@
  * `TurnPorts.tools`.
  */
 import { echoDescription } from '../lib/interfaces.js';
+import { execEntry } from './tools/exec.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -59,7 +60,7 @@ const echo = harden({
 });
 
 /** @type {readonly ToolTableEntry[]} */
-export const toolTable = harden([echo]);
+export const toolTable = harden([echo, execEntry]);
 
 /**
  * The tool-table entries available with these ports, in table order: their

@@ -20,8 +20,9 @@
  *   idle and the queue has nothing to claim.
  * - `recoverySteps`: step 6 of `recoverAfterRestart()` (W1a.5; M9).
  *
- * In M1a every list is empty.
+ * In M1a every list is empty. M1b W1b.4 appends the exec tool's hooks.
  */
+import { execHooks } from './tools/exec.js';
 
 /**
  * @typedef {(context: { core: any, active: any, round: number }) => void} TurnHook
@@ -31,11 +32,11 @@ export const turnHooks = harden({
   /** @type {TurnHook[]} */
   beforeRound: [],
   /** @type {TurnHook[]} */
-  onCancel: [],
+  onCancel: [execHooks.onCancel],
   /** @type {TurnHook[]} */
   onSettle: [],
   /** @type {((core: any) => (undefined | { text: string, at: number }))[]} */
   turnSources: [],
   /** @type {TurnHook[]} */
-  recoverySteps: [],
+  recoverySteps: [execHooks.recoverySteps],
 });
