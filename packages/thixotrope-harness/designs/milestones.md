@@ -6,8 +6,10 @@ section 9, budgets in its section 11). All code is written in
 `H/` = `packages/thixotrope-harness/`. `pkg/` = `packages/thixotrope/`. `AH/` =
 `H/resources/agent-host/impl/` (the run-time-loaded implementation, D-14).
 Endo reference files are read with `git -C <T> show 1315bef86:<path>`. Spec items are cited as
-SPEC:<line> in `endo-harness-spec.md`. M0 is done; what it measured and changed is in `m0-results.md`,
-and decisions or budgets changed because of it are listed in "Changes after M0" at the end of this file.
+SPEC:<line> in `endo-harness-spec.md`. M0 and M1a are done: what M0 measured and changed is in
+`m0-results.md` (which also keeps every core-change candidate's status), M1a's outcome table is in its
+section below, and decisions or budgets changed because of them are listed in "Changes after M0 and
+M1a" at the end of this file.
 
 ## Conventions for every milestone
 
@@ -140,6 +142,14 @@ harness code depends on them.
 
 ## M1a. Headless session slice (smallest end-to-end)
 
+**Status: done.** Build commits `6e3b8692f7..91458e17b5` (W1a.0..W1a.7 and the QC fixes); hardening
+`a88ecbf159..156762e5b4` (adapter channels and tooling, ports held per adapter incarnation, settled
+turns as records, the C-16 engine fix `9828522485` and the C-17 core change `f8bf23c62d`, integration
+fixes). Journal J-0200..J-0296, J-9100..J-9127, J-9150..J-9157, J-9170..J-9174, J-9190..J-9200. The
+work-unit table below is kept as the record of what M1a was asked to do; the outcome follows it.
+Where the contract changed after the build (ports per incarnation, records for settled turns),
+`m1a-interfaces.md` is current and the rows below are historical.
+
 **Goal.** One session vat, a scripted fake backend and an adapter tool: submit a message, stream
 events to a subscriber, run one parallel tool round, kill and restart, and find the session,
 transcript and queue intact with the in-flight turn marked outcome-unknown and nothing sent twice.
@@ -237,6 +247,36 @@ guest vat), and the cold session create cost while there is no pool.
 **Deferred:** exec, spare pool, staging, context cache, list feed (M1b); real providers and the full
 queue (M2); UI (M3).
 
+**Outcome.** Release worker `7cda4467...`, crank budget 50 M, Apple M3 Max with other agents
+running. "Before" is the M1a build (J-0270..J-0293, worker `c2f65dbe...`); "after" is
+`2ea74a02f8`..`ddcdfc68e3` (J-9190..J-9192). Verdicts use the 1.25 x rule.
+
+| item | before | after | verdict | entries |
+|---|---|---|---|---|
+| Acceptance 1-4, 8, 9, QC 1 (`m1a-slice`) | 6/6 | 6/6; acceptance 1 also checks `createdAt` | pass | J-0284, J-0295, J-9190 |
+| Acceptance 5-7 (`m1a-slice-restart`) | 3/3, one kill each | 3/3, then 20/20 at kill delays 0, 100, 500, 1,500, 4,000 ms (5, 6, 7 and the held-ports case 3, five each); no provider request or tool run twice | pass | J-0284, J-9190 |
+| Acceptance 10 (`m1a-slice-crash`) | 1/1, served 6.1 s | 1/1, served 6.0 s | pass | J-0284, J-9190 |
+| Provisioning (`m1a-provision`) | 1/1 | 1/1 | pass | J-0295, J-9190 |
+| `turn.start` (budget 350 ms; 3 frames) | median 573-575 ms, p99 5.7-10.4 s; 4 frames | median 255 ms (two runs of 200), p95 288-293, p99 1.9-3.0 s; 2 frames | **pass** (0.73 x); p99 tail is C-20 | J-0272, J-0293, J-9191 |
+| `turn.delta` (5 ms; 0 deliveries) | 18 ms through a control client (wrong place) | 0.17-0.18 ms in the adapter process; 0 deliveries | pass | J-0274, J-9173, J-9191 |
+| `turn.delta.client` (no budget) | 18 ms, p95 2.7-3.0 s in GC bursts | 18 ms, p95 0.74-1.8 s in GC bursts | recorded; C-20 | J-0274, J-9191 |
+| `turn.round` (3) / `turn.lease` (1) | 3 / 1 (a plain turn 5 deliver frames) | 3 / 1 (a plain turn 4 deliver frames) | pass | J-0273, J-9191, J-9193 |
+| too-big probes | pass (keys2000 11.1 s in a burst) | pass (0.7 / 0.8 / 1.2 s) | pass | J-0278, J-9191 |
+| `session.program` (200 KB) | 142,994 bytes | 157,493 bytes, ASCII, 7 pieces | pass (0.79 x) | J-0281, J-9192 |
+| `session.createCold` (6 s) | 5,890 ms | 6,138 ms (6.03-6.18 s) | pass under the rule (1.02 x); depends on C-5 | J-0281, J-9192 |
+| `install.factory` (15 s) | 5,725 ms | 5,950 ms | pass | J-0281, J-9192 |
+| `restart.serving` (10 s; woken session vats = 1) | median 6.7 s; gate failed in run 1 of every invocation (11 woken) | median 6.2 s (6.1-9.7); gate 5/5 (wakes) | pass | J-0276, J-0294, J-9125, J-9192 |
+| `restart.crashingSession` (15 s; depends on C-8, C-9) | 20.5 s | 20.4 s | **miss** (1.36 x), recorded | J-0280, J-9192 |
+| `gc.burst.turnStart` / `gc.restart` (C-17, new) | p99 3.3 s; 10 idle sessions woken at the first restart | p99 0.52 s (max 4.0 s with 6 session cranks); 0 woken in 5 of 5 runs | pass | J-9120, J-9123, J-9192 |
+| `crash.restart.*` (M0 rows, 15 s) | bound 5 35.8-68.5 s; bound 2 7.6-9.0 s; healthy 4.6-5.8 s | bound 5 35.7 s; bound 2 5.5 s; healthy 4.6-4.9 s | bound 5 **miss** (C-8, C-9); others pass | J-9046, J-9192 |
+| `test:ironhorse` lane | 65/65 | 66/66 (worker and core unchanged since) | pass | J-9102, J-9126 |
+| Unit lane | 275 passed | 313 passed, 23 skipped | pass | J-0295, J-9190 |
+
+Fit (J-9194): the turn loop, intent before effect and restart recovery fit vats well; holding ports
+across turns is awkward (a clock comparison stands in for a restart notice, C-19); GC traffic was a
+poor fit until CORE-9 and still costs host time per frame (C-20). Remaining performance risks:
+J-9195..J-9200.
+
 ---
 
 ## M1b. Exec scope, staging, context cache, pool, list feed
@@ -247,22 +287,40 @@ the first multi-session performance checks.
 
 - **P:** P-09 (late join), P-16 (basic exec), P-03 (list feed), P-13 (large content).
 - **R:** R3-29, R3-41, R3-42, R4-31, R4-46, R4-63, R4-100.
-- **Depends on:** M1a.
+- **Depends on:** M1a (done; read its outcome table and the "Changes after" rows first).
 - **Owns:** `H/guest/exec/`, `H/guest/session/tools/exec.js`, `H/guest/session/{context-source,staging}.js`,
   `H/guest/lib/tool-output.js` (from `fae/session/tool-output.js`), `H/guest/factory/{pool,list-feed}.js`,
-  `AH/{blobs,content,context-cache,projection,projection-hooks}.js`, `H/test/*/m1b-*`,
-  `H/perf/{exec,pool,concurrency,hub}.perf.mjs`.
+  `AH/{blobs,content,context-cache,projection,projection-hooks}.js`, `H/designs/m1b-interfaces.md`,
+  `H/test/*/m1b-*`, `H/perf/{exec,pool,concurrency,hub,history}.perf.mjs`; for W1b.0 only:
+  `H/guest/lib/{interfaces,limits}.js`, `H/designs/m1a-interfaces.md`, `H/guest/session/live.js`
+  (the outside-publish bound).
+
+**What M1a leaves for builders to know.** Ports are held per adapter incarnation and opened in
+`make` (contract 6.1, 7.1): a spare's `make()` sends the creation-time open, which the manager
+answers only after the factory's `bindSession` (the pool must keep that order). A turn start is one
+crank on held ports; a claim after an unannounced restart reopens (case 3). GC frames ride the next
+ordinary crank and never wake a vat (architecture 4.6), so do not count journal growth as wakes:
+read the worker row's `wakes`. Settled turns are records; only 32 `Turn` handles are kept
+(compare by `turnId`). `createSession` takes `at` (the caller's clock). Guest bundles are ASCII
+(escaped by the bundler). Integration files run one per invocation or through
+`corepack yarn test:integration`.
 
 **Work units**
 
 | id | files | behaviour | tests |
 |---|---|---|---|
+| W1b.0 interface contract | `H/guest/lib/{interfaces,limits}.js`, `H/designs/m1b-interfaces.md` (new; `m1a-interfaces.md` stays the M1a contract and gets only corrections), `H/test/unit/m1b-interfaces.test.js`, `H/guest/session/live.js` | One subagent, first, alone, as W1a.0. Guards and method lists for every object that crosses between M1b's units: `Blob`, `BlobWriter`, `Content`, the staged-submission and staged-field shapes (`{ blob, preview, bytes }`), `ContextSource.page` (records only), `ExecHandle` (run, retire), the exec vat's `ExecScope` (run, busy answer), `SpareMaker` (completed from its M1a shape), `SessionListFeed` and its publisher, the `PoolStatus`/`whenSettled()` shape, `ToolOutput` cut rules (R4-46). For each method: caller, crank of the turn sequence (`m1a-interfaces.md` 6), answered or `sendOnly`, largest message in bytes, what a retired break means (adapter: restart; exec vat or spare: that vat is lost). Carried from M1a (J-9172, J-9150): an optional close `reason` on `LiveBatch`; a bound on the chain of outside-a-turn publishes in `live.js` (`outsideTail`: keep at most one batch's worth pending and drop the oldest, so a `liveChannel()` that never settles cannot grow it); the text of the blank-submission refusal once the PM rules on it. | unit: every guard accepts a sample and refuses an unbounded string, an oversize array and an unknown key; `limits.js` equals `config/defaults.js`; a `liveChannel()` that never settles leaves at most the bound of outside batches pending |
 | W1b.1 blobs + staging | `AH/{blobs,content}.js`, `H/guest/session/staging.js`, Composer staging | D-15 pre-minted handles, fsync before handing out; `BlobWriter`; `Content.read(blob, offset, length)` in-process; staging of submissions, model messages, tool args, tool results and native context over `inlineBytes`; progress as `{partial: Blob, tail}` replacing one record | adapter: handle never handed out before fsync; resolve after restart; unit: partial record replaced |
-| W1b.2 context cache | `AH/{context-cache,projection,projection-hooks}.js`, `H/guest/session/context-source.js` | D-9: records in, projection in Node; `{count, epoch}` check; page pull from the latest compaction boundary; batched blob resolve; native context replayed from blob | adapter: rebuild equals incremental; integration: rebuild after restart |
+| W1b.2 context cache | `AH/{context-cache,projection,projection-hooks}.js`, `H/guest/session/context-source.js` | D-9: records in, projection in Node; `{count, epoch}` check; page pull from the latest compaction boundary; batched blob resolve; native context replayed from blob; a reopen after an unannounced restart (contract 7.1 case 3) re-sends round 0 with `base` unchanged, so the cache rebuild must not count `TurnStarted` twice | adapter: rebuild equals incremental; a round 0 sent twice to two incarnations projects once; integration: rebuild after restart |
 | W1b.3 exec vat | `H/guest/exec/main.js` | one persistent `Compartment`; async-body wrapper; endowments `E, harden, sleep, console(bounded), powers` (empty live facet until M5); `{busy}` answer while a call runs; large results cut (R4-46) and written to the passed `BlobWriter` in pieces of at most `frameBytes / 2`; a source over `inlineBytes` read from its Blob in pages of at most `frameBytes`, joined and evaluated in one crank (never one message: S3); `execSourceBytes` refusal; no data-keyed records leave the vat (`console` lines and results are text) | unit (Node Compartment) |
 | W1b.4 exec tool | `H/guest/session/tools/exec.js` | `exec` in the tool table; adapter deadline armed with the call; a retired break from the exec vat (halt or crash give-up, D-17; indistinguishable from inside) -> the neutral terminated result of architecture section 6 + explicit `retire()`; deadline -> timeout result + retire (this also bounds a worker that misses the watchdog and is being retried); cancel abandons by generation (no retire); busy at next call -> retire + "the previous exec call was still running; the scope was reset"; after a restart the pending exec call is abandoned, never awaited (J-9048) | integration |
-| W1b.5 pool + list feed | `H/guest/factory/{pool,list-feed}.js` | spare pool (D-4) with `whenSettled()`: spares made as in S6 (`createWorker`, staged bundle, evaluating crank returning a `SpareMaker`), refilled with up to 4 creations in parallel; `ExecHandle` (run, retire); session list channel (one publish per crank of row changes, `rev`); `sessionListFeed()`; publisher refreshed in the start listener; calls-per-round cap and window in `turn.js` via `turn-hooks.js` settings | integration |
-| W1b.6 tests + perf | `H/test/integration/m1b-*.test.js`, `H/perf/{exec,pool,concurrency,hub}.perf.mjs` | acceptance below | acceptance 1-11 |
+| W1b.5 pool + list feed | `H/guest/factory/{pool,list-feed}.js` | spare pool (D-4) with `whenSettled()`: spares made as in S6 (`createWorker`, staged bundle, evaluating crank returning a `SpareMaker`), refilled with up to 4 creations in parallel; a take is `make(config)` then `bindSession`, in that order (the creation-time open waits for the bind); `ExecHandle` (run, retire); session list channel (one publish per crank of row changes, `rev`, delivered in rev order as the session channel); `sessionListFeed()`; publisher refreshed in the start listener; calls-per-round cap and window in `turn.js` via `turn-hooks.js` settings | integration |
+| W1b.6 tests + perf | `H/test/integration/m1b-*.test.js`, `H/perf/{exec,pool,concurrency,hub,history}.perf.mjs` | acceptance below; perf rows below, including the vat row for history pages that M1a measured only in Node (J-9153, J-9155) | acceptance 1-12 |
+
+**Order and parallelism inside M1b.** W1b.0 first, alone; then W1b.1, W1b.3 and W1b.5 in parallel;
+then W1b.2 and W1b.4 in parallel (W1b.2 needs W1b.1's blobs, W1b.4 needs W1b.3's vat and W1b.5's
+`ExecHandle`); then W1b.6. No unit edits W1b.0's files; a unit that needs a contract change stops and
+asks the PM, as in M1a.
 
 **Acceptance tests (observable)**
 1. A second subscriber attached mid-turn receives a fold equal to the events so far, then the same live
@@ -281,6 +339,8 @@ the first multi-session performance checks.
    body over `execSourceBytes` gets the "exec source too large" result.
 8. After a daemon restart, the next turn of a 200-turn session rebuilds the context cache; the fake
    provider receives the same context as before the restart, including the scripted native context.
+   The same holds when the session was idle across the restart (its first claim goes to dead ports
+   and is re-sent to fresh ones, contract 7.1 case 3): the provider receives that turn once.
 9. Two list-feed subscribers see create, rename and delete within 500 ms; a closed subscriber is
    dropped and costs no further work.
 10. SIGKILL during a 30 s `exec` sleep, restart: the turn is outcome-unknown and recovery did not wait
@@ -289,6 +349,9 @@ the first multi-session performance checks.
 11. An exec vat whose worker is killed on every attempt while a call runs (live, no restart): the
     call ends with the terminated result after the bound is spent, the lost exec vat is retired, and
     the next `exec` gets a fresh scope.
+12. A session created from a spare (`createSession` with the pool) runs its first turn on ports
+    opened by its `make()`; a SIGKILL right after the take and a restart leave the session listed
+    once and its first turn runs once.
 
 **Perf checks**
 | check | budget |
@@ -296,16 +359,20 @@ the first multi-session performance checks.
 | `exec.trivial` | <= 250 ms |
 | `exec.first` (spare exec vat) | <= 750 ms (spare take 157-176 ms in M0) |
 | `exec.sends` 100 answered / 100 `sendOnly` from one body | <= 8 s / <= 1 s; no MeterAbort (M0 probe: 9.4-10.6 s / 0.5 s; answered depends on C-7) |
-| `session.create` with spare pool / without | <= 750 ms / <= 6 s (without: depends on C-5) |
+| `session.create` with spare pool / without | <= 750 ms / <= 6 s (without: depends on C-5; M1a 5.9-6.2 s for a 157 KB program, no margin) |
 | `pool.refill` 2 spares after 2 takes, 4 lanes | recorded (M0: 6.4 s per spare, 50 in 108.7 s) |
 | `context.rebuild` 1,000-turn session after restart | <= 5 s before the request is sent |
-| `concurrency.10` 10 sessions streaming with tool rounds | per-session turn start <= 2 x single; crank p95 <= 200 ms; row push <= 500 ms |
+| `history.page` 32 turns of 8 records, in a vat | <= 300 ms (Node: 0.77 ms after the structural guard, J-9153) |
+| `concurrency.10` 10 sessions streaming with tool rounds | per-session turn start <= 2 x single; crank p95 <= 200 ms; row push <= 500 ms; GC frames per session per turn recorded |
 | `hub.growth` `hub.json` bytes and ms per delivery after 1,000 turns with a subscriber, after 50 sessions | <= 2 MB; <= 1.25 x fresh |
+| `hub.gcBurst` host time per incoming GC frame (hub persist and journal append, timed separately) | recorded; decides C-20 (J-9127) |
+| `turn.start` and `gc.burst.turnStart` (M1a rows, re-run) | median <= 350 ms; p99 recorded (M1a: 0.5-3.0 s from GC bursts' host cost; p99 <= 1 s **depends on C-20**) |
 | `exec.retire` disk returned after a lost exec vat is retired | >= 15 MB (M0: 17.3 MB per vat) |
 | too-big probes: 300 tool calls in one round; 1 MiB reply; 10 MiB echo output; 300 KiB exec body; an exec body building an object with 60,000 fresh keys | no session vat halt (the last halts only the exec vat, which is retired) |
 
 **Fit risk:** awkward. Persistent scope and guest-to-guest exec fit well; the cost is blob plumbing
-for anything over a few KB and the exec compute ceiling per crank.
+for anything over a few KB and the exec compute ceiling per crank. The cold create has no margin
+until the pool exists (C-5).
 
 **Deferred:** real providers (M2), presets and `powers` content (M5), UI (M3).
 
@@ -1045,10 +1112,10 @@ into M9-M12; backlog heading states that parity is incomplete until decision 7; 
 
 ---
 
-## Changes after M0
+## Changes after M0 and M1a
 
-Decisions, settings and budgets that M0 and the PR 1667 integration changed. "Was" is the plan
-before M0; the evidence is in `JOURNAL.md` and `m0-results.md`.
+Decisions, settings and budgets that M0, the PR 1667 integration, M1a and its hardening changed.
+"Was" is the plan before the change; the evidence is in `JOURNAL.md` and `m0-results.md`.
 
 | what | was | now | evidence |
 |---|---|---|---|
@@ -1077,3 +1144,17 @@ before M0; the evidence is in `JOURNAL.md` and `m0-results.md`.
 | Integration test method | template "if path-independent"; run lock by pid | template helper API and supervisor child as built; run lock by generation with workload tracking (architecture 10) | J-0180, J-9020, J-9021 |
 | M1a | 7 work units, 8 acceptance tests | W1a.0 interface contract first, then W1a.1-W1a.3 and W1a.4-W1a.6 in parallel; acceptance 8 (frame limit) widened, 9 (record keys) and 10 (crashing session at restart) added; perf `session.program`, `session.createCold`, `install.factory`, `restart.crashingSession` | this table |
 | M1b | 9 acceptance tests | 10 (exec call across a restart is not awaited) and 11 (exec worker crash give-up) added; exec staging and pool refill specified | J-9048, J-9051 |
+| Turn start ports | `Backend.open` per turn through the manager vat (M1a contract) | ports (`TurnPorts`, with `since`) opened once in `make`, held per adapter incarnation, dropped when proved dead; a turn start is one crank; the settle crank starts the next queued turn (architecture 4.1, contract 6.1) | turn start 573 -> 255 ms (J-0272, J-9151, J-9191) |
+| Restart before `Dispatched` | recovered in the crank of the lease break | the session reopens and compares `TurnStarted.at` with the fresh ports' `since`: earlier -> `interrupted`; later -> round 0 again on fresh ports (contract 7.1; a typed notice is C-19) | J-9154, J-9190 |
+| Settled turns | a `Turn` exo per turn for the session's life | records; `Turn` minted when handed out, 32 kept (`retainedTurnHandles`); compare turns by `turnId`; receipts: 4,096, 24 h, no exo | 1,000 -> 32 live `Turn`s (J-9152) |
+| History page guard | strict `M.or` of every record shape | structural (`M.key()` per record; records were checked at append) | 18.0 -> 0.77 ms per page in Node (J-9153, J-9156); vat row is M1b |
+| `createdAt` | stamped from the factory's known time (always 0) | `CreateOptions.at`, the caller's clock | J-9150, J-9193 |
+| Blank submissions | not refused | refused with `texts.blankSubmission` (Fae's text; the spec has none: PM decision) | J-9150 |
+| OCapN GC frames | one vat delivery each; woke sleeping vats | held in the journal, delivered with the next ordinary crank or after 64; never wake a vat (CORE-9, architecture 4.6) | J-9120..J-9125 |
+| Woken-vat checks | "journal grew" | the worker row's `wakes`; `journalLength` is the delivery frontier, `heldFrames` separate | J-9122, J-9193 |
+| Live channel | arrival order, deliveries-only drop bound | rev order with a reorder window; 4,096 deliveries or 2 MiB per subscriber; 32 subscribers; envelope-only return guard | J-9170..J-9172 |
+| `turn.delta` measurement | control client through the hub | in-process subscriber in the adapter (where the gateway subscribes); the client path is `turn.delta.client`, no budget | J-0274, J-9173 |
+| Guest bundles | non-ASCII hidden names (U+034F) from `@endo/module-source` | escaped as `\uXXXX`; guest lint refuses non-ASCII outside comments and SES-rejected source text | J-9174 |
+| C-16 workarounds | the `Set`-based queue and no in-place array moves (J-0271, J-0292) | kept; no longer needed for correctness after the engine fix (`9828522485`) | J-9101 |
+| Integration runs | one file per invocation | also `corepack yarn test:integration` (serial, one lock); `M1A_KILL_DELAYS_MS` repeats the SIGKILL cases | J-9174, J-9193 |
+| M1b | 6 work units, 11 acceptance tests | W1b.0 contract step first (with the carried M1a items); acceptance 8 extended to a session idle across the restart, 12 (spare take and its open) added; perf `history.page`, `hub.gcBurst`, the M1a turn rows re-run | this table |

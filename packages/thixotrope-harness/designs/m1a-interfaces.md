@@ -235,8 +235,22 @@ presence it receives (S2 (d): one presence per vat object per incarnation).
 **`LiveSubscription`** (W1a.3) — one per subscriber. `next() -> LiveBatch`: answered; resolves as
 soon as at least one delivery is queued (at once if any is), with at most `liveBatchDeliveries`
 (256); `closed: true` once closed (then always `{ deliveries: [], closed: true }`). `close()`:
-drops the subscriber. A subscriber whose queue exceeds 4,096 undelivered deliveries is dropped
-(closed) and must re-watch and re-subscribe.
+drops the subscriber. A subscriber is dropped (closed) and must re-watch and re-subscribe when
+its queue exceeds 4,096 undelivered deliveries or 2 MiB of queued bytes; a session holds at most
+32 subscribers, and a 33rd subscribe drops the one with the most queued bytes
+(`config/defaults.js` `channelLimits`, J-9172). A dropped client sees only `closed: true`:
+`LiveBatch` has no reason field (the channel records the reason in `closes()`). The facet's
+interface guard (`LIVE_SUBSCRIPTION_GUARD` in `AH/channels.js`) checks the batch envelope only:
+a record of at most 256 deliveries and an optional `closed`; each delivery was checked once where
+it was made (the publisher guard, `publishDelta`, the snapshot), so a 256-delivery `next()` costs
+0.10 ms instead of 13.5 ms (J-9171). What a client receives still matches `S.LiveBatch`.
+
+**Batch order** (J-9170): the channel delivers vat batches in `rev` order. The first batch a
+channel incarnation sees sets the base; a newer rev is held, and deltas that arrive while
+something is held queue behind it; a duplicate or a rev at or below the delivered one is dropped
+and counted; a missing rev is given up as a counted gap after `reorderWaitMs` (1,000 ms) or when
+more than 32 batches or 4,096 deliveries are held, and the held batches then go out in order
+(clients see the rev jump and re-watch).
 
 **`Composer`** (W1a.3) — gateway-local; tests get it from `AgentHostAdmin.composer()`.
 `submit(session, text, requestId) -> Receipt`: measures `text` in UTF-8 bytes; over `inlineBytes`

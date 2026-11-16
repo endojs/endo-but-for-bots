@@ -8,10 +8,12 @@ runs in Ironhorse vats lives in `guest/` and reads the Thixotrope prelude (`E`, 
 `makeExo`, ...) from `globalThis`; it imports only relative modules, so its bundles carry no
 second copy of an `@endo/*` library.
 
-- Plan: `designs/architecture.md` (facts, decisions, core changes, limits, test and perf method,
-  guest rules) and `designs/milestones.md` (work units, acceptance tests, perf checks; "Changes
-  after M0" at the end). What M0 measured and changed: `designs/m0-results.md`. Surveys and plan
-  reviews: `designs/survey/`, `designs/review-*.md`.
+- Plan: `designs/architecture.md` (facts, decisions, core changes, limits, the turn sequence,
+  test and perf method, guest rules) and `designs/milestones.md` (work units, acceptance tests, perf
+  checks; each finished milestone's outcome table; "Changes after M0 and M1a" at the end). What M0
+  measured and changed, and every core-change candidate with its status (C-1..C-20):
+  `designs/m0-results.md`. The M1a interface contract, crank by crank: `designs/m1a-interfaces.md`.
+  Surveys and plan reviews: `designs/survey/`, `designs/review-*.md`.
 - Journal: `JOURNAL.md` records what fits Thixotrope and what does not, and every perf
   measurement. Append in your milestone's number block; never rewrite an entry.
 - Settings: `config/defaults.js` (`limits`: frame sizes, crank budget, sends per crank, exec
@@ -34,9 +36,14 @@ corepack yarn build:ironhorse-bundles
 ```
 
 The worker is `../../target/release/thixotrope-ironhorse-worker`
-(`THIXOTROPE_IRONHORSE_WORKER` overrides it). A change of either the worker or the bundles
-changes the boot digest: existing state directories are refused, and cached test templates are
-rebuilt automatically (their key includes both). Use `corepack yarn`, not a global yarn.
+(`THIXOTROPE_IRONHORSE_WORKER` overrides it); since `9828522485` its sha256 is
+`7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741` (it rebuilds to the same digest).
+A change of either the worker or the bundles changes the boot digest: existing state directories
+are refused, and cached test templates are rebuilt automatically (their key includes both). To
+check that the bundles match the tree without touching them, build into a scratch directory under
+the run lock (`node scripts/bundle-ironhorse-worker.mjs <dir>` in `packages/thixotrope`) and compare
+with `cmp`. Rebuild the worker and the bundles only under the run lock: another run would break if
+they changed under it. Use `corepack yarn`, not a global yarn.
 
 ## Unit tests and lint
 
@@ -96,7 +103,11 @@ which takes the run lock once and runs AVA with `--serial --concurrency 1`. Neve
 processes, and each file's `takeIntegrationLock` passes through the outer lock (a nested taker),
 so their supervisors would run side by side.
 
-A template start takes about 5.6 s against about 35 s for a cold provision. Copies live in
+`m1a-slice-restart.test.js` repeats its SIGKILL cases (acceptance 5, 6, 7 and the held-ports
+case) once per kill delay with `M1A_KILL_DELAYS_MS=0,100,500,1500,4000` (20 tests, about 10
+minutes); each run prints an `m1a.slice.restart.case` line before its assertions.
+
+A template start takes about 5 s against about 35-40 s for a cold provision. Copies live in
 `tmp/<6 chars>`: the control socket path must stay under 104 bytes (98 in this checkout), so keep
 the checkout path short or pass `startFromTemplate(template, { root })`. `KEEP_STATE=1` keeps the
 copy; `removeTemplates()` deletes cached templates. Never copy a running state directory.
@@ -130,8 +141,22 @@ the commit, worker sha256, crank budget and load average; the exit code is 1 whe
 p95, p99, max, value) is over 1.25 x its budget or deliveries per operation are over theirs.
 `IDLE_MS` (default 1 h) and `SNAP_EVERY` set the supervisor's idle sleep and snapshot cadence;
 `FRAMES_N`, `LOOP_N`, `INSTALL_N` and `CRASH_*` shorten individual scripts.
-`perf/crash.perf.mjs` exits 1 by design while a restart with a crashing vat misses its 15 s target
-(core candidates C-8, C-9). Paste the lines into `JOURNAL.md` with a reading and a decision.
+`perf/crash.perf.mjs` and `perf/restart.perf.mjs` exit 1 by design while a restart with a crashing
+vat misses its 15 s target (core candidates C-8, C-9). Paste the lines into `JOURNAL.md` with a
+reading and a decision.
+
+| script | rows | about |
+| --- | --- | --- |
+| `perf/turn.perf.mjs` | `turn.start` (+ `.open`, `.dispatch`, `.client`, `.deliveries`), `turn.delta`, `turn.delta.client`, `turn.round`, `turn.lease`, `turn.tooBig.*`, `turn.frames` | 4 min (`TURN_N` 200) |
+| `perf/session.perf.mjs` | `session.program`, `install.factory`, `session.createCold` | 3 min |
+| `perf/restart.perf.mjs` | `restart.serving` (gate: woken session vats = 1, read from the worker rows' `wakes`), `restart.crashingSession` | 6 min |
+| `perf/gc.perf.mjs` | `gc.burst.turnStart`, `gc.burst.frames`, `gc.burst.hub`, `gc.restart` (C-17) | 6 min |
+| `perf/crash.perf.mjs` | M0's crash and restart phases (C-8..C-10) | 6 min |
+
+A vat is woken when its worker row's `wakes` (process-local) is above 0; `journalLength` is the
+delivery frontier, and held GC frames (`heldFrames`) wait in the journal without a crank. `turn.delta`
+reads an in-process subscriber in the adapter (the file `tmp/live-probe/enabled` switches it on;
+the script does this itself).
 
 ## The Ironhorse lane
 
@@ -143,7 +168,9 @@ cd ../thixotrope && node ../thixotrope-harness/scripts/run-lock.mjs --label lane
   corepack yarn test:ironhorse > ../thixotrope-harness/tmp/lane.log 2>&1
 ```
 
-It passes 65/65 at the end of M0.
+It passes 66/66 (worker `7cda4467...`, `2b273930ab`, 15.8-17.6 min; J-9102, J-9126). Run it again
+after any change to the worker, the bundles or `packages/thixotrope/src`. Any engine wrapper that
+intercepts `deliver` must also intercept `deliverBatch` (J-9126).
 
 ## Serving a state directory
 

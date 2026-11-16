@@ -1,8 +1,10 @@
 # Architecture: the Endo daemon harness on Thixotrope
 
-Status: plan for M1a onward. M0 (groundwork) is built; its measurements are summarised in
-`m0-results.md` and recorded in `../JOURNAL.md` (entries J-0100..J-0198, J-9000..J-9051), and the facts,
-core changes, limits and budgets below are the measured ones.
+Status: plan for M1b onward. M0 (groundwork) and M1a (the headless session slice) are built. M0's
+measurements are summarised in `m0-results.md` (which also keeps the core-change candidates current),
+M1a's in `milestones.md` (M1a outcome); both are recorded in `../JOURNAL.md` (M0: J-0100..J-0198,
+J-9000..J-9051; M1a: J-0200..J-0296, J-9100..J-9200). The facts, core changes, limits, turn sequence and
+budgets below are the measured ones.
 Inputs: the six survey reports in `survey/` (core, native, apps, tooling, reuse,
 spec-digest), the feasibility and coverage reviews `review-feasibility.md` and `review-coverage.md` with the
 probe `survey/feasibility-probe.mjs`, spec Part I sections 1, 4 and 10, Appendix A.4 and
@@ -27,7 +29,9 @@ Numbers are for the release worker at the harness crank budget of 50 M.
    (8 pipelined inbound frames cost what 8 separate calls cost, J-0142). An answered `E()` costs a
    second delivery when the answer comes back (100 answered sends from one crank take 9.4-10.6 s
    until every answer is back, J-0143); `E.sendOnly` does not. vat -> adapter -> vat costs 70-76 ms
-   per answered call; an adapter hop through the hub with no vat 20-25 ms (J-0161, J-9043).
+   per answered call; an adapter hop through the hub with no vat 20-25 ms (J-0161, J-9043). OCapN GC
+   frames (`op:gc-exports`, `op:gc-answers`) do not cost a crank of their own since `f8bf23c62d`
+   (C-17): they wait in the vat's journal and enter with its next ordinary frame (section 4.6).
 2. **Every byte of a message into a vat is hardened, and one message above about 94 KB halts the vat
    for good.** The pipe hardens each inbound frame's bytes (`pkg/src/net/pipe-network.js` `deliver`);
    SES `harden` allocates one descriptor object per byte. Inbound costs about 10 us per byte at steady
@@ -62,7 +66,9 @@ Numbers are for the release worker at the harness crank budget of 50 M.
    what every caller of a halted or given-up vat sees (fact 7). Sends to objects of a retired session
    break silently for `E.sendOnly` (tombstoned rows, `hub.js:1917-1931`). The exception: a
    guest-to-guest call pending into a vat that is given up during startup never breaks (J-9048, core
-   candidate C-10).
+   candidate C-10). A vat that has **no** call pending into a dead adapter incarnation is told nothing:
+   its references into that incarnation are tombstones it finds only when it next uses them (J-9154,
+   core candidate C-19); section 4.4 says how a session tells that case from a turn in flight.
 6. **Startup replays every worker whose journal runs past its last snapshot**
    (`pkg/src/core/daemon.js:826-847`), independent of the application. Vats checkpoint at idle sleep
    (default 30 s, configurable as `idleSleepMs`, `pkg/src/control/supervisor.js:141`), every 256
@@ -165,6 +171,8 @@ upstream reviewer; page 6 lists the open core-change candidates C-1..C-15 that w
 | **CORE-7** | Export `serveThixotrope` and `connectLocalControl`. | `pkg/package.json`, `pkg/index.js`, `pkg/supervisor.js`, `pkg/local-control.js` (`042171c094`) | D-1's public surface (J-0132, J-9022). |
 | upstream | PR 1667, "bound a vat's crash loop": crash classification, persisted crash count with doubling retries, startup that waits out a crashing vat, `standDown()`, `THIXOTROPE_MAX_DELIVERY_ATTEMPTS`. | merge `3f2b90954e` | Not ours; merged without conflict with CORE-6 (J-9040). Semantics: fact 7, D-17. |
 | tests | Snapshot goldens re-pinned for CORE-1's boot statics. | `rust/engine/ironhorse-snapshot/tests` (`0a4bdb3826`) | `1d44da02d0` moved the boot fingerprint without re-pinning (J-9000). |
+| **CORE-8** (C-16) | `GET_LOCAL` and the with/eval read return a value without the binding's attribute bits; the stores that create an element give it flag 0; a debug assertion at `Interp::push`. No boot, golden or metering change; the worker binary is `7cda4467...`. | `rust/engine/ironhorse-vm` (`9828522485`); lane scenario `pkg/test/ironhorse/element-attributes.js` (`d6f4e38b9b`) | An element pushed from a `const` local was non-writable, so `splice` threw in the session queue (J-0271, J-9100, J-9101). |
+| **CORE-9** (C-17) | GC frames toward a worker are journaled (`gc: true`) and enter with the worker's next ordinary frame, or alone after 64; crank boundaries follow from the journal; Ironhorse `deliverBatch`; the startup sweep resumes only workers owed a crank; a retired session's rows are released in one batch per destination; worker rows report the delivery frontier and `heldFrames`, `wakes`, `cranks`; the hub counts GC frames by session (`status().gc`). | `pkg/src/core/durable-worker-transport.js`, `pkg/src/ironhorse/ironhorse-engine.js`, `pkg/src/net/hub.js`, `pkg/src/core/daemon.js` (`18c8f633ee`, `f8bf23c62d`, `a46f505035`); lane fixtures (`2b273930ab`) | GC bursts cost one full crank per frame and woke idle sessions at restart (J-0276, J-0277, J-9120..J-9125). |
 | CORE-2 | Kit `operate(fn)` verb. | - | **Not needed**: S2 confirmed D-7 (J-0160). |
 | CORE-3 | Booted-image templates for fast vat creation. | - | **Not needed**: S6 confirmed D-4 (J-0184). |
 
@@ -255,6 +263,16 @@ restart only from its own pending calls:
   runs `recoverAfterRestart()` (section 4.4). The break arrives during startup, before the daemon
   serves (S2), so a session with a turn in flight is awake and recovered when serving begins. Cost: 1
   extra delivery per turn.
+- **Ports per adapter incarnation.** The session opens its ports (`E(backend).open(host)` ->
+  `TurnPorts`: endpoint, publisher, tools, `since`) once, in `make`, and holds them across turns; it
+  drops them when they prove dead (a retired break from the lease, an adapter tool or an answered
+  outside publish) and opens again at its next claim. An idle session therefore still holds the dead
+  incarnation's ports after a restart (it is not woken, and nothing tells it, fact 5); its next claim
+  finds out from the lease break and reopens (section 4.4).
+- **GC from dead peers does not wake anyone.** At startup the hub forgets the dead adapter and
+  client sessions and releases what they imported; those GC frames wait in each exporting vat's
+  journal (section 4.6). In M1a's restart checks no idle session vat was woken in any run, the first
+  restart after setup included (J-9123, J-9125).
 - **Any adapter call on the turn path** (round dispatch handshake, `runCommand`, blob reads) that
   rejects with the retired text is classified `outcome-unknown` and routed to the same idempotent
   recovery; it is never recorded as an ordinary tool failure, and the session never calls a
@@ -519,33 +537,50 @@ later milestones plug in without editing `turn.js`.
 
 ### 4.1 Sequence for one turn
 
+The crank-by-crank contract is `m1a-interfaces.md` section 6; this is its outline. The session holds
+its `TurnPorts` (endpoint, live publisher, adapter tools, `since`) from its creation-time open
+across turns (D-5), so a turn start does not pass through the manager vat.
+
 ```
 browser --E(composer).submit(session, text, reqId)--> gateway (adapter): stage text > inlineBytes
-   as a Blob; E(session).enqueueOnce(submission, reqId, at)                 [crank 1: receipt + queue entry;
-                                                                          if idle: claim = remove entry AND
-                                                                          record TurnStarted{input} (atomic),
-                                                                          publish (sendOnly), RowReporter change,
-                                                                          E(endpoint).holdTurn(t) (lease),
-                                                                          E.sendOnly(endpoint).startRound(req0)]
+   as a Blob; E(session).enqueueOnce(submission, reqId, at)                 [crank A: receipt + queue entry;
+                                                                          if idle and not held: claim = remove
+                                                                          entry AND record TurnStarted{input, at}
+                                                                          (atomic); RowReporter change; ONE
+                                                                          publish (turn-start, phase, pending);
+                                                                          E(endpoint).holdTurn(t) (lease);
+                                                                          E.sendOnly(endpoint).startRound(req0)
+                                                                          on the held ports]
 agent-host adapter: project the provider request from its context cache + req0.append; then
-   E(turnSink).dispatching(0) and WAIT for the answer                   [crank 2: record Dispatched]
+   E(turnSink).dispatching(0) and WAIT for the answer                   [crank C: record Dispatched]
    then send HTTP; parse SSE in Node; every delta -> session channel (in-process) -> WS clients
    every 10 s or 16 KiB of new text: stage the partial text so far as a Blob;
    E.sendOnly(turnSink).progress({ partial, tail })                    [crank per checkpoint; replaces the
                                                                           single partial record]
    end of round: stage oversize fields; E.sendOnly(turnSink).roundFinal({ message, toolCalls,
-   nativeContext: Blob, usage, at })                                     [crank 3: record round; record all
+   nativeContext: Blob, usage, at })                                     [crank D: record round; record all
                                                                           intents (one record, <= maxCallsPerRound);
                                                                           publish tool_call events; issue the first
                                                                           callWindow calls]
 tool results: one crank per result; record it, publish tool_result, issue the next waiting call
 after the last result of the round: E.sendOnly(endpoint).startRound(reqN)   [same crank as the last result]
-... final round without tool calls -> record TurnSettled, usage; publish final/usage/end;
-    RowReporter change; E.sendOnly(endpoint).releaseTurn(t)               [lease answer: 1 more delivery]
+... final round without tool calls -> record TurnSettled, usage; RowReporter change;
+    E.sendOnly(endpoint).releaseTurn(t); if the queue has a waiting entry and no hold: claim it and
+    start it on the held ports IN THE SAME CRANK; one publish carries
+    [final, usage, end, turn-start, phase, pending]                       [lease answer: 1 more delivery]
 ```
 
-Turn start costs 2 durable cranks before the HTTP request. A round costs 1 (final) + one per tool
-result + one per progress checkpoint. A turn costs one extra delivery for the lease answer.
+Without held ports (the creation-time open has not answered yet, or the last ports proved dead) the
+claim sends `E(backend).open(host)` instead (crank A'), and the turn starts when the open answers
+(crank B); this hop through the manager vat cost about 300 ms per turn while every turn opened its
+ports (J-0272).
+
+Turn start costs 2 session deliveries before the HTTP request (A, C), with no manager crank. A plain
+turn costs 4 session deliveries (A, C, D, the lease answer). A round costs 1 (final) + one per tool
+result + one per progress checkpoint. GC frames from peers add no crank (section 4.6). Measured with
+the scripted backend: turn start median 255 ms (budget 350; 573 ms while ports were opened per
+turn), p95 288-293 ms, 2 frames into the session before the request. The tail is GC bursts' host
+cost (section 4.6, C-20): p99 0.46-3.0 s across four runs of 150-200 turns (J-9124, J-9191).
 
 **Calls per round (coverage 18).** At most `maxCallsPerRound` (default 64) tool calls of one round
 are run; extras get the error result "Too many tool calls in one round (N); only the first 64 were
@@ -571,12 +606,21 @@ Viewing: the browser calls `E(session).watch()` for the durable snapshot and `re
 the session presence (S2 (d)), sends the current-turn fold, then live events. A gap in `rev` makes the
 client re-watch. Late joiners and reloads get the same view (P-09).
 
-Staleness after a restart: inside a turn the publisher is obtained with the turn's Endpoint (same
-incarnation), so `sendOnly` is safe; a stale Endpoint shows up as a broken lease. Outside a turn
-(queue edits, renames) the session publishes with an answered `E(publisher).publish(...)`; a break
-makes it obtain a fresh publisher with `E(services.host).liveChannel()` and publish again. These are
-rare, so the extra delivery does not matter. The factory refreshes its list publisher in its start
-listener.
+Staleness after a restart: the publisher comes with the held ports (same incarnation as the
+Endpoint), so inside a turn `sendOnly` is safe; a stale publisher shows up as a broken lease, and
+what was published on it since the restart is lost (viewers see a rev gap and re-watch). Outside a
+turn (queue edits, renames) the session publishes with an answered `E(publisher).publish(...)`; a
+break drops the held ports and makes it obtain a fresh publisher with
+`E(services.host).liveChannel()` and publish again. These are rare, so the extra delivery does not
+matter. The chain of outside publishes waiting for an answer has no bound yet (`guest/session/live.js`
+`outsideTail`, J-9172; M1b W1b.0). The factory refreshes its list publisher in its start listener.
+
+The channel delivers a session's vat batches in `rev` order (a late older batch is held for, a
+duplicate dropped, a missing rev given up after 1 s or a full window); a subscriber is dropped over
+4,096 queued deliveries or 2 MiB, and a session has at most 32 subscribers (`config/defaults.js`
+`channelLimits`; `m1a-interfaces.md` section 3.2; J-9170..J-9172). Measured in the adapter process,
+where the gateway subscribes, a delta reaches a waiting subscriber 0.15-0.18 ms after its publish
+(budget 5 ms); a control client through the hub sees 17-18 ms (J-9173, J-9124).
 
 ### 4.3 What is recorded before and after each step (intent before effect)
 
@@ -611,7 +655,25 @@ outcome-unknown although no HTTP request was sent (conservative, documented).
 `recoverAfterRestart()` is idempotent and runs on the first retired break the session receives from an
 adapter object (D-5: the lease, or any adapter call on the turn path); a retired break from a guest vat
 is not a restart signal (D-17). The lease break is delivered during startup replay, before the daemon
-serves, so recovery normally runs before any client can connect. It inspects the current turn:
+serves, so recovery normally runs before any client can connect.
+
+**In flight at the restart, or claimed after it?** Because ports are held (D-5), a lease break before
+`Dispatched` has two possible meanings: the turn was in flight when the adapter died, or the session
+was idle across the restart and has just claimed a turn on ports that were already dead (nothing
+reached any adapter). Nothing in the vat orders the claim against the restart except time, so the
+session opens fresh ports and compares the turn's claim time (`TurnStarted.at`, the caller's clock)
+with their `since` (the adapter incarnation's start): claimed earlier -> recovered as below
+(`interrupted`); claimed later -> the same round 0 goes to the fresh ports and the turn runs once.
+Both misclassifications are safe because nothing was dispatched (the adapter sends no request before
+`dispatching(0) = true`): a clock stepping back sends an in-flight turn to the provider once; a claim
+in the ~65 ms between serving and the adapter's re-attach, or a `startTurn` without `at`, closes a
+turn that was not in flight as `interrupted`. After `Dispatched` recovery runs in the crank of the
+break, with no reopen. The case table, crank by crank, is `m1a-interfaces.md` section 7.1; core
+candidate C-19 (a typed restart notice) would remove the clock comparison. In M1a's restart tests
+(20 SIGKILLs at kill delays 0-4,000 ms, J-9190) every turn read its final state at the first read
+after serving, and no provider request or tool run happened twice.
+
+It inspects the current turn:
 
 - no `Dispatched` record: close it "Interrupted before dispatch; no backend execution was started."
   The input stays in the transcript, marked interrupted; nothing is re-queued (the entry was removed at
@@ -631,6 +693,12 @@ serves, so recovery normally runs before any client can connect. It inspects the
   and nothing in it runs.
 - if the queue is non-empty, hold it `restart` (A.4 text, SPEC:1621; R4-56).
 - report the row change.
+
+Costs after a restart: a turn whose decision waits for the reopen (no `Dispatched`) settles when the
+manager's restore has re-attached the adapter and the open answers, which in M1a was always before
+the first client read (1.5 s after connecting). The first turn of a session that was idle across the
+restart pays the reopen (A, the break, B, C): 0.78-0.99 s from submit to completion against about
+0.3 s for an ordinary one-chunk turn (J-9190).
 
 The turn is acknowledged with `turn.resolve(note)` while idle; the next context includes the
 outcome-unknown turn and its "Tool outcome unknown" texts (R4-32). **Builders must not follow
@@ -655,6 +723,36 @@ Compaction (P-36, M8): the vat decides from the previous usage reading (R4-34) a
 `CompactionStarted` before a tool-less summary round; the adapter plans the retained tail on its cache
 and returns the summary as an ordinary round result; the vat records `Compaction`. A restart during
 compaction is an ordinary outcome-unknown round. Unknown outcomes stay in the retained context (R4-35).
+
+### 4.6 OCapN GC frames (core change CORE-9, C-17)
+
+A peer that drops an import sends `op:gc-exports` (or `op:gc-answers` for answers) to the exporter.
+Adapters coalesce per microtask, but a Node peer's finalizers run across many tasks, so a burst is
+still 100-280 small frames over a second or two; every GC frame into a session vat in M1a was a
+release by a native adapter's transient session (the agent host or the control adapter) of what the
+session handed it per turn (Turn, TurnSink, receipts) (J-9120, J-9121). Since `f8bf23c62d`:
+
+- A GC frame toward a worker is journaled (`gc: true`) and **not delivered on its own**. A run of
+  them enters the worker in the same crank as the next ordinary frame, before it and in order, or
+  alone once 64 have gathered. Frames are only ever delayed, never reordered, so nothing is released
+  early. On Ironhorse such a crank is one evaluation, one drain, one collection (`deliverBatch`).
+- **A GC frame never wakes a sleeping vat.** An idle vat keeps up to 64 held frames (3-6 per idle
+  session measured) and the memory they would free until its next ordinary frame. The startup sweep
+  wakes only workers owed a crank; forgotten transient sessions' releases are journaled, not
+  delivered.
+- **The crank boundary rule is part of the replay contract** (`journalCranks`), so a replay after a
+  kill delivers the same cranks and regenerates the same outbound frames.
+- Worker status rows report `journalLength` as the delivery frontier ("asleep and checkpointed" is
+  still `snapshot.cut >= journalLength`) plus `heldFrames`, `wakes` and `cranks`; `status().gc` counts
+  GC frames by session. A wake is best read from `wakes`.
+- An engine wrapper that intercepts `deliver` must also intercept `deliverBatch`, or drop it.
+
+Effect: session cranks per one-chunk turn 6.55 -> 4.01; idle sessions woken at the first restart
+after setup 10 -> 0 (J-9123..J-9125, J-9192). What remains is host-side: each incoming GC frame costs
+the supervisor a `hub.json` persist and an fsync'd journal append per outgoing frame (C-20), which
+delays all hub traffic during a burst: a 161-frame burst held one turn start for 4.0 s with only 6
+session cranks, and a client's deltas reach it up to 2 s late (J-9127, J-9191, J-9195). Fewer exports
+per turn would shrink bursts, but a long-lived viewer (the M3 gateway) makes the same pattern.
 
 ---
 
@@ -853,7 +951,10 @@ too. The other rows below are design settings, kept in the module that enforces 
 | Context page to adapter, session list page | `frameBytes`; 50 rows | | n/a |
 | Exec deadline | 120 s; compute bound = crank budget | | none (G-18; R4-48) - open decision 10 |
 | Turn wall-clock deadline | off (configurable) | | none (R4-48; G-06) |
-| Queue | 100 waiting, 4,096 receipts | | same (R4-98) |
+| Queue | 100 waiting; at most 4,096 receipts, pruned by age (24 h) at each `enqueueOnce`, none holding an exo | J-9152 | same (R4-98) |
+| Settled turns | a record each (kept for life, R4-64); a `Turn` exo is minted when a page or receipt hands it out, and only the 32 most recently handed out are kept (`retainedTurnHandles`); clients compare turns by `turnId` | after 1,000 turns 32 live `Turn`s (1,000 before) (J-9152) | n/a |
+| Live subscribers (adapter, `channelLimits`) | 4,096 queued deliveries or 2 MiB per subscriber; 32 subscribers per session; reorder window 32 batches / 4,096 deliveries / 1,000 ms | J-9170..J-9172 | n/a |
+| Held GC frames per vat (core, `GC_FRAMES_PER_CRANK`) | 64, then delivered alone in one crank | J-9122 | n/a |
 
 ---
 
@@ -958,39 +1059,40 @@ too. The other rows below are design settings, kept in the module that enforces 
 6. Bulk fixtures (hundreds of sessions or thousands of turns) are built with `importState` (one crank
    per `frameBytes` of records), never by running turns.
 
-**Budgets** (M3 Max class machine; deliveries = durable vat deliveries). The "M0 evidence" column
-gives what M0 measured where it bears on a budget; `m0-results.md` page 7 has every check. A budget
+**Budgets** (M3 Max class machine; deliveries = durable vat deliveries). The evidence column
+gives what M0 and M1a measured where it bears on a budget (M1a's full table is in `milestones.md`,
+M1a outcome); `m0-results.md` page 7 has every check. A budget
 marked **depends on C-n** is not reachable until that core candidate (`m0-results.md` page 6) is
 fixed: the check is run and recorded, a miss is journaled against C-n, and it does not block a
 milestone by itself.
 
-| Metric | Budget | M0 evidence |
+| Metric | Budget | Evidence (M0, M1a) |
 |---|---|---|
 | `frames.inbound` / `frames.outbound` at `frameBytes` | no halt; <= 300 ms over the ping floor | 312 / 69 ms with a 57 ms floor: pass (J-0193) |
 | `frames.halt` (S1) | `frameBytes` <= half the halt point on fresh and used vats | 94,208 / 98,304 at 50 M: pass (J-0194) |
 | `vat.evaluateProgram` 150 k source, staged | <= 2 s; no MeterAbort; **depends on C-5** | 2.2-2.3 s, 95 % of it staging (J-0193, J-9024) |
 | `loop.runaway` at the crank budget | <= 1 s | 242 ms (J-0193) |
-| Turn start: submit accepted to provider request sent (scripted backend) | median <= 350 ms; <= 3 deliveries | |
-| Live delta: provider chunk in adapter to WS frame out | median <= 5 ms; 0 deliveries per delta | |
+| Turn start: submit accepted to provider request sent (scripted backend) | median <= 350 ms; <= 3 deliveries | M1a: 255 ms, 2 frames, p99 0.5-3.0 s from GC bursts (C-20); 573 ms while ports were opened per turn (J-0272, J-9191) |
+| Live delta: provider chunk in adapter to WS frame out | median <= 5 ms; 0 deliveries per delta | M1a: 0.17-0.18 ms to an in-process subscriber; 18 ms through a control client (J-9173, J-9191) |
 | Deliveries per model round | <= 1 + ceil(round seconds / 10) + tool results | |
 | Tool intents per round | in the round-final delivery, 0 extra | |
-| Turn lease | 1 delivery per turn | |
+| Turn lease | 1 delivery per turn | M1a: a plain turn is 4 session deliveries including the lease answer (J-9191) |
 | `exec` trivial call (session -> exec vat -> session) | median <= 250 ms | vat -> adapter -> vat 70-76 ms per answered call (J-9043) |
 | `exec` first call in a session (spare exec vat) | <= 750 ms | a spare take is 157-176 ms (J-9045); was 1.5 s |
 | `exec` 100 answered sends / 100 `sendOnly` | <= 8 s / <= 1 s; answered **depends on C-7** | S1 from a probe vat: 100 answered 9.4-10.6 s until all answers were back, 100 `sendOnly` 490-513 ms (J-0143, before CORE-4) |
-| Session create with spare pool / without | <= 750 ms / <= 6 s; without **depends on C-5** | take 157-176 ms (was 1.5 s); cold 6.4 s for a 246 KB program (J-9045) |
-| `session.program` session program bundle size | <= 200 KB | (new) |
+| Session create with spare pool / without | <= 750 ms / <= 6 s; without **depends on C-5** | take 157-176 ms (was 1.5 s); cold 6.4 s for a 246 KB program (J-9045); M1a cold 6.14 s for the 157 KB session program (J-9192) |
+| `session.program` session program bundle size | <= 200 KB | M1a: 157,493 bytes (J-9192) |
 | Session list, 100 sessions | <= 200 ms per 50-row page; 0 session vats woken | |
 | Session watch snapshot, 1,000-turn session | <= 300 ms; <= `frameBytes` | |
-| History page (32 turns) | <= 300 ms | |
+| History page (32 turns) | <= 300 ms | M1a: 0.77 ms in Node with the structural guard (18 ms strict); not measured in a vat (J-9153) |
 | Queue enqueue while a turn runs, round trip from the browser | median <= 150 ms | |
 | Concurrent: 10 sessions streaming with tool rounds at once | per-session turn start <= 2 x single; crank p95 <= 200 ms; row push <= 500 ms | |
 | Daemon throughput: deliveries per second at saturation | recorded; journal if < 50/s | adapter-to-adapter 82 events/s; a vat's batched `sendOnly` 236/s (J-0163, C-2) |
 | `hub.json` after 1,000 turns with a UI attached / after 50 sessions | <= 2 MB; ms per delivery <= 1.25 x fresh | 43 KB -> 630-690 KB during 2,000 hops, 110 KB at rest (J-0163) |
 | Checkpoint stall: turn latency while a busy session vat snapshots | p99 <= 1 s | |
-| Restart to serving, 50 idle sessions (checkpointed), no vat crashing | <= 15 s; 0 idle session vats woken | 4.4-5.8 s with 0-50 sleeping vats, 0 woken (J-9045, J-9050) |
-| Restart to serving with one session vat crashing on every replay (bound 5) | <= 15 s; recorded; **depends on C-8, C-9** | 35.8 / 68.5 / 36.4 s (J-9046) |
-| Restart to serving after SIGKILL with unsnapshotted vats | recorded; **depends on C-3** for growth | 11.0 -> 18.2 s over 24 kills with idle sleep 1 h (J-9044) |
+| Restart to serving, 50 idle sessions (checkpointed), no vat crashing | <= 15 s; 0 idle session vats woken | 4.4-5.8 s with 0-50 sleeping vats, 0 woken (J-9045, J-9050); M1a 10 idle + 1 in flight: 6.1-9.7 s, only the in-flight session woken, 5 of 5 runs (J-9192) |
+| Restart to serving with one session vat crashing on every replay (bound 5) | <= 15 s; recorded; **depends on C-8, C-9** | 35.8 / 68.5 / 36.4 s (J-9046); M1a session vat 20.3-20.5 s, plain vat 35.7 s (J-9192) |
+| Restart to serving after SIGKILL with unsnapshotted vats | recorded; **depends on C-3** for growth | 11.0 -> 18.2 s over 24 kills with idle sleep 1 h (J-9044); M1a one awake session 8.8-9.3 s, asleep 5.1-5.6 s (J-9190) |
 | Restart with 20 sessions that have environments | <= 15 s; 0 containers started | |
 | Clean shutdown, 50 sessions | <= 5 s | small state closes in 1.9 s (J-0147) |
 | Disk per idle session (session vat only / with exec vat) | <= 25 MB / <= 50 MB | 17.3 MB per sleeping vat (J-9045) |
@@ -1003,6 +1105,7 @@ milestone by itself.
 | TTS first audio after first sentence (warm) | <= 1 s (real engine) | |
 | Factory install of the bundled program, up to 300 k characters | <= 15 s (was 30 s) | 11.6 s ASCII, 14.0 s for 478 KB of mixed text (J-0193) |
 | `template.start` copy + start to serving | <= 10 s (was 20 s) | 5.6 s (J-9045) |
+| OCapN GC burst: turn start while a peer releases 100+ objects | median <= 350 ms; p99 recorded, <= 1 s **depends on C-20** | M1a: median 248 ms, p99 0.52 s, max 4.0 s with 6 session cranks (J-9192) |
 
 ---
 

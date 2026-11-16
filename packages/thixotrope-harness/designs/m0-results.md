@@ -10,7 +10,12 @@ rebuilt it byte-identically) and the crank budget is 50 M. Paths: `pkg/` = `pack
 
 Pages: 1 settings and margins; 2 inbound cost, measured causes; 3 changes outside the harness,
 commit by commit; 4 decisions confirmed and how the mechanisms behave; 5 crashes, halts and restart
-after PR 1667; 6 open core-change candidates; 7 performance so far; 8 not done.
+after PR 1667; 6 core-change candidates and their status; 7 performance so far; 8 not done.
+
+Pages 3 and 6 are kept current after M0: they also list the core changes and candidates that M1a
+and its hardening produced (C-16..C-20; engine and core commits up to `2b273930ab`). Since
+`9828522485` the release worker is `7cda4467...`; M1a's own measurements are in `milestones.md`
+(M1a outcome) and `JOURNAL.md` J-0200..J-0296, J-9100..J-9200.
 
 ---
 
@@ -95,6 +100,15 @@ This is the list an upstream reviewer needs. Harness-only commits are not listed
 | `3f2b90954e` | merge of upstream PR 1667 (`6a7cdc5e15..a96d4e20f4`) | crash classification (`WorkerCrashError`), a persisted crash count with doubling retries, startup that waits out a crashing vat, `standDown()`, snapshot-retry cadence, `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` | upstream; merged without conflict with `63927edaba` (J-9040) |
 | `042171c094` | `pkg` `package.json`, `index.js`, new `supervisor.js`, `local-control.js`, README | export `serveThixotrope` and `connectLocalControl` (subpaths and main entry); their 52-module graph imports no `node:` builtin | the harness's public surface (architecture D-1) was reachable only by relative path (J-0132, J-9022) |
 | `0a4bdb3826` | `ironhorse-snapshot` test fixtures | re-pin the three snapshot goldens (3-run procedure: plain, deterministic-math, plain) | `1d44da02d0` moved the boot fingerprint without re-pinning (J-9000..J-9002) |
+| `9828522485` | `ironhorse-vm` (+ tests `index_attribute_matrix.rs`, `ironhorse-snapshot/tests/index_attributes_carry.rs`) | `GET_LOCAL` and the with/eval read return a value without the binding's attribute bits (as XS `mxPushSlot`); the `push` fast path, `array_item_set` and the ordinary index store create elements with flag 0; `Interp::push` debug-asserts that no pushed value carries attribute bits | C-16: `const x = {}; a.push(x); a.splice(0, 1)` threw "C: xsSet ?: not writable"; a `const` local's read-only flag rode onto the stack and into new elements (J-9100, J-9101). Boot fingerprint, snapshot goldens and golden computrons unchanged; the worker binary changed (`c2f65dbe...` -> `7cda4467...`) |
+| `d6f4e38b9b` | `pkg` Ironhorse lane | `test/ironhorse/element-attributes.js` | lane regression for C-16 through the real worker (66 scenarios since) |
+| `18c8f633ee` | `pkg` `net/hub.js`, `core/daemon.js`, `control/supervisor.js` | the hub counts OCapN GC frames by session and direction; `status()` has a `gc` field | measuring C-17 (J-9120) |
+| `f8bf23c62d` | `pkg` `core/durable-worker-transport.js`, `ironhorse/ironhorse-engine.js`, `core/worker-engine.js`, `net/hub.js`, `core/daemon.js`, `control/measured-engine.js` (+ `test/worker-gc-cranks.test.js`) | a GC frame toward a worker is journaled with `gc: true` and not delivered alone; a run of them enters with the next ordinary frame, in order and before it, or alone once 64 have gathered (`GC_FRAMES_PER_CRANK`); crank boundaries are a pure function of the journal (`journalCranks`), so replay delivers the same cranks; Ironhorse `deliverBatch` runs a crank's frames as one evaluation, one drain and one collection; the startup sweep resumes only workers owed a crank; the hub releases a retired session's rows in one batch per destination | C-17: GC bursts from adapters cost one full crank per frame (turn start p99 3.3-4.6 s) and woke every idle session at the first restart after setup (J-9120..J-9122) |
+| `a46f505035` | `pkg` `core/daemon.js` | a worker row's `journalLength` is its delivery frontier; new `heldFrames`, `wakes`, `cranks` | held GC frames read as "unsnapshotted" to every existing caller (J-9122, J-9123) |
+| `2b273930ab` | `pkg` lane fixtures `test/ironhorse/_fixture.js`, `process-daemon.mjs` | fault injectors treat a `deliverBatch` that contains the target frame as that frame's crank | after `f8bf23c62d` their faults never fired (lane 62/66, then 66/66) (J-9126) |
+
+Any engine wrapper that intercepts `deliver` must also intercept `deliverBatch` (or drop it, which
+makes the transport deliver frame by frame) since `f8bf23c62d` (J-9126).
 
 Every boot change (`b10254b252`, `1d44da02d0`, `54a42f5eec`, `63927edaba`) changes the boot digest,
 so existing Ironhorse state directories are refused cleanly with `BootLayoutMismatch` (J-9001). Any
@@ -197,13 +211,37 @@ The design consequences are in architecture sections 2 (D-17), 4.4, 6 and 11.
 
 ---
 
-## 6. Open core-change candidates
+## 6. Core-change candidates and their status
 
-None of these is made; each is for the PM and the core owner. "Cost if left alone" is what the
-harness pays, already reflected in the architecture.
+For the PM and the core owner. "Cost if left alone" is what the harness pays, already reflected in
+the architecture. Status: **open** (not made), **closed** (made; commit given), **partly** (made in
+part; the rest stays open). C-1..C-15 came from M0, C-16..C-20 from M1a and its hardening
+(J-0271, J-0276, J-0277, J-0290, J-9100..J-9127, J-9154).
 
-| id | candidate | evidence | cost to the harness if left alone |
-|---|---|---|---|
+| id | candidate | status | evidence | cost to the harness if left alone |
+|---|---|---|---|---|
+| C-1 | `hub.json` holds frames bound for transient (`discardOnRestart`) sessions in clear (hex): `flushOutbox` persists before splicing the queue | open | J-0164: marker in 1,001 of 1,020 versions during 1 KiB hops; none at rest | No secret, token or provider payload may cross the hub, not even adapter to adapter; everything secret stays in the agent-host process (D-6). Write amplification on every frame. |
+| C-2 | Whole-file `hub.json` rewrite with fsync, about 2.6 times per answered hop, on the supervisor's single thread | open; now also the main cost of a GC burst (C-20) | J-0163: 5,379 rewrites for 2,000 hops; file 43 KB -> 630-690 KB under load, 110 KB at rest | About 12 ms of host time per frame; adapter-to-adapter traffic about 80 frames/s daemon-wide [inferred]; streams must stay inside one adapter process; throughput and `hub.growth` budgets at risk under many sessions. |
+| C-3 | Restart replays every unsnapshotted journal suffix, and each crash adds to it | open | J-0166: 12.6 -> 26.1 s over 24 SIGKILLs (idle sleep 1 h); J-9044: 11.0 -> 18.2 s; M1a: a session awake at the kill serves in 8.8-9.3 s, asleep in 5.1-5.6 s (J-9190) | Tests and production must checkpoint idle vats quickly (`idleSleepMs` 2,000 in tests); the healthy-restart budget holds only for checkpointed vats. |
+| C-4 | The control-socket path is kept in a vat heap (`pkg/resources/control/durable.js:77-90`) and re-registered at each start | open | J-0181 | A running state directory must never be copied (the copy's adapter could touch the original's socket); templates are built at a throwaway path. Harmless otherwise. |
+| C-5 | SES `harden` of each inbound frame allocates one descriptor object per byte | open | J-0190, J-0194: about 10 us per byte; halt above 94 KB at 50 M; M1a cold create 5.9-6.2 s for a 143-157 KB program (J-0281, J-9192) | `frameBytes` stays 24,576; every large text is a Blob; program sources are staged: install 11.6 s per 300 KB, cold session create at its 6 s budget, `vat.evaluateProgram` 150 k 2.2-2.3 s (over its 2 s target). Fix: the pipe does not harden bytes it owns, or a native harden of TypedArrays. |
+| C-6 | Each vat's 16-bit name table is permanent: about 57,000 names after boot, never released | open | J-0191; M1a acceptance 9 (2,000-key arguments kept as text) | One data-dependent record can permanently halt a session vat. The harness forbids data-dependent record keys (guest rule 12.10) and the gateway refuses records with undeclared keys (section 7). |
+| C-7 | A full GC after every crank (`rust/thixotrope-ironhorse-worker/src/main.rs:185-190,240-265`) | open; its worst effect (one crank per GC frame) is removed by C-17 | ping floor 55-57 ms, about 44 ms of engine time per delivery (J-0193); M1a: 60-80 ms per vat hop, which set turn start at 573 ms before ports were held (J-0272) | Each delivery costs about 56 ms; one vat handles about 15-18 deliveries per second; each answer of an answered send is a delivery (100 answered sends 9.4-10.6 s, J-0143), which puts `exec.sends` (100 answered <= 8 s) at risk. A GC-only crank (64 held frames) still pays it (J-9127 (2)). |
+| C-8 | Startup waits for every crashing vat before opening the control socket and running start notices | open | J-9046, J-9051; M1a `restart.crashingSession` 20.4-20.6 s at bound 5 (J-0280, J-9125, J-9192) | One vat crashing on every replay makes the whole harness unreachable for 20-64 s (bound 5) or at least 315 s (watchdog). The restart budget with a crashing vat cannot be met (section 11 keeps the target, marked). Fix: serve first and retry crashing vats in the background. |
+| C-9 | Crash progress is judged by the interrupted frame, not by completed deliveries | open | J-9047 | Give-up time is a floor of 15 s, not a bound; under jittered external kills the startup wait grows towards journal length x bound x 60 s. |
+| C-10 | A guest-to-guest call pending into a vat given up during startup never breaks | open; M1a's held ports add one exposure | J-9048 (reproducer `perf/crash.perf.mjs` phases a/b); J-9154 | Recovery must never wait on a guest call's settlement after a restart. Since ports are held, the decision for a turn killed before `dispatching` waits for a reopen through the manager vat (contract 7.1 case 2): if that vat was given up during startup the turn stays `running` until `Turn.cancel()`. |
+| C-11 | No reinstate for a given-up vat (clear `failure`, keep the journal) | open | J-9049, J-9051 | A session vat that crashes repeatedly is lost with its transcript (still on disk, unusable). Conflicts with "transcript content is never deleted". |
+| C-12 | `HostAllocationFailed` is sent as `fatal` and recorded as a halt; an allocation abort (SIGABRT) counts as a crash | open | J-9040 | A host-side allocation failure quarantines a vat at once although the worker asks for a restore. Rare. |
+| C-13 | `STAGING_FRAME_BYTES` is a second copy of `frameBytes` in core, and no caller passes `chunkChars` | open | J-0122 | Changing `frameBytes` needs a core commit; `test/limits.test.js` guards the equality. |
+| C-14 | Documentation: `pkg/README.md` says async-generator suspensions do not persist (they do, J-0147); `pkg/src/native/contract.js` forbids foreign remotables in specs (they work, J-0162); `thix status` does not report the attempt bound | open | J-0147, J-0162, J-9023 | Misleads builders; no runtime cost. |
+| C-15 | Polyfill corners: `TextEncoder.encode(Symbol())` does not throw; the XS path of `polyfills.js` and the XS `fromBase64` switch were not executed; `ironhorse-262` cannot build here (`xs-oracle` sources absent) | open | J-0197, J-0114 | None for the Ironhorse-only harness. |
+| C-16 | Ironhorse VM: an element pushed onto an array from a `const` local came out non-writable, so `splice`/`shift` on it threw "C: xsSet ?: not writable" | **closed** (`9828522485`, lane `d6f4e38b9b`) | J-0271 (acceptance 4 ran one message three times), J-9100..J-9102: `GET_LOCAL` pushed the binding's `XS_DONT_SET_FLAG` with the value; 42/552 source x store pairs failed before, none after | None now. The harness workarounds (the `Set`-based queue, J-0292's no-in-place-move rewrites) are no longer needed for correctness and stay as they are. Old state directories are refused (the worker digest changed), so no damaged element carries forward. |
+| C-17 | OCapN GC frames were vat deliveries: one full crank per frame, and a frame for a sleeping vat woke it | **closed** (`f8bf23c62d`, `a46f505035`; counters `18c8f633ee`) | J-0276, J-0277, J-0294; J-9120..J-9125: turn start p99 3,274 -> 433 ms, session cranks per turn 6.55 -> 4.01, idle sessions woken at the first restart 10 -> 0 | Semantics now: a vat's memory held only by references a peer dropped is reclaimed at its next ordinary crank (or after 64 GC frames), not at once; an idle vat keeps up to 64 held frames across sleeps (3-6 per idle session measured); the crank boundary rule is part of the replay contract. What remains is C-20 and the open parts listed in J-9127: GC-only cranks keep the full collection, XS has no `deliverBatch`, held frames are not flushed at a sleep. |
+| C-18 | The only signal of "the callee's session is gone" is an ordinary `Error` whose message is the hub's text | open | J-0290: a model-chosen argument quoted in a tool error faked a restart until `isRetiredBreak` became an exact match | The harness decides restart versus tool failure by an exact string (`guest/lib/retired.js`) and must keep adapter tools from rejecting with that text. Fix: a typed break (an error kind or a distinct rejection class from the hub). |
+| C-19 | A vat is never told that an adapter incarnation it holds references into has died, unless it has a call pending into it | open | J-9154; contract 7.1 | Held ports make the session tell "in flight at the restart" from "claimed after it" by comparing two clocks (`TurnStarted.at` against the ports' `since`); the first turn after an unannounced restart pays a reopen (A, break, B, C; 777-989 ms end to end against about 250 ms, J-9190). Fix: an incarnation number on every adapter presence, or a hub query "has this presence's session restarted", answered locally. |
+| C-20 | Each incoming GC frame costs the supervisor a whole-`hub.json` persist and a durable journal append (fsync) per outgoing frame | open | J-9127 (1): a 78-frame burst cost 2.2 s with 5 session cranks; `turn.delta.client` p95 564 ms during a 39-frame burst on a path that never enters a vat; J-9191 | GC bursts from adapters (and from the M3 gateway) delay every hub-crossing message, including control-client and gateway traffic, by up to 1-2 s. Fix (J-9127 (a)): one table pass and one `persist()` per run of incoming GC frames from one session, one fsync per flush to a worker journal; measure first with a hub timer. |
+
+---|---|---|---|
 | C-1 | `hub.json` holds frames bound for transient (`discardOnRestart`) sessions in clear (hex): `flushOutbox` persists before splicing the queue | J-0164: marker in 1,001 of 1,020 versions during 1 KiB hops; none at rest | No secret, token or provider payload may cross the hub, not even adapter to adapter; everything secret stays in the agent-host process (D-6). Write amplification on every frame. |
 | C-2 | Whole-file `hub.json` rewrite with fsync, about 2.6 times per answered hop, on the supervisor's single thread | J-0163: 5,379 rewrites for 2,000 hops; file 43 KB -> 630-690 KB under load, 110 KB at rest | About 12 ms of host time per frame; adapter-to-adapter traffic about 80 frames/s daemon-wide [inferred]; streams must stay inside one adapter process; throughput and `hub.growth` budgets at risk under many sessions. |
 | C-3 | Restart replays every unsnapshotted journal suffix, and each crash adds to it | J-0166: 12.6 -> 26.1 s over 24 SIGKILLs (idle sleep 1 h); J-9044: 11.0 -> 18.2 s | Tests and production must checkpoint idle vats quickly (`idleSleepMs` 2,000 in tests); the healthy-restart budget holds only for checkpointed vats. |
@@ -263,11 +301,11 @@ row's tag (`-dirty` = spike files only differed); all at 50 M unless stated.
 - The XS side of the polyfill change is not executed; test262 parity (`ironhorse-262`) was not re-run
   (J-0111, J-0114, J-0197).
 - The root cause of C-10 is not determined (J-9048).
-- `H/test/spikes/_crash.js` still spawns the supervisor child without the parent pipe, so a killed
-  spike process can leave a supervisor behind (J-9025).
+- `H/test/spikes/_crash.js` spawned the supervisor child without the parent pipe (J-9025); fixed in
+  M1a (`efb8a288c1`, J-9174), not re-run since.
 - `perf/install.perf.mjs`, `test/limits.test.js` and `test/spikes/s6.test.js` import
   `pkg/src/core/evaluate-source.js` by relative path on purpose (core internals measured) (J-9022).
 - A shutdown error the core swallows inside `supervisor.close()` cannot be seen by `serve.mjs`
   (J-9021).
-- Session-program size was measured only for a generated 246 k program; the real session program
-  size is first known in M1a.
+- Session-program size was measured only for a generated 246 k program; M1a measured the real
+  one (`session.program`, `milestones.md` M1a outcome).
