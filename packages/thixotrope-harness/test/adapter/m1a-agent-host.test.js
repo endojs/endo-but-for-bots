@@ -20,7 +20,12 @@ import {
   textOf,
 } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
-import { messageBytes } from '../../guest/lib/bounded.js';
+import { fitsFrame, messageBytes } from '../../guest/lib/bounded.js';
+import {
+  HUB_RETIRED_MESSAGE,
+  RETIRED_TEXT,
+  isRetiredBreak,
+} from '../../guest/lib/retired.js';
 /* eslint-enable import/no-relative-packages */
 import { make as makeManagerVat } from '../../resources/agent-host/durable.js';
 import {
@@ -521,46 +526,92 @@ test('echo: text, bytes, delay, and the output bounds', async t => {
   );
 });
 
-test('echo: argument errors use the R4-43 / R4-45 texts', async t => {
+test('echo: argument errors use the R4-43 / R4-45 texts, answered as failed outcomes', async t => {
+  /** @type {any[]} */
+  const echoLog = [];
+  const echo = makeEchoTool({
+    timers,
+    log: (kind, fields) => echoLog.push({ kind, ...fields }),
+  });
+  /** @param {string} args */
+  const run = args => E(echo).execute(harden({ opId: 'op', args }));
+  /** @param {string} text */
+  const failed = text => harden({ status: 'failed', text });
+  const notJson = await run('{nope');
+  t.is(notJson.status, 'failed');
+  t.regex(
+    notJson.text,
+    /^could not parse tool arguments as JSON \(.+\)\. Re-send this tool call with valid JSON arguments\.$/,
+  );
+  t.deepEqual(
+    await run('[1]'),
+    failed(textOf.invalidArgument('args', 'echo', 'a JSON object')),
+  );
+  t.deepEqual(
+    await run('null'),
+    failed(textOf.invalidArgument('args', 'echo', 'a JSON object')),
+  );
+  t.deepEqual(
+    await run('{"text":"a","colour":1}'),
+    failed(
+      textOf.unexpectedArgument('colour', 'echo', [
+        'text',
+        'delayMs',
+        'bytes',
+        'data',
+      ]),
+    ),
+  );
+  t.deepEqual(
+    await run('{"text":5}'),
+    failed(textOf.invalidArgument('text', 'echo', 'a string')),
+  );
+  t.deepEqual(
+    await run('{"delayMs":-1}'),
+    failed(
+      textOf.invalidArgument(
+        'delayMs',
+        'echo',
+        `a number from 0 to ${limits.maxDelayMs}`,
+      ),
+    ),
+  );
+  t.deepEqual(
+    await run('{"bytes":"9"}'),
+    failed(
+      textOf.invalidArgument(
+        'bytes',
+        'echo',
+        `a number from 0 to ${limits.echoMaxUnits}`,
+      ),
+    ),
+  );
+  t.deepEqual(
+    echoLog.map(line => line.kind),
+    [...Array(7)].flatMap(() => ['echo-start', 'echo-failed']),
+  );
+});
+
+test('echo: an argument error that quotes the hub break text is not a break (QC 1)', async t => {
   const echo = makeEchoTool({ timers });
   /** @param {string} args */
   const run = args => E(echo).execute(harden({ opId: 'op', args }));
-  const notJson = await t.throwsAsync(run('{nope'));
-  t.regex(
-    notJson?.message ?? '',
-    /^could not parse tool arguments as JSON \(.+\)\. Re-send this tool call with valid JSON arguments\.$/,
+  // Before QC 1 both of these rejected with an Error whose message contained
+  // the retired text, which the session took for a daemon restart.
+  const outcomes = await Promise.all(
+    [`{"${HUB_RETIRED_MESSAGE}":1}`, `${HUB_RETIRED_MESSAGE}`].map(run),
   );
-  await t.throwsAsync(run('[1]'), {
-    message: textOf.invalidArgument('args', 'echo', 'a JSON object'),
-  });
-  await t.throwsAsync(run('null'), {
-    message: textOf.invalidArgument('args', 'echo', 'a JSON object'),
-  });
-  await t.throwsAsync(run('{"text":"a","colour":1}'), {
-    message: textOf.unexpectedArgument('colour', 'echo', [
-      'text',
-      'delayMs',
-      'bytes',
-      'data',
-    ]),
-  });
-  await t.throwsAsync(run('{"text":5}'), {
-    message: textOf.invalidArgument('text', 'echo', 'a string'),
-  });
-  await t.throwsAsync(run('{"delayMs":-1}'), {
-    message: textOf.invalidArgument(
-      'delayMs',
-      'echo',
-      `a number from 0 to ${limits.maxDelayMs}`,
-    ),
-  });
-  await t.throwsAsync(run('{"bytes":"9"}'), {
-    message: textOf.invalidArgument(
-      'bytes',
-      'echo',
-      `a number from 0 to ${limits.echoMaxUnits}`,
-    ),
-  });
+  for (const outcome of outcomes) {
+    t.is(outcome.status, 'failed');
+    t.false(isRetiredBreak(Error(outcome.text)));
+  }
+  const quoted = await run(`{"${HUB_RETIRED_MESSAGE}":1}`);
+  t.true(quoted.text.includes(RETIRED_TEXT), 'the R4-43 text quotes the key');
+  // An argument error whose text is over the frame (60 KB) is cut to fit.
+  const huge = await run(`{"${'\u20ac'.repeat(20_000)}":1}`);
+  t.is(huge.status, 'failed');
+  t.true(String(huge.text).length < 20_000);
+  t.true(fitsFrame(huge));
 });
 
 test('deadlines: armDeadline calls sink.deadline; disarm and release cancel', async t => {

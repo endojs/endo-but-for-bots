@@ -893,6 +893,45 @@ test('restart: a retired break on a tool call is never a tool failure', async t 
   t.is(kinds.at(-1), 'turn-resolved');
 });
 
+test('restart: a tool rejection that only quotes the retired text is a tool failure (QC 1)', async t => {
+  // The model chose the argument name; echo's R4-43 text quotes it. The
+  // session must not read that as a hub break and fake a restart.
+  const s = setup();
+  const receipt = await submit(s);
+  s.lastRound().sink.dispatching(0);
+  s.lastRound().sink.roundFinal(
+    result(0, '', [echoCall(`{"${RETIRED_TEXT}":1}`)]),
+  );
+  await drain();
+  const quoted = textOf.unexpectedArgument(RETIRED_TEXT, 'echo', [
+    'text',
+    'delayMs',
+    'bytes',
+    'data',
+  ]);
+  s.toolCalls[0].kit.reject(Error(quoted));
+  // A message queued behind the turn must not be held 'restart'.
+  s.session.enqueueOnce(harden({ text: 'next' }), requestId(), AT);
+  await drain();
+  t.is(receipt.turn.getStatus().state, 'running');
+  const results = s.session
+    .getCurrentTurn()
+    .history.records.filter((/** @type {any} */ r) => r.kind === 'tool-result');
+  t.deepEqual(
+    results.map((/** @type {any} */ r) => [r.result, r.outcome]),
+    [[textOf.errorResult(quoted), undefined]],
+  );
+  t.is(s.rounds.length, 2, 'the next round was requested');
+  t.is(s.session.listPending().hold, undefined);
+  // A real hub break (the exact hub message) is still a restart.
+  s.lastRound().sink.dispatching(1);
+  s.lastRound().sink.roundFinal(result(1, '', [echoCall()]));
+  await drain();
+  s.toolCalls[1].kit.reject(retired());
+  await drain();
+  t.is(receipt.turn.getStatus().state, 'outcome-unknown');
+});
+
 test('Turn.resolve refuses with the fixed texts', async t => {
   const s = setup();
   const receipt = await submit(s);

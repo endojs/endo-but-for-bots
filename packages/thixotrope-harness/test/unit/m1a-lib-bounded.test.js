@@ -291,7 +291,14 @@ test('isRetiredBreak recognises the hub text and nothing else', t => {
   t.true(
     isRetiredBreak(Error('ocapn hub: the target session has been retired')),
   );
-  t.true(isRetiredBreak(harden({ message: `x ${RETIRED_TEXT} y` })));
+  // Exact match only: an error that quotes the text is not a break (QC 1).
+  t.true(isRetiredBreak(harden({ message: `ocapn hub: ${RETIRED_TEXT}` })));
+  t.false(isRetiredBreak(harden({ message: `x ${RETIRED_TEXT} y` })));
+  t.false(isRetiredBreak(Error(RETIRED_TEXT)));
+  t.false(
+    isRetiredBreak(Error(`Unexpected argument "ocapn hub: ${RETIRED_TEXT}"`)),
+  );
+  t.false(isRetiredBreak(Error(`ocapn hub: ${RETIRED_TEXT} `)));
   t.false(isRetiredBreak(Error('the target session has been suspended')));
   t.false(isRetiredBreak(Error('tool failed')));
   t.false(isRetiredBreak(RETIRED_TEXT));

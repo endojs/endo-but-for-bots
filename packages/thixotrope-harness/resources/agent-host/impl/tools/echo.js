@@ -5,8 +5,11 @@
  *
  * Its arguments arrive as the model's JSON text and are parsed here, in
  * the callee, never in a vat (rule 12.10): a 2,000-key object reaches it
- * intact and is logged as received. Argument errors reject with the R4-43 /
- * R4-45 texts. The output is cut in the callee to `toolOutputUnits` with
+ * intact and is logged as received. Argument errors are answered as a
+ * `failed` outcome carrying the R4-43 / R4-45 text, never as a rejection:
+ * those texts quote words the model chose, and a rejection from an adapter
+ * tool is how the session sees a hub break (M1a QC finding 1, J-0290). Only
+ * a real CapTP break (or a defect in this file) rejects. The output is cut in the callee to `toolOutputUnits` with
  * the R4-46 marker; an answer still over `frameBytes` (exact UTF-8) is not
  * sent: the outcome is `frame-limit` and the session fails the turn.
  *
@@ -21,6 +24,7 @@ import {
 } from '../../../../guest/lib/interfaces.js';
 import {
   boundToolOutput,
+  cutText,
   fitsFrame,
   previewText,
 } from '../../../../guest/lib/bounded.js';
@@ -40,6 +44,62 @@ const inRange = (value, max) =>
   value <= max;
 
 /**
+ * Check echo's arguments. Returns the parsed record, or the R4-43 / R4-45
+ * error text (which may quote text the model chose).
+ *
+ * @param {string} args
+ * @returns {string | Record<string, unknown>}
+ */
+const checkArgs = args => {
+  /** @type {unknown} */
+  let parsed;
+  try {
+    parsed = JSON.parse(args);
+  } catch (error) {
+    return textOf.argumentsNotJson(
+      /** @type {Error} */ (error)?.message ?? String(error),
+    );
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    return textOf.invalidArgument('args', 'echo', 'a JSON object');
+  const record = /** @type {Record<string, unknown>} */ (parsed);
+  const unexpected = Object.keys(record).find(
+    key => !echoArgumentNames.includes(key),
+  );
+  if (unexpected !== undefined)
+    return textOf.unexpectedArgument(unexpected, 'echo', echoArgumentNames);
+  const { text, delayMs = 0, bytes } = record;
+  if (text !== undefined && typeof text !== 'string')
+    return textOf.invalidArgument('text', 'echo', 'a string');
+  if (!inRange(delayMs, limits.maxDelayMs))
+    return textOf.invalidArgument(
+      'delayMs',
+      'echo',
+      `a number from 0 to ${limits.maxDelayMs}`,
+    );
+  if (bytes !== undefined && !inRange(bytes, limits.echoMaxUnits))
+    return textOf.invalidArgument(
+      'bytes',
+      'echo',
+      `a number from 0 to ${limits.echoMaxUnits}`,
+    );
+  return record;
+};
+
+/**
+ * A `failed` outcome whose text fits `toolOutputUnits` and the frame. The
+ * session writes it as `Error: <text>` (R4-45).
+ *
+ * @param {string} message
+ */
+const failedOutcome = message => {
+  let text = boundToolOutput(message);
+  if (!fitsFrame(harden({ status: 'failed', text })))
+    text = cutText(text, limits.frameBytes - 1024);
+  return harden({ status: 'failed', text });
+};
+
+/**
  * @param {object} options
  * @param {import('../timers.js').Timers} options.timers
  * @param {import('../providers/scripted.js').EventLog} [options.log] the
@@ -50,51 +110,12 @@ export const makeEchoTool = ({ timers, log = () => {} }) =>
     /** @param {{ opId: string, args: string }} request */
     execute: async ({ opId, args }) => {
       log('echo-start', { opId, args });
-      /** @type {unknown} */
-      let parsed;
-      try {
-        parsed = JSON.parse(args);
-      } catch (error) {
-        throw Error(
-          textOf.argumentsNotJson(
-            /** @type {Error} */ (error)?.message ?? String(error),
-          ),
-          { cause: error },
-        );
+      const checked = checkArgs(args);
+      if (typeof checked === 'string') {
+        log('echo-failed', { opId, units: checked.length });
+        return failedOutcome(checked);
       }
-      if (
-        typeof parsed !== 'object' ||
-        parsed === null ||
-        Array.isArray(parsed)
-      )
-        throw Error(textOf.invalidArgument('args', 'echo', 'a JSON object'));
-      const record = /** @type {Record<string, unknown>} */ (parsed);
-      const unexpected = Object.keys(record).find(
-        key => !echoArgumentNames.includes(key),
-      );
-      if (unexpected !== undefined)
-        throw Error(
-          textOf.unexpectedArgument(unexpected, 'echo', echoArgumentNames),
-        );
-      const { text, delayMs = 0, bytes } = record;
-      if (text !== undefined && typeof text !== 'string')
-        throw Error(textOf.invalidArgument('text', 'echo', 'a string'));
-      if (!inRange(delayMs, limits.maxDelayMs))
-        throw Error(
-          textOf.invalidArgument(
-            'delayMs',
-            'echo',
-            `a number from 0 to ${limits.maxDelayMs}`,
-          ),
-        );
-      if (bytes !== undefined && !inRange(bytes, limits.echoMaxUnits))
-        throw Error(
-          textOf.invalidArgument(
-            'bytes',
-            'echo',
-            `a number from 0 to ${limits.echoMaxUnits}`,
-          ),
-        );
+      const { text, delayMs = 0, bytes } = checked;
       // R4-49: a cancel does not interrupt a running tool.
       if (/** @type {number} */ (delayMs) > 0)
         await timers.delay(/** @type {number} */ (delayMs));

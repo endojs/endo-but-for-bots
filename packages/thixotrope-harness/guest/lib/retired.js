@@ -13,15 +13,23 @@
  * call site (the 15-row table in m1a-interfaces.md section 7) and use this
  * predicate only to recognise the break.
  *
+ * The match is exact: the whole message must equal `HUB_RETIRED_MESSAGE`.
+ * A substring match let any error that merely quotes the text count as a
+ * break, for example a tool's argument error quoting an argument name the
+ * model chose (M1a QC finding 1, J-0290), which faked a daemon restart.
+ *
  * Runs in vats and in Node: plain JavaScript, no prelude names.
  */
 
 /** The text the hub breaks a retired session's answers with. */
 export const RETIRED_TEXT = 'the target session has been retired';
 
+/** The hub's whole break message (`hub.js` `unreachableReason` and retire). */
+export const HUB_RETIRED_MESSAGE = `ocapn hub: ${RETIRED_TEXT}`;
+
 /**
  * Whether `error` is a retired break: an object whose own or inherited
- * `message` is a string containing `RETIRED_TEXT`. Never throws: a getter
+ * `message` is exactly `HUB_RETIRED_MESSAGE`. Never throws: a getter
  * that throws, a primitive, or a record without a string message is not a
  * retired break.
  *
@@ -36,6 +44,6 @@ export const isRetiredBreak = error => {
   } catch {
     return false;
   }
-  return typeof message === 'string' && message.includes(RETIRED_TEXT);
+  return message === HUB_RETIRED_MESSAGE;
 };
 harden(isRetiredBreak);
