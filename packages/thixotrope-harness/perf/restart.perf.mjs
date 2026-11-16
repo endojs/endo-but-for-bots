@@ -6,8 +6,9 @@
  * - `restart.serving`: SIGKILL with 10 checkpointed idle sessions and one
  *   session with a turn in flight (stalled after Dispatched), then serve
  *   again; budget 10 s to serving; gate: exactly one session vat woken (the
- *   in-flight one; a vat counts as woken when its journal grew across the
- *   restart). After serving, the in-flight turn must already read
+ *   in-flight one; a vat counts as woken when its worker row reports a wake
+ *   since the start, or, from a daemon without `wakes`, when its delivery
+ *   frontier moved). After serving, the in-flight turn must already read
  *   outcome-unknown. RESTART_N runs (default 5).
  * - `restart.crashingSession`: acceptance 10 with the crash bound 5: a new
  *   session with a turn in flight, awake and unsnapshotted, SIGKILL, and its
@@ -154,7 +155,13 @@ await runPerf('restart', async ({ root }) => {
       const preview = page.turns.find(
         (/** @type {any} */ tp) => tp.turnId === turnId,
       );
-      const woken = grew.map(w => w.debugLabel);
+      // A vat is woken when its worker row counts a wake since this start
+      // (`wakes` is process-local, J-9127 (5)); a daemon that does not report
+      // `wakes` falls back to "the delivery frontier moved".
+      const counted = after.some(w => w.wakes !== undefined);
+      const woken = (
+        counted ? after.filter(w => Number(w.wakes) > 0) : grew
+      ).map(w => w.debugLabel);
       const gate = woken.length === 1 && woken[0] === `session ${flightKey}`;
       if (!gate) wrong.push(`run ${run}: woken ${woken.join(', ')}`);
       if (preview?.state !== 'outcome-unknown')
@@ -166,6 +173,13 @@ await runPerf('restart', async ({ root }) => {
           run,
           sessions: after.length,
           wokenSessions: woken,
+          wokenBy: counted ? 'wakes' : 'journal grew',
+          frontierMoved: grew.map(w => w.debugLabel),
+          heldFrames: Object.fromEntries(
+            after
+              .filter(w => Number(w.heldFrames ?? 0) > 0)
+              .map(w => [w.debugLabel, Number(w.heldFrames)]),
+          ),
           gate,
           awakeAfterServing: after.filter(w => w.awake).map(w => w.debugLabel),
           engineSinceStart: timings,
