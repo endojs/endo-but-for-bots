@@ -143,7 +143,7 @@ harness code depends on them.
 ## M1a. Headless session slice (smallest end-to-end)
 
 **Status: done.** Build commits `6e3b8692f7..91458e17b5` (W1a.0..W1a.7 and the QC fixes); hardening
-`a88ecbf159..156762e5b4` (adapter channels and tooling, ports held per adapter incarnation, settled
+`a88ecbf159..58e7b572c1` (adapter channels and tooling, ports held per adapter incarnation, settled
 turns as records, the C-16 engine fix `9828522485` and the C-17 core change `f8bf23c62d`, integration
 fixes). Journal J-0200..J-0296, J-9100..J-9127, J-9150..J-9157, J-9170..J-9174, J-9190..J-9200. The
 work-unit table below is kept as the record of what M1a was asked to do; the outcome follows it.
