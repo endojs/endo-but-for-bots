@@ -68,6 +68,15 @@ const GC_SESSIONS = Number(process.env.GC_SESSIONS ?? 10);
 const GC_RESTARTS = Number(process.env.GC_RESTARTS ?? 5);
 
 /** @param {number[]} values */
+/**
+ * Entries in a worker's journal file past its truncation point: the
+ * delivery frontier (`journalLength`) plus the GC frames held after it
+ * (`heldFrames`, where the daemon reports it).
+ * @param {any} row a worker status row
+ */
+const journaled = row =>
+  Number(row?.journalLength ?? 0) + Number(row?.heldFrames ?? 0);
+
 const median = values => {
   const s = [...values].sort((a, b) => a - b);
   return s[Math.floor(s.length / 2)];
@@ -183,11 +192,11 @@ async function burst(template, root) {
       for (let k = 0; k < 20; k += 1) {
         await delay(50);
         const again = await row();
-        if (Number(again.journalLength) === Number(after.journalLength)) break;
+        if (journaled(again) === journaled(after)) break;
         after = again;
       }
       const engineAfter = (await status()).timings;
-      const n = Number(after.journalLength) - Number(before.journalLength);
+      const n = journaled(after) - journaled(before);
       const kinds = journalTail(served.root, workerId, n);
       const cranks =
         after.cranks === undefined
@@ -352,22 +361,19 @@ async function restarts(template, root) {
         .filter((/** @type {any} */ w) =>
           counted
             ? Number(w.wakes) > 0
-            : Number(w.journalLength) >
-              Number(before.get(w.debugLabel)?.journalLength ?? 0),
+            : journaled(w) > journaled(before.get(w.debugLabel)),
         )
         .map((/** @type {any} */ w) => w.debugLabel);
       /** @type {Record<string, Record<string, number>>} */
-      const journaled = {};
+      const grown = {};
       for (const w of after) {
-        const n =
-          Number(w.journalLength) -
-          Number(before.get(w.debugLabel)?.journalLength ?? 0);
+        const n = journaled(w) - journaled(before.get(w.debugLabel));
         if (n > 0) {
           /** @type {Record<string, number>} */
           const kinds = {};
           for (const k of journalTail(served.root, w.workerId, n))
             kinds[k] = (kinds[k] ?? 0) + 1;
-          journaled[w.debugLabel] = kinds;
+          grown[w.debugLabel] = kinds;
         }
       }
       const gate = woken.length === 0;
@@ -380,7 +386,7 @@ async function restarts(template, root) {
           wokenSessions: woken,
           wokenBy: counted ? 'wakes' : 'journal grew',
           gate,
-          journaledAcrossRestart: journaled,
+          journaledAcrossRestart: grown,
           heldFrames: Object.fromEntries(
             after
               .filter((/** @type {any} */ w) => Number(w.heldFrames ?? 0) > 0)
