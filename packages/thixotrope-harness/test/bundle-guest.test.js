@@ -177,9 +177,10 @@ test('the CLI writes one bundle per program and prints JSON lines', async t => {
 
 test('escapeNonAscii keeps identifiers, strings, regexps and cooked templates', t => {
   const source =
+    // eslint-disable-next-line no-template-curly-in-string -- guest source text
     "(() => { const $h\u034f_x = 'na\u00efve \u{1F600}'; // caf\u00e9\n return [$h\u034f_x, /\u00e9+/.test('\u00e9\u00e9'), `\u2026${1}`]; })()";
   const escaped = escapeNonAscii(source);
-  t.true(/^[\x00-\x7f]*$/.test(escaped));
+  t.false(/[\u0080-\uffff]/.test(escaped));
   t.true(escaped.includes('$h\\u034f_x'));
   const evaluate = (/** @type {string} */ text) =>
     new Compartment({ __options__: true }).evaluate(text);
@@ -199,7 +200,7 @@ test('escapeNonAscii refuses what an escape would change', t => {
 
 test('the session program bundle is ASCII (J-0244: U+034F hidden names)', async t => {
   const bundle = await bundleGuest(sessionEntry, { guestRoot });
-  t.true(/^[\x00-\x7f]*$/.test(bundle.source));
+  t.false(/[\u0080-\uffff]/.test(bundle.source));
   t.is(bundle.bytes, bundle.source.length);
   t.true(bundle.source.includes('$h\\u034f_'));
   // Staged in pieces of programPieceBytes (scripts/provision-steps.js).
