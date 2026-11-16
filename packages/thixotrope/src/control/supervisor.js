@@ -669,6 +669,7 @@ export const serveThixotrope = async (
           ...(ironhorseLimits ? { ironhorse: ironhorseLimits } : {}),
           workers: daemon.inspectWorkers(),
           timings: timings(),
+          gc: daemon.inspectGc(),
         }),
       /** @param {string} source */
       evaluate: async source => {

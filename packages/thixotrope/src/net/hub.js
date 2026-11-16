@@ -312,24 +312,70 @@ export const makeOcapnHub = ({
     }
   };
 
+  /**
+   * Process-local GC diagnostics, never persisted: frames and positions of
+   * `op:gc-*` received from each session, and sent to each destination with
+   * the cause of the release (the session whose GC frame, or retirement,
+   * let the last holder go). Keyed by the JSON of `['in', kind, from]` or
+   * `['out', kind, cause, to]`.
+   *
+   * @type {Map<string, { frames: number, positions: number }>}
+   */
+  const gcCounts = new Map();
+  /** The session whose GC frame or retirement is releasing rows, if any. */
+  let gcCause = 'other';
+  /**
+   * @param {string[]} parts
+   * @param {number} frames
+   * @param {number} positions
+   */
+  const countGc = (parts, frames, positions) => {
+    const key = JSON.stringify(parts);
+    const counts = gcCounts.get(key) ?? { frames: 0, positions: 0 };
+    counts.frames += frames;
+    counts.positions += positions;
+    gcCounts.set(key, counts);
+  };
+  /**
+   * @param {string} destination
+   * @param {Record<string, any>} message
+   */
+  const sendGcFrame = (destination, message) => {
+    const positions =
+      message.type === 'op:gc-answers'
+        ? message.answerPositions
+        : message.exportPositions;
+    countGc(['out', message.type, gcCause, destination], 1, positions.length);
+    sendMessage(destination, message);
+  };
+
   const gcBatching = true;
   /** @type {Map<string, ReturnType<typeof makeGcBatcher>> | undefined} */
   let gcBatches;
-  /** @param {() => void} action */
-  const withGcBatch = action => {
+  /**
+   * @param {() => void} action
+   * @param {string} [cause] the session whose frame or retirement this is
+   */
+  const withGcBatch = (action, cause = undefined) => {
     if (!gcBatching || gcBatches) {
       action();
       return;
     }
     const batches = new Map();
     gcBatches = batches;
+    const outerCause = gcCause;
+    if (cause !== undefined) gcCause = cause;
     try {
       action();
     } finally {
       gcBatches = undefined;
-      // Still inside deliveryDepth: all frame bytes and the source watermark
-      // commit together before any destination can observe the batch.
-      for (const batch of batches.values()) batch.flush();
+      try {
+        // Still inside deliveryDepth: all frame bytes and the source watermark
+        // commit together before any destination can observe the batch.
+        for (const batch of batches.values()) batch.flush();
+      } finally {
+        gcCause = outerCause;
+      }
     }
   };
   /**
@@ -338,12 +384,12 @@ export const makeOcapnHub = ({
    */
   const sendGcMessage = (destination, message) => {
     if (!gcBatches) {
-      sendMessage(destination, message);
+      sendGcFrame(destination, message);
       return;
     }
     let batch = gcBatches.get(destination);
     if (!batch) {
-      batch = makeGcBatcher(notice => sendMessage(destination, notice));
+      batch = makeGcBatcher(notice => sendGcFrame(destination, notice));
       gcBatches.set(destination, batch);
     }
     batch.send(message);
@@ -1766,6 +1812,11 @@ export const makeOcapnHub = ({
         return;
       }
       case 'op:gc-exports': {
+        countGc(
+          ['in', 'op:gc-exports', sessionKey],
+          1,
+          message.exportPositions.length,
+        );
         withGcBatch(() => {
           const exportPositions = /** @type {Array<bigint>} */ (
             message.exportPositions
@@ -1796,11 +1847,16 @@ export const makeOcapnHub = ({
             }
             dirty = true;
           }
-        });
+        }, sessionKey);
         persist();
         return;
       }
       case 'op:gc-answers': {
+        countGc(
+          ['in', 'op:gc-answers', sessionKey],
+          1,
+          message.answerPositions.length,
+        );
         withGcBatch(() => {
           for (const position of message.answerPositions) {
             const key = String(position);
@@ -1828,7 +1884,7 @@ export const makeOcapnHub = ({
               }
             }
           }
-        });
+        }, sessionKey);
         persist();
         return;
       }
@@ -1947,12 +2003,18 @@ export const makeOcapnHub = ({
         harden(Error('ocapn hub: the target session has been retired')),
       );
     }
-    for (const row of [...refs.values()]) {
-      if (row.facing.has(sessionKey) || row.refcounts.has(sessionKey)) {
-        row.facing.delete(sessionKey);
-        row.refcounts.delete(sessionKey);
-        maybeReleaseRef(row);
+    const outerCause = gcCause;
+    gcCause = `retired ${sessionKey}`;
+    try {
+      for (const row of [...refs.values()]) {
+        if (row.facing.has(sessionKey) || row.refcounts.has(sessionKey)) {
+          row.facing.delete(sessionKey);
+          row.refcounts.delete(sessionKey);
+          maybeReleaseRef(row);
+        }
       }
+    } finally {
+      gcCause = outerCause;
     }
     // Answers the retiree owed other sessions. Each asker's route pins the
     // answer's row until the asker's collector drops the answer and it
@@ -2335,6 +2397,21 @@ export const makeOcapnHub = ({
       }
       persist();
     },
+    /**
+     * GC frames and positions this process received and sent, by session:
+     * `direction` `in` (from `from`) or `out` (to `to`, released because of
+     * `cause`: the session whose GC frame or retirement let the last holder
+     * go, or `other`). Process-local diagnostics, not hub state.
+     */
+    gcCounts: () =>
+      harden(
+        [...gcCounts].map(([key, { frames, positions }]) => {
+          const [direction, kind, a, b] = JSON.parse(key);
+          return direction === 'in'
+            ? { direction, kind, from: a, frames, positions }
+            : { direction, kind, cause: a, to: b, frames, positions };
+        }),
+      ),
     /**
      * The reachability graph for vat-level GC: which origin sessions
      * are referenced by publications, and which sessions hold

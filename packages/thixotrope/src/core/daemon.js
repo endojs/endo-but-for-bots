@@ -121,6 +121,9 @@ import {
  *   unconstrained as it was before, so an embedder that names nothing
  *   is unaffected.
  * @property {(options?: { keep?: Array<string> }) => ReturnType<typeof inspectVatReachability>} inspectReachability
+ * @property {() => ReturnType<ReturnType<typeof makeOcapnHub>['gcCounts']>} inspectGc
+ *   the GC frames and positions the hub received and sent in this process,
+ *   by session (diagnostics)
  * @property {(options?: { keep?: Array<string> }) => Promise<Array<string>>} collectVats
  * @property {() => void} standDown say that the host is going down, as
  *   soon as that is known: from here on a worker's crash is not counted
@@ -1050,6 +1053,7 @@ const buildDaemon = async (
       return E(bootstrap).fetch(encodeSwissnum(secret));
     },
     inspectReachability,
+    inspectGc: () => hub.gcCounts(),
     collectVats: async ({ keep = [] } = {}) => {
       // A kept vat its owner retires meanwhile is no longer a vat to keep.
       const live = () => keep.filter(workerId => workers.has(workerId));
