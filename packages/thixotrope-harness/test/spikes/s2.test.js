@@ -210,6 +210,10 @@ run('S2 attach pattern across SIGKILL', async t => {
     await E(vat).startPending();
     const pendingBefore = await E(vat).pendingState();
     await delay(1000);
+    const journalOf = async () =>
+      (await host.workers()).find(w => w.workerId === vatWorker)
+        ?.journalLength ?? null;
+    const jBeforeKill = await journalOf();
     const supervisorPid = host.pid;
     t0 = performance.now();
     await host.kill();
@@ -217,9 +221,7 @@ run('S2 attach pattern across SIGKILL', async t => {
     await delay(1000);
     const orphans = await adapterProcesses();
     const restarted = await host.serve();
-    const journalAt = async () =>
-      (await host.workers()).find(w => w.workerId === vatWorker)
-        ?.journalLength ?? null;
+    const journalAt = journalOf;
     const j0 = await journalAt();
     // Do not call the vat: wait for the break to arrive on its own.
     const grewMs = await waitUntil(
@@ -241,7 +243,9 @@ run('S2 attach pattern across SIGKILL', async t => {
       restart: restarted,
       pendingBefore,
       pendingAfter,
+      vatJournalBeforeKill: jBeforeKill,
       vatJournalAtServe: j0,
+      deliveredDuringStartup: Number(j0) > Number(jBeforeKill),
       vatJournalAfterWait: j1,
       journalGrewWithoutCallerMs: grewMs,
       ok: found.b,
