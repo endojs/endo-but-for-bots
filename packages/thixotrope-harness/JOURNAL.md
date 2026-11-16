@@ -4214,3 +4214,173 @@ length and the same first 1,024 units counts as the same submission.
 Decision: the `row-removed` event is in the contract and published by M2's `deleteSession`; W1b.6
 tests create and rename (PM to confirm, `m1b-interfaces.md` 16.6). The duplicate rule stands; a
 `digest` field in `StagedText` is the fix if it matters (16.8, open).
+
+### J-9210 2026-11-17 M1b C-20 transport - perf
+Evidence: `perf/hub.perf.mjs` (new, `282fac9ec5`), phase 1 (HUB_TURNS 150, one session with a
+subscriber), measured first: the hub's new process-local counters (`status().hub`, `7efa7fb3e4`) time
+every inbound `deliver`/`deliverBatch` call, the `persist()` calls inside it (serialization plus the
+atomic `hub.json` replacement) and the sends (toward a durable worker, `transport.write`: journal
+append with fsync). Before the fix (`7efa7fb3e4`, release worker `7cda4467...`, crank budget 50 M, load 1.4-1.9):
+{"metric":"hub.gcBurst","unit":"ms per incoming GC frame","value":16.703,"turns":150,"gc":{"frames":723,"deliveries":723,"persistMsPerFrame":13.923,"sendMsPerFrame":2.606,"persistsPerFrame":1.26,"sendsPerFrame":1.216,"framesPerDelivery":1,"msPerPersist":11.05,"msPerSend":2.144},"other":{"msPerFrame":11,"persistMsPerFrame":8.878,"sendMsPerFrame":1.745,"framesPerDelivery":1.42},"largestBursts":[{"gcFrames":193,"gcDeliveries":193,"gcMs":3614.3,"startMs":3828},{"gcFrames":155,"gcDeliveries":155,"gcMs":2893.7,"startMs":276},{"gcFrames":79,"gcDeliveries":79,"gcMs":1470.7,"startMs":245}],"hubJsonBytes":239787,"pass":null,"commit":"7efa7fb3e4-dirty","crankBudget":"50000000","loadAvg":[1.44,1.88,1.87]}
+{"metric":"hub.gcBurst.turnStart","unit":"ms","n":150,"median":249,"p95":276,"p99":447,"max":3828,"budget":{"median":350},"pass":true,"commit":"7efa7fb3e4-dirty","crankBudget":"50000000","loadAvg":[1.44,1.88,1.87]}
+(-dirty: uncommitted files, this unit's perf script among them, differed; the core was `7efa7fb3e4`.) Reading: an incoming GC frame cost 16.7 ms of
+supervisor thread, 83% of it `hub.json` (1.26 whole-file replacements per frame at 11 ms each,
+serialization only 0.5 ms of that: the time is the two F_FULLFSYNCs of file and directory), 16% the
+worker journal append (1.2 appends per frame at 2.1 ms). Every frame was its own delivery (1.00
+frames per delivery) and so its own commit. A 193-frame burst held the thread 3.6 s and delayed that
+turn's start to 3.8 s. Non-GC inbound frames cost the same per frame (11 ms), so this is C-2's per-commit
+cost multiplied by the number of frames in a burst, not something GC-specific. More than one persist
+per frame came from `flushOutbox`, which commits once per outgoing frame toward a durable session
+(the head's sequence before each send).
+Decision: fix the number of commits, not their cost: one commit per burst and one journal fsync per
+flush (J-9211); the per-commit cost is C-2 (J-9216).
+
+### J-9211 2026-11-17 M1b C-20 persistence - good fit
+Evidence: `1f1194059b`, `6be1bd3403` (`packages/thixotrope/src/net/hub.js`,
+`src/core/durable-worker-transport.js`, `src/store/store-fs.js`, `src/store/store-memory.js`,
+`src/store/store.js`, `src/core/daemon.js`, `src/native/adapters.js`, `src/net/transient-hub-client.js`).
+The rule kept: an outbound frame may reach its receiver only after the hub state that lets a restart
+re-send or deduplicate it is durable (source watermark, rows, queued frame and its sequence), and a
+worker owns a frame only once its journal append returned. Three changes inside that rule:
+(1) `coalesceInbound` (attach option, allowed only with `discardOnRestart`, set for native adapters
+and transient clients): frames such a session delivers in one turn are queued and handled at the end
+of the turn as one `deliverBatch` (one persist, then the sends); forget, retire and detach handle
+pending frames first, a failure ends the observer through its `onAbort`. These sessions carry no
+replay identity and are retired at restart, so a frame not yet committed at a crash is exactly as
+lost as it was before (the observer died with the process) and its releases come from the
+retirement. (2) `sendBatch` (attach option, requires `deferCleanup`; set for worker sessions): the
+queue's sequences are assigned for the whole queue in the commit of the delivery that queued the
+frames, and the flush hands the committed queue to `transport.writeBatch` in one call. Allowed only
+for sessions that are never dialed, since only those could have gift withdrawals reordered in front
+of an attempted tail at reattach. (3) `writeBatch` and the optional `WorkerStore.appendJournalEntries`:
+one `appendTextDurable` (one fsync) for all entries, then the same per-entry crank bookkeeping as
+`write`; the journal bytes are those `write` would have written, so cranks, `GC_FRAMES_PER_CRANK` and
+replay are unchanged. A torn tail can only be the last line (one write), which the existing repair
+drops. The IPC channel emits all messages of one read in `nextTick`s before any microtask runs, so a
+burst that arrives while the thread is busy lands in one batch (self-adjusting: the slower the hub,
+the bigger the batch).
+Thixotrope fit: good. The hub already had the right seam (`deliveryDepth` and `deliverBatch` for
+worker cranks commit once and publish after), so the change is a choice of which sessions may batch
+and where, not a new mechanism; the hard part was knowing which sessions' frames carry no identity
+(only disposable observers) and which receivers are never dialed (workers).
+Decision: kept. The endpoint (in-process, durable: false, not disposable) and worker cranks keep
+their behaviour; extending coalescing to the endpoint is in J-9216.
+
+### J-9212 2026-11-17 M1b C-20 tests - good fit
+Evidence: `packages/thixotrope/test/hub-crash-consistency.test.js` with `test/_hub-crash-child.mjs`
+(`6be1bd3403`): a child process runs the hub over the real file store and the real durable worker
+transport, with W's N=20 exports each held by a coalescing observer A and a sequenced session V. In
+`burst` A sends 20 deliveries toward W and then 20 GC frames (several per turn) and V releases its
+holds in 4-frame cranks; in `ordinary` only V, with deliveries and releases. The child SIGKILLs itself
+just before its k-th durable file operation (hub.json replacement or journal append); a second
+process recovers from the directory (forgetting A, V re-sending everything) and finishes. Checked for
+every k: hub sequences in W's journal strictly increase (nothing journaled twice), each of the 20
+positions is released exactly once (by A's frame or A's retirement), A's deliveries reach W in order
+without a gap, every outbox drains, no reference row remains (as in the uninterrupted run), and the
+journal the kill left is a byte prefix of the recovered journal; for `ordinary` the recovered journal
+equals the uninterrupted run's byte for byte. With HUB_CRASH_ALL=1: every point (39 for burst, 18 for
+ordinary; 49 and 23 durable operations before the last change of J-9211) passes in all three ses-ava
+configurations; the default lane draws 8 random points per scenario (seed in the title). Mutation
+check: sending the batch before both commits (delivery and flush) fails at k=11 ("each export
+released exactly once"; [inferred] a retirement's release reused a sequence the worker had journaled
+for an uncommitted single release and was dropped as a duplicate); moving only one of the two commits
+after the send still passes, because the other commit precedes the send (defence in depth).
+`test/hub-coalesce.test.js`: one commit and one send call for a 12-frame burst, sequences committed
+before a refused send, drain on forget, option guards. The lane fault injector
+(`test/ironhorse/process-daemon.mjs`) also wraps `appendJournalEntries` (J-9126's lesson).
+Thixotrope unit suite at `6be1bd3403` + `a3a2b58da5` (comment only): 417 passed, 3 skipped (XS worker
+not built) in each of the 3 configurations (411 before; 6 new tests), 13.8 min. Ironhorse lane at
+`a3a2b58da5`'s tree: {"metric":"lane.ironhorse","passed":66,"failed":0,"wallMinutes":15.75,"workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","loadAvg":[1.34,1.46,1.57],"commit":"a3a2b58da5"}
+Harness unit lane 324 passed, 24 skipped; harness `yarn lint` 0 errors. The Ironhorse bundles built
+into a scratch directory are byte-identical to `dist-ironhorse` (`boot.js`, `worker-peer.js`): the hub,
+transport and stores run in the supervisor only, so the boot digest did not change. No cargo run.
+Decision: crash consistency shown at every commit point of both traffic shapes; SIGKILL cannot
+model power loss (J-0163's caveat on fsync strength stands).
+
+### J-9213 2026-11-17 M1b C-20 transport - perf
+Evidence: after the fix, worker `7cda4467...`, crank budget 50 M. `hub.perf.mjs` phase 1, two runs
+(`7d0e59c809`, load 1.1-2.2; `a3a2b58da5`, load 1.3-1.8):
+{"metric":"hub.gcBurst","unit":"ms per incoming GC frame","value":6.647,"turns":150,"gc":{"frames":495,"deliveries":205,"persistMsPerFrame":6.245,"sendMsPerFrame":0.339,"persistsPerFrame":0.6,"sendsPerFrame":0.848,"framesPerDelivery":2.415,"msPerPersist":10.408,"msPerSend":0.4},"other":{"msPerFrame":10.004,"persistMsPerFrame":8.003,"sendMsPerFrame":1.639,"framesPerDelivery":1.653},"largestBursts":[{"gcFrames":128,"gcDeliveries":3,"gcMs":47.4,"startMs":274},{"gcFrames":93,"gcDeliveries":3,"gcMs":446.9,"startMs":270},{"gcFrames":58,"gcDeliveries":3,"gcMs":338,"startMs":234}],"hubJsonBytes":319784,"pass":null,"commit":"7d0e59c809","crankBudget":"50000000","loadAvg":[1.11,1.84,2.16]}
+{"metric":"hub.gcBurst.turnStart","unit":"ms","n":150,"median":260,"p95":287,"p99":348,"max":411,"budget":{"median":350},"pass":true,"commit":"7d0e59c809","crankBudget":"50000000","loadAvg":[1.11,1.84,2.16]}
+{"metric":"hub.gcBurst","unit":"ms per incoming GC frame","value":7.016,"turns":150,"gc":{"frames":431,"deliveries":207,"persistMsPerFrame":6.435,"sendMsPerFrame":0.516,"persistsPerFrame":0.61,"sendsPerFrame":0.828,"framesPerDelivery":2.082,"msPerPersist":10.546,"msPerSend":0.623},"other":{"msPerFrame":10.298,"persistMsPerFrame":8.246,"sendMsPerFrame":1.691,"framesPerDelivery":1.666},"largestBursts":[{"gcFrames":117,"gcDeliveries":2,"gcMs":37.8,"startMs":268},{"gcFrames":58,"gcDeliveries":2,"gcMs":328.4,"startMs":322},{"gcFrames":51,"gcDeliveries":3,"gcMs":55.1,"startMs":279}],"hubJsonBytes":294962,"pass":null,"commit":"a3a2b58da5","crankBudget":"50000000","loadAvg":[1.31,1.74,1.81]}
+{"metric":"hub.gcBurst.turnStart","unit":"ms","n":150,"median":256,"p95":276,"p99":435,"max":446,"budget":{"median":350},"pass":true,"commit":"a3a2b58da5","crankBudget":"50000000","loadAvg":[1.31,1.74,1.81]}
+`perf/gc.perf.mjs` (`7d0e59c809`): {"metric":"gc.burst.turnStart","unit":"ms","n":150,"median":257,"p95":307,"p99":474,"max":499,"budget":{"median":350},"pass":true,"commit":"7d0e59c809","crankBudget":"50000000","loadAvg":[1.62,1.82,2.08]}
+largest GC windows 153 and 105 frames with starts of 263 and 287 ms (J-9192 before: a 161-frame burst
+took 3,972 ms); `gc.restart` gate 5/5 with 0 sessions woken, the idle session's next turn completed.
+`perf/turn.perf.mjs` (TURN_N 200), before (the eight core files of J-9211 put back to `7efa7fb3e4` in the
+working tree of `7d0e59c809`, hence -dirty; load 1.0-1.7) and two runs after (`7d0e59c809`, load 1.4-2.2):
+{"metric":"turn.start","unit":"ms","n":200,"median":260,"p95":372,"p99":2583,"max":7151,"slowest":[{"turnId":"t195","ms":7151,"frames":287},{"turnId":"t40","ms":2583,"frames":104},{"turnId":"t138","ms":1393,"frames":27}],"budget":{"median":350},"pass":true,"commit":"7d0e59c809-dirty","crankBudget":"50000000","loadAvg":[1.04,1.42,1.67]}
+{"metric":"turn.delta.client","unit":"ms","n":250,"median":18,"p95":1417,"p99":1834,"max":1883,"pass":null,"commit":"7d0e59c809-dirty","crankBudget":"50000000","loadAvg":[1.09,1.39,1.65]}
+{"metric":"turn.start","unit":"ms","n":200,"median":261,"p95":307,"p99":507,"max":597,"slowest":[{"turnId":"t100","ms":597,"frames":157},{"turnId":"t41","ms":507,"frames":46},{"turnId":"t169","ms":342,"frames":4}],"budget":{"median":350},"pass":true,"commit":"7d0e59c809","crankBudget":"50000000","loadAvg":[1.4,1.49,1.82]}
+{"metric":"turn.delta.client","unit":"ms","n":250,"median":18,"p95":22,"p99":38,"max":42,"pass":null,"commit":"7d0e59c809","crankBudget":"50000000","loadAvg":[2.23,1.68,1.88]}
+{"metric":"turn.start","unit":"ms","n":200,"median":260,"p95":312,"p99":785,"max":871,"slowest":[{"turnId":"t116","ms":871,"frames":43},{"turnId":"t194","ms":785,"frames":4},{"turnId":"t96","ms":664,"frames":156}],"budget":{"median":350},"pass":true,"commit":"7d0e59c809","crankBudget":"50000000","loadAvg":[1.68,1.62,1.8]}
+{"metric":"turn.delta.client","unit":"ms","n":250,"median":18,"p95":40,"p99":324,"max":376,"pass":null,"commit":"7d0e59c809","crankBudget":"50000000","loadAvg":[1.76,1.66,1.81]}
+(turn.start.dispatch p99 2,431 -> 281 / 277 ms, max 6,980 -> 398 / 396 ms; turn.start.deliveries 2,
+turn.round 3 and turn.lease unchanged.) Reading: per incoming GC frame 16.7 -> 6.6-7.0 ms (persist
+13.9 -> 6.2-6.4, journal 2.6 -> 0.3-0.5; frames per delivery 1.0 -> 2.1-2.4); a 117-157-frame burst
+now costs 38-47 ms of hub time instead of 2.9-3.6 s. `turn.start` p99 2,583 -> 507 / 785 ms (target
+1 s: **met** in both runs), max 7,151 -> 597 / 871 ms, median unchanged (260 ms); the client path
+`turn.delta.client` p95 1,417 -> 22 / 40 ms during streams that met 28-67 GC frames (J-9124's 22 ms
+floor). The averages per frame stay at 6-7 ms because what remains is not coalesced: some windows of
+36-45 GC frames still arrive one per delivery (t18 of the second run: 45 frames, 45 deliveries,
+914 ms) [inferred: from the endpoint, which is not a disposable observer], and releases toward the
+endpoint go out one commit per frame through its non-batching outbox (t128 of the first run: 93
+frames in 3 deliveries but 436 ms of persists; `gc.burst.hub` shows 86 gc-answers frames toward the
+endpoint in 150 turns).
+Decision: C-20's stall is fixed for the burst shape the M1a perf saw (adapter finalizers); the
+remaining single-frame sources and the endpoint outbox are J-9216.
+
+### J-9214 2026-11-17 M1b C-2 persistence - perf
+Evidence: `perf/hub.perf.mjs` phase 2 at `a3a2b58da5` (GROWTH_WINDOW 30, GROWTH_TURNS 1,000,
+GROWTH_SESSIONS 50; 26.4 min; load 1.6-2.2):
+{"metric":"hub.growth","unit":"bytes","value":569619,"points":[{"at":"fresh","hubJsonBytes":220614,"msPerDelivery":16.532,"msPerFrame":10.439,"msPerPersist":10.146,"serializeMsPerPersist":0.128,"persistsPerTurn":23.5},{"at":"after 1000 turns","hubJsonBytes":213315,"msPerDelivery":16.586,"msPerFrame":8.173,"msPerPersist":10.292,"serializeMsPerPersist":0.192,"persistsPerTurn":24.433,"msPerDeliveryVsFresh":1.003},{"at":"after 50 sessions","hubJsonBytes":569619,"msPerDelivery":21.818,"msPerFrame":13.643,"msPerPersist":11.725,"serializeMsPerPersist":0.471,"persistsPerTurn":28.7,"msPerDeliveryVsFresh":1.32}],"turns":1000,"sessions":50,"window":30,"budget":{"bytes":2000000,"msPerDeliveryVsFresh":1.25},"pass":false,"exceeded":["msPerDelivery: 1.32 x fresh > 1.25"],"commit":"a3a2b58da5","crankBudget":"50000000","loadAvg":[1.8,1.8,1.61]}
+Reading: `hub.json` does not grow with turns (220 -> 213 KB after 1,000 turns: settled turns leave
+no rows) and reaches 570 KB with 51 sessions (about 7 KB per session; bytes **pass**, 0.28 x 2 MB).
+The hub's time per inbound non-GC delivery is flat over 1,000 turns (1.00 x) and 1.32 x fresh after
+50 sessions (**fails** the 1.25 x budget): a persist costs 10.1 -> 11.7 ms (serialization 0.13 ->
+0.47 ms; the rest is writing and syncing 2.6 x the bytes) and a turn makes 23.5 -> 28.7 persists [inferred: more
+destination outboxes flushed per delivery]. A plain one-chunk turn costs about 24 whole-file
+`hub.json` replacements, about 240 ms of supervisor time per turn at 10 ms each, which bounds
+daemon-wide throughput near 4 turns/s before any vat work [inferred].
+Decision: recorded miss (C-2, not C-20); no budget changed. The fix is the per-commit cost (J-9216
+(c)), which this row will measure.
+
+### J-9215 2026-11-17 M1b C-20 transport - awkward
+Evidence: what the design rests on and where Thixotrope made it harder. Which sessions may batch
+inbound is a property of the session's replay contract (no sequence numbers and retired at restart),
+which the hub learns only from attach options the embedder passes (`discardOnRestart`), not from the
+frames; and which receivers may take a whole queue with sequences assigned depends on whether a gift
+withdrawal can ever be ordered toward them (only dialed sessions), an invariant that lives in
+`attachSession`'s reattach code. Both are now asserted (`coalesceInbound` requires
+`discardOnRestart`, the batch path requires `sendBatch` and no `dialLocation`), but a future session
+kind must choose its options knowing these two rules. The single-threaded supervisor makes the cost
+of one commit (10-12 ms of fsync) everyone's latency; batching hides it for bursts, not for steady
+traffic (J-9214).
+Decision: the rules are documented at the attach options in `hub.js`; architecture section 4 should
+say that the hub commits per batch (for the PM: `architecture.md` is not this unit's file).
+
+### J-9216 2026-11-17 M1b C-20 plan - awkward
+Evidence: J-9213 and J-9214: after the fix the supervisor still spends about 10 ms per hub commit,
+commits once per frame for every non-observer source, once per outgoing frame toward non-batching
+durable outboxes, and about 24 times per turn.
+Decision: proposal for the rest of C-20 and C-2, in order of expected gain, none done here:
+(a) Endpoint outbox: the endpoint (in-process, `durable: false`, synchronous acceptance) pays one
+commit per outgoing frame in `flushOutbox` (prepare head, persist, send). If a restart never replays
+the endpoint's queue to a live endpoint incarnation (to be checked in `restore()` and the endpoint's
+resume path), its outbox can take the disposable observer's committed-prefix drain; else give it
+`sendBatch` with an in-memory dedupe. Expected: the 86 gc-answers toward the endpoint per 150 turns
+and the endpoint's share of the 24 commits per turn, up to about 0.4 s per 90-frame window (t128).
+(b) Coalesce the endpoint's own inbound frames (its FinalizationRegistry bursts: t18, 45 frames,
+914 ms) the way observers are, after checking that no daemon code reads hub tables synchronously
+after an endpoint write (`publishHeld`, `introduce`). Expected: such a window from about 0.9 s to
+about 50 ms.
+(c) C-2: replace the whole-file `hub.json` replacement (two F_FULLFSYNCs, 10-12 ms, growing with
+sessions) with an append-only log of state deltas plus periodic compaction; the mail experiment
+(`packages/thixotrope/designs/mail-observer-outbox.md`, `scripts/mail-hub-log.mjs` behind its
+experimental flag, with recovery tests for torn appends and failed compaction) measured about half
+the persistence time per commit with matched sync strength (19.3 -> 9.6 ms for two commits).
+Expected: every remaining commit about 2 x cheaper and independent of state size, so `hub.growth`'s
+1.32 x after 50 sessions back under 1.25 x, and per-frame hub time 10 -> about 5 ms [inferred]; cost:
+record framing, recovery, compaction policy, migration of existing state directories.
+(d) Fewer commits per turn: trace the 24 per plain turn (as the mail work traced its 6, which became
+2) before changing anything; expected gain unknown until traced.
