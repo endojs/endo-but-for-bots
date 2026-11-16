@@ -1,0 +1,57 @@
+{
+  "name": "@endo/thixotrope-harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Endo daemon harness (hosted AI-assistant sessions) built on Thixotrope: guest vat programs, native resources, scripts and perf checks",
+  "keywords": [
+    "thixotrope",
+    "ocapn",
+    "agent",
+    "harness"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/tree/master/packages/thixotrope-harness#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/thixotrope-harness"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "bundle": "node scripts/bundle-guest.mjs",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint .",
+    "lint:types": "tsc",
+    "perf": "node scripts/run-lock.mjs --label perf -- node perf/run-all.mjs",
+    "test": "ses-ava",
+    "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
+    "test:xs": "exit 0"
+  },
+  "dependencies": {
+    "@endo/compartment-mapper": "workspace:^",
+    "@endo/far": "workspace:^",
+    "@endo/harden": "workspace:^",
+    "@endo/init": "workspace:^",
+    "@endo/thixotrope": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
+    "c8": "catalog:dev",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "files": [],
+  "sesAvaConfigs": {
+    "lockdown": "../../ava-endo-lockdown.config.mjs"
+  }
+}

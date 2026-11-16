@@ -3699,7 +3699,24 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/thixotrope@workspace:packages/thixotrope":
+"@endo/thixotrope-harness@workspace:packages/thixotrope-harness":
+  version: 0.0.0-use.local
+  resolution: "@endo/thixotrope-harness@workspace:packages/thixotrope-harness"
+  dependencies:
+    "@endo/compartment-mapper": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/thixotrope": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/thixotrope@workspace:^, @endo/thixotrope@workspace:packages/thixotrope":
   version: 0.0.0-use.local
   resolution: "@endo/thixotrope@workspace:packages/thixotrope"
   dependencies:
