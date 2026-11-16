@@ -2626,3 +2626,92 @@ Decision: `impl/endpoint.js` parks a `startRound` that arrives before its lease 
 turns) and runs it when `holdTurn` registers the lease; a round for a released turn is dropped, and a
 `holdTurn` for a released turn settles at once. Tested (`lease: ...` adapter test). No contract
 change.
+
+### J-0260 2026-11-16 M1a persistence - good fit
+Evidence: the factory vat program (`packages/thixotrope-harness/guest/factory/{main,root,factory,rows,services,session-options}.js`,
+commit `ba4d6b076f`) is plain closures over a row `Map`, an array in creation order, a creation-record
+`Set` and a program store; `make({ host, vats })` runs once in the install and the `HarnessRoot` lives in
+the vat heap from then on, with no persistence code at all. A creation is one `async` function whose
+awaits span many cranks (createWorker, 2-9 staging evaluates, the evaluating crank, `forSession`,
+`make`, `bindSession`); its continuation survives restarts like any other promise. The start
+listener (registered with `AgentHostAdmin.onStart` in `make`) reached the factory after a clean
+restart and marked a halted working session `lost` 150-206 ms after serving (integration test
+`test/integration/m1a-provision.test.js`, 3 runs).
+Decision: as built. Interrupted creations are told apart from new ones by a start epoch (the
+listener's `started()` increases it), not by time; a continuation that wakes after the listener
+rolled its creation back finds `abandoned` and rethrows ("Session creation was interrupted by a
+restart"). Unit-tested with fakes (`test/unit/m1a-factory.test.js`, 18 tests); not exercised by a
+SIGKILL mid-creation in a real daemon.
+
+### J-0261 2026-11-16 M1a admin - perf
+Evidence: `test/integration/m1a-provision.test.js` under the run lock, release worker `c2f65dbe...`,
+crank budget 50 M, commit `ba4d6b076f` with only that test file uncommitted, `idleSleepMs` 2,000,
+stand-in session program (W1a.4's is not written yet). Runs 1 and 3 built the template (fresh
+provision); run 2 used it cached.
+{"metric":"install.factory","unit":"ms","value":6311,"factoryBytes":89648,"budget":{"value":15000},"pass":true,"commit":"ba4d6b076f-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.39,4.21,5.12]}
+{"metric":"m1a.provision.steps","unit":"ms","steps":[{"name":"install-native agentHost","ms":5831.6},{"name":"inventory vats","ms":336.6},{"name":"install harness","ms":6311},{"name":"load session program","ms":1988}],"buildMs":39784.2,"buildSteps":{"serveMs":16394.7,"createWorkspaceMs":6014,"provisionMs":14635.5,"stopMs":2739.2}}
+{"metric":"install.factory","unit":"ms","value":6179,"factoryBytes":89648,"budget":{"value":15000},"pass":true,"commit":"ba4d6b076f-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.73,3.12,4.12]}
+{"metric":"m1a.provision.steps","unit":"ms","steps":[{"name":"install-native agentHost","ms":5859.9},{"name":"inventory vats","ms":351.4},{"name":"install harness","ms":6179},{"name":"load session program","ms":1186.4}],"buildMs":38712.7,"buildSteps":{"serveMs":16750.3,"createWorkspaceMs":6446.7,"provisionMs":13750,"stopMs":1703.8}}
+{"metric":"m1a.provision.rerun","unit":"ms","value":1393.7}
+{"metric":"m1a.provision.rerun","unit":"ms","value":1475.6}
+{"metric":"m1a.provision.bundles","unit":"bytes","factoryBytes":89648,"factoryModules":10,"standinBytes":46287,"sessionProgramBudget":200000}
+Reading: installing the 89,648-byte factory bundle takes 6.2-6.3 s (0.42 x the 15 s budget, load
+2.7-3.4); a fresh provision is 13.8-14.6 s of steps (installNative 5.9 s is the largest after the
+factory install) and 38.7-39.8 s with serve and workspace creation. Re-running every step on a
+provisioned, served state is a no-op in 1.4-1.5 s (four `lookup`s, two bundlings, one `status`) and
+creates no worker. The factory bundle is 89.6 KB, of which `interfaces.js` + `limits.js` are about
+43 KB and `bounded.js` about 10 KB.
+Decision: pass. Template builds cost about 40 s, so the m1a template id is derived from the
+provisioned code (`templateIdFor`, `m1a-<10 hex>`): a code change builds a new template rather than
+serving a stale one. Each template is about 160 MB; old ones stay until `removeTemplates()`.
+
+### J-0262 2026-11-16 M1a persistence - perf
+Evidence: same runs as J-0261 (3 runs; lines of runs 1 and 3 shown, run 2 within 3 % of them).
+{"metric":"session.createCold","unit":"ms","n":3,"median":3840.2,"p95":4182,"p99":4182,"min":3785.3,"max":4182,"program":"stand-in","programBytes":46287,"budget":{"median":6000},"pass":true,"commit":"ba4d6b076f-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.14,4.1,5.06]}
+{"metric":"session.createCold","unit":"ms","n":3,"median":7157.5,"p95":7406.9,"p99":7406.9,"min":7066.4,"max":7406.9,"program":"stand-in padded","programBytes":195000,"budget":{"median":6000},"pass":true,"commit":"ba4d6b076f-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.82,3.95,4.98]}
+{"metric":"session.createCold","unit":"ms","n":3,"median":3800.1,"p95":4076,"p99":4076,"min":3704.6,"max":4076,"program":"stand-in","programBytes":46287,"budget":{"median":6000},"pass":true,"commit":"ba4d6b076f-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.92,3.13,4.1]}
+{"metric":"session.createCold","unit":"ms","n":3,"median":7139.9,"p95":7146.6,"p99":7146.6,"min":7126.9,"max":7146.6,"program":"stand-in padded","programBytes":195000,"budget":{"median":6000},"pass":true,"commit":"ba4d6b076f-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.69,3.13,4.05]}
+{"metric":"m1a.provision.loadProgram","unit":"ms","value":3157.9,"bytes":195000,"pieces":9}
+{"metric":"m1a.provision.createAfterRestart","unit":"ms","value":7186.5}
+Reading: a cold `createSession` with the 46 KB stand-in takes 3.7-3.8 s (0.63 x budget). With the
+stand-in padded by a comment to 195,000 bytes (the size the real program may reach) it takes
+7.0-7.2 s: 1.17-1.19 x the 6 s budget, within the 1.25 x rule but over the nominal budget, as the
+architecture expected (depends on C-5; M0 measured 6.4 s for 246 KB driven from Node, J-9045). The
+factory forwards 9 pieces of up to 23,552 bytes, each an inbound frame of the new vat (about 10 us
+per byte), plus the boot of the new worker and the factory's own 7 answered sends. Loading the 195 KB
+program into the factory itself takes 2.9-3.2 s (9 inbound frames).
+Decision: recorded against C-5; the pool (M1b, D-4) is what brings `createSession` to a take
+(157-176 ms). W1a.7 must re-measure with the real session program, whose size decides where in the
+3.7-7.2 s range a cold create falls. Not done: deliveries per create were not counted.
+
+### J-0263 2026-11-16 M1a admin - awkward
+Evidence: three points where the factory's contract and Thixotrope met with friction.
+(1) Piece size: the contract (m1a-interfaces.md section 9) cuts program pieces at `frameBytes` units
+for ASCII, but each piece then travels in a message that also carries `digest`, `index`, `count` and
+the record keys (into the factory), or the staging source and the `chunk` key (into the new worker),
+so a full piece made each message slightly over `frameBytes`. Provisioning and the factory use
+`frameBytes - 1024` = 23,552 bytes per piece, measured exactly (`chunkText`), ASCII or not.
+(2) Time: the factory has no time source in M1a (no call into it carries `at`), so `createdAt` in
+the session config is 0 for every session.
+(3) The vat cannot hash: `loadSessionProgram` trusts the operator's `digest` (the root is
+operator-only); a corrupted piece would surface only when the evaluating crank fails.
+Also, a control client's presences die with its connection: a `Backend` made before a restart must
+be made again through the new connection (the integration test first failed with "Session
+disconnected" on a stale backend presence; fixed in the test).
+Decision: (1) as built, a refinement of the contract's wording, no guard change; (2) open for the PM:
+`createSession` could take `at` from the gateway (a contract change) or the factory could keep the
+latest `at` it sees; (3) accepted for M1a.
+
+### J-0264 2026-11-16 M1a persistence - good fit
+Evidence: lost rows (D-17). The stand-in session, made `working` through its RowReporter, was halted
+by an endless loop (`rename('stand-in: halt')`; the caller saw the retired text 523-527 ms later).
+After a clean restart the agent-host manager's `lifecycle.started()` called the factory's start
+listener, whose `rowSnapshot` probe of the working row broke with the retired text: the row was
+listed `lost` 150-206 ms after serving, the other five sessions stayed `ready` and answered, a call
+on the lost session rejected with the retired text, and a new session was created after the
+restart (7.2 s, padded program). Idle rows were not called (unit test; the start listener probes only
+`working` rows, at most 32 at once, so a probe that never settles, C-10, holds one slot only).
+Decision: as built. A halted session vat is detected only when something calls it; an idle session
+whose vat was given up during startup stays `ready` in the list until a call breaks (D-5 keeps idle
+vats asleep). Acceptance 10 (W1a.7) therefore needs session A working at the kill, as the W1a.0
+report noted.
