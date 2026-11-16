@@ -338,14 +338,19 @@ export const copyWithBound = async (
      * Serve; resolves when the supervisor reports serving.
      * @param {number} maxDeliveryAttempts
      * @param {number} [t0] performance.now() the log times are relative to
+     * @param {number} [idle] this serve's idle sleep (default the copy's)
      */
-    serve: async (maxDeliveryAttempts, t0 = performance.now()) => {
+    serve: async (
+      maxDeliveryAttempts,
+      t0 = performance.now(),
+      idle = idleSleepMs,
+    ) => {
       crashLog = [];
       started = spawnSupervisorChild(
         {
           statePath: root,
           crankBudget: template.crankBudget,
-          idleSleepMs,
+          idleSleepMs: idle,
           maxDeliveryAttempts,
         },
         { stdout: 'pipe', stderr: 'pipe' },
@@ -425,3 +430,38 @@ export const untilAsleep = (workers, which, ms = 120_000) =>
 /** @param {any} row a worker status row */
 export const unsnapshotted = row =>
   Number(row?.snapshot?.cut ?? 0) < Number(row?.journalLength ?? 0);
+
+/**
+ * The OCapN operation of a worker journal line (`{ b64 }`): `deliver` with
+ * its method (or `fulfill` for an answer), or a GC or other operation.
+ * @param {string} line
+ */
+export const frameKind = line => {
+  const { b64 } = JSON.parse(line);
+  const text = Buffer.from(b64, 'base64')
+    .toString('latin1')
+    .replace(/[^\x20-\x7e]/g, '.');
+  const op = /op:([a-z-]+)/.exec(text)?.[1] ?? '?';
+  if (op !== 'deliver') return op;
+  const method = /\d+'desc.*?\d+'([A-Za-z]+)/.exec(text)?.[1] ?? '?';
+  return `deliver ${method}`;
+};
+
+/**
+ * Kinds of the last `n` frames of a worker's journal (fewer when a
+ * snapshot truncated the journal meanwhile).
+ * @param {string} root the state directory
+ * @param {string} workerId
+ * @param {number} n
+ */
+export const journalTail = (root, workerId, n) => {
+  if (n <= 0) return [];
+  const lines = readFileSync(
+    path.join(root, 'workers', workerId, 'journal.jsonl'),
+    'utf8',
+  )
+    .trim()
+    .split('\n');
+  // The first line is the file's header ({ base }).
+  return lines.slice(1).slice(-n).map(frameKind);
+};
