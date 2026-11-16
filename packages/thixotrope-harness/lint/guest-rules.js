@@ -255,9 +255,104 @@ const noStringConcatInLoop = {
   },
 };
 
+/**
+ * Source patterns SES refuses to evaluate, wherever they appear (code,
+ * comments, strings, templates): a possible dynamic import (`import(`, or
+ * `import` followed by a comment) and HTML comment markers. The bundler keeps
+ * comments, so a JSDoc type `{import('./x.js').T}` in a guest module made
+ * the whole session bundle fail with SES_IMPORT_REJECTED in its evaluating
+ * crank (J-0244). The patterns are the ones in `packages/ses/src/transforms.js`
+ * (`importPattern`, `htmlCommentPattern`).
+ */
+export const sesRejectedPatterns = Object.freeze([
+  {
+    pattern: /(^|[^.]|\.\.\.)\bimport(\s*(?:\(|\/[/*]))/g,
+    what: 'a possible import expression',
+  },
+  { pattern: /(?:<!--|-->)/g, what: 'an HTML comment marker' },
+]);
+
+/** @type {Rule.RuleModule} */
+const noSesRejectedSource = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        'Forbid text SES rejects anywhere in a guest module, comments and strings included: `import(` (or `import` followed by a comment) and `<!--` / `-->`. Use `@import` JSDoc tags for types.',
+    },
+    schema: [],
+    messages: {
+      rejected:
+        'SES rejects any source holding {{what}}, even in a comment or a string, so the bundle would not evaluate in a vat (J-0244); for types use a JSDoc `@import` tag, and split such text in strings.',
+    },
+  },
+  create: context => ({
+    Program: () => {
+      const { text } = context.sourceCode;
+      for (const { pattern, what } of sesRejectedPatterns) {
+        for (const match of text.matchAll(pattern)) {
+          // Point at `import` (after the prefix group) or at the marker.
+          const index =
+            /** @type {number} */ (match.index) + (match[1]?.length ?? 0);
+          context.report({
+            loc: context.sourceCode.getLocFromIndex(index),
+            messageId: 'rejected',
+            data: { what },
+          });
+        }
+      }
+    },
+  }),
+};
+
+/** @type {Rule.RuleModule} */
+const asciiOutsideComments = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        'Guest code is ASCII outside comments: write other characters as \\u escapes. The bundler escapes what is left (comments and its own hidden names) so the bundle is ASCII; an escape inside a template literal would change its raw text, so code must not depend on that.',
+    },
+    schema: [],
+    messages: {
+      nonAscii:
+        'Character U+{{code}} (not printable ASCII) in guest code: write it as \\u{{code}} (the bundle is ASCII; scripts/bundle-guest.mjs escapes only comments safely).',
+    },
+  },
+  create: context => ({
+    Program: () => {
+      const { sourceCode } = context;
+      const { text } = sourceCode;
+      const comments = sourceCode.getAllComments();
+      for (const match of text.matchAll(/[^\t\n\r\x20-\x7e]/g)) {
+        const index = /** @type {number} */ (match.index);
+        const inComment = comments.some(
+          comment =>
+            comment.range !== undefined &&
+            comment.range[0] <= index &&
+            index < comment.range[1],
+        );
+        if (!inComment) {
+          context.report({
+            loc: sourceCode.getLocFromIndex(index),
+            messageId: 'nonAscii',
+            data: {
+              code: match[0].charCodeAt(0).toString(16).padStart(4, '0'),
+            },
+          });
+        }
+      }
+    },
+  }),
+};
+
 export const guestLintPlugin = Object.freeze({
   meta: { name: 'thixotrope-harness-guest', version: '0.1.0' },
-  rules: { 'no-string-concat-in-loop': noStringConcatInLoop },
+  rules: {
+    'no-string-concat-in-loop': noStringConcatInLoop,
+    'no-ses-rejected-source': noSesRejectedSource,
+    'ascii-outside-comments': asciiOutsideComments,
+  },
 });
 
 /**
@@ -275,6 +370,8 @@ export const guestRules = {
   },
   rules: {
     'thixotrope-harness-guest/no-string-concat-in-loop': 'error',
+    'thixotrope-harness-guest/no-ses-rejected-source': 'error',
+    'thixotrope-harness-guest/ascii-outside-comments': 'error',
     'no-restricted-globals': [
       'error',
       ...forbiddenGuestGlobals.map(name => ({

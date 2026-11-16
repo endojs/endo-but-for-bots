@@ -46,6 +46,16 @@ const clean = [
   ],
   ['Math methods by name', 'export const m = a => Math.max(a, 1);\n'],
   [
+    'a JSDoc @import tag',
+    "/** @import { T } from './t.js' */\n/** @type {T | undefined} */\nexport const x = undefined;\n",
+  ],
+  ['a method named import', 'export const f = o => o.import(1);\n'],
+  [
+    'non-ASCII in a comment (the bundler escapes it)',
+    '// caf\u00e9 \u2014 ok\nexport const s = 1;\n',
+  ],
+  ['a \\u escape in a string', "export const s = '\\u00e9';\n"],
+  [
     'array concat in a loop',
     'export const c = xss => { let all = []; for (const xs of xss) all = all.concat(xs); return all; };\n',
   ],
@@ -172,6 +182,46 @@ const dirty = [
     's = x + s (prepend) in a loop',
     "export const s = xs => { let out = ''; for (const x of xs) out = x + out; return out; };\n",
     'thixotrope-harness-guest/no-string-concat-in-loop',
+  ],
+  [
+    'import( in a JSDoc type (SES rejects the bundle, J-0244)',
+    "/** @type {import('./t.js').T} */\nexport const x = 1;\n",
+    'thixotrope-harness-guest/no-ses-rejected-source',
+  ],
+  [
+    'import( in a string',
+    "export const s = 'import(x)';\n",
+    'thixotrope-harness-guest/no-ses-rejected-source',
+  ],
+  [
+    'import followed by a comment',
+    "export const s = 'import /* x */';\n",
+    'thixotrope-harness-guest/no-ses-rejected-source',
+  ],
+  [
+    'an HTML comment marker in a template',
+    'export const s = `<!-- x`;\n',
+    'thixotrope-harness-guest/no-ses-rejected-source',
+  ],
+  [
+    'a dynamic import is also rejected as source text',
+    "export const load = () => import('./x.js');\n",
+    'thixotrope-harness-guest/no-ses-rejected-source',
+  ],
+  [
+    'non-ASCII in a string',
+    "export const s = 'caf\u00e9';\n",
+    'thixotrope-harness-guest/ascii-outside-comments',
+  ],
+  [
+    'non-ASCII in a template literal',
+    'export const s = `\u2026`;\n',
+    'thixotrope-harness-guest/ascii-outside-comments',
+  ],
+  [
+    'non-ASCII in an identifier',
+    'export const caf\u00e9 = 1;\n',
+    'thixotrope-harness-guest/ascii-outside-comments',
   ],
   [
     's = s.concat(x) in a loop',
