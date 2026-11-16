@@ -606,3 +606,103 @@ survive inbound today either.
 Decision: raised to the PM: W0.2 (CORE-1 native UTF-8) is now the binding change for inbound
 frames, and W0.5 S1 must measure the halt point after it before any `frameBytes` is chosen; the
 HeapExhausted / key-space halts on a single string need their own trace (not in W0.1's scope).
+
+### J-0130 2026-11-16 M0 tooling - good fit
+Evidence: `packages/thixotrope-harness/scripts/bundle-guest.mjs` bundles `guest/<prog>/main.js`
+with compartment-mapper `makeBundle` (the same call as `pkg/src/platform/bundler.js:38`), the
+output a script whose value is the module namespace. `guest/package.json` is a package of its own
+with no dependencies, so a bare `import '@endo/patterns'` fails at bundle time ("Cannot find
+external module"), and the bundler's read powers are wrapped so any module read outside the guest
+root is refused. The test fixture (`test/fixtures/guest/tiny`, two modules, prelude names off
+`globalThis`) bundles to 3,142 bytes whose `// === n. <package> <path> ===` heads name only the two
+fixture modules; evaluating it in a compartment with stand-in prelude globals gives `make()`. Tests:
+`test/bundle-guest.test.js` (7). Bundling the fixture costs about 1.4 ms (J-0134).
+Decision: guest code reads the prelude from `globalThis` (the `GuestGlobals` pattern of
+`pkg/guest.js`, types through a JSDoc `@import`, which is a comment and bundles nothing); pure Endo
+modules are copied into `guest/lib/`, as architecture section 1 says.
+
+### J-0131 2026-11-16 M0 tooling - awkward
+Evidence: (1) The repository uses one ESLint 10 flat config (`eslint.config.js`); an `H/.eslintrc`
+(milestones.md M0 "Owns") would be ignored. The guest rules are in
+`packages/thixotrope-harness/lint/guest-rules.js` and the root config spreads
+`makeHarnessLintConfigs(...)` (a 6-line edit of the root `eslint.config.js`, outside `H/`). They
+forbid `Date`, `setTimeout`/`setInterval` and the other timers, `console`, `WeakRef`,
+`FinalizationRegistry`, `performance`, `fetch`, `crypto`, `URL`, `Math.random`, aliasing `Math`,
+reaching any of those through `globalThis` (member or destructure), dynamic `import()`, any
+non-relative import, and string growth in loops. (2) String `+=` cannot be told from numeric `+=`
+syntactically (`i += 1` is the house loop style), so the custom rule
+`thixotrope-harness-guest/no-string-concat-in-loop` is a static guess: it fires when the target
+was declared with a string initialiser or the right side is evidently a string (literal, template,
+`String(...)`, `String.fromCharCode`, `.slice/.join/.padStart/...`), in a loop body or an
+array-iteration callback. It misses e.g. `out += part` where `out` is a parameter or a property
+fed only non-literal values; review still has to catch those. (3) ESLint does not load under SES
+lockdown ("Cannot assign to read only property 'constructor'"), so `test/guest-lint.test.js` runs
+ESLint in a plain Node child (`test/_lint-runner.mjs`). (4) `@endo/init` locks down and ses-ava
+already has, so a second lockdown throws `SES_ALREADY_LOCKED_DOWN`; scripts import
+`scripts/_init.mjs` (locks down only when `Object.prototype` is not frozen) and load
+compartment-mapper lazily, because a sibling static import can evaluate before the lockdown
+module's top-level await finishes ("assert is not defined").
+Decision: keep the rules in `H/lint/` with the root hook; treat the string rule as a tripwire, not
+a proof. Tests: 26 lint cases, including "a guest importing `@endo/patterns` fails lint under the
+root config".
+
+### J-0132 2026-11-16 M0 tooling - awkward
+Evidence: `@endo/thixotrope`'s `exports` (`pkg/package.json`) are `.`, `./native-adapter.js`,
+`./node-powers.js`, `./guest.js`; `serveThixotrope` (`pkg/src/control/supervisor.js`) and
+`connectLocalControl` (`pkg/src/control/local-control.js`), which architecture D-1 names as the
+harness's public surface and the survey baseline used by relative path, are not exported (and not
+re-exported from `pkg/index.js`). `scripts/serve.mjs` and `perf/_harness.mjs` import them as
+`../../thixotrope/src/control/...` with `eslint-disable-next-line import/no-relative-packages`.
+Decision: open question for the PM: either export `./supervisor.js` and `./local-control.js` from
+`@endo/thixotrope` (a small core change not in the CORE list) or keep the in-tree relative path,
+which works only inside this work tree.
+
+### J-0133 2026-11-16 M0 admin - awkward
+Evidence: Thixotrope records the limits in `heaps/runtime.json` but not whether the last shutdown
+was clean; "lower a budget after a clean shutdown" is advice in `pkg/README.md` (limits section).
+`scripts/serve.mjs` keeps its own record, `<state>/harness-serve.json`
+(`{"version":1,"status":"running"|"clean","crankBudget","floor",...}`), written before the
+supervisor starts and set to `clean` only after `supervisor.close()` resolves; `floor` is the
+highest budget since the last clean shutdown, so a crash at 100 M, a run at 50 M that crashes too,
+then a request for 50 M is still refused. With no record, `heaps/runtime.json`'s
+`limits.crankBudget` is the floor (unknown history). The CLI refuses in the parent before any
+process starts and then runs the supervisor in a child whose environment is only `ENV_ALLOWLIST`
+(HOME, PATH, USER, LOGNAME, SHELL, TMPDIR, TZ, LANG, LC_*, TERM, the THIXOTROPE_* limit settings and
+THIXOTROPE_TRACE) plus `THIXOTROPE_CRANK_BUDGET`: adapter processes are forked with the
+supervisor's environment (`pkg/src/platform/node/adapter-processes.js:63`) and the supervisor has
+no environment option. The in-process `serveHarness()` (tests, perf) gives the engine an allowlisted
+environment power, but its adapters still inherit the test process's environment. A state directory
+later served by plain `thix serve` leaves the harness record stale. Default budget: 50,000,000
+(the planning value; S1 replaces it). Tests: `test/serve.test.js` (12), including the CLI refusal
+leaving the directory untouched.
+Decision: serve only through `scripts/serve.mjs` (or `serveHarness`); perf and integration runs
+that must also isolate adapter environments use the CLI path.
+
+### J-0134 2026-11-16 M0 tooling - perf
+Evidence: throwaway script (`tmp/`, deleted) using `perf/_harness.mjs` `stats`; no vat involved, so
+the crank budget field is the harness default and not exercised; run before commit 4180c69f2b on
+its identical working tree (hence `1dccac467c-dirty`); load average 5.8-6.2 (other agents
+compiling and running vat probes).
+```
+{"metric":"skeleton.bundleGuest.tiny","unit":"ms","n":50,"median":1.381,"p95":2.981,"p99":3.334,"min":0.958,"max":3.334,"modules":2,"pass":null,"commit":"1dccac467c-dirty","workerSha256":"a7000409bb22c3158a2143ca4179b58137536caf7459a1843a2758fb1fa367d9","crankBudget":"50000000","loadAvg":[6.18,3.58,2.68]}
+{"metric":"skeleton.runLock.uncontended","unit":"ms","n":200,"median":5.032,"p95":6.904,"p99":9.93,"min":4.48,"max":10.919,"pass":null,"commit":"1dccac467c-dirty","workerSha256":"a7000409bb22c3158a2143ca4179b58137536caf7459a1843a2758fb1fa367d9","crankBudget":"50000000","loadAvg":[6.18,3.58,2.68]}
+{"metric":"skeleton.runLock.handoff","unit":"ms","n":10,"median":257.077,"p95":407.859,"p99":407.859,"min":72.88,"max":407.859,"pollMs":500,"pass":null,"commit":"1dccac467c-dirty","workerSha256":"a7000409bb22c3158a2143ca4179b58137536caf7459a1843a2758fb1fa367d9","crankBudget":"50000000","loadAvg":[5.76,3.53,2.67]}
+```
+Bundling a 2-module guest is about 1.4 ms; an uncontended run-lock take and release is about 5 ms
+(O_EXCL create plus fsync); a waiter takes a released lock after a median 257 ms because it polls
+every 500 ms, negligible against minute-long Ironhorse workloads.
+Decision: keep `pollMs` 500. Two-taker serialisation (CLI, 400 ms holds), stale-pid break,
+unreadable-lock aging, two concurrent breakers and re-entry are covered by `test/run-lock.test.js`
+(9).
+
+### J-0135 2026-11-16 M0 tooling - deviation
+Evidence: not done in W0.4: `perf/_harness.mjs` `provision()`, `restart()` and `runPerf()` were not
+run against a real supervisor (the unit was told not to run Ironhorse while W0.1/W0.2 change the
+worker); only their pure parts are unit-tested (`test/perf-harness.test.js`: quantiles, the 1.25 x
+rule, deliveries per op from `status().timings` deltas, `hubJsonBytes()` reading `heaps/hub.json`,
+row shape). `provision({ template })` copies a template directory but W0.7 (S8) owns the
+template. The M0 "Owns" row lists `H/JOURNAL.md` "from journal-seed.md"; the journal already
+existed and was only appended to. `designs/survey/*.mjs` fail `prettier --check` (they are plan
+files, not this unit's) and are excluded from ESLint by the harness ignores.
+Decision: the first spike unit (W0.5) exercises `provision()` under the run lock and reports any
+defect against J-0135.
