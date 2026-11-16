@@ -113,11 +113,14 @@ harden(assertNoActiveTurn);
  */
 export const makeQueue = ({ onChange = () => {} } = {}) => {
   /**
-   * Waiting entries, oldest first. At most maxWaiting; claim and cancel
-   * remove from it.
-   * @type {Internal[]}
+   * Waiting entries, oldest first (a Set keeps insertion order). At most
+   * maxWaiting; claim and cancel remove from it. Not an array: in an
+   * Ironhorse vat an element pushed onto this array came out non-writable,
+   * so `splice` at the claim threw "not writable" and the claimed entry
+   * stayed waiting (W1a.7, J-0271). A Set never rewrites an element.
+   * @type {Set<Internal>}
    */
-  const waiting = [];
+  const waiting = new Set();
   /**
    * Receipts by request id, in insertion order. Pruned by age on each
    * enqueueOnce; at most maxReceipts.
@@ -176,8 +179,7 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
 
   /** @param {Internal} internal */
   const removeWaiting = internal => {
-    const index = waiting.indexOf(internal);
-    if (index >= 0) waiting.splice(index, 1);
+    waiting.delete(internal);
     internal.waiting = false;
   };
 
@@ -186,7 +188,7 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
    * (Fae session-submissions.js cancel).
    */
   const clearHoldIfEmpty = () => {
-    if (waiting.length === 0 && currentHold !== undefined) {
+    if (waiting.size === 0 && currentHold !== undefined) {
       currentHold = undefined;
     }
   };
@@ -270,7 +272,7 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
     }
     prune(at);
     receipts.size < limits.maxReceipts || refuse(texts.receiptLimit);
-    waiting.length < limits.maxWaiting ||
+    waiting.size < limits.maxWaiting ||
       refuse(textOf.queueFull(limits.maxWaiting));
 
     const key = `q${nextKey}`;
@@ -292,7 +294,7 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
       requestId,
     });
     byEntry.set(entry, internal);
-    waiting.push(internal);
+    waiting.add(internal);
     /** @type {StoredReceipt} */
     const stored = { requestId, text, issued, entry };
     receipts.set(requestId, stored);
@@ -337,10 +339,10 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
         VIEW_OVERHEAD_BYTES -
         holdBytes -
         keyBytes -
-        ROW_OVERHEAD_BYTES * waiting.length;
-      units = Math.max(0, Math.floor(available / (3 * waiting.length)));
+        ROW_OVERHEAD_BYTES * waiting.size;
+      units = Math.max(0, Math.floor(available / (3 * waiting.size)));
     }
-    const entries = waiting.map(internal =>
+    const entries = [...waiting].map(internal =>
       harden({
         entry: internal.item.entry,
         key: internal.item.key,
@@ -359,8 +361,8 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
 
   /** @type {Queue['first']} */
   const first = () =>
-    currentHold === undefined && waiting.length > 0
-      ? waiting[0].item
+    currentHold === undefined && waiting.size > 0
+      ? waiting.values().next().value?.item
       : undefined;
 
   /** @type {Queue['claim']} */
@@ -414,7 +416,7 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
     hold,
     release,
     holdReason: () => currentHold?.reason,
-    size: () => waiting.length,
+    size: () => waiting.size,
   });
 };
 harden(makeQueue);
