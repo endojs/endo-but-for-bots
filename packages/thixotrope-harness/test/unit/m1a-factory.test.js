@@ -228,6 +228,21 @@ test('createSession defaults: title, preset, model id, userInitiated', async t =
   t.is((await E(kit.factory).listSessions()).rows.length, 1);
 });
 
+test("createSession: createdAt is the caller's at, else the latest the factory saw (J-9150)", async t => {
+  const { kit } = setup();
+  const stamped = await E(kit.factory).createSession(
+    harden({ backend, at: 1_763_000_000_000 }),
+  );
+  t.is((await E(stamped).getInfo()).createdAt, 1_763_000_000_000);
+  const unstamped = await E(kit.factory).createSession(harden({ backend }));
+  t.is((await E(unstamped).getInfo()).createdAt, 1_763_000_000_000);
+  // An older stamp is the caller's own time: kept as given.
+  const older = await E(kit.factory).createSession(
+    harden({ backend, at: 1_762_000_000_000 }),
+  );
+  t.is((await E(older).getInfo()).createdAt, 1_762_000_000_000);
+});
+
 test('refused options make no row and no vat', async t => {
   const { kit, workers } = setup();
   await t.throwsAsync(

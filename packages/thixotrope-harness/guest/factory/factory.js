@@ -19,8 +19,8 @@
  * D-5). Idle sessions are never called. A retired break from a session
  * marks its row `lost` (D-17).
  *
- * Guest rules: prelude globals only; no clock (`createdAt` is the factory's
- * last known time); answered sends are sequential in a creation and at most
+ * Guest rules: prelude globals only; no clock (`createdAt` is the caller's
+ * `CreateOptions.at`, else the latest one the factory saw); answered sends are sequential in a creation and at most
  * `PROBE_WINDOW` at once in the start listener.
  */
 import { interfaces, shapes, texts } from '../lib/interfaces.js';
@@ -76,15 +76,19 @@ export const INTERRUPTED_CREATION_TEXT =
  * @param {any} powers.vats the worker controller (`vats` grant)
  * @param {ProgramStore} powers.programs
  * @param {RowTable} powers.rows
- * @param {() => number} [powers.lastKnownTime]
+ * @param {() => number} [powers.lastKnownTime] the time a creation without
+ *   `at` is stamped with; by default the latest `at` the factory has seen
  */
 export const makeFactoryKit = ({
   admin,
   vats,
   programs,
   rows,
-  lastKnownTime = () => 0,
+  lastKnownTime,
 }) => {
+  /** The latest `CreateOptions.at` seen (vats have no clock: time is data). */
+  let latestAt = 0;
+  const knownTime = lastKnownTime ?? (() => latestAt);
   const chatOnly = makeExo('Preset', interfaces.Preset, {
     describe: () => harden({ label: CHAT_ONLY, builtIn: true }),
     snapshot: () => harden({ label: CHAT_ONLY }),
@@ -156,6 +160,10 @@ export const makeFactoryKit = ({
 
   /** @param {Record<string, any>} options */
   const createSession = async options => {
+    // The caller has the clock (J-9150): its `at` is the session's createdAt.
+    const { at } = options;
+    if (typeof at === 'number' && at > latestAt) latestAt = at;
+    const createdAt = typeof at === 'number' ? at : knownTime();
     const resolved = await resolveCreateOptions(options, {
       defaultPreset: chatOnly,
     });
@@ -194,7 +202,7 @@ export const makeFactoryKit = ({
         backendTitle: resolved.backendTitle,
         modelId: resolved.modelId,
         preset: resolved.presetSnapshot,
-        createdAt: lastKnownTime(),
+        createdAt,
         userInitiated: resolved.userInitiated,
       });
       mustMatch(config, shapes.SessionConfig);
