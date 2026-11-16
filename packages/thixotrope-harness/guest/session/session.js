@@ -25,6 +25,7 @@ import {
 } from './recovery.js';
 import { makeLivePublishing } from './live.js';
 import { makeRecordLog } from './records.js';
+import { submissionField } from './staging.js';
 import { toolTable } from './tool-table.js';
 import { turnHooks } from './turn-hooks.js';
 import { makeTurnRunner } from './turn.js';
@@ -154,7 +155,7 @@ export const makeSession = (
     },
     /**
      * Crank A of section 6.1: receipt, entry, and the claim when idle.
-     * @param {{ text: string }} submission
+     * @param {any} submission inline `{ text }` or a StagedText
      * @param {string} requestId
      * @param {number} at
      */
@@ -177,12 +178,15 @@ export const makeSession = (
     /**
      * Direct start (A.4): refused with R4-10 while a turn is current, whatever
      * the queue holds.
-     * @param {{ text: string }} submission
+     * @param {any} submission inline `{ text }` or a StagedText
      * @param {number} [at]
      */
     startTurn(submission, at) {
       runner.see(at);
-      return runner.startTurn(submission.text, at ?? runner.lastKnownTime());
+      return runner.startTurn(
+        submissionField(submission),
+        at ?? runner.lastKnownTime(),
+      );
     },
     getCurrentTurn() {
       return runner.currentTurn();

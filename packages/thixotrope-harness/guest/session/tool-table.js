@@ -30,8 +30,10 @@ const { E } = /** @type {GuestGlobals} */ (globalThis);
  * @property {string} name
  * @property {'adapter' | 'guest'} [site]
  * @property {() => { name: string, description: string, parameters: string }} describe
- * @property {(ports: any) => boolean} available
- * @property {(request: { opId: string, args: string, turnId: string }, ports: any) => Promise<{ status: 'ok' | 'failed' | 'frame-limit', text: string }>} execute
+ * @property {(ports: any, services?: any) => boolean} available
+ * @property {(request: { opId: string, args: any, turnId: string }, ports: any, context?: any) => Promise<{ status: 'ok' | 'failed' | 'frame-limit', text: any }>} execute
+ *   M1b (contract 2.3): `context` is the ToolContext; `args` may be staged
+ * @property {(request: { opId: string }, context: any) => void} [deadline]
  */
 
 /**
@@ -65,14 +67,15 @@ export const toolTable = harden([echo]);
  *
  * @param {any} ports
  * @param {readonly ToolTableEntry[]} [table]
+ * @param {any} [services] SessionServices (M1b: `available(ports, services)`)
  */
-export const toolSetFor = (ports, table = toolTable) => {
+export const toolSetFor = (ports, table = toolTable, services = undefined) => {
   /** @type {any[]} */
   const descriptions = [];
   /** @type {Map<string, ToolTableEntry>} */
   const byName = new Map();
   for (const entry of table) {
-    if (!byName.has(entry.name) && entry.available(ports)) {
+    if (!byName.has(entry.name) && entry.available(ports, services)) {
       byName.set(entry.name, entry);
       descriptions.push(entry.describe());
     }

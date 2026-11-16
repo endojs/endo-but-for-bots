@@ -45,6 +45,12 @@
 import { interfaces, texts, textOf } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { previewText, utf8Bytes } from '../lib/bounded.js';
+import {
+  isStaged,
+  previewOf,
+  sameSubmission,
+  submissionField,
+} from './staging.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { defineExoClass, harden } = /** @type {GuestGlobals} */ (globalThis);
@@ -71,7 +77,7 @@ const ROW_OVERHEAD_BYTES = 40;
 const VIEW_OVERHEAD_BYTES = 64;
 
 /**
- * @typedef {{ text: string }} Submission
+ * @typedef {any} Submission `{ text }`, or (M1b) a StagedText
  * @typedef {'restart' | 'stopped' | 'refused' | 'interrupted' | 'unavailable'} HoldReason
  * @typedef {{ reason: HoldReason, message: string }} Hold
  * @typedef {object} QueueItem
@@ -158,8 +164,8 @@ export const makeQueue = ({
    * @property {boolean} waiting false once claimed or cancelled
    * @typedef {object} StoredReceipt
    * @property {string} requestId
-   * @property {string} text the submitted text (shared with the entry and
-   *   later the TurnStarted record, so it costs no copy)
+   * @property {Submission} submission as submitted (inline or staged;
+   *   shared with the entry, so it costs no copy)
    * @property {number} issued the request id's timestamp
    * @property {any} entry the QueueEntry while waiting; cleared by the
    *   claim, the shared stand-in once cancelled
@@ -303,16 +309,19 @@ export const makeQueue = ({
 
   /** @type {Queue['enqueueOnce']} */
   const enqueueOnce = (submission, requestId, at) => {
-    const { text } = submission;
-    // A.4 / Fae: a blank message is refused before anything else (J-9150).
-    text.trim() !== '' || refuse(texts.blankSubmission);
+    // A.4 / Fae: a blank message is refused before anything else (J-9150);
+    // a staged one never is (the Composer refused it).
+    isStaged(submission) ||
+      submission.text.trim() !== '' ||
+      refuse(texts.blankSubmission);
     REQUEST_ID.test(requestId) || refuse(texts.invalidRequestId);
     const issued = Number(requestId.slice(0, 13));
     (issued > at - limits.retryWindowMs && issued <= at + limits.clockSkewMs) ||
       refuse(texts.requestIdExpired);
     const known = receipts.get(requestId);
     if (known !== undefined) {
-      known.text === text || refuse(texts.requestIdReused);
+      sameSubmission(known.submission, submission) ||
+        refuse(texts.requestIdReused);
       return harden({ receipt: receiptOf(known, true), added: false });
     }
     prune(at);
@@ -322,7 +331,10 @@ export const makeQueue = ({
 
     const key = `q${nextKey}`;
     nextKey += 1;
-    const preview = previewText(text, limits.messagePreviewUnits);
+    const preview = previewOf(
+      submissionField(submission),
+      limits.messagePreviewUnits,
+    );
     /** @type {Internal} */
     const internal = {
       item: /** @type {any} */ (undefined),
@@ -334,14 +346,14 @@ export const makeQueue = ({
     internal.item = harden({
       entry,
       key,
-      submission: harden({ text }),
+      submission,
       at,
       requestId,
     });
     byEntry.set(entry, internal);
     waiting.add(internal);
     /** @type {StoredReceipt} */
-    const stored = { requestId, text, issued, entry };
+    const stored = { requestId, submission, issued, entry };
     receipts.set(requestId, stored);
     // A new message releases every hold except interrupted (A.4, R4-56).
     if (currentHold !== undefined && currentHold.reason !== 'interrupted') {

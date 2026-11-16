@@ -44,7 +44,7 @@
  * Data-keyed state lives in `Map`s (rule 12.10); records and events use the
  * closed shapes of `guest/lib/interfaces.js`.
  */
-import { interfaces, shapes, texts, textOf } from '../lib/interfaces.js';
+import { m1bInterfaces, shapes, texts, textOf } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { runAgenticTurn } from '../lib/turn-engine.js';
 import {
@@ -54,6 +54,7 @@ import {
   previewText,
 } from '../lib/bounded.js';
 import { inCallOrder } from './records.js';
+import { blobsOf, isStaged, submissionField } from './staging.js';
 import { toolSetFor, toolTable } from './tool-table.js';
 import { turnHooks } from './turn-hooks.js';
 
@@ -135,7 +136,7 @@ const COUNT_KEYS = harden([
  * @typedef {object} TurnInfo a plain record kept for the session's life
  *   (history pages, receipts); the Turn exo is minted from it on demand
  * @property {string} turnId
- * @property {string} input
+ * @property {any} input a string or a StagedText
  * @property {number} at
  * @property {string} state
  * @property {number} round
@@ -154,6 +155,8 @@ const COUNT_KEYS = harden([
  * @property {number} unsettled calls without a recorded result
  * @property {boolean} frameLimited
  * @property {any} kit resolves when every call has a result
+ * @property {Map<string, { entry: any, context: any }>} running issued
+ *   calls without a result, by op id (deadlines reach their entry)
  */
 
 /**
@@ -182,6 +185,9 @@ const COUNT_KEYS = harden([
  * @property {any} roundKit pending until the round's roundFinal
  * @property {number} sentUpTo records before this index were sent to the adapter
  * @property {any} usage summed counts, or undefined before any round reported
+ * @property {{ round: number, partial: any } | undefined} checkpoint the
+ *   latest progress of the streaming round (W1b.1): kept outside the log,
+ *   appended as one Partial only if the round ends without roundFinal
  */
 
 /**
@@ -369,6 +375,23 @@ export const makeTurnRunner = ({
   // ------------------------------------------------------------ settle
 
   /**
+   * A round that ends without roundFinal leaves its latest checkpoint as one
+   * Partial record (contract 3.2); the checkpoint is then gone.
+   * @param {ActiveTurn} active
+   */
+  const keepCheckpoint = active => {
+    const kept = active.checkpoint;
+    active.checkpoint = undefined;
+    if (kept === undefined || kept.round !== active.round) return;
+    records.append({
+      kind: 'partial',
+      turnId: active.turnId,
+      round: kept.round,
+      text: kept.partial,
+    });
+  };
+
+  /**
    * Section 6.3: end the turn in this crank. Idempotent: a turn that is not
    * current is left alone (returns false).
    *
@@ -387,6 +410,7 @@ export const makeTurnRunner = ({
     active.roundKit = undefined;
     active.calls?.kit.reject(SETTLED);
     active.calls = undefined;
+    keepCheckpoint(active);
 
     /** @type {Record<string, any>} */
     const settled = {
@@ -485,6 +509,16 @@ export const makeTurnRunner = ({
   const issue = (active, calls, intent) => {
     const entry = active.tools.byName.get(intent.name);
     calls.inFlight += 1;
+    // Contract 2.3: the third argument of execute (M1a entries ignore it).
+    const context = harden({
+      turn: active.turn,
+      turnId: active.turnId,
+      generation: active.generation,
+      round: active.round,
+      services,
+      endpoint: active.ports?.endpoint,
+    });
+    calls.running.set(intent.opId, { entry, context });
     /** @type {Promise<any>} */
     let answer;
     try {
@@ -496,6 +530,7 @@ export const makeTurnRunner = ({
             turnId: active.turnId,
           }),
           active.ports,
+          context,
         ),
       );
     } catch (error) {
@@ -529,8 +564,10 @@ export const makeTurnRunner = ({
    * the engine (which publishes at its next stop).
    * @param {ActiveTurn} active
    * @param {RoundCalls} calls
+   * @param {string} opId
    */
-  const afterResult = (active, calls) => {
+  const afterResult = (active, calls, opId) => {
+    calls.running.delete(opId);
     calls.inFlight -= 1;
     calls.unsettled -= 1;
     issueWaiting(active, calls);
@@ -588,6 +625,9 @@ export const makeTurnRunner = ({
         textOf.errorResult('the tool returned an invalid outcome'),
         true,
       );
+    } else if (outcome.status !== 'frame-limit' && isStaged(outcome.text)) {
+      // Staged by the callee, already cut (contract 2.3 item 5, 5.3).
+      recordResult(active, intent, outcome.text, outcome.status === 'failed');
     } else if (outcome.status === 'ok') {
       recordResult(active, intent, boundToolOutput(outcome.text), false);
     } else if (outcome.status === 'failed') {
@@ -601,7 +641,7 @@ export const makeTurnRunner = ({
       calls.frameLimited = true;
       recordResult(active, intent, texts.frameLimit, true);
     }
-    afterResult(active, calls);
+    afterResult(active, calls, intent.opId);
   };
 
   /**
@@ -625,7 +665,7 @@ export const makeTurnRunner = ({
       boundToolOutput(textOf.errorResult(messageOf(error))),
       true,
     );
-    afterResult(active, calls);
+    afterResult(active, calls, intent.opId);
   };
 
   /**
@@ -668,6 +708,7 @@ export const makeTurnRunner = ({
       unsettled: 0,
       frameLimited: false,
       kit: makePromiseKit(),
+      running: new Map(),
     };
     const available = active.tools.descriptions.map(
       (/** @type {any} */ d) => d.name,
@@ -835,7 +876,7 @@ export const makeTurnRunner = ({
    */
   const makeSink = defineExoClass(
     'TurnSink',
-    interfaces.TurnSink,
+    m1bInterfaces.TurnSink,
     (/** @type {ActiveTurn} */ active) => ({ active }),
     {
       /** @param {number} round */
@@ -859,6 +900,7 @@ export const makeTurnRunner = ({
         see(result.at);
         const kit = active.roundKit;
         active.roundKit = undefined;
+        active.checkpoint = undefined;
         // R4-42, decided before ToolIntents is written.
         /** @type {string | undefined} */
         let failure;
@@ -886,6 +928,9 @@ export const makeTurnRunner = ({
           at: result.at,
         };
         if (result.servedBy !== undefined) settled.servedBy = result.servedBy;
+        if (result.nativeContext !== undefined) {
+          settled.nativeContext = result.nativeContext;
+        }
         records.append(settled);
         addUsage(active, result.usage);
         if (failure !== undefined) {
@@ -904,18 +949,29 @@ export const makeTurnRunner = ({
         if (failure.round !== active.round) return;
         see(failure.at);
         if (failure.partial !== undefined && failure.partial !== '') {
-          records.append({
-            kind: 'partial',
-            turnId: active.turnId,
+          active.checkpoint = {
             round: failure.round,
-            text: failure.partial,
-          });
+            partial: failure.partial,
+          };
         }
         addUsage(active, failure.usage);
         settle(active, { status: 'failed', error: failure.reason });
       },
-      deadline(_request) {
-        // M1a arms no deadline; an unknown op id is ignored.
+      /** @param {{ opId: string }} request */
+      deadline({ opId }) {
+        // Contract 2.3 item 3: to the entry of an issued, unsettled call.
+        const { active } = /** @type {any} */ (this).state;
+        if (current !== active) return;
+        const call = active.calls?.running.get(opId);
+        call?.entry.deadline?.(harden({ opId }), call.context);
+      },
+      /** @param {any} progress W1b.1: replaces the kept checkpoint */
+      progress({ round, partial, at }) {
+        const { active } = /** @type {any} */ (this).state;
+        if (current !== active || active.state !== 'running') return;
+        if (round !== active.round || active.roundKit === undefined) return;
+        see(at);
+        active.checkpoint = { round, partial };
       },
     },
   );
@@ -1007,7 +1063,7 @@ export const makeTurnRunner = ({
       return;
     }
     reopens = 0;
-    held = harden({ ports, tools: toolSetFor(ports, table) });
+    held = harden({ ports, tools: toolSetFor(ports, table, services) });
     const active = current;
     if (active === undefined || active.ports !== undefined) return;
     if (active.state !== 'running') return;
@@ -1090,7 +1146,7 @@ export const makeTurnRunner = ({
    * (QC advisory 1, J-0271): `take` runs before any record or send, so a
    * `take` that throws leaves no turn, no record and no send behind, and the
    * entry stays waiting.
-   * @param {string} input
+   * @param {any} input a string or a StagedText
    * @param {number} at
    * @param {(info: TurnInfo) => void} [take]
    */
@@ -1133,6 +1189,7 @@ export const makeTurnRunner = ({
       roundKit: undefined,
       sentUpTo: 0,
       usage: undefined,
+      checkpoint: undefined,
     };
     const turn = makeTurn(info);
     take(info);
@@ -1168,7 +1225,7 @@ export const makeTurnRunner = ({
     if (current !== undefined) return undefined;
     const item = queue.first();
     if (item !== undefined) {
-      return claim(item.submission.text, lastKnownTime, info =>
+      return claim(submissionField(item.submission), lastKnownTime, info =>
         queue.claim(item, info),
       );
     }
@@ -1235,9 +1292,14 @@ export const makeTurnRunner = ({
    */
   const makeTurn = defineExoClass(
     'Turn',
-    interfaces.Turn,
+    m1bInterfaces.Turn,
     (/** @type {TurnInfo} */ info) => ({ info }),
     {
+      /** @param {string} [cursor] W1b.1: the turn's records in full */
+      getContent(cursor) {
+        const { info } = /** @type {any} */ (this).state;
+        return contentPage(info.turnId, cursor);
+      },
       getStatus() {
         const { info } = /** @type {any} */ (this).state;
         return statusOf(info);
@@ -1321,10 +1383,11 @@ export const makeTurnRunner = ({
   const previewRecord = record => {
     const known = previews.get(record);
     if (known !== undefined) return known;
-    const message = (/** @type {string} */ t) =>
-      previewText(t, limits.messagePreviewUnits);
-    const tool = (/** @type {string} */ t) =>
-      previewText(t, limits.toolPreviewUnits);
+    // A staged field is already its preview (with its blob).
+    const message = (/** @type {any} */ t) =>
+      isStaged(t) ? t : previewText(t, limits.messagePreviewUnits);
+    const tool = (/** @type {any} */ t) =>
+      isStaged(t) ? t : previewText(t, limits.toolPreviewUnits);
     /** @type {any} */
     let shown = record;
     let cut = false;
@@ -1374,7 +1437,7 @@ export const makeTurnRunner = ({
       default:
         break;
     }
-    cut = shown !== record;
+    cut = shown !== record || blobsOf(record).length > 0;
     const preview = harden({ record: shown, cut, bytes: plainBytes(shown) });
     previews.set(record, preview);
     return preview;
@@ -1460,6 +1523,40 @@ export const makeTurnRunner = ({
     return harden(result);
   };
 
+  /**
+   * W1b.1 `Turn.getContent`: the turn's records in log order, in full, at
+   * most `pageRecords` and `frameBytes` per page; cursor `c<n>` (n > 0).
+   * @param {string} turnId
+   * @param {string} [cursor]
+   */
+  const contentPage = (turnId, cursor) => {
+    const own = records.ofTurn(turnId);
+    let start = 0;
+    if (cursor !== undefined) {
+      const match = /^c([1-9][0-9]*)$/.exec(cursor);
+      start = match === null ? NaN : Number(match[1]);
+      if (!(Number.isSafeInteger(start) && start < own.length)) {
+        throw Error(texts.badCursor);
+      }
+    }
+    const budget = limits.frameBytes - PAGE_SLACK;
+    /** @type {any[]} */
+    const page = [];
+    let used = 0;
+    let index = start;
+    while (index < own.length && page.length < limits.pageRecords) {
+      const bytes = plainBytes(own[index]);
+      if (page.length > 0 && used + bytes > budget) break;
+      page.push(own[index]);
+      used += bytes;
+      index += 1;
+    }
+    /** @type {Record<string, any>} */
+    const result = { records: harden(page) };
+    if (index < own.length) result.next = `c${index}`;
+    return harden(result);
+  };
+
   // ------------------------------------------------------------ the runner
 
   return harden({
@@ -1504,11 +1601,13 @@ export const makeTurnRunner = ({
     },
     /**
      * Section 6.1 direct start; refused while a turn is current (R4-10).
-     * @param {string} input
+     * @param {any} input a string or a StagedText
      * @param {number} at
      */
     startTurn: (input, at) => {
-      if (input.trim() === '') throw Error(texts.blankSubmission);
+      if (!isStaged(input) && input.trim() === '') {
+        throw Error(texts.blankSubmission);
+      }
       if (current !== undefined) throw Error(texts.activeTurn);
       const active = claim(input, at);
       flush();
