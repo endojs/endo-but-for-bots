@@ -2468,3 +2468,84 @@ about the client's `rev`: the comparison is the client's (section 5). (4) The pa
 does not include `resources/**`; the channel modules are type-checked only through the test files
 that import them.
 Decision: (1)-(3) as built; (4) for the PM (one include line), not a W1a.3 file.
+
+### J-0210 2026-11-16 M1a engine - good fit
+Evidence: W1a.1 ported three Endo pure modules into `packages/thixotrope-harness/guest/lib/` from
+commit `1315bef86` (commit `7bd314a887`): `packages/fae/src/turn-engine.js` (86 lines),
+`packages/fae/session/reply-fold.js` (182) and a subset of `packages/hosted-agent/src/transcript-records.js`
+(`assertTranscriptRecord`, `encodeTranscriptRecord`, `encodeTranscript`, `parseTranscript`,
+`pairToolCalls`; 516 lines in the source). What had to change to make them vat-safe: (1) imports of
+`@endo/errors` (`Fail`, `q`) and `@endo/harden` became reads of the prelude globals, so the bundle
+carries no second copy of a library; (2) the turn engine's `signal` is typed as any object with
+`throwIfAborted()` (vats have no `AbortController`; the engine only calls that method); (3)
+`encodeTranscript` grew a string with `+=` in its loop and now joins an array (rule 12.4); (4) the
+reply fold's event type, imported from `session/stream.js`, is declared locally, and
+`makeFoldableStatus()` is added; (5) two type casts for tsc. Nothing else: no clock, randomness or
+id minting existed in any of them (every effect of the turn engine is an injected callback), record
+keys were already a fixed vocabulary, and pairing was already `Map`-keyed (rule 12.10). The source
+tests were ported almost verbatim (`test/unit/m1a-lib-{turn-engine,reply-fold,transcript-records}.test.js`,
+27 tests; the tests of the transcript functions left out were dropped) and pass under ses-ava
+lockdown with the guest prelude installed. In a real vat (J-0211) every module loaded and ran
+correctly, including `Object.hasOwn`, an async `runAgenticTurn` over three rounds, and the fold.
+Decision: Endo's pure modules port with mechanical edits; a builder can reuse the other pure modules
+the reuse survey lists the same way (prelude names, no string growth in loops, `Map` for data keys).
+
+### J-0211 2026-11-16 M1a engine - perf
+Evidence: bundled sizes through `scripts/bundle-guest.mjs` `bundleGuest` (each module as its own entry;
+source bytes in brackets): `retired.js` 3,910 (1,584), `turn-engine.js` 6,736 (4,340),
+`reply-fold.js` 10,411 (8,052), `transcript-records.js` 16,197 (13,326), `bounded.js` 53,528
+including the contract it imports (`interfaces.js` + `limits.js` alone: 42,793; `bounded.js` source
+10,235). A standalone bundle carries about 2.3 KB of loader. All five W1a.1 modules with the contract
+in one bundle: 85,037 bytes, of which W1a.1 adds 42,244 (21 % of the 200 KB session-program budget;
+with the contract 43 %). The session program needs `turn-engine`, `bounded` and `retired`, not the
+fold (adapter side in M1a), so its share is about 77 KB before W1a.4/W1a.5 code [inferred]; comments
+are a large part of every module. Vat probe (throwaway script under the run lock; fresh base template
+copy, workspace vat through `client.call('evaluate', ...)`, the 85 KB bundle staged in 11 pieces of
+8,192 characters, then one evaluating crank; each check 3 times, median over the median floor of 9
+calls taken after the load; the HEAD shown is later than `7bd314a887` but the guest lib was unchanged;
+crank budget 50 M; JSON line unchanged):
+{"metric":"w1a1.lib.vatProbe","commit":"ec44994416","crankBudget":"50000000","bytes":85037,"chars":84949,"templateBuilt":true,"floorMs":161.8,"pieces":11,"stageMs":3150.8,"loadMs":208.5,"loadOverFloorMs":46.7,"exports":"'DEFAULT_MAX_TOOL_ROUNDS,RETIRED_TEXT,assertTranscriptRecord,boundToolOutput,chunkText,cutText,encodeTranscript,encodeTranscriptRecord,estimateBytes,fitsFrame,isRetiredBreak,makeFoldableStatus,makeReplyFold,messageBytes,pairToolCalls,parseTranscript,previewText,runAgenticTurn,splitBatches,utf8Bytes'","floorAfterLoadMs":[169.5,170.8,170.9,172.1,174.1,175,177.1,180.8,180.8],"results":{"hasOwn":"'function'","utf8":"'5,4,3,9'","chunkAscii200k":"'9:true:24576'","chunkEuro200k":"'25:true:true'","chunkMixedPairs":"'94:true:split=0'","cutEuro":"'8192:24576'","boundToolOutput300k":"'32768:true'","fitsFrameRoundRequest":"'true:8258:false'","splitBatches150":"'64,64,22'","transcript500":"'33390:500:250:0:true'","transcriptRefuse":"'transcript \"message\" record has unknown field \"cap\"'","turnEngine":"true","turnEngineResult":"'true:root/a!+b!/c!/final'","turnEngineBadBound":"'agentic turn maxRounds must be a positive integer'","replyFold":"'{\"phase\":\"thinking\",\"streamingText\":\"\",\"messages\":[{\"role\":\"assistant\",\"text\":\"Let me\"},{\"role\":\"tool\",\"id\":\"c1\",\"name\":\"echo\",\"args\":\"{}\",\"result\":\"ok\"},{\"role\":\"assistant\",\"text\":\"Done.\"}],\"error\":null,\"usage\":{\"turns\":1,\"inputTokens\":3,\"incompleteTurns\":0}}'","retired":"'true,false,false'"},"overFloorMs":{"hasOwn":-1,"utf8":-2.4,"chunkAscii200k":1.3,"chunkEuro200k":33.3,"chunkMixedPairs":94.8,"cutEuro":-4.7,"boundToolOutput300k":-6.5,"fitsFrameRoundRequest":8.4,"splitBatches150":37.8,"transcript500":260.9,"transcriptRefuse":22.1,"turnEngine":13.4,"turnEngineResult":2.9,"turnEngineBadBound":1.6,"replyFold":13,"retired":-0.3},"loadAvg":[8.49,5.34,4.8]}
+Reading: every check returned the expected value. Loading the 85 KB bundle costs about 47 ms over the
+floor (lazy guards are not built by these modules). `chunkText` of a 200,000-character ASCII
+source (the session program's case) costs nothing measurable over the floor (9 pieces of 24,576);
+of 200,000 three-byte characters (600 KB, 25 pieces) about 33 ms; of a mixed text with surrogate
+pairs at 1,000 bytes per piece (94 pieces, binary search each) about 95 ms. `fitsFrame` of a
+round request carrying an 8,192-character text answers from the estimate path in single milliseconds.
+Encoding, parsing and pairing a 500-record transcript costs about 261 ms (J-0212). Staging still costs
+about 0.29 s per 8 KB piece through the control socket (C-5). No check approached the crank budget;
+computron counts were not read.
+Decision: the sizes are recorded for `session.program` (W1a.7); if the session program nears
+200 KB, strip comments in the bundler first (J-0201).
+
+### J-0212 2026-11-16 M1a engine - awkward
+Evidence: two properties of `transcript-records.js` are harmless in Node and costly in a vat. (1)
+`parseTranscript` calls `JSON.parse`, which creates every key of a line's object before
+`assertTranscriptRecord` refuses an unknown field; in a vat each fresh key costs one of the ~57,000
+names for life (rule 12.10, J-0191), so parsing untrusted transcript text in a vat would let its author
+spend the vat's key space. (2) Validation is not cheap in a vat: 500 records encoded, parsed and paired
+(two assertions each) cost about 261 ms over the floor (J-0211), about 0.25 ms per assertion, against
+nothing measurable in Node. Separately, `reply-fold.js` writes a `thinking` key on thinking messages,
+which `shapes.FoldedMessage` (`guest/lib/interfaces.js`) does not name; M1a has no thinking events,
+so the snapshot shape holds for now.
+Decision: the module note says a vat parses only text the harness encoded and works in pages; M1a's
+session records are the contract's own shapes, so no M1a vat path parses transcripts. The milestone
+that adds thinking events must add `thinking` to `shapes.FoldedMessage` in a `contract(...)` commit.
+
+### J-0213 2026-11-16 M1a engine - good fit
+Evidence: `guest/lib/bounded.js` (new code) measures exactly with the engine's native
+`TextEncoder.encode` and never with `encodeInto`: in an Ironhorse vat `Uint8Array` after the SES boot
+is `@endo/immutable-arraybuffer`'s emulated constructor (`rust/endo/xsnap/src/polyfills.js:56-67`), so
+an `encodeInto` destination must be a genuine view; whether guest code can construct one was not
+tested [inferred], while `encode` was verified in vats (J-0203). `cutText`
+therefore takes one exact measurement when the prefix fits and otherwise a binary search of native
+encodes over at most `maxBytes` units, adjusting each probe off a surrogate-pair split point;
+`chunkText` cuts a window of `maxBytes` units (never ending inside a pair) and then `cutText`s it, so
+an ASCII source becomes `frameBytes`-unit pieces with one encode each. `fitsFrame` and
+`splitBatches` sum units x 3 and measure exactly only when that is over (`splitBatches` re-measures a
+group once after its first overflow, so the estimate never splits groups that fit). The message
+walk is iterative and accepts unhardened records (a sender may measure before hardening). Unit
+tests (`test/unit/m1a-lib-bounded.test.js`, 9 tests) check maximality and no pair split over
+deterministic mixed texts, and equality with Fae's `boundToolOutput` (R4-46) for pairs at the
+boundary; the vat probe repeated the chunking checks (no split, joins equal). One difference from Fae:
+a lone high surrogate exactly at the cut is kept (Fae drops it); no pair is ever split in either.
+Decision: as built; W1a.2, W1a.4, W1a.5 and W1a.6 use these entry points (m1a-interfaces.md section 11).
