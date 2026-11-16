@@ -20,6 +20,8 @@
 /* eslint-disable no-await-in-loop -- steps of one scenario run in order */
 import '../unit/_m1a-prelude.js';
 
+import { statSync } from 'node:fs';
+import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -135,13 +137,31 @@ run(
     t.is(filled.spareSessions, 6);
     await untilAsleep(slice.workers, isSpare);
     const kibAfter = du(state.root);
+    // A sleeping spare's disk is its snapshot (heaps/snapshots/<ref>.sqlite;
+    // its journal is cut to it). The whole-state du delta is kept for
+    // reference: it depends on when snapshots were written (J-0353).
+    const snapshotKiB = (await slice.workers()).filter(isSpare).map(w => {
+      try {
+        const file = path.join(
+          state.root,
+          'heaps',
+          'snapshots',
+          `${w.snapshot?.ref}.sqlite`,
+        );
+        return round1(statSync(file).size / 1024);
+      } catch {
+        return NaN;
+      }
+    });
+    const known = snapshotKiB
+      .filter(n => !Number.isNaN(n))
+      .sort((a, b) => a - b);
     emit({
       metric: 'pool.rest.diskPerSpare',
       unit: 'KiB',
-      value: round1((kibAfter - kibBefore) / 4),
-      spares: 4,
-      stateKiBBefore: kibBefore,
-      stateKiBAfter: kibAfter,
+      value: known[Math.floor(known.length / 2)] ?? NaN,
+      snapshotKiB,
+      stateKiBDeltaPer4: round1((kibAfter - kibBefore) / 4),
       ...identity,
     });
     emit({

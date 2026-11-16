@@ -4727,3 +4727,16 @@ staging sources, `mintHost`; `listed`/`isListed`): corrected in `98b756dc38`. (5
 discarded leaves its pre-minted, never-bound `SessionHostFacet` in the manager (one small exo per
 discarded spare).
 Decision: reported to the PM.
+
+### J-0357 2026-11-17 M1b pool - perf
+Evidence: a third `m1b-pool` run with `pool.rest.diskPerSpare` read from the spares' snapshot files
+(commit `ba89dccc4b` plus that test change, committed next; load 2.0-2.2):
+{"metric":"pool.rest.diskPerSpare","unit":"KiB","value":16340,"snapshotKiB":[16372,16340,16340,16340,16376,16340,16076],"stateKiBDeltaPer4":5520,"commit":"ba89dccc4b-dirty","crankBudget":"50000000","loadAvg":[2.16,1.98,1.99]}
+{"metric":"session.create.pool","unit":"ms","n":3,"median":1261.375,"p95":1303.919,"min":1098.085,"max":1303.919,"budget":{"median":750},"pass":false,"commit":"ba89dccc4b-dirty","crankBudget":"50000000","loadAvg":[2.19,2,1.99]}
+{"metric":"session.create.cold","unit":"ms","n":2,"median":6878.063,"min":6815.908,"max":6878.063,"budget":{"median":6000},"pass":true,"commit":"ba89dccc4b-dirty","crankBudget":"50000000","loadAvg":[2.1,2,1.99]}
+{"metric":"pool.refill","unit":"ms","value":4925.1,"spares":2,"lanes":4,"commit":"ba89dccc4b-dirty"}
+{"metric":"pool.fill4","unit":"ms","value":8833.3,"spares":4,"lanes":4,"perSpareMs":2208.3,"whileRefilling":{"samples":32,"maxRssKiB":620608,"maxWorkers":6},"commit":"ba89dccc4b-dirty"}
+A sleeping spare is 16.1-16.4 MiB of snapshot (7 spares, session and exec); the default pool (2 + 1)
+is about 49 MiB at rest. The whole-state `du` delta (5.5 MiB per spare here) undercounts, as J-0353
+says. `session.create.pool` repeats J-0351 (median 1.26 s, miss).
+Decision: as J-0351 and J-0353.
