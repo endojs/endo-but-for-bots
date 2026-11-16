@@ -3191,3 +3191,115 @@ for one call (ratio 1.09 < 1.6). Acceptance 10 at bound 2 serves in 6.1 s, A's c
 Decision: M1a acceptance 1-10 pass; perf misses are J-0272 (`turn.start` time and deliveries),
 J-0274 (`turn.delta`, subscriber placement), J-0276 (woken gate, first restart) and J-0280
 (`restart.crashingSession`, C-8/C-9).
+
+### J-0290 2026-11-17 M1a QC transport - poor fit
+Evidence: QC finding 1 reproduced first in Node: a session test where the echo fake rejects with
+`textOf.unexpectedArgument('the target session has been retired', ...)` settled the turn
+`outcome-unknown` (expected `running`), i.e. a model-chosen argument name faked a daemon restart
+(no `releaseTurn`, the lease leaked, a queued message held `restart`). Root cause: the only signal
+Thixotrope gives a vat for "the callee's session is gone" is an ordinary Error whose message is
+`'ocapn hub: the target session has been retired'` (`hub.js` builds it as `Error(reason)` at :1063,
+:1522, :1947, :1968), and `isRetiredBreak` tested it with `includes`. An adapter tool's own
+rejection crosses the hub as the same kind of Error, so text was the only distinguisher.
+Fix (`f0101ef14b` contract, `b64fd0a54f` code): `isRetiredBreak` is an exact match on the whole hub
+message; echo answers R4-43/R4-45 argument errors as `{ status: 'failed', text }` (cut to the
+frame; new `echo-failed` log kind), so an adapter tool rejects only on a real break or its own
+defect. The V8 `JSON.parse` message also quotes argument text, so the parse path had the same hole.
+Proof in a real vat (`3cb250d6f1`, slice test "QC 1", 16.9 s): the turn completes with the R4-43
+`Error: ...` result, the log shows `echo-start, echo-failed`, and the queued message runs.
+Acceptance 5-7 (`m1a-slice-restart`, 3/3) and 10 (`m1a-slice-crash`, 1/1) still recover through the
+exact match, so the hub text reaches vats unchanged.
+Decision: fixed within M1a. Still a poor fit: a break is distinguishable from an application error
+only by an exact string. A typed break (an error kind or a distinct rejection class from the hub)
+would remove the string protocol; core candidate for the PM, not filed as a C-n here.
+
+### J-0291 2026-11-17 M1a QC tooling - deviation
+Evidence: QC finding 2 (the full unit lane failed on `deadlines: armDeadline calls
+sink.deadline...`). Reproduced in my first full lane (1 failed, 271 passed). Instrumented runs
+(QCDBG prints in `endpoint.js`, reverted) showed every armed timer firing, 50-80 ms late under the
+lane's load (a 10 ms timer fired at 66-77 ms): the 60 ms deadline `c` then fired before the test
+released the turn, `deadlines.length === 1` was never observed, and `until()` timed out after 3 s.
+The reviewers' "until(dispatching)" was the line of the deadlines wait (line 583 at `ffa4aa31c9`).
+The endpoint was correct; the test depended on timer latency.
+Fix (`f1ff7ff152`): the test gives the endpoint hand-fired timers and checks the same three facts
+(a fires, disarmed b is cancelled, release cancels c). Full lane 10/10 green after the fix (272
+passed), and 3/3 at the end of the unit (275 passed, 23 skipped). No test was weakened.
+Decision: done.
+
+### J-0292 2026-11-17 M1a QC engine - good fit
+Evidence: QC advisories 1, 2 and 4, each with a failing Node test first (`0f7ed5711b`).
+(1) `claim()` now makes the Turn, lets the queue claim the entry, and only then appends
+`TurnStarted` and sends `open`; a `queue.claim` that throws leaves no turn, no record and no `open`,
+and the entry runs exactly once later (the J-0271 triple run cannot recur). `settle()` still claims
+in its own crank (so the batch carries the post-claim `pending`, as section 6.3 and the FIFO test
+require) but publishes and sends `releaseTurn` before rethrowing a failed claim. (2) No in-place
+element moves left on the turn path or in factory rows: `issueWaiting` reads `waiting` by index,
+`onPorts` builds a fresh outbox before setting the ports, `rows.drop` filters. (4) The channel
+never moves `latestRev` back; a late older batch keeps its own rev.
+Reading: Thixotrope's "a crank's sends go out even if the crank later throws" makes intent before
+effect a per-call-site discipline in guest code; with that order kept, the fixes were local.
+Decision: done. Advisory 4 is only half fixed: a late older batch is still delivered after a newer
+one (no reordering); viewers fold by arrival. Follow-up with advisory 3.
+
+### J-0293 2026-11-17 M1a QC engine - perf
+Evidence: `perf/turn.perf.mjs` under the run lock at `0f7ed5711b` (the slice test edits uncommitted,
+not in the provisioned code), release worker `c2f65dbe...`, crank budget 50 M, load average
+1.4-2.1, n=200.
+{"metric":"turn.start","unit":"ms","n":200,"median":573,"p95":783,"p99":5742,"min":-3391,"max":14609,"deliveriesPerTurn":14.36,"budget":{"median":350},"pass":false,"commit":"0f7ed5711b-dirty","crankBudget":"50000000","loadAvg":[1.41,1.69,2.02]}
+{"metric":"turn.start.open","unit":"ms","median":466,"p95":532,"commit":"0f7ed5711b-dirty","crankBudget":"50000000","loadAvg":[1.41,1.69,2.02]}
+{"metric":"turn.start.dispatch","unit":"ms","median":107,"p95":127,"commit":"0f7ed5711b-dirty","crankBudget":"50000000","loadAvg":[1.41,1.69,2.02]}
+{"metric":"turn.start.deliveries","unit":"frames","value":4,"kinds":["deliver enqueueOnce","deliver fulfill","gc-exports","deliver dispatchingD"],"budget":{"deliveriesPerOp":3},"pass":false,"commit":"0f7ed5711b-dirty","crankBudget":"50000000","loadAvg":[1.76,1.74,2.02]}
+{"metric":"turn.delta","unit":"ms","n":250,"median":18,"p95":3019,"deliveries":{"perOp":0},"budget":{"median":5,"deliveriesPerOp":0},"pass":false,"commit":"0f7ed5711b-dirty","crankBudget":"50000000","loadAvg":[1.41,1.69,2.02]}
+{"metric":"turn.round","value":3,"pass":true,"metric2":"turn.lease","value2":1,"pass2":true,"commit":"0f7ed5711b-dirty","crankBudget":"50000000"}
+Reading: QC findings 3, 4 and 5 are unchanged by the QC fixes: turn.start 573 ms (1.64 x of 350),
+open 466 + dispatch 107 as in J-0272; 4 session frames per start, the extra one `gc-exports`;
+turn.delta 18 ms with 0 vat deliveries per delta (now measured after `76045694b3`'s counting fix,
+closing QC advisory 11's first point). The p95 3,019 ms of turn.delta is one 53-frame gc-exports
+burst inside a streaming turn. `min` is negative (-3,391 ms; also in open/dispatch/client): the
+perf script keys log lines by `turnId` alone, and later sessions of the same backend reuse `t1..`,
+so a few start samples pair with another session's lines. The median is not affected [inferred:
+negative pairs need a colliding turnId; 5-10 of 200 at most]; the script is a follow-up.
+Decision: not fixable inside the M1a design. Finding 3 needs a contract change (keep `TurnPorts`
+across a session's turns, or open without the manager hop): escalated to the PM as in J-0272.
+Finding 4 needs either the same contract change (fewer per-turn exports, so fewer gc-exports) or
+C-17 (GC frames not a full delivery). Finding 5 is a measurement placement problem: a control-client
+subscriber crosses the hub per batch; an in-process or gateway subscriber is M3. No budget changed.
+
+### J-0294 2026-11-17 M1a QC persistence - poor fit
+Evidence: `perf/restart.perf.mjs` under the run lock at `0f7ed5711b`, 10 idle checkpointed sessions
+plus 1 in flight, SIGKILL, 5 runs, load average 1.5-1.9.
+{"metric":"restart.serving","unit":"ms","n":5,"median":6687.4,"min":6174.2,"max":6889.4,"budget":{"median":10000},"pass":true,"commit":"0f7ed5711b-dirty","crankBudget":"50000000","loadAvg":[1.93,1.87,2.02]}
+{"metric":"restart.serving.gate","runs":[{"run":1,"woken":11,"gate":false},{"run":2,"woken":1,"gate":true},{"run":3,"woken":1,"gate":true},{"run":4,"woken":1,"gate":true},{"run":5,"woken":1,"gate":true}],"commit":"0f7ed5711b-dirty","crankBudget":"50000000"}
+{"metric":"restart.crashingSession","unit":"ms","n":5,"median":20555.1,"min":20380.7,"max":23284.8,"budget":{"median":15000},"pass":false,"depends":"C-8, C-9","commit":"0f7ed5711b-dirty","crankBudget":"50000000","loadAvg":[1.45,1.66,1.9]}
+Reading: QC finding 6 reproduces exactly as W1a.7 saw it: the gate fails in run 1 and holds in runs
+2-5. It is now 2 of 2 perf invocations failing in run 1 and 0 of 8 later runs, so it is systematic,
+not flaky: the first restart after the setup client (which made all 11 sessions and held their
+presences) died wakes every session with `gc-exports` frames from that dead peer (run 1 snapshot
+count 15 against 6 in later runs). Later restarts have no such peer. In every run the in-flight turn
+read `outcome-unknown` at the first read. crashingSession still misses (1.37 x, C-8/C-9).
+Decision: needs a core change (C-17 as proposed in J-0276/J-0277: GC from a dead peer must not be
+a full delivery that wakes a sleeping vat, or must be deferred until the vat wakes for another
+reason). Not fixable in M1a guest code: the session cannot refuse a GC frame. Open problem.
+
+### J-0295 2026-11-17 M1a QC tests - good fit
+Evidence: every M1a integration file run alone under one run-lock hold (`qc-m1a`) at `0f7ed5711b`,
+release worker, crank budget 50 M, template built in the first file: m1a-slice 5/5 (195.4 s with
+the template build), m1a-slice-restart 3/3 (142.2 s), m1a-slice-crash 1/1 (99.8 s), m1a-provision
+1/1 (154.6 s); load average 1.7-3.3. Then m1a-slice again with the new QC 1 test at `3cb250d6f1`
+plus the receipt fix (committed next): 6/6 (tests 15.9-21.5 s each, template cached). Unit lane at
+the end: 275 passed, 23 skipped, 3/3 runs; `yarn lint` 0 errors (114 warnings, pre-existing kinds).
+Decision: M1a acceptance 1-10 still pass after the QC fixes; QC 1 has an in-vat regression test.
+
+### J-0296 2026-11-17 M1a QC follow-ups - awkward
+Evidence: advisories not changed in this unit, each still open: (3) the outside-publish chain in
+`live.js` has no bound and waits forever behind a `liveChannel()` that never settles; a bounded
+queue with drop-oldest is a small redesign of `outside`. (5) subscribers per channel are unbounded
+and the drop limit counts deliveries, not bytes. (6) R4-46 truncation above about 24 KB of ASCII
+always ends in frame-limit (contract choice), and `roundRequest` falls back to `append: []`.
+(7) `Session.enqueueOnce`/`startTurn` admit 8,192 units (up to about 24.6 KB UTF-8), so the frame
+rule rests on the Composer. (8) `getHistoryPage`/`getCurrentTurn` cost on long sessions is not
+measured against the crank meter. (9) per-session state grows without bound; `Turn.resolve` can be
+repeated on an outcome-unknown turn. (10) the start listener probes only `working` rows, so an idle
+lost session stays `ready` until called. (18) tsconfig does not include `resources/**`. C-16 has no
+minimal reproduction; the turn path no longer moves array elements in place (J-0292).
+Decision: for the PM; (3), (5) and (7) are the cheapest next fixes, (6) and (7) need contract text.
