@@ -211,6 +211,8 @@ export const makeNativeAdapters = (
               sink = hub.attachSession(id, {
                 durable: false,
                 discardOnRestart: true,
+                // A burst of GC frames (one IPC read) commits once (C-20).
+                coalesceInbound: true,
                 send: child.send,
                 onAbort: () => {
                   void end().catch(error => cleanupFailure.record(error));

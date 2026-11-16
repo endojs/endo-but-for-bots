@@ -271,6 +271,10 @@ const buildDaemon = async (
           /** @type {Uint8Array} */ bytes,
           /** @type {string | undefined} */ sequence = undefined,
         ) => transport.write(bytes, sequence),
+        // A hub flush toward the worker is journaled with one fsync.
+        sendBatch: (
+          /** @type {Array<{ bytes: Uint8Array, sequence: string }>} */ frames,
+        ) => transport.writeBatch(frames),
         // The worker transport journals frames against heap snapshots;
         // hub frames toward a momentarily-detached worker session must
         // queue, never break.

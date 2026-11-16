@@ -265,6 +265,8 @@ export const makeOcapnHub = ({
    *   nextHandoffCount: bigint,
    *   dialLocation: any,
    *   send: (bytes: Uint8Array, deliverySequence?: string) => unknown,
+   *   sendBatch: ((frames: Array<{ bytes: Uint8Array, sequence: string }>) => number) | undefined,
+   *   inbound: Array<Uint8Array> | undefined,
    *   requireAcceptance: boolean,
    *   deferCleanup: boolean,
    *   discardOnRestart: boolean,
@@ -426,6 +428,19 @@ export const makeOcapnHub = ({
     batch.send(message);
   };
 
+  /**
+   * Each coalescing session's pending-frame drain, so forgetting or
+   * retiring the session handles what it already delivered first.
+   *
+   * @type {WeakMap<SessionState, () => void>}
+   */
+  const inboundDrains = new WeakMap();
+  /** @param {string} sessionKey */
+  const drainInboundOf = sessionKey => {
+    const session = sessions.get(sessionKey);
+    if (session?.inbound !== undefined) inboundDrains.get(session)?.();
+  };
+
   // --- cost counters (process-local, never persisted) ---
 
   /**
@@ -521,6 +536,26 @@ export const makeOcapnHub = ({
     }
   };
 
+  /**
+   * One batch of sends toward a session, timed (a durable worker journals
+   * the whole batch with one fsync before it returns).
+   *
+   * @param {SessionState} session
+   * @param {Array<{ bytes: Uint8Array, sequence: string }>} frames
+   */
+  const timedSendBatch = (session, frames) => {
+    const start = now();
+    try {
+      return /** @type {NonNullable<SessionState['sendBatch']>} */ (
+        session.sendBatch
+      )(frames);
+    } finally {
+      const bucket = measuring ?? costs.outside;
+      bucket.sends += 1;
+      bucket.sendMs += now() - start;
+    }
+  };
+
   // --- persistence ---
 
   let deliveryDepth = 0;
@@ -576,6 +611,8 @@ export const makeOcapnHub = ({
         send: () => {
           throw Error(`ocapn hub: session ${sessionKey} is not attached`);
         },
+        sendBatch: undefined,
+        inbound: undefined,
         requireAcceptance: false,
         deferCleanup: false,
         discardOnRestart: false,
@@ -1061,8 +1098,40 @@ export const makeOcapnHub = ({
 
   // --- outbound ---
 
+  /**
+   * Whether flushes toward this session go out as one batch: a batching
+   * durable receiver that is never dialed (so no gift withdrawal is ever
+   * ordered in front of its queue).
+   *
+   * @param {SessionState} session
+   */
+  const sendsInBatches = session =>
+    session.sendBatch !== undefined && session.dialLocation === undefined;
+
+  /**
+   * Give every unattempted frame of a batching session's queue its stable
+   * sequence, in order.
+   *
+   * @param {SessionState} session
+   */
+  const assignQueueSequences = session => {
+    for (let i = 0; i < session.queueSequences.length; i += 1) {
+      if (session.queueSequences[i] === '') {
+        session.nextDelivery += 1n;
+        session.queueSequences[i] = String(session.nextDelivery);
+        dirty = true;
+      }
+    }
+  };
+
   /** @param {any} session */
   const prepareOutboxHead = session => {
+    if (session.attached && sendsInBatches(session)) {
+      // The whole queue goes out in the next flush: commit all of its
+      // sequences in the commit that precedes it.
+      assignQueueSequences(session);
+      return;
+    }
     if (
       session.attached &&
       !session.discardOnRestart &&
@@ -1142,6 +1211,36 @@ export const makeOcapnHub = ({
               return;
             }
           }
+        }
+        return;
+      }
+      if (sendsInBatches(session)) {
+        // A batching durable receiver (a worker's journal): give every
+        // queued frame its stable sequence, commit them all with one
+        // persist, then hand the committed queue over in one durable
+        // append. The receiver deduplicates by sequence, so a crash after
+        // the append but before the removal commits resends what it owns.
+        // Sequences go to the whole queue, not only its head: no gift
+        // withdrawal is ever ordered toward such a session (it is never
+        // dialed), so nothing must move in front of the tail at reattach.
+        while (session.queue.length > 0 && session.attached) {
+          // Usually committed already, with the delivery that queued them.
+          assignQueueSequences(session);
+          persist();
+          const count = session.queue.length;
+          const frames = session.queue.map((hex, i) => ({
+            bytes: decodeHex(hex),
+            sequence: session.queueSequences[i],
+          }));
+          const accepted = timedSendBatch(session, frames);
+          (Number.isInteger(accepted) && accepted >= 0 && accepted <= count) ||
+            Fail`sendBatch for ${sessionKey} must return how many frames it owns`;
+          if (accepted > 0) {
+            session.queue.splice(0, accepted);
+            session.queueSequences.splice(0, accepted);
+            dirty = true;
+          }
+          if (accepted < count) break;
         }
         return;
       }
@@ -2232,6 +2331,15 @@ export const makeOcapnHub = ({
      *   instead of being dropped (the policy for sessions from beyond
      *   the process boundary)
      * @param {(error: unknown) => void} [powers.onAbort]
+     * @param {(frames: Array<{ bytes: Uint8Array, sequence: string }>) => number} [powers.sendBatch]
+     *   several frames in order with their sequences, owned durably by the
+     *   receiver when it returns: answers how many leading frames it owns.
+     *   Requires `deferCleanup`. The outbox then commits every queued
+     *   frame's sequence with one persist and sends them in one call.
+     * @param {boolean} [powers.coalesceInbound] frames delivered in one
+     *   turn are handled together at the end of it, as one batch with one
+     *   commit, instead of one commit each. Requires `discardOnRestart`
+     *   (no replay identities, nobody awaits each frame's commit).
      * @param {{ sessionId: Uint8Array, peerPublicKeyQ: Uint8Array, selfPrivateKeyBytes?: Uint8Array }} [powers.identity]
      *   the session's wire identity from the embedder's handshake
      *   (including the hub side's session private key, which signs
@@ -2242,6 +2350,8 @@ export const makeOcapnHub = ({
       sessionKey,
       {
         send,
+        sendBatch = undefined,
+        coalesceInbound = false,
         durable = false,
         requireAcceptance = false,
         deferCleanup = false,
@@ -2251,6 +2361,12 @@ export const makeOcapnHub = ({
         identity = undefined,
       },
     ) => {
+      sendBatch === undefined ||
+        deferCleanup ||
+        Fail`batched sends require deferred outbox cleanup`;
+      !coalesceInbound ||
+        discardOnRestart ||
+        Fail`coalesced inbound frames require a disposable observer session`;
       !discardOnRestart ||
         (sessionKey.startsWith('transient:') &&
           !durable &&
@@ -2259,6 +2375,7 @@ export const makeOcapnHub = ({
         Fail`disposable observer requires a unique transient session and abort handler`;
       const session = provideSessionState(sessionKey);
       session.send = send;
+      session.sendBatch = sendBatch;
       !deferCleanup ||
         (durable && requireAcceptance) ||
         Fail`deferred outbox cleanup requires durable acceptance`;
@@ -2355,6 +2472,19 @@ export const makeOcapnHub = ({
         persist();
         for (const key of sessions.keys()) flushOutbox(key);
       };
+      /**
+       * Handle the frames a coalescing session delivered in this turn, as one
+       * batch: one commit, then the sends. Not for a session forgotten or
+       * replaced meanwhile.
+       */
+      const drainInbound = () => {
+        const frames = session.inbound;
+        if (frames === undefined || frames.length === 0) return;
+        session.inbound = undefined;
+        if (sessions.get(sessionKey) !== session) return;
+        sink.deliverBatch(frames.map(bytes => ({ bytes })));
+      };
+      inboundDrains.set(session, drainInbound);
       const sink = harden({
         /**
          * @param {Uint8Array} bytes one inbound OCapN frame
@@ -2364,8 +2494,30 @@ export const makeOcapnHub = ({
          *   skipped, making processing exactly-once — the watermark
          *   commits atomically with the frame's effects
          */
-        deliver: (bytes, sequenceNumber = undefined) =>
-          measureDelivery(() => deliverFrame(bytes, sequenceNumber)),
+        deliver: (bytes, sequenceNumber = undefined) => {
+          if (coalesceInbound && sequenceNumber === undefined) {
+            if (session.inbound === undefined) {
+              session.inbound = [bytes];
+              // The end of this turn: every frame delivered before it (one
+              // read of the transport, usually) commits together.
+              Promise.resolve()
+                .then(drainInbound)
+                .catch(error => {
+                  logError(`inbound frames from ${sessionKey} failed:`, error);
+                  try {
+                    session.onAbort?.(error);
+                  } catch (hookError) {
+                    logError(`onAbort for ${sessionKey} threw:`, hookError);
+                  }
+                });
+            } else {
+              session.inbound.push(bytes);
+            }
+            return;
+          }
+          drainInbound();
+          measureDelivery(() => deliverFrame(bytes, sequenceNumber));
+        },
         /**
          * Commit a completed crank atomically, preserving frame order and
          * individual replay identities. Never publish an intermediate effect.
@@ -2390,6 +2542,7 @@ export const makeOcapnHub = ({
           flushOutbox(sessionKey);
         },
         detach: () => {
+          drainInbound();
           session.attached = false;
         },
       });
@@ -2474,6 +2627,8 @@ export const makeOcapnHub = ({
      *   old transport tombstone cannot retire a replacement under the alias
      */
     retireSession: (sessionKey, expectedEpoch = undefined) => {
+      // Frames the session delivered before its retirement are its own.
+      drainInboundOf(sessionKey);
       if (
         expectedEpoch !== undefined &&
         (sessions.get(sessionKey)?.epoch ?? 0) !== expectedEpoch
@@ -2499,6 +2654,7 @@ export const makeOcapnHub = ({
      * @param {string} sessionKey
      */
     forgetSession: sessionKey => {
+      drainInboundOf(sessionKey);
       retireSessionInternal(sessionKey);
       sessions.delete(sessionKey);
       codecKits.delete(sessionKey);

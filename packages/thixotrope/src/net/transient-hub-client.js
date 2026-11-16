@@ -64,6 +64,8 @@ export const makeTransientHubClient = async (
     hubSession.attach({
       durable: false,
       discardOnRestart: true,
+      // Frames written in one turn commit once (C-20).
+      coalesceInbound: true,
       onAbort: close,
     });
     const session = await client.provideSession(
