@@ -24,6 +24,7 @@ import { makeEndpoint } from './endpoint.js';
 import { makeTimerFacet, makeTimers } from './timers.js';
 import { findBlobDir, makeBlobStore } from './blobs.js';
 import { makeContent } from './content.js';
+import { makeListChannel } from './list-channel.js';
 import { makeEventLog, makeScriptedProvider } from './providers/scripted.js';
 import { makeEchoTool } from './tools/echo.js';
 
@@ -95,7 +96,9 @@ export const makeAgentHostImpl = ({
   });
   const content = makeContent({ store: blobs });
   const timer = makeTimerFacet(timers);
-  const live = makeLive({ channels });
+  // The session list channel (W1b.5's list-channel.js), one per incarnation.
+  const listChannel = makeListChannel();
+  const live = makeLive({ channels, listChannel });
   const composer = makeComposer({ blobs });
 
   /**
@@ -153,6 +156,7 @@ export const makeAgentHostImpl = ({
     live: () => live,
     composer: () => composer,
     content: () => content,
+    listPublisher: () => listChannel.publisher,
   });
 
   const { bind, unbind } = makeAttach({
@@ -164,6 +168,6 @@ export const makeAgentHostImpl = ({
       await blobs.sweep().catch(() => {});
     },
   });
-  return harden({ bind, unbind, ops, blobs, content });
+  return harden({ bind, unbind, ops, blobs, content, listChannel });
 };
 harden(makeAgentHostImpl);

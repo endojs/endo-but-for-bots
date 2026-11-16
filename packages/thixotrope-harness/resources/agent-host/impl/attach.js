@@ -69,7 +69,7 @@ const makeOpsInterface = () =>
  * @property {() => any} composer
  * @property {() => any} content M1b: this incarnation's Content
  * @property {() => any} [listPublisher] M1b: the list channel's publisher
- *   (W1b.5's `AH/list-channel.js`); throws until one is wired
+ *   (W1b.5's `AH/list-channel.js`); refused without one
  */
 
 /**

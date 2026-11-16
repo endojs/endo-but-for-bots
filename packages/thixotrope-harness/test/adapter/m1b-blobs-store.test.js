@@ -359,9 +359,14 @@ test('manager: mintBlobs and resolveBlobs on the real sink; admin.content() and 
     harden({ offset: 0, maxBytes: 100 }),
   );
   t.is(page.text, 'q'.repeat(100));
-  await t.throwsAsync(() => E(admin).listPublisher(), {
-    message: /no session list feed/,
-  });
+  // The list feed (W1b.5's channel, wired here): the factory's publisher
+  // reaches Live.subscribeList subscribers of the same incarnation.
+  const listPublisher = await E(admin).listPublisher();
+  t.is(listPublisher, impl.listChannel.publisher);
+  const live = await E(admin).live();
+  const list = await E(live).subscribeList(0);
+  const [snapshot] = (await E(list).next()).deliveries;
+  t.deepEqual(snapshot.event, { type: 'list-snapshot' });
 
   // TurnPorts carry content, writers and timer.
   const backend = await E(admin).makeBackend(
