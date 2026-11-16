@@ -6,6 +6,7 @@
     "guest/**/*.js",
     "lint/**/*.js",
     "perf/**/*.mjs",
+    "resources/**/*.js",
     "scripts/**/*.mjs",
     "scripts/**/*.js",
     "test/**/*.js",
