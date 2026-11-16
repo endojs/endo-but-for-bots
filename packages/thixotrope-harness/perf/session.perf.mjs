@@ -3,7 +3,9 @@
  * Perf check "session" (milestones.md M1a perf table, W1a.7):
  *
  * - `session.program`: bytes of the bundled session program
- *   (`guest/session/main.js`), budget 200,000 (value).
+ *   (`guest/session/main.js`), budget 200,000 (value), with its non-ASCII
+ *   units (0 since the bundler escapes them) and its staging pieces of
+ *   `programPieceBytes`.
  * - `install.factory`: provisioning a fresh state directory, the step that
  *   installs the factory bundle (`install harness`), budget 15 s. Each run
  *   serves a new state directory and runs every provisioning step;
@@ -34,8 +36,15 @@ const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
 installGuestPrelude();
 const { E } = await import('@endo/far');
 const { bundleGuest } = await import('../scripts/bundle-guest.mjs');
-const { guestRoot, makeProvision, sessionEntry, sessionProgramBytes } =
-  await import('../scripts/provision-steps.js');
+const {
+  guestRoot,
+  makeProvision,
+  programPieceBytes,
+  sessionEntry,
+  sessionProgramBytes,
+} = await import('../scripts/provision-steps.js');
+// eslint-disable-next-line import/no-relative-packages
+const { chunkText } = await import('../guest/lib/bounded.js');
 const { perfScript } = await import('../test/fixtures/scripts/m1a-slice.js');
 const { makeSlice } = await import('../test/integration/_m1a-slice.js');
 
@@ -54,6 +63,8 @@ await runPerf('session', async ({ root, provision }) => {
       units: program.source.length,
       modules: program.modules.length,
       nonAsciiUnits: nonAscii,
+      stagingPieces: chunkText(program.source, programPieceBytes).length,
+      programPieceBytes,
     },
   });
 

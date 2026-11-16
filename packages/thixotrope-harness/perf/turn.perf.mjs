@@ -21,10 +21,20 @@
  *   (dispatching(0) round trip). `turn.start.client` from the control
  *   client's call. `turn.start.deliveries`: frames into the session from the
  *   submit to the request, budget 3.
- * - `turn.delta`: a delta's publish (its `delta` line) to its arrival at a
- *   Live subscriber in this process (control client, through the hub);
- *   budget median 5 ms; `deliveriesPerOp`: frames the session received
- *   while 50 deltas streamed, per delta, budget 0.
+ * - `turn.delta`: a delta's publish to its arrival at a Live subscriber in
+ *   the adapter process, where the browser gateway will hold its
+ *   subscriptions (the channels' live probe, `tmp/live-probe/`, both times
+ *   `performance.now()` in the adapter); budget median 5 ms;
+ *   `deliveriesPerOp`: frames the session received while 50 deltas
+ *   streamed, per delta, budget 0.
+ * - `turn.delta.client`: the same deltas from their publish (the provider's
+ *   `delta` line) to their arrival at a Live subscriber in this process (a
+ *   control client: every batch crosses the hub; `Date.now()` on one
+ *   machine); recorded, no budget (J-0274: the hop alone is 12-25 ms).
+ *
+ * Log lines are paired by backend and turn: the backend's label is unique
+ * to this run and it serves one session, so a turn id names one turn (the
+ * template's own backends write `t1..` too, J-0293).
  * - `turn.round`: frames per round with 2 echo calls (a tool turn against a
  *   plain turn), budget 3; `turn.lease`: frames of a plain turn besides
  *   its start, its final round and GC frames, budget 1.
@@ -36,7 +46,13 @@
  * turn.delta (50 deltas each); ROUND_N (default 10) tool and plain turns.
  * IDLE_MS defaults to 1 h (perf/_harness.mjs), so the vat never sleeps.
  */
-import { readFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -61,6 +77,8 @@ const { perfInputs, perfScript, STREAM_CHUNKS } =
   await import('../test/fixtures/scripts/m1a-slice.js');
 const { makeSlice, sliceTemplate, waitFor } =
   await import('../test/integration/_m1a-slice.js');
+const { liveProbeDir } =
+  await import('../resources/agent-host/impl/channels.js');
 
 const TURN_N = Number(process.env.TURN_N ?? 200);
 const STREAM_TURNS = Number(process.env.STREAM_TURNS ?? 5);
@@ -88,11 +106,68 @@ const frameKind = line => {
   return `deliver ${method}`;
 };
 
+/**
+ * Lines of one kind for round 0, by turn id; refuses a turn id seen twice
+ * (lines of another backend or session would pair wrongly).
+ * @param {any[]} lines
+ * @param {string} kind
+ * @returns {Map<string, number>}
+ */
+const atByTurn = (lines, kind) => {
+  /** @type {Map<string, number>} */
+  const out = new Map();
+  for (const l of lines) {
+    if (l.kind === kind && l.round === 0) {
+      if (out.has(l.turnId))
+        throw Error(`two ${kind} lines for turn ${l.turnId} of this backend`);
+      out.set(l.turnId, l.at);
+    }
+  }
+  return out;
+};
+
+/** The live probe's lines (every adapter pid), or none. */
+const readProbe = () => {
+  /** @type {any[]} */
+  const lines = [];
+  for (const name of readdirSync(liveProbeDir)) {
+    if (name.endsWith('.jsonl')) {
+      const text = readFileSync(path.join(liveProbeDir, name), 'utf8');
+      for (const line of text.split('\n')) {
+        if (line) lines.push(JSON.parse(line));
+      }
+    }
+  }
+  return lines;
+};
+
 await runPerf('turn', async ({ provision }) => {
   const template = await sliceTemplate();
+  // The adapter makes its channel registry when it starts: switch the live
+  // probe on before serving, off when done.
+  rmSync(liveProbeDir, { recursive: true, force: true });
+  mkdirSync(liveProbeDir, { recursive: true });
+  writeFileSync(path.join(liveProbeDir, 'enabled'), 'perf/turn.perf.mjs\n');
+  try {
+    await measure(template, provision);
+  } finally {
+    if (!process.env.KEEP_STATE)
+      rmSync(liveProbeDir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * @param {any} template
+ * @param {(options: any) => Promise<any>} provision
+ */
+async function measure(template, provision) {
   const run = await provision({ template });
   const slice = await makeSlice(run);
-  const { backend, log } = await slice.makeBackend(harden(perfScript));
+  const label = `perf-turn-${process.pid}`;
+  const made = await slice.makeBackend(harden(perfScript), { label });
+  const { backend } = made;
+  /** This backend's lines only (its session is the only one using it). */
+  const log = () => made.log().filter(l => l.label === label);
   const session = await slice.createSession(backend, 'perf');
   const sub = await slice.subscribe(session);
   const worker = await slice.sessionWorker('s1');
@@ -191,16 +266,17 @@ await runPerf('turn', async ({ provision }) => {
   for (let i = 0; i < TURN_N; i += 1) starts.push(await turn(perfInputs.start));
   const engineAfter = (await run.client.call('status')).timings;
   const lines = log();
-  /** @param {string} kind */
-  const atOf = kind =>
-    new Map(
-      lines
-        .filter(l => l.kind === kind && l.round === 0)
-        .map(l => [l.turnId, l.at]),
-    );
-  const requestAt = atOf('request');
-  const roundStartAt = atOf('round-start');
-  const startMs = starts.map(s => requestAt.get(s.turnId) - s.at);
+  const requestAt = atByTurn(lines, 'request');
+  const roundStartAt = atByTurn(lines, 'round-start');
+  /** @param {number[]} values */
+  const assertPaired = values => {
+    if (values.some(v => !Number.isFinite(v)))
+      throw Error('a turn.start sample has no paired log line');
+    return values;
+  };
+  const startMs = assertPaired(
+    starts.map(s => Number(requestAt.get(s.turnId)) - s.at),
+  );
   await stats('turn.start', startMs, {
     budget: { median: 350 },
     before: engineBefore,
@@ -222,7 +298,7 @@ await runPerf('turn', async ({ provision }) => {
   });
   await stats(
     'turn.start.open',
-    starts.map(s => roundStartAt.get(s.turnId) - s.at),
+    assertPaired(starts.map(s => Number(roundStartAt.get(s.turnId)) - s.at)),
     {
       extra: {
         from: 'Composer stamp',
@@ -232,12 +308,17 @@ await runPerf('turn', async ({ provision }) => {
   );
   await stats(
     'turn.start.dispatch',
-    starts.map(s => requestAt.get(s.turnId) - roundStartAt.get(s.turnId)),
+    assertPaired(
+      starts.map(
+        s =>
+          Number(requestAt.get(s.turnId)) - Number(roundStartAt.get(s.turnId)),
+      ),
+    ),
     { extra: { from: 'round-start', to: 'request (dispatching answered)' } },
   );
   await stats(
     'turn.start.client',
-    starts.map(s => requestAt.get(s.turnId) - s.clientAt),
+    assertPaired(starts.map(s => Number(requestAt.get(s.turnId)) - s.clientAt)),
     { extra: { from: 'control client before submit', to: 'request' } },
   );
 
@@ -273,6 +354,8 @@ await runPerf('turn', async ({ provision }) => {
   // ---- turn.delta
   /** @type {number[]} */
   const latencies = [];
+  /** @type {string[]} */
+  const streamTurnIds = [];
   /** @type {number[]} */
   const streamingFrames = [];
   /** @type {string[]} */
@@ -308,7 +391,19 @@ await runPerf('turn', async ({ provision }) => {
         `stream turn ${done.turnId}: ${published.length} published, ${arrived.length} arrived`,
       );
     arrived.forEach((d, k) => latencies.push(d.arrivedAt - published[k].at));
+    streamTurnIds.push(done.turnId);
   }
+  // The in-process subscriber (live probe): one channel, the session's.
+  const probed = readProbe().filter(l => streamTurnIds.includes(l.turnId));
+  const probeChannels = [...new Set(probed.map(l => `${l.pid}/${l.channel}`))];
+  if (probeChannels.length !== 1)
+    throw Error(
+      `live probe: stream turns on ${probeChannels.length} channels (${probeChannels.join(', ')})`,
+    );
+  if (probed.length !== STREAM_CHUNKS * STREAM_TURNS)
+    throw Error(
+      `live probe: ${probed.length} deltas, expected ${STREAM_CHUNKS * STREAM_TURNS}`,
+    );
   // Frames that arrived while the deltas streamed: deliveries the deltas
   // caused are `deliver` frames; GC frames come from peers dropping
   // references at their own pace.
@@ -320,14 +415,29 @@ await runPerf('turn', async ({ provision }) => {
     k => k.startsWith('deliver') && k !== 'deliver roundFinal',
   ).length;
   const perDelta = streamDeliver / (STREAM_CHUNKS * STREAM_TURNS);
-  await stats('turn.delta', latencies, {
-    budget: { median: 5, deliveriesPerOp: 0 },
+  await stats(
+    'turn.delta',
+    probed.map(l => l.ms),
+    {
+      budget: { median: 5, deliveriesPerOp: 0 },
+      extra: {
+        deliveries: { count: streamDeliver, perOp: perDelta },
+        framesWhileStreaming: streamingFrames,
+        kindsWhileStreaming: streamingKinds,
+        subscriber:
+          'in the adapter process (live probe; where the gateway subscribes)',
+        clock: 'performance.now() in the adapter',
+        batchSizes: [...new Set(probed.map(l => l.batch))].sort(
+          (a, b) => a - b,
+        ),
+      },
+    },
+  );
+  await stats('turn.delta.client', latencies, {
     extra: {
-      deliveries: { count: streamDeliver, perOp: perDelta },
-      framesWhileStreaming: streamingFrames,
-      kindsWhileStreaming: streamingKinds,
       subscriber: 'control client through the hub',
       clock: 'Date.now() in the adapter and here',
+      note: 'no budget: the adapter -> hub -> client hop (J-0274)',
     },
   });
 
@@ -459,4 +569,4 @@ await runPerf('turn', async ({ provision }) => {
     loadAvg: loadAvg(),
   });
   if (wrong.length) throw Error(wrong.join('; '));
-});
+}
