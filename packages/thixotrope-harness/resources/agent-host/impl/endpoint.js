@@ -1,0 +1,168 @@
+// @ts-check
+/**
+ * The Endpoint (M1a W1a.2; architecture D-5, D-9; `designs/m1a-interfaces.md`
+ * sections 3.2, 6 and 7): one per `Backend.open`, held by one session vat
+ * for one turn. Transient: after a restart the vat's reference is a
+ * tombstone, so its pending `holdTurn` breaks with the retired text, which
+ * is the session's restart signal.
+ *
+ * - `holdTurn(turn)` is the lease: it settles only at `releaseTurn(turn)`.
+ *   A second `holdTurn` for the same turn returns the same pending lease.
+ * - `startRound(req)` runs a round with the provider only for a turn whose
+ *   lease is held. The session sends `holdTurn` (answered, guarded with
+ *   `M.callWhen`, so its body runs a few microtasks after delivery) and
+ *   `startRound` (sendOnly) in one crank; a `startRound` that overtakes its
+ *   lease is parked until the lease arrives, never run without it.
+ * - `releaseTurn(turn)` settles the lease, stops a round still running for
+ *   the turn, disarms the turn's timers and forgets the turn.
+ * - `armDeadline` / `disarm`: adapter timers that call
+ *   `E.sendOnly(sink).deadline({ opId })` (no M1a caller arms one).
+ */
+/* eslint-disable import/no-relative-packages -- guest/ is its own private package */
+import { E } from '@endo/far';
+
+import { interfaces } from '../../../guest/lib/interfaces.js';
+import { cutText } from '../../../guest/lib/bounded.js';
+import { limits } from '../../../guest/lib/limits.js';
+/* eslint-enable import/no-relative-packages */
+
+const { makeExo } = /** @type {any} */ (globalThis);
+
+/** Timers one turn may have armed at once (retained state bound, rule 12.6). */
+const MAX_TIMERS_PER_TURN = 64;
+/** Turns one endpoint tracks at once (one per open in M1a; a bound, not a quota). */
+const MAX_TURNS = 8;
+/** Node's timer ceiling (a longer delay would fire at once). */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * @param {object} options
+ * @param {{ startRound: (req: any, channel: any) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} options.provider
+ * @param {any} options.channel the session's channel (deltas go here, in-process)
+ * @param {import('./timers.js').Timers} options.timers
+ * @param {() => number} [options.now]
+ */
+export const makeEndpoint = ({
+  provider,
+  channel,
+  timers,
+  now = () => Date.now(),
+}) => {
+  /**
+   * @typedef {object} HeldTurn
+   * @property {Promise<undefined>} lease
+   * @property {() => void} settle
+   * @property {any} sink the TurnSink of the turn's last startRound
+   * @property {Map<string, () => void>} armed opId -> cancel
+   */
+  /** @type {Map<any, HeldTurn>} */
+  const held = new Map();
+  /** Rounds that arrived before their lease (turn -> RoundRequest). */
+  /** @type {Map<any, any>} */
+  const parked = new Map();
+  /** Turns released here; their late rounds and leases are ignored. */
+  const released = new WeakSet();
+
+  /**
+   * Run a round with the provider; a provider that throws fails the round
+   * rather than leaving the session waiting.
+   * @param {HeldTurn} state
+   * @param {any} req
+   */
+  const run = (state, req) => {
+    state.sink = req.sink;
+    provider.startRound(req, channel).catch(error => {
+      if (released.has(req.turn)) return;
+      const reason = cutText(
+        `scripted provider failed: ${error?.message ?? error}`,
+        limits.reasonUnits,
+      );
+      E.sendOnly(req.sink).roundFailed(
+        harden({ round: req.round, reason, at: now() }),
+      );
+    });
+  };
+
+  /** @param {any} turn */
+  const forget = turn => {
+    const state = held.get(turn);
+    held.delete(turn);
+    parked.delete(turn);
+    if (state === undefined) return;
+    for (const cancel of state.armed.values()) cancel();
+    state.armed.clear();
+    state.settle();
+  };
+
+  return makeExo('Endpoint', interfaces.Endpoint, {
+    /** @param {any} turn */
+    holdTurn: async turn => {
+      if (released.has(turn)) return undefined;
+      let state = held.get(turn);
+      if (state === undefined) {
+        if (held.size >= MAX_TURNS)
+          throw Error(`this endpoint already holds ${MAX_TURNS} turns`);
+        /** @type {() => void} */
+        let settle = () => {};
+        /** @type {Promise<undefined>} */
+        const lease = new Promise(resolve => {
+          settle = () => resolve(undefined);
+        });
+        state = { lease, settle, sink: undefined, armed: new Map() };
+        held.set(turn, state);
+        const waiting = parked.get(turn);
+        if (waiting !== undefined) {
+          parked.delete(turn);
+          run(state, waiting);
+        }
+      }
+      return state.lease;
+    },
+    /** @param {any} turn */
+    releaseTurn: turn => {
+      released.add(turn);
+      forget(turn);
+      provider.releaseTurn?.(turn);
+    },
+    /** @param {any} req */
+    startRound: req => {
+      if (released.has(req.turn)) return;
+      const state = held.get(req.turn);
+      if (state === undefined) {
+        // The lease has not arrived yet (or never will): never run a round
+        // without it. One parked round per turn; bounded like `held`.
+        if (parked.size < MAX_TURNS || parked.has(req.turn))
+          parked.set(req.turn, req);
+        return;
+      }
+      run(state, req);
+    },
+    /** @param {any} turn */
+    cancelRound: turn => {
+      parked.delete(turn);
+      provider.cancelRound(turn);
+    },
+    /** @param {{ turn: any, opId: string, ms: number }} request */
+    armDeadline: ({ turn, opId, ms }) => {
+      const state = held.get(turn);
+      if (state === undefined || state.sink === undefined) return;
+      state.armed.get(opId)?.();
+      state.armed.delete(opId);
+      if (state.armed.size >= MAX_TIMERS_PER_TURN) return;
+      const { sink } = state;
+      const cancel = timers.after(Math.min(ms, MAX_TIMER_MS), () => {
+        state.armed.delete(opId);
+        E.sendOnly(sink).deadline(harden({ opId }));
+      });
+      state.armed.set(opId, cancel);
+    },
+    /** @param {{ turn: any, opId: string }} request */
+    disarm: ({ turn, opId }) => {
+      const state = held.get(turn);
+      if (state === undefined) return;
+      state.armed.get(opId)?.();
+      state.armed.delete(opId);
+    },
+  });
+};
+harden(makeEndpoint);

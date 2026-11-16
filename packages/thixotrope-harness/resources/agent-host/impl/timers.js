@@ -6,6 +6,7 @@
  *
  * Node only. Tests pass a fake with the same two methods.
  */
+import { clearTimeout, setTimeout } from 'node:timers';
 
 /**
  * @typedef {object} Timers

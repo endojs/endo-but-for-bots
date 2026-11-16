@@ -13,6 +13,8 @@
  * add entries to `backendKinds` and `adapterTools` below, never edit another
  * milestone's entry.
  */
+import { pid } from 'node:process';
+
 import { channelTaps } from './channel-taps.js';
 import { makeChannelRegistry } from './channels.js';
 import { makeComposer } from './composer.js';
@@ -71,7 +73,7 @@ export const makeAgentHostImpl = ({
   channels = makeChannelRegistry({ taps: channelTaps }),
   kinds = backendKinds,
   tools = adapterTools,
-  incarnation = `${process.pid}`,
+  incarnation = `${pid}`,
 } = {}) => {
   const live = makeLive({ channels });
   const composer = makeComposer();
