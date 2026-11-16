@@ -118,13 +118,28 @@ Composer and the gateway (through the factory), tests. Lives in the session vat.
 | `startTurn(submission, at?) -> Turn` | test, gateway | A | answered | ~8.4 KB | session vat lost |
 | `getCurrentTurn() -> CurrentTurn \| undefined` | test, gateway | any | answered | < frameBytes | session vat lost |
 | `getHistoryPage(cursor?) -> HistoryPage` | test, gateway | any | answered | <= frameBytes (W1a.4 cuts the page by bytes) | session vat lost |
+
+Return guards of `getHistoryPage` and `getCurrentTurn` (J-0243, J-9156): the value matches
+`shapes.HistoryPage` / `shapes.CurrentTurn`, but the guard checks only the structure and bounds
+(at most `historyPageTurns` turns, at most `historyTurnRecords` records per turn, the closed
+`TurnPreview` record with its ids and state) and each record only with `M.key()`. Every record was
+matched against its closed shape when it was appended (`records.js`, one `M.splitRecord` chosen by
+`kind`), and a preview only shortens strings or drops trailing intents, so checking each record
+against the `M.or` of the eight record shapes again on every read was pure cost. Cost model: the
+strict guard is one `M.or` attempt sequence per record (Node 18.7 ms for a full page of 28 turns
+of 8 records, about 84 us per record; a vat pays about 120 ms per 8-record turn, J-0243); the
+structural guard is one `M.splitRecord` per turn plus one memoized pass-style test per record
+(Node 0.69 ms for the same page, about 3 us per record; `test/unit/m1a-session.bench.mjs`).
+`M.record()` was not used: it walks every entry of every record (Node 6.4 ms for the page).
 | `getUsage() -> UsageTotals` | test, gateway | any | answered | < 1 KB | session vat lost |
 
 - `startTurn` refuses with `texts.activeTurn` (R4-10) while a turn is current (state `running` or
   `cancelling`). It does not take the queue's entries or holds into account (A.4 direct start).
   `at` defaults to `lastKnownTime`.
 - `enqueueOnce` and `startTurn` take `{ text }` (at most `submissionUnits` units; the Composer has
-  already refused anything over `inlineBytes` bytes).
+  already refused anything over `inlineBytes` bytes). Text that is empty or only whitespace
+  (`text.trim() === ''`) is refused with `texts.blankSubmission` before anything else (no receipt,
+  no entry, no turn; J-9150); other text is kept exactly as given, blanks included.
 - `watch()` returns `{ rev, info, pending, usage, current? }`; the transcript comes from
   `getHistoryPage` (section 5 for `rev`).
 - `getHistoryPage(cursor?)`: newest turn first, at most `historyPageTurns` (32) turns and
@@ -140,16 +155,20 @@ Composer and the gateway (through the factory), tests. Lives in the session vat.
 `rowSnapshot() -> RowPatch` (all four fields): answered, tiny; the factory's probe (section 9).
 Retired break: session vat lost; the factory marks the row `lost`.
 
-**`Turn`** — one exo per turn, made in the claim crank (A); kept for the session's life (history
-pages carry it). Held by whoever started or re-attached (Receipt, `startTurn`, `getCurrentTurn`,
-history pages) and by the adapter (lease key, round key).
+**`Turn`** — made in the claim crank (A); held by whoever started or re-attached (Receipt,
+`startTurn`, `getCurrentTurn`, history pages) and by the adapter (lease key, round key). The
+session keeps the current turn's Turn; a settled turn is a plain record (`TurnInfo` and the record
+log), and its Turn is minted from that record whenever a page or a receipt hands one out (J-9152,
+C-7). The session keeps the `retainedTurnHandles` (32) most recently handed-out Turns of settled
+turns, so a page read again hands out the same objects; an older turn's Turn may be a new object
+that answers exactly as the first (same record). Compare turns by `turnId`, not by identity.
 
 | method | caller | mode | notes |
 |---|---|---|---|
 | `getStatus() -> TurnStatus` | test, gateway | answered | `{ turnId, state, round, at, error?, resolution? }` |
 | `cancel()` | test, gateway | answered | section 6.4; no-op when settled |
 | `whenFinished() -> TurnStatus` | test, gateway | answered, settles when the turn settles | a settled turn answers at once; after a restart a turn settled by recovery answers at once |
-| `resolve(note)` | test, gateway | answered | only while the session is idle and `state === 'outcome-unknown'`; records `TurnResolved`; else throws `texts.activeTurn` (a turn is current) or `texts.resolveNotUnknown` |
+| `resolve(note)` | test, gateway | answered | only while the session is idle and `state === 'outcome-unknown'`, once; records `TurnResolved`; else throws `texts.activeTurn` (a turn is current), `texts.resolveNotUnknown`, or `texts.turnAlreadyResolved` (a second resolve; J-9150) |
 
 **`QueueEntry`** — one exo per waiting entry, made in the `enqueueOnce` crank; held by receipts
 and pending rows. `describe() -> EntryInfo` (throws `texts.entryGone` once claimed or cancelled);
@@ -180,13 +199,14 @@ All live in the agent-host adapter process and die with it; after a restart ever
 vat holds to one is a tombstone (answered calls break with the retired text, `sendOnly` is
 dropped silently).
 
-**`Endpoint`** (W1a.2) — one per `Backend.open`; held by the session vat for one turn.
+**`Endpoint`** (W1a.2) — one per `Backend.open`, so one per session per adapter incarnation; held
+by the session vat for every turn of that incarnation (J-9151).
 
 | method | caller | crank | mode | max | retired break |
 |---|---|---|---|---|---|
-| `holdTurn(turn)` the lease: settles `undefined` when `releaseTurn(turn)` arrives | session | B | answered (pending all turn) | tiny | **restart**: `recoverAfterRestart()` |
+| `holdTurn(turn)` the lease, once per turn (and incarnation): settles `undefined` when `releaseTurn(turn)` arrives | session | A (held ports), B (after an open) | answered (pending all turn) | tiny | **restart**: after `Dispatched`, `recoverAfterRestart()`; before, reopen and classify (section 7) |
 | `releaseTurn(turn)` | session | settle crank | sendOnly | tiny | (dropped) |
-| `startRound(RoundRequest)` | session | B (round 0), last tool-result crank (round n) | sendOnly | <= frameBytes (session-checked) | (dropped; the lease break reveals the restart) |
+| `startRound(RoundRequest)` | session | A or B (round 0), last tool-result crank (round n) | sendOnly | <= frameBytes (session-checked) | (dropped; the lease break reveals the restart) |
 | `cancelRound(turn)` | session | cancel crank | sendOnly | tiny | (dropped) |
 | `armDeadline({ turn, opId, ms })` / `disarm({ turn, opId })` | session | any in a turn | sendOnly | tiny | (dropped) |
 
@@ -195,11 +215,13 @@ the turn's timers and forgets it. The adapter's `startRound` must not run a roun
 holds no lease for (it answers nothing; the session's lease is pending in the same crank anyway).
 
 **`LivePublisher`** (W1a.3) — the publisher facet of one session's channel. Held by the session
-vat: per turn from `TurnPorts.publisher`, outside a turn from `SessionHostFacet.liveChannel()`.
+vat: in a turn from its held `TurnPorts.publisher`, outside a turn the last publisher it used or one
+from `SessionHostFacet.liveChannel()`.
 `publish({ rev, events })`: **sendOnly inside a turn**, **answered outside a turn**; at most
 `publishBatchEvents` (64) events and `frameBytes` per call; retired break on an answered publish:
-the adapter restarted (not a turn-path signal): get a fresh publisher with
-`E(host).liveChannel()` and publish once more; never run recovery for it.
+the adapter restarted (not a turn-path signal): the session stops holding ports with that
+publisher (unless the current turn uses them; its lease will tell), gets a fresh publisher with
+`E(host).liveChannel()` and publishes once more; never run recovery for it.
 
 **`AdapterTool`** (W1a.2; M1a: `echo`) — reached through `TurnPorts.tools`. `execute({ opId, args })
 -> ToolOutcome`: answered, issued in crank D (or a tool-result crank), result <= frameBytes
@@ -243,12 +265,17 @@ factory (granted as `host`) and the operator (control socket, tests).
 
 **`Backend`** — manager exo per `makeBackend`; held by the factory, by tests, and in each
 session's `SessionServices`. `describe() -> { kind, label }`; `open(host) -> TurnPorts`:
-answered, crank A sends it, crank B receives it. The manager checks `host` is a facet it minted
-and bound (else `texts.unknownSessionHost`), then asks the adapter (ops) for `TurnPorts`:
-`{ endpoint, publisher: the bound session's channel publisher, tools }`. `tools` lists the adapter
-tools this backend offers: a scripted backend offers `echo`; other kinds (M2) offer none.
-Retired break from `open`: the manager vat is lost (it is a guest vat) or its reconcile failed
-twice; never a restart signal: the turn fails with `textOf.openFailed(message)`.
+answered; the session sends it once per adapter incarnation (in `make`, and again only after a
+retired break showed its ports dead; section 6.1). The manager refuses a facet it did not mint
+(`texts.unknownSessionHost`), waits for the bind of a minted facet that is not bound yet (`make`
+opens before the factory's `bindSession`; a weak map, so a rolled-back creation leaves nothing),
+then asks the adapter (ops) for `TurnPorts`: `{ endpoint, publisher: the bound session's channel
+publisher, tools, since }`. `tools` lists the adapter tools this backend offers: a scripted backend
+offers `echo`; other kinds (M2) offer none. `since` is when the adapter incarnation started (ms,
+the adapter's clock; the ops facet stamps it when it is made). Retired break from `open`: the
+manager vat is lost (it is a guest vat) or its reconcile failed twice; never a restart signal: a
+turn waiting for ports fails with `textOf.openFailed(message)`, a turn waiting to classify a
+pre-dispatch break (section 7) is recovered `interrupted`.
 
 **`SessionHostFacet`** — minted per session; held only by that session (in `SessionServices`)
 and by the manager. `liveChannel() -> LivePublisher`: answered, outside-turn publishing.
@@ -344,8 +371,8 @@ Vat events (all carry `turnId` except `pending`):
 
 | event | when (crank of section 6) |
 |---|---|
-| `turn-start { input, at }` | B (first batch of a turn) |
-| `phase { phase }` | B (`thinking`), D with calls (`using tools`), next round (`thinking`), cancel (`cancelling`) |
+| `turn-start { input, at }` | A, or B without held ports (the first batch of a turn on its ports; again on fresh ports after dead ones, 7.1) |
+| `phase { phase }` | A or B (`thinking`), D with calls (`using tools`), next round (`thinking`), cancel (`cancelling`) |
 | `tool_call { id: opId, name, args }` | D, one per call, before any `tool_result` |
 | `tool_result { id: opId, name, result, failed }` | each result crank (and D for local refusals) |
 | `final { text }` | settle: the last round's text (completed turns only) |
@@ -355,7 +382,8 @@ Vat events (all carry `turnId` except `pending`):
 | `pending { pending: PendingView }` | any crank that changed the queue or its hold |
 
 Order inside a batch: as listed for that crank; a settle batch is `final`, `usage`, `end` (or
-`abort`), then `pending` if the next entry was claimed. The adapter publishes a round's deltas
+`abort`), then the next turn's `turn-start` and `phase` if it was claimed and started on held ports,
+then `pending` if the queue changed. The adapter publishes a round's deltas
 before it sends `roundFinal`, and the vat publishes that round's events only after receiving it,
 so subscribers see deltas before the round's tool calls or final (architecture 4.2).
 
@@ -384,17 +412,39 @@ Session-vat deliveries are lettered. Sizes are string bytes of each message.
 
 ### 6.1 Start
 
+**Ports are held per adapter incarnation** (J-9151; before, `Backend.open` ran once per turn
+through the manager vat and turn start was 573 ms against 350, J-0272, J-0293). The session sends
+`E(backend).open(host)` once in `make` and keeps the answer (`TurnPorts`: endpoint, publisher,
+tools, `since`) across turns. It drops them when they prove dead: a retired break from the lease,
+an adapter tool or an answered outside publish. A claim with no ports held opens again (crank A'
+then B below). The lease stays per turn: one `holdTurn(turn)` per turn, released at the settle.
+
 | crank | delivery into the session | the session does (in this order) | sends (mode, size) |
 |---|---|---|---|
-| A | `enqueueOnce(submission, requestId, at)` from the Composer (<= 8.4 KB), or `startTurn` | validate; receipt; append the entry; if idle and no hold (or `startTurn`): **claim** = remove the entry, append `TurnStarted`, make `Turn` and `TurnSink`, current turn = running, generation += 1; send | `E(backend).open(host)` (answered, tiny); `RowReporter.changed({ activity:'working', queuedCount })` (sendOnly, tiny); returns the receipt (`state:'started', turn`) |
-| B | answer of `open`: `TurnPorts` (< 1 KB) | if the turn was cancelled meanwhile (it is settled already, 6.4), send nothing; else keep the ports | `publish({ rev, events:[turn-start, phase thinking] })` (sendOnly, <= 9 KB); `E(endpoint).holdTurn(turn)` (answered, the lease); `startRound({ turn, sink, turnId, round:0, base, append:[TurnStarted], tools, options })` (sendOnly, <= 20 KB) |
+| A | `enqueueOnce(submission, requestId, at)` from the Composer (<= 8.4 KB), or `startTurn` | validate (blank text refused); receipt; append the entry; if idle and no hold (or `startTurn`): **claim** = remove the entry, append `TurnStarted`, make `Turn` and `TurnSink`, current turn = running, generation += 1; with ports held: start the turn on them | `RowReporter.changed({ activity:'working', queuedCount })` (sendOnly, tiny); `publish({ rev, events:[turn-start, phase thinking, pending?] })` (sendOnly, <= 9 KB); `E(endpoint).holdTurn(turn)` (answered, the lease); `startRound({ turn, sink, turnId, round:0, base, append:[TurnStarted], tools, options })` (sendOnly, <= 20 KB); returns the receipt (`state:'started', turn`) |
 | (adapter) | | selects the script turn, waits `dispatchDelayMs`, calls `E(sink).dispatching(0)` and **waits for the answer** | |
 | C | `dispatching(0)` (tiny) | append `Dispatched`; answer `true` | - |
 | (adapter) | | logs `request` (the provider request), streams deltas in-process | |
 
+Without ports held (the creation-time open has not answered, or the last ports proved dead):
+
+| crank | delivery | the session does | sends |
+|---|---|---|---|
+| A' | as A | claim as A | row change; `E(backend).open(host)` (answered, tiny), unless one is in flight |
+| B | answer of `open`: `TurnPorts` (< 1 KB) | keep them as the held ports; if the turn was cancelled meanwhile (it is settled already, 6.4), send nothing; else start the turn on them | as A: publish, `holdTurn`, `startRound` |
+
 If `open` rejects (crank B): append `TurnSettled{ failed, error: textOf.openFailed(msg) }`, publish
 `abort` through `SessionHostFacet.liveChannel()` (answered), row `error`, then claim the next entry
-if any. Turn start costs 3 session deliveries (A, B, C) plus one manager crank for `open`.
+if any.
+
+**Cost.** With ports held a turn start costs 2 session deliveries (A, C) and no manager crank; a
+GC frame for the previous turn's Turn and TurnSink (dropped by the adapter after its release, J-0277)
+may arrive in between, so at most 3 frames reach the session before the provider request. A plain
+turn is A, C, D (final round, with the settle) and the lease answer: 4 deliveries (5 before). The
+first turn of a session whose creation-time open has not answered yet, and the first turn after an
+adapter restart that the session learned of from a broken outside publish, pay crank B and the
+manager hop once (A', B, C). The first turn after a restart the session was not told of (idle across
+it) pays a reopen: A, the lease break, B (fresh ports, round 0 again), C (section 7).
 
 `RoundRequest`: `base = { count: <records in the log before append[0]>, epoch: 0 }`; round 0
 `append` is exactly `[TurnStarted]`; round n carries the records appended since the previous
@@ -419,11 +469,14 @@ unsettled, except by recovery (7) and cancel (6.4, which waits).
 ### 6.3 Settle
 
 In the crank that decides the turn's end: append `TurnSettled`; current turn cleared (the Turn's
-`whenFinished` resolves); update usage totals (`turns` += 1; `incompleteTurns` += 1 unless
-`completed`); publish `[final?, usage, end | abort]`; `RowReporter.changed({ activity, messageCount,
-queuedCount })`; `E.sendOnly(endpoint).releaseTurn(turn)` (the lease answer comes back as one more
-delivery, which the session ignores); then, if the queue has a waiting entry and no hold, claim
-it in the same crank (6.1 crank A's work, including `open`).
+`whenFinished` resolves; the settled turn is a record from now on, its Turn kept only as a recent
+handle); update usage totals (`turns` += 1; `incompleteTurns` += 1 unless `completed`); publish
+`[final?, usage, end | abort]`; `RowReporter.changed({ activity, messageCount, queuedCount })`;
+`E.sendOnly(endpoint).releaseTurn(turn)` (the lease answer comes back as one more delivery, which
+the session ignores); then, if the queue has a waiting entry and no hold, claim it in the same
+crank (6.1 crank A's work). With ports held the next turn starts in this crank too, and its events
+ride in the same batch: `[final?, usage, end | abort, turn-start, phase, pending]`. Turn sources
+(M9) are asked only when the queue has no waiting entry **and no hold** (J-9157).
 
 ### 6.4 Cancel
 
@@ -432,8 +485,9 @@ it in the same crank (6.1 crank A's work, including `open`).
 `cancelled` in this crank (a late `roundFinal`, `roundFailed` or `dispatching` for this turn is
 ignored or answered `false`). If tool calls are in flight, the turn waits for their results
 (recorded as usual; R4-49 does not interrupt a running tool), issues no further calls and no next
-round, and settles `cancelled` after the last one. Before crank B (open pending), settle at once;
-crank B then sends nothing.
+round, and settles `cancelled` after the last one. While the turn waits for ports (an open
+pending, crank B, or a reopen after a pre-dispatch break), settle at once; the open's answer is
+then kept as the held ports and nothing is sent for the turn.
 
 ---
 
@@ -451,11 +505,11 @@ gone": for an **adapter object** that is a restart (D-5); for a **guest vat** it
 
 | caller -> callee (kind) | meaning | action |
 |---|---|---|
-| session -> `Endpoint.holdTurn` (adapter) | restart | `recoverAfterRestart()` |
+| session -> `Endpoint.holdTurn` (adapter) | restart | `Dispatched` recorded: `recoverAfterRestart()`; else drop the ports, reopen, and on fresh ports either `recoverAfterRestart()` (claimed before their `since`: in flight) or send round 0 again (claimed on ports already dead); section 7.1 |
 | session -> `AdapterTool.execute` (adapter) | restart | `recoverAfterRestart()`; never a tool failure |
 | session -> `Endpoint` sendOnly methods (adapter) | no answer; silently dropped on a tombstone | none (the lease break reveals it) |
-| session -> `LivePublisher.publish` answered, outside a turn (adapter) | restart, not on the turn path | `E(host).liveChannel()`, publish again once |
-| session -> `Backend.open` (manager, guest) | manager lost | turn `failed`, `textOf.openFailed` |
+| session -> `LivePublisher.publish` answered, outside a turn (adapter) | restart, not on the turn path | stop holding ports with that publisher; `E(host).liveChannel()`, publish again once |
+| session -> `Backend.open` (manager, guest) | manager lost | a turn waiting for ports: `failed`, `textOf.openFailed`; a turn waiting to classify a pre-dispatch break: `recoverAfterRestart()` (`interrupted`) |
 | session -> `SessionHostFacet.liveChannel` (manager, guest) | manager lost | drop this publish |
 | session -> `RowReporter.changed` (factory, sendOnly) | - | none |
 | factory -> `Session`, `SessionInternal` (guest) | session vat lost | row `state: 'lost'` (kept listed; D-17) |
@@ -471,7 +525,8 @@ gone": for an **adapter object** that is a restart (D-5); for a **guest vat** it
 for the same turn, or a late answer of the old generation, does nothing):
 
 1. No current turn: nothing to recover (an old lease of a settled turn).
-2. Drop the turn's ports (endpoint, publisher, tools): tombstones.
+2. Drop the turn's ports (endpoint, publisher, tools): tombstones; the session stops holding them
+   too (the next claim opens fresh ports).
 3. No `Dispatched` record for the turn: append `TurnSettled{ status: 'interrupted', error:
    texts.interruptedBeforeDispatch }`. The input stays in the log once (it was claimed, not
    re-queued) and is left out of later context (R4-32).
@@ -497,12 +552,63 @@ not hardened (hardening it would freeze the session's mutable `ActiveTurn` and `
 that throws or rejects is skipped. `Dispatched` is taken as recorded when `active.dispatched` is set
 or the log has the record.
 
-The lease break is delivered during startup before the daemon serves (S2), so a session with a
-turn in flight has recovered by the time clients connect. A restart between crank A and crank B
-is invisible to the session: its `open` (a call into the manager vat) is answered after the
-restart with a fresh incarnation's ports and the turn proceeds (nothing was dispatched, so nothing
-is sent twice). A turn whose `Dispatched` is recorded but whose provider request was never made is
-still reported `outcome-unknown` (conservative, architecture 4.3).
+The lease break is delivered during startup before the daemon serves (S2). A dispatched turn has
+recovered by the time clients connect; an undispatched one recovers when its reopen is answered
+(after the manager's restore re-attaches the adapter, about 65 ms after serving plus one open,
+S2). A turn whose `Dispatched` is recorded but whose provider request was never made is still
+reported `outcome-unknown` (conservative, architecture 4.3).
+
+### 7.1 Held ports and SIGKILL, crank by crank (J-9151)
+
+A session that holds its ports across turns can claim a turn on ports whose adapter incarnation
+died while the session was idle: no vat is told of a restart unless it has a call pending into the
+dead incarnation (D-5 keeps idle sessions asleep). The `holdTurn` of that claim then breaks at once,
+with the same retired text as the lease of a turn that was in flight when the adapter died. The
+session tells the two apart by time: it opens fresh ports and compares the turn's claim time
+(`TurnStarted.at`: the caller's `at`, or for a queued claim the latest `at` the session has seen)
+with the fresh ports' `since`. Claimed before the fresh incarnation started: the turn was in flight
+at the restart and is recovered (R4-66: `interrupted`, never sent again). Claimed after: the ports
+were dead when it was claimed, nothing reached any adapter, and the same round 0 request goes to
+the fresh ports (with its `turn-start` and `phase` published again on the fresh publisher, after a
+rev the old publisher swallowed: viewers see a rev gap and re-watch). An open answered with ports no
+newer than the broken ones (an open that was in flight across the break) is asked again, at most
+three times, then the turn is recovered.
+
+Session cranks: A claim on held ports (records `TurnStarted`; sends publish, `holdTurn`,
+`startRound`); A' claim without ports (sends `open`); B ports answered; K a lease break; R the
+reopen answered; C `dispatching(0)` (records `Dispatched`); D `roundFinal` (records `RoundSettled`,
+`ToolIntents`; sends `execute`); E a tool result; S the settle (records `TurnSettled`; sends the
+batch and `releaseTurn`; may claim the next entry, S+A). "Kill after X" means the supervisor is
+SIGKILLed after crank X was journaled (its outbound frames are committed with it, M0 S9) and before
+the next session crank.
+
+| case | kill after | what the restart delivers | outcome | before J-9151 |
+|---|---|---|---|---|
+| 1 | nothing of the turn (A not journaled) | the Composer's call breaks or is replayed | no turn, or the turn once (request ids are idempotent) | same |
+| 2 | A on live ports, before C | K during startup; reopen; R: `since` > claim time | `interrupted` (R4-66), queue held `restart` if non-empty, `[end, pending]` published outside; the provider never got a request (the adapter waits for `dispatching(0) = true`) | same outcome, without the reopen (recovered in K) |
+| 3 | A on ports already dead (the adapter died earlier, session idle) | nothing: K arrives at once after A, before any kill | R: claim time >= `since`: round 0 again on fresh ports, then as a normal turn (C ...) | did not exist (ports per turn) |
+| 3a | K of case 3, before R | the reopen (pending in the manager, a durable vat) is answered after the restart with the newest ports | `since` > claim time: `interrupted`; the turn was in flight at this restart | - |
+| 3b | R of case 3 (round 0 resent), before C | as case 2 | `interrupted` | - |
+| 4 | A' (open pending), before B | the manager answers the open after the restart with fresh ports | B starts the turn; it proceeds (nothing was dispatched, nothing is sent twice); a deviation from R4-66's letter kept from M1a: `since` cannot be compared here, because the first open of a daemon's life starts the adapter after the claim | same |
+| 5 | C | K during startup | `recoverAfterRestart()` at once: `outcome-unknown`, open intents "Tool outcome unknown", queue held; held ports dropped, no reopen | same |
+| 6 | D (intents recorded, calls sent) | K and the `execute` breaks | as 5; the first break recovers, the rest do nothing (one recovery per generation) | same |
+| 7 | E | as 6 | as 5 | same |
+| 8 | S, no next claim | K for a release that never arrived | no current turn: nothing to recover; held ports dropped | same |
+| 8a | S+A (the next entry claimed on held ports in the settle crank) | K of the new turn | as case 2: `interrupted` (claim time is the settle's last known time, before the restart) | the claim sent `open`; as case 4 the turn proceeded after the restart |
+| 9 | the session idle, ports held | nothing (the session sleeps; GC frames from dead peers are C-17) | the next claim is case 3 | the next claim opened (A', B) |
+
+Clocks. The claim time is the caller's clock (the Composer's `Date.now()`, or an adapter's `at` for
+a queued claim) and `since` the adapter's; on one machine in M1a. A misclassification is safe in
+both directions, since nothing was dispatched in any of these cases: a clock stepping back across a
+restart makes an in-flight turn go to the fresh ports (the provider sees it once; a deviation from
+R4-66's "closed"); a claim made between the daemon serving and the adapter's re-attach (about 65 ms,
+S2), or a `startTurn` without `at` after a restart (`lastKnownTime` older than `since`), closes a
+turn that was not in flight as `interrupted` (the user sends it again). Callers should pass `at`.
+
+C-10. Recovery itself stays synchronous and never awaits. In case 2 the *decision* waits for the
+reopen, an answered call into the manager (a guest vat): if that vat was given up during startup
+the turn stays `running` until `Turn.cancel()`, which settles it at once (it has no ports). Case 4
+had the same exposure before this change.
 
 ---
 
@@ -511,6 +617,8 @@ still reported `outcome-unknown` (conservative, architecture 4.3).
 FIFO of waiting entries (at most `maxWaiting`, 100), a hold, and receipts (at most `maxReceipts`,
 4,096) keyed by request id inside the vat (a `Map`).
 
+- **Blank text** (A.4, Fae): `text.trim() === ''` throws `texts.blankSubmission` before the
+  request id is looked at (J-9150).
 - **Request id** (A.4): matches `/^\d{13}-[0-9a-f-]{36}$/` else `texts.invalidRequestId`; its
   timestamp `issued` (first 13 digits) must satisfy `issued > at - retryWindowMs` and
   `issued <= at + clockSkewMs`, else `texts.requestIdExpired`. A known id with the same text returns
@@ -531,15 +639,22 @@ FIFO of waiting entries (at most `maxWaiting`, 100), a hold, and receipts (at mo
 - **Details settled by W1a.5** (`guest/session/queue.js`): only a *new* entry releases holds (a
   duplicate `enqueueOnce` is a retry and releases nothing); cancelling the last waiting entry clears
   the hold (Fae `session-submissions.js` cancel); `hold(reason)` never replaces an `interrupted`
-  hold with another reason; a cancelled entry keeps its receipt (`state: 'queued'`, its entry, whose
-  `describe()` throws `texts.entryGone`), so a retry does not resurrect it; a `started` receipt
-  keeps only its Turn (the claimed entry is dropped so it can be collected: every retained object
-  costs each later delivery, C-7). Receipt pruning looks at the oldest receipts in insertion order
+  hold with another reason; a cancelled entry keeps its receipt (`state: 'queued'`, naming one
+  shared stand-in entry per queue whose `describe()` throws `texts.entryGone`, so the cancelled
+  QueueEntry itself is kept only by its holders), so a retry does not resurrect it; a `started`
+  receipt keeps only the session's record of its turn and hands out `turnOf(record)`, the Turn
+  minted from it (J-9152; the claimed entry is dropped so it can be collected: every retained
+  object costs each later delivery, C-7). Receipt pruning looks at the oldest receipts in insertion order
   and stops at the first live one; when the table is full it scans all of them before refusing with
   `texts.receiptLimit` (an expired id is refused before lookup, so an expired receipt left behind a
   live one costs memory only). The preview cut of `view()` is `floor((frameBytes - holdBytes -
   overhead) / (3 x entries))` units, which is at least the formula above whenever the hold text is
   short and still fits when it is long.
+- **Receipt table rule** (J-9152): at most `maxReceipts` (4,096, A.4) receipts of plain data, none
+  holding an exo; a receipt is dropped once its request id was issued more than `retryWindowMs`
+  (24 h) before the `at` of an `enqueueOnce` (checked at every `enqueueOnce`, oldest first); a full
+  table of live ids refuses new submissions with `texts.receiptLimit`. Retained memory is
+  therefore bounded by count (4,096 small records) and, while submissions arrive, by age.
 
 ---
 
@@ -570,7 +685,8 @@ the program for later creations only.
    -> `SpareMaker`. (The string is data sent to the worker; guest code itself never evaluates.)
 4. `host = E(admin).forSession()`; `config = { key, title, backendTitle: (await
    E(backend).describe()).label, modelId, preset: E(preset).snapshot(), createdAt, userInitiated }`
-   (`createdAt` = the factory's `lastKnownTime`); `rowReporter` = a new RowReporter;
+   (`createdAt` = `CreateOptions.at`, stamped by the caller, which has the clock, as the Composer
+   stamps `enqueueOnce`; without it the latest `at` the factory has seen, 0 before any; J-9150); `rowReporter` = a new RowReporter;
    `{ session, internal } = E(maker).make({ config, services: { backend, host }, rowReporter })`;
    `E(admin).bindSession(host, session)`.
 5. Row `ready`; creation record cleared; return `session`. On any failure: retire the facade
@@ -758,7 +874,7 @@ modules follow the guest rules; "Node" modules run in the adapter or in tests.
 | `guest/session/session.js` | `makeSession(makeArgs) -> { session, internal }` | builds `SessionCore` and passes it to `recovery.js` |
 | `guest/session/records.js` | `makeRecordLog() -> RecordLog` | `{ append(record) -> index, count(), since(index) -> records, ofTurn(turnId) -> records, messageCount() }`; `append` checks `shapes.TurnRecord` |
 | `guest/session/turn.js` | internal to W1a.4 | the turn loop over `runAgenticTurn`; W1a.5 reaches it only through `SessionCore` |
-| `guest/session/live.js` | `makeLivePublishing({ host }) -> { inTurn(ports, events), outside(events) -> Promise<void>, rev() }` | rev counter and batching (section 5) |
+| `guest/session/live.js` | `makeLivePublishing({ host, onStale? }) -> { inTurn(ports, events), outside(events) -> Promise<void>, rev(), forget(publisher) }` | rev counter and batching (section 5); `onStale(publisher)` on a retired break of an answered publish |
 | `guest/session/tool-table.js` | `toolTable` | hook table: `[ToolTableEntry]` (section 12) |
 | | `toolSetFor(ports) -> { descriptions: ToolDescription[], byName: Map<string, ToolTableEntry> }` | entries whose `available(ports)` is true |
 | `guest/session/turn-hooks.js` | `turnHooks` | `{ beforeRound: [], onCancel: [], onSettle: [], turnSources: [], recoverySteps: [] }` |
@@ -777,15 +893,16 @@ modules follow the guest rules; "Node" modules run in the adapter or in tests.
   claimNext(),        // claim the first waiting entry if idle and no hold
 }
 ActiveTurn = { turn, sink, turnId, generation, state, round, dispatched: boolean,
-               ports: TurnPorts | undefined, openIntents(): ToolIntent[] /* intents of the
-               current round without a ToolResult */, dropPorts() }
+               ports: TurnPorts | undefined, claimAt: number, reopening: boolean,
+               openIntents(): ToolIntent[] /* intents of the current round without a
+               ToolResult */, dropPorts() /* also stops holding those ports */ }
 ```
 
 ### W1a.5 queue and recovery (vat)
 
 | file | export | signature |
 |---|---|---|
-| `guest/session/queue.js` | `makeQueue({ onChange }) -> Queue` | `onChange()` is called after any change (the session publishes `pending` and reports `queuedCount`) |
+| `guest/session/queue.js` | `makeQueue({ onChange, turnOf? }) -> Queue` | `onChange()` is called after any change (the session publishes `pending` and reports `queuedCount`); `turnOf(kept)` turns what `claim` was given into the receipt's Turn (the session passes its turn record and mints; identity by default) |
 | | Queue | `{ enqueueOnce(submission, requestId, at) -> { receipt: Receipt, added: boolean }, receiptFor(requestId) -> Receipt \| undefined, view() -> PendingView, first() -> QueueItem \| undefined /* undefined while held */, claim(item, turn) -> void, hold(reason, message), release() /* every hold but interrupted */, holdReason() -> string \| undefined, size() }` |
 | | QueueItem | `{ entry: QueueEntry, key, submission, at, requestId }` |
 | | `assertNoActiveTurn(current)` | throws `texts.activeTurn` (R4-10) when `current` is not undefined; for `startTurn` |
@@ -850,6 +967,8 @@ Exact strings live in `interfaces.js` `texts` and `textOf`; the unit test checks
 | `texts.holdRestart` / `holdStopped` / `holdInterrupted` / `textOf.holdRefused` / `texts.holdRefusedDefault` / `textOf.holdUnavailable` | the A.4 hold texts | A.4 |
 | `texts.invalidRequestId`, `requestIdExpired`, `requestIdReused`, `receiptLimit` | Fae pending-queue texts | R4-55 |
 | `texts.modelOption` | createSession option "model" is unsupported; use backend and modelId | R4-6 (object-passing wording) |
+| `texts.blankSubmission` | A queued message must be non-empty text | A.4 / R4-55 (the spec names the refusal without a text; Fae `pending-queue.js:49-53`, J-0253, J-9150) |
+| `texts.turnAlreadyResolved` | This turn was already resolved | harness (J-9150) |
 | `textOf.optionNotSupported`, `texts.noBackend`, `texts.unknownSession`, `texts.badCursor`, `texts.resolveNotUnknown`, `texts.entryGone`, `texts.unknownSessionHost`, `textOf.openFailed`, `textOf.scriptExhausted`, `textOf.submissionTooLarge`, `textOf.invalidArgument` | harness texts | this contract |
 
 ---
@@ -884,10 +1003,16 @@ Micro costs in the vat (over the floor, 50 M): 100 `M.string` 113 ms; 100 `M.spl
 - **Exact UTF-8 sizes in vats** via `TextEncoder` after the cheap estimate (rule 12.5 said
   "estimate units x 3"; the estimate alone would refuse an 8,192-character ASCII submission inside a
   RoundRequest).
-- **`Backend.open(host)` per turn** returns `TurnPorts` (endpoint, publisher, adapter tools): one
-  manager crank and one session delivery per turn, and no stale Endpoint can be used for a new turn.
+- **`Backend.open(host)` once per adapter incarnation** (J-9151, replacing "per turn", which cost
+  one manager hop and one session delivery per turn and made `turn.start` 573 ms against 350,
+  J-0272/J-0293): the session opens in `make` and holds `TurnPorts` (endpoint, publisher, adapter
+  tools, `since`) across turns; a stale Endpoint is found by its lease and handled by section 7.1.
   `SessionHostFacet` is minted unbound and bound after `make` (`bindSession`), because `make` needs
-  the facet before the Session exists.
+  the facet before the Session exists; `open` waits for that bind.
+- **Settled turns are records** (J-9152): one `TurnInfo` record per turn and the record log; Turn
+  objects are minted from records on demand, at most `retainedTurnHandles` (32) kept; receipts keep
+  records, not exos. Exo classes are defined once per session (`defineExoClass`).
+- **History return guards are structural** (J-9156, section 3.1).
 - **Tool arguments are never parsed in a vat**; JSON and argument checks (R4-43, R4-45) happen in
   the adapter tool. A vat-side tool (M5+) that must read arguments needs its own design for rule
   12.10.

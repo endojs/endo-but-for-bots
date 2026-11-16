@@ -283,6 +283,7 @@ const shapeSamples = {
     endpoint: far('Endpoint'),
     publisher: far('LivePublisher'),
     tools: [{ name: 'echo', tool: far('AdapterTool') }],
+    since: 1_763_251_100_000,
   },
   ToolRequest: { opId: 't1/r0/c0', args: '{}' },
   ToolOutcome: { status: 'frame-limit', text: texts.frameLimit },
@@ -356,6 +357,7 @@ const shapeSamples = {
     systemPrompt: 'You are a test.',
     userInitiated: true,
     spoken: false,
+    at: 1_763_251_200_000,
   },
   SessionConfig: config,
   SessionServices: services,
@@ -778,9 +780,69 @@ test('fixed texts are the spec texts', t => {
     'This session already has 100 messages waiting; send or delete some first',
   );
   t.is(textOf.opId('t3', 1, 0), 't3/r1/c0');
+  // The spec names the blank refusal without a text; this is Fae's (J-9150).
+  t.is(texts.blankSubmission, 'A queued message must be non-empty text');
+  t.is(texts.turnAlreadyResolved, 'This turn was already resolved');
   t.is(textOf.synthesizedCallId(2, 5), 'floot-synth-2-5');
   t.true(texts.roundLimit.startsWith("I wasn't able to finish that"));
   const parameters = JSON.parse(echoDescription.parameters);
   t.deepEqual(Object.keys(parameters.properties), [...echoArgumentNames]);
   t.true(matches(harden({ ...echoDescription }), shapes.ToolDescription));
+});
+
+test('getHistoryPage and getCurrentTurn return through a structural guard (J-9156)', t => {
+  // Records were checked at append; the return guard checks the page's
+  // structure and bounds, and each record only for being a key.
+  const preview = (/** @type {number} */ n) =>
+    harden({
+      ...turnPreview,
+      records: Array.from({ length: n }, () => records.TurnStarted),
+    });
+  const exo = (/** @type {any} */ page, /** @type {any} */ current) =>
+    makeExo('Session', /** @type {any} */ (interfaces.Session), {
+      ...Object.fromEntries(
+        Object.entries(methodSamples.Session).map(([method, { returns }]) => [
+          method,
+          () => harden(returns),
+        ]),
+      ),
+      getHistoryPage: () => page,
+      getCurrentTurn: () => current,
+    });
+  const ok = exo(
+    harden({ turns: [preview(limits.historyTurnRecords)], next: 'h1' }),
+    harden({ input: 'hi', turn, history: preview(3) }),
+  );
+  t.notThrows(() => ok.getHistoryPage());
+  t.notThrows(() => ok.getCurrentTurn());
+  t.true(matches(ok.getHistoryPage(), shapes.HistoryPage), 'strict shape too');
+  // Bounds and structure still hold.
+  const tooManyTurns = harden({
+    turns: Array.from({ length: limits.historyPageTurns + 1 }, () =>
+      preview(1),
+    ),
+  });
+  t.throws(() => exo(tooManyTurns, undefined).getHistoryPage());
+  const tooManyRecords = harden({
+    turns: [preview(limits.historyTurnRecords + 1)],
+  });
+  t.throws(() => exo(tooManyRecords, undefined).getHistoryPage());
+  const extraKey = harden({ turns: [harden({ ...preview(1), extra: 1 })] });
+  t.throws(() => exo(extraKey, undefined).getHistoryPage());
+  // Each record must be passable data (a key): no promise inside.
+  const notKey = harden({
+    turns: [
+      harden({
+        ...preview(0),
+        records: [harden({ kind: 'turn-started', at: Promise.resolve(1) })],
+      }),
+    ],
+  });
+  t.throws(() => exo(notKey, undefined).getHistoryPage());
+  t.throws(() =>
+    exo(
+      undefined,
+      harden({ input: 'hi', turn, history: preview(0), extra: 1 }),
+    ).getCurrentTurn(),
+  );
 });

@@ -154,8 +154,17 @@ export const texts = harden({
   blankSystemPrompt: 'createSession systemPrompt must be a nonblank string',
   /** QueueEntry.describe on an entry that was claimed or cancelled. */
   entryGone: 'This message is no longer waiting',
-  /** Backend.open with a SessionHostFacet the manager did not mint or never bound. */
+  /** Backend.open with a SessionHostFacet the manager did not mint. */
   unknownSessionHost: 'Unknown session host',
+  /**
+   * enqueueOnce or startTurn with empty or whitespace-only text. The spec
+   * names the refusal (Fae trims and refuses) but gives no text; this is
+   * Fae's (`packages/fae/session/pending-queue.js:49-53` at `1315bef86`,
+   * JOURNAL J-0253, J-9150).
+   */
+  blankSubmission: 'A queued message must be non-empty text',
+  /** Turn.resolve on a turn that was already resolved (one TurnResolved per turn). */
+  turnAlreadyResolved: 'This turn was already resolved',
 });
 
 /**
@@ -473,11 +482,19 @@ export const shapes = lazyTable({
       name: S.ToolName,
       tool: M.remotable('AdapterTool'),
     }),
+  /**
+   * `since`: when the adapter incarnation that minted these ports started
+   * (ms since the epoch, the adapter's clock). The session holds its ports
+   * across turns and compares a turn's claim time with the `since` of fresh
+   * ports to tell a turn in flight at a restart from one claimed on ports
+   * that were already dead (m1a-interfaces.md 6.1, 7).
+   */
   TurnPorts: () =>
     record({
       endpoint: M.remotable('Endpoint'),
       publisher: M.remotable('LivePublisher'),
       tools: list(S.AdapterToolEntry, limits.maxToolsPerRound),
+      since: count,
     }),
   /** `AdapterTool.execute` argument. */
   ToolRequest: () => record({ opId: S.Id, args: S.Text }),
@@ -719,6 +736,10 @@ export const shapes = lazyTable({
         networkPolicy: M.any(),
         userInitiated: M.boolean(),
         spoken: M.boolean(),
+        // When the caller made the request (ms since the epoch): the caller
+        // has the clock (as the Composer stamps enqueueOnce); the session's
+        // createdAt. Absent: the factory's latest known time.
+        at: count,
         // Admitted only so the factory can refuse it with the R4-6 text.
         model: M.any(),
       },
@@ -821,6 +842,50 @@ const R = label => M.remotable(label);
 const done = M.undefined();
 
 /**
+ * Return guards of `getHistoryPage` and `getCurrentTurn` (contract 3.1,
+ * J-0243, J-9156). Their records were checked against their closed shape
+ * when they were appended (records.js) and a preview only shortens strings
+ * or drops intents, so the return guard checks the page's structure and
+ * bounds (turn and record counts, ids, states) and each record only for
+ * being a key (passable data: no promise, error or unknown object; pass
+ * styles are memoized per hardened object): one `M.splitRecord` per turn
+ * instead of an `M.or` of eight closed records per record. `M.record()`
+ * would walk every entry of every record again (about 30 us per record in
+ * Node against 3 us for `M.key()`, J-9156). Not in `shapes`: they do not
+ * bound strings inside records (the strict `shapes.HistoryPage` and
+ * `shapes.CurrentTurn` still describe the value).
+ * @type {Map<string, any>}
+ */
+const views = new Map();
+/** @param {string} name */
+const view = name => {
+  if (!views.has(name)) {
+    const preview = record(
+      {
+        turn: R('Turn'),
+        turnId: S.Id,
+        state: S.TurnState,
+        at: count,
+        records: list(M.key(), limits.historyTurnRecords),
+      },
+      { cut: M.boolean() },
+    );
+    views.set(
+      'HistoryPage',
+      record(
+        { turns: list(preview, limits.historyPageTurns) },
+        { next: S.Cursor },
+      ),
+    );
+    views.set(
+      'CurrentTurn',
+      record({ input: S.SubmissionText, turn: R('Turn'), history: preview }),
+    );
+  }
+  return views.get(name);
+};
+
+/**
  * Every interface guard by its interface name, built on first use and kept:
  * `makeExo('Session', interfaces.Session, methods)`.
  */
@@ -843,8 +908,8 @@ export const interfaces = lazyTable({
       ),
       listPending: M.call().returns(S.PendingView),
       startTurn: M.call(S.Submission).optional(count).returns(R('Turn')),
-      getCurrentTurn: M.call().returns(M.or(done, S.CurrentTurn)),
-      getHistoryPage: M.call().optional(S.Cursor).returns(S.HistoryPage),
+      getCurrentTurn: M.call().returns(M.or(done, view('CurrentTurn'))),
+      getHistoryPage: M.call().optional(S.Cursor).returns(view('HistoryPage')),
       getUsage: M.call().returns(S.UsageTotals),
     }),
 

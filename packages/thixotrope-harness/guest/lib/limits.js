@@ -96,6 +96,13 @@ export const limits = harden({
   historyPageTurns: 32,
   /** Records shown for one turn in a history page; more is marked cut. */
   historyTurnRecords: 256,
+  /**
+   * Turn objects of settled turns a session keeps (most recently used): a
+   * settled turn is a record, and its Turn is minted from it when a page or
+   * a receipt hands it out (J-9152). One history page's worth, so reading a
+   * page again hands out the same objects.
+   */
+  retainedTurnHandles: 32,
   /** Rows in one session list page (architecture 3.1). */
   sessionPageRows: 50,
   /** Tool descriptions offered in one round. */
