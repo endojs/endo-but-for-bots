@@ -134,6 +134,11 @@ test('the supervisor environment is the allowlist plus the budget', t => {
     'NODE_OPTIONS',
     'UNRELATED',
   ]);
+  // macOS adds this one to every process started without it.
+  t.deepEqual(
+    unexpectedEnvironment({ ...out, __CF_USER_TEXT_ENCODING: '0x1F5:0x0:0x0' }),
+    [],
+  );
 });
 
 test('fresh state has no floor', async t => {

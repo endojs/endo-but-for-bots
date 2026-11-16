@@ -95,6 +95,13 @@ const WRAPPER_SET = Object.freeze([
 ]);
 
 /**
+ * Set by the operating system in a process started with an environment
+ * that lacks it, so the child may have it though the wrapper never passed
+ * it: macOS CoreFoundation's text-encoding hint (not a secret).
+ */
+const OS_ADDED = Object.freeze(['__CF_USER_TEXT_ENCODING']);
+
+/**
  * @param {string} name
  * @param {string | number | bigint} value
  */
@@ -247,7 +254,10 @@ export const allowlistEnvironment = (
 export const unexpectedEnvironment = env =>
   Object.keys(env)
     .filter(
-      name => !ENV_ALLOWLIST.includes(name) && !WRAPPER_SET.includes(name),
+      name =>
+        !ENV_ALLOWLIST.includes(name) &&
+        !WRAPPER_SET.includes(name) &&
+        !OS_ADDED.includes(name),
     )
     .sort();
 
