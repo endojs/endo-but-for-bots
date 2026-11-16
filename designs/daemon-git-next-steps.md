@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-27 |
-| **Updated** | 2026-07-11 |
+| **Updated** | 2026-11-16 |
 | **Author** | 0xPatrick (prompted) |
 | **Status** | In Progress |
 
@@ -77,11 +77,11 @@ The plan below dispatches against substrate that is already on `llm`; a builder 
 Recorded here once so the phases can cite it tersely:
 
 - **Content layer complete.** [daemon-mount-capabilities](daemon-mount-capabilities.md) is Complete (all five phases); mount revocation caretaker + deny patterns landed via #650.
-- **Local `Git` complete through history verbs.** #364 (capability, Phases 1–5), #367 (bulk archive), #371 (hardening), and #644 (`commit({ amend })` + `reword` behind the gated `allowHistoryRewrite` axis).
+- **Local `Git` complete through history verbs.** #364 (capability, Phases 1–5), #367 (bulk archive), #371 (hardening), #644 (`commit({ amend })` + `reword` behind the gated `allowHistoryRewrite` axis), and #1641 (`diff` / `stashPush` path designators resolved through the worktree mount rather than passed to git as host-path-bearing strings).
 - **`GitRemote` complete with controllers.** #365 (capability + controllers + policy validation), #368 (fd-pipe askpass credential injection).
 - **Historical read landed.** `Git.filesystemAt(ref)` over `@endo/platform/fs/extended`'s `wrapBackend` ([endo-fs-from-git](endo-fs-from-git.md), In Progress: Phases 1–3 plus a Phase-4 slice).
 - **Repository bootstrap landed.** `EndoHost.provideGitClone` + the `@endo/exo-git` cloner seam + the native clone helper (#538); see [daemon-git-remotes](daemon-git-remotes.md) § Repository Bootstrap and `clone`.
-- **Agent tool layer partially landed.** `@endo/agent-tools` core + `makeGitTool` (#523/#524), file tools (#614), `Shell` capability + tool (#615), mount-bridged git `status`/`add` (#616), and the elevated `makeGitHistoryTool` (#644), per [daemon-agent-tools](daemon-agent-tools.md) § Implementation Plan.
+- **Agent tool layer partially landed.** `@endo/agent-tools` core + `makeGitTool` (#523/#524), file tools (#614), `Shell` capability + tool (#615), mount-bridged git `status`/`add` (#616), the `diff` tool's explicit `cached` / ref / path schema (#1641), and the elevated `makeGitHistoryTool` (#644), per [daemon-agent-tools](daemon-agent-tools.md) § Implementation Plan.
   (Numbering caveat for builders: code comments around #616 say "Phase 3"; the canonical numbering in [daemon-agent-tools](daemon-agent-tools.md) calls that slice **Phase 3.5**, and reserves *its own* Phase 3 for the push tier — which the whole-stack plan below indexes as **Phase 1**. The two numbering spaces are disentangled under § Phased Build Plan.)
 
 ## Phased Build Plan
