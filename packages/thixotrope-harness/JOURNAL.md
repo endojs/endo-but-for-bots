@@ -3412,3 +3412,167 @@ this unit was allowed; nothing else ran meanwhile (the lock held). The two m1a t
 (`tad010a43c6`, `t2360f21278`) are deleted; `t84716bde2b` is kept.
 Decision: done, with (3) unproven in Ironhorse; the next integration pass should run m1a-slice-crash and
 restart.perf.
+
+### J-9150 2026-11-17 M1a hardening spec - deviation
+Evidence: four small contract defects from J-0245, J-0253, J-0296 (9) and the M1a QC advisories, each
+fixed with a unit test that failed on the code before the change (run against the old files restored
+from `0269d27b73`; 15 tests failed, among them every new one). (1) `createdAt` was always 0: the
+factory stamped `lastKnownTime()`, which nothing advanced. `CreateOptions.at` (optional) now stamps
+it, the caller having the clock as the Composer does for `enqueueOnce`; without it the latest `at`
+the factory saw (`6f63ac9795`). The perf and integration helpers (`test/integration/_m1a-slice.js`,
+`createSession`) do not pass `at` yet, so their sessions still show 0: not my files. (2) Blank text:
+`enqueueOnce` and `startTurn` refuse `text.trim() === ''` with `texts.blankSubmission` before the
+request id is looked at; other text is kept exactly. The spec (A.4, R4-55) names no text for this
+refusal; the text is Fae's ("A queued message must be non-empty text", J-0253). (3) `Turn.resolve`
+twice appended two `TurnResolved` records; a second now throws the new `texts.turnAlreadyResolved`.
+(4) `claimNext` asked `turnHooks.turnSources` whenever `queue.first()` was undefined, held or not;
+it now asks them only when the queue has no hold.
+Decision: done (`aeb84fedc8` contract, `37d762f43c`, `6f63ac9795`). (4) is in tension with R4-65
+("agents are not dormant after restart; only the user queue is held"): M9's inbox source must decide
+per hold reason (at least `restart` should not hold it). For the PM: the spec text for (2).
+
+### J-9151 2026-11-17 M1a hardening engine - perf
+Evidence: turn start (J-0272, J-0293: 573 ms against 350; 4 session frames against 3). Contract change
+(`aeb84fedc8`, m1a-interfaces.md 6.1, 7.1) and code (`37d762f43c`): the session sends
+`Backend.open(host)` once, in `make`, and holds the `TurnPorts` across turns; the manager's `open`
+waits for the bind of a minted, unbound facet (make opens before the factory's `bindSession`). A
+claim on an idle session with ports held is one crank (A): row change, one publish (`turn-start`,
+`phase`, `pending`), `holdTurn`, `startRound` (unit test "held ports: opened once at creation"); three
+turns cost one `open`. Expected in a vat [inferred from J-0272's hop costs, not measured]: deliver
+frames before the provider request 2 (A, `dispatching`), plus the previous turn's GC frame (one
+`gc-exports` per turn remains: the adapter still drops a Turn and a TurnSink per turn), so 3 against
+the budget of 3; time = Composer -> A (about 80-100 ms) + `startRound` to the adapter + the
+`dispatching` round trip (107 ms in J-0293) = about 220-280 ms against 350. Deliveries per plain turn
+4 (A, C, D, lease answer; was 5). The settle crank now also starts the next queued turn on the held
+ports: its `turn-start` and `phase` ride in the settle batch (`final, usage, end, turn-start, phase,
+pending`). Ports are dropped when they prove dead (a retired break from the lease, an adapter tool or
+an answered outside publish); the next claim then opens (A', B as before).
+Node rows (no vat; `test/unit/m1a-session.bench.mjs`, claim crank's own work with an immediate fake):
+{"metric":"session.turn.claim.held","unit":"ms","n":200,"median":0.153,"p95":0.977,"p99":1.233,"min":0.147,"max":1.772,"note":"Node, no vat; algorithmic cost only","pass":null,"commit":"6f63ac9795-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.88,2.33,2.34]}
+(before, old code restored: median 0.162 ms; the Node row cannot see the hops, which are the cost.)
+Decision: built and unit-tested; the vat measurement is for the integration step (J-9155). `durable.js`
+changed, so the agent-host install digest changes (D-14: a deployed state would need a reinstall; the
+test templates rebuild by key).
+
+### J-9152 2026-11-17 M1a hardening persistence - good fit
+Evidence: per-session growth (C-7, J-0251). The Turn and TurnSink classes were already defined once
+per session (`2e5733e116`); what grew was retention: `turns` held each Turn exo for the session's life
+and started receipts held their Turn. Now a settled turn is a `TurnInfo` record (and the log); a Turn
+is minted from the record when a page or a receipt hands it out; the 32 most recently handed out
+(`limits.retainedTurnHandles`, one page's worth, so a page read twice hands out the same objects) are
+kept in a Map used as an LRU (delete and set again; no array element moves, C-16). Receipts keep the
+record and call `turnOf(record)` (new `makeQueue` option); a cancelled entry's receipt names one shared
+stand-in entry. Receipt rule, written in contract section 8: at most 4,096, pruned by age (24 h) at
+every `enqueueOnce`, none holding an exo. Unit test `test/unit/m1a-session-growth.test.js` (counts
+instances made by `defineExoClass` through WeakRefs after a forced full GC; V8 `gc` enabled at run
+time) after 1,000 turns, every history page read and an old receipt read:
+{"made":{"QueueEntry":1000,"Turn":1968,"TurnSink":1000},"live":{"Turn":32}}
+On the old code the same test counted 1,000 live Turns. A first version of the test kept one more
+Turn and its TurnSink alive: the suspended async test function kept the last loop's request in its
+frame; moving the loop into its own function fixed the count (a test artefact, recorded so nobody
+chases it).
+Decision: done (`37d762f43c`). Not bounded and not meant to be: the record log, one `TurnInfo` per
+turn and the preview cache keyed by record (R4-64 keeps transcripts). Turn identity across reads is
+no longer guaranteed for turns older than the last 32 handed out: compare by `turnId` (contract 3.1).
+
+### J-9153 2026-11-17 M1a hardening engine - perf
+Evidence: Node cost of a history page through the Session (`test/unit/m1a-session.bench.mjs`, a full
+page: 28 turns of 8 records fit one frame), before (old files restored from `0269d27b73`) and after
+`aeb84fedc8`:
+{"metric":"session.history.page32x8","unit":"ms","n":200,"median":18.005,"p95":20.975,"p99":22.193,"min":15.912,"max":22.623,"note":"Node, no vat; algorithmic cost only (before: strict return guard)","turns":28,"recordsPerTurn":8,"commit":"6f63ac9795-dirty","crankBudget":"50000000","loadAvg":[1.69,2.26,2.31]}
+{"metric":"session.history.page32x8","unit":"ms","n":200,"median":0.766,"p95":1.615,"p99":1.682,"min":0.742,"max":1.709,"note":"Node, no vat; algorithmic cost only","turns":28,"recordsPerTurn":8,"guard":"view","pass":null,"commit":"6f63ac9795-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.88,2.33,2.34]}
+{"metric":"session.history.guard.strict","unit":"ms","n":200,"median":17.209,"p95":17.951,"p99":18.344,"min":16.282,"max":18.493,"note":"Node, no vat; algorithmic cost only","turns":28,"recordsPerTurn":8,"pass":null,"commit":"6f63ac9795-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.88,2.33,2.34]}
+{"metric":"session.history.guard.view","unit":"ms","n":200,"median":0.636,"p95":1.464,"p99":1.503,"min":0.61,"max":1.531,"note":"Node, no vat; algorithmic cost only","turns":28,"recordsPerTurn":8,"pass":null,"commit":"6f63ac9795-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.88,2.33,2.34]}
+Reading: the guard was 96 % of a page read; it is now 27 x cheaper. A probe of candidate record
+patterns on the same page (scratch, deleted): `M.record()` 6.4 ms (it walks every entry again),
+`M.key()` 0.73 ms, `M.any()` 0.66 ms, the strict `M.or` of eight shapes 18.7 ms; pass styles are
+memoized per hardened object, so `M.key()` is nearly free for records already marshalled. In a vat
+J-0243 measured about 120 ms per 8-record turn for the strict guard [inferred: the structural guard
+should leave the per-crank floor plus about 5-10 ms per page; not measured in a vat].
+Decision: `M.key()` per record (J-9156). The vat row is for the integration step (J-9155).
+
+### J-9154 2026-11-17 M1a hardening persistence - poor fit
+Evidence: holding ports across turns meets a fact of the core: a vat learns that an adapter session
+is gone only from a call it has pending or makes into it (S2), so a session idle across a restart is
+never told (and must not be woken, D-5). Its next claim goes to dead ports: the `holdTurn` breaks at
+once with exactly the text a turn in flight at the restart gets, and R4-66 needs the two told apart
+(in flight -> `interrupted`, never re-sent; claimed after -> must simply run). Nothing in the vat
+orders the claim against the restart except time: the session opens fresh ports and compares the
+turn's claim time (`TurnStarted.at`, a caller's clock) with the ports' `since` (the adapter
+incarnation's start, stamped by the ops facet, `attach.js`). Both errors are safe, as nothing was
+dispatched in either case (the adapter sends no provider request before `dispatching(0) = true`): a
+clock stepping back across a restart sends an in-flight turn once to the fresh ports; a claim between
+serving and the adapter's re-attach (about 65 ms, S2) or a `startTurn` without `at` after a restart
+closes a turn that was not in flight as `interrupted`. Costs: the first turn after an unannounced
+restart pays a reopen (A, break, B with round 0 again, C); an undispatched turn in flight at a
+restart is now recovered only when the reopen answers (after the manager's restore re-attaches the
+adapter), no longer in the crank of the break. Recovery itself is still synchronous, but that
+decision waits on an answered call into the manager, a guest vat (C-10: if the manager vat was given
+up during startup the turn stays `running` until `Turn.cancel()`, which settles it at once). The
+M1a contract already had this exposure for a restart between crank A and B. An open answered with
+ports no newer than the broken ones is asked again (at most 3 times; unit test). Contract 7.1 holds
+the SIGKILL case table crank by crank (cases 1-9); case 8a changes behaviour: a turn claimed in a
+settle crank just before a kill is now `interrupted` (R4-66), where it used to proceed after the
+restart.
+Decision: as built, unit-tested in Node (cases 2, 3, the stale answer, a failed reopen, the dispatched
+break without reopen, the outside-publish drop); unproven in a vat. A typed restart notice from the
+hub (an incarnation number on every adapter presence, or a "this presence's session restarted" query
+answered locally by the hub) would remove the clock comparison: a core candidate for the PM, not filed
+as a C-n here.
+
+### J-9155 2026-11-17 M1a hardening tooling - awkward
+Evidence: what the later integration and perf step must re-run (each file in its own invocation under
+the run lock; the session program, `durable.js` and `attach.js` changed, so the m1a template is
+rebuilt by key), with what this unit expects:
+- `test/integration/m1a-provision.test.js`: passes (new agent-host install digest).
+- `test/integration/m1a-slice.test.js` (acceptance 1-4, 8, 9, QC 1): passes; acceptance 4 (FIFO) now
+  starts the next queued turn in the settle crank on held ports.
+- `test/integration/m1a-slice-restart.test.js`: 5 (stalled after `Dispatched`) passes unchanged.
+  6 (killed before `dispatching`) must still read `interrupted` and the `restart` hold, but recovery
+  now waits for the reopen (case 2): if the first page read after the restart comes before the
+  manager's restore and the adapter answer it would see `running` [risk; expected about 0.3-0.8 s
+  after serving against a first read 1.5-1.9 s after connecting, J-0284]. 7 (echo) unchanged.
+- `test/integration/m1a-slice-crash.test.js` (acceptance 10): passes; session B's turn after the
+  restart is case 3 (reopen, round 0 again, completes).
+- `perf/turn.perf.mjs`: `turn.start` median about 220-280 ms (budget 350; was 573);
+  `turn.start.open` (now Composer stamp to `round-start`) about 110-170 ms; `turn.start.deliveries`
+  3 (`deliver enqueueOnce`, `gc-exports`, `deliver dispatchingD`; no `deliver fulfill`; budget 3);
+  `turn.round` 3 and `turn.lease` 1 unchanged; daemon deliveries per turn lower by the manager's open
+  traffic (about 4 of 14.9).
+- `perf/restart.perf.mjs`: `restart.serving` about as J-0294 (the in-flight session is stalled after
+  `Dispatched`: synchronous recovery); the run-1 gate failure is C-17 and unchanged.
+- `perf/session.perf.mjs`: `session.program` 157,493 bytes (ASCII bundle; was 145,690 at
+  `0269d27b73`, +11.8 KB, about half comments); `session.createCold` expected up by 0.1-0.2 s
+  (about 10 us per byte, C-5, plus the creation-time open: one more manager crank before
+  `bindSession`), so likely over its 6 s budget but under 1.25 x [inferred].
+- A vat row for `getHistoryPage` does not exist in perf/; J-0242's probe (`history5`) is the model if
+  the PM wants J-9153 confirmed in a vat.
+Decision: for the integration step. No Ironhorse workload, worker build or cargo test ran in this unit.
+
+### J-9156 2026-11-17 M1a hardening engine - good fit
+Evidence: the history return guards (contract 3.1). `getHistoryPage` and `getCurrentTurn` now return
+through a guard built next to the interface (not in `shapes`, because it does not bound strings
+inside records): closed `HistoryPage` / `CurrentTurn` / `TurnPreview` records with their ids, states
+and count bounds, and `M.key()` per record. Cost model: strict guard = for each record one `M.or`
+trial sequence over eight closed `M.splitRecord`s (about 84 us per record in Node, about 15 ms in a
+vat, J-0243); structural guard = one `M.splitRecord` per turn plus one memoized pass-style test per
+record (about 3 us per record in Node). Safety rests on two facts in the code: every record passed
+`mustMatch` against its kind's closed shape at `append` (`records.js`), and a preview only shortens
+strings and drops trailing intents (`previewRecord`). Unit test: the guard refuses 33 turns, 257
+records, an extra key in a `TurnPreview` and a record holding a promise; a built page still matches
+the strict `shapes.HistoryPage`.
+Decision: done (`aeb84fedc8`).
+
+### J-9157 2026-11-17 M1a hardening tests - good fit
+Evidence: unit lane after the unit: 313 passed, 23 skipped (one earlier full run had 4 channel test
+failures, `m1a-channels` and `m1a-channel-bounds`; they failed identically with my files reverted to
+HEAD and passed on the next run after another agent's commits: not caused here). `corepack yarn lint`
+0 errors (warnings of the existing kinds only); prettier clean on every changed file. Tests changed by
+the contract (not weakened): the session test setup answers the creation-time open before returning
+and models adapter incarnations (`restartAdapter(since)`: dead endpoints refuse leases with the
+retired text, dead publishers drop sendOnly and break answered publishes); the FIFO test expects the
+next turn's start in the settle batch; the pre-dispatch restart test restarts the fake adapter after
+the claim; the manager adapter test expects `open` on a minted, unbound facet to wait for the bind
+(an unminted one is still refused). New: 10 session tests, the growth test, the history guard test,
+the factory `createdAt` test, `since` checks in the manager test.
+Decision: done.

@@ -1159,7 +1159,7 @@ export const makeTurnRunner = ({
 
   /**
    * Claim the first waiting entry (or a turn source's turn) if idle and the
-   * queue is not held. A held queue holds turn sources too (J-9157); M9's
+   * queue is not held. A held queue holds turn sources too (J-9150); M9's
    * inbox must revisit this for the `restart` hold (R4-65: agents are not
    * dormant after restart).
    * @returns {ActiveTurn | undefined}
