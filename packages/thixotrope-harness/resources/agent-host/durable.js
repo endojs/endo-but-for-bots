@@ -24,7 +24,7 @@ import { fitsFrame } from '../../guest/lib/bounded.js';
 import { isRetiredBreak } from '../../guest/lib/retired.js';
 /* eslint-enable import/no-relative-packages */
 
-const { E, Far, M, makeExo } = /** @type {any} */ (globalThis);
+const { E, Far, M, makeExo, makePromiseKit } = /** @type {any} */ (globalThis);
 
 /** The one registration key; `impl/attach.js` binds it. */
 export const SERVICE_KEY = 'agent-host';
@@ -113,6 +113,31 @@ export const make = ({ makeManager }) => {
     return session;
   };
 
+  /**
+   * Host facet minted but not bound yet -> the bind it waits for. A session
+   * opens its ports in `make`, before the factory binds its facet (contract
+   * 6.1, J-9151); weak, so a creation rolled back leaves nothing here.
+   * @type {WeakMap<any, any>}
+   */
+  const bindWaits = new WeakMap();
+
+  /**
+   * The Session bound to `host`, once it is bound. A facet this manager did
+   * not mint is refused at once.
+   * @param {any} host
+   */
+  const whenBound = async host => {
+    if (!sessionOfHost.has(host)) throw Error(texts.unknownSessionHost);
+    const session = sessionOfHost.get(host);
+    if (session !== undefined) return session;
+    let wait = bindWaits.get(host);
+    if (wait === undefined) {
+      wait = makePromiseKit();
+      bindWaits.set(host, wait);
+    }
+    return wait.promise;
+  };
+
   const forSession = () => {
     const host = makeExo('SessionHostFacet', interfaces.SessionHostFacet, {
       liveChannel: async () => {
@@ -138,6 +163,8 @@ export const make = ({ makeManager }) => {
       throw Error('This session already has a session host');
     sessionOfHost.set(host, session);
     hostOfSession.set(session, host);
+    bindWaits.get(host)?.resolve(session);
+    bindWaits.delete(host);
     return undefined;
   };
 
@@ -147,9 +174,13 @@ export const make = ({ makeManager }) => {
     const info = harden({ kind: spec.kind, label: spec.label });
     const backend = makeExo('Backend', interfaces.Backend, {
       describe: () => info,
-      /** @param {any} host */
+      /**
+       * Once per adapter incarnation per session (contract 6.1); waits for
+       * the bind of a minted, unbound facet.
+       * @param {any} host
+       */
       open: async host => {
-        const session = boundSession(host);
+        const session = await whenBound(host);
         return withOps(current =>
           E(current).open(harden({ backend, spec, session })),
         );

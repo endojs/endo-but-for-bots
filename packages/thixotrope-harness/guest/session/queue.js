@@ -21,7 +21,19 @@
  *   session claims (`SessionCore.claimNext()`) after it.
  * - `first()` is the entry the session may claim, `undefined` while a hold
  *   is set. `claim(item, turn)` removes it and turns its receipt `started`
- *   with the Turn, in the caller's crank.
+ *   with `turn`, in the caller's crank. `turn` is what the session wants
+ *   kept: its plain record of the turn, which `turnOf` turns into the Turn
+ *   object whenever a receipt is handed out (J-9152: a receipt keeps a record,
+ *   not an exo).
+ * - The receipt table (J-9152, contract section 8): at most `maxReceipts`
+ *   receipts; a receipt is dropped once its request id was issued more than
+ *   `retryWindowMs` before the `at` of an `enqueueOnce` (oldest first, at
+ *   every `enqueueOnce`; the whole table only when it is full). A full table
+ *   of live ids refuses with `texts.receiptLimit` (A.4: 4,096 kept). A
+ *   receipt holds plain data and the session's record of its turn; no
+ *   receipt keeps a QueueEntry that is no longer waiting (a cancelled
+ *   entry's receipt names one shared stand-in whose `describe()` throws
+ *   `texts.entryGone`).
  * - `onChange()` runs after every change of the entries or the hold (the
  *   session publishes `pending` and reports `queuedCount`). An `onChange`
  *   that throws is ignored: the change has happened and must not be
@@ -86,7 +98,8 @@ const VIEW_OVERHEAD_BYTES = 64;
  * @property {(requestId: string) => Receipt | undefined} receiptFor
  * @property {() => PendingView} view
  * @property {() => QueueItem | undefined} first
- * @property {(item: QueueItem, turn: any) => void} claim
+ * @property {(item: QueueItem, turn: any) => void} claim `turn` is kept in
+ *   the receipt and handed out as `turnOf(turn)`
  * @property {(reason: HoldReason, message: string) => void} hold
  * @property {() => void} release
  * @property {() => HoldReason | undefined} holdReason
@@ -109,9 +122,15 @@ harden(assertNoActiveTurn);
  * @param {object} [options]
  * @param {() => void} [options.onChange] runs after every change of the
  *   entries or the hold
+ * @param {(turn: any) => any} [options.turnOf] the Turn object of what
+ *   `claim` was given (the session passes its turn record and mints the
+ *   Turn); the identity by default
  * @returns {Queue}
  */
-export const makeQueue = ({ onChange = () => {} } = {}) => {
+export const makeQueue = ({
+  onChange = () => {},
+  turnOf = turn => turn,
+} = {}) => {
   /**
    * Waiting entries, oldest first (a Set keeps insertion order). At most
    * maxWaiting; claim and cancel remove from it. Not an array: in an
@@ -142,8 +161,9 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
    * @property {string} text the submitted text (shared with the entry and
    *   later the TurnStarted record, so it costs no copy)
    * @property {number} issued the request id's timestamp
-   * @property {any} entry the QueueEntry; cleared by the claim
-   * @property {any} [turn] set by the claim
+   * @property {any} entry the QueueEntry while waiting; cleared by the
+   *   claim, the shared stand-in once cancelled
+   * @property {any} [turn] set by the claim: what `claim` was given
    */
 
   /** @type {WeakMap<object, Internal>} */
@@ -174,7 +194,7 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
           requestId: stored.requestId,
           duplicate,
           state: 'started',
-          turn: stored.turn,
+          turn: turnOf(stored.turn),
         });
 
   /** @param {Internal} internal */
@@ -224,6 +244,7 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
             const { internal: self } = this.state;
             if (!self.waiting) return false;
             removeWaiting(self);
+            forgetCancelled(self);
             clearHoldIfEmpty();
             changed();
             return true;
@@ -232,6 +253,28 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
       );
     }
     return makeEntryInstance(internal);
+  };
+
+  /**
+   * The stand-in a cancelled entry's receipt names, made on first use: the
+   * cancelled QueueEntry itself is then kept only by whoever holds it.
+   * @type {any}
+   */
+  let goneEntry;
+  /**
+   * After a cancel: the receipt of this entry names the stand-in.
+   * @param {Internal} internal
+   */
+  const forgetCancelled = internal => {
+    const stored = receipts.get(internal.item.requestId);
+    if (stored === undefined || stored.entry !== internal.item.entry) return;
+    goneEntry ??= makeEntry({
+      item: /** @type {any} */ (undefined),
+      preview: '',
+      previewBytes: 0,
+      waiting: false,
+    });
+    stored.entry = goneEntry;
   };
 
   /**
@@ -261,6 +304,8 @@ export const makeQueue = ({ onChange = () => {} } = {}) => {
   /** @type {Queue['enqueueOnce']} */
   const enqueueOnce = (submission, requestId, at) => {
     const { text } = submission;
+    // A.4 / Fae: a blank message is refused before anything else (J-9150).
+    text.trim() !== '' || refuse(texts.blankSubmission);
     REQUEST_ID.test(requestId) || refuse(texts.invalidRequestId);
     const issued = Number(requestId.slice(0, 13));
     (issued > at - limits.retryWindowMs && issued <= at + limits.clockSkewMs) ||

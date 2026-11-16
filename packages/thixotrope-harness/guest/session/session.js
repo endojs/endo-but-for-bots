@@ -12,7 +12,9 @@
  *
  * Every Session method runs in one crank and ends it with one publish of
  * that crank's events (turn.js `flush`); `enqueueOnce` claims the entry in
- * the same crank when the session is idle and the queue is not held.
+ * the same crank when the session is idle and the queue is not held. The
+ * session asks for its adapter ports when it is made (`Backend.open`, once
+ * per adapter incarnation; contract 6.1).
  */
 import { interfaces } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
@@ -58,7 +60,11 @@ export const makeSession = (
 ) => {
   let { title } = config;
   const records = makeRecordLog();
-  const live = makeLivePublishing({ host: services.host });
+  const live = makeLivePublishing({
+    host: services.host,
+    // `runner` is defined below; a break is reported only in a later crank.
+    onStale: publisher => runner.publisherBroke(publisher),
+  });
   const runner = makeTurnRunner({
     config,
     services,
@@ -71,7 +77,12 @@ export const makeSession = (
     table,
     maxToolRounds,
   });
-  const queue = makeQueue({ onChange: runner.queueChanged });
+  // Receipts keep the turn's record; the Turn is minted when one is handed
+  // out (J-9152).
+  const queue = makeQueue({
+    onChange: runner.queueChanged,
+    turnOf: runner.turnHandle,
+  });
 
   /** Section 11: what recovery.js (W1a.5) works on. */
   const core = harden({
@@ -85,6 +96,8 @@ export const makeSession = (
     claimNext: runner.claimNext,
   });
   runner.attach({ queue, core });
+  // Contract 6.1: the ports are opened once, here, and held across turns.
+  runner.openPorts();
 
   const info = () => {
     /** @type {Record<string, any>} */

@@ -3,9 +3,13 @@
  * The session's turn side (M1a W1a.4; architecture 4.1-4.3;
  * `designs/m1a-interfaces.md` sections 3.1, 4, 5 and 6).
  *
- * One turn at a time. A turn is claimed atomically (crank A: `TurnStarted`
- * appended, the queue entry removed, `Backend.open` sent), gets its ports
- * (crank B: publish, lease, round 0), is dispatched (crank C), and runs
+ * One turn at a time. The session holds the `TurnPorts` of the current
+ * adapter incarnation across turns (opened once when the session is made,
+ * and again only after a retired break showed that incarnation gone;
+ * J-9151). A turn is claimed atomically and, with ports held, started in the
+ * same crank (crank A: `TurnStarted` appended, the queue entry removed,
+ * publish, lease, round 0); without ports the claim sends `Backend.open` and
+ * the answer starts it (crank B). It is dispatched (crank C), and runs
  * rounds (crank D per `roundFinal`, one crank per tool result) until a round
  * without tool calls, the round limit, a failure, cancel, or recovery
  * settles it. The loop body is `runAgenticTurn` (guest/lib/turn-engine.js):
@@ -23,10 +27,19 @@
  *   (`startRound`, a wait for tool results, or the settle). Every other
  *   handler publishes at its end. Inside a turn the publish is `sendOnly`
  *   through the turn's publisher; outside a turn it is answered (live.js).
- * - The lease: `E(endpoint).holdTurn(turn)` is answered only by
- *   `releaseTurn`; a retired break from it is the restart signal and runs
- *   `recoverAfterRestart` (W1a.5). So is a retired break from an adapter
- *   tool (never recorded as a tool failure).
+ * - The lease: `E(endpoint).holdTurn(turn)`, one per turn and incarnation,
+ *   is answered only by `releaseTurn`; a retired break from it is the
+ *   restart signal. After `Dispatched` it runs `recoverAfterRestart` (W1a.5)
+ *   at once. Before `Dispatched` the session cannot tell a turn that was in
+ *   flight when the adapter died from one it claimed on ports that were
+ *   already dead (a session idle across a restart is never told): it opens
+ *   fresh ports and compares the turn's claim time with their `since`
+ *   (contract section 7). A retired break from an adapter tool is a restart
+ *   too (never recorded as a tool failure).
+ * - Settled turns are records (`TurnInfo` in `turns`, the record log), not
+ *   objects: a Turn is minted from its record when a page or a receipt hands
+ *   it out, and only the most recent `retainedTurnHandles` are kept (C-7,
+ *   J-0251, J-9152).
  *
  * Data-keyed state lives in `Map`s (rule 12.10); records and events use the
  * closed shapes of `guest/lib/interfaces.js`.
@@ -119,8 +132,8 @@ const COUNT_KEYS = harden([
 ]);
 
 /**
- * @typedef {object} TurnInfo kept for the session's life (history pages)
- * @property {any} turn the Turn exo
+ * @typedef {object} TurnInfo a plain record kept for the session's life
+ *   (history pages, receipts); the Turn exo is minted from it on demand
  * @property {string} turnId
  * @property {string} input
  * @property {number} at
@@ -152,9 +165,17 @@ const COUNT_KEYS = harden([
  * @property {string} state 'running' | 'cancelling', then the settled status
  * @property {number} round
  * @property {boolean} dispatched
- * @property {any} ports TurnPorts, or undefined before crank B or after recovery
+ * @property {any} ports TurnPorts, or undefined before crank B, while
+ *   reopening, or after recovery
+ * @property {number} claimAt the claim's time (`TurnStarted.at`)
+ * @property {boolean} reopening the lease broke before Dispatched; fresh
+ *   ports decide between in flight (recovery) and stale (round 0 again)
+ * @property {boolean} engineStarted
+ * @property {any} request the last RoundRequest sent (round 0 is sent again
+ *   on fresh ports when the first ones were already dead)
  * @property {() => any[]} openIntents intents of the current round without a result
- * @property {() => void} dropPorts forget the ports (recovery: they are tombstones)
+ * @property {() => void} dropPorts forget the ports (recovery: they are
+ *   tombstones), and the held ports when they are the same
  * @property {TurnInfo} info
  * @property {any} tools the tool set for these ports
  * @property {RoundCalls | undefined} calls
@@ -204,10 +225,34 @@ export const makeTurnRunner = ({
   /** @type {ActiveTurn | undefined} */
   let current;
   /**
-   * turn id -> info
+   * turn id -> info (records only; J-9152)
    * @type {Map<string, TurnInfo>}
    */
   const turns = new Map();
+  /**
+   * Turn objects of settled turns, least recently handed out first; at most
+   * `limits.retainedTurnHandles` (a Map keeps insertion order; a hit is
+   * deleted and set again, so no element moves in place).
+   * @type {Map<string, any>}
+   */
+  const handles = new Map();
+
+  /**
+   * The ports of the current adapter incarnation and their tool set, held
+   * across turns (contract 6.1, J-9151); undefined until the first open
+   * answers and after a retired break showed them dead.
+   * @type {{ ports: any, tools: any } | undefined}
+   */
+  let held;
+  /** an open is in flight */
+  let opening = false;
+  /** opens asked for since the last break (bounded; see onOpened) */
+  let reopens = 0;
+  /**
+   * The latest `since` of ports whose lease broke: an open answered with
+   * ports no newer than that came from the dead incarnation.
+   */
+  let brokenSince = -1;
   /** activity of the row when no turn is current */
   let restActivity = 'passive';
 
@@ -382,6 +427,8 @@ export const makeTurnRunner = ({
     });
     info.finished?.resolve(statusOf(info));
     info.finished = undefined;
+    // The settled turn is a record now; its Turn stays only as a recent handle.
+    remember(active.turnId, active.turn);
 
     // Claim the next entry in this crank, so the batch carries the queue
     // after the claim (section 6.3), but a claim that throws must lose
@@ -709,6 +756,7 @@ export const makeTurnRunner = ({
       emit({ type: 'phase', turnId: active.turnId, phase: 'thinking' });
     }
     const request = roundRequest(active, round);
+    active.request = request;
     flushTo(active.ports);
     E.sendOnly(active.ports.endpoint).startRound(request);
     const kit = makePromiseKit();
@@ -875,28 +923,38 @@ export const makeTurnRunner = ({
   // ------------------------------------------------------------ ports
 
   /**
-   * Crank B: the open answered.
-   * @param {ActiveTurn} active
+   * Ports whose incarnation is gone: stop holding them.
    * @param {any} ports
    */
-  const onPorts = (active, ports) => {
+  const dropHeld = ports => {
+    if (held !== undefined && held.ports === ports) held = undefined;
+    live.forget(ports.publisher);
+  };
+
+  /**
+   * Start the turn on these ports (crank A with held ports, crank B after an
+   * open, or the crank of fresh ports after stale ones): publish its first
+   * events, take the lease, run round 0. `again`: round 0 was sent once to
+   * ports that turned out dead; send the same request to these.
+   * @param {ActiveTurn} active
+   * @param {{ ports: any, tools: any }} set
+   * @param {boolean} again
+   */
+  const attachPorts = (active, set, again) => {
     if (current !== active || active.state !== 'running') return;
     const { info } = active;
-    // The turn's first events go before any held `pending`. A fresh array,
-    // not `unshift` (no in-place element moves: C-16, QC advisory 2), built
-    // before the ports are set so a throw leaves the turn without ports.
-    outbox = [
-      harden({
-        type: 'turn-start',
-        turnId: active.turnId,
-        input: info.input,
-        at: info.at,
-      }),
-      harden({ type: 'phase', turnId: active.turnId, phase: 'thinking' }),
-      ...outbox,
-    ];
+    const { ports } = set;
+    // Appended: in a settle crank the previous turn's final/usage/end come
+    // first; a held `pending` is added after them all (takeEvents).
+    emit({
+      type: 'turn-start',
+      turnId: active.turnId,
+      input: info.input,
+      at: info.at,
+    });
+    emit({ type: 'phase', turnId: active.turnId, phase: 'thinking' });
     active.ports = ports;
-    active.tools = toolSetFor(ports, table);
+    active.tools = set.tools;
     flushTo(ports);
     E(ports.endpoint)
       .holdTurn(active.turn)
@@ -904,53 +962,143 @@ export const makeTurnRunner = ({
         () => {
           // The lease settles at releaseTurn: nothing to do.
         },
-        error => {
-          if (isRestartSignal(error)) {
-            recoverAfterRestart(core, active);
-            flush();
-          } else if (current === active) {
-            settle(active, { status: 'failed', error: messageOf(error) });
-          }
-        },
+        error => onLeaseBroken(active, ports, error),
       );
-    startEngine(active);
+    if (again && active.request !== undefined) {
+      E.sendOnly(ports.endpoint).startRound(active.request);
+    } else if (!active.engineStarted) {
+      active.engineStarted = true;
+      startEngine(active);
+    }
   };
 
-  /** @param {ActiveTurn} active */
-  const open = active => {
+  /** Ask the manager for this incarnation's ports (one open at a time). */
+  const openPorts = () => {
+    if (opening) return;
+    opening = true;
+    reopens += 1;
     E(services.backend)
       .open(services.host)
       .then(
-        ports => onPorts(active, ports),
+        ports => {
+          opening = false;
+          onOpened(ports);
+          flush();
+        },
         error => {
-          if (current !== active) return;
-          // The manager is a guest vat: never a restart signal.
-          settle(active, {
-            status: 'failed',
-            error: textOf.openFailed(messageOf(error)),
-          });
+          opening = false;
+          onOpenFailed(error);
+          flush();
         },
       );
+  };
+
+  /** @param {any} ports */
+  const onOpened = ports => {
+    const since = /** @type {number} */ (ports.since);
+    if (since <= brokenSince) {
+      // Answered from the incarnation whose lease broke (the open was sent
+      // before the break): ask again, a bounded number of times.
+      if (reopens < 3) {
+        openPorts();
+        return;
+      }
+      onOpenFailed(Error('the backend answered with ports that are gone'));
+      return;
+    }
+    reopens = 0;
+    held = harden({ ports, tools: toolSetFor(ports, table) });
+    const active = current;
+    if (active === undefined || active.ports !== undefined) return;
+    if (active.state !== 'running') return;
+    if (active.reopening) {
+      active.reopening = false;
+      if (active.claimAt < since) {
+        // Claimed before this incarnation started: the turn was in flight
+        // when the adapter went (R4-66); never sent again.
+        recoverAfterRestart(core, active);
+        return;
+      }
+      // Claimed on ports that were already dead: nothing reached a backend;
+      // the same round 0 goes to the fresh ports.
+      attachPorts(active, held, true);
+      return;
+    }
+    attachPorts(active, held, false);
+  };
+
+  /** @param {unknown} error */
+  const onOpenFailed = error => {
+    reopens = 0;
+    const active = current;
+    if (active === undefined || active.ports !== undefined) return;
+    if (active.reopening) {
+      // The adapter went and no fresh ports came: nothing was dispatched.
+      active.reopening = false;
+      recoverAfterRestart(core, active);
+      return;
+    }
+    // The manager is a guest vat: never a restart signal.
+    settle(active, {
+      status: 'failed',
+      error: textOf.openFailed(messageOf(error)),
+    });
+  };
+
+  /**
+   * The lease of `active` on `ports` was rejected.
+   * @param {ActiveTurn} active
+   * @param {any} ports
+   * @param {unknown} error
+   */
+  const onLeaseBroken = (active, ports, error) => {
+    const restart = isRestartSignal(error);
+    if (restart) dropHeld(ports);
+    if (current !== active || active.ports !== ports) {
+      // A settled turn's lease, or ports this turn already gave up: only the
+      // generation's recovery may act on it (it does nothing).
+      if (restart) recoverAfterRestart(core, active);
+      flush();
+      return;
+    }
+    if (!restart) {
+      settle(active, { status: 'failed', error: messageOf(error) });
+      flush();
+      return;
+    }
+    if (active.dispatched) {
+      recoverAfterRestart(core, active);
+      flush();
+      return;
+    }
+    // Before Dispatched: fresh ports tell whether the turn was in flight.
+    const since = /** @type {number} */ (ports.since);
+    if (since > brokenSince) brokenSince = since;
+    active.ports = undefined;
+    active.reopening = true;
+    reopens = 0;
+    openPorts();
+    flush();
   };
 
   // ------------------------------------------------------------ claim
 
   /**
-   * Crank A: claim a turn for this input: make the Turn, let `take(turn)`
-   * remove the queue entry, then append `TurnStarted` and send `open`.
-   * Intent before effect (QC advisory 1, J-0271): `take` runs before any
-   * record or send, so a `take` that throws leaves no turn, no record and no
-   * `open` behind, and the entry stays waiting.
+   * Crank A: claim a turn for this input: make the Turn, let `take(info)`
+   * remove the queue entry, then append `TurnStarted` and start the turn on
+   * the held ports, or send `open` when none are held. Intent before effect
+   * (QC advisory 1, J-0271): `take` runs before any record or send, so a
+   * `take` that throws leaves no turn, no record and no send behind, and the
+   * entry stays waiting.
    * @param {string} input
    * @param {number} at
-   * @param {(turn: any) => void} [take]
+   * @param {(info: TurnInfo) => void} [take]
    */
   const claim = (input, at, take = () => {}) => {
     current === undefined || Fail`a turn is current`;
     const turnId = `t${turnCounter + 1}`;
     /** @type {TurnInfo} */
     const info = {
-      turn: undefined,
       turnId,
       input,
       at,
@@ -968,11 +1116,15 @@ export const makeTurnRunner = ({
       round: 0,
       dispatched: false,
       ports: undefined,
+      claimAt: at,
+      reopening: false,
+      engineStarted: false,
+      request: undefined,
       openIntents: () => {
         return openIntentsOf(active);
       },
       dropPorts: () => {
-        if (active.ports !== undefined) live.forget(active.ports.publisher);
+        if (active.ports !== undefined) dropHeld(active.ports);
         active.ports = undefined;
       },
       info,
@@ -983,7 +1135,7 @@ export const makeTurnRunner = ({
       usage: undefined,
     };
     const turn = makeTurn(info);
-    take(turn);
+    take(info);
     turnCounter += 1;
     generation += 1;
     active.sentUpTo = records.append({
@@ -992,29 +1144,35 @@ export const makeTurnRunner = ({
       input,
       at,
     });
-    info.turn = turn;
     active.turn = turn;
     active.sink = makeSink(active);
     turns.set(turnId, info);
     current = active;
     report({ activity: 'working' });
-    open(active);
+    if (held !== undefined) {
+      attachPorts(active, held, false);
+    } else {
+      openPorts();
+    }
     return active;
   };
 
   /**
    * Claim the first waiting entry (or a turn source's turn) if idle and the
-   * queue is not held.
+   * queue is not held. A held queue holds turn sources too (J-9157); M9's
+   * inbox must revisit this for the `restart` hold (R4-65: agents are not
+   * dormant after restart).
    * @returns {ActiveTurn | undefined}
    */
   const claimNext = () => {
     if (current !== undefined) return undefined;
     const item = queue.first();
     if (item !== undefined) {
-      return claim(item.submission.text, lastKnownTime, turn =>
-        queue.claim(item, turn),
+      return claim(item.submission.text, lastKnownTime, info =>
+        queue.claim(item, info),
       );
     }
+    if (queue.holdReason() !== undefined) return undefined;
     for (const source of hooks.turnSources) {
       const next = source(core);
       if (next !== undefined) return claim(next.text, next.at);
@@ -1070,7 +1228,11 @@ export const makeTurnRunner = ({
 
   // ------------------------------------------------------------ the Turn
 
-  /** One Turn per turn, kept for the session's life; one class per session. */
+  /**
+   * The Turn class, defined once per session (`makeExo` would define a class
+   * per object, J-0251). A Turn's state is its turn's record, so a Turn
+   * minted again for a settled turn behaves as the first one.
+   */
   const makeTurn = defineExoClass(
     'Turn',
     interfaces.Turn,
@@ -1098,6 +1260,9 @@ export const makeTurnRunner = ({
         if (info.state !== 'outcome-unknown') {
           throw Error(texts.resolveNotUnknown);
         }
+        if (info.resolution !== undefined) {
+          throw Error(texts.turnAlreadyResolved);
+        }
         records.append({
           kind: 'turn-resolved',
           turnId: info.turnId,
@@ -1108,6 +1273,34 @@ export const makeTurnRunner = ({
       },
     },
   );
+
+  /**
+   * Keep `handle` as the most recently handed-out Turn of `turnId`; drop
+   * the least recently used beyond `retainedTurnHandles`.
+   * @param {string} turnId
+   * @param {any} handle
+   */
+  const remember = (turnId, handle) => {
+    handles.delete(turnId);
+    handles.set(turnId, handle);
+    if (handles.size > limits.retainedTurnHandles) {
+      const oldest = handles.keys().next().value;
+      if (oldest !== undefined) handles.delete(oldest);
+    }
+  };
+
+  /**
+   * The Turn object of a turn: the current turn's own, else a recent handle,
+   * else one minted from the record (J-9152).
+   * @param {TurnInfo} info
+   */
+  const turnHandle = info => {
+    if (current !== undefined && current.info === info) return current.turn;
+    const known = handles.get(info.turnId);
+    const handle = known ?? makeTurn(info);
+    remember(info.turnId, handle);
+    return handle;
+  };
 
   // ------------------------------------------------------------ previews
 
@@ -1217,7 +1410,7 @@ export const makeTurnRunner = ({
     }
     /** @type {Record<string, any>} */
     const preview = {
-      turn: info.turn,
+      turn: turnHandle(info),
       turnId,
       state: info.state,
       at: info.at,
@@ -1293,12 +1486,29 @@ export const makeTurnRunner = ({
       report({ queuedCount: queue.size() });
       scheduleFlush();
     },
+    /** Open this incarnation's ports (at creation; contract 6.1). */
+    openPorts: () => {
+      if (held === undefined) openPorts();
+    },
+    turnHandle,
+    /**
+     * An outside publish broke with the retired text: the adapter
+     * restarted; ports with this publisher are dead. A turn using them
+     * learns it from its lease.
+     * @param {any} publisher
+     */
+    publisherBroke: publisher => {
+      if (held === undefined || held.ports.publisher !== publisher) return;
+      if (current?.ports === held.ports) return;
+      held = undefined;
+    },
     /**
      * Section 6.1 direct start; refused while a turn is current (R4-10).
      * @param {string} input
      * @param {number} at
      */
     startTurn: (input, at) => {
+      if (input.trim() === '') throw Error(texts.blankSubmission);
       if (current !== undefined) throw Error(texts.activeTurn);
       const active = claim(input, at);
       flush();

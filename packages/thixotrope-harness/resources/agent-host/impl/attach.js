@@ -8,9 +8,16 @@
  * so when the manager's reconcile returns, the manager holds this
  * incarnation's ops facet. The manager forwards `open()`-style calls to the
  * ops facet; the objects they return (Endpoint, publishers, Live, Composer,
- * adapter tools) are then used directly, so the manager vat is on the path
- * once per turn, not per operation. After a restart every one of them is a
- * tombstone; the manager re-attaches through its restore.
+ * adapter tools) are then used directly: a session opens its `TurnPorts`
+ * once per adapter incarnation and holds them across turns (contract 6.1,
+ * J-9151), so the manager vat is on the path once per incarnation, not per
+ * turn. After a restart every one of them is a tombstone; the manager
+ * re-attaches through its restore.
+ *
+ * Every `TurnPorts` this incarnation hands out carries `since`, when the
+ * incarnation (this ops facet) was made, by this process's clock: a session
+ * compares it with a turn's claim time to tell a turn in flight at a restart
+ * from one claimed on ports that were already dead (contract section 7).
  *
  * Internal to W1a.2 (`designs/m1a-interfaces.md` section 11).
  */
@@ -52,24 +59,28 @@ const makeOpsInterface = () =>
 /**
  * @typedef {object} OpsHandlers
  * @property {(request: { backend: any, spec: any, session: any }) => any} open
- *   the backend's TurnPorts for one turn of `session`
+ *   the backend's TurnPorts for `session` (endpoint, publisher, tools; the
+ *   ops facet adds `since`), held by the session for this incarnation
  * @property {(session: any) => any} liveChannel the session channel's publisher
  * @property {() => any} live
  * @property {() => any} composer
  */
 
 /**
- * @param {OpsHandlers} handlers
+ * @param {OpsHandlers} handlers `open` answers the ports without `since`
+ * @param {() => number} [now]
  */
-export const makeOps = handlers =>
-  makeExo('AgentHostOps', makeOpsInterface(), {
+export const makeOps = (handlers, now = () => Date.now()) => {
+  const since = now();
+  return makeExo('AgentHostOps', makeOpsInterface(), {
     /** @param {{ backend: any, spec: any, session: any }} request */
-    open: request => handlers.open(request),
+    open: request => harden({ ...handlers.open(request), since }),
     /** @param {any} session */
     liveChannel: session => handlers.liveChannel(session),
     live: () => handlers.live(),
     composer: () => handlers.composer(),
   });
+};
 harden(makeOps);
 
 /**

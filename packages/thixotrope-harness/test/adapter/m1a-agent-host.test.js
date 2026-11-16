@@ -799,11 +799,27 @@ test('manager: backends, host facets and TurnPorts through the attach pattern', 
   t.is(kit.counts().registers, 0, 'no adapter until one is needed');
 
   const host = await E(admin).forSession();
-  await t.throwsAsync(E(backend).open(host), {
+  await t.throwsAsync(E(backend).open(Far('SessionHostFacet', {})), {
     message: texts.unknownSessionHost,
   });
+  // A minted host not bound yet: the session opens its ports in make,
+  // before the factory binds the facet (contract 6.1), so open waits.
+  const early = E(backend).open(host);
+  let earlySettled = false;
+  early.then(
+    () => {
+      earlySettled = true;
+    },
+    () => {
+      earlySettled = true;
+    },
+  );
+  await sleep(20);
+  t.false(earlySettled, 'open waits for the bind');
   const session = Far('Session', {});
   await E(admin).bindSession(host, session);
+  const earlyPorts = await early;
+  t.true(matches(earlyPorts, shapes.TurnPorts));
   await E(admin).bindSession(host, session); // idempotent
   await t.throwsAsync(E(admin).bindSession(host, Far('Session', {})), {
     message: /bound to another session/,
@@ -814,6 +830,8 @@ test('manager: backends, host facets and TurnPorts through the attach pattern', 
 
   const ports = await E(backend).open(host);
   t.true(matches(ports, shapes.TurnPorts));
+  t.is(ports.since, earlyPorts.since, 'one incarnation, one since');
+  t.true(Number(ports.since) <= Date.now());
   t.deepEqual(
     ports.tools.map((/** @type {any} */ entry) => entry.name),
     ['echo'],
@@ -838,6 +856,7 @@ test('manager: backends, host facets and TurnPorts through the attach pattern', 
   const fresh = await E(backend).open(host);
   t.true(matches(fresh, shapes.TurnPorts));
   t.not(fresh.endpoint, ports.endpoint);
+  t.true(Number(fresh.since) >= Number(ports.since), 'a later incarnation');
   t.deepEqual(kit.counts(), { registers: 2, incarnations: 2 });
 
   // Start listeners hear every start, after the restore.

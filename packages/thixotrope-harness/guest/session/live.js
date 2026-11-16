@@ -14,8 +14,10 @@
  *   incarnation as the Endpoint) and publishes with `E.sendOnly`: a stale
  *   publisher is revealed by the broken lease, not here.
  * - Outside a turn the publish is answered. A retired break means the
- *   adapter restarted (not a turn-path signal): fetch a fresh publisher with
- *   `E(host).liveChannel()` and publish once more. Any other failure,
+ *   adapter restarted (not a turn-path signal): `onStale(publisher)` tells
+ *   the session (whose held ports carry that publisher, J-9151), then a fresh
+ *   publisher comes from `E(host).liveChannel()` and the batch goes once
+ *   more. Any other failure,
  *   including a retired break from `liveChannel()` (the manager vat is lost),
  *   drops the batch: viewers re-watch. Outside publishes are serialized so
  *   their revs leave in order.
@@ -66,8 +68,10 @@ harden(fitEvent);
 /**
  * @param {object} options
  * @param {any} options.host the session's SessionHostFacet
+ * @param {(publisher: any) => void} [options.onStale] called with a
+ *   publisher whose answered publish broke with the retired text
  */
-export const makeLivePublishing = ({ host }) => {
+export const makeLivePublishing = ({ host, onStale = () => {} }) => {
   let rev = 1;
   /**
    * The publisher outside publishes use until it breaks.
@@ -105,6 +109,11 @@ export const makeLivePublishing = ({ host }) => {
     } catch (error) {
       if (!isRetiredBreak(error)) throw error;
       if (outsidePublisher === publisher) outsidePublisher = undefined;
+      try {
+        onStale(publisher);
+      } catch {
+        // The batch still goes out on a fresh publisher.
+      }
       const fresh = await E(host).liveChannel();
       outsidePublisher = fresh;
       await E(fresh).publish(batch);

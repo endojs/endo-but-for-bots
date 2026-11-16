@@ -2,12 +2,16 @@
 /**
  * The Endpoint (M1a W1a.2; architecture D-5, D-9; `designs/m1a-interfaces.md`
  * sections 3.2, 6 and 7): one per `Backend.open`, held by one session vat
- * for one turn. Transient: after a restart the vat's reference is a
- * tombstone, so its pending `holdTurn` breaks with the retired text, which
- * is the session's restart signal.
+ * for every turn of this adapter incarnation (the session opens its ports
+ * once per incarnation, J-9151). Transient: after a restart the vat's
+ * reference is a tombstone, so its pending `holdTurn` breaks with the
+ * retired text, which is the session's restart signal, and a `holdTurn` sent
+ * to it later breaks at once.
  *
- * - `holdTurn(turn)` is the lease: it settles only at `releaseTurn(turn)`.
- *   A second `holdTurn` for the same turn returns the same pending lease.
+ * - `holdTurn(turn)` is the lease, one per turn: it settles only at
+ *   `releaseTurn(turn)`. A second `holdTurn` for the same turn returns the
+ *   same pending lease. Released turns are forgotten (`held` keeps only the
+ *   turns of this session that are not released: one at a time).
  * - `startRound(req)` runs a round with the provider only for a turn whose
  *   lease is held. The session sends `holdTurn` (answered, guarded with
  *   `M.callWhen`, so its body runs a few microtasks after delivery) and
@@ -30,7 +34,7 @@ const { makeExo } = /** @type {any} */ (globalThis);
 
 /** Timers one turn may have armed at once (retained state bound, rule 12.6). */
 const MAX_TIMERS_PER_TURN = 64;
-/** Turns one endpoint tracks at once (one per open in M1a; a bound, not a quota). */
+/** Turns one endpoint tracks at once (one per session at a time; a bound, not a quota). */
 const MAX_TURNS = 8;
 /** Node's timer ceiling (a longer delay would fire at once). */
 const MAX_TIMER_MS = 2_147_483_647;

@@ -54,14 +54,31 @@ const requestId = (at = 1_700_000_000_000) => {
 const AT = 1_700_000_000_000;
 
 /**
+ * When the first fake adapter incarnation started: before every claim the
+ * tests make (`AT`).
+ */
+const FIRST_SINCE = AT - 60_000;
+
+/**
  * A session with fakes. Every adapter call is logged in `log` in the order
- * it arrives.
+ * it arrives. The adapter has incarnations: `restartAdapter(since)` kills the
+ * current one (its endpoint refuses new leases with the retired text, its
+ * sendOnly targets drop what they get, as tombstones do) and starts another
+ * whose ports carry `since`; pending leases are broken by hand
+ * (`leases[i].kit.reject(retired())`), as a restart breaks them. The
+ * session's creation-time open has been answered when this resolves.
  * @param {object} [options]
  * @param {number} [options.maxToolRounds]
  * @param {boolean} [options.manualOpen] answer Backend.open by hand
  * @param {(options: any) => any} [options.makeQueue] wrap the queue
+ * @param {any} [options.hooks] turn hooks
  */
-const setup = ({ maxToolRounds, manualOpen = false, makeQueue: mq } = {}) => {
+const setup = async ({
+  maxToolRounds,
+  manualOpen = false,
+  makeQueue: mq,
+  hooks,
+} = {}) => {
   /** @type {any[]} */
   const log = [];
   /** @type {any[]} */
@@ -82,12 +99,71 @@ const setup = ({ maxToolRounds, manualOpen = false, makeQueue: mq } = {}) => {
   /** @type {any} */
   let sessionRef;
 
-  const publisher = Far('LivePublisher', {
-    publish: (/** @type {any} */ batch) => {
-      log.push(['publish', batch]);
-      published.push(batch);
-    },
-  });
+  /** @param {number} since */
+  const makeIncarnation = since => {
+    const incarnation = { dead: false, ports: /** @type {any} */ (undefined) };
+    const publisher = Far('LivePublisher', {
+      publish: (/** @type {any} */ batch) => {
+        if (incarnation.dead) {
+          // A tombstone: a sendOnly publish is dropped, an answered one
+          // breaks with the retired text.
+          log.push(['publish-dead', batch]);
+          throw retired();
+        }
+        log.push(['publish', batch]);
+        published.push(batch);
+      },
+    });
+    const endpoint = Far('Endpoint', {
+      holdTurn: (/** @type {any} */ turn) => {
+        if (incarnation.dead) {
+          log.push(['holdTurn-dead', turn]);
+          return Promise.reject(retired());
+        }
+        const kit = makePromiseKit();
+        leases.push({ turn, kit });
+        log.push(['holdTurn', turn]);
+        return kit.promise;
+      },
+      releaseTurn: (/** @type {any} */ turn) => {
+        log.push([incarnation.dead ? 'releaseTurn-dead' : 'releaseTurn', turn]);
+      },
+      startRound: (/** @type {any} */ req) => {
+        if (incarnation.dead) {
+          log.push(['startRound-dead', req]);
+          return;
+        }
+        log.push(['startRound', req]);
+        rounds.push(req);
+      },
+      cancelRound: (/** @type {any} */ turn) => log.push(['cancelRound', turn]),
+      armDeadline: () => {},
+      disarm: () => {},
+    });
+    const echoTool = Far('AdapterTool', {
+      execute: (/** @type {any} */ request) => {
+        const kit = makePromiseKit();
+        // What the session's log holds when the effect starts.
+        const current = sessionRef.getCurrentTurn();
+        const kinds = current.history.records.map(
+          (/** @type {any} */ r) => r.kind,
+        );
+        toolCalls.push({ request, kit, kindsAtCall: kinds });
+        log.push(['execute', request.opId]);
+        return kit.promise;
+      },
+    });
+    incarnation.ports = harden({
+      endpoint,
+      publisher,
+      tools: harden([harden({ name: 'echo', tool: echoTool })]),
+      since,
+    });
+    return incarnation;
+  };
+  let incarnation = makeIncarnation(FIRST_SINCE);
+  const ports = incarnation.ports;
+
   const outsidePublisher = Far('LivePublisher', {
     publish: (/** @type {any} */ batch) => {
       if (publishFails > 0) {
@@ -98,47 +174,11 @@ const setup = ({ maxToolRounds, manualOpen = false, makeQueue: mq } = {}) => {
       outsidePublished.push(batch);
     },
   });
-  const endpoint = Far('Endpoint', {
-    holdTurn: (/** @type {any} */ turn) => {
-      const kit = makePromiseKit();
-      leases.push({ turn, kit });
-      log.push(['holdTurn', turn]);
-      return kit.promise;
-    },
-    releaseTurn: (/** @type {any} */ turn) => {
-      log.push(['releaseTurn', turn]);
-    },
-    startRound: (/** @type {any} */ req) => {
-      log.push(['startRound', req]);
-      rounds.push(req);
-    },
-    cancelRound: (/** @type {any} */ turn) => log.push(['cancelRound', turn]),
-    armDeadline: () => {},
-    disarm: () => {},
-  });
-  const echoTool = Far('AdapterTool', {
-    execute: (/** @type {any} */ request) => {
-      const kit = makePromiseKit();
-      // What the session's log holds when the effect starts.
-      const current = sessionRef.getCurrentTurn();
-      const kinds = current.history.records.map(
-        (/** @type {any} */ r) => r.kind,
-      );
-      toolCalls.push({ request, kit, kindsAtCall: kinds });
-      log.push(['execute', request.opId]);
-      return kit.promise;
-    },
-  });
-  const ports = harden({
-    endpoint,
-    publisher,
-    tools: harden([harden({ name: 'echo', tool: echoTool })]),
-  });
   const backend = Far('Backend', {
     describe: () => harden({ kind: 'scripted', label: 'fake' }),
     open: () => {
       log.push(['open']);
-      if (!manualOpen) return ports;
+      if (!manualOpen) return incarnation.ports;
       const kit = makePromiseKit();
       opens.push(kit);
       return kit.promise;
@@ -171,9 +211,11 @@ const setup = ({ maxToolRounds, manualOpen = false, makeQueue: mq } = {}) => {
     harden({
       ...(maxToolRounds === undefined ? {} : { maxToolRounds }),
       ...(mq === undefined ? {} : { makeQueue: mq }),
+      ...(hooks === undefined ? {} : { hooks }),
     }),
   );
   sessionRef = session;
+  await drain();
   return {
     session,
     internal,
@@ -186,6 +228,13 @@ const setup = ({ maxToolRounds, manualOpen = false, makeQueue: mq } = {}) => {
     toolCalls,
     opens,
     ports,
+    currentPorts: () => incarnation.ports,
+    /** @param {number} since */
+    restartAdapter: since => {
+      incarnation.dead = true;
+      incarnation = makeIncarnation(since);
+      return incarnation.ports;
+    },
     liveChannelCalls: () => liveChannelCalls,
     failOutsidePublishes: (/** @type {number} */ n) => {
       publishFails = n;
@@ -194,6 +243,7 @@ const setup = ({ maxToolRounds, manualOpen = false, makeQueue: mq } = {}) => {
     lastRound: () => rounds[rounds.length - 1],
     eventsOf: (/** @type {any[]} */ batches) =>
       batches.flatMap(b => b.events.map((/** @type {any} */ e) => e.type)),
+    kinds: () => log.map(([kind]) => kind),
   };
 };
 
@@ -254,16 +304,19 @@ const failingQueue = () => {
   return { failing, make };
 };
 
-test('claim: a queue.claim that throws sends no open and records no turn (QC advisory 1)', async t => {
+test('claim: a queue.claim that throws sends nothing and records no turn (QC advisory 1)', async t => {
   const { failing, make } = failingQueue();
-  const s = setup({ makeQueue: make });
+  const s = await setup({ makeQueue: make });
   failing.claims = 1;
+  const before = s.log.length;
   t.throws(() =>
     s.session.enqueueOnce(harden({ text: 'hi' }), requestId(), AT),
   );
   await drain();
   t.false(
-    s.log.some(([kind]) => kind === 'open'),
+    s.log
+      .slice(before)
+      .some(([kind]) => ['open', 'holdTurn', 'startRound'].includes(kind)),
     'no effect before the entry is claimed',
   );
   t.is(s.session.getCurrentTurn(), undefined);
@@ -278,7 +331,7 @@ test('claim: a queue.claim that throws sends no open and records no turn (QC adv
 
 test('settle: a claim that throws loses neither the settle batch nor the lease release (QC advisory 1)', async t => {
   const { failing, make } = failingQueue();
-  const s = setup({ makeQueue: make });
+  const s = await setup({ makeQueue: make });
   const receipt = await submit(s);
   s.session.enqueueOnce(harden({ text: 'two' }), requestId(), AT);
   await drain();
@@ -301,7 +354,7 @@ test('settle: a claim that throws loses neither the settle batch nor the lease r
 });
 
 test('claim: enqueue on an idle session starts a turn in the same crank', async t => {
-  const s = setup();
+  const s = await setup();
   const receipt = s.session.enqueueOnce(
     harden({ text: 'hi' }),
     requestId(),
@@ -349,7 +402,7 @@ test('claim: enqueue on an idle session starts a turn in the same crank', async 
 });
 
 test('a toolless round settles completed: final, usage, end in one batch; lease released', async t => {
-  const s = setup();
+  const s = await setup();
   const receipt = await submit(s);
   const req = s.lastRound();
   req.sink.dispatching(0);
@@ -407,7 +460,7 @@ test('a toolless round settles completed: final, usage, end in one batch; lease 
 });
 
 test('rev: watch() reports the last batch; each batch is one more', async t => {
-  const s = setup();
+  const s = await setup();
   t.is(s.session.watch().rev, 1);
   await submit(s);
   const req = s.lastRound();
@@ -426,7 +479,7 @@ test('rev: watch() reports the last batch; each batch is one more', async t => {
 // ---------------------------------------------------------------- tools
 
 test('intent before effect; results recorded in completion order, presented in call order', async t => {
-  const s = setup();
+  const s = await setup();
   await submit(s);
   const req = s.lastRound();
   req.sink.dispatching(0);
@@ -519,7 +572,7 @@ test('intent before effect; results recorded in completion order, presented in c
 });
 
 test('local refusals: unknown tool (R4-43), more than maxCallsPerRound, window of callWindow', async t => {
-  const s = setup();
+  const s = await setup();
   await submit(s);
   const req = s.lastRound();
   req.sink.dispatching(0);
@@ -560,7 +613,7 @@ test('local refusals: unknown tool (R4-43), more than maxCallsPerRound, window o
 });
 
 test('R4-45: failed outcomes and rejections become "Error: ..." results; the turn goes on', async t => {
-  const s = setup();
+  const s = await setup();
   await submit(s);
   const req = s.lastRound();
   req.sink.dispatching(0);
@@ -606,7 +659,7 @@ test('R4-45: failed outcomes and rejections become "Error: ..." results; the tur
 });
 
 test('R4-46: a long tool output is bounded with the marker before it is recorded', async t => {
-  const s = setup();
+  const s = await setup();
   await submit(s);
   const req = s.lastRound();
   req.sink.dispatching(0);
@@ -634,7 +687,8 @@ test('R4-42: missing name and duplicate ids fail the turn before any intent', as
       texts.duplicateToolCallId,
     ],
   ])) {
-    const s = setup();
+    // eslint-disable-next-line no-await-in-loop
+    const s = await setup();
     // eslint-disable-next-line no-await-in-loop
     const receipt = await submit(s);
     const req = s.lastRound();
@@ -659,7 +713,7 @@ test('R4-42: missing name and duplicate ids fail the turn before any intent', as
 });
 
 test('round limit (R4-47): the turn ends completed with the fixed text', async t => {
-  const s = setup({ maxToolRounds: 2 });
+  const s = await setup({ maxToolRounds: 2 });
   const receipt = await submit(s);
   s.lastRound().sink.dispatching(0);
   for (let round = 0; round < 2; round += 1) {
@@ -685,7 +739,7 @@ test('round limit (R4-47): the turn ends completed with the fixed text', async t
 });
 
 test("frame-limit tool result fails the turn after the round's other calls settle", async t => {
-  const s = setup();
+  const s = await setup();
   const receipt = await submit(s);
   s.lastRound().sink.dispatching(0);
   s.lastRound().sink.roundFinal(result(0, '', [echoCall(), echoCall()]));
@@ -710,7 +764,7 @@ test("frame-limit tool result fails the turn after the round's other calls settl
 // ---------------------------------------------------------------- queue
 
 test('FIFO: a message waits while a turn runs and is claimed in the settle crank', async t => {
-  const s = setup();
+  const s = await setup();
   const first = await submit(s, 'one');
   const second = s.session.enqueueOnce(
     harden({ text: 'two' }),
@@ -736,14 +790,18 @@ test('FIFO: a message waits while a turn runs and is claimed in the settle crank
   s.lastRound().sink.roundFinal(result(0, 'done one'));
   await drain();
   t.is(first.turn.getStatus().state, 'completed');
-  // Settle crank: final/usage/end then pending, one batch; next turn opened.
+  // Settle crank: final/usage/end, the next turn's start on the held ports,
+  // then pending: one batch (contract 6.3).
   t.deepEqual(s.eventsOf(s.published.slice(before, before + 1)), [
     'final',
     'usage',
     'end',
+    'turn-start',
+    'phase',
     'pending',
   ]);
-  t.deepEqual(s.published[before].events[3].pending.entries, []);
+  t.is(s.published.length, before + 1, 'one publish in the settle crank');
+  t.deepEqual(s.published[before].events[5].pending.entries, []);
   const receipt = s.session.getSubmissionReceipt(
     /** @type {string} */ (second.requestId),
   );
@@ -761,7 +819,7 @@ test('FIFO: a message waits while a turn runs and is claimed in the settle crank
 });
 
 test('duplicate request ids answer the stored receipt without a second turn', async t => {
-  const s = setup();
+  const s = await setup();
   const id = requestId();
   const first = s.session.enqueueOnce(harden({ text: 'hi' }), id, AT);
   const again = s.session.enqueueOnce(harden({ text: 'hi' }), id, AT);
@@ -775,7 +833,7 @@ test('duplicate request ids answer the stored receipt without a second turn', as
 // ---------------------------------------------------------------- cancel
 
 test('cancel with nothing in flight settles at once; late answers are ignored', async t => {
-  const s = setup();
+  const s = await setup();
   const receipt = await submit(s);
   const req = s.lastRound();
   req.sink.dispatching(0);
@@ -796,7 +854,7 @@ test('cancel with nothing in flight settles at once; late answers are ignored', 
 });
 
 test('cancel waits for running calls; waiting calls never run', async t => {
-  const s = setup();
+  const s = await setup();
   const receipt = await submit(s);
   s.lastRound().sink.dispatching(0);
   const calls = [];
@@ -826,7 +884,7 @@ test('cancel waits for running calls; waiting calls never run', async t => {
 });
 
 test('cancel before the open answered settles at once and sends nothing after', async t => {
-  const s = setup({ manualOpen: true });
+  const s = await setup({ manualOpen: true });
   const receipt = s.session.enqueueOnce(
     harden({ text: 'hi' }),
     requestId(),
@@ -850,7 +908,7 @@ test('cancel before the open answered settles at once and sends nothing after', 
 // ---------------------------------------------------------------- failures
 
 test('roundFailed records the partial text and fails the turn', async t => {
-  const s = setup();
+  const s = await setup();
   const receipt = await submit(s);
   s.lastRound().sink.dispatching(0);
   s.lastRound().sink.roundFailed(
@@ -873,7 +931,7 @@ test('roundFailed records the partial text and fails the turn', async t => {
 });
 
 test('open rejected: failed with openFailed, published outside, next entry claimed', async t => {
-  const s = setup({ manualOpen: true });
+  const s = await setup({ manualOpen: true });
   const first = s.session.enqueueOnce(harden({ text: 'one' }), requestId(), AT);
   s.session.enqueueOnce(harden({ text: 'two' }), requestId(), AT);
   await drain();
@@ -889,7 +947,7 @@ test('open rejected: failed with openFailed, published outside, next entry claim
 });
 
 test('outside publish: a retired break refreshes the publisher once', async t => {
-  const s = setup({ manualOpen: true });
+  const s = await setup({ manualOpen: true });
   const receipt = s.session.enqueueOnce(
     harden({ text: 'hi' }),
     requestId(),
@@ -905,12 +963,16 @@ test('outside publish: a retired break refreshes the publisher once', async t =>
 // ---------------------------------------------------------------- restart
 
 test('restart: a retired break on the lease before dispatch closes the turn interrupted', async t => {
-  const s = setup();
+  const s = await setup();
   const receipt = await submit(s, 'one');
   s.session.enqueueOnce(harden({ text: 'two' }), requestId(), AT);
   await drain();
+  // The adapter restarts after the claim (at AT): its new incarnation
+  // started at AT + 500, so fresh ports show the turn was in flight.
+  s.restartAdapter(AT + 500);
   s.leases[0].kit.reject(retired());
   await drain();
+  t.is(s.kinds().filter(kind => kind === 'open').length, 2, 'one reopen');
   const status = receipt.turn.getStatus();
   t.is(status.state, 'interrupted');
   t.is(status.error, texts.interruptedBeforeDispatch);
@@ -932,7 +994,7 @@ test('restart: a retired break on the lease before dispatch closes the turn inte
 });
 
 test('restart: a retired break on a tool call is never a tool failure', async t => {
-  const s = setup();
+  const s = await setup();
   const receipt = await submit(s);
   s.lastRound().sink.dispatching(0);
   s.lastRound().sink.roundFinal(result(0, '', [echoCall(), echoCall()]));
@@ -969,7 +1031,7 @@ test('restart: a retired break on a tool call is never a tool failure', async t 
 test('restart: a tool rejection that only quotes the retired text is a tool failure (QC 1)', async t => {
   // The model chose the argument name; echo's R4-43 text quotes it. The
   // session must not read that as a hub break and fake a restart.
-  const s = setup();
+  const s = await setup();
   const receipt = await submit(s);
   s.lastRound().sink.dispatching(0);
   s.lastRound().sink.roundFinal(
@@ -1006,7 +1068,7 @@ test('restart: a tool rejection that only quotes the retired text is a tool fail
 });
 
 test('Turn.resolve refuses with the fixed texts', async t => {
-  const s = setup();
+  const s = await setup();
   const receipt = await submit(s);
   t.throws(() => receipt.turn.resolve('n'), { message: texts.activeTurn });
   s.lastRound().sink.dispatching(0);
@@ -1020,7 +1082,7 @@ test('Turn.resolve refuses with the fixed texts', async t => {
 // ---------------------------------------------------------------- history
 
 test('history pages: newest first, 32 turns, cursors, frame bound', async t => {
-  const s = setup();
+  const s = await setup();
   for (let i = 0; i < 40; i += 1) {
     const receipt = s.session.startTurn(
       harden({ text: `m${i} ${'€'.repeat(2000)}` }),
@@ -1055,7 +1117,7 @@ test('history pages: newest first, 32 turns, cursors, frame bound', async t => {
 });
 
 test('startTurn on an idle session ignores the queue hold (A.4 direct start)', async t => {
-  const s = setup();
+  const s = await setup();
   const turn = s.session.startTurn(harden({ text: 'direct' }), AT + 7);
   t.is(turn.getStatus().at, AT + 7);
   await drain();
@@ -1063,7 +1125,7 @@ test('startTurn on an idle session ignores the queue hold (A.4 direct start)', a
 });
 
 test('rename reports the title; getInfo', async t => {
-  const s = setup();
+  const s = await setup();
   s.session.rename('new');
   await drain();
   t.deepEqual(s.rows.at(-1), { title: 'new' });
@@ -1122,9 +1184,9 @@ test('tool table: echo only when the ports offer it', t => {
   t.true(set.byName.has('echo'));
 });
 
-test('SpareMaker makes one session per vat', t => {
+test('SpareMaker makes one session per vat', async t => {
   const maker = makeSpareMaker();
-  const s = setup();
+  const s = await setup();
   const args = harden({
     config: harden({
       key: 's2',
@@ -1149,7 +1211,7 @@ test('SpareMaker makes one session per vat', t => {
 });
 
 test('a waiting entry cancelled from outside a turn crank publishes pending at the end of its crank', async t => {
-  const s = setup();
+  const s = await setup();
   await submit(s, 'one');
   const second = s.session.enqueueOnce(
     harden({ text: 'two' }),
@@ -1166,7 +1228,7 @@ test('a waiting entry cancelled from outside a turn crank publishes pending at t
 });
 
 test('a round request whose new records exceed the frame carries none (base = log count)', async t => {
-  const s = setup();
+  const s = await setup();
   await submit(s);
   s.lastRound().sink.dispatching(0);
   s.lastRound().sink.roundFinal(result(0, '', [echoCall(), echoCall()]));
@@ -1200,4 +1262,307 @@ test('live: an event alone over the frame has its large field cut to fit', async
   t.true(event.args.startsWith(fitted.args));
   const small = harden({ type: 'phase', turnId: 't1', phase: 'thinking' });
   t.is(fitEvent(small), small);
+});
+
+// ---------------------------------------------------------------- held ports (J-9151)
+
+/**
+ * Run one plain turn to completion.
+ * @param {any} s
+ * @param {string} text
+ * @param {number} [at]
+ */
+const plainTurn = async (s, text, at = AT) => {
+  const receipt = s.session.enqueueOnce(harden({ text }), requestId(), at);
+  await drain();
+  const req = s.lastRound();
+  req.sink.dispatching(0);
+  req.sink.roundFinal(result(0, `re ${text}`));
+  await drain();
+  return receipt;
+};
+
+test('held ports: opened once at creation; each turn starts in its claim crank without open', async t => {
+  const s = await setup();
+  t.deepEqual(s.kinds(), ['open'], 'the creation-time open');
+  for (let i = 0; i < 3; i += 1) {
+    const before = s.log.length;
+    const publishedBefore = s.published.length;
+    const receipt = s.session.enqueueOnce(
+      harden({ text: `m${i}` }),
+      requestId(),
+      AT + i,
+    );
+    // eslint-disable-next-line no-await-in-loop
+    await drain();
+    // One crank (A): row, one publish, the lease, round 0; no manager hop.
+    t.deepEqual(
+      s.log.slice(before).map(([kind]) => kind),
+      ['row', 'publish', 'holdTurn', 'startRound'],
+      `turn ${i}`,
+    );
+    t.deepEqual(s.eventsOf(s.published.slice(publishedBefore)), [
+      'turn-start',
+      'phase',
+      'pending',
+    ]);
+    const req = s.lastRound();
+    t.is(req.turn, receipt.turn);
+    t.is(req.append[0].input, `m${i}`);
+    t.true(req.sink.dispatching(0));
+    req.sink.roundFinal(result(0, 'ok'));
+    // eslint-disable-next-line no-await-in-loop
+    await drain();
+    t.is(receipt.turn.getStatus().state, 'completed');
+    t.true(
+      s.log.some(
+        ([kind, turn]) => kind === 'releaseTurn' && turn === receipt.turn,
+      ),
+      'one lease per turn, released at settle',
+    );
+  }
+  t.is(s.kinds().filter(kind => kind === 'open').length, 1);
+  t.is(s.leases.length, 3);
+});
+
+test('restart while idle: the first claim on dead ports opens fresh ones and sends round 0 there', async t => {
+  const s = await setup();
+  await plainTurn(s, 'one');
+  // The adapter restarts while the session is idle: nothing tells it.
+  s.restartAdapter(AT + 500);
+  const before = s.log.length;
+  const receipt = s.session.enqueueOnce(
+    harden({ text: 'two' }),
+    requestId(),
+    AT + 1000,
+  );
+  await drain();
+  t.deepEqual(
+    s.log.slice(before).map(([kind]) => kind),
+    [
+      'row',
+      'publish-dead',
+      'holdTurn-dead',
+      'startRound-dead',
+      'open',
+      'publish',
+      'holdTurn',
+      'startRound',
+    ],
+  );
+  // Claimed after the fresh incarnation started: not in flight at the
+  // restart, so the same round 0 goes to the fresh ports.
+  t.is(receipt.turn.getStatus().state, 'running');
+  const req = s.lastRound();
+  t.is(req.round, 0);
+  t.is(req.turn, receipt.turn);
+  t.deepEqual(
+    req.append.map((/** @type {any} */ r) => [r.kind, r.input]),
+    [['turn-started', 'two']],
+  );
+  t.deepEqual(s.eventsOf(s.published.slice(-1)), ['turn-start', 'phase']);
+  t.true(req.sink.dispatching(0));
+  req.sink.roundFinal(result(0, 'fine'));
+  await drain();
+  t.is(receipt.turn.getStatus().state, 'completed');
+  t.is(s.session.listPending().hold, undefined);
+  t.deepEqual(historyKinds(s.session.getHistoryPage()), [
+    'turn-started',
+    'dispatched',
+    'round-settled',
+    'turn-settled',
+  ]);
+  // The next turn starts on the fresh ports without another open.
+  await plainTurn(s, 'three', AT + 2000);
+  t.is(s.kinds().filter(kind => kind === 'open').length, 2);
+});
+
+test('an open answered with ports of the incarnation that broke is asked again', async t => {
+  const s = await setup({ manualOpen: true });
+  s.opens[0].resolve(s.ports);
+  await drain();
+  await plainTurn(s, 'one');
+  const fresh = s.restartAdapter(AT + 500);
+  const receipt = s.session.enqueueOnce(
+    harden({ text: 'two' }),
+    requestId(),
+    AT + 1000,
+  );
+  await drain();
+  t.is(s.opens.length, 2, 'reopened after the lease broke');
+  // A late answer from before the restart: the dead incarnation's ports.
+  s.opens[1].resolve(s.ports);
+  await drain();
+  t.is(s.opens.length, 3, 'asked again');
+  t.is(receipt.turn.getStatus().state, 'running');
+  s.opens[2].resolve(fresh);
+  await drain();
+  t.is(s.lastRound().append[0].input, 'two');
+  t.is(receipt.turn.getStatus().state, 'running');
+});
+
+test('a reopen that fails after a pre-dispatch break recovers the turn interrupted', async t => {
+  const s = await setup({ manualOpen: true });
+  s.opens[0].resolve(s.ports);
+  await drain();
+  const receipt = s.session.enqueueOnce(
+    harden({ text: 'one' }),
+    requestId(),
+    AT,
+  );
+  s.session.enqueueOnce(harden({ text: 'two' }), requestId(), AT);
+  await drain();
+  s.leases[0].kit.reject(retired());
+  await drain();
+  t.is(receipt.turn.getStatus().state, 'running', 'waiting for fresh ports');
+  s.opens[1].reject(Error('manager says no'));
+  await drain();
+  const status = receipt.turn.getStatus();
+  t.is(status.state, 'interrupted');
+  t.is(status.error, texts.interruptedBeforeDispatch);
+  t.is(s.session.listPending().hold?.reason, 'restart');
+});
+
+test('a lease break after Dispatched recovers at once, without an open', async t => {
+  const s = await setup();
+  const receipt = await submit(s);
+  s.lastRound().sink.dispatching(0);
+  s.restartAdapter(AT + 500);
+  s.leases[0].kit.reject(retired());
+  await drain();
+  t.is(receipt.turn.getStatus().state, 'outcome-unknown');
+  t.is(s.kinds().filter(kind => kind === 'open').length, 1, 'no reopen');
+  // The held ports were dropped: the next claim opens fresh ones.
+  receipt.turn.resolve('checked');
+  await plainTurn(s, 'next', AT + 1000);
+  t.is(s.kinds().filter(kind => kind === 'open').length, 2);
+  t.is(s.lastRound().append[0].input, 'next');
+});
+
+test('an outside publish that breaks drops the held ports; the next claim opens', async t => {
+  /** @type {any} */
+  let queue;
+  const s = await setup({
+    makeQueue: (/** @type {any} */ options) => {
+      queue = makeQueue(options);
+      return queue;
+    },
+  });
+  const first = s.session.enqueueOnce(harden({ text: 'one' }), requestId(), AT);
+  await drain();
+  const second = s.session.enqueueOnce(
+    harden({ text: 'two' }),
+    requestId(),
+    AT,
+  );
+  queue.hold('stopped', texts.holdStopped);
+  s.lastRound().sink.dispatching(0);
+  s.lastRound().sink.roundFinal(result(0, 'done'));
+  await drain();
+  t.is(first.turn.getStatus().state, 'completed');
+  t.is(s.session.getCurrentTurn(), undefined, 'held: nothing claimed');
+  s.restartAdapter(AT + 500);
+  // Idle: the cancel's `pending` goes out answered, and breaks.
+  t.true(second.entry.cancel());
+  await drain();
+  t.true(s.kinds().includes('publish-dead'));
+  t.is(s.liveChannelCalls(), 1, 'a fresh publisher for the batch');
+  const before = s.log.length;
+  await plainTurn(s, 'three', AT + 1000);
+  t.deepEqual(
+    s.log.slice(before, before + 5).map(([kind]) => kind),
+    ['open', 'row', 'publish', 'holdTurn', 'startRound'],
+    'no claim on the dead ports',
+  );
+});
+
+// ---------------------------------------------------------------- contract fixes (J-9150)
+
+test('blank submissions are refused with the fixed text; nothing is kept', async t => {
+  const s = await setup();
+  for (const text of ['', '   ', '\n\t ']) {
+    const id = requestId();
+    t.throws(() => s.session.enqueueOnce(harden({ text }), id, AT), {
+      message: texts.blankSubmission,
+    });
+    t.is(s.session.getSubmissionReceipt(id), undefined);
+    t.throws(() => s.session.startTurn(harden({ text }), AT), {
+      message: texts.blankSubmission,
+    });
+  }
+  t.deepEqual(s.session.listPending().entries, []);
+  t.is(s.session.getCurrentTurn(), undefined);
+  t.deepEqual(s.session.getHistoryPage().turns, []);
+  // Text with content around blanks is kept exactly.
+  const receipt = s.session.enqueueOnce(
+    harden({ text: '  hi  ' }),
+    requestId(),
+    AT,
+  );
+  t.is(s.session.getCurrentTurn().input, '  hi  ');
+  t.is(receipt.state, 'started');
+});
+
+test('Turn.resolve records one resolution; a second is refused', async t => {
+  const s = await setup();
+  const receipt = await submit(s);
+  s.lastRound().sink.dispatching(0);
+  s.leases[0].kit.reject(retired());
+  await drain();
+  t.is(receipt.turn.getStatus().state, 'outcome-unknown');
+  receipt.turn.resolve('checked');
+  t.throws(() => receipt.turn.resolve('again'), {
+    message: texts.turnAlreadyResolved,
+  });
+  const kinds = historyKinds(s.session.getHistoryPage());
+  t.is(kinds.filter(kind => kind === 'turn-resolved').length, 1);
+  t.is(receipt.turn.getStatus().resolution, 'checked');
+});
+
+test('turn sources are not asked while the queue is held', async t => {
+  /** @type {any} */
+  let queue;
+  let asked = 0;
+  const source = () => {
+    asked += 1;
+    return harden({ text: 'from a source', at: AT });
+  };
+  const s = await setup({
+    makeQueue: (/** @type {any} */ options) => {
+      queue = makeQueue(options);
+      return queue;
+    },
+    hooks: harden({
+      beforeRound: [],
+      onCancel: [],
+      onSettle: [],
+      turnSources: [source],
+      recoverySteps: [],
+    }),
+  });
+  const first = s.session.enqueueOnce(harden({ text: 'one' }), requestId(), AT);
+  await drain();
+  s.session.enqueueOnce(harden({ text: 'two' }), requestId(), AT);
+  queue.hold('stopped', texts.holdStopped);
+  s.lastRound().sink.dispatching(0);
+  s.lastRound().sink.roundFinal(result(0, 'done'));
+  await drain();
+  t.is(first.turn.getStatus().state, 'completed');
+  t.is(asked, 0, 'a held queue holds the sources too');
+  t.is(s.session.getCurrentTurn(), undefined);
+  // Unheld: the next settle with an empty queue asks the source once.
+  const listed = s.session.listPending().entries;
+  t.true(listed[0].entry.cancel());
+  const third = s.session.enqueueOnce(
+    harden({ text: 'three' }),
+    requestId(),
+    AT,
+  );
+  await drain();
+  t.is(third.state, 'started');
+  s.lastRound().sink.dispatching(0);
+  s.lastRound().sink.roundFinal(result(0, 'done'));
+  await drain();
+  t.is(asked, 1);
+  t.is(s.session.getCurrentTurn()?.input, 'from a source');
 });
