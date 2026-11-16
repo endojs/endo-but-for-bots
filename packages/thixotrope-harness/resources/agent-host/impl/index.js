@@ -24,6 +24,7 @@ import { makeEndpoint } from './endpoint.js';
 import { makeTimerFacet, makeTimers } from './timers.js';
 import { findBlobDir, makeBlobStore } from './blobs.js';
 import { makeContent } from './content.js';
+import { makeContextCache } from './context-cache.js';
 import { makeListChannel } from './list-channel.js';
 import { makeEventLog, makeScriptedProvider } from './providers/scripted.js';
 import { makeEchoTool } from './tools/echo.js';
@@ -31,7 +32,7 @@ import { makeEchoTool } from './tools/echo.js';
 /**
  * @typedef {object} BackendKind
  * @property {string} kind the `BackendSpec.kind` it serves
- * @property {(options: { label: string, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore }) => { startRound: (req: any, channel: any) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
+ * @property {(options: { label: string, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
  * @property {readonly string[]} tools names in `adapterTools` this kind
  *   offers in its `TurnPorts.tools`
  *
@@ -100,6 +101,8 @@ export const makeAgentHostImpl = ({
   const listChannel = makeListChannel();
   const live = makeLive({ channels, listChannel });
   const composer = makeComposer({ blobs });
+  // W1b.2: the context cache of every session served here (D-9).
+  const contextCache = makeContextCache({ store: blobs });
 
   /**
    * What a Backend presence of the manager vat is in this incarnation:
@@ -142,7 +145,12 @@ export const makeAgentHostImpl = ({
     open: ({ backend, spec, session }) => {
       const { provider, toolEntries } = backendState(backend, spec);
       const channel = channels.channelFor(session);
-      const endpoint = makeEndpoint({ provider, channel, timers });
+      const endpoint = makeEndpoint({
+        provider,
+        channel,
+        timers,
+        prepare: req => contextCache.prepare(session, req),
+      });
       return harden({
         endpoint,
         publisher: channel.publisher,
@@ -168,6 +176,14 @@ export const makeAgentHostImpl = ({
       await blobs.sweep().catch(() => {});
     },
   });
-  return harden({ bind, unbind, ops, blobs, content, listChannel });
+  return harden({
+    bind,
+    unbind,
+    ops,
+    blobs,
+    content,
+    listChannel,
+    contextCache,
+  });
 };
 harden(makeAgentHostImpl);

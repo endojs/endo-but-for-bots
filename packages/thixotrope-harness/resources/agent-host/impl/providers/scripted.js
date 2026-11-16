@@ -29,10 +29,23 @@
  * staged and sent as `TurnSink.progress` (sendOnly, one at a time); the
  * reply reuses the last checkpoint's blob when no text came after it.
  *
+ * M1b W1b.2 (m1b-interfaces.md 6.5, 9): each round first calls the
+ * endpoint's `prepare` (the context cache) and stands for a provider that
+ * sends the projection: round 0 chooses its script turn from the
+ * projection's full input text, a page that breaks abandons the round
+ * (nothing sent), a blob that cannot be loaded fails it with
+ * `textOf.stagingFailed`. With `logContext` (default: when there is a log
+ * file) a `context` line records what the provider would have received:
+ * `{ records, bytes, digest, turnDigests }` (sha-256 prefixes of the
+ * transcript records' JSON, the whole and per turn, a turn starting at each
+ * user message), so a test can compare contexts across a restart.
+ *
  * Node only.
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
+import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { closeSync, fsyncSync, openSync, writeSync } from 'node:fs';
 import { pid } from 'node:process';
 
@@ -45,6 +58,7 @@ import {
 import { limits } from '../../../../guest/lib/limits.js';
 import { isStaged } from '../../../../guest/session/staging.js';
 /* eslint-enable import/no-relative-packages */
+import { isAbandoned } from '../context-cache.js';
 
 /**
  * One JSON line per provider or tool event (section 10):
@@ -112,6 +126,43 @@ export const tailText = (text, units) => {
 };
 harden(tailText);
 
+/** @param {string} text */
+const sha = text => createHash('sha256').update(text).digest('hex');
+
+/**
+ * What the `context` log line records of a projection (W1b.2): the record
+ * count, the JSON bytes, a digest of the whole transcript and one 16-hex
+ * digest per turn (a turn starts at each user message), space-separated.
+ * @param {readonly any[]} transcript
+ */
+export const contextDigests = transcript => {
+  /** @type {string[]} */
+  const turns = [];
+  /** @type {string[]} */
+  let current = [];
+  let bytes = 0;
+  /** @type {string[]} */
+  const all = [];
+  for (const record of transcript) {
+    const json = JSON.stringify(record);
+    bytes += Buffer.byteLength(json);
+    all.push(json);
+    if (record.kind === 'message' && record.role === 'user' && current.length) {
+      turns.push(sha(current.join('\n')).slice(0, 16));
+      current = [];
+    }
+    current.push(json);
+  }
+  if (current.length) turns.push(sha(current.join('\n')).slice(0, 16));
+  return harden({
+    records: transcript.length,
+    bytes,
+    digest: sha(all.join('\n')).slice(0, 32),
+    turnDigests: turns.join(' '),
+  });
+};
+harden(contextDigests);
+
 /** @param {unknown} error */
 const messageOf = error =>
   /** @type {Error} */ (error)?.message ?? String(error);
@@ -171,6 +222,8 @@ const makeRoundControl = timers => {
  * @param {import('../blobs.js').BlobStore} [options.blobs] M1b staging
  *   (without one, text over inlineBytes fails the round)
  * @param {() => number} [options.now]
+ * @param {boolean} [options.logContext] W1b.2: log a `context` line per
+ *   round (default: when `logPath` is given)
  */
 export const makeScriptedProvider = ({
   label,
@@ -180,6 +233,7 @@ export const makeScriptedProvider = ({
   log = makeEventLog({ label, logPath }),
   blobs,
   now = () => Date.now(),
+  logContext = logPath !== undefined,
 }) => {
   /**
    * @param {string} text
@@ -247,18 +301,60 @@ export const makeScriptedProvider = ({
    * @param {any} req a RoundRequest
    * @param {any} channel
    * @param {ReturnType<typeof makeRoundControl>} control
+   * @param {(() => Promise<any>) | undefined} prepare
    */
-  const runRound = async (req, channel, control) => {
+  const runRound = async (req, channel, control, prepare) => {
     const { turn, sink, turnId, round } = req;
     const where = { turnId, round };
     later(log, 'round-start', { ...where, at: now() });
     const cancelled = () => {
       if (control.stopped() === 'cancel') log('cancelled', where);
     };
+    /** @type {any} */
+    let projection;
+    if (prepare !== undefined) {
+      const t0 = now();
+      try {
+        projection = await prepare();
+      } catch (error) {
+        if (isAbandoned(error)) {
+          log('context-abandoned', { ...where, error: messageOf(error) });
+          return;
+        }
+        log('context-failed', { ...where, error: messageOf(error) });
+        if (control.stopped() !== undefined) {
+          cancelled();
+          return;
+        }
+        E.sendOnly(sink).roundFailed(
+          failure(round, textOf.stagingFailed(messageOf(error))),
+        );
+        return;
+      }
+      if (logContext) {
+        const ms = now() - t0;
+        const { transcript } = projection;
+        // Digested off the round's path, as `later` does for its lines.
+        timers.after(0, () => {
+          try {
+            log('context', { ...where, ms, ...contextDigests(transcript) });
+          } catch {
+            // Dropped.
+          }
+        });
+      }
+      if (control.stopped() !== undefined) {
+        cancelled();
+        return;
+      }
+    }
     let scriptTurn;
     if (round === 0) {
-      const first = req.append[0];
-      let input = first?.kind === 'turn-started' ? first.input : undefined;
+      const first = req.append.findLast(
+        (/** @type {any} */ r) =>
+          r.kind === 'turn-started' && r.turnId === turnId,
+      );
+      let input = projection?.input ?? first?.input;
       if (isStaged(input)) {
         // The script matches on the full text, read in process.
         input = await blobs?.read(input.blob).catch(() => undefined);
@@ -513,13 +609,14 @@ export const makeScriptedProvider = ({
     /**
      * @param {any} req
      * @param {any} channel
+     * @param {() => Promise<any>} [prepare] the context cache (W1b.2)
      */
-    startRound: async (req, channel) => {
+    startRound: async (req, channel, prepare) => {
       running.get(req.turn)?.stop('release');
       const control = makeRoundControl(timers);
       running.set(req.turn, control);
       try {
-        await runRound(req, channel, control);
+        await runRound(req, channel, control, prepare);
       } finally {
         if (running.get(req.turn) === control) running.delete(req.turn);
       }

@@ -974,8 +974,17 @@ test('scripted backend writes its event log as fsynced JSON lines', async t => {
     all.find(line => line.kind === 'round-start'),
     { turnId: 't1', round: 0 },
   );
+  // M1b W1b.2: a `context` line per round (what the provider received),
+  // written off the round's path like `delta` and `round-start`.
+  t.like(
+    all.find(line => line.kind === 'context'),
+    { turnId: 't1', round: 0 },
+  );
   const lines = all.filter(
-    line => line.kind !== 'delta' && line.kind !== 'round-start',
+    line =>
+      line.kind !== 'delta' &&
+      line.kind !== 'round-start' &&
+      line.kind !== 'context',
   );
   const [publishedAt, requestAt, finalAt] = [
     deltas[0].at,

@@ -21,6 +21,10 @@
  *   the turn, disarms the turn's timers and forgets the turn.
  * - `armDeadline` / `disarm`: adapter timers that call
  *   `E.sendOnly(sink).deadline({ opId })` (no M1a caller arms one).
+ * - M1b W1b.2: every round run is handed `prepare`, a thunk the provider
+ *   calls first to bring the session's context cache up to the request and
+ *   get the projection (context-cache.js); without `prepare` (M1a tests)
+ *   the provider gets none.
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
@@ -41,16 +45,19 @@ const MAX_TIMER_MS = 2_147_483_647;
 
 /**
  * @param {object} options
- * @param {{ startRound: (req: any, channel: any) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} options.provider
+ * @param {{ startRound: (req: any, channel: any, prepare?: () => Promise<any>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} options.provider
  * @param {any} options.channel the session's channel (deltas go here, in-process)
  * @param {import('./timers.js').Timers} options.timers
  * @param {() => number} [options.now]
+ * @param {(req: any) => Promise<any>} [options.prepare] W1b.2: the
+ *   session's context cache for one RoundRequest
  */
 export const makeEndpoint = ({
   provider,
   channel,
   timers,
   now = () => Date.now(),
+  prepare,
 }) => {
   /**
    * @typedef {object} HeldTurn
@@ -75,7 +82,8 @@ export const makeEndpoint = ({
    */
   const run = (state, req) => {
     state.sink = req.sink;
-    provider.startRound(req, channel).catch(error => {
+    const project = prepare === undefined ? undefined : () => prepare(req);
+    provider.startRound(req, channel, project).catch(error => {
       if (released.has(req.turn)) return;
       const reason = cutText(
         `scripted provider failed: ${error?.message ?? error}`,
