@@ -85,6 +85,17 @@ THIX_HARNESS_INTEGRATION=1 node scripts/run-lock.mjs --label it -- \
   corepack yarn test test/template/template.test.js
 ```
 
+Run one integration file per invocation, or all of them with
+
+```sh
+corepack yarn test:integration   # every file under test/integration and test/template, one at a time
+```
+
+which takes the run lock once and runs AVA with `--serial --concurrency 1`. Never give
+`corepack yarn test` several integration files at once: AVA runs files in parallel worker
+processes, and each file's `takeIntegrationLock` passes through the outer lock (a nested taker),
+so their supervisors would run side by side.
+
 A template start takes about 5.6 s against about 35 s for a cold provision. Copies live in
 `tmp/<6 chars>`: the control socket path must stay under 104 bytes (98 in this checkout), so keep
 the checkout path short or pass `startFromTemplate(template, { root })`. `KEEP_STATE=1` keeps the
