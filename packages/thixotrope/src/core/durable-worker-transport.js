@@ -1,17 +1,27 @@
 // @ts-check
 /** @import { Logger } from '../platform/logging.js' */
 /** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
+/** @import { PromiseKit } from '@endo/promise-kit' */
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, makeError, q, X } from '@endo/errors';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeSerialQueue } from '../serial-queue.js';
+import { WorkerCrashError } from './worker-crash-error.js';
 import { WorkerHaltError } from './worker-engine.js';
 
 /**
  * @import {WorkerEngine, WorkerIncarnation} from './worker-engine.js'
- * @import {WorkerStore} from '../store/store.js'
+ * @import {WorkerCrashRecord, WorkerStore} from '../store/store.js'
  */
+
+/**
+ * The first wait before retrying a crashed worker; each further retry
+ * doubles it, up to {@link MAX_CRASH_RETRY_DELAY_MS}.
+ */
+const DEFAULT_CRASH_RETRY_DELAY_MS = 1000;
+const MAX_CRASH_RETRY_DELAY_MS = 60_000;
 
 /**
  * The durability envelope of one worker's hub session: the "wire" is
@@ -48,6 +58,24 @@ import { WorkerHaltError } from './worker-engine.js';
  * naturally drains the deliveries queued before it, and deliveries
  * queued after it reopen the worker from the snapshot it just took.
  *
+ * Three kinds of failure end an incarnation, and they are told apart by
+ * what retrying would do:
+ *
+ * - A halt (`WorkerHaltError`) is deterministic. Its message is recorded as
+ *   the worker's `failure` and the logical session is retired at once.
+ * - A crash (`WorkerCrashError`: the process was killed, or missed its
+ *   deadline) may or may not repeat. With `maxDeliveryAttempts`, a crash
+ *   that leaves journal frames undelivered is counted, and the transport
+ *   owes the worker a retry: it waits, then replays the journal by itself,
+ *   and keeps doing so until the replay completes or the count of crashes
+ *   without progress reaches the bound, when it records a `failure` as a
+ *   halt does. The count is kept in the worker's metadata, so a restart
+ *   continues it. A crash during a snapshot is not counted.
+ * - Anything else is the host's own trouble (a full disk, a lost lease, a
+ *   sink that refused a frame). It is never counted against the worker: the
+ *   frame stays in the journal and the next operation tries again, or the
+ *   owed retry does if there is one.
+ *
  * @param {object} powers
  * @param {TimerPowers} powers.timers
  * @param {Logger} powers.logging
@@ -76,6 +104,13 @@ import { WorkerHaltError } from './worker-engine.js';
  *   once this many deliveries have accrued since its last snapshot, so a
  *   worker that never idles still bounds its journal, and the replay a
  *   restart needs; omitted means an awake worker snapshots only at sleep
+ * @param {number} [options.maxDeliveryAttempts] record a failure, as a halt
+ *   does, once this many attempts in a row have crashed without progress;
+ *   omitted means crashes are not counted, and a worker that crashes on
+ *   every attempt is woken again by every later frame
+ * @param {number} [options.crashRetryDelayMs] with `maxDeliveryAttempts`,
+ *   how long to wait before the first retry of a crashed worker; each
+ *   further retry waits twice as long, up to a minute
  * @param {() => void} [options.onFatal] retire the failed logical session
  */
 export const makeDurableWorkerTransport = (
@@ -88,6 +123,8 @@ export const makeDurableWorkerTransport = (
     onFrames = undefined,
     idleSleepMs = undefined,
     snapshotEveryDeliveries = undefined,
+    maxDeliveryAttempts = undefined,
+    crashRetryDelayMs = DEFAULT_CRASH_RETRY_DELAY_MS,
     debugLabel = undefined,
     resident = false,
     onFatal = () => {},
@@ -109,6 +146,37 @@ export const makeDurableWorkerTransport = (
   /** Absolute journal index the recorded snapshot subsumes (from meta). */
   let snapshotCut = store.getMeta().snapshot?.cut ?? 0;
   let checkpointQueued = false;
+  /**
+   * Where the last cadence snapshot failed, so the next is attempted a whole
+   * cadence later rather than after every delivery.
+   */
+  let snapshotFailedAt = 0;
+  /**
+   * Crashes since the worker last made progress, as recorded in its
+   * metadata: a restart resumes the count instead of forgetting it.
+   *
+   * @type {WorkerCrashRecord | undefined}
+   */
+  let stalled = store.getMeta().crash;
+  /**
+   * The retry a counted crash is owed: its timer, and the outcome of the
+   * attempt it will make, for a wake that arrives meanwhile to wait on.
+   * While it is armed nothing else attempts a wake: frames queue in the
+   * journal for the retry to replay.
+   *
+   * @type {{ timer: TimerHandle, outcome: PromiseKit<void> } | undefined}
+   */
+  let retry;
+  /** Retries armed since the worker last woke: each doubles the wait. */
+  let retriesArmed = 0;
+  /** Whether a `failure` is on record: the worker has been given up on. */
+  let givenUp = store.getMeta().failure !== undefined;
+  /**
+   * Whether the host has said it is going down. From then on a crash proves
+   * nothing, since stopping a supervisor's process group kills its workers
+   * too, so none is counted and no retry is owed.
+   */
+  let standingDown = false;
   let deliveredHubSequence = String(store.getMeta().hubDelivery ?? '0');
   let receivedHubSequence = BigInt(deliveredHubSequence);
   for (const { hubSequence } of store.readJournal()) {
@@ -199,21 +267,182 @@ export const makeDurableWorkerTransport = (
     await dying.terminate();
   };
 
+  /** @param {string} why */
+  const cancelRetry = why => {
+    if (retry === undefined) return;
+    const { timer, outcome } = retry;
+    retry = undefined;
+    timers.clearTimer(timer);
+    outcome.reject(Error(`worker ${debugName}: retry after a crash ${why}`));
+  };
+
+  /** The worker's metadata without its crash record. */
+  const metaWithoutCrash = () => {
+    const meta = { ...store.getMeta() };
+    delete meta.crash;
+    return meta;
+  };
+
   /**
-   * The incarnation's engine process died (a delivery or snapshot
+   * Keep the crash count in the worker's metadata. The count in memory is
+   * the one this process acts on, so a write that fails loses only what a
+   * restart would have remembered, and must not mask the crash it follows.
+   */
+  const persistStall = () => {
+    try {
+      const meta = metaWithoutCrash();
+      store.setMeta(stalled === undefined ? meta : { ...meta, crash: stalled });
+    } catch (error) {
+      logging.error(
+        `thixotrope worker transport ${debugName}: crash count not recorded`,
+        error,
+      );
+    }
+  };
+
+  /**
+   * Owe the worker a retry: after a wait that doubles each time, replay the
+   * journal. The wait makes a burst of frames one attempt rather than one
+   * each, and lets a fault that lasts a moment be outlived rather than
+   * counted to the bound. The retry stays owed until a replay completes or
+   * the worker is given up on, because frames that arrive meanwhile leave
+   * their delivery to it.
+   */
+  const armRetry = () => {
+    cancelRetry('was superseded');
+    // The exponent is bounded so that the product stays a number however
+    // long a failure of the host's keeps the retry owed.
+    const delayMs = Math.min(
+      crashRetryDelayMs * 2 ** Math.min(retriesArmed, 30),
+      MAX_CRASH_RETRY_DELAY_MS,
+    );
+    retriesArmed += 1;
+    /** @type {PromiseKit<void>} */
+    const outcome = makePromiseKit();
+    // Awaited only by a wake that happens to arrive while this is owed.
+    outcome.promise.catch(() => {});
+    const timer = timers.setTimer(() => {
+      retry = undefined;
+      enqueue(retryWake).then(
+        () => outcome.resolve(),
+        error => {
+          // Giving the worker up for its crashes is reported where it is
+          // decided; everything else is reported here.
+          if (!(error.cause instanceof WorkerCrashError)) {
+            logging.error(
+              `thixotrope worker transport ${debugName}: retry after a crash failed`,
+              error,
+            );
+          }
+          // A crash armed the next retry as it was counted. A failure of
+          // the host's did not, and nothing else will deliver the frames
+          // that deferred to this one. A halt ends the matter.
+          if (
+            !(error instanceof WorkerHaltError) &&
+            !destroyed &&
+            !standingDown &&
+            !givenUp &&
+            retry === undefined &&
+            incarnation === undefined
+          ) {
+            armRetry();
+          }
+          outcome.reject(error);
+        },
+      );
+    }, delayMs);
+    // Not unreferenced, as the idle timer is: a wake may be waiting on this
+    // retry, and a host with nothing else to do must not exit under it.
+    retry = harden({ timer, outcome });
+  };
+
+  /**
+   * Count a crash that left journal frames undelivered. A crash at or
+   * before the frame the last one reached is another attempt without
+   * progress; one past it starts the count afresh. Below the bound the
+   * worker is owed a retry. At the bound it is given up on.
+   *
+   * @param {WorkerCrashError} error
+   * @param {{ index: number, phase: string }} during
+   * @param {number} bound
+   * @returns {WorkerHaltError | undefined} the failure to throw in the
+   *   crash's place, once the bound is reached
+   */
+  const noteCrash = (error, { index, phase }, bound) => {
+    const repeated = stalled !== undefined && index <= stalled.index;
+    const attempts =
+      stalled !== undefined && repeated ? stalled.attempts + 1 : 1;
+    stalled = harden({
+      index: stalled !== undefined && repeated ? stalled.index : index,
+      attempts,
+      reason: error.message,
+    });
+    if (attempts < bound) {
+      if (!destroyed) armRetry();
+      persistStall();
+      return undefined;
+    }
+    const failure = `crashed ${attempts} times without progress, last while ${phase}: ${error.message}`;
+    try {
+      store.setMeta({ ...metaWithoutCrash(), failure });
+    } catch (storeError) {
+      // Only a failure on record may retire the session. If this one is
+      // not, the worker is still owed its retry, and the next crash tries
+      // to record the failure again. If the write landed before it threw,
+      // the retry finds the failure on record and retires the session then.
+      if (!destroyed) armRetry();
+      throw storeError;
+    }
+    logging.error(
+      `thixotrope worker transport ${debugName}: quarantined; ${failure}`,
+    );
+    givenUp = true;
+    stalled = undefined;
+    retriesArmed = 0;
+    onFatal();
+    return new WorkerHaltError(failure, { cause: error });
+  };
+
+  /**
+   * The incarnation's engine process died (a start, delivery or snapshot
    * failed): drop it so the next operation restarts from the snapshot
    * plus the journal suffix instead of wedging on a dead process.
    *
+   * That replay is the right answer to a one-off crash. A worker that
+   * crashes on every attempt (its process is killed, or misses its request
+   * deadline, each time it reaches one frame) would instead make every
+   * later frame replay up to that frame and crash again, so crashes are
+   * counted: see `noteCrash`. A failure that is neither a halt nor a crash
+   * is the host's, and is not held against the worker. Nor is a crash with
+   * nothing left in the journal to deliver: no frame is waiting on the
+   * worker, so there is no retry to owe and nothing to give it up for. Nor
+   * is a crash once the host is standing down.
+   *
    * @param {unknown} error
+   * @param {{ index: number, phase: string }} [during] the journal frame
+   *   being delivered, or the next to deliver, and what the incarnation was
+   *   doing; omitted where a crash is not counted (a snapshot)
    * @returns {never}
    */
-  const abandonIncarnation = error => {
+  const abandonIncarnation = (error, during = undefined) => {
     void terminateIncarnation().catch(() => {});
     if (error instanceof WorkerHaltError) {
       // Preserve the last snapshot for inspection, but do not endlessly
       // replay an input known to exhaust its budget or hit an engine gap.
-      store.setMeta({ ...store.getMeta(), failure: error.message });
+      stalled = undefined;
+      retriesArmed = 0;
+      store.setMeta({ ...metaWithoutCrash(), failure: error.message });
+      givenUp = true;
       onFatal();
+    } else if (
+      error instanceof WorkerCrashError &&
+      during !== undefined &&
+      maxDeliveryAttempts !== undefined &&
+      !standingDown &&
+      store.journalLength() > snapshotCut
+    ) {
+      const failure = noteCrash(error, during, maxDeliveryAttempts);
+      if (failure !== undefined) throw failure;
     }
     throw error;
   };
@@ -242,34 +471,58 @@ export const makeDurableWorkerTransport = (
     }
     seenOutbound = 0;
     const meta = store.getMeta();
-    if (meta.failure !== undefined) throw new WorkerHaltError(meta.failure);
+    if (meta.failure !== undefined) {
+      if (!givenUp) {
+        // On record without this transport knowing: a write that landed
+        // and then threw. The session it should have retired is retired
+        // now, and nothing more is owed.
+        givenUp = true;
+        onFatal();
+      }
+      throw new WorkerHaltError(meta.failure);
+    }
+    // Every caller leaves the attempt to an owed retry.
+    retry === undefined ||
+      Fail`worker ${q(debugName)}: a wake was attempted while a retry is owed`;
     outboundBase = meta.outboundBase ?? 0;
     const snapshotRef = meta.snapshot?.ref ?? null;
     const cut = meta.snapshot?.cut ?? 0;
     snapshotCut = cut;
-    const started = await engine.start({
-      debugName,
-      snapshot: snapshotRef,
-      onOutbound: processOutboundEnvelope,
-      onOutboundBatch:
-        onFrames === undefined
-          ? undefined
-          : envelopes => {
-              if (destroyed) return;
-              const frames = envelopes.map(envelope => {
-                if (envelope.t !== 'f' || typeof envelope.b64 !== 'string') {
-                  throw makeError(
-                    X`worker ${q(debugName)}: invalid duct frame`,
-                  );
-                }
-                seenOutbound += 1;
-                return {
-                  bytes: decodeBase64(envelope.b64),
-                  sequenceNumber: outboundBase + seenOutbound,
-                };
-              });
-              if (frames.length > 0) onFrames(frames);
-            },
+    // What the incarnation is doing, and the journal frame it has reached,
+    // when a failure interrupts the wake: a crash before the first frame
+    // counts against that frame.
+    let during = { index: cut, phase: 'starting' };
+    const start = async () =>
+      engine.start({
+        debugName,
+        snapshot: snapshotRef,
+        onOutbound: processOutboundEnvelope,
+        onOutboundBatch:
+          onFrames === undefined
+            ? undefined
+            : envelopes => {
+                if (destroyed) return;
+                const frames = envelopes.map(envelope => {
+                  if (envelope.t !== 'f' || typeof envelope.b64 !== 'string') {
+                    throw makeError(
+                      X`worker ${q(debugName)}: invalid duct frame`,
+                    );
+                  }
+                  seenOutbound += 1;
+                  return {
+                    bytes: decodeBase64(envelope.b64),
+                    sequenceNumber: outboundBase + seenOutbound,
+                  };
+                });
+                if (frames.length > 0) onFrames(frames);
+              },
+      });
+    const started = await start().catch(error => {
+      // Only a crash has anything to count or clean up here: there is no
+      // incarnation yet, and any other failure to start is passed on as it
+      // always was.
+      if (error instanceof WorkerCrashError) abandonIncarnation(error, during);
+      throw error;
     });
     // Awake from the moment the process runs: replies to replayed
     // frames can reach userland before the replay loop returns, and an
@@ -280,21 +533,83 @@ export const makeDurableWorkerTransport = (
         // The peer boots from the init message on first incarnation (or
         // on every incarnation for replay engines without snapshots);
         // restored heaps already contain the booted peer.
+        during = { index: cut, phase: 'initializing' };
         await started.deliver(harden({ t: 'init', workerId, debugLabel }));
       }
       const entries = store.readJournal(cut);
       deliveredUpTo = cut;
       deliveredHubSequence = String(meta.hubDelivery ?? '0');
       for (const { b64, hubSequence } of entries) {
+        during = {
+          index: deliveredUpTo,
+          phase: `replaying journal frame ${deliveredUpTo}`,
+        };
         // eslint-disable-next-line no-await-in-loop
         await started.deliver(harden({ t: 'f', b64 }));
         if (hubSequence !== undefined) deliveredHubSequence = hubSequence;
         deliveredUpTo += 1;
       }
     } catch (error) {
-      abandonIncarnation(error);
+      abandonIncarnation(error, during);
+    }
+    // A wake that completes is progress past whatever crashed before it.
+    retriesArmed = 0;
+    if (stalled !== undefined) {
+      stalled = undefined;
+      persistStall();
     }
     return started;
+  };
+
+  /** The attempt an owed retry makes when its wait is over. */
+  const retryWake = async () => {
+    !destroyed || Fail`worker ${q(debugName)} transport is closed`;
+    // An operation queued ahead of this one may have settled the matter:
+    // woken the worker, or crashed and been owed the next retry.
+    if (retry === undefined) await ensureAwake();
+  };
+
+  /**
+   * Wake the worker, or fail as the attempt to does. A crashed worker's owed
+   * retry is that attempt: a wake waits for it rather than making another,
+   * so that a wake never adds to the count.
+   */
+  const wake = async () => {
+    for (;;) {
+      while (retry !== undefined) {
+        // eslint-disable-next-line no-await-in-loop
+        await retry.outcome.promise;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const attempted = await enqueue(async () => {
+        if (retry !== undefined) return false;
+        await ensureAwake();
+        return true;
+      });
+      if (attempted) return;
+    }
+  };
+
+  /**
+   * Stop counting and stop retrying, because the host is going down. A
+   * signal sent to a supervisor's process group to stop it kills its workers
+   * too, so a crash from here on is not counted, and the crash whose retry
+   * this cancels is forgiven: with the retry unmade, nothing says it would
+   * repeat. A worker that does crash every time is counted again at the
+   * next start. Never throws: a host that is going down must get there.
+   */
+  const standDown = () => {
+    standingDown = true;
+    if (retry === undefined) return;
+    cancelRetry('was cancelled: the host is standing down');
+    retriesArmed = 0;
+    if (stalled !== undefined) {
+      stalled =
+        stalled.attempts > 1
+          ? harden({ ...stalled, attempts: stalled.attempts - 1 })
+          : undefined;
+      persistStall();
+    }
   };
 
   const connection = harden({
@@ -323,6 +638,12 @@ export const makeDurableWorkerTransport = (
         if (destroyed) {
           return;
         }
+        if (retry !== undefined) {
+          // A crashed worker is owed a retry, and the retry replays this
+          // frame from the journal: attempting here as well would make
+          // every frame of a burst a counted attempt.
+          return;
+        }
         const running = await ensureAwake();
         if (index < deliveredUpTo) {
           // The wake replay already delivered this frame from the
@@ -336,7 +657,10 @@ export const makeDurableWorkerTransport = (
         } catch (error) {
           // The frame stays in the journal; the wake this failure
           // provokes replays it against a fresh incarnation.
-          abandonIncarnation(error);
+          abandonIncarnation(error, {
+            index,
+            phase: `delivering journal frame ${index}`,
+          });
         }
         deliveredUpTo = index + 1;
         if (hubSequence !== undefined) deliveredHubSequence = hubSequence;
@@ -345,7 +669,8 @@ export const makeDurableWorkerTransport = (
           !resident &&
           engine.canSnapshot &&
           !checkpointQueued &&
-          deliveredUpTo - snapshotCut >= snapshotEveryDeliveries
+          deliveredUpTo - Math.max(snapshotCut, snapshotFailedAt) >=
+            snapshotEveryDeliveries
         ) {
           // Behind the deliveries already queued, as a sleep would be; the
           // worker stays awake through it.
@@ -370,6 +695,7 @@ export const makeDurableWorkerTransport = (
     },
     end: () => {
       destroyed = true;
+      standDown();
     },
   });
 
@@ -389,6 +715,10 @@ export const makeDurableWorkerTransport = (
     try {
       ref = await incarnation.snapshot();
     } catch (error) {
+      // The next frame replays the whole journal. Were the cadence left
+      // where it is, that frame would also snapshot again, and a snapshot
+      // that fails every time would cost a full replay per frame.
+      snapshotFailedAt = cut;
       abandonIncarnation(error);
     }
     const previous = store.getMeta().snapshot?.ref;
@@ -434,9 +764,8 @@ export const makeDurableWorkerTransport = (
     /** Stop accepting frames; deliveries in flight drain. */
     end: () => connection.end(),
     isAwake: () => incarnation !== undefined,
-    wake: async () => {
-      await enqueue(ensureAwake);
-    },
+    wake,
+    standDown,
     /** See {@link sleepInternal}, which the idle timer shares. */
     sleep: async () => {
       await sleepInternal();
@@ -458,6 +787,7 @@ export const makeDurableWorkerTransport = (
         return;
       }
       destroyed = true;
+      cancelRetry('was cancelled: the worker is retired');
       await enqueue(async () => {
         await terminateIncarnation();
         const ref = store.getMeta().snapshot?.ref;

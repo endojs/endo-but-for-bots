@@ -31,6 +31,7 @@
 /** @import { ThixotropeDaemon } from '../core/daemon.js' */
 /** @import { Workspace, WorkspaceTable } from './workspaces.js' */
 /** @import { PlatformPowers } from '../platform/powers.js' */
+/** @import { EnvironmentPowers } from '../platform/environment.js' */
 /** @import { FilePowers } from '../platform/files.js' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
 import { E, Far } from '@endo/far';
@@ -126,12 +127,40 @@ const save = async (files, path, value) => {
 };
 
 /**
+ * How many crashes in a row without progress give a worker up, from the
+ * environment. Parsed at the configuration boundary, as the Ironhorse limits
+ * are. The default allows four retries over fifteen seconds, so that a
+ * fault of the host's that kills workers for a few seconds is outlived
+ * rather than charged to them: a vat given up on is not got back. One is
+ * refused for the same reason, since it leaves no retry at all. The ceiling
+ * keeps the wait within reason: a starting supervisor waits for a crashing
+ * vat's retries to run out, and they come a minute apart at most.
+ *
+ * @param {EnvironmentPowers} environment
+ */
+const readMaxDeliveryAttempts = environment => {
+  const text = environment.get('THIXOTROPE_MAX_DELIVERY_ATTEMPTS');
+  if (text === undefined) return 5;
+  if (!/^([2-9]|[1-9][0-9]|100)$/.test(text)) {
+    throw Error(
+      'THIXOTROPE_MAX_DELIVERY_ATTEMPTS must be a decimal integer between 2 and 100',
+    );
+  }
+  return Number(text);
+};
+
+/**
  * Run a single local supervisor. The engine lease encloses socket lifetime.
  * @param {PlatformPowers} platform
  * @param {string} statePath
- * @param {{engine?: WorkerEngine, idleSleepMs?: number, snapshotEveryDeliveries?: number, mailboxPlacement?: 'workspace' | 'separate'}} [options]
+ * @param {{engine?: WorkerEngine, idleSleepMs?: number, snapshotEveryDeliveries?: number, maxDeliveryAttempts?: number, crashRetryDelayMs?: number, mailboxPlacement?: 'workspace' | 'separate'}} [options]
  *   Mailbox placement is selected for fresh state and persisted for ordinary
  *   restarts. Omission retains separate mailboxes for existing state.
+ *   A worker that crashes `maxDeliveryAttempts` times in a row without
+ *   progress has its failure recorded, as a halt does, instead of being
+ *   woken to crash again by every later frame; omitted, the bound is read
+ *   from `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` and defaults to 5. A crashed
+ *   worker is retried after `crashRetryDelayMs`, doubling with each retry.
  */
 export const serveThixotrope = async (
   platform,
@@ -140,6 +169,8 @@ export const serveThixotrope = async (
     engine,
     idleSleepMs = 30_000,
     snapshotEveryDeliveries = 256,
+    maxDeliveryAttempts = readMaxDeliveryAttempts(platform.environment),
+    crashRetryDelayMs,
     mailboxPlacement,
   } = {},
 ) => {
@@ -310,6 +341,8 @@ export const serveThixotrope = async (
         codec: syrupCodec,
         idleSleepMs,
         snapshotEveryDeliveries,
+        maxDeliveryAttempts,
+        crashRetryDelayMs,
         validateState: async () => {
           try {
             config = JSON.parse(await files.readText(configPath));
@@ -1029,6 +1062,9 @@ export const serveThixotrope = async (
     const close = () => {
       closing ??= (async () => {
         requested = true;
+        // Before anything is awaited: the signal that asked for this stop
+        // went to the workers too, and their deaths are about to be seen.
+        daemon.standDown();
         // Remove the endpoint while still holding the lease. A successor's
         // socket must never be removed by this process after ownership passes.
         try {
