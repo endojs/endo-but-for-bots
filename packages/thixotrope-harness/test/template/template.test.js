@@ -1,0 +1,111 @@
+// @ts-check
+/**
+ * Tests of the state-template helper (test/template/index.js).
+ *
+ * The unit tests always run. The lifecycle test needs the release Ironhorse
+ * worker and runs only with THIX_HARNESS_INTEGRATION=1 (or
+ * THIX_HARNESS_SPIKES=1), under the run lock:
+ *
+ *   THIX_HARNESS_INTEGRATION=1 node scripts/run-lock.mjs -- \
+ *     corepack yarn test test/template/template.test.js
+ */
+import { mkdir, stat, writeFile } from 'node:fs/promises';
+import net from 'node:net';
+import path from 'node:path';
+
+import test from 'ava';
+
+import { scratch } from '../_helpers.js';
+import {
+  copyState,
+  ensureTemplate,
+  integrationEnabled,
+  processesUnder,
+  shortName,
+  startFromTemplate,
+  takeIntegrationLock,
+  templateKey,
+} from './index.js';
+
+takeIntegrationLock(test, 'template helper test');
+
+test('shortName is one letter and five base-36 characters', t => {
+  for (let i = 0; i < 50; i += 1) t.regex(shortName(), /^s[0-9a-z]{5}$/);
+  t.regex(shortName('q'), /^q[0-9a-z]{5}$/);
+});
+
+test('templateKey depends on the provisioning id and the crank budget', async t => {
+  const a = await templateKey({ crankBudget: 50_000_000n, id: 'base' });
+  t.regex(a, /^[0-9a-f]{10}$/);
+  t.is(await templateKey({ crankBudget: 50_000_000n, id: 'base' }), a);
+  t.not(await templateKey({ crankBudget: 50_000_000n, id: 'other' }), a);
+  t.not(await templateKey({ crankBudget: 10_000_000n, id: 'base' }), a);
+});
+
+test('ensureTemplate refuses an id that is not a short slug', async t => {
+  await t.throwsAsync(() => ensureTemplate({ id: '../x' }), {
+    message: /template id/,
+  });
+});
+
+test('copyState clones files, skips sockets and makes the root private', async t => {
+  const dir = await scratch(t, 'c');
+  const from = path.join(dir, 'a');
+  await mkdir(path.join(from, 'heaps'), { recursive: true, mode: 0o755 });
+  await writeFile(path.join(from, 'heaps', 'x'), 'payload');
+  const server = net.createServer();
+  await new Promise(resolve =>
+    server.listen(path.join(from, 'control.sock'), () => resolve(undefined)),
+  );
+  try {
+    const to = path.join(dir, 'b');
+    await copyState(from, to);
+    t.is((await stat(path.join(to, 'heaps', 'x'))).size, 7);
+    await t.throwsAsync(() => stat(path.join(to, 'control.sock')));
+    t.is(((await stat(to)).mode % 0o1000).toString(8), '700');
+  } finally {
+    server.close();
+  }
+});
+
+const run = integrationEnabled ? test.serial : test.skip;
+
+run(
+  'a fresh state from the template serves, survives kill -9 and is cleaned up',
+  async t => {
+    t.timeout(15 * 60_000);
+    const template = await ensureTemplate();
+    const state = await startFromTemplate(template, { t });
+    t.not(state.root, template.dir);
+    t.true(
+      Buffer.byteLength(`${state.root}/control.sock`) < 104,
+      'socket path within sun_path',
+    );
+    t.log(JSON.stringify({ built: template.built, ...state.timings }));
+
+    // The workspace answers from the copy, and keeps a value durably.
+    t.is(
+      await state.client.call(
+        'evaluate',
+        '(globalThis.helperProbe = 41 + 1, globalThis.helperProbe)',
+      ),
+      '42',
+    );
+    // Its supervisor's processes name the copy, never the template.
+    t.deepEqual(processesUnder(template.dir), []);
+    t.true(processesUnder(state.root).length > 0);
+
+    const pid = state.pid();
+    await state.kill();
+    t.throws(() => process.kill(/** @type {number} */ (pid), 0));
+    await state.restart();
+    t.not(state.pid(), pid);
+    t.is(await state.client.call('evaluate', 'globalThis.helperProbe'), '42');
+
+    await state.cleanup();
+    await t.throwsAsync(() => stat(state.root));
+    t.deepEqual(processesUnder(state.root), []);
+    // The template itself is untouched and still cleanly stopped.
+    t.true((await stat(template.dir)).isDirectory());
+  },
+);
