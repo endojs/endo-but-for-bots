@@ -1560,3 +1560,221 @@ Evidence: four departures in W0.7.
 Decision: the PM decides whether `perf/_harness.mjs` should use `test/template/index.js`
 `copyState`/`ensureTemplate`. The factory's pool (M1b) should stage ASCII bundles at frameBytes and
 anything else at frameBytes / 3.
+
+### J-0190 2026-11-16 M0 engine - perf
+Evidence: QC fix of the inbound per-byte cost (QC blocking findings 2, 4, 5; supersedes the
+cause given in J-0140). J-0140 named `getOwnPropertyDescriptor` per index; the engine already
+answers that by index without a name (`natives/dispatch.rs`, typed-array branch, `to_read_key`).
+An engine probe after the real SES boot (throwaway `tests/zz_qc_probe.rs`, deleted; `harden`,
+its parts, and the guest name room measured by interning `'zq' + i` until the RangeError) split
+it: `Object.getOwnPropertyDescriptors(new Uint8Array(16384))` took 2,435 ms for 16,925
+computrons and consumed 16,375 names (room 62,476 -> 46,101), because that native resolved every
+key with `to_property_id`, which interns canonical index strings, and the result object stored
+them as named slots. SES `harden` calls it for every object it freezes
+(`packages/ses/src/make-hardener.js` `baseFreezeAndTraverse`), and every inbound frame is hardened
+(`packages/thixotrope/src/net/pipe-network.js` `deliver`, `harden({ done: false, value: bytes })`,
+now confirmed). The remaining time was `install_pending_intrinsics`
+(`rust/engine/ironhorse-vm/src/interp/link.rs`), which walked every intrinsic name on each
+computed key even when nothing was pending: `hasOwnProperty.call(d, 'value')` x 16,384 took
+196 ms. Fix d0fd6b1138 (core, own commit): getOwnPropertyDescriptors (ordinary and Proxy) keeps
+indices as `ReadKey::Index` and stores them in the result's index store, as XS keeps
+`(XS_NO_ID, index)`; each environment caches the sizes at which it last had no global left to
+bind, so the walk is skipped while they are unchanged (not persisted; restore starts empty).
+Computrons are unchanged (2,934,251 for the 16 KiB harden before and after). After the fix:
+getOwnPropertyDescriptors 16 KiB 20 ms, no names consumed (room 62,474); the hasOwnProperty loop
+24 ms; `harden(new Uint8Array(16384))` 2,646 ms -> 118 ms; 24,576 bytes 3,830 ms -> 174 ms.
+Tests: new `rust/engine/ironhorse-vm/tests/descriptors_index_keys.rs` (3 tests, including
+`harden(new Uint8Array(60000))` after the SES boot leaving more than 40 k names); `ironhorse-vm`
+and `ironhorse-snapshot` suites 2,083 passed. The snapshot field-inventory test
+(`sidetable.rs` `realm_fields_have_an_explicit_standalone_persistence_policy`) now lists the
+cache field. Three snapshot golden tests fail with and without this change (checked by running
+them on the HEAD engine sources): `metamorphic_determinism`
+`golden_vector_pins_canonical_bytes_and_manifest`, `state_golden`
+`math_profile_refuses_a_platform_snapshot_in_deterministic_configuration` and
+`carried_state_has_frozen_bytes_manifests_costs_and_continuations` [inferred: broken since the
+W0.1/W0.2 boot roster changes, which were not run against these goldens].
+Decision: the per-byte inbound cost was an engine defect, not a property of Thixotrope; fixed in
+the engine. Still per byte: SES `harden` allocates one descriptor object per frame byte, so a
+single inbound frame now halts on the heap (HeapExhausted) above about 94 KB at 50 M (J-0194).
+The next fix would be for the pipe not to harden bytes it owns, or a native harden of
+TypedArrays; open for the PM. The three golden failures are open for the engine owner.
+
+### J-0191 2026-11-16 M0 transport - poor fit
+Evidence: QC blocking finding 1 (a vat neither halted nor answering). Reproduced with throwaway
+`packages/thixotrope/tmp/qc/repro.mjs` (deleted) through `makeThixotropeDaemon` at the default
+10 M on worker da7949ed... (pre-fix): a guest call fills the key table to the engine's reserve
+(57,075 names, RangeError caught by the guest), then `E(k).keys({fresh0..fresh49})` and a later
+ping both time out after 30 s. Cause (traced): the vat's OCapN pump decodes the record after the
+duct delivery returned; Syrup's `DictionaryCodec.read` defines each key, the engine throws
+`RangeError: property key space exhausted`, `packages/ocapn/src/client/index.js` `runPump`
+logs "CapTP dispatch failed", sends op:abort and ends the session, and the pipe closes, so every
+later frame is dropped. The crank completed, so the host saw no failure. The reviewer's 1,500-key
+records reproduce it the same way. Fix 63927edaba (core): `pipe-network.js` takes `onClose`,
+`worker-peer.js` reports `onSessionEnd` unless shutting down, and `worker-peer-xs.js` latches it;
+the crank's `thixotropeTakeOutbound` read and any later frame then throw, so the crank halts
+(observed: "guest crank halted: Throw ... thixotrope worker peer: the OCapN session to the host
+ended after: [worker-peer] CapTP dispatch failed Error: SyrupAnyCodec: read failed at index 0 of
+<unknown>"; the committed version also appends the error's cause), the host records the failure and the hub breaks pending answers with the retired
+text. After the fix, same probes, worker c2f65dbe...: the burn probe breaks `keys` with "ocapn
+hub: the target session has been retired" in 118 ms and the ping likewise; the reviewer's probe
+(1,500 unique keys per record, 10 M) answers messages 0-37 in 690-798 ms each and message 38
+(57,000 keys in all) breaks with the retired text in 341 ms. Regression test
+`packages/thixotrope/test/ironhorse/key-space.js` (2 tests, in the lane).
+Decision: liveness fixed: exhaustion now retires the vat visibly. The key table itself remains a
+hard, permanent, per-vat budget of about 57,000 names after boot (54,378 after a 250 k staged
+program): every fresh record key a vat ever receives or creates costs one. Recorded as
+`limits.vatKeyNames` in `config/defaults.js` with the rule: no data-dependent record keys across a
+vat boundary or in guest state (send entry lists, keep Maps). This is a poor fit for any adapter
+that forwards JSON objects as records (tool arguments, provider payloads): M1a/M1b adapters must
+pass such payloads as strings or entry lists. Also: a record of 1,500 fresh keys costs about
+700 ms of decode in the vat [inferred: Syrup's per-key re-encode for the sort check, not
+profiled].
+
+### J-0192 2026-11-16 M0 transport - good fit
+Evidence: QC blocking finding 3 (supersedes J-0113's deferral). Fix 5a73049032 (core,
+`@endo/ocapn` patch changeset `.changeset/syrup-keep-leading-bom.md`): both Syrup decoders
+(`packages/ocapn/src/syrup/decode.js`, `codec.js`) are `{ fatal: true, ignoreBOM: true }`, so a
+string, selector or record label starting with U+FEFF round-trips on Node and in vats. Before it,
+Node's decoder already stripped it (`"﻿hello"` decoded as `"hello"`). Tests:
+`packages/ocapn/test/syrup/codec.test.js` (leading U+FEFF in strings, selectors and labels;
+malformed UTF-8 c3 28, ed a0 80, c0 af, f4 90 80 80 and a truncated e2 82 refused by
+`readString`), ocapn suite 572 passed x 3 configs; the vat lane test in `text-codec.js` sends
+`'﻿bom'` into a vat (length 4) and back.
+Decision: done; the polyfill keeps the WHATWG default and Syrup asks for what it needs.
+
+### J-0193 2026-11-16 M0 transport - perf
+Evidence: `perf/frames.perf.mjs` re-run after d0fd6b1138 + 63927edaba (QC blocking findings 4
+and 5), `PERF_OUT` rows, 200 samples per latency, crank budget 50 M, worker sha256 c2f65dbe...
+(built from d0fd6b1138), `pkg/dist-ironhorse` rebuilt from 63927edaba; rows read
+`ac25998a8d-dirty` (the dirty files were the spike edits committed in 50e071c64b); load 3.0-4.2.
+```
+{"metric":"frames.pingFloor","unit":"ms","n":200,"median":57.233,"p95":59.738,"p99":60.897,"min":54.779,"max":61.2,"deliveries":{"count":200,"perOp":1},"engine":{"delivery":{"count":200,"ms":8778.1},"snapshot":{"count":0,"ms":0},"wake":{"count":0,"ms":0}},"hubJsonBytes":93199,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","pass":null,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.35,2.98,2.99]}
+{"metric":"frames.inbound.first","unit":"ms","value":518.314,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","ok":true,"floorMedian":57.233,"pass":null,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.35,2.98,2.99]}
+{"metric":"frames.inbound","unit":"ms","n":200,"median":311.835,"p95":362.813,"p99":408.434,"min":305.088,"max":449.345,"deliveries":{"count":233,"perOp":1.165},"engine":{"delivery":{"count":233,"ms":59062},"snapshot":{"count":1,"ms":134.5},"wake":{"count":0,"ms":0}},"hubJsonBytes":25318,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","floorMedian":57.233,"utf8Bytes":24576,"budget":{"median":357.233},"pass":true,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.73,3.1,3.03]}
+{"metric":"frames.outbound","unit":"ms","n":200,"median":68.725,"p95":81.585,"p99":89.758,"min":65.371,"max":192.714,"deliveries":{"count":228,"perOp":1.14},"engine":{"delivery":{"count":228,"ms":8468.3},"snapshot":{"count":1,"ms":117.5},"wake":{"count":0,"ms":0}},"hubJsonBytes":23899,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","floorMedian":57.233,"utf8Bytes":24576,"budget":{"median":357.233},"pass":true,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.34,3.05,3.01]}
+{"metric":"frames.halt","unit":"ms","value":642.594,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","utf8Bytes":49152,"ok":true,"pass":null,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.31,3.04,3.01]}
+{"metric":"frames.halt.usedVat","unit":"ms","value":665.252,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","historyProgramChars":249998,"historyNames":54378,"historyFill":"property key space exhausted","historyMs":11324.8,"utf8Bytes":49152,"ok":true,"pass":null,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.16,3.03,3]}
+{"metric":"vat.evaluateProgram","unit":"ms","value":2320.234,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","sourceChars":149978,"stageMs":2197.2,"evalCrankMs":123,"ok":true,"budget":{"value":2000},"pass":true,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.15,3.02,3]}
+{"metric":"vat.evaluateProgram.oneMessage","unit":"ms","value":801.004,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","sourceChars":149978,"ok":false,"error":"ocapn hub: the target session has been retired","pass":null,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.86,3.17,3.05]}
+{"metric":"loop.runaway","unit":"ms","n":5,"median":241.93,"p95":248.394,"p99":248.394,"min":241.454,"max":248.394,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","runs":5,"budget":{"median":1000},"pass":true,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[4.15,3.3,3.1]}
+```
+| check (M0 perf table) | budget | before (J-0145) | after | verdict |
+|---|---|---|---|---|
+| `frames.inbound` at 24,576 | median <= floor + 300 ms (357 ms) | 867 ms (2.37 x) | 311.8 ms (p95 362.8), first frame 518 ms | pass (0.87 x) |
+| `frames.outbound` at 24,576 | same | 80 ms | 68.7 ms | pass |
+| `frames.halt` | frameBytes <= half the halt point | 2 x on a fresh vat only | 2 x on a fresh and a used vat (J-0194) | pass |
+| `vat.evaluateProgram` 150 k | <= 2 s, no MeterAbort | 8,636 ms (4.3 x) | 2,320 ms (staging 2,197 + crank 123), no MeterAbort | 1.16 x: over the nominal budget, inside the 1.25 x rule |
+| `loop.runaway` | <= 1 s | 266 ms | 242 ms | pass |
+
+The same 150 k source in one message halts the vat (HeapExhausted, 801 ms); the harness stages
+(CORE-1b). Install perf (`perf/install.perf.mjs`, 50 M, commit 50e071c64b, load 2.2-2.4):
+```
+{"metric":"install.factory300k","unit":"ms","n":3,"median":11566.656,"p95":11602.527,"p99":11602.527,"min":11343.168,"max":11602.527,"deliveries":{"count":266,"perOp":88.667},"engine":{"delivery":{"count":266,"ms":30981.5},"snapshot":{"count":0,"ms":0},"wake":{"count":3,"ms":1473.2}},"hubJsonBytes":31467,"stagingChunkChars":8192,"sourceTarget":300000,"sourceChars":299990,"utf8Bytes":299990,"stagedMessages":37,"budget":{"median":30000,"max":30000},"pass":true,"commit":"50e071c64b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.35,2.24,2.4]}
+{"metric":"install.factory300kMixed","unit":"ms","value":13961.714,"stagingChunkChars":8192,"sourceTarget":300000,"ok":true,"sourceChars":299979,"utf8Bytes":478479,"textChars":115500,"stagedMessages":37,"deliveries":{"count":80,"perOp":80},"budget":{"value":30000},"pass":true,"commit":"50e071c64b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.2,2.21,2.38]}
+```
+Reading: 300 k install 20.0 s -> 11.6 s, mixed text 28.1 s -> 14.0 s (budget 30 s). Inbound now
+costs about 10 us per byte steady (311 ms per 24 KiB including the 57 ms floor), down from 33-160.
+Decision: both blocked M0 budgets are met (vat.evaluateProgram within the 1.25 x rule, not
+under 2 s). Staging dominates evaluateProgram (2.2 s of 2.3 s, 7 frames); a frameBytes above
+24,576 would cut messages but raises inbound latency per frame past the 300 ms budget, so
+frameBytes stays.
+
+### J-0194 2026-11-16 M0 transport - perf
+Evidence: S1 re-run after the fix (QC blocking finding 2), `test/spikes/s1.test.js` at 50 M
+(parts inbound, inboundUsed, sendsUsed, accept) and 10 M (inbound), same build as J-0193, ladder
+now to 2 MiB, fresh vat per inbound probe. "Used vat" = a staged and evaluated 250 k program
+(249,998 chars, 11 frames) then the key table filled by the guest to the engine's reserve
+(54,378 more names, RangeError caught): no history can leave less room. Load 1.4-3.2.
+```
+{"spike":"S1","metric":"frames.inbound.single.haltPoint","crankBudget":"50000000","okMax":94208,"haltMin":98304,"haltError":"ocapn hub: the target session has been retired","ladderTop":2097152,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[1.48,2.59,2.85],"at":"2026-11-16T09:53:53.513Z"}
+{"spike":"S1","metric":"frames.inbound.strings8.haltPoint","crankBudget":"50000000","okMax":94208,"haltMin":98304,"haltError":"ocapn hub: the target session has been retired","ladderTop":2097152,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[1.46,2.44,2.78],"at":"2026-11-16T09:54:39.275Z"}
+{"spike":"S1","metric":"frames.inbound.strings32.haltPoint","crankBudget":"50000000","okMax":94208,"haltMin":98304,"haltError":"ocapn hub: the target session has been retired","ladderTop":2097152,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[1.86,2.44,2.77],"at":"2026-11-16T09:55:22.528Z"}
+{"spike":"S1","metric":"frames.inbound.usedVat.haltPoint","crankBudget":"50000000","okMax":94208,"haltMin":98304,"haltError":"ocapn hub: the target session has been retired","ladderTop":2097152,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[1.38,2.01,2.54],"at":"2026-11-16T09:57:35.991Z"}
+{"spike":"S1","metric":"sends.perCrank.answered.usedVat.haltPoint","crankBudget":"50000000","okMax":250,"haltMin":300,"haltError":"ocapn hub: the target session has been retired","ladderTop":1000,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[1.7,1.86,2.41],"at":"2026-11-16T09:59:22.104Z"}
+{"spike":"S1","metric":"accept.frames200","crankBudget":"50000000","frameBytes":24576,"inboundMedianMs":349,"inboundFirstMs":351,"inboundMaxMs":934.7,"outboundMedianMs":67.9,"floorMs":51,"ok":true,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[1.84,1.85,2.35],"at":"2026-11-16T10:00:52.107Z"}
+{"spike":"S1","metric":"accept.twiceFrameBytes","crankBudget":"50000000","utf8Bytes":49152,"ok":true,"ms":682.2,"floorMs":117.7,"overFloorMs":564.5,"installMs":3246.6,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[1.77,1.84,2.34],"at":"2026-11-16T10:00:57.292Z"}
+{"spike":"S1","metric":"accept.twiceFrameBytes.usedVat","crankBudget":"50000000","utf8Bytes":49152,"historyProgramChars":249998,"historyNames":54378,"historyFill":"property key space exhausted","historyMs":11167.6,"ok":true,"ms":684.4,"floorMs":61.8,"overFloorMs":622.6,"installMs":3858.3,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[1.55,1.78,2.31],"at":"2026-11-16T10:01:14.949Z"}
+{"spike":"S1","metric":"frames.inbound.single.haltPoint","crankBudget":"10000000","okMax":51200,"haltMin":53248,"haltError":"ocapn hub: the target session has been retired","ladderTop":2097152,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.87,2.12,2.4],"at":"2026-11-16T10:02:20.428Z"}
+{"spike":"S1","metric":"frames.inbound.strings8.haltPoint","crankBudget":"10000000","okMax":49152,"haltMin":51200,"haltError":"ocapn hub: the target session has been retired","ladderTop":2097152,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.66,2.15,2.4],"at":"2026-11-16T10:02:57.337Z"}
+{"spike":"S1","metric":"frames.inbound.strings32.haltPoint","crankBudget":"10000000","okMax":49152,"haltMin":51200,"haltError":"ocapn hub: the target session has been retired","ladderTop":2097152,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.35,2.13,2.38],"at":"2026-11-16T10:03:35.672Z"}
+```
+| config (UTF-8 bytes) | 10 M | 50 M |
+|---|---|---|
+| 1 string: largest ok / smallest halt | 51,200 / 53,248 MeterAbort | 94,208 / 98,304 HeapExhausted |
+| 8 / 32 strings | 49,152 / 51,200 MeterAbort | 94,208 / 98,304 HeapExhausted |
+| 1 string, used vat | not run | 94,208 / 98,304 HeapExhausted |
+| answered sends per crank, used vat | not run | 250 / 300 HeapExhausted |
+
+Reading: at 50 M the halt is now the heap (one descriptor object per frame byte in `harden`,
+J-0190), the same on a fresh vat and on a vat with a full key table: the halt no longer depends
+on history. Inbound wall time 255 / 451 / 640 / 829 ms at 16 / 32 / 48 / 64 KiB (fresh vat;
+before: 2.4 / 5.0 / 7.9 s). At 10 M the meter halts first at about 50 KB, so 2 x frameBytes
+(49,152) passes there with no margin. M0 acceptance test 1 at 50 M passes again: 200 x 24,576 in
+(median 349 ms, floor 51 ms) and 200 out (68 ms), 2 x frameBytes on a fresh and on a used vat.
+`sendsPerCrank` = 100 keeps 2.5 x margin on a used vat.
+Decision: `frameBytes` = 24,576 is at most half the halt point on any vat at 50 M (94,208 / 2 =
+47,104); the J-0141/J-0144 verdict now rests on evidence from used vats. At 10 M it is exactly
+half, so lowering the daemon budget below 50 M needs a re-run. The settings file records this.
+
+### J-0195 2026-11-16 M0 engine - perf
+Evidence: S3 re-run (`test/spikes/s3.test.js`, 50 M, same build; now also `execSourceBytes`, and
+400 k staged is asserted; QC advisory 9), load 2.4-3.2.
+```
+{"spike":"S3","metric":"vat.evaluateProgram.oneMessage","crankBudget":"50000000","frameBytes":24576,"sourceChars":149978,"functions":1615,"ok":false,"ms":1329,"floorMs":58,"error":"ocapn hub: the target session has been retired","alive":false,"pingError":"ocapn hub: the target session has been retired","worker":"{\"awake\":false,\"debugLabel\":\"app:p2\",\"failure\":\"guest crank halted: HeapExhausted\"}","commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.99,3.16,3.06],"at":"2026-11-16T09:52:04.007Z"}
+{"spike":"S3","metric":"vat.evaluateProgram.staged","crankBudget":"50000000","frameBytes":24576,"sourceChars":149978,"functions":1615,"chunks":7,"stageMs":2181.4,"evalMs":124.6,"totalMs":2306,"ok":true,"result":1615,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.15,3.19,3.07],"at":"2026-11-16T09:52:10.581Z"}
+{"spike":"S3","metric":"vat.evaluateProgram.oneMessage","crankBudget":"50000000","frameBytes":24576,"sourceChars":262053,"functions":2796,"ok":false,"ms":1003.8,"floorMs":59,"error":"ocapn hub: the target session has been retired","alive":false,"pingError":"ocapn hub: the target session has been retired","worker":"{\"awake\":false,\"debugLabel\":\"app:p4\",\"failure\":\"guest crank halted: HeapExhausted\"}","commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.98,3.15,3.06],"at":"2026-11-16T09:52:16.197Z"}
+{"spike":"S3","metric":"vat.evaluateProgram.staged","crankBudget":"50000000","frameBytes":24576,"sourceChars":262053,"functions":2796,"chunks":11,"stageMs":3736.2,"evalMs":175.1,"totalMs":3911.3,"ok":true,"result":2796,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.67,3.08,3.04],"at":"2026-11-16T09:52:24.531Z"}
+{"spike":"S3","metric":"vat.evaluateProgram.oneMessage","crankBudget":"50000000","frameBytes":24576,"sourceChars":399938,"functions":4249,"ok":false,"ms":1609.2,"floorMs":59.1,"error":"ocapn hub: the target session has been retired","alive":false,"pingError":"ocapn hub: the target session has been retired","worker":"{\"awake\":false,\"debugLabel\":\"app:p6\",\"failure\":\"guest crank halted: HeapExhausted\"}","commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.54,3.04,3.03],"at":"2026-11-16T09:52:30.843Z"}
+{"spike":"S3","metric":"vat.evaluateProgram.staged","crankBudget":"50000000","frameBytes":24576,"sourceChars":399938,"functions":4249,"chunks":17,"stageMs":5796.5,"evalMs":233.5,"totalMs":6030,"ok":true,"result":4249,"commit":"ac25998a8d-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.38,2.99,3.01],"at":"2026-11-16T09:52:41.068Z"}
+```
+Reading: staged 150 k / 262 k / 400 k evaluate in 2.3 / 3.9 / 6.0 s (before 8.6 / - / 17.5 s);
+the evaluating cranks are 125 / 175 / 234 ms. One message of each still halts (HeapExhausted,
+J-0194).
+Decision: `execSourceBytes` = 262,144 stays a staged size, now tested.
+
+### J-0196 2026-11-16 M0 tooling - good fit
+Evidence: M0 gate after the QC fixes: `corepack yarn test:ironhorse` in `pkg/` under the run lock
+(18:31-18:48, about 17 minutes, load 3.0-4.2) with worker c2f65dbe... built at HEAD d0fd6b1138
+(`cargo build --locked --release -p thixotrope-ironhorse-worker`; this also answers QC advisory
+12, the gate now runs a binary built from the committed engine) and `pkg/dist-ironhorse` rebuilt
+from 63927edaba: `65 tests passed`, exit 0. The lane is 55 original + 1 (W0.1 scenario) + 7
+(text-codec) + 2 (new key-space.js) (QC advisory 14: acceptance test 3's 55/55 now reads 65/65).
+Also: Node ses-ava pipe/worker-peer/hub set 25 passed x 3 configs; harness unit lane 84 passed,
+10 skipped; `tsc` clean; eslint 0 errors on every changed file.
+Decision: gate passes with the fixes.
+
+### J-0197 2026-11-16 M0 tooling - awkward
+Evidence: QC advisory findings. Applied: (6) guest lint (`lint/guest-rules.js`, ac25998a8d) now
+forbids `globalThis['Date']`, `const g = globalThis`, `Reflect.get(globalThis, ...)`,
+`({ Date: D } = globalThis)`, any `eval`, `new Function`/`Function(...)`, `s = x + s` and
+`s = s.concat(x)` in a loop (9 new cases in `test/guest-lint.test.js`); still missed: `+=` on a
+parameter or property fed non-literal values, growth through recursion. (5) `test/limits.test.js`
+keeps the core `STAGING_FRAME_BYTES` equal to `limits.frameBytes`. (9) S1 and S3 no longer
+assert the old defects as passing conditions (50e071c64b). (13) partly: Node-side malformed UTF-8
+refusal is tested through `readString` (J-0192); a crafted-frame vat test was not written. (19)
+the two survey scripts are prettier-formatted. Not applied, follow-ups: (3, 18) 1d44da02d0 stays
+non-bisectable (no history rewrite allowed); (7) `run-lock.mjs` records the wrapper's pid, not
+the workload's, and its break race; (8) `serve.mjs` orphaned supervisor after SIGKILL of the CLI
+and the clean-close assumption; (10, 16) J-0163, J-0164, J-0166, J-0181 still open; (11)
+`TextEncoder.encode(Symbol())` does not throw (polyfill `String(input)`); (4) the XS path of
+`polyfills.js` and the XS `Uint8Array.fromBase64` switch were not executed; ironhorse-262 still
+cannot build here (xs-oracle).
+Decision: listed for the PM.
+
+### J-0198 2026-11-16 M0 admin - deviation
+Evidence: the QC fixes touch paths outside the M0 Owns list:
+`rust/engine/ironhorse-vm/src/interp/{natives/dispatch.rs,property/descriptors.rs,property/object.rs,admission.rs,realm.rs,link.rs}`,
+`rust/engine/ironhorse-vm/tests/descriptors_index_keys.rs` and
+`rust/engine/ironhorse-snapshot/src/sidetable.rs` (d0fd6b1138);
+`packages/ocapn/src/syrup/{decode,codec}.js`, its test and a changeset (5a73049032);
+`packages/thixotrope/src/{net/pipe-network.js,core/worker-peer.js,core/worker-peer-xs.js}`,
+`test/ironhorse/key-space.js` and one line of `ava.ironhorse.config.mjs` (63927edaba);
+`H/lint/guest-rules.js`, `H/test/limits.test.js`, `H/designs/survey/*.mjs` (ac25998a8d);
+`H/config/defaults.js` (`vatKeyNames` added), `H/perf/frames.perf.mjs` (50e071c64b). Each root
+cause lived in that file. The boot digest changed again (new worker-peer bundle), so existing
+Ironhorse states are refused, as with any boot change. Open for the PM: J-0190's remaining
+per-byte heap cost in `harden` (frame halt about 94 KB at 50 M) and the three failing snapshot
+goldens; J-0191's key-name budget as a design rule for adapters; the earlier W0.x deviations
+listed in QC advisory 17 still need sign-off; J-0183's cold-session cost (14.6 s) was not
+re-measured and should now be lower [inferred from J-0193's install numbers].
+Decision: as above.
