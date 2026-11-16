@@ -250,6 +250,38 @@ test.serial('SES confinement remains intact across SQLite restore', async t => {
   t.deepEqual(await f.daemon.getWorker(f.guestId).evaluate(source), expected);
 });
 
+// `@endo/base64` captures `Uint8Array.fromBase64` at module load
+// (`packages/base64/src/decode.js:86`) and decodes every inbound duct frame
+// with it (`src/core/worker-peer-xs.js`). The engine implements the static;
+// the SES boot must not hide it behind `@endo/immutable-arraybuffer`'s
+// replacement `Uint8Array` global. 192 KiB is past where the JavaScript
+// decoder meters out at the default 10 M-computron crank budget.
+test.serial(
+  'a vat sees the native Uint8Array base64 statics and decodes 192 KiB in one crank',
+  async t => {
+    t.timeout(120_000);
+    const f = await makeFixture(t);
+    const vat = f.daemon.getWorker(f.guestId);
+    t.deepEqual(
+      await vat.evaluate(
+        `[typeof Uint8Array.fromBase64, typeof Uint8Array.fromHex,
+          Object.isFrozen(Uint8Array)]`,
+      ),
+      ['function', 'function', true],
+    );
+    await vat.evaluate(
+      `(globalThis.base64Input = 'QUFB'.repeat(65536), base64Input.length)`,
+    );
+    t.is(
+      await vat.evaluate(
+        `Uint8Array.fromBase64(globalThis.base64Input,
+          { alphabet: 'base64', lastChunkHandling: 'strict' }).length`,
+      ),
+      196_608,
+    );
+  },
+);
+
 test.serial(
   'a metered-out vat stays quarantined while its sibling serves calls',
   async t => {

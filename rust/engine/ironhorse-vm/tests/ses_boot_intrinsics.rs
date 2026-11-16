@@ -669,3 +669,65 @@ fn an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments() {
         .join()
         .unwrap();
 }
+
+/// The SES boot must leave the engine's own `%Uint8Array%` base64 and hex
+/// statics on the `Uint8Array` global a vat sees. `@endo/immutable-arraybuffer`'s
+/// shim (pulled into the SES bundle by `packages/ses/src/lockdown.js`) replaces
+/// each concrete TypedArray global with an emulated constructor; until it
+/// copied the genuine constructor's own statics, `Uint8Array.fromBase64` read
+/// `undefined` after boot, and `@endo/base64`
+/// (`packages/base64/src/decode.js:86`), which captures the native at module
+/// load, decoded every inbound frame in metered JavaScript.
+#[test]
+fn the_ses_boot_keeps_the_native_uint8_array_base64_statics() {
+    let Some(boot) = thixotrope_ses_boot() else {
+        return;
+    };
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(move || {
+            let mut machine = Interp::new();
+            machine.set_source_compiler(std::rc::Rc::new(TestCompiler));
+            let mut crank = |source: &str| {
+                let (code, symbols) = ironhorse_compile::compile_atoms_goal(
+                    source,
+                    ironhorse_compile::Goal::Script,
+                    false,
+                )
+                .expect("compiles");
+                let names = parse_symbols(&symbols);
+                let code = if machine.program_symbol_names().is_empty() {
+                    machine.link_intrinsics(&names);
+                    code
+                } else {
+                    machine.relink_crank(&code, &names).expect("relinks")
+                };
+                let outcome = machine.run(&code);
+                assert!(outcome.completed, "{source:.60}: {:?}", outcome.halt);
+                outcome.result
+            };
+            crank(
+                "globalThis.__engineFromBase64 = Uint8Array.fromBase64; \
+                 globalThis.__engineFromHex = Uint8Array.fromHex; 0",
+            );
+            assert_eq!(crank(&wrapped(&boot)), "ok", "the ses shim must evaluate");
+            assert_eq!(
+                crank(
+                    "[typeof Uint8Array.fromBase64, typeof Uint8Array.fromHex, \
+                      Uint8Array.fromBase64 === globalThis.__engineFromBase64, \
+                      Uint8Array.fromHex === globalThis.__engineFromHex, \
+                      Object.isFrozen(Uint8Array), \
+                      Uint8Array.fromBase64('SGVsbG8=', { alphabet: 'base64', \
+                        lastChunkHandling: 'strict' }).join(), \
+                      Object.getPrototypeOf(Uint8Array.fromHex('00')) === Uint8Array.prototype]\
+                       .join(' ')"
+                ),
+                "function function true true true 72,101,108,108,111 true",
+                "the replacement Uint8Array global must carry the engine's \
+                 native base64 and hex statics through lockdown"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
