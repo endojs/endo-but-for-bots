@@ -171,3 +171,96 @@ export const sliceScript = {
     },
   ],
 };
+
+/** Inputs the perf script adds. */
+export const perfInputs = Object.freeze({
+  start: 'perf start',
+  startProbe: 'perf start probe',
+  stream: 'perf stream',
+  plain: 'perf plain',
+  tools: 'perf tools',
+  bigReply: 'perf big reply',
+  echo300k: 'perf echo 300k',
+  keys: 'perf keys',
+});
+
+/** Chunks per `perf stream` turn and the delay before each. */
+export const STREAM_CHUNKS = 50;
+export const STREAM_DELAY_MS = 40;
+
+/** The perf checks' script (turn, restart, session): the slice's turns too. */
+export const perfScript = {
+  turns: [
+    {
+      input: perfInputs.start,
+      rounds: [{ chunks: [{ text: 'ok' }], usage }],
+    },
+    {
+      // The first chunk waits, so the session's journal can be read while
+      // nothing but the start has reached it.
+      input: perfInputs.startProbe,
+      rounds: [{ chunks: [{ text: 'ok', delayMs: 1500 }], usage }],
+    },
+    {
+      input: perfInputs.stream,
+      rounds: [
+        {
+          chunks: Array.from({ length: STREAM_CHUNKS }, (_, i) => ({
+            text: `t${i} `,
+          })),
+          chunkDelayMs: STREAM_DELAY_MS,
+          usage,
+        },
+      ],
+    },
+    {
+      input: perfInputs.plain,
+      rounds: [
+        { chunks: [{ text: 'a' }, { text: 'b' }, { text: 'c' }], usage },
+      ],
+    },
+    {
+      input: perfInputs.tools,
+      rounds: [
+        {
+          chunks: [{ text: 'tools' }],
+          toolCalls: [
+            echo('echo', { text: 'a' }),
+            echo('echo', { text: 'b' }),
+          ],
+          usage,
+        },
+        closing,
+      ],
+    },
+    {
+      input: perfInputs.bigReply,
+      rounds: [{ chunks: [{ text: 'x', repeat: 65_536 }], usage }],
+    },
+    {
+      // 300,000 characters: cut in the callee to toolOutputUnits, still
+      // over frameBytes.
+      input: perfInputs.echo300k,
+      rounds: [
+        {
+          chunks: [{ text: 'big' }],
+          toolCalls: [echo('echo', { text: 'z', bytes: 300_000 })],
+          usage,
+        },
+        closing,
+      ],
+    },
+    {
+      input: perfInputs.keys,
+      rounds: [
+        {
+          chunks: [{ text: 'keys' }],
+          toolCalls: [{ name: 'echo', argsKeys: 2000 }],
+          usage,
+        },
+        closing,
+      ],
+    },
+    ...sliceScript.turns,
+  ],
+};
