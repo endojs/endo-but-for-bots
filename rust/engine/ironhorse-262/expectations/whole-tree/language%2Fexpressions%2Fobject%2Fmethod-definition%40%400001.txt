@@ -1,12 +1,12 @@
 # engine=ironhorse features=default corpus=language/expressions/object/method-definition tip=be13516fb6441b950ba8a3df97eb34062c186972
 language/expressions/object/method-definition/async-gen-yield-star-next-then-returns-abrupt.js sloppy pass
 language/expressions/object/method-definition/async-gen-yield-star-next-then-returns-abrupt.js strict pass
-language/expressions/object/method-definition/async-gen-yield-star-sync-next.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-language/expressions/object/method-definition/async-gen-yield-star-sync-next.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-language/expressions/object/method-definition/async-gen-yield-star-sync-return.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-language/expressions/object/method-definition/async-gen-yield-star-sync-return.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-language/expressions/object/method-definition/async-gen-yield-star-sync-throw.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
-language/expressions/object/method-definition/async-gen-yield-star-sync-throw.js strict fail:"async: Test262:AsyncTestFailure:TypeError: call: not a function (the oracle completed)"
+language/expressions/object/method-definition/async-gen-yield-star-sync-next.js sloppy pass
+language/expressions/object/method-definition/async-gen-yield-star-sync-next.js strict pass
+language/expressions/object/method-definition/async-gen-yield-star-sync-return.js sloppy pass
+language/expressions/object/method-definition/async-gen-yield-star-sync-return.js strict pass
+language/expressions/object/method-definition/async-gen-yield-star-sync-throw.js sloppy pass
+language/expressions/object/method-definition/async-gen-yield-star-sync-throw.js strict pass
 language/expressions/object/method-definition/async-meth-array-destructuring-param-strict-body.js sloppy pass
 language/expressions/object/method-definition/async-meth-array-destructuring-param-strict-body.js strict pass
 language/expressions/object/method-definition/async-meth-dflt-params-abrupt.js sloppy pass

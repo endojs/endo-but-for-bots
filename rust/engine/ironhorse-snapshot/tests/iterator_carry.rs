@@ -100,6 +100,31 @@ fn resumed_iterator_from_wrapper_keeps_its_iterated_object_and_cached_next() {
 }
 
 #[test]
+fn resumed_for_await_keeps_its_async_from_sync_wrapper() {
+    // Crank 1 leaves an async function suspended inside `for await` over a
+    // synchronous iterable, so the AsyncFromSyncIterator wrapper (with its
+    // wrapped iterator, cached `next`, and done flag) crosses the snapshot.
+    assert_twin(
+        "ih-iter-twin-async-from-sync",
+        "var log = ''; var resume = 0; var t = 0; \
+         var it = { [Symbol.iterator]() { var i = 0; return { \
+             next() { i++; return i < 3 ? { value: Promise.resolve(i), done: false } \
+                 : { done: true }; } }; } }; \
+         (async function () { for await (var x of it) { log += x; \
+             await new Promise(function (r) { resume = r; }); } log += '!'; })(); \
+         t = 7; t",
+        &[
+            "var log; var resume; var t; t = log; t",
+            "var log; var resume; var t; resume(); t = 0; t",
+            "var log; var resume; var t; t = log; t",
+            "var log; var resume; var t; resume(); t = 0; t",
+            "var log; var resume; var t; t = log; t",
+        ],
+        &["1", "0", "12", "0", "12!"],
+    );
+}
+
+#[test]
 fn resumed_string_iterator_steps_surrogate_pairs_whole() {
     // 'ab😀c': crank 1 consumes 'a'; the resumed cursor must yield 'b',
     // then the astral character as ONE two-unit string (the byte

@@ -1496,6 +1496,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("regexp_split_method", &[Req::GcRoots], "lazy well-known boot method"),
     ("iterator_proto", &[Req::GcRoots], "boot iterator ancestor retained independently of global bindings"),
     ("iterator_wrapper_proto", &[Req::GcRoots], "boot anchor (%WrapForValidIteratorPrototype%)"),
+    ("async_from_sync_iterator_proto", &[Req::GcRoots], "boot anchor (%AsyncFromSyncIteratorPrototype%)"),
     ("iterator_helper_proto", &[Req::GcRoots], "boot anchor (%IteratorHelperPrototype%)"),
     ("map_iterator_proto", &[Req::GcRoots], "boot iterator prototype retained for future collection iterators"),
     ("set_iterator_proto", &[Req::GcRoots], "boot iterator prototype retained for future collection iterators"),

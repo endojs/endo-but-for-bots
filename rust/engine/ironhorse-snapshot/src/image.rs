@@ -4602,8 +4602,9 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
         // The engine's cursor kinds are 0..=15 (array values/keys/entries,
         // for-in, string, collection keys/values/entries, Iterator.from
         // generic wrappers, RegExp String Iterator, the five lazy Iterator
-        // helpers map/filter/take/drop/flatMap, and Iterator.concat).
-        if kind > 15 {
+        // helpers map/filter/take/drop/flatMap, Iterator.concat, and the
+        // AsyncFromSyncIterator wrapper).
+        if kind > 16 {
             return Err(SnapshotError::Corrupt("iterator cursors: unknown kind"));
         }
         let iterable = c.u32()?;
@@ -4669,6 +4670,22 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
         {
             return Err(SnapshotError::Corrupt(
                 "iterator cursors: malformed Iterator.from wrapper",
+            ));
+        }
+        // The AsyncFromSyncIterator wrapper has the Iterator.from shape, except
+        // that `done` is the shared done flag of its latest step.
+        if kind == 16
+            && iterator_from_wrapper_malformed(
+                iterable,
+                result,
+                index,
+                false,
+                enum_keys.is_empty(),
+                str_bytes.is_empty(),
+            )
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: malformed AsyncFromSyncIterator wrapper",
             ));
         }
         if kind == 9
@@ -6363,8 +6380,9 @@ mod tests {
         };
         // 10-14 are the lazy Iterator helpers, whose self-contained shape
         // gate the fixture row already satisfies (a live iterable, a holder
-        // in `result`, and empty for-in and string payloads).
-        for kind in 0..=15 {
+        // in `result`, and empty for-in and string payloads). 16 is the
+        // AsyncFromSyncIterator wrapper, which shares Iterator.from's shape.
+        for kind in 0..=16 {
             assert_eq!(
                 decode_iterators(&encode_iterators(&[row(kind)])).unwrap(),
                 vec![row(kind)]
@@ -6383,7 +6401,7 @@ mod tests {
                 ))
             );
         }
-        for kind in [16, 255] {
+        for kind in [17, 255] {
             assert_eq!(
                 decode_iterators(&encode_iterators(&[row(kind)])),
                 Err(SnapshotError::Corrupt("iterator cursors: unknown kind"))
@@ -6417,6 +6435,37 @@ mod tests {
                     ))
                 );
             }
+        }
+        // The AsyncFromSyncIterator wrapper carries its latest step's done
+        // flag, but still needs its wrapped iterator and `next` holder.
+        let finished = IteratorRow {
+            done: true,
+            ..row(16)
+        };
+        assert_eq!(
+            decode_iterators(&encode_iterators(std::slice::from_ref(&finished))).unwrap(),
+            vec![finished]
+        );
+        for broken in [
+            IteratorRow {
+                iterable: u32::MAX,
+                ..row(16)
+            },
+            IteratorRow {
+                result: u32::MAX,
+                ..row(16)
+            },
+            IteratorRow {
+                index: 1,
+                ..row(16)
+            },
+        ] {
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[broken])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: malformed AsyncFromSyncIterator wrapper"
+                ))
+            );
         }
         for value in [2, 255] {
             let mut bytes = encode_iterators(&[row(0)]);

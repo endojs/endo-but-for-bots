@@ -883,6 +883,7 @@ mod tests {
             "regexp_split_method",
             "iterator_proto",
             "iterator_wrapper_proto",
+            "async_from_sync_iterator_proto",
             "iterator_helper_proto",
             "map_iterator_proto",
             "set_iterator_proto",

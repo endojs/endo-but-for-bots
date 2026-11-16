@@ -1070,6 +1070,20 @@ pub enum NativeMethod {
     /// wrapped iterator's live `return` method, or synthesize a completed
     /// iterator result when it has none.
     IteratorWrapperReturn,
+    /// `%AsyncFromSyncIteratorPrototype%.next/return/throw`
+    /// (`fx_AsyncFromSyncIterator_prototype_*`): step the wrapped synchronous
+    /// iterator and return a promise of its unwrapped result.
+    AsyncFromSyncIteratorNext,
+    AsyncFromSyncIteratorReturn,
+    AsyncFromSyncIteratorThrow,
+    /// The fulfillment handler a wrapper step registers on its value
+    /// (`fxAsyncFromSyncIteratorDone`): build `{ value, done }` from the
+    /// wrapper's done flag. Its `home` names the wrapper.
+    AsyncFromSyncIteratorDone,
+    /// The rejection handler a wrapper step registers on its value
+    /// (`fxAsyncFromSyncIteratorFailed`): close the synchronous iterator,
+    /// ignoring any error, then rethrow the reason. Its `home` names the wrapper.
+    AsyncFromSyncIteratorFailed,
     /// `get Iterator.prototype.constructor`: returns the realm's `%Iterator%`
     /// constructor without inspecting the receiver.
     IteratorConstructorGetter,

@@ -4041,9 +4041,10 @@ impl Interp {
             if row.iterable != u32::MAX {
                 self.validate_restore_owner(row.iterable, ROW)?;
             }
-            if row.kind == 8 {
-                // Iterator.from caches the next value in an ordinary value
-                // holder; unlike the other kinds, this is no result object.
+            if row.kind == 8 || row.kind == 16 {
+                // Iterator.from and the AsyncFromSyncIterator wrapper cache
+                // the next method in an ordinary value holder; unlike the
+                // other kinds, this is no result object.
                 let holder = crate::value::SlotIndex(row.result);
                 if holder.is_null()
                     || holder.0 >= self.slots.capacity()
@@ -4061,7 +4062,7 @@ impl Interp {
         }
 
         for r in &rows {
-            if r.kind > 15 {
+            if r.kind > 16 {
                 return Err(RestoreError {
                     row: ROW,
                     reason: "malformed iterator state",
@@ -4146,11 +4147,13 @@ impl Interp {
                         });
                     }
                 }
-                8 => {
+                // The AsyncFromSyncIterator wrapper (16) shares Iterator.from's
+                // shape; its `done` is the latest step's shared done flag.
+                8 | 16 => {
                     if r.iterable == crate::value::SlotIndex::NULL.0
                         || r.result == crate::value::SlotIndex::NULL.0
                         || r.index != 0
-                        || r.done
+                        || (r.done && r.kind == 8)
                         || !r.enum_keys.is_empty()
                         || !r.str_bytes.is_empty()
                     {

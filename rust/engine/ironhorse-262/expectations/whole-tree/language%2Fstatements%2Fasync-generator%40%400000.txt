@@ -108,8 +108,8 @@ language/statements/async-generator/yield-star-getiter-async-not-callable-string
 language/statements/async-generator/yield-star-getiter-async-not-callable-string-throw.js strict pass
 language/statements/async-generator/yield-star-getiter-async-not-callable-symbol-throw.js sloppy pass
 language/statements/async-generator/yield-star-getiter-async-not-callable-symbol-throw.js strict pass
-language/statements/async-generator/yield-star-getiter-async-null-sync-get-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
-language/statements/async-generator/yield-star-getiter-async-null-sync-get-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/async-generator/yield-star-getiter-async-null-sync-get-abrupt.js sloppy pass
+language/statements/async-generator/yield-star-getiter-async-null-sync-get-abrupt.js strict pass
 language/statements/async-generator/yield-star-getiter-async-returns-abrupt.js sloppy pass
 language/statements/async-generator/yield-star-getiter-async-returns-abrupt.js strict pass
 language/statements/async-generator/yield-star-getiter-async-returns-boolean-throw.js sloppy pass
@@ -124,10 +124,10 @@ language/statements/async-generator/yield-star-getiter-async-returns-symbol-thro
 language/statements/async-generator/yield-star-getiter-async-returns-symbol-throw.js strict pass
 language/statements/async-generator/yield-star-getiter-async-returns-undefined-throw.js sloppy pass
 language/statements/async-generator/yield-star-getiter-async-returns-undefined-throw.js strict pass
-language/statements/async-generator/yield-star-getiter-async-undefined-sync-get-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
-language/statements/async-generator/yield-star-getiter-async-undefined-sync-get-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
-language/statements/async-generator/yield-star-getiter-sync-get-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
-language/statements/async-generator/yield-star-getiter-sync-get-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/async-generator/yield-star-getiter-async-undefined-sync-get-abrupt.js sloppy pass
+language/statements/async-generator/yield-star-getiter-async-undefined-sync-get-abrupt.js strict pass
+language/statements/async-generator/yield-star-getiter-sync-get-abrupt.js sloppy pass
+language/statements/async-generator/yield-star-getiter-sync-get-abrupt.js strict pass
 language/statements/async-generator/yield-star-getiter-sync-not-callable-boolean-throw.js sloppy pass
 language/statements/async-generator/yield-star-getiter-sync-not-callable-boolean-throw.js strict pass
 language/statements/async-generator/yield-star-getiter-sync-not-callable-number-throw.js sloppy pass
@@ -138,8 +138,8 @@ language/statements/async-generator/yield-star-getiter-sync-not-callable-string-
 language/statements/async-generator/yield-star-getiter-sync-not-callable-string-throw.js strict pass
 language/statements/async-generator/yield-star-getiter-sync-not-callable-symbol-throw.js sloppy pass
 language/statements/async-generator/yield-star-getiter-sync-not-callable-symbol-throw.js strict pass
-language/statements/async-generator/yield-star-getiter-sync-returns-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
-language/statements/async-generator/yield-star-getiter-sync-returns-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/async-generator/yield-star-getiter-sync-returns-abrupt.js sloppy pass
+language/statements/async-generator/yield-star-getiter-sync-returns-abrupt.js strict pass
 language/statements/async-generator/yield-star-getiter-sync-returns-boolean-throw.js sloppy pass
 language/statements/async-generator/yield-star-getiter-sync-returns-boolean-throw.js strict pass
 language/statements/async-generator/yield-star-getiter-sync-returns-null-throw.js sloppy pass

@@ -2370,6 +2370,11 @@ impl Interp {
             | NativeMethod::IteratorConcat
             | NativeMethod::IteratorWrapperNext
             | NativeMethod::IteratorWrapperReturn
+            | NativeMethod::AsyncFromSyncIteratorNext
+            | NativeMethod::AsyncFromSyncIteratorReturn
+            | NativeMethod::AsyncFromSyncIteratorThrow
+            | NativeMethod::AsyncFromSyncIteratorDone
+            | NativeMethod::AsyncFromSyncIteratorFailed
             | NativeMethod::IteratorConstructorGetter
             | NativeMethod::IteratorToStringTagGetter
             | NativeMethod::IteratorConstructorSetter
@@ -5532,6 +5537,18 @@ impl Interp {
             NativeMethod::IteratorConcat => self.iterator_concat(code, base, argc)?,
             NativeMethod::IteratorWrapperNext => self.iterator_wrapper_next(code, this)?,
             NativeMethod::IteratorWrapperReturn => self.iterator_wrapper_return(code, this)?,
+            NativeMethod::AsyncFromSyncIteratorNext
+            | NativeMethod::AsyncFromSyncIteratorReturn
+            | NativeMethod::AsyncFromSyncIteratorThrow => {
+                let arg = (argc > 0).then_some(arg0);
+                self.async_from_sync_iterator_step(code, m, this, arg)?
+            }
+            NativeMethod::AsyncFromSyncIteratorDone => {
+                self.async_from_sync_iterator_done(base, arg0)?
+            }
+            NativeMethod::AsyncFromSyncIteratorFailed => {
+                self.async_from_sync_iterator_failed(code, base, arg0)?
+            }
             NativeMethod::IteratorConstructorGetter => {
                 let constructor = self.intrinsics.get("Iterator").copied().ok_or(Step::Host(
                     Halt::EngineInvariant("Iterator:missing-constructor"),

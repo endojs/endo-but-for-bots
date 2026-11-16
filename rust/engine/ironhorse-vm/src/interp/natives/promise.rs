@@ -938,22 +938,6 @@ impl Interp {
                         "async-generator:yield-reaction-missing",
                     )));
                 }
-                if self.async_generator_suspended_in_yield_star(code, gen) {
-                    // A `yield*` does not await what it yields (ES2024
-                    // 14.4.14); this await stands in for the one
-                    // %AsyncFromSyncIteratorPrototype%.next makes on a sync
-                    // delegate's value, which has no wrapper here. Its
-                    // rejection belongs to the delegation's `next`, past the
-                    // `yield*`'s own handler, so it must not resume the body
-                    // through that handler into the delegate's `throw`: the
-                    // generator completes and the request rejects with the
-                    // reason, as when the delegation throws and no `try`
-                    // encloses it.
-                    let data = self.async_generators.get_mut(&gen).unwrap();
-                    data.state = AsyncGeneratorState::Completed;
-                    data.frame = None;
-                    return self.finish_async_generator_request(code, gen, value, true);
-                }
                 // AsyncGeneratorYield awaits the operand inside the body
                 // (`yield v` is `yield await v`, ES2024 27.6.3.8), so a
                 // rejection is thrown at the `yield`, where a `try` around it
@@ -1110,7 +1094,7 @@ impl Interp {
     /// whose `kind` the drain dispatches on. A pending promise appends it (+1
     /// THENS-list slot); an already-settled promise queues the job now. Marks
     /// the promise handled for the unhandled-rejection latch.
-    fn register_native_reaction(
+    pub(in crate::interp) fn register_native_reaction(
         &mut self,
         promise: crate::value::SlotIndex,
         reaction: PromiseReaction,
@@ -1212,7 +1196,7 @@ impl Interp {
     /// A branded promise whose observable constructor is `C` is returned
     /// unchanged; every other value is resolved through a fresh capability so
     /// custom constructors and resolving callbacks remain observable.
-    fn promise_resolve_with_constructor(
+    pub(in crate::interp) fn promise_resolve_with_constructor(
         &mut self,
         code: &[u8],
         constructor: Slot,
