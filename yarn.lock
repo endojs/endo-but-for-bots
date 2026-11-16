@@ -39,6 +39,23 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@anthropic-ai/sdk@npm:0.129.0":
+  version: 0.129.0
+  resolution: "@anthropic-ai/sdk@npm:0.129.0"
+  dependencies:
+    json-schema-to-ts: "npm:^3.1.1"
+    standardwebhooks: "npm:^1.0.0"
+  peerDependencies:
+    zod: ^3.25.0 || ^4.0.0
+  peerDependenciesMeta:
+    zod:
+      optional: true
+  bin:
+    anthropic-ai-sdk: bin/cli
+  checksum: 10c0/d4eba38c978ef5ecf9cce4e47b5dd927a78e1b20c6725a7cb61a77cf6e9dfa4543767165c7a8499f9c949466093e8e3d8c8416bdb0c0d78de81d54a8b2b93f6d
+  languageName: node
+  linkType: hard
+
 "@anthropic-ai/sdk@npm:^0.133.0":
   version: 0.133.0
   resolution: "@anthropic-ai/sdk@npm:0.133.0"
@@ -954,6 +971,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@earendil-works/pi-agent-core@npm:1.4.0":
+  version: 1.4.0
+  resolution: "@earendil-works/pi-agent-core@npm:1.4.0"
+  dependencies:
+    "@earendil-works/pi-ai": "npm:1.4.0"
+    typebox: "npm:1.3.27"
+  checksum: 10c0/8679ba7c80454beaa7fef2eb7d9e3161b83298b4bfe8f64eb20dd8acf990467d538f2ab827f626d9bb83007d730105f02e41269011c9d4c592d725425be404a0
+  languageName: node
+  linkType: hard
+
 "@earendil-works/pi-agent-core@npm:^0.87.1":
   version: 0.87.1
   resolution: "@earendil-works/pi-agent-core@npm:0.87.1"
@@ -966,6 +993,26 @@ __metadata:
     typebox: "npm:1.3.27"
     yaml: "npm:2.9.0"
   checksum: 10c0/972fcd09f359acd565e179906889675bf6a209ba609aa2bc018bb47888eff9a3bafd6e384701403e549e4e57625922c92d4d6dafacb461f6b078c0daeba3a98b
+  languageName: node
+  linkType: hard
+
+"@earendil-works/pi-ai@npm:1.4.0":
+  version: 1.4.0
+  resolution: "@earendil-works/pi-ai@npm:1.4.0"
+  dependencies:
+    "@anthropic-ai/sdk": "npm:0.129.0"
+    "@aws-sdk/client-bedrock-runtime": "npm:3.1127.0"
+    "@earendil-works/pi-telemetry": "npm:1.4.0"
+    "@google/genai": "npm:2.21.0"
+    "@smithy/node-http-handler": "npm:4.12.1"
+    http-proxy-agent: "npm:9.1.0"
+    https-proxy-agent: "npm:9.1.0"
+    openai: "npm:7.19.0"
+    partial-json: "npm:0.1.7"
+    typebox: "npm:1.3.27"
+  bin:
+    pi-ai: dist/cli.js
+  checksum: 10c0/2484bf538b8c7976eaeb317d2ac6932020a8542c724509e2b73d392c01970d5e021240cc74cf33c84ee8b8178988ec09ef14b17dbc4b476cf86284bac51cf740
   languageName: node
   linkType: hard
 
@@ -989,15 +1036,26 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@earendil-works/pi-coding-agent@npm:^0.87.1":
-  version: 0.87.1
-  resolution: "@earendil-works/pi-coding-agent@npm:0.87.1"
+"@earendil-works/pi-codemode@npm:1.4.0":
+  version: 1.4.0
+  resolution: "@earendil-works/pi-codemode@npm:1.4.0"
   dependencies:
-    "@earendil-works/chord": "npm:^0.87.1"
-    "@earendil-works/pi-agent-core": "npm:^0.87.1"
-    "@earendil-works/pi-ai": "npm:^0.87.1"
-    "@earendil-works/pi-tui": "npm:^0.87.1"
+    quickjs-wasi: "npm:3.6.2"
+  checksum: 10c0/a49f0f70a06896eab9f32840834c6074fd70501b0257952e6737406dd66022603dd8d868009d5a4253201e6bef43048eead8a3a4d4c1734ca8b2967065b09c60
+  languageName: node
+  linkType: hard
+
+"@earendil-works/pi-coding-agent@npm:^1.4.0":
+  version: 1.4.0
+  resolution: "@earendil-works/pi-coding-agent@npm:1.4.0"
+  dependencies:
+    "@earendil-works/pi-agent-core": "npm:1.4.0"
+    "@earendil-works/pi-ai": "npm:1.4.0"
+    "@earendil-works/pi-codemode": "npm:1.4.0"
+    "@earendil-works/pi-mcp": "npm:1.4.0"
+    "@earendil-works/pi-tui": "npm:1.4.0"
     "@silvia-odwyer/photon-node": "npm:0.3.4"
+    brace-expansion: "npm:5.0.12"
     chalk: "npm:6.0.0"
     cross-spawn: "npm:7.0.6"
     diff: "npm:8.0.4"
@@ -1008,13 +1066,30 @@ __metadata:
     jiti: "npm:2.7.0"
     minimatch: "npm:10.2.6"
     proper-lockfile: "npm:4.1.2"
+    quickjs-wasi: "npm:3.6.2"
     semver: "npm:7.8.5"
     typebox: "npm:1.3.27"
     undici: "npm:8.10.2"
     yaml: "npm:2.9.0"
   bin:
     pi: dist/bundle/cli.js
-  checksum: 10c0/9920d5133d28586c6166f899465a0737a8aa40798fd103aed4ba5995af0aab54c1409661f11210143f391230eb2c6332a6cfb0df4679e235f2623f3cfdca49a9
+  checksum: 10c0/f62a7f20f90f1e4c6d9cf1a4eae9193d50f525ca389fb81b2304e323e92bd3b89b2474df43278026e8dd0c9a84edffa8654104291b84887cdc1a9d272275a15d
+  languageName: node
+  linkType: hard
+
+"@earendil-works/pi-mcp@npm:1.4.0":
+  version: 1.4.0
+  resolution: "@earendil-works/pi-mcp@npm:1.4.0"
+  dependencies:
+    cross-spawn: "npm:7.0.6"
+  checksum: 10c0/cf109ac93f85f69c9d0523a8ff86f6c6e033c12a517d16acb1dc6f2acc5280c0e99e6587c3d575ecb57d03ae0ea57147bc5bbeb276d49e09cf3908bb7b63a590
+  languageName: node
+  linkType: hard
+
+"@earendil-works/pi-telemetry@npm:1.4.0":
+  version: 1.4.0
+  resolution: "@earendil-works/pi-telemetry@npm:1.4.0"
+  checksum: 10c0/ee9b1c1fe5fc6df6ecb169ad9ed9e3ffebca47872a4403259aaa4e276163964d4aafdc0fe579603d9dd1da3fc544f4f60636ab197db66230942559acf3380d09
   languageName: node
   linkType: hard
 
@@ -1025,17 +1100,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@earendil-works/pi-tui@npm:^0.87.1":
-  version: 0.87.1
-  resolution: "@earendil-works/pi-tui@npm:0.87.1"
-  dependencies:
-    get-east-asian-width: "npm:1.6.0"
-    marked: "npm:18.0.11"
-  checksum: 10c0/af1d3a351d5093b80d5239826bab3f3e46a208c6860bb30d579c78b3043c53900c99d87d4b0de57da3d4921237bd036412f9b347d8b30040d5ff9b8092e38d7f
-  languageName: node
-  linkType: hard
-
-"@earendil-works/pi-tui@npm:^1.4.0":
+"@earendil-works/pi-tui@npm:1.4.0, @earendil-works/pi-tui@npm:^1.4.0":
   version: 1.4.0
   resolution: "@earendil-works/pi-tui@npm:1.4.0"
   dependencies:
@@ -1308,7 +1373,7 @@ __metadata:
   dependencies:
     "@earendil-works/pi-agent-core": "npm:^0.87.1"
     "@earendil-works/pi-ai": "npm:^0.87.1"
-    "@earendil-works/pi-coding-agent": "npm:^0.87.1"
+    "@earendil-works/pi-coding-agent": "npm:^1.4.0"
     "@earendil-works/pi-tui": "npm:^1.4.0"
     "@endo/agent-tools": "workspace:^"
     "@endo/cancel": "workspace:^"
@@ -8071,6 +8136,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"brace-expansion@npm:5.0.12, brace-expansion@npm:^5.0.8":
+  version: 5.0.12
+  resolution: "brace-expansion@npm:5.0.12"
+  dependencies:
+    balanced-match: "npm:^4.0.2"
+  checksum: 10c0/a40ac64d3bdb5bb222456514d3633c1f627f03b844f509c69e70f98b78be0ce85e21b44bbfecdd0ddd4cc0855ca4242b41ea96ddccf88c7c3c7a84405474bb3a
+  languageName: node
+  linkType: hard
+
 "brace-expansion@npm:^1.1.7":
   version: 1.1.11
   resolution: "brace-expansion@npm:1.1.11"
@@ -8096,15 +8170,6 @@ __metadata:
   dependencies:
     balanced-match: "npm:^4.0.2"
   checksum: 10c0/4d238e14ed4f5cc9c07285550a41cef23121ca08ba99fa9eb5b55b580dcb6bf868b8210aa10526bdc9f8dc97f33ca2a7259039c4cc131a93042beddb424c48e3
-  languageName: node
-  linkType: hard
-
-"brace-expansion@npm:^5.0.8":
-  version: 5.0.12
-  resolution: "brace-expansion@npm:5.0.12"
-  dependencies:
-    balanced-match: "npm:^4.0.2"
-  checksum: 10c0/a40ac64d3bdb5bb222456514d3633c1f627f03b844f509c69e70f98b78be0ce85e21b44bbfecdd0ddd4cc0855ca4242b41ea96ddccf88c7c3c7a84405474bb3a
   languageName: node
   linkType: hard
 
@@ -14829,6 +14894,33 @@ __metadata:
   languageName: node
   linkType: hard
 
+"openai@npm:7.19.0":
+  version: 7.19.0
+  resolution: "openai@npm:7.19.0"
+  peerDependencies:
+    "@aws-sdk/credential-provider-node": ">=3.972.0 <4"
+    "@smithy/hash-node": ">=4.3.0 <5"
+    "@smithy/signature-v4": ">=5.4.0 <6"
+    undici: ">=5 <9"
+    ws: ^8.21.0
+    zod: ^3.25 || ^4.0
+  peerDependenciesMeta:
+    "@aws-sdk/credential-provider-node":
+      optional: true
+    "@smithy/hash-node":
+      optional: true
+    "@smithy/signature-v4":
+      optional: true
+    undici:
+      optional: true
+    ws:
+      optional: true
+    zod:
+      optional: true
+  checksum: 10c0/027f21e9dd47bfc76f411775d18e17bb0d7c25a1f29d0bc5832a304b598509b44809b1d33ce231fa7657a9f6d38cda0304c15cd4eb7864aa8f3d50ebd4b7ed52
+  languageName: node
+  linkType: hard
+
 "openai@npm:^7.43.0":
   version: 7.43.0
   resolution: "openai@npm:7.43.0"
@@ -15896,6 +15988,13 @@ __metadata:
   version: 4.0.1
   resolution: "quick-lru@npm:4.0.1"
   checksum: 10c0/f9b1596fa7595a35c2f9d913ac312fede13d37dc8a747a51557ab36e11ce113bbe88ef4c0154968845559a7709cb6a7e7cbe75f7972182451cd45e7f057a334d
+  languageName: node
+  linkType: hard
+
+"quickjs-wasi@npm:3.6.2":
+  version: 3.6.2
+  resolution: "quickjs-wasi@npm:3.6.2"
+  checksum: 10c0/044491e56924c683b1c96e17e542fbdb0b7d8d9888dc8441302a13e1c6738a5843f470bef3c832b7f1cfd83eb2d8a38c84560256f7ebd08317d611b0275475d5
   languageName: node
   linkType: hard
 
