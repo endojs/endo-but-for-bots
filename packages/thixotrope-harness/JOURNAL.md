@@ -3636,3 +3636,204 @@ adds one byte store per `GET_LOCAL` and per created element and charges nothing:
 computron tests pass unchanged, so metering is identical. The audit run was outside the run lock
 (a mistake; later runs took it). The release worker rebuilds reproducibly to the same sha256.
 Decision: no performance effect to track.
+
+### J-9120 2026-11-17 M1a hardening transport - perf
+Evidence: C-17 baseline. `perf/gc.perf.mjs` (new, `7049d6b8fd`; hub GC counters `18c8f633ee`) under the
+run lock, host code at `18c8f633ee` (no change to delivery), release worker `7cda4467...`, crank budget
+50 M, load 1.4-2.5. Phase 1: one session, a control-client Live subscriber, 3 warm-up and 150 one-chunk
+turns, idle sleep 1 h. Phase 2: 10 sessions each run one turn, then 5 SIGKILL restarts (run 1 is the
+first after setup), idle sleep 2 s; before this change a vat counts as woken when its journal grew.
+{"metric":"gc.burst.turnStart","unit":"ms","n":150,"median":246,"p95":275,"p99":3274,"min":206,"max":4607,"from":"Composer stamp (adapter clock)","to":"request log line","turns":150,"wallMs":143846.7,"budget":{"median":350},"pass":true,"commit":"18c8f633ee-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.41,1.88,1.91]}
+{"metric":"gc.burst.frames","unit":"frames","turns":150,"sessionFramesPerTurn":6.55,"sessionGcFramesPerTurn":2.55,"sessionCranksPerTurn":6.55,"sessionCranksMedian":4,"daemonDeliveriesPerTurn":8.69,"kinds":{"deliver enqueueOnce":148,"deliver dispatchingD":149,"deliver roundFinal":149,"deliver fulfill":150,"gc-answers":189,"gc-exports":193},"gcFramesPerTurnHistogram":{"0":145,"3-10":1,"51+":2,"11-50":2},"largestGcWindows":[{"turnId":"t123","gcFrames":192,"cranks":196,"startMs":4607},{"turnId":"t51","gcFrames":112,"cranks":116,"startMs":273},{"turnId":"t141","gcFrames":39,"cranks":43,"startMs":2616},{"turnId":"t57","gcFrames":30,"cranks":34,"startMs":1883},{"turnId":"t17","gcFrames":9,"cranks":13,"startMs":384}],"crankCounter":"one per journaled frame","commit":"18c8f633ee-dirty","crankBudget":"50000000","loadAvg":[1.41,1.88,1.91]}
+{"metric":"gc.burst.hub","unit":"frames","turns":150,"counts":[{"direction":"in","kind":"op:gc-exports","from":"session s1","frames":300,"positions":300},{"direction":"out","kind":"op:gc-exports","cause":"session s1","to":"peer transient:na","frames":300,"positions":300},{"direction":"in","kind":"op:gc-answers","from":"peer transient:na","frames":279,"positions":1478},{"direction":"in","kind":"op:gc-exports","from":"peer transient:na","frames":265,"positions":940},{"direction":"out","kind":"op:gc-exports","cause":"peer transient:na","to":"session s1","frames":193,"positions":338},{"direction":"out","kind":"op:gc-answers","cause":"peer transient:na","to":"session s1","frames":180,"positions":241},{"direction":"out","kind":"op:gc-exports","cause":"peer transient:na","to":"peer transient:na","frames":152,"positions":482},{"direction":"in","kind":"op:gc-answers","from":"session s1","frames":150,"positions":150},{"direction":"out","kind":"op:gc-answers","cause":"session s1","to":"peer transient:na","frames":150,"positions":150},{"direction":"out","kind":"op:gc-answers","cause":"peer transient:na","to":"endpoint","frames":90,"positions":689},{"direction":"out","kind":"op:gc-answers","cause":"peer transient:na","to":"peer transient:na","frames":84,"positions":548},{"direction":"in","kind":"op:gc-exports","from":"endpoint","frames":37,"positions":639},{"direction":"out","kind":"op:gc-exports","cause":"endpoint","to":"peer transient:na","frames":37,"positions":624},{"direction":"in","kind":"op:gc-answers","from":"endpoint","frames":22,"positions":23},{"direction":"out","kind":"op:gc-answers","cause":"endpoint","to":"session s1","frames":9,"positions":9},{"direction":"out","kind":"op:gc-exports","cause":"endpoint","to":"app:harness","frames":8,"positions":10},{"direction":"out","kind":"op:gc-answers","cause":"endpoint","to":"workspace:w","frames":6,"positions":6},{"direction":"out","kind":"op:gc-answers","cause":"endpoint","to":"registry","frames":3,"positions":3},{"direction":"out","kind":"op:gc-exports","cause":"endpoint","to":"native:control","frames":3,"positions":3},{"direction":"out","kind":"op:gc-answers","cause":"endpoint","to":"workspace:default","frames":2,"positions":2},{"direction":"in","kind":"op:gc-exports","from":"app:harness","frames":2,"positions":2},{"direction":"out","kind":"op:gc-exports","cause":"endpoint","to":"native:agentHostAdmin","frames":2,"positions":2},{"direction":"out","kind":"op:gc-answers","cause":"endpoint","to":"peer transient:na","frames":2,"positions":2},{"direction":"out","kind":"op:gc-answers","cause":"endpoint","to":"native:control","frames":1,"positions":1},{"direction":"out","kind":"op:gc-exports","cause":"app:harness","to":"endpoint","frames":1,"positions":1}],"reported":true,"commit":"18c8f633ee-dirty","crankBudget":"50000000","loadAvg":[1.41,1.88,1.91]}
+{"metric":"gc.restart.run","unit":"ms","value":9029.6,"run":1,"sessions":10,"wokenSessions":["session s9","session s1","session s6","session s3","session s5","session s2","session s10","session s4","session s8","session s7"],"wokenBy":"journal grew","gate":false,"engineSinceStart":{"delivery":{"count":67,"milliseconds":6515.684957999997},"snapshot":{"count":19,"milliseconds":28927.269041000003},"wake":{"count":21,"milliseconds":7614.645413999999}},"awakeWorkers":2,"budget":{"value":10000},"pass":true,"commit":"18c8f633ee-dirty","crankBudget":"50000000","loadAvg":[2.54,2.12,1.99]}
+{"metric":"gc.restart","runs":[{"run":1,"woken":10,"gate":false},{"run":2,"woken":0,"gate":true},{"run":3,"woken":0,"gate":true},{"run":4,"woken":0,"gate":true},{"run":5,"woken":0,"gate":true}],"gate":false,"gateWokenSessions":0,"idleSessions":10,"after":{"turn":"completed","turnMs":931.5,"failure":null,"heldFrames":null},"pass":false,"commit":"18c8f633ee-dirty","crankBudget":"50000000","loadAvg":[2.2,2.12,2]}
+(The run-1 row is shown without its `hubGcSinceStart` and `journaledAcrossRestart` fields; the
+first held, among the release counts, `retired peer transient:na` -> each of the 10 sessions 1-3
+`op:gc-exports` frames of one position each; the journals read empty because the woken vats slept
+and truncated them within the 3 s wait.) "-dirty" is the uncommitted script; the supervisor ran
+`18c8f633ee`'s host code (its worker rows had no `cranks`/`wakes` fields).
+Reading: the turn-start median is fine (246 ms; the ports-per-incarnation work of J-9150..J-9157
+removed the per-turn manager hop), but the tail is GC: 145 of 150 turns saw no GC frame, and the
+5 turns that did took up to 4.6 s with 192 GC frames = 196 session cranks in the window. The
+`peer transient:na` keys are native adapters' transient sessions (`transient:native:<id>`, the
+agent host and the control adapter; the script now names them `adapter <id>`). Every GC frame
+into the session vat (193 + 180 + 9) is a release by one of them, not by another vat.
+The restart gate fails in run 1 exactly as J-0276/J-0294: the forgotten transient session's
+releases wake all 10 idle sessions (21 wakes, 19 snapshots costing 28.9 s of snapshot time in the
+background), and holds in runs 2-5.
+Decision: explained in J-9121; fixed in J-9122.
+
+### J-9121 2026-11-17 M1a hardening transport - poor fit
+Evidence: why GC frames arrive one per delivery, from the counts of J-9120 and the code.
+(1) Peers do batch: the adapters' 279 incoming `op:gc-answers` frames carried 1,478 positions and
+their 265 `op:gc-exports` 940 (the OCapN client coalesces per microtask, `makeGcBatcher`). But a
+Node peer's FinalizationRegistry callbacks fire across many tasks, so a burst is still ~100-280
+small frames spread over a second or two. (2) The hub batches only within one incoming frame
+(`withGcBatch` in `packages/thixotrope/src/net/hub.js`): each incoming frame released 1-2 rows whose
+origin is the session vat, so it sent the vat one frame per incoming frame (193 frames for 338
+positions, 180 for 241). (3) The durable worker transport delivered each journaled frame as its own
+crank (`write` -> one `deliver` per frame), and every Ironhorse crank ends with a full collection
+and finalizer rounds (C-7), about 25-30 ms per GC crank here [inferred: 192 frames + 4 turn frames in
+4.6 s]. (4) A frame for a sleeping vat woke it: GC frames from the startup sweep's `forgetSession`
+of stale transient sessions (one frame per released row, since `retireSessionInternal` released rows
+outside any batch) woke each exporting vat, which then snapshotted again on idle. Which exports: the
+session vat's releases come from the adapters dropping what the session hands them per turn (the
+`op:gc-exports` toward s1 are Turn/TurnSink-style exports and the receipts the control adapter
+held; the `op:gc-answers` are the answers to the session's calls on the adapter's ports)
+[inferred from the senders; the wire carries positions, not interfaces]; the session itself drops 2
+imports and 1 answer per turn toward the agent-host adapter (300 + 150 frames out), which cost only
+hub work, since an adapter is not a vat.
+Decision: per-object GC messages are cheap on the wire but were priced as vat deliveries; the cure
+is in the transport, not the guest (J-9122). Fewer per-turn exports would shrink the bursts but a
+long-lived viewer (the M3 gateway) makes the same pattern.
+
+### J-9122 2026-11-17 M1a hardening persistence - good fit
+Evidence: the change, `f8bf23c62d` and `a46f505035` (Thixotrope core only; no worker binary, guest
+bundle or snapshot golden change). The design considered in order: (a) coalescing pending GC
+frames for one vat into one delivery, (b) never waking a sleeping vat only for GC frames, (c)
+dropping the GC obligations of forgotten transient sessions, (d) a GC crank without the post-crank
+full GC. (a) and (b) are one mechanism: `packages/thixotrope/src/core/durable-worker-transport.js`
+journals a GC frame (classified by its record label, `makeGcFrameTest` in `hub.js`) with `gc: true`
+and does not deliver it; a run of them enters the worker in the same crank as the next ordinary
+frame, before it and in order, or alone once 64 have gathered (`GC_FRAMES_PER_CRANK`). Ironhorse
+runs such a crank as one evaluation of the frames' dispatch calls (`deliverBatch`: one drain, one
+collection, one outbound read, budget the sum of the frames' budgets). Where cranks begin is a pure
+function of the journal (`journalCranks`), and a snapshot cut is always a crank boundary, so a
+replay after a kill, from a snapshot or after a restart delivers the same cranks and regenerates
+the same outbound frames under the same sequence numbers. The startup sweep now resumes only
+workers owed a crank (`owesDelivery`); worker rows report `journalLength` as the delivery frontier
+and the held frames as `heldFrames`, so "asleep and checkpointed" (`cut === journalLength`) and
+"journal grew = woken" keep their meaning for every existing caller. (c) is covered by (b): the
+forgotten session's releases are journaled for the sleeping vats and never wake them; the hub also
+releases a retiree's rows in one batch per destination (one frame per vat instead of one per row).
+(d) was not done: with GC frames riding real cranks, GC-only cranks are rare (a full run of 64), and
+skipping the collection would change the guest's finalization schedule for a replay.
+Safety argument: a GC frame is only ever delayed, never moved past an ordinary frame, so the vat
+releases later than before, never earlier; a later message that reuses an answer or export position
+arrives after the release in the same crank, as before. Tests (`test/worker-gc-cranks.test.js`,
+9 tests x 3 SES configurations): the classifier (syrup, cbor, the hub's own frames); crank
+boundaries; a held frame does not wake a sleeping worker and goes first in the next crank; a full
+run is one crank; a model vat put to sleep with frames held, killed, and replayed by a fresh
+transport emits byte-identical outbound under the same sequence numbers as an uninterrupted twin,
+every release reaches the host exactly once and no object is used after its release (a replay that
+ignores the grouping fails this test, checked by mutation); the hub sequence advances only with
+delivery; the startup sweep leaves a held-only worker asleep and its row reads checkpointed.
+Thixotrope unit suite 411 passed, 3 skipped (XS) x 3 configurations; harness unit lane 313 passed,
+23 skipped; `tsc` clean; eslint 0 errors.
+Decision: done. The deviation from the old contract: a vat's memory held only by references a peer
+has dropped is reclaimed at its next ordinary crank (or after 64 GC frames), not at once; an idle
+vat keeps its journal suffix of held GC frames across sleeps (the restart gate run showed 3-6 per
+session).
+
+### J-9123 2026-11-17 M1a hardening transport - perf
+Evidence: `perf/gc.perf.mjs` after, commit `3c083b304c` (clean), release worker `7cda4467...`, crank
+budget 50 M, load 1.4-1.6; woken = worker row `wakes` > 0 since the restart.
+{"metric":"gc.burst.turnStart","unit":"ms","n":150,"median":251,"p95":273,"p99":433,"min":210,"max":436,"from":"Composer stamp (adapter clock)","to":"request log line","turns":150,"wallMs":137389.3,"budget":{"median":350},"pass":true,"commit":"3c083b304c","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.47,1.44,1.56]}
+{"metric":"gc.burst.frames","unit":"frames","turns":150,"sessionFramesPerTurn":6.44,"sessionGcFramesPerTurn":2.44,"sessionCranksPerTurn":4.01,"sessionCranksMedian":4,"daemonDeliveriesPerTurn":6.02,"kinds":{"deliver enqueueOnce":149,"deliver dispatchingD":149,"deliver roundFinal":150,"deliver fulfill":150,"gc-answers":177,"gc-exports":189},"gcFramesPerTurnHistogram":{"0":144,"3-10":1,"51+":2,"11-50":3},"largestGcWindows":[{"turnId":"t107","gcFrames":150,"cranks":4,"startMs":249},{"turnId":"t50","gcFrames":136,"cranks":4,"startMs":277},{"turnId":"t116","gcFrames":40,"cranks":4,"startMs":326},{"turnId":"t55","gcFrames":19,"cranks":4,"startMs":257},{"turnId":"t77","gcFrames":13,"cranks":4,"startMs":273}],"crankCounter":"worker row cranks","commit":"3c083b304c","crankBudget":"50000000","loadAvg":[1.47,1.44,1.56]}
+{"metric":"gc.restart.run","unit":"ms","value":5642.3,"run":1,"sessions":10,"wokenSessions":[],"wokenBy":"wakes","gate":true,"journaledAcrossRestart":{"session s10":{"gc-exports":1},"session s4":{"gc-exports":1},"session s7":{"gc-exports":1},"session s5":{"gc-exports":1},"session s3":{"gc-exports":1},"session s8":{"gc-exports":1},"session s2":{"gc-exports":1},"session s6":{"gc-exports":1}},"heldFrames":{"session s10":6,"session s9":6,"session s4":6,"session s7":6,"session s5":6,"session s3":5,"session s8":5,"session s1":3,"session s2":6,"session s6":6},"engineSinceStart":{"delivery":{"count":39,"milliseconds":3484.118208999999},"snapshot":{"count":8,"milliseconds":1299.071958000001},"wake":{"count":8,"milliseconds":1839.1176249999994}},"awakeWorkers":0,"budget":{"value":10000},"pass":true,"commit":"3c083b304c","crankBudget":"50000000","loadAvg":[1.38,1.43,1.54]}
+{"metric":"gc.restart","runs":[{"run":1,"woken":0,"gate":true},{"run":2,"woken":0,"gate":true},{"run":3,"woken":0,"gate":true},{"run":4,"woken":0,"gate":true},{"run":5,"woken":0,"gate":true}],"gate":true,"gateWokenSessions":0,"idleSessions":10,"after":{"turn":"completed","turnMs":1055.4,"failure":null,"heldFrames":0},"pass":true,"commit":"3c083b304c","crankBudget":"50000000","loadAvg":[1.54,1.46,1.55]}
+(The run-1 row is shown without `hubGcSinceStart`; its `gc.burst.hub` row is in the run log, same
+pattern as J-9120 with the adapters named.)
+Reading: the GC frames into the session per turn are the same (2.44 against 2.55), but they now cost
+no crank: 4.01 session cranks per turn (6.55 before), daemon deliveries 6.02 per turn (8.69). The two
+bursts (150 and 136 GC frames in one turn's window) took 249 and 277 ms, as an ordinary start;
+turn.start p99 433 ms and max 436 ms against 3,274 and 4,607 ms. Restart: no idle session vat woken
+in any of 5 runs, the first after setup included (10 of 10 woken before); run 1 needed 8 wakes and 8
+snapshots (1.3 s) instead of 21 and 19 (28.9 s); after the last run an idle session with 6 held
+frames ran a turn to completion and held 0 afterwards. An earlier after-run at `7049d6b8fd` (before
+`a46f505035`) had p99 1,509 ms and max 2,171 ms with 5 session cranks in the slowest window (so the
+time was outside the vat; J-9127), and its restart phase timed out in the old "asleep" check, which
+read held frames as unsnapshotted: that is what `a46f505035` fixed.
+Decision: C-17's stall and the restart wake are fixed; gate holds 5/5.
+
+### J-9124 2026-11-17 M1a hardening transport - perf
+Evidence: `perf/turn.perf.mjs` (TURN_N 200) before (`7049d6b8fd` with the delivery change taken out
+of the working tree, so `18c8f633ee`'s core) and after (`7049d6b8fd`, the change in), release worker
+`7cda4467...`, crank budget 50 M, load 1.2-2.2.
+{"metric":"turn.start","unit":"ms","n":200,"median":250,"p95":360,"p99":4550,"min":209,"max":4771,"from":"Composer stamp (adapter clock)","to":"request log line","daemonDeliveriesPerTurn":9.08,"sessionFramesPerTurn":4,"slowest":[{"turnId":"t190","ms":4771,"frames":199},{"turnId":"t120","ms":4550,"frames":194},{"turnId":"t132","ms":3006,"frames":49},{"turnId":"t47","ms":2896,"frames":118},{"turnId":"t69","ms":2023,"frames":32}],"budget":{"median":350},"pass":true,"commit":"7049d6b8fd-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.2,1.96,2.16]}
+{"metric":"turn.start","unit":"ms","n":200,"median":256,"p95":299,"p99":457,"min":214,"max":1202,"from":"Composer stamp (adapter clock)","to":"request log line","daemonDeliveriesPerTurn":6.01,"sessionFramesPerTurn":4,"slowest":[{"turnId":"t54","ms":1202,"frames":28},{"turnId":"t99","ms":457,"frames":4},{"turnId":"t49","ms":450,"frames":4},{"turnId":"t98","ms":450,"frames":4},{"turnId":"t108","ms":361,"frames":4}],"budget":{"median":350},"pass":true,"commit":"7049d6b8fd","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.34,1.51,1.72]}
+{"metric":"turn.start.deliveries","unit":"frames","value":2,"budget":{"deliveriesPerOp":3},"pass":true,"commit":"7049d6b8fd-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.2,1.9,2.13]}
+{"metric":"turn.start.deliveries","unit":"frames","value":2,"budget":{"deliveriesPerOp":3},"pass":true,"commit":"7049d6b8fd","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.53,1.54,1.72]}
+{"metric":"turn.delta","unit":"ms","n":250,"median":0.172,"p95":0.291,"p99":5.29,"min":0.054,"max":5.956,"framesWhileStreaming":[1,1,1,1,1],"subscriber":"in the adapter process (live probe; where the gateway subscribes)","clock":"performance.now() in the adapter","batchSizes":[1],"budget":{"median":5,"deliveriesPerOp":0},"pass":true,"commit":"7049d6b8fd-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[2.18,2.08,2.19]}
+{"metric":"turn.delta","unit":"ms","n":250,"median":0.177,"p95":0.294,"p99":5.243,"min":0.049,"max":5.718,"framesWhileStreaming":[1,1,1,39,1],"subscriber":"in the adapter process (live probe; where the gateway subscribes)","clock":"performance.now() in the adapter","batchSizes":[1],"budget":{"median":5,"deliveriesPerOp":0},"pass":true,"commit":"7049d6b8fd","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.48,1.53,1.72]}
+{"metric":"turn.delta.client","unit":"ms","n":250,"median":18,"p95":22,"p99":41,"min":11,"max":83,"subscriber":"control client through the hub","pass":null,"commit":"7049d6b8fd-dirty","crankBudget":"50000000","loadAvg":[2.18,2.08,2.19]}
+{"metric":"turn.delta.client","unit":"ms","n":250,"median":18,"p95":564,"p99":980,"min":12,"max":1064,"subscriber":"control client through the hub","pass":null,"commit":"7049d6b8fd","crankBudget":"50000000","loadAvg":[1.48,1.53,1.72]}
+(Rows shown without their `kinds`/`perTurn`/`engine`/`deliveries` fields; turn.round 3 and
+turn.lease 0 pass in both.)
+Reading: turn.start p99 4,550 -> 457 ms and max 4,771 -> 1,202 ms, p95 360 -> 299, median 250 -> 256
+(noise); daemon deliveries per turn 9.08 -> 6.01. The before run's slowest turns are its GC
+windows (199, 194, 118 frames); the after run's slowest (1,202 ms, 28 frames) was not a vat cost.
+`turn.start.deliveries` is 2 frames in both (the probe window no longer contains a GC frame since
+J-9150's ports change; it counts journaled frames, not cranks). In-process `turn.delta` is unchanged.
+`turn.delta.client` p95 564 ms after against 22 before: the after run had a 39-GC-frame burst during
+a streaming turn and the before run had none; that client path never touches the session vat, so
+this is the hub and adapter processing the burst (J-9127), not a regression of the change
+[inferred: J-0274 saw a 2.7 s p95 for a 48-frame burst on the same path before].
+Decision: turn.start passes with its tail removed; the remaining burst cost is outside the vat.
+
+### J-9125 2026-11-17 M1a hardening persistence - perf
+Evidence: `perf/restart.perf.mjs` before (`7049d6b8fd`, delivery change out of the tree) and after
+(`3c083b304c`), 10 idle checkpointed sessions + 1 in flight, SIGKILL, 5 runs, crank budget 50 M,
+load 1.3-2.0. Its gate counts a vat woken when `journalLength` grew; after `a46f505035` that is the
+delivery frontier, so held GC frames do not count, and a frame past it means a crank (a wake).
+{"metric":"restart.serving","unit":"ms","n":5,"median":6494.9,"p95":10379.2,"p99":10379.2,"min":6317.8,"max":10379.2,"idleSessions":10,"inFlight":1,"how":"SIGKILL","gateWokenSessions":1,"budget":{"median":10000},"pass":true,"commit":"7049d6b8fd-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.39,1.77,2.04]}
+{"metric":"restart.serving","unit":"ms","n":5,"median":6181.2,"p95":9695.7,"p99":9695.7,"min":5890.7,"max":9695.7,"idleSessions":10,"inFlight":1,"how":"SIGKILL","gateWokenSessions":1,"budget":{"median":10000},"pass":true,"commit":"3c083b304c","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","crankBudget":"50000000","loadAvg":[1.61,1.48,1.66]}
+{"metric":"restart.crashingSession","unit":"ms","n":5,"median":20553,"min":20424.8,"max":20698.3,"budget":{"median":15000},"pass":false,"depends":"C-8, C-9","commit":"7049d6b8fd-dirty","crankBudget":"50000000"}
+{"metric":"restart.crashingSession","unit":"ms","n":5,"median":20405.5,"min":20334.9,"max":20504.5,"budget":{"median":15000},"pass":false,"depends":"C-8, C-9","commit":"3c083b304c","crankBudget":"50000000"}
+Per run, woken session vats before: 11, 1, 1, 1, 1 (run 1: 21 wakes, 17 snapshots, 182 deliveries
+before serving, 10.4 s); after: 1, 1, 1, 1, 1 (only the in-flight s11; run 1: 11 wakes, 7 snapshots,
+104 deliveries, 9.7 s). In every run of both the in-flight turn read `outcome-unknown` at the first
+read.
+Reading: the restart gate (only the in-flight session woken) now holds in all 5 runs including the
+first after setup; it failed in run 1 of every earlier invocation (J-0276, J-0294 and the before
+run here). restart.serving median 6.5 -> 6.2 s. crashingSession is unchanged at 1.36 x its budget
+(C-8/C-9, not GC).
+Decision: QC finding 6 (J-0294) is closed by the core change; crashingSession stays open.
+
+### J-9126 2026-11-17 M1a hardening tests - awkward
+Evidence: the Ironhorse lane (`corepack yarn test:ironhorse` in `packages/thixotrope`, under the run
+lock), release worker `7cda4467...`. At `3c083b304c`: 62 of 66 passed in 18.6 min; failed: reliability
+"SIGKILL recovery at heap/output preserves exactly one increment" ("boundary not reached") and
+scenarios "a pending call recovers after failure before delivery / after commit before outbound"
+(timeouts). Cause: the lane's fault injectors (`test/ironhorse/_fixture.js`,
+`test/ironhorse/process-daemon.mjs`) wrap an incarnation's `deliver` to fire at the counter's
+increment crank, and spread the rest of the incarnation through unchanged; with GC frames waiting
+for the next ordinary frame, the increment arrived in a `deliverBatch` with held GC frames, which
+bypassed the wrapper, so no fault fired. Not a recovery defect: the production wrapper
+(`src/control/measured-engine.js`) was already updated in `f8bf23c62d`. Fixed in `2b273930ab` (a batch
+is the increment's crank when any of its frames is the increment); the two files alone 28/28; the
+whole lane at `2b273930ab`: {"metric":"lane.ironhorse","passed":66,"failed":0,"wallMinutes":15.8,"workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","loadAvg":[1.36,1.49,1.54],"loadAvgEnd":[1.13,1.32,1.43],"commit":"2b273930ab"}
+Thixotrope unit suite (all files, 3 configurations, run lock): 411 passed, 3 skipped (XS worker not
+built) each, at `f8bf23c62d`'s tree; `test/worker-gc-cranks.test.js` 9/9 x 3 again at `a46f505035`.
+Harness unit lane 313 passed, 23 skipped; harness `yarn lint` 0 errors. Harness integration files
+were not run (the perf scripts above exercise the same restart and turn paths).
+Decision: any engine wrapper that intercepts `deliver` must now also intercept `deliverBatch`
+(or drop it, which makes the transport deliver frame by frame); recorded for whoever adds one.
+No cargo test was run; `target` is 234 MB (release worker present, unchanged). The m1a slice
+template this task's perf runs built (`tmp/t17d00ef816`) was deleted; the base template is kept.
+
+### J-9127 2026-11-17 M1a hardening transport - awkward
+Evidence: what C-17 still leaves, with the evidence above. (1) Bursts still cost host time outside
+the vats: in the first after-run of `gc.perf.mjs` (`7049d6b8fd`) the slowest start took 2,171 ms with
+78 GC frames but only 5 session cranks, and `turn.delta.client` p95 was 564 ms during a 39-frame
+burst (J-9124) on a path that never enters the session vat. Per incoming GC frame the hub decodes,
+releases rows, persists its whole state (`persist()`, one `hub.json` rewrite) and journals each
+outgoing frame with a durable append (`appendTextDurable`: open, write, fsync, close) [inferred: no
+timer covers these yet]. (2) GC-only cranks keep the full collection (option (d) of J-9122, not
+done). (3) The XS engine has no `deliverBatch`, so on XS a crank of held frames is delivered frame
+by frame inside one transport operation (still no wake, but one collection each). (4) An idle vat
+keeps its held GC frames (3-6 per session in J-9123; at most 64) and their memory until its next
+ordinary frame; delivering them at a sleep that happens anyway would need a journal marker so a
+replay finds that crank boundary. (5) `perf/restart.perf.mjs` and the slice helpers
+(`untilAsleep`, `unsnapshotted`) read `journalLength` as the frontier; that holds after
+`a46f505035`, but a direct `wakes` count (as `gc.perf.mjs` uses) is the exact wake signal.
+Decision: proposals, none done here, in order of expected gain: (a) in the hub, coalesce a run of
+incoming GC frames from one session into one table pass and one `persist()`, and in the transport
+append all frames of one hub flush to a worker journal with one fsync; expected: a 100-frame burst
+from about 1-2 s of host time to well under 100 ms [inferred from the 5-crank 2.2 s window], and
+turn.delta.client p95 back to its 22 ms floor during bursts; measure first with a hub timer per
+incoming GC frame (persist and journal separately). (b) `deliverBatch` for the XS engine (needs the
+XS worker binary's request to take several dispatches; same source concatenation). (c) The sleep-
+time flush with a journal marker, if snapshot size for idle vats matters. (d) For the harness owner:
+switch `restart.perf.mjs`'s gate to the worker row's `wakes`.
