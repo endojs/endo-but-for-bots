@@ -480,6 +480,18 @@ for the same turn, or a late answer of the old generation, does nothing):
 8. Report the row (`activity: 'passive'`, counts); publish `[end{status}, pending]` outside the
    turn (fresh publisher through `host.liveChannel()`, answered; failures ignored).
 
+**Order inside the recovery crank** (W1a.5, `guest/session/recovery.js`): the steps above all run
+in the one crank that received the break, synchronously, in the order 1, 2, 4 (the unknown
+results), 5, 6, 7, then the settle (`core.settle(active, { status, error? })`, which appends the
+`TurnSettled` of 3 or 4 and does 8). The hold (7) is set **before** the settle because the settle
+claims the next entry (6.3) and must find the queue held; there is no observable difference, since
+everything happens in one crank. With the ports dropped (2) the settle publishes its batch outside
+the turn (answered, through `host.liveChannel()`) and sends no `releaseTurn`; the `pending` event
+of the hold rides at the end of that batch. `turnHooks.recoverySteps` get a context that is frozen,
+not hardened (hardening it would freeze the session's mutable `ActiveTurn` and `SessionCore`); a step
+that throws or rejects is skipped. `Dispatched` is taken as recorded when `active.dispatched` is set
+or the log has the record.
+
 The lease break is delivered during startup before the daemon serves (S2), so a session with a
 turn in flight has recovered by the time clients connect. A restart between crank A and crank B
 is invisible to the session: its `open` (a call into the manager vat) is answered after the
@@ -511,6 +523,18 @@ FIFO of waiting entries (at most `maxWaiting`, 100), a hold, and receipts (at mo
   first). While a hold is set no entry is claimed.
 - **Claim** (atomic): only in the crank that appends `TurnStarted`; the entry is removed and its
   receipt becomes `started` with the Turn in that same crank.
+- **Details settled by W1a.5** (`guest/session/queue.js`): only a *new* entry releases holds (a
+  duplicate `enqueueOnce` is a retry and releases nothing); cancelling the last waiting entry clears
+  the hold (Fae `session-submissions.js` cancel); `hold(reason)` never replaces an `interrupted`
+  hold with another reason; a cancelled entry keeps its receipt (`state: 'queued'`, its entry, whose
+  `describe()` throws `texts.entryGone`), so a retry does not resurrect it; a `started` receipt
+  keeps only its Turn (the claimed entry is dropped so it can be collected: every retained object
+  costs each later delivery, C-7). Receipt pruning looks at the oldest receipts in insertion order
+  and stops at the first live one; when the table is full it scans all of them before refusing with
+  `texts.receiptLimit` (an expired id is refused before lookup, so an expired receipt left behind a
+  live one costs memory only). The preview cut of `view()` is `floor((frameBytes - holdBytes -
+  overhead) / (3 x entries))` units, which is at least the formula above whenever the hold text is
+  short and still fits when it is long.
 
 ---
 
@@ -751,7 +775,8 @@ ActiveTurn = { turn, sink, turnId, generation, state, round, dispatched: boolean
 | `guest/session/queue.js` | `makeQueue({ onChange }) -> Queue` | `onChange()` is called after any change (the session publishes `pending` and reports `queuedCount`) |
 | | Queue | `{ enqueueOnce(submission, requestId, at) -> { receipt: Receipt, added: boolean }, receiptFor(requestId) -> Receipt \| undefined, view() -> PendingView, first() -> QueueItem \| undefined /* undefined while held */, claim(item, turn) -> void, hold(reason, message), release() /* every hold but interrupted */, holdReason() -> string \| undefined, size() }` |
 | | QueueItem | `{ entry: QueueEntry, key, submission, at, requestId }` |
-| `guest/session/recovery.js` | `recoverAfterRestart(core: SessionCore, active: ActiveTurn) -> boolean` | section 7; returns false when this generation was already recovered |
+| | `assertNoActiveTurn(current)` | throws `texts.activeTurn` (R4-10) when `current` is not undefined; for `startTurn` |
+| `guest/session/recovery.js` | `recoverAfterRestart(core: SessionCore, active: ActiveTurn, { steps? }) -> boolean` | section 7; synchronous; returns false when there is no current turn of `active.generation` or this generation was already recovered; `steps` defaults to `turnHooks.recoverySteps` (tests pass their own) |
 | | `isRestartSignal(error) -> boolean` | `isRetiredBreak(error)`; call it only at adapter call sites (section 7 table) |
 
 ### W1a.6 factory and provisioning
