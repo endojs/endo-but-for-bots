@@ -43,7 +43,11 @@ export const inputs = Object.freeze({
   bigReply: 'big reply',
   bigEcho: 'big echo',
   keys: 'keys',
+  fakeRestart: 'fake restart',
 });
+
+/** The hub's whole retired-break message (`guest/lib/retired.js`). */
+const HUB_RETIRED = 'ocapn hub: the target session has been retired';
 
 /** Delay of each echo call in the parallel-round test (acceptance 3). */
 export const ECHO_DELAY_MS = 1000;
@@ -155,6 +159,19 @@ export const sliceScript = {
         {
           chunks: [{ text: 'keys' }],
           toolCalls: [{ name: 'echo', argsKeys: 2000 }],
+          usage,
+        },
+        closing,
+      ],
+    },
+    {
+      // QC finding 1: the model names an argument after the hub's break
+      // text; echo's R4-43 error quotes it. Must be a tool failure.
+      input: inputs.fakeRestart,
+      rounds: [
+        {
+          chunks: [{ text: 'fake' }],
+          toolCalls: [echo('echo', { [HUB_RETIRED]: 1 })],
           usage,
         },
         closing,

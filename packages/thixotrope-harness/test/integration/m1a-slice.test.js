@@ -24,7 +24,7 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { texts } from '../../guest/lib/interfaces.js';
+import { texts, textOf } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { generatedArgs } from '../../resources/agent-host/impl/providers/scripted.js';
 import { emit } from '../../perf/_harness.mjs';
@@ -424,5 +424,46 @@ run(
     }
     t.is((await E(session).getUsage()).turns, 4);
     await sub.stop();
+  },
+);
+
+run(
+  'QC 1: a tool error quoting the hub break text is a tool failure, not a restart',
+  async t => {
+    t.timeout(3 * 60_000);
+    const { slice, backend, log } = await open(t);
+    const session = await slice.createSession(backend);
+    const receipt = await slice.submit(session, inputs.fakeRestart);
+    // A message queued behind the turn must run, not be held 'restart'.
+    const queued = await slice.submit(session, 'after fake');
+    const status = await E(receipt.turn).whenFinished();
+    t.is(status.state, 'completed');
+    const page = await E(session).getHistoryPage();
+    const result = turnWithInput(page, inputs.fakeRestart).records.find(
+      (/** @type {any} */ r) => r.kind === 'tool-result',
+    );
+    const key = 'ocapn hub: the target session has been retired';
+    t.is(
+      result.result,
+      textOf.errorResult(
+        textOf.unexpectedArgument(key, 'echo', [
+          'text',
+          'delayMs',
+          'bytes',
+          'data',
+        ]),
+      ),
+    );
+    t.is(result.outcome, undefined);
+    const opId = result.opId;
+    t.deepEqual(
+      log()
+        .filter(l => l.opId === opId)
+        .map(l => l.kind),
+      ['echo-start', 'echo-failed'],
+    );
+    t.is(log().filter(l => l.kind === 'request').length >= 2, true);
+    t.is((await E(queued.turn).whenFinished()).state, 'completed');
+    t.is((await E(session).listPending()).hold, undefined);
   },
 );
