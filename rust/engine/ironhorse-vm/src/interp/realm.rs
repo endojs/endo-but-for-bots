@@ -49,6 +49,14 @@ pub struct CompartmentEnvironment {
     /// bindings later deleted. The symbol table and intrinsic prototypes are
     /// shared across compartments, but this history is per global object.
     pub(super) binding_names: std::collections::BTreeSet<u16>,
+    /// Cache, never persisted: the sizes (name table, binding history,
+    /// intrinsic roster) at which this environment last had no standard
+    /// global left to bind. Those three only grow, so while they are
+    /// unchanged the answer is still "none", and
+    /// `install_pending_intrinsics` skips its walk of every intrinsic name.
+    /// That walk ran on every computed key and cost about 10 us each
+    /// (Thixotrope harness JOURNAL J-0190).
+    pub(super) globals_caught_up_at: Option<(usize, usize, usize)>,
     pub(super) global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
     /// The compartment's `globalLexicals` (`fx_Compartment`,
     /// `xsModule.c:3030`), by interned key id.
@@ -104,6 +112,7 @@ impl CompartmentEnvironment {
             global_props: Default::default(),
             global_lexicals: Default::default(),
             binding_names: Default::default(),
+            globals_caught_up_at: None,
             modules: Default::default(),
             source_compiler: None,
             shared_compiler: None,

@@ -19,6 +19,8 @@ impl Interp {
     /// restore" claim true, and it keeps the two callers from drifting.
     pub(super) fn bind_program_symbols(&mut self, names: &[SymbolName]) {
         *self.symbol_names = names.to_vec();
+        // A replaced table invalidates the size-keyed catch-up cache.
+        self.environment.globals_caught_up_at = None;
         // String keys interned at runtime APPEND to `symbol_names` (see
         // `intern_key`), so `names` here — a restored NAME row included —
         // already carries every string key the heap stores, and ids are
@@ -1519,10 +1521,20 @@ impl Interp {
             }
         }
 
-        let missing = self.missing_environment_global_bindings();
-        if missing.is_empty() {
+        let sizes = (
+            self.symbol_names.len(),
+            self.environment.binding_names.len(),
+            self.intrinsics.len(),
+        );
+        if self.environment.globals_caught_up_at == Some(sizes) {
             return;
         }
+        let missing = self.missing_environment_global_bindings();
+        if missing.is_empty() {
+            self.environment.globals_caught_up_at = Some(sizes);
+            return;
+        }
+        self.environment.globals_caught_up_at = None;
         let installing = self.installing_intrinsics;
         self.installing_intrinsics = true;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

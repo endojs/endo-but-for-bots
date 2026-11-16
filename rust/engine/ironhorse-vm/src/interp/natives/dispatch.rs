@@ -7308,27 +7308,25 @@ impl Interp {
                     unreachable!("ToObject returns a reference")
                 };
                 let keys = self.mop_own_keys(code, inst)?;
-                let mut props: Vec<(u16, OrdinaryDescriptor)> = self.reserve_scratch(keys.len())?;
+                let mut props: Vec<(ReadKey, OrdinaryDescriptor)> =
+                    self.reserve_scratch(keys.len())?;
                 for key in keys {
-                    let id = self.to_property_id(code, key)?;
-                    if let Some(descriptor) = self.mop_get_own_property(code, inst, id)? {
-                        props.push((id, descriptor));
+                    // A canonical index stays an index and mints no name
+                    // (XS's `(XS_NO_ID, index)`): SES `harden` copies every
+                    // TypedArray's descriptors, and naming each element
+                    // filled the 16-bit key table and ran an unmetered
+                    // intrinsic install pass per element.
+                    let key = self.to_read_key(code, key)?;
+                    if let Some(descriptor) = self.mop_get_own_property_read(code, inst, key)? {
+                        props.push((key, descriptor));
                     }
                 }
                 self.meter.tick_raw(GOPDS_FRAME_METERING);
                 let result = self.slots.alloc(Slot::instance(self.object_proto));
-                for (id, descriptor) in props {
+                for (key, descriptor) in props {
                     self.meter.tick_raw(GOPDS_PER_KEY_METERING);
-                    let desc = match self.descriptor_object(descriptor).value {
-                        Payload::Reference(desc) => desc,
-                        _ => unreachable!(),
-                    };
-                    let head = self.slots.get(result).next;
-                    let mut prop = Slot::of(Kind::Reference, Payload::Reference(desc));
-                    prop.id = id;
-                    prop.next = head;
-                    let idx = self.slots.alloc(prop);
-                    self.slots.get_mut(result).next = idx;
+                    let desc = self.descriptor_object(descriptor);
+                    self.define_descriptors_entry(result, key, desc);
                 }
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }

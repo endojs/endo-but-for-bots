@@ -486,10 +486,11 @@ impl Interp {
                 let keys = self.mop_own_keys(code, proxy)?;
                 let result = self.slots.alloc(Slot::instance(self.object_proto));
                 for key in keys {
-                    let id = self.to_property_id(code, key)?;
-                    if let Some(d) = self.mop_get_own_property(code, proxy, id)? {
+                    // As the ordinary path: an index mints no name.
+                    let key = self.to_read_key(code, key)?;
+                    if let Some(d) = self.mop_get_own_property_read(code, proxy, key)? {
                         let desc = self.descriptor_object(d);
-                        self.define_descriptor_field_slot(result, key, desc);
+                        self.define_descriptors_entry(result, key, desc);
                     }
                 }
                 Ok(Slot::of(Kind::Reference, Payload::Reference(result)))

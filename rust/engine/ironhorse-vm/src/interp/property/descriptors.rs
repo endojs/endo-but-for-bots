@@ -24,25 +24,44 @@ impl Interp {
         self.slots.get_mut(inst).next = idx;
     }
 
-    /// Add one own enumerable data property with a **key slot** (string or
-    /// symbol) — the symbol-keyed analogue of [`Self::define_descriptor_field`].
-    pub(in crate::interp) fn define_descriptor_field_slot(
+    /// `CreateDataProperty(result, key, descriptor)` on the fresh ordinary
+    /// result of `Object.getOwnPropertyDescriptors`, keyed by a [`ReadKey`].
+    ///
+    /// A canonical array index goes to the result's index store, as XS keeps
+    /// it at `(XS_NO_ID, index)`, so copying the descriptors of a TypedArray
+    /// or an Array mints no name per element. SES `harden` does exactly that
+    /// for every TypedArray it freezes (every inbound Thixotrope frame), and
+    /// naming each element used to exhaust the 16-bit key table and run an
+    /// unmetered intrinsic-install pass per element. Every other key is a
+    /// named slot, as before. The result is fresh and ordinary, so no named
+    /// slot can already hold the index.
+    pub(in crate::interp) fn define_descriptors_entry(
         &mut self,
         inst: crate::value::SlotIndex,
-        key: Slot,
+        key: ReadKey,
         value: Slot,
     ) {
-        let id = match self.to_property_id(&[], key) {
-            Ok(id) => id,
-            Err(_) => return,
+        let index = match key {
+            ReadKey::Index(index) => Some(index),
+            ReadKey::Id(id) => self.key_id_index(id),
         };
-        let head = self.slots.get(inst).next;
-        let mut prop = value;
-        prop.id = id;
-        prop.flag = 0;
-        prop.next = head;
-        let idx = self.slots.alloc(prop);
-        self.slots.get_mut(inst).next = idx;
+        match (index, key) {
+            (Some(index), _) => {
+                let mut item = value;
+                item.flag = 0;
+                self.index_prop_store(inst, index, item);
+            }
+            (None, ReadKey::Index(_)) => unreachable!("an Index key always has its index"),
+            (None, ReadKey::Id(id)) => {
+                let head = self.slots.get(inst).next;
+                let mut prop = value;
+                prop.id = id;
+                prop.flag = 0;
+                prop.next = head;
+                let idx = self.slots.alloc(prop);
+                self.slots.get_mut(inst).next = idx;
+            }
+        }
     }
 
     /// `ValidateAndApplyPropertyDescriptor(undefined, P, extensible, Desc,

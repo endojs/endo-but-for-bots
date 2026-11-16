@@ -38,6 +38,7 @@ scratch_element! {
     (ReadKey, Slot) => 32,
     (ReadKey, usize) => 16,
     (u16, OrdinaryDescriptor) => 88,
+    (ReadKey, OrdinaryDescriptor) => 88,
     (u32, Slot) => 32,
     (Slot, Slot) => 48,
     Option<Slot> => 24,
