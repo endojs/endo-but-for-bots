@@ -2306,3 +2306,90 @@ exo guard runs only after decoding (J-0191). (3) A session vat given up after re
 no reinstate path (C-11); the factory keeps its row as `lost` and only `deleteSession` frees it.
 Decision: as written; (1) becomes a precise message if core adds a failure reading to the facade;
 (3) is open decision 17 for the owner and the core owner.
+
+### J-0200 2026-11-16 M1a spec - awkward
+Evidence: writing the M1a interface contract (`packages/thixotrope-harness/guest/lib/interfaces.js`,
+`limits.js`, `designs/m1a-interfaces.md`; 23 interfaces, 74 closed record shapes, the A.4 and
+Part I section 4 texts). Object passing maps directly onto exos for the session, turn, queue entry,
+backend, endpoint and channel facets; nothing needs a string id except F.2 cases (title, labels, tool
+names and argument JSON, `modelId`, `logPath`, session key, cursor, request id). Three places needed
+a pattern rather than a plain object call: (1) `SessionHostFacet` must exist before the Session it
+serves (`make` needs it), so it is minted unbound and bound after `make`
+(`AgentHostAdmin.bindSession(host, session)`); (2) adapter objects are tombstones after a restart and
+a vat cannot tell a stale one from a live one, so a session opens its ports per turn
+(`Backend.open(host) -> { endpoint, publisher, tools }`: one manager crank and one session delivery
+per turn, which keeps turn start at 3 session deliveries); (3) the retired text means "restart" from
+an adapter and "vat lost" from a guest vat, so the contract classifies each call site instead of the
+error (m1a-interfaces.md section 7, 15 rows). Rule 12.10 also means a vat never `JSON.parse`s tool
+arguments: R4-43/R4-45 argument checks run in the callee (the adapter tool).
+Decision: as written; the per-call-site retired table and the per-turn `open` are the contract for
+W1a.2-W1a.7. A vat-side tool that must read model arguments (M5+) needs its own design.
+
+### J-0201 2026-11-16 M1a engine - perf
+Evidence: W1a.0 vat probe (throwaway script under the run lock; fresh state, workspace vat through
+`client.call('evaluate', ...)`, commit `d0a35ae1f6` with the W1a.0 files uncommitted, crank budget
+50 M). The bundled `interfaces.js` + `limits.js` staged in 6 pieces of 8,192 characters, then one
+evaluating crank. Eager guards (first draft), with in-vat micro costs over the call floor (JSON lines unchanged):
+{"metric":"w1a0.interfaces.vatLoad","bytes":43204,"chars":43159,"modules":["lib/interfaces.js","lib/limits.js"],"floorMs":157.9,"pieces":6,"stageMs":1691.4,"loaded":"23","loadMs":696.7,"parseOnlyMs":173,"secondLoadMs":751.4,"string100":113.4,"record100":149.9,"record100closedNoRest":132.3,"plainRecord100":18.1,"interface20x5":512.8,"or100":67,"checks":"\"note:accepted,longNote:refused,status:accepted,roundFinal:accepted,roundFinalExtraKey:refused,roundFinalManyCalls:refused,frameLimit=round output exceeds this build's frame limit,TextEncoder=function,euroBytes=5,matchesRecord=true\"","checkMs":275,"loadAvg":[5.83,5.42,5.15]}
+(two earlier eager runs: loadMs 728.6 and 874.0 with floors 167.8 and 176.8). Lazy tables (as committed),
+two runs:
+{"metric":"w1a0.interfaces.vatLoad","bytes":42323,"chars":42301,"modules":["lib/interfaces.js","lib/limits.js"],"floorMs":158.3,"pieces":6,"stageMs":1671,"loaded":"23","loadMs":203.3,"firstUseSessionVatMs":202.1,"secondUseSessionVatMs":10.6,"firstUseRestMs":350.2,"firstUseAllShapesMs":18,"checks":"\"note:accepted,longNote:refused,status:accepted,roundFinal:accepted,roundFinalExtraKey:refused,roundFinalManyCalls:refused,frameLimit=round output exceeds this build's frame limit,TextEncoder=function,euroBytes=5,matchesRecord=true\"","checkMs":295.5,"loadAvg":[6.38,5.71,5.29]}
+{"metric":"w1a0.interfaces.vatLoad","bytes":42323,"chars":42301,"modules":["lib/interfaces.js","lib/limits.js"],"floorMs":158.3,"pieces":6,"stageMs":2568.4,"loaded":"23","loadMs":195,"firstUseSessionVatMs":198.7,"secondUseSessionVatMs":3.1,"firstUseRestMs":359.4,"firstUseAllShapesMs":8.8,"checks":"\"note:accepted,longNote:refused,status:accepted,roundFinal:accepted,roundFinalExtraKey:refused,roundFinalManyCalls:refused,frameLimit=round output exceeds this build's frame limit,TextEncoder=function,euroBytes=5,matchesRecord=true\"","checkMs":279.3,"loadAvg":[4.86,5.41,5.2]}
+Reading: building a guard is expensive in a vat: about 25 ms per `M.interface` of 5 methods, 1.1 ms
+per `M.string`, 1.5 ms per `M.splitRecord`; parsing the 43 KB source costs about 15-20 ms over the
+floor. Eagerly, the contract alone adds 0.54-0.70 s to the loading crank of every vat that imports it
+(the session program's evaluating crank, measured at 229-268 ms for a 246 KB program in S6). Lazily
+(tables whose properties are built on first read and kept), loading costs about 40 ms over the floor
+and a session vat pays 199-202 ms once, on first use of its six interfaces; after that 3-11 ms. The
+in-vat checks passed: a guarded Turn accepted a note and refused a 5,000-unit one; a TurnSink refused
+an extra record key and 300 tool calls; `TextEncoder` is a function in vats and encodes `a€b` to 5
+bytes. The committed bundle is 42,793 bytes, 21 % of the 200 KB session-program budget (comments
+included). No probe exceeded the crank budget; its computron count was not read.
+Decision: `shapes` and `interfaces` are lazy tables; builders read them where they use them. If
+the session program nears 200 KB, strip comments in `bundle-guest.mjs` before trimming code.
+
+### J-0202 2026-11-16 M1a engine - awkward
+Evidence: `packages/patterns/src/patterns/patternMatchers.js:1946-1975`: `M.splitRecord(required,
+optional)` defaults its rest pattern to `M.any()`, so a split record admits any further keys. The
+first draft's shapes were all open; the W1a.0 unit test caught it (an extra key in `ContextReading` and
+in a submission passed). Every shape now passes `{}` as rest, and the unit test adds an unknown key to
+every record of every sample (all refused). Separately, a guard runs only after the frame is decoded,
+so it protects neither against an oversize frame nor against fresh record keys (J-0191); the
+contract states the sender-side rules beside each method.
+Decision: closed shapes are `M.splitRecord(required, optional, {})` (the `record` helper in
+`interfaces.js`); any builder writing another pattern for a vat-bound record must do the same.
+
+### J-0203 2026-11-16 M1a engine - good fit
+Evidence: the W1a.0 probe (J-0201): `typeof TextEncoder === 'function'` in a workspace vat, and the
+native UTF-8 encoder costs about 0.25 computron per byte (J-0110). Architecture rule 12.5 asked guest
+code to estimate a string's bytes as UTF-16 units x 3; with that estimate alone a vat could not send
+back an 8,192-character ASCII submission inside a `RoundRequest` (24,576 + envelope > `frameBytes`), nor
+publish a `final` event for a round text the adapter delivered within one frame.
+Decision: `bounded.js` (W1a.1) checks the estimate first and measures exact UTF-8 bytes only when the
+estimate is over the budget (`fitsFrame`, `messageBytes`); the contract's frame rule is exact bytes in
+both directions.
+
+### J-0204 2026-11-16 M1a tooling - awkward
+Evidence: guest modules read the prelude off `globalThis`; a Node test or adapter that imports them
+needs the same names first. The prelude record (`packages/thixotrope/src/guest/prelude.js`) is not
+exported by `@endo/thixotrope`, and the harness package does not depend on `@endo/patterns` or
+`@endo/exo`. `packages/thixotrope-harness/scripts/guest-prelude.js` imports the core record by relative
+path (the second deliberate reach into core internals after `evaluate-source.js`, J-9022) and
+`installGuestPrelude()` defines the missing names; tests import `test/unit/_m1a-prelude.js` first (ES
+modules evaluate imports in order). Because `guest/` is its own private package, Node imports of guest
+modules trip `import/no-relative-packages` and carry an eslint-disable block.
+Decision: as written. A core export of the prelude (`@endo/thixotrope/guest-prelude.js`) would remove
+the relative import; candidate for the PM's core-change list, not made here.
+
+### J-0205 2026-11-16 M1a spec - deviation
+Evidence: decisions the contract makes where the spec is silent or differs (m1a-interfaces.md
+section 15): `createSession` defaults `userInitiated` to true in M1a (R4-6 says the UI sets it; M1a
+acceptance 1 creates without it and expects the row listed); the R4-6 text says "use backend and
+modelId" (object passing) instead of "backendId"; A.4 `resolveTurn(turnId, note)` becomes
+`Turn.resolve(note)` with Turns reachable from history pages; cancel waits for running tool calls
+before settling `cancelled` (R4-44, R4-49); a tool result over the frame fails the turn after the
+round's other calls settle, with "round output exceeds this build's frame limit" (milestones M1a
+acceptance 8), instead of becoming a failed result the model sees; `systemPrompt`, `networkPolicy`,
+`spoken` and `reasoningEffort` are refused by `createSession` until their milestones.
+Decision: as written; each later milestone that lifts one of these changes the contract in a
+`contract(thixotrope-harness):` commit.
