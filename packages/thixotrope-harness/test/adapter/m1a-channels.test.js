@@ -389,8 +389,10 @@ test('a subscriber that falls behind is dropped; others keep receiving', async t
   }
   t.is(fastSeen.length, 21);
   t.is(channel.subscriberCount(), 1);
-  t.deepEqual(await E(slow).next(), { deliveries: [], closed: true });
-  t.deepEqual(await E(slow).next(), { deliveries: [], closed: true });
+  // M1b (W1b.1): a closed batch carries its reason.
+  const dropped = { deliveries: [], closed: true, reason: 'queueDeliveries' };
+  t.deepEqual(await E(slow).next(), dropped);
+  t.deepEqual(await E(slow).next(), dropped);
 });
 
 test('the default drop bound is 4,096 undelivered deliveries', async t => {
@@ -416,12 +418,13 @@ test('close() drops the subscriber and answers a waiting next()', async t => {
   await E(subscription).next();
   const waiting = E(subscription).next();
   await E(subscription).close();
-  t.deepEqual(await waiting, { deliveries: [], closed: true });
+  const closed = { deliveries: [], closed: true, reason: 'client' };
+  t.deepEqual(await waiting, closed);
   t.is(channel.subscriberCount(), 0);
   channel.publishDelta(
     harden({ type: 'delta', turnId: 't1', round: 0, text: 'x' }),
   );
-  t.deepEqual(await E(subscription).next(), { deliveries: [], closed: true });
+  t.deepEqual(await E(subscription).next(), closed);
 });
 
 test('concurrent next() callers get disjoint batches in order', async t => {

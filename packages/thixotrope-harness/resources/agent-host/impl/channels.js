@@ -93,13 +93,18 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import url from 'node:url';
 
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
-import { interfaces, shapes } from '../../../guest/lib/interfaces.js';
+import {
+  interfaces,
+  m1bShapes,
+  shapes,
+} from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { messageBytes } from '../../../guest/lib/bounded.js';
 import {
   makeFoldableStatus,
   makeReplyFold,
 } from '../../../guest/lib/reply-fold.js';
+import { isStaged } from '../../../guest/session/staging.js';
 /* eslint-enable import/no-relative-packages */
 import { channelLimits } from '../../../config/defaults.js';
 import { channelTaps } from './channel-taps.js';
@@ -143,14 +148,18 @@ export const LIVE_SUBSCRIPTION_GUARD = M.interface('LiveSubscription', {
           arrayLengthLimit: limits.liveBatchDeliveries,
         }),
       },
-      { closed: M.boolean() },
+      // `reason` (M1b W1b.1, J-9172): the closeReasons key.
+      { closed: M.boolean(), reason: m1bShapes.CloseReason },
     ),
   ),
   close: M.call().returns(M.undefined()),
 });
 
-/** What a closed subscription answers to every `next()`. */
-const closedBatch = harden({ deliveries: [], closed: true });
+/**
+ * What a closed subscription answers to every `next()`.
+ * @param {keyof typeof closeReasons} reason
+ */
+const closedBatch = reason => harden({ deliveries: [], closed: true, reason });
 
 /**
  * @typedef {{ seq: number, rev: number, event: any }} Delivery
@@ -198,6 +207,9 @@ const copyStatus = status =>
     usage: status.usage === null ? null : { ...status.usage },
   });
 
+/** Event fields that may be a StagedText (m1b-interfaces.md 5.1). */
+const STAGED_FIELDS = harden(['input', 'args', 'result', 'text']);
+
 /**
  * The event as the fold reads it: without `turnId` (and `round` for deltas),
  * so the folded usage matches `shapes.UsageTotals`.
@@ -206,6 +218,11 @@ const copyStatus = status =>
 const foldable = event => {
   if (event.type === 'delta') return { type: 'delta', text: event.text };
   const { turnId: _turnId, ...rest } = event;
+  // M1b (W1b.1): a staged field folds as its preview; the event itself is
+  // delivered with the StagedText (clients read the text through Content).
+  for (const field of STAGED_FIELDS) {
+    if (isStaged(rest[field])) rest[field] = rest[field].preview;
+  }
   return rest;
 };
 
@@ -245,15 +262,20 @@ const makeSubscriber = ({ queueLimit, queueBytes, onClose }) => {
     }
   };
 
-  /** @param {string} reason */
+  /** @type {keyof typeof closeReasons} */
+  let closedFor = 'client';
+  /** @param {keyof typeof closeReasons} reason a closeReasons key */
   const close = reason => {
     if (closed) return;
     closed = true;
+    closedFor = reason;
     queue.length = 0;
     sizes.length = 0;
     bytes = 0;
-    onClose(reason);
-    for (const waiter of waiters.splice(0)) waiter.resolve(closedBatch);
+    onClose(closeReasons[reason]);
+    for (const waiter of waiters.splice(0)) {
+      waiter.resolve(closedBatch(reason));
+    }
   };
 
   /**
@@ -268,11 +290,11 @@ const makeSubscriber = ({ queueLimit, queueBytes, onClose }) => {
     sizes.push(size);
     bytes += size;
     if (queue.length > queueLimit) {
-      close(closeReasons.queueDeliveries);
+      close('queueDeliveries');
       return;
     }
     if (bytes > queueBytes) {
-      close(closeReasons.queueBytes);
+      close('queueBytes');
       return;
     }
     if (waiters.length > 0 && !flushScheduled) {
@@ -283,14 +305,14 @@ const makeSubscriber = ({ queueLimit, queueBytes, onClose }) => {
 
   const facet = makeExo('LiveSubscription', LIVE_SUBSCRIPTION_GUARD, {
     async next() {
-      if (closed) return closedBatch;
+      if (closed) return closedBatch(closedFor);
       if (queue.length > 0 && waiters.length === 0) return take();
       const waiter = makePromiseKit();
       waiters.push(waiter);
       return waiter.promise;
     },
     close() {
-      close(closeReasons.client);
+      close('client');
     },
   });
 
@@ -586,7 +608,7 @@ const makeChannel = (
     const first = snapshot();
     mustMatch(first, shapes.SnapshotEvent);
     while (subscribers.size >= maxSubscribers) {
-      slowest()?.close(closeReasons.subscriberLimit);
+      slowest()?.close('subscriberLimit');
     }
     /** @type {ReturnType<typeof makeSubscriber>} */
     const subscriber = makeSubscriber({

@@ -21,20 +21,22 @@ import { makeComposer } from './composer.js';
 import { makeLive } from './live-service.js';
 import { makeAttach, makeOps } from './attach.js';
 import { makeEndpoint } from './endpoint.js';
-import { makeTimers } from './timers.js';
+import { makeTimerFacet, makeTimers } from './timers.js';
+import { findBlobDir, makeBlobStore } from './blobs.js';
+import { makeContent } from './content.js';
 import { makeEventLog, makeScriptedProvider } from './providers/scripted.js';
 import { makeEchoTool } from './tools/echo.js';
 
 /**
  * @typedef {object} BackendKind
  * @property {string} kind the `BackendSpec.kind` it serves
- * @property {(options: { label: string, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog }) => { startRound: (req: any, channel: any) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
+ * @property {(options: { label: string, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore }) => { startRound: (req: any, channel: any) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
  * @property {readonly string[]} tools names in `adapterTools` this kind
  *   offers in its `TurnPorts.tools`
  *
  * @typedef {object} AdapterToolKind
  * @property {string} name the tool name the model sees
- * @property {(options: { timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog }) => any} makeTool
+ * @property {(options: { timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore }) => any} makeTool
  */
 
 /**
@@ -67,6 +69,10 @@ export const adapterTools = harden([
  * @param {string} [options.incarnation] names this incarnation in the
  *   manager's attach count (default: pid and a random suffix, from the
  *   loader)
+ * @param {string | (() => string)} [options.blobDir] M1b: where staged
+ *   text lives (default: `<state>/agent-host/blobs`, found from argv)
+ * @param {any} [options.sink] M1b: the manager's sink, when there is no
+ *   attach (tests); otherwise `bind` provides it
  */
 export const makeAgentHostImpl = ({
   timers = makeTimers(),
@@ -74,9 +80,23 @@ export const makeAgentHostImpl = ({
   kinds = backendKinds,
   tools = adapterTools,
   incarnation = `${pid}`,
+  blobDir = () => findBlobDir(),
+  sink: givenSink = undefined,
 } = {}) => {
+  /** The manager's sink, from the attach (M1b blobs mint through it). */
+  let sink = givenSink;
+  const blobs = makeBlobStore({
+    dir: blobDir,
+    sink: () => {
+      if (sink === undefined) throw Error('the agent host is not attached');
+      return sink;
+    },
+    timers,
+  });
+  const content = makeContent({ store: blobs });
+  const timer = makeTimerFacet(timers);
   const live = makeLive({ channels });
-  const composer = makeComposer();
+  const composer = makeComposer({ blobs });
 
   /**
    * What a Backend presence of the manager vat is in this incarnation:
@@ -103,11 +123,12 @@ export const makeAgentHostImpl = ({
       logPath: spec.logPath,
       timers,
       log,
+      blobs,
     });
     const toolEntries = kind.tools.map(name => {
       const entry = tools.find(candidate => candidate.name === name);
       if (entry === undefined) throw Error(`No adapter tool ${name} here`);
-      return harden({ name, tool: entry.makeTool({ timers, log }) });
+      return harden({ name, tool: entry.makeTool({ timers, log, blobs }) });
     });
     const state = harden({ provider, toolEntries });
     backends.set(backend, state);
@@ -123,14 +144,26 @@ export const makeAgentHostImpl = ({
         endpoint,
         publisher: channel.publisher,
         tools: toolEntries,
+        content,
+        writers: blobs.writers,
+        timer,
       });
     },
     liveChannel: session => channels.channelFor(session).publisher,
     live: () => live,
     composer: () => composer,
+    content: () => content,
   });
 
-  const { bind, unbind } = makeAttach({ ops, incarnation });
-  return harden({ bind, unbind, ops });
+  const { bind, unbind } = makeAttach({
+    ops,
+    incarnation,
+    onSink: async attachedSink => {
+      sink = attachedSink;
+      // Writes that never completed (section 4.6); no state dir in tests.
+      await blobs.sweep().catch(() => {});
+    },
+  });
+  return harden({ bind, unbind, ops, blobs, content });
 };
 harden(makeAgentHostImpl);

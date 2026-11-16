@@ -19,12 +19,19 @@
  * closed records, bounded retained state (architecture 12).
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { interfaces, texts } from '../../guest/lib/interfaces.js';
+import {
+  interfaces,
+  m1bInterfaces,
+  m1bShapes,
+  texts,
+} from '../../guest/lib/interfaces.js';
+import { limits } from '../../guest/lib/limits.js';
 import { fitsFrame } from '../../guest/lib/bounded.js';
 import { isRetiredBreak } from '../../guest/lib/retired.js';
 /* eslint-enable import/no-relative-packages */
 
-const { E, Far, M, makeExo, makePromiseKit } = /** @type {any} */ (globalThis);
+const { E, Far, M, defineExoClass, makeExo, makePromiseKit } =
+  /** @type {any} */ (globalThis);
 
 /** The one registration key; `impl/attach.js` binds it. */
 export const SERVICE_KEY = 'agent-host';
@@ -45,6 +52,21 @@ export const make = ({ makeManager }) => {
     same: () => true,
   });
 
+  // ---- blobs (M1b W1b.1; designs/m1b-interfaces.md section 4) ----
+  // Handles are minted here in batches for the adapter's stock; the file
+  // key of each is kept only in this WeakMap (and in the adapter's memory):
+  // a handle nobody holds any more is collected with its entry. Keys come
+  // from a counter in this vat's durable heap, so they never repeat.
+  let blobSerial = 0;
+  /** @type {WeakMap<any, string>} */
+  const blobKeys = new WeakMap();
+  const makeBlob = defineExoClass(
+    'Blob',
+    m1bInterfaces.Blob,
+    () => harden({}),
+    {},
+  );
+
   const sink = makeExo(
     'AgentHostSink',
     M.interface('AgentHostSink', {
@@ -52,8 +74,34 @@ export const make = ({ makeManager }) => {
         M.remotable('AgentHostOps'),
         M.string({ stringLengthLimit: 128 }),
       ).returns(M.number()),
+      mintBlobs: M.call().returns(m1bShapes.BlobStock),
+      resolveBlobs: M.call(
+        M.arrayOf(M.remotable('Blob'), {
+          arrayLengthLimit: limits.blobResolveBatch,
+        }),
+      ).returns(m1bShapes.BlobKeys),
     }),
     {
+      /** A stock batch for the adapter (one crank; section 4.1). */
+      mintBlobs: () => {
+        /** @type {any[]} */
+        const entries = [];
+        for (let i = 0; i < limits.blobStockBatch; i += 1) {
+          blobSerial += 1;
+          const key = `b${blobSerial}`;
+          const blob = makeBlob();
+          blobKeys.set(blob, key);
+          entries.push(harden({ blob, key }));
+        }
+        return harden(entries);
+      },
+      /**
+       * The file keys of handles a new adapter incarnation met (section 4.6);
+       * `null` for a handle this manager did not mint.
+       * @param {any[]} blobs
+       */
+      resolveBlobs: blobs =>
+        harden(blobs.map(blob => blobKeys.get(blob) ?? null)),
       /**
        * @param {any} opsFacet
        * @param {string} _incarnation
@@ -205,13 +253,17 @@ export const make = ({ makeManager }) => {
     });
   };
 
-  const facet = makeExo('AgentHostAdmin', interfaces.AgentHostAdmin, {
+  const facet = makeExo('AgentHostAdmin', m1bInterfaces.AgentHostAdmin, {
     makeBackend,
     forSession,
     bindSession,
     onStart,
     live: async () => withOps(current => E(current).live()),
     composer: async () => withOps(current => E(current).composer()),
+    // M1b W1b.1: the incarnation's Content; the list publisher (W1b.5's
+    // channel, answered by the ops facet once it has one).
+    content: async () => withOps(current => E(current).content()),
+    listPublisher: async () => withOps(current => E(current).listPublisher()),
   });
 
   const lifecycle = Far('AgentHostLifecycle', {

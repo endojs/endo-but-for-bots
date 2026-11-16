@@ -259,7 +259,11 @@ test('a subscriber over its queued bytes is dropped with the reason recorded', a
     await E(fast).next();
   }
   t.is(channel.subscriberCount(), 1);
-  t.deepEqual(await E(slow).next(), { deliveries: [], closed: true });
+  t.deepEqual(await E(slow).next(), {
+    deliveries: [],
+    closed: true,
+    reason: 'queueBytes',
+  });
   t.deepEqual(channel.closes(), { [closeReasons.queueBytes]: 1 });
   // The snapshot is not counted: a subscriber whose only queued delivery
   // is a large snapshot stays.
@@ -286,7 +290,11 @@ test('a subscribe beyond subscribersPerSession drops the slowest subscriber', as
   await E(reading).next();
   const newcomer = channel.subscribe();
   t.is(channel.subscriberCount(), 2);
-  t.deepEqual(await E(lagging).next(), { deliveries: [], closed: true });
+  t.deepEqual(await E(lagging).next(), {
+    deliveries: [],
+    closed: true,
+    reason: 'subscriberLimit',
+  });
   t.deepEqual(channel.closes(), { [closeReasons.subscriberLimit]: 1 });
   channel.publishDelta(delta('after'));
   t.is((await E(reading).next()).deliveries[0].event.text, 'after');

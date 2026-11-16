@@ -40,6 +40,7 @@ import {
   makeScriptedProvider,
 } from '../../resources/agent-host/impl/providers/scripted.js';
 import { makeEchoTool } from '../../resources/agent-host/impl/tools/echo.js';
+import { makeTestBlobs } from './_m1b-blobs.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E, Far, makeExo, matches } = /** @type {GuestGlobals} */ (globalThis);
@@ -153,8 +154,9 @@ const roundRequest = (fake, { round = 0, input = 'hi', modelId = 'm' } = {}) =>
  * `events` too, so the test sees one ordered history.
  * @param {any} script
  * @param {any[]} events
+ * @param {{ blobs?: any }} [options] M1b: a blob store for staging
  */
-const makeRig = (script, events) => {
+const makeRig = (script, events, { blobs } = {}) => {
   /** @type {any[]} */
   const log = [];
   /**
@@ -173,6 +175,7 @@ const makeRig = (script, events) => {
     script,
     timers,
     log: logFn,
+    blobs,
   });
   /** @type {any[]} */
   const deltas = [];
@@ -341,10 +344,15 @@ test('rounds after round 0 follow the script turn chosen at round 0', async t =>
   );
 });
 
-test('frame limit: a 64 KiB scripted reply fails the round before any message reaches the vat', async t => {
+// M1b (W1b.1): a 64 KiB reply is staged now; a round of 300 tool calls is
+// what still cannot be sent (m1b-interfaces.md 5.4).
+test('frame limit: a round of 300 tool calls fails before any message reaches the vat', async t => {
   const fake = makeFakeTurn();
+  const toolCalls = Array.from({ length: 300 }, () => ({ name: 'echo' }));
   const script = harden({
-    turns: [{ rounds: [{ chunks: [{ text: 'x', repeat: 65_536 }] }] }],
+    turns: [
+      { rounds: [{ chunks: [{ text: 'x', repeat: 65_536 }], toolCalls }] },
+    ],
   });
   const { endpoint, log, deltas } = makeRig(script, fake.events);
   void E(endpoint).holdTurn(fake.turn);
@@ -454,16 +462,20 @@ test('tool arguments stay text: 2,000 keys reach the vat as one string and echo 
       },
     ],
   });
-  const { endpoint } = makeRig(script, fake.events);
+  // M1b (W1b.1): 2,000 keys are about 19 KB, over inlineBytes: staged.
+  const blobs = makeTestBlobs();
+  t.teardown(blobs.cleanup);
+  const { endpoint } = makeRig(script, fake.events, { blobs: blobs.store });
   void E(endpoint).holdTurn(fake.turn);
   E.sendOnly(endpoint).startRound(roundRequest(fake));
   await until(() => fake.finals.length === 1);
   const [result] = fake.finals;
   t.true(matches(result, shapes.RoundResult), 'closed shape, fixed keys');
   const [many, plain] = result.toolCalls;
-  t.is(typeof many.args, 'string');
-  t.is(many.args, generatedArgs(2000));
-  t.is(Object.keys(JSON.parse(many.args).data).length, 2000);
+  t.is(many.args.bytes, generatedArgs(2000).length, 'staged, exact bytes');
+  const full = await blobs.store.read(many.args.blob);
+  t.is(full, generatedArgs(2000));
+  t.is(Object.keys(JSON.parse(full).data).length, 2000);
   t.is(many.callId, 'c1');
   t.deepEqual(plain, { callId: '', name: 'echo', args: '{"text":"a"}' });
 
@@ -472,22 +484,26 @@ test('tool arguments stay text: 2,000 keys reach the vat as one string and echo 
   const echo = makeEchoTool({
     timers,
     log: (kind, fields = {}) => echoLog.push({ kind, ...fields }),
+    blobs: blobs.store,
   });
   const outcome = await E(echo).execute(
     harden({ opId: 't1/r0/c0', args: many.args }),
   );
   t.deepEqual(outcome, { status: 'ok', text: '' });
   t.is(echoLog[0].kind, 'echo-start');
-  t.is(echoLog[0].args, many.args, 'echo logs the arguments as received');
+  t.is(echoLog[0].units, full.length, 'echo read the staged arguments');
   t.is(echoLog[1].kind, 'echo-end');
 });
 
 test('echo: text, bytes, delay, and the output bounds', async t => {
   /** @type {any[]} */
   const echoLog = [];
+  const blobs = makeTestBlobs();
+  t.teardown(blobs.cleanup);
   const echo = makeEchoTool({
     timers,
     log: (kind, fields = {}) => echoLog.push({ kind, ...fields }),
+    blobs: blobs.store,
   });
   /** @param {string} args */
   const run = args => E(echo).execute(harden({ opId: 'op', args }));
@@ -505,25 +521,24 @@ test('echo: text, bytes, delay, and the output bounds', async t => {
   await run('{"text":"slow","delayMs":120}');
   t.true(Date.now() - t0 >= 110);
 
-  // R4-46: cut in the callee with the marker; still under the frame.
+  // R4-46: cut in the callee with the marker. M1b (W1b.1): an output over
+  // inlineBytes is staged (256-unit preview) instead of hitting the frame.
   const big = await run('{"bytes":20000}');
   t.is(big.status, 'ok');
-  t.is(big.text.length, 20_000);
+  t.is(big.text.bytes, 20_000);
+  t.is(big.text.preview, 'x'.repeat(limits.toolPreviewUnits));
+  t.is((await blobs.store.read(big.text.blob)).length, 20_000);
   const bounded = await run(JSON.stringify({ text: 'é', bytes: 40_000 }));
-  // 32,768 units of 2-byte text is over the frame: frame-limit.
-  t.deepEqual(bounded, { status: 'frame-limit', text: texts.frameLimit });
+  t.is(bounded.status, 'ok');
+  const boundedText = await blobs.store.read(bounded.text.blob);
+  t.is(boundedText.length, limits.toolOutputUnits);
+  t.true(boundedText.endsWith(textOf.truncationMarker(40_000)));
   const huge = await run('{"bytes":300000}');
-  t.deepEqual(huge, { status: 'frame-limit', text: texts.frameLimit });
-  t.is(echoLog.filter(line => line.kind === 'echo-frame-limit').length, 2);
   const marker = textOf.truncationMarker(300_000);
-  t.true(
-    echoLog.some(
-      line =>
-        line.kind === 'echo-frame-limit' &&
-        line.units === limits.toolOutputUnits,
-    ),
-    `cut to ${limits.toolOutputUnits} units (marker ${marker.length} units)`,
-  );
+  const hugeText = await blobs.store.read(huge.text.blob);
+  t.is(hugeText.length, limits.toolOutputUnits);
+  t.true(hugeText.endsWith(marker));
+  t.is(echoLog.filter(line => line.kind === 'echo-frame-limit').length, 0);
 });
 
 test('echo: argument errors use the R4-43 / R4-45 texts, answered as failed outcomes', async t => {

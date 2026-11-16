@@ -13,6 +13,12 @@
  * the R4-46 marker; an answer still over `frameBytes` (exact UTF-8) is not
  * sent: the outcome is `frame-limit` and the session fails the turn.
  *
+ * M1b (W1b.1; m1b-interfaces.md 5.2, 5.3, 6.4): staged arguments are read
+ * from the blob store in process; a model-facing text over `inlineBytes`
+ * (the cut output, or `Error: <message>` for a failure) is staged with a
+ * 256-unit preview and answered as a StagedText; a staging failure answers
+ * `failed` with `textOf.stagingFailed`.
+ *
  * Node only.
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
@@ -27,8 +33,10 @@ import {
   cutText,
   fitsFrame,
   previewText,
+  utf8Bytes,
 } from '../../../../guest/lib/bounded.js';
 import { limits } from '../../../../guest/lib/limits.js';
+import { isStaged } from '../../../../guest/session/staging.js';
 /* eslint-enable import/no-relative-packages */
 
 const { makeExo } = /** @type {any} */ (globalThis);
@@ -100,20 +108,68 @@ const failedOutcome = message => {
 };
 
 /**
+ * Stage a model-facing text over inlineBytes (M1b); inline otherwise.
+ * @param {import('../blobs.js').BlobStore | undefined} blobs
+ * @param {'ok' | 'failed'} status
+ * @param {string} modelText for `failed`, already `Error: <message>`
+ * @param {() => any} inline the M1a outcome when it fits inline
+ */
+const stagedOutcome = async (blobs, status, modelText, inline) => {
+  if (utf8Bytes(modelText) <= limits.inlineBytes) return inline();
+  try {
+    if (blobs === undefined) throw Error('no blob store');
+    const text = await blobs.stage(modelText, {
+      previewUnits: limits.toolPreviewUnits,
+    });
+    return harden({ status, text });
+  } catch (error) {
+    return failedOutcome(
+      textOf.stagingFailed(/** @type {Error} */ (error)?.message ?? `${error}`),
+    );
+  }
+};
+
+/**
  * @param {object} options
  * @param {import('../timers.js').Timers} options.timers
  * @param {import('../providers/scripted.js').EventLog} [options.log] the
  *   backend's event log (`echo-start`, `echo-end`, `echo-frame-limit`)
+ * @param {import('../blobs.js').BlobStore} [options.blobs] M1b staging
  */
-export const makeEchoTool = ({ timers, log = () => {} }) =>
+export const makeEchoTool = ({ timers, log = () => {}, blobs }) =>
   makeExo('AdapterTool', interfaces.AdapterTool, {
-    /** @param {{ opId: string, args: string }} request */
-    execute: async ({ opId, args }) => {
-      log('echo-start', { opId, args });
+    /** @param {{ opId: string, args: any }} request */
+    execute: async ({ opId, args: field }) => {
+      /** @type {string} */
+      let args;
+      try {
+        args =
+          isStaged(field) && blobs !== undefined
+            ? await blobs.read(field.blob)
+            : field;
+      } catch (error) {
+        return failedOutcome(
+          textOf.stagingFailed(
+            /** @type {Error} */ (error)?.message ?? `${error}`,
+          ),
+        );
+      }
+      if (typeof args !== 'string') {
+        return failedOutcome(textOf.stagingFailed('no blob store'));
+      }
+      log('echo-start', {
+        opId,
+        ...(isStaged(field) ? { units: args.length } : { args }),
+      });
       const checked = checkArgs(args);
       if (typeof checked === 'string') {
         log('echo-failed', { opId, units: checked.length });
-        return failedOutcome(checked);
+        return stagedOutcome(
+          blobs,
+          'failed',
+          boundToolOutput(textOf.errorResult(checked)),
+          () => failedOutcome(checked),
+        );
       }
       const { text, delayMs = 0, bytes } = checked;
       // R4-49: a cancel does not interrupt a running tool.
@@ -129,7 +185,9 @@ export const makeEchoTool = ({ timers, log = () => {} }) =>
         );
       }
       output = boundToolOutput(output);
-      const outcome = harden({ status: 'ok', text: output });
+      const outcome = await stagedOutcome(blobs, 'ok', output, () =>
+        harden({ status: 'ok', text: output }),
+      );
       if (!fitsFrame(outcome)) {
         log('echo-frame-limit', { opId, units: output.length });
         return harden({ status: 'frame-limit', text: texts.frameLimit });

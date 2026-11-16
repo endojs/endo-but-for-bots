@@ -54,6 +54,9 @@ const makeOpsInterface = () =>
     ),
     live: M.call().returns(M.remotable('Live')),
     composer: M.call().returns(M.remotable('Composer')),
+    // M1b W1b.1
+    content: M.call().returns(M.remotable('Content')),
+    listPublisher: M.call().returns(M.remotable('ListPublisher')),
   });
 
 /**
@@ -64,6 +67,9 @@ const makeOpsInterface = () =>
  * @property {(session: any) => any} liveChannel the session channel's publisher
  * @property {() => any} live
  * @property {() => any} composer
+ * @property {() => any} content M1b: this incarnation's Content
+ * @property {() => any} [listPublisher] M1b: the list channel's publisher
+ *   (W1b.5's `AH/list-channel.js`); throws until one is wired
  */
 
 /**
@@ -79,6 +85,12 @@ export const makeOps = (handlers, now = () => Date.now()) => {
     liveChannel: session => handlers.liveChannel(session),
     live: () => handlers.live(),
     composer: () => handlers.composer(),
+    content: () => handlers.content(),
+    listPublisher: () => {
+      if (handlers.listPublisher === undefined)
+        throw Error('this agent host has no session list feed yet');
+      return handlers.listPublisher();
+    },
   });
 };
 harden(makeOps);
@@ -87,9 +99,14 @@ harden(makeOps);
  * The `bind`/`unbind` pair `makeAdapter` needs: binding the service key
  * attaches `ops` to the manager and waits for the answer.
  *
- * @param {{ ops: any, incarnation: string }} options
+ * @param {object} options
+ * @param {any} options.ops
+ * @param {string} options.incarnation
+ * @param {(sink: any) => Promise<void> | void} [options.onSink] M1b: told
+ *   the manager's sink before attaching (the blob store mints and resolves
+ *   handles through it; its `*.part` sweep runs here)
  */
-export const makeAttach = ({ ops, incarnation }) => {
+export const makeAttach = ({ ops, incarnation, onSink = () => {} }) => {
   /**
    * @param {unknown} key
    * @param {any} spec
@@ -97,6 +114,7 @@ export const makeAttach = ({ ops, incarnation }) => {
   const bind = async (key, spec) => {
     if (key !== SERVICE_KEY)
       throw Error(`agent host has no registration ${JSON.stringify(key)}`);
+    await onSink(spec.sink);
     await E(spec.sink).attach(ops, incarnation);
     return harden({ key });
   };

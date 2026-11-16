@@ -8,6 +8,10 @@
  */
 import { clearTimeout, setTimeout } from 'node:timers';
 
+/* eslint-disable import/no-relative-packages -- guest/ is its own private package */
+import { m1bInterfaces } from '../../../guest/lib/interfaces.js';
+/* eslint-enable import/no-relative-packages */
+
 /**
  * @typedef {object} Timers
  * @property {(ms: number) => Promise<void>} delay resolves after `ms`
@@ -33,3 +37,18 @@ export const makeTimers = () => {
   return harden({ delay, after });
 };
 harden(makeTimers);
+
+/**
+ * The `Timer` exo of `TurnPorts.timer` (M1b W1b.1; m1b-interfaces.md 3.1):
+ * the exec vat's `sleep(ms)`. It dies with this incarnation (a sleep in
+ * flight at a restart rejects with the retired text in the exec vat).
+ * @param {Timers} timers
+ */
+export const makeTimerFacet = timers =>
+  /** @type {any} */ (globalThis).makeExo('Timer', m1bInterfaces.Timer, {
+    /** @param {number} ms */
+    sleep: async ms => {
+      await timers.delay(ms);
+    },
+  });
+harden(makeTimerFacet);
