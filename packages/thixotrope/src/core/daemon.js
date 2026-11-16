@@ -20,6 +20,7 @@ import { makeNativeAdapters } from '../native/adapters.js';
 import { makeLogPowers, silentLogger } from '../platform/logging.js';
 import { settleWithin } from '../platform/timers.js';
 import { inspectVatReachability } from './vat-reachability.js';
+import { WorkerCrashError } from './worker-crash-error.js';
 import { WorkerHaltError } from './worker-engine.js';
 import {
   boundKeyOf,
@@ -121,6 +122,10 @@ import {
  *   is unaffected.
  * @property {(options?: { keep?: Array<string> }) => ReturnType<typeof inspectVatReachability>} inspectReachability
  * @property {(options?: { keep?: Array<string> }) => Promise<Array<string>>} collectVats
+ * @property {() => void} standDown say that the host is going down, as
+ *   soon as that is known: from here on a worker's crash is not counted
+ *   toward giving it up, and a crashed worker is not retried. `shutdown`
+ *   says so itself, but only once it is reached
  * @property {() => Promise<void>} shutdown
  * @property {() => Promise<void>} crash drain queued work then terminate without snapshots
  */
@@ -155,9 +160,14 @@ const START_NOTICE_MS = 10_000;
  *   transport's cadence policy); omitted means an awake worker snapshots
  *   only at sleep
  * @param {number} [options.maxDeliveryAttempts] record a worker's failure
- *   once one journal frame has failed this many times without a halt and
- *   without progress past it (see the transport); omitted means retry on
- *   every later frame
+ *   once this many attempts in a row have crashed without progress (see the
+ *   transport), at startup as well as later, so that startup waits for a
+ *   crashing worker to be retried to one end or the other; omitted means
+ *   crashes are not counted, a worker that crashes is woken again by every
+ *   later frame, and one that crashes during startup's replay fails the
+ *   startup
+ * @param {number} [options.crashRetryDelayMs] with `maxDeliveryAttempts`,
+ *   how long to wait before the first retry of a crashed worker
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
@@ -173,6 +183,7 @@ const buildDaemon = async (
     idleSleepMs = undefined,
     snapshotEveryDeliveries = undefined,
     maxDeliveryAttempts = undefined,
+    crashRetryDelayMs = undefined,
     verbose = false,
   },
 ) => {
@@ -227,6 +238,7 @@ const buildDaemon = async (
           idleSleepMs,
           snapshotEveryDeliveries,
           maxDeliveryAttempts,
+          crashRetryDelayMs,
           debugLabel: workerStore.getMeta().debugLabel,
           // An ephemeral worker is resident by construction. Its state is
           // discarded at the next startup regardless, so snapshotting it on
@@ -760,11 +772,19 @@ const buildDaemon = async (
 
   // Only after every session is seated does the daemon accept
   // connections: an early resume must never race the restore.
-  netlayerRef.netlayer = await makeNetlayer({
-    handlers: hubHandlers,
-    logger: log.sub('netlayer'),
-    resumption,
-  });
+  try {
+    netlayerRef.netlayer = await makeNetlayer({
+      handlers: hubHandlers,
+      logger: log.sub('netlayer'),
+      resumption,
+    });
+  } catch (error) {
+    // A worker's session is attached already, and its outbox may have woken
+    // it meanwhile. Nothing below runs to stop the transports, and one that
+    // crashed is owed a retry on a timer that would outlive this start.
+    for (const entry of workers.values()) entry.transport.end();
+    throw error;
+  }
   for (const token of store.listSessionTokens()) {
     const meta = store.provideSessionStore(token).getMeta();
     if (meta.retired)
@@ -838,16 +858,37 @@ const buildDaemon = async (
           meta.failure === undefined &&
           workerStore.journalLength() > (meta.snapshot?.cut ?? 0)
         ) {
-          try {
-            await entry.transport.wake();
-          } catch (error) {
-            // Fatal guest replay quarantines only that worker, just as live
-            // delivery does. Infrastructure failures still abort startup.
-            if (
-              !(error instanceof WorkerHaltError) ||
-              workerStore.getMeta().failure === undefined
-            )
-              throw error;
+          // Fatal guest replay quarantines only that worker, just as live
+          // delivery does. So does a run of crashes that is being counted:
+          // each further wake waits for the retry the transport owes the
+          // worker, so this ends with the replay complete or that worker
+          // given up on, and whoever is handed a started daemon finds every
+          // worker this sweep woke in one state or the other. Infrastructure
+          // failures still abort startup.
+          for (;;) {
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              await entry.transport.wake();
+              break;
+            } catch (error) {
+              if (
+                error instanceof WorkerHaltError &&
+                workerStore.getMeta().failure !== undefined
+              ) {
+                break;
+              }
+              // Retired while its retry was owed: no longer this sweep's.
+              if (workers.get(workerId) !== entry) break;
+              if (
+                !(error instanceof WorkerCrashError) ||
+                maxDeliveryAttempts === undefined
+              ) {
+                throw error;
+              }
+              logging
+                .sub('thixotrope', 'daemon')
+                .error(`worker ${workerId} crashed while resuming:`, error);
+            }
           }
         }
       }),
@@ -898,6 +939,19 @@ const buildDaemon = async (
       connectedSessions: peers.connectedSessionKeys(),
       keep,
     });
+
+  /**
+   * The host is going down. Stopping a supervisor signals its process
+   * group, which kills workers in the middle of whatever they were doing;
+   * said before those deaths are seen, as it nearly always can be, this
+   * keeps them from being counted against the workers, and a death seen
+   * first is forgiven when this cancels its retry. It also keeps a worker
+   * waiting to retry after a crash from being woken by its timer while the
+   * others are put to sleep.
+   */
+  const standDown = () => {
+    for (const entry of workers.values()) entry.transport.standDown();
+  };
 
   /** @type {ThixotropeDaemon} */
   const daemon = {
@@ -1014,7 +1068,9 @@ const buildDaemon = async (
       }
       return harden(swept.sort());
     },
+    standDown,
     shutdown: async () => {
+      standDown();
       // Exit notices stop first: one delivered while vats are put to sleep
       // would wake a vat just put to sleep.
       nativeAdapters.quiesce();
