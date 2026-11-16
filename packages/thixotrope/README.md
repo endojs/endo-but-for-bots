@@ -888,6 +888,14 @@ netlayer's port (`makeTcpNetLayer({ ..., specifiedPort })`, or the
 equivalent for your netlayer) rather than letting a successor process
 pick a fresh ephemeral port.
 
+The supervisor that `thix serve` runs, and the client of its local control
+socket, are exported for hosts that compose their own command:
+`serveThixotrope(platform, statePath, options)` from
+`@endo/thixotrope/supervisor.js` and
+`connectLocalControl(powers, socketPath, { workspace })` from
+`@endo/thixotrope/local-control.js` (both also from the main entry). Like the
+rest of the core, both take their powers from the caller.
+
 ## Worker sessions
 
 Each worker runs a full (reduced-profile) OCapN peer —

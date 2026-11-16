@@ -13,3 +13,5 @@ export { makeIronhorseEngine } from './src/ironhorse/ironhorse-engine.js';
 export { makeFsStore } from './src/store/store-fs.js';
 export { makeDurableNetLayer } from './src/net/durable-netlayer.js';
 export { inspectIronhorseStore } from './src/ironhorse/inspect-ironhorse.js';
+export { serveThixotrope } from './src/control/supervisor.js';
+export { connectLocalControl } from './src/control/local-control.js';

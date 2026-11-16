@@ -29,6 +29,8 @@
     "./package.json": "./package.json",
     "./native-adapter.js": "./native-adapter.js",
     "./node-powers.js": "./node-powers.js",
+    "./supervisor.js": "./supervisor.js",
+    "./local-control.js": "./local-control.js",
     "./guest.js": "./guest.js"
   },
   "scripts": {
