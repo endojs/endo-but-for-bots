@@ -4384,3 +4384,110 @@ Expected: every remaining commit about 2 x cheaper and independent of state size
 record framing, recovery, compaction policy, migration of existing state directories.
 (d) Fewer commits per turn: trace the 24 per plain turn (as the mail work traced its 6, which became
 2) before changing anything; expected gain unknown until traced.
+
+### J-0330 2026-11-17 M1b exec - good fit
+Evidence: W1b.3 exec program (`guest/exec/main.js`, `guest/exec/render.js`, `e0ec872f29`; bundle
+digest `54f7cfe8...`). One `Compartment` per vat made in `makeExecScope()`; its global object is
+the persistent scope. Vat check (throwaway script under the run lock, base template `284d870502`,
+idle sleep 2 s, release worker `7cda4467...`, crank budget 50 M, tree `a1465906b2-dirty` with
+other units' work, load 1.7-2.1): `globalThis.x = 5`, the vat checkpointed and slept, clean restart,
+`return x` gave 5; then `globalThis.y = 7` in the awake vat (journal 340, snapshot cut 333) and an
+immediate SIGKILL of the supervisor: after the restart (replay) `[x, y]` gave `[5, 7]` and a
+binding never set stayed undefined. The first call after each restart took 2.0-2.3 s (the vat's
+wake), later calls 84 ms.
+{"metric":"w1b3.persistence","set":{"status":"ok","text":"5"},"sleptMs":2510.7,"cleanRestart":{"servedMs":4597.4,"connectedMs":4737.8},"afterClean":{"ok":true,"ms":2264.8,"value":{"status":"ok","text":"5"}},"beforeKill":{"awake":true,"journalLength":340,"cut":333},"sigkillRestart":{"servedMs":6069.6,"connectedMs":6214},"afterKill":{"ok":true,"ms":2011,"value":{"status":"ok","text":"[5,7,\"undefined\"]"}},"afterKillRow":{"wakes":2},"pass":true,"commit":"a1465906b2-dirty","crankBudget":"50000000"}
+Reading: D-11's persistent scope is what an orthogonally persistent vat gives for free: no
+serialisation of model state, nothing to rebuild after either kind of restart. The vat's
+`Compartment` also confines as specified: from model code `makeExo`, `M` and `Far` are undefined,
+`Date.now()` and `Math.random()` throw ("secure mode"); `TextEncoder`, `Compartment` and `eval`
+are present (no authority; the Node unit test's compartment does not have `TextEncoder`).
+Decision: none; the property W1b.6's acceptance 3 and 10 rely on holds in a real vat.
+
+### J-0331 2026-11-17 M1b exec - perf
+Evidence: same run as J-0330. `exec.trivial` measured as a direct call from Node (control client ->
+exec vat -> answer), 200 samples after 5 warm-up calls, and through a caller in the workspace vat
+(Node -> workspace vat -> exec vat -> workspace vat -> Node, closer to the session's D, X1, E):
+{"metric":"exec.trivial","unit":"ms","path":"node -> exec vat -> node (control client)","n":200,"median":83.707,"p95":87.414,"p99":118.848,"min":79.284,"max":367.367,"budget":{"median":250},"pass":true,"commit":"a1465906b2-dirty","crankBudget":"50000000","loadAvg":[1.67,2.05,2.01]}
+{"metric":"exec.trivial.viaVat","unit":"ms","path":"node -> workspace vat -> exec vat -> workspace vat -> node","n":50,"median":175.119,"p95":182.493,"p99":255.234,"min":169.954,"max":255.234,"pass":null,"commit":"a1465906b2-dirty","crankBudget":"50000000","loadAvg":[1.79,2.06,2.01]}
+An earlier run (`ba48c5e64f-dirty`, load 2.1-2.4) gave 85.0 / 176.6 ms medians. Exec vat creation
+(`createWorker`, the 92,917-byte bundle staged in 4 pieces of `frameBytes`, one evaluating crank):
+createWorker 135-190 ms, staging 2.85-3.06 s, evaluating crank 243-258 ms, total 3.26-3.46 s
+(5 creations). A 100,000-character result cut to 32,768 units and staged through writers that live
+in the workspace vat (open, 3 appends, close: 5 answered vat hops) took 1.83-1.85 s end to end.
+Reading: the session path (D's send, X1, E) should land near the via-vat figure, about 175 ms,
+inside the 250 ms budget; W1b.6's `exec.trivial` row measures the real thing. Staged results cost
+one answered hop per piece: with the adapter's writers (70-76 ms per hop, fact 1) 3 pieces should
+be about 0.4 s, not the 1.8 s seen with vat-held fakes. A cold exec vat (3.3 s) is why the pool keeps
+a spare (`exec.first` <= 750 ms).
+Decision: `exec.trivial` <= 250 ms holds for the vat part; recorded for W1b.6.
+
+### J-0332 2026-11-17 M1b exec - perf
+Evidence: same run. A synchronous runaway (`for (;;) {}`) in an awake exec vat: the pending `run`
+broke with "ocapn hub: the target session has been retired" after 1,101 ms (earlier run 1,095 ms);
+on a used vat (after the key flood of J-0333) 1,416 ms; the worker row's failure was "guest crank
+halted: MeterAbort" each time; the other exec vat and the workspace vat kept answering (`return x`
+gave 5; `41 + 1` gave 42); a second call to the halted vat broke with the retired text in 797-831 ms.
+{"metric":"exec.runaway","unit":"ms","value":1101.4,"error":"ocapn hub: the target session has been retired","failure":"guest crank halted: MeterAbort","otherExecVat":{"ok":true,"text":"5"},"workspace":{"ok":true,"value":"42"},"budget":{"value":1000},"commit":"a1465906b2-dirty","crankBudget":"50000000","loadAvg":[2.07,2.32,2.07]}
+Reading: M0 measured a runaway ending in 242-271 ms from a probe vat (J-0143); end to end, from
+the call to the caller seeing the break, it is about 1.1 s here, 1.4 s on a used vat. The crank
+itself is bounded by the budget; the rest is the supervisor quarantining the vat and the hub
+breaking its answers [inferred; not split]. 1.1 s is over the 1 s `loop.runaway` budget if that
+budget is read end to end. It costs one exec call's latency, not a session's.
+Decision: recorded for the PM; W1b.6's acceptance 4 should allow a few seconds for the terminated
+result. Splitting the 1.1 s (crank, quarantine, hub break) is a core measurement, not done here.
+
+### J-0333 2026-11-17 M1b exec - incompatible
+Evidence: same run. An exec call building one object with 60,000 fresh keys does **not** halt the
+exec vat. The engine throws a catchable RangeError "property key space exhausted" at the 56,583rd
+key (56,582 added). Model code that catches it gets on (`"caught at 56582: property key space
+exhausted"`, 9.3 s); model code that does not gets an ordinary `failed` result "property key space
+exhausted" (7.7 s), because the exec program turns every exception into the call's result. The vat
+then lives on with its name table exhausted: a later call with a record key it has never seen fails
+("Could not parse the code (property key space exhausted)...", reported as a parse failure because
+`Compartment.evaluate` is where the new name is interned), a call with known names still works, and
+every call is slow (928-951 ms against 84 ms). The session vat, the workspace and the other exec
+vat were unaffected.
+{"metric":"exec.keyFlood","unit":"ms","value":9259.4,"keys":60000,"flood":{"status":"ok","text":"\"caught at 56582: property key space exhausted\""},"afterFloodNewKey":{"ms":950.7,"status":"failed","text":"Could not parse the code (property key space exhausted). Check the code for syntax errors and send it again."},"afterFloodOld":{"ms":928.4,"status":"ok"},"halted":false,"commit":"a1465906b2-dirty","crankBudget":"50000000"}
+{"metric":"exec.keyFlood.uncaught","unit":"ms","value":7681.9,"flood":{"status":"failed","text":"property key space exhausted"},"halted":false,"commit":"a1465906b2-dirty","crankBudget":"50000000"}
+Reading: architecture fact 4 and J-0191 say exhaustion halts the vat; that holds only when the
+throw escapes the crank (core `63927edaba`). Inside the exec vat it never escapes: model code may
+catch it, and the program must catch it to answer. The milestone's too-big probe ("halts only the
+exec vat, which is retired") and contract 8.3 do not hold: the scope is not reset, the vat is
+degraded for life, and no retire happens because the session sees no retired break.
+Decision: not changed in W1b.3 (it needs a contract or core decision). Options for the PM: (a) core:
+make name-table exhaustion a halt (MeterAbort-like, uncatchable), as fact 4 assumes; (b) contract:
+the exec program recognises the exhaustion (the engine's message), answers the call with a new
+`texts.execExhausted`-style failure and the session retires the scope as for a retired break (W1b.4);
+(c) the exec program answers `busy` from then on, which the session already turns into a retire,
+with a misleading "still running" notice (not recommended). (a) also covers session vats that catch
+it in their own code.
+
+### J-0334 2026-11-17 M1b exec - awkward
+Evidence: building the exec program. (1) Fae's parse hints contain the dynamic-import and
+HTML-comment sequences literally; SES refuses a bundle that contains them anywhere (the first bundle
+had one at `import()`), so `render.js` assembles those texts from pieces. (2) The bundle is 92,917
+bytes of the 100,000 `execProgramBytes` (comments included), 75 % of it `interfaces.js` +
+`limits.js` for one guard and a few texts. (3) Every exec vat pays about 3 s to stage it (J-0331).
+(4) The vat check could not `keep` an `ExecScope` presence through the control client ("A value
+granted from the inventory must be a remotable capability", though `passStyleOf` in Node said
+`remotable`); objects created inside the workspace and set with `inventory.set` worked.
+Decision: (1) and (2) recorded; stripping comments in `bundle-guest.mjs` (J-0303's recommendation)
+would also shrink this bundle and its staging time. (4) is for whoever writes W1b.6's exec perf
+script: hold scopes in a workspace-made object, not through `keep`.
+
+### J-0335 2026-11-17 M1b exec - deviation
+Evidence: `m1b-interfaces.md` 8.1 and 8.3 leave three cases open, decided in the exec program:
+(1) arguments that parse to JSON but not to an object (`[1]`, `"x"`) fail with "exec arguments must
+be a JSON object" (Fae's schema check would refuse them with its own text); (2) a staged source
+without `content` fails with "exec arguments were staged but no content reader was passed", and a
+blob whose pages do not reach their end within 4 x the needed pages fails with "exec source could
+not be read..."; a page past `execSourceBytes` (a `StagedText` understating `bytes`) fails with
+`textOf.execSourceTooLarge`; (3) a `notice` is prefixed to failed results too, so a busy reset
+followed by a thrown error reads "Error: the previous exec call was still running; the scope was
+reset\n\n<message>". A failed message over `inlineBytes` is staged as the complete
+`boundToolOutput(textOf.errorResult(message))` (5.3). A remote capability's method names are cut
+to 256 before rendering. The exported constants are `NOT_AN_OBJECT_TEXT`, `NO_CONTENT_TEXT`,
+`SOURCE_PAGES_TEXT` in `guest/exec/main.js`.
+Decision: harness texts, not contract constants; the PM may move them into `texts` at sign-off.
+Unit test `test/unit/m1b-exec-vat.test.js` (17 tests, the bundle in a Node Compartment with the
+prelude alone) covers them.
