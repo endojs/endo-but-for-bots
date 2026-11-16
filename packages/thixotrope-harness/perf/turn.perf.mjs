@@ -16,8 +16,8 @@
  * Rows:
  * - `turn.start`: Composer stamp (the turn's `at`, adapter clock) to the
  *   scripted provider's `request` line; budget median 350 ms. Split at the
- *   provider's `round-start` line: `turn.start.open` (claim crank, the
- *   manager's open, crank B, startRound) and `turn.start.dispatch`
+ *   provider's `round-start` line: `turn.start.open` (the claim crank on
+ *   held ports and startRound) and `turn.start.dispatch`
  *   (dispatching(0) round trip). `turn.start.client` from the control
  *   client's call. `turn.start.deliveries`: frames into the session from the
  *   submit to the request, budget 3.
@@ -481,9 +481,11 @@ async function measure(template, provision) {
       callsPerRound: 2,
     },
   });
-  // A plain turn's deliver frames: enqueueOnce, open answer, dispatching,
-  // roundFinal, and the lease answer.
-  const lease = plainDeliver - 4;
+  // A plain turn's deliver frames with ports held (contract 6.1, J-9151):
+  // enqueueOnce, dispatching, roundFinal, and the lease answer (`fulfill`).
+  // The lease is what is left after the first three; an open answer (a
+  // turn that had to open its ports) would show here as a second one.
+  const lease = plainDeliver - 3;
   await single('turn.lease', lease, {
     budget: { deliveriesPerOp: 1 },
     extra: {
