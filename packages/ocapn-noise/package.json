@@ -20,6 +20,7 @@
   "module": "./index.js",
   "exports": {
     ".": "./index.js",
+    "./hints": "./src/hints.js",
     "./transport/mock": "./src/transports/mock.js",
     "./transport/tcp": {
       "node": "./src/transports/tcp.js",
