@@ -78,6 +78,7 @@ export const INTERRUPTED_CREATION_TEXT =
  * @property {{ host: any, backend: any } | undefined} services
  * @property {{ session: any, internal: any } | undefined} made `make`'s answer
  * @property {boolean} fromSpare the vat was a pool spare (M1b)
+ * @property {any} [spareHost] the unbound host facet the spare brought (M1b)
  * @property {boolean} finished
  * @property {boolean} abandoned rolled back (by its own failure or the start listener)
  */
@@ -165,6 +166,7 @@ export const makeFactoryKit = ({
     if (spare === undefined) return undefined;
     creation.facade = spare.facade;
     creation.fromSpare = true;
+    if (spare.host !== undefined) creation.spareHost = spare.host;
     return spare.value;
   };
 
@@ -228,6 +230,7 @@ export const makeFactoryKit = ({
         backend: resolved.backend,
         preset: resolved.preset,
         key: row.key,
+        host: creation.spareHost,
         makeExecVat:
           pool === undefined || settings === undefined
             ? undefined

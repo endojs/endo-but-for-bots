@@ -81,6 +81,8 @@ export const execStagingSources = harden({
  * @property {SpareKind} kind
  * @property {any} facade the worker facade (retire)
  * @property {any} value the `SpareMaker` or the `ExecScope`
+ * @property {any} host a session spare's unbound `SessionHostFacet`, minted
+ *   with the spare (undefined without `mintHost`, and for exec spares)
  * @property {string} digest the program it was made from
  * @property {string} label the worker's debug label
  */
@@ -139,6 +141,8 @@ harden(makePoolSettings);
  * @param {StagingSources} powers.sessionSources the session program's
  *   staging sources (`factory.js` `stagingSources`)
  * @param {number} [powers.lanes] creations in flight at most (default `poolLanes`)
+ * @param {() => Promise<any>} [powers.mintHost] mints an unbound
+ *   `SessionHostFacet` (`E(admin).forSession()`) for each session spare
  */
 export const makePool = ({
   vats,
@@ -146,6 +150,7 @@ export const makePool = ({
   settings,
   sessionSources,
   lanes = limits.poolLanes,
+  mintHost,
 }) => {
   /** @type {Record<SpareKind, Spare[]>} ready spares, oldest first */
   const spares = { session: [], exec: [] };
@@ -248,7 +253,14 @@ export const makePool = ({
       await E(facade).evaluate(sources.push, harden({ chunk }));
     }
     if (creation.abandoned) throw Error(ABANDONED_TEXT);
-    return E(facade).evaluate(sources.evaluate);
+    const value = await E(facade).evaluate(sources.evaluate);
+    // A session spare carries its unbound SessionHostFacet, minted now, so
+    // a take saves the forSession hop (J-0351).
+    const host =
+      kind === 'session' && mintHost !== undefined
+        ? await mintHost()
+        : undefined;
+    return { value, host };
   };
 
   /** @param {SpareKind} kind */
@@ -291,7 +303,7 @@ export const makePool = ({
       };
       inflight.add(creation);
       makeVat(kind, program, creation, label).then(
-        value => {
+        ({ value, host }) => {
           if (creation.abandoned) {
             retireFacade(creation.facade);
             return;
@@ -304,6 +316,7 @@ export const makePool = ({
               kind,
               facade: creation.facade,
               value,
+              host,
               digest: creation.digest,
               label,
             }),
@@ -368,11 +381,12 @@ export const makePool = ({
     const creation = { facade: undefined, abandoned: false };
     counts.cold += 1;
     try {
-      const value = await makeVat(kind, program, creation, label);
+      const { value, host } = await makeVat(kind, program, creation, label);
       return harden({
         kind,
         facade: creation.facade,
         value,
+        host,
         digest: program.digest,
         label,
       });

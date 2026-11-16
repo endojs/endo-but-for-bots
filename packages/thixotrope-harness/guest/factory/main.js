@@ -61,6 +61,7 @@ export const make = ({ host, vats }) => {
     programs: { session: programs, exec: execPrograms },
     settings,
     sessionSources: stagingSources,
+    mintHost: () => E(host).forSession(),
   });
   const kit = makeFactoryKit({
     admin: host,

@@ -25,6 +25,8 @@ const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
  * @property {any} backend this session's Backend
  * @property {any} preset this session's Preset
  * @property {string} key the session key
+ * @property {any} [host] an unbound `SessionHostFacet` minted with a pool
+ *   spare (M1b W1b.5)
  * @property {() => any} [makeExecVat] makes this session's `ExecHandle`
  *   (M1b W1b.5; absent without a pool)
  */
@@ -35,10 +37,14 @@ const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
  * @returns {Promise<Record<string, any>>}
  */
 
-/** @type {ServiceBuilder} */
-const backendAndHost = async ({ admin, backend }) => ({
+/**
+ * A spare session brings a host facet minted with it (M1b W1b.5: the take
+ * saves the `forSession` hop); otherwise one is minted now.
+ * @type {ServiceBuilder}
+ */
+const backendAndHost = async ({ admin, backend, host }) => ({
   backend,
-  host: await E(admin).forSession(),
+  host: host ?? (await E(admin).forSession()),
 });
 
 /**

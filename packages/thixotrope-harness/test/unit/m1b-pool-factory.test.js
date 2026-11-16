@@ -544,6 +544,49 @@ test('a lost spare (retired break from make) is retired and replaced once', asyn
   t.is((await E(kit.factory).listSessions()).rows.length, 1);
 });
 
+test('a session spare carries a host facet minted with it; the take does not call forSession', async t => {
+  const fake = makeFakeVats();
+  const fakeAdmin = makeFakeAdmin();
+  let minted = 0;
+  const countingAdmin = Far('AgentHostAdmin', {
+    forSession: () => {
+      minted += 1;
+      return E(fakeAdmin.admin).forSession();
+    },
+    /**
+     * @param {any} host
+     * @param {any} session
+     */
+    bindSession: (host, session) =>
+      E(fakeAdmin.admin).bindSession(host, session),
+  });
+  const session = makeProgramStore();
+  loadInto(session, SESSION_SOURCE);
+  const settings = makePoolSettings({ spareSessions: 1, spareExec: 0 });
+  const pool = makePool({
+    vats: fake.vats,
+    programs: { session, exec: makeProgramStore() },
+    settings,
+    sessionSources: stagingSources,
+    mintHost: () => E(countingAdmin).forSession(),
+  });
+  await pool.whenSettled();
+  t.is(minted, 1, 'minted with the spare');
+  const kit = makeFactoryKit({
+    admin: countingAdmin,
+    vats: fake.vats,
+    programs: session,
+    rows: makeRowTable(),
+    pool,
+    settings,
+  });
+  const made = await E(kit.factory).createSession(harden({ backend }));
+  t.is(fakeAdmin.bindings.length, 1);
+  t.is(fakeAdmin.bindings[0][1], made);
+  await pool.whenSettled();
+  t.is(minted, 2, 'only the refill minted another');
+});
+
 test('without a spare the creation is cold, as M1a', async t => {
   const { kit, pool, workers } = setupFactory({
     settings: { spareSessions: 0, spareExec: 0 },
