@@ -1835,3 +1835,137 @@ Reading: both suites are green under both math providers (counts include doc-tes
 ironhorse-vm, 3 for ironhorse-snapshot); the Thixotrope worker was not rebuilt because no engine
 source changed.
 Decision: none.
+
+### J-9020 2026-11-16 PM tooling - awkward
+Evidence: QC advisory (7) (J-0197): `scripts/run-lock.mjs` recorded the wrapper's pid, so a
+wrapper killed with SIGKILL freed the lock while its workload ran on; and its stale-lock break
+was guarded by a `.run.lock.break` file that a waiter could itself judge stale and delete, after
+which two breakers ran at once and one could rename away the other's fresh lock. Reproduced with
+the old module (`git show 3f2b90954e:.../run-lock.mjs`, a throwaway race script in the session
+scratchpad: 10 in-process takers x 6 rounds, every other holder "dying" with the lock held, 20
+trials): no overlap was observed, but 2 takers crashed with `ENOENT rename lock -> lock.stale-<pid>`,
+which only happens when two breakers act on one lock at once. The new module, same script: 0
+crashes, 0 overlaps. Fix (3e8753a903): the record is `{"version":2,"id","pid","startedAt",
+"label","at","workload":{"pid","startedAt"}}`; `id` is a random generation nonce; start times
+are `ps -o lstart`, so a reused pid is not the holder; the lock is held while the taker OR the
+workload is alive (the CLI records the workload on `spawn`); creation hard-links a fully written
+temporary file into place (no empty-lock window); a stale generation G is deleted only by the
+holder of token `.run.lock.break-G-k`, which re-reads that the lock is still G and still stale,
+and token k+1 is used only when token k's owner is dead. Re-entry (THIX_HARNESS_RUN_LOCK) now
+carries the generation id, not a pid. Tests (`test/run-lock.test.js`, 17, 3 runs green): 24
+separate processes racing, half dying with the lock held (0 overlaps by an O_EXCL marker,
+`brokeStale` seen); 10 in-process takers x 6 rounds over abandoned locks (max 1 inside); 8
+takers against a live holder (all time out, lock unchanged); SIGKILL of the CLI wrapper leaves
+the lock held until the workload ends; reused pid; dead and live break-token owners.
+Decision: done. Caveats: a process still running the old module (loaded before 3e8753a903)
+judges by pid only and uses the old break file; mixing ends when those processes end. Between
+the workload's spawn and its record (one `ps` call, about 10 ms) a SIGKILLed wrapper leaves the
+workload unrecorded. A caller that set THIX_HARNESS_RUN_LOCK to a pid by hand no longer
+re-enters.
+
+### J-9021 2026-11-16 PM tooling - awkward
+Evidence: QC advisory (8) and J-0133. (1) The supervisor child of `scripts/serve.mjs` was
+orphaned when the CLI was SIGKILLed. (2) `serveHarness()` served in-process, so adapters (forked
+by the core with no `env`, `pkg/src/platform/node/adapter-processes.js` `fork(...)`) inherited
+the test or perf process's whole environment. Fix (7cb87c5858, 03356c1d3b):
+`spawnSupervisorChild` is now the only way the CLI, `serveHarness` and the template helper
+start a supervisor. The child gets fd 3, a pipe whose other end only the parent holds and never
+writes; when the parent dies the kernel closes it, the child reads end-of-file, closes the
+supervisor cleanly and exits (forced after 60 s). A pipe rather than a periodic parent check:
+immediate, no timer, no pid-reuse question, and the same on macOS (no PR_SET_PDEATHSIG) as on
+Linux. `serveHarness` always runs the child (no in-process path remains), and the child refuses
+to serve when its environment holds anything beyond the allowlist and the two settings it sets.
+First integration run: the refusal fired on `__CF_USER_TEXT_ENCODING`, which macOS adds to a
+process started without it; it is tolerated by name (not a secret). Integration tests under the
+run lock (THIX_HARNESS_INTEGRATION=1, commit 03356c1d3b, crank budget 50 M, load 2.2-2.8):
+SIGKILL of the CLI: the supervisor child had exited 1.7 s later, no process named the state
+directory, the record read `clean` (`{"metric":"serve.parentGone","servedMs":19143,"stopMs":1745}`);
+`serveHarness` with `LEAKED_SECRET` in its `env`: absent from the child's `ps eww` environment,
+`THIXOTROPE_MAX_DELIVERY_ATTEMPTS=5` present. The template lifecycle test passed through the
+shared spawner (copy 130.9 ms, served 5,345 ms, total 5,711 ms). Unit lane: a stand-in child
+watching the pipe exits within 0.1 s of its wrapper's SIGKILL; the child's environment refusal.
+Decision: done. Behaviour changes for callers: `serveHarness(...).stopped` now settles at the
+child's exit, `close()` throws unless the record reads `clean`, and the handle adds `pid` and
+`kill()`; each serve costs one extra Node start (about 0.3 s with lockdown [inferred], within
+the noise of a 5-20 s serve). The "clean-close assumption" of advisory (8) was re-read: the record
+turns `clean` only after `supervisor.close()` resolves; the core's `stopped` settles only from
+`close()` (its `finally`), and a close that threw rejects the memoized promise the child awaits
+again, so the record stays `running` and the child exits 1. A shutdown error the core itself
+swallows cannot be seen from here; that stays open.
+
+### J-9022 2026-11-16 PM tooling - good fit
+Evidence: J-0132. `serveThixotrope` and `connectLocalControl` are now exported
+(042171c094): `@endo/thixotrope/supervisor.js`, `@endo/thixotrope/local-control.js` (thunk
+files like `node-powers.js`) and the main entry. Their module graph (52 modules) imports no
+`node:` builtin and only `@endo/*` and `@noble/hashes` packages; both take every power from the
+caller, so nothing private or ambient is dragged in. `scripts/serve.mjs`,
+`test/template/index.js`, `test/spikes/_spike.js` and `test/spikes/_crash.js` import the
+exports, and their four `import/no-relative-packages` disables are gone; `pkg` `tsc` clean.
+Decision: done. Still relative into `pkg/src`, and not covered by these exports:
+`core/evaluate-source.js` from `test/limits.test.js`, `test/spikes/s6.test.js` and
+`perf/install.perf.mjs` (core internals measured or compared on purpose).
+
+### J-9023 2026-11-16 PM admin - good fit
+Evidence: PR 1667 (3f2b90954e) reads THIXOTROPE_MAX_DELIVERY_ATTEMPTS (2..100, default 5) in
+`pkg/src/control/supervisor.js` `readMaxDeliveryAttempts`. `config/defaults.js` now has
+`limits.maxDeliveryAttempts: 5` (the upstream default); `scripts/serve.mjs` allowlists the
+variable, takes `--max-delivery-attempts`, else the caller's variable, else the default, validates
+with the same pattern before any process starts, and always passes it to the child (an empty
+variable counts as unset, as for the crank budget). Test: `test/serve.test.js`
+"THIXOTROPE_MAX_DELIVERY_ATTEMPTS: allowlisted, defaulted from config, validated like thix serve".
+Decision: done.
+
+### J-9024 2026-11-16 PM tooling - perf
+Evidence: J-0186's open question: `perf/_harness.mjs` `provision({ template })` copied with plain
+`fs.cp`. It now starts state through `test/template/index.js` (817733031d): `copyState` (clone,
+sockets skipped, root 0700), `template: true` or PERF_TEMPLATE=1 for the cached base template
+(`ensureTemplate`), the helper's `connect`, the same supervisor child as integration tests, and
+`killStrays` on close; each `provision()` emits `<feature>.provision`. `frames.perf.mjs` short
+mode (FRAMES_N=20 LOOP_N=2), under the run lock (re-entered through the CLI's generation id),
+commit 03356c1d3b, crank budget 50 M, worker c2f65dbe..., load 1.6-2.5, both exit 0. From the
+template (built by the template test just before):
+```
+{"metric":"frames.provision","unit":"ms","value":4671.233,"start":{"template":"84716bde2b","templateBuilt":false,"copyMs":65.035,"servedMs":4422.813,"totalMs":4671.233},"pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.16,2.77,2.91]}
+{"metric":"frames.pingFloor","unit":"ms","n":20,"median":55.994,"p95":57.461,"p99":57.461,"min":53.271,"max":57.461,"deliveries":{"count":20,"perOp":1},"engine":{"delivery":{"count":20,"ms":830.7},"snapshot":{"count":0,"ms":0},"wake":{"count":0,"ms":0}},"hubJsonBytes":47867,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.15,2.76,2.91]}
+{"metric":"frames.inbound.first","unit":"ms","value":341.396,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","ok":true,"floorMedian":55.994,"pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.15,2.76,2.91]}
+{"metric":"frames.inbound","unit":"ms","n":20,"median":330.213,"p95":350.44,"p99":350.44,"min":325.969,"max":350.44,"deliveries":{"count":25,"perOp":1.25},"engine":{"delivery":{"count":25,"ms":6184.8},"snapshot":{"count":0,"ms":0},"wake":{"count":0,"ms":0}},"hubJsonBytes":35978,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","floorMedian":55.994,"utf8Bytes":24576,"budget":{"median":355.994},"pass":true,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.06,2.73,2.9]}
+{"metric":"frames.outbound","unit":"ms","n":20,"median":77.266,"p95":93.087,"p99":93.087,"min":74.918,"max":93.087,"deliveries":{"count":23,"perOp":1.15},"engine":{"delivery":{"count":23,"ms":1007.3},"snapshot":{"count":0,"ms":0},"wake":{"count":0,"ms":0}},"hubJsonBytes":36640,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","floorMedian":55.994,"utf8Bytes":24576,"budget":{"median":355.994},"pass":true,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.97,2.7,2.88]}
+{"metric":"frames.halt","unit":"ms","value":612.13,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","utf8Bytes":49152,"ok":true,"pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.89,2.67,2.87]}
+{"metric":"frames.halt.usedVat","unit":"ms","value":623.525,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","historyProgramChars":249998,"historyNames":54378,"historyFill":"property key space exhausted","historyMs":10579.4,"utf8Bytes":49152,"ok":true,"pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.69,2.59,2.84]}
+{"metric":"vat.evaluateProgram","unit":"ms","value":2205.604,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","sourceChars":149978,"stageMs":2087.8,"evalCrankMs":117.8,"ok":true,"budget":{"value":2000},"pass":true,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.64,2.56,2.83]}
+{"metric":"vat.evaluateProgram.oneMessage","unit":"ms","value":739.818,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","sourceChars":149978,"ok":false,"error":"ocapn hub: the target session has been retired","pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.91,2.6,2.84]}
+{"metric":"loop.runaway","unit":"ms","n":2,"median":235.611,"p95":235.611,"p99":235.611,"min":228.795,"max":235.611,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","runs":2,"budget":{"median":1000},"pass":true,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.85,2.57,2.82]}
+{"metric":"frames.done","crankBudget":"50000000","frameBytes":24576}
+```
+Fresh state:
+```
+{"metric":"frames.provision","unit":"ms","value":22184.546,"start":{"servedMs":15852.029,"createWorkspaceMs":6155.48,"totalMs":22184.546},"pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.97,2.53,2.81]}
+{"metric":"frames.pingFloor","unit":"ms","n":20,"median":55.967,"p95":59.961,"p99":59.961,"min":54.038,"max":59.961,"deliveries":{"count":20,"perOp":1},"engine":{"delivery":{"count":20,"ms":839.4},"snapshot":{"count":0,"ms":0},"wake":{"count":0,"ms":0}},"hubJsonBytes":39010,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.21,2.58,2.82]}
+{"metric":"frames.inbound.first","unit":"ms","value":348.064,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","ok":true,"floorMedian":55.967,"pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.21,2.58,2.82]}
+{"metric":"frames.inbound","unit":"ms","n":20,"median":346.896,"p95":361.691,"p99":361.691,"min":336.31,"max":361.691,"deliveries":{"count":25,"perOp":1.25},"engine":{"delivery":{"count":25,"ms":6539.7},"snapshot":{"count":0,"ms":0},"wake":{"count":0,"ms":0}},"hubJsonBytes":28731,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","floorMedian":55.967,"utf8Bytes":24576,"budget":{"median":355.967},"pass":true,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.26,2.57,2.81]}
+{"metric":"frames.outbound","unit":"ms","n":20,"median":82.881,"p95":188.052,"p99":188.052,"min":75.324,"max":188.052,"deliveries":{"count":28,"perOp":1.4},"engine":{"delivery":{"count":28,"ms":1194.4},"snapshot":{"count":0,"ms":0},"wake":{"count":0,"ms":0}},"hubJsonBytes":24440,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","floorMedian":55.967,"utf8Bytes":24576,"budget":{"median":355.967},"pass":true,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.26,2.57,2.81]}
+{"metric":"frames.halt","unit":"ms","value":631.741,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","utf8Bytes":49152,"ok":true,"pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.31,2.58,2.82]}
+{"metric":"frames.halt.usedVat","unit":"ms","value":663.076,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","historyProgramChars":249998,"historyNames":54378,"historyFill":"property key space exhausted","historyMs":10274.5,"utf8Bytes":49152,"ok":true,"pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.4,2.58,2.81]}
+{"metric":"vat.evaluateProgram","unit":"ms","value":2305.191,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","sourceChars":149978,"stageMs":2180.5,"evalCrankMs":124.7,"ok":true,"budget":{"value":2000},"pass":true,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.53,2.61,2.82]}
+{"metric":"vat.evaluateProgram.oneMessage","unit":"ms","value":731.182,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","sourceChars":149978,"ok":false,"error":"ocapn hub: the target session has been retired","pass":null,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.36,2.57,2.8]}
+{"metric":"loop.runaway","unit":"ms","n":2,"median":242.674,"p95":242.674,"p99":242.674,"min":228.852,"max":242.674,"frameBytes":24576,"crankOutBytes":196608,"configuredCrankBudget":"50000000","runs":2,"budget":{"median":1000},"pass":true,"commit":"03356c1d3b","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.46,2.58,2.81]}
+{"metric":"frames.done","crankBudget":"50000000","frameBytes":24576}
+```
+Reading: both start paths work and every budgeted row passes; a template start took 4.7 s
+against 22.2 s fresh (15.9 s serve + 6.2 s workspace). Against J-0193's 200-sample run, inbound
+330-347 ms vs 312 ms, outbound 77-83 vs 69, evaluateProgram 2,206-2,305 vs 2,320, runaway
+236-243 vs 242: n=20 here, so these are not a regression signal. `vat.evaluateProgram.oneMessage`
+records "the target session has been retired" as its error text (the one-message halt), as before.
+Decision: perf checks may start from the template (PERF_TEMPLATE=1) to save about 17 s each; the
+default stays fresh state so existing perf rows stay comparable.
+
+### J-9025 2026-11-16 PM tooling - awkward
+Evidence: the M0 advisory items (J-0197) in this unit's files. Closed: (7) J-9020; (8) J-9021,
+including the clean-close reading; J-0132 by J-9022; J-0186's perf/template question by J-9024.
+Still open in these files: none of (3, 18, 10, 16, 11, 4) live here. Left as found:
+`perf/install.perf.mjs` and two tests import `core/evaluate-source.js` by relative path (J-9022);
+`test/spikes/_crash.js` still spawns `serve.mjs --supervisor-child` itself, without the parent
+pipe (it is not this unit's file; its supervisor would outlive a killed test process). `README.md`
+was not updated for the run-lock record, `--max-delivery-attempts` or PERF_TEMPLATE (not in this
+unit's paths); the module headers describe them.
+Decision: listed for the PM.
