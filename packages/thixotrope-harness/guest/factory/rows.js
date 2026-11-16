@@ -1,0 +1,278 @@
+// @ts-check
+/**
+ * The factory's session index (M1a W1a.6; architecture 3.1, D-3, D-17;
+ * `designs/m1a-interfaces.md` sections 3.4 and 9).
+ *
+ * One row per session, in creation order, kept in the factory vat's heap so
+ * a session list never wakes a session vat. Rows are plain records with a
+ * fixed key vocabulary (rule 12.10); the collections are a `Map` keyed by
+ * the session key and an array in creation order. A row is listed only once
+ * its session exists (`state` is not `creating`): nothing half-made is
+ * listed (R4-6).
+ *
+ * Each session holds its own `RowReporter`, which can change only that
+ * row. A row becomes `lost` when a factory call into its session breaks
+ * with the retired text (a session vat is a guest vat: the text means it
+ * halted or was given up, never a restart); a lost row stays listed
+ * (transcripts are never deleted by the harness).
+ *
+ * Guest rules: prelude globals only; no clock; no data-dependent keys.
+ */
+import { interfaces, shapes, texts } from '../lib/interfaces.js';
+import { limits } from '../lib/limits.js';
+import { messageBytes } from '../lib/bounded.js';
+
+/** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+const { makeExo } = /** @type {GuestGlobals} */ (globalThis);
+/** @type {GuestGlobals['mustMatch']} */
+const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
+
+/**
+ * Bytes kept free in a session page for the page record itself and the
+ * message envelope (`rows`, `rev`, `next`, the answer's framing).
+ */
+const PAGE_OVERHEAD_BYTES = 1024;
+
+/**
+ * @typedef {object} Row
+ * @property {number} ordinal creation order
+ * @property {string} key `s<n>`
+ * @property {string} title
+ * @property {'creating' | 'ready' | 'error' | 'lost'} state
+ * @property {'passive' | 'working' | 'error'} activity
+ * @property {string} backendTitle
+ * @property {string} modelId
+ * @property {number} messageCount
+ * @property {number} queuedCount
+ * @property {boolean} userInitiated
+ * @property {any} session the Session, once made
+ * @property {any} internal the SessionInternal, once made
+ * @property {boolean} dropped true once the row was removed (a rolled-back creation)
+ */
+
+/**
+ * @typedef {object} RowSeed
+ * @property {string} title
+ * @property {string} backendTitle
+ * @property {string} modelId
+ * @property {boolean} userInitiated
+ */
+
+/**
+ * The row table and its row reporters.
+ */
+export const makeRowTable = () => {
+  /** @type {Map<string, Row>} */
+  const byKey = new Map();
+  /** @type {Row[]} rows in creation order */
+  const order = [];
+  let counter = 0;
+  let rev = 0;
+
+  const bump = () => {
+    rev += 1;
+  };
+
+  /**
+   * A new row in state `creating`, with the next key.
+   * @param {RowSeed} seed
+   * @returns {Row}
+   */
+  const add = ({ title, backendTitle, modelId, userInitiated }) => {
+    counter += 1;
+    /** @type {Row} */
+    const row = {
+      ordinal: counter,
+      key: `s${counter}`,
+      title,
+      state: 'creating',
+      activity: 'passive',
+      backendTitle,
+      modelId,
+      messageCount: 0,
+      queuedCount: 0,
+      userInitiated,
+      session: undefined,
+      internal: undefined,
+      dropped: false,
+    };
+    byKey.set(row.key, row);
+    order.push(row);
+    bump();
+    return row;
+  };
+
+  /**
+   * Remove a row (a creation rolled back). Its key is never reused.
+   * @param {Row} row
+   */
+  const drop = row => {
+    if (row.dropped) return;
+    row.dropped = true;
+    byKey.delete(row.key);
+    const at = order.indexOf(row);
+    if (at >= 0) order.splice(at, 1);
+    bump();
+  };
+
+  /**
+   * The session was made: the row is ready and listed.
+   * @param {Row} row
+   * @param {{ session: any, internal: any }} made
+   */
+  const ready = (row, { session, internal }) => {
+    if (row.dropped) return;
+    row.session = session;
+    row.internal = internal;
+    row.state = 'ready';
+    bump();
+  };
+
+  /**
+   * Apply a row patch (from the session's RowReporter or a rowSnapshot).
+   * @param {Row} row
+   * @param {{ title?: string, activity?: Row['activity'], messageCount?: number, queuedCount?: number }} patch
+   */
+  const apply = (row, patch) => {
+    if (row.dropped) return;
+    let changed = false;
+    if (patch.title !== undefined && patch.title !== row.title) {
+      row.title = patch.title;
+      changed = true;
+    }
+    if (patch.activity !== undefined && patch.activity !== row.activity) {
+      row.activity = patch.activity;
+      changed = true;
+    }
+    if (
+      patch.messageCount !== undefined &&
+      patch.messageCount !== row.messageCount
+    ) {
+      row.messageCount = patch.messageCount;
+      changed = true;
+    }
+    if (
+      patch.queuedCount !== undefined &&
+      patch.queuedCount !== row.queuedCount
+    ) {
+      row.queuedCount = patch.queuedCount;
+      changed = true;
+    }
+    if (changed) bump();
+  };
+
+  /**
+   * A call into the row's session broke with the retired text (D-17).
+   * @param {Row} row
+   */
+  const markLost = row => {
+    if (row.dropped || row.state === 'lost') return;
+    row.state = 'lost';
+    bump();
+  };
+
+  /**
+   * The RowReporter a session holds: it can change only its own row.
+   * `changed` is sendOnly from the session; a patch for a dropped row is
+   * ignored.
+   * @param {Row} row
+   */
+  const makeReporter = row =>
+    makeExo('RowReporter', interfaces.RowReporter, {
+      /** @param {any} patch */
+      changed: patch => {
+        apply(row, patch);
+        return undefined;
+      },
+    });
+
+  /**
+   * The listed form of a row (`shapes.SessionRow`).
+   * @param {Row} row
+   */
+  const listed = row =>
+    harden({
+      session: row.session,
+      key: row.key,
+      title: row.title,
+      state: row.state,
+      activity: row.activity,
+      backendTitle: row.backendTitle,
+      modelId: row.modelId,
+      messageCount: row.messageCount,
+      queuedCount: row.queuedCount,
+    });
+
+  /** @param {Row} row */
+  const isListed = row => row.state !== 'creating' && row.userInitiated;
+
+  /**
+   * One page of listed rows in creation order: at most `limit` rows (at
+   * most `sessionPageRows`) and at most `frameBytes` in all, so the page
+   * fits one message wherever it goes (architecture section 9). `after` is
+   * the last key of the previous page; `next` is set when more rows exist.
+   * @param {{ after?: string, limit?: number }} [options]
+   */
+  const page = ({ after, limit = limits.sessionPageRows } = {}) => {
+    const most = Math.max(
+      1,
+      Math.min(Math.floor(limit), limits.sessionPageRows),
+    );
+    let start = 0;
+    if (after !== undefined) {
+      const from = byKey.get(after);
+      if (from === undefined) throw Error(texts.unknownSession);
+      start = order.indexOf(from) + 1;
+    }
+    /** @type {ReturnType<typeof listed>[]} */
+    const rows = [];
+    let bytes = PAGE_OVERHEAD_BYTES;
+    let more = false;
+    for (let i = start; i < order.length; i += 1) {
+      const row = order[i];
+      if (isListed(row)) {
+        if (rows.length >= most) {
+          more = true;
+          break;
+        }
+        const entry = listed(row);
+        const size = messageBytes(entry);
+        if (rows.length > 0 && bytes + size > limits.frameBytes) {
+          more = true;
+          break;
+        }
+        bytes += size;
+        rows.push(entry);
+      }
+    }
+    /** @type {{ rows: ReturnType<typeof listed>[], rev: number, next?: string }} */
+    const result =
+      more && rows.length > 0
+        ? harden({ rows, rev, next: rows[rows.length - 1].key })
+        : harden({ rows, rev });
+    mustMatch(result, shapes.SessionPage);
+    return result;
+  };
+
+  return harden({
+    add,
+    drop,
+    ready,
+    apply,
+    markLost,
+    makeReporter,
+    page,
+    /** @param {string} key */
+    get: key => byKey.get(key),
+    /**
+     * Rows in creation order: a fresh array, not hardened (hardening it
+     * would freeze the mutable rows). Vat-internal only.
+     */
+    all: () => [...order],
+    size: () => order.length,
+    rev: () => rev,
+  });
+};
+harden(makeRowTable);
+
+/** @typedef {ReturnType<typeof makeRowTable>} RowTable */
