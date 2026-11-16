@@ -1969,3 +1969,302 @@ pipe (it is not this unit's file; its supervisor would outlive a killed test pro
 was not updated for the run-lock record, `--max-delivery-attempts` or PERF_TEMPLATE (not in this
 unit's paths); the module headers describe them.
 Decision: listed for the PM.
+
+### J-9040 2026-11-16 PM engine - good fit
+Evidence: the merge of upstream PR 1667 (`3f2b90954e`) against M0's `63927edaba` (halt a worker whose
+OCapN session to the host ended). They meet at one point and agree there. `63927edaba` makes the crank
+whose session ended throw in the worker (`pkg/src/core/worker-peer-xs.js`, `thixotropeTakeOutbound`
+wrapper); the worker answers that, like every incomplete crank, with `{"op":"fatal"}`
+(`rust/thixotrope-ironhorse-worker/src/main.rs:211-221, 514-518`), and the engine turns `fatal` into
+`WorkerHaltError` (`pkg/src/ironhorse/ironhorse-engine.js:321-322`). The PR's classification only adds
+`WorkerCrashError` for a child that ends by a signal without the host asking (`ironhorse-engine.js:236-243`)
+and for a missed request deadline (`ironhorse-engine.js:256-259`); a status exit and a host-terminated
+incarnation stay plain `Error`. The transport still records a halt at once, retires the session and
+owes no retry (`pkg/src/core/durable-worker-transport.js:427-436`); only `WorkerCrashError` with frames
+past the snapshot reaches `noteCrash` (`:437-445`, `:371-405`). So:
+- key-table exhaustion (the session-ended throw), `HeapExhausted` and `MeterAbort` are halts:
+  quarantined on the first occurrence, not counted, not retried. The lane's `key-space.js` logged
+  "guest crank halted: Throw { ... the OCapN session to the host ended after: ... SyrupRecordCodec ... }"
+  and passed; `crash.live.halt` (J-9049) recorded `"guest crank halted: MeterAbort"` with no retry.
+- after a `fatal` reply the engine SIGKILLs the child (`fail`, `:205-210`), whose exit is then
+  classified as a crash, but the pending request was already rejected with the halt, so the crash is
+  never seen by the transport (PR test "a halt is a halt, whatever the exit that follows it").
+- a Rust panic in the worker ends with `process::exit(1)` (`main.rs:536-548`): a status exit, not a
+  crash, not counted; the frame is retried by the next frame as before the PR.
+- a 60 s request-deadline (watchdog) miss is now a crash (`ironhorse-engine.js:258`): counted, and
+  retried by the transport after 1, 2, 4 and 8 s (`durable-worker-transport.js:23-24, 311-341`), given
+  up at the fifth. Waits alone are 15 s; each attempt costs the deadline again, so a vat whose replay
+  misses the watchdog every time is given up after at least 5 x 60 + 15 = 315 s (more if a later attempt
+  gets further, J-9047).
+Decision: no semantic conflict; no change to either commit. Two pre-existing gaps are noted for the
+PM: the worker names a host allocation failure "host failure, crank not committed ... restore in a
+fresh worker" (`main.rs:211-221`), but it is sent as `fatal` and recorded as a halt; and an allocation
+abort (SIGABRT) would instead be counted as a crash.
+
+### J-9041 2026-11-16 PM persistence - good fit
+Evidence: who counts a crash, and whether our own kills are counted. The count lives in the
+supervisor process (`durable-worker-transport.js:160` reads `meta.crash`, `persistStall` `:291-305`
+writes it), so only a death the supervisor observes before it dies itself can be counted. The harness
+SIGKILLs the supervisor child's pid only, never its group (`test/template/index.js:203`,
+`scripts/serve.mjs:534-537`, `test/spikes/_crash.js:171`); the workers then lose their stdin and exit,
+unseen. A group SIGKILL ends the supervisor in the same instant. In this unit's re-runs, 24 S9 kills, 1
+S2 kill, 2 S6 and 1 S7 SIGKILL restarts and 7 `crash.perf` SIGKILLs left no vat given up and every vat
+answering afterwards (J-9043..J-9046). For a clean stop, `close()` calls `daemon.standDown()` before
+anything is awaited (`pkg/src/control/supervisor.js:1064-1067`); from then on no crash is counted, and a
+death seen first is forgiven when its retry is cancelled (`durable-worker-transport.js:601-612`). The
+harness's SIGTERM path goes through that `close()` (`scripts/serve.mjs` `runChild` `stop`).
+Decision: our SIGKILLs are not counted against a vat after restart; nothing to change in the spike or
+template kill helpers. A restart still replays an unsnapshotted suffix at startup, which is a fresh
+attempt and counted only if that replay itself crashes.
+
+### J-9042 2026-11-16 PM tooling - perf
+Evidence: tests after the merge, commit `8edc8a4ecf` (clean tree), worker sha256 `c2f65dbe...`
+(rebuild with `cargo build --locked --release` was a no-op; `build:ironhorse-bundles` produced
+byte-identical `boot.js` and `worker-peer.js`, so the PR changed nothing inside the worker).
+- Node, under the run lock: the PR's `durable-worker-crash-loop`, `daemon-journal-recovery`,
+  `ironhorse-engine-crash-classification` and `supervisor-crash-bound` plus `evaluate-source`,
+  `worker-peer`, `worker-peer-xs`, `daemon`, `daemon-shutdown`: 69 passed, 1 skipped (`worker-peer-xs`
+  "survives snapshot restore": needs the XS worker, not built) in each of the three ses-ava configs
+  (lockdown, unsafe, endo). `packages/ocapn` `test/syrup/codec.test.js` 6 passed x 3 configs;
+  `packages/immutable-arraybuffer` `test/lib-typedarray-statics.test.js` 2 passed.
+- Ironhorse lane (`corepack yarn test:ironhorse` in `pkg/`, under the run lock): 65 passed, 0 failed,
+  0 skipped, exit 0; 16 min 15 s wall (19:39:56-19:56:11 local), load average 2.4-2.8 at the start, 2.0
+  near the end.
+Decision: the merged tree passes everything M0 ran plus the PR's tests; no engine rebuild was needed.
+
+### J-9043 2026-11-16 PM native - perf
+Evidence: S2 and S7 re-run under the run lock at commit `9655151542` (worker `c2f65dbe...`, crank budget
+50 M, load average 2.6-4.0), against J-0160..J-0162:
+```
+{"spike":"S2","crankBudget":"50000000","metric":"s2.serve.fresh","servedMs":16025,"connectedMs":23823.1,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.63,3.68,3.32],"at":"2026-11-16T11:13:12.353Z"}
+{"spike":"S2","crankBudget":"50000000","metric":"s2.rtt.vatAdapterVat.hostTimed","unit":"ms","floor":{"n":30,"median":60,"p95":66.3,"p99":66.5,"max":66.5,"min":56.3},"chainOf":10,"chain":{"n":20,"median":762.1,"p95":952,"p99":952,"max":952,"min":641.8},"perRoundTripMedian":70.2,"note":"host->vat call doing CHAIN sequential E(endpoint).echo; per round trip = (chain - ping floor)/CHAIN","commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.69,3.61,3.3],"at":"2026-11-16T11:13:38.966Z"}
+{"spike":"S2","crankBudget":"50000000","metric":"s2.rtt.adapterVatAdapter.adapterTimed","unit":"ms","max":82.773,"median":74.696,"min":66.857,"n":200,"p95":79.242,"p99":82.495,"note":"adapter E(vatObject).ping() timed in the adapter: one vat delivery + answer","commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.77,3.58,3.3],"at":"2026-11-16T11:13:54.003Z"}
+{"spike":"S2","crankBudget":"50000000","metric":"s2.rtt.hostAdapterHost","unit":"ms","n":30,"median":20.3,"p95":21.9,"p99":22,"max":22,"min":18.8,"note":"control client -> adapter endpoint echo (no vat)","commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.77,3.58,3.3],"at":"2026-11-16T11:13:54.615Z"}
+{"spike":"S2","crankBudget":"50000000","metric":"s2.b.pendingBreaksAfterSigkill","supervisorPid":4339,"killMs":3.9,"orphanAdapterProcessesAfterKill":0,"restart":{"servedMs":20569.5,"connectedMs":20704.3},"pendingBefore":{"state":"waiting"},"pendingAfter":{"message":"ocapn hub: the target session has been retired","state":"broken"},"vatJournalBeforeKill":493,"vatJournalAtServe":630,"deliveredDuringStartup":true,"vatJournalAfterWait":630,"journalGrewWithoutCallerMs":null,"ok":true,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.86,3.72,3.36],"at":"2026-11-16T11:14:49.324Z"}
+{"spike":"S2","crankBudget":"50000000","metric":"s2.c.restoreReattaches","inc1":"4412-217bd48d","inc2":"4506-0df14e55","attachInfoBeforeReopen":{"attaches":2,"incarnation":"4506-0df14e55","staleOpens":0},"reattachObservedMs":62.1,"staleEndpointCall":{"ok":false,"ms":89.4,"error":"ocapn hub: the target session has been retired"},"reopenMs":278.4,"callAfterReopen":{"ok":true,"ms":153.9,"value":2},"attachInfoAfter":{"attaches":2,"incarnation":"4506-0df14e55","staleOpens":0},"ok":true,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.79,3.7,3.36],"at":"2026-11-16T11:14:50.419Z"}
+```
+```
+{"spike":"S7","crankBudget":"50000000","metric":"s7.restart.clean","servedMs":5095.7,"connectedMs":5223.6,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.81,3.78,3.43],"at":"2026-11-16T11:16:37.835Z"}
+{"spike":"S7","crankBudget":"50000000","metric":"s7.restart.sigkill","servedMs":5353.8,"connectedMs":5499.6,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.59,3.73,3.41],"at":"2026-11-16T11:16:44.102Z"}
+{"spike":"S7","crankBudget":"50000000","metric":"s7.listenerLog","log":[["bound","sub1","4836-cfcc853a"],["hear","4836-cfcc853a","fresh"],["bound","sub1","4878-e9a74f5e"],["hear","4878-e9a74f5e","afterCleanRestart"],["bound","sub1","4909-0eff88f5"],["hear","4909-0eff88f5","afterSigkill"]],"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.59,3.73,3.41],"at":"2026-11-16T11:16:44.965Z"}
+```
+S2: all four parts pass as in M0. The pending adapter call broke after SIGKILL with exactly "ocapn hub:
+the target session has been retired"; the vat journal went 493 -> 630 by serving (M0 493 -> 633) and did
+not grow afterwards, so the break is still delivered during startup. Restart after SIGKILL served in
+20.6 s (M0 23.3 s); fresh serve 16.0 s (24.7 s); vat -> adapter -> vat 70 ms per round trip (75-76);
+adapter-timed 74.7 ms median (77-80); control -> adapter 20.3 ms (25.5); re-attach observed 62 ms after
+serving (68), reopen 278 ms (307). S7: listener restored to every new adapter after a clean and a
+SIGKILL restart; restart 5.10 s clean and 5.35 s SIGKILL (M0 6.02 and 6.13).
+Decision: the attach pattern and the retired break are unchanged by the PR; every time is equal or
+lower [inferred: the lower times come from d0fd6b1138's inbound fix and a quieter machine, not from
+the PR]. No spike change.
+
+### J-9044 2026-11-16 PM persistence - perf
+Evidence: S9 re-run (24 SIGKILLs of the supervisor), same commit, worker and budget, load average
+3.6-6.3 (another workload started during the run):
+```
+{"spike":"S9","crankBudget":"50000000","metric":"s9.distribution","iterations":24,"distribution":{"record missing (ran 0)":2,"recorded, ran 0":6,"recorded, ran once":16},"outcomesSeenByVat":{"none":2,"retired break":11,"ok":11},"byMode":[["0",1.5,false,0,null],["10",12.2,false,0,null],["20",22.3,true,0,"retired"],["30",32.2,true,0,"retired"],["40",42.2,true,0,"retired"],["50",52.2,true,0,"retired"],["60",61.4,true,0,"retired"],["70",72.2,true,0,"retired"],["80",82.1,true,1,"retired"],["90",90.8,true,1,"ok"],["100",102.2,true,1,"ok"],["120",121.2,true,1,"ok"],["140",141.2,true,1,"ok"],["160",161.2,true,1,"ok"],["180",181.2,true,1,"ok"],["200",201.2,true,1,"ok"],["250",251.2,true,1,"ok"],["300",301.2,true,1,"ok"],["400",401.2,true,1,"ok"],["600",601.2,true,1,"ok"],["effect",74.3,true,1,"retired"],["effect",69.8,true,1,"retired"],["effect",72.7,true,1,"retired"],["effect",69.4,true,1,"retired"]],"restartServedMs":{"n":24,"median":14610.5,"p95":17211,"p99":18245.2,"max":18245.2,"min":11023.6},"calibrationSendToEffectMedian":77,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[5.27,6.3,4.98],"at":"2026-11-16T11:24:33.859Z"}
+```
+No effect ran twice and no effect ran without its record, as in J-0165. The distribution moved: recorded
+and ran once 16 (M0 15), recorded and ran 0 times 6 (8), record missing 2 (1); the kills at 0 and 10 ms
+lost the host's message (M0 only at 0 ms), and the kill at 80 ms ran the effect (M0 from 90 ms). The
+send-to-effect calibration is faster (77 ms median against 117), which shifts each boundary about 10
+ms earlier. Restart to serving after each kill: median 14.6 s, 11.0 -> 18.2 s over the 24 kills (M0
+median 18.7 s, 12.6 -> 26.1 s); it still rises by about 0.3 s per kill as the unsnapshotted suffix grows
+(J-0166), from a lower start.
+Decision: intent before effect holds after the merge; the distribution shift is timing, not
+semantics. J-0166's growth persists and is not affected by the PR.
+
+### J-9045 2026-11-16 PM engine - perf
+Evidence: S6 (spare pool), S8 (state template) and the template lifecycle test re-run, same commit,
+worker and budget, load average 2.6-4.9:
+```
+{"spike":"S6","crankBudget":"50000000","metric":"s6.createMany","upTo":10,"parallel":4,"wallMs":11010.4,"each":{"n":4,"median":10926.1,"p95":11010.3,"p99":11010.3,"max":11010.3,"min":10707},"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.94,4.81,4.58],"at":"2026-11-16T11:27:13.462Z"}
+{"spike":"S6","crankBudget":"50000000","metric":"s6.disk","sleepingSpares":10,"stateKiB":295904,"perSpareKiB":17284,"workers":0,"rssKiB":0,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.79,4.75,4.56],"at":"2026-11-16T11:27:17.591Z"}
+{"spike":"S6","crankBudget":"50000000","metric":"s6.createMany","upTo":50,"parallel":4,"wallMs":108723.8,"each":{"n":40,"median":10531.9,"p95":13780.2,"p99":14100.5,"max":14100.5,"min":9575.5},"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.61,4.26,4.38],"at":"2026-11-16T11:29:35.805Z"}
+{"spike":"S6","crankBudget":"50000000","metric":"s6.disk","sleepingSpares":50,"stateKiB":985940,"perSpareKiB":17258,"workers":0,"rssKiB":0,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.48,4.22,4.37],"at":"2026-11-16T11:29:40.144Z"}
+{"spike":"S6","crankBudget":"50000000","metric":"s6.restart.summary","rows":[{"how":"clean","sleeping":0,"servedMs":4416.5,"connectedMs":4558,"woken":0,"awake":4},{"how":"clean","sleeping":0,"servedMs":5315.9,"connectedMs":5865.6,"woken":0,"awake":2},{"how":"clean","sleeping":10,"servedMs":5185.7,"connectedMs":5320.2,"woken":0,"awake":4},{"how":"clean","sleeping":10,"servedMs":4636,"connectedMs":4772.8,"woken":0,"awake":4},{"how":"sigkill","sleeping":10,"servedMs":4878.7,"connectedMs":5019.2,"woken":0,"awake":4},{"how":"clean","sleeping":50,"servedMs":5263.5,"connectedMs":5408.5,"woken":0,"awake":4},{"how":"clean","sleeping":50,"servedMs":5305.5,"connectedMs":5445.1,"woken":0,"awake":4},{"how":"sigkill","sleeping":50,"servedMs":5333.2,"connectedMs":5469.7,"woken":0,"awake":4}],"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[2.82,3.98,4.27],"at":"2026-11-16T11:30:12.130Z"}
+```
+```
+{"metric":"vat.spareCreate","unit":"ms","n":6,"median":6449.1,"p95":6571.3,"p99":6571.3,"min":6324.2,"max":6571.3,"programChars":246422,"messagesPerCreate":13,"createWorker":{"n":6,"median":137.2,"p95":139.7,"p99":139.7,"max":139.7,"min":134.8},"load":{"n":6,"median":6068.5,"p95":6112.5,"p99":6112.5,"max":6112.5,"min":5974.6},"evaluatingCrank":{"n":6,"median":244.8,"p95":253.6,"p99":253.6,"max":253.6,"min":228.9},"awakeRssKiB":{"n":6,"median":126800,"p95":129968,"p99":129968,"max":129968,"min":119920},"diskPerSpareKiB":19359,"stateKiB":239216,"pass":null,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.85,4.89,4.61]}
+{"metric":"vat.spareTake","unit":"ms","n":6,"median":170.6,"p95":184.5,"p99":184.5,"min":150.9,"max":184.5,"phase":"asleep, same daemon run","awakeCall":{"n":6,"median":54.7,"p95":56.6,"p99":56.6,"max":56.6,"min":52.8},"allWereAsleep":true,"budget":{"median":500},"pass":true,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.78,4.84,4.59]}
+{"metric":"vat.spareTake.afterRestart","unit":"ms","n":6,"median":156.5,"p95":167.2,"p99":167.2,"min":118.5,"max":167.2,"awakeCall":{"n":6,"median":54.7,"p95":55.7,"p99":55.7,"max":55.7,"min":52.9},"allWereAsleep":true,"budget":{"median":500},"pass":true,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.82,3.98,4.27]}
+{"metric":"template.start","unit":"ms","n":5,"median":5572.9,"p95":5732.7,"p99":5732.7,"min":5307,"max":5732.7,"parts":[{"copyMs":96.2,"servedMs":5492.8,"connectedMs":5636.5,"totalMs":5732.7,"firstCallMs":519.5},{"copyMs":89,"servedMs":5401.2,"connectedMs":5537.6,"totalMs":5626.6,"firstCallMs":479.3},{"copyMs":90.8,"servedMs":5202.9,"connectedMs":5334.6,"totalMs":5425.4,"firstCallMs":452.7},{"copyMs":90.4,"servedMs":5093.1,"connectedMs":5216.6,"totalMs":5307,"firstCallMs":469.1},{"copyMs":94.3,"servedMs":5341.3,"connectedMs":5478.6,"totalMs":5572.9,"firstCallMs":504}],"coldServeMs":15850.6,"coldCreateWorkspaceMs":6024,"coldProvisionMs":11750.3,"templateKiB":160764,"budget":{"median":20000},"pass":true,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.7,3.76,4.11]}
+```
+```
+{"spike":"S8","crankBudget":"50000000","metric":"s8.template.build","buildMs":34952.4,"steps":{"serveMs":15850.6,"createWorkspaceMs":6024,"provisionMs":11750.3,"stopMs":1326.9},"templateKiB":160764,"builtAt":"b7542","storedAt":"t1230bc433c","commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.26,3.72,4.13],"at":"2026-11-16T11:31:48.445Z"}
+{"spike":"S8","crankBudget":"50000000","metric":"s8.copy.serve","timings":{"copyMs":295.2,"servedMs":5336.8,"connectedMs":5473.5,"totalMs":5768.7},"copyRoot":"sqyshu","rootLength":85,"socketIsSocket":true,"runtimeProfiles":["25a2e846db8cb30e4225ef3795f8746e9b8d9616e34f5ef49fe1a13300f54057"],"processes":7,"processesNamingOldPaths":0,"ok":true,"ping":1,"evaluated":"42","incarnation":"7732-8062254d","adapterCalls":3,"freshPing":1,"firstCallMs":520.8,"adapterMs":664.8,"installMs":3689,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.23,3.69,4.12],"at":"2026-11-16T11:31:59.809Z"}
+{"spike":"S8","crankBudget":"50000000","metric":"s8.copy.afterKill","servedMs":6346.9,"connectedMs":6473.7,"ok":true,"ping":1,"evaluated":"42","incarnation":"7828-a0482530","adapterCalls":3,"freshPing":1,"firstCallMs":366.5,"adapterMs":589.2,"installMs":3926.5,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.1,3.65,4.1],"at":"2026-11-16T11:32:11.626Z"}
+{"spike":"S8","crankBudget":"50000000","metric":"s8.copy.sideBySide","timings":{"copyMs":214,"servedMs":5527.8,"connectedMs":5668.5,"totalMs":5882.5},"overlap":0,"ok":true,"ping":1,"evaluated":"42","incarnation":"7879-a6b237a3","adapterCalls":3,"freshPing":1,"firstCallMs":468.6,"adapterMs":605.8,"installMs":5677.8,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.92,3.8,4.14],"at":"2026-11-16T11:32:24.740Z"}
+{"spike":"S8","crankBudget":"50000000","metric":"s8.scan.copyAfterRun","filesNamingCopyPath":[{"file":"heaps/snapshots/aeb2f653c310f32785b05510c30ef00223cf4a0da67692a4be20e3af2b182edd.sqlite","count":2,"bytes":13676544}],"filesNamingBuildPath":[],"copyKiB":189884,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","loadAvg":[3.92,3.8,4.14],"at":"2026-11-16T11:32:26.909Z"}
+```
+S6: restart to serving with 0 / 10 / 50 sleeping spares 4.42-5.32 / 4.64-5.19 / 5.26-5.33 s, clean and
+SIGKILL alike (M0 5.12-5.18 / 5.24-5.42 / 5.95-6.08 s); startup woke no spare in any of the 8 restarts;
+`vat.spareTake` 170.6 ms median (M0 176.3), after restarts 156.5 ms (185.2), both PASS (budget 500).
+Creation is much faster than in M0 (`vat.spareCreate` 6,449 ms median against 14,380; 50 spares in
+108.7 s against 171.8 s) because of `d0fd6b1138` (J-0190), not the PR; disk per sleeping spare 17.3 MB
+(17.7-17.9). S8: all checks pass as in J-0180/J-0181 (only the vat heap names the build path, a start
+replaces it); template build 35.0 s (51.5), copy served in 5.34 s (5.94), after kill -9 6.35 s (7.79),
+side by side 5.53 s (6.04); `template.start` median 5,572.9 ms (M0 6,334.8-6,353.9), PASS (budget
+20,000). The template lifecycle test: 5 passed, the integration test in 14.5 s with copy 133.5 ms and
+`totalMs` 6,173.9 (M0 5,269.4; J-9024 5,711).
+Decision: fact 5 holds after the merge: checkpointed sleepers are not replayed and cost about 1-2 ms
+each at startup now. No spike change was needed: the PR changed no behaviour these spikes observe.
+
+### J-9046 2026-11-16 PM persistence - poor fit
+Evidence: `packages/thixotrope-harness/perf/crash.perf.mjs` (commit `9655151542`; the first two runs at
+`8edc8a4ecf-dirty`, the same script before its last label fix), crank budget 50 M, idleSleepMs 2,000,
+worker `c2f65dbe...`. Ten small vats; vat `h0` holds a pending `hang()` call into the crashing vat,
+whose journal holds that call and 8 compute frames (about 100 ms each) past its snapshot when the
+supervisor is SIGKILLed; at the restart a poller SIGKILLs each worker process of that vat as soon as
+`ps` shows it (`heaps/incarnations/vat-<label>-`, every 20 ms). Three runs (A, B, C) with bound 5, then
+bound 2 on a fresh crashing vat:
+```
+{"metric":"crash.restart.bound5","unit":"ms","value":35845.5,"maxDeliveryAttempts":5,"atKill":{"badAwake":true,"badJournal":12,"badCut":3,"sinceCallMs":56.6,"burnFrames":8,"burnN":200000,"burnMs":{"n":8,"median":81,"max":87.1,"min":75.9}},"servedMs":35845.5,"controlSocket":{"tries":131,"firstOkMs":35915.6,"lastError":"connect timed out"},"kills":[{"pid":86489,"ms":521.8},{"pid":86632,"ms":1613.5},{"pid":86901,"ms":3665.8},{"pid":87438,"ms":7759.4},{"pid":88489,"ms":15817.3},{"pid":90587,"ms":31891.4}],"killPollMs":20,"crashLog":[{"ms":542.1,"text":"[thixotrope:daemon] worker ca00ea4320b0b0fad0464a4c2427cb17 crashed while resuming: (Error#1)"},{"ms":1627,"text":"thixotrope worker transport crasha(ca00ea43): retry after a crash failed (Error#2)"},{"ms":1627.1,"text":"[thixotrope:daemon] worker ca00ea4320b0b0fad0464a4c2427cb17 crashed while resuming: (Error#2)"},{"ms":3678.6,"text":"thixotrope worker transport crasha(ca00ea43): retry after a crash failed (Error#3)"},{"ms":3678.7,"text":"[thixotrope:daemon] worker ca00ea4320b0b0fad0464a4c2427cb17 crashed while resuming: (Error#3)"},{"ms":7779.2,"text":"thixotrope worker transport crasha(ca00ea43): retry after a crash failed (Error#4)"},{"ms":7780.2,"text":"[thixotrope:daemon] worker ca00ea4320b0b0fad0464a4c2427cb17 crashed while resuming: (Error#4)"},{"ms":15832.8,"text":"thixotrope worker transport crasha(ca00ea43): retry after a crash failed (Error#5)"},{"ms":15832.9,"text":"[thixotrope:daemon] worker ca00ea4320b0b0fad0464a4c2427cb17 crashed while resuming: (Error#5)"},{"ms":31908.1,"text":"thixotrope worker transport crasha(ca00ea43): quarantined; crashed 5 times without progress, last while replaying journal frame 4: Ironhorse worker exited (signaled)"}],"bad":{"failure":"crashed 5 times without progress, last while replaying journal frame 4: Ironhorse worker exited (signaled)","crash":null,"awake":false,"journalLength":12,"snapshotCut":3},"pendingCaller":{"outcome":"pending","settledWithinMs":30019.8},"directCall":{"ok":false,"ms":338.1,"error":"ocapn hub: the target session has been retired"},"healthyFirstCall":{"ok":8,"of":8,"ms":{"n":8,"median":425.3,"max":434,"min":354},"errors":[]},"awakeAfter":2,"budget":{"value":15000},"pass":false,"exceeded":["value: 35845.5 > 1.25 x 15000"],"commit":"8edc8a4ecf-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.3,2.74,2.74]}
+{"metric":"crash.restart.bound2","unit":"ms","value":7580.8,"maxDeliveryAttempts":2,"atKill":{"badAwake":true,"badJournal":13,"badCut":4,"sinceCallMs":55.4,"burnFrames":8,"burnN":200000,"burnMs":{"n":8,"median":80.5,"max":90.8,"min":76.1}},"servedMs":7580.8,"controlSocket":{"tries":20,"firstOkMs":7644.3,"lastError":"connect timed out"},"kills":[{"pid":91572,"ms":571.3},{"pid":91716,"ms":1657},{"pid":92002,"ms":3757}],"killPollMs":20,"crashLog":[{"ms":595.1,"text":"[thixotrope:daemon] worker 59ac4a88c1ee23790f9be95d924c352e crashed while resuming: (Error#1)"},{"ms":1671.3,"text":"thixotrope worker transport crashb(59ac4a88): retry after a crash failed (Error#2)"},{"ms":1671.5,"text":"[thixotrope:daemon] worker 59ac4a88c1ee23790f9be95d924c352e crashed while resuming: (Error#2)"},{"ms":3771.5,"text":"thixotrope worker transport crashb(59ac4a88): quarantined; crashed 2 times without progress, last while replaying journal frame 5: Ironhorse worker exited (signaled)"}],"bad":{"failure":"crashed 2 times without progress, last while replaying journal frame 5: Ironhorse worker exited (signaled)","crash":null,"awake":false,"journalLength":13,"snapshotCut":4},"pendingCaller":{"outcome":"pending","settledWithinMs":30021.6},"directCall":{"ok":false,"ms":330,"error":"ocapn hub: the target session has been retired"},"healthyFirstCall":{"ok":8,"of":8,"ms":{"n":8,"median":403,"max":489.8,"min":366.5},"errors":[]},"awakeAfter":3,"budget":{"value":15000},"pass":true,"commit":"8edc8a4ecf-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[1.73,2.51,2.65]}
+{"metric":"crash.restart.bound5","unit":"ms","value":68537.7,"maxDeliveryAttempts":5,"atKill":{"badAwake":true,"badJournal":12,"badCut":3,"sinceCallMs":55.9,"burnFrames":8,"burnN":200000,"burnMs":{"n":8,"median":116,"max":121.4,"min":90.6}},"servedMs":68537.7,"controlSocket":{"tries":259,"firstOkMs":68607.7,"lastError":"connect timed out"},"kills":[{"pid":93386,"ms":683.5},{"pid":93514,"ms":1764.7},{"pid":93907,"ms":3875.8},{"pid":94501,"ms":7987.4},{"pid":95433,"ms":16083},{"pid":97315,"ms":32174.6},{"pid":1332,"ms":64262.7}],"killPollMs":20,"crashLog":[{"ms":707,"text":"[thixotrope:daemon] worker b8ea2ecccdd18bb687591ea0af97cc05 crashed while resuming: (Error#1)"},{"ms":1778.9,"text":"thixotrope worker transport crasha(b8ea2ecc): retry after a crash failed (Error#2)"},{"ms":1779.1,"text":"[thixotrope:daemon] worker b8ea2ecccdd18bb687591ea0af97cc05 crashed while resuming: (Error#2)"},{"ms":3892.8,"text":"thixotrope worker transport crasha(b8ea2ecc): retry after a crash failed (Error#3)"},{"ms":3893,"text":"[thixotrope:daemon] worker b8ea2ecccdd18bb687591ea0af97cc05 crashed while resuming: (Error#3)"},{"ms":8003.5,"text":"thixotrope worker transport crasha(b8ea2ecc): retry after a crash failed (Error#4)"},{"ms":8003.7,"text":"[thixotrope:daemon] worker b8ea2ecccdd18bb687591ea0af97cc05 crashed while resuming: (Error#4)"},{"ms":16099.7,"text":"thixotrope worker transport crasha(b8ea2ecc): retry after a crash failed (Error#5)"},{"ms":16099.8,"text":"[thixotrope:daemon] worker b8ea2ecccdd18bb687591ea0af97cc05 crashed while resuming: (Error#5)"},{"ms":32190.5,"text":"thixotrope worker transport crasha(b8ea2ecc): retry after a crash failed (Error#6)"},{"ms":32190.6,"text":"[thixotrope:daemon] worker b8ea2ecccdd18bb687591ea0af97cc05 crashed while resuming: (Error#6)"},{"ms":64280.1,"text":"thixotrope worker transport crasha(b8ea2ecc): quarantined; crashed 5 times without progress, last while replaying journal frame 4: Ironhorse worker exited (signaled)"}],"bad":{"failure":"crashed 5 times without progress, last while replaying journal frame 4: Ironhorse worker exited (signaled)","crash":null,"awake":false,"journalLength":12,"snapshotCut":3},"pendingCaller":{"outcome":"pending","settledWithinMs":30055},"directCall":{"ok":false,"ms":384.1,"error":"ocapn hub: the target session has been retired"},"healthyFirstCall":{"ok":8,"of":8,"ms":{"n":8,"median":492.1,"max":544.1,"min":421.6},"errors":[]},"awakeAfter":2,"budget":{"value":15000},"pass":false,"exceeded":["value: 68537.7 > 1.25 x 15000"],"commit":"8edc8a4ecf-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[4.11,3.28,2.95]}
+{"metric":"crash.restart.bound2","unit":"ms","value":8978.7,"maxDeliveryAttempts":2,"atKill":{"badAwake":true,"badJournal":13,"badCut":4,"sinceCallMs":59.5,"burnFrames":8,"burnN":200000,"burnMs":{"n":8,"median":116.6,"max":117.9,"min":87.3}},"servedMs":8978.7,"controlSocket":{"tries":23,"firstOkMs":9062.7,"lastError":"connect timed out"},"kills":[{"pid":2272,"ms":802.6},{"pid":2381,"ms":1942.2},{"pid":2589,"ms":4065.6}],"killPollMs":20,"crashLog":[{"ms":830.8,"text":"[thixotrope:daemon] worker b31eee3dcad89a2ad46418eadb30a1cb crashed while resuming: (Error#1)"},{"ms":1955.7,"text":"thixotrope worker transport crashb(b31eee3d): retry after a crash failed (Error#2)"},{"ms":1956,"text":"[thixotrope:daemon] worker b31eee3dcad89a2ad46418eadb30a1cb crashed while resuming: (Error#2)"},{"ms":4084.7,"text":"thixotrope worker transport crashb(b31eee3d): quarantined; crashed 2 times without progress, last while replaying journal frame 5: Ironhorse worker exited (signaled)"}],"bad":{"failure":"crashed 2 times without progress, last while replaying journal frame 5: Ironhorse worker exited (signaled)","crash":null,"awake":false,"journalLength":13,"snapshotCut":4},"pendingCaller":{"outcome":"pending","settledWithinMs":30060.9},"directCall":{"ok":false,"ms":322,"error":"ocapn hub: the target session has been retired"},"healthyFirstCall":{"ok":8,"of":8,"ms":{"n":8,"median":396.9,"max":466.9,"min":349.8},"errors":[]},"awakeAfter":4,"budget":{"value":15000},"pass":true,"commit":"8edc8a4ecf-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[5.06,3.74,3.14]}
+{"metric":"crash.restart.bound5","unit":"ms","value":36352.5,"maxDeliveryAttempts":5,"atKill":{"badAwake":true,"badJournal":12,"badCut":3,"sinceCallMs":53,"burnFrames":8,"burnN":200000,"burnMs":{"n":8,"median":85.4,"max":109.7,"min":77.5}},"servedMs":36352.5,"controlSocket":{"tries":132,"firstOkMs":36422.3,"lastError":"connect timed out"},"kills":[{"pid":8551,"ms":551.8},{"pid":8688,"ms":1634.7},{"pid":8947,"ms":3705.3},{"pid":9460,"ms":7787.6},{"pid":10490,"ms":15895.9},{"pid":12400,"ms":32089.2}],"killPollMs":20,"crashLog":[{"ms":574.3,"text":"[thixotrope:daemon] worker 34468aa7145acf26e64c6e8d06c5f0aa crashed while resuming: (Error#1)"},{"ms":1648.8,"text":"thixotrope worker transport crasha(34468aa7): retry after a crash failed (Error#2)"},{"ms":1649,"text":"[thixotrope:daemon] worker 34468aa7145acf26e64c6e8d06c5f0aa crashed while resuming: (Error#2)"},{"ms":3721.7,"text":"thixotrope worker transport crasha(34468aa7): retry after a crash failed (Error#3)"},{"ms":3721.9,"text":"[thixotrope:daemon] worker 34468aa7145acf26e64c6e8d06c5f0aa crashed while resuming: (Error#3)"},{"ms":7801.9,"text":"thixotrope worker transport crasha(34468aa7): retry after a crash failed (Error#4)"},{"ms":7802.1,"text":"[thixotrope:daemon] worker 34468aa7145acf26e64c6e8d06c5f0aa crashed while resuming: (Error#4)"},{"ms":15919.7,"text":"thixotrope worker transport crasha(34468aa7): retry after a crash failed (Error#5)"},{"ms":15919.8,"text":"[thixotrope:daemon] worker 34468aa7145acf26e64c6e8d06c5f0aa crashed while resuming: (Error#5)"},{"ms":32108.4,"text":"thixotrope worker transport crasha(34468aa7): quarantined; crashed 5 times without progress, last while replaying journal frame 3: Ironhorse worker exited (signaled)"}],"bad":{"failure":"crashed 5 times without progress, last while replaying journal frame 3: Ironhorse worker exited (signaled)","crash":null,"awake":false,"journalLength":12,"snapshotCut":3},"pendingCaller":{"outcome":"pending","settledWithinMs":30201.7},"directCall":{"ok":false,"ms":359.4,"error":"ocapn hub: the target session has been retired"},"healthyFirstCall":{"ok":8,"of":8,"ms":{"n":8,"median":425.7,"max":641.9,"min":395.6},"errors":[]},"awakeAfter":2,"budget":{"value":15000},"pass":false,"exceeded":["value: 36352.5 > 1.25 x 15000"],"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.39,3.82,4.08]}
+{"metric":"crash.restart.bound2","unit":"ms","value":8026.2,"maxDeliveryAttempts":2,"atKill":{"badAwake":true,"badJournal":13,"badCut":4,"sinceCallMs":57.6,"burnFrames":8,"burnN":200000,"burnMs":{"n":8,"median":84.1,"max":88.2,"min":79}},"servedMs":8026.2,"controlSocket":{"tries":21,"firstOkMs":8096.7,"lastError":"connect timed out"},"kills":[{"pid":13314,"ms":686},{"pid":13450,"ms":1804.6},{"pid":13706,"ms":3900.7}],"killPollMs":20,"crashLog":[{"ms":710.5,"text":"[thixotrope:daemon] worker 0973fc19f762f8c2bd65faa8680c5754 crashed while resuming: (Error#1)"},{"ms":1817.1,"text":"thixotrope worker transport crashb(0973fc19): retry after a crash failed (Error#2)"},{"ms":1817.3,"text":"[thixotrope:daemon] worker 0973fc19f762f8c2bd65faa8680c5754 crashed while resuming: (Error#2)"},{"ms":3925.8,"text":"thixotrope worker transport crashb(0973fc19): quarantined; crashed 2 times without progress, last while replaying journal frame 5: Ironhorse worker exited (signaled)"}],"bad":{"failure":"crashed 2 times without progress, last while replaying journal frame 5: Ironhorse worker exited (signaled)","crash":null,"awake":false,"journalLength":13,"snapshotCut":4},"pendingCaller":{"outcome":"pending","settledWithinMs":30296.2},"directCall":{"ok":false,"ms":345.1,"error":"ocapn hub: the target session has been retired"},"healthyFirstCall":{"ok":8,"of":8,"ms":{"n":8,"median":400.1,"max":491.9,"min":370},"errors":[]},"awakeAfter":2,"budget":{"value":15000},"pass":true,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.25,3.75,4.04]}
+```
+Bound 5 served after 35.8 / 68.5 / 36.4 s (A / B / C); startup waited 31.3 / 64.0 / 31.6 s more than
+a healthy restart of the same state. Bound 2 served after 7.6 / 9.0 / 8.0 s (waited 3.0-4.4 s more).
+The control socket accepted its first connection 64-77 ms after the serving line in every run, and
+not once before (prober every 250 ms): no vat, healthy or not, can be reached while startup waits.
+The 8 other healthy vats then answered their first call in 0.35-0.64 s. A new call into the given-up
+vat failed at once with "ocapn hub: the target session has been retired".
+Decision: the architecture's "restart to serving <= 15 s" (section 11) cannot hold with bound 5 when
+a vat crashes on every replay; see J-9047 for why it was 31-64 s and not the 15-20 s the README
+implies, and J-9051 for the consequences.
+
+### J-9047 2026-11-16 PM persistence - poor fit
+Evidence: J-9046's kill timelines. Run A killed the vat 6 times for "crashed 5 times" (kills at 0.5,
+1.6, 3.7, 7.8, 15.8, 31.9 s); run B 7 times (to 64.3 s); bound 2 took 3 kills for "crashed 2 times". A
+crash is "another attempt without progress" only when it interrupts the same or an earlier journal
+frame than the last one (`durable-worker-transport.js:371-376`: `repeated = index <= stalled.index`);
+a crash at a later frame restarts the count at 1, while the wait keeps doubling, because
+`retriesArmed` is reset only by a wake that completes (`:556`) or a give-up. A kill that lands
+during start-up of the incarnation is charged to the snapshot cut (`phase: 'starting'`, index = cut),
+one that lands during the replay to the frame being replayed, so an external killer with ordinary
+timing jitter "makes progress" once or twice per run. The waits were therefore 1+2+4+8+16(+32) s, not
+1+2+4+8.
+Decision: the README's "at least fifteen seconds" is a floor; under crashes that land at varying
+points of a replay (an OOM killer, a host that kills by memory pressure) the give-up comes later, with
+waits growing to the 60 s cap. For the harness this lengthens the startup wait without bound other
+than journal length x bound x 60 s. A core option worth asking for (PM): count progress only by frames
+whose delivery completed (`deliveredUpTo`), not by the frame a crash interrupted. Not changed here.
+
+### J-9048 2026-11-16 PM transport - incompatible
+Evidence: J-9046's `pendingCaller` in all six crashing restarts: `h0`'s pending `E(bad).hang()`, whose
+`.then` records the rejection in `h0`'s heap, was still `pending` 30 s after the vat was given up during
+startup (polled every 250 ms with `E(h0).outcome`, which wakes `h0`). Without a restart the same
+pattern breaks promptly:
+```
+{"metric":"crash.live.crash","maxDeliveryAttempts":5,"kills":[{"pid":3417,"ms":257.1},{"pid":3559,"ms":1359.2}],"failure":"crashed 2 times without progress, last while replaying journal frame 3: Ironhorse worker exited (signaled)","failureSeenMs":1646.8,"pendingCaller":{"outcome":"broken: ocapn hub: the target session has been retired","settledMs":1698.2},"directCall":{"ok":false,"ms":340,"error":"ocapn hub: the target session has been retired"},"commit":"8edc8a4ecf-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[5.22,3.79,3.16]}
+{"metric":"crash.live.halt","maxDeliveryAttempts":5,"kills":[],"failure":"guest crank halted: MeterAbort","failureSeenMs":558.2,"pendingCaller":{"outcome":"broken: ocapn hub: the target session has been retired","settledMs":624.9},"directCall":{"ok":false,"ms":320.7,"error":"ocapn hub: the target session has been retired"},"commit":"8edc8a4ecf-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[4.94,3.78,3.17]}
+{"metric":"crash.live.crash","maxDeliveryAttempts":2,"kills":[{"pid":14673,"ms":318.5}],"failure":null,"failureSeenMs":null,"pendingCaller":{"outcome":"pending","settledMs":null},"directCall":{"ok":true,"ms":629.6,"value":1},"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[13.72,6.24,4.92]}
+{"metric":"crash.live.halt","maxDeliveryAttempts":2,"kills":[],"failure":null,"failureSeenMs":null,"pendingCaller":{"outcome":"broken: ocapn hub: the target session has been retired","settledMs":799.2},"directCall":{"ok":false,"ms":401.5,"error":"ocapn hub: the target session has been retired"},"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[12.45,6.21,4.92]}
+```
+In run B, a vat given up after crashes while live (killer on, bound 2 in force at that point of the
+script) broke `h0`'s call with "ocapn hub: the target session has been retired" 51 ms after the
+failure was visible in `status()`, and a halt (`spin()`, "guest crank halted: MeterAbort") 67 ms after.
+In run C the killer missed the retry (one kill, the vat recovered and its `hang()` stayed pending as it
+should; load average 11-13 from another workload), and the halt broke in 799 ms. The root cause of the
+startup case is not determined. The give-up during startup calls the same `onFatal` ->
+`hub.retireSession` (`pkg/src/core/daemon.js:249`) whose orphaned-listener breaks
+(`pkg/src/net/hub.js:1921-1948`) work live; [inferred] the caller's listen is not among them when the
+retirement happens inside the startup sweep (`daemon.js:853-896`), while the caller is itself being
+replayed.
+Decision: a guest-to-guest call pending into a vat that is given up (or, probably, halts) during
+startup replay does not break. The harness must not wait on such a break: after a restart a session
+must re-check every guest-to-guest call it holds open (for example the exec vat's) rather than wait
+for its settlement (J-9051). Reported to the PM as a core bug candidate for the hub/startup path
+(reproducer: `perf/crash.perf.mjs` phases a/b, `pendingCaller`).
+
+### J-9049 2026-11-16 PM admin - good fit
+Evidence: the vat given up on, afterwards (run C):
+```
+{"metric":"crash.givenUp","statusRow":{"failure":"crashed 5 times without progress, last while replaying journal frame 3: Ironhorse worker exited (signaled)","crash":null,"awake":false,"journalLength":12,"snapshotCut":3,"debugLabel":"crasha"},"retire":{"ok":true,"ms":87.9},"listedAfterRetire":false,"diskBefore":{"storeKiB":8,"snapshotFiles":1},"diskAfter":{"storeKiB":null,"snapshotFiles":0},"rootKiB":{"before":364552,"after":297664},"callAfterRetire":{"ok":false,"ms":315.5,"error":"ocapn hub: the target session has been retired"},"replacement":{"label":"crashb","makeMs":1816.8,"ping":{"ok":true,"ms":333.8,"value":1}},"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[3.39,3.82,4.08]}
+```
+`status()` lists it with `failure: "crashed 5 times without progress, last while replaying journal frame
+3: Ironhorse worker exited (signaled)"`, no `crash` record (cleared at the give-up), `awake: false`, and
+its journal (12) and snapshot cut (3) kept for inspection. `retire()` through the facade the worker
+controller returned succeeded in 88 ms; the worker left `status()`, its `workers/<id>` directory and
+its snapshot image were deleted, and the state shrank from 364,552 to 297,664 KiB (the other 66 MB
+were earlier snapshots and incarnation files released with it [inferred]). A call on its old object then
+breaks with the retired text. A replacement vat made through the same controller answered (make
+1.7-2.2 s, first call 0.34-0.40 s). A halt and a crash give-up look the same in `status()` apart from
+the `failure` text ("guest crank halted: ..." against "crashed N times without progress ...").
+Decision: a given-up vat is handled by the harness exactly as a halted one: read `failure` through an
+admin path if the reason matters, retire it explicitly (it is not got back), and make a new one.
+Retiring returns its disk.
+
+### J-9050 2026-11-16 PM persistence - perf
+Evidence: healthy restarts in the same state with 10 small sleeping vats (bound 5), runs B and C, and
+the run summaries:
+```
+{"metric":"crash.restart.healthy.clean","unit":"ms","value":4580.6,"connectedMs":5218.7,"sleepingVats":10,"vatsWoken":0,"daemonWorkers":17,"awakeWorkers":4,"maxDeliveryAttempts":5,"stateKiB":313848,"budget":{"value":15000},"pass":true,"commit":"8edc8a4ecf-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[4.46,3.73,3.16]}
+{"metric":"crash.restart.healthy.clean","unit":"ms","value":4960.7,"connectedMs":5528.3,"sleepingVats":10,"vatsWoken":0,"daemonWorkers":17,"awakeWorkers":5,"maxDeliveryAttempts":5,"stateKiB":313872,"budget":{"value":15000},"pass":true,"commit":"8edc8a4ecf-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[4.62,3.79,3.18]}
+{"metric":"crash.restart.healthy.sigkill","unit":"ms","value":5135.5,"connectedMs":5567.8,"sleepingVats":10,"vatsWoken":0,"daemonWorkers":17,"awakeWorkers":4,"maxDeliveryAttempts":5,"stateKiB":313876,"budget":{"value":15000},"pass":true,"commit":"8edc8a4ecf-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[5.14,3.92,3.24]}
+{"metric":"crash.summary","bound5ServedMs":68537.7,"bound2ServedMs":8978.7,"healthy":[{"how":"clean","servedMs":4580.6},{"how":"clean","servedMs":4960.7},{"how":"sigkill","servedMs":5135.5}],"startupWaitedMs":{"bound5":63957.1,"bound2":4398.1},"commit":"8edc8a4ecf-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[5.14,3.92,3.24]}
+{"metric":"crash.restart.healthy.clean","unit":"ms","value":5747.8,"connectedMs":6198.3,"sleepingVats":10,"vatsWoken":0,"daemonWorkers":17,"awakeWorkers":4,"maxDeliveryAttempts":5,"stateKiB":313104,"budget":{"value":15000},"pass":true,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[13.52,6.76,5.14]}
+{"metric":"crash.restart.healthy.clean","unit":"ms","value":5383.1,"connectedMs":5798.7,"sleepingVats":10,"vatsWoken":0,"daemonWorkers":17,"awakeWorkers":4,"maxDeliveryAttempts":5,"stateKiB":313136,"budget":{"value":15000},"pass":true,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[12.83,6.83,5.18]}
+{"metric":"crash.restart.healthy.sigkill","unit":"ms","value":4752.7,"connectedMs":5152.6,"sleepingVats":10,"vatsWoken":0,"daemonWorkers":17,"awakeWorkers":4,"maxDeliveryAttempts":5,"stateKiB":313140,"budget":{"value":15000},"pass":true,"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[11.39,6.72,5.16]}
+{"metric":"crash.summary","bound5ServedMs":36352.5,"bound2ServedMs":8026.2,"healthy":[{"how":"clean","servedMs":5747.8},{"how":"clean","servedMs":5383.1},{"how":"sigkill","servedMs":4752.7}],"startupWaitedMs":{"bound5":31599.8,"bound2":3273.5},"commit":"9655151542","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[11.39,6.72,5.16]}
+{"metric":"crash.summary","bound5ServedMs":35845.5,"bound2ServedMs":7580.8,"healthy":[{"how":"clean","servedMs":4555.2},{"how":"clean","servedMs":4602},{"how":"sigkill","servedMs":4815.2}],"startupWaitedMs":{"bound5":31290.3,"bound2":3025.6},"commit":"8edc8a4ecf-dirty","workerSha256":"c2f65dbeb716b9195600ca00b9e9e1a970ca6869c68de54563d7c4bc20a4f12c","crankBudget":"50000000","loadAvg":[2.91,2.71,2.72]}
+```
+Served after 4.56 / 4.60 / 4.82 s (B: clean, clean, SIGKILL; load 1.9-2.9) and 5.75 / 5.38 / 4.75 s (C;
+load average 11-13 from another workload), no vat woken. Against J-0185 (10 sleeping spares, 5.24-5.42
+s) and this unit's S6 re-run (4.64-5.19 s with 10, 5.26-5.33 s with 50): no regression from the merge.
+Decision: a healthy restart stays inside the 15 s budget with a wide margin; the PR costs nothing when
+no vat crashes.
+
+### J-9051 2026-11-16 PM spec - awkward
+Evidence: J-9040..J-9050. Design consequences for the next design step (designs/*.md not edited here):
+1. Restart budget (architecture section 11, "restart to serving, 50 idle sessions <= 15 s"). A healthy
+   restart takes 4.6-5.8 s (J-9050, J-9045). One vat that crashes on every replay holds the whole
+   start: the startup sweep waits for each crashing vat to be retried "to one end or the other"
+   (`pkg/src/core/daemon.js:853-896`), and the control socket (`pkg/src/control/supervisor.js:1043`) and
+   every start notice, which is where the harness's adapters (gateway included) are restored
+   (`daemon.js:908-922`), come after it. Measured with bound 5: served after 36-69 s (J-9046); the
+   floor is about 15 s + 5 attempts; a vat whose replay misses the 60 s watchdog each time holds it for
+   at least 315 s. Several crashing vats wait in parallel (`Promise.all`, `daemon.js:853`), not in sum.
+   The budget should be restated as a healthy-restart budget, with a separate recorded figure for a
+   restart with a crashing vat; no bound >= 4 meets 15 s in that case.
+2. Session recovery (D-5). A vat given up after crashes and a halted vat surface identically to every
+   caller: the retired text "ocapn hub: the target session has been retired" (`pkg/src/net/hub.js:1947`),
+   which is also the text of an adapter break at restart. Both are terminal (`WorkerHaltError` is what
+   the transport raises once it gives up, `pkg/src/core/worker-engine.js:45-52`; README "a vat given up
+   on is not got back"). So: (a) a retired break from an adapter object on the turn path still means
+   "restart" (D-5 unchanged); (b) a retired break from a guest vat means "that vat is lost", whatever
+   the cause, and the recovery path treats crash give-up and halt the same: retire the handle, make a
+   new vat, and state the loss; (c) a pending guest-to-guest call into a vat given up during startup
+   does not break at all (J-9048), so `recoverAfterRestart()` must actively check each guest-vat call it
+   holds (the exec call in particular) instead of waiting for a break; (d) a session vat that is itself
+   given up is a lost session with no reinstate path, which conflicts with "transcript content is
+   precious": a core reinstate operation (clear `failure`, keep the journal) is a PM item.
+3. Exec vat (D-11/section 6, retire on deadline or compute halt). The compute halt is unchanged: a
+   synchronous runaway is a halt (`MeterAbort`), quarantined at once, not retried (J-9040, J-9048).
+   The 120 s exec deadline with `ExecHandle.retire()` remains the bound for hangs; retiring cancels any
+   retry the vat is owed (`durable-worker-transport.js:790`, `cancelRetry`). A watchdog miss in the
+   exec vat is now a crash and is retried (1 s later, replaying the poisoned frame for another 60 s), so
+   the 120 s deadline fires during the second attempt and retires it; no new logic is needed, and the
+   exec logic cannot see the classification from inside a vat anyway. Only the wording changes: the
+   scope-loss message must not say "exceeded the per-step compute budget" unless the worker's `failure`
+   says "guest crank halted"; otherwise "the exec scope was lost (its worker crashed repeatedly)".
+4. The delivery-attempt bound. Keep `limits.maxDeliveryAttempts` at 5 (`config/defaults.js`). Bound 2
+   would meet the restart budget (7.6-9.0 s, J-9046) but gives a vat up about one second after its first
+   crash, and a give-up is irreversible: any host trouble longer than a second (an OOM kill, a load
+   spike past the watchdog) would lose sessions for good. Higher than 5 doubles the startup wait per
+   step (6: +16 s, 7: +32 s, then +60 s each) while the hub keeps the harness unreachable. 5 is the
+   compromise until (i) progress is counted by completed frames (J-9047) and (ii) a reinstate path
+   exists; owner decision to confirm.
+5. A "starting" state for the browser. Yes, but on the client: during a crashing vat's retries nothing
+   of the harness listens (control socket and gateway come after the sweep), so the browser sees
+   connection refused for 30 s to several minutes instead of the usual 5 s. The browser client must
+   treat a refused or dropped connection as "server starting", retry with backoff and say so; a
+   server-side page would need a listener outside the supervisor (the `serve.mjs` parent), which is not
+   worth its port hand-off for M1. The operator-facing `serve.mjs` could relay the supervisor's
+   "crashed while resuming" lines, which name the vat being waited for.
+Decision: for the next design step (architecture sections 2 D-5, 6, 9, 11 and the browser client).
+
