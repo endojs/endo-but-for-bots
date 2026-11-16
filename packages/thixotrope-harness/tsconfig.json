@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.eslint-base.json",
   "include": [
     "*.js",
+    "config/**/*.js",
     "guest/**/*.js",
     "lint/**/*.js",
     "perf/**/*.mjs",

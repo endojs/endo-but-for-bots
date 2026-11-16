@@ -1,0 +1,194 @@
+// @ts-check
+/**
+ * M0 perf checks for frames (milestones.md M0 "Perf checks"; architecture.md
+ * section 11): frames.halt, frames.inbound, frames.outbound,
+ * vat.evaluateProgram and loop.runaway, at the settings in
+ * config/defaults.js and the crank budget the harness serves with.
+ *
+ *   cd packages/thixotrope-harness && node perf/frames.perf.mjs
+ *
+ * FRAMES_N (default 200) samples per latency metric; LOOP_N (default 5)
+ * runaway-loop runs; THIXOTROPE_CRANK_BUDGET overrides the budget.
+ */
+import { performance } from 'node:perf_hooks';
+
+import {
+  crankBudget,
+  emit,
+  runPerf,
+  single,
+  stats,
+  summarize,
+} from './_harness.mjs';
+
+// After the harness module (it locks down first, J-0131).
+const { limits } = await import('../config/defaults.js');
+const { PROBE_PROGRAM, makeProgram } = await import('../test/spikes/_spike.js');
+const { E } = await import('@endo/far');
+
+const N = Number(process.env.FRAMES_N ?? 200);
+const LOOP_N = Number(process.env.LOOP_N ?? 5);
+/** M0 perf table: frames at frameBytes cost at most this over the ping floor. */
+const OVER_FLOOR_MS = 300;
+
+/**
+ * @template T
+ * @param {() => Promise<T>} fn
+ */
+const time = async fn => {
+  const t0 = performance.now();
+  try {
+    const value = await fn();
+    return { ok: true, ms: performance.now() - t0, value };
+  } catch (error) {
+    return {
+      ok: false,
+      ms: performance.now() - t0,
+      error: String(/** @type {Error} */ (error)?.message ?? error).slice(
+        0,
+        200,
+      ),
+    };
+  }
+};
+
+await runPerf('frames', async ({ provision }) => {
+  const run = await provision();
+  const { frameBytes } = limits;
+  let count = 0;
+  const fresh = async () => {
+    count += 1;
+    const name = `f${count}`;
+    await run.client.call('install', name, PROBE_PROGRAM, []);
+    const vat = await run.client.call('lookup', name);
+    await E(vat).ping();
+    return { name, vat };
+  };
+  /** @param {string} name */
+  const retire = name => run.client.call('remove', name).catch(() => {});
+  /**
+   * @param {number} n
+   * @param {() => Promise<unknown>} fn
+   */
+  const sample = async (n, fn) => {
+    const samples = [];
+    for (let i = 0; i < n; i += 1) {
+      const t0 = performance.now();
+      // eslint-disable-next-line no-await-in-loop
+      await fn();
+      samples.push(performance.now() - t0);
+    }
+    return samples;
+  };
+  const settings = {
+    frameBytes,
+    crankOutBytes: limits.crankOutBytes,
+    configuredCrankBudget: String(limits.crankBudget),
+  };
+
+  // Ping floor and frames at frameBytes on one vat.
+  const probe = await fresh();
+  await sample(20, () => E(probe.vat).ping());
+  let before = await run.counters();
+  const floorSamples = await sample(N, () => E(probe.vat).ping());
+  let after = await run.counters();
+  const floorMedian = summarize(floorSamples).median;
+  await stats('frames.pingFloor', floorSamples, {
+    before,
+    after,
+    root: run.root,
+    extra: settings,
+  });
+
+  const payload = 'x'.repeat(frameBytes);
+  // The first inbound frame of a size in a vat interns its index keys
+  // (JOURNAL J-0140); it is reported on its own, then the steady state.
+  const first = await time(() => E(probe.vat).len(payload));
+  await single('frames.inbound.first', first.ms, {
+    extra: { ...settings, ok: first.ok, floorMedian },
+  });
+  before = await run.counters();
+  const inbound = await sample(N, () => E(probe.vat).len(payload));
+  after = await run.counters();
+  await stats('frames.inbound', inbound, {
+    budget: { median: +(floorMedian + OVER_FLOOR_MS).toFixed(3) },
+    before,
+    after,
+    root: run.root,
+    extra: { ...settings, floorMedian, utf8Bytes: frameBytes },
+  });
+
+  before = await run.counters();
+  const outbound = await sample(N, () => E(probe.vat).out(frameBytes));
+  after = await run.counters();
+  await stats('frames.outbound', outbound, {
+    budget: { median: +(floorMedian + OVER_FLOOR_MS).toFixed(3) },
+    before,
+    after,
+    root: run.root,
+    extra: { ...settings, floorMedian, utf8Bytes: frameBytes },
+  });
+  await retire(probe.name);
+
+  // frames.halt: the halt point is at least 2 x frameBytes, so a fresh vat
+  // takes one message of twice frameBytes.
+  const halt = await fresh();
+  const twice = await time(() => E(halt.vat).len('x'.repeat(2 * frameBytes)));
+  await single('frames.halt', twice.ms, {
+    extra: {
+      ...settings,
+      utf8Bytes: 2 * frameBytes,
+      ok: twice.ok,
+      ...(twice.ok ? {} : { error: twice.error }),
+    },
+  });
+  if (!twice.ok) process.exitCode = 1;
+  await retire(halt.name);
+
+  // vat.evaluateProgram: a 150 k program source, staged in frameBytes
+  // chunks (one message halts, spike S3), then evaluated in one crank.
+  const program = makeProgram(150_000);
+  const evalVat = await fresh();
+  const t0 = performance.now();
+  for (let offset = 0; offset < program.source.length; offset += frameBytes) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(evalVat.vat).stage(
+      program.source.slice(offset, offset + frameBytes),
+    );
+  }
+  const stageMs = performance.now() - t0;
+  const evaluated = await time(() => E(evalVat.vat).evalStaged());
+  const totalMs = performance.now() - t0;
+  const evalOk = evaluated.ok && evaluated.value === program.functions;
+  await single('vat.evaluateProgram', totalMs, {
+    budget: { value: 2000 },
+    extra: {
+      ...settings,
+      sourceChars: program.source.length,
+      stageMs: +stageMs.toFixed(1),
+      evalCrankMs: +evaluated.ms.toFixed(1),
+      ok: evalOk,
+      ...(evaluated.ok ? {} : { error: evaluated.error }),
+    },
+  });
+  if (!evalOk) process.exitCode = 1;
+  await retire(evalVat.name);
+
+  // loop.runaway: wall time until the meter halts a runaway crank.
+  const spins = [];
+  for (let i = 0; i < LOOP_N; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const v = await fresh();
+    // eslint-disable-next-line no-await-in-loop
+    const r = await time(() => E(v.vat).spin());
+    if (r.ok) process.exitCode = 1;
+    spins.push(r.ms);
+    // eslint-disable-next-line no-await-in-loop
+    await retire(v.name);
+  }
+  await stats('loop.runaway', spins, {
+    budget: { median: 1000 },
+    extra: { ...settings, runs: LOOP_N },
+  });
+  emit({ metric: 'frames.done', crankBudget, frameBytes });
+});

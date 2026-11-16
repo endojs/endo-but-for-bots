@@ -32,11 +32,13 @@ import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import url from 'node:url';
 
+import { limits } from '../config/defaults.js';
+
 /**
- * Planning value (architecture section 9) until M0 spike S1 measures and
- * chooses; S1's choice replaces this constant.
+ * The daemon crank budget spike S1 chose (config/defaults.js, architecture
+ * section 9).
  */
-export const DEFAULT_CRANK_BUDGET = 50_000_000n;
+export const DEFAULT_CRANK_BUDGET = limits.crankBudget;
 export const SERVE_RECORD = 'harness-serve.json';
 const CHILD_FLAG = '--supervisor-child';
 
