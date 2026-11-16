@@ -35,13 +35,13 @@
  * template whose key no longer matches is simply not found and a new one is
  * built; `removeTemplates()` deletes all of them.
  *
- * The supervisor runs in a child process (`scripts/serve.mjs
- * --supervisor-child`, with the environment allowlist), so it can be killed
- * with SIGKILL like a real crash.
+ * The supervisor runs in a child process (`scripts/serve.mjs`
+ * `spawnSupervisorChild`: the environment allowlist, and a pipe that stops
+ * it if this process dies), so it can be killed with SIGKILL like a real
+ * crash. The perf harness (perf/_harness.mjs) starts state the same way.
  */
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { once } from 'node:events';
 import { constants, createReadStream } from 'node:fs';
 import {
   chmod,
@@ -60,13 +60,12 @@ import url from 'node:url';
 
 import { limits } from '../../config/defaults.js';
 import { acquireRunLock } from '../../scripts/run-lock.mjs';
-import { allowlistEnvironment, readServeRecord } from '../../scripts/serve.mjs';
+import { readServeRecord, spawnSupervisorChild } from '../../scripts/serve.mjs';
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 export const harnessRoot = path.resolve(here, '..', '..');
 const repoRoot = path.resolve(harnessRoot, '..', '..');
 const thixotropeRoot = path.join(repoRoot, 'packages', 'thixotrope');
-const serveScript = path.join(harnessRoot, 'scripts', 'serve.mjs');
 export const tmpRoot = path.join(harnessRoot, 'tmp');
 
 /** Bump when what a template holds changes shape. */
@@ -180,68 +179,38 @@ const makeSupervisor = ({
   idleSleepMs,
   snapshotEveryDeliveries,
 }) => {
-  /** @type {import('node:child_process').ChildProcess | undefined} */
-  let child;
-  /** @type {Promise<unknown> | undefined} */
-  let exited;
-  let stderr = '';
-  const running = () =>
-    child !== undefined && child.exitCode === null && child.signalCode === null;
+  /** @type {import('../../scripts/serve.mjs').SupervisorChild | undefined} */
+  let started;
+  const running = () => started !== undefined && started.running();
   const serve = async () => {
     if (running()) throw Error('the supervisor is already running');
     const t0 = performance.now();
-    const proc = spawn(
-      process.execPath,
-      [
-        serveScript,
-        '--supervisor-child',
-        root,
-        `--crank-budget=${crankBudget}`,
-        `--idle-sleep-ms=${idleSleepMs}`,
-        ...(snapshotEveryDeliveries
-          ? [`--snapshot-every=${snapshotEveryDeliveries}`]
-          : []),
-      ],
+    // The same child, environment and parent-death pipe as scripts/serve.mjs.
+    started = spawnSupervisorChild(
       {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: allowlistEnvironment(process.env, { crankBudget }),
+        statePath: root,
+        crankBudget,
+        idleSleepMs,
+        snapshotEveryDeliveries,
       },
+      { stdout: 'pipe', stderr: 'pipe' },
     );
-    child = proc;
-    exited = once(proc, 'exit');
-    stderr = '';
-    proc.stderr?.on('data', bytes => {
-      stderr = `${stderr}${String(bytes)}`.slice(-16_384);
-    });
-    let out = '';
-    await Promise.race([
-      new Promise(resolve => {
-        proc.stdout?.on('data', bytes => {
-          out = `${out}${String(bytes)}`.slice(-8192);
-          if (out.includes('"serving"')) resolve(undefined);
-        });
-      }),
-      exited.then(() => {
-        throw Error(
-          `the supervisor exited before serving ${root}: ${stderr.slice(-2000)}`,
-        );
-      }),
-    ]);
+    await started.served;
     return { servedMs: round1(performance.now() - t0) };
   };
   const kill = async () => {
     if (!running()) return;
-    child?.kill('SIGKILL');
-    await exited;
+    started?.child.kill('SIGKILL');
+    await started?.exited;
   };
   const stop = async () => {
-    if (!running()) return;
-    const proc = child;
-    proc?.kill('SIGTERM');
+    if (!running() || !started) return;
+    const { child, exited } = started;
+    child.kill('SIGTERM');
     await Promise.race([
       exited,
       delay(60_000).then(() => {
-        proc?.kill('SIGKILL');
+        child.kill('SIGKILL');
         return exited;
       }),
     ]);
@@ -249,13 +218,13 @@ const makeSupervisor = ({
   return {
     root,
     get pid() {
-      return child?.pid;
+      return started?.pid;
     },
     serve,
     kill,
     stop,
     running,
-    stderrTail: () => stderr,
+    stderrTail: () => started?.stderrTail() ?? '',
   };
 };
 
@@ -264,8 +233,7 @@ let controlModules;
 const control = () => {
   controlModules ??= (async () => {
     const [{ connectLocalControl }, { makeNodePowers }] = await Promise.all([
-      // eslint-disable-next-line import/no-relative-packages -- not exported (J-0132)
-      import('../../../thixotrope/src/control/local-control.js'),
+      import('@endo/thixotrope/local-control.js'),
       import('@endo/thixotrope/node-powers.js'),
     ]);
     return { connectLocalControl, powers: makeNodePowers() };

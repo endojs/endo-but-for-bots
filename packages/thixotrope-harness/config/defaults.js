@@ -44,6 +44,15 @@ export const limits = Object.freeze({
    */
   crankBudget: 50_000_000n,
   /**
+   * Crashes in a row without progress after which the supervisor gives a
+   * vat up and records its failure (THIXOTROPE_MAX_DELIVERY_ATTEMPTS, 2..100;
+   * PR 1667, merge 3f2b90954e). Kept at the upstream default of 5: four
+   * retries over about fifteen seconds of doubling backoff, and a starting
+   * supervisor waits out a crashing vat's retries before it serves
+   * (pkg README; pkg src/control/supervisor.js readMaxDeliveryAttempts).
+   */
+  maxDeliveryAttempts: 5,
+  /**
    * Eventual sends per crank (guest rule). Answered sends halt at 250 in one
    * crank at every budget, sendOnly at 450 (10 M) / 600 (50 M, 100 M), on
    * an empty probe vat (J-0143). On a vat with a staged 250 k program and a

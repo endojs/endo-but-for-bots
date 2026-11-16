@@ -10,9 +10,21 @@
  *   directory was clean: crash recovery replays journaled cranks under the
  *   current budget, and a crank recorded under a higher one can exceed it
  *   and quarantine that vat (pkg README, limits section).
- * - Runs the supervisor in a child process whose environment is only
- *   ENV_ALLOWLIST plus the budget, so native adapter processes (which
- *   inherit the supervisor's environment) see no other host variables.
+ * - Sets THIXOTROPE_MAX_DELIVERY_ATTEMPTS (the crash bound of `thix serve`,
+ *   2..100) from `--max-delivery-attempts`, else the caller's variable, else
+ *   config/defaults.js `limits.maxDeliveryAttempts` (the upstream default).
+ * - Always runs the supervisor in a child process whose environment is only
+ *   ENV_ALLOWLIST plus those two settings, so native adapter processes
+ *   (which the core forks with the supervisor's environment) see no other
+ *   host variables. This holds for the CLI and for `serveHarness()`; the
+ *   child refuses to serve from any other environment.
+ * - The child exits when its parent dies, even by SIGKILL: the parent holds
+ *   one end of a pipe (the child's fd 3) and never writes to it; the kernel
+ *   closes it when the parent dies, the child reads end-of-file, closes the
+ *   supervisor cleanly and exits (forced after PARENT_GONE_GRACE_MS). A pipe
+ *   rather than a periodic parent check: it fires at once, needs no timer,
+ *   cannot be fooled by a reused pid, and works the same on macOS (no
+ *   PR_SET_PDEATHSIG) and Linux.
  *
  * The record of the last run is `<state>/harness-serve.json`:
  *   {"version":1,"status":"running"|"clean","crankBudget","floor","pid",...}
@@ -23,12 +35,13 @@
  *
  * Usage:
  *   node scripts/serve.mjs STATE [--crank-budget N] [--idle-sleep-ms N]
- *     [--snapshot-every N]
+ *     [--snapshot-every N] [--max-delivery-attempts N]
  * Stop with SIGINT or SIGTERM (or `thix stop STATE`).
  */
 import './_init.mjs';
 import { spawn } from 'node:child_process';
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import url from 'node:url';
 
@@ -39,8 +52,14 @@ import { limits } from '../config/defaults.js';
  * section 9).
  */
 export const DEFAULT_CRANK_BUDGET = limits.crankBudget;
+export const DEFAULT_MAX_DELIVERY_ATTEMPTS = limits.maxDeliveryAttempts;
 export const SERVE_RECORD = 'harness-serve.json';
-const CHILD_FLAG = '--supervisor-child';
+export const CHILD_FLAG = '--supervisor-child';
+/** `--parent-fd=N`: the child watches fd N for its parent's death. */
+const PARENT_FD_FLAG = '--parent-fd=';
+const PARENT_FD = 3;
+/** How long a child whose parent died may take to close cleanly. */
+export const PARENT_GONE_GRACE_MS = 60_000;
 
 /**
  * Host variables the supervisor and its adapter processes may see. Provider
@@ -65,7 +84,14 @@ export const ENV_ALLOWLIST = Object.freeze([
   'THIXOTROPE_SLOT_CEILING',
   'THIXOTROPE_CHUNK_CEILING',
   'THIXOTROPE_REQUEST_TIMEOUT_MS',
+  'THIXOTROPE_MAX_DELIVERY_ATTEMPTS',
   'THIXOTROPE_TRACE',
+]);
+
+/** Set by the wrapper itself, besides the allowlist. */
+const WRAPPER_SET = Object.freeze([
+  'THIXOTROPE_CRANK_BUDGET',
+  'THIXOTROPE_MAX_DELIVERY_ATTEMPTS',
 ]);
 
 /**
@@ -80,6 +106,21 @@ export const parseCrankBudget = (name, value) => {
   if (amount > 0xffff_ffff_ffff_ffffn)
     throw Error(`${name} must be at most 2^64-1`);
   return amount;
+};
+
+/**
+ * The same rule as `thix serve` (pkg src/control/supervisor.js
+ * readMaxDeliveryAttempts): a decimal integer from 2 to 100.
+ * @param {string} name
+ * @param {string | number} value
+ */
+export const parseMaxDeliveryAttempts = (name, value) => {
+  const text = String(value);
+  if (!/^([2-9]|[1-9][0-9]|100)$/.test(text))
+    throw Error(
+      `${name} must be a decimal integer between 2 and 100, got ${text}`,
+    );
+  return Number(text);
 };
 
 /**
@@ -98,6 +139,8 @@ const parseMs = (name, value) => {
  * @property {bigint} crankBudget
  * @property {number} [idleSleepMs]
  * @property {number} [snapshotEveryDeliveries]
+ * @property {number} [maxDeliveryAttempts] default: the caller's
+ *   THIXOTROPE_MAX_DELIVERY_ATTEMPTS, else DEFAULT_MAX_DELIVERY_ATTEMPTS
  */
 
 /**
@@ -114,6 +157,8 @@ export const parseServeArgs = (argv, env = process.env) => {
   let idleSleepMs;
   /** @type {number | undefined} */
   let snapshotEveryDeliveries;
+  /** @type {number | undefined} */
+  let maxDeliveryAttempts;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const [flag, inline] = arg.startsWith('--') ? arg.split('=', 2) : [arg];
@@ -130,13 +175,18 @@ export const parseServeArgs = (argv, env = process.env) => {
       idleSleepMs = parseMs('--idle-sleep-ms', takeValue());
     else if (flag === '--snapshot-every')
       snapshotEveryDeliveries = parseMs('--snapshot-every', takeValue());
+    else if (flag === '--max-delivery-attempts')
+      maxDeliveryAttempts = parseMaxDeliveryAttempts(
+        '--max-delivery-attempts',
+        takeValue(),
+      );
     else if (arg.startsWith('-')) throw Error(`Unknown option ${arg}`);
     else if (statePath === undefined) statePath = path.resolve(arg);
     else throw Error(`Unexpected argument ${arg}`);
   }
   if (statePath === undefined)
     throw Error(
-      'Usage: serve.mjs STATE [--crank-budget N] [--idle-sleep-ms N] [--snapshot-every N]',
+      'Usage: serve.mjs STATE [--crank-budget N] [--idle-sleep-ms N] [--snapshot-every N] [--max-delivery-attempts N]',
     );
   if (crankBudget === undefined) {
     const fromEnv = env.THIXOTROPE_CRANK_BUDGET;
@@ -145,17 +195,38 @@ export const parseServeArgs = (argv, env = process.env) => {
         ? DEFAULT_CRANK_BUDGET
         : parseCrankBudget('THIXOTROPE_CRANK_BUDGET', fromEnv);
   }
-  return { statePath, crankBudget, idleSleepMs, snapshotEveryDeliveries };
+  maxDeliveryAttempts ??= defaultMaxDeliveryAttempts(env);
+  return {
+    statePath,
+    crankBudget,
+    idleSleepMs,
+    snapshotEveryDeliveries,
+    maxDeliveryAttempts,
+  };
 };
 
 /**
- * The supervisor's environment: the allowlisted host variables and the
- * chosen crank budget, nothing else.
+ * The caller's THIXOTROPE_MAX_DELIVERY_ATTEMPTS, else the harness default.
  * @param {Record<string, string | undefined>} env
- * @param {{ crankBudget: bigint }} options
+ */
+export const defaultMaxDeliveryAttempts = env => {
+  const text = env.THIXOTROPE_MAX_DELIVERY_ATTEMPTS;
+  return text === undefined || text === ''
+    ? DEFAULT_MAX_DELIVERY_ATTEMPTS
+    : parseMaxDeliveryAttempts('THIXOTROPE_MAX_DELIVERY_ATTEMPTS', text);
+};
+
+/**
+ * The supervisor's environment: the allowlisted host variables, the chosen
+ * crank budget and the crash bound, nothing else.
+ * @param {Record<string, string | undefined>} env
+ * @param {{ crankBudget: bigint, maxDeliveryAttempts?: number }} options
  * @returns {Record<string, string>}
  */
-export const allowlistEnvironment = (env, { crankBudget }) => {
+export const allowlistEnvironment = (
+  env,
+  { crankBudget, maxDeliveryAttempts = defaultMaxDeliveryAttempts(env) },
+) => {
   /** @type {Record<string, string>} */
   const out = {};
   for (const name of ENV_ALLOWLIST) {
@@ -163,8 +234,22 @@ export const allowlistEnvironment = (env, { crankBudget }) => {
     if (value !== undefined) out[name] = value;
   }
   out.THIXOTROPE_CRANK_BUDGET = String(crankBudget);
+  out.THIXOTROPE_MAX_DELIVERY_ATTEMPTS = String(
+    parseMaxDeliveryAttempts('maxDeliveryAttempts', maxDeliveryAttempts),
+  );
   return out;
 };
+
+/**
+ * Names in `env` that the supervisor child may not see.
+ * @param {Record<string, string | undefined>} env
+ */
+export const unexpectedEnvironment = env =>
+  Object.keys(env)
+    .filter(
+      name => !ENV_ALLOWLIST.includes(name) && !WRAPPER_SET.includes(name),
+    )
+    .sort();
 
 /**
  * @typedef {object} ServeRecord
@@ -267,27 +352,212 @@ export const checkCrankBudget = async (statePath, crankBudget) => {
 };
 
 /**
- * Serve in this process (tests and perf). The engine reads the budget from
- * an environment power holding only the allowlist; adapter processes still
- * inherit this process's environment, which the CLI path avoids.
+ * @param {ServeOptions} options
+ * @returns {string[]} the child's arguments after CHILD_FLAG and the parent fd
+ */
+const childArguments = ({
+  statePath,
+  crankBudget,
+  idleSleepMs,
+  snapshotEveryDeliveries,
+  maxDeliveryAttempts,
+}) => [
+  statePath,
+  `--crank-budget=${crankBudget}`,
+  ...(idleSleepMs ? [`--idle-sleep-ms=${idleSleepMs}`] : []),
+  ...(snapshotEveryDeliveries
+    ? [`--snapshot-every=${snapshotEveryDeliveries}`]
+    : []),
+  ...(maxDeliveryAttempts
+    ? [`--max-delivery-attempts=${maxDeliveryAttempts}`]
+    : []),
+];
+
+/**
+ * @typedef {object} SupervisorChild
+ * @property {import('node:child_process').ChildProcess} child
+ * @property {number | undefined} pid
+ * @property {Promise<{ socketPath: string, pid: number }>} served resolves at
+ *   the child's "serving" line (only with `stdout: 'pipe'`); rejects if the
+ *   child exits first
+ * @property {Promise<{ code: number | null, signal: NodeJS.Signals | null }>} exited
+ * @property {() => boolean} running
+ * @property {() => string} stderrTail
+ */
+
+/**
+ * Start `serve.mjs --supervisor-child` over a state directory: the
+ * environment is the allowlist (plus the budget and crash bound), and the
+ * child holds the read end of a pipe from this process, so it stops when
+ * this process dies. The one way every harness path starts a supervisor
+ * (the CLI, `serveHarness`, the state-template helper).
+ *
+ * @param {ServeOptions} options
+ * @param {object} [io]
+ * @param {Record<string, string | undefined>} [io.env] the source of allowlisted variables
+ * @param {'inherit' | 'pipe'} [io.stdout] 'pipe' parses the serving line
+ * @param {'inherit' | 'pipe' | 'tail'} [io.stderr] 'tail' keeps a tail and
+ *   forwards to this process's stderr; 'pipe' only keeps the tail
+ * @returns {SupervisorChild}
+ */
+export const spawnSupervisorChild = (
+  options,
+  { env = process.env, stdout = 'pipe', stderr = 'pipe' } = {},
+) => {
+  const child = spawn(
+    process.execPath,
+    [
+      url.fileURLToPath(import.meta.url),
+      CHILD_FLAG,
+      `${PARENT_FD_FLAG}${PARENT_FD}`,
+      ...childArguments(options),
+    ],
+    {
+      stdio: [
+        'ignore',
+        stdout,
+        stderr === 'inherit' ? 'inherit' : 'pipe',
+        'pipe',
+      ],
+      env: allowlistEnvironment(env, options),
+    },
+  );
+  // Our end of the parent pipe: never written, never read; it must not keep
+  // this process alive.
+  const parentEnd = /** @type {import('node:net').Socket | undefined} */ (
+    child.stdio[PARENT_FD]
+  );
+  parentEnd?.on('error', () => {});
+  parentEnd?.unref();
+  let tail = '';
+  child.stderr?.on('data', bytes => {
+    tail = `${tail}${String(bytes)}`.slice(-16_384);
+    if (stderr === 'tail') process.stderr.write(bytes);
+  });
+  /** @type {Promise<{ code: number | null, signal: NodeJS.Signals | null }>} */
+  const exited = new Promise(resolve => {
+    child.once('exit', (code, signal) => {
+      parentEnd?.destroy();
+      resolve({ code, signal });
+    });
+    child.once('error', () => {
+      if (child.pid === undefined) resolve({ code: null, signal: null });
+    });
+  });
+  /** @type {Promise<{ socketPath: string, pid: number }>} */
+  const served = new Promise((resolve, reject) => {
+    let out = '';
+    child.stdout?.on('data', bytes => {
+      out = `${out}${String(bytes)}`.slice(-8192);
+      const line = out.split('\n').find(text => text.includes('"serving"'));
+      if (line) {
+        try {
+          const { serving, pid } = JSON.parse(line);
+          resolve({ socketPath: serving, pid });
+        } catch (error) {
+          reject(error);
+        }
+      }
+    });
+    void exited.then(({ code, signal }) =>
+      reject(
+        Error(
+          `the supervisor for ${options.statePath} exited (${code ?? signal}) before serving: ${tail.slice(-2000)}`,
+        ),
+      ),
+    );
+  });
+  void served.catch(() => {});
+  return {
+    child,
+    pid: child.pid,
+    served,
+    exited,
+    running: () => child.exitCode === null && child.signalCode === null,
+    stderrTail: () => tail,
+  };
+};
+
+/**
+ * Serve a state directory for tests, spikes and perf: the supervisor runs in
+ * a child process through `spawnSupervisorChild`, so its adapters get the
+ * allowlisted environment, as on the CLI path, and it stops if this process
+ * dies. Refuses to lower the crank budget before anything starts.
+ *
  * @param {ServeOptions} options
  * @param {{ env?: Record<string, string | undefined> }} [host]
  */
-export const serveHarness = async (
-  { statePath, crankBudget, idleSleepMs, snapshotEveryDeliveries },
-  { env = process.env } = {},
-) => {
-  // `serveThixotrope` is not in @endo/thixotrope's exports (JOURNAL
-  // J-0132): reach it by path inside the work tree, as the survey baseline did.
+export const serveHarness = async (options, { env = process.env } = {}) => {
+  const { statePath, crankBudget } = options;
+  const maxDeliveryAttempts =
+    options.maxDeliveryAttempts ?? defaultMaxDeliveryAttempts(env);
+  await mkdir(statePath, { recursive: true, mode: 0o700 });
+  await checkCrankBudget(statePath, crankBudget);
+  const started = spawnSupervisorChild(
+    { ...options, maxDeliveryAttempts },
+    { env, stdout: 'pipe', stderr: 'tail' },
+  );
+  const { socketPath, pid } = await started.served;
+  /** @type {Promise<void> | undefined} */
+  let closing;
+  const close = () => {
+    closing ??= (async () => {
+      if (started.running()) {
+        started.child.kill('SIGTERM');
+        const timer = setTimeout(() => started.child.kill('SIGKILL'), 60_000);
+        await started.exited;
+        clearTimeout(timer);
+      } else await started.exited;
+      const record = await readServeRecord(statePath);
+      if (record?.status !== 'clean')
+        throw Error(
+          `the supervisor for ${statePath} did not stop cleanly: ${started.stderrTail().slice(-2000)}`,
+        );
+    })();
+    return closing;
+  };
+  return harden({
+    socketPath,
+    pid,
+    stopped: started.exited.then(() => undefined),
+    close,
+    /** SIGKILL the supervisor, as a crash would. */
+    kill: async () => {
+      if (started.running()) started.child.kill('SIGKILL');
+      await started.exited;
+    },
+    crankBudget,
+    maxDeliveryAttempts,
+  });
+};
+
+/**
+ * Serve in this process: only the supervisor child does this, from an
+ * environment `spawnSupervisorChild` made.
+ * @param {ServeOptions} options
+ */
+const serveInProcess = async ({
+  statePath,
+  crankBudget,
+  idleSleepMs,
+  snapshotEveryDeliveries,
+  maxDeliveryAttempts,
+}) => {
+  const extra = unexpectedEnvironment(process.env);
+  if (extra.length)
+    throw Error(
+      `the supervisor child must run from the allowlisted environment (scripts/serve.mjs spawnSupervisorChild); it also has ${extra.join(', ')}`,
+    );
   const [{ serveThixotrope }, { makeNodePowers }] = await Promise.all([
-    // eslint-disable-next-line import/no-relative-packages -- not exported (J-0132)
-    import('../../thixotrope/src/control/supervisor.js'),
+    import('@endo/thixotrope/supervisor.js'),
     import('@endo/thixotrope/node-powers.js'),
   ]);
-  const { mkdir } = await import('node:fs/promises');
   await mkdir(statePath, { recursive: true, mode: 0o700 });
   const floor = await checkCrankBudget(statePath, crankBudget);
-  const allowed = allowlistEnvironment(env, { crankBudget });
+  const allowed = allowlistEnvironment(process.env, {
+    crankBudget,
+    maxDeliveryAttempts,
+  });
   const powers = makeNodePowers();
   const platform = {
     ...powers,
@@ -338,9 +608,38 @@ export const serveHarness = async (
   });
 };
 
-/** @param {ServeOptions} options */
-const runChild = async options => {
-  const served = await serveHarness(options);
+/**
+ * Call `onGone` once when the process holding the other end of the pipe on
+ * `fd` dies (end-of-file, close or error on the read end). The watch does
+ * not keep this process alive.
+ * @param {number} fd
+ * @param {() => void} onGone
+ */
+export const watchParent = (fd, onGone) => {
+  const socket = new net.Socket({ fd, readable: true, writable: false });
+  let fired = false;
+  const gone = () => {
+    if (fired) return;
+    fired = true;
+    onGone();
+  };
+  socket.on('data', () => {});
+  socket.once('end', gone);
+  socket.once('close', gone);
+  socket.once('error', gone);
+  socket.unref();
+  return socket;
+};
+
+/**
+ * @param {ServeOptions} options
+ * @param {number | undefined} parentFd
+ */
+const runChild = async (options, parentFd) => {
+  // A parent that died leaves our stdout and stderr pipes broken.
+  process.stdout.on('error', () => {});
+  process.stderr.on('error', () => {});
+  const served = await serveInProcess(options);
   const stop = () => {
     void served.close().catch(error => {
       process.stderr.write(`serve: ${error.message}\n`);
@@ -349,6 +648,15 @@ const runChild = async options => {
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+  if (parentFd !== undefined)
+    watchParent(parentFd, () => {
+      process.stderr.write('serve: parent process gone; stopping\n');
+      setTimeout(() => {
+        process.stderr.write('serve: clean stop timed out; exiting\n');
+        process.exit(1);
+      }, PARENT_GONE_GRACE_MS).unref();
+      stop();
+    });
   process.stdout.write(
     `${JSON.stringify({ serving: served.socketPath, crankBudget: String(served.crankBudget), pid: process.pid })}\n`,
   );
@@ -359,39 +667,29 @@ const runChild = async options => {
 /** @param {string[]} argv */
 const main = async argv => {
   if (argv[0] === CHILD_FLAG) {
-    await runChild(parseServeArgs(argv.slice(1)));
+    let rest = argv.slice(1);
+    /** @type {number | undefined} */
+    let parentFd;
+    if (rest[0]?.startsWith(PARENT_FD_FLAG)) {
+      parentFd = Number(rest[0].slice(PARENT_FD_FLAG.length));
+      rest = rest.slice(1);
+    }
+    await runChild(parseServeArgs(rest), parentFd);
     return;
   }
   const options = parseServeArgs(argv);
   // Refuse in the parent too, before any process starts.
   await checkCrankBudget(options.statePath, options.crankBudget);
-  const childArgs = [
-    CHILD_FLAG,
-    options.statePath,
-    `--crank-budget=${options.crankBudget}`,
-    ...(options.idleSleepMs ? [`--idle-sleep-ms=${options.idleSleepMs}`] : []),
-    ...(options.snapshotEveryDeliveries
-      ? [`--snapshot-every=${options.snapshotEveryDeliveries}`]
-      : []),
-  ];
-  const child = spawn(
-    process.execPath,
-    [url.fileURLToPath(import.meta.url), ...childArgs],
-    {
-      stdio: 'inherit',
-      env: allowlistEnvironment(process.env, options),
-    },
-  );
+  const started = spawnSupervisorChild(options, {
+    stdout: 'inherit',
+    stderr: 'inherit',
+  });
   /** @param {NodeJS.Signals} signal */
-  const forward = signal => child.kill(signal);
+  const forward = signal => started.child.kill(signal);
   process.on('SIGINT', forward);
   process.on('SIGTERM', forward);
-  const code = await new Promise(resolve =>
-    child.once('exit', (exitCode, signal) =>
-      resolve(exitCode ?? (signal ? 128 : 1)),
-    ),
-  );
-  process.exitCode = /** @type {number} */ (code);
+  const { code, signal } = await started.exited;
+  process.exitCode = code ?? (signal ? 128 : 1);
 };
 
 if (

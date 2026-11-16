@@ -1,22 +1,32 @@
 // @ts-check
 import test from '@endo/ses-ava/test.js';
 
-import { execFile } from 'node:child_process';
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { limits } from '../config/defaults.js';
 import {
+  CHILD_FLAG,
   DEFAULT_CRANK_BUDGET,
+  DEFAULT_MAX_DELIVERY_ATTEMPTS,
   ENV_ALLOWLIST,
   SERVE_RECORD,
   allowlistEnvironment,
   checkCrankBudget,
   crankBudgetFloor,
+  parseMaxDeliveryAttempts,
   parseServeArgs,
   readServeRecord,
+  unexpectedEnvironment,
   writeServeRecord,
 } from '../scripts/serve.mjs';
 import { harnessRoot, scratch } from './_helpers.js';
+import {
+  integrationEnabled,
+  processesUnder,
+  takeIntegrationLock,
+} from './template/index.js';
 
 const serveScript = path.join(harnessRoot, 'scripts', 'serve.mjs');
 
@@ -37,6 +47,7 @@ test('arguments: state path, budget flag forms, idle sleep, snapshot cadence', t
     crankBudget: 20_000_000n,
     idleSleepMs: 2000,
     snapshotEveryDeliveries: 64,
+    maxDeliveryAttempts: 5,
   });
   t.is(parseServeArgs(['st', '--crank-budget=7'], {}).crankBudget, 7n);
   // u64 budgets survive as bigint.
@@ -109,12 +120,20 @@ test('the supervisor environment is the allowlist plus the budget', t => {
     PATH: '/bin',
     THIXOTROPE_TRACE: '1',
     THIXOTROPE_CRANK_BUDGET: '50000000',
+    THIXOTROPE_MAX_DELIVERY_ATTEMPTS: '5',
   });
   for (const name of Object.keys(out))
     t.true(
       ENV_ALLOWLIST.includes(name) || name === 'THIXOTROPE_CRANK_BUDGET',
       name,
     );
+  t.deepEqual(unexpectedEnvironment(out), []);
+  t.deepEqual(unexpectedEnvironment(env), [
+    'ANTHROPIC_API_KEY',
+    'AWS_SECRET_ACCESS_KEY',
+    'NODE_OPTIONS',
+    'UNRELATED',
+  ]);
 });
 
 test('fresh state has no floor', async t => {
@@ -240,3 +259,203 @@ test('in-process serving refuses the same way before any supervisor starts', asy
   );
   t.deepEqual(await readdir(dir), [SERVE_RECORD]);
 });
+
+test('THIXOTROPE_MAX_DELIVERY_ATTEMPTS: allowlisted, defaulted from config, validated like thix serve', t => {
+  t.true(ENV_ALLOWLIST.includes('THIXOTROPE_MAX_DELIVERY_ATTEMPTS'));
+  // The upstream default (PR 1667), as a named harness setting.
+  t.is(limits.maxDeliveryAttempts, 5);
+  t.is(DEFAULT_MAX_DELIVERY_ATTEMPTS, limits.maxDeliveryAttempts);
+  t.is(parseServeArgs(['st'], {}).maxDeliveryAttempts, 5);
+  t.is(
+    parseServeArgs(['st'], { THIXOTROPE_MAX_DELIVERY_ATTEMPTS: '9' })
+      .maxDeliveryAttempts,
+    9,
+  );
+  t.is(
+    parseServeArgs(['st', '--max-delivery-attempts=100'], {
+      THIXOTROPE_MAX_DELIVERY_ATTEMPTS: '9',
+    }).maxDeliveryAttempts,
+    100,
+  );
+  // The caller's value passes through the allowlist; an option wins.
+  t.is(
+    allowlistEnvironment(
+      { THIXOTROPE_MAX_DELIVERY_ATTEMPTS: '2' },
+      { crankBudget: 1n },
+    ).THIXOTROPE_MAX_DELIVERY_ATTEMPTS,
+    '2',
+  );
+  t.is(
+    allowlistEnvironment(
+      { THIXOTROPE_MAX_DELIVERY_ATTEMPTS: '2' },
+      { crankBudget: 1n, maxDeliveryAttempts: 7 },
+    ).THIXOTROPE_MAX_DELIVERY_ATTEMPTS,
+    '7',
+  );
+  for (const good of ['2', '9', '10', '99', '100'])
+    t.is(parseMaxDeliveryAttempts('x', good), Number(good), good);
+  for (const bad of ['0', '1', '101', '05', '5.0', '', 'five', '-3'])
+    t.throws(() => parseMaxDeliveryAttempts('x', bad), undefined, bad);
+  for (const bad of ['0', '1', '101', '05', 'five']) {
+    t.throws(
+      () => parseServeArgs(['st'], { THIXOTROPE_MAX_DELIVERY_ATTEMPTS: bad }),
+      { message: /between 2 and 100/ },
+      bad,
+    );
+    t.throws(
+      () => parseServeArgs(['st', `--max-delivery-attempts=${bad}`], {}),
+      {
+        message: /between 2 and 100/,
+      },
+    );
+  }
+  // An empty variable is unset, as for THIXOTROPE_CRANK_BUDGET.
+  t.is(
+    parseServeArgs(['st'], { THIXOTROPE_MAX_DELIVERY_ATTEMPTS: '' })
+      .maxDeliveryAttempts,
+    5,
+  );
+});
+
+test('the supervisor child refuses to serve from an environment beyond the allowlist', async t => {
+  const dir = await scratch(t, 'sv');
+  const state = path.join(dir, 'st');
+  const { code, stderr } = await new Promise(resolve => {
+    const child = execFile(
+      process.execPath,
+      [serveScript, CHILD_FLAG, state],
+      { env: { PATH: process.env.PATH, LEAKED_SECRET: 'x' } },
+      (_error, _stdout, err) =>
+        resolve({ code: child.exitCode, stderr: String(err) }),
+    );
+  });
+  t.is(code, 1);
+  t.regex(stderr, /allowlisted environment.*LEAKED_SECRET/);
+  t.false(stderr.includes('"x"'));
+  // Refused before the state directory was made.
+  await t.throwsAsync(() => readdir(state), { code: 'ENOENT' });
+});
+
+/** @param {number} pid */
+const alive = pid => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * @param {() => boolean} predicate
+ * @param {number} ms
+ */
+const waitFor = async (predicate, ms) => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (predicate()) return true;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  return predicate();
+};
+
+test('a child watching the parent pipe exits when its parent is SIGKILLed', async t => {
+  const dir = await scratch(t, 'sv');
+  const log = path.join(dir, 'log');
+  await writeFile(log, '');
+  const wrapper = spawn(
+    process.execPath,
+    [
+      path.join(harnessRoot, 'test', 'fixtures', 'parent-pipe-wrapper.mjs'),
+      log,
+    ],
+    { stdio: ['ignore', 'pipe', 'inherit'] },
+  );
+  const line = await new Promise(resolve =>
+    wrapper.stdout.once('data', bytes => resolve(String(bytes).trim())),
+  );
+  const [pidText, state] = String(line).split(' ');
+  const childPid = Number(pidText);
+  t.is(state, 'watching');
+  t.true(alive(childPid));
+  wrapper.kill('SIGKILL');
+  t.true(await waitFor(() => !alive(childPid), 5000), 'no stray child remains');
+  t.is((await readFile(log, 'utf8')).trim(), `gone ${childPid}`);
+});
+
+const integration = integrationEnabled ? test.serial : test.skip;
+takeIntegrationLock(test, 'serve.test.js');
+
+/**
+ * The environment of a process of ours (`ps eww`), as one string.
+ * @param {number} pid
+ */
+const environmentOf = pid =>
+  execFileSync('ps', ['eww', '-o', 'command=', '-p', String(pid)]).toString();
+
+integration(
+  'serve CLI: SIGKILL of the CLI stops the supervisor child, cleanly',
+  async t => {
+    const dir = await scratch(t, 'sv');
+    const state = path.join(dir, 's');
+    const cli = spawn(process.execPath, [serveScript, state], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, LEAKED_SECRET: 'not-for-adapters' },
+    });
+    let err = '';
+    cli.stderr.on('data', bytes => {
+      err += String(bytes);
+    });
+    const t0 = Date.now();
+    const serving = await new Promise((resolve, reject) => {
+      let out = '';
+      cli.stdout.on('data', bytes => {
+        out += String(bytes);
+        if (out.includes('"serving"')) resolve(JSON.parse(out.trim()));
+      });
+      cli.once('exit', () => reject(Error(`CLI exited: ${err}`)));
+    });
+    const servedMs = Date.now() - t0;
+    const childPid = serving.pid;
+    t.not(childPid, cli.pid);
+    t.false(environmentOf(childPid).includes('LEAKED_SECRET'));
+    t.true(
+      environmentOf(childPid).includes('THIXOTROPE_MAX_DELIVERY_ATTEMPTS=5'),
+    );
+    const t1 = Date.now();
+    cli.kill('SIGKILL');
+    t.true(
+      await waitFor(() => !alive(childPid), 70_000),
+      'supervisor child exited',
+    );
+    const stopMs = Date.now() - t1;
+    t.true(
+      await waitFor(() => processesUnder(state).length === 0, 10_000),
+      JSON.stringify(processesUnder(state)),
+    );
+    t.is((await readServeRecord(state))?.status, 'clean');
+    t.log(JSON.stringify({ metric: 'serve.parentGone', servedMs, stopMs }));
+  },
+);
+
+integration(
+  'serveHarness: the supervisor (and so its adapters) gets only the allowlist',
+  async t => {
+    const { serveHarness } = await import('../scripts/serve.mjs');
+    const dir = await scratch(t, 'sv');
+    const state = path.join(dir, 's');
+    const served = await serveHarness(
+      { statePath: state, crankBudget: DEFAULT_CRANK_BUDGET },
+      { env: { ...process.env, LEAKED_SECRET: 'not-for-adapters' } },
+    );
+    try {
+      t.not(served.pid, process.pid);
+      t.false(environmentOf(served.pid).includes('LEAKED_SECRET'));
+    } finally {
+      await served.close();
+    }
+    t.is((await readServeRecord(state))?.status, 'clean');
+    t.deepEqual(processesUnder(state), []);
+  },
+);

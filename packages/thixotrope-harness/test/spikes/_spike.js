@@ -191,8 +191,7 @@ export const startHost = async ({
   idleSleepMs = 3_600_000,
 }) => {
   const [{ connectLocalControl }, { makeNodePowers }] = await Promise.all([
-    // eslint-disable-next-line import/no-relative-packages -- not exported (J-0132)
-    import('../../../thixotrope/src/control/local-control.js'),
+    import('@endo/thixotrope/local-control.js'),
     import('@endo/thixotrope/node-powers.js'),
   ]);
   const powers = makeNodePowers();
