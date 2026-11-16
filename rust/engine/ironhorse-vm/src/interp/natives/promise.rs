@@ -705,16 +705,26 @@ impl Interp {
                 // the resolving function's native try boundary so an abrupt
                 // completion rejects this promise with the thrown value.
                 self.meter.tick_raw(PROMISE_RESOLVE_THEN_PROBE_METERING);
-                let then = match self.then_id {
-                    Some(tid) => {
-                        match self.array_from_try(|this| this.mop_get(code, obj, tid, value))? {
-                            Ok(then) => then,
-                            Err(thrown) => {
-                                return self.finish_promise_settlement(promise, thrown, true)
-                            }
-                        }
+                // Promise resolution performs `Get(resolution, "then")` even
+                // when the current program never mentioned that key.  The
+                // await general path can reach this with a branded promise
+                // whose `constructor` is not `%Promise%`; treating an absent
+                // cached id as an absent property would fulfill with the
+                // promise object instead of adopting its settlement.
+                let then_id = match self.then_id {
+                    Some(id) => id,
+                    None => {
+                        let id = self.intern_static_key("then");
+                        self.install_pending_intrinsics();
+                        self.then_id = Some(id);
+                        id
                     }
-                    None => Slot::undefined(),
+                };
+                let then = match self
+                    .array_from_try(|this| this.mop_get(code, obj, then_id, value))?
+                {
+                    Ok(then) => then,
+                    Err(thrown) => return self.finish_promise_settlement(promise, thrown, true),
                 };
                 let intrinsic_then = matches!(then.value,
                     Payload::Reference(function)
