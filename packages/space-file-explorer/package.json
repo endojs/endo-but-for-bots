@@ -40,7 +40,7 @@
     "@endo/monaco-wrapper": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/preact-container": "workspace:^",
-    "preact": "^10.29.8"
+    "preact": "^11.1.1"
   },
   "devDependencies": {
     "@endo/init": "workspace:^",

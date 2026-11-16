@@ -82,7 +82,7 @@
     "@endo/patterns": "workspace:^",
     "@endo/preact-container": "workspace:^",
     "marked": "^18.1.1",
-    "preact": "^10.29.8"
+    "preact": "^11.1.1"
   },
   "devDependencies": {
     "eslint": "catalog:dev"
