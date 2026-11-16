@@ -1,0 +1,170 @@
+// @ts-check
+/**
+ * The exec tool across cancel and restarts in a real daemon (M1b W1b.4;
+ * milestones.md M1b acceptance 3 and 10 at the tool level;
+ * m1b-interfaces.md 8.3):
+ *
+ * - 3: `globalThis.x = 5` in one exec; `return x` in the next turn after a
+ *   clean restart returns 5. A turn cancelled during a 30 s exec sleep keeps
+ *   the scope: an exec after the sleep ended sees `x === 5`; an exec while
+ *   the abandoned run still sleeps gets the busy reset and its notice.
+ * - 10: SIGKILL during a 30 s exec sleep, restart: the turn is
+ *   outcome-unknown as soon as the daemon serves (recovery did not wait for
+ *   the exec call); the next exec works and sees `x` from before.
+ *
+ *   THIX_HARNESS_INTEGRATION=1 node scripts/run-lock.mjs --label m1b-exec -- \
+ *     corepack yarn test test/integration/m1b-exec-tool-restart.test.js
+ */
+import '../unit/_m1a-prelude.js';
+
+import { performance } from 'node:perf_hooks';
+import { setTimeout as delay } from 'node:timers/promises';
+
+import test from 'ava';
+
+import { E } from '@endo/far';
+
+// eslint-disable-next-line import/no-relative-packages
+import { texts, textOf } from '../../guest/lib/interfaces.js';
+import {
+  crankBudget,
+  emit,
+  loadAvg,
+  runIdentity,
+} from '../../perf/_harness.mjs';
+import {
+  integrationEnabled,
+  killStrays,
+  startFromTemplate,
+  takeIntegrationLock,
+} from '../template/index.js';
+import { makeSlice, round1 } from './_m1a-slice.js';
+import {
+  execScript,
+  execTemplate,
+  execTurn,
+  resultsOf,
+  UNSET,
+} from './_m1b-exec.js';
+
+takeIntegrationLock(test, 'm1b exec tool restart test');
+
+const run = integrationEnabled ? test.serial : test.skip;
+
+run('exec across cancel, a clean restart and a SIGKILL', async t => {
+  t.timeout(5 * 60_000);
+  const tStart = performance.now();
+  const template = await execTemplate();
+  const state = await startFromTemplate(template, { t });
+  const slice = await makeSlice(state);
+  const identity = {
+    ...(await runIdentity()),
+    crankBudget,
+    loadAvg: loadAvg(),
+  };
+  const made = await slice.makeBackend(harden(execScript));
+  let session = await slice.createSession(made.backend, 'exec restart');
+  const { key } = await E(session).getInfo();
+  let live = await slice.subscribe(session);
+
+  /** Serve again (after `stop` or `kill`) and find the session again. */
+  const reopen = async () => {
+    await live.stop();
+    const restarted = await state.restart();
+    const t1 = performance.now();
+    await slice.refresh();
+    session = await E(slice.factory).findSession(key);
+    live = await slice.subscribe(session);
+    return { ...restarted, t1 };
+  };
+
+  // ---- 3a: x survives a clean restart
+  t.is((await execTurn(slice, session, live, 'exec set')).result, '5');
+  const clean = await reopen();
+  const afterClean = await execTurn(slice, session, live, 'exec get');
+  t.is(afterClean.result, '5');
+  emit({
+    metric: 'exec.restart.clean',
+    unit: 'ms',
+    value: afterClean.callMs,
+    what: 'the first exec after a clean restart (tool_call to tool_result; the exec vat wakes)',
+    servedMs: clean.servedMs,
+    ...identity,
+  });
+
+  // ---- 3b: cancel during a 30 s sleep keeps the scope
+  const sleeping = await execTurn(slice, session, live, 'exec sleep30', {
+    wait: 'call',
+  });
+  const sleepStarted = /** @type {number} */ (sleeping.callAt);
+  await E(sleeping.turn).cancel();
+  const cancelled = await E(sleeping.turn).whenFinished();
+  t.is(cancelled.state, 'cancelled');
+  t.deepEqual((await resultsOf(session, sleeping.turnId)).results, [
+    textOf.errorResult(texts.execAbandoned),
+  ]);
+  const waitMs = sleepStarted + 31_000 - Date.now();
+  if (waitMs > 0) await delay(waitMs);
+  const afterSleep = await execTurn(slice, session, live, 'exec get');
+  t.is(afterSleep.result, '5', 'the scope was kept');
+
+  // ---- 3c: an exec while the abandoned run still sleeps: busy, reset
+  const sleeping2 = await execTurn(slice, session, live, 'exec sleep30', {
+    wait: 'call',
+  });
+  await E(sleeping2.turn).cancel();
+  await E(sleeping2.turn).whenFinished();
+  const busy = await execTurn(slice, session, live, 'exec get');
+  t.is(busy.result, `${texts.execBusyReset}\n\n${UNSET}`);
+  emit({
+    metric: 'exec.busyReset',
+    unit: 'ms',
+    value: busy.callMs,
+    what: 'busy answer, retire, a fresh scope (spare or cold), run again with the notice',
+    ...identity,
+  });
+
+  // ---- 10: SIGKILL during a 30 s sleep
+  t.is((await execTurn(slice, session, live, 'exec set')).result, '5');
+  const killed = await execTurn(slice, session, live, 'exec sleep30', {
+    wait: 'call',
+  });
+  // Let the run reach the exec vat and its sleep before the kill.
+  await delay(2000);
+  const atKill = Date.now();
+  await state.kill();
+  await killStrays(state.root);
+  const restarted = await reopen();
+  const firstRead = await resultsOf(session, killed.turnId);
+  const readMs = round1(performance.now() - restarted.t1);
+  const readSinceCallMs = Date.now() - /** @type {number} */ (killed.callAt);
+  t.is(firstRead.state, 'outcome-unknown', 'recovered at serving');
+  t.deepEqual(firstRead.results, [texts.toolOutcomeUnknown]);
+  const next = await execTurn(slice, session, live, 'exec get', {
+    ms: 90_000,
+  });
+  emit({
+    metric: 'exec.restart.sigkill',
+    unit: 'ms',
+    value: restarted.servedMs,
+    what: 'SIGKILL during a 30 s exec sleep: served, then the turn read outcome-unknown, then the next exec',
+    turnStateAtFirstRead: firstRead.state,
+    firstReadAfterServedMs: readMs,
+    killAfterCallMs: atKill - /** @type {number} */ (killed.callAt),
+    firstReadSinceCallMs: readSinceCallMs,
+    nextResult: next.result,
+    nextCallMs: next.callMs,
+    ...identity,
+  });
+  t.true(readSinceCallMs < 30_000, 'recovery did not wait for the sleep');
+  t.is(next.result, '5', 'the exec vat survived and keeps x');
+  t.is(next.endStatus, 'completed');
+
+  await live.stop();
+  emit({
+    metric: 'm1b.exec.restart.file',
+    unit: 'ms',
+    value: round1(performance.now() - tStart),
+    ...identity,
+  });
+});
