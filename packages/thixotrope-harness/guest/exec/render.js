@@ -1,0 +1,176 @@
+// @ts-check
+/**
+ * Texts the exec vat makes from model code and its results (M1b W1b.3;
+ * `designs/m1b-interfaces.md` 8.1), ported from Fae `src/tool-makers.js` at
+ * `1315bef86` (`stripCodeFence` :1484, `describeParseFailure` :1499,
+ * `renderToolResult` :96, `bigintsAsDecimalStrings` :81).
+ *
+ * Two changes from Fae, both forced by the vat: the hint texts that name the
+ * sequences SES refuses to evaluate (a dynamic import and the HTML comment
+ * markers) are assembled from pieces, because SES refuses a source that
+ * contains them anywhere, including inside a string, and this module is part
+ * of a bundle a vat evaluates; and the result of a remote capability's
+ * method-name query is bounded before it is rendered.
+ */
+
+/** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+const { E } = /** @type {GuestGlobals} */ (globalThis);
+
+// SES refuses these sequences anywhere in an evaluated source (Fae writes
+// them literally; a vat bundle cannot).
+const IMPORT_CALL = ['imp', 'ort('].join('');
+const HTML_OPEN = ['<!', '--'].join('');
+const HTML_CLOSE = ['--', '>'].join('');
+
+/**
+ * The code inside one wrapping markdown fence (```js ... ```), or the code
+ * unchanged. A common model output; multiline code is not refused for its
+ * wrapping backticks.
+ *
+ * @param {string} code
+ * @returns {string}
+ */
+export const stripCodeFence = code => {
+  const trimmed = code.trim();
+  const fenced = /^```[^\n`]*\n([\s\S]*?)\n?```$/.exec(trimmed);
+  return fenced ? fenced[1] : code;
+};
+harden(stripCodeFence);
+
+/**
+ * What to tell a model whose code did not parse. The advice has to fit the
+ * cause: told "no markdown fences" about code that had none, a model resends
+ * the same thing with something else changed.
+ *
+ * @param {string} code
+ * @param {string} message the engine's message; it carries no position
+ * @returns {string}
+ */
+export const describeParseFailure = (code, message) => {
+  /** @type {string[]} */
+  const hints = [];
+  if (
+    /SES_IMPORT_REJECTED|import expression|import statement|import\.meta/i.test(
+      message,
+    )
+  ) {
+    hints.push(
+      [
+        'exec has no import, ',
+        IMPORT_CALL,
+        ') or require: there is no module loader and no Node built-ins. Reach files and everything else outside through capabilities: E(powers).lookup(...). This evaluator refuses the characters "',
+        IMPORT_CALL,
+        '" anywhere in the source, even inside a string or a comment - so if you are writing a file that contains a dynamic import, build that text as "imp" + "ort(".',
+      ].join(''),
+    );
+  } else if (/SES_HTML_COMMENT_REJECTED|html comment/i.test(message)) {
+    hints.push(
+      [
+        'The source contains an HTML comment marker (',
+        HTML_OPEN,
+        ' or ',
+        HTML_CLOSE,
+        '), which this evaluator refuses even inside a string. Write it as "<!" + "--" and "--" + ">".',
+      ].join(''),
+    );
+  } else {
+    // A fence that was stripped before evaluating is not the problem; one
+    // that is still there (prose around it, or only half of it) is.
+    if (stripCodeFence(code) === code && code.includes('```')) {
+      hints.push(
+        'Send raw JavaScript in the "code" argument, without markdown fences or any prose around the code.',
+      );
+    }
+    // The fences' own backticks are not template literals.
+    if (code.replace(/```/g, '').includes('`')) {
+      hints.push(
+        'The code uses template literals. If one of them holds text that itself contains a backtick or ${ (a shader, a template, markdown), that inner backtick ends the literal and the rest is parsed as code - a common cause of "Unexpected identifier". Build such text from single-quoted strings joined together, or escape each inner backtick and ${.',
+      );
+    }
+    if (/await is only valid|Unexpected reserved word/.test(message)) {
+      hints.push(
+        'await works at the top level of the code, but not inside a nested function unless that function is async.',
+      );
+    }
+  }
+  if (hints.length === 0) {
+    hints.push('Check the code for syntax errors and send it again.');
+  }
+  return `Could not parse the code (${message}). ${hints.join(' ')}`;
+};
+harden(describeParseFailure);
+
+/**
+ * `JSON.stringify` replacer: a BigInt as its decimal digits (a tool result is
+ * text a model reads).
+ * @param {string} _key
+ * @param {unknown} value
+ */
+const bigintsAsDecimalStrings = (_key, value) =>
+  typeof value === 'bigint' ? value.toString() : value;
+
+/** Method names rendered for a remote capability, at most. */
+const MAX_METHOD_NAMES = 256;
+
+/**
+ * A thrown value's message, never throwing itself.
+ * @param {unknown} error
+ * @returns {string}
+ */
+export const messageOf = error => {
+  try {
+    if (typeof error === 'object' && error !== null) {
+      const { message } = /** @type {{ message?: unknown }} */ (error);
+      if (typeof message === 'string') return message;
+    }
+    return String(error);
+  } catch {
+    return 'unprintable error';
+  }
+};
+harden(messageOf);
+
+/**
+ * A result value as text for the model. JSON-serialisable values are
+ * stringified (two-space indent, BigInts as decimal strings). A remote
+ * capability has no enumerable own properties, so `JSON.stringify` makes it
+ * `"{}"`; when it answers the method-name query it is described by its
+ * method names instead, so the model knows what it can call.
+ *
+ * @param {unknown} result
+ * @returns {Promise<string>}
+ */
+export const renderToolResult = async result => {
+  await null;
+  /** @type {string | undefined} */
+  let json;
+  try {
+    json = JSON.stringify(result, bigintsAsDecimalStrings, 2);
+  } catch {
+    json = undefined;
+  }
+  if (json !== undefined && json !== '{}') {
+    return json;
+  }
+  try {
+    // `__getMethodNames__` is the introspection method every exo answers;
+    // it is not on the typed `E` surface.
+    // eslint-disable-next-line no-underscore-dangle
+    const methods = await E(/** @type {any} */ (result)).__getMethodNames__();
+    if (Array.isArray(methods)) {
+      const names = methods
+        .slice(0, MAX_METHOD_NAMES)
+        .map(name => (typeof name === 'string' ? name : String(name)));
+      return `[remote capability] callable methods: ${JSON.stringify(names)}`;
+    }
+  } catch {
+    // Not an introspectable presence; fall through to the best-effort string.
+  }
+  if (json !== undefined) return json;
+  try {
+    return String(result);
+  } catch {
+    return 'unprintable result';
+  }
+};
+harden(renderToolResult);
