@@ -278,6 +278,22 @@ run(
       .filter(e => e.type === 'turn-start')
       .map(e => e.input);
     t.deepEqual(started, [inputs.slow, 'fifo 1', 'fifo 2']);
+    // Live order across turns: every event of a turn (its deltas through
+    // the adapter, its vat events through the hub) arrives before the next
+    // turn's turn-start; seq has no gap.
+    const order = sub.deliveries
+      .filter(d => d.event.turnId !== undefined)
+      .map(d => d.event.turnId);
+    t.deepEqual(
+      order,
+      [...order].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))),
+      order.join(' '),
+    );
+    const seqs = sub.deliveries.map(d => d.seq);
+    t.deepEqual(
+      seqs,
+      seqs.map((_, i) => seqs[0] + i),
+    );
     const third2 = await E(session).getSubmissionReceipt(
       /** @type {any} */ (third).requestId,
     );
