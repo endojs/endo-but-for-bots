@@ -3837,3 +3837,252 @@ incoming GC frame (persist and journal separately). (b) `deliverBatch` for the X
 XS worker binary's request to take several dispatches; same source concatenation). (c) The sleep-
 time flush with a journal marker, if snapshot size for idle vats matters. (d) For the harness owner:
 switch `restart.perf.mjs`'s gate to the worker row's `wakes`.
+
+### J-9190 2026-11-17 M1a integration persistence - good fit
+Evidence: the hardening units' work run together, one workload at a time under the run lock. Build
+state: worker `7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741` (built after
+`9828522485`, the last engine commit); the Ironhorse bundles rebuilt into a scratch directory are
+byte-identical to `packages/thixotrope/dist-ironhorse` (`boot.js`, `worker-peer.js`), so nothing was
+rebuilt and the boot digest did not change in this step; `packages/thixotrope` and `rust/` are
+unchanged since the lane's 66/66 at `2b273930ab` (J-9126), so the lane was not re-run. `target` 234 MB
+(no cargo run). At `f02135953f` (load 1.6-3.6): unit lane 313 passed, 23 skipped; `m1a-provision`
+1/1 (1m36s, new m1a template: the session program changed), `m1a-slice` 6/6, `m1a-slice-restart`
+3/3, `m1a-slice-crash` 1/1 (served 6.0 s at bound 2, A given up after 2 kills, B and the factory
+answer). After the integration fixes (J-9193): `m1a-slice` 6/6 at `2ea74a02f8`, then the SIGKILL
+cases repeated with `M1A_KILL_DELAYS_MS=0,100,500,1500,4000` at `ddcdfc68e3`'s content: 20/20
+(05:00-05:10, load 1.5-1.9), one `m1a.slice.restart.case` line per run, for example
+{"metric":"m1a.slice.restart.case","case":5,"killDelayMs":0,"atKill":{"awake":true,"unsnapshotted":true,"journalLength":23},"killMs":3.5,"servedMs":8852.4,"connectedMs":8993.9,"firstReadMs":1527,"firstRead":"outcome-unknown","settled":"outcome-unknown","requests":1,"hold":"restart"}
+Distribution (5 runs per case; "awake" = the session vat awake and unsnapshotted at the kill, true
+for delays 0-1,500 ms and false at 4,000 ms, above the 2 s idle sleep):
+- case 5 (stalled after `Dispatched`): `outcome-unknown` at the first read 5/5, provider requests
+  for the turn 1 in every run, queue held `restart` 5/5; served 8.85-9.25 s awake, 5.57 s asleep.
+- case 6 (killed before `dispatching`): `interrupted` at the first read 5/5 (the J-9155 risk that the
+  reopen answers after the first read did not occur), 0 requests for the turn, the queue held and
+  then run in order with the message once; served 8.95-9.21 s awake, 5.33 s asleep.
+- case 7 (echo in flight): `outcome-unknown` with "Tool outcome unknown" 5/5, echo started once and
+  never again (also after the next turn), only round 0 requested; served 9.04-9.18 s, 5.41 s asleep.
+- held-ports case 3 (a session idle across the restart, its next claim on dead ports): the next turn
+  completed 5/5 with exactly one provider request, in 777-989 ms from submit (reopen included);
+  served 8.83-9.35 s, 5.07 s asleep.
+First read after connecting: 1,454-1,642 ms in every run. **No provider request and no tool run
+happened twice in any of the 20 runs** (nor in the 4 kills of the default runs above).
+Reading: recovery holds on the new turn sequence at every kill delay tried; whether the session vat
+was awake at the kill moves only the serve time (C-3: 3.5-4 s of journal replay), never the outcome.
+Decision: M1a's restart semantics stand with ports held. The repeat knob stays in the test file.
+
+### J-9191 2026-11-17 M1a integration transport - perf
+Evidence: `perf/turn.perf.mjs` (TURN_N 200) twice under the run lock: run 1 at `2ea74a02f8` (rows read
+-dirty: only this unit's uncommitted test and design files differed), run 2 at `ddcdfc68e3` plus the
+negative-sample capture of `156762e5b4`; worker `7cda4467...`, crank budget 50 M, load 1.3-2.1.
+Rows shown without their kinds, engine and per-turn fields.
+{"metric":"turn.start","unit":"ms","n":200,"median":255,"p95":288,"p99":1914,"min":-1109,"max":3614,"deliveries":{"count":1204,"perOp":6.02},"daemonDeliveriesPerTurn":6.02,"sessionFramesPerTurn":4,"slowest":[{"turnId":"t109","ms":3614,"frames":149},{"turnId":"t140","ms":1914,"frames":31},{"turnId":"t54","ms":1250,"frames":30}],"budget":{"median":350},"pass":true,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.66,1.59,1.62]}
+{"metric":"turn.start.open","unit":"ms","n":200,"median":144,"p95":162,"p99":1163,"min":-1227,"max":1809,"pass":null,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.66,1.59,1.62]}
+{"metric":"turn.start.dispatch","unit":"ms","n":200,"median":111,"p95":127,"p99":239,"min":87,"max":3461,"pass":null,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.66,1.59,1.62]}
+{"metric":"turn.start.client","unit":"ms","n":200,"median":267,"p95":304,"p99":2359,"min":223,"max":3625,"pass":null,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.66,1.59,1.62]}
+{"metric":"turn.start.deliveries","unit":"frames","value":2,"deliveries":{"count":2,"perOp":2},"budget":{"deliveriesPerOp":3},"pass":true,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.68,1.6,1.62]}
+{"metric":"turn.delta","unit":"ms","n":250,"median":0.169,"p95":0.265,"p99":5.903,"min":0.043,"max":6.015,"deliveries":{"count":0,"perOp":0},"framesWhileStreaming":[1,64,1,1,1],"batchSizes":[1],"budget":{"median":5,"deliveriesPerOp":0},"pass":true,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.51,1.57,1.6]}
+{"metric":"turn.delta.client","unit":"ms","n":250,"median":18,"p95":1843,"p99":2261,"min":12,"max":2310,"pass":null,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.51,1.57,1.6]}
+{"metric":"turn.round","unit":"deliver frames","value":3,"deliveries":{"count":7,"perOp":3},"callsPerRound":2,"budget":{"deliveriesPerOp":3},"pass":true,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.3,1.51,1.58]}
+{"metric":"turn.lease","unit":"deliver frames","value":0,"deliveries":{"count":0,"perOp":0},"plainTurnDeliverFrames":4,"budget":{"deliveriesPerOp":1},"pass":true,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.3,1.51,1.58]}
+{"metric":"turn.tooBig.reply64k","unit":"ms","value":695,"state":"failed","reason":"round output exceeds this build's frame limit","frames":4,"nextTurn":"completed","ok":true,"pass":null,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.3,1.51,1.58]}
+{"metric":"turn.tooBig.echo300k","unit":"ms","value":805,"state":"failed","reason":"round output exceeds this build's frame limit","frames":5,"nextTurn":"completed","ok":true,"pass":null,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.44,1.54,1.59]}
+{"metric":"turn.tooBig.keys2000","unit":"ms","value":1228,"state":"completed","reason":null,"frames":6,"nextTurn":"completed","ok":true,"pass":null,"commit":"2ea74a02f8-dirty","crankBudget":"50000000","loadAvg":[1.44,1.54,1.59]}
+{"metric":"turn.start","unit":"ms","n":200,"median":255,"p95":293,"p99":3045,"min":212,"max":3549,"deliveries":{"count":1206,"perOp":6.03},"daemonDeliveriesPerTurn":6.03,"sessionFramesPerTurn":4,"slowest":[{"turnId":"t107","ms":3549,"frames":142},{"turnId":"t50","ms":3045,"frames":126},{"turnId":"t22","ms":1015,"frames":12}],"negative":[],"budget":{"median":350},"pass":true,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.82,1.45,1.46]}
+{"metric":"turn.start.open","unit":"ms","n":200,"median":143,"p95":163,"p99":490,"min":121,"max":882,"pass":null,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.82,1.45,1.46]}
+{"metric":"turn.start.dispatch","unit":"ms","n":200,"median":111,"p95":131,"p99":2891,"min":86,"max":3407,"pass":null,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.82,1.45,1.46]}
+{"metric":"turn.start.client","unit":"ms","n":200,"median":266,"p95":312,"p99":3057,"min":223,"max":3559,"pass":null,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.82,1.45,1.46]}
+{"metric":"turn.start.deliveries","unit":"frames","value":2,"deliveries":{"count":2,"perOp":2},"budget":{"deliveriesPerOp":3},"pass":true,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.86,1.48,1.47]}
+{"metric":"turn.delta","unit":"ms","n":250,"median":0.181,"p95":0.311,"p99":6.15,"min":0.057,"max":8,"deliveries":{"count":0,"perOp":0},"framesWhileStreaming":[55,1,44,1,1],"batchSizes":[1],"budget":{"median":5,"deliveriesPerOp":0},"pass":true,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[2.1,1.56,1.5]}
+{"metric":"turn.delta.client","unit":"ms","n":250,"median":18,"p95":741,"p99":2052,"min":11,"max":2103,"pass":null,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[2.1,1.56,1.5]}
+Reading against the M1a build (J-0272, J-0293: median 573-575 ms, p99 5.7-10.4 s, 4 frames):
+`turn.start` median 255 ms in both runs (0.73 x of 350: **pass**), p95 288-293 ms, 2 frames before the
+request (budget 3: pass); daemon deliveries per turn 14.9 -> 6.0. The split is now claim + startRound
+143-144 ms and the `dispatching(0)` round trip 111 ms; the manager hop is gone. The tail is not:
+p99 1.9 s (run 1) and 3.0 s (run 2), max 3.5-3.6 s, every slow start a GC burst (t109 149 frames,
+t107 142, t50 126). J-9124 had p99 457 ms after CORE-9 in a run whose largest burst missed the turn
+starts; `gc.perf.mjs` here (J-9192) shows a 161-frame burst costing 3,972 ms with only 6 session
+cranks, so the time is the supervisor's per-GC-frame work (C-20; J-9195), not the vat. The
+dispatch leg carries it (`turn.start.dispatch` max 3.4 s): the `dispatching(0)` answer waits behind
+the burst in the hub. `turn.delta` in the adapter 0.17-0.18 ms median (pass, 0 deliveries per
+delta); `turn.delta.client` median 18 ms but p95 0.74-1.8 s, p99 2.1-2.3 s in the streams that met a
+burst (55, 64 and 44 GC frames) on a path that never enters a vat (C-20 again). `turn.round` 3
+(pass). `turn.lease` read 0 because the script still subtracted the open answer that held ports
+removed; from the same runs' `plainTurnDeliverFrames` 4 the lease is 1 delivery (budget 1: pass);
+fixed in the script (J-9193). Too-big probes all ok (64 KiB reply 670-695 ms, 300 k echo
+805-811 ms, 2,000 keys 1,170-1,228 ms: no burst in their windows this time). One sample of run 1
+was negative (-1,109 ms; open -1,227 ms), during a burst; a turn-start's `at` (the claim's time,
+the latest `at` the session has seen) can only exceed the request time if an earlier `see()` carried
+a later time [inferred; not explained]; run 2 has none, and the row now lists any negative sample's
+raw times (`156762e5b4`).
+Decision: `turn.start` meets its budget at the median with margin; its tail is now a host cost, recorded
+against C-20 (J-9195). No budget changed.
+
+### J-9192 2026-11-17 M1a integration persistence - perf
+Evidence: `perf/session.perf.mjs`, `perf/restart.perf.mjs` (gate by `wakes`, `1728c1e401`),
+`perf/gc.perf.mjs` and `perf/crash.perf.mjs`, one after another under the run lock, 05:14-05:34, at
+`ddcdfc68e3` (rows read -dirty: design files and the uncommitted turn.perf change only), worker
+`7cda4467...`, crank budget 50 M. Rows shown without per-run, step and crash-log fields.
+{"metric":"session.program","unit":"bytes","value":157493,"units":157493,"modules":14,"nonAsciiUnits":0,"stagingPieces":7,"programPieceBytes":23552,"budget":{"value":200000},"pass":true,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.4,1.53,1.59]}
+{"metric":"install.factory","unit":"ms","n":3,"median":5950.4,"p95":6239,"p99":6239,"min":5856.2,"max":6239,"budget":{"median":15000},"pass":true,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.24,1.4,1.53]}
+{"metric":"session.createCold","unit":"ms","n":5,"median":6137.885,"p95":6176.15,"p99":6176.15,"min":6028.141,"max":6176.15,"deliveries":{"count":163,"perOp":32.6},"programBytes":157493,"listed":5,"depends":"C-5 (staging cost)","budget":{"median":6000},"pass":true,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.21,1.37,1.51]}
+{"metric":"restart.serving","unit":"ms","n":5,"median":6233.9,"p95":9734.1,"p99":9734.1,"min":6141.8,"max":9734.1,"idleSessions":10,"how":"SIGKILL","gateWokenSessions":1,"budget":{"median":10000},"pass":true,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[2.21,1.6,1.56]}
+{"metric":"restart.crashingSession","unit":"ms","n":5,"median":20398.9,"p95":20529,"p99":20529,"min":20290,"max":20529,"maxDeliveryAttempts":5,"depends":"C-8, C-9","budget":{"median":15000},"pass":false,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.8,1.69,1.6]}
+{"metric":"gc.burst.turnStart","unit":"ms","n":150,"median":248,"p95":280,"p99":518,"min":206,"max":3972,"turns":150,"wallMs":134371.3,"budget":{"median":350},"pass":true,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.22,1.51,1.55]}
+{"metric":"gc.burst.frames","unit":"frames","turns":150,"sessionFramesPerTurn":6.3,"sessionGcFramesPerTurn":2.01,"sessionCranksPerTurn":4.02,"sessionCranksMedian":4,"daemonDeliveriesPerTurn":6.02,"crankCounter":"worker row cranks","commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.22,1.51,1.55]}
+{"metric":"gc.restart","gate":true,"gateWokenSessions":0,"idleSessions":10,"pass":true,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.86,1.58,1.57]}
+{"metric":"crash.restart.bound5","unit":"ms","value":35745.3,"maxDeliveryAttempts":5,"servedMs":35745.3,"killPollMs":20,"healthyFirstCall":{"ok":8,"of":8,"ms":{"n":8,"median":419.9,"max":441.7,"min":380.2},"errors":[]},"awakeAfter":2,"budget":{"value":15000},"pass":false,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.27,1.49,1.53]}
+{"metric":"crash.restart.bound2","unit":"ms","value":5460.5,"maxDeliveryAttempts":2,"servedMs":5460.5,"killPollMs":20,"healthyFirstCall":{"ok":8,"of":8,"ms":{"n":8,"median":384.2,"max":423,"min":368.8},"errors":[]},"awakeAfter":2,"budget":{"value":15000},"pass":true,"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[1.18,1.45,1.51]}
+{"metric":"crash.summary","bound5ServedMs":35745.3,"bound2ServedMs":5460.5,"startupWaitedMs":{"bound5":31148.2,"bound2":863.4},"commit":"ddcdfc68e3-dirty","crankBudget":"50000000","loadAvg":[0.92,1.29,1.44]}
+Before -> after (before: J-0281, J-0276/J-0280/J-0294, J-9120, J-9046/J-9050; worker `c2f65dbe...`
+except J-9120):
+- `session.program` 142,994 -> 157,493 bytes (0.79 x of 200 KB: pass), ASCII, 7 staging pieces.
+- `install.factory` 5,725 -> 5,950 ms (pass).
+- `session.createCold` 5,890 -> 6,138 ms (6.03-6.18 s; 1.02 x of 6 s: pass under the 1.25 x rule,
+  over nominal); daemon deliveries per create 38.2 -> 32.6. The 14.5 KB added to the program
+  account for about 0.15 s at 10 us per byte (C-5) [inferred]; the creation-time open did not add
+  a measurable crank. Risk entry J-9196.
+- `restart.serving` median 6,726 -> 6,234 ms (6.1-9.7 s: pass); gate: woken session vats 11, 1, 1,
+  1, 1 -> 1, 1, 1, 1, 1 (wakes and frontier agree in every run); held GC frames per idle session
+  2-6; the in-flight turn read `outcome-unknown` at the first read in 5 of 5. Run 1 is still the
+  slowest (9.7 s, 105 engine deliveries and 11 wakes before serving against 76 and 10 in runs 2-5):
+  the first restart after setup replays the vats the setup left awake (factory, manager, workspace)
+  [inferred from the wake counts; idle sessions were not among them].
+- `restart.crashingSession` 20,492 -> 20,399 ms (20.3-20.5 s: **miss**, 1.36 x of 15 s; C-8, C-9;
+  every run as acceptance 10). Risk entry J-9197.
+- `gc.burst.turnStart` (J-9120 before CORE-9: median 246, p99 3,274, max 4,607) -> median 248, p99
+  518, max 3,972 ms; session cranks per turn 6.55 -> 4.02, GC frames per turn 2.55 -> 2.01; the max is
+  turn t109's 161-frame window with 6 cranks (J-9195). `gc.restart`: 0 idle sessions woken in 5 of 5
+  runs (before: 10 in run 1); a turn after the restarts completed in 987 ms and left 0 held frames.
+- `crash.restart.bound5` 35.8 / 68.5 / 36.4 s (M0) -> 35.7 s (**miss**, C-8, C-9); `bound2` 7.6-9.0 ->
+  5.5 s (pass); healthy clean/clean/SIGKILL 4.6-5.8 -> 4.85 / 4.60 / 4.77 s with 0 of 10 sleeping
+  vats woken (pass). Phase (b) again saw `h0`'s call into the given-up vat still pending after 30 s
+  (C-10, unchanged).
+Decision: every M1a budget is met except `restart.crashingSession` and M0's `crash.restart.bound5`,
+both recorded against C-8/C-9 as before. The creation-time cost has no margin left (J-9196).
+
+### J-9193 2026-11-17 M1a integration tooling - awkward
+Evidence: defects where the four hardening units' work met, each fixed in its own commit with a
+check that ran:
+(1) `2ea74a02f8`: the contract made `createdAt` the caller's `CreateOptions.at` (J-9150), but the
+slice helper that every integration file and perf script uses still called `createSession` without
+`at`, so all their sessions read `createdAt` 0. The helper stamps `Date.now()`; acceptance 1 checks
+`getInfo().createdAt` equals the `at` passed (m1a-slice 6/6).
+(2) `1728c1e401`: the core change made `journalLength` the delivery frontier and added `wakes`
+(J-9122); `restart.perf.mjs` still inferred a wake from journal growth (J-9127 (d)). It now reads
+`wakes` and also reports `frontierMoved` and `heldFrames`; both agreed in all 5 runs (J-9192).
+(3) `ddcdfc68e3`: the restart test could run each SIGKILL case only once, and contract 7.1 case 3 (a
+session idle across a restart, the reason for the clock comparison) had no direct test; it gains
+`M1A_KILL_DELAYS_MS` and the held-ports case, with a measurement line before the assertions (J-9190).
+(4) `58e7b572c1`: `turn.lease` subtracted the open answer that held ports removed and read 0; it now
+subtracts 3. Short check (TURN_N 20, ROUND_N 5, load 1.6-2.2):
+{"metric":"turn.lease","unit":"deliver frames","value":1,"deliveries":{"count":1,"perOp":1},"plainTurnDeliverFrames":4,"budget":{"deliveriesPerOp":1},"pass":true,"commit":"58e7b572c1-dirty","crankBudget":"50000000","loadAvg":[1.85,1.73,1.58]}
+(5) `156762e5b4`: `turn.start` lists any negative sample's raw times (J-9191).
+(6) `m1a-interfaces.md` 3.2 now states the `LiveSubscription` guard as built (envelope only), the
+subscriber bounds and the batch-order rule (J-9172 (1)).
+Not changed, carried to M1b W1b.0 (they are contract or session-vat changes, and each would rebuild
+the template and re-open every measurement above): the unbounded chain of outside-a-turn publishes
+(`guest/session/live.js` `outsideTail`, J-9172 (3)); a close `reason` on `LiveBatch` (J-9172 (2));
+the spec text for the blank-submission refusal (J-9150, PM). The C-16 workarounds (Set-based queue,
+no in-place moves) are kept: they cost nothing measurable and the turn path is tested with them.
+Reading: none of the defects was in the vat code; all were in tooling that observes the vat
+(helpers, perf arithmetic, gates) and had kept the old contract's numbers.
+Decision: done. A contract change must list the perf rows and helpers that encode it (W1b.0).
+
+### J-9194 2026-11-17 M1a summary engine - awkward
+Evidence: M1a end to end (build J-0200..J-0296, hardening J-9100..J-9174, integration J-9190..J-9193;
+outcome table in `milestones.md`). All 10 acceptance tests and QC 1 pass at the end; every M1a perf
+budget is met except `restart.crashingSession` (C-8, C-9).
+What fits Thixotrope well:
+- One vat per session as the system of record. A plain turn is 4 session deliveries (A, C, D, the
+  lease answer), a 2-call tool round adds 3; records are written in the crank that emits the effect,
+  so intent-before-effect needed no extra machinery: across 24 SIGKILLs at 0-4,000 ms in M1a's
+  restart tests no provider request or tool ran twice (J-9190), as S9 predicted for M0 (J-0165).
+- Recovery by the vat's own pending call: the lease break arrives during startup, and the first
+  client read 1.5 s after connecting already shows `outcome-unknown` / `interrupted` (J-0279, J-9190).
+- Deltas outside vats: 0 deliveries per delta, 0.17 ms to an in-process subscriber (J-9191).
+- Restart cost independent of idle sessions once CORE-9 landed: 10 idle sessions, none woken, 6.2 s
+  to serving (J-9192).
+What is awkward:
+- Holding ports across turns is what made turn start fit its budget (573 -> 255 ms, J-9191), and it
+  forces a clock comparison: a vat is not told that an adapter incarnation died (C-19), so "in flight
+  at the restart" and "claimed after it" are told apart by `TurnStarted.at` against `since` (J-9154).
+  Safe both ways, tested, but a protocol by convention.
+- A retired break is an exact string (C-18, J-0290); a tool must not reject with it.
+- Every vat hop costs 60-80 ms (C-7), so each design choice is counted in hops: the per-turn manager
+  hop alone was about 300 ms (J-0272).
+- Guest code has to be written defensively around engine behaviour: C-16 (fixed in the engine,
+  J-9101) cost a day of probing because Node never showed it.
+What is a poor fit:
+- GC traffic. Until CORE-9 every released object cost the exporting vat a full crank and woke idle
+  vats (turn start p99 3.3-10.4 s; 11 sessions woken at the first restart). Since CORE-9 the vat cost
+  is gone, but each GC frame still costs the supervisor a whole-file persist and an fsync per
+  outgoing frame (C-20): a 161-frame burst still holds a turn start for 4.0 s with 6 session cranks
+  (J-9192), and the M3 gateway will produce the same bursts.
+- Cold creation: 6.1 s for a 157 KB program, at its budget, because every inbound byte is hardened
+  (C-5); the pool (M1b) hides it, nothing removes it.
+- A crashing vat makes the whole daemon unreachable for 20-36 s at bound 5 (C-8, C-9).
+Decision: M1a is done. M1b starts with W1b.0 (contract, carried items in J-9193); the remaining
+performance risks are J-9195..J-9200.
+
+### J-9195 2026-11-17 M1a risk transport - perf
+Evidence: the remaining tail of turn start and of the client path is the supervisor's work per
+incoming GC frame (C-20). `gc.burst` at `ddcdfc68e3`: turn t109's window held 161 GC frames and 6
+session cranks and took 3,972 ms to reach the provider; `turn.start` p99 1.9 / 3.0 s and max 3.5-3.6 s
+in the two TURN_N 200 runs, each slow start a burst of 126-149 frames; `turn.delta.client` p95 0.74-
+1.8 s in streams that met 44-64 GC frames, a path with no vat in it (J-9191, J-9192). Bursts come
+from the native adapters' Node finalizers (J-9121) and recur at about the same turn index (t107-t109
+and t50 in three separate runs) [inferred: a V8 heap threshold in the adapter process]. Per incoming
+frame the hub decodes, releases rows, rewrites `hub.json` whole (`persist()`), and appends each
+outgoing frame to the target worker's journal with an fsync (J-9127 (1)); no timer covers these yet.
+Decision: risk for M1b's `concurrency.10` (10 sessions make 10 x the bursts) and for M3 (a gateway
+holding presences for many browser tabs). M1b perf row `hub.gcBurst` times persist and journal
+append per incoming GC frame before any fix; the fix proposed in J-9127 (a) (one table pass and one
+persist per run of incoming GC frames, one fsync per flush) is core work, candidate C-20.
+
+### J-9196 2026-11-17 M1a risk admin - perf
+Evidence: `session.createCold` 6,138 ms median (6.03-6.18 s) against 6 s, up from 5,890 ms as the
+session program grew from 142,994 to 157,493 bytes (J-0281, J-9192): about 10 us per byte of staging
+(C-5) plus the boot and `make()`. 42.5 KB of headroom remain under the 200 KB program bound, but the
+1.25 x rule leaves about 1.4 s, about 140 KB of program at 10 us per byte [inferred].
+Decision: risk until the M1b pool lands (a take is 157-176 ms, J-9045); after it, cold creation
+happens only in the background refill. Every addition to the session program should be weighed in
+bytes; M1b's exec tool and staging code go into the session program, the exec scope into its own.
+
+### J-9197 2026-11-17 M1a risk persistence - perf
+Evidence: a restart with one vat crashing on every replay serves after 20.3-20.5 s for a session vat
+(bound 5, killed while starting) and 35.7 s for M0's plain vat (killed while replaying) (J-9192);
+target 15 s. Nothing of the harness is reachable meanwhile (C-8), and the give-up time is a floor,
+not a bound (C-9). Unchanged by M1a; recorded against C-8/C-9 since M0 (J-9046).
+Decision: stays a recorded miss, not a milestone blocker (architecture 11). The browser shows
+"Server starting..." meanwhile (M3). The owner's open decision 16 (the bound) is unchanged.
+
+### J-9198 2026-11-17 M1a risk persistence - perf
+Evidence: restart costs that depend on what was awake at the kill, from the 20 SIGKILL runs (J-9190):
+a session vat awake and unsnapshotted at the kill makes the daemon serve in 8.8-9.3 s, asleep and
+checkpointed in 5.1-5.6 s (C-3: the unsnapshotted suffix is replayed before serving); and the first
+turn of a session that was idle across the restart pays a reopen (claim on dead ports, lease break,
+fresh ports, round 0 again): 0.78-0.99 s from submit to a completed one-chunk turn against about
+0.3 s otherwise (C-19). With N busy sessions at a crash the first cost grows with N [inferred: each
+replay is its own worker, run in parallel, so less than linear]; the second is paid once per idle
+session, at its next turn, and never wakes anyone early.
+Decision: accepted for M1b. M1b's `concurrency.10` should end with a SIGKILL of 10 busy sessions
+and record restart-to-serving (architecture 11 "after SIGKILL with unsnapshotted vats", C-3).
+
+### J-9199 2026-11-17 M1a risk engine - perf
+Evidence: costs that M1a measured only in Node or not at all: a history page through the session
+(0.77 ms in Node with the structural guard, 18 ms strict, J-9153; in a vat the strict guard cost about
+120 ms per 8-record turn, J-0243), `watch()` snapshots of long sessions, and the session vat's
+snapshot size as its record log grows (every settled turn stays a record, R4-64, J-9152). The largest
+session in M1a's perf ran 244 turns.
+Decision: M1b adds the `history.page` vat row; the 1,000-turn session of `context.rebuild` should
+also record `watch()` time and the snapshot bytes (architecture 11 "session vat snapshot with 10,000
+turns" is M13's decision point).
+
+### J-9200 2026-11-17 M1a risk transport - perf
+Evidence: everything in M1a's perf ran one busy session at a time. Daemon-wide each plain turn costs
+6.0 engine deliveries (session 4, plus the factory's row reports and the manager), all on one
+supervisor thread that also persists `hub.json` per frame (C-2) and handles the GC frames (C-20)
+(J-9191). Ten sessions streaming with tool rounds (M1b `concurrency.10`: per-session start <= 2 x
+single, crank p95 <= 200 ms) has not been tried.
+Decision: risk for M1b; `concurrency.10` must report per-session turn start p50/p99, the hub's GC
+frames per second and `hub.json` rewrites per second, so a miss can be attributed to C-2, C-7 or C-20.
