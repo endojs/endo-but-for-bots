@@ -133,6 +133,9 @@ run('provision, create, list, lost after restart', async t => {
         ['inventory vats', false],
         ['install harness', false],
         ['load session program', false],
+        // M1b W1b.5 appends these (the exec step runs once W1b.3's program exists).
+        ['load exec program', buildReports[4]?.skipped],
+        ['pool', false],
       ],
     );
     const byName = new Map(buildReports.map(r => [r.name, r]));

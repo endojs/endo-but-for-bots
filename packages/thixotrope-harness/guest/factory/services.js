@@ -25,6 +25,8 @@ const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
  * @property {any} backend this session's Backend
  * @property {any} preset this session's Preset
  * @property {string} key the session key
+ * @property {() => any} [makeExecVat] makes this session's `ExecHandle`
+ *   (M1b W1b.5; absent without a pool)
  */
 
 /**
@@ -39,13 +41,21 @@ const backendAndHost = async ({ admin, backend }) => ({
   host: await E(admin).forSession(),
 });
 
+/**
+ * M1b W1b.5: the session's exec-vat lease (`ExecHandle`, made by the
+ * factory from its pool; architecture 3.2, m1b-interfaces.md 3.4).
+ * @type {ServiceBuilder}
+ */
+const execVat = async ({ makeExecVat }) =>
+  makeExecVat === undefined ? {} : { execVat: makeExecVat() };
+
 /** Hook table (append-only). */
-export const serviceBuilders = harden([backendAndHost]);
+export const serviceBuilders = harden([backendAndHost, execVat]);
 
 /**
  * Merge every builder's part; the result must be a `shapes.SessionServices`.
  * @param {ServicesContext} context
- * @returns {Promise<{ backend: any, host: any }>}
+ * @returns {Promise<{ backend: any, host: any, execVat?: any }>}
  */
 export const buildSessionServices = async context => {
   /** @type {Record<string, any>} */
@@ -56,6 +66,6 @@ export const buildSessionServices = async context => {
   }
   const result = harden(services);
   mustMatch(result, shapes.SessionServices);
-  return /** @type {{ backend: any, host: any }} */ (result);
+  return /** @type {{ backend: any, host: any, execVat?: any }} */ (result);
 };
 harden(buildSessionServices);

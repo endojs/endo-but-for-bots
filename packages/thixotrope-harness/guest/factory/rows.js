@@ -60,8 +60,17 @@ const PAGE_OVERHEAD_BYTES = 1024;
 
 /**
  * The row table and its row reporters.
+ *
+ * M1b (W1b.5): `onChange(row, kind)` is told of every change (`kind`
+ * 'changed' or 'removed'), so the list feed can publish it; `rev`, when
+ * given, is the revision pages report (the list feed's batch rev, so
+ * `listSessions().rev` and the feed agree); by default the table counts
+ * changes itself, as in M1a.
+ * @param {object} [options]
+ * @param {(row: Row, kind: 'changed' | 'removed') => void} [options.onChange]
+ * @param {() => number} [options.rev]
  */
-export const makeRowTable = () => {
+export const makeRowTable = ({ onChange, rev: revOf } = {}) => {
   /** @type {Map<string, Row>} */
   const byKey = new Map();
   /**
@@ -73,8 +82,13 @@ export const makeRowTable = () => {
   let counter = 0;
   let rev = 0;
 
-  const bump = () => {
+  /**
+   * @param {Row} row
+   * @param {'changed' | 'removed'} [kind]
+   */
+  const bump = (row, kind = 'changed') => {
     rev += 1;
+    if (onChange !== undefined) onChange(row, kind);
   };
 
   /**
@@ -102,7 +116,7 @@ export const makeRowTable = () => {
     };
     byKey.set(row.key, row);
     order.push(row);
-    bump();
+    bump(row);
     return row;
   };
 
@@ -115,7 +129,7 @@ export const makeRowTable = () => {
     row.dropped = true;
     byKey.delete(row.key);
     order = order.filter(other => other !== row);
-    bump();
+    bump(row, 'removed');
   };
 
   /**
@@ -128,7 +142,7 @@ export const makeRowTable = () => {
     row.session = session;
     row.internal = internal;
     row.state = 'ready';
-    bump();
+    bump(row);
   };
 
   /**
@@ -161,7 +175,7 @@ export const makeRowTable = () => {
       row.queuedCount = patch.queuedCount;
       changed = true;
     }
-    if (changed) bump();
+    if (changed) bump(row);
   };
 
   /**
@@ -171,7 +185,7 @@ export const makeRowTable = () => {
   const markLost = row => {
     if (row.dropped || row.state === 'lost') return;
     row.state = 'lost';
-    bump();
+    bump(row);
   };
 
   /**
@@ -205,6 +219,8 @@ export const makeRowTable = () => {
       messageCount: row.messageCount,
       queuedCount: row.queuedCount,
     });
+
+  const pageRev = () => (revOf === undefined ? rev : revOf());
 
   /** @param {Row} row */
   const isListed = row => row.state !== 'creating' && row.userInitiated;
@@ -251,8 +267,8 @@ export const makeRowTable = () => {
     /** @type {{ rows: ReturnType<typeof listed>[], rev: number, next?: string }} */
     const result =
       more && rows.length > 0
-        ? harden({ rows, rev, next: rows[rows.length - 1].key })
-        : harden({ rows, rev });
+        ? harden({ rows, rev: pageRev(), next: rows[rows.length - 1].key })
+        : harden({ rows, rev: pageRev() });
     mustMatch(result, shapes.SessionPage);
     return result;
   };
@@ -265,6 +281,8 @@ export const makeRowTable = () => {
     markLost,
     makeReporter,
     page,
+    listed,
+    isListed,
     /** @param {string} key */
     get: key => byKey.get(key),
     /**
@@ -273,7 +291,7 @@ export const makeRowTable = () => {
      */
     all: () => [...order],
     size: () => order.length,
-    rev: () => rev,
+    rev: pageRev,
   });
 };
 harden(makeRowTable);

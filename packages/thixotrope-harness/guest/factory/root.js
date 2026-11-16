@@ -18,12 +18,13 @@
  * Guest rules: prelude globals only; pieces are kept in a `Map` keyed by
  * index while loading and as an array once complete.
  */
-import { interfaces } from '../lib/interfaces.js';
+import { m1bInterfaces } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { utf8Bytes } from '../lib/bounded.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RowTable } from './rows.js' */
+/** @import { Pool } from './pool.js' */
 const { makeExo } = /** @type {GuestGlobals} */ (globalThis);
 
 /**
@@ -56,8 +57,13 @@ export const maxProgramBytes = limits.execSourceBytes;
  * @property {(piece: { digest: string, index: number, count: number, text: string }) => { complete: boolean, bytes: number }} load
  */
 
-/** @returns {ProgramStore} */
-export const makeProgramStore = () => {
+/**
+ * @param {object} [options]
+ * @param {string} [options.what] the program's name in refusals (M1b: the
+ *   exec program has its own store)
+ * @returns {ProgramStore}
+ */
+export const makeProgramStore = ({ what = 'session program' } = {}) => {
   /** @type {SessionProgram | undefined} */
   let program;
   /** @type {{ digest: string, count: number, pieces: Map<number, string>, bytes: number } | undefined} */
@@ -66,10 +72,10 @@ export const makeProgramStore = () => {
   /** @param {{ digest: string, index: number, count: number, text: string }} piece */
   const load = ({ digest, index, count, text }) => {
     if (!/^[0-9a-f]{64}$/.test(digest))
-      throw Error('A session program digest is 64 lower-case hex digits');
+      throw Error(`A ${what} digest is 64 lower-case hex digits`);
     if (!Number.isSafeInteger(count) || count < 1 || count > MAX_PROGRAM_PIECES)
       throw Error(
-        `A session program has 1 to ${MAX_PROGRAM_PIECES} pieces, not ${count}`,
+        `A ${what} has 1 to ${MAX_PROGRAM_PIECES} pieces, not ${count}`,
       );
     if (!Number.isSafeInteger(index) || index >= count)
       throw Error(`Piece index ${index} is not below the count ${count}`);
@@ -78,7 +84,7 @@ export const makeProgramStore = () => {
     const bytes = utf8Bytes(text);
     if (bytes > programPieceBytes)
       throw Error(
-        `A session program piece is at most ${programPieceBytes} bytes, not ${bytes}`,
+        `A ${what} piece is at most ${programPieceBytes} bytes, not ${bytes}`,
       );
     if (
       loading === undefined ||
@@ -92,7 +98,7 @@ export const makeProgramStore = () => {
       if (current.bytes + bytes > maxProgramBytes) {
         loading = undefined;
         throw Error(
-          `A session program is at most ${maxProgramBytes} bytes in this build`,
+          `A ${what} is at most ${maxProgramBytes} bytes in this build`,
         );
       }
       current.pieces.set(index, text);
@@ -114,26 +120,68 @@ export const makeProgramStore = () => {
 };
 harden(makeProgramStore);
 
+/** @param {SessionProgram | undefined} program */
+const programInfo = program =>
+  program === undefined
+    ? { digest: '', bytes: 0 }
+    : { digest: program.digest, bytes: program.bytes };
+
+/** Pool methods called on a root made without a pool (M1a tests). */
+export const NO_POOL_TEXT = 'This harness root has no spare pool';
+
 /**
+ * The harness root (`m1bInterfaces.HarnessRoot` since M1b W1b.5: the exec
+ * program, pool settings and `whenSettled`). Without `pool` (M1a tests)
+ * `status()` has no `pool` or `execProgram` and the pool methods throw.
  * @param {object} powers
  * @param {any} powers.operator
  * @param {RowTable} powers.rows
- * @param {ProgramStore} powers.programs
+ * @param {ProgramStore} powers.programs the session program
+ * @param {ProgramStore} [powers.execPrograms] the exec program (M1b)
+ * @param {Pool} [powers.pool] (M1b)
  */
-export const makeHarnessRoot = ({ operator, rows, programs }) =>
-  makeExo('HarnessRoot', interfaces.HarnessRoot, {
+export const makeHarnessRoot = ({
+  operator,
+  rows,
+  programs,
+  execPrograms,
+  pool,
+}) => {
+  const needPool = () => {
+    if (pool === undefined || execPrograms === undefined)
+      throw Error(NO_POOL_TEXT);
+    return { pool, execPrograms };
+  };
+  return makeExo('HarnessRoot', m1bInterfaces.HarnessRoot, {
     getOperator: () => operator,
     status: () => {
-      const program = programs.current();
-      return harden({
+      const base = {
         sessions: rows.size(),
-        program:
-          program === undefined
-            ? { digest: '', bytes: 0 }
-            : { digest: program.digest, bytes: program.bytes },
+        program: programInfo(programs.current()),
+      };
+      if (pool === undefined || execPrograms === undefined) return harden(base);
+      return harden({
+        ...base,
+        execProgram: programInfo(execPrograms.current()),
+        pool: pool.status(),
       });
     },
     /** @param {any} piece a `shapes.ProgramPiece` (checked by the guard) */
-    loadSessionProgram: piece => programs.load(piece),
+    loadSessionProgram: piece => {
+      const answer = programs.load(piece);
+      if (answer.complete) pool?.programChanged();
+      return answer;
+    },
+    /** @param {any} piece a `shapes.ProgramPiece` (checked by the guard) */
+    loadExecProgram: piece => {
+      const parts = needPool();
+      const answer = parts.execPrograms.load(piece);
+      if (answer.complete) parts.pool.programChanged();
+      return answer;
+    },
+    /** @param {any} changes `m1bShapes.HarnessSettings` (checked by the guard) */
+    configure: changes => needPool().pool.configure(changes),
+    whenSettled: () => needPool().pool.whenSettled(),
   });
+};
 harden(makeHarnessRoot);

@@ -730,7 +730,17 @@ test('start listener: a probe that never settles does not hold back the others',
 
 test('the hook tables have M1a entries and the services are attenuated', async t => {
   t.is(optionResolvers.length, 3);
-  t.is(serviceBuilders.length, 1);
+  // M1b W1b.5 appends the execVat builder (empty without a pool).
+  t.is(serviceBuilders.length, 2);
+  t.deepEqual(
+    await serviceBuilders[1]({
+      admin: makeFakeAdmin().admin,
+      backend,
+      preset: Far('Preset', {}),
+      key: 's1',
+    }),
+    {},
+  );
   const fakeAdmin = makeFakeAdmin();
   const services = await serviceBuilders[0]({
     admin: fakeAdmin.admin,

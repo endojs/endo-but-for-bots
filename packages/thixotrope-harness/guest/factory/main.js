@@ -14,13 +14,22 @@
  * factory's start listener with the agent-host manager, whose
  * `lifecycle.started()` calls it at every daemon start (D-5).
  *
+ * M1b (W1b.5): the factory also holds the spare pool (`pool.js`, with the
+ * exec program's store and the pool settings) and the session list feed
+ * (`list-feed.js`), which the row table tells of every row change. `make`
+ * fetches the first list publisher; the start listener fetches it again at
+ * every start.
+ *
  * Guest rules: prelude globals only.
  */
-import { makeFactoryKit } from './factory.js';
+import { makeFactoryKit, stagingSources } from './factory.js';
+import { makeListFeed } from './list-feed.js';
+import { makePool, makePoolSettings } from './pool.js';
 import { makeHarnessRoot, makeProgramStore } from './root.js';
 import { makeRowTable } from './rows.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+/** @import { ListFeed } from './list-feed.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
 
 /**
@@ -29,9 +38,40 @@ const { E } = /** @type {GuestGlobals} */ (globalThis);
  * @param {any} powers.vats the worker controller
  */
 export const make = ({ host, vats }) => {
-  const rows = makeRowTable();
+  /** @type {{ feed: ListFeed | undefined }} */
+  const late = { feed: undefined };
+  const rows = makeRowTable({
+    onChange: (row, kind) => {
+      if (kind === 'removed') late.feed?.removed(row);
+      else late.feed?.changed(row);
+    },
+    rev: () => late.feed?.rev() ?? 0,
+  });
+  const listFeed = makeListFeed({
+    admin: host,
+    listed: rows.listed,
+    isListed: rows.isListed,
+  });
+  late.feed = listFeed;
   const programs = makeProgramStore();
-  const kit = makeFactoryKit({ admin: host, vats, programs, rows });
+  const execPrograms = makeProgramStore({ what: 'exec program' });
+  const settings = makePoolSettings();
+  const pool = makePool({
+    vats,
+    programs: { session: programs, exec: execPrograms },
+    settings,
+    sessionSources: stagingSources,
+  });
+  const kit = makeFactoryKit({
+    admin: host,
+    vats,
+    programs,
+    rows,
+    pool,
+    settings,
+    listFeed,
+  });
+  void listFeed.refresh();
   // The Registration is kept for the vat's life. A failure leaves the
   // factory without restart recovery; the provisioning test checks that a
   // restart reaches the listener.
@@ -45,6 +85,12 @@ export const make = ({ host, vats }) => {
       },
       () => undefined,
     );
-  return makeHarnessRoot({ operator: kit.operator, rows, programs });
+  return makeHarnessRoot({
+    operator: kit.operator,
+    rows,
+    programs,
+    execPrograms,
+    pool,
+  });
 };
 harden(make);

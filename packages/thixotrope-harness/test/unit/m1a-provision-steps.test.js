@@ -22,6 +22,7 @@ import {
   programPieceBytes,
   provisionSteps,
   sessionProgramBytes,
+  standinExecEntry,
   standinSessionEntry,
   templateIdFor,
 } from '../../scripts/provision-steps.js';
@@ -85,6 +86,9 @@ test('the provisioning steps install, load the program, and re-run as a no-op', 
   const reports = [];
   const run = makeProvision({
     sessionEntry: standinSessionEntry,
+    // M1b W1b.5: the exec step is appended; the stand-in keeps this test
+    // independent of guest/exec/main.js.
+    execEntry: standinExecEntry,
     onStep: report => reports.push(report),
   });
   const first = await run({ client });
@@ -95,6 +99,8 @@ test('the provisioning steps install, load the program, and re-run as a no-op', 
       ['inventory vats', false],
       ['install harness', false],
       ['load session program', false],
+      ['load exec program', false],
+      ['pool', false],
     ],
   );
   t.deepEqual(reports, first);
@@ -120,7 +126,7 @@ test('the provisioning steps install, load the program, and re-run as a no-op', 
   t.true(second.every(r => r.skipped));
   t.deepEqual(
     calls.map(c => c[0]),
-    ['lookup', 'lookup', 'lookup', 'lookup'],
+    ['lookup', 'lookup', 'lookup', 'lookup', 'lookup', 'lookup'],
   );
 });
 
@@ -156,7 +162,7 @@ test('the template id follows the provisioned code', async t => {
   );
 });
 
-test('the steps table is the M1a list, each with a name and a run', t => {
+test('the steps table is the M1a list, then M1b W1b.5 appends', t => {
   t.deepEqual(
     provisionSteps.map(s => s.name),
     [
@@ -164,6 +170,8 @@ test('the steps table is the M1a list, each with a name and a run', t => {
       'inventory vats',
       'install harness',
       'load session program',
+      'load exec program',
+      'pool',
     ],
   );
   t.true(Object.isFrozen(provisionSteps));

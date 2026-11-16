@@ -22,6 +22,18 @@
  *    unless the factory already holds that digest.
  * The factory registers its start listener itself when it is made.
  *
+ * M1b's steps (W1b.5, appended):
+ * 5. `load exec program`: bundle the exec program (`guest/exec/main.js`,
+ *    W1b.3; `options.execEntry` overrides it) and load it with
+ *    `HarnessRoot.loadExecProgram` in pieces, unless the factory holds that
+ *    digest; skipped when there is no exec program yet.
+ * 6. `pool`: `HarnessRoot.configure(options.pool)` then `whenSettled()`, so
+ *    a template is stopped with its spares made and asleep; skipped when the
+ *    targets are already as asked and the pool is full. `makeProvision`
+ *    defaults to no spares (`M1A_POOL`: M1a's states create cold, as their
+ *    tests and perf rows expect); `provision` and `m1bTemplateOptions` use
+ *    the factory's defaults (2 session spares, 1 exec spare).
+ *
  * `provision(context)` runs the steps with the session program
  * `guest/session/main.js` (W1a.4). `makeProvision({ sessionEntry })` runs
  * them with another program (the factory's tests use the stand-in
@@ -61,6 +73,22 @@ export const standinSessionEntry = path.join(
   'standin-session.js',
 );
 
+/** The exec program (W1b.3). */
+export const execEntry = path.join(guestRoot, 'exec', 'main.js');
+/** The pool's stand-in exec program (tests until W1b.3 lands). */
+export const standinExecEntry = path.join(
+  guestRoot,
+  'factory',
+  'standin-exec.js',
+);
+
+/**
+ * Pool settings for M1a's states: no spares, every creation cold (their
+ * tests and perf rows measure the cold path and find vats by
+ * `session s<n>` labels).
+ */
+export const M1A_POOL = harden({ spareSessions: 0, spareExec: 0 });
+
 /** Inventory names (F.2 c: names a CLI and tests use). */
 export const names = harden({
   agentHost: 'agentHostAdmin',
@@ -82,7 +110,12 @@ export const sessionProgramBytes = 200_000;
  * @typedef {object} StepContext
  * @property {any} client a control client on the harness workspace
  * @property {(options?: { workspace?: string }) => Promise<any>} [connect]
- * @property {{ sessionEntry: string }} options
+ * @property {{ sessionEntry: string, execEntry?: string, pool?: PoolOption }} options
+ */
+
+/**
+ * @typedef {{ spareSessions?: number, spareExec?: number, execDeadlineMs?: number }} PoolOption
+ *   `HarnessRoot.configure` settings; `{}` keeps the factory's defaults
  */
 
 /**
@@ -159,22 +192,89 @@ const m1aSteps = [
   },
 ];
 
+/** @type {ProvisionStep[]} */
+const m1bSteps = [
+  {
+    name: 'load exec program',
+    run: async ({ client, options }) => {
+      const entry = options.execEntry ?? execEntry;
+      if (!existsSync(entry))
+        return { skipped: true, detail: { missing: entry } };
+      const bundle = await bundleGuest(entry, { guestRoot });
+      const harness = await client.call('lookup', names.harness);
+      const status = await E(harness).status();
+      const detail = { bytes: bundle.bytes, digest: bundle.digest };
+      if (status.execProgram?.digest === bundle.digest)
+        return { skipped: true, detail };
+      const answer = await loadProgramPieces(harness, bundle, 'exec');
+      return { skipped: false, detail: { ...detail, pieces: answer.pieces } };
+    },
+  },
+  {
+    name: 'pool',
+    run: async ({ client, options }) => {
+      const wanted = options.pool ?? {};
+      const harness = await client.call('lookup', names.harness);
+      const before = await E(harness).status();
+      const { pool } = before;
+      if (pool === undefined) return { skipped: true };
+      const target = { ...pool.target, ...wanted };
+      const execLoaded = (before.execProgram?.digest ?? '') !== '';
+      const satisfied =
+        pool.target.spareSessions === target.spareSessions &&
+        pool.target.spareExec === target.spareExec &&
+        wanted.execDeadlineMs === undefined &&
+        pool.refilling === 0 &&
+        pool.spareSessions === target.spareSessions &&
+        (!execLoaded || pool.spareExec === target.spareExec);
+      if (satisfied) return { skipped: true, detail: { pool } };
+      const t0 = performance.now();
+      await E(harness).configure(harden(wanted));
+      const settled = await E(harness).whenSettled();
+      return {
+        skipped: false,
+        detail: {
+          pool: settled,
+          settleMs: +(performance.now() - t0).toFixed(1),
+        },
+      };
+    },
+  },
+];
+
 /** Hook table (append-only). */
-export const provisionSteps = harden(m1aSteps);
+export const provisionSteps = harden([...m1aSteps, ...m1bSteps]);
 
 /**
  * Load a program source into the factory in pieces.
  * @param {any} harness the HarnessRoot
  * @param {{ source: string, digest: string }} program
  */
-export const loadSessionProgram = async (harness, { source, digest }) => {
+export const loadSessionProgram = async (harness, program) =>
+  loadProgramPieces(harness, program, 'session');
+
+/**
+ * Load a program source into the factory in pieces: the session program
+ * (`loadSessionProgram`) or the exec program (`loadExecProgram`, M1b).
+ * @param {any} harness the HarnessRoot
+ * @param {{ source: string, digest: string }} program
+ * @param {'session' | 'exec'} kind
+ */
+export const loadProgramPieces = async (harness, { source, digest }, kind) => {
   const { chunkText } = await guestBounded();
   const pieces = chunkText(source, programPieceBytes);
   let answer = { complete: false, bytes: 0 };
   for (let index = 0; index < pieces.length; index += 1) {
-    answer = await E(harness).loadSessionProgram(
-      harden({ digest, index, count: pieces.length, text: pieces[index] }),
-    );
+    const piece = harden({
+      digest,
+      index,
+      count: pieces.length,
+      text: pieces[index],
+    });
+    answer =
+      kind === 'exec'
+        ? await E(harness).loadExecProgram(piece)
+        : await E(harness).loadSessionProgram(piece);
   }
   if (!answer.complete)
     throw Error(`the factory did not complete program ${digest}`);
@@ -205,11 +305,19 @@ const guestBounded = async () => {
  * The provisioning function for a session program.
  * @param {object} [options]
  * @param {string} [options.sessionEntry] default `guest/session/main.js`
+ * @param {string} [options.execEntry] default `guest/exec/main.js` (M1b;
+ *   the step is skipped while it does not exist)
+ * @param {PoolOption} [options.pool] default `M1A_POOL` (no spares)
  * @param {(report: StepReport) => void} [options.onStep]
  * @returns {(context: { client: any, connect?: any }) => Promise<StepReport[]>}
  */
 export const makeProvision =
-  ({ sessionEntry: entry = sessionEntry, onStep } = {}) =>
+  ({
+    sessionEntry: entry = sessionEntry,
+    execEntry: exec = execEntry,
+    pool = M1A_POOL,
+    onStep,
+  } = {}) =>
   async ({ client, connect }) => {
     if (!existsSync(entry))
       throw Error(`No session program at ${entry} (W1a.4 writes it)`);
@@ -221,7 +329,7 @@ export const makeProvision =
       const result = await step.run({
         client,
         connect,
-        options: { sessionEntry: entry },
+        options: { sessionEntry: entry, execEntry: exec, pool },
       });
       const report = {
         name: step.name,
@@ -236,11 +344,12 @@ export const makeProvision =
   };
 
 /**
- * Provision with the session program (the template helper's `provision`).
+ * Provision with the session program, the exec program and the factory's
+ * default pool (the template helper's `provision`; M1b's states).
  * @param {{ client: any, connect?: any }} context
  */
 export const provision = async context => {
-  await makeProvision()(context);
+  await makeProvision({ pool: {} })(context);
 };
 
 /**
@@ -271,16 +380,24 @@ const hashTree = async (hash, dir) => {
  * and crank budget are in the template key already.
  * @param {object} [options]
  * @param {string} [options.sessionEntry]
+ * @param {string} [options.execEntry] (M1b) hashed when it exists
+ * @param {PoolOption} [options.pool] (M1b) default `M1A_POOL`
  * @param {string} [options.prefix] default `m1a`
  */
 export const templateIdFor = async ({
   sessionEntry: entry = sessionEntry,
+  execEntry: exec = execEntry,
+  pool = M1A_POOL,
   prefix = 'm1a',
 } = {}) => {
   const hash = createHash('sha256');
   for (const bundleEntry of [factoryEntry, entry]) {
     hash.update((await bundleGuest(bundleEntry, { guestRoot })).digest);
   }
+  if (existsSync(exec))
+    hash.update((await bundleGuest(exec, { guestRoot })).digest);
+  hash.update(JSON.stringify(pool));
+  hash.update(await readFile(path.join(here, 'provision-steps.js')));
   for (const file of ['durable.js', 'ephemeral.js']) {
     hash.update(await readFile(path.join(agentHostDirectory, file)));
   }
@@ -304,6 +421,44 @@ export const m1aTemplateOptions = async ({
   const run = makeProvision({ sessionEntry: entry, onStep });
   return {
     id: await templateIdFor({ sessionEntry: entry, prefix }),
+    /** @param {{ client: any, connect?: any }} context */
+    provision: async context => {
+      await run(context);
+    },
+  };
+};
+
+/**
+ * Options for `ensureTemplate` that build an M1b state template: the
+ * session and exec programs and a pool (default: the factory's targets),
+ * provisioned with its spares made and asleep.
+ * @param {object} [options]
+ * @param {string} [options.sessionEntry]
+ * @param {string} [options.execEntry]
+ * @param {PoolOption} [options.pool] default `{}` (the factory's defaults)
+ * @param {string} [options.prefix] default `m1b`
+ * @param {(report: StepReport) => void} [options.onStep]
+ */
+export const m1bTemplateOptions = async ({
+  sessionEntry: entry = sessionEntry,
+  execEntry: exec = execEntry,
+  pool = {},
+  prefix = 'm1b',
+  onStep,
+} = {}) => {
+  const run = makeProvision({
+    sessionEntry: entry,
+    execEntry: exec,
+    pool,
+    onStep,
+  });
+  return {
+    id: await templateIdFor({
+      sessionEntry: entry,
+      execEntry: exec,
+      pool,
+      prefix,
+    }),
     /** @param {{ client: any, connect?: any }} context */
     provision: async context => {
       await run(context);

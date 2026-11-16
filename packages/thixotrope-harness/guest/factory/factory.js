@@ -19,18 +19,29 @@
  * D-5). Idle sessions are never called. A retired break from a session
  * marks its row `lost` (D-17).
  *
+ * M1b (W1b.5): with a pool, `createSession` takes a spare session vat
+ * (`pool.js`) instead of creating one, then calls `make` and `bindSession`
+ * in that order exactly as a cold creation; a spare whose `make` breaks
+ * with the retired text is lost, retired and replaced once. Each session
+ * gets an `ExecHandle` (`SessionServices.execVat`). The start listener also
+ * refreshes the list feed's publisher and restarts the pool's refills. Row
+ * changes reach the list feed through the row table (`list-feed.js`).
+ *
  * Guest rules: prelude globals only; no clock (`createdAt` is the caller's
  * `CreateOptions.at`, else the latest one the factory saw); answered sends are sequential in a creation and at most
  * `PROBE_WINDOW` at once in the start listener.
  */
-import { interfaces, shapes, texts } from '../lib/interfaces.js';
+import { interfaces, m1bInterfaces, shapes, texts } from '../lib/interfaces.js';
 import { isRetiredBreak } from '../lib/retired.js';
+import { makeExecHandle } from './pool.js';
 import { buildSessionServices } from './services.js';
 import { resolveCreateOptions } from './session-options.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RowTable, Row } from './rows.js' */
 /** @import { ProgramStore, SessionProgram } from './root.js' */
+/** @import { Pool, PoolSettings } from './pool.js' */
+/** @import { ListFeed } from './list-feed.js' */
 const { E, makeExo } = /** @type {GuestGlobals} */ (globalThis);
 /** @type {GuestGlobals['mustMatch']} */
 const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
@@ -66,6 +77,7 @@ export const INTERRUPTED_CREATION_TEXT =
  * @property {any} facade the new worker's facade, once created
  * @property {{ host: any, backend: any } | undefined} services
  * @property {{ session: any, internal: any } | undefined} made `make`'s answer
+ * @property {boolean} fromSpare the vat was a pool spare (M1b)
  * @property {boolean} finished
  * @property {boolean} abandoned rolled back (by its own failure or the start listener)
  */
@@ -78,6 +90,10 @@ export const INTERRUPTED_CREATION_TEXT =
  * @param {RowTable} powers.rows
  * @param {() => number} [powers.lastKnownTime] the time a creation without
  *   `at` is stamped with; by default the latest `at` the factory has seen
+ * @param {Pool} [powers.pool] the spare pool (M1b W1b.5); without it every
+ *   creation is cold and sessions get no `execVat` (M1a)
+ * @param {PoolSettings} [powers.settings] the pool's settings (exec deadline)
+ * @param {ListFeed} [powers.listFeed] the session list feed (M1b W1b.5)
  */
 export const makeFactoryKit = ({
   admin,
@@ -85,6 +101,9 @@ export const makeFactoryKit = ({
   programs,
   rows,
   lastKnownTime,
+  pool,
+  settings,
+  listFeed,
 }) => {
   /** The latest `CreateOptions.at` seen (vats have no clock: time is data). */
   let latestAt = 0;
@@ -138,6 +157,18 @@ export const makeFactoryKit = ({
   };
 
   /**
+   * Take a spare session vat for this creation (M1b), if the pool has one.
+   * @param {Creation} creation
+   */
+  const takeSpare = creation => {
+    const spare = pool?.takeSession();
+    if (spare === undefined) return undefined;
+    creation.facade = spare.facade;
+    creation.fromSpare = true;
+    return spare.value;
+  };
+
+  /**
    * Stage the session program into a new worker and evaluate it.
    * @param {Creation} creation
    * @param {SessionProgram} program
@@ -184,15 +215,23 @@ export const makeFactoryKit = ({
       made: undefined,
       finished: false,
       abandoned: false,
+      fromSpare: false,
     };
     creations.add(creation);
     try {
-      const maker = await loadProgram(creation, program);
+      // A take is make() then bindSession(), as a cold creation (contract
+      // 6.6): the creation-time open the session sends in make() is
+      // answered by the manager only after the bind.
+      let maker = takeSpare(creation) ?? (await loadProgram(creation, program));
       const services = await buildSessionServices({
         admin,
         backend: resolved.backend,
         preset: resolved.preset,
         key: row.key,
+        makeExecVat:
+          pool === undefined || settings === undefined
+            ? undefined
+            : () => makeExecHandle({ pool, settings }),
       });
       ensureLive(creation);
       creation.services = services;
@@ -206,9 +245,27 @@ export const makeFactoryKit = ({
         userInitiated: resolved.userInitiated,
       });
       mustMatch(config, shapes.SessionConfig);
-      const made = await E(maker).make(
-        harden({ config, services, rowReporter: rows.makeReporter(row) }),
-      );
+      const makeArgs = harden({
+        config,
+        services,
+        rowReporter: rows.makeReporter(row),
+      });
+      /** @type {any} */
+      let made;
+      try {
+        made = await E(maker).make(makeArgs);
+      } catch (error) {
+        // A lost spare (halted or given up while it slept, D-17): retire
+        // it and take the next spare, or create cold, once (contract 7).
+        if (!creation.fromSpare || !isRetiredBreak(error)) throw error;
+        ensureLive(creation);
+        pool?.retire(creation.facade);
+        creation.facade = undefined;
+        creation.fromSpare = false;
+        maker = takeSpare(creation) ?? (await loadProgram(creation, program));
+        ensureLive(creation);
+        made = await E(maker).make(makeArgs);
+      }
       mustMatch(made, shapes.MadeSession);
       ensureLive(creation);
       creation.made = /** @type {{ session: any, internal: any }} */ (made);
@@ -221,7 +278,7 @@ export const makeFactoryKit = ({
     }
   };
 
-  const factory = makeExo('SessionFactory', interfaces.SessionFactory, {
+  const factory = makeExo('SessionFactory', m1bInterfaces.SessionFactory, {
     createSession,
     /** @param {{ after?: string, limit?: number }} [options] */
     listSessions: options => rows.page(options),
@@ -233,6 +290,9 @@ export const makeFactoryKit = ({
       return row.session;
     },
     listPresets: () => presets,
+    /** The list rev viewers subscribe from (`Live.subscribeList(rev)`). */
+    sessionListFeed: () =>
+      harden({ rev: listFeed === undefined ? rows.rev() : listFeed.rev() }),
   });
 
   const operator = makeExo('Operator', interfaces.Operator, {
@@ -287,6 +347,11 @@ export const makeFactoryKit = ({
   const recover = async () => {
     epoch += 1;
     const current = epoch;
+    // The previous incarnation's publisher is a tombstone; fetch the new
+    // one (not awaited: changes before it answers go unpublished, and
+    // viewers of the new incarnation start from the rev anyway).
+    void listFeed?.refresh();
+    pool?.onStart();
     const interrupted = [...creations].filter(c => c.epoch < current);
     await Promise.all(
       interrupted.map(async creation => {
