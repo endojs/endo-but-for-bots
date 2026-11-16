@@ -241,7 +241,19 @@ export const makeScriptedProvider = ({
       }
       const text = chunk.text.repeat(chunk.repeat ?? 1);
       parts.push(text);
+      const publishedAt = now();
       channel.publishDelta(harden({ type: 'delta', turnId, round, text }));
+      // Logged after this turn of the event loop, so the fsync does not
+      // delay the subscribers' answers (perf turn.delta reads `at`). A
+      // late write that fails (the log removed meanwhile) is dropped: it
+      // must not take the adapter process down.
+      timers.after(0, () => {
+        try {
+          log('delta', { ...where, units: text.length, at: publishedAt });
+        } catch {
+          // Dropped.
+        }
+      });
     }
     const text = parts.join('');
     if (scripted.stall === 'untilCancel') await control.whenStopped;

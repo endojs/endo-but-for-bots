@@ -157,6 +157,9 @@ const makeRig = (script, events) => {
    * @param {Record<string, unknown>} [fields]
    */
   const logFn = (kind, fields = {}) => {
+    // `delta` lines are written on a later turn of the event loop (perf
+    // turn.delta, W1a.7); these tests check the order of the others.
+    if (kind === 'delta') return;
     log.push({ kind, ...fields });
     events.push(['log', kind]);
   };
@@ -814,10 +817,17 @@ test('scripted backend writes its event log as fsynced JSON lines', async t => {
   await E(ports.tools[0].tool).execute(
     harden({ opId: 't1/r0/c0', args: '{"text":"z"}' }),
   );
-  const lines = readFileSync(logPath, 'utf8')
+  // The delta line is written on a later turn of the event loop.
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const all = readFileSync(logPath, 'utf8')
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
+  const deltas = all.filter(line => line.kind === 'delta');
+  t.is(deltas.length, 1);
+  t.like(deltas[0], { turnId: 't1', round: 0, units: 1 });
+  const lines = all.filter(line => line.kind !== 'delta');
+  t.true(deltas[0].at >= lines[0].at && deltas[0].at <= lines[1].at);
   t.deepEqual(
     lines.map(line => line.kind),
     ['request', 'round-final', 'echo-start', 'echo-end'],

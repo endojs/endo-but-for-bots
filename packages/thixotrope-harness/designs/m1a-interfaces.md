@@ -597,9 +597,12 @@ the inventory and the program digest first). Tests and perf find `agentHostAdmin
 fsynced, from the provider and from `echo` for calls made through this backend's ports:
 `{ kind, label, pid, at, turnId?, round?, opId?, args?, units? }` with `kind` one of `request`,
 `dispatch-refused`, `round-final`, `round-failed`, `frame-limit`, `cancelled`, `echo-start`,
-`echo-end`, `echo-frame-limit`. `pid` identifies the adapter incarnation. "The provider received
+`echo-end`, `echo-frame-limit`, `delta`. `pid` identifies the adapter incarnation. "The provider received
 exactly one request" = one `request` line for the turn; "echo ran at most once" = at most one
-`echo-start` per op id.
+`echo-start` per op id. A `delta` line (`turnId`, `round`, `units`) is written for every delta the
+provider publishes; its `at` is the time of the publish, and it is written on a later turn of the
+adapter's event loop (so its fsync does not delay subscribers), possibly after the round's
+`round-final` line (W1a.7, perf `turn.delta`).
 
 **Script** (`shapes.Script`; the whole spec <= `frameBytes`, so large outputs use `repeat`):
 
