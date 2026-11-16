@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-03-02 |
-| **Updated** | 2026-10-06 |
+| **Updated** | 2026-11-16 |
 | **Author** | Kris Kowal, endolinbot (prompted) |
 | **Status** | In Progress |
 
@@ -32,9 +32,11 @@ What has shipped, by layer:
   code-mode TypeScript declaration renderer shipped in #524. The
   2026-07-08 batch then landed the file-tool set (`list` / `edit` / `stat`,
   #614), the **Shell capability** and `makeShellTool` (`provideShell` plus
-  the host-spawner engine, #615), and the mount-bridged local git `status`
-  / `add` tools (#616) — Phase 1 in full, plus the Shell capability and
-  tool (Phase 2a/2b; the sandbox engine 2c is still gated and open).
+  the host-spawner engine, #615), the mount-bridged local git `status`
+  / `add` tools (#616), and mount-resolved `diff` path designators with an
+  explicit agent-tool options schema (#1641) — Phase 1 in full, plus the
+  Shell capability and tool (Phase 2a/2b; the sandbox engine 2c is still
+  gated and open).
   The local Git catalog now derives its reader, writer, and rewriter
   inventories from the granted facet. The compatibility
   `makeGitHistoryTool` remains the explicit four-tool history inventory, and
@@ -108,7 +110,7 @@ What this document owns is the remainder:
 |---|---|---|---|
 | Filesystem | `Dir` from [daemon-capability-filesystem](daemon-capability-filesystem.md) | `Filesystem` (`@endo/platform/fs/extended`) via `mountAsFilesystem(mount)` for the live worktree and `Git.filesystemAt(ref)` for history | read tool landed (#523); list / edit / stat landed (#614) |
 | Shell | `makeShell({ cwd, allowedCommands, … })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
-| Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); facet-derived catalogs landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616), with conflict checkout added in Phase 6 |
+| Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); facet-derived catalogs landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616); `diff` paths now resolve through the same confined mount and its tool schema declares its options (#1641), with conflict checkout added in Phase 6 |
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` landed (#705) |
 | Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); plugin provisioning and `makeHttpTool` remaining |
 | Package management | not in sketch | Portable `EndoPackageManager` reader, safe-installer, and project-executor facets over an injected, snapshot-revalidating backend | portable facets in #948; daemon-backed base-session design in #949; grant-sensitive agent-tools projection in #950; optional backend design in #953 |
@@ -502,6 +504,14 @@ deliverable's shape.
   path arguments stay as boundary-authenticated relative strings; #424
   petname persistence has not landed, and remains the future direction
   for cap-bearing results.
+
+- [x] `diff` path designators now take the same confined route as `add`:
+  `Git.diff({ paths })` resolves each worktree-relative string through the
+  mount before the backend invokes git (#1641). `stashPush({ paths })` uses
+  the same capability-level conversion. A path denoting the worktree root is
+  refused; omit `paths` to operate on the whole worktree. The `diff` agent
+  tool now documents its `cached`, `base`, `head`, and `paths` options rather
+  than presenting an opaque options record.
 
 ### Phase 3.6: Network (HTTP) tier
 
