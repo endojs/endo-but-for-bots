@@ -85,6 +85,9 @@ const VIEW_OVERHEAD_BYTES = 64;
  * @property {() => void} release
  * @property {() => HoldReason | undefined} holdReason
  * @property {() => number} size
+ * @property {() => Hold | undefined} currentHold the hold, if any (W2.7 export)
+ * @property {() => QueueItem[]} items the waiting entries' items, oldest
+ *   first (W2.7: delete's blob pages and export)
  */
 /**
  * `startTurn`'s refusal (R4-10; A.4 direct start): throws the fixed text
@@ -273,6 +276,8 @@ export const makeQueue = ({
     release: submissions.release,
     holdReason: () => submissions.current()?.reason,
     size: pending.size,
+    currentHold: () => submissions.current(),
+    items: () => [...pending.entries()].map(internal => internal.item),
   });
 };
 harden(makeQueue);
