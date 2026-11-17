@@ -11,7 +11,7 @@ second copy of an `@endo/*` library.
 - Plan: `designs/architecture.md` (facts, decisions, core changes, limits, the turn sequence,
   test and perf method, guest rules) and `designs/milestones.md` (work units, acceptance tests, perf
   checks; each finished milestone's outcome table; "Changes after M0 and M1a" at the end). What M0
-  measured and changed, and every core-change candidate with its status (C-1..C-20):
+  measured and changed, and every core-change candidate with its status (C-1..C-21):
   `designs/m0-results.md`. The M1a interface contract, crank by crank: `designs/m1a-interfaces.md`.
   Surveys and plan reviews: `designs/survey/`, `designs/review-*.md`.
 - Journal: `JOURNAL.md` records what fits Thixotrope and what does not, and every perf
@@ -38,8 +38,10 @@ corepack yarn build:ironhorse-bundles
 ```
 
 The worker is `../../target/release/thixotrope-ironhorse-worker`
-(`THIXOTROPE_IRONHORSE_WORKER` overrides it); since `9828522485` its sha256 is
-`7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741` (it rebuilds to the same digest).
+(`THIXOTROPE_IRONHORSE_WORKER` overrides it); since `f0ff5e098b` (CC-022, the allocation collection
+schedule) its sha256 is
+`367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25` (it rebuilds to the same digest;
+was `7cda4467...`). The boot fingerprint is `6c864841...` (pinned in `0a4bdb3826`, unchanged since).
 A change of either the worker or the bundles changes the boot digest: existing state directories
 are refused, and cached test templates are rebuilt automatically (their key includes both). To
 check that the bundles match the tree without touching them, build into a scratch directory under
@@ -114,7 +116,12 @@ acceptance 9's delete, which is M2).
 
 `m1a-slice-restart.test.js` repeats its SIGKILL cases (acceptance 5, 6, 7 and the held-ports
 case) once per kill delay with `M1A_KILL_DELAYS_MS=0,100,500,1500,4000` (20 tests, about 10
-minutes); each run prints an `m1a.slice.restart.case` line before its assertions.
+minutes); each run prints an `m1a.slice.restart.case` line before its assertions. The M1b SIGKILL
+cases take kill points too: `EXEC_KILL_DELAY_MS` (acceptance 10, default 2,000; the test also checks
+that the killed exec ran at most once and that the provider got the turn once), `CONTEXT_RESTARTS`
+with `CONTEXT_KILL_DELAYS_MS` (acceptance 8) and `POOL_KILL_DELAYS_MS` (acceptance 12).
+`m1b-followups` covers the M1b follow-ups in real vats (name-table flood, exec scope, call fence,
+`exec.sends.answered`).
 
 A template start takes about 5 s against about 35-40 s for a cold provision. Copies live in
 `tmp/<6 chars>`: the control socket path must stay under 104 bytes (98 in this checkout), so keep
@@ -166,6 +173,8 @@ reading and a decision.
 | `perf/pool.perf.mjs` | `session.create.pool` (+ `.poolAwake`), `session.create.cold`, `pool.refill`, `pool.firstTurn` | 3 min |
 | `perf/concurrency.perf.mjs` | `concurrency.single.turnStart`, `concurrency.10.turnStart`, `.turn`, `.crank` (from `status().deliveryHistogram`), `.rowPush`, `.gc` | 3 min |
 | `perf/history.perf.mjs` | `history.page` (+ `.floor`), `history.grow` (with the session vat's slot capacity every 100 turns), `history.heap`, `context.rebuild` of a 1,000-turn session after a clean restart (`HISTORY_TURNS`) | 25-30 min |
+| `perf/crank.perf.mjs` | `crank.worker.<heap>[.alloc][.<policy>]` (the worker run directly on a vat image: per-delivery cost and its collection share), `crank.ping`, `crank.turn.start.early/.mid/.late`, `crank.history.page[.late]`, `crank.context.rebuild`, `crank.grow`, `crank.heap`; with `CRANK_POINTS` also `.at<n>` rows per session length; `crank.grow` carries engine and hub deltas per 100 turns (`CRANK_TURNS`, `CRANK_WORKER_N`, `CRANK_GC_POLICIES`, `CRANK_START`) | 40-50 min at 1,000 turns; the long-session table (`CRANK_TURNS=5000 CRANK_POINTS=200,1000,4000 CRANK_START=mixed`, J-9383) about 2.5 h. A session takes at most 4,096 Composer submissions in 24 h (`maxReceipts`, J-9391): `mixed` starts the unmeasured turns with `startTurn` |
+| `perf/install.perf.mjs`, `perf/frames.perf.mjs` | M0's install and frame rows (`INSTALL_N`, `FRAMES_N`, `LOOP_N`) | a few minutes each |
 
 A vat is woken when its worker row's `wakes` (process-local) is above 0; `journalLength` is the
 delivery frontier, and held GC frames (`heldFrames`) wait in the journal without a crank. `turn.delta`
@@ -182,8 +191,9 @@ cd ../thixotrope && node ../thixotrope-harness/scripts/run-lock.mjs --label lane
   corepack yarn test:ironhorse > ../thixotrope-harness/tmp/lane.log 2>&1
 ```
 
-It passes 66/66 (worker `7cda4467...`, `2b273930ab`, 15.8-17.6 min; J-9102, J-9126). Run it again
-after any change to the worker, the bundles or `packages/thixotrope/src`. Any engine wrapper that
+It passes 69/69 (worker `367e78ad...`, `50f1d348eb`, 12.2 min; J-9302, J-9336; three tests run
+under both collection schedules). Run it again after any change to the worker, the bundles or
+`packages/thixotrope/src`. Any engine wrapper that
 intercepts `deliver` must also intercept `deliverBatch` (J-9126).
 
 ## Serving a state directory
@@ -196,7 +206,15 @@ node scripts/serve.mjs STATE [--crank-budget N] [--max-delivery-attempts N] \
 The wrapper runs the supervisor in a child process whose environment is only an allowlist plus
 `THIXOTROPE_CRANK_BUDGET` (default 50 M), `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` (default 5,
 2..100) and `THIXOTROPE_SLOT_CEILING` (default 4,000,000 from `config/defaults.js`, M1b QC; a
-state persists its ceiling and is refused at a lower one, so test templates key on it); it refuses
+state persists its ceiling and is refused at a lower one, so test templates key on it). The
+allowlist also passes the collection schedule (`THIXOTROPE_GC_POLICY` `allocation` by default or
+`every-crank`, `THIXOTROPE_GC_SLOT_ALLOWANCE`, `THIXOTROPE_GC_CHUNK_ALLOWANCE`,
+`THIXOTROPE_GC_CRANK_INTERVAL`; CC-022, CC-023: fixed per state directory, a change needs fresh
+state) and the hub store (`THIXOTROPE_HUB_STORE`, `log` by default or `file`; CC-025: a log
+directory keeps `hub-image.json` plus `hub-log.jsonl`, `hub.json` is a marker, and the migration is
+one way). Templates key on any of these that is set, and every perf row names `gcPolicy` and
+`hubStore`. To bisect against the old behaviour, run fresh state with
+`THIXOTROPE_GC_POLICY=every-crank` or `THIXOTROPE_HUB_STORE=file`. It refuses
 to lower the crank budget unless the last shutdown was clean
 (`STATE/harness-serve.json` records it). The child stops cleanly when its parent dies, even by
 SIGKILL. Stop with SIGINT or SIGTERM. If one vat crashes on every replay, the supervisor waits

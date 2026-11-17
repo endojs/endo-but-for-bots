@@ -890,3 +890,25 @@ Outside that command's paths but outside `packages/thixotrope-harness` too:
 - `0d35cbd569` -> CC-001 (`yarn.lock`)
 - `c3baa8c6ea` -> CC-010 (upstream `packages/agent-tools` tests, via merge)
 - `6ee05b2bfd` -> CC-010 (upstream CI workflows, via merge)
+
+### Accounting check 2026-11-18 (integration of C-7 and C-2, J-9380..J-9393)
+
+Cut-off commit: `87e13507b5` (the newest commit outside `packages/thixotrope-harness`; branch HEAD
+was `4f0661fca2` when checked). Command:
+`git log --format='%h %s' 48d6f3e08b..HEAD -- . ':!packages/thixotrope-harness'` (44 commits, merge
+commits included). Every one of them appears in an entry above or in the lists of this section; no
+entry is missing, so none was added. The integration step changed nothing outside the harness: the
+release worker (`367e78ad...`, rebuilt to the same digest under the run lock) and the Ironhorse boot
+bundles (rebuilt into a scratch directory, byte-identical) correspond to HEAD, and the lane's last
+run (69/69 at `50f1d348eb`, J-9336) postdates every change to `pkg/src`, the worker and the bundles.
+
+Harness follow-ups that CC-023 and CC-025 name, now done in harness commits (no core change):
+`758c545380` (`scripts/serve.mjs` passes `THIXOTROPE_GC_*` and `THIXOTROPE_HUB_STORE`),
+`ef637da1b6` (test templates key on them when set), `d3b605dbd0` (`perf/_harness.mjs` sizes the log
+store's image plus log; rows name `gcPolicy` and `hubStore`). Still open: spike S4 and
+`test/spikes/_crash.js` watch `hub.json` (J-9337 (2)); `pkg/scripts/measure-mail.mjs` needs
+`THIXOTROPE_HUB_STORE=file` (J-9337 (5)).
+
+The "Open candidates" table above keeps the costs it had when written. Current status, from
+`designs/m0-results.md` page 6: C-7 closed for the per-crank collection (CC-022, CC-023); C-2 partly
+(CC-025); C-20 partly (CC-019, with CC-025 lowering each commit); C-21 open (proposal J-9305).

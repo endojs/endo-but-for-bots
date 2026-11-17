@@ -425,11 +425,39 @@ J-0396). Verdicts use the 1.25 x rule.
 | Unit lane | 423 passed, 37 skipped | 434 passed, 38 skipped | pass | J-0396 |
 | Core tsc (`packages/thixotrope` `lint:types`) | 1 error (`b45da47b93`) | 0 | pass | J-0396 |
 
+**After the core changes C-7 and C-2** (CORE-11, CORE-12; worker `367e78ad...`, hub log store;
+integration J-9380..J-9399, every row in J-9382). The M1b rows, re-run at `be7d2a84aa`..`bd14ef7e08`:
+
+| item | QC (above) | after | verdict | entries |
+|---|---|---|---|---|
+| acceptance 1-12, M1a files, `m1b-qc`, `m1b-followups` | pass | pass; 35 SIGKILL runs at varied kill points (M1a 5, 6, 7, held ports x 5; M1b 3/10 x 5, 8 x 5, 12 x 5), no duplicated request, tool run or exec evaluation | pass | J-9380, J-9381 |
+| `exec.trivial` (250 ms) | 174-179 | 53 | pass | J-9382 |
+| `exec.first` (750 ms) | 537-547 | 285-298 | pass | J-9382 |
+| `exec.sends` 100 answered (8 s) | 4.8-6.7 s; 7.0 s (J-9368) | 1.3-1.4 s | pass | J-9382 |
+| `session.create` with the pool (750 ms) | 1,209-1,255, **miss** | 849-864 (p95 989) | pass (1.13-1.15 x) | J-9382 |
+| `session.create` without (6 s) | 5.8-5.9 s | 4.5 s | pass | J-9382 |
+| `pool.refill` (recorded) | 4.2 s | 2.8-3.4 s | recorded | J-9382 |
+| `context.rebuild` 1,000 turns (5 s) | 21.7 s | 22.1-22.8 s | **miss**; C-5 (page cranks), J-0322 (b) | J-9382, J-9387 |
+| `history.page` (300 ms) | 603-715 | 568-596 at 50 turns, 869 at 1,000 | **miss**; C-5; W2.5 record bound | J-9382, J-9387 |
+| `concurrency.10` turn start (2 x) / crank p95 (200 ms) / row push (500 ms) | 3.63 x / 500 / 372 | 6.5 x (728 vs 112 ms) / 500 / 189 | **miss** / **miss** / pass; C-2 (the rest) | J-9382, J-9386 |
+| `hub.growth` (2 MB; 1.25 x fresh) | 1.32 x (C-20 run) | 1.36 x, 1.35 MB | **miss**; C-2 (the rest) | J-9382, J-9386 |
+| `hub.gcBurst` (recorded) | 6.6-7.0 ms per GC frame | 1.9 ms | recorded | J-9382 |
+| `turn.start` (350 ms) | 282, p99 688 | 105, p99 428; 233 ms (p95 1.4 s) at 4,000 turns | pass (median) | J-9382, J-9383 |
+| `exec.retire` (15 MB) | 60 MB | 52 MB | pass | J-9382 |
+| too-big probes | all pass | all pass | pass | J-9382 |
+| `session.program` (200 KB) | 130,798 | 132,588 | pass | J-9382 |
+| long sessions, 50 / 1,000 / 5,000 turns (recorded) | per turn 0.69 -> 2.46 s over 1,000 turns (J-0370) | per turn 0.84 / 1.0 / 3.2 s; `turn.start` 121-130 / 142-152 / 271 ms (p95 1.8 s at 5,000); `history.page` 0.54-0.60 / 0.84-0.87 / 2.0 s; rebuild 1.3 / 21-22 / 180 s; slot capacity 13 / 22 / 48 % of 4,000,000 | still grows with length (about +0.53 s per turn per 1,000 turns) | J-9383..J-9389 |
+
 Fit (J-0398): the exec scope, the blob model and the call fence fit vats well; the heap model does
 not: the slot ceiling bounds live heap plus one crank (C-21) and every crank collects the whole heap
 (C-7), so the cost of a session grows with its length and its heaviest crank sets how long it may
 get. Open for the PM: the four misses above, the engine halt for name-table exhaustion (C-6), a
-per-session disk quota (J-0393), and the advisories listed in J-0397.
+per-session disk quota (J-0393), and the advisories listed in J-0397. After CORE-11 and CORE-12
+(J-9385): the per-crank collection is gone and a vat is cheap to talk to, but a collection still
+marks the whole live heap and a hub session row grows with the handles a session keeps, so session
+cost still grows with length, about 3.3 x more slowly; a 5,000-turn session takes 3.2 s per turn,
+180 s to rebuild its context and 48 % of the slot ceiling (J-9383, J-9386..J-9389). New for the PM:
+a session takes at most 4,096 Composer submissions in 24 h (J-9391).
 
 ---
 
@@ -461,8 +489,16 @@ delete with reclamation, data-only export/import, and fixed prompt composition.
 (`config/defaults.js` `slotCeiling`, `scripts/serve.mjs`): a vat's live heap plus everything one
 crank allocates must fit (the engine collects only between cranks, C-7, C-21), so a session vat has a
 size at which its heaviest cranks stop fitting; `perf/history.perf.mjs` reports the session vat's
-slot capacity per 100 turns (`history.grow` `heap`, `history.heap`). Every crank also pays a full
-collection of the live heap: per-turn time grows with session length (J-0370). Guest bundles carry
+slot capacity per 100 turns (`history.grow` `heap`, `history.heap`), and `perf/crank.perf.mjs` with
+`CRANK_POINTS` the long-session table (J-9383). Since CORE-11 a crank no longer pays a collection
+of the live heap: the worker collects on an allocation schedule (after 131,072 slots or 16 MiB of
+growth, every 32nd crank, at close), so a crank may start with that much uncollected growth, and a
+vat's finalizers (its `gc-*` frames) leave up to 32 cranks after the reference died; do not assert
+a release in the crank that freed it. Per-turn time still grows with session length, more slowly
+(J-9383, J-9388), and a hub session row grows with the handles the session keeps (J-9386).
+Since CORE-12 the hub keeps `hub-image.json` plus `hub-log.jsonl` (`hub.json` is a marker; tools
+that read hub state read through the store). A scripted backend's script crosses the manager vat:
+it must fit one frame; floods of fresh keys use `keys` / `argsFreshKeys` (m1b-interfaces 17.6). Guest bundles carry
 no comments (`bundle-guest.mjs`; session program 130 KB of 200 KB). Exec calls end at their answer or
 at `ExecScope.abandon()` (cancel, recovery) and model code cannot outlive its call (`sleep` dies with
 the call); `exhausted` retires an exec vat whose name table ran out. Progress checkpoints are
@@ -480,7 +516,7 @@ the current ceiling (`m1b-qc.test.js`); keep that test green when the record or 
 | W2.2 model catalogue | `AH/providers/catalog.js`, factory `listBackends/listModels`, `session-options.js` entry | catalogue read with the backend credential through the R4-104 cache; rows sorted per R4-20; `unavailable` on failure; selection rules R4-21; the resolved model is stored at creation (R4-22) | adapter + unit tests |
 | W2.3 secrets minimal | `AH/secrets/*` | encrypted file (AES-GCM, key file outside state dir, D-6), `SecretsAdmin.create`, `Secret.makeReadGrant/revoke/delete/describe`, `SecretWriter.replace(secret, value, expectedGeneration)` with amplification inside the resource, sealed-box import for the CLI path, audited reads, values re-read every round (R4-82); adapters never log tool arguments, results or secret values (W-13) | stale generation refused; revoked read fails; grep of the state dir (heaps, journals, `hub.json`, blobs) after a test finds no secret value |
 | W2.4 queue and submissions | `guest/session/{submissions,holds,holds-table}.js`, `guest/lib/pending-queue.js` (adapted, heap Map, no pet names) | bounded 100 waiting, 4,096 receipts, request-id window from the Composer's `at`, `QueueEntry.edit/cancel/sendNow` (edits go through the Composer for staging), holds `restart/stopped/refused/unavailable` with the A.4 texts (no `interrupted` state, section 4.3), release rule R4-56, duplicate detection | ported `fae/test/session/pending-queue.test.js`, `session-submissions.test.js` (minus `interrupted` cases, recorded) |
-| W2.5 history + snapshot measurement | `guest/session/history.js` | history pages of at most 32 turns, `frameBytes` **and a record bound** chosen so a page crank meets `history.page` (M1b: a 26-turn page of 182 records cost about 605 ms of session crank, about 3 ms per record, J-0370), `getTurnContent(ref)`, `getCurrentTurn`; snapshot time and size **and the session vat's slot capacity** measured at 1,000 / 10,000 / 30,000 turns (fixtures by `importState`) to decide on an archive in M2 (architecture 5: the slot ceiling bounds live heap plus one crank, C-21) | 300-turn session pages back to turn 1 |
+| W2.5 history + snapshot measurement | `guest/session/history.js` | history pages of at most 32 turns, `frameBytes` **and a record bound** chosen so a page crank meets `history.page` (M1b: a 26-turn page of 182 records cost about 605 ms of session crank, about 3 ms per record, J-0370; unchanged by CORE-11: 568-596 ms for 154 records at 50 turns and 869 ms on a 1,000-turn session, so the bound must also absorb growth with session length, J-9387), `getTurnContent(ref)`, `getCurrentTurn`; snapshot time and size **and the session vat's slot capacity** measured at 1,000 / 10,000 / 30,000 turns (fixtures by `importState`) to decide on an archive in M2 (architecture 5: the slot ceiling bounds live heap plus one crank, C-21) | 300-turn session pages back to turn 1 |
 | W2.6 turn completeness | `guest/session/{turn hooks,usage,prompt}.js` via `turn-hooks.js` | unknown tool / bad JSON texts (R4-43, R4-45), synthesized ids R4-42, round limit fallback R4-47, cancel tears down the stream (R4-7, R4-49) and records late results as ignored, usage five counts and context reading (R4-33, R4-83 "skipped if not read in time"), turn deadline setting (default off), fixed prompt composition (R4-26 parts 1-2, 7) | integration `m2-turns.test.js` |
 | W2.7 delete, rollback, export | `guest/factory/{delete,export}.js`, `guest/session/export.js` | `deleteSession` publishes `row-removed` on the list feed (M1b acceptance 9 "delete", moved here) and marks `deleting`, retires the session and exec vats (also a `lost` session's, D-17: this is the only way its disk is returned), releases blobs (and later workspace/environment via `onSettle`-style hooks), completes after a restart (R4-9); failed creation rolls back including after a restart (R4-6); `exportState`/`importState` of factory and session records (exec bindings are not exportable: documented loss) | integration `m2-lifecycle.test.js` |
 
@@ -517,8 +553,9 @@ the current ceiling (`m1b-qc.test.js`); keep that test green when the record or 
 | check | budget |
 |---|---|
 | `queue.enqueue` while a turn runs, round trip | <= 150 ms |
-| `history.page` 32 turns on a 1,000-turn session | <= 300 ms (M1b: 598-666 ms for 26 turns of 7 records, J-0370; needs the record bound of W2.5 or C-5) |
-| `context.rebuild` 1,000-turn session after restart (M1b row, carried) | <= 5 s (M1b: see its outcome table; J-0322 option (b), the adapter's cache persisted next to the blobs, removes the page cranks from the restart path) |
+| `history.page` 32 turns on a 1,000-turn session | <= 300 ms (M1b: 598-666 ms for 26 turns of 7 records, J-0370; after CORE-11 869 ms at 1,000 turns, J-9383; needs the record bound of W2.5 or C-5) |
+| `context.rebuild` 1,000-turn session after restart (M1b row, carried) | <= 5 s (M1b: see its outcome table; after CORE-11 22.1 s, 14 page cranks of about 1.55 s, linear in turns, J-9383, J-9387; J-0322 option (b), the adapter's cache persisted next to the blobs, removes the page cranks from the restart path) |
+| `hub.row` bytes per hub commit of a session's row at 1,000 / 5,000 turns | recorded; decides J-9335 (a) in M2 or M3 (a row carries one entry per handle the session holds, and the log store rewrites the whole row per change, J-9386) |
 | `session.heap` session vat slot capacity at 1,000 / 10,000 / 30,000 turns | recorded against the slot ceiling (4,000,000); the heaviest crank of a session at that size must still fit |
 | `journal.snapshot` session vat at 1,000 / 10,000 / 30,000 turns | <= 500 ms / <= 1 s / recorded |
 | `checkpoint.stall` turn latency while a busy session vat snapshots | p99 <= 1 s |
@@ -1188,7 +1225,8 @@ into M9-M12; backlog heading states that parity is incomplete until decision 7; 
 
 ## Changes after M0 and M1a
 
-Decisions, settings and budgets that M0, the PR 1667 integration, M1a and its hardening changed.
+Decisions, settings and budgets that M0, the PR 1667 integration, M1a and its hardening, M1b and
+the core work after M1b (C-7, C-2 and their integration, J-9300..J-9399) changed.
 "Was" is the plan before the change; the evidence is in `JOURNAL.md` and `m0-results.md`.
 
 | what | was | now | evidence |
@@ -1242,3 +1280,9 @@ Decisions, settings and budgets that M0, the PR 1667 integration, M1a and its ha
 | M1b acceptance 9 "delete" | M1b | M2 (W2.7, acceptance 13): it needs `deleteSession`; `m1b-live` keeps it as a known failure | m1b-interfaces 16.6, J-0309 |
 | M1b perf misses (QC findings 11-14) | budgets as listed | **kept**, not re-based; each names the core candidate it depends on, for the PM to rule: `session.create` with the pool (C-2, C-7: 7 serial cranks plus a wake), `concurrency.10` turn start and crank p95 (C-2), `history.page` (C-5, C-7; W2.5 record bound), `context.rebuild` (C-5; J-0322 (b)) | M1b outcome table, J-0396, J-0397 |
 | M2 | 7 work units | W2.0 contract step first (folds the M1b tables, adds `blobPage`/`releaseBlobs`/`deleteSession`, record-bounded history pages, heaviest-crank column); W2.5 also measures slot capacity and decides an archive in M2 | this table |
+| Garbage collection in a vat (CORE-11, C-7) | a full collection after every crank (17-126 ms per delivery, growing with the vat) | an allocation schedule: after 131,072 slots or 16 MiB of growth, every 32nd crank, and before the image at close (`THIXOTROPE_GC_POLICY` `allocation`, fixed per state directory); a trivial delivery 0.5-0.6 ms of worker time at any session length; finalizers and their `gc-*` frames leave up to 32 cranks later or in the first crank after a wake | J-9300..J-9307, J-9382 |
+| Hub persistence (CORE-12, C-2) | whole-file `hub.json` rewrite, two fsyncs, 9.8-10.7 ms per commit | write-ahead log of deltas (`hub-image.json` + `hub-log.jsonl`, one append per commit, 5.5-6.8 ms); one-way migration; `THIXOTROPE_HUB_STORE=file` keeps the old store | J-9330..J-9337, J-9382 |
+| Serve environment and template key | crank budget, attempt bound, slot ceiling | also `THIXOTROPE_GC_*` and `THIXOTROPE_HUB_STORE` pass through `scripts/serve.mjs`; templates key on them when set; perf rows name `gcPolicy` and `hubStore` | J-9380 |
+| M1b SIGKILL cases | acceptance 10 checked outcome-unknown and the next exec only; fixed kill points for 8 and 10 | acceptance 10 also checks that the killed exec ran at most once and the provider got the turn once; `EXEC_KILL_DELAY_MS`, `CONTEXT_KILL_DELAYS_MS` (with `POOL_KILL_DELAYS_MS`, `M1A_KILL_DELAYS_MS`) vary the kill point | J-9380 |
+| Scripted backend floods | flood text inside the script | `ScriptChunk.keys` / `ScriptToolCall.argsFreshKeys`: the adapter builds the keys; a script crosses the manager vat and must fit one frame (m1b-interfaces 17.6) | J-9381 |
+| M1b perf misses after the core changes | `session.create` with the pool, `concurrency.10` turn start and crank p95, `history.page`, `context.rebuild`, `hub.growth` | `session.create` with the pool passes (864 ms, 1.15 x); the others still miss, now each with a measured cause: hub commits (`concurrency.10`, `hub.growth`: C-2's rest), page-crank marshalling (`history.page`, `context.rebuild`: C-5, M2 W2.5, J-0322 (b)) | J-9382, J-9386..J-9399 |

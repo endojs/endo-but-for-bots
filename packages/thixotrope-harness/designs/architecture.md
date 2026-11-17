@@ -1,10 +1,14 @@
 # Architecture: the Endo daemon harness on Thixotrope
 
-Status: plan for M1b onward. M0 (groundwork) and M1a (the headless session slice) are built. M0's
+Status: plan for M2 onward. M0 (groundwork), M1a (the headless session slice) and M1b (exec scope,
+staging, context cache, pool, list feed) are built, and so are two core changes after M1b: the
+allocation collection schedule (CORE-11, C-7) and the hub write-ahead log (CORE-12, C-2). M0's
 measurements are summarised in `m0-results.md` (which also keeps the core-change candidates current),
-M1a's in `milestones.md` (M1a outcome); both are recorded in `../JOURNAL.md` (M0: J-0100..J-0198,
-J-9000..J-9051; M1a: J-0200..J-0296, J-9100..J-9200). The facts, core changes, limits, turn sequence and
-budgets below are the measured ones.
+M1a's and M1b's in `milestones.md` (outcome tables); all are recorded in `../JOURNAL.md` (M0:
+J-0100..J-0198, J-9000..J-9051; M1a: J-0200..J-0296, J-9100..J-9200; M1b: J-0300..J-0398,
+J-9210..J-9216, J-9360..J-9370; core work and its integration: J-9300..J-9337, J-9380..J-9393).
+`../CORE-CHANGES.md` records every change outside the harness. The facts, core changes, limits, turn
+sequence and budgets below are the measured ones.
 Inputs: the six survey reports in `survey/` (core, native, apps, tooling, reuse,
 spec-digest), the feasibility and coverage reviews `review-feasibility.md` and `review-coverage.md` with the
 probe `survey/feasibility-probe.mjs`, spec Part I sections 1, 4 and 10, Appendix A.4 and
@@ -22,10 +26,17 @@ Measured in the survey (tooling.md section 4, native.md section 0, reuse.md sect
 feasibility probe) and in M0 (`m0-results.md`; journal entry ids in brackets), and confirmed in code.
 Numbers are for the release worker at the harness crank budget of 50 M.
 
-1. **A durable crank costs about 56 ms, one at a time per vat.** The ping floor is 55-57 ms
-   (J-0193, J-9024), about 44 ms of it engine time, most of that the worker's full GC after every
-   crank (`rust/thixotrope-ironhorse-worker/src/main.rs:185-190,240-265`; not re-measured in M0,
-   core candidate C-7). One vat handles about 15-18 deliveries per second. Pipelining gains nothing
+1. **A durable crank costs tens of ms of host work, one at a time per vat; the collection no longer
+   dominates it.** Until `f0ff5e098b` the worker ran a full collection after every crank, so a
+   trivial delivery cost 17 ms on a new session vat and 126 ms after 1,000 turns (C-7, J-9300).
+   Since CC-022 it collects only when the live heap grew by 131,072 slots or 16 MiB, every 32nd
+   crank, and before the image at close (`gcPolicy` `allocation`, fixed per state directory,
+   CC-023): the worker's own time for a trivial delivery is 0.5-0.6 ms at every session length, a
+   `getInfo()` round trip from the control client through the hub 37 ms (81 before), and the rest of
+   a crank is the host's journal append, hub commit and transport (J-9303, J-9333). A crank that
+   collects pays it then: 56-189 ms for a collection that finds 130,000 garbage slots. Finalizers
+   (and the OCapN `gc-*` frames they send) run at the next collection, up to 32 cranks later or in
+   the first crank after a wake. Pipelining gains nothing
    (8 pipelined inbound frames cost what 8 separate calls cost, J-0142). An answered `E()` costs a
    second delivery when the answer comes back (100 answered sends from one crank take 9.4-10.6 s
    until every answer is back, J-0143); `E.sendOnly` does not. vat -> adapter -> vat costs 70-76 ms
@@ -53,7 +64,8 @@ Numbers are for the release worker at the harness crank budget of 50 M.
    refuses otherwise). Answered sends halt at 250 per crank on a fresh vat and 300 on a used one
    (`HeapExhausted`); `sendOnly` at 600 (J-0143, J-0194). **The heap ceiling bounds a vat's live heap
    plus everything one crank allocates** (M1b QC, J-0392): the engine collects garbage only between
-   cranks (C-7), and a crank that would take more slots than the slot ceiling halts. At Thixotrope's
+   cranks (C-21), and since CC-022 a crank may also start with up to 131,072 slots (and 16 MiB) of
+   uncollected growth (J-9304); a crank that would take more slots than the slot ceiling halts. At Thixotrope's
    default ceiling (1,000,000 slots of 24 bytes) a session vat (a spare's slot capacity, the
    high-water mark of live heap plus its largest crank, is about 280,000) halted while recording a
    round of 100 tool calls (several thousand slots per call in one crank) and a
@@ -105,12 +117,18 @@ Numbers are for the release worker at the harness crank budget of 50 M.
    sleeping vat takes about 17 MB of disk; an awake one 120-136 MB resident while loading and about
    63 MB after waking from its snapshot; its process exits when it sleeps (J-0183, J-0184). There is no
    live code upgrade (`pkg/src/control/supervisor.js:112` `WORKSPACE_VERSION = 21`).
-9. **The hub rewrites `hub.json` whole, with fsync, about 2.6 times per answered adapter hop**
-   (`pkg/src/net/hub.js:354-364`; J-0163), and every exo exported across the gateway is a row in it.
-   All journal and hub writes run on the supervisor's single Node thread: adapter-to-adapter events
-   reach about 82 per second, a vat's batched `sendOnly` events 236 per second (J-0163). Frames bound
-   for an adapter are written to `hub.json` in clear (hex) while queued (J-0164, core candidate C-1),
-   so nothing secret may cross the hub.
+9. **The hub commits its state before every frame it sends, about 1.25 times per inbound delivery
+   and 21-27 times per turn**, and every exo exported across the gateway is a row in it. Until
+   `72ef46f905` a commit rewrote `hub.json` whole with two fsyncs (9.8-10.7 ms, 121-337 KB, J-0163,
+   J-9330); since CC-025 it is one durable append of the changed table entries to `hub-log.jsonl`
+   over `hub-image.json` (5.5-6.6 ms, 14-46 KB; compaction at 1 MiB of log; J-9333). A changed session
+   row is still rewritten whole and every row is stringified at each commit, so the cost still grows
+   with the hub's state (`hub.growth` 1.40 x fresh after 50 sessions, J-9333; C-2's rest, J-9335). All
+   journal and hub writes run on the supervisor's single Node thread: adapter-to-adapter events
+   reached about 82 per second with the whole-file store, a vat's batched `sendOnly` events 236 per
+   second (J-0163; not re-measured). Frames bound for an adapter are written to the hub's log in clear
+   (hex) while queued, until the next compaction (J-0164, J-9337, core candidate C-1), so nothing
+   secret may cross the hub.
 10. **State directories are path-independent** (S8, J-0180): a cleanly stopped state copied to a new
     path serves there. Only the control-socket resource's heap names the old path until the next
     start replaces it, so a running state must never be copied (J-0181).
@@ -169,8 +187,9 @@ that the prelude already provides (reuse.md section 4). Node-side code imports E
 
 ### 1.1 Changes outside the harness package (each in its own commits)
 
-What landed in M0, where, and why. `m0-results.md` page 3 is the commit-by-commit list for an
-upstream reviewer; page 6 lists the open core-change candidates C-1..C-15 that were not made.
+What landed in M0, M1a, M1b and the core work after M1b, where, and why. `../CORE-CHANGES.md` is the
+record (CC-001..CC-025, every commit accounted for); `m0-results.md` page 3 is its commit-by-commit
+summary and page 6 lists every core-change candidate (C-1..C-21) with its status.
 
 | id | change as landed | where (commit) | why |
 |---|---|---|---|
@@ -185,6 +204,9 @@ upstream reviewer; page 6 lists the open core-change candidates C-1..C-15 that w
 | tests | Snapshot goldens re-pinned for CORE-1's boot statics. | `rust/engine/ironhorse-snapshot/tests` (`0a4bdb3826`) | `1d44da02d0` moved the boot fingerprint without re-pinning (J-9000). |
 | **CORE-8** (C-16) | `GET_LOCAL` and the with/eval read return a value without the binding's attribute bits; the stores that create an element give it flag 0; a debug assertion at `Interp::push`. No boot, golden or metering change; the worker binary is `7cda4467...`. | `rust/engine/ironhorse-vm` (`9828522485`); lane scenario `pkg/test/ironhorse/element-attributes.js` (`d6f4e38b9b`) | An element pushed from a `const` local was non-writable, so `splice` threw in the session queue (J-0271, J-9100, J-9101). |
 | **CORE-9** (C-17) | GC frames toward a worker are journaled (`gc: true`) and enter with the worker's next ordinary frame, or alone after 64; crank boundaries follow from the journal; Ironhorse `deliverBatch`; the startup sweep resumes only workers owed a crank; a retired session's rows are released in one batch per destination; worker rows report the delivery frontier and `heldFrames`, `wakes`, `cranks`; the hub counts GC frames by session (`status().gc`). | `pkg/src/core/durable-worker-transport.js`, `pkg/src/ironhorse/ironhorse-engine.js`, `pkg/src/net/hub.js`, `pkg/src/core/daemon.js` (`18c8f633ee`, `f8bf23c62d`, `a46f505035`); lane fixtures (`2b273930ab`) | GC bursts cost one full crank per frame and woke idle sessions at restart (J-0276, J-0277, J-9120..J-9125). |
+| **CORE-10** (C-20) | Hub cost counters per inbound delivery (`status().hub`); one hub commit per inbound GC burst and one journal fsync per worker flush; a crank wall-time histogram (`status().deliveryHistogram`). | `pkg/src/net/hub.js`, `pkg/src/core/durable-worker-transport.js`, `pkg/src/core/daemon.js` (`7efa7fb3e4`, `1f1194059b`, `6be1bd3403`, `a3a2b58da5`, `b45da47b93`, `d4241fa77a`; CC-018..CC-021) | A GC frame cost 16.7 ms of supervisor time; 6.6-7.0 ms after (J-9210..J-9216). |
+| **CORE-11** (C-7) | The worker collects on an allocation schedule (live slots +131,072, chunk footprint +16 MiB, every 32nd crank, and before the image at close) instead of after every crank; `THIXOTROPE_GC_POLICY` (`allocation` default, `every-crank`) and the three allowances, recorded in `runtime.json`, fixed per state directory. Worker `367e78ad...`; boot fingerprint, bundles and goldens unchanged. | `rust/thixotrope-ironhorse-worker/src/main.rs` (`3db48394c9`, `f0ff5e098b`), `pkg/src/ironhorse/*` and lane tests (`4d6a84e86f`, `2657c03f53`, `4a42dc711c`; CC-022, CC-023) | A trivial delivery cost 17-126 ms of collection, growing with the vat; after 0.5-0.6 ms (J-9300, J-9303). Finalizers run up to 32 cranks later (J-9306). |
+| **CORE-12** (C-2) | The hub's state is a write-ahead log of deltas over an image (`hub-image.json`, `hub-log.jsonl`), one durable append per commit; `THIXOTROPE_HUB_STORE=file` keeps `hub.json`; migration one way; `status().hub` persist sizes, store counters and persist runs. | `pkg/src/store/hub-log-store.js`, `store-fs.js`, `control/supervisor.js`, `net/hub.js` (`a71e5272b5`, `72ef46f905`, `87e13507b5`; CC-024, CC-025) | A commit rewrote the whole `hub.json` (9.8-10.7 ms, 121-337 KB); after 5.5-6.6 ms, 14-46 KB (J-9330, J-9333). |
 | CORE-2 | Kit `operate(fn)` verb. | - | **Not needed**: S2 confirmed D-7 (J-0160). |
 | CORE-3 | Booted-image templates for fast vat creation. | - | **Not needed**: S6 confirmed D-4 (J-0184). |
 
@@ -194,7 +216,11 @@ Outside `pkg/` and the engine the harness also added one hook to the root `eslin
 **Configuration, not core: the crank budget and the crash bound.** The serve wrapper
 (`scripts/serve.mjs`) sets `THIXOTROPE_CRANK_BUDGET` (50 M, chosen by S1, J-0143) and
 `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` (5, D-17) from `config/defaults.js` on every serve path. The budget
-may be lowered only after a clean shutdown; the wrapper refuses otherwise (J-0133).
+may be lowered only after a clean shutdown; the wrapper refuses otherwise (J-0133). It also sets the
+slot ceiling (4,000,000) and passes the host's `THIXOTROPE_GC_*` and `THIXOTROPE_HUB_STORE` through
+(the harness serves the core defaults, `allocation` and `log`, unless a caller sets them; J-9380);
+test templates key on any of them that is set, since a state directory refuses a change of slot
+ceiling downwards, of collection schedule at all, and the file store refuses a log directory.
 
 Changing the boot bundle or the worker's boot natives changes the boot digest, so existing state
 directories are refused cleanly with `BootLayoutMismatch` (J-9001). Acceptable: nothing is in
@@ -759,13 +785,22 @@ session handed it per turn (Turn, TurnSink, receipts) (J-9120, J-9121). Since `f
   still `snapshot.cut >= journalLength`) plus `heldFrames`, `wakes` and `cranks`; `status().gc` counts
   GC frames by session. A wake is best read from `wakes`.
 - An engine wrapper that intercepts `deliver` must also intercept `deliverBatch`, or drop it.
+- **When a vat's own GC frames leave** (CORE-11, since `f0ff5e098b`): a vat's finalizers run at its
+  next collection, not in the crank that dropped the reference: up to 32 cranks later, at the first
+  crank after a wake (close sweeps before the image and leaves the cleanups pending), or sooner when
+  it allocated 131,072 slots or 16 MiB. Hub answer and export rows a vat releases therefore live
+  longer (at most 12 owed answer rows over 80 calls in the lane scenario, 2 before; J-9301). Tests
+  must not expect a release in the crank that freed its target.
 
 Effect: session cranks per one-chunk turn 6.55 -> 4.01; idle sessions woken at the first restart
-after setup 10 -> 0 (J-9123..J-9125, J-9192). What remains is host-side: each incoming GC frame costs
-the supervisor a `hub.json` persist and an fsync'd journal append per outgoing frame (C-20), which
-delays all hub traffic during a burst: a 161-frame burst held one turn start for 4.0 s with only 6
-session cranks, and a client's deltas reach it up to 2 s late (J-9127, J-9191, J-9195). Fewer exports
-per turn would shrink bursts, but a long-lived viewer (the M3 gateway) makes the same pattern.
+after setup 10 -> 0 (J-9123..J-9125, J-9192). The host side was the rest (C-20): each incoming GC
+frame cost the supervisor a whole-`hub.json` persist and an fsync'd journal append per outgoing frame,
+and a 161-frame burst held one turn start for 4.0 s (J-9127, J-9191, J-9195). CORE-10 commits once per
+inbound burst and fsyncs once per worker flush (16.7 -> 6.6-7.0 ms per GC frame, J-9211..J-9213), and
+CORE-12 makes each commit an append (GC ms per frame 2.2 -> 1.8, `hub.gcBurst.turnStart` median 143 ->
+105 ms, p99 442 -> 373 ms, J-9333). Frames from the in-process endpoint and releases toward it are
+still one commit each (J-9216). Fewer exports per turn would shrink bursts, but a long-lived viewer
+(the M3 gateway) makes the same pattern.
 
 ---
 
@@ -782,9 +817,14 @@ snapshot by about 3.3 bytes per character and the state directory roughly double
   vat through a `BlobWriter` for large exec results). Content is never deleted (R4-64); session delete
   releases its blobs.
 - A settled turn is therefore a few KB in the vat. 10,000 turns are tens of MB of heap, below the
-  chunk wall, but not necessarily below the **slot** ceiling, and every crank pays a full collection
-  of the live heap (C-7): M1b measured per-turn time rising from 0.69 to 2.46 s over 1,000 turns
-  (J-0370) and records the session vat's slot capacity per 100 turns (`history.grow`, J-0395).
+  chunk wall, but not necessarily below the **slot** ceiling. Until CORE-11 every crank paid a full
+  collection of the live heap (C-7): M1b measured per-turn time rising from 0.69 to 2.46 s over 1,000
+  turns (J-0370). With the allocation schedule a crank no longer pays it, but a collection still
+  marks the whole live heap (about 0.4 ms per 1,000 live slots), so per-turn time still grows,
+  slower: 0.75 s at 300 turns, 1.7 s at 2,000, 2.7 s at 4,000 (J-9383, J-9388); the live heap grows
+  about 270 slots and the slot capacity about 230 slots per turn (1.14 M live, 1.55 M capacity at
+  4,000 turns, J-9389). The session vat's slot capacity per 100 turns is `history.grow` (J-0395) and
+  per session length `crank.heap`.
   **No archive in M2 unless those numbers say so.** M2 measures snapshot time and size at 1,000,
   10,000 and 30,000 turns (`journal.snapshot`) and the slot capacity at each; if either misses, M2
   (not M13) adds an adapter-written archive
@@ -1016,8 +1056,9 @@ too. The other rows below are design settings, kept in the module that enforces 
        `tmp/t<key>`: a supervisor serves a throwaway `tmp/b<pid>`, workspace `w` is created, the
        caller's `provision(context)` runs with `context.client` (a control client on `w`) and
        `context.connect()`, the supervisor stops cleanly and the directory is renamed. The key covers the
-       worker binary, the boot bundles, `WORKSPACE_VERSION`, the crank budget, `TEMPLATE_VERSION` and
-       `id`, so a template is rebuilt whenever any of them changes. M1a passes its
+       worker binary, the boot bundles, `WORKSPACE_VERSION`, the crank budget, `TEMPLATE_VERSION`,
+       `id`, the slot ceiling and any `THIXOTROPE_GC_*` or `THIXOTROPE_HUB_STORE` that is set, so a
+       template is rebuilt whenever any of them changes. M1a passes its
        `scripts/provision-steps.js` as `provision` with its own `id` (for example `m1a`).
      - `startFromTemplate(template, { t, idleSleepMs = 2000, root })` clones it (APFS clone, about
        0.1-0.35 s for 160 MB) to a new `tmp/<6 chars>` and starts the supervisor child; it returns
@@ -1039,7 +1080,8 @@ too. The other rows below are design settings, kept in the module that enforces 
      gateway with the scripted backend: reconnect, reload, phone width, voice with synthetic audio.
 - **Supervisor process.** Every serve (the `scripts/serve.mjs` CLI, `serveHarness()`, the template
   helper, the perf harness) runs the supervisor in a child process started by `spawnSupervisorChild`,
-  with only the allowlisted environment plus `THIXOTROPE_CRANK_BUDGET` and
+  with only the allowlisted environment (which includes `THIXOTROPE_SLOT_CEILING`,
+  `THIXOTROPE_GC_*` and `THIXOTROPE_HUB_STORE`) plus `THIXOTROPE_CRANK_BUDGET` and
   `THIXOTROPE_MAX_DELIVERY_ATTEMPTS`; the child refuses to serve from any other environment. It holds a
   pipe from its parent on fd 3 and closes the supervisor cleanly when the parent dies, even by SIGKILL
   (J-9021). Its record is `<state>/harness-serve.json`.
@@ -1103,31 +1145,32 @@ milestone by itself.
 | `frames.halt` (S1) | `frameBytes` <= half the halt point on fresh and used vats | 94,208 / 98,304 at 50 M: pass (J-0194) |
 | `vat.evaluateProgram` 150 k source, staged | <= 2 s; no MeterAbort; **depends on C-5** | 2.2-2.3 s, 95 % of it staging (J-0193, J-9024) |
 | `loop.runaway` at the crank budget | <= 1 s | 242 ms (J-0193) |
-| Turn start: submit accepted to provider request sent (scripted backend) | median <= 350 ms; <= 3 deliveries | M1a: 255 ms, 2 frames, p99 0.5-3.0 s from GC bursts (C-20); 573 ms while ports were opened per turn (J-0272, J-9191) |
+| Turn start: submit accepted to provider request sent (scripted backend) | median <= 350 ms; <= 3 deliveries | M1a: 255 ms, 2 frames, p99 0.5-3.0 s from GC bursts (C-20); 573 ms while ports were opened per turn (J-0272, J-9191). After CORE-11/12: 105 ms, p99 428 ms, 2 deliveries; on a long session 121-152 ms up to 1,000 turns, 233 ms (p95 1.4 s) at 4,000 (J-9382, J-9383) |
 | Live delta: provider chunk in adapter to WS frame out | median <= 5 ms; 0 deliveries per delta | M1a: 0.17-0.18 ms to an in-process subscriber; 18 ms through a control client (J-9173, J-9191) |
 | Deliveries per model round | <= 1 + ceil(round seconds / 10) + tool results | |
 | Tool intents per round | in the round-final delivery, 0 extra | |
 | Turn lease | 1 delivery per turn | M1a: a plain turn is 4 session deliveries including the lease answer (J-9191) |
-| `exec` trivial call (session -> exec vat -> session) | median <= 250 ms | vat -> adapter -> vat 70-76 ms per answered call (J-9043) |
-| `exec` first call in a session (spare exec vat) | <= 750 ms | a spare take is 157-176 ms (J-9045); was 1.5 s |
-| `exec` 100 answered sends / 100 `sendOnly` | <= 8 s / <= 1 s; answered **depends on C-7** | S1 from a probe vat: 100 answered 9.4-10.6 s until all answers were back, 100 `sendOnly` 490-513 ms (J-0143, before CORE-4) |
-| Session create with spare pool / without | <= 750 ms / <= 6 s; without **depends on C-5** | take 157-176 ms (was 1.5 s); cold 6.4 s for a 246 KB program (J-9045); M1a cold 6.14 s for the 157 KB session program (J-9192) |
+| `exec` trivial call (session -> exec vat -> session) | median <= 250 ms | vat -> adapter -> vat 70-76 ms per answered call (J-9043); M1b 179 ms, after CORE-11 53 ms (J-9382) |
+| `exec` first call in a session (spare exec vat) | <= 750 ms | a spare take is 157-176 ms (J-9045); was 1.5 s; M1b 541 ms, now 285-298 ms (J-9382) |
+| `exec` 100 answered sends / 100 `sendOnly` | <= 8 s / <= 1 s | S1 from a probe vat: 100 answered 9.4-10.6 s until all answers were back, 100 `sendOnly` 490-513 ms (J-0143, before CORE-4); exec vat: 7.0 s (J-9368) -> 1.3-1.4 s after CORE-11 (J-9382); `sendOnly` not measurable until M5's `powers` |
+| Session create with spare pool / without | <= 750 ms / <= 6 s; without **depends on C-5** | take 157-176 ms (was 1.5 s); cold 6.4 s for a 246 KB program (J-9045); M1a cold 6.14 s for the 157 KB session program (J-9192); M1b with the pool 1.2 s (miss), after CORE-11/12 849-864 ms (pass under 1.25 x), cold 4.5 s (J-9382) |
 | `session.program` session program bundle size | <= 200 KB | M1a: 157,493 bytes (J-9192) |
 | Session list, 100 sessions | <= 200 ms per 50-row page; 0 session vats woken | |
 | Session watch snapshot, 1,000-turn session | <= 300 ms; <= `frameBytes` | |
-| History page (32 turns) | <= 300 ms | M1a: 0.77 ms in Node with the structural guard (18 ms strict); not measured in a vat (J-9153) |
+| History page (32 turns) | <= 300 ms; **depends on C-5** or W2.5's record bound | M1a: 0.77 ms in Node with the structural guard (18 ms strict) (J-9153); in a vat 568-596 ms at 22 turns of 7 records, 869 ms on a 1,000-turn session: the page crank's own marshalling (J-9382, J-9383, J-9387) |
 | Queue enqueue while a turn runs, round trip from the browser | median <= 150 ms | |
-| Concurrent: 10 sessions streaming with tool rounds at once | per-session turn start <= 2 x single; crank p95 <= 200 ms; row push <= 500 ms | |
+| Concurrent: 10 sessions streaming with tool rounds at once | per-session turn start <= 2 x single; crank p95 <= 200 ms; row push <= 500 ms; **depends on C-2** (the rest) | M1b 3.6 x / 500 ms / 372 ms; after CORE-11/12 6.5 x (728 vs 112 ms) / 500 ms / 189 ms: 24.6 s of a 30 s hub window are commits (J-9382, J-9386) |
 | Daemon throughput: deliveries per second at saturation | recorded; journal if < 50/s | adapter-to-adapter 82 events/s; a vat's batched `sendOnly` 236/s (J-0163, C-2) |
-| `hub.json` after 1,000 turns with a UI attached / after 50 sessions | <= 2 MB; ms per delivery <= 1.25 x fresh | 43 KB -> 630-690 KB during 2,000 hops, 110 KB at rest (J-0163) |
+| Hub state after 1,000 turns with a UI attached / after 50 sessions | <= 2 MB; ms per delivery <= 1.25 x fresh; **depends on C-2** (the rest) | 43 KB -> 630-690 KB during 2,000 hops, 110 KB at rest (J-0163); log store: image plus log up to 1.35 MB, 1.36-1.40 x fresh (J-9333, J-9382) |
 | Checkpoint stall: turn latency while a busy session vat snapshots | p99 <= 1 s | |
-| Restart to serving, 50 idle sessions (checkpointed), no vat crashing | <= 15 s; 0 idle session vats woken | 4.4-5.8 s with 0-50 sleeping vats, 0 woken (J-9045, J-9050); M1a 10 idle + 1 in flight: 6.1-9.7 s, only the in-flight session woken, 5 of 5 runs (J-9192) |
-| Restart to serving with one session vat crashing on every replay (bound 5) | <= 15 s; recorded; **depends on C-8, C-9** | 35.8 / 68.5 / 36.4 s (J-9046); M1a session vat 20.3-20.5 s, plain vat 35.7 s (J-9192) |
+| Restart to serving, 50 idle sessions (checkpointed), no vat crashing | <= 15 s; 0 idle session vats woken | 4.4-5.8 s with 0-50 sleeping vats, 0 woken (J-9045, J-9050); M1a 10 idle + 1 in flight: 6.1-9.7 s, only the in-flight session woken, 5 of 5 runs (J-9192); after CORE-11/12 3.3-6.9 s (median 4.1 s), healthy 10 sleeping vats 2.7-3.0 s (J-9382) |
+| Restart to serving with one session vat crashing on every replay (bound 5) | <= 15 s; recorded; **depends on C-8, C-9** | 35.8 / 68.5 / 36.4 s (J-9046); M1a session vat 20.3-20.5 s, plain vat 35.7 s (J-9192); now session vat 18.2-18.4 s, plain vat 66.2 s (J-9382, J-9390) |
 | Restart to serving after SIGKILL with unsnapshotted vats | recorded; **depends on C-3** for growth | 11.0 -> 18.2 s over 24 kills with idle sleep 1 h (J-9044); M1a one awake session 8.8-9.3 s, asleep 5.1-5.6 s (J-9190) |
 | Restart with 20 sessions that have environments | <= 15 s; 0 containers started | |
 | Clean shutdown, 50 sessions | <= 5 s | small state closes in 1.9 s (J-0147) |
 | Disk per idle session (session vat only / with exec vat) | <= 25 MB / <= 50 MB | 17.3 MB per sleeping vat (J-9045) |
-| Session vat snapshot with 10,000 turns | <= 1 s; decides whether M13 builds an archive | |
+| Session vat snapshot with 10,000 turns | <= 1 s; decides whether M13 builds an archive | already 1.29 s and 114 MB at 5,000 turns (J-9384) |
+| Long session (one session, 5,000 turns of a tool round and two staged native contexts) | recorded; turn start, history page and context rebuild budgets apply at every length | per turn 0.84 s (50) -> 3.2 s (5,000); turn start 121 -> 271 ms (p95 1.8 s); history page 0.54 -> 2.0 s; context rebuild 1.3 -> 180 s; slot capacity 13 -> 48 % of 4,000,000; the session's hub row 516 KB (J-9383..J-9389) |
 | Secret read per round | in-process, <= 1 ms, 0 deliveries | |
 | Container `runCommand(['true'])` harness overhead over runtime | <= 150 ms | |
 | git `status` on 10 k-file repo through the capability | <= 1 s | |
@@ -1136,7 +1179,7 @@ milestone by itself.
 | TTS first audio after first sentence (warm) | <= 1 s (real engine) | |
 | Factory install of the bundled program, up to 300 k characters | <= 15 s (was 30 s) | 11.6 s ASCII, 14.0 s for 478 KB of mixed text (J-0193) |
 | `template.start` copy + start to serving | <= 10 s (was 20 s) | 5.6 s (J-9045) |
-| OCapN GC burst: turn start while a peer releases 100+ objects | median <= 350 ms; p99 recorded, <= 1 s **depends on C-20** | M1a: median 248 ms, p99 0.52 s, max 4.0 s with 6 session cranks (J-9192) |
+| OCapN GC burst: turn start while a peer releases 100+ objects | median <= 350 ms; p99 recorded, <= 1 s **depends on C-20** | M1a: median 248 ms, p99 0.52 s, max 4.0 s with 6 session cranks (J-9192); now 106 ms, p99 293 ms (J-9382) |
 
 ---
 
