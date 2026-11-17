@@ -44,6 +44,17 @@ const setup = async () => {
   return { daemon, coordinator, maker, calls, bound };
 };
 
+test('fake private host rejects calls outside its declared interface', async t => {
+  const daemon = makeFakeDaemon();
+  await t.throwsAsync(E(daemon.host).has(/** @type {any} */ (1)), {
+    message: /string/,
+  });
+  await t.throwsAsync(
+    E(daemon.host).storeValue(makeToken('Value'), /** @type {any} */ (1)),
+    { message: /string|array/ },
+  );
+});
+
 test('create commits a child with exactly its endowments', async t => {
   const { daemon, bound, calls } = await setup();
   const notes = makeToken('Notes');
