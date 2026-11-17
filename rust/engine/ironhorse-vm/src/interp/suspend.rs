@@ -1148,6 +1148,42 @@ impl Interp {
         kind: ReactionKind,
     ) -> Result<(), Step> {
         if let Payload::Reference(r) = value.value {
+            let constructor_id = self.symbol_ids.get("constructor").copied().filter(|&id| {
+                self.promises.contains_key(&r)
+                    && !self.await_promise_keeps_default_constructor(r, id)
+            });
+            if let Some(constructor_id) = constructor_id {
+                // `Await` is `PromiseResolve(%Promise%, value)`, whose first
+                // step reads `value.constructor` (XS's `fx_Promise_resolveAux`
+                // under `fxAsyncGeneratorStep` / `fxStepAsync`). A promise
+                // whose constructor lookup is anything but the untouched
+                // inherited data property needs the full, observable `Get`.
+                // When it throws, XS rejects a fresh promise with the
+                // exception and waits on that, so the awaiting code resumes
+                // with a throw completion rather than the error escaping here.
+                let observed = match self
+                    .native_try(|machine| machine.mop_get(code, r, constructor_id, value))?
+                {
+                    Ok(observed) => observed,
+                    Err(reason) => {
+                        self.meter.tick_raw(ASYNC_AWAIT_GENERAL_METERING);
+                        let (derived, _resolve, reject) = self.new_promise_capability();
+                        self.promise_then_native(derived, kind);
+                        return self.reject_via_function(reject, reason);
+                    }
+                };
+                let default = self.intrinsics.get("Promise").copied();
+                let same = matches!(
+                    (observed.kind, observed.value, default),
+                    (Kind::Reference, Payload::Reference(c), Some(d)) if c == d
+                );
+                if !same {
+                    self.meter.tick_raw(ASYNC_AWAIT_GENERAL_METERING);
+                    let (derived, resolve, _reject) = self.new_promise_capability();
+                    self.promise_then_native(derived, kind);
+                    return self.settle_via_function(code, resolve, value);
+                }
+            }
             if self.promises.contains_key(&r) {
                 // XS's fast path is `mxGetID(_constructor)` + `fxIsSameValue` +
                 // `fxPromiseThen` (null capability, 5 slots) — no capability, no
@@ -1166,6 +1202,38 @@ impl Interp {
         let (derived, resolve, _reject) = self.new_promise_capability();
         self.promise_then_native(derived, kind);
         self.settle_via_function(code, resolve, value)
+    }
+
+    /// Whether `promise.constructor` is, without running any guest code, the
+    /// realm's `%Promise%`: no own `constructor`, a `[[Prototype]]` of
+    /// `%Promise.prototype%`, and that prototype's `constructor` still the
+    /// original data property. Reading such a property has no observable
+    /// effect, so the await fast path may skip the `Get`. The caller asks only
+    /// once the realm has a `constructor` key: before any code names it, no
+    /// guest code can have redefined the property, and interning it here
+    /// would shift the ids a sparse realm hands out next.
+    fn await_promise_keeps_default_constructor(
+        &self,
+        promise: crate::value::SlotIndex,
+        constructor_id: u16,
+    ) -> bool {
+        let Some(&default) = self.intrinsics.get("Promise") else {
+            return false;
+        };
+        if self.find_property(promise, constructor_id).is_some() {
+            return false;
+        }
+        let proto = self.instance_prototype(promise);
+        if proto != self.promise_proto || self.accessors.contains_key(&(proto, constructor_id)) {
+            return false;
+        }
+        match self.find_property(proto, constructor_id) {
+            Some(slot) => {
+                let slot = self.slots.get(slot);
+                slot.kind == Kind::Reference && slot.value == Payload::Reference(default)
+            }
+            None => false,
+        }
     }
 }
 

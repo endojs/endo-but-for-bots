@@ -15,7 +15,7 @@ var buffer = new ArrayBuffer(16);
 var view = new DataView(buffer, 4, 8);
 var bytes = new Uint16Array(buffer, 2, 4); view.setUint16(0, 258, true); // ABUF, TARR, DVIW
 var boxed = [new Number(5), new String('str'), new Boolean(true)]; // WRAP
-var re = /a(b)/g; re.exec('xab');                           // REGX
+var re = /a(b)/g;                                           // REGX
 var args; (function () { args = arguments; })(10, 32);      // ARGB
 var dur = Temporal.Duration.from({ hours: 2, minutes: 5 });
 var inst = Temporal.Instant.fromEpochMilliseconds(86400000); // TMPR
@@ -58,4 +58,5 @@ var weakTarget = { v: 1 }; var weakToken = {};
 var weak = new WeakRef(weakTarget);                         // WREF
 var registry = new FinalizationRegistry(function (held) { count += held; });
 registry.register(weakTarget, 1, weakToken);                // FREG
+re.exec('xab');                                             // NFLR
 0
