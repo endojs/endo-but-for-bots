@@ -158,7 +158,7 @@ export const checkBudget = (observed, budget) => {
 /** Machine load average (1, 5, 15 minutes). */
 export const loadAvg = () => os.loadavg().map(v => +v.toFixed(2));
 
-/** @type {{ commit: string, workerSha256: string | null, slotCeiling: number } | undefined} */
+/** @type {{ commit: string, workerSha256: string | null, slotCeiling: number, gcPolicy: string, hubStore: string } | undefined} */
 let identity;
 /** The commit (with "-dirty" for local changes) and the worker's SHA-256. */
 export const runIdentity = async () => {
@@ -197,21 +197,35 @@ export const runIdentity = async () => {
   const slotCeiling = Number(
     process.env.THIXOTROPE_SLOT_CEILING ?? harnessLimits.slotCeiling,
   );
-  identity = { commit, workerSha256, slotCeiling };
+  identity = {
+    commit,
+    workerSha256,
+    slotCeiling,
+    // The supervisor's defaults when unset (CC-022, CC-024).
+    gcPolicy: process.env.THIXOTROPE_GC_POLICY ?? 'allocation',
+    hubStore: process.env.THIXOTROPE_HUB_STORE ?? 'log',
+  };
   return identity;
 };
 
 /**
- * Bytes of the hub's persisted state (`hub.json`) under a state directory,
- * or null when there is none yet.
+ * Bytes of the hub's persisted state under a state directory (the log
+ * store's image plus log, else the whole-file `hub.json`), or null when
+ * there is none yet.
  * @param {string} root
  */
 export const hubJsonBytes = async root => {
-  for (const candidate of [
-    path.join(root, 'heaps', 'hub.json'),
-    path.join(root, 'hub.json'),
-  ]) {
-    const info = await stat(candidate).catch(() => undefined);
+  for (const dir of [path.join(root, 'heaps'), root]) {
+    // The log store (CC-024, the default since 72ef46f905) keeps an image
+    // and a log; its hub.json is only a marker that older builds refuse.
+    const logged = await Promise.all(
+      ['hub-image.json', 'hub-log.jsonl'].map(name =>
+        stat(path.join(dir, name)).catch(() => undefined),
+      ),
+    );
+    if (logged.some(info => info?.isFile()))
+      return logged.reduce((sum, info) => sum + (info?.size ?? 0), 0);
+    const info = await stat(path.join(dir, 'hub.json')).catch(() => undefined);
     if (info?.isFile()) return info.size;
   }
   return null;
