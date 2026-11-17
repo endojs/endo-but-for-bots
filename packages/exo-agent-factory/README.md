@@ -7,7 +7,9 @@ It implements the core of
 [`designs/endo-child-agent-factory.md`](../../designs/endo-child-agent-factory.md).
 
 Holding a facet is the authorization.
-The factory never compares owner, caller, provider, or formula identifiers.
+The factory does not consult owner, caller, or provider identities.
+It compares formula identifiers only to prove that a derived name it reuses
+holds the value the coordinator expects.
 A child receives exactly the endowments its creator names, and never the
 maker, a credential, the root host, or the coordinator's private directory.
 
