@@ -83,7 +83,7 @@ const GROWTH_STEPS = (process.env.GROWTH_STEPS ?? `10,${GROWTH_SESSIONS}`)
 const GROWTH_SAMPLE = Number(process.env.GROWTH_SAMPLE ?? 100);
 
 /** @typedef {{ deliveries: number, frames: number, ms: number, persists: number, persistMs: number, persistChars: number, serializeMs: number, sends: number, sendMs: number }} Bucket */
-/** @typedef {{ gcOnly: Bucket, other: Bucket, outside: Bucket, store?: Record<string, any> }} HubStats */
+/** @typedef {{ gcOnly: Bucket, other: Bucket, outside: Bucket, store?: Record<string, any>, persistRuns?: Record<string, any> }} HubStats */
 
 const BUCKET_KEYS = /** @type {const} */ ([
   'deliveries',
@@ -121,7 +121,11 @@ const storeDelta = (before, after) =>
   Object.fromEntries(
     Object.entries(after).map(([k, v]) => [
       k,
-      typeof v === 'number' && typeof before?.[k] === 'number'
+      // High-water marks (max, imageChars, logChars, seq...) are not deltas
+      // in a meaningful sense; counts are. Both are numbers, so the caller
+      // reads a mark from the after side: here every number is a delta
+      // except `max`, kept as after has it.
+      k !== 'max' && typeof v === 'number' && typeof before?.[k] === 'number'
         ? +(v - before[k]).toFixed(3)
         : v,
     ]),
@@ -363,13 +367,13 @@ async function growth(template, root) {
       const other = [];
       /** @type {Bucket[]} */
       const all = [];
-      const storeBefore = (await run.hubStats()).store;
+      const statsBefore = await run.hubStats();
       for (let i = 0; i < GROWTH_WINDOW; i += 1) {
         const t = await turn();
         other.push(t.hub.other);
         all.push(t.hub.other, t.hub.gcOnly, t.hub.outside);
       }
-      const storeAfter = (await run.hubStats()).store;
+      const statsAfter = await run.hubStats();
       const o = sum(other);
       const a = sum(all);
       const disk = await hubDiskBytes(run.served.root);
@@ -398,7 +402,11 @@ async function growth(template, root) {
         serializeMsPerPersist: per(a.serializeMs, a.persists),
         diskBytes: disk?.bytes ?? null,
         diskFiles: disk?.files ?? null,
-        store: storeDelta(storeBefore, storeAfter) ?? null,
+        store: storeDelta(statsBefore.store, statsAfter.store) ?? null,
+        // Persists with no microtask checkpoint between them (core
+        // a71e5272b5+): persists - bursts is what one commit per burst saves.
+        persistRuns:
+          storeDelta(statsBefore.persistRuns, statsAfter.persistRuns) ?? null,
         pass: null,
         commit,
         workerSha256,
