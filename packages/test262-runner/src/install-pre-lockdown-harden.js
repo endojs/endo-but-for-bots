@@ -5,7 +5,7 @@
  * and `lockdown()`, withdrawn again before `lockdown()` sees it.
  *
  * This corpus needs `passStyleOf` and the `@endo/bytes` helpers as globals, and
- * six of its eight cases never call `lockdown()` at all -- so those modules
+ * seven of its eight cases never call `lockdown()` at all -- so those modules
  * have to load first. They all call `harden()` at module scope, which means
  * something hardens BEFORE `lockdown()`, and that is the one situation
  * `@endo/ironhorse-prelude` deliberately does not decide for its embedders.
@@ -17,7 +17,8 @@
  *    own into `Object[@harden]` if neither is there. `repairIntrinsics` then
  *    refuses outright -- "a prior harden implementation has been used and
  *    installed" (`packages/ses/src/lockdown.js:395`). This is how the node host
- *    fails `Symbol.toStringTag-lockdown.js` today.
+ *    used to fail `Symbol.toStringTag-lockdown.js`, before it imported this
+ *    module too.
  * 2. Install a TRAVERSING one, or install one BEFORE the shim is evaluated.
  *    Either way the guest ends up with a hardener that does not traverse, or
  *    with no `lockdown()` at all. `packages/ses/src/make-hardener.js:142-147`
@@ -50,9 +51,24 @@
  * nothing having hardened.
  *
  * Nothing Ironhorse-specific here -- this is the CORPUS's repair, which is why
- * it lives in the test harness rather than in `@endo/ironhorse-prelude`. It is
- * wired into `ironhorse-prelude.js` only; whether any other host wants it is
- * not a question this change answers.
+ * it lives in the test harness rather than in `@endo/ironhorse-prelude`. Both
+ * `ironhorse-prelude.js` and `node-prelude.js` import it, for the same reason
+ * and at the same point in their order -- after `ses/assert-shim.js`, before
+ * `./expose-pass-style-bytes-globals.js`. That position is deliberate, not
+ * load-bearing on every host: moving it ahead of `ses/lockdown-shim.js` was
+ * measured to leave the node lane at 16/16, because the shim then adopts this
+ * hardener itself and the poisoning slot is still never touched. Keep it here
+ * anyway, so the shim keeps its OWN traversing hardener for the guest. `xs-prelude.js` does NOT, and should
+ * not: XS installs a NATIVE `globalThis.harden` for the selector to adopt
+ * (`fx_harden`, bound as a host function in
+ * `rust/engine/xs-oracle/csrc/xs_shim.c`), so it never reaches the poisoning
+ * slot and needs no stand-in. Adding one would REPLACE that native `harden`
+ * with a non-traversing stand-in and then `delete` the global -- a loss
+ * rather than a no-op. That lane also cannot be run here: `xst` needs the
+ * `c/moddable` submodule built, and so does `test262:ironhorse-host`, whose
+ * `ironhorse-xst` binary depends on `xs-oracle`. Two of the four lanes are
+ * unrunnable on a bare checkout, so this rests on reading those sources
+ * rather than on measuring the lane.
  */
 
 import { makeHardener } from '@endo/harden/make-hardener.js';

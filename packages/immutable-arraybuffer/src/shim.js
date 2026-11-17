@@ -8,9 +8,11 @@ import {
 } from './lib.js';
 
 // eslint-disable-next-line no-restricted-globals
-const { ArrayBuffer, Object } = globalThis;
+const globalObject = globalThis;
+const { ArrayBuffer, Object } = globalObject;
 
 const {
+  getOwnPropertyDescriptor,
   getOwnPropertyDescriptors,
   defineProperties,
   defineProperty,
@@ -53,10 +55,7 @@ if (!('sliceToImmutable' in arrayBufferPrototype)) {
   // `getPrototypeOf(Uint8Array.prototype)` is the standard way to reach
   // %TypedArrayPrototype% without a dedicated
   // intrinsic name.
-  const typedArrayPrototype = getPrototypeOf(
-    // eslint-disable-next-line no-restricted-globals
-    globalThis.Uint8Array.prototype,
-  );
+  const typedArrayPrototype = getPrototypeOf(globalObject.Uint8Array.prototype);
 
   // Install the lib property record onto %TypedArrayPrototype%.
   //
@@ -69,31 +68,32 @@ if (!('sliceToImmutable' in arrayBufferPrototype)) {
     getOwnPropertyDescriptors(freezableTypedArrayLibProperties),
   );
 
-  // Replace each of the eleven concrete global TypedArray constructors with
-  // the emulated constructor produced by the lib. The emulated constructor
-  // discriminates on `buffers` brand membership and falls through to
-  // the genuine constructor for all other call shapes.
+  // Node's contextified global may create a backing sandbox property here.
+  // Supply the existing flags so a value-only write cannot reset them.
+  /**
+   * @param {string} name
+   * @param {unknown} value
+   */
+  const replaceGlobalConstructor = (name, value) => {
+    const desc = getOwnPropertyDescriptor(globalObject, name);
+    defineProperty(globalObject, name, {
+      value,
+      writable: desc?.writable ?? false,
+      enumerable: desc?.enumerable ?? false,
+      configurable: desc?.configurable ?? false,
+    });
+  };
+
   for (const { name, Constructor } of concreteTypedArrayConstructors) {
-    const EmulatedConstructor = makeEmulatedTypedArrayConstructor(Constructor);
-    defineProperty(
-      // eslint-disable-next-line no-restricted-globals
-      globalThis,
+    replaceGlobalConstructor(
       name,
-      {
-        value: EmulatedConstructor,
-      },
+      makeEmulatedTypedArrayConstructor(Constructor),
     );
   }
 
   defineProperties(
-    // eslint-disable-next-line no-restricted-globals
-    globalThis.DataView.prototype,
+    globalObject.DataView.prototype,
     getOwnPropertyDescriptors(freezableDataViewLibProperties),
   );
-  defineProperty(
-    // eslint-disable-next-line no-restricted-globals
-    globalThis,
-    'DataView',
-    { value: EmulatedDataView },
-  );
+  replaceGlobalConstructor('DataView', EmulatedDataView);
 }
