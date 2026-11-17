@@ -101,7 +101,11 @@ import { restoreHubState, serializeHubState } from './hub-state.js';
  * @typedef {object} HubStore
  * @property {() => any} getState previously persisted state, or
  *   undefined
- * @property {(state: any) => void} setState atomic write-through
+ * @property {(state: any) => (number | void)} setState atomic
+ *   write-through: durable when it returns. It may return the characters
+ *   it wrote, which `stats()` adds up.
+ * @property {() => Record<string, unknown>} [stats] the store's own
+ *   process-local counters, shown as `stats().store`
  */
 
 const BOOTSTRAP_POSITION = '0';
@@ -451,6 +455,7 @@ export const makeOcapnHub = ({
    *   ms: number,
    *   persists: number,
    *   persistMs: number,
+   *   persistChars: number,
    *   serializeMs: number,
    *   sends: number,
    *   sendMs: number,
@@ -463,6 +468,7 @@ export const makeOcapnHub = ({
     ms: 0,
     persists: 0,
     persistMs: 0,
+    persistChars: 0,
     serializeMs: 0,
     sends: 0,
     sendMs: 0,
@@ -502,6 +508,7 @@ export const makeOcapnHub = ({
       bucket.ms += now() - current.start;
       bucket.persists += current.persists;
       bucket.persistMs += current.persistMs;
+      bucket.persistChars += current.persistChars;
       bucket.serializeMs += current.serializeMs;
       bucket.sends += current.sends;
       bucket.sendMs += current.sendMs;
@@ -574,11 +581,14 @@ export const makeOcapnHub = ({
       giftWaiters,
     });
     const serialized = now();
+    let written = 0;
     try {
-      store.setState(state);
+      const result = store.setState(state);
+      if (typeof result === 'number') written = result;
     } finally {
       const bucket = measuring ?? costs.outside;
       bucket.persists += 1;
+      bucket.persistChars += written;
       bucket.serializeMs += serialized - start;
       bucket.persistMs += now() - start;
     }
@@ -2715,12 +2725,16 @@ export const makeOcapnHub = ({
      * (serialization included) and sends (a durable worker's journal
      * append) inside it; `outside` counts persists and sends made outside
      * any inbound delivery. Milliseconds read 0 without a `now` clock.
+     * `persistChars` adds up what the store says each persist wrote (0 for a
+     * store that does not say); `store` is the store's own counters, when it
+     * keeps any.
      */
     stats: () =>
       harden({
         gcOnly: { ...costs.gcOnly },
         other: { ...costs.other },
         outside: { ...costs.outside },
+        ...(store.stats ? { store: { ...store.stats() } } : {}),
       }),
     /**
      * GC frames and positions this process received and sent, by session:

@@ -97,7 +97,10 @@
  * @typedef {object} ThixotropeStore
  * @property {string} [statePath] filesystem ownership boundary
  * @property {() => any} getHubState the OCapN hub's persisted tables
- * @property {(state: any) => void} setHubState
+ * @property {(state: any) => (number | void)} setHubState durable when it
+ *   returns; may return the characters it wrote
+ * @property {() => Record<string, unknown>} [hubStoreStats] process-local
+ *   counters of the hub state's storage
  * @property {() => Array<string>} listWorkerIds
  * @property {(workerId: string) => WorkerStore} provideWorkerStore
  * @property {(workerId: string) => void} deleteWorker removes the

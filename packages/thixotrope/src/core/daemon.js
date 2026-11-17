@@ -221,6 +221,9 @@ const buildDaemon = async (
     store: harden({
       getState: () => store.getHubState(),
       setState: (/** @type {any} */ state) => store.setHubState(state),
+      ...(store.hubStoreStats
+        ? { stats: /** @type {any} */ (store.hubStoreStats) }
+        : {}),
     }),
     now: () => timers.monotonicNow(),
     cryptography,

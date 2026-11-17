@@ -224,6 +224,10 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
   /** @type {Map<string, WorkerStore>} */
   const workerStores = new Map();
 
+  // Process-local counters of the hub state's whole-file replacements.
+  let hubWrites = 0;
+  let hubChars = 0;
+
   /** @type {ThixotropeStore} */
   const store = {
     statePath,
@@ -248,11 +252,15 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
       });
     },
     getHubState: () => readJsonMaybe(join(statePath, 'hub.json')),
-    setHubState: state =>
-      syncFiles.writeTextAtomic(
-        join(statePath, 'hub.json'),
-        `${JSON.stringify(state)}\n`,
-      ),
+    setHubState: state => {
+      const text = `${JSON.stringify(state)}\n`;
+      syncFiles.writeTextAtomic(join(statePath, 'hub.json'), text);
+      hubWrites += 1;
+      hubChars += text.length;
+      return text.length;
+    },
+    hubStoreStats: () =>
+      harden({ kind: 'file', writes: hubWrites, chars: hubChars }),
     listSessionTokens: () =>
       syncFiles.exists(sessionsPath)
         ? syncFiles.listDirectory(sessionsPath).sort()
