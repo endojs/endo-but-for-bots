@@ -50,8 +50,9 @@
  * just after each SSE event was handed to the socket); perf uses it for
  * `provider.overhead`.
  *
- * W2.1b (Anthropic fixtures `anthropic-*`) and W2.2 (`*-models.json`) add
- * fixture files and builders; the server itself stays provider-neutral.
+ * W2.1b (Anthropic fixtures `anthropic-*`, `anthropicEvents`) and W2.2
+ * (`*-models.json`) add fixture files and builders; the server itself
+ * stays provider-neutral.
  *
  * Node only (tests and perf); not shipped to a vat.
  */
@@ -245,6 +246,170 @@ export const openRouterChunks = ({
   }
   if (usage !== null) events.push({ data: { ...base, choices: [], usage } });
   if (done) events.push('[DONE]');
+  return events;
+};
+
+/**
+ * Anthropic Messages stream events (W2.1b): `message_start` (the model and
+ * input usage), per content block `content_block_start`, its deltas
+ * (`text_delta`, `input_json_delta`, `thinking_delta` + `signature_delta`)
+ * and `content_block_stop`, then `message_delta` (stop reason, output
+ * usage) and `message_stop`, with a `ping` after the start, as the public
+ * Messages streaming API sends them. Written from the shapes that lal
+ * `providers/anthropic.js` and the spec's Fae streaming adapter encode.
+ *
+ * @param {object} [options]
+ * @param {string[]} [options.deltas] text pieces of one text block
+ * @param {Array<{ id?: string, name: string, args: string, pieces?: number }>} [options.toolCalls]
+ *   each call's JSON input in `pieces` fragments (default 2)
+ * @param {Array<{ thinking?: string, signature?: string, data?: string }>} [options.thinking]
+ *   blocks before the text: `data` makes a `redacted_thinking` block
+ * @param {string | null} [options.stopReason] default 'end_turn', or
+ *   'tool_use' with calls; null: no message_delta
+ * @param {any} [options.usage] `{ input_tokens, output_tokens, ... }`
+ *   (input counts go in message_start, output_tokens in message_delta)
+ * @param {string} [options.model]
+ * @param {boolean} [options.stop] send `message_stop` (default true)
+ * @param {any} [options.error] an `error` event's `error` object, sent
+ *   instead of the rest after `errorAfter` text deltas
+ * @param {number} [options.errorAfter] default 0
+ * @returns {PlanEvent[]}
+ */
+export const anthropicEvents = ({
+  deltas = [],
+  toolCalls = [],
+  thinking = [],
+  stopReason = toolCalls.length ? 'tool_use' : 'end_turn',
+  usage = { input_tokens: 12, output_tokens: 7 },
+  model = 'claude-fake-1',
+  stop = true,
+  error,
+  errorAfter = 0,
+} = {}) => {
+  /** @type {PlanEvent[]} */
+  const events = [];
+  /**
+   * @param {string} type
+   * @param {Record<string, unknown>} fields
+   */
+  const event = (type, fields) => ({ event: type, data: { type, ...fields } });
+  const { output_tokens: outputTokens = 0, ...inputUsage } = usage ?? {};
+  events.push(
+    event('message_start', {
+      message: {
+        id: 'msg_fake_1',
+        type: 'message',
+        role: 'assistant',
+        model,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { ...inputUsage, output_tokens: 1 },
+      },
+    }),
+  );
+  events.push(event('ping', {}));
+  let index = 0;
+  for (const block of thinking) {
+    if (block.data !== undefined) {
+      events.push(
+        event('content_block_start', {
+          index,
+          content_block: { type: 'redacted_thinking', data: block.data },
+        }),
+      );
+    } else {
+      events.push(
+        event('content_block_start', {
+          index,
+          content_block: { type: 'thinking', thinking: '' },
+        }),
+      );
+      events.push(
+        event('content_block_delta', {
+          index,
+          delta: { type: 'thinking_delta', thinking: block.thinking ?? '' },
+        }),
+      );
+      events.push(
+        event('content_block_delta', {
+          index,
+          delta: { type: 'signature_delta', signature: block.signature ?? '' },
+        }),
+      );
+    }
+    events.push(event('content_block_stop', { index }));
+    index += 1;
+  }
+  const errorEvent = () =>
+    event('error', { error: { message: `${BODY_MARKER} stream`, ...error } });
+  if (error !== undefined && errorAfter === 0 && deltas.length === 0) {
+    events.push(errorEvent());
+    return events;
+  }
+  if (deltas.length > 0) {
+    events.push(
+      event('content_block_start', {
+        index,
+        content_block: { type: 'text', text: '' },
+      }),
+    );
+    for (let i = 0; i < deltas.length; i += 1) {
+      if (error !== undefined && i === errorAfter) {
+        events.push(errorEvent());
+        return events;
+      }
+      events.push(
+        event('content_block_delta', {
+          index,
+          delta: { type: 'text_delta', text: deltas[i] },
+        }),
+      );
+    }
+    if (error !== undefined) {
+      events.push(errorEvent());
+      return events;
+    }
+    events.push(event('content_block_stop', { index }));
+    index += 1;
+  }
+  for (const call of toolCalls) {
+    events.push(
+      event('content_block_start', {
+        index,
+        content_block: {
+          type: 'tool_use',
+          ...(call.id === undefined ? {} : { id: call.id }),
+          name: call.name,
+          input: {},
+        },
+      }),
+    );
+    const pieces = Math.max(1, call.pieces ?? 2);
+    const size = Math.ceil(call.args.length / pieces) || 1;
+    for (let i = 0; i < pieces; i += 1) {
+      events.push(
+        event('content_block_delta', {
+          index,
+          delta: {
+            type: 'input_json_delta',
+            partial_json: call.args.slice(i * size, (i + 1) * size),
+          },
+        }),
+      );
+    }
+    events.push(event('content_block_stop', { index }));
+    index += 1;
+  }
+  if (stopReason !== null) {
+    events.push(
+      event('message_delta', {
+        delta: { stop_reason: stopReason, stop_sequence: null },
+        usage: { output_tokens: outputTokens },
+      }),
+    );
+  }
+  if (stop) events.push(event('message_stop', {}));
   return events;
 };
 

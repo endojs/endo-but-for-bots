@@ -34,6 +34,7 @@ import { makeListChannel } from './list-channel.js';
 import { makeEventLog, makeScriptedProvider } from './providers/scripted.js';
 import { makeEchoTool } from './tools/echo.js';
 import { openRouterKind } from './providers/openrouter.js';
+import { anthropicKind } from './providers/anthropic.js';
 import { makeCatalog } from './providers/catalog.js';
 import { findSecretsFiles, makeSecretStore } from './secrets/store.js';
 import { makeSealKeys } from './secrets/seal.js';
@@ -60,6 +61,8 @@ export const backendKinds = harden([
   { kind: 'scripted', makeProvider: makeScriptedProvider, tools: ['echo'] },
   // M2 W2.1a: OpenRouter chat completions, streamed (m2-interfaces.md 8.1).
   openRouterKind,
+  // M2 W2.1b: the Anthropic Messages API, streamed (m2-interfaces.md 8.1).
+  anthropicKind,
 ]);
 
 /**

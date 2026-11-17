@@ -44,17 +44,21 @@
  * (`texts.openRouterModelPrefix`). No output limit is sent unless the round
  * asks for one (`options.maxOutputTokens`, R4-92: OpenRouter none).
  *
- * Retry (R4-74, R4-105) is W2.1b's: `makeOpenRouterProvider({ retry })`
- * takes a wrapper `({ attempt, signal }) => AsyncIterable<RoundEvent>`
- * around one attempt (default: the single attempt). An attempt's failure is
- * a `ProviderFailure` with `retryable`, `retryAfterMs`, `timedOut` and
- * `delivered` (it published text or reported usage) set.
+ * Retry (R4-74, R4-105; W2.1b, `retry.js`): by default every round runs
+ * its attempts through `makeRetry({ delayMs: openRouterDelay })`: 408, 429,
+ * 5xx, network failures, unreadable and empty answers are asked again, at
+ * most 3 attempts, one timeout retry, waiting `min(30 s, max(Retry-After,
+ * 1 s x 3^(n-1)))`, only while nothing was delivered (no text published, no
+ * tokens reported); each retry is logged `retry` (attempt, wait, status;
+ * never a body). `makeOpenRouterProvider({ retry })` replaces the wrapper
+ * (`({ attempt, signal }) => AsyncIterable<RoundEvent>`). An attempt's
+ * failure is a `ProviderFailure` with `retryable`, `retryAfterMs`,
+ * `timedOut` and `delivered` (it published text or reported tokens) set.
  *
  * Node only (adapter).
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
-import { isStaged } from '../../../../guest/session/staging.js';
 import { usageFromOpenRouter } from '../../../../guest/lib/token-usage.js';
 /* eslint-enable import/no-relative-packages */
 import {
@@ -68,9 +72,12 @@ import { parseSseBatches } from './sse.js';
 import {
   makeRoundControl,
   ProviderFailure,
+  readProviderKey,
   runProviderRound,
+  systemTextOf,
 } from './round.js';
 import { makeEventLog } from './scripted.js';
+import { isDelivery, makeRetry, openRouterDelay } from './retry.js';
 
 /** OpenRouter's API base (a spec's `baseUrl` replaces it: the fake server). */
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -432,7 +439,9 @@ export async function* openRouterAttempt({
     throw transport(error, response.requestSignal);
   }
   if (usage !== undefined) {
-    delivered = true;
+    // Tokens consumed are a delivery (R4-74: lal's `consumed`, usage with
+    // a positive count); a zero reading is not.
+    if (isDelivery({ usage })) delivered = true;
     yield { usage };
   }
   if (apiError !== undefined) {
@@ -528,24 +537,6 @@ export async function* openRouterAttempt({
 harden(openRouterAttempt);
 
 /**
- * The key, through the backend's grant (R4-82).
- * @param {(() => Promise<string>) | undefined} readKey
- */
-const keyOf = async readKey => {
-  if (readKey === undefined)
-    throw new ProviderFailure(textOf.secretFailed('READ_FAILED'));
-  try {
-    const key = await readKey();
-    if (typeof key !== 'string' || key.trim() === '') throw Error('no key');
-    return key;
-  } catch (error) {
-    const message = /** @type {Error} */ (error)?.message ?? '';
-    const code = /^Secret operation failed: "([A-Z_]+)"$/.exec(message)?.[1];
-    throw new ProviderFailure(textOf.secretFailed(code ?? 'READ_FAILED'));
-  }
-};
-
-/**
  * @param {object} options
  * @param {string} options.label the backend's label
  * @param {any} [options.spec] the BackendSpec (`modelId`, `baseUrl`,
@@ -558,7 +549,8 @@ const keyOf = async readKey => {
  * @param {typeof globalThis.fetch} [options.fetch]
  * @param {() => number} [options.now]
  * @param {(args: { attempt: (signal: AbortSignal) => AsyncIterable<import('./round.js').RoundEvent>, signal: AbortSignal }) => AsyncIterable<import('./round.js').RoundEvent>} [options.retry]
- *   W2.1b's retry wrapper (default: one attempt)
+ *   the retry wrapper (default: `makeRetry` with `openRouterDelay`, one per
+ *   round, logging each retry)
  * @param {string} [options.logPath] (as the scripted kind's options)
  */
 export const makeOpenRouterProvider = ({
@@ -571,7 +563,7 @@ export const makeOpenRouterProvider = ({
   blobs,
   fetch,
   now = () => Date.now(),
-  retry = ({ attempt, signal }) => attempt(signal),
+  retry,
 }) => {
   const baseUrl = String(spec.baseUrl ?? OPENROUTER_BASE_URL).replace(
     /\/+$/,
@@ -581,18 +573,6 @@ export const makeOpenRouterProvider = ({
   /** turn -> the control of its running round. */
   /** @type {Map<any, import('./round.js').RoundControl>} */
   const running = new Map();
-
-  /**
-   * The system prompt's text (inline, or staged: read in process).
-   * @param {any} system
-   * @param {any} owner
-   */
-  const systemText = async (system, owner) => {
-    if (system === undefined) return undefined;
-    if (!isStaged(system)) return system;
-    if (blobs === undefined) throw Error('no blob store');
-    return blobs.read(system.blob, owner);
-  };
 
   return harden({
     /**
@@ -622,17 +602,8 @@ export const makeOpenRouterProvider = ({
             const model = req.options.modelId;
             if (typeof model !== 'string' || !model.includes('/'))
               throw new ProviderFailure(texts.openRouterModelPrefix);
-            const key = await keyOf(readKey);
-            let system;
-            try {
-              system = await systemText(req.system, owner);
-            } catch (error) {
-              throw new ProviderFailure(
-                textOf.stagingFailed(
-                  /** @type {Error} */ (error)?.message ?? String(error),
-                ),
-              );
-            }
+            const key = await readProviderKey(readKey);
+            const system = await systemTextOf(req.system, blobs, owner);
             const transcript =
               projection?.transcript ??
               req.append
@@ -653,7 +624,24 @@ export const makeOpenRouterProvider = ({
                 req.options.maxOutputTokens ?? spec.maxOutputTokens,
               reasoningEffort: req.options.reasoningEffort,
             });
-            yield* retry({
+            const retryRound =
+              retry ??
+              makeRetry({
+                timers,
+                delayMs: openRouterDelay,
+                onRetry: ({ attempt, failure, waitMs }) =>
+                  log('retry', {
+                    turnId: req.turnId,
+                    round: req.round,
+                    attempt,
+                    waitMs,
+                    ...(failure.status === undefined
+                      ? {}
+                      : { status: failure.status }),
+                    timedOut: failure.timedOut,
+                  }),
+              });
+            yield* retryRound({
               signal,
               attempt: attemptSignal =>
                 openRouterAttempt({

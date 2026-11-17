@@ -17,7 +17,9 @@
  *    deliveries per delta; split at the `DeltaEvent` bound) and appended to
  *    the reply; `{ toolCall }` is kept (`callId`, `name`, `args` as text,
  *    never parsed, rule 12.10; cut to the `ToolCall` guard's bounds); the
- *    latest `{ usage }` and `{ servedBy }` are kept; `{ stop }` is
+ *    latest `{ usage }`, `{ servedBy }` and `{ nativeContext }` (opaque
+ *    provider text, W2.1b: staged with no preview into the result's
+ *    `nativeContext`, R4-31) are kept; `{ stop }` is
  *    informative. While text streams, progress checkpoints stage the whole
  *    text so far every `progressEveryBytes` new bytes or `progressEveryMs`
  *    (answered, one in flight, linear bytes written; M1b 3.2, J-0393), as
@@ -137,10 +139,54 @@ harden(makeRoundControl);
 /** @typedef {ReturnType<typeof makeRoundControl>} RoundControl */
 
 /**
+ * The key, through the backend's grant (R4-82): a read failure is
+ * `textOf.secretFailed(code)` with the store's code, else `READ_FAILED`.
+ * @param {(() => Promise<string>) | undefined} readKey
+ */
+export const readProviderKey = async readKey => {
+  if (readKey === undefined)
+    throw new ProviderFailure(textOf.secretFailed('READ_FAILED'));
+  try {
+    const key = await readKey();
+    if (typeof key !== 'string' || key.trim() === '') throw Error('no key');
+    return key;
+  } catch (error) {
+    const message = /** @type {Error} */ (error)?.message ?? '';
+    const code = /^Secret operation failed: "([A-Z_]+)"$/.exec(message)?.[1];
+    throw new ProviderFailure(textOf.secretFailed(code ?? 'READ_FAILED'));
+  }
+};
+harden(readProviderKey);
+
+/**
+ * The round's system prompt as text (inline, or staged: read in process),
+ * or undefined; a read that fails is `textOf.stagingFailed`.
+ * @param {any} system
+ * @param {import('../blobs.js').BlobStore | undefined} blobs
+ * @param {any} owner
+ */
+export const systemTextOf = async (system, blobs, owner) => {
+  if (system === undefined) return undefined;
+  if (!isStaged(system)) return system;
+  try {
+    if (blobs === undefined) throw Error('no blob store');
+    return await blobs.read(system.blob, owner);
+  } catch (error) {
+    throw new ProviderFailure(
+      textOf.stagingFailed(
+        /** @type {Error} */ (error)?.message ?? String(error),
+      ),
+    );
+  }
+};
+harden(systemTextOf);
+
+/**
  * @typedef {{ delta: string }
  *   | { toolCall: { callId?: string, name: string, args: string } }
  *   | { usage: any }
  *   | { servedBy: { modelId?: string, provider?: string } }
+ *   | { nativeContext: string }
  *   | { stop: string }} RoundEvent
  */
 
@@ -313,6 +359,8 @@ export const runProviderRound = async ({
   let usage;
   /** @type {{ modelId?: string, provider?: string }} */
   let served = {};
+  /** @type {string | undefined} */
+  let nativeContext;
   let checkpointBytes = 0;
   let checkpointAt = now();
   let checkpointWritten = 0;
@@ -416,6 +464,9 @@ export const runProviderRound = async ({
         usage = event.usage;
       } else if ('servedBy' in event) {
         served = { ...served, ...event.servedBy };
+      } else if ('nativeContext' in event) {
+        if (typeof event.nativeContext === 'string' && event.nativeContext)
+          nativeContext = event.nativeContext;
       }
     }
   } catch (error) {
@@ -503,6 +554,7 @@ export const runProviderRound = async ({
       }),
       now,
       staged: roundStaged,
+      nativeContext,
     });
     if (control.stopped() === undefined) await commit(roundStaged);
   } catch (error) {
@@ -547,6 +599,7 @@ harden(runProviderRound);
  * @param {any} round.servedBy
  * @param {() => number} round.now
  * @param {any[]} round.staged collects every StagedText of the result
+ * @param {string} [round.nativeContext] staged with no preview (R4-31)
  */
 const stageResult = async ({
   round,
@@ -559,6 +612,7 @@ const stageResult = async ({
   servedBy,
   now,
   staged,
+  nativeContext,
 }) => {
   /** @param {Promise<any>} staging */
   const kept = async staging => {
@@ -578,7 +632,11 @@ const stageResult = async ({
       }
     }),
   );
+  /** @type {Record<string, any>} */
   const fields = { round, text: replyText, usage, at: now(), servedBy };
+  if (nativeContext !== undefined) {
+    fields.nativeContext = await kept(stage(nativeContext, 0));
+  }
   const build = () =>
     harden({ ...fields, toolCalls: calls.map(call => harden({ ...call })) });
   let result = build();

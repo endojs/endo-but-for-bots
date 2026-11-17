@@ -130,6 +130,8 @@ const testBlobs = () => {
  * @param {any} [options.system]
  * @param {boolean} [options.wait] wait for the round's result
  * @param {number} [options.round]
+ * @param {any} [options.retry] the provider's retry wrapper (W2.1b;
+ *   default: the provider's own retry schedule)
  */
 const runRound = async (
   server,
@@ -143,6 +145,7 @@ const runRound = async (
     system,
     wait = true,
     round = 0,
+    retry,
   } = {},
 ) => {
   const blobs = testBlobs();
@@ -155,6 +158,7 @@ const runRound = async (
     timers,
     log: (kind, fields = {}) => log.push({ kind, ...fields }),
     blobs: blobs.store,
+    ...(retry === undefined ? {} : { retry }),
   });
   const channels = makeChannelRegistry();
   const owner = Far('Session', {});
@@ -452,14 +456,18 @@ test('HTTP failures carry the status only; their bodies are never read', async t
     { status: 529 },
     { status: 200, body: { error: { message: `${BODY_MARKER} json` } } },
   ]);
+  // One attempt per round here (W2.1b's retries are tested in
+  // m2-w21b-retry.test.js).
+  /** @type {any} */
+  const once = ({ attempt, signal }) => attempt(signal);
   for (const status of [401, 429, 503, 529]) {
     // eslint-disable-next-line no-await-in-loop
-    const r = await runRound(server);
+    const r = await runRound(server, { retry: once });
     t.teardown(r.cleanup);
     t.is(r.failures[0].reason, textOf.openRouterHttp(status));
     noBodyOrKey(t, r);
   }
-  const json = await runRound(server);
+  const json = await runRound(server, { retry: once });
   t.teardown(json.cleanup);
   t.is(json.failures[0].reason, texts.openRouterUnreachable);
   noBodyOrKey(t, json);
