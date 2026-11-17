@@ -62,9 +62,10 @@ export const limits = Object.freeze({
    * slots per call; J-0362), and a 1,000-turn session in its first context
    * page crank (J-0368). M1b QC (J-0392) raised it for every vat: 4,000,000
    * slots (96 MB; the chunk ceiling is 256 MiB) admit the 256-call round
-   * `maxCallsPerMessage` allows. The worker accepts up to 44,739,242. Raising
-   * it never breaks replay (a crank that fitted still fits); lowering it on a
-   * used state could.
+   * `maxCallsPerMessage` allows. The worker accepts up to 44,739,242. A state
+   * persists the ceiling it was served with and Thixotrope refuses to serve
+   * it at a lower one ("slotCeiling cannot decrease below persisted value"),
+   * so raising it is one-way per state directory (test templates key on it).
    */
   slotCeiling: 4_000_000,
   /**

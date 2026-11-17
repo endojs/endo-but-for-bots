@@ -107,8 +107,10 @@ so their supervisors would run side by side.
 
 The M1b acceptance files are `m1b-live` (1, 6, 9), `m1b-content` (2, 7), `m1b-exec-tool` (4, 5,
 11), `m1b-exec-tool-restart` (3, 10), `m1b-context-restart` (8: 200 turns, a clean restart then an
-idle SIGKILL; `CONTEXT_TURNS`, `CONTEXT_RESTARTS`), `m1b-pool` and `m1b-pool-restart` (12). Known
-failures are marked with AVA's `test.failing` and the reason in the title.
+idle SIGKILL; `CONTEXT_TURNS`, `CONTEXT_RESTARTS`), `m1b-pool` and `m1b-pool-restart` (12);
+`m1b-qc` holds the M1b QC regressions (256-call rounds, the exec key flood, an exec background
+loop). Known failures are marked with AVA's `test.failing` and the reason in the title (only
+acceptance 9's delete, which is M2).
 
 `m1a-slice-restart.test.js` repeats its SIGKILL cases (acceptance 5, 6, 7 and the held-ports
 case) once per kill delay with `M1A_KILL_DELAYS_MS=0,100,500,1500,4000` (20 tests, about 10
@@ -163,7 +165,7 @@ reading and a decision.
 | `perf/exec.perf.mjs` | `exec.first`, `exec.trivial`, `exec.sends.answered` (`.sendOnly` not measurable in M1b), `exec.runaway`, `exec.retire`, the too-big probes `tooBig.*` | 3 min |
 | `perf/pool.perf.mjs` | `session.create.pool` (+ `.poolAwake`), `session.create.cold`, `pool.refill`, `pool.firstTurn` | 3 min |
 | `perf/concurrency.perf.mjs` | `concurrency.single.turnStart`, `concurrency.10.turnStart`, `.turn`, `.crank` (from `status().deliveryHistogram`), `.rowPush`, `.gc` | 3 min |
-| `perf/history.perf.mjs` | `history.page` (+ `.floor`), `context.rebuild` of a 1,000-turn session after a clean restart (`HISTORY_TURNS`) | 20 min |
+| `perf/history.perf.mjs` | `history.page` (+ `.floor`), `history.grow` (with the session vat's slot capacity every 100 turns), `history.heap`, `context.rebuild` of a 1,000-turn session after a clean restart (`HISTORY_TURNS`) | 25-30 min |
 
 A vat is woken when its worker row's `wakes` (process-local) is above 0; `journalLength` is the
 delivery frontier, and held GC frames (`heldFrames`) wait in the journal without a crank. `turn.delta`
@@ -192,8 +194,10 @@ node scripts/serve.mjs STATE [--crank-budget N] [--max-delivery-attempts N] \
 ```
 
 The wrapper runs the supervisor in a child process whose environment is only an allowlist plus
-`THIXOTROPE_CRANK_BUDGET` (default 50 M) and `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` (default 5,
-2..100); it refuses to lower the crank budget unless the last shutdown was clean
+`THIXOTROPE_CRANK_BUDGET` (default 50 M), `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` (default 5,
+2..100) and `THIXOTROPE_SLOT_CEILING` (default 4,000,000 from `config/defaults.js`, M1b QC; a
+state persists its ceiling and is refused at a lower one, so test templates key on it); it refuses
+to lower the crank budget unless the last shutdown was clean
 (`STATE/harness-serve.json` records it). The child stops cleanly when its parent dies, even by
 SIGKILL. Stop with SIGINT or SIGTERM. If one vat crashes on every replay, the supervisor waits
 for it to be retried out before it serves (36-69 s at the default bound): the control socket is
@@ -203,7 +207,7 @@ absent meanwhile.
 
 | Command | What it does |
 | --- | --- |
-| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js`, refusing any module outside `guest/` |
+| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js` without comments, refusing any module outside `guest/` |
 
 ## Disk
 
