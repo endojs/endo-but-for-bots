@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: timeoutMs is the shared child-process control API.
 
 /* global clearTimeout, process, setTimeout */
 
@@ -49,6 +50,17 @@ import {
  * therefore `make()`, indefinitely.
  */
 const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
+
+/**
+ * Signal reserved for the parent-death supervisor.  The public process
+ * interface accepts only termination signals, so callers cannot collide with
+ * this control signal.
+ */
+const PARENT_DEATH_SIGNAL = 'SIGUSR2';
+
+const PARENT_DEATH_SUPERVISOR = decodeURIComponent(
+  new URL('./bwrap-parent-death.js', import.meta.url).pathname,
+);
 
 /**
  * Grace allowed, after the SIGKILL sweep in `teardown`, for each
@@ -237,9 +249,13 @@ export const assembleSliceArgv = async (spec, extras) => {
   // slice keeps its own private net namespace; bwrap's --unshare-all
   // is sufficient.
 
-  // 2. Lifecycle.
+  // 2. Lifecycle.  Do not pass `--new-session`: Node's `detached` spawn
+  // already makes the supervisor a session and process-group leader.  Keeping
+  // bwrap and its cloned init in that group lets one safe negative-pgid signal
+  // reach the whole tree during every setup phase.  In bwrap, `--new-session`
+  // calls setsid() in the init before the init arms `--die-with-parent`, which
+  // creates a window where neither the owned group nor parent death reaches it.
   argv.push('--die-with-parent');
-  argv.push('--new-session');
 
   // 3. Drop all capabilities.
   argv.push('--cap-drop', 'ALL');
@@ -585,20 +601,44 @@ export const makeBwrapDriver = ({
     // test both rather than materialising a concatenated copy.
     const advertises = (/** @type {string} */ flag) =>
       helpResult.stdout.includes(flag) || helpResult.stderr.includes(flag);
-    if (
-      helpResult.code !== 0 ||
-      !advertises('--die-with-parent') ||
-      !advertises('--new-session')
-    ) {
+    if (helpResult.code !== 0 || !advertises('--die-with-parent')) {
       return harden({
         available: false,
         version,
-        reason:
-          'bwrap does not advertise required --die-with-parent and --new-session lifecycle support',
+        reason: 'bwrap does not advertise required --die-with-parent support',
         details: harden({
           lifecycle: harden({
             available: false,
             reason: 'required bwrap lifecycle flags unavailable',
+          }),
+        }),
+      });
+    }
+
+    let setprivResult;
+    try {
+      setprivResult = await spawnAndCollect(cp, 'setpriv', ['--help'], {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      });
+    } catch (e) {
+      return harden({
+        available: false,
+        version,
+        reason: `failed to probe setpriv parent-death support: ${/** @type {Error} */ (e).message}`,
+      });
+    }
+    if (
+      setprivResult.code !== 0 ||
+      !setprivResult.stdout.includes('--pdeathsig')
+    ) {
+      return harden({
+        available: false,
+        version,
+        reason: 'setpriv does not advertise required --pdeathsig support',
+        details: harden({
+          lifecycle: harden({
+            available: false,
+            reason: 'required parent-death supervisor support unavailable',
           }),
         }),
       });
@@ -824,16 +864,32 @@ export const makeBwrapDriver = ({
     // empty-prefix case (`prlimitArgv.length === 0`) preserves the
     // Phase 1 behaviour of execing bwrap directly.
     /** @type {string} */
-    let execProgram;
+    let sandboxProgram;
     /** @type {string[]} */
-    let execArgv;
+    let sandboxArguments;
     if (slice.prlimitArgv.length === 0) {
-      execProgram = 'bwrap';
-      execArgv = fullArgv;
+      sandboxProgram = 'bwrap';
+      sandboxArguments = fullArgv;
     } else {
-      execProgram = slice.prlimitArgv[0];
-      execArgv = [...slice.prlimitArgv.slice(1), 'bwrap', ...fullArgv];
+      sandboxProgram = slice.prlimitArgv[0];
+      sandboxArguments = [...slice.prlimitArgv.slice(1), 'bwrap', ...fullArgv];
     }
+
+    // setpriv arms the supervisor before it can create bwrap.  The supervisor
+    // installs its handler and verifies its expected parent before spawning;
+    // an owner death then SIGKILLs the entire owned process group, including a
+    // bwrap init that has not yet armed its own --die-with-parent signal.
+    const execProgram = 'setpriv';
+    const execArgv = [
+      '--pdeathsig',
+      PARENT_DEATH_SIGNAL,
+      '--',
+      process.execPath,
+      PARENT_DEATH_SUPERVISOR,
+      String(process.pid),
+      sandboxProgram,
+      ...sandboxArguments,
+    ];
 
     /** @type {import('child_process').ChildProcess} */
     let child;
@@ -848,9 +904,9 @@ export const makeBwrapDriver = ({
           opts.captureStdout === false ? 'ignore' : 'pipe',
           opts.captureStderr === false ? 'ignore' : 'pipe',
         ],
-        // A distinct host process group lets every termination path signal
-        // bwrap, its launcher, and all descendants with one negative pid.
-        // `--die-with-parent` independently covers an ungraceful daemon exit.
+        // A distinct host process group lets explicit termination and the
+        // parent-death supervisor signal every descendant with one negative
+        // pid. bwrap must not create a second session inside this group.
         detached: true,
         // Inherit minimal env: bwrap itself needs PATH to find
         // libraries; the slice's clearenv inside takes effect after

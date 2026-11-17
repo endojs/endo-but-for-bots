@@ -266,6 +266,51 @@ const waitForProcessGroupGone = async (pid, timeoutMs = 3000) => {
   throw new Error(`process group ${pid} survived bounded cleanup`);
 };
 
+/**
+ * Wait until a process group has no executable members.  Parent-death cleanup
+ * necessarily kills the supervisor and its child together, so a host init that
+ * reaps orphaned zombies slowly can retain an inert group identity after every
+ * member is dead.
+ *
+ * @param {number} processGroup
+ * @param {number} [timeoutMilliseconds]
+ */
+const waitForProcessGroupQuiescent = async (
+  processGroup,
+  timeoutMilliseconds = 10_000,
+) => {
+  await null;
+  const deadline = Date.now() + timeoutMilliseconds;
+  for (;;) {
+    let live = false;
+    for (const entry of nodeFs.readdirSync('/proc')) {
+      if (/^\d+$/.test(entry)) {
+        let stat;
+        try {
+          stat = nodeFs.readFileSync(`/proc/${entry}/stat`, 'utf8');
+        } catch {
+          // exited while listing
+        }
+        if (stat !== undefined) {
+          const [state, , group] = stat
+            .slice(stat.lastIndexOf(')') + 2)
+            .split(' ');
+          if (Number(group) === processGroup && state !== 'Z') {
+            live = true;
+            break;
+          }
+        }
+      }
+    }
+    if (!live) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`process group ${processGroup} retained a live member`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+};
+
 test.serial('bwrap probe reports available with a version', async t => {
   // eslint-disable-next-line @jessie.js/safe-await-separator
   if (!(await bwrapCheck(t))) {
@@ -863,18 +908,22 @@ test.serial('prlimit nproc cap is enforced inside the slice', async t => {
       }
     }
   });
-  // /bin/sh's `ulimit -u` reports RLIMIT_NPROC, the same value
-  // prlimit set.  We assert the cap is in effect rather than
-  // running an actual fork bomb (which would also stress the host
-  // the test process is running on).
-  const result = await runInSlice(t, handle, ['/bin/sh', '-c', 'ulimit -u']);
+  // The `Max processes` row of `/proc/self/limits` reports
+  // RLIMIT_NPROC, the same value prlimit set; `cat` inherits it from
+  // the slice's process tree.  We read procfs rather than a shell
+  // builtin because `ulimit -u` is a bash spelling that dash, the
+  // `/bin/sh` on Debian and Ubuntu, rejects.  We assert the cap is in
+  // effect rather than running an actual fork bomb (which would also
+  // stress the host the test process is running on).
+  const result = await runInSlice(t, handle, ['cat', '/proc/self/limits']);
   if (result === null) return;
   t.is(
     result.exit.code,
     0,
-    `ulimit -u exit code 0 (got ${result.exit.code}); ${formatCapture('stdout', result.stdout)} ${formatCapture('stderr', result.stderr)}`,
+    `cat /proc/self/limits exit code 0 (got ${result.exit.code}); ${formatCapture('stdout', result.stdout)} ${formatCapture('stderr', result.stderr)}`,
   );
-  const reported = Number(result.stdout.trim());
+  const match = result.stdout.match(/^Max processes\s+(\S+)/m);
+  const reported = match === null ? undefined : Number(match[1]);
   t.is(
     reported,
     cap,
@@ -1025,8 +1074,8 @@ test.serial(
     );
     t.teardown(async () => {
       await E(handle).dispose();
-      for (const dir of tmpdirs)
-        nodeFs.rmSync(dir, { recursive: true, force: true });
+      for (const directory of tmpdirs)
+        nodeFs.rmSync(directory, { recursive: true, force: true });
     });
     const proc = await E(handle).spawn(
       harden([
@@ -1146,8 +1195,70 @@ test.serial('bwrap parent death leaves no owned process group', async t => {
   });
   owner.kill('SIGKILL');
   await new Promise(resolve => owner.once('close', resolve));
-  await waitForProcessGroupGone(/** @type {number} */ (pid));
+  await t.notThrowsAsync(
+    waitForProcessGroupGone(/** @type {number} */ (pid)),
+    `process group ${pid} should not outlive its owner`,
+  );
 });
+
+test.serial(
+  'bwrap supervisor kills its process group on its parent-death signal',
+  async t => {
+    t.timeout(20_000);
+    // eslint-disable-next-line @jessie.js/safe-await-separator
+    if (!(await bwrapCheck(t))) return;
+    const probe = await makeBwrapDriver({ env: {} }).probe();
+    if (!probe.available) {
+      t.pass(`parent-death supervisor unavailable: ${probe.reason}`);
+      return;
+    }
+    const fixture = new URL(
+      './fixtures/bwrap-parent-death-owner.js',
+      import.meta.url,
+    );
+    const owner = nodeSpawn(process.execPath, [fixture.pathname], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    t.teardown(() => {
+      try {
+        owner.kill('SIGKILL');
+      } catch {
+        // already gone
+      }
+    });
+    /** @type {Buffer[]} */
+    const stderr = [];
+    owner.stderr?.on('data', chunk => stderr.push(chunk));
+    const processGroup = await new Promise((resolve, reject) => {
+      let output = '';
+      const timer = setTimeout(
+        () => reject(new Error('parent-death fixture did not become ready')),
+        5000,
+      );
+      owner.stdout?.on('data', chunk => {
+        output += String(chunk);
+        const match = output.match(/^(\d+)$/m);
+        if (match !== null) {
+          clearTimeout(timer);
+          resolve(Number(match[1]));
+        }
+      });
+      owner.once('exit', code => {
+        clearTimeout(timer);
+        reject(
+          new Error(
+            `parent-death fixture exited ${code}: ${Buffer.concat(stderr).toString('utf8')}`,
+          ),
+        );
+      });
+    });
+    process.kill(/** @type {number} */ (processGroup), 'SIGUSR2');
+    await t.notThrowsAsync(
+      waitForProcessGroupQuiescent(/** @type {number} */ (processGroup)),
+      `process group ${processGroup} should have no live members after its parent-death signal`,
+    );
+  },
+);
 
 // --- PATH synthesis tests --------------------------------------------------
 //
@@ -1172,6 +1283,18 @@ const extractSetenvPath = argv => {
   }
   return undefined;
 };
+
+test('bwrap lifecycle stays in the supervisor process group', async t => {
+  const argv = await assembleSliceArgv(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+    { seccompFd: null, ambientPath: '' },
+  );
+  t.true(argv.includes('--die-with-parent'));
+  t.false(
+    argv.includes('--new-session'),
+    'bwrap must not let its init escape the owned process group',
+  );
+});
 
 /**
  * Build a minimal `SliceSpec` for the synthesis tests.  The factory's
