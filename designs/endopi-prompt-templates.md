@@ -102,13 +102,13 @@ The placeholder grammar is exactly Pi's:
 
 Substitution is a single left-to-right pass with one regular
 expression over the body, so a substituted value containing `$1`,
-`${…}`, or `$&` stays literal. Text that does not match the grammar
+`${...}`, or `$&` stays literal. Text that does not match the grammar
 (`$PATH`, `$0`, a lone `$`) stays literal. There is no escape syntax,
 matching Pi.
 
 `extractVariables` becomes `analyzePlaceholders(body)`, which returns
-`{ maxPosition, usesRest }`: the highest `$n` / `${n…}` index, and
-whether any `$@`, `$ARGUMENTS` or `${@…}` form appears.
+`{ maxPosition, usesRest }`: the highest `$n` / `${n...}` index, and
+whether any `$@`, `$ARGUMENTS` or `${@...}` form appears.
 
 ### Invocation in Chat
 
@@ -122,11 +122,11 @@ when the user presses Enter, as with any typed message.
    redefine `/clear`. The `skill:` prefix is reserved for
    [endopi-skills-markdown-format](endopi-skills-markdown-format.md).
 2. **Complete arguments.** `/name args` with every required position
-   (`<…>` tokens in `argument-hint`) filled expands directly.
+   (`<...>` tokens in `argument-hint`) filled expands directly.
 3. **Missing arguments.** If a required position is empty, the chat bar
    shows its inline command form (`inline-command-form.js`), one text
    field per `argument-hint` token, prefilled with any arguments already
-   typed. With no `argument-hint`, fields are generated as `$1`…`$n` up
+   typed. With no `argument-hint`, fields are generated as `$1`...`$n` up
    to `maxPosition`, all optional, and the form opens only when the user
    invoked the template with no arguments at all. Submitting the form
    expands into the editor.
