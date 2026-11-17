@@ -289,3 +289,49 @@ test('import seams W2.5 has not built say so', t => {
     { message: textOf.notBuilt('importUsage') },
   );
 });
+
+test('export then import between two real sessions: the same records, usage and queue', async t => {
+  const a = await makeQueueSession();
+  for (let i = 0; i < 4; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await a.submit(`turn ${i}`);
+    // eslint-disable-next-line no-await-in-loop
+    await a.finish(`answer ${i}`);
+  }
+  const pages = exportAll(a.internal);
+  const b = await makeQueueSession();
+  for (const page of pages) {
+    const chunk =
+      page.part === 'queue' ? harden({ ...page, hold: undefined }) : page;
+    const { next: _next, ...rest } = chunk;
+    b.internal.importState(harden(JSON.parse(JSON.stringify(rest))));
+  }
+  await drain();
+  t.deepEqual(exportAll(b.internal).slice(1), pages.slice(1));
+  t.deepEqual(b.session.getUsage(), a.session.getUsage());
+  const turns = b.session.getHistoryPage().turns;
+  t.deepEqual(
+    turns.map((/** @type {any} */ p) => p.state),
+    ['completed', 'completed', 'completed', 'completed'],
+  );
+  // After its end, a chunk is answered without effect (a resend).
+  t.deepEqual(
+    b.internal.importState(harden({ part: 'records', from: 0, records: [] })),
+    { records: 16, complete: true },
+  );
+});
+
+test('the structural import guard still lets no malformed record into the log', async t => {
+  const s = await makeQueueSession();
+  s.internal.importState(harden({ part: 'head' }));
+  t.throws(() =>
+    s.internal.importState(
+      harden({
+        part: 'records',
+        from: 0,
+        records: [{ kind: 'turn-started', turnId: 't1', input: 'x' }],
+      }),
+    ),
+  );
+  t.is(s.internal.importState(harden({ part: 'end' })).complete, true);
+});

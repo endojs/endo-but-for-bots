@@ -794,6 +794,11 @@ it) and does not use the `archive` part; the importer replays records and waits 
 `archiveKeepTurns + 3 * archiveSegmentTurns` imported turns are unsealed (reading the head page's
 `archive`).
 
+`SessionInternal.importState`'s guard checks `records` structurally (a list of keys, as the
+structural page views of J-9156); every record is still checked by its kind when it is appended
+(`RecordLog.append`). Measured in a vat (J-0481): with `SessionExportPage` the import cost about
+22 ms a record; with the structural guard 13 ms (the append's check is about 6 ms of it).
+
 ---
 
 ## 8. Providers, retry, timeouts and the catalogue

@@ -2358,6 +2358,35 @@ const m2InterfaceBuilders = {
     }),
 };
 
+/**
+ * `SessionInternal.importState` argument (W2.7, J-0481): a
+ * `SessionExportPage` whose `records` are checked structurally (keys, as
+ * the structural page views, J-9156). The session checks each record by
+ * its kind as it appends it (`RecordLog.append`), so the guard does not
+ * try the eight `TurnRecord` alternatives on every imported record first
+ * (about 9 ms a record in a vat).
+ * @type {any}
+ */
+let importChunk;
+const importChunkView = () => {
+  importChunk ??= record(
+    { part: M.or('head', 'archive', 'records', 'queue', 'end') },
+    {
+      info: S.SessionInfo,
+      config: S.SessionConfig,
+      usage: S.UsageTotals,
+      archive: S.ArchiveState,
+      segments: list(S.SegmentEntry, limits.segmentPageEntries),
+      from: count,
+      records: list(M.key(), limits.pageRecords),
+      entries: list(S.ExportEntry, limits.maxWaiting),
+      hold: S.Hold,
+      next: S.Cursor,
+    },
+  );
+  return importChunk;
+};
+
 /** M2 versions of the interfaces M2 extends (folded methods first). */
 const m2InterfaceBuilders2 = {
   /** + `findTurn` (W2.5; m2-interfaces.md 4.9). */
@@ -2373,7 +2402,7 @@ const m2InterfaceBuilders2 = {
       blobPage: M.call().optional(S.Cursor).returns(B.BlobPage),
       deleteSelf: M.call().returns(done),
       exportState: M.call().optional(S.Cursor).returns(S.SessionExportPage),
-      importState: M.call(S.SessionExportPage).returns(S.ImportProgress),
+      importState: M.call(importChunkView()).returns(S.ImportProgress),
     }),
   /** + `edit`, `sendNow` (W2.4; A.4 editPending, sendPending). */
   QueueEntry: () =>
