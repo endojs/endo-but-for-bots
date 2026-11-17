@@ -398,15 +398,15 @@ test('M1b QC (J-0393): a streamed 1 MiB reply writes bytes linear in its length 
     `${written} bytes staged for a 1 MiB reply`,
   );
   t.true(r.progress.length >= 3, 'checkpoints still come');
-  // Every checkpoint but the one the session holds was deleted.
+  // Every checkpoint but the one the session holds was deleted, and the
+  // reply is that checkpoint: one file.
   t.is(stats.discarded, r.progress.length - 1);
+  const last = r.progress[r.progress.length - 1];
+  t.is(last.partial.blob, result.text.blob, 'the reply is the last checkpoint');
   const files = readdirSync(r.blobs.blobDir).filter(
     name => !name.endsWith('.part'),
   );
-  t.true(
-    files.length <= 2,
-    `${files.length} files: the reply and the held checkpoint`,
-  );
+  t.is(files.length, 1, 'only the reply is on disk');
 });
 
 test('M1b QC (J-0393): a checkpoint the session refused keeps its file and the one it holds', async t => {

@@ -442,7 +442,8 @@ export const makeScriptedProvider = ({
           // Answered (J-0393): once the session kept this checkpoint it no
           // longer holds the previous one, whose file is deleted. A refusal
           // or a break keeps every file (the session may still hold it).
-          E(sink)
+          // The next checkpoint waits for this answer (one in flight).
+          return E(sink)
             .progress(
               harden({
                 round,
@@ -502,6 +503,20 @@ export const makeScriptedProvider = ({
     }
     // The reply reuses the last checkpoint when no text came after it.
     await checkpointing;
+    if (
+      heldCheckpoint !== undefined &&
+      lastCheckpoint !== undefined &&
+      lastCheckpoint.bytes !== textBytes &&
+      control.stopped() === undefined
+    ) {
+      // The session holds an older checkpoint: make the whole text the last
+      // one, so the reply reuses it and the older file is deleted when the
+      // session keeps it (no checkpoint is left on disk unreferenced after
+      // the round; J-0393). One more session crank, only for streamed
+      // rounds that checkpointed.
+      checkpoint();
+      await checkpointing;
+    }
     /** @param {number} previewUnits */
     const stageText = previewUnits =>
       lastCheckpoint !== undefined && lastCheckpoint.bytes === textBytes
