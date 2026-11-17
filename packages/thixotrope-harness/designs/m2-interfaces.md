@@ -780,6 +780,20 @@ log order (each <= frameBytes; the session seals as 4.3 allows), queue entries l
 (the row becomes `ready` and listed if `userInitiated`). Exec bindings are not exportable (a
 documented loss); secrets are not exported (re-create them); presets are M5.
 
+As built (W2.7): `SessionInternal.exportState` cursors are `a<n>` (the segment index from entry n),
+`r<n>` (records from absolute index n; below `sealedTo` it throws `texts.recordsSealed`), `q<n>`
+(waiting entries from n) and `e`; `blobPage` cursors are `p<i>.<k>` (source i: a kept record, then
+the checkpoint, the staged prompt and the waiting entries; after its first k handles).
+`importState` accepts `head` only in a session with no record, then `records` chunks whose `from`
+is the session's record count (a chunk already applied is answered again without effect, so an
+importer may resend after a lost answer), `queue` (the entries are held `restart`, or with the
+exported hold: nothing starts by itself), and `end`; `ImportProgress` is `{ records: the session's
+record count, complete: the end was applied }`. The exporter writes archived turns from `History`
+in segment order (tool results in call order; a `TurnResolved` sealed after its turn right after
+it) and does not use the `archive` part; the importer replays records and waits while more than
+`archiveKeepTurns + 3 * archiveSegmentTurns` imported turns are unsealed (reading the head page's
+`archive`).
+
 ---
 
 ## 8. Providers, retry, timeouts and the catalogue
@@ -1100,10 +1114,12 @@ guest rules; "Node" = adapter or tests.
 
 | file | export | signature |
 |---|---|---|
-| `guest/factory/delete.js` (vat) | `makeDeletions({ admin, rows, listFeed, pool }) -> { delete(session), resume() }` | 7.1 |
-| `guest/factory/export.js` (vat) | `exportPage(cursor?)`, `importSession(options)` | 7.3 |
-| `guest/session/export.js` (vat) | `makeSessionExport({ records, queue, runner }) -> { blobPage, exportState, importState }` | 7.1, 7.3 |
-| `scripts/export.mjs` (Node) | `exportState({ client, file })`, `importState({ client, file })`, CLI | 7.3 |
+| `guest/factory/delete.js` (vat) | `makeDeletions({ admin, rows, hooks? }) -> { delete(session), resume(), isDeleting(row), pending(), counts() }`; `onDelete` (hook table) | 7.1. As built (W2.7): the list feed hears of the drop through the row table (`rows.drop`), and the exec vat is closed through `pool.js` `closeExecHandle(handle)`, so neither is passed |
+| `guest/factory/export.js` (vat) | `makeFactoryExport({ rows, settings, create }) -> { exportPage(cursor?), importSession(options) }` | 7.3 |
+| `guest/factory/root.js` (vat) | `makeHarnessSettings({ pool? }) -> { set, backends, defaultBackend, defaultModelId, turnDeadlineMs, current }` | 1.4; resolvers get `defaultBackend`, `defaultModelId`, `turnDeadlineMs` in their context |
+| `guest/session/export.js` (vat) | `makeSessionExport({ records, queue, runner, config, info, rowReporter }) -> { blobPage, deleteSelf, exportState, importState, isDeleting, isImporting }` | 7.1, 7.3 |
+| `guest/session/queue.js` (vat, W2.4's file) | `Queue.items()`, `Queue.currentHold()` | read by `export.js` |
+| `scripts/export.mjs` (Node) | `exportState({ client, file })`, `importState({ client, file, backends?, onProgress? })`, `treeBytes`, `importAhead`, CLI | 7.3 |
 
 ### W2.8 (Node)
 
