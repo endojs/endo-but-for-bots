@@ -1202,7 +1202,7 @@ test.serial('bwrap parent death leaves no owned process group', async t => {
 });
 
 test.serial(
-  'bwrap supervisor kills its process group when its owner dies',
+  'bwrap supervisor kills its process group on its parent-death signal',
   async t => {
     t.timeout(20_000);
     // eslint-disable-next-line @jessie.js/safe-await-separator
@@ -1252,11 +1252,10 @@ test.serial(
         );
       });
     });
-    owner.kill('SIGKILL');
-    await new Promise(resolve => owner.once('close', resolve));
+    process.kill(/** @type {number} */ (processGroup), 'SIGUSR2');
     await t.notThrowsAsync(
       waitForProcessGroupQuiescent(/** @type {number} */ (processGroup)),
-      `process group ${processGroup} should have no live members after owner death`,
+      `process group ${processGroup} should have no live members after its parent-death signal`,
     );
   },
 );
