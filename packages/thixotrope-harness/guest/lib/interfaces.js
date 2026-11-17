@@ -1221,6 +1221,9 @@ const m1aShapeBuilders = {
         stall: 'untilCancel',
         // M1b: opaque native context for this round, staged as a Blob (R4-31).
         nativeContext: S.Text,
+        // M2 W2.6: the round stands for this many rounds in a row (the
+        // round-limit probe runs maxToolRounds rounds from one frame).
+        times: M.and(count, M.lte(limits.maxToolRounds + 1)),
       },
     ),
   ScriptTurn: () =>

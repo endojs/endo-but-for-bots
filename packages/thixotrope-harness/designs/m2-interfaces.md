@@ -92,6 +92,7 @@ M1b.
 | `BackendSpec` | a second alternative: `{ kind: 'openrouter' \| 'anthropic', label, keyGrant: ReadGrant, modelId?, baseUrl?, timeoutMs?, maxOutputTokens?, logPath? }` | W2.3 (manager), W2.1a/b (providers) |
 | `BackendInfo` | `kind` is `BackendKind`; optional `modelId` | W2.3 |
 | `HarnessSettings` | optional `backends`, `defaultBackend`, `defaultModelId`, `turnDeadlineMs` | W2.7 |
+| `ScriptRound` (test double) | optional `times` (1..`maxToolRounds` + 1): the round stands for that many rounds in a row, so a script of one frame reaches the real round limit (acceptance 3 in a vat) | W2.6 |
 
 A receiver built for M1b that is sent a new field fails its guard, so senders send a new field
 only once the receivers accept it: each row's two sides belong to units that run in order (group
