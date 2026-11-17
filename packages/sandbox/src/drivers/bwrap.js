@@ -72,6 +72,45 @@ const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
 const TEARDOWN_CLOSE_GRACE_MS = 1000;
 
 /**
+ * Keep a member in the detached process group until the parent has swept it.
+ *
+ * The first background shell ignores the signals used for graceful shutdown,
+ * so the process-group id remains owned even when bwrap and this wrapper exit.
+ * The second background shell compares the daemon's pid and kernel start time,
+ * so an ungraceful daemon exit also kills the group without trusting a reused
+ * numeric pid. Without a Linux `/proc` start time (`not-applicable`), that
+ * watchdog is skipped rather than firing at once. The watchdog uses the shell's
+ * `kill` builtin, so it needs no `/bin/kill`. The wrapper exits with bwrap's
+ * status; a bwrap killed by signal N is therefore reported as code 128+N.
+ */
+const PROCESS_GROUP_ANCHOR_SCRIPT = `
+(
+  trap '' HUP INT TERM
+  while :; do sleep 2147483647; done
+) &
+parent_pid=$1
+parent_start_time=$2
+shift 2
+if [ "$parent_start_time" != not-applicable ]; then
+  (
+    while parent_stat=$(cat "/proc/$parent_pid/stat" 2>/dev/null); do
+      parent_fields=\${parent_stat##*) }
+      set -- $parent_fields
+      shift 19
+      if [ "$1" != "$parent_start_time" ]; then
+        break
+      fi
+      sleep 1
+    done
+    kill -9 -$$
+  ) &
+fi
+"$@"
+status=$?
+exit "$status"
+`;
+
+/**
  * Wait for `child` to emit `'close'`, giving up after `ms`.
  *
  * Resolves `true` when the stdio closed within the bound and `false`
@@ -484,6 +523,9 @@ harden(assembleSliceArgv);
  *                                                            process module
  *                                                            override
  *                                                            (tests).
+ * @param {typeof process.kill} [input.processKill]            Process signal
+ *                                                            override
+ *                                                            (tests).
  * @param {typeof import('fs')} [input.fs]                    fs module
  *                                                            override.  Used
  *                                                            for the
@@ -503,6 +545,7 @@ harden(assembleSliceArgv);
 export const makeBwrapDriver = ({
   env = {},
   childProcess: childProcessModule,
+  processKill = process.kill,
   fs: fsModule,
 } = {}) => {
   // Lazy-resolve `child_process` so callers in test environments can
@@ -841,22 +884,68 @@ export const makeBwrapDriver = ({
     if (controls?.isCancelled?.()) {
       throw makeError(X`bwrap operation admission aborted`);
     }
+    // Read the daemon's own process identity (pid plus kernel start time)
+    // so the anchor can tell this parent apart from a later reuse of its
+    // numeric pid.  This read is isolated from the spawn below so a `/proc`
+    // failure is reported as itself rather than misattributed to spawn.
+    let parentStartTime = 'not-applicable';
+    if (process.platform === 'linux') {
+      // Prefer the injected fs capability; reacquire the ambient module
+      // only when the factory was constructed without one.
+      const fs = fsModule ?? (await import('fs'));
+      let parentStat;
+      try {
+        parentStat = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8');
+      } catch (e) {
+        throw makeError(
+          X`could not read /proc/${q(process.pid)}/stat: ${q(/** @type {Error} */ (e).message)}`,
+        );
+      }
+      const closeParen = parentStat.lastIndexOf(')');
+      if (closeParen < 0) {
+        throw makeError(X`could not read daemon process identity`);
+      }
+      parentStartTime = parentStat.slice(closeParen + 2).split(' ')[19];
+      if (parentStartTime === undefined) {
+        throw makeError(X`could not read daemon process identity`);
+      }
+    }
+
+    // The ambient-fs fallback above may have yielded the turn; re-confirm
+    // the operation was not cancelled during that suspension before spawning.
+    slice.operations.assertOpen();
+    if (controls?.isCancelled?.()) {
+      throw makeError(X`bwrap operation admission aborted`);
+    }
+
     try {
-      child = cp.spawn(execProgram, execArgv, {
-        stdio: [
-          'pipe',
-          opts.captureStdout === false ? 'ignore' : 'pipe',
-          opts.captureStderr === false ? 'ignore' : 'pipe',
+      child = cp.spawn(
+        '/bin/sh',
+        [
+          '-c',
+          PROCESS_GROUP_ANCHOR_SCRIPT,
+          'endo-bwrap-process-group-anchor',
+          String(process.pid),
+          parentStartTime,
+          execProgram,
+          ...execArgv,
         ],
-        // A distinct host process group lets every termination path signal
-        // bwrap, its launcher, and all descendants with one negative pid.
-        // `--die-with-parent` independently covers an ungraceful daemon exit.
-        detached: true,
-        // Inherit minimal env: bwrap itself needs PATH to find
-        // libraries; the slice's clearenv inside takes effect after
-        // the bwrap binary execs.
-        env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
-      });
+        {
+          stdio: [
+            'pipe',
+            opts.captureStdout === false ? 'ignore' : 'pipe',
+            opts.captureStderr === false ? 'ignore' : 'pipe',
+          ],
+          // A distinct host process group lets every termination path signal
+          // bwrap, its launcher, and all descendants with one negative pid.
+          // `--die-with-parent` independently covers an ungraceful daemon exit.
+          detached: true,
+          // Inherit minimal env: bwrap itself needs PATH to find
+          // libraries; the slice's clearenv inside takes effect after
+          // the bwrap binary execs.
+          env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+        },
+      );
     } catch (e) {
       throw makeError(
         X`failed to spawn ${q(execProgram)}: ${q(/** @type {Error} */ (e).message)}`,
@@ -897,7 +986,23 @@ export const makeBwrapDriver = ({
     child.once('error', err => {
       rejectExit(err);
     });
-    child.once('exit', (code, signal) => resolveExit({ code, signal }));
+    child.once('exit', (code, signal) => {
+      // The wrapper leaves its anchor in the group, so its numeric pgid
+      // remains owned after Node reaps the leader. Sweep before reporting the
+      // exit; killing bwrap's init tears down the whole pid namespace.
+      if (child.pid !== undefined) {
+        try {
+          processKill(-child.pid, 'SIGKILL');
+        } catch (e) {
+          const error = /** @type {NodeJS.ErrnoException} */ (e);
+          if (error.code !== 'ESRCH') {
+            rejectExit(error);
+            return;
+          }
+        }
+      }
+      resolveExit({ code, signal });
+    });
     exited.catch(() => undefined);
 
     // The DriverProcess surface exposes async-iterables for stdout
