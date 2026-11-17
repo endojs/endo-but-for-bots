@@ -13,8 +13,12 @@
  * add entries to `backendKinds` and `adapterTools` below, never edit another
  * milestone's entry.
  */
-import { pid } from 'node:process';
+import { dirname } from 'node:path';
+import { env, pid } from 'node:process';
 
+/* eslint-disable import/no-relative-packages -- guest/ is its own private package */
+import { textOf } from '../../../guest/lib/interfaces.js';
+/* eslint-enable import/no-relative-packages */
 import { channelTaps } from './channel-taps.js';
 import { makeChannelRegistry } from './channels.js';
 import { makeComposer } from './composer.js';
@@ -30,11 +34,15 @@ import { makeListChannel } from './list-channel.js';
 import { makeEventLog, makeScriptedProvider } from './providers/scripted.js';
 import { makeEchoTool } from './tools/echo.js';
 import { openRouterKind } from './providers/openrouter.js';
+import { makeCatalog } from './providers/catalog.js';
+import { findSecretsFiles, makeSecretStore } from './secrets/store.js';
+import { makeSealKeys } from './secrets/seal.js';
+import { makeSecretsOps } from './secrets/manager.js';
 
 /**
  * @typedef {object} BackendKind
  * @property {string} kind the `BackendSpec.kind` it serves
- * @property {(options: { label: string, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
+ * @property {(options: { label: string, spec: any, readKey?: () => Promise<string>, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
  * @property {readonly string[]} tools names in `adapterTools` this kind
  *   offers in its `TurnPorts.tools`
  *
@@ -81,6 +89,13 @@ export const adapterTools = harden([
  *   attach (tests); otherwise `bind` provides it
  * @param {string | (() => string)} [options.archiveDir] M2 (W2.8): the
  *   record archive's root (default: `archive` next to the blob directory)
+ * @param {ReturnType<typeof makeCatalog>} [options.catalog] M2 (W2.2): the
+ *   model catalogue (default: one per incarnation, over `fetch`)
+ * @param {Pick<ReturnType<typeof makeSecretsOps>, 'readKey'> & Partial<ReturnType<typeof makeSecretsOps>>} [options.secrets]
+ *   M2 (W2.2 wiring W2.3's ops): the Secrets operations (default: made on
+ *   first use over `<state>/agent-host/secrets.enc`, so an incarnation that
+ *   never meets a secret creates no key file)
+ * @param {typeof globalThis.fetch} [options.fetch] M2: the catalogue's fetch
  */
 export const makeAgentHostImpl = ({
   timers = makeTimers(),
@@ -91,6 +106,9 @@ export const makeAgentHostImpl = ({
   blobDir = () => findBlobDir(),
   sink: givenSink = undefined,
   archiveDir = undefined,
+  catalog = undefined,
+  secrets: givenSecrets = undefined,
+  fetch = undefined,
 } = {}) => {
   /** The manager's sink, from the attach (M1b blobs mint through it). */
   let sink = givenSink;
@@ -119,6 +137,60 @@ export const makeAgentHostImpl = ({
   const composer = makeComposer({ blobs });
   // W1b.2: the context cache of every session served here (D-9).
   const contextCache = makeContextCache({ store: blobs, archive });
+  // M2 W2.2: the model catalogue (R4-17, R4-104), this incarnation only.
+  const models = catalog ?? makeCatalog(fetch === undefined ? {} : { fetch });
+
+  /**
+   * M2 (W2.3's ops, wired by W2.2, m2-interfaces 2.3): made on first use.
+   * The state directory is the blob directory's grandparent
+   * (`<state>/agent-host/blobs`); the key file comes from
+   * THIX_HARNESS_SECRETS_KEY or the user's config directory (9.1).
+   * @type {any}
+   */
+  let secretsMade = givenSecrets;
+  const secrets = () => {
+    if (secretsMade === undefined) {
+      const stateDir = dirname(
+        dirname(typeof blobDir === 'function' ? blobDir() : blobDir),
+      );
+      const files = findSecretsFiles({ stateDir, env });
+      secretsMade = makeSecretsOps({
+        store: makeSecretStore({
+          file: files.file,
+          keyFile: files.keyFile,
+          auditFile: files.auditFile,
+          stateDir: files.stateDir,
+        }),
+        seal: makeSealKeys({ file: files.keyFile, stateDir: files.stateDir }),
+        sink: () => {
+          if (sink === undefined) throw Error('the agent host is not attached');
+          return sink;
+        },
+      });
+    }
+    return secretsMade;
+  };
+  /**
+   * An API backend's key, through its grant, read at every use (R4-82).
+   * @param {any} spec
+   * @returns {(() => Promise<string>) | undefined}
+   */
+  const readKeyOf = spec =>
+    spec.keyGrant === undefined
+      ? undefined
+      : () => secrets().readKey(spec.keyGrant);
+  /**
+   * A Secrets handler that builds the operations on first use.
+   * @param {string} name
+   */
+  const secretsHandler =
+    name =>
+    /** @param {any[]} args */
+    (...args) => {
+      const handler = secrets()[name];
+      if (handler === undefined) throw Error(textOf.notBuilt(name));
+      return handler(...args);
+    };
 
   /**
    * What a Backend presence of the manager vat is in this incarnation:
@@ -156,8 +228,13 @@ export const makeAgentHostImpl = ({
     if (kind === undefined)
       throw Error(`No backend kind ${JSON.stringify(spec.kind)} here`);
     const log = makeEventLog({ label: spec.label, logPath: spec.logPath });
+    const readKey = readKeyOf(spec);
     const provider = kind.makeProvider({
       label: spec.label,
+      // M2 (W2.2 wiring, 2.3): API kinds read `spec` (base URL, timeout,
+      // output limit) and the key through its grant.
+      spec,
+      ...(readKey === undefined ? {} : { readKey }),
       script: spec.script,
       logPath: spec.logPath,
       timers,
@@ -223,6 +300,30 @@ export const makeAgentHostImpl = ({
     releaseBlobs: keys => blobs.release(keys),
     releaseArchive: key => archive.release(key),
     writersFor: session => blobs.writersFor(session),
+    // M2 W2.2 (8.4): the catalogue, with the backend's key.
+    listModels: ({ backend, spec, request }) =>
+      models.listModels({
+        backend,
+        spec,
+        readKey: readKeyOf(spec),
+        log: backendState(backend, spec).log,
+        ...(request === undefined ? {} : { request }),
+      }),
+    resolveModel: ({ backend, spec, modelId }) =>
+      models.resolveModel({
+        backend,
+        spec,
+        readKey: readKeyOf(spec),
+        log: backendState(backend, spec).log,
+        ...(modelId === undefined ? {} : { modelId }),
+      }),
+    // M2 W2.3's Secrets operations (9), wired by W2.2 (2.3).
+    secretCreate: secretsHandler('secretCreate'),
+    secretDescribe: secretsHandler('secretDescribe'),
+    secretRevoke: secretsHandler('secretRevoke'),
+    secretDelete: secretsHandler('secretDelete'),
+    secretAudit: secretsHandler('secretAudit'),
+    secretWriter: secretsHandler('secretWriter'),
   });
 
   const { bind, unbind } = makeAttach({
@@ -245,6 +346,7 @@ export const makeAgentHostImpl = ({
     listChannel,
     contextCache,
     archive,
+    catalog: models,
   });
 };
 harden(makeAgentHostImpl);

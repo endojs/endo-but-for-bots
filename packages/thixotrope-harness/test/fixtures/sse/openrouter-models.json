@@ -1,0 +1,71 @@
+{
+  "data": [
+    {
+      "id": "deepseek/deepseek-v4.1-flash",
+      "name": "DeepSeek: DeepSeek V4.1 Flash",
+      "description": "A fast general model (fixture text written for tests).",
+      "context_length": 163840,
+      "architecture": {
+        "input_modalities": ["text"],
+        "output_modalities": ["text"]
+      },
+      "top_provider": { "max_completion_tokens": 32768 },
+      "supported_parameters": ["tools", "tool_choice", "max_tokens"],
+      "reasoning": { "mandatory": false, "supported_efforts": ["low", "high"], "default_effort": "low" }
+    },
+    {
+      "id": "anthropic/claude-sonnet-4.6",
+      "name": "Anthropic: Claude Sonnet 4.6",
+      "description": "Fixture text.",
+      "context_length": 200000,
+      "architecture": {
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"]
+      },
+      "top_provider": { "max_completion_tokens": 64000 },
+      "supported_parameters": ["tools", "max_tokens"]
+    },
+    {
+      "id": "acme/alpha-b",
+      "name": "alpha Model",
+      "description": "",
+      "context_length": 8192,
+      "architecture": {
+        "input_modalities": ["text"],
+        "output_modalities": ["text"]
+      },
+      "top_provider": null,
+      "supported_parameters": ["tools"]
+    },
+    {
+      "id": "acme/alpha-a",
+      "name": "Alpha model",
+      "architecture": {
+        "input_modalities": ["text"],
+        "output_modalities": ["text"]
+      },
+      "supported_parameters": ["tools"]
+    },
+    {
+      "id": "acme/no-tools",
+      "name": "Acme: No Tools",
+      "description": "Left out: no tool use.",
+      "context_length": 4096,
+      "architecture": {
+        "input_modalities": ["text"],
+        "output_modalities": ["text"]
+      },
+      "supported_parameters": ["max_tokens"]
+    },
+    {
+      "id": "acme/image-maker",
+      "name": "Acme: Image Maker",
+      "description": "Left out: no text output.",
+      "architecture": {
+        "input_modalities": ["text"],
+        "output_modalities": ["image"]
+      },
+      "supported_parameters": ["tools"]
+    }
+  ]
+}

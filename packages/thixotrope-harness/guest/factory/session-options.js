@@ -38,11 +38,23 @@ const NOT_YET = harden(['networkPolicy', 'reasoningEffort']);
  * @property {boolean} userInitiated
  * @property {string} backendTitle the backend's label (`describe()`)
  * @property {{ label: string }} presetSnapshot `shapes.PresetSnapshot`
+ * @property {string} [backendKind] M2 (W2.2): the backend's kind
+ *   (`describe()`)
+ * @property {number} [contextLength] M2 (W2.2): the resolved model's
+ *   window from the catalogue (R4-33), stored in `SessionConfig`
+ * @property {number} [maxOutputTokens] M2 (W2.2): the backend's output
+ *   limit (R4-92), stored in `SessionConfig`
  */
 
 /**
  * @typedef {object} OptionsContext
  * @property {any} defaultPreset the built-in `chat-only` preset
+ * @property {any} [defaultBackend] M2 (W2.2, R4-21):
+ *   `HarnessSettings.defaultBackend`, the backend of a creation that names
+ *   none
+ * @property {string} [defaultModelId] M2 (W2.2, R4-21):
+ *   `HarnessSettings.defaultModelId`, the model an empty model follows on
+ *   the default backend
  */
 
 /**
@@ -63,11 +75,13 @@ const refuse = async options => {
 };
 
 /** @type {OptionResolver} */
-const basics = async (options, resolved, { defaultPreset }) => {
-  if (options.backend === undefined) throw Error(texts.noBackend);
+const basics = async (options, resolved, { defaultPreset, defaultBackend }) => {
+  // M2 (W2.2, R4-21): the backend defaults to the factory's default.
+  const backend = options.backend ?? defaultBackend;
+  if (backend === undefined) throw Error(texts.noBackend);
   resolved.title = options.title ?? DEFAULT_TITLE;
   resolved.preset = options.preset ?? defaultPreset;
-  resolved.backend = options.backend;
+  resolved.backend = backend;
   resolved.modelId = options.modelId ?? DEFAULT_MODEL_ID;
   // Section 15: true unless a caller (a subagent, M9) says otherwise.
   resolved.userInitiated = options.userInitiated ?? true;
@@ -82,7 +96,40 @@ const describeObjects = async (_options, resolved) => {
   mustMatch(info, shapes.BackendInfo);
   mustMatch(snapshot, shapes.PresetSnapshot);
   resolved.backendTitle = info.label;
+  // M2 (W2.2): the kind decides whether the model goes to the catalogue.
+  resolved.backendKind = info.kind;
   resolved.presetSnapshot = /** @type {{ label: string }} */ (snapshot);
+};
+
+/**
+ * M2 W2.2 (m2-interfaces.md 8.4; R4-21, R4-22, R4-33): the model a
+ * creation stores and keeps. A scripted backend keeps M1a's rule (no
+ * catalogue). On an API backend: a given model is pinned and must be in the
+ * backend's current catalogue; an empty model on the factory's default
+ * backend follows the factory's configured model (else the backend's own);
+ * an empty model on any other backend is refused, unless the factory has
+ * no default backend at all. The answer is stored at creation and never
+ * follows a later change of the default (R4-22).
+ * @type {OptionResolver}
+ */
+const catalogueModel = async (options, resolved, context) => {
+  if (resolved.backendKind === 'scripted') return;
+  const { defaultBackend, defaultModelId } = context;
+  let modelId = options.modelId;
+  if (modelId === undefined) {
+    if (defaultBackend !== undefined && resolved.backend !== defaultBackend)
+      throw Error(texts.modelRequired);
+    if (defaultBackend !== undefined) modelId = defaultModelId;
+  }
+  const answer = await (modelId === undefined
+    ? E(resolved.backend).resolveModel()
+    : E(resolved.backend).resolveModel(modelId));
+  mustMatch(answer, shapes.ResolvedModel);
+  resolved.modelId = answer.modelId;
+  if (answer.contextLength !== undefined)
+    resolved.contextLength = answer.contextLength;
+  if (answer.maxOutputTokens !== undefined)
+    resolved.maxOutputTokens = answer.maxOutputTokens;
 };
 
 /** Hook table (append-only). */
@@ -90,6 +137,9 @@ export const optionResolvers = harden([
   refuse,
   basics,
   describeObjects,
+  // M2 W2.2: the model from the backend's catalogue (8.4). Before W2.6's
+  // line, whose test expects it last.
+  catalogueModel,
   // M2 W2.6: the system prompt (R4-26..R4-28; m2-interfaces.md 10).
   promptResolver,
 ]);
