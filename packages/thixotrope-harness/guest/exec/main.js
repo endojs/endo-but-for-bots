@@ -30,7 +30,11 @@
  * call started runs at most until its next `sleep`, then stops, instead of
  * keeping the vat cranking; a `sleep` kept on `globalThis` is dead in later
  * calls. (Fencing the answers in flight too, with a `then` per sleep, made
- * 100 answered sleeps 2-3 x slower in a vat, J-0391.)
+ * 100 answered sleeps 2-3 x slower in a vat, J-0391.) That one more step
+ * cannot send either (M1b follow-ups, J-9368): `E` and `powers` are per
+ * call too, and a closed call's `E` sends to a promise that never settles;
+ * `HandledPromise` and `Compartment` are not in the scope (J-9367). What the
+ * step can still do is change the scope's own globals.
  *
  * Arguments are the model's JSON text: inline, or a `StagedText` read through
  * `Content` in pages of at most `blobPageBytes` (one answered page per
@@ -50,6 +54,7 @@ import { boundToolOutput, chunkText, utf8Bytes } from '../lib/bounded.js';
 import {
   describeParseFailure,
   messageOf,
+  redactHostPaths,
   renderToolResult,
   stripCodeFence,
 } from './render.js';
@@ -140,12 +145,53 @@ const EXHAUSTED = harden({ status: 'exhausted' });
 const never = () => new Promise(() => {});
 
 /**
- * One call's life: its `sleep` endowment, which sends nothing and never
- * settles once the call is closed.
+ * Globals of the scope's compartment that model code must not see (M1b
+ * follow-ups, J-9367): `Compartment` (new evaluators with fresh globals,
+ * outside the per-call endowments), `lockdown` and `repairIntrinsics` (the
+ * vat's own setup), `HandledPromise` (eventual sends without the call's
+ * `E`, so past its fence). Each is deleted from the compartment's global
+ * object, or shadowed with `undefined` where it cannot be deleted.
+ */
+export const HIDDEN_GLOBALS = harden([
+  'Compartment',
+  'lockdown',
+  'repairIntrinsics',
+  'HandledPromise',
+]);
+
+/**
+ * Take the hidden globals off a compartment's global object.
+ * @param {any} global
+ */
+const hideGlobals = global => {
+  for (const name of HIDDEN_GLOBALS) {
+    try {
+      delete global[name];
+    } catch {
+      // Not configurable: shadowed below if writable.
+    }
+    if (global[name] !== undefined) {
+      try {
+        global[name] = undefined;
+      } catch {
+        // Neither: the exec scope test lists it as still visible.
+      }
+    }
+  }
+};
+
+/**
+ * One call's life: its `sleep`, `E` and `powers` endowments, which send
+ * nothing and never settle once the call is closed (J-0391; `E` and
+ * `powers` M1b follow-ups, J-9368). A closed call's `E(x).m()` is an
+ * eventual send to a promise that never settles: nothing leaves the vat,
+ * nothing answers, and no answer is wrapped while the call is open.
  * @param {any} timer
  */
 const makeCall = timer => {
   let open = true;
+  /** Where a closed call's sends go: nowhere, forever. */
+  const nowhere = never();
   /** @type {(outcome: Outcome) => void} */
   let resolveAbandoned = () => {};
   /** @type {Promise<Outcome>} */
@@ -157,8 +203,24 @@ const makeCall = timer => {
     if (!open) return never();
     return E(timer).sleep(clampDelay(ms));
   };
+  /** @param {unknown} target */
+  const callE = target => E(open ? target : nowhere);
+  callE.sendOnly = (/** @type {unknown} */ target) =>
+    E.sendOnly(open ? target : nowhere);
+  callE.get = (/** @type {unknown} */ target) => E.get(open ? target : nowhere);
+  callE.resolve = (/** @type {unknown} */ value) =>
+    open ? E.resolve(value) : nowhere;
+  callE.when = (
+    /** @type {unknown} */ value,
+    /** @type {any} */ onFulfilled,
+    /** @type {any} */ onRejected,
+  ) => (open ? E.when(value, onFulfilled, onRejected) : nowhere);
   return {
     sleep: harden(sleep),
+    E: harden(callE),
+    // M1b: an empty facet; M5 builds the call's capabilities here, per call,
+    // so a closed call holds none that still answer (J-9368).
+    powers: harden({}),
     isOpen: () => open,
     abandoned,
     close: () => {
@@ -296,8 +358,7 @@ export const makeExecScope = () => {
     __options__: true,
     globals: harden({ BigInt }),
   });
-  /** M1b: an empty live facet (M5 passes the session's label map per call). */
-  const powers = harden({});
+  hideGlobals(compartment.globalThis);
   /** @type {ReturnType<typeof makeCall> | undefined} the running call */
   let current;
 
@@ -326,7 +387,9 @@ export const makeExecScope = () => {
       );
     } catch (error) {
       if (isKeysExhausted(error)) return EXHAUSTED;
-      return failed(describeParseFailure(code, messageOf(error)));
+      return failed(
+        describeParseFailure(code, redactHostPaths(messageOf(error))),
+      );
     }
     /** @type {'ok' | 'failed'} */
     let status;
@@ -334,8 +397,8 @@ export const makeExecScope = () => {
     let text;
     try {
       const result = await body(
-        powers,
-        E,
+        call.powers,
+        call.E,
         harden,
         discardingConsole,
         call.sleep,
@@ -353,6 +416,9 @@ export const makeExecScope = () => {
     }
     // The call's model code is over: its sleeps die before anything else.
     call.close();
+    // No host file paths reach the model (J-9367): stacks a result carries,
+    // engine messages.
+    text = redactHostPaths(text);
     if (notice !== undefined) text = `${notice}\n\n${text}`;
     return finish(status, text, writers);
   };

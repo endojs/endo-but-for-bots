@@ -113,6 +113,32 @@ const bigintsAsDecimalStrings = (_key, value) =>
 const MAX_METHOD_NAMES = 256;
 
 /**
+ * Host file paths in text that leaves the exec vat (M1b follow-ups, J-9367):
+ * stack strings and engine messages may name the files the vat's boot code
+ * came from on the daemon's machine. An absolute path under a host root, or
+ * a `file://` URL, keeps only its last segment (the file name, line and
+ * column), behind `<host>/`. Paths under other roots (an API path the model
+ * built, `/a/b`) are left alone.
+ */
+const HOST_PATH =
+  /(?:file:\/\/)?\/(?:Users|home|private|tmp|var|opt|nix|root|usr|Volumes|run|srv|mnt|etc)\/(?:[^\s'"`()<>:/\\]+\/)*([^\s'"`()<>:/\\]+)/g;
+const WINDOWS_PATH =
+  /(?:file:\/\/\/)?[A-Za-z]:\\(?:[^\s'"`()<>:\\]+\\)*([^\s'"`()<>:\\]+)/g;
+
+/**
+ * `text` with host file paths cut to their file names (J-9367).
+ * @param {string} text
+ * @returns {string}
+ */
+export const redactHostPaths = text => {
+  if (!text.includes('/') && !text.includes('\\')) return text;
+  return text
+    .replace(HOST_PATH, (_whole, last) => `<host>/${last}`)
+    .replace(WINDOWS_PATH, (_whole, last) => `<host>/${last}`);
+};
+harden(redactHostPaths);
+
+/**
  * A thrown value's message, never throwing itself.
  * @param {unknown} error
  * @returns {string}

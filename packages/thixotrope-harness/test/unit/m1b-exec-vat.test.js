@@ -744,3 +744,140 @@ test('M1b QC (J-0390): an exhausted name table answers exhausted, from arguments
   // Not busy afterwards.
   t.deepEqual(await exec('return 2;'), { status: 'ok', text: '2' });
 });
+
+// ---- M1b follow-ups (JOURNAL J-9367, J-9368)
+
+test('M1b follow-ups (J-9367): model code does not see Compartment, lockdown, repairIntrinsics or HandledPromise', async t => {
+  const { exec, namespace } = await fresh();
+  t.deepEqual(
+    [...namespace.HIDDEN_GLOBALS],
+    ['Compartment', 'lockdown', 'repairIntrinsics', 'HandledPromise'],
+  );
+  const seen = await exec(
+    'return ["Compartment", "lockdown", "repairIntrinsics", "HandledPromise"].map(n => typeof globalThis[n] + " " + (n in globalThis && globalThis[n] !== undefined));',
+  );
+  t.deepEqual(JSON.parse(/** @type {string} */ (seen.text)), [
+    'undefined false',
+    'undefined false',
+    'undefined false',
+    'undefined false',
+  ]);
+  // A fresh name list, for the record (the vat's list is the integration
+  // file's; Node's compartment has more).
+  const names = await exec(
+    'return Object.getOwnPropertyNames(globalThis).filter(n => globalThis[n] !== undefined).sort();',
+  );
+  t.log(names.text);
+  // The endowments are still there.
+  t.deepEqual(
+    await exec(
+      'return [typeof powers, typeof E, typeof harden, typeof console, typeof sleep].join(" ");',
+    ),
+    { status: 'ok', text: '"object function function object function"' },
+  );
+});
+
+test('M1b follow-ups (J-9367): host file paths in error text and stacks reach the model as file names only', async t => {
+  const { exec, namespace } = await fresh();
+  t.is(typeof namespace.makeExecScope, 'function');
+  const thrown = await exec(
+    "throw Error('cannot open /Users/someone/dev/endo/packages/ses/src/x.js:12:3 or file:///home/u/app/b.cjs:1:2');",
+  );
+  t.deepEqual(thrown, {
+    status: 'failed',
+    text: 'cannot open <host>/x.js:12:3 or <host>/b.cjs:1:2',
+  });
+  const returned = await exec(
+    "return 'at f (/private/var/folders/q/T/bundle.cjs:4:5) GET /api/v1/items';",
+  );
+  t.deepEqual(returned, {
+    status: 'ok',
+    text: '"at f (<host>/bundle.cjs:4:5) GET /api/v1/items"',
+  });
+  // A real stack: whatever this engine puts in it, no host root survives.
+  const stack = await exec("return new Error('x').stack;");
+  t.notRegex(
+    /** @type {string} */ (stack.text),
+    /\/(?:Users|home|private|tmp|var|nix)\//,
+  );
+});
+
+test('M1b follow-ups (J-9368): the one step an abandoned call takes after its sleep answers cannot send', async t => {
+  const { exec, adapter, scope } = await fresh();
+  adapter.holdSleeps();
+  // The call sleeps, then (once abandoned and its sleep answered) takes its
+  // one more step: a scope write and an eventual send to a target it holds.
+  const pending = exec(
+    [
+      'globalThis.hits = [];',
+      "const target = harden({ hit: () => { globalThis.hits.push('sent'); } });",
+      'await sleep(30000);',
+      "globalThis.hits.push('stepped');",
+      'E(target).hit();',
+      'E.sendOnly(target).hit();',
+      "return 'late';",
+    ].join('\n'),
+  );
+  await settleJobs();
+  await E(scope).abandon();
+  t.deepEqual(await pending, { status: 'failed', text: texts.execAbandoned });
+  adapter.wake();
+  await settleJobs();
+  await settleJobs();
+  t.deepEqual(await exec('return hits;'), {
+    status: 'ok',
+    text: JSON.stringify(['stepped'], null, 2),
+  });
+  // A call's E kept on globalThis is dead in a later call; the later call's
+  // own E sends.
+  t.deepEqual(
+    await exec(
+      [
+        'globalThis.keptE = E;',
+        "globalThis.box = harden({ hit: () => { globalThis.hits.push('kept'); } });",
+        'return 1;',
+      ].join('\n'),
+    ),
+    { status: 'ok', text: '1' },
+  );
+  t.deepEqual(
+    await exec(
+      [
+        'keptE(box).hit();',
+        "E(harden({ hit: () => { globalThis.hits.push('live'); } })).hit();",
+        'await null; await null; await null;',
+        'return hits;',
+      ].join('\n'),
+    ),
+    { status: 'ok', text: JSON.stringify(['stepped', 'live'], null, 2) },
+  );
+});
+
+test('M1b follow-ups (J-9368): 100 answered sleeps from one body (Node timing, per-call E fence)', async t => {
+  const { exec } = await fresh();
+  const code = [
+    'const all = [];',
+    'for (let i = 0; i < 100; i += 1) all.push(sleep(0));',
+    'await Promise.all(all);',
+    'return all.length;',
+  ].join('\n');
+  /** @type {number[]} */
+  const ms = [];
+  for (let i = 0; i < 20; i += 1) {
+    const t0 = performance.now();
+    // eslint-disable-next-line no-await-in-loop
+    const out = await exec(code);
+    ms.push(performance.now() - t0);
+    t.deepEqual(out, { status: 'ok', text: '100' });
+  }
+  ms.sort((a, b) => a - b);
+  t.log(
+    JSON.stringify({
+      metric: 'exec.sends.answered.node',
+      unit: 'ms',
+      n: ms.length,
+      median: Math.round(ms[10] * 100) / 100,
+      p95: Math.round(ms[18] * 100) / 100,
+    }),
+  );
+});
