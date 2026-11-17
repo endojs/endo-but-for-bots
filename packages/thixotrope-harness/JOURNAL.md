@@ -4896,3 +4896,266 @@ adapted (`m1a-session-turn.test.js`, 7 places), and `m1a-agent-host.test.js` now
 loaded with `textOf.stagingFailed` (the contract's text for a failed rebuild) and sends nothing when
 a page breaks. (5) The session program bundle is 198,339 of 200,000 bytes after W1b.2 and W1b.4.
 Decision: reported to the PM; comment stripping (J-0303) is now needed before more vat code.
+
+### J-0360 2026-11-17 M1b acceptance - perf
+Evidence: W1b.6 runs under the run lock, one file per invocation, release worker `7cda4467...`,
+crank budget 50 M, commits `a99abea744`..`1647fcbc41` (the "-dirty" in the lines is an untracked
+probe file of this unit, deleted afterwards), load average 2.4-4.1 (other agents' work on the
+machine; higher than any earlier M1b run). Every M1b acceptance file from the m1b template:
+
+| file | acceptance | result | wall |
+|---|---|---|---|
+| `m1b-live` | 1 late join | pass (snapshot seq 16 equals the fold of the first 16 deliveries; then 34 identical deliveries) | 4 m 54 s file (includes a 50.7 s template build and test 6's 120 s timeout) |
+| `m1b-live` | 6 100 echo calls | **FAIL, known failure** (J-0362): the session vat halts with `HeapExhausted` | |
+| `m1b-live` | 9 list feed | pass for create and rename (row 33-36 ms after `createSession` returned, rename 183-294 ms); a closed subscriber answers `closed`/`client` in 19 ms and gets nothing more; **delete: known failure** (`deleteSession` is M2, contract 16.6) | |
+| `m1b-content` | 2, 7 | pass | 1 m 41 s |
+| `m1b-exec-tool` | 4, 5, 11 | pass | 2 m 45 s |
+| `m1b-exec-tool-restart` | 3, 10 | pass | 2 m 18 s |
+| `m1b-pool`, `m1b-pool-restart` | 12 | pass | 3 m 2 s, 1 m 59 s |
+| `m1b-context-restart` | 8 (200 turns; clean restart, then idle SIGKILL) | pass | 3 m 43 s |
+
+M1a files re-run at `5bc545f127`..`1e8c751f6e`: `m1a-slice-restart` (2 m 57 s), `m1a-slice-crash`
+(2 m 27 s), `m1a-provision` (2 m 45 s) passed unchanged; `m1a-slice` failed acceptance 9 and, before
+it, still asserted M1a's frame limit in acceptance 8 (defects of the test, not the product: M1b
+stages those texts). Both now read the staged text through `Content` byte for byte
+(`1e8c751f6e`) and the file passes (2 m 55 s). `perf/turn.perf.mjs`'s `turn.tooBig.*` probes had
+the same defect (`1647fcbc41`).
+Acceptance 2's surrogate pair: the rendered result is exactly 100,000 units with the high half of
+a pair at unit 32,767 - marker length - 1; the result is 32,767 units (the high half dropped), ends
+with the exact R4-46 marker, and the round-1 context digest the fake provider logged equals the
+digest of the transcript this test builds from its own expected text. Acceptance 7: the 1 MiB +
+10-byte reply (multi-byte tail) reads back equal through 52 `Content` pages in 2.7 s from the
+client; round 1's provider context (1,048,902 bytes) carries it whole; a 205 KB exec source is
+staged, read by the exec vat in pages and evaluated whole (`return n` = 5000 in the next turn);
+312,011 bytes are refused with the "exec source too large" text and the turn completes.
+{"metric":"m1b.acceptance2","turnMs":2521.9,"resultUnits":32767,"resultBytes":32767,"contextMs":0,"commit":"a99abea744","crankBudget":"50000000","loadAvg":[2.98,2.96,2.57]}
+{"metric":"m1b.acceptance7","replyTurnMs":2550.2,"replyBytes":1048586,"replyReadMs":2727.6,"roundOneContextMs":5,"roundOneContextBytes":1048902,"stagedSourceBytes":205011,"tooLargeBytes":312011,"commit":"a99abea744","crankBudget":"50000000","loadAvg":[3.59,3.13,2.64]}
+{"metric":"list.push","unit":"ms","timings":[{"createCallMs":1192,"createRowAfterReturnMs":33,"renameRowMs":268},{"createCallMs":1528,"createRowAfterReturnMs":36,"renameRowMs":294},{"createCallMs":7955,"createRowAfterReturnMs":35,"renameRowMs":183}],"closedNextMs":19,"commit":"a99abea744","crankBudget":"50000000","loadAvg":[3.06,2.95,2.52]}
+(The third create took 7,955 ms: the pool's two session spares had been taken and the refill had
+not finished, so it was a cold creation.)
+Decision: M1b acceptance passes except 6 (J-0362) and 9's delete (M2). Both are `test.failing` in
+`m1b-live.test.js`, with the reason in the title, so they turn red when fixed.
+
+### J-0361 2026-11-17 M1b exec scope - good fit
+Evidence: W1b.3 exec vat, W1b.4 tool, W1b.5 `ExecHandle`, and this unit's runs (J-0360, J-0366).
+The persistent scope is one `Compartment` per exec vat whose global object is the scope; nothing in
+the harness saves, restores or replays it. Measured: `globalThis.x = 5` survives a clean restart
+(`exec.restart.clean`: the next call 288 ms after serving) and a SIGKILL during a 30 s sleep
+(`exec.restart.sigkill`: served in 8.1 s, the turn reads `outcome-unknown`, the next `return x` is
+5); a cancel keeps it (acceptance 3). Losing it is equally plain: a runaway halts only the exec vat
+(766 ms call to terminated result, the vat retired 145 ms after, 25-62 MB of snapshot files gone),
+and the next call gets a fresh spare in 557-585 ms.
+Reading: yes, orthogonal persistence made this easy, which is what it should do. The whole feature
+is "keep a JavaScript heap alive across process deaths", and Thixotrope does exactly that with no
+code from us; Endo's Fae needed a serialized REPL history to get near it. What was not easy is
+everything around the heap: the per-crank compute and heap ceiling (a body that allocates too much
+is a halt, not an exception, J-0362's cousin), the per-vat name table (60,000 fresh keys is a
+catchable `RangeError` that leaves the vat permanently degraded rather than a halt, J-0333 still
+open), the blob plumbing for sources and results over 8 KB (`Content` pages in, `BlobWriter` pieces
+out: several cranks for what is one string in Node), and the 3 s cost of making a vat (hidden by the
+pool). None of those are persistence problems.
+Decision: none for the scope; J-0333 stays with the PM.
+
+### J-0362 2026-11-17 M1b turn loop - poor fit
+Evidence: acceptance 6 in a real vat (m1b template, release worker, crank budget 50 M,
+`a99abea744`): a scripted round of 100 `echo` calls halts the session vat with
+`guest crank halted: HeapExhausted` in the crank of `roundFinal` (the turn's `Turn` then breaks
+with the hub's retired text). A throwaway probe under the lock (deleted) found the edge: 40, 64, 66
+and 80 echo calls complete (64 run, the rest get the too-many text, all results in order); 100
+echo calls halt; 60 calls to an unknown tool complete, 90 halt. An unknown-tool round sends nothing:
+each call costs one `tool_call` event, one `tool-result` record and one `tool_result` event in that
+one crank, so the ceiling is the volume of records, guarded and hardened events and publish
+messages built in one crank (about 180-200 items), not the sends. The heap ceiling is per crank at
+the 50 M budget (M0: one inbound message above 94 KB, 250 answered sends). The 300-call too-big
+probe is unaffected: the adapter refuses a round over `maxCallsPerMessage` (256) before anything
+reaches the vat (`tooBig.calls300`: `failed`, frame-limit text, next turn completes).
+Reading: `maxCallsPerMessage` = 256 is unsafe: a provider (a real one in M2) that returns 100 calls
+kills the session vat, and with it the session (`lost`). The contract sized the message by bytes
+(frameBytes) but the crank's cost is per call.
+Decision: escalated to the PM; not fixed here (a redesign of `runTools`). Options: (a) lower
+`maxCallsPerMessage` to 64 (the adapter refuses more with the frame-limit text; contract change,
+and acceptance 6 then reads "the round fails" unless the adapter itself writes the 36 refusals);
+(b) `runTools` records intents and refusals in slices of about 32 per crank through a sendOnly
+self-continuation, publishing as it goes (keeps the contract; costs a crank per slice); (c) the
+heap cost per record and event in the vat (C-5).
+
+### J-0363 2026-11-17 M1b blob staging - perf
+Evidence: J-0360 and J-0367 lines; W1b.1's bench (J-0310..J-0313).
+What staging costs on the turn path, measured end to end: a staged field adds no session-vat
+delivery (W1b.1: 4 frames for a staged 9 KB reply as for an inline 8 KB one); its cost is the
+adapter's two fsyncs per staging, 9-10 ms median. On the M1a turn rows, which stay inline, nothing
+changed: `turn.start` median 291 ms (M1a after C-20: 260 ms at load 1.4-2.2; here load 3.6-3.8),
+p99 536 ms; `turn.tooBig.reply64k` now completes in 1,135 ms (64 KiB reply staged, 4 progress
+checkpoints) where M1a failed it at the frame limit; `echo300k` 1,048 ms; 2,000-key arguments
+1,050 ms. The 1 MiB reply turn takes 2.5 s (`tooBig.reply1m` 2,535 ms; acceptance 7 2,550 ms) of
+which about 1.2 s is the provider's own streaming; the progress checkpoints (one per 16 KiB, the
+whole text each time) are the rest, and their disk use is quadratic (W1b.1 J-0313: 34 MB for 1 MiB).
+Reading the text back from a client is the slow side: 1 MiB through `Content.read` pages of 20 KiB
+took 2.7 s (52 hub round trips); the adapter reads it in process in 0.3 ms. The context cache reads
+blobs in process too: round 1 after the 1 MiB reply was prepared in 5 ms.
+Decision: staging is cheap on the turn path; J-0313's checkpoint growth is the cost to fix (stage
+only the new text since the last checkpoint, contract change); clients should page larger.
+
+### J-0364 2026-11-17 M1b pool - perf
+Evidence: `perf/pool.perf.mjs` (`2b1e3b2a79`, m1b template with the real exec program, idle 2 s,
+load 3.2-3.7) and `m1b-pool.test.js` (same commit, load 4.2-4.7).
+{"metric":"session.create.pool","unit":"ms","n":8,"median":1183.892,"p95":1350.177,"min":1103.357,"max":1350.177,"budget":{"median":750},"pass":false,"exceeded":["median: 1183.892 > 1.25 x 750"],"deliveries":{"count":277,"perOp":34.625},"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[3.16,3.23,3.2]}
+{"metric":"session.create.poolAwake","unit":"ms","n":4,"median":1194.435,"p95":1210.67,"min":1158.065,"max":1210.67,"pass":null,"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[3.56,3.32,3.23]}
+{"metric":"session.create.cold","unit":"ms","n":3,"median":7677.056,"p95":7848.961,"min":7597.362,"max":7848.961,"budget":{"median":6000},"pass":false,"exceeded":["median: 7677.056 > 1.25 x 6000"],"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[3.68,3.4,3.26]}
+{"metric":"pool.refill","unit":"ms","n":3,"median":6096.594,"p95":6114.816,"min":5642.383,"max":6114.816,"pass":null,"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[3.53,3.33,3.24]}
+{"metric":"pool.firstTurn","unit":"ms","n":1,"median":797.693,"pass":null,"status":"completed","commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[3.56,3.32,3.23]}
+{"metric":"session.create.pool","unit":"ms","n":3,"median":1345.963,"p95":1390.359,"min":1176.79,"max":1390.359,"budget":{"median":750},"pass":false,"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[4.36,3.5,3.05]}
+{"metric":"session.create.cold","unit":"ms","n":2,"median":7798.772,"budget":{"median":6000},"pass":false,"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[4.71,3.66,3.12]}
+{"metric":"pool.rest.diskPerSpare","unit":"KiB","value":16408,"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[4.22,3.38,2.99]}
+Plus `pool.fill4` 8,850 ms (4 spares, 4 lanes), `pool.rest.restart` 5,476 ms with 0 spares woken.
+`exec.first` (J-0366) is the exec side of the same mechanism: 542 ms, within its 750 ms.
+Reading: benefit: a pooled create is 6.5 x faster than a cold one (1.18 s against 7.7 s) and
+`exec.first` meets its budget only because of the exec spare. Cost: about 16 MiB of disk per sleeping
+spare (49 MiB for the default 2 + 1), 2.1-3 s of supervisor-shared CPU per spare made (refill of 2:
+6.1 s; it competes with turns while it runs, W1b.4's exec.first finding), nothing at restart (spares
+sleep). Two budgets miss: `session.create.pool` by 1.6 x (J-0351's analysis holds: 7 serial cranks
+at about 75 ms plus the hops through the hub; awake and asleep spares cost the same here, so the
+wake is not the problem at this load), and `session.create.cold` by 1.28 x: the session program is
+198 KB now against 157 KB in M1a, under 3.2-3.7 load (`session.perf`'s cold create at load 2.5 was
+4.2 s earlier in the day, J-0367).
+Decision: both misses escalated (block per the conventions); the cold one depends on C-5 and on
+shrinking the session bundle (J-0303 comment stripping); the pooled one on J-0351's options.
+
+### J-0365 2026-11-17 M1b concurrency - perf
+Evidence: `perf/concurrency.perf.mjs` (`2b1e3b2a79`, m1b template, idle 1 h, 10 sessions each on its
+own scripted backend; a turn streams 20 deltas 50 ms apart, calls `echo` (100 ms), streams 10 more;
+8 rounds in which all 10 submit at once; load 5.2 at the end), with the new core
+`status().deliveryHistogram` (`b45da47b93`, J-0369).
+{"metric":"concurrency.single.turnStart","unit":"ms","n":15,"median":291,"p95":432,"min":238,"max":432,"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[3.36,3.35,3.25]}
+{"metric":"concurrency.10.turnStart","unit":"ms","n":80,"median":994,"p95":1252,"p99":1977,"min":558,"max":1977,"budget":{"median":582},"pass":false,"exceeded":["median: 994 > 1.25 x 582"],"ratioMedian":3.42,"singleMedianMs":291,"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[5.18,3.87,3.45]}
+{"metric":"concurrency.10.turn","unit":"ms","n":80,"median":4393,"p95":4777,"max":4920,"singleTurnMedianMs":2374,"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[5.18,3.87,3.45]}
+{"metric":"concurrency.10.rowPush","unit":"ms","n":80,"median":342,"p95":609,"p99":676,"min":2,"max":676,"budget":{"median":500},"pass":true,"missing":0,"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[5.18,3.87,3.45]}
+{"metric":"concurrency.10.crank","unit":"ms","median":300,"p95":500,"p99":750,"max":1781.2,"budget":{"p95":200},"pass":false,"counts":[0,0,0,0,0,48,52,66,172,280,94,8,0,0,0,0],"single":{"p95":150,"counts":[0,0,0,0,0,51,39,48,0,2,0,0,0,0,0,0]},"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[5.18,3.87,3.45]}
+{"metric":"concurrency.10.gc","gcFramesPerSessionTurn":2.04,"hubDelta":{"gcOnly":{"deliveries":82,"frames":163,"ms":1202.1,"persistMs":1106.0,"persists":92},"other":{"deliveries":1502,"frames":6214,"ms":37609.7,"persistMs":32414.9,"persists":2242,"sendMs":4404.2,"sends":6114,"serializeMs":1138.1}},"commit":"2b1e3b2a79-dirty","crankBudget":"50000000","loadAvg":[5.18,3.87,3.45]}
+(The crank histogram's buckets are 5, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 750 ms...; a
+p value is the bucket's upper bound. "Crank" is the supervisor's wall time of one `deliver`, so it
+includes waiting for the supervisor thread.)
+Reading: with 10 sessions streaming at once on one supervisor thread, latency roughly triples. Turn
+start goes from 291 to 994 ms (3.4 x; budget 2 x: MISS), a turn from 2.4 to 4.4 s, crank p95 from
+150 to 500 ms (budget 200: MISS). The thread is the bottleneck, and the hub's commits are most of
+its time: in the concurrent phase (about 50 s) the hub spent 37.6 s, 32.4 s of it in 2,242 persists
+of `hub.json` (14.5 ms each, whole file, fsync), against 4.4 s of sends and 1.1 s of serialization.
+That is C-2 (whole-file hub persist growing with state) multiplied by the number of active
+sessions; C-20 batched GC frames (2.0 per session per turn, 1.2 s in total: no longer the problem)
+but ordinary traffic still commits per delivery. Row pushes stay within budget (median 342 ms, p95
+609 ms): the list feed rides the same traffic. Nothing halted, no turn failed.
+Decision: escalated: `concurrency.10` blocks on C-2 (J-9216 (c): an append-only hub log or a
+per-session record instead of rewriting `hub.json` per delivery). Expected gain: most of 32 s per
+50 s of load.
+
+### J-0366 2026-11-17 M1b exec perf and too-big probes - perf
+Evidence: `perf/exec.perf.mjs` second run (`1647fcbc41`, m1b template, idle 2 s, load 3.6-4.4; the
+first run, `2b1e3b2a79`, timed out in the 300-call probe because the helper waited for `end` and a
+failed turn ends with `abort`: fixed in `1647fcbc41`; its other rows agree).
+{"metric":"exec.first","unit":"ms","n":5,"median":542,"p95":544,"max":544,"budget":{"median":750},"pass":true,"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[4.08,3.82,3.46]}
+{"metric":"exec.trivial","unit":"ms","n":50,"median":191,"p95":276,"max":381,"budget":{"median":250},"pass":true,"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[3.94,3.81,3.48]}
+{"metric":"exec.sends.answered","unit":"ms","n":5,"median":5585,"p95":8184,"max":8184,"budget":{"median":8000},"pass":true,"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[3.63,3.75,3.46]}
+{"metric":"exec.runaway","unit":"ms","value":766,"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[4.19,3.87,3.51]}
+{"metric":"exec.retire","unit":"bytes","value":61825275,"budget":{"atLeast":15000000},"pass":true,"retireAfterResultMs":145.4,"victimFilesStillThere":0,"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[4.19,3.87,3.51]}
+{"metric":"tooBig.calls300","unit":"ms","value":547.8,"problems":[],"status":"failed","reason":"round output exceeds this build's frame limit","commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[4.19,3.87,3.51]}
+{"metric":"tooBig.reply1m","unit":"ms","value":2535.1,"problems":[],"status":"completed","units":1048576,"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[4.42,3.92,3.53]}
+{"metric":"tooBig.echo10m","unit":"ms","value":710.1,"problems":[],"status":"completed","result":"Error: Invalid argument \"bytes\" for echo: expected a number from 0 to 1048576","commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[4.22,3.89,3.52]}
+{"metric":"tooBig.echo1m","unit":"ms","value":750.3,"problems":[],"status":"completed","resultUnits":32768,"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[4.22,3.89,3.52]}
+{"metric":"tooBig.exec300k","unit":"ms","value":691.8,"problems":[],"status":"completed","commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[4.22,3.89,3.52]}
+{"metric":"tooBig.keys60k","unit":"ms","value":8581.8,"problems":["the exec vat did not halt (J-0333: the key-space RangeError is catchable)"],"status":"completed","execVatsRetired":0,"result":"Error: property key space exhausted","commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[4.38,3.94,3.55]}
+{"metric":"tooBig.keys60k.nextTrivial","unit":"ms","n":5,"median":222,"p95":289,"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[4.38,3.94,3.55]}
+First run (`2b1e3b2a79`): exec.first 580, exec.trivial 185 (p95 218), sends 7,274 (p95 9,444),
+runaway 731, retire 24,953,083 bytes. Integration run (`m1b-exec-tool`, load 2.8-3.4): first 535,
+trivial 188, sends 5,331, runaway 626, deadline 5,144, worker killed 5,458 ms; restart file:
+`exec.restart.clean` 288 ms, `exec.busyReset` 896 ms, `exec.restart.sigkill` served 8.1 s.
+`exec.sends.sendOnly`: not measured (M1b `powers` is empty; model code reaches no remote to sendOnly
+to; M5).
+Reading: every exec budget passes at a load above earlier runs. `exec.sends.answered` is close to
+its 8 s budget at this load (5.3-7.3 s median, p95 up to 9.4 s): it depends on C-7 as planned.
+`exec.retire` returns the victim's snapshot files: 25 MB in one run, 62 MB in the other (three
+snapshot files: the victim's generations; not attributed per vat beyond "gone after the retire").
+The too-big probes: no session vat halted in any of the six; four behave as designed; the 10 MiB
+echo request is an argument error (`echoMaxUnits` is 1 MiB, so the probe as written cannot ask for
+10 MiB of output; the 1 MiB one is cut to 32,768 units and staged); the 60,000-key body does NOT
+halt the exec vat (J-0333): the result is "Error: property key space exhausted", the vat is not
+retired, and the scope keeps running degraded (the next trivial calls were 222 ms here, not slower
+by the 11 x W1b.3 measured, because these calls create no new keys). That probe fails its pass
+condition and stays failed until the PM decides J-0333.
+Decision: as measured; J-0333 open.
+
+### J-0367 2026-11-17 M1b M1a rows re-run - perf
+Evidence: `perf/turn.perf.mjs` (TURN_N 200) and `perf/gc.perf.mjs` at `1647fcbc41`, m1a state
+(no pool), crank budget 50 M, load 3.5-4.7.
+{"metric":"turn.start","unit":"ms","n":200,"median":291,"p95":323,"p99":536,"min":242,"max":857,"budget":{"median":350},"pass":true,"deliveries":{"count":1205,"perOp":6.025},"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[3.62,3.8,3.56]}
+{"metric":"gc.burst.turnStart","unit":"ms","n":150,"median":287,"p95":328,"p99":404,"min":250,"max":646,"budget":{"median":350},"pass":true,"turns":150,"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[3.54,3.75,3.59]}
+Also: `turn.start.open` 161, `.dispatch` 129, `.client` 302 (p99 869), `turn.delta` 0.089 ms
+(p99 4.9), `turn.delta.client` 15 ms (p99 239), `turn.round` 3 and `turn.lease` 1 deliveries
+(pass), `gc.restart` 5/5 runs served in 5.2-5.5 s (pass). `session.perf`'s `session.createCold`
+(run by `m1a-provision`): 4,160 and 7,038 ms medians in two runs (load 3.3-3.5).
+Reading: M1b did not regress the M1a turn path: turn.start median 291 ms against 260 ms after C-20
+at a third of this load, p99 536 ms (under the 1 s C-20 target), and GC bursts stay out of turn
+starts (p99 404 ms; M1a before C-20: 0.5-3.0 s).
+Decision: the M1a rows pass under M1b.
+
+### J-0368 2026-11-17 M1b context rebuild - perf
+Evidence: `m1b-context-restart.test.js` at 200 turns (`2b1e3b2a79`, load 3.2-4.0) and
+`perf/history.perf.mjs` at 1,000 turns (below).
+{"metric":"context.rebuild.vat","unit":"ms","value":2577,"restart":"clean","timing":{"pages":2,"pageMs":2117,"waitResolveMs":452.6,"readMs":4.6,"blobs":203,"projectMs":1.2},"turns":202,"commit":"2b1e3b2a79-dirty","crankBudget":"50000000"}
+{"metric":"context.rebuild.vat","unit":"ms","value":2314,"restart":"kill","timing":{"pages":2,"pageMs":1847.2,"waitResolveMs":459.2,"readMs":4.1,"blobs":204,"projectMs":1.4},"turns":203,"commit":"2b1e3b2a79-dirty","crankBudget":"50000000"}
+{"metric":"context.rebuild","unit":"ms","value":8280,"turns":401,"level":"adapter prepare of the first round after a clean restart","timing":{"pages":6,"pageMs":7920.4,"waitResolveMs":323.3,"readMs":28.2,"blobs":800,"projectMs":4},"transcriptRecords":2001,"transcriptBytes":351332,"status":"completed","serveMs":5878.9,"deliveriesInTurn":32,"budget":{"value":5000},"pass":false,"exceeded":["value: 8280 > 1.25 x 5000"],"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[2.96,3.01,3.13]}
+{"metric":"history.error","error":"timed out after 180000 ms waiting for turn \"after restart\": end","pass":false,"turns":1000,"commit":"1647fcbc41-dirty"}
+{"metric":"context.rebuild.diag","error":"timed out after 180000 ms waiting for turn \"after restart\": end","logTail":[{"kind":"round-start","turnId":"t1001","round":0},{"kind":"context-abandoned","turnId":"t1001","round":0,"error":"context page failed: ocapn hub: the target session has been retired"}],"rows":[{"label":"spare session 1","failure":"guest crank halted: HeapExhausted","journalLength":11183}],"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[2.35,2.76,2.81]}
+Reading: the 200-turn session passes acceptance 8 (both restarts; the provider gets the turn once
+with the same per-turn context digests) but its rebuild takes 2.3-2.6 s, almost all page cranks
+(about 1 s per page of about 450 records, W1b.2's J-0322). It is linear in the session: 400 turns
+rebuild in 8.3 s (6 pages, 7.9 s of page cranks), so the 1,000-turn budget of 5 s is missed by
+more than 1.6 x at 400 turns already. The first 1,000-turn run (`1647fcbc41`, load 3.0-3.6) did
+not get a result at all: the turn after the clean restart did not reach `end` within 180 s, and
+that run kept no state or diagnostics. A second run with diagnostics (`a83660c2d2`'s
+history.perf at `1647fcbc41`, same conditions) shows why, and it is worse than slow: the first
+context page crank of the 1,000-turn session after the restart halted the session vat with
+`HeapExhausted`; the adapter abandoned the round ("context page failed: ocapn hub: the target
+session has been retired") and the session is lost. 2 runs of 2 at 1,000 turns; none at 200 or
+400 turns.
+Decision: a 1,000-turn session is lost at its first turn after a restart (escalated, blocks M1b;
+same per-crank heap ceiling as J-0362: a `ContextSource` page must be bounded by what one crank can
+build, not only by bytes and 512 records; the page size the vat answers should shrink until a probe
+at 1,000 and 5,000 turns passes). `context.rebuild` also MISSES its time budget: J-0322's options stand, (b) (persist the
+adapter's cache next to the blobs, verified by `{count, epoch}`) removes the page cranks from the
+restart path entirely; (a) and (c) only scale them down.
+
+### J-0370 2026-11-17 M1b history page and session growth - perf
+Evidence: `perf/history.perf.mjs` (`1647fcbc41`, m1b template, idle 1 h, load 3.0-3.6), two runs.
+{"metric":"history.page","unit":"ms","n":30,"median":654.136,"p95":689.992,"p99":725.911,"min":619.97,"max":725.911,"deliveries":{"count":30,"perOp":1},"engine":{"delivery":{"count":30,"ms":18156.2}},"turns":26,"budget":{"median":300},"pass":false,"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[3.48,3.68,3.59]}
+{"metric":"history.page","unit":"ms","n":30,"median":665.769,"p95":679.499,"p99":685.022,"min":633.304,"max":685.022,"deliveries":{"count":30,"perOp":1},"engine":{"delivery":{"count":30,"ms":18314.7}},"turns":26,"budget":{"median":300},"pass":false,"exceeded":["median: 665.769 > 1.25 x 300"],"commit":"1647fcbc41-dirty","crankBudget":"50000000","loadAvg":[3.4,3.04,3.21]}
+{"metric":"history.page.floor","unit":"ms","n":30,"median":98.691,"p95":106.023,"commit":"1647fcbc41-dirty","crankBudget":"50000000"}
+{"metric":"history.grow","turns":"100..1000","msPer100":[68849,114141,135723,149283,170782,179295,198888,217102,229053,245952],"commit":"1647fcbc41-dirty","loadAvg":[2.99,3.17,3.34]}
+The newest page held 26 turns of 7 records each (36,155 bytes; it is cut by `frameBytes` before 32
+turns), one session-vat crank of about 605 ms (18.2 s over 30 deliveries), against a 99-111 ms
+round trip for `getInfo` on the same path.
+Reading: `history.page` MISSES its 300 ms budget by 2.2 x: the Node estimate (0.77 ms, J-9153)
+says nothing about the vat, where answering 182 records costs about 3 ms per record, the same
+marshal cost as the context pages (J-0322, C-5). Separately, a session gets slower as it grows:
+100 turns took 69 s at the start and 246 s at 900-1,000 (0.69 -> 2.46 s per turn, about +1.9 ms per
+earlier turn), with nothing else running in the daemon. This run cannot say where (the scripted
+provider digests the whole transcript per round off the round path, the adapter projects the whole
+session per round, the hub rewrites `hub.json` per delivery, C-2); a profile is the next step.
+Decision: escalated with J-0368: the history view should page by records (not 32 turns) and carry
+fewer nodes per record; the growth needs a profile before M2 runs long sessions.
+
+### J-0369 2026-11-17 M1b tests and perf - deviation
+Evidence: what this unit changed outside its own files, each in its own commit:
+(1) core `b45da47b93`: `status().deliveryHistogram` (cumulative per-bucket counts of `deliver`
+wall time and the max) in `packages/thixotrope/src/control/{measured-engine,supervisor}.js`, with
+`test/measured-engine.test.js`; made under the run lock; additive (`timings` unchanged). Needed for
+`concurrency.10`'s crank p95: the engine reported only cumulative totals. (2) contract
+`5bc545f127`: `ScriptToolCall.times` (optional) so the 300-call probe can be scripted through the
+public `makeBackend` (the list guard stops at `maxCallsPerMessage`); session program 198,339 ->
+198,438 bytes. (3) `12e137f83e`: W1b.1's flaky BlobWriter test waits for the aborted part file
+(abort is fire-and-forget) instead of a fixed 20 ms. (4) `1e8c751f6e`, `1647fcbc41`: M1a test and
+perf assertions that still expected M1a's frame limit and inline arguments. (5)
+`m1b-context-restart.test.js` now defaults to 200 turns and runs a clean restart and then an idle
+SIGKILL on the same session (acceptance 8 has both). (6) The milestone's "10 MiB echo output"
+probe cannot be asked as written (`echoMaxUnits` is 1 MiB): both the refused 10 MiB request and the
+1 MiB output are probed. (7) `exec.sends` sendOnly is not measurable in M1b (empty `powers`).
+Decision: reported to the PM.
