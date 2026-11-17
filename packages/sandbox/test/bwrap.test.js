@@ -1929,6 +1929,71 @@ test('bwrap exit sweep tolerates ESRCH and resolves with the exit status', async
   t.deepEqual(await proc.wait(), { code: 0, signal: null });
 });
 
+/**
+ * Build an fs override that answers the daemon's own `/proc/<pid>/stat`
+ * read with `readStat` and defers every other call to the host fs.
+ *
+ * @param {(path: string) => string} readStat
+ */
+const makeStatOverrideFs = readStat =>
+  /** @type {any} */ ({
+    ...nodeFs,
+    readFileSync: (/** @type {any} */ path, /** @type {any[]} */ ...rest) =>
+      path === `/proc/${process.pid}/stat`
+        ? readStat(path)
+        : nodeFs.readFileSync(path, ...rest),
+  });
+
+test('bwrap spawn reports a failed daemon /proc stat read', async t => {
+  if (process.platform !== 'linux') {
+    t.pass('process identity is read only on Linux');
+    return;
+  }
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({
+      env: {},
+      childProcess,
+      fs: makeStatOverrideFs(() => {
+        throw new Error('proc unavailable');
+      }),
+    })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  await t.throwsAsync(driver.spawn(slice, ['/bin/true'], {}), {
+    message: /could not read \/proc\/.*\/stat: "proc unavailable"/,
+  });
+  t.is(children.length, 0);
+});
+
+test('bwrap spawn rejects a malformed daemon /proc stat line', async t => {
+  if (process.platform !== 'linux') {
+    t.pass('process identity is read only on Linux');
+    return;
+  }
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({
+      env: {},
+      childProcess,
+      fs: makeStatOverrideFs(() => '1 (node) S 0 1'),
+    })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  await t.throwsAsync(driver.spawn(slice, ['/bin/true'], {}), {
+    message: /could not read daemon process identity/,
+  });
+  t.is(children.length, 0);
+});
+
 test('failed teardown retains its child until a later close permits cleanup', async t => {
   // Guards the hang: ownership ends only on 'close', so
   // without a bound this teardown never settles and `dispose()` wedges
