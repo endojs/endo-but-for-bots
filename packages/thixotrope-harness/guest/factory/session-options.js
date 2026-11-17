@@ -13,6 +13,7 @@
  * Guest rules: prelude globals only.
  */
 import { shapes, textOf, texts } from '../lib/interfaces.js';
+import { promptResolver } from '../session/prompt.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -25,12 +26,8 @@ export const DEFAULT_TITLE = 'New chat';
 export const DEFAULT_MODEL_ID = 'scripted';
 
 /** Options the guard admits that M1a refuses (later milestones implement them). */
-const NOT_YET = harden([
-  'systemPrompt',
-  'networkPolicy',
-  'spoken',
-  'reasoningEffort',
-]);
+// M2 W2.6: `systemPrompt` and `spoken` are resolved by `promptResolver`.
+const NOT_YET = harden(['networkPolicy', 'reasoningEffort']);
 
 /**
  * @typedef {object} ResolvedOptions
@@ -89,7 +86,13 @@ const describeObjects = async (_options, resolved) => {
 };
 
 /** Hook table (append-only). */
-export const optionResolvers = harden([refuse, basics, describeObjects]);
+export const optionResolvers = harden([
+  refuse,
+  basics,
+  describeObjects,
+  // M2 W2.6: the system prompt (R4-26..R4-28; m2-interfaces.md 10).
+  promptResolver,
+]);
 
 /**
  * Run every resolver in order.

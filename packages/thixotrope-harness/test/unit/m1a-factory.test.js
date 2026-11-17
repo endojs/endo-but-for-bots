@@ -254,10 +254,16 @@ test('refused options make no row and no vat', async t => {
     () => E(kit.factory).createSession(harden({ model: 'x' })),
     { message: texts.modelOption },
   );
+  // M2 W2.6 resolves `systemPrompt` and `spoken`; a blank prompt is refused.
+  for (const systemPrompt of ['', ' \n\t ']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () => E(kit.factory).createSession(harden({ backend, systemPrompt })),
+      { message: texts.blankSystemPrompt },
+    );
+  }
   for (const [name, value] of /** @type {[string, any][]} */ ([
-    ['systemPrompt', 'be brief'],
     ['networkPolicy', 'none'],
-    ['spoken', true],
     ['reasoningEffort', 'high'],
   ])) {
     // eslint-disable-next-line no-await-in-loop
@@ -729,7 +735,8 @@ test('start listener: a probe that never settles does not hold back the others',
 });
 
 test('the hook tables have M1a entries and the services are attenuated', async t => {
-  t.is(optionResolvers.length, 3);
+  // M1a's three entries first; later milestones append (M2: W2.2, W2.6, W2.7).
+  t.true(optionResolvers.length >= 3);
   // M1b W1b.5 appends the execVat builder (empty without a pool).
   t.is(serviceBuilders.length, 2);
   t.deepEqual(
