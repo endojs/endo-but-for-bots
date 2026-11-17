@@ -28,7 +28,7 @@ Reusable user-prompt scaffolds (a "code review" prompt, a "write a PR
 description" prompt, a "summarize this thread" prompt) are an ergonomic
 affordance every coding harness offers. Pi calls them *prompt
 templates*: a markdown file, expanded into the editor when the user
-types `/templatename args…`. Endo's Chat command bar
+types `/templatename args...`. Endo's Chat command bar
 (`packages/spaces-util/src/chat-bar-component.js`) has built-in slash
 commands from `COMMANDS` in `command-registry.js` but no user-authored
 ones.
@@ -236,9 +236,9 @@ sequenceDiagram
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle authority | Value crossing |
 |---|---|---|---|---|---|
-| Filesystem → daemon | Setup script | User chooses which project to grant | Files on disk, owned by the user | User runs or removes the setup | Read-only mount capability |
-| Daemon → Chat | Catalog over CapTP | Precedence by entry order; built-ins win | None in Chat (reread on every menu open) | Revoking the pet name removes all templates | Template text |
-| Chat → agent | Chat bar send | User reviews and presses Enter | Agent transcript | Agent owns its transcript | Plain user message text |
+| Filesystem -> daemon | Setup script | User chooses which project to grant | Files on disk, owned by the user | User runs or removes the setup | Read-only mount capability |
+| Daemon -> Chat | Catalog over CapTP | Precedence by entry order; built-ins win | None in Chat (reread on every menu open) | Revoking the pet name removes all templates | Template text |
+| Chat -> agent | Chat bar send | User reviews and presses Enter | Agent transcript | Agent owns its transcript | Plain user message text |
 
 Persistent state is the user's files plus the agent's transcript; Chat
 keeps none. The only commit decision is the user's Enter. There is
