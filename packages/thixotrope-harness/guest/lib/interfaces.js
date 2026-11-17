@@ -345,6 +345,16 @@ export const textOf = harden({
    */
   stagingFailed: message => `could not stage large text: ${message}`,
   /**
+   * M1b follow-ups (J-9369; M1a QC advisory J-0296 (7)): an inline
+   * submission whose UTF-8 bytes exceed `inlineBytes` (the guard bounds
+   * units only, so up to about 24.6 KB passed); the Composer stages such
+   * text, so only a caller that skips it meets this.
+   * @param {number} bytes
+   * @param {number} limit
+   */
+  inlineTooLarge: (bytes, limit) =>
+    `Inline text of ${bytes} bytes is over the ${limit}-byte limit; larger text must be staged (the Composer does this)`,
+  /**
    * M1b follow-ups (J-9361): a staging that would take a session's staged
    * text on disk over its quota (`blobLimits.sessionBytes`); the message of
    * the staging failure (`stagingFailed`).

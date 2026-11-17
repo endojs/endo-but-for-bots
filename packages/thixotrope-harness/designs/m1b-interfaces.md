@@ -893,6 +893,7 @@ guest rules; "Node" = adapter or tests.
 | `textOf.stagingFailed(msg)` | `could not stage large text: <msg>` | harness |
 | `texts.blobUnknown`, `texts.writerClosed` | `Unknown blob`; `This blob writer is closed` | harness |
 | `texts.blobNotOwned` | `This blob belongs to another session` | harness (17.3) |
+| `textOf.inlineTooLarge(bytes, limit)` | `Inline text of N bytes is over the L-byte limit; larger text must be staged (the Composer does this)` | harness (17.5) |
 | `textOf.blobSessionQuota(bytes, held, quota)` | `the session's staged text would exceed its disk quota: N more bytes on top of H, quota Q bytes` | harness (17.1) |
 | `textOf.blobDaemonQuota(bytes, held, quota)` | `the daemon's staged text would exceed its disk quota: N more bytes on top of H, quota Q bytes` | harness (17.1) |
 | `texts.blankSubmission` | `A queued message must be non-empty text` (kept) | Fae; deviation 16.1 |
@@ -1068,4 +1069,12 @@ adapter incarnation attaches while no daemon start is running (`lifecycle.starte
 window) and it is not the first attach. The factory's listener refreshes its list publisher
 (`E(admin).listPublisher()`). Batches published between the adapter's exit and the refresh are
 lost, as at a daemon start; viewers of the new incarnation start from `listSessions` and the rev.
+
+### 17.5 Inline submissions over `inlineBytes` (M1a QC advisory J-0296 (7))
+
+`Session.enqueueOnce` and `startTurn` refuse an inline submission whose UTF-8 bytes exceed
+`inlineBytes` (8,192) with `textOf.inlineTooLarge(bytes, inlineBytes)`, before anything is stored.
+The guard bounds units only (`submissionUnits`, 8,192), so up to about 24.6 KB passed and the frame
+rule rested on the Composer, which stages anything longer. Composer callers see no change; the
+Composer counts the refusal among those that delete a staged file (17.1).
 
