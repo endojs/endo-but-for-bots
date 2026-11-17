@@ -1061,7 +1061,19 @@ test.serial('bwrap normal exit sweeps its process-group anchor', async t => {
   t.timeout(20_000);
   // eslint-disable-next-line @jessie.js/safe-await-separator
   if (!(await bwrapCheck(t))) return;
-  const driver = makeBwrapDriver({ env: {} });
+  /** @type {{ processIdentifier: number, signal: string | number | undefined }[]} */
+  const sweepCalls = [];
+  const driver = makeBwrapDriver({
+    env: {},
+    processKill: (processIdentifier, signal) => {
+      t.true(
+        process.kill(processIdentifier, 0),
+        'the process group must retain a member after its leader exits',
+      );
+      sweepCalls.push({ processIdentifier, signal });
+      return process.kill(processIdentifier, signal);
+    },
+  });
   const { powers, tmpdirs } = makeStubScratchProvider();
   const factory = makeSandboxFactory({
     drivers: harden([driver]),
@@ -1075,10 +1087,13 @@ test.serial('bwrap normal exit sweeps its process-group anchor', async t => {
     for (const directory of tmpdirs)
       nodeFs.rmSync(directory, { recursive: true, force: true });
   });
-  const proc = await E(handle).spawn(harden(['/bin/true']));
-  const pid = await E(proc).pid();
-  t.deepEqual(await E(proc).wait(), { code: 0, signal: null });
-  await t.notThrowsAsync(() => waitForProcessGroupGone(pid));
+  const driverProcess = await E(handle).spawn(harden(['/bin/true']));
+  const processIdentifier = await E(driverProcess).pid();
+  t.deepEqual(await E(driverProcess).wait(), { code: 0, signal: null });
+  t.deepEqual(sweepCalls, [
+    { processIdentifier: -processIdentifier, signal: 'SIGKILL' },
+  ]);
+  await t.notThrowsAsync(() => waitForProcessGroupGone(processIdentifier));
 });
 
 test.serial(
