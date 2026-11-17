@@ -12,6 +12,37 @@ import { imageResultText } from '@endo/hosted-agent/image-result.js';
 const wireBytes = value =>
   new TextEncoder().encode(JSON.stringify(value)).length;
 
+export const defaultContextCompactionSettings = harden({
+  enabled: true,
+  reserveTokens: 16_384,
+  keepRecentTokens: 20_000,
+});
+harden(defaultContextCompactionSettings);
+
+/**
+ * @param {object} options
+ * @param {boolean} [options.enabled]
+ * @param {number} [options.reserveTokens]
+ * @param {number} [options.keepRecentTokens]
+ * @param {string} [options.customInstructions]
+ */
+const assertCompactionSettings = ({
+  enabled = defaultContextCompactionSettings.enabled,
+  reserveTokens = defaultContextCompactionSettings.reserveTokens,
+  keepRecentTokens = defaultContextCompactionSettings.keepRecentTokens,
+  customInstructions,
+}) => {
+  typeof enabled === 'boolean' || Fail`Invalid compaction enabled setting`;
+  (Number.isSafeInteger(reserveTokens) && reserveTokens >= 0) ||
+    Fail`Invalid compaction reserveTokens setting`;
+  (Number.isSafeInteger(keepRecentTokens) && keepRecentTokens >= 0) ||
+    Fail`Invalid compaction keepRecentTokens setting`;
+  customInstructions === undefined ||
+    (typeof customInstructions === 'string' &&
+      customInstructions.trim() !== '') ||
+    Fail`Invalid compaction customInstructions setting`;
+};
+
 /**
  * Select completed protocol groups, not a fixed number of user turns. Keep a
  * size-budgeted recent tail and the current user directive verbatim, including
@@ -22,20 +53,49 @@ const wireBytes = value =>
  * @param {readonly any[]} [options.tools]
  * @param {number} [options.windowTokens] Exact selected-model catalog reading.
  * @param {number} [options.usedTokens] Last request's observation, not a lifetime sum.
- * @param {boolean} [options.force] Acceptance-only, not a fabricated model limit.
+ * @param {boolean} [options.force] Explicit/manual trigger, not a fabricated model limit.
+ * @param {boolean} [options.enabled] Whether automatic compaction is enabled.
+ * @param {number} [options.reserveTokens] Context reserved for the next response.
+ * @param {number} [options.keepRecentTokens] Recent context retained verbatim.
+ * @param {string} [options.customInstructions] Trusted summary focus for this compaction.
  */
 export const planContextCompaction = (
   messages,
-  { tools = [], windowTokens = 0, usedTokens = 0, force = false } = {},
+  {
+    tools = [],
+    windowTokens = 0,
+    usedTokens = 0,
+    force = false,
+    enabled = defaultContextCompactionSettings.enabled,
+    reserveTokens = defaultContextCompactionSettings.reserveTokens,
+    keepRecentTokens = defaultContextCompactionSettings.keepRecentTokens,
+    customInstructions,
+  } = {},
 ) => {
+  assertCompactionSettings({
+    enabled,
+    reserveTokens,
+    keepRecentTokens,
+    customInstructions,
+  });
+  if (!force && !enabled) return undefined;
   // Only a provider token observation can trigger automatic compaction. Wire
   // bytes and model tokens are different units, especially for opaque context.
-  // Leave 30% for the next reply and tool results. Unknown readings do not
-  // invent a context limit; explicit forcing remains available to callers.
-  const thresholdTokens = Math.floor(windowTokens * 0.7);
+  // Small test/local models cannot reserve more than their entire window, so
+  // cap the default at 30%. An explicit setting is authoritative and fails
+  // closed when it leaves no input window.
+  const effectiveReserveTokens =
+    reserveTokens === defaultContextCompactionSettings.reserveTokens
+      ? Math.min(reserveTokens, Math.floor(windowTokens * 0.3))
+      : reserveTokens;
+  const thresholdTokens = windowTokens - effectiveReserveTokens;
+  !windowTokens ||
+    thresholdTokens > 0 ||
+    force ||
+    Fail`Compaction reserveTokens leaves no model input window`;
   if (
     !force &&
-    (!thresholdTokens || !usedTokens || usedTokens < thresholdTokens)
+    (!thresholdTokens || !usedTokens || usedTokens <= thresholdTokens)
   )
     return undefined;
   const originalBytes = wireBytes({ messages, tools });
@@ -57,11 +117,22 @@ export const planContextCompaction = (
   const baseBytes = wireBytes({ messages: [...system, ...anchor], tools });
   if (headroomBytes !== undefined && baseBytes >= headroomBytes)
     Fail`Compaction instructions and tools exceed the model headroom`;
-  // Half the remaining headroom goes to recent verbatim context, half to the
-  // summary. Unknown capacity permits explicit forcing, never automatic sizing.
+  // Convert the requested recent-token window using this request's observed
+  // token-to-byte ratio. This sizes complete protocol groups without claiming
+  // that serialized bytes are themselves model tokens. A forced compaction
+  // with no capacity observation retains the older half-budget behavior.
+  const recentBytes =
+    usedTokens > 0
+      ? Math.floor(
+          (originalBytes * Math.min(keepRecentTokens, usedTokens)) / usedTokens,
+        )
+      : Math.floor(originalBytes / 2);
   const tailBudget = Math.max(
     0,
-    Math.floor(((byteBudget ?? originalBytes) - baseBytes) / 2),
+    Math.min(
+      Math.max(0, recentBytes - baseBytes),
+      (byteBudget ?? originalBytes) - baseBytes,
+    ),
   );
   const boundaries = [0];
   const pending = new Map();
@@ -117,6 +188,7 @@ export const planContextCompaction = (
     tools,
     headroomBytes,
     originalBytes,
+    customInstructions,
   });
 };
 harden(planContextCompaction);
@@ -132,7 +204,12 @@ const summaryInstruction =
   'Describe outcomes, not private reasoning. Do not discuss the act of summarization.\n' +
   '## Goal\n## Constraints and decisions\n## Progress\n' +
   '### Done\n### Underway\n### Blockers and failures\n' +
-  '## Next steps\n## Paths and references\n\nHistory (JSON):\n';
+  '## Next steps\n## Files touched\n## Code patterns established\n' +
+  '## Paths and references';
+
+const historyMarker = `
+History (JSON):
+`;
 
 /**
  * @param {any} content
@@ -185,7 +262,14 @@ const summaryMessages = plan => {
       ...plan.system,
       {
         role: 'user',
-        content: `${summaryInstruction}${JSON.stringify(history)}`,
+        content: `${summaryInstruction}${
+          plan.customInstructions
+            ? `
+Additional summary focus:
+${plan.customInstructions}
+`
+            : ''
+        }${historyMarker}${JSON.stringify(history)}`,
       },
     ];
     if (

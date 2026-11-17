@@ -519,6 +519,7 @@ const provisionPresetObjects = async (
  *   the factory built (see `makeFlootToolRegistry`).
  * @param {number} [options.contextLength] Exact selected-model catalog reading.
  * @param {boolean} [options.forceCompaction] Acceptance-only trigger.
+ * @param {{ enabled?: boolean, reserveTokens?: number, keepRecentTokens?: number, customInstructions?: string }} [options.compactionSettings]
  * @param {() => Promise<void>} [options.stopEnvironment] Private execution stop barrier, distinct from inference cancellation.
  * @param {(kind: 'turn-started' | 'turn-settled' | 'turn-resolved', detail?: { input: string, from?: string }) => void} [options.onChange]
  *   Told when this session's turn records change, whoever started the turn —
@@ -573,6 +574,7 @@ export const makeStreamingAgent = async (
     extraTools,
     contextLength,
     forceCompaction = false,
+    compactionSettings = {},
     stopEnvironment,
     journalPowers,
     attachments,
@@ -1145,6 +1147,7 @@ export const makeStreamingAgent = async (
         const plan = unseenImages
           ? undefined
           : planContextCompaction(context, {
+              ...compactionSettings,
               tools: tools.providerSchemas,
               windowTokens: contextLength ?? 0,
               usedTokens: lastRequestContext?.usedTokens ?? 0,
@@ -4489,6 +4492,7 @@ export const make = async (
             contextLength:
               entry.inferenceRecipe?.contextLength ?? entry.contextLength,
             forceCompaction: env?.FLOOT_FORCE_COMPACTION === 'true',
+            compactionSettings: workload.compactionSettings,
             ...(presetHasShell(preset)
               ? {
                   stopEnvironment: async () => {

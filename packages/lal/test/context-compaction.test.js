@@ -89,6 +89,8 @@ test('keeps complete recent protocol groups and summarizes only older completed 
     t.true(context[1].content.includes(messages[2].content));
     t.true(context[1].content.includes('## Constraints and decisions'));
     t.true(context[1].content.includes('### Blockers and failures'));
+    t.true(context[1].content.includes('## Files touched'));
+    t.true(context[1].content.includes('## Code patterns established'));
     t.true(context[1].content.includes('## Paths and references'));
     t.true(
       context[1].content.includes('previous summary; newer evidence wins'),
@@ -110,7 +112,7 @@ test('unknown capacity does not become a fake automatic limit', t => {
   t.truthy(
     planContextCompaction(dialogue(), {
       windowTokens: 10_000,
-      usedTokens: 7000,
+      usedTokens: 7001,
     }),
   );
   t.is(planContextCompaction(dialogue(), { windowTokens: 100_000 }), undefined);
@@ -122,9 +124,10 @@ test('reported token occupancy, not serialized bytes, triggers compaction', t =>
     { role: 'user', content: 'Keep working on the agreed implementation.' },
     ...toolGroup(0, 60_000),
   ];
-  // Reproduce Tokyo: a 272k window, about 25k reported tokens, and wire data
-  // larger than 70% of that token count. Opaque reasoning makes the units
-  // differ further; it must not become an additional token budget.
+  // Reproduce Tokyo: a 272k window, about 25k reported tokens, and large wire
+  // data. Opaque reasoning makes the units differ further; it must not become
+  // an additional token budget. The default 16,384-token reserve triggers only
+  // above 255,616 reported tokens.
   messages[2].responsesOutput.items[0].encrypted_content = 'opaque'.repeat(
     50_000,
   );
@@ -139,15 +142,82 @@ test('reported token occupancy, not serialized bytes, triggers compaction', t =>
   t.is(
     planContextCompaction(messages, {
       windowTokens: 272_000,
-      usedTokens: 190_399,
+      usedTokens: 255_616,
     }),
     undefined,
   );
   t.truthy(
     planContextCompaction(messages, {
       windowTokens: 272_000,
-      usedTokens: 190_400,
+      usedTokens: 255_617,
     }),
+  );
+});
+
+test('configures automatic threshold, recent tail and summary focus', async t => {
+  const messages = [
+    { role: 'user', content: 'finish the migration' },
+    ...toolGroup(0),
+    ...toolGroup(1),
+    ...toolGroup(2),
+  ];
+  t.is(
+    planContextCompaction(messages, {
+      enabled: false,
+      windowTokens: 100_000,
+      usedTokens: 100_000,
+    }),
+    undefined,
+  );
+  t.is(
+    planContextCompaction(messages, {
+      windowTokens: 100_000,
+      usedTokens: 75_000,
+      reserveTokens: 20_000,
+    }),
+    undefined,
+  );
+  const plan = planContextCompaction(messages, {
+    windowTokens: 100_000,
+    usedTokens: 80_001,
+    reserveTokens: 20_000,
+    keepRecentTokens: 0,
+    customInstructions: 'Keep the database rollback plan.',
+  });
+  if (!plan) throw Error('Expected configured plan');
+  t.deepEqual(plan.retained, [messages[0]]);
+  await summarizeContext(plan, async request => {
+    t.true(request[0].content.includes('Keep the database rollback plan.'));
+    return {
+      message: { role: 'assistant', content: 'Migration remains underway.' },
+    };
+  });
+});
+
+test('rejects invalid compaction settings', t => {
+  for (const settings of [
+    { enabled: 'yes' },
+    { reserveTokens: -1 },
+    { keepRecentTokens: 1.5 },
+    { customInstructions: '' },
+  ]) {
+    t.throws(
+      () =>
+        planContextCompaction(dialogue(), {
+          .../** @type {any} */ (settings),
+          force: true,
+        }),
+      { message: /Invalid compaction/ },
+    );
+  }
+  t.throws(
+    () =>
+      planContextCompaction(dialogue(), {
+        windowTokens: 100,
+        usedTokens: 100,
+        reserveTokens: 100,
+      }),
+    { message: /leaves no model input window/ },
   );
 });
 
@@ -272,7 +342,7 @@ test('a smaller summary must still leave model headroom with tools and tail', as
     summarizeContext(plan, async () => ({
       message: { role: 'assistant', content: 'summary '.repeat(2200) },
     })),
-    { message: /summary and tail exceed/ },
+    { message: /did not reduce|summary and tail exceed/ },
   );
 });
 

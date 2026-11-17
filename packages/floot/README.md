@@ -208,6 +208,12 @@ The voice id encodes its path: `en_GB-alba-medium` → `en/en_GB/alba/medium/`.
    response plus all requested tool results; parallel calls share one round.
    It is a finite runaway-loop guard, not a model context limit. Hosted CLI
    backends have their own loops and do not use this setting.
+   Direct-provider context compaction is enabled by default.
+   `FLOOT_COMPACTION_RESERVE_TOKENS` reserves response headroom (default
+   `16384`), `FLOOT_COMPACTION_KEEP_RECENT_TOKENS` keeps a recent verbatim tail
+   (default `20000`), and `FLOOT_COMPACTION_CUSTOM_INSTRUCTIONS` adds trusted
+   focus to every structured summary.
+   Set `FLOOT_COMPACTION_ENABLED=false` to disable automatic compaction.
 
 3. **Provision the voice caplets.** Ensure `uv`, `piper`, and a voice model are
    present, then:

@@ -221,6 +221,7 @@ Example: if a message says "Here is @counter for you", adopt it:
  *   a revoked one stops it. Absent when the caller injected a built provider.
  * @param {string} [options.sessionId] - Stable pool identity, required for subscriptions.
  * @param {boolean} [options.forceCompaction] Acceptance-only trigger.
+ * @param {{ enabled?: boolean, reserveTokens?: number, keepRecentTokens?: number, customInstructions?: string }} [options.compactionSettings]
  * @param {string} [options.providerIdentity] Locator of the exact retained provider recipe.
  * @param {typeof DEFAULT_SUBAGENT_LIMITS} [options.subagentLimits]
  * @param {number} [options.maxToolRounds]
@@ -239,6 +240,7 @@ export const spawnWorkerLoop = async (
     delegatedPrompt,
     sessionId,
     forceCompaction = false,
+    compactionSettings = {},
     providerIdentity,
     subagentLimits = DEFAULT_SUBAGENT_LIMITS,
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
@@ -528,6 +530,7 @@ export const spawnWorkerLoop = async (
         const plan = unseenImages
           ? undefined
           : planContextCompaction(providerContext, {
+              ...compactionSettings,
               tools: tools.schemas,
               // Only caller-supplied exact next-model catalog metadata is a
               // capacity guarantee. A router's previous served model is not.

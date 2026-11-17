@@ -12,6 +12,11 @@ test('Fae workload configuration shares defaults and validates overrides', t => 
   t.is(defaults.maxToolRounds, 1024);
   t.is(defaults.maxDepth, 2);
   t.is(defaults.maxSubagents, 8);
+  t.deepEqual(defaults.compactionSettings, {
+    enabled: true,
+    reserveTokens: 16_384,
+    keepRecentTokens: 20_000,
+  });
   const configured = readFaeWorkloadConfig({
     FAE_MAX_TOOL_ROUNDS: '2000',
     FAE_PROVIDER_REQUEST_TIMEOUT_MS: '9000',
@@ -19,6 +24,10 @@ test('Fae workload configuration shares defaults and validates overrides', t => 
     FAE_MAX_SUBAGENT_DEPTH: '0',
     FAE_SUBAGENT_TIMEOUT_SECONDS: '2',
     FAE_SUBAGENT_MAX_TIMEOUT_SECONDS: '3',
+    FAE_COMPACTION_ENABLED: 'false',
+    FAE_COMPACTION_RESERVE_TOKENS: '4096',
+    FAE_COMPACTION_KEEP_RECENT_TOKENS: '8192',
+    FAE_COMPACTION_CUSTOM_INSTRUCTIONS: 'Preserve file changes.',
   });
   t.is(configured.maxToolRounds, 2000);
   t.is(configured.requestTimeoutMs, 9000);
@@ -26,6 +35,12 @@ test('Fae workload configuration shares defaults and validates overrides', t => 
   t.is(configured.maxDepth, 0);
   t.is(configured.subagentLimits.replyTimeoutSeconds, 2);
   t.is(configured.subagentLimits.maxTimeoutSeconds, 3);
+  t.deepEqual(configured.compactionSettings, {
+    enabled: false,
+    reserveTokens: 4096,
+    keepRecentTokens: 8192,
+    customInstructions: 'Preserve file changes.',
+  });
 });
 
 test('malformed retained workload settings fail before factory, driver or setup host calls', async t => {
@@ -45,6 +60,8 @@ test('malformed retained workload settings fail before factory, driver or setup 
     { FAE_MAX_TOOL_ROUNDS: 'invalid' },
     { FAE_PROVIDER_REQUEST_TIMEOUT_MS: '2147483648' },
     { FAE_SUBAGENT_MAX_TIMEOUT_SECONDS: '2147484' },
+    { FAE_COMPACTION_ENABLED: 'maybe' },
+    { FAE_COMPACTION_RESERVE_TOKENS: '-1' },
   ]) {
     // Each constructor must reject synchronously with respect to capability use.
     // eslint-disable-next-line no-await-in-loop
