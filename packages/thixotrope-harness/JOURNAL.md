@@ -7292,3 +7292,120 @@ same crank if tool calls are in flight (7.1: it does not wait). (6) Seals are no
 Z: an `importState` faster than seals leaves a backlog that drains one seal per import chunk or
 settle (W2.7 should know).
 Decision: within the contract; recorded for W2.7 and W2.9.
+
+### J-0470 2026-11-18 M2 turn completeness - good fit
+Evidence: `test/adapter/m2-w26-turns.test.js` (8 tests, 2 known failures, J-0475),
+`test/integration/m2-turns.test.js` (acceptance 2 and 12 in a vat; 3 opt-in, J-0471),
+`guest/lib/journal-usage.js`, `guest/session/prompt.js`, `guest/lib/system-prompt-base.js`;
+commits 79229a3c88, 6ed67a0491, b7f06ee949 (contract), 85f3639e8b, 8edcc2e7f4 and the
+integration commit.
+Reading: almost all of the turn loop's completeness was already true of the M1a/M1b vat code;
+what W2.6 adds is proof on the real paths. The Node test runs the session program, the Endpoint,
+the streamed OpenRouter provider against the fake server, the context cache and the echo tool
+together, and reads what the model would see where it arrives: the request body the fake server
+recorded. That body shows the R4-43 / R4-45 texts as `tool` messages in call order in the next
+request, the R4-32 eligibility (the failed turn's partial text and the "Tool outcome unknown"
+result present, the never-dispatched turn's user text absent), and the connection closing on
+cancel (R4-7). Late `roundFinal` / `roundFailed` after the settle append nothing and
+`dispatching` answers false; a running tool is waited for and its result recorded (R4-49).
+In the vat (integration), acceptance 12 compares the scripted provider's per-turn digests with
+transcripts written by hand: the failed turn, the turn left outcome-unknown by a supervisor
+SIGKILL while its echo ran, and the probe, with the cancelled-before-dispatch turn absent. The
+design fits Thixotrope well here because "what the model sees" is one pure function in the adapter
+over records the vat wrote with intent before effect: eligibility (Dispatched or not), unknown
+outcomes (recovery's ToolResult) and failures (Partial) are all records, so a restart, a cancel
+and a provider failure need no extra state to be projected right.
+Decision: as built.
+
+### J-0471 2026-11-18 M2 long turns in a vat - perf
+Evidence: `test/integration/m2-turns.test.js` (`m2.turns.rounds`, `m2.turns.restart`), run 1 and
+run 2 under the run lock; identity below.
+Reading: acceptance 3 at the real round limit (R4-95: 1,024 tool rounds in one turn, the
+scripted backend, one script round repeated by `ScriptRound.times`) did not finish within 200 s
+in a vat (run 1), so it cannot run inside a 5-minute integration file. It is kept as an opt-in
+test (`M2_TURNS_ROUND_LIMIT=1`), marked as a known failure against the file budget; the default
+run measures a 100-round turn instead and the behaviour at the limit is proven in Node at a limit
+of 2 (R4-47: completed, the fixed text, no further request). Measured (run 2; scripted backend, m1a template, release worker 367e78ad...,
+crank budget 50 M, slot ceiling 4,000,000, collection schedule `allocation`, hub store `log`,
+load average 1.7): a turn of 100 tool rounds plus its closing round took 21.6 s, a median of 272
+ms between consecutive provider requests (first 20 rounds 290 ms, last 20 272 ms: no growth
+visible within 100 rounds), so 1,024 rounds take about 280 s by extrapolation, in line with run 1.
+A round is two session cranks (the `roundFinal` crank with its ToolIntents record and the
+`execute` send; the tool result's crank with the next `startRound`), the echo call, the context
+cache's prepare and several fsynced scripted-log lines. JSON lines:
+`{"metric":"m2.turns.rounds","unit":"ms","rounds":101,"firstRoundsMs":290,"lastRoundsMs":272,"medianRoundMs":272,"ms":21577.2}`
+`{"metric":"m2.turns.restart","unit":"ms","servedMs":7595.2,"connectedMs":7703.5,"recoveredMs":8738}`
+(run 1: served 7,668 ms, recovered 8,806 ms; the SIGKILL in acceptance 12 while the echo runs).
+Run 3 (the passing run, load 2.05): `{"metric":"m2.turns.rounds","unit":"ms","rounds":101,"firstRoundsMs":279,"lastRoundsMs":267,"medianRoundMs":267,"ms":21595.8}`,
+`{"metric":"m2.turns.restart","unit":"ms","servedMs":7727.4,"connectedMs":7837.7,"recoveredMs":8899.9}`;
+the file's two tests took 38.2 s and 21.7 s.
+A turn of 1,024 rounds holds about 3,100 records in the kept tail (one turn is never sealed
+until it settles); its `previewTurn` and `ofTurn` walks and the adapter's per-round projection
+grow with the turn. No budget names a per-round time; the spec's 1,024 is a ceiling, not an
+expected length, but a long agentic turn is the case it guards.
+Decision: recorded for the PM; not re-based (D-M2-3). A configurable round limit in
+`SessionConfig` (a contract change and a `turn.js` line, W2.5's file) would let the vat test run at
+a small limit; the owner's call.
+
+### J-0472 2026-11-18 M2 prompt composition - deviation
+Evidence: `guest/lib/system-prompt-base.js`, `guest/session/prompt.js`,
+`test/unit/m2-w26-prompt.test.js` (reads Fae's and Floot's sources at 1315bef86 from git and
+compares), integration: every `context` line carries the composed prompt's digest and bytes.
+Reading: parts 1 (Floot's plain or spoken introduction) and 2 (Fae's guest section) are word for
+word, Fae's em dashes kept as `—` escapes (the guest ASCII rule). The exec paragraph is
+rewritten for the persistent scope (architecture 6, D-11): top-level `const`/`let` per call,
+`globalThis` across calls, turns and restarts, endowments per call. Its sentence "A name you
+never declared does not throw; it reads as undefined" is kept from Fae but not verified in the
+exec vat's Compartment (an SES scope behaviour; owner to confirm in M5). Parts 3-6 are empty in
+M2 (provider environment; tools, widgets and object-kind sections arrive with M5), part 7 is the
+preset's text below a blank line (none in `chat-only`; `PresetSnapshot` has no `instructions`
+field yet). The composed prompt is 2.9 KB (spoken 3.2 KB), always inline. The guest section still
+names a petstore and `E(powers).lookup` that M2's empty `powers` does not offer; the contract
+asked for Fae's text, so it stays until M5. Two wiring notes: `systemPrompt` and `spoken` were
+refused by M1a's `refuse` resolver, so W2.6 removed them from its `NOT_YET` list (an M1a entry of
+the hook table; `m1a-factory.test.js` adapted); and the factory's resolver context carries no
+`admin`, so a given prompt over `inlineBytes` (8 KiB) fails creation with
+`textOf.notBuilt('createSession systemPrompt over inlineBytes')` until W2.7/W2.9 pass it.
+Decision: as built; the two wiring notes for W2.9.
+
+### J-0473 2026-11-18 M2 usage totals - deviation
+Evidence: `guest/lib/journal-usage.js` (`usageOfRecords`, `makeUsageTally`),
+`test/unit/m2-w26-journal-usage.test.js`, the usage tests of both W2.6 test files.
+Reading: `getUsage()`, the settle's `usage` event and `usageOfRecords(all records)` agree in Node
+(OpenRouter, with cached and reasoning counts kept disjoint and the stored window from
+`contextLength`) and in the vat (scripted, 4 turns, 104 rounds). Two differences from Fae's
+`journal-usage.js`, both the harness contract's (m1a-interfaces 6.3): `turns` counts every
+settled turn (Fae counts only completed ones; `incompleteTurns` is the same), and the context
+reading is the latest one reported whole (Fae keeps the latest non-zero used and window values
+independently). R4-83's "skipped if not read in time" does not arise: the totals live in the vat
+and go out in the settle crank's batch. Seam 3 sets the window in the totals even for a turn
+whose usage had no reading; `usageOfRecords` then reports window 0 where `getUsage` reports the
+configured one (only when no round of any turn reported a reading).
+Decision: as built; the `turns` meaning is for the PM (contract vs reference).
+
+### J-0474 2026-11-18 M2 round-limit fallback and cancel events - awkward
+Evidence: `resources/agent-host/impl/projection.js` (W2.8), `guest/session/turn.js` settle,
+Fae `session-factory.js` 1147-1166 at 1315bef86.
+Reading: (1) Fae records the round-limit fallback text as an assistant message in the transcript
+"so the turn ends on a well-formed assistant message instead of an empty reply sitting atop a
+dangling tool_result"; the harness keeps it only as `TurnSettled.final`, which the projection does
+not read, so later turns' context ends that turn with tool results and no assistant text. The fix
+belongs to the projection (or a record the vat appends at the limit), neither W2.6's file.
+(2) Acceptance 6 says a cancel emits `abort`; contract 6.3 emits `end` with status `cancelled`
+(abort only for `failed`, R4-79). W2.6's tests follow the contract.
+Decision: both for the PM / W2.9.
+
+### J-0475 2026-11-18 M2 turn deadline - awkward
+Evidence: `test/adapter/m2-w26-turns.test.js` two `test.failing` tests;
+`resources/agent-host/impl/endpoint.js` `armDeadline`; `guest/session/turn.js` seam 4 (W2.5).
+Reading: with `turnDeadlineMs` set, seam 4 sends `armDeadline` in the crank that sends
+`holdTurn` (answered, `M.callWhen`, its body runs a few microtasks after delivery) and
+`startRound`. The Endpoint arms only for a turn whose lease state exists and whose first round
+has set `state.sink`; at that moment neither holds, so the arm is dropped silently and the turn
+runs past its deadline (the Node test waited 5 s on a 300 ms deadline). Exec's deadline is not
+affected (armed later, while a round's sink is known). The default (0, off) is unaffected. Fix,
+in `AH/endpoint.js` (W2.1b's in group B, else W2.9): keep an arm that arrives before the lease
+with the parked round (as `startRound` is parked) and take the sink from the round request. The
+two tests flip to red when it lands; then make them plain tests. No vat test of the deadline was
+added for that reason.
+Decision: defect reported; not fixed (not W2.6's file).
