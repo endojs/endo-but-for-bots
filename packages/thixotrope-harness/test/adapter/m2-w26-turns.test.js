@@ -88,12 +88,17 @@ let dirSerial = 0;
  */
 const setup = async (t, { maxToolRounds, config: extra = {} } = {}) => {
   const server = await startFakeProviderServer();
-  t.teardown(server.close);
   dirSerial += 1;
   const dir = join(harnessTmp, `w26-${process.pid}-${dirSerial}`);
   mkdirSync(dir, { recursive: true });
   const blobs = makeTestBlobs({ dir });
-  t.teardown(blobs.cleanup);
+  // Last (teardowns run in reverse): after the server closed and a round
+  // still running had its moment to stage, so nothing recreates the dir.
+  t.teardown(async () => {
+    await timers.delay(100);
+    blobs.cleanup();
+  });
+  t.teardown(server.close);
   /** @type {any[]} */
   const log = [];
   const record = (/** @type {string} */ kind, fields = {}) =>
