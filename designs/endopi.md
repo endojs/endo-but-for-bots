@@ -214,7 +214,7 @@ Codex — is the on-disk side. See gap [endopi-skills-markdown-format](endopi-sk
 
 | Pi Feature                                  | Endo Equivalent                                | Status                                                 |
 |---------------------------------------------|------------------------------------------------|--------------------------------------------------------|
-| Markdown templates with `{{var}}` interpolation| —                                           | Gap                                                    |
+| Markdown templates with `$1` / `$@` arguments | —                                            | Gap                                                    |
 | `/templatename` expansion in editor         | —                                              | Gap                                                    |
 | Global + project + package locations        | —                                              | Gap                                                    |
 
