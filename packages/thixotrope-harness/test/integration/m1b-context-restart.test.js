@@ -9,7 +9,8 @@
  * daemon is restarted cleanly and one turn is compared ("after a daemon
  * restart, the next turn ... rebuilds the context cache"), then the
  * supervisor is SIGKILLed while the session is idle (CONTEXT_RESTARTS,
- * default `clean,kill`): its next claim goes to dead ports and its round 0 is sent
+ * default `clean,kill`; each kill after CONTEXT_KILL_DELAYS_MS of idle time,
+ * taken in turn, default 0): its next claim goes to dead ports and its round 0 is sent
  * again to fresh ones (contract 7.1 case 3), whose empty cache rebuilds
  * from the session's ContextSource and the manager's `resolveBlobs`.
  *
@@ -28,6 +29,7 @@
 import '../unit/_m1a-prelude.js';
 
 import { performance } from 'node:perf_hooks';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import test from 'ava';
 
@@ -62,6 +64,15 @@ const TURNS = Number(process.env.CONTEXT_TURNS ?? 200);
 const RESTARTS = /** @type {Array<'clean' | 'kill'>} */ (
   (process.env.CONTEXT_RESTARTS ?? 'clean,kill').split(',')
 );
+
+/**
+ * Idle time before each `kill`, in ms, used in turn (CONTEXT_KILL_DELAYS_MS,
+ * default 0): above the 2,000 ms idle sleep the session vat has slept and
+ * checkpointed before the kill.
+ */
+const KILL_DELAYS = (process.env.CONTEXT_KILL_DELAYS_MS ?? '0')
+  .split(',')
+  .map(s => Number(s.trim()));
 
 const usage = {
   inputTokens: 10,
@@ -175,10 +186,17 @@ run(
       .slice(-10)
       .map((/** @type {any} */ l) => l.ms);
 
+    let kills = 0;
     for (const mode of RESTARTS) {
       await live.stop();
-      if (mode === 'kill') await state.kill();
-      else await state.stop();
+      /** @type {number | undefined} */
+      let killDelayMs;
+      if (mode === 'kill') {
+        killDelayMs = KILL_DELAYS[kills % KILL_DELAYS.length];
+        kills += 1;
+        await delay(killDelayMs);
+        await state.kill();
+      } else await state.stop();
       const { servedMs } = await state.restart();
       await slice.refresh();
       // Presences die with the control client: find the session again.
@@ -219,6 +237,7 @@ run(
         unit: 'ms',
         value: rebuilt.ms,
         restart: mode,
+        ...(killDelayMs === undefined ? {} : { killDelayMs }),
         timing: rebuilt.timing,
         // Engine counters over the whole turn after the restart (reopen,
         // page cranks, resolves, the turn itself).

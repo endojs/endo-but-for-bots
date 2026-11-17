@@ -32,7 +32,10 @@ export const execCode = Object.freeze({
   'exec set': 'globalThis.x = 5; return x;',
   'exec get': "return typeof x === 'undefined' ? -1 : x;",
   'exec trivial': 'return 1;',
-  'exec sleep30': 'globalThis.x = 5; await sleep(30000); return 30;',
+  // `sleeps` counts evaluations, so a test sees an exec run twice.
+  'exec sleep30':
+    'globalThis.x = 5; globalThis.sleeps = (globalThis.sleeps ?? 0) + 1; await sleep(30000); return 30;',
+  'exec sleeps': "return typeof sleeps === 'undefined' ? 0 : sleeps;",
   'exec sleep4': 'await sleep(4000); return 4;',
   // M1b QC (J-0391): a loop of sleeps; once abandoned it stops at its next
   // sleep.

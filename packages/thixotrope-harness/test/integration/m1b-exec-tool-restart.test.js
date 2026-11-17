@@ -12,7 +12,10 @@
  *   sleeps stops at its next sleep.
  * - 10: SIGKILL during a 30 s exec sleep, restart: the turn is
  *   outcome-unknown as soon as the daemon serves (recovery did not wait for
- *   the exec call); the next exec works and sees `x` from before.
+ *   the exec call); the next exec works and sees `x` from before. The
+ *   provider got the killed turn once and the exec ran at most once (its
+ *   `sleeps` counter); EXEC_KILL_DELAY_MS (default 2,000) sets the kill
+ *   point after the call is sent.
  *
  *   THIX_HARNESS_INTEGRATION=1 node scripts/run-lock.mjs --label m1b-exec -- \
  *     corepack yarn test test/integration/m1b-exec-tool-restart.test.js
@@ -46,6 +49,9 @@ import { execScript, execTemplate, execTurn, resultsOf } from './_m1b-exec.js';
 takeIntegrationLock(test, 'm1b exec tool restart test');
 
 const run = integrationEnabled ? test.serial : test.skip;
+
+/** How long after the exec call is sent the supervisor is killed (acceptance 10). */
+const KILL_DELAY_MS = Number(process.env.EXEC_KILL_DELAY_MS ?? 2000);
 
 run('exec across cancel, a clean restart and a SIGKILL', async t => {
   t.timeout(5 * 60_000);
@@ -144,11 +150,15 @@ run('exec across cancel, a clean restart and a SIGKILL', async t => {
 
   // ---- 10: SIGKILL during a 30 s sleep
   t.is((await execTurn(slice, session, live, 'exec set')).result, '5');
+  const sleepsBefore = Number(
+    (await execTurn(slice, session, live, 'exec sleeps')).result,
+  );
   const killed = await execTurn(slice, session, live, 'exec sleep30', {
     wait: 'call',
   });
-  // Let the run reach the exec vat and its sleep before the kill.
-  await delay(2000);
+  // Let the run reach the exec vat and its sleep before the kill
+  // (EXEC_KILL_DELAY_MS, default 2,000; a shorter one may kill before it).
+  await delay(KILL_DELAY_MS);
   const atKill = Date.now();
   await state.kill();
   await killStrays(state.root);
@@ -174,9 +184,31 @@ run('exec across cancel, a clean restart and a SIGKILL', async t => {
     nextCallMs: next.callMs,
     ...identity,
   });
+  const sleepsAfter = Number(
+    (await execTurn(slice, session, live, 'exec sleeps')).result,
+  );
+  const killedRequests = made
+    .log()
+    .filter(
+      (/** @type {any} */ l) =>
+        l.kind === 'request' && l.turnId === killed.turnId,
+    ).length;
+  emit({
+    metric: 'exec.restart.sigkill.once',
+    killDelayMs: KILL_DELAY_MS,
+    sleepsBefore,
+    sleepsAfter,
+    killedRequests,
+    ...identity,
+  });
   t.true(readSinceCallMs < 30_000, 'recovery did not wait for the sleep');
   t.is(next.result, '5', 'the exec vat survived and keeps x');
   t.is(next.endStatus, 'completed');
+  t.true(
+    sleepsAfter - sleepsBefore <= 1,
+    `the killed exec was evaluated at most once (${sleepsBefore} -> ${sleepsAfter})`,
+  );
+  t.is(killedRequests, 1, 'the provider got the killed turn once');
 
   await live.stop();
   emit({
