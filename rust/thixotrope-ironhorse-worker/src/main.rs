@@ -330,12 +330,19 @@ enum GcPolicy {
     EveryCrank,
     /// Collect after a crank that grew the live slots by `slots`, or the
     /// chunk footprint by `chunk_bytes`, since the last collection (or since
-    /// the image); and at close when any crank ran since the last
-    /// collection, so no image carries the garbage of its cranks. A crank
-    /// therefore starts with less than the allowance of uncollected growth:
-    /// it fits under a ceiling wherever it would fit under every-crank
-    /// collection with the allowance to spare.
-    Allocation { slots: u32, chunk_bytes: u64 },
+    /// the image), or that is the `cranks`th crank since then; and at close
+    /// when any crank ran since the last collection, so no image carries the
+    /// garbage of its cranks. A crank therefore starts with less than the
+    /// allowance of uncollected growth: it fits under a ceiling wherever it
+    /// would fit under every-crank collection with the allowance to spare.
+    /// The crank interval bounds how long a dead import's finalizer (and so
+    /// its `gc-exports` frame, and the hub rows that frame releases) waits
+    /// in a vat whose cranks allocate little.
+    Allocation {
+        slots: u32,
+        chunk_bytes: u64,
+        cranks: u32,
+    },
 }
 
 impl GcPolicy {
@@ -375,8 +382,13 @@ impl GcSchedule {
     fn due(&self, m: &Interp) -> bool {
         match self.policy {
             GcPolicy::EveryCrank => true,
-            GcPolicy::Allocation { slots, chunk_bytes } => {
-                m.slots().live_count().saturating_sub(self.live_slots) >= slots
+            GcPolicy::Allocation {
+                slots,
+                chunk_bytes,
+                cranks,
+            } => {
+                self.cranks_since >= cranks
+                    || m.slots().live_count().saturating_sub(self.live_slots) >= slots
                     || chunk_footprint(m).saturating_sub(self.chunk_bytes) >= chunk_bytes
             }
         }
@@ -623,8 +635,9 @@ impl WorkerLimits {
 
 /// The collection policy a host names in the worker limits. A host that
 /// names none (one older than the policy) gets every-crank, as before. Under
-/// "allocation", an allowance not named is [`DEFAULT_GC_SLOT_ALLOWANCE`] or
-/// [`DEFAULT_GC_CHUNK_ALLOWANCE`], never derived from a ceiling (a ceiling
+/// "allocation", a setting not named is [`DEFAULT_GC_SLOT_ALLOWANCE`],
+/// [`DEFAULT_GC_CHUNK_ALLOWANCE`] or [`DEFAULT_GC_CRANK_INTERVAL`], never
+/// derived from a ceiling (a ceiling
 /// may be raised across a restart, and the schedule must not move with it);
 /// one above half its ceiling is refused.
 fn parse_gc_policy(
@@ -659,6 +672,15 @@ fn parse_gc_policy(
                     DEFAULT_GC_CHUNK_ALLOWANCE,
                     u64::from(chunk_ceiling),
                 )?,
+                cranks: if value["gcCrankInterval"].is_null() {
+                    DEFAULT_GC_CRANK_INTERVAL
+                } else {
+                    u32::try_from(positive_integer(
+                        &value["gcCrankInterval"],
+                        "gcCrankInterval",
+                    )?)
+                    .map_err(|_| "gcCrankInterval exceeds u32")?
+                },
             })
         }
         _ => Err("gcPolicy must be \"every-crank\" or \"allocation\"".into()),
@@ -672,6 +694,9 @@ fn parse_gc_policy(
 const DEFAULT_GC_SLOT_ALLOWANCE: u32 = 1 << 17;
 /// Chunk-footprint growth between collections, likewise.
 const DEFAULT_GC_CHUNK_ALLOWANCE: u64 = 1 << 24;
+/// Cranks between collections at most, likewise: a dead import's
+/// finalizer waits at most this many of its vat's cranks.
+const DEFAULT_GC_CRANK_INTERVAL: u32 = 32;
 
 /// Open the worker's heap. A new heap starts a session on a fresh machine;
 /// an existing one is first upgraded in place to the current store schema,
@@ -1426,6 +1451,7 @@ mod tests {
         GcPolicy::Allocation {
             slots: 20_000,
             chunk_bytes: 1 << 20,
+            cranks: 1_000,
         }
     }
 
@@ -1627,6 +1653,7 @@ mod tests {
             GcPolicy::Allocation {
                 slots: allowance,
                 chunk_bytes: 1 << 24,
+                cranks: 1_000,
             },
         ] {
             let image = session
@@ -1728,6 +1755,7 @@ mod tests {
             GcPolicy::Allocation {
                 slots: 1 << 20,
                 chunk_bytes: allowance,
+                cranks: 1_000,
             },
         );
         vat.machine_mut().set_chunk_ceiling(ceiling).unwrap();
@@ -1749,6 +1777,45 @@ mod tests {
         assert!(collections > 5 && collections < 100 / 2, "{collections}");
     }
 
+    /// A vat whose cranks allocate little still collects every `cranks`
+    /// cranks, so a dead import's finalizer waits at most that many.
+    #[test]
+    fn the_crank_interval_bounds_how_long_a_finalizer_waits() {
+        let image = gc_image();
+        let policy = GcPolicy::Allocation {
+            slots: 1 << 20,
+            chunk_bytes: 1 << 30,
+            cranks: 8,
+        };
+        let (mut vat, mut schedule) = gc_incarnation(&image, policy);
+        // dispatch(1500 * k) allocates no garbage: (n * 7919) % 1500 == 0.
+        let budget = test_limits().crank_budget;
+        let mut collected_at = Vec::new();
+        let mut outbound = Vec::new();
+        for crank in 1..=24u32 {
+            let mut stats = CrankStats::default();
+            outbound.push(
+                crank_deliver(
+                    &mut vat,
+                    &mut schedule,
+                    &format!("dispatch({})", 1500 * (crank + 10)),
+                    budget,
+                    budget,
+                    &mut stats,
+                )
+                .unwrap(),
+            );
+            if stats.collections > 0 {
+                collected_at.push(crank);
+            }
+        }
+        assert_eq!(collected_at, [8, 16, 24]);
+        // Imports that died in cranks 1..8 are finalized in crank 8.
+        let frames = gc_frames(&outbound);
+        assert!(!frames.is_empty());
+        assert!(frames.iter().all(|(index, _)| [7, 15, 23].contains(index)));
+    }
+
     #[test]
     fn the_gc_policy_is_parsed_and_bounded() {
         let parse = |extra: &str| {
@@ -1768,17 +1835,20 @@ mod tests {
                 .gc,
             GcPolicy::Allocation {
                 slots: 131_072,
-                chunk_bytes: 16_777_216
+                chunk_bytes: 16_777_216,
+                cranks: 32
             }
         );
         assert_eq!(
-            parse(r#","gcPolicy":"allocation","gcSlotAllowance":"5","gcChunkAllowance":7"#)
+            parse(r#","gcPolicy":"allocation","gcSlotAllowance":"5","gcChunkAllowance":7,"gcCrankInterval":9"#)
                 .unwrap(),
             GcPolicy::Allocation {
                 slots: 5,
-                chunk_bytes: 7
+                chunk_bytes: 7,
+                cranks: 9
             }
         );
+        assert!(parse(r#","gcPolicy":"allocation","gcCrankInterval":0"#).is_err());
         assert!(
             parse(r#","gcPolicy":"allocation","gcSlotAllowance":800001"#)
                 .unwrap_err()
