@@ -5882,3 +5882,212 @@ integration files were not run against the new schedule in this unit (the lane a
 any harness test that expects a gc frame in the crank that freed its import will now see it later;
 (4) `m0-results.md` page 6 still lists C-7 as open.
 Decision: for the harness owner.
+
+### J-9330 2026-11-17 C-2 whole-file hub.json, before - perf
+Evidence: `a71e5272b5` (the hub counts what each persist writes, CC-024), `d0d364409d`
+(`perf/hub.perf.mjs` gains `hub.persist` per window and `hub.size` every 100 growth turns). One run
+under the run lock, `concurrency.perf.mjs`, `hub.perf.mjs`, `turn.perf.mjs`, `gc.perf.mjs` in turn,
+release worker `367e78ad...`, crank budget 50 M, slot ceiling 4,000,000, fresh state, load 1.1-4.4
+(`turn` and `gc` rows say `d0d364409d-dirty`: this unit's new test files were in the tree, no source).
+{"metric":"hub.persist","value":15.108,"at":"fresh","sessions":1,"perDelivery":{"deliveries":484,"persists":1.254,"persistChars":151545.928,"persistMs":12.396,"sendMs":2.201},"msPerPersist":9.829,"charsPerPersist":120946.841,"diskBytes":154713,"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[3.19,3.56,4.14]}
+{"metric":"hub.persist","value":16.043,"at":"after 1000 turns","sessions":1,"perDelivery":{"deliveries":481,"persists":1.249,"persistChars":279362.372,"persistMs":13.237,"sendMs":2.296},"msPerPersist":10.59,"charsPerPersist":223546.488,"diskBytes":274801,"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[2.2,3.06,3.6]}
+{"metric":"hub.persist","value":16.536,"at":"at 10 sessions","sessions":10,"perDelivery":{"deliveries":531,"persists":1.262,"persistChars":361526.42,"persistMs":13.306,"sendMs":2.36},"msPerPersist":10.439,"charsPerPersist":274402.511,"diskBytes":112596,"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[1.51,2.63,3.39]}
+{"metric":"hub.persist","value":18.977,"at":"at 50 sessions","sessions":50,"perDelivery":{"deliveries":549,"persists":1.266,"persistChars":431914.383,"persistMs":13.717,"sendMs":2.589},"msPerPersist":10.729,"charsPerPersist":336553.021,"diskBytes":590114,"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[1.78,2.23,3]}
+{"metric":"hub.growth","value":590114,"msPerDeliveryVsFresh":[1,1.062,1.095,1.256],"persistsPerTurn":[21.6,20.3,25.7,28],"budget":{"bytes":2000000,"msPerDeliveryVsFresh":1.25},"pass":false,"exceeded":["msPerDelivery: 1.256 x fresh > 1.25"],"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[1.78,2.23,3]}
+{"metric":"hub.size","unit":"bytes","every":100,"turns":1000,"bytes":[125913,122006,267539,310777,288494,233250,204517,152750,154892,206368],"value":310777,"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[2.68,3.2,3.66]}
+{"metric":"hub.gcBurst","value":2.213,"gc":{"frames":624,"deliveries":45,"msPerPersist":9.398,"persistCharsPerFrame":25694},"other":{"frames":3928,"deliveries":2415,"msPerFrame":9.223,"persistMsPerFrame":7.586,"msPerPersist":9.825,"persistCharsPerFrame":132879},"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[3.82,3.71,4.22]}
+{"metric":"hub.gcBurst.turnStart","n":150,"median":143,"p95":325,"p99":442,"max":580,"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[3.82,3.71,4.22]}
+{"metric":"concurrency.single.turnStart","n":15,"median":158,"p95":183,"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[3.56,3.78,4.38]}
+{"metric":"concurrency.10.turnStart","n":80,"median":964,"p95":1144,"p99":1289,"ratioMedian":6.1,"budget":{"median":316},"pass":false,"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[3.44,3.74,4.34]}
+{"metric":"concurrency.10.turn","n":80,"median":4457,"p95":4776,"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[3.44,3.74,4.34]}
+{"metric":"concurrency.10.crank","median":200,"p95":500,"p99":750,"budget":{"p95":200},"pass":false,"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[3.44,3.74,4.34]}
+{"metric":"concurrency.10.rowPush","n":80,"median":247,"p95":490,"pass":true,"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[3.44,3.74,4.34]}
+{"metric":"concurrency.10.gc.hub","other":{"deliveries":1433,"persists":2248,"persistMs":32859.9,"persistChars":809850559,"ms":37980.8},"gcOnly":{"deliveries":3,"persists":13,"persistMs":273.2},"store":{"kind":"file","writes":2261,"chars":812672658},"commit":"d0d364409d","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[3.44,3.74,4.34]}
+{"metric":"turn.start","n":200,"median":152,"p95":302,"p99":333,"max":333,"commit":"d0d364409d-dirty","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[1.96,1.94,2.7]}
+{"metric":"turn.delta.client","n":250,"median":17,"p95":36,"p99":244,"commit":"d0d364409d-dirty","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[2.06,1.95,2.67]}
+{"metric":"gc.burst.turnStart","n":150,"median":151,"p95":298,"p99":419,"max":477,"commit":"d0d364409d-dirty","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[1.08,1.65,2.42]}
+{"metric":"gc.restart","gate":true,"runs":5,"gateWokenSessions":0,"commit":"d0d364409d-dirty"}
+(Rows abridged to the fields read here; the full lines are in the run's PERF_OUT, kept outside the
+repository.) Reading: a persist costs 9.8-10.7 ms whatever it writes (121 KB fresh, 337 KB at 50
+sessions: two F_FULLFSYNCs and a rename, J-9210), 1.25 persists per inbound delivery and 20-28 per
+turn: 12.4-13.7 ms of every 15-19 ms of hub time per delivery is persistence. With 10 sessions
+streaming, 2,261 persists took 33.1 s of the supervisor thread and wrote 813 MB. `hub.json` stayed
+110-590 KB (at rest after 1,000 turns 206 KB). `hub.growth` 1.256 x fresh at 50 sessions: still a
+miss, smaller than J-9214's 1.32 because C-7 (CC-022) made the rest of the delivery cheaper.
+Decision: the per-commit cost, not the number of commits, is this unit's target (J-9331).
+
+### J-9331 2026-11-17 C-2 the design: a write-ahead log of deltas - good fit
+Evidence: `pkg/src/net/hub.js` (`persist`, `flushOutbox`, `dispatchBytes`, `withGcBatch`),
+`pkg/designs/mail-observer-outbox.md` (the 19 October backends), `pkg/scripts/mail-hub-log.mjs`.
+The invariant the hub relies on (J-9211 states it; `flushOutbox` and `withGcBatch` enforce it):
+an outbound frame is not handed to a transport before the hub state that lets a restart re-send or
+deduplicate it is durable: the sender's inbound watermark, the rows and routes the frame mentions,
+the queued frame and its delivery sequence. `persist()` is synchronous and every send follows a
+returned `persist()`; the store's whole contract is "`setState` is durable when it returns".
+The earlier work kept full snapshots in an append log (`mail-hub-log.mjs`, benchmark only: each append
+is the whole state) and SQLite with one row; both left `hub.json` stale and were never allowed on a
+user's directory. Neither is a delta store.
+Design (`pkg/src/store/hub-log-store.js`, behind the same `getHubState`/`setHubState`): the store
+remembers the JSON text of every entry of every top-level table (`refs`, `sessions`, `publications`,
+`gifts`, `giftWaiters`) as last committed; a commit appends one line with the entries that changed,
+the keys that went, and a whole table only when its entry order changed (a row removed and added
+again moves to the end of the hub's Map, which a put cannot say), then fsyncs. Recovery: image plus
+the records numbered after its `through`, contiguous. Torn-tail rule: a record is committed exactly
+when its line, newline included, is in the file; a crash inside `appendTextDurable` before it
+returned leaves at most a partial last line, and the hub sent nothing that depended on it (its
+`persist()` had not returned), so dropping it is the state just before that commit; a complete
+record whose fsync had not returned may also survive, which is the state of a commit followed by a
+crash before the send, a state the old store could produce too. Any other unparsable line, a gap,
+or a log without an image refuses the directory. Compaction replaces the append of the commit at hand
+with an image write (temporary file, rename) and then a log reset; records an interrupted compaction
+leaves are numbered at or below the new image and skipped. A failed append makes the next commit a
+compaction, so no record is ever appended after torn bytes. Why it keeps the invariant: `setState`
+returns only after the append (or the image) is durable, and recovery yields exactly the state of
+the last commit that returned, or of the one whose return a crash cut short (same as before). The hub
+code is unchanged; the crash test's journal comparison checks that nothing the hub sends changes.
+Group commit (one fsync for every delivery of one event-loop turn) is not built: it needs the sends
+of all those deliveries held until the shared commit, and today a worker send is itself the worker's
+journal append, the endpoint reads hub tables synchronously after its writes (J-9216 (b)), and a
+worker snapshot must not record an outbound base past frames whose watermark is not yet durable
+(else a crash loses them: the replay starts after the snapshot). Measured potential in J-9334.
+Migration: chosen over refusal because every existing harness template and state directory holds a
+whole-file `hub.json` and the conversion is exact (the file is the image at commit 0); refusing would
+force fresh state for no safety gain. It is one way: the old `hub.json` becomes a marker an older
+build refuses ("Incompatible hub state"), never a stale state it could read.
+Thixotrope fit: good. The seam existed (the store interface), the hub needed no change, and the
+whole-file store stays available (`hubStore: 'file'`, `THIXOTROPE_HUB_STORE=file`).
+Decision: built (CC-025). Thresholds: compact when the log exceeds max(1 MiB, 2 x image).
+
+### J-9332 2026-11-17 C-2 tests - good fit
+Evidence: `72ef46f905`. `pkg/test/hub-log-store.test.js` (8 tests, in-memory file system with
+faults, `pkg/test/_memory-sync-files.js`): order-preserving round trip over 80 commits with
+compaction, unchanged commits and moved rows; recovery from every byte prefix of every log of a
+40-commit run (28,212 prefixes, 27,965 ending in a torn record), each followed by a commit and a
+reopen; a failed replacement or a torn half-append at every one of a run's operations, each with a
+reopen after every commit (the state is the last commit that returned or the failed one) and a
+retry that commits; a compaction killed between image and log reset (stale records skipped, then
+compacted away); migration, and the marker refused by `restoreHubState`; migration interrupted after
+its image (the image wins, the marker is rewritten); refusal of a damaged middle record, a gap, a log
+without image, a marker without image, a foreign header; a 3-row change to a 68,883-character state
+appends 220 characters. `pkg/test/hub-crash-consistency.test.js` now runs both stores: the child
+writes the crafted state with the whole-file store, the log store migrates it at its first open and
+compacts every 4,000 characters, so kills land inside the migration and inside compactions. Several
+vats and an adapter: worker W over the real durable transport and file journal, sequenced session V
+(a second vat's crank batches, re-sent in full after restart), disposable adapter A. With
+HUB_CRASH_ALL=1, every kill point passes in all three ses-ava configurations: log store 44 (burst)
+and 22 (ordinary) durable operations, file store 39 and 18; for every point no frame is journaled
+twice (hub sequences strictly increase), each of the 20 exports is released exactly once, A's
+deliveries arrive in order without a gap, every outbox drains, no reference row remains (the
+uninterrupted run's export counts), the killed journal is a byte prefix of the recovered one, and
+for ordinary traffic the recovered journal equals the uninterrupted run's byte for byte. The log
+store's uninterrupted journal equals the whole-file store's byte for byte in both scenarios.
+The lane's `test/ironhorse/supervisor.js` read `hub.json` directly; it reads through the store now.
+Ironhorse bundles rebuilt into a scratch directory: byte-identical (`boot.js`, `worker-peer.js`).
+Decision: crash consistency shown at every commit point; SIGKILL still cannot model power loss.
+
+### J-9333 2026-11-17 C-2 the log store, after - perf
+Evidence: same four scripts at `50f1d348eb` (CC-025 and CC-024), worker `367e78ad...`, crank budget
+50 M, slot ceiling 4,000,000, fresh state from the same templates (each run migrated its template's
+`hub.json`), load 1.2-4.5.
+{"metric":"hub.persist","value":9.431,"at":"fresh","sessions":1,"perDelivery":{"deliveries":500,"persists":1.244,"persistChars":17034.23,"persistMs":6.894,"sendMs":2.109},"msPerPersist":5.577,"charsPerPersist":13680.428,"diskBytes":218256,"persistRuns":{"bursts":648,"max":54,"persists":895},"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[1.24,1.85,2.16]}
+{"metric":"hub.persist","value":10.655,"at":"after 1000 turns","sessions":1,"perDelivery":{"deliveries":489,"persists":1.26,"persistChars":57936.593,"persistMs":8.045,"sendMs":2.099},"msPerPersist":6.385,"charsPerPersist":45978.206,"diskBytes":680832,"persistRuns":{"bursts":635,"max":54,"persists":824},"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[4.08,2.75,2.37]}
+{"metric":"hub.persist","value":10.393,"at":"at 10 sessions","sessions":10,"perDelivery":{"deliveries":556,"persists":1.268,"persistChars":23696.962,"persistMs":7.128,"sendMs":2.369},"msPerPersist":5.541,"charsPerPersist":17857.136,"diskBytes":458586,"persistRuns":{"bursts":722,"max":70,"persists":1026},"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[3.72,2.89,2.45]}
+{"metric":"hub.persist","value":13.226,"at":"at 50 sessions","sessions":50,"perDelivery":{"deliveries":528,"persists":1.241,"persistChars":50185.038,"persistMs":8.415,"sendMs":2.414},"msPerPersist":6.627,"charsPerPersist":35823.71,"diskBytes":690126,"persistRuns":{"bursts":721,"max":107,"persists":1012},"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[4.53,4.02,3.06]}
+{"metric":"hub.growth","value":690126,"msPerDeliveryVsFresh":[1,1.13,1.102,1.402],"persistsPerTurn":[22.6,20.6,26.633,25.733],"budget":{"bytes":2000000,"msPerDeliveryVsFresh":1.25},"pass":false,"exceeded":["msPerDelivery: 1.402 x fresh > 1.25"],"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[4.53,4.02,3.06]}
+{"metric":"hub.size","unit":"bytes","every":100,"turns":1000,"bytes":[322280,888536,579382,1012077,836901,853895,1135214,949186,1014800,365640],"value":1135214,"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[4.53,2.74,2.36]}
+{"metric":"hub.gcBurst","value":1.797,"gc":{"frames":623,"deliveries":81,"msPerPersist":5.751,"persistCharsPerFrame":3873},"other":{"frames":3937,"deliveries":2456,"msPerFrame":6.135,"persistMsPerFrame":4.519,"msPerPersist":5.784,"persistCharsPerFrame":15763},"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[1.58,1.98,2.22]}
+{"metric":"hub.gcBurst.turnStart","n":150,"median":105,"p95":267,"p99":373,"max":865,"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[1.58,1.98,2.22]}
+{"metric":"concurrency.single.turnStart","n":15,"median":118,"p95":217,"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[2.81,2.25,2.34]}
+{"metric":"concurrency.10.turnStart","n":80,"median":652,"p95":734,"p99":817,"ratioMedian":5.53,"budget":{"median":236},"pass":false,"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[2.81,2.25,2.34]}
+{"metric":"concurrency.10.turn","n":80,"median":3649,"p95":3857,"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[2.81,2.25,2.34]}
+{"metric":"concurrency.10.crank","median":150,"p95":300,"p99":500,"budget":{"p95":200},"pass":false,"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[2.81,2.25,2.34]}
+{"metric":"concurrency.10.rowPush","n":80,"median":214,"p95":329,"pass":true,"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[2.81,2.25,2.34]}
+{"metric":"concurrency.10.gc.hub","other":{"deliveries":1929,"persists":2697,"persistMs":23985.8,"persistChars":132055180,"ms":28994.4},"gcOnly":{"deliveries":7,"persists":59,"persistMs":514.9},"persistRuns":{"bursts":1936,"persists":2756},"store":{"kind":"log","appends":2665,"appendChars":94574259,"compactions":91,"compactionChars":38611954},"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[2.81,2.25,2.34]}
+{"metric":"turn.start","n":200,"median":102,"p95":277,"p99":684,"max":728,"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000,"loadAvg":[3.54,3.76,3.13]}
+{"metric":"turn.delta.client","n":250,"median":13,"p95":55,"p99":100,"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000}
+{"metric":"gc.burst.turnStart","n":150,"median":103,"p95":278,"p99":304,"max":399,"commit":"50f1d348eb","crankBudget":"50000000","slotCeiling":4000000}
+{"metric":"gc.restart","gate":true,"runs":5,"gateWokenSessions":0,"commit":"50f1d348eb"}
+Direct store bench (scratch script, 300 commits of a watermark, a queued frame and two rows, same
+machine, under the run lock, load 2.1-2.6): whole-file median 10.60 / 10.40 ms per commit (17 KB /
+223 KB state), log 4.73 / 5.43 ms (674 / 1,859 characters per commit).
+Reading: per persist 9.8-10.7 -> 5.5-6.6 ms and 121-337 KB -> 14-46 KB; persist time per inbound
+delivery 12.4-13.7 -> 6.9-8.4 ms; hub time per delivery 15.1-19.0 -> 9.4-13.2 ms (1.6 x at 1 session,
+1.4 x at 50). With 10 sessions streaming: hub persist time 33.1 -> 24.5 s although the window held
+more persists (2,261 -> 2,756; more deliveries were counted, 1,436 -> 1,936 [inferred: the faster
+hub let more cranks land inside the measured rounds]); per persist 14.6 -> 8.9 ms; written 813 ->
+133 MB. `concurrency.10.turnStart` median 964 -> 652 ms (still 5.5 x single, budget 2 x: miss),
+`concurrency.10.crank` p95 500 -> 300 ms (budget 200: miss), turn 4,457 -> 3,649 ms. `turn.start`
+median 152 -> 102 ms, `gc.burst.turnStart` 151 -> 103 ms, `hub.gcBurst.turnStart` 143 -> 105 ms;
+`turn.start` p99 333 -> 684 ms in a run at load 3.5-3.8 (before: 2.0-2.7) [inferred: load, not
+the store; the max of 728 ms is one turn]. `gc.restart` gate 5/5 with the log store, after a
+migration. Not better: `hub.growth` 1.256 -> 1.402 x fresh (a miss either way: the fresh point fell
+further than the 50-session point, 15.1 -> 9.4 against 19.0 -> 13.2 ms), and the size on disk is
+larger (`hub.size` max 311 KB -> 1.14 MB; image plus log up to 1 MiB of uncompacted log). The
+remaining per-persist time is one F_FULLFSYNC (about 4.5 ms, the bench) plus finding the changes
+(every row is stringified at each commit, growing with the state) plus the delta's bytes, which are
+large because a session row is rewritten whole (J-9335).
+Decision: kept as the default. The growth miss and the concurrency misses are recorded, no budget
+changed.
+
+### J-9334 2026-11-17 C-2 group commit, measured not built - perf
+Evidence: `87e13507b5` (`status().hub.persistRuns`: runs of persists with no microtask checkpoint
+between them), the rows of J-9333.
+Reading: one commit per run would have saved `persists - bursts`: 247 of 895 (28%) fresh, 189 of 824
+(23%) after 1,000 turns, 304 of 1,026 (30%) at 10 sessions, 291 of 1,012 (29%) at 50 sessions, and
+820 of 2,756 (30%) with 10 sessions streaming; the longest run was 54-107 persists (a delivery batch
+whose flushes each commit). At about 5.5 ms per commit that is 4.5 s of the 24.5 s in the
+concurrency window [inferred: the fsync share only]. Building it means holding every send of the run
+until the shared commit: worker sends are journal appends (each its own fsync, J-9211), the endpoint
+reads hub tables synchronously after its writes (J-9216 (b)), a worker snapshot must first flush the
+group (else its outbound base can pass frames whose watermark is not durable), and the hub's
+synchronous `persist()`-then-send would become a deferred publication queue for every session kind,
+not only disposable observers (J-9211's `coalesceInbound`).
+Decision: proposal, not built (J-9335 (c)).
+
+### J-9335 2026-11-17 C-2 what is left - awkward
+Evidence: J-9333, J-9334; `hub-log-store.js` diffs whole entries of top-level tables.
+Decision: proposals in order of expected gain, none built here:
+(a) Finer deltas for session rows: a session entry carries `queue` (hex frames), `queueSequences`,
+`ourExports` and `answersOwed`; today any change rewrites the whole row, so an append under load
+is 14-46 KB (95 MB of appends and 39 MB of compaction in the concurrency window). Diff one level
+deeper for `sessions` (per field, and the queue as appended or removed from its head). Expected:
+appends of a few hundred bytes to a few KB, compaction 10 x rarer, persist about 5 ms flat in state
+size; with (b), `hub.growth` back under 1.25 x [inferred].
+(b) Dirty tracking in the hub: the store stringifies every row of the state at every commit to find
+what changed (`serializeHubState` builds the whole record first), so the CPU part grows with the
+state (serialization 0.16 -> 0.58 ms per persist from fresh to 50 sessions, plus the store's own
+stringify, not separately timed). Have the hub mark the rows and sessions it mutates and hand the
+store only those (a `setDelta` beside `setState`). Expected: the 1 -> 50 session growth of
+per-persist time (5.6 -> 6.6 ms) mostly gone. Cost: every mutation site in `hub.js` (about 40
+`dirty = true`) must name what it touched, so a missed site is a lost update: needs the crash and
+order tests of J-9332 plus a check that the delta equals a full diff in tests.
+(c) Group commit (J-9334): about 30% of commits, up to 4.5 s of 24.5 s in the concurrency window.
+(d) Fewer commits per delivery: still 1.24-1.27 persists per inbound delivery and 21-27 per turn
+(J-9216 (d)).
+(e) Compaction policy: max(1 MiB, 2 x image) lets image plus log reach 1.1 MB at rest; a smaller
+floor trades disk for more 2-sync compactions. Not tuned.
+
+### J-9337 2026-11-17 C-2 follow-ups outside this unit's files - awkward
+Evidence: CC-025's layout change.
+Reading: (1) `H/perf/_harness.mjs` `hubJsonBytes` now reads the 144-byte marker for a log store
+directory (`hub.perf.mjs` uses its own `hubDiskBytes`; `stats()`'s `hubJsonBytes` in other perf rows
+is wrong from `72ef46f905` on); (2) spike S4 (`H/test/spikes/s4.test.js`, `_crash.js` `hubJsonPath`)
+watches `hub.json` for payload markers and rewrites: it must watch `hub-image.json` and
+`hub-log.jsonl` (C-1's clear-text frames are in the log now, for up to one compaction longer);
+(3) `H/scripts/serve.mjs` does not pass `THIXOTROPE_HUB_STORE` through, so the harness always serves
+the log store; (4) cached templates hold a whole-file `hub.json` and are migrated at each use (a few
+ms); a template rebuilt after this commit starts as a log; (5) `pkg/scripts/measure-mail.mjs` with
+`THIX_MAIL_HUB=log|sqlite` wraps `hub.json` writes and needs `THIXOTROPE_HUB_STORE=file` to measure what
+it measured; (6) `m0-results.md` page 6 should say C-2 is partly addressed (CC-025).
+Decision: for the harness owner and the PM.
+
+### J-9336 2026-11-17 C-2 suites - good fit
+Evidence: tree `50f1d348eb`, worker `367e78ad...`, under the run lock, one after another.
+{"metric":"lane.ironhorse","passed":69,"failed":0,"wallMinutes":12.2,"workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","loadAvg":[3.31,3.28,3.33],"commit":"50f1d348eb"}
+Thixotrope Node suite (`corepack yarn test` in `pkg/`): 430 passed, 3 skipped (XS worker not built) in
+each of the three configurations (417 at J-9212; this unit adds 8 store tests and 2 crash-test
+variants per configuration), 9.6 min. Harness unit lane: 465 passed, 41 skipped. `pkg` `lint:types`
+clean; eslint 0 errors on the changed files (warnings as before). No cargo run; `target` not touched.
+Reading: every lane test runs on the log store (the default), including the state directories the
+lane's supervisor test restarts three times, and `gc.restart`'s five restarts (J-9333).
+Decision: none.

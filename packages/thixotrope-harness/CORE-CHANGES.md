@@ -87,6 +87,8 @@ polyfills, Thixotrope core, Thixotrope tests and tooling, other Endo package, up
 | CC-021 | 2026-11-17 | Thixotrope tests | `measured-engine.test.js` passes a frame-shaped value (tsc) | `lint:types` failed on CC-020's test | `d4241fa77a` |
 | CC-022 | 2026-11-17 | Ironhorse worker | collect on an allocation schedule (slot growth, chunk growth, crank interval) and before the image at close, not after every crank; `timing` replies | a trivial delivery cost 17-126 ms of collection, growing with the session (C-7) | `3db48394c9`, `f0ff5e098b` |
 | CC-023 | 2026-11-17 | Thixotrope core | `gcPolicy`, `gcSlotAllowance`, `gcChunkAllowance`, `gcCrankInterval` limits, fixed per state directory; lane tests per schedule | choose CC-022's schedule; a replay must collect after the same cranks | `4d6a84e86f`, `2657c03f53`, `4a42dc711c` |
+| CC-024 | 2026-11-17 | Thixotrope core | hub cost counters say what each persist wrote (`persistChars`, `stats().store`) and how persists cluster (`persistRuns`) | size C-2's per-commit cost; estimate group commit | `a71e5272b5`, `87e13507b5` |
+| CC-025 | 2026-11-17 | Thixotrope core | the hub's state is a write-ahead log of deltas over an image (`hub-log-store.js`, default); `hubStore: 'file'` / `THIXOTROPE_HUB_STORE=file` keeps `hub.json`; migration one way | a commit rewrote and twice fsynced the whole `hub.json` (10-15 ms, C-2) | `72ef46f905` |
 
 ---
 
@@ -700,6 +702,69 @@ Upstream notes: the harness's `scripts/serve.mjs` does not pass `THIXOTROPE_GC_*
 templates do not key on them (J-9307). The refusal is strict: a schedule change needs a fresh state
 directory even after a clean shutdown, when no journal suffix would be replayed.
 
+### CC-024 2026-11-17 Thixotrope core - hub persist sizes and clustering in status().hub
+Commits: `a71e5272b5` perf(thixotrope): count what each hub persist writes
+`87e13507b5` perf(thixotrope): the hub counts how its persists cluster
+Files: `pkg/src/net/hub.js`, `pkg/src/store/store.js`, `pkg/src/store/store-fs.js`,
+`pkg/src/core/daemon.js`.
+What changed: `HubStore.setState` may return the characters it wrote; the hub adds them up per cost
+bucket as `persistChars`. A store's own counters (`HubStore.stats`, `ThixotropeStore.hubStoreStats`)
+appear as `status().hub.store`. `status().hub.persistRuns` counts runs of persists with no
+microtask checkpoint between them (`bursts`, `persists`, `max`). Process-local, never persisted.
+Motivation: C-2's cost per commit could be timed but not sized (J-9330); `persistRuns` estimates
+what group commit would save (J-9334).
+Visible to other users: new `status().hub` fields. Additive.
+Tests: exercised by `H/perf/hub.perf.mjs` and `concurrency.perf.mjs` (J-9330, J-9333); hub unit
+tests pass unchanged.
+Upstream notes: stands alone. `persistRuns` uses a resolved-promise callback to find the end of a
+run; it schedules nothing else.
+
+### CC-025 2026-11-17 Thixotrope core - the hub's state as a write-ahead log of deltas
+Commits: `72ef46f905` perf(thixotrope): keep the hub's state as a write-ahead log of deltas
+Files: `pkg/src/store/hub-log-store.js` (new), `pkg/src/store/store-fs.js`,
+`pkg/src/control/supervisor.js`, `pkg/src/ironhorse/ironhorse-runtime.js`,
+`pkg/test/hub-log-store.test.js` (new), `pkg/test/_memory-sync-files.js` (new),
+`pkg/test/hub-crash-consistency.test.js`, `pkg/test/_hub-crash-child.mjs`,
+`pkg/test/ironhorse/supervisor.js`.
+What changed: the store commits the hub's state (`setHubState`, durable when it returns, as before)
+by appending one line to `hub-log.jsonl` with the entries of each top-level table that changed since
+the last commit (set, dropped, or the whole table when its entry order changed), instead of replacing
+`hub.json` (scratch file, fsync, rename, directory fsync). Recovery is `hub-image.json` plus the log
+records numbered after it, contiguous; a final line without its newline is a torn append and is
+dropped; any other damage refuses the directory. Compaction (log over max(1 MiB, 2 x image), after
+a failed append, after recovery found a torn tail or stale records, and at the first commit) writes
+the image of the commit at hand, then resets the log, both atomically; a commit that changed nothing
+writes nothing. `getState()` returns the record in the committed top-level, table and entry order.
+`makeFsStore(powers, path, { hubStore: 'log' | 'file', hubLog })`, 'log' by default; the supervisor
+reads `THIXOTROPE_HUB_STORE`. The invariant kept: an outbound frame is not sent before the state that
+lets a restart re-send or deduplicate it is durable (J-9331).
+Motivation: a persist cost 9.8-10.7 ms and wrote 121-337 KB (J-9330); with 10 sessions streaming the
+hub spent 32.9 s and wrote 812 MB in 2,261 persists. After: 5.5-6.6 ms and 14-46 KB per persist;
+concurrency.10 hub persist time 33.1 -> 24.5 s for 2,756 persists, 133 MB (J-9333).
+Visible to other users: the state directory layout changes. A directory with only `hub.json` is
+migrated at its first open (image written, then `hub.json` replaced by a marker
+`{"version":"hub-log",...}`); a build without this store then refuses it ("Incompatible hub state:
+this build requires version 2"), and `hubStore: 'file'` refuses a log directory with a message naming
+the log store. Migration is one way. Tools that read `hub.json` directly must read through
+`makeFsStore(...).getHubState()` (the harness's `perf/_harness.mjs` `hubJsonBytes` and spike S4 do
+not yet: J-9337). The Ironhorse unversioned-state check also looks for `hub-image.json`. Boot bundles
+and worker unchanged (bundles rebuilt into a scratch directory are byte-identical).
+Tests: `hub-log-store.test.js` 8 tests: every byte prefix of every log (28,212, of which 27,965 end in
+a torn record), a failed or torn write at every operation then a retry, interrupted compaction and
+migration, refusals of damage, delta size; `hub-crash-consistency.test.js` runs both stores, the log
+store migrating and compacting inside the run; with HUB_CRASH_ALL=1 every kill point (log: 44 burst,
+22 ordinary) passes in all three ses-ava configurations and its uninterrupted worker journal equals the
+whole-file store's byte for byte. Thixotrope Node suite and Ironhorse lane: J-9336.
+Upstream notes: a delta is per top-level table entry, so a session row (with its queued frames and
+`ourExports`) is rewritten whole when any field of it changes: under load an append is 14-46 KB, not
+the few hundred bytes of a ref row (J-9335 (a)). The store still stringifies every row at every commit
+to find the changes (CPU comparable to the old `JSON.stringify` of the whole state); hub-side dirty
+tracking would remove it (J-9335 (b)). Durability per commit is one `fsync` of the log (F_FULLFSYNC on
+macOS through libuv) instead of two plus a rename; SIGKILL tests do not model power loss (J-0163).
+The mail experiment scripts (`scripts/measure-mail.mjs` with `THIX_MAIL_HUB=log|sqlite`) wrap
+`hub.json` writes and now need `THIXOTROPE_HUB_STORE=file` to measure what they measured. Stands
+alone; CC-024's counters measure it.
+
 ---
 
 ## Open candidates not yet changed
@@ -729,6 +794,8 @@ closed (CC-013, CC-015). C-20 is addressed in part by CC-018 and CC-019; page 6 
 | C-20 (rest) | endpoint commits per frame; per-commit cost is C-2 | some bursts still cost 0.4-0.9 s of hub time (J-9213, J-9216) |
 | C-21 | the slot ceiling bounds live heap plus one crank; no collection inside a crank | the harness serves at 4,000,000 slots (persisted per state); a session's heaviest crank sets how large it may grow (J-0392) |
 
+C-2 is addressed in part by CC-025 (one append instead of a whole-file replacement; per persist
+9.8-10.7 -> 5.5-6.6 ms, J-9333); the row above keeps the cost it had, and the rest is J-9335.
 C-7 is addressed by CC-022 and CC-023 (an allocation schedule; the fixed per-crank cost is gone,
 J-9303); the row above keeps the cost it had. C-21 is not changed: the proposal is J-9305.
 
@@ -814,6 +881,9 @@ commits that arrived through the PR 1667 merge map to CC-010.
 - `2657c03f53` -> CC-023
 - `f0ff5e098b` -> CC-022
 - `4a42dc711c` -> CC-023
+- `a71e5272b5` -> CC-024
+- `72ef46f905` -> CC-025
+- `87e13507b5` -> CC-024
 
 Outside that command's paths but outside `packages/thixotrope-harness` too:
 
