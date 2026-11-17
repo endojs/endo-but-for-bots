@@ -371,6 +371,11 @@ A segment is records [`from`, `to`) of the session's log: the whole records of t
 ordinals `firstTurn` .. `firstTurn + turns - 1` (ordinal = position in start order, from 1), plus
 any `TurnResolved` of an earlier turn that lies inside the range.
 
+**Turn spans** (W2.8, found by its adapter tests): a turn's span runs from its `TurnStarted` to the
+next turn's `TurnStarted`, so a `TurnResolved` appended between two turns belongs to the earlier
+turn's span and every range starts with a `TurnStarted` (the fingerprint check of 4.4 A1 requires
+it). A `TurnResolved` appended while a turn runs lies inside that turn's span.
+
 **Size rule** (the vat applies it; `limits.js`): starting at the oldest kept turn, add whole
 settled turns while the segment stays within `archiveSegmentTurns` (32) turns,
 `archiveSegmentRecords` (4,096) records and `archiveSegmentBytes` (4 MiB) of record bytes
@@ -382,7 +387,10 @@ long-session script: 32 turns, about 290 records, about 100 KB.
 digest>.jsonl`, written as `<name>.part`, fsynced, renamed, directory fsynced. JSON lines:
 
 1. header: `{"format":"thixotrope-harness-segment-1","ordinal":n,"from","to","firstTurn","turns","records","bytes","epoch","previous":"<hex or ''>"}`;
-2. one line per record, in log order, as the vat recorded it, except that every staged field
+2. one line per record in **segment order**: log order, except that the range's tool results are
+   in call order (`inCallOrder` over the range, the order `RoundRequest.append` already carries,
+   W2.8), so a range read from the mirror and one paged from the vat make the same file; as the
+   vat recorded each record, except that every staged field
    (`{ blob, preview, bytes, digest? }`) is written `{"$staged":{"key":"b<n>","preview","bytes","digest"?}}`
    (the adapter's key for the handle; the blob file itself stays in `<state>/agent-host/blobs/`);
 3. trailer: `{"end":true,"digest":"<hex>"}` with digest = SHA-256 over the previous digest
@@ -483,7 +491,7 @@ Mode 0700. Inside:
 | file | content | written | durable? |
 |---|---|---|---|
 | `seg-*.jsonl` | segments (4.2) | A2 | yes (system of record for sealed records) |
-| `manifest.json` | `{ format, segments: [{ ordinal, file, from, to, firstTurn, turns, records, bytes, digest, acknowledged }], epoch, boundary }` | A2, A4 (temp + rename) | cache: rebuilt from the segment files |
+| `manifest.json` | `{ format, segments: [{ ordinal, file, from, to, firstTurn, turns, records, bytes, digest, previous, epoch, acknowledged, turnIds, resolutions, blobBytes }], epoch, boundary }` (W2.8 added `previous`, `epoch`, `turnIds` (the segment's turns in start order: `History` finds a turn without reading segments), `resolutions` (`[turnId, note, at]` of every `TurnResolved` in it) and `blobBytes` (the quota of 4.10 item 4)) | A2, A4 (temp + rename) | cache: rebuilt from the segment files |
 | `context.jsonl` | the persisted projection: the projected transcript records (`projection.js` output) of the sealed turns from the compaction boundary on, staged texts as `{"$key":"b<n>"}`, each segment's lines followed by a marker `{"through":n,"digest":"<chain head>"}`; first line `{ format, epoch, boundary }` | A4 (append) | cache: rebuilt from the segment files |
 | `mirror.jsonl` | the session's kept records as the adapter received them (`RoundRequest.append`, gap pulls), one `{"i":<absolute index>,"r":<record, staged as keys>}` per line | every request (append, no fsync), rewritten from `sealedTo` at A4 | cache: rebuilt from vat pages |
 
@@ -552,10 +560,12 @@ ordinal of the next turn to show). The vat serves ordinals > `sealedTurns`; the 
   in call order, text fields cut to previews as the vat does, every staged field a `SealedField`
   `{ sealed: SealedText, preview, bytes, digest? }`), within `frameBytes`; `next` is
   `h<o - 1>` for the oldest ordinal o shown, while o - 1 >= 1. An archived turn's
-  `resolution` comes from a `TurnResolved` sealed after it (an unresolved one is shown without).
+  `resolution` comes from a `TurnResolved` sealed after it (an unresolved one is shown without);
+  that `TurnResolved` is also among its records, as the vat's `ofTurn` shows it (W2.8).
   Before serving a sealed cursor for a session it has not validated in this incarnation, `History`
   asks the vat for the newest page once (to learn its `ArchiveState`).
-- `History.turnContent(session, turnId, cursor?)`: the turn's records in full, in log order, staged
+- `History.turnContent(session, turnId, cursor?)`: the turn's records in full, in segment order
+  (4.2; its `TurnResolved` last when it was sealed in a later segment), staged
   fields as `SealedField`s, pages of at most `pageRecords` and `contextPageBytes`, cursor `c<n>`;
   a turn the archive does not hold throws `texts.unknownTurn` (the vat's turns are read with
   `Turn.getContent`).
@@ -1038,12 +1048,14 @@ guest rules; "Node" = adapter or tests.
 
 | file | export | signature |
 |---|---|---|
-| `AH/archive/store.js` | `makeArchiveStore({ dir, blobs, sink }) -> { portFor({ session, key }) -> ArchivePort, history() -> History, release(key) -> Promise<void>, prepareSealed(session, key, archiveState) -> Promise<{ transcript, sealedTo }>, record(session, key, request), compacted({ key, epoch, boundary }) }` | 4.4-4.12 |
-| `AH/archive/segment.js` | `writeSegment(dir, header, records, previous) -> Promise<SegmentEntry>`, `readSegment(path) -> Promise<{ header, records, digest }>`, `chainDigest(previous, bytes)` | 4.2 |
+| `AH/archive/store.js` | `makeArchiveStore({ dir, blobs, sink, trace? }) -> { portFor({ session, key? }) -> ArchivePort, history() -> History, release(key) -> Promise<void>, prepareSealed(session, key, archiveState, { after?, context? }?) -> Promise<{ transcript, sealedTo, segments, digest, blobs, units }>, record(session, key, { from, records, replace? }), compacted({ key, epoch, boundary }), keyFor(session), tail(session, key, { from, until }), tokenKey(blob), observe(session, key, state), sweep(), entriesOf(key), stats() }`; `checkFingerprint(keyed, sealRequest)`; `archiveDirFor(blobDir)` | 4.4-4.12. `portFor` without `key`: resolved through `sink.resolveSessions` at the first seal (W2.3's `durable.js` does not pass `archiveKey` to `ops.open`; the context cache resolves it the same way, once per session and incarnation, one manager crank) |
+| `AH/archive/segment.js` | `writeSegment(dir, header, records, previous, { trace? }) -> Promise<SegmentEntry & { file, reused }>`, `readSegment(path, { records? }) -> Promise<{ header, records, digest, size }>`, `chainDigest(previous, bytes)`, `formatSegment(header, records, previous) -> { header, body, trailer, digest }`, `encodeRecord(record, keyOf)`, `decodeRecord(keyed, toStaged)` | 4.2 |
+| `test/unit/_m2-fake-archive.js` (Node, for W2.5's unit tests) | `makeFakeArchive({ keyOf? }) -> { port, rejectNext(message), breakNext(), holdNext() -> { answer(), fail(error) }, segments(), recordsOf(ordinal), acknowledge(state), requests(), counts() }` | an `ArchivePort` without files: pages the range from the request's `context`, the real fingerprint check and digest (`test/unit/m2-w28-fake-archive.test.js` checks it answers what the real store answers) |
+| `test/adapter/_m2-archive-vat.js` (Node) | `makeFakeVat(options)` | the vat side as this section specifies it, for the adapter tests (W2.5 may compare against it) |
 | `AH/archive/mirror.js`, `context-file.js`, `history.js` | free | 4.7, 4.9 |
 | `AH/archive/store.js` | `archiveKeys(dir) -> Promise<Set<string>>` | 4.10 (M13's sweep) |
-| `AH/context-cache.js` | as M1b + archive-aware prepare | 4.8 |
-| `AH/blobs.js` | `BlobStore.release(keys)`, `BlobStore.readKey(key)`, `BlobStore.readPageKey(key, offset, maxBytes)` | 3.3, 4.9 |
+| `AH/context-cache.js` | as M1b + archive-aware prepare: `makeContextCache({ store, archive? })`, `prepare(session, request, { key? })` | 4.8 |
+| `AH/blobs.js` | `BlobStore.release(keys)`, `BlobStore.readKey(key)`, `BlobStore.readPageKey(key, offset, maxBytes)`, `BlobStore.keyOf(blob)`, `BlobStore.chargeArchived(owner, bytes)` | 3.3, 4.9, 4.10 |
 
 ### W2.9
 
