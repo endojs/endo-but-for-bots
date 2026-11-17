@@ -118,7 +118,19 @@ export const decodeIronhorseOutcome = (test, code, signal, reportText) => {
   };
 };
 
-export const testIronhorse = async (test, { sesShim, quiet }) => {
+/**
+ * @param {object} test
+ * @param {object} options
+ * @param {boolean} options.sesShim
+ * @param {boolean} [options.quiet]
+ * @param {'panic' | 'throw'} [options.resourceLimits] the engine's
+ * resource-limit policy: `panic` (the engine default) stops the case at a
+ * ceiling, `throw` raises a guest `RangeError` there instead.
+ */
+export const testIronhorse = async (
+  test,
+  { sesShim, quiet, resourceLimits = 'panic' },
+) => {
   ensureIronhorse();
   const temporaryLocation = new URL(
     `../../tmp/${test.temporaryPath}`,
@@ -132,7 +144,15 @@ export const testIronhorse = async (test, { sesShim, quiet }) => {
 
   const child = spawn(
     ironhorseBinary,
-    ['--test262-dir', packageRoot, '--json', reportFile, temporaryFile],
+    [
+      '--test262-dir',
+      packageRoot,
+      '--resource-limits',
+      resourceLimits,
+      '--json',
+      reportFile,
+      temporaryFile,
+    ],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );
   let stdout = '';

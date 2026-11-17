@@ -1412,6 +1412,42 @@ pub enum Halt {
     Panic(PanicKind),
 }
 
+/// What the engine does when a guest reaches a resource ceiling it detects at
+/// a consistent point: the native re-entry budget ([`Halt::ReentryLimit`]),
+/// the modeled value-stack geometry ([`Halt::StackOverflow`]), or a storage
+/// admission or matcher cap reported as a returned [`Halt::HeapExhausted`].
+///
+/// [`Self::Panic`] is the default and XS's behavior: the crank stops with the
+/// uncatchable halt, which [`Halt::is_panic`] tells the supervisor to discard.
+/// [`Self::Throw`] instead raises a catchable guest `RangeError` at the
+/// dispatch loop that observes the limit, so guest `try`/`catch` and a
+/// conformance harness see an ordinary completion or throw.
+///
+/// The meter ([`Halt::MeterAbort`]), the harness step ceiling, profile
+/// refusals, and engine invariants stop the crank under either policy. So
+/// does an arena refusal that unwinds the Rust stack mid-operation (and a
+/// `RangeError` whose own allocation is refused), because the heap it
+/// interrupts is not quiescent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResourceLimitPolicy {
+    #[default]
+    Panic,
+    Throw,
+}
+
+impl ResourceLimitPolicy {
+    /// The guest `RangeError` message for `halt`, or `None` when `halt` is not
+    /// a resource ceiling this policy may convert.
+    fn range_error_message(halt: &Halt) -> Option<&'static str> {
+        match halt {
+            Halt::HeapExhausted => Some("resource limit: heap exhausted"),
+            Halt::ReentryLimit { .. } => Some("resource limit: native recursion depth exceeded"),
+            Halt::StackOverflow(_) => Some("resource limit: stack overflow"),
+            _ => None,
+        }
+    }
+}
+
 /// The kind of a net-new [`Halt::Panic`], each carrying a diagnostic
 /// payload so a frozen-at-fault snapshot is self-describing rather than
 /// requiring the cause to be re-derived from the program counter (design
@@ -2096,6 +2132,17 @@ impl Interp {
     /// installed into a runnable machine except through a restore session.
     pub fn into_arenas(self) -> (SlotArena, ChunkArena) {
         (self.slots, self.chunks)
+    }
+
+    /// Choose whether a resource ceiling stops the crank or raises a guest
+    /// `RangeError` ([`ResourceLimitPolicy`]). Host configuration like the
+    /// arena ceilings: it is not snapshotted, so set it again after restore.
+    pub fn set_resource_limit_policy(&mut self, policy: ResourceLimitPolicy) {
+        self.resource_limit_policy = policy;
+    }
+
+    pub fn resource_limit_policy(&self) -> ResourceLimitPolicy {
+        self.resource_limit_policy
     }
 
     /// Set the host's slot-allocation ceiling for subsequent execution.

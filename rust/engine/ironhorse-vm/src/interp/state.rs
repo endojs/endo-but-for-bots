@@ -333,6 +333,18 @@ pub struct Interp {
     /// self-targeting backward branch, an unbounded loop) aborts in bounded
     /// time rather than wedging the caller.
     step_limit: u64,
+    #[boot_new(ResourceLimitPolicy::Panic)]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Host configuration, not guest state: [`Interp::set_resource_limit_policy`].
+    resource_limit_policy: ResourceLimitPolicy,
     #[boot_new(slots)]
     #[gc_root(none)]
     #[quiescent(retained)]

@@ -298,6 +298,10 @@ const compactEnd = test => {
   );
 };
 
+// `ironhorseThrowOnLimit` is bare Ironhorse under the `throw` resource-limit
+// policy, so both engine configurations ratchet separately at the ceilings.
+const ironhorseAgents = ['ironhorse', 'sesIronhorse', 'ironhorseThrowOnLimit'];
+
 // Which (agent, scenario) pairs execute today. XS and Node.js use their module
 // entry points. Ironhorse's compiler currently accepts scripts, so its bare and
 // SES-shim deliveries exercise sloppy/strict, with and without lockdown. The
@@ -307,7 +311,7 @@ const compactEnd = test => {
 // TextEncoder and TextDecoder as explicit endowments. Whether URL and similar
 // platform globals belong among SES's implicit globals is a separate decision.
 export const agentRunsScenario = (agent, scenario) => {
-  if (agent === 'ironhorse' || agent === 'sesIronhorse') {
+  if (ironhorseAgents.includes(agent)) {
     return (
       scenario === 'sloppy' ||
       scenario === 'strict' ||
@@ -326,7 +330,7 @@ export async function* runTests({ quiet, begin }, tests) {
       // Report the scenario as an explicit skip rather than silently dropping
       // it, so a run and `--list` enumerate the same scenarios and un-covered
       // cases stay visible.
-      if (agent === 'ironhorse' || agent === 'sesIronhorse') {
+      if (ironhorseAgents.includes(agent)) {
         yield {
           ...test,
           ok: false,
@@ -347,6 +351,12 @@ export async function* runTests({ quiet, begin }, tests) {
       yield await testIronhorse(test, { sesShim: false, quiet });
     } else if (agent === 'sesIronhorse') {
       yield await testIronhorse(test, { sesShim: true, quiet });
+    } else if (agent === 'ironhorseThrowOnLimit') {
+      yield await testIronhorse(test, {
+        sesShim: false,
+        quiet,
+        resourceLimits: 'throw',
+      });
     } else {
       yield { ...test, skipped: true };
     }
@@ -523,6 +533,7 @@ const main = async () => {
     'sesNode',
     'ironhorse',
     'sesIronhorse',
+    'ironhorseThrowOnLimit',
   ];
   const tests = scenariosForTests(stream, agents, conditions);
 

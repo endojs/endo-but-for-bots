@@ -80,6 +80,23 @@ impl Interp {
         }
     }
 
+    /// Under [`ResourceLimitPolicy::Throw`], turn a resource-ceiling halt into
+    /// a guest `RangeError` raised at the observing dispatch loop; every other
+    /// step, and every step under the default policy, passes through.
+    pub(super) fn resource_limit_step(&mut self, step: Step) -> Step {
+        if self.resource_limit_policy != ResourceLimitPolicy::Throw {
+            return step;
+        }
+        let Step::Host(halt) = &step else {
+            return step;
+        };
+        let Some(message) = ResourceLimitPolicy::range_error_message(halt) else {
+            return step;
+        };
+        let error = self.internal_error("RangeError", message.into());
+        self.raise_js(error)
+    }
+
     /// Raise a realm-local TypeError carrying a diagnostic message. Existing
     /// oracle-pinned messages remain verbatim; profile-specific guards supply
     /// descriptive diagnostics even where XS has no corresponding refusal.

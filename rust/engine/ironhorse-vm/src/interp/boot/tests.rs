@@ -45,6 +45,7 @@ const FRESH_ORDER: &[&str] = &[
     "cost",
     "meter_host",
     "step_limit",
+    "resource_limit_policy",
     "slots",
     "chunks",
     "static_str",

@@ -75,7 +75,7 @@ The outer workspace's `ironhorse-store-sqlite` backend links bundled SQLite;
 ## Acceptance status
 
 Audited 2026-09-09 at `96db92e23`; no fresh full XS-oracle run is claimed.
-“Partial” describes implemented surfaces without asserting the full roadmap bar.
+"Partial" describes implemented surfaces without asserting the full roadmap bar.
 Evidence paths are ongoing checks or historical measurements, not proofs of an
 entire stage where the verdict is open.
 
@@ -123,7 +123,7 @@ A native stack overflow is not a panic: it is a `SIGABRT` no
 recursion the engine performed on a guest's behalf ran on the host's terms.
 `DISPATCH_REENTRY_LIMIT` bounded exactly one family (bytecode re-entry through
 `dispatch_at`); a Proxy forwarding through a Proxy (or a spec-legal Proxy
-prototype cycle), a built-in re-entering a built-in (`join` → `toString` →
+prototype cycle), a built-in re-entering a built-in (`join` -> `toString` ->
 `join` over a self-containing array), `JSON.parse`/`JSON.stringify`, the
 host-boundary renderer, `flat`, an ordinary prototype chain read through the
 MOP, the async-generator drain, the bound-function / `call` / `apply`
@@ -164,6 +164,17 @@ The invariant, not the sites, is what landed:
   before the engine knows whether a native driver (an async body's rejection,
   a promise reaction, `Array.fromAsync`) will catch it, so that render is a
   diagnostic that falls back to the `[object Object]` stub and never halts.
+- **Resource-limit policy** — `Interp::set_resource_limit_policy` chooses
+  what the runtime ceilings above, the value-stack geometry, and the storage
+  and matcher caps that return `Halt::HeapExhausted` do. The default
+  `ResourceLimitPolicy::Panic` stops the crank uncatchably, as XS's `fxAbort`
+  does. `ResourceLimitPolicy::Throw` raises a guest `RangeError` (for example
+  `resource limit: heap exhausted`) at the dispatch loop that observes the
+  halt, so the guest can catch it and the harness classifies the case as a
+  pass or a failure (`endot-ih --resource-limits throw`, the hardened262
+  `ironhorseThrowOnLimit` agent). The meter, profile refusals, engine
+  invariants, and an arena refusal that unwinds the Rust stack stop the crank
+  under both policies.
 - **Parser** — `PARSER_STACK_BUDGET` (1,024 units) charged by frame class: a
   full expression-cascade re-entry costs `CASCADE_COST` (8) plus the operand
   charges on the way down (about 90 nested parentheses, brackets, calls,
@@ -174,7 +185,7 @@ The invariant, not the sites, is what landed:
   overflow".
 - **The tree itself** — `TREE_DEPTH_LIMIT` (2,048 levels), enforced by the
   parser as each node is built, for the flat runs the grammar folds into
-  left-nested chains (`a + a + … + a`, `a.b.c…`) that the parser never
+  left-nested chains (`a + a + ... + a`, `a.b.c...`) that the parser never
   recursed for. No deeper tree ever exists, so the scoper's and coder's
   walks, the cover-grammar conversions and the tree's own drop glue (which
   aborted a 32 MiB thread on a 100,000-term chain) are bounded by

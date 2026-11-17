@@ -96,6 +96,9 @@ test/intrinsics/TypedArray/in-place-methods.js
 test/intrinsics/TypedArray/intrinsic-metadata.js
 test/intrinsics/WeakMapPrototype/intrinsic-metadata.js
 test/intrinsics/WeakSetPrototype/intrinsic-metadata.js
+test/ironhorse/resource-limits/native-recursion-ceiling.js
+test/ironhorse/resource-limits/regexp-matcher-state-ceiling.js
+test/ironhorse/resource-limits/within-ceilings.js
 test/ironhorse/smoke.js
 test/modules/module-source-reflection/ses-legacy/duplicate-import.js
 test/modules/module-source-reflection/ses-legacy/export-all-from.js

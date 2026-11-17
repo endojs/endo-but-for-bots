@@ -29,6 +29,11 @@ each case into a cross product of scenarios along four dimensions:
   - `ironhorse` — bare Ironhorse, differentially checked against XS.
   - `sesIronhorse` — Ironhorse after loading the same XS-specialized SES shim
     used by `sesXs`, also differentially checked against XS.
+  - `ironhorseThrowOnLimit` — bare Ironhorse under the `throw` resource-limit
+    policy (`endot-ih --resource-limits throw`), differentially checked
+    against XS. The other Ironhorse agents run the engine's default `panic`
+    policy, which stops a case uncatchably at a resource ceiling, as XS does;
+    this agent's guests instead catch a `RangeError` there.
 - **mode** — `sloppy`, `strict` (a `"use strict";` pragma is prepended), or
   `module`.
 - **lockdown** — whether `lockdown()` has been called.
@@ -75,6 +80,16 @@ retain separate agent/scenario keys, so bare and shimmed Ironhorse coverage can
 ratchet independently without making their unlike parse goals look comparable.
 Compact output adds the differential's failure reason as a final field; the
 baseline continues to gate every agent/scenario/file tuple.
+
+### Ironhorse resource-limit policies
+
+The cases under `test/ironhorse/resource-limits/` drive Ironhorse at and just
+inside its native re-entry budget and its matcher's retained-state cap, on
+inputs XS completes. The `ironhorse` baseline records the two over-ceiling
+cases as failures (`ironhorse-aborted-limit`), and the `ironhorseThrowOnLimit`
+baseline records them as passes. Every other corpus case has the same outcome
+under both policies, so the baselines also pin that the policy changes
+nothing below the ceilings.
 
 ### Ironhorse module parity rollout
 

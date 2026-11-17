@@ -33,6 +33,12 @@
 #   --oracle on|off    gate on the XS oracle (default on).
 #   --case-timeout N   per-case wall-clock seconds, 1..3600 (default 60).
 #                      The batch watchdog remains an independent outer bound.
+#   --resource-limits panic|throw  the engine's resource-limit policy
+#                      (default panic). Under throw a resource ceiling raises
+#                      a guest RangeError, so a case that stopped there as
+#                      ironhorse-aborted-limit classifies as a pass or a
+#                      failure. A throw sweep records the policy in its
+#                      provenance; the default adds nothing.
 #   --no-fetch         do not clone; require --test262-dir.
 #   --expectations-dir DIR  gate every batch against committed shards + manifest.
 #   --update-expectations-dir DIR  generate shards in a new output directory;
@@ -62,6 +68,7 @@ output="$engine_directory/target/test262-report"
 jobs=""
 oracle="on"
 case_timeout=60
+resource_limits="panic"
 allow_fetch="yes"
 expectations_dir=""
 update_expectations_dir=""
@@ -74,6 +81,7 @@ while [ $# -gt 0 ]; do
     --jobs) jobs="$2"; shift 2 ;;
     --oracle) oracle="$2"; shift 2 ;;
     --case-timeout) case_timeout="${2:-}"; [ "$#" -ge 2 ] || { echo "full-run: --case-timeout needs seconds (1..3600)" >&2; exit 2; }; shift 2 ;;
+    --resource-limits) resource_limits="${2:-}"; [ "$#" -ge 2 ] || { echo "full-run: --resource-limits needs panic or throw" >&2; exit 2; }; shift 2 ;;
     --no-fetch) allow_fetch="no"; shift ;;
     --expectations-dir) expectations_dir="$2"; shift 2 ;;
     --update-expectations-dir) update_expectations_dir="$2"; shift 2 ;;
@@ -105,6 +113,9 @@ fi
 case_timeout=$((10#$case_timeout))
 if [ "$case_timeout" -lt 1 ] || [ "$case_timeout" -gt 3600 ]; then
   echo "full-run: --case-timeout needs seconds (1..3600)" >&2; exit 2
+fi
+if [ "$resource_limits" != "panic" ] && [ "$resource_limits" != "throw" ]; then
+  echo "full-run: --resource-limits must be panic or throw" >&2; exit 2
 fi
 if [ "$oracle" != "on" ] && [ "$oracle" != "off" ]; then
   echo "full-run: --oracle must be on or off" >&2; exit 2
@@ -236,10 +247,15 @@ fi
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 host="redacted"
 oracle_flag=""; [ "$oracle" = "off" ] && oracle_flag="--no-oracle"
+resource_limits_flag=""; [ "$resource_limits" = "throw" ] && resource_limits_flag="--resource-limits throw"
 ses_mode="none"
 scope="whole-corpus"; [ -n "$subtree" ] && scope="subtree=$subtree"
 config="oracle=$oracle max-cases-per-batch=$batch_size jobs=$jobs case-timeout=$case_timeout subtree=${subtree:-<all>}"
 command_line="full-run.sh --subtree ${subtree:-<all>} --jobs $jobs --oracle $oracle --case-timeout $case_timeout"
+if [ -n "$resource_limits_flag" ]; then
+  config="$config resource-limits=$resource_limits"
+  command_line="$command_line $resource_limits_flag"
+fi
 
 # The run identity every batch is stamped with: the fingerprint of the
 # result-affecting inputs. Reusing a results dir after ANY of these changes
@@ -249,6 +265,7 @@ command_line="full-run.sh --subtree ${subtree:-<all>} --jobs $jobs --oracle $ora
 # gate that decides every case's verdict, so bumping c/moddable must re-run the
 # affected batches rather than retain results scored against the old oracle.
 run_id="test262=$test262_sha;endo=$endo_sha;oracle=$oracle;moddable=$moddable_sha;ses=$ses_mode;cap=$batch_size;case-timeout=$case_timeout;scope=${subtree:-<all>}"
+[ -z "$resource_limits_flag" ] || run_id="$run_id;resource-limits=$resource_limits"
 if [ -n "$expectations_dir" ]; then
   expectations_digest=$(expectation_shards_digest "$expectations_dir")
   run_id="$run_id;expectations=$expectations_digest"
@@ -351,7 +368,7 @@ run_one_batch() {
     [ -z "$expectation_part" ] || rm -f "$expectation_part"
     status=0
     "$xst_binary" --direct-only --batch-size "$batch_size" --batch-index "$((10#$batch_index))" \
-      $oracle_flag --case-timeout "$case_timeout" --run-id "$run_id" --json "$part" --test262-dir "$test262_dir" \
+      $oracle_flag $resource_limits_flag --case-timeout "$case_timeout" --run-id "$run_id" --json "$part" --test262-dir "$test262_dir" \
       "${expectation_arguments[@]}" "$test_root/$directory" >"$log" 2>&1 &
     worker=$!
     (
@@ -424,7 +441,7 @@ run_one_batch() {
   fi
 }
 export -f run_one_batch expectation_shard_name
-export xst_binary report_binary results test262_dir test_root oracle_flag case_timeout batch_size run_id logs attempts quarantines ratchets expectations_dir update_expectations_dir
+export xst_binary report_binary results test262_dir test_root oracle_flag resource_limits_flag case_timeout batch_size run_id logs attempts quarantines ratchets expectations_dir update_expectations_dir
 export GARDEN_TEST262_TIP="$test262_sha"
 
 if [ "${#pending[@]}" -gt 0 ]; then
