@@ -45,6 +45,7 @@ const U64_MAX = 0xffff_ffff_ffff_ffffn;
  *   (see `makeIronhorseLimits`)
  * @param {LimitInput} [options.gcSlotAllowance]
  * @param {LimitInput} [options.gcChunkAllowance]
+ * @param {LimitInput} [options.gcCrankInterval]
  * @param {LimitInput} [options.requestTimeoutMs] watchdog: a worker that has
  *   not answered a request in this long is killed, and has crashed
  * @returns {WorkerEngine}
@@ -62,6 +63,7 @@ export const makeIronhorseEngine = (
     gcPolicy,
     gcSlotAllowance,
     gcChunkAllowance,
+    gcCrankInterval,
     requestTimeoutMs,
   },
 ) => {
@@ -73,6 +75,7 @@ export const makeIronhorseEngine = (
     gcPolicy,
     gcSlotAllowance,
     gcChunkAllowance,
+    gcCrankInterval,
     requestTimeoutMs,
   });
   const timeoutMs = limits.requestTimeoutMs;

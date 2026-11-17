@@ -400,10 +400,10 @@ test.serial(
 );
 
 test.serial(
-  "a worker's settled answers are released from the hub by its collector",
+  "a worker's settled answers are released from the hub by its collector (every crank)",
   async t => {
     t.timeout(120_000);
-    const f = await makeFixture(t);
+    const f = await makeFixture(t, { gcPolicy: 'every-crank' });
     /** The owner's answer rows, and the guest's routes to answers it asked. */
     const owed = () => {
       const state = f.store.getHubState();
@@ -442,5 +442,70 @@ test.serial(
     after = owed();
     t.true(after.rows <= 2, `answer rows ${after.rows} after replay`);
     t.true(after.routes <= 2, `answer routes ${after.routes} after replay`);
+  },
+);
+
+test.serial(
+  "a worker's settled answers are released from the hub by its collector (allocation schedule)",
+  async t => {
+    t.timeout(180_000);
+    const f = await makeFixture(t);
+    const owed = () => {
+      const state = f.store.getHubState();
+      const rows = Object.values(state?.refs ?? {}).filter(
+        row => row.backing === 'answer' && row.origin === f.ownerId,
+      ).length;
+      const routes = Object.keys(
+        state?.sessions?.[f.guestId]?.answersOwed ?? {},
+      ).length;
+      return { rows, routes };
+    };
+    let caller = await f.guest();
+    let asked = 0;
+    const ask = async () => {
+      asked += 1;
+      const count = await E(caller).incr();
+      t.is(count, BigInt(asked));
+    };
+    // The guest collects every 32 of its cranks at most (gcCrankInterval)
+    // when its cranks allocate little, so settled answers wait for that
+    // collection: the rows are bounded by the interval, not released at once.
+    /** @type {number[]} */
+    const rowsSeen = [];
+    for (let i = 0; i < 80; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await ask();
+      rowsSeen.push(owed().rows);
+    }
+    t.log(`answer rows after each call: ${rowsSeen}`);
+    t.true(Math.max(...rowsSeen) <= 34, `answer rows ${rowsSeen}`);
+    t.true(
+      rowsSeen.some((rows, i) => i > 0 && rows < rowsSeen[i - 1]),
+      `the collector released rows: ${rowsSeen}`,
+    );
+    // A clean stop sweeps each image; the cleanups it flags run in the
+    // guest's first crank after the wake, and their gc frames release every
+    // row from before the stop: what is left are the answers of the two
+    // calls since, and the two every-crank collection leaves too.
+    await f.restart(false);
+    caller = await f.guest();
+    await ask();
+    await ask();
+    let after = owed();
+    t.log(`after a clean restart and two calls: ${JSON.stringify(after)}`);
+    t.true(after.rows <= 4, `answer rows ${after.rows} after a clean restart`);
+    t.true(after.routes <= 4, `answer routes ${after.routes}`);
+    // A crash replays the journals; the replay collects after the same
+    // cranks, so the regenerated gc frames keep their numbers and the counts
+    // stay bounded.
+    await f.restart(true);
+    caller = await f.guest();
+    for (let i = 0; i < 12; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await ask();
+    }
+    after = owed();
+    t.true(after.rows <= 34, `answer rows ${after.rows} after replay`);
+    t.true(after.routes <= 34, `answer routes ${after.routes} after replay`);
   },
 );

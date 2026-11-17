@@ -12,14 +12,15 @@ import harden from '@endo/harden';
  * @property {GcPolicyName} [gcPolicy]
  * @property {LimitInput} [gcSlotAllowance]
  * @property {LimitInput} [gcChunkAllowance]
+ * @property {LimitInput} [gcCrankInterval]
  * @property {LimitInput} [requestTimeoutMs]
  */
 
 /**
  * When the worker collects garbage. `allocation` (the default) collects
  * after a crank that grew the live slots by `gcSlotAllowance` or the chunk
- * footprint by `gcChunkAllowance` since the last collection, and before the
- * image at close; `every-crank` collects after every crank, as every worker
+ * footprint by `gcChunkAllowance` since the last collection, or that is the
+ * `gcCrankInterval`th crank since then, and before the image at close; `every-crank` collects after every crank, as every worker
  * did before (kept so a regression can be bisected). See the worker's
  * `GcPolicy` (`rust/thixotrope-ironhorse-worker/src/main.rs`).
  * @typedef {'allocation' | 'every-crank'} GcPolicyName
@@ -66,6 +67,7 @@ export const makeIronhorseLimits = ({
   gcPolicy = 'allocation',
   gcSlotAllowance = 128 * 1024,
   gcChunkAllowance = 16 * 1024 * 1024,
+  gcCrankInterval = 32,
   requestTimeoutMs = 60_000,
 } = {}) => {
   const slots = Number(natural('slotCeiling', slotCeiling, 0xffff_ffffn));
@@ -97,6 +99,9 @@ export const makeIronhorseLimits = ({
     gcPolicy,
     gcSlotAllowance: allowance('gcSlotAllowance', gcSlotAllowance, slots),
     gcChunkAllowance: allowance('gcChunkAllowance', gcChunkAllowance, chunks),
+    gcCrankInterval: Number(
+      natural('gcCrankInterval', gcCrankInterval, 0xffff_ffffn),
+    ),
     requestTimeoutMs: Number(
       natural('requestTimeoutMs', requestTimeoutMs, 0x7fff_ffffn),
     ),
@@ -120,12 +125,13 @@ export const heapCeilingNames = harden(['slotCeiling', 'chunkCeiling']);
  * journal suffix onto the last image and the hub drops replayed outbound by
  * sequence number, so a replay must collect after the same cranks as the
  * incarnation it replaces: these limits never change for a state directory.
- * @type {ReadonlyArray<'gcPolicy' | 'gcSlotAllowance' | 'gcChunkAllowance'>}
+ * @type {ReadonlyArray<'gcPolicy' | 'gcSlotAllowance' | 'gcChunkAllowance' | 'gcCrankInterval'>}
  */
 export const gcScheduleNames = harden([
   'gcPolicy',
   'gcSlotAllowance',
   'gcChunkAllowance',
+  'gcCrankInterval',
 ]);
 
 /** @param {EnvironmentPowers} environment */
@@ -140,6 +146,7 @@ export const readIronhorseLimits = environment =>
     ),
     gcSlotAllowance: environment.get('THIXOTROPE_GC_SLOT_ALLOWANCE'),
     gcChunkAllowance: environment.get('THIXOTROPE_GC_CHUNK_ALLOWANCE'),
+    gcCrankInterval: environment.get('THIXOTROPE_GC_CRANK_INTERVAL'),
     requestTimeoutMs: environment.get('THIXOTROPE_REQUEST_TIMEOUT_MS'),
   });
 harden(readIronhorseLimits);

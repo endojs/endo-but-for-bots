@@ -42,7 +42,8 @@ await Promise.all([workerBinary, ...bootPaths].map(path => access(path)));
 /**
  * Each test owns two real guest processes and an independent comms/store.
  * @param {ExecutionContext} t
- * @param {{ ownerSource?: string, guestSource?: string, endowment?: string }} [options]
+ * @param {{ ownerSource?: string, guestSource?: string, endowment?: string, gcPolicy?: import('../../src/ironhorse/ironhorse-limits.js').GcPolicyName }} [options]
+ *   gcPolicy: the workers' collection schedule (default: the limits' default)
  */
 export const makeFixture = async (
   t,
@@ -50,6 +51,7 @@ export const makeFixture = async (
     ownerSource = counterSource,
     guestSource = callerSource,
     endowment = 'counter',
+    gcPolicy = undefined,
   } = {},
 ) => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-ci-'));
@@ -67,6 +69,7 @@ export const makeFixture = async (
     workerBinary,
     bootPaths,
     storePath: join(statePath, 'heaps'),
+    gcPolicy,
   });
   const injected = [];
   /** @type {{ phase: string, observed: () => void } | undefined} */

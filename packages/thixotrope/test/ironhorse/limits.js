@@ -51,6 +51,7 @@ test.serial(
       gcPolicy: 'allocation',
       gcSlotAllowance: 131_072,
       gcChunkAllowance: 16_777_216,
+      gcCrankInterval: 32,
       requestTimeoutMs: 90_000,
     });
     await host.client.call(
@@ -122,6 +123,7 @@ test.serial(
       gcPolicy: 'allocation',
       gcSlotAllowance: 131_072,
       gcChunkAllowance: 16_777_216,
+      gcCrankInterval: 32,
     });
     // The collection schedule is fixed for the state directory: a replayed
     // journal must collect after the same cranks.

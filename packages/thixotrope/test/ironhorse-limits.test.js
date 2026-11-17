@@ -34,6 +34,7 @@ test('Ironhorse configuration preserves wide budgets without numeric rounding', 
     gcPolicy: 'allocation',
     gcSlotAllowance: 131_072,
     gcChunkAllowance: 16_777_216,
+    gcCrankInterval: 32,
     requestTimeoutMs: 90_000,
   });
   t.is(
@@ -56,6 +57,7 @@ test('Ironhorse configuration rejects unsupported quantities rather than clampin
     { gcSlotAllowance: 0 },
     { gcSlotAllowance: 500_001 },
     { gcChunkAllowance: 128 * 1024 * 1024 + 1 },
+    { gcCrankInterval: 0 },
   ]) {
     t.throws(() => makeIronhorseLimits(options), { message: /must be/ });
   }
@@ -68,12 +70,14 @@ test('Ironhorse collection schedule is read from the environment', t => {
         THIXOTROPE_GC_POLICY: 'every-crank',
         THIXOTROPE_GC_SLOT_ALLOWANCE: '4096',
         THIXOTROPE_GC_CHUNK_ALLOWANCE: '65536',
+        THIXOTROPE_GC_CRANK_INTERVAL: '8',
       })[name],
   });
   t.like(limits, {
     gcPolicy: 'every-crank',
     gcSlotAllowance: 4096,
     gcChunkAllowance: 65_536,
+    gcCrankInterval: 8,
   });
 });
 
@@ -245,6 +249,7 @@ const defaultLimits = harden({
   gcPolicy: 'allocation',
   gcSlotAllowance: 131_072,
   gcChunkAllowance: 16_777_216,
+  gcCrankInterval: 32,
 });
 
 test('Ironhorse runtime records execution limits beside the pinned identity', async t => {
@@ -320,6 +325,7 @@ test('Ironhorse collection schedule never changes for a state directory', async 
     [{ gcPolicy: 'every-crank' }, 'gcPolicy'],
     [{ gcSlotAllowance: 65_536 }, 'gcSlotAllowance'],
     [{ gcChunkAllowance: 1_048_576 }, 'gcChunkAllowance'],
+    [{ gcCrankInterval: 64 }, 'gcCrankInterval'],
   ])) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => acquire(t, host, options), {

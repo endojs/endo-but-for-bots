@@ -37,9 +37,20 @@ const boot = `
 })();
 `;
 
-for (const combined of [true, false]) {
+for (const [combined, gcPolicy] of /** @type {const} */ ([
+  [true, 'every-crank'],
+  [false, 'every-crank'],
+  [true, 'allocation'],
+  [false, 'allocation'],
+])) {
+  // Under every-crank collection a delivery's own garbage is finalized
+  // before its outbound is taken. Under the allocation schedule the go
+  // delivery collects nothing (it is far below the allowances and the crank
+  // interval); the snapshot's close sweeps, and the cleanup it flags runs at
+  // the end of the first delivery after the restore, exactly once.
+  const eager = gcPolicy === 'every-crank';
   test.serial(
-    `native delivery includes cleanup frames and restores (${combined ? 'combined' : 'legacy handshake'})`,
+    `native delivery includes cleanup frames and restores (${combined ? 'combined' : 'legacy handshake'}, ${gcPolicy})`,
     async t => {
       t.timeout(30_000);
       const root = await mkdtemp('/tmp/thix-delivery-');
@@ -98,6 +109,7 @@ for (const combined of [true, false]) {
           workerBinary: binary,
           bootPaths: [bootPath],
           storePath: join(root, 'heaps'),
+          gcPolicy,
         },
       );
       if (!engine.acquireStore)
@@ -113,7 +125,7 @@ for (const combined of [true, false]) {
       await worker.deliver({ t: 'go' });
       t.deepEqual(
         frames.map(frame => frame.kind),
-        ['go', 'job', 'finalizer', 'cleanup-job'],
+        eager ? ['go', 'job', 'finalizer', 'cleanup-job'] : ['go', 'job'],
       );
       t.deepEqual(
         requests.map(request => request.op),
@@ -125,14 +137,17 @@ for (const combined of [true, false]) {
       frames.length = 0;
       await worker.deliver({ t: 'after' });
       t.deepEqual(
-        frames,
-        [{ kind: 'after' }],
+        frames.map(frame => frame.kind),
+        eager ? ['after'] : ['after', 'finalizer', 'cleanup-job'],
         'no duplicated finalizer frames after restore',
       );
       t.deepEqual(
         requests.map(request => request.op),
         combined ? ['deliver'] : ['eval', 'eval'],
       );
+      frames.length = 0;
+      await worker.deliver({ t: 'again' });
+      t.deepEqual(frames, [{ kind: 'again' }], 'each cleanup ran once');
     },
   );
 }
