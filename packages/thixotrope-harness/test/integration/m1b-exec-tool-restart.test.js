@@ -6,8 +6,10 @@
  *
  * - 3: `globalThis.x = 5` in one exec; `return x` in the next turn after a
  *   clean restart returns 5. A turn cancelled during a 30 s exec sleep keeps
- *   the scope: an exec after the sleep ended sees `x === 5`; an exec while
- *   the abandoned run still sleeps gets the busy reset and its notice.
+ *   the scope: the next turn's exec, sent at once while the abandoned sleep
+ *   still runs, sees `x === 5` (M1b QC, J-0391: the session tells the exec
+ *   vat `abandon()`, so there is no busy reset); and an abandoned call's
+ *   code after its sleep never runs (`x` is not set to 99).
  * - 10: SIGKILL during a 30 s exec sleep, restart: the turn is
  *   outcome-unknown as soon as the daemon serves (recovery did not wait for
  *   the exec call); the next exec works and sees `x` from before.
@@ -39,13 +41,7 @@ import {
   takeIntegrationLock,
 } from '../template/index.js';
 import { makeSlice, round1 } from './_m1a-slice.js';
-import {
-  execScript,
-  execTemplate,
-  execTurn,
-  resultsOf,
-  UNSET,
-} from './_m1b-exec.js';
+import { execScript, execTemplate, execTurn, resultsOf } from './_m1b-exec.js';
 
 takeIntegrationLock(test, 'm1b exec tool restart test');
 
@@ -92,37 +88,44 @@ run('exec across cancel, a clean restart and a SIGKILL', async t => {
     ...identity,
   });
 
-  // ---- 3b: cancel during a 30 s sleep keeps the scope
+  // ---- 3b: cancel during a 30 s sleep keeps the scope; the next exec runs
+  // at once in it (acceptance 3 as written)
   const sleeping = await execTurn(slice, session, live, 'exec sleep30', {
     wait: 'call',
   });
-  const sleepStarted = /** @type {number} */ (sleeping.callAt);
+  // Let the run reach the exec vat and its sleep before the cancel.
+  await delay(1000);
   await E(sleeping.turn).cancel();
   const cancelled = await E(sleeping.turn).whenFinished();
   t.is(cancelled.state, 'cancelled');
   t.deepEqual((await resultsOf(session, sleeping.turnId)).results, [
     textOf.errorResult(texts.execAbandoned),
   ]);
-  const waitMs = sleepStarted + 31_000 - Date.now();
-  if (waitMs > 0) await delay(waitMs);
-  const afterSleep = await execTurn(slice, session, live, 'exec get');
-  t.is(afterSleep.result, '5', 'the scope was kept');
-
-  // ---- 3c: an exec while the abandoned run still sleeps: busy, reset
-  const sleeping2 = await execTurn(slice, session, live, 'exec sleep30', {
-    wait: 'call',
-  });
-  await E(sleeping2.turn).cancel();
-  await E(sleeping2.turn).whenFinished();
-  const busy = await execTurn(slice, session, live, 'exec get');
-  t.is(busy.result, `${texts.execBusyReset}\n\n${UNSET}`);
+  const sleepLeftMs =
+    /** @type {number} */ (sleeping.callAt) + 30_000 - Date.now();
+  const afterCancel = await execTurn(slice, session, live, 'exec get');
+  t.true(sleepLeftMs > 20_000, 'the abandoned sleep was still running');
+  t.is(afterCancel.result, '5', 'the scope was kept, without a busy reset');
   emit({
-    metric: 'exec.busyReset',
+    metric: 'exec.afterCancel',
     unit: 'ms',
-    value: busy.callMs,
-    what: 'busy answer, retire, a fresh scope (spare or cold), run again with the notice',
+    value: afterCancel.callMs,
+    what: 'the next turn exec right after a cancelled 30 s sleep (abandon, same scope)',
+    sleepLeftMs,
     ...identity,
   });
+
+  // ---- 3c: an abandoned call's code after its sleep never runs
+  const late = await execTurn(slice, session, live, 'exec late99', {
+    wait: 'call',
+  });
+  await delay(1000);
+  await E(late.turn).cancel();
+  await E(late.turn).whenFinished();
+  // Past the abandoned 4 s sleep, and its answer.
+  await delay(5000);
+  const afterLate = await execTurn(slice, session, live, 'exec get');
+  t.is(afterLate.result, '5', 'the abandoned continuation did not run');
 
   // ---- 10: SIGKILL during a 30 s sleep
   t.is((await execTurn(slice, session, live, 'exec set')).result, '5');

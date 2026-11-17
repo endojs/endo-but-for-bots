@@ -6,10 +6,13 @@
  * retired. Calls of one session run one at a time, in issue order.
  *
  * Endings of a call (8.3): the answer; a retired break (exec vat lost) ->
- * `execTerminated` + retire; the adapter deadline -> `execTimeout` + retire;
- * cancel -> `execAbandoned`, scope kept, late answer ignored; restart
- * (recovery) -> abandoned, never awaited, scope kept; `busy` -> retire,
- * fresh scope, run again once with the `execBusyReset` notice.
+ * `execTerminated` + retire; `exhausted` (the vat's name table ran out,
+ * M1b QC J-0390) -> `execExhausted` + retire; the adapter deadline ->
+ * `execTimeout` + retire; cancel -> `execAbandoned`, scope kept, and the
+ * exec vat is told (`ExecScope.abandon`, sendOnly, M1b QC J-0391) so the
+ * next call runs in the same scope at once; restart (recovery) -> the same,
+ * never awaited; `busy` -> retire, fresh scope, run again once with the
+ * `execBusyReset` notice.
  *
  * State per session in a WeakMap keyed by its ExecHandle. Guest rules.
  */
@@ -142,6 +145,12 @@ const run = (call, notice) => {
     .run(harden(request))
     .then(
       outcome => {
+        if (outcome?.status === 'exhausted') {
+          // The name table never shrinks: this scope is done (J-0390).
+          retire(call, scope);
+          settle(call, failed(texts.execExhausted));
+          return;
+        }
         if (outcome?.status === 'busy') {
           if (call.settled) return;
           retire(call, scope);
@@ -220,8 +229,13 @@ const abandon = (active, ranText, quiet) => {
       settle(call, failed(NOT_RUN_TEXT), quiet);
   }
   const call = state.running;
-  if (call !== undefined && call.context.turn === active.turn)
+  if (call !== undefined && call.context.turn === active.turn) {
+    // Tell the exec vat first (J-0391): a later `run` from this vat to the
+    // same scope arrives after it, so the next call is not busy.
+    if (call.sent && call.scope !== undefined && call.scope === state.scope)
+      E.sendOnly(call.scope).abandon();
     settle(call, failed(call.sent ? ranText : NOT_RUN_TEXT), quiet);
+  }
 };
 
 /**

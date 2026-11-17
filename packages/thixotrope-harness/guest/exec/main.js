@@ -15,8 +15,21 @@
  * One call at a time: while a `run` is unsettled, another `run` answers
  * `{ status: 'busy' }` in the crank it arrives and evaluates nothing. A
  * synchronous runaway never answers: it exceeds the crank budget and the vat
- * halts (`MeterAbort`); a key flood exhausts the vat's name table and halts
- * it too. Either way only this vat is lost; the session retires it.
+ * halts (`MeterAbort`); only this vat is lost and the session retires it.
+ * A key flood does not halt the vat: the engine's "property key space
+ * exhausted" RangeError is catchable, and the name table never shrinks, so
+ * any call that meets it answers `{ status: 'exhausted' }` and the session
+ * retires the scope (M1b QC, J-0390).
+ *
+ * A call ends when its body's promise settles or the session abandons it
+ * (`abandon()`, sendOnly, on cancel or recovery: the run answers
+ * `execAbandoned` at once and the scope stays). Model code cannot outlive
+ * its call (M1b QC, J-0391): `sleep` is the only endowment that reaches
+ * outside the vat, and a call's `sleep` never settles once the call ended,
+ * neither for sleeps asked for afterwards nor for answers still in flight.
+ * Background work started by a call therefore stops at its next `sleep`
+ * instead of keeping the vat cranking; a `sleep` kept on `globalThis` is
+ * dead in later calls.
  *
  * Arguments are the model's JSON text: inline, or a `StagedText` read through
  * `Content` in pages of at most `blobPageBytes` (one answered page per
@@ -108,6 +121,59 @@ harden(clampDelay);
  * @returns {Outcome}
  */
 const failed = text => harden({ status: 'failed', text });
+
+/** The engine's text when a vat's name table is full (J-0333). */
+const KEYS_EXHAUSTED = 'property key space exhausted';
+
+/**
+ * Whether `error` (or a message) says this vat's name table is full.
+ * @param {unknown} error
+ */
+export const isKeysExhausted = error =>
+  messageOf(error).includes(KEYS_EXHAUSTED);
+harden(isKeysExhausted);
+
+const EXHAUSTED = harden({ status: 'exhausted' });
+
+/** A promise that never settles (what a dead `sleep` answers). */
+const never = () => new Promise(() => {});
+
+/**
+ * One call's life: its `sleep` endowment, live until `close()`.
+ * @param {any} timer
+ */
+const makeCall = timer => {
+  let open = true;
+  /** @type {(outcome: Outcome) => void} */
+  let resolveAbandoned = () => {};
+  /** @type {Promise<Outcome>} */
+  const abandoned = new Promise(resolve => {
+    resolveAbandoned = resolve;
+  });
+  /** @param {unknown} ms */
+  const sleep = ms => {
+    if (!open) return never();
+    return E(timer)
+      .sleep(clampDelay(ms))
+      .then(
+        value => (open ? value : never()),
+        error => (open ? Promise.reject(error) : never()),
+      );
+  };
+  return {
+    sleep: harden(sleep),
+    isOpen: () => open,
+    abandoned,
+    close: () => {
+      open = false;
+    },
+    /** @param {Outcome} outcome */
+    abandon: outcome => {
+      open = false;
+      resolveAbandoned(outcome);
+    },
+  };
+};
 
 /**
  * The model's argument text: inline, or read from its blob in pages.
@@ -235,17 +301,21 @@ export const makeExecScope = () => {
   });
   /** M1b: an empty live facet (M5 passes the session's label map per call). */
   const powers = harden({});
-  let busy = false;
+  /** @type {ReturnType<typeof makeCall> | undefined} the running call */
+  let current;
 
   /**
-   * One call, from arguments to outcome.
+   * One call, from arguments to outcome. Nothing is evaluated or rendered
+   * once the call was abandoned.
    * @param {ExecRequest} request
-   * @returns {Promise<Outcome>}
+   * @param {ReturnType<typeof makeCall>} call
+   * @returns {Promise<Outcome | typeof EXHAUSTED>}
    */
-  const runOnce = async request => {
-    const { writers, timer, notice } = request;
+  const runOnce = async (request, call) => {
+    const { writers, notice } = request;
     const source = await argumentText(request);
     if ('outcome' in source) return source.outcome;
+    if (!call.isOpen()) return failed(texts.execAbandoned);
     // From here to the call, nothing awaits: a staged source is joined,
     // parsed and evaluated in the crank its last page arrived (S3).
     const argument = codeOf(source.text);
@@ -258,25 +328,34 @@ export const makeExecScope = () => {
         [WRAP_HEAD, stripCodeFence(code), WRAP_TAIL].join(''),
       );
     } catch (error) {
+      if (isKeysExhausted(error)) return EXHAUSTED;
       return failed(describeParseFailure(code, messageOf(error)));
     }
-    /** @param {unknown} ms */
-    const sleep = ms => E(timer).sleep(clampDelay(ms));
     /** @type {'ok' | 'failed'} */
     let status;
     /** @type {string} */
     let text;
     try {
-      const result = await body(powers, E, harden, discardingConsole, sleep);
+      const result = await body(
+        powers,
+        E,
+        harden,
+        discardingConsole,
+        call.sleep,
+      );
+      if (!call.isOpen()) return failed(texts.execAbandoned);
       status = 'ok';
       text =
         result === undefined
           ? texts.execNoReturn
           : await renderToolResult(result);
     } catch (error) {
+      if (isKeysExhausted(error)) return EXHAUSTED;
       status = 'failed';
       text = messageOf(error);
     }
+    // The call's model code is over: its sleeps die before anything else.
+    call.close();
     if (notice !== undefined) text = `${notice}\n\n${text}`;
     return finish(status, text, writers);
   };
@@ -284,17 +363,31 @@ export const makeExecScope = () => {
   return makeExo('ExecScope', m1bInterfaces.ExecScope, {
     /**
      * @param {ExecRequest} request
-     * @returns {Promise<Outcome | { status: 'busy' }>}
+     * @returns {Promise<Outcome | { status: 'busy' } | typeof EXHAUSTED>}
      */
     async run(request) {
-      if (busy) return harden({ status: 'busy' });
-      busy = true;
+      if (current !== undefined) return harden({ status: 'busy' });
+      const call = makeCall(request.timer);
+      current = call;
       await null;
       try {
-        return await runOnce(request);
+        return await Promise.race([
+          runOnce(request, call).catch(error =>
+            isKeysExhausted(error) ? EXHAUSTED : failed(messageOf(error)),
+          ),
+          call.abandoned,
+        ]);
       } finally {
-        busy = false;
+        call.close();
+        if (current === call) current = undefined;
       }
+    },
+    /** The session gave the running call up (cancel, recovery). */
+    abandon() {
+      const call = current;
+      if (call === undefined) return;
+      current = undefined;
+      call.abandon(failed(texts.execAbandoned));
     },
   });
 };

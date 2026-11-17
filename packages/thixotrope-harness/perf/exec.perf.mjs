@@ -448,17 +448,17 @@ await runPerf('exec', async ({ provision }) => {
     );
     const problems = [];
     if (r.end.status !== 'completed') problems.push('not completed');
+    // The vat does not halt (the engine's RangeError is catchable, J-0333):
+    // it answers `exhausted` and the session retires it (M1b QC, J-0390).
     const halted = text === textOf.errorResult(texts.execTerminated);
-    if (!halted)
-      problems.push(
-        'the exec vat did not halt (J-0333: the key-space RangeError is catchable)',
-      );
+    const exhausted = text === textOf.errorResult(texts.execExhausted);
+    if (!halted && !exhausted)
+      problems.push('the exec vat neither halted nor answered exhausted');
     // Retired: an exec vat of before is gone.
     await new Promise(resolve => setTimeout(resolve, 2000));
     const now = new Set((await execRows()).map(w => w.workerId));
     const retired = [...execBefore].filter(id => !now.has(id)).length;
-    if (halted && retired === 0)
-      problems.push('the halted vat was not retired');
+    if (retired === 0) problems.push('the exec vat was not retired');
     return {
       problems,
       result: text.slice(0, 300),
@@ -473,7 +473,7 @@ await runPerf('exec', async ({ provision }) => {
   }
   await stats('tooBig.keys60k.nextTrivial', afterKeys, {
     extra: {
-      what: 'exec.trivial on the same session after the 60,000-key probe (J-0333: a surviving vat with an exhausted name table is slower)',
+      what: 'exec.trivial on the same session after the 60,000-key probe (a fresh scope since J-0390; before, the surviving vat with an exhausted name table took 928-951 ms, J-0333)',
     },
   });
   await main.live.stop();

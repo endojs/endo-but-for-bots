@@ -53,14 +53,20 @@ const code = (/** @type {string} */ c) => JSON.stringify({ code: c });
 const makeFakeScope = (/** @type {string} */ label) => {
   /** @type {{ request: any, kit: any }[]} */
   const runs = [];
+  /** @type {string[]} every message in arrival order */
+  const log = [];
   const scope = Far('ExecScope', {
     run: (/** @type {any} */ request) => {
       const kit = makePromiseKit();
       runs.push({ request, kit });
+      log.push('run');
       return kit.promise;
     },
+    abandon: () => {
+      log.push('abandon');
+    },
   });
-  return { scope, runs, label };
+  return { scope, runs, label, log };
 };
 
 /**
@@ -322,7 +328,8 @@ test('cancel abandons the call without retiring; the next call while it still ru
   t.is(page.turns[0].state, 'cancelled');
   t.deepEqual(s.results(), [textOf.errorResult(texts.execAbandoned)]);
   t.deepEqual(s.retired, [], 'scope kept (R4-49)');
-  t.is(s.scopes[0].runs.length, 1, 'nothing more sent to the exec vat');
+  t.is(s.scopes[0].runs.length, 1, 'no run sent to the exec vat');
+  t.deepEqual(s.scopes[0].log, ['run', 'abandon'], 'the exec vat is told');
 
   // The abandoned run still sleeps: the exec vat answers busy.
   await execTurn(s, [code('return x')]);
@@ -456,4 +463,41 @@ test('any other rejection is an ordinary failure; the scope is kept', async t =>
   await drain();
   t.deepEqual(s.results(), [textOf.errorResult('guard refused')]);
   t.deepEqual(s.retired, []);
+});
+
+test('M1b QC (J-0391): after a cancel the next call goes to the same scope, after the abandon', async t => {
+  const s = await setup();
+  await execTurn(s, [code('globalThis.x = 5; await sleep(30000)')]);
+  s.session.getCurrentTurn().turn.cancel();
+  await drain();
+  await execTurn(s, [code('return x')]);
+  t.is(s.scopes.length, 1, 'no reset');
+  t.deepEqual(s.scopes[0].log, ['run', 'abandon', 'run']);
+  s.scopes[0].runs[1].kit.resolve(ok('5'));
+  await drain();
+  t.deepEqual(s.results(), ['5']);
+  t.deepEqual(s.retired, []);
+});
+
+test('M1b QC (J-0391): recovery also abandons the call in the exec vat; the scope is kept', async t => {
+  const s = await setup();
+  await execTurn(s, [code('await sleep(30000)')]);
+  s.leases[0].reject(retiredBreak());
+  await drain();
+  t.deepEqual(s.scopes[0].log, ['run', 'abandon']);
+  t.deepEqual(s.retired, []);
+});
+
+test('M1b QC (J-0390): an exhausted name table: execExhausted, retire, the next call is fresh', async t => {
+  const s = await setup();
+  await execTurn(s, [
+    code('for (let i = 0; i < 60000; i++) globalThis["k" + i] = i'),
+  ]);
+  s.scopes[0].runs[0].kit.resolve(harden({ status: 'exhausted' }));
+  await drain();
+  t.deepEqual(s.results(), [textOf.errorResult(texts.execExhausted)]);
+  t.deepEqual(s.retired, [0]);
+  await closeTurn(s);
+  await execTurn(s, [code('return 1')]);
+  t.is(s.scopes.length, 2);
 });

@@ -34,6 +34,8 @@ export const execCode = Object.freeze({
   'exec trivial': 'return 1;',
   'exec sleep30': 'globalThis.x = 5; await sleep(30000); return 30;',
   'exec sleep4': 'await sleep(4000); return 4;',
+  // M1b QC (J-0391): what an abandoned call would do after its sleep.
+  'exec late99': 'await sleep(4000); globalThis.x = 99; return 99;',
   'exec loop': 'while (true) {}',
   'exec forever': 'await new Promise(() => {});',
   'exec sends': [

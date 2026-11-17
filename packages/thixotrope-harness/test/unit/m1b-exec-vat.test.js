@@ -607,3 +607,130 @@ test('the ExecScope guard refuses requests outside the contract', async t => {
     { status: 'ok', text: '1' },
   );
 });
+
+/** Let queued promise jobs run (the fakes answer in later turns). */
+const settleJobs = async () => {
+  for (let i = 0; i < 20; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+};
+
+test('M1b QC (J-0391): model code cannot outlive its call; a kept sleep is dead', async t => {
+  const { exec, adapter } = await fresh();
+  adapter.holdSleeps();
+  // The reviewer's background loop: returns at once, then sleeps forever.
+  const answer = await exec(
+    [
+      'globalThis.ticks = 0; globalThis.kept = sleep;',
+      '(async () => { for (;;) { for (let i = 0; i < 3; i += 1) sleep(600000);',
+      '  await sleep(0); globalThis.ticks += 1; } })();',
+      'return 1;',
+    ].join('\n'),
+  );
+  t.deepEqual(answer, { status: 'ok', text: '1' });
+  const asked = adapter.sleeps.length;
+  t.is(asked, 4, 'only what the call asked for while it ran');
+  // The timer answers every sleep: the loop's continuation must not run.
+  adapter.wake();
+  await settleJobs();
+  t.deepEqual(await exec('return ticks;'), { status: 'ok', text: '0' });
+  t.is(adapter.sleeps.length, asked, 'no sleep was sent after the call ended');
+  // A sleep kept on globalThis never settles in a later call and sends
+  // nothing; the call's own sleep still reaches the timer.
+  t.deepEqual(
+    await exec(
+      'globalThis.kept(0).then(() => { globalThis.ticks = -1; }); sleep(5); return 2;',
+    ),
+    { status: 'ok', text: '2' },
+  );
+  t.deepEqual(adapter.sleeps.slice(asked), [5], 'only the live sleep was sent');
+  adapter.wake();
+  await settleJobs();
+  t.deepEqual(await exec('return ticks;'), { status: 'ok', text: '0' });
+});
+
+test('M1b QC (J-0391): abandon ends the running call; the scope and its bindings stay', async t => {
+  const { exec, adapter, scope } = await fresh();
+  adapter.holdSleeps();
+  t.deepEqual(await exec('globalThis.x = 5; return "set";'), {
+    status: 'ok',
+    text: '"set"',
+  });
+  // A long sleep, as acceptance 3's cancelled call.
+  const pending = exec('await sleep(30000); globalThis.x = 99; return "late";');
+  await settleJobs();
+  t.deepEqual(
+    await exec('return x;'),
+    { status: 'busy' },
+    'busy while it runs',
+  );
+  await E(scope).abandon();
+  t.deepEqual(await pending, { status: 'failed', text: texts.execAbandoned });
+  // The next call runs in the same scope at once (no busy, no reset).
+  t.deepEqual(await exec('return x;'), { status: 'ok', text: '5' });
+  // The abandoned call's sleep is answered later: its continuation is dead.
+  adapter.wake();
+  await settleJobs();
+  t.deepEqual(await exec('return x;'), { status: 'ok', text: '5' });
+  // Abandon with nothing running does nothing.
+  await E(scope).abandon();
+  t.deepEqual(await exec('return x + 1;'), { status: 'ok', text: '6' });
+});
+
+test('M1b QC (J-0391): a staged source abandoned while it is read is never evaluated', async t => {
+  const { scope, adapter, exec } = await fresh();
+  const staged = adapter.stage(argsOf('globalThis.y = 7; return 1;'));
+  /** @type {(() => void)[]} */
+  const gates = [];
+  // A Content whose pages arrive only when the test lets them.
+  const slowContent = Far('Content', {
+    /**
+     * @param {any} blob
+     * @param {any} range
+     */
+    read: (blob, range) => {
+      const kit = makePromiseKit();
+      gates.push(() => kit.resolve(E(adapter.content).read(blob, range)));
+      return kit.promise;
+    },
+  });
+  const pending = E(scope).run(
+    harden({
+      args: staged,
+      writers: adapter.writers,
+      timer: adapter.timer,
+      content: slowContent,
+    }),
+  );
+  await settleJobs();
+  t.is(gates.length, 1, 'the first page was asked for');
+  await E(scope).abandon();
+  t.deepEqual(await pending, { status: 'failed', text: texts.execAbandoned });
+  for (const open of gates.splice(0)) open();
+  await settleJobs();
+  t.deepEqual(await exec('return typeof y;'), {
+    status: 'ok',
+    text: '"undefined"',
+  });
+});
+
+test('M1b QC (J-0390): an exhausted name table answers exhausted, from arguments, parse or body', async t => {
+  const { namespace } = await load();
+  t.true(namespace.isKeysExhausted(RangeError('property key space exhausted')));
+  t.false(namespace.isKeysExhausted(RangeError('Invalid array length')));
+  const { exec } = await fresh();
+  // The engine's error is simulated: Node has no 64 Ki name table.
+  t.deepEqual(await exec('throw RangeError("property key space exhausted");'), {
+    status: 'exhausted',
+  });
+  t.deepEqual(
+    await exec(
+      'try { throw RangeError("property key space exhausted"); } catch (e) { return "swallowed"; }',
+    ),
+    { status: 'ok', text: '"swallowed"' },
+    'model code that swallows it is not seen (residual, J-0390)',
+  );
+  // Not busy afterwards.
+  t.deepEqual(await exec('return 2;'), { status: 'ok', text: '2' });
+});
