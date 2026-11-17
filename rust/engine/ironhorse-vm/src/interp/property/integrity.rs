@@ -476,6 +476,36 @@ impl Interp {
         if self.mop_is_extensible(code, inst)? {
             return Ok(false);
         }
+        // A cold cache (fresh, or a restored arena) must not take a heap-
+        // allocating route the warm cache skips: materializing the key list
+        // interns temporary strings, so a resumed machine would diverge from
+        // a never-suspended one byte-for-byte. When the authoritative slot
+        // flags already prove the level, charge exactly as the warm path does
+        // and record the fact; otherwise fall through to the full walk, whose
+        // `false` outcome never depends on the cache.
+        if self.fused_integrity_object(inst) && self.fused_key_resolution_is_inert() {
+            self.materialize_intrinsic_own_surface(inst);
+            let properties = self.own_property_slots(inst);
+            let proven = properties.iter().all(|&property| {
+                let flag = self.slots.get(property).flag;
+                flag & XS_DONT_DELETE_FLAG != 0
+                    && (!frozen
+                        || flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0
+                        || flag & XS_DONT_SET_FLAG != 0)
+            });
+            if proven {
+                let own_keys_metering = self.fused_own_keys_metering(&properties)?;
+                self.meter.tick_raw(INTEGRITY_QUERY_KEYS_BASE_METERING);
+                self.charge_fused_own_keys(own_keys_metering)?;
+                for _ in 0..properties.len() {
+                    self.meter.tick_raw(INTEGRITY_QUERY_PER_KEY_METERING);
+                }
+                let state = INTEGRITY_SEALED | if frozen { INTEGRITY_FROZEN } else { 0 };
+                self.slots
+                    .cache_integrity(inst, state, properties.len() as u32, own_keys_metering);
+                return Ok(true);
+            }
+        }
         self.meter.tick_raw(INTEGRITY_QUERY_KEYS_BASE_METERING);
         let keys = self.mop_own_keys(code, inst)?;
         let own_property_count = keys.len() as u32;
