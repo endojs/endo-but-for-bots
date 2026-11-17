@@ -126,6 +126,8 @@ const composerTurn = n =>
   n <= 51 ||
   n > TURNS - 50 ||
   POINTS.some(p => n > p - 50 && n <= p + 1);
+/** How long the first turn after a restart may take (its context rebuild). */
+const REBUILD_WAIT_MS = 30 * 60_000;
 const PING_N = 200;
 /** Slots per engine page (`rust/engine/ironhorse-vm/src/value.rs`). */
 const SLOTS_PER_PAGE = 256;
@@ -470,8 +472,9 @@ await runPerf('crank', async ({ provision }) => {
    * outside the measured windows (CRANK_START=mixed, J-9383).
    * @param {any} target
    * @param {string} input
+   * @param {number} ms
    */
-  const directTurn = async (target, input) => {
+  const directTurn = async (target, input, ms) => {
     const from = live.deliveries.length;
     const started = await E(target).startTurn(
       harden({ text: input }),
@@ -486,7 +489,7 @@ await runPerf('crank', async ({ provision }) => {
             (d.event.type === 'end' || d.event.type === 'abort') &&
             d.event.turnId === turnId,
         ),
-      120_000,
+      ms,
       `turn "${input}": end`,
       10,
     );
@@ -501,11 +504,12 @@ await runPerf('crank', async ({ provision }) => {
   /**
    * @param {any} target the session (reopened after each restart)
    * @param {number} n turn number (1-based)
+   * @param {number} [ms] how long to wait for its end
    */
-  const turn = async (target, n) => {
+  const turn = async (target, n, ms = 120_000) => {
     const r = composerTurn(n)
-      ? await runTurn(slice, target, live, `c${n}`, 120_000)
-      : await directTurn(target, `c${n}`);
+      ? await runTurn(slice, target, live, `c${n}`, ms)
+      : await directTurn(target, `c${n}`, ms);
     const started = live.deliveries
       .slice(r.from)
       .find(
@@ -631,7 +635,9 @@ await runPerf('crank', async ({ provision }) => {
     live = await slice.subscribe(found);
     const b = await state.counters();
     const rebuiltAt = performance.now();
-    await turn(found, n + 1);
+    // The first turn after a restart rebuilds the context cache: its page
+    // cranks are linear in the session's length (over 120 s at 4,000 turns).
+    await turn(found, n + 1, REBUILD_WAIT_MS);
     const turnMs = performance.now() - rebuiltAt;
     const a = await state.counters();
     await rebuildRow(`crank.context.rebuild.at${n}`, n + 1, {
@@ -725,7 +731,7 @@ await runPerf('crank', async ({ provision }) => {
   found = await E(slice.factory).findSession(key);
   live = await slice.subscribe(found);
   before = await state.counters();
-  const r = await runTurn(slice, found, live, 'after restart', 180_000);
+  const r = await runTurn(slice, found, live, 'after restart', REBUILD_WAIT_MS);
   after = await state.counters();
   const line = await waitFor(
     () =>
