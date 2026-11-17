@@ -22,6 +22,7 @@ import { join } from 'node:path';
 /* eslint-disable import/no-relative-packages */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
+import { messageBytes } from '../../guest/lib/bounded.js';
 import { inCallOrder } from '../../guest/session/records.js';
 import { blobsOf } from '../../guest/session/staging.js';
 /* eslint-enable import/no-relative-packages */
@@ -301,7 +302,10 @@ test('history: pages back to turn 1, every turn once; sealed previews and conten
   let sealedPages = 0;
   /** @type {any} */
   let page = await E(inc.history).page(vat.session);
+  let largest = 0;
   for (;;) {
+    largest = Math.max(largest, messageBytes(page));
+    t.true(messageBytes(page) <= limits.frameBytes, 'a page fits a frame');
     for (const turn of page.turns) {
       seen.push(turn.turnId);
       const ordinal = Number(turn.turnId.slice(1));
@@ -326,6 +330,7 @@ test('history: pages back to turn 1, every turn once; sealed previews and conten
   const expected = vat.turns.map(turn => turn.turnId).reverse();
   t.deepEqual(seen, expected, 'every turn once, newest first');
   t.true(sealedPages > 0);
+  t.log({ sealedPages, largestPageBytes: largest });
   // Full content of every sealed turn equals the full list, texts included.
   for (let ordinal = 1; ordinal <= vat.sealedTurns(); ordinal += 1) {
     const turnId = `t${ordinal}`;
@@ -634,4 +639,37 @@ test('ops facet: M2 methods forward to their handlers or throw notBuilt', async 
       name,
     );
   }
+});
+
+test('compacted: the persisted projection is rewritten from the boundary (the M8 hook)', async t => {
+  const dirs = await makeStateDir('w28c');
+  t.teardown(dirs.cleanup);
+  const { sink, keyOf } = makeFakeSink();
+  const first = makeIncarnation(dirs, sink);
+  const vat = makeFakeVat({
+    seed: 12,
+    store: first.blobs,
+    keepTurns: 4,
+    segmentTurns: 2,
+  });
+  const key = keyOf(vat.session);
+  const { inc } = await drive(t, { vat, dirs, sink, key, turns: 20 });
+  const state = /** @type {any} */ (vat.state());
+  t.true(vat.entries.length >= 3);
+  // A boundary inside the second segment.
+  const second = vat.entries[1];
+  const boundary = second.from + 2;
+  await inc.archive.compacted({ key, epoch: 1, boundary });
+  const sealed = await inc.archive.prepareSealed(vat.session, key, state);
+  const expected = await oracleTranscript(
+    vat.all.slice(boundary, state.sealedTo),
+    inc.blobs,
+  );
+  t.deepEqual(sealed.transcript, expected);
+  const head = JSON.parse(
+    (await readFile(join(dirs.archiveDir, key, 'context.jsonl'), 'utf8')).split(
+      '\n',
+    )[0],
+  );
+  t.like(head, { epoch: 1, boundary });
 });
