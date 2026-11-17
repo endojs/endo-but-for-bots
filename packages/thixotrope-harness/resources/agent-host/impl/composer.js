@@ -22,11 +22,48 @@
 import { interfaces, texts, textOf } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { utf8Bytes } from '../../../guest/lib/bounded.js';
+import { isRetiredBreak } from '../../../guest/lib/retired.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
 const { E, makeExo } = /** @type {GuestGlobals} */ (globalThis);
+
+/**
+ * The texts `Session.enqueueOnce` refuses with before it stores anything
+ * (guest/session/queue.js `enqueueOnce`: every `refuse` precedes the first
+ * write of the submission).
+ */
+const QUEUE_REFUSALS = new Set([
+  texts.blankSubmission,
+  texts.invalidRequestId,
+  texts.requestIdExpired,
+  texts.requestIdReused,
+  texts.receiptLimit,
+  textOf.queueFull(limits.maxWaiting),
+]);
+
+/**
+ * Whether `error` is the session's refusal of a submission it did not
+ * store: a queue refusal text, or its interface guard's rejection (the
+ * method never ran).
+ * @param {unknown} error
+ */
+export const isRefusal = error => {
+  if (isRetiredBreak(error)) return false;
+  let message;
+  try {
+    message = /** @type {any} */ (error)?.message;
+  } catch {
+    return false;
+  }
+  if (typeof message !== 'string') return false;
+  return (
+    QUEUE_REFUSALS.has(message) ||
+    message.startsWith('In "enqueueOnce" method of (Session)')
+  );
+};
+harden(isRefusal);
 
 /**
  * @param {object} [options]
@@ -52,6 +89,7 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) =>
         if (blobs === undefined) throw Error('no blob store');
         staged = await blobs.stage(text, {
           previewUnits: limits.messagePreviewUnits,
+          owner: session,
         });
       } catch (error) {
         throw Error(
@@ -60,11 +98,21 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) =>
           ),
         );
       }
-      const receipt = await E(session).enqueueOnce(staged, requestId, now());
+      /** @type {any} */
+      let receipt;
+      try {
+        receipt = await E(session).enqueueOnce(staged, requestId, now());
+      } catch (error) {
+        // A refusal the session makes before it stores anything (its queue
+        // checks, its guard) leaves this file without a holder: delete it
+        // (J-9361). Anything else (a break, an unknown failure) may come
+        // after the session kept the handle, so the file stays.
+        if (isRefusal(error)) void blobs?.discard(staged.blob);
+        throw error;
+      }
       // A retry of a submission the session already has (a duplicate
       // receipt) keeps the first one's blob: this one's file has no holder
-      // (M1b QC, J-0393). A refusal may come after the session changed
-      // state, so a failed enqueue keeps its file (bounded leak, 4.7).
+      // (M1b QC, J-0393).
       if (receipt?.duplicate === true) void blobs?.discard(staged.blob);
       return receipt;
     },

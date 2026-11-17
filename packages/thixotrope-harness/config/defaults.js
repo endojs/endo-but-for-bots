@@ -131,3 +131,30 @@ export const channelLimits = Object.freeze({
    */
   reorderWaitMs: 1000,
 });
+
+/**
+ * Disk quotas of staged text (M1b follow-ups, JOURNAL J-9361; contract
+ * `designs/m1b-interfaces.md` 17.1). Adapter settings: the blob store in the
+ * agent-host adapter (`resources/agent-host/impl/blobs.js`) refuses a
+ * staging that would go over either quota, with `textOf.blobSessionQuota`
+ * or `textOf.blobDaemonQuota` as the message of the staging failure (the
+ * submission, round or tool call fails; nothing is written).
+ */
+export const blobLimits = Object.freeze({
+  /**
+   * UTF-8 bytes of staged text one session may hold on disk: what was
+   * staged for it in this adapter incarnation, and the files of its handles
+   * the adapter resolved since it started (a restart starts the count from
+   * what the session's context and reads touch). 1 GiB is about 1,000
+   * 1 MiB replies; a 1,000-turn session of mixed sizes holds about 80 MB
+   * (J-9361).
+   */
+  sessionBytes: 1024 * 1024 * 1024,
+  /**
+   * UTF-8 bytes of staged text on this daemon's disk, all sessions: the
+   * files in `<state>/agent-host/blobs` (counted at adapter start) plus
+   * every staging since. 16 GiB, a sixth of the 98 GB data volume the
+   * specification's host has (Appendix C).
+   */
+  daemonBytes: 16 * 1024 * 1024 * 1024,
+});

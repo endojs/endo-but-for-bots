@@ -850,3 +850,29 @@ test("M1b QC: rows over one flush's batch cap are published in a later crank, no
     batches.map((_, i) => i + 1),
   );
 });
+
+test('M1b follow-ups (J-9362): after an adapter-only restart the start listener fetches the new list publisher', async t => {
+  const { kit, pool, published, listFeed } = setupFactory();
+  await listFeed.refresh();
+  await pool.whenSettled();
+  const session = await E(kit.factory).createSession(
+    harden({ title: 'a', backend }),
+  );
+  await settle();
+  t.deepEqual(
+    published.map(p => p.publisher),
+    [1],
+  );
+  // The adapter process restarts; the daemon does not. Publisher 1 is a
+  // tombstone (sendOnly drops); the manager tells its listeners that a new
+  // incarnation attached.
+  await E(kit.startListener).attached();
+  await settle();
+  await E(session).rename('after the restart');
+  await settle();
+  t.is(published.length, 2);
+  t.is(published[1].publisher, 2, 'the change went to the new publisher');
+  t.is(published[1].events[0].row.title, 'after the restart');
+  // `attached` is not `started`: no recovery ran.
+  t.is(kit.pendingCreations(), 0);
+});

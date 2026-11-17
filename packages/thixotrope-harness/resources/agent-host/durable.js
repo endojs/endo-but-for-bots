@@ -45,6 +45,11 @@ export const make = ({ makeManager }) => {
   /** The ops facet of the adapter incarnation that attached last. */
   let ops;
   let attaches = 0;
+  /**
+   * True while a daemon start runs `lifecycle.started()`: an attach then is
+   * the start's own, and listeners hear `started()` after it (J-9362).
+   */
+  let starting = false;
 
   const manager = makeManager({
     label: 'AgentHost',
@@ -109,6 +114,14 @@ export const make = ({ makeManager }) => {
       attach: (opsFacet, _incarnation) => {
         ops = opsFacet;
         attaches += 1;
+        // An incarnation that replaces another outside a daemon start (the
+        // adapter process exited and was rebuilt, or a call found the ops
+        // facet retired): what listeners fetched from the old one, such as
+        // the factory's list publisher, is a tombstone now (M1b follow-ups,
+        // J-9362; it stayed stale until the next daemon start).
+        if (attaches > 1 && !starting) {
+          for (const listener of listeners) E.sendOnly(listener).attached();
+        }
         return attaches;
       },
     },
@@ -273,9 +286,11 @@ export const make = ({ makeManager }) => {
      * told, sendOnly.
      */
     started: async () => {
+      starting = true;
       try {
         await manager.lifecycle.started();
       } finally {
+        starting = false;
         for (const listener of listeners) E.sendOnly(listener).started();
       }
     },

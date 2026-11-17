@@ -32,7 +32,10 @@ export const submissionField = s => (isStaged(s) ? s : s.text);
 harden(submissionField);
 
 /**
- * Same submission (contract 3.3): equal strings, or equal bytes and preview.
+ * Same submission (contract 3.3, 17.2): equal strings; staged, equal digests
+ * (the SHA-256 the adapter computed, J-9363) and bytes. A staged text
+ * without a digest (staged before digests) compares by bytes and preview,
+ * as before; with a digest on one side only, they differ.
  * @param {any} a
  * @param {any} b
  */
@@ -41,7 +44,11 @@ export const sameSubmission = (a, b) => {
   const y = submissionField(b);
   if (isStaged(x) !== isStaged(y)) return false;
   if (!isStaged(x)) return x === y;
-  return x.bytes === y.bytes && x.preview === y.preview;
+  if (x.bytes !== y.bytes) return false;
+  const hasX = typeof x.digest === 'string';
+  const hasY = typeof y.digest === 'string';
+  if (hasX || hasY) return hasX && hasY && x.digest === y.digest;
+  return x.preview === y.preview;
 };
 harden(sameSubmission);
 

@@ -24,7 +24,9 @@
  * in that order exactly as a cold creation; a spare whose `make` breaks
  * with the retired text is lost, retired and replaced once. Each session
  * gets an `ExecHandle` (`SessionServices.execVat`). The start listener also
- * refreshes the list feed's publisher and restarts the pool's refills. Row
+ * refreshes the list feed's publisher and restarts the pool's refills; its
+ * `attached()` (M1b follow-ups, J-9362) refreshes the publisher after an
+ * adapter-only restart. Row
  * changes reach the list feed through the row table (`list-feed.js`).
  *
  * Guest rules: prelude globals only; no clock (`createdAt` is the caller's
@@ -379,9 +381,19 @@ export const makeFactoryKit = ({
   /** Settles when the latest start's recovery is done (tests). */
   let recovered = Promise.resolve();
 
-  const startListener = makeExo('StartListener', interfaces.StartListener, {
+  const startListener = makeExo('StartListener', m1bInterfaces.StartListener, {
     started: () => {
       recovered = recover();
+      return undefined;
+    },
+    /**
+     * A new adapter incarnation attached outside a daemon start (an
+     * adapter-only restart, J-9362): the list publisher this vat holds is a
+     * tombstone, so fetch the current one. Nothing else here holds adapter
+     * objects (sessions reopen their own ports, contract 7.1).
+     */
+    attached: () => {
+      void listFeed?.refresh();
       return undefined;
     },
   });

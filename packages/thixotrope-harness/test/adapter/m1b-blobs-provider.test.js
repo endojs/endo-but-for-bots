@@ -5,7 +5,8 @@
 // TurnSink with `progress`, real files.
 import '../unit/_m1a-prelude.js';
 
-import { readdirSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 
 import test from '@endo/ses-ava/test.js';
 
@@ -27,8 +28,17 @@ import {
   tailText,
 } from '../../resources/agent-host/impl/providers/scripted.js';
 import { makeEchoTool } from '../../resources/agent-host/impl/tools/echo.js';
+import { makeComposer } from '../../resources/agent-host/impl/composer.js';
 import { makeChannelRegistry } from '../../resources/agent-host/impl/channels.js';
-import { makeTestBlobs } from './_m1b-blobs.js';
+import {
+  blobsUntil,
+  FIXED_REQUEST_ID,
+  filesIn,
+  makeFakeSession,
+  makeTestBlobs,
+  partsIn,
+  runRoundFor,
+} from './_m1b-blobs.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E, Far, makeExo, matches } = /** @type {GuestGlobals} */ (globalThis);
@@ -420,3 +430,142 @@ test('M1b QC (J-0393): a checkpoint the session refused keeps its file and the o
   });
   t.is(blobs.store.stats().discarded, 1);
 });
+
+// ---- M1b follow-ups (J-9361). Serial: AVA runs a file's serial tests
+// before its concurrent ones, so their fsyncs do not overlap the streamed
+// checkpoint test above (its checkpoint count falls under fsync load).
+
+test.serial(
+  'M1b follow-ups (J-9361): a round that fails after staging its tool arguments leaves no file',
+  async t => {
+    const blobs = makeTestBlobs();
+    t.teardown(blobs.cleanup);
+    // 64 calls of 9,000-byte arguments: every one is staged, and the result
+    // still does not fit roundResultBytes, so the round fails (frame limit)
+    // and none of the 64 handles was sent.
+    const args = JSON.stringify({ text: 'z'.repeat(9000) });
+    const owner = Far('Session', {});
+    const r = await runRoundFor(
+      blobs.store,
+      {
+        turns: [
+          {
+            rounds: [
+              {
+                chunks: [{ text: 'calls' }],
+                toolCalls: [{ name: 'echo', args, times: 64 }],
+              },
+            ],
+          },
+        ],
+      },
+      owner,
+    );
+    t.is(r.failures.length, 1);
+    t.is(r.failures[0].reason, texts.frameLimit);
+    await blobsUntil(() => blobs.store.stats().dropped >= 64);
+    t.deepEqual(filesIn(blobs.blobDir), []);
+    t.deepEqual(partsIn(blobs.blobDir), []);
+    t.is(blobs.store.usage(owner).session, 0);
+  },
+);
+
+/**
+ * Turns of the disk check: 25 in the unit lane (under a second); the J-9361
+ * measurement ran 1,000 (`BLOBS_DISK_TURNS=1000`, about 20 s of fsyncs,
+ * which slows the other adapter tests running beside it).
+ */
+const DISK_TURNS = Number(process.env.BLOBS_DISK_TURNS ?? 25);
+
+test.serial(
+  'M1b follow-ups (J-9361): blob disk after many turns of mixed sizes (Composer, provider): every byte on disk is held',
+  async t => {
+    t.timeout(10 * 60_000);
+    const blobs = makeTestBlobs();
+    t.teardown(blobs.cleanup);
+    const owner = Far('Session', {});
+    const composer = makeComposer({ now: () => 7, blobs: blobs.store });
+    const session = makeFakeSession();
+    const refusing = makeFakeSession(() => {
+      throw Error(texts.requestIdReused);
+    });
+    // Sizes in bytes, cycled per turn: most turns are small, some large.
+    const inputSizes = [200, 9000, 600, 20_000, 1000, 64_000];
+    const replySizes = [500, 12_000, 2000, 40_000, 800, 200_000];
+    let referenced = 0;
+    let refusedSubmissions = 0;
+    const t0 = Date.now();
+    for (let turn = 0; turn < DISK_TURNS; turn += 1) {
+      const inputBytes = inputSizes[turn % inputSizes.length];
+      const replyBytes =
+        turn % 100 === 99 ? 1_048_576 : replySizes[turn % replySizes.length];
+      // Every 25th submission is refused by the session (its file must go).
+      const target = turn % 25 === 24 ? refusing : session;
+      const input = `${turn} ${'i'.repeat(inputBytes)}`;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await E(composer).submit(target.session, input, FIXED_REQUEST_ID);
+        if (Buffer.byteLength(input) > limits.inlineBytes)
+          referenced += Buffer.byteLength(input);
+      } catch {
+        refusedSubmissions += 1;
+      }
+      const replyText = 'r'.repeat(replyBytes);
+      const chunks =
+        replyBytes > 64_000
+          ? Array.from({ length: Math.ceil(replyBytes / 16_384) }, (_, i) => ({
+              text: replyText.slice(i * 16_384, (i + 1) * 16_384),
+            }))
+          : [{ text: replyText }];
+      // Every 10th round has a 20 KB tool argument.
+      const toolCalls =
+        turn % 10 === 3
+          ? [
+              {
+                name: 'echo',
+                args: JSON.stringify({ text: 'a'.repeat(20_000) }),
+              },
+            ]
+          : [];
+      // eslint-disable-next-line no-await-in-loop
+      const r = await runRoundFor(
+        blobs.store,
+        { turns: [{ rounds: [{ chunks, toolCalls }] }] },
+        owner,
+        `t${turn}`,
+      );
+      const [final] = r.finals;
+      if (typeof final.text === 'object') referenced += final.text.bytes;
+      for (const call of final.toolCalls) {
+        if (typeof call.args === 'object') referenced += call.args.bytes;
+      }
+    }
+    const ms = Date.now() - t0;
+    // Let the last discards land.
+    await timers.delay(100);
+    const files = filesIn(blobs.blobDir);
+    const onDisk = files.reduce(
+      (sum, name) => sum + statSync(join(blobs.blobDir, name)).size,
+      0,
+    );
+    const stats = blobs.store.stats();
+    const row = {
+      metric: 'blobs.disk',
+      turns: DISK_TURNS,
+      files: files.length,
+      onDiskBytes: onDisk,
+      referencedBytes: referenced,
+      unreferencedBytes: onDisk - referenced,
+      parts: partsIn(blobs.blobDir).length,
+      refusedSubmissions,
+      stagedBytes: stats.stagedBytes,
+      discarded: stats.discarded,
+      sessionUsage: blobs.store.usage(owner).session,
+      ms,
+    };
+    t.log(JSON.stringify(row));
+    t.is(refusedSubmissions, Math.floor(DISK_TURNS / 25));
+    t.is(onDisk, referenced, 'every byte on disk is held by a record');
+    t.is(row.parts, 0);
+  },
+);

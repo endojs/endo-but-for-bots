@@ -108,9 +108,26 @@ export const makeAgentHostImpl = ({
    * What a Backend presence of the manager vat is in this incarnation:
    * built from its spec on first open, then reused (one provider per
    * backend, so a script's turn selection spans the backend's turns).
-   * @type {WeakMap<any, { provider: any, toolEntries: Array<{ name: string, tool: any }> }>}
+   * @type {WeakMap<any, { provider: any, log: any, kind: BackendKind, toolsOf: WeakMap<any, any> }>}
    */
   const backends = new WeakMap();
+
+  /**
+   * The blob store as one session sees it (J-9361, J-9364): what it stages
+   * counts against that session's quota, and what it reads must be its own.
+   * @param {any} owner the Session presence
+   * @returns {import('./blobs.js').BlobStore}
+   */
+  const blobsOf = owner =>
+    harden({
+      ...blobs,
+      stage: (text, options = {}) => blobs.stage(text, { ...options, owner }),
+      stagePending: (text, options = {}) =>
+        blobs.stagePending(text, { ...options, owner }),
+      read: blob => blobs.read(blob, owner),
+      readPage: (blob, offset, maxBytes) =>
+        blobs.readPage(blob, offset, maxBytes, owner),
+    });
 
   /**
    * @param {any} backend
@@ -131,32 +148,47 @@ export const makeAgentHostImpl = ({
       log,
       blobs,
     });
-    const toolEntries = kind.tools.map(name => {
-      const entry = tools.find(candidate => candidate.name === name);
-      if (entry === undefined) throw Error(`No adapter tool ${name} here`);
-      return harden({ name, tool: entry.makeTool({ timers, log, blobs }) });
-    });
-    const state = harden({ provider, toolEntries });
+    // The backend's adapter tools, one set per session (J-9364).
+    const state = harden({ provider, log, kind, toolsOf: new WeakMap() });
     backends.set(backend, state);
     return state;
   };
 
   const ops = makeOps({
     open: ({ backend, spec, session }) => {
-      const { provider, toolEntries } = backendState(backend, spec);
+      const { provider, log, kind, toolsOf } = backendState(backend, spec);
       const channel = channels.channelFor(session);
       const endpoint = makeEndpoint({
         provider,
         channel,
         timers,
         prepare: req => contextCache.prepare(session, req),
+        owner: session,
       });
+      // Per session (J-9361, J-9364): the tools, writers and Content of
+      // these ports stage for this session and read only its blobs.
+      const sessionBlobs = blobsOf(session);
+      let toolEntries = toolsOf.get(session);
+      if (toolEntries === undefined) {
+        toolEntries = harden(
+          kind.tools.map(name => {
+            const entry = tools.find(candidate => candidate.name === name);
+            if (entry === undefined)
+              throw Error(`No adapter tool ${name} here`);
+            return harden({
+              name,
+              tool: entry.makeTool({ timers, log, blobs: sessionBlobs }),
+            });
+          }),
+        );
+        toolsOf.set(session, toolEntries);
+      }
       return harden({
         endpoint,
         publisher: channel.publisher,
         tools: toolEntries,
-        content,
-        writers: blobs.writers,
+        content: makeContent({ store: sessionBlobs }),
+        writers: blobs.writersFor(session),
         timer,
       });
     },

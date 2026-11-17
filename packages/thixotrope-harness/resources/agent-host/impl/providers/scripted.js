@@ -236,12 +236,28 @@ export const makeScriptedProvider = ({
   logContext = logPath !== undefined,
 }) => {
   /**
+   * Stage a round's text without letting its handle out: the file stays
+   * `<key>.part` until `commit` right before the message that carries it is
+   * sent, so a crash or a cancel in between leaves nothing on disk (J-9361).
    * @param {string} text
    * @param {number} previewUnits
+   * @param {any} owner the Session presence (its disk quota)
    */
-  const stage = (text, previewUnits) => {
+  const stage = (text, previewUnits, owner) => {
     if (blobs === undefined) return Promise.reject(Error('no blob store'));
-    return blobs.stage(text, { previewUnits });
+    return blobs.stagePending(text, { previewUnits, owner });
+  };
+  /**
+   * Name the pending files among `staged` before sending them.
+   * @param {ReadonlyArray<any>} staged
+   */
+  const commit = staged => blobs?.commit(staged) ?? Promise.resolve();
+  /**
+   * Delete the files among `staged` that were never committed.
+   * @param {ReadonlyArray<any>} staged
+   */
+  const drop = staged => {
+    void blobs?.drop(staged).catch(() => 0);
   };
   /**
    * Log after this turn of the event loop, with the `at` of the moment it
@@ -302,8 +318,9 @@ export const makeScriptedProvider = ({
    * @param {any} channel
    * @param {ReturnType<typeof makeRoundControl>} control
    * @param {(() => Promise<any>) | undefined} prepare
+   * @param {any} owner the Session presence served (its disk quota)
    */
-  const runRound = async (req, channel, control, prepare) => {
+  const runRound = async (req, channel, control, prepare, owner) => {
     const { turn, sink, turnId, round } = req;
     const where = { turnId, round };
     later(log, 'round-start', { ...where, at: now() });
@@ -371,7 +388,7 @@ export const makeScriptedProvider = ({
       let input = projection?.input ?? first?.input;
       if (isStaged(input)) {
         // The script matches on the full text, read in process.
-        input = await blobs?.read(input.blob).catch(() => undefined);
+        input = await blobs?.read(input.blob, owner).catch(() => undefined);
       }
       scriptTurn = chooseTurn(input);
       if (scriptTurn !== undefined) chosen.set(turn, scriptTurn);
@@ -430,13 +447,22 @@ export const makeScriptedProvider = ({
       checkpointBytes = bytes;
       checkpointAt = now();
       checkpointWritten += bytes;
-      checkpointing = stage(whole, limits.messagePreviewUnits).then(
-        partial => {
-          checkpointing = undefined;
+      checkpointing = stage(whole, limits.messagePreviewUnits, owner).then(
+        async partial => {
           if (control.stopped() !== undefined) {
-            void blobs?.discard(partial.blob);
-            return;
+            checkpointing = undefined;
+            drop([partial]);
+            return undefined;
           }
+          try {
+            await commit([partial]);
+          } catch (error) {
+            checkpointing = undefined;
+            drop([partial]);
+            log('progress-failed', { ...where, error: messageOf(error) });
+            return undefined;
+          }
+          checkpointing = undefined;
           lastCheckpoint = { bytes, staged: partial };
           log('progress', { ...where, units: whole.length });
           // Answered (J-0393): once the session kept this checkpoint it no
@@ -521,7 +547,7 @@ export const makeScriptedProvider = ({
     const stageText = previewUnits =>
       lastCheckpoint !== undefined && lastCheckpoint.bytes === textBytes
         ? Promise.resolve(lastCheckpoint.staged)
-        : stage(text, previewUnits);
+        : stage(text, previewUnits, owner);
     if (scripted.error !== undefined) {
       /** @type {any} */
       let partial = text;
@@ -529,8 +555,15 @@ export const makeScriptedProvider = ({
         partial = await stageText(limits.messagePreviewUnits).catch(() => text);
       }
       if (control.stopped() !== undefined) {
+        drop([partial]);
         cancelled();
         return;
+      }
+      try {
+        await commit([partial]);
+      } catch {
+        drop([partial]);
+        partial = text;
       }
       log('round-failed', where);
       E.sendOnly(sink).roundFailed(failure(round, scripted.error, partial));
@@ -557,6 +590,9 @@ export const makeScriptedProvider = ({
     }));
     /** @type {any} */
     let result;
+    /** What this round staged for its result (pending until sent). */
+    /** @type {any[]} */
+    const roundStaged = [];
     try {
       if (calls.length > limits.maxCallsPerMessage) {
         throw Error(texts.frameLimit);
@@ -570,8 +606,13 @@ export const makeScriptedProvider = ({
         nativeContext: scripted.nativeContext,
         usage: scripted.usage ?? ZERO_USAGE,
         servedBy: { label, modelId: req.options.modelId },
+        owner,
+        staged: roundStaged,
       });
+      if (control.stopped() === undefined) await commit(roundStaged);
     } catch (error) {
+      // Nothing of this round was sent: its pending files go (J-9361).
+      drop(roundStaged);
       const reason =
         messageOf(error) === texts.frameLimit
           ? texts.frameLimit
@@ -588,6 +629,7 @@ export const makeScriptedProvider = ({
       return;
     }
     if (control.stopped() !== undefined) {
+      drop(roundStaged);
       cancelled();
       return;
     }
@@ -607,6 +649,8 @@ export const makeScriptedProvider = ({
    * @param {string | undefined} round.nativeContext
    * @param {any} round.usage
    * @param {any} round.servedBy
+   * @param {any} round.owner the Session presence (its disk quota)
+   * @param {any[]} round.staged collects every StagedText of the result
    */
   const stageRound = async ({
     round,
@@ -617,23 +661,35 @@ export const makeScriptedProvider = ({
     nativeContext,
     usage,
     servedBy,
+    owner,
+    staged,
   }) => {
+    /**
+     * @param {Promise<any>} staging
+     */
+    const kept = async staging => {
+      const value = await staging;
+      staged.push(value);
+      return value;
+    };
     /** @type {any} */
     let replyText = text;
     if (textBytes > limits.inlineBytes) {
-      replyText = await stageText(limits.messagePreviewUnits);
+      replyText = await kept(stageText(limits.messagePreviewUnits));
     }
     await Promise.all(
       calls.map(async call => {
         if (utf8Bytes(call.args) > limits.inlineBytes) {
-          call.args = await stage(call.args, limits.toolPreviewUnits);
+          call.args = await kept(
+            stage(call.args, limits.toolPreviewUnits, owner),
+          );
         }
       }),
     );
     /** @type {Record<string, any>} */
     const fields = { round, text: replyText, usage, at: now(), servedBy };
     if (nativeContext !== undefined) {
-      fields.nativeContext = await stage(nativeContext, 0);
+      fields.nativeContext = await kept(stage(nativeContext, 0, owner));
     }
     const build = () =>
       harden({ ...fields, toolCalls: calls.map(call => harden({ ...call })) });
@@ -655,9 +711,8 @@ export const makeScriptedProvider = ({
         throw Error(texts.frameLimit);
       }
       // eslint-disable-next-line no-await-in-loop
-      calls[largest].args = await stage(
-        calls[largest].args,
-        limits.toolPreviewUnits,
+      calls[largest].args = await kept(
+        stage(calls[largest].args, limits.toolPreviewUnits, owner),
       );
       result = build();
     }
@@ -669,13 +724,15 @@ export const makeScriptedProvider = ({
      * @param {any} req
      * @param {any} channel
      * @param {() => Promise<any>} [prepare] the context cache (W1b.2)
+     * @param {any} [owner] the Session presence the round serves (blob
+     *   quota and provenance, J-9361)
      */
-    startRound: async (req, channel, prepare) => {
+    startRound: async (req, channel, prepare, owner) => {
       running.get(req.turn)?.stop('release');
       const control = makeRoundControl(timers);
       running.set(req.turn, control);
       try {
-        await runRound(req, channel, control, prepare);
+        await runRound(req, channel, control, prepare, owner);
       } finally {
         if (running.get(req.turn) === control) running.delete(req.turn);
       }

@@ -21,6 +21,17 @@
  * process; its handles were exported only to this adapter session, so the
  * manager's WeakMap lets them go.
  *
+ * Quotas (M1b follow-ups, J-9361; contract 17.1): a staging that would
+ * take its session (`owner`) over `blobLimits.sessionBytes`, or the whole
+ * directory over `blobLimits.daemonBytes`, is refused before anything is
+ * written (`textOf.blobSessionQuota`, `textOf.blobDaemonQuota`). A writer is
+ * checked piece by piece. Deleted files are refunded.
+ *
+ * Provenance (J-9364; contract 17.3): each bound handle records the session
+ * it was staged for; `read`/`readPage`/`claim` with an owner refuse another
+ * session's handle (`texts.blobNotOwned`). A handle resolved after a restart
+ * has no owner until the first session presents it.
+ *
  * Node only. Reading is in process (`read`, `readPage`); the `Content`
  * exo (content.js) answers vats from `readPage`; `writers` is the
  * `BlobWriters` exo of `TurnPorts.writers` (the exec vat writes large
@@ -29,6 +40,7 @@
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import {
   open,
   mkdir,
@@ -41,9 +53,10 @@ import {
 import { dirname, basename, join } from 'node:path';
 import { argv as processArgv, pid } from 'node:process';
 
-import { m1bInterfaces, texts } from '../../../guest/lib/interfaces.js';
+import { m1bInterfaces, texts, textOf } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { previewText } from '../../../guest/lib/bounded.js';
+import { blobLimits } from '../../../config/defaults.js';
 import { makeTimers } from './timers.js';
 /* eslint-enable import/no-relative-packages */
 
@@ -61,25 +74,53 @@ const isContinuation = byte => byte >= 0x80 && byte < 0xc0;
  * @property {any} blob
  * @property {string} preview
  * @property {number} bytes
+ * @property {string} [digest] SHA-256 of the UTF-8 bytes, hex (J-9363)
  *
  * @typedef {object} ContentPage
  * @property {string} text
  * @property {number} next
  * @property {boolean} done
  *
+ * @typedef {{ previewUnits?: number, owner?: any }} StageOptions `owner`:
+ *   the Session presence the text is staged for (its quota; J-9361, J-9364)
+ *
  * @typedef {object} BlobStore
- * @property {(text: string, options?: { previewUnits?: number }) => Promise<StagedText>} stage
- * @property {(blob: any) => Promise<string>} read the whole text
- * @property {(blob: any, offset: number, maxBytes: number) => Promise<ContentPage>} readPage
+ * @property {(text: string, options?: StageOptions) => Promise<StagedText>} stage
+ *   write, fsync, name, fsync the directory, bind: the handle may leave now
+ * @property {(text: string, options?: StageOptions) => Promise<StagedText>} stagePending
+ *   write and fsync `<key>.part` only; the handle must not leave the process
+ *   before `commit` (a crash before it leaves a `.part` the next start
+ *   deletes; J-9361)
+ * @property {(staged: ReadonlyArray<StagedText | undefined>) => Promise<void>} commit
+ *   name the pending files and fsync the directory once; then bind them
+ *   (committed or unknown entries are skipped)
+ * @property {(staged: ReadonlyArray<StagedText | undefined>) => Promise<number>} drop
+ *   delete the files of the entries still pending (their handles never left
+ *   the process: a round cancelled or failed before it was sent); committed
+ *   entries are left alone. Answers how many were deleted.
+ * @property {(blob: any, owner?: any) => Promise<string>} read the whole
+ *   text; with `owner`, refused (`texts.blobNotOwned`) for another
+ *   session's handle
+ * @property {(blob: any, offset: number, maxBytes: number, owner?: any) => Promise<ContentPage>} readPage
  * @property {(blobs: readonly any[]) => Promise<void>} resolveMany
- * @property {any} writers the BlobWriters exo
- * @property {() => Promise<void>} sweep deletes `*.part` (writes that never completed)
+ * @property {(blob: any, owner: any) => void} claim refuses
+ *   (`texts.blobNotOwned`) a bound handle of another session; an ownerless
+ *   one (resolved after a restart) becomes `owner`'s (J-9364)
+ * @property {any} writers the BlobWriters exo (no owner)
+ * @property {(owner: any) => any} writersFor a BlobWriters exo whose
+ *   blobs are `owner`'s (its quota; TurnPorts.writers)
+ * @property {() => Promise<void>} sweep deletes `*.part` (writes that never
+ *   completed or were never committed) and counts the bytes on disk
  * @property {(blob: any) => boolean} knows the handle is bound in this incarnation
  * @property {(blob: any) => Promise<boolean>} discard delete the file of a
- *   handle this incarnation bound and the caller knows no vat keeps (M1b QC,
- *   J-0393: superseded progress checkpoints, staged submissions a session
- *   refused or already had); true when a file was deleted. The handle stays
- *   minted; a later read of it fails with `texts.blobUnknown`.
+ *   handle this incarnation bound (or wrote and did not commit) and the
+ *   caller knows no vat keeps (M1b QC, J-0393: superseded progress
+ *   checkpoints, staged submissions a session refused or already had;
+ *   J-9361: stagings of a round that was cancelled before it was sent);
+ *   true when a file was deleted. The handle stays minted; a later read of
+ *   it fails with `texts.blobUnknown`.
+ * @property {(owner: any) => { session: number, daemon: number }} usage
+ *   bytes held by `owner` and on disk in all (quotas)
  * @property {() => Record<string, number>} stats counters (tests, perf)
  *
  * @typedef {'write' | 'fsync' | 'rename' | 'fsync-dir' | 'bind'} Step
@@ -124,6 +165,11 @@ const syncDirectory = async path => {
 const resolveLazy = value =>
   typeof value === 'function' ? /** @type {() => T} */ (value)() : value;
 
+/** The SHA-256 of `buffer`, 64 lowercase hex digits (StagedText.digest). @param {Buffer} buffer */
+export const digestOf = buffer =>
+  createHash('sha256').update(buffer).digest('hex');
+harden(digestOf);
+
 /**
  * @param {object} options
  * @param {string | (() => string)} options.dir the blob directory (or how to
@@ -133,6 +179,8 @@ const resolveLazy = value =>
  * @param {import('./timers.js').Timers} [options.timers]
  * @param {(step: Step, key: string) => void} [options.trace] called before
  *   each durable step and the bind (tests: order; a throw fails the staging)
+ * @param {{ sessionBytes: number, daemonBytes: number }} [options.quota]
+ *   disk quotas (`config/defaults.js` `blobLimits`; J-9361)
  * @returns {BlobStore}
  */
 export const makeBlobStore = ({
@@ -140,6 +188,7 @@ export const makeBlobStore = ({
   sink,
   timers = makeTimers(),
   trace = () => {},
+  quota = blobLimits,
 }) => {
   /** @type {string | undefined} */
   let blobDir;
@@ -158,9 +207,23 @@ export const makeBlobStore = ({
   };
   const sinkOf = () => resolveLazy(sink);
 
-  /** presence -> its file key and byte length (this incarnation). */
-  /** @type {WeakMap<any, { key: string, bytes: number }>} */
+  /**
+   * presence -> its file key, byte length and owner (this incarnation). The
+   * owner is the Session presence the text was staged for, or the first
+   * session that claimed the handle after a restart (J-9364).
+   * @type {WeakMap<any, { key: string, bytes: number, owner?: any }>}
+   */
   const known = new WeakMap();
+  /**
+   * Handles written to `<key>.part` and fsynced but not yet committed (named
+   * and bound): they have not left this process (J-9361).
+   * @type {WeakMap<any, { key: string, bytes: number, owner?: any }>}
+   */
+  const pending = new WeakMap();
+  /** owner -> bytes of its staged text this incarnation knows. @type {WeakMap<any, number>} */
+  const ownerBytes = new WeakMap();
+  /** Bytes of staged text on disk (files counted by `sweep`, then kept up). */
+  let diskBytes = 0;
   /** @type {Array<{ blob: any, key: string }>} */
   const stock = [];
   /** @type {Promise<void> | undefined} */
@@ -175,6 +238,43 @@ export const makeBlobStore = ({
     writersAborted: 0,
     discarded: 0,
     discardedBytes: 0,
+    dropped: 0,
+    refusedSession: 0,
+    refusedDaemon: 0,
+    refusedOwner: 0,
+    swept: 0,
+  };
+
+  /** @param {any} owner */
+  const heldBy = owner =>
+    owner === undefined ? 0 : (ownerBytes.get(owner) ?? 0);
+  /**
+   * @param {any} owner
+   * @param {number} delta
+   */
+  const charge = (owner, delta) => {
+    diskBytes += delta;
+    if (owner !== undefined)
+      ownerBytes.set(owner, Math.max(0, heldBy(owner) + delta));
+  };
+  /**
+   * Refuse `bytes` more for `owner` over either quota (nothing written yet),
+   * else charge them (the caller refunds them if the staging fails).
+   * @param {any} owner
+   * @param {number} bytes
+   */
+  const reserve = (owner, bytes) => {
+    if (owner !== undefined && heldBy(owner) + bytes > quota.sessionBytes) {
+      counts.refusedSession += 1;
+      throw Error(
+        textOf.blobSessionQuota(bytes, heldBy(owner), quota.sessionBytes),
+      );
+    }
+    if (diskBytes + bytes > quota.daemonBytes) {
+      counts.refusedDaemon += 1;
+      throw Error(textOf.blobDaemonQuota(bytes, diskBytes, quota.daemonBytes));
+    }
+    charge(owner, bytes);
   };
 
   const refill = () => {
@@ -196,14 +296,22 @@ export const makeBlobStore = ({
     return refilling;
   };
 
-  /** A stock handle; refills in the background below STOCK_LOW. */
+  /**
+   * A stock handle; refills in the background below STOCK_LOW. Many
+   * stagings at once (a round of 100 large tool arguments) may each wait
+   * for several refills: only refills that left the stock empty count
+   * against the bound (J-9361; before, the fourth waiter of one refill
+   * failed with "minted no blob handles").
+   */
   const take = async () => {
-    let tries = 0;
+    let empty = 0;
     while (stock.length === 0) {
-      tries += 1;
-      if (tries > 3) throw Error('the manager minted no blob handles');
       // eslint-disable-next-line no-await-in-loop
       await refill();
+      if (stock.length === 0) {
+        empty += 1;
+        if (empty > 3) throw Error('the manager minted no blob handles');
+      }
     }
     const entry = /** @type {{ blob: any, key: string }} */ (stock.shift());
     if (stock.length < STOCK_LOW) refill().catch(() => {});
@@ -211,59 +319,153 @@ export const makeBlobStore = ({
   };
 
   /**
-   * The durable part of a staging: the file is complete and named before
-   * its handle is bound.
+   * fsync and close a written part file.
    * @param {string} key
-   * @param {string} part path of the written, unsynced file handle's file
-   * @param {import('node:fs/promises').FileHandle} handle open on `part`
+   * @param {import('node:fs/promises').FileHandle} handle
    */
-  const commit = async (key, part, handle) => {
-    const path = await directory();
+  const syncPart = async (key, handle) => {
     try {
       trace('fsync', key);
       await handle.sync();
     } finally {
       await handle.close();
     }
-    trace('rename', key);
-    await rename(part, join(path, key));
-    trace('fsync-dir', key);
+  };
+
+  /**
+   * Name synced part files and fsync the directory once for all of them:
+   * after this their handles may leave the process.
+   * @param {Array<{ key: string, part: string }>} files
+   */
+  const name = async files => {
+    if (files.length === 0) return;
+    const path = await directory();
+    for (const { key, part } of files) {
+      trace('rename', key);
+      // eslint-disable-next-line no-await-in-loop
+      await rename(part, join(path, key));
+    }
+    trace('fsync-dir', files[files.length - 1].key);
     await syncDirectory(path);
   };
 
   /**
    * @param {any} blob
-   * @param {string} key
-   * @param {number} bytes
-   * @param {string} preview
+   * @param {{ key: string, bytes: number, owner?: any }} info
    */
-  const bind = (blob, key, bytes, preview) => {
-    trace('bind', key);
-    known.set(blob, { key, bytes });
+  const bind = (blob, info) => {
+    trace('bind', info.key);
+    known.set(blob, info);
     counts.staged += 1;
-    counts.stagedBytes += bytes;
-    return harden({ blob, preview, bytes });
+    counts.stagedBytes += info.bytes;
+  };
+
+  /**
+   * Write `text` to `<key>.part` and fsync it; quotas first.
+   * @param {string} text
+   * @param {{ previewUnits?: number, owner?: any }} options
+   */
+  const writePart = async (
+    text,
+    { previewUnits = limits.messagePreviewUnits, owner } = {},
+  ) => {
+    const buffer = Buffer.from(text, 'utf8');
+    reserve(owner, buffer.length);
+    try {
+      const path = await directory();
+      const { blob, key } = await take();
+      const part = join(path, `${key}.part`);
+      const handle = await open(part, 'w', 0o600);
+      try {
+        trace('write', key);
+        await handle.writeFile(buffer);
+      } catch (error) {
+        await handle.close();
+        await unlink(part).catch(() => {});
+        throw error;
+      }
+      try {
+        await syncPart(key, handle);
+      } catch (error) {
+        await unlink(part).catch(() => {});
+        throw error;
+      }
+      const staged = harden({
+        blob,
+        preview: previewText(text, previewUnits),
+        bytes: buffer.length,
+        digest: digestOf(buffer),
+      });
+      return { staged, key, part, info: { key, bytes: buffer.length, owner } };
+    } catch (error) {
+      charge(owner, -buffer.length);
+      throw error;
+    }
   };
 
   /** @type {BlobStore['stage']} */
-  const stage = async (
-    text,
-    { previewUnits = limits.messagePreviewUnits } = {},
-  ) => {
-    const path = await directory();
-    const { blob, key } = await take();
-    const buffer = Buffer.from(text, 'utf8');
-    const part = join(path, `${key}.part`);
-    const handle = await open(part, 'w', 0o600);
+  const stage = async (text, options = {}) => {
+    const { staged, key, part, info } = await writePart(text, options);
     try {
-      trace('write', key);
-      await handle.writeFile(buffer);
+      await name([{ key, part }]);
     } catch (error) {
-      await handle.close();
+      await unlink(part).catch(() => {});
+      charge(info.owner, -info.bytes);
       throw error;
     }
-    await commit(key, part, handle);
-    return bind(blob, key, buffer.length, previewText(text, previewUnits));
+    bind(staged.blob, info);
+    return staged;
+  };
+
+  /** @type {BlobStore['stagePending']} */
+  const stagePending = async (text, options = {}) => {
+    const { staged, info } = await writePart(text, options);
+    pending.set(staged.blob, info);
+    return staged;
+  };
+
+  /** @type {BlobStore['commit']} */
+  const commit = async stagedTexts => {
+    /** @type {Array<{ blob: any, key: string, part: string, info: any }>} */
+    const files = [];
+    if (
+      !stagedTexts.some(
+        staged =>
+          staged !== undefined &&
+          typeof staged === 'object' &&
+          pending.has(staged.blob),
+      )
+    )
+      return;
+    const path = await directory();
+    for (const staged of stagedTexts) {
+      const info =
+        staged === undefined || typeof staged !== 'object'
+          ? undefined
+          : pending.get(staged.blob);
+      if (staged !== undefined && info !== undefined) {
+        pending.delete(staged.blob);
+        files.push({
+          blob: staged.blob,
+          key: info.key,
+          part: join(path, `${info.key}.part`),
+          info,
+        });
+      }
+    }
+    try {
+      await name(files);
+    } catch (error) {
+      for (const file of files) {
+        // eslint-disable-next-line no-await-in-loop
+        await unlink(file.part).catch(() => {});
+        // eslint-disable-next-line no-await-in-loop
+        await unlink(join(path, file.key)).catch(() => {});
+        charge(file.info.owner, -file.info.bytes);
+      }
+      throw error;
+    }
+    for (const file of files) bind(file.blob, file.info);
   };
 
   /** @type {BlobStore['resolveMany']} */
@@ -293,8 +495,10 @@ export const makeBlobStore = ({
               if (typeof key !== 'string' || !KEY.test(key)) return;
               try {
                 const info = await stat(join(path, key));
-                known.set(blob, { key, bytes: info.size });
-                counts.resolved += 1;
+                if (!known.has(blob)) {
+                  known.set(blob, { key, bytes: info.size });
+                  counts.resolved += 1;
+                }
               } catch {
                 // No file: the handle stays unknown (texts.blobUnknown).
               }
@@ -306,23 +510,45 @@ export const makeBlobStore = ({
     await Promise.all(batches);
   };
 
-  /** @param {any} blob */
-  const locate = async blob => {
+  /** @type {BlobStore['claim']} */
+  const claim = (blob, owner) => {
+    const found = known.get(blob);
+    if (found === undefined) return;
+    if (found.owner === undefined) {
+      // Staged before this incarnation (or without an owner): the first
+      // session that presents the handle holds it from now on (J-9364).
+      found.owner = owner;
+      if (owner !== undefined)
+        ownerBytes.set(owner, heldBy(owner) + found.bytes);
+      return;
+    }
+    if (found.owner !== owner) {
+      counts.refusedOwner += 1;
+      throw Error(texts.blobNotOwned);
+    }
+  };
+
+  /**
+   * @param {any} blob
+   * @param {any} [owner] when given, the handle must be that session's
+   */
+  const locate = async (blob, owner) => {
     if (!known.has(blob)) await resolveMany([blob]);
     const found = known.get(blob);
     if (found === undefined) throw Error(texts.blobUnknown);
+    if (owner !== undefined) claim(blob, owner);
     return { ...found, path: join(await directory(), found.key) };
   };
 
   /** @type {BlobStore['read']} */
-  const read = async blob => {
-    const { path } = await locate(blob);
+  const read = async (blob, owner) => {
+    const { path } = await locate(blob, owner);
     return (await readFile(path)).toString('utf8');
   };
 
   /** @type {BlobStore['readPage']} */
-  const readPage = async (blob, offset, maxBytes) => {
-    const { path, bytes } = await locate(blob);
+  const readPage = async (blob, offset, maxBytes, owner) => {
+    const { path, bytes } = await locate(blob, owner);
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > bytes) {
       throw Error(`offset ${offset} is outside the blob (${bytes} bytes)`);
     }
@@ -363,12 +589,14 @@ export const makeBlobStore = ({
   };
 
   let writerSerial = 0;
-  const makeWriter = () => {
+  /** @param {any} owner */
+  const makeWriter = owner => {
     writerSerial += 1;
     const serial = writerSerial;
     /** @type {'open' | 'closed'} */
     let state = 'open';
     let bytes = 0;
+    const hash = createHash('sha256');
     /** @type {string[]} */
     const head = [];
     let headUnits = 0;
@@ -392,6 +620,7 @@ export const makeBlobStore = ({
       await tail.catch(() => {});
       await handle?.close().catch(() => {});
       if (part !== undefined) await unlink(part).catch(() => {});
+      charge(owner, -bytes);
     };
     const touch = () => {
       cancelIdle();
@@ -414,14 +643,23 @@ export const makeBlobStore = ({
         inOrder(async () => {
           if (state !== 'open') throw Error(texts.writerClosed);
           touch();
-          if (handle === undefined) {
-            const path = await directory();
-            part = join(path, `w${pid}-${serial}.part`);
-            handle = await open(part, 'w', 0o600);
-          }
           const buffer = Buffer.from(piece, 'utf8');
-          await handle.write(buffer);
+          // Quotas per piece, before the bytes are written (J-9361); the
+          // writer's earlier pieces are already charged.
+          reserve(owner, buffer.length);
+          try {
+            if (handle === undefined) {
+              const path = await directory();
+              part = join(path, `w${pid}-${serial}.part`);
+              handle = await open(part, 'w', 0o600);
+            }
+            await handle.write(buffer);
+          } catch (error) {
+            charge(owner, -buffer.length);
+            throw error;
+          }
           bytes += buffer.length;
+          hash.update(buffer);
           if (headUnits < limits.toolPreviewUnits) {
             head.push(piece);
             headUnits += piece.length;
@@ -438,16 +676,18 @@ export const makeBlobStore = ({
             handle = await open(part, 'w', 0o600);
           }
           const { blob, key } = await take();
-          await commit(key, /** @type {string} */ (part), handle);
+          await syncPart(key, handle);
+          await name([{ key, part: /** @type {string} */ (part) }]);
           handle = undefined;
           state = 'closed';
           counts.writersOpen -= 1;
-          return bind(
+          bind(blob, { key, bytes, owner });
+          return harden({
             blob,
-            key,
+            preview: previewText(head.join(''), limits.toolPreviewUnits),
             bytes,
-            previewText(head.join(''), limits.toolPreviewUnits),
-          );
+            digest: hash.digest('hex'),
+          });
         }),
       abort: () => {
         void drop();
@@ -455,47 +695,96 @@ export const makeBlobStore = ({
     });
   };
 
-  const writers = makeExo('BlobWriters', m1bInterfaces.BlobWriters, {
-    open: async () => makeWriter(),
-  });
+  /** @param {any} [owner] */
+  const writersFor = owner =>
+    makeExo('BlobWriters', m1bInterfaces.BlobWriters, {
+      open: async () => makeWriter(owner),
+    });
+  const writers = writersFor(undefined);
 
   /** @type {BlobStore['discard']} */
   const discard = async blob => {
+    const path = await directory();
+    const waiting = pending.get(blob);
+    if (waiting !== undefined) {
+      // Written but never committed: its handle never left this process.
+      pending.delete(blob);
+      await unlink(join(path, `${waiting.key}.part`)).catch(() => {});
+      charge(waiting.owner, -waiting.bytes);
+      counts.dropped += 1;
+      return true;
+    }
     const found = known.get(blob);
     if (found === undefined) return false;
     known.delete(blob);
-    const path = await directory();
     try {
       await unlink(join(path, found.key));
     } catch {
       return false;
     }
+    charge(found.owner, -found.bytes);
     counts.discarded += 1;
     counts.discardedBytes += found.bytes;
     return true;
+  };
+
+  /** @type {BlobStore['drop']} */
+  const drop = async stagedTexts => {
+    let dropped = 0;
+    for (const staged of stagedTexts) {
+      if (
+        staged !== undefined &&
+        typeof staged === 'object' &&
+        pending.has(staged.blob)
+      ) {
+        // eslint-disable-next-line no-await-in-loop
+        if (await discard(staged.blob)) dropped += 1;
+      }
+    }
+    return dropped;
   };
 
   /** @type {BlobStore['sweep']} */
   const sweep = async () => {
     const path = await directory();
     const names = await readdir(path);
+    let total = 0;
     await Promise.all(
-      names
-        .filter(name => name.endsWith('.part'))
-        .map(name => unlink(join(path, name)).catch(() => {})),
+      names.map(async entry => {
+        if (entry.endsWith('.part')) {
+          await unlink(join(path, entry)).catch(() => {});
+          counts.swept += 1;
+          return;
+        }
+        if (!KEY.test(entry)) return;
+        try {
+          const { size } = await stat(join(path, entry));
+          total += size;
+        } catch {
+          // Gone meanwhile.
+        }
+      }),
     );
+    // Files counted at start, plus whatever this incarnation staged since.
+    diskBytes += total;
   };
 
   return harden({
     stage,
+    stagePending,
+    commit,
+    drop,
     read,
     readPage,
     resolveMany,
+    claim,
     writers,
+    writersFor,
     sweep,
     knows: blob => known.has(blob),
     discard,
-    stats: () => harden({ ...counts, stock: stock.length }),
+    usage: owner => harden({ session: heldBy(owner), daemon: diskBytes }),
+    stats: () => harden({ ...counts, stock: stock.length, diskBytes }),
   });
 };
 harden(makeBlobStore);

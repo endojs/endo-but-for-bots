@@ -30,7 +30,9 @@ import { makeAgentHostImpl } from '../../resources/agent-host/impl/index.js';
 import { makeFakeBlobSink, makeTestBlobs } from './_m1b-blobs.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { E, Far, matches } = /** @type {GuestGlobals} */ (globalThis);
+const { E, Far, matches, passStyleOf } = /** @type {GuestGlobals} */ (
+  globalThis
+);
 
 const requestId = '1763251200000-123e4567-e89b-12d3-a456-426614174000';
 
@@ -380,8 +382,12 @@ test('manager: mintBlobs and resolveBlobs on the real sink; admin.content() and 
   const session = Far('Session', {});
   await E(admin).bindSession(host, session);
   const ports = await E(backend).open(host);
-  t.is(ports.content, content);
-  t.is(ports.writers, impl.blobs.writers);
+  // Per session since J-9364: the ports' Content and writers are this
+  // session's, not the incarnation-wide ones.
+  t.not(ports.content, content);
+  t.is(passStyleOf(ports.content), 'remotable');
+  t.not(ports.writers, impl.blobs.writers);
+  t.is(passStyleOf(ports.writers), 'remotable');
   await E(ports.timer).sleep(1);
   await t.throwsAsync(() => E(ports.timer).sleep(limits.maxDelayMs + 1));
 });

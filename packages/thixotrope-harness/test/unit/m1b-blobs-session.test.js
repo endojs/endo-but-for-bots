@@ -457,3 +457,23 @@ test('tool seams: context, available(ports, services), deadline routing, staged 
     ],
   );
 });
+
+test('M1b follow-ups (J-9363): a retry whose staged text differs only past its preview is refused, by digest', async t => {
+  const s = await setup();
+  const id = requestId();
+  /** @param {string} digest */
+  const withDigest = digest =>
+    harden({
+      blob: Far('Blob', {}),
+      preview: 'same first units',
+      bytes: 20_000,
+      digest,
+    });
+  s.session.enqueueOnce(withDigest('a'.repeat(64)), id, AT);
+  // The same text staged again (a new blob, the same digest): a duplicate.
+  t.true(s.session.enqueueOnce(withDigest('a'.repeat(64)), id, AT).duplicate);
+  // Another text with the same length and preview: not the same submission.
+  t.throws(() => s.session.enqueueOnce(withDigest('b'.repeat(64)), id, AT), {
+    message: texts.requestIdReused,
+  });
+});

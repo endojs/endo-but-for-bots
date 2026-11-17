@@ -36,7 +36,17 @@
  *
  * Retained state is bounded: at most `maxSessions` entries and
  * `maxTextUnits` UTF-16 units of loaded text across them, least recently
- * prepared first out (the entry being prepared is never evicted).
+ * prepared first out. The entry being prepared is kept while others can go;
+ * when it alone is over `maxTextUnits` it is dropped once its projection is
+ * built (M1b follow-ups, J-9365: it was kept whatever its size), so that
+ * session rebuilds at its next round.
+ *
+ * Each prepare has its own timing record (J-9365: one record was shared, so
+ * two sessions preparing at once reset and added into each other's).
+ *
+ * Provenance (J-9364): a staged field is read as the session's own
+ * (`store.read(blob, session)`); a record that names another session's
+ * blob fails the round with `texts.blobNotOwned`.
  *
  * Node only.
  */
@@ -82,13 +92,14 @@ const messageOf = error =>
  * @property {number} pagedRecords
  * @property {number} blobsRead
  * @property {number} evictions
+ * @property {number} oversize prepared entries dropped for their own size
  * @property {number} failures
  * @property {number} abandons
  */
 
 /**
  * @param {object} options
- * @param {Pick<import('./blobs.js').BlobStore, 'resolveMany' | 'read'>} options.store
+ * @param {{ resolveMany: (blobs: readonly any[]) => Promise<void>, read: (blob: any, owner?: any) => Promise<string> }} options.store
  * @param {readonly import('./projection-hooks.js').ProjectionHook[]} [options.hooks]
  * @param {number} [options.maxSessions]
  * @param {number} [options.maxTextUnits]
@@ -107,11 +118,17 @@ export const makeContextCache = ({
   const tails = new WeakMap();
   let textUnits = 0;
   /**
-   * Where the current prepare's time went (one prepare at a time per
-   * session; this is reset per prepare and copied into its projection).
-   * @type {{ pages: number, pageMs: number, waitResolveMs: number, readMs: number, blobs: number, projectMs?: number }}
+   * @typedef {{ pages: number, pageMs: number, waitResolveMs: number, readMs: number, blobs: number }} Timing
+   *   where one prepare's time went (copied into its projection)
    */
-  let timing = { pages: 0, pageMs: 0, waitResolveMs: 0, readMs: 0, blobs: 0 };
+  /** @returns {Timing} */
+  const newTiming = () => ({
+    pages: 0,
+    pageMs: 0,
+    waitResolveMs: 0,
+    readMs: 0,
+    blobs: 0,
+  });
   /** @type {CacheStats} */
   const counts = {
     appends: 0,
@@ -122,6 +139,7 @@ export const makeContextCache = ({
     pagedRecords: 0,
     blobsRead: 0,
     evictions: 0,
+    oversize: 0,
     failures: 0,
     abandons: 0,
   };
@@ -146,13 +164,29 @@ export const makeContextCache = ({
   };
 
   /**
+   * After a prepare: the entry just used goes too when it alone is over
+   * the bound (J-9365).
+   * @param {any} session
+   */
+  const trimPrepared = session => {
+    const entry = entries.get(session);
+    if (entry !== undefined && entry.textUnits > maxTextUnits) {
+      evict(session);
+      counts.evictions += 1;
+      counts.oversize += 1;
+    }
+  };
+
+  /**
    * Read the staged texts of `records` the entry does not have yet, after
    * the resolutions in flight (`resolving`).
    * @param {Entry} entry
    * @param {readonly any[]} records
+   * @param {Timing} timing
+   * @param {any} session whose blobs these must be
    * @param {Promise<void>[]} [resolving]
    */
-  const loadTexts = async (entry, records, resolving = []) => {
+  const loadTexts = async (entry, records, timing, session, resolving = []) => {
     /** @type {any[]} */
     const missing = [];
     const seen = new Set();
@@ -177,7 +211,7 @@ export const makeContextCache = ({
         const blob = missing[next];
         next += 1;
         // eslint-disable-next-line no-await-in-loop
-        const text = await store.read(blob);
+        const text = await store.read(blob, session);
         entry.texts.set(blob, text);
         entry.textUnits += text.length;
         textUnits += text.length;
@@ -201,8 +235,9 @@ export const makeContextCache = ({
    * @param {string | undefined} cursor
    * @param {number} until
    * @param {number | undefined} expectFrom
+   * @param {Timing} timing
    */
-  const pull = async (context, cursor, until, expectFrom) => {
+  const pull = async (context, cursor, until, expectFrom, timing) => {
     /** @type {any[]} */
     const got = [];
     /** @type {Promise<void>[]} */
@@ -277,8 +312,9 @@ export const makeContextCache = ({
   /**
    * @param {any} session
    * @param {CacheRequest} request
+   * @param {Timing} timing
    */
-  const update = async (session, request) => {
+  const update = async (session, request, timing) => {
     const { base, append, context } = request;
     let entry = entries.get(session);
     if (entry !== undefined) {
@@ -291,7 +327,7 @@ export const makeContextCache = ({
       if (count === base.count) {
         entry.records.push(...append);
         counts.appends += 1;
-        await loadTexts(entry, append);
+        await loadTexts(entry, append, timing, session);
         return entry;
       }
       if (
@@ -309,9 +345,15 @@ export const makeContextCache = ({
       }
       if (count < base.count && context !== undefined) {
         counts.gapPulls += 1;
-        const gap = await pull(context, `p${count}`, base.count, count);
+        const gap = await pull(context, `p${count}`, base.count, count, timing);
         entry.records.push(...gap.records, ...append);
-        await loadTexts(entry, [...gap.records, ...append], gap.resolving);
+        await loadTexts(
+          entry,
+          [...gap.records, ...append],
+          timing,
+          session,
+          gap.resolving,
+        );
         return entry;
       }
     }
@@ -329,7 +371,13 @@ export const makeContextCache = ({
     let resolving = [];
     if (context !== undefined) {
       // Without a source (an M1a request) only the append is known.
-      const pulled = await pull(context, undefined, base.count, undefined);
+      const pulled = await pull(
+        context,
+        undefined,
+        base.count,
+        undefined,
+        timing,
+      );
       fresh.start = pulled.from;
       fresh.records.push(...pulled.records);
       resolving = pulled.resolving;
@@ -337,7 +385,7 @@ export const makeContextCache = ({
     fresh.records.push(...append);
     entries.set(session, fresh);
     entry = fresh;
-    await loadTexts(fresh, fresh.records, resolving);
+    await loadTexts(fresh, fresh.records, timing, session, resolving);
     return fresh;
   };
 
@@ -348,9 +396,9 @@ export const makeContextCache = ({
   const prepareNow = async (session, request) => {
     /** @type {Entry} */
     let entry;
-    timing = { pages: 0, pageMs: 0, waitResolveMs: 0, readMs: 0, blobs: 0 };
+    const timing = newTiming();
     try {
-      entry = await update(session, request);
+      entry = await update(session, request, timing);
     } catch (error) {
       evict(session);
       if (isAbandoned(error)) counts.abandons += 1;
@@ -383,6 +431,7 @@ export const makeContextCache = ({
           ? started.input
           : entry.texts.get(started.input.blob);
     }
+    trimPrepared(session);
     return harden(projection);
   };
 

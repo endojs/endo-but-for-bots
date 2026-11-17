@@ -45,12 +45,14 @@ const MAX_TIMER_MS = 2_147_483_647;
 
 /**
  * @param {object} options
- * @param {{ startRound: (req: any, channel: any, prepare?: () => Promise<any>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} options.provider
+ * @param {{ startRound: (req: any, channel: any, prepare?: () => Promise<any>, owner?: any) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} options.provider
  * @param {any} options.channel the session's channel (deltas go here, in-process)
  * @param {import('./timers.js').Timers} options.timers
  * @param {() => number} [options.now]
  * @param {(req: any) => Promise<any>} [options.prepare] W1b.2: the
  *   session's context cache for one RoundRequest
+ * @param {any} [options.owner] the Session presence this endpoint serves;
+ *   the provider stages its text for it (disk quota, provenance; J-9361)
  */
 export const makeEndpoint = ({
   provider,
@@ -58,6 +60,7 @@ export const makeEndpoint = ({
   timers,
   now = () => Date.now(),
   prepare,
+  owner,
 }) => {
   /**
    * @typedef {object} HeldTurn
@@ -83,7 +86,7 @@ export const makeEndpoint = ({
   const run = (state, req) => {
     state.sink = req.sink;
     const project = prepare === undefined ? undefined : () => prepare(req);
-    provider.startRound(req, channel, project).catch(error => {
+    provider.startRound(req, channel, project, owner).catch(error => {
       if (released.has(req.turn)) return;
       const reason = cutText(
         `scripted provider failed: ${error?.message ?? error}`,
