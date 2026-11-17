@@ -103,6 +103,11 @@ which takes the run lock once and runs AVA with `--serial --concurrency 1`. Neve
 processes, and each file's `takeIntegrationLock` passes through the outer lock (a nested taker),
 so their supervisors would run side by side.
 
+The M1b acceptance files are `m1b-live` (1, 6, 9), `m1b-content` (2, 7), `m1b-exec-tool` (4, 5,
+11), `m1b-exec-tool-restart` (3, 10), `m1b-context-restart` (8: 200 turns, a clean restart then an
+idle SIGKILL; `CONTEXT_TURNS`, `CONTEXT_RESTARTS`), `m1b-pool` and `m1b-pool-restart` (12). Known
+failures are marked with AVA's `test.failing` and the reason in the title.
+
 `m1a-slice-restart.test.js` repeats its SIGKILL cases (acceptance 5, 6, 7 and the held-ports
 case) once per kill delay with `M1A_KILL_DELAYS_MS=0,100,500,1500,4000` (20 tests, about 10
 minutes); each run prints an `m1a.slice.restart.case` line before its assertions.
@@ -152,6 +157,11 @@ reading and a decision.
 | `perf/restart.perf.mjs` | `restart.serving` (gate: woken session vats = 1, read from the worker rows' `wakes`), `restart.crashingSession` | 6 min |
 | `perf/gc.perf.mjs` | `gc.burst.turnStart`, `gc.burst.frames`, `gc.burst.hub`, `gc.restart` (C-17) | 6 min |
 | `perf/crash.perf.mjs` | M0's crash and restart phases (C-8..C-10) | 6 min |
+| `perf/hub.perf.mjs` | `hub.gcBurst`, `hub.gcBurst.turnStart`, `hub.growth` (C-20, C-2; `HUB_GROWTH=0` skips growth) | 10-20 min |
+| `perf/exec.perf.mjs` | `exec.first`, `exec.trivial`, `exec.sends.answered` (`.sendOnly` not measurable in M1b), `exec.runaway`, `exec.retire`, the too-big probes `tooBig.*` | 3 min |
+| `perf/pool.perf.mjs` | `session.create.pool` (+ `.poolAwake`), `session.create.cold`, `pool.refill`, `pool.firstTurn` | 3 min |
+| `perf/concurrency.perf.mjs` | `concurrency.single.turnStart`, `concurrency.10.turnStart`, `.turn`, `.crank` (from `status().deliveryHistogram`), `.rowPush`, `.gc` | 3 min |
+| `perf/history.perf.mjs` | `history.page` (+ `.floor`), `context.rebuild` of a 1,000-turn session after a clean restart (`HISTORY_TURNS`) | 20 min |
 
 A vat is woken when its worker row's `wakes` (process-local) is above 0; `journalLength` is the
 delivery frontier, and held GC frames (`heldFrames`) wait in the journal without a crank. `turn.delta`

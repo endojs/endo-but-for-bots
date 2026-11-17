@@ -150,7 +150,42 @@ await runPerf('history', async ({ provision }) => {
   const found = await E(slice.factory).findSession(key);
   live = await slice.subscribe(found);
   const statusBefore = await state.client.call('status');
-  const r = await runTurn(slice, found, live, 'after restart', 180_000);
+  /** @type {any} */
+  let r;
+  try {
+    r = await runTurn(slice, found, live, 'after restart', 180_000);
+  } catch (error) {
+    // What the adapter and the vats did meanwhile, for the journal.
+    const rows = (await slice.workers()).filter(
+      (/** @type {any} */ w) => w.failure || /session/.test(w.debugLabel),
+    );
+    emit({
+      metric: 'context.rebuild.diag',
+      error: String(/** @type {Error} */ (error).message),
+      logTail: made
+        .log()
+        .slice(-8)
+        .map((/** @type {any} */ l) => ({
+          kind: l.kind,
+          turnId: l.turnId,
+          round: l.round,
+          ms: l.ms,
+          error: l.error,
+          timing: l.timing,
+        })),
+      rows: rows.map((/** @type {any} */ w) => ({
+        label: w.debugLabel,
+        failure: w.failure,
+        awake: w.awake,
+        journalLength: w.journalLength,
+      })),
+      events: live.events().slice(-6),
+      ...(await runIdentity()),
+      crankBudget,
+      loadAvg: loadAvg(),
+    });
+    throw error;
+  }
   const statusAfter = await state.client.call('status');
   const line = await waitFor(
     () =>
