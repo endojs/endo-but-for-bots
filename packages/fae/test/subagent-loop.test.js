@@ -1884,3 +1884,84 @@ test('cancelling an image request checkpoints receipts before stop and recovers 
   t.is(decodeImageResult(recovered.content), undefined);
   t.regex(recovered.content, /Not replayed after an incomplete turn/);
 });
+
+/**
+ * Drive three turns through a provider whose second answer reports a nearly
+ * full window, so the third turn crosses the automatic compaction threshold
+ * with one older completed turn to summarize and one recent turn to keep.
+ * @param {import('ava').ExecutionContext} t
+ * @param {object} compactionSettings
+ */
+const runOverThreshold = async (t, compactionSettings) => {
+  const mailbox = makeLiveMailbox();
+  /** @type {any[][]} */
+  const summaries = [];
+  let answers = 0;
+  const provider = harden({
+    chat: async (/** @type {any[]} */ messages) => {
+      const summarizing = messages.some(
+        message =>
+          typeof message.content === 'string' &&
+          message.content.includes('History (JSON):'),
+      );
+      if (summarizing) {
+        summaries.push(messages);
+        return harden({
+          message: { role: 'assistant', content: 'Earlier task done.' },
+        });
+      }
+      answers += 1;
+      return harden({
+        message: { role: 'assistant', content: 'done '.repeat(4000) },
+        usage: { context: { usedTokens: answers >= 2 ? 99_000 : 10_000 } },
+      });
+    },
+  });
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    null,
+    harden({ provider, contextLength: 100_000 }),
+    'test prompt',
+    harden({
+      timers: inertTimers,
+      compactionSettings: harden({
+        keepRecentTokens: 50_000,
+        ...compactionSettings,
+      }),
+    }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
+  const replies = () =>
+    mailbox.sent.filter(record => record.replyTo !== undefined).length;
+  for (const [index, task] of ['first', 'second', 'third'].entries()) {
+    mailbox.deliver({ from: locatorFor(HOST), strings: [`${task} task`] });
+    // eslint-disable-next-line no-await-in-loop
+    t.true(await until(() => replies() === index + 1));
+  }
+  return summaries;
+};
+
+test('Fae compaction settings disable automatic summaries', async t => {
+  t.timeout(15_000);
+  const summaries = await runOverThreshold(t, harden({ enabled: false }));
+  t.is(summaries.length, 0);
+});
+
+test('Fae compaction settings carry custom summary focus to the provider', async t => {
+  t.timeout(15_000);
+  const summaries = await runOverThreshold(
+    t,
+    harden({ customInstructions: 'Keep the rollback plan.' }),
+  );
+  t.is(summaries.length, 1);
+  t.true(
+    summaries[0].some(
+      message =>
+        typeof message.content === 'string' &&
+        message.content.includes('Keep the rollback plan.'),
+    ),
+  );
+});

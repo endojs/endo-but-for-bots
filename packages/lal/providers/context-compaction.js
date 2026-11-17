@@ -12,6 +12,18 @@ import { imageResultText } from '@endo/hosted-agent/image-result.js';
 const wireBytes = value =>
   new TextEncoder().encode(JSON.stringify(value)).length;
 
+/**
+ * Operator settings for automatic and forced context compaction. An absent
+ * `reserveTokens` selects the default reserve, capped at 30% of the window; a
+ * present one is authoritative.
+ * @typedef {object} ContextCompactionSettings
+ * @property {boolean} [enabled] Whether automatic compaction runs. A forced
+ *   compaction runs regardless.
+ * @property {number} [reserveTokens] Context reserved for the next response.
+ * @property {number} [keepRecentTokens] Recent context retained verbatim.
+ * @property {string} [customInstructions] Trusted operator summary focus.
+ */
+
 export const defaultContextCompactionSettings = harden({
   enabled: true,
   reserveTokens: 16_384,
@@ -20,20 +32,17 @@ export const defaultContextCompactionSettings = harden({
 harden(defaultContextCompactionSettings);
 
 /**
- * @param {object} options
- * @param {boolean} [options.enabled]
- * @param {number} [options.reserveTokens]
- * @param {number} [options.keepRecentTokens]
- * @param {string} [options.customInstructions]
+ * @param {ContextCompactionSettings} settings
  */
 const assertCompactionSettings = ({
   enabled = defaultContextCompactionSettings.enabled,
-  reserveTokens = defaultContextCompactionSettings.reserveTokens,
+  reserveTokens,
   keepRecentTokens = defaultContextCompactionSettings.keepRecentTokens,
   customInstructions,
 }) => {
   typeof enabled === 'boolean' || Fail`Invalid compaction enabled setting`;
-  (Number.isSafeInteger(reserveTokens) && reserveTokens >= 0) ||
+  reserveTokens === undefined ||
+    (Number.isSafeInteger(reserveTokens) && reserveTokens >= 0) ||
     Fail`Invalid compaction reserveTokens setting`;
   (Number.isSafeInteger(keepRecentTokens) && keepRecentTokens >= 0) ||
     Fail`Invalid compaction keepRecentTokens setting`;
@@ -55,7 +64,8 @@ const assertCompactionSettings = ({
  * @param {number} [options.usedTokens] Last request's observation, not a lifetime sum.
  * @param {boolean} [options.force] Explicit/manual trigger, not a fabricated model limit.
  * @param {boolean} [options.enabled] Whether automatic compaction is enabled.
- * @param {number} [options.reserveTokens] Context reserved for the next response.
+ * @param {number} [options.reserveTokens] Context reserved for the next response;
+ *   absent selects the default, capped at 30% of the window.
  * @param {number} [options.keepRecentTokens] Recent context retained verbatim.
  * @param {string} [options.customInstructions] Trusted summary focus for this compaction.
  */
@@ -67,7 +77,7 @@ export const planContextCompaction = (
     usedTokens = 0,
     force = false,
     enabled = defaultContextCompactionSettings.enabled,
-    reserveTokens = defaultContextCompactionSettings.reserveTokens,
+    reserveTokens,
     keepRecentTokens = defaultContextCompactionSettings.keepRecentTokens,
     customInstructions,
   } = {},
@@ -81,23 +91,29 @@ export const planContextCompaction = (
   if (!force && !enabled) return undefined;
   // Only a provider token observation can trigger automatic compaction. Wire
   // bytes and model tokens are different units, especially for opaque context.
+  // Unknown readings do not invent a context limit, whatever the configured
+  // reserve; explicit forcing remains available to callers.
+  if (!force && (!windowTokens || !usedTokens)) return undefined;
   // Small test/local models cannot reserve more than their entire window, so
   // cap the default at 30%. An explicit setting is authoritative and fails
   // closed when it leaves no input window.
   const effectiveReserveTokens =
-    reserveTokens === defaultContextCompactionSettings.reserveTokens
-      ? Math.min(reserveTokens, Math.floor(windowTokens * 0.3))
+    reserveTokens === undefined
+      ? Math.min(
+          defaultContextCompactionSettings.reserveTokens,
+          Math.floor(windowTokens * 0.3),
+        )
       : reserveTokens;
-  const thresholdTokens = windowTokens - effectiveReserveTokens;
+  const thresholdTokens = windowTokens
+    ? windowTokens - effectiveReserveTokens
+    : 0;
   !windowTokens ||
     thresholdTokens > 0 ||
     force ||
     Fail`Compaction reserveTokens leaves no model input window`;
-  if (
-    !force &&
-    (!thresholdTokens || !usedTokens || usedTokens <= thresholdTokens)
-  )
-    return undefined;
+  // Compact only strictly above the threshold: a request that exactly fills
+  // the input window still leaves the reserve for the reply.
+  if (!force && usedTokens <= thresholdTokens) return undefined;
   const originalBytes = wireBytes({ messages, tools });
   // Byte counts remain useful for selecting complete protocol groups. Convert
   // the token headroom to a relative byte budget using the observed occupancy;
@@ -118,9 +134,8 @@ export const planContextCompaction = (
   if (headroomBytes !== undefined && baseBytes >= headroomBytes)
     Fail`Compaction instructions and tools exceed the model headroom`;
   // Convert the requested recent-token window using this request's observed
-  // token-to-byte ratio. This sizes complete protocol groups without claiming
-  // that serialized bytes are themselves model tokens. A forced compaction
-  // with no capacity observation retains the older half-budget behavior.
+  // token-to-byte ratio. A forced compaction with no capacity observation
+  // retains the older half-budget behavior.
   const recentBytes =
     usedTokens > 0
       ? Math.floor(
@@ -207,7 +222,7 @@ const summaryInstruction =
   '## Next steps\n## Files touched\n## Code patterns established\n' +
   '## Paths and references';
 
-const historyMarker = `
+const historyHeading = `
 History (JSON):
 `;
 
@@ -269,7 +284,7 @@ Additional summary focus:
 ${plan.customInstructions}
 `
             : ''
-        }${historyMarker}${JSON.stringify(history)}`,
+        }${historyHeading}${JSON.stringify(history)}`,
       },
     ];
     if (

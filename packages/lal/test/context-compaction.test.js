@@ -116,6 +116,17 @@ test('unknown capacity does not become a fake automatic limit', t => {
     }),
   );
   t.is(planContextCompaction(dialogue(), { windowTokens: 100_000 }), undefined);
+  // An explicit reserve must not turn an unknown window into a limit.
+  for (const reserveTokens of [0, 4096, 16_384]) {
+    t.is(
+      planContextCompaction(dialogue(), {
+        windowTokens: 0,
+        usedTokens: 50_000,
+        reserveTokens,
+      }),
+      undefined,
+    );
+  }
 });
 
 test('reported token occupancy, not serialized bytes, triggers compaction', t => {
@@ -126,8 +137,7 @@ test('reported token occupancy, not serialized bytes, triggers compaction', t =>
   ];
   // Reproduce Tokyo: a 272k window, about 25k reported tokens, and large wire
   // data. Opaque reasoning makes the units differ further; it must not become
-  // an additional token budget. The default 16,384-token reserve triggers only
-  // above 255,616 reported tokens.
+  // an additional token budget.
   messages[2].responsesOutput.items[0].encrypted_content = 'opaque'.repeat(
     50_000,
   );
@@ -218,6 +228,24 @@ test('rejects invalid compaction settings', t => {
         reserveTokens: 100,
       }),
     { message: /leaves no model input window/ },
+  );
+  // An explicit value equal to the default is still explicit, so it is not
+  // capped at 30% of a small window.
+  t.throws(
+    () =>
+      planContextCompaction(dialogue(), {
+        windowTokens: 16_384,
+        usedTokens: 12_000,
+        reserveTokens: 16_384,
+      }),
+    { message: /leaves no model input window/ },
+  );
+  t.is(
+    planContextCompaction(dialogue(), {
+      windowTokens: 16_384,
+      usedTokens: 11_469,
+    }),
+    undefined,
   );
 });
 
@@ -338,11 +366,13 @@ test('a smaller summary must still leave model headroom with tools and tail', as
     [{ role: 'user', content: 'run tests' }, ...toolGroup(0), ...toolGroup(1)],
     { windowTokens: 24_000, usedTokens: 21_000 },
   );
+  if (!plan) throw Error('Expected plan');
   await t.throwsAsync(
     summarizeContext(plan, async () => ({
-      message: { role: 'assistant', content: 'summary '.repeat(2200) },
+      // Smaller than the original context, so only the headroom check fires.
+      message: { role: 'assistant', content: 'summary '.repeat(1000) },
     })),
-    { message: /did not reduce|summary and tail exceed/ },
+    { message: /summary and tail exceed/ },
   );
 });
 

@@ -59,6 +59,27 @@ Example configuration files are provided:
 - `openai.env.example` - OpenAI API
 - `opus.env.example` - Anthropic Claude (Opus)
 
+### Context compaction
+
+`@endo/lal/providers/index.js` exports `planContextCompaction`,
+`summarizeContext`, and `defaultContextCompactionSettings`. The
+`ContextCompactionSettings` shape is declared once, in
+`providers/context-compaction.js`:
+
+| Setting              | Meaning                                           | Default                    |
+| -------------------- | ------------------------------------------------- | -------------------------- |
+| `enabled`            | Run automatic compaction; forcing ignores it      | `true`                     |
+| `reserveTokens`      | Window held back for the next reply               | `16384`, capped at 30%     |
+| `keepRecentTokens`   | Recent context kept verbatim                      | `20000`                    |
+| `customInstructions` | Trusted operator focus added to the summary       | none                       |
+
+Automatic compaction runs only when the model's window size and the last
+request's token usage are both known, and only when usage exceeds the window
+minus the reserve. The 30% cap applies only to the default reserve; an
+explicit `reserveTokens` is used as given and fails if it leaves no input
+window. Fae and Floot read these settings from `FAE_COMPACTION_*` and
+`FLOOT_COMPACTION_*` variables.
+
 ## Usage
 
 ```bash

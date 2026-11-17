@@ -19,7 +19,6 @@
   "exports": {
     "./model-detect.js": "./model-detect.js",
     "./providers/index.js": "./providers/index.js",
-    "./providers/context-compaction.js": "./providers/context-compaction.js",
     "./tools/mock-powers.js": "./tools/mock-powers.js",
     "./package.json": "./package.json"
   },

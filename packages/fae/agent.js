@@ -220,8 +220,8 @@ Example: if a message says "Here is @counter for you", adopt it:
  *   token afresh for each turn, so a rotated secret reaches a running agent and
  *   a revoked one stops it. Absent when the caller injected a built provider.
  * @param {string} [options.sessionId] - Stable pool identity, required for subscriptions.
- * @param {boolean} [options.forceCompaction] Acceptance-only trigger.
- * @param {{ enabled?: boolean, reserveTokens?: number, keepRecentTokens?: number, customInstructions?: string }} [options.compactionSettings]
+ * @param {boolean} [options.forceCompaction] Explicit/manual trigger; runs even when automatic compaction is disabled.
+ * @param {import('@endo/lal/providers/index.js').ContextCompactionSettings} [options.compactionSettings]
  * @param {string} [options.providerIdentity] Locator of the exact retained provider recipe.
  * @param {typeof DEFAULT_SUBAGENT_LIMITS} [options.subagentLimits]
  * @param {number} [options.maxToolRounds]

@@ -19,7 +19,6 @@ test('Floot defaults no longer impose small development budgets', t => {
   t.is(settings.subagentLimits.maxTimeoutSeconds, 604_800);
   t.deepEqual(settings.compactionSettings, {
     enabled: true,
-    reserveTokens: 16_384,
     keepRecentTokens: 20_000,
   });
 });
@@ -84,6 +83,11 @@ test('each workload setting can be overridden and malformed settings fail early'
   );
   t.throws(
     () => readFlootWorkloadConfig({ FLOOT_COMPACTION_ENABLED: 'maybe' }),
+    { message: /Invalid compaction/ },
+  );
+  t.throws(
+    () =>
+      readFlootWorkloadConfig({ FLOOT_COMPACTION_CUSTOM_INSTRUCTIONS: '   ' }),
     { message: /Invalid compaction/ },
   );
   t.throws(

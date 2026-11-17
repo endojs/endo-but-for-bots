@@ -518,8 +518,8 @@ const provisionPresetObjects = async (
  * @param {Map<string, any>} [options.extraTools] - Session-specific tools
  *   the factory built (see `makeFlootToolRegistry`).
  * @param {number} [options.contextLength] Exact selected-model catalog reading.
- * @param {boolean} [options.forceCompaction] Acceptance-only trigger.
- * @param {{ enabled?: boolean, reserveTokens?: number, keepRecentTokens?: number, customInstructions?: string }} [options.compactionSettings]
+ * @param {boolean} [options.forceCompaction] Explicit/manual trigger; runs even when automatic compaction is disabled.
+ * @param {import('@endo/lal/providers/index.js').ContextCompactionSettings} [options.compactionSettings]
  * @param {() => Promise<void>} [options.stopEnvironment] Private execution stop barrier, distinct from inference cancellation.
  * @param {(kind: 'turn-started' | 'turn-settled' | 'turn-resolved', detail?: { input: string, from?: string }) => void} [options.onChange]
  *   Told when this session's turn records change, whoever started the turn —

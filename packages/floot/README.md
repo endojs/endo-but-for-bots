@@ -213,7 +213,8 @@ The voice id encodes its path: `en_GB-alba-medium` → `en/en_GB/alba/medium/`.
    `16384`), `FLOOT_COMPACTION_KEEP_RECENT_TOKENS` keeps a recent verbatim tail
    (default `20000`), and `FLOOT_COMPACTION_CUSTOM_INSTRUCTIONS` adds trusted
    focus to every structured summary.
-   Set `FLOOT_COMPACTION_ENABLED=false` to disable automatic compaction.
+   Set `FLOOT_COMPACTION_ENABLED=false` to disable automatic compaction; an
+   explicit forced compaction still takes precedence.
 
 3. **Provision the voice caplets.** Ensure `uv`, `piper`, and a voice model are
    present, then:

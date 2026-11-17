@@ -135,7 +135,9 @@ export {
   messageFromResponsesOutput,
   assertSubscriptionResponsesRecipe,
 } from './subscription-responses.js';
+/** @typedef {import('./context-compaction.js').ContextCompactionSettings} ContextCompactionSettings */
 export {
+  defaultContextCompactionSettings,
   planContextCompaction,
   summarizeContext,
 } from './context-compaction.js';

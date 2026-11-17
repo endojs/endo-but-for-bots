@@ -14,9 +14,13 @@ test('Fae workload configuration shares defaults and validates overrides', t => 
   t.is(defaults.maxSubagents, 8);
   t.deepEqual(defaults.compactionSettings, {
     enabled: true,
-    reserveTokens: 16_384,
     keepRecentTokens: 20_000,
   });
+  t.is(
+    readFaeWorkloadConfig({ FAE_COMPACTION_RESERVE_TOKENS: '16384' })
+      .compactionSettings.reserveTokens,
+    16_384,
+  );
   const configured = readFaeWorkloadConfig({
     FAE_MAX_TOOL_ROUNDS: '2000',
     FAE_PROVIDER_REQUEST_TIMEOUT_MS: '9000',
@@ -62,6 +66,7 @@ test('malformed retained workload settings fail before factory, driver or setup 
     { FAE_SUBAGENT_MAX_TIMEOUT_SECONDS: '2147484' },
     { FAE_COMPACTION_ENABLED: 'maybe' },
     { FAE_COMPACTION_RESERVE_TOKENS: '-1' },
+    { FAE_COMPACTION_CUSTOM_INSTRUCTIONS: '   ' },
   ]) {
     // Each constructor must reject synchronously with respect to capability use.
     // eslint-disable-next-line no-await-in-loop
