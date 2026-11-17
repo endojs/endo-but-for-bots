@@ -21,6 +21,14 @@
  *   -> fetch -> parser -> provider -> round -> channel), one round, no
  *   subscriber; the reply is staged (10 MiB of text) as a real round would.
  *
+ * - W2.1b: `provider.overhead.anthropic`, `provider.sse.attempt.anthropic`
+ *   and `provider.sse.stream.anthropic`: the same through the Anthropic
+ *   Messages provider; `provider.retry.passThrough`: the 10 MiB OpenRouter
+ *   attempt with and without the retry wrapper in front (the cost of
+ *   holding and passing events); `provider.retry.wait`: how far the second
+ *   attempt after a 429 with `Retry-After: 1` lands from its scheduled
+ *   wait (from the 429's arrival to the second request at the server).
+ *
  * Run under the run lock (perf/_harness.mjs): `node perf/provider.perf.mjs`.
  * Environment: PROVIDER_DELTAS (default 200), PROVIDER_DELTA_MS (default 5),
  * PROVIDER_RUNS (default 3).
@@ -34,8 +42,12 @@ import { performance } from 'node:perf_hooks';
 await import('../scripts/_init.mjs');
 await import('../test/unit/_m1a-prelude.js');
 const { runPerf, stats } = await import('./_harness.mjs');
-const { openRouterChunks, sseText, startFakeProviderServer } =
-  await import('../test/fixtures/fake-provider-server.mjs');
+const {
+  anthropicEvents,
+  openRouterChunks,
+  sseText,
+  startFakeProviderServer,
+} = await import('../test/fixtures/fake-provider-server.mjs');
 const { makeTestBlobs } = await import('../test/adapter/_m1b-blobs.js');
 // eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
 const { interfaces } = await import('../guest/lib/interfaces.js');
@@ -48,6 +60,10 @@ const { makeOpenRouterProvider, openRouterAttempt } =
   await import('../resources/agent-host/impl/providers/openrouter.js');
 const { parseSse } =
   await import('../resources/agent-host/impl/providers/sse.js');
+const { anthropicAttempt, makeAnthropicProvider } =
+  await import('../resources/agent-host/impl/providers/anthropic.js');
+const { makeRetry, openRouterDelay } =
+  await import('../resources/agent-host/impl/providers/retry.js');
 
 const { E, Far, makeExo } = /** @type {any} */ (globalThis);
 
@@ -102,14 +118,28 @@ const makeSink = () => {
  * @param {any} options.blobs
  * @param {boolean} options.subscribe
  * @param {(text: string, at: number) => void} [options.onDelta]
+ * @param {'openrouter' | 'anthropic'} [options.kind]
+ * @param {(kind: string, fields?: any) => void} [options.log]
  */
-const oneRound = async ({ server, blobs, subscribe, onDelta }) => {
-  const provider = makeOpenRouterProvider({
+const oneRound = async ({
+  server,
+  blobs,
+  subscribe,
+  onDelta,
+  kind = 'openrouter',
+  log = () => {},
+}) => {
+  const anthropic = kind === 'anthropic';
+  const provider = (
+    anthropic ? makeAnthropicProvider : makeOpenRouterProvider
+  )({
     label: 'perf',
-    spec: { baseUrl: server.openRouterBaseUrl },
+    spec: {
+      baseUrl: anthropic ? server.anthropicBaseUrl : server.openRouterBaseUrl,
+    },
     readKey: async () => 'not a real key',
     timers,
-    log: () => {},
+    log,
     blobs: blobs.store,
   });
   const owner = Far('Session', {});
@@ -151,7 +181,9 @@ const oneRound = async ({ server, blobs, subscribe, onDelta }) => {
       base: { count: 0, epoch: 0 },
       append: [{ kind: 'turn-started', turnId: 't1', input: 'hi', at: 1 }],
       tools: [],
-      options: { modelId: 'fake-org/fake-model' },
+      options: {
+        modelId: anthropic ? 'claude-fake-1' : 'fake-org/fake-model',
+      },
     }),
   );
   await fake.settled;
@@ -318,6 +350,178 @@ await runPerf('provider', async ({ root }) => {
         deltas: count,
         replyBytes: count * piece.length,
         mibPerSecond: +(bytes.length / MIB / (medianStream / 1000)).toFixed(1),
+      },
+    });
+
+    // ---- W2.1b: the Anthropic provider, the same rows
+    /** @type {number[]} */
+    const aSamples = [];
+    let aStreamingCalls = 0;
+    for (let run = 0; run < RUNS; run += 1) {
+      written.clear();
+      const deltas = Array.from({ length: DELTAS }, (_, i) => `d${i} `);
+      // Events: message_start, ping, content_block_start, then the deltas.
+      server.setPlan([
+        { events: anthropicEvents({ deltas }), delayMs: DELTA_MS },
+      ]);
+      /** @type {number[]} */
+      const arrivals = [];
+      const blobs = makeTestBlobs({ dir: path.join(blobDir, `a${run}`) });
+      const calls = await oneRound({
+        server,
+        blobs,
+        subscribe: true,
+        kind: 'anthropic',
+        onDelta: (_text, at) => arrivals.push(at),
+      });
+      aStreamingCalls += calls.progress;
+      arrivals.slice(0, DELTAS).forEach((at, i) => {
+        const sent = written.get(i + 3);
+        if (sent !== undefined) aSamples.push(at - sent);
+      });
+      if (arrivals.length !== DELTAS)
+        throw Error(`expected ${DELTAS} deltas, saw ${arrivals.length}`);
+    }
+    await stats('provider.overhead.anthropic', aSamples, {
+      budget: { median: 5, deliveriesPerOp: 0 },
+      before: { delivery: { count: 0, milliseconds: 0 } },
+      after: { delivery: { count: aStreamingCalls, milliseconds: 0 } },
+      ops: aSamples.length,
+      extra: {
+        deltasPerRun: DELTAS,
+        deltaSpacingMs: DELTA_MS,
+        runs: RUNS,
+        path: 'fake server socket write -> fetch -> parseSse -> anthropic (retry wrapper) -> runProviderRound -> channel -> E(subscription).next()',
+      },
+    });
+
+    const aBig = anthropicEvents({
+      deltas: Array.from({ length: count }, () => piece),
+    });
+    const aBytes = new TextEncoder().encode(sseText(aBig)).length;
+    /** @type {number[]} */
+    const aAttemptMs = [];
+    for (let run = 0; run < RUNS; run += 1) {
+      server.setPlan([{ events: aBig }]);
+      let seen = 0;
+      const t0 = performance.now();
+      for await (const event of anthropicAttempt({
+        url: `${server.anthropicBaseUrl}/v1/messages`,
+        key: 'not a real key',
+        body: { model: 'claude-fake-1', stream: true, messages: [] },
+        signal: new AbortController().signal,
+        timeoutMs: 600_000,
+      })) {
+        if ('delta' in event) seen += event.delta.length;
+      }
+      aAttemptMs.push(performance.now() - t0);
+      if (seen !== count * piece.length)
+        throw Error(`anthropic attempt saw ${seen} units`);
+    }
+    const aMedianAttempt = [...aAttemptMs].sort((a, b) => a - b)[
+      Math.floor(aAttemptMs.length / 2)
+    ];
+    await stats('provider.sse.attempt.anthropic', aAttemptMs, {
+      extra: {
+        bytes: aBytes,
+        events: count,
+        mibPerSecond: +(aBytes / MIB / (aMedianAttempt / 1000)).toFixed(1),
+      },
+    });
+    /** @type {number[]} */
+    const aStreamMs = [];
+    for (let run = 0; run < RUNS; run += 1) {
+      server.setPlan([{ events: aBig }]);
+      const blobs = makeTestBlobs({ dir: path.join(blobDir, `as${run}`) });
+      const t0 = performance.now();
+      const calls = await oneRound({
+        server,
+        blobs,
+        subscribe: false,
+        kind: 'anthropic',
+      });
+      aStreamMs.push(performance.now() - t0 - 20);
+      if (calls.roundFinal !== 1)
+        throw Error('the 10 MiB Anthropic round did not finish');
+    }
+    const aMedianStream = [...aStreamMs].sort((a, b) => a - b)[
+      Math.floor(aStreamMs.length / 2)
+    ];
+    await stats('provider.sse.stream.anthropic', aStreamMs, {
+      extra: {
+        bytes: aBytes,
+        deltas: count,
+        mibPerSecond: +(aBytes / MIB / (aMedianStream / 1000)).toFixed(1),
+      },
+    });
+
+    // ---- W2.1b: the retry wrapper's own cost, and its wait's accuracy
+    const retry = makeRetry({ timers, delayMs: openRouterDelay });
+    /** @type {number[]} */
+    const bare = [];
+    /** @type {number[]} */
+    const wrapped = [];
+    for (let run = 0; run < RUNS; run += 1) {
+      for (const wrap of [false, true]) {
+        server.setPlan([{ events: big }]);
+        const signal = new AbortController().signal;
+        /** @param {AbortSignal} attemptSignal */
+        const attempt = attemptSignal =>
+          openRouterAttempt({
+            url: `${server.openRouterBaseUrl}/chat/completions`,
+            key: 'not a real key',
+            body: { model: 'fake-org/fake-model', stream: true, messages: [] },
+            signal: attemptSignal,
+            timeoutMs: 600_000,
+          });
+        const t0 = performance.now();
+        for await (const _ of wrap
+          ? retry({ attempt, signal })
+          : attempt(signal)) {
+          // drain
+        }
+        (wrap ? wrapped : bare).push(performance.now() - t0);
+      }
+    }
+    const median = (/** @type {number[]} */ xs) =>
+      [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+    await stats('provider.retry.passThrough', wrapped, {
+      extra: {
+        bytes: bytes.length,
+        bareMedianMs: +median(bare).toFixed(1),
+        wrappedMedianMs: +median(wrapped).toFixed(1),
+        overheadMs: +(median(wrapped) - median(bare)).toFixed(1),
+      },
+    });
+    /** @type {number[]} */
+    const waitError = [];
+    for (let run = 0; run < RUNS; run += 1) {
+      server.setPlan([
+        { status: 429, headers: { 'retry-after': '1' } },
+        { events: openRouterChunks({ deltas: ['ok'] }) },
+      ]);
+      const before = server.requests().length;
+      /** @type {number[]} */
+      const retries = [];
+      const blobs = makeTestBlobs({ dir: path.join(blobDir, `r${run}`) });
+      await oneRound({
+        server,
+        blobs,
+        subscribe: false,
+        log: kind => {
+          if (kind === 'retry') retries.push(performance.now());
+        },
+      });
+      const [first, second] = server.requests().slice(before);
+      // The 429 left at `first.receivedAt` (no body to wait for); the
+      // second request's arrival minus the 1,000 ms wait is the slack.
+      waitError.push(second.receivedAt - first.receivedAt - 1000);
+      if (retries.length !== 1) throw Error('expected one retry');
+    }
+    await stats('provider.retry.wait', waitError, {
+      extra: {
+        scheduledMs: openRouterDelay(1, 1000),
+        what: 'second request arrival - first request arrival - 1000 ms',
       },
     });
   } finally {
