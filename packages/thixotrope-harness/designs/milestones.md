@@ -477,13 +477,14 @@ delete with reclamation, data-only export/import, and fixed prompt composition.
   R7-24, R7-28.
 - **Depends on:** M1b (done with recorded perf misses; read its outcome table, the M1b rows of
   "Changes after" and `m1b-interfaces.md` 16 first).
-- **Owns:** `AH/providers/{openrouter,anthropic,http,sse,retry,catalog}.js`,
-  `AH/secrets/{store,manager,writer,seal}.js`,
-  `H/guest/session/{submissions,holds,holds-table,history,usage,prompt,export}.js`,
+- **Owns:** `AH/providers/{openrouter,anthropic,http,sse,retry,catalog,round}.js`,
+  `AH/secrets/{store,manager,writer,seal}.js`, `AH/archive/` (the record archive, D-M2-1),
+  `H/guest/session/{submissions,holds,holds-table,history,archive,usage,prompt,export}.js`,
   `H/guest/factory/{delete,export}.js`,
   `H/guest/lib/{pending-queue,journal-usage,token-usage,system-prompt-base}.js`,
-  `H/test/fixtures/fake-provider-server.mjs`, `H/test/fixtures/sse/`, `H/test/*/m2-*`,
-  `H/perf/{journal,history,queue,provider,throughput}.perf.mjs`.
+  `H/scripts/export.mjs`, `H/test/fixtures/fake-provider-server.mjs`, `H/test/fixtures/sse/`,
+  `H/test/*/m2-*`, `H/perf/{journal,history,queue,provider,throughput,archive}.perf.mjs`; the M1a
+  and M1b files M2 edits are assigned per group in `m2-interfaces.md` 2.2.
 
 **What M1b leaves for builders to know.** The daemon serves with a slot ceiling of 4,000,000
 (`config/defaults.js` `slotCeiling`, `scripts/serve.mjs`): a vat's live heap plus everything one
@@ -510,15 +511,24 @@ the current ceiling (`m1b-qc.test.js`); keep that test green when the record or 
 
 | id | files | behaviour | tests |
 |---|---|---|---|
-| W2.0 interface contract | `H/guest/lib/{interfaces,limits}.js`, `H/designs/m2-interfaces.md` (new), `H/test/unit/m2-interfaces.test.js` | One subagent, first, alone, as W1a.0 and W1b.0. Fold the M1b tables into the M1a ones (`m1bShapes`, `m1bInterfaces`, `m1bMethodNames` into `shapes`, `interfaces`, `methodNames`; adapt `m1a-interfaces.test.js` and `m1b-interfaces.test.js` in the same commit). Add M2's guards and texts: `SessionInternal.blobPage` and `AgentHostAdmin.releaseBlobs` exactly as `m1b-interfaces.md` 4.8 specifies; `SessionFactory.deleteSession` and the `row-removed` list event; the full queue (`QueueEntry.edit/cancel/sendNow`, holds); history pages bounded by records and bytes as well as turns (W2.5); provider, catalogue and secrets shapes. For each method: caller, crank, answered or sendOnly, largest message, retired-break meaning, and the heaviest crank it can cause in records, events and sends (M1b J-0392: crank allocation, not only bytes, halts a vat). | unit: every guard accepts a sample and refuses an unbounded string, an oversize array and an unknown key; the folded tables keep every M1a and M1b method in order |
-| W2.1a HTTP, SSE, OpenRouter | `AH/providers/{http,sse,openrouter}.js` | Node `fetch` (Node 22 pinned); SSE parser adapted from `lal/providers/subscription-events.js` (linear); OpenRouter **streamed** (G-03), `tool_choice:'auto'`; provider bodies never in failure text | fake-server fixtures: deltas, tool calls, empty answer, length stop, mid-stream disconnect; ported `lal/test/openrouter.test.js` parts |
-| W2.1b Anthropic, retry, timeouts | `AH/providers/{anthropic,retry}.js` | Anthropic Messages streamed; R4-74 retry schedule only while nothing delivered; R4-77/R4-78/R4-79 texts; timeouts (R4-93, configurable; Anthropic gets one, G-04) | fixtures: 401, 429 Retry-After, 5xx, overload |
-| W2.2 model catalogue | `AH/providers/catalog.js`, factory `listBackends/listModels`, `session-options.js` entry | catalogue read with the backend credential through the R4-104 cache; rows sorted per R4-20; `unavailable` on failure; selection rules R4-21; the resolved model is stored at creation (R4-22) | adapter + unit tests |
-| W2.3 secrets minimal | `AH/secrets/*` | encrypted file (AES-GCM, key file outside state dir, D-6), `SecretsAdmin.create`, `Secret.makeReadGrant/revoke/delete/describe`, `SecretWriter.replace(secret, value, expectedGeneration)` with amplification inside the resource, sealed-box import for the CLI path, audited reads, values re-read every round (R4-82); adapters never log tool arguments, results or secret values (W-13) | stale generation refused; revoked read fails; grep of the state dir (heaps, journals, `hub.json`, blobs) after a test finds no secret value |
-| W2.4 queue and submissions | `guest/session/{submissions,holds,holds-table}.js`, `guest/lib/pending-queue.js` (adapted, heap Map, no pet names) | bounded 100 waiting, 4,096 receipts, request-id window from the Composer's `at`, `QueueEntry.edit/cancel/sendNow` (edits go through the Composer for staging), holds `restart/stopped/refused/unavailable` with the A.4 texts (no `interrupted` state, section 4.3), release rule R4-56, duplicate detection | ported `fae/test/session/pending-queue.test.js`, `session-submissions.test.js` (minus `interrupted` cases, recorded) |
-| W2.5 history + snapshot measurement | `guest/session/history.js` | history pages of at most 32 turns, `frameBytes` **and a record bound** chosen so a page crank meets `history.page` (M1b: a 26-turn page of 182 records cost about 605 ms of session crank, about 3 ms per record, J-0370; unchanged by CORE-11: 568-596 ms for 154 records at 50 turns and 869 ms on a 1,000-turn session, so the bound must also absorb growth with session length, J-9387), `getTurnContent(ref)`, `getCurrentTurn`; snapshot time and size **and the session vat's slot capacity** measured at 1,000 / 10,000 / 30,000 turns (fixtures by `importState`) to decide on an archive in M2 (architecture 5: the slot ceiling bounds live heap plus one crank, C-21) | 300-turn session pages back to turn 1 |
-| W2.6 turn completeness | `guest/session/{turn hooks,usage,prompt}.js` via `turn-hooks.js` | unknown tool / bad JSON texts (R4-43, R4-45), synthesized ids R4-42, round limit fallback R4-47, cancel tears down the stream (R4-7, R4-49) and records late results as ignored, usage five counts and context reading (R4-33, R4-83 "skipped if not read in time"), turn deadline setting (default off), fixed prompt composition (R4-26 parts 1-2, 7) | integration `m2-turns.test.js` |
-| W2.7 delete, rollback, export | `guest/factory/{delete,export}.js`, `guest/session/export.js` | `deleteSession` publishes `row-removed` on the list feed (M1b acceptance 9 "delete", moved here) and marks `deleting`, retires the session and exec vats (also a `lost` session's, D-17: this is the only way its disk is returned), releases blobs (and later workspace/environment via `onSettle`-style hooks), completes after a restart (R4-9); failed creation rolls back including after a restart (R4-6); `exportState`/`importState` of factory and session records (exec bindings are not exportable: documented loss) | integration `m2-lifecycle.test.js` |
+| W2.0 interface contract | `H/guest/lib/{interfaces,limits}.js`, `H/designs/m2-interfaces.md` (new), `H/test/unit/m2-interfaces.test.js` | **Done** (`58980f7d9e`, `d0a2f565e2`; J-0400..J-0404). One subagent, first, alone, as W1a.0 and W1b.0; also designs the record archive (D-M2-1, `m2-interfaces.md` 4) and assigns every file M2 edits to one unit per group (2.2). Fold the M1b tables into the M1a ones (`m1bShapes`, `m1bInterfaces`, `m1bMethodNames` into `shapes`, `interfaces`, `methodNames`; adapt `m1a-interfaces.test.js` and `m1b-interfaces.test.js` in the same commit). Add M2's guards and texts: `SessionInternal.blobPage` and `AgentHostAdmin.releaseBlobs` exactly as `m1b-interfaces.md` 4.8 specifies; `SessionFactory.deleteSession` and the `row-removed` list event; the full queue (`QueueEntry.edit/cancel/sendNow`, holds); history pages bounded by records and bytes as well as turns (W2.5); provider, catalogue and secrets shapes. For each method: caller, crank, answered or sendOnly, largest message, retired-break meaning, and the heaviest crank it can cause in records, events and sends (M1b J-0392: crank allocation, not only bytes, halts a vat). | unit: every guard accepts a sample and refuses an unbounded string, an oversize array and an unknown key; the folded tables keep every M1a and M1b method in order |
+| W2.1a HTTP, SSE, OpenRouter (group A) | `AH/providers/{http,sse,openrouter,round}.js`, `guest/lib/token-usage.js`, the fake server; `AH/endpoint.js` | Node `fetch` (Node 22 pinned); SSE parser adapted from `lal/providers/subscription-events.js` (linear); OpenRouter **streamed** (G-03), `tool_choice:'auto'`; provider bodies never in failure text | fake-server fixtures: deltas, tool calls, empty answer, length stop, mid-stream disconnect; ported `lal/test/openrouter.test.js` parts |
+| W2.1b Anthropic, retry, timeouts (group B) | `AH/providers/{anthropic,retry}.js`; group B owner of the W2.1a files | Anthropic Messages streamed; R4-74 retry schedule only while nothing delivered; R4-77/R4-78/R4-79 texts; timeouts (R4-93, configurable; Anthropic gets one, G-04) | fixtures: 401, 429 Retry-After, 5xx, overload |
+| W2.2 model catalogue (group B) | `AH/providers/catalog.js`, `session-options.js` entry; group B owner of `AH/{index,attach}.js` (the factory's `listBackends/listModels` are W2.7's forwards) | catalogue read with the backend credential through the R4-104 cache; rows sorted per R4-20; `unavailable` on failure; selection rules R4-21; the resolved model is stored at creation (R4-22) | adapter + unit tests |
+| W2.3 secrets minimal (group A) | `AH/secrets/*`; group A owner of `resources/agent-host/durable.js` (every M2 manager method, `m2-interfaces.md` 3.3) and `scripts/serve.mjs` (the key-file variable) | encrypted file (AES-GCM, key file outside state dir, D-6), `SecretsAdmin.create`, `Secret.makeReadGrant/revoke/delete/describe`, `SecretWriter.replace(secret, value, expectedGeneration)` with amplification inside the resource, sealed-box import for the CLI path, audited reads, values re-read every round (R4-82); adapters never log tool arguments, results or secret values (W-13) | stale generation refused; revoked read fails; grep of the state dir (heaps, journals, `hub.json`, blobs) after a test finds no secret value |
+| W2.4 queue and submissions (group A) | `guest/session/{submissions,holds,holds-table}.js`, `guest/lib/pending-queue.js` (adapted, heap Map, no pet names); group A owner of `guest/session/{queue,session,turn,recovery}.js` and `AH/composer.js` | bounded 100 waiting, 4,096 receipts, request-id window from the Composer's `at`, `QueueEntry.edit/cancel/sendNow` (edits go through the Composer for staging), holds `restart/stopped/refused/unavailable` with the A.4 texts (no `interrupted` state, section 4.3), release rule R4-56, duplicate detection | ported `fae/test/session/pending-queue.test.js`, `session-submissions.test.js` (minus `interrupted` cases, recorded) |
+| W2.5 history and archive (vat side; group B) | `guest/session/{history,archive}.js`; `turn.js`, `records.js`, `context-source.js` (`m2-interfaces.md` 2.2) | history pages of at most 32 turns, `frameBytes` **and `historyPageRecords` (48)** (a page crank marshals about 3 ms per record, J-0370, J-9387; measure and propose another bound if it misses); the vat side of the record archive (D-M2-1, `m2-interfaces.md` 4): seal in the settle crank when 160 settled turns are kept (32 turns per segment, 128 kept), intent before effect, drop only on the adapter's durable answer, the index of `SegmentEntry`s and the chained `ArchiveState`, `RoundRequest.base.archive`, `ContextSource` from `sealedTo` and `segments()`, archived turns in history (`archived`, `archive`), `Session.findTurn`, `Turn.getContent`/`resolve` of archived turns, at most 64 archived unresolved turns kept; the seams of 2.4 for W2.6 and W2.7; snapshot time and size and the session vat's slot capacity at 200 and 1,000 turns (`journal.snapshot`, `session.heap`, `archive.flat` at those lengths) | unit (archive and history in Node, with a fake port); integration `m2-history` (acceptance 9), `m2-archive-restart` (acceptance 16) |
+| W2.6 turn completeness (group B) | `guest/session/{usage,prompt}.js`, `guest/lib/{journal-usage,system-prompt-base}.js`, hook lines; through the seams W2.5 builds in `turn.js` (`m2-interfaces.md` 2.4) | unknown tool / bad JSON texts (R4-43, R4-45), synthesized ids R4-42, round limit fallback R4-47, cancel tears down the stream (R4-7, R4-49) and records late results as ignored, usage five counts and context reading (R4-33, R4-83 "skipped if not read in time"), turn deadline setting (default off), fixed prompt composition (R4-26 parts 1-2, 7) | integration `m2-turns.test.js` |
+| W2.7 delete, rollback, export | `guest/factory/{delete,export}.js`, `guest/session/export.js`, `scripts/export.mjs`; group B owner of `session.js`, the factory files and `durable.js` (`m2-interfaces.md` 2.2) | `deleteSession` publishes `row-removed` on the list feed (M1b acceptance 9 "delete", moved here) and marks `deleting`, fences the session (`deleteSelf`), releases the live tail's blobs (`blobPage` -> `releaseBlobs`) and the archive's (`releaseArchive`: segments, the blobs they name, the mirror), retires the session and exec vats (also a `lost` session's, D-17: this is the only way its disk is returned), completes after a restart (R4-9); failed creation rolls back including after a restart (R4-6); `exportState`/`importState` of factory and session records, archived turns read through `History` and re-sealed by the importing session (exec bindings are not exportable: documented loss); `SessionFactory.listBackends`/`listModels`, `Operator.getSecrets`, the M2 `HarnessSettings` | integration `m2-lifecycle.test.js` (acceptance 13, 14) |
+| W2.8 archive store (adapter side; group A) | `AH/archive/`; group A owner of `AH/{index,attach,context-cache,projection,blobs,content}.js` (`m2-interfaces.md` 2.2) | the adapter side of the record archive (D-M2-1, `m2-interfaces.md` 4): `ArchivePort.seal` (fingerprint check, segment written and fsynced with a chained digest before the answer, a half-written segment never read), the per-session archive directory (manifest, `context.jsonl` persisted projection, `mirror.jsonl` of the kept records), validation against the vat's `ArchiveState` (orphans deleted), the context cache's sealed part (a restart reads one file and the tail, not a page per 512 records), `History` and `SealedText` (archived pages without a vat crank), `releaseArchive`, `BlobStore.release`, `archiveKeys` for M13; every M2 ops method in `attach.js` (handlers or `notBuilt`) | adapter tests over a fake session (seal, SIGKILL points by killing a child process mid-write, validation, rebuild equals incremental, history pages back to turn 1) |
+| W2.9 integration | everything | the wiring of `m2-interfaces.md` 2.3, no `notBuilt` stub left, the fold of `m2Interfaces`; acceptance 7, 11 and 15; perf `throughput`, `restart.serving`, `hub.row`, `archive.flat` at 5,000 turns (fixtures by `importState`) | all M2 integration files, each alone |
+
+**Order and parallelism inside M2.** W2.0 first, alone (done); then **group A** = W2.1a, W2.3, W2.4,
+W2.8 in parallel; then **group B** = W2.1b, W2.2, W2.5, W2.6, W2.7 in parallel; then W2.9, which
+owns every file. No two units of a group edit one file (`m2-interfaces.md` 2.2 names the owner of
+every M1a/M1b file M2 edits); hook tables take lines from several units; an exo switches to its
+M2 guard once, with stubs (`textOf.notBuilt`) for methods a later unit builds (`m2-interfaces.md`
+1.3); a unit that needs a contract change makes it by the contract rule and reports it.
 
 **Acceptance tests**
 1. Against the fake server: an OpenRouter-format session streams more than one delta per reply.
@@ -548,13 +558,26 @@ the current ceiling (`m1b-qc.test.js`); keep that test green when the record or 
     delete part; `m1b-live.test.js` keeps it as a known failure until then).
 14. `exportState` then `importState` into a fresh state directory yields the same sessions, history,
     queues and presets.
+15. **A 5,000-turn session behaves like a 200-turn one** (D-M2-1; `m2-interfaces.md` 4): per-turn
+    wall time, `turn.start`, the session vat's snapshot size, its slot capacity and its hub row
+    bytes are each within 1.25 x of the 200-turn session's (the scripted backend with
+    `logContext: false`; sessions built by `importState`, which seals as a grown session does);
+    after a restart the next turn's context is rebuilt in at most 5 s and the provider receives
+    the same context as before (`turnDigests`); `history.page` is at most 300 ms; history pages
+    load from the newest turn back to turn 1 across archived and kept turns with every turn
+    exactly once. The same at 1,000 turns.
+16. **SIGKILL during a seal** (`m2-interfaces.md` 4.5): a supervisor SIGKILL after the seal crank,
+    while the segment file is written (before its rename), after the adapter's answer, and after
+    the answer crank; after each restart history from the newest turn back to turn 1 shows every
+    turn exactly once, the provider's next request carries the same context as before, no
+    half-written segment is read or left, and the next seal succeeds.
 
 **Perf checks**
 | check | budget |
 |---|---|
 | `queue.enqueue` while a turn runs, round trip | <= 150 ms |
-| `history.page` 32 turns on a 1,000-turn session | <= 300 ms (M1b: 598-666 ms for 26 turns of 7 records, J-0370; after CORE-11 869 ms at 1,000 turns, J-9383; needs the record bound of W2.5 or C-5) |
-| `context.rebuild` 1,000-turn session after restart (M1b row, carried) | <= 5 s (M1b: see its outcome table; after CORE-11 22.1 s, 14 page cranks of about 1.55 s, linear in turns, J-9383, J-9387; J-0322 option (b), the adapter's cache persisted next to the blobs, removes the page cranks from the restart path) |
+| `history.page` 32 turns on a 1,000-turn session | <= 300 ms (M1b: 598-666 ms for 26 turns of 7 records, J-0370; after CORE-11 869 ms at 1,000 turns, J-9383; needs the record bound of W2.5 or C-5; with the archive a session keeps at most 159 settled turns, so the page crank no longer grows with session length, `m2-interfaces.md` 4.13) |
+| `context.rebuild` 1,000-turn session after restart (M1b row, carried) | <= 5 s (M1b: see its outcome table; after CORE-11 22.1 s, 14 page cranks of about 1.55 s, linear in turns, J-9383, J-9387; J-0322 option (b), the adapter's cache persisted next to the blobs, removes the page cranks from the restart path: built by W2.8 as `context.jsonl` and the mirror, `m2-interfaces.md` 4.7, 4.8) |
 | `hub.row` bytes per hub commit of a session's row at 1,000 / 5,000 turns | recorded; decides J-9335 (a) in M2 or M3 (a row carries one entry per handle the session holds, and the log store rewrites the whole row per change, J-9386) |
 | `session.heap` session vat slot capacity at 1,000 / 10,000 / 30,000 turns | recorded against the slot ceiling (4,000,000); the heaviest crank of a session at that size must still fit |
 | `journal.snapshot` session vat at 1,000 / 10,000 / 30,000 turns | <= 500 ms / <= 1 s / recorded |
@@ -565,12 +588,22 @@ the current ceiling (`m1b-qc.test.js`); keep that test green when the record or 
 | `throughput` deliveries per second at saturation (20 sessions) | recorded; journal if < 50/s |
 | `disk.session` idle session after 300 turns; after delete | <= 25 MB plus blobs; returned on delete |
 | too-big probes: 200 k-char submission accepted through the Composer, 200 k + 1 refused; a 100 KiB string sent straight to a vat method through the admin path is refused by the client library before sending | no halt |
+| `archive.flat.turn` wall time per turn (100 turns ending there), 5,000 against 200 turns | <= 1.25 x (D-M2-1) |
+| `archive.flat.turnStart` `turn.start` median, 5,000 against 200 turns | <= 1.25 x and <= 350 ms |
+| `archive.flat.snapshot` session vat snapshot bytes and ms, 5,000 against 200 turns | <= 1.25 x (expected about 20 MB, `m2-interfaces.md` 4.13) |
+| `archive.flat.slots` session vat slot capacity, 5,000 against 200 turns | <= 1.25 x (expected about 16 % of 4,000,000) |
+| `archive.flat.hubRow` the session's hub row bytes and entries, 5,000 against 200 turns | <= 1.25 x (expected about 290 entries, 15 KB) |
+| `context.rebuild` at 1,000 and 5,000 turns (archive) | <= 5 s each (D-M2-1) |
+| `history.page` at 1,000 and 5,000 turns: the newest page (vat) and an archived page (`History`) | <= 300 ms each (D-M2-1) |
+| `archive.seal` per seal: session crank ms (S, Z), adapter ms, bytes written, fsyncs | recorded |
+| `archive.disk` bytes per archived turn (segments, `context.jsonl`) | recorded |
 
 **Fit risk:** good for queue/records (heap Maps replace 1,320 lines of pet-name storage; atomic claim
 removes the `interrupted` window); awkward for time-window checks (time stamped by the gateway).
 
-**Deferred:** subscription backends (M4), compaction (M8), presets (M5), UI (M3); archive (M13, only
-if `journal.snapshot` misses its budget).
+**Deferred:** subscription backends (M4), compaction (M8; the archive's compaction hook is specified,
+`m2-interfaces.md` 4.12), presets (M5), UI (M3). The record archive is **built in M2** (D-M2-1: W2.5
+vat side, W2.8 adapter side), not in M13.
 
 ---
 
@@ -1110,17 +1143,16 @@ losing sessions, native reinstalls without breaking references, reclaimed state,
 - **P:** hardening of P-13, P-14, P-28, P-29; G-29, G-33 decisions.
 - **R:** R2-25, R4-63, R4-64 (and the spec's defect "removed state never reclaimed").
 - **Depends on:** all earlier milestones.
-- **Owns:** `H/guest/factory/upgrade.js`, `H/scripts/{upgrade,soak}.mjs`, `AH/archive.js`
-  (conditional), `H/test/*/m13-*`, `H/perf/soak.perf.mjs`.
+- **Owns:** `H/guest/factory/upgrade.js`, `H/scripts/{upgrade,soak}.mjs`, `H/test/*/m13-*`,
+  `H/perf/soak.perf.mjs`. (The record archive moved to M2, D-M2-1.)
 
 **Work units:** W13.1 `upgrade.mjs`: automates M2's `exportState`/`importState` into new program
 versions and swaps references in the factory. W13.2 native reinstall migration: re-mint
 Secrets/Backends/Blobs/Routes handles from adapter-side state and push new `SessionServices` (D-13).
 W13.3 collection sweep: `collectVats` with the factory as root, snapshot and incarnation cleanup
-verified on disk (per-delete reclamation is already in M2). W13.4 archive, **only if** M2's
-`journal.snapshot` missed its budget: adapter-written chunks from its cache, resident records dropped
-after the chunk's Blob is received for a matching turn range. W13.5 soak: 50 sessions, 7 simulated
-days of turns with the scripted backend.
+verified on disk (per-delete reclamation is already in M2); a sweep of blob files must keep every
+key an archive names (`archiveKeys`, `m2-interfaces.md` 4.10). W13.4 (archive) moved to M2 (D-M2-1:
+W2.5, W2.8). W13.5 soak: 50 sessions, 7 simulated days of turns with the scripted backend.
 
 **Acceptance tests:** upgrade a state directory with 20 sessions to a new session program:
 transcripts, queues, presets intact; reinstall agent-host: sessions keep working; delete 10 sessions:
