@@ -29,13 +29,26 @@
  *
  * Phase 2, growth (a second copy; HUB_GROWTH=0 skips it): one session with
  * a subscriber; a window of GROWTH_WINDOW (default 30) turns is measured
- * fresh, after GROWTH_TURNS (default 1,000) more turns, and after
- * GROWTH_SESSIONS (default 50) more sessions have each run one turn.
- * - `hub.growth`: `hub.json` bytes and the hub's milliseconds per inbound
- *   non-GC delivery and per persist at each point. Budget: bytes <= 2 MB,
- *   ms per delivery <= 1.25 x fresh (computed here, not with the harness
- *   slack).
+ * fresh, after GROWTH_TURNS (default 1,000) more turns, and after more
+ * sessions have each run one turn: GROWTH_STEPS (default "10,50") are the
+ * session counts, the measured session included, at which a window runs
+ * (the last is GROWTH_SESSIONS, default 50, when that is set).
+ * - `hub.growth`: the hub's persisted bytes and the hub's milliseconds per
+ *   inbound non-GC delivery and per persist at each point. Budget: bytes
+ *   <= 2 MB, ms per delivery <= 1.25 x fresh (computed here, not with the
+ *   harness slack).
+ * - `hub.persist` (C-2, journal J-9330..): one row per window: persists,
+ *   characters written (`persistChars`, the store's own count; ASCII JSON,
+ *   so bytes) and milliseconds, per inbound non-GC delivery and per turn,
+ *   the hub state's size on disk, and the store's counters (`status().hub.
+ *   store`: whole-file writes, or the log's appends and compactions).
+ * - `hub.size`: the hub state's size on disk every GROWTH_SAMPLE (default
+ *   100) turns of the GROWTH_TURNS.
+ * The size on disk is `hub.json` for the whole-file store, and the image
+ * plus the log (`hub-image.json`, `hub-log.jsonl`) for the log store.
  */
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -63,9 +76,14 @@ const HUB_GROWTH = process.env.HUB_GROWTH !== '0';
 const GROWTH_WINDOW = Number(process.env.GROWTH_WINDOW ?? 30);
 const GROWTH_TURNS = Number(process.env.GROWTH_TURNS ?? 1000);
 const GROWTH_SESSIONS = Number(process.env.GROWTH_SESSIONS ?? 50);
+const GROWTH_STEPS = (process.env.GROWTH_STEPS ?? `10,${GROWTH_SESSIONS}`)
+  .split(',')
+  .map(Number)
+  .filter(n => n > 1);
+const GROWTH_SAMPLE = Number(process.env.GROWTH_SAMPLE ?? 100);
 
-/** @typedef {{ deliveries: number, frames: number, ms: number, persists: number, persistMs: number, serializeMs: number, sends: number, sendMs: number }} Bucket */
-/** @typedef {{ gcOnly: Bucket, other: Bucket, outside: Bucket }} HubStats */
+/** @typedef {{ deliveries: number, frames: number, ms: number, persists: number, persistMs: number, persistChars: number, serializeMs: number, sends: number, sendMs: number }} Bucket */
+/** @typedef {{ gcOnly: Bucket, other: Bucket, outside: Bucket, store?: Record<string, any> }} HubStats */
 
 const BUCKET_KEYS = /** @type {const} */ ([
   'deliveries',
@@ -73,6 +91,7 @@ const BUCKET_KEYS = /** @type {const} */ ([
   'ms',
   'persists',
   'persistMs',
+  'persistChars',
   'serializeMs',
   'sends',
   'sendMs',
@@ -85,8 +104,57 @@ const BUCKET_KEYS = /** @type {const} */ ([
  */
 const bucketDelta = (before, after) =>
   /** @type {Bucket} */ (
-    Object.fromEntries(BUCKET_KEYS.map(k => [k, after[k] - before[k]]))
+    // persistChars is absent before the core counted it (a71e5272b5).
+    Object.fromEntries(
+      BUCKET_KEYS.map(k => [k, (after[k] ?? 0) - (before[k] ?? 0)]),
+    )
   );
+
+/**
+ * The numeric fields of the store's counters, after minus before; the rest
+ * as after has them.
+ * @param {Record<string, any> | undefined} before
+ * @param {Record<string, any> | undefined} after
+ */
+const storeDelta = (before, after) =>
+  after &&
+  Object.fromEntries(
+    Object.entries(after).map(([k, v]) => [
+      k,
+      typeof v === 'number' && typeof before?.[k] === 'number'
+        ? +(v - before[k]).toFixed(3)
+        : v,
+    ]),
+  );
+
+/**
+ * The hub state's size on disk under a state directory (the whole-file
+ * store's `hub.json`, or the log store's image and log), or null before
+ * there is any.
+ * @param {string} root
+ */
+const hubDiskBytes = async root => {
+  for (const dir of [path.join(root, 'heaps'), root]) {
+    /** @type {Record<string, number>} */
+    const sizes = {};
+    for (const name of ['hub.json', 'hub-image.json', 'hub-log.jsonl']) {
+      const info = await stat(path.join(dir, name)).catch(() => undefined);
+      if (info?.isFile()) sizes[name] = info.size;
+    }
+    if (Object.keys(sizes).length > 0) {
+      const logged =
+        sizes['hub-image.json'] !== undefined ||
+        sizes['hub-log.jsonl'] !== undefined;
+      return {
+        bytes: logged
+          ? (sizes['hub-image.json'] ?? 0) + (sizes['hub-log.jsonl'] ?? 0)
+          : (sizes['hub.json'] ?? 0),
+        files: sizes,
+      };
+    }
+  }
+  return null;
+};
 
 /**
  * @param {HubStats} before
@@ -97,6 +165,7 @@ const hubDelta = (before, after) => ({
   gcOnly: bucketDelta(before.gcOnly, after.gcOnly),
   other: bucketDelta(before.other, after.other),
   outside: bucketDelta(before.outside, after.outside),
+  store: storeDelta(before.store, after.store),
 });
 
 /**
@@ -125,6 +194,7 @@ const perFrame = b => ({
   deliveries: b.deliveries,
   msPerFrame: per(b.ms, b.frames),
   persistMsPerFrame: per(b.persistMs, b.frames),
+  persistCharsPerFrame: per(b.persistChars, b.frames),
   serializeMsPerFrame: per(b.serializeMs, b.frames),
   sendMsPerFrame: per(b.sendMs, b.frames),
   persistsPerFrame: per(b.persists, b.frames),
@@ -248,6 +318,7 @@ async function burst(template, root) {
         .sort((a, b) => b.gcFrames - a.gcFrames)
         .slice(0, 5),
       hubJsonBytes: await hubJsonBytes(run.served.root),
+      hubDisk: await hubDiskBytes(run.served.root),
       wallMs,
       clock: 'supervisor monotonic clock, synchronous hub work only',
       pass: null,
@@ -282,43 +353,115 @@ async function growth(template, root) {
     const session = await run.slice.createSession(run.made.backend, 'grow');
     const { sub, turn } = await run.open(session);
     for (let i = 0; i < 3; i += 1) await turn();
-    /** @param {string} at */
-    const window = async at => {
+    const { commit, workerSha256 } = await runIdentity();
+    /**
+     * @param {string} at
+     * @param {number} sessions
+     */
+    const window = async (at, sessions) => {
       /** @type {Bucket[]} */
       const other = [];
       /** @type {Bucket[]} */
       const all = [];
+      const storeBefore = (await run.hubStats()).store;
       for (let i = 0; i < GROWTH_WINDOW; i += 1) {
         const t = await turn();
         other.push(t.hub.other);
         all.push(t.hub.other, t.hub.gcOnly, t.hub.outside);
       }
+      const storeAfter = (await run.hubStats()).store;
       const o = sum(other);
       const a = sum(all);
+      const disk = await hubDiskBytes(run.served.root);
+      emit({
+        metric: 'hub.persist',
+        unit: 'ms per inbound non-GC delivery',
+        value: per(o.ms, o.deliveries),
+        at,
+        sessions,
+        window: GROWTH_WINDOW,
+        perDelivery: {
+          deliveries: o.deliveries,
+          persists: per(o.persists, o.deliveries),
+          persistChars: per(o.persistChars, o.deliveries),
+          persistMs: per(o.persistMs, o.deliveries),
+          sendMs: per(o.sendMs, o.deliveries),
+        },
+        perTurn: {
+          persists: per(a.persists, GROWTH_WINDOW),
+          persistChars: per(a.persistChars, GROWTH_WINDOW),
+          persistMs: per(a.persistMs, GROWTH_WINDOW),
+          hubMs: per(a.ms, GROWTH_WINDOW),
+        },
+        msPerPersist: per(a.persistMs, a.persists),
+        charsPerPersist: per(a.persistChars, a.persists),
+        serializeMsPerPersist: per(a.serializeMs, a.persists),
+        diskBytes: disk?.bytes ?? null,
+        diskFiles: disk?.files ?? null,
+        store: storeDelta(storeBefore, storeAfter) ?? null,
+        pass: null,
+        commit,
+        workerSha256,
+        crankBudget,
+        loadAvg: loadAvg(),
+      });
       return {
         at,
-        hubJsonBytes: await hubJsonBytes(run.served.root),
+        sessions,
+        hubJsonBytes: disk?.bytes ?? (await hubJsonBytes(run.served.root)),
         msPerDelivery: per(o.ms, o.deliveries),
         msPerFrame: per(o.ms, o.frames),
         msPerPersist: per(a.persistMs, a.persists),
         serializeMsPerPersist: per(a.serializeMs, a.persists),
         persistsPerTurn: per(a.persists, GROWTH_WINDOW),
+        charsPerTurn: per(a.persistChars, GROWTH_WINDOW),
       };
     };
-    const points = [await window('fresh')];
+    const points = [await window('fresh', 1)];
     const t0 = performance.now();
-    for (let i = 0; i < GROWTH_TURNS; i += 1) await turn();
-    const turnsMs = round1(performance.now() - t0);
-    points.push(await window(`after ${GROWTH_TURNS} turns`));
-    const t1 = performance.now();
-    for (let i = 0; i < GROWTH_SESSIONS; i += 1) {
-      const other = await run.slice.createSession(run.made.backend, `g${i}`);
-      await run.slice.submit(other, perfInputs.start);
+    /** @type {Array<{ turns: number, bytes: number | null, files: Record<string, number> | null }>} */
+    const sizes = [];
+    for (let i = 0; i < GROWTH_TURNS; i += 1) {
+      await turn();
+      if ((i + 1) % GROWTH_SAMPLE === 0) {
+        const disk = await hubDiskBytes(run.served.root);
+        sizes.push({
+          turns: i + 1,
+          bytes: disk?.bytes ?? null,
+          files: disk?.files ?? null,
+        });
+      }
     }
-    // The last sessions' turns settle before the window.
-    await delay(2000);
+    const turnsMs = round1(performance.now() - t0);
+    emit({
+      metric: 'hub.size',
+      unit: 'bytes',
+      value: Math.max(...sizes.map(p => p.bytes ?? 0)),
+      every: GROWTH_SAMPLE,
+      turns: GROWTH_TURNS,
+      samples: sizes,
+      pass: null,
+      commit,
+      workerSha256,
+      crankBudget,
+      loadAvg: loadAvg(),
+    });
+    points.push(await window(`after ${GROWTH_TURNS} turns`, 1));
+    const t1 = performance.now();
+    let made = 1;
+    for (const target of GROWTH_STEPS) {
+      for (; made < target; made += 1) {
+        const other = await run.slice.createSession(
+          run.made.backend,
+          `g${made}`,
+        );
+        await run.slice.submit(other, perfInputs.start);
+      }
+      // The last sessions' turns settle before the window.
+      await delay(2000);
+      points.push(await window(`at ${target} sessions`, target));
+    }
     const sessionsMs = round1(performance.now() - t1);
-    points.push(await window(`after ${GROWTH_SESSIONS} sessions`));
     const fresh = points[0];
     const maxBytes = Math.max(...points.map(p => p.hubJsonBytes ?? 0));
     const ratios = points.map(p =>
@@ -332,14 +475,13 @@ async function growth(template, root) {
       ...(maxRatio > 1.25 ? [`msPerDelivery: ${maxRatio} x fresh > 1.25`] : []),
     ];
     if (exceeded.length) process.exitCode = 1;
-    const { commit, workerSha256 } = await runIdentity();
     emit({
       metric: 'hub.growth',
       unit: 'bytes',
       value: maxBytes,
       points: points.map((p, k) => ({ ...p, msPerDeliveryVsFresh: ratios[k] })),
       turns: GROWTH_TURNS,
-      sessions: GROWTH_SESSIONS,
+      sessions: made,
       window: GROWTH_WINDOW,
       turnsMs,
       sessionsMs,
