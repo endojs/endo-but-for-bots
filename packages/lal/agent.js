@@ -150,7 +150,7 @@ export const spawnWorkerLoop = async (
    * the transcript.
    *
    * @param {string} prompt - User-role content for this round.
-   * @param {{ number?: number | bigint, messageId?: string, replyTo?: string }} [mail]
+   * @param {{ number?: number | bigint, messageIdentifier?: string, replyTo?: string }} [mail]
    *   The inbound mail message that started the round.
    */
   const runOneRound = async (prompt, mail) => {
@@ -260,13 +260,16 @@ export const make = (guestPowers, _context) => {
     // old value messages (from prior sessions) that reply to an earlier form
     // are not accidentally matched when the iterator replays history.
     /** @type {string | undefined} */
-    let formMessageId;
+    let formMessageIdentifier;
     const existingMessages = /** @type {any[]} */ (
       await E(powers).listMessages()
     );
-    for (const msg of existingMessages) {
-      if (msg.from === selfLocator && msg.type === 'form') {
-        formMessageId = msg.messageId;
+    for (const inboundMessage of existingMessages) {
+      if (
+        inboundMessage.from === selfLocator &&
+        inboundMessage.type === 'form'
+      ) {
+        formMessageIdentifier = inboundMessage.messageId;
       }
     }
 
@@ -275,19 +278,25 @@ export const make = (guestPowers, _context) => {
       const { value: message, done } = await messageIterator.next();
       if (done) break;
 
-      const msg = /** @type {any} */ (message);
+      const inboundMessage = /** @type {any} */ (message);
 
       // Capture the form's messageId from our own outbound message.
 
-      if (msg.from === selfLocator && msg.type === 'form') {
-        formMessageId = msg.messageId;
-      } else if (msg.type === 'value' && msg.replyTo === formMessageId) {
+      if (
+        inboundMessage.from === selfLocator &&
+        inboundMessage.type === 'form'
+      ) {
+        formMessageIdentifier = inboundMessage.messageId;
+      } else if (
+        inboundMessage.type === 'value' &&
+        inboundMessage.replyTo === formMessageIdentifier
+      ) {
         // Only process value messages that reply to our form.
         try {
           // Resolve the submitted values from the value message.
           const config =
             /** @type {{ name: string, host: string, model: string, authToken: string }} */ (
-              await E(powers).lookupById(msg.valueId)
+              await E(powers).lookupById(inboundMessage.valueId)
             );
 
           const { name } = config;
@@ -295,7 +304,7 @@ export const make = (guestPowers, _context) => {
           if (activeWorkers.has(name)) {
             // A worker is already running for this name.
             await E(powers).reply(
-              msg.number,
+              inboundMessage.number,
               [`Agent "${name}" already exists.`],
               [],
               [],
@@ -334,7 +343,7 @@ export const make = (guestPowers, _context) => {
             }
 
             // Spawn a worker loop for this guest.
-            const workerP = spawnWorkerLoop(
+            const workerPromise = spawnWorkerLoop(
               guest,
               null,
               {
@@ -344,14 +353,14 @@ export const make = (guestPowers, _context) => {
               },
               { transcript },
             );
-            activeWorkers.set(name, workerP);
-            workerP.catch(error => {
+            activeWorkers.set(name, workerPromise);
+            workerPromise.catch(error => {
               console.error(`[lal] Worker "${name}" error:`, error);
               activeWorkers.delete(name);
             });
 
             await E(powers).reply(
-              msg.number,
+              inboundMessage.number,
               [`Agent "${name}" is now running.`],
               [],
               [],
@@ -363,7 +372,7 @@ export const make = (guestPowers, _context) => {
           console.error('[lal] Form submission error:', errorMessage);
           try {
             await E(powers).reply(
-              msg.number,
+              inboundMessage.number,
               [`Error creating agent: ${errorMessage}`],
               [],
               [],

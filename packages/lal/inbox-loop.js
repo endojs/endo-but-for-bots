@@ -29,7 +29,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
  * @param {() => Promise<Promise<unknown> | null>} args.getCancelled
  *   Resolver returning the worker's cancellation promise (or null if no
  *   cancellation surface is configured).
- * @param {(prompt: string, mail?: { number?: number | bigint, messageId?: string, replyTo?: string }) => Promise<void>} args.runOneRound
+ * @param {(prompt: string, mail?: { number?: number | bigint, messageIdentifier?: string, replyTo?: string }) => Promise<void>} args.runOneRound
  *   Per-round runner, bound to this worker's `PiAgent`.
  * @returns {Promise<void>}
  */
@@ -103,7 +103,7 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
       break;
     }
     const inboxMessage =
-      /** @type {InboxMessage & {type?: string, messageId?: string, replyTo?: string, done?: boolean}} */ (
+      /** @type {InboxMessage & {type?: string, messageIdentifier?: string, replyTo?: string, done?: boolean}} */ (
         message
       );
     const {
@@ -138,7 +138,7 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
       try {
         await runOneRound(formatInboundMessage(), {
           number,
-          messageId: inboxMessage.messageId,
+          messageIdentifier: inboxMessage.messageId,
           replyTo: inboxMessage.replyTo,
         });
       } catch (error) {

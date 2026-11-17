@@ -11,6 +11,8 @@
 // sub-guest powers, whose pet store never names the mount.
 
 import { E } from '@endo/eventual-send';
+import { encodeHex } from '@endo/hex';
+import { decodeUtf8, encodeUtf8 } from '@endo/utf8';
 import {
   loadFromJsonl,
   assemblePath,
@@ -34,9 +36,6 @@ const isProjected = message =>
   message !== null &&
   typeof message === 'object' &&
   PROJECTED_ROLES.includes(message.role);
-
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
 
 /**
  * @param {string} path
@@ -69,13 +68,11 @@ export const makeMountWriterFs = mount => {
       if (text === undefined) {
         throw makeEnoent(path);
       }
-      return textEncoder.encode(text);
+      return encodeUtf8(text);
     },
     async truncate(path, length) {
       const text = (await readText(path)) ?? '';
-      const kept = textDecoder.decode(
-        textEncoder.encode(text).slice(0, length),
-      );
+      const kept = decodeUtf8(encodeUtf8(text).slice(0, length));
       await E(mount).writeText(path, kept);
     },
     async open(path) {
@@ -107,14 +104,14 @@ export const uuidv7 = (
   fillRandom = bytes => globalThis.crypto.getRandomValues(bytes),
 ) => {
   const bytes = fillRandom(new Uint8Array(16));
-  let ms = now();
-  for (let i = 5; i >= 0; i -= 1) {
-    bytes[i] = ms % 256;
-    ms = Math.floor(ms / 256);
+  let milliseconds = now();
+  for (let index = 5; index >= 0; index -= 1) {
+    bytes[index] = milliseconds % 256;
+    milliseconds = Math.floor(milliseconds / 256);
   }
   bytes[6] = 0x70 + (bytes[6] % 0x10);
   bytes[8] = 0x80 + (bytes[8] % 0x40);
-  const hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+  const hex = encodeHex(bytes);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
 harden(uuidv7);
@@ -159,18 +156,18 @@ harden(findLatestSessionFile);
  * @param {string} options.workerName
  * @param {boolean} [options.fresh]
  * @param {() => number} [options.now]
- * @param {() => string} [options.makeId]
+ * @param {() => string} [options.makeIdentifier]
  * @param {string} [options.cwd] - Recorded in the header.
- * @param {string} [options.guestId] - The worker guest's id, for the header.
+ * @param {string} [options.guestIdentifier] - The worker guest's id, for the header.
  */
 export const openWorkerTranscript = async ({
   mount,
   workerName,
   fresh = false,
   now = Date.now,
-  makeId = () => uuidv7(now),
+  makeIdentifier = () => uuidv7(now),
   cwd = '/',
-  guestId,
+  guestIdentifier,
 }) => {
   const fs = makeMountWriterFs(mount);
 
@@ -180,24 +177,29 @@ export const openWorkerTranscript = async ({
   /** @type {any[]} */
   let seedMessages = [];
   /** @type {string | null} */
-  let lastId = null;
-  const sessionId =
+  let lastIdentifier = null;
+  const sessionIdentifier =
     existing === undefined
-      ? `${workerPrefix(workerName)}${makeId()}`
+      ? `${workerPrefix(workerName)}${makeIdentifier()}`
       : undefined;
   /** @type {string} */
   const fileName =
     existing ??
-    sessionFileName({ timestamp: now(), sessionId: `${sessionId}` });
+    sessionFileName({
+      timestamp: now(),
+      sessionId: `${sessionIdentifier}`,
+    });
 
   const writer = makeSessionWriter({ path: fileName, fs });
   // Opening repairs any torn tail before we read the file back.
   // `writeHeader` is a no-op when resuming a non-empty file.
   await writer.writeHeader({
-    sessionId: sessionId ?? fileName,
+    sessionId: sessionIdentifier ?? fileName,
     createdAt: now(),
     cwd,
-    ...(guestId === undefined ? {} : { 'endo:guestId': guestId }),
+    ...(guestIdentifier === undefined
+      ? {}
+      : { 'endo:guestId': guestIdentifier }),
   });
 
   const text = (await E(mount).maybeReadText(fileName)) ?? '';
@@ -205,8 +207,8 @@ export const openWorkerTranscript = async ({
   const nodes = graph.entries.filter(entry => entry.type !== 'header');
   const lastNode = nodes.at(-1);
   if (lastNode !== undefined) {
-    lastId = lastNode.id;
-    seedMessages = assemblePath(graph, lastId)
+    lastIdentifier = lastNode.id;
+    seedMessages = assemblePath(graph, lastIdentifier)
       .filter(entry => entry.type === 'message' && isProjected(entry.message))
       .map(entry => entry.message);
   }
@@ -215,10 +217,10 @@ export const openWorkerTranscript = async ({
   const recorded = new WeakSet();
 
   const link = () => {
-    const id = makeId();
-    const parentId = lastId;
-    lastId = id;
-    return { id, parentId };
+    const identifier = makeIdentifier();
+    const parentIdentifier = lastIdentifier;
+    lastIdentifier = identifier;
+    return { id: identifier, parentId: parentIdentifier };
   };
 
   const transcript = {
@@ -241,12 +243,14 @@ export const openWorkerTranscript = async ({
      * Record the Endo mail message that started a turn. Ids only, never
      * live references.
      *
-     * @param {{ number?: number | bigint, messageId?: string, replyTo?: string }} mail
+     * @param {{ number?: number | bigint, messageIdentifier?: string, replyTo?: string }} mail
      */
     async recordMail(mail) {
       /** @type {Record<string, unknown>} */
       const payload = {};
-      if (mail.messageId !== undefined) payload.messageId = mail.messageId;
+      if (mail.messageIdentifier !== undefined) {
+        payload.messageId = mail.messageIdentifier;
+      }
       if (mail.replyTo !== undefined) payload.replyTo = mail.replyTo;
       if (mail.number !== undefined) payload.number = String(mail.number);
       await writer.append(makeCustomEntry('endo:mail', { ...link(), payload }));

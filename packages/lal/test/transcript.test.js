@@ -85,7 +85,7 @@ test('a fresh session writes a header, the mail entry, and linked messages', asy
   });
   t.deepEqual(transcript.seedMessages, []);
 
-  await transcript.recordMail({ number: 3n, messageId: 'm-1' });
+  await transcript.recordMail({ number: 3n, messageIdentifier: 'm-1' });
   await transcript.recordMessages([
     { role: 'system', content: 'not projected' },
     user('hi'),
