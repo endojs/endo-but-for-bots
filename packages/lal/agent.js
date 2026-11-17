@@ -20,10 +20,14 @@ import {
 } from './model-resolution.js';
 import { runRound } from './round-runner.js';
 import { runInboxLoop } from './inbox-loop.js';
-import { openWorkerTranscript, provideTranscriptsMount } from './transcript.js';
+import {
+  makeTranscriptRoundRunner,
+  openWorkerTranscript,
+  provideTranscriptsMount,
+} from './transcript.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
-/** @import { GuestPowers, LalContext } from './agent.types.js' */
+/** @import { GuestPowers, LalContext, TranscriptMail, WorkerTranscript } from './agent.types.js' */
 
 // pi-ai's built-in API providers (anthropic, openai, google, openrouter,
 // mistral, deepseek, groq, xai, github-copilot, and ~20 others) are registered
@@ -54,13 +58,12 @@ const LalInterface = M.interface('Lal', {
  * When the harness supplies a `transcript` (see `transcript.js`), the PiAgent
  * is seeded from the resumed session's messages and every completed
  * `user`/`assistant`/`toolResult` message is appended to the session's
- * Pi-compatible JSONL file. The transcript is held only in this closure: the
- * model's tools run on `powers`, which never name the writable mount.
+ * Pi-compatible JSONL file.
  *
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | null | undefined} context
  * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string }} workerEnv
- * @param {{ transcript?: Awaited<ReturnType<typeof openWorkerTranscript>> }} [options]
+ * @param {{ transcript?: WorkerTranscript }} [options]
  * @returns {Promise<void>}
  */
 export const spawnWorkerLoop = async (
@@ -126,49 +129,18 @@ export const spawnWorkerLoop = async (
     getApiKey,
     messages: transcript ? [...transcript.seedMessages] : [],
   });
-  if (transcript) {
-    transcript.markRecorded(piAgent.state.messages);
-  }
-
-  /**
-   * Run `record` and log, rather than throw, a transcript write failure: a
-   * lost transcript line must not take down the worker.
-   *
-   * @param {() => Promise<void>} record
-   */
-  const recordSafely = async record => {
-    try {
-      await record();
-    } catch (error) {
-      console.error('[lal] Transcript write failed:', error);
-    }
-  };
-
   /**
    * Run one chat round on the PiAgent, forwarding tool-call activity to
    * the console (via `round-runner.js`), and append the round's messages to
    * the transcript.
    *
-   * @param {string} prompt - User-role content for this round.
-   * @param {{ number?: number | bigint, messageIdentifier?: string, replyTo?: string }} [mail]
-   *   The inbound mail message that started the round.
+   * @type {(prompt: string, mail?: TranscriptMail) => Promise<void>}
    */
-  const runOneRound = async (prompt, mail) => {
-    if (!transcript) {
-      await runRound(piAgent, prompt);
-      return;
-    }
-    if (mail) {
-      await recordSafely(() => transcript.recordMail(mail));
-    }
-    try {
-      await runRound(piAgent, prompt);
-    } finally {
-      await recordSafely(() =>
-        transcript.recordMessages(piAgent.state.messages),
-      );
-    }
-  };
+  const runOneRound = transcript
+    ? makeTranscriptRoundRunner({ transcript, piAgent, runRound })
+    : async prompt => {
+        await runRound(piAgent, prompt);
+      };
 
   await runInboxLoop({ powers, getCancelled, runOneRound });
 };
@@ -281,7 +253,6 @@ export const make = (guestPowers, _context) => {
       const inboundMessage = /** @type {any} */ (message);
 
       // Capture the form's messageId from our own outbound message.
-
       if (
         inboundMessage.from === selfLocator &&
         inboundMessage.type === 'form'

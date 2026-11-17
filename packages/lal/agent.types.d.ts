@@ -5,6 +5,7 @@ import type {
   NameOrPath,
   StampedMessage,
 } from '@endo/daemon';
+import type { ChatMessage } from '@endo/jsonl-transcript';
 
 export type { NameOrPath };
 
@@ -67,4 +68,35 @@ export type WorkerConfig = {
 export type LalContext = {
   whenCancelled?: () => Promise<void>;
   cancelled?: Promise<void>;
+};
+
+/**
+ * The Endo mail message that started a worker round, recorded in the
+ * transcript as an `endo:mail` entry. Ids only, never live references.
+ */
+export type TranscriptMail = {
+  number?: number | bigint;
+  messageIdentifier?: string;
+  replyTo?: string;
+};
+
+/** The writable mount methods the transcript harness uses. */
+export type TranscriptMount = {
+  list(): string[];
+  maybeReadText(path: string): string | undefined;
+  writeText(path: string, text: string): void;
+  makeFile(path: string, text?: string): void;
+  lookup(path: string): unknown;
+};
+
+/** One worker's session transcript, held only by the trusted harness. */
+export type WorkerTranscript = {
+  /** The session file's name at the mount root. */
+  readonly fileName: string;
+  /** A fresh copy of the resumed session's PiAgent seed messages. */
+  readonly seedMessages: ChatMessage[];
+  markRecorded(messages: readonly unknown[]): void;
+  recordMail(mail: TranscriptMail): Promise<void>;
+  recordMessages(messages: readonly unknown[]): Promise<void>;
+  close(): Promise<void>;
 };

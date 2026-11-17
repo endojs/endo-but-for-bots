@@ -1,4 +1,5 @@
 // @ts-check
+/* eslint-disable no-await-in-loop */
 import test from '@endo/ses-ava/prepare-endo.js';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -6,6 +7,7 @@ import { loadFromJsonl } from '@endo/jsonl-transcript/reader.js';
 
 import {
   findLatestSessionFile,
+  makeTranscriptRoundRunner,
   openWorkerTranscript,
   provideTranscriptsMount,
   TRANSCRIPTS_MOUNT_NAME,
@@ -75,6 +77,16 @@ test('uuidv7 has the version and variant bits and a sortable time prefix', t => 
   t.true(a < b);
 });
 
+test('uuidv7 rejects a tamed or out-of-range clock', t => {
+  t.throws(() => uuidv7(() => NaN), { instanceOf: RangeError });
+  t.throws(() => uuidv7(() => -1), { instanceOf: RangeError });
+  t.throws(() => uuidv7(() => 2 ** 48), { instanceOf: RangeError });
+  t.regex(
+    uuidv7(() => 2 ** 48 - 1),
+    /^ffffffff-ffff-7/,
+  );
+});
+
 test('a fresh session writes a header, the mail entry, and linked messages', async t => {
   const { mount, files } = makeMemoryMount();
   const now = makeClock();
@@ -98,7 +110,9 @@ test('a fresh session writes a header, the mail entry, and linked messages', asy
     /** @type {string} */ (files.get(transcript.fileName)),
   );
   t.like(header, { type: 'header', version: 3 });
-  t.true(String(header?.sessionId).startsWith('alice--'));
+  // The worker key is the hex of the UTF-8 name: `alice` is 616c696365.
+  t.true(String(header?.sessionId).startsWith('w616c696365--'));
+  t.is(header?.['endo:worker'], 'alice');
   const nodes = entries.filter(entry => entry.type !== 'header');
   t.deepEqual(
     nodes.map(entry => entry.type),
@@ -214,4 +228,209 @@ test('provideTranscriptsMount reuses an existing pet name', async t => {
   t.is(await provideTranscriptsMount(host), mount);
   t.is(made, 1);
   t.true(names.has(TRANSCRIPTS_MOUNT_NAME));
+});
+
+test('worker names that embed or slug like another never share a session', async t => {
+  const { mount } = makeMemoryMount();
+  const now = makeClock();
+  const names = ['a', 'x_a', 'a--x', 'a b', 'a-b', 'a/b', '', 'é'];
+  /** @type {Map<string, string>} */
+  const fileNames = new Map();
+  for (const workerName of names) {
+    const transcript = await openWorkerTranscript({ mount, workerName, now });
+    await transcript.recordMessages([user(`for ${workerName}`)]);
+    fileNames.set(workerName, transcript.fileName);
+  }
+  t.is(new Set(fileNames.values()).size, names.length);
+  for (const workerName of names) {
+    t.is(
+      await findLatestSessionFile(mount, workerName),
+      fileNames.get(workerName),
+    );
+    const resumed = await openWorkerTranscript({ mount, workerName, now });
+    t.deepEqual(
+      resumed.seedMessages.map(message => message.content),
+      [`for ${workerName}`],
+    );
+  }
+});
+
+test('a file whose header names another worker is not resumed', async t => {
+  const { mount, files } = makeMemoryMount();
+  const now = makeClock();
+  const alice = await openWorkerTranscript({ mount, workerName: 'alice', now });
+  await alice.recordMessages([user('mine')]);
+  const forged = alice.fileName.replace(/^\d{14}/, '99999999999999');
+  files.set(
+    forged,
+    String(files.get(alice.fileName)).replace(
+      '"endo:worker":"alice"',
+      '"endo:worker":"mallory"',
+    ),
+  );
+  t.is(await findLatestSessionFile(mount, 'alice'), alice.fileName);
+});
+
+test('the transcript is hardened and hands out copies of its seed', async t => {
+  const { mount } = makeMemoryMount();
+  const now = makeClock();
+  const first = await openWorkerTranscript({ mount, workerName: 'alice', now });
+  await first.recordMessages([user('one')]);
+  const second = await openWorkerTranscript({
+    mount,
+    workerName: 'alice',
+    now,
+  });
+  t.true(Object.isFrozen(second));
+  const seed = second.seedMessages;
+  seed.push(user('injected'));
+  t.is(second.seedMessages.length, 1);
+});
+
+test('a failed append is retried by the next record, in order', async t => {
+  const { mount, files } = makeMemoryMount();
+  const now = makeClock();
+  let failNext = false;
+  const flakyMount = makeExo(
+    'FlakyMount',
+    M.interface('FlakyMount', {}, { defaultGuards: 'passable' }),
+    {
+      list: () => mount.list(),
+      maybeReadText: path => mount.maybeReadText(path),
+      writeText: (path, text) => mount.writeText(path, text),
+      makeFile: (path, text) => mount.makeFile(path, text),
+      lookup: path => {
+        const file = mount.lookup(path);
+        return makeExo(
+          'FlakyFile',
+          M.interface('FlakyFile', {}, { defaultGuards: 'passable' }),
+          {
+            append: text => {
+              if (failNext) {
+                failNext = false;
+                throw Error('transient');
+              }
+              return file.append(text);
+            },
+          },
+        );
+      },
+    },
+  );
+  const transcript = await openWorkerTranscript({
+    mount: flakyMount,
+    workerName: 'alice',
+    now,
+  });
+  const one = user('one');
+  const two = assistant('two');
+  failNext = true;
+  await t.throwsAsync(() => transcript.recordMessages([one, two]), {
+    message: 'transient',
+  });
+  await transcript.recordMessages([one, two]);
+  const { entries } = loadFromJsonl(
+    /** @type {string} */ (files.get(transcript.fileName)),
+  );
+  const nodes = entries.filter(entry => entry.type === 'message');
+  t.deepEqual(
+    nodes.map(entry => entry.message.role),
+    ['user', 'assistant'],
+  );
+  t.is(nodes[0].parentId, null);
+  t.is(nodes[1].parentId, nodes[0].id);
+});
+
+/**
+ * A PiAgent stand-in: `runRound` appends the round's messages to
+ * `state.messages`, as pi-agent-core does, and may throw midway.
+ *
+ * @param {unknown[]} seed
+ */
+const makeFakePiAgent = seed => {
+  const piAgent = { state: { messages: [...seed] } };
+  /**
+   * @param {typeof piAgent} agent
+   * @param {string} prompt
+   */
+  const runRound = async (agent, prompt) => {
+    agent.state.messages.push(user(prompt));
+    if (prompt.startsWith('fail')) {
+      throw Error('round failed');
+    }
+    agent.state.messages.push(assistant(`re: ${prompt}`));
+  };
+  return { piAgent, runRound };
+};
+
+test('the round runner seeds, records mail, and records even a failed round', async t => {
+  const { mount, files } = makeMemoryMount();
+  const now = makeClock();
+  const first = await openWorkerTranscript({ mount, workerName: 'alice', now });
+  {
+    const { piAgent, runRound } = makeFakePiAgent(first.seedMessages);
+    const runOneRound = makeTranscriptRoundRunner({
+      transcript: first,
+      piAgent,
+      runRound,
+    });
+    await runOneRound('hello', { number: 1n, messageIdentifier: 'm-1' });
+    await t.throwsAsync(() => runOneRound('fail now', { number: 2n }), {
+      message: 'round failed',
+    });
+  }
+  const textAfterFirst = String(files.get(first.fileName));
+  const kinds = loadFromJsonl(textAfterFirst)
+    .entries.filter(entry => entry.type !== 'header')
+    .map(entry => (entry.type === 'message' ? entry.message.role : entry.type));
+  t.deepEqual(kinds, ['custom', 'user', 'assistant', 'custom', 'user']);
+
+  // A restarted worker seeds its PiAgent and appends only the new round.
+  const second = await openWorkerTranscript({
+    mount,
+    workerName: 'alice',
+    now,
+  });
+  const { piAgent, runRound } = makeFakePiAgent(second.seedMessages);
+  t.is(piAgent.state.messages.length, 3);
+  const runOneRound = makeTranscriptRoundRunner({
+    transcript: second,
+    piAgent,
+    runRound,
+  });
+  await runOneRound('again');
+  const text = String(files.get(first.fileName));
+  t.true(text.startsWith(textAfterFirst));
+  const added = loadFromJsonl(text.slice(textAfterFirst.length - 1)).entries;
+  t.deepEqual(
+    added.map(entry => /** @type {any} */ (entry).message.content),
+    ['again', [{ type: 'text', text: 're: again' }]],
+  );
+});
+
+test('the round runner reports, and does not throw, a transcript write failure', async t => {
+  /** @type {unknown[]} */
+  const errors = [];
+  const transcript = /** @type {any} */ ({
+    markRecorded() {},
+    async recordMail() {
+      throw Error('mail write');
+    },
+    async recordMessages() {
+      throw Error('message write');
+    },
+  });
+  const { piAgent, runRound } = makeFakePiAgent([]);
+  const runOneRound = makeTranscriptRoundRunner({
+    transcript,
+    piAgent,
+    runRound,
+    onError: error => errors.push(error),
+  });
+  await runOneRound('hello', { number: 1 });
+  t.is(piAgent.state.messages.length, 2);
+  t.deepEqual(
+    errors.map(error => /** @type {Error} */ (error).message),
+    ['mail write', 'message write'],
+  );
 });

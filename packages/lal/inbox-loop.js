@@ -18,7 +18,7 @@
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
-/** @import { InboxMessage } from './agent.types.js' */
+/** @import { InboxMessage, TranscriptMail } from './agent.types.js' */
 
 /**
  * Run the worker's inbox follow loop. Sends the greeting, then loops over
@@ -29,7 +29,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
  * @param {() => Promise<Promise<unknown> | null>} args.getCancelled
  *   Resolver returning the worker's cancellation promise (or null if no
  *   cancellation surface is configured).
- * @param {(prompt: string, mail?: { number?: number | bigint, messageIdentifier?: string, replyTo?: string }) => Promise<void>} args.runOneRound
+ * @param {(prompt: string, mail?: TranscriptMail) => Promise<void>} args.runOneRound
  *   Per-round runner, bound to this worker's `PiAgent`.
  * @returns {Promise<void>}
  */
@@ -103,7 +103,7 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
       break;
     }
     const inboxMessage =
-      /** @type {InboxMessage & {type?: string, messageIdentifier?: string, replyTo?: string, done?: boolean}} */ (
+      /** @type {InboxMessage & {type?: string, messageId?: string, replyTo?: string, done?: boolean}} */ (
         message
       );
     const {
@@ -114,7 +114,6 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
     } = inboxMessage;
 
     // Skip our own outbound messages; only act on inbound mail.
-
     if (fromLocator !== selfLocator) {
       // Skip partial (in-flight) submissions: wait until the sender
       // marks the message done before spinning up an LLM turn.

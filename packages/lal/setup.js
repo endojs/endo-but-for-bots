@@ -43,8 +43,7 @@ export const main = async agent => {
   }
 
   // Lal's session transcripts live in a daemon scratch mount the host names
-  // `transcripts-for-lal`. Readers (the CLI, Chat) take its `readOnly()`
-  // facet; only the Lal harness writes.
+  // `transcripts-for-lal`; only the Lal harness writes to it.
   await provideTranscriptsMount(agent);
   console.log(`Transcripts mount: ${TRANSCRIPTS_MOUNT_NAME}`);
 
@@ -103,11 +102,9 @@ export const main = async agent => {
     if (message.type !== 'form' || message.from === selfLocator) {
       continue;
     }
-
     const [fromName] = await E(agent).reverseLocate(message.from);
     if (fromName === 'setup-lal') {
       console.log(`Found form at message ${message.number} — submitting...`);
-
       await E(agent).submit(message.number, { name, host, model, authToken });
       console.log('Submitted.');
       return;

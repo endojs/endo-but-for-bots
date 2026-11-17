@@ -4,11 +4,7 @@
 // Lal's durable session transcript: a Pi-compatible JSONL file per worker
 // session, written through `@endo/jsonl-transcript` into a daemon scratch
 // mount (`transcripts-for-lal`). See
-// `designs/endopi-jsonl-transcript-format.md` § The writer.
-//
-// Only the trusted harness (the Lal manager and the worker loop it spawns)
-// holds the writable mount. Model-driven tools run against the worker's
-// sub-guest powers, whose pet store never names the mount.
+// `designs/endopi-jsonl-transcript-format.md` § Writer.
 
 import { E } from '@endo/eventual-send';
 import { encodeHex } from '@endo/hex';
@@ -19,10 +15,11 @@ import {
   makeCustomEntry,
   makeSessionWriter,
   sessionFileName,
-  slugSegment,
 } from '@endo/jsonl-transcript';
 
-/** The host pet name of Lal's transcripts scratch mount. */
+/** @import { ChatMessage } from '@endo/jsonl-transcript' */
+/** @import { TranscriptMail, TranscriptMount, WorkerTranscript } from './agent.types.js' */
+
 export const TRANSCRIPTS_MOUNT_NAME = 'transcripts-for-lal';
 
 /** PiAgent message roles that become `message` entries. */
@@ -54,7 +51,7 @@ const makeEnoent = path => {
  * accepts. Session files sit flat at the mount root, so `mkdir` is a no-op.
  * The file mode is the daemon's concern, not the adapter's.
  *
- * @param {any} mount - A writable `EndoMount`.
+ * @param {TranscriptMount} mount - A writable `EndoMount`.
  */
 export const makeMountWriterFs = mount => {
   /** @param {string} path */
@@ -70,6 +67,9 @@ export const makeMountWriterFs = mount => {
       }
       return encodeUtf8(text);
     },
+    // The writer truncates only to the end of the last complete line, so
+    // `length` never falls inside a multibyte sequence. The mount has no
+    // truncate, so this is a non-atomic read-and-rewrite of the whole file.
     async truncate(path, length) {
       const text = (await readText(path)) ?? '';
       const kept = decodeUtf8(encodeUtf8(text).slice(0, length));
@@ -91,23 +91,42 @@ export const makeMountWriterFs = mount => {
 };
 harden(makeMountWriterFs);
 
+const defaultFillRandom = bytes => {
+  const { crypto } = globalThis;
+  if (crypto === undefined) {
+    throw Error('uuidv7: no globalThis.crypto; pass fillRandom explicitly');
+  }
+  return crypto.getRandomValues(bytes);
+};
+
+const MAX_UUIDV7_MILLISECONDS = 2n ** 48n - 1n;
+
 /**
  * A UUIDv7 (RFC 9562): 48-bit millisecond timestamp, version and variant
  * bits, random remainder. Pi's own tools expect entry ids of this shape.
  *
+ * Lal runs as an unconfined guest, so `Date.now` and `globalThis.crypto`
+ * are the start compartment's real ones. A tamed clock (`NaN`) or a
+ * timestamp outside 48 bits throws rather than minting a garbage id.
+ *
  * @param {() => number} [now]
- * @param {(bytes: Uint8Array) => Uint8Array} [fillRandom]
+ * @param {(bytes: Uint8Array) => Uint8Array} [fillRandom] - Fills its
+ *   argument with random bytes and returns it; the return value is used.
  * @returns {string}
  */
-export const uuidv7 = (
-  now = Date.now,
-  fillRandom = bytes => globalThis.crypto.getRandomValues(bytes),
-) => {
+export const uuidv7 = (now = Date.now, fillRandom = defaultFillRandom) => {
+  const timestamp = now();
+  if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
+    throw RangeError(`uuidv7: clock returned ${timestamp}`);
+  }
+  let milliseconds = BigInt(timestamp);
+  if (milliseconds > MAX_UUIDV7_MILLISECONDS) {
+    throw RangeError(`uuidv7: timestamp ${timestamp} exceeds 48 bits`);
+  }
   const bytes = fillRandom(new Uint8Array(16));
-  let milliseconds = now();
   for (let index = 5; index >= 0; index -= 1) {
-    bytes[index] = milliseconds % 256;
-    milliseconds = Math.floor(milliseconds / 256);
+    bytes[index] = Number(milliseconds % 256n);
+    milliseconds /= 256n;
   }
   bytes[6] = 0x70 + (bytes[6] % 0x10);
   bytes[8] = 0x80 + (bytes[8] % 0x40);
@@ -117,30 +136,44 @@ export const uuidv7 = (
 harden(uuidv7);
 
 /**
- * The file-name marker that scopes a session file to one worker. One mount
- * serves every worker a Lal manager spawns; the worker's name is recorded in
- * the session id (and so the file name) and in the header.
+ * The session-id prefix that scopes a session file to one worker. One mount
+ * serves every worker a Lal manager spawns. The worker name is hex-encoded so
+ * the key is injective and holds no `-` or `_`: no worker's key can appear
+ * inside another's file name, and names that would slug alike stay apart.
+ * The raw name is also recorded in the header as `endo:worker`.
  *
  * @param {string} workerName
  */
-const workerPrefix = workerName => `${slugSegment(workerName)}--`;
+const workerPrefix = workerName => `w${encodeHex(encodeUtf8(workerName))}--`;
 
 /**
- * The newest session file in the mount that belongs to `workerName`, or
+ * The newest session file in the mount whose name carries `workerName`'s key
+ * right after the timestamp and whose header names `workerName` exactly, or
  * `undefined`. `sessionFileName` zero-pads the timestamp, so lexical order is
  * chronological.
  *
- * @param {any} mount
+ * @param {TranscriptMount} mount
  * @param {string} workerName
  * @returns {Promise<string | undefined>}
  */
 export const findLatestSessionFile = async (mount, workerName) => {
-  const marker = `_${workerPrefix(workerName)}`;
+  const prefix = workerPrefix(workerName);
   const names = /** @type {string[]} */ (await E(mount).list());
-  const mine = names
-    .filter(name => name.endsWith('.jsonl') && name.includes(marker))
-    .sort();
-  return mine.length > 0 ? mine[mine.length - 1] : undefined;
+  const candidates = names
+    .filter(name => {
+      const match = /^\d{14}_(.*)\.jsonl$/.exec(name);
+      return match !== null && match[1].startsWith(prefix);
+    })
+    .sort()
+    .reverse();
+  for (const name of candidates) {
+    const text = (await E(mount).maybeReadText(name)) ?? '';
+    const { header } = loadFromJsonl(text);
+    if (header !== null && header['endo:worker'] === workerName) {
+      return name;
+    }
+  }
+  return undefined;
 };
 harden(findLatestSessionFile);
 
@@ -148,24 +181,35 @@ harden(findLatestSessionFile);
  * Open (resuming if possible) the transcript for one worker.
  *
  * Resumes the newest session file for the worker, repairing a torn tail, and
- * returns its `message` entries as PiAgent seed messages. With no prior file,
- * or with `fresh: true`, starts a new session file.
+ * returns the `user`/`assistant`/`toolResult` messages on its current path as
+ * PiAgent seed messages. With no prior file, or with `fresh: true`, starts a
+ * new session file (an older file is left in place).
+ *
+ * On resume the file already has a header, so the header fields passed here
+ * are ignored.
+ *
+ * The returned transcript assumes one round at a time: `recordMail` and
+ * `recordMessages` share the parent chain, and the inbox loop awaits each
+ * round before the next.
  *
  * @param {object} options
- * @param {any} options.mount - The writable transcripts mount.
+ * @param {TranscriptMount} options.mount - The writable transcripts mount.
  * @param {string} options.workerName
  * @param {boolean} [options.fresh]
  * @param {() => number} [options.now]
+ * @param {(bytes: Uint8Array) => Uint8Array} [options.fillRandom]
  * @param {() => string} [options.makeIdentifier]
  * @param {string} [options.cwd] - Recorded in the header.
  * @param {string} [options.guestIdentifier] - The worker guest's id, for the header.
+ * @returns {Promise<WorkerTranscript>}
  */
 export const openWorkerTranscript = async ({
   mount,
   workerName,
   fresh = false,
   now = Date.now,
-  makeIdentifier = () => uuidv7(now),
+  fillRandom = defaultFillRandom,
+  makeIdentifier = () => uuidv7(now, fillRandom),
   cwd = '/',
   guestIdentifier,
 }) => {
@@ -174,7 +218,7 @@ export const openWorkerTranscript = async ({
   const existing = fresh
     ? undefined
     : await findLatestSessionFile(mount, workerName);
-  /** @type {any[]} */
+  /** @type {ChatMessage[]} */
   let seedMessages = [];
   /** @type {string | null} */
   let lastIdentifier = null;
@@ -197,6 +241,7 @@ export const openWorkerTranscript = async ({
     sessionId: sessionIdentifier ?? fileName,
     createdAt: now(),
     cwd,
+    'endo:worker': workerName,
     ...(guestIdentifier === undefined
       ? {}
       : { 'endo:guestId': guestIdentifier }),
@@ -223,10 +268,13 @@ export const openWorkerTranscript = async ({
     return { id: identifier, parentId: parentIdentifier };
   };
 
+  /** @type {WorkerTranscript} */
   const transcript = {
     fileName,
-    /** PiAgent `initialState.messages` for a resumed session. */
-    seedMessages,
+    /** PiAgent `initialState.messages` for a resumed session, as a copy. */
+    get seedMessages() {
+      return [...seedMessages];
+    },
     /**
      * Mark seeded messages as already on file once the PiAgent holds them.
      *
@@ -243,7 +291,7 @@ export const openWorkerTranscript = async ({
      * Record the Endo mail message that started a turn. Ids only, never
      * live references.
      *
-     * @param {{ number?: number | bigint, messageIdentifier?: string, replyTo?: string }} mail
+     * @param {TranscriptMail} mail
      */
     async recordMail(mail) {
       /** @type {Record<string, unknown>} */
@@ -256,23 +304,79 @@ export const openWorkerTranscript = async ({
       await writer.append(makeCustomEntry('endo:mail', { ...link(), payload }));
     },
     /**
-     * Append every projected PiAgent message not yet on file, in order.
+     * Append every projected PiAgent message not yet on file, in order. A
+     * message counts as on file only once its append succeeds, so a failed
+     * write is retried by the next call and the file stays an in-order
+     * prefix of the PiAgent's history.
      *
      * @param {readonly any[]} messages - The PiAgent's `state.messages`.
      */
     async recordMessages(messages) {
       for (const message of messages) {
         if (isProjected(message) && !recorded.has(message)) {
+          const parentIdentifier = lastIdentifier;
+          try {
+            await writer.appendMessage(message, link());
+          } catch (error) {
+            lastIdentifier = parentIdentifier;
+            throw error;
+          }
           recorded.add(message);
-          await writer.appendMessage(message, link());
         }
       }
     },
     close: () => writer.close(),
   };
-  return transcript;
+  return harden(transcript);
 };
 harden(openWorkerTranscript);
+
+/**
+ * Bind a worker's transcript to its PiAgent. Marks the PiAgent's current
+ * (seeded) messages as already on file, and returns a round runner that
+ * records the starting mail, runs the round, and then (even if the round
+ * throws) appends the round's new messages. A transcript write failure is
+ * reported to `onError` and never fails the round: a lost transcript line
+ * must not take down the worker.
+ *
+ * @param {object} options
+ * @param {WorkerTranscript} options.transcript
+ * @param {{ state: { messages: readonly unknown[] } }} options.piAgent
+ * @param {(piAgent: any, prompt: string) => Promise<unknown>} options.runRound
+ * @param {(error: unknown) => void} [options.onError]
+ * @returns {(prompt: string, mail?: TranscriptMail) => Promise<void>}
+ */
+export const makeTranscriptRoundRunner = ({
+  transcript,
+  piAgent,
+  runRound,
+  onError = error => console.error('[lal] Transcript write failed:', error),
+}) => {
+  transcript.markRecorded(piAgent.state.messages);
+
+  /** @param {() => Promise<void>} record */
+  const recordSafely = async record => {
+    try {
+      await record();
+    } catch (error) {
+      onError(error);
+    }
+  };
+
+  return async (prompt, mail) => {
+    if (mail) {
+      await recordSafely(() => transcript.recordMail(mail));
+    }
+    try {
+      await runRound(piAgent, prompt);
+    } finally {
+      await recordSafely(() =>
+        transcript.recordMessages(piAgent.state.messages),
+      );
+    }
+  };
+};
+harden(makeTranscriptRoundRunner);
 
 /**
  * Look up the host's transcripts scratch mount, creating it on first use.
