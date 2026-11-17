@@ -25,7 +25,11 @@
 import { makeFactoryKit, stagingSources } from './factory.js';
 import { makeListFeed } from './list-feed.js';
 import { makePool, makePoolSettings } from './pool.js';
-import { makeHarnessRoot, makeProgramStore } from './root.js';
+import {
+  makeHarnessRoot,
+  makeHarnessSettings,
+  makeProgramStore,
+} from './root.js';
 import { makeRowTable } from './rows.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -56,6 +60,14 @@ export const make = ({ host, vats }) => {
   const programs = makeProgramStore();
   const execPrograms = makeProgramStore({ what: 'exec program' });
   const settings = makePoolSettings();
+  // M2 W2.7: backends, default backend and model, turn deadline.
+  const harnessSettings = makeHarnessSettings({
+    pool: () => ({
+      spareSessions: settings.spareSessions(),
+      spareExec: settings.spareExec(),
+      execDeadlineMs: settings.execDeadlineMs(),
+    }),
+  });
   const pool = makePool({
     vats,
     programs: { session: programs, exec: execPrograms },
@@ -71,6 +83,7 @@ export const make = ({ host, vats }) => {
     pool,
     settings,
     listFeed,
+    harnessSettings,
   });
   void listFeed.refresh();
   // The Registration is kept for the vat's life. A failure leaves the
@@ -92,6 +105,8 @@ export const make = ({ host, vats }) => {
     programs,
     execPrograms,
     pool,
+    settings: harnessSettings,
+    exports: kit.exports,
   });
 };
 harden(make);

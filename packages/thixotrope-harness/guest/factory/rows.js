@@ -38,7 +38,7 @@ const PAGE_OVERHEAD_BYTES = 1024;
  * @property {number} ordinal creation order
  * @property {string} key `s<n>`
  * @property {string} title
- * @property {'creating' | 'ready' | 'error' | 'lost'} state
+ * @property {'creating' | 'ready' | 'error' | 'lost' | 'deleting'} state
  * @property {'passive' | 'working' | 'error'} activity
  * @property {string} backendTitle
  * @property {string} modelId
@@ -48,6 +48,11 @@ const PAGE_OVERHEAD_BYTES = 1024;
  * @property {any} session the Session, once made
  * @property {any} internal the SessionInternal, once made
  * @property {boolean} dropped true once the row was removed (a rolled-back creation)
+ * @property {any} facade the session vat's worker facade, once made (M2
+ *   W2.7: delete retires it)
+ * @property {any} execVat the session's ExecHandle, if any (M2 W2.7)
+ * @property {boolean} importing an import whose `end` has not arrived: the
+ *   row is not listed (M2 W2.7, m2-interfaces.md 7.2)
  */
 
 /**
@@ -113,6 +118,9 @@ export const makeRowTable = ({ onChange, rev: revOf } = {}) => {
       session: undefined,
       internal: undefined,
       dropped: false,
+      facade: undefined,
+      execVat: undefined,
+      importing: false,
     };
     byKey.set(row.key, row);
     order.push(row);
@@ -132,27 +140,61 @@ export const makeRowTable = ({ onChange, rev: revOf } = {}) => {
     bump(row, 'removed');
   };
 
+  /** @type {WeakMap<any, Row>} Session -> its row (M2: deleteSession) */
+  const bySession = new WeakMap();
+
   /**
-   * The session was made: the row is ready and listed.
+   * The session was made: the row is ready and listed (an import's once
+   * its `end` arrived).
    * @param {Row} row
    * @param {{ session: any, internal: any }} made
+   * @param {{ facade?: any, execVat?: any }} [vats] M2 W2.7
    */
-  const ready = (row, { session, internal }) => {
+  const ready = (row, { session, internal }, { facade, execVat } = {}) => {
     if (row.dropped) return;
     row.session = session;
     row.internal = internal;
+    row.facade = facade;
+    row.execVat = execVat;
     row.state = 'ready';
+    bySession.set(session, row);
+    bump(row);
+  };
+
+  /**
+   * M2 W2.7: a delete began (R4-9); the row stays listed as `deleting`.
+   * @param {Row} row
+   */
+  const markDeleting = row => {
+    if (row.dropped || row.state === 'deleting') return;
+    row.state = 'deleting';
+    bump(row);
+  };
+
+  /**
+   * M2 W2.7: an import's row is listed once its `end` arrived (7.2).
+   * @param {Row} row
+   * @param {boolean} importing
+   */
+  const setImporting = (row, importing) => {
+    if (row.dropped || row.importing === importing) return;
+    row.importing = importing;
     bump(row);
   };
 
   /**
    * Apply a row patch (from the session's RowReporter or a rowSnapshot).
    * @param {Row} row
-   * @param {{ title?: string, activity?: Row['activity'], messageCount?: number, queuedCount?: number }} patch
+   * @param {{ title?: string, activity?: Row['activity'], messageCount?: number, queuedCount?: number, imported?: boolean }} patch
    */
   const apply = (row, patch) => {
     if (row.dropped) return;
     let changed = false;
+    // M2 W2.7: an imported session reports its import's end (7.2).
+    if (patch.imported === true && row.importing) {
+      row.importing = false;
+      changed = true;
+    }
     if (patch.title !== undefined && patch.title !== row.title) {
       row.title = patch.title;
       changed = true;
@@ -183,7 +225,7 @@ export const makeRowTable = ({ onChange, rev: revOf } = {}) => {
    * @param {Row} row
    */
   const markLost = row => {
-    if (row.dropped || row.state === 'lost') return;
+    if (row.dropped || row.state === 'lost' || row.state === 'deleting') return;
     row.state = 'lost';
     bump(row);
   };
@@ -223,7 +265,8 @@ export const makeRowTable = ({ onChange, rev: revOf } = {}) => {
   const pageRev = () => (revOf === undefined ? rev : revOf());
 
   /** @param {Row} row */
-  const isListed = row => row.state !== 'creating' && row.userInitiated;
+  const isListed = row =>
+    row.state !== 'creating' && row.userInitiated && !row.importing;
 
   /**
    * One page of listed rows in creation order: at most `limit` rows (at
@@ -279,6 +322,10 @@ export const makeRowTable = ({ onChange, rev: revOf } = {}) => {
     ready,
     apply,
     markLost,
+    markDeleting,
+    setImporting,
+    /** @param {any} session */
+    ofSession: session => bySession.get(session),
     makeReporter,
     page,
     listed,

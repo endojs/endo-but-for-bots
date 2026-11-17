@@ -18,7 +18,7 @@
  * Guest rules: prelude globals only; pieces are kept in a `Map` keyed by
  * index while loading and as an array once complete.
  */
-import { m1bInterfaces } from '../lib/interfaces.js';
+import { m2Interfaces, shapes } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { utf8Bytes } from '../lib/bounded.js';
 
@@ -26,6 +26,8 @@ import { utf8Bytes } from '../lib/bounded.js';
 /** @import { RowTable } from './rows.js' */
 /** @import { Pool } from './pool.js' */
 const { makeExo } = /** @type {GuestGlobals} */ (globalThis);
+/** @type {GuestGlobals['mustMatch']} */
+const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
 
 /**
  * Bytes kept free in a staging message for its envelope: the piece travels
@@ -126,6 +128,59 @@ const programInfo = program =>
     ? { digest: '', bytes: 0 }
     : { digest: program.digest, bytes: program.bytes };
 
+/**
+ * The operator settings M2 adds (m2-interfaces.md 1.4, 8.4, 10; W2.7): the
+ * backends `listBackends` offers, the default backend and model of a
+ * creation that names none (R4-21, R4-88) and the turn deadline (0: off).
+ * The pool's own fields stay in `pool.js` `makePoolSettings`; `current()`
+ * answers both as one `HarnessSettings` (export, 7.3).
+ * @param {{ pool?: () => Record<string, number> }} [powers]
+ */
+export const makeHarnessSettings = ({ pool } = {}) => {
+  /** @type {{ backends: any[], defaultBackend: any, defaultModelId: string | undefined, turnDeadlineMs: number }} */
+  const current = {
+    backends: [],
+    defaultBackend: undefined,
+    defaultModelId: undefined,
+    turnDeadlineMs: 0,
+  };
+  return harden({
+    /** @param {any} changes `shapes.HarnessSettings` */
+    set: changes => {
+      mustMatch(changes, shapes.HarnessSettings);
+      if (changes.backends !== undefined)
+        current.backends = [...changes.backends];
+      if (changes.defaultBackend !== undefined)
+        current.defaultBackend = changes.defaultBackend;
+      if (changes.defaultModelId !== undefined)
+        current.defaultModelId = changes.defaultModelId;
+      if (changes.turnDeadlineMs !== undefined)
+        current.turnDeadlineMs = changes.turnDeadlineMs;
+    },
+    backends: () => harden([...current.backends]),
+    defaultBackend: () => current.defaultBackend,
+    defaultModelId: () => current.defaultModelId,
+    turnDeadlineMs: () => current.turnDeadlineMs,
+    /** Every setting as one `shapes.HarnessSettings`. */
+    current: () => {
+      /** @type {Record<string, any>} */
+      const all = { ...(pool?.() ?? {}), backends: [...current.backends] };
+      if (current.defaultBackend !== undefined)
+        all.defaultBackend = current.defaultBackend;
+      if (current.defaultModelId !== undefined)
+        all.defaultModelId = current.defaultModelId;
+      all.turnDeadlineMs = current.turnDeadlineMs;
+      return harden(all);
+    },
+  });
+};
+harden(makeHarnessSettings);
+
+/** @typedef {ReturnType<typeof makeHarnessSettings>} HarnessSettings */
+
+/** Export methods called on a root made without them (M1a tests). */
+export const NO_EXPORT_TEXT = 'This harness root has no export';
+
 /** Pool methods called on a root made without a pool (M1a tests). */
 export const NO_POOL_TEXT = 'This harness root has no spare pool';
 
@@ -139,6 +194,9 @@ export const NO_POOL_TEXT = 'This harness root has no spare pool';
  * @param {ProgramStore} powers.programs the session program
  * @param {ProgramStore} [powers.execPrograms] the exec program (M1b)
  * @param {Pool} [powers.pool] (M1b)
+ * @param {HarnessSettings} [powers.settings] the M2 settings (W2.7)
+ * @param {{ exportPage: (cursor?: string) => any, importSession: (options: any) => Promise<any> }} [powers.exports]
+ *   data-only export and importing (W2.7, `export.js`)
  */
 export const makeHarnessRoot = ({
   operator,
@@ -146,13 +204,19 @@ export const makeHarnessRoot = ({
   programs,
   execPrograms,
   pool,
+  settings,
+  exports,
 }) => {
+  const needExports = () => {
+    if (exports === undefined) throw Error(NO_EXPORT_TEXT);
+    return exports;
+  };
   const needPool = () => {
     if (pool === undefined || execPrograms === undefined)
       throw Error(NO_POOL_TEXT);
     return { pool, execPrograms };
   };
-  return makeExo('HarnessRoot', m1bInterfaces.HarnessRoot, {
+  return makeExo('HarnessRoot', m2Interfaces.HarnessRoot, {
     getOperator: () => operator,
     status: () => {
       const base = {
@@ -180,8 +244,16 @@ export const makeHarnessRoot = ({
       return answer;
     },
     /** @param {any} changes `m1bShapes.HarnessSettings` (checked by the guard) */
-    configure: changes => needPool().pool.configure(changes),
+    configure: changes => {
+      const parts = needPool();
+      settings?.set(changes);
+      return parts.pool.configure(changes);
+    },
     whenSettled: () => needPool().pool.whenSettled(),
+    /** @param {string} [cursor] M2 W2.7 (m2-interfaces.md 7.3) */
+    exportState: cursor => needExports().exportPage(cursor),
+    /** @param {any} options M2 W2.7: a creation listed once imported */
+    importSession: options => needExports().importSession(options),
   });
 };
 harden(makeHarnessRoot);

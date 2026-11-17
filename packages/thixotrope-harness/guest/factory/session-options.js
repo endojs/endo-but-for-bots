@@ -55,6 +55,8 @@ const NOT_YET = harden(['networkPolicy', 'reasoningEffort']);
  * @property {string} [defaultModelId] M2 (W2.2, R4-21):
  *   `HarnessSettings.defaultModelId`, the model an empty model follows on
  *   the default backend
+ * @property {number} [turnDeadlineMs] M2 (W2.7):
+ *   `HarnessSettings.turnDeadlineMs`
  */
 
 /**
@@ -132,6 +134,18 @@ const catalogueModel = async (options, resolved, context) => {
     resolved.maxOutputTokens = answer.maxOutputTokens;
 };
 
+/**
+ * M2 W2.7 (m2-interfaces.md 10): the operator's turn deadline
+ * (`HarnessSettings.turnDeadlineMs`, given as `context.turnDeadlineMs`; 0
+ * or absent: off) is stored in the session's config at creation.
+ * @type {OptionResolver}
+ */
+const turnDeadline = async (_options, resolved, { turnDeadlineMs }) => {
+  if (typeof turnDeadlineMs === 'number' && turnDeadlineMs > 0)
+    /** @type {Record<string, any>} */ (resolved).turnDeadlineMs =
+      turnDeadlineMs;
+};
+
 /** Hook table (append-only). */
 export const optionResolvers = harden([
   refuse,
@@ -142,6 +156,8 @@ export const optionResolvers = harden([
   catalogueModel,
   // M2 W2.6: the system prompt (R4-26..R4-28; m2-interfaces.md 10).
   promptResolver,
+  // M2 W2.7: the operator's turn deadline (m2-interfaces.md 10).
+  turnDeadline,
 ]);
 
 /**

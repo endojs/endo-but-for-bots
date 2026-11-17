@@ -16,7 +16,7 @@
  * session asks for its adapter ports when it is made (`Backend.open`, once
  * per adapter incarnation; contract 6.1).
  */
-import { interfaces } from '../lib/interfaces.js';
+import { m2Interfaces, texts, textOf } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { makeQueue as defaultMakeQueue } from './queue.js';
 import {
@@ -24,6 +24,7 @@ import {
   recoverAfterRestart as defaultRecoverAfterRestart,
 } from './recovery.js';
 import { makeContextSource } from './context-source.js';
+import { makeSessionExport } from './export.js';
 import { makeLivePublishing } from './live.js';
 import { makeRecordLog } from './records.js';
 import { submissionField } from './staging.js';
@@ -121,6 +122,19 @@ export const makeSession = (
     return harden(result);
   };
 
+  // M2 W2.7 (7.1, 7.3): the delete fence, blob pages, export, importing.
+  const lifecycle = makeSessionExport({
+    records,
+    queue,
+    runner,
+    config,
+    info,
+    rowReporter,
+  });
+  const refuseIfDeleting = () => {
+    if (lifecycle.isDeleting()) throw Error(texts.sessionDeleting);
+  };
+
   /**
    * Run one Session method's crank work and publish its events at the end.
    * @template T
@@ -135,7 +149,7 @@ export const makeSession = (
     }
   };
 
-  const session = makeExo('Session', interfaces.Session, {
+  const session = makeExo('Session', m2Interfaces.Session, {
     getInfo() {
       return info();
     },
@@ -165,6 +179,7 @@ export const makeSession = (
      * @param {number} at
      */
     enqueueOnce(submission, requestId, at) {
+      refuseIfDeleting();
       return inCrank(() => {
         runner.see(at);
         const { receipt, added } = queue.enqueueOnce(submission, requestId, at);
@@ -187,6 +202,7 @@ export const makeSession = (
      * @param {number} [at]
      */
     startTurn(submission, at) {
+      refuseIfDeleting();
       runner.see(at);
       return runner.startTurn(
         submissionField(submission),
@@ -203,9 +219,15 @@ export const makeSession = (
     getUsage() {
       return runner.usage();
     },
+    /** @param {string} turnId W2.5 (m2-interfaces.md 4.9) */
+    findTurn(turnId) {
+      if (typeof runner.findTurn !== 'function')
+        throw Error(textOf.notBuilt('findTurn'));
+      return runner.findTurn(turnId);
+    },
   });
 
-  const internal = makeExo('SessionInternal', interfaces.SessionInternal, {
+  const internal = makeExo('SessionInternal', m2Interfaces.SessionInternal, {
     rowSnapshot() {
       return harden({
         title,
@@ -213,6 +235,21 @@ export const makeSession = (
         messageCount: records.messageCount(),
         queuedCount: queue.size(),
       });
+    },
+    /** @param {string} [cursor] */
+    blobPage(cursor) {
+      return lifecycle.blobPage(cursor);
+    },
+    deleteSelf() {
+      return inCrank(() => lifecycle.deleteSelf());
+    },
+    /** @param {string} [cursor] */
+    exportState(cursor) {
+      return lifecycle.exportState(cursor);
+    },
+    /** @param {any} chunk */
+    importState(chunk) {
+      return inCrank(() => lifecycle.importState(chunk));
     },
   });
 

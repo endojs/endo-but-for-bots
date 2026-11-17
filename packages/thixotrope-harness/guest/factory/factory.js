@@ -33,8 +33,16 @@
  * `CreateOptions.at`, else the latest one the factory saw); answered sends are sequential in a creation and at most
  * `PROBE_WINDOW` at once in the start listener.
  */
-import { interfaces, m1bInterfaces, shapes, texts } from '../lib/interfaces.js';
+import {
+  interfaces,
+  m1bInterfaces,
+  m2Interfaces,
+  shapes,
+  texts,
+} from '../lib/interfaces.js';
 import { isRetiredBreak } from '../lib/retired.js';
+import { makeDeletions } from './delete.js';
+import { makeFactoryExport } from './export.js';
 import { makeExecHandle } from './pool.js';
 import { buildSessionServices } from './services.js';
 import { resolveCreateOptions } from './session-options.js';
@@ -44,7 +52,8 @@ import { resolveCreateOptions } from './session-options.js';
 /** @import { ProgramStore, SessionProgram } from './root.js' */
 /** @import { Pool, PoolSettings } from './pool.js' */
 /** @import { ListFeed } from './list-feed.js' */
-const { E, makeExo } = /** @type {GuestGlobals} */ (globalThis);
+/** @import { HarnessSettings } from './root.js' */
+const { E, makeExo, matches } = /** @type {GuestGlobals} */ (globalThis);
 /** @type {GuestGlobals['mustMatch']} */
 const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
 
@@ -77,13 +86,26 @@ export const INTERRUPTED_CREATION_TEXT =
  * @property {Row} row
  * @property {number} epoch the factory start epoch the creation began in
  * @property {any} facade the new worker's facade, once created
- * @property {{ host: any, backend: any } | undefined} services
+ * @property {{ host: any, backend: any, execVat?: any } | undefined} services
  * @property {{ session: any, internal: any } | undefined} made `make`'s answer
  * @property {boolean} fromSpare the vat was a pool spare (M1b)
  * @property {any} [spareHost] the unbound host facet the spare brought (M1b)
  * @property {boolean} finished
  * @property {boolean} abandoned rolled back (by its own failure or the start listener)
+ * @property {any} [prompt] a staged system prompt, released on rollback (M2)
  */
+
+/**
+ * Optional creation results a resolver may fill (W2.2 model window, W2.6
+ * prompt, W2.7 turn deadline) that the factory copies into the
+ * SessionConfig (m2-interfaces.md 1.4).
+ */
+const CONFIG_EXTRAS = harden([
+  'systemPrompt',
+  'contextLength',
+  'maxOutputTokens',
+  'turnDeadlineMs',
+]);
 
 /**
  * @param {object} powers
@@ -97,6 +119,8 @@ export const INTERRUPTED_CREATION_TEXT =
  *   creation is cold and sessions get no `execVat` (M1a)
  * @param {PoolSettings} [powers.settings] the pool's settings (exec deadline)
  * @param {ListFeed} [powers.listFeed] the session list feed (M1b W1b.5)
+ * @param {HarnessSettings} [powers.harnessSettings] the M2 operator settings
+ *   (W2.7: backends, default backend and model, turn deadline)
  */
 export const makeFactoryKit = ({
   admin,
@@ -107,6 +131,7 @@ export const makeFactoryKit = ({
   pool,
   settings,
   listFeed,
+  harnessSettings,
 }) => {
   /** The latest `CreateOptions.at` seen (vats have no clock: time is data). */
   let latestAt = 0;
@@ -121,6 +146,8 @@ export const makeFactoryKit = ({
   let epoch = 0;
   /** @type {Set<Creation>} creations not yet finished or rolled back */
   const creations = new Set();
+  // M2 W2.7 (m2-interfaces.md 7.1): delete records, completed after restarts.
+  const deletions = makeDeletions({ admin, rows });
 
   /** @param {Creation} creation */
   const ensureLive = creation => {
@@ -141,6 +168,12 @@ export const makeFactoryKit = ({
         .retire()
         .catch(() => undefined);
     }
+    // M2 (7.2): a staged system prompt of a rolled-back creation.
+    if (creation.prompt !== undefined) {
+      await E(admin)
+        .releaseBlobs(harden([creation.prompt]))
+        .catch(() => undefined);
+    }
   };
 
   /**
@@ -156,7 +189,10 @@ export const makeFactoryKit = ({
     if (creation.finished || creation.abandoned) return;
     creation.finished = true;
     creations.delete(creation);
-    rows.ready(creation.row, made);
+    rows.ready(creation.row, made, {
+      facade: creation.facade,
+      execVat: services.execVat,
+    });
   };
 
   /**
@@ -193,15 +229,32 @@ export const makeFactoryKit = ({
     return maker;
   };
 
-  /** @param {Record<string, any>} options */
-  const createSession = async options => {
+  /**
+   * A creation (contract 9); with `importing` (M2 W2.7, 7.3) its row stays
+   * unlisted until the session reports its import's end.
+   * @param {Record<string, any>} given
+   * @param {{ importing: boolean }} how
+   */
+  const create = async (given, { importing }) => {
     // The caller has the clock (J-9150): its `at` is the session's createdAt.
-    const { at } = options;
+    const { at } = given;
     if (typeof at === 'number' && at > latestAt) latestAt = at;
     const createdAt = typeof at === 'number' ? at : knownTime();
-    const resolved = await resolveCreateOptions(options, {
-      defaultPreset: chatOnly,
-    });
+    // M2 (R4-21, R4-88; W2.2's resolvers): the operator's default backend
+    // and model, and the turn deadline (W2.7).
+    /** @type {Record<string, any>} */
+    const context = { defaultPreset: chatOnly };
+    if (harnessSettings !== undefined) {
+      const defaultBackend = harnessSettings.defaultBackend();
+      const defaultModelId = harnessSettings.defaultModelId();
+      if (defaultBackend !== undefined) context.defaultBackend = defaultBackend;
+      if (defaultModelId !== undefined) context.defaultModelId = defaultModelId;
+      context.turnDeadlineMs = harnessSettings.turnDeadlineMs();
+    }
+    const resolved = await resolveCreateOptions(
+      given,
+      /** @type {any} */ (harden(context)),
+    );
     const program = programs.current();
     if (program === undefined) throw Error(NO_PROGRAM_TEXT);
     const row = rows.add({
@@ -210,6 +263,9 @@ export const makeFactoryKit = ({
       modelId: resolved.modelId,
       userInitiated: resolved.userInitiated,
     });
+    if (importing) rows.setImporting(row, true);
+    /** @type {Record<string, any>} */
+    const extras = resolved;
     /** @type {Creation} */
     const creation = {
       row,
@@ -220,6 +276,10 @@ export const makeFactoryKit = ({
       finished: false,
       abandoned: false,
       fromSpare: false,
+      prompt:
+        typeof extras.systemPrompt === 'object'
+          ? extras.systemPrompt.blob
+          : undefined,
     };
     creations.add(creation);
     try {
@@ -240,7 +300,8 @@ export const makeFactoryKit = ({
       });
       ensureLive(creation);
       creation.services = services;
-      const config = harden({
+      /** @type {Record<string, any>} */
+      const fields = {
         key: row.key,
         title: resolved.title,
         backendTitle: resolved.backendTitle,
@@ -248,7 +309,12 @@ export const makeFactoryKit = ({
         preset: resolved.presetSnapshot,
         createdAt,
         userInitiated: resolved.userInitiated,
-      });
+      };
+      for (const name of CONFIG_EXTRAS) {
+        const value = extras[name];
+        if (value !== undefined) fields[name] = value;
+      }
+      const config = harden(fields);
       mustMatch(config, shapes.SessionConfig);
       const makeArgs = harden({
         config,
@@ -276,14 +342,53 @@ export const makeFactoryKit = ({
       creation.made = /** @type {{ session: any, internal: any }} */ (made);
       await finish(creation);
       ensureLive(creation);
-      return made.session;
+      return /** @type {{ session: any, internal: any }} */ (made);
     } catch (error) {
       await rollBack(creation);
       throw error;
     }
   };
 
-  const factory = makeExo('SessionFactory', m1bInterfaces.SessionFactory, {
+  /** @param {Record<string, any>} options */
+  const createSession = async options =>
+    (await create(options, { importing: false })).session;
+
+  /**
+   * M2 W2.7: the catalogue of a backend (the request's, else the default,
+   * else the first configured), passed through (W2.2 reads it); a lost
+   * manager answers `unavailable` (section 11).
+   * @param {any} [request] `shapes.ModelRequest`
+   */
+  const listModels = async (request = {}) => {
+    const backend =
+      request.backend ??
+      harnessSettings?.defaultBackend() ??
+      harnessSettings?.backends()[0];
+    const unavailable = harden({
+      rows: [],
+      state: 'unavailable',
+      error: texts.catalogUnavailable,
+    });
+    if (backend === undefined) return unavailable;
+    const defaultBackend = harnessSettings?.defaultBackend();
+    const defaultModelId = harnessSettings?.defaultModelId();
+    /** @type {Record<string, any>} */
+    const full = { ...request, backend };
+    if (defaultBackend !== undefined) full.defaultBackend = defaultBackend;
+    if (defaultModelId !== undefined) full.defaultModelId = defaultModelId;
+    // W2.2 widens ModelRequest with the defaults; until then they are left out.
+    const forwarded = matches(harden(full), shapes.ModelRequest)
+      ? harden(full)
+      : harden({ ...request, backend });
+    try {
+      return await E(backend).listModels(forwarded);
+    } catch (error) {
+      if (isRetiredBreak(error)) return unavailable;
+      throw error;
+    }
+  };
+
+  const factory = makeExo('SessionFactory', m2Interfaces.SessionFactory, {
     createSession,
     /** @param {{ after?: string, limit?: number }} [options] */
     listSessions: options => rows.page(options),
@@ -298,10 +403,24 @@ export const makeFactoryKit = ({
     /** The list rev viewers subscribe from (`Live.subscribeList(rev)`). */
     sessionListFeed: () =>
       harden({ rev: listFeed === undefined ? rows.rev() : listFeed.rev() }),
+    /** @param {any} session M2 W2.7 (m2-interfaces.md 7.1) */
+    deleteSession: session => deletions.delete(session),
+    listBackends: () => harnessSettings?.backends() ?? harden([]),
+    listModels,
   });
 
-  const operator = makeExo('Operator', interfaces.Operator, {
+  const operator = makeExo('Operator', m2Interfaces.Operator, {
     getFactory: () => factory,
+    /** M2 W2.7: the agent host's Secrets manager (m2-interfaces.md 9). */
+    getSecrets: () => E(admin).getSecrets(),
+  });
+
+  const exports = makeFactoryExport({
+    rows,
+    settings: {
+      current: () => harnessSettings?.current() ?? harden({}),
+    },
+    create,
   });
 
   /**
@@ -367,15 +486,24 @@ export const makeFactoryKit = ({
         await finish(creation).catch(() => rollBack(creation));
       }),
     );
+    // M2 W2.7: an import cut off by the restart is rolled back (7.2), and
+    // every delete record completes from its step (7.1, R4-9).
+    const deleting = deletions.resume();
+    for (const row of rows.all()) {
+      if (row.importing && row.session !== undefined && !row.dropped) {
+        void deletions.delete(row.session).catch(() => undefined);
+      }
+    }
     const working = rows
       .all()
       .filter(
         row =>
           row.internal !== undefined &&
           row.state !== 'lost' &&
+          row.state !== 'deleting' &&
           row.activity === 'working',
       );
-    await probeAll(working);
+    await Promise.all([probeAll(working), deleting]);
   };
 
   /** Settles when the latest start's recovery is done (tests). */
@@ -408,6 +536,8 @@ export const makeFactoryKit = ({
     whenRecovered: () => recovered,
     /** Creations not yet finished or rolled back (tests, status). */
     pendingCreations: () => creations.size,
+    deletions,
+    exports,
   });
 };
 harden(makeFactoryKit);

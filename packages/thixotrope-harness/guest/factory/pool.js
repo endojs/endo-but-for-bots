@@ -484,6 +484,27 @@ harden(makePool);
 /** @typedef {ReturnType<typeof makePool>} Pool */
 
 /**
+ * ExecHandle -> its factory-side control (M2 W2.7: a deleted session's exec
+ * vat is retired and the handle closed).
+ * @type {WeakMap<any, { close: () => void }>}
+ */
+const execControls = new WeakMap();
+
+/** The text `ExecHandle.scope()` answers once its session was deleted. */
+export const EXEC_CLOSED_TEXT = 'This exec handle belongs to a deleted session';
+
+/**
+ * Retire the exec vat a session's ExecHandle leases and close the handle
+ * (M2 W2.7 delete step 4). Idempotent; a handle this vat did not make is
+ * ignored.
+ * @param {any} handle
+ */
+export const closeExecHandle = handle => {
+  execControls.get(handle)?.close();
+};
+harden(closeExecHandle);
+
+/**
  * The session's exec-vat lease (`m1bInterfaces.ExecHandle`): one per
  * session, held only by that session (`SessionServices.execVat`).
  * `scope()` answers the current scope (taking one from the pool the first
@@ -499,12 +520,18 @@ export const makeExecHandle = ({ pool, settings }) => {
   let current;
   /** @type {Promise<{ scope: any, facade: any }> | undefined} */
   let taking;
-  return makeExo('ExecHandle', m1bInterfaces.ExecHandle, {
+  let closed = false;
+  const handle = makeExo('ExecHandle', m1bInterfaces.ExecHandle, {
     async scope() {
+      if (closed) throw Error(EXEC_CLOSED_TEXT);
       if (current === undefined) {
         if (taking === undefined) {
           taking = pool.takeExec().then(
             spare => {
+              if (closed) {
+                pool.retire(spare.facade);
+                throw Error(EXEC_CLOSED_TEXT);
+              }
               const lease = { scope: spare.value, facade: spare.facade };
               current = lease;
               taking = undefined;
@@ -533,5 +560,15 @@ export const makeExecHandle = ({ pool, settings }) => {
       return undefined;
     },
   });
+  execControls.set(handle, {
+    close: () => {
+      closed = true;
+      if (current === undefined) return;
+      const { facade } = current;
+      current = undefined;
+      pool.retire(facade);
+    },
+  });
+  return handle;
 };
 harden(makeExecHandle);
