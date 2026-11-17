@@ -18,7 +18,7 @@ export const MAX_TEMPLATE_LENGTH = 1024 * 1024;
 harden(MAX_TEMPLATE_LENGTH);
 
 const TEMPLATE_FILE_PATTERN = /^(.*)\.md$/;
-const TEMPLATE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const TEMPLATE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
  * Load the `*.md` entries of each source. A later source overrides an earlier

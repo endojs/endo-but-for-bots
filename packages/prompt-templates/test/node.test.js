@@ -10,6 +10,7 @@ import test from 'ava';
 
 import {
   discoverPromptTemplates,
+  listConventionalDirectories,
   listPromptTemplateDirectories,
 } from '../src/node.js';
 
@@ -94,7 +95,7 @@ test('discovery loads real files with project over global precedence', async t =
   await mkdir(join(project, '.git'), { recursive: true });
   await writeTemplate(join(home, '.pi/agent/prompts/both.md'), 'global both');
   await writeTemplate(join(home, '.pi/agent/prompts/own.md'), 'global own');
-  await writeTemplate(join(home, '.agents/prompts/cross.md'), 'cross {{x}}');
+  await writeTemplate(join(home, '.agents/prompts/cross.md'), 'cross $1');
   await writeTemplate(join(project, '.agents/prompts/both.md'), 'agents both');
   await writeTemplate(join(project, '.pi/prompts/both.md'), 'project both');
   await mkdir(join(project, '.pi/prompts/directory.md'), { recursive: true });
@@ -107,7 +108,7 @@ test('discovery loads real files with project over global precedence', async t =
     templates.map(({ name, body }) => [name, body]),
     [
       ['both', 'project both'],
-      ['cross', 'cross {{x}}'],
+      ['cross', 'cross $1'],
       ['own', 'global own'],
     ],
   );
@@ -185,4 +186,30 @@ test('an unreadable directory yields a diagnostic and the others still load', as
   t.is(diagnostics.length, 1);
   t.is(diagnostics[0].source, unreadable);
   t.regex(diagnostics[0].message, /ENOTDIR/);
+});
+
+test('the shared walker orders home, project, then cwd leaves', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'conventional-'));
+  t.teardown(() => rm(root, { recursive: true, force: true }));
+  const home = join(root, 'home');
+  const repo = join(home, 'repo');
+  const cwd = join(repo, 'pkg');
+  await mkdir(join(repo, '.git'), { recursive: true });
+  await mkdir(cwd, { recursive: true });
+  t.deepEqual(
+    await listConventionalDirectories({
+      cwd,
+      home,
+      leaves: { home: ['h'], project: ['p1', 'p2'], cwd: ['c'] },
+    }),
+    [
+      join(home, 'h'),
+      join(repo, 'p1'),
+      join(repo, 'p2'),
+      join(cwd, 'p1'),
+      join(cwd, 'p2'),
+      join(cwd, 'c'),
+    ],
+  );
+  t.deepEqual(await listConventionalDirectories({ cwd, home, leaves: {} }), []);
 });

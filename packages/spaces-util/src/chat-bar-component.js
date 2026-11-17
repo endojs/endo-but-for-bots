@@ -12,9 +12,8 @@ import { Fragment, h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { renderConfined, unmount } from '@endo/preact-container/renderer';
 import {
-  bindArguments,
   parseCommandArguments,
-  substituteVariables,
+  substituteArguments,
 } from '@endo/prompt-templates/substitute.js';
 
 import { sendFormComponent } from './send-form.js';
@@ -29,6 +28,7 @@ import { createInlineCommandForm } from './inline-command-form.js';
 import { createPendingCommands } from './pending-commands.js';
 import { createCommandExecutor } from './command-executor.js';
 import {
+  countTemplateFields,
   makePromptTemplateCatalog,
   PROMPT_TEMPLATE_CATEGORY,
 } from './prompt-template-catalog.js';
@@ -985,7 +985,7 @@ export const chatBarComponent = (
 
     const promptTemplate = promptTemplates.getTemplate(commandName);
     if (promptTemplate) {
-      expandPromptTemplate(
+      expandPromptTemplateForm(
         promptTemplate,
         /** @type {Record<string, string>} */ (data),
       );
@@ -1940,32 +1940,64 @@ export const chatBarComponent = (
   };
 
   /**
+   * Arguments typed on a template's slash line beyond its form fields, kept so
+   * a rest placeholder still receives them once the form is submitted.
+   * @type {readonly string[]}
+   */
+  let pendingExtraArguments = [];
+
+  /**
    * Put a template's text in the editor and return to send mode. Sending stays
    * the user's decision: nothing reaches the agent until they press Enter.
    * @param {PromptTemplate} template
-   * @param {Readonly<Record<string, string>>} values
+   * @param {readonly string[]} commandArguments
    */
-  const expandPromptTemplate = (template, values) => {
+  const expandPromptTemplate = (template, commandArguments) => {
+    pendingExtraArguments = [];
     exitCommandMode();
-    setEditorText(substituteVariables(template.body, values));
+    setEditorText(substituteArguments(template.body, commandArguments));
   };
 
   /**
-   * Invoke a template with the argument text from its slash line: expand it if
-   * the arguments fill every variable, ask for the rest in the command form if
-   * they do not, and keep the slash line open for correction if there are too
-   * many.
+   * Expand a template from its submitted command form, whose fields are named
+   * by position. Trailing empty fields are dropped so `$@` does not gain
+   * spaces; an empty field in the middle stays empty, so its default applies.
+   * @param {PromptTemplate} template
+   * @param {Readonly<Record<string, string>>} data
+   */
+  const expandPromptTemplateForm = (template, data) => {
+    const fieldValues = Array.from(
+      { length: countTemplateFields(template) },
+      (_, index) => {
+        const value = data[String(index + 1)];
+        return typeof value === 'string' ? value : '';
+      },
+    );
+    const extra = pendingExtraArguments;
+    let length = fieldValues.length;
+    if (extra.length === 0) {
+      while (length > 0 && fieldValues[length - 1] === '') {
+        length -= 1;
+      }
+    }
+    expandPromptTemplate(template, [...fieldValues.slice(0, length), ...extra]);
+  };
+
+  /**
+   * Invoke a template with the argument text from its slash line. Expand it
+   * when every required `argument-hint` position is filled; ask in the command
+   * form when one is not (or, for a template with no hint, when it takes
+   * arguments and none were given); keep the slash line open for correction
+   * when there are more arguments than positions and no rest placeholder.
    * @param {PromptTemplate} template
    * @param {string} argumentText
    */
   const invokePromptTemplate = (template, argumentText) => {
-    const { name, variables } = template;
-    const { values, missing, excess } = bindArguments(
-      variables,
-      parseCommandArguments(argumentText),
-    );
-    if (excess > 0) {
-      $error.textContent = `/${name} takes ${variables.length} argument(s); ${excess} too many. Quote an argument to include spaces.`;
+    const { name, argumentHint, maxPosition, usesRest } = template;
+    const commandArguments = parseCommandArguments(argumentText);
+    if (!usesRest && commandArguments.length > maxPosition) {
+      const excess = commandArguments.length - maxPosition;
+      $error.textContent = `/${name} takes ${maxPosition} argument(s); ${excess} too many. Quote an argument to include spaces.`;
       setTimeout(() => {
         $error.textContent = '';
       }, 3000);
@@ -1973,14 +2005,29 @@ export const chatBarComponent = (
       commandSelector.filter(name);
       return;
     }
-    if (missing.length === 0) {
-      expandPromptTemplate(template, values);
+    const missingRequired = argumentHint.some(
+      ({ required }, index) => required && !commandArguments[index],
+    );
+    const needsForm =
+      missingRequired ||
+      (argumentHint.length === 0 &&
+        maxPosition > 0 &&
+        commandArguments.length === 0);
+    if (!needsForm) {
+      expandPromptTemplate(template, commandArguments);
       return;
     }
+    const fieldCount = countTemplateFields(template);
+    pendingExtraArguments = harden(commandArguments.slice(fieldCount));
+    const prefill = Object.fromEntries(
+      commandArguments
+        .slice(0, fieldCount)
+        .map((value, index) => [String(index + 1), value]),
+    );
     sendForm.clear();
     enterCommandMode(
       name,
-      Object.keys(values).length === 0 ? undefined : { ...values },
+      Object.keys(prefill).length === 0 ? undefined : prefill,
     );
   };
 

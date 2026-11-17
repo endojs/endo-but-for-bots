@@ -1,42 +1,107 @@
 // @ts-check
 
-/** @import { ArgumentBinding } from './types.js' */
+/** @import { ArgumentHintToken, PlaceholderAnalysis } from './types.js' */
 
 import harden from '@endo/harden';
 
-const VARIABLE_PATTERN = /\{\{\s*([A-Za-z][A-Za-z0-9_-]*)\s*\}\}/g;
+// One alternation covers Pi's whole grammar, so substitution is a single
+// left-to-right pass: `${@:N:L}`, `${@:N}`, `${@:-default}`, `${n:-default}`,
+// `$ARGUMENTS`, `$@`, and `$n` (n >= 1).
+const PLACEHOLDER_PATTERN =
+  /\$\{@:(\d+)(?::(\d+))?\}|\$\{@:-([^}]*)\}|\$\{([1-9]\d*):-([^}]*)\}|\$ARGUMENTS|\$@|\$([1-9]\d*)/g;
 
 /**
- * List a template body's distinct variables in order of first appearance.
+ * Report the highest positional placeholder in a template body and whether
+ * the body consumes the remaining arguments (`$@`, `$ARGUMENTS`, or a rest-slice form).
  *
  * @param {string} body
- * @returns {readonly string[]}
+ * @returns {PlaceholderAnalysis}
  */
-export const extractVariables = body =>
-  harden([
-    ...new Set(Array.from(body.matchAll(VARIABLE_PATTERN), match => match[1])),
-  ]);
-harden(extractVariables);
+export const analyzePlaceholders = body => {
+  let maxPosition = 0;
+  let usesRest = false;
+  for (const match of body.matchAll(PLACEHOLDER_PATTERN)) {
+    const position = match[4] ?? match[6];
+    if (position !== undefined) {
+      maxPosition = Math.max(maxPosition, Number(position));
+    } else {
+      usesRest = true;
+    }
+  }
+  return harden({ maxPosition, usesRest });
+};
+harden(analyzePlaceholders);
 
 /**
- * Replace each `{{name}}` that has a value. This makes a single pass over the
- * body, so a value containing `{{other}}` or `$&` stays literal. A placeholder
- * with no value also stays, so the user can see it in the editor.
+ * Expand Pi placeholders with positional arguments in one pass, so a value
+ * that contains `$1`, `${...}`, or `$&` stays literal. Text outside the
+ * grammar (`$PATH`, `$0`, a lone `$`) is kept as written.
  *
  * @param {string} body
- * @param {Readonly<Record<string, string>>} values
+ * @param {readonly string[]} commandArguments
  * @returns {string}
  */
-export const substituteVariables = (body, values) =>
-  body.replace(VARIABLE_PATTERN, (placeholder, name) =>
-    Object.hasOwn(values, name) ? values[name] : placeholder,
+export const substituteArguments = (body, commandArguments) =>
+  body.replace(
+    PLACEHOLDER_PATTERN,
+    (
+      placeholder,
+      sliceStart,
+      sliceLength,
+      restDefault,
+      defaultPosition,
+      positionalDefault,
+      position,
+    ) => {
+      if (sliceStart !== undefined) {
+        const start = Math.max(0, Number(sliceStart) - 1);
+        const end =
+          sliceLength === undefined ? undefined : start + Number(sliceLength);
+        return commandArguments.slice(start, end).join(' ');
+      }
+      if (restDefault !== undefined) {
+        return commandArguments.length > 0
+          ? commandArguments.join(' ')
+          : restDefault;
+      }
+      if (defaultPosition !== undefined) {
+        const value = commandArguments[Number(defaultPosition) - 1];
+        return value || positionalDefault;
+      }
+      if (position !== undefined) {
+        return commandArguments[Number(position) - 1] ?? '';
+      }
+      // `$@` and `$ARGUMENTS`.
+      return commandArguments.join(' ');
+    },
   );
-harden(substituteVariables);
+harden(substituteArguments);
 
 /**
- * Split a slash-command argument string the way a shell splits words: single
- * or double quotes group whitespace, the quotes are removed, and `""` yields an
- * empty argument. An unterminated quote runs to the end of the string.
+ * Parse an `argument-hint` such as `<focus> [scope]` into tokens. A token in
+ * angle brackets is required; any other token, bracketed or bare, is optional.
+ * The *n*th token labels `$n`.
+ *
+ * @param {string} hint
+ * @returns {readonly ArgumentHintToken[]}
+ */
+export const parseArgumentHint = hint =>
+  harden(
+    Array.from(hint.matchAll(/<([^>]*)>|\[([^\]]*)\]|(\S+)/g), match =>
+      match[1] !== undefined
+        ? harden({ label: match[1].trim(), required: true })
+        : harden({ label: (match[2] ?? match[3]).trim(), required: false }),
+    ),
+  );
+harden(parseArgumentHint);
+
+/**
+ * Split a slash-command argument string by Pi's rules: whitespace separates
+ * arguments; a `'` or `"` opens a quoted argument only at the start of an
+ * argument, so an apostrophe inside a word is text; the matching quote closes
+ * it and both quotes are removed (`""` is an empty argument); a quote with no
+ * matching close stays as literal text; backslashes never escape. A quoted
+ * argument ends at its closing quote, so `"a"b` is two arguments.
  *
  * @param {string} text
  * @returns {readonly string[]}
@@ -44,53 +109,31 @@ harden(substituteVariables);
 export const parseCommandArguments = text => {
   /** @type {string[]} */
   const parsed = [];
-  let current = '';
-  let hasToken = false;
-  /** @type {string | undefined} */
-  let quote;
-  for (const character of text) {
-    if (quote !== undefined) {
-      if (character === quote) {
-        quote = undefined;
-      } else {
-        current += character;
-      }
-    } else if (character === '"' || character === "'") {
-      quote = character;
-      hasToken = true;
-    } else if (/\s/.test(character)) {
-      if (hasToken) {
-        parsed.push(current);
-        current = '';
-        hasToken = false;
-      }
-    } else {
-      current += character;
-      hasToken = true;
+  let index = 0;
+  while (index < text.length) {
+    while (index < text.length && /\s/.test(text[index])) {
+      index += 1;
     }
-  }
-  if (hasToken) {
-    parsed.push(current);
+    if (index >= text.length) {
+      break;
+    }
+    const character = text[index];
+    if (character === '"' || character === "'") {
+      const close = text.indexOf(character, index + 1);
+      if (close !== -1) {
+        parsed.push(text.slice(index + 1, close));
+        index = close + 1;
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+    }
+    let word = '';
+    while (index < text.length && !/\s/.test(text[index])) {
+      word += text[index];
+      index += 1;
+    }
+    parsed.push(word);
   }
   return harden(parsed);
 };
 harden(parseCommandArguments);
-
-/**
- * Assign positional arguments to variables in order of first appearance.
- *
- * @param {readonly string[]} variables
- * @param {readonly string[]} commandArguments
- * @returns {ArgumentBinding}
- */
-export const bindArguments = (variables, commandArguments) =>
-  harden({
-    values: Object.fromEntries(
-      variables
-        .slice(0, commandArguments.length)
-        .map((name, index) => [name, commandArguments[index]]),
-    ),
-    missing: variables.slice(commandArguments.length),
-    excess: Math.max(0, commandArguments.length - variables.length),
-  });
-harden(bindArguments);

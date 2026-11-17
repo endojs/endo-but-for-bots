@@ -13,18 +13,36 @@ the text and presses Enter.
 
 ```markdown
 ---
-description: Review code for a chosen concern
+description: Review staged changes for one concern
+argument-hint: <focus> [scope]
 ---
-Review this code for bugs, security issues, and performance problems.
-Focus on: {{focus}}
+Review the ${2:-staged} changes for bugs, focusing on $1.
+Extra notes from the user: ${@:3}
 ```
 
+The format and placeholder grammar are Pi's, so a template written for Pi
+expands the same way here.
+
 - The file name without `.md` is the command name. It may contain letters,
-  digits, `-`, and `_`, and cannot be the name of a built-in command.
+  digits, `.`, `-`, and `_`, and cannot be the name of a built-in command.
 - `description` is optional and defaults to the body's first non-empty line.
-- A variable is `{{name}}` or `{{ name }}`, where `name` starts with a letter and
-  continues with letters, digits, `-`, and `_`. Other text in braces is literal,
-  and so are Pi's `$1` and `$@`.
+- `argument-hint` is optional. It is shown after the name in the `/` menu and
+  labels the form fields: `<name>` is required, `[name]` is optional, and the
+  *n*th token labels `$n`.
+- Other frontmatter keys (for example `model:`) are ignored.
+
+| Placeholder | Expands to |
+|---|---|
+| `$1`, `$2`, ... | The *n*th argument, or empty |
+| `$@`, `$ARGUMENTS` | All arguments joined with one space |
+| `${1:-default}` | The first argument, or `default` if absent or empty |
+| `${@:-default}` | All arguments, or `default` if there are none |
+| `${@:N}` | Arguments from position *N* (1-based) |
+| `${@:N:L}` | *L* arguments from position *N* |
+
+Substitution is a single pass, so an argument containing `$1` stays literal.
+Other `$` text (`$PATH`, `$0`, a lone `$`) is kept as written; there is no
+escape syntax.
 
 ## Where templates live
 
@@ -51,17 +69,26 @@ mount of each. Chat rereads them whenever `/` opens the menu, so a new or edited
 file needs no further setup. Rerun the script if a directory is created or you
 move to another project.
 
-- `/review` and Enter prompts for `focus`, then expands.
-- `/review memory` and Enter expands directly.
-- Arguments split like a shell's, so `/review "memory safety"` is one argument.
-  They fill variables in order of first appearance. Too many is an error.
+- `/review` and Enter opens a form for the required `focus` (prefilled with
+  any arguments already typed), then expands.
+- `/review memory` and Enter expands directly; `scope` takes its default.
+- A template without `argument-hint` expands directly when given arguments,
+  and opens a form of optional `$1`...`$n` fields when given none.
+- Whitespace separates arguments. A `'` or `"` at the start of an argument
+  quotes it, so `/review "memory safety"` is one argument, while the
+  apostrophe in `don't` is text. An unmatched quote is literal and a backslash
+  never escapes.
+- More arguments than the highest `$n` is an error, unless the template uses
+  `$@`, `$ARGUMENTS`, or `${@...}` to take the rest.
 
 ## Modules
 
 - `@endo/prompt-templates/parse.js`: `parsePromptTemplate`.
-- `@endo/prompt-templates/substitute.js`: `extractVariables`,
-  `substituteVariables`, `parseCommandArguments`, `bindArguments`.
+- `@endo/prompt-templates/substitute.js`: `analyzePlaceholders`,
+  `substituteArguments`, `parseArgumentHint`, `parseCommandArguments`.
 - `@endo/prompt-templates/load.js`: `loadPromptTemplates` reads any list of
   sources, each providing `list` and `readText`. Runs in the browser.
-- `@endo/prompt-templates/node.js`: `listPromptTemplateDirectories`,
+- `@endo/prompt-templates/node.js`: `listConventionalDirectories` (the
+  home / repository / working-directory walker shared with `@endo/skills`),
+  `listPromptTemplateDirectories`,
   `makeNodePromptTemplateSource`, and `discoverPromptTemplates` for Node.

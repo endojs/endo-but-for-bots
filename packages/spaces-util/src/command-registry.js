@@ -26,6 +26,7 @@
  * @property {'inline' | 'modal' | 'immediate'} mode - How command is executed
  * @property {CommandField[]} fields - Command parameters
  * @property {string} [submitLabel] - Custom submit button label
+ * @property {string} [argumentHint] - Argument synopsis shown after the name in the menu
  * @property {string[]} [aliases] - Shorthand aliases for the command
  * @property {'inbox' | 'channel' | 'both'} [context] - Where this command is available ('both' by default)
  */

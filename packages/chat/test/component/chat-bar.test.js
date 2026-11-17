@@ -1401,10 +1401,10 @@ test.serial(
 );
 
 test.serial(
-  'space completes a name, then arguments fill variables',
+  'space completes a name, then arguments fill positions',
   async t => {
     const context = await setupTemplateChatBar({
-      'review.md': 'Review {{what}} for {{focus}}.',
+      'review.md': '---\nargument-hint: <what> <focus>\n---\nReview $1 for $2.',
     });
     await context.openMenu();
     context.setText('/rev');
@@ -1433,44 +1433,47 @@ test.serial(
   },
 );
 
-test.serial('missing variables open the form; submit expands it', async t => {
-  const context = await setupTemplateChatBar({
-    'review.md': 'Review {{what}} for {{focus}}.',
-  });
-  await context.openMenu();
-  context.setText('/review parser');
-  await waitFor(() => context.menuNames().length === 1);
-  context.press('Enter');
+test.serial(
+  'missing required arguments open the form; submit expands it',
+  async t => {
+    const context = await setupTemplateChatBar({
+      'review.md': '---\nargument-hint: <what> <focus>\n---\nReview $1 for $2.',
+    });
+    await context.openMenu();
+    context.setText('/review parser');
+    await waitFor(() => context.menuNames().length === 1);
+    context.press('Enter');
 
-  t.true(context.$chatBar.classList.contains('command-mode'));
-  const inputsReady = () =>
-    context.$parent.querySelectorAll('#inline-form-container input');
-  await waitFor(() => inputsReady().length === 2);
-  const [$what, $focus] = inputsReady();
-  t.is($what.value, 'parser');
-  t.is($focus.value, '');
+    t.true(context.$chatBar.classList.contains('command-mode'));
+    const inputsReady = () =>
+      context.$parent.querySelectorAll('#inline-form-container input');
+    await waitFor(() => inputsReady().length === 2);
+    const [$what, $focus] = inputsReady();
+    t.is($what.value, 'parser');
+    t.is($focus.value, '');
 
-  // The form is invalid until every variable has a value.
-  const $submit = context.$parent.querySelector('.command-footer button');
-  await waitFor(() => $submit && $submit.textContent === 'Expand');
-  t.is($submit.textContent, 'Expand');
-  t.true($submit.disabled);
+    // The form is invalid until every required argument has a value.
+    const $submit = context.$parent.querySelector('.command-footer button');
+    await waitFor(() => $submit && $submit.textContent === 'Expand');
+    t.is($submit.textContent, 'Expand');
+    t.true($submit.disabled);
 
-  $focus.value = 'bugs';
-  $focus.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
-  await waitFor(() => !$submit.disabled);
-  $submit.click();
-  await waitFor(() => !context.$chatBar.classList.contains('command-mode'));
+    $focus.value = 'bugs';
+    $focus.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+    await waitFor(() => !$submit.disabled);
+    $submit.click();
+    await waitFor(() => !context.$chatBar.classList.contains('command-mode'));
 
-  t.is(context.$input.textContent, 'Review parser for bugs.');
-  t.deepEqual(context.mock.sentMessages, []);
-  context.api.dispose();
-});
+    t.is(context.$input.textContent, 'Review parser for bugs.');
+    t.deepEqual(context.mock.sentMessages, []);
+    context.api.dispose();
+  },
+);
 
 test.serial(
   'too many arguments stay on the slash line with an error',
   async t => {
-    const context = await setupTemplateChatBar({ 'one.md': 'Only {{x}}' });
+    const context = await setupTemplateChatBar({ 'one.md': 'Only $1' });
     await context.openMenu();
     context.setText('/one a b');
     await waitFor(() => context.menuNames().length === 1);
@@ -1488,6 +1491,39 @@ test.serial(
     await waitFor(() => context.menuNames().length === 1);
     context.press('Enter');
     t.is(context.$input.textContent, 'Only a b');
+    context.api.dispose();
+  },
+);
+
+test.serial('a rest placeholder takes any number of arguments', async t => {
+  const context = await setupTemplateChatBar({
+    // eslint-disable-next-line no-template-curly-in-string
+    'all.md': 'First $1; rest ${@:2}; all $@',
+  });
+  await context.openMenu();
+  context.setText('/all a b "c d"');
+  await waitFor(() => context.menuNames().length === 1);
+  context.press('Enter');
+  t.is(context.$input.textContent, 'First a; rest b c d; all a b c d');
+  t.false(context.$chatBar.classList.contains('command-mode'));
+  t.deepEqual(context.mock.sentMessages, []);
+  context.api.dispose();
+});
+
+test.serial(
+  'an optional hinted argument may be omitted and takes its default',
+  async t => {
+    const context = await setupTemplateChatBar({
+      'scope.md':
+        // eslint-disable-next-line no-template-curly-in-string
+        '---\nargument-hint: <focus> [scope]\n---\nReview ${2:-staged} for $1.',
+    });
+    await context.openMenu();
+    context.setText('/scope bugs');
+    await waitFor(() => context.menuNames().length === 1);
+    context.press('Enter');
+    t.is(context.$input.textContent, 'Review staged for bugs.');
+    t.deepEqual(context.mock.sentMessages, []);
     context.api.dispose();
   },
 );
@@ -1535,7 +1571,7 @@ test.serial(
 );
 
 test.serial('a slash line with no arguments opens an empty form', async t => {
-  const context = await setupTemplateChatBar({ 'one.md': 'Only {{x}}' });
+  const context = await setupTemplateChatBar({ 'one.md': 'Only $1' });
   await context.openMenu();
   context.setText('/one');
   await waitFor(() => context.menuNames().length === 1);

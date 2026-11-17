@@ -61,6 +61,52 @@ const listProjectDirectories = async (workingDirectory, homeDirectory) => {
 };
 
 /**
+ * Leaf paths, relative to each rung of the conventional directory ladder.
+ *
+ * @typedef {object} ConventionalLeaves
+ * @property {readonly string[]} [home] Under the home directory.
+ * @property {readonly string[]} [project] Under each directory from the
+ *   repository root down to the working directory.
+ * @property {readonly string[]} [cwd] Under the working directory only.
+ */
+
+/**
+ * Walk the home / repository-root / working-directory ladder that Pi-style
+ * harnesses search, and return the candidate directories ordered from lowest
+ * to highest precedence: every `home` leaf, then every `project` leaf from
+ * the repository root down to the working directory, then every `cwd` leaf.
+ * The walk stops at the enclosing repository root and never climbs to or past
+ * the home directory, so an arbitrary ancestor such as `/tmp` is not part of
+ * the project. This is the one walker shared with `@endo/skills`; a feature
+ * differs only in its leaves.
+ *
+ * @param {object} options
+ * @param {string} options.cwd
+ * @param {string} options.home
+ * @param {ConventionalLeaves} options.leaves
+ * @returns {Promise<readonly string[]>}
+ */
+export const listConventionalDirectories = async ({ cwd, home, leaves }) => {
+  const { home: homeLeaves = [], project = [], cwd: cwdLeaves = [] } = leaves;
+  const projectDirectories = await listProjectDirectories(cwd, home);
+  return harden([
+    ...homeLeaves.map(leaf => join(home, leaf)),
+    ...[...projectDirectories]
+      .reverse()
+      .flatMap(directory => project.map(leaf => join(directory, leaf))),
+    ...cwdLeaves.map(leaf => join(cwd, leaf)),
+  ]);
+};
+harden(listConventionalDirectories);
+
+/** The prompt-template leaves of the conventional ladder. */
+export const PROMPT_TEMPLATE_LEAVES = harden({
+  home: [join('.pi', 'agent', 'prompts'), join('.agents', 'prompts')],
+  project: [join('.agents', 'prompts')],
+  cwd: [join('.pi', 'prompts')],
+});
+
+/**
  * Name the directories that may hold prompt templates, ordered from lowest to
  * highest precedence: the user's own directories, then `.agents/prompts` from
  * the repository root down to the working directory, then the working
@@ -71,23 +117,15 @@ const listProjectDirectories = async (workingDirectory, homeDirectory) => {
  * @param {string} options.workingDirectory
  * @returns {Promise<readonly string[]>}
  */
-export const listPromptTemplateDirectories = async ({
+export const listPromptTemplateDirectories = ({
   homeDirectory,
   workingDirectory,
-}) => {
-  const projectDirectories = await listProjectDirectories(
-    workingDirectory,
-    homeDirectory,
-  );
-  return harden([
-    join(homeDirectory, '.pi', 'agent', 'prompts'),
-    join(homeDirectory, '.agents', 'prompts'),
-    ...projectDirectories
-      .map(directory => join(directory, '.agents', 'prompts'))
-      .reverse(),
-    join(workingDirectory, '.pi', 'prompts'),
-  ]);
-};
+}) =>
+  listConventionalDirectories({
+    cwd: workingDirectory,
+    home: homeDirectory,
+    leaves: PROMPT_TEMPLATE_LEAVES,
+  });
 harden(listPromptTemplateDirectories);
 
 /**

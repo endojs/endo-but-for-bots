@@ -44,10 +44,11 @@ test('an agent without the directory has no templates or warnings', async t => {
   t.deepEqual(warnings, []);
 });
 
-test('a template becomes an inline command with one field per variable', async t => {
+test('a template becomes an inline command with one field per position', async t => {
   const { catalog } = makeCatalog({
     'source-000': makeTree({
-      'review.md': '---\ndescription: Review\n---\n{{focus}} {{depth}}',
+      'review.md':
+        '---\ndescription: Review\nargument-hint: <focus> [depth]\n---\n$1 $2',
     }),
   });
   await catalog.refresh();
@@ -55,19 +56,33 @@ test('a template becomes an inline command with one field per variable', async t
     name: 'review',
     label: 'review',
     description: 'Review',
+    argumentHint: '<focus> [depth]',
     category: 'templates',
     mode: 'inline',
     submitLabel: 'Expand',
     fields: [
-      { name: 'focus', label: 'focus', type: 'text', required: true },
-      { name: 'depth', label: 'depth', type: 'text', required: true },
+      { name: '1', label: 'focus', type: 'text', required: true },
+      { name: '2', label: 'depth', type: 'text', required: false },
     ],
   });
-  t.is(catalog.getTemplate('review').body, '{{focus}} {{depth}}');
+  t.is(catalog.getTemplate('review').body, '$1 $2');
   t.deepEqual(
     catalog.getCommands().map(({ name }) => name),
     ['review'],
   );
+});
+
+test('without a hint, fields run to the highest position and are optional', async t => {
+  const { catalog } = makeCatalog({
+    'source-000': makeTree({ 'plain.md': '$2 then $@' }),
+  });
+  await catalog.refresh();
+  const command = catalog.getCommand('plain');
+  t.false('argumentHint' in command);
+  t.deepEqual(command.fields, [
+    { name: '1', label: '$1', type: 'text', required: false },
+    { name: '2', label: '$2', type: 'text', required: false },
+  ]);
 });
 
 test('sources apply in sorted order regardless of listing order', async t => {

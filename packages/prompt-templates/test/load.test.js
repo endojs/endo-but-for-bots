@@ -75,12 +75,11 @@ test('an unusable name is reported and skipped', async t => {
   ]);
   t.deepEqual(
     templates.map(({ name }) => name),
-    ['ok_1-x'],
+    ['a.b', 'ok_1-x'],
   );
   t.deepEqual(diagnostics.map(({ entryName }) => entryName).sort(), [
     '.hidden.md',
     '.md',
-    'a.b.md',
     'has space.md',
   ]);
 });

@@ -8,8 +8,12 @@ export interface PromptTemplate {
   description: string;
   /** The text expanded into the editor, without frontmatter. */
   body: string;
-  /** Distinct `{{name}}` placeholders in order of first appearance. */
-  variables: readonly string[];
+  /** Frontmatter `argument-hint` tokens; the *n*th token labels `$n`. */
+  argumentHint: readonly ArgumentHintToken[];
+  /** The highest `$n` or `${n:-...}` position in the body, else 0. */
+  maxPosition: number;
+  /** Whether the body has `$@`, `$ARGUMENTS`, or a rest-slice form. */
+  usesRest: boolean;
   /** The label of the source the template was loaded from. */
   source: string;
 }
@@ -37,12 +41,16 @@ export interface LoadPromptTemplatesResult {
   diagnostics: readonly PromptTemplateDiagnostic[];
 }
 
-/** How positional arguments distribute over a template's variables. */
-export interface ArgumentBinding {
-  /** Values for the variables that received an argument. */
-  values: Readonly<Record<string, string>>;
-  /** Variables left without an argument, in order. */
-  missing: readonly string[];
-  /** How many arguments exceed the template's variables. */
-  excess: number;
+/** One token of an `argument-hint` such as `<focus> [scope]`. */
+export interface ArgumentHintToken {
+  /** The token text without its brackets. */
+  label: string;
+  /** True for `<angle>` tokens, false for `[square]` or bare tokens. */
+  required: boolean;
+}
+
+/** What a template body's placeholders require of its arguments. */
+export interface PlaceholderAnalysis {
+  maxPosition: number;
+  usesRest: boolean;
 }

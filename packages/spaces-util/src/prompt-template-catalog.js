@@ -25,27 +25,52 @@ export const PROMPT_TEMPLATE_CATEGORY = 'templates';
 harden(PROMPT_TEMPLATE_CATEGORY);
 
 /**
- * Present a template as an inline command whose fields are its variables, so
- * the command form prompts for whichever ones the slash line did not fill.
+ * How many form fields a template takes: one per `argument-hint` token, or one
+ * per position up to the highest `$n` when the hint is shorter or absent.
+ *
+ * @param {PromptTemplate} template
+ * @returns {number}
+ */
+export const countTemplateFields = ({ argumentHint, maxPosition }) =>
+  Math.max(argumentHint.length, maxPosition);
+harden(countTemplateFields);
+
+/**
+ * Present a template as an inline command with one field per position, named
+ * `1`, `2`, ..., so the command form prompts for whatever the slash line left
+ * out. `argument-hint` supplies the labels and which fields are required;
+ * positions beyond the hint are labelled `$n` and optional.
  *
  * @param {PromptTemplate} template
  * @returns {CommandDefinition}
  */
-const makeTemplateCommand = ({ name, description, variables }) =>
-  harden({
+const makeTemplateCommand = template => {
+  const { name, description, argumentHint } = template;
+  const hintText = argumentHint
+    .map(({ label, required }) => (required ? `<${label}>` : `[${label}]`))
+    .join(' ');
+  return harden({
     name,
     label: name,
     description,
+    ...(hintText ? { argumentHint: hintText } : {}),
     category: PROMPT_TEMPLATE_CATEGORY,
     mode: 'inline',
     submitLabel: 'Expand',
-    fields: variables.map(variable => ({
-      name: variable,
-      label: variable,
-      type: /** @type {const} */ ('text'),
-      required: true,
-    })),
+    fields: Array.from(
+      { length: countTemplateFields(template) },
+      (_, index) => {
+        const token = argumentHint[index];
+        return {
+          name: String(index + 1),
+          label: token ? token.label : `$${index + 1}`,
+          type: /** @type {const} */ ('text'),
+          required: token ? token.required : false,
+        };
+      },
+    ),
   });
+};
 
 /**
  * The part of a mount the catalog reads.

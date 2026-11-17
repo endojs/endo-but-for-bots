@@ -1,3 +1,4 @@
+/* eslint-disable no-template-curly-in-string -- Pi placeholders are literal template text */
 import '@endo/init/debug.js';
 
 import test from 'ava';
@@ -9,26 +10,35 @@ const parse = text =>
   parsePromptTemplate({ name: 'review', text, source: 'test' });
 
 test('a plain file is all body, described by its first line', t => {
-  t.deepEqual(parse('\n\nReview for bugs.\nFocus on: {{focus}}\n'), {
+  t.deepEqual(parse('\n\nReview for bugs.\nFocus on: $1\n'), {
     name: 'review',
     description: 'Review for bugs.',
-    body: 'Review for bugs.\nFocus on: {{focus}}',
-    variables: ['focus'],
+    body: 'Review for bugs.\nFocus on: $1',
+    argumentHint: [],
+    maxPosition: 1,
+    usesRest: false,
     source: 'test',
   });
 });
 
-test('frontmatter supplies the description and leaves the body', t => {
+test('frontmatter supplies the description and argument hint', t => {
   const template = parse(
-    '---\nargument-hint: "<x>"\ndescription: Review staged changes\n---\n\nBody {{x}}\n',
+    '---\nargument-hint: "<focus> [scope]"\nmodel: ignored\ndescription: Review staged changes\n---\n\nBody $1 ${@:2}\n',
   );
   t.is(template.description, 'Review staged changes');
-  t.is(template.body, 'Body {{x}}');
-  t.deepEqual(template.variables, ['x']);
+  t.is(template.body, 'Body $1 ${@:2}');
+  t.deepEqual(template.argumentHint, [
+    { label: 'focus', required: true },
+    { label: 'scope', required: false },
+  ]);
+  t.is(template.maxPosition, 1);
+  t.true(template.usesRest);
 });
 
-test('a placeholder in frontmatter is not a variable', t => {
-  t.deepEqual(parse('---\ndescription: {{no}}\n---\nBody').variables, []);
+test('a placeholder in frontmatter does not count', t => {
+  const template = parse('---\ndescription: $3 $@\n---\nBody');
+  t.is(template.maxPosition, 0);
+  t.false(template.usesRest);
 });
 
 test('quotes around a frontmatter description are removed', t => {
@@ -77,5 +87,6 @@ test('an empty file yields an empty template', t => {
   const template = parse('');
   t.is(template.body, '');
   t.is(template.description, '');
-  t.deepEqual(template.variables, []);
+  t.deepEqual(template.argumentHint, []);
+  t.is(template.maxPosition, 0);
 });

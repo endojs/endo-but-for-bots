@@ -98,6 +98,13 @@ const CommandItem = ({ command, index, selected, onHover, onPick }) =>
     },
     h('span', { class: 'token-prefix' }, '/'),
     h('span', null, command.name),
+    command.argumentHint
+      ? h(
+          'span',
+          { class: 'command-argument-hint' },
+          ` ${command.argumentHint}`,
+        )
+      : null,
     h('span', { class: 'command-desc' }, ` - ${command.description}`),
   );
 harden(CommandItem);

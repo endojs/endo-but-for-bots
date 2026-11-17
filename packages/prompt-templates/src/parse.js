@@ -4,24 +4,26 @@
 
 import harden from '@endo/harden';
 
-import { extractVariables } from './substitute.js';
+import { analyzePlaceholders, parseArgumentHint } from './substitute.js';
 
 const FRONTMATTER_PATTERN = /^---\n([\s\S]*?)\n?---(?:\n|$)/;
-const DESCRIPTION_PATTERN = /^description:[ \t]*(.*?)[ \t]*$/m;
 const QUOTED_PATTERN = /^(["'])(.*)\1$/;
 const BLOCK_SCALAR_PATTERN = /^[|>]/;
 const DESCRIPTION_FALLBACK_LENGTH = 60;
 
 /**
- * Read `description` from frontmatter. Templates use no other frontmatter key,
- * so this reads that one line rather than taking on a YAML parser; a block
- * scalar reads as absent, and the caller falls back to the body.
+ * Read one single-line key from frontmatter. Templates use only
+ * `description` and `argument-hint` and ignore every other key, so this reads
+ * lines rather than taking on a YAML parser; a block scalar reads as absent.
  *
  * @param {string} frontmatter
+ * @param {string} key
  * @returns {string}
  */
-const readDescription = frontmatter => {
-  const match = frontmatter.match(DESCRIPTION_PATTERN);
+const readFrontmatterValue = (frontmatter, key) => {
+  const match = frontmatter.match(
+    new RegExp(`^${key}:[ \\t]*(.*?)[ \\t]*$`, 'm'),
+  );
   if (!match || BLOCK_SCALAR_PATTERN.test(match[1])) {
     return '';
   }
@@ -57,13 +59,19 @@ export const parsePromptTemplate = ({ name, text, source }) => {
     ? normalized.slice(frontmatterMatch[0].length)
     : normalized;
   const body = content.replace(/^\n+/, '').trimEnd();
+  const frontmatter = frontmatterMatch ? frontmatterMatch[1] : '';
+  const { maxPosition, usesRest } = analyzePlaceholders(body);
   return harden({
     name,
     description:
-      (frontmatterMatch && readDescription(frontmatterMatch[1])) ||
+      readFrontmatterValue(frontmatter, 'description') ||
       firstLineDescription(body),
     body,
-    variables: extractVariables(body),
+    argumentHint: parseArgumentHint(
+      readFrontmatterValue(frontmatter, 'argument-hint'),
+    ),
+    maxPosition,
+    usesRest,
     source,
   });
 };
