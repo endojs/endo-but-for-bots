@@ -10,7 +10,7 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { texts, shapes } from '../../guest/lib/interfaces.js';
+import { texts, textOf, shapes } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeSession } from '../../guest/session/session.js';
@@ -476,4 +476,26 @@ test('M1b follow-ups (J-9363): a retry whose staged text differs only past its p
   t.throws(() => s.session.enqueueOnce(withDigest('b'.repeat(64)), id, AT), {
     message: texts.requestIdReused,
   });
+});
+
+test('M1b follow-ups (J-9369): inline text over inlineBytes UTF-8 bytes is refused by the session itself', async t => {
+  const s = await setup();
+  // 5,000 units (under the 8,192-unit guard), 10,000 UTF-8 bytes.
+  const wide = '\u00e9'.repeat(5000);
+  t.throws(
+    () => s.session.enqueueOnce(harden({ text: wide }), requestId(), AT),
+    {
+      message: textOf.inlineTooLarge(10_000, limits.inlineBytes),
+    },
+  );
+  t.throws(() => s.session.startTurn(harden({ text: wide }), AT), {
+    message: textOf.inlineTooLarge(10_000, limits.inlineBytes),
+  });
+  t.deepEqual(s.session.listPending().entries, []);
+  // Exactly inlineBytes still passes.
+  const fits = 'a'.repeat(limits.inlineBytes);
+  t.is(
+    s.session.enqueueOnce(harden({ text: fits }), requestId(), AT).state,
+    'started',
+  );
 });

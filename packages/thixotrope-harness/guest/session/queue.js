@@ -314,6 +314,12 @@ export const makeQueue = ({
     isStaged(submission) ||
       submission.text.trim() !== '' ||
       refuse(texts.blankSubmission);
+    // The frame rule rests on the session, not on its caller (J-9369).
+    if (!isStaged(submission)) {
+      const bytes = utf8Bytes(submission.text);
+      bytes <= limits.inlineBytes ||
+        refuse(textOf.inlineTooLarge(bytes, limits.inlineBytes));
+    }
     REQUEST_ID.test(requestId) || refuse(texts.invalidRequestId);
     const issued = Number(requestId.slice(0, 13));
     (issued > at - limits.retryWindowMs && issued <= at + limits.clockSkewMs) ||

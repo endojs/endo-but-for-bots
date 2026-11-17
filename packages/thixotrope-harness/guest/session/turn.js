@@ -1623,6 +1623,12 @@ export const makeTurnRunner = ({
       if (!isStaged(input) && input.trim() === '') {
         throw Error(texts.blankSubmission);
       }
+      // The frame rule rests on the session, not on its caller (J-9369).
+      if (!isStaged(input) && utf8Bytes(input) > limits.inlineBytes) {
+        throw Error(
+          textOf.inlineTooLarge(utf8Bytes(input), limits.inlineBytes),
+        );
+      }
       if (current !== undefined) throw Error(texts.activeTurn);
       const active = claim(input, at);
       flush();

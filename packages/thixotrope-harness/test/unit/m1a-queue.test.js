@@ -318,7 +318,10 @@ test('QueueEntry is guarded and describes itself', t => {
 
 test('previews are cut so 100 long multi-byte entries plus a hold fit one frame', t => {
   const queue = makeQueue();
-  const euro = '€'.repeat(limits.submissionUnits); // 3 bytes per unit
+  // 3 bytes per unit; the longest inline text the session admits since
+  // J-9369 (inlineBytes of UTF-8; longer text arrives staged, its preview
+  // already cut to messagePreviewUnits).
+  const euro = '€'.repeat(Math.floor(limits.inlineBytes / 3));
   for (let i = 0; i < limits.maxWaiting; i += 1) {
     queue.enqueueOnce(sub(euro), rid(NOW, i), NOW);
   }
@@ -335,7 +338,11 @@ test('previews are cut so 100 long multi-byte entries plus a hold fit one frame'
   // Surrogate pairs are never split by the cut.
   const pairs = makeQueue();
   for (let i = 0; i < limits.maxWaiting; i += 1) {
-    pairs.enqueueOnce(sub('\u{1F600}'.repeat(4000)), rid(NOW, i), NOW);
+    pairs.enqueueOnce(
+      sub('\u{1F600}'.repeat(limits.inlineBytes / 4)),
+      rid(NOW, i),
+      NOW,
+    );
   }
   const pairView = pairs.view();
   t.true(messageBytes(pairView) <= limits.frameBytes);

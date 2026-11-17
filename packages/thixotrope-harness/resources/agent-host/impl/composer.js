@@ -42,6 +42,11 @@ const QUEUE_REFUSALS = new Set([
   texts.receiptLimit,
   textOf.queueFull(limits.maxWaiting),
 ]);
+/** Text that starts a refusal the session makes before storing anything. */
+const REFUSAL_PREFIXES = [
+  'In "enqueueOnce" method of (Session)',
+  'Inline text of ',
+];
 
 /**
  * Whether `error` is the session's refusal of a submission it did not
@@ -60,7 +65,7 @@ export const isRefusal = error => {
   if (typeof message !== 'string') return false;
   return (
     QUEUE_REFUSALS.has(message) ||
-    message.startsWith('In "enqueueOnce" method of (Session)')
+    REFUSAL_PREFIXES.some(prefix => message.startsWith(prefix))
   );
 };
 harden(isRefusal);
