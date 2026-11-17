@@ -170,6 +170,7 @@ test('thinking is kept as opaque native context: staged, never published, replay
   server.setPlan([{ sse: 'anthropic-thinking.sse' }]);
   const r = await run(server);
   t.teardown(r.cleanup);
+  t.deepEqual(r.failures, []);
   const [final] = r.finals;
   t.is(final.text, 'Hi there.');
   t.truthy(final.nativeContext, 'native context in the result');

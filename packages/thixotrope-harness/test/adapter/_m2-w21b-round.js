@@ -5,7 +5,7 @@
 // session's channel and real blob files under H/tmp. Shared by
 // m2-w21b-anthropic.test.js and m2-w21b-retry.test.js; the same shape as
 // W2.1a's runRound in m2-w21a-openrouter.test.js, for any API provider.
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 
 /* eslint-disable import/no-relative-packages */
@@ -71,12 +71,15 @@ const makeFakeTurn = ({ dispatch = true } = {}) => {
   return { turn, sink, finals, failures, progress };
 };
 
-let dirSerial = 0;
+/**
+ * A fresh blob directory under H/tmp (rule 6). `mkdtemp`, not a pid and a
+ * counter: AVA runs test files in worker threads of one process, so two
+ * files importing this helper would share `<pid>-1` and remove each
+ * other's files.
+ */
 const testBlobs = () => {
-  dirSerial += 1;
-  const dir = join(harnessTmp, `w21b-${process.pid}-${dirSerial}`);
-  mkdirSync(dir, { recursive: true });
-  return makeTestBlobs({ dir });
+  mkdirSync(harnessTmp, { recursive: true });
+  return makeTestBlobs({ dir: mkdtempSync(join(harnessTmp, 'w21b-')) });
 };
 
 /**
