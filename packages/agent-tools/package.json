@@ -171,8 +171,8 @@
     "@endo/platform": "workspace:^"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "^0.87.1",
-    "@earendil-works/pi-ai": "^0.87.1",
+    "@earendil-works/pi-agent-core": "^1.4.0",
+    "@earendil-works/pi-ai": "^1.4.0",
     "@endo/daemon": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/git": "workspace:^",
@@ -188,8 +188,8 @@
     "typescript": "catalog:dev"
   },
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": "^0.87.1",
-    "@earendil-works/pi-ai": "^0.87.1"
+    "@earendil-works/pi-agent-core": "^1.4.0",
+    "@earendil-works/pi-ai": "^1.4.0"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-agent-core": {

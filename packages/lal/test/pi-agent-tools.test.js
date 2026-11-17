@@ -82,12 +82,15 @@ const makeScriptedStreamFn = script => {
       stopReason: 'stop',
     };
     turn += 1;
+    // Left unhardened: pi-ai 1.x's event stream stamps `durationMs` onto
+    // the final message it receives via `done` / `end()`, so a frozen
+    // message fails the turn with "object is not extensible".
     /** @type {any} */
-    const finalMessage = harden({
+    const finalMessage = {
       ...partial,
       content: next.content,
       stopReason: next.stopReason,
-    });
+    };
     // Per the AssistantMessageEvent contract, emit `start` (so the loop
     // attaches the partial), then `done` with the final message.
     stream.push({ type: 'start', partial });
