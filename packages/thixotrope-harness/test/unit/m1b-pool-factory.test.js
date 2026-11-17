@@ -15,7 +15,10 @@ import { createHash } from 'node:crypto';
 import { m1bShapes, shapes } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { makeFactoryKit, stagingSources } from '../../guest/factory/factory.js';
-import { makeListFeed } from '../../guest/factory/list-feed.js';
+import {
+  MAX_BATCHES_PER_FLUSH,
+  makeListFeed,
+} from '../../guest/factory/list-feed.js';
 import { make } from '../../guest/factory/main.js';
 import {
   MAX_REFILL_FAILURES,
@@ -798,4 +801,52 @@ test('a root without a pool (M1a) refuses the pool methods', async t => {
   await t.throwsAsync(() => E(root).whenSettled(), {
     message: /no spare pool/,
   });
+});
+
+test("M1b QC: rows over one flush's batch cap are published in a later crank, not left waiting", async t => {
+  /** @type {any[]} */
+  const batches = [];
+  const publisher = Far('ListPublisher', {
+    publish: (/** @type {any} */ batch) => {
+      batches.push(batch);
+    },
+  });
+  let refreshes = 0;
+  const admin = Far('AgentHostAdmin', {
+    listPublisher: () => {
+      refreshes += 1;
+      return publisher;
+    },
+  });
+  const feed = makeListFeed({
+    admin,
+    listed: (/** @type {any} */ row) =>
+      harden({
+        session: row.session,
+        key: row.key,
+        title: row.key,
+        state: 'ready',
+        activity: 'passive',
+        backendTitle: 'b',
+        modelId: 'm',
+        messageCount: 0,
+        queuedCount: 0,
+      }),
+    isListed: () => true,
+  });
+  await feed.refresh();
+  const n = MAX_BATCHES_PER_FLUSH * limits.publishBatchEvents + 10;
+  const session = Far('Session', {});
+  for (let i = 0; i < n; i += 1)
+    feed.changed(/** @type {any} */ ({ key: `s${i}`, session }));
+  feed.flush();
+  t.is(batches.length, 0, 'sendOnly: nothing arrived yet');
+  await settle();
+  const events = batches.flatMap(b => b.events);
+  t.is(events.length, n, 'every row was published');
+  t.is(refreshes, 2, 'the rest waited for one refresh');
+  t.deepEqual(
+    batches.map(b => b.rev),
+    batches.map((_, i) => i + 1),
+  );
 });

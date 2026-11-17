@@ -16,7 +16,8 @@
  * `{ type: 'row-removed', session, key }` for a row that had been published
  * and is gone. A batch holds at most `publishBatchEvents` events and
  * `frameBytes` bytes; more rows split into more batches, each its own rev,
- * at most `MAX_BATCHES_PER_FLUSH` per flush (the rest wait for the next).
+ * at most `MAX_BATCHES_PER_FLUSH` per flush; the rest go out in the crank
+ * a publisher refresh answers in.
  *
  * When it flushes: on a microtask after the first change of a crank (so the
  * crank's later changes join it), and when the factory calls `flush()`.
@@ -118,12 +119,33 @@ export const makeListFeed = ({ admin, listed, isListed }) => {
       }
     }
     if (events.length > 0) send(events);
+    if (pending.size > 0) {
+      // Over this crank's batches (M1b QC advisory): the rest go out in a
+      // later crank, the one the manager's answer arrives in, which also
+      // fetches the current publisher.
+      scheduled = true;
+      void refresh().then(flush);
+    }
   };
 
   const schedule = () => {
     if (scheduled) return;
     scheduled = true;
     void Promise.resolve().then(flush);
+  };
+
+  /**
+   * Fetch the current adapter incarnation's publisher (every start).
+   * Settles either way; a manager without `listPublisher` leaves the
+   * feed unpublished.
+   */
+  const refresh = async () => {
+    counts.refreshes += 1;
+    try {
+      publisher = await E(admin).listPublisher();
+    } catch {
+      publisher = undefined;
+    }
   };
 
   return harden({
@@ -146,19 +168,7 @@ export const makeListFeed = ({ admin, listed, isListed }) => {
     flush,
     /** The rev of the last batch numbered. */
     rev: () => rev,
-    /**
-     * Fetch the current adapter incarnation's publisher (every start).
-     * Settles either way; a manager without `listPublisher` leaves the
-     * feed unpublished.
-     */
-    refresh: async () => {
-      counts.refreshes += 1;
-      try {
-        publisher = await E(admin).listPublisher();
-      } catch {
-        publisher = undefined;
-      }
-    },
+    refresh,
     /** Counters (tests, diagnostics). */
     counts: () => harden({ ...counts, pending: pending.size }),
   });
