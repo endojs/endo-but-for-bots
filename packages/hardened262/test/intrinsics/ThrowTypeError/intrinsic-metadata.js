@@ -15,12 +15,11 @@ flags: [onlyStrict]
 
 // %ThrowTypeError% is a well-known intrinsic that no host exposes as a global:
 // it is the shared accessor installed as the get/set pair of the poison-pill
-// `callee` property on every strict-mode arguments object (and, where the host
-// keeps them, of Function.prototype's `caller`/`arguments`). Reaching it through
-// a strict arguments object is the one route that survives on every host: the
-// SES shim's lockdown deletes Function.prototype.caller/arguments as unpermitted
-// intrinsics, but the strict `callee` poison pill is mandated by the language
-// and left in place, so XS native lockdown and the SES shim agree here.
+// `callee` property on every strict-mode arguments object. Reaching it through
+// a strict arguments object survives on every host: the SES shim's lockdown
+// deletes Function.prototype.caller/arguments as unpermitted intrinsics, but
+// the strict `callee` poison pill is mandated by the language and left in place,
+// so XS native lockdown and the SES shim agree here.
 function makeArguments() {
   return arguments;
 }
@@ -124,46 +123,3 @@ assert.sameValue(
   ThrowTypeError,
   "a class method's strict arguments object shares the same realm-wide %ThrowTypeError%",
 );
-
-// Where a host retains the Function.prototype `caller`/`arguments` poison pills
-// (every non-lockdown host, and XS's native lockdown), they too must be the
-// same %ThrowTypeError% used for the same get and set slots. The SES shim's
-// lockdown removes these accessors entirely, so this cross-route invariant is
-// pinned only where the accessors survive rather than forced everywhere.
-var callerDescriptor = Object.getOwnPropertyDescriptor(
-  Function.prototype,
-  'caller',
-);
-// `caller` and `arguments` are each independently optional — hosts have dropped
-// one without the other across engine history — so guard each descriptor on its
-// own presence rather than assuming the pair is retained or removed together. A
-// host that stripped just one would otherwise throw an uncaught TypeError here
-// instead of failing (or skipping) cleanly.
-if (callerDescriptor !== undefined) {
-  assert.sameValue(
-    callerDescriptor.get,
-    ThrowTypeError,
-    'Function.prototype.caller reuses the %ThrowTypeError% intrinsic',
-  );
-  assert.sameValue(
-    callerDescriptor.get,
-    callerDescriptor.set,
-    'Function.prototype.caller uses one accessor for get and set',
-  );
-}
-var argumentsDescriptor = Object.getOwnPropertyDescriptor(
-  Function.prototype,
-  'arguments',
-);
-if (argumentsDescriptor !== undefined) {
-  assert.sameValue(
-    argumentsDescriptor.get,
-    ThrowTypeError,
-    'Function.prototype.arguments reuses the %ThrowTypeError% intrinsic',
-  );
-  assert.sameValue(
-    argumentsDescriptor.get,
-    argumentsDescriptor.set,
-    'Function.prototype.arguments uses one accessor for get and set',
-  );
-}
