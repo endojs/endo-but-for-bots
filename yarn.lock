@@ -2750,7 +2750,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/jsonl-transcript@workspace:packages/jsonl-transcript":
+"@endo/jsonl-transcript@workspace:^, @endo/jsonl-transcript@workspace:packages/jsonl-transcript":
   version: 0.0.0-use.local
   resolution: "@endo/jsonl-transcript@workspace:packages/jsonl-transcript"
   dependencies:
@@ -2779,6 +2779,7 @@ __metadata:
     "@endo/harden": "workspace:^"
     "@endo/hosted-agent": "workspace:^"
     "@endo/init": "workspace:^"
+    "@endo/jsonl-transcript": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/marshal": "workspace:^"
     "@endo/patterns": "workspace:^"
