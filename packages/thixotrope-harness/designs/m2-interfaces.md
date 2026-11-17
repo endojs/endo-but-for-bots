@@ -783,7 +783,14 @@ backend's key through its grant in process at every round (R4-82): `sink.resolve
 incarnation, then the store (audited, section 9). `AH/providers/round.js` (W2.1a) holds the shared
 round driver (`runProviderRound({ req, channel, prepare, blobs, log, stream })`, where `stream` is
 an async iterator of `{ delta } | { toolCall } | { usage } | { stop }` events) so both API providers
-and later ones use one implementation of dispatch, progress, staging and limits.
+and later ones use one implementation of dispatch, progress, staging and limits. W2.1a: `stream` is
+passed as a function `({ projection, signal }) => AsyncIterable<event>`, called only after round 0's
+`dispatching(0)` answered `true` (the request must not leave before), with `signal` aborted by
+cancel or release; events add `{ servedBy: { modelId?, provider? } }`; a failure is a thrown
+`ProviderFailure` (`round.js`) whose `reason` is one of the fixed texts below, never built from a
+body. Further options: `owner`, `control` (`makeRoundControl()`), `timers`, `now`, `label`.
+`ServedBy` gains an optional `provider` (R4-108: OpenRouter's upstream provider, recorded per
+round), additive.
 
 - **OpenRouter** (R4-12, R4-13, R4-41; G-03): chat completions with `stream: true`, `tools` and
   `tool_choice: 'auto'` when tools exist; SSE parsed linearly (`AH/providers/sse.js`, from lal
@@ -1078,6 +1085,8 @@ Exact strings are in `interfaces.js`; `m2-interfaces.test.js` checks them.
 | `textOf.openRouterStopped(reason, served)` | `OpenRouter completion stopped: <reason><served>` | R4-78 (lal :458, :471) |
 | `textOf.openRouterEmpty(details)` | `OpenRouter returned an empty assistant response<details>` | R4-78 (lal :497) |
 | `textOf.servedBy(parts)` | ` (served by <model>, via <provider>)` or empty | lal :148-156 |
+| `textOf.openRouterApiError(details)` | `OpenRouter returned an API error<details>` | R4-79 (lal :379; W2.1a: a stream chunk's `error`) |
+| `textOf.openRouterNoMessage(details)` | `OpenRouter returned no successful assistant message<details>` | R4-79 (lal :394; finish reason `error`, or a stream with no choice) |
 | `texts.openRouterModelPrefix` | `OpenRouter model must include its organization prefix` | R4-21 (Fae `session/provider-connections.js:546`) |
 | `texts.catalogUnavailable` | `Model catalog unavailable for the provider backend; no model can be admitted now` | A.4 (Fae :590) |
 | `textOf.unknownProviderModel(id)` | `Unknown model "<id>" for the provider backend` | A.4 (Fae :600) |

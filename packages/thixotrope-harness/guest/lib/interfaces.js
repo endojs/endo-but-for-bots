@@ -507,6 +507,20 @@ export const textOf = harden({
   openRouterEmpty: details =>
     `OpenRouter returned an empty assistant response${details}`,
   /**
+   * R4-79 (lal providers/openrouter.js:379): an `error` object in the
+   * answer (W2.1a: in a stream chunk). `details` as `served`, with the
+   * error's code when it has an identifier's shape.
+   * @param {string} details
+   */
+  openRouterApiError: details => `OpenRouter returned an API error${details}`,
+  /**
+   * R4-79 (lal providers/openrouter.js:394): no choice, or a choice that
+   * finished with `error`. `details` as `served`.
+   * @param {string} details
+   */
+  openRouterNoMessage: details =>
+    `OpenRouter returned no successful assistant message${details}`,
+  /**
    * The parenthesised detail of OpenRouter failures (lal
    * providers/openrouter.js:148-156): ` (served by m, via p)`, or ''.
    * Values are the provider's model and provider names only, never a body.
@@ -676,7 +690,9 @@ const m1aShapeBuilders = {
       parameters: text(limits.toolParametersUnits),
     }),
   /** Who served a round (R4-50, R4-108). */
-  ServedBy: () => record({ label: S.Label, modelId: S.ModelId }),
+  // M2 W2.1a: OpenRouter also names the upstream provider (R4-108).
+  ServedBy: () =>
+    record({ label: S.Label, modelId: S.ModelId }, { provider: S.Label }),
   TurnStarted: () =>
     record({
       kind: 'turn-started',

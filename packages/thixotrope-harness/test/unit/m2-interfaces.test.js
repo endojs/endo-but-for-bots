@@ -889,6 +889,14 @@ test('the fixed M2 texts', t => {
     'OpenRouter returned an empty assistant response',
   );
   t.is(
+    textOf.openRouterApiError(' (code 502)'),
+    'OpenRouter returned an API error (code 502)',
+  );
+  t.is(
+    textOf.openRouterNoMessage(''),
+    'OpenRouter returned no successful assistant message',
+  );
+  t.is(
     textOf.unknownProviderModel('org/x'),
     'Unknown model "org/x" for the provider backend',
   );
