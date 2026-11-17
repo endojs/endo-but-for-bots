@@ -476,8 +476,17 @@ export const make = ({ makeManager }) => {
        */
       open: async host => {
         const session = await whenBound(host);
+        // M2 (W2.7 for W2.8, J-0494): the session's archive key travels with
+        // the open, so the adapter needs no resolveSessions crank for it.
+        const archiveKey = archiveKeyOf(session);
         return withOps(current =>
-          E(current).open(harden({ backend, spec, session })),
+          E(current).open(
+            harden(
+              archiveKey === null
+                ? { backend, spec, session }
+                : { backend, spec, session, archiveKey },
+            ),
+          ),
         );
       },
     });
