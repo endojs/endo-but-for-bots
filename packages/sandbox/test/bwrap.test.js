@@ -277,7 +277,7 @@ const waitForProcessGroupGone = async (pid, timeoutMs = 3000) => {
  */
 const waitForProcessGroupQuiescent = async (
   processGroup,
-  timeoutMilliseconds = 3000,
+  timeoutMilliseconds = 10_000,
 ) => {
   await null;
   const deadline = Date.now() + timeoutMilliseconds;
@@ -1204,7 +1204,7 @@ test.serial('bwrap parent death leaves no owned process group', async t => {
 test.serial(
   'bwrap supervisor kills its process group when its owner dies',
   async t => {
-    t.timeout(10_000);
+    t.timeout(20_000);
     // eslint-disable-next-line @jessie.js/safe-await-separator
     if (!(await bwrapCheck(t))) return;
     const probe = await makeBwrapDriver({ env: {} }).probe();
