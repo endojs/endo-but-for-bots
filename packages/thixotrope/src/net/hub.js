@@ -566,6 +566,28 @@ export const makeOcapnHub = ({
 
   // --- persistence ---
 
+  /**
+   * How commits cluster, for the group-commit estimate (C-2): `bursts` counts
+   * the runs of persists with no microtask checkpoint between them (the
+   * frames of one transport read are delivered in one tick queue, which
+   * drains before any microtask), `persists` all of them, `max` the longest
+   * run. `persists - bursts` is how many fsyncs one commit per run would have
+   * saved. Process-local, never persisted.
+   */
+  const persistRuns = { bursts: 0, persists: 0, max: 0 };
+  let persistRun = 0;
+  const notePersistRun = () => {
+    if (persistRun === 0) {
+      persistRuns.bursts += 1;
+      void Promise.resolve().then(() => {
+        persistRun = 0;
+      });
+    }
+    persistRun += 1;
+    persistRuns.persists += 1;
+    if (persistRun > persistRuns.max) persistRuns.max = persistRun;
+  };
+
   let deliveryDepth = 0;
   const persist = () => {
     if (deliveryDepth > 0) return;
@@ -585,6 +607,7 @@ export const makeOcapnHub = ({
     try {
       const result = store.setState(state);
       if (typeof result === 'number') written = result;
+      notePersistRun();
     } finally {
       const bucket = measuring ?? costs.outside;
       bucket.persists += 1;
@@ -2727,13 +2750,15 @@ export const makeOcapnHub = ({
      * any inbound delivery. Milliseconds read 0 without a `now` clock.
      * `persistChars` adds up what the store says each persist wrote (0 for a
      * store that does not say); `store` is the store's own counters, when it
-     * keeps any.
+     * keeps any; `persistRuns` how persists cluster between microtask
+     * checkpoints (the group-commit estimate).
      */
     stats: () =>
       harden({
         gcOnly: { ...costs.gcOnly },
         other: { ...costs.other },
         outside: { ...costs.outside },
+        persistRuns: { ...persistRuns },
         ...(store.stats ? { store: { ...store.stats() } } : {}),
       }),
     /**
