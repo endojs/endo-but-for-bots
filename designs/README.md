@@ -506,7 +506,7 @@ LLM-agent stack).*
 | [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md) | 2026-05-15 | 2026-05-15 | In Progress |
 | [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) | 2026-05-15 | 2026-05-15 | In Progress |
 | [endopi-skills-markdown-format](endopi-skills-markdown-format.md) | 2026-05-15 | 2026-05-15 | Proposed |
-| [endopi-prompt-templates](endopi-prompt-templates.md) | 2026-05-15 | 2026-05-15 | Proposed |
+| [endopi-prompt-templates](endopi-prompt-templates.md) | 2026-05-15 | 2026-11-17 | Proposed |
 | [endopi-iterative-compaction](endopi-iterative-compaction.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | 2026-05-15 | 2026-05-15 | In Progress |
 | [endopi-extension-package-manifest](endopi-extension-package-manifest.md) | 2026-05-15 | 2026-05-15 | Proposed |
@@ -2093,7 +2093,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endopi-provider-registry-and-oauth | M | 4-5 days | 3 | Registry shape for LLM providers; subscription OAuth (Claude Pro, ChatGPT Plus, Copilot); cross-provider handoff. Partially satisfied today: `packages/genie` ships `pi-ai`'s full registry plus an ollama adaptor; remaining scope is OAuth + cross-provider handoff + Lal-vs-Genie consolidation. |
 | endopi-iterative-compaction | S-M | 3 days | 9 | Auto-compaction algorithm matching Pi's released shape; substrate for [lal-transcript-memory-management](lal-transcript-memory-management.md). Partially satisfied today: `packages/genie`'s observer/reflector subagent pair is a working iterative compactor. |
 | endopi-skills-markdown-format | S-M | 3 days | 10 | On-disk SKILL.md format (agentskills.io); paired with [endoclaw-skill-registry](endoclaw-skill-registry.md) |
-| endopi-prompt-templates | S | 1-2 days | 9 | Reusable user-prompt scaffolds with `{{var}}` expansion; shares skills' discovery walker |
+| endopi-prompt-templates | S | 1-2 days | 9 | Reusable user-prompt scaffolds with Pi-compatible `$1` / `$@` arguments; shares skills' discovery walker |
 | endopi-stdio-rpc-bridge | M | 4-5 days | 3 | LF-delimited JSONL RPC for embedding the Lal/Fae agent in another process; short-term shape before `endor-bus-tui` |
 | endopi-extension-package-manifest | S-M | 3 days | 10 | `package.json` `endo` keyword bundling guests + skills + prompts + providers in one install |
 | app-sharing-milestone | — | — | 8 | Roadmap doc; no implementation of its own (reference for the P0-P3 sequencing) |
