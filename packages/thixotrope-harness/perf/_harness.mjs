@@ -45,6 +45,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import url from 'node:url';
 
+import { limits as harnessLimits } from '../config/defaults.js';
 import { acquireRunLock } from '../scripts/run-lock.mjs';
 import {
   DEFAULT_CRANK_BUDGET,
@@ -157,7 +158,7 @@ export const checkBudget = (observed, budget) => {
 /** Machine load average (1, 5, 15 minutes). */
 export const loadAvg = () => os.loadavg().map(v => +v.toFixed(2));
 
-/** @type {{ commit: string, workerSha256: string | null } | undefined} */
+/** @type {{ commit: string, workerSha256: string | null, slotCeiling: number } | undefined} */
 let identity;
 /** The commit (with "-dirty" for local changes) and the worker's SHA-256. */
 export const runIdentity = async () => {
@@ -192,7 +193,11 @@ export const runIdentity = async () => {
   } catch {
     // No worker built: recorded as null.
   }
-  identity = { commit, workerSha256 };
+  // The served daemon's slot ceiling (scripts/serve.mjs default, M1b QC).
+  const slotCeiling = Number(
+    process.env.THIXOTROPE_SLOT_CEILING ?? harnessLimits.slotCeiling,
+  );
+  identity = { commit, workerSha256, slotCeiling };
   return identity;
 };
 

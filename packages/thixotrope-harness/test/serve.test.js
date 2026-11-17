@@ -119,9 +119,18 @@ test('the supervisor environment is the allowlist plus the budget', t => {
     HOME: '/home/u',
     PATH: '/bin',
     THIXOTROPE_TRACE: '1',
+    THIXOTROPE_SLOT_CEILING: '4000000',
     THIXOTROPE_CRANK_BUDGET: '50000000',
     THIXOTROPE_MAX_DELIVERY_ATTEMPTS: '5',
   });
+  // A host value wins over the harness default (M1b QC, J-0392).
+  t.is(
+    allowlistEnvironment(
+      { ...env, THIXOTROPE_SLOT_CEILING: '1000000' },
+      { crankBudget: 50_000_000n },
+    ).THIXOTROPE_SLOT_CEILING,
+    '1000000',
+  );
   for (const name of Object.keys(out))
     t.true(
       ENV_ALLOWLIST.includes(name) || name === 'THIXOTROPE_CRANK_BUDGET',

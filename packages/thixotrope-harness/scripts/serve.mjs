@@ -225,7 +225,9 @@ export const defaultMaxDeliveryAttempts = env => {
 
 /**
  * The supervisor's environment: the allowlisted host variables, the chosen
- * crank budget and the crash bound, nothing else.
+ * crank budget and the crash bound, and the harness's slot ceiling
+ * (`limits.slotCeiling`) unless the host sets `THIXOTROPE_SLOT_CEILING`,
+ * nothing else.
  * @param {Record<string, string | undefined>} env
  * @param {{ crankBudget: bigint, maxDeliveryAttempts?: number }} options
  * @returns {Record<string, string>}
@@ -240,6 +242,7 @@ export const allowlistEnvironment = (
     const value = env[name];
     if (value !== undefined) out[name] = value;
   }
+  out.THIXOTROPE_SLOT_CEILING ??= String(limits.slotCeiling);
   out.THIXOTROPE_CRANK_BUDGET = String(crankBudget);
   out.THIXOTROPE_MAX_DELIVERY_ATTEMPTS = String(
     parseMaxDeliveryAttempts('maxDeliveryAttempts', maxDeliveryAttempts),
