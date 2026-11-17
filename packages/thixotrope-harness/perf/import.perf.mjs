@@ -6,6 +6,7 @@
  *
  *   node perf/import.perf.mjs            # 5,000 turns
  *   IMPORT_TURNS=5000,30000 node perf/import.perf.mjs
+ *   IMPORT_SHAPE=plain ...   # 4-record turns without a tool call
  *
  * Each length gets a fresh state from the m1a template (the real session
  * program, the scripted backend). The synthetic turns are the one-tool-call
@@ -56,7 +57,12 @@ await runPerf('import', async ({ provision, root }) => {
       `${path.basename(root)}-${turns}.jsonl`,
     );
     const written = await writeSyntheticExport(file, [
-      { title: `imported ${turns}`, turns, backendLabel: 'Scripted' },
+      {
+        title: `imported ${turns}`,
+        turns,
+        backendLabel: 'Scripted',
+        shape: process.env.IMPORT_SHAPE === 'plain' ? 'plain' : 'tool',
+      },
     ]);
     const disk0 = await diskOf(state.root);
     let mark = { turns: 0, ms: 0, chunks: 0 };
@@ -92,6 +98,7 @@ await runPerf('import', async ({ provision, root }) => {
       metric: 'import.rate',
       unit: 'turns/s',
       length: turns,
+      shape: process.env.IMPORT_SHAPE === 'plain' ? 'plain' : 'tool',
       turns: result.turns,
       records: result.records,
       chunks: result.chunks,
