@@ -1,9 +1,15 @@
 //! Pure acceptance policy, testable without building XS. A cost gap is data,
 //! never a conformance failure; release vectors pin IronHorse's own costs.
 
-/// Each observation is (completed, rendered result, computrons).
+/// The IronHorse observation is `(completed, rendered result, computrons)`.
+/// The oracle observation is `(completed, rendered result, spec spelling,
+/// computrons)`: its third field is ECMA-262 `Number::toString` of the
+/// completion's exact IEEE-754 double when the completion was a Number, and
+/// `None` otherwise, so the computrons sit at `.3` on the oracle side and `.2`
+/// on the IronHorse side. The caller derives the spec spelling (this module
+/// stays dependency-free so CI can test it with a bare `rustc --test`).
 pub(crate) fn compare_observations(
-    oracle: (bool, &str, u64),
+    oracle: (bool, &str, Option<&str>, u64),
     ironhorse: (bool, &str, u64),
 ) -> Result<Option<(u64, u64)>, String> {
     if oracle.0 != ironhorse.0 {
@@ -12,108 +18,29 @@ pub(crate) fn compare_observations(
             oracle.0, ironhorse.0
         ));
     }
-    if oracle.0 && !results_agree(oracle.1, ironhorse.1) {
+    if oracle.0 && !results_agree(oracle.1, oracle.2, ironhorse.1) {
         return Err(format!(
             "result: oracle={:?} ironhorse={:?}",
             oracle.1, ironhorse.1
         ));
     }
-    Ok((oracle.0 && oracle.2 != ironhorse.2).then_some((oracle.2, ironhorse.2)))
+    Ok((oracle.0 && oracle.3 != ironhorse.2).then_some((oracle.3, ironhorse.2)))
 }
 
-/// Whether two completion result strings denote the same guest value.
+/// Whether IronHorse's completion string denotes the oracle's completion.
 ///
-/// Byte-identical strings agree. Beyond that, a **Number** completion is
-/// compared by its IEEE-754 double rather than its decimal spelling. XS's
-/// `fx_dtoa` renders some large integer-valued doubles in a non-shortest,
-/// exact-integer form — finding `d99d263fcf6ca7a7` reproduced
-/// `327155712 * ((327155712 * (729808896 % 603979776)) % 729808896)`, whose
-/// value is the exactly-representable double `57632001481506816`, which XS
-/// prints verbatim (17 digits). ironhorse — like V8/SpiderMonkey and
-/// ECMA-262 §6.1.6.1.20's "k is as small as possible" — prints the *shortest*
-/// round-tripping decimal, `57632001481506820` (16 digits). Both spellings
-/// parse back to the identical double, so the two engines computed the same
-/// value and disagree only on rendering; forcing byte-identity would make
-/// ironhorse reproduce XS's non-shortest, non-conformant rendering.
-///
-/// Comparing the parsed doubles suppresses that spurious spelling divergence
-/// while still flagging every genuine value divergence — ALMOST. The reasoning
-/// it rested on was "two *different* doubles never share a parse, so
-/// `a.to_bits() == b.to_bits()` fails the moment the engines actually computed
-/// different numbers". That holds only while both renderings round-trip, and
-/// XS's does not always: `xsdtoa.c:56` defines David Gay's `ROUND_BIASED`, so
-/// XS can emit a spelling sitting EXACTLY on the boundary between two doubles
-/// and read it back by rounding up rather than to even. Parsed here with
-/// ties-to-even, that spelling lands on the OTHER double, and the check
-/// reported a value divergence where there was none.
-///
-/// `differential_source` found one: the doubles were byte-identical
-/// (`247,255,255,255,255,199,102,195`) and both engines answered `true` to
-/// `expr === -51298814505516984`, yet XS rendered `-51298814505516980` — the
-/// exact midpoint down — and the comparison read that back as
-/// `-51298814505516976`. A false positive, and the exact inverse of the family
-/// this function was written for.
-///
-/// So a boundary spelling is treated as what it is: AMBIGUOUS. It denotes
-/// either neighbour depending on the reader's tie rule, and the engines agree
-/// if ironhorse's double is one of them. Restricted to integral values, where
-/// the midpoint is itself an integer and the comparison is exact; a genuine
-/// value divergence of more than one ulp, or between non-integral values, is
-/// unaffected.
-pub(crate) fn results_agree(oracle: &str, ironhorse: &str) -> bool {
-    if oracle == ironhorse {
-        return true;
-    }
-    match (as_ecma_number(oracle), as_ecma_number(ironhorse)) {
-        (Some(a), Some(b)) => a.to_bits() == b.to_bits() || oracle_spelling_is_a_tie(oracle, b),
-        _ => false,
-    }
-}
-
-/// Whether `oracle` is the exact decimal midpoint between `ironhorse` and one
-/// of its two adjacent doubles — the one shape a `ROUND_BIASED` renderer emits
-/// that a ties-to-even parser reads back as the neighbour.
-///
-/// Integral values only. Both doubles and the midpoint are then exact integers,
-/// so the test is done in `i128` and involves no rounding of its own.
-fn oracle_spelling_is_a_tie(oracle: &str, ironhorse: f64) -> bool {
-    let exact = |v: f64| -> Option<i128> {
-        (v.is_finite() && v.fract() == 0.0 && v.abs() < 9.0e18).then_some(v as i128)
-    };
-    let Some(here) = exact(ironhorse) else {
-        return false;
-    };
-    // The oracle's text must itself be an exact decimal integer; anything with
-    // an exponent or a fraction is not the shape this rule is about.
-    let Ok(spelled) = oracle.parse::<i128>() else {
-        return false;
-    };
-    [ironhorse.next_down(), ironhorse.next_up()]
-        .into_iter()
-        .filter_map(exact)
-        .any(|neighbour| {
-            let sum = here + neighbour;
-            sum % 2 == 0 && sum / 2 == spelled
-        })
-}
-
-/// Parse a completion string as the ECMAScript `String()` of a finite
-/// Number, or `None` when it is not a plain decimal Number spelling — so
-/// `"Infinity"`, `"NaN"`, booleans, and string results fall through to the
-/// byte comparison in [`results_agree`] (and `Infinity`/`NaN` already match
-/// byte-for-byte anyway). The character allow-list is what keeps Rust's
-/// float parser from accepting `inf`/`nan`/`infinity`, which JS never prints.
-fn as_ecma_number(s: &str) -> Option<f64> {
-    if s.is_empty() {
-        return None;
-    }
-    if !s
-        .bytes()
-        .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'))
-    {
-        return None;
-    }
-    s.parse::<f64>().ok().filter(|v| v.is_finite())
+/// When the oracle's completion was a Number, IronHorse must spell it exactly
+/// as `oracle_spelling`, the ECMA-262 `Number::toString` of the oracle's exact
+/// double; XS's own spelling is ignored because it is not always shortest or
+/// round-tripping. Step 5 of 6.1.6.1.20 leaves `s` open at an exact decimal
+/// tie; both spellers resolve it by Note 2 (the even digit), so the spelling
+/// is fully determined and any other digits are a divergence. Otherwise the
+/// oracle has reported that the completion was not a Number (a String, BigInt,
+/// Boolean, and so on), so the strings must be byte-identical: re-inferring a
+/// Number from a numeric-looking spelling would hide a divergence such as the
+/// String `"1e2"` against `"100"`.
+pub(crate) fn results_agree(oracle: &str, oracle_spelling: Option<&str>, ironhorse: &str) -> bool {
+    ironhorse == oracle_spelling.unwrap_or(oracle)
 }
 
 #[cfg(test)]
@@ -123,21 +50,23 @@ mod tests {
     #[test]
     fn recalibration_is_advisory_even_at_extreme_costs() {
         assert_eq!(
-            compare_observations((true, "42", 1), (true, "42", u64::MAX)),
+            compare_observations((true, "42", None, 1), (true, "42", u64::MAX)),
             Ok(Some((1, u64::MAX)))
         );
         assert_eq!(
-            compare_observations((true, "42", 1), (true, "42", 1)),
+            compare_observations((true, "42", None, 1), (true, "42", 1)),
             Ok(None)
         );
     }
 
     #[test]
     fn cost_drift_never_hides_a_semantic_failure() {
-        assert!(compare_observations((true, "42", 1), (false, "42", 2))
-            .unwrap_err()
-            .starts_with("completion:"));
-        assert!(compare_observations((true, "42", 1), (true, "43", 2))
+        assert!(
+            compare_observations((true, "42", None, 1), (false, "42", 2))
+                .unwrap_err()
+                .starts_with("completion:")
+        );
+        assert!(compare_observations((true, "42", None, 1), (true, "43", 2))
             .unwrap_err()
             .starts_with("result:"));
     }
@@ -148,70 +77,209 @@ mod tests {
     /// Both engines held the SAME double: byte-identical IEEE-754
     /// (`247,255,255,255,255,199,102,195`) and both answered `true` to
     /// `expr === -51298814505516984`. XS rendered the exact midpoint down,
-    /// which ties-to-even reads back as `-51298814505516976`, so the by-double
-    /// comparison called it a value divergence and the target panicked.
+    /// which ties-to-even reads back as `-51298814505516976`. Comparing
+    /// against the spec spelling of the oracle's exact double ignores XS's
+    /// biased boundary spelling entirely.
     #[test]
     fn a_biased_boundary_spelling_is_not_a_value_divergence() {
-        assert!(results_agree("-51298814505516980", "-51298814505516984"));
+        // The second argument is the spec spelling of the oracle's exact
+        // double (`xs_oracle::number_to_ecma_string`).
+        assert!(results_agree(
+            "-51298814505516980",
+            Some("-51298814505516984"),
+            "-51298814505516984"
+        ));
         // The positive-signed member of the same class.
-        assert!(results_agree("51298814505517060", "51298814505517064"));
-        // And it is genuinely the tie that does it, not mere proximity: the
-        // midpoint is 51298814505517060, so 51298814505517058 is not it.
-        assert!(!results_agree("51298814505517058", "51298814505517064"));
+        assert!(results_agree(
+            "51298814505517060",
+            Some("51298814505517064"),
+            "51298814505517064"
+        ));
+        // XS's boundary spelling itself is not the spec spelling.
+        assert!(!results_agree(
+            "51298814505517060",
+            Some("51298814505517064"),
+            "51298814505517060"
+        ));
     }
 
-    /// The suppression must not swallow a real one-ulp disagreement.
+    /// The exact-double rule must not swallow a real one-ulp disagreement.
     #[test]
     fn an_adjacent_double_spelled_exactly_is_still_a_divergence() {
-        // Both spellings round-trip to DIFFERENT doubles one ulp apart. Only a
-        // spelling on the boundary between them is ambiguous; these are not.
-        assert!(!results_agree("51298814505517056", "51298814505517064"));
-        assert!(!results_agree("57632001481506816", "57632001481506824"));
-        // Two ulps away from the tie is not a tie either.
-        assert!(!results_agree("51298814505517052", "51298814505517064"));
-        // Non-integral values are outside the rule entirely.
-        assert!(!results_agree("0.5", "0.5000000000000001"));
+        // Each oracle double and ironhorse double are one ulp apart.
+        assert!(!results_agree(
+            "51298814505517056",
+            Some("51298814505517060"),
+            "51298814505517064"
+        ));
+        assert!(!results_agree(
+            "57632001481506816",
+            Some("57632001481506820"),
+            "57632001481506824"
+        ));
+        assert!(!results_agree("0.5", Some("0.5"), "0.5000000000000001"));
     }
 
     #[test]
     fn numeric_spelling_policy_is_preserved() {
+        let spec = Some("57632001481506820");
         assert!(compare_observations(
-            (true, "57632001481506816", 1),
+            (true, "57632001481506816", spec, 1),
             (true, "57632001481506820", 2)
         )
         .is_ok());
         assert!(compare_observations(
-            (true, "57632001481506816", 1),
+            (true, "57632001481506816", spec, 1),
             (true, "57632001481506824", 2)
         )
         .is_err());
     }
+
     #[test]
-    fn results_agree_on_equal_doubles_spelled_differently() {
-        // The finding's two renderings of the same double.
-        assert!(results_agree("57632001481506816", "57632001481506820"));
-        // A genuine value divergence is still caught.
-        assert!(!results_agree("57632001481506816", "57632001481506824"));
-        // Multi-crank CI finding 3bb7e699: no epsilon comparison. Even the
-        // immediately adjacent double must remain a divergence.
-        let finding = f64::from_bits(0x4370_7400_0000_0000);
-        assert_eq!("74098287619080190".parse::<f64>().unwrap(), finding);
-        assert_eq!("74098287619080200".parse::<f64>().unwrap(), finding);
-        assert!(results_agree("74098287619080190", "74098287619080200"));
-        for bits in [finding.to_bits() - 1, finding.to_bits() + 1] {
-            assert!(!results_agree(
-                "74098287619080190",
-                &f64::from_bits(bits).to_string()
-            ));
+    fn a_number_agrees_only_with_its_exact_spec_spelling() {
+        // -125343939420064.625 is exactly halfway between the 17-digit
+        // candidates; Note 2 and both spellers pick the even one.
+        let spec = Some("-125343939420064.62");
+        assert!(results_agree("", spec, "-125343939420064.62"));
+        assert!(!results_agree("", spec, "-125343939420064.63"));
+        assert!(!results_agree("", spec, "-125343939420064.61"));
+        assert!(!results_agree("", spec, "-125343939420064.625"));
+        assert!(!results_agree("", spec, "125343939420064.62"));
+        // Other spellings of the same double are divergences, as are
+        // non-closest digits that happen to round-trip.
+        for (spec, other) in [
+            ("100", "1e2"),
+            ("1000", "1e+3"),
+            ("1000", "+1e3"),
+            ("1000", "01e3"),
+            ("1e+21", "10e20"),
+            ("1e+21", "1.e21"),
+            ("5e-324", "4e-324"),
+            ("51298827675632344", "51298827675632342"),
+        ] {
+            assert_eq!(other.parse::<f64>(), spec.parse::<f64>(), "{other}");
+            assert!(!results_agree("", Some(spec), other), "{spec} {other}");
         }
-        assert!(!results_agree("3", "4"));
-        // Non-numeric completions compare byte-for-byte.
-        assert!(results_agree("true", "true"));
-        assert!(!results_agree("true", "false"));
-        assert!(!results_agree("Infinity", "1e999"));
-        // `Infinity`/`NaN` are not parsed as numbers (they match as strings).
-        assert!(as_ecma_number("Infinity").is_none());
-        assert!(as_ecma_number("NaN").is_none());
-        assert!(as_ecma_number("").is_none());
+    }
+
+    #[test]
+    fn non_number_completions_compare_byte_for_byte() {
+        assert!(results_agree("true", None, "true"));
+        assert!(!results_agree("true", None, "false"));
+        assert!(!results_agree("Infinity", None, "1e999"));
+        // `'' + 51298827675632344` completes as a String. XS spells it
+        // "51298827675632340"; a different String is a divergence even though
+        // both spellings parse to nearby (or equal) doubles.
+        assert!(!results_agree(
+            "51298827675632340",
+            None,
+            "51298827675632344"
+        ));
+        // The same double spelled two ways is still two different Strings.
+        assert!(!results_agree(
+            "57632001481506816",
+            None,
+            "57632001481506820"
+        ));
+        assert!(!results_agree("1e2", None, "100"));
+        assert!(!results_agree("100000000000000000000", None, "1e+20"));
+        assert!(results_agree("1e2", None, "1e2"));
+    }
+
+    #[test]
+    fn oracle_double_overrides_a_non_round_tripping_spelling() {
+        // Finding 05264cccae42245a: XS spells 51298827675632344 as
+        // "51298827675632340", which parses to 51298827675632336. The spec
+        // spelling of the oracle's exact double is all 17 digits.
+        assert_ne!(
+            "51298827675632340".parse::<f64>().unwrap(),
+            51298827675632344.0_f64
+        );
+        let spec = Some("51298827675632344");
+        assert!(results_agree(
+            "51298827675632340",
+            spec,
+            "51298827675632344"
+        ));
+        // The same ambiguous spelling no longer masks a one-ulp divergence.
+        assert!(!results_agree(
+            "51298827675632340",
+            spec,
+            "51298827675632340"
+        ));
+        assert!(!results_agree(
+            "51298827675632340",
+            spec,
+            "51298827675632336"
+        ));
+        // A right-valued but non-canonical spelling is still a divergence.
+        assert!(!results_agree(
+            "51298827675632340",
+            spec,
+            "5.1298827675632344e16"
+        ));
+        assert!(!results_agree(
+            "51298827675632340",
+            spec,
+            "51298827675632344.0"
+        ));
+        // XS's non-minimal exact-integer spelling is not the spec spelling.
+        let spec = Some("57632001481506820");
+        assert!(results_agree(
+            "57632001481506816",
+            spec,
+            "57632001481506820"
+        ));
+        assert!(!results_agree(
+            "57632001481506816",
+            spec,
+            "57632001481506816"
+        ));
+        // -0 and +0 both spell "0"; "-0" never agrees.
+        assert!(results_agree("0", Some("0"), "0"));
+        assert!(!results_agree("0", Some("0"), "-0"));
+        // Exponent-form extremes: only the spec spelling agrees.
+        let spec = Some("1.7976931348623157e+308");
+        assert!(results_agree(
+            "1.7976931348623157e+308",
+            spec,
+            "1.7976931348623157e+308"
+        ));
+        assert!(!results_agree(
+            "1.7976931348623157e+308",
+            spec,
+            "1.7976931348623157e308"
+        ));
+        assert!(results_agree("5e-324", Some("5e-324"), "5e-324"));
+        assert!(!results_agree("5e-324", Some("5e-324"), "4.9e-324"));
+        assert!(!results_agree("5e-324", Some("5e-324"), "0"));
+        // A Number completion never agrees with a non-numeric one.
+        assert!(!results_agree("1", Some("1"), "true"));
+        // Non-finite Numbers spell as the spec does.
+        assert!(results_agree("Infinity", Some("Infinity"), "Infinity"));
+        assert!(results_agree("-Infinity", Some("-Infinity"), "-Infinity"));
+        assert!(!results_agree("-Infinity", Some("-Infinity"), "Infinity"));
+        assert!(results_agree("NaN", Some("NaN"), "NaN"));
+        assert!(!results_agree("NaN", Some("NaN"), "Infinity"));
+        // ECMA-262 switches to exponent notation at 10^21 and below 10^-6.
+        assert!(results_agree("1e+21", Some("1e+21"), "1e+21"));
+        assert!(!results_agree(
+            "1e+21",
+            Some("1e+21"),
+            "1000000000000000000000"
+        ));
+        assert!(results_agree("1e-7", Some("1e-7"), "1e-7"));
+        assert!(!results_agree("1e-7", Some("1e-7"), "0.0000001"));
+        // The exact-integer transition at 2^53 stays explicit as well.
+        assert!(results_agree(
+            "9007199254740992",
+            Some("9007199254740992"),
+            "9007199254740992"
+        ));
+        assert!(!results_agree(
+            "9007199254740992",
+            Some("9007199254740992"),
+            "9007199254740994"
+        ));
     }
 }

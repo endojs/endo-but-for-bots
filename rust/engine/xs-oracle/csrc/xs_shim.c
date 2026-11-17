@@ -68,9 +68,30 @@ typedef struct {
 	 * run did not reach the checkpoint. */
 	txU4 has_async_signal;
 	char async_signal[ENDOR_ERROR_MAX];
+	/* Nonzero when the completion value was a Number, in which case
+	 * `result_number` holds its exact double. XS's fx_dtoa can render a
+	 * double as a decimal that does not round-trip (finding
+	 * 05264cccae42245a: 51298827675632344 prints as "51298827675632340",
+	 * a round-half-even tie that parses back to 51298827675632336), so the
+	 * differential check compares Numbers by these bits, not the string. */
+	txU4 result_is_number;
+	double result_number;
 } EndorOracleResult;
 
 static int gEndorClusterReady = 0;
+
+/* Record a Number completion's exact double before String() coercion. */
+static void endor_capture_number(txSlot *slot, EndorOracleResult *out)
+{
+	if (slot->kind == XS_INTEGER_KIND) {
+		out->result_is_number = 1;
+		out->result_number = (double)slot->value.integer;
+	}
+	else if (slot->kind == XS_NUMBER_KIND) {
+		out->result_is_number = 1;
+		out->result_number = slot->value.number;
+	}
+}
 
 /*
  * Machine create/delete must be serialized process-wide.  XS machines
@@ -479,6 +500,7 @@ static int xs_oracle_run_impl(const char *source, txU4 sourceLen,
 
 			/* fxRunScript leaves the completion value on the stack top. */
 			result = the->stack;
+			endor_capture_number(result, out);
 			fxToString(the, result);
 			{
 				txString s = result->value.string;
@@ -671,6 +693,7 @@ static int xs_oracle_run_sources(const char **sources, const txU4 *sourceLens,
 				out->chunks_size = (txU4)the->currentChunksSize;
 
 				result = the->stack;
+				endor_capture_number(result, out);
 				fxToString(the, result);
 				{
 					txString s = result->value.string;
@@ -1036,6 +1059,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 				out->ok = 1;
 				mxPush(mxGlobal);
 				fxGetID(the, fxID(the, "result"));
+				endor_capture_number(the->stack, out);
 				fxToString(the, the->stack);
 				if (the->stack->value.string) {
 					out->result_len = (txU4)c_strlen(the->stack->value.string);

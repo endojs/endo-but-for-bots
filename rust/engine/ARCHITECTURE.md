@@ -22,7 +22,7 @@ is supplied through a trait owned by the VM.
 | Member | Responsibility |
 |---|---|
 | `ironhorse-meter` | Frozen weights, default keys, canonical digest, append-only release identities. |
-| `ironhorse-text` | CESU-8 encoding/decoding for symbol names, including lone surrogates. |
+| `ironhorse-text` | CESU-8 encoding/decoding for symbol names, including lone surrogates; ECMA-262 Number spelling. |
 | `ironhorse-unicode` | Pinned Unicode character classifications shared by compiler and runtime. |
 | `ironhorse-runtime` | Oracle-free compiler adapter installed by production embedders and the conformance harness. |
 | `ironhorse-vm` | Values, arenas, interpreter, built-ins, modules, collector and meter integration. |

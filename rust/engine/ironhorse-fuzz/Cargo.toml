@@ -44,3 +44,6 @@ ironhorse-262 = { path = "../ironhorse-262" }
 [[bin]]
 name = "write-seed-corpus"
 path = "src/bin/write_seed_corpus.rs"
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }

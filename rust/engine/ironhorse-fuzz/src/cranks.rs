@@ -25,9 +25,7 @@
 
 use ironhorse_262::{dual_run_cranks, Agreement};
 
-use crate::{
-    comparison::results_agree, gen_program, gen_stage2b_program, gen_stage3_arrays_program,
-};
+use crate::{gen_program, gen_stage2b_program, gen_stage3_arrays_program};
 
 /// A per-crank divergence between ironhorse and the XS oracle.
 #[derive(Debug)]
@@ -171,17 +169,15 @@ pub fn differential_check_cranks(sequence: &[String]) -> Result<usize, CrankDive
     };
     for (i, run) in runs.iter().enumerate() {
         let detail = match run.agreement {
-            // Use the same exact-double rendering policy as the single-crank
-            // fuzzer. DualRun's raw string comparison also reports known XS
-            // dtoa spelling differences; it is not a numeric value mismatch.
-            Agreement::BothComplete
-                if !results_agree(&run.oracle_result, &run.ironhorse_result) =>
-            {
-                Some(format!(
-                    "crank result divergence: oracle {:?} against ironhorse {:?}",
-                    run.oracle_result, run.ironhorse_result
-                ))
-            }
+            // `result_agrees` is the shared completion rule
+            // (`xs_oracle::completion_agrees`) the single-crank fuzzer uses:
+            // a Number completion must be the ECMA-262 spelling of the
+            // oracle's exact double, so XS dtoa spelling quirks are not
+            // read as value divergences.
+            Agreement::BothComplete if !run.result_agrees => Some(format!(
+                "crank result divergence: oracle {:?} against ironhorse {:?}",
+                run.oracle_result, run.ironhorse_result
+            )),
             Agreement::BothAbort if !run.error_agrees => Some(format!(
                 "crank abort divergence: oracle {:?} against ironhorse {:?} ({:?})",
                 run.oracle_error, run.ironhorse_error, run.ironhorse_halt

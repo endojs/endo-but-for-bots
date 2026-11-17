@@ -13,8 +13,15 @@ workspace = true
 name = "xs_oracle"
 path = "src/lib.rs"
 
+[dependencies]
+ironhorse-text = { path = "../ironhorse-text" }
+# Keep the oracle's Number digits independent of ironhorse-vm's dtoa
+# so a VM dtoa regression remains visible to the differential.
+ryu = "1"
+
 [build-dependencies]
 cc = "1"
 
 [dev-dependencies]
 ironhorse-vm = { path = "../ironhorse-vm" }
+proptest = { version = "1", default-features = false, features = ["std"] }
