@@ -72,6 +72,7 @@ import {
   appendContext,
   keysOfTranscript,
   loadContextFile,
+  peekContextFile,
   projectKeyed,
   resolveKeys,
   writeContextFile,
@@ -751,6 +752,26 @@ export const makeArchiveStore = ({
     const manifest = /** @type {Manifest} */ (st.manifest);
     const expected = contextEntries(manifest, segments);
     const path = contextPath(st);
+    if (!want && st.contextThrough === 0 && expected.length > 0) {
+      // First look in this incarnation: the last marker alone, when it is
+      // on the chain, vouches for every part before it (chained digests).
+      const peek = await peekContextFile(path);
+      const at =
+        peek.clean && peek.last !== undefined
+          ? expected.findIndex(
+              e =>
+                e.ordinal === peek.last?.through &&
+                e.digest === peek.last.digest,
+            )
+          : -1;
+      if (
+        at >= 0 &&
+        peek.head?.epoch === manifest.epoch &&
+        peek.head?.boundary === manifest.boundary
+      ) {
+        st.contextThrough = expected[at].ordinal;
+      }
+    }
     if (!want && st.contextThrough > 0) {
       // Known in this incarnation: append what is missing only.
       const lastKnown = expected.findIndex(

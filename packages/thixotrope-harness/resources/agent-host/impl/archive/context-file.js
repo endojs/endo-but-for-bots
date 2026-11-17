@@ -19,7 +19,15 @@
  *
  * Node only.
  */
-import { appendFile, readFile, rename, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  open,
+  readFile,
+  rename,
+  writeFile,
+} from 'node:fs/promises';
+
+import { Buffer } from 'node:buffer';
 
 import { projectRecords } from '../projection.js';
 import { decodeRecord } from './segment.js';
@@ -227,3 +235,59 @@ export const keysOfTranscript = (value, into) => {
   return into;
 };
 harden(keysOfTranscript);
+
+/**
+ * The file's header and its last marker, reading only its first line and
+ * its last bytes (a first validation in an incarnation need not parse the
+ * whole projection: the last marker's chained digest stands for every part
+ * before it). `clean` is false when anything follows the last marker or it
+ * is not found in the tail read.
+ * @param {string} path
+ * @param {number} [tailBytes]
+ * @returns {Promise<{ head?: { epoch: number, boundary: number }, last?: { through: number, digest: string }, clean: boolean }>}
+ */
+export const peekContextFile = async (path, tailBytes = 65_536) => {
+  /** @type {import('node:fs/promises').FileHandle | undefined} */
+  let handle;
+  try {
+    handle = await open(path, 'r');
+    const { size } = await handle.stat();
+    const headBuffer = Buffer.alloc(Math.min(size, 4096));
+    await handle.read(headBuffer, 0, headBuffer.length, 0);
+    const firstLine = headBuffer.toString('utf8').split('\n')[0];
+    /** @type {any} */
+    const head = JSON.parse(firstLine);
+    if (head?.format !== CONTEXT_FORMAT) return { clean: false };
+    const start = Math.max(0, size - tailBytes);
+    const tail = Buffer.alloc(size - start);
+    await handle.read(tail, 0, tail.length, start);
+    const text = tail.toString('utf8');
+    if (!text.endsWith('\n')) return { head, clean: false };
+    const lines = text.slice(0, -1).split('\n');
+    const lastLine = lines[lines.length - 1];
+    /** @type {any} */
+    let last;
+    try {
+      last = JSON.parse(lastLine);
+    } catch {
+      return { head, clean: false };
+    }
+    if (
+      typeof last?.through === 'number' &&
+      typeof last.digest === 'string' &&
+      last.kind === undefined
+    ) {
+      return {
+        head: { epoch: head.epoch, boundary: head.boundary },
+        last: { through: last.through, digest: last.digest },
+        clean: true,
+      };
+    }
+    return { head, clean: lines.length === 1 && start === 0 };
+  } catch {
+    return { clean: false };
+  } finally {
+    await handle?.close();
+  }
+};
+harden(peekContextFile);
