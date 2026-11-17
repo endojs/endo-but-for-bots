@@ -269,9 +269,9 @@ const describeProcessGroup = pgid => {
       try {
         const stat = nodeFs.readFileSync(`/proc/${entry}/stat`, 'utf8');
         // Fields after the parenthesized comm: state ppid pgrp ...
-        const close = stat.lastIndexOf(')');
-        const comm = stat.slice(stat.indexOf('(') + 1, close);
-        const [state, ppid, pgrp] = stat.slice(close + 2).split(' ');
+        const closeParen = stat.lastIndexOf(')');
+        const comm = stat.slice(stat.indexOf('(') + 1, closeParen);
+        const [state, ppid, pgrp] = stat.slice(closeParen + 2).split(' ');
         if (Number(pgrp) === pgid) {
           members.push(`${entry}(${comm}) state=${state} ppid=${ppid}`);
         }
@@ -1884,6 +1884,34 @@ test('bwrap exit sweep propagates a non-ESRCH signal error', async t => {
   child.exitCode = 0;
   child.emit('exit', 0, null);
   t.is(await t.throwsAsync(proc.wait()), refused);
+});
+
+test('bwrap exit sweep tolerates ESRCH and resolves with the exit status', async t => {
+  // The mirror of the propagation case: an already-empty process group is
+  // the expected outcome of the sweep, so `ESRCH` is swallowed and
+  // `wait()` must still resolve with bwrap's own exit status.
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const gone = Object.assign(new Error('no such process'), { code: 'ESRCH' });
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({
+      env: {},
+      childProcess,
+      processKill: () => {
+        throw gone;
+      },
+    })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  const proc = await driver.spawn(slice, ['/bin/true'], {});
+  const child = children[0];
+  t.teardown(() => child.emit('close', 0, null));
+  child.exitCode = 0;
+  child.emit('exit', 0, null);
+  t.deepEqual(await proc.wait(), { code: 0, signal: null });
 });
 
 test('failed teardown retains its child until a later close permits cleanup', async t => {
