@@ -295,11 +295,11 @@ const describeProcessGroup = pgid => {
  * is generous.  A process that escaped containment survives any bound.
  *
  * @param {number} pid
- * @param {number} [timeoutMs]
+ * @param {number} [timeoutMilliseconds]
  */
-const waitForProcessGroupGone = async (pid, timeoutMs = 10_000) => {
+const waitForProcessGroupGone = async (pid, timeoutMilliseconds = 10_000) => {
   await null;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
     try {
       process.kill(-pid, 0);
@@ -310,7 +310,7 @@ const waitForProcessGroupGone = async (pid, timeoutMs = 10_000) => {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   throw new Error(
-    `process group ${pid} survived bounded cleanup (${timeoutMs}ms): ${describeProcessGroup(pid)}`,
+    `process group ${pid} survived bounded cleanup (${timeoutMilliseconds}ms): ${describeProcessGroup(pid)}`,
   );
 };
 
