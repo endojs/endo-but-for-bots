@@ -47,10 +47,12 @@
  *   a clean restart with `crank.heap` and the `session<n>` worker rows, and
  *   `crank.context.rebuild.at<n>` (the next turn's round 0 `prepare()`);
  *   `crank.context.rebuild.at50` likewise after the restart at 50 turns.
- *   The long-session table: `CRANK_TURNS=5000 CRANK_POINTS=200,1000`.
+ *   The long-session table: `CRANK_TURNS=5000 CRANK_POINTS=200,1000,4000
+ *   CRANK_START=mixed` (`startTurn` outside the measured windows: the
+ *   Composer refuses a session's 4,097th submission within 24 h).
  *
  * CRANK_TURNS (default 1,000), CRANK_WORKER_N (default 200),
- * CRANK_GC_POLICIES, CRANK_POINTS. About 30-40 minutes at 1,000 turns.
+ * CRANK_GC_POLICIES, CRANK_POINTS, CRANK_START. About 30-40 minutes at 1,000 turns.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import {
@@ -107,6 +109,23 @@ const POINTS = (process.env.CRANK_POINTS ?? '')
   .filter(Boolean)
   .map(Number)
   .filter(n => n > 50 && n < TURNS);
+/**
+ * How turns start: `composer` (default, every turn through the Composer)
+ * or `mixed` (the Composer inside the measured windows, `startTurn`
+ * elsewhere: a session takes at most 4,096 Composer submissions in 24 h).
+ */
+const START = process.env.CRANK_START ?? 'composer';
+/**
+ * Whether turn `n` goes through the Composer: always, or under `mixed`
+ * when it is in a measured window (turns 1-50, the 50 turns up to and the
+ * one after each point, the last 50).
+ * @param {number} n
+ */
+const composerTurn = n =>
+  START !== 'mixed' ||
+  n <= 51 ||
+  n > TURNS - 50 ||
+  POINTS.some(p => n > p - 50 && n <= p + 1);
 const PING_N = 200;
 /** Slots per engine page (`rust/engine/ironhorse-vm/src/value.rs`). */
 const SLOTS_PER_PAGE = 256;
@@ -443,6 +462,38 @@ await runPerf('crank', async ({ provision }) => {
   await slice.refresh();
   let found = await E(slice.factory).findSession(key);
   let live = await slice.subscribe(found);
+  /**
+   * A turn started with `Session.startTurn` (inline text, the caller's
+   * clock) instead of the Composer: the same turn path without a
+   * submission receipt. The Composer keeps at most 4,096 receipts per
+   * session for 24 h (`maxReceipts`), so a long session is grown this way
+   * outside the measured windows (CRANK_START=mixed, J-9383).
+   * @param {any} target
+   * @param {string} input
+   */
+  const directTurn = async (target, input) => {
+    const from = live.deliveries.length;
+    const started = await E(target).startTurn(
+      harden({ text: input }),
+      Date.now(),
+    );
+    const { turnId } = await E(started).getStatus();
+    const at = await waitFor(
+      () =>
+        live.deliveries.find(
+          (/** @type {any} */ d, /** @type {number} */ i) =>
+            i >= from &&
+            (d.event.type === 'end' || d.event.type === 'abort') &&
+            d.event.turnId === turnId,
+        ),
+      120_000,
+      `turn "${input}": end`,
+      10,
+    );
+    if (at.event.type === 'abort')
+      throw Error(`turn ${input} failed: ${at.event.reason}`);
+    return { turn: started, turnId, end: at.event, from };
+  };
   /** @type {Map<number, number>} turn number -> turn.start ms */
   const startByTurn = new Map();
   /** @type {unknown} the last turn's id */
@@ -452,7 +503,9 @@ await runPerf('crank', async ({ provision }) => {
    * @param {number} n turn number (1-based)
    */
   const turn = async (target, n) => {
-    const r = await runTurn(slice, target, live, `c${n}`, 120_000);
+    const r = composerTurn(n)
+      ? await runTurn(slice, target, live, `c${n}`, 120_000)
+      : await directTurn(target, `c${n}`);
     const started = live.deliveries
       .slice(r.from)
       .find(
