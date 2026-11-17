@@ -51,12 +51,24 @@ Numbers are for the release worker at the harness crank budget of 50 M.
    halts first, so a larger budget buys nothing (J-0143). The budget is daemon-wide
    (`THIXOTROPE_CRANK_BUDGET`) and may be lowered only after a clean shutdown (`scripts/serve.mjs`
    refuses otherwise). Answered sends halt at 250 per crank on a fresh vat and 300 on a used one
-   (`HeapExhausted`); `sendOnly` at 600 (J-0143, J-0194).
+   (`HeapExhausted`); `sendOnly` at 600 (J-0143, J-0194). **The heap ceiling bounds a vat's live heap
+   plus everything one crank allocates** (M1b QC, J-0392): the engine collects garbage only between
+   cranks (C-7), and a crank that would take more slots than the slot ceiling halts. At Thixotrope's
+   default ceiling (1,000,000 slots of 24 bytes) a session vat (a spare's slot capacity, the
+   high-water mark of live heap plus its largest crank, is about 280,000) halted while recording a
+   round of 100 tool calls (several thousand slots per call in one crank) and a
+   1,000-turn session in its first context page crank. The harness serves with 4,000,000
+   (`config/defaults.js` `slotCeiling`, set by `scripts/serve.mjs`); a vat's live heap grows with what
+   it keeps (records, Blob presences), so a session has a size at which ordinary cranks no longer fit
+   (measured by `history.heap`, `perf/history.perf.mjs`).
 4. **Each vat has a permanent table of about 57,000 property names** (J-0191). Every fresh record key
    a vat ever receives or creates takes one for the vat's life (54,378 remain after a 250 k program);
-   when they run out the crank throws, the vat halts and is retired (core `63927edaba`; before it, the
-   vat silently stopped answering). A record with 1,500 fresh keys also costs about 700 ms to decode.
-   No data-dependent record key may cross into a vat (rule 12.10).
+   when they run out the engine throws a **catchable** `RangeError` ("property key space exhausted",
+   J-0333): the vat does not halt, and every later new name fails while known names work (calls about
+   11 x slower). A record with 1,500 fresh keys also costs about 700 ms to decode. No data-dependent
+   record key may cross into a vat (rule 12.10); the exec vat, where model data lands on purpose,
+   answers `exhausted` and is retired (section 6, M1b QC J-0390). Making exhaustion a halt is engine
+   work (C-6).
 5. **Answers owed by the host or an adapter break after a restart; guest-to-guest promises survive
    with one exception.** At startup the hub forgets stale transient sessions
    (`pkg/src/core/daemon.js:825`) and breaks every pending answer they owed with "ocapn hub: the target
@@ -713,7 +725,8 @@ append: [records], tools, options })` carries the records added since the last r
 fields are Blob handles). The adapter keeps one context cache per session (record list + loaded blob
 text + provider-format projection). If its `{count, epoch}` differs from `base` (adapter restarted,
 cache evicted, first round), it pulls records from `E(contextSource).page(cursor)` (pages of at most
-`frameBytes`, outbound from the vat) starting at the latest `Compaction` boundary, resolves blob
+`contextPageBytes`, 4 frames, outbound from the vat to Node only, M1b decision 16.4; a page reads only
+its own records, M1b QC) starting at the latest `Compaction` boundary, resolves blob
 handles in batches, and rebuilds. Projection logic (Fae `journal-transcript.js`,
 `context-transcript.js`, `transcript-records.js`) runs once, in Node, so there is no second
 implementation to keep in byte-for-byte agreement (feasibility A-6). Native context is replayed from
@@ -769,8 +782,12 @@ snapshot by about 3.3 bytes per character and the state directory roughly double
   vat through a `BlobWriter` for large exec results). Content is never deleted (R4-64); session delete
   releases its blobs.
 - A settled turn is therefore a few KB in the vat. 10,000 turns are tens of MB of heap, below the
-  chunk wall. **No archive in M2.** M2 measures snapshot time and size at 1,000, 10,000 and 30,000
-  turns (`journal.snapshot`); only if that misses its budget does M13 add an adapter-written archive
+  chunk wall, but not necessarily below the **slot** ceiling, and every crank pays a full collection
+  of the live heap (C-7): M1b measured per-turn time rising from 0.69 to 2.46 s over 1,000 turns
+  (J-0370) and records the session vat's slot capacity per 100 turns (`history.grow`, J-0395).
+  **No archive in M2 unless those numbers say so.** M2 measures snapshot time and size at 1,000,
+  10,000 and 30,000 turns (`journal.snapshot`) and the slot capacity at each; if either misses, M2
+  (not M13) adds an adapter-written archive
   (the adapter writes chunks from its cache, the vat drops resident records only after receiving the
   chunk's Blob for a matching turn range: 1-2 deliveries per 256 turns).
 - History pages are 32 turns and at most `frameBytes`; a turn larger than that returns a summary with
@@ -823,11 +840,23 @@ Lifetimes:
   departure from R4-48, open decision 10): the session arms an adapter timer
   (`E.sendOnly(endpoint).armDeadline`) in the crank that issues the call; on `deadline(opId)` it
   records the timeout and retires the exec vat (the only way to stop it).
-- **Cancel does not retire the exec vat** (R4-49: a running tool is not interrupted). The pending
-  answer is abandoned by turn generation. If the exec vat is still busy when the next exec call
-  arrives (the exec program answers `{ busy }` at once), the session retires it and tells the model
-  "the previous exec call was still running; the scope was reset". Every scope loss is stated in the
-  tool result and journaled when first seen.
+- **Cancel does not retire the exec vat** (R4-49: a running tool is not interrupted). The session
+  settles the call `execAbandoned` and sends `ExecScope.abandon()` (sendOnly, before any later
+  `run`; also from recovery), which ends the call in the exec vat: the next call runs at once in the
+  same scope (M1b QC, J-0391). If the exec vat is still busy when the next exec call arrives anyway
+  (an `abandon` was lost), it answers `{ busy }`, the session retires it and tells the model "the
+  previous exec call was still running; the scope was reset". Every scope loss is stated in the tool
+  result and journaled when first seen.
+- **A call's end is a fence** (M1b QC, J-0391): a call ends when its body's promise settles or it is
+  abandoned. Each call gets its own `sleep`; a sleep asked for after the call ended sends nothing
+  and never settles, so code the model leaves running (`(async () => { for (;;) await sleep(0);
+  })(); return 1`) stops at its next sleep (sleeps already in flight still answer: one more step at
+  most) instead of keeping the vat cranking; nothing else in M1b reaches outside the vat. M5's
+  `powers` must keep this: a facet per call that goes dead with it, or the deadline no longer bounds
+  asynchronous work.
+- **Name-table exhaustion** (fact 4) answers `{ status: 'exhausted' }`; the session records
+  "exec scope terminated: the exec vat ran out of property names ..." and retires the vat (J-0390).
+  Model code that catches and swallows the RangeError is not seen until a later call meets it.
 
 W-6 is fixed: the exec scope shares no worker with tokens.
 
@@ -874,7 +903,7 @@ caches rebuild lazily per session (journal: blast radius).
 - **Key guard:** the bridge also refuses a call whose arguments contain a record with a key that the
   target method's declared shape (`guest/lib/interfaces.js`) does not name, with "unexpected field";
   every fresh record key a vat receives costs it one of its about 57,000 names for life, and running
-  out halts the session for good (fact 4). An exo guard cannot protect the vat from either: decoding
+  out leaves the session failing every new name for good (fact 4; a catchable error, not a halt). An exo guard cannot protect the vat from either: decoding
   happens before the guard runs.
 - Objects the adapter owns (`Live`, `Content`, `Composer`, `SecretWriter`, audio streams) are local
   exports of the same process, so their traffic never leaves the adapter; a returned own export
@@ -933,7 +962,9 @@ too. The other rows below are design settings, kept in the module that enforces 
 | `frameBytes`: string content of one message into or out of a vat | 24,576 (`config/defaults.js`) | one inbound message halts above 94,208 at 50 M, on fresh and full vats; 24,576 inbound in 312 ms (budget 357) (J-0193, J-0194). The plan's target of 196,608 is unreachable while `harden` costs per byte (C-5). | n/a |
 | `crankOutBytes`: all messages sent in one crank | 196,608 = 8 frames (`config/defaults.js`) | 8 x 64 KiB `sendOnly` in one crank 553-576 ms, no halt (J-0142) | n/a |
 | `inlineBytes`: larger text fields are Blobs | 8,192 (`config/defaults.js`) | plan value; about 80 ms of inbound per field at this size | n/a |
-| `vatKeyNames`: distinct record keys a vat may ever receive or create | 57,000 per vat, for life (`config/defaults.js`) | 57,075 after boot, 54,378 after a 250 k program; exhaustion halts (J-0191) | n/a |
+| `vatKeyNames`: distinct record keys a vat may ever receive or create | 57,000 per vat, for life (`config/defaults.js`) | 57,075 after boot, 54,378 after a 250 k program; exhaustion is a catchable RangeError, not a halt (J-0191, J-0333); the exec vat answers `exhausted` and is retired (J-0390) | n/a |
+| Slot ceiling (`THIXOTROPE_SLOT_CEILING`, daemon-wide): live heap plus one crank's allocation | 4,000,000 slots of 24 bytes (`config/defaults.js` `slotCeiling`, set by `scripts/serve.mjs`; Thixotrope's default is 1,000,000) | a 100-call round halted a session vat at 1,000,000 and passes at 4,000,000; 256-call rounds pass (J-0362, J-0392) | n/a |
+| Progress checkpoint writes per round | at most `progressWriteFactor` (3) x the text so far; superseded checkpoints deleted once the session answers it kept the newer one | 1 MiB reply: 34 MB written before, 3.6 MB after (J-0313, J-0393) | n/a |
 | Eventual sends per crank (guest code rule) | 100 (`config/defaults.js` `sendsPerCrank`) | answered sends halt at 250 (fresh vat) / 300 (used vat); `sendOnly` at 600 (J-0143, J-0194) | n/a |
 | Exec source, **staged** in `frameBytes` pages then evaluated in one crank | 262,144 (`config/defaults.js` `execSourceBytes`) | 262 k staged in 3.9 s, evaluating crank 175 ms; one message of 150 k halts (J-0195) | none |
 | Crank budget (`THIXOTROPE_CRANK_BUDGET`, daemon-wide) | 50,000,000 (`config/defaults.js` `crankBudget`, set by `scripts/serve.mjs`) | runaway ends in 242-271 ms; 100 M buys nothing (J-0143) | n/a |
@@ -948,7 +979,7 @@ too. The other rows below are design settings, kept in the module that enforces 
 | Tool calls per round / in flight | 64 / 16 | | none - open decision 11 |
 | Live publish batch from a vat | 64 events and `frameBytes` | | n/a |
 | History page | 32 turns and `frameBytes` | | 32 turns |
-| Context page to adapter, session list page | `frameBytes`; 50 rows | | n/a |
+| Context page to adapter, session list page | `contextPageBytes` (98,304) and 512 records, to the adapter only (M1b decision 16.4); 50 rows | | n/a |
 | Exec deadline | 120 s; compute bound = crank budget | | none (G-18; R4-48) - open decision 10 |
 | Turn wall-clock deadline | off (configurable) | | none (R4-48; G-06) |
 | Queue | 100 waiting; at most 4,096 receipts, pruned by age (24 h) at each `enqueueOnce`, none holding an exo | J-9152 | same (R4-98) |
@@ -1147,6 +1178,14 @@ milestone by itself.
     at most `frameBytes` bytes (`frameBytes` units for ASCII, `frameBytes / 3` units otherwise) and are
     joined and evaluated (or recorded) inside the vat; text larger than `inlineBytes` is a Blob, read in
     pages when a vat needs it. Never send a source in one message.
+12. **Bound a crank by what it builds, not only by its bytes** (M1b QC, J-0392). One crank's
+    allocation plus the vat's live heap must fit the slot ceiling (fact 3; nothing is collected
+    inside a crank): count the records, events, guard checks and sends one crank can produce from
+    one input (a round of `maxCallsPerMessage` calls, a page of `pageRecords` records) and keep the
+    worst case tested (`m1b-qc.test.js`); page or spread work whose size the input chooses. Never
+    copy a growing collection in a crank that needs only part of it (`RecordLog.at`, not `since`).
+13. **An endowment that reaches outside a vat is per call and dies with the call** (M1b QC, J-0391):
+    exec's `sleep` today, M5's `powers` facets next, so model code cannot outlive its call.
 
 ---
 

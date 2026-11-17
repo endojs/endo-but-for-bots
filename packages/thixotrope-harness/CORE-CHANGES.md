@@ -84,6 +84,7 @@ polyfills, Thixotrope core, Thixotrope tests and tooling, other Endo package, up
 | CC-018 | 2026-11-17 | Thixotrope core | hub cost counters per inbound delivery (`status().hub`) | measure C-20 before changing it | `7efa7fb3e4` |
 | CC-019 | 2026-11-17 | Thixotrope core | one hub commit per inbound burst; one journal fsync per worker flush | a GC burst cost 16.7 ms of supervisor time per frame (C-20) | `1f1194059b`, `6be1bd3403`, `a3a2b58da5` |
 | CC-020 | 2026-11-17 | Thixotrope core | `status().deliveryHistogram`: crank wall-time histogram | the `concurrency.10` check needs crank p95 | `b45da47b93` |
+| CC-021 | 2026-11-17 | Thixotrope tests | `measured-engine.test.js` passes a frame-shaped value (tsc) | `lint:types` failed on CC-020's test | `d4241fa77a` |
 
 ---
 
@@ -620,6 +621,16 @@ Visible to other users: a new `status().deliveryHistogram` field. Additive.
 Tests: `measured-engine.test.js` (deliveries counted, timed and bucketed; inclusive bounds; the
 open bucket). No suite run is recorded in JOURNAL.md.
 Upstream notes: stands alone. Bucket bounds are fixed in code.
+Measured with it (M1b QC, J-0395): `concurrency.10.crank` p95 500 ms against 150 for one session.
+
+### CC-021 2026-11-17 Thixotrope tests - the measured-engine test type-checks
+Commits: `d4241fa77a` test(thixotrope): measured-engine test passes a frame-shaped value to deliver
+Files: `pkg/test/measured-engine.test.js`.
+What changed: the test's fake delivery argument is cast to the frame type instead of a
+`Uint8Array`; `corepack yarn lint:types` in `packages/thixotrope` was 1 error (TS2345, M1b QC
+finding 16) and is 0. The test passes; nothing under `pkg/src` changed, so the Ironhorse lane was
+not re-run (66/66 at CC-019).
+Visible to other users: none.
 
 ---
 
@@ -648,9 +659,11 @@ closed (CC-013, CC-015). C-20 is addressed in part by CC-018 and CC-019; page 6 
 | C-18 | a retired session is signalled only by an `Error` with the hub's text | the harness matches an exact string |
 | C-19 | a vat is not told that an adapter incarnation it holds has died | held ports compare two clocks; first turn after a restart pays a reopen |
 | C-20 (rest) | endpoint commits per frame; per-commit cost is C-2 | some bursts still cost 0.4-0.9 s of hub time (J-9213, J-9216) |
+| C-21 | the slot ceiling bounds live heap plus one crank; no collection inside a crank | the harness serves at 4,000,000 slots (persisted per state); a session's heaviest crank sets how large it may grow (J-0392) |
 
-Not numbered in page 6: name-table exhaustion is a catchable RangeError, so a vat whose code
-catches it lives on degraded instead of halting (J-0333; option (a) there is a core change).
+C-6 now also records that name-table exhaustion is a catchable RangeError, so a vat whose code
+catches it lives on degraded instead of halting (J-0333); the harness retires an exec vat that
+meets it (J-0390), and an engine halt is the fix.
 
 ## Workarounds in the harness that exist because of a core limit
 
@@ -676,6 +689,11 @@ catches it lives on degraded instead of halting (J-0333; option (a) there is a c
   from "claimed after it". Removed by C-19.
 - Any engine wrapper the harness adds must wrap `deliverBatch` as well as `deliver` (J-9126). A
   consequence of CC-015, not a limit to remove.
+- The daemon is served with `THIXOTROPE_SLOT_CEILING` 4,000,000 (`scripts/serve.mjs`), and test
+  templates key on it, because a crank's allocation counts against the same ceiling as the live
+  heap (J-0392). Relaxed by C-21.
+- The exec vat answers `exhausted` on the name-table RangeError and the session retires it
+  (J-0390). Removed by C-6 (exhaustion as a halt).
 
 ---
 
@@ -719,6 +737,7 @@ commits that arrived through the PR 1667 merge map to CC-010.
 - `6be1bd3403` -> CC-019
 - `a3a2b58da5` -> CC-019
 - `b45da47b93` -> CC-020
+- `d4241fa77a` -> CC-021
 
 Outside that command's paths but outside `packages/thixotrope-harness` too:
 

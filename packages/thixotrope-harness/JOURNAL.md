@@ -5159,3 +5159,249 @@ SIGKILL on the same session (acceptance 8 has both). (6) The milestone's "10 MiB
 probe cannot be asked as written (`echoMaxUnits` is 1 MiB): both the refused 10 MiB request and the
 1 MiB output are probed. (7) `exec.sends` sendOnly is not measurable in M1b (empty `powers`).
 Decision: reported to the PM.
+
+### J-0390 2026-11-17 M1b QC exec name table - awkward
+Evidence: QC findings 3 and 10 (J-0333): an exec body or exec arguments with about 60,000 fresh keys
+exhaust the exec vat's name table; the engine's "property key space exhausted" is a catchable
+`RangeError` (`rust/engine/ironhorse-vm/src/interp/property/keys.rs:56`, `interp/link.rs:1272`), so
+the vat neither halted nor was retired, and the scope stayed degraded for life (new names failed,
+calls 928-951 ms against 84). Fix `b124f5ed09` (contract `97c132c172`): any such RangeError in a
+call (argument JSON, compile, model code, rendering) answers `{ status: 'exhausted' }`; the session
+records `texts.execExhausted` and retires the scope. Unit tests: 4 new exec-vat tests fail on the
+old program and pass now. Real vat (`m1b-qc.test.js`, `6794d9e808`, release worker `7cda4467...`,
+crank budget 50 M, slot ceiling 4,000,000, load 1.8-2.6):
+{"metric":"qc.keys60k","retired":1,"nextTrivialTurnMs":1970.1,"commit":"6794d9e808","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[1.78,2.61,2.35]}
+(`nextTrivialTurnMs` is a whole turn: submit, a fresh scope from the pool, the call, the closing
+round.) `perf/exec.perf.mjs` `tooBig.keys60k` now passes on "exhausted and retired" (J-0396).
+Reading: the harness can bound this without the engine, but not completely: model code that catches
+and swallows the RangeError is not seen, and its scope keeps working on known names until a later
+call needs a new one (then it is retired). The clean fix is engine side (C-6: exhaustion as a halt,
+`Halt::Refused` or a dedicated variant), which would also cover session and factory vats, whose
+protection stays rule 12.10 alone.
+Decision: harness-side retire now; C-6 updated (engine halt proposed, not done here: it changes
+the worker digest and the Ironhorse lane, and the engine is outside this unit).
+
+### J-0391 2026-11-17 M1b QC exec call lifetime - good fit
+Evidence: QC finding 4: `runOnce` awaited only the wrapper's promise, so
+`(async()=>{for(;;){...sleep(600000)...; await sleep(0);}})(); return 1` returned `ok` at once and
+left a perpetual loop cranking the exec vat and holding answered Timer sends. QC finding 6:
+acceptance 3's second half held only if the next exec arrived after the cancelled 30 s sleep had
+ended (otherwise busy, reset, fresh scope). Fix `b124f5ed09`, contract `97c132c172`, revised in
+the next commit (below): each call gets its own `sleep`; a sleep asked for after the call ended
+sends nothing and never settles; the session sends `ExecScope.abandon()` (sendOnly) on cancel and in recovery before it settles the
+call; the exec vat answers the abandoned run `execAbandoned` at once, frees the scope, and never
+evaluates a staged source still being read. Real vats (`6794d9e808`, load 1.8-2.6):
+{"metric":"qc.execBackgroundLoop","execCranksIn5s":0,"commit":"6794d9e808","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[1.78,2.61,2.35]}
+{"metric":"exec.afterCancel","unit":"ms","value":164,"what":"the next turn exec right after a cancelled 30 s sleep (abandon, same scope)","sleepLeftMs":28461,"commit":"6794d9e808-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[1.85,2.24,2.25]}
+The loop's `ticks` stayed 0 after the call returned; `exec get` after a cancelled 30 s sleep
+returned 5 in 164 ms with 28.5 s of the sleep left (acceptance 3 as written). (`-dirty`: design
+documents only.) Revision `e48dffe8f7`: fencing the answers already in flight with a `then` per
+sleep made `exec.sends.answered` 2-3 x slower (12.9 / 13.5 s against 4.8 s without it, J-0395), so
+only sleeps asked for after the call are dead now; a sleep in flight still answers and its code
+takes at most one more step. Re-run at `e48dffe8f7` (load 1.5-2.5):
+{"metric":"exec.afterCancel","unit":"ms","value":165,"sleepLeftMs":28448,"commit":"e48dffe8f7-dirty","loadAvg":[1.54,1.81,1.83]}
+{"metric":"exec.abandonedLoop","ticksAtCancel":4,"ticksLater":4,"commit":"e48dffe8f7-dirty","loadAvg":[1.54,1.81,1.83]}
+{"metric":"qc.execBackgroundLoop","execCranksIn5s":0,"commit":"e48dffe8f7-dirty","loadAvg":[2.5,2,1.89]}
+Reading: a good fit. The exec vat has exactly one door to the outside (`sleep`), so a per-call
+facet that refuses new sleeps once the call ended bounds all asynchronous work to one more step
+without touching the engine (fencing the answers in flight costs too much per answer in a vat). M5's
+`powers` must keep this shape (a facet per call, dead after it), or the deadline no longer bounds
+background work. `busy` remains only for a lost `abandon`.
+Decision: done; architecture 6 and contract 8.1/8.3/8.4 updated.
+
+### J-0392 2026-11-17 M1b QC heap ceiling - poor fit
+Evidence: QC findings 1, 2, 8, 9 (J-0362, J-0368): a 100-call round halted the session vat with
+`HeapExhausted` in its `roundFinal` crank, and a 1,000-turn session in its first context page crank
+after a restart. The engine collects garbage only between cranks (C-7) and halts a crank that would
+take more slots than the slot ceiling (`THIXOTROPE_SLOT_CEILING`, Thixotrope default 1,000,000, 24
+bytes each). A spare session vat's snapshot holds 1,088 slot pages (278,528 slots of capacity,
+the high-water mark of live heap plus its largest crank); the m1b template's other vats 678-1,352
+pages. Acceptance 6 alone, same template and programs (stripped
+bundles), `d4241fa77a-dirty`, load 2.1-2.3: at 1,000,000 slots it halts (`test.failing` held); at
+4,000,000 it passes:
+{"metric":"m1b.acceptance6","turnMs":8587.6,"calls":100,"ran":64,"commit":"d4241fa77a-dirty","crankBudget":"50000000","loadAvg":[2.15,2.2,1.93]}
+So the 100-call crank needs more than the room left (at most about 720,000 slots, less what the
+session's earlier turns raised its live heap by), several thousand slots per call (guards,
+harden, events, publish marshalling). Fix `e2e41a2915`: `scripts/serve.mjs` serves every state with
+`limits.slotCeiling` = 4,000,000 (96 MB of slots; chunk ceiling 256 MiB) unless the host sets it;
+perf rows carry `slotCeiling`. With it, at `6794d9e808` (load 1.8-2.6):
+{"metric":"qc.round256.echo","turnMs":11124.2,"calls":256,"commit":"6794d9e808","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[1.78,2.61,2.35]}
+{"metric":"qc.round256.nosuchtool","turnMs":6050.4,"calls":256,"commit":"6794d9e808","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[1.78,2.61,2.35]}
+{"metric":"m1b.acceptance6","turnMs":8193,"calls":100,"ran":64,"commit":"6794d9e808","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[1.84,2.36,2.29]}
+The largest round a provider may send (`maxCallsPerMessage` 256), of echo or of unknown-tool
+calls, completes with 64 run and 192 refused, and no vat failed. Separately, `ContextSource.page`
+copied the log's tail (`records.since`) for every page; `6c41429b67` walks its own index range
+(`RecordLog.at`; unit test fails on the old source).
+Reading: a poor fit, made workable. The ceiling is not per crank but live heap plus crank, so it
+shrinks as a vat keeps more (a session vat grows with its records and Blob presences), and the
+heaviest crank a vat can be sent sets how much it may keep. Raising the ceiling moves the cliff; it
+does not remove it. Spreading a large round over several cranks (J-0362 option (b)) was not needed
+at 4,000,000 and was not built. The session's slot capacity per 100 turns is now measured
+(`history.grow` `heap`, J-0395) so M2 can see where the cliff is.
+Decision: ceiling 4,000,000 (budget change in milestones "Changes after"); new core candidate C-21
+(a collection inside a crank under allocation pressure, or a per-crank allocation ceiling separate
+from the live heap); C-7 updated.
+
+### J-0393 2026-11-17 M1b QC disk for progress checkpoints - deviation
+Evidence: QC finding 5 (J-0313): checkpoints staged the whole text every 16 KiB and were never
+deleted: 34 MB on disk for a 1 MiB reply, about 3.3 GB computed for 10 MiB. Fix `0673c66408`
+(contract `97c132c172`): a checkpoint is skipped while the round's earlier checkpoints staged more
+than `(progressWriteFactor - 1)` = 2 x the text so far; `TurnSink.progress` is answered and returns
+whether the session kept the checkpoint, and then the adapter deletes the previous checkpoint's
+file (`BlobStore.discard`); a Composer retry the session reports as a duplicate deletes its own
+staged copy. `d49b78418e`: a round that checkpointed ends on a checkpoint of its whole text, which
+the reply reuses, so the checkpoint the session held is deleted too (one more session crank per
+such round). Adapter test (Node, `d49b78418e`, load about 2): a 1 MiB reply in 1,024 chunks of
+1 KiB, 1 ms apart: 10 checkpoints, 3,793,920 bytes staged in all (reply included, 3.6 x; was 34 MB),
+9 checkpoint files deleted, 1 file left (the reply).
+Reading: write volume is linear and no checkpoint outlives its round. Still not bounded: files of a
+staging whose handle never reached a vat (contract 4.7), and a submission the session refused (the
+session may have changed state before refusing, so its file is kept). There is no disk quota.
+Decision: contract change recorded; a disk quota per session and the M2 delete path stay open.
+
+### J-0394 2026-11-17 M1b QC guest bundles without comments - perf
+Evidence: `fc7c725748`: `bundleGuest` strips comments (parsed with `@endo/module-source`'s
+`@babel/parser`, line breaks kept). Bytes before (`4efd2d795c`) and after (before the QC code):
+session program 198,438 -> 130,061; exec 92,917 -> 61,035; factory 141,845 -> 93,009. After the QC
+code: exec 63,067 (unit test `exec.program`). All unit tests that evaluate bundles pass.
+Reading: 68 KB of headroom back under the 200 KB session budget, 37 KB under the 100 KB exec budget;
+staging a program costs about 10 us per byte inbound (C-5), so cold creation and spare refills get
+cheaper (J-0396).
+Decision: done (J-0303's recommendation).
+
+### J-0395 2026-11-17 M1b QC re-run of the M1b and M1a perf checks - perf
+Evidence: `perf/{exec,pool,concurrency,session,turn,history}.perf.mjs` after the QC fixes, release
+worker `7cda4467...`, crank budget 50 M, slot ceiling 4,000,000, one script at a time under the run
+lock; commits `d49b78418e`..`c5a2a04551` (`-dirty` = design documents only), load 1.2-3.5.
+{"metric":"exec.first","unit":"ms","n":5,"median":541,"p95":552,"commit":"e48dffe8f7-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[3.5,2.46,2.1]}
+{"metric":"exec.trivial","unit":"ms","n":50,"median":179,"p95":247,"commit":"e48dffe8f7-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.82,2.45,2.12]}
+{"metric":"exec.sends.answered","unit":"ms","n":5,"median":6668,"p95":8516,"min":4258,"commit":"e48dffe8f7-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.43,2.38,2.1]}
+{"metric":"exec.runaway","unit":"ms","value":697,"commit":"e48dffe8f7-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.24,2.34,2.09]}
+{"metric":"exec.retire","unit":"bytes","value":59965691,"pass":true,"commit":"e48dffe8f7-dirty"}
+{"metric":"tooBig.keys60k","unit":"ms","value":8075.258,"execVatsRetired":1,"result":"Error: exec scope terminated: the exec vat ran out of property names (too many distinct keys were created); bindings from earlier calls are gone","commit":"e48dffe8f7-dirty"}
+{"metric":"session.create.pool","unit":"ms","n":8,"median":1255.278,"p95":1346.392,"pass":false,"commit":"d49b78418e-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.69,2.12,1.97]}
+{"metric":"session.create.poolAwake","unit":"ms","n":4,"median":1111.425,"commit":"d49b78418e-dirty"}
+{"metric":"session.create.cold","unit":"ms","n":3,"median":5928.47,"pass":true,"commit":"d49b78418e-dirty"}
+{"metric":"pool.refill","unit":"ms","n":3,"median":4220.485,"commit":"d49b78418e-dirty"}
+{"metric":"concurrency.single.turnStart","unit":"ms","n":15,"median":278,"p95":326,"commit":"c5a2a04551-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.04,2.31,2.11]}
+{"metric":"concurrency.10.turnStart","unit":"ms","n":80,"median":1009,"p95":1137,"ratioMedian":3.63,"budget":{"median":556},"pass":false,"commit":"c5a2a04551-dirty","loadAvg":[2.67,2.44,2.17]}
+{"metric":"concurrency.10.crank","unit":"ms","median":300,"p95":500,"p99":750,"budget":{"p95":200},"pass":false,"single":{"p95":150},"commit":"c5a2a04551-dirty"}
+{"metric":"concurrency.10.rowPush","unit":"ms","n":80,"median":372,"p95":541,"pass":true,"commit":"c5a2a04551-dirty"}
+{"metric":"concurrency.10.gc","gcFramesPerSessionTurn":2.75,"commit":"c5a2a04551-dirty"}
+{"metric":"session.program","value":130798,"pass":true,"commit":"c5a2a04551-dirty"}
+{"metric":"install.factory","unit":"ms","n":3,"median":6323,"pass":true,"commit":"c5a2a04551-dirty"}
+{"metric":"session.createCold","unit":"ms","n":5,"median":5822.623,"p95":6239.312,"pass":true,"commit":"c5a2a04551-dirty"}
+{"metric":"turn.start","unit":"ms","n":200,"median":282,"p95":327,"p99":688,"max":968,"pass":true,"commit":"c5a2a04551-dirty","loadAvg":[2.9,2.54,2.29]}
+{"metric":"turn.delta","unit":"ms","n":250,"median":0.139,"p95":0.342,"pass":true,"commit":"c5a2a04551-dirty"}
+{"metric":"turn.delta.client","unit":"ms","n":250,"median":17,"p95":38,"p99":318,"commit":"c5a2a04551-dirty"}
+{"metric":"turn.round","value":3,"pass":true}
+{"metric":"turn.lease","value":1,"pass":true}
+{"metric":"turn.tooBig.reply64k","unit":"ms","value":1100}
+{"metric":"turn.tooBig.echo300k","unit":"ms","value":1068}
+{"metric":"turn.tooBig.keys2000","unit":"ms","value":1074}
+{"metric":"history.page","unit":"ms","n":30,"median":627.076,"p95":675.633,"p99":714.81,"min":603.034,"max":714.81,"turns":26,"budget":{"median":300},"pass":false,"exceeded":["median: 627.076 > 1.25 x 300"],"commit":"c5a2a04551-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.62,2.47,2.29]}
+{"metric":"history.page.floor","unit":"ms","n":30,"median":95.176,"p95":99.271,"p99":104.122,"min":93.119,"max":104.122,"pass":null,"commit":"c5a2a04551-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.49,2.45,2.28]}
+{"metric":"history.grow","turns":1000,"ms":1672727,"heap":{"label":"spare session 1","cut":10893,"slots":513280,"ofCeiling":0.128},"loadAvg":[1.25,2.05,2.48]}
+{"metric":"history.heap","turns":1000,"heap":{"label":"spare session 1","cut":10999,"slots":513280,"ofCeiling":0.128},"commit":"c5a2a04551-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[1.21,2.02,2.46]}
+{"metric":"context.rebuild","unit":"ms","value":21670,"turns":1001,"level":"adapter prepare of the first round after a clean restart","timing":{"pages":14,"pageMs":21092.1,"waitResolveMs":488.8,"readMs":70.3,"blobs":2000,"projectMs":10.9},"transcriptRecords":5001,"transcriptBytes":878734,"status":"completed","serveMs":6127.4,"growMs":1672817.1,"first32Ms":28381.5,"deliveriesInTurn":59,"budget":{"value":5000},"pass":false,"exceeded":["value: 21670 > 1.25 x 5000"],"commit":"c5a2a04551-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[1.21,1.95,2.42]}
+Live heap of the session vat from its snapshots while it grew (slot capacity minus the free list,
+approximate; read by hand from the running state, `tmp/qc/heap-sample.sh`, deleted):
+{"turnsAbout":200,"cut":1908,"slots":513280,"liveApprox":118232}
+{"turnsAbout":430,"cut":4028,"slots":513280,"liveApprox":171100}
+{"turnsAbout":600,"cut":5614,"slots":513280,"liveApprox":197376}
+{"turnsAbout":900,"cut":9543,"slots":513280,"liveApprox":294298}
+Seconds per 100 turns while growing: 65, 110, 133, 147, 163, 176, 205, 214, 226, 234 (0.65 ->
+2.34 s per turn; W1b.6: 0.69 -> 2.46).
+A/B for `exec.sends.answered` (same template and commit `b8ed5fdb34`, one variable each, load
+1.5-2.2): the QC program with a `then` per sleep 12,855 ms (slot ceiling 4,000,000) and 13,464 ms
+(1,000,000); the pre-QC program 6,639 ms; the QC program without the per-sleep `then` 4,847 ms. So
+the slot ceiling costs nothing here and the wrapper cost 2-3 x; it was removed (`e48dffe8f7`,
+J-0391). In every variant the five sends calls get slower one after another (about 4 -> 8 s, or
+8 -> 16 s with the wrapper) on the same exec vat: the vat's heap grows per call (each call compiles
+a new body) and every crank collects all of it (C-7). One `exec.runaway` at the 4,000,000 ceiling
+took 12,941 ms (a wake from snapshot first); 4 other runs at either ceiling took 598-722 ms.
+Reading: the QC fixes pass everything they touch, and the 130 KB session program brings
+`session.createCold` back under 6 s (5.8-5.9 s, was 7.7 s). The misses that remain are not changed
+by the QC: `session.create.pool` 1.21-1.26 s (1.6-1.7 x), `concurrency.10` turn start 3.63 x and
+crank p95 500 ms, `history.page` 627 ms (2.1 x), and `context.rebuild` at 1,000 turns. That last one is the QC's main
+change of outcome: the 1,000-turn session no longer halts after the restart (2 of 2 runs lost it
+before, J-0368); its next turn completes, but the rebuild takes 21.7 s (14 pages of about 360
+records, 1.5 s of session crank each) against 5 s: a 4.3 x miss. The session vat's live heap grows
+by about 200-300 slots per turn (about 300,000 at 1,000 turns, J-0392's room) while its capacity
+stays at the 513,280 its heaviest crank so far needed; the per-turn time rises as before.
+Decision: the misses are escalated with their core dependencies (J-0397); budgets are not re-based
+here.
+
+### J-0396 2026-11-17 M1b QC acceptance and integration - perf
+Evidence: every M1a and M1b integration file, one per invocation under the run lock, release worker
+`7cda4467...`, crank budget 50 M, slot ceiling 4,000,000, at `6794d9e808`/`d49b78418e` (load
+1.8-2.7), and the three exec files again at `e48dffe8f7` after the fence revision:
+m1b-qc pass (158 s; again 166 s), m1b-live 3 passed + 1 known failure (9 delete, M2) (128 s),
+m1b-exec-tool-restart pass (108 s; again 111 s), m1b-exec-tool pass (173 s; again 156 s),
+m1b-content 2 passed (99 s), m1b-context-restart pass (211 s), m1b-pool pass (166 s),
+m1b-pool-restart 3 passed (118 s), m1a-slice 6 passed (204 s), m1a-slice-restart 4 passed (167 s),
+m1a-slice-crash pass (98 s), m1a-provision pass (159 s). Selected rows:
+{"metric":"exec.afterCancel","unit":"ms","value":165,"sleepLeftMs":28448,"commit":"e48dffe8f7-dirty","loadAvg":[1.54,1.81,1.83]}
+{"metric":"exec.abandonedLoop","ticksAtCancel":4,"ticksLater":4,"commit":"e48dffe8f7-dirty","loadAvg":[1.54,1.81,1.83]}
+{"metric":"qc.execBackgroundLoop","execCranksIn5s":0,"commit":"e48dffe8f7-dirty","loadAvg":[2.5,2,1.89]}
+{"metric":"qc.round256.echo","turnMs":11276,"commit":"e48dffe8f7-dirty","loadAvg":[2.5,2,1.89]}
+{"metric":"m1b.acceptance2","turnMs":2192.8,"resultUnits":32767,"commit":"d49b78418e-dirty"}
+{"metric":"m1b.acceptance7","replyTurnMs":2528.8,"replyBytes":1048586,"replyReadMs":2173.3,"roundOneContextBytes":1048902,"commit":"d49b78418e-dirty"}
+{"metric":"context.rebuild.vat","unit":"ms","value":2441,"restart":"clean","timing":{"pages":2,"pageMs":2018.4},"turns":202,"commit":"d49b78418e-dirty"}
+{"metric":"context.rebuild.vat","unit":"ms","value":2256,"restart":"kill","timing":{"pages":2,"pageMs":1752},"turns":203,"commit":"d49b78418e-dirty"}
+{"metric":"exec.restart.sigkill","unit":"ms","value":7026.7,"commit":"e48dffe8f7-dirty"}
+{"metric":"exec.workerKilled","unit":"ms","value":5607.5,"commit":"e48dffe8f7-dirty"}
+{"metric":"session.create.pool","unit":"ms","n":3,"median":1208.541,"commit":"6794d9e808","source":"m1b-pool"}
+{"metric":"m1a.slice.crashingSession","unit":"ms","value":5941,"commit":"6794d9e808"}
+Unit lane: 434 passed, 38 skipped; `corepack yarn lint` (tsc + eslint) 0 errors; guest lint passes;
+prettier clean on changed files. Core: `packages/thixotrope` `corepack yarn lint:types` 0 errors
+(was 1, TS2345 in `test/measured-engine.test.js`, fixed in `d4241fa77a`; the test passes). No
+change under `packages/thixotrope/src`, the engine or the worker, so the Ironhorse lane was not
+re-run (66/66 at C-20, J-9213).
+Reading: acceptance 1-12 pass as written except 9's delete (M2). m1b-live now runs in 128 s (286 s
+before: acceptance 6 no longer waits on a halted vat).
+Decision: M1b acceptance done; 9's delete moved to M2 acceptance 13.
+
+### J-0397 2026-11-17 M1b QC what stays open - poor fit
+Evidence: J-0395, J-0396 and the QC findings.
+Reading and decision, per item:
+(1) `session.create` with the pool, 1.21-1.26 s against 750 ms: 7 serial vat cranks (factory 4,
+manager 2, spare 1, about 75 ms each with the full collection, C-7) plus a 270-300 ms wake from
+snapshot; an awake spare is still 1.11 s. Caching a Backend's description in the factory would save
+one manager hop (about 150 ms) and still miss 1.25 x. Depends on C-2 and C-7; PM to rule (re-base to
+about 1.3 s, or wait for the core).
+(2) `concurrency.10` turn start 3.63 x and crank p95 500 ms (single session 150): the supervisor's
+hub persists (C-2) and the per-crank collection of 10 busy vats (C-7). Not changed by the QC.
+(3) `history.page` and `context.rebuild`: both are session-vat cranks that answer many records, about
+2-3 ms per record (marshal and guards, C-5) plus the full collection (C-7). M2 W2.5 bounds history
+pages by records; J-0322 option (b) (persist the adapter's cache next to the blobs) removes the page
+cranks from the restart path. At 1,000 turns the rebuild now completes (21.7 s, 4.3 x the budget) instead of losing the session.
+(4) Name-table exhaustion is still catchable in session and factory vats (C-6); only the exec vat is
+covered.
+(5) Disk: no per-session quota; refused staged submissions and stagings whose handle never left the
+adapter keep their files (contract 4.7); M2's delete frees the rest.
+(6) Advisories not done (follow-ups): the list publisher goes stale after an adapter-only restart
+until the next daemon start or an over-cap flush (advisory 1); a thrown hub journal append can wedge
+the worker transport (3); the C-20 crash test cannot see a missing commit at one of its two sites
+(4); `sameSubmission` without a digest (5, contract 16.8); the context cache never evicts the entry
+being prepared and its `timing` object is shared (6); the exec compartment still has `Compartment`
+and `lockdown` globals and stack strings show host paths (7); a `StagedText.blob` from the exec vat
+is shape-checked only (8); a replaced spare's pre-minted host leaks (9); test-strength notes (11);
+acceptance 12's wording ("listed once" holds once the create went through, 14).
+Done from the advisories: the list feed's over-cap rows (2), a frozen per-call `sleep` that dies
+with its call (7, p06/p13), bundle headroom (12, 16), `session.create.cold` (15), m1b-live's run
+time (18).
+
+### J-0398 2026-11-17 M1b QC fit of the milestone - poor fit
+Evidence: J-0390..J-0397.
+Reading: what M1b built on Thixotrope's strengths fits: the persistent exec scope needs no save or
+replay code, blobs keep every frame small, and the call fence and `abandon` close the exec vat's
+only door to the outside with a per-call facet. What M1b found in the heap model does not fit a
+long-lived conversation: the engine collects only between cranks and collects everything each
+time, so (a) the slot ceiling bounds live heap plus one crank and has to be sized for the heaviest
+crank a vat can be sent (4,000,000 now, persisted per state), and (b) every crank of a session costs
+more as the session grows (0.69 -> 2.46 s per turn over 1,000 turns, J-0370). The harness can
+shrink its cranks (pages, rounds) and move records out of the vat (an archive), but the cliff and
+the slope are the engine's (C-7, C-21).
+Decision: M2 measures the session vat's slot capacity next to snapshot size and decides an archive
+in M2 (milestones W2.5); C-7 and C-21 go to the core owner with these numbers.

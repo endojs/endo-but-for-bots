@@ -57,10 +57,9 @@ export const limits = Object.freeze({
    * The engine collects garbage only between cranks, so the ceiling bounds
    * a vat's live heap plus everything one crank allocates, and going over
    * halts the vat (`HeapExhausted`). At Thixotrope's default (1,000,000) a
-   * session vat whose live heap is about 280,000 slots (a spare's snapshot)
-   * halted in the crank that records a round of 100 tool calls (about 7,000
-   * slots per call; J-0362), and a 1,000-turn session in its first context
-   * page crank (J-0368). M1b QC (J-0392) raised it for every vat: 4,000,000
+   * session vat (a spare's slot capacity is about 280,000) halted in the
+   * crank that records a round of 100 tool calls (J-0362), and a 1,000-turn
+   * session in its first context page crank (J-0368). M1b QC (J-0392) raised it for every vat: 4,000,000
    * slots (96 MB; the chunk ceiling is 256 MiB) admit the 256-call round
    * `maxCallsPerMessage` allows. The worker accepts up to 44,739,242. A state
    * persists the ceiling it was served with and Thixotrope refuses to serve
