@@ -129,31 +129,31 @@ test('mergeGatewayConfig rejects relay without ocapnWebSocket', t => {
   );
 });
 
-test('mergeGatewayConfig rejects relay without udsBootstrap', t => {
+test('mergeGatewayConfig rejects relay without sockBootstrap', t => {
   t.throws(
     () =>
       mergeGatewayConfig({
         enableFeatures: {
           ...defaultFeatureToggles,
           captpRelay: true,
-          udsBootstrap: false,
+          sockBootstrap: false,
         },
       }),
-    { message: /captpRelay depends on udsBootstrap/ },
+    { message: /captpRelay depends on sockBootstrap/ },
   );
 });
 
-test('mergeGatewayConfig rejects adminDaemon without udsBootstrap', t => {
+test('mergeGatewayConfig rejects adminDaemon without sockBootstrap', t => {
   t.throws(
     () =>
       mergeGatewayConfig({
         enableFeatures: {
           ...defaultFeatureToggles,
           adminDaemon: true,
-          udsBootstrap: false,
+          sockBootstrap: false,
         },
       }),
-    { message: /adminDaemon depends on udsBootstrap/ },
+    { message: /adminDaemon depends on sockBootstrap/ },
   );
 });
 
