@@ -86,6 +86,14 @@ export const ENV_ALLOWLIST = Object.freeze([
   'THIXOTROPE_REQUEST_TIMEOUT_MS',
   'THIXOTROPE_MAX_DELIVERY_ATTEMPTS',
   'THIXOTROPE_TRACE',
+  // The collection schedule (CC-022, CC-023): fixed per state directory,
+  // so a run that bisects with `every-crank` must reach the supervisor.
+  'THIXOTROPE_GC_POLICY',
+  'THIXOTROPE_GC_SLOT_ALLOWANCE',
+  'THIXOTROPE_GC_CHUNK_ALLOWANCE',
+  'THIXOTROPE_GC_CRANK_INTERVAL',
+  // How the hub keeps its state (CC-024): `log` (default) or `file`.
+  'THIXOTROPE_HUB_STORE',
 ]);
 
 /** Set by the wrapper itself, besides the allowlist. */

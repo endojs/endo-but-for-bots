@@ -274,6 +274,21 @@ test('in-process serving refuses the same way before any supervisor starts', asy
   t.deepEqual(await readdir(dir), [SERVE_RECORD]);
 });
 
+test('the collection schedule and the hub store pass through to the supervisor (CC-022..CC-024)', t => {
+  const env = {
+    THIXOTROPE_GC_POLICY: 'every-crank',
+    THIXOTROPE_GC_SLOT_ALLOWANCE: '65536',
+    THIXOTROPE_GC_CHUNK_ALLOWANCE: '8388608',
+    THIXOTROPE_GC_CRANK_INTERVAL: '16',
+    THIXOTROPE_HUB_STORE: 'file',
+  };
+  const out = allowlistEnvironment(env, { crankBudget: 1n });
+  for (const [name, value] of Object.entries(env)) t.is(out[name], value);
+  // Unset stays unset: the supervisor applies its own defaults.
+  const bare = allowlistEnvironment({}, { crankBudget: 1n });
+  for (const name of Object.keys(env)) t.false(name in bare);
+});
+
 test('THIXOTROPE_MAX_DELIVERY_ATTEMPTS: allowlisted, defaulted from config, validated like thix serve', t => {
   t.true(ENV_ALLOWLIST.includes('THIXOTROPE_MAX_DELIVERY_ATTEMPTS'));
   // The upstream default (PR 1667), as a named harness setting.
