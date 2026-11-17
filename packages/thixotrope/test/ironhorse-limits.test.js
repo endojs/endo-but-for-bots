@@ -31,6 +31,9 @@ test('Ironhorse configuration preserves wide budgets without numeric rounding', 
     bootstrapBudget: '18446744073709551615',
     slotCeiling: 2_000_000,
     chunkCeiling: 536_870_912,
+    gcPolicy: 'allocation',
+    gcSlotAllowance: 131_072,
+    gcChunkAllowance: 16_777_216,
     requestTimeoutMs: 90_000,
   });
   t.is(
@@ -49,9 +52,29 @@ test('Ironhorse configuration rejects unsupported quantities rather than clampin
     { chunkCeiling: -1 },
     { requestTimeoutMs: 2_147_483_648 },
     { requestTimeoutMs: 1.5 },
+    { gcPolicy: /** @type {any} */ ('sometimes') },
+    { gcSlotAllowance: 0 },
+    { gcSlotAllowance: 500_001 },
+    { gcChunkAllowance: 128 * 1024 * 1024 + 1 },
   ]) {
     t.throws(() => makeIronhorseLimits(options), { message: /must be/ });
   }
+});
+
+test('Ironhorse collection schedule is read from the environment', t => {
+  const limits = readIronhorseLimits({
+    get: name =>
+      ({
+        THIXOTROPE_GC_POLICY: 'every-crank',
+        THIXOTROPE_GC_SLOT_ALLOWANCE: '4096',
+        THIXOTROPE_GC_CHUNK_ALLOWANCE: '65536',
+      })[name],
+  });
+  t.like(limits, {
+    gcPolicy: 'every-crank',
+    gcSlotAllowance: 4096,
+    gcChunkAllowance: 65_536,
+  });
 });
 
 // The runtime manifest policy is exercised against an in-memory host: a fake
@@ -219,6 +242,9 @@ const defaultLimits = harden({
   bootstrapBudget: '1000000000',
   slotCeiling: 1_000_000,
   chunkCeiling: 268_435_456,
+  gcPolicy: 'allocation',
+  gcSlotAllowance: 131_072,
+  gcChunkAllowance: 16_777_216,
 });
 
 test('Ironhorse runtime records execution limits beside the pinned identity', async t => {
@@ -283,6 +309,35 @@ test('Ironhorse heap ceilings refuse to decrease below the persisted value', asy
     crankBudget: '1',
     slotCeiling: 1_600_000,
     chunkCeiling: 400_000_000,
+  });
+});
+
+test('Ironhorse collection schedule never changes for a state directory', async t => {
+  const host = makeFakeHost();
+  const manifest = await acquire(t, host, {});
+  const before = host.texts.get(manifestPath);
+  for (const [options, name] of /** @type {const} */ ([
+    [{ gcPolicy: 'every-crank' }, 'gcPolicy'],
+    [{ gcSlotAllowance: 65_536 }, 'gcSlotAllowance'],
+    [{ gcChunkAllowance: 1_048_576 }, 'gcChunkAllowance'],
+  ])) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => acquire(t, host, options), {
+      message: new RegExp(
+        `^Incompatible Ironhorse runtime: ${name} cannot change from persisted value`,
+      ),
+    });
+    t.is(host.texts.get(manifestPath), before);
+  }
+  // A raised ceiling does not move the schedule.
+  const raised = await acquire(t, host, { slotCeiling: 2_000_000 });
+  t.deepEqual(raised.limits, { ...manifest.limits, slotCeiling: 2_000_000 });
+  // A state made under every-crank keeps it.
+  const other = makeFakeHost();
+  const old = await acquire(t, other, { gcPolicy: 'every-crank' });
+  t.is(old.limits.gcPolicy, 'every-crank');
+  await t.throwsAsync(() => acquire(t, other, {}), {
+    message: /gcPolicy cannot change from persisted value every-crank/,
   });
 });
 

@@ -14,7 +14,7 @@ import { WorkerHaltError } from '../core/worker-engine.js';
 import { withExpiry } from '../platform/timers.js';
 
 /** @import { WorkerEngine } from '../core/worker-engine.js' */
-/** @import { LimitInput } from './ironhorse-limits.js' */
+/** @import { GcPolicyName, LimitInput } from './ironhorse-limits.js' */
 
 /** The largest budget the worker accepts (u64). */
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
@@ -41,6 +41,10 @@ const U64_MAX = 0xffff_ffff_ffff_ffffn;
  * @param {LimitInput} [options.bootstrapBudget]
  * @param {LimitInput} [options.slotCeiling]
  * @param {LimitInput} [options.chunkCeiling]
+ * @param {GcPolicyName} [options.gcPolicy] when the worker collects garbage
+ *   (see `makeIronhorseLimits`)
+ * @param {LimitInput} [options.gcSlotAllowance]
+ * @param {LimitInput} [options.gcChunkAllowance]
  * @param {LimitInput} [options.requestTimeoutMs] watchdog: a worker that has
  *   not answered a request in this long is killed, and has crashed
  * @returns {WorkerEngine}
@@ -55,6 +59,9 @@ export const makeIronhorseEngine = (
     bootstrapBudget,
     slotCeiling,
     chunkCeiling,
+    gcPolicy,
+    gcSlotAllowance,
+    gcChunkAllowance,
     requestTimeoutMs,
   },
 ) => {
@@ -63,6 +70,9 @@ export const makeIronhorseEngine = (
     bootstrapBudget,
     slotCeiling,
     chunkCeiling,
+    gcPolicy,
+    gcSlotAllowance,
+    gcChunkAllowance,
     requestTimeoutMs,
   });
   const timeoutMs = limits.requestTimeoutMs;
@@ -385,7 +395,8 @@ export const makeIronhorseEngine = (
       }
       /**
        * One crank: dispatch `source` (calls of the bootstrap's dispatch),
-       * drain its jobs, collect and finalize, take outbound.
+       * drain its jobs, collect and finalize when the worker's collection
+       * schedule (`limits.gcPolicy`) says so, take outbound.
        *
        * @param {string} source
        * @param {string} budget decimal computrons

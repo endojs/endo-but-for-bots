@@ -760,6 +760,9 @@ Per-vat overrides are not implemented yet.
 | `THIXOTROPE_BOOTSTRAP_BUDGET` | computrons per bootstrap script or peer initialization | 1,000,000,000 | 1 to 2^64−1 |
 | `THIXOTROPE_SLOT_CEILING` | slot records | 1,000,000 | 1 to 44,739,242 |
 | `THIXOTROPE_CHUNK_CEILING` | chunk address-space bytes | 268,435,456 | 1 to 536,870,912 |
+| `THIXOTROPE_GC_POLICY` | when a worker collects garbage: `allocation` or `every-crank` | `allocation` | fixed per state directory |
+| `THIXOTROPE_GC_SLOT_ALLOWANCE` | live-slot growth between collections (`allocation`) | 131,072 | 1 to half the slot ceiling; fixed per state directory |
+| `THIXOTROPE_GC_CHUNK_ALLOWANCE` | chunk-footprint bytes of growth between collections (`allocation`) | 16,777,216 | 1 to half the chunk ceiling; fixed per state directory |
 | `THIXOTROPE_REQUEST_TIMEOUT_MS` | milliseconds per worker request | 60,000 | 1 to 2^31−1 |
 | `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` | crashes in a row without progress before a vat is given up on | 5 | 2 to 100 |
 
@@ -769,6 +772,13 @@ Supply positive decimal integers; zero does not mean unlimited.
 The engine API also accepts bigint budgets; numeric inputs must fit unsigned 32 bits.
 Status reports computron budgets as decimal strings to preserve precision.
 Heap ceilings are arena limits, not per-crank allowances or total process memory limits.
+Under the `allocation` policy a worker collects after a crank that grew its live slots or chunk
+footprint by the allowance since its last collection, and before it writes an image; a crank
+therefore starts with less than the allowance of garbage, so a vat needs the allowance to spare
+under each ceiling beyond what it needs under `every-crank` (a full collection after every crank,
+the behaviour before this setting). The schedule decides in which crank a finalizer runs, so it
+must be the same for a replay as for the original run: a state directory refuses to start under
+another policy or allowance.
 
 Limits may change on restart while preserving the workspace, with one exception:
 the slot and chunk ceilings may only increase, because a restored heap that already exceeds a

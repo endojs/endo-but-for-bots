@@ -9,8 +9,24 @@ import harden from '@endo/harden';
  * @property {LimitInput} [bootstrapBudget]
  * @property {LimitInput} [slotCeiling]
  * @property {LimitInput} [chunkCeiling]
+ * @property {GcPolicyName} [gcPolicy]
+ * @property {LimitInput} [gcSlotAllowance]
+ * @property {LimitInput} [gcChunkAllowance]
  * @property {LimitInput} [requestTimeoutMs]
  */
+
+/**
+ * When the worker collects garbage. `allocation` (the default) collects
+ * after a crank that grew the live slots by `gcSlotAllowance` or the chunk
+ * footprint by `gcChunkAllowance` since the last collection, and before the
+ * image at close; `every-crank` collects after every crank, as every worker
+ * did before (kept so a regression can be bisected). See the worker's
+ * `GcPolicy` (`rust/thixotrope-ironhorse-worker/src/main.rs`).
+ * @typedef {'allocation' | 'every-crank'} GcPolicyName
+ */
+
+/** @type {ReadonlyArray<GcPolicyName>} */
+const gcPolicyNames = harden(['allocation', 'every-crank']);
 
 /**
  * Parse exact natural quantities at the configuration boundary. Numbers are
@@ -47,21 +63,45 @@ export const makeIronhorseLimits = ({
   bootstrapBudget = 1_000_000_000n,
   slotCeiling = 1_000_000,
   chunkCeiling = 256 * 1024 * 1024,
+  gcPolicy = 'allocation',
+  gcSlotAllowance = 128 * 1024,
+  gcChunkAllowance = 16 * 1024 * 1024,
   requestTimeoutMs = 60_000,
-} = {}) =>
-  harden({
+} = {}) => {
+  const slots = Number(natural('slotCeiling', slotCeiling, 0xffff_ffffn));
+  const chunks = Number(natural('chunkCeiling', chunkCeiling, 0xffff_ffffn));
+  if (!gcPolicyNames.includes(gcPolicy)) {
+    throw Error(`gcPolicy must be one of ${gcPolicyNames.join(', ')}`);
+  }
+  // An allowance above half its ceiling would collect after every crank;
+  // the worker refuses it too.
+  const allowance = (
+    /** @type {string} */ name,
+    /** @type {LimitInput} */ value,
+    /** @type {number} */ ceiling,
+  ) => {
+    const amount = Number(natural(name, value, 0xffff_ffffn));
+    if (amount > ceiling / 2)
+      throw Error(`${name} must be at most half its ceiling (${ceiling})`);
+    return amount;
+  };
+  return harden({
     crankBudget: String(
       natural('crankBudget', crankBudget, 0xffff_ffff_ffff_ffffn),
     ),
     bootstrapBudget: String(
       natural('bootstrapBudget', bootstrapBudget, 0xffff_ffff_ffff_ffffn),
     ),
-    slotCeiling: Number(natural('slotCeiling', slotCeiling, 0xffff_ffffn)),
-    chunkCeiling: Number(natural('chunkCeiling', chunkCeiling, 0xffff_ffffn)),
+    slotCeiling: slots,
+    chunkCeiling: chunks,
+    gcPolicy,
+    gcSlotAllowance: allowance('gcSlotAllowance', gcSlotAllowance, slots),
+    gcChunkAllowance: allowance('gcChunkAllowance', gcChunkAllowance, chunks),
     requestTimeoutMs: Number(
       natural('requestTimeoutMs', requestTimeoutMs, 0x7fff_ffffn),
     ),
   });
+};
 harden(makeIronhorseLimits);
 
 /**
@@ -74,6 +114,20 @@ harden(makeIronhorseLimits);
  */
 export const heapCeilingNames = harden(['slotCeiling', 'chunkCeiling']);
 
+/**
+ * The limits that decide when a worker collects garbage, and so in which
+ * crank a finalizer runs and its outbound leaves the vat. Recovery replays a
+ * journal suffix onto the last image and the hub drops replayed outbound by
+ * sequence number, so a replay must collect after the same cranks as the
+ * incarnation it replaces: these limits never change for a state directory.
+ * @type {ReadonlyArray<'gcPolicy' | 'gcSlotAllowance' | 'gcChunkAllowance'>}
+ */
+export const gcScheduleNames = harden([
+  'gcPolicy',
+  'gcSlotAllowance',
+  'gcChunkAllowance',
+]);
+
 /** @param {EnvironmentPowers} environment */
 export const readIronhorseLimits = environment =>
   makeIronhorseLimits({
@@ -81,6 +135,11 @@ export const readIronhorseLimits = environment =>
     bootstrapBudget: environment.get('THIXOTROPE_BOOTSTRAP_BUDGET'),
     slotCeiling: environment.get('THIXOTROPE_SLOT_CEILING'),
     chunkCeiling: environment.get('THIXOTROPE_CHUNK_CEILING'),
+    gcPolicy: /** @type {GcPolicyName | undefined} */ (
+      environment.get('THIXOTROPE_GC_POLICY')
+    ),
+    gcSlotAllowance: environment.get('THIXOTROPE_GC_SLOT_ALLOWANCE'),
+    gcChunkAllowance: environment.get('THIXOTROPE_GC_CHUNK_ALLOWANCE'),
     requestTimeoutMs: environment.get('THIXOTROPE_REQUEST_TIMEOUT_MS'),
   });
 harden(readIronhorseLimits);

@@ -48,6 +48,9 @@ test.serial(
       bootstrapBudget: '1100000000',
       slotCeiling: 1_200_000,
       chunkCeiling: 300_000_000,
+      gcPolicy: 'allocation',
+      gcSlotAllowance: 131_072,
+      gcChunkAllowance: 16_777_216,
       requestTimeoutMs: 90_000,
     });
     await host.client.call(
@@ -116,7 +119,16 @@ test.serial(
       bootstrapBudget: '1100000000',
       slotCeiling: 1_500_000,
       chunkCeiling: 400_000_000,
+      gcPolicy: 'allocation',
+      gcSlotAllowance: 131_072,
+      gcChunkAllowance: 16_777_216,
     });
+    // The collection schedule is fixed for the state directory: a replayed
+    // journal must collect after the same cranks.
+    await t.throwsAsync(
+      () => start({ ...raisedEnv, THIXOTROPE_GC_POLICY: 'every-crank' }),
+      { message: /gcPolicy cannot change from persisted value allocation/ },
+    );
     host = await start(raisedEnv);
     t.is(await host.client.call('evaluate', 'savedForLimits'), '42');
   },

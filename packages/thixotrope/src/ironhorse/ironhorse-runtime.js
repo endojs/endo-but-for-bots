@@ -7,7 +7,11 @@ import { q } from '@endo/errors';
 import harden from '@endo/harden';
 
 import { assertRecordVersion } from '../store/versioned-record.js';
-import { heapCeilingNames, makeIronhorseLimits } from './ironhorse-limits.js';
+import {
+  gcScheduleNames,
+  heapCeilingNames,
+  makeIronhorseLimits,
+} from './ironhorse-limits.js';
 
 /**
  * @typedef {object} RuntimeIdentity
@@ -98,6 +102,16 @@ const checkSavedManifest = (saved, identity, executionLimits) => {
     if (BigInt(executionLimits[name]) < BigInt(previous[name])) {
       throw Error(
         `Incompatible Ironhorse runtime: ${name} cannot decrease below persisted value ${previous[name]}; a restored heap may already exceed the lower ceiling`,
+      );
+    }
+  }
+  // The collection schedule decides which crank runs a finalizer; a replay
+  // under another schedule would emit other outbound under the same
+  // sequence numbers. Refuse rather than diverge.
+  for (const name of gcScheduleNames) {
+    if (executionLimits[name] !== previous[name]) {
+      throw Error(
+        `Incompatible Ironhorse runtime: ${name} cannot change from persisted value ${previous[name]}; a replayed journal would collect garbage after other cranks; use a fresh state directory`,
       );
     }
   }
@@ -223,8 +237,9 @@ export const acquireIronhorseRuntime = async (
       bootstrap: digests.slice(1),
     };
     // Execution limits do not identify code or the snapshot format; keeping
-    // them out of the profile lets the same heaps reopen after a change. Only
-    // the heap ceilings are monotonic (see checkSavedManifest). The watchdog
+    // them out of the profile lets the same heaps reopen after a change. The
+    // heap ceilings are monotonic and the collection schedule is fixed (see
+    // checkSavedManifest). The watchdog
     // is operational and is not part of the persisted profile at all.
     const { requestTimeoutMs: _timeout, ...executionLimits } = limits;
     const manifest = { ...identity, limits: executionLimits };
