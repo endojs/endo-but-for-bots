@@ -6559,3 +6559,68 @@ the next owner or W2.9 (2.3). Cost: acceptance 7 (secrets end to end), 11 (defau
 (5,000-turn flatness) cannot run before W2.9, because each needs units of both groups.
 Decision: for the PM: the M2 table now has W2.8 (group A) and W2.9 (integration) rows; the
 assignment in 2.2 is binding for the builders.
+
+### J-0440 2026-11-18 M2 object model - good fit
+Evidence: W2.3 (`8e4e0a1f28`, `27238a1a94`); `resources/agent-host/durable.js`,
+`AH/secrets/{store,seal,writer,manager}.js`; `test/adapter/m2-w23-manager.test.js` (the restart
+case: a fake manager kit retires the ops facet as a SIGKILL does).
+Reading: "secrets never enter a vat" splits the Secrets object model along the manager/adapter
+seam that blobs already use (M1b 17.3). Durable identities, in the agent-host manager vat:
+the one `SecretsAdmin`, each `Secret` (with its label and description, which are not secret), each
+`ReadGrant`, and the store key `k<n>` of each, held only in manager `WeakMap`s; API `Backend`s
+keep their spec, which holds the grant, never key text (`makeBackend` refuses a grant this manager
+did not mint). Adapter-only, per incarnation: the decrypted entries and the audit tail in memory,
+the `SecretWriter` exo, the sealing keys, and two weak caches presence -> key filled by one sink
+call (`resolveGrants`, `resolveSecrets`) per handle per incarnation. On disk: `secrets.enc`
+(AES-256-GCM) and `secrets-audit.log` (each line sealed) in the state directory, the 32-byte
+wrapping key outside it. What a restart does: every manager identity survives with the vat heap
+and keeps working through the next ops facet (`withOps` reconciles once); a grant in a backend
+spec reads the same value after one sink call; a `SecretWriter` a client held is a tombstone and
+the client opens a new one; a box sealed before the restart still opens, because the X25519 key is
+derived from the wrapping key rather than stored; the values come back from `secrets.enc`. A vat
+never holds a value, and nothing maps a key back to a handle, so the key in the sink calls grants
+nothing. The writer's amplification (pass the `Secret` itself) is exactly the owner's principle:
+no secret id crosses any boundary.
+Decision: good fit. Two consequences for later units: the gateway (M3) must call the writer in the
+agent-host adapter's process, or seal the value as the CLI does, because a plain value sent to the
+writer through the hub would be kept in hub state; and acceptance 7 at daemon level must also
+grep the worker journals (base64 frames) and heap snapshots (UTF-16 strings), which
+`test/integration/_m2-secrets.js` does, with a control text to prove the grep sees those encodings.
+
+### J-0441 2026-11-18 M2 secrets.read - perf
+Evidence: `node test/adapter/m2-w23-secrets.bench.mjs` at `27238a1a94` (dirty: the bench itself,
+committed as `80eeb49d32`), Node 22.23.4, no vat and no Ironhorse workload (so crank budget,
+slot ceiling, collection schedule and hub store do not apply; rows carry crankBudget 50 M, slot
+ceiling 4,000,000, allocation, log), load 2.06-2.36. A 200-byte value, one secret:
+`secrets.read` (a cached grant: memory read plus two sealed audit lines appended) n 5,000 median
+0.018 ms, p95 0.040, p99 0.096, max 1.18, pass (budget 1 ms); at n 12,000: median 0.025, p99
+0.117, max 36.8 ms (the one read that rewrote the audit file to its newest 10,000 events, once per
+10,000 events, i.e. every 5,000 reads); `secrets.read.first` 0.88 ms plus the manager crank of one
+`resolveGrants` (not included: a local fake sink); `secrets.audit.bytes` 318 per read (two lines);
+`secrets.replace` (encrypt the whole file, write, fsync, rename, fsync the directory) median 11.9 ms,
+p99 15.9; with a sealed box 12.5 ms, p99 19.6; `secrets.load` (restart: key, `secrets.enc`, a 1.7-2.3
+MB audit file of 10,000+ lines) median 37-39 ms.
+Reading: the read path is 40 times under budget. Its one hiccup is the synchronous audit rewrite
+(37 ms every 5,000 rounds), which falls inside a provider round, not a vat crank. The audit file
+is bounded at about 2 x 10,000 lines (about 3.2 MB).
+Decision: budget met. Moving the audit rewrite off the read path (write the compacted file from a
+queued task) is a small follow-up if the 37 ms matters; recorded, not done.
+
+### J-0442 2026-11-18 M2 secrets store - deviation
+Evidence: `AH/secrets/store.js`; `m2-interfaces.md` 3.4, 9.1; `resources/agent-host/durable.js`.
+Reading: (1) The audit log is not inside `secrets.enc` as 9.1 says: rewriting the whole encrypted
+file twice per provider round costs about 12 ms (`secrets.replace`) against the 1 ms budget. It is
+`secrets-audit.log` beside it, one AES-GCM-sealed line per event, appended without fsync (a SIGKILL
+may lose the newest lines; never a value or a generation), kept to the newest 10,000. (2)
+`STALE_READ` never happens: the adapter is one process and a read is synchronous over the entry
+the last durable write left, so a read cannot straddle a replace. (3) `Secret.revoke` drops the
+value from the file at once (the daemon's keeps it until delete). (4) The manager keeps at most
+1,024 secrets (`CREATE_FAILED` beyond; a local constant, not in `limits.js`). (5) The manager's
+`open` request does not yet carry `archiveKey` (3.4): `attach.js` (W2.8) still refuses an extra
+key, and sending it now would break every open; W2.8 can add it to the request in `durable.js`'s
+`open` with one line once its guard accepts it, or resolve the key itself through the sink's
+`resolveSessions`, which this unit built. (6) The ops handlers are not wired into `AH/index.js`
+(W2.8 or W2.2, 2.3): `makeSecretsOps({ store, seal, sink })` over `findSecretsFiles({ stateDir,
+env: process.env })` and `readKey` for the providers; until then the manager's secrets methods
+reach an ops facet that refuses them. The daemon-level grep (acceptance 7) is W2.9's.
+Decision: deviations (1)-(4) for the owner; (5) and (6) are wiring left to the units 2.3 names.
