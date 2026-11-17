@@ -41,8 +41,15 @@
  *
  *   cd packages/thixotrope-harness && node perf/crank.perf.mjs
  *
+ * - With CRANK_POINTS (session lengths between 50 and CRANK_TURNS), at each
+ *   point: `crank.turn.start.at<n>` (the 50 turns before), `crank.history.page.at<n>`,
+ *   a clean restart with `crank.heap` and the `session<n>` worker rows, and
+ *   `crank.context.rebuild.at<n>` (the next turn's round 0 `prepare()`);
+ *   `crank.context.rebuild.at50` likewise after the restart at 50 turns.
+ *   The long-session table: `CRANK_TURNS=5000 CRANK_POINTS=200,1000`.
+ *
  * CRANK_TURNS (default 1,000), CRANK_WORKER_N (default 200),
- * CRANK_GC_POLICIES. About 30-40 minutes at 1,000 turns.
+ * CRANK_GC_POLICIES, CRANK_POINTS. About 30-40 minutes at 1,000 turns.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import {
@@ -87,6 +94,17 @@ const WORKER_N = Number(process.env.CRANK_WORKER_N ?? 200);
 const EXTRA_POLICIES = (process.env.CRANK_GC_POLICIES ?? '')
   .split(',')
   .filter(Boolean);
+/**
+ * Session lengths between 50 and CRANK_TURNS at which the session is also
+ * measured (CRANK_POINTS, comma-separated, default none): `turn.start` over
+ * the 50 turns before, `history.page`, a clean restart with the heap and
+ * worker rows, and the next turn's context rebuild.
+ */
+const POINTS = (process.env.CRANK_POINTS ?? '')
+  .split(',')
+  .filter(Boolean)
+  .map(Number)
+  .filter(n => n > 50 && n < TURNS);
 const PING_N = 200;
 /** Slots per engine page (`rust/engine/ironhorse-vm/src/value.rs`). */
 const SLOTS_PER_PAGE = 256;
@@ -398,6 +416,8 @@ await runPerf('crank', async ({ provision }) => {
   let live = await slice.subscribe(found);
   /** @type {Map<number, number>} turn number -> turn.start ms */
   const startByTurn = new Map();
+  /** @type {unknown} the last turn's id */
+  let lastTurnId;
   /**
    * @param {any} target the session (reopened after each restart)
    * @param {number} n turn number (1-based)
@@ -418,6 +438,7 @@ await runPerf('crank', async ({ provision }) => {
       );
     if (started && request)
       startByTurn.set(n, Number(request.at) - Number(started.event.at));
+    lastTurnId = r.turnId;
   };
   /**
    * @param {string} metric
@@ -489,8 +510,75 @@ await runPerf('crank', async ({ provision }) => {
   await slice.refresh();
   found = await E(slice.factory).findSession(key);
   live = await slice.subscribe(found);
+  /**
+   * A clean restart: the session vat's heap and worker rows at `n` turns,
+   * then the next turn's context rebuild (its round 0 `prepare()` after the
+   * restart; that turn's `turn.start` is left out of the windows).
+   * @param {number} n
+   */
+  const point = async n => {
+    await startRow(`crank.turn.start.at${n}`, Math.max(4, n - 49), n);
+    await pageRow(found, `crank.history.page.at${n}`);
+    await live.stop();
+    label = await busySessionLabel();
+    const restarted = await state.restart(`crank${n}`);
+    const image = vatImage(state.root, label);
+    emit({
+      metric: 'crank.heap',
+      turns: n,
+      heap: image && { ...image, file: undefined },
+      ...(await runIdentity()),
+      crankBudget,
+      loadAvg: loadAvg(),
+    });
+    if (image)
+      await workerRows({
+        name: `session${n}`,
+        scratch,
+        profile: runtime.profile,
+        bootPaths: runtime.bootPaths,
+        limits: runtime.limits,
+        image: image.file,
+      });
+    await slice.refresh();
+    found = await E(slice.factory).findSession(key);
+    live = await slice.subscribe(found);
+    const b = await state.counters();
+    const rebuiltAt = performance.now();
+    await turn(found, n + 1);
+    const turnMs = performance.now() - rebuiltAt;
+    const a = await state.counters();
+    await rebuildRow(`crank.context.rebuild.at${n}`, n + 1, {
+      serveMs: round1(restarted.serveMs),
+      turnMs: round1(turnMs),
+      deliveriesInTurn: a.delivery.count - b.delivery.count,
+    });
+  };
+  /**
+   * The context rebuild of the turn just run, the first after a restart.
+   * @param {string} metric
+   * @param {number} n its turn number
+   * @param {Record<string, unknown>} extra
+   */
+  const rebuildRow = async (metric, n, extra) => {
+    startByTurn.delete(n);
+    const line = made
+      .log()
+      .find(
+        (/** @type {any} */ l) =>
+          l.kind === 'context' && l.turnId === lastTurnId && l.round === 0,
+      );
+    if (line)
+      await single(metric, Number(line.ms), {
+        budget: { value: 5000 },
+        extra: { turns: n, timing: line.timing, ...extra },
+      });
+  };
   for (let n = 51; n <= TURNS; n += 1) {
-    await turn(found, n);
+    // Turn n ran inside point(n - 1).
+    if (!POINTS.includes(n - 1)) await turn(found, n);
+    if (n === 51) await rebuildRow('crank.context.rebuild.at50', n, {});
+    if (POINTS.includes(n)) await point(n);
     if (n % 100 === 0) {
       const now = performance.now();
       emit({
