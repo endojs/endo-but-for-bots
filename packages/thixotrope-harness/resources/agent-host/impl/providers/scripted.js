@@ -415,29 +415,52 @@ export const makeScriptedProvider = ({
     // Progress checkpoints (contract 3.2): one staging in flight at a time.
     let checkpointBytes = 0;
     let checkpointAt = now();
+    /** bytes staged by this round's checkpoints (M1b QC, J-0393) */
+    let checkpointWritten = 0;
     /** @type {{ bytes: number, staged: any } | undefined} */
     let lastCheckpoint;
     /** @type {Promise<void> | undefined} */
     let checkpointing;
+    /** the checkpoint the session holds (it said so), if any */
+    /** @type {any} */
+    let heldCheckpoint;
     const checkpoint = () => {
       const whole = parts.join('');
       const bytes = textBytes;
       checkpointBytes = bytes;
       checkpointAt = now();
+      checkpointWritten += bytes;
       checkpointing = stage(whole, limits.messagePreviewUnits).then(
         partial => {
           checkpointing = undefined;
-          if (control.stopped() !== undefined) return;
+          if (control.stopped() !== undefined) {
+            void blobs?.discard(partial.blob);
+            return;
+          }
           lastCheckpoint = { bytes, staged: partial };
           log('progress', { ...where, units: whole.length });
-          E.sendOnly(sink).progress(
-            harden({
-              round,
-              partial,
-              tail: tailText(whole, limits.messagePreviewUnits),
-              at: now(),
-            }),
-          );
+          // Answered (J-0393): once the session kept this checkpoint it no
+          // longer holds the previous one, whose file is deleted. A refusal
+          // or a break keeps every file (the session may still hold it).
+          E(sink)
+            .progress(
+              harden({
+                round,
+                partial,
+                tail: tailText(whole, limits.messagePreviewUnits),
+                at: now(),
+              }),
+            )
+            .then(
+              kept => {
+                if (kept !== true) return;
+                const previous = heldCheckpoint;
+                heldCheckpoint = partial;
+                if (previous !== undefined && previous.blob !== partial.blob)
+                  void blobs?.discard(previous.blob);
+              },
+              () => {},
+            );
         },
         error => {
           checkpointing = undefined;
@@ -463,7 +486,10 @@ export const makeScriptedProvider = ({
         checkpointing === undefined &&
         fresh > 0 &&
         (fresh >= limits.progressEveryBytes ||
-          publishedAt - checkpointAt >= limits.progressEveryMs)
+          publishedAt - checkpointAt >= limits.progressEveryMs) &&
+        // Linear bytes written (J-0393): skip while earlier checkpoints of
+        // this round already staged (factor - 1) x the text so far.
+        checkpointWritten <= (limits.progressWriteFactor - 1) * textBytes
       ) {
         checkpoint();
       }

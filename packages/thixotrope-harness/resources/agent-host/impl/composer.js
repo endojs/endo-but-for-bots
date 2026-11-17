@@ -60,7 +60,13 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) =>
           ),
         );
       }
-      return E(session).enqueueOnce(staged, requestId, now());
+      const receipt = await E(session).enqueueOnce(staged, requestId, now());
+      // A retry of a submission the session already has (a duplicate
+      // receipt) keeps the first one's blob: this one's file has no holder
+      // (M1b QC, J-0393). A refusal may come after the session changed
+      // state, so a failed enqueue keeps its file (bounded leak, 4.7).
+      if (receipt?.duplicate === true) void blobs?.discard(staged.blob);
+      return receipt;
     },
   });
 harden(makeComposer);

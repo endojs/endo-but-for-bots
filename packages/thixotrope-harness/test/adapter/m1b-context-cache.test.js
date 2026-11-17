@@ -510,7 +510,7 @@ test('failures: a page that breaks abandons the round (nothing sent); a blob tha
       sent.push(f.reason);
     },
     deadline: () => undefined,
-    progress: () => undefined,
+    progress: () => true,
   });
   const turn = Far('Turn', {});
   /** @type {any[]} */
@@ -578,7 +578,7 @@ test('scripted provider through the endpoint: chooses its turn from the projecte
       finals.push(f);
     },
     deadline: () => undefined,
-    progress: () => undefined,
+    progress: () => true,
   });
   await sim.turn(async () => {}); // history
   // A staged input, sent as `append: []` (it did not fit): the provider

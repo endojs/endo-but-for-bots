@@ -5,6 +5,8 @@
 // TurnSink with `progress`, real files.
 import '../unit/_m1a-prelude.js';
 
+import { readdirSync } from 'node:fs';
+
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
@@ -74,6 +76,7 @@ const makeFakeTurn = () => {
     deadline: () => undefined,
     progress: (/** @type {any} */ p) => {
       progress.push(p);
+      return true;
     },
   });
   return { turn, sink, finals, failures, progress };
@@ -361,4 +364,59 @@ test('channels fold staged fields as their previews and deliver the StagedText u
     (/** @type {any} */ d) => d.event.type === 'turn-start',
   );
   t.is(start.event.input, input, 'delivered with the StagedText');
+});
+
+test('M1b QC (J-0393): a streamed 1 MiB reply writes bytes linear in its length and keeps no superseded checkpoint', async t => {
+  // 1 KiB chunks: the reviewer's shape (34 MB written before the fix).
+  const chunk = 'q'.repeat(1024);
+  const r = await run({
+    turns: [
+      {
+        rounds: [
+          {
+            chunks: Array.from({ length: 1024 }, () => ({
+              text: chunk,
+              delayMs: 1,
+            })),
+          },
+        ],
+      },
+    ],
+  });
+  t.teardown(r.blobs.cleanup);
+  const [result] = r.finals;
+  t.is(result.text.bytes, 1_048_576);
+  t.is(await r.blobs.store.read(result.text.blob), chunk.repeat(1024));
+  // Wait for the last progress answer's discard.
+  await until(() => r.progress.length > 0);
+  await timers.delay(50);
+  const stats = r.blobs.store.stats();
+  const written = stats.stagedBytes;
+  t.log({ checkpoints: r.progress.length, written, stats });
+  t.true(
+    written <= (limits.progressWriteFactor + 1) * 1_048_576,
+    `${written} bytes staged for a 1 MiB reply`,
+  );
+  t.true(r.progress.length >= 3, 'checkpoints still come');
+  // Every checkpoint but the one the session holds was deleted.
+  t.is(stats.discarded, r.progress.length - 1);
+  const files = readdirSync(r.blobs.blobDir).filter(
+    name => !name.endsWith('.part'),
+  );
+  t.true(
+    files.length <= 2,
+    `${files.length} files: the reply and the held checkpoint`,
+  );
+});
+
+test('M1b QC (J-0393): a checkpoint the session refused keeps its file and the one it holds', async t => {
+  const blobs = makeTestBlobs();
+  t.teardown(blobs.cleanup);
+  const a = await blobs.store.stage('a'.repeat(9000));
+  t.true(await blobs.store.discard(a.blob));
+  t.false(await blobs.store.discard(a.blob), 'once');
+  await t.throwsAsync(() => blobs.store.read(a.blob), {
+    message: texts.blobUnknown,
+  });
+  t.is(blobs.store.stats().discarded, 1);
 });

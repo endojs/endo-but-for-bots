@@ -75,6 +75,11 @@ const isContinuation = byte => byte >= 0x80 && byte < 0xc0;
  * @property {any} writers the BlobWriters exo
  * @property {() => Promise<void>} sweep deletes `*.part` (writes that never completed)
  * @property {(blob: any) => boolean} knows the handle is bound in this incarnation
+ * @property {(blob: any) => Promise<boolean>} discard delete the file of a
+ *   handle this incarnation bound and the caller knows no vat keeps (M1b QC,
+ *   J-0393: superseded progress checkpoints, staged submissions a session
+ *   refused or already had); true when a file was deleted. The handle stays
+ *   minted; a later read of it fails with `texts.blobUnknown`.
  * @property {() => Record<string, number>} stats counters (tests, perf)
  *
  * @typedef {'write' | 'fsync' | 'rename' | 'fsync-dir' | 'bind'} Step
@@ -168,6 +173,8 @@ export const makeBlobStore = ({
     resolved: 0,
     writersOpen: 0,
     writersAborted: 0,
+    discarded: 0,
+    discardedBytes: 0,
   };
 
   const refill = () => {
@@ -452,6 +459,22 @@ export const makeBlobStore = ({
     open: async () => makeWriter(),
   });
 
+  /** @type {BlobStore['discard']} */
+  const discard = async blob => {
+    const found = known.get(blob);
+    if (found === undefined) return false;
+    known.delete(blob);
+    const path = await directory();
+    try {
+      await unlink(join(path, found.key));
+    } catch {
+      return false;
+    }
+    counts.discarded += 1;
+    counts.discardedBytes += found.bytes;
+    return true;
+  };
+
   /** @type {BlobStore['sweep']} */
   const sweep = async () => {
     const path = await directory();
@@ -471,6 +494,7 @@ export const makeBlobStore = ({
     writers,
     sweep,
     knows: blob => known.has(blob),
+    discard,
     stats: () => harden({ ...counts, stock: stock.length }),
   });
 };
