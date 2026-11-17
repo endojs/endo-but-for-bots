@@ -193,6 +193,14 @@ export const texts = harden({
   /** Harness (R4-49): the turn was cancelled while its exec call ran. */
   execAbandoned:
     'exec call abandoned: the turn was cancelled while it ran; the code may still be running and its effects may still happen',
+  /**
+   * M1b QC (J-0333, J-0390): the exec vat ran out of property names (its
+   * name table is per vat and never shrinks; the engine's RangeError is
+   * catchable, so the vat does not halt). The exec vat answers
+   * `{ status: 'exhausted' }`; the session retires the scope.
+   */
+  execExhausted:
+    'exec scope terminated: the exec vat ran out of property names (too many distinct keys were created); bindings from earlier calls are gone',
   /** Content.read with a handle that has no file. */
   blobUnknown: 'Unknown blob',
   /** BlobWriter.append or close after close or abort. */
@@ -1327,8 +1335,16 @@ export const m1bShapes = lazyTable({
       },
       { content: M.remotable('Content'), notice: S.Reason },
     ),
-  /** `ExecScope.run` answer: a ToolOutcome, or `busy` at once while a call runs. */
-  ExecOutcome: () => M.or(S.ToolOutcome, record({ status: 'busy' })),
+  /**
+   * `ExecScope.run` answer: a ToolOutcome; `busy` at once while a call runs;
+   * `exhausted` when the vat's name table ran out (M1b QC: retire it).
+   */
+  ExecOutcome: () =>
+    M.or(
+      S.ToolOutcome,
+      record({ status: 'busy' }),
+      record({ status: 'exhausted' }),
+    ),
   /** `ContextSource.page` answer: records from absolute index `from`. */
   ContextPage: () =>
     record(
@@ -1470,7 +1486,10 @@ export const m1bInterfaces = lazyTable({
   TurnSink: () =>
     M.interface('TurnSink', {
       ...methodsOf.TurnSink(),
-      progress: M.call(B.Progress).returns(done),
+      // Answered from M1b QC (J-0393): true when the session kept this
+      // checkpoint in place of the previous one, so the adapter may delete
+      // the previous one's file.
+      progress: M.call(B.Progress).returns(M.boolean()),
     }),
   /** M1a Turn + `getContent` (W1b.1). */
   Turn: () =>
@@ -1492,6 +1511,10 @@ export const m1bInterfaces = lazyTable({
   ExecScope: () =>
     M.interface('ExecScope', {
       run: M.callWhen(B.ExecRequest).returns(B.ExecOutcome),
+      // M1b QC (J-0391): the session gave the running call up (cancel or
+      // recovery); sendOnly. The call ends now: its run answers
+      // `execAbandoned`, its `sleep` never settles again, the scope is kept.
+      abandon: M.call().returns(done),
     }),
   /** Factory: the session's exec vat lease (architecture 3.2). */
   ExecHandle: () =>
@@ -1563,7 +1586,7 @@ export const m1bMethodNames = harden({
   TurnSink: [...methodNames.TurnSink, 'progress'],
   Turn: [...methodNames.Turn, 'getContent'],
   ContextSource: ['page'],
-  ExecScope: ['run'],
+  ExecScope: ['run', 'abandon'],
   ExecHandle: ['scope', 'retire'],
   ListPublisher: ['publish'],
   ListSubscription: ['next', 'close'],

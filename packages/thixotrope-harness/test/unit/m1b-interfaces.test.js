@@ -357,7 +357,7 @@ const methodSamples = {
     roundFinal: { args: [widenedSamples.RoundResult], returns: undefined },
     roundFailed: { args: [widenedSamples.RoundFailure], returns: undefined },
     deadline: { args: [{ opId: 't1/r0/c0' }], returns: undefined },
-    progress: { args: [shapeSamples.Progress], returns: undefined },
+    progress: { args: [shapeSamples.Progress], returns: true },
   },
   Turn: {
     getStatus: {
@@ -377,6 +377,7 @@ const methodSamples = {
   },
   ExecScope: {
     run: { args: [execRequest], returns: { status: 'busy' } },
+    abandon: { args: [], returns: undefined },
   },
   ExecHandle: {
     scope: { args: [], returns: shapeSamples.ExecLease },
@@ -525,6 +526,7 @@ test('return guards: an exec outcome, a busy answer and a structural record page
   const exo = /** @type {any} */ (
     makeExo('ExecScope', /** @type {any} */ (m1bInterfaces.ExecScope), {
       run: async () => harden({ status: 'ok', text: 'a'.repeat(9) }),
+      abandon: () => {},
     })
   );
   const answer = await exo.run(harden(execRequest));
@@ -535,6 +537,7 @@ test('return guards: an exec outcome, a busy answer and a structural record page
   const busy = /** @type {any} */ (
     makeExo('ExecScope', /** @type {any} */ (m1bInterfaces.ExecScope), {
       run: async () => harden({ status: 'busy', text: 'x' }),
+      abandon: () => {},
     })
   );
   await t.throwsAsync(
@@ -542,6 +545,17 @@ test('return guards: an exec outcome, a busy answer and a structural record page
     undefined,
     'busy carries no text',
   );
+  // M1b QC (J-0390): an exhausted name table is its own answer, without text.
+  const answers = (/** @type {any} */ value) =>
+    /** @type {any} */ (
+      makeExo('ExecScope', /** @type {any} */ (m1bInterfaces.ExecScope), {
+        run: async () => harden(value),
+        abandon: () => {},
+      })
+    ).run(harden(execRequest));
+  t.deepEqual(await answers({ status: 'exhausted' }), { status: 'exhausted' });
+  await t.throwsAsync(() => answers({ status: 'exhausted', text: 'x' }));
+  await t.throwsAsync(() => answers({ status: 'lost' }));
   // ContextSource.page: structure and bounds, records only as keys (J-9156).
   const page = (/** @type {any} */ value) =>
     /** @type {any} */ (

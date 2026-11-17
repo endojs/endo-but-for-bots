@@ -28,6 +28,7 @@ export const makeExecScope = () => {
       calls += 1;
       return harden({ status: 'ok', text: `calls ${calls}` });
     },
+    abandon() {},
   });
 };
 harden(makeExecScope);

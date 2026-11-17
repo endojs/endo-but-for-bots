@@ -140,6 +140,16 @@ export const limits = harden({
   progressEveryBytes: 16_384,
   /** ... or this long after the last checkpoint (architecture 4.1). */
   progressEveryMs: 10_000,
+  /**
+   * M1b QC (J-0393): a checkpoint stages the whole text so far, so a fixed
+   * cadence wrote bytes quadratic in the reply's length (34 MB for 1 MiB).
+   * A round's checkpoints together stage at most this many times its text
+   * so far: one is skipped while the bytes staged by the round's earlier
+   * checkpoints exceed (factor - 1) x the text so far, so the bytes written
+   * stay linear (about 3x the reply) and checkpoints thin out to every half
+   * of the text again.
+   */
+  progressWriteFactor: 3,
   /** An open BlobWriter idle this long is aborted by the adapter. */
   blobWriterIdleMs: 60_000,
   /** Exec call deadline (architecture 6; open decision 10); HarnessRoot.configure changes it. */

@@ -211,10 +211,17 @@ adapter restarted; inside model code the `await` rejects (section 7).
 - **`TurnPorts`** gains `content`, `writers`, `timer` (all three present from W1b.1 on; optional in
   the guard only for M1a compatibility). They belong to the incarnation that made the ports and go
   dead with it, like the endpoint.
-- **`TurnSink.progress({ round, partial, tail, at })`** (`m1bInterfaces.TurnSink`): adapter ->
-  session, **sendOnly**, at most 6.2 KB, sent when a round has produced `progressEveryBytes`
-  (16,384) new UTF-8 bytes or `progressEveryMs` (10 s) have passed since the last checkpoint (and
-  there is new text). `partial` is the round's whole text so far, staged; `tail` its last
+- **`TurnSink.progress({ round, partial, tail, at }) -> boolean`** (`m1bInterfaces.TurnSink`):
+  adapter -> session, **answered** (M1b QC, J-0393; it was sendOnly), at most 6.2 KB, sent when a
+  round has produced `progressEveryBytes` (16,384) new UTF-8 bytes or `progressEveryMs` (10 s) have
+  passed since the last checkpoint (and there is new text), **and** the round's earlier checkpoints
+  together staged at most `(progressWriteFactor - 1)` (2) times the text so far, so the bytes a
+  round's checkpoints write stay at most about 3 times its text (they were quadratic: 34 MB for a
+  1 MiB reply). The answer is `true` when the session kept the checkpoint in place of the previous
+  one; the adapter then deletes the previous checkpoint's file (`BlobStore.discard`). `false`, or a
+  break, keeps every file: the session may still hold or have recorded the older one. The
+  checkpoint the session holds when the round ends stays on disk (at most one per round, the size
+  of the text so far; M2's delete frees it with the session). `partial` is the round's whole text so far, staged; `tail` its last
   `messagePreviewUnits` units. The session keeps the latest checkpoint of the current round
   **outside** the record log (it replaces the previous one; architecture 4.3 "replaces the single
   partial record") and appends it as one `Partial` record only if the round ends without
@@ -260,12 +267,16 @@ then by the `ExecHandle` and the session it serves (from `ExecHandle.scope()`).
 | method | caller | crank | mode | max | retired break |
 |---|---|---|---|---|---|
 | `run(ExecRequest) -> ExecOutcome` | session (exec entry) | D or E (the issuing crank) | answered; settles when the call ends, or at once with `{ status: 'busy' }` | request: inline <= 12.4 KB (8,192 args + notice), staged ~1-3 KB; answer: inline <= 8.3 KB, staged ~1 KB | **exec vat lost** (halted or given up): terminated result + `retire(scope)` (section 8.3) |
+| `abandon()` (M1b QC, J-0391) | session (exec hooks `onCancel`, `recoverySteps`) | the cancel crank; the recovery crank | **sendOnly** | tiny | none (dropped) |
 
 `ExecRequest = { args, writers, timer, content?, notice? }`: `args` is the model's JSON argument
 text, inline (at most `inlineBytes`) or a `StagedText` (then `content` is required);
 `writers`/`timer`/`content` are the current turn's `TurnPorts` ones; `notice` is a text the exec
 vat puts first in the result (the busy reset, section 8.4). `ExecOutcome` = a `ToolOutcome`
-(`ok` | `failed`, inline or staged; never `frame-limit`) or `{ status: 'busy' }`.
+(`ok` | `failed`, inline or staged; never `frame-limit`), `{ status: 'busy' }`, or (M1b QC, J-0390)
+`{ status: 'exhausted' }`: the vat's name table ran out ("property key space exhausted", a
+catchable RangeError in this engine, so the vat does not halt); the session records
+`texts.execExhausted` and retires the scope.
 
 **`ExecHandle`** (`m1bInterfaces.ExecHandle`) - factory exo, one per session, made at creation by
 W1b.5's service builder, held only by that session (`SessionServices.execVat`).
@@ -580,6 +591,18 @@ awaits, never retires).
   since the vat heap is durable; architecture D-11).
 - **Busy.** While a `run` is unsettled, another `run` answers `{ status: 'busy' }` in the crank it
   arrives (no evaluation). A synchronous runaway never answers (the vat halts).
+- **A call's end is a fence (M1b QC, J-0391).** A call ends when its body's promise settles or the
+  session sends `abandon()`. `abandon()` answers the running `run` with `failed`
+  `texts.execAbandoned` at once and frees the scope (no busy for the next call); a staged source
+  still being read is never evaluated. Each call gets its own `sleep`; once the call ended, that
+  `sleep` never settles again (neither new sleeps nor answers in flight), so model code cannot keep
+  the vat cranking after its call (a background `for (;;) await sleep(0)` stops at its next sleep),
+  and a `sleep` kept on `globalThis` is dead in later calls. `sleep` is the only endowment that
+  reaches outside the vat in M1b (M5's `powers` must follow the same rule: a facet per call, dead
+  after it).
+- **Name table (M1b QC, J-0390).** A RangeError "property key space exhausted" anywhere in a call
+  (argument JSON, compile, model code, rendering) answers `{ status: 'exhausted' }`. Model code
+  that catches and swallows it is not seen; the next call that needs a new name meets it again.
 - **Arguments.** `args` inline or read through `content` (6.2). `JSON.parse` in the exec vat is
   allowed (rule 12.10: the exec vat is the place model data is meant to land; a key flood halts only
   this vat, which is then retired). Closed schema: a key other than `code` fails with
@@ -631,23 +654,28 @@ deadline }`. Module state (the vat has one session): `scope` (current `ExecScope
 | synchronous runaway (`MeterAbort`) or a worker crashing past `maxDeliveryAttempts` (D-17): the pending `run` breaks with the retired text | `texts.execTerminated` | retired; the next call takes a fresh vat (acceptance 4, 11) |
 | `deadline({ opId })` before the answer (`execDeadlineMs`, default 120 s; `HarnessRoot.configure` for tests) | `textOf.execTimeout(deadlineMs)` | retired (the only way to stop it); a late answer is ignored (acceptance 5) |
 | `busy` at the next call | the new call's own result, prefixed with `texts.execBusyReset` | retired before the new call |
-| turn cancelled while the call runs | `texts.execAbandoned` (recorded in the cancel crank by the `onCancel` hook settling the pending call) | **kept** (R4-49); the old run continues; its late answer is ignored |
-| restart with the call in flight | `texts.toolOutcomeUnknown` by recovery (contract 7) | kept if the vat survived; the adapter `sleep` it awaited rejects, so the old run ends soon after the restart (acceptance 10) |
+| turn cancelled while the call runs | `texts.execAbandoned` (recorded in the cancel crank by the `onCancel` hook settling the pending call) | **kept** (R4-49); `abandon()` (sendOnly) ends the call in the exec vat: the next call runs at once in the same scope; the abandoned code never resumes after a `sleep` (M1b QC, J-0391) |
+| restart with the call in flight | `texts.toolOutcomeUnknown` by recovery (contract 7) | kept if the vat survived; recovery sends `abandon()` too (acceptance 10) |
+| the vat's name table ran out (`exhausted`) | `texts.execExhausted` | retired (M1b QC, J-0390) |
 | arguments over `execSourceBytes` | `textOf.execSourceTooLarge(bytes, limit)` | untouched (nothing sent) |
 
 Acceptance 3 reads with this table: after cancelling during a 30 s `sleep`, the next turn's `exec`
-sees `x === 5` **if it arrives after the abandoned run ended** (the test waits for the 30 s sleep
-to end, e.g. 31 s); an `exec` that arrives while the abandoned run still sleeps gets `busy`, a reset
-and `texts.execBusyReset` (W1b.6 tests both; J-0307).
+sees `x === 5` at once (M1b QC, J-0391; before, an exec that arrived while the abandoned run still
+slept got `busy`, a reset and `texts.execBusyReset`, J-0307). `busy` remains for a session that
+lost track of a running call (a dropped `abandon`).
 
 ### 8.4 Cancel, deadline and busy in the session (W1b.4 hooks)
 
-- `turnHooks.onCancel` (append): if `pending` belongs to the cancelled turn, settle it with
-  `{ status: 'failed', text: texts.execAbandoned }` and clear `pending`; no retire, no message to
-  the exec vat (R4-49). The turn then settles `cancelled` in the same crank (2.3 item 4).
+- `turnHooks.onCancel` (append): if `pending` belongs to the cancelled turn and its `run` was sent,
+  `E.sendOnly(scope).abandon()` first (M1b QC, J-0391), then settle it with `{ status: 'failed',
+  text: texts.execAbandoned }` and clear `pending`; no retire (R4-49). The turn then settles
+  `cancelled` in the same crank (2.3 item 4).
 - `deadline` (entry method, 2.3 item 3): settle `pending` with `textOf.execTimeout(deadlineMs)`,
   `E.sendOnly(execVat).retire(scope)`, `scope = undefined`.
-- `turnHooks.recoverySteps` (append): clear `pending` (recovery already wrote the unknown result).
+- `turnHooks.recoverySteps` (append): `abandon()` as on cancel, clear `pending` (recovery already
+  wrote the unknown result).
+- `exhausted` answer: `E.sendOnly(execVat).retire(scope)`, `scope = undefined`, settle with
+  `texts.execExhausted` (M1b QC, J-0390).
 
 ---
 
@@ -774,7 +802,7 @@ guest rules; "Node" = adapter or tests.
 | file | export | signature |
 |---|---|---|
 | `AH/blobs.js` (Node) | `makeBlobStore({ dir, sink, timers? }) -> BlobStore` | `sink` = the manager's attach sink (`mintBlobs`, `resolveBlobs`) |
-| | `BlobStore` | `{ stage(text, { previewUnits }) -> Promise<StagedText>, read(blob) -> Promise<string>, readPage(blob, offset, maxBytes) -> Promise<ContentPage>, resolveMany(blobs) -> Promise<void>, writers: BlobWriters, sweep() -> Promise<void> }` |
+| | `BlobStore` | `{ stage(text, { previewUnits }) -> Promise<StagedText>, read(blob) -> Promise<string>, readPage(blob, offset, maxBytes) -> Promise<ContentPage>, resolveMany(blobs) -> Promise<void>, writers: BlobWriters, sweep() -> Promise<void>, discard(blob) -> Promise<boolean> }` (`discard`: M1b QC) |
 | | `findBlobDir(argv = process.argv) -> string` | `<state>/agent-host/blobs` |
 | `AH/content.js` (Node) | `makeContent({ store }) -> Content` | the exo (`m1bInterfaces.Content`) |
 | `AH/timers.js` (Node; exists) | `makeTimerFacet(timers) -> Timer` | added by W1b.1 |
@@ -800,6 +828,7 @@ guest rules; "Node" = adapter or tests.
 | file | export | signature |
 |---|---|---|
 | `guest/exec/main.js` (vat) | `makeExecScope() -> ExecScope` | the exec program's entry (bundle namespace); section 8.1 |
+| | `isKeysExhausted(error) -> boolean` | M1b QC: the engine's name-table RangeError |
 | `guest/exec/*.js` (vat) | free | e.g. `render.js` (Fae `renderToolResult`, `stripCodeFence`, `describeParseFailure`) |
 
 ### W1b.4 exec tool
@@ -852,6 +881,7 @@ guest rules; "Node" = adapter or tests.
 | `texts.execNoReturn` | Fae's "done (no return value). Use a top-level return ..." | R3-41; Fae `tool-makers.js:1650` |
 | `texts.execCodeRequired` | `code is required` | Fae `tool-makers.js:1617` |
 | `texts.execAbandoned` | `exec call abandoned: the turn was cancelled while it ran; the code may still be running and its effects may still happen` | harness (R4-49) |
+| `texts.execExhausted` | `exec scope terminated: the exec vat ran out of property names (too many distinct keys were created); bindings from earlier calls are gone` | harness (M1b QC, J-0390) |
 | `textOf.execUnavailable(msg)` | `exec is unavailable: <msg>` | harness |
 | `textOf.stagingFailed(msg)` | `could not stage large text: <msg>` | harness |
 | `texts.blobUnknown`, `texts.writerClosed` | `Unknown blob`; `This blob writer is closed` | harness |
@@ -938,6 +968,15 @@ shape 238 ms. Every accept and refuse check passed in the vat.
 9. **Session program size** (15): 22 KB left for staging, the context source and the exec tool.
    Recommendation to the PM: strip comments in `scripts/bundle-guest.mjs` (J-0201's standing
    decision) before W1b.4 lands (J-0303).
+11. **M1b QC changes** (J-0390..J-0393; contract commit `contract(thixotrope-harness): ...` of
+    the QC unit): `ExecScope.abandon()` and the call fence (8.1); `ExecOutcome` gains
+    `{ status: 'exhausted' }` and `texts.execExhausted`; `TurnSink.progress` is answered and returns
+    whether the session kept the checkpoint; `limits.progressWriteFactor` (3) bounds checkpoint
+    writes; the adapter deletes superseded checkpoints and duplicate staged submissions
+    (`BlobStore.discard`). Context pages read only their own records (`RecordLog.at`); the page
+    bound is unchanged. Not in the guards: the daemon's slot ceiling is 4,000,000
+    (`config/defaults.js` `slotCeiling`, `scripts/serve.mjs`), which the 256-call round and the
+    1,000-turn rebuild need (J-0392).
 10. **Exec arguments bound by their JSON bytes**: `execSourceBytes` applies to the argument text
     (UTF-8 bytes of the model's JSON), checked in the session before any call; the code inside is
     never longer. A code of exactly 262,144 bytes is refused (its JSON is longer).
