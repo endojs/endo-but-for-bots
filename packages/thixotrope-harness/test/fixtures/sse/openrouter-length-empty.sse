@@ -1,0 +1,10 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-fake-1","object":"chat.completion.chunk","created":1,"model":"fake-org/fake-model","provider":"Fake Provider","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"gen-fake-1","object":"chat.completion.chunk","created":1,"model":"fake-org/fake-model","provider":"Fake Provider","choices":[{"index":0,"delta":{},"finish_reason":"length"}]}
+
+data: {"id":"gen-fake-1","object":"chat.completion.chunk","created":1,"model":"fake-org/fake-model","provider":"Fake Provider","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}
+
+data: [DONE]
+

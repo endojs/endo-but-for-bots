@@ -1,0 +1,28 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-fake-1","object":"chat.completion.chunk","created":1,"model":"fake-org/fake-model","provider":"Fake Provider","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+: fake-delay 5
+data: {"id":"gen-fake-1","object":"chat.completion.chunk","created":1,"model":"fake-org/fake-model","provider":"Fake Provider","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+: fake-delay 5
+data: {"id":"gen-fake-1","object":"chat.completion.chunk","created":1,"model":"fake-org/fake-model","provider":"Fake Provider","choices":[{"index":0,"delta":{"content":", "},"finish_reason":null}]}
+
+: fake-delay 5
+data: {"id":"gen-fake-1","object":"chat.completion.chunk","created":1,"model":"fake-org/fake-model","provider":"Fake Provider","choices":[{"index":0,"delta":{"content":"world"},"finish_reason":null}]}
+
+: fake-delay 5
+data: {"id":"gen-fake-1","object":"chat.completion.chunk","created":1,"model":"fake-org/fake-model","provider":"Fake Provider","choices":[{"index":0,"delta":{"content":". "},"finish_reason":null}]}
+
+: fake-delay 5
+data: {"id":"gen-fake-1","object":"chat.completion.chunk","created":1,"model":"fake-org/fake-model","provider":"Fake Provider","choices":[{"index":0,"delta":{"content":"How can I help?"},"finish_reason":null}]}
+
+: fake-delay 5
+data: {"id":"gen-fake-1","object":"chat.completion.chunk","created":1,"model":"fake-org/fake-model","provider":"Fake Provider","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+: fake-delay 5
+data: {"id":"gen-fake-1","object":"chat.completion.chunk","created":1,"model":"fake-org/fake-model","provider":"Fake Provider","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}
+
+: fake-delay 5
+data: [DONE]
+
