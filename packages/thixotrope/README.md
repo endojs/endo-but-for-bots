@@ -780,9 +780,10 @@ the behaviour before this setting). The schedule decides in which crank a finali
 must be the same for a replay as for the original run: a state directory refuses to start under
 another policy or allowance.
 
-Limits may change on restart while preserving the workspace, with one exception:
+Limits may change on restart while preserving the workspace, with two exceptions:
 the slot and chunk ceilings may only increase, because a restored heap that already exceeds a
-lower ceiling could never allocate again.
+lower ceiling could never allocate again; and the collection schedule (`THIXOTROPE_GC_*`) may
+not change at all.
 A ceiling decrease is refused before workers start, never clamped; repeat raised ceilings on
 subsequent starts so an omitted setting does not revert to a lower default.
 The crank budget, bootstrap budget, and watchdog timeout may change in either direction.
