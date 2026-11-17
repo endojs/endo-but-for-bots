@@ -6624,3 +6624,240 @@ key, and sending it now would break every open; W2.8 can add it to the request i
 env: process.env })` and `readKey` for the providers; until then the manager's secrets methods
 reach an ops facet that refuses them. The daemon-level grep (acceptance 7) is W2.9's.
 Decision: deviations (1)-(4) for the owner; (5) and (6) are wiring left to the units 2.3 names.
+
+### J-0450 2026-11-18 M2 queue - good fit
+Evidence: W2.4 (`a997a904e3`, `8c77d3d4c5`); `guest/lib/pending-queue.js`,
+`guest/session/{submissions,holds,holds-table,queue}.js`, `AH/composer.js`; unit
+`test/unit/m2-queue-{pending,submissions,heap}.test.js`, adapter
+`test/adapter/m2-queue-composer.test.js`, integration `test/integration/m2-queue.test.js`
+(acceptance 4, 5, 10: 2 tests passed twice, 2 min 57 s each with the m1a template).
+Reading: Fae's queue is 829 lines over a pet-name record rewritten whole on every change, a
+serial promise chain, a load step and two entry states (`dispatching`, `interrupted`) that exist
+to survive a crash between the record write and the turn start. On Thixotrope the heap is the
+record: entries are a Set, receipts a Map keyed by the client's request id, and every operation is
+one synchronous crank. The claim removes the entry in the crank that appends `TurnStarted`, so no
+entry can be found half-sent after a SIGKILL and the `interrupted` hold has nothing to protect
+(acceptance 5 showed restart holds, release by a new message and by send-now, FIFO after a real
+SIGKILL). Objects instead of ids fit the queue exactly: `QueueEntry.edit/cancel/sendNow` act on the
+entry the page holds; a stale entry is a handle to nothing (answers false or `texts.entryGone`),
+where Fae needed a time-salted id so a stale id could not cancel someone else's message; a receipt
+names its turn by id only once the turn may be archived (5.3), handed out as the Turn while the
+session keeps it. Awkward parts: (1) time windows need the Composer's stamp (vats have no clock);
+(2) the exo guard requires every M2 method in the switch commit (`QueueEntry`, `Composer` moved to
+`m2Interfaces` with all their methods built here, no stub); (3) every enqueue publishes the whole
+pending view, whose cost grows with the waiting entries (J-0454); (4) splitting the queue into the
+contract's four modules cost bundle bytes (J-0455).
+Decision: good fit for the queue and submissions. The design choices that differ from Fae are in
+J-0456.
+
+### J-0451 2026-11-18 M2 queue tests - deviation
+Evidence: Fae `test/session/pending-queue.test.js` (19 cases) and `session-submissions.test.js`
+(16 cases) at `1315bef86`, ported as `m2-queue-pending.test.js` (20 tests) and
+`m2-queue-submissions.test.js` (16 tests) over the real queue and the real session with in-memory
+fakes (`test/unit/_m2-queue-session.js`); each file lists the cases that do not apply.
+Reading: not applicable, because the heap is the record: persistence across the process, a failed
+write, a lost acknowledgement, a corrupt or unreadable record, pruning after failed persistence
+(pending-queue, 6 cases); the incarnation close (submissions, 1). Not applicable, because the claim
+is atomic (architecture 4.3): dispatch at most once across a crash, the refused turn putting its
+message back, the interrupted head and its two decisions, a start that throws, a session admitting
+no work, a slot filling during the accepting write (pending-queue 2 and the `interrupted` part of a
+third, submissions 6); their observable rules (one claim at a time, duplicates after the claim, a
+`refused` hold released by a new message with the older message first, an `interrupted` hold
+released by nothing but a decision) are ported. Not applicable in M2: session delete (W2.7, 2
+cases), mentions and attachments (M5, 2 cases), the `unavailable` hold (a heap cannot fail to load;
+its text is tested). Adapted: send-now no longer answers `cancelCurrent` (Fae let the head cut the
+running turn short); here it moves the entry to the head and the running turn finishes (5.1). Kept
+differences: the text is not trimmed (M1a stores what was submitted) and cancelling an entry that
+started answers false (contract 8) instead of throwing.
+Decision: recorded; every applicable case passes.
+
+### J-0452 2026-11-18 M2 queue edit - awkward
+Evidence: `AH/composer.js` `edit(entry, text)`; `m2-queue-composer.test.js` (8 tests).
+Reading: an edit over `inlineBytes` is staged in the adapter, and a staged text belongs to the
+session it was staged for (M1b 17.3, quotas). The Composer is given the entry, not the session (the
+owner's principle: pass the object that is acted on), so it learns the session from the receipts
+it handed out (a WeakMap entry -> session); for an entry it never saw (after an adapter restart, or
+a page that got the entry from `listPending`) the text is staged without an owner and the session
+that first presents it takes it, as `writersFor()` does. The file is deleted when the entry
+refuses the edit (gone, blank, too large, its guard) or the session vat is lost; any other failure
+keeps it, since the vat may hold it. The text an edit replaces is dropped by the session: a staged
+one's file is not deleted, and after the edit no record, entry or receipt names it, so W2.7's
+`blobPage` will not find it either; it stays on disk until the session is deleted from the blob
+store's side or M13's sweep.
+Decision: for the PM: the replaced staged text of an edit leaks its file until M13 (bounded by one
+file per staged edit). A fix needs the edit to hand the replaced StagedText back to the Composer
+(`QueueEntry.edit` returning it: a contract change), which W2.9 or M13 can take.
+
+### J-0453 2026-11-18 M2 queue heap - perf
+Evidence: `test/unit/m2-queue-heap.test.js` at `a997a904e3` (Node 22, V8 heap after two full
+collections; no vat, so crank budget, slot ceiling, collection schedule and hub store do not apply),
+load about 2.4: {"metric":"queue.heap.worstInline","unit":"bytes","receipts":4096,"waiting":100,"heapGrowth":35205488,"statedStrings":34680832,"liveQueueEntries":100}
+{"metric":"queue.heap.staged","unit":"bytes","receipts":4096,"heapGrowth":4072536,"perReceipt":994,"liveBlobs":0,"liveQueueEntries":0}
+Reading: the queue holds at most 100 entries (<= 1.1 MB of strings, about 600 objects) and the
+receipt table at most 4,096 receipts in the 24 h window. No receipt keeps a Blob, a Turn or a
+QueueEntry that no longer waits (the test collects and counts them): a started receipt keeps the
+turn id and a fingerprint (an inline text, or a staged text's bytes and digest). Worst case: every
+receipt of the window is of a maximum-size inline text whose turn the session no longer keeps,
+4,096 x 8,192 bytes = 32 MiB of strings; Node measured 35.2 MB with 100 waiting maximum-size entries
+(1.02 x the stated strings). A staged receipt costs about 1 KB (4.1 MB for 4,096). Typical use (a
+few hundred submissions a day of a few hundred bytes) keeps well under 1 MB, and the inline text of
+a kept turn is shared with its `TurnStarted` record.
+Decision: bounded and tested. Open for the PM: the 32 MiB worst case could be cut to the staged
+case's 4 MB by having the Composer send a digest with inline text too (an additive `digest` on the
+inline Submission: a contract change); not done.
+
+### J-0454 2026-11-18 M2 queue.enqueue - perf
+Evidence: `perf/queue.perf.mjs` (Node, the real Composer and session over in-memory fakes, no
+vat, no run lock) and `test/integration/m2-queue.test.js` (daemon, scripted backend, a `stall` turn
+running, the queue filled from 0 to 99 waiting through the Composer), worker `367e78ad...`, crank
+budget 50 M, slot ceiling 4,000,000, collection schedule `allocation`, hub store `log`. Node:
+{"metric":"queue.enqueue.memory","unit":"ms","n":200,"median":0.233,"p95":0.936,"p99":1.252,"min":0.17,"max":1.263,"mode":"memory","note":"Node, real Composer and session over in-memory fakes; no vat (slot ceiling, collection schedule and hub store do not apply)","receipts":0,"waiting":0,"budget":{"median":150},"pass":true,"commit":"598c81914c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000","loadAvg":[3.14,2.62,2.44]}
+{"metric":"queue.enqueue.memory","unit":"ms","n":200,"median":0.179,"p95":0.205,"p99":0.796,"min":0.163,"max":2.822,"mode":"memory","note":"Node, real Composer and session over in-memory fakes; no vat (slot ceiling, collection schedule and hub store do not apply)","receipts":3800,"waiting":0,"budget":{"median":150},"pass":true,"commit":"598c81914c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000","loadAvg":[3.14,2.62,2.44]}
+{"metric":"queue.enqueue.memory","unit":"ms","n":200,"median":0.314,"p95":0.699,"p99":1.021,"min":0.256,"max":3.448,"mode":"memory","note":"Node, real Composer and session over in-memory fakes; no vat (slot ceiling, collection schedule and hub store do not apply)","receipts":0,"waiting":98,"budget":{"median":150},"pass":true,"commit":"598c81914c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000","loadAvg":[3.14,2.62,2.44]}
+{"metric":"queue.edit.memory","unit":"ms","n":200,"median":0.086,"p95":0.105,"p99":0.597,"min":0.078,"max":0.71,"mode":"memory","note":"Node, real Composer and session over in-memory fakes; no vat (slot ceiling, collection schedule and hub store do not apply)","pass":null,"commit":"598c81914c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000","loadAvg":[3.14,2.62,2.44]}
+{"metric":"queue.sendNow.memory","unit":"ms","n":200,"median":0.11,"p95":0.147,"p99":0.411,"min":0.094,"max":0.478,"mode":"memory","note":"Node, real Composer and session over in-memory fakes; no vat (slot ceiling, collection schedule and hub store do not apply)","waiting":99,"pass":null,"commit":"598c81914c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000","loadAvg":[3.14,2.62,2.44]}
+{"metric":"queue.view.memory","unit":"ms","n":200,"median":2.321,"p95":4.038,"p99":23.014,"min":2.006,"max":23.875,"mode":"memory","note":"Node, real Composer and session over in-memory fakes; no vat (slot ceiling, collection schedule and hub store do not apply)","waiting":100,"pass":null,"commit":"598c81914c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000","loadAvg":[3.14,2.62,2.44]}
+Daemon, before reusing pending rows (`a997a904e3` code):
+{"metric":"queue.enqueue.e2e","unit":"ms","n":100,"median":194.095,"p95":387.843,"p99":429.87,"min":51.968,"max":429.87,"waitingFrom":0,"waitingTo":100,"by":"W2.4","budget":{"median":150},"pass":false,"exceeded":["median: 194.095 > 1.25 x 150"],"commit":"b4ddc4ba0a-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000","loadAvg":[3.17,2.39,2.34]}
+Daemon, after (`8c77d3d4c5` code):
+{"metric":"queue.enqueue.e2e","unit":"ms","n":100,"median":123.116,"p95":332.646,"p99":358.313,"min":50.92,"max":358.313,"waitingFrom":0,"waitingTo":99,"byDepth":[{"waitingFrom":0,"medianMs":61.1},{"waitingFrom":25,"medianMs":93.5},{"waitingFrom":50,"medianMs":123.1},{"waitingFrom":75,"medianMs":279.1}],"by":"W2.4","budget":{"median":150},"pass":true,"commit":"b4ddc4ba0a-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000","loadAvg":[2.86,2.55,2.4]}
+{"metric":"queue.enqueue.e2e.shallow","unit":"ms","n":10,"median":56.755,"p95":257.842,"p99":257.842,"min":50.92,"max":257.842,"waitingFrom":0,"waitingTo":9,"by":"W2.4","budget":{"median":150},"pass":true,"commit":"b4ddc4ba0a-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000","loadAvg":[2.86,2.55,2.4]}
+Restart of the supervisor in acceptance 5: {"metric":"m2.queue.restart","unit":"ms","restartMs":8039.7,"servedMs":6858.1,"connectedMs":6970.2}
+Reading: the queue itself costs 0.2-0.3 ms a submission in Node with 0 or 3,800 receipts or 98
+waiting; the daemon round trip is about 51-61 ms with few entries waiting (budget 150 ms: pass).
+Each enqueue publishes the whole `pending` view (every waiting row with its QueueEntry, contract 8),
+so the crank grows with the waiting entries: about 2.9 ms per waiting row (61 ms at 0-24 waiting,
+279 ms at 75-99). Making each row once per entry and text instead of per view brought the sweep's
+median from 194 ms (miss, 1.29 x) to 123 ms (pass); the deep end (75-99 waiting) stays over budget
+at 279 ms. The rest is marshalling 75-100 rows with a remotable each, the C-5 class of J-0370 and
+J-9387.
+Decision: `queue.enqueue` passes (median 123 ms over the sweep, 57 ms shallow); the 75-99-waiting
+median (279 ms, 1.9 x) is recorded, not re-based (D-M2-3). For the PM: a `pending` event that
+carries only the change (row added, row removed, row changed, hold) would make the enqueue crank
+independent of the queue's depth; it is a LiveEvent contract change for M3's viewers, or waits
+for C-5.
+
+### J-0455 2026-11-18 M2 session program - perf
+Evidence: `scripts/bundle-guest.mjs session` (comments stripped) before W2.4 (`a438a51de8` with the
+other group A units' working files) 149,942 bytes; after `8c77d3d4c5` 159,418 (+9,476), 21 modules;
+`m1a-session-program.test.js` passes (budget 200,000).
+Reading: the new queue modules bundle to pending-queue 6.4 KB, queue 5.2 KB, submissions 1.9 KB,
+holds 1.2 KB, holds-table 1.1 KB; the old queue.js was 6.4 KB. About 1 KB of each is the module
+wrapper and import tables, so the contract's split into five files costs about 4 KB of the 9.5 KB.
+Decision: recorded. 40,582 bytes are left for W2.5-W2.7's vat code (W2.0 left 50,567 for
+W2.4-W2.7).
+
+### J-0456 2026-11-18 M2 queue - deviation
+Evidence: `guest/session/{queue,submissions}.js`, `guest/lib/pending-queue.js`, `AH/composer.js`;
+SPEC A.4 "Queue", R4-54..R4-56; Fae `session-submissions.js` at `1315bef86`.
+Reading: (1) send-now moves the entry to the head and claims at once when idle; while a turn runs
+it waits at the head (5.1); Fae instead answers `cancelCurrent` so the head may cut the running
+turn short, and does not reorder. (2) The holds `refused` and `unavailable` are in the table with
+their exact A.4 texts but no M2 path sets them (5.2: M2 has no refusal in the claim crank and a
+heap cannot fail to load); `interrupted` likewise, for the shape; `stopped` is M6's. (3) The
+receipt bound stays a rate cap of 4,096 Composer submissions per session in 24 h, as J-9391
+recorded (the PM has not ruled; D-M2-3). (4) Request-id windows use the Composer's stamp `at`
+(the session has no clock), 24 h back and 5 min ahead as A.4. (5) An edit does not release a hold
+(Fae neither) and keeps the receipt's fingerprint of the original submission, so a retry of the
+original is still a duplicate and a retry of the edited text under the same id is refused as
+reused (Fae the same). (6) recovery.js is unchanged: the `restart` hold it sets is the table's.
+Decision: (1) and (3) for the owner and the PM; the rest as designed.
+
+### J-0410 2026-11-18 M2 providers - good fit
+Evidence: `AH/providers/{http,sse,round,openrouter}.js`, `guest/lib/token-usage.js`,
+`test/adapter/m2-w21a-openrouter.test.js` (19 tests), `m2-w21a-sse.test.js` (6),
+`m2-w21a-fake-server.test.js` (5), at `b4ddc4ba0a` and `a964c3ab9b`.
+Reading: a real provider lives entirely in the agent-host adapter, beside the scripted one, and
+meets the session vat only at the M1a/M1b seams: one answered `dispatching(0)` before the request
+leaves, answered `progress` checkpoints, then one sendOnly `roundFinal` or `roundFailed` staged to
+fit `roundResultBytes`. Text deltas go to the session's channel in process (0 vat deliveries per
+delta, measured in J-0411), so streaming costs the vat nothing however many tokens arrive. Cancel
+and lease release abort the request's `AbortSignal`; the fake server sees the connection close
+(acceptance 6 at adapter level) and nothing more is sent to the vat. Tool-call arguments stay
+text end to end (rule 12.10), names and call ids are cut to the `ToolCall` guard's bounds, and the
+`servedBy` record has fixed keys only (rule 12.10). The shared round driver (`runProviderRound`) is
+the scripted provider's dispatch/progress/staging logic factored for any provider, so W2.1b's
+Anthropic provider supplies only a `stream({ projection, signal })` generator.
+Decision: good fit; no core change and no vat code beyond the 151-line `token-usage.js` (not yet
+imported by any vat program, so no bundle bytes until W2.6 uses it).
+
+### J-0411 2026-11-18 M2 provider.overhead - perf
+Evidence: `node perf/provider.perf.mjs` (run lock held; no Ironhorse workload: the provider runs
+in process against the fake server on 127.0.0.1), at `598c81914c` dirty with this unit's perf
+script, Node 22.23.4, crank budget 50 M, slot ceiling 4,000,000, collection schedule
+`allocation`, hub store `log` (recorded by the harness; they do not apply to an in-process run),
+load average 2.28-3.14. 3 runs x 200 deltas, one SSE event per 5 ms.
+`provider.overhead` (fake server hands the event to its socket -> fetch -> `parseSseBatches` ->
+OpenRouter attempt -> `runProviderRound` -> `channel.publishDelta` -> `E(subscription).next()`
+arrival): n 600, median 0.26-0.66 ms, p95 0.81-1.20, p99 1.91-2.82, max 3.4-5.2 ms over four
+runs; pass (budget 5 ms per delta). TurnSink messages while streaming: 0 per delta (pass,
+budget 0 deliveries).
+Reading: the budget is met with a 7-19x margin at the median. The 0-deliveries figure counts the
+round's vat messages in process (a guarded fake TurnSink), not the daemon's delivery counter: an
+`openrouter` backend made by the manager cannot be served until `AH/index.js` passes `spec` and
+`readKey` to `makeProvider` (J-0414).
+Decision: met; the daemon-path measurement (same metric with the engine's delivery counter) is
+for W2.9 once W2.2 wires the kind.
+
+### J-0412 2026-11-18 M2 providers - awkward
+Evidence: `round.js` `makeRoundControl`; the first test run of `m2-w21a-openrouter.test.js`
+(every round failed `openRouterUnreachable` before any request).
+Reading: under lockdown, `harden` of an object that holds an `AbortSignal` freezes the signal
+itself, and Node's `fetch` (undici) then rejects at once when it combines or listens to it; the
+failure looked like a network error because the provider maps every transport failure to the
+fixed R4-74 text (as it must: R4-79). The control object is now `Object.freeze`d, not hardened.
+Two other SES/Node seams worked without change: `fetch`, `AbortSignal.any` and
+`AbortSignal.timeout` under the lockdown config, and `node:http` for the fake server. A perf
+script must `await import()` `_init.mjs` and the guest prelude before any module that uses them:
+static imports are evaluated beside `_init.mjs`'s top-level await, so `@endo/errors` loaded
+before `ses`.
+Decision: recorded; adapter code that holds platform objects with internal state (signals,
+sockets, streams) must not `harden` them. The round driver logs the class (never the message) of
+any non-provider failure as `stream-failed`, which would have shown this at once.
+
+### J-0413 2026-11-18 M2 SSE throughput - perf
+Evidence: `perf/provider.perf.mjs`, same runs and identity as J-0411; a 10 MiB (10,486,328-byte)
+OpenRouter-shaped stream of 40,175 delta events of 64 characters each, 3 runs per row.
+`provider.sse.parse` (`parseSse` alone, 64 KiB chunks): median 35.5-38.7 ms, 258-282 MiB/s,
+about 1.1 M events/s. `provider.sse.attempt` (fake server -> fetch -> parser -> OpenRouter event
+handling, no round): 137-167 ms, 60-73 MiB/s. `provider.sse.stream` (the whole round, reply staged
+as a 2.5 MiB blob): before coalescing 1,365 ms (7.3 MiB/s); after, 169-218 ms (46-59 MiB/s).
+A CPU profile of the 1,365 ms run: most of the time in `harden`/`passStyleOf`/pattern matching
+under `channels.js` `publishDelta` (its `mustMatch(shapes.DeltaEvent)` and `harden` per delta,
+about 25 us each), not in the parser or the provider. A 4 MiB single line in 64 KiB chunks parses
+in well under 2 s (unit test; the lal original rescans a growing line from its start each chunk).
+Reading: per-delta cost belongs to the channel (W1a.3's file, J-0230 measured its batch guard
+before), so the provider now publishes one delta per network read: the content of every event
+that arrived in one body chunk is joined (the attempt yielded 167-169 deltas for 40,175 events).
+Latency is unchanged (the joined text is published when the chunk is read) and a provider that
+spaces its tokens still yields one delta per token (acceptance 1).
+Decision: no budget exists for SSE throughput; recorded. 46-59 MiB/s end to end is about 100x
+any provider's real token rate. If a later client needs every provider event as its own delta,
+the channel's per-delta guard is the thing to make cheaper (a check of the three fixed fields
+instead of `mustMatch`), not the parser.
+
+### J-0414 2026-11-18 M2 OpenRouter - deviation
+Evidence: `openrouter.js`, contract commit `2c8f1a8935`, `m2-interfaces.md` 8.1, 14.
+Reading: (1) Streamed (`stream: true`), departing from R4-12/R4-13's "whole reply at once"
+(G-03: do not copy); the length note is published as one more delta so the live view and the
+record agree. (2) Usage is asked for with `usage: { include: true }` and read from the stream's
+last chunk; `[real-provider]`: confirm the field and the chunk shape against the live API. (3)
+`reasoning_details` (lal keeps them across tool rounds in its buffered path) are not kept: a
+streamed reasoning delta has no settled shape in the reference modules; native context for
+OpenRouter is left for the owner. (4) Texts from lal word for word, including its empty-answer
+detail ` (finish_reason stop) (served by m, via p)` with two parentheses; two lal texts added to
+the contract (`openRouterApiError`, `openRouterNoMessage`) and an optional
+`ServedBy.provider` (R4-108), all additive. (5) A tool call with no name or id reaches the vat as
+`''` (R4-42's synthesized ids are the vat's); more than `maxCallsPerMessage` calls fails the round
+with `texts.frameLimit`. (6) No output limit is sent unless the round carries
+`options.maxOutputTokens` (R4-92 OpenRouter: none). (7) Retry is a seam (`retry` option of
+`makeOpenRouterProvider`, `ProviderFailure.retryable/retryAfterMs/timedOut/delivered`) that
+W2.1b fills; until then one attempt per round. (8) Wiring not done (not this unit's file):
+`AH/index.js` `backendState` passes `{ label, script, logPath, timers, log, blobs }` to
+`makeProvider`, so an `openrouter` backend gets no `spec` (base URL, timeout) and no `readKey`;
+it fails every round with `textOf.secretFailed('READ_FAILED')` before any request (never reaching
+the real host). W2.2 (2.3) passes `spec` and `readKey: () => secretsOps.readKey(spec.keyGrant)`.
+(9) The kind offers no adapter tool (`tools: []`, 8.1); acceptance 2 with real tool names needs
+the vat's tool table (W2.6/W2.9). (10) An API provider's unforeseen throw is reported with its
+fixed `unexpectedFailure` text by the Endpoint, never the thrown message (R4-79).
+Decision: (1), (3), (6) for the owner; (2) is `[real-provider]`; (8) is W2.2's wiring.
