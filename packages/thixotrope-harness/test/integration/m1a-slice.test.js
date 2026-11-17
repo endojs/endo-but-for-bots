@@ -24,7 +24,9 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
+import { boundToolOutput } from '../../guest/lib/bounded.js';
 import { texts, textOf } from '../../guest/lib/interfaces.js';
+import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { generatedArgs } from '../../resources/agent-host/impl/providers/scripted.js';
 import { emit } from '../../perf/_harness.mjs';
@@ -44,6 +46,7 @@ import {
   sliceTemplate,
   turnWithInput,
 } from './_m1a-slice.js';
+import { isStaged, readField } from './_m1b.js';
 
 takeIntegrationLock(test, 'm1a slice test');
 
@@ -311,12 +314,16 @@ run(
 );
 
 run(
-  '8: frame limit: a 64 KiB reply and a 64 KiB echo result fail the turn; the session goes on',
+  '8 (M1b: staged): a 64 KiB reply and a 64 KiB echo result complete as staged text; the session goes on',
   async t => {
+    // M1a's acceptance 8 expected both turns to fail with the frame-limit
+    // text; M1b stages text over inlineBytes (m1b-interfaces.md 5), so
+    // both turns now complete and their full text is read through Content.
     t.timeout(4 * 60_000);
     const { slice, backend, log } = await open(t);
     const session = await slice.createSession(backend);
     const sub = await slice.subscribe(session);
+    const content = await E(slice.admin).content();
 
     /** @param {string} input */
     const finished = async input => {
@@ -324,63 +331,43 @@ run(
       return E(receipt.turn).whenFinished();
     };
     const reply = await finished(inputs.bigReply);
-    t.is(reply.state, 'failed');
-    t.is(reply.error, texts.frameLimit);
+    t.is(reply.state, 'completed');
     const afterReply = await finished(inputs.hi);
     t.is(afterReply.state, 'completed');
 
     const result = await finished(inputs.bigEcho);
-    t.is(result.state, 'failed');
-    t.is(result.error, texts.frameLimit);
+    t.is(result.state, 'completed');
     const afterResult = await finished(inputs.hi);
     t.is(afterResult.state, 'completed');
 
     const lines = log();
-    t.is(
-      lines.filter(l => l.kind === 'frame-limit' && l.turnId === reply.turnId)
-        .length,
-      1,
+    t.false(
+      lines.some(
+        l => l.kind === 'frame-limit' || l.kind === 'echo-frame-limit',
+      ),
+      'nothing hit the frame limit',
     );
-    t.is(
-      lines.filter(
-        l =>
-          l.kind === 'echo-frame-limit' &&
-          l.opId.startsWith(`${result.turnId}/`),
-      ).length,
-      1,
-    );
-    // The recorded reason, and the tool result the model would see.
     const page = await E(session).getHistoryPage();
     const replyTurn = turnWithInput(page, inputs.bigReply);
-    const replySettled = replyTurn.records.at(-1);
-    t.like(replySettled, {
-      kind: 'turn-settled',
-      status: 'failed',
-      error: texts.frameLimit,
-    });
-    t.false(
-      replyTurn.records.some(
-        (/** @type {any} */ r) => r.kind === 'round-settled',
-      ),
-      'no round result reached the vat',
+    const settled = replyTurn.records.find(
+      (/** @type {any} */ r) => r.kind === 'round-settled',
     );
+    t.true(isStaged(settled.text), 'the reply is staged');
+    t.is(settled.text.bytes, 65_536);
+    t.is(await readField(content, settled.text), 'x'.repeat(65_536));
     const echoTurn = turnWithInput(page, inputs.bigEcho);
-    t.like(
-      echoTurn.records.find((/** @type {any} */ r) => r.kind === 'tool-result'),
-      { result: texts.frameLimit, failed: true },
+    const echoResult = echoTurn.records.find(
+      (/** @type {any} */ r) => r.kind === 'tool-result',
     );
-    t.like(echoTurn.records.at(-1), {
-      kind: 'turn-settled',
-      status: 'failed',
-      error: texts.frameLimit,
-    });
-    await sub.until(e => e.type === 'abort' && e.turnId === result.turnId);
-    t.deepEqual(
-      sub
-        .events()
-        .filter(e => e.type === 'abort')
-        .map(e => e.reason),
-      [texts.frameLimit, texts.frameLimit],
+    t.true(isStaged(echoResult.result), 'the echo result is staged');
+    t.falsy(echoResult.failed);
+    t.is(
+      await readField(content, echoResult.result),
+      boundToolOutput('y'.repeat(65_536)),
+    );
+    t.false(
+      sub.events().some(e => e.type === 'abort'),
+      'no turn was aborted',
     );
     // The session vat was not halted.
     const row = await slice.sessionWorker('s1');
@@ -403,22 +390,32 @@ run(
     const start = log().find(
       l => l.kind === 'echo-start' && l.opId.startsWith(`${status.turnId}/`),
     );
-    t.is(start.args, expected, 'echo received the arguments byte for byte');
+    // M1b: arguments over inlineBytes are staged (m1b-interfaces.md 5.2);
+    // echo reads the blob in process and logs only their length, and the
+    // transcript holds the StagedText, whose text Content returns.
+    t.true(expected.length > limits.inlineBytes);
+    t.is(start.units, expected.length, 'echo read the whole arguments');
     t.is(
       log().filter(l => l.kind === 'echo-end' && l.opId === start.opId).length,
       1,
     );
-    // Recorded as text: the intent's args (a preview in history pages) and
-    // the live tool_call event (the whole text).
     const page = await E(session).getHistoryPage();
     const intents = turnWithInput(page, inputs.keys).records.find(
       (/** @type {any} */ r) => r.kind === 'tool-intents',
     );
-    t.is(typeof intents.intents[0].args, 'string');
-    t.true(expected.startsWith(intents.intents[0].args));
+    const { args } = intents.intents[0];
+    t.true(isStaged(args));
+    t.true(expected.startsWith(args.preview));
+    const content = await E(slice.admin).content();
+    t.is(
+      await readField(content, args),
+      expected,
+      'the arguments byte for byte',
+    );
     await sub.until(e => e.type === 'end' && e.turnId === status.turnId);
     const call = sub.events().find(e => e.type === 'tool_call');
-    t.is(call.args, expected);
+    t.true(isStaged(call.args));
+    t.is(await readField(content, call.args), expected);
     for (const text of ['after 1', 'after 2', 'after 3']) {
       // eslint-disable-next-line no-await-in-loop
       const next = await slice.submit(session, text);
