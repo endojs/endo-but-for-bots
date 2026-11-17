@@ -345,7 +345,13 @@ test('a creation answers from a usable observation and refreshes in the backgrou
     contextLength: 8192,
     maxOutputTokens: 2048,
   });
-  await flush();
+  // The background read reaches the server (polled: the lane runs files in
+  // parallel, so a fixed wait is not enough).
+  const t0 = Date.now();
+  while (server.requests().length < 2 && Date.now() - t0 < 5000) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
   t.is(server.requests().length, 2);
 });
 
