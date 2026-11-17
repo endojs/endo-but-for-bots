@@ -5,22 +5,22 @@
 | **Created** | 2026-05-15 |
 | **Updated** | 2026-11-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Parent** | [endopi](endopi.md) |
 
 ## Status
 
-A first build is open as draft
-[#1640](https://github.com/endojs/endo-but-for-bots/pull/1640)
-(`@endo/prompt-templates`, `packages/chat/setup-prompt-templates.js`,
-`packages/spaces-util/src/prompt-template-catalog.js`). It was written
-against the earlier, thinner version of this document, which said Pi
-templates use `{{var}}` placeholders. Pi does not: it uses shell-style
-`$1` / `$@` placeholders and an `argument-hint` frontmatter key. This
-revision fixes the format so that a template written for Pi expands the
-same way in Endo, and keeps #1640's capability shape (read-only mounts
-under one pet name), which is sound. The build follow-up is a rework of
-#1640, not a new PR. § *Delta from #1640* lists the changes.
+Built in draft
+[#1640](https://github.com/endojs/endo-but-for-bots/pull/1640), reworked
+to this revision: `@endo/prompt-templates` (Pi placeholder grammar,
+Pi argument splitting, `argument-hint`, and the shared
+`listConventionalDirectories` walker in its `src/node.js`),
+`packages/chat/setup-prompt-templates.js`, and
+`packages/spaces-util/src/prompt-template-catalog.js` plus the chat bar.
+All three phases are in that PR. Pending: `@endo/skills` (#1643) importing
+the walker from `@endo/prompt-templates/node.js` instead of keeping its
+own, and the two open questions below, which the build answers with the
+recommended defaults (no `{{name}}` extension; user-only invocation).
 
 ## Motivation
 
