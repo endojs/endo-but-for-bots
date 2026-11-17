@@ -250,12 +250,16 @@ test('BlobWriter: pieces in order, close answers the StagedText; closed and abor
   await t.throwsAsync(() => E(aborted).close(), {
     message: texts.writerClosed,
   });
-  // eslint-disable-next-line no-await-in-loop
-  await new Promise(resolve => setTimeout(resolve, 20));
-  t.deepEqual(
-    readdirSync(blobs.blobDir).filter(name => name.endsWith('.part')),
-    [],
-  );
+  // abort is fire-and-forget (its guard returns nothing): the part file is
+  // unlinked after the writer's queued writes and its close, so under load
+  // that can take longer than any fixed pause. Wait for it, bounded.
+  const parts = () =>
+    readdirSync(blobs.blobDir).filter(name => name.endsWith('.part'));
+  for (let waited = 0; parts().length > 0 && waited < 5000; waited += 10) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  t.deepEqual(parts(), []);
   // An empty writer closes as an empty blob.
   const empty = await E(blobs.store.writers).open();
   const nothing = await E(empty).close();
