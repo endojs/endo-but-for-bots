@@ -22,6 +22,7 @@ import {
   m2Interfaces,
   m2MethodNames,
   methodNames,
+  archiveKindLetters,
   secretCodes,
   shapes,
   textOf,
@@ -287,6 +288,7 @@ const shapeSamples = {
     bytes: 96_000,
     firstTurnId: 't33',
     lastTurnId: 't64',
+    kinds: 'sdritrdre',
     epoch: 0,
     previous: digest,
     context: contextSource,
@@ -904,6 +906,10 @@ test('the fixed M2 texts', t => {
     'This turn is archived; read it through the history service',
   );
   t.is(texts.sessionDeleting, 'This session is being deleted');
+  t.is(texts.unknownTurn, 'Unknown turn');
+  // One letter per record kind, all distinct (SealRequest.kinds).
+  t.is(new Set(archiveKindLetters.map(([, letter]) => letter)).size, 8);
+  t.is(new Set(archiveKindLetters.map(([kind]) => kind)).size, 8);
   // M1a's texts the M2 units use are unchanged.
   t.is(
     texts.blankSystemPrompt,

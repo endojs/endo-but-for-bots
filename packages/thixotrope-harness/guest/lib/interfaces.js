@@ -293,7 +293,24 @@ export const texts = harden({
    * session's sealed boundary.
    */
   recordsSealed: 'These records are archived',
+  /** Harness: `Session.findTurn` with an id this session never minted. */
+  unknownTurn: 'Unknown turn',
 });
+
+/**
+ * The record kind letters of `SealRequest.kinds` (m2-interfaces.md 4.4),
+ * by record kind; the adapter checks its copy of the range against them.
+ */
+export const archiveKindLetters = harden([
+  ['turn-started', 's'],
+  ['dispatched', 'd'],
+  ['partial', 'p'],
+  ['round-settled', 'r'],
+  ['tool-intents', 'i'],
+  ['tool-result', 't'],
+  ['turn-settled', 'e'],
+  ['turn-resolved', 'v'],
+]);
 
 /**
  * Fixed texts with parameters. Each returns the exact string.
@@ -1986,9 +2003,11 @@ const m2ShapeBuilders = {
     ),
   /**
    * `ArchivePort.seal` argument (crank S, m2-interfaces.md 4.4): the vat's
-   * range and its fingerprint; `previous` is the digest the new segment
-   * chains to ('' for the first); `context` serves records the adapter
-   * lacks (never below `from`).
+   * range and its fingerprint (`kinds`: one letter per record of the range,
+   * in log order, `archiveKindLetters`; only the first
+   * `archiveSegmentRecords` when one turn is larger); `previous` is the digest the new
+   * segment chains to ('' for the first); `context` serves records the
+   * adapter lacks (never below `from`).
    */
   SealRequest: () =>
     record({
@@ -2000,6 +2019,7 @@ const m2ShapeBuilders = {
       bytes: count,
       firstTurnId: S.Id,
       lastTurnId: S.Id,
+      kinds: text(limits.archiveSegmentRecords),
       epoch: count,
       previous: text(64),
       context: M.remotable('ContextSource'),
@@ -2342,7 +2362,10 @@ const m2InterfaceBuilders2 = {
       ).returns(done),
       releaseArchive: M.callWhen(R('Session')).returns(done),
       history: M.callWhen().returns(R('History')),
-      writersFor: M.callWhen(R('Session')).returns(R('BlobWriters')),
+      // No session: writers whose blobs no session owns yet (17.3: the
+      // first session that presents one holds it): the factory stages a
+      // composed prompt over inlineBytes before the session exists.
+      writersFor: M.callWhen().optional(R('Session')).returns(R('BlobWriters')),
     }),
   /** + the catalogue (W2.2's ops; manager forwards, W2.3). */
   Backend: () =>
