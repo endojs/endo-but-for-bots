@@ -6651,20 +6651,20 @@ Decision: good fit for the queue and submissions. The design choices that differ
 J-0456.
 
 ### J-0451 2026-11-18 M2 queue tests - deviation
-Evidence: Fae `test/session/pending-queue.test.js` (19 cases) and `session-submissions.test.js`
-(16 cases) at `1315bef86`, ported as `m2-queue-pending.test.js` (20 tests) and
+Evidence: Fae `test/session/pending-queue.test.js` (20 tests from 19 definitions) and `session-submissions.test.js`
+(16 tests) at `1315bef86`, ported as `m2-queue-pending.test.js` (20 tests) and
 `m2-queue-submissions.test.js` (16 tests) over the real queue and the real session with in-memory
 fakes (`test/unit/_m2-queue-session.js`); each file lists the cases that do not apply.
 Reading: not applicable, because the heap is the record: persistence across the process, a failed
-write, a lost acknowledgement, a corrupt or unreadable record, pruning after failed persistence
-(pending-queue, 6 cases); the incarnation close (submissions, 1). Not applicable, because the claim
+write, a claim whose write failed, a corrupt record, receipt pruning after failed persistence
+(pending-queue), the incarnation close and the unreadable queue (submissions). Not applicable, because the claim
 is atomic (architecture 4.3): dispatch at most once across a crash, the refused turn putting its
 message back, the interrupted head and its two decisions, a start that throws, a session admitting
-no work, a slot filling during the accepting write (pending-queue 2 and the `interrupted` part of a
-third, submissions 6); their observable rules (one claim at a time, duplicates after the claim, a
+no work, a slot filling during the accepting write, the head cutting the running turn short;
+their observable rules (one claim at a time, duplicates after the claim, a
 `refused` hold released by a new message with the older message first, an `interrupted` hold
-released by nothing but a decision) are ported. Not applicable in M2: session delete (W2.7, 2
-cases), mentions and attachments (M5, 2 cases), the `unavailable` hold (a heap cannot fail to load;
+released by nothing but a decision) are ported. Not applicable in M2: the record going with the session and an unreadable record not blocking a
+delete (W2.7), mentions and attachments (M5), the `unavailable` hold (a heap cannot fail to load;
 its text is tested). Adapted: send-now no longer answers `cancelCurrent` (Fae let the head cut the
 running turn short); here it moves the entry to the head and the running turn finishes (5.1). Kept
 differences: the text is not trimmed (M1a stores what was submitted) and cancelling an entry that

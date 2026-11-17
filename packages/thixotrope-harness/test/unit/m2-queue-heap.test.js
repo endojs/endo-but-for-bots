@@ -173,9 +173,18 @@ test.serial(
         receipt.entry.cancel();
       }
     })(queue);
-    const counts = await liveExos();
+    // On a loaded machine (the whole unit lane in parallel) a collection
+    // may leave some of them for the next: look up to five times.
+    let live = Infinity;
+    for (let k = 0; k < 5 && live - baseline > 1; k += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      live = (await liveExos()).live.QueueEntry ?? 0;
+    }
     t.is(queue.size(), 0);
-    t.true((counts.live.QueueEntry ?? 0) - baseline <= 1, 'only the stand-in');
+    t.true(
+      live - baseline <= 1,
+      `only the stand-in (${live - baseline}; baseline ${baseline})`,
+    );
     t.throws(() => queue.receiptFor(rid(NOW, 0))?.entry.describe());
   },
 );
