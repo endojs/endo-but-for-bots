@@ -42,6 +42,32 @@ test('templateKey depends on the provisioning id and the crank budget', async t 
   t.not(await templateKey({ crankBudget: 10_000_000n, id: 'base' }), a);
 });
 
+test.serial(
+  'templateKey depends on a set collection schedule or hub store, not on unset ones',
+  async t => {
+    const names = ['THIXOTROPE_GC_POLICY', 'THIXOTROPE_HUB_STORE'];
+    const saved = names.map(name => process.env[name]);
+    t.teardown(() =>
+      names.forEach((name, i) => {
+        if (saved[i] === undefined) delete process.env[name];
+        else process.env[name] = saved[i];
+      }),
+    );
+    for (const name of names) delete process.env[name];
+    const a = await templateKey({ crankBudget: 50_000_000n, id: 'base' });
+    process.env.THIXOTROPE_GC_POLICY = 'every-crank';
+    const b = await templateKey({ crankBudget: 50_000_000n, id: 'base' });
+    t.not(b, a);
+    delete process.env.THIXOTROPE_GC_POLICY;
+    process.env.THIXOTROPE_HUB_STORE = 'file';
+    const c = await templateKey({ crankBudget: 50_000_000n, id: 'base' });
+    t.not(c, a);
+    t.not(c, b);
+    delete process.env.THIXOTROPE_HUB_STORE;
+    t.is(await templateKey({ crankBudget: 50_000_000n, id: 'base' }), a);
+  },
+);
+
 test('ensureTemplate refuses an id that is not a short slug', async t => {
   await t.throwsAsync(() => ensureTemplate({ id: '../x' }), {
     message: /template id/,

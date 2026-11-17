@@ -105,6 +105,28 @@ const hashInto = (hash, file) =>
   );
 
 /**
+ * State settings a served directory pins (the collection schedule, CC-022,
+ * CC-023) or lays out on disk (the hub store, CC-024), as set in this
+ * process's environment; unset ones are left out.
+ * @returns {Record<string, string>}
+ */
+export const stateSettingsFromEnv = () => {
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const name of [
+    'THIXOTROPE_GC_POLICY',
+    'THIXOTROPE_GC_SLOT_ALLOWANCE',
+    'THIXOTROPE_GC_CHUNK_ALLOWANCE',
+    'THIXOTROPE_GC_CRANK_INTERVAL',
+    'THIXOTROPE_HUB_STORE',
+  ]) {
+    const value = process.env[name];
+    if (value !== undefined) out[name] = value;
+  }
+  return out;
+};
+
+/**
  * The cache key of a template: a short hex digest of the runtime identity,
  * the workspace version, the crank budget, TEMPLATE_VERSION and the
  * provisioning id.
@@ -138,6 +160,10 @@ export const templateKey = async ({ crankBudget, id }) => {
       slotCeiling: String(
         process.env.THIXOTROPE_SLOT_CEILING ?? limits.slotCeiling,
       ),
+      // Also persisted and refused when changed (CC-022, CC-023), and the
+      // hub store's layout (CC-024): the file store refuses a log directory.
+      // Only set ones are keyed, so the defaults keep their templates.
+      ...stateSettingsFromEnv(),
     }),
   );
   return hash.digest('hex').slice(0, 10);
