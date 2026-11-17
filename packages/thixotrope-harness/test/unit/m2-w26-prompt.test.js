@@ -269,8 +269,8 @@ test('a prompt over inlineBytes is staged through writersFor() in pieces within 
 
 test('the resolver is in the hook table after the preset snapshot; createSession options resolve a prompt', async t => {
   const i = optionResolvers.indexOf(promptResolver);
-  t.true(i > 0);
-  t.is(i, optionResolvers.length - 1, 'W2.6 appended its line');
+  // After the preset snapshot (M1a's describeObjects, the third entry).
+  t.true(i >= 3, 'W2.6 appended its line');
   const backend = Far('Backend', {
     describe: () => harden({ kind: 'scripted', label: 'fake' }),
   });
