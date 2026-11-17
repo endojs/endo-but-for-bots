@@ -6475,3 +6475,87 @@ the run lock while `perf/exec.perf.mjs` ran (no Ironhorse workload of its own; t
 line with the other runs). (5) Perf rows carry `-dirty`: documents and, in the first rows, the test
 files of `aa7325c02f` were uncommitted.
 Decision: (1) for the next builder who runs the spikes.
+
+### J-0400 2026-11-18 M2 tooling - awkward
+Evidence: W2.0 contract commits `58980f7d9e` (fold and M2 guards) and `d0a2f565e2` (the document
+`designs/m2-interfaces.md`); `test/unit/m2-interfaces.test.js` (10 tests), the M1a and M1b contract
+tests (32 tests together), the unit lane 478 passed, 41 skipped (none failed) after the fold; tsc,
+ESLint (guest rules included) and Prettier clean on the changed files.
+Reading: folding M1b's tables into M1a's (`shapes`, `interfaces`, `methodNames`; the M1b names kept
+as views of the same objects) cost nothing at run time and broke only test doubles that implement
+an M1a-only Turn or TurnSink against a folded guard: `test/adapter/m1a-agent-host.test.js` (W1a.2's
+file) needed `getContent` and `progress` stubs, made in the fold commit; `m1a-interfaces.test.js`
+now checks its own names inside the folded tables. The exo guard's rule that every method of an
+interface must be implemented is what makes contract growth awkward: several M2 units add methods
+to one interface (AgentHostAdmin gains methods for W2.3, W2.7 and W2.8), so the contract adds
+`m2Interfaces` and a "switch once, stub the rest" rule (`textOf.notBuilt`), and assigns each file to
+one unit per parallel group.
+Decision: as `m2-interfaces.md` 1.3 and 2.2. W2.9 removes every stub and folds `m2Interfaces` at M2
+sign-off.
+
+### J-0401 2026-11-18 M2 persistence - awkward
+Evidence: D-M2-1 (J-9383..J-9389: at 5,000 turns a 114 MB session snapshot, a 556 ms collection,
+3.2 s per turn, a 180 s context rebuild, a 516 KB hub row of 10,012 entries); the archive design in
+`m2-interfaces.md` 4.
+Reading: orthogonal persistence makes "keep every record in the vat" the natural design and it is
+correct, but its costs grow with what a vat keeps: the collector marks the whole live heap, the
+snapshot writes it, and every handle a vat imports is an entry of its hub row, rewritten whole on
+change. So the archive moves settled turns out of the vat into adapter files the way blobs already
+are (durable before the vat lets go), and keeps the vat the decider and the holder of the index.
+Three things about Thixotrope shaped it. (1) Intent before effect and replayed cranks make the
+sealing protocol simple: the seal intent and the call leave in one crank, the drop happens only in
+the crank of the durable answer, and a retired break leaves the records in the vat; every SIGKILL
+point in 4.5 loses and duplicates nothing. (2) The hub row forbids a handle per segment: with one
+Blob-like handle per 32 turns the row would still grow with the session, so segments are ranges of
+one archive addressed by the vat's index entries and a chained digest, the way a Content read
+addresses a range of one blob. (3) Because a page of records out of a vat costs about 3 ms per
+record (C-5 class, J-9387), sealing reads the records the adapter already received (its mirror)
+instead of paging them out, and a restart reads one persisted projection file instead of a page
+crank per 512 records (J-0322 option (b)).
+Decision: built in M2 as W2.5 (vat) and W2.8 (adapter). Expected: a session keeps 128-159 turns, a
+vat heap of about 83,000 live slots, a snapshot of about 20 MB and a hub row of about 290 entries
+at 200, 1,000 and 5,000 turns alike [inferred] (`m2-interfaces.md` 4.13); measured by acceptance 15.
+
+### J-0402 2026-11-18 M2 engine - perf
+Evidence: bundle sizes (`scripts/bundle-guest.mjs`, comments stripped) at `2f57390c54` and
+`58980f7d9e`: session program 132,760 -> 149,433 bytes (+16,673; 50,567 left of 200,000), exec
+program 65,856 -> 82,529 (17,471 left of `execProgramBytes` 100,000), factory 94,802 -> 111,475,
+`interfaces.js` + `limits.js` 43,182 -> 59,855. Vat probe (throwaway script under the run lock,
+`runPerf`, base template, workspace vat through `client.call('evaluate', ...)`, both contracts
+staged in pieces of 16,384 units into the same vat), JSON line unchanged:
+{"metric":"w20.interfaces.vatLoad","unit":"ms","floorMs":75.8,"before":{"bytes":43182,"pieces":3,"maxMessage":17344,"stageMs":908,"loadMs":215,"loadOverFloorMs":139,"exports":"12","firstUseSessionMs":247,"secondUseMs":-4,"firstUseRestMs":653,"tables":"115"},"after":{"bytes":59855,"pieces":4,"maxMessage":17456,"stageMs":1191,"loadMs":277,"loadOverFloorMs":201,"exports":"15","firstUseSessionMs":387,"secondUseMs":-2,"firstUseRestMs":1102,"tables":"175","checks":"'archiveState=true,archiveStateExtraKey=false,segmentPage64=true,segmentPage65=false,sealRequest=true,sealRequestDigest65=false,roundRequestArchive=true,lifecycleDeleting=true,backendSpecGrant=true,backendSpecKeyText=false,edit:accepted,edit9000:refused,switchPartial:refused,notBuilt=not built yet: x'","checkMs":519},"commit":"58980f7d9e","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000","loadAvg":[2.24,2.52,2.34]}
+Reading: the larger contract costs 62 ms more in its evaluating crank (201 against 139 ms over the
+floor) and 0.28 s more staging; a session vat's first use of the guards it needs costs 387 ms once
+(19 guards and shapes, M2's archive and queue ones included; 247 ms for M1b's 12), nothing after;
+every table entry 1.1 s. The guards' accept and refuse cases hold in the vat. The session program
+has 50,567 bytes left for W2.4-W2.7's vat code.
+Decision: recorded in `m2-interfaces.md` 15. Builders of vat code check `session.program` (200 KB)
+in their unit; a unit that would pass it reports it before committing.
+
+### J-0403 2026-11-18 M2 spec - deviation
+Evidence: `m2-interfaces.md` 4.3, 8.2, 9.1, 10; SPEC R4-106, R4-77, R4-93 (G-04), R4-26.
+Reading: (1) R4-106's `[default]` "256 settled turns resident; archive chunks of 256 turns" becomes
+128 kept turns and 32 turns per segment: with 256 the kept turns would vary between 256 and 511
+across a seal cycle, so heap, snapshot and hub row could differ by about 2 x between two session
+lengths, against D-M2-1's 1.25 x; the vat history page is also bounded by 48 records (an estimate
+from 3 ms per record, J-0370, J-9387). (2) The Anthropic API's retries ("its SDK's default retries
+[inferred]", R4-77) become a stated schedule (3 attempts; 408, 409, 429, 5xx, network; min(8 s,
+max(Retry-After, 500 ms x 2^(n-1)))), only while nothing was delivered, and it gets a 1 h request
+timeout (G-04: the spec has none). (3) Failure texts of the Anthropic API other than 401 are harness
+texts in OpenRouter's wording (R4-79: no body). (4) The secrets wrapping key lives outside the state
+directory (D-6), at `THIX_HARNESS_SECRETS_KEY` or under `~/.config/thixotrope-harness/` (R7-19 keeps
+it beside the ciphertext). (5) The guest prompt's `exec` paragraph (R4-26 part 2, "each call is a
+fresh function body") is rewritten for the persistent scope in M2, not M5.
+Decision: deviations, for the owner; each is one setting or text in the contract.
+
+### J-0404 2026-11-18 M2 tooling - awkward
+Evidence: `m2-interfaces.md` 2.2-2.5 (file ownership, wiring that waits, seams, acceptance owners).
+Reading: the M2 work touches the same composition files from many units: `durable.js` (secrets,
+catalogue, delete and history forwards), `AH/index.js` and `attach.js` (every new ops method),
+`session.js` and `turn.js` (queue, archive, history, delete, prompt, deadline). Group A and group B
+each get one owner per file; the other units' needs are met by contract-specified forwards and
+stubs (1.3), by seams W2.5 builds in `turn.js` for W2.6 and W2.7 (2.4), by hook tables, or wait for
+the next owner or W2.9 (2.3). Cost: acceptance 7 (secrets end to end), 11 (default model) and 15
+(5,000-turn flatness) cannot run before W2.9, because each needs units of both groups.
+Decision: for the PM: the M2 table now has W2.8 (group A) and W2.9 (integration) rows; the
+assignment in 2.2 is binding for the builders.
