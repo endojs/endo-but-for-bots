@@ -4821,3 +4821,78 @@ W1b.4 does not retire on it. (5) Unit lane at `614cd894e3`: one failure, W1b.1's
 `m1b-blobs-store` BlobWriter test, which passes alone (11/11) and failed under the full lane's load.
 Decision: (1) comment stripping in `bundle-guest.mjs` (J-0303) is now needed before any further
 session-vat code; (4) waits for the PM's J-0333 decision.
+
+### J-0320 2026-11-17 M1b context cache - good fit
+Evidence: D-9 as built (W1b.2, `01bbeea49e`..`f9c0fa4c5f`). The session vat only records and pages
+(`guest/session/context-source.js`, 40 lines: `page(cursor?) -> { from, records, next? }` within
+`contextPageBytes` and `pageRecords`, cursors `p<index>`); the adapter keeps one cache per Session
+presence per incarnation (`AH/context-cache.js`) and projects in Node (`AH/projection.js`, transcript
+records of `transcript-records.js`; native context as `providerContext`, calls then results in call
+order, never-dispatched turns left out; `projectionHooks` empty for M8). Object passing fits: the
+cache is keyed by the Session presence (S2 (d)), staged fields are `Blob` presences resolved through
+the manager in batches of 64 and read in process, and the ContextSource is an object carried in every
+`RoundRequest`, never a name. The `{count, epoch}` rule needs no vat state beyond the log: append when
+in step, ignore a re-sent round 0 (same tail kinds/turnIds), gap-pull from `p<count>`, else rebuild
+taking only records below `base.count`, so a round 0 re-sent to a fresh incarnation (contract 7.1
+case 3) projects its `TurnStarted` once. Adapter property test (24 seeded random sessions, 411
+comparisons with dropped requests, `append: []` fallbacks, duplicates and restarts mixed in):
+incremental = rebuild from pages = an oracle over the whole log, every time; the real session
+(`makeSession`) through the cache gives the same. Integration (`m1b-context-restart.test.js`, real
+vats, SIGKILL): after a 60- and a 200-turn session the idle session's next turn reached the provider
+once, with per-turn context digests of every earlier turn equal to before the restart (staged native
+contexts and a staged 20 KB reply included). One change to the M1a protocol was needed (J-0323).
+Decision: as built.
+
+### J-0321 2026-11-17 M1b context cache - perf
+Evidence: Node bench `test/adapter/m1b-context-cache.bench.mjs` (real record log, ContextSource,
+blob files; a fresh blob store and cache stand for the restart; no vat), commit `ad6e59008a` + W1b.2
+uncommitted, load 1.5-2.1. Shape: every turn a staged native context, a third with 1-2 echo calls,
+5 % of other texts staged (5.6 records per turn).
+{"metric":"context.rebuild","unit":"ms","n":5,"median":12.66,"p95":22.995,"level":"adapter","turns":200,"records":1108,"transcriptRecords":754,"pages":3,"pageBytesMax":96129,"blobs":320,"resolveCalls":7,"vatEstimateMs":808,"commit":"ad6e59008a-dirty","crankBudget":"50000000","loadAvg":[1.58,2,2.03]}
+{"metric":"context.rebuild","unit":"ms","n":5,"median":49.309,"p95":59.082,"level":"adapter","turns":1000,"records":5634,"transcriptRecords":3873,"pages":13,"pageBytesMax":96264,"blobs":1620,"resolveCalls":27,"vatEstimateMs":3244,"budget":{"median":5000},"pass":true,"commit":"ad6e59008a-dirty","crankBudget":"50000000","loadAvg":[2.08,2.02,2.03]}
+{"metric":"context.append","unit":"ms","n":20,"median":4.953,"p95":16.795,"level":"adapter","turns":1000,"pass":null,"commit":"ad6e59008a-dirty","loadAvg":[1.51,1.94,2]}
+{"metric":"context.project","unit":"ms","n":20,"median":5.028,"p95":6.981,"level":"adapter","turns":1000,"records":5674,"commit":"ad6e59008a-dirty","loadAvg":[1.51,1.94,2]}
+(200 turns: append 1.1 ms, project 1.1 ms.) Node work is small: 49 ms to rebuild 1,000 turns, 5 ms
+per in-step round (the whole session is projected again each round; linear, fine at this size).
+Resolves were first sent per page (34 calls for 1,620 handles); now in whole batches of 64 as pages
+arrive (27). `vatEstimateMs` assumed 90 ms per page crank (contract 6.5); J-0322 shows that is wrong.
+Decision: adapter level passes; the vat cost is J-0322.
+
+### J-0322 2026-11-17 M1b context cache - perf
+Evidence: `m1b-context-restart.test.js` under the run lock, release worker `7cda4467...`, crank
+budget 50 M, commit `8acb9dafe1` + W1b.2 uncommitted (since committed as `f9c0fa4c5f`), load
+1.3-2.4. `value` = the adapter's `prepare()` of the first round after a SIGKILL restart, including
+the session vat's page cranks and the manager's `resolveBlobs` cranks; `engine` = counters over that
+whole turn.
+{"metric":"context.rebuild.vat","unit":"ms","value":857,"turns":61,"transcriptRecords":126,"inStepMs":[7,8,9,9,8,0,0,9,1,1],"servedMs":16494,"commit":"614cd894e3-dirty","crankBudget":"50000000","loadAvg":[2.1,2.07,2.06]}
+{"metric":"context.rebuild.vat","unit":"ms","value":2475,"timing":{"pages":2,"pageMs":2041.2,"waitResolveMs":426.8,"readMs":3.8,"blobs":203,"projectMs":1},"engine":{"delivery":{"count":17,"ms":3469.5},"snapshot":{"count":4,"ms":384.9}},"turns":201,"transcriptRecords":406,"servedMs":13311,"commit":"8acb9dafe1-dirty","crankBudget":"50000000","loadAvg":[1.56,1.82,1.94]}
+(Two earlier 200-turn runs: 2,440 and 2,456 ms.) A page crank costs about 1 s for about 450
+records, not 70-90 ms: about 2 ms per record in the vat. Two probes under the lock (tree restored
+after each, their templates deleted): the ContextPage return guard as `M.any()` -> pageMs 1,643
+(the structural `M.key()` guard is about 200 ms of each page); page byte accounting removed ->
+2,006 (`plainBytes` costs nothing measurable). The rest is the vat serializing the page (marshal of
+every record node), as C-5's per-byte/per-node cost. Projection for 1,000 turns (5.6 records per
+turn, 11 pages by `pageRecords`): about 11 x 1 s + resolves = 11-13 s against the 5 s budget: a
+projected MISS of about 2.5x (not measured end to end here: building 1,000 live turns takes about
+10 minutes; W1b.6 builds the fixture with importState). The in-step path is unaffected (0-13 ms per
+round, no vat crank).
+Decision: escalated to the PM. Options, cheapest first: (a) a context view of each record (the
+fields the projection reads: drop `at`, `usage`, `servedBy`, `callCount`, fold `Dispatched` into a
+flag), about a third fewer nodes; (b) persist the adapter cache next to the blobs (one file per
+session presence key known to the manager, verified by `{count, epoch}` plus a digest of the last
+record) so a restart reads a file instead of paging; (c) the marshal cost itself (core, C-5).
+Rebuilds happen once per session per restart, before its first request.
+
+### J-0323 2026-11-17 M1b context cache - deviation
+Evidence: (1) Contract change `01bbeea49e`: `RoundRequest.append` carries every record since the
+session's previous request, not the turn's (M1a: round 0 `append` exactly `[TurnStarted]`). With
+per-turn appends every turn start would find the cache behind by the previous turn's trailing
+records (`Dispatched`, `RoundSettled`, `TurnSettled`, partials, recovery results) and pay a page
+crank (about 1 s, J-0322) on the turn-start path. M1a unit assertions that read `append[0]` were
+adapted (`m1a-session-turn.test.js`, 7 places), and `m1a-agent-host.test.js` now expects the new
+`context` log line. (2) The cache builds one cursor itself, `p<count>`, for gap pulls (contract 9.1).
+(3) `test/integration/m1b-context-restart.test.js` is in W1b.6's namespace; the row asked W1b.2 for
+"integration: rebuild after restart". (4) The scripted provider fails a round whose blobs cannot be
+loaded with `textOf.stagingFailed` (the contract's text for a failed rebuild) and sends nothing when
+a page breaks. (5) The session program bundle is 198,339 of 200,000 bytes after W1b.2 and W1b.4.
+Decision: reported to the PM; comment stripping (J-0303) is now needed before more vat code.
