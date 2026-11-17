@@ -383,6 +383,7 @@ decision 16.2). The session calls the scope directly.
 | `TurnPorts` | optional `content`, `writers`, `timer` | - | adapter objects |
 | `SessionServices` | optional `execVat` | - | `ExecHandle` |
 | `ScriptToolCall` | optional `code: { text, repeat? }` | - | args = `JSON.stringify({ code: text.repeat(repeat ?? 1) })` |
+| `ScriptToolCall` | optional `times` (W1b.6) | - | the call appears `times` times in the round (default 1), copies alike; the round's calls may then exceed `maxCallsPerMessage` (the too-big probe of 300 calls: the provider fails that round with `texts.frameLimit` before anything reaches the vat) |
 | `ScriptRound` | optional `nativeContext` | - | text staged as the round's native context |
 
 `DeltaEvent`, `FoldedMessage`, `FoldableStatus`, `SnapshotEvent` are unchanged: the channel folds

@@ -496,7 +496,11 @@ export const makeScriptedProvider = ({
       return;
     }
     /** @type {Array<{ callId: string, name: string, args: any }>} */
-    const calls = (scripted.toolCalls ?? []).map((/** @type {any} */ call) => ({
+    // `times` repeats a scripted call (W1b.6: the 300-call too-big probe).
+    const scriptedCalls = (scripted.toolCalls ?? []).flatMap(
+      (/** @type {any} */ call) => Array(call.times ?? 1).fill(call),
+    );
+    const calls = scriptedCalls.map((/** @type {any} */ call) => ({
       callId: call.callId ?? '',
       name: call.name,
       /** @type {any} */

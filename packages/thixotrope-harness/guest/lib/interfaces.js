@@ -861,6 +861,8 @@ export const shapes = lazyTable({
         argsKeys: count,
         // M1b: args = JSON.stringify({ code: text repeated }) (exec probes).
         code: record({ text: S.Text }, { repeat: count }),
+        // W1b.6: the call appears `times` times (too-big probe: 300 calls).
+        times: count,
       },
     ),
   ScriptRound: () =>
