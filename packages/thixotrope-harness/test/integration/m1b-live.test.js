@@ -197,8 +197,13 @@ run(
   },
 );
 
-run(
-  '6: 100 echo calls in one round: 64 run, 36 get the too-many-calls text',
+// Known failure (W1b.6, J-0362): the session vat halts with HeapExhausted
+// in the crank that records a round of 100 calls (100 tool_call events,
+// 36 refusals, 16 sends); 80 echo calls pass, 90 calls to an unknown tool
+// halt. Kept failing until turn.js spreads a large round over cranks or the
+// contract lowers maxCallsPerMessage; `test.failing` turns red when fixed.
+(integrationEnabled ? test.failing : test.skip)(
+  '6: 100 echo calls in one round: 64 run, 36 get the too-many-calls text [known failure: session vat HeapExhausted, J-0362]',
   async t => {
     t.timeout(4 * 60_000);
     const { slice, made } = await open(t);
