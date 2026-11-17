@@ -16,6 +16,8 @@ second copy of an `@endo/*` library.
   Surveys and plan reviews: `designs/survey/`, `designs/review-*.md`.
 - Journal: `JOURNAL.md` records what fits Thixotrope and what does not, and every perf
   measurement. Append in your milestone's number block; never rewrite an entry.
+- Core changes: `CORE-CHANGES.md` journals every change made outside this package (Thixotrope,
+  Ironhorse, other Endo packages) with its motivation; add an entry with each such change.
 - Settings: `config/defaults.js` (`limits`: frame sizes, crank budget, sends per crank, exec
   source size, vat key names, crash bound), with the evidence for each value.
 
