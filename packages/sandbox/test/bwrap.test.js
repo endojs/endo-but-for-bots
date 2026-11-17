@@ -266,6 +266,51 @@ const waitForProcessGroupGone = async (pid, timeoutMs = 3000) => {
   throw new Error(`process group ${pid} survived bounded cleanup`);
 };
 
+/**
+ * Wait until a process group has no executable members.  Parent-death cleanup
+ * necessarily kills the supervisor and its child together, so a host init that
+ * reaps orphaned zombies slowly can retain an inert group identity after every
+ * member is dead.
+ *
+ * @param {number} processGroup
+ * @param {number} [timeoutMilliseconds]
+ */
+const waitForProcessGroupQuiescent = async (
+  processGroup,
+  timeoutMilliseconds = 3000,
+) => {
+  await null;
+  const deadline = Date.now() + timeoutMilliseconds;
+  for (;;) {
+    let live = false;
+    for (const entry of nodeFs.readdirSync('/proc')) {
+      if (/^\d+$/.test(entry)) {
+        let stat;
+        try {
+          stat = nodeFs.readFileSync(`/proc/${entry}/stat`, 'utf8');
+        } catch {
+          // exited while listing
+        }
+        if (stat !== undefined) {
+          const [state, , group] = stat
+            .slice(stat.lastIndexOf(')') + 2)
+            .split(' ');
+          if (Number(group) === processGroup && state !== 'Z') {
+            live = true;
+            break;
+          }
+        }
+      }
+    }
+    if (!live) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`process group ${processGroup} retained a live member`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+};
+
 test.serial('bwrap probe reports available with a version', async t => {
   // eslint-disable-next-line @jessie.js/safe-await-separator
   if (!(await bwrapCheck(t))) {
@@ -1160,6 +1205,13 @@ test.serial(
   'bwrap supervisor kills its process group when its owner dies',
   async t => {
     t.timeout(10_000);
+    // eslint-disable-next-line @jessie.js/safe-await-separator
+    if (!(await bwrapCheck(t))) return;
+    const probe = await makeBwrapDriver({ env: {} }).probe();
+    if (!probe.available) {
+      t.pass(`parent-death supervisor unavailable: ${probe.reason}`);
+      return;
+    }
     const fixture = new URL(
       './fixtures/bwrap-parent-death-owner.js',
       import.meta.url,
@@ -1203,8 +1255,8 @@ test.serial(
     owner.kill('SIGKILL');
     await new Promise(resolve => owner.once('close', resolve));
     await t.notThrowsAsync(
-      waitForProcessGroupGone(/** @type {number} */ (processGroup)),
-      `process group ${processGroup} should die with its owner`,
+      waitForProcessGroupQuiescent(/** @type {number} */ (processGroup)),
+      `process group ${processGroup} should have no live members after owner death`,
     );
   },
 );
