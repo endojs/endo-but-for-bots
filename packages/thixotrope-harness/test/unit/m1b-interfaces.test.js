@@ -324,6 +324,15 @@ test('M1a shapes widened in place accept staged fields and still refuse what the
     matches(harden({ ...staged, units: 3 }), shapes.Submission),
     'StagedText is closed',
   );
+  // M1b follow-ups (J-9363): an optional SHA-256 digest, 64 units at most.
+  t.true(
+    matches(harden({ ...staged, digest: 'c'.repeat(64) }), shapes.Submission),
+    'a StagedText may carry its digest',
+  );
+  t.false(
+    matches(harden({ ...staged, digest: 'c'.repeat(65) }), shapes.Submission),
+    'a digest is at most 64 units',
+  );
   t.false(
     matches(harden({ blob: 'b1', preview: '', bytes: 1 }), shapes.Submission),
     'blob is a handle, never a name',
@@ -415,6 +424,10 @@ const methodSamples = {
     composer: { args: [], returns: far('Composer') },
     content: { args: [], returns: far('Content') },
     listPublisher: { args: [], returns: far('ListPublisher') },
+  },
+  StartListener: {
+    started: { args: [], returns: undefined },
+    attached: { args: [], returns: undefined },
   },
   SessionFactory: {
     createSession: { args: [{ title: 't', at: 1 }], returns: session },

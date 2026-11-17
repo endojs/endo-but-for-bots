@@ -203,6 +203,12 @@ export const texts = harden({
     'exec scope terminated: the exec vat ran out of property names (too many distinct keys were created); bindings from earlier calls are gone',
   /** Content.read with a handle that has no file. */
   blobUnknown: 'Unknown blob',
+  /**
+   * M1b follow-ups (J-9364): a handle that was staged for another session
+   * (`Content.read` through a session's ports, or a staged field in a
+   * session's records that names another session's blob).
+   */
+  blobNotOwned: 'This blob belongs to another session',
   /** BlobWriter.append or close after close or abort. */
   writerClosed: 'This blob writer is closed',
 });
@@ -336,6 +342,25 @@ export const textOf = harden({
    * @param {string} message
    */
   stagingFailed: message => `could not stage large text: ${message}`,
+  /**
+   * M1b follow-ups (J-9361): a staging that would take a session's staged
+   * text on disk over its quota (`blobLimits.sessionBytes`); the message of
+   * the staging failure (`stagingFailed`).
+   * @param {number} bytes the text being staged
+   * @param {number} held bytes the session already has staged
+   * @param {number} quota
+   */
+  blobSessionQuota: (bytes, held, quota) =>
+    `the session's staged text would exceed its disk quota: ${bytes} more bytes on top of ${held}, quota ${quota} bytes`,
+  /**
+   * M1b follow-ups (J-9361): a staging that would take all staged text on
+   * this daemon's disk over the daemon-wide quota (`blobLimits.daemonBytes`).
+   * @param {number} bytes
+   * @param {number} held bytes staged on this daemon's disk
+   * @param {number} quota
+   */
+  blobDaemonQuota: (bytes, held, quota) =>
+    `the daemon's staged text would exceed its disk quota: ${bytes} more bytes on top of ${held}, quota ${quota} bytes`,
 });
 
 // ---------------------------------------------------------------- shapes
@@ -1292,13 +1317,22 @@ export const execDescription = harden({
 
 /** Every M1b shape, by name, built on first use (see `lazyTable`). */
 export const m1bShapes = lazyTable({
-  /** Text over inlineBytes (D-15; m1b-interfaces.md 4). */
+  /**
+   * Text over inlineBytes (D-15; m1b-interfaces.md 4). `digest` (M1b
+   * follow-ups, J-9360): the SHA-256 of the text's UTF-8 bytes, 64 lowercase
+   * hex digits, computed by the adapter that wrote the file; every staging
+   * from then on carries it. Optional only so records staged before it stay
+   * valid. Duplicates compare by it (3.3).
+   */
   StagedText: () =>
-    record({
-      blob: M.remotable('Blob'),
-      preview: text(limits.messagePreviewUnits),
-      bytes: count,
-    }),
+    record(
+      {
+        blob: M.remotable('Blob'),
+        preview: text(limits.messagePreviewUnits),
+        bytes: count,
+      },
+      { digest: text(64) },
+    ),
   /** `TurnSink.progress`: the round's whole text so far, staged; `tail` its last units. */
   Progress: () =>
     record({
@@ -1554,6 +1588,18 @@ export const m1bInterfaces = lazyTable({
       content: M.callWhen().returns(R('Content')),
       listPublisher: M.callWhen().returns(R('ListPublisher')),
     }),
+  /**
+   * M1a StartListener + `attached` (M1b follow-ups, J-9362): the manager
+   * tells its start listeners, sendOnly, each time a new adapter incarnation
+   * attaches outside a daemon start (an adapter-only restart), so objects
+   * they fetched from the previous incarnation (the list publisher) are
+   * fetched again.
+   */
+  StartListener: () =>
+    M.interface('StartListener', {
+      started: M.call().returns(done),
+      attached: M.call().returns(done),
+    }),
   /** M1a SessionFactory + `sessionListFeed`. */
   SessionFactory: () =>
     M.interface('SessionFactory', {
@@ -1592,6 +1638,7 @@ export const m1bMethodNames = harden({
   ListSubscription: ['next', 'close'],
   Live: [...methodNames.Live, 'subscribeList'],
   AgentHostAdmin: [...methodNames.AgentHostAdmin, 'content', 'listPublisher'],
+  StartListener: [...methodNames.StartListener, 'attached'],
   SessionFactory: [...methodNames.SessionFactory, 'sessionListFeed'],
   HarnessRoot: [
     ...methodNames.HarnessRoot,

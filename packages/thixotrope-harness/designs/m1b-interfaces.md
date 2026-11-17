@@ -177,7 +177,9 @@ records, queue entries, receipts, events in flight, the exec vat while it reads 
 text's first `messagePreviewUnits` (1,024) units for messages, submissions, partial text and native
 context (native context: `preview` is `''`), and its first `toolPreviewUnits` (256) for tool
 arguments and results; cut surrogate-safe (`previewText`), no marker. `bytes` is the exact UTF-8
-length. A `StagedText` is a closed record: no units count, no digest, no name.
+length. A `StagedText` is a closed record: no units count, no name. M1b follow-ups (17.2): an
+optional `digest`, the SHA-256 of the UTF-8 bytes in 64 lowercase hex digits, computed by the
+adapter that wrote the file; every staging since carries it.
 
 **`Content`** (adapter, one per incarnation) - held by the gateway (in process, M3), tests
 (`AgentHostAdmin.content()`), and the exec vat for one call (through `ExecRequest.content`).
@@ -245,8 +247,10 @@ adapter restarted; inside model code the `await` rejects (section 7).
 
 - **`Session.enqueueOnce` / `startTurn`** accept `Submission = { text } | StagedText`.
   Duplicates (contract 8): an inline submission is "the same text" when the strings are equal; a
-  staged one when `bytes` and `preview` are equal (the vat cannot read the blob; a retry stages a
-  new blob for the same text). Inline and staged never compare equal. A staged submission is never
+  staged one when `digest` and `bytes` are equal (17.2; the vat cannot read the blob; a retry
+  stages a new blob for the same text, with the same digest); two staged texts without a digest
+  (staged before 17.2) when `bytes` and `preview` are equal; a digest on one side only is not the
+  same. Inline and staged never compare equal. A staged submission is never
   blank (the Composer refused that).
 - **`Turn.getContent(cursor?) -> { records, next? }`** (`m1bInterfaces.Turn`): the turn's records
   in full, in log order (strings at most `inlineBytes`, larger fields staged), pages of at most
@@ -888,6 +892,9 @@ guest rules; "Node" = adapter or tests.
 | `textOf.execUnavailable(msg)` | `exec is unavailable: <msg>` | harness |
 | `textOf.stagingFailed(msg)` | `could not stage large text: <msg>` | harness |
 | `texts.blobUnknown`, `texts.writerClosed` | `Unknown blob`; `This blob writer is closed` | harness |
+| `texts.blobNotOwned` | `This blob belongs to another session` | harness (17.3) |
+| `textOf.blobSessionQuota(bytes, held, quota)` | `the session's staged text would exceed its disk quota: N more bytes on top of H, quota Q bytes` | harness (17.1) |
+| `textOf.blobDaemonQuota(bytes, held, quota)` | `the daemon's staged text would exceed its disk quota: N more bytes on top of H, quota Q bytes` | harness (17.1) |
 | `texts.blankSubmission` | `A queued message must be non-empty text` (kept) | Fae; deviation 16.1 |
 
 Fae's `describeParseFailure` hints are ported text (W1b.3), not contract constants.
@@ -968,6 +975,7 @@ shape 238 ms. Every accept and refuse check passed in the vat.
 8. **Staged duplicates compare by `bytes` and `preview`** (3.3): exact identity would need a
    digest in `StagedText`; a retry of a different text with the same length and first 1,024 units
    is taken as the same submission. Open: add `digest` (64 hex) if that matters (J-0309).
+   **Closed by 17.2** (M1b follow-ups): `StagedText.digest`, compared exactly.
 9. **Session program size** (15): 22 KB left for staging, the context source and the exec tool.
    Recommendation to the PM: strip comments in `scripts/bundle-guest.mjs` (J-0201's standing
    decision) before W1b.4 lands (J-0303).
@@ -983,3 +991,81 @@ shape 238 ms. Every accept and refuse check passed in the vat.
 10. **Exec arguments bound by their JSON bytes**: `execSourceBytes` applies to the argument text
     (UTF-8 bytes of the model's JSON), checked in the session before any call; the code inside is
     never longer. A code of exactly 262,144 bytes is refused (its JSON is longer).
+
+---
+
+## 17. M1b follow-ups (J-9360..J-9379)
+
+Changes after the M1b QC (J-0397's open list). Guards: `m1bShapes.StagedText` gains the optional
+`digest`; `m1bInterfaces.StartListener` (M1a's plus `attached`); texts `blobNotOwned`,
+`blobSessionQuota`, `blobDaemonQuota`. Everything else here is adapter behaviour.
+
+### 17.1 Disk quotas and files nobody holds
+
+- **Settings** (`config/defaults.js` `blobLimits`; adapter settings, not contract limits):
+  `sessionBytes` 1 GiB, `daemonBytes` 16 GiB. The blob store refuses a staging that would take its
+  session over `sessionBytes`, or the blob directory over `daemonBytes`, before anything is
+  written; the message is `textOf.blobSessionQuota` / `textOf.blobDaemonQuota`, inside the usual
+  `textOf.stagingFailed` where the caller reports one (Composer, provider round, echo, exec
+  result). A `BlobWriter` is checked per piece. A session's count is what was staged for it in this
+  adapter incarnation plus the files of its handles resolved since the incarnation started (17.3);
+  the daemon count is the files found at adapter start plus every staging since. Deleted files are
+  refunded.
+- **Who a staging is for.** The Composer stages for the session it submits to; a provider round,
+  the backend's adapter tools and the `TurnPorts.writers` / `TurnPorts.content` of a session's
+  ports stage and read for the session that opened them (`ops.open` builds them per session).
+  The incarnation-wide `BlobWriters` and `Content` (`AgentHostAdmin.content()`) have no owner.
+- **Commit before send (replaces 4.2's order for the provider).** A provider writes and fsyncs
+  `<key>.part` (`BlobStore.stagePending`) and names it and fsyncs the directory
+  (`BlobStore.commit`, one directory fsync for all the round's files) right before the message that
+  carries the handles is sent (`progress`, `roundFinal`, `roundFailed`). A round cancelled or
+  failed after staging (frame limit, cancel) deletes its pending files (`BlobStore.drop`); a crash
+  before the commit leaves `.part` files, which the next adapter start deletes (4.6). The total
+  number of fsyncs per staging is unchanged. The Composer, echo and `BlobWriter.close` still name
+  the file before they answer (their send follows at once).
+- **Refused submissions.** When `Session.enqueueOnce` refuses a staged submission with one of the
+  queue's refusal texts (blank, invalid, expired or reused request id, receipt limit, queue full)
+  or its guard rejects the call, the session stored nothing (every refusal precedes the first write
+  in `queue.js`), and the Composer deletes the file. A retired break or any other failure keeps
+  it. 4.7's leak is now: a file named whose handle was in a message being sent at a crash.
+- **Not done: "files no manager handle names".** The manager keeps `WeakMap<Blob, key>` only, and
+  vats have no `WeakRef`, so it cannot list which keys still have a holder; a sweep by manager
+  liveness would need a strong key table (which would keep every handle alive) or an engine
+  query. Files of handles nobody holds any more stay until M2's `deleteSession` (4.8) or M13.
+
+### 17.2 `StagedText.digest`
+
+SHA-256 of the UTF-8 bytes, 64 lowercase hex digits, computed by the adapter (Node `crypto`) when
+it writes the file (`stage`, `stagePending`, `BlobWriter.close`, incrementally per piece). Optional
+in the guard so earlier records stay valid. `sameSubmission` (3.3) compares `digest` and `bytes`.
+The session vat never computes a digest; it compares what the adapter wrote.
+
+### 17.3 Blob provenance
+
+Rule: **a session reads only blobs staged for it, and can name only handles it was given.**
+
+1. A handle is an unforgeable capability (a manager exo). No method maps a key, a digest or any
+   text to a handle: `resolveBlobs` maps handles to keys, never back; keys never leave the
+   adapter-manager pair. A vat can therefore name only handles that reached it.
+2. Handles reach a session only through its own traffic: its submissions (Composer, for that
+   session), its rounds (its endpoint's provider), its tool calls (its ports' tools and writers)
+   and its exec vat (one per session, never shared; `ExecRequest` carries that session's ports).
+3. The adapter records, per handle, the session it was staged for. A session's `TurnPorts.content`
+   and the context cache (which reads a session's records to build its provider request) refuse a
+   handle bound for another session with `texts.blobNotOwned` (the round fails with
+   `stagingFailed`, the exec read fails the call). So even a session vat or exec vat that obtained
+   another session's handle (an engine escape, a bug that passed one across) cannot have it read
+   for it, nor have its text sent to its model.
+4. After an adapter restart the owner of an older handle is unknown until a session presents it:
+   the first session whose context or read resolves it holds it from then on (trust on first use,
+   bounded by 1 and 2). The incarnation-wide `Content` (operators, tests, the gateway) reads any
+   handle; it is never given to a vat.
+
+### 17.4 The list publisher after an adapter-only restart
+
+`StartListener.attached()` (sendOnly): the manager sends it to every start listener when an
+adapter incarnation attaches while no daemon start is running (`lifecycle.started()` sets the
+window) and it is not the first attach. The factory's listener refreshes its list publisher
+(`E(admin).listPublisher()`). Batches published between the adapter's exit and the refresh are
+lost, as at a daemon start; viewers of the new incarnation start from `listSessions` and the rev.
+
