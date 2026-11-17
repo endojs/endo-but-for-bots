@@ -188,24 +188,13 @@ export const forEachKey = (value, visit) => {
 harden(forEachKey);
 
 /**
- * Write a segment durably: `<name>.part`, fsync, rename, fsync the
- * directory. An identical file already in place (an orphan of an earlier
- * attempt of the same range, same digest) is verified and reused.
- *
- * @param {string} dir the session's archive directory (exists)
+ * A segment's bytes and chained digest (pure: `writeSegment` writes them;
+ * the in-memory fake archive of the vat's unit tests computes the same).
  * @param {Omit<SegmentHeader, 'format' | 'previous' | 'records'>} header
- * @param {readonly any[]} records keyed records (`encodeRecord`), in log order
- * @param {string} previous the digest this segment chains to ('' first)
- * @param {{ trace?: (step: SegmentStep, name: string) => void }} [options]
- * @returns {Promise<WrittenSegment>}
+ * @param {readonly any[]} records keyed records, in segment order
+ * @param {string} previous
  */
-export const writeSegment = async (
-  dir,
-  header,
-  records,
-  previous,
-  { trace = () => {} } = {},
-) => {
+export const formatSegment = (header, records, previous) => {
   /** @type {SegmentHeader} */
   const full = {
     format: SEGMENT_FORMAT,
@@ -233,6 +222,35 @@ export const writeSegment = async (
     `${JSON.stringify({ end: true, digest })}\n`,
     'utf8',
   );
+  return { header: full, body, trailer, digest };
+};
+harden(formatSegment);
+
+/**
+ * Write a segment durably: `<name>.part`, fsync, rename, fsync the
+ * directory. An identical file already in place (an orphan of an earlier
+ * attempt of the same range, same digest) is verified and reused.
+ *
+ * @param {string} dir the session's archive directory (exists)
+ * @param {Omit<SegmentHeader, 'format' | 'previous' | 'records'>} header
+ * @param {readonly any[]} records keyed records (`encodeRecord`), in log order
+ * @param {string} previous the digest this segment chains to ('' first)
+ * @param {{ trace?: (step: SegmentStep, name: string) => void }} [options]
+ * @returns {Promise<WrittenSegment>}
+ */
+export const writeSegment = async (
+  dir,
+  header,
+  records,
+  previous,
+  { trace = () => {} } = {},
+) => {
+  const {
+    header: full,
+    body,
+    trailer,
+    digest,
+  } = formatSegment(header, records, previous);
   const name = segmentName(full.ordinal, digest);
   const path = join(dir, name);
   const entry = {
