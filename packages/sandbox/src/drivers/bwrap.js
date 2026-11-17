@@ -78,7 +78,10 @@ const TEARDOWN_CLOSE_GRACE_MS = 1000;
  * so the process-group id remains owned even when bwrap and this wrapper exit.
  * The second background shell compares the daemon's pid and kernel start time,
  * so an ungraceful daemon exit also kills the group without trusting a reused
- * numeric pid. The wrapper otherwise returns bwrap's status unchanged.
+ * numeric pid. Without a Linux `/proc` start time (`not-applicable`), that
+ * watchdog is skipped rather than firing at once. The watchdog uses the shell's
+ * `kill` builtin, so it needs no `/bin/kill`. The wrapper exits with bwrap's
+ * status; a bwrap killed by signal N is therefore reported as code 128+N.
  */
 const PROCESS_GROUP_ANCHOR_SCRIPT = `
 (
@@ -88,18 +91,20 @@ const PROCESS_GROUP_ANCHOR_SCRIPT = `
 parent_pid=$1
 parent_start_time=$2
 shift 2
-(
-  while parent_stat=$(cat "/proc/$parent_pid/stat" 2>/dev/null); do
-    parent_fields=\${parent_stat##*) }
-    set -- $parent_fields
-    shift 19
-    if [ "$1" != "$parent_start_time" ]; then
-      break
-    fi
-    sleep 1
-  done
-  /bin/kill -KILL -- -$$
-) &
+if [ "$parent_start_time" != not-applicable ]; then
+  (
+    while parent_stat=$(cat "/proc/$parent_pid/stat" 2>/dev/null); do
+      parent_fields=\${parent_stat##*) }
+      set -- $parent_fields
+      shift 19
+      if [ "$1" != "$parent_start_time" ]; then
+        break
+      fi
+      sleep 1
+    done
+    kill -9 -$$
+  ) &
+fi
 "$@"
 status=$?
 exit "$status"
@@ -897,8 +902,11 @@ export const makeBwrapDriver = ({
         );
       }
       const closeParen = parentStat.lastIndexOf(')');
+      if (closeParen < 0) {
+        throw makeError(X`could not read daemon process identity`);
+      }
       parentStartTime = parentStat.slice(closeParen + 2).split(' ')[19];
-      if (closeParen < 0 || parentStartTime === undefined) {
+      if (parentStartTime === undefined) {
         throw makeError(X`could not read daemon process identity`);
       }
     }
