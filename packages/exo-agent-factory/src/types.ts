@@ -14,8 +14,8 @@ export interface ChildAgentPolicy {
    * `MAX_POLICY_COUNT` (`2**32 - 1`).
    */
   maxInstructionBytes?: number;
-  /** The endowment names `create` admits. */
-  endowmentNames?: readonly string[];
+  /** The pet-name paths at which `create` may install endowments. */
+  endowmentPaths?: readonly (readonly string[])[];
 }
 
 /**
@@ -25,15 +25,15 @@ export interface ChildAgentPolicy {
 export interface RootPolicy {
   maxChildren: number;
   maxInstructionBytes: number;
-  endowmentNames: readonly string[];
+  endowmentPaths: readonly (readonly string[])[];
 }
 
 /** A policy with every field present, as held by a namespace. */
 export interface EffectivePolicy {
   maxChildren: number;
   maxInstructionBytes: number;
-  /** Sorted, without duplicates. */
-  endowmentNames: readonly string[];
+  /** Lexicographically sorted pet-name paths, without duplicates. */
+  endowmentPaths: readonly (readonly string[])[];
 }
 
 /**
@@ -49,12 +49,13 @@ export interface PrivateHost {
    * a runner.
    */
   lookup(...path: string[]): Promise<any>;
-  list(...path: string[]): Promise<string[]>;
-  identify(...path: string[]): Promise<string | undefined>;
-  formulaType(...path: string[]): Promise<string | undefined>;
+  list(...path: string[]): Promise<readonly string[]>;
+  identify(...path: string[]): Promise<string | void>;
+  formulaType(...path: string[]): Promise<string | void>;
   /** The identifier of the powers an unconfined caplet was formulated with. */
-  powersOf(...path: string[]): Promise<string | undefined>;
+  powersOf(...path: string[]): Promise<string | void>;
   storeValue(value: any, path: string | string[]): Promise<void>;
+  makeDirectory(path: string | string[]): Promise<any>;
   remove(...path: string[]): Promise<void>;
   cancel(...path: string[]): Promise<void>;
   provideGuest(name: string): Promise<any>;

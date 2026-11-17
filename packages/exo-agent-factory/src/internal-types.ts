@@ -20,7 +20,7 @@ export interface Operation {
   name: string;
   phase: ChildPhase;
   instructions: string;
-  endowmentNames: string[];
+  endowmentPaths: string[][];
   createdAt: number;
   /** Set when a derived name held the wrong formula type; journaled. */
   fault?: string;

@@ -139,7 +139,7 @@ interface BoundChildAgentFactory {
     name: string,
     options?: {
       instructions?: string;
-      endowments?: Record<string, Passable>;
+      endowments?: Array<{ namePath: string[]; value: Passable }>;
     },
   ): Promise<{ summary: ChildAgentSummary; handle: EndoHandle }>;
   lookup(name: string): Promise<EndoHandle>;
@@ -187,7 +187,7 @@ sibling's powers.
 `ChildAgentPolicy` is data chosen by the factory's authority holder: maximum
 retained children, maximum instruction size, and an endowment-name guard.
 `bind` intersects it with the root policy; it cannot widen quota or admit an
-endowment name the root excluded. The returned bound factory closes over the
+endowment pet-name path the root excluded. The returned bound factory closes over the
 maker capability. A guest holding only a bound factory therefore cannot swap in
 an unrelated provider or harness.
 
@@ -226,7 +226,7 @@ root host, holding the root facet, can therefore reclaim everything below each
 
 - `create` resolves only after the operation appends `Committed`. It rejects
   without side effects when the policy refuses the instructions, an endowment
-  name, or the quota. It rejects when the name is already bound to a child in
+  path, or the quota. It rejects when the name is already bound to a child in
   any phase other than `Removed`; the error names the existing phase.
 - `remove` resolves only after the operation appends `Removed`. Calling it on a
   name already in `Removing` joins the in-flight removal and resolves when it
@@ -252,7 +252,7 @@ const maker = await E(host).lookup(['makers', 'claude-sdk']);
 const forUi = await E(root).bind(maker, {
   maxChildren: 8,
   maxInstructionBytes: 16_384,
-  endowmentNames: ['workspace', 'notes'],
+  endowmentPaths: [['workspace'], ['notes']],
 });
 // The UI or parent agent receives forUi and nothing else.
 await E(host).storeValue(forUi, ['ui-guest-inbox', 'child-agents']);
@@ -263,7 +263,7 @@ await E(host).storeValue(forUi, ['ui-guest-inbox', 'child-agents']);
 const notes = await E(uiGuest).lookup('notes');
 const { handle } = await E(forUi).create('helper', {
   instructions: 'Summarize new notes.',
-  endowments: { notes },
+  endowments: [{ namePath: ['notes'], value: notes }],
 });
 await E(uiGuest).storeValue(handle, 'helper');
 await E(uiGuest).send('helper', ['Start with today.'], [], []);
@@ -479,12 +479,15 @@ under a derived name before the operation starts. Recovery therefore never
 depends on the caller's arguments.
 
 During `GuestCreated`, the coordinator installs each endowment into the child
-guest by `storeValue` under its endowment name. Each write is idempotent by
+guest by `storeValue` under its non-empty pet-name path, creating intermediate
+directories as needed. Even a one-segment path is represented as an array of
+strings. Each write is idempotent by
 proof: if the child already binds that name, the coordinator compares the
 child's identifier for it with the identifier of the retained value. An equal
 identifier counts as done, and a different one fails closed. The coordinator
 then lists the child's directory and confirms it holds exactly the daemon's
-built-in special names plus the endowment names. Only then does it append
+built-in special names plus the endowment paths and their intermediate
+directories. Only then does it append
 `Endowed`. The child has no running driver before `Endowed`, so nothing but the
 coordinator can have written its directory. A crash during installation
 replays the same writes and converges, and the child never runs partially
@@ -567,7 +570,7 @@ Lal conversation views do not do this today. Adding it is an explicit work item
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 |---|---|---|---|---|---|
-| Caller -> bound factory | `create`, `list`, `remove`, `attenuate`, `listDerived`, and `revokeDerived` facets | Factory creator binds maker, namespace, quota, instruction bound, and allowed endowment names; `bind` only attenuates | Factory coordinator owns the child-name index and numbered operation journals | Coordinator reserves quota, commits a visible child, and decides roll-forward versus cleanup | `create` options enter; safe `ChildAgentSummary` data leaves |
+| Caller -> bound factory | `create`, `list`, `remove`, `attenuate`, `listDerived`, and `revokeDerived` facets | Factory creator binds maker, namespace, quota, instruction bound, and allowed endowment pet-name paths; `bind` only attenuates | Factory coordinator owns the child-name index and numbered operation journals | Coordinator reserves quota, commits a visible child, and decides roll-forward versus cleanup | `create` options enter; safe `ChildAgentSummary` data leaves |
 | Factory coordinator -> daemon | `EndoHost`/`EndoDirectory` create, store, pin, and remove operations | Coordinator decides which formulas form one child; daemon applies generic formula rules | Daemon exclusively owns formula/content state; coordinator exclusively owns logical-child phase and stable references | Coordinator owns logical commit/removal; daemon owns individual formula incarnation/cancellation | `EndoGuest`, directory, responder, and stable-reference capabilities, named in daemon vocabulary |
 | Mailbox -> driver | Coordinator revives the retained responder at start; driver follows child mail | Coordinator's durable `AgentLifecycle` admits or quiesces the loop | Daemon owns the mailbox and message numbers; driver owns its cursor and turn ledger | Daemon revives formulas; driver replays from its cursor; coordinator ends the logical child | Mail notification and message number enter the driver; no provider authority crosses |
 | Driver -> inference backend | `InferenceBackend.infer` over a `GuestToolProjection` | `CredentialSource` decides provider admission; held tool facets authorize calls | Driver owns turn ledger and recorded results; provider owns credential and usage records | Driver decides whether to publish/retry an `InferResult`, keyed by message number; backend owns only one execution | `InferRequest` and `InferResult`, named in `@endo/inference`'s execution vocabulary |
@@ -634,7 +637,7 @@ replaces work already counted in M3 rather than adding a new milestone.
 
 - A holder of one bound factory cannot address a sibling factory's namespace.
 - `bind` can reduce but never widen child quota, instruction size, or allowed
-  endowment names.
+  endowment pet-name paths.
 - `bind` accepts a maker capability, never a provider/account string, and the
   child cannot recover that maker from its directory.
 - Credentials, root host, private factory directory, formula identifiers, and
@@ -668,7 +671,7 @@ Inject a crash before and after every state transition and external effect:
   crash between formulation and the name write leaves the name unbound, and
   replay produces exactly one named value;
 - a crash at each endowment write converges to `Endowed` with exactly the
-  retained endowments installed, and a pre-bound endowment name with a
+  retained endowments installed, and a pre-bound endowment path with a
   different identifier fails closed;
 - a crash at each step of `revokeDerived` converges to `Revoked`, with every
   nested namespace and child removed and every ancestor quota slot released;

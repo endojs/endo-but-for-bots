@@ -25,7 +25,7 @@ maker, a credential, the root host, or the coordinator's private directory.
 - A bound facet (`BoundChildAgentFactory`) offers `create`, `lookup`, `list`,
   `remove`, `attenuate`, `listDerived`, and `revokeDerived`.
 - `bind` and `attenuate` intersect their policy with the issuer's, so quota,
-  instruction size, and admitted endowment names only shrink.
+  instruction size, and admitted endowment pet-name paths only shrink.
   A child created in a derived namespace reserves a quota slot in every
   ancestor.
 - Each child's runner receives a read-only `AgentLifecycle` facet under the
@@ -62,13 +62,13 @@ const { rootFacet } = await prepareChildAgentCoordinator({
   rootPolicy: {
     maxChildren: 8,
     maxInstructionBytes: 16_384,
-    endowmentNames: ['notes', 'workspace'],
+    endowmentPaths: [['notes'], ['workspace']],
   },
 });
 const forUi = await E(rootFacet).bind(maker, { maxChildren: 4 });
 const { handle } = await E(forUi).create('helper', {
   instructions: 'Summarize new notes.',
-  endowments: { notes },
+  endowments: [{ namePath: ['notes'], value: notes }],
 });
 ```
 

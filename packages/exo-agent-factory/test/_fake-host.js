@@ -8,6 +8,38 @@ import { M } from '@endo/patterns';
 import { Fail, q } from '@endo/errors';
 import { AgentDriverMakerInterface } from '../src/interfaces.js';
 
+const NamePathShape = M.arrayOf(M.string());
+const NameOrPathShape = M.or(M.string(), NamePathShape);
+
+const GuestInterface = M.interface('Guest', {
+  lookup: M.callWhen().rest(NamePathShape).returns(M.any()),
+  provideGuest: M.callWhen().rest(NamePathShape).returns(M.remotable()),
+});
+
+const PrivateHostInterface = M.interface('PrivateHost', {
+  has: M.callWhen().rest(NamePathShape).returns(M.boolean()),
+  lookup: M.callWhen().rest(NamePathShape).returns(M.any()),
+  list: M.callWhen().rest(NamePathShape).returns(M.arrayOf(M.string())),
+  identify: M.callWhen()
+    .rest(NamePathShape)
+    .returns(M.or(M.string(), M.undefined())),
+  formulaType: M.callWhen()
+    .rest(NamePathShape)
+    .returns(M.or(M.string(), M.undefined())),
+  powersOf: M.callWhen()
+    .rest(NamePathShape)
+    .returns(M.or(M.string(), M.undefined())),
+  storeValue: M.callWhen(M.any(), NameOrPathShape).returns(M.undefined()),
+  makeDirectory: M.callWhen(NameOrPathShape).returns(M.remotable()),
+  remove: M.callWhen().rest(NamePathShape).returns(M.undefined()),
+  cancel: M.callWhen().rest(NamePathShape).returns(M.undefined()),
+  provideGuest: M.callWhen(M.string()).returns(M.remotable()),
+});
+
+// The JSDoc overload cannot express this fixture's async rest-guard methods.
+/** @type {(tag: string, guard: object, methods: object) => any} */
+const makeExoFromInterface = makeExo;
+
 /**
  * Thrown by the fake daemon at an injected crash point. Once one is thrown the
  * incarnation is dead: every later call throws too, as if the process exited.
@@ -28,7 +60,7 @@ harden(makeToken);
  * leaked guest apart from its method-less `@self` handle.
  */
 const makeGuestPowers = () =>
-  makeExo('Guest', M.interface('Guest', {}, { defaultGuards: 'passable' }), {
+  makeExo('Guest', GuestInterface, {
     async lookup() {
       return makeToken('GuestValue');
     },
@@ -110,12 +142,17 @@ export const makeFakeDaemon = () => {
    * @param {string[]} path
    */
   const directoryFor = path => {
-    if (path.length === 1) return names;
-    path.length === 2 || Fail`Fake daemon paths have at most two segments`;
-    const guestId = names.get(path[0]);
-    const guest = guestId ? formulas.get(guestId) : undefined;
-    if (!guest || !guest.names) throw Fail`${q(path[0])} is not a guest`;
-    return guest.names;
+    path.length > 0 || Fail`Fake daemon path must not be empty`;
+    let directory = names;
+    for (const name of path.slice(0, -1)) {
+      const id = directory.get(name);
+      const formula = id ? formulas.get(id) : undefined;
+      if (!formula || !formula.names) {
+        throw Fail`${q(name)} is not a directory`;
+      }
+      directory = formula.names;
+    }
+    return directory;
   };
 
   /** @param {string[]} path */
@@ -148,98 +185,117 @@ export const makeFakeDaemon = () => {
   };
 
   /** The coordinator's private host, the `PrivateHost` port. */
-  const host = makeExo(
-    'PrivateHost',
-    M.interface('PrivateHost', {}, { defaultGuards: 'passable' }),
-    {
-      /** @param {string[]} path */
-      async has(...path) {
-        alive();
-        return idAt(path) !== undefined;
-      },
-      /** @param {string[]} path */
-      async lookup(...path) {
-        alive();
-        const id = idAt(path);
-        if (id === undefined) throw Fail`unknown name ${q(path)}`;
-        if (plain.has(id)) return plain.get(id);
-        return incarnate(id);
-      },
-      /** @param {string[]} path */
-      async list(...path) {
-        alive();
-        if (path.length === 0) return [...names.keys()].sort();
-        const guestId = names.get(path[0]);
-        const guest = guestId ? formulas.get(guestId) : undefined;
-        if (!guest || !guest.names) throw Fail`not a guest`;
-        return [...guest.names.keys()].sort();
-      },
-      /** @param {string[]} path */
-      async identify(...path) {
-        alive();
-        return idAt(path);
-      },
-      /** @param {string[]} path */
-      async formulaType(...path) {
-        alive();
-        const id = idAt(path);
-        return id === undefined ? undefined : formulas.get(id)?.type;
-      },
-      /** @param {string[]} path */
-      async powersOf(...path) {
-        alive();
-        const id = idAt(path);
-        return id === undefined ? undefined : formulas.get(id)?.powers;
-      },
-      /**
-       * @param {any} value
-       * @param {string | string[]} nameOrPath
-       */
-      async storeValue(value, nameOrPath) {
-        const path = typeof nameOrPath === 'string' ? [nameOrPath] : nameOrPath;
-        effect(`store ${path.join('/')}`);
-        const directory = directoryFor(path);
-        const isRecord =
-          value !== null && typeof value === 'object' && !isRemotable(value);
-        let id;
-        if (isRecord) {
-          id = `${nextId}:data`;
-          nextId += 1;
-          plain.set(id, value);
-        } else {
-          id = idOfValue(value);
-        }
-        directory.set(path[path.length - 1], id);
-      },
-      /** @param {string[]} path */
-      async remove(...path) {
-        effect(`remove ${path.join('/')}`);
-        directoryFor(path).delete(path[path.length - 1]);
-      },
-      /** @param {string[]} path */
-      async cancel(...path) {
-        effect(`cancel ${path.join('/')}`);
-        const id = idAt(path);
-        if (id === undefined) return;
-        cancelFormula(id);
-      },
-      /**
-       * `provideGuest` returns whatever the name holds, of any type.
-       *
-       * @param {string} name
-       */
-      async provideGuest(name) {
-        alive();
-        const existing = names.get(name);
-        if (existing !== undefined) return incarnate(existing);
-        const formula = makeGuestFormula();
-        effect(`formulate guest ${name}`);
-        names.set(name, formula.id);
-        effect(`name guest ${name}`);
-        return formula.value;
-      },
+  const host = makeExoFromInterface('PrivateHost', PrivateHostInterface, {
+    /** @param {string[]} path */
+    async has(...path) {
+      alive();
+      return idAt(path) !== undefined;
     },
-  );
+    /** @param {string[]} path */
+    async lookup(...path) {
+      alive();
+      const id = idAt(path);
+      if (id === undefined) throw Fail`unknown name ${q(path)}`;
+      if (plain.has(id)) return plain.get(id);
+      return incarnate(id);
+    },
+    /** @param {string[]} path */
+    async list(...path) {
+      alive();
+      if (path.length === 0) return [...names.keys()].sort();
+      const id = idAt(path);
+      const formula = id ? formulas.get(id) : undefined;
+      if (!formula || !formula.names) throw Fail`not a directory`;
+      return [...formula.names.keys()].sort();
+    },
+    /** @param {string[]} path */
+    async identify(...path) {
+      alive();
+      return idAt(path);
+    },
+    /** @param {string[]} path */
+    async formulaType(...path) {
+      alive();
+      const id = idAt(path);
+      return id === undefined ? undefined : formulas.get(id)?.type;
+    },
+    /** @param {string[]} path */
+    async powersOf(...path) {
+      alive();
+      const id = idAt(path);
+      return id === undefined ? undefined : formulas.get(id)?.powers;
+    },
+    /**
+     * @param {any} value
+     * @param {string | string[]} nameOrPath
+     */
+    async storeValue(value, nameOrPath) {
+      const path = typeof nameOrPath === 'string' ? [nameOrPath] : nameOrPath;
+      effect(`store ${path.join('/')}`);
+      const directory = directoryFor(path);
+      const isRecord =
+        value !== null && typeof value === 'object' && !isRemotable(value);
+      let id;
+      if (isRecord) {
+        id = `${nextId}:data`;
+        nextId += 1;
+        plain.set(id, value);
+      } else {
+        id = idOfValue(value);
+      }
+      directory.set(path[path.length - 1], id);
+    },
+    /** @param {string | string[]} nameOrPath */
+    async makeDirectory(nameOrPath) {
+      const path = typeof nameOrPath === 'string' ? [nameOrPath] : nameOrPath;
+      let directory = names;
+      let value = makeToken('Directory');
+      for (const name of path) {
+        const existing = directory.get(name);
+        if (existing !== undefined) {
+          const formula = formulas.get(existing);
+          if (!formula || !formula.names)
+            throw Fail`${q(name)} is not a directory`;
+          value = formula.value;
+          directory = formula.names;
+        } else {
+          value = makeToken('Directory');
+          const formula = formulate('directory', value, { names: new Map() });
+          effect(`make directory ${name}`);
+          directory.set(name, formula.id);
+          directory = /** @type {Map<string, string>} */ (formula.names);
+        }
+      }
+      return value;
+    },
+    /** @param {string[]} path */
+    async remove(...path) {
+      effect(`remove ${path.join('/')}`);
+      directoryFor(path).delete(path[path.length - 1]);
+    },
+    /** @param {string[]} path */
+    async cancel(...path) {
+      effect(`cancel ${path.join('/')}`);
+      const id = idAt(path);
+      if (id === undefined) return;
+      cancelFormula(id);
+    },
+    /**
+     * `provideGuest` returns whatever the name holds, of any type.
+     *
+     * @param {string} name
+     */
+    async provideGuest(name) {
+      alive();
+      const existing = names.get(name);
+      if (existing !== undefined) return incarnate(existing);
+      const formula = makeGuestFormula();
+      effect(`formulate guest ${name}`);
+      names.set(name, formula.id);
+      effect(`name guest ${name}`);
+      return formula.value;
+    },
+  });
 
   /** @param {string} id */
   const cancelFormula = id => {

@@ -243,8 +243,7 @@ export const prepareChildAgentCoordinator = async ({
     }
   };
 
-  // ------------------------------------------------------------------
-  // Lifecycle facets
+  // Lifecycle facets.
 
   /** @type {Map<string, any>} */
   const lifecycles = new Map();
@@ -303,8 +302,7 @@ export const prepareChildAgentCoordinator = async ({
     return lifecycle;
   };
 
-  // ------------------------------------------------------------------
-  // Creation: one precheck-and-proof step per phase
+  // Creation: one precheck-and-proof step per phase.
 
   /**
    * Adopt the value at a derived name only after proving its formula type, or
@@ -348,33 +346,64 @@ export const prepareChildAgentCoordinator = async ({
   const installEndowments = async operation => {
     await null;
     const guestName = childName(operation.key, 'guest');
-    for (let i = 0; i < operation.endowmentNames.length; i += 1) {
-      const endowmentName = operation.endowmentNames[i];
+    for (let i = 0; i < operation.endowmentPaths.length; i += 1) {
+      const endowmentPath = operation.endowmentPaths[i];
       const retainedName = childName(operation.key, `e${i}`);
       const retainedId = await E(host).identify(retainedName);
-      if (await E(host).has(guestName, endowmentName)) {
-        const boundId = await E(host).identify(guestName, endowmentName);
+      for (let length = 1; length < endowmentPath.length; length += 1) {
+        const directoryPath = [guestName, ...endowmentPath.slice(0, length)];
+        if (!(await E(host).has(...directoryPath))) {
+          await E(host).makeDirectory(directoryPath);
+        }
+      }
+      const guestPath = [guestName, ...endowmentPath];
+      if (await E(host).has(...guestPath)) {
+        const boundId = await E(host).identify(...guestPath);
         if (!(boundId === retainedId)) {
           throw makeFault(
-            `Child already binds endowment ${q(endowmentName)} to another value`,
+            `Child already binds endowment ${q(endowmentPath)} to another value`,
           );
         }
       } else {
         const value = await E(host).lookup(retainedName);
-        await E(host).storeValue(value, [guestName, endowmentName]);
+        await E(host).storeValue(value, guestPath);
       }
     }
-    const names = await E(host).list(guestName);
-    const ordinary = names.filter(name => !name.startsWith('@')).sort();
-    const expected = [...operation.endowmentNames].sort();
-    const exact =
-      ordinary.length === expected.length &&
-      ordinary.every((name, i) => name === expected[i]);
-    if (!exact) {
-      throw makeFault(
-        `Child directory holds ${q(ordinary)}, expected exactly ${q(expected)}`,
-      );
-    }
+
+    /** @param {string[]} prefix */
+    const assertExactDirectory = async prefix => {
+      const names = await E(host).list(guestName, ...prefix);
+      const ordinary = names.filter(name => !name.startsWith('@')).sort();
+      const expected = [
+        ...new Set(
+          operation.endowmentPaths
+            .filter(path => prefix.every((name, index) => path[index] === name))
+            .map(path => path[prefix.length]),
+        ),
+      ].sort();
+      const exact =
+        ordinary.length === expected.length &&
+        ordinary.every((name, i) => name === expected[i]);
+      if (!exact) {
+        throw makeFault(
+          `Child directory ${q(prefix)} holds ${q(ordinary)}, expected exactly ${q(expected)}`,
+        );
+      }
+      for (const name of expected) {
+        if (
+          operation.endowmentPaths.some(
+            path =>
+              path.length > prefix.length + 1 &&
+              [...prefix, name].every(
+                (segment, index) => path[index] === segment,
+              ),
+          )
+        ) {
+          await assertExactDirectory([...prefix, name]);
+        }
+      }
+    };
+    await assertExactDirectory([]);
   };
 
   /**
@@ -431,7 +460,13 @@ export const prepareChildAgentCoordinator = async ({
     }
     if (operation.phase === 'DriverCreated') {
       const driverId = await E(host).identify(driverName);
-      if (!(await proveOrAbsent(responderName, 'unconfined', driverId))) {
+      if (
+        !(await proveOrAbsent(
+          responderName,
+          'unconfined',
+          driverId || undefined,
+        ))
+      ) {
         const maker = await makerFor(operation);
         const { responder } = await E(maker).installDriver(
           harden({
@@ -449,7 +484,11 @@ export const prepareChildAgentCoordinator = async ({
         // it. A mismatch here is the maker's defect, not a coordinator one:
         // cancel the responder and let the caller roll the child back.
         try {
-          await proveOrAbsent(responderName, 'unconfined', driverId);
+          await proveOrAbsent(
+            responderName,
+            'unconfined',
+            driverId || undefined,
+          );
         } catch (error) {
           if (!isFault(error)) throw error;
           await E(host).cancel(responderName);
@@ -473,8 +512,7 @@ export const prepareChildAgentCoordinator = async ({
     await E(host).lookup(childName(operation.key, 'responder'));
   };
 
-  // ------------------------------------------------------------------
-  // Removal
+  // Removal.
 
   /**
    * @param {Operation} operation
@@ -511,7 +549,7 @@ export const prepareChildAgentCoordinator = async ({
         await E(host).remove(name);
       }
     }
-    for (let i = 0; i < operation.endowmentNames.length; i += 1) {
+    for (let i = 0; i < operation.endowmentPaths.length; i += 1) {
       const retainedName = childName(operation.key, `e${i}`);
       if (await E(host).has(retainedName)) {
         await E(host).remove(retainedName);
@@ -594,8 +632,7 @@ export const prepareChildAgentCoordinator = async ({
     return namespace.revocation;
   };
 
-  // ------------------------------------------------------------------
-  // Replay
+  // Replay.
 
   /**
    * @param {number} id
@@ -667,7 +704,7 @@ export const prepareChildAgentCoordinator = async ({
         name: entry.name,
         phase: 'Intended',
         instructions: entry.instructions,
-        endowmentNames: entry.endowmentNames,
+        endowmentPaths: entry.endowmentPaths,
         createdAt: entry.createdAt,
         watchers: new Set(),
       };
@@ -829,8 +866,7 @@ export const prepareChildAgentCoordinator = async ({
     }
   };
 
-  // ------------------------------------------------------------------
-  // Facets
+  // Facets.
 
   /** @param {Operation} operation */
   const summarize = operation =>
@@ -905,7 +941,7 @@ export const prepareChildAgentCoordinator = async ({
     if (facet) return facet;
     const namespace = /** @type {Namespace} */ (namespaces.get(namespaceId));
     facet = makeExo('BoundChildAgentFactory', BoundChildAgentFactoryInterface, {
-      create(name, { instructions = '', endowments = {} } = {}) {
+      create(name, { instructions = '', endowments = [] } = {}) {
         return serial(async () => {
           await null;
           assertLive(namespaceId);
@@ -913,8 +949,13 @@ export const prepareChildAgentCoordinator = async ({
           const existing = namespace.children.get(name);
           !existing ||
             Fail`Child ${q(name)} already exists in phase ${q(existing.phase)}`;
-          const endowmentNames = Object.keys(endowments).sort();
-          assertCreateAdmitted(namespace.policy, instructions, endowmentNames);
+          const sortedEndowments = [...endowments].sort((left, right) =>
+            left.namePath.join('\0').localeCompare(right.namePath.join('\0')),
+          );
+          const endowmentPaths = sortedEndowments.map(({ namePath }) => [
+            ...namePath,
+          ]);
+          assertCreateAdmitted(namespace.policy, instructions, endowmentPaths);
           const counts = retainedCounts();
           /** @type {number | undefined} */
           let id = namespaceId;
@@ -931,12 +972,9 @@ export const prepareChildAgentCoordinator = async ({
           // already reserved for this key belongs to an `Intended` entry
           // that was never appended, possibly with more endowments.
           await sweepRetained(key);
-          for (let i = 0; i < endowmentNames.length; i += 1) {
+          for (let i = 0; i < sortedEndowments.length; i += 1) {
             const retainedName = childName(key, `e${i}`);
-            await E(host).storeValue(
-              endowments[endowmentNames[i]],
-              retainedName,
-            );
+            await E(host).storeValue(sortedEndowments[i].value, retainedName);
           }
           const createdAt = now();
           const sequence = await append(namespace, {
@@ -944,7 +982,7 @@ export const prepareChildAgentCoordinator = async ({
             operation: key,
             name,
             instructions,
-            endowmentNames,
+            endowmentPaths,
             createdAt,
           });
           `${namespaceId}.${sequence}` === key || Fail`Journal sequence moved`;
@@ -955,7 +993,7 @@ export const prepareChildAgentCoordinator = async ({
             name,
             phase: 'Intended',
             instructions,
-            endowmentNames,
+            endowmentPaths,
             createdAt,
             watchers: new Set(),
           };

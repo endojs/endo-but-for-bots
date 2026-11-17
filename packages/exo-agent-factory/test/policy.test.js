@@ -13,24 +13,24 @@ import { assertCreateAdmitted } from '../src/policy.js';
 const root = makeRootPolicy({
   maxChildren: 4,
   maxInstructionBytes: 100,
-  endowmentNames: ['workspace', 'notes', 'notes'],
+  endowmentPaths: [['workspace'], ['notes'], ['notes']],
 });
 
-test('root policy requires every field and normalizes names', t => {
-  t.deepEqual(root.endowmentNames, ['notes', 'workspace']);
+test('root policy requires every field and normalizes paths', t => {
+  t.deepEqual(root.endowmentPaths, [['notes'], ['workspace']]);
   t.throws(
     () =>
       makeRootPolicy(
         /** @type {any} */ ({ maxChildren: 1, maxInstructionBytes: 1 }),
       ),
-    { message: /endowmentNames/ },
+    { message: /endowmentPaths/ },
   );
   t.throws(
     () =>
       makeRootPolicy({
         maxChildren: 1,
         maxInstructionBytes: 1,
-        endowmentNames: ['@pins'],
+        endowmentPaths: [['@pins']],
       }),
     { message: /ordinary pet name/ },
   );
@@ -41,9 +41,13 @@ test('intersection only reduces', t => {
     intersectPolicy(root, {
       maxChildren: 99,
       maxInstructionBytes: 10,
-      endowmentNames: ['notes', 'secrets'],
+      endowmentPaths: [['notes'], ['secrets']],
     }),
-    { maxChildren: 4, maxInstructionBytes: 10, endowmentNames: ['notes'] },
+    {
+      maxChildren: 4,
+      maxInstructionBytes: 10,
+      endowmentPaths: [['notes']],
+    },
   );
   t.deepEqual(intersectPolicy(root), root, 'absent fields inherit');
   t.throws(() => intersectPolicy(root, { maxChildren: -1 }));
@@ -52,15 +56,28 @@ test('intersection only reduces', t => {
   });
 });
 
-test('create admission checks instruction bytes and endowment names', t => {
+test('create admission checks instruction bytes and endowment paths', t => {
   const policy = intersectPolicy(root, { maxInstructionBytes: 4 });
-  t.notThrows(() => assertCreateAdmitted(policy, 'abcd', ['notes']));
+  t.notThrows(() => assertCreateAdmitted(policy, 'abcd', [['notes']]));
   t.throws(() => assertCreateAdmitted(policy, 'abcdé', []), {
     message: /4-byte bound/,
   });
-  t.throws(() => assertCreateAdmitted(policy, '', ['secrets']), {
+  t.throws(() => assertCreateAdmitted(policy, '', [['secrets']]), {
     message: /does not admit/,
   });
+  t.throws(() => assertCreateAdmitted(policy, '', [[]]), {
+    message: /non-empty pet name path/,
+  });
+  const nested = makeRootPolicy({
+    maxChildren: 1,
+    maxInstructionBytes: 1,
+    endowmentPaths: [['tools'], ['tools', 'counter']],
+  });
+  t.notThrows(() => assertCreateAdmitted(nested, '', [['tools', 'counter']]));
+  t.throws(
+    () => assertCreateAdmitted(nested, '', [['tools'], ['tools', 'counter']]),
+    { message: /cannot also be a directory/ },
+  );
 });
 
 test('instruction bytes are measured in UTF-8 at the bound', t => {
@@ -93,7 +110,7 @@ test('policy counts are integers from 0 to MAX_POLICY_COUNT', t => {
         makeRootPolicy({
           maxChildren: 1,
           maxInstructionBytes: 1,
-          endowmentNames: [],
+          endowmentPaths: [],
           [field]: value,
         }),
       );
@@ -150,7 +167,7 @@ test('ordinary names exclude special, path, and oversized names', t => {
     t.throws(
       () =>
         intersectPolicy(root, {
-          endowmentNames: [/** @type {any} */ (name)],
+          endowmentPaths: [[/** @type {any} */ (name)]],
         }),
       { message: /ordinary pet name/ },
     );

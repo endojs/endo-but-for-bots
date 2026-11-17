@@ -25,7 +25,7 @@ const crashPattern = /^(crash at|dead incarnation)/;
 const rootPolicy = {
   maxChildren: 3,
   maxInstructionBytes: 64,
-  endowmentNames: ['notes', 'workspace'],
+  endowmentPaths: [['notes'], ['workspace'], ['workspace', 'notes']],
 };
 
 /** @param {ReturnType<typeof makeFakeDaemon>} daemon */
@@ -49,7 +49,7 @@ test('create commits a child with exactly its endowments', async t => {
   const notes = makeToken('Notes');
   const { summary, handle } = await E(bound).create('helper', {
     instructions: 'Summarize.',
-    endowments: { notes },
+    endowments: [{ namePath: ['workspace', 'notes'], value: notes }],
   });
   t.like(summary, { name: 'helper', phase: 'Committed', createdAt: 1000 });
   t.is(typeof summary.operationId, 'string');
@@ -72,9 +72,17 @@ test('create commits a child with exactly its endowments', async t => {
   const guestEntries = await E(daemon.host).list(
     /** @type {string} */ (guestName),
   );
-  t.deepEqual(guestEntries, ['@pins', '@self', 'notes']);
+  t.deepEqual(guestEntries, ['@pins', '@self', 'workspace']);
+  t.deepEqual(
+    await E(daemon.host).list(/** @type {string} */ (guestName), 'workspace'),
+    ['notes'],
+  );
   t.is(
-    await E(daemon.host).lookup(/** @type {string} */ (guestName), 'notes'),
+    await E(daemon.host).lookup(
+      /** @type {string} */ (guestName),
+      'workspace',
+      'notes',
+    ),
     notes,
   );
   t.is(daemon.running().length, 1, 'the runner was started');
@@ -87,7 +95,9 @@ test('policy refusal has no side effects', async t => {
     message: /64-byte bound/,
   });
   await t.throwsAsync(
-    E(bound).create('a', { endowments: { secrets: makeToken('S') } }),
+    E(bound).create('a', {
+      endowments: [{ namePath: ['secrets'], value: makeToken('S') }],
+    }),
     { message: /does not admit/ },
   );
   await t.throwsAsync(E(bound).create('@self'), { message: /ordinary/ });
@@ -118,10 +128,12 @@ test('bind and attenuate can only reduce policy and quota is nested', async t =>
   const { coordinator, maker } = await setup();
   const narrow = await E(coordinator.rootFacet).bind(maker, {
     maxChildren: 99,
-    endowmentNames: ['notes', 'unlisted'],
+    endowmentPaths: [['notes'], ['unlisted']],
   });
   await t.throwsAsync(
-    E(narrow).create('a', { endowments: { workspace: makeToken('W') } }),
+    E(narrow).create('a', {
+      endowments: [{ namePath: ['workspace'], value: makeToken('W') }],
+    }),
     { message: /does not admit/ },
   );
   const derived = await E(narrow).attenuate('sub', { maxChildren: 99 });
@@ -460,7 +472,9 @@ test('recovery matrix: create converges to exactly one child or none', async t =
     t,
     async () => {},
     async ({ bound }) => {
-      await E(bound).create('helper', { endowments: { notes } });
+      await E(bound).create('helper', {
+        endowments: [{ namePath: ['notes'], value: notes }],
+      });
     },
     async ({ daemon, revived }) => {
       const bound = revived.boundFacet(1);
@@ -500,7 +514,7 @@ test('recovery matrix: removal converges with nothing left', async t => {
     t,
     async ({ bound }) => {
       await E(bound).create('helper', {
-        endowments: { notes: makeToken('N') },
+        endowments: [{ namePath: ['notes'], value: makeToken('N') }],
       });
     },
     async ({ bound }) => {
@@ -592,7 +606,7 @@ test('a pre-bound endowment with a different identifier fails closed', async t =
   );
   const start = probe.effects;
   await E(probeBound).create('helper', {
-    endowments: { notes: makeToken('N') },
+    endowments: [{ namePath: ['notes'], value: makeToken('N') }],
   });
   const cut =
     probe.trace.findIndex(
@@ -604,7 +618,9 @@ test('a pre-bound endowment with a different identifier fails closed', async t =
   // `notes` to something else, which only a defect could do.
   daemon.crashAfter(cut);
   await t.throwsAsync(
-    E(bound).create('helper', { endowments: { notes: makeToken('N') } }),
+    E(bound).create('helper', {
+      endowments: [{ namePath: ['notes'], value: makeToken('N') }],
+    }),
     { message: crashPattern },
   );
   daemon.restart();
@@ -626,7 +642,7 @@ test('a stray name in the child directory fails closed', async t => {
   );
   const start = probe.effects;
   await E(probeBound).create('helper', {
-    endowments: { notes: makeToken('N') },
+    endowments: [{ namePath: ['notes'], value: makeToken('N') }],
   });
   const cut =
     probe.trace.findIndex(
@@ -636,7 +652,9 @@ test('a stray name in the child directory fails closed', async t => {
     2;
   daemon.crashAfter(cut);
   await t.throwsAsync(
-    E(bound).create('helper', { endowments: { notes: makeToken('N') } }),
+    E(bound).create('helper', {
+      endowments: [{ namePath: ['notes'], value: makeToken('N') }],
+    }),
     { message: crashPattern },
   );
   daemon.restart();
@@ -701,7 +719,10 @@ test('a crash before Intended leaves no retained endowment after restart', async
   daemon.crashAfter(2);
   await t.throwsAsync(
     E(bound).create('helper', {
-      endowments: { notes: makeToken('N'), workspace: makeToken('W') },
+      endowments: [
+        { namePath: ['notes'], value: makeToken('N') },
+        { namePath: ['workspace'], value: makeToken('W') },
+      ],
     }),
     { message: crashPattern },
   );
@@ -805,27 +826,23 @@ test('a zero-quota factory refuses create with no effects', async t => {
   t.deepEqual(await E(none).list(), []);
 });
 
-test('endowment names may be __proto__ and constructor', async t => {
+test('endowment path segments may be __proto__ and constructor', async t => {
   const daemon = makeFakeDaemon();
   const coordinator = await prepareChildAgentCoordinator({
     host: daemon.host,
     rootPolicy: {
       maxChildren: 1,
       maxInstructionBytes: 0,
-      endowmentNames: ['__proto__', 'constructor'],
+      endowmentPaths: [['__proto__'], ['constructor']],
     },
   });
   const bound = await E(coordinator.rootFacet).bind(daemon.makeMaker().maker);
-  const endowments = {};
-  Object.defineProperty(endowments, '__proto__', {
-    value: makeToken('Proto'),
-    enumerable: true,
+  await E(bound).create('helper', {
+    endowments: [
+      { namePath: ['__proto__'], value: makeToken('Proto') },
+      { namePath: ['constructor'], value: makeToken('Ctor') },
+    ],
   });
-  Object.defineProperty(endowments, 'constructor', {
-    value: makeToken('Ctor'),
-    enumerable: true,
-  });
-  await E(bound).create('helper', { endowments: harden(endowments) });
   t.deepEqual(await E(daemon.host).list('c1.0.guest'), [
     '@pins',
     '@self',

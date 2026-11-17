@@ -11,8 +11,8 @@ import { encodeUtf8 } from '@endo/utf8';
 /**
  * The daemon's ordinary pet-name rule (`packages/daemon/src/pet-name.js`): 1 to
  * 255 characters with no `/`, NUL, or `@`, and neither `.` nor `..`. Child and
- * endowment names must be ordinary names so neither can shadow a special name
- * such as `@self` or `@pins` in a guest directory.
+ * every segment of an endowment path must be an ordinary name so none can
+ * shadow a special name such as `@self` or `@pins` in a guest directory.
  *
  * @param {unknown} name
  * @returns {name is string}
@@ -37,6 +37,32 @@ export const assertOrdinaryName = (name, what) => {
   isOrdinaryName(name) || Fail`${q(what)} must be an ordinary pet name`;
 };
 harden(assertOrdinaryName);
+
+/** @param {readonly string[]} path */
+const pathKey = path => path.join('\0');
+
+/**
+ * @param {unknown} path
+ * @returns {asserts path is string[]}
+ */
+const assertEndowmentPath = path => {
+  if (!Array.isArray(path) || path.length === 0) {
+    throw Fail`Endowment path must be a non-empty pet name path`;
+  }
+  for (const name of path) assertOrdinaryName(name, 'endowment path segment');
+};
+
+/** @param {readonly (readonly string[])[]} paths */
+const normalizeEndowmentPaths = paths => {
+  const byKey = new Map();
+  for (const path of paths) {
+    assertEndowmentPath(path);
+    byKey.set(pathKey(path), [...path]);
+  }
+  return [...byKey.values()].sort((left, right) =>
+    pathKey(left).localeCompare(pathKey(right)),
+  );
+};
 
 /**
  * The largest policy count. Both counts are natural numbers this package
@@ -71,21 +97,18 @@ const assertCount = (n, field) => {
  * @returns {EffectivePolicy}
  */
 export const makeRootPolicy = policy => {
-  const { maxChildren, maxInstructionBytes, endowmentNames, ...rest } = policy;
+  const { maxChildren, maxInstructionBytes, endowmentPaths, ...rest } = policy;
   Object.keys(rest).length === 0 ||
     Fail`Unknown policy fields ${q(Object.keys(rest))}`;
   assertCount(maxChildren, 'maxChildren');
   assertCount(maxInstructionBytes, 'maxInstructionBytes');
-  if (!Array.isArray(endowmentNames)) {
-    throw Fail`Root policy requires an endowmentNames list`;
-  }
-  for (const name of endowmentNames) {
-    assertOrdinaryName(name, 'endowment name');
+  if (!Array.isArray(endowmentPaths)) {
+    throw Fail`Root policy requires an endowmentPaths list`;
   }
   return harden({
     maxChildren,
     maxInstructionBytes,
-    endowmentNames: [...new Set(endowmentNames)].sort(),
+    endowmentPaths: normalizeEndowmentPaths(endowmentPaths),
   });
 };
 harden(makeRootPolicy);
@@ -93,7 +116,7 @@ harden(makeRootPolicy);
 /**
  * Intersect a requested policy with the issuing namespace's effective policy.
  * The result can only reduce: a larger quota or instruction bound is clamped
- * to the issuer's, and an endowment name the issuer excludes is dropped. An
+ * to the issuer's, and an endowment path the issuer excludes is dropped. An
  * absent field inherits.
  *
  * @param {EffectivePolicy} issuer
@@ -101,7 +124,7 @@ harden(makeRootPolicy);
  * @returns {EffectivePolicy}
  */
 export const intersectPolicy = (issuer, requested = {}) => {
-  const { maxChildren, maxInstructionBytes, endowmentNames, ...rest } =
+  const { maxChildren, maxInstructionBytes, endowmentPaths, ...rest } =
     requested;
   Object.keys(rest).length === 0 ||
     Fail`Unknown policy fields ${q(Object.keys(rest))}`;
@@ -109,15 +132,16 @@ export const intersectPolicy = (issuer, requested = {}) => {
   if (maxInstructionBytes !== undefined) {
     assertCount(maxInstructionBytes, 'maxInstructionBytes');
   }
-  let names = issuer.endowmentNames;
-  if (endowmentNames !== undefined) {
-    Array.isArray(endowmentNames) ||
-      Fail`Policy field "endowmentNames" must be a list`;
-    for (const name of endowmentNames) {
-      assertOrdinaryName(name, 'endowment name');
-    }
-    const requestedNames = new Set(endowmentNames);
-    names = issuer.endowmentNames.filter(name => requestedNames.has(name));
+  let paths = issuer.endowmentPaths;
+  if (endowmentPaths !== undefined) {
+    Array.isArray(endowmentPaths) ||
+      Fail`Policy field "endowmentPaths" must be a list`;
+    const requestedPaths = new Set(
+      normalizeEndowmentPaths(endowmentPaths).map(pathKey),
+    );
+    paths = issuer.endowmentPaths.filter(path =>
+      requestedPaths.has(pathKey(path)),
+    );
   }
   return harden({
     maxChildren:
@@ -128,7 +152,7 @@ export const intersectPolicy = (issuer, requested = {}) => {
       maxInstructionBytes === undefined
         ? issuer.maxInstructionBytes
         : Math.min(maxInstructionBytes, issuer.maxInstructionBytes),
-    endowmentNames: names,
+    endowmentPaths: paths,
   });
 };
 harden(intersectPolicy);
@@ -139,16 +163,30 @@ harden(intersectPolicy);
  *
  * @param {EffectivePolicy} policy
  * @param {string} instructions
- * @param {string[]} endowmentNames
+ * @param {string[][]} endowmentPaths
  */
-export const assertCreateAdmitted = (policy, instructions, endowmentNames) => {
+export const assertCreateAdmitted = (policy, instructions, endowmentPaths) => {
   typeof instructions === 'string' || Fail`Instructions must be a string`;
   encodeUtf8(instructions).length <= policy.maxInstructionBytes ||
     Fail`Instructions exceed this factory's ${q(policy.maxInstructionBytes)}-byte bound`;
-  for (const name of endowmentNames) {
-    assertOrdinaryName(name, 'endowment name');
-    policy.endowmentNames.includes(name) ||
-      Fail`This factory does not admit the endowment name ${q(name)}`;
+  const admitted = new Set(policy.endowmentPaths.map(pathKey));
+  const seen = new Set();
+  for (const path of endowmentPaths) {
+    assertEndowmentPath(path);
+    const key = pathKey(path);
+    !seen.has(key) || Fail`Duplicate endowment path ${q(path)}`;
+    seen.add(key);
+    admitted.has(key) ||
+      Fail`This factory does not admit the endowment path ${q(path)}`;
+  }
+  const sorted = [...endowmentPaths].sort((left, right) =>
+    pathKey(left).localeCompare(pathKey(right)),
+  );
+  for (let index = 1; index < sorted.length; index += 1) {
+    const shorter = sorted[index - 1];
+    const longer = sorted[index];
+    !shorter.every((name, offset) => longer[offset] === name) ||
+      Fail`Endowment path ${q(shorter)} cannot also be a directory`;
   }
 };
 harden(assertCreateAdmitted);

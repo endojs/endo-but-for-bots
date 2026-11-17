@@ -9,7 +9,7 @@ export const ChildAgentPolicyShape = M.splitRecord(
   {
     maxChildren: M.number(),
     maxInstructionBytes: M.number(),
-    endowmentNames: M.arrayOf(M.string()),
+    endowmentPaths: M.arrayOf(M.arrayOf(M.string())),
   },
 );
 harden(ChildAgentPolicyShape);
@@ -18,7 +18,9 @@ export const CreateOptionsShape = M.splitRecord(
   {},
   {
     instructions: M.string(),
-    endowments: M.recordOf(M.string(), M.any()),
+    endowments: M.arrayOf(
+      M.splitRecord({ namePath: M.arrayOf(M.string()), value: M.any() }),
+    ),
   },
 );
 harden(CreateOptionsShape);
