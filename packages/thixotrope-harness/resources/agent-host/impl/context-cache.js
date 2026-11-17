@@ -48,12 +48,33 @@
  * (`store.read(blob, session)`); a record that names another session's
  * blob fails the round with `texts.blobNotOwned`.
  *
+ * M2 (W2.8; D-M2-1; `designs/m2-interfaces.md` 4.8): with an archive store
+ * and the session's archive key, an entry is `{ epoch, sealed, tail }`: the
+ * projected transcript of the sealed part (text, no handles; from the
+ * archive's persisted projection) and the kept records from `sealedTo`
+ * with their texts. `RoundRequest.base.archive` (`segments`, `digest`)
+ * joins `{ count, epoch }` in the in-step check:
+ *
+ * - a seal moved the base (newer segments, same epoch): the new segments'
+ *   projection is added from the files the adapter wrote, tail records
+ *   below the new `sealedTo` and their texts are dropped; no vat crank;
+ * - rebuild: the archive is validated, its persisted projection loaded
+ *   (one file and its blob files), the tail taken from the mirror plus one
+ *   gap page from one below the mirror's end (whose record must agree with
+ *   the mirror's last), or paged from `p<sealedTo>` without a mirror.
+ *
+ * Every prepare then brings the archive's mirror up to the records the
+ * cache holds (`archive.record`, off the round's path). A request with an
+ * `archive` and no archive key here fails the round (the sealed part would
+ * be missing from the context).
+ *
  * Node only.
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
 import { performance } from 'node:perf_hooks';
 
+import { textOf } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { blobsOf } from '../../../guest/session/staging.js';
 /* eslint-enable import/no-relative-packages */
@@ -82,6 +103,12 @@ const messageOf = error =>
  * @property {any[]} records
  * @property {Map<any, string>} texts blob presence -> its text
  * @property {number} textUnits
+ * @property {any[]} sealed M2: the sealed part's projected transcript
+ * @property {number} sealedUnits
+ * @property {{ segments: number, digest: string, sealedTo: number } | undefined} archive
+ *   M2: the vat's archive state the entry was built for
+ * @property {number} mirrored M2: records up to this index are in the
+ *   archive's mirror (-1: rewrite it)
  *
  * @typedef {object} CacheStats
  * @property {number} appends
@@ -95,15 +122,21 @@ const messageOf = error =>
  * @property {number} oversize prepared entries dropped for their own size
  * @property {number} failures
  * @property {number} abandons
+ * @property {number} sealMoves M2: entries extended by a seal
+ * @property {number} sealedLoads M2: rebuilds that loaded a sealed part
+ * @property {number} mirrorTails M2: rebuild tails taken from the mirror
+ * @property {number} mirrorMisses M2: mirrors that disagreed with the vat
  */
 
 /**
  * @param {object} options
- * @param {{ resolveMany: (blobs: readonly any[]) => Promise<void>, read: (blob: any, owner?: any) => Promise<string> }} options.store
+ * @param {{ resolveMany: (blobs: readonly any[]) => Promise<void>, read: (blob: any, owner?: any) => Promise<string>, readKey?: (key: string) => Promise<string> }} options.store
  * @param {readonly import('./projection-hooks.js').ProjectionHook[]} [options.hooks]
  * @param {number} [options.maxSessions]
  * @param {number} [options.maxTextUnits]
  * @param {number} [options.readsInFlight] blob files read at once
+ * @param {any} [options.archive] M2: the archive store
+ *   (`archive/store.js`); without it requests with an `archive` fail
  */
 export const makeContextCache = ({
   store,
@@ -111,6 +144,7 @@ export const makeContextCache = ({
   maxSessions = 32,
   maxTextUnits = 128 * 1024 * 1024,
   readsInFlight = 32,
+  archive = undefined,
 }) => {
   /** session -> entry, least recently prepared first. @type {Map<any, Entry>} */
   const entries = new Map();
@@ -118,7 +152,7 @@ export const makeContextCache = ({
   const tails = new WeakMap();
   let textUnits = 0;
   /**
-   * @typedef {{ pages: number, pageMs: number, waitResolveMs: number, readMs: number, blobs: number }} Timing
+   * @typedef {{ pages: number, pageMs: number, waitResolveMs: number, readMs: number, blobs: number, sealedMs: number, sealedBlobs: number }} Timing
    *   where one prepare's time went (copied into its projection)
    */
   /** @returns {Timing} */
@@ -128,6 +162,8 @@ export const makeContextCache = ({
     waitResolveMs: 0,
     readMs: 0,
     blobs: 0,
+    sealedMs: 0,
+    sealedBlobs: 0,
   });
   /** @type {CacheStats} */
   const counts = {
@@ -142,6 +178,10 @@ export const makeContextCache = ({
     oversize: 0,
     failures: 0,
     abandons: 0,
+    sealMoves: 0,
+    sealedLoads: 0,
+    mirrorTails: 0,
+    mirrorMisses: 0,
   };
 
   /** @param {any} session */
@@ -149,7 +189,7 @@ export const makeContextCache = ({
     const entry = entries.get(session);
     if (entry === undefined) return;
     entries.delete(session);
-    textUnits -= entry.textUnits;
+    textUnits -= entry.textUnits + entry.sealedUnits;
   };
 
   /** @param {any} keep */
@@ -170,10 +210,43 @@ export const makeContextCache = ({
    */
   const trimPrepared = session => {
     const entry = entries.get(session);
-    if (entry !== undefined && entry.textUnits > maxTextUnits) {
+    if (
+      entry !== undefined &&
+      entry.textUnits + entry.sealedUnits > maxTextUnits
+    ) {
       evict(session);
       counts.evictions += 1;
       counts.oversize += 1;
+    }
+  };
+
+  /**
+   * A token blob of the archive's mirror (its key, no handle).
+   * @param {any} blob
+   */
+  const isToken = blob => archive?.tokenKey(blob) !== undefined;
+
+  /**
+   * Drop the entry's records below `index` and the texts no remaining
+   * record names (a seal moved the base).
+   * @param {Entry} entry
+   * @param {number} index
+   */
+  const dropBelow = (entry, index) => {
+    const k = index - entry.start;
+    if (k <= 0) return;
+    entry.records = entry.records.slice(k);
+    entry.start = index;
+    const kept = new Set();
+    for (const record of entry.records) {
+      for (const blob of blobsOf(record)) kept.add(blob);
+    }
+    for (const [blob, text] of [...entry.texts]) {
+      if (!kept.has(blob)) {
+        entry.texts.delete(blob);
+        entry.textUnits -= text.length;
+        textUnits -= text.length;
+      }
     }
   };
 
@@ -202,7 +275,7 @@ export const makeContextCache = ({
     // (an append's handles are usually bound here: no manager call).
     const waited = clock();
     await Promise.all(resolving);
-    await store.resolveMany(missing);
+    await store.resolveMany(missing.filter(blob => !isToken(blob)));
     timing.waitResolveMs += clock() - waited;
     const reading = clock();
     let next = 0;
@@ -210,8 +283,11 @@ export const makeContextCache = ({
       while (next < missing.length) {
         const blob = missing[next];
         next += 1;
+        const key = archive?.tokenKey(blob);
         // eslint-disable-next-line no-await-in-loop
-        const text = await store.read(blob, session);
+        const text = await (key === undefined || store.readKey === undefined
+          ? store.read(blob, session)
+          : store.readKey(key));
         entry.texts.set(blob, text);
         entry.textUnits += text.length;
         textUnits += text.length;
@@ -305,25 +381,135 @@ export const makeContextCache = ({
   };
 
   /**
-   * @typedef {{ turnId: string, base: { count: number, epoch: number }, append: any[], context?: any }} CacheRequest
+   * @typedef {{ turnId: string, base: { count: number, epoch: number, archive?: { sealedTo: number, sealedTurns: number, segments: number, digest: string } }, append: any[], context?: any }} CacheRequest
    *   the parts of a RoundRequest the cache reads
    */
+
+  /** @param {{ segments: number, digest: string } | undefined} state */
+  const segmentsOf = state => state?.segments ?? 0;
+  /** @param {{ segments: number, digest: string } | undefined} state */
+  const headOf = state => state?.digest ?? '';
+
+  /**
+   * M2: load the sealed part of a rebuilt entry and its tail (mirror plus
+   * one gap page, or pages from `sealedTo`).
+   * @param {any} session
+   * @param {CacheRequest} request
+   * @param {Entry} fresh
+   * @param {string} key
+   * @param {Timing} timing
+   */
+  const rebuildArchived = async (session, request, fresh, key, timing) => {
+    const { base, context } = request;
+    const vat = base.archive;
+    const loading = clock();
+    const sealed = await archive.prepareSealed(session, key, vat, {
+      context,
+    });
+    timing.sealedMs += clock() - loading;
+    timing.sealedBlobs += sealed.blobs;
+    if (vat !== undefined) counts.sealedLoads += 1;
+    fresh.sealed = sealed.transcript;
+    fresh.sealedUnits = sealed.units;
+    textUnits += sealed.units;
+    fresh.archive =
+      vat === undefined
+        ? undefined
+        : {
+            segments: vat.segments,
+            digest: vat.digest,
+            sealedTo: vat.sealedTo,
+          };
+    const from = Number(vat?.sealedTo ?? 0);
+    fresh.start = from;
+    fresh.mirrored = -1;
+    /** @type {Promise<void>[]} */
+    let resolving = [];
+    if (context === undefined) return resolving;
+    /** @type {{ from: number, records: any[] }} */
+    const mirror =
+      Number(base.count) > from
+        ? await archive.tail(session, key, { from, until: base.count })
+        : { from, records: [] };
+    if (mirror.records.length > 0) {
+      const k = from + mirror.records.length - 1;
+      const gap = await pull(context, `p${k}`, base.count, k, timing);
+      const check = gap.records[0];
+      const last = mirror.records[mirror.records.length - 1];
+      if (
+        check !== undefined &&
+        check.kind === last.kind &&
+        check.turnId === last.turnId
+      ) {
+        counts.mirrorTails += 1;
+        fresh.records.push(...mirror.records, ...gap.records.slice(1));
+        return gap.resolving;
+      }
+      counts.mirrorMisses += 1;
+    }
+    if (base.count > from) {
+      const pulled = await pull(context, `p${from}`, base.count, from, timing);
+      fresh.records.push(...pulled.records);
+      resolving = pulled.resolving;
+    }
+    return resolving;
+  };
 
   /**
    * @param {any} session
    * @param {CacheRequest} request
    * @param {Timing} timing
+   * @param {string | undefined} key M2: the session's archive key
    */
-  const update = async (session, request, timing) => {
+  const update = async (session, request, timing, key) => {
     const { base, append, context } = request;
+    const vat = base.archive;
+    const archived = archive !== undefined && key !== undefined;
+    if (vat !== undefined && !archived) {
+      throw Error(textOf.archiveFailed('no archive for this session here'));
+    }
     let entry = entries.get(session);
     if (entry !== undefined) {
       // Most recently prepared last.
       entries.delete(session);
       entries.set(session, entry);
     }
+    if (
+      entry !== undefined &&
+      archived &&
+      vat !== undefined &&
+      entry.epoch === base.epoch &&
+      vat.segments > segmentsOf(entry.archive) &&
+      vat.sealedTo >= entry.start
+    ) {
+      // A seal moved the base: add the new segments' projection, drop the
+      // tail below sealedTo. No vat crank.
+      const loading = clock();
+      const more = await archive.prepareSealed(session, key, vat, {
+        after: entry.archive ?? { segments: 0, digest: '' },
+        context,
+      });
+      timing.sealedMs += clock() - loading;
+      timing.sealedBlobs += more.blobs;
+      entry.sealed = [...entry.sealed, ...more.transcript];
+      entry.sealedUnits += more.units;
+      textUnits += more.units;
+      dropBelow(entry, vat.sealedTo);
+      entry.archive = {
+        segments: vat.segments,
+        digest: vat.digest,
+        sealedTo: vat.sealedTo,
+      };
+      entry.mirrored = -1;
+      counts.sealMoves += 1;
+    }
     const count = entry === undefined ? -1 : entry.start + entry.records.length;
-    if (entry !== undefined && entry.epoch === base.epoch) {
+    if (
+      entry !== undefined &&
+      entry.epoch === base.epoch &&
+      segmentsOf(entry.archive) === segmentsOf(vat) &&
+      headOf(entry.archive) === headOf(vat)
+    ) {
       if (count === base.count) {
         entry.records.push(...append);
         counts.appends += 1;
@@ -366,10 +552,17 @@ export const makeContextCache = ({
       records: [],
       texts: new Map(),
       textUnits: 0,
+      sealed: [],
+      sealedUnits: 0,
+      archive: undefined,
+      mirrored: -1,
     };
     /** @type {Promise<void>[]} */
     let resolving = [];
-    if (context !== undefined) {
+    if (archived) {
+      entries.set(session, fresh);
+      resolving = await rebuildArchived(session, request, fresh, key, timing);
+    } else if (context !== undefined) {
       // Without a source (an M1a request) only the append is known.
       const pulled = await pull(
         context,
@@ -390,30 +583,82 @@ export const makeContextCache = ({
   };
 
   /**
+   * M2: bring the archive's mirror up to the entry's records (off the
+   * round's path; a mirror that cannot be written is dropped there).
+   * @param {any} session
+   * @param {string} key
+   * @param {Entry} entry
+   */
+  const mirror = (session, key, entry) => {
+    const end = entry.start + entry.records.length;
+    if (entry.mirrored < 0) {
+      archive
+        .record(session, key, {
+          from: entry.start,
+          records: entry.records,
+          replace: true,
+        })
+        .catch(() => {});
+    } else if (end > entry.mirrored) {
+      archive
+        .record(session, key, {
+          from: entry.mirrored,
+          records: entry.records.slice(entry.mirrored - entry.start),
+        })
+        .catch(() => {});
+    } else {
+      return;
+    }
+    entry.mirrored = end;
+  };
+
+  /**
    * @param {any} session
    * @param {CacheRequest} request
+   * @param {string | undefined} given M2: the session's archive key
    */
-  const prepareNow = async (session, request) => {
+  const prepareNow = async (session, request, given) => {
     /** @type {Entry} */
     let entry;
     const timing = newTiming();
+    /** @type {string | undefined} */
+    let key = given;
     try {
-      entry = await update(session, request, timing);
+      if (key === undefined && archive !== undefined) {
+        // The manager names the key when `open` did not (once per session
+        // and incarnation); a manager without archives answers none.
+        key = await archive.keyFor(session).catch(() => undefined);
+      }
+      entry = await update(session, request, timing, key);
     } catch (error) {
       evict(session);
       if (isAbandoned(error)) counts.abandons += 1;
       else counts.failures += 1;
       throw error;
     }
+    if (archive !== undefined && key !== undefined) {
+      mirror(session, key, entry);
+    }
     trim(session);
     const projecting = clock();
-    const projected = projectRecords(entry.records, {
+    const tail = projectRecords(entry.records, {
       texts: entry.texts,
-      hooks,
+      hooks: [],
     });
+    /** @type {any[]} */
+    let transcript =
+      entry.sealed.length === 0
+        ? [...tail.transcript]
+        : [...entry.sealed, ...tail.transcript];
+    for (const hook of hooks) {
+      transcript = hook(transcript, {
+        records: entry.records,
+        texts: entry.texts,
+      });
+    }
     /** @type {Record<string, any>} */
     const projection = {
-      ...projected,
+      transcript: harden(transcript),
       epoch: entry.epoch,
       count: entry.start + entry.records.length,
       timing: {
@@ -441,11 +686,12 @@ export const makeContextCache = ({
      * presence the endpoint serves); one at a time per session.
      * @param {any} session
      * @param {CacheRequest} request a RoundRequest
+     * @param {{ key?: string }} [options] M2: the session's archive key
      * @returns {Promise<import('./projection.js').Projection>}
      */
-    prepare: (session, request) => {
+    prepare: (session, request, { key } = {}) => {
       const before = tails.get(session) ?? Promise.resolve();
-      const result = before.then(() => prepareNow(session, request));
+      const result = before.then(() => prepareNow(session, request, key));
       tails.set(
         session,
         result.then(

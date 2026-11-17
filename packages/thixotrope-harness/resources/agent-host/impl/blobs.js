@@ -122,6 +122,20 @@ const isContinuation = byte => byte >= 0x80 && byte < 0xc0;
  * @property {(owner: any) => { session: number, daemon: number }} usage
  *   bytes held by `owner` and on disk in all (quotas)
  * @property {() => Record<string, number>} stats counters (tests, perf)
+ * @property {(key: string) => Promise<string>} readKey M2 (W2.8): the whole
+ *   text of the file `key` names (the archive reads sealed fields by key:
+ *   their handles are gone); `texts.blobUnknown` when there is none
+ * @property {(key: string, offset: number, maxBytes: number) => Promise<ContentPage>} readPageKey
+ *   M2: a page of the file `key` names, as `readPage`
+ * @property {(keys: readonly string[]) => Promise<number>} release M2:
+ *   delete the files `keys` name (missing files are fine) and refund their
+ *   bytes; answers how many were deleted. For deleting a session (M1b 4.8,
+ *   m2-interfaces.md 4.11), never for a seal (4.10).
+ * @property {(blob: any) => string | undefined} keyOf M2: the file key of a
+ *   handle bound or resolved in this incarnation
+ * @property {(owner: any, bytes: number) => void} chargeArchived M2: count
+ *   a session's sealed blob bytes against its quota (once per incarnation,
+ *   when its archive is first validated; 4.10 item 4)
  *
  * @typedef {'write' | 'fsync' | 'rename' | 'fsync-dir' | 'bind'} Step
  */
@@ -243,6 +257,8 @@ export const makeBlobStore = ({
     refusedDaemon: 0,
     refusedOwner: 0,
     swept: 0,
+    released: 0,
+    releasedBytes: 0,
   };
 
   /** @param {any} owner */
@@ -546,9 +562,14 @@ export const makeBlobStore = ({
     return (await readFile(path)).toString('utf8');
   };
 
-  /** @type {BlobStore['readPage']} */
-  const readPage = async (blob, offset, maxBytes, owner) => {
-    const { path, bytes } = await locate(blob, owner);
+  /**
+   * A page of the file at `path` (`bytes` long): whole code points.
+   * @param {string} path
+   * @param {number} bytes
+   * @param {number} offset
+   * @param {number} maxBytes
+   */
+  const readRange = async (path, bytes, offset, maxBytes) => {
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > bytes) {
       throw Error(`offset ${offset} is outside the blob (${bytes} bytes)`);
     }
@@ -586,6 +607,80 @@ export const makeBlobStore = ({
       next,
       done: next === bytes,
     });
+  };
+
+  /** @type {BlobStore['readPage']} */
+  const readPage = async (blob, offset, maxBytes, owner) => {
+    const { path, bytes } = await locate(blob, owner);
+    return readRange(path, bytes, offset, maxBytes);
+  };
+
+  /** @param {string} key */
+  const pathOfKey = async key => {
+    if (!KEY.test(key)) throw Error(texts.blobUnknown);
+    return join(await directory(), key);
+  };
+
+  /** @type {BlobStore['readKey']} */
+  const readKey = async key => {
+    const path = await pathOfKey(key);
+    try {
+      return (await readFile(path)).toString('utf8');
+    } catch {
+      throw Error(texts.blobUnknown);
+    }
+  };
+
+  /** @type {BlobStore['readPageKey']} */
+  const readPageKey = async (key, offset, maxBytes) => {
+    const path = await pathOfKey(key);
+    /** @type {number} */
+    let bytes;
+    try {
+      bytes = (await stat(path)).size;
+    } catch {
+      throw Error(texts.blobUnknown);
+    }
+    return readRange(path, bytes, offset, maxBytes);
+  };
+
+  /** @type {BlobStore['release']} */
+  const release = async keys => {
+    const path = await directory();
+    let removed = 0;
+    for (const key of keys) {
+      if (typeof key === 'string' && KEY.test(key)) {
+        const file = join(path, key);
+        // eslint-disable-next-line no-await-in-loop
+        const size = await stat(file).then(
+          info => info.size,
+          () => -1,
+        );
+        if (size >= 0) {
+          // eslint-disable-next-line no-await-in-loop
+          const gone = await unlink(file).then(
+            () => true,
+            () => false,
+          );
+          if (gone) {
+            diskBytes = Math.max(0, diskBytes - size);
+            removed += 1;
+            counts.released += 1;
+            counts.releasedBytes += size;
+          }
+        }
+      }
+    }
+    return removed;
+  };
+
+  /** @type {BlobStore['keyOf']} */
+  const keyOf = blob => known.get(blob)?.key;
+
+  /** @type {BlobStore['chargeArchived']} */
+  const chargeArchived = (owner, bytes) => {
+    if (owner === undefined || !(bytes > 0)) return;
+    ownerBytes.set(owner, heldBy(owner) + bytes);
   };
 
   let writerSerial = 0;
@@ -776,6 +871,11 @@ export const makeBlobStore = ({
     drop,
     read,
     readPage,
+    readKey,
+    readPageKey,
+    release,
+    keyOf,
+    chargeArchived,
     resolveMany,
     claim,
     writers,

@@ -25,6 +25,7 @@ import { makeTimerFacet, makeTimers } from './timers.js';
 import { findBlobDir, makeBlobStore } from './blobs.js';
 import { makeContent } from './content.js';
 import { makeContextCache } from './context-cache.js';
+import { archiveDirFor, makeArchiveStore } from './archive/store.js';
 import { makeListChannel } from './list-channel.js';
 import { makeEventLog, makeScriptedProvider } from './providers/scripted.js';
 import { makeEchoTool } from './tools/echo.js';
@@ -78,6 +79,8 @@ export const adapterTools = harden([
  *   text lives (default: `<state>/agent-host/blobs`, found from argv)
  * @param {any} [options.sink] M1b: the manager's sink, when there is no
  *   attach (tests); otherwise `bind` provides it
+ * @param {string | (() => string)} [options.archiveDir] M2 (W2.8): the
+ *   record archive's root (default: `archive` next to the blob directory)
  */
 export const makeAgentHostImpl = ({
   timers = makeTimers(),
@@ -87,6 +90,7 @@ export const makeAgentHostImpl = ({
   incarnation = `${pid}`,
   blobDir = () => findBlobDir(),
   sink: givenSink = undefined,
+  archiveDir = undefined,
 } = {}) => {
   /** The manager's sink, from the attach (M1b blobs mint through it). */
   let sink = givenSink;
@@ -99,13 +103,22 @@ export const makeAgentHostImpl = ({
     timers,
   });
   const content = makeContent({ store: blobs });
+  // M2 W2.8: the record archive (D-M2-1), next to the blobs.
+  const archive = makeArchiveStore({
+    dir:
+      archiveDir ??
+      (() =>
+        archiveDirFor(typeof blobDir === 'function' ? blobDir() : blobDir)),
+    blobs,
+    sink: () => sink,
+  });
   const timer = makeTimerFacet(timers);
   // The session list channel (W1b.5's list-channel.js), one per incarnation.
   const listChannel = makeListChannel();
   const live = makeLive({ channels, listChannel });
   const composer = makeComposer({ blobs });
   // W1b.2: the context cache of every session served here (D-9).
-  const contextCache = makeContextCache({ store: blobs });
+  const contextCache = makeContextCache({ store: blobs, archive });
 
   /**
    * What a Backend presence of the manager vat is in this incarnation:
@@ -158,14 +171,14 @@ export const makeAgentHostImpl = ({
   };
 
   const ops = makeOps({
-    open: ({ backend, spec, session }) => {
+    open: ({ backend, spec, session, archiveKey }) => {
       const { provider, log, kind, toolsOf } = backendState(backend, spec);
       const channel = channels.channelFor(session);
       const endpoint = makeEndpoint({
         provider,
         channel,
         timers,
-        prepare: req => contextCache.prepare(session, req),
+        prepare: req => contextCache.prepare(session, req, { key: archiveKey }),
         owner: session,
       });
       // Per session (J-9361, J-9364): the tools, writers and Content of
@@ -186,20 +199,30 @@ export const makeAgentHostImpl = ({
         );
         toolsOf.set(session, toolEntries);
       }
-      return harden({
+      /** @type {Record<string, any>} */
+      const ports = {
         endpoint,
         publisher: channel.publisher,
         tools: toolEntries,
         content: makeContent({ store: sessionBlobs }),
         writers: blobs.writersFor(session),
         timer,
-      });
+      };
+      // M2 W2.8: the session's archive port (its key from `archiveKey`,
+      // else resolved through the manager when first needed).
+      ports.archive = archive.portFor({ session, key: archiveKey });
+      return harden(ports);
     },
     liveChannel: session => channels.channelFor(session).publisher,
     live: () => live,
     composer: () => composer,
     content: () => content,
     listPublisher: () => listChannel.publisher,
+    // M2 W2.8 (m2-interfaces.md 3.4, 4.9-4.11).
+    history: () => archive.history(),
+    releaseBlobs: keys => blobs.release(keys),
+    releaseArchive: key => archive.release(key),
+    writersFor: session => blobs.writersFor(session),
   });
 
   const { bind, unbind } = makeAttach({
@@ -209,6 +232,8 @@ export const makeAgentHostImpl = ({
       sink = attachedSink;
       // Writes that never completed (section 4.6); no state dir in tests.
       await blobs.sweep().catch(() => {});
+      // M2: half-written segments, manifests and mirrors (4.5).
+      await archive.sweep().catch(() => {});
     },
   });
   return harden({
@@ -219,6 +244,7 @@ export const makeAgentHostImpl = ({
     content,
     listChannel,
     contextCache,
+    archive,
   });
 };
 harden(makeAgentHostImpl);

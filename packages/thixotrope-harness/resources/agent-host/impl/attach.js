@@ -24,7 +24,8 @@
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
 
-import { shapes } from '../../../guest/lib/interfaces.js';
+import { shapes, textOf } from '../../../guest/lib/interfaces.js';
+import { limits } from '../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 
 const { M, makeExo } = /** @type {any} */ (globalThis);
@@ -36,8 +37,18 @@ export const SERVICE_KEY = 'agent-host';
  * The ops facet's guard: W1a.2-internal (the manager vat is its only
  * caller). Closed records, as every vat-facing pattern (rule 12.10).
  */
-const makeOpsInterface = () =>
-  M.interface('AgentHostOps', {
+const makeOpsInterface = () => {
+  const key = shapes.Id;
+  const done = M.undefined();
+  const backendRequest = (/** @type {Record<string, any>} */ optional) =>
+    M.splitRecord(
+      { backend: M.remotable('Backend'), spec: shapes.BackendSpec },
+      optional,
+      {},
+    );
+  return M.interface('AgentHostOps', {
+    // M2 (W2.8): `archiveKey`, the archive key (`h<n>`) the manager keeps
+    // for the session's host facet; the ports then carry `archive`.
     open: M.call(
       M.splitRecord(
         {
@@ -45,7 +56,7 @@ const makeOpsInterface = () =>
           spec: shapes.BackendSpec,
           session: M.remotable('Session'),
         },
-        {},
+        { archiveKey: key },
         {},
       ),
     ).returns(shapes.TurnPorts),
@@ -57,11 +68,77 @@ const makeOpsInterface = () =>
     // M1b W1b.1
     content: M.call().returns(M.remotable('Content')),
     listPublisher: M.call().returns(M.remotable('ListPublisher')),
+    // ---- M2 (m2-interfaces.md 3.4); each forwards to its handler or
+    // throws textOf.notBuilt while the handler is absent.
+    history: M.call().returns(M.remotable('History')),
+    releaseBlobs: M.callWhen(
+      M.arrayOf(key, { arrayLengthLimit: limits.blobResolveBatch }),
+    ).returns(done),
+    releaseArchive: M.callWhen(key).returns(done),
+    writersFor: M.call()
+      .optional(M.remotable('Session'))
+      .returns(M.remotable('BlobWriters')),
+    listModels: M.callWhen(
+      backendRequest({ request: shapes.ModelRequest }),
+    ).returns(shapes.ModelPage),
+    resolveModel: M.callWhen(
+      backendRequest({ modelId: shapes.ModelId }),
+    ).returns(shapes.ResolvedModel),
+    secretCreate: M.callWhen(
+      M.splitRecord(
+        {
+          key,
+          label: shapes.Label,
+          description: M.string({
+            stringLengthLimit: limits.secretDescriptionUnits,
+          }),
+        },
+        {},
+        {},
+      ),
+    ).returns(done),
+    secretDescribe: M.callWhen(key).returns(
+      M.splitRecord(
+        {
+          generation: M.nat(),
+          state: M.or('active', 'revoked'),
+          bytes: M.nat(),
+        },
+        {},
+        {},
+      ),
+    ),
+    secretRevoke: M.callWhen(key).returns(done),
+    secretDelete: M.callWhen(key).returns(done),
+    secretAudit: M.callWhen(
+      M.splitRecord({ limit: M.nat() }, { key }, {}),
+    ).returns(shapes.AuditPage),
+    secretWriter: M.callWhen().returns(M.remotable('SecretWriter')),
   });
+};
+
+/** M2 ops methods that forward to an optional handler (m2-interfaces.md 3.4). */
+const M2_FORWARDS = harden([
+  'history',
+  'writersFor',
+  'listModels',
+  'resolveModel',
+  'secretDescribe',
+  'secretAudit',
+  'secretWriter',
+]);
+/** M2 ops methods whose answer is only "done". */
+const M2_DONE = harden([
+  'releaseBlobs',
+  'releaseArchive',
+  'secretCreate',
+  'secretRevoke',
+  'secretDelete',
+]);
 
 /**
  * @typedef {object} OpsHandlers
- * @property {(request: { backend: any, spec: any, session: any }) => any} open
+ * @property {(request: { backend: any, spec: any, session: any, archiveKey?: string }) => any} open
  *   the backend's TurnPorts for `session` (endpoint, publisher, tools; the
  *   ops facet adds `since`), held by the session for this incarnation
  * @property {(session: any) => any} liveChannel the session channel's publisher
@@ -70,6 +147,21 @@ const makeOpsInterface = () =>
  * @property {() => any} content M1b: this incarnation's Content
  * @property {() => any} [listPublisher] M1b: the list channel's publisher
  *   (W1b.5's `AH/list-channel.js`); refused without one
+ * @property {() => any} [history] M2 (W2.8): the `History` exo
+ * @property {(keys: string[]) => Promise<unknown>} [releaseBlobs] M2: delete
+ *   the blob files the manager's keys name (M1b 4.8)
+ * @property {(key: string) => Promise<unknown>} [releaseArchive] M2: delete
+ *   a session's archive (4.11)
+ * @property {(session?: any) => any} [writersFor] M2: BlobWriters for a
+ *   session, or for none yet
+ * @property {(request: any) => Promise<any>} [listModels] M2 (W2.2)
+ * @property {(request: any) => Promise<any>} [resolveModel] M2 (W2.2)
+ * @property {(request: any) => Promise<unknown>} [secretCreate] M2 (W2.3)
+ * @property {(key: string) => Promise<any>} [secretDescribe] M2 (W2.3)
+ * @property {(key: string) => Promise<unknown>} [secretRevoke] M2 (W2.3)
+ * @property {(key: string) => Promise<unknown>} [secretDelete] M2 (W2.3)
+ * @property {(request: any) => Promise<any>} [secretAudit] M2 (W2.3)
+ * @property {() => Promise<any>} [secretWriter] M2 (W2.3)
  */
 
 /**
@@ -79,7 +171,7 @@ const makeOpsInterface = () =>
 export const makeOps = (handlers, now = () => Date.now()) => {
   const since = now();
   return makeExo('AgentHostOps', makeOpsInterface(), {
-    /** @param {{ backend: any, spec: any, session: any }} request */
+    /** @param {{ backend: any, spec: any, session: any, archiveKey?: string }} request */
     open: request => harden({ ...handlers.open(request), since }),
     /** @param {any} session */
     liveChannel: session => handlers.liveChannel(session),
@@ -91,6 +183,29 @@ export const makeOps = (handlers, now = () => Date.now()) => {
         throw Error('this agent host has no session list feed yet');
       return handlers.listPublisher();
     },
+    ...Object.fromEntries(
+      M2_FORWARDS.map(name => [
+        name,
+        /** @param {any[]} args */
+        (...args) => {
+          const handler = /** @type {any} */ (handlers)[name];
+          if (handler === undefined) throw Error(textOf.notBuilt(name));
+          return handler(...args);
+        },
+      ]),
+    ),
+    ...Object.fromEntries(
+      M2_DONE.map(name => [
+        name,
+        /** @param {any[]} args */
+        async (...args) => {
+          const handler = /** @type {any} */ (handlers)[name];
+          if (handler === undefined) throw Error(textOf.notBuilt(name));
+          await handler(...args);
+          return undefined;
+        },
+      ]),
+    ),
   });
 };
 harden(makeOps);
