@@ -879,17 +879,38 @@ export const makeBwrapDriver = ({
     if (controls?.isCancelled?.()) {
       throw makeError(X`bwrap operation admission aborted`);
     }
-    try {
-      let parentStartTime = 'not-applicable';
-      if (process.platform === 'linux') {
-        const fs = await import('fs');
-        const parentStat = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8');
-        const closeParen = parentStat.lastIndexOf(')');
-        parentStartTime = parentStat.slice(closeParen + 2).split(' ')[19];
-        if (closeParen < 0 || parentStartTime === undefined) {
-          throw Error('could not read daemon process identity');
-        }
+    // Read the daemon's own process identity (pid plus kernel start time)
+    // so the anchor can tell this parent apart from a later reuse of its
+    // numeric pid.  This read is isolated from the spawn below so a `/proc`
+    // failure is reported as itself rather than misattributed to spawn.
+    let parentStartTime = 'not-applicable';
+    if (process.platform === 'linux') {
+      // Prefer the injected fs capability; reacquire the ambient module
+      // only when the factory was constructed without one.
+      const fs = fsModule ?? (await import('fs'));
+      let parentStat;
+      try {
+        parentStat = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8');
+      } catch (e) {
+        throw makeError(
+          X`could not read /proc/${q(process.pid)}/stat: ${q(/** @type {Error} */ (e).message)}`,
+        );
       }
+      const closeParen = parentStat.lastIndexOf(')');
+      parentStartTime = parentStat.slice(closeParen + 2).split(' ')[19];
+      if (closeParen < 0 || parentStartTime === undefined) {
+        throw makeError(X`could not read daemon process identity`);
+      }
+    }
+
+    // The ambient-fs fallback above may have yielded the turn; re-confirm
+    // the operation was not cancelled during that suspension before spawning.
+    slice.operations.assertOpen();
+    if (controls?.isCancelled?.()) {
+      throw makeError(X`bwrap operation admission aborted`);
+    }
+
+    try {
       child = cp.spawn(
         '/bin/sh',
         [
