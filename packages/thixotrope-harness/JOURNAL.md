@@ -6981,3 +6981,84 @@ next. The M2 ops methods without handlers (`listModels`, `resolveModel`, `secret
 `textOf.notBuilt`. (4) `scripted.js`: nothing to change; its context log digests the projection,
 which now includes the sealed part.
 Decision: for W2.2 (secrets and catalogue handlers) and W2.7 (`archiveKey` in `open`).
+
+### J-0430 2026-11-18 M2 model catalogue - good fit
+Evidence: `AH/providers/catalog.js` (`makeCatalog`), `AH/index.js` handlers `listModels` and
+`resolveModel`, `guest/factory/session-options.js` `catalogueModel`; tests
+`test/adapter/m2-w22-catalog.test.js` (12) and `test/unit/m2-w22-session-options.test.js` (5);
+commits 11cc52078a (contract), 075d89784f.
+Reading: the catalogue is the kind of state D-8 puts in the adapter: it is bound to a live
+connection, read with a credential no vat may see, and R4-67 says it is lost on a restart. So it
+lives in a per-incarnation `WeakMap` keyed by the manager's `Backend` presence (identity, no
+backend id), its reads use the grant's `readKey` (W2.3) in process, and a vat sees only a page
+of rows (<= `modelPageRows`, <= frameBytes) or a `ResolvedModel` of a few dozen bytes. The
+factory vat holds nothing new for listing: `SessionConfig` already carries `modelId`, and the
+resolver adds `contextLength` and `maxOutputTokens` to the creation's `resolved` (W2.7 copies
+them into the config). The session keeps what it was created with (R4-22): there is no path from
+a session back to the catalogue, so a later change of `HarnessSettings.defaultModelId` or of the
+provider's list cannot reach it; the unit test changes the default between two creations and
+the first keeps its model and window. Reads are single-flight and fail closed (hosted-agent's
+OpenRouter and Anthropic readers, ported); failure is a state, never a thrown cause, so no
+provider body or key text can reach a page, a log line or a creation error (tested with
+`BODY_MARKER` and the key text).
+Decision: as built.
+
+### J-0431 2026-11-18 M2 model catalogue - perf
+Evidence: `node test/adapter/m2-w22-catalog.bench.mjs`, twice; commit 075d89784f-dirty
+(the bench itself), worker 367e78ad..., crank budget 50 M, slot ceiling 4,000,000, collection
+schedule allocation, hub store log (recorded identity; Node only, no vat or hub exercised),
+Node 22.23.4, load average 1.92-1.98. A 4,096-model OpenRouter catalogue (the reader's bound)
+with 1,000-unit descriptions, 5.1 MB, from the fake server on 127.0.0.1.
+Reading: `catalog.read.cold` (key, GET, bounded read, validate, filter, sort, first page):
+median 20.3-20.5 ms, max 36-39 ms (n 5 each). `catalog.page.warm.first`: median 0.145-0.149
+ms, p99 0.55-4.6 ms (n 200); `catalog.page.warm.deep` (a cursor 90 % of the way down):
+median 0.145-0.15 ms; the cursor is found by a map lookup, so depth costs nothing. 196 pages of
+21 rows; the largest page is 23,840 bytes by the contract measure (frameBytes 24,576).
+`catalog.resolve.warm`: median 0.002 ms. One provider read served 1 + 196 + 400 calls (R4-104
+freshness). No budget exists for these rows in the M2 table; what a vat pays is one forward per
+call (factory -> manager -> adapter and back, about two cranks) and one page of at most
+frameBytes, as m2-interfaces 3.2 and 3.3 state. The daemon-path number (`SessionFactory.listModels`
+end to end) needs W2.7's forward and is left to W2.9.
+Decision: recorded; no budget re-based (D-M2-3).
+
+### J-0432 2026-11-18 M2 model catalogue - deviation
+Evidence: m2-interfaces.md 8.4 "W2.2 additions"; `guest/lib/interfaces.js` `ModelRequest`,
+`texts.modelRequired`.
+Reading: (1) **Who knows the default.** R4-20 marks the default row and chooses bare selection
+ids on the default backend, but the manager's `Backend` does not know which backend is the
+factory's default, and the factory passes the page through. Additive contract change:
+`ModelRequest` gains optional `defaultBackend` (compared by identity in the adapter) and
+`defaultModelId`, which the factory adds when it forwards; without them no row is default and
+every selection id is prefixed. (2) **No spec text** for an empty model on a non-default
+backend (R4-21): harness text `A model must be chosen for this backend`. It is also the answer
+when an API backend has no configured model and none is given. (3) **No default backend
+configured** (M1a tests, or an operator who has not run `configure`): an empty model takes the
+backend's own model instead of failing, so an unconfigured factory still works. (4) **Scripted**
+keeps M1a's rule and never asks the catalogue (no extra manager crank on every M1a/M1b
+creation); its catalogue is one row `scripted`. (5) **`maxOutputTokens`** in `ResolvedModel` is
+the spec's, never the catalogue's: R4-92 sends no output limit to OpenRouter by default, and
+storing the catalogue's top-provider limit would send one on every round. (6) **No reasoning
+efforts** on API rows (R4-23), although hosted-agent lists OpenRouter's. (7) A cursor that names
+no row of the current catalogue (the model left the list) ends the listing with an empty page,
+rather than restart it. (8) The OpenRouter read is `GET /models` (the spec's evidence; the fake
+server's route), not hosted-agent's account-filtered `/models/user` [real-provider: the owner
+should decide which the live account needs]. (9) The resolver line sits before W2.6's in the
+`optionResolvers` table, because W2.6's test asserts its line is last.
+Decision: (1) contract change 11cc52078a; the rest as built, for the PM.
+
+### J-0433 2026-11-18 M2 agent-host wiring - awkward
+Evidence: `AH/index.js` (075d89784f); `test/adapter/m2-w22-catalog.test.js` "through the ops
+facet".
+Reading: W2.2 is the group B owner of `AH/index.js`, so it wired W2.3's Secrets operations
+(m2-interfaces 2.3) as well as its own handlers. To meet J-0494's concern, the operations are
+built on the first Secrets call or key read, not at incarnation start: an incarnation that never
+meets a secret finds and creates no key file. Every API provider now gets `spec` and `readKey:
+() => secrets.readKey(spec.keyGrant)`, so W2.1a's "every round fails READ_FAILED" gap is closed
+in code. `makeAgentHostImpl` takes `catalog`, `secrets` and `fetch` options for tests. The index
+file was committed with only W2.2's hunks (`git hash-object` and `update-index`), because W2.1b's
+`anthropicKind` line and W2.7's `turnDeadline` resolver were uncommitted in the same working
+files. Not verified here: a daemon run that creates a secret, an OpenRouter backend on its grant
+and a session (acceptance 7 and 11 are W2.9's); no Ironhorse workload was run by this unit.
+Open for W2.7: pass `defaultBackend`/`defaultModelId` in the resolver context and in the
+`listModels` forward, and copy `resolved.contextLength`/`maxOutputTokens` into `SessionConfig`.
+Decision: as built; the factory half is W2.7's.
