@@ -296,7 +296,13 @@ const shapeSamples = {
   SealAnswer: { ...segmentEntry, from: 288, to: 576, firstTurn: 33 },
   SealedField: sealedField,
   SealedTextInfo: { bytes: 9000, preview: 'Hello', digest },
-  ModelRequest: { backend, after: 'openrouter:org/a', limit: 50 },
+  ModelRequest: {
+    backend,
+    after: 'openrouter:org/a',
+    limit: 50,
+    defaultBackend: backend,
+    defaultModelId: 'org/a',
+  },
   ModelRow: modelRow,
   ModelPage: { rows: [modelRow], state: 'ok', next: 'openrouter:org/model' },
   ResolvedModel: {
@@ -864,6 +870,7 @@ test('the fixed M2 texts', t => {
     texts.catalogUnavailable,
     'Model catalog unavailable for the provider backend; no model can be admitted now',
   );
+  t.is(texts.modelRequired, 'A model must be chosen for this backend');
   t.is(textOf.openRouterHttp(429), 'OpenRouter request failed (HTTP 429)');
   t.is(
     textOf.openRouterTimeout(3600),

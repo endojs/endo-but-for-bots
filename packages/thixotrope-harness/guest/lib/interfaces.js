@@ -267,6 +267,12 @@ export const texts = harden({
   catalogUnavailable:
     'Model catalog unavailable for the provider backend; no model can be admitted now',
   /**
+   * Harness (R4-21: no backend but the factory's default accepts an empty
+   * model; the spec gives no text): a creation on another backend without
+   * a model, or on an API backend that has no configured model.
+   */
+  modelRequired: 'A model must be chosen for this backend',
+  /**
    * Harness (R4-79: no provider body in failure text): the Anthropic API
    * could not be reached or answered something unreadable (OpenRouter's
    * wording, R4-74).
@@ -2093,6 +2099,13 @@ const m2ShapeBuilders = {
         backend: M.remotable('Backend'),
         after: text(limits.modelCursorUnits),
         limit: M.and(count, M.lte(limits.modelPageRows)),
+        // W2.2 (R4-20): the factory's default backend and configured model,
+        // added by the factory when it forwards to `Backend.listModels`, so
+        // the catalogue can mark the default row and choose bare selection
+        // ids on the default backend. Absent: no row is default and every
+        // selection id is `<label>:<model>`.
+        defaultBackend: M.remotable('Backend'),
+        defaultModelId: S.ModelId,
       },
     ),
   /** A.4 model row, object style (R4-20): `backend` replaces the backend id. */

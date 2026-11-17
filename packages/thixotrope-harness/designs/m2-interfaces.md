@@ -883,6 +883,49 @@ acceptance 11.
 `SessionFactory.listBackends()` answers `HarnessSettings.backends`; `listModels({ backend? })`
 forwards to that backend (default: the default backend), W2.7.
 
+W2.2 additions (contract commit of W2.2):
+
+- **`ModelRequest.defaultBackend`, `ModelRequest.defaultModelId`** (optional, additive). The
+  manager's `Backend` does not know which backend is the factory's default, nor the factory's
+  configured model, and the rows of a page must already carry `default` and `selectionId` when
+  the factory passes the answer through. So the factory, when it forwards
+  `SessionFactory.listModels` to `Backend.listModels`, adds `defaultBackend:
+  HarnessSettings.defaultBackend` and, when set, `defaultModelId: HarnessSettings.defaultModelId`.
+  The catalogue compares `defaultBackend` with the backend it lists (object identity, no name);
+  the default row is the one whose model is `defaultModelId ?? spec.modelId`. Without
+  `defaultBackend` no row is default and every selection id is `<label>:<model>`. `backend` in a
+  request is the factory's routing field and is ignored by `Backend.listModels`.
+- **Creation resolver context.** `resolveCreateOptions(options, context)`: `context` gains
+  optional `defaultBackend` and `defaultModelId` (from `HarnessSettings`), which the factory
+  (W2.7) passes. The resolvers then: a creation without `backend` takes `defaultBackend`
+  (else `texts.noBackend` as M1a); the model of a `scripted` backend is resolved as in M1a (no
+  catalogue); on an API backend, an empty model on the default backend asks
+  `Backend.resolveModel(defaultModelId)` (or `resolveModel()`, the spec's model, when the
+  factory has no default model); an empty model on any other backend fails
+  `texts.modelRequired` unless the factory has no default backend at all (then the backend's own
+  model, as on the default backend); a given model is pinned and checked by
+  `Backend.resolveModel(modelId)`. The resolver fills `resolved.modelId` and, when the answer
+  has them, `resolved.contextLength` and `resolved.maxOutputTokens`; the factory (W2.7) copies
+  those two into `SessionConfig` (R4-22, R4-33).
+- **`ResolvedModel`**: `contextLength` is the catalogue row's (R4-33); `maxOutputTokens` is the
+  backend spec's `maxOutputTokens` when set, never the catalogue's (R4-92: OpenRouter sends no
+  output limit by default; the Anthropic provider uses 4,096 when absent). Rows show the
+  catalogue's own `maxOutputTokens`.
+- **Rows.** API rows list no reasoning effort (R4-23: only subscription backends have one). A
+  title is cut to `labelUnits`, a description to `modelDescriptionUnits`; a model whose id is
+  over `modelIdUnits` or whose selection id is over `modelCursorUnits` is left out. A page holds
+  at most `limit` (default `modelPageRows`) rows and is cut further so it fits `frameBytes` by
+  the contract measure; `next` is then the last row's selection id. A cursor naming no row of
+  the current catalogue answers an empty `ok` page without `next`.
+- **`scripted`** (test double): `listModels` answers one row, model `scripted`; `resolveModel`
+  accepts any model id.
+- **Reads.** OpenRouter `GET <baseUrl>/models` (bearer key); Anthropic `GET
+  <baseUrl>/v1/models?limit=1000[&after_id=]` (`x-api-key`, `anthropic-version: 2023-06-01`), at
+  most 16 pages. OpenRouter rows are kept only for models with text in and out and `tools` among
+  the supported parameters (hosted-agent `modelsFromOpenRouterCatalog`). Any defect (status,
+  shape, more than 4,096 models, a body over 16 MiB, a 20 s timeout) fails the whole read; no
+  provider body is read on a non-2xx answer or shown anywhere.
+
 ---
 
 ## 9. Secrets, minimal (W2.3; D-6, R7-15, R7-22..R7-28)
@@ -1009,7 +1052,7 @@ guest rules; "Node" = adapter or tests.
 | file | export | signature |
 |---|---|---|
 | `AH/providers/catalog.js` | `makeCatalog({ fetch?, now?, timers }) -> { listModels({ backend, spec, readKey, request }) -> Promise<ModelPage>, resolveModel({ backend, spec, readKey, modelId, defaults }) -> Promise<ResolvedModel> }` | 8.4 |
-| `guest/factory/session-options.js` (vat; hook line) | a resolver filling `modelId`, `contextLength`, `maxOutputTokens` | 8.4 |
+| `guest/factory/session-options.js` (vat; hook line) | a resolver filling `modelId`, `contextLength`, `maxOutputTokens`; `OptionsContext` gains `defaultBackend?`, `defaultModelId?` | 8.4 |
 
 ### W2.3
 
@@ -1115,6 +1158,7 @@ Exact strings are in `interfaces.js`; `m2-interfaces.test.js` checks them.
 | `textOf.openRouterNoMessage(details)` | `OpenRouter returned no successful assistant message<details>` | R4-79 (lal :394; finish reason `error`, or a stream with no choice) |
 | `texts.openRouterModelPrefix` | `OpenRouter model must include its organization prefix` | R4-21 (Fae `session/provider-connections.js:546`) |
 | `texts.catalogUnavailable` | `Model catalog unavailable for the provider backend; no model can be admitted now` | A.4 (Fae :590) |
+| `texts.modelRequired` | `A model must be chosen for this backend` | harness (R4-21 gives no text; W2.2) |
 | `textOf.unknownProviderModel(id)` | `Unknown model "<id>" for the provider backend` | A.4 (Fae :600) |
 | `textOf.secretFailed(code)` | `Secret operation failed: "<code>"`, code in `secretCodes` | R7-24 (daemon `secret-manager.js:27`) |
 | `textOf.anthropicHttp(status)`, `texts.anthropicUnreachable`, `textOf.anthropicTimeout(s)` | `Anthropic API request failed (HTTP <status>)`; `Anthropic API could not be reached or sent an unreadable response`; `Anthropic API did not answer within <s> seconds` | harness (R4-79: no body; OpenRouter's wording) |
