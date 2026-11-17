@@ -30,7 +30,7 @@ test('deliveries are counted, timed and bucketed by wall time', async t => {
   const worker = await engine.start(/** @type {any} */ ({}));
   for (let i = 0; i < 7; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    await worker.deliver(new Uint8Array());
+    await worker.deliver(/** @type {any} */ ({}));
   }
   await worker.snapshot();
   t.is(timings().delivery.count, 7);
