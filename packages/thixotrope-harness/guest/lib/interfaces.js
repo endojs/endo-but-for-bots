@@ -3,8 +3,18 @@
  * The M1a interface contract (milestones.md M1a W1a.0; architecture.md
  * sections 3, 4 and 9; `designs/m1a-interfaces.md` says who calls each method,
  * in which crank, answered or sendOnly, the largest message, and what a
- * retired break from it means), and M1b's (W1b.0: `m1bShapes`,
- * `m1bInterfaces`, in-place `staged(...)` widenings; `designs/m1b-interfaces.md`).
+ * retired break from it means), M1b's (W1b.0; `designs/m1b-interfaces.md`)
+ * and M2's (W2.0; `designs/m2-interfaces.md`).
+ *
+ * Tables (M2 W2.0 folded M1b's into M1a's): `shapes`, `interfaces` and
+ * `methodNames` hold every M1a, M1b and M2 entry; where M1b extended an M1a
+ * interface the table holds the M1b version. `m1bShapes`, `m1bInterfaces`
+ * and `m1bMethodNames` remain as views of the M1b names over the folded
+ * tables (the same objects), for modules written against them.
+ * `m2Interfaces` and `m2MethodNames` hold the M2 versions of the interfaces
+ * M2 extends: the unit that implements an M2 method switches that exo from
+ * `interfaces.X` to `m2Interfaces.X` (m2-interfaces.md 1.3). Interfaces new
+ * in M2 are in `interfaces` directly.
  *
  * Every object that crosses between M1a's units has its `M.interface` guard
  * here; every record that crosses has a closed `M.splitRecord` shape with a
@@ -104,6 +114,27 @@ const lazyTable = builders => {
     });
   }
   return harden(table);
+};
+
+/**
+ * A hardened view of some names of a lazy table: each property reads the
+ * table's (the same object). The M1b tables are such views since M2 W2.0
+ * folded them into the main tables.
+ * @param {readonly string[]} names
+ * @param {any} table
+ */
+const viewOf = (names, table) => {
+  /** @type {any} */
+  const view = {};
+  for (const name of names) {
+    // The names are this module's own table keys, fixed in its source.
+    // eslint-disable-next-line thixotrope-harness-guest/no-data-keys
+    Object.defineProperty(view, name, {
+      enumerable: true,
+      get: () => table[name],
+    });
+  }
+  return harden(view);
 };
 
 // ---------------------------------------------------------------- texts
@@ -213,6 +244,55 @@ export const texts = harden({
   blobNotOwned: 'This blob belongs to another session',
   /** BlobWriter.append or close after close or abort. */
   writerClosed: 'This blob writer is closed',
+
+  // ---- M2 (m2-interfaces.md section 14) ----
+  /**
+   * R4-77 (Fae providers/anthropic-streaming.js:170 at 1315bef86): a 401
+   * from the Anthropic API.
+   */
+  anthropicAuthFailed:
+    'Anthropic API authentication failed (invalid or expired API key). Check the configured Secret.',
+  /**
+   * R4-78 (lal providers/openrouter.js:515): appended, after a blank line,
+   * to a reply the model cut at its own output limit.
+   */
+  outputLimitNote: '[The model stopped here: it reached its own output limit.]',
+  /** R4-74 (lal providers/openrouter.js:337): network failure or unreadable answer. */
+  openRouterUnreachable:
+    'OpenRouter could not be reached or sent an unreadable response',
+  /** R4-21 (Fae session/provider-connections.js:546): OpenRouter ids are `org/model`. */
+  openRouterModelPrefix:
+    'OpenRouter model must include its organization prefix',
+  /** A.4 creation error (Fae session/provider-connections.js:590). */
+  catalogUnavailable:
+    'Model catalog unavailable for the provider backend; no model can be admitted now',
+  /**
+   * Harness (R4-79: no provider body in failure text): the Anthropic API
+   * could not be reached or answered something unreadable (OpenRouter's
+   * wording, R4-74).
+   */
+  anthropicUnreachable:
+    'Anthropic API could not be reached or sent an unreadable response',
+  /** Harness (R4-9): a session being deleted takes no new work. */
+  sessionDeleting: 'This session is being deleted',
+  /**
+   * Harness (D-M2-1, m2-interfaces.md 4.9): `Turn.getContent` or
+   * `Session.findTurn` of a turn whose records were sealed into the
+   * archive; read it through the agent host's `History`.
+   */
+  turnSealed: 'This turn is archived; read it through the history service',
+  /**
+   * Harness (m2-interfaces.md 4.6): `Turn.resolve` of an archived
+   * outcome-unknown turn the session no longer keeps (more than
+   * `maxUnresolvedTurns` were waiting).
+   */
+  turnArchivedUnresolvable:
+    'This turn is archived and can no longer be resolved',
+  /**
+   * Harness (m2-interfaces.md 4.8): a `ContextSource` cursor below the
+   * session's sealed boundary.
+   */
+  recordsSealed: 'These records are archived',
 });
 
 /**
@@ -373,15 +453,130 @@ export const textOf = harden({
    */
   blobDaemonQuota: (bytes, held, quota) =>
     `the daemon's staged text would exceed its disk quota: ${bytes} more bytes on top of ${held}, quota ${quota} bytes`,
+
+  // ---- M2 (m2-interfaces.md section 14) ----
+  /**
+   * R4-74 (lal providers/openrouter.js:359): a non-2xx answer.
+   * @param {number} status
+   */
+  openRouterHttp: status => `OpenRouter request failed (HTTP ${status})`,
+  /**
+   * R4-74, R4-93 (lal providers/openrouter.js:335): the request timeout.
+   * @param {number} seconds
+   */
+  openRouterTimeout: seconds =>
+    `OpenRouter did not answer within ${seconds} seconds`,
+  /**
+   * R4-74 (lal providers/openrouter.js:437-441): the last failure after
+   * retries.
+   * @param {string} failure
+   * @param {number} attempts
+   */
+  afterAttempts: (failure, attempts) =>
+    attempts > 1 ? `${failure}, after ${attempts} attempts` : failure,
+  /**
+   * R4-78 (lal providers/openrouter.js:458, 471): content filtering, or a
+   * length stop with no text. `served` is `textOf.servedBy(...)` or ''.
+   * @param {'content_filter' | 'length'} reason
+   * @param {string} served
+   */
+  openRouterStopped: (reason, served) =>
+    `OpenRouter completion stopped: ${reason}${served}`,
+  /**
+   * R4-78 (lal providers/openrouter.js:497): an answer with neither text
+   * nor tool calls. `details` as `served`.
+   * @param {string} details
+   */
+  openRouterEmpty: details =>
+    `OpenRouter returned an empty assistant response${details}`,
+  /**
+   * The parenthesised detail of OpenRouter failures (lal
+   * providers/openrouter.js:148-156): ` (served by m, via p)`, or ''.
+   * Values are the provider's model and provider names only, never a body.
+   * @param {readonly [string, string][]} parts label and value pairs
+   */
+  servedBy: parts =>
+    parts.length === 0
+      ? ''
+      : ` (${parts.map(([label, value]) => `${label} ${value}`).join(', ')})`,
+  /**
+   * Harness (R4-79): an Anthropic API answer other than 2xx or 401.
+   * @param {number} status
+   */
+  anthropicHttp: status => `Anthropic API request failed (HTTP ${status})`,
+  /**
+   * Harness (G-04, R4-93): the Anthropic request timeout.
+   * @param {number} seconds
+   */
+  anthropicTimeout: seconds =>
+    `Anthropic API did not answer within ${seconds} seconds`,
+  /**
+   * A.4 creation error (Fae session/provider-connections.js:600).
+   * @param {string} modelId
+   */
+  unknownProviderModel: modelId =>
+    `Unknown model "${modelId}" for the provider backend`,
+  /**
+   * R7-24 (daemon secret-manager.js:27 at 1315bef86): every Secrets
+   * failure is one of the fixed codes (`secretCodes`), never secret bytes.
+   * @param {string} code
+   */
+  secretFailed: code => `Secret operation failed: "${code}"`,
+  /**
+   * Harness (R4-48 departure, G-06; m2-interfaces.md 10): the turn deadline
+   * (`turnDeadlineMs`, off by default) fired.
+   * @param {number} ms
+   */
+  turnDeadline: ms =>
+    `The turn ran longer than its ${ms} ms deadline and was stopped`,
+  /**
+   * The op id of a turn's deadline timer (architecture 8).
+   * @param {string} turnId
+   */
+  turnDeadlineOpId: turnId => `${turnId}/deadline`,
+  /**
+   * Harness (m2-interfaces.md 4.4): sealing failed; nothing was dropped and
+   * the session seals again later. Also the failure of an archive read.
+   * @param {string} message
+   */
+  archiveFailed: message => `could not archive turns: ${message}`,
+  /**
+   * M2 switching rule (m2-interfaces.md 1.3): an M2 method whose unit has
+   * not built it yet. Nothing may answer with this after W2.9.
+   * @param {string} method
+   */
+  notBuilt: method => `not built yet: ${method}`,
 });
+
+/**
+ * R7-24 (daemon secret-manager.js at 1315bef86): the fixed codes of
+ * Secrets failures and audit events; `textOf.secretFailed(code)`.
+ */
+export const secretCodes = harden([
+  'INVALID_DESCRIPTION',
+  'INVALID_SECRET_BYTES',
+  'UNKNOWN_SECRET',
+  'UNKNOWN_GRANT',
+  'REVOKED',
+  'STALE_READ',
+  'READ_FAILED',
+  'INVALID_GENERATION',
+  'GENERATION_CONFLICT',
+  'REPLACE_FAILED',
+  'NOT_REVOKED',
+  'DELETE_FAILED',
+  'INVALID_LIMIT',
+  'CREATE_FAILED',
+]);
 
 // ---------------------------------------------------------------- shapes
 
 /**
- * Every shape, by name, built on first use and kept (see `lazyTable`).
- * Senders' checks, tests and the gateway key guard read these.
+ * M1a's shapes (W1a.0), widened in place by M1b (`staged(...)`) and M2
+ * (optional fields; m2-interfaces.md 1.4). `shapes` below holds them with
+ * M1b's and M2's.
  */
-export const shapes = lazyTable({
+const m1aShapeBuilders = {
   Id: () => text(limits.idUnits),
   Label: () => text(limits.labelUnits),
   Reason: () => text(limits.reasonUnits),
@@ -407,7 +602,8 @@ export const shapes = lazyTable({
   Phase: () =>
     M.or('thinking', 'using tools', 'compacting context', 'cancelling'),
   Activity: () => M.or('passive', 'working', 'error'),
-  Lifecycle: () => M.or('creating', 'ready', 'error', 'lost'),
+  // M2: `deleting` while deleteSession runs (R4-9; m2-interfaces.md 7).
+  Lifecycle: () => M.or('creating', 'ready', 'error', 'lost', 'deleting'),
   HoldReason: () =>
     M.or('restart', 'stopped', 'refused', 'interrupted', 'unavailable'),
   ContextReading: () => record({ usedTokens: count, windowTokens: count }),
@@ -550,7 +746,10 @@ export const shapes = lazyTable({
         sink: M.remotable('TurnSink'),
         turnId: S.Id,
         round: count,
-        base: record({ count, epoch: count }),
+        // M2: `archive` once the session has sealed segments (D-M2-1;
+        // m2-interfaces.md 4.8): records before `archive.sealedTo` are
+        // in the archive, not in the vat.
+        base: record({ count, epoch: count }, { archive: S.ArchiveState }),
         append: list(S.TurnRecord, limits.maxAppendRecords),
         tools: list(S.ToolDescription, limits.maxToolsPerRound),
         options: record(
@@ -558,7 +757,8 @@ export const shapes = lazyTable({
           { reasoningEffort: text(limits.effortUnits), maxOutputTokens: count },
         ),
       },
-      { context: M.remotable('ContextSource'), system: S.Text },
+      // M2: `system` may be staged (a composed prompt over inlineBytes).
+      { context: M.remotable('ContextSource'), system: staged(S.Text) },
     ),
   /** `TurnSink.roundFinal` argument. */
   RoundResult: () =>
@@ -604,6 +804,8 @@ export const shapes = lazyTable({
         content: M.remotable('Content'),
         writers: M.remotable('BlobWriters'),
         timer: M.remotable('Timer'),
+        // M2 (D-M2-1): this session's archive port in this incarnation.
+        archive: M.remotable('ArchivePort'),
       },
     ),
   /** `AdapterTool.execute` argument; M1b: `args` may be staged (W1b.1, 6.4). */
@@ -647,7 +849,13 @@ export const shapes = lazyTable({
         duplicate: M.boolean(),
         state: M.or('queued', 'started'),
       },
-      { entry: M.remotable('QueueEntry'), turn: M.remotable('Turn') },
+      // M2: a started receipt of an archived turn names it by `turnId`
+      // only (m2-interfaces.md 5.3).
+      {
+        entry: M.remotable('QueueEntry'),
+        turn: M.remotable('Turn'),
+        turnId: S.Id,
+      },
     ),
   PresetSnapshot: () => record({ label: S.Label }),
   SessionInfo: () =>
@@ -679,10 +887,15 @@ export const shapes = lazyTable({
       },
       { cut: M.boolean() },
     ),
+  /**
+   * M2: `archived` when the turns before `next` are sealed (read them
+   * through `History.page`); `archive` whenever the session has sealed
+   * segments (m2-interfaces.md 4.9).
+   */
   HistoryPage: () =>
     record(
       { turns: list(S.TurnPreview, limits.historyPageTurns) },
-      { next: S.Cursor },
+      { next: S.Cursor, archived: M.boolean(), archive: S.ArchiveState },
     ),
   CurrentTurn: () =>
     record({
@@ -866,7 +1079,16 @@ export const shapes = lazyTable({
         createdAt: count,
         userInitiated: M.boolean(),
       },
-      { reasoningEffort: text(limits.effortUnits) },
+      {
+        reasoningEffort: text(limits.effortUnits),
+        // M2: the prompt composed at creation (R4-26..R4-28), staged when
+        // over inlineBytes; the window of the resolved model (R4-33); the
+        // turn deadline (0 or absent: off; m2-interfaces.md 10).
+        systemPrompt: staged(S.Text),
+        contextLength: count,
+        maxOutputTokens: count,
+        turnDeadlineMs: count,
+      },
     ),
   SessionServices: () =>
     record(
@@ -943,15 +1165,42 @@ export const shapes = lazyTable({
       { input: S.SubmissionText },
     ),
   Script: () => record({ turns: list(S.ScriptTurn, limits.scriptRounds) }),
+  /** M2: the backend kinds (R4-12, R4-13); `scripted` is the test double. */
+  BackendKind: () => M.or('scripted', 'openrouter', 'anthropic'),
+  /**
+   * `AgentHostAdmin.makeBackend` argument. M2 adds the API kinds: the key is
+   * a `ReadGrant` (D-6, R7-28), never a value; `modelId` is the slot's
+   * configured model (R4-21, R4-88); `baseUrl` points a test at the fake
+   * server (F.2 c); `timeoutMs` is the request timeout (R4-93).
+   */
   BackendSpec: () =>
-    record(
-      { kind: 'scripted', label: S.Label, script: S.Script },
-      { logPath: text(4096) },
+    M.or(
+      record(
+        { kind: 'scripted', label: S.Label, script: S.Script },
+        { logPath: text(4096) },
+      ),
+      record(
+        {
+          kind: M.or('openrouter', 'anthropic'),
+          label: S.Label,
+          keyGrant: M.remotable('ReadGrant'),
+        },
+        {
+          modelId: S.ModelId,
+          baseUrl: text(limits.urlUnits),
+          timeoutMs: count,
+          maxOutputTokens: count,
+          logPath: text(4096),
+        },
+      ),
     ),
-  BackendInfo: () => record({ kind: 'scripted', label: S.Label }),
-});
-/** Shorthand inside this module. */
-const S = shapes;
+  BackendInfo: () =>
+    record(
+      { kind: S.BackendKind, label: S.Label },
+      // M2: the default model of an API backend (R4-21, R4-88).
+      { modelId: S.ModelId },
+    ),
+};
 
 export const echoArgumentNames = harden(['text', 'delayMs', 'bytes', 'data']);
 
@@ -1011,7 +1260,7 @@ const view = name => {
       'HistoryPage',
       record(
         { turns: list(preview, limits.historyPageTurns) },
-        { next: S.Cursor },
+        { next: S.Cursor, archived: M.boolean(), archive: S.ArchiveState },
       ),
     );
     views.set(
@@ -1027,12 +1276,9 @@ const view = name => {
 };
 
 /**
- * Every interface guard by its interface name, built on first use and kept:
- * `makeExo('Session', interfaces.Session, methods)`.
- */
-/**
- * Method guards of interfaces M1b extends, shared by `interfaces` (M1a) and
- * `m1bInterfaces` (M1a's methods first, then M1b's).
+ * Method guards of interfaces later milestones extend: the M1a methods, then
+ * (in `foldedMethods` below) M1b's, then (in `m2InterfaceBuilders`) M2's,
+ * always in that order.
  */
 const methodsOf = harden({
   Turn: () => ({
@@ -1068,47 +1314,66 @@ const methodsOf = harden({
     findSession: M.call(S.Id).returns(R('Session')),
     listPresets: M.call().returns(list(R('Preset'), 64)),
   }),
+  Session: () => ({
+    getInfo: M.call().returns(S.SessionInfo),
+    rename: M.call(text(limits.titleUnits)).returns(done),
+    watch: M.call().returns(S.WatchSnapshot),
+    enqueueOnce: M.call(
+      S.Submission,
+      text(limits.requestIdUnits),
+      count,
+    ).returns(S.Receipt),
+    getSubmissionReceipt: M.call(text(limits.requestIdUnits)).returns(
+      M.or(done, S.Receipt),
+    ),
+    listPending: M.call().returns(S.PendingView),
+    startTurn: M.call(S.Submission).optional(count).returns(R('Turn')),
+    getCurrentTurn: M.call().returns(M.or(done, view('CurrentTurn'))),
+    getHistoryPage: M.call().optional(S.Cursor).returns(view('HistoryPage')),
+    getUsage: M.call().returns(S.UsageTotals),
+  }),
+  SessionInternal: () => ({
+    rowSnapshot: M.call().returns(S.RowPatch),
+  }),
+  QueueEntry: () => ({
+    describe: M.call().returns(S.EntryInfo),
+    cancel: M.call().returns(M.boolean()),
+  }),
+  Backend: () => ({
+    describe: M.call().returns(S.BackendInfo),
+    open: M.callWhen(R('SessionHostFacet')).returns(S.TurnPorts),
+  }),
+  Composer: () => ({
+    submit: M.callWhen(
+      R('Session'),
+      M.string({ stringLengthLimit: limits.messageUnits }),
+      text(limits.requestIdUnits),
+    ).returns(S.Receipt),
+  }),
+  Operator: () => ({
+    getFactory: M.call().returns(R('SessionFactory')),
+  }),
 });
 
-export const interfaces = lazyTable({
+/**
+ * M1a's interface guards (W1a.0). `interfaces` below holds them with M1b's
+ * (whose versions replace the M1a ones they extend) and M2's new ones.
+ */
+const m1aInterfaceBuilders = {
   // ---- session vat (W1a.4, W1a.5) ----
 
   /** The session's public facet (architecture 3.2; A.4 session facet). */
-  Session: () =>
-    M.interface('Session', {
-      getInfo: M.call().returns(S.SessionInfo),
-      rename: M.call(text(limits.titleUnits)).returns(done),
-      watch: M.call().returns(S.WatchSnapshot),
-      enqueueOnce: M.call(
-        S.Submission,
-        text(limits.requestIdUnits),
-        count,
-      ).returns(S.Receipt),
-      getSubmissionReceipt: M.call(text(limits.requestIdUnits)).returns(
-        M.or(done, S.Receipt),
-      ),
-      listPending: M.call().returns(S.PendingView),
-      startTurn: M.call(S.Submission).optional(count).returns(R('Turn')),
-      getCurrentTurn: M.call().returns(M.or(done, view('CurrentTurn'))),
-      getHistoryPage: M.call().optional(S.Cursor).returns(view('HistoryPage')),
-      getUsage: M.call().returns(S.UsageTotals),
-    }),
+  Session: () => M.interface('Session', methodsOf.Session()),
 
   /** Held only by the factory (architecture 3.2). */
   SessionInternal: () =>
-    M.interface('SessionInternal', {
-      rowSnapshot: M.call().returns(S.RowPatch),
-    }),
+    M.interface('SessionInternal', methodsOf.SessionInternal()),
 
   /** One turn (A.4 turn handle, object style). */
   Turn: () => M.interface('Turn', methodsOf.Turn()),
 
   /** One waiting queue entry (A.4 queue; edit and sendNow arrive in M2). */
-  QueueEntry: () =>
-    M.interface('QueueEntry', {
-      describe: M.call().returns(S.EntryInfo),
-      cancel: M.call().returns(M.boolean()),
-    }),
+  QueueEntry: () => M.interface('QueueEntry', methodsOf.QueueEntry()),
 
   /** Passed in every startRound; the adapter reports the round through it. */
   TurnSink: () => M.interface('TurnSink', methodsOf.TurnSink()),
@@ -1170,23 +1435,12 @@ export const interfaces = lazyTable({
     }),
 
   /** Gateway-local submissions (D-12); stamps `at`. */
-  Composer: () =>
-    M.interface('Composer', {
-      submit: M.callWhen(
-        R('Session'),
-        M.string({ stringLengthLimit: limits.messageUnits }),
-        text(limits.requestIdUnits),
-      ).returns(S.Receipt),
-    }),
+  Composer: () => M.interface('Composer', methodsOf.Composer()),
 
   // ---- agent-host manager vat objects (W1a.2); durable ----
 
   /** A configured backend (architecture 3.3); held by the factory and sessions. */
-  Backend: () =>
-    M.interface('Backend', {
-      describe: M.call().returns(S.BackendInfo),
-      open: M.callWhen(R('SessionHostFacet')).returns(S.TurnPorts),
-    }),
+  Backend: () => M.interface('Backend', methodsOf.Backend()),
 
   /** Minted per session by forSession(); given only to that session's vat. */
   SessionHostFacet: () =>
@@ -1232,10 +1486,7 @@ export const interfaces = lazyTable({
     M.interface('SessionFactory', methodsOf.SessionFactory()),
 
   /** The one object the gateway publishes (F.1 #10). */
-  Operator: () =>
-    M.interface('Operator', {
-      getFactory: M.call().returns(R('SessionFactory')),
-    }),
+  Operator: () => M.interface('Operator', methodsOf.Operator()),
 
   /** Inventory label `harness`; operator-only through the control socket. */
   HarnessRoot: () =>
@@ -1251,14 +1502,10 @@ export const interfaces = lazyTable({
         record({ complete: M.boolean(), bytes: count }),
       ),
     }),
-});
+};
 
-/**
- * Method names per interface, in declaration order (the gateway key guard
- * and the docs read these; a guard's payload is not reachable from the
- * prelude).
- */
-export const methodNames = harden({
+/** M1a's method names per interface, in declaration order. */
+const m1aMethodNames = harden({
   Session: [
     'getInfo',
     'rename',
@@ -1339,8 +1586,8 @@ export const execDescription = harden({
   }),
 });
 
-/** Every M1b shape, by name, built on first use (see `lazyTable`). */
-export const m1bShapes = lazyTable({
+/** M1b's shapes (W1b.0); in `shapes` since M2 W2.0. */
+const m1bShapeBuilders = {
   /**
    * Text over inlineBytes (D-15; m1b-interfaces.md 4). `digest` (M1b
    * follow-ups, J-9360): the SHA-256 of the text's UTF-8 bytes, 64 lowercase
@@ -1471,7 +1718,12 @@ export const m1bShapes = lazyTable({
       refilling: count,
       target: B.PoolCounts,
     }),
-  /** `HarnessRoot.configure` argument (operator settings, architecture 9). */
+  /**
+   * `HarnessRoot.configure` argument (operator settings, architecture 9).
+   * M2 (m2-interfaces.md 8.5, 10): the backends `listBackends` offers, the
+   * default backend and model of a creation that names none (R4-21, R4-88),
+   * and the turn deadline (0: off).
+   */
   HarnessSettings: () =>
     record(
       {},
@@ -1479,6 +1731,10 @@ export const m1bShapes = lazyTable({
         spareSessions: M.and(count, M.lte(limits.maxSpares)),
         spareExec: M.and(count, M.lte(limits.maxSpares)),
         execDeadlineMs: M.and(count, M.gte(1000), M.lte(limits.maxDelayMs)),
+        backends: list(M.remotable('Backend'), limits.maxBackends),
+        defaultBackend: M.remotable('Backend'),
+        defaultModelId: S.ModelId,
+        turnDeadlineMs: M.and(count, M.lte(limits.maxTurnDeadlineMs)),
       },
     ),
   ProgramInfo: () => record({ digest: text(64), bytes: count }),
@@ -1487,9 +1743,7 @@ export const m1bShapes = lazyTable({
       { sessions: count, program: B.ProgramInfo },
       { execProgram: B.ProgramInfo, pool: B.PoolStatus },
     ),
-});
-/** Shorthand inside this module. */
-const B = m1bShapes;
+};
 
 /**
  * Structural return guards of record pages (records as keys, J-9156).
@@ -1509,8 +1763,39 @@ const pageView = name => {
   return pageViews.get(name);
 };
 
-/** Every M1b interface guard, built on first use. */
-export const m1bInterfaces = lazyTable({
+/**
+ * Method guards of the M1b versions that M2 extends again (M1a's methods
+ * first, then M1b's).
+ */
+const foldedMethodsOf = harden({
+  ContextSource: () => ({
+    page: M.call().optional(S.Cursor).returns(pageView('ContextPage')),
+  }),
+  AgentHostAdmin: () => ({
+    ...methodsOf.AgentHostAdmin(),
+    content: M.callWhen().returns(R('Content')),
+    listPublisher: M.callWhen().returns(R('ListPublisher')),
+  }),
+  SessionFactory: () => ({
+    ...methodsOf.SessionFactory(),
+    sessionListFeed: M.call().returns(B.ListFeedInfo),
+  }),
+  HarnessRoot: () => ({
+    getOperator: M.call().returns(R('Operator')),
+    status: M.call().returns(B.HarnessStatus),
+    loadSessionProgram: M.call(S.ProgramPiece).returns(
+      record({ complete: M.boolean(), bytes: count }),
+    ),
+    loadExecProgram: M.call(S.ProgramPiece).returns(
+      record({ complete: M.boolean(), bytes: count }),
+    ),
+    configure: M.call(B.HarnessSettings).returns(B.PoolStatus),
+    whenSettled: M.callWhen().returns(B.PoolStatus),
+  }),
+});
+
+/** M1b's interface guards (W1b.0); in `interfaces` since M2 W2.0. */
+const m1bInterfaceBuilders = {
   // ---- blobs and content (W1b.1) ----
 
   /** Manager-minted handle (D-15); no methods: read it through Content. */
@@ -1559,9 +1844,7 @@ export const m1bInterfaces = lazyTable({
     }),
   /** The session's records for the adapter's context cache (W1b.2; D-9). */
   ContextSource: () =>
-    M.interface('ContextSource', {
-      page: M.call().optional(S.Cursor).returns(pageView('ContextPage')),
-    }),
+    M.interface('ContextSource', foldedMethodsOf.ContextSource()),
 
   // ---- exec (W1b.3 vat, W1b.5 handle) ----
 
@@ -1607,11 +1890,7 @@ export const m1bInterfaces = lazyTable({
 
   /** M1a AgentHostAdmin + `content`, `listPublisher`. */
   AgentHostAdmin: () =>
-    M.interface('AgentHostAdmin', {
-      ...methodsOf.AgentHostAdmin(),
-      content: M.callWhen().returns(R('Content')),
-      listPublisher: M.callWhen().returns(R('ListPublisher')),
-    }),
+    M.interface('AgentHostAdmin', foldedMethodsOf.AgentHostAdmin()),
   /**
    * M1a StartListener + `attached` (M1b follow-ups, J-9362): the manager
    * tells its start listeners, sendOnly, each time a new adapter incarnation
@@ -1626,48 +1905,558 @@ export const m1bInterfaces = lazyTable({
     }),
   /** M1a SessionFactory + `sessionListFeed`. */
   SessionFactory: () =>
-    M.interface('SessionFactory', {
-      ...methodsOf.SessionFactory(),
-      sessionListFeed: M.call().returns(B.ListFeedInfo),
-    }),
+    M.interface('SessionFactory', foldedMethodsOf.SessionFactory()),
   /** M1a HarnessRoot + exec program, pool settings and settling. */
-  HarnessRoot: () =>
-    M.interface('HarnessRoot', {
-      getOperator: M.call().returns(R('Operator')),
-      status: M.call().returns(B.HarnessStatus),
-      loadSessionProgram: M.call(S.ProgramPiece).returns(
-        record({ complete: M.boolean(), bytes: count }),
-      ),
-      loadExecProgram: M.call(S.ProgramPiece).returns(
-        record({ complete: M.boolean(), bytes: count }),
-      ),
-      configure: M.call(B.HarnessSettings).returns(B.PoolStatus),
-      whenSettled: M.callWhen().returns(B.PoolStatus),
-    }),
-});
+  HarnessRoot: () => M.interface('HarnessRoot', foldedMethodsOf.HarnessRoot()),
+};
 
-/** Method names per M1b interface, in declaration order. */
-export const m1bMethodNames = harden({
+/** M1b's method names per interface (M1a's first where M1b extends one). */
+const m1bMethodLists = harden({
   Blob: [],
   BlobWriters: ['open'],
   BlobWriter: ['append', 'close', 'abort'],
   Content: ['read'],
   Timer: ['sleep'],
-  TurnSink: [...methodNames.TurnSink, 'progress'],
-  Turn: [...methodNames.Turn, 'getContent'],
+  TurnSink: [...m1aMethodNames.TurnSink, 'progress'],
+  Turn: [...m1aMethodNames.Turn, 'getContent'],
   ContextSource: ['page'],
   ExecScope: ['run', 'abandon'],
   ExecHandle: ['scope', 'retire'],
   ListPublisher: ['publish'],
   ListSubscription: ['next', 'close'],
-  Live: [...methodNames.Live, 'subscribeList'],
-  AgentHostAdmin: [...methodNames.AgentHostAdmin, 'content', 'listPublisher'],
-  StartListener: [...methodNames.StartListener, 'attached'],
-  SessionFactory: [...methodNames.SessionFactory, 'sessionListFeed'],
+  Live: [...m1aMethodNames.Live, 'subscribeList'],
+  AgentHostAdmin: [
+    ...m1aMethodNames.AgentHostAdmin,
+    'content',
+    'listPublisher',
+  ],
+  StartListener: [...m1aMethodNames.StartListener, 'attached'],
+  SessionFactory: [...m1aMethodNames.SessionFactory, 'sessionListFeed'],
   HarnessRoot: [
-    ...methodNames.HarnessRoot,
+    ...m1aMethodNames.HarnessRoot,
     'loadExecProgram',
     'configure',
     'whenSettled',
   ],
 });
+
+// ================================================================ M2
+//
+// The M2 contract (W2.0; designs/m2-interfaces.md). New shapes and new
+// interfaces go into the folded tables; `m2Interfaces` holds the M2 versions
+// of interfaces M2 extends (m2-interfaces.md 1.3).
+
+/** M2's shapes (W2.0). */
+const m2ShapeBuilders = {
+  // ---- the record archive (D-M2-1; m2-interfaces.md 4) ----
+
+  /**
+   * Where a session's live records start: records before `sealedTo` are in
+   * `segments` sealed segments, turns before `sealedTurns + 1` (by ordinal)
+   * are archived, and `digest` is the last segment's chained digest ('' for
+   * none).
+   */
+  ArchiveState: () =>
+    record({
+      sealedTo: count,
+      sealedTurns: count,
+      segments: count,
+      digest: text(64),
+    }),
+  /**
+   * One sealed segment as the vat indexes it: records [from, to), turns
+   * firstTurn .. firstTurn + turns - 1 (ordinals), its record bytes, and its
+   * chained digest (m2-interfaces.md 4.2).
+   */
+  SegmentEntry: () =>
+    record({
+      from: count,
+      to: count,
+      firstTurn: count,
+      turns: count,
+      records: count,
+      bytes: count,
+      digest: text(64),
+    }),
+  /** `ContextSource.segments` answer, oldest first. */
+  SegmentPage: () =>
+    record(
+      { segments: list(S.SegmentEntry, limits.segmentPageEntries) },
+      { next: S.Cursor },
+    ),
+  /**
+   * `ArchivePort.seal` argument (crank S, m2-interfaces.md 4.4): the vat's
+   * range and its fingerprint; `previous` is the digest the new segment
+   * chains to ('' for the first); `context` serves records the adapter
+   * lacks (never below `from`).
+   */
+  SealRequest: () =>
+    record({
+      from: count,
+      to: count,
+      firstTurn: count,
+      turns: count,
+      records: count,
+      bytes: count,
+      firstTurnId: S.Id,
+      lastTurnId: S.Id,
+      epoch: count,
+      previous: text(64),
+      context: M.remotable('ContextSource'),
+    }),
+  /** `ArchivePort.seal` answer: the segment is durable (fsynced, renamed). */
+  SealAnswer: () => S.SegmentEntry,
+  /**
+   * A staged field of an archived record as `History` shows it: no Blob
+   * handle (the vat dropped it), a `SealedText` to read the text.
+   */
+  SealedField: () =>
+    record(
+      {
+        sealed: M.remotable('SealedText'),
+        preview: text(limits.messagePreviewUnits),
+        bytes: count,
+      },
+      { digest: text(64) },
+    ),
+  /** `SealedText.describe()`. */
+  SealedTextInfo: () =>
+    record(
+      { bytes: count, preview: text(limits.messagePreviewUnits) },
+      { digest: text(64) },
+    ),
+  // ---- providers and the model catalogue (m2-interfaces.md 8) ----
+
+  /** `Backend.listModels` / `SessionFactory.listModels` argument. */
+  ModelRequest: () =>
+    record(
+      {},
+      {
+        backend: M.remotable('Backend'),
+        after: text(limits.modelCursorUnits),
+        limit: M.and(count, M.lte(limits.modelPageRows)),
+      },
+    ),
+  /** A.4 model row, object style (R4-20): `backend` replaces the backend id. */
+  ModelRow: () =>
+    record(
+      {
+        backend: M.remotable('Backend'),
+        modelId: S.ModelId,
+        selectionId: text(limits.modelCursorUnits),
+        title: S.Label,
+        default: M.boolean(),
+        reasoningEfforts: list(text(limits.effortUnits), limits.maxEfforts),
+      },
+      {
+        description: text(limits.modelDescriptionUnits),
+        defaultReasoningEffort: text(limits.effortUnits),
+        contextLength: count,
+        maxOutputTokens: count,
+      },
+    ),
+  /**
+   * One page of a catalogue (R4-17: `unavailable` with no rows on a failed
+   * read; `error` is a fixed text, never a provider body).
+   */
+  ModelPage: () =>
+    record(
+      {
+        rows: list(S.ModelRow, limits.modelPageRows),
+        state: M.or('ok', 'unavailable'),
+      },
+      { next: text(limits.modelCursorUnits), error: S.Reason },
+    ),
+  /** `Backend.resolveModel` answer: what a creation stores (R4-21, R4-22). */
+  ResolvedModel: () =>
+    record(
+      { modelId: S.ModelId },
+      { contextLength: count, maxOutputTokens: count },
+    ),
+  // ---- secrets (m2-interfaces.md 9) ----
+
+  /** `SecretsAdmin.create` argument (R7-25: description 1-200, no newline). */
+  NewSecret: () =>
+    record({
+      label: S.Label,
+      description: text(limits.secretDescriptionUnits),
+    }),
+  /** `Secret.describe()`: never the value (R7-22, R7-26). */
+  SecretInfo: () =>
+    record({
+      label: S.Label,
+      description: text(limits.secretDescriptionUnits),
+      generation: count,
+      state: M.or('active', 'revoked'),
+      bytes: count,
+    }),
+  SecretPage: () =>
+    record(
+      { secrets: list(M.remotable('Secret'), limits.secretPageEntries) },
+      { next: S.Cursor },
+    ),
+  /** One audit event (R7-24): fixed outcome and code, no bytes. */
+  AuditEvent: () =>
+    record(
+      {
+        at: count,
+        label: S.Label,
+        op: M.or('create', 'read', 'replace', 'revoke', 'delete'),
+        outcome: M.or('attempted', 'succeeded', 'failed'),
+      },
+      { code: text(limits.secretCodeUnits), generation: count },
+    ),
+  AuditPage: () => list(S.AuditEvent, limits.auditPageEvents),
+  /**
+   * A value sealed to the adapter's X25519 key (D-6: the CLI path; the hub
+   * carries only ciphertext). `publicKey` is the sender's ephemeral key.
+   */
+  SealedBox: () =>
+    record({
+      format: 'x25519-aes-256-gcm-1',
+      publicKey: text(64),
+      box: text(limits.sealedBoxUnits),
+    }),
+  /** A plain secret value (adapter-local writer only; never into a vat). */
+  SecretValue: () => text(limits.secretValueBytes),
+  ReadGrantInfo: () =>
+    record({
+      label: S.Label,
+      description: text(limits.secretDescriptionUnits),
+    }),
+  // ---- delete, export and importing (m2-interfaces.md 7) ----
+
+  /** One waiting entry as exported. */
+  ExportEntry: () =>
+    record({
+      submission: S.Submission,
+      requestId: text(limits.requestIdUnits),
+      at: count,
+    }),
+  /**
+   * `SessionInternal.exportState` page and `importState` chunk: one `part`
+   * each, in the order head, archive, records, queue, end.
+   */
+  SessionExportPage: () =>
+    record(
+      { part: M.or('head', 'archive', 'records', 'queue', 'end') },
+      {
+        info: S.SessionInfo,
+        config: S.SessionConfig,
+        usage: S.UsageTotals,
+        archive: S.ArchiveState,
+        segments: list(S.SegmentEntry, limits.segmentPageEntries),
+        from: count,
+        records: list(S.TurnRecord, limits.pageRecords),
+        entries: list(S.ExportEntry, limits.maxWaiting),
+        hold: S.Hold,
+        next: S.Cursor,
+      },
+    ),
+  /** `SessionInternal.importState` answer. */
+  ImportProgress: () => record({ records: count, complete: M.boolean() }),
+  /** One session of `HarnessRoot.exportState`. */
+  ExportSession: () =>
+    record({
+      session: M.remotable('Session'),
+      internal: M.remotable('SessionInternal'),
+      key: S.Id,
+      title: text(limits.titleUnits),
+      state: S.Lifecycle,
+      userInitiated: M.boolean(),
+    }),
+  /** `HarnessRoot.exportState` page: settings first, then sessions. */
+  FactoryExportPage: () =>
+    record(
+      { sessions: list(S.ExportSession, limits.sessionPageRows) },
+      { settings: B.HarnessSettings, next: S.Id },
+    ),
+};
+
+/**
+ * Structural return guards of the archive's pages (records as keys, as
+ * M1a's history views, J-9156): `History` builds them from segment files.
+ * @type {Map<string, any>}
+ */
+const archiveViews = new Map();
+/** @param {'SealedTurnPreview' | 'ArchiveHistoryPage' | 'SealedContentPage'} name */
+const archiveView = name => {
+  if (!archiveViews.has(name)) {
+    const preview = record(
+      {
+        turnId: S.Id,
+        state: S.TurnState,
+        at: count,
+        sealed: true,
+        records: list(M.key(), limits.historyTurnRecords),
+      },
+      { cut: M.boolean(), resolution: S.Reason },
+    );
+    archiveViews.set('SealedTurnPreview', preview);
+    archiveViews.set(
+      'ArchiveHistoryPage',
+      record(
+        { turns: list(preview, limits.historyPageTurns) },
+        { next: S.Cursor },
+      ),
+    );
+    archiveViews.set(
+      'SealedContentPage',
+      record(
+        { records: list(M.key(), limits.pageRecords) },
+        { next: S.Cursor },
+      ),
+    );
+  }
+  return archiveViews.get(name);
+};
+
+/** M2's new interface guards (W2.0). */
+const m2InterfaceBuilders = {
+  // ---- archive (W2.8 adapter, W2.5 vat) ----
+
+  /** Adapter: one session's archive in one incarnation (TurnPorts.archive). */
+  ArchivePort: () =>
+    M.interface('ArchivePort', {
+      seal: M.callWhen(S.SealRequest).returns(S.SealAnswer),
+    }),
+  /**
+   * Adapter-local (gateway, tests through `AgentHostAdmin.history()`):
+   * history pages of any session, archived turns from segment files.
+   */
+  History: () =>
+    M.interface('History', {
+      page: M.callWhen(R('Session'))
+        .optional(S.Cursor)
+        .returns(M.or(view('HistoryPage'), archiveView('ArchiveHistoryPage'))),
+      turnContent: M.callWhen(R('Session'), S.Id)
+        .optional(S.Cursor)
+        .returns(archiveView('SealedContentPage')),
+    }),
+  /** Adapter-local: the text of one archived staged field. */
+  SealedText: () =>
+    M.interface('SealedText', {
+      read: M.callWhen(B.ContentRange).returns(B.ContentPage),
+      describe: M.call().returns(S.SealedTextInfo),
+    }),
+
+  // ---- secrets (W2.3; D-6) ----
+
+  /** Manager: the Secrets manager (R3-231, R7-22); held by the operator. */
+  SecretsAdmin: () =>
+    M.interface('SecretsAdmin', {
+      list: M.call().optional(S.Cursor).returns(S.SecretPage),
+      create: M.callWhen(S.NewSecret).returns(R('Secret')),
+      openWriter: M.callWhen().returns(R('SecretWriter')),
+      audit: M.callWhen()
+        .optional(M.and(count, M.lte(limits.auditPageEvents)))
+        .returns(S.AuditPage),
+    }),
+  /** Manager: one secret's admin facet (R7-23), reached from the catalogue. */
+  Secret: () =>
+    M.interface('Secret', {
+      describe: M.callWhen().returns(S.SecretInfo),
+      makeReadGrant: M.call().returns(R('ReadGrant')),
+      revoke: M.callWhen().returns(done),
+      delete: M.callWhen().returns(done),
+      audit: M.callWhen()
+        .optional(M.and(count, M.lte(limits.auditPageEvents)))
+        .returns(S.AuditPage),
+    }),
+  /**
+   * Manager: a read grant (R7-23). It has no read method: a value is read
+   * only in the agent-host adapter, by the backend that holds the grant.
+   */
+  ReadGrant: () =>
+    M.interface('ReadGrant', {
+      describe: M.call().returns(S.ReadGrantInfo),
+    }),
+  /** Adapter-local: writes values (D-6); never in a vat. */
+  SecretWriter: () =>
+    M.interface('SecretWriter', {
+      replace: M.callWhen(R('Secret'), M.or(S.SecretValue, S.SealedBox))
+        .optional(count)
+        .returns(record({ generation: count })),
+      publicKey: M.call().returns(text(64)),
+    }),
+};
+
+/** M2 versions of the interfaces M2 extends (folded methods first). */
+const m2InterfaceBuilders2 = {
+  /** + `findTurn` (W2.5; m2-interfaces.md 4.9). */
+  Session: () =>
+    M.interface('Session', {
+      ...methodsOf.Session(),
+      findTurn: M.call(S.Id).returns(R('Turn')),
+    }),
+  /** + delete, blob paging, data-only export and importing (W2.7). */
+  SessionInternal: () =>
+    M.interface('SessionInternal', {
+      ...methodsOf.SessionInternal(),
+      blobPage: M.call().optional(S.Cursor).returns(B.BlobPage),
+      deleteSelf: M.call().returns(done),
+      exportState: M.call().optional(S.Cursor).returns(S.SessionExportPage),
+      importState: M.call(S.SessionExportPage).returns(S.ImportProgress),
+    }),
+  /** + `edit`, `sendNow` (W2.4; A.4 editPending, sendPending). */
+  QueueEntry: () =>
+    M.interface('QueueEntry', {
+      ...methodsOf.QueueEntry(),
+      edit: M.call(S.Submission).returns(done),
+      sendNow: M.call().returns(done),
+    }),
+  /** + `segments` (W2.5; m2-interfaces.md 4.8). */
+  ContextSource: () =>
+    M.interface('ContextSource', {
+      ...foldedMethodsOf.ContextSource(),
+      segments: M.call().optional(S.Cursor).returns(S.SegmentPage),
+    }),
+  /** + `deleteSession` (W2.7), `listBackends`, `listModels` (W2.7 for W2.2). */
+  SessionFactory: () =>
+    M.interface('SessionFactory', {
+      ...foldedMethodsOf.SessionFactory(),
+      deleteSession: M.callWhen(R('Session')).returns(done),
+      listBackends: M.call().returns(list(R('Backend'), limits.maxBackends)),
+      listModels: M.callWhen().optional(S.ModelRequest).returns(S.ModelPage),
+    }),
+  /** + data-only export and importing (W2.7). */
+  HarnessRoot: () =>
+    M.interface('HarnessRoot', {
+      ...foldedMethodsOf.HarnessRoot(),
+      exportState: M.call().optional(S.Id).returns(S.FactoryExportPage),
+      importSession: M.callWhen(S.CreateOptions).returns(S.MadeSession),
+    }),
+  /** + `getSecrets` (W2.7 forwards to the agent host's). */
+  Operator: () =>
+    M.interface('Operator', {
+      ...methodsOf.Operator(),
+      getSecrets: M.callWhen().returns(R('SecretsAdmin')),
+    }),
+  /** + secrets, blob and archive release, history, import writers. */
+  AgentHostAdmin: () =>
+    M.interface('AgentHostAdmin', {
+      ...foldedMethodsOf.AgentHostAdmin(),
+      getSecrets: M.call().returns(R('SecretsAdmin')),
+      releaseBlobs: M.callWhen(
+        list(R('Blob'), limits.blobResolveBatch),
+      ).returns(done),
+      releaseArchive: M.callWhen(R('Session')).returns(done),
+      history: M.callWhen().returns(R('History')),
+      writersFor: M.callWhen(R('Session')).returns(R('BlobWriters')),
+    }),
+  /** + the catalogue (W2.2's ops; manager forwards, W2.3). */
+  Backend: () =>
+    M.interface('Backend', {
+      ...methodsOf.Backend(),
+      listModels: M.callWhen().optional(S.ModelRequest).returns(S.ModelPage),
+      resolveModel: M.callWhen().optional(S.ModelId).returns(S.ResolvedModel),
+    }),
+  /** + `edit` (W2.4): stages an edit over inlineBytes, as `submit`. */
+  Composer: () =>
+    M.interface('Composer', {
+      ...methodsOf.Composer(),
+      edit: M.callWhen(
+        R('QueueEntry'),
+        M.string({ stringLengthLimit: limits.messageUnits }),
+      ).returns(done),
+    }),
+};
+
+// ================================================================ tables
+
+/**
+ * Every shape, by name, built on first use and kept (see `lazyTable`):
+ * M1a's, M1b's and M2's. Senders' checks, tests and the gateway key guard
+ * read these.
+ */
+export const shapes = lazyTable({
+  ...m1aShapeBuilders,
+  ...m1bShapeBuilders,
+  ...m2ShapeBuilders,
+});
+/** Shorthands inside this module. */
+const S = shapes;
+const B = shapes;
+
+/**
+ * Every interface guard by its interface name, built on first use and kept:
+ * `makeExo('Session', interfaces.Session, methods)`. Where M1b extended an
+ * M1a interface this is the M1b version; M2's extensions are in
+ * `m2Interfaces`.
+ */
+export const interfaces = lazyTable({
+  ...m1aInterfaceBuilders,
+  ...m1bInterfaceBuilders,
+  ...m2InterfaceBuilders,
+});
+
+/**
+ * M2 versions of the interfaces M2 extends. The unit that implements an M2
+ * method switches that exo to the M2 guard (m2-interfaces.md 1.3).
+ */
+export const m2Interfaces = lazyTable(m2InterfaceBuilders2);
+
+/** M2's new interfaces' method names. */
+const m2NewMethodNames = harden({
+  ArchivePort: ['seal'],
+  History: ['page', 'turnContent'],
+  SealedText: ['read', 'describe'],
+  SecretsAdmin: ['list', 'create', 'openWriter', 'audit'],
+  Secret: ['describe', 'makeReadGrant', 'revoke', 'delete', 'audit'],
+  ReadGrant: ['describe'],
+  SecretWriter: ['replace', 'publicKey'],
+});
+
+/**
+ * Method names per interface of `interfaces`, in declaration order (the
+ * gateway key guard and the docs read these; a guard's payload is not
+ * reachable from the prelude).
+ */
+export const methodNames = harden({
+  ...m1aMethodNames,
+  ...m1bMethodLists,
+  ...m2NewMethodNames,
+});
+
+/** Method names of `m2Interfaces`: the folded ones first, then M2's. */
+export const m2MethodNames = harden({
+  Session: [...methodNames.Session, 'findTurn'],
+  SessionInternal: [
+    ...methodNames.SessionInternal,
+    'blobPage',
+    'deleteSelf',
+    'exportState',
+    'importState',
+  ],
+  QueueEntry: [...methodNames.QueueEntry, 'edit', 'sendNow'],
+  ContextSource: [...methodNames.ContextSource, 'segments'],
+  SessionFactory: [
+    ...methodNames.SessionFactory,
+    'deleteSession',
+    'listBackends',
+    'listModels',
+  ],
+  HarnessRoot: [...methodNames.HarnessRoot, 'exportState', 'importSession'],
+  Operator: [...methodNames.Operator, 'getSecrets'],
+  AgentHostAdmin: [
+    ...methodNames.AgentHostAdmin,
+    'getSecrets',
+    'releaseBlobs',
+    'releaseArchive',
+    'history',
+    'writersFor',
+  ],
+  Backend: [...methodNames.Backend, 'listModels', 'resolveModel'],
+  Composer: [...methodNames.Composer, 'edit'],
+});
+
+/**
+ * The M1b tables as views of the folded ones (the same shape and guard
+ * objects), for modules written against them before the fold.
+ */
+export const m1bShapes = viewOf(Object.keys(m1bShapeBuilders), shapes);
+export const m1bInterfaces = viewOf(
+  Object.keys(m1bInterfaceBuilders),
+  interfaces,
+);
+export const m1bMethodNames = m1bMethodLists;

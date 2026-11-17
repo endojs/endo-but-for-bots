@@ -168,6 +168,62 @@ export const limits = harden({
    */
   outsidePendingEvents: 64,
 
+  // ---- M2 contract settings (W2.0; designs/m2-interfaces.md) ----
+  /**
+   * Records in one history page a session vat answers (W2.5; section 6):
+   * a page crank marshals about 3 ms per record (J-0370, J-9387), so 48
+   * records keep it near 245 ms over a floor of about 95 ms against the
+   * 300 ms `history.page` budget [inferred].
+   */
+  historyPageRecords: 48,
+  /**
+   * The record archive (D-M2-1; section 4): settled turns the session vat
+   * keeps after a seal, the most turns one segment takes, and the record
+   * and byte bounds of a segment (whole turns; at least one). A session
+   * seals when it holds `archiveKeepTurns + archiveSegmentTurns` settled
+   * turns, so it keeps between 128 and 159 of them (section 4.13).
+   */
+  archiveKeepTurns: 128,
+  archiveSegmentTurns: 32,
+  archiveSegmentRecords: 4096,
+  /** Record bytes of one segment (`plainBytes`, staged fields as stubs). */
+  archiveSegmentBytes: 4_194_304,
+  /** Segments one session may seal (4,096 x 32 = 131,072 turns). */
+  archiveMaxSegments: 4096,
+  /** Segment entries in one `ContextSource.segments` page or export page. */
+  segmentPageEntries: 64,
+  /**
+   * Outcome-unknown turns the session keeps resolvable after their records
+   * were sealed (section 4.6); beyond it the oldest is no longer resolvable.
+   */
+  maxUnresolvedTurns: 64,
+  /** Backends `SessionFactory.listBackends` offers. */
+  maxBackends: 16,
+  /** Rows in one model catalogue page (a page fits frameBytes). */
+  modelPageRows: 50,
+  /** A model selection id (`<backend>:<model>`) or catalogue cursor. */
+  modelCursorUnits: 320,
+  /** A model's description in a catalogue row (cut by the adapter). */
+  modelDescriptionUnits: 2048,
+  /** Reasoning efforts one model row lists (R4-23). */
+  maxEfforts: 8,
+  /** A provider base URL in a backend spec (F.2 c; tests: the fake server). */
+  urlUnits: 2048,
+  /** The largest turn deadline HarnessRoot.configure accepts (1 day). */
+  maxTurnDeadlineMs: 86_400_000,
+  /** A secret description (R7-25: 1-200 characters, no newline). */
+  secretDescriptionUnits: 200,
+  /** A secret value (R7-25: at most 1 MiB), adapter-local only. */
+  secretValueBytes: 1_048_576,
+  /** A sealed box: base64 of a 1 MiB value plus its envelope. */
+  sealedBoxUnits: 1_400_000,
+  /** Secrets in one `SecretsAdmin.list` page. */
+  secretPageEntries: 64,
+  /** A fixed Secrets code (`secretCodes`). */
+  secretCodeUnits: 32,
+  /** Audit events in one answer (A.2 default 100; the pages fit a frame). */
+  auditPageEvents: 100,
+
   // ---- scripted provider script bounds (AH/providers/scripted.js) ----
   /** Rounds in one script. */
   scriptRounds: 256,

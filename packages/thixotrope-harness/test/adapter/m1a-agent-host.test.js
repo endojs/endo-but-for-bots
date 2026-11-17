@@ -80,7 +80,9 @@ const ZERO = harden({
  * @param {{ dispatch?: boolean | (() => Promise<boolean>), events?: any[] }} [options]
  */
 const makeFakeTurn = ({ dispatch = true, events = [] } = {}) => {
+  // The folded Turn guard (M2 W2.0) has M1b's getContent.
   const turn = makeExo('Turn', interfaces.Turn, {
+    getContent: () => harden({ records: [] }),
     getStatus: () =>
       harden({ turnId: 't1', state: 'running', round: 0, at: 0 }),
     cancel: () => undefined,
@@ -128,6 +130,8 @@ const makeFakeTurn = ({ dispatch = true, events = [] } = {}) => {
       events.push(['deadline', deadline.opId]);
       deadlines.push(deadline);
     },
+    // The folded TurnSink guard (M2 W2.0) has M1b's progress.
+    progress: () => false,
   });
   return { turn, sink, events, finals, failures, deadlines };
 };

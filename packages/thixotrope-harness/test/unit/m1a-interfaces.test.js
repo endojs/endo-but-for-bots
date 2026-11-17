@@ -477,17 +477,21 @@ test('the guest limits keep their stated relations', t => {
   t.true(limits.toolOutputUnits >= limits.textUnits);
 });
 
+// Since M2 W2.0 the tables hold M1a's, M1b's and M2's entries; this file
+// checks M1a's (its samples name them) and m2-interfaces.test.js checks that
+// every entry of the folded tables has a sample in one of the three files.
 test('every shape has a sample, and the sample matches it', t => {
-  t.deepEqual(Object.keys(shapeSamples).sort(), Object.keys(shapes).sort());
-  for (const [name, shape] of Object.entries(shapes)) {
+  for (const name of Object.keys(shapeSamples)) {
+    t.true(Object.keys(shapes).includes(name), name);
     const sample = harden(/** @type {any} */ (shapeSamples)[name]);
-    t.true(matches(sample, shape), name);
+    t.true(matches(sample, /** @type {any} */ (shapes)[name]), name);
   }
 });
 
 test('every shape refuses an oversize string, an oversize array and an extra key wherever one can occur', t => {
   let refused = 0;
-  for (const [name, shape] of Object.entries(shapes)) {
+  for (const name of Object.keys(shapeSamples)) {
+    const shape = /** @type {any} */ (shapes)[name];
     const sample = harden(/** @type {any} */ (shapeSamples)[name]);
     for (const { label, value } of badVariants(sample)) {
       t.false(matches(value, shape), `${name}: ${label}`);
@@ -562,10 +566,11 @@ const methodSamples = {
     roundFailed: { args: [shapeSamples.RoundFailure], returns: undefined },
     deadline: { args: [{ opId: 't1/r0/c0' }], returns: undefined },
   },
+  // M1a's shape-only ContextSource is M1b's since the fold (`from`).
   ContextSource: {
     page: {
       args: ['c1'],
-      returns: { records: [records.TurnStarted], next: 'c2' },
+      returns: { from: 0, records: [records.TurnStarted], next: 'c2' },
     },
   },
   SpareMaker: {
@@ -662,21 +667,28 @@ const stubExo = name => {
   const samples = methodSamples[name];
   /** @type {Record<string, (...args: any[]) => any>} */
   const methods = {};
+  // Methods later milestones added to an M1a interface (the folded guard
+  // has them); m1b- and m2-interfaces.test.js call those.
+  for (const method of /** @type {any} */ (methodNames)[name]) {
+    methods[method] = () => undefined;
+  }
   for (const [method, { returns }] of Object.entries(samples)) {
     methods[method] = () => harden(returns);
   }
-  return makeExo(name, interfaces[name], methods);
+  return makeExo(name, /** @type {any} */ (interfaces)[name], methods);
 };
 
 test('every interface has method names, samples, and a stub exo accepts the samples', async t => {
   t.deepEqual(Object.keys(methodNames).sort(), Object.keys(interfaces).sort());
-  t.deepEqual(
-    Object.keys(methodSamples).sort(),
-    Object.keys(interfaces).sort(),
-  );
+  for (const name of Object.keys(methodSamples)) {
+    t.true(Object.keys(interfaces).includes(name), name);
+  }
   const calls = [];
-  for (const [name, names] of Object.entries(methodNames)) {
-    t.deepEqual(Object.keys(methodSamples[name]), [...names], name);
+  for (const name of Object.keys(methodSamples)) {
+    const names = /** @type {any} */ (methodNames)[name];
+    const own = Object.keys(methodSamples[name]);
+    // M1a's methods first, in order; later milestones' after them.
+    t.deepEqual(names.slice(0, own.length), own, name);
     const exo = stubExo(name);
     for (const [method, { args }] of Object.entries(methodSamples[name])) {
       calls.push(
@@ -692,7 +704,7 @@ test('every interface has method names, samples, and a stub exo accepts the samp
 
 test('every method refuses an oversize string, an oversize array and an extra key in its arguments', async t => {
   const calls = [];
-  for (const name of Object.keys(methodNames)) {
+  for (const name of Object.keys(methodSamples)) {
     const exo = stubExo(name);
     for (const [method, { args }] of Object.entries(methodSamples[name])) {
       // Every variant but the one that lengthens the argument list itself.
@@ -716,6 +728,7 @@ test('every method refuses an oversize string, an oversize array and an extra ke
 
 test('a guard refuses a return value outside its shape', async t => {
   const exo = makeExo('Turn', interfaces.Turn, {
+    getContent: () => harden({ records: [] }),
     getStatus: () => harden({ ...turnStatus, extra: 1 }),
     cancel: () => undefined,
     whenFinished: async () => harden({ ...turnStatus, state: 'unknown' }),
