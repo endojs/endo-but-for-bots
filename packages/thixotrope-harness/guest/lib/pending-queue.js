@@ -80,6 +80,8 @@ export const REQUEST_ID = /^\d{13}-[0-9a-f-]{36}$/;
  * @property {string} preview the text cut to messagePreviewUnits
  * @property {number} previewBytes its exact UTF-8 bytes
  * @property {boolean} waiting false once claimed or cancelled
+ * @property {any} [row] its pending row, made by the first view after its
+ *   last change (queue.js)
  * @typedef {object} StoredReceipt
  * @property {string} requestId
  * @property {Fingerprint} fingerprint
@@ -257,6 +259,7 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
       item: /** @type {any} */ (undefined),
       ...previewOf(submission),
       waiting: true,
+      row: undefined,
     };
     const entry = makeEntry(internal);
     internal.item = harden({ entry, key, submission, at, requestId });
@@ -288,6 +291,7 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
     internal.item = harden({ ...internal.item, submission });
     internal.preview = preview;
     internal.previewBytes = previewBytes;
+    internal.row = undefined;
     changed();
   };
 
@@ -308,6 +312,7 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
         preview: '',
         previewBytes: 0,
         waiting: false,
+        row: undefined,
       });
       stored.entry = goneEntry;
     }

@@ -227,18 +227,27 @@ export const makeQueue = ({
         ROW_OVERHEAD_BYTES * count;
       units = Math.max(0, Math.floor(available / (3 * count)));
     }
-    const entries = [...pending.entries()].map(internal =>
+    /**
+     * @param {Internal} internal
+     * @param {string} preview
+     */
+    const rowOf = (internal, preview) =>
       harden({
         entry: internal.item.entry,
         key: internal.item.key,
-        preview:
-          units === undefined
-            ? internal.preview
-            : previewText(internal.preview, units),
+        preview,
         state: /** @type {'queued'} */ ('queued'),
         at: internal.item.at,
-      }),
-    );
+      });
+    // An uncut row is made once per entry and text, and reused by every
+    // later view (each enqueue publishes the view: J-0454).
+    const entries = [...pending.entries()].map(internal => {
+      if (units !== undefined) {
+        return rowOf(internal, previewText(internal.preview, units));
+      }
+      internal.row ??= rowOf(internal, internal.preview);
+      return internal.row;
+    });
     return hold === undefined ? harden({ entries }) : harden({ entries, hold });
   };
 

@@ -158,6 +158,9 @@ test.serial(
 test.serial(
   'cancelled entries: the receipt names one stand-in; the cancelled exos are not kept',
   async t => {
+    // Exos of earlier tests that a loaded machine has not collected yet
+    // are not this test's: count from here.
+    const baseline = (await liveExos()).live.QueueEntry ?? 0;
     const queue = makeQueue();
     // In a plain function, as fillStaged.
     ((/** @type {any} */ q) => {
@@ -172,7 +175,7 @@ test.serial(
     })(queue);
     const counts = await liveExos();
     t.is(queue.size(), 0);
-    t.true((counts.live.QueueEntry ?? 0) <= 1, 'only the stand-in');
+    t.true((counts.live.QueueEntry ?? 0) - baseline <= 1, 'only the stand-in');
     t.throws(() => queue.receiptFor(rid(NOW, 0))?.entry.describe());
   },
 );
