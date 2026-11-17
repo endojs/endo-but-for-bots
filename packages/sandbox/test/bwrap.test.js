@@ -1057,6 +1057,30 @@ test.serial('bwrap keeps split UTF-8 stdout separate from stderr', async t => {
   t.deepEqual(status, { code: 0, signal: null });
 });
 
+test.serial('bwrap normal exit sweeps its process-group anchor', async t => {
+  t.timeout(20_000);
+  // eslint-disable-next-line @jessie.js/safe-await-separator
+  if (!(await bwrapCheck(t))) return;
+  const driver = makeBwrapDriver({ env: {} });
+  const { powers, tmpdirs } = makeStubScratchProvider();
+  const factory = makeSandboxFactory({
+    drivers: harden([driver]),
+    scratchProvider: powers,
+  });
+  const handle = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+  t.teardown(async () => {
+    await E(handle).dispose();
+    for (const directory of tmpdirs)
+      nodeFs.rmSync(directory, { recursive: true, force: true });
+  });
+  const proc = await E(handle).spawn(harden(['/bin/true']));
+  const pid = await E(proc).pid();
+  t.deepEqual(await E(proc).wait(), { code: 0, signal: null });
+  await t.notThrowsAsync(() => waitForProcessGroupGone(pid));
+});
+
 test.serial(
   'bwrap output cap kills a soft-refusing group with a pipe-holding descendant',
   async t => {
@@ -1836,6 +1860,31 @@ const prepareStubbedSlice = async (childProcess, spawn = true) => {
   if (spawn) await driver.spawn(slice, ['/bin/true'], {});
   return { driver, slice };
 };
+
+test('bwrap exit sweep propagates a non-ESRCH signal error', async t => {
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const refused = Object.assign(new Error('signal refused'), { code: 'EPERM' });
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({
+      env: {},
+      childProcess,
+      processKill: () => {
+        throw refused;
+      },
+    })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  const proc = await driver.spawn(slice, ['/bin/true'], {});
+  const child = children[0];
+  t.teardown(() => child.emit('close', 0, null));
+  child.exitCode = 0;
+  child.emit('exit', 0, null);
+  t.is(await t.throwsAsync(proc.wait()), refused);
+});
 
 test('failed teardown retains its child until a later close permits cleanup', async t => {
   // Guards the hang: ownership ends only on 'close', so
