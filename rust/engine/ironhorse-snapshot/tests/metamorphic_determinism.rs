@@ -122,13 +122,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "c39ddaf28e67b97a069252022e1580dbdfc187e1218f536060ae39694566a8f2"
+        "e22bb62b11b3815444f7fc81896421e8a4290774c78efbecbb26df356b11a56a"
     );
     previous.meter.cost_table_version = "ironhorse-meter-5".into();
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "18f6529b828aa5b4e1fa238f2eedfa65bd6985f6d07551665d456826fbf1a91e"
+        "6559028cdbf71d5cacb2be9d0156abac4d81827b0b8693d4b04ac0afddbcfa5c"
     );
 
     let mut format19 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -136,7 +136,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format19.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format19)),
-        "b59074a495b1321d1f71b9d8a6c512ea838649f09127d869f1fabef79d6be901"
+        "9f76aefd25959713f5be7c314fe7371180de68c10058bfd7526f3aa2c83b5787"
     );
 
     let mut format20 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -144,7 +144,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format20.version.format_version = 20;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format20)),
-        "445aa203d3d16d15a13d09a1312ae192ca97e9d751b4890843ac707b55f467f2"
+        "f1a8c5f9d5e2667f63a3fa48c0326a9ba671a00a610efcde8dab966d98056d36"
     );
 
     let mut format21 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -152,7 +152,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format21.version.format_version = 21;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format21)),
-        "4bbf354e941403fbbc6e7c9f87aacc3dcb39a2155e847bfe92b7bf5ec0a78d2d"
+        "b6dcb4c10fb84f5b6c740f242862eb09871876978f3391ff2ac3927a1cb49e4a"
     );
 
     let blob = session
@@ -385,7 +385,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // Re-pinned for format version 23, which lets `ASYN` carry
             // async generator instances (architecture review F127). This
             // fixture holds none, so only the VERS payload changes.
-            "02b51e051e57e0b739f6896c8f76f99a819ed918cde690ce639bffa217fb6436"
+            "ec1f68bab79afbbf7f06c9249581f2662e76c064d0e4f9eed6f84dc85c9cbe4a"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
             // Re-pinned for format version 23 alongside the platform pin.
@@ -396,7 +396,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // green locally and turns ci.yml:842 red. Move both arms
             // together, and run the golden test under BOTH providers.
             // The digest below is the `findLast`/`findLastIndex` one.
-            "e6f05396fd7f352cf603b672caa40c1ad8f3dad8b97420c4b19988700fe9adb6"
+            "eac4bac5c7afa887cd26ab2f98ebcae1670d8cadec84fe3f3dff736708bd59e4"
         },
         "canonical final blob hash"
     );
@@ -632,7 +632,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // the `VERS` stamp and the schema, so the seal moves with the blob
             // while the small state itself is unchanged (this machine holds no
             // async generator).
-            "194acf3cdedd0b5ad68c2b5817570c7dabc32fb3bf341bbbf4a5b9e1e51f307c"
+            "f0af8cf935881942df6c17085b132964d572d8baf5bd8776cb95abc1356b41f6"
         } else {
             // Re-pinned for format version 23 / store schema v34 alongside
             // the platform pin.
@@ -643,7 +643,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // green locally and turns ci.yml:842 red. Move both arms
             // together, and run the golden test under BOTH providers.
             // The digest below is the `findLast`/`findLastIndex` one.
-            "5b0e98e36dddc7e2408adefb80bdffe552979034deb34a534b96e4a0bb257361"
+            "4bbe7cb83b95f96d1b3c28f1d37d9e9408286061bffb0a064af218ee770dd897"
         },
         "epoch-3 seal chain"
     );
