@@ -758,7 +758,10 @@ depth-first before step 1 (`onDelete` hooks: M9 appends; empty in M2).
 As contract 9 and M1b 6.6: a creation record; rolled back on failure and by the start listener
 after a restart (retire the facade, drop the row, never listed). M2 adds: a staged system prompt
 whose creation rolled back is released (`releaseBlobs([prompt.blob])`); an import (7.3) is a
-creation whose row stays unlisted until its `end` chunk.
+creation whose row stays unlisted until its `end` chunk. W2.7: the session reports the end on its
+own row, `RowReporter.changed({ imported: true, messageCount, queuedCount })` (`RowPatch.imported`,
+additive), since the importer talks to `SessionInternal` directly and the factory sees no chunk;
+an import still open at a daemon start is deleted (7.1) by the start listener.
 
 ### 7.3 Export and import (data only)
 

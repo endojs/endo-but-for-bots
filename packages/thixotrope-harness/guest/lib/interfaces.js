@@ -1086,6 +1086,9 @@ const m1aShapeBuilders = {
         activity: S.Activity,
         messageCount: count,
         queuedCount: count,
+        // M2 W2.7 (m2-interfaces.md 7.2): an imported session reports the
+        // end of its import; the factory lists its row from then on.
+        imported: true,
       },
     ),
   SessionRow: () =>
