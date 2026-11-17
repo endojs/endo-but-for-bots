@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-11-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Parent** | [endopi](endopi.md) |
 
 ## Motivation
@@ -136,6 +136,15 @@ place of the elided ones.
 4. **Compaction integration.** Once
    [endopi-iterative-compaction](endopi-iterative-compaction.md)
    lands.
+
+## Status
+
+Phase 1 ships for Lal: `packages/lal/transcript.js` writes each worker's
+session through `@endo/jsonl-transcript` into a daemon scratch mount the
+host names `transcripts-for-lal`, and a restarted worker resumes its newest
+session file. The `endo:mail` custom entry that records a round's
+starting mail message is an early piece of phase 2. Phases 3 and 4 are not
+started.
 
 ## Open questions
 

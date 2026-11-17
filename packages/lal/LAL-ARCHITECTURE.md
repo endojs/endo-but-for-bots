@@ -347,19 +347,28 @@ capability. The recipient can `resolve` or `reject` the request.
 
 ## Session Management
 
-Lal has no persistent session management. The transcript is an in-memory
-array that grows indefinitely:
+Each worker's conversation is the `PiAgent`'s in-memory message history,
+and it is also written to disk as a Pi-compatible JSONL session file
+(`transcript.js`, format in
+`designs/endopi-jsonl-transcript-format.md`).
 
-```javascript
-const transcript = [{ role: 'system', content: systemPrompt }];
-```
-
-- Messages are appended but never truncated.
-- No JSONL persistence.
-- No memory consolidation.
-- Transcript is lost when the daemon process restarts.
-- Optional `LAL_MAX_MESSAGES` truncation at the provider level (llama.cpp
-  only) to avoid context-size errors.
+- Session files live flat in a daemon scratch mount that the host names
+  `transcripts-for-lal`. One mount serves every worker the Lal manager
+  spawns. The writable mount stays in the manager's closure, and worker
+  sub-guests are never introduced to it.
+- A session file is named `<timestamp>_w<hex-of-worker-name>--<uuidv7>.jsonl`.
+  Its header records the raw worker name as `endo:worker`.
+- Each round records the inbound mail message (ids only) as an `endo:mail`
+  custom entry, then every new `user`/`assistant`/`toolResult` message, even
+  when the round throws.
+- When a worker restarts, Lal resumes the newest session file whose header
+  names that worker. It repairs a torn tail, seeds the `PiAgent` with the
+  messages on the current path, and appends only new messages.
+- A transcript write failure is logged and does not stop the worker. If the
+  mount is unavailable, the worker runs without a transcript.
+- There is no memory consolidation yet, and session files grow without
+  bound. `LAL_MAX_MESSAGES` truncation at the provider level (llama.cpp
+  only) still guards against context-size errors.
 
 ---
 
