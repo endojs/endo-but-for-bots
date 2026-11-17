@@ -1078,3 +1078,15 @@ The guard bounds units only (`submissionUnits`, 8,192), so up to about 24.6 KB p
 rule rested on the Composer, which stages anything longer. Composer callers see no change; the
 Composer counts the refusal among those that delete a staged file (17.1).
 
+
+### 17.6 Scripted floods of fresh keys (integration, J-9381)
+
+Test double only. `ScriptChunk` gains an optional `keys: ScriptKeys` and `ScriptToolCall` an
+optional `argsFreshKeys: ScriptKeys`, where `ScriptKeys` is `{ prefix, from, count }`
+(`prefix` at most `callIdUnits`). The scripted provider builds the text in the adapter:
+`{"<prefix><from>":<from>,...}` with `count` keys (a chunk's `text` is then ignored; a call's args
+are `JSON.stringify({ text })` of it). Reason: a script crosses the agent host's manager vat whole
+(`AgentHostAdmin.makeBackend`), so a script carrying 2 MB of flood text halted that vat
+(`MeterAbort`, C-5) and every later call on the admin facet broke with the retired text. A script
+must fit one frame (`frameBytes`), each delta at most `textUnits`, and a round's calls one
+RoundResult (`roundResultBytes`).

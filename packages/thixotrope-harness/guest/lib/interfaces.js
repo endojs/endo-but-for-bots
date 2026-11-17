@@ -895,8 +895,17 @@ export const shapes = lazyTable({
       count,
       text: text(limits.frameBytes),
     }),
+  // `keys` (integration J-9381): the scripted provider builds the text in the
+  // adapter, `{"<prefix><from>":<from>,...}` with `count` keys (`text` is
+  // then ignored), so a flood of fresh keys need not cross the manager vat
+  // inside the script (a script of 2 MB halted it, C-5).
+  ScriptKeys: () =>
+    record({ prefix: text(limits.callIdUnits), from: count, count }),
   ScriptChunk: () =>
-    record({ text: S.Text }, { repeat: count, delayMs: count }),
+    record(
+      { text: S.Text },
+      { repeat: count, delayMs: count, keys: S.ScriptKeys },
+    ),
   ScriptToolCall: () =>
     record(
       { name: S.ToolName },
@@ -904,6 +913,9 @@ export const shapes = lazyTable({
         callId: text(limits.callIdUnits),
         args: S.Text,
         argsKeys: count,
+        // Integration (J-9381): args = JSON.stringify({ text: keys }) built
+        // in the adapter, as ScriptChunk's `keys`.
+        argsFreshKeys: S.ScriptKeys,
         // M1b: args = JSON.stringify({ code: text repeated }) (exec probes).
         code: record({ text: S.Text }, { repeat: count }),
         // W1b.6: the call appears `times` times (too-big probe: 300 calls).

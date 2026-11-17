@@ -125,16 +125,28 @@ const UNKNOWN_TOOLS = limits.maxCallsPerMessage - limits.maxCallsPerRound;
  * whose arguments carry distinct keys, 192 calls to distinct unknown
  * tools).
  */
+/**
+ * A generator spec for `n` fresh keys (the scripted provider builds the
+ * text in the adapter: the script itself crosses the agent host's manager
+ * vat, where the 2 MB of flood text halted it, J-9381).
+ * @param {string} prefix
+ * @param {number} n
+ */
+const freshSpec = (prefix, n) => {
+  const spec = { prefix, from: fedKeys, count: n };
+  fedKeys += n;
+  return spec;
+};
+
 const makeScript = () => {
   const floodCalls = [];
   for (let i = 0; i < limits.maxCallsPerRound; i += 1) {
-    floodCalls.push({
-      name: 'echo',
-      args: JSON.stringify({ text: fresh('arg', 100) }),
-    });
+    // Two keys each: 256 calls must fit one RoundResult (roundResultBytes).
+    floodCalls.push({ name: 'echo', argsFreshKeys: freshSpec('a', 2) });
   }
   for (let i = 0; i < UNKNOWN_TOOLS; i += 1) {
-    floodCalls.push({ name: `tool_${fedKeys + i}`, args: fresh('targ', 20) });
+    // A fresh tool name each (the script must fit one frame: no arguments).
+    floodCalls.push({ name: `u${fedKeys + i}` });
   }
   fedKeys += UNKNOWN_TOOLS;
   const baselineCalls = [
@@ -147,7 +159,12 @@ const makeScript = () => {
         input: 'baseline',
         rounds: [
           {
-            chunks: [{ text: `{"c":3}${'x'.repeat(limits.inlineBytes)}` }],
+            // Over inlineBytes (staged), sent as a repeat: the script itself
+            // must fit one frame to the manager vat.
+            chunks: [
+              { text: '{"c":3}' },
+              { text: 'x', repeat: limits.inlineBytes },
+            ],
             toolCalls: baselineCalls,
             usage,
           },
@@ -157,11 +174,15 @@ const makeScript = () => {
       {
         rounds: [
           {
-            chunks: [{ text: fresh('reply', 100_000) }],
+            // 100 deltas of 1,000 keys: a delta is at most textUnits.
+            chunks: Array.from({ length: 100 }, () => ({
+              text: '',
+              keys: freshSpec('r', 1000),
+            })),
             toolCalls: floodCalls,
             usage,
           },
-          { chunks: [{ text: fresh('final', 300) }], usage },
+          { chunks: [{ text: '', keys: freshSpec('final', 300) }], usage },
         ],
       },
     ],
@@ -176,165 +197,246 @@ const makeScript = () => {
  * @param {any} live
  * @param {(prefix: string, n: number) => string} data
  * @param {'baseline' | 'flood'} phase
+ * @param {(label: string) => void} step names the call about to be made
  */
-const touchEveryEntryPoint = async (slice, session, live, data, phase) => {
+const touchEveryEntryPointSteps = async (
+  slice,
+  session,
+  live,
+  data,
+  phase,
+  step,
+) => {
   const rounds = phase === 'baseline' ? 1 : 3;
   for (let i = 0; i < rounds; i += 1) {
     // Composer -> enqueueOnce (inline, about 7 KB of keys), then a staged
-    // submission (100,000 keys) that runs the flood turn.
+    // submission (9,000 keys, under the Composer's bound) that runs the flood turn.
     const inline = phase === 'baseline' ? 'baseline' : data('sub', 600);
+    step('const r = await runTurn(slice, session, live, inline, 180_00');
     const r = await runTurn(slice, session, live, inline, 180_000);
     if (phase === 'flood') {
+      step('const records = await turnRecords(r.turn);');
       const records = await turnRecords(r.turn);
       if (!records.some(x => x.kind === 'tool-result'))
-        throw Error('the flood turn ran no tools');
+        throw Error(
+          `the flood turn ran no tools (end ${JSON.stringify(r.end).slice(0, 400)}; records ${records.map(x => x.kind).join(' ')})`,
+        );
     }
   }
   if (phase === 'flood') {
-    await runTurn(slice, session, live, data('big', 100_000), 180_000);
+    step('staged submission');
+    // A staged submission under the Composer's 200,000-character bound.
+    await runTurn(slice, session, live, data('big', 9000), 180_000);
   }
   const variants = phase === 'baseline' ? 1 : 40;
   for (let i = 0; i < variants; i += 1) {
     const tag = phase === 'baseline' ? 'k0' : data('id', 1).slice(2, 12);
+    step('rename');
     await E(session).rename(`${phase} ${tag}`);
+    step('await E(session).getSubmissionReceipt(requestId());');
     await E(session).getSubmissionReceipt(requestId());
+    step('getHistoryPage');
     await E(session)
       .getHistoryPage(`c${tag}`)
       .catch(() => undefined);
+    step('await E(session).getInfo();');
     await E(session).getInfo();
+    step('await E(session).listPending();');
     await E(session).listPending();
+    step('await E(session).getUsage();');
     await E(session).getUsage();
+    step('await E(session).getCurrentTurn();');
     await E(session).getCurrentTurn();
+    step('await E(session).watch();');
     await E(session).watch();
     // Factory: unknown keys and cursors are refused or empty.
+    step('factory findSession');
     await E(slice.factory)
       .findSession(`s${tag}`)
       .catch(() => undefined);
+    step('factory listSessions');
     await E(slice.factory)
       .listSessions(harden({ after: `s${tag}`, limit: 5 }))
       .catch(() => undefined);
+    step('await E(slice.factory).listPresets();');
     await E(slice.factory).listPresets();
+    step('await E(slice.factory).sessionListFeed();');
     await E(slice.factory).sessionListFeed();
   }
   // A direct start refused while a turn is current is still an entry point;
   // idle here, so it starts a turn: wait for it.
+  step('const direct = await E(session).startTurn(');
   const direct = await E(session).startTurn(
-    harden({ text: phase === 'baseline' ? 'baseline' : data('direct', 600) }),
+    harden({ text: phase === 'baseline' ? 'baseline' : data('direct', 300) }),
     Date.now(),
   );
+  step('await E(direct).whenFinished();');
   await E(direct).whenFinished();
   // createSession with a fresh title (the factory's main entry point).
+  step('const made = await slice.createSession(');
   const made = await slice.createSession(
     slice.backend,
     phase === 'baseline' ? 'baseline title' : data('title', 5).slice(0, 64),
   );
   void made;
 };
+/**
+ * touchEveryEntryPointSteps, with the step that failed named in the error
+ * (a retired break carries no stack across the hub).
+ * @param {any} slice
+ * @param {any} session
+ * @param {any} live
+ * @param {(prefix: string, n: number) => string} data
+ * @param {'baseline' | 'flood'} phase
+ */
+const touchEveryEntryPoint = async (slice, session, live, data, phase) => {
+  let at = 'start';
+  try {
+    await touchEveryEntryPointSteps(slice, session, live, data, phase, s => {
+      at = s;
+    });
+  } catch (error) {
+    throw Error(`${phase} at "${at}": ${/** @type {Error} */ (error).message}`);
+  }
+};
 
 run(
   'J-9366: feeding 100,000 distinct keys through the session and factory entry points does not grow their name tables',
   async t => {
     t.timeout(20 * 60_000);
-    const template = await execTemplate();
-    const state = await startFromTemplate(template, { t });
-    let slice = await makeSlice(state);
-    const script = makeScript();
-    const made = await slice.makeBackend(script);
-    /** @type {any} */ (slice).backend = made.backend;
-    let session = await slice.createSession(made.backend, 'names');
-    const { key } = await E(session).getInfo();
-    let live = await slice.subscribe(session);
-    const identity = {
-      ...(await runIdentity()),
-      crankBudget,
-      loadAvg: loadAvg(),
-    };
-    // The session vat came from the pool ("spare session N"): after the
-    // baseline it is the session vat with the longest journal.
-    /** @type {{ session?: string, factory?: string }} */
-    const ids = {};
-    const findIds = async () => {
-      const rows = await slice.workers();
-      const sessions = rows
-        .filter(w => /^(spare )?session /.test(w.debugLabel ?? ''))
-        .sort(
-          (a, b) => Number(b.journalLength ?? 0) - Number(a.journalLength ?? 0),
-        );
-      ids.session = sessions[0]?.workerId;
-      ids.factory = rows.find(w => w.debugLabel === 'app:harness')?.workerId;
-    };
-    const measure = () => ({
-      session:
-        ids.session === undefined
-          ? undefined
-          : vatNames(state.root, ids.session),
-      factory:
-        ids.factory === undefined
-          ? undefined
-          : vatNames(state.root, ids.factory),
-    });
+    let stage = 'start';
+    /** @type {any} */
+    let state;
+    try {
+      stage = 'execTemplate();';
+      const template = await execTemplate();
+      stage = 'startFromTemplate(template, { t });';
+      state = await startFromTemplate(template, { t });
+      stage = 'makeSlice(state);';
+      let slice = await makeSlice(state);
+      const script = makeScript();
+      stage = 'slice.makeBackend(script);';
+      const made = await slice.makeBackend(script);
+      /** @type {any} */ (slice).backend = made.backend;
+      stage = 'slice.createSession(made.backend, names);';
+      let session = await slice.createSession(made.backend, 'names');
+      stage = 'E(session).getInfo();';
+      const { key } = await E(session).getInfo();
+      stage = 'slice.subscribe(session);';
+      let live = await slice.subscribe(session);
+      const identity = {
+        ...(await runIdentity()),
+        crankBudget,
+        loadAvg: loadAvg(),
+      };
+      // The session vat came from the pool ("spare session N"): after the
+      // baseline it is the session vat with the longest journal.
+      /** @type {{ session?: string, factory?: string }} */
+      const ids = {};
+      const findIds = async () => {
+        const rows = await slice.workers();
+        const sessions = rows
+          .filter(w => /^(spare )?session /.test(w.debugLabel ?? ''))
+          .sort(
+            (a, b) =>
+              Number(b.journalLength ?? 0) - Number(a.journalLength ?? 0),
+          );
+        ids.session = sessions[0]?.workerId;
+        ids.factory = rows.find(w => w.debugLabel === 'app:harness')?.workerId;
+      };
+      const measure = () => ({
+        session:
+          ids.session === undefined
+            ? undefined
+            : vatNames(state.root, ids.session),
+        factory:
+          ids.factory === undefined
+            ? undefined
+            : vatNames(state.root, ids.factory),
+      });
 
-    const cleanCycle = async () => {
+      const cleanCycle = async () => {
+        await live.stop();
+        await state.restart();
+        // A retired break here names no step; the labels below do.
+        cycleStep = 'makeSlice';
+        slice = await makeSlice(state);
+        // Presences the client held die with its connection: a backend for
+        // createSession is made again (the session keeps its own).
+        /** @type {any} */ (slice).backend = (
+          await slice.makeBackend(script)
+        ).backend;
+        cycleStep = 'findSession';
+        session = await E(slice.factory).findSession(key);
+        cycleStep = 'subscribe';
+        live = await slice.subscribe(session);
+        cycleStep = 'done';
+      };
+      let cycleStep = 'none';
+
+      stage = 'touchEveryEntryPoint(';
+      await touchEveryEntryPoint(
+        slice,
+        session,
+        live,
+        (p, n) => keysJson(p, 0, n),
+        'baseline',
+      );
+      stage = 'findIds();';
+      await findIds();
+      stage = 'cleanCycle().catch(error => {';
+      await cleanCycle().catch(error => {
+        throw Error(`cleanCycle at ${cycleStep}: ${error.message}`);
+      });
+      const before = measure();
+      const fedBefore = fedKeys;
+      const t0 = performance.now();
+      stage = 'touchEveryEntryPoint(slice, session, live, fresh, ';
+      await touchEveryEntryPoint(slice, session, live, fresh, 'flood');
+      const floodMs = round1(performance.now() - t0);
+      stage = 'cleanCycle().catch(error => {';
+      await cleanCycle().catch(error => {
+        throw Error(`cleanCycle at ${cycleStep}: ${error.message}`);
+      });
+      const after = measure();
+      const row = {
+        metric: 'names.flood',
+        fedKeys,
+        fedInFlood: fedKeys - fedBefore,
+        before,
+        after,
+        sessionGrowth:
+          Number(after.session?.names ?? NaN) -
+          Number(before.session?.names ?? NaN),
+        factoryGrowth:
+          Number(after.factory?.names ?? NaN) -
+          Number(before.factory?.names ?? NaN),
+        ids,
+        floodMs,
+        ...identity,
+      };
+      emit(row);
+      t.log(JSON.stringify(row));
+      t.true(fedKeys >= 100_000, `${fedKeys} distinct keys fed`);
+      t.truthy(before.session && after.session, 'session vat snapshots found');
+      t.truthy(before.factory && after.factory, 'factory vat snapshots found');
+      t.true(
+        row.sessionGrowth <= 32,
+        `session vat names grew ${row.sessionGrowth}`,
+      );
+      t.true(
+        row.factoryGrowth <= 32,
+        `factory vat names grew ${row.factoryGrowth}`,
+      );
+      stage = 'runTurn(slice, session, live, baseline);';
+      const last = await runTurn(slice, session, live, 'baseline');
+      t.is(last.end.status, 'completed');
+      stage = 'live.stop();';
       await live.stop();
-      await state.restart();
-      slice = await makeSlice(state);
-      // Presences the client held die with its connection: a backend for
-      // createSession is made again (the session keeps its own).
-      /** @type {any} */ (slice).backend = (
-        await slice.makeBackend(script)
-      ).backend;
-      session = await E(slice.factory).findSession(key);
-      live = await slice.subscribe(session);
-    };
-
-    await touchEveryEntryPoint(
-      slice,
-      session,
-      live,
-      (p, n) => keysJson(p, 0, n),
-      'baseline',
-    );
-    await findIds();
-    await cleanCycle();
-    const before = measure();
-    const fedBefore = fedKeys;
-    const t0 = performance.now();
-    await touchEveryEntryPoint(slice, session, live, fresh, 'flood');
-    const floodMs = round1(performance.now() - t0);
-    await cleanCycle();
-    const after = measure();
-    const row = {
-      metric: 'names.flood',
-      fedKeys,
-      fedInFlood: fedKeys - fedBefore,
-      before,
-      after,
-      sessionGrowth:
-        Number(after.session?.names ?? NaN) -
-        Number(before.session?.names ?? NaN),
-      factoryGrowth:
-        Number(after.factory?.names ?? NaN) -
-        Number(before.factory?.names ?? NaN),
-      ids,
-      floodMs,
-      ...identity,
-    };
-    emit(row);
-    t.log(JSON.stringify(row));
-    t.true(fedKeys >= 100_000, `${fedKeys} distinct keys fed`);
-    t.truthy(before.session && after.session, 'session vat snapshots found');
-    t.truthy(before.factory && after.factory, 'factory vat snapshots found');
-    t.true(
-      row.sessionGrowth <= 32,
-      `session vat names grew ${row.sessionGrowth}`,
-    );
-    t.true(
-      row.factoryGrowth <= 32,
-      `factory vat names grew ${row.factoryGrowth}`,
-    );
-    const last = await runTurn(slice, session, live, 'baseline');
-    t.is(last.end.status, 'completed');
-    await live.stop();
+    } catch (error) {
+      if (state) t.log(state.stderrTail());
+      throw Error(`at "${stage}": ${/** @type {Error} */ (error).message}`);
+    }
   },
 );
 

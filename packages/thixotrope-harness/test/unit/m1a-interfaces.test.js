@@ -364,6 +364,7 @@ const shapeSamples = {
   MakeArgs: { config, services, rowReporter: far('RowReporter') },
   MadeSession: { session, internal: far('SessionInternal') },
   ProgramPiece: { digest: 'a'.repeat(64), index: 0, count: 1, text: 'src' },
+  ScriptKeys: { prefix: 'reply', from: 0, count: 100_000 },
   ScriptChunk: { text: 'x', repeat: 65_536, delayMs: 0 },
   ScriptToolCall: { name: 'echo', callId: 'c', args: '{}' },
   ScriptRound: scriptRound,

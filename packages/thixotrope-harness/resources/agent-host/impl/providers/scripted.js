@@ -113,6 +113,23 @@ export const generatedArgs = count => {
 harden(generatedArgs);
 
 /**
+ * `{"<prefix><from>":<from>,...}` with `count` distinct keys, built as
+ * text in the adapter. A script names a flood of fresh keys this way
+ * (`chunk.keys`, `call.argsFreshKeys`) instead of carrying the text:
+ * the script crosses the agent host's manager vat whole, where a message of
+ * a few hundred KB halts it (C-5; J-9381).
+ * @param {{ prefix: string, from: number, count: number }} spec
+ */
+export const generatedKeys = ({ prefix, from, count }) => {
+  /** @type {string[]} */
+  const parts = [];
+  for (let i = from; i < from + count; i += 1)
+    parts.push(`"${prefix}${i}":${i}`);
+  return `{${parts.join(',')}}`;
+};
+harden(generatedKeys);
+
+/**
  * The last `units` UTF-16 units of `text`, never starting inside a pair.
  * @param {string} text
  * @param {number} units
@@ -501,7 +518,10 @@ export const makeScriptedProvider = ({
         cancelled();
         return;
       }
-      const text = chunk.text.repeat(chunk.repeat ?? 1);
+      const text =
+        chunk.keys !== undefined
+          ? generatedKeys(chunk.keys)
+          : chunk.text.repeat(chunk.repeat ?? 1);
       parts.push(text);
       textBytes += utf8Bytes(text);
       const publishedAt = now();
@@ -584,9 +604,11 @@ export const makeScriptedProvider = ({
           ? JSON.stringify({
               code: call.code.text.repeat(call.code.repeat ?? 1),
             })
-          : call.argsKeys
-            ? generatedArgs(call.argsKeys)
-            : '{}'),
+          : call.argsFreshKeys !== undefined
+            ? JSON.stringify({ text: generatedKeys(call.argsFreshKeys) })
+            : call.argsKeys
+              ? generatedArgs(call.argsKeys)
+              : '{}'),
     }));
     /** @type {any} */
     let result;

@@ -37,6 +37,7 @@ import { makeEndpoint } from '../../resources/agent-host/impl/endpoint.js';
 import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 import {
   generatedArgs,
+  generatedKeys,
   makeScriptedProvider,
 } from '../../resources/agent-host/impl/providers/scripted.js';
 import { makeEchoTool } from '../../resources/agent-host/impl/tools/echo.js';
@@ -1047,4 +1048,14 @@ test('loader: finds the implementation and returns an adapter that attaches', as
   await t.throwsAsync(E(adapter).bind('other', harden({ sink }), 2n), {
     message: /no registration "other"/,
   });
+});
+
+test('generatedKeys builds a flood of fresh keys in the adapter (J-9381)', t => {
+  t.is(
+    generatedKeys({ prefix: 'r', from: 5, count: 3 }),
+    '{"r5":5,"r6":6,"r7":7}',
+  );
+  const many = JSON.parse(generatedKeys({ prefix: 'x', from: 0, count: 1000 }));
+  t.is(Object.keys(many).length, 1000);
+  t.is(generatedKeys({ prefix: 'x', from: 0, count: 0 }), '{}');
 });
