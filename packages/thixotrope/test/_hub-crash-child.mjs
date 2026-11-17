@@ -18,10 +18,16 @@
  * last holder lets go: by a GC frame, or by A's retirement after a restart.
  *
  * argv: statePath mode(fresh|recover) scenario(burst|ordinary) n killAt
+ * [hubStore(file|log) [compactChars]]
  * With killAt > 0 the process SIGKILLs itself just before its killAt-th
- * durable file operation (a hub.json replacement or a journal append), so
- * the kill lands at every commit point a run has. It prints one JSON line
- * with the hub's remaining reference rows when it finishes.
+ * durable file operation (a hub.json replacement, a hub log append, image
+ * or log reset, or a journal append), so the kill lands at every commit
+ * point a run has. With the log hub store (C-2) the crafted starting state
+ * is written by the whole-file store, so a fresh run starts by migrating it
+ * (its writes are kill points too), and the log compacts whenever it
+ * outgrows compactChars (default 4,000 characters) so that compactions are
+ * killed as well. It prints one JSON line with the hub's remaining reference
+ * rows when it finishes.
  */
 /* eslint-disable no-await-in-loop */
 import '@endo/init';
@@ -33,9 +39,19 @@ import { makeGcFrameTest, makeOcapnHub } from '../src/net/hub.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
 import { makeFsStore } from '../src/store/store-fs.js';
 
-const [statePath, mode, scenario, nText, killAtText] = process.argv.slice(2);
+const [
+  statePath,
+  mode,
+  scenario,
+  nText,
+  killAtText,
+  hubStoreText,
+  compactText,
+] = process.argv.slice(2);
 const N = Number(nText);
 const killAt = Number(killAtText ?? 0);
+const hubStore = hubStoreText === 'log' ? 'log' : 'file';
+const compactChars = Number(compactText ?? 4000);
 
 const nodePowers = makeNodePowers();
 let durableOps = 0;
@@ -64,7 +80,10 @@ const syncFiles = harden({
     nodePowers.syncFiles.appendTextDurable(path, text);
   },
 });
-const store = makeFsStore({ ...nodePowers, syncFiles }, statePath);
+const store = makeFsStore({ ...nodePowers, syncFiles }, statePath, {
+  hubStore,
+  hubLog: { compactChars, compactRatio: 0 },
+});
 
 const W = 'f'.repeat(32);
 const V = 'e'.repeat(32);
@@ -144,7 +163,8 @@ if (mode === 'fresh') {
     nextHandoffCount: '1',
     ...extra,
   });
-  store.setHubState({
+  // The whole-file store writes it: the log store migrates it.
+  makeFsStore(nodePowers, statePath, { hubStore: 'file' }).setHubState({
     version: 2,
     refs,
     publications: {},
@@ -256,6 +276,7 @@ process.stdout.write(
   `${JSON.stringify({
     done: true,
     durableOps,
+    hubStore: store.hubStoreStats?.(),
     refs: Object.keys(state.refs).sort(),
     queues: Object.fromEntries(
       Object.entries(state.sessions).map(([k, s]) => [

@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { connectLocalControl } from '../../src/control/local-control.js';
 
 import { makeNodePowers } from '../../src/platform/node/powers.js';
+import { makeFsStore } from '../../src/store/store-fs.js';
 
 const nodePowers = makeNodePowers();
 
@@ -150,11 +151,10 @@ test.serial(
     t.is(await initial.call('evaluate', 'globalThis.retained = 91'), '91');
     await initial.call('stop');
     t.is((await first.exited)[0], 0);
-    const hubPath = join(path, 'hub.json');
     const configPath = join(path, 'workspace.json');
-    const publications = JSON.parse(
-      await readFile(hubPath, 'utf8'),
-    ).publications;
+    // Through the store: the hub's state is a log (hub-image.json and
+    // hub-log.jsonl), not a hub.json to read directly.
+    const { publications } = makeFsStore(nodePowers, path).getHubState();
     // The workspace root, the registry vat, and the clock and control
     // managers' start notices: both are native resources, and a native
     // manager's lifecycle facet is published privately for its notices.
@@ -177,7 +177,7 @@ test.serial(
     await recoveredSelection.call('stop');
     t.is((await second.exited)[0], 0);
     t.deepEqual(
-      JSON.parse(await readFile(hubPath, 'utf8')).publications,
+      makeFsStore(nodePowers, path).getHubState().publications,
       publications,
     );
     t.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), config);
@@ -199,7 +199,7 @@ test.serial(
     t.is((await third.exited)[0], 0);
     t.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), config);
     t.deepEqual(
-      JSON.parse(await readFile(hubPath, 'utf8')).publications,
+      makeFsStore(nodePowers, path).getHubState().publications,
       publications,
     );
   },

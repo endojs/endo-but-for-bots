@@ -24,6 +24,13 @@
  *
  * Kill points are drawn at random (the seed is in the test title; set
  * HUB_CRASH_SEED to repeat one, HUB_CRASH_ALL=1 to try every point).
+ *
+ * Both hub stores run every scenario: the whole-file `hub.json` and the log
+ * of deltas (C-2), which here migrates the crafted whole-file state at its
+ * first open and compacts every few commits, so kills also land inside a
+ * migration and inside compactions. The log store's uninterrupted journal
+ * must equal the whole-file store's byte for byte: the store changes how
+ * the state is written, never what the hub sends.
  */
 /* eslint-disable no-await-in-loop */
 import test from '@endo/ses-ava/test.js';
@@ -132,25 +139,75 @@ const killPoints = (total, random) => {
   return [...points].sort((a, b) => a - b);
 };
 
-for (const scenario of /** @type {const} */ (['burst', 'ordinary'])) {
-  test(`SIGKILL at random commit points during ${scenario === 'burst' ? 'a GC burst' : 'ordinary traffic'} loses and repeats nothing (seed ${seed})`, async t => {
+for (const [hubStore, scenario] of /** @type {const} */ ([
+  ['file', 'burst'],
+  ['file', 'ordinary'],
+  ['log', 'burst'],
+  ['log', 'ordinary'],
+])) {
+  test(`SIGKILL at random commit points during ${scenario === 'burst' ? 'a GC burst' : 'ordinary traffic'} loses and repeats nothing, ${hubStore} hub store (seed ${seed})`, async t => {
     t.timeout(600_000);
     const root = await mkdtemp(join(tmpdir(), 'thix-hub-crash-'));
     t.teardown(() => rm(root, { recursive: true, force: true }));
+    const storeArgs = [hubStore];
     const reference = join(root, 'reference');
-    const done = await run([reference, 'fresh', scenario, String(N), '0']);
+    const done = await run([
+      reference,
+      'fresh',
+      scenario,
+      String(N),
+      '0',
+      ...storeArgs,
+    ]);
     t.is(done.code, 0);
     t.deepEqual(done.out.refs, [], 'the uninterrupted run releases every row');
     const referenceJournal = journalText(reference);
     const total = done.out.durableOps;
-    t.log(`${scenario}: ${total} durable operations uninterrupted`);
-    const random = makeRandom(seed + (scenario === 'burst' ? 0 : 1));
+    t.log(
+      `${scenario}, ${hubStore} store: ${total} durable operations uninterrupted; store ${JSON.stringify(done.out.hubStore)}`,
+    );
+    if (hubStore === 'log') {
+      t.true(done.out.hubStore.migrated === 1, 'the run migrated hub.json');
+      t.true(Number(done.out.hubStore.compactions) > 2, 'the run compacted');
+      const wholeFile = join(root, 'whole-file');
+      const control = await run([
+        wholeFile,
+        'fresh',
+        scenario,
+        String(N),
+        '0',
+        'file',
+      ]);
+      t.is(control.code, 0);
+      t.is(
+        referenceJournal,
+        journalText(wholeFile),
+        'the log store sends what the whole-file store sends, byte for byte',
+      );
+    }
+    const random = makeRandom(
+      seed + (scenario === 'burst' ? 0 : 1) + (hubStore === 'log' ? 2 : 0),
+    );
     for (const k of killPoints(total, random)) {
       const dir = join(root, `k${k}`);
-      const killed = await run([dir, 'fresh', scenario, String(N), String(k)]);
+      const killed = await run([
+        dir,
+        'fresh',
+        scenario,
+        String(N),
+        String(k),
+        ...storeArgs,
+      ]);
       t.is(killed.signal, 'SIGKILL', `killed before durable operation ${k}`);
       const before = journalText(dir);
-      const recovered = await run([dir, 'recover', scenario, String(N), '0']);
+      const recovered = await run([
+        dir,
+        'recover',
+        scenario,
+        String(N),
+        '0',
+        ...storeArgs,
+      ]);
       t.is(recovered.code, 0, `recovered after kill point ${k}`);
       t.deepEqual(recovered.out?.refs, [], `k=${k}: export counts match`);
       t.true(

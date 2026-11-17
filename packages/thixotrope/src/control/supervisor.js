@@ -150,6 +150,23 @@ const readMaxDeliveryAttempts = environment => {
 };
 
 /**
+ * How the hub's state is kept, from the environment: THIXOTROPE_HUB_STORE
+ * "log" (the default: one append of what changed per commit, compacted into
+ * an image) or "file" (the whole hub.json replaced at every commit). The log
+ * store migrates a whole-file directory; the whole-file store refuses a log
+ * directory.
+ *
+ * @param {EnvironmentPowers} environment
+ * @returns {'log' | 'file'}
+ */
+const readHubStore = environment => {
+  const text = environment.get('THIXOTROPE_HUB_STORE');
+  if (text === undefined || text === 'log') return 'log';
+  if (text === 'file') return 'file';
+  throw Error('THIXOTROPE_HUB_STORE must be "log" or "file"');
+};
+
+/**
  * Run a single local supervisor. The engine lease encloses socket lifetime.
  * @param {PlatformPowers} platform
  * @param {string} statePath
@@ -320,7 +337,9 @@ export const serveThixotrope = async (
   };
 
   try {
-    const store = makeFsStore({ syncFiles, paths }, statePath);
+    const store = makeFsStore({ syncFiles, paths }, statePath, {
+      hubStore: readHubStore(environment),
+    });
     // Collection takes its turn with a vat allocation in flight, which has
     // no root until its facade is answered; the registry vat itself
     // serialises installations and removals, and roots the vat of an

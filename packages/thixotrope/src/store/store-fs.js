@@ -5,6 +5,7 @@
 import { Fail, q } from '@endo/errors';
 import harden from '@endo/harden';
 
+import { makeHubLogStore } from './hub-log-store.js';
 import {
   assertBundleDigest,
   assertSessionToken,
@@ -25,13 +26,33 @@ export { assertWorkerId, isSessionToken } from './store-validators.js';
  * - `workers/<workerId>/journal.jsonl`
  * - `sessions/<token>/meta.json`
  * - `bundles/<digest>.cjs`
+ * - the OCapN hub's state: `hub-image.json` and `hub-log.jsonl` (the log
+ *   store, `hub-log-store.js`; the default), or `hub.json` (the whole-file
+ *   store, `hubStore: 'file'`)
+ *
+ * The log store migrates a directory the whole-file store wrote, and leaves
+ * a `hub.json` that every reader of whole-file hub state refuses. The
+ * whole-file store refuses a directory the log store wrote.
  *
  * @param {{ syncFiles: SyncFilePowers, paths: PathPowers }} powers
  * @param {string} statePath
+ * @param {object} [options]
+ * @param {'log' | 'file'} [options.hubStore] how the hub's state is kept:
+ *   a log of deltas over an image (one append per commit), or the whole
+ *   `hub.json` replaced atomically at every commit
+ * @param {{ compactChars?: number, compactRatio?: number }} [options.hubLog]
+ *   the log store's compaction thresholds
  * @returns {ThixotropeStore}
  */
-export const makeFsStore = ({ syncFiles, paths }, statePath) => {
+export const makeFsStore = (
+  { syncFiles, paths },
+  statePath,
+  { hubStore = 'log', hubLog = {} } = {},
+) => {
   const { join } = paths;
+  hubStore === 'log' ||
+    hubStore === 'file' ||
+    Fail`Unknown hub store ${q(hubStore)}: use "log" or "file"`;
   /**
    * @param {string} path
    * @returns {any}
@@ -224,6 +245,27 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
   /** @type {Map<string, WorkerStore>} */
   const workerStores = new Map();
 
+  const hubPath = join(statePath, 'hub.json');
+  const hubImagePath = join(statePath, 'hub-image.json');
+  const hubLogPath = join(statePath, 'hub-log.jsonl');
+  const hubLogStore =
+    hubStore === 'log'
+      ? makeHubLogStore(
+          syncFiles,
+          {
+            imagePath: hubImagePath,
+            logPath: hubLogPath,
+            legacyPath: hubPath,
+          },
+          hubLog,
+        )
+      : undefined;
+  const refuseHubLog = () => {
+    if (syncFiles.exists(hubImagePath) || syncFiles.exists(hubLogPath))
+      throw Error(
+        `The hub state in ${q(statePath)} is a log (hub-image.json, hub-log.jsonl), which the whole-file hub store cannot read; open it with the log hub store`,
+      );
+  };
   // Process-local counters of the hub state's whole-file replacements.
   let hubWrites = 0;
   let hubChars = 0;
@@ -251,16 +293,24 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
         force: true,
       });
     },
-    getHubState: () => readJsonMaybe(join(statePath, 'hub.json')),
+    getHubState: () => {
+      if (hubLogStore) return hubLogStore.getState();
+      refuseHubLog();
+      return readJsonMaybe(hubPath);
+    },
     setHubState: state => {
+      if (hubLogStore) return hubLogStore.setState(state);
+      refuseHubLog();
       const text = `${JSON.stringify(state)}\n`;
-      syncFiles.writeTextAtomic(join(statePath, 'hub.json'), text);
+      syncFiles.writeTextAtomic(hubPath, text);
       hubWrites += 1;
       hubChars += text.length;
       return text.length;
     },
     hubStoreStats: () =>
-      harden({ kind: 'file', writes: hubWrites, chars: hubChars }),
+      hubLogStore
+        ? hubLogStore.stats()
+        : harden({ kind: 'file', writes: hubWrites, chars: hubChars }),
     listSessionTokens: () =>
       syncFiles.exists(sessionsPath)
         ? syncFiles.listDirectory(sessionsPath).sort()

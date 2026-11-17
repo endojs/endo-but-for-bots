@@ -266,7 +266,11 @@ export const acquireIronhorseRuntime = async (
           if (error.code !== 'ENOENT') throw error;
           return [];
         });
-      if (entries.includes('hub.json') || workers.length) {
+      if (
+        entries.includes('hub.json') ||
+        entries.includes('hub-image.json') ||
+        workers.length
+      ) {
         throw Error(
           'Unversioned Ironhorse state: no runtime.json; use the original runtime or a fresh state directory',
         );
