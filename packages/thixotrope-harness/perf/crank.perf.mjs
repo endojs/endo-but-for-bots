@@ -36,7 +36,8 @@
  *   CRANK_TURNS turns): `getHistoryPage()`, budget median 300 ms.
  * - `crank.context.rebuild`: the first round's `prepare()` after a clean
  *   restart at CRANK_TURNS turns (budget 5 s), as `history.perf.mjs`.
- * - `crank.grow`: wall time per 100 turns; `crank.heap`: the session vat's
+ * - `crank.grow`: wall time per 100 turns, with the engine timing and hub
+ *   cost deltas of those turns; `crank.heap`: the session vat's
  *   slot capacity (pages x 256, a high-water mark) at each snapshot.
  *
  *   cd packages/thixotrope-harness && node perf/crank.perf.mjs
@@ -68,6 +69,7 @@ import { limits as harnessLimits } from '../config/defaults.js';
 
 import {
   crankBudget,
+  delta,
   emit,
   harnessRoot,
   loadAvg,
@@ -140,6 +142,33 @@ const script = harden({
     },
   ],
 });
+
+/**
+ * The hub's process-local cost counters (`status().hub`, CC-018, CC-024)
+ * summed over its delivery buckets: deliveries, ms, persists, persistMs, persistChars.
+ * @param {any} hub
+ */
+const hubTotals = hub => {
+  /** @type {Record<string, number>} */
+  const out = {
+    deliveries: 0,
+    ms: 0,
+    persists: 0,
+    persistMs: 0,
+    persistChars: 0,
+  };
+  // The delivery buckets only (not `store` or `persistRuns`).
+  for (const name of ['other', 'gcOnly', 'outside']) {
+    const bucket = hub?.[name];
+    if (bucket !== null && typeof bucket === 'object') {
+      for (const key of Object.keys(out)) {
+        const value = /** @type {any} */ (bucket)[key];
+        if (typeof value === 'number') out[key] += value;
+      }
+    }
+  }
+  return out;
+};
 
 /** @param {number[]} values */
 const median = values => (values.length ? summarize(values).median : null);
@@ -481,6 +510,10 @@ await runPerf('crank', async ({ provision }) => {
 
   const tGrow = performance.now();
   let tHundred = tGrow;
+  /** @type {any} */
+  let lastStatus;
+  /** @type {Record<string, number> | undefined} */
+  let lastHub;
   for (let n = 1; n <= 50; n += 1) await turn(found, n);
   await startRow('crank.turn.start.early', 4, 50);
   await pageRow(found, 'crank.history.page');
@@ -581,12 +614,30 @@ await runPerf('crank', async ({ provision }) => {
     if (POINTS.includes(n)) await point(n);
     if (n % 100 === 0) {
       const now = performance.now();
+      const status = await state.client.call('status');
+      // Where the 100 turns' time went: engine timings (deliveries,
+      // snapshots, wakes) and the hub's own synchronous time and persists,
+      // as deltas since the last row (a restart in between resets the hub's
+      // process-local counters: then the row has no hub delta).
+      const hubNow = hubTotals(status.hub);
       emit({
         metric: 'crank.grow',
         turns: n,
         msPer100: round1(now - tHundred),
+        engine: delta(lastStatus?.timings ?? {}, status.timings),
+        hub:
+          lastHub && hubNow.ms >= lastHub.ms
+            ? Object.fromEntries(
+                Object.entries(hubNow).map(([k, v]) => [
+                  k,
+                  round1(v - (lastHub?.[k] ?? 0)),
+                ]),
+              )
+            : undefined,
         loadAvg: loadAvg(),
       });
+      lastStatus = status;
+      lastHub = hubNow;
       tHundred = now;
     }
   }
