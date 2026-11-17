@@ -30,11 +30,18 @@ export const makeStateDir = async prefix => {
   const base = join(harnessRoot, 'tmp');
   await mkdir(base, { recursive: true, mode: 0o700 });
   const root = await mkdtemp(join(base, prefix));
+  /** Archive stores made over this directory: drained before removal. */
+  /** @type {any[]} */
+  const archives = [];
   return {
     root,
     blobDir: join(root, 'agent-host', 'blobs'),
     archiveDir: join(root, 'agent-host', 'archive'),
-    cleanup: () => rm(root, { recursive: true, force: true }),
+    archives,
+    cleanup: async () => {
+      await Promise.all(archives.map(archive => archive.drain()));
+      await rm(root, { recursive: true, force: true });
+    },
   };
 };
 
@@ -74,7 +81,7 @@ export const makeFakeSink = () => {
 /**
  * One adapter incarnation over `dirs`: a fresh blob store, archive store and
  * context cache (a restart is another call over the same dirs and sink).
- * @param {{ blobDir: string, archiveDir: string }} dirs
+ * @param {{ blobDir: string, archiveDir: string, archives?: any[] }} dirs
  * @param {any} sink
  * @param {{ trace?: any, maxTextUnits?: number }} [options]
  */
@@ -86,6 +93,7 @@ export const makeIncarnation = (dirs, sink, { trace, maxTextUnits } = {}) => {
     sink,
     ...(trace === undefined ? {} : { trace }),
   });
+  dirs.archives?.push(archive);
   const cache = makeContextCache({
     store: blobs,
     archive,

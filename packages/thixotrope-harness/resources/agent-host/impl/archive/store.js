@@ -488,6 +488,23 @@ export const makeArchiveStore = ({
     return st;
   };
 
+  /** Operations started and not finished (`drain`). @type {Set<Promise<unknown>>} */
+  const inFlight = new Set();
+  /**
+   * @template T
+   * @param {Promise<T>} promise
+   * @returns {Promise<T>}
+   */
+  const track = promise => {
+    const settled = promise.then(
+      () => {},
+      () => {},
+    );
+    inFlight.add(settled);
+    void settled.then(() => inFlight.delete(settled));
+    return promise;
+  };
+
   /**
    * Run `step` in the session's queue.
    * @template T
@@ -498,6 +515,7 @@ export const makeArchiveStore = ({
   const queued = (st, step) => {
     st.busy += 1;
     const result = st.tail.then(step);
+    track(result);
     st.tail = result.then(
       () => {
         st.busy -= 1;
@@ -1318,7 +1336,7 @@ export const makeArchiveStore = ({
         replace = true;
         records = [];
       }
-      return stateOf(key, session).then(st =>
+      return track(stateOf(key, session)).then(st =>
         queued(st, async () => {
           const path = mirrorPath(st);
           try {
@@ -1419,6 +1437,16 @@ export const makeArchiveStore = ({
         }
       }
       return removed;
+    },
+    /**
+     * Wait until every operation started so far (mirror writes included)
+     * has finished: shutdown, tests.
+     */
+    drain: async () => {
+      while (inFlight.size > 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await Promise.all([...inFlight]);
+      }
     },
     /** Observe a vat state (tests; History uses it for vat pages). */
     observe,
