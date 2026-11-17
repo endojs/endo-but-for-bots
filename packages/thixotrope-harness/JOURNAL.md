@@ -6091,3 +6091,387 @@ clean; eslint 0 errors on the changed files (warnings as before). No cargo run; 
 Reading: every lane test runs on the log store (the default), including the state directories the
 lane's supervisor test restarts three times, and `gc.restart`'s five restarts (J-9333).
 Decision: none.
+
+### J-9380 2026-11-17 Integration of C-7 and C-2 build state, fixes and runs - good fit
+Evidence: HEAD `be7d2a84aa` and later (this step's harness commits `758c545380`, `ef637da1b6`,
+`d3b605dbd0`, `c029fbf693`, `be7d2a84aa`, `aa7325c02f`, `bd14ef7e08`, `f44fe629ae`, `4f0661fca2`),
+under the run lock, one file
+per invocation, load 1.3-5.1. Build state: `cargo build --locked --release -p
+thixotrope-ironhorse-worker` was a no-op and the release worker is
+`367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25` (the C-7 digest); the Ironhorse
+boot bundles rebuilt into a scratch directory are byte-identical to `pkg/dist-ironhorse` (`boot.js`,
+`worker-peer.js`); boot fingerprint `6c864841...` (pinned in `0a4bdb3826`, unchanged); runtime
+identity as recorded in a template's `runtime.json`: format 2, host protocol
+`sequenced-hub-outbox-v1`, worker `367e78ad...`, bootstrap `7e38f2cf...`, `b1f3a52e...`, limits
+crank budget 50 M, slot ceiling 4,000,000, chunk ceiling 256 MiB, `gcPolicy` allocation (131,072
+slots, 16 MiB, 32 cranks). The cached templates were already for this worker; templates were built
+where their key changed: the m1a, m1b and pool templates after `aa7325c02f` changed
+`guest/lib/interfaces.js` (which their provisioning hashes; m1b 40.4 s), the base template once (not
+cached before), and one `THIXOTROPE_HUB_STORE=file` template for an A/B. At the end the stale ones
+were deleted (`t21dfc2e13c`, `t70c7e9a431`, `tcbd23832e7`, `td9d9e8c019`, `tfac3323850`) and the
+current ones kept: `t284d07d9e8` (base), `td66b90a076` (m1a), `t7e61829f2f` (m1b); the pool template
+rebuilds at its next use. The lane was not re-run: its
+last run (69/69 at `50f1d348eb`, J-9336) postdates every change to the worker, the bundles and
+`pkg/src`, and this step changed none of them.
+Integration defects fixed (each its own commit): (1) `scripts/serve.mjs` dropped `THIXOTROPE_GC_*`
+and `THIXOTROPE_HUB_STORE` from the supervisor's environment, so a bisect with `every-crank` or the
+file store silently measured the defaults (`758c545380`, unit test); (2) templates did not key on
+them, so a run with either set would clone a template the supervisor then refuses (`ef637da1b6`;
+only set ones are keyed, so default keys did not move); (3) `perf/_harness.mjs` `hubJsonBytes` read
+the 144-byte marker of a log-store directory (`d3b605dbd0`; rows now also name `gcPolicy` and
+`hubStore`); (4) acceptance 10 did not check that the killed exec ran at most once (`c029fbf693`: an
+evaluation counter in the scope and the provider's request count); (5) the name-table test never got
+past its first call (J-9381). No change outside the harness.
+Runs (all pass): unit lane 467 passed / 41 skipped after (1)-(4), 468 / 41 after `aa7325c02f`;
+`m1a-provision` 1/1, `m1a-slice` 6/6, `m1a-slice-crash` 1/1, `m1a-slice-restart` 20/20
+(`M1A_KILL_DELAYS_MS=0,100,500,1500,4000`), `m1b-content` 2/2, `m1b-live` 3/3 plus the known failure
+(9 delete, M2), `m1b-exec-tool` 1/1, `m1b-exec-tool-restart` 5 runs x 1/1 (`EXEC_KILL_DELAY_MS` 300,
+1,000, 2,000, 5,000, 12,000), `m1b-context-restart` 1/1
+(`CONTEXT_RESTARTS=clean,kill,kill,kill,kill,kill`, kill delays 0, 500, 1,500, 3,000, 6,000 ms),
+`m1b-pool` 1/1, `m1b-pool-restart` 6/6 (`POOL_KILL_DELAYS_MS=0,50,150,400,1000`), `m1b-qc` 1/1,
+`test/template/template.test.js` 6/6, `m1b-followups` 3/3 (after J-9381).
+SIGKILL repetitions, duplicates looked for in every run:
+- M1a 5, 6, 7 and held ports, 5 delays each: provider requests for the killed turn 1 / 0 / 1 / 1 in
+  every run, echo starts 1 in every case-7 run, first reads outcome-unknown / interrupted /
+  outcome-unknown / completed; served 6.3-6.7 s while the session was awake and unsnapshotted,
+  3.1-3.3 s at the 4,000 ms delay (asleep, checkpointed).
+{"metric":"exec.restart.sigkill.once","killDelayMs":300,"sleepsBefore":1,"sleepsAfter":2,"killedRequests":1}
+{"metric":"exec.restart.sigkill.once","killDelayMs":12000,"sleepsBefore":1,"sleepsAfter":2,"killedRequests":1}
+- M1b 10 (and 3 in the same file), 5 delays: the killed exec evaluated exactly once (`sleeps` 1 -> 2
+  in all five, including the 300 ms kill), the provider got the killed turn once, the turn read
+  outcome-unknown 1.25-1.31 s after serving and 6.5-16.9 s after the call (recovery did not wait for
+  the 30 s sleep), the next exec saw `x === 5` in 128-150 ms. Acceptance 3: `x` after the clean
+  restart, cancel keeps the scope (next exec 44-52 ms after the cancel), the abandoned loop stops,
+  in all five runs.
+- M1b 8, 5 idle kills (0-6,000 ms) plus a clean restart: the provider received each turn once, one
+  context line each, digests of all prior turns equal; `context.rebuild.vat` 2,297-2,337 ms after a
+  kill, 2,412 ms after the clean restart (QC: 2.3-2.4 s).
+- M1b 12, kill after a take at 0, 50, 150, 400, 1,000 ms: listed at most once (0 at 0 ms: rolled
+  back; 1 otherwise, state ready), the first turn's provider requests 1, the pool back at target.
+No duplicated provider request, tool run or exec evaluation in any of the 35 SIGKILL runs (20 M1a,
+15 M1b).
+Reading: the two core changes integrate with the harness without a behaviour change visible to its
+acceptance tests; the defects were in harness plumbing and in one test.
+Decision: none beyond the fixes; perf in J-9382.
+
+### J-9381 2026-11-17 Integration the name-table flood test, and its result - deviation
+Evidence: `m1b-followups.test.js` 'J-9366 ...' failed at HEAD with "ocapn hub: the target session
+has been retired", the same text J-9366 read as a presence held across a restart. With the step
+named in the error it failed at the first `slice.makeBackend(script)`, before any restart, on both
+hub stores (log and `THIXOTROPE_HUB_STORE=file`). A scratch bisect of `makeBackend` with a script of
+one chunk of 256 KB .. 4 MB: the supervisor logged `native:agentHostAdmin ... guest crank halted:
+MeterAbort`. The script crosses the agent host's manager vat whole (`AgentHostAdmin.makeBackend`),
+and this test's script carried about 2 MB of flood text (C-5: one inbound message above about 94 KB
+halts a vat). So the test had never run past its first call; nothing in the harness or the core
+changes broke it.
+Fix (`aa7325c02f`): the scripted provider builds key floods in the adapter from a spec
+(`ScriptChunk.keys`, `ScriptToolCall.argsFreshKeys`, `{prefix, from, count}`; m1b-interfaces 17.6, a
+test-double shape). Each later bound the test then met was a sending-side bound working as designed,
+and the test now respects it: the script fits one frame (`frameBytes`; first try: "round output
+exceeds this build's frame limit" at `makeBackend`), a delta is at most `textUnits` (100 deltas of
+1,000 keys), 256 calls fit one RoundResult (`roundResultBytes` 18,432: two keys per echo call, no
+arguments for the 192 unknown tools), a submission is at most 200,000 characters (9,000 keys) and an
+inline `startTurn` at most `inlineBytes` (300 keys).
+{"metric":"names.flood","fedKeys":111765,"fedInFlood":11145,"before":{"session":{"label":"spare session 1","cut":47,"names":8127},"factory":{"label":"app:harness","cut":141,"names":8037}},"after":{"session":{"label":"spare session 1","cut":819,"names":8127},"factory":{"label":"app:harness","cut":417,"names":8037}},"sessionGrowth":0,"factoryGrowth":0,"floodMs":68907.2,"commit":"be7d2a84aa-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000","loadAvg":[2.49,2.6,2.6]}
+Reading: 111,765 distinct keys were fed (100,000 in the flood turn's reply, built when the script
+was made, so `fedInFlood` counts only the 11,145 the entry points carried), and neither the session
+vat nor the factory vat interned a single new name (8,127 and 8,037 before and after). J-9366's
+guard holds in real vats. The whole file passes 3/3 (`exec.sends.answered` 1,275-1,411 ms over the
+runs of this step).
+Decision: this is the result J-9366 promised as J-9371. A script is itself vat input: any test
+double that takes data through a vat facet is bounded by `frameBytes`.
+
+### J-9382 2026-11-17 Integration every perf row before and after C-7 and C-2 - perf
+Evidence: every script in `perf/` once, under the run lock, one at a time (`turn`, `session`,
+`restart`, `gc`, `crash`, `exec`, `pool`, `concurrency`, `hub`, `history`, `install`, `frames`,
+`crank`, the long-session runs of J-9383), plus the rows the integration files emit;
+worker `367e78ad...`, crank budget 50 M, slot ceiling 4,000,000, `gcPolicy` allocation, `hubStore`
+log, commits `be7d2a84aa-dirty` and `bd14ef7e08-dirty` (only documents and, for the first rows,
+`aa7325c02f`'s test files differed), load 1.3-5.1. The unit lane ran once (not under the lock) while
+`perf/exec.perf.mjs` ran. "Before" is the M1b outcome table (QC column) and the newest journal row
+for each metric (J-9024, J-9045, J-9050, J-9192, J-0395, J-0396, J-9303, J-9333, J-9368).
+Raw rows were kept outside the repository (not committed); the values that set a verdict are in the
+table.
+
+| row | budget | before (entry) | after | verdict |
+|---|---|---|---|---|
+| `frames.pingFloor` (getInfo round trip) | none | 56 ms (J-9024) | 20 ms (p95 116) | recorded; 2.8 x faster |
+| `frames.inbound` at 24,576 | <= floor + 300 ms | 347 ms (J-9024) | 303 ms (budget 320) | pass |
+| `frames.outbound` | same | 83 ms (J-9024) | 40 ms | pass |
+| `vat.evaluateProgram` 150 k staged | 2 s; depends on C-5 | 2,305 ms (J-9024) | 2,269 ms | pass under 1.25 x (1.13 x); C-5 |
+| `loop.runaway` | 1 s | 243 ms (J-9024) | 222 ms | pass |
+| `install.factory` (session program) | 15 s | 6,323 ms (J-0395) | 4,732 ms | pass |
+| `install.factory300k` / mixed | 30 s | 11.6 / 14.0 s (J-0193) | 8.2 / 10.8 s | pass |
+| `session.program` | 200 KB | 130,798 (J-0395) | 132,588 bytes | pass |
+| `session.createCold` / `session.create.cold` | 6 s; C-5 | 5,823 / 5,928 ms (J-0395) | 4,590 / 4,484 ms | pass |
+| `session.create.pool` | 750 ms | 1,209 ms (J-0396), miss | 849 (pool perf) / 864 ms (`m1b-pool`, n 8, p95 989) | pass (1.13-1.15 x) |
+| `pool.refill` 2 spares, 4 lanes | recorded | 4,220 ms (J-0395) | 2,838 / 3,442 ms | recorded |
+| `pool.firstTurn` | recorded | 798 ms (J-0364) | 483 ms | recorded |
+| `turn.start` | 350 ms; p99 1 s (C-20) | 102, p99 684 (J-9333); QC 282, p99 688 | 105, p95 282, p99 428 | pass |
+| `turn.start.deliveries` / `turn.round` / `turn.lease` | 3 / 3 / 1 | 2 / 3 / 1 | 2 / 3 / 1 | pass |
+| `turn.delta` (in-process) | 5 ms | 0.139 ms (J-0395) | 0.151 ms | pass |
+| `turn.delta.client` | none | 13 ms, p99 100 (J-9333) | 12 ms, p99 30 | recorded |
+| `gc.burst.turnStart` | 350 ms; p99 1 s | 103, p99 304 (J-9333) | 106, p99 293 | pass |
+| `gc.restart` gate | 0 woken | 5/5 (J-9333) | 5/5, 3.2-3.3 s | pass |
+| `hub.gcBurst` (ms per GC frame) | recorded | 1.80 (J-9333); 6.6-7.0 (C-20) | 1.88 | recorded |
+| `hub.gcBurst.turnStart` | 350 ms | 105, p99 373 (J-9333) | 103, p99 308 | pass |
+| `hub.persist` ms per delivery fresh / 1,000 turns / 10 / 50 sessions | recorded | 9.4 / 10.7 / 10.4 / 13.2 (J-9333) | 9.8 / 11.3 / 10.8 / 13.4 | recorded |
+| `hub.growth` | 2 MB; 1.25 x fresh | 1.402 x, 690 KB (J-9333) | 1.363 x, 1.35 MB | **miss** (C-2 rest) |
+| `concurrency.10.turnStart` | 2 x single | 652 ms, 5.5 x (J-9333); QC 3.63 x | 728 ms, 6.5 x (single 112) | **miss** |
+| `concurrency.10.crank` p95 | 200 ms | 300 ms (J-9333); QC 500 | 500 ms (max 1,040) | **miss** |
+| `concurrency.10.rowPush` | 500 ms | 214 ms (J-9333) | 189 ms | pass |
+| `concurrency.10.turn` | recorded | 3,649 ms (J-9333) | 3,782 ms | recorded |
+| `exec.trivial` | 250 ms | 179 ms (J-0395) | 53 ms (p95 258) | pass |
+| `exec.first` | 750 ms | 541 ms (J-0395) | 285-298 ms | pass |
+| `exec.sends.answered` 100 | 8 s | 7,050 ms (J-9368); QC 4.8-6.7 s | 1,275-1,411 ms (5 runs of 3-5) | pass |
+| `exec.sends.sendOnly` | 1 s | not measurable (M5) | not measurable | M5 |
+| `exec.runaway` / `exec.deadline` / `exec.workerKilled` | recorded | 697 / 5,168 / 5,608 ms | 542-634 / 5,141 / 7,435 ms | recorded |
+| `exec.retire` | >= 15 MB | 60 MB (J-0395) | 52 MB | pass |
+| too-big probes (no session vat halt) | no halt | all pass (J-0390, J-0395) | all pass: calls300 190 ms, reply1m 1,990, echo1m 513, echo10m 442, exec300k 402, keys60k 7,132 (exhausted, retired) | pass |
+| `history.page` (22 turns of 7 records) | 300 ms | 627 (QC); 592 at 50 turns (J-9303) | 568 ms (floor 24) | **miss** (C-5) |
+| `context.rebuild` 1,000 turns | 5 s | 21.7 s (QC); 23.3 s (J-9303) | 22.8 s (history perf), 22.1 s (crank perf) | **miss** (C-5) |
+| `context.rebuild.vat` 200 turns (acceptance 8) | none | 2.3-2.4 s (J-0396) | 2.30-2.41 s | recorded |
+| `restart.serving` (10 idle + 1 in flight) | 10 s, gate | 6,234 ms (J-9192) | 4,119 ms, gate 5/5 | pass |
+| `restart.crashingSession` | 15 s; C-8 | 20,399 ms (J-9192), miss | 18,347 ms | pass under 1.25 x (1.22 x); C-8 |
+| `crash.restart.healthy` clean / SIGKILL | 15 s | 5.4 / 4.8 s (J-9050) | 2.7 / 3.0 s | pass |
+| `crash.restart.bound2` | 15 s | 5.5 s (J-9192) | 5.7 s | pass |
+| `crash.restart.bound5` | 15 s; C-8, C-9 | 35.7 s (J-9192); M0 35.8-68.5 s | 66.2 s | **miss** (C-8, C-9) |
+| `pool.rest.restart` | recorded | 5,798 ms (J-0353) | 3,252 ms | recorded |
+| `crank.ping` | recorded | 37 ms (J-9303) | 24 ms (p95 136) | recorded |
+| `crank.worker.session<n>` trivial | recorded | 0.5-0.6 ms (J-9303) | 0.5-0.6 ms at 0 to 5,000 turns | recorded |
+| `crank.turn.start` early / 1,000 turns | 350 ms | 170 / 188 (J-9303) | 121-130 / 142-152; 233-296 at 4,000, 271 at 5,000 (J-9383) | pass (median) |
+| `crank.history.page` at 50 / 1,000 turns | 300 ms | 592 / 852 (J-9303) | 543-596 / 842-869 ms | **miss** (C-5) |
+| `crank.context.rebuild` 1,000 turns | 5 s | 23.3 s (J-9303) | 21.3-22.1 s | **miss** (C-5) |
+
+Reading: C-7 is what moved most rows: every crank paid a collection of the whole live heap, and with
+it gone the ping floor fell 56 -> 20 ms and everything made of many cranks fell with it
+(`exec.sends.answered` 7.0 -> 1.3 s, `exec.trivial` 179 -> 53 ms, `exec.first` 541 -> 298 ms,
+installs 25-30 %, cold creates 23 %, `restart.crashingSession` 20.4 -> 18.3 s, healthy restarts 5.4
+-> 2.7 s). C-2 moved the hub rows (J-9333) and they hold here. `session.create` with the pool now
+passes (864 ms, 1.15 x). Still missing: `concurrency.10` turn start (6.5 x single) and crank p95
+(500 ms), `hub.growth` (1.36 x), `history.page` (568 ms), `context.rebuild` (22.8 s) and
+`crash.restart.bound5` (66.2 s); each has its cause in J-9386..J-9391.
+Decision: no budget changed; the misses are recorded with their causes and core candidates.
+
+### J-9383 2026-11-18 Integration long sessions: 50, 200, 1,000, 4,000 and 5,000 turns - perf
+Evidence: `perf/crank.perf.mjs` three times on the exec template (one session, the scripted backend
+of `history.perf.mjs`: per turn a tool round and a closing round, two staged native contexts, about
+9 deliveries), worker `367e78ad...`, crank budget 50 M, slot ceiling 4,000,000, allocation schedule,
+log store, load 1.4-3.6. How the sessions were built: by running every turn (no `importState` yet,
+M2): run 1 (`CRANK_TURNS=5000 CRANK_POINTS=200,1000`, all through the Composer, `bd14ef7e08`)
+stopped at about 4,050 turns on the Composer's receipt bound (J-9391); run 2 (`CRANK_START=mixed`,
+`CRANK_POINTS=200,1000,4000`, `f44fe629ae`) grows with `Session.startTurn` outside the measured
+windows and through the Composer inside them, and stopped when the first turn after the restart at
+4,000 turns outlived the script's 120 s timeout; run 3 (`CRANK_POINTS=4000`, rebuild wait 30 min,
+`4f0661fca2`) completed 5,000 turns in 2 h 33 min. Per-turn time is the same with both starts (run 1
+/ run 2 at 1,200 turns: 1.17 / 1.09 s; at 3,900: 2.66 / 2.46 s). Two values give the range of two
+runs. "Per delivery" is the worker round trip of every delivery to every vat in the 100 turns before
+(`status().timings.delivery`, about 908 per 100 turns); "trivial" is the worker run directly on the
+session vat's image (`crank.worker.session<n>`); "collection" is that row's collection time (one
+full collection of the image's live heap).
+
+| session length | 50 | 200 | 1,000 | 4,000 | 5,000 |
+|---|---|---|---|---|---|
+| wall time per turn (100 turns ending there) | 0.84-0.94 s (first 100) | 0.67-0.75 s (at 300) | 0.99-1.03 s | 2.45-2.71 s | 3.03-3.21 s |
+| worker time of a trivial delivery | 0.50-0.55 ms | 0.50-0.53 ms | 0.51-0.52 ms | 0.51 ms | 0.52 ms |
+| wall per real delivery (all vats) | 62 ms | 70-77 ms (at 300) | 102-109 ms | 229-253 ms | 281-299 ms |
+| hub time per turn / characters per hub commit | - | 0.29 s / 86-93 KB (at 300) | 0.35 s / 190 KB | 0.63-0.66 s / 695-708 KB | 0.72 s / 888 KB |
+| `turn.start` median (p95), 50 turns before | 121-130 (254-288) ms | 126-132 (316-345) ms | 142-152 (540-575) ms | 233-296 (1,398-1,441) ms | 271 (1,781) ms |
+| `history.page` median (22 turns, 154 records) | 543-596 ms | 602-626 ms | 842-869 ms | 1,610-1,642 ms | 2,003 ms |
+| context rebuild after a clean restart (page cranks) | 1.27-1.36 s (1) | 4.07-4.11 s (3) | 21.3-22.1 s (14) | 133.6 s (55); over 120 s in run 2 | 179.6 s (69) |
+| slot capacity (high-water) / of 4,000,000 | 518,656 / 13 % | 645,120-647,168 / 16 % | 873,472-875,776 / 22 % | 1,528,576-1,551,104 / 38-39 % | 1,911,808 / 48 % |
+| live slots after a collection | 61,528-62,820 | 107,393-118,534 | 323,675-329,768 | 1,138,474 | 1,409,386 |
+| one collection of that heap | 27 ms | 40-48 ms | 116-133 ms | 429 ms | 556 ms |
+| session vat snapshot (each, every 256 deliveries) | - | 0.31 s (at 300) | 0.37 s | 1.0 s | 1.29 s; 114 MB file |
+
+{"metric":"crank.context.rebuild","unit":"ms","value":179632,"turns":5001,"timing":{"pages":69,"pageMs":179048.1,"waitResolveMs":347.2,"readMs":162.4,"blobs":10000,"projectMs":43.9},"status":"completed","serveMs":5497.2,"commit":"4f0661fca2-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"gcPolicy":"allocation","hubStore":"log","crankBudget":"50000000"}
+{"metric":"crank.turn.start.late","unit":"ms","n":50,"median":271,"p95":1781,"p99":1821,"turns":"4951..5000","budget":{"median":350},"pass":true,"commit":"4f0661fca2-dirty"}
+{"metric":"crank.history.page.late","unit":"ms","n":30,"median":2003.097,"p95":2026.147,"turns":22,"sessionTurns":4998,"budget":{"median":300},"pass":false,"commit":"4f0661fca2-dirty"}
+{"metric":"crank.heap","turns":5000,"heap":{"label":"spare session 1","cut":52916,"slots":1911808,"ofCeiling":0.478},"commit":"4f0661fca2-dirty"}
+{"metric":"crank.worker.session5000","unit":"ms","n":200,"median":0.515,"p99":559.754,"collectMs":{"n":6,"median":555.787},"liveSlots":{"max":1409386},"slotCapacityMax":1911674,"commit":"4f0661fca2-dirty"}
+Reading: session cost still grows with session length, roughly linearly. Wall time per turn rises
+about 0.53 s per 1,000 turns (0.70 s at 300, 3.21 s at 5,000; before C-7 it rose 1.77 s over the
+first 1,000 turns, J-0370, so about 3.3 x more slowly now). Of that growth (300 -> 5,000 turns, +2.5
+s per turn) about +2.05 s is vat delivery time (72 -> 299 ms per delivery) and +0.43 s hub time. The
+fixed cost of a crank does not grow (0.5 ms at every length). `turn.start` stays under its budget
+but its median doubles over 5,000 turns and its p95 reaches 1.8 s, the turns whose start crank
+collected a 1.4 M-slot heap. `history.page` grows about 0.3 ms per turn on top of its fixed miss;
+the context rebuild grows about 36 ms per turn (one page crank of 2.4-2.6 s per 512 records at
+4,000-5,000 turns, against 1.1-1.55 s at 50-1,000 turns: the page cranks themselves slow with the
+heap). The slot capacity grows 230-380 slots per turn, faster at the end (J-9384). The causes and
+the core candidates are J-9386 (hub), J-9387 (page cranks), J-9388 (vat time), J-9389 (heap).
+Decision: recorded; no budget changed. M2's W2.5 measures at 10,000 and 30,000 turns: at this slope
+the session vat's slot capacity passes the 4,000,000 ceiling before 10,000-11,000 turns [inferred],
+so those fixtures will halt unless records leave the heap or C-21 lands (J-9389).
+
+### J-9384 2026-11-18 Integration heap high-water, snapshot and disk at length - perf
+Evidence: the `crank.heap` and `crank.worker.session<n>` rows of J-9383; the kept state of run 3
+after 5,000 turns (`KEEP_STATE=1`, measured, then deleted).
+Reading: the slot capacity (what the ceiling counts: the arena's high-water mark at the latest
+snapshot) was 337,408 for a new session, 518,656 at 50 turns, 645,120-647,168 at 200,
+873,472-875,776 at 1,000, 1,528,576-1,551,104 at 4,000 and 1,911,808 at 5,000 turns (8 / 13 / 16 /
+22 / 38-39 / 48 % of 4,000,000). Live slots after a collection were 44,700-44,876 / 61,528-62,820 /
+107,393-118,534 / 323,675-329,768 / 1,138,474 / 1,409,386: live data is 74 % of the high-water mark
+at 5,000 turns (13 % for a new session), so the ceiling margin is now set by live data plus the
+allowance (131,072) plus the heaviest crank, not by one crank alone. Thixotrope's default ceiling
+(1,000,000) would be passed at about 1,500-1,600 turns [inferred]. At 5,000 turns the state
+directory was 809 MB: the session vat's snapshot 114 MB (budget for an idle session: 25 MB), heaps
+333 MB in all, the scripted provider's log 416 MB (test only), blobs 39 MB, hub image 3.1 MB plus
+log 1.0 MB (the session's hub row 516 KB with 10,012 entries). Each snapshot of the session vat took
+1.29 s at 5,000 turns (0.31 s at 300).
+Decision: recorded against architecture section 5 and M2 W2.5 (snapshot time and size, slot
+capacity: both decide the archive). Risk in J-9389.
+
+### J-9385 2026-11-18 Integration what C-7 and C-2 did for the fit - good fit
+Evidence: J-9380..J-9384 and the rows of J-9300..J-9337.
+Reading: the harness's founding fact was "a durable crank costs about 56 ms, one at a time per vat"
+(architecture fact 1), and most of that was a full collection the worker ran after every crank, a
+cost that also grew with every vat's live heap. With the allocation schedule (CORE-11) that fixed
+cost is gone: a trivial delivery is 0.5 ms of worker time at every session length measured (0 to
+5,000 turns), a control-client round trip to a vat 20-24 ms (56 before), and every operation built
+of many cranks fell 1.4-5 x (`exec.sends.answered` 7.0 -> 1.3 s, `exec.trivial` 179 -> 53 ms,
+installs and cold creates 23-30 %, healthy restarts 5.4 -> 2.7 s). `turn.start` is within budget at
+every length measured, though it grows slowly (121-130 ms early, 271 ms at 5,000 turns, J-9383). The
+hub log (CORE-12) halved the cost of each commit (9.8-10.7 -> 5.5-6.8 ms) and cut what a commit
+writes by 5-8 x at small states; GC bursts no longer show in turn starts. So the fit is better in
+the way that matters most for M2-M3: a vat is now cheap to talk to, and "one coarse message per
+second per session" is no longer the ceiling it was; the design rule (vats decide, adapters carry
+data) stays because inbound bytes still cost per byte (C-5) and every hub commit is still an fsync.
+What the two changes did not do: a collection is still a full mark of the live heap, so its
+amortized cost grows with what a vat keeps; the hub still commits about 1.25 times per inbound
+delivery and rewrites a whole session row per commit, and a session row grows with the handles the
+session keeps. Both make session cost grow with session length (J-9386, J-9388), more slowly than
+before C-7 but without bound.
+Decision: the remaining risks are J-9386..J-9393, each with numbers and the candidate it depends on.
+
+### J-9386 2026-11-18 Risk hub commits: concurrency, and a session row that grows with the session - perf
+Evidence: `concurrency.10.gc` and `hub.growth` (J-9382); `crank.grow` hub deltas and samples of the
+running state's `hub-image.json` every 4 minutes during the long-session runs (J-9383).
+{"metric":"concurrency.10.gc","hubDelta":{"other":{"deliveries":1846,"frames":7312,"ms":29990.714,"persistChars":149913420,"persistMs":24644.37,"persists":2621,"sendMs":4532.117}},"store":{"appends":2562,"compactions":95}}
+Reading: (1) Concurrency. With 10 sessions streaming, the supervisor spent 30.0 s in the hub during
+the measured rounds, 24.6 s of it in 2,621 commits (9.4 ms each under load, 150 MB written). Every
+commit is one fsync on the supervisor's single thread, and a turn start of one session waits behind
+the other nine sessions' commits: `concurrency.10.turnStart` 728 ms against 112 ms alone (6.5 x,
+budget 2 x), crank p95 500 ms (budget 200). C-7 removed the vat side of this queue; what is left is
+the commit rate (1.25 per inbound delivery, 21-28 per turn, J-9216 (d)) times the commit cost.
+(2) Session length. A hub session row has one `ourExports` entry per object its session holds from
+another session, and the log store rewrites the whole row whenever any field of it changes (J-9335
+(a)). The long-session script stages two native contexts per turn, and both the session vat (its
+records) and the agent host adapter (its context cache) hold every Blob handle (minted by the
+manager vat): each of those two rows gains about 2 entries per turn (4,006 and 3,973 entries, 204 KB
+each at about 1,950 turns; 8,272 and 8,192 entries, 425 KB each at about 4,050 turns; the session's
+row 516 KB with 10,012 entries at 5,000 turns). Characters written per commit rose from 86-93 KB at
+300 turns to 359-367 KB at 2,000, 695-708 KB at 4,000 and 888 KB at 5,000 turns, at an unchanged
+3,140-3,320 commits per 100 turns: 2.9 GB written per 100 turns at 5,000 turns. Hub time per turn
+0.29 -> 0.44 -> 0.72 s (300 / 2,000 / 5,000 turns). The state on disk was 3.7 MB of image plus up to
+7.1 MB of log at about 4,050 turns (compaction at max(1 MiB, 2 x image)), over the 2 MB of the
+`hub.growth` budget, which `hub.perf.mjs` checks only at 1,000 turns and 50 sessions (1.35 MB, 1.36
+x fresh: miss).
+Decision: depends on C-2 (the rest). In order of gain for long sessions: diff session rows per entry
+of `ourExports` and `answersOwed` (J-9335 (a): makes an append independent of session length);
+hub-side dirty tracking (J-9335 (b)); group commit (J-9334, about 30 % of commits, the concurrency
+case). For the harness: a session need not keep every native context's handle in two places; the
+adapter's cache could hold text, not handles, once J-0322 (b) persists it [inferred]. M2 W2.5 should
+add the per-commit row size to its long-session rows (`hub.row`, milestones M2).
+
+### J-9387 2026-11-18 Risk page cranks: history.page and context.rebuild - perf
+Evidence: `history.page`, `context.rebuild` (J-9382); `crank.history.page.at<n>`,
+`crank.context.rebuild.at<n>` (J-9383).
+Reading: both are page cranks in the session vat that marshal records out (outbound, about 3 ms per
+record, C-5 class: per-element work in the engine's marshalling path), and neither moved with C-7:
+the collection was at most 0.1-0.2 s of a 0.6-1.6 s page crank. `history.page` reads a fixed 22-turn
+page (154 records) and still grows with session length: 596 ms at 50 turns, 626 at 200, 869 at
+1,000, 1,610-1,642 at 4,000 and 2,003 at 5,000 [inferred: the page crank's collection share and its
+record lookups grow with the heap]. `context.rebuild` reads every record since the last compaction:
+one page crank of about 1.1-1.55 s per 512 records up to 1,000 turns and 2.4-2.6 s at 4,000-5,000;
+1.27-1.36 s at 50 turns, 4.1 s at 200, 21.3-22.1 s at 1,000, 133.6 s at 4,000, 179.6 s at 5,000 (69
+page cranks): linear in turns and slower per page as the heap grows, so no record bound fixes it.
+Decision: `history.page` depends on W2.5's record bound (about 100 records per page to meet 300 ms
+at 1,000 turns [inferred from 3 ms per record]) or on C-5; `context.rebuild` on J-0322 (b) (the
+adapter's cache persisted beside the blobs, so a restart reads no page crank) or on compaction (M8)
+bounding what is rebuilt. No budget changed.
+
+### J-9388 2026-11-18 Risk session cost still grows with session length - perf
+Evidence: `crank.grow` (J-9383): wall time per 100 turns with the engine's delivery timing (the
+worker round trip of every delivery to every vat) and the hub's own time over the same turns;
+`crank.worker.session<n>` (the worker run directly on the session vat's image).
+Reading: yes, it still grows, roughly linearly: per turn of the long-session script (two rounds, a
+tool call, two staged native contexts, about 9 deliveries) 0.70 s at 300 turns, 0.99 s at 1,000,
+1.48 s at 2,000, 2.45-2.71 s at 4,000 and 3.03-3.21 s at 5,000, about +0.53 s per 1,000 turns
+(before C-7, J-0370: +1.77 s over the first 1,000 turns). Of the growth from 300 to 5,000 turns
+(+2.5 s per turn), +2.05 s is vat delivery time (72 -> 299 ms per delivery, about 908 deliveries per
+100 turns) and +0.43 s hub time (J-9386); snapshots add 0.3 -> 1.3 s each, 4-6 per 100 turns (+0.05
+s per turn). The fixed cost of a crank does not grow: a trivial delivery is 0.5 ms of worker time at
+every length. `turn.start` grows from 121-130 to 271 ms (median) and its p95 to 1.8 s. What grows is
+what a real turn's cranks do on a larger heap. A full collection costs about 0.4 ms per 1,000 live
+slots (27 ms at 63,000, 133 ms at 330,000, 429 ms at 1.14 M, 556 ms at 1.41 M), and the allocation
+schedule runs one at least every 32nd crank of the vat (a session vat takes about 4 cranks per turn,
+J-9123, so at least one collection per 8 turns, at least about 70 ms per turn at 5,000 turns) and
+whenever 131,072 slots were allocated since the last [inferred: how many collections a real turn
+triggers is not measured; Thixotrope's status reports no per-vat collection time]. The live heap
+grows with what the session keeps: about 280 slots per turn (records and two Blob handles per turn).
+Decision: risk for any session past a few thousand turns. Depends on C-7 (the rest: the collector
+still marks the whole live heap; an incremental or generational collector, or collection counters
+per vat in `status()` to measure it first) and on what a session keeps (M2 W2.5's archive decision:
+dropping resident records shrinks the heap). Measure first: add per-vat collection count and time to
+`status()` (the worker already answers `timing: true`).
+
+### J-9389 2026-11-18 Risk heap high-water against the slot ceiling - perf
+Evidence: `crank.heap` (slot capacity, pages x 256, at each clean restart) and the worker rows'
+`liveSlots` (J-9383).
+Reading: the slot capacity (high-water mark) was 337,408 (new), 518,656 (50 turns), 645,120-647,168
+(200), 873,472-875,776 (1,000), 1,528,576-1,551,104 (4,000) and 1,911,808 (5,000): 8, 13, 16, 22,
+38-39 and 48 % of the 4,000,000 ceiling, growing 230-380 slots per turn and faster late; live slots
+after a collection 1,409,386 at 5,000 turns, 74 % of the high-water mark (J-9384). Since CORE-11 a
+crank may also start with up to 131,072 slots of uncollected growth (J-9304).
+Decision: depends on C-21. The high-water mark is set by the heaviest crank plus up to 131,072 slots
+of uncollected growth, not by live data. At the measured slope a session reaches the 4,000,000-slot
+ceiling at about 10,000-11,000 turns [inferred, linear extrapolation from 4,000-5,000 turns], and
+Thixotrope's default of 1,000,000 at about 1,500-1,600 turns. The session snapshot was 114 MB and
+took 1.29 s at 5,000 turns (budgets: 25 MB per idle session; 1 s at 10,000 turns: both miss
+already). M2 W2.5's `session.heap` rows at 10,000 and 30,000 turns will reach or pass the ceiling
+unless records leave the heap (archive) or C-21 lands.
+
+### J-9390 2026-11-18 Risk restart with a vat that crashes on every replay - perf
+Evidence: `crash.restart.bound5`, `restart.crashingSession` (J-9382).
+Reading: a plain vat crashing on every replay held the start for 66.2 s (bound 5; M0 35.8-68.5 s,
+the doubling waits make it vary run to run); a crashing session vat 18.2-18.4 s (20.4 s before: the
+faster cranks shortened the replays between the waits), now inside 1.25 x of the 15 s target but not
+under it. Healthy restarts fell to 2.7-3.0 s.
+Decision: unchanged: depends on C-8 (serve first, retry crashing vats in the background) and C-9.
+
+### J-9391 2026-11-18 Risk a session takes at most 4,096 Composer submissions in 24 h - deviation
+Evidence: the first 5,000-turn run stopped at about 4,050 turns with "Submission receipt limit
+reached; wait for the retry window to expire" (`texts.receiptLimit`, `guest/session/queue.js`,
+`limits.maxReceipts` 4,096 receipts kept for 24 h, J-9152).
+Reading: the bound is on retained receipts, but receipts are pruned only by age, so it acts as a
+rate cap: a session refuses its 4,097th Composer submission within 24 h. A scripted or automated
+session (subagents in M9, a busy voice session in M11) could reach it; the spec's A.4 text names the
+4,096 kept receipts, not a daily rate. The perf script now starts turns with `startTurn` outside its
+measured windows (`f44fe629ae`).
+Decision: for the PM: either accept a daily cap of 4,096 submissions per session, or prune receipts
+by count as well (oldest first, they only deduplicate retries within the window) so the bound limits
+retained state without capping the rate.
+
+### J-9392 2026-11-18 Risk GC frames and owed hub rows now wait for a collection - awkward
+Evidence: J-9301, J-9306 (lane scenario); `gc.burst.*`, `hub.gcBurst` (J-9382).
+Reading: since CORE-11 a vat's finalizers run at its next collection: up to 32 cranks later, at the
+first crank after a wake, or after 131,072 slots of growth. Owed answer rows in the hub rose to at
+most 12 over 80 calls in the lane (2 before). No harness test depended on the earlier timing (all
+integration files pass, J-9380), and GC bursts cost less (1.9 ms of hub time per GC frame,
+`gc.burst.turnStart` 106 ms, p99 293 ms). The risk is for M3's gateway: a long-lived viewer that
+imports many objects from a quiet vat sees them released only when that vat next collects.
+Decision: recorded; a test that needs a release must drive cranks or a restart, not wait.
+
+### J-9393 2026-11-18 Integration what is left open in the harness's own plumbing - awkward
+Evidence: J-9307, J-9337, this step.
+Reading: (1) spike S4 and `test/spikes/_crash.js` still watch `hub.json` (now a marker); S4 would
+report no rewrites and no payload markers on the log store: not re-run here; run it with
+`THIXOTROPE_HUB_STORE=file` or teach it the image and log. (2) `pkg/scripts/measure-mail.mjs` needs
+`THIXOTROPE_HUB_STORE=file` (core, not changed here). (3) The queue script this step used recorded
+`rc=0` for every perf script (the exit status was read after a command substitution); the verdicts
+in J-9382 come from the rows' `pass` fields, not from exit codes. (4) The unit lane ran once outside
+the run lock while `perf/exec.perf.mjs` ran (no Ironhorse workload of its own; the exec rows are in
+line with the other runs). (5) Perf rows carry `-dirty`: documents and, in the first rows, the test
+files of `aa7325c02f` were uncommitted.
+Decision: (1) for the next builder who runs the spikes.
