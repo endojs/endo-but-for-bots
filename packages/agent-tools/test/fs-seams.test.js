@@ -94,9 +94,9 @@ test('a compartment guest writes and reads through the in-memory seam', async t 
   const root = await E(workspace).root();
   await E(root).write('note.txt', 'from the guest');
   const file = await E(root).lookup('note.txt');
-  const info = await E(await E(file).snapshot()).getInfo();
+  const size = await E(await E(file).snapshot()).size();
   const entries = await E(await E(root).list()).toArray();
-  return { size: info.size, entries: entries.map(entry => entry.name) };
+  return { size, entries: entries.map(entry => entry.name) };
 })()`,
   });
   t.deepEqual(result, { size: 14n, entries: ['note.txt'] });

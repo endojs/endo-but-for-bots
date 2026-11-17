@@ -24,4 +24,37 @@ pub const PINNED: &[(&str, &str)] = &[
         "ironhorse-meter-5",
         "039b227725239e1da7f6c1c6be93b036a2c6582b2aab545e01bfd9d31c762490",
     ),
+    // A nullish for-in's own creation weight. The for-in enumerator follows
+    // XS's per-level walk, which moves its per-key charges on a TypedArray
+    // or String wrapper receiver, and intrinsic surface reached by a
+    // program's walk moves what it charges.
+    (
+        "ironhorse-meter-6",
+        "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
+    ),
+    // Same weights, new charging points: `ArrayBuffer.prototype.resize` and
+    // `SharedArrayBuffer.prototype.grow` charge their new backing chunk as an
+    // allocation, a buffer constructor's options object is read, and a
+    // SharedArrayBuffer's `byteLength` is an accessor call on
+    // `%SharedArrayBuffer.prototype%` rather than a free read.
+    (
+        "ironhorse-meter-7",
+        "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
+    ),
+    // Same weights. Charging points move: a write to a primitive base runs
+    // [[Set]], a definition flagged to name its anonymous function renames
+    // it, dense array searches start at fromIndex, iteration and TypedArray
+    // construction read @@iterator through the property protocol, Atomics
+    // and `ArrayBuffer.prototype.concat` run where they halted, and the
+    // compiler's spec departures emit different code.
+    (
+        "ironhorse-meter-8",
+        "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
+    ),
+    // Same weights; new charging points in the Annex B and ES2024-and-later
+    // built-ins XS ships, and programs that named them and halted now run.
+    (
+        "ironhorse-meter-9",
+        "4d9abebe68c732f045097da41de323467d6403019a672eb1249521cd476601a5",
+    ),
 ];

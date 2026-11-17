@@ -933,12 +933,32 @@ impl Interp {
         if let ReactionKind::AsyncGeneratorYield(gen) = reaction.kind {
             self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
             if rejected {
-                let data = self.async_generators.get_mut(&gen).ok_or(Step::Host(
-                    Halt::EngineInvariant("async-generator:yield-reaction-missing"),
-                ))?;
-                data.state = AsyncGeneratorState::Completed;
-                data.frame = None;
-                return self.finish_async_generator_request(code, gen, value, true);
+                if !self.async_generators.contains_key(&gen) {
+                    return Err(Step::Host(Halt::EngineInvariant(
+                        "async-generator:yield-reaction-missing",
+                    )));
+                }
+                if self.async_generator_suspended_in_yield_star(code, gen) {
+                    // A `yield*` does not await what it yields (ES2024
+                    // 14.4.14); this await stands in for the one
+                    // %AsyncFromSyncIteratorPrototype%.next makes on a sync
+                    // delegate's value, which has no wrapper here. Its
+                    // rejection belongs to the delegation's `next`, past the
+                    // `yield*`'s own handler, so it must not resume the body
+                    // through that handler into the delegate's `throw`: the
+                    // generator completes and the request rejects with the
+                    // reason, as when the delegation throws and no `try`
+                    // encloses it.
+                    let data = self.async_generators.get_mut(&gen).unwrap();
+                    data.state = AsyncGeneratorState::Completed;
+                    data.frame = None;
+                    return self.finish_async_generator_request(code, gen, value, true);
+                }
+                // AsyncGeneratorYield awaits the operand inside the body
+                // (`yield v` is `yield await v`, ES2024 27.6.3.8), so a
+                // rejection is thrown at the `yield`, where a `try` around it
+                // catches it; the request stays pending on the resumed body.
+                return self.step_async_generator(code, gen, ResumeStatus::Throw, value, false);
             }
             let result = self.new_generator_result(value, false);
             self.async_generators.get_mut(&gen).unwrap().state =
@@ -1209,6 +1229,57 @@ impl Interp {
         }
         let capability = self.new_promise_capability_for(code, constructor)?;
         self.call_any(code, capability.resolve, Slot::undefined(), &[value])?;
+        Ok(capability.promise)
+    }
+
+    /// `Promise.withResolvers()` (`fx_Promise_withResolvers`): a capability
+    /// of the receiver, exposed as an ordinary `{ promise, resolve, reject }`
+    /// object. Out of line so that the Promise family's frame, which every
+    /// re-entry through `Promise.resolve` carries, does not grow with it.
+    #[inline(never)]
+    pub(in crate::interp) fn promise_with_resolvers(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Slot, Step> {
+        let capability = self.new_promise_capability_for(code, this)?;
+        self.meter.tick_slot_alloc();
+        let result = self.slots.alloc(Slot::instance(self.object_proto));
+        self.define_descriptor_field(result, "promise", capability.promise);
+        self.define_descriptor_field(result, "resolve", capability.resolve);
+        self.define_descriptor_field(result, "reject", capability.reject);
+        Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
+    }
+
+    /// `Promise.try(callback, ...args)` (`fx_Promise_try`): call the callback
+    /// synchronously with `this` undefined, then resolve the receiver's new
+    /// capability with its result, or reject it with what the call threw. A
+    /// throw from the capability's own resolve or reject propagates. Out of
+    /// line, as [`Self::promise_with_resolvers`] is.
+    #[inline(never)]
+    pub(in crate::interp) fn promise_try(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Step> {
+        if this.kind != Kind::Reference {
+            return Err(self.catchable_type_error_msg("this: not an object".into()));
+        }
+        let capability = self.new_promise_capability_for(code, this)?;
+        let args = self.frame_arguments(base, argc)?;
+        let (callback, rest) = args
+            .split_first()
+            .map_or((Slot::undefined(), &[][..]), |(f, rest)| (*f, rest));
+        match self.call_any_catching_throw(code, callback, Slot::undefined(), rest)? {
+            Ok(value) => {
+                self.call_any(code, capability.resolve, Slot::undefined(), &[value])?;
+            }
+            Err(thrown) => {
+                self.call_any(code, capability.reject, Slot::undefined(), &[thrown])?;
+            }
+        }
         Ok(capability.promise)
     }
 

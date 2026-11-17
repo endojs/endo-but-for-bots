@@ -1,12 +1,13 @@
-//! Golden bytes and seal roots for nonempty carried side tables. These vectors
-//! run on the same debug/release and Linux/macOS CI lanes as the runtime corpus.
+//! Golden bytes and store manifests for nonempty carried side tables. These
+//! vectors run on the same debug/release and Linux/macOS CI lanes as the runtime
+//! corpus.
 use ironhorse_snapshot::{
     machine::{
         begin_store_session, from_snapshot_bytes, resume_from_store, resume_from_store_lazy,
         MachineSnapshot, MachineSnapshotError,
     },
     sha256::hex_sha256,
-    store::{HeapStore, MemoryStore},
+    store::{root_hash, CommitToken, HeapStore, MemoryStore},
     Signature,
 };
 use ironhorse_vm::{parse_symbols, Interp};
@@ -27,6 +28,17 @@ fn platform_signature(sig: &Signature) -> Signature {
     let mut encoded = sig.encode();
     encoded[4..36].copy_from_slice(include_bytes!("fixtures/math-platform-boot.bin"));
     Signature::decode(&encoded).unwrap()
+}
+
+/// The store's manifest, pinned without its random commit token: the hex
+/// SHA-256 of its encoding with the token zeroed, so the pin covers every
+/// field a commit writes (schema, signature, geometry, epoch, counters).
+/// With the export hash, which pins the content, it replaced the pinned
+/// commit seal when the seal went (store schema 36).
+fn manifest_digest(store: &dyn HeapStore) -> String {
+    let mut manifest = store.manifest().unwrap();
+    manifest.token = CommitToken::ZERO;
+    hex_sha256(&manifest.encode())
 }
 
 /// A historical format / meter stamp, as a way of asking what identity the
@@ -87,11 +99,40 @@ fn crank(m: &mut Interp, source: &str) -> String {
     outcome.result
 }
 
+/// Execution charges a meter release moved on purpose, which the historical
+/// cost controls (`state_golden_meter_4.tsv`, `state_golden_format_16.tsv`)
+/// still hold at their old values: label, the controls' initial and final
+/// meter, and the current ones. `ironhorse-meter-8` charges the rename of each
+/// function a literal defines as a method, accessor or private method.
+const RELEASE_MOVED_COSTS: &[(&str, &str, &str, &str, &str)] = &[
+    ("proxy", "3332800", "6137096", "3365568", "6169864"),
+    ("accessor", "3351488", "5959152", "3417024", "6024688"),
+    ("private", "6794336", "8861328", "6827104", "8894096"),
+];
+
+/// A row's execution charges against a historical cost control: equal, or
+/// moved exactly as [`RELEASE_MOVED_COSTS`] records.
+fn assert_control_costs(label: &str, current: (&str, &str), control: (&str, &str), name: &str) {
+    match RELEASE_MOVED_COSTS
+        .iter()
+        .find(|(moved, ..)| *moved == label)
+    {
+        Some(&(_, old_initial, old_final, new_initial, new_final)) => {
+            assert_eq!(control, (old_initial, old_final), "{label}: {name} control");
+            assert_eq!(current, (new_initial, new_final), "{label}: moved charges");
+        }
+        None => assert_eq!(
+            current, control,
+            "{label}: {name} execution-only charges stay fixed"
+        ),
+    }
+}
+
 #[test]
-fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
-    assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-5");
+fn carried_state_has_frozen_bytes_manifests_costs_and_continuations() {
+    assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-9");
     let corpus = corpus();
-    assert!(corpus.starts_with("# ironhorse-meter-5 "));
+    assert!(corpus.starts_with("# ironhorse-meter-9 "));
     let format_21_corpus = include_str!("fixtures/state_golden_format_21.tsv");
     let format_20_corpus = include_str!("fixtures/state_golden_format_20.tsv");
     let format_19_corpus = include_str!("fixtures/state_golden_format_19.tsv");
@@ -134,12 +175,13 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
             .map(|line| line.split('\t').collect::<Vec<_>>())
             .find(|row| row[0] == label)
             .unwrap();
-        assert_eq!(
+        assert_control_costs(label, (f[7], f[8]), (prior[7], prior[8]), "meter-4");
+        assert_control_costs(
+            label,
             (f[7], f[8]),
-            (prior[7], prior[8]),
-            "execution-only charges stay fixed"
+            (format_16[7], format_16[8]),
+            "format-16",
         );
-        assert_eq!((f[7], f[8]), (format_16[7], format_16[8]));
         let control: Vec<_> = controls
             .lines()
             .skip(1)
@@ -170,9 +212,14 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
                 .map_err(|(_, e)| e)
                 .unwrap();
             assert_eq!(
-                store.borrow().manifest().unwrap().seal,
+                manifest_digest(&*store.borrow()),
                 f[6],
-                "{label}: initial seal"
+                "{label}: initial store manifest"
+            );
+            assert_eq!(
+                root_hash(&*store.borrow()).unwrap(),
+                f[5],
+                "{label}: the store exports the initial bytes"
             );
             let blob = from_snapshot_bytes(&bytes, &sig).unwrap();
             let eager = resume_from_store(&*store.borrow(), &sig).unwrap();
@@ -221,17 +268,48 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
     assert_eq!(labels.len(), 16);
 }
 
+/// Both async shapes that once refused a snapshot now write one, and what
+/// they write reads back. The `Array.fromAsync` arm is the last of them
+/// (format 24, architecture finding F127's last clause); before it, a machine
+/// holding one refused with `PendingStateUnsupported`.
+///
+/// This lives beside the golden corpus rather than in the carry suite because
+/// it is the assertion that the corpus's own gate — `write_snapshot`, not the
+/// container reader — admits these machines at all.
 #[test]
-fn async_generator_state_writes_and_a_from_async_step_remains_an_explicit_refusal() {
-    let machine = fresh("async function* g() { yield 10; yield 20; } var it = g(); it.next(); 0");
-    assert!(machine
-        .write_snapshot(&Signature::new("w4-determinism-corpus"))
-        .is_ok());
-    let machine = fresh("var p = Array.fromAsync([new Promise(function () {})]); 0");
+fn both_async_generator_and_from_async_state_now_write_and_read_back() {
+    let sig = Signature::new("w4-determinism-corpus");
+    for source in [
+        "async function* g() { yield 10; yield 20; } var it = g(); it.next(); 0",
+        "var p = Array.fromAsync([new Promise(function () {})]); 0",
+    ] {
+        let machine = fresh(source);
+        let bytes = machine
+            .write_snapshot(&sig)
+            .unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        from_snapshot_bytes(&bytes, &sig).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+    }
+    // The control must guard the SAME gate the two arms above used to trip.
+    // A quiescence control does not: it lives on a different branch of
+    // `write_snapshot`, so the whole pending-row gate could be deleted and
+    // this test would stay green while claiming otherwise. The `$262` host is
+    // a quiescent machine that the PENDING-ROW gate still refuses, which is
+    // the branch that has to remain live for the admissions to mean anything.
+    let (code, names) = ironhorse_compile::compile_atoms("var x = 0; x = 41; x").unwrap();
+    let mut machine = Interp::new();
+    // BEFORE `link_intrinsics`, which is the installer's own precondition.
+    machine.install_test262_host();
+    machine.link_intrinsics(&parse_symbols(&names));
+    assert!(machine.run(&code).completed);
     assert!(
-        matches!(machine.write_snapshot(&Signature::new("w4-determinism-corpus")),
-        Err(MachineSnapshotError::PendingStateUnsupported { row }) if row == "a promise reaction that would resume a non-persisted async frame")
+        machine.is_quiescent(),
+        "the refusal must not be quiescence's"
     );
+    assert!(matches!(
+        machine.write_snapshot(&sig),
+        Err(MachineSnapshotError::PendingStateUnsupported { row })
+            if row == "a test262 `$262` host object, which no snapshot carries"
+    ));
 }
 
 /// An identity fixture, read back so regeneration rewrites only the digest
@@ -274,7 +352,7 @@ impl Table {
 }
 
 /// Explicit format/schema/boot-layout identity regeneration tool. Runtime costs and continuation
-/// results must remain unchanged; only persisted byte/seal identities move.
+/// results must remain unchanged; only persisted byte/manifest identities move.
 ///
 /// That sentence is the whole review. A digest is not reviewable by reading it,
 /// so what makes rewriting one safe is that this re-derives each row and
@@ -324,11 +402,7 @@ fn regenerate_persistence_identities() {
                 .iter()
                 .find(|row| row[0] == label)
                 .unwrap_or_else(|| panic!("{}: no row for {label}", control.name));
-            assert_eq!(
-                (&f[7], &f[8]),
-                (&row[7], &row[8]),
-                "{label}: {name} execution-only charges stay fixed"
-            );
+            assert_control_costs(label, (&f[7], &f[8]), (&row[7], &row[8]), name);
         }
 
         let machine = fresh(&f[1]);
@@ -352,7 +426,7 @@ fn regenerate_persistence_identities() {
         let session = begin_store_session(machine, &sig, &mut store)
             .map_err(|(_, e)| e)
             .unwrap();
-        main.rows[index][6] = store.manifest().unwrap().seal;
+        main.rows[index][6] = manifest_digest(&store);
 
         let mut machine = session.into_machine();
         crank(&mut machine, &f[2]);

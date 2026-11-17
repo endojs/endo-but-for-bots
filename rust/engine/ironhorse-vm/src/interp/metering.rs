@@ -1,4 +1,14 @@
 //! Public aliases for the canonical meter weights and their execution contracts.
+//!
+//! **Doctrine fence (accuracy over parity).** The calibration notes below
+//! record how each constant was measured — typically against the pinned XS
+//! source or oracle during bring-up. That is *provenance*, not a standing
+//! requirement: Iron Horse's metering objective is to approximate actual CPU
+//! time with its own deterministic, release-versioned cost model, and it MAY
+//! diverge from XS's computron counts. XS-computron parity is a non-goal —
+//! not a deferred goal (`designs/ironhorse-engine.md` § Metering). A future
+//! recalibration may change any of these weights at a meter-version bump;
+//! nothing in these notes obliges equality with XS.
 #[cfg(doc)]
 use super::{Interp, RegExpData};
 /// The raw 16.16 cost XS accrues unwinding an **uncaught** throw across
@@ -235,7 +245,7 @@ pub(super) use ironhorse_meter::FUNCTION_LOCAL_METERING;
 
 /// The Function.prototype call/apply trampoline work specific to a callable
 /// Proxy receiver. The Proxy's own target/trap-sensitive `[[Call]]` costs are
-/// charged centrally by [`Interp::proxy_call`], so direct, bound, and abstract
+/// charged centrally by [`Interp::proxy_call_step`], so direct, bound, and abstract
 /// calls all see them and these helpers add only the syntactic trampoline.
 pub(super) use ironhorse_meter::CALLABLE_PROXY_DOT_TRAMPOLINE_METERING;
 
@@ -958,12 +968,6 @@ pub(super) use ironhorse_meter::ARRAY_CTOR_BASE_METERING;
 /// argument).
 pub(super) use ironhorse_meter::ARRAY_ISARRAY_METERING;
 
-/// The raw 16.16 cost of the `ArrayBuffer.prototype.byteLength` accessor
-/// getter (`fx_ArrayBuffer_prototype_get_byteLength`) beyond the
-/// `GET_PROPERTY` dispatch: measured against the pin (the getter reads the
-/// stored `bufferInfo.length` and meters nothing itself).
-pub(super) use ironhorse_meter::ARRAY_BUFFER_BYTE_LENGTH_GET_METERING;
-
 /// The constant raw 16.16 cost of a `new ArrayBuffer(n)` construct beyond
 /// the byteLength-dependent backing-store chunk: the native host frame,
 /// `fxArgToSafeByteLength`, `fxGetPrototypeFromConstructor`, and
@@ -1139,14 +1143,19 @@ pub(super) use ironhorse_meter::ENUMERATOR_NEXT_METERING;
 /// of the key count (the per-key string allocation is metered in
 /// [`ENUMERATOR_NEXT_METERING`] + the key chunk). Calibrated against the pin
 /// for an empty ordinary-object enumeration; an array adds
-/// [`ARRAY_FOR_IN_EXTRA_METERING`]. Known sub-computron residual: the exact
-/// non-empty keys-list handling carries a ±8-raw chunk-alignment gap
-/// (analogous to the array-spread residual) that is well under one computron
-/// and never crosses a `>> 16` boundary in a bounded program, so the
-/// computron-level bar (which every corpus/fuzz/test262 check uses) stays
-/// exact; modeling the keys-instance chunk capacity to close it is a later
-/// refinement.
+/// [`ARRAY_FOR_IN_EXTRA_METERING`]. XS's count is where the number came
+/// from, not a target: XS-computron parity is a non-goal, so the ±8-raw
+/// difference from XS's keys-instance chunk alignment on a non-empty keys
+/// list is not a defect. Only a mismatch between this charge and the work
+/// Ironhorse does would be.
 pub(super) use ironhorse_meter::FOR_IN_ENUMERATOR_METERING;
+
+/// The raw 16.16 cost of `XS_CODE_FOR_IN` over `null` or `undefined`, in
+/// place of [`FOR_IN_ENUMERATOR_METERING`]: `fx_Enumerator` builds the
+/// enumerator and its result but lists no keys and leaves no first level to
+/// walk. Calibrated against the pin as that cluster less XS's own-keys
+/// collection, 102,400 raw, which the empty-object calibration includes.
+pub(super) use ironhorse_meter::FOR_IN_NULLISH_ENUMERATOR_METERING;
 
 /// The raw 16.16 cost of `XS_CODE_FOR_OF` (`fxRunForOf` → `fxGetIterator`)
 /// beyond the `values()` iterator creation it performs: the `fxGetIterator`

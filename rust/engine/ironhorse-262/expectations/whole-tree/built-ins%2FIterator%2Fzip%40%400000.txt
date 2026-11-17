@@ -5,8 +5,8 @@ built-ins/Iterator/zip/basic-shortest.js sloppy skip:shared-positive-test-failur
 built-ins/Iterator/zip/basic-shortest.js strict skip:shared-positive-test-failure
 built-ins/Iterator/zip/basic-strict.js sloppy skip:shared-positive-test-failure
 built-ins/Iterator/zip/basic-strict.js strict skip:shared-positive-test-failure
-built-ins/Iterator/zip/is-function.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: The value of `typeof Iterator.zip` is 'function' Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
-built-ins/Iterator/zip/is-function.js strict fail:"abort-value-differs: oracle=\"Test262Error: The value of `typeof Iterator.zip` is 'function' Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/Iterator/zip/is-function.js sloppy skip:shared-test262-failure
+built-ins/Iterator/zip/is-function.js strict skip:shared-test262-failure
 built-ins/Iterator/zip/iterables-containing-string-objects.js sloppy skip:shared-positive-test-failure
 built-ins/Iterator/zip/iterables-containing-string-objects.js strict skip:shared-positive-test-failure
 built-ins/Iterator/zip/iterables-iteration-after-reading-options.js sloppy skip:shared-positive-test-failure
@@ -65,8 +65,8 @@ built-ins/Iterator/zip/proto.js sloppy skip:shared-positive-test-failure
 built-ins/Iterator/zip/proto.js strict skip:shared-positive-test-failure
 built-ins/Iterator/zip/result-arrays-are-fresh.js sloppy skip:shared-positive-test-failure
 built-ins/Iterator/zip/result-arrays-are-fresh.js strict skip:shared-positive-test-failure
-built-ins/Iterator/zip/result-is-iterator.js sloppy skip:unsupported-opcode:Iterator.helper
-built-ins/Iterator/zip/result-is-iterator.js strict skip:unsupported-opcode:Iterator.helper
+built-ins/Iterator/zip/result-is-iterator.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/zip/result-is-iterator.js strict skip:shared-positive-test-failure
 built-ins/Iterator/zip/suspended-start-iterator-close-calls-next.js sloppy skip:shared-positive-test-failure
 built-ins/Iterator/zip/suspended-start-iterator-close-calls-next.js strict skip:shared-positive-test-failure
 built-ins/Iterator/zip/suspended-start-iterator-close-calls-return.js sloppy skip:shared-positive-test-failure

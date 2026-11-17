@@ -1,0 +1,3 @@
+const keys = []; for (let i = 0; i < 10000; i++) keys.push({});
+const wm = new WeakMap(); for (const k of keys) wm.set(k, 1);
+for (const k of keys) wm.delete(k);

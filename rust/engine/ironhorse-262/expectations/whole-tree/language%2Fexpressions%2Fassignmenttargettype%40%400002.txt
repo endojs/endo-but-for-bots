@@ -26,7 +26,7 @@ language/expressions/assignmenttargettype/parenthesized-identifierreference-eval
 language/expressions/assignmenttargettype/parenthesized-import.meta.js sloppy pass
 language/expressions/assignmenttargettype/parenthesized-import.meta.js strict pass
 language/expressions/assignmenttargettype/parenthesized-importcall-defer.js sloppy pass
-language/expressions/assignmenttargettype/parenthesized-importcall-source.js sloppy skip:compiler-unimplemented:parse
+language/expressions/assignmenttargettype/parenthesized-importcall-source.js sloppy pass
 language/expressions/assignmenttargettype/parenthesized-importcall.js sloppy pass
 language/expressions/assignmenttargettype/parenthesized-lefthandsideexpression-assignment-assignmentexpression-0.js sloppy pass
 language/expressions/assignmenttargettype/parenthesized-lefthandsideexpression-assignment-assignmentexpression-0.js strict pass

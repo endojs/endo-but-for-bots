@@ -103,13 +103,7 @@ test('native polling watcher preserves rapid external commit advancement', async
     await E(await E(first.position.root).root()).lookup('root.txt')
   );
   const firstBlob = await E(firstFile).snapshot();
-  const firstInfo = await E(firstBlob).getInfo();
-  const { stdout: firstBlobOid } = await execFileAsync(
-    'git',
-    ['rev-parse', `${commit1}:root.txt`],
-    { cwd: repoRoot },
-  );
-  t.is(firstInfo.hash, firstBlobOid.trim());
+  t.is(await E(firstBlob).text(), 'one\n');
 });
 
 test('native watcher reports a non-fast-forward root replacement as a single transition', async t => {
@@ -214,11 +208,5 @@ test('native watcher reports a non-fast-forward root replacement as a single tra
     await E(await E(latest.position.root).root()).lookup('root.txt')
   );
   const supersededBlob = await E(supersededFile).snapshot();
-  const supersededInfo = await E(supersededBlob).getInfo();
-  const { stdout: supersededBlobOid } = await execFileAsync(
-    'git',
-    ['rev-parse', `${superseded}:root.txt`],
-    { cwd: repoRoot },
-  );
-  t.is(supersededInfo.hash, supersededBlobOid.trim());
+  t.is(await E(supersededBlob).text(), 'superseded\n');
 });

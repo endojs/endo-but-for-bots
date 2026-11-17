@@ -50,8 +50,22 @@ const materializeRecord = (baseDir, record, created, skipped) => {
     fs.writeFileSync(dest, body);
   } else if (record.type === 'symlink') {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
+    // On Windows, `symlinkSync` requires an explicit `type` ('file' | 'dir' |
+    // 'junction'); infer it from the target when present, defaulting to 'dir'
+    // for our directory-pointing links so they materialize rather than throw.
+    const targetPath = path.resolve(
+      path.dirname(dest),
+      /** @type {string} */ (record.target),
+    );
+    /** @type {'dir' | 'file'} */
+    let symlinkType;
     try {
-      fs.symlinkSync(/** @type {string} */ (record.target), dest);
+      symlinkType = fs.statSync(targetPath).isDirectory() ? 'dir' : 'file';
+    } catch {
+      symlinkType = 'dir';
+    }
+    try {
+      fs.symlinkSync(/** @type {string} */ (record.target), dest, symlinkType);
       created.add(record.path);
     } catch (error) {
       if (record.optional) {

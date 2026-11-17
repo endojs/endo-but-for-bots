@@ -89,6 +89,92 @@ impl Interp {
         result
     }
 
+    /// Run an explicit-stack walk that stands in for a recursion
+    /// (STACK-DEPTH-REFACTOR.md B3-B6): `f` charges a unit for each level it
+    /// opens and releases it when the level closes, so it returns with
+    /// `native_depth` where it found it, but an error leaves the units of
+    /// every level still open charged. The recursion released them on its way
+    /// out; this restores the depth on every return path so none leaks across
+    /// a crank. A throw from inside the walk can pop frames from before it
+    /// that held units for a call run in place (§4.5): they released them as
+    /// they were popped, where the recursion released them only after the
+    /// walk, so the depth restored is less what they released.
+    #[inline(always)]
+    pub(super) fn with_native_depth_restored<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, Step>,
+    ) -> Result<T, Step> {
+        let base = self.native_depth;
+        let held = self.held_total;
+        let result = f(self);
+        debug_assert!(
+            result.is_err() || self.native_depth == base,
+            "an explicit-stack walk returned with its levels still charged"
+        );
+        debug_assert!(self.held_total <= held, "a walk left frames holding units");
+        self.native_depth = base - held.saturating_sub(self.held_total);
+        result
+    }
+
+    /// Hold the native-recursion units of a forwarding walk
+    /// (STACK-DEPTH-REFACTOR.md B1): `f` adds each unit it charges to the
+    /// count it is handed, through [`Self::forwarding_hop`], and every one is
+    /// released when `f` returns, on every return path.
+    #[inline]
+    pub(super) fn with_forwarding_walk<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self, &mut usize) -> Result<T, Step>,
+    ) -> Result<T, Step> {
+        let mut held = 0usize;
+        let result = f(self, &mut held);
+        self.leave_native_frame(held);
+        result
+    }
+
+    /// One hop of a forwarding walk ([`Self::with_forwarding_walk`]): the
+    /// check-and-charge the recursive shape's guarded entry performed, added
+    /// to the units the walk holds.
+    #[inline]
+    pub(super) fn forwarding_hop(&mut self, held: &mut usize) -> Result<(), Step> {
+        self.enter_native_frame(LIGHT_FRAME_COST)?;
+        *held += LIGHT_FRAME_COST;
+        Ok(())
+    }
+
+    /// The Proxy arm of an internal method, entered with whatever its caller
+    /// holds for `proxy` (the method's guarded entry's unit, or none on the
+    /// opcode paths that call the arm directly, as before). A Proxy whose trap is
+    /// absent forwards the method to its target, and the recursive shape
+    /// re-entered the guarded entry for it: one more unit, and one more host
+    /// frame chain, per layer. The loop instead takes `step` on each Proxy
+    /// layer, charging a forwarded-to Proxy the unit its entry would have
+    /// ([`Self::forwarding_hop`]) and holding every unit until the method
+    /// returns, so `native_depth` at each point is what the recursion held
+    /// and the budget halts the same programs at the same depth. A target
+    /// that is not a Proxy goes back through the guarded entry, `forwarded`,
+    /// which charges its own unit as it always did.
+    #[inline(always)]
+    pub(super) fn forwarding_loop<T>(
+        &mut self,
+        proxy: crate::value::SlotIndex,
+        mut step: impl FnMut(&mut Self, crate::value::SlotIndex) -> Result<ProxyStep<T>, Step>,
+        forwarded: impl FnOnce(&mut Self, crate::value::SlotIndex) -> Result<T, Step>,
+    ) -> Result<T, Step> {
+        self.with_forwarding_walk(|vm, held| {
+            let mut proxy = proxy;
+            loop {
+                match step(vm, proxy)? {
+                    ProxyStep::Done(result) => return Ok(result),
+                    ProxyStep::Forward(target) if vm.proxies.contains_key(&target) => {
+                        vm.forwarding_hop(held)?;
+                        proxy = target;
+                    }
+                    ProxyStep::Forward(target) => return forwarded(vm, target),
+                }
+            }
+        })
+    }
+
     /// One step of an iterative prototype-chain walk that may pass through a
     /// Proxy (`OrdinaryHasInstance`, `Object.prototype.isPrototypeOf`). A
     /// Proxy forwards `[[GetPrototypeOf]]` to its target, and a spec-legal
@@ -114,6 +200,107 @@ impl Interp {
             }
         }
         Ok(())
+    }
+
+    /// The `argc` arguments of the frame at `base`, copied into a list
+    /// reserved fallibly: a host that refuses the allocation halts the run
+    /// with `HeapExhausted` rather than aborting it, as `enter_call`'s copy
+    /// does. A frame shorter than `argc` gives what it holds.
+    pub(super) fn frame_arguments(&self, base: usize, argc: usize) -> Result<Vec<Slot>, Step> {
+        let held = self.stack.get(base + 4..base + 4 + argc).unwrap_or(&[]);
+        let mut args = Self::reserved_vec(held.len())?;
+        args.extend_from_slice(held);
+        Ok(args)
+    }
+
+    /// The capture of `this` an arrow function `function` reads (the
+    /// `this` slot `STORE_ARROW` appended to its environment), or `None` for
+    /// any other function.
+    pub(super) fn arrow_this_capture(
+        &self,
+        function: crate::value::SlotIndex,
+    ) -> Option<crate::value::SlotIndex> {
+        let closures = self.functions.get(&function).map(|info| info.closures)?;
+        if closures.is_null() {
+            return None;
+        }
+        // Looked up, never interned: `STORE_ARROW` interned the key when it
+        // made the capture, and a constructor without an arrow must not add
+        // a key to the machine's state.
+        let id = *self.symbol_ids.get("this")?;
+        self.find_property(closures, id)
+    }
+
+    /// Bind `this` from a `super(...)` an arrow ran: write the arrow's
+    /// capture, then, up the suspended frames, the frame that made that
+    /// capture and every other capture it made, as the constructor's own
+    /// `SET_THIS` does. That frame is the derived constructor, or an arrow
+    /// nested in it, whose own capture is published the same way. XS's
+    /// frames share one `this` cell, which gives this for free. A
+    /// constructor that has returned holds no capture and is not found.
+    #[inline(never)]
+    pub(super) fn publish_arrow_this(&mut self, capture: crate::value::SlotIndex, value: Slot) {
+        let mut capture = capture;
+        loop {
+            let slot = self.slots.get_mut(capture);
+            slot.kind = value.kind;
+            slot.value = value.value;
+            let Some(frame) = self
+                .call_stack
+                .iter_mut()
+                .rev()
+                .find(|frame| frame.this_captures.contains(&capture))
+            else {
+                return;
+            };
+            frame.this_val = value;
+            let captures = std::mem::take(&mut frame.this_captures);
+            let function = frame.cur_func;
+            for other in captures {
+                let slot = self.slots.get_mut(other);
+                slot.kind = value.kind;
+                slot.value = value.value;
+            }
+            match self.arrow_this_capture(function) {
+                Some(outer) => capture = outer,
+                None => return,
+            }
+        }
+    }
+
+    /// The `new.target` a `super(...)` frame at `base` carries in its RESULT
+    /// slot (see the dispatch loop's `SUPER` arm). The RESULT slot of every
+    /// other frame is `undefined`, so this is `None` for them.
+    fn super_frame_target(&self, base: usize) -> Option<crate::value::SlotIndex> {
+        self.stack.get(base + 2).and_then(|slot| match slot.value {
+            Payload::Reference(target) if slot.kind == Kind::Reference => Some(target),
+            _ => None,
+        })
+    }
+
+    /// Arm `pending_new_target` with the `new.target` of the construct frame
+    /// at `base`, if a `super(...)` pushed it: the latch is set only as the
+    /// construct starts, after the arguments have run, so no construct among
+    /// them can take it. Out of line, as the dispatch loop's `RUN` arm, which
+    /// every native re-entry holds, calls it.
+    #[inline(never)]
+    pub(super) fn arm_super_frame_target(&mut self, base: usize) {
+        if let Some(target) = self.super_frame_target(base) {
+            self.pending_new_target = Some(target);
+        }
+    }
+
+    /// The `new.target` argument of a Proxy construct from the frame at
+    /// `base`: the one a `super(...)` pushed, or else the Proxy `px` itself.
+    /// Out of line for the reason [`Self::arm_super_frame_target`] is.
+    #[inline(never)]
+    pub(super) fn proxy_construct_new_target(
+        &self,
+        base: usize,
+        px: crate::value::SlotIndex,
+    ) -> Slot {
+        let target = self.super_frame_target(base).unwrap_or(px);
+        Slot::of(Kind::Reference, Payload::Reference(target))
     }
 
     /// `XS_CODE_RUN`'s inline argument count (pushed as an integer just
@@ -147,8 +334,11 @@ impl Interp {
             .ok_or(Step::Host(Halt::EngineInvariant("call:stack-underflow")))?; // THIS
         let func_slot = self.stack[base + 1];
         // Collect arguments (arg0 is the deepest of the argc; XS's
-        // `mxFrameArgv(i) = mxFrame - 1 - i`).
-        let args: Vec<Slot> = self.stack[base + 4..base + 4 + argc].to_vec();
+        // `mxFrameArgv(i) = mxFrame - 1 - i`), reserved fallibly: a host
+        // that refuses the list halts the run with `HeapExhausted` rather
+        // than aborting it.
+        let mut args: Vec<Slot> = Self::reserved_vec(argc)?;
+        args.extend_from_slice(&self.stack[base + 4..base + 4 + argc]);
         let this_val = self.stack[base];
         // Keep the existing conservative overflow decision, which includes
         // the pending tuple, but retire that tuple before any validation can
@@ -176,6 +366,14 @@ impl Interp {
                 return Err(self.catchable_type_error_msg(message.into()));
             }
         };
+        // A construct of a function without [[Construct]] (an arrow, a method
+        // or accessor, a generator, an async function) throws before its body
+        // is entered, as XS's `RUN` does for a target frame whose function
+        // `mxIsConstructor` refuses. `Reflect.construct`, `extends`, bound
+        // functions and Proxies check the same way before they get here.
+        if has_target && !self.slot_is_constructor(func) {
+            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
+        }
         // The single choke point every user-function dispatch funnels through.
         // A `None` body means the callee has no runnable bytecode — a bound
         // function (or any bodyless instance) that reached here past a missed
@@ -219,6 +417,8 @@ impl Interp {
             target_func: self.target_func,
             ret_pc,
             stack_base: base,
+            held: 0,
+            returns: FrameReturn::Call,
         });
         self.switch_environment(self.functions[&func].global_env);
         self.result = Slot::undefined();
@@ -289,6 +489,46 @@ impl Interp {
         }
     }
 
+    /// Set where the frame just entered returns to.
+    pub(super) fn set_return_pc(&mut self, ret_pc: usize) {
+        debug_assert!(!self.call_stack.is_empty(), "no frame was entered");
+        if let Some(caller) = self.call_stack.last_mut() {
+            caller.ret_pc = ret_pc;
+        }
+    }
+
+    /// How the current frame returns ([`FrameReturn`]).
+    pub(super) fn frame_returns(&self) -> FrameReturn {
+        self.call_stack
+            .last()
+            .map_or(FrameReturn::Call, |caller| caller.returns)
+    }
+
+    /// What the current frame, returning `result` as `returns` says, gives
+    /// its caller: for a setter, the value it was entered with, which its
+    /// argument list still holds (a frame's list is replaced only as frames
+    /// are entered, left, captured or parked, and never written as the frame
+    /// runs); for any other frame, `result`. Read before the frame is left.
+    #[inline(always)]
+    pub(super) fn frame_result(&self, returns: FrameReturn, result: Slot) -> Slot {
+        if returns == FrameReturn::Setter {
+            return self.assigned_value();
+        }
+        result
+    }
+
+    /// The value a setter's frame was entered with ([`Self::frame_result`]).
+    /// Out of line: the `START_ASYNC` handler that returns through it sits on
+    /// every level of a nest of async calls.
+    #[cold]
+    #[inline(never)]
+    fn assigned_value(&self) -> Slot {
+        self.args
+            .first()
+            .copied()
+            .expect("a setter's frame holds the value assigned")
+    }
+
     /// Leave a call the way XS's `XS_CODE_END` does: `mxStack = mxFrameEnd`
     /// (xsRun.c:1063) resets the value stack to the frame's base *before*
     /// `*mxStack = *slot` writes the result, so whatever the body left above
@@ -303,9 +543,12 @@ impl Interp {
     /// values, not just the `call: not a function` it produced when the slot
     /// it displaced happened to be a callee.
     ///
-    /// Only the `END` family restores. The `START_*` opcodes hand a generator
-    /// or promise back at function *entry*, before any body has run and with
-    /// nothing to abandon.
+    /// The `END` family restores, and so do the non-boundary `START_*` arms,
+    /// which hand a generator or promise back at function *entry*: the stack
+    /// is already at the base there, except for a `Reflect` call's target run
+    /// in place (STACK-DEPTH-REFACTOR.md C2), whose frame begins at the
+    /// `Reflect` call's base. The boundary `START_*` arms keep a bare
+    /// `leave_call`: a frame run in place is never a loop's boundary frame.
     pub(super) fn leave_call_to_frame_base(&mut self) -> usize {
         let base = self.call_stack.last().map(|caller| caller.stack_base);
         let resume = self.leave_call();
@@ -342,6 +585,86 @@ impl Interp {
         self.cur_func = caller.cur_func;
         self.cur_target = caller.cur_target;
         self.target_func = caller.target_func;
+        // The frame's activation is over: release the units it held.
+        self.held_total -= caller.held;
+        self.leave_native_frame(caller.held);
+        if caller.returns == FrameReturn::Generator {
+            self.leave_generator_in_place();
+        }
         caller.ret_pc
+    }
+
+    /// Leaving a generator's body resumed in place (STACK-DEPTH-REFACTOR.md
+    /// C4), by `YIELD`, `END` or a throw unwinding past it: drop its run
+    /// entry and the resume status, as `resume_generator` did once its nested
+    /// loop returned, and complete the generator unless it suspended (a body
+    /// that ended or threw runs no more). A loop that halts leaves such frames
+    /// through [`Self::release_held_above`] instead. After a reset has cleared
+    /// the run stack there is no entry and nothing to do.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn leave_generator_in_place(&mut self) {
+        self.drop_generator_run(self.call_stack.len() + 1);
+    }
+
+    /// Drop the run entry of the generator whose body returns into the frame
+    /// at `call_depth_base - 1`, and the resume status, and complete that
+    /// generator if it is still executing. The entry is the topmost with that
+    /// base, though not always the top one: a throw unwinds frames before the
+    /// nested loops it crosses return, so the entries of bodies that
+    /// `resume_generator` runs above this frame may still be on the stack,
+    /// each to be popped by its own driver.
+    fn drop_generator_run(&mut self, call_depth_base: usize) {
+        let Some(at) = self
+            .gen_run_stack
+            .iter()
+            .rposition(|run| run.call_depth_base == call_depth_base)
+        else {
+            return;
+        };
+        let run = self.gen_run_stack.remove(at);
+        self.resume_status = ResumeStatus::NoStatus;
+        if let Some(g) = self.generators.get_mut(&run.gen) {
+            if g.state == GeneratorState::Executing {
+                g.state = GeneratorState::Completed;
+                g.frame = None;
+            }
+        }
+    }
+
+    /// Release the units held by the frames above `depth` (see
+    /// `CallerState::held`), as each nested `dispatch_at` released its own
+    /// charge on its way out, and clear them so a later pop releases nothing.
+    /// The dispatch loop that pushed them calls this when it exits with them
+    /// still on the call stack (a halt, or a throw no frame of it caught).
+    /// A generator's body among them is left as its `resume_generator` left
+    /// it on such an exit (C4): its run entry dropped and the generator
+    /// completed, innermost first, the frame kept for the reset to pop as a
+    /// call.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn release_held_above(&mut self, depth: usize) {
+        let mut held = 0;
+        for caller in self.call_stack.iter_mut().skip(depth) {
+            held += std::mem::take(&mut caller.held);
+        }
+        self.held_total -= held;
+        self.leave_native_frame(held);
+        for index in (depth..self.call_stack.len()).rev() {
+            if self.call_stack[index].returns == FrameReturn::Generator {
+                self.call_stack[index].returns = FrameReturn::Call;
+                self.drop_generator_run(index + 1);
+            }
+        }
+    }
+
+    /// Clear the units every frame on the call stack holds, without releasing
+    /// them: for the paths that reset `native_depth` itself, after which the
+    /// frames' charges are no longer in it.
+    pub(super) fn clear_held(&mut self) {
+        for caller in &mut self.call_stack {
+            caller.held = 0;
+        }
+        self.held_total = 0;
     }
 }

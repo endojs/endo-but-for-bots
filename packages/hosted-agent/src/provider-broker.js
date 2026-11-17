@@ -3,24 +3,40 @@
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { M } from '@endo/patterns';
 
+import {
+  INFERENCE_PATHS,
+  forwardableHeaders,
+  splitInferenceTarget,
+} from './provider-paths.js';
+import { makeUsageTap } from './provider-usage.js';
 import { makeSecretRotator } from './secret-rotator.js';
+import { emptyCounts, tokenCount } from './token-usage.js';
+
+export {
+  assertBrokerOAuthRefreshState,
+  makeBrokerMemoryOAuthCredential,
+} from './memory-oauth-credential.js';
 
 /**
  * @typedef {{ method: string, path: string }} Route
- * @typedef {{ origin: string, routes: Route[], models: string[], expiresAt: number,
- * maxRequests: bigint, maxRequestBytes: bigint, maxResponseBytes: bigint,
- * maxTotalBytes: bigint, maxCostMicrounits: bigint,
- * maxCostMicrounitsPerRequest: bigint, credentialHeader?: 'bearer' | 'x-api-key',
+ * @typedef {{ origin: string, routes: Route[],
+ * clientAuthorization?: 'reject' | 'strip',
+ * maxConcurrentRequests: number, maxRequestBytes: bigint, maxResponseBytes: bigint,
+ * credentialHeader?: 'bearer' | 'x-api-key',
  * anthropicVersion?: string, anthropicBeta?: string,
  * authMode?: 'api-key' | 'oauth', accountRef?: string }} BrokerPolicy
+ * @typedef {(request: {path: string, data: Readonly<Record<string, unknown>>}) =>
+ *   {path: string, headers?: Readonly<Record<string, string>>}} ProviderRequestAdapter
  * @typedef {{ startedAt: number }} BrokerRefreshIntent
  * @typedef {{ version: 'BrokerOAuthStateV1', accessToken: string,
  * refreshToken?: string, expiresAt: number, accountId: string,
  * pendingRefresh?: BrokerRefreshIntent }} BrokerOAuthState
  * @typedef {{next(): Promise<{done: boolean, value: string}>, return(): void}} ProviderReader
- * @typedef {{status: number, reader: ProviderReader}} ProviderStream
+ * @typedef {{status: number, reader: ProviderReader, closed?: Promise<void>}} ProviderStream
  * @typedef {{ url: string, method: string, headers: Record<string, string>,
  * body: string, redirect: 'error', maxResponseBytes: bigint }} UpstreamRequest
  */
@@ -40,6 +56,65 @@ import { makeSecretRotator } from './secret-rotator.js';
 export const isCredentialRejection = error =>
   error instanceof Error && error.message === 'Provider credential rejected';
 harden(isCredentialRejection);
+
+/**
+ * The message a transport uses to report that the upstream refused the request
+ * because the subscription's allowance is used up: a 429 whose rate-limit
+ * headers say so, as opposed to a moment's throttling or any other refusal.
+ * Like the credential classification it is a bare message. When the allowance
+ * comes back is in the account reading the same response produced, which the
+ * transport hands to its observer before it throws this.
+ *
+ * It revises the decision recorded in designs/hosted-agent-broker-oauth.md
+ * that one boolean's worth of information crosses this seam: a pool can only
+ * hand a request to its next subscription if it can tell this refusal from a
+ * failure. Text from the upstream still never crosses.
+ *
+ * @param {unknown} error
+ */
+export const isSubscriptionExhaustion = error =>
+  error instanceof Error && error.message === 'Provider subscription exhausted';
+harden(isSubscriptionExhaustion);
+
+const MEMBER_UNAVAILABLE = 'Provider subscription unavailable';
+const makeMemberUnavailable = () => Error(MEMBER_UNAVAILABLE);
+/**
+ * @typedef {object} UsageSettlement
+ * @property {ReturnType<typeof emptyCounts> | null} usage
+ * @property {boolean} began Whether the provider may have done the work.
+ * @property {boolean} complete Whether the producer reached the end.
+ * @property {number} responseBytes Bytes read by the producer.
+ */
+/** @param {unknown} error */
+const isMemberUnavailable = error =>
+  error instanceof Error && error.message === MEMBER_UNAVAILABLE;
+
+/**
+ * The five counts of a settlement, as numbers and nothing else.
+ *
+ * @param {any} usage
+ */
+const projectCounts = usage =>
+  harden({
+    inputTokens: tokenCount(usage?.inputTokens),
+    outputTokens: tokenCount(usage?.outputTokens),
+    cachedInputTokens: tokenCount(usage?.cachedInputTokens),
+    cacheWriteInputTokens: tokenCount(usage?.cacheWriteInputTokens),
+    reasoningOutputTokens: tokenCount(usage?.reasoningOutputTokens),
+  });
+
+/**
+ * The provider may have done the work though nothing of its answer arrived:
+ * the deadline passed with the request out, or a response broke off after it
+ * had begun. Bare like the others. It changes nothing for the caller, who
+ * sees a failed request; it tells whoever charges for the request that it
+ * was not free.
+ *
+ * @param {unknown} error
+ */
+export const isResponseLost = error =>
+  error instanceof Error && error.message === 'Provider response lost';
+harden(isResponseLost);
 
 /**
  * Whether a rotation was refused because the record moved under it, as opposed
@@ -84,7 +159,7 @@ harden(isUndispatchedRefresh);
  * The document, not a bare bearer string, is what `authMode: 'oauth'` stores:
  * refreshing rotates every field at once, and a state that named a different
  * account after a rotation would silently move a session's billing, so the
- * account travels with the tokens and is checked against the lease's binding.
+ * account travels with the tokens and is checked against the grant's binding.
  *
  * `pendingRefresh` is the write-ahead intent: present, it says this record's
  * refresh token was handed to a token endpoint and nothing recorded the
@@ -152,8 +227,8 @@ harden(assertBrokerOAuthState);
  * excludes what shares this object: two of them over one record each redeem the
  * same refresh token, and a provider that invalidates a refresh token on use
  * reads the second redemption as a replay and revokes the whole grant. It is
- * built here, by whoever composes the deployment, rather than inside a lease or
- * a lease issuer, so that sharing it across every lease and every issuer over
+ * built here, by whoever composes the deployment, rather than inside a grant or
+ * a grant issuer, so that sharing it across every grant and every issuer over
  * that record is a visible act rather than an accident of construction.
  *
  * Ownership cannot be enforced from inside this module — a second daemon over
@@ -188,14 +263,14 @@ harden(assertBrokerOAuthState);
  * - SecretBlob read facet. The generation-carrying read is required: a
  * rotation that cannot name the version it read cannot be made conditional.
  * @param {{ refresh(request: {refreshToken: string, accountId: string}): Promise<unknown> }} powers.refresh
- * - Token exchange on the broker's own outbound authority, never a lease's.
+ * - Token exchange on the broker's own outbound authority, never a grant's.
  * @param {{ replaceBase64(base64: string, options?: {ifGeneration?: bigint}): Promise<unknown> }} powers.rotate
  * - A secret administration facet, attenuated here to replacement alone. It
  * must resolve to the generation it committed, as `SecretAdmin` does: the
  * write-ahead protocol below pins its second write to the version the first
  * produced, and re-reading to learn it would reopen the window that pin closes.
- * @param {string} powers.accountRef - The operator's selected account.
  * @param {() => number} powers.now - Trusted epoch-millisecond clock
+ * @param {string} powers.accountRef - The operator's selected account.
  * @param {number} [powers.refreshSkewMs] - Refresh this long before expiry.
  */
 export const makeBrokerOAuthCredential = ({
@@ -307,7 +382,7 @@ export const makeBrokerOAuthCredential = ({
     const started = (async () => {
       await null;
       // Re-read inside the guard. A caller that lost the race to another
-      // lease, or to an operator's re-grant, is holding a refresh token that
+      // grant, or to an operator's re-grant, is holding a refresh token that
       // is already spent; exchanging it again is the replay this guard
       // exists to prevent. Whatever is in the record now wins.
       const { state, generation, base64 } = await read();
@@ -389,7 +464,7 @@ export const makeBrokerOAuthCredential = ({
         }),
       );
       // A refreshed credential that names another account would move the
-      // session's billing and quota to one the lease was never bound to.
+      // session's billing and quota to one the grant was never bound to.
       next.accountId === accountRef || Fail`Broker account binding changed`;
       // The refreshed credential must not itself be spent. An `expires_in`
       // duration mistaken for an instant, a badly skewed clock, or a token
@@ -461,7 +536,7 @@ export const makeBrokerOAuthCredential = ({
      * The credential to present now, refreshed if the stored one is spent.
      *
      * The read is per call by design: a credential rotated by this broker, by
-     * a concurrent lease, or by an operator is picked up on the next request
+     * a concurrent grant, or by an operator is picked up on the next request
      * with no re-delegation.
      *
      * @param {object} [options]
@@ -482,60 +557,231 @@ export const makeBrokerOAuthCredential = ({
 harden(makeBrokerOAuthCredential);
 
 /**
+ * One subscription as a grant uses it.
+ *
+ * @typedef {object} BrokerGrantMember
+ * @property {string} id
+ * @property {{ readBase64(): Promise<string> }} [secret]
+ * @property {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} [transport]
+ *   This member's own transport, so that what its responses say of the
+ *   account is read as this member's.
+ * @property {ReturnType<typeof makeBrokerOAuthCredential>} [credential]
+ * @property {ProviderRequestAdapter} [adaptRequest]
+ * @property {string} [accountRef] The account an OAuth credential must name.
+ * @property {(model: string) => Promise<boolean> | boolean} [admits] Whether
+ *   this member's account may be served the named model, as its catalog
+ *   owner answers now (`model-catalog.js`). Required of every member: a
+ *   member with no discovery admits nothing. The request is tried on the
+ *   members that admit its model, in the pool's order.
+ * @property {() => string} [catalogState] How the member's catalog stands
+ *   (`current`, `stale`, `unavailable`, `unsupported`), for the audit trail
+ *   of a refusal: a model nobody lists reads differently from nobody able
+ *   to say.
+ * @property {{ provide(): Promise<any>, reset(endpoint: any): void }} [wrapped]
+ *   In place of `secret` and `transport`: this member is somebody else's
+ *   subscription. `provide` answers an inference endpoint opened on it for
+ *   this grant's session, opening it on first use; `reset` forgets one that
+ *   stopped working, so the next `provide` opens another. The request goes
+ *   to it whole, no credential of this broker's is involved, and its response
+ *   comes back untouched: the stream is the far subscription's own reader.
+ */
+
+/**
+ * @typedef {object} BrokerGrantPool
+ * @property {readonly BrokerGrantMember[]} members
+ * @property {() => string[]} select The member ids to try for the request now
+ *   being admitted, in order. May throw, for a pinned member that is gone.
+ * @property {(memberId: string) => void} served
+ * @property {(memberId: string) => void} exhausted The member refused the
+ *   request as exhausted; its reading, with the time it is back, has already
+ *   reached the member's transport observer.
+ * @property {(memberId: string) => void} [unusable] The member's credential
+ *   would not resolve, or was rejected even after a refresh. The request is
+ *   not tried elsewhere (that failure is not a statement about the request),
+ *   but the pool may skip the member for a while.
+ */
+
+/** The largest chunk a bytes response stream carries. */
+export const RESPONSE_CHUNK_BYTES = 32_768;
+harden(RESPONSE_CHUNK_BYTES);
+
+/**
+ * A grant's screened text reader (`next()` and `return()`, yielding strings
+ * the echo screen has passed) as a bytes exo-stream. The screen works on
+ * decoded text and cuts on character boundaries, so it stays beneath this and
+ * its output is encoded again here. Chunks are cut to `RESPONSE_CHUNK_BYTES`,
+ * which gives a consumer's read-ahead a known ceiling and its base64 string
+ * limit a number to be set from.
+ *
+ * The cut pieces of one upstream chunk wait here between pulls, and the
+ * screened reader is only consulted when they run out. `checkLive` is
+ * therefore asked before each piece too: a revoked grant delivers nothing
+ * more, including what was already cut.
+ *
+ * `RESPONSE_CHUNK_BYTES` may not grow past 49,152: a listener checks each
+ * base64 chunk against a 65,536-character limit compiled into its image, and
+ * the images deployed are the operator's to replace.
+ *
+ * @param {any} screened
+ * @param {() => void} checkLive throws once the grant may deliver no more
+ */
+const makeScreenedBytesReader = (screened, checkLive) => {
+  const encoder = new TextEncoder();
+  /** @type {Uint8Array[]} */
+  const queued = [];
+  let ended = false;
+  // Set only by this reader's own close. A pull that rejects for any other
+  // reason is a failure and is reported as one.
+  let closedByConsumer = false;
+  const source = harden({
+    next: async () => {
+      await null;
+      for (;;) {
+        if (queued.length > 0) {
+          try {
+            checkLive();
+          } catch (_error) {
+            queued.length = 0;
+            ended = true;
+            // The same wording every other failure of this grant has.
+            throw Fail`Provider request failed`;
+          }
+          return harden({ done: false, value: queued.shift() });
+        }
+        if (ended) return harden({ done: true, value: undefined });
+        let chunk;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          chunk = await E(screened).next();
+        } catch (error) {
+          // The consumer closed while this pull was parked, and the cancelled
+          // upstream read rejected: that is the close, not a failure.
+          if (closedByConsumer) return harden({ done: true, value: undefined });
+          throw error;
+        }
+        if (chunk.done) {
+          ended = true;
+        } else {
+          const bytes = encoder.encode(chunk.value);
+          for (
+            let offset = 0;
+            offset < bytes.byteLength;
+            offset += RESPONSE_CHUNK_BYTES
+          ) {
+            queued.push(bytes.subarray(offset, offset + RESPONSE_CHUNK_BYTES));
+          }
+        }
+      }
+    },
+    return: async () => {
+      closedByConsumer = true;
+      ended = true;
+      queued.length = 0;
+      await E(screened).return();
+      return harden({ done: true, value: undefined });
+    },
+    [Symbol.asyncIterator]: () => source,
+  });
+  return bytesReaderFromIterator(/** @type {any} */ (source), {
+    // A consumer that closes while the upstream is quiet must not wait for
+    // its next chunk: cancel the upstream read, which the pending pull then
+    // settles on.
+    cancelPending: () => {
+      closedByConsumer = true;
+      ended = true;
+      return E(screened).return();
+    },
+  });
+};
+
+/**
  * A bounded inference capability, not an HTTP listener or sandbox attestation.
  * The trusted transport MUST enforce redirect:'error' before following any
  * redirect and maxResponseBytes while reading, and must not forward ambient
  * cookies or credentials. It alone receives the upstream credential.
- * The operator must supply a conservative upper cost bound for each request;
- * reservations are never refunded, including on failure. This is admission
- * accounting, not a claim about actual provider billing.
+ * Admission bounds simultaneous requests, not lifetime usage or spending.
  * Revocation prevents new dispatch and delivery, but cannot undo a request
  * already dispatched. Production transports must separately support teardown.
+ * A transport with independent termination (such as a deadline) must expose
+ * `closed` so an abandoned reader cannot keep an admission slot forever.
  * Literal token echoes are rejected as defense in depth; the upstream remains
  * trusted not to encode or otherwise disclose its own authorization credential.
  *
  * With `authMode: 'oauth'` the secret holds a `BrokerOAuthStateV1` document
- * instead of a bare credential, and the broker — never the lease — refreshes
+ * instead of a bare credential, and the broker — never the grant — refreshes
  * and rotates it. Refresh travels on `powers.refresh`, a separate outbound
  * authority, because the route allowlist below admits inference paths only and
  * a token endpoint is neither that origin nor those paths.
  *
  * @param {BrokerPolicy} policy
  * @param {object} powers
- * @param {{ readBase64(): Promise<string> }} powers.secret - SecretBlob read facet
- * @param {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} powers.transport
- * @param {() => number} powers.now - Trusted epoch-millisecond clock
+ * @param {{ readBase64(): Promise<string> }} [powers.secret] - SecretBlob read facet; required without a pool.
+ * @param {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} [powers.transport] Required without a pool.
  * @param {(event: {event: string, requests: bigint}) => void} [powers.audit]
  * @param {ReturnType<typeof makeBrokerOAuthCredential>} [powers.credential]
  * - The shared refreshing credential for this secret record, required by
- * `authMode: 'oauth'`. Shared rather than per lease so that concurrent
+ * `authMode: 'oauth'`. Shared rather than per grant so that concurrent
  * sessions cannot each redeem the same refresh token.
+ * @param {ProviderRequestAdapter} [powers.adaptRequest]
+ * Trusted provider code, never guest data or serialized operator policy.
+ * Runs after route/model/body admission and before reading credentials.
+ * May translate the path within the pinned origin and add non-credential
+ * headers; cannot change the method, body, credential, or response bounds.
+ * @param {(model: string) => Promise<boolean> | boolean} [powers.admits]
+ * Whether the one account may be served the named model, from its catalog
+ * owner; required without a pool. There is no operator list of models: what
+ * an account is admitted is what its provider lists for it, and a request
+ * for a model no eligible account lists is refused (`Model denied`) before
+ * a slot is taken or a credential read.
+ * @param {() => string} [powers.catalogState] How the one account's catalog
+ * stands, for the audit trail of a refusal.
+ * @param {BrokerGrantPool} [powers.pool]
+ * Several subscriptions of one provider behind this grant, in place of
+ * `secret`, `transport`, `credential` and `adaptRequest`, which describe one.
+ * Each request is tried on the members the pool's `select` names, in order:
+ * a member that refuses it because its allowance is used up (`Provider
+ * subscription exhausted`) is reported to the pool and the request goes to
+ * the next, built afresh for that member — its credential, its adapter
+ * headers (an account header belongs to one account), its transport. Nothing
+ * of a refused attempt reached the caller, so the caller sees one response.
+ * At most one attempt per member per request, beside the one refresh retry
+ * within a member. See designs/hosted-agent-subscriptions.md, "Handover".
+ * @param {boolean} [powers.revealExhaustion]
+ * Every failure of a request reaches the caller as `Provider request failed`.
+ * With this, one more bare classification does: `Provider subscription
+ * exhausted`, when the request failed because every subscription it could be
+ * served from is used up; and `Provider response lost`, when the provider was
+ * given the whole deadline or had begun to answer, so the work may have been
+ * done. For an endpoint a share sits on, which must tell its holder a limit
+ * from a fault and charge for what was not free; never for a slice's
+ * listener.
  */
-export const makeProviderBrokerLease = (
+export const makeProviderBrokerGrant = (
   policy,
-  { secret, transport, now, audit = () => {}, credential },
+  {
+    secret,
+    transport,
+    audit = () => {},
+    credential,
+    adaptRequest,
+    admits,
+    catalogState,
+    pool,
+    revealExhaustion = false,
+  },
 ) => {
   // Copy and validate operator input so later mutation cannot widen authority.
-  const {
-    origin,
-    expiresAt,
-    maxRequests,
-    maxRequestBytes,
-    maxResponseBytes,
-    maxTotalBytes,
-    maxCostMicrounits,
-    maxCostMicrounitsPerRequest,
-  } = policy;
+  const { origin, maxConcurrentRequests, maxRequestBytes, maxResponseBytes } =
+    policy;
   const authMode = policy.authMode ?? 'api-key';
-  // 'subscription' is deliberately absent. Neither vendor documents a
-  // configuration in which the broker holds an individual subscription
-  // credential and the slice does not: Codex's proxy mode
-  // (`requires_openai_auth`) authenticates with the CLI's own `auth.json`, and
-  // a Claude Code gateway credential replaces the claude.ai login rather than
-  // carrying it. See packages/codex-sandbox/SUBSCRIPTION-AUTH.md.
   authMode === 'api-key' ||
     authMode === 'oauth' ||
     Fail`Unsupported broker authentication mode`;
+  // There is no operator model list: a policy that carries one is from
+  // before account catalogs admitted models, and is refused rather than
+  // silently ignored.
+  /** @type {any} */ (policy).models === undefined ||
+    Fail`Broker policy must not name models`;
   const credentialHeader = policy.credentialHeader ?? 'bearer';
   credentialHeader === 'bearer' ||
     credentialHeader === 'x-api-key' ||
@@ -558,9 +804,8 @@ export const makeProviderBrokerLease = (
       accountRef.length > 0 &&
       accountRef.length <= 256) ||
     Fail`Invalid broker account binding`;
-  // Provisioning, not preference: an OAuth lease with no usable refreshing
-  // credential is an API-key lease with a shorter life, and would fail its
-  // first turn rather than at admission. Binding it here also makes its
+  // Require refresh capability at admission so an OAuth session does not fail
+  // its first turn merely because provisioning omitted that capability. Binding it here also makes its
   // presence the mode: everything below asks whether there is an `oauth`
   // record rather than re-reading a mode string.
   //
@@ -570,62 +815,107 @@ export const makeProviderBrokerLease = (
   // read synchronously, which requires the credential to be a local object: the
   // single-flight guard it carries only excludes callers sharing that object,
   // so a remote presence to it would not be the guard this mode needs anyway.
+  /** @type {readonly BrokerGrantMember[]} */
+  const members = harden(
+    pool === undefined
+      ? [
+          {
+            id: 'default',
+            secret,
+            transport,
+            credential,
+            adaptRequest,
+            admits,
+            ...(catalogState === undefined ? {} : { catalogState }),
+          },
+        ]
+      : pool.members.map(member => ({ ...member })),
+  );
+  (members.length > 0 &&
+    new Set(members.map(member => member.id)).size === members.length &&
+    members.every(
+      member =>
+        typeof member.id === 'string' &&
+        member.id !== '' &&
+        typeof member.admits === 'function' &&
+        (member.wrapped !== undefined ||
+          (member.secret !== undefined && member.transport !== undefined)),
+    )) ||
+    Fail`Invalid broker subscription set`;
   if (authMode === 'oauth') {
     credentialHeader === 'bearer' || Fail`Unprovisioned broker OAuth mode`;
-    // The lease's account is the operator's selection; a credential for some
-    // other account is a different session's, not this one's.
-    (credential !== undefined &&
-      typeof credential.current === 'function' &&
-      credential.accountRef === accountRef) ||
-      Fail`Unprovisioned broker OAuth mode`;
+    // A member's account is the operator's selection; a credential for some
+    // other account is a different subscription's, not this one's.
+    for (const member of members) {
+      // A wrapped member authenticates wherever its subscription lives.
+      member.wrapped !== undefined ||
+        (member.credential !== undefined &&
+          typeof member.credential.current === 'function' &&
+          member.credential.accountRef === (member.accountRef ?? accountRef)) ||
+        Fail`Unprovisioned broker OAuth mode`;
+    }
   }
-  const oauth =
-    authMode === 'oauth'
-      ? (credential ?? Fail`Unprovisioned broker OAuth mode`)
-      : undefined;
+  const oauthMode = authMode === 'oauth';
+  const membersById = new Map(members.map(member => [member.id, member]));
+  // The members to try for a request. A pool may name one this grant does not
+  // hold: the grant took the set as it was when it was issued, and an
+  // operator has since added to it. Such a member is not this grant's to use.
+  const selectOrder = () =>
+    pool === undefined
+      ? ['default']
+      : [...new Set(pool.select())].filter(id => membersById.has(id));
+  /**
+   * The pool's bookkeeping must not change how a request settles: a response
+   * already received is delivered whatever the pool's hook does.
+   *
+   * @param {'served' | 'exhausted' | 'unusable'} hook
+   * @param {string} memberId
+   */
+  const tellPool = (hook, memberId) => {
+    try {
+      pool?.[hook]?.(memberId);
+    } catch (_error) {
+      // Bookkeeping only.
+    }
+  };
   const parsedOrigin = new URL(origin);
   (parsedOrigin.protocol === 'https:' &&
     parsedOrigin.origin === origin &&
     !parsedOrigin.username &&
     !parsedOrigin.password) ||
     Fail`Invalid provider origin`;
+  const clientAuthorization = policy.clientAuthorization ?? 'reject';
+  clientAuthorization === 'reject' ||
+    clientAuthorization === 'strip' ||
+    Fail`Unsupported client authorization mode`;
   const routes = policy.routes.map(({ method, path }) => {
-    // Exact paths only: no normalization, query, fragment, percent escaping,
-    // alternate authority or dot segments can affect dispatch.
+    // Exact targets only: no normalization, fragment, percent escaping,
+    // alternate authority or dot segments can affect dispatch. A query is
+    // admitted, but as part of the exact target — never as a wildcard.
+    const target = splitInferenceTarget(path);
     (method === 'POST' &&
-      ['/v1/responses', '/v1/messages', '/v1/chat/completions'].includes(
-        path,
-      ) &&
-      /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path)) ||
+      target !== undefined &&
+      INFERENCE_PATHS.includes(target.pathname) &&
+      /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
       Fail`Invalid inference route`;
     return `${method} ${path}`;
   });
   routes.length > 0 || Fail`Inference routes required`;
-  const models = [...policy.models];
-  (models.length > 0 &&
-    models.every(model => typeof model === 'string' && model.length > 0)) ||
-    Fail`Models required`;
-  Number.isFinite(expiresAt) || Fail`Invalid expiry`;
-  for (const limit of [
-    maxRequests,
-    maxRequestBytes,
-    maxResponseBytes,
-    maxTotalBytes,
-    maxCostMicrounits,
-    maxCostMicrounitsPerRequest,
-  ]) {
+  // Simultaneous request slots are a deployment allocation, not a usage budget.
+  (Number.isInteger(maxConcurrentRequests) &&
+    maxConcurrentRequests > 0 &&
+    maxConcurrentRequests <= 0xffff_ffff) ||
+    Fail`Invalid provider concurrency limit`;
+  for (const limit of [maxRequestBytes, maxResponseBytes]) {
     (typeof limit === 'bigint' && limit > 0n) || Fail`Positive quota required`;
   }
   /** @type {Set<() => void>} */
   const streams = new Set();
   let revoked = false;
   let requests = 0n;
-  let reservedBytes = 0n;
-  let reservedCostMicrounits = 0n;
+  let activeRequests = 0;
   const checkLive = () => {
-    const time = now();
-    (!revoked && Number.isFinite(time) && time < expiresAt) ||
-      Fail`Broker lease inactive`;
+    !revoked || Fail`Broker grant inactive`;
   };
   /** @param {string} event */
   const record = event => {
@@ -637,33 +927,82 @@ export const makeProviderBrokerLease = (
       revoked = true;
     }
   };
+  // Keep the existing small-body admission envelope, but allow configured
+  // larger prompts up to the private pipe's 8MiB frame ceiling. UTF-8 byte
+  // accounting below remains authoritative (characters are not bytes).
+  const BodyShape = M.string({
+    stringLengthLimit: Math.max(
+      100_000,
+      Number(maxRequestBytes < 8_388_608n ? maxRequestBytes : 8_388_608n),
+    ),
+  });
   const endpoint = makeExo(
-    'ProviderInferenceLease',
-    M.interface('ProviderInferenceLease', {
+    'ProviderInferenceGrant',
+    M.interface('ProviderInferenceGrant', {
+      // `headers` is optional, not merely nullable: a caller that curates no
+      // headers of its own — every in-process caller before the listener
+      // existed — omits the key, and `M.opt` inside the required half would
+      // still demand it be present.
       request: M.call(
-        M.splitRecord({
-          method: M.string(),
-          path: M.string(),
-          body: M.string(),
-        }),
+        M.splitRecord(
+          {
+            method: M.string(),
+            path: M.string(),
+            body: BodyShape,
+          },
+          { headers: M.recordOf(M.string(), M.string()) },
+        ),
       ).returns(M.promise()),
 
-      requestStream: M.call(
-        M.splitRecord({
-          method: M.string(),
-          path: M.string(),
-          body: M.string(),
-        }),
+      requestByteStream: M.call(
+        M.splitRecord(
+          {
+            method: M.string(),
+            path: M.string(),
+            body: BodyShape,
+          },
+          { headers: M.recordOf(M.string(), M.string()) },
+        ),
       ).returns(M.promise()),
     }),
     {
-      /** @param {{method: string, path: string, body: string}} request */
+      /** @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request */
       async request(request) {
         return perform(request, false);
       },
-      /** @param {{method: string, path: string, body: string}} request */
-      async requestStream(request) {
-        return perform(request, true);
+      /**
+       * A response as a bytes exo-stream: a reader
+       * that a consumer may read ahead of (`iterateBytesReader(reader, {
+       * buffer })`), so a response crossing a slow link does not pay a round
+       * trip per chunk.
+       *
+       * What the producer holds for a consumer that reads ahead is bounded by
+       * the response byte limit and not by the consumer's read-ahead: in
+       * exo-stream the consumer grants credit, and one that grants a great
+       * deal and reads nothing makes the producer drain the upstream at once.
+       * That costs at most `maxResponseBytes`, a third more in base64, per
+       * open response, and `maxConcurrentRequests` of those per grant. Over
+       * the private pipe the pipe's own queue bound trips first and closes
+       * that consumer's pipe alone.
+       *
+       * @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request
+       */
+      async requestByteStream(request) {
+        const { status, reader, contentType, usage, bytesReader } =
+          await perform(request, true);
+        return harden({
+          status,
+          contentType,
+          reader:
+            bytesReader ??
+            makeScreenedBytesReader(
+              reader ?? Fail`Missing provider stream reader`,
+              checkLive,
+            ),
+          // What the response cost, once the producer has read its end:
+          // `{ usage, began }` (`provider-usage.js`). It always fulfils.
+          usage,
+        });
       },
     },
   );
@@ -682,7 +1021,7 @@ export const makeProviderBrokerLease = (
   };
 
   /**
-   * Everything the upstream could echo back that the lease must not deliver.
+   * Everything the upstream could echo back that the grant must not deliver.
    * The base64 spellings are included because the broker itself is the only
    * place either form exists, so either form appearing downstream is a leak.
    *
@@ -700,17 +1039,20 @@ export const makeProviderBrokerLease = (
    * good for the request about to be dispatched.
    *
    * The read is per dispatch by design: a credential rotated by this broker, by
-   * a concurrent lease, or by an operator is picked up on the next request
+   * a concurrent grant, or by an operator is picked up on the next request
    * without re-delegation, and every length derived below is derived from that
    * read rather than cached across it.
    *
+   * @param {BrokerGrantMember} member
    * @param {string} [rejected] - An access token the upstream has just refused,
    * so a credential that still looks current is replaced too.
    * @returns {Promise<ResolvedCredential>}
    */
-  const resolveCredential = async rejected => {
+  const resolveCredential = async (member, rejected) => {
+    const oauth = oauthMode ? member.credential : undefined;
     if (!oauth) {
-      const encoded = await E(secret).readBase64();
+      const selectedSecret = member.secret ?? Fail`Missing provider secret`;
+      const encoded = await E(selectedSecret).readBase64();
       const decoded = decodeSecret(encoded);
       /^[\x21-\x7e]+$/.test(decoded) || Fail`Invalid credential`;
       return harden({ credential: decoded, screens: [decoded, encoded] });
@@ -737,22 +1079,25 @@ export const makeProviderBrokerLease = (
    * @overload
    * @param {{method: string, path: string, body: string}} request
    * @param {false} streaming
-   * @returns {Promise<{status: number, body: string}>}
+   * @returns {Promise<{status: number, body: string, usage: UsageSettlement}>}
    */
   /**
    * @overload
    * @param {{method: string, path: string, body: string}} request
    * @param {true} streaming
-   * @returns {Promise<ProviderStream & {contentType: string}>}
+   * @returns {Promise<{status: number, contentType: string, reader?: ProviderStream['reader'], bytesReader?: ReturnType<typeof makeScreenedBytesReader>, usage: Promise<UsageSettlement>}>}
    */
   /**
-   * @param {{method: string, path: string, body: string}} request
+   * @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request
    * @param {boolean} streaming
    */
-  const perform = async ({ method, path, body }, streaming) => {
+  const perform = async ({ method, path, body, headers }, streaming) => {
+    // Re-screen on this side of the seam: the listener already dropped the
+    // owned headers, and the broker does not take its word for it.
+    const forwarded = forwardableHeaders(headers ?? {});
     checkLive();
     routes.includes(`${method} ${path}`) || Fail`Inference route denied`;
-    let requestBytes = BigInt(new TextEncoder().encode(body).length);
+    const requestBytes = BigInt(new TextEncoder().encode(body).length);
     requestBytes <= maxRequestBytes || Fail`Request byte quota exceeded`;
     let data;
     try {
@@ -760,30 +1105,142 @@ export const makeProviderBrokerLease = (
     } catch (_error) {
       Fail`Invalid inference JSON`;
     }
-    (data &&
-      typeof data === 'object' &&
-      !Array.isArray(data) &&
-      typeof data.model === 'string' &&
-      models.includes(data.model)) ||
+    const model = /** @type {unknown} */ (
+      data && typeof data === 'object' && !Array.isArray(data)
+        ? data.model
+        : undefined
+    );
+    (typeof model === 'string' && model !== '' && model.length <= 256) ||
       Fail`Model denied`;
+    const modelId = /** @type {string} */ (model);
     const canonicalBody = JSON.stringify(data);
     const canonicalBytes = BigInt(
       new TextEncoder().encode(canonicalBody).length,
     );
     canonicalBytes <= maxRequestBytes || Fail`Request byte quota exceeded`;
-    if (canonicalBytes > requestBytes) requestBytes = canonicalBytes;
-    const reservation = requestBytes + maxResponseBytes;
-    (requests < maxRequests &&
-      reservedBytes + reservation <= maxTotalBytes &&
-      reservedCostMicrounits + maxCostMicrounitsPerRequest <=
-        maxCostMicrounits) ||
-      Fail`Broker quota exhausted`;
-    // Reserve synchronously, before retrieving the secret: concurrent calls
-    // cannot each spend the same remaining quota.
+    /**
+     * A member's translation of the canonical request. Per member, because
+     * what an adapter adds can belong to one account (a ChatGPT account
+     * header), so a request built for one member cannot be replayed under
+     * another.
+     *
+     * @param {BrokerGrantMember} member
+     */
+    const adaptFor = member => {
+      // Somebody else's subscription translates the request where it lives.
+      if (member.wrapped !== undefined) {
+        return harden({ upstreamPath: path, adapterHeaders: {} });
+      }
+      const adapted = member.adaptRequest
+        ? member.adaptRequest(harden({ path, data }))
+        : { path };
+      const upstreamPath = adapted.path;
+      const target = splitInferenceTarget(upstreamPath);
+      (target &&
+        /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
+        Fail`Invalid adapted inference target`;
+      const adapterHeaders = forwardableHeaders(adapted.headers ?? {});
+      Object.entries(adapted.headers ?? {}).every(
+        ([name, value]) => adapterHeaders[name] === value,
+      ) || Fail`Invalid adapted inference headers`;
+      return harden({ upstreamPath, adapterHeaders });
+    };
+    // Which subscriptions to try, in order, and the first one's translation:
+    // both before a slot is reserved or any credential read, as the single
+    // translation always was. With a pool a failure here is collapsed like
+    // any other of the request's: what the pool says, a pinned id included,
+    // is the operator's and not for whoever holds the endpoint.
+    /** @type {BrokerGrantMember[]} */
+    let selected;
+    try {
+      selected = selectOrder().map(
+        id => membersById.get(id) ?? Fail`Unknown broker subscription`,
+      );
+      if (selected.length === 0) {
+        record('subscriptions-exhausted');
+        throw Fail`Provider subscriptions exhausted`;
+      }
+    } catch (error) {
+      if (pool === undefined) throw error;
+      if (
+        revealExhaustion &&
+        error instanceof Error &&
+        error.message === 'Provider subscriptions exhausted'
+      ) {
+        throw Error('Provider subscription exhausted');
+      }
+      return Fail`Provider request failed`;
+    }
+    // Of those, the ones whose account lists the model. Asked of all at
+    // once, kept in the pool's order, so a pinned session's one member
+    // refusing is a refusal and not a fall-through; an answer that fails is
+    // no. Nothing is reserved or read yet, and the grant may be revoked
+    // meanwhile.
+    const answers = await Promise.all(
+      selected.map(async member => {
+        try {
+          const answer =
+            await /** @type {NonNullable<typeof member.admits>} */ (
+              member.admits
+            )(modelId);
+          return answer === true;
+        } catch (_error) {
+          return false;
+        }
+      }),
+    );
+    const candidates = selected.filter((_member, index) => answers[index]);
+    if (candidates.length === 0) {
+      // A model nobody lists, or nobody able to say: the audit trail tells
+      // them apart, the slice is told neither.
+      const anyCatalog = selected.some(member => {
+        const state = member.catalogState?.();
+        return state === undefined || state === 'current' || state === 'stale';
+      });
+      record(anyCatalog ? 'model-denied' : 'catalog-unavailable');
+      throw Fail`Model denied`;
+    }
+    let firstAdapted;
+    try {
+      firstAdapted = adaptFor(candidates[0]);
+    } catch (error) {
+      if (pool === undefined) throw error;
+      if (
+        revealExhaustion &&
+        error instanceof Error &&
+        error.message === 'Provider subscriptions exhausted'
+      ) {
+        throw Error('Provider subscription exhausted');
+      }
+      return Fail`Provider request failed`;
+    }
+    activeRequests < maxConcurrentRequests ||
+      Fail`Provider concurrency limit reached`;
+    // Reserve before the secret read; an open stream retains its slot until
+    // upstream EOF, cancellation, or failure. Completed requests consume no slot.
+    activeRequests += 1;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      activeRequests -= 1;
+    };
     requests += 1n;
-    reservedBytes += reservation;
-    reservedCostMicrounits += maxCostMicrounitsPerRequest;
     record('admitted');
+    // What this request cost, for whoever charges for it. Settled once, by
+    // whichever comes first: the end of the response, its failure or
+    // cancellation, or a refusal before any response. It never rejects.
+    /** @type {(settlement: UsageSettlement) => void} */
+    let settleUsage = () => {};
+    /** @type {Promise<UsageSettlement>} */
+    const usageSettled = new Promise(resolve => {
+      let settled = false;
+      settleUsage = settlement => {
+        if (settled) return;
+        settled = true;
+        resolve(harden(settlement));
+      };
+    });
     /**
      * Every credential this request has handed the upstream, in every form it
      * could come back as. It accumulates across a refreshed retry rather than
@@ -799,28 +1256,45 @@ export const makeProviderBrokerLease = (
      * retry re-enters here, so every length below is derived from the
      * credentials actually sent rather than cached across the request.
      *
+     * @param {BrokerGrantMember} member
+     * @param {{ upstreamPath: string, adapterHeaders: Record<string, string> }} adapted
      * @param {ResolvedCredential} resolved
      */
-    const dispatch = async ({ credential: token, screens }) => {
+    const dispatch = async (
+      member,
+      { upstreamPath, adapterHeaders },
+      { credential: token, screens },
+    ) => {
       await null;
       checkLive();
+      const memberTransport =
+        member.transport ?? Fail`Missing provider transport`;
       for (const screen of screens) {
         if (!exposed.includes(screen)) exposed.push(screen);
       }
       const upstream = harden({
-        url: `${origin}${path}`,
+        url: `${origin}${upstreamPath}`,
         method,
         headers: {
-          ...(credentialHeader === 'bearer'
-            ? { authorization: `Bearer ${token}` }
-            : { 'x-api-key': token }),
-          ...(anthropicVersion === undefined
+          // The harness describes its own request; the broker authenticates it.
+          // Re-screened here rather than trusted from the listener, so the
+          // owned set is enforced on this side of the seam too. Policy values
+          // fill in only what the harness did not send, and the credential is
+          // applied last and unconditionally.
+          ...forwarded,
+          ...(anthropicVersion === undefined ||
+          forwarded['anthropic-version'] !== undefined
             ? {}
             : { 'anthropic-version': anthropicVersion }),
-          ...(anthropicBeta === undefined
+          ...(anthropicBeta === undefined ||
+          forwarded['anthropic-beta'] !== undefined
             ? {}
             : { 'anthropic-beta': anthropicBeta }),
           'content-type': 'application/json',
+          ...adapterHeaders,
+          ...(credentialHeader === 'bearer'
+            ? { authorization: `Bearer ${token}` }
+            : { 'x-api-key': token }),
         },
         body: canonicalBody,
         redirect: /** @type {const} */ ('error'),
@@ -829,17 +1303,52 @@ export const makeProviderBrokerLease = (
       /** @param {string} text */
       const echoes = text => exposed.some(screen => text.includes(screen));
       if (streaming) {
-        const response = await E(transport).requestStream(upstream);
+        const response = await (E(memberTransport).requestStream?.(upstream) ??
+          Fail`Provider streaming transport unavailable`);
+        const tap = makeUsageTap();
+        let bytes = 0n;
         const cancel = () => {
           // Release ownership before the eventual send, including if it fails.
           if (!streams.delete(cancel)) return;
+          finish();
+          // The response began and was cut short, so it is not free, and not
+          // cheaper than one that ran: what it said of its cost so far and
+          // how much of it was read, for a meter to set against what it
+          // reserved.
+          settleUsage({
+            usage: tap.finish() ?? null,
+            began: true,
+            complete: false,
+            responseBytes: Number(bytes),
+          });
           void E(response.reader)
             .return()
             .catch(() => {});
         };
         streams.add(cancel);
+        if (response.closed !== undefined) {
+          // The transport can terminate while the consumer is not pulling.
+          // Do not discard buffered final output when normal EOF closes it.
+          void response.closed.then((/** @type {any} */ ending) => {
+            // The transport says how it ended. Only the end of the body is
+            // a response read to its end; a deadline or a reset closes it
+            // too, and that is one cut short, whatever it had already said
+            // of its cost.
+            if (ending?.complete !== true) {
+              cancel();
+              return;
+            }
+            streams.delete(cancel);
+            finish();
+            settleUsage({
+              usage: tap.finish() ?? null,
+              began: true,
+              complete: true,
+              responseBytes: Number(bytes),
+            });
+          }, cancel);
+        }
         let held = '';
-        let bytes = 0n;
         let reading = false;
         let ended = false;
         const keep =
@@ -871,9 +1380,19 @@ export const makeProviderBrokerLease = (
                     Fail`Response byte quota exceeded`;
                   held += chunk.value;
                   !echoes(held) || Fail`Invalid provider response`;
+                  // Numbers only, and from what the producer read: a consumer
+                  // that stops reading does not make the response cheaper.
+                  tap.push(chunk.value);
                   if (chunk.done) {
                     ended = true;
                     streams.delete(cancel);
+                    finish();
+                    settleUsage({
+                      usage: tap.finish() ?? null,
+                      began: true,
+                      complete: true,
+                      responseBytes: Number(bytes),
+                    });
                     record('completed');
                     checkLive();
                     const value = held;
@@ -922,13 +1441,14 @@ export const makeProviderBrokerLease = (
             reader: stream,
             contentType:
               data.stream === true ? 'text/event-stream' : 'application/json',
+            usage: usageSettled,
           });
         } catch (_error) {
           cancel();
           throw _error;
         }
       }
-      const response = await E(transport).request(upstream);
+      const response = await E(memberTransport).request(upstream);
       checkLive();
       (Number.isInteger(response.status) &&
         response.status >= 200 &&
@@ -940,36 +1460,341 @@ export const makeProviderBrokerLease = (
         Fail`Invalid provider response`;
       record('completed');
       checkLive();
+      finish();
+      const whole = makeUsageTap();
+      whole.push(response.body);
+      const settlement = harden({
+        usage: whole.finish() ?? null,
+        began: true,
+        complete: true,
+        responseBytes: new TextEncoder().encode(response.body).length,
+      });
+      settleUsage(settlement);
       // No upstream headers (including cookies or authentication challenges)
-      // escape through the lease. Upstream error bodies are never returned.
-      return harden({ status: response.status, body: response.body });
+      // escape through the grant. Upstream error bodies are never returned.
+      return harden({
+        status: response.status,
+        body: response.body,
+        usage: settlement,
+      });
     };
-    try {
+    /**
+     * The request, whole, to a member that is somebody else's subscription.
+     * What comes back is theirs: the stream is their reader, handed on and
+     * not read here, and what it cost is what they settle. A refusal by their
+     * limits reads as this member being used up, so the request goes on to
+     * the next, as it would from an account of the operator's own.
+     *
+     * @param {BrokerGrantMember} member
+     */
+    const dispatchWrapped = async member => {
+      await null;
       checkLive();
-      const first = await resolveCredential();
+      const { wrapped } = member;
+      if (wrapped === undefined) throw Fail`Invalid broker subscription set`;
+      const message = harden({
+        method,
+        path,
+        body: canonicalBody,
+        ...(Object.keys(forwarded).length > 0 ? { headers: forwarded } : {}),
+      });
+      /**
+       * The far side's bare words for the request itself. Anything else it
+       * throws (its endpoint was closed, its daemon restarted, the connection
+       * to it dropped) is about the endpoint, and nothing was delivered.
+       *
+       * @param {unknown} error
+       */
+      const aboutTheRequest = error =>
+        error instanceof Error &&
+        [
+          'Provider request failed',
+          'Provider response lost',
+          'Model denied',
+          'Invalid inference JSON',
+          'Inference route denied',
+          'Request byte quota exceeded',
+          'Provider concurrency limit reached',
+        ].includes(error.message);
+      /** @param {unknown} error */
+      const usedUp = error =>
+        error instanceof Error &&
+        (error.message === 'Provider share exhausted' ||
+          error.message === 'Provider subscription exhausted');
+      /** @param {any} far */
+      const send = far =>
+        streaming ? E(far).requestByteStream(message) : E(far).request(message);
+      let result;
       try {
-        return await dispatch(first);
+        let first;
+        try {
+          first = await wrapped.provide();
+        } catch (_error) {
+          throw makeMemberUnavailable();
+        }
+        try {
+          result = await send(first);
+        } catch (error) {
+          if (usedUp(error) || aboutTheRequest(error)) throw error;
+          const word = error instanceof Error ? error.message : '';
+          if (word !== 'Inference endpoint revoked') {
+            // The share itself cannot serve just now (its store, what is
+            // beneath it, a revocation), or the connection to it failed.
+            // The request is not sent again: it may have arrived. The
+            // endpoint is left as it is, since another request of this
+            // session may be streaming from it; only a lost connection
+            // forgets it, so the next request opens another.
+            if (word !== 'Provider share unavailable') wrapped.reset(first);
+            throw makeMemberUnavailable();
+          }
+          // The far side's own word that this endpoint is gone (its daemon
+          // restarted, or it closed the one used least recently): nothing
+          // of the request was taken up, so it is sent once more, on
+          // another.
+          wrapped.reset(first);
+          checkLive();
+          let again;
+          try {
+            again = await wrapped.provide();
+          } catch (_error) {
+            throw makeMemberUnavailable();
+          }
+          try {
+            result = await send(again);
+          } catch (retryError) {
+            if (usedUp(retryError) || aboutTheRequest(retryError)) {
+              throw retryError;
+            }
+            throw makeMemberUnavailable();
+          }
+        }
+      } catch (error) {
+        if (usedUp(error)) throw Error('Provider subscription exhausted');
+        throw error;
+      }
+      /** Give a far response nobody will read back to where it came from. */
+      const abandon = () => {
+        const reader = result?.reader;
+        if (reader === undefined || reader === null) return;
+        // A bytes reader is closed by taking it up and returning at once:
+        // that is what tells its producer to stop.
+        try {
+          void Promise.resolve(
+            iterateBytesReader(reader, { buffer: 0 }).return(undefined),
+          ).catch(() => {});
+        } catch (_error) {
+          // Not a reader after all; there is nothing to give back.
+        }
+      };
+      try {
+        checkLive();
+        (result !== null &&
+          typeof result === 'object' &&
+          Number.isInteger(result.status) &&
+          Number(result.status) >= 200 &&
+          Number(result.status) < 300 &&
+          (streaming
+            ? result.reader !== undefined && result.reader !== null
+            : typeof result.body === 'string' &&
+              BigInt(new TextEncoder().encode(result.body).length) <=
+                maxResponseBytes)) ||
+          Fail`Invalid provider response`;
+      } catch (error) {
+        abandon();
+        throw error;
+      }
+      // Numbers, and only the ones a settlement has: nothing else another
+      // daemon put there goes on to the next holder.
+      const settled = Promise.resolve(result.usage).then(
+        settlement =>
+          settlement !== null &&
+          typeof settlement === 'object' &&
+          typeof settlement.began === 'boolean'
+            ? {
+                usage:
+                  settlement.usage === null || settlement.usage === undefined
+                    ? null
+                    : projectCounts(settlement.usage),
+                began: settlement.began,
+                complete: settlement.complete === true,
+                responseBytes: tokenCount(settlement.responseBytes),
+              }
+            : { usage: null, began: true, complete: false, responseBytes: 0 },
+        () => ({ usage: null, began: true, complete: false, responseBytes: 0 }),
+      );
+      if (!streaming) {
+        record('completed');
+        finish();
+        const settlement = harden(await settled);
+        settleUsage(settlement);
+        return harden({
+          status: result.status,
+          body: result.body,
+          usage: settlement,
+        });
+      }
+      // The slot is held until the far side has read the end of the stream,
+      // which is when it settles what the response cost. A revoked grant
+      // gives the stream back.
+      const cancel = () => {
+        if (!streams.delete(cancel)) return;
+        abandon();
+      };
+      streams.add(cancel);
+      void settled.then(settlement => {
+        streams.delete(cancel);
+        finish();
+        record(settlement.complete ? 'completed' : 'failed');
+        settleUsage(settlement);
+      });
+      return harden({
+        status: result.status,
+        contentType:
+          data.stream === true ? 'text/event-stream' : 'application/json',
+        usage: usageSettled,
+        // Not a text reader: the bytes stream itself, for `requestByteStream`
+        // to hand on.
+        reader: undefined,
+        bytesReader: result.reader,
+      });
+    };
+    /**
+     * One subscription's attempt at the request, with its one refresh retry.
+     *
+     * @param {BrokerGrantMember} member
+     * @param {ReturnType<typeof adaptFor>} adapted
+     */
+    const attempt = async (member, adapted) => {
+      if (member.wrapped !== undefined) return dispatchWrapped(member);
+      const first = await resolveCredential(member).catch(error => {
+        tellPool('unusable', member.id);
+        throw error;
+      });
+      try {
+        return await dispatch(member, adapted, first);
       } catch (error) {
         // One retry, and only for the one failure a refresh can fix. A turn
         // whose token was revoked or rotated elsewhere mid-session recovers
         // here; every other failure propagates as it happened. Nothing was
         // delivered to the caller yet: an upstream that rejects the credential
         // does so before the first response byte.
-        if (!oauth || !isCredentialRejection(error)) throw error;
+        if (!oauthMode || !isCredentialRejection(error)) {
+          // A key the upstream rejects cannot be refreshed: the member is
+          // unusable until its secret is replaced.
+          if (isCredentialRejection(error)) tellPool('unusable', member.id);
+          throw error;
+        }
         record('credential-rejected');
         // Naming the refused token is what lets the shared credential tell
-        // "replace this one" from "another lease already replaced it": it
+        // "replace this one" from "another grant already replaced it": it
         // exchanges only if the record still holds the token that just failed.
-        return await dispatch(await resolveCredential(first.credential));
+        try {
+          return await dispatch(
+            member,
+            adapted,
+            await resolveCredential(member, first.credential),
+          );
+        } catch (retryError) {
+          // Refused again with a fresh credential, or no fresh one to be
+          // had: this member cannot serve until somebody mends it.
+          tellPool('unusable', member.id);
+          throw retryError;
+        }
       }
-    } catch (_error) {
+    };
+    try {
+      checkLive();
+      /** @type {unknown} */
+      let refusal;
+      for (const [index, member] of candidates.entries()) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const result = await attempt(
+            member,
+            index === 0 ? firstAdapted : adaptFor(member),
+          );
+          tellPool('served', member.id);
+          return result;
+        } catch (error) {
+          // A far subscription admits by its own accounts' catalogs, of
+          // which its holder's answer was the union: one of them refusing
+          // the model is not this request's failure, and the next member,
+          // an account of the operator's own that lists it, may serve.
+          if (
+            pool !== undefined &&
+            member.wrapped !== undefined &&
+            error instanceof Error &&
+            error.message === 'Model denied'
+          ) {
+            checkLive();
+            refusal = error;
+            record('model-denied');
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+          // A subscription that is used up refuses at admission, before any
+          // response byte, so the same request can go to the next one. Any
+          // other failure is the request's, and is not tried elsewhere.
+          if (pool !== undefined && isMemberUnavailable(error)) {
+            // A grant revoked meanwhile is why, not the member.
+            checkLive();
+            // Nothing the next member could not also be given, so it may
+            // have the request. The pool skips this one for a while, as it
+            // does a dead credential. If none is left, the request was
+            // refused by what the subscription can do now and not by
+            // anything about the request, which is what exhaustion means to
+            // whoever holds this: their pool moves on.
+            refusal = Error('Provider subscription exhausted');
+            record('subscription-unavailable');
+            tellPool('unusable', member.id);
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+          if (pool === undefined || !isSubscriptionExhaustion(error)) {
+            throw error;
+          }
+          refusal = error;
+          record('subscription-exhausted');
+          tellPool('exhausted', member.id);
+          checkLive();
+        }
+      }
+      throw refusal;
+    } catch (error) {
+      finish();
       record('failed');
+      // Refused before any response: nothing was spent. Unless the provider
+      // was given the whole deadline, or had begun to answer: then the work
+      // may have been done, and it is charged as a response cut short.
+      settleUsage(
+        isResponseLost(error)
+          ? { usage: null, began: true, complete: false, responseBytes: 0 }
+          : {
+              usage: emptyCounts(),
+              began: false,
+              complete: true,
+              responseBytes: 0,
+            },
+      );
+      if (
+        revealExhaustion &&
+        (isSubscriptionExhaustion(error) ||
+          (error instanceof Error &&
+            error.message === 'Provider subscriptions exhausted'))
+      ) {
+        throw Error('Provider subscription exhausted');
+      }
+      // A caller that fails gets no `usage` to await, so an endpoint a share
+      // sits on is told this way that the request it lost was not free.
+      if (revealExhaustion && isResponseLost(error)) {
+        throw Error('Provider response lost');
+      }
       return Fail`Provider request failed`;
     }
   };
   const admin = makeExo(
-    'ProviderInferenceLeaseAdmin',
-    M.interface('ProviderInferenceLeaseAdmin', {
+    'ProviderInferenceGrantAdmin',
+    M.interface('ProviderInferenceGrantAdmin', {
       revoke: M.call().returns(M.undefined()),
       getStatus: M.call().returns(M.record()),
     }),
@@ -983,9 +1808,7 @@ export const makeProviderBrokerLease = (
         return harden({
           revoked,
           requests,
-          reservedBytes,
-          reservedCostMicrounits,
-          expiresAt,
+          activeRequests,
           authMode,
         });
       },
@@ -993,4 +1816,4 @@ export const makeProviderBrokerLease = (
   );
   return harden({ endpoint, admin });
 };
-harden(makeProviderBrokerLease);
+harden(makeProviderBrokerGrant);

@@ -2,6 +2,8 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { makeLoopback } from '@endo/captp';
 import { makePipe } from '@endo/stream';
+import { passStyleOf } from '@endo/pass-style';
+import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
 import { readerFromIterator } from '../reader-from-iterator.js';
 import { iterateReader } from '../iterate-reader.js';
 import { bytesReaderFromIterator } from '../bytes-reader-from-iterator.js';
@@ -10,6 +12,8 @@ import { writerFromIterator } from '../writer-from-iterator.js';
 import { iterateWriter } from '../iterate-writer.js';
 import { bytesWriterFromIterator } from '../bytes-writer-from-iterator.js';
 import { iterateBytesWriter } from '../iterate-bytes-writer.js';
+
+/** @import { PassableReader } from '../types.js' */
 
 const writeAll = async (writer, iterable) => {
   for await (const value of iterable) {
@@ -104,6 +108,50 @@ test('captp: bytes reader', async t => {
   t.is(results.length, 2);
   t.deepEqual(results[0], new Uint8Array([1, 2, 3]));
   t.deepEqual(results[1], new Uint8Array([4, 5, 6]));
+});
+
+// Test the byte-array stream() of a bytes reader over CapTP
+test('captp: bytes reader stream() yields passable byte arrays', async t => {
+  const { makeFar } = makeLoopback('test');
+
+  const chunks = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])];
+
+  const localReader = bytesReaderFromIterator(chunks);
+  // A bytes reader's `stream()` is an ordinary reader of byte arrays.
+  const remoteReader = /** @type {PassableReader<Uint8Array>} */ (
+    /** @type {unknown} */ (await makeFar(localReader))
+  );
+
+  const results = [];
+  for await (const chunk of iterateReader(remoteReader)) {
+    results.push(chunk);
+  }
+
+  t.is(results.length, 2);
+  for (const chunk of results) {
+    t.is(passStyleOf(chunk), 'byteArray');
+  }
+  t.deepEqual(results.map(thawedBytes), chunks);
+});
+
+// A byte array received from a peer can be streamed onward
+test('captp: bytes reader stream() forwards received byte arrays', async t => {
+  const { makeFar } = makeLoopback('test');
+
+  const received = frozenBytes(new Uint8Array([7, 8, 9]));
+
+  const localReader = bytesReaderFromIterator([received]);
+  // A bytes reader's `stream()` is an ordinary reader of byte arrays.
+  const remoteReader = /** @type {PassableReader<Uint8Array>} */ (
+    /** @type {unknown} */ (await makeFar(localReader))
+  );
+
+  const results = [];
+  for await (const chunk of iterateReader(remoteReader)) {
+    results.push(thawedBytes(chunk));
+  }
+
+  t.deepEqual(results, [new Uint8Array([7, 8, 9])]);
 });
 
 // Test reader with buffering over CapTP

@@ -150,3 +150,40 @@ fn blob_snapshot_carries_the_family_too() {
     let resumed = crank(&mut r, obs);
     assert_eq!(resumed, continuous, "blob twin agrees");
 }
+
+#[test]
+fn resumed_resizable_buffer_keeps_its_maximum_and_tracking_views() {
+    // A resizable buffer shrunk under a length-tracking view, a fixed-length
+    // view it no longer covers and a length-tracking DataView: the resumed
+    // machine answers each length as the continuous one does, and a resize
+    // after the resume brings the out-of-bounds view back with its bytes.
+    assert_twin(
+        "ih-tarr-twin-resizable",
+        "var rab = 0; var track = 0; var fixed = 0; var dv = 0; var t = 0; \
+         rab = new ArrayBuffer(8, { maxByteLength: 16 }); \
+         track = new Uint16Array(rab, 2); fixed = new Uint8Array(rab, 4, 4); \
+         dv = new DataView(rab, 1); fixed[0] = 9; rab.resize(5); t = 7; t",
+        &[
+            "var rab; var track; var fixed; var dv; var t; \
+             t = [rab.byteLength, rab.maxByteLength, rab.resizable, track.length, \
+             fixed.length, dv.byteLength].join(); t",
+            "var rab; var track; var fixed; var dv; var t; rab.resize(12); \
+             t = [track.length, fixed.length, fixed[0], dv.byteLength].join(); t",
+        ],
+        &["5,16,true,1,0,4", "5,4,9,11"],
+    );
+}
+
+#[test]
+fn resumed_growable_shared_buffer_grows_under_its_views() {
+    assert_twin(
+        "ih-tarr-twin-growable",
+        "var gsab = 0; var track = 0; var t = 0; \
+         gsab = new SharedArrayBuffer(4, { maxByteLength: 8 }); \
+         track = new Uint8Array(gsab); track[3] = 5; t = 7; t",
+        &["var gsab; var track; var t; gsab.grow(8); \
+             t = [gsab.byteLength, gsab.maxByteLength, gsab.growable, track.length, \
+             track[3], track[7]].join(); t"],
+        &["8,8,true,8,5,0"],
+    );
+}

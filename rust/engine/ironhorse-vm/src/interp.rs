@@ -27,25 +27,29 @@
 mod state;
 
 mod admission;
+pub(crate) use admission::ScratchElement;
 mod apply;
 mod code;
 mod coerce;
 mod dispatch;
 mod metering;
+mod side_ledger;
 use metering::*;
 mod native_ids;
 pub use native_ids::{MathId, Native, NativeMethod};
 mod snapshot_rows;
+mod snapshot_views;
 pub use snapshot_rows::{
     AccessorRow, ArraySnapshot, AsyncGeneratorRequestRow, AsyncGeneratorRow, AsyncRow,
     BoundFunctionRow, CollectionSnapshot, CombinatorRow, DisposableStackRow, DisposalRecordRow,
-    EnvironmentRow, EvaluatorRow, FunctionRow, FunctionStateSnapshot, GeneratorRow,
-    HostFunctionRow, IndexPropsSnapshot, IntlBoundFunctionRow, IteratorRow, ModuleGraphSnapshot,
-    ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow,
-    PromiseClusterSnapshot, PromiseFnRow, PromiseJobRow, PromiseReactionRow, PromiseRow,
-    ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow, SavedJumpRow,
-    SharedMachineSnapshot,
+    EnvironmentRow, EvaluatorRow, FinalizationCellRow, FinalizationRegistryRow, FromAsyncRow,
+    FunctionRow, FunctionStateSnapshot, GeneratorRow, HostFunctionRow, IndexPropsSnapshot,
+    IntlBoundFunctionRow, IteratorRow, ModuleGraphSnapshot, ModuleRecordRow, PrivateAccessorRow,
+    PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow, PromiseJobRow,
+    PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow,
+    SavedJumpRow, SharedMachineSnapshot, WeakRefRow,
 };
+pub use snapshot_views::{ArrayRowView, CollectionRowView};
 mod symbol_keys;
 use symbol_keys::SymbolKeys;
 mod intl_data;
@@ -68,9 +72,12 @@ mod strings;
 mod unwind;
 
 pub(crate) mod host;
+mod intrinsic_order;
 mod link;
 mod native_try;
 mod natives;
+#[doc(hidden)]
+pub use natives::JsonSourceTree;
 mod persist;
 mod shared_persist;
 pub use persist::RestoreError;
@@ -110,7 +117,7 @@ mod locale;
 use locale::{
     canonicalize_locale, collator_compare_units, currency_digits, format_date_time_parts,
     format_date_time_range_parts, is_well_formed_currency_code, is_well_formed_unit_identifier,
-    list_format_parts, locale_base_name, locale_is_supported, locale_to_tag, maximize_locale,
+    list_separator, locale_base_name, locale_is_supported, locale_to_tag, maximize_locale,
     minimize_locale, plural_categories, plural_select, segment_units, supported_locale,
     titlecase_ascii, valid_language, valid_region, valid_script, valid_unicode_type,
 };
@@ -125,9 +132,10 @@ use text::{
 mod numeric;
 pub use numeric::slot_to_ecma_string;
 use numeric::{
-    apply_arith, canonical_numeric_index_string, element_slot_to_i64, fx_pow, loose_equals,
-    math_to_integer, number_to_radix_string, numeric_of, parse_int, strict_equals,
-    string_to_array_like_index, string_to_index, string_to_number, to_number, unary_minus, ArithOp,
+    apply_arith, canonical_numeric_index_string, fx_pow, loose_equals, math_to_integer,
+    number_to_exponential, number_to_fixed, number_to_precision, number_to_radix_string,
+    number_to_u64_wrapping, numeric_of, parse_int, strict_equals, string_to_array_like_index,
+    string_to_index, string_to_number, to_number, unary_minus, ArithOp,
 };
 
 mod bigint;
@@ -197,11 +205,46 @@ pub enum SourceCompileError {
     /// A genuine early (parse/early) error: the source is not a valid
     /// Script. The bridge throws a catchable realm `SyntaxError`.
     Syntax(String),
-    /// The compiler reached a deferred/unported path (a valid construct it
-    /// does not yet compile, or a coder panic). An honest coverage gap.
+    /// The compiler reached a deferred/unported path: a valid construct it
+    /// does not yet compile. An honest coverage gap.
+    ///
+    /// NOT a caught panic. A panic is [`Self::Invariant`], and the two used
+    /// to be the same arm — so a compiler that violated its own invariant
+    /// reported as missing coverage, which is exactly the distinction a
+    /// consensus engine needs and the one it did not have (architecture
+    /// finding F063).
     Unsupported(String),
+    /// The compiler violated an invariant: it panicked, and an embedder's
+    /// firewall caught the unwind.
+    ///
+    /// This is an ENGINE FAULT, not a coverage gap and not a guest error.
+    /// The bridge stops the machine with an uncatchable
+    /// [`Halt::EngineInvariant`] under a fixed label rather than letting
+    /// arbitrary panic text reach a guest, and no guest `SyntaxError` is
+    /// raised: the source may be perfectly valid.
+    Invariant(String),
     /// Regexp compilation exceeded its storage profile.
     HeapExhausted,
+    /// The host allocator refused storage the compiler's profile admitted;
+    /// the bridge stops the machine with [`Halt::HostAllocationFailed`].
+    HostAllocationFailed,
+}
+
+/// What a direct `eval` inherits from the code that calls it, as XS's
+/// `fxRunEval` passes it to the parse: its strictness; whether `new.target`
+/// is allowed (the caller can construct); whether `super` property access is
+/// (the caller has a home object); whether it runs in a class field
+/// initializer, where `arguments` is a SyntaxError; and whether the caller's
+/// environment can supply a class's private names, which a strict eval then
+/// binds at run time (`EVAL_PRIVATE`) instead of rejecting. An indirect eval
+/// and the `Function` constructor compile with `strict` alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EvalContext {
+    pub strict: bool,
+    pub new_target: bool,
+    pub super_property: bool,
+    pub field: bool,
+    pub private_environment: bool,
 }
 
 /// The compiler seam the runtime source-execution bridge drives (design
@@ -253,6 +296,20 @@ pub trait SourceCompiler {
         })?;
         self.compile_source(&text, strict, raw_budget, charge)
     }
+
+    /// Compile a direct eval's source in its caller's [`EvalContext`]. A
+    /// compiler that does not override this compiles with the context's
+    /// strictness alone, so `super`, `new.target` and private names in the
+    /// eval'd source are SyntaxErrors there.
+    fn compile_eval_units(
+        &self,
+        source: &[u16],
+        context: &EvalContext,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<CompiledSource, SourceCompileError> {
+        self.compile_source_units(source, context.strict, raw_budget, charge)
+    }
 }
 
 /// XS's value stack is a fixed array of `stackCount` slots
@@ -275,6 +332,14 @@ pub const STACK_SLOT_COUNT: usize = 4096;
 /// this ceiling before the next instruction and returns `Halt::StepLimit`.
 /// Ordinary runs use the arena and allocation-admission limits instead.
 const BOUNDED_RUN_SLOT_CEILING: u32 = 1_000_000;
+
+/// Dispatch budget for one opt-in guest render of an escaping thrown value
+/// ([`Interp::run_rendering_throws_in_guest`]). Generous by orders of
+/// magnitude for any `toString` a diagnostic would meet -- test262's is a
+/// string concatenation -- while still bounding a `toString` that does not
+/// terminate. Exceeding it is `Halt::StepLimit`, which the render propagates
+/// rather than turning into text.
+const RENDER_DISPATCH_BUDGET: u64 = 10_000_000;
 /// XS reserves a fixed band at the top of the stack for the machine roots
 /// (`mxGlobal`/`mxException`/`mxProgram`/… — the `*StackIndex` slots in
 /// `xsAll.h`) plus the frame scratch `fxOverflow` guards against; the
@@ -379,6 +444,10 @@ pub const XS_DONT_SET_FLAG: u8 = 8; // writable: false
 pub const XS_METHOD_FLAG: u8 = 16;
 pub const XS_GETTER_FLAG: u8 = 32;
 pub const XS_SETTER_FLAG: u8 = 64;
+/// XS define-mask bit (`xsCommon.h`), never stored on a property: the
+/// defined value is an anonymous function definition that takes its name
+/// from the key ([`Interp::name_defined_function`]).
+pub const XS_NAME_FLAG: u8 = 1;
 /// XS instance-slot flag bit (`xsAll.h`): a non-extensible instance carries
 /// `XS_DONT_PATCH_FLAG` on its own `XS_INSTANCE_KIND` slot's `flag` byte
 /// (`mxBehaviorPreventExtensions` sets it, `mxBehaviorIsExtensible` reads it).
@@ -435,6 +504,20 @@ struct AccessorData {
 enum ProtoAccessorKey {
     String(&'static str),
     WellKnownSymbol(&'static str),
+}
+
+/// Where [`Interp::index_set_walk`] leaves an index write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IndexSetWalk {
+    /// A setter or a Proxy's `set` trap decided, or a TypedArray took no
+    /// element (`true`), or a missing setter or a non-writable value rejected
+    /// the write (`false`).
+    Done(bool),
+    /// No inherited property decides: the receiver creates or updates its own.
+    Create,
+    /// The receiver is a TypedArray reached on its own chain, whose element
+    /// `[[Set]]` the caller runs by name.
+    Defer,
 }
 
 /// Result of writing through XS's exotic closure-environment behavior.
@@ -614,6 +697,102 @@ struct ProxyData {
     revoked: bool,
 }
 
+/// How a `[[Get]]` that may cross Proxy layers is metered, carried as one
+/// argument rather than four (STACK-DEPTH-REFACTOR.md A3): V8 passes a call's
+/// arguments past the fifth on the machine stack, once per Proxy layer.
+#[derive(Clone, Copy, Default)]
+struct GetMetering {
+    /// The caller-owned residual charged for each Proxy trap actually taken
+    /// (the Array Iterator's); zero for an ordinary `[[Get]]`.
+    proxy_trap: u64,
+    /// Charge a terminal primitive wrapper (its String receiver residual, or
+    /// the Symbol and BigInt tick), whether or not a Proxy was crossed.
+    terminal_wrapper: bool,
+    /// The read reached its object through a forward: the terminal target is
+    /// metered as forwarded, a trapped layer charges its forwarded-active
+    /// residual, and a String receiver takes the forwarded residual.
+    forwarded_target: bool,
+    /// The read runs inside an active `get` trap's own read of its target.
+    after_active_trap: bool,
+}
+
+/// Where one leg of a `[[Get]]` ended (STACK-DEPTH-REFACTOR.md B9): with its
+/// value, or at the next object whose `[[Get]]` the read is, which the
+/// recursive shape entered through its guarded entry, one native frame and
+/// one unit deeper each time. [`Interp::get_legs`] takes them in a loop
+/// instead, charging and holding the same units.
+enum GetLeg {
+    Value(Slot),
+    /// The prototype an ordinary walk delegates to (a Proxy, or the object
+    /// the Array Iterator's read is aimed at), entered as `mop_get` entered
+    /// it.
+    Prototype(crate::value::SlotIndex),
+    /// The object a Proxy forwarded to, not itself a Proxy, entered as
+    /// `mop_get_with_proxy_metering` entered it, with the forward's metering.
+    Target(crate::value::SlotIndex, GetMetering),
+}
+
+/// Where one leg of a `[[Set]]` ended (STACK-DEPTH-REFACTOR.md B9): with its
+/// result, or at the next object whose `[[Set]]` the assignment is (a
+/// prototype that is a Proxy or holds the TypedArray element, or the object a
+/// Proxy forwarded to), which the recursive shape entered through `mop_set`
+/// or, for a Proxy forwarded to, a forwarding hop. [`Interp::set_legs`] takes
+/// them in a loop.
+enum SetLeg {
+    Done(bool),
+    Next(crate::value::SlotIndex),
+}
+
+/// What one Proxy layer of an internal method does: forward the method to
+/// its target (the trap is absent), or finish with the trap's checked result.
+/// The `mop_*` walks loop over `Forward` instead of recursing once per layer
+/// (STACK-DEPTH-REFACTOR.md B1).
+enum ProxyStep<T> {
+    Forward(crate::value::SlotIndex),
+    Done(T),
+}
+
+/// What one Proxy layer of `[[Call]]` does: forward the call to its target
+/// with the same receiver and arguments, or call the `apply` trap with the
+/// handler as receiver and `(target, thisArgument, argumentsList)`. Either is
+/// a tail call, which `invoke_value` takes as its next turn and `RUN` makes
+/// itself ([`Interp::proxy_run_call`]).
+enum ProxyCall {
+    Forward(crate::value::SlotIndex),
+    Trap {
+        trap: Slot,
+        handler: Slot,
+        args: [Slot; 3],
+    },
+}
+
+/// One guest `Compartment` instance's internal slots (`fx_Compartment`,
+/// `xsModule.c:2864`), keyed by the instance slot in
+/// [`Interp::guest_compartments`]. Membership is the brand: every
+/// `Compartment.prototype` method checks it rather than duck-typing, so
+/// `Compartment.prototype.evaluate.call({})` is a `TypeError`.
+///
+/// `lease` is what keeps the environment out of [`Interp::reap_environments`]'s
+/// reach. A HOST compartment's lease is the Rust `Compartment` handle's
+/// (`compartment.rs`), whose `Weak` is handed to `create_environment` as
+/// `owner`; a guest compartment has no Rust handle, so the lease is owned HERE
+/// and its lifetime is the instance's. When the collector prunes a dead
+/// instance's row the lease drops with it, `owner.strong_count()` reaches zero,
+/// and the environment becomes collectable on the next pass -- the same
+/// contract, reached from the guest side.
+#[derive(Clone, Debug)]
+struct GuestCompartmentData {
+    /// The compartment's own global object -- what
+    /// `Compartment.prototype.globalThis` answers, and the key
+    /// `inactive_environments` files its environment under.
+    global: crate::value::SlotIndex,
+    /// The environment's owner lease. Never read; held for its `Drop`, which
+    /// is what releases the environment to [`Interp::reap_environments`] when
+    /// the collector prunes this row.
+    #[allow(dead_code)]
+    lease: std::rc::Rc<()>,
+}
+
 /// Transient metering context for a recursive `Reflect.get(target, key, …)`
 /// issued by an active Proxy trap while an Array Iterator performs its
 /// `length` or indexed-value Get. It is installed only when the active trap's
@@ -759,13 +938,56 @@ struct DisposableStackData {
     records: Vec<DisposalRecord>,
 }
 
+/// A `WeakRef` instance's `[[WeakRefTarget]]` (XS's `XS_WEAK_REF_KIND`
+/// internal property, `xsMapSet.c`). Kept in the [`Interp::weak_refs`] side
+/// table like [`DisposableStackData`].
+#[derive(Copy, Clone, Debug)]
+struct WeakRefData {
+    /// The target instance, or `SlotIndex::NULL` once a full collection found
+    /// it unreachable (`fxMarkWeakStuff` nulls `weakRef.target`); `deref` then
+    /// answers `undefined`.
+    target: crate::value::SlotIndex,
+}
+
+/// One `[[Cells]]` record of a `FinalizationRegistry` (XS's
+/// `XS_FINALIZATION_CELL_KIND` slot and the holdings slot preceding it).
+#[derive(Copy, Clone, Debug)]
+struct FinalizationCell {
+    /// The weakly held target, or `SlotIndex::NULL` once a collection found
+    /// it dead — the state that queues the cell for cleanup.
+    target: crate::value::SlotIndex,
+    /// The held value handed to the cleanup callback; any value, held
+    /// strongly, so it may be chunk-bearing (a string or BigInt).
+    holdings: Slot,
+    /// The weakly held unregister token, or `SlotIndex::NULL` when none was
+    /// given or it died.
+    token: crate::value::SlotIndex,
+}
+
+/// A `FinalizationRegistry` instance's internal state (XS's
+/// `XS_FINALIZATION_REGISTRY_KIND` closure, `xsMapSet.c`). Kept in the
+/// [`Interp::finalization_registries`] side table.
+#[derive(Clone, Debug)]
+struct FinalizationRegistryData {
+    /// The cleanup callback (`finalizationRegistry.callback`), held strongly.
+    callback: Slot,
+    /// Registration order, as XS links the cells off the callback slot.
+    cells: Vec<FinalizationCell>,
+    /// XS's `XS_FINALIZATION_REGISTRY_CHANGED`: a cell's target died in a
+    /// collection since the last cleanup, so the next job boundary runs the
+    /// callback for each dead cell.
+    changed: bool,
+}
+
 /// An `ArrayBuffer` instance's internal state (XS's `XS_ARRAY_BUFFER_KIND`
-/// + `XS_BUFFER_INFO_KIND` internal slots: the backing-store address and
-/// the byte length). Kept in the [`Interp::array_buffers`] side table like
-/// [`CollectionData`]; the backing bytes live in the chunk arena at
-/// `data`, relocated by the slide-compactor. `length` is the buffer's
-/// `byteLength` (`bufferInfo.length`). Resizable buffers are unsupported,
-/// so this record has no maximum-length field.
+/// + `XS_BUFFER_INFO_KIND` internal slots: the backing-store address, the
+/// byte length and the maximum byte length). Kept in the
+/// [`Interp::array_buffers`] side table like [`CollectionData`]; the backing
+/// bytes live in the chunk arena at `data`, relocated by the slide-compactor.
+/// `length` is the buffer's `byteLength` (`bufferInfo.length`). An attached
+/// buffer's backing chunk holds exactly `length` bytes: a resize allocates a
+/// new chunk and repoints `data`, as XS's `fxRenewChunk` may. A detached
+/// buffer keeps its old chunk under a zero `length`.
 #[derive(Copy, Clone, Debug)]
 struct ArrayBufferData {
     /// The chunk-arena offset of the zero-filled backing store. Read by the
@@ -774,13 +996,18 @@ struct ArrayBufferData {
     /// exposes `length`.
     data: crate::value::ChunkOffset,
     length: u32,
+    /// `[[ArrayBufferMaxByteLength]]` (XS's `bufferInfo.maxLength`): `Some`
+    /// for a resizable `ArrayBuffer` or a growable `SharedArrayBuffer`, and
+    /// `None` (XS's `-1`) for a fixed-length buffer.
+    max_length: Option<u32>,
 }
 
 /// One TypedArray element type (XS's `gxTypeDispatches` row): the
 /// constructor name, the element byte `size`, and the `shift` (log2 of the
-/// size, so `byteLength == length << shift`). The order mirrors
-/// `gxTypeDispatches` (with `mxFloat16` off, as the oracle target builds
-/// it), so [`Native::TypedArray`]'s index maps 1:1 to the C table.
+/// size, so `byteLength == length << shift`). The first eleven rows follow
+/// `gxTypeDispatches` as XS orders it without `mxFloat16`; `Float16Array`
+/// comes last rather than after `BigUint64Array`, where XS puts it, because
+/// [`Native::TypedArray`]'s index is the persisted kind.
 #[derive(Copy, Clone, Debug)]
 pub struct TypedArrayType {
     pub name: &'static str,
@@ -788,8 +1015,9 @@ pub struct TypedArrayType {
     pub shift: u8,
 }
 
-/// The concrete TypedArray constructors ironhorse binds, in `gxTypeDispatches`
-/// order. `Native::TypedArray(i)` indexes this table.
+/// The concrete TypedArray constructors ironhorse binds, in
+/// `gxTypeDispatches` order with `Float16Array` appended.
+/// `Native::TypedArray(i)` indexes this table.
 pub const TYPED_ARRAY_TYPES: &[TypedArrayType] = &[
     TypedArrayType {
         name: "BigInt64Array",
@@ -846,32 +1074,113 @@ pub const TYPED_ARRAY_TYPES: &[TypedArrayType] = &[
         size: 1,
         shift: 0,
     },
+    // Appended, never inserted: a TypedArray's persisted kind indexes this
+    // table, so an insertion would renumber every later family.
+    TypedArrayType {
+        name: "Float16Array",
+        size: 2,
+        shift: 1,
+    },
 ];
+
+/// The IEEE 754 binary16 bits nearest `value`, ties to even, NaN as the
+/// canonical quiet NaN `0x7E00`. Integer-only, after XS's `fxFloat64to16`
+/// (`xsDataView.c`, adapted from half.sourceforge.net), so every host
+/// rounds alike and no value is rounded twice through binary32.
+pub(crate) fn f64_to_f16_bits(value: f64) -> u16 {
+    let round = |bits: u32, guard: u32, sticky: u32| bits + (guard & (sticky | bits));
+    let dbits = value.to_bits();
+    let lo = dbits as u32;
+    let mut hi = (dbits >> 32) as u32;
+    let sign = (hi >> 16) & 0x8000;
+    hi &= 0x7FFF_FFFF;
+    let bits = if hi >= 0x7FF0_0000 {
+        if dbits & 0x000F_FFFF_FFFF_FFFF != 0 {
+            return 0x7E00;
+        }
+        sign | 0x7C00
+    } else if hi >= 0x40F0_0000 {
+        sign | 0x7C00
+    } else if hi >= 0x3F10_0000 {
+        round(
+            sign | (((hi >> 20) - 1008) << 10) | ((hi >> 10) & 0x3FF),
+            (hi >> 9) & 1,
+            u32::from((hi & 0x1FF) | lo != 0),
+        )
+    } else if hi >= 0x3E60_0000 {
+        let shift = 1018 - (hi >> 20);
+        let mantissa = (hi & 0xF_FFFF) | 0x10_0000;
+        round(
+            sign | (mantissa >> (shift + 1)),
+            (mantissa >> shift) & 1,
+            u32::from((mantissa & ((1 << shift) - 1)) | lo != 0),
+        )
+    } else {
+        sign
+    };
+    bits as u16
+}
+
+/// The value of IEEE 754 binary16 `bits`, exactly, after XS's
+/// `fxFloat16to64`.
+pub(crate) fn f16_bits_to_f64(bits: u16) -> f64 {
+    let mut hi = u32::from(bits & 0x8000) << 16;
+    let mut abs = u32::from(bits & 0x7FFF);
+    if abs != 0 {
+        hi |= 0x3F00_0000 << u32::from(abs >= 0x7C00);
+        while abs < 0x400 {
+            abs <<= 1;
+            hi -= 0x10_0000;
+        }
+        hi += abs << 10;
+    }
+    f64::from_bits(u64::from(hi) << 32)
+}
 
 /// A TypedArray instance's internal state (XS's `XS_TYPED_ARRAY_KIND`
 /// dispatch slot + `XS_DATA_VIEW_KIND` view slot + buffer reference). Kept
 /// in the [`Interp::typed_arrays`] side table. `kind` indexes
 /// [`TYPED_ARRAY_TYPES`]; `buffer` names the backing `ArrayBuffer`
-/// instance; `offset` is the `byteOffset`; `length` is the element count
-/// (XS's `size >> shift`). Kinds 0 and 1 are BigInt-element views; their
-/// element reads and writes use the BigInt conversion paths.
+/// instance; `offset` is the `byteOffset`; `array_length` is the element
+/// count (XS's `size >> shift`), or `None` for a view that tracks the length
+/// of a resizable buffer (XS's `size < 0`). Kinds 0 and 1 are BigInt-element
+/// views; their element reads and writes use the BigInt conversion paths.
+///
+/// The live length of a view is never stored: [`Interp::ta_length`] derives
+/// it from the buffer's current byte length (`IsTypedArrayOutOfBounds` and
+/// `TypedArrayLength`), because a resize can move it under any view.
 #[derive(Copy, Clone, Debug)]
 struct TypedArrayData {
     kind: u8,
     buffer: crate::value::SlotIndex,
     offset: u32,
-    length: u32,
+    /// `[[ArrayLength]]`: `Some(n)` for a fixed-length view, `None` (`auto`)
+    /// for a length-tracking one.
+    array_length: Option<u32>,
+    /// Whether `buffer` is resizable (growable, when shared), which never
+    /// changes for a buffer. Only then can a resize move the view's length,
+    /// so a view on a fixed-length buffer answers its length without reading
+    /// the buffer (and a length-tracking view always has this set).
+    resizable_buffer: bool,
 }
+
+/// The persisted length of a length-tracking view (`[[ArrayLength]]` or
+/// `[[ByteLength]]` `auto`) in the `TARR` and `DVIW` rows: XS's `size = -1`
+/// as an unsigned word. No fixed-length view can reach it, since a buffer
+/// holds at most `0x7FFF_FFFF` bytes.
+pub const VIEW_LENGTH_TRACKING: u32 = u32::MAX;
 
 /// A `DataView` instance's internal state (XS's `XS_DATA_VIEW_KIND` view
 /// slot + buffer reference). Kept in the [`Interp::data_views`] side table.
 /// `buffer` names the backing `ArrayBuffer`; `offset` is the `byteOffset`;
-/// `size` is the view's `byteLength` in bytes.
+/// `byte_length` is the view's `[[ByteLength]]` in bytes, or `None` (`auto`)
+/// for a view that tracks the length of a resizable buffer (XS's
+/// `size < 0`). [`Interp::dv_byte_length`] derives the live byte length.
 #[derive(Copy, Clone, Debug)]
 struct DataViewData {
     buffer: crate::value::SlotIndex,
     offset: u32,
-    size: u32,
+    byte_length: Option<u32>,
 }
 
 /// A promise instance's settlement state (XS's `XS_PROMISE_KIND` STATUS
@@ -1202,23 +1511,41 @@ struct FromAsyncData {
 
 /// An iterator's state. For an **array iterator** (`kind` 0 = values, 1 =
 /// keys, 2 = entries) `iterable` is the array and `index` the cursor. For a
-/// **for-in enumerator** (`kind` = 3) `enum_keys` is the pre-collected list of
-/// enumerable property keys `(id, index)` to yield as strings (an `id ==
-/// XS_NO_ID` entry is an array index), and `index` cursors it. `result` is the
+/// **for-in enumerator** (`kind` = 3) `iterable` is the prototype level being
+/// stepped, `enum_keys` every own string key `(id, index)` of the levels listed
+/// so far (an `id == XS_NO_ID` entry is an array index; one that was gone at
+/// its turn is `FOR_IN_GONE`), and `index` cursors it. `result` is the
 /// reused `{value, done}` object `next()` mutates and returns. Kind 9 is a
 /// RegExp String Iterator: `iterable` is its matcher, `str_bytes` its input,
 /// and the low two `index` bits carry `global`/`fullUnicode`.
 #[derive(Clone, Debug)]
 struct IterState {
     iterable: crate::value::SlotIndex,
+    /// The cursor position. For a collection cursor (kinds 5-7) it is only a
+    /// hint, the physical place [`IterState::coll_seq`] was last found at
+    /// (see [`crate::bulk::CollCursor`]).
     index: u32,
+    /// For a collection cursor (kinds 5-7): the least entry sequence number
+    /// not yet visited, which survives the entry list compacting. Zero for
+    /// every other kind.
+    coll_seq: u64,
     kind: u8,
     result: crate::value::SlotIndex,
     done: bool,
     /// For a collection cursor (kinds 5-7): the owning collection's
     /// clear-generation at creation. A `clear()` bumps the collection's
     /// counter and this cursor dead-ends — XS's purge semantics (see
-    /// `CollectionData::generation`). Zero for every other kind.
+    /// `CollectionData::generation`).
+    ///
+    /// For a lazy Iterator helper (kinds 10-14) the field is reused as the
+    /// "already running" re-entrancy latch, set to 1 only for the duration of
+    /// one `next()` step, so a callback that re-enters its own helper is
+    /// refused rather than corrupting half-advanced state. The snapshot row
+    /// carries no field for it: a snapshot is taken only at a quiescent point,
+    /// where no helper is mid-step, so restore's zero is always the live
+    /// value.
+    ///
+    /// Zero for every other kind, and zero for a helper between steps.
     generation: u32,
     enum_keys: std::rc::Rc<Vec<(u16, u32)>>,
     /// For a string iterator (`kind == 4`) or RegExp String Iterator (`kind ==
@@ -1226,6 +1553,11 @@ struct IterState {
     /// matcher carries its own observable `lastIndex`, leaving `index` for its
     /// two persisted mode bits.
     str_bytes: std::rc::Rc<Vec<u8>>,
+    /// For a for-in enumerator (`kind == 3`): the keys of `enum_keys` before
+    /// the cursor that are not `FOR_IN_GONE` — XS's visited list — as a set.
+    /// Derived state, never persisted: `None` until an enumerator first
+    /// needs it, and after a restore, when it is rebuilt from `enum_keys`.
+    enum_visited: Option<std::rc::Rc<std::collections::HashSet<(u16, u32)>>>,
 }
 
 /// Construction metadata retained in the existing snapshot format, plus the
@@ -1263,6 +1595,23 @@ pub fn error_name_static(name: &str) -> Option<&'static str> {
     ERROR_NAMES.iter().find(|&&n| n == name).copied()
 }
 
+/// The halt a caught resource-stop unwind reports, or `None` for any other
+/// panic payload: [`crate::value::heap_exhausted`] (the ceiling refused)
+/// becomes [`Halt::HeapExhausted`], and
+/// [`crate::value::host_allocation_failed`] (the host allocator refused)
+/// becomes [`Halt::HostAllocationFailed`]. Every `catch_unwind` that
+/// contains a resource stop classifies its payload here, so the two never
+/// collapse into one.
+pub(crate) fn resource_halt(payload: &(dyn std::any::Any + Send)) -> Option<Halt> {
+    if payload.is::<crate::value::HeapExhausted>() {
+        Some(Halt::HeapExhausted)
+    } else if payload.is::<crate::value::HostAllocationFailed>() {
+        Some(Halt::HostAllocationFailed)
+    } else {
+        None
+    }
+}
+
 /// A host-observable completion or abort. Nested catch and suspension transfers
 /// are private interpreter state and cannot be returned in this type.
 ///
@@ -1287,7 +1636,36 @@ pub enum Halt {
     /// The meter host refused more computation.
     MeterAbort,
     /// The configured slot or chunk heap ceiling was exhausted.
+    ///
+    /// Deterministic: the same program under the same ceilings halts here
+    /// on every host and target. Contrast [`Halt::HostAllocationFailed`].
     HeapExhausted,
+    /// The host allocator refused memory that the configured ceilings had
+    /// admitted: a fallible growth (an arena, a reserved scratch buffer, a
+    /// side table) failed for a reason outside the program, such as a host
+    /// that caps memory by failing `memory.grow`, or a request past the
+    /// target's `isize::MAX` allocation limit (2 GiB on wasm32).
+    ///
+    /// **Not deterministic.** The same crank completes, or halts later with
+    /// [`Halt::HeapExhausted`], on a host with more memory, so this outcome
+    /// belongs to the host, not to the program. The embedder contract:
+    ///
+    /// 1. **Never commit a crank that ends here**: neither its heap nor its
+    ///    outbound effects, and never record the halt itself as the crank's
+    ///    outcome (a replica must not vote it, and a supervisor must not
+    ///    terminate the vat for it).
+    /// 2. **Restore from the last committed state** and re-drive the crank.
+    /// 3. **Recycle the instance** first. On wasm, linear memory never
+    ///    shrinks, so the instance that failed keeps the memory it reached;
+    ///    drop it and restore into a fresh one
+    ///    (`rust/engine/WASM-MEMORY.md` has the threshold and the cost).
+    ///
+    /// Like [`Halt::HeapExhausted`] it is a panic ([`Halt::is_panic`]);
+    /// [`Halt::is_host_failure`] is the predicate that separates the two.
+    /// Allocations the engine still makes infallibly abort (a trap on wasm)
+    /// rather than reaching this halt; the embedder treats such a trap the
+    /// same way.
+    HostAllocationFailed,
     /// The interpreter ran past a caller-supplied **step ceiling** without
     /// completing — a bounded-execution guard for callers that install no
     /// metering host (notably the bytecode-decoder fuzz harness, which
@@ -1400,7 +1778,9 @@ impl Halt {
     /// still the sole definition of "is a panic," not of "must discard the
     /// crank" (a strictly larger set).
     ///
-    /// The settled core is `StackOverflow | ReentryLimit | MeterAbort | EngineInvariant(_) | Panic(_)`.
+    /// The settled core is `StackOverflow | ReentryLimit | MeterAbort | EngineInvariant(_) | Panic(_)`,
+    /// with the resource stops `HeapExhausted` and `HostAllocationFailed`;
+    /// [`Halt::is_host_failure`] tells the second of those apart.
     /// `Decode` and the harness-only `StepLimit` are **provisional**
     /// members: they terminate-without-commit like a panic, but their
     /// provenance is supervisor/harness rather than guest behavior, so
@@ -1420,6 +1800,7 @@ impl Halt {
                 | Halt::ReentryLimit { .. }
                 | Halt::MeterAbort
                 | Halt::HeapExhausted
+                | Halt::HostAllocationFailed
                 | Halt::Panic(_)
                 | Halt::EngineInvariant(_)
                 // Provisional (Open Question), may change without a
@@ -1427,6 +1808,22 @@ impl Halt {
                 | Halt::Decode(_)
                 | Halt::StepLimit(_)
         )
+    }
+
+    /// True when the halt reports the **host**, not the program: the crank
+    /// would have run differently with more memory, so its outcome is not a
+    /// fact about the delivery. Today that is [`Halt::HostAllocationFailed`]
+    /// alone.
+    ///
+    /// Every such halt is also a panic ([`Halt::is_panic`]), so a commit
+    /// path that discards panics already discards it. This predicate answers
+    /// the further question a supervisor or replica asks: whether the halt
+    /// may be recorded as the crank's result (vote it, terminate the vat for
+    /// it, count it toward a runaway policy). For these halts it may not;
+    /// restore the last committed state into a fresh instance and re-drive
+    /// the crank instead.
+    pub fn is_host_failure(&self) -> bool {
+        matches!(self, Halt::HostAllocationFailed)
     }
 }
 
@@ -1762,7 +2159,89 @@ struct CallerState {
     /// `mxFrameEnd`, the slot its result is written to. `END` restores the
     /// stack to it so operands the body abandoned (a `switch` discriminant a
     /// `return` jumped over, say) cannot survive into the caller's expression.
+    /// For a `Reflect.apply` or `Reflect.construct` target, or a generator's
+    /// body, run in place it is the base of the native call's frame, below the
+    /// callee's own slots, so the return cuts that frame too
+    /// (`Interp::native_run_call`).
     stack_base: usize,
+    /// Native-recursion budget units this frame holds for the activation it
+    /// replaces (STACK-DEPTH-REFACTOR.md §4.5): a call the dispatch loop runs
+    /// in place, which the recursive shape ran in a nested `dispatch_at`,
+    /// charges that loop's [`HEAVY_FRAME_COST`] here, with any units its
+    /// caller charged around the call (a Proxy layer's light unit, or a
+    /// `Reflect` call's heavy unit; see `Interp::enter_in_place`).
+    /// `Interp::leave_call`
+    /// releases them when the frame is popped, and the dispatch loop that owns
+    /// the frame releases them when it exits with the frame still on the call
+    /// stack, so the depth is released where the nested loop released it.
+    /// Zero for every other frame.
+    held: usize,
+    /// How the frame hands its result back to the caller's loop.
+    returns: FrameReturn,
+}
+
+/// What `GET_PROPERTY`'s `[[Get]]` of an ordinary object made of the read
+/// ([`Interp::get_property_in_place`]).
+enum GetInPlace {
+    /// The property's value.
+    Value(Slot),
+    /// A getter entered in the caller's loop: continue at its body.
+    Entered(usize),
+}
+
+/// What `RUN`'s call of a generator's `next`, `return` or `throw` made of it
+/// ([`Interp::resume_generator_in_place`]).
+enum GenResume {
+    /// The call's result.
+    Value(Slot),
+    /// The generator's body resumed in the caller's loop: continue there.
+    Entered(usize),
+}
+
+/// The key a flagged definition names its function after: an interned id,
+/// or an array index that has none.
+#[derive(Copy, Clone, Debug)]
+enum DefinedKey {
+    Id(u16),
+    Index(u32),
+}
+
+/// What `SET_PROPERTY`'s `[[Set]]` of an ordinary object made of the
+/// assignment ([`Interp::set_property_in_place`]).
+enum SetInPlace {
+    /// `[[Set]]`'s result: whether the assignment took.
+    Done(bool),
+    /// A setter entered in the caller's loop: continue at its body.
+    Entered(usize),
+}
+
+/// How a frame the dispatch loop runs hands its result back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum FrameReturn {
+    /// Any other frame: `END`, and the `START_*` of a generator or async
+    /// body, push the result and check the meter on the return into the
+    /// caller's loop (`mxFirstCode`'s check, which for a call run in place is
+    /// the one `RUN` made after the call's nested loop returned).
+    #[default]
+    Call,
+    /// A getter `GET_PROPERTY` reached and runs in place
+    /// (STACK-DEPTH-REFACTOR.md C7): the result is pushed as the property's
+    /// value and no meter is checked, as none was when the getter's nested
+    /// loop returned through its boundary and the read went on.
+    Getter,
+    /// A setter `SET_PROPERTY` reached and runs in place (C7): the result is
+    /// dropped and the value assigned, the frame's one argument, pushed as the
+    /// assignment's, and no meter is checked, as none was when the setter's
+    /// nested loop returned and the assignment went on.
+    Setter,
+    /// A generator's body that `RUN`'s call of `next`, `return` or `throw`
+    /// resumed in place (STACK-DEPTH-REFACTOR.md C4), its driver's activation
+    /// saved in this frame as `resume_generator` saved it: `END` pushes the
+    /// `{value, done: true}` result, and `YIELD` the yielded one, with the
+    /// meter check `RUN` made after the native returned. However the frame is
+    /// left, the generator's own run entry goes with it, and a generator still
+    /// executing is completed ([`Interp::leave_generator_in_place`]).
+    Generator,
 }
 
 /// One entry of the exception jump-buffer chain (XS's `txJump`, pushed by
@@ -1810,8 +2289,9 @@ enum GeneratorState {
     /// Suspended at a `yield`; `.next(v)` resumes with `v` as the yield
     /// expression's value.
     SuspendedYield,
-    /// Currently running on a `resume_generator` nested dispatch (a
-    /// re-entrant `.next`/`for-of` while executing is a `TypeError` in XS).
+    /// Currently running, on a `resume_generator` nested dispatch or resumed
+    /// in its caller's loop (STACK-DEPTH-REFACTOR.md C4); a re-entrant
+    /// `.next`/`for-of` while executing is a `TypeError` in XS.
     Executing,
     /// Fell off the end or `return`ed; every further `.next` yields
     /// `{value: undefined, done: true}`.
@@ -1893,9 +2373,10 @@ struct GeneratorData {
     frame: Option<SavedFrame>,
 }
 
-/// The context of a generator currently executing on a nested
-/// [`Interp::resume_generator`] dispatch, so the `YIELD` arm knows which
-/// instance to snapshot into and where its value-stack region begins.
+/// The context of a generator currently executing, on a nested
+/// [`Interp::resume_generator`] dispatch or resumed in its caller's loop
+/// (STACK-DEPTH-REFACTOR.md C4), so the `YIELD` arm knows which instance to
+/// snapshot into and where its value-stack region begins.
 /// A stack (not a scalar) because a generator body may drive another
 /// generator's `.next` before it yields.
 struct GenRunFrame {
@@ -2039,13 +2520,17 @@ impl Interp {
     }
 
     /// Set the host's slot-allocation ceiling for subsequent execution.
-    pub fn set_slot_ceiling(&mut self, ceiling: u32) {
-        self.slots.set_ceiling(ceiling);
+    /// A `consensus` build refuses a ceiling above
+    /// [`crate::CONSENSUS_MAX_SLOT_CEILING`] and keeps the current one.
+    pub fn set_slot_ceiling(&mut self, ceiling: u32) -> Result<(), crate::CeilingRefused> {
+        self.slots.set_ceiling(ceiling)
     }
 
     /// Set the host's chunk-allocation ceiling for subsequent execution.
-    pub fn set_chunk_ceiling(&mut self, ceiling: usize) {
-        self.chunks.set_ceiling(ceiling);
+    /// A `consensus` build refuses a ceiling above
+    /// [`crate::CONSENSUS_MAX_CHUNK_CEILING`] and keeps the current one.
+    pub fn set_chunk_ceiling(&mut self, ceiling: usize) -> Result<(), crate::CeilingRefused> {
+        self.chunks.set_ceiling(ceiling)
     }
 
     /// The cost-calibration histogram recorder, present only under the
@@ -2357,15 +2842,51 @@ impl Interp {
         self.run_shared(std::rc::Rc::from(code))
     }
 
+    /// [`Self::run`], but an escaping thrown value is rendered by running the
+    /// guest's own `toString`, as ECMAScript `String()` would.
+    ///
+    /// **Opt in, and only a differential harness should.** The ordinary
+    /// boundary is deliberately guest-free: `host_rendering_meter.rs` pins that
+    /// a diagnostic render cannot run guest work past an exhausted meter
+    /// ceiling, cannot allocate past the chunk ceiling, and cannot make a run's
+    /// cost depend on rendering work. Those are the guarantees an embedder
+    /// relies on and they are unchanged here; this entry point trades them away
+    /// deliberately, for the one caller that needs the oracle's string.
+    ///
+    /// **What it does NOT put back.** The meter index and the dispatch count
+    /// are snapshotted and restored, and the render is bounded by
+    /// [`RENDER_DISPATCH_BUDGET`]. Everything else a guest `toString` does
+    /// persists: heap slots and chunks it allocated, globals and the thrown
+    /// object it mutated, a promise job it enqueued (the run's only drain has
+    /// already happened by then, so such a job waits for the next crank), and
+    /// the unhandled-rejection latch. An armed meter host is also CONSULTED
+    /// during the render even though the index is rolled back afterwards --
+    /// the consultation cannot be undone. Both current callers bail out on
+    /// `!completed` before touching the machine again, so none of this is live
+    /// today; a second caller must read this list rather than assume the meter
+    /// snapshot covers it.
+    ///
+    /// That caller is the test262 differential. The oracle's side of the
+    /// comparison does not come from XS either: `xs_shim.c`'s
+    /// `endor_error_from_exception` runs `fxToString` on `mxException` after
+    /// `mxCatch`, in the SHIM. Comparing a guest-free approximation against a
+    /// guest-run `ToString` measures the two harnesses, not the two engines, so
+    /// the port's harness has to render the same way to compare at all.
+    pub fn run_rendering_throws_in_guest(&mut self, code: &[u8]) -> RunOutcome {
+        self.run_operation(std::rc::Rc::from(code), true, true, true)
+    }
+
     /// Execute caller-owned immutable bytecode without copying its bytes.
     /// Escaping functions retain this same allocation across later cranks.
     pub fn run_shared(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
-        self.run_operation(shared, true, true)
+        self.run_operation(shared, true, true, false)
     }
 
-    /// Evaluate a compartment script without pumping the machine's job queue.
-    pub(crate) fn run_script_shared(&mut self, code: std::rc::Rc<[u8]>) -> RunOutcome {
-        self.run_operation(code, true, false)
+    /// Evaluate a script without pumping the machine's job queue.
+    /// Hosts evaluating several scripts in one job must finish with `run`,
+    /// `run_shared`, or `run_promise_jobs` to perform the microtask checkpoint.
+    pub fn run_script_shared(&mut self, code: std::rc::Rc<[u8]>) -> RunOutcome {
+        self.run_operation(code, true, false, false)
     }
 
     /// Whether this machine has queued promise jobs. This is distinct from
@@ -2388,7 +2909,25 @@ impl Interp {
             .top_level_code
             .clone()
             .unwrap_or_else(|| std::rc::Rc::from([]));
-        self.run_operation(code, false, true)
+        self.run_operation(code, false, true, false)
+    }
+
+    /// The operator's notification step. A sweep ([`Self::collect_garbage`])
+    /// only nulls dead targets and flags the registries that held them; the
+    /// cleanup callbacks are guest code, so they run as a crank: this one, a
+    /// script-less pump under the meter that runs every flagged registry's
+    /// callbacks and the reactions they queue, and returns that run's
+    /// outcome for the operator's accounting. A host that must not carry a
+    /// pending cleanup across a boundary calls it after each sweep, and
+    /// sweeps and calls again while [`Self::finalization_cleanup_pending`]
+    /// says the callbacks' own garbage flagged more; the meter bounds that
+    /// loop, since every productive step invokes a callback. A host that
+    /// never calls it gets XS's `fxEndJob` timing instead: the next completed
+    /// crank notifies at the end of its drain. A completed run leaves the
+    /// machine quiescent; a callback's uncaught throw halts it as a crank's
+    /// would, with the remaining dead cells still flagged.
+    pub fn notify_finalizations(&mut self) -> RunOutcome {
+        self.run_promise_jobs()
     }
 
     fn run_operation(
@@ -2396,10 +2935,12 @@ impl Interp {
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
         pump_jobs: bool,
+        guest_thrown_rendering: bool,
     ) -> RunOutcome {
         let start_raw = self.meter.raw();
         let start_dispatched = self.n_dispatched;
-        let mut outcome = self.run_shared_outcome(shared, execute_script, pump_jobs);
+        let mut outcome =
+            self.run_shared_outcome(shared, execute_script, pump_jobs, guest_thrown_rendering);
         outcome.meter_raw_this_run = outcome.meter_raw.saturating_sub(start_raw);
         outcome.computrons_this_run = outcome.meter_raw_this_run >> 16;
         outcome.dispatched_this_run = outcome.dispatched.saturating_sub(start_dispatched);
@@ -2411,6 +2952,7 @@ impl Interp {
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
         pump_jobs: bool,
+        guest_thrown_rendering: bool,
     ) -> RunOutcome {
         if self.gc_failed {
             return RunOutcome {
@@ -2428,39 +2970,68 @@ impl Interp {
                 host_render_halt: None,
             };
         }
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_inner(shared, execute_script, pump_jobs)
+        let payload = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_inner(shared, execute_script, pump_jobs, guest_thrown_rendering)
         })) {
-            Ok(outcome) => outcome,
-            Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
-                // All native activations have unwound. The interrupted heap
-                // remains non-quiescent and must be rewound by the supervisor.
-                self.native_depth = 0;
-                self.last_crank_completed = false;
-                RunOutcome {
-                    meter_raw_this_run: 0,
-                    computrons_this_run: 0,
-                    dispatched_this_run: 0,
-                    completed: false,
-                    unhandled_rejection: self.unhandled_rejection(),
-                    result: String::new(),
-                    coercion_error: None,
-                    computrons: self.meter.computrons(),
-                    dispatched: self.n_dispatched,
-                    meter_raw: self.meter.raw(),
-                    halt: Halt::HeapExhausted,
-                    host_render_halt: None,
-                }
+            // `run_inner` re-derives the ledger itself for a stop a nested
+            // boundary caught, before it builds the outcome: holding a
+            // `RunOutcome` here across that call gives it a slot of its own
+            // in this frame, which lies under every run.
+            Ok(outcome) => return outcome,
+            Err(payload) => payload,
+        };
+        let Some(halt) = resource_halt(&*payload) else {
+            // The Rust stack has unwound every native activation. Keep
+            // the failed crank and poison latches for inspection, but do
+            // not retain native recursion charges for frames that no
+            // longer exist. A later explicit run resets guest activation.
+            self.native_depth = 0;
+            self.clear_held();
+            self.last_crank_completed = false;
+            std::panic::resume_unwind(payload)
+        };
+        // All native activations have unwound. The interrupted heap
+        // remains non-quiescent and must be rewound by the supervisor.
+        self.native_depth = 0;
+        self.clear_held();
+        self.last_crank_completed = false;
+        // A lazy Iterator helper's "already running" latch rides
+        // `IterState::generation`, cleared by the step's own exit path
+        // — which THIS unwind skipped, because a resource stop is a
+        // `resume_unwind` rather than a returned `Step`. A latch left
+        // set poisons that helper for good (every later `next()` and
+        // `return()` answers "already running"), and because a
+        // following completed crank restores quiescence the machine
+        // could then be snapshotted: the row carries no field for the
+        // latch, so the resumed twin would answer differently from the
+        // machine it came from. No helper is mid-step once the stack
+        // has unwound, so clearing every latch here is exactly the
+        // live value.
+        for state in self.iterators.values_mut() {
+            if (10..=15).contains(&state.kind) {
+                state.generation = 0;
             }
-            Err(payload) => {
-                // The Rust stack has unwound every native activation. Keep
-                // the failed crank and poison latches for inspection, but do
-                // not retain native recursion charges for frames that no
-                // longer exist. A later explicit run resets guest activation.
-                self.native_depth = 0;
-                self.last_crank_completed = false;
-                std::panic::resume_unwind(payload)
-            }
+        }
+        // A resource stop can unwind past storage a native had charged but
+        // not yet installed in a table (an array it was still filling, a
+        // `%Segments%` record awaiting its slot). The tables are intact, so
+        // charge exactly what they hold: a later completed crank may make
+        // this machine snapshot-able again, and its restore derives the
+        // ledger from the same tables.
+        self.rederive_side_reserved();
+        RunOutcome {
+            meter_raw_this_run: 0,
+            computrons_this_run: 0,
+            dispatched_this_run: 0,
+            completed: false,
+            unhandled_rejection: self.unhandled_rejection(),
+            result: String::new(),
+            coercion_error: None,
+            computrons: self.meter.computrons(),
+            dispatched: self.n_dispatched,
+            meter_raw: self.meter.raw(),
+            halt,
+            host_render_halt: None,
         }
     }
 
@@ -2469,9 +3040,15 @@ impl Interp {
         self.gen_run_stack.clear();
         self.async_run_stack.clear();
         self.async_gen_run_stack.clear();
+        // Retained frames hold no charge by now (their loops released it on
+        // exit, or a reset cleared it); clear it anyway so popping them can
+        // never release units `native_depth` no longer holds.
+        self.clear_held();
         while !self.call_stack.is_empty() {
             let _ = self.leave_call();
         }
+        // No native activation is live between runs.
+        debug_assert_eq!(self.native_depth, 0, "a native charge outlived its crank");
         self.stack.clear();
         self.jumps.clear();
         self.locals.clear();
@@ -2500,11 +3077,10 @@ impl Interp {
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
         pump_jobs: bool,
+        guest_thrown_rendering: bool,
     ) -> RunOutcome {
         let code: &[u8] = &shared;
-        if self.slots.capacity() > self.slots.ceiling()
-            || self.chunks.byte_size() > self.chunks.ceiling()
-        {
+        if self.slots.capacity() > self.slots.ceiling() || !self.chunks.within_ceiling() {
             crate::value::heap_exhausted();
         }
         // A halted crank retains its activation for inspection until the
@@ -2559,9 +3135,31 @@ impl Interp {
             if let Err(h) = self.drain_promise_jobs(code) {
                 step = h;
             }
+            // `fxEndJob` → `fxCleanupFinalizationRegistries`: once the job
+            // queue has drained, a registry flagged by an earlier sweep runs
+            // its cleanup callback for each dead cell. A callback may queue
+            // reactions, so the queue drains once more afterwards and the
+            // crank still ends quiescent. This is also the whole of
+            // `notify_finalizations`, the operator's script-less pump; a
+            // host that notifies after each sweep reaches here with nothing
+            // flagged. Collection runs only between cranks, so no cell dies
+            // during this crank's own jobs.
+            if step == Step::Returned {
+                if let Err(h) = self
+                    .cleanup_finalization_registries(code)
+                    .and_then(|()| self.drain_promise_jobs(code))
+                {
+                    step = h;
+                }
+            }
             self.result = script_result;
         }
-        let halt = self.finish_step(step);
+        let halt = self.finish_step_rendering_throws(code, step, guest_thrown_rendering);
+        if matches!(halt, Halt::HeapExhausted | Halt::HostAllocationFailed) {
+            // A nested boundary caught the stop; the unwind below it can
+            // still have dropped charged storage.
+            self.rederive_side_reserved();
+        }
         // The ENGINE's verdict on this crank: the dispatch reached `END`
         // and the job queue drained, so the machine stands at a crank
         // boundary. `completed`, the boundary-register clear and the
@@ -2732,6 +3330,8 @@ fn decode_element_le(kind: u8, b: &[u8]) -> Option<Slot> {
                 Slot::number(u as f64)
             }
         }
+        // Float16
+        11 => Slot::number(f16_bits_to_f64(u16::from_le_bytes([b[0], b[1]]))),
         _ => return None,
     })
 }
@@ -2786,6 +3386,8 @@ fn encode_element_le(kind: u8, n: f64) -> Option<Vec<u8>> {
             };
             vec![v as u8]
         }
+        // Float16
+        11 => f64_to_f16_bits(n).to_le_bytes().to_vec(),
         _ => return None,
     })
 }
@@ -2809,6 +3411,7 @@ fn round_half_even(x: f64) -> f64 {
 
 fn temporal_set_time_args(
     interp: &mut Interp,
+    code: &[u8],
     record: &mut TemporalPlainRecord,
     args: &[Slot],
     start: usize,
@@ -2817,7 +3420,7 @@ fn temporal_set_time_args(
     for (n, field) in out.iter_mut().enumerate() {
         let value = args.get(start + n).copied().unwrap_or_else(Slot::undefined);
         if value.kind != Kind::Undefined {
-            *field = u32::try_from(interp.temporal_integer(value)?).map_err(|_| {
+            *field = u32::try_from(interp.temporal_integer(code, value)?).map_err(|_| {
                 interp.catchable_range_error_msg("Temporal: time component out of range".into())
             })?;
         }
@@ -2845,6 +3448,26 @@ fn temporal_set_time_args(
 /// attributed to the specific built-in (never a silent mis-execution).
 fn native_unsupported_name(native: Native) -> &'static str {
     match native {
+        // Modeled, not unsupported, so it gets no label. Every caller of this
+        // function is either the `_` fallthrough in `call_native_inner` --
+        // which `Native::LockedDownConstructor`'s own arm answers before -- or
+        // a `Native::Number`/`Native::String` coercion arm, where `native` is
+        // already that variant. A label here would be worse than dead: this
+        // registry is the set of executions the differential instruments are
+        // excused from judging (`src/halt_labels.rs`), so registering one
+        // would turn a future dispatch regression into a silent SKIP of every
+        // locked-down-constructor case instead of a failure.
+        //
+        // The `unreachable!` carries no message on purpose: the registry test
+        // scans every string literal in THIS function body and would read one
+        // as a new label.
+        Native::LockedDownConstructor => unreachable!(),
+        // Modeled too, and for the same reason it gets no label: `Compartment`
+        // has its own arms in `call_native_inner` for both the construct and
+        // the bare-call (a `TypeError`) paths, so the `_` fallthrough that
+        // reaches this registry is unreachable for it. The `unreachable!`
+        // carries no message, as above.
+        Native::Compartment => unreachable!(),
         Native::Host => "native-call:host",
         Native::Eval => "native-call:eval",
         Native::Locale => "native-call:Locale",
@@ -2889,6 +3512,8 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::Set => "native-call:Set",
         Native::WeakMap => "native-call:WeakMap",
         Native::WeakSet => "native-call:WeakSet",
+        Native::WeakRef => "native-call:WeakRef",
+        Native::FinalizationRegistry => "native-call:FinalizationRegistry",
         Native::Iterator => "native-call:Iterator",
         Native::ArrayBuffer => "native-call:ArrayBuffer",
         Native::SharedArrayBuffer => "native-call:SharedArrayBuffer",

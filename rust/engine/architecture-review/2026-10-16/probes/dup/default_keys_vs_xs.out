@@ -1,0 +1,11 @@
+mxImmutableArrayBuffers=0: XS 532 keys, DEFAULT_KEYS 534
+  --- XS
+  +++ DEFAULT_KEYS
+  @@ -525,0 +526,2 @@
+  +immutable
+  +transferToImmutable
+mxImmutableArrayBuffers=1: XS 535 keys, DEFAULT_KEYS 534
+  --- XS
+  +++ DEFAULT_KEYS
+  @@ -535 +534,0 @@
+  -sliceToImmutable

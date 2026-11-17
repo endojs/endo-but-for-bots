@@ -1,0 +1,34 @@
+function u(s){ if (typeof s !== 'string') return typeof s + ':' + String(s); var r=[]; for (var i=0;i<s.length;i++){ var c=s.charCodeAt(i); r.push(c<0x80 && c>=0x20 && c!==0x2c ? String.fromCharCode(c) : 'U+'+c.toString(16)); } return r.join(''); }
+var out = {};
+function t(name, f){ try { out[name] = u(f()); } catch (e) { out[name] = 'THROW ' + (e && e.name); } }
+var L = 'a\uD800b\uDC00c😀';
+t('upper', function(){ return L.toUpperCase(); });
+t('lower', function(){ return ('A\uD800').toLowerCase(); });
+t('locale_upper', function(){ return L.toLocaleUpperCase(); });
+t('normalize', function(){ return ('é\uD800').normalize('NFC'); });
+t('normalize_nfd', function(){ return ('é\uDC00').normalize('NFD'); });
+t('trim', function(){ return ('  \uD800  ').trim(); });
+t('pad', function(){ return 'x'.padStart(3, '\uD800'); });
+t('repeat', function(){ return '\uDC00'.repeat(2); });
+t('array_from', function(){ return Array.from(L).map(u).join('|'); });
+t('codePointAt', function(){ return String(L.codePointAt(1)); });
+t('isWellFormed', function(){ return String(L.isWellFormed()); });
+t('toWellFormed', function(){ return L.toWellFormed(); });
+t('encodeURI', function(){ return encodeURIComponent('\uD800'); });
+t('escape', function(){ return escape('\uD800'); });
+t('localeCompare', function(){ return String('\uD800'.localeCompare('�')); });
+t('collator', function(){ return String(new Intl.Collator().compare('\uD800', '�')); });
+t('concat_template', function(){ var x = '\uD800'; return `${x}\uDC00`; });
+t('join', function(){ return ['\uD800', '\uDC00'].join(''); });
+t('json_roundtrip_key', function(){ var o = {}; o['\uD800'] = '\uDC00'; return JSON.stringify(JSON.parse(JSON.stringify(o))); });
+t('number_to_string_with_surrogate_radix', function(){ return (255).toString(16) + '\uD800'; });
+t('string_raw', function(){ return String.raw({raw: ['\uD800', '\uDC00']}, 'x'); });
+t('replace_fn', function(){ return 'abc'.replace('b', function(){ return '\uD800'; }); });
+t('replace_dollar', function(){ return 'abc'.replace(/(b)/, '\uDC00$1\uD800'); });
+t('localeLower_tr', function(){ return 'I\uD800'.toLocaleLowerCase('tr'); });
+t('date_parse_lone', function(){ return String(Date.parse('2020\uD800')); });
+t('number_lone', function(){ return String(Number('1\uD800')); });
+t('bigint_lone', function(){ return String(BigInt('1\uD800')); });
+t('parseFloat_lone', function(){ return String(parseFloat('1.5\uD800')); });
+t('parseInt_lone', function(){ return String(parseInt('12\uD800')); });
+throw new Error(JSON.stringify(out));

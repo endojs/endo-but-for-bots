@@ -17,8 +17,8 @@ built-ins/Temporal/ZonedDateTime/prototype/toString/calendarname-never.js sloppy
 built-ins/Temporal/ZonedDateTime/prototype/toString/calendarname-never.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/calendarname-undefined.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/calendarname-undefined.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/ZonedDateTime/prototype/toString/calendarname-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/ZonedDateTime/prototype/toString/calendarname-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/toString/calendarname-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toString/calendarname-wrong-type.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/fractionalseconddigits-auto.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/fractionalseconddigits-auto.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/fractionalseconddigits-invalid-string.js sloppy skip:oracle-host-missing-global:Temporal
@@ -55,8 +55,8 @@ built-ins/Temporal/ZonedDateTime/prototype/toString/offset-never.js sloppy skip:
 built-ins/Temporal/ZonedDateTime/prototype/toString/offset-never.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/offset-undefined.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/offset-undefined.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/ZonedDateTime/prototype/toString/offset-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/ZonedDateTime/prototype/toString/offset-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/toString/offset-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toString/offset-wrong-type.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/offset.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/offset.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/options-object.js sloppy skip:oracle-host-missing-temporal
@@ -119,7 +119,7 @@ built-ins/Temporal/ZonedDateTime/prototype/toString/timezonename-never.js sloppy
 built-ins/Temporal/ZonedDateTime/prototype/toString/timezonename-never.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/timezonename-undefined.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/timezonename-undefined.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/ZonedDateTime/prototype/toString/timezonename-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/ZonedDateTime/prototype/toString/timezonename-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/toString/timezonename-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toString/timezonename-wrong-type.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/year-format.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/toString/year-format.js strict skip:oracle-host-missing-temporal

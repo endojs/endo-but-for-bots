@@ -2,6 +2,10 @@
 
 import harden from '@endo/harden';
 import { h } from 'preact';
+import { PresetSettings } from './PresetSettings.js';
+import { NetworkPolicyPanel } from './NetworkPolicyPanel.js';
+import { accountCapacity, accountSections } from './account-label.js';
+import { usageRows } from './usage-label.js';
 
 /** @import { VNode } from 'preact' */
 /** @import { FlootController, FlootSafeEvent, FlootState } from './types.js' */
@@ -142,9 +146,145 @@ export const SettingsPanel = ({ state, controller }) => {
       ]
     : [Row('Spoken replies', 'no TTS object wired')];
 
-  const tokens = usage
-    ? Row('Tokens', `↑${usage.inputTokens} ↓${usage.outputTokens}`)
-    : Row('Tokens', '—');
+  const tokens = usageRows(usage).map(([label, value]) => Row(label, value));
+
+  // Every backend's subscription: what is left, when it resets, and how old
+  // the figures are. Readings arrive with requests; the button asks the
+  // providers once, because a person pressed it.
+  const nowMs = Date.now();
+  const sections = accountSections(state.accounts, nowMs);
+  const capacityRows = section => {
+    const account = state.accounts?.find(item => item.accountId === section.id);
+    if (!account) return [];
+    return accountCapacity(account, nowMs).map(({ title, remaining, note }) =>
+      h(
+        'div',
+        { class: 'floot-settings-capacity' },
+        h('span', { class: 'floot-settings-label' }, `${title} remaining`),
+        h(
+          'div',
+          null,
+          remaining === null
+            ? h('span', {
+                class: 'floot-capacity-unknown',
+                'aria-hidden': 'true',
+              })
+            : h(
+                'meter',
+                {
+                  min: 0,
+                  max: 100,
+                  low: 20,
+                  high: 50,
+                  optimum: 100,
+                  value: remaining,
+                  'aria-label': `${section.title}: ${title} remaining`,
+                  'aria-valuetext': `${remaining}% remaining`,
+                  class: 'floot-capacity-meter',
+                },
+                `${remaining}%`,
+              ),
+          h(
+            'span',
+            { class: 'floot-capacity-text' },
+            remaining === null
+              ? `Unknown — ${note}`
+              : `${remaining}% remaining`,
+          ),
+        ),
+      ),
+    );
+  };
+  const subscriptions = sections.length
+    ? [
+        h(
+          'div',
+          { class: 'floot-settings-heading', key: 'subscriptions' },
+          h('span', null, 'Subscriptions'),
+          h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-settings-refresh',
+              onClick: () => controller.refreshAccounts?.(),
+            },
+            'Refresh',
+          ),
+        ),
+        ...sections.flatMap(section => [
+          h(
+            'div',
+            { class: 'floot-settings-subheading', key: `t:${section.id}` },
+            section.title,
+          ),
+          ...capacityRows(section),
+          ...section.rows.map(([label, value]) => Row(label, value)),
+          // Spending a banked reset is a person's decision: the host asks
+          // them to confirm, and nothing else ever presses this.
+          section.redeem && controller.redeemAccountReset
+            ? h(
+                'div',
+                { class: 'floot-settings-action', key: `r:${section.id}` },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    class: 'floot-settings-refresh',
+                    disabled: state.accountAction?.busy === true,
+                    onClick: () => {
+                      const { redeem } = section;
+                      if (redeem) {
+                        controller.redeemAccountReset?.(
+                          redeem.key,
+                          redeem.confirm,
+                          redeem.pending ? 'replay' : 'redeem',
+                        );
+                      }
+                    },
+                  },
+                  state.accountAction?.busy === true &&
+                    state.accountAction.key === section.redeem.key
+                    ? 'Asking…'
+                    : section.redeem.label,
+                ),
+                section.redeem.abandon
+                  ? h(
+                      'button',
+                      {
+                        type: 'button',
+                        class: 'floot-settings-refresh',
+                        disabled: state.accountAction?.busy === true,
+                        onClick: () => {
+                          const { redeem } = section;
+                          const abandon = redeem?.abandon;
+                          if (redeem && abandon) {
+                            controller.redeemAccountReset?.(
+                              redeem.key,
+                              abandon.confirm,
+                              'abandon',
+                            );
+                          }
+                        },
+                      },
+                      section.redeem.abandon.label,
+                    )
+                  : null,
+                state.accountAction?.key === section.redeem.key &&
+                  state.accountAction.message
+                  ? h(
+                      'span',
+                      {
+                        class: 'floot-settings-note',
+                        role: state.accountAction.error ? 'alert' : 'status',
+                      },
+                      state.accountAction.message,
+                    )
+                  : null,
+              )
+            : null,
+        ]),
+      ]
+    : [];
 
   return h(
     'div',
@@ -152,10 +292,91 @@ export const SettingsPanel = ({ state, controller }) => {
     h(
       'div',
       { class: 'floot-settings' },
-      h('div', { class: 'floot-modal-title' }, 'Transcription & settings'),
+      h('div', { class: 'floot-modal-title' }, 'Assistant & voice settings'),
+      h(PresetSettings, { state, controller }),
+      controller.forgetUnconfirmedSend
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-settings-refresh',
+              onClick: () => controller.forgetUnconfirmedSend?.(),
+            },
+            'Clear unconfirmed submission…',
+          )
+        : null,
+      controller.exportObjects
+        ? h(
+            'button',
+            {
+              type: 'button',
+              class: 'floot-settings-refresh',
+              onClick: () => controller.exportObjects?.(),
+            },
+            'Export Floot objects…',
+          )
+        : null,
+      state.execution?.supported
+        ? h(
+            'section',
+            { class: 'floot-execution floot-operator-panel' },
+            h('h3', null, 'Sandbox execution'),
+            h(
+              'p',
+              { role: 'status' },
+              state.execution.changing
+                ? 'Waiting for session cleanup or resume…'
+                : state.execution.state === 'stopped'
+                  ? 'Stopped. Local sandbox cleanup completed.'
+                  : state.execution.state === 'stopping'
+                    ? 'Stop incomplete. New work remains blocked; retry cleanup.'
+                    : 'Running. Turn interruption does not stop background processes.',
+            ),
+            h(
+              'p',
+              null,
+              'Emergency stop withdraws session authority and ends local sandbox execution. Already-dispatched remote effects may still finish. History and workspace are retained.',
+            ),
+            state.execution.error
+              ? h('p', { role: 'alert' }, state.execution.error)
+              : null,
+            state.execution.state === 'stopped' &&
+              state.execution.action !== 'resume'
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    disabled: state.execution.changing,
+                    onClick: () => controller.resumeSession?.(),
+                  },
+                  'Resume session',
+                )
+              : h(
+                  'button',
+                  {
+                    type: 'button',
+                    disabled:
+                      state.execution.changing &&
+                      state.execution.action !== 'resume',
+                    onClick: () => controller.emergencyStop?.(),
+                  },
+                  state.execution.state === 'stopping'
+                    ? 'Retry emergency stop'
+                    : 'Emergency stop',
+                ),
+          )
+        : null,
+      state.network
+        ? h(NetworkPolicyPanel, {
+            key: state.activeSessionId || '',
+            network: state.network,
+            controller,
+          })
+        : null,
       ...transcription,
       ...speech,
-      tokens,
+      ...tokens,
+      ...subscriptions,
       Row('Controller', obj.controller || '—'),
       Row('STT', obj.stt || '—'),
       Row('TTS', obj.tts || '—'),

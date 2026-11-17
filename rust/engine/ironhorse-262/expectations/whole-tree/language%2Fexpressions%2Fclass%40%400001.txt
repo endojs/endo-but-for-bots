@@ -82,10 +82,10 @@ language/expressions/class/gen-method-param-dflt-yield.js sloppy pass
 language/expressions/class/gen-method-param-dflt-yield.js strict pass
 language/expressions/class/getter-param-dflt.js sloppy pass
 language/expressions/class/getter-param-dflt.js strict pass
-language/expressions/class/heritage-arrow-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/class/heritage-arrow-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/class/heritage-async-arrow-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/class/heritage-async-arrow-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/class/heritage-arrow-function.js sloppy pass
+language/expressions/class/heritage-arrow-function.js strict pass
+language/expressions/class/heritage-async-arrow-function.js sloppy pass
+language/expressions/class/heritage-async-arrow-function.js strict pass
 language/expressions/class/ident-name-method-def-break-escaped.js sloppy pass
 language/expressions/class/ident-name-method-def-break-escaped.js strict pass
 language/expressions/class/ident-name-method-def-case-escaped.js sloppy pass

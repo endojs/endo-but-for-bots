@@ -1,0 +1,1360 @@
+# Compiling Ironhorse to WebAssembly: blockers
+
+Investigation date: 2026-09-23, against `f9cbcfc4`; revised 2026-09-24 after adversarial review.
+Toolchain: the pinned Rust 1.91.1 (LLVM 21.1.2), targets `wasm32-wasip1` and
+`wasm32-unknown-unknown`.
+Hosts:
+
+- Node.js 22.22.2 (V8, through `node:wasi`).
+- Wasmtime 49.0.0 (through the `wasmtime` Python bindings).
+- Headless Chromium 141.0.7390.37 (through Playwright), on the page's main thread and in a
+  dedicated Web Worker.
+- Local workerd 1.20260923.1 (V8 15.4.80.5), in a request handler and in a SQLite-backed
+  Durable Object.
+  These runs come from the verification of the Cloudflare design
+  ([review](../../designs/thixotrope-on-cloudflare-review.md)); local workerd enforces no CPU or
+  memory limits.
+
+The motivating target is [Thixotrope on Cloudflare](../../designs/thixotrope-on-cloudflare.md):
+Ironhorse compiled to wasm inside Durable Objects, which run on workerd.
+[Cloudflare-specific considerations](#cloudflare-workerd-specific-considerations) follow the
+browser section.
+
+Every claim below was checked by building and running something unless it is marked
+*inferred*.
+The [appendix](#appendix-reproduction) has the commands for the Node, Wasmtime and Chromium runs.
+The workerd harness and the divergence audit's crafted-store probes were not kept.
+
+## Summary
+
+Six of the eight runtime library crates already build for both wasm targets unchanged.
+The one that does not, `ironhorse-compile`, is blocked on purpose: it refuses `panic=abort`,
+the only panic strategy stable Rust offers on wasm.
+`ironhorse-runtime` fails only because it depends on it.
+
+With unwinding turned on through an unstable toolchain feature, the whole compile-and-run
+pipeline works on both targets and in all four hosts.
+Heap exhaustion, compiler budget refusal, and `eval`-time `SyntaxError`s are contained, as they
+are natively.
+A `wasm32-unknown-unknown` build needs **no imports at all**.
+
+It is **not** yet deterministic across targets, even with `consensus` on.
+An audit confirmed 27 sites where native x86_64 and wasm32 behave differently (B7).
+The sites in heap admission, in `usize` arithmetic and in unadmitted host allocations are fixed,
+among them a three-line program that crashed the wasm32 engine outright, and the arrays and side
+tables that grew past wasm32's allocation limits.
+The others are host-side, and all are fixed: a checkpoint that aborted on wasm32 (the whole-heap
+writer streams), a crafted store, error values, a WASI panic, and a restore that follows hash order.
+What remains are B7's latent issues, among them ceilings raised to exactly the consensus caps,
+which still diverge.
+The probes that stay clear of those sites and of the host limits in B3 and B8 matched native
+exactly.
+
+What stands in the way, in order of severity:
+
+| # | Blocker | Layer | Kind |
+|---|---------|-------|------|
+| B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors; option 1 adopted, std is rebuilt with unwinding on the pinned toolchain (`scripts/build-wasm.py`) | toolchain / engine | **hard**, worked around |
+| B7 | Ceilings raised to the consensus caps still depend on the target, so native and wasm32 can diverge in results and metering; heap admission, `usize` arithmetic, snapshot decoding and unadmitted host allocations are fixed | engine | **hard (consensus)** |
+| B3 | The native-recursion budget assumes an 8 MiB stack; smaller wasm stacks overflow **before** the budget halts, sometimes on programs the engine accepts natively | engine / host | configuration for Wasmtime and Node, **hard in browsers and workerd** |
+| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap, plus one container while a snapshot of it is written (the writer streams now; it used to be about 6×), and up to 6.6× at a checkpoint of an array heap now that array items and side tables are charged against it; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare documents replacing the whole isolate, but whether production fails `memory.grow` first is not known | engine / host | **hard under a 128 MB cap** |
+| B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
+| B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
+| B5 | The worker binary depends on threads, `flock`, bundled C SQLite and POSIX files; `FileStore` does not work on WASI | worker / store | port work |
+| B6 | CI builds the engine for both wasm targets and runs the one WASI test script (`build-ironhorse-wasm`), and runs the native-against-wasm32 differential's fast shard (`cross-target-ironhorse`); the slow shard and engine test suites on wasm are not run | CI | process |
+
+[Browser-specific considerations](#browser-specific-considerations) follow the blockers.
+
+## What builds today, unmodified
+
+`cargo build --release -p <crate> --target <t>` on the stable pinned toolchain:
+
+| Crate | `wasm32-unknown-unknown` | `wasm32-wasip1` |
+|-------|:---:|:---:|
+| `ironhorse-meter` | ok | ok |
+| `ironhorse-text` | ok | ok |
+| `ironhorse-unicode` | ok | ok |
+| `ironhorse-regexp` | ok | ok |
+| `ironhorse-vm` | ok | ok |
+| `ironhorse-snapshot` | ok | ok |
+| `ironhorse-compile` | **fails** (`compile_error!`) | **fails** |
+| `ironhorse-runtime` | **fails** (depends on compile) | **fails** |
+
+The interpreter, compiler, RegExp and snapshot codec use no `std::thread`, `std::time`,
+`std::env` or networking.
+Three public modules do touch the OS:
+
+- `ironhorse-snapshot`'s documented `FileStore` (`store_file.rs`) uses `std::fs`.
+- `ironhorse-snapshot`'s `machine` module: `MachineSnapshot::suspend_to_cas` and
+  `resume_from_cas` use `std::fs`.
+- `ironhorse-vm`'s hidden `source_scan` module (`source_scan.rs:11`) uses `std::fs`.
+
+All three build.
+None asks for a process id on WASI any longer (B7), so on `wasm32-wasip1` a `FileStore` session
+and a CAS suspend and resume work in a preopened directory, as `scripts/test-snapshot-wasi.py`
+checks.
+On `wasm32-unknown-unknown`, which has no filesystem, a store session runs over `MemoryStore`
+or a host-imported store on commit tokens the embedder supplies.
+The default source, `RandomTokens`, would read `SystemTime::now()`, which panics there, and std
+keys its hashers there from addresses that repeat from one run of a build to the next.
+Without the clock each run would mint the previous run's tokens, so on that target it refuses
+with `StoreError::TokenSource`, and a session's first commit refuses with it.
+The embedder passes its host's randomness as a `CommitTokenSource` to
+`begin_store_session_with_tokens` or `begin_shared_store_session_with_tokens`, and gives a
+resumed session one with `set_token_source` before it checkpoints.
+In Node, a `wasm32-unknown-unknown` build whose source imports `crypto.getRandomValues` begins,
+checkpoints, and resumes both eagerly and lazily; begun with the default source, it refuses and
+hands the machine back.
+`scripts/test-snapshot-wasi.py` runs the same API on `wasm32-wasip1`
+(`ironhorse-snapshot/tests/commit_token_source.rs`).
+`import_from_container` still draws from `RandomTokens` and refuses there too; restoring the
+container with `from_snapshot_bytes` and beginning a session over the machine serves instead.
+
+`Date.now` does not read a host clock.
+`HashMap` seeding works on both targets.
+On `wasm32-unknown-unknown` std falls back to address-derived keys, and on WASI it imports
+`random_get`.
+Numbers are NaN-canonicalized at `Slot::of` (`ironhorse-vm/src/value.rs`).
+In the probe, NaN results from `0/0`, `Infinity - Infinity`, `Math.sqrt(-1)` and a
+reinterpreted `0xfff8…01` all read back as `00 00 00 00 00 00 f8 7f` through a `Float64Array`
+on both targets.
+
+## B1: unwinding is required, and stable wasm cannot provide it
+
+### What the engine uses unwinding for
+
+`ironhorse-compile/src/lib.rs:31` refuses the build outright:
+
+```rust
+#[cfg(panic = "abort")]
+compile_error!("ironhorse-compile requires panic=unwind to contain budget refusal");
+```
+
+The compiler is not the only crate that relies on unwinding; it is the only one that says so.
+Outside test code the runtime crates have 23 `catch_unwind` sites.
+Four private control transfers use `resume_unwind` as a non-local exit:
+
+- **`ironhorse-vm` `HeapExhausted`** (`value.rs`) is raised from the "infallible" arena
+  allocators and admission checks, 10 raise sites.
+  Through them it is reachable from about 540 allocation call sites in `ironhorse-vm/src`
+  (320 `.alloc(` and 220 more `.alloc_*(`, by grep).
+  `Interp::run` catches it at the crank boundary and returns `Halt::HeapExhausted`.
+- **`ironhorse-compile` `Refused`** (`meter.rs`) is the parse meter's budget stop.
+- **`ironhorse-compile` `Poisoned`** (`coder.rs`, `Coder::report_kind`) is how the coder
+  reports an early error, "the same control transfer" as XS's `longjmp` out of
+  `fxReportParserError`.
+- **`ironhorse-regexp` `CompileStop::{Budget, Resource}`** (`compile.rs`, 14 raise sites) is
+  the pattern compiler's work and state ceilings.
+
+The compile path also catches panics at each embedding site.
+`ironhorse-runtime` does it for `eval` and `Function`, turning a compiler panic into
+`Halt::EngineInvariant("eval:compiler-invariant")`.
+The production worker does not use `ironhorse-runtime`; it wraps
+`compile_atoms_goal_with_meter` in its own `catch_unwind`
+(`thixotrope-ironhorse-worker/src/main.rs:121`).
+`ironhorse-vm` and `ironhorse-regexp` have no `compile_error!` guard.
+They build under `panic=abort`, and their refusals would then abort instead of halting.
+
+Not everything that looks like a refusal unwinds.
+The VM's own meter refusal is a returned `Step` (`dispatch.rs:48`, `admission.rs:40`), so
+`MeterAbort` from guest execution is unaffected by the panic strategy.
+
+Most of the unwind paths end in a halt the guest cannot catch (`HeapExhausted`,
+`EngineInvariant`, or `MeterAbort` from compile-time budgets).
+**`Poisoned` does not.**
+Coder-detected early errors reach the guest as catchable `SyntaxError`s through `eval`.
+This probe gives the same result natively, in Node and in Wasmtime:
+
+```js
+try { eval('a: a: 1') } catch (e) { e.message }      // "duplicate label a"
+try { eval('({a = 1})') } catch (e) { e.message }    // "invalid initializer"
+```
+
+Unwinding is therefore guest-observable.
+Under `panic=abort`, a guest could crash the instance with a `SyntaxError` it meant to catch.
+
+### Why stable Rust cannot provide it
+
+Both wasm targets have `"panic-strategy": "abort"`, and the prebuilt `std` for them is compiled
+that way.
+Passing `-C panic=unwind` on stable flips `cfg(panic)`, so every library crate, including
+`ironhorse-compile`, *compiles*.
+The final link then fails:
+
+```text
+error: the crate `panic_unwind` does not have the panic strategy `unwind`
+```
+
+The std source says the same in `library/unwind/src/wasm.rs`: the `throw` path is taken "only
+if the user explicitly opts in to wasm exceptions, via -Zbuild-std with -Cpanic=unwind".
+`-Zbuild-std` is nightly-only.
+
+### Verified workaround
+
+The following links and runs on the pinned 1.91.1 toolchain once `rust-src` is installed:
+
+```sh
+RUSTC_BOOTSTRAP=1 \
+RUSTFLAGS="-C panic=unwind -C target-feature=+exception-handling" \
+cargo build -Zbuild-std=std,panic_unwind --release --target wasm32-wasip1
+```
+
+`RUSTC_BOOTSTRAP=1` stands in for a nightly toolchain.
+rustc warns that `exception-handling` is an unstable target feature.
+
+The probe then shows:
+
+- **Heap exhaustion is contained** (Node, Wasmtime, Chromium, workerd).
+  `var a=[]; for(;;) a.push({x:a.length})` under `set_slot_ceiling(20_000)` halts with
+  `HeapExhausted`, and a fresh `Interp` in the same instance then runs `1+1` to `2`.
+- **Compiler budget refusal is contained** (Node, Wasmtime), when the host calls
+  `compile_atoms_with_budget` at top level.
+  The same `Refused` unwind inside a guest `eval` under an armed meter was **not** exercised.
+  The probe meant for it hit the parser's tree-depth limit instead.
+- **Early errors through `eval` are contained** (Node, Wasmtime): the `Poisoned` cases above.
+- **`eval` and `Function` work** (Node, Wasmtime), including the compiler-budget
+  `SyntaxError`s.
+  Chromium and workerd ran only the `eval-deep` family case, which exercises `eval` and its
+  compiler-budget `SyntaxError`s but neither `Function` nor a `Poisoned` unwind.
+
+### Options
+
+1. **Ship with `-Zbuild-std` and wasm EH.**
+   This is proven here.
+   It costs an unstable toolchain feature in the build of an artifact that is meant for
+   consensus, and a std rebuilt from the version-pinned `rust-src`.
+   Hosts must also support wasm exception handling (see B2).
+2. **Replace the unwind transfers with `Result` propagation.**
+   This makes the engine panic-strategy-agnostic, and it would also let the native build use
+   `panic=abort`.
+   It is expensive.
+   `HeapExhausted` is the dominant cost: the arena allocators are infallible by contract, and
+   making them fallible touches hundreds of call sites.
+   `Poisoned` is the subtle cost: the coder's own doc comment explains that returning instead
+   of stopping was tried once and failed, because "the eighty-odd `panic!`/`unreachable!`/
+   `expect` sites" would all need guarding.
+3. **`panic=abort` for the uncatchable halts only.**
+   This needs two things first:
+   - `Poisoned` becomes a `Result` (part of option 2).
+   - The `compile_error!` is relaxed for wasm.
+
+   After that, only `HeapExhausted`, the compile-time `Refused` and the regexp `CompileStop`
+   would trap.
+   Each ends in an uncatchable halt, so the host can drop the instance and restore from the
+   last committed snapshot.
+   The worker already exits without committing on a fatal halt.
+   The halt classification is recoverable (*inferred*, not built):
+   - `panic!`, `unreachable!`, `expect` and overflow checks still run the panic hook before
+     aborting, so a hook that calls a host import can report them.
+   - The `resume_unwind` sites bypass the hook.
+     They could record a reason in a static that the host reads through an export after the
+     trap, since a trapped instance remains callable (see the browser section).
+
+   What is lost is in-process reuse of the `Interp` or `Machine` after a refusal, and
+   containment of compiler panics inside `eval`.
+
+Option 1 is the only route that works without engine changes.
+Option 3 needs the `Poisoned` refactor first.
+Option 2 lifts the constraint for good.
+
+**Status (2026-10-14): option 1 adopted, accepting the unstable feature for now.**
+The official wasm build is `scripts/build-wasm.py`, the one place the recipe lives.
+It keeps the pinned 1.91.1 compiler and that toolchain's pinned `rust-src`, and stands in for a
+nightly channel with `RUSTC_BOOTSTRAP=1`: a pinned compiler with its pinned `rust-src` is
+reproducible, a nightly channel is not, so `rust-toolchain.toml` does not change.
+The script rebuilds `std` and `panic_unwind` with `-C panic=unwind` and wasm exception handling
+(`-Zbuild-std=std,panic_unwind`) and builds every workspace member that can target wasm for
+`wasm32-wasip1` and `wasm32-unknown-unknown`, with overflow checks on from the workspace
+`release` profile.
+`stack-lanes/build_probe.py` imports its flags and environment, and CI's `build-ironhorse-wasm`
+job runs it on every change to the engine (B6).
+Options 2 and 3 remain the routes that would retire the toolchain cost.
+
+## B7: native and wasm32 diverge wherever accounting or allocation depends on the host
+
+A consensus build must give the same result and the same computrons on every target.
+An audit of the engine for native-versus-wasm32 divergence confirmed 27 distinct sites.
+Each guest-visible site was reproduced by running the same program on the native probe and on
+the wasm32 probe under Wasmtime, both with `consensus`, and comparing the full output line.
+Those repros are kept in `stack-lanes/differential/cross-target.js` and `cross-target.slow.js`,
+and CI compares them on both targets (B6); `stack-lanes/expected-divergence/wasmtime.json`
+lists the ones that still diverge.
+The snapshot and store findings used crafted inputs or host calls.
+It found them through five lenses: host-layout charges, casts, overflow points, floating point,
+and snapshots.
+The sites fall into four families.
+Floating point is not among them.
+With `consensus`, 13 of the 15 floating-point candidates were false positives, and the other two
+are latent issues listed below.
+
+### Admission charged by Rust memory layout
+
+Deterministic heap admission measured Rust memory rather than guest data.
+`admit_scratch` and its siblings (`ironhorse-vm/src/interp/admission.rs:106`, `:208-216`,
+`:223`) charged `capacity * size_of::<T>()` against the chunk ceiling.
+The RegExp compiler and matcher did the same against their own byte budgets.
+For any `T` that contains `usize`, a `Vec` header or a pointer, native and wasm32 charged
+different amounts, so a program near a ceiling halted on one target and completed on the other.
+Every site below is fixed (see [Status](#status)); the wasm32 column is from before the fix.
+
+| Site | Element type (native / wasm32 bytes) | Program | Native | wasm32 |
+|---|---|---|---|---|
+| `natives/regexp.rs:1012` | `usize` (8 / 4) | `var s='a'.repeat(16*1024*1024); var f='b'.repeat(64*1024*1024); /z/.test(s)` | `HeapExhausted`, 20,972,860 | `Return false`, 37,750,079 |
+| `natives/regexp.rs:1393` | `usize` (8 / 4) | `'a'.repeat(30000000).replaceAll('a','c').length` | `HeapExhausted`, 14,013,699 | `Return 30000000`, 30,000,936 |
+| `natives/regexp.rs:1490` | `(Slot, usize, usize)` (40 / 32) | 134.1M-unit filler, then `'a'.repeat(5000).replace(/a/g,'b').length` | `HeapExhausted` | `Return 5000` |
+| `natives/json.rs:591`, `:708` | `Vec<u16>` (24 / 12) | 134.2M-unit filler, then `JSON.stringify(new Array(1000)).length` | `HeapExhausted`, 33,553,334 | `Return 5001` |
+| `natives/json.rs:1095` | `JsonSource` (40 / 32) | `var f='b'.repeat(134186000); var t='['+'1,'.repeat(999)+'1]'; JSON.parse(t, function(k,v){return v}).length` | `HeapExhausted`, 33,549,846 | `Return 1000`, 33,563,123 |
+| `natives/json.rs:1204` | `(ReadKey, JsonSource)` (48 / 40) | `var f='b'.repeat(134142000)`, then the same reviver parse of a 1,000-member object, `typeof` its result | `HeapExhausted`, 33,570,307 | `Return object`, 33,583,878 |
+| `ironhorse-regexp/src/compile.rs:953`, `:955-962`, `:1366-1375`, `:1717` | `Node` (64 / 40), `Vec<u32>` headers (24 / 12) | `new RegExp('a'.repeat(420000)).test('a')` | `HeapExhausted`, 288,772 | `Return false`, 321,730 |
+| `ironhorse-regexp/src/matcher.rs:129`, `:190-193` | `State` (40 / 24), `AssertionData` (16 / 8) | `new RegExp('()'.repeat(129)+'a*$').test('a'.repeat(62500))` | `HeapExhausted`, 202,597 | `Return true`, 203,696 |
+
+For `new RegExp` and RegExp literals, guest `try`/`catch` could not hide the difference.
+The regexp compiler's limit became an uncatchable `HeapExhausted` natively.
+Top-level literals became a compile-time `RegExpResourceLimit` natively but compiled on wasm32.
+A wasm32 snapshot that held such a `RegExp` was refused when restored natively, with
+`Corrupt("regexp side table: persisted source does not compile")`
+(`ironhorse-snapshot/src/snapshot_roster.rs:950`).
+`json.rs:1199` (`(ReadKey, usize)`, 16 / 12) was masked by a stricter check before it.
+
+Each site now charges a fixed, declared width per element type instead of `size_of::<T>()`.
+The widths are the audited 64-bit layouts, with a compile-time assertion on 64-bit targets, so
+native thresholds do not move.
+
+### Unadmitted host allocations
+
+Some guest-driven storage was never admitted against a ceiling at all.
+Every site below is fixed (see [Status](#status)); the wasm32 column is from before the fix.
+Its only bound is host memory, and wasm32 has less of it.
+Rust's `Vec` also refuses any single allocation larger than `isize::MAX` bytes, which is
+2 GiB on wasm32.
+Past these limits wasm32 aborts: an allocation failure or a "capacity overflow" panic becomes a
+trap.
+At the same point native completes, or halts deterministically.
+
+| Site | Program | Native | wasm32 |
+|---|---|---|---|
+| Map and Set entries (`ironhorse-vm/src/bulk.rs:479`) | `var m=new Map(); for (var i=0;i<N;i++) m.set(i,i); m.size`, N = 2^25 + 1 | `Return 33554433` | capacity-overflow panic, trap |
+| Array items (`bulk.rs:242`) | 80 × `JSON.parse` of a 1,000,000-element array, all kept | `Return 80:1000000` (4.4 GiB RSS) | allocation failure, trap |
+| `Intl.Segmenter` segments (`interp/locale.rs:308`) | 8 × `seg.segment()` of a 32M-unit string, all kept | `Return 8` (6.6 GiB RSS) | allocation failure, trap |
+| `Intl.ListFormat` (`natives/dispatch.rs:1967`, `intl.rs:757`) | 2,000 references to one 1.1M-unit string, then a number | catchable `TypeError` | allocation failure, trap |
+| Typed-array `join`, typed-array and array `toLocaleString` (`natives/buffer.rs:558`, `:287`, `natives/array.rs:4482`) | a long separator or long elements | `HeapExhausted` | capacity-overflow panic, trap |
+| `Function` constructor (`interp/eval.rs:226`, then `ironhorse-compile/src/lexer.rs:167`) | `Function(s,s,…,'')` with a 268.8M-code-point assembled source | `Return function12` | `EngineInvariant("eval:compiler-invariant")` |
+
+After B8's `Halt::HostAllocationFailed`, and before the fix, the Map and Set and the array rows
+ended in that halt on wasm32 instead of trapping, as do the latent repros below whose wasm32 side
+trapped or halted `HeapExhausted` on a host refusal.
+The same sites broke native resource accounting too.
+Under the default ceilings the native process reached about 4–6.6 GiB of RSS in these repros.
+With a slot ceiling of 50,000, one million Map entries, Set entries, array items or indexed
+properties still succeeded.
+The fix admits side-table and array-item storage, and guest-amplified host copies, against the
+chunk ceiling before allocating.
+
+### Arithmetic on the host's `usize`
+
+Both sites are fixed (see [Status](#status)).
+
+- **`advance_string_index` (`natives/regexp.rs:301`)** computed `i + 1` in `usize`.
+  With `lastIndex = 2**32 - 1` that overflowed on wasm32 only.
+  With overflow checks on, as the workspace `release` profile and the default `dev` profile both
+  have them, it panicked; with them off, `subject[i]` panicked out of bounds instead, so a
+  three-line guest program crashed the wasm engine either way:
+
+  ```js
+  var re = /(?:)/gu; var n = 0;
+  re.exec = function () { if (n++) return null; this.lastIndex = 4294967295; return ['']; };
+  re[Symbol.replace]('x', 'Q')
+  ```
+
+  Native returns `"Qx"`.
+  `@@match`, `String.prototype.replace` and `matchAll` reached the same line.
+- **`JSON.stringify` output sizing (`natives/json.rs:163`)** converted a `u64` to `usize` before
+  checking the result limit.
+  A nested array whose computed output crosses 2^32 units threw a catchable
+  `RangeError: result too large` natively, but halted with `HeapExhausted` on wasm32.
+
+### Snapshots and stores
+
+- **Checkpointing needed several copies of the heap** (fixed: the whole-heap writer streams,
+  `ironhorse-snapshot/src/stream.rs`).
+  A machine with 16 million Map entries runs identically on both targets.
+  Natively it then checkpoints into a 640 MB snapshot.
+  On wasm32 the encoder's doubling buffer failed to allocate 1 GiB and aborted.
+  `snapshot_image` first copied the arenas into a `MachineImage`, and `encode_heap` then built
+  the HEAP payload in two more buffers before copying it into the output.
+  The container write verbs (`write_snapshot`, `write_snapshot_to`, `write_snapshot_to_file`,
+  `suspend_to_cas`) now encode each atom straight from the live arenas and side tables into
+  the sink, whether a file, a hasher or one exactly pre-sized buffer: a sizing pass runs every
+  encoder into a byte counter, because an atom's header carries its length, and the write pass
+  runs the same encoders into the sink.
+  The bytes are those of the image writer by construction (one encoder per payload, the
+  roster's atom order and omission rule; `tests/streaming_identity.rs` locks it on a machine
+  carrying every atom, on the golden corpus, and through a restore of a container the image
+  writer wrote), so no seal or hash moves.
+  The same 16-million-entry Map now snapshots on wasm32 in 4.5 s, taking linear memory from
+  2.05 GB to 2.69 GB, exactly the container's 640 MB in one buffer; natively the snapshot's peak
+  resident set fell from 4.56 GB to 3.14 GB (the run's 2.50 GB plus the buffer) and the write
+  from 15.7 s to 3.9 s.
+  What still copies: `begin_store_session`'s first full commit builds an image and a whole batch,
+  and a checkpoint re-encodes each dirty section whole (B8), both O(side tables), and the vm's
+  owned snapshots of the per-instance tables (functions, promises, iterators, …), O(exotic rows).
+- **`manifest.chunk_len` is truncated** (`ironhorse-snapshot/src/store.rs:605`, narrowed with
+  `as usize` at `machine.rs:1379`, `store.rs:2931`, `store.rs:3262`).
+  A crafted store with `chunk_len = 2^32 + 65536` makes every chunk allocation halt natively.
+  On wasm32 the same store resumes as if it held 65,536 bytes and answers guest programs.
+  Decoding should refuse any `chunk_len` above the 32-bit chunk address space.
+- **Duplicate Intl bound-function rows restore by hash order**
+  (the gate at `ironhorse-snapshot/src/snapshot_roster.rs:1762` accepts them, and
+  `ironhorse-vm/src/interp/persist.rs:1985` keeps both).
+  The same crafted snapshot gave `false,true,false` in 7 of 12 native runs and
+  `true,false,false` in the other 5, because the `compare` getter picks a row by `HashMap`
+  iteration order (`interp/dispatch/property_read.rs:291-294`).
+  This was measured natively and on `wasm32-wasip1`; on `wasm32-unknown-unknown`, whose hash
+  keys derive from addresses, the pick is fixed for a given build and history (*inferred*).
+  Decoding should refuse duplicate owners.
+- **The CAS and file-store temporary names use `std::process::id()`**
+  (`ironhorse-snapshot/src/machine.rs:114`, `store_file.rs:135`, `:730`), which panics on WASI.
+  The default commit-token source (`store.rs`, `RandomTokens`) did too, so no store session
+  could begin under WASI; it now hashes a constant in place of the process id there, the counter,
+  the clock and the per-thread hash keys keeping tokens distinct.
+- **Error values differ by width.**
+  An overflowing HEAP, STAC or manifest count is refused on both targets, with different
+  `Corrupt` messages (`ironhorse-snapshot/src/image.rs:957`, `:4630`, `store.rs:639`).
+
+**Status.**
+Every item above is closed: the first by the streaming writer, and the other four each with a
+test that `scripts/test-snapshot-wasi.py` also runs on `wasm32-wasip1`.
+- The store open gates refuse a `chunk_len` past the u32 chunk offset space, as the manifest
+  decoder and the commit check already did, so a host-imported store's manifest is refused
+  too before any reader narrows it (`ironhorse-snapshot/tests/chunk_length_refusal.rs`).
+  No other decoded `u64` in `ironhorse-snapshot` is narrowed to `usize` unbounded: function
+  body offsets are bounded by their segment first, and the VM narrows saved frame offsets with
+  `try_from`.
+- Decoding refuses a second Intl bound-function row for one owner, and the VM's restore
+  refuses it too (`ironhorse-snapshot/tests/intl_bound_owner_refusal.rs`).
+  Every other side-table decoder already requires strictly ascending keys, and the `compare`
+  getter is the only VM lookup that searches a restored `HashMap` by value.
+- The file store's and the CAS's temporary names no longer use `std::process::id()`.
+  They use 64 random bits drawn once per process from the standard library's `RandomState`
+  and a sequence number, and both writers create the file exclusively and draw again on a
+  collision (`ironhorse-snapshot/tests/temporary_names.rs`).
+- The HEAP and STAC record sizes and the manifest's parent-seal end are computed in `u64`, so
+  an oversized count is refused as truncation, with the same message, on every target
+  (`ironhorse-snapshot/tests/record_count_overflow.rs`, which no longer needs a 32-bit host).
+
+### Latent: host limits the ceilings can outrun
+
+- **Embedder-raised ceilings.**
+  With a chunk ceiling above about 1 GiB, the chunk arena's amortized doubling asks for more
+  than `isize::MAX` on wasm32 before memory runs out (`ironhorse-vm/src/value.rs:2222`).
+  At a 1.5 GiB ceiling, 17 kept 32M-unit strings return natively and halt on wasm32.
+  A single scratch buffer over 2 GiB fails the same way: at a 3.5 GiB ceiling,
+  `'a'.repeat(1100000000)` returns natively and halts on wasm32 in `reserved_vec`
+  (`interp/admission.rs:236`).
+  The slot arena has the same wall, and where it falls depends on the arena's capacity history,
+  which no snapshot records: a fresh wasm32 arena stops at 2^26 slots and a restored one at
+  59,244,544, so two wasm32 replicas can disagree.
+  Under `consensus`, `set_chunk_ceiling` and `set_slot_ceiling` should refuse any value that
+  some target cannot honor, whatever the history.
+  The `isize::MAX` wall alone allows at most 2^30 bytes of chunks and 44,739,242 slots
+  (`floor((2^31 - 1) / 48)`), but wasm32's 4 GiB address space binds sooner.
+  At a 2^30 chunk ceiling, B8's 1M-unit doubling program halts natively and traps on wasm32 when
+  `units_to_be16` cannot allocate 1 GiB.
+  At 2^29 both targets halt identically, but with the slot ceiling at 44,739,242, 44,000,000
+  kept objects take 3.23 GB of wasm32 linear memory, and the same doubling after them traps on
+  wasm32 again (it halts `HostAllocationFailed` now).
+  Kept in an array, the objects now halt both targets at the chunk ceiling first, because their
+  array items are charged against it; the repro keeps them as a prototype chain, one slot each.
+  The two caps must be chosen together, so that both arenas' worst-case footprint (B8) fits in
+  4 GiB with room left for a checkpoint: one container's worth when it is written to memory,
+  and 64 KiB when it is written to a file, now that the encoder streams (see "Checkpointing
+  needed several copies of the heap" above).
+  The 44,000,000 kept objects above run identically on both targets, but checkpointing them
+  aborts on wasm32 at 4.11 GB of linear memory, when the encoder cannot allocate 880 MB, while
+  native writes the 880 MB snapshot.
+  At a 2^29 chunk ceiling, writing a 503 MB snapshot of strings took wasm32 from 1.10 GB to
+  3.11 GB of linear memory.
+- **`json_escape_string` (`natives/json.rs:81`)** sizes its output in `usize`, but no guest can
+  build a large enough string on wasm32 today.
+- **The host floating-point environment.**
+  A shared library that sets flush-to-zero or a different rounding mode in MXCSR changes native
+  results.
+  Wasm is not immune: under the same `LD_PRELOAD`, the wasm32 probe gave the same altered
+  results in Wasmtime and in Node, whose generated code runs under the host thread's MXCSR.
+  A self-test inside the engine, run on the executing thread at every entry and on every target,
+  can refuse such a host.
+- **The platform `Math` provider is the default** for every crate except the two shipping
+  binaries (B4).
+- **`ironhorse-store-sqlite` narrows stored `i64` keys without range checks**
+  (`rust/endo/ironhorse-store-sqlite/src/lib.rs:855` and siblings).
+  A crafted database could alias rows differently by width; the crate does not build for wasm
+  today.
+
+**Status.**
+Two of these are closed.
+- Under `consensus`, `set_slot_ceiling` and `set_chunk_ceiling`, and the arenas' own
+  `set_ceiling`, refuse a ceiling above `CONSENSUS_MAX_SLOT_CEILING` (44,739,242 slots, the
+  `isize::MAX` wall for doubling 24-byte records) or `CONSENSUS_MAX_CHUNK_CEILING` (2^29
+  bytes, where the 1M-unit doubling program above halts identically on both targets), and
+  keep the current ceiling (`ironhorse-vm/src/value.rs`,
+  `ironhorse-vm/tests/consensus_ceiling_caps.rs`).
+  The defaults sit under both caps, so no program run under the default ceilings changes.
+  The stack-lanes probe builds with `consensus` and prints the refusal, so the three
+  `cross-target.slow.js` repros that raise the chunk ceiling past the cap now print the same line
+  on both targets.
+  The caps are not yet chosen together against a 4 GiB footprint with room for a checkpoint:
+  the repro at exactly both caps still diverges, and the B8 memory work may lower them.
+- `ironhorse-store-sqlite` range-checks every stored slot-page, chunk-extent and page-edge key
+  into u32, refusing one outside it as a corrupt row, and its page-summary count no longer
+  accepts a negative key in place of page 0
+  (`rust/endo/ironhorse-store-sqlite/tests/row_corruption.rs`).
+
+### Status
+
+All four families are closed.
+Every finding in "Snapshots and stores" is closed, as its status above records.
+Every site in "Admission charged by Rust memory layout", in "Arithmetic on the host's `usize`" and
+in "Unadmitted host allocations" now behaves the same on native and wasm32:
+
+- Scratch admission (`ironhorse-vm/src/interp/admission.rs`) charges a width each element type
+  declares through a `ScratchElement` trait, instead of `size_of::<T>()`.
+  This closes `natives/regexp.rs:1012`, `:1393` and `:1490`, and `natives/json.rs:591`, `:708`,
+  `:1095`, `:1204` and the masked `:1199`.
+- The RegExp matcher charges declared constants for `State`, `AssertionData` and
+  `QuantifierData`, which closes `ironhorse-regexp/src/matcher.rs:129` and `:190-193`.
+- The RegExp compiler charges declared constants for a `Node` and for a `Vec<u32>` string
+  header, which closes `ironhorse-regexp/src/compile.rs:953`, `:955-962`, `:1366-1375` and
+  `:1717`.
+- `advance_string_index` reads a surrogate pair through a checked range and never adds to the
+  guest index in `usize`, which closes `natives/regexp.rs:301`.
+- `JSON.stringify` admits a container's size in `u64` before narrowing it, which closes
+  `natives/json.rs:163`.
+- Array items, index properties, Map, Set, WeakMap and WeakSet entries and `Intl.Segmenter`
+  results are charged against the chunk ceiling (`ironhorse-vm/src/side_storage.rs`), at widths
+  declared through the same `ScratchElement` table: 32 bytes per item, 96 per entry (the entry and
+  its lookup index), and 2 per retained input unit and 24 per segment.
+  A growable table is charged by the capacity class of its count (0, 4, then powers of two), a
+  function of the count alone, so neither host layout nor the order of operations moves a halt,
+  and the ledger is derived from the tables on restore rather than persisted.
+  Guest-amplified host copies (typed-array `join` and `toLocaleString`, `Array` `toLocaleString`,
+  the `ListFormat` result and the `Function` source) are bounded by the ceiling before they grow,
+  and `ListFormat` collects its list by reference.
+  This closes `bulk.rs:479` and `:242`, `interp/locale.rs:308`, `natives/dispatch.rs:1967` and
+  `intl.rs:757`, `natives/buffer.rs:558` and `:287`, `natives/array.rs:4482`, and
+  `interp/eval.rs:226`.
+  Unlike the others it changes which programs complete, so it is a release change (engine 0.0.2,
+  `CHANGELOG.md`).
+
+The line numbers are the audit's.
+Each declared width is the audited 64-bit layout, and a 64-bit build asserts at compile time
+that it equals `size_of`, so native thresholds cannot move and a layout change fails the build.
+`ironhorse-vm/tests/declared_width_audit.rs` fails when any of these paths returns to `size_of`
+or to `usize` arithmetic.
+Rerun on this tree, every repro in the two tables above now prints the native line on wasm32
+under Wasmtime, and the native line is the same as before the fix.
+The cross-target gate (B6) checks those repros on every engine change and finds them the same
+on both targets, so the expected-divergence list no longer names them.
+The `json.rs:1204` repro was rerun with a 134,136,000-unit filler and its object text built with
+`join`, since the audit did not record how it built that text.
+The release-neutral gate (`stack-lanes/differential.py`) found native output byte-identical to
+the tree before the fix on all 1,763 of its programs.
+
+The side-storage fix was checked the same way.
+Both cross-target shards find every repro of "Unadmitted host allocations" the same on both
+targets, so the expected-divergence list holds only the repro at both consensus caps:
+
+| Repro (`stack-lanes/differential/`) | Native and wasm32 | Computrons |
+|---|---|---:|
+| Map entries, 2^25 + 1 (`cross-target.slow.js#map-entries`) | `HeapExhausted` | 50,880,814 |
+| 80 kept arrays of 1,000,000 items (`#array-items`) | `HeapExhausted` | 7,229,417 |
+| 11 kept segmentations of 32M units (`#intl-segmenter-segments`) | `HeapExhausted` | 8,389,201 |
+| `ListFormat` of 2,000 references, then a number (`#intl-list-format-copy`) | `Return "TypeError"` | 324,102 |
+| `Function` with a 268.8M-code-point source (`#function-constructor-source`) | `HeapExhausted` | 5,600,396 |
+| Typed-array `join` (`cross-target.js#typed-array-join`) | `HeapExhausted` | 16,922 |
+| Typed-array `toLocaleString` (`#typed-array-to-locale-string`) | `HeapExhausted` | 27,706 |
+| `Array` `toLocaleString` (`#array-to-locale-string`) | `HeapExhausted` | 239,703 |
+
+`ironhorse-vm/tests/side_storage_admission.rs` pins where unbounded loops over each charged table
+halt under a 50,000-slot, 1 MiB-chunk ceiling, and `allocation_admission_audit.rs` fails when any
+growth or release site loses its charge.
+`differential.py --slow` against `863a9957` reports 14 of its 1,790 programs changed natively,
+every one a heap-ceiling stress program that now halts at the ceiling (`CHANGELOG.md` lists each).
+
+Guest-sized storage outside those tables is still unadmitted, found by the same audit of
+`ironhorse-vm/src` and left for later work:
+
+- Retained per-object copies: the frame names and message an `Error` captures; `Symbol.for`
+  registry keys; the string a string iterator, `matchAll` iterator or for-in cursor copies; a
+  compiled `RegExp` program and its source; a bound function's arguments; a suspended generator's
+  or async function's frame; `DisposableStack` records; option strings kept by `Intl` objects;
+  and the bytecode `eval` and `Function` keep.
+  Each grows with one object's input, and the slot ceiling bounds only the number of objects.
+- Transient copies built before their check: the operands of string `+` and of BigInt
+  multiplication before the chunk allocation, a `JSON.stringify` replacer's property list,
+  `Intl.Collator` comparison buffers, locale-tag parsing, and argument lists that `apply` spreads
+  past the value-stack budget.
+
+The latent issues not marked closed remain open.
+
+## B3: the native-recursion budget outruns wasm stacks
+
+`NATIVE_DEPTH_LIMIT = 2048` (`interp.rs`) bounds host recursion by a counter, so the halt depth
+is deterministic.
+The budget is sound only on a stack that can hold it.
+`NATIVE_STACK_BYTES` states 8 MiB (release) and 32 MiB (debug), and the worker spawns a thread
+of exactly that size.
+On wasm there are two stacks, and **both** can bind:
+
+- **The linear-memory shadow stack** is set at link time.
+  Rust's wasm targets default to 1 MiB with `--stack-first`, so an overflow traps
+  (`memory access out of bounds`) instead of corrupting data.
+  At 1 MiB, the 10,000-layer Proxy `[[DefineOwnProperty]]` case overflows it in Node and in
+  Chromium.
+  `-C link-arg=-zstack-size=8388608` fixes that.
+  Every figure below uses that 8 MiB shadow stack.
+- **The host engine's call stack** is where wasm frames themselves live.
+  The host sizes it: V8's `--stack-size` defaults to 984 KiB, and Wasmtime's `max_wasm_stack`
+  defaults to 512 KiB.
+  In a browser it is not configurable at all.
+
+The measurements below predate the refactors of
+[STACK-DEPTH-REFACTOR.md](STACK-DEPTH-REFACTOR.md) §5.
+After its Phase 3, every one of the 242 cases of the stack-lanes corpus
+(`stack-lanes/README.md`), each recursion family at its ceiling among them, returns the
+native result on Wasmtime at 409,600 B, under Node at a 425 KiB `--stack-size` with either
+tier pinned and on workerd at 836 KiB, all with the 4 MiB shadow stack of the build recipe.
+None is an expected trap any longer: the Proxy prototype cycle, the last, needs 7,168 B on
+Wasmtime.
+The trapped-Proxy layer chains are not in that corpus and wait on STACK-DEPTH-REFACTOR.md's
+B10 (§5, Phase 4).
+
+### Measurements
+
+The 25 cases below cover the families in `ironhorse-vm/tests/native_recursion_budget.rs`, each
+at its ceiling, plus within-budget twins.
+Wherever an entry says "ok", the host returned the same `Halt`, result and computrons as native.
+The V8 columns are single runs of a **freshly started process** (see "V8 is not stable" below).
+
+| Case | Native | Node default | Chromium main | Chromium Worker | Wasmtime 512 KiB (default) | Wasmtime 1 MiB | Wasmtime 2,000,000 B |
+|---|---|---|---|---|---|---|---|
+| `JSON.stringify`, 10,000 nested arrays | `ReentryLimit` | **trap** | **trap** | **trap** | **trap** | **trap** | ok |
+| Proxy `[[DefineOwnProperty]]` / `[[Call]]`, 10,000 layers | `ReentryLimit` | ok | ok | **trap** | **trap** | **trap** | ok |
+| 10,000 nested sync `async` calls | `ReentryLimit` | ok | ok | ok | **trap** | **trap** | ok |
+| Other Proxy methods (`[[Get]]`, `[[OwnPropertyKeys]]`, `[[Construct]]`), 10,000 layers | `ReentryLimit` | ok | ok | **trap** | **trap** | ok | ok |
+| `JSON.parse` 10,000 nested arrays / objects; reviver deepening its holder | `ReentryLimit` | ok | ok | **trap** | **trap** | ok | ok |
+| `flat(Infinity)` over a self-containing array | `ReentryLimit` | ok | ok | **trap** | **trap** | ok | ok |
+| 10,000 nested `forEach` callbacks | `ReentryLimit` | ok | ok | ok | **trap** | ok | ok |
+| `eval` of 5,000 nested parens and braces (compiler budget) | catchable `SyntaxError`s | ok | ok | ok | **trap** | ok | ok |
+| *Accepted:* 2,016-layer Proxy `[[Get]]` | completes | ok | ok | **trap** | **trap** | ok | ok |
+| *Accepted:* 63 nested `forEach` (the documented allowance) | completes | ok | ok | ok | **trap** | ok | ok |
+| *Accepted:* 64 nested `async` calls (half the allowance, which is 126) | completes | ok | ok | ok | **trap** | ok | ok |
+| *Accepted:* 511 nested blocks; a 990-deep `?:` chain | completes | ok | ok | ok | **trap** | ok | ok |
+| Self-containing `join` / `String(a)`, deep `RegExp`, a backtracking `RegExp`, copied Iterator setter, 91 parens, 256-deep render | as native | ok | ok | ok | ok | ok | ok |
+
+The rows marked *Accepted* matter most.
+On an undersized stack, programs the engine **accepts** natively fail too; it is not only the
+programs it was going to halt anyway.
+The table's accepted rows all pass at Wasmtime 1 MiB, but they are not the worst accepted
+programs.
+[STACK-DEPTH-REFACTOR.md §1.3](STACK-DEPTH-REFACTOR.md#13-what-traps-today) measures more:
+- eight heavy re-entry ceilings trap at 1 MiB, and two of them still trap at 1.5 MiB;
+- some accepted programs trap even at 2,097,152 B, such as a 4 KB chain of 2,038 tagged
+  templates, and `JSON.stringify` of objects nested to the native ceiling;
+- 41 nested `eval`s compiling such a chain need 3,281,859 B.
+
+A second batch covered the file's remaining 17 cases: `[[Set]]`, `[[HasProperty]]`,
+`[[Delete]]`, `[[GetOwnProperty]]`, `[[GetPrototypeOf]]`, `[[SetPrototypeOf]]`,
+`[[IsExtensible]]` and `[[PreventExtensions]]` chains, the index-key variants, `Reflect.get`,
+the Proxy prototype cycle, the `instanceof` cycle, bound-call trampolines, and the
+`Symbol.toStringTag` Iterator setter.
+All of them passed at Wasmtime 2,000,000 B, but:
+
+- At Wasmtime 512 KiB, `[[Set]]`, `[[HasProperty]]`, `[[Delete]]`, the index `[[Get]]`,
+  `[[HasProperty]]` and `[[Delete]]` chains, `Reflect.get` and the Proxy prototype cycle trap.
+- At Wasmtime 1 MiB, only the Proxy prototype cycle still traps.
+- In the Chromium Worker, `[[Set]]`, `[[HasProperty]]`, `[[Delete]]`, the index
+  `[[HasProperty]]` and `[[Delete]]` chains, and the prototype cycle trap.
+
+In total **17 of 42 cases trap in a Chromium dedicated Worker**.
+The compiler contributes too: its parser, scoper and coder recurse on the host stack up to
+`TREE_DEPTH_LIMIT = 2048` (`ast.rs:166`).
+That recursion is behind the Wasmtime 512 KiB traps of the nested-`eval`, nested-block and
+`?:`-chain cases.
+
+### V8 is not stable
+
+V8's per-frame stack use depends on which compiler tier ran the code.
+At `--stack-size=1300`, the `JSON.stringify` case passed 2 of 5 runs of the same build.
+With `--liftoff-only` it passes at 1300.
+With `--no-liftoff` (TurboFan only) it still traps at 1500 and first passes at 1600.
+Under `--no-liftoff` at the default stack size, five cases trap rather than one:
+
+- the Proxy `[[Call]]` chain
+- `JSON.parse` of nested arrays and of nested objects
+- the reviver
+- `JSON.stringify`
+
+A warmed process is worse than a cold one.
+After a warm-up loop, the 10,000-level `JSON.parse` traps in default Node in 3 of 3 runs, while
+a cold process passes it.
+The same warmed case passed in Chromium's main thread.
+Wasmtime compiles ahead of time and behaved identically on every run.
+
+### Failures are traps or host crashes
+
+In the recursion cases, no host ever returned a *different* answer.
+The failures were:
+
+- **Host traps**: `RangeError: Maximum call stack size exceeded` in V8, and
+  `wasm trap: call stack exhausted` in Wasmtime.
+- **Host process crashes.**
+  Wasmtime runs wasm on the calling thread's own stack.
+  With `max_wasm_stack = 2,000,000` on a Python thread with a 1 MiB stack, the
+  `JSON.stringify` case kills the host with `SIGSEGV`.
+  It works on 2 MiB and 8 MiB host threads.
+
+A trap is not contained, even with unwinding enabled.
+Rust state at the moment of the trap is not rolled back, so the instance must be discarded.
+In local workerd, an exception inside a transaction rolled SQL back while a JS stand-in for the
+cached vat kept the change, and the next crank committed the mismatch
+([Cloudflare review](../../designs/thixotrope-on-cloudflare-review.md), blocker 4).
+The guest controls how deep it recurses, so on an undersized stack a guest can turn a
+deterministic `ReentryLimit` into a host-dependent failure.
+That is a determinism break across hosts, not just a crash.
+
+### Options
+
+- **Require minimum stacks** where the embedder controls them, and document them next to
+  `NATIVE_STACK_BYTES`:
+  - `-zstack-size` ≥ 4 MiB: the worst accepted composition measured needs 2,611,856 bytes of
+    shadow stack (STACK-DEPTH-REFACTOR.md
+    [§1.2](STACK-DEPTH-REFACTOR.md#12-two-stacks-on-wasm-and-the-host-limits)).
+    The figures in this report used 8 MiB.
+  - Wasmtime `max_wasm_stack` ≥ 2 MiB for the families above, on a host thread whose own
+    stack is comfortably larger.
+    Some accepted programs need more than 3 MiB (see above), so 2 MiB is a floor, not a bound.
+    The wasmtime-py 49 `Config` class has no `async_stack_size` property, and `max_wasm_stack`
+    above 2,097,152 bytes panics the process with "max_wasm_stack size cannot exceed the
+    async_stack_size" unless that limit is raised first.
+    From Python, `wasmtime._ffi.wasmtime_config_async_stack_size_set(cfg.ptr(), n)` raises it,
+    and STACK-DEPTH-REFACTOR.md §1.3 measured its 2.26–3.28 MB cases that way; the Rust API has
+    `Config::async_stack_size`.
+  - Node `--stack-size` ≥ 1,551 KiB for the 25 cases (1,518 KiB with TurboFan pinned, 1,551 KiB
+    under the worst measured tier mix), more for accepted compositions (1,680 KiB measured),
+    plus margin.
+- **Browsers and workerd** cannot raise the stack, so there the frames must shrink or leave the
+  call stack.
+  Candidates include:
+  - moving the deep walkers (JSON, `flat`, Proxy forwarding, re-entrant dispatch) onto
+    explicit heap stacks
+  - bounding the compiler's AST recursion the same way
+  - shrinking the heavy `dispatch_at` and `call_native` frames
+
+  [STACK-DEPTH-REFACTOR.md](STACK-DEPTH-REFACTOR.md) maps every recursion
+  family and ranks these refactors.
+  Lowering `NATIVE_DEPTH_LIMIT` for wasm alone would not work: the limit is release-versioned
+  and changes acceptance, so native and wasm workers could no longer share a release.
+
+## B8: the ceilings do not bound memory
+
+The default ceilings (1,000,000 slots, a 256 MiB chunk arena, `value.rs:10-13`) bound the
+engine's own arenas, not the process's memory.
+Measured:
+
+- Doubling a 1M-unit string (`var s='x'.repeat(1<<20); for(;;) s=s+s;`) until it reaches the
+  256 MiB chunk ceiling left Wasmtime's linear memory at 18,516 pages (1.21 GB), and native
+  peak memory (RSS) at 1.08 GB.
+  Doubling from `'a'` halts at 9,908 pages (649 MB).
+- The same doubling stopped at 64 million code units completes normally with 945 MB of linear
+  memory; `'a'.repeat(64*1024*1024)` needs 414 MB.
+- Array items and the Map, Set and Intl side tables were not admitted at all (B7).
+  Ten million `a.push(0)` calls grew linear memory to 583 MB while the chunk arena held 12 KB.
+  Native repros reached about 4–6.6 GiB of RSS under the default ceilings (B7).
+  They are charged against the chunk ceiling now: the same push loop halts `HeapExhausted` when
+  its count reaches 4,194,304, whose next capacity class would pass 256 MiB, at 235.8 MiB of
+  linear memory and 240.5 MiB of native peak RSS (the memory lane's array shape at the ceiling).
+
+So for heaps dominated by strings the running footprint is up to 4–5× the chunk ceiling
+(doubling a large string is the worst case measured while running; push loops of strings halted
+at 2.1–2.2×), and heaps dominated by arrays or side tables, which no ceiling bounded, now take at
+most 2.1 bytes of linear memory per byte they are charged while running and 6.6 at a checkpoint
+([WASM-MEMORY.md](WASM-MEMORY.md)).
+A whole-heap snapshot used to add several copies (B7), and the worst-case footprint had to
+count them: under the default ceilings, writing a 252 MB snapshot of strings took wasm32 from
+557 MB to 1.56 GB of linear memory, 5.8× the chunk ceiling, and at 2^29 the same pattern reached
+3.11 GB.
+The whole-heap writer now streams from the live arenas (`ironhorse-snapshot/src/stream.rs`), and
+the snapshot adds at most the container itself, in one buffer, when written to memory, or a 64 KiB
+write buffer when written to a file.
+Measured with `scripts/snapshot-footprint.py` (natively, resident set size and its high-water mark;
+on wasm32, `memory.size` under Wasmtime 49, which never shrinks), before and after:
+
+| Case | Container | wasm32 before | wasm32 after | native peak before | native peak after |
+|---|---|---|---|---|---|
+| 16,000,000 Map entries | 640 MB | 2.05 GB, then aborts allocating 1 GiB | 2.05 GB → 2.69 GB, 4.5 s | 2.62 GB → 4.56 GB, 15.7 s | 2.62 GB → 3.14 GB, 3.9 s |
+| 125,000 strings of 1,000 units | 254 MB | 746 MB → 1.75 GB, 0.60 s | 746 MB → 746 MB, 0.04 s | 266 MB → 1.03 GB, 0.88 s | 266 MB → 521 MB, 0.21 s |
+| 1,000,000 Map entries | 40 MB | 124 MB → 400 MB, 0.26 s | 124 MB → 164 MB, 0.05 s | 171 MB → 308 MB, 0.18 s | 171 MB → 204 MB, 0.05 s |
+
+The string snapshot grew wasm32 linear memory by nothing at all, because the buffer fit in memory
+the run had already freed; the 16-million-entry Map, whose entries are the live heap, grew it by
+exactly the container.
+Natively the snapshot's own share of the peak fell from 1.94 GB over the run's high-water mark to
+514 MB, the buffer, and every case writes three to five times faster, because the four copies and
+the doubling reallocations were the cost.
+So for a whole-heap snapshot the worst case is the running footprint plus one container, and a
+container is bounded by the ceilings: the chunk arena verbatim, 20 bytes per slot record, and
+the side tables' rows, which the chunk ceiling now bounds as well.
+
+The Thixotrope worker's per-crank `checkpoint_to_store` copies only the dirty chunk extents and
+slot pages, but it re-encodes each changed section, such as all arrays' items or all Maps'
+entries, whole (`ironhorse-snapshot/src/machine.rs`, the `small_updates` of
+`checkpoint_to_store_core`).
+On the string heap above, its batch fit in memory the crank had already freed, and linear memory
+grew to 787 MB only because the in-memory store kept its own copy.
+For arrays and Maps it costs as much as a whole-heap snapshot or more, on every crank that
+changes them: before the store copied anything, checkpointing 500,000 kept array items took
+wasm32 from 40 MB to 122 MB, where writing their snapshot reached 92 MB, and 500,000 Map entries
+from 78 MB to 224 MB, where their snapshot reached 208 MB.
+The streaming writer does not change this path, and the same harness measured it afterwards
+(`--case array-ckpt --case map-ckpt`: a session begun on the kept state, one crank that changes
+one element, then a checkpoint into a store that samples memory when the batch reaches it).
+Natively, 500,000 array items took the resident set from 77 MB before the checkpoint to 94 MB
+at the commit, 17 MB for the owned item rows the vm hands out (500,000 × 32 B) and the 12 MB
+`ARRY` payload; 500,000 Map entries took it from 106 MB to 167 MB, 61 MB for the owned entry
+rows (500,000 × 48 B), the 20 MB `COLL` payload and the doubling slack of both.
+On wasm32 the session's first full commit, which still builds an image and a whole batch, had
+already grown linear memory to 129 MB and 268 MB, and neither checkpoint grew it further: the
+re-encoding fits in what that first commit freed, so on this path the first commit, not the
+checkpoint, sets the mark.
+Now that the chunk ceiling admits array items and side tables, its checkpoint coefficient leaves
+room for that re-encoding: 6.6 bytes of wasm32 linear memory per byte charged for array items and
+4.2 for Map and Set entries ([WASM-MEMORY.md](WASM-MEMORY.md)), until the sections are encoded
+incrementally.
+
+**Incremental section encoding, a proposal.**
+The dirty tracking is a 32-bit mask with one bit per section (`ironhorse-vm/src/snapshot_dirty.rs`);
+once a bit is set the checkpoint extracts and encodes the whole section, so its cost is the
+section's size, not the change's.
+The bulk sections, arrays, index properties and collections, carry the slot payloads, and one
+collection can hold the whole heap (the 16-million-entry Map is one 640 MB row), so the unit of
+change must be smaller than a row.
+What the tracking would have to record, per bulk section:
+
+- per owner, whether the row was created, removed (the sweep drops it) or had its header
+  changed (an array's `length`, an index store's high-water mark, a collection's `kind` or
+  `table_length`);
+- per owner, which fixed-size spans of its payload changed: for arrays and index properties the
+  item map by index range, for collections the physical entry list by entry range, with a
+  tombstone compaction or `clear()` marking every span, since both renumber what follows.
+
+A span of 4,096 entries is 160 KB of `COLL` payload or 96 KB of `ARRY` payload, the size of a
+slot page's worth of records, so the same ceilings can count section spans and slot pages in one
+unit.
+The dirty state is one bit per span and one per owner: the 16-million-entry Map needs 3,907 span
+bits, under 500 bytes, beside its one owner bit.
+The store would hold each bulk section as span rows keyed by owner and span index, like slot
+pages and chunk extents, with the container export concatenating the rows in owner order, which
+is the section's encoding already (a count, then rows), so the container bytes and every seal
+over them stay as they are; the section digests the checkpoint compares would become one digest
+per span row, and `small_section_hashes` the digest of those.
+A crank that sets one entry would then ship one 160 KB span instead of 640 MB, and the
+checkpoint's transient memory would be the touched spans' bytes.
+The cost is a store schema bump with a migration that splits the three sections into span rows,
+the per-span dirty bits in `ArrayData` and `CollectionData` with the sweep and compaction hooks
+that set them, and the checkpoint and resume paths that read them: about three thousand lines
+across the vm, the snapshot crate and the SQLite backend, by the size of the slot-page machinery
+it would mirror.
+
+Wasm linear memory never shrinks.
+On a host that enforces its memory cap by failing `memory.grow`, as Wasmtime's store limits do,
+growth fails before the engine's deterministic `HeapExhausted` whenever the cap is below that
+footprint.
+An infallible allocation then aborts and traps, as `units_to_be16` does in the 1M-unit doubling
+program, and as array items do.
+A fallible one, such as the chunk and slot arenas' growth or `reserved_vec`, halts with a
+`HeapExhausted` that the embedder cannot tell from a deterministic one.
+Under a 128 MiB Wasmtime memory limit, a loop that keeps 40 strings of 1M units halted that way
+at 2,359,889 computrons, where native and uncapped wasm32 return `40` at 10,488,433.
+Either way the outcome depends on the host; a distinct halt for host allocation failure, which
+the embedder never commits, would make the second case visible.
+Cloudflare's 128 MB isolate cap is far below the default footprint, and the documentation
+describes a different enforcement: the isolate is replaced (see the Cloudflare section).
+Ceilings for these hosts must be set so that the *worst-case* footprint fits, and the ratio
+must be measured per build.
+
+Node's `node:wasi` is also unreliable at these sizes.
+Above roughly 0.6 GB of linear memory it crashed the whole Node process with `SIGSEGV`: a
+memory-pressure GC reached from `uvwasi_fd_write` crashes in
+`InnerPointerToCodeCache::GetCacheEntry`.
+Wasmtime ran the same modules correctly.
+`scripts/test-snapshot-wasi.py` uses the same runner, which is fine for its small tests.
+
+**Status (2026-10-14): measured and decided in [WASM-MEMORY.md](WASM-MEMORY.md), with the
+streaming writer and the declared admission widths.**
+The footprint is linear in the ceilings: on wasm32 the worst running heap takes 4.5 bytes per
+byte of chunk ceiling and 50 per slot over a 7.25 MiB empty instance, a checkpoint or a
+whole-heap snapshot at most one container more (5.5 and 70), and an eager restore, now the
+costliest phase, 6.0 and 114, with a 15% allowance for the allocator's layout.
+That report gives the formula, ceilings for a 128 MB Cloudflare isolate (4 MiB of chunks and
+262,144 slots), a 512 MB container (32 MiB and 2^20) and a native host, the consensus caps (2^28
+bytes and 2^23 slots, not 2^29 and 44,739,242), and the linear-memory threshold at which to
+recycle an instance.
+A host allocator's refusal now halts with its own `Halt::HostAllocationFailed`, which the embedder
+never commits: under a 128 MiB Wasmtime cap the forty-string loop above ends in it instead of in
+`HeapExhausted`.
+Array items and side tables are now charged against the chunk ceiling (B7 "Status"), which
+raises the checkpoint's per-chunk-byte constant from 5.5 to 6.6 (WASM-MEMORY.md); the allocations
+that remain infallible still trap under a cap.
+
+## B2: which exception-handling encoding the host supports
+
+LLVM 21 emits the **legacy** wasm EH instructions (`try`/`catch`) by default.
+Wasmtime 49 rejects such a module:
+
+```text
+Invalid input WebAssembly code at offset 5431: legacy_exceptions feature required for try instruction
+```
+
+Adding `-C llvm-args=-wasm-use-legacy-eh=false` to the same `RUSTFLAGS` emits the standard
+`exnref` form (`try_table`).
+Wasmtime 49 then loads and runs the `exnref` module with its default `Config`; exceptions are
+enabled by default.
+At the default 512 KiB `max_wasm_stack`, the meter probe's refused `eval` traps in the
+recursive drop of its partial tree (B3); with 1 MiB it matches native.
+Node 22.22.2 and Chromium 141 ran **both** encodings without flags.
+
+Wasmtime needs `exnref`, so `exnref` is the natural default for a build shared by Wasmtime and
+browsers.
+Legacy EH matters only for older browser engines, which were not tested here.
+Whichever is chosen, the flag must be in `RUSTFLAGS` so that `-Zbuild-std` compiles std with
+the same encoding.
+
+**Status (2026-10-14): `exnref` chosen.**
+`scripts/build-wasm.py` puts `-C llvm-args=-wasm-use-legacy-eh=false` in `RUSTFLAGS`, so the
+rebuilt std and the engine share the encoding, and every host the build is meant for runs it:
+Wasmtime 49, Node 22, Chromium 141 and workerd.
+Legacy EH is not built; a host that needs it is a reason to revisit, not a second artifact.
+
+## B4: default features diverge from native in results and metering
+
+Without `consensus`, `ironhorse-vm` computes `Math.*` with the platform libm: glibc natively,
+wasi-libc on WASI.
+The probe applies 22 `Math` functions to 400 inputs and hashes the string forms of the
+results:
+
+| Build | native hash / computrons | wasm hash / computrons |
+|---|---|---|
+| default features | `1006434603` / 4,410,817 | `-1595503651` / 4,410,427 |
+| `features = ["consensus"]` | `-416448200` / 4,410,687 | `-416448200` / 4,410,687 |
+
+The default build diverges in results.
+Because guest control flow follows those results (here, the hashing loop's length), the
+computron counts diverge too.
+With `consensus` (pure-Rust `libm`, `force-soft-floats`) the two targets agree on this probe.
+The worker already enables `consensus`, and the build already rejects `cost-calibration`
+alongside it (`ironhorse-vm/src/lib.rs:25`).
+Floating-point operations outside the `Math` provider are part of the B7 audit.
+
+**Status (2026-10-14): `consensus` is on in the official build.**
+`scripts/build-wasm.py` builds `ironhorse-vm` with `features = ["consensus"]`, as the worker
+and the stack-lanes probe do, so the wasm artifacts CI builds use the pure-Rust `libm` and
+never wasi-libc.
+
+## B5: the worker binary is not wasm-ready
+
+`thixotrope-ironhorse-worker` fails to build for `wasm32-wasip1`.
+Beyond B1, it has these problems:
+
+- **Bundled SQLite (C).**
+  `libsqlite3-sys` 0.28 (`rusqlite` 0.31, pinned to match `rust/endo`) compiles
+  `sqlite3.c` with the host's headers and fails (`bits/libc-header-start.h`).
+  It needs a WASI C sysroot such as wasi-sdk.
+  Its build script also applies its WASI defines (`SQLITE_THREADSAFE=0`, emulated
+  `mman`/`signal`/`getpid`, optional WASI VFS) only when `TARGET == "wasm32-wasi"`.
+  Rust retired that target name, so on `wasm32-wasip1` the defines are silently skipped.
+  WAL mode also relies on shared-memory locking that WASI preview 1 lacks
+  (*inferred*, not built).
+- **`rustix::fs::flock`** is `cfg`-excluded on `target_os = "wasi"`.
+  The worker's kernel lease, `--lock-state` helper and shared `ACTIVE_LEASE_PATH` lease all
+  use it.
+- **`std::thread::Builder::spawn`** with `stack_size(NATIVE_STACK_BYTES)` in `main`.
+  `wasm32-wasip1` has no threads.
+  The stack must come from the link (`-zstack-size`) and the host (B3) instead.
+- **File paths** (the heap database, the boot files and the state directory) need WASI
+  preopens.
+- **`FileStore` is not an alternative**: it panics on `wasm32-wasip1` (see
+  [What builds today](#what-builds-today-unmodified)).
+
+The snapshot store seam already abstracts the backend (`ironhorse_snapshot::store`, with
+`MemoryStore` in tree).
+A wasm worker can therefore keep persistence on the host side, behind an imported store.
+That is the approach [Thixotrope on Cloudflare](../../designs/thixotrope-on-cloudflare.md)
+proposes with Durable Object SQLite.
+The daemon has no wasm host yet: `engine_for_spawn_request("wasm", …)` is rejected
+(`rust/endo/src/engine.rs`), and `endor.rs`'s module docs list `-e wasm` only as a future
+engine.
+
+## B6: little wasm coverage in CI
+
+The differential job exists: `cross-target-ironhorse` in `.github/workflows/ci.yml` runs on every
+change under `rust/engine` except documentation.
+It builds the stack-lanes probe natively and for `wasm32-wasip1` with the B1 workaround, and
+`stack-lanes/cross_target.py` hands both the same guest programs.
+The wasm32 side runs under the Wasmtime 49 CLI at lane A's fixed `max_wasm_stack` of 409,600 B.
+Halt, result, computrons, the meter's checks, bytecode, symbols and parse-meter charges must
+agree byte for byte.
+The programs are the stack-lanes corpus, every recursion family and chain kind around its
+ceiling, the per-change snippets of `stack-lanes/differential/`, and the B7 repros in
+`stack-lanes/differential/cross-target.js`.
+A divergence passes only when `stack-lanes/expected-divergence/wasmtime.json` lists it, with
+both lines and its B7 site.
+A listed divergence that no longer appears fails, so the list holds exactly the open B7 sites
+the probe reaches, and each B7 fix removes its entries.
+The repros of the fixed B7 sites stay in `cross-target.js` and must agree on both targets, so
+the gate confirms on every engine change that "Admission charged by Rust memory layout",
+"Arithmetic on the host's `usize`" and "Unadmitted host allocations" stay closed; the list holds
+the repro at both consensus caps.
+The B7 repros that need gigabytes natively or minutes on wasm32, in `cross-target.slow.js`, are
+a separate shard (`--shard slow`) that no workflow runs yet.
+The snapshot and store sites need crafted stores or snapshots, which the probe does not take.
+
+The differential builds only the crates the probe links, and only for `wasm32-wasip1`.
+The engine's own wasm build, below, covers the rest; `build-wasm` builds `rust/ocapn_noise`.
+
+**Status (2026-10-14): the build gate is in CI.**
+CI's `build-ironhorse-wasm` job runs on every change to a crate the script builds (and to the
+recipe, the probe build, the WASI script and the toolchain pin).
+It builds all eight runtime library crates with `scripts/build-wasm.py` for both targets, with
+unwinding (B1), `exnref` (B2) and `consensus` (B4), so it also covers `ironhorse-compile` and
+`ironhorse-runtime`, which the stable build cannot link.
+It then runs `scripts/test-snapshot-wasi.py` on `wasm32-wasip1`: the snapshot's B7 refusals and
+portability checks that need no compiler, and the consensus ceiling caps, so the claim in
+`architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md` that the overflow refusals run on 32-bit
+WASI in CI now holds.
+The script had been failing since 2026-09-24 (`50f547f71`), when `RandomTokens`, the default
+commit-token source of store sessions, began hashing `std::process::id()`, which panics on
+WASI; checkpointing into a `MemoryStore` panicked on `wasm32-wasip1`.
+That source now leaves the process id out on WASI (`34464d6c6`), and the script passes, now
+with thirteen tests (13/13), the embedder-chosen commit-token sources among them.
+On `ubuntu-latest` a cold run of the job, with no cache, took 2 min 18 s.
+The two builds took 97 s, of which rebuilding std took about 10 s per target, and the WASI
+script 13 s; the rest is the engine crates themselves, `ironhorse-vm` above all.
+
+What the job does not cover:
+
+- **No comparison with native.**
+  It compares no results or computrons; `cross-target-ironhorse`, above, does that for the
+  programs the probe runs.
+- **Libraries only.**
+  It links no wasm executable from the engine; the stack-lanes probe, which does, is built by
+  `cross-target-ironhorse` and the nightly lanes.
+- **No engine test suites on wasm.**
+  Only the WASI script's tests run there.
+- **The legacy EH encoding and the default features are not built.**
+
+**Engine test suites on `wasm32-wasip1` (2026-10-14, report only).**
+The tests of four crates were built with the recipe (release, with `ironhorse-vm`'s `consensus`
+and `store-integrity`, the worker's features) and run one binary at a time under the Wasmtime 49
+CLI: `wasmtime run -W exceptions=y -W max-wasm-stack=8388608`, `--test-threads=1`, and no
+preopened directories.
+Building the 275 test binaries took 355 s on 4 cores.
+No binary trapped or timed out, so every test has a verdict, and nothing was gated or changed:
+
+| Crate | Test binaries (with a failure) | Pass | Fail | Ignored |
+|---|---|---:|---:|---:|
+| `ironhorse-compile` | 27 (2) | 216 | 9 | 5 |
+| `ironhorse-regexp` | 13 (2) | 69 | 3 | 0 |
+| `ironhorse-snapshot` | 71 (30) | 528 | 147 | 25 |
+| `ironhorse-vm` | 164 (27) | 1,023 | 210 | 18 |
+
+Every failure falls in one of four classes, by its last panic:
+
+| Class | compile | regexp | snapshot | vm |
+|---|---:|---:|---:|---:|
+| Threads: the test runs its body on a spawned thread with a native-size stack, and wasip1 has none | 8 | 3 | 3 | 173 |
+| Process id: a scratch directory, `FileStore` or CAS temporary is named with `std::process::id()` | 0 | 0 | 140 | 0 |
+| A file without a preopen: source scans, fixtures and corpus directories read by host path | 1 | 0 | 2 | 37 |
+| Error values differ by width (B7): `image.rs`'s two over-allocation tests expect the native message | 0 | 0 | 2 | 0 |
+
+The thread class includes all of `native_recursion_budget` and the suites that wrap their body
+in `NATIVE_STACK_BYTES`.
+The file class includes 14 `gc_visitation_registry` tests that fail on a `LazyLock` poisoned by
+the first failed source read.
+Apart from the width row, no failure is a wrong result or computron count.
+`golden_computrons`, `math_determinism`, `math_provider_comparison`,
+`parse_meter_determinism` and the RegExp `compile_golden` pass, and so do the tests that catch
+panics, which rely on the rebuilt std's unwinding.
+
+For a follow-up deciding what to gate: the 185 binaries without a failure (21, 11, 30 and 123)
+pass as they are.
+The thread class needs those tests to run inline on targets without threads, taking their stack
+from `max-wasm-stack`.
+The process-id class needs scratch names that do not read the process id; the store's and the
+CAS's temporaries no longer read it (B7), but the tests' own scratch directories still do.
+The width row's cause is fixed: both targets now refuse those counts with the native message
+(B7).
+The file class needs preopened directories, which were not tried, or is native-only by nature,
+like the source scans.
+
+## Browser-specific considerations
+
+Everything above applies in a browser.
+The following is specific to it, measured in headless Chromium 141 unless marked otherwise.
+Firefox and Safari were not available to test.
+
+- **Target.**
+  `wasm32-unknown-unknown` is the natural target.
+  The cdylib imports nothing, so it needs neither a WASI shim nor `wasm-bindgen`.
+  A small `extern "C"` surface was enough to drive it: `alloc`, `set_ceiling`,
+  `eval(ptr, len)` and `out_ptr`.
+- **The stack is the main problem** (B3).
+  A page cannot configure it.
+  Among the 42 B3 cases the main thread fails only the `JSON.stringify` ceiling (cold).
+  It also traps accepted compiler chains and deep-object `JSON.stringify`
+  ([STACK-DEPTH-REFACTOR.md §1.3](STACK-DEPTH-REFACTOR.md#13-what-traps-today)).
+  A dedicated **Web Worker has a smaller stack**.
+  17 of 42 cases trap there, including an accepted 2,016-layer Proxy chain.
+  `--js-flags=--stack-size=4000` fixed the main thread but not the Worker.
+  The Worker's limit is a Blink constant, `kWorkerMaxStackSize = 500 * 1024`, not the V8 flag
+  (see STACK-DEPTH-REFACTOR.md
+  [§1.2](STACK-DEPTH-REFACTOR.md#12-two-stacks-on-wasm-and-the-host-limits)); a page could not
+  pass the flag anyway.
+  This is a real tension.
+  Long cranks belong in a Worker so they do not freeze the page, and the Worker is where the
+  stack is smallest.
+  In practice, browser support depends on the refactors in B3.
+- **A trap poisons the instance, cumulatively.**
+  After a stack-overflow `RangeError`, the same instance accepted another call and returned
+  `2` for `1+1`, so nothing in the platform forces the embedder to notice.
+  But a trap skips function epilogues, so the shadow-stack pointer is not restored, and each
+  trap leaks shadow stack.
+  In workerd (request handler and Durable Object) a loop of trap, then `1+1`, kept working for
+  10 iterations; on the 11th, and from then on, even `1+1` trapped (Node: the 12th).
+  No destructors run either, so any `RefCell` borrowed at the trap stays borrowed
+  (*inferred* for the browser).
+  The embedder must discard the instance after **any** trap and restore from a snapshot.
+- **Synchronous compilation is capped.**
+  Chromium refuses `new WebAssembly.Module(bytes)` on the main thread above 8 MB
+  ("WebAssembly.Compile is disallowed on the main thread, if the buffer size is larger than
+  8MB").
+  The module is 6.9 MB today and was accepted, but debug info or more ICU data would cross the
+  cap.
+  Use `WebAssembly.compileStreaming` or `WebAssembly.compile`, or compile in a Worker.
+- **Exception handling.**
+  Chromium 141 accepted both the legacy and the `exnref` encodings (B2).
+  The 8 MiB-shadow-stack runs used the legacy encoding only.
+  Older browser engines may accept only the legacy form (*inferred*).
+- **Memory** (B8).
+  Desktop headless Chromium grew a memory to the full 4 GiB.
+  Mobile browsers typically cap lower (*inferred*).
+  The engine's default ceilings allow a footprint above 1 GB, so browser ceilings must be set
+  from the memory cap, not left at the defaults.
+  As on Cloudflare, ceilings alone are not enough: array items and side tables must also be
+  admitted against them (B7, B8).
+- **No threads.**
+  The engine is single-threaded, so it needs no `SharedArrayBuffer` and no cross-origin
+  isolation headers (COOP/COEP).
+- **Content Security Policy.**
+  Compiling wasm needs `'wasm-unsafe-eval'` (or `'unsafe-eval'`) in `script-src`.
+  That matters for extension and strict-CSP deployments (*inferred*, standard behavior).
+- **Persistence.**
+  There is no SQLite.
+  The store seam (B5) would be backed by IndexedDB or the Origin Private File System.
+  OPFS synchronous access handles are available only in Workers (*inferred*).
+- **Cross-browser determinism.**
+  Scalar wasm floating point is deterministic except for NaN bit patterns, which the engine
+  canonicalizes, and `consensus` removes the platform libm.
+  Both assume the host thread's default floating-point environment (B7, latent issues).
+  The build must not enable `relaxed-simd`, whose results are implementation-defined.
+  rustc does not enable any SIMD for these targets by default.
+  B7 applies unchanged.
+  Only Chromium was measured.
+- **Download size.**
+  The module is 6.9 MB before `wasm-opt` and compression, including ICU normalizer and
+  segmenter data.
+
+## Cloudflare (workerd)-specific considerations
+
+Everything in the browser section about V8 applies, because workerd embeds V8.
+The following was measured in local workerd 1.20260923.1 (V8 15.4.80.5), in a request handler
+and in a SQLite-backed Durable Object.
+Local workerd enforces no memory or CPU limit (`NullIsolateLimitEnforcer`,
+`src/workerd/server/server.c++:3305`), so production limits are cited from the Cloudflare
+documentation, not measured.
+
+- **The module must be bundled.**
+  `new WebAssembly.Module(bytes)`, `WebAssembly.compile(bytes)` and
+  `WebAssembly.instantiate(bytes)` all fail with "Wasm code generation disallowed by embedder"
+  (`src/workerd/jsg/setup.c++:623-627`).
+  `WebAssembly.instantiate` of a module bundled with the Worker succeeds.
+  The browser advice to use `compileStreaming` does not apply.
+- **Exception handling.**
+  Both encodings load by default.
+  With `--no-wasm-legacy-eh`, the legacy build fails at startup ("Invalid opcode 0x06") while the
+  `exnref` build runs, so `exnref` is the encoding to ship (B2).
+- **The stack cannot be raised** (B3).
+  - 18–24 of the 25 B3 cases match native, depending on V8's tier state: fresh instances
+    matched 24 and one run after natural tier-up 23, in a request handler or a Durable Object.
+    With TurboFan pinned (`--no-liftoff`), a request handler matched 18; the 7 that trap
+    include the accepted 2,016-layer Proxy chain
+    ([STACK-DEPTH-REFACTOR.md §1.3](STACK-DEPTH-REFACTOR.md#13-what-traps-today)).
+  - The `JSON.stringify` ceiling traps in both.
+  - The Proxy `[[Call]]` chain passes on a cold run and traps after V8 tiers up: `--liftoff-only`
+    passed 6 of 6 runs, `--no-liftoff` trapped 6 of 6.
+  - `JSON.stringify` first traps at depth 1,529 under Liftoff (the same with an explicit
+    `--stack-size=984`, V8's default) and at 1,343–1,376 after tier-up.
+    Native accepts 2,000.
+  - Every case passes with `--stack-size=2000`, but that is a `v8Flags` setting of self-hosted
+    workerd ("Use at your own risk", `workerd.capnp:70`).
+    The Cloudflare documentation describes no stack setting for Workers.
+
+  So on Cloudflare, as in browsers, the stack refactors in
+  [STACK-DEPTH-REFACTOR.md](STACK-DEPTH-REFACTOR.md) are required, not optional.
+- **A trap poisons the instance, cumulatively** (see the browser section).
+  In a Durable Object this is a guest-triggerable wedge: an embedder that caches the instance
+  across events will fail every event after about ten traps, until the object is evicted.
+  Each trap also grows linear memory by about 4.1 MiB, since nothing frees what the trapped
+  call allocated (*inferred*): under Node 22 the same module grew from 11.25 MiB to 52.56 MiB
+  over ten `JSON.stringify` traps.
+- **Unwinding across the JS boundary needs `extern "C-unwind"`.**
+  If the host calls back into wasm from a Durable Object's transaction callback, the call
+  re-enters wasm from JS; a host can avoid that by running the whole crank inside one callback.
+  A Rust unwind crossing an `extern "C"` export or import aborts (`RuntimeError: unreachable`).
+  With `extern "C-unwind"` on both, an outer `catch_unwind` receives the original payload and the
+  transaction rolls back.
+  A JS exception thrown by an import (for example `sql.exec`) is not caught by `catch_unwind`.
+  Through an `extern "C"` import it also skips Rust destructors, so a `RefCell` borrowed at that
+  moment stays borrowed and later calls trap (local workerd).
+  Through an `extern "C-unwind"` import the destructors run (Node 22, both EH encodings).
+  Host imports should catch JS exceptions and return error codes.
+- **Memory** (B8).
+  An instance starts at 11,468,800 bytes of linear memory, 8 MiB of it the shadow stack (about
+  7 MB with the 4 MiB shadow stack B3 recommends).
+  Under the default ceilings, the slot ceiling halts at 66,912,256 bytes of linear memory.
+  A string push loop halts at the chunk ceiling at 599,392,256 bytes, with the same computrons
+  natively; string doubling reaches 1.21 GB (B8).
+  Cloudflare's 128 MB limit is per isolate, "including the JavaScript heap and WebAssembly
+  allocations", and one isolate can host several Durable Objects (Workers limits and Durable
+  Object in-memory-state documentation).
+  Past the limit, the runtime "lets in-flight requests complete and creates a new isolate for
+  subsequent requests" (Workers limits), which resets every Durable Object in the isolate.
+  No halt inside the engine reports that, and local workerd enforces no limit, so whether
+  production also fails `memory.grow` first, as a capped Wasmtime does, is not known.
+  Ceilings for Cloudflare must be set well below the defaults, but ceilings alone are not
+  enough: array items and side tables must also be admitted against them first (B7, B8).
+  The instance should be recycled when its linear memory passes a threshold, since it never
+  shrinks.
+- **CPU.**
+  Computrons do not bound CPU time uniformly: 14.55 million per second on a tight loop against
+  0.119 million per second on `indexOf` over a 2 MB string (Node).
+  Nothing can preempt a synchronous wasm call.
+  A crank that exceeds the per-event CPU limit (30 s by default) resets the object instead of
+  halting (*inferred* from the documentation; local workerd enforces no CPU limit).
+- **Speed.**
+  A RegExp-backtracking workload ran 1.5–2.7× slower than native, on a contended host
+  (indicative only).
+  The first evaluation in a fresh isolate took 78–174 ms under Liftoff, and later ones 3–19 ms.
+- **Size.**
+  The module is 6.9 MB raw, 3.2 MB with gzip and 2.6 MB with Brotli.
+  Workers allow 64 MiB uncompressed, and global scope must finish within 1 second.
+
+## Not blockers (verified)
+
+- **Host imports.**
+  The `wasm32-wasip1` module imports only `random_get`, `args_*`, `environ_*`, `fd_write` and
+  `proc_exit`, and most of those come from the probe's own `main`.
+  The `wasm32-unknown-unknown` cdylib imports **nothing**.
+- **The snapshot's 32-bit overflow refusals** pass on WASI (`test-snapshot-wasi.py`).
+- **ICU** (`icu_normalizer`, `icu_segmenter` with compiled data) builds and runs:
+  `'Å'.normalize('NFC')` gives length 1.
+- **Casting edge cases.**
+  21 typed-array, `ArrayBuffer`, `DataView`, `repeat`, `padEnd`, `join`, `Array` length and
+  sparse-index cases at 2^29 to 2^32 gave identical results and computrons natively and on
+  wasm32 (Wasmtime).
+
+## Not investigated
+
+- Restoring a wasm32-written Thixotrope heap natively.
+  At the engine level, the B7 audit restored snapshots in both directions: a 45-feature heap
+  restored with identical results and computrons, but a wasm32 snapshot holding a `RegExp` that
+  only wasm32 compiles is refused natively (B7).
+  In the other direction, the Cloudflare verification imported two natively written Thixotrope
+  heaps into a wasm32 instance under Node.
+  They were a 7.65 MB SES boot heap and a 17.27 MB counter vat, and each resumed lazily and
+  eagerly and ran `1+1` and the outbound drain.
+  It had to pass the native profile string, because Thixotrope's runtime profile hashes the
+  worker executable (`packages/thixotrope/src/ironhorse-runtime.js:117-129`) and resume requires
+  an exact signature match (`ironhorse-snapshot/src/format.rs:437-438`).
+  The engine's boot fingerprints already match between native and wasm builds, so moving heaps
+  between builds needs a platform-neutral profile and the B7 fixes.
+  See also the B7 decode hazards.
+- Performance beyond the one workload measured in the Cloudflare section (1.5–2.7× native).
+- Firefox and Safari.
+- `wasm32-wasip2` and the component model, `wasm64`, and `wasm32-wasip1-threads`.
+- An abort-mode build (B1 option 3) was not built.
+- Production Cloudflare: its stack size, memory enforcement and CPU enforcement cannot be
+  measured in local workerd.
+
+## Appendix: reproduction
+
+A standalone probe crate (outside the workspace; copy `rust-toolchain.toml` and `Cargo.lock`
+from `rust/engine`) depends on `ironhorse-vm` (with `consensus` for B4), `ironhorse-compile`
+and `ironhorse-runtime`.
+It compiles one source string, links intrinsics, installs `IronhorseSourceCompiler`, runs it,
+and prints `halt`, `result` and `computrons`:
+
+```rust
+let (code, symbols) = ironhorse_compile::compile_atoms_with(src, false)?;
+let mut vm = ironhorse_vm::Interp::new();
+vm.link_intrinsics(&ironhorse_vm::parse_symbols(&symbols));
+vm.set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler));
+let out = vm.run(&code);
+```
+
+Two shapes were built:
+
+- A `bin` for `wasm32-wasip1`, run under Node and Wasmtime.
+- A `cdylib` for `wasm32-unknown-unknown` that exports `alloc`, `set_ceiling`,
+  `eval(ptr, len)` and `out_ptr`, run in Chromium.
+
+Toolchain setup and builds:
+
+```sh
+rustup target add wasm32-wasip1 wasm32-unknown-unknown   # in rust/engine (1.91.1)
+rustup component add rust-src
+# B1, the stable failure:
+RUSTFLAGS="-C panic=unwind" cargo build --release --target wasm32-wasip1
+# B1 workaround; for exnref (Wasmtime) add -C llvm-args=-wasm-use-legacy-eh=false:
+RUSTC_BOOTSTRAP=1 \
+RUSTFLAGS="-C panic=unwind -C target-feature=+exception-handling -C link-arg=-zstack-size=4194304" \
+  cargo build -Zbuild-std=std,panic_unwind --release --target wasm32-wasip1
+```
+
+The shadow stack is 4 MiB, per E1 of
+[STACK-DEPTH-REFACTOR.md §4.7](STACK-DEPTH-REFACTOR.md#47-class-e-host-level-escape-hatches):
+the worst accepted composition measured needs 2,611,856 B, so 2 MiB is too small today.
+Keep 4 MiB until that report's D1, D2, B5, B6 and B7 land, and lower it (to 2 MiB on
+Cloudflare, whose 128 MB isolate limit counts it) only once the painted shadow marks (lane
+B, `--paint`) for the U2-U4 compositions support it.
+The figures above were measured with 8 MiB; link with `-zstack-size=8388608` to reproduce
+them.
+`scripts/build-wasm.py` is the recipe's home, in its exnref form (B2), with `consensus` on
+(B4); `stack-lanes/build_probe.py` imports its flags and environment and also exports
+`__stack_pointer`, and lane B's hosts, run with `--paint`, paint the shadow stack and fail when
+a mark comes within 64 KiB of it.
+
+Running each host:
+
+- **Node:** `node:wasi` (`new WASI({version: 'preview1', …})`, as in
+  `scripts/test-snapshot-wasi.py`), with `--stack-size=N` for B3.
+  Keep programs well below 0.6 GB of memory (B8).
+- **Wasmtime:** `pip install wasmtime` (exceptions are on by default in 49), with
+  `Config.max_wasm_stack` for B3.
+  Run it on a host thread with more stack than `max_wasm_stack`.
+- **Chromium:** Playwright's `chromium.launch({executablePath: '/opt/pw-browsers/chromium'})`
+  on a page served over HTTP.
+  The page compiles with `WebAssembly.compile`, uses a fresh instance per case, and repeats
+  each case in a dedicated Worker.
+
+The B3 sources are copied verbatim from `ironhorse-vm/tests/native_recursion_budget.rs`, plus
+the within-budget twins (2,016 layers, 63 and 64 levels, 511 blocks, a 990-deep `?:` chain).

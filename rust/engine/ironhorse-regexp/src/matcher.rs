@@ -2,7 +2,9 @@
 //! (`xsre.c`). It interprets the integer step stream the [`crate::compile`]
 //! pass emits, using an explicit state stack for backtracking, and meters
 //! `XS_REGEXP_METERING` per dispatched step — the matcher's consensus
-//! cost, and the number the parity suite pins bit-exact against the pin.
+//! cost, deterministic per release (Iron Horse's own frozen value; drift
+//! against the XS pin is advisory telemetry — XS-computron parity is a
+//! non-goal).
 //!
 //! The C engine keeps its backtrack states as a linked list threaded
 //! through the machine stack or `c_malloc`; the safe port keeps them in a
@@ -60,6 +62,10 @@ pub struct MatchOutcome {
     pub aborted: bool,
     /// The deterministic scratch or backtracking storage ceiling was reached.
     pub resource_limit: bool,
+    /// The host allocator refused backtracking storage the ceilings had
+    /// admitted. Unlike [`Self::resource_limit`] this says nothing about the
+    /// pattern or the subject: it depends on the host's free memory.
+    pub host_allocation_failed: bool,
 }
 
 impl MatchOutcome {
@@ -121,23 +127,50 @@ pub const MATCH_CHECK_STRIDE: u64 = 1024;
 pub const MAX_MATCH_STATES: usize = 65_536;
 pub const MAX_MATCH_BYTES: usize = 64 << 20;
 
+/// Consensus byte charges for the matcher's retained records. They decide
+/// `resource_limit`, so they must not follow the host pointer width as
+/// `size_of` does (`State` holds a `Vec`, `AssertionData` a `usize`). These
+/// are the audited 64-bit layouts; a 64-bit build asserts they still agree.
+const STATE_CHARGE: usize = 40;
+const ASSERTION_CHARGE: usize = 16;
+const QUANTIFIER_CHARGE: usize = 12;
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(
+    std::mem::size_of::<State>() == STATE_CHARGE
+        && std::mem::size_of::<AssertionData>() == ASSERTION_CHARGE
+        && std::mem::size_of::<QuantifierData>() == QUANTIFIER_CHARGE
+);
+
+/// Why [`save_captures`] could not save a backtracking state.
+enum SaveStop {
+    /// [`MAX_MATCH_STATES`] or [`MAX_MATCH_BYTES`] refused it.
+    Limit,
+    /// The limits admitted it and the host allocator refused it.
+    Host,
+}
+
 fn save_captures(
     states: &mut Vec<State>,
     captures: &[(i32, i32)],
     base_bytes: usize,
-) -> Option<Vec<(i32, i32)>> {
-    let state_bytes = std::mem::size_of::<State>().checked_add(std::mem::size_of_val(captures))?;
-    let count = states.len().checked_add(1)?;
-    if count > MAX_MATCH_STATES
-        || base_bytes.checked_add(count.checked_mul(state_bytes)?)? > MAX_MATCH_BYTES
-    {
-        return None;
+) -> Result<Vec<(i32, i32)>, SaveStop> {
+    let admitted = (|| {
+        let state_bytes = STATE_CHARGE.checked_add(std::mem::size_of_val(captures))?;
+        let count = states.len().checked_add(1)?;
+        (count <= MAX_MATCH_STATES
+            && base_bytes.checked_add(count.checked_mul(state_bytes)?)? <= MAX_MATCH_BYTES)
+            .then_some(())
+    })();
+    if admitted.is_none() {
+        return Err(SaveStop::Limit);
     }
-    states.try_reserve(1).ok()?;
+    states.try_reserve(1).map_err(|_| SaveStop::Host)?;
     let mut saved = Vec::new();
-    saved.try_reserve_exact(captures.len()).ok()?;
+    saved
+        .try_reserve_exact(captures.len())
+        .map_err(|_| SaveStop::Host)?;
     saved.extend_from_slice(captures);
-    Some(saved)
+    Ok(saved)
 }
 
 /// Match a compiled `program` against `subject` (the caller's UTF-8 or XS
@@ -187,14 +220,8 @@ pub fn match_regexp_budgeted(
     let base_bytes = [
         (capture_count, std::mem::size_of::<(i32, i32)>()),
         (name_count, std::mem::size_of::<i32>()),
-        (
-            program.assertion_count,
-            std::mem::size_of::<AssertionData>(),
-        ),
-        (
-            program.quantifier_count,
-            std::mem::size_of::<QuantifierData>(),
-        ),
+        (program.assertion_count, ASSERTION_CHARGE),
+        (program.quantifier_count, QUANTIFIER_CHARGE),
     ]
     .into_iter()
     .try_fold(0usize, |sum, (n, width)| {
@@ -208,6 +235,7 @@ pub fn match_regexp_budgeted(
             match_meter_raw: 0,
             aborted: false,
             resource_limit: true,
+            host_allocation_failed: false,
         };
     };
 
@@ -235,6 +263,7 @@ pub fn match_regexp_budgeted(
     let mut until_check: u64 = MATCH_CHECK_STRIDE;
     let mut aborted = false;
     let mut resource_limit = false;
+    let mut host_allocation_failed = false;
     let mut result = false;
     let mut start = start;
 
@@ -304,11 +333,17 @@ pub fn match_regexp_budgeted(
                         assertions[ai].offset = offset;
                         assertions[ai].first_state = states.len();
                         let sequel = code[p];
-                        let Some(saved_captures) =
-                            save_captures(&mut states, &captures, base_bytes)
-                        else {
-                            resource_limit = true;
-                            break 'scan;
+                        let saved_captures = match save_captures(&mut states, &captures, base_bytes)
+                        {
+                            Ok(saved) => saved,
+                            Err(SaveStop::Limit) => {
+                                resource_limit = true;
+                                break 'scan;
+                            }
+                            Err(SaveStop::Host) => {
+                                host_allocation_failed = true;
+                                break 'scan;
+                            }
                         };
                         states.push(State {
                             step: sequel,
@@ -522,11 +557,17 @@ pub fn match_regexp_budgeted(
                         step = code[p];
                         p += 1;
                         let sequel = code[p];
-                        let Some(saved_captures) =
-                            save_captures(&mut states, &captures, base_bytes)
-                        else {
-                            resource_limit = true;
-                            break 'scan;
+                        let saved_captures = match save_captures(&mut states, &captures, base_bytes)
+                        {
+                            Ok(saved) => saved,
+                            Err(SaveStop::Limit) => {
+                                resource_limit = true;
+                                break 'scan;
+                            }
+                            Err(SaveStop::Host) => {
+                                host_allocation_failed = true;
+                                break 'scan;
+                            }
                         };
                         states.push(State {
                             step: sequel,
@@ -600,12 +641,18 @@ pub fn match_regexp_budgeted(
                             step = sequel;
                         } else {
                             if quantifiers[qi].min == 0 {
-                                let Some(saved_captures) =
-                                    save_captures(&mut states, &captures, base_bytes)
-                                else {
-                                    resource_limit = true;
-                                    break 'scan;
-                                };
+                                let saved_captures =
+                                    match save_captures(&mut states, &captures, base_bytes) {
+                                        Ok(saved) => saved,
+                                        Err(SaveStop::Limit) => {
+                                            resource_limit = true;
+                                            break 'scan;
+                                        }
+                                        Err(SaveStop::Host) => {
+                                            host_allocation_failed = true;
+                                            break 'scan;
+                                        }
+                                    };
                                 states.push(State {
                                     step: sequel,
                                     offset,
@@ -633,12 +680,18 @@ pub fn match_regexp_budgeted(
                         if quantifiers[qi].max == 0 {
                             step = sequel;
                         } else if quantifiers[qi].min == 0 {
-                            let Some(saved_captures) =
-                                save_captures(&mut states, &captures, base_bytes)
-                            else {
-                                resource_limit = true;
-                                break 'scan;
-                            };
+                            let saved_captures =
+                                match save_captures(&mut states, &captures, base_bytes) {
+                                    Ok(saved) => saved,
+                                    Err(SaveStop::Limit) => {
+                                        resource_limit = true;
+                                        break 'scan;
+                                    }
+                                    Err(SaveStop::Host) => {
+                                        host_allocation_failed = true;
+                                        break 'scan;
+                                    }
+                                };
                             states.push(State {
                                 step,
                                 offset,
@@ -745,12 +798,13 @@ pub fn match_regexp_budgeted(
     }
 
     MatchOutcome {
-        matched: result && !aborted && !resource_limit,
+        matched: result && !aborted && !resource_limit && !host_allocation_failed,
         captures,
         names,
         match_meter_raw: meter,
         aborted,
         resource_limit,
+        host_allocation_failed,
     }
 }
 

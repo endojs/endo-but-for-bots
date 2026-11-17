@@ -1,0 +1,10 @@
+static transferToImmutable           agreement=BothComplete ih_raw=1755440 xs_raw=1755736 ih_c=26 xs_c=26 ih-xs_raw=-296
+static transferToImmutablX           agreement=BothComplete ih_raw=1755720 xs_raw=1755736 ih_c=26 xs_c=26 ih-xs_raw=-16
+static immutable                     agreement=BothComplete ih_raw=1755440 xs_raw=1755728 ih_c=26 xs_c=26 ih-xs_raw=-288
+static immutablX                     agreement=BothComplete ih_raw=1755720 xs_raw=1755728 ih_c=26 xs_c=26 ih-xs_raw=-8
+static sliceToImmutable (control)    agreement=BothComplete ih_raw=1755720 xs_raw=1755736 ih_c=26 xs_c=26 ih-xs_raw=-16
+static sliceToImmutablX (control)    agreement=BothComplete ih_raw=1755720 xs_raw=1755736 ih_c=26 xs_c=26 ih-xs_raw=-16
+runtime transferToImmutable          agreement=BothComplete ih_raw=2017688 xs_raw=2017944 ih_c=30 xs_c=30 ih-xs_raw=-256
+runtime transferToImmutablX          agreement=BothComplete ih_raw=2018224 xs_raw=2017944 ih_c=30 xs_c=30 ih-xs_raw=280
+loop1000 transferToImmutable         agreement=BothComplete ih_raw=1689999688 xs_raw=1689999984 ih_c=25787 xs_c=25787 ih-xs_raw=-296
+loop1000 transferToImmutablX         agreement=BothComplete ih_raw=1690279688 xs_raw=1689999984 ih_c=25791 xs_c=25787 ih-xs_raw=279704

@@ -2,12 +2,11 @@
 
 use ironhorse_262::{dual_run, Agreement};
 
-// FULL agreement — results AND computrons. The suite-wide gap this
-// bar replaces (-4..-8 on the DisposableStack paths, -2 per sync
-// `using`) decomposed into five measured per-operation constants
-// (construct, add-record, use-record disposal, `using` declaration,
-// `using` resource lookup), now charged at the natives; see
-// `DISPOSABLE_STACK_CONSTRUCT_METERING` and siblings in the vm.
+// Observable agreement — completion + result. The per-operation metering
+// constants (`DISPOSABLE_STACK_CONSTRUCT_METERING` and siblings in the vm)
+// were originally measured against XS during bring-up; they are now Iron
+// Horse's own release costs, and computron drift against the oracle here is
+// advisory only (XS-computron parity is a non-goal).
 fn agrees(source: &str) {
     let run = dual_run(source).expect("the XS oracle machine must start");
     assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");

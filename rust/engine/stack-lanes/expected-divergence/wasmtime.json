@@ -1,0 +1,13 @@
+{
+  "config": {
+    "max_wasm_stack": 409600
+  },
+  "expected_divergences": [
+    {
+      "program": "snippet cross-target.slow.js#slot-ceiling-kept-objects-doubling",
+      "site": "embedder-raised ceilings: set_slot_ceiling at 44,739,242",
+      "native": "halt=HeapExhausted result=\"\" meter=68514107510352 digest=08f4403ca4b61c7e parse_meter=24297472 charges=445:e20b08227efdc89c checks=88204109:3c29ed3a13e6a059",
+      "wasm32": "halt=HostAllocationFailed result=\"\" meter=68514107510352 digest=08f4403ca4b61c7e parse_meter=24297472 charges=445:e20b08227efdc89c checks=88204109:3c29ed3a13e6a059"
+    }
+  ]
+}

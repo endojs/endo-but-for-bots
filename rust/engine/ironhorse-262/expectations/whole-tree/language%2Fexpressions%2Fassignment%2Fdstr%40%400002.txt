@@ -63,8 +63,8 @@ language/expressions/assignment/dstr/obj-id-init-yield-ident-invalid.js strict p
 language/expressions/assignment/dstr/obj-id-init-yield-ident-valid.js sloppy pass
 language/expressions/assignment/dstr/obj-id-put-const.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
 language/expressions/assignment/dstr/obj-id-put-const.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/assignment/dstr/obj-id-put-let.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
-language/expressions/assignment/dstr/obj-id-put-let.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/assignment/dstr/obj-id-put-let.js sloppy pass
+language/expressions/assignment/dstr/obj-id-put-let.js strict pass
 language/expressions/assignment/dstr/obj-id-put-unresolvable-no-strict.js sloppy pass
 language/expressions/assignment/dstr/obj-id-put-unresolvable-strict.js strict pass
 language/expressions/assignment/dstr/obj-id-simple-no-strict.js sloppy pass
@@ -155,8 +155,8 @@ language/expressions/assignment/dstr/obj-prop-nested-obj.js sloppy pass
 language/expressions/assignment/dstr/obj-prop-nested-obj.js strict pass
 language/expressions/assignment/dstr/obj-prop-put-const.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
 language/expressions/assignment/dstr/obj-prop-put-const.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/assignment/dstr/obj-prop-put-let.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
-language/expressions/assignment/dstr/obj-prop-put-let.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/expressions/assignment/dstr/obj-prop-put-let.js sloppy pass
+language/expressions/assignment/dstr/obj-prop-put-let.js strict pass
 language/expressions/assignment/dstr/obj-prop-put-order.js sloppy pass
 language/expressions/assignment/dstr/obj-prop-put-order.js strict pass
 language/expressions/assignment/dstr/obj-prop-put-prop-ref-no-get.js sloppy pass

@@ -634,6 +634,16 @@ fn machine_reports_rejections_from_collected_orphan_compartments() {
 /// `GeneratorFunction` call answers `NotImplemented("eval:no-compiler")`,
 /// which would hide what this test measures. `common::TestCompiler` is that
 /// compiler.
+///
+/// **On an UNFROZEN machine**, which is the only shape that still has these
+/// routes. `Machine::new()` performs the whole lockdown operation at
+/// construction, and step 2 of it replaces every one of the five prototypes'
+/// `constructor` with an inert stand-in -- so the loop below would measure
+/// five `TypeError: secure mode`s and nothing about routing.
+/// `a_locked_down_machine_denies_every_prototype_chain_evaluator` pins that
+/// denial; this pins where a reachable evaluator COMPILES, which is the
+/// cross-compartment leak the `global_env` machinery exists to prevent and is
+/// still live for the per-compartment `eval` and `Function` copies.
 #[test]
 fn every_reachable_evaluator_compiles_in_the_calling_compartment() {
     // `link_intrinsics` routes each global binding through
@@ -657,7 +667,7 @@ fn every_reachable_evaluator_compiles_in_the_calling_compartment() {
     // assignment rather than a return: an async function body and a (sync or
     // async) generator body all run their prefix synchronously far enough to
     // perform one, with no job pump.
-    let machine = Machine::new();
+    let machine = Machine::unfrozen_with_start_global_names(None);
     machine
         .set_source_compiler(std::rc::Rc::new(TestCompiler))
         .expect("machine takes a compiler");
@@ -739,6 +749,74 @@ fn every_reachable_evaluator_compiles_in_the_calling_compartment() {
         eval(&start, "({}).constructor.constructor('return answer')()"),
         "default"
     );
+}
+
+/// The other side of the test above: on a machine that IS locked down, none of
+/// those routes resolves to an evaluator at all.
+///
+/// `Machine::new()` runs lockdown step 2 at construction, so each of the five
+/// function-family prototypes carries an inert `constructor` and the only
+/// evaluators a guest can reach are the `eval` and `Function` that
+/// `compartment_evaluator` minted for its OWN global. That is SES's shape after
+/// `lockdown()`, and XS's after `fx_lockdown`: a compartment gets `eval` and
+/// `Function`, and the generator/async families -- which have no global binding
+/// here (`boot.rs:1153`) and were reachable ONLY through a prototype chain --
+/// become unreachable rather than shared.
+///
+/// This is the invariant `CompartmentOptions::global_names` defers to. It
+/// documents itself as "not a security boundary" because it cannot close a
+/// route through a shared prototype; closing that route is what makes the pair
+/// sufficient. Before step 2 ran at construction, neither half did it, and
+/// `({}).constructor.constructor('return 1')()` compiled source in every
+/// compartment of every `Machine`.
+#[test]
+fn a_locked_down_machine_denies_every_prototype_chain_evaluator() {
+    let machine = Machine::new();
+    machine
+        .set_source_compiler(std::rc::Rc::new(TestCompiler))
+        .expect("machine takes a compiler");
+    let mut a = machine.new_compartment();
+    a.set_source_compiler(std::rc::Rc::new(TestCompiler));
+    assert_eq!(eval(&a, "var answer = 'a'; answer"), "a");
+
+    // Its OWN evaluators still work: they are this compartment's objects,
+    // minted after the freeze, and denying them would deny `Compartment` its
+    // point rather than lockdown's.
+    assert_eq!(eval(&a, "Function('return answer')()"), "a");
+    assert_eq!(eval(&a, "eval('answer')"), "a");
+
+    for family in [
+        "({}).constructor.constructor",
+        "(function(){}).constructor",
+        "Object.getPrototypeOf(function*(){}).constructor",
+        "Object.getPrototypeOf(async function(){}).constructor",
+        "Object.getPrototypeOf(async function*(){}).constructor",
+    ] {
+        assert_eq!(
+            eval(
+                &a,
+                &format!(
+                    "try {{ {family}('return 1')(); 'REACHED' }} \
+                     catch (e) {{ e.name + ': ' + e.message }}"
+                )
+            ),
+            "TypeError: secure mode",
+            "{family} still reaches an evaluator on a locked-down machine"
+        );
+    }
+
+    // `Date` is the fifth prototype step 2 poisons, and the one that is not an
+    // evaluator: it is here because `fx_lockdown` poisons it (`xsLockdown.c:127`)
+    // and because `Date` itself must keep working through its own binding.
+    assert_eq!(
+        eval(
+            &a,
+            "try { Date.prototype.constructor(); 'REACHED' } \
+             catch (e) { e.name + ': ' + e.message }"
+        ),
+        "TypeError: secure mode"
+    );
+    assert_eq!(eval(&a, "typeof new Date().getTime()"), "number");
 }
 
 /// `global_names` is PER-ENVIRONMENT, and environments do not inherit.

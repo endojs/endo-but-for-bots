@@ -562,7 +562,9 @@ this repo:
 | [#698](https://github.com/endojs/endo-but-for-bots/pull/698)–[#704](https://github.com/endojs/endo-but-for-bots/pull/704) the #697 bridge cuts (esp. [#701](https://github.com/endojs/endo-but-for-bots/pull/701) mint + export over a swiss-num store) | open (draft) | Six independently mergeable implementation cuts of #697; #701 gives the daemon the exporter role (`host.sturdyRefs().provideSturdyRef`, revocable by forgetting) |
 
 *(The origin design [#510](https://github.com/endojs/endo-but-for-bots/pull/510)
-merged and its `endor`-syscall retention direction was abandoned;
+merged and its `endor`-syscall retention direction was abandoned. Its design
+file has since been transformed into the separate Parcel-over-Slot-Machine
+transport design;
 [#511](https://github.com/endojs/endo-but-for-bots/pull/511)'s competing
 `FinalizationRegistry` retention framing is withdrawn per #539. Both are
 superseded by the #539/#695/#697 line above.)*

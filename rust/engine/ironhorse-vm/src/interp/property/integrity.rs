@@ -1,6 +1,75 @@
 //! Property integrity operations.
 use crate::interp::*;
 
+/// Preserve the outer walk's state when a proxy callback hardens another graph.
+struct HardenGuard {
+    intrinsics: std::rc::Rc<crate::Intrinsics>,
+    previous: bool,
+}
+
+impl HardenGuard {
+    fn enter(intrinsics: &std::rc::Rc<crate::Intrinsics>) -> Self {
+        Self {
+            previous: intrinsics.hardening.replace(true),
+            intrinsics: intrinsics.clone(),
+        }
+    }
+}
+
+impl Drop for HardenGuard {
+    fn drop(&mut self) {
+        self.intrinsics.hardening.set(self.previous);
+    }
+}
+
+/// Clear `XS_DONT_MARSHALL_FLAG` from every instance marked at or after `base`
+/// in `Intrinsics::harden_marks`, and drop those entries.
+///
+/// The marks a walk places are PROVISIONAL until the OUTERMOST walk completes.
+/// XS instead scopes the undo to one walk's own worklist (`fx_harden`'s
+/// `mxCatch`), which is coherent while only one walk exists -- and a Proxy trap
+/// reached from the freeze can always arrange a second, since the trap runs
+/// arbitrary guest code, `harden()` included.
+///
+/// Under re-entry a mark means less than a nested walk reads into it. The outer
+/// walk has queued an instance and not yet frozen it; the nested walk skips
+/// that instance as already hardened, completes, and marks its OWN roots. When
+/// the outer walk then fails and undoes only its own marks, what is left is a
+/// root carrying a mark that promises a freeze nobody performed: every later
+/// `harden()` -- and every `lockdown()` root that reaches it -- short-circuits
+/// on it. `a_nested_harden_cannot_inherit_an_unfinished_walks_marks` and
+/// `lockdown_refreezes_an_intrinsic_a_failed_nested_walk_marked` measure both
+/// ends of that. So a failing walk revokes every mark placed under it,
+/// including those of walks that completed inside it and relied on it.
+///
+/// Revoking rather than withholding is what keeps re-entry TERMINATING: a
+/// nested `harden()` on an instance the running walk has already queued still
+/// returns immediately, as it does on XS. Withholding the mark until the walk
+/// ended was measured against `a_trap_that_hardens_the_walks_own_root_
+/// terminates` -- each nested call starts a fresh walk that re-enters the same
+/// trap, and the engine halts with `ReentryLimit { depth: 2062, limit: 2048 }`.
+///
+/// The recorded indices are only read while a walk is running or by the sweep
+/// at the top of the next walk, and no collection can run in between without
+/// the machine first going quiescent. If one does -- the abnormal-unwind case
+/// -- the worst a recycled index costs is a cleared memo on an unrelated
+/// object, which the next `harden()` of it re-earns.
+///
+/// § Oracle divergences in `designs/ironhorse-native-lockdown.md` carries the
+/// departure.
+fn revoke_harden_marks(
+    slots: &mut crate::value::SlotArena,
+    intrinsics: &crate::Intrinsics,
+    base: usize,
+) {
+    // Take the entries out from under the borrow before touching the arena:
+    // a `for` over the `borrow_mut()` temporary would hold it for the loop.
+    let revoked = intrinsics.harden_marks.borrow_mut().split_off(base);
+    for inst in revoked {
+        slots.get_mut(inst).flag &= !XS_DONT_MARSHALL_FLAG;
+    }
+}
+
 impl Interp {
     /// The global `harden(x)` (`fx_harden` + `fx_hardenFreezeAndTraverse` +
     /// `fx_hardenQueue`, `xsLockdown.c`): the transitive freeze worklist over
@@ -10,7 +79,10 @@ impl Interp {
     /// own property, marking each reached instance `XS_DONT_MARSHALL_FLAG` so
     /// the graph is walked once. Returns `x` (the argument). A non-reference
     /// argument, an already-hardened object, and `harden()` with no argument
-    /// pass through per XS. `xsLockdown.c` calls no `mxMeter`, so the cost is
+    /// pass through per XS. A mark is PROVISIONAL until the outermost walk
+    /// completes, so a walk that fails revokes the marks of every walk nested
+    /// inside it as well -- see [`revoke_harden_marks`].
+    /// `xsLockdown.c` calls no `mxMeter`, so the cost is
     /// the allocation constants; computron parity over a transitive walk into
     /// ironhorse's sparse intrinsics is structurally unavailable, so the corpus is
     /// result-gated (the freeze *result* is faithful).
@@ -22,10 +94,23 @@ impl Interp {
             Payload::Reference(i) => i,
             _ => return Ok(arg0),
         };
+        let intrinsics = self.realm.intrinsics().clone();
+        // An OUTERMOST walk starts from no provisional marks. Finding some
+        // means an earlier walk left the machine without running the revoke
+        // below -- a Rust panic a supervisor caught while keeping the
+        // interpreter, the one unwind no cleanup of ours reaches. They are not
+        // evidence of a completed freeze, so drop them before the
+        // short-circuit that would trust them.
+        let nested = intrinsics.hardening.get();
+        if !nested {
+            revoke_harden_marks(&mut self.slots, &intrinsics, 0);
+        }
         // Already hardened: XS short-circuits (`slot->flag & flag`).
         if self.slots.get(inst).flag & XS_DONT_MARSHALL_FLAG != 0 {
             return Ok(arg0);
         }
+        let _guard = HardenGuard::enter(&intrinsics);
+        let base = intrinsics.harden_marks.borrow().len();
         let mut list: Vec<crate::value::SlotIndex> = Vec::new();
         self.harden_enqueue(inst, &mut list);
         let mut i = 0;
@@ -34,13 +119,19 @@ impl Interp {
                 // `fx_harden` clears the visited/hardened bit from every item
                 // accumulated in its worklist when any proxy trap or property
                 // definition fails. A later harden attempt must retry rather
-                // than short-circuit a partially frozen graph.
-                for &queued in &list {
-                    self.slots.get_mut(queued).flag &= !XS_DONT_MARSHALL_FLAG;
-                }
+                // than short-circuit a partially frozen graph. This revokes
+                // the marks of any walk that COMPLETED inside this one too --
+                // see `revoke_harden_marks` for why their completion was
+                // conditional on this walk's.
+                revoke_harden_marks(&mut self.slots, &intrinsics, base);
                 return Err(halt);
             }
             i += 1;
+        }
+        if !nested {
+            // The outermost walk completed, so every mark placed under it --
+            // this walk's and any nested walk's -- is now what it says.
+            intrinsics.harden_marks.borrow_mut().clear();
         }
         Ok(arg0)
     }
@@ -63,6 +154,8 @@ impl Interp {
             return;
         }
         self.slots.get_mut(inst).flag |= XS_DONT_MARSHALL_FLAG;
+        // Provisional until the outermost walk completes: `revoke_harden_marks`.
+        self.realm.intrinsics().harden_marks.borrow_mut().push(inst);
         self.meter.tick_raw(HARDEN_QUEUE_ITEM_METERING);
         list.push(inst);
     }

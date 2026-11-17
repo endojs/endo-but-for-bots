@@ -152,7 +152,7 @@ fn compact_literal_indices_do_not_allocate_property_names() {
     assert!(run.result_agrees, "{run:?}");
     if !run.computrons_agree {
         eprintln!(
-            "compact array writes must preserve exact XS metering: oracle={} ironhorse={}",
+            "compact-array-write computron drift vs XS (advisory): oracle={} ironhorse={}",
             run.oracle_computrons, run.ironhorse_computrons,
         );
     }

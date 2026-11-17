@@ -26,13 +26,10 @@ use ironhorse_262::{dual_run, Agreement, IronhorseCompile};
 
 /// Assert `source` is a covered parse-phase rejection: ironhorse's own front
 /// end returns a structured `Rejected` (never `Unsupported`/`Panicked`), both
-/// engines abort, and ironhorse presents the bare `SyntaxError` the oracle does.
-/// This is exactly what `evaluate_negative_early` reads to mark a parse-phase
-/// negative `Covered` (ironhorse `Rejected` + an oracle parse rejection). The
-/// oracle's descriptive message (`SyntaxError: invalid private identifier`,
-/// or a strict deferred `SyntaxError: eval #x: undefined private property`) is
-/// its own SyntaxError constructor, so full-string `error_agrees` is *not*
-/// required — only that both are SyntaxError aborts.
+/// engines abort, and ironhorse throws a `SyntaxError` carrying its parser's
+/// message. This is exactly what `evaluate_negative_early` reads to mark a
+/// parse-phase negative `Covered` (ironhorse `Rejected` + an oracle parse
+/// rejection).
 fn covered_syntax_error_rejection(source: &str) {
     let run = dual_run(source).expect("the pinned XS oracle machine must start");
     assert!(
@@ -45,8 +42,8 @@ fn covered_syntax_error_rejection(source: &str) {
         Agreement::BothAbort,
         "{source}: expected both engines to reject at parse: {run:?}"
     );
-    assert_eq!(
-        run.ironhorse_error, "SyntaxError",
+    assert!(
+        run.ironhorse_error.starts_with("SyntaxError: "),
         "{source}: ironhorse must throw a SyntaxError: {run:?}"
     );
     assert!(

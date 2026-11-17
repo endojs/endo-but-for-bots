@@ -19,8 +19,8 @@ language/expressions/new.target/value-via-new.js sloppy pass
 language/expressions/new.target/value-via-new.js strict pass
 language/expressions/new.target/value-via-reflect-apply.js sloppy pass
 language/expressions/new.target/value-via-reflect-apply.js strict pass
-language/expressions/new.target/value-via-reflect-construct.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: NewTarget explicitly defined Expected SameValue(«function [\"f\"] (){[native code]}», «function [\"customNewTarget\"] (){[native code]}») to be true"
-language/expressions/new.target/value-via-reflect-construct.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: NewTarget explicitly defined Expected SameValue(«function [\"f\"] (){[native code]}», «function [\"customNewTarget\"] (){[native code]}») to be true"
+language/expressions/new.target/value-via-reflect-construct.js sloppy pass
+language/expressions/new.target/value-via-reflect-construct.js strict pass
 language/expressions/new.target/value-via-super-call.js sloppy pass
 language/expressions/new.target/value-via-super-call.js strict pass
 language/expressions/new.target/value-via-super-property.js sloppy pass

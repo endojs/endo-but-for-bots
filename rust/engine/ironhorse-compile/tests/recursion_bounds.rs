@@ -71,6 +71,25 @@ fn pin(name: &str, source: impl Fn(usize) -> String + Send + 'static, ok: usize)
     });
 }
 
+/// The ceiling `sweep.py` records for one of its shapes in
+/// `stack-lanes/sweep-pins.json`, the one place a sweep ceiling is written:
+/// re-pinning with `sweep.py --write-pins` moves the nightly sweep's check and
+/// the pins here together. Each shape's source below is the sweep's own.
+fn sweep_pin(shape: &str) -> usize {
+    const PINS: &str = include_str!("../../stack-lanes/sweep-pins.json");
+    let key = format!("\"{shape}\":");
+    let at = PINS
+        .find(&key)
+        .unwrap_or_else(|| panic!("sweep-pins.json pins no shape {shape}"));
+    let value = PINS[at + key.len()..].trim_start();
+    let digits = &value[..value
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(value.len())];
+    digits
+        .parse()
+        .unwrap_or_else(|_| panic!("sweep-pins.json gives {shape} no ceiling: {value:.20}"))
+}
+
 #[test]
 fn cascade_re_entry_is_bounded_at_about_ninety_levels() {
     // Every one of these re-enters the whole precedence cascade per level.
@@ -86,7 +105,7 @@ fn cascade_re_entry_is_bounded_at_about_ninety_levels() {
     pin(
         "template substitutions",
         |d| wrapped("`${", "1", "}`", d),
-        91,
+        sweep_pin("template-nested"),
     );
 }
 
@@ -144,6 +163,180 @@ fn flat_chains_the_grammar_folds_into_deep_trees_are_bounded_by_the_tree_depth_l
         |d| format!("if (a) x; {}else y;", "else if (a) x; ".repeat(d)),
         2044,
     );
+}
+
+#[test]
+fn productions_found_by_the_grammar_sweep_are_bounded() {
+    // The remaining productions that fold operands into a deep tree or nest
+    // on the right: the chain kinds of `rust/engine/stack-lanes/cases.rs` and
+    // the shapes of its `sweep.py` (STACK-DEPTH-REFACTOR §5, lane C), whose
+    // ceilings are read from the sweep's pins (`sweep_pin`). The
+    // tagged-template chain is the corner the report found unpinned; each of
+    // the others is a contract in the same sense as above.
+    pin("tagged templates", |d| format!("f{}", "``".repeat(d)), 2043);
+    pin(
+        "tagged templates with substitutions",
+        |d| format!("f{}", "`${1}`".repeat(d)),
+        sweep_pin("tagged-with-substitution"),
+    );
+    pin("logical and", |d| format!("a{}", " && a".repeat(d)), 2045);
+    pin("logical or", |d| format!("a{}", " || a".repeat(d)), 2045);
+    pin(
+        "nullish coalescing",
+        |d| format!("a{}", " ?? a".repeat(d)),
+        2045,
+    );
+    pin(
+        "comparison chains",
+        |d| format!("a{}", " < a".repeat(d)),
+        2045,
+    );
+    pin(
+        "computed members",
+        |d| format!("a{}", "[0]".repeat(d)),
+        2045,
+    );
+    pin("optional chains", |d| format!("a{}", "?.b".repeat(d)), 1022);
+    pin(
+        "optional calls",
+        |d| format!("a{}", "?.()".repeat(d)),
+        sweep_pin("optional-call"),
+    );
+    pin(
+        "member calls",
+        |d| format!("a{}", ".b()".repeat(d)),
+        sweep_pin("call-then-member"),
+    );
+    pin(
+        "else-if chains with blocks",
+        |d| {
+            format!(
+                "if (a) {{ x; }} {}else {{ y; }}",
+                "else if (a) { x; } ".repeat(d)
+            )
+        },
+        2041,
+    );
+    pin(
+        "labels",
+        |d| {
+            format!(
+                "{}1;",
+                (0..d).map(|i| format!("l{i}: ")).collect::<String>()
+            )
+        },
+        505,
+    );
+    pin(
+        "labeled blocks",
+        |d| {
+            format!(
+                "{}{}",
+                (0..d).map(|i| format!("l{i}: {{ ")).collect::<String>(),
+                " }".repeat(d)
+            )
+        },
+        sweep_pin("labeled-block"),
+    );
+    pin(
+        "try blocks",
+        |d| wrapped("try { ", "", " } catch (e) {}", d),
+        sweep_pin("try"),
+    );
+    pin(
+        "switch cases",
+        |d| wrapped("switch (a) { case 1: ", "", " }", d),
+        sweep_pin("switch"),
+    );
+    pin(
+        "for bodies",
+        |d| wrapped("for (;;) { ", "break;", " }", d),
+        sweep_pin("for"),
+    );
+    pin(
+        "while bodies",
+        |d| wrapped("while (a) { ", "", " }", d),
+        sweep_pin("while"),
+    );
+    pin(
+        "do-while bodies",
+        |d| wrapped("do { ", "", " } while (a);", d),
+        sweep_pin("do-while"),
+    );
+    pin(
+        "with bodies",
+        |d| wrapped("with (a) { ", "", " }", d),
+        sweep_pin("with"),
+    );
+    pin(
+        "array spreads",
+        |d| wrapped("[...", "a", "]", d),
+        sweep_pin("spread-array"),
+    );
+    pin(
+        "call spreads",
+        |d| wrapped("f(...", "a", ")", d),
+        sweep_pin("spread-call"),
+    );
+    pin(
+        "arrow block bodies",
+        |d| wrapped("() => { return ", "1", "; }", d),
+        sweep_pin("arrow-block"),
+    );
+    pin(
+        "new with arguments",
+        |d| wrapped("new f(", "1", ")", d),
+        sweep_pin("new-with-args"),
+    );
+    pin(
+        "function expressions in call arguments",
+        |d| wrapped("f(function () { return ", "1", "; })", d),
+        sweep_pin("function-in-call"),
+    );
+    pin(
+        "default parameters",
+        |d| {
+            format!(
+                "function f(a = {}) {{}}",
+                wrapped("(function (b = ", "1", ") {})", d)
+            )
+        },
+        sweep_pin("default-params"),
+    );
+    pin(
+        "object getters",
+        |d| format!("({})", wrapped("{ get a() { return ", "1", "; } }", d)),
+        sweep_pin("object-getter"),
+    );
+    pin(
+        "class heritage",
+        |d| format!("({})", wrapped("class extends (", "Object", ") {}", d)),
+        sweep_pin("class-extends"),
+    );
+    pin(
+        "class static blocks",
+        |d| wrapped("(class { static { ", "", " } })", d),
+        sweep_pin("class-static-block"),
+    );
+    pin(
+        "await chains",
+        |d| format!("async function f() {{ return {}a; }}", "await ".repeat(d)),
+        sweep_pin("await"),
+    );
+    pin(
+        "yield chains",
+        |d| format!("function* f() {{ return {}a; }}", "yield ".repeat(d)),
+        sweep_pin("yield"),
+    );
+}
+
+#[test]
+fn a_comma_chain_is_a_flat_list_and_needs_no_pin() {
+    // The sweep's one shape without a ceiling: the parser folds a sequence
+    // expression into a list, not a tree, so its compile stack is constant in
+    // the length (`sweep.py` measures 0 B per operand). An 8,192-term chain
+    // compiles; nothing recurses over it.
+    assert!(compile(&format!("1{}", ",1".repeat(8192))).is_ok());
 }
 
 #[test]
@@ -213,6 +406,36 @@ fn a_regexp_literal_nested_past_the_pattern_limit_is_a_syntax_error() {
         );
         let far = compile(&format!("/{}/", wrapped("(", "a", ")", 10_000)));
         assert!(far.is_err(), "never an abort: {far:?}");
+        // The same literal at the deepest cascade level the parser admits
+        // (STACK-DEPTH-REFACTOR §5, Phase 0): the lexer's recursion sits on
+        // top of the parser's, and both fit.
+        let deepest = |groups| {
+            wrapped(
+                "(",
+                &format!("/{}/", wrapped("(", "a", ")", groups)),
+                ")",
+                91,
+            )
+        };
+        assert!(
+            compile(&deepest(512)).is_ok(),
+            "a 512-deep regexp literal at the deepest cascade level compiles"
+        );
+        assert!(
+            matches!(
+                compile(&deepest(513)),
+                Err(ParseError {
+                    kind: ParseErrorKind::Lex(_),
+                    ..
+                })
+            ),
+            "one group past the pattern limit there is still the lex-time SyntaxError"
+        );
+        let past_the_cascade = wrapped("(", &format!("/{}/", wrapped("(", "a", ")", 512)), ")", 92);
+        assert!(
+            is_stack_overflow(&compile(&past_the_cascade)),
+            "one cascade level more is the parser's refusal"
+        );
     });
 }
 
@@ -231,4 +454,68 @@ fn the_budget_is_released_on_the_error_path() {
         );
         assert!(compile(&wrapped("(", "1", ")", 91)).is_ok());
     });
+}
+
+#[test]
+fn chains_near_the_tree_depth_limit_compile_on_a_small_stack() {
+    // The scoper and coder walk a chain the parser folded into a deep tree
+    // with explicit stacks (STACK-DEPTH-REFACTOR.md D2), so no pass recurses
+    // over its links: each of these compiles at or near the tree-depth limit
+    // (a class body or a mixed chain spends some of its levels elsewhere) on a
+    // thread far smaller than one host frame per link would need. A chain
+    // that is one of the sweep's shapes takes its depth from the sweep's pin.
+    let chains: [(&str, String); 16] = [
+        ("binary", wrapped("1+", "1", "", 2045)),
+        ("member", format!("a{}", ".b".repeat(2045))),
+        ("computed", format!("a{}", "[0]".repeat(2045))),
+        ("call", format!("f{}", "()".repeat(2044))),
+        (
+            "method call",
+            format!("a{}", ".b()".repeat(sweep_pin("call-then-member"))),
+        ),
+        ("optional", format!("a{}", "?.b".repeat(1022))),
+        (
+            "optional call",
+            format!("a{}", "?.()".repeat(sweep_pin("optional-call"))),
+        ),
+        ("tagged template", format!("f{}", "``".repeat(2043))),
+        (
+            "tagged substitution",
+            format!(
+                "f{}",
+                "`${1}`".repeat(sweep_pin("tagged-with-substitution"))
+            ),
+        ),
+        ("and", format!("a{}", " && a".repeat(2045))),
+        ("or", format!("a{}", " || a".repeat(2045))),
+        ("nullish", format!("a{}", " ?? a".repeat(2045))),
+        (
+            "else if",
+            format!("if (a) x; {}else y;", "else if (a) x; ".repeat(2044)),
+        ),
+        (
+            "else if with blocks",
+            format!(
+                "if (a) {{ x; }} {}else {{ y; }}",
+                "else if (a) { x; } ".repeat(2041)
+            ),
+        ),
+        (
+            "private member",
+            format!(
+                "class C {{ #b; m() {{ return this{}; }} }}",
+                ".#b".repeat(2000)
+            ),
+        ),
+        ("mixed", format!("a{}", ".b()[0]``.c?.d && a".repeat(300))),
+    ];
+    for (name, source) in chains {
+        let result = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || compile(&source).map(|_| ()))
+            .expect("spawn")
+            .join()
+            .expect("the compiler must not overflow a small stack on a flat chain");
+        assert!(result.is_ok(), "{name}: {result:?}");
+    }
 }

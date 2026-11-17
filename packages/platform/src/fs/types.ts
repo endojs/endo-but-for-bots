@@ -22,28 +22,11 @@ export interface ReadableBlob {
  * Git, and platform LocalBlob Exos.
  */
 export type ReadableBlobRange = ReadableBlob & {
-  getInfo: () => Promise<BlobInfo>;
-  fetch: (
-    offset: bigint,
-    length: bigint,
-  ) => Promise<import('@endo/exo-stream').PassableBytesReader>;
-};
-
-/**
- * The richer LocalBlob surface, with whole-value range conveniences layered
- * on top of `ReadableBlobRange.fetch`.
- */
-export type ReadableBlobRangeRead = ReadableBlobRange & {
-  /**
-   * Whole-value windowed read: the raw bytes of `[offset, offset + length)`,
-   * clamped at EOF, as a `Uint8Array`.
-   */
-  rangeRead: (offset: bigint, length: bigint) => Promise<Uint8Array>;
-  /**
-   * Whole-value line-range read: the file decoded as UTF-8, lines
-   * `[startLine, endLine)` (0-based, end-exclusive) joined with '\n'.
-   */
-  rangeReadText: (startLine: number, endLine: number) => Promise<string>;
+  sha256: () => Promise<string>;
+  size: () => Promise<bigint>;
+  bytes: () => Promise<import('@endo/exo-stream').PassableBytesReader>;
+  byteRange: (start: bigint, end: bigint) => ReadableBlobRange;
+  textRange: (startLine: number, endLine: number) => Promise<ReadableBlobRange>;
 };
 
 /**
@@ -58,9 +41,7 @@ export interface TreeEntry {
 }
 
 /**
- * The `{ algorithm, hash, size }` content-address triple returned by
- * `getInfo()`. `hash` is base64; `algorithm` is `'sha256'`; `size` is the byte
- * length (of the blob, or of a tree's own manifest).
+ * A content address and byte length used internally by the CAS composition.
  */
 export interface BlobInfo {
   algorithm: string;
@@ -71,12 +52,12 @@ export interface BlobInfo {
 /**
  * A SnapshotBlob is a ReadableBlob with a content-addressed identity.
  * `sha256()` returns the digest as base64 (the canonical public hash encoding);
- * the hex form is the internal content-store address. `getInfo()` is the
- * uniform identity accessor (the same shape live blobs and trees expose).
+ * the hex form is the internal content-store address. `size()` returns the
+ * selected byte length.
  */
 export type SnapshotBlob = ReadableBlob & {
   sha256: () => string;
-  getInfo: () => Promise<BlobInfo>;
+  size: () => Promise<bigint>;
 };
 
 /**
@@ -115,12 +96,12 @@ export type DirectoryWriteSource = ReadableBlobSource | ReadableTree;
 /**
  * A SnapshotTree is a ReadableTree with a content-addressed identity.
  * `sha256()` returns the digest as base64 (the canonical public hash encoding);
- * the hex form is the internal content-store address. `getInfo()` is the
- * uniform identity accessor (its `size` is the manifest byte length).
+ * the hex form is the internal content-store address. `size()` returns the
+ * manifest byte length.
  */
 export type SnapshotTree = ReadableTree & {
   sha256: () => string;
-  getInfo: () => Promise<BlobInfo>;
+  size: () => Promise<bigint>;
 };
 
 /**
@@ -128,7 +109,7 @@ export type SnapshotTree = ReadableTree & {
  *
  * This is a local CAS implementation seam, not a public ReadableBlob Exo.
  * `readRange` uses safe-number offsets because it backs the public bigint
- * `ReadableBlobRange.fetch()` method at the daemon boundary.
+ * `ReadableBlobRange.bytes()` method at the daemon boundary.
  */
 export interface ContentStoreBlob {
   makeFileReader: () => import('@endo/stream').Reader<Uint8Array>;

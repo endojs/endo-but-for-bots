@@ -113,6 +113,15 @@ Creates a writer that encodes messages with length prefixes.
 
 **Returns:** A `Writer<Uint8Array, undefined>` that frames messages.
 
+## Related packages
+
+`@endo/lp32` is a sibling to [`@endo/netstring`](../netstring/) (Bernstein
+netstrings) and [`@endo/cbor-frame`](../cbor-frame/) (CBOR byte-string
+framing wrapped in tag 24).
+Each names a different on-the-wire grammar for length-prefixed byte strings.
+The packages are peers: taking a dependency on one of them does not entrain
+a dependency on any of the others.
+
 ## Hardened JavaScript
 
 This package depends on Hardened JavaScript.

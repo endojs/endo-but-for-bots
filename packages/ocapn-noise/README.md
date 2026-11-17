@@ -36,9 +36,46 @@ first message.
      The responder verifies the prefix matches its own published key.
    - **Noise IK message 1**: ephemeral X25519 public key, encrypted
      initiator static, and an encrypted payload carrying the
-     supported encoding versions.
-     Identity hiding (Noise §7.8 property 8): the initiator's static
-     is encrypted on the wire under the responder's static.
+     initiator's Ed25519 verifying key and the supported encoding
+     versions.
+     Identity hiding (Noise §7.8 property 4): the initiator's static
+     is encrypted on the wire under the responder's static, without
+     forward secrecy.
+     The verifying key in the payload is only a claim, so the
+     responder rejects the SYN unless that key converts to the static
+     X25519 key the initiator actually used in the handshake, and has
+     no small-order component.
+     Without this check, an initiator holding any keypair could claim
+     any identity.
+     The Edwards-to-Montgomery conversion drops the sign of x, so the
+     holder of key A can also claim -A: a second identity for the same
+     key holder, not an impersonation.
+     Message 1 carries no freshness (Noise §7.7 destination property
+     2), so anyone who has seen a genuine SYN can replay it.
+     A replay never becomes a session, because it cannot produce the
+     channel-bound `op:start-session` below.
+     Displacing the named peer's existing (unclaimed) session is deferred
+     until `op:start-session` verifies, so a replay cannot close it.
+     A replay can still occupy a crossed-hello settlement slot for the
+     peer — that slot is needed so two genuine simultaneous dials
+     converge on one session — but once no local dial to the peer is in
+     flight and either a handshake has proven or a caller is waiting,
+     settlement waits at most one more handshake timeout for the rest.
+     A sustained replay can therefore delay a dial by at most that much,
+     and cannot keep a failed dial's caller waiting.
+     The same bound means a genuine crossed hello whose second direction
+     takes longer than a handshake timeout to prove is settled without
+     it, which can leave the two sides on different sessions.
+     Total pre-`op:start-session` work is bounded by a cap on concurrent
+     inbound handshakes per local (responder) identity
+     (`maxInProgressPerLocalKey`).
+     When the cap is full, a new SYN evicts the oldest unproven handshake
+     rather than being dropped, so a flood of stalled handshakes cannot
+     lock a genuine peer out.
+     The costs are that every SYN in a flood is now decrypted (one
+     X25519 operation each) before it evicts another, and that a flood
+     fast enough to cycle the whole cap within one round trip can still
+     starve a dial.
 
 2. **SYNACK (responder to initiator)**:
    - **Noise IK message 2**: responder ephemeral, encrypted payload
@@ -105,6 +142,11 @@ The `np` locator's `designator` is the hex-encoded raw Ed25519 public
 key (64 chars).
 An initiator learns the peer's identity up front from the locator
 itself: no extra hint, no out-of-band step.
+`provideSession` requires the designator to be canonical lowercase hex
+(`/^[0-9a-f]{64}$/`) and rejects a weak (small-order or torsion-carrying)
+key: a weak responder static zeroes the `es`/`ss` Diffie-Hellman results,
+which would forfeit identity hiding and let a party holding no keys
+complete the handshake.
 
 Transport plugins:
 

@@ -127,10 +127,21 @@ class Repository(unittest.TestCase):
         """The oracle lane generates `dist-ironhorse/boot.js` and
         `prelude/ironhorse.js`, and `ses_boot_intrinsics.rs` /
         `ses_prelude_reach.rs` read them at runtime. Editing what those
-        artifacts are built from has to re-run the pins that watch them."""
+        artifacts are built from has to re-run the pins that watch them.
+
+        `@endo/ironhorse-prelude` is the one that matters most now: the
+        repairs both artifacts share live THERE, and
+        `ironhorse-pre-shim.js` is a one-line re-export of it. An edit
+        confined to that package is the case this rule exists for, and it
+        is exactly the case an earlier revision of this test missed --
+        every path below it named still resolved, so the suite stayed green
+        while the lane went unselected for the file it guards."""
         for path in [
+            "packages/ironhorse-prelude/prelude.js",
+            "packages/ironhorse-prelude/package.json",
             "packages/test262-runner/src/ironhorse-prelude.js",
             "packages/test262-runner/src/ironhorse-pre-shim.js",
+            "packages/test262-runner/src/install-pre-lockdown-harden.js",
             "packages/test262-runner/scripts/generate-preludes.js",
             "packages/thixotrope/scripts/bundle-ironhorse-worker.mjs",
         ]:
@@ -189,6 +200,56 @@ class Repository(unittest.TestCase):
         self.assertTrue(self.selected("packages/test262-runner/test262/test/ironhorse/regression.js")["test-ironhorse"])
         self.assertTrue(self.selected(".github/workflows/browser-test.yml")["lint"])
         self.assertTrue(self.selected("typedoc.json")["lint"])
+
+    def test_stack_lane_files_engine_tests_include_select_the_matrix(self):
+        """`stack-lanes/` is no crate, so the graph cannot see that
+        `recursion_bounds.rs` reads `sweep-pins.json` and that
+        ironhorse-vm's tests compile `cases.rs` and `paint.rs`: without
+        this rule a bad pin selected no job and merged green."""
+        for path in ["rust/engine/stack-lanes/sweep-pins.json",
+                     "rust/engine/stack-lanes/cases.rs",
+                     "rust/engine/stack-lanes/paint.rs"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["test-ironhorse"])
+        self.assertFalse(self.selected("rust/engine/stack-lanes/lane_c.py")["test-ironhorse"])
+
+    def test_every_engine_change_but_documentation_selects_the_cross_target_differential(self):
+        for path in ["rust/engine/ironhorse-vm/src/interp/admission.rs",
+                     "rust/engine/Cargo.lock",
+                     "rust/engine/stack-lanes/cross_target.py",
+                     "rust/engine/stack-lanes/probe/src/main.rs",
+                     "rust/engine/stack-lanes/differential/cross-target.js",
+                     "rust/engine/stack-lanes/expected-divergence/wasmtime.json"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["cross-target-ironhorse"])
+        for path in ["rust/engine/WASM-BLOCKERS.md", "rust/engine/stack-lanes/README.md",
+                     "packages/cbor/src/encode.js", "rust/ocapn_noise/src/lib.rs"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["cross-target-ironhorse"])
+
+    def test_engine_wasm_build_inputs(self):
+        """The engine's wasm build runs for the members it builds, through the
+        graph, and for the inputs of its own that no crate owns: the recipe,
+        its test, the probe build that shares the recipe, the WASI test
+        script and the engine's toolchain pin. The host-only members, the
+        probe's source and prose do not select it."""
+        for path in ["rust/engine/ironhorse-text/src/lib.rs",
+                     "rust/engine/ironhorse-snapshot/tests/record_count_overflow.rs",
+                     "rust/engine/scripts/build-wasm.py",
+                     "rust/engine/scripts/test-build-wasm.py",
+                     "rust/engine/stack-lanes/build_probe.py",
+                     "rust/engine/scripts/test-snapshot-wasi.py",
+                     "rust/engine/rust-toolchain.toml",
+                     "rust/engine/Cargo.lock"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["build-ironhorse-wasm"])
+        for path in ["rust/engine/xs-oracle/src/lib.rs",
+                     "rust/engine/ironhorse-262/src/lib.rs",
+                     "rust/engine/stack-lanes/probe/src/main.rs",
+                     "rust/engine/WASM-BLOCKERS.md",
+                     "rust/ocapn_noise/src/lib.rs"]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["build-ironhorse-wasm"])
 
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])

@@ -7,8 +7,8 @@ built-ins/TypedArrayConstructors/internals/Delete/BigInt/detached-buffer-realm.j
 built-ins/TypedArrayConstructors/internals/Delete/BigInt/detached-buffer-realm.js strict skip:shared-positive-test-failure
 built-ins/TypedArrayConstructors/internals/Delete/BigInt/detached-buffer.js sloppy pass
 built-ins/TypedArrayConstructors/internals/Delete/BigInt/detached-buffer.js strict pass
-built-ins/TypedArrayConstructors/internals/Delete/BigInt/indexed-value-ab-non-strict.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/internals/Delete/BigInt/indexed-value-ab-strict.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Delete/BigInt/indexed-value-ab-non-strict.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Delete/BigInt/indexed-value-ab-strict.js strict pass
 built-ins/TypedArrayConstructors/internals/Delete/BigInt/indexed-value-sab-non-strict.js sloppy pass
 built-ins/TypedArrayConstructors/internals/Delete/BigInt/indexed-value-sab-strict.js strict pass
 built-ins/TypedArrayConstructors/internals/Delete/BigInt/infinity-detached-buffer.js sloppy pass
@@ -21,7 +21,7 @@ built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-not-numeric-inde
 built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-not-numeric-index-get-throws.js strict pass
 built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-not-numeric-index-non-strict.js sloppy pass
 built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-not-numeric-index-strict.js strict pass
-built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-out-of-bounds-non-strict.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-out-of-bounds-strict.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-symbol.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-symbol.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-out-of-bounds-non-strict.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-out-of-bounds-strict.js strict pass
+built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-symbol.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Delete/BigInt/key-is-symbol.js strict pass

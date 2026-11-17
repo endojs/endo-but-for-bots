@@ -17,8 +17,8 @@ built-ins/Promise/prototype/finally/prop-desc.js sloppy pass
 built-ins/Promise/prototype/finally/prop-desc.js strict pass
 built-ins/Promise/prototype/finally/rejected-observable-then-calls-PromiseResolve.js sloppy pass
 built-ins/Promise/prototype/finally/rejected-observable-then-calls-PromiseResolve.js strict pass
-built-ins/Promise/prototype/finally/rejected-observable-then-calls-argument.js sloppy skip:async:reported-failure
-built-ins/Promise/prototype/finally/rejected-observable-then-calls-argument.js strict skip:async:reported-failure
+built-ins/Promise/prototype/finally/rejected-observable-then-calls-argument.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: The value of resolve.length is expected to equal the value of expected[calls].length Expected SameValue(«1», «0») to be true (the oracle completed)"
+built-ins/Promise/prototype/finally/rejected-observable-then-calls-argument.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: The value of resolve.length is expected to equal the value of expected[calls].length Expected SameValue(«1», «0») to be true (the oracle completed)"
 built-ins/Promise/prototype/finally/rejected-observable-then-calls.js sloppy pass
 built-ins/Promise/prototype/finally/rejected-observable-then-calls.js strict pass
 built-ins/Promise/prototype/finally/rejection-reason-no-fulfill.js sloppy pass
@@ -29,18 +29,18 @@ built-ins/Promise/prototype/finally/resolution-value-no-override.js sloppy pass
 built-ins/Promise/prototype/finally/resolution-value-no-override.js strict pass
 built-ins/Promise/prototype/finally/resolved-observable-then-calls-PromiseResolve.js sloppy pass
 built-ins/Promise/prototype/finally/resolved-observable-then-calls-PromiseResolve.js strict pass
-built-ins/Promise/prototype/finally/resolved-observable-then-calls-argument.js sloppy skip:async:reported-failure
-built-ins/Promise/prototype/finally/resolved-observable-then-calls-argument.js strict skip:async:reported-failure
+built-ins/Promise/prototype/finally/resolved-observable-then-calls-argument.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: The value of resolve.length is expected to equal the value of expected[calls].length Expected SameValue(«1», «0») to be true (the oracle completed)"
+built-ins/Promise/prototype/finally/resolved-observable-then-calls-argument.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: The value of resolve.length is expected to equal the value of expected[calls].length Expected SameValue(«1», «0») to be true (the oracle completed)"
 built-ins/Promise/prototype/finally/resolved-observable-then-calls.js sloppy pass
 built-ins/Promise/prototype/finally/resolved-observable-then-calls.js strict pass
 built-ins/Promise/prototype/finally/species-constructor-throws.js sloppy pass
 built-ins/Promise/prototype/finally/species-constructor-throws.js strict pass
-built-ins/Promise/prototype/finally/species-constructor.js sloppy skip:async:reported-failure
-built-ins/Promise/prototype/finally/species-constructor.js strict skip:async:reported-failure
-built-ins/Promise/prototype/finally/subclass-reject-count.js sloppy skip:async:reported-failure
-built-ins/Promise/prototype/finally/subclass-reject-count.js strict skip:async:reported-failure
-built-ins/Promise/prototype/finally/subclass-resolve-count.js sloppy skip:async:reported-failure
-built-ins/Promise/prototype/finally/subclass-resolve-count.js strict skip:async:reported-failure
+built-ins/Promise/prototype/finally/species-constructor.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: 7 new promises were created Expected SameValue(«5», «7») to be true (the oracle completed)"
+built-ins/Promise/prototype/finally/species-constructor.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: 7 new promises were created Expected SameValue(«5», «7») to be true (the oracle completed)"
+built-ins/Promise/prototype/finally/subclass-reject-count.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Expected SameValue(«5», «7») to be true (the oracle completed)"
+built-ins/Promise/prototype/finally/subclass-reject-count.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Expected SameValue(«5», «7») to be true (the oracle completed)"
+built-ins/Promise/prototype/finally/subclass-resolve-count.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Expected SameValue(«5», «7») to be true (the oracle completed)"
+built-ins/Promise/prototype/finally/subclass-resolve-count.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Expected SameValue(«5», «7») to be true (the oracle completed)"
 built-ins/Promise/prototype/finally/subclass-species-constructor-reject-count.js sloppy pass
 built-ins/Promise/prototype/finally/subclass-species-constructor-reject-count.js strict pass
 built-ins/Promise/prototype/finally/subclass-species-constructor-resolve-count.js sloppy pass

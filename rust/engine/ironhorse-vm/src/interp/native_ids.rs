@@ -44,6 +44,8 @@ pub enum MathId {
     Tan,
     Tanh,
     Trunc,
+    /// `Math.f16round` (`fx_Math_f16round`): the nearest binary16 value.
+    F16round,
 }
 
 /// A native prototype method ironhorse models (dispatched with the receiver as
@@ -288,6 +290,13 @@ pub enum NativeMethod {
     /// objects and consulted by the `instanceof` operator.
     FunctionHasInstance,
     ErrorToString,
+    /// `Error.isError(value)` (`fx_Error_isError`): whether `value` is an
+    /// object with an `[[ErrorData]]` internal slot.
+    ErrorIsError,
+    /// `Math.sumPrecise(items)` (`fx_Math_sumPrecise`): the exact sum of an
+    /// iterable of Numbers, rounded once. Unlike the [`MathId`] functions it
+    /// iterates, and charges per item.
+    MathSumPrecise,
     DisposableStackUse,
     DisposableStackAdopt,
     DisposableStackDefer,
@@ -298,10 +307,16 @@ pub enum NativeMethod {
     AsyncDisposableStackDefer,
     AsyncDisposableStackMove,
     AsyncDisposableStackDisposeAsync,
-    /// A primitive wrapper's `valueOf` (returns the wrapped primitive).
-    WrapperValueOf,
-    /// A primitive wrapper's `toString` (stringifies the wrapped primitive).
-    WrapperToString,
+    /// `Boolean.prototype.valueOf`/`toString`, `Number.prototype.valueOf`
+    /// and `String.prototype.valueOf`/`toString`: the receiver's primitive,
+    /// which a primitive of the type is itself and a wrapper of the type
+    /// holds, or XS's TypeError (`this: not a boolean`, `… number`,
+    /// `… string`).
+    BooleanValueOf,
+    BooleanToString,
+    NumberValueOf,
+    StringValueOf,
+    StringToString,
     /// `Symbol.prototype.toString()` (`fx_Symbol_prototype_toString` →
     /// `fxSymbolToString`): the descriptive string `Symbol(<description>)`.
     SymbolToString,
@@ -518,6 +533,9 @@ pub enum NativeMethod {
     /// yield the next `{value, done}` (mutating and returning the iterator's
     /// reused result object).
     ArrayIteratorNext,
+    /// The for-in enumerator's `next` (`fx_Enumerator_prototype_next`), owned
+    /// by its private prototype.
+    EnumeratorNext,
     /// A `Math.*` static (`xsMath.c`), dispatched ignoring the receiver.
     Math(MathId),
     /// `String.prototype.charCodeAt(pos)` (`fx_String_prototype_charCodeAt`):
@@ -541,6 +559,10 @@ pub enum NativeMethod {
     /// (`fx_String_prototype_substring`): the substring between the clamped,
     /// swapped-if-needed offsets.
     StringSubstring,
+    /// Annex B `String.prototype.substr(start[, length])`
+    /// (`fx_String_prototype_substr`): `length` units from the relative
+    /// `start`, clamped to the string.
+    StringSubstr,
     /// `String.prototype.indexOf(search[,from])`
     /// (`fx_String_prototype_indexOf`): the first index of `search` at or after
     /// `from`, or `-1`. Meters one `mxMeterSome` per non-continuation scanned
@@ -616,6 +638,15 @@ pub enum NativeMethod {
     NumberToString,
     /// `Number.prototype.toLocaleString([locales[, options]])`.
     NumberToLocaleString,
+    /// `Number.prototype.toFixed(fractionDigits)`: the exact value rounded
+    /// to a fixed number of places, a tie to the larger digits.
+    NumberToFixed,
+    /// `Number.prototype.toExponential(fractionDigits)`: one digit before the
+    /// point, the given places after it (or the shortest round-tripping digits).
+    NumberToExponential,
+    /// `Number.prototype.toPrecision(precision)`: `precision` significant
+    /// digits, in fixed or exponential notation by magnitude.
+    NumberToPrecision,
     /// The global `parseInt(string[,radix])` (`fx_parseInt`): the integer
     /// prefix parse. No `mxMeterSome`, no chunk.
     GlobalParseInt,
@@ -630,8 +661,11 @@ pub enum NativeMethod {
     /// freeze worklist over the slot arena — prevent extensions and stamp
     /// every own data property non-writable/non-configurable (accessors
     /// non-configurable), then queue the prototype and every reference-valued
-    /// property, marking each reached instance `XS_DONT_MARSHALL_FLAG`. Returns
-    /// `x`. `xsLockdown.c` calls no `mxMeter`, so the cost is allocation-driven
+    /// property, marking each reached instance `XS_DONT_MARSHALL_FLAG`. That
+    /// mark is PROVISIONAL until the outermost walk completes, so a walk that
+    /// fails revokes the marks of every walk nested inside it
+    /// (`revoke_harden_marks`, `interp/property/integrity.rs`). Returns `x`.
+    /// `xsLockdown.c` calls no `mxMeter`, so the cost is allocation-driven
     /// (the worklist `fxNewSlot`s + the two `fxNewInstance` ownKeys holders per
     /// object). Ironhorse's intrinsics are modeled sparsely, so the transitive
     /// object count diverges from the pin — the freeze *result* is faithful,
@@ -646,6 +680,48 @@ pub enum NativeMethod {
     /// Returns `x`. Allocation-driven metering (the one `fxNewInstance` ownKeys
     /// holder + its at-slots).
     GlobalPetrify,
+    /// The global `lockdown()` (`fx_lockdown`, `xsLockdown.c:74`): rewire the
+    /// function-family (and `Date`) prototypes' `constructor` to an inert
+    /// stand-in, then transitively harden the intrinsic graph. Returns
+    /// `undefined`; a second call is a `TypeError`, as XS's is
+    /// (`xsLockdown.c:90-92`).
+    ///
+    /// Scoped in `designs/ironhorse-native-lockdown.md`. Two of
+    /// `fx_lockdown`'s five steps are deliberately absent because ironhorse
+    /// has no guest `Compartment`: the compartment-global template (`:105`)
+    /// and the `Math`/`Date` duplicates that are pulled INTO that template
+    /// (`:121-137`). What survives of step 4 is `Date.prototype.constructor`,
+    /// which step 2 covers, and `Math.random`, which ironhorse does not
+    /// implement and so has nothing to secure.
+    ///
+    /// **The direct slot write is load-bearing; the order is not.**
+    /// [`Self::GlobalHarden`] walks prototype chains, so a single `harden({})`
+    /// anywhere leaves `Function.prototype.constructor`
+    /// `{writable: false, configurable: false}` and a later
+    /// `[[DefineOwnProperty]]` cannot replace it. XS writes the slot directly
+    /// instead (`fx_lockdown_aux`, `:52`) and so does this, through
+    /// `set_own_unmetered_with_flag` -- which is why the rewire works whenever
+    /// it runs. `do_lockdown` rewires before hardening AND again after, because
+    /// the harden walk can run guest Proxy traps in between.
+    ///
+    /// Allocation-driven metering, like its `harden` sibling — `xsLockdown.c`
+    /// calls no `mxMeter`.
+    GlobalLockdown,
+    /// `Compartment.prototype.evaluate(source)` (`fx_Compartment_prototype_evaluate`,
+    /// `xsModule.c`): compile `source` as a Script in the receiver's
+    /// environment and run it there, returning the completion value.
+    ///
+    /// The receiver must be branded — present in
+    /// [`Interp::guest_compartments`] — or this is a `TypeError`, the same
+    /// discrimination `CollKind` gives `Map.prototype.get`. The environment is
+    /// switched for the duration and restored on both the normal and the
+    /// throwing path, so a guest exception surfaces in the CALLING
+    /// compartment with its own environment intact.
+    CompartmentEvaluate,
+    /// `get Compartment.prototype.globalThis`: the receiver's own global
+    /// object, as an ordinary reference. Branded like
+    /// [`Self::CompartmentEvaluate`].
+    CompartmentGlobalThisGetter,
     /// `$262.detachArrayBuffer(buffer)`, the test262 host hook.
     Test262DetachArrayBuffer,
     /// `JSON.stringify(value[, replacer[, space]])` serializes through
@@ -654,6 +730,12 @@ pub enum NativeMethod {
     JsonStringify,
     /// `JSON.parse(text)` (`fx_JSON_parse`): parse `text` to a value.
     JsonParse,
+    /// `JSON.rawJSON(text)` (`fx_JSON_rawJSON`): a frozen, null-prototype
+    /// raw JSON object whose `rawJSON` property `JSON.stringify` emits as is.
+    JsonRawJson,
+    /// `JSON.isRawJSON(value)` (`fx_JSON_isRawJSON`): whether `value` is an
+    /// object `JSON.rawJSON` made.
+    JsonIsRawJson,
     /// `Map.prototype.set(k, v)` / `WeakMap.prototype.set(k, v)`
     /// (`fx_Map_prototype_set` / `fx_WeakMap_prototype_set`): insert or update
     /// the entry, returning the receiver. A new key allocates the entry slots
@@ -760,13 +842,33 @@ pub enum NativeMethod {
     /// `get ArrayBuffer[Symbol.species]`: the standard accessor returns its
     /// receiver.
     ArrayBufferSpeciesGetter,
-    /// The fixed-buffer-compatible `ArrayBuffer.prototype` accessors.
+    /// `get [Symbol.species]` of `Array`, `Map`, `Set`, `SharedArrayBuffer`
+    /// and `%TypedArray%`: one function per constructor, as XS's
+    /// `fxNextHostAccessorProperty` mints them, each returning its receiver.
+    /// Recorded in `proto_accessors`, so the species readers can tell the
+    /// untouched intrinsic from a guest getter.
+    SpeciesGetter,
+    /// The `ArrayBuffer.prototype` accessors (`fx_ArrayBuffer_prototype_get_*`).
+    ArrayBufferByteLengthGetter,
     ArrayBufferDetachedGetter,
     ArrayBufferMaxByteLengthGetter,
     ArrayBufferResizableGetter,
-    /// `ArrayBuffer.prototype.resize` is recognized but returns
-    /// `Halt::NotImplemented`; only fixed-size buffers are modeled.
+    /// `ArrayBuffer.prototype.resize(newLength)`
+    /// (`fx_ArrayBuffer_prototype_resize`): a resizable buffer's new byte
+    /// length, zero-filling any growth.
     ArrayBufferResize,
+    /// The `SharedArrayBuffer.prototype` accessors
+    /// (`fx_SharedArrayBuffer_prototype_get_*`).
+    SharedArrayBufferByteLengthGetter,
+    SharedArrayBufferGrowableGetter,
+    SharedArrayBufferMaxByteLengthGetter,
+    /// `SharedArrayBuffer.prototype.grow(newLength)`: a growable buffer's new,
+    /// never smaller, byte length.
+    SharedArrayBufferGrow,
+    /// `SharedArrayBuffer.prototype.slice(start, end)`
+    /// (`fx_SharedArrayBuffer_prototype_slice`): a species-constructed
+    /// SharedArrayBuffer holding the byte range.
+    SharedArrayBufferSlice,
     /// `ArrayBuffer.prototype.transfer` / `transferToFixedLength`.
     ArrayBufferTransfer,
     ArrayBufferTransferToFixedLength,
@@ -848,11 +950,18 @@ pub enum NativeMethod {
     /// `Promise.any(iterable)` (`fx_Promise_any`): live iterator consumption,
     /// first fulfillment, or an ordered `AggregateError`.
     PromiseAny,
+    /// `Promise.withResolvers()` (`fx_Promise_withResolvers`): a new
+    /// capability of the receiver, as a `{ promise, resolve, reject }` object.
+    PromiseWithResolvers,
+    /// `Promise.try(callback, ...args)` (`fx_Promise_try`): a new capability
+    /// of the receiver, resolved with the callback's result or rejected with
+    /// what it threw.
+    PromiseTry,
     /// A promise's resolve/reject function (XS's `fxResolvePromise`/
     /// `fxRejectPromise` host functions handed to the executor). Recognized
     /// in the `RUN` dispatch by a `promise_functions` side-table lookup, not
     /// bound as a prototype method; this variant is the marker the
-    /// `alloc_method` name/length machinery uses.
+    /// `alloc_named_method` name/length machinery uses.
     PromiseResolveFunction,
     PromiseRejectFunction,
     /// The anonymous length-2 closure `NewPromiseCapability` passes to a
@@ -875,6 +984,9 @@ pub enum NativeMethod {
     /// annexB stub is literally `*mxResult = *mxThis` — no instance check, no
     /// recompilation, arguments ignored — so the mirror returns `this` as-is.
     RegExpCompile,
+    /// `RegExp.escape(string)` (`fx_RegExp_escape`, `xsre.c`): the string
+    /// with every character that could change a pattern's meaning escaped.
+    RegExpEscape,
     /// `%RegExp.prototype%[Symbol.replace](string, replaceValue)`: coerce the
     /// subject and drive the shared RegExp replacement worker.
     RegExpReplace,
@@ -906,6 +1018,11 @@ pub enum NativeMethod {
     /// TypeError for a non-object `this`, a missing argument, or a refused
     /// define (a frozen receiver, a rejecting proxy trap).
     ErrorStackSetter,
+    /// `%ThrowTypeError%` (ES2024 10.2.4.1; XS's `fxThrowTypeError`): the
+    /// frozen poison behind a strict `arguments.callee` and
+    /// `%Function.prototype%`'s `caller`/`arguments` accessors. Every call
+    /// throws XS's "strict mode" TypeError.
+    ThrowTypeError,
     /// `String.prototype.match(regexp)` (`fx_String_prototype_match`): coerce
     /// the receiver to string, the argument to a RegExp, and dispatch to the
     /// matcher — the non-global path returns `exec`'s result; the global path
@@ -934,6 +1051,18 @@ pub enum NativeMethod {
     MapIteratorNext,
     SetIteratorNext,
     IteratorFrom,
+    /// `Iterator.concat(...items)` (`fx_Iterator_concat`): an Iterator
+    /// Helper yielding each item's iteration in turn.
+    IteratorConcat,
+    /// The Uint8Array base64 and hex members (`fx_Uint8Array_fromBase64`
+    /// &co., `xsDataView.c`): the two statics on `%Uint8Array%` and the four
+    /// methods on `%Uint8Array.prototype%`.
+    Uint8ArrayFromBase64,
+    Uint8ArrayFromHex,
+    Uint8ArraySetFromBase64,
+    Uint8ArraySetFromHex,
+    Uint8ArrayToBase64,
+    Uint8ArrayToHex,
     /// `%WrapForValidIteratorPrototype%.next()`: call the `next` method
     /// captured by `Iterator.from` with the wrapped iterator as receiver.
     IteratorWrapperNext,
@@ -953,9 +1082,51 @@ pub enum NativeMethod {
     /// `set Iterator.prototype[Symbol.toStringTag]`: the symbol-keyed instance
     /// of `SetterThatIgnoresPrototypeProperties`.
     IteratorToStringTagSetter,
+    /// `%IteratorHelperPrototype%.next()`: advance the lazy helper named by
+    /// the receiver's [`IterState`] kind (10 map, 11 filter, 12 take, 13 drop,
+    /// 14 flatMap).
+    IteratorHelperNext,
+    /// `%IteratorHelperPrototype%.return()`: close the underlying iterator and
+    /// latch the helper done, returning `{ value: undefined, done: true }`.
+    IteratorHelperReturn,
     /// One of the Iterator Helper prototype methods, indexed in the order
     /// installed by `create_intrinsics`.
     IteratorHelper(u8),
+    /// `WeakRef.prototype.deref()` (`fx_WeakRef_prototype_deref`,
+    /// `xsMapSet.c`): the `[[WeakRefTarget]]` while it is alive, else
+    /// `undefined`. A live target is kept for the rest of the job
+    /// (`fxKeepDuringJobs`), which the quiescent-only collector satisfies by
+    /// construction: no collection runs before the crank ends.
+    WeakRefDeref,
+    /// `FinalizationRegistry.prototype.register(target, holdings[, token])`
+    /// (`fx_FinalizationRegistry_prototype_register`): append a cell to the
+    /// receiver's `[[Cells]]`. The target and token are held weakly, the
+    /// holdings strongly. Returns `undefined`.
+    FinalizationRegistryRegister,
+    /// `FinalizationRegistry.prototype.unregister(token)`
+    /// (`fx_FinalizationRegistry_prototype_unregister`): drop every cell
+    /// whose token is `token`; `true` when any was.
+    FinalizationRegistryUnregister,
+    /// ECMAScript URI percent encoding and decoding globals.
+    UriEncode,
+    UriEncodeComponent,
+    UriDecode,
+    UriDecodeComponent,
+    /// The Annex B `%Object.prototype%.__proto__` accessor (B.2.2.1,
+    /// `fx_Object_prototype___proto__get` / `…set`): the receiver's
+    /// `[[GetPrototypeOf]]` and `[[SetPrototypeOf]]`.
+    ObjectProtoGetter,
+    ObjectProtoSetter,
+    /// The Annex B legacy accessor helpers of `%Object.prototype%`
+    /// (B.2.2.2-B.2.2.5, `fx_Object_prototype___defineGetter__` &co.).
+    ObjectDefineGetter,
+    ObjectDefineSetter,
+    ObjectLookupGetter,
+    ObjectLookupSetter,
+    /// The Annex B `escape` and `unescape` globals (B.2.1, `fx_escape` /
+    /// `fx_unescape`, `xsGlobal.c`).
+    GlobalEscape,
+    GlobalUnescape,
 }
 
 /// One intrinsic (native) function ironhorse models. The variant is the
@@ -1012,6 +1183,19 @@ pub enum Native {
     Set,
     WeakMap,
     WeakSet,
+    /// `WeakRef` — the weak-reference constructor (`xsMapSet.c` `fx_WeakRef`).
+    /// Constructor-only; the target must be an object (the pinned XS rejects
+    /// symbols, as its `WeakMap` does). The per-instance `[[WeakRefTarget]]`
+    /// lives in the [`Interp::weak_refs`] side table, which the full collector
+    /// clears when the target dies (`fxMarkWeakStuff`).
+    WeakRef,
+    /// `FinalizationRegistry` — the cleanup-callback registry constructor
+    /// (`xsMapSet.c` `fx_FinalizationRegistry`). Constructor-only; the
+    /// callback must be callable. Its `[[Cells]]` live in the
+    /// [`Interp::finalization_registries`] side table; a cell whose target
+    /// dies in a collection is cleaned up at the next job boundary
+    /// (`fxCleanupFinalizationRegistries`).
+    FinalizationRegistry,
     /// The abstract `Iterator` constructor and its helper-method prototype.
     Iterator,
     /// `ArrayBuffer` — the raw byte-buffer constructor (`xsDataView.c`
@@ -1025,6 +1209,18 @@ pub enum Native {
     /// [`Interp::shared_buffers`]); the "shared" distinction only gates
     /// `Atomics.wait`/`notify` and `ArrayBuffer.isView`-style brand checks.
     SharedArrayBuffer,
+    /// `Compartment` — the guest-callable compartment constructor
+    /// (`fx_Compartment`, `xsModule.c:2864`), scoped in
+    /// `designs/ironhorse-guest-compartment.md`.
+    ///
+    /// Constructor-only: a bare `Compartment(...)` call is a `TypeError`, as
+    /// `Map`/`Set`/`Proxy` are. Each instance owns a fresh global object built
+    /// by [`Interp::create_environment`], holding references to the one shared
+    /// intrinsic graph rather than copies, and a fresh `eval`/`Function` bound
+    /// to it ([`Interp::compartment_evaluator`]). The per-instance environment
+    /// handle lives in the [`Interp::guest_compartments`] side table, which is
+    /// also the brand [`Interp::compartment_of`] checks.
+    Compartment,
     /// The non-global abstract `%TypedArray%` constructor, reachable as the
     /// `[[Prototype]]` of every concrete TypedArray constructor. Direct call
     /// and direct construction both throw a `TypeError`.
@@ -1066,6 +1262,23 @@ pub enum Native {
     /// generator** function constructor, reachable as
     /// `(async function*(){}).constructor`.
     AsyncGeneratorFunction,
+    /// The inert stand-in `lockdown()` installs as the function-family and
+    /// `Date` prototypes' `constructor` (`fx_lockdown_aux`, `xsLockdown.c:52`,
+    /// which duplicates `%ThrowTypeError%` and stamps it
+    /// `XS_CAN_CONSTRUCT_FLAG`). Callable AND constructable, and both throw:
+    /// being constructable is the point, since `new
+    /// Function.prototype.constructor(src)` must fail as a secure-mode refusal
+    /// rather than as "not a constructor".
+    ///
+    /// The message is XS's. `fxThrowTypeError` (`xsArguments.c:220`) branches
+    /// on `XS_CAN_CONSTRUCT_FLAG` and says **"secure mode"** for exactly this
+    /// instance, reserving "strict mode" for the arguments-object poison. The
+    /// oracle compares thrown messages, so this is not a free choice.
+    ///
+    /// Minted during boot so snapshots retain native identities by boot index.
+    /// Lockdown freezes their metadata and wires their prototype edges before
+    /// exposing them. Their identities participate in [`Interp::boot_fingerprint`].
+    LockedDownConstructor,
 }
 
 impl Native {
@@ -1110,9 +1323,12 @@ impl Native {
             Native::Set => "Set",
             Native::WeakMap => "WeakMap",
             Native::WeakSet => "WeakSet",
+            Native::WeakRef => "WeakRef",
+            Native::FinalizationRegistry => "FinalizationRegistry",
             Native::Iterator => "Iterator",
             Native::ArrayBuffer => "ArrayBuffer",
             Native::SharedArrayBuffer => "SharedArrayBuffer",
+            Native::Compartment => "Compartment",
             Native::TypedArrayBase => "TypedArray",
             Native::TypedArray(i) => TYPED_ARRAY_TYPES[i as usize].name,
             Native::DataView => "DataView",
@@ -1122,6 +1338,11 @@ impl Native {
             Native::GeneratorFunction => "GeneratorFunction",
             Native::AsyncFunction => "AsyncFunction",
             Native::AsyncGeneratorFunction => "AsyncGeneratorFunction",
+            // XS's is anonymous: `fx_lockdown_aux` sets the duplicate's code
+            // ID to `XS_NO_ID` (`xsLockdown.c:61`). SES's shim names each one
+            // after the constructor it replaces; XS does not, and this follows
+            // XS because the oracle compares what it can see.
+            Native::LockedDownConstructor => "",
         }
     }
 
@@ -1149,9 +1370,21 @@ impl Native {
             // `%GeneratorFunction%`/`%AsyncFunction%`/`%AsyncGeneratorFunction%`
             // each have `length` 1 (their sole formal is `...args`).
             Native::GeneratorFunction | Native::AsyncFunction | Native::AsyncGeneratorFunction => 1,
+            // Only the DEFAULT. `fx_lockdown_aux` takes the length from the
+            // constructor it replaces — 1 for the function family, 7 for
+            // `Date` — so `Interp::do_lockdown` sets `FuncInfo::arity` per
+            // instance and this value is never the one a guest reads.
+            Native::LockedDownConstructor => 1,
             Native::TypedArray(_) => 3,
+            // `fx_Compartment` takes the single options bag. SES's legacy
+            // positional `(globals, modules, options)` form is not XS's
+            // surface and is not modelled.
+            Native::Compartment => 1,
             Native::DataView => 1,
             Native::Date => 7,
+            // `fxBuildHostConstructor(the, mxCallback(fx_WeakRef), 1, …)` and
+            // its FinalizationRegistry twin: one required argument each.
+            Native::WeakRef | Native::FinalizationRegistry => 1,
             Native::Symbol
             | Native::Map
             | Native::Set
@@ -1212,6 +1445,7 @@ impl Native {
             ("Iterator", Native::Iterator),
             ("ArrayBuffer", Native::ArrayBuffer),
             ("SharedArrayBuffer", Native::SharedArrayBuffer),
+            ("Compartment", Native::Compartment),
         ];
         // The concrete TypedArray constructors (`Uint8Array`/…), each a
         // `fx_TypedArray` callback distinguished by its element type index.
@@ -1221,6 +1455,10 @@ impl Native {
         v.push(("DataView", Native::DataView));
         v.push(("Promise", Native::Promise));
         v.push(("RegExp", Native::RegExp));
+        // Appended after the long-standing roster so the boot slot indices of
+        // every earlier intrinsic are unchanged; only the fingerprint moves.
+        v.push(("WeakRef", Native::WeakRef));
+        v.push(("FinalizationRegistry", Native::FinalizationRegistry));
         v
     }
 }

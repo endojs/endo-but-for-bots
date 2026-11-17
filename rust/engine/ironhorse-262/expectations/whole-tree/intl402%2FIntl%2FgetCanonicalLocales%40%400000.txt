@@ -27,14 +27,14 @@ intl402/Intl/getCanonicalLocales/has-property.js sloppy fail:"abort-value-differ
 intl402/Intl/getCanonicalLocales/has-property.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a RangeError\""
 intl402/Intl/getCanonicalLocales/invalid-tags.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Language tag:  Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Language tag: cmn-hans-cn-t-u-ca-u Expected a RangeError to be thrown but no exception was thrown at all\""
 intl402/Intl/getCanonicalLocales/invalid-tags.js strict fail:"abort-value-differs: oracle=\"Test262Error: Language tag:  Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Language tag: cmn-hans-cn-t-u-ca-u Expected a RangeError to be thrown but no exception was thrown at all\""
-intl402/Intl/getCanonicalLocales/length.js sloppy skip:oracle-host-missing-global:Intl
-intl402/Intl/getCanonicalLocales/length.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/length.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/length.js strict skip:oracle-host-missing-intl
 intl402/Intl/getCanonicalLocales/locales-is-not-a-string.js sloppy skip:oracle-host-missing-global:Intl
 intl402/Intl/getCanonicalLocales/locales-is-not-a-string.js strict skip:oracle-host-missing-global:Intl
 intl402/Intl/getCanonicalLocales/main.js sloppy skip:oracle-host-missing-global:Intl
 intl402/Intl/getCanonicalLocales/main.js strict skip:oracle-host-missing-global:Intl
-intl402/Intl/getCanonicalLocales/name.js sloppy skip:oracle-host-missing-global:Intl
-intl402/Intl/getCanonicalLocales/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Intl/getCanonicalLocales/name.js sloppy skip:oracle-host-missing-intl
+intl402/Intl/getCanonicalLocales/name.js strict skip:oracle-host-missing-intl
 intl402/Intl/getCanonicalLocales/non-iana-canon.js sloppy skip:oracle-host-missing-global:Intl
 intl402/Intl/getCanonicalLocales/non-iana-canon.js strict skip:oracle-host-missing-global:Intl
 intl402/Intl/getCanonicalLocales/overriden-arg-length.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: should throw if locales.length throws Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: should throw if locales.length throws Expected a Test262Error but got a RangeError\""

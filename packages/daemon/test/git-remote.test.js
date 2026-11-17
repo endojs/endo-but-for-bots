@@ -65,11 +65,7 @@ const makeFakeGitMount = () => {
     list: async () => [],
     lookup: async () => undefined,
     sha256: () => '',
-    getInfo: async () => ({
-      algorithm: 'sha256',
-      hash: '',
-      size: 0n,
-    }),
+    size: async () => 0n,
   });
   const mount = Far('FakeMount', {
     has: async () => false,

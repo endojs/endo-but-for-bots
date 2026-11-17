@@ -23,8 +23,8 @@ intl402/DateTimeFormat/prototype/formatToParts/era.js sloppy skip:oracle-host-mi
 intl402/DateTimeFormat/prototype/formatToParts/era.js strict skip:oracle-host-missing-global:Intl
 intl402/DateTimeFormat/prototype/formatToParts/formatToParts.js sloppy skip:oracle-host-missing-intl
 intl402/DateTimeFormat/prototype/formatToParts/formatToParts.js strict skip:oracle-host-missing-intl
-intl402/DateTimeFormat/prototype/formatToParts/fractionalSecondDigits.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: fractionalSecondDigits 0 should throw RangeError for out of range Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: string\\\"2\\\"», «string\\\"02\\\"») to be true\""
-intl402/DateTimeFormat/prototype/formatToParts/fractionalSecondDigits.js strict fail:"abort-value-differs: oracle=\"Test262Error: fractionalSecondDigits 0 should throw RangeError for out of range Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: string\\\"2\\\"», «string\\\"02\\\"») to be true\""
+intl402/DateTimeFormat/prototype/formatToParts/fractionalSecondDigits.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: fractionalSecondDigits 0 should throw RangeError for out of range Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: minute part value. no fractionalSecondDigits round down Expected SameValue(«\\\"2\\\"», «\\\"02\\\"») to be true\""
+intl402/DateTimeFormat/prototype/formatToParts/fractionalSecondDigits.js strict fail:"abort-value-differs: oracle=\"Test262Error: fractionalSecondDigits 0 should throw RangeError for out of range Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: minute part value. no fractionalSecondDigits round down Expected SameValue(«\\\"2\\\"», «\\\"02\\\"») to be true\""
 intl402/DateTimeFormat/prototype/formatToParts/length.js sloppy skip:oracle-host-missing-intl
 intl402/DateTimeFormat/prototype/formatToParts/length.js strict skip:oracle-host-missing-intl
 intl402/DateTimeFormat/prototype/formatToParts/lunisolar-leap-months.js sloppy skip:oracle-host-missing-global:Intl

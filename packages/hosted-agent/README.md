@@ -30,6 +30,27 @@ structure into Floot's metadata.
 
 ## Turn durability
 
+### Codex reasoning effort
+
+`codex-reasoning.js` exports `codexResponsesEffort` for the Fae Codex picker and
+subscription Responses adapter.
+It maps the pinned Codex CLI's `ultra` option to its wire value, `max`, preserves
+supported Responses efforts, and returns `undefined` for unknown values.
+New Fae sessions offer the wire values; retained `ultra` recipes still work.
+
+### Snapshot storage
+
+`snapshot-journal.js` provides `makeSnapshotJournal` for versioned snapshots in
+a caller-owned Endo namespace.
+Accounts, pool routing, reset intents, shares and delegated runners each choose
+their own fixed prefix and record shape; the helper does not own those states.
+It publishes the new snapshot before pruning older ones and reads the newest
+sequence, rather than replaying events like Floot's conversation journal.
+The caller must keep one writer per namespace/prefix and drain writes at handoff.
+The helper does not coordinate independent writers or native process cleanup.
+
+### Turn acknowledgement
+
 `turn-ledger.js` is the protocol between dispatching a turn and the consumer
 acknowledging it. A hosted turn is not durable because the provider says it
 finished: Floot commits its own conversation on the terminal event and
@@ -70,8 +91,90 @@ state keeps loading.
 Both defects this module exists to prevent were found in a real adapter, and
 both are covered by `test/turn-ledger.test.js`.
 
+## Session ownership
+
+`@endo/daemon/session-record-store.js` retains a logical session's approved plan and exact
+dependency identities in a host-private daemon directory.
+The shared supervisor supplies the plan as encoded text and the dependency formula IDs.
+Each reference is a separate directory entry, retaining its formula through GC and
+restart without reviving it during inspection.
+Storing IDs only inside plan text would not retain those formulas.
+Storing capabilities inside a marshal record would eagerly revive them when reading
+the record, making cleanup metadata depend on a healthy client.
+
+`create` refuses an existing session name and publishes the plan only after all
+initial references have been retained.
+A failed write leaves an incomplete record with the references acquired so far;
+`inspect` reports an absent plan, and `retain` refuses further construction.
+For a complete record, `retain` adds a newly acquired resource without replacing an
+existing owner; keep any construction name until retention succeeds.
+`release` removes selected incarnation references only after cleanup succeeds,
+keeping the logical plan and stable dependencies for a later incarnation.
+Partial release failures preserve remaining references for retry.
+`remove` passes a passive snapshot to the supervisor's cleanup callback and removes
+the directory only after that callback succeeds.
+Failure retains the original dependencies for retry.
+The cleanup callback must tolerate repetition, including when it succeeded but
+the subsequent directory removal failed.
+
+One supervisor must own the directory and store instance.
+The store serializes mutations and inspection for each session; cleanup callbacks
+must not reenter it for that session.
+The supervisor owns admission, stop ordering, and intentional resolution of recorded
+formula IDs; this store does not start or stop runtimes.
+Keep the directory outside guest powers and prevent other writers from rebinding it.
+The final identity check detects a prior rebind; it is not atomic compare-and-delete
+and does not replace exclusive ownership.
+The store and shared resource registry live in the daemon package so a daemon-local
+supervisor can use them without importing sandbox adapters or native modules.
+All three adapters are wired to it (`provideSessionOwner` in each backend
+module). Running record administration in a shared worker can cause collection
+of a temporary directory to terminate that worker.
+
+## What this package owns for every adapter
+
+- `hosted-agent-policy.js` — the shared `hosted-agent-v1` slice profile:
+  `HOSTED_SLICE_RESOURCES`, `HOSTED_ANCHOR_ARGV`, `sliceWritableBytes`, and the
+  verifier each adapter parameterises with its fixed mount table.
+- `session-supervisor.js` — the one session lifecycle all three native
+  controllers compose.
+- `provider-broker-service.js` and the broker/grant modules — host-held
+  credentials; a slice sees a placeholder.
+- `transcript-records.js` — the stack's record of a conversation, which each
+  adapter restores its CLI's native store from.
+- `turn-channel.js` — the credit-bounded delivery channel, terminal barrier and
+  deadline helper every client builds its turn on.
+- `mcp-bridge.js`, `mcp-server.js`, `mcp-stdio-bridge.js` — Endo tools over a
+  per-session MCP socket for the CLIs that take tools that way.
+
+## Retired session execution powers
+
+The legacy `session-powers.js` module and export have been removed with the old
+Claude client-formula topology.
+Current native controllers start from passive records and acquire dependencies through
+the daemon owner's resolver under the shared supervisor.
+They do not replace passive records with an active bundle that revives native work when read.
+Generic exact-capability retention, rebinding, restart, GC, and remote-adoption coverage
+now lives in daemon tests using a daemon-owned dependency-bundle fixture.
+Before deploying the source removal, retire retained old formulas while their release
+is still available; see the Claude package's
+[retirement gate](../claude-sandbox/docs/legacy-retirement.md).
+
 ## Account visibility
 
 `account.js` and `account-oracle.js` answer what plan a credential is on, how
 much of the rate limit is left, and what a token count costs — without holding
 the credential. See [ACCOUNT-ORACLE.md](./ACCOUNT-ORACLE.md).
+
+## Session inference grants
+
+`makeProviderBrokerGrant` and `makeProviderBrokerGrantIssuer` grant inference until
+explicit revocation or owner/transport shutdown, independently of credential expiry.
+The host keeps credentials and refresh authority and fixes provider routes.
+Models are admitted by what each account's provider lists for it, read through
+the account's own credential owner (`model-catalog.js`); there is no operator
+model list, and an account without discovery admits nothing.
+Request and response size bounds and simultaneous request slots protect host resources;
+completed requests do not exhaust a lifetime budget.
+An open stream holds its slot until upstream EOF, cancellation, or failure.
+Token and dollar spending limits are future application policy, not implicit defaults.

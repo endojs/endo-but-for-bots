@@ -104,26 +104,23 @@ export const makePetStoreMaker = daemonDb => {
       assertValidName(petName);
       assertValidId(formulaIdentifier);
 
-      if (idsToPetNames.hasValue(petName)) {
-        const oldFormulaIdentifier = idsToPetNames.getKey(petName);
-        if (oldFormulaIdentifier === formulaIdentifier) {
-          return;
-        }
+      const oldFormulaIdentifier = idsToPetNames.getKey(petName);
+      if (oldFormulaIdentifier === formulaIdentifier) return;
 
-        if (oldFormulaIdentifier !== undefined) {
-          // Perform cleanup on the overwritten pet name.
-          idsToPetNames.delete(oldFormulaIdentifier, petName);
-          publishNameRemoval(oldFormulaIdentifier, petName);
-        }
-      }
-
-      idsToPetNames.add(formulaIdentifier, petName);
+      // Publish only after persistence succeeds. Otherwise a failed write
+      // poisons the identical-ID fast path: a retry appears successful without
+      // writing the edge, and session revision recovery may drop its intent.
       daemonDb.writePetStoreEntry(
         storeNumber,
         storeType,
         petName,
         formulaIdentifier,
       );
+      if (oldFormulaIdentifier !== undefined) {
+        idsToPetNames.delete(oldFormulaIdentifier, petName);
+        publishNameRemoval(oldFormulaIdentifier, petName);
+      }
+      idsToPetNames.add(formulaIdentifier, petName);
       publishNameAddition(formulaIdentifier, petName);
     };
 

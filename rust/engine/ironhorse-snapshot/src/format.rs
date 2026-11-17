@@ -147,6 +147,15 @@ pub const PRMS: FourCc = FourCc(*b"PRMS");
 /// than wider `ERRD` rows, so an older container stays an
 /// encoding-identical subset and the read range keeps its meaning.
 pub const ESTK: FourCc = FourCc(*b"ESTK");
+/// `WKRF` — the `WeakRef` instances (ledger `WeakRefs` row): owner plus
+/// the weak target, `u32::MAX` once a collection cleared it, owner-ascending.
+/// Ironhorse-specific; emitted only when non-empty (see [`ARRY`]).
+pub const WKRF: FourCc = FourCc(*b"WKRF");
+/// `FNRG` — the `FinalizationRegistry` instances (ledger
+/// `FinalizationRegistries` row): owner, cleanup callback, the CHANGED
+/// flag and the cells (weak target, held value, weak token) in registration
+/// order, owner-ascending. Ironhorse-specific; emitted only when non-empty.
+pub const FNRG: FourCc = FourCc(*b"FNRG");
 /// `NFLR` — the installed-names floor: the id ceiling at
 /// or below which partial install passes leave bindings alone. Four
 /// big-endian bytes. Emitted only when it differs from the name-table
@@ -219,7 +228,22 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// Format 22 adds host-function recipes to the shared FUNC extension.
 /// Format 23 lets `ASYN` carry async generator instances after the
 /// activations, and the `AsyncGenerator*` reaction kinds resume.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 23;
+/// Format 24 lets `ASYN` carry the `Array.fromAsync` accumulations after the
+/// generators, and the `FromAsync*` reaction kinds resume (architecture
+/// finding F127). A payload with no accumulations is byte-identical to what
+/// format 23 wrote; one carrying accumulations but no generators writes a zero
+/// generator count as a positional placeholder, which is the only case where
+/// that count may be zero.
+/// Format 25 adds the `WKRF` and `FNRG` atoms after `NFLR`: `WeakRef`
+/// targets and `FinalizationRegistry` callbacks, cells and cleanup flags
+/// (row schema 6). Both are omitted when their table is empty, so a machine
+/// holding neither writes the format-24 atom sequence under the new stamp.
+/// Format 26 carries resizable buffers: an `ABUF` row whose flags have bit
+/// 2 set (resizable, or growable when shared) is followed by its `u32`
+/// maximum byte length, and a `TARR` or `DVIW` length of `u32::MAX` marks a
+/// view that tracks its buffer's length. A machine with no resizable buffer
+/// writes the format-25 payloads under the new stamp.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 26;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in

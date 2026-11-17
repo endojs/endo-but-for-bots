@@ -1,0 +1,10 @@
+const r=/a/gi; const out={};
+out.bracket=[r["global"], r["flags"], r["source"]];
+out.inOp="global" in r;
+out.protoNames=Object.getOwnPropertyNames(RegExp.prototype).sort().join(",");
+out.protoSource=RegExp.prototype.source;
+const d=Object.getOwnPropertyDescriptor(RegExp.prototype,"flags"); out.desc=typeof d;
+out.frozenProto = (()=>{ try { Object.freeze(RegExp.prototype); return Object.isFrozen(RegExp.prototype);} catch(e){return "threw "+e.name}})();
+const r2=/b/g; Object.defineProperty(r2,"global",{value:42}); out.shadow=r2.global;
+class R extends RegExp { get flags(){return "zz"} } out.sub=new R("a","g").flags;
+throw new Error(JSON.stringify(out));

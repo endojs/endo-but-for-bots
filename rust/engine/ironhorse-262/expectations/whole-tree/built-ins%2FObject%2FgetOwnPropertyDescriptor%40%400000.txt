@@ -133,8 +133,8 @@ built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-3-9.js sloppy pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-3-9.js strict pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-1.js sloppy pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-1.js strict pass
-built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-10.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-10.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-10.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-10.js strict pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-100.js sloppy pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-100.js strict pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-101.js sloppy pass
@@ -155,8 +155,8 @@ built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-108.js sloppy pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-108.js strict pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-109.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-109.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-11.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-11.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-11.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-11.js strict pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-110.js sloppy pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-110.js strict pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-111.js sloppy pass

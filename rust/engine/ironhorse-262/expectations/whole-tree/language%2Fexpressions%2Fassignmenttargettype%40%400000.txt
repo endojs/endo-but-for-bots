@@ -108,7 +108,7 @@ language/expressions/assignmenttargettype/direct-identifierreference-eval-strict
 language/expressions/assignmenttargettype/direct-import.meta.js sloppy pass
 language/expressions/assignmenttargettype/direct-import.meta.js strict pass
 language/expressions/assignmenttargettype/direct-importcall-defer.js sloppy pass
-language/expressions/assignmenttargettype/direct-importcall-source.js sloppy skip:compiler-unimplemented:parse
+language/expressions/assignmenttargettype/direct-importcall-source.js sloppy pass
 language/expressions/assignmenttargettype/direct-importcall.js sloppy pass
 language/expressions/assignmenttargettype/direct-lefthandsideexpression-assignment-assignmentexpression-0.js sloppy pass
 language/expressions/assignmenttargettype/direct-lefthandsideexpression-assignment-assignmentexpression-0.js strict pass

@@ -61,7 +61,11 @@ fn attached_vs_detached_hot_crank() {
                acc";
     let (b_build, names) = compile(build);
     let (b_hot, _) = compile(hot);
-    const ROUNDS: usize = 9;
+    // Each round is a crank of a few tens of milliseconds. Twenty-one rounds,
+    // as every timing fixture now takes, narrow the median's spread between
+    // runs of one binary on a shared host (`benches/results/
+    // repin-3a30ab1e9.json`, `noise`).
+    const ROUNDS: usize = 21;
 
     // Arm 1: detached (no store anywhere).
     let mut detached = Interp::new();

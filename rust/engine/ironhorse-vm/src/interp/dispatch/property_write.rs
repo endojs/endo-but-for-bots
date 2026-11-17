@@ -3,23 +3,26 @@
 use super::super::*;
 
 impl Interp {
-    pub(super) fn dispatch_set_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
+    /// `SET_PROPERTY`: the assigned value pushed, or a setter entered in
+    /// place (STACK-DEPTH-REFACTOR.md C7), whose body to continue at; the loop
+    /// sets where its frame returns, and the frame pushes the value.
+    pub(super) fn dispatch_set_property(
+        &mut self,
+        code: &[u8],
+        id: u16,
+    ) -> Result<Option<usize>, Step> {
         let value = self.pop_checked()?;
         let obj = self.pop_checked()?;
-        // A primitive symbol's `Payload::Reference` is its
-        // DESCRIPTION slot, not an instance — so it must be
-        // matched off BEFORE the generic reference arm, or
-        // `sym.k = v` runs the description's setters and stores on
-        // it. XS boxes the primitive, finds the fresh wrapper
-        // non-extensible, and stores nothing: a sloppy no-op, a
-        // strict TypeError.
-        if obj.kind == Kind::Symbol {
-            if self.strict {
-                let error = self.internal_error(
-                    "TypeError",
-                    format!("set {}: not extensible", self.property_debug_name(id)),
-                );
-                return Err(self.raise_js(error));
+        // A primitive base, matched on its KIND before the reference arm: a
+        // primitive symbol's `Payload::Reference` is its DESCRIPTION slot,
+        // not an instance, and must never be written through.
+        if let Some(proto) = self.primitive_wrapper_proto(obj) {
+            let accepted = match (self.primitive_set_in_place(code, obj, proto, id, value))? {
+                SetInPlace::Done(accepted) => accepted,
+                SetInPlace::Entered(body_start) => return Ok(Some(body_start)),
+            };
+            if !accepted && self.strict {
+                return Err(self.failed_primitive_set_error(obj, proto, id));
             }
         } else if let Payload::Reference(inst) = obj.value {
             if self.proxies.contains_key(&inst) {
@@ -50,7 +53,7 @@ impl Interp {
                         return Err(self.raise_js(error));
                     }
                     self.push(value);
-                    return Ok(());
+                    return Ok(None);
                 }
                 let accepted = (self.array_define_length(
                     code,
@@ -69,17 +72,30 @@ impl Interp {
                     );
                     return Err(self.raise_js(error));
                 }
-            } else if !(self.mop_set(code, inst, id, value, obj))? {
-                // A frozen / non-writable property, or a new key on a
-                // non-extensible object: XS's `mxBehaviorSetProperty`
-                // stores nothing. A **sloppy** callee silently
-                // ignores the failed set (the assignment still
-                // evaluates to the RHS) — fully modeled, no
-                // allocation, so it meters nothing beyond its
-                // dispatch (verified against the pin). A **strict**
-                // callee throws a realm-local, catchable TypeError.
-                if self.strict {
-                    return Err(self.failed_set_error(inst, id, "set"));
+            } else {
+                let accepted = if self.typed_arrays.contains_key(&inst) {
+                    // A typed array's own `[[Set]]`, whose element store
+                    // coerces the value and so can re-enter, keeps the
+                    // frames it had.
+                    (self.mop_set(code, inst, id, value, obj))?
+                } else {
+                    match (self.set_property_in_place(code, inst, id, value, obj))? {
+                        SetInPlace::Done(accepted) => accepted,
+                        SetInPlace::Entered(body_start) => return Ok(Some(body_start)),
+                    }
+                };
+                if !accepted {
+                    // A frozen / non-writable property, or a new key on a
+                    // non-extensible object: XS's `mxBehaviorSetProperty`
+                    // stores nothing. A **sloppy** callee silently
+                    // ignores the failed set (the assignment still
+                    // evaluates to the RHS) — fully modeled, no
+                    // allocation, so it meters nothing beyond its
+                    // dispatch (verified against the pin). A **strict**
+                    // callee throws a realm-local, catchable TypeError.
+                    if self.strict {
+                        return Err(self.failed_set_error(inst, id, "set"));
+                    }
                 }
             }
         } else if matches!(obj.kind, Kind::Null | Kind::Undefined) {
@@ -89,11 +105,50 @@ impl Interp {
             return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)));
         }
         self.push(value);
-        Ok(())
+        Ok(None)
     }
 
     pub(super) fn dispatch_delete_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
         let obj = self.peek_checked()?;
+        if obj.kind == Kind::EnvReference {
+            // `EVAL_REFERENCE` pushes an `EnvReference` sentinel when the name
+            // resolved to no object environment: NULL for a frame local, and
+            // `SlotIndex(0)` for "the global object". Neither payload is an
+            // instance index. `SlotIndex(0)` is the DEFAULT realm's global only
+            // by construction accident -- `Interp::new` happens to allocate it
+            // first -- so matching on `obj.value` alone took the sentinel for a
+            // live instance and deleted from that realm whatever environment
+            // was actually current. Harmless while only the host could mint a
+            // second environment; a cross-realm mutation as soon as guest code
+            // can run in a compartment. Resolve against the CURRENT environment.
+            self.meter.tick_builtin();
+            let deleted = if self.environment.global_lexicals.contains_key(&id) {
+                // A `globalLexicals` entry is a binding in a scope, not a
+                // property of the global object: `delete` cannot remove it,
+                // and must not answer `true` as though it had.
+                false
+            } else if matches!(obj.value, Payload::Reference(i) if i == crate::value::SlotIndex::NULL)
+            {
+                // A frame-local declarative binding is likewise not deletable.
+                false
+            } else {
+                self.delete_own_property(self.environment.global_obj, id)
+            };
+            if !deleted && self.strict {
+                let error = self.internal_error(
+                    "TypeError",
+                    format!(
+                        "delete {}: no permission (strict mode)",
+                        self.property_debug_name(id)
+                    ),
+                );
+                return Err(self.raise_js(error));
+            }
+            if let Some(s) = self.stack.last_mut() {
+                *s = Slot::boolean(deleted);
+            }
+            return Ok(());
+        }
         match obj.value {
             Payload::Reference(inst) => {
                 // `fxRunDelete` wraps `mxBehaviorDeleteProperty`
@@ -201,10 +256,11 @@ impl Interp {
                         if item.flag & XS_DONT_DELETE_FLAG != 0 {
                             false
                         } else {
-                            self.arrays
-                                .get_mut(&inst)
-                                .unwrap()
-                                .remove_item(&index, &mut self.side_refs);
+                            self.arrays.get_mut(&inst).unwrap().remove_item(
+                                &index,
+                                &mut self.side_refs,
+                                &mut self.chunks,
+                            );
                             true
                         }
                     } else {
@@ -286,6 +342,9 @@ impl Interp {
         let value = self.pop_checked()?;
         let obj = self.pop_checked()?;
         if let Payload::Reference(inst) = obj.value {
+            if self.is_async_function_caller_define(inst, id, value, property_flag) {
+                return Ok(());
+            }
             if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                 if property_flag & XS_METHOD_FLAG != 0 {
                     if let Payload::Reference(f) = value.value {
@@ -321,6 +380,14 @@ impl Interp {
                     self.ordinary_define_own_property(inst, id, descriptor);
                 }
                 self.meter.tick_builtin();
+                if property_flag & XS_NAME_FLAG != 0 {
+                    let prefix = if property_flag & XS_GETTER_FLAG != 0 {
+                        "get "
+                    } else {
+                        "set "
+                    };
+                    self.name_defined_function(value, DefinedKey::Id(id), prefix);
+                }
                 return Ok(());
             }
             // `fxRunDefine` creating a data property: one
@@ -346,9 +413,7 @@ impl Interp {
                     ..OrdinaryDescriptor::default()
                 },
             )? {
-                return Err(
-                    self.catchable_type_error_msg("define property: definition rejected".into())
-                );
+                return Err(self.define_rejected_error(Some(id)));
             }
             if let Some(property) = self.find_property(inst, id) {
                 self.slots.get_mut(property).flag =
@@ -362,31 +427,8 @@ impl Interp {
                 }
             }
             self.meter.tick_builtin();
-            // An object-literal generator method (`{ *m(){} }`)
-            // compiles the value as an ANONYMOUS `GENERATOR_FUNCTION`
-            // renamed here by `fxRenameFunction` (`XS_METHOD` define
-            // flag), charging two built-in steps — XS does this for a
-            // generator method but not a plain `{ m(){} }` (which is
-            // already bit-exact without it). Name it and charge the
-            // rename so the method's `.name`/computrons match.
-            if let Payload::Reference(f) = value.value {
-                let needs_rename = self
-                    .functions
-                    .get(&f)
-                    .map(|fi| fi.is_generator && fi.name.is_empty())
-                    .unwrap_or(false);
-                if needs_rename {
-                    self.meter.tick_builtin_some(2);
-                    let fname = (id as usize)
-                        .checked_sub(1)
-                        .and_then(|i| self.symbol_names.get(i).cloned())
-                        .unwrap_or_default();
-                    let name_chunk = self.chunks.alloc(&units_to_be16(&fname.to_units()));
-                    self.functions.update(&f, |fi| {
-                        fi.name = fname.to_string();
-                        fi.name_chunk = name_chunk;
-                    });
-                }
+            if property_flag & XS_NAME_FLAG != 0 {
+                self.name_defined_function(value, DefinedKey::Id(id), "");
             }
         }
         Ok(())
@@ -417,8 +459,9 @@ impl Interp {
                         });
                     }
                 }
-                if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                    let current = self.accessors.get(&(inst, id)).copied().unwrap_or_default();
+                let defined = if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                    let previous = self.accessors.get(&(inst, id)).copied();
+                    let current = previous.unwrap_or_default();
                     let accessor = AccessorData {
                         get: if property_flag & XS_GETTER_FLAG != 0 {
                             Some(value)
@@ -432,7 +475,7 @@ impl Interp {
                         },
                     };
                     self.accessors.insert((inst, id), accessor);
-                    self.ordinary_define_own_property(
+                    let defined = self.ordinary_define_own_property(
                         inst,
                         id,
                         OrdinaryDescriptor {
@@ -443,6 +486,14 @@ impl Interp {
                             ..OrdinaryDescriptor::default()
                         },
                     );
+                    if !defined {
+                        // Leave the refused key's accessor record as it was.
+                        match previous {
+                            Some(previous) => self.accessors.insert((inst, id), previous),
+                            None => self.accessors.remove(&(inst, id)),
+                        };
+                    }
+                    defined
                 } else {
                     self.ordinary_define_own_property(
                         inst,
@@ -454,9 +505,25 @@ impl Interp {
                             configurable: Some(property_flag & XS_DONT_DELETE_FLAG == 0),
                             ..OrdinaryDescriptor::default()
                         },
-                    );
-                }
+                    )
+                };
                 self.meter.tick_builtin();
+                // A static member named `prototype` meets the constructor's
+                // non-configurable `prototype` (ClassDefinitionEvaluation's
+                // DefineMethodProperty, ES2024 15.4.4).
+                if !defined {
+                    return Err(self.define_rejected_error(Some(id)));
+                }
+                if property_flag & XS_NAME_FLAG != 0 {
+                    let prefix = if property_flag & XS_GETTER_FLAG != 0 {
+                        "get "
+                    } else if property_flag & XS_SETTER_FLAG != 0 {
+                        "set "
+                    } else {
+                        ""
+                    };
+                    self.name_defined_function(value, DefinedKey::Id(id), prefix);
+                }
                 true
             }
             _ => false,
@@ -473,6 +540,15 @@ impl Interp {
             {
                 if let Some(array) = self.arrays.get_mut(&inst) {
                     array.set_item_flag(index, property_flag);
+                }
+            }
+            if property_flag & XS_NAME_FLAG != 0 {
+                match key.value {
+                    Payload::At(crate::value::XS_NO_ID, index) => {
+                        self.name_defined_function(value, DefinedKey::Index(index), "")
+                    }
+                    Payload::At(id, _) => self.name_defined_function(value, DefinedKey::Id(id), ""),
+                    _ => {}
                 }
             }
         }

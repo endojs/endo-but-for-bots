@@ -5,8 +5,8 @@ built-ins/Promise/allSettledKeyed/arg-not-object-reject-bigint.js sloppy skip:as
 built-ins/Promise/allSettledKeyed/arg-not-object-reject-bigint.js strict skip:async:reported-failure
 built-ins/Promise/allSettledKeyed/arg-not-object-reject.js sloppy skip:async:reported-failure
 built-ins/Promise/allSettledKeyed/arg-not-object-reject.js strict skip:async:reported-failure
-built-ins/Promise/allSettledKeyed/capability-executor-not-callable.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: executor not called at all Expected SameValue(«\\\"\\\"», «\\\"a\\\"») to be true\" ironhorse=\"Test262Error: string\\\"\\\"», «string\\\"a\\\"») to be true\""
-built-ins/Promise/allSettledKeyed/capability-executor-not-callable.js strict fail:"abort-value-differs: oracle=\"Test262Error: executor not called at all Expected SameValue(«\\\"\\\"», «\\\"a\\\"») to be true\" ironhorse=\"Test262Error: string\\\"\\\"», «string\\\"a\\\"») to be true\""
+built-ins/Promise/allSettledKeyed/capability-executor-not-callable.js sloppy skip:shared-test262-failure
+built-ins/Promise/allSettledKeyed/capability-executor-not-callable.js strict skip:shared-test262-failure
 built-ins/Promise/allSettledKeyed/capability-resolve-throws-reject.js sloppy skip:async:reported-failure
 built-ins/Promise/allSettledKeyed/capability-resolve-throws-reject.js strict skip:async:reported-failure
 built-ins/Promise/allSettledKeyed/ctx-ctor-constructed.js sloppy skip:shared-positive-test-failure
@@ -17,8 +17,8 @@ built-ins/Promise/allSettledKeyed/ctx-non-ctor.js sloppy pass
 built-ins/Promise/allSettledKeyed/ctx-non-ctor.js strict pass
 built-ins/Promise/allSettledKeyed/element-function-properties.js sloppy skip:shared-positive-test-failure
 built-ins/Promise/allSettledKeyed/element-function-properties.js strict skip:shared-positive-test-failure
-built-ins/Promise/allSettledKeyed/extensible.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected true but got false\" ironhorse=\"Test262Error: booleanfalse\""
-built-ins/Promise/allSettledKeyed/extensible.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected true but got false\" ironhorse=\"Test262Error: booleanfalse\""
+built-ins/Promise/allSettledKeyed/extensible.js sloppy skip:shared-test262-failure
+built-ins/Promise/allSettledKeyed/extensible.js strict skip:shared-test262-failure
 built-ins/Promise/allSettledKeyed/get-value-not-called-for-non-enumerable.js sloppy skip:async:reported-failure
 built-ins/Promise/allSettledKeyed/get-value-not-called-for-non-enumerable.js strict skip:async:reported-failure
 built-ins/Promise/allSettledKeyed/get-value-throws-reject.js sloppy skip:async:reported-failure

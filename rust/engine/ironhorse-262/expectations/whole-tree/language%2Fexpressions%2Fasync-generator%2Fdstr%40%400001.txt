@@ -107,8 +107,8 @@ language/expressions/async-generator/dstr/dflt-obj-ptrn-rest-val-obj.js sloppy p
 language/expressions/async-generator/dstr/dflt-obj-ptrn-rest-val-obj.js strict pass
 language/expressions/async-generator/dstr/named-ary-init-iter-close.js sloppy pass
 language/expressions/async-generator/dstr/named-ary-init-iter-close.js strict pass
-language/expressions/async-generator/dstr/named-ary-init-iter-get-err-array-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/async-generator/dstr/named-ary-init-iter-get-err-array-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/async-generator/dstr/named-ary-init-iter-get-err-array-prototype.js sloppy pass
+language/expressions/async-generator/dstr/named-ary-init-iter-get-err-array-prototype.js strict pass
 language/expressions/async-generator/dstr/named-ary-init-iter-get-err.js sloppy pass
 language/expressions/async-generator/dstr/named-ary-init-iter-get-err.js strict pass
 language/expressions/async-generator/dstr/named-ary-init-iter-no-close.js sloppy pass

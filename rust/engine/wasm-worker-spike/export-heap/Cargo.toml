@@ -1,0 +1,13 @@
+[package]
+name = "ih-export-heap"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Native only: reads a Thixotrope `heap.sqlite` through the daemon-side SQLite
+# backend and writes its canonical container, which the Durable Object imports.
+[workspace]
+
+[dependencies]
+ironhorse-snapshot = { path = "../../ironhorse-snapshot" }
+ironhorse-store-sqlite = { path = "../../../endo/ironhorse-store-sqlite" }

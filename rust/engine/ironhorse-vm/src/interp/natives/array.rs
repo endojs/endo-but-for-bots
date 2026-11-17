@@ -1,6 +1,21 @@
 //! Array construction, async drivers, iteration, and native array algorithms.
 use super::super::*;
 
+/// One source array of the generic `FlattenIntoArray` walk: where its read
+/// stands, its remaining depth, and the value it was read as (the receiver of
+/// its `flatMap` callback when it is the outermost one).
+#[derive(Clone, Copy)]
+struct FlatSource {
+    source: crate::value::SlotIndex,
+    source_len: u64,
+    source_index: u64,
+    /// `HasProperty` probes taken on this source without a present-index
+    /// shortcut, against the linear cap.
+    linear_steps: u64,
+    depth: f64,
+    receiver: Slot,
+}
+
 impl Interp {
     // ------------------------------------------------------------------
     // `Array.from` (ECMA-262 23.1.2.1). This shares the general callable,
@@ -9,6 +24,10 @@ impl Interp {
     // element-definition completion.
     // ------------------------------------------------------------------
 
+    /// Out of line: inlined, `Array.from`'s whole body joins
+    /// `native_method_array`'s frame, which every native Array method's
+    /// recursion (`join` re-entering through an element's `toString`) pays.
+    #[inline(never)]
     pub(in crate::interp) fn array_from(
         &mut self,
         code: &[u8],
@@ -1312,10 +1331,48 @@ impl Interp {
         // Overwriting an item replaces its VALUE, never its attributes. See
         // `array_item_set` for why dropping them is a seal bypass.
         v.flag = data.items().get(&i).map_or(v.flag, |item| item.flag);
-        data.insert_item(i, v, &mut self.side_refs);
+        data.insert_item(i, v, &mut self.side_refs, &mut self.chunks);
         if i + 1 > data.length {
             data.length = i + 1;
         }
+    }
+
+    /// The ids of `value` and `done`, interning and caching them on first use.
+    ///
+    /// An intrinsic iterator's `{value, done}` result must carry both own
+    /// properties whether or not the program ever spells either name, and
+    /// [`Self::bind_program_symbols`] caches them only when it does. Writing
+    /// the fields under the optional caches left `[1].values().next()` an
+    /// empty object (`JSON.stringify` gave `{}`) until some read such as
+    /// `r.value` happened to intern the name. Both are XS boot default keys,
+    /// so interning them is unmetered.
+    pub(in crate::interp) fn iterator_result_ids(&mut self) -> (u16, u16) {
+        let value_id = match self.value_id {
+            Some(id) => id,
+            None => self.intern_static_key("value"),
+        };
+        let done_id = match self.done_id {
+            Some(id) => id,
+            None => self.intern_static_key("done"),
+        };
+        self.value_id = Some(value_id);
+        self.done_id = Some(done_id);
+        (value_id, done_id)
+    }
+
+    /// The `{value, done}` object an intrinsic iterator reuses for every
+    /// `next()` (XS's `fxNewIteratorInstance`), with XS's attributes for both
+    /// fields: non-writable and non-configurable, so a guest can neither
+    /// delete nor redefine a field `next()` keeps rewriting. Plain writable
+    /// fields let `delete r.value; Object.freeze(r)` be undone by the next
+    /// `next()`, which re-added the property to a frozen object.
+    pub(in crate::interp) fn new_reused_iterator_result(&mut self) -> crate::value::SlotIndex {
+        let result = self.slots.alloc(Slot::instance(self.object_proto));
+        let (value_id, done_id) = self.iterator_result_ids();
+        let fixed = XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG;
+        self.set_own_unmetered_with_flag(result, value_id, Slot::undefined(), fixed);
+        self.set_own_unmetered_with_flag(result, done_id, Slot::boolean(false), fixed);
+        result
     }
 
     /// Build an Array Iterator over `arr` with the given `kind` (0 values, 1
@@ -1330,13 +1387,7 @@ impl Interp {
     ) -> Slot {
         self.meter.tick_raw(ARRAY_ITERATOR_CREATE_METERING);
         // The reused result object `{ value: undefined, done: false }`.
-        let result = self.slots.alloc(Slot::instance(self.object_proto));
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::undefined());
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(false));
-        }
+        let result = self.new_reused_iterator_result();
         let iter = self.slots.alloc(Slot::instance(self.array_iterator_proto));
         self.iterators.insert(
             iter,
@@ -1344,11 +1395,13 @@ impl Interp {
                 iterable: arr,
                 index: 0,
                 kind,
+                coll_seq: 0,
                 generation: 0,
                 result,
                 done: false,
                 enum_keys: std::rc::Rc::default(),
                 str_bytes: std::rc::Rc::default(),
+                enum_visited: None,
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iter))
@@ -1363,9 +1416,6 @@ impl Interp {
         code: &[u8],
         iter: crate::value::SlotIndex,
     ) -> Result<Slot, Step> {
-        if self.iterators[&iter].kind == 3 {
-            return Ok(self.enumerator_next(iter));
-        }
         if self.iterators[&iter].kind == 4 {
             return self.string_iterator_next(iter);
         }
@@ -1387,11 +1437,12 @@ impl Interp {
                 && !self.arguments_objects.contains(&st.iterable)
             {
                 u64::from(self.arrays[&st.iterable].length)
-            } else if let Some(typed_array) = self.typed_arrays.get(&st.iterable) {
-                if self.detached_buffers.contains(&typed_array.buffer) {
-                    return Err(self.catchable_type_error_msg("out of bound buffer".into()));
-                } else {
-                    u64::from(typed_array.length)
+            } else if let Some(&typed_array) = self.typed_arrays.get(&st.iterable) {
+                // A view its buffer was detached from or shrunk under throws
+                // (XS's `fxIsDataViewOutOfBound`); otherwise its live length.
+                match self.ta_length(typed_array) {
+                    Some(length) => u64::from(length),
+                    None => return Err(self.catchable_type_error_msg("out of bound buffer".into())),
                 }
             } else {
                 self.meter
@@ -1465,8 +1516,13 @@ impl Interp {
                         let pair = self.new_array();
                         let a = self.arrays.get_mut(&pair).unwrap();
                         a.length = 2;
-                        a.insert_item(0, Slot::integer(st.index as i32), &mut self.side_refs);
-                        a.insert_item(1, elem, &mut self.side_refs);
+                        a.insert_item(
+                            0,
+                            Slot::integer(st.index as i32),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
+                        a.insert_item(1, elem, &mut self.side_refs, &mut self.chunks);
                         self.charge_and_check(self.array_chunk_size_metering(2))?;
                         Slot::of(Kind::Reference, Payload::Reference(pair))
                     }
@@ -1482,12 +1538,9 @@ impl Interp {
                 s.done = true;
             }
         }
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(new_done));
-        }
+        let (vid, did) = self.iterator_result_ids();
+        self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
+        self.set_own_unmetered(result, did, Slot::boolean(new_done));
         Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
     }
 
@@ -1836,36 +1889,91 @@ impl Interp {
         let mut owner = constructor_inst;
         while !owner.is_null() {
             if self.find_property(owner, species_id).is_some() {
-                return false;
+                // The intrinsic getter answers the Array constructor itself.
+                return self.intrinsic_species_getter(owner, species_id);
             }
             owner = self.instance_prototype(owner);
         }
         true
     }
 
+    /// Whether `owner`'s own `@@species` is an accessor whose getter is the
+    /// untouched intrinsic [`NativeMethod::SpeciesGetter`], which returns its
+    /// receiver and observes nothing.
+    pub(in crate::interp) fn intrinsic_species_getter(
+        &self,
+        owner: crate::value::SlotIndex,
+        species_id: u16,
+    ) -> bool {
+        let Some(property) = self.find_property(owner, species_id) else {
+            return false;
+        };
+        if self.slots.get(property).flag & XS_GETTER_FLAG == 0 {
+            return false;
+        }
+        self.accessors
+            .get(&(owner, species_id))
+            .and_then(|accessor| accessor.get)
+            .is_some_and(|getter| match getter.value {
+                Payload::Reference(getter) => self
+                    .functions
+                    .get(&getter)
+                    .is_some_and(|info| info.method == Some(NativeMethod::SpeciesGetter)),
+                _ => false,
+            })
+    }
+
+    /// `Get(C, @@species)` for the Array and TypedArray species readers. The
+    /// untouched intrinsic getter is answered without a call — it returns its
+    /// receiver — which keeps these readers' metering what it was before the
+    /// accessor existed; anything else is the observable MOP read.
+    pub(in crate::interp) fn species_of(
+        &mut self,
+        code: &[u8],
+        constructor_ref: crate::value::SlotIndex,
+        constructor: Slot,
+        species_id: u16,
+    ) -> Result<Slot, Step> {
+        let mut owner = constructor_ref;
+        while !owner.is_null() && !self.proxies.contains_key(&owner) {
+            if self.find_property(owner, species_id).is_some() {
+                if self.intrinsic_species_getter(owner, species_id) {
+                    return Ok(constructor);
+                }
+                break;
+            }
+            owner = self.instance_prototype(owner);
+        }
+        self.mop_get(code, constructor_ref, species_id, constructor)
+    }
+
     /// Whether the compact `flat` path can read the complete traversed graph
     /// without invoking guest code. Dense own data elements are sufficient;
     /// holes, accessors, Proxies, and arguments objects require `HasProperty`,
     /// `Get`, or the full `IsArray` operation. The budget also keeps a cyclic
-    /// graph with a very large requested depth from recursing on the Rust
-    /// stack merely to decide which execution path to use.
+    /// graph with a very large requested depth from walking without end merely
+    /// to decide which execution path to use.
+    ///
+    /// The visit is the recursion's own (STACK-DEPTH-REFACTOR.md B4): pre-order,
+    /// each array's items in key order, the budget spent at the same visits,
+    /// with one item iterator per open array on a heap stack instead of a host
+    /// frame. It charges nothing.
     pub(in crate::interp) fn array_flat_fast_safe(
         &self,
         source: crate::value::SlotIndex,
         depth: u32,
         budget: &mut u32,
     ) -> bool {
-        if *budget == 0 || self.arguments_objects.contains(&source) {
+        if !self.array_flat_fast_visit(source, budget) {
             return false;
         }
-        *budget -= 1;
-        let Some(array) = self.arrays.get(&source) else {
-            return false;
-        };
-        if array.items().len() as u32 != array.length {
-            return false;
-        }
-        for item in array.items().values() {
+        let mut open = vec![(self.arrays[&source].items().values(), depth)];
+        while let Some((items, depth)) = open.last_mut() {
+            let depth = *depth;
+            let Some(&item) = items.next() else {
+                open.pop();
+                continue;
+            };
             if item.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                 return false;
             }
@@ -1878,14 +1986,27 @@ impl Interp {
             if self.proxies.contains_key(&element) {
                 return false;
             }
-            if depth > 0
-                && self.arrays.contains_key(&element)
-                && !self.array_flat_fast_safe(element, depth - 1, budget)
-            {
-                return false;
+            if depth > 0 && self.arrays.contains_key(&element) {
+                if !self.array_flat_fast_visit(element, budget) {
+                    return false;
+                }
+                open.push((self.arrays[&element].items().values(), depth - 1));
             }
         }
         true
+    }
+
+    /// One array of [`Self::array_flat_fast_safe`]'s walk: spend one visit of
+    /// the budget, and require a dense array that is not an arguments object.
+    fn array_flat_fast_visit(&self, source: crate::value::SlotIndex, budget: &mut u32) -> bool {
+        if *budget == 0 || self.arguments_objects.contains(&source) {
+            return false;
+        }
+        *budget -= 1;
+        let Some(array) = self.arrays.get(&source) else {
+            return false;
+        };
+        array.items().len() as u32 == array.length
     }
 
     /// Whether `IsConcatSpreadable(value)` is guaranteed to use its default
@@ -1928,8 +2049,7 @@ impl Interp {
     // or allocating method with observable species. Reads use the object MOP
     // (`mop_get`/`mop_has`) so accessors, inherited holes, and Proxy traps are
     // honored; allocating methods additionally use `ArraySpeciesCreate` and
-    // `CreateDataPropertyOrThrow`. An unmodeled primitive receiver keeps the
-    // method's original named skip.
+    // `CreateDataPropertyOrThrow`. A primitive receiver is boxed first.
 
     /// The property **id** for integer element index `k` (its canonical decimal
     /// string key), interned like any ordinary string key.
@@ -2112,11 +2232,15 @@ impl Interp {
     /// caller (`find`/`findIndex`/`findLast`/`includes`/`at` reach `get` with
     /// no preceding `has`) would re-arm that on its own.
     ///
-    /// A name is only ever LOOKED UP here, never minted. That matters most
-    /// for a chain carrying a Proxy, where every index is "answerable"
-    /// because an absent one can still invoke an observable trap: the trap
-    /// does have to be called, but `read_key_slot` spells its key from the
-    /// index the way `fxKeyAt` does, so calling it costs no id.
+    /// An array index's name is only ever LOOKED UP here, never minted. That
+    /// matters most for a chain carrying a Proxy, where every index is
+    /// "answerable" because an absent one can still invoke an observable
+    /// trap: the trap does have to be called, but `read_key_slot` spells its
+    /// key from the index the way `fxKeyAt` does, so calling it costs no id.
+    /// Above 2^32 - 1 the key is an ordinary name, which
+    /// [`Self::array_index_read_key`] interns as XS does, so a Proxy walk
+    /// there spends one id per step and meets the key space's guest ceiling
+    /// after about 64k steps.
     pub(in crate::interp) fn array_generic_index_read_key(
         &mut self,
         o: crate::value::SlotIndex,
@@ -2182,7 +2306,7 @@ impl Interp {
 
     /// `? HasProperty(O, ToString(k))` over a generic receiver, index-safe via
     /// the shared non-interning probe.
-    fn array_generic_has(
+    pub(in crate::interp) fn array_generic_has(
         &mut self,
         code: &[u8],
         o: crate::value::SlotIndex,
@@ -2266,9 +2390,10 @@ impl Interp {
         };
 
         // The loop performs an observable `Get` at every index, so a Proxy or
-        // accessor-backed pathological length cannot be skipped ahead. Keep
-        // the same bounded-completion policy as the other generic Array
-        // methods; any abrupt completion in the reachable prefix still wins.
+        // accessor-backed pathological length cannot be skipped ahead, and it
+        // accumulates the joined string as it goes. Refuse past 2^24 indices
+        // or output units; any abrupt completion in the reachable prefix
+        // still wins.
         const GENERIC_JOIN_CAP: u64 = 1 << 24;
         const GENERIC_JOIN_OUTPUT_CAP: usize = 1 << 24;
         let mut result = Vec::new();
@@ -2905,24 +3030,70 @@ impl Interp {
         }
     }
 
-    /// The original per-method named skip reason (kept byte-identical to the
-    /// dense arm's) for a receiver the generic path does not model.
-    fn array_generic_skip_reason(m: NativeMethod) -> &'static str {
-        match m {
-            NativeMethod::ArrayForEach => "forEach:non-dense-array",
-            NativeMethod::ArrayMap => "map:non-dense-array",
-            NativeMethod::ArrayFilter => "filter:non-dense-array",
-            NativeMethod::ArraySome | NativeMethod::ArrayEvery => "some/every:non-dense-array",
-            NativeMethod::ArrayFind | NativeMethod::ArrayFindIndex => "find:non-dense-array",
-            NativeMethod::ArrayFindLast | NativeMethod::ArrayFindLastIndex => {
-                "findLast:non-dense-array"
-            }
-            NativeMethod::ArrayReduce | NativeMethod::ArrayReduceRight => "reduce:non-dense-array",
-            NativeMethod::ArrayIndexOf => "indexOf:non-dense-array",
-            NativeMethod::ArrayLastIndexOf => "lastIndexOf:non-dense-array",
-            NativeMethod::ArrayIncludes => "includes:non-dense-array",
-            NativeMethod::ArrayAt => "at:non-dense-array",
-            _ => "array:non-dense-array",
+    /// Whether iterating the Array `array` with the iterator protocol would
+    /// yield exactly its elements: its `@@iterator` resolves to the intrinsic
+    /// `values` and %ArrayIteratorPrototype%'s `next` is the intrinsic one,
+    /// both as plain data properties, so reading them runs no guest code and a
+    /// snapshot of the elements is the protocol's result. An inherited
+    /// override is as observable as an own one, so the whole chain is checked.
+    pub(in crate::interp) fn array_iterates_intrinsically(
+        &mut self,
+        array: crate::value::SlotIndex,
+    ) -> bool {
+        // Runtime keys (for example from JSON.parse) can precede their lazy
+        // intrinsic bindings. Complete that installation before inspecting
+        // next.
+        self.install_pending_intrinsics();
+        let iterator_id = self
+            .well_known_symbol_property_id("iterator")
+            .expect("well-known iterator symbol");
+        // Unreferenced intrinsic names are linked lazily. If no next key
+        // exists, guest code cannot yet have replaced or deleted the intrinsic
+        // next method.
+        let intrinsic_next = self.symbol_ids.get("next").is_none_or(|&id| {
+            self.chain_resolves_native_data_method(
+                self.array_iterator_proto,
+                id,
+                NativeMethod::ArrayIteratorNext,
+            )
+        });
+        intrinsic_next
+            && self.chain_resolves_native_data_method(array, iterator_id, NativeMethod::ArrayValues)
+    }
+
+    /// The element a dense fast path's callback visits at `index`, or `None`
+    /// to skip it: the item itself while it is still a plain own element,
+    /// otherwise what HasProperty and Get answer. The array is dense when
+    /// the walk starts, but a callback can delete an element (exposing an
+    /// inherited one), make it an accessor (which leaves the item map), or
+    /// shorten the array.
+    pub(in crate::interp) fn dense_item_or_inherited(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<Option<Slot>, Step> {
+        if let Some(item) = self.arrays[&inst].items().get(&index).copied() {
+            return Ok(Some(item));
+        }
+        if !self.array_generic_has(code, inst, u64::from(index))? {
+            return Ok(None);
+        }
+        self.array_generic_get(code, inst, u64::from(index))
+            .map(Some)
+    }
+
+    /// As [`Self::dense_item_or_inherited`] for `find` and its relatives,
+    /// which visit every index with Get, a hole included.
+    pub(in crate::interp) fn dense_item_or_get(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<Slot, Step> {
+        match self.arrays[&inst].items().get(&index).copied() {
+            Some(item) => Ok(item),
+            None => self.array_generic_get(code, inst, u64::from(index)),
         }
     }
 
@@ -2969,11 +3140,20 @@ impl Interp {
                 let Payload::Reference(c) = constructor.value else {
                     unreachable!()
                 };
-                let species = self.mop_get(code, c, species_id, constructor)?;
-                constructor = if species.kind == Kind::Null || species.kind == Kind::Undefined {
-                    Slot::undefined()
-                } else {
-                    species
+                let species = self.species_of(code, c, constructor, species_id)?;
+                // `Construct(%Array%, «length»)` is ArrayCreate(length): the
+                // compact path below builds the same array.
+                let intrinsic_array = self.intrinsics.get("Array").copied();
+                constructor = match species.value {
+                    _ if species.kind == Kind::Null || species.kind == Kind::Undefined => {
+                        Slot::undefined()
+                    }
+                    Payload::Reference(r)
+                        if species.kind == Kind::Reference && Some(r) == intrinsic_array =>
+                    {
+                        Slot::undefined()
+                    }
+                    _ => species,
                 };
             }
         }
@@ -3126,6 +3306,15 @@ impl Interp {
     /// apply the optional top-level mapper, recursively flatten only values for
     /// which `IsArray` is true (including transparent Proxies), and create each
     /// target element with `CreateDataPropertyOrThrow`.
+    ///
+    /// One light frame of the native-recursion budget per nested array: a
+    /// self-containing array under `flat(Infinity)` halts with
+    /// `Halt::ReentryLimit` (XS recurses `fxFlattenIntoArray` on its C stack to
+    /// the same end) instead of overflowing the host stack. The nesting is an
+    /// explicit stack of open sources (STACK-DEPTH-REFACTOR.md B4), each
+    /// charged its unit where the recursive call charged it and holding it
+    /// until the source is exhausted, so the budget, the meter and every
+    /// observable read evolve as they did.
     #[allow(clippy::too_many_arguments)]
     fn array_generic_flatten_into(
         &mut self,
@@ -3138,116 +3327,137 @@ impl Interp {
         mapper: Option<(Slot, Slot)>,
         source_receiver: Slot,
     ) -> Result<u64, Step> {
-        // One light frame of the native-recursion budget per nested array:
-        // a self-containing array under `flat(Infinity)` halts with
-        // `Halt::ReentryLimit` (XS recurses `fxFlattenIntoArray` on its C
-        // stack to the same end) instead of overflowing the host stack.
-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-            vm.array_generic_flatten_into_inner(
+        self.with_native_depth_restored(|vm| {
+            vm.array_generic_flatten_nested(
                 code,
                 target,
-                source,
-                source_len,
+                FlatSource {
+                    source,
+                    source_len,
+                    source_index: 0,
+                    linear_steps: 0,
+                    depth,
+                    receiver: source_receiver,
+                },
                 target_index,
-                depth,
                 mapper,
-                source_receiver,
             )
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn array_generic_flatten_into_inner(
+    fn array_generic_flatten_nested(
         &mut self,
         code: &[u8],
         target: crate::value::SlotIndex,
-        source: crate::value::SlotIndex,
-        source_len: u64,
+        top: FlatSource,
         mut target_index: u64,
-        depth: f64,
         mapper: Option<(Slot, Slot)>,
-        source_receiver: Slot,
     ) -> Result<u64, Step> {
         const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
         const GENERIC_FLAT_LINEAR_CAP: u64 = 1 << 24;
 
-        let mut source_index = 0u64;
-        let mut linear_steps = 0u64;
-        while source_index < source_len {
-            let present =
-                match self.array_generic_next_present_index(source, source_index, source_len) {
+        self.enter_native_frame(LIGHT_FRAME_COST)?;
+        // The source being read, and the sources it was reached from.
+        let mut cur = top;
+        let mut outer: Vec<FlatSource> = Vec::new();
+        loop {
+            while cur.source_index < cur.source_len {
+                let present = match self.array_generic_next_present_index(
+                    cur.source,
+                    cur.source_index,
+                    cur.source_len,
+                ) {
                     Some(Some(next)) => {
-                        source_index = next;
+                        cur.source_index = next;
                         true
                     }
                     Some(None) => break,
                     None => {
-                        if linear_steps >= GENERIC_FLAT_LINEAR_CAP {
+                        if cur.linear_steps >= GENERIC_FLAT_LINEAR_CAP {
                             return Err(Step::Host(Halt::Refused("flat:oversized-array-like")));
                         }
-                        linear_steps += 1;
-                        self.array_generic_has(code, source, source_index)?
+                        cur.linear_steps += 1;
+                        self.array_generic_has(code, cur.source, cur.source_index)?
                     }
                 };
-            if !present {
-                source_index += 1;
-                continue;
-            }
-
-            let mut element = self.array_generic_get(code, source, source_index)?;
-            if let Some((callback, this_arg)) = mapper {
-                self.meter.tick_raw(
-                    ARRAY_FLATMAP_CALLBACK_METERING - ARRAY_FLATMAP_GENERIC_ELEMENT_OVERLAP,
-                );
-                let callback_args = [
-                    element,
-                    Self::array_index_number(source_index),
-                    source_receiver,
-                ];
-                element = self.run_callback(code, callback, this_arg, &callback_args)?;
-            }
-
-            if depth > 0.0 {
-                let array_element = match element.value {
-                    Payload::Reference(element_object) if element.kind == Kind::Reference => self
-                        .array_generic_is_array(element_object)?
-                        .then_some(element_object),
-                    _ => None,
-                };
-                if let Some(element_object) = array_element {
-                    self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
-                    let element_len = self.array_generic_length(code, element_object)?;
-                    target_index = self.array_generic_flatten_into(
-                        code,
-                        target,
-                        element_object,
-                        element_len,
-                        target_index,
-                        depth - 1.0,
-                        None,
-                        element,
-                    )?;
-                    source_index += 1;
+                if !present {
+                    cur.source_index += 1;
                     continue;
                 }
-            }
 
-            if target_index >= MAX_SAFE_INTEGER {
-                // This spec guard has no matching XS diagnostic: the pinned
-                // flat helper uses txIndex without a safe-integer guard.
-                return Err(self.catchable_type_error_msg(
-                    "Array.flat: result exceeds maximum array-like length".into(),
-                ));
+                let mut element = self.array_generic_get(code, cur.source, cur.source_index)?;
+                // Only the outermost source is mapped (`flatMap`).
+                if let Some((callback, this_arg)) = mapper.filter(|_| outer.is_empty()) {
+                    self.meter.tick_raw(
+                        ARRAY_FLATMAP_CALLBACK_METERING - ARRAY_FLATMAP_GENERIC_ELEMENT_OVERLAP,
+                    );
+                    let callback_args = [
+                        element,
+                        Self::array_index_number(cur.source_index),
+                        cur.receiver,
+                    ];
+                    element = self.run_callback(code, callback, this_arg, &callback_args)?;
+                }
+
+                if cur.depth > 0.0 {
+                    let array_element = match element.value {
+                        Payload::Reference(element_object) if element.kind == Kind::Reference => {
+                            self.array_generic_is_array(element_object)?
+                                .then_some(element_object)
+                        }
+                        _ => None,
+                    };
+                    if let Some(element_object) = array_element {
+                        self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
+                        let element_len = self.array_generic_length(code, element_object)?;
+                        // The nested source's light frame, charged where the
+                        // recursive call charged it.
+                        self.enter_native_frame(LIGHT_FRAME_COST)?;
+                        // Host memory the recursion took as stack: at most one
+                        // source per unit of the budget, so this fails only if
+                        // the host allocator does.
+                        outer
+                            .try_reserve(1)
+                            .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
+                        let nested = FlatSource {
+                            source: element_object,
+                            source_len: element_len,
+                            source_index: 0,
+                            linear_steps: 0,
+                            depth: cur.depth - 1.0,
+                            receiver: element,
+                        };
+                        outer.push(std::mem::replace(&mut cur, nested));
+                        continue;
+                    }
+                }
+
+                if target_index >= MAX_SAFE_INTEGER {
+                    // This spec guard has no matching XS diagnostic: the pinned
+                    // flat helper uses txIndex without a safe-integer guard.
+                    return Err(self.catchable_type_error_msg(
+                        "Array.flat: result exceeds maximum array-like length".into(),
+                    ));
+                }
+                self.charge_and_check(ARRAY_FLAT_PER_LEAF_METERING)?;
+                let count = usize::try_from(target_index + 1)
+                    .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                self.admit_scratch::<Slot>(count)?;
+                self.array_generic_create_data_property(code, target, target_index, element)?;
+                target_index += 1;
+                cur.source_index += 1;
             }
-            self.charge_and_check(ARRAY_FLAT_PER_LEAF_METERING)?;
-            let count =
-                usize::try_from(target_index + 1).map_err(|_| Step::Host(Halt::HeapExhausted))?;
-            self.admit_scratch::<Slot>(count)?;
-            self.array_generic_create_data_property(code, target, target_index, element)?;
-            target_index += 1;
-            source_index += 1;
+            // This source is exhausted: release its frame and resume the one
+            // it was reached from after the element that led here.
+            self.leave_native_frame(LIGHT_FRAME_COST);
+            match outer.pop() {
+                None => return Ok(target_index),
+                Some(resumed) => {
+                    cur = resumed;
+                    cur.source_index += 1;
+                }
+            }
         }
-        Ok(target_index)
     }
 
     /// `IsConcatSpreadable(O)`: primitives are never spread; an explicit
@@ -3330,12 +3540,13 @@ impl Interp {
                 ));
             }
             // Integer-indexed own elements need no observable `has`/`get`
-            // property walk. Keep validating attachment before every read:
-            // a custom species result's defineProperty trap can detach the
-            // source between iterations. Indices beyond the fixed view length
-            // are known absent even when an own fake `length` is wider.
+            // property walk. Keep validating the index before every read: a
+            // custom species result's defineProperty trap can detach or resize
+            // the source between iterations. Indices no resize could ever
+            // bring into the view are known absent even when an own fake
+            // `length` is wider.
             if let Some(typed_array) = self.typed_arrays.get(&source).copied() {
-                let copy_length = length.min(u64::from(typed_array.length));
+                let copy_length = length.min(u64::from(self.ta_length_bound(typed_array)));
                 for k in 0..copy_length {
                     if self.ta_valid_index(typed_array, k as f64).is_some() {
                         let value = if typed_array.kind <= 1 {
@@ -3614,7 +3825,8 @@ impl Interp {
     /// Generic `map`/`filter` over sparse Arrays, arguments, array-like
     /// objects, and Proxies. Both snapshot `length`, skip absent properties via
     /// `HasProperty`, read inherited/accessor values via `Get`, and create the
-    /// result through `ArraySpeciesCreate`.
+    /// result through `ArraySpeciesCreate`. No step count stops the walk: each
+    /// step charges the meter, which is what bounds a metered run.
     pub(in crate::interp) fn array_generic_map_filter(
         &mut self,
         code: &[u8],
@@ -3622,23 +3834,8 @@ impl Interp {
         this: Slot,
         base: usize,
     ) -> Result<Slot, Step> {
-        let o = match this.value {
-            Payload::Reference(o) if this.kind == Kind::Reference => o,
-            _ if this.kind == Kind::Null || this.kind == Kind::Undefined => {
-                return Err(self.catchable_type_error_msg(
-                    if this.kind == Kind::Null {
-                        "cannot coerce null to object"
-                    } else {
-                        "cannot coerce undefined to object"
-                    }
-                    .into(),
-                ));
-            }
-            _ => {
-                return Err(Step::Host(Halt::NotImplemented(
-                    Self::array_generic_skip_reason(m),
-                )))
-            }
+        let Payload::Reference(o) = self.array_to_object(this)?.value else {
+            unreachable!("ToObject result")
         };
         let callback = self
             .stack
@@ -3654,16 +3851,11 @@ impl Interp {
         if !self.is_callable_value(callback) {
             return Err(self.catchable_type_error_msg("callback: not a function".into()));
         }
-        // Allocating methods cannot short-circuit, so decline pathological
-        // array-like lengths before a case spends seconds walking empty keys.
-        // This remains far above the conformance fixtures' real work sets.
-        const GENERIC_ITER_CAP: u64 = 1 << 16;
         let is_map = m == NativeMethod::ArrayMap;
         let target = self.array_generic_species_create(code, o, if is_map { len } else { 0 })?;
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
         let mut to = 0u64;
         let mut k = 0u64;
-        let mut linear_steps = 0u64;
         while k < len {
             let present = match self.array_generic_next_present_index(o, k, len) {
                 Some(Some(next)) => {
@@ -3671,15 +3863,7 @@ impl Interp {
                     true
                 }
                 Some(None) => break,
-                None => {
-                    if linear_steps >= GENERIC_ITER_CAP {
-                        return Err(Step::Host(Halt::NotImplemented(
-                            Self::array_generic_skip_reason(m),
-                        )));
-                    }
-                    linear_steps += 1;
-                    self.array_generic_has(code, o, k)?
-                }
+                None => self.array_generic_has(code, o, k)?,
             };
             self.charge_builtin_work(1)?;
             if !present {
@@ -3703,8 +3887,11 @@ impl Interp {
     /// Generic fallback for the non-allocating read-only `Array.prototype`
     /// methods over an array-like / sparse / proxy receiver. Returns the
     /// method's result, or the appropriate catchable `TypeError` (bad `this` /
-    /// non-callable callback / empty reduce with no seed), or the original
-    /// named `Unsupported` skip for an unmodeled receiver / callback.
+    /// non-callable callback / empty reduce with no seed).
+    ///
+    /// A generic `length` may be up to 2^53−1, and no step count stops a walk
+    /// short of it: each step charges the meter, which is what bounds a
+    /// metered run.
     pub(in crate::interp) fn array_generic_readonly(
         &mut self,
         code: &[u8],
@@ -3714,23 +3901,8 @@ impl Interp {
         argc: usize,
     ) -> Result<Slot, Step> {
         // `ToObject(this)`.
-        let o = match this.value {
-            Payload::Reference(o) if this.kind == Kind::Reference => o,
-            _ => {
-                if this.kind == Kind::Null || this.kind == Kind::Undefined {
-                    return Err(self.catchable_type_error_msg(
-                        if this.kind == Kind::Null {
-                            "cannot coerce null to object"
-                        } else {
-                            "cannot coerce undefined to object"
-                        }
-                        .into(),
-                    ));
-                }
-                return Err(Step::Host(Halt::NotImplemented(
-                    Self::array_generic_skip_reason(m),
-                )));
-            }
+        let Payload::Reference(o) = self.array_to_object(this)?.value else {
+            unreachable!("ToObject result")
         };
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
         let arg0 = self
@@ -3748,19 +3920,6 @@ impl Interp {
         let len = self.array_generic_length(code, o)?;
         self.charge_builtin_work(2)?;
 
-        // A generic array-like `length` may be up to 2^53−1. A real engine
-        // iterates the whole range, but no test262 case *expects completion* of
-        // a multi-billion-iteration scan (they pair a huge `length` with an
-        // accessor / proxy trap that throws — or a match — within the first few
-        // indices). Bound the index loop so a pathological length neither
-        // OOMs (materializing indices) nor hangs (tripping the case timeout →
-        // an ironhorse-failure). Exceeding the bound returns the method's
-        // ORIGINAL named skip, so such a case stays `skipped` exactly as before
-        // this generic path existed — never a new failure. The cap is far above
-        // any real test's iteration count.
-        const GENERIC_ITER_CAP: u64 = 1 << 24;
-        let over_cap = Step::Host(Halt::NotImplemented(Self::array_generic_skip_reason(m)));
-
         match m {
             NativeMethod::ArrayForEach => {
                 let callback = arg0;
@@ -3769,7 +3928,6 @@ impl Interp {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 let mut k = 0u64;
-                let mut linear_steps = 0u64;
                 while k < len {
                     let present = match self.array_generic_next_present_index(o, k, len) {
                         Some(Some(next)) => {
@@ -3777,13 +3935,7 @@ impl Interp {
                             true
                         }
                         Some(None) => break,
-                        None => {
-                            if linear_steps >= GENERIC_ITER_CAP {
-                                return Err(over_cap);
-                            }
-                            linear_steps += 1;
-                            self.array_generic_has(code, o, k)?
-                        }
+                        None => self.array_generic_has(code, o, k)?,
                     };
                     self.charge_builtin_work(1)?;
                     if present {
@@ -3803,7 +3955,6 @@ impl Interp {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 let mut k = 0u64;
-                let mut linear_steps = 0u64;
                 while k < len {
                     let present = match self.array_generic_next_present_index(o, k, len) {
                         Some(Some(next)) => {
@@ -3811,13 +3962,7 @@ impl Interp {
                             true
                         }
                         Some(None) => break,
-                        None => {
-                            if linear_steps >= GENERIC_ITER_CAP {
-                                return Err(over_cap);
-                            }
-                            linear_steps += 1;
-                            self.array_generic_has(code, o, k)?
-                        }
+                        None => self.array_generic_has(code, o, k)?,
                     };
                     self.charge_builtin_work(1)?;
                     if present {
@@ -3856,7 +4001,6 @@ impl Interp {
                 if !self.is_callable_value(predicate) {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
-                let mut iters: u64 = 0;
                 let step = |slf: &mut Self, k: u64| -> Result<Option<Slot>, Step> {
                     slf.charge_builtin_work(1)?;
                     let kv = slf.array_generic_get(code, o, k)?;
@@ -3876,19 +4020,12 @@ impl Interp {
                     let mut k = len;
                     while k > 0 {
                         k -= 1;
-                        iters += 1;
-                        if iters > GENERIC_ITER_CAP {
-                            return Err(over_cap);
-                        }
                         if let Some(hit) = step(self, k)? {
                             return Ok(hit);
                         }
                     }
                 } else {
                     for k in 0..len {
-                        if k >= GENERIC_ITER_CAP {
-                            return Err(over_cap);
-                        }
                         if let Some(hit) = step(self, k)? {
                             return Ok(hit);
                         }
@@ -3906,19 +4043,9 @@ impl Interp {
                 if !self.is_callable_value(callback) {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
-                // The XS differential oracle mis-handles a fold over an
-                // array-like whose `length` exceeds the 2^32 array-index space
-                // (it mis-visits the near-2^53 indices and rejects a source
-                // ironhorse folds correctly — e.g.
-                // `reduceRight/length-near-integer-limit.js`, where ironhorse
-                // matches the spec but XS throws). Decline the generic fold
-                // there so the case stays a named skip rather than assert a
-                // divergence against a non-compliant oracle; every
-                // realistic-length fold is unaffected (indexOf/lastIndexOf at
-                // the same length agree with XS and stay covered).
-                if len > u32::MAX as u64 {
-                    return Err(over_cap);
-                }
+                // A `length` above 2^32 - 1 folds here as specified. XS folds
+                // only its resident index storage there; the departure is
+                // recorded in `ironhorse-262/tests/xs_departures.rs`.
                 let has_initial = argc >= 2;
                 // Fold index in `[0, len)`, ascending (reduce) or descending
                 // (reduceRight), without materializing the range.
@@ -3938,9 +4065,6 @@ impl Interp {
                     // TypeError.
                     let mut seed: Option<Slot> = None;
                     while cursor < len {
-                        if cursor >= GENERIC_ITER_CAP {
-                            return Err(over_cap);
-                        }
                         let k = idx_at(cursor);
                         cursor += 1;
                         self.charge_builtin_work(1)?;
@@ -3957,9 +4081,6 @@ impl Interp {
                     }
                 };
                 while cursor < len {
-                    if cursor >= GENERIC_ITER_CAP {
-                        return Err(over_cap);
-                    }
                     let k = idx_at(cursor);
                     cursor += 1;
                     self.charge_builtin_work(1)?;
@@ -3997,7 +4118,6 @@ impl Interp {
                         from as u64
                     }
                 };
-                let mut linear_steps = 0u64;
                 while k < len {
                     let present = match self.array_generic_next_present_index(o, k, len) {
                         Some(Some(next)) => {
@@ -4005,13 +4125,7 @@ impl Interp {
                             true
                         }
                         Some(None) => break,
-                        None => {
-                            if linear_steps >= GENERIC_ITER_CAP {
-                                return Err(over_cap);
-                            }
-                            linear_steps += 1;
-                            self.array_generic_has(code, o, k)?
-                        }
+                        None => self.array_generic_has(code, o, k)?,
                     };
                     self.charge_builtin_work(1)?;
                     if present {
@@ -4043,7 +4157,6 @@ impl Interp {
                 } else {
                     len as i128 + n as i128
                 };
-                let mut linear_steps = 0u64;
                 while k >= 0 {
                     let mut ku = k as u64;
                     let present = match self.array_generic_previous_present_index(o, ku) {
@@ -4053,13 +4166,7 @@ impl Interp {
                             true
                         }
                         Some(None) => break,
-                        None => {
-                            if linear_steps >= GENERIC_ITER_CAP {
-                                return Err(over_cap);
-                            }
-                            linear_steps += 1;
-                            self.array_generic_has(code, o, ku)?
-                        }
+                        None => self.array_generic_has(code, o, ku)?,
                     };
                     self.charge_builtin_work(1)?;
                     if present {
@@ -4093,11 +4200,7 @@ impl Interp {
                 } else {
                     (len as i128 + n as i128) as u64
                 };
-                let start = k;
                 while k < len {
-                    if k - start >= GENERIC_ITER_CAP {
-                        return Err(over_cap);
-                    }
                     self.charge_builtin_work(1)?;
                     let ek = self.array_generic_get(code, o, k)?;
                     if self.same_value_zero(&search, &ek) {
@@ -4119,9 +4222,7 @@ impl Interp {
                 }
                 self.array_generic_get(code, o, k as u64)
             }
-            _ => Err(Step::Host(Halt::NotImplemented(
-                Self::array_generic_skip_reason(m),
-            ))),
+            _ => unreachable!("generic read-only method"),
         }
     }
 
@@ -4509,10 +4610,12 @@ impl Interp {
         } else {
             Slot::undefined()
         };
+        // The result is bounded by the chunk ceiling as it grows, before the
+        // host copy can outrun it.
         let mut out = Vec::new();
         for index in 0..length {
             if index > 0 {
-                out.push(u16::from(b','));
+                self.extend_admitted_copy(&mut out, &[u16::from(b',')])?;
             }
             let value = if self.arrays.contains_key(&inst) {
                 self.array_generic_get(code, inst, index)?
@@ -4524,7 +4627,8 @@ impl Interp {
             }
             let rendered =
                 self.invoke_value_method(code, value, "toLocaleString", &[locales, options])?;
-            out.extend_from_slice(&self.to_string_units(code, rendered)?);
+            let units = self.to_string_units(code, rendered)?;
+            self.extend_admitted_copy(&mut out, &units)?;
         }
         Ok(self.new_string_units(&out))
     }
@@ -4545,6 +4649,11 @@ impl Interp {
     /// array elements while `depth > 0` and appending leaves to `out`. Meters
     /// the per-visit read, the per-array-element length read, and each
     /// appended leaf's `mxDefineIndex` chunk growth as it goes.
+    ///
+    /// The nesting is an explicit stack of open arrays, each with its length,
+    /// cursor and remaining depth (STACK-DEPTH-REFACTOR.md B4): the same
+    /// pre-order visit and the same metering sequence as the recursion, on a
+    /// flat host stack.
     pub(in crate::interp) fn flat_into(
         &mut self,
         src: crate::value::SlotIndex,
@@ -4552,7 +4661,15 @@ impl Interp {
         depth: u32,
         out: &mut Vec<Slot>,
     ) -> Result<(), Step> {
-        for index in 0..len {
+        // (array, length, next index, remaining depth)
+        let mut open: Vec<(crate::value::SlotIndex, u32, u32, u32)> = vec![(src, len, 0, depth)];
+        while let Some(top) = open.last_mut() {
+            let (src, len, index, depth) = *top;
+            if index >= len {
+                open.pop();
+                continue;
+            }
+            top.2 += 1;
             let item = match self
                 .arrays
                 .get(&src)
@@ -4570,7 +4687,7 @@ impl Interp {
                 };
                 self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
                 let sub_len = self.arrays[&sub].length;
-                self.flat_into(sub, sub_len, depth - 1, out)?;
+                open.push((sub, sub_len, 0, depth - 1));
             } else {
                 // Append the leaf: the per-leaf cost plus the `mxDefineIndex`
                 // chunk growth to `out.len() + 1` slots.
@@ -4578,7 +4695,7 @@ impl Interp {
                 self.charge_and_check(self.array_item_grow_metering(out.len() as u64))?;
                 self.admit_scratch::<Slot>(out.len() + 1)?;
                 out.try_reserve(1)
-                    .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                    .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
                 out.push(item);
             }
         }

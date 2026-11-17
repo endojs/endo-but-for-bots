@@ -15,8 +15,8 @@ built-ins/Object/prototype/toLocaleString/S15.2.4.3_A8.js sloppy pass
 built-ins/Object/prototype/toLocaleString/S15.2.4.3_A8.js strict pass
 built-ins/Object/prototype/toLocaleString/S15.2.4.3_A9.js sloppy pass
 built-ins/Object/prototype/toLocaleString/S15.2.4.3_A9.js strict pass
-built-ins/Object/prototype/toLocaleString/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be toLocaleString; name value should be toLocaleString"
-built-ins/Object/prototype/toLocaleString/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be toLocaleString; name value should be toLocaleString"
+built-ins/Object/prototype/toLocaleString/name.js sloppy pass
+built-ins/Object/prototype/toLocaleString/name.js strict pass
 built-ins/Object/prototype/toLocaleString/not-a-constructor.js sloppy pass
 built-ins/Object/prototype/toLocaleString/not-a-constructor.js strict pass
 built-ins/Object/prototype/toLocaleString/primitive_this_value.js strict pass

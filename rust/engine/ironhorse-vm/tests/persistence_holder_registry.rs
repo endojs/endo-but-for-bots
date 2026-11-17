@@ -38,7 +38,7 @@ fn every_persisted_holder_keeps_its_native_reference_checks() {
         ("stack", &[".iter().any(names)"]),
         ("arrays", &[".items().iter().map(|(_,v)|v)", ".any(names)"]),
         ("index_props", &[".items().iter().map(|(_,v)|v)", ".any(names)"]),
-        ("collections", &[".entries().iter().flatten().flat_map(|e|[&e.0,&e.1])", ".any(names)"]),
+        ("collections", &[".live_entries().flat_map(|e|[&e.0,&e.1])", ".any(names)"]),
         ("accessors", &["d.get.as_ref().is_some_and(names)||d.set.as_ref().is_some_and(names)"]),
         ("private_accessors", &["d.get.as_ref().is_some_and(names)||d.set.as_ref().is_some_and(names)"]),
         ("private_values", &[".values().any(names)"]),
@@ -46,6 +46,8 @@ fn every_persisted_holder_keeps_its_native_reference_checks() {
         ("bound_functions", &["index(d.target.0)||names(&d.this_arg)||d.args.iter().any(names)"]),
         ("proxies", &["index(p.target.0)||index(p.handler.0)"]),
         ("disposable_stacks", &[".records.iter()", "names(&r.resource)||names(&r.method)"]),
+        ("weak_refs", &["!w.target.is_null()&&index(w.target.0)"]),
+        ("finalization_registries", &["names(&r.callback)||r.cells.iter().any", "names(&c.holdings)||(!c.target.is_null()&&index(c.target.0))||(!c.token.is_null()&&index(c.token.0))"]),
         ("promises", &["names(&p.result)||p.reactions.iter().any", "names(&r.on_fulfilled)||names(&r.on_rejected)||names(&r.resolve)||names(&r.reject)"]),
         ("combinators", &["names(&c.resolve)||names(&c.reject)"]),
         ("generators", &[".frame.as_ref()", "saved_frame_contains(f,names)"]),
@@ -53,6 +55,7 @@ fn every_persisted_holder_keeps_its_native_reference_checks() {
         ("async_generators", &[".frame.as_ref().is_some_and(|f|saved_frame_contains(f,names))", "g.requests.iter().chain(g.active.as_ref()).any(|r|names(&r.value)||names(&r.resolve)||names(&r.reject))"]),
         ("promise_jobs", &["PromiseJob::Reaction{reaction:r,value,..}=>names(value)||names(&r.on_fulfilled)||names(&r.on_rejected)||names(&r.resolve)||names(&r.reject)", "PromiseJob::Thenable{then,thenable,resolve,reject}=>names(then)||names(thenable)||names(resolve)||names(reject)"]),
         ("iterators", &["index(s.iterable.0)"]),
+        ("from_async", &["index(f.target.0)", "names(&f.resolve)||names(&f.reject)||names(&f.mapfn)||names(&f.this_arg)||names(&f.iterator)||names(&f.next_method)||names(&f.array_like)||names(&f.close_error)"]),
     ];
     let active: Vec<_> = PERSIST_HOLDER_SOURCE
         .iter()

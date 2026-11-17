@@ -1,0 +1,16 @@
+{
+  "sessionId": "11111111-1111-4111-8111-111111111111",
+  "prompt": "Run the native shell and inspect the Endo policy.",
+  "rows": [
+    { "type": "user", "uuid": "00000001-1111-4111-8111-111111111111", "parentUuid": null, "message": { "role": "user", "content": "Run the native shell and inspect the Endo policy." } },
+    { "type": "attachment", "uuid": "00000002-1111-4111-8111-111111111111", "parentUuid": "00000001-1111-4111-8111-111111111111", "attachment": { "type": "total_tokens_reminder", "text": "synthetic accounting" } },
+    { "type": "assistant", "uuid": "00000003-1111-4111-8111-111111111111", "parentUuid": "00000002-1111-4111-8111-111111111111", "message": { "role": "assistant", "type": "message", "id": "message-tools", "model": "synthetic-model", "content": [{ "type": "thinking", "thinking": "synthetic reasoning", "signature": "synthetic-signature" }] } },
+    { "type": "assistant", "uuid": "00000004-1111-4111-8111-111111111111", "parentUuid": "00000003-1111-4111-8111-111111111111", "message": { "role": "assistant", "type": "message", "id": "message-tools", "model": "synthetic-model", "content": [{ "type": "tool_use", "id": "native-shell", "name": "Bash", "input": { "command": "printf cats" } }] } },
+    { "type": "assistant", "uuid": "00000005-1111-4111-8111-111111111111", "parentUuid": "00000004-1111-4111-8111-111111111111", "message": { "role": "assistant", "type": "message", "id": "message-tools", "model": "synthetic-model", "content": [{ "type": "tool_use", "id": "endo-policy", "name": "mcp__endo__getSandboxNetworkPolicy", "input": {} }] } },
+    { "type": "user", "uuid": "00000006-1111-4111-8111-111111111111", "parentUuid": "00000004-1111-4111-8111-111111111111", "sourceToolAssistantUUID": "00000004-1111-4111-8111-111111111111", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "native-shell", "content": "cats", "is_error": false }] } },
+    { "type": "user", "uuid": "00000007-1111-4111-8111-111111111111", "parentUuid": "00000005-1111-4111-8111-111111111111", "sourceToolAssistantUUID": "00000005-1111-4111-8111-111111111111", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "endo-policy", "content": "off", "is_error": false }] } },
+    { "type": "attachment", "uuid": "00000008-1111-4111-8111-111111111111", "parentUuid": "00000007-1111-4111-8111-111111111111", "attachment": { "type": "total_tokens_reminder", "text": "synthetic accounting after tools" } },
+    { "type": "assistant", "uuid": "00000009-1111-4111-8111-111111111111", "parentUuid": "00000008-1111-4111-8111-111111111111", "message": { "role": "assistant", "type": "message", "id": "message-answer", "model": "synthetic-model", "content": [{ "type": "redacted_thinking", "data": "synthetic-opaque-context" }] } },
+    { "type": "assistant", "uuid": "00000010-1111-4111-8111-111111111111", "parentUuid": "00000009-1111-4111-8111-111111111111", "message": { "role": "assistant", "type": "message", "id": "message-answer", "model": "synthetic-model", "content": [{ "type": "text", "text": "cats; policy off" }] } }
+  ]
+}

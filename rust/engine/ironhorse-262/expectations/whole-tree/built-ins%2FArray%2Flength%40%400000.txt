@@ -15,12 +15,12 @@ built-ins/Array/length/S15.4.2.2_A1.2_T1.js sloppy pass
 built-ins/Array/length/S15.4.2.2_A1.2_T1.js strict pass
 built-ins/Array/length/S15.4.2.2_A2.1_T1.js sloppy pass
 built-ins/Array/length/S15.4.2.2_A2.1_T1.js strict pass
-built-ins/Array/length/S15.4.2.2_A2.2_T1.js sloppy skip:unsupported-opcode:native-call:Array:bad-length
-built-ins/Array/length/S15.4.2.2_A2.2_T1.js strict skip:unsupported-opcode:native-call:Array:bad-length
-built-ins/Array/length/S15.4.2.2_A2.2_T2.js sloppy skip:unsupported-opcode:native-call:Array:bad-length
-built-ins/Array/length/S15.4.2.2_A2.2_T2.js strict skip:unsupported-opcode:native-call:Array:bad-length
-built-ins/Array/length/S15.4.2.2_A2.2_T3.js sloppy skip:unsupported-opcode:native-call:Array:bad-length
-built-ins/Array/length/S15.4.2.2_A2.2_T3.js strict skip:unsupported-opcode:native-call:Array:bad-length
+built-ins/Array/length/S15.4.2.2_A2.2_T1.js sloppy pass
+built-ins/Array/length/S15.4.2.2_A2.2_T1.js strict pass
+built-ins/Array/length/S15.4.2.2_A2.2_T2.js sloppy pass
+built-ins/Array/length/S15.4.2.2_A2.2_T2.js strict pass
+built-ins/Array/length/S15.4.2.2_A2.2_T3.js sloppy pass
+built-ins/Array/length/S15.4.2.2_A2.2_T3.js strict pass
 built-ins/Array/length/S15.4.2.2_A2.3_T1.js sloppy pass
 built-ins/Array/length/S15.4.2.2_A2.3_T1.js strict pass
 built-ins/Array/length/S15.4.2.2_A2.3_T2.js sloppy pass
@@ -31,8 +31,8 @@ built-ins/Array/length/S15.4.2.2_A2.3_T4.js sloppy pass
 built-ins/Array/length/S15.4.2.2_A2.3_T4.js strict pass
 built-ins/Array/length/S15.4.2.2_A2.3_T5.js sloppy pass
 built-ins/Array/length/S15.4.2.2_A2.3_T5.js strict pass
-built-ins/Array/length/S15.4.4_A1.3_T1.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «number0») to be true"
-built-ins/Array/length/S15.4.4_A1.3_T1.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «number0») to be true"
+built-ins/Array/length/S15.4.4_A1.3_T1.js sloppy pass
+built-ins/Array/length/S15.4.4_A1.3_T1.js strict pass
 built-ins/Array/length/S15.4.5.1_A1.1_T1.js sloppy pass
 built-ins/Array/length/S15.4.5.1_A1.1_T1.js strict pass
 built-ins/Array/length/S15.4.5.1_A1.1_T2.js sloppy pass

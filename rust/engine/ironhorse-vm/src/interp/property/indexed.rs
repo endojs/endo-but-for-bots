@@ -27,6 +27,27 @@ impl Interp {
     /// `fxRunDefine`). Grows the item chunk when the index is new (metered by
     /// [`Self::array_item_grow_metering`]) and bumps `length` when the index
     /// reaches past the end; `define` adds the `fxRunDefine` built-in step.
+    /// Whether defining a fresh data item at `index` (CreateDataProperty)
+    /// can take [`Self::array_item_set`]: the array is extensible, the index
+    /// fits a writable length, and any item already there carries no
+    /// attribute flags.
+    pub(in crate::interp) fn array_item_define_is_plain(
+        &self,
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> bool {
+        let Some(array) = self.arrays.get(&inst) else {
+            return false;
+        };
+        match array.items().get(&index) {
+            Some(item) => item.flag == 0 || self.arguments_objects.contains(&inst),
+            None => {
+                self.instance_extensible(inst)
+                    && (index < array.length || self.array_length_writable(inst))
+            }
+        }
+    }
+
     pub(in crate::interp) fn array_item_set(
         &mut self,
         inst: crate::value::SlotIndex,
@@ -79,7 +100,7 @@ impl Interp {
             // while sealing PROMOTED each element out of the item map; making
             // seal stamp items in place is what exposed it.
             v.flag = a.items().get(&index).map_or(v.flag, |item| item.flag);
-            a.insert_item(index, v, &mut self.side_refs);
+            a.insert_item(index, v, &mut self.side_refs, &mut self.chunks);
             if index + 1 > a.length {
                 a.length = index + 1;
             }
@@ -95,14 +116,11 @@ impl Interp {
     /// (the payload is already 8-aligned). Verified against the pin: an
     /// N-element literal's per-element chunk cost is 48, 80, 112, 144, ….
     ///
-    /// Known sub-computron residual: a *spread* segment appending into an
-    /// already-populated array carries a −8-raw-per-segment gap (ironhorse
-    /// over-charges by 8) versus XS's item-chunk over-allocation
-    /// (`fxNewGrowableChunk`/`fxSizeToCapacity`) growth path. It is well under
-    /// one computron and never crosses a `>> 16` boundary in a bounded program,
-    /// so the computron-level bar (and every corpus/fuzz/test262 check, which
-    /// compare `meterIndex >> 16`) stays exact; modeling the over-allocation
-    /// capacity to close the raw gap is a later refinement.
+    /// A *spread* segment appending into an already-populated array charges
+    /// 8 raw more per segment than XS, whose item chunks grow with
+    /// over-allocation (`fxNewGrowableChunk`/`fxSizeToCapacity`). XS's
+    /// count is where these weights came from, not a target: XS-computron
+    /// parity is a non-goal, so that difference is not a defect.
     pub(in crate::interp) fn array_item_grow_metering(&self, present: u64) -> u64 {
         let bytes = (present + 1) * ARRAY_ITEM_BYTES;
         // round up to 8 (already a multiple of 8) + 16-byte chunk header.
@@ -240,10 +258,11 @@ impl Interp {
                         self.arrays.get_mut(&inst).unwrap().length = index + 1;
                         return false;
                     }
-                    self.arrays
-                        .get_mut(&inst)
-                        .unwrap()
-                        .remove_item(&index, &mut self.side_refs);
+                    self.arrays.get_mut(&inst).unwrap().remove_item(
+                        &index,
+                        &mut self.side_refs,
+                        &mut self.chunks,
+                    );
                 }
             }
         }
@@ -432,6 +451,7 @@ impl Interp {
                             index,
                             replacement,
                             &mut self.side_refs,
+                            &mut self.chunks,
                         );
                     } else {
                         self.arrays
@@ -497,6 +517,7 @@ impl Interp {
                             index,
                             replacement,
                             &mut self.side_refs,
+                            &mut self.chunks,
                         );
                     }
                     // Attributes only: the value and its reference topology
@@ -513,10 +534,11 @@ impl Interp {
             // An accessor on an index: `self.accessors` is keyed by
             // `(instance, id)`, so this one genuinely needs a name.
             let id = self.array_index_promotion_id(id, index)?;
-            self.arrays
-                .get_mut(&inst)
-                .unwrap()
-                .remove_item(&index, &mut self.side_refs);
+            self.arrays.get_mut(&inst).unwrap().remove_item(
+                &index,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
             self.set_own_unmetered_with_flag(inst, id, current.value.unwrap(), value.flag);
             return Ok(self.ordinary_define_own_property(inst, id, descriptor));
         }
@@ -620,10 +642,8 @@ impl Interp {
         self.index_prop_store(inst, index, value);
     }
 
-    /// [`Self::index_prop_set`] without the growth metering — the resume path,
-    /// which rebuilds a store that was already paid for when the guest built
-    /// it. Charging here would make a resumed machine's meter diverge from the
-    /// uninterrupted one it must agree with.
+    /// [`Self::index_prop_set`] without the growth metering. The item's side
+    /// storage is still charged against the chunk ceiling.
     pub(in crate::interp) fn index_prop_store(
         &mut self,
         inst: crate::value::SlotIndex,
@@ -634,7 +654,31 @@ impl Interp {
         value.next = crate::value::SlotIndex::NULL;
         let refs = &mut self.side_refs;
         let props = self.index_props.entry(inst).or_default();
-        props.insert_item(index, value, refs);
+        props.insert_item(index, value, refs, &mut self.chunks);
+        // `ArrayData::length` is this store's HIGH-WATER mark, not an array
+        // `length` (an ordinary object has none). It only ever rises, so a
+        // deleted index keeps the cursor domain it opened — XS's resident
+        // indexed-array slot does not shrink when an element is deleted, and
+        // `resident_indexed_limit` reads this as the tombstone it documents.
+        props.length = props.length.max(index.saturating_add(1));
+    }
+
+    /// The resume path's [`Self::index_prop_store`]: it rebuilds a store the
+    /// guest already paid for, so it neither meters nor charges. Charging
+    /// here would make a resumed machine's meter diverge from the
+    /// uninterrupted one it must agree with; the side-storage ledger is
+    /// derived from the restored tables afterwards.
+    pub(in crate::interp) fn index_prop_restore(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        index: u32,
+        mut value: Slot,
+    ) {
+        value.id = crate::value::XS_NO_ID;
+        value.next = crate::value::SlotIndex::NULL;
+        let refs = &mut self.side_refs;
+        let props = self.index_props.entry(inst).or_default();
+        props.restore_item(index, value, refs);
         // `ArrayData::length` is this store's HIGH-WATER mark, not an array
         // `length` (an ordinary object has none). It only ever rises, so a
         // deleted index keeps the cursor domain it opened — XS's resident
@@ -657,7 +701,7 @@ impl Interp {
         let removed = self
             .index_props
             .get_mut(&inst)
-            .and_then(|props| props.remove_item(&index, refs));
+            .and_then(|props| props.remove_item(&index, refs, &mut self.chunks));
         if self
             .index_props
             .get(&inst)
@@ -696,18 +740,109 @@ impl Interp {
         })
     }
 
+    /// The prototype walk of `OrdinarySet` for an index key, from `start`:
+    /// the first object owning the index decides — its setter runs, or a
+    /// non-writable value rejects the write — and an ordinary chain that owns
+    /// none, or a writable data property, leaves the write to create or
+    /// update on the receiver. A Proxy runs its `set` trap or forwards to its
+    /// target, and a TypedArray answers by index; neither needs a name, so a
+    /// write loop never mints one per index. `name` is the index's interned
+    /// id, if any: an accessor on an index is promoted to a named slot.
+    ///
+    /// [`IndexSetWalk::Defer`] is left for a TypedArray that is the receiver
+    /// itself, whose element `[[Set]]` converts the value.
+    pub(in crate::interp) fn index_set_walk(
+        &mut self,
+        code: &[u8],
+        start: crate::value::SlotIndex,
+        index: u32,
+        name: Option<u16>,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<IndexSetWalk, Step> {
+        self.with_forwarding_walk(|vm, held| {
+            vm.index_set_walk_held(code, start, index, name, value, receiver, held)
+        })
+    }
+
+    /// [`Self::index_set_walk`]'s loop, charging each Proxy it forwards
+    /// through the unit its guarded entry would ([`Self::forwarding_hop`]).
+    #[allow(clippy::too_many_arguments)]
+    fn index_set_walk_held(
+        &mut self,
+        code: &[u8],
+        start: crate::value::SlotIndex,
+        index: u32,
+        name: Option<u16>,
+        value: Slot,
+        receiver: Slot,
+        held: &mut usize,
+    ) -> Result<IndexSetWalk, Step> {
+        let mut current = start;
+        loop {
+            // A Proxy's `[[Set]]` (ECMA-262 10.5.9): its `set` trap is handed
+            // the key and the receiver, and without one the target's
+            // `[[Set]]` takes over the walk.
+            if self.proxies.contains_key(&current) {
+                let (target, handler) = self.proxy_target_handler(current, "set")?;
+                if let Some(trap) = self.proxy_trap(code, handler, "set")? {
+                    let key = name.map_or(ReadKey::Index(index), ReadKey::Id);
+                    let accepted =
+                        self.proxy_set_trapped(code, target, handler, trap, key, value, receiver)?;
+                    return Ok(IndexSetWalk::Done(accepted));
+                }
+                self.forwarding_hop(held)?;
+                current = target;
+                continue;
+            }
+            // A TypedArray's integer-indexed `[[Set]]` (10.4.5.5) for another
+            // receiver: an index it does not hold is accepted and stores
+            // nothing; one it holds is a writable data element, so the
+            // receiver gets the property.
+            if let Some(&ta) = self.typed_arrays.get(&current) {
+                if receiver.value == Payload::Reference(current) {
+                    return Ok(IndexSetWalk::Defer);
+                }
+                return Ok(match self.ta_valid_index(ta, f64::from(index)) {
+                    Some(_) => IndexSetWalk::Create,
+                    None => IndexSetWalk::Done(true),
+                });
+            }
+            let own = self
+                .index_prop_descriptor(current, index)
+                .or_else(|| name.and_then(|id| self.ordinary_get_own_descriptor(current, id)))
+                .or_else(|| self.exotic_index_descriptor(current, index))
+                .or_else(|| name.and_then(|id| self.exotic_own_descriptor(current, id)));
+            if let Some(descriptor) = own {
+                if descriptor.is_accessor() {
+                    let setter = descriptor.set.unwrap_or_else(Slot::undefined);
+                    if setter.kind == Kind::Undefined {
+                        return Ok(IndexSetWalk::Done(false));
+                    }
+                    self.invoke_setter(code, setter, receiver, value)?;
+                    return Ok(IndexSetWalk::Done(true));
+                }
+                if descriptor.writable == Some(false) {
+                    return Ok(IndexSetWalk::Done(false));
+                }
+                return Ok(IndexSetWalk::Create);
+            }
+            current = self.instance_prototype(current);
+            if current.is_null() {
+                return Ok(IndexSetWalk::Create);
+            }
+        }
+    }
+
     /// `OrdinarySet(O, ToString(index), V, Receiver)` keyed by INDEX.
     ///
     /// The same walk as [`Self::ordinary_set`], reading each level's own
     /// descriptor by index instead of by name, so a write to a novel index on
     /// an ordinary object neither needs nor mints a property name.
     ///
-    /// Returns `Ok(None)` when the walk reaches a prototype whose `[[Set]]` is
-    /// not this algorithm — a Proxy, or a TypedArray answering an integer
-    /// index — because delegating to those requires the key the trap or the
-    /// exotic will be handed. The caller resolves a name for that narrow shape
-    /// and retries by id, which keeps the trap observable at the cost of one
-    /// name.
+    /// Returns `Ok(None)` when the walk defers ([`IndexSetWalk::Defer`]) or
+    /// the receiver's own storage is not the index store. The caller resolves
+    /// a name for that narrow shape and retries by id.
     pub(in crate::interp) fn ordinary_index_set(
         &mut self,
         code: &[u8],
@@ -716,37 +851,11 @@ impl Interp {
         value: Slot,
         receiver: Slot,
     ) -> Result<Option<bool>, Step> {
-        let mut current = inst;
-        loop {
-            let own = self
-                .index_prop_descriptor(current, index)
-                .or_else(|| self.named_index_descriptor(current, index))
-                .or_else(|| self.exotic_index_own_descriptor(current, index));
-            if let Some(descriptor) = own {
-                if descriptor.is_accessor() {
-                    let setter = descriptor.set.unwrap_or_else(Slot::undefined);
-                    if setter.kind == Kind::Undefined {
-                        return Ok(Some(false));
-                    }
-                    self.invoke_setter(code, setter, receiver, value)?;
-                    return Ok(Some(true));
-                }
-                if descriptor.writable == Some(false) {
-                    return Ok(Some(false));
-                }
-                break;
-            }
-            let parent = self.instance_prototype(current);
-            if parent.is_null() {
-                break;
-            }
-            // A Proxy's `set` trap and a TypedArray's integer-indexed
-            // `[[Set]]` are observable behaviour, not a descriptor read, so
-            // they cannot be flattened into this walk.
-            if self.proxies.contains_key(&parent) || self.typed_arrays.contains_key(&parent) {
-                return Ok(None);
-            }
-            current = parent;
+        let name = self.index_read_key_id(index);
+        match self.index_set_walk(code, inst, index, name, value, receiver)? {
+            IndexSetWalk::Done(accepted) => return Ok(Some(accepted)),
+            IndexSetWalk::Defer => return Ok(None),
+            IndexSetWalk::Create => {}
         }
         let receiver_inst = match receiver.value {
             Payload::Reference(receiver_inst) if receiver.kind == Kind::Reference => receiver_inst,
@@ -756,6 +865,22 @@ impl Interp {
             // A different or non-ordinary receiver completes through the
             // general path, which knows that receiver's own storage.
             return Ok(None);
+        }
+        // A receiver that holds this index in a NAMED slot — an index promoted
+        // for an accessor, then redefined as data, or one guest code gave it
+        // during the walk (a Proxy handler's `set` getter) — is updated
+        // there, as `index_prop_define` declines it. Writing the store here
+        // made a second copy: `[[Get]]` kept reading the named one while
+        // `[[GetOwnProperty]]`, `delete` and `Object.freeze` reached the
+        // store's, so `harden` left the live value writable behind a `true`
+        // from `Object.isFrozen`.
+        if let Some(id) = self
+            .index_read_key_id(index)
+            .filter(|&id| self.find_property(receiver_inst, id).is_some())
+        {
+            return self
+                .set_named_index_on_receiver(code, receiver_inst, id, value)
+                .map(Some);
         }
         // CreateDataProperty / update, on the receiver.
         match self.index_prop_item(receiver_inst, index) {
@@ -775,6 +900,41 @@ impl Interp {
             }
         }
         Ok(Some(true))
+    }
+
+    /// OrdinarySetWithOwnDescriptor's receiver step (ECMA-262 10.1.9.2 step
+    /// 3) for an index `inst` holds in a named slot, once the walk has left
+    /// the write to it: an accessor or a read-only value refuses the write,
+    /// and a writable value takes it. The chain is not walked again, so no
+    /// setter runs.
+    pub(in crate::interp) fn set_named_index_on_receiver(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+    ) -> Result<bool, Step> {
+        match self.mop_get_own_property(code, inst, id)? {
+            Some(existing) if existing.is_accessor() || existing.writable == Some(false) => {
+                Ok(false)
+            }
+            existing => {
+                let descriptor = match existing {
+                    Some(_) => OrdinaryDescriptor {
+                        value: Some(value),
+                        ..OrdinaryDescriptor::default()
+                    },
+                    None => OrdinaryDescriptor {
+                        value: Some(value),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                        ..OrdinaryDescriptor::default()
+                    },
+                };
+                self.mop_define_own_property(code, inst, id, descriptor)
+            }
+        }
     }
 
     /// The index store's descriptor for a property arrived at by NAME.

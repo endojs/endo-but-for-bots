@@ -1,10 +1,17 @@
-//! Peer engine descriptors.
+//! Peer engine descriptors, and the machine surface the daemon drives.
 //!
 //! The Engine enum generalizes the "how do we run this peer?"
 //! decision so handle_control_message can dispatch spawn
 //! requests across transports without the JS side having to know.
+//!
+//! [`JsMachine`] is the other half of that generalization, over the machine
+//! rather than over how it is started. See its own documentation for what it
+//! covers, what it deliberately does not, and what is still open.
 
 use crate::types::Message;
+
+mod js_machine;
+pub use js_machine::{JsMachine, JsMachineError, JsMachineErrorKind};
 
 /// How a new peer should be instantiated.
 pub enum Engine {

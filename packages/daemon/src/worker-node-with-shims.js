@@ -37,13 +37,14 @@ harden(globalThis.TextDecoder);
 harden(globalThis.URL);
 
 // Phase 5: Dynamic imports so they execute after lockdown.
-const [{ makePowers }, { main }, fs, url, { makePromiseKit }] =
+const [{ makePowers }, { main }, fs, url, { makePromiseKit }, shutdown] =
   await Promise.all([
     import('./worker-node-powers.js'),
     import('./worker.js'),
     import('fs'),
     import('url'),
     import('@endo/promise-kit'),
+    import('./shutdown-signals.js'),
   ]);
 
 /** @import { PromiseKit } from '@endo/promise-kit' */
@@ -53,7 +54,13 @@ const powers = makePowers({ fs: fs.default ?? fs, url: url.default ?? url });
 const { promise: cancelled, reject: cancel } =
   /** @type {PromiseKit<never>} */ (makePromiseKit());
 
-process.once('SIGINT', () => cancel(new Error('SIGINT')));
+// See worker-node.js: graceful SIGTERM/SIGINT with a bounded force-exit backstop
+// and orphan-exit under ENDO_EXIT_WHEN_ORPHANED.
+shutdown.installShutdownSignals({
+  cancel,
+  graceMs: Number(process.env.ENDO_WORKER_SHUTDOWN_GRACE_MS) || 3000,
+  exitWhenOrphaned: process.env.ENDO_EXIT_WHEN_ORPHANED === '1',
+});
 
 // @ts-ignore Yes, we can assign to exitCode, typedoc.
 process.exitCode = 1;

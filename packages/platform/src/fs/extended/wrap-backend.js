@@ -82,11 +82,9 @@ const probeCapabilities = backend => {
     rename: typeof b.rename === 'function',
     watch: typeof b.watch === 'function',
     statfs: typeof b.statfs === 'function',
-    // Content-address hooks (`qidFor` / `blobInfoFor`) are probed at
-    // their call sites via optional chaining, not here: a backend that
-    // knows a stronger identity than a path (e.g. a git object OID)
-    // supplies them, and both degrade to `synthQid` / SHA-256 when the
-    // method is absent OR returns `undefined` for a given path.
+    // The optional content-address `qidFor` hook is probed at its call site. A
+    // backend that knows a stronger identity than a path (such as a git object
+    // OID) may supply it; otherwise the wrapper uses `synthQid`.
   });
 };
 
@@ -475,6 +473,7 @@ export const wrapBackend = (backend, opts = {}) => {
         const off = offset === undefined ? cursor : BigInt(offset);
         /** @type {Uint8Array[]} */
         const chunks = [];
+        let settled = false;
         const sinkIterator = {
           /** @param {Uint8Array} chunk */
           async next(chunk) {
@@ -484,19 +483,31 @@ export const wrapBackend = (backend, opts = {}) => {
             return { done: false, value: undefined };
           },
           async return(value) {
-            let total = 0;
-            for (const c of chunks) total += c.length;
-            const merged = new Uint8Array(total);
-            let p = 0;
-            for (const c of chunks) {
-              merged.set(c, p);
-              p += c.length;
+            // The first return commits the admitted bytes. Its error belongs
+            // to that stream's outcome; cleanup must not retry the write (it
+            // could already have partially changed the backend). Once that
+            // attempt has settled, this endpoint owns no pending operation.
+            // exo-stream serializes release attempts and retains the original
+            // rejection for the consumer while permitting a separate close.
+            if (settled) return { done: true, value };
+            try {
+              let total = 0;
+              for (const c of chunks) total += c.length;
+              const merged = new Uint8Array(total);
+              let p = 0;
+              for (const c of chunks) {
+                merged.set(c, p);
+                p += c.length;
+              }
+              await backend.write(path, merged, off);
+              cursor = off + BigInt(merged.length);
+              // POSIX: writing updates mtime (and ctime via touch).
+              touch(path, { mtime: true });
+              return { done: true, value };
+            } finally {
+              settled = true;
+              chunks.length = 0;
             }
-            await backend.write(path, merged, off);
-            cursor = off + BigInt(merged.length);
-            // POSIX: writing updates mtime (and ctime via touch).
-            touch(path, { mtime: true });
-            return { done: true, value };
           },
           [Symbol.asyncIterator]() {
             return sinkIterator;
@@ -775,16 +786,9 @@ export const wrapBackend = (backend, opts = {}) => {
           throw makeError(X`ENOENT: ${q(path.join('/'))}`);
         }
         const bytes = await backend.read(path);
-        // A content-address backend may supply the native content hash
-        // (e.g. git's `git-sha1` blob OID) via `blobInfoFor`; when it
-        // does we stamp `{ algorithm, hash }` onto the BlobRef instead
-        // of hashing the captured bytes with SHA-256. A missing method
-        // or a per-path `undefined` falls back to the default SHA-256.
-        const infoOverride = backend.blobInfoFor?.(path);
         return makeBlobRefExo(
           bytes,
           `BlobRef: snapshot of ${path.join('/') || '/'}.`,
-          infoOverride,
         );
       },
       help(method) {

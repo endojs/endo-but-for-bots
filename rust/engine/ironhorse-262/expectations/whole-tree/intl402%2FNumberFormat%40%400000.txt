@@ -23,20 +23,20 @@ intl402/NumberFormat/constructor-no-instanceof.js sloppy skip:oracle-host-missin
 intl402/NumberFormat/constructor-no-instanceof.js strict skip:oracle-host-missing-intl
 intl402/NumberFormat/constructor-notation.js sloppy skip:oracle-host-missing-intl
 intl402/NumberFormat/constructor-notation.js strict skip:oracle-host-missing-intl
-intl402/NumberFormat/constructor-option-read-order.js sloppy skip:oracle-host-missing-global:Intl
-intl402/NumberFormat/constructor-option-read-order.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-option-read-order.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-option-read-order.js strict skip:oracle-host-missing-intl
 intl402/NumberFormat/constructor-options-numberingSystem-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: new Intl.NumberFormat(\"en\", {numberingSystem: \"\"}) throws RangeError Expected a RangeError but got a ReferenceError"
 intl402/NumberFormat/constructor-options-numberingSystem-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: new Intl.NumberFormat(\"en\", {numberingSystem: \"\"}) throws RangeError Expected a RangeError but got a ReferenceError"
 intl402/NumberFormat/constructor-options-roundingMode-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null Expected a RangeError but got a ReferenceError"
 intl402/NumberFormat/constructor-options-roundingMode-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null Expected a RangeError but got a ReferenceError"
-intl402/NumberFormat/constructor-options-throwing-getters.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: Exception from numberingSystem getter should be propagated Expected a CustomError to be thrown but no exception was thrown at all\""
-intl402/NumberFormat/constructor-options-throwing-getters.js strict fail:"abort-value-differs: oracle=\"Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: Exception from numberingSystem getter should be propagated Expected a CustomError to be thrown but no exception was thrown at all\""
+intl402/NumberFormat/constructor-options-throwing-getters.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a ReferenceError"
+intl402/NumberFormat/constructor-options-throwing-getters.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a ReferenceError"
 intl402/NumberFormat/constructor-options-toobject.js sloppy skip:oracle-host-missing-global:Intl
 intl402/NumberFormat/constructor-options-toobject.js strict skip:oracle-host-missing-global:Intl
 intl402/NumberFormat/constructor-order.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
 intl402/NumberFormat/constructor-order.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
-intl402/NumberFormat/constructor-roundingIncrement-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: 0 Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: 2, roundingType is \\\"morePrecision\\\" Expected a TypeError to be thrown but no exception was thrown at all\""
-intl402/NumberFormat/constructor-roundingIncrement-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: 0 Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: 2, roundingType is \\\"morePrecision\\\" Expected a TypeError to be thrown but no exception was thrown at all\""
+intl402/NumberFormat/constructor-roundingIncrement-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: 0 Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: \\\"maximumFractionDigits\\\" is not equal to \\\"minimumFractionDigits\\\" Expected a RangeError to be thrown but no exception was thrown at all\""
+intl402/NumberFormat/constructor-roundingIncrement-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: 0 Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: \\\"maximumFractionDigits\\\" is not equal to \\\"minimumFractionDigits\\\" Expected a RangeError to be thrown but no exception was thrown at all\""
 intl402/NumberFormat/constructor-roundingIncrement.js sloppy skip:oracle-host-missing-intl
 intl402/NumberFormat/constructor-roundingIncrement.js strict skip:oracle-host-missing-intl
 intl402/NumberFormat/constructor-signDisplay-negative.js sloppy skip:oracle-host-missing-intl

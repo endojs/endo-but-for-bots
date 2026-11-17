@@ -1,0 +1,986 @@
+// @ts-check
+import '@endo/init';
+import { Far } from '@endo/far';
+import { createHash } from 'node:crypto';
+import test from 'ava';
+import { access, mkdir, mkdtemp, rm, stat, symlink } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+import { main } from '../setup-hosted.js';
+import {
+  brokerServiceSpecifier,
+  nativeSandboxSpecifier,
+  sessionStorageSpecifier,
+} from '../src/hosted-runtime-setup.js';
+
+// What the fake reports for a persisted formula it has no entry for: a
+// generic entrypoint no service accepts.
+const unsupportedSpecifier = new URL(
+  '../../sandbox/src/agent.js',
+  import.meta.url,
+).href;
+
+/** @import { EndoHost } from '@endo/daemon' */
+
+const key = (...parts) => JSON.stringify(parts.flat());
+
+/** @param {{ failMint?: (specifier: string, options: any) => boolean, nativeSpecifier?: string }} [options] */
+const makeFakeHost = ({
+  failMint,
+  nativeSpecifier = nativeSandboxSpecifier,
+} = {}) => {
+  const bindings = new Map();
+  const mints = [];
+  const copies = [];
+  const removed = [];
+  const stored = [];
+  /** @type {Array<Record<string, unknown>>} */
+  const configured = [];
+  const profileValues = new Map();
+  const publications = [];
+  const profile = Far('TestFlootProfile', {
+    has: async name => profileValues.has(key(name)),
+    makeDirectory: async name => {
+      profileValues.set(key(name), 'dir');
+    },
+    storeValue: async (value, name) => {
+      publications.push({ value, name });
+      profileValues.set(key(name), value);
+    },
+  });
+  const oracle = Far('TestAccountOracle', {});
+  const oraclePowers = Far('TestOraclePowers', {
+    storeLocator: async (name, locator) => {
+      bindings.set(
+        key('opencode-sandbox', 'account-oracle-powers', name),
+        locator,
+      );
+    },
+  });
+  bindings.set(key('opencode-sandbox', 'account-oracle'), oracle);
+  bindings.set(key('opencode-sandbox', 'account-oracle-powers'), oraclePowers);
+  /** @type {Map<string, Record<string, string | undefined>>} */
+  const environments = new Map();
+  environments.set(
+    'native-sandbox-id',
+    harden({
+      ENDO_SANDBOX_OWNER_ID: 'test-owned',
+      ENDO_SANDBOX_RUNTIME_DIR: process.env.ENDO_SANDBOX_RUNTIME_DIR,
+      ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
+      ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+    }),
+  );
+  const reads = [];
+  /** @type {Map<string, string>} Specifier reported for a persisted formula id. */
+  const specifiers = new Map([['native-sandbox-id', nativeSpecifier]]);
+  return {
+    bindings,
+    mints,
+    copies,
+    removed,
+    stored,
+    configured,
+    profileValues,
+    publications,
+    environments,
+    reads,
+    specifiers,
+    host: /** @type {EndoHost} */ (
+      /** @type {unknown} */ ({
+        async identify(...parts) {
+          if (parts[0] === '@agent') return 'fake-host-id';
+          return bindings.has(key(...parts)) ? `${parts.at(-1)}-id` : undefined;
+        },
+        async diagnostics() {
+          return harden({
+            getFormula: async id => {
+              reads.push(['formula', id]);
+              return harden({
+                type: 'make-unconfined',
+                properties: {
+                  specifier: {
+                    kind: 'literal',
+                    value: specifiers.get(id) ?? unsupportedSpecifier,
+                  },
+                },
+              });
+            },
+          });
+        },
+        async getFormulaEnvironment(id) {
+          reads.push(['env', id]);
+          return environments.get(id);
+        },
+        async has(...parts) {
+          return bindings.has(key(...parts));
+        },
+        async locate(...parts) {
+          if (!bindings.has(key(...parts)))
+            throw Error('Missing locator target');
+          return `test:${parts.join('/')}`;
+        },
+        async lookup(pathParts) {
+          if (key(pathParts) === key('floot', 'controller-profile'))
+            return profile;
+          if (
+            pathParts[0] === 'opencode-sandbox' &&
+            pathParts[1]?.startsWith('account-oracle')
+          ) {
+            return bindings.get(key(pathParts));
+          }
+          if (pathParts[1] === 'catalog') {
+            return harden({ list: async () => [] });
+          }
+          if (key(pathParts) === key('opencode-sandbox', 'broker-service')) {
+            return harden({
+              configure: async settings => {
+                configured.push(settings);
+              },
+            });
+          }
+          return harden({ createBase64: async () => {} });
+        },
+        async storeValue(value, name) {
+          stored.push({ value, name });
+          bindings.set(key(name), value);
+        },
+        async copy(from, to) {
+          copies.push({ from, to });
+          bindings.set(key(...to), bindings.get(key(...from)) ?? 'cap');
+        },
+        async remove(...parts) {
+          removed.push(parts);
+          bindings.delete(key(...parts));
+        },
+        async makeUnconfined(worker, specifier, options) {
+          if (failMint && failMint(specifier, options)) {
+            throw Error('mint failed');
+          }
+          mints.push({ worker, specifier, options });
+          const result = Array.isArray(options.resultName)
+            ? options.resultName
+            : [options.resultName];
+          bindings.set(key(...result), 'cap');
+        },
+      })
+    ),
+  };
+};
+
+const makeTmp = async (t, prefix) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+};
+
+const withEnv = async (t, values) => {
+  const previous = new Map();
+  for (const [name, value] of Object.entries(values)) {
+    previous.set(name, process.env[name]);
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
+  t.teardown(() => {
+    for (const [name, value] of previous) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  });
+};
+
+const preflightHost = () => {
+  const fake = makeFakeHost();
+  for (const name of ['native-sandbox']) {
+    fake.bindings.set(key('opencode-sandbox', name), 'cap');
+  }
+  fake.bindings.set(key('floot', 'controller-profile'), 'dir');
+  return fake;
+};
+
+const baseEnv = async t => {
+  const base = await makeTmp(t, 'setup-hosted-');
+  const runtime = path.join(base, 'runtime');
+  await mkdir(runtime, { mode: 0o700 });
+  await withEnv(t, {
+    ENDO_SANDBOX_RUNTIME_DIR: runtime,
+    ENDO_OPENCODE_STATE_DIR: path.join(base, 'state'),
+    ENDO_OPENCODE_WORKSPACE_DIR: path.join(base, 'workspaces'),
+    ENDO_OPENCODE_MCP_DIR: path.join(base, 'mcp'),
+    ENDO_OPENCODE_CREDS_NAME: 'test-auth',
+    ENDO_OPENCODE_ACCOUNT_AUTHORITY: 'openrouter-main',
+    ENDO_OPENROUTER_API_KEY: 'seed-token',
+    ENDO_FLOOT_DIR: 'floot',
+    // Daemon-owned sessions require the broker; resource policy is shared.
+    ENDO_OPENCODE_BROKER_LISTENER_IMAGE: `localhost/listener@sha256:${'c'.repeat(64)}`,
+    ENDO_OPENCODE_BROKER_DIR: path.join(base, 'broker'),
+    ENDO_OPENCODE_BROKER_OWNER_ID: 'test-broker',
+    ENDO_OPENCODE_SANDBOX_IMAGE: `oci:localhost/opencode@sha256:${'a'.repeat(64)}`,
+    // The mounter's own operator variables must not leak in from a developer
+    // shell that runs the rootless mounter locally.
+    NINEP_SUDO: undefined,
+    NINEP_MOUNT_PROGRAM: undefined,
+    NINEP_UMOUNT_PROGRAM: undefined,
+    ENDO_NINEP_SUDO: undefined,
+    ENDO_NINEP_MOUNT_PROGRAM: undefined,
+    ENDO_NINEP_UMOUNT_PROGRAM: undefined,
+  });
+  return base;
+};
+
+test.serial('requires setup-host.js artifacts', async t => {
+  await baseEnv(t);
+  const noNative = makeFakeHost();
+  noNative.bindings.set(key('opencode-sandbox', 'state-provider'), 'cap');
+  await t.throwsAsync(main(noNative.host), { message: /native-sandbox/ });
+  t.is(noNative.mints.length, 0, 'no mint precedes the preflight failures');
+});
+
+test.serial(
+  'standalone hosted setup refuses a generic runtime before any mutation',
+  async t => {
+    await baseEnv(t);
+    const fake = makeFakeHost({ nativeSpecifier: unsupportedSpecifier });
+    for (const name of ['native-sandbox']) {
+      fake.bindings.set(key('opencode-sandbox', name), 'cap');
+    }
+    await t.throwsAsync(main(fake.host), { message: /Retire the old runtime/ });
+    t.deepEqual(fake.mints, []);
+    t.deepEqual(fake.removed, []);
+    t.deepEqual(fake.copies, []);
+  },
+);
+
+test.serial(
+  'standalone hosted setup refuses guest storage inside the runtime parent',
+  async t => {
+    const base = await baseEnv(t);
+    await withEnv(t, {
+      ENDO_OPENCODE_MCP_DIR: path.join(base, 'runtime', 'mcp'),
+    });
+    const fake = preflightHost();
+    await t.throwsAsync(main(fake.host), { message: /must be disjoint/ });
+    t.deepEqual(fake.mints, []);
+  },
+);
+
+test.serial(
+  'hosted setup validates retained runtime and state roots rather than current env',
+  async t => {
+    const base = await baseEnv(t);
+    const fake = preflightHost();
+    await withEnv(t, {
+      ENDO_SANDBOX_RUNTIME_DIR: path.join(base, 'ignored-runtime'),
+      ENDO_OPENCODE_STATE_DIR: path.join(base, 'ignored-state'),
+      ENDO_OPENCODE_WORKSPACE_DIR: path.join(
+        base,
+        'runtime',
+        'guest-workspaces',
+      ),
+    });
+    await t.throwsAsync(main(fake.host), { message: /must be disjoint/ });
+    t.deepEqual(fake.mints, []);
+    await withEnv(t, {
+      ENDO_OPENCODE_WORKSPACE_DIR: path.join(base, 'workspaces'),
+    });
+    await main(fake.host);
+    t.false(fake.reads.some(([, id]) => id === 'state-provider-id'));
+  },
+);
+
+test.serial(
+  'hosted setup needs no replacement runtime or state env for retained formulas',
+  async t => {
+    await baseEnv(t);
+    const fake = preflightHost();
+    await withEnv(t, {
+      ENDO_SANDBOX_RUNTIME_DIR: undefined,
+      ENDO_OPENCODE_STATE_DIR: undefined,
+    });
+    await main(fake.host);
+    t.is(
+      fake.mints.length,
+      6,
+      'credential, broker, session storage, backend, account source, subscription',
+    );
+    t.deepEqual(fake.reads, [
+      ['formula', 'native-sandbox-id'],
+      ['env', 'native-sandbox-id'],
+    ]);
+  },
+);
+
+test.serial(
+  'mints the backend under a temp name and rebinds the Floot profile',
+  async t => {
+    await baseEnv(t);
+    const {
+      host,
+      bindings,
+      mints,
+      copies,
+      removed,
+      publications,
+      profileValues,
+    } = preflightHost();
+    await main(host);
+
+    t.deepEqual(
+      publications.map(({ value }) => value.unavailable),
+      [true, undefined],
+    );
+    const publication = profileValues.get(
+      key('account-bindings', 'opencode-sandbox'),
+    );
+    t.is(publication.version, 1);
+    t.is(publication.accounts.length, 1);
+    t.like(publication.accounts[0], {
+      accountId: JSON.stringify(['openrouter', 'openrouter-main', null]),
+      providerId: 'openrouter',
+      uses: [{ backendId: 'opencode' }],
+    });
+    t.is(
+      publication.accounts[0].oracle,
+      bindings.get(key('opencode-sandbox', 'account-oracle')),
+    );
+
+    // The fifth is the broker's read-only account source, minted again over
+    // the broker on every run for the account oracle.
+    t.is(
+      mints.length,
+      6,
+      'credential + broker + session storage + backend + account source + subscription',
+    );
+    t.regex(mints[4].specifier, /account-source-module\.js$/);
+    t.regex(mints[0].specifier, /managed-credentials-module\.js$/);
+    t.is(mints[1].specifier, brokerServiceSpecifier);
+    t.is(mints[2].specifier, sessionStorageSpecifier);
+    t.regex(mints[3].specifier, /opencode-backend-module\.js$/);
+    t.deepEqual(mints[3].options.resultName, [
+      'opencode-sandbox',
+      'backend-next',
+    ]);
+    t.true(
+      bindings.has(key('opencode-sandbox', 'backend')),
+      'backend is live under its final name',
+    );
+    t.false(
+      bindings.has(key('opencode-sandbox', 'backend-next')),
+      'the temporary mint is removed after the swap',
+    );
+    t.true(
+      bindings.has(key('floot', 'controller-profile', 'opencode-backend')),
+      'the factory facet is bound into the Floot profile',
+    );
+    // The account oracle's provisioning follows the backend's binding, so
+    // the binding is found, not assumed to be the last thing done.
+    t.deepEqual(
+      copies.find(copy => copy.to.at(-1) === 'opencode-backend'),
+      {
+        from: ['opencode-sandbox', 'backend'],
+        to: ['floot', 'controller-profile', 'opencode-backend'],
+      },
+    );
+    t.true(
+      removed.some(
+        parts => key(...parts) === key('opencode-sandbox', 'backend-next'),
+      ),
+    );
+  },
+);
+
+test.serial(
+  'mints the session storage owner over null powers with the persisted roots',
+  async t => {
+    const base = await baseEnv(t);
+    const { host, bindings, mints, stored, removed } = preflightHost();
+    await main(host);
+    const storage = mints.find(
+      mint => mint.specifier === sessionStorageSpecifier,
+    );
+    t.truthy(storage);
+    t.deepEqual(storage?.options.resultName, [
+      'opencode-sandbox',
+      'session-storage',
+    ]);
+    t.is(storage?.options.powersName, 'opencode.storage-null-powers');
+    t.deepEqual(storage?.options.env, {
+      OPENCODE_WORKSPACE_BASE_DIR: path.join(base, 'workspaces'),
+      OPENCODE_MCP_DIR: path.join(base, 'mcp'),
+    });
+    t.deepEqual(stored, [
+      { value: null, name: 'opencode.storage-null-powers' },
+    ]);
+    t.true(
+      removed.some(
+        parts => key(...parts) === key('opencode.storage-null-powers'),
+      ),
+    );
+    t.false(bindings.has(key('opencode.storage-null-powers')));
+    t.true(mints.some(mint => mint.specifier === brokerServiceSpecifier));
+  },
+);
+
+test.serial('refuses to mint the backend without the broker image', async t => {
+  const base = await baseEnv(t);
+  await withEnv(t, { ENDO_OPENCODE_BROKER_LISTENER_IMAGE: undefined });
+  const noBroker = preflightHost();
+  await t.throwsAsync(main(noBroker.host), {
+    message: /ENDO_OPENCODE_BROKER_LISTENER_IMAGE is required/,
+  });
+  t.deepEqual(noBroker.mints, [], 'refused before any mint');
+  // The workspace root itself is absent: the refusal precedes the mkdir
+  // that would otherwise create it after the credential mint.
+  await t.throwsAsync(
+    access(path.join(base, 'workspaces')),
+    { code: 'ENOENT' },
+    'refused before any directory creation',
+  );
+});
+
+test.serial(
+  'mints the broker service from the managed credential when the listener image is configured',
+  async t => {
+    const base = await baseEnv(t);
+    const digest = `sha256:${'b'.repeat(64)}`;
+    const listenerImageRef = `localhost/listener@sha256:${'c'.repeat(64)}`;
+    await withEnv(t, {
+      ENDO_OPENCODE_BROKER_LISTENER_IMAGE: listenerImageRef,
+      ENDO_OPENCODE_BROKER_DIR: path.join(base, 'broker'),
+      ENDO_OPENCODE_BROKER_OWNER_ID: 'operator-broker',
+      ENDO_OPENCODE_SANDBOX_IMAGE: 'oci:localhost/opencode:latest',
+      ENDO_OPENCODE_PUBLIC_INTERNET: '1',
+    });
+    const { host, bindings, mints, copies, removed } = preflightHost();
+    /** @type {string[][]} */
+    const inspected = [];
+    await main(host, {
+      exec: async (file, args) => {
+        inspected.push([file, ...args]);
+        return { stdout: `${digest}\n` };
+      },
+    });
+    t.deepEqual(inspected, [
+      [
+        'podman',
+        'image',
+        'inspect',
+        '--format',
+        '{{.Digest}}',
+        'localhost/opencode:latest',
+      ],
+    ]);
+    const broker = mints.find(
+      mint => mint.specifier === brokerServiceSpecifier,
+    );
+    t.truthy(broker);
+    t.deepEqual(broker?.options.resultName, [
+      'opencode-sandbox',
+      'broker-service',
+    ]);
+    t.is(broker?.options.powersName, 'test-auth.broker-read');
+    const config = JSON.parse(broker?.options.env.OPENCODE_BROKER_CONFIG ?? '');
+    t.like(config, {
+      ownerId: 'operator-broker',
+      directory: path.join(base, 'broker'),
+      // The tag is resolved AWAY: `name:tag@digest` is a reference the
+      // native runtime refuses, so the pin drops the tag it was found under.
+      imageRef: `localhost/opencode@${digest}`,
+      imageDigest: digest,
+      listenerImageRef,
+      accountAuthority: 'openrouter-main',
+      publicInternet: true,
+    });
+    // No operator model list is persisted: the account's OpenRouter catalog
+    // admits models, and a stale list would be refused by the broker.
+    t.false(Object.hasOwn(config, 'models'));
+    // eslint-disable-next-line no-bitwise
+    t.is((await stat(path.join(base, 'broker'))).mode & 0o777, 0o700);
+    t.true(
+      copies.some(
+        ({ from, to }) =>
+          key(...from) === key('secrets', 'test-auth') &&
+          key(...to) === key('test-auth.broker-read'),
+      ),
+    );
+    t.true(
+      removed.some(parts => key(...parts) === key('test-auth.broker-read')),
+    );
+    t.false(bindings.has(key('test-auth.broker-read')));
+    t.deepEqual(
+      mints.map(mint => [mint.options.resultName].flat().at(-1)),
+      [
+        'test-auth',
+        'broker-service',
+        'session-storage',
+        'backend-next',
+        'account-source',
+        'subscription',
+      ],
+    );
+  },
+);
+
+test.serial(
+  'retains an existing broker service and session storage without re-minting',
+  async t => {
+    const base = await baseEnv(t);
+    await withEnv(t, {
+      ENDO_OPENCODE_BROKER_LISTENER_IMAGE: `localhost/listener@sha256:${'c'.repeat(64)}`,
+      // Settings the persisted broker was not minted with: applied, no retirement.
+      ENDO_OPENCODE_MAX_SESSIONS: '12',
+      ENDO_OPENCODE_PUBLIC_INTERNET: '1',
+    });
+    const fake = preflightHost();
+    for (const name of ['broker-service', 'session-storage']) {
+      fake.bindings.set(key('opencode-sandbox', name), 'cap');
+    }
+    fake.specifiers.set('broker-service-id', brokerServiceSpecifier);
+    fake.specifiers.set('session-storage-id', sessionStorageSpecifier);
+    // The retained broker's pins equal the configured ones; a retained broker
+    // is kept only while they do (see the pin-mismatch test below).
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const brokerEnv = harden({
+      OPENCODE_BROKER_CONFIG: JSON.stringify({
+        ownerId: 'persisted-broker',
+        directory: '/persisted/broker',
+        imageRef: `localhost/opencode@${digest}`,
+        imageDigest: digest,
+        listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
+        accountAuthority: 'openrouter-main',
+      }),
+    });
+    fake.environments.set('broker-service-id', brokerEnv);
+    // The retained owner's roots are effective; the backend is re-minted with
+    // them, not with the current environment's roots, so its new sessions stay
+    // where this owner can remove them.
+    const persistedRoots = harden({
+      OPENCODE_WORKSPACE_BASE_DIR: path.join(base, 'persisted-workspaces'),
+      OPENCODE_MCP_DIR: path.join(base, 'persisted-mcp'),
+    });
+    fake.environments.set('session-storage-id', persistedRoots);
+    await main(fake.host);
+    t.deepEqual(
+      fake.mints.map(mint => [mint.options.resultName].flat().at(-1)),
+      ['test-auth', 'backend-next', 'account-source', 'subscription'],
+    );
+    t.true(fake.reads.some(([, id]) => id === 'broker-service-id'));
+    t.true(fake.reads.some(([, id]) => id === 'session-storage-id'));
+    t.deepEqual(fake.configured, [
+      { maxSessions: 12, publicInternet: true, diagnostics: false },
+    ]);
+    const backend = fake.mints.find(mint =>
+      /opencode-backend-module\.js$/.test(mint.specifier),
+    );
+    t.deepEqual(Object.keys(backend?.options.env ?? {}).sort(), [
+      'OPENCODE_MCP_DIR',
+      'OPENCODE_WORKSPACE_BASE_DIR',
+    ]);
+    t.like(backend?.options.env, persistedRoots);
+    await stat(persistedRoots.OPENCODE_MCP_DIR);
+    // A retained broker under an unsupported entrypoint is refused before the
+    // credential mint or any directory creation, with no storage owner to
+    // refuse first.
+    const brokerOnly = preflightHost();
+    brokerOnly.bindings.set(key('opencode-sandbox', 'broker-service'), 'cap');
+    await t.throwsAsync(main(brokerOnly.host), {
+      message: /unsupported entrypoint/,
+    });
+    t.deepEqual(brokerOnly.mints, [], 'the broker is verified before any mint');
+    t.true(brokerOnly.reads.some(([, id]) => id === 'broker-service-id'));
+    // With no storage owner the environment's roots apply; the retained run
+    // above created only the persisted ones.
+    await t.throwsAsync(access(path.join(base, 'workspaces')), {
+      code: 'ENOENT',
+    });
+    // A retained service under an unsupported entrypoint is refused, not
+    // replaced. The broker is retained here too, so nothing reaches Podman.
+    const unsupported = preflightHost();
+    for (const name of ['broker-service', 'session-storage']) {
+      unsupported.bindings.set(key('opencode-sandbox', name), 'cap');
+    }
+    unsupported.specifiers.set('broker-service-id', brokerServiceSpecifier);
+    unsupported.environments.set('broker-service-id', brokerEnv);
+    await t.throwsAsync(main(unsupported.host), {
+      message: /unsupported entrypoint/,
+    });
+    t.deepEqual(
+      unsupported.mints,
+      [],
+      'the storage owner is read for its roots before any mint',
+    );
+  },
+);
+
+test.serial(
+  'a retained broker whose pins no longer match the configuration is refused before any mint',
+  async t => {
+    await baseEnv(t);
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const other = `sha256:${'e'.repeat(64)}`;
+    const retained = overrides =>
+      harden({
+        OPENCODE_BROKER_CONFIG: JSON.stringify({
+          ownerId: 'persisted-broker',
+          directory: '/persisted/broker',
+          imageRef: `localhost/opencode@${digest}`,
+          imageDigest: digest,
+          listenerImageRef: `localhost/listener@sha256:${'c'.repeat(64)}`,
+          accountAuthority: 'openrouter-main',
+          ...overrides,
+        }),
+      });
+    const retainedHost = brokerEnv => {
+      const fake = preflightHost();
+      fake.bindings.set(key('opencode-sandbox', 'broker-service'), 'cap');
+      fake.specifiers.set('broker-service-id', brokerServiceSpecifier);
+      fake.environments.set('broker-service-id', brokerEnv);
+      return fake;
+    };
+    // The operator bumped the slice image; the retained broker still pins the
+    // old digest. Retaining it silently would leave every slice on the old
+    // image while the unit environment claims the new one.
+    await withEnv(t, {
+      ENDO_OPENCODE_SANDBOX_IMAGE: `oci:localhost/opencode@${other}`,
+    });
+    const bumped = retainedHost(retained());
+    await t.throwsAsync(main(bumped.host), {
+      message: new RegExp(
+        `pins OpenCode sandbox image "${digest}" but the configuration now names "${other}"; a live broker cannot be re-pinned in place: remove "opencode-sandbox/broker-service" when no session depends on it, then rerun setup`,
+      ),
+    });
+    t.deepEqual(bumped.mints, [], 'refused before the credential mint');
+    // A tag is resolved (read-only) to compare; matching the retained digest
+    // retains the broker exactly as a pinned reference would.
+    await withEnv(t, {
+      ENDO_OPENCODE_SANDBOX_IMAGE: 'oci:localhost/opencode:latest',
+    });
+    const resolvedHost = retainedHost(retained());
+    const inspected = [];
+    await main(resolvedHost.host, {
+      exec: async (file, args) => {
+        inspected.push([file, ...args]);
+        return { stdout: `${digest}\n` };
+      },
+    });
+    t.is(inspected.length, 1);
+    t.false(
+      resolvedHost.mints.some(
+        mint => mint.specifier === brokerServiceSpecifier,
+      ),
+      'the broker is retained, not re-minted',
+    );
+    // The listener image is compared the same way when the environment names
+    // one; a retained broker allows the environment to omit it.
+    await withEnv(t, {
+      ENDO_OPENCODE_SANDBOX_IMAGE: `oci:localhost/opencode@${digest}`,
+      ENDO_OPENCODE_BROKER_LISTENER_IMAGE: `localhost/listener@${other}`,
+    });
+    const listener = retainedHost(retained());
+    await t.throwsAsync(main(listener.host), {
+      message:
+        /runs listener image "localhost\/listener@sha256:c+" but the configuration now names "localhost\/listener@sha256:e+"/,
+    });
+    t.deepEqual(listener.mints, []);
+    await withEnv(t, { ENDO_OPENCODE_BROKER_LISTENER_IMAGE: undefined });
+    const omitted = retainedHost(retained());
+    await main(omitted.host);
+    t.false(
+      omitted.mints.some(mint => mint.specifier === brokerServiceSpecifier),
+    );
+  },
+);
+
+test.serial(
+  'derives the broker owner label from the host identity when none is configured',
+  async t => {
+    const base = await baseEnv(t);
+    await withEnv(t, {
+      ENDO_OPENCODE_BROKER_LISTENER_IMAGE: `localhost/listener@sha256:${'c'.repeat(64)}`,
+      ENDO_OPENCODE_BROKER_DIR: path.join(base, 'broker'),
+      ENDO_OPENCODE_BROKER_OWNER_ID: undefined,
+      ENDO_OPENCODE_SANDBOX_IMAGE: `oci:localhost/opencode@sha256:${'b'.repeat(64)}`,
+    });
+    const { host, mints } = preflightHost();
+    await main(host);
+    const broker = mints.find(
+      mint => mint.specifier === brokerServiceSpecifier,
+    );
+    const expected = `opencode-${createHash('sha256').update('fake-host-id').digest('hex').slice(0, 48)}`;
+    t.like(JSON.parse(broker?.options.env.OPENCODE_BROKER_CONFIG ?? ''), {
+      ownerId: expected,
+    });
+  },
+);
+
+test.serial(
+  'rootless mount settings are recorded for the backend and refused before any mint',
+  async t => {
+    await baseEnv(t);
+    await withEnv(t, {
+      ENDO_NINEP_SUDO: '1',
+      ENDO_NINEP_MOUNT_PROGRAM: 'sudo -n mount',
+    });
+    const fake = preflightHost();
+    await main(fake.host);
+    const backend = fake.mints.find(mint =>
+      /opencode-backend-module\.js$/.test(mint.specifier),
+    );
+    t.is(typeof backend?.options.env.OPENCODE_MOUNTER_ENV, 'string');
+    t.deepEqual(JSON.parse(backend?.options.env.OPENCODE_MOUNTER_ENV ?? '{}'), {
+      NINEP_SUDO: '1',
+      NINEP_MOUNT_PROGRAM: 'sudo -n mount',
+    });
+    // An empty ENDO_ spelling falls through to the mounter's own name.
+    await withEnv(t, { ENDO_NINEP_SUDO: '', NINEP_SUDO: '1' });
+    const fallthrough = preflightHost();
+    await main(fallthrough.host);
+    const viaPlain = fallthrough.mints.find(mint =>
+      /opencode-backend-module\.js$/.test(mint.specifier),
+    );
+    t.deepEqual(
+      JSON.parse(viaPlain?.options.env.OPENCODE_MOUNTER_ENV ?? '{}'),
+      {
+        NINEP_SUDO: '1',
+        NINEP_MOUNT_PROGRAM: 'sudo -n mount',
+      },
+    );
+    await withEnv(t, { ENDO_NINEP_SUDO: '1', NINEP_SUDO: undefined });
+    // The mounter's unprefixed spelling is accepted too, and refused as the
+    // mounter would refuse it, before the credential mint.
+    await withEnv(t, {
+      ENDO_NINEP_MOUNT_PROGRAM: undefined,
+      NINEP_UMOUNT_PROGRAM: 'rm -rf',
+    });
+    const bad = preflightHost();
+    await t.throwsAsync(main(bad.host), {
+      message: /"NINEP_UMOUNT_PROGRAM" must invoke "umount"/,
+    });
+    t.deepEqual(bad.mints, [], 'refused before any mint');
+    // A present NINEP_SUDO other than `1` is refused rather than silently off.
+    await withEnv(t, { NINEP_UMOUNT_PROGRAM: undefined, ENDO_NINEP_SUDO: '0' });
+    const off = preflightHost();
+    await t.throwsAsync(main(off.host), {
+      message: /"NINEP_SUDO" must be "1" when present/,
+    });
+    t.deepEqual(off.mints, [], 'refused before any mint');
+    // Empty values are unset: nothing is recorded for the backend.
+    await withEnv(t, { ENDO_NINEP_SUDO: '', ENDO_NINEP_MOUNT_PROGRAM: '' });
+    const unset = preflightHost();
+    await main(unset.host);
+    const plain = unset.mints.find(mint =>
+      /opencode-backend-module\.js$/.test(mint.specifier),
+    );
+    t.false(Object.hasOwn(plain?.options.env ?? {}, 'OPENCODE_MOUNTER_ENV'));
+  },
+);
+
+test.serial(
+  'refuses before any mint what a minted owner could not construct',
+  async t => {
+    const base = await baseEnv(t);
+    // A trailing separator passes placement but the storage owner's own root
+    // check refuses it; the daemon would keep the unconstructible formula.
+    await withEnv(t, {
+      ENDO_OPENCODE_WORKSPACE_DIR: `${path.join(base, 'workspaces')}/`,
+    });
+    const slash = preflightHost();
+    await t.throwsAsync(main(slash.host), {
+      message:
+        /ENDO_OPENCODE_WORKSPACE_DIR .*must be a normalized absolute path/,
+    });
+    t.deepEqual(slash.mints, []);
+    await withEnv(t, {
+      ENDO_OPENCODE_WORKSPACE_DIR: path.join(base, 'workspaces'),
+      ENDO_OPENCODE_BROKER_LISTENER_IMAGE: `localhost/listener@sha256:${'c'.repeat(64)}`,
+      ENDO_OPENCODE_BROKER_DIR: 'relative-broker',
+      ENDO_OPENCODE_BROKER_OWNER_ID: 'Operator',
+    });
+    const relativeDir = preflightHost();
+    await t.throwsAsync(main(relativeDir.host), {
+      message: /ENDO_OPENCODE_BROKER_DIR must be a normalized absolute path/,
+    });
+    t.deepEqual(relativeDir.mints, [], 'refused before any mint');
+    await t.throwsAsync(access(path.join(base, 'workspaces')), {
+      code: 'ENOENT',
+    });
+    await withEnv(t, { ENDO_OPENCODE_BROKER_DIR: path.join(base, 'broker') });
+    const badOwner = preflightHost();
+    await t.throwsAsync(main(badOwner.host), {
+      message: /ENDO_OPENCODE_BROKER_OWNER_ID must match/,
+    });
+    t.deepEqual(badOwner.mints, [], 'refused before any mint');
+    // A mutable listener tag passes the persisted config shape but the broker
+    // kit refuses it at construction; refuse it before Podman is even asked.
+    await withEnv(t, {
+      ENDO_OPENCODE_BROKER_OWNER_ID: 'operator-broker',
+      ENDO_OPENCODE_BROKER_LISTENER_IMAGE: 'localhost/listener:latest',
+    });
+    const mutableListener = preflightHost();
+    /** @type {string[][]} */
+    const inspected = [];
+    await t.throwsAsync(
+      main(mutableListener.host, {
+        exec: async (file, args) => {
+          inspected.push([file, ...args]);
+          return { stdout: `sha256:${'b'.repeat(64)}\n` };
+        },
+      }),
+      { message: /ENDO_OPENCODE_BROKER_LISTENER_IMAGE must be/ },
+    );
+    t.deepEqual(inspected, [], 'refused before resolving the slice image');
+    t.deepEqual(mutableListener.mints, [], 'refused before any mint');
+    // A malformed pinned digest (the broker kit's own check) or an option-like
+    // name (which Podman would misparse) is refused before any mint, without
+    // asking Podman.
+    await withEnv(t, {
+      ENDO_OPENCODE_BROKER_LISTENER_IMAGE: `localhost/listener@sha256:${'c'.repeat(64)}`,
+      ENDO_OPENCODE_SANDBOX_IMAGE: 'oci:localhost/opencode@sha256:zzz',
+    });
+    const badDigest = preflightHost();
+    await t.throwsAsync(
+      main(badDigest.host, {
+        exec: async (file, args) => {
+          inspected.push([file, ...args]);
+          return { stdout: `sha256:${'b'.repeat(64)}\n` };
+        },
+      }),
+      { message: /sandbox image digest is invalid/ },
+    );
+    t.deepEqual(inspected, [], 'refused before resolving the slice image');
+    t.deepEqual(badDigest.mints, [], 'refused before any mint');
+    await t.throwsAsync(access(path.join(base, 'workspaces')), {
+      code: 'ENOENT',
+    });
+    await withEnv(t, { ENDO_OPENCODE_SANDBOX_IMAGE: 'oci:-rm' });
+    const optionLike = preflightHost();
+    await t.throwsAsync(
+      main(optionLike.host, {
+        exec: async (file, args) => {
+          inspected.push([file, ...args]);
+          return { stdout: `sha256:${'b'.repeat(64)}\n` };
+        },
+      }),
+      { message: /Invalid OpenCode sandbox image/ },
+    );
+    t.deepEqual(inspected, [], 'refused before resolving the slice image');
+    t.deepEqual(optionLike.mints, [], 'refused before any mint');
+  },
+);
+
+test.serial('ignores bare OPENCODE_* variables the daemon strips', async t => {
+  await baseEnv(t);
+  await withEnv(t, {
+    OPENCODE_BACKEND_NAME: 'hijacked',
+    OPENCODE_CLIENT_NAME: 'hijacked-client',
+    FLOOT_AUTH_SECRET_NAME: 'hijacked-secret',
+  });
+  const { host, bindings } = preflightHost();
+  await main(host);
+
+  t.true(bindings.has(key('test-auth')), 'ENDO_ creds name wins');
+  t.false(bindings.has(key('hijacked-secret')));
+  t.true(
+    bindings.has(key('floot', 'controller-profile', 'opencode-backend')),
+    'the backend stays at its conventional name',
+  );
+  t.false(bindings.has(key('hijacked')));
+});
+
+test.serial(
+  'does not derive the credential from Floot provider variables',
+  async t => {
+    await baseEnv(t);
+    await withEnv(t, {
+      ENDO_OPENCODE_CREDS_NAME: undefined,
+      ENDO_FLOOT_AUTH_SECRET_NAME: 'floot-auth',
+      FLOOT_AUTH_SECRET_NAME: 'floot-auth',
+    });
+    const { host, bindings } = preflightHost();
+    await main(host);
+    t.true(
+      bindings.has(key('openrouter-auth')),
+      'defaults to the documented OpenRouter secret name',
+    );
+    t.false(
+      bindings.has(key('floot-auth')),
+      'never wraps a possibly non-OpenRouter provider secret',
+    );
+  },
+);
+
+test.serial(
+  'a failed replacement mint leaves the live backend and Floot binding intact',
+  async t => {
+    await baseEnv(t);
+    const failing = makeFakeHost({
+      failMint: specifier => /opencode-backend-module\.js$/.test(specifier),
+    });
+    failing.bindings.set(
+      key('floot', 'controller-profile', 'opencode-backend'),
+      'old-backend',
+    );
+    for (const name of ['native-sandbox']) {
+      failing.bindings.set(key('opencode-sandbox', name), 'cap');
+    }
+    failing.bindings.set(key('floot', 'controller-profile'), 'dir');
+    failing.bindings.set(key('opencode-sandbox', 'backend'), 'old-backend');
+    await t.throwsAsync(main(failing.host), { message: /mint failed/ });
+    t.is(
+      failing.bindings.get(key('opencode-sandbox', 'backend')),
+      'old-backend',
+      'the old backend is untouched',
+    );
+    t.is(
+      failing.bindings.get(
+        key('floot', 'controller-profile', 'opencode-backend'),
+      ),
+      'old-backend',
+      'Floot still resolves the old backend',
+    );
+  },
+);
+
+test.serial(
+  'rebinds the profile in place over an existing binding',
+  async t => {
+    await baseEnv(t);
+    const fake = preflightHost();
+    fake.bindings.set(
+      key('floot', 'controller-profile', 'opencode-backend'),
+      'stale',
+    );
+    await main(fake.host);
+    t.is(
+      fake.bindings.get(key('floot', 'controller-profile', 'opencode-backend')),
+      'cap',
+      'copy overwrote the stale binding',
+    );
+    t.false(
+      fake.removed.some(
+        parts =>
+          key(...parts) ===
+          key('floot', 'controller-profile', 'opencode-backend'),
+      ),
+      'no remove-then-copy window for the profile binding',
+    );
+  },
+);
+
+test.serial('rejects a symlinked MCP base directory', async t => {
+  const base = await baseEnv(t);
+  const target = path.join(base, 'mcp-target');
+  const link = path.join(base, 'mcp-link');
+  await mkdir(target, { mode: 0o700 });
+  await symlink(target, link);
+  await withEnv(t, { ENDO_OPENCODE_MCP_DIR: link });
+  const { host, mints } = preflightHost();
+  await t.throwsAsync(main(host), { message: /must not be a symlink/ });
+  t.is(mints.length, 1, 'the credential mint preceded the MCP check');
+});

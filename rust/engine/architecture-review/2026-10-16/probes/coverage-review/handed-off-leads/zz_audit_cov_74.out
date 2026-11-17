@@ -1,0 +1,7 @@
+eval super() in derived ctor: agreement=BothComplete oracle="threw SyntaxError" ironhorse="threw SyntaxError" oracle_error="" ih_error=""
+eval super() in arrow in derived ctor: agreement=BothComplete oracle="threw SyntaxError" ironhorse="threw SyntaxError" oracle_error="" ih_error=""
+eval new.target in method: agreement=BothComplete oracle="threw SyntaxError" ironhorse="threw SyntaxError" oracle_error="" ih_error=""
+eval new.target in generator: agreement=BothComplete oracle="threw SyntaxError" ironhorse="threw SyntaxError" oracle_error="" ih_error=""
+compartment evaluators frozen after lockdown: agreement=BothComplete oracle="[true,true,true]" ironhorse="[false,false,false]" oracle_error="" ih_error=""
+compartment evaluators frozen, compartment before lockdown: agreement=BothComplete oracle="[false,false,false]" ironhorse="[false,false,false]" oracle_error="" ih_error=""
+pre-flip closure called from child after lockdown: agreement=BothComplete oracle="false" ironhorse="true" oracle_error="" ih_error=""

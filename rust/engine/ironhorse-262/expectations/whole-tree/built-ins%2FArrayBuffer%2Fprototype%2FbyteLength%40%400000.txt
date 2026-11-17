@@ -17,5 +17,5 @@ built-ins/ArrayBuffer/prototype/byteLength/this-has-no-typedarrayname-internal.j
 built-ins/ArrayBuffer/prototype/byteLength/this-has-no-typedarrayname-internal.js strict pass
 built-ins/ArrayBuffer/prototype/byteLength/this-is-not-object.js sloppy pass
 built-ins/ArrayBuffer/prototype/byteLength/this-is-not-object.js strict pass
-built-ins/ArrayBuffer/prototype/byteLength/this-is-sharedarraybuffer.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: `this` cannot be a SharedArrayBuffer Expected a TypeError to be thrown but no exception was thrown at all"
-built-ins/ArrayBuffer/prototype/byteLength/this-is-sharedarraybuffer.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: `this` cannot be a SharedArrayBuffer Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/ArrayBuffer/prototype/byteLength/this-is-sharedarraybuffer.js sloppy pass
+built-ins/ArrayBuffer/prototype/byteLength/this-is-sharedarraybuffer.js strict pass

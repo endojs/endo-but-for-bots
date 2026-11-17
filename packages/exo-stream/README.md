@@ -206,6 +206,28 @@ try {
 
 ## API
 
+### Endpoint resource cleanup
+
+The four `*FromIterator` adapters return endpoints with a separate `close()` method.
+The callable reader and writer pumps also expose this method as `pump.close` for custom Exos.
+It fences all stream invocations sharing that source, interrupts pending reader pulls through
+`cancelPending` when supplied, and waits for admitted source calls and source cleanup.
+Without an interruption hook, a pending source operation must settle naturally.
+New stream calls and source pulls are refused after the fence.
+
+A stream's `return()` retains its original data, validation, or terminal error.
+Endpoint `close()` acknowledges resource release independently: an earlier I/O failure does
+not prevent successful cleanup, and failed cleanup remains available for explicit retry.
+Only a fulfilled source `return()` with `done: true` acknowledges release.
+An unfinished return result remains owned even if the ordinary stream protocol accepts its value.
+A source with no `return()` must have no separately owned resource to release.
+Source adapters must forward this acknowledgement to any underlying resources they own.
+
+The `CloseablePassableReader`, `CloseablePassableWriter`, and corresponding bytes types express
+this additional authority and contract.
+The base stream-only types, including buffered event channels, do not promise resource cleanup.
+
+
 ### Reader Modules
 
 #### `readerFromIterator(iterator, options?)`
@@ -279,10 +301,20 @@ the `stream` method on a custom Exo.
 #### `bytesReaderFromIterator(bytesIterator, options?)`
 
 Wrap a local `AsyncIterator<Uint8Array>` as a `PassableBytesReader` Exo.
-Bytes are automatically base64-encoded for transmission over CapTP.
+The Exo offers two methods over the same chunks:
 
-Uses `streamBase64()` method instead of `stream()` to allow future migration
-to direct bytes transport when CapTP supports it.
+- `stream()` yields each chunk as a passable byte array (a frozen `Uint8Array`
+  over an immutable `ArrayBuffer`). Consume it with `iterateReader()`.
+- `streamBase64()` yields each chunk as a base64 string. Consume it with
+  `iterateBytesReader()`. It is retained for compatibility and is slated for
+  deprecation.
+
+A reader is consumed once, through whichever method an initiator calls.
+
+Chunks from `stream()` are frozen. Under the immutable-ArrayBuffer shim they
+are not genuine `ArrayBuffer` views, so APIs such as `Uint8Array#set` and
+`TextDecoder#decode` cannot read them directly. Copy each chunk into a mutable
+`Uint8Array` with `thawedBytes()` from `@endo/immutable-arraybuffer` first.
 
 **Options:**
 - `buffer` (number, default 0): Number of values to pre-pull
@@ -326,14 +358,33 @@ for transmission over CapTP.
 
 ### Migration Path for Bytes Streams
 
-Currently, bytes are transmitted as base64-encoded strings via `streamBase64()`.
-When CapTP and pass-style support direct binary transport, bytes-streamable
-Exos can implement the `stream()` method directly, allowing initiators to
-gracefully transition to using `iterateReader()` instead of
-`iterateBytesReader()`, and `iterateWriter()` instead of
-`iterateBytesWriter()`.
+Bytes readers made with `bytesReaderFromIterator()` offer both `stream()`,
+which yields passable byte arrays, and the older `streamBase64()`, which yields
+base64 strings. Initiators can migrate from `iterateBytesReader()` to
+`iterateReader()` at their own pace. Bytes writers still use `streamBase64()`
+only; `iterateWriter()` is not yet a substitute for `iterateBytesWriter()`.
 
 ## Design
+
+### Bounded push sources
+
+`makeBoundedReader` from `@endo/exo-stream/bounded-channel.js` adapts a push
+source to the credit-aware reader pump.
+Pass `maxItems`, `maxWeight`, and `weigh(event)` to bound undelivered data.
+Weights and bounds use positive 32-bit integers for this resident-queue profile.
+Consumed entries release their charges; these are not lifetime traffic limits.
+One additional terminal event, itself subject to `maxWeight`, has reserved space.
+Queue exhaustion fails the reader and invokes `onClose` so the producer can stop.
+The producer must connect that hook to its own cancellation/cleanup barrier;
+closing a reader alone is not proof that native execution stopped.
+
+Unlike `makeBufferedReader`, this channel honors consumer credit rather than
+building an eager acknowledgement chain.
+Consumers must still bound prefetch and their own retained history.
+An absent consumer can fill the producer queue, but cannot cause unbounded growth.
+Use this for non-cooperative push sources where explicit overload failure is
+preferable to losing events or retaining them without a bound.
+Use a pull source directly when producer backpressure is available.
 
 See [DESIGN.md](./DESIGN.md) for design documentation.
 

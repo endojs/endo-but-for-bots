@@ -411,7 +411,7 @@ fn lossy_utf16_text_is_diagnostic_only() {
         let allowed_functions: &[&str] = match relative {
             "interp/strings.rs" => &["str_text_lossy"],
             "interp/render.rs" => &[
-                "render_at",
+                "render_leaf",
                 "render_uncaught",
                 "string_tag_of",
                 "render_symbol_lossy",

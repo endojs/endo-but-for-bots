@@ -1,0 +1,257 @@
+// @ts-check
+import test from 'ava';
+
+import {
+  parseTranscript,
+  encodeTranscript,
+} from '../src/transcript-records.js';
+
+/**
+ * Shared restoration conformance for the hosted CLI adapters.
+ *
+ * The stack owns the transcript, so every adapter must be able to turn the
+ * record stream back into its CLI's native conversation without losing what
+ * the records distinguish. These are the properties that hold whatever the
+ * native format is; an adapter's own suite adds whatever its format needs.
+ *
+ * This suite is what makes the accepted format couplings safe. Claude's JSONL
+ * schema and OpenCode's database schema were captured by observation, not
+ * specification, and the protection for that is a pinned image — which only
+ * protects while a pin bump re-runs these tests. A format that drifted
+ * silently would resume empty rather than fail, which is the failure mode
+ * that hides.
+ *
+ * @param {object} adapter
+ * @param {string} adapter.label
+ * @param {(records: readonly any[]) => string | Promise<string>} adapter.restore
+ *   Render the records as the CLI's native store.
+ * @param {(native: string) => readonly any[] | Promise<readonly any[]>} adapter.readBack
+ *   Read that store back as records, so the round trip can be judged.
+ */
+export const testTranscriptRestoration = ({ label, restore, readBack }) => {
+  const conversation = harden([
+    { kind: 'message', role: 'user', content: 'build the page' },
+    { kind: 'message', role: 'assistant', content: 'reading the workspace' },
+    { kind: 'tool-call', id: 'c1', name: 'readFile', args: '{"path":"a"}' },
+    { kind: 'tool-result', id: 'c1', content: 'contents of a' },
+    { kind: 'message', role: 'assistant', content: 'done' },
+  ]);
+
+  test(`${label} restores a conversation without losing its turns`, async t => {
+    const records = await readBack(await restore(conversation));
+    t.deepEqual(
+      records.map(record => record.kind),
+      conversation.map(record => record.kind),
+      'every record comes back, in order',
+    );
+    t.deepEqual(
+      records.filter(record => record.kind === 'message'),
+      conversation.filter(record => record.kind === 'message'),
+      'dialogue is unchanged',
+    );
+  });
+
+  test(`${label} restores a tool call as a tool call with its result`, async t => {
+    const records = await readBack(await restore(conversation));
+    const call = records.find(record => record.kind === 'tool-call');
+    const result = records.find(record => record.kind === 'tool-result');
+    // The property most likely to regress silently: a format that flattened
+    // tool traffic into prose would still round-trip the dialogue above.
+    t.like(call, { name: 'readFile', args: '{"path":"a"}' });
+    t.like(result, { content: 'contents of a' });
+    t.is(call?.id, result?.id, 'the call and its result stay paired');
+  });
+
+  test(`${label} restores an interrupted call as interrupted`, async t => {
+    const interrupted = harden([
+      { kind: 'message', role: 'user', content: 'go' },
+      { kind: 'tool-call', id: 'c1', name: 'build', args: '{}' },
+    ]);
+    const records = await readBack(await restore(interrupted));
+    t.truthy(
+      records.find(record => record.kind === 'tool-call'),
+      'the call survives rather than being dropped',
+    );
+  });
+
+  for (const firstCompleted of [true, false]) {
+    test(`${label} keeps reused tool ids scoped to their turn (${firstCompleted ? 'completed' : 'interrupted'})`, async t => {
+      const input = harden([
+        { kind: 'message', role: 'user', content: 'first turn' },
+        { kind: 'tool-call', id: 'reused', name: 'first', args: '{}' },
+        ...(firstCompleted
+          ? [
+              {
+                kind: 'tool-result',
+                id: 'reused',
+                content: 'first result',
+                failed: true,
+              },
+            ]
+          : []),
+        { kind: 'message', role: 'user', content: 'second turn' },
+        { kind: 'tool-call', id: 'reused', name: 'second', args: '{}' },
+        { kind: 'tool-result', id: 'reused', content: 'second result' },
+      ]);
+      const restored = await readBack(await restore(input));
+      const calls = restored.filter(record => record.kind === 'tool-call');
+      const results = restored.filter(record => record.kind === 'tool-result');
+      t.deepEqual(
+        calls.map(call => call.name),
+        ['first', 'second'],
+      );
+      t.deepEqual(
+        results.map(result => result.content),
+        [
+          firstCompleted ? 'first result' : 'Tool call did not complete.',
+          'second result',
+        ],
+      );
+      t.deepEqual(
+        results.map(result => result.id),
+        calls.map(call => call.id),
+      );
+    });
+  }
+
+  test(`${label} preserves sequential reused ids within one retained checkpoint tail`, async t => {
+    const restored = await readBack(
+      await restore(
+        harden([
+          {
+            kind: 'compaction',
+            summary: 'summary',
+            retainedTail: [
+              { kind: 'message', role: 'user', content: 'one turn' },
+              { kind: 'tool-call', id: 'same', name: 'first', args: '{}' },
+              { kind: 'tool-result', id: 'same', content: 'first answer' },
+              { kind: 'tool-call', id: 'same', name: 'second', args: '{}' },
+              { kind: 'tool-result', id: 'same', content: 'second answer' },
+            ],
+          },
+        ]),
+      ),
+    );
+    t.deepEqual(
+      restored
+        .filter(record => record.kind === 'tool-result')
+        .map(record => record.content),
+      ['first answer', 'second answer'],
+    );
+  });
+
+  test(`${label} refuses a result after a user boundary without a call in that turn`, async t => {
+    const input = harden([
+      { kind: 'message', role: 'user', content: 'first turn' },
+      { kind: 'tool-call', id: 'reused', name: 'first', args: '{}' },
+      { kind: 'message', role: 'user', content: 'second turn' },
+      { kind: 'tool-result', id: 'reused', content: 'unattributed result' },
+    ]);
+    await t.throwsAsync(async () => restore(input), {
+      message: /answers no call/,
+    });
+  });
+
+  test(`${label} restores a compacted conversation at its boundary`, async t => {
+    const compacted = harden([
+      ...conversation,
+      { kind: 'compaction', summary: 'we built the page' },
+      { kind: 'message', role: 'user', content: 'now the footer' },
+    ]);
+    const records = await readBack(await restore(compacted));
+    // A CLI with no compaction concept carries the summary as a message; one
+    // with the concept carries it as the boundary row. Either is the summary
+    // reaching the model, which is what is being judged.
+    const text = records
+      .filter(
+        record => record.kind === 'message' || record.kind === 'compaction',
+      )
+      .map(record =>
+        record.kind === 'compaction' ? record.summary : record.content,
+      )
+      .join('\n');
+    t.true(text.includes('we built the page'), 'the summary is carried');
+    t.true(text.includes('now the footer'), 'the live span is carried');
+    t.false(
+      text.includes('reading the workspace'),
+      'the superseded span is not replayed, or the compaction bought nothing',
+    );
+  });
+
+  test(`${label} restores the same store from the same records`, async t => {
+    // A retried revival must not fork a second conversation out of one
+    // history, so restoration cannot depend on randomness or the clock.
+    t.is(await restore(conversation), await restore(conversation));
+  });
+
+  test(`${label} restores context already selected at its checkpoint`, async t => {
+    const records = await readBack(
+      await restore(
+        harden([
+          { kind: 'compaction', summary: 'checkpoint-only summary' },
+          {
+            kind: 'message',
+            role: 'user',
+            content: 'continue from checkpoint',
+          },
+        ]),
+      ),
+    );
+    const text = records
+      .filter(
+        record => record.kind === 'message' || record.kind === 'compaction',
+      )
+      .map(record =>
+        record.kind === 'compaction' ? record.summary : record.content,
+      );
+    t.deepEqual(text, ['checkpoint-only summary', 'continue from checkpoint']);
+  });
+
+  test(`${label} restores a compaction's explicit retained tail exactly once`, async t => {
+    const retainedTail = harden([
+      { kind: 'message', role: 'user', content: 'retained request' },
+      { kind: 'tool-call', id: 'tail-call', name: 'readFile', args: '{}' },
+      {
+        kind: 'tool-result',
+        id: 'tail-call',
+        content: '[Old tool result content cleared]',
+      },
+    ]);
+    const records = await readBack(
+      await restore(
+        harden([
+          ...conversation,
+          { kind: 'compaction', summary: 'head summary', retainedTail },
+          {
+            kind: 'message',
+            role: 'user',
+            content: 'continue after checkpoint',
+          },
+        ]),
+      ),
+    );
+    t.is(records.filter(row => row.kind === 'tool-call').length, 1);
+    t.like(
+      records.find(row => row.kind === 'tool-result'),
+      { content: '[Old tool result content cleared]' },
+    );
+    const dialogue = records
+      .filter(row => row.kind === 'message')
+      .map(row => row.content);
+    t.is(dialogue.filter(text => text === 'retained request').length, 1);
+    t.true(dialogue.includes('continue after checkpoint'));
+    t.false(dialogue.includes('build the page'));
+  });
+
+  test(`${label} restores an empty conversation as an empty store`, async t => {
+    t.deepEqual(await readBack(await restore([])), []);
+  });
+
+  test(`${label} round-trips through the record encoding unchanged`, t => {
+    // The stream an adapter is handed is the stream the stack persisted.
+    t.deepEqual(parseTranscript(encodeTranscript(conversation)), [
+      ...conversation,
+    ]);
+  });
+};
+harden(testTranscriptRestoration);

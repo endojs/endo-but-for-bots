@@ -8,6 +8,9 @@ import test from 'ava';
 import url from 'url';
 import path from 'path';
 import fs from 'fs';
+import * as crypto from 'node:crypto';
+import * as popen from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { makePromiseKit } from '@endo/promise-kit';
@@ -16,6 +19,13 @@ import { decodeBase64 } from '@endo/base64';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { start, stop, purge, makeEndoClient } from '../index.js';
 import { parseId } from '../src/formula-identifier.js';
+import { makeDaemon } from '../src/manager.js';
+import {
+  gunzip,
+  makeCryptoPowers,
+  makeDaemonicPowers,
+  makeFilePowers,
+} from '../src/manager-node-powers.js';
 
 const { raw } = String;
 
@@ -89,6 +99,19 @@ const prepareConfig = async t => {
     ...makeConfig('tmp', getConfigDirectoryName(t.title, t.context.length)),
     gcEnabled: true,
   };
+  if (process.platform !== 'win32') {
+    // Unix sockets have a short path limit even when the checkout is nested.
+    const socketDirectory = await fs.promises.mkdtemp(
+      path.join(tmpdir(), 'endo-gc-'),
+    );
+    t.teardown(async () => {
+      // AVA runs this before afterEach.always: leave the socket available
+      // until the graceful shutdown request has been sent.
+      await stop(config);
+      await fs.promises.rm(socketDirectory, { recursive: true, force: true });
+    });
+    config.sockPath = path.join(socketDirectory, 'endo.sock');
+  }
 
   await purge(config);
   await start(config);
@@ -126,7 +149,7 @@ test.afterEach.always(async t => {
   }
 });
 
-// Both blobs (getInfo().hash) and trees (sha256()) report the content hash as
+// Both blobs and trees report the content hash with sha256() as
 // base64; the content store keys files by the hex digest, so convert via
 // storeKeyOf wherever the store address is needed.
 const storeKeyOf = hashBase64 => encodeHex(decodeBase64(hashBase64));
@@ -144,7 +167,7 @@ test('content-store blob is reclaimed when its only formula is collected', async
     new TextEncoder().encode('blob-content'),
   ]);
   const blob = await E(host).storeBlob(readerRef, 'lonely-blob');
-  const sha256 = (await E(blob).getInfo()).hash;
+  const sha256 = await E(blob).sha256();
 
   const filePath = contentPathOf(config.statePath, sha256);
   t.true(fs.existsSync(filePath), 'blob file written to content store');
@@ -172,8 +195,8 @@ test('content-store blob survives when a sibling formula still references the sa
     'twin-b',
   );
 
-  const shaA = (await E(blobA).getInfo()).hash;
-  const shaB = (await E(blobB).getInfo()).hash;
+  const shaA = await E(blobA).sha256();
+  const shaB = await E(blobB).sha256();
   t.is(shaA, shaB, 'both blobs dedupe to the same content hash');
 
   const filePath = contentPathOf(config.statePath, shaA);
@@ -249,17 +272,9 @@ test('content-store blob from a readable-tree formula is reclaimed when the tree
   const tree = await E(host).lookup(['lonely-tree']);
   const sha256 = await E(tree).sha256();
 
-  // getInfo() is the uniform identity accessor on the real content store:
-  // its base64 hash equals sha256() and the cheap size() path yields the
-  // manifest byte length as a bigint.
-  const info =
-    /** @type {{ algorithm: string, hash: string, size: bigint }} */ (
-      await E(tree).getInfo()
-    );
-  t.is(info.algorithm, 'sha256');
-  t.is(info.hash, sha256);
-  t.is(typeof info.size, 'bigint');
-  t.true(info.size > 0n);
+  const size = /** @type {bigint} */ (await E(tree).size());
+  t.is(typeof size, 'bigint');
+  t.true(size > 0n);
 
   const filePath = contentPathOf(config.statePath, sha256);
   t.true(fs.existsSync(filePath), 'tree root JSON written to content store');
@@ -306,6 +321,140 @@ const makeRemoteBlobTree = (blobs, subtrees = {}) => {
 
 const storeDirEntries = statePath =>
   fs.readdirSync(path.join(statePath, 'store-sha256'));
+
+for (const retainSurvivor of [false, true]) {
+  test.serial(
+    `tree cleanup retries child after root removal, new survivor: ${retainSurvivor}`,
+    async t => {
+      t.timeout(15_000);
+      const temporary = await fs.promises.mkdtemp(
+        path.join(tmpdir(), 'endo-content-retry-'),
+      );
+      t.teardown(() =>
+        fs.promises.rm(temporary, { recursive: true, force: true }),
+      );
+      const cancelled = makePromiseKit();
+      void cancelled.promise.catch(() => {});
+      t.teardown(() => cancelled.reject(Error('Test finished')));
+      const statePath = path.join(temporary, 'state');
+      const powers = await makeDaemonicPowers({
+        config: {
+          statePath,
+          ephemeralStatePath: path.join(temporary, 'ephemeral'),
+          cachePath: path.join(temporary, 'cache'),
+          sockPath: path.join(temporary, 'socket'),
+        },
+        cancelled: cancelled.promise,
+        fs,
+        popen,
+        url,
+        filePowers: makeFilePowers({ fs, path }),
+        cryptoPowers: makeCryptoPowers(crypto),
+        registryPowers: {
+          fetch: async () => {
+            throw Error('Unexpected network');
+          },
+          gunzip,
+          createHash: crypto.createHash,
+        },
+      });
+      await powers.persistence.initializePersistence();
+      const content = powers.persistence.makeContentStore();
+      const attempts = new Map();
+      let childHash;
+      let failChild = true;
+      const daemon = await makeDaemon(
+        {
+          ...powers,
+          control: {
+            makeWorker: async (
+              _id,
+              _facet,
+              workerCancelled,
+              forceCancelled,
+            ) => {
+              void forceCancelled.catch(() => {});
+              return {
+                workerDaemonFacet: Far('UnusedWorker', { terminate: () => {} }),
+                workerTerminated: workerCancelled.catch(() => {}),
+              };
+            },
+          },
+          persistence: harden({
+            ...powers.persistence,
+            makeContentStore: () =>
+              harden({
+                ...content,
+                remove: async hash => {
+                  attempts.set(hash, (attempts.get(hash) || 0) + 1);
+                  if (hash === childHash && failChild) {
+                    throw Error('Injected child removal failure');
+                  }
+                  return content.remove(hash);
+                },
+              }),
+          }),
+        },
+        'content-collection-retry-test',
+        cancelled.reject,
+        cancelled.promise,
+        {},
+        { gcEnabled: true },
+      );
+      t.teardown(() => daemon.cancelGracePeriod(Error('Test finished')));
+      const host = await E(daemon.endoBootstrap).host();
+      const bytes = new TextEncoder().encode(
+        'retained-child-after-root-removal',
+      );
+      await E(host).storeTree(
+        makeRemoteBlobTree({ 'child.txt': bytes }),
+        'victim',
+      );
+      const tree = await E(host).lookup(['victim']);
+      const rootHash = storeKeyOf(await E(tree).sha256());
+      const entries = await content.fetch(rootHash).json();
+      [[, , childHash]] = entries;
+      t.is(typeof childHash, 'string');
+      await t.throwsAsync(E(host).remove('victim'), {
+        message: /Collected storage cleanup failed/,
+      });
+      t.false(await content.has(rootHash), 'root deletion succeeded');
+      t.true(await content.has(childHash), 'failed child remains');
+      t.is(attempts.get(rootHash), 1);
+      t.is(attempts.get(childHash), 1);
+
+      if (retainSurvivor) {
+        // Keep the fault active through intermediate graph drains until the
+        // newly published formula protects the old child candidate.
+        await E(host).storeBlob(bytesReaderFromIterator([bytes]), 'survivor');
+      }
+      failChild = false;
+      const childAttempts = attempts.get(childHash);
+      await E(host).makeDirectory('retry-trigger');
+      await E(host).remove('retry-trigger');
+      t.is(
+        attempts.get(rootHash),
+        1,
+        'successful root removal is not replayed',
+      );
+      if (retainSurvivor) {
+        t.is(attempts.get(childHash), childAttempts, 'survivor prevents retry');
+        t.true(await content.has(childHash));
+        const survivor = await E(host).lookup(['survivor']);
+        t.is(await E(survivor).text(), new TextDecoder().decode(bytes));
+        await E(host).remove('survivor');
+        t.false(await content.has(childHash), 'last owner can reclaim child');
+      } else {
+        t.is(attempts.get(childHash), childAttempts + 1);
+        t.false(
+          await content.has(childHash),
+          'original child candidate retried',
+        );
+      }
+      t.deepEqual(storeDirEntries(statePath), []);
+    },
+  );
+}
 
 test('readable-tree collection reclaims transitively-referenced child blob hashes', async t => {
   const { cancelled, config } = await prepareConfig(t);
@@ -365,7 +514,7 @@ test('readable-tree collection preserves a child blob hash that a surviving read
     bytesReaderFromIterator([sharedBytes]),
     'shared-leaf-blob',
   );
-  const sharedSha256 = (await E(sharedBlob).getInfo()).hash;
+  const sharedSha256 = await E(sharedBlob).sha256();
 
   const remoteTree = makeRemoteBlobTree({
     'shared.txt': sharedBytes,

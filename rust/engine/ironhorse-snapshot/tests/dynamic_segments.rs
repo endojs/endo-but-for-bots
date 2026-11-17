@@ -29,7 +29,7 @@ impl ironhorse_vm::SourceCompiler for TestCompiler {
         raw_budget: u64,
         charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        match ironhorse_compile::compile_atoms_budgeted_with_limit(
+        match ironhorse_compile::compile_atoms_budgeted_firewalled(
             source,
             ironhorse_compile::Goal::Eval,
             strict,
@@ -45,11 +45,20 @@ impl ironhorse_vm::SourceCompiler for TestCompiler {
             Err(ironhorse_compile::CompileError::MeterAbort) => {
                 Err(ironhorse_vm::SourceCompileError::MeterAbort)
             }
+            // A caught compiler panic is an engine fault, not a coverage
+            // gap (architecture finding F063).
+            Err(ironhorse_compile::CompileError::Invariant(detail)) => {
+                Err(ironhorse_vm::SourceCompileError::Invariant(detail))
+            }
             Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
                 ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                     kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
                     ..
                 }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpHostAllocationFailed,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::HostAllocationFailed),
                 ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                     kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
                     ..

@@ -1,6 +1,7 @@
 // @ts-check
 
 import { E } from '@endo/eventual-send';
+import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
 
 /** @import { ConversationNode, TreeBackend } from '../types.js' */
@@ -61,21 +62,25 @@ export const makeEndoPetstoreBackend = powers => {
         const ctNames = allNames.filter(name => name.startsWith(CT_PREFIX));
         // One parallel batch instead of a per-node round-trip chain.
         const nodes = await Promise.all(
-          ctNames.map(name =>
-            E(powers)
-              .lookup(name)
-              .then(
-                node => /** @type {ConversationNode} */ (node),
-                () => null,
-              ),
-          ),
+          ctNames.map(async name => {
+            const node = /** @type {ConversationNode} */ (
+              await E(powers).lookup(name)
+            );
+            (node &&
+              typeof node.id === 'string' &&
+              name === `${CT_PREFIX}${node.id}` &&
+              (node.parentId === null || typeof node.parentId === 'string') &&
+              Array.isArray(node.messages) &&
+              node.metadata &&
+              typeof node.metadata === 'object') ||
+              Fail`Invalid retained conversation node`;
+            return node;
+          }),
         );
         /** @type {Map<string, ConversationNode>} */
         const map = new Map();
         for (const node of nodes) {
-          if (node && typeof node.id === 'string') {
-            map.set(node.id, node);
-          }
+          map.set(node.id, node);
         }
         // Re-setting a key an entry above already holds keeps its original
         // position, so a write the snapshot did catch stays where `list()` put
@@ -146,6 +151,11 @@ export const makeEndoPetstoreBackend = powers => {
 
     async getRoots() {
       return backend.getChildren(null);
+    },
+
+    async getNodes() {
+      await null;
+      return [...(await load()).values()];
     },
   };
 

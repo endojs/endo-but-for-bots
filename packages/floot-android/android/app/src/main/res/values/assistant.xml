@@ -1,0 +1,4 @@
+<resources>
+    <!-- Android 10/11 require a recognizer; use the ASSIST activity there. -->
+    <bool name="voice_interaction_enabled">false</bool>
+</resources>

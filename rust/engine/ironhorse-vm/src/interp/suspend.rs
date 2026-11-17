@@ -1,11 +1,12 @@
 //! Activation capture, reinstallation, and generator/async resume drivers.
 use super::{
     AsyncGenRunFrame, AsyncGeneratorRequest, AsyncGeneratorState, AsyncRunFrame, CallerHandlers,
-    CallerState, CatchJump, GenRunFrame, GenStatus, GeneratorState, Halt, Interp, Kind, Payload,
-    ReactionKind, ResumeStatus, SavedFrame, SavedJump, Slot, Step, ASYNC_AWAIT_FASTPATH_CREDIT,
-    ASYNC_AWAIT_GENERAL_METERING, ASYNC_GENERATOR_BRAND_REJECT_CALL_METERING,
-    ASYNC_START_REJECT_BOUNDARY_METERING, ASYNC_STEP_SETTLE_METERING, FRAME_OVERHEAD_SLOTS,
-    GENERATOR_RESULT_METERING, GENERATOR_RESUME_METERING, GENERATOR_YIELD_METERING,
+    CallerState, CatchJump, FrameReturn, GenResume, GenRunFrame, GenStatus, GeneratorState, Halt,
+    Interp, Kind, Payload, ReactionKind, ResumeStatus, SavedFrame, SavedJump, Slot, Step,
+    ASYNC_AWAIT_FASTPATH_CREDIT, ASYNC_AWAIT_GENERAL_METERING,
+    ASYNC_GENERATOR_BRAND_REJECT_CALL_METERING, ASYNC_START_REJECT_BOUNDARY_METERING,
+    ASYNC_STEP_SETTLE_METERING, FRAME_OVERHEAD_SLOTS, GENERATOR_RESULT_METERING,
+    GENERATOR_RESUME_METERING, GENERATOR_YIELD_METERING, HEAVY_FRAME_COST,
 };
 
 pub(super) enum Suspension {
@@ -152,35 +153,50 @@ impl Interp {
         }
     }
 
+    /// Whether async generator `gen` is suspended at a `yield*` rather than a
+    /// `yield`: both are one-byte opcodes, so the byte before the saved resume
+    /// pc names the one that suspended it, in the body's own code segment.
+    pub(super) fn async_generator_suspended_in_yield_star(
+        &self,
+        code: &[u8],
+        gen: crate::value::SlotIndex,
+    ) -> bool {
+        let Some(frame) = self
+            .async_generators
+            .get(&gen)
+            .and_then(|g| g.frame.as_ref())
+        else {
+            return false;
+        };
+        let (_, buffer) = self.resume_segment_buffer(frame.cur_func);
+        let body: &[u8] = buffer.as_deref().unwrap_or(code);
+        frame
+            .resume_pc
+            .checked_sub(1)
+            .and_then(|pc| body.get(pc))
+            .is_some_and(|&op| op == crate::Opcode::XS_CODE_YIELD_STAR as u8)
+    }
+
     /// Build a generator `{value, done}` result object (`fxNewGeneratorResult`):
     /// a fresh `%Object.prototype%`-chained object with `value`/`done` own data
     /// properties, metering the calibrated [`GENERATOR_RESULT_METERING`]. The
-    /// property ids are the program-local `value`/`done` symbols (resolved in
-    /// `link_intrinsics`); a program that never names them still runs (the
-    /// object is unread), so a `None` id just omits that property.
+    /// property ids are the program-local `value`/`done` symbols, interned on
+    /// first use when the program never names them.
     pub(super) fn new_generator_result(&mut self, value: Slot, done: bool) -> Slot {
         self.meter.tick_raw(GENERATOR_RESULT_METERING);
         let result = self.slots.alloc(Slot::instance(self.object_proto));
-        // The `value`/`done` key ids are cached from the top-level program's
-        // symbols (`bind_program_symbols`). When the generator was defined in
-        // an `eval` / dynamic-`Function` unit that the *outer* program never
-        // named `value`/`done` for, those caches are `None` — but the eval
-        // unit's relink interned the names into the realm table, so fall back
-        // to that shared table before omitting the property (else a completed
-        // eval-generator's host-built `{value, done}` result would silently
-        // drop both keys, rendering `{}` where XS renders `{done:true}`).
-        let vid = self
-            .value_id
-            .or_else(|| self.symbol_ids.get("value").copied());
-        let did = self
-            .done_id
-            .or_else(|| self.symbol_ids.get("done").copied());
-        if let Some(vid) = vid {
-            self.set_own_unmetered(result, vid, value);
-        }
-        if let Some(did) = did {
-            self.set_own_unmetered(result, did, Slot::boolean(done));
-        }
+        // `iterator_result_ids` interns `value` and `done` when no program
+        // has named them (a generator from an `eval` unit, or one that never
+        // `yield`s), as every intrinsic iterator's result does: XS boot
+        // defines both keys, so the interning is unmetered. The object is
+        // fresh per step and its fields are writable and configurable, as
+        // CreateIterResultObject makes them and V8 does. XS's
+        // `fxNewGeneratorResult`, which builds a completed or async
+        // generator's results, protects both fields; its yields, built in
+        // bytecode, do not (`ironhorse-262/tests/xs_departures.rs`).
+        let (vid, did) = self.iterator_result_ids();
+        self.set_own_unmetered(result, vid, value);
+        self.set_own_unmetered(result, did, Slot::boolean(done));
         Slot::of(Kind::Reference, Payload::Reference(result))
     }
 
@@ -279,6 +295,8 @@ impl Interp {
             // The resumed frame's operands begin at the current top: the
             // driver's stack is suspended below it, and `END` restores to here.
             stack_base: self.stack.len(),
+            held: 0,
+            returns: FrameReturn::Call,
         });
         // Sync generators may unwind directly into a caller's live handler.
         self.run_guest_under_native_try(CallerHandlers::Preserve, |machine| {
@@ -390,6 +408,120 @@ impl Interp {
                 }
             }
         })
+    }
+
+    /// `RUN`'s call of a generator's `next`, `return` or `throw`, its frame
+    /// beginning at `base` (STACK-DEPTH-REFACTOR.md C4):
+    /// [`Self::resume_generator`]'s steps, except that a body it would run in
+    /// a nested loop over this loop's buffer is resumed in the caller's loop.
+    /// The driver's activation is saved as that driver saved it, in a frame
+    /// that returns as a generator ([`FrameReturn::Generator`]) to `ret_pc`
+    /// and begins at `base`, so that leaving it cuts the call's frame too,
+    /// and that holds the heavy unit the native charged with the one the
+    /// nested `dispatch_at` charged. Returns the call's result, or where the
+    /// body resumes. A generator running, completed, not yet started for a
+    /// `return` or `throw`, or with its body in another segment takes
+    /// `resume_generator` itself.
+    pub(super) fn resume_generator_in_place(
+        &mut self,
+        code: &[u8],
+        gen: crate::value::SlotIndex,
+        sent: Slot,
+        status: GenStatus,
+        base: usize,
+        ret_pc: usize,
+    ) -> Result<GenResume, Step> {
+        let resumes_here = self.generators.get(&gen).is_some_and(|g| {
+            let resumable = match g.state {
+                GeneratorState::SuspendedYield => true,
+                GeneratorState::SuspendedStart => status == GenStatus::Next,
+                GeneratorState::Executing | GeneratorState::Completed => false,
+            };
+            resumable
+                && g.frame
+                    .as_ref()
+                    .is_some_and(|frame| self.callee_segment(frame.cur_func) == self.active_segment)
+        });
+        if !resumes_here {
+            return self
+                .resume_generator(code, gen, sent, status)
+                .map(GenResume::Value);
+        }
+        let generator = self.generators.get_mut(&gen).expect("instance exists");
+        let was_start = generator.state == GeneratorState::SuspendedStart;
+        let saved = generator
+            .frame
+            .take()
+            .expect("a resumable generator has a frame");
+        // `resume_generator`'s admission, tick and driver suspension.
+        let extra = saved.stack_slice.len()
+            + saved.locals.len()
+            + saved.args.len()
+            + FRAME_OVERHEAD_SLOTS
+            + usize::from(!was_start);
+        if self.would_overflow(extra) {
+            self.generators
+                .get_mut(&gen)
+                .expect("instance exists")
+                .frame = Some(saved);
+            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
+        }
+        self.meter.tick_raw(GENERATOR_RESUME_METERING);
+        let driver_footprint = FRAME_OVERHEAD_SLOTS + self.args.len() + self.locals.len();
+        self.frame_slots += driver_footprint;
+        self.call_stack.push(CallerState {
+            global_env: self.capture_global_environment(),
+            locals: std::mem::take(&mut self.locals),
+            id_map: std::mem::take(&mut self.id_map),
+            result: self.result,
+            strict: self.strict,
+            args: std::mem::take(&mut self.args),
+            this_val: self.this_val,
+            this_captures: std::mem::take(&mut self.this_captures),
+            env: self.env,
+            cur_func: self.cur_func,
+            cur_target: self.cur_target,
+            target_func: self.target_func,
+            ret_pc,
+            stack_base: base,
+            held: 0,
+            returns: FrameReturn::Generator,
+        });
+        // The body closure `resume_generator` runs, up to its nested loop.
+        let stack_base = self.stack.len();
+        let jumps_base = self.jumps.len();
+        let return_depth = self.call_stack.len();
+        let resume_pc = self.reinstall_activation(saved, stack_base, return_depth);
+        if !was_start {
+            self.push(sent);
+        }
+        self.resume_status = match status {
+            GenStatus::Next => ResumeStatus::NoStatus,
+            GenStatus::Return => ResumeStatus::Return,
+            GenStatus::Throw => ResumeStatus::Throw,
+        };
+        if let Some(g) = self.generators.get_mut(&gen) {
+            g.state = GeneratorState::Executing;
+        }
+        self.gen_run_stack.push(GenRunFrame {
+            gen,
+            stack_base,
+            jumps_base,
+            call_depth_base: return_depth,
+        });
+        // The nested loop's charge. Refused, the loop would not have run:
+        // its driver left the body as it leaves one that halted, the driver
+        // restored and the generator completed.
+        if let Err(halt) = self.enter_native_frame(HEAVY_FRAME_COST) {
+            let _ = self.leave_call();
+            self.stack.truncate(stack_base);
+            self.jumps.truncate(jumps_base);
+            return Err(halt);
+        }
+        let held = 2 * HEAVY_FRAME_COST;
+        self.call_stack[return_depth - 1].held = held;
+        self.held_total += held;
+        Ok(GenResume::Entered(resume_pc))
     }
 
     pub(super) fn enqueue_async_generator(
@@ -616,6 +748,8 @@ impl Interp {
             // The resumed frame's operands begin at the current top: the
             // driver's stack is suspended below it, and `END` restores to here.
             stack_base: self.stack.len(),
+            held: 0,
+            returns: FrameReturn::Call,
         });
         // Async body throws reject their promise, without consuming a handler
         // live around the caller's synchronous start. Rebased body handlers
@@ -829,6 +963,8 @@ impl Interp {
             // The resumed frame's operands begin at the current top: the
             // driver's stack is suspended below it, and `END` restores to here.
             stack_base: self.stack.len(),
+            held: 0,
+            returns: FrameReturn::Call,
         });
         // Async body throws reject their promise, without consuming a handler
         // live around the caller's synchronous start. Rebased body handlers

@@ -1,6 +1,6 @@
 // @ts-check
 
-import { M } from '@endo/patterns';
+import { M, getNamedMethodGuards } from '@endo/patterns';
 
 /**
  * Interface for passable Reader references.
@@ -89,16 +89,20 @@ export const PassableWriterInterface = M.interface('PassableWriter', {
 
 /**
  * Interface for passable bytes reader references.
- * Uses streamBase64() method instead of stream() to allow future migration
- * to a direct bytes stream() method when CapTP supports binary transport.
+ * `stream()` yields passable byte arrays and is consumed with
+ * `iterateReader()`. `streamBase64()` yields the same chunks as base64 strings
+ * for initiators that still use `iterateBytesReader()`; it is retained for
+ * compatibility and is slated for deprecation.
  *
- * No readPattern() method - the interface implies Uint8Array yields
- * (transmitted as base64 strings over the wire).
+ * No readPattern() method - the interface implies Uint8Array yields.
  *
  * @see bytesReaderFromIterator - responder side for bytes readers
- * @see iterateBytesReader - initiator side for bytes readers
+ * @see iterateReader - initiator side for the byte-array `stream()`
+ * @see iterateBytesReader - initiator side for `streamBase64()`
  */
 export const PassableBytesReaderInterface = M.interface('PassableBytesReader', {
+  // stream(synPromise: ERef<StreamNode<Passable, TReadReturn>>): Promise<StreamNode<Uint8Array, TReadReturn>>
+  stream: M.call(M.any()).returns(M.promise()),
   // streamBase64(synPromise: ERef<StreamNode<Passable, TReadReturn>>): Promise<StreamNode<string, TReadReturn>>
   streamBase64: M.call(M.any()).returns(M.promise()),
   // readReturnPattern(): Pattern | undefined - pattern for TReadReturn
@@ -127,3 +131,43 @@ export const PassableBytesWriterInterface = M.interface('PassableBytesWriter', {
   // writeReturnPattern(): Pattern | undefined - pattern for TWriteReturn
   writeReturnPattern: M.call().returns(M.opt(M.pattern())),
 });
+
+/** PassableReader with an independent resource-release acknowledgement. */
+export const CloseablePassableReaderInterface = M.interface(
+  'CloseablePassableReader',
+  {
+    ...getNamedMethodGuards(PassableReaderInterface),
+    close: M.call().returns(M.promise()),
+  },
+);
+harden(CloseablePassableReaderInterface);
+
+/** PassableWriter with an independent resource-release acknowledgement. */
+export const CloseablePassableWriterInterface = M.interface(
+  'CloseablePassableWriter',
+  {
+    ...getNamedMethodGuards(PassableWriterInterface),
+    close: M.call().returns(M.promise()),
+  },
+);
+harden(CloseablePassableWriterInterface);
+
+/** PassableBytesReader with an independent resource-release acknowledgement. */
+export const CloseablePassableBytesReaderInterface = M.interface(
+  'CloseablePassableBytesReader',
+  {
+    ...getNamedMethodGuards(PassableBytesReaderInterface),
+    close: M.call().returns(M.promise()),
+  },
+);
+harden(CloseablePassableBytesReaderInterface);
+
+/** PassableBytesWriter with an independent resource-release acknowledgement. */
+export const CloseablePassableBytesWriterInterface = M.interface(
+  'CloseablePassableBytesWriter',
+  {
+    ...getNamedMethodGuards(PassableBytesWriterInterface),
+    close: M.call().returns(M.promise()),
+  },
+);
+harden(CloseablePassableBytesWriterInterface);

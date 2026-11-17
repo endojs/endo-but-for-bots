@@ -1,0 +1,1 @@
+var R; try { var F = new Function('a', 'this.a = a'); var B = F.bind(null, 3); function L(a){this.a=a} var BL = L.bind(null,4); R = Reflect.construct(B, []).a + ',' + new BL().a + ',' + new F(5).a + ',' + B(9); } catch (e) { R = 'caught ' + e; } throw new Error(String(R));

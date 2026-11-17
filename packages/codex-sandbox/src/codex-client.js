@@ -1,21 +1,37 @@
 // @ts-check
+import {
+  decodeImageResult,
+  imageDataUrl,
+} from '@endo/hosted-agent/image-result.js';
 import { clearTimeout, setTimeout } from 'node:timers';
 
-import { makeError, X } from '@endo/errors';
+import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import {
+  pairToolCalls,
+  responsesApiItems,
+  selectActiveTranscript,
+} from '@endo/hosted-agent/transcript-records.js';
+import {
+  awaitBarrier,
+  makeHostedTurnChannel,
+} from '@endo/hosted-agent/turn-channel.js';
 import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 import { makeTurnLedger } from '@endo/hosted-agent/turn-ledger.js';
 
-import { assertBrokerRuntimeConfig } from './broker-launch.js';
-import { renderToolResult, toolFromItem } from './codex-protocol.js';
+import { assertBrokerRuntimeConfig } from './app-server-transport.js';
+import {
+  DEFAULT_MAX_LINE_BYTES,
+  renderToolResult,
+  toolFromItem,
+  usageEventFromTokenUsage,
+} from './codex-protocol.js';
 
 const CodexClientInterface = M.interface('CodexClient', {
   send: M.call(M.string())
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.promise()),
-  models: M.call().returns(M.promise()),
   interrupt: M.call().returns(M.promise()),
   acknowledge: M.call(M.string()).returns(M.promise()),
   terminate: M.call().returns(M.promise()),
@@ -49,15 +65,12 @@ const brief = (value, limit) => {
   return `${text.slice(0, limit)}… [truncated ${text.length - limit} chars]`;
 };
 
-const auditProjection = (value, limit = 4 * 1024 * 1024) => {
-  const text =
-    typeof value === 'string'
-      ? value
-      : (JSON.stringify(value) ?? String(value));
-  const size = new TextEncoder().encode(text).byteLength;
-  if (size > limit) throw Error(`Audit payload exceeded ${limit} bytes`);
-  return text;
-};
+// The text an audit entry records for a value. Its size is the journal's
+// business: a field beyond the inline bound is stored by reference there, and
+// only a value beyond one storage value is refused — by the journal, which
+// is what makes the refusal a recording failure the client quarantines on.
+const auditProjection = value =>
+  typeof value === 'string' ? value : (JSON.stringify(value) ?? String(value));
 
 /**
  * Project a successful tool fulfillment to JSON without silently collapsing
@@ -105,11 +118,15 @@ const projectToolResult = root => {
   return visit(root);
 };
 
-const CODEX_SANDBOX_MODE = 'workspace-write';
+// The CLI runs inside an attested outer sandbox. The pinned thread API has
+// no external-sandbox mode; every turn separately selects externalSandbox.
+/** @typedef {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} TranscriptRecord */
+const CODEX_SANDBOX_MODE = 'danger-full-access';
 
 /**
  * @typedef {object} AppServerTransport
  * @property {string} [brokerEndpoint]
+ * @property {any} [network]
  * @property {AsyncIterable<any>} messages
  * @property {(message: object) => Promise<void>} send
  * @property {() => Promise<void>} close
@@ -121,6 +138,9 @@ const CODEX_SANDBOX_MODE = 'workspace-write';
  * @property {string} [turnId]
  * @property {(event: any) => void} push
  * @property {boolean} interrupted
+ * @property {boolean} startAdmitted Whether turn/start crossed the transport-write boundary.
+ * @property {boolean} [capturing]
+ * @property {any} [nativeBinding]
  * @property {string} [interruptReason]
  * @property {string} [errorReason]
  * @property {Promise<void>} terminal
@@ -131,9 +151,6 @@ const CODEX_SANDBOX_MODE = 'workspace-write';
  * @property {(turnId: string) => void} resolveStarted
  * @property {ReturnType<typeof setTimeout>} [terminalTimer]
  * @property {ReturnType<typeof setTimeout>} [wallTimer]
- * @property {number} events
- * @property {number} bytes
- * @property {number} toolCalls
  * @property {Set<string>} serverRequestIds
  * @property {Set<string>} toolCallIds
  * @property {Set<string>} textItems
@@ -154,7 +171,6 @@ const CODEX_SANDBOX_MODE = 'workspace-write';
  * @param {(error: Error) => void | Promise<void>} [options.reportCleanupFailure]
  * @param {(kind: string, payload: Record<string, unknown>) => void | Promise<void>} [options.auditEvent]
  * @param {string} [options.threadId]
- * @param {(threadId: string) => Promise<void>} [options.saveThreadId]
  * @param {string} [options.cwd]
  * @param {string} [options.model]
  * @param {string} [options.reasoningEffort]
@@ -164,17 +180,30 @@ const CODEX_SANDBOX_MODE = 'workspace-write';
  * @param {(name: string, args: Record<string, unknown>) => Promise<unknown>} [options.callTool]
  * @param {string} [options.toolSetId]
  * @param {string} [options.savedToolSetId]
- * @param {{ baseTurnId: string | null, turnId?: string, status?: string }} [options.savedRecovery]
- * @param {(state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string } }) => Promise<void>} [options.saveThreadState]
+ * @param {{capture: (request: any) => Promise<any>, restore: (request: any) => Promise<any>, cancel: () => Promise<void>, close: () => Promise<void>}} [options.nativeContext]
+ * @param {() => {sessionId: string, timestamp: string}} [options.makeNativeIdentity]
+ * @param {{ baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string }} [options.savedRecovery]
+ * @param {(state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }) => Promise<void>} options.saveThreadState
  * @param {number} [options.requestTimeoutMs]
- * @param {number} [options.maxTurnEvents]
- * @param {number} [options.maxTurnBytes]
+ * @param {number} [options.maxTurnItems] Distinct item, call and request
+ *   identities one turn may retain for deduplication; the one per-turn
+ *   allocation that grows with the stream. A turn is not bounded in events
+ *   or bytes: what it delivers is bounded by credit at the reader, and what
+ *   the host keeps of it is bounded where it is kept (Floot's hosted turn).
+ * @param {number} [options.maxEarlyEvents] Events queued for a turn the
+ *   app-server has announced before `turn/start` has answered with its id.
+ * @param {number} [options.maxEarlyBytes]
  * @param {number} [options.maxToolResultChars]
  * @param {number} [options.maxPromptBytes]
  * @param {number} [options.maxRequestBytes]
- * @param {number} [options.maxToolCalls]
- * @param {number} [options.toolCallTimeoutMs]
- * @param {number} [options.turnWallTimeoutMs]
+ * @param {number} [options.toolCallTimeoutMs] How long one Endo tool call
+ *   may run before its outcome is recorded unknown and the session poisoned
+ *   against a successor overlapping it. Off by default: a slow tool is the
+ *   user's to interrupt, and a timeout that ends the session for a build
+ *   that took three minutes is not a bound on anything the host retains.
+ *   An operator with an explicit budget sets it.
+ * @param {number} [options.turnWallTimeoutMs] Likewise for a whole turn.
+ *   Off by default; neither the Claude nor the OpenCode adapter has one.
  */
 export const makeCodexClient = ({
   start,
@@ -182,7 +211,6 @@ export const makeCodexClient = ({
   reportCleanupFailure = () => undefined,
   auditEvent = () => undefined,
   threadId: savedThreadId,
-  saveThreadId = async () => undefined,
   saveThreadState,
   cwd = '/workspace',
   model,
@@ -193,30 +221,58 @@ export const makeCodexClient = ({
   callTool,
   toolSetId,
   savedToolSetId,
+  nativeContext,
+  makeNativeIdentity,
   savedRecovery,
   requestTimeoutMs = 30_000,
-  maxTurnEvents = 10_000,
-  maxTurnBytes = 16 * 1024 * 1024,
+  maxTurnItems = 16_384,
+  maxEarlyEvents = 1024,
+  maxEarlyBytes = 16 * 1024 * 1024,
   maxToolResultChars = 64 * 1024,
   maxPromptBytes = 1024 * 1024,
-  maxRequestBytes = 2 * 1024 * 1024,
-  maxToolCalls = 128,
-  toolCallTimeoutMs = 120_000,
-  turnWallTimeoutMs = 30 * 60_000,
+  maxRequestBytes = DEFAULT_MAX_LINE_BYTES,
+  toolCallTimeoutMs = 0,
+  turnWallTimeoutMs = 0,
 }) => {
+  if (typeof saveThreadState !== 'function') {
+    throw makeError(X`Codex requires a thread-state writer`);
+  }
   /** @type {AppServerTransport | undefined} */
   let transport;
   /** @type {Promise<void> | undefined} */
   let ready;
   /** @type {Promise<void> | undefined} */
   let shutdown;
+  let shutdownFailed = false;
+  let transportClosed = false;
   /** @type {Promise<void> | undefined} */
   let sessionFailureAudit;
+  /** @type {Promise<void> | undefined} */
+  let failureSettlement;
+  /** @type {unknown} */
+  let messageFailure;
+  // Admitted message handlers can still be writing host records after their
+  // process has stopped. Keep them until their writes settle.
+  /** @type {Set<Promise<unknown>>} */
+  const hostWrites = new Set();
+  /**
+   * @template T
+   * @param {Promise<T>} operation
+   */
+  const trackHostWrite = operation => {
+    hostWrites.add(operation);
+    void operation.then(
+      () => hostWrites.delete(operation),
+      () => hostWrites.delete(operation),
+    );
+    return operation;
+  };
   let terminated = false;
   let closing = false;
   let closeDeferredAudited = false;
   let closeRequestedAudited = false;
   let initialized = false;
+  let publicNetworkAdmitted = false;
   /** @type {string[]} */
   const cleanupFailures = [];
   /** @type {Set<Promise<unknown>>} */
@@ -230,7 +286,17 @@ export const makeCodexClient = ({
    */
   const detachedRequests = new Set();
   const audit = async (kind, payload = {}) => {
-    await auditEvent(kind, harden({ sessionId, ...payload }));
+    try {
+      await trackHostWrite(
+        Promise.resolve(auditEvent(kind, harden({ sessionId, ...payload }))),
+      );
+    } catch (auditError) {
+      // A failed required write during shutdown cannot be hidden by the
+      // pump's admission fence. Ordinary protocol errors and a timed-out tool
+      // that later settles are not themselves outstanding host writes.
+      if (closing || terminated) messageFailure = auditError;
+      throw auditError;
+    }
   };
   const recordCleanupFailure = error => {
     const failure = error instanceof Error ? error : Error(`${error}`);
@@ -273,7 +339,23 @@ export const makeCodexClient = ({
   );
   let nextRequestId = 1;
   let threadId = savedThreadId;
+  const nativeCaptures = new Set();
+  let boundToolSetId = savedToolSetId;
   let threadReady = false;
+  let replayContinuity =
+    !savedThreadId ||
+    Boolean(savedRecovery && savedRecovery.baseTurnId === null);
+  // A thread id that arrived in the saved state was written by a previous
+  // incarnation, so resuming it would let the CLI's own store decide the
+  // conversation -- the behaviour the stack's records exist to replace, and
+  // the one Claude's client stopped doing for the same reason. There is no
+  // ambient resume shortcut: native checkpoints rebuild under fresh identity,
+  // and portable records are injected when there is no native checkpoint.
+  // An inherited thread is
+  // reconciled and then rotated away from, which is the path a changed tool
+  // catalog already takes. Cleared once this incarnation owns a thread.
+  let inheritedThread = Boolean(savedThreadId);
+  let continuityCheckpoint = savedRecovery?.previousCheckpoint;
   // Codex app-server 0.152.0 refuses `thread/turns/list` on a thread that has
   // had no user message: a thread is not materialized until its first turn
   // starts. A freshly started thread therefore may not be asked, and its
@@ -281,11 +363,11 @@ export const makeCodexClient = ({
   // first turn. A saved marker naming *some* turn — the base it built on, or
   // the turn itself — proves the saved thread was materialized; a marker with
   // neither was written between the write-ahead and `turn/start`, so that
-  // thread still has no turns to list.
+  // thread still has no turns to list. No marker means acknowledged history:
+  // new empty threads persist an explicit empty marker at creation instead.
   let threadHasTurns = Boolean(
     savedThreadId &&
-    savedRecovery &&
-    (savedRecovery.turnId || savedRecovery.baseTurnId),
+    (!savedRecovery || savedRecovery.turnId || savedRecovery.baseTurnId),
   );
   // The write-ahead / settle-once / reconcile protocol is @endo/hosted-agent's,
   // not this adapter's: it is the same for every hosted backend and it is where
@@ -307,11 +389,11 @@ export const makeCodexClient = ({
         }
       : {}),
     persist: async record => {
-      if (!threadId || !saveThreadState) return;
+      if (!threadId) return;
       await saveThreadState(
         harden({
           threadId,
-          ...(toolSetId ? { toolSetId } : {}),
+          ...(boundToolSetId ? { toolSetId: boundToolSetId } : {}),
           ...(record
             ? {
                 recovery: harden({
@@ -320,11 +402,24 @@ export const makeCodexClient = ({
                   ...(record.status === 'completed'
                     ? { status: 'completed' }
                     : {}),
+                  ...(continuityCheckpoint
+                    ? { previousCheckpoint: continuityCheckpoint }
+                    : {}),
                 }),
               }
-            : {}),
+            : !threadHasTurns
+              ? {
+                  recovery: {
+                    baseTurnId: null,
+                    ...(continuityCheckpoint
+                      ? { previousCheckpoint: continuityCheckpoint }
+                      : {}),
+                  },
+                }
+              : {}),
         }),
       );
+      if (!record && threadHasTurns) continuityCheckpoint = undefined;
     },
   });
   /** @type {Map<number, { resolve: (value: any) => void, reject: (error: Error) => void }>} */
@@ -368,7 +463,28 @@ export const makeCodexClient = ({
     if (!turn) return false;
     let accepted = true;
     if (turn.ledgerTurn) {
-      ({ accepted } = await turn.ledgerTurn.settle(outcome));
+      try {
+        ({ accepted } = await turn.ledgerTurn.settle(outcome));
+      } catch (error) {
+        // The ledger has already latched its winner. A failed checkpoint
+        // write is uncertain, so do not retry settlement or report success.
+        // Release this reader even though a later failure settlement cannot
+        // win the latch; fence admission before the consumer can send again.
+        // Early notifications are replayed by send(), outside the transport
+        // pump's catch. Retain the write failure for shutdown on both paths.
+        const failure = error instanceof Error ? error : Error(String(error));
+        messageFailure ||= failure;
+        if (active === turn) {
+          endActive(
+            harden({
+              type: 'abort',
+              reason: failure.message,
+            }),
+          );
+        }
+        failSession(failure);
+        throw failure;
+      }
     }
     if (!accepted || active !== turn) return false;
     endActive(
@@ -393,27 +509,35 @@ export const makeCodexClient = ({
     signalTermination(failure);
     turnReserved = false;
     rejectPending(failure);
-    if (active) {
+    if (active && !failureSettlement) {
       const failedTurn = active;
-      const finish = () => {
-        void settleTurn(failedTurn, {
+      const finish = async () => {
+        await settleTurn(failedTurn, {
           type: 'failed',
           reason: failure.message,
         });
       };
-      if (sessionFailureAudit) {
-        sessionFailureAudit.then(finish, finish);
-      } else {
-        finish();
-      }
+      failureSettlement = sessionFailureAudit
+        ? sessionFailureAudit.then(finish, finish)
+        : finish();
+      failureSettlement.catch(() => undefined);
     }
     if (!shutdown) {
       shutdown = (async () => {
         await null;
         const failures = [];
-        if (transport) {
+        if (nativeContext) {
+          try {
+            await nativeContext.close();
+          } catch (cleanupError) {
+            failures.push(cleanupError);
+          }
+        }
+        await Promise.allSettled([...nativeCaptures]);
+        if (transport && !transportClosed) {
           try {
             await transport.close();
+            transportClosed = true;
           } catch (closeError) {
             failures.push(closeError);
           }
@@ -436,6 +560,20 @@ export const makeCodexClient = ({
             failures.push(auditError);
           }
         }
+        if (failureSettlement) {
+          try {
+            await failureSettlement;
+          } catch (settlementError) {
+            failures.push(settlementError);
+          }
+        }
+        while (hostWrites.size > 0) {
+          // Writers can admit subsequent writes before settling. Drain to a
+          // fixed point after protocol admission has closed.
+          // eslint-disable-next-line no-await-in-loop
+          await Promise.allSettled([...hostWrites]);
+        }
+        if (messageFailure) failures.push(messageFailure);
         if (failures.length > 0) {
           if (failures.length === 1) throw failures[0];
           throw new AggregateError(failures, 'Codex session shutdown failed');
@@ -444,12 +582,17 @@ export const makeCodexClient = ({
       // Automatic protocol-failure paths have no caller awaiting shutdown.
       // Preserve the rejecting promise for explicit terminate(), while also
       // making teardown failure visible to the provisioner.
-      shutdown.catch(recordCleanupFailure);
+      shutdown.catch(shutdownError => {
+        recordCleanupFailure(shutdownError);
+        // The admission fence stays closed. Only unfinished cleanup retries;
+        // required audit/settlement failures remain retained above.
+        shutdownFailed = true;
+      });
     }
     return shutdown;
   };
 
-  const sendMessage = async message => {
+  const sendMessage = async (message, beforeSend = () => {}) => {
     if (!transport) throw Error('Codex app-server is not initialized');
     const size = byteLength(message);
     if (size > maxRequestBytes) {
@@ -465,6 +608,7 @@ export const makeCodexClient = ({
     });
     await null;
     try {
+      beforeSend();
       await Promise.race([transport.send(harden(message)), deadline]);
     } catch (error) {
       // A failed or timed-out write has an unknown outcome, including for
@@ -476,7 +620,7 @@ export const makeCodexClient = ({
     }
   };
 
-  const request = async (method, params) => {
+  const request = async (method, params, beforeSend = () => {}) => {
     if (terminated) throw Error('Codex session terminated');
     const id = nextRequestId;
     nextRequestId += 1;
@@ -498,7 +642,7 @@ export const makeCodexClient = ({
     // blocks, the deadline still settles request() and the losing exchange
     // remains observed by Promise.race rather than becoming unhandled.
     const exchange = (async () => {
-      await sendMessage({ id, method, params });
+      await sendMessage({ id, method, params }, beforeSend);
       return response;
     })();
     await null;
@@ -514,6 +658,42 @@ export const makeCodexClient = ({
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       pending.delete(id);
+    }
+  };
+
+  /**
+   * Restore ordered history without starting inference between batches. Images
+   * have an individual bound, while a transcript can contain many images.
+   * Preflight every item before the first append; callers publish the restored
+   * projection and start its turn only after every batch is acknowledged.
+   * @param {string} thread
+   * @param {any[]} items
+   */
+  const injectItems = async (thread, items) => {
+    const method = 'thread/inject_items';
+    // Reserve space for a request id and the JSONL newline as well as params.
+    const overhead =
+      byteLength({ id: 0, method, params: { threadId: thread, items: [] } }) +
+      32;
+    const batches = [];
+    let batch = [];
+    let size = overhead;
+    for (const item of items) {
+      const itemBytes = byteLength(item);
+      if (overhead + itemBytes > maxRequestBytes)
+        throw Error('Codex restored item exceeds the request byte limit');
+      if (size + itemBytes + (batch.length ? 1 : 0) > maxRequestBytes) {
+        batches.push(batch);
+        batch = [];
+        size = overhead;
+      }
+      size += itemBytes + (batch.length ? 1 : 0);
+      batch.push(item);
+    }
+    if (batch.length) batches.push(batch);
+    for (const batchItems of batches) {
+      // eslint-disable-next-line no-await-in-loop
+      await request(method, { threadId: thread, items: batchItems });
     }
   };
 
@@ -534,6 +714,23 @@ export const makeCodexClient = ({
     }
     turn.interrupted = true;
     turn.interruptReason = reason;
+    if (turn.capturing) {
+      try {
+        await nativeContext?.cancel();
+        await settleTurn(turn, { type: 'aborted', reason });
+      } catch (error) {
+        await failSession(error);
+      }
+      return undefined;
+    }
+    if (!turn.startAdmitted) {
+      // Restoration and write-ahead preparation are not native execution.
+      // Let their owned work settle; send() fences the prompt and settles the
+      // ledger afterward. Waiting for turn/started here would admit precisely
+      // the work the caller canceled, or wait for an announcement never sent.
+      await turn.terminal;
+      return undefined;
+    }
     // The app-server honours `turn/interrupt` only for a turn it has announced
     // with `turn/started`. Asked earlier — and the announcement can trail the
     // `turn/start` response, let alone a response still in flight — it answers
@@ -547,23 +744,15 @@ export const makeCodexClient = ({
       const timeoutFailure = Error(
         'Codex turn was not announced before the interrupt deadline',
       );
-      /** @type {ReturnType<typeof setTimeout> | undefined} */
-      let timer;
-      const deadline = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(timeoutFailure), requestTimeoutMs);
-      });
       try {
-        turnId = await Promise.race([
-          turn.started,
-          turn.terminal.then(() => undefined),
-          deadline,
-        ]);
+        turnId = await awaitBarrier(
+          Promise.race([turn.started, turn.terminal.then(() => undefined)]),
+          { deadlineMs: requestTimeoutMs, makeFailure: () => timeoutFailure },
+        );
       } catch {
         if (active !== turn) return undefined;
         failSession(timeoutFailure);
         return timeoutFailure;
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
       }
     }
     if (turnId === undefined || active !== turn) return undefined;
@@ -590,19 +779,15 @@ export const makeCodexClient = ({
       const timeoutFailure = Error(
         'Codex turn did not confirm interruption before the deadline',
       );
-      /** @type {ReturnType<typeof setTimeout> | undefined} */
-      let timer;
-      const deadline = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(timeoutFailure), requestTimeoutMs);
-      });
       try {
-        await Promise.race([turn.terminal, deadline]);
+        await awaitBarrier(turn.terminal, {
+          deadlineMs: requestTimeoutMs,
+          makeFailure: () => timeoutFailure,
+        });
       } catch (error) {
         const failure = error instanceof Error ? error : timeoutFailure;
         failSession(failure);
         return failure;
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
       }
     }
     return undefined;
@@ -611,13 +796,29 @@ export const makeCodexClient = ({
   const pushTurn = event => {
     const turn = active;
     if (!turn) return;
-    turn.events += 1;
-    turn.bytes += byteLength(event);
-    if (turn.events > maxTurnEvents || turn.bytes > maxTurnBytes) {
-      void interruptActive('Codex turn exceeded configured output bounds');
-      return;
-    }
     turn.push(harden(event));
+  };
+
+  /**
+   * Retain an identity the turn deduplicates on. The sets and the phase map
+   * are the per-turn allocations that grow with the stream, so they carry
+   * the bound; a turn that keeps naming new items past it is failed with a
+   * reason that says which allocation, not "output bounds".
+   *
+   * @param {Set<string> | Map<string, unknown>} retained
+   * @param {string} key
+   * @param {unknown} [value]
+   */
+  const retainIdentity = (retained, key, value = undefined) => {
+    if (!retained.has(key) && retained.size >= maxTurnItems) {
+      failSession(
+        Error(`Codex turn retained more than ${maxTurnItems} item identities`),
+      );
+      return false;
+    }
+    if (retained instanceof Map) retained.set(key, value);
+    else retained.add(key);
+    return true;
   };
 
   const sameTurn = params => {
@@ -669,14 +870,19 @@ export const makeCodexClient = ({
     if (typeof params.callId !== 'string' || params.callId === '') {
       throw Error('Dynamic tool call omitted its stable call id');
     }
-    if (!active || active.toolCalls >= maxToolCalls) {
-      throw Error(`Dynamic tool call limit exceeded (${maxToolCalls})`);
+    if (!active) {
+      throw Error('Dynamic tool call outside an active turn');
     }
     if (active.toolCallIds.has(params.callId)) {
       throw Error(`Dynamic tool call id was replayed: ${params.callId}`);
     }
-    active.toolCallIds.add(params.callId);
-    active.toolCalls += 1;
+    // No count of calls per turn: the ids are the one thing retained, and
+    // they are bounded with the turn's other identities.
+    if (!retainIdentity(active.toolCallIds, params.callId)) {
+      throw Error(
+        `Codex turn retained more than ${maxTurnItems} item identities`,
+      );
+    }
     await audit('tool-intent', {
       threadId: params.threadId,
       turnId: params.turnId,
@@ -690,11 +896,20 @@ export const makeCodexClient = ({
     /** @type {ReturnType<typeof setTimeout> | undefined} */
     let timer;
     const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(timeoutFailure), toolCallTimeoutMs);
+      if (toolCallTimeoutMs > 0) {
+        timer = setTimeout(() => reject(timeoutFailure), toolCallTimeoutMs);
+      }
     });
-    const operation = Promise.resolve().then(() =>
-      callTool(params.tool, params.arguments),
-    );
+    const operation = Promise.resolve().then(() => {
+      // The intent write may have yielded to shutdown. Check at the actual
+      // effect boundary, without another await before calling the tool.
+      if (closing || terminated) {
+        throw Error(
+          'Codex session is closing; no new Endo tool calls are admitted',
+        );
+      }
+      return callTool(params.tool, params.arguments);
+    });
     pendingToolOperations.add(operation);
     operation.then(
       () => pendingToolOperations.delete(operation),
@@ -717,48 +932,53 @@ export const makeCodexClient = ({
         // The Endo call cannot be assumed cancelled. Poison the session so no
         // successor can overlap it, and keep observing the late settlement for
         // the operator journal instead of reporting a false tool failure.
-        operation
-          .then(
-            async lateResult => {
-              try {
-                const lateProjected = projectToolResult(lateResult);
-                await audit('tool-late-settled', {
+        trackHostWrite(
+          operation
+            .then(
+              async lateResult => {
+                try {
+                  const lateProjected = projectToolResult(lateResult);
+                  await audit('tool-late-settled', {
+                    threadId: params.threadId,
+                    turnId: params.turnId,
+                    callId: params.callId,
+                    tool: params.tool,
+                    success: true,
+                    result: auditProjection(lateProjected),
+                  });
+                } catch (lateProjectionError) {
+                  await audit('tool-late-outcome-unknown', {
+                    threadId: params.threadId,
+                    turnId: params.turnId,
+                    callId: params.callId,
+                    tool: params.tool,
+                    reason: brief(
+                      lateProjectionError instanceof Error
+                        ? lateProjectionError.message
+                        : `${lateProjectionError}`,
+                      maxToolResultChars,
+                    ),
+                  });
+                }
+              },
+              lateError =>
+                audit('tool-late-settled', {
                   threadId: params.threadId,
                   turnId: params.turnId,
                   callId: params.callId,
                   tool: params.tool,
-                  success: true,
-                  result: auditProjection(lateProjected),
-                });
-              } catch (lateProjectionError) {
-                await audit('tool-late-outcome-unknown', {
-                  threadId: params.threadId,
-                  turnId: params.turnId,
-                  callId: params.callId,
-                  tool: params.tool,
+                  success: false,
                   reason: brief(
-                    lateProjectionError instanceof Error
-                      ? lateProjectionError.message
-                      : `${lateProjectionError}`,
+                    lateError instanceof Error ? lateError.message : lateError,
                     maxToolResultChars,
                   ),
-                });
-              }
-            },
-            lateError =>
-              audit('tool-late-settled', {
-                threadId: params.threadId,
-                turnId: params.turnId,
-                callId: params.callId,
-                tool: params.tool,
-                success: false,
-                reason: brief(
-                  lateError instanceof Error ? lateError.message : lateError,
-                  maxToolResultChars,
-                ),
-              }),
-          )
-          .catch(recordCleanupFailure);
+                }),
+            )
+            .catch(lateAuditError => {
+              messageFailure = lateAuditError;
+              recordCleanupFailure(lateAuditError);
+            }),
+        );
         failSession(timeoutFailure);
         throw timeoutFailure;
       }
@@ -783,8 +1003,10 @@ export const makeCodexClient = ({
 
     let projected;
     let text;
+    let image;
     try {
       projected = projectToolResult(result);
+      image = decodeImageResult(projected);
       text = brief(projected, maxToolResultChars);
     } catch (renderError) {
       const reason = brief(
@@ -831,7 +1053,16 @@ export const makeCodexClient = ({
     }
     return harden({
       success: true,
-      contentItems: harden([{ type: 'inputText', text }]),
+      contentItems: harden(
+        image
+          ? [
+              {
+                type: 'inputImage',
+                imageUrl: imageDataUrl(image),
+              },
+            ]
+          : [{ type: 'inputText', text }],
+      ),
     });
   };
 
@@ -848,7 +1079,7 @@ export const makeCodexClient = ({
     if (active.serverRequestIds.has(requestKey)) {
       throw Error(`Codex server request id was replayed: ${id}`);
     }
-    active.serverRequestIds.add(requestKey);
+    if (!retainIdentity(active.serverRequestIds, requestKey)) return;
     if (method === 'item/tool/call') {
       const result = await runDynamicTool(params);
       await sendMessage({ id, result });
@@ -909,10 +1140,14 @@ export const makeCodexClient = ({
       active.earlyEvents += 1;
       active.earlyBytes += byteLength(message);
       if (
-        active.earlyEvents > maxTurnEvents ||
-        active.earlyBytes > maxTurnBytes
+        active.earlyEvents > maxEarlyEvents ||
+        active.earlyBytes > maxEarlyBytes
       ) {
-        failSession(Error('Codex early turn events exceeded output bounds'));
+        failSession(
+          Error(
+            `Codex queued more than ${maxEarlyEvents} events or ${maxEarlyBytes} bytes for a turn before turn/start answered`,
+          ),
+        );
         return;
       }
       const queued = active.earlyByTurn.get(`${eventTurnId}`) || [];
@@ -933,7 +1168,7 @@ export const makeCodexClient = ({
       case 'item/agentMessage/delta':
         if (active) {
           const itemId = `${params.itemId || ''}`;
-          active.textItems.add(itemId);
+          if (!retainIdentity(active.textItems, itemId)) break;
           pushTurn({
             type:
               active.messagePhases.get(itemId) === 'commentary'
@@ -945,10 +1180,14 @@ export const makeCodexClient = ({
         break;
       case 'item/started': {
         if (params.item?.type === 'agentMessage' && active) {
-          active.messagePhases.set(
-            `${params.item.id || ''}`,
-            params.item.phase ?? null,
-          );
+          if (
+            !retainIdentity(
+              active.messagePhases,
+              `${params.item.id || ''}`,
+              params.item.phase ?? null,
+            )
+          )
+            break;
         }
         const tool = toolFromItem(params.item);
         if (tool) {
@@ -976,7 +1215,14 @@ export const makeCodexClient = ({
       case 'item/completed': {
         const { item } = params;
         if (item?.type === 'agentMessage' && active) {
-          active.messagePhases.set(`${item.id || ''}`, item.phase ?? null);
+          if (
+            !retainIdentity(
+              active.messagePhases,
+              `${item.id || ''}`,
+              item.phase ?? null,
+            )
+          )
+            break;
         }
         const tool = toolFromItem(item);
         if (tool) {
@@ -986,14 +1232,19 @@ export const makeCodexClient = ({
             itemId: tool.id,
             tool: tool.name,
             result: auditProjection(tool.result),
+            ...('ok' in tool ? { ok: tool.ok } : {}),
           });
+          const renderedResult = renderToolResult(tool.result);
           pushTurn({
             type: 'tool-result',
             id: tool.id,
             name: tool.name,
             // The journal above keeps the provider's envelope; the transcript
             // gets the text the model saw.
-            result: brief(renderToolResult(tool.result), maxToolResultChars),
+            result: decodeImageResult(renderedResult)
+              ? renderedResult
+              : brief(renderedResult, maxToolResultChars),
+            ...('ok' in tool ? { ok: tool.ok } : {}),
           });
         } else if (
           item?.type === 'agentMessage' &&
@@ -1010,14 +1261,8 @@ export const makeCodexClient = ({
         break;
       }
       case 'thread/tokenUsage/updated': {
-        const last = params.tokenUsage?.last;
-        if (last) {
-          pushTurn({
-            type: 'usage',
-            inputTokens: Number(last.inputTokens) || 0,
-            outputTokens: Number(last.outputTokens) || 0,
-          });
-        }
+        const usage = usageEventFromTokenUsage(params.tokenUsage);
+        if (usage) pushTurn(usage);
         break;
       }
       case 'error':
@@ -1046,6 +1291,7 @@ export const makeCodexClient = ({
         }
         break;
       case 'turn/completed': {
+        const completedTurn = active;
         const status = params.turn?.status;
         await audit('turn-terminal', {
           threadId: params.threadId,
@@ -1056,6 +1302,94 @@ export const makeCodexClient = ({
           }),
         });
         if (status === 'completed') {
+          if (nativeContext) {
+            const turn = completedTurn;
+            if (!turn || active !== turn || closing || terminated) break;
+            if (turn.interrupted) {
+              await settleTurn(turn, {
+                type: 'aborted',
+                reason: turn.interruptReason || 'Codex turn interrupted',
+              });
+              break;
+            }
+            if (turn.capturing) break;
+            turn.capturing = true;
+            // Never await an RPC from the serial notification pump.
+            const capture = (async () => {
+              await null;
+              const assertCapture = () => {
+                if (
+                  closing ||
+                  terminated ||
+                  active !== turn ||
+                  turn.interrupted
+                )
+                  throw Error('Codex native capture cancelled');
+              };
+              try {
+                assertCapture();
+                const read = await request('thread/read', {
+                  threadId: turn.threadId,
+                  includeTurns: false,
+                });
+                assertCapture();
+                if (
+                  read?.thread?.id !== turn.threadId ||
+                  typeof read.thread.path !== 'string'
+                )
+                  throw Error(
+                    'Codex native capture requires its explicit rollout path',
+                  );
+                const captured = await nativeContext.capture({
+                  rolloutPath: read.thread.path,
+                  sessionId: turn.threadId,
+                  turnId: eventTurnId,
+                });
+                assertCapture();
+                if (
+                  captured?.sessionId !== turn.threadId ||
+                  captured?.turnId !== eventTurnId ||
+                  typeof captured.baseInstructions !== 'string' ||
+                  typeof captured.payload !== 'string' ||
+                  !captured.payload.endsWith('\n')
+                )
+                  throw Error('Codex native capture identity mismatch');
+                turn.push(
+                  harden({
+                    type: 'native-context',
+                    checkpoint: {
+                      kind: 'native-context',
+                      format: 'codex-rollout-v1',
+                      context: [],
+                      payload: JSON.stringify({
+                        capture: captured,
+                        binding: turn.nativeBinding,
+                      }),
+                    },
+                  }),
+                );
+                await settleTurn(turn, {
+                  type: 'completed',
+                  checkpoint: `${eventTurnId}`,
+                });
+              } catch (error) {
+                await settleTurn(turn, {
+                  type: 'failed',
+                  reason:
+                    error instanceof Error ? error.message : String(error),
+                });
+              }
+            })();
+            nativeCaptures.add(capture);
+            void capture.catch(error => {
+              failSession(error);
+            });
+            void capture.then(
+              () => nativeCaptures.delete(capture),
+              () => nativeCaptures.delete(capture),
+            );
+            break;
+          }
           // Floot persists this checkpoint with its conversation node, then
           // acknowledges it. Until then the next send conservatively rolls the
           // backend turn out. The ledger records the commit only if this is the
@@ -1093,6 +1427,7 @@ export const makeCodexClient = ({
     await null;
     try {
       for await (const message of transport.messages) {
+        if (terminated) break;
         if ('id' in message && !('method' in message)) {
           const responseId = /** @type {number} */ (
             typeof message.id === 'number' ? message.id : Number.NaN
@@ -1140,10 +1475,15 @@ export const makeCodexClient = ({
               () => detachedRequests.delete(handled),
             );
           } else {
-            await handleServerRequest(message);
+            await trackHostWrite(handleServerRequest(message));
           }
         } else if ('method' in message) {
-          await onNotification(message);
+          await trackHostWrite(
+            onNotification(message).catch(error => {
+              messageFailure = error;
+              throw error;
+            }),
+          );
         }
       }
       if (!terminated) failSession(Error('Codex app-server stdout closed'));
@@ -1248,7 +1588,9 @@ export const makeCodexClient = ({
             assertBrokerRuntimeConfig(
               observed?.config,
               transport.brokerEndpoint,
+              transport.network,
             );
+            publicNetworkAdmitted = transport.network !== undefined;
           }
           // A signed-out app-server accepts `initialize` and `thread/start`
           // alike and fails only when the first turn opens its model
@@ -1288,7 +1630,8 @@ export const makeCodexClient = ({
           await audit('session-open', {
             approvalPolicy,
             sandbox: CODEX_SANDBOX_MODE,
-            toolNetworkAccess: false,
+            executionDomain: 'guest',
+            publicNetworkAccess: publicNetworkAdmitted,
             toolSetId: toolSetId || '',
             // The kind of credential, never the credential: `apiKey`,
             // `chatgpt`, `amazonBedrock`, or `none` for a provider that needs
@@ -1304,38 +1647,129 @@ export const makeCodexClient = ({
     return ready;
   };
 
-  const ensureThread = async (opts = {}) => {
+  const catalogChanged = () =>
+    Boolean(
+      threadId &&
+      boundToolSetId !== toolSetId &&
+      (dynamicTools.length > 0 || boundToolSetId),
+    );
+  // Two reasons to abandon the current thread, one mechanism. They differ in
+  // what they demand of the caller: a catalog change *requires* the records,
+  // because a conversation is being carried across an authority boundary and
+  // silently dropping it would rebind old context to new tools. An inherited
+  // thread does not -- if the stack holds no records then no turn is known to
+  // have happened, and a fresh empty thread is the honest result rather than
+  // a refusal.
+  const mustRotate = (opts = {}) =>
+    catalogChanged() ||
+    inheritedThread ||
+    Boolean(nativeSnapshot(opts)?.suffix.length);
+
+  const transcriptRecords = opts =>
+    Array.isArray(opts.transcript)
+      ? /** @type {TranscriptRecord[]} */ (opts.transcript)
+      : [];
+  const nativeBinding = opts =>
+    harden({
+      model: opts.model || model || '',
+      systemPrompt: opts.systemPrompt || developerInstructions || '',
+      toolSetId: toolSetId || '',
+      cwd,
+      cliVersion: '0.152.0',
+      modelProvider: 'endo_broker',
+    });
+  const nativeSnapshot = opts => {
+    const records = selectActiveTranscript(transcriptRecords(opts)).active;
+    if (records[0]?.kind !== 'native-context') return undefined;
+    if (!nativeContext || records[0].format !== 'codex-rollout-v1')
+      throw Error('Codex cannot restore this native context format');
+    const suffix = records.slice(1);
+    // Projection admits only settled recovery evidence. Independently reject
+    // dangling calls and unsupported encodings before touching native state.
+    if (pairToolCalls(suffix, { perTurn: true }).unanswered.length)
+      throw Error('Codex native context cannot restore an unsettled suffix');
+    responsesApiItems(suffix);
+    const snapshot = JSON.parse(records[0].payload);
+    if (
+      !snapshot ||
+      typeof snapshot !== 'object' ||
+      !snapshot.capture ||
+      typeof snapshot.capture !== 'object' ||
+      typeof snapshot.capture.sessionId !== 'string' ||
+      !snapshot.capture.sessionId ||
+      typeof snapshot.capture.turnId !== 'string' ||
+      !snapshot.capture.turnId ||
+      typeof snapshot.capture.baseInstructions !== 'string' ||
+      typeof snapshot.capture.payload !== 'string' ||
+      !snapshot.capture.payload.endsWith('\n')
+    )
+      throw Error('Codex native context capture is malformed');
+    if (
+      JSON.stringify(snapshot.binding) !== JSON.stringify(nativeBinding(opts))
+    )
+      throw Error('Codex native context binding changed');
+    return { capture: snapshot.capture, suffix };
+  };
+  // Records are the only channel. `continuityContext` used to stand in for
+  // them as text; it carried nothing a tool call survives, and gating on it
+  // let a rotation proceed on a conversation that could not actually be
+  // handed over.
+  const assertContinuity = (opts, required = false) => {
+    if (required && transcriptRecords(opts).length === 0) {
+      throw Error(
+        'Codex context rotation requires this conversation as transcript records; the stack handed none, and a rotated thread cannot be given a history it did not receive',
+      );
+    }
+  };
+
+  const ensureThread = async (opts = {}, preserveCatalog = false) => {
     await ensureReady();
-    if (threadReady && threadId) return threadId;
+    if (threadReady && threadId && (preserveCatalog || !mustRotate(opts)))
+      return threadId;
     const common = {
       cwd,
       approvalPolicy,
       sandbox: CODEX_SANDBOX_MODE,
       ...(opts.model || model ? { model: opts.model || model } : {}),
-      ...(opts.systemPrompt ||
-      opts.developerInstructions ||
-      developerInstructions
+      ...(opts.systemPrompt || developerInstructions
         ? {
-            developerInstructions:
-              opts.systemPrompt ||
-              opts.developerInstructions ||
-              developerInstructions,
+            developerInstructions: opts.systemPrompt || developerInstructions,
           }
         : {}),
     };
     let rotatedFrom;
-    if (threadId && dynamicTools.length > 0 && savedToolSetId !== toolSetId) {
+    /** @type {'catalog-changed' | 'thread-inherited' | 'recovered-context' | undefined} */
+    let rotationReason;
+    if (!preserveCatalog && mustRotate(opts)) {
+      assertContinuity(opts, catalogChanged());
+      if (ledger.status().needsReconciliation) {
+        throw Error(
+          'Codex must reconcile the old thread before context rotation',
+        );
+      }
       // A schema/capability change gets a fresh conversation rather than
-      // silently rebinding old model context to new authority. The old thread
-      // remains intact for audit/recovery.
+      // silently rebinding old model context to new authority; an inherited
+      // thread gets one so that the records, not the surviving store, decide
+      // what the conversation is. Either way the old thread remains intact
+      // for audit and recovery -- it is superseded, never rewritten.
+      rotationReason = catalogChanged()
+        ? 'catalog-changed'
+        : inheritedThread
+          ? 'thread-inherited'
+          : 'recovered-context';
       rotatedFrom = threadId;
+      continuityCheckpoint =
+        opts.acknowledgedCheckpoint || continuityCheckpoint;
       threadId = undefined;
+      inheritedThread = false;
       threadHasTurns = false;
+      replayContinuity = true;
       // The marker names a turn in the thread being abandoned; the new thread
       // starts with nothing outstanding. The old thread is left intact for
       // audit and recovery.
       ledger.forget();
       await audit('thread-rotation-required', {
+        reason: rotationReason || 'catalog-changed',
         oldThreadId: rotatedFrom,
         oldToolSetId: savedToolSetId || '',
         newToolSetId: toolSetId || '',
@@ -1355,10 +1789,75 @@ export const makeCodexClient = ({
         throw failure;
       }
     } else {
-      const response = await request('thread/start', {
-        ...common,
-        ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
-      });
+      const snapshot = nativeSnapshot(opts);
+      let response;
+      let restoredBase = null;
+      if (snapshot) {
+        // A newly allocated native store has no inherited thread to rotate,
+        // but the journal still names its previous committed checkpoint.
+        // Persist that lineage with the new projection's distinct baseline.
+        continuityCheckpoint =
+          opts.acknowledgedCheckpoint || continuityCheckpoint;
+        if (!makeNativeIdentity || !nativeContext)
+          throw Error('Codex native identity allocator missing');
+        const target = {
+          ...makeNativeIdentity(),
+          cwd,
+          modelProvider: 'endo_broker',
+          dynamicTools,
+        };
+        const restored = await nativeContext.restore({
+          capture: snapshot.capture,
+          target,
+        });
+        if (closing || terminated)
+          throw Error('Codex native restoration cancelled');
+        if (
+          restored?.sessionId !== target.sessionId ||
+          typeof restored.rolloutPath !== 'string'
+        )
+          throw Error('Codex native restoration identity mismatch');
+        response = await request('thread/resume', {
+          ...common,
+          threadId: target.sessionId,
+          path: restored.rolloutPath,
+          excludeTurns: true,
+        });
+        if (response?.thread?.id !== target.sessionId)
+          throw Error('Codex native resume identity mismatch');
+        const baseline = await request('thread/turns/list', {
+          threadId: target.sessionId,
+          cursor: null,
+          limit: 1,
+          sortDirection: 'desc',
+          itemsView: 'notLoaded',
+        });
+        if (
+          !Array.isArray(baseline?.data) ||
+          /** @type {any[]} */ (baseline.data).length > 1 ||
+          (baseline.data.length &&
+            (typeof baseline.data[0].id !== 'string' ||
+              baseline.data[0].status !== 'completed'))
+        )
+          throw Error('Codex native restoration baseline unavailable');
+        restoredBase = baseline.data[0]?.id ?? null;
+        threadHasTurns = restoredBase !== null;
+        if (snapshot.suffix.length) {
+          // This writes historical calls/results; it does not execute tools.
+          // Publish this projection only after injection succeeds. A failure
+          // leaves the original checkpoint and journal available for recovery.
+          await injectItems(
+            target.sessionId,
+            responsesApiItems(snapshot.suffix),
+          );
+        }
+        replayContinuity = false;
+      } else {
+        response = await request('thread/start', {
+          ...common,
+          ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
+        });
+      }
       const created = response?.thread?.id;
       if (typeof created !== 'string' || created === '') {
         const failure = Error('Codex app-server did not return a thread id');
@@ -1368,21 +1867,26 @@ export const makeCodexClient = ({
       // Persistence is part of thread creation: never execute a turn whose
       // continuation identity was not durably accepted by the caller.
       try {
-        if (saveThreadState) {
-          await saveThreadState(
-            harden({
-              threadId: created,
-              ...(toolSetId ? { toolSetId } : {}),
-            }),
-          );
-        } else {
-          await saveThreadId(created);
-        }
+        await saveThreadState(
+          harden({
+            threadId: created,
+            ...(toolSetId ? { toolSetId } : {}),
+            // A crash after creation but before first dispatch must not
+            // revive this empty thread as though it retained the dialogue.
+            recovery: {
+              baseTurnId: restoredBase,
+              ...(continuityCheckpoint
+                ? { previousCheckpoint: continuityCheckpoint }
+                : {}),
+            },
+          }),
+        );
       } catch (error) {
         failSession(error);
         throw error;
       }
       threadId = created;
+      boundToolSetId = toolSetId;
     }
     await audit('thread-bound', {
       threadId: /** @type {string} */ (threadId),
@@ -1395,7 +1899,7 @@ export const makeCodexClient = ({
   };
 
   const readLatestTurnId = async () => {
-    const currentThreadId = await ensureThread();
+    const currentThreadId = await ensureThread({}, true);
     // Asking an unmaterialized thread is an error, not an empty answer, and
     // the honest answer for one is that it has no turns.
     if (!threadHasTurns) return null;
@@ -1416,12 +1920,13 @@ export const makeCodexClient = ({
     if (latest !== undefined && (typeof latest !== 'string' || latest === '')) {
       throw Error('Codex returned an invalid latest turn id');
     }
+    threadHasTurns = Boolean(latest);
     return latest || null;
   };
 
   const reconcileThread = async () => {
     if (!ledger.status().needsReconciliation) return;
-    const currentThreadId = await ensureThread();
+    const currentThreadId = await ensureThread({}, true);
     await ledger.reconcile({
       readLatestCheckpoint: readLatestTurnId,
       revertBefore: async beforeTurnId => {
@@ -1444,10 +1949,29 @@ export const makeCodexClient = ({
     await ledger.acknowledge(checkpoint);
   };
 
+  const acknowledgeContinuityCheckpoint = async checkpoint => {
+    if (
+      checkpoint === continuityCheckpoint &&
+      ledger.getRecord() !== undefined
+    ) {
+      // This exact checkpoint belongs to the prior catalog's native thread.
+      // It remains Floot's committed checkpoint until a replacement turn commits.
+      return;
+    }
+    await acknowledgeCheckpoint(checkpoint);
+  };
+
   return makeExo('CodexClient', CodexClientInterface, {
     async send(prompt, opts = {}) {
+      if (Object.hasOwn(opts, 'developerInstructions')) {
+        throw Error(
+          'Per-turn developerInstructions is unsupported; use systemPrompt',
+        );
+      }
       if (terminated) throw Error('Codex session terminated');
       if (closing) throw Error('Codex session closing');
+      // Validate journal/native binding before resuming or mutating any thread.
+      nativeSnapshot(opts);
       if (new TextEncoder().encode(prompt).byteLength > maxPromptBytes) {
         throw makeError(X`Codex prompt exceeded ${maxPromptBytes} bytes`);
       }
@@ -1458,9 +1982,31 @@ export const makeCodexClient = ({
       let currentThreadId;
       await null;
       try {
+        const rotating = mustRotate(opts);
+        if (rotating || (replayContinuity && !threadHasTurns)) {
+          assertContinuity(opts, catalogChanged());
+        }
+        if (rotating) {
+          // The journal's exact committed checkpoint can acknowledge a
+          // completed marker without opening its disposable native projection.
+          if (opts.acknowledgedCheckpoint) {
+            await acknowledgeContinuityCheckpoint(
+              String(opts.acknowledgedCheckpoint),
+            );
+          }
+          // Outstanding work still requires the original native history under
+          // its original catalog. Never hide its loss by restoring a new copy.
+          if (ledger.status().needsReconciliation) {
+            await ensureThread(opts, true);
+            await reconcileThread();
+          }
+          threadReady = false;
+        }
         currentThreadId = await ensureThread(opts);
-        if (opts.acknowledgedCheckpoint) {
-          await acknowledgeCheckpoint(String(opts.acknowledgedCheckpoint));
+        if (!rotating && opts.acknowledgedCheckpoint) {
+          await acknowledgeContinuityCheckpoint(
+            String(opts.acknowledgedCheckpoint),
+          );
         }
         await reconcileThread();
       } catch (error) {
@@ -1471,30 +2017,29 @@ export const makeCodexClient = ({
         turnReserved = false;
         throw Error('Codex session terminated');
       }
-      const channel = makeBufferedReader();
-      let resolveTerminal = () => {};
-      const terminal = /** @type {Promise<void>} */ (
-        new Promise(resolve => {
-          resolveTerminal = () => resolve(undefined);
-        })
-      );
+      /** @type {any} */
+      let turn;
+      const channel = makeHostedTurnChannel({
+        onConsumerClosed: () => {
+          if (active === turn) void interruptActive('Codex turn interrupted');
+        },
+      });
       let resolveStarted = (/** @type {string} */ _turnId) => {};
       const started = /** @type {Promise<string>} */ (
         new Promise(resolve => {
           resolveStarted = resolve;
         })
       );
-      const turn = {
+      turn = {
         threadId: currentThreadId,
+        nativeBinding: nativeBinding(opts),
         push: channel.push,
         interrupted: false,
-        terminal,
-        resolveTerminal,
+        startAdmitted: false,
+        terminal: channel.terminal,
+        resolveTerminal: channel.settle,
         started,
         resolveStarted,
-        events: 0,
-        bytes: 0,
-        toolCalls: 0,
         serverRequestIds: new Set(),
         toolCallIds: new Set(),
         textItems: new Set(),
@@ -1504,16 +2049,20 @@ export const makeCodexClient = ({
         earlyBytes: 0,
       };
       active = turn;
-      turn.wallTimer = setTimeout(() => {
-        if (active === turn) {
-          void interruptActive(
-            `Codex turn exceeded ${turnWallTimeoutMs} ms wall time`,
-          );
+      const assertPromptAdmission = () => {
+        if (terminated || closing || active !== turn || turn.interrupted) {
+          throw Error('Codex turn canceled before prompt admission');
         }
-      }, turnWallTimeoutMs);
-      channel.setOnClose(() => {
-        if (active === turn) void interruptActive('Codex turn interrupted');
-      });
+      };
+      if (turnWallTimeoutMs > 0) {
+        turn.wallTimer = setTimeout(() => {
+          if (active === turn) {
+            void interruptActive(
+              `Codex turn exceeded ${turnWallTimeoutMs} ms wall time`,
+            );
+          }
+        }, turnWallTimeoutMs);
+      }
       try {
         await audit('turn-requested', {
           threadId: currentThreadId,
@@ -1527,25 +2076,66 @@ export const makeCodexClient = ({
         // about to be dispatched is written ahead first: the marker names the
         // checkpoint the thread must be rolled back to if nothing acknowledges
         // it.
-        turn.ledgerTurn = await ledger.begin({
-          baseCheckpoint: await readLatestTurnId(),
-        });
-        const response = await request('turn/start', {
-          threadId: currentThreadId,
-          input: [{ type: 'text', text: prompt, text_elements: [] }],
-          approvalPolicy,
-          sandboxPolicy: {
-            type: 'workspaceWrite',
-            writableRoots: ['/workspace', '/tmp', '/run', '/scratch'],
-            networkAccess: false,
-            excludeSlashTmp: true,
-            excludeTmpdirEnvVar: true,
+        const baseCheckpoint = await readLatestTurnId();
+        assertPromptAdmission();
+        const restoreContext = replayContinuity && baseCheckpoint === null;
+        if (restoreContext) {
+          assertContinuity(opts);
+        }
+        // Faithful restoration, when the thread is new and the stack has a
+        // record of it. `thread/inject_items` appends raw Responses API items
+        // "without starting a user turn" — the app-server's own words — so a
+        // tool call restores as a `function_call` with its output rather than
+        // as a line describing one, and nothing here queues work.
+        //
+        // There is no second path. An app-server that cannot take the items
+        // fails the turn: putting the conversation in the prompt instead
+        // would keep the session answering while the mechanism meant to
+        // carry it is broken, and a degraded answer is indistinguishable
+        // from a good one until someone reads the transcript.
+        if (restoreContext) {
+          const records = transcriptRecords(opts);
+          const items = responsesApiItems(records);
+          if (items.length > 0) {
+            try {
+              await injectItems(currentThreadId, items);
+            } catch (cause) {
+              // The app-server's own words are the useful part of this: a
+              // schema refusal and an unavailable method read very
+              // differently, and only one of them is worth retrying.
+              const failure = makeError(
+                X`Codex app-server refused ${q(items.length)} restored items for a new thread (${cause}); this session's ${q(records.length)} records cannot be handed over, and answering without them would be answering a different question.`,
+              );
+              failSession(failure);
+              throw failure;
+            }
+          }
+        }
+        assertPromptAdmission();
+        turn.ledgerTurn = await ledger.begin({ baseCheckpoint });
+        const response = await request(
+          'turn/start',
+          {
+            threadId: currentThreadId,
+            // The prompt, and only the prompt. A restored conversation reached
+            // the thread through `inject_items` above or the turn never got
+            // here.
+            input: [{ type: 'text', text: prompt, text_elements: [] }],
+            approvalPolicy,
+            sandboxPolicy: {
+              type: 'externalSandbox',
+              networkAccess: publicNetworkAdmitted ? 'enabled' : 'restricted',
+            },
+            ...(opts.model || model ? { model: opts.model || model } : {}),
+            ...(opts.reasoningEffort || reasoningEffort
+              ? { effort: opts.reasoningEffort || reasoningEffort }
+              : {}),
           },
-          ...(opts.model || model ? { model: opts.model || model } : {}),
-          ...(opts.reasoningEffort || reasoningEffort
-            ? { effort: opts.reasoningEffort || reasoningEffort }
-            : {}),
-        });
+          () => {
+            assertPromptAdmission();
+            turn.startAdmitted = true;
+          },
+        );
         if (
           typeof response?.turn?.id !== 'string' ||
           response.turn.id === '' ||
@@ -1574,6 +2164,13 @@ export const makeCodexClient = ({
           }
         }
       } catch (error) {
+        if (turn.interrupted && !turn.startAdmitted) {
+          // Preparation has now settled, including any write-ahead record.
+          // Fence successors before publishing the terminal event; the same
+          // failure path settles the ledger and drains its host writes.
+          await failSession(error);
+          return channel.reader;
+        }
         await settleTurn(turn, {
           type: 'failed',
           reason: error instanceof Error ? error.message : `${error}`,
@@ -1582,42 +2179,8 @@ export const makeCodexClient = ({
       return channel.reader;
     },
     async acknowledge(checkpoint) {
-      await ensureThread();
+      await ensureThread({}, true);
       await acknowledgeCheckpoint(checkpoint);
-    },
-    async models() {
-      await ensureReady();
-      const models = [];
-      let cursor = null;
-      for (let page = 0; page < 10; page += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        const response = await request('model/list', {
-          cursor,
-          limit: 100,
-          includeHidden: false,
-        });
-        if (
-          !Array.isArray(response?.data) ||
-          !(
-            response.nextCursor === null ||
-            response.nextCursor === undefined ||
-            typeof response.nextCursor === 'string'
-          )
-        ) {
-          const failure = Error(
-            'Codex app-server returned a malformed model catalog',
-          );
-          failSession(failure);
-          throw failure;
-        }
-        models.push(...response.data);
-        cursor = response?.nextCursor;
-        if (!cursor) break;
-        if (page === 9) {
-          throw Error('Codex model catalog exceeded 10 pages');
-        }
-      }
-      return harden(models);
     },
     async interrupt() {
       const failure = await interruptActive('Codex turn interrupted');
@@ -1635,9 +2198,11 @@ export const makeCodexClient = ({
           });
           closeDeferredAudited = true;
         }
-        throw Error(
-          `Codex session has ${pendingToolOperations.size} unsettled Endo tool call(s)`,
-        );
+        // Closing fences new effects at dispatch. Drain admitted calls rather
+        // than requiring callers to recognize and retry an English error.
+        // The supervisor independently fences grants and closes the sandbox;
+        // this wait is a completion barrier, not a delay to that containment.
+        await Promise.allSettled([...pendingToolOperations]);
       }
       if (!terminated && !closeRequestedAudited) {
         await audit('session-close-requested', {
@@ -1645,6 +2210,10 @@ export const makeCodexClient = ({
           needsRollback: ledger.status().needsReconciliation,
         });
         closeRequestedAudited = true;
+      }
+      if (shutdownFailed) {
+        shutdown = undefined;
+        shutdownFailed = false;
       }
       const done = failSession(Error('Codex session terminated'), false);
       await done;
@@ -1667,8 +2236,7 @@ export const makeCodexClient = ({
     },
     help(method = '') {
       const methods = harden({
-        send: 'send(prompt, options?) -> streamed provider-neutral events',
-        models: 'models() -> app-server model catalog',
+        send: 'send(prompt, options?) -> streamed provider-neutral events. options.transcript is the stack’s transcript records; a new thread is restored from them through thread/inject_items before the prompt runs, and a thread that cannot take them fails the turn rather than answering without them.',
         interrupt: 'interrupt() -> interrupt the active turn',
         acknowledge:
           'acknowledge(checkpoint) -> confirm the durable Floot commit',

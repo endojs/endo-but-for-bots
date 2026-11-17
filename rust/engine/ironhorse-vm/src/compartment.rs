@@ -14,8 +14,11 @@
 //! Machine owns compiler services outside its execution core to avoid cycles
 //! through host compilers that capture compartments. Its default compiler serves
 //! shared dynamic constructors; compartment compilers serve their own evaluators.
-//! Retained handles keep the heap alive after Machine drops, but compiler services
-//! expire with that policy owner. Collection is explicit consumer policy.
+//! A guest-created child inherits its compiler under the child's environment id,
+//! so transferring the child also transfers the service lifetime until that
+//! environment is collected. Retained handles keep the heap alive after Machine
+//! drops, but compiler services expire with the machine policy owner. Collection
+//! is explicit consumer policy.
 //! Intrinsic permits control global bindings, not transitive capability access.
 //! Static module cells and evaluation status are persisted; loader services are
 //! explicitly reattached. Dynamic import is unsupported.
@@ -34,16 +37,37 @@ use crate::value::{Kind, Payload, Slot};
 pub struct Intrinsics {
     pub(crate) roots: Vec<crate::SlotIndex>,
     pub(crate) locked_down: std::cell::Cell<bool>,
+    /// A transient guard: no quiescent snapshot can contain an active lockdown.
+    pub(crate) locking_down: std::cell::Cell<bool>,
+    /// An unfinished harden walk has queued objects that are not yet frozen.
+    pub(crate) hardening: std::cell::Cell<bool>,
+    /// Instances marked hardened by walks that have not all completed yet: a
+    /// walk that fails revokes its own entries and those of every walk that
+    /// completed inside it, and the outermost walk's completion empties the
+    /// list (`interp::property::integrity`). So it is empty between walks --
+    /// unless one was unwound by a panic, which is the residue the next
+    /// outermost walk sweeps before trusting any mark.
+    pub(crate) harden_marks: RefCell<Vec<crate::SlotIndex>>,
 }
 
 impl Intrinsics {
-    /// True after the complete primordial graph has been frozen.
+    /// True after the complete lockdown operation has run on this realm: the
+    /// function-family and `Date` constructors replaced with inert stand-ins,
+    /// and the whole primordial graph transitively frozen.
+    ///
+    /// One flag for both steps, which is honest only because every path that
+    /// sets it performs both -- construction
+    /// (`Interp::new_shared_realm_machine_configured`), the deferred host
+    /// freeze ([`Machine::lock_down`]) and the guest `lockdown()` alike. It
+    /// once meant "frozen" alone, and a realm could report `true` while
+    /// `({}).constructor.constructor` still compiled source.
     pub fn is_locked_down(&self) -> bool {
         self.locked_down.get()
     }
 }
 
-type CompilerRegistry = RefCell<HashMap<crate::SlotIndex, Rc<dyn crate::SourceCompiler>>>;
+pub(crate) type CompilerRegistry =
+    RefCell<HashMap<crate::SlotIndex, Rc<dyn crate::SourceCompiler>>>;
 
 struct MachineState {
     compilers: std::rc::Weak<CompilerRegistry>,
@@ -276,13 +300,29 @@ pub struct CompartmentOptions {
     /// stay reachable two ways.
     ///
     /// Through any object's prototype chain, the dynamic evaluator included:
-    /// under `Some(vec![])` a guest still reads `({}).constructor.name` as
-    /// `"Object"`, `({}).constructor.constructor.name` as `"Function"`, and
-    /// evaluates `({}).constructor.constructor('return 1 + 1')()` to `2`. SES
-    /// and XS close that route by replacing the function-family prototypes'
-    /// `.constructor` with a throwing stub during `lockdown()`
-    /// (`fx_lockdown_aux`, `xsLockdown.c:52`); ironhorse has no `lockdown()`
-    /// and does not.
+    /// a guest reads `({}).constructor.name` as `"Object"` and
+    /// `({}).constructor.constructor.name` as `"Function"` whatever this list
+    /// says, because a denied name is an absent BINDING and not an absent
+    /// object. Whether that reaches a working evaluator is the realm's
+    /// question, not this list's:
+    ///
+    /// * On a realm that has NOT locked down -- a bare `Interp`, or
+    ///   [`Machine::unfrozen_with_start_global_names`] before something freezes
+    ///   it -- `({}).constructor.constructor('return 1 + 1')()` evaluates to
+    ///   `2` under `Some(vec![])`, and this list has done nothing about it.
+    /// * After lockdown, SES and XS both close that route by replacing the
+    ///   function-family prototypes' `.constructor` with a throwing stub
+    ///   (`fx_lockdown_aux`, `xsLockdown.c:52`), and so does ironhorse. A
+    ///   [`Machine`] does it at construction, so the route is shut in every
+    ///   compartment of one
+    ///   (`realms.rs::a_locked_down_machine_denies_every_prototype_chain_evaluator`).
+    ///
+    /// Neither half suffices alone, which is the point this paragraph exists to
+    /// make: lockdown cannot close the direct `eval`/`Function` bindings,
+    /// because `compartment_evaluator` mints each compartment its own AFTER it
+    /// ran, and this list cannot close the prototype route.
+    /// `native_lockdown.rs::a_host_made_compartment_confines_guest_source_only_with_global_names`
+    /// measures both configurations.
     ///
     /// And transitively through an endowed object. Raw heap-backed `Slot`
     /// endowments are refused, but [`Compartment::define_global_value`] shares
@@ -885,6 +925,7 @@ impl Machine {
         interpreter.attach_host_registry(&hosts);
         let realm = Rc::clone(interpreter.realm());
         let compilers = Rc::new(CompilerRegistry::default());
+        interpreter.attach_compiler_registry(&compilers);
         Machine {
             hosts,
             compilers: Rc::clone(&compilers),
@@ -911,7 +952,14 @@ impl Machine {
             .try_borrow_mut()
             .map_err(|_| Halt::MachineBusy)?;
         self.machine.prepare_persistence(&mut interpreter)?;
-        Ok(operation(&mut interpreter))
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&mut interpreter)));
+        drop(interpreter);
+        self.retire_compilers();
+        match result {
+            Ok(result) => Ok(result),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Adopt an admitted shared heap only after every environment's host policy
@@ -951,6 +999,7 @@ impl Machine {
                     .insert(crate::SlotIndex(id.0), compiler.clone());
             }
         }
+        interpreter.attach_compiler_registry(&compilers);
         if let Some(host) = policy.meter_host.take() {
             interpreter.reattach_meter_host(host);
         }
@@ -1141,15 +1190,25 @@ impl Machine {
         })
     }
 
-    /// Freeze the shared intrinsic graph that
-    /// [`Machine::unfrozen_with_start_global_names`] left mutable. Idempotent, and a
-    /// no-op on a machine that was built frozen.
+    /// Perform on this machine the lockdown that
+    /// [`Machine::unfrozen_with_start_global_names`] deferred: replace the
+    /// function-family and `Date` constructors with inert stand-ins, then
+    /// transitively freeze the intrinsic graph. Idempotent, and a no-op on a
+    /// machine that was built frozen -- [`Machine::new`] does both steps at
+    /// construction.
     ///
-    /// NOT atomic. The intrinsic roots are frozen one at a time, so a guest
-    /// that has made an intrinsic non-extensible or installed a refusing
-    /// Proxy can make this return `Err` with some roots already frozen while
-    /// [`Intrinsics::is_locked_down`] still reports false. Call it again to
-    /// finish: the roots already frozen are no-ops.
+    /// Freezing alone would not be lockdown. It leaves
+    /// `Function.prototype.constructor` pointing at the real evaluator, so
+    /// `({}).constructor.constructor` still compiles guest source in every
+    /// compartment -- the route `CompartmentOptions::global_names` says it
+    /// cannot close.
+    ///
+    /// NOT atomic, and **calling again is not a recovery**. The roots are
+    /// frozen one at a time, so a guest that has made an intrinsic
+    /// non-extensible or installed a refusing Proxy can make this return `Err`
+    /// with some roots already frozen while [`Intrinsics::is_locked_down`]
+    /// still reports false. Retrying does not converge: the Proxy that refused
+    /// one root refuses it on every attempt. Discard the machine instead.
     pub fn lock_down(&self) -> Result<(), Halt> {
         self.machine
             .interpreter
@@ -1196,7 +1255,7 @@ impl Machine {
             }
         })?;
         drop(machine);
-        self.retire_compilers()?;
+        self.retire_compilers();
         Ok(stats)
     }
 
@@ -1206,16 +1265,11 @@ impl Machine {
             interp.prepare_collection()?;
             Ok(operation(interp))
         })??;
-        self.retire_compilers()?;
         Ok(result)
     }
 
-    fn retire_compilers(&self) -> Result<(), Halt> {
-        let machine = self
-            .machine
-            .interpreter
-            .try_borrow()
-            .map_err(|_| Halt::MachineBusy)?;
+    fn retire_compilers(&self) {
+        let machine = self.machine.interpreter.borrow();
         let live = machine.live_environment_ids();
         drop(machine);
         let dead: Vec<_> = self
@@ -1230,7 +1284,6 @@ impl Machine {
             dead.iter().filter_map(|id| compilers.remove(id)).collect()
         };
         drop(retired);
-        Ok(())
     }
 
     /// The single Realm shared by all compartments of this Machine.
@@ -1285,6 +1338,21 @@ impl Machine {
     }
 
     /// Drain the machine's ordered promise queue through captured callback contexts.
+    /// The operator's finalization step at the machine level: a pump,
+    /// since the drain of a script-less crank is where a sweep's flagged
+    /// registries notify ([`Interp::notify_finalizations`]). A `meter`
+    /// replaces the realm's, charges included, so the step can run under a
+    /// crank's budget; a `host` is this pump's check callback, detached
+    /// afterwards as every pump's is. Named so a host's sweep, notify,
+    /// checkpoint sequence reads as what it is.
+    pub fn notify_finalizations(
+        &self,
+        meter: Option<crate::Meter>,
+        host: Option<Box<dyn FnMut(u64) -> bool>>,
+    ) -> RunOutcome {
+        self.pump(meter, host)
+    }
+
     pub fn run_promise_jobs(&self) -> RunOutcome {
         self.pump(None, None)
     }
@@ -1432,7 +1500,12 @@ mod tests {
             .interpreter
             .borrow()
             .current_environment_id();
-        machine.machine.interpreter.borrow_mut().set_slot_ceiling(0);
+        machine
+            .machine
+            .interpreter
+            .borrow_mut()
+            .set_slot_ceiling(0)
+            .unwrap();
         assert_eq!(machine.with_persistence(|_| ()), Err(Halt::HeapExhausted));
         assert_eq!(
             machine
@@ -1462,14 +1535,14 @@ mod tests {
             let mut interp = machine.machine.interpreter.borrow_mut();
             let previous = interp.current_environment_id();
             let ceiling = interp.slots().capacity() + allowance;
-            interp.set_slot_ceiling(ceiling);
+            interp.set_slot_ceiling(ceiling).unwrap();
             drop(interp);
             assert_eq!(machine.with_persistence(|_| ()), Err(Halt::HeapExhausted));
             let mut interp = machine.machine.interpreter.borrow_mut();
             assert_eq!(interp.current_environment_id(), previous);
             assert!(interp.is_quiescent());
             assert_eq!(interp.stored_unpersistable_row(), None);
-            interp.set_slot_ceiling(u32::MAX);
+            interp.set_slot_ceiling(u32::MAX).unwrap();
             drop(interp);
             assert!(pending.snapshot_id().is_some());
             let (code, symbols) = ironhorse_compile::compile_atoms("40 + 2").unwrap();
@@ -1484,7 +1557,12 @@ mod tests {
         let (code, symbols) = ironhorse_compile::compile_atoms("Promise.reject(42); 0").unwrap();
         assert!(a.evaluate_with_symbols(&code, &symbols).completed);
         assert!(machine.run_promise_jobs().completed);
-        machine.machine.interpreter.borrow_mut().set_slot_ceiling(0);
+        machine
+            .machine
+            .interpreter
+            .borrow_mut()
+            .set_slot_ceiling(0)
+            .unwrap();
         assert!(matches!(
             machine.unhandled_rejections(),
             Err(Halt::HeapExhausted)

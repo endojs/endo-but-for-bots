@@ -19,8 +19,18 @@ which commits closed which findings and those claims had never been verified.
 Every behavioural claim below was reproduced with `ironhorse_262::dual_run`,
 which runs the same program on IronHorse and on the pinned XS 9.0 oracle and
 compares completion values and the raw 16.16 meter.
-Metering claims are decided by `computrons_agree` and the raw meter, never by
-result agreement alone.
+Metering claims were measured as deltas from XS's raw meter, the review's
+instrument; the doctrine note below says how to read them.
+
+**Doctrine note (2026-09-15).** The XS oracle was this review's *measurement
+instrument*, so the metering entries below quantify deltas against XS. Read
+them under the accuracy-over-parity doctrine
+([ironhorse-engine § Metering](ironhorse-engine.md)): a metering defect is a
+defect in the fidelity of Iron Horse's **own** cost model (work performed but
+not charged, or charged without work) for which the XS delta was the
+evidence — it is **not** the delta itself. XS-computron parity is a non-goal,
+not a deferred goal; closing an entry means making Iron Horse's meter honest
+about the work, never making its number equal XS's.
 
 Each verdict recorded as still-open was then given to a second reviewer whose
 only instruction was to refute it.
@@ -306,26 +316,36 @@ The rest are listed here as they stood.
 
 ### Snapshot migration and boot versioning
 
-8 open, 4 of them P1.
+7 open, 4 of them P1; `F078` and `F079` since fixed.
 
 - `F068` **P1** Do not use a considered `join` as the arguments-layout version (partial)
 - `F069` **P1** Encode the boot generation outside the legacy signature namespace
 - `F071` **P2** Keep legacy migration-fixture generators on the legacy signature
 - `F072` **P2** Treat a null `@@toPrimitive` method as absent
 - `F073` **P2** Preserve the pinned missing-key behavior
-- `F074` **P1** Make the new coercion tests enforce computron parity
-- `F078` **P1** Canonicalize intrinsic ordering for prototypes and namespaces too
-- `F079` **P2** Move a deleted-and-recreated intrinsic property to the end
+- `F078` **P1** Canonicalize intrinsic ordering for prototypes and namespaces too (fixed)
+- `F079` **P2** Move a deleted-and-recreated intrinsic property to the end (fixed)
+
+Every intrinsic's own keys now come in XS's order, whatever a program names,
+computes or reflects on first: each lazily installed member takes its place
+from the tables in `ironhorse-vm/src/interp/intrinsic_order.rs`, and a global
+object's standard bindings are installed together before guest code runs.
+A deleted member added again is an ordinary new key, last.
+`ironhorse-262/tests/intrinsic_key_order.rs` compares every intrinsic with XS.
 
 ### Object MOP: intrinsics, tombstones, harden, petrify
 
-7 open, 5 of them P1.
+7 open, 5 of them P1; `F082` and `F085` since fixed.
 
 - `F081` **P1** Retain ordinary numeric expandos on boxed Strings
 - `F082` **P1** Honor deleted function-metadata tombstones throughout the MOP
+  (fixed: `exotic_own_descriptor` and own keys honor the tombstone, and
+  `bind` reads the target's `length` and `name` through the MOP)
 - `F083` **P1** Throw a catchable TypeError after key coercion
 - `F084` **P2** Include RegExp in the full-MOP defineProperty path (partial)
-- `F085` **P2** Preserve descriptor field presence for proxy defineProperty traps
+- `F085` **P1** Preserve descriptor field presence for proxy defineProperty traps
+  (fixed: raised to P1 because a forwarding trap wiped values under `freeze`,
+  `seal` and plain assignment; the trap now receives FromPropertyDescriptor)
 - `F087` **P1** Do not expose the queued harden mark to reentrant calls
 - `F088` **P1** Enforce petrified ArrayBuffer state in its ordinary view writes
 
@@ -344,11 +364,15 @@ The rest are listed here as they stood.
 
 ### Numeric coercion, Math, JSON
 
-11 open, 8 of them P1.
+11 open, 8 of them P1; `F100` since fixed.
 
 - `F099` **P1** Meter the newly reachable object-to-number conversions
 - `F100` **P1** Parse every ECMAScript whitespace character in numeric strings
+  (fixed: `parseInt`, `parseFloat` and StringToNumber skip every WhiteSpace
+  and LineTerminator code point)
 - `F101` **P1** Coerce the first pow/atan2 argument when the second is missing
+  (re-probed 2026-10-14: XS skips the coercion too, so this is a `SHARED`
+  candidate; V8 coerces, as ES2024 21.3.2.26 step 1 requires)
 - `F102` **P2** Use a scaled algorithm for variadic Math.hypot
 - `F103` **P1** Meter the new reviver wrapper and recursive walk
 - `F104` **P1** Preserve callable-Proxy identity after revocation
@@ -360,7 +384,7 @@ The rest are listed here as they stood.
 
 ### Promise combinators, capabilities, thenables
 
-13 open, 6 of them P1.
+13 open, 6 of them P1; `F126` since fixed.
 
 - `F111` **P1** Invoke `then` on primitive Promise.resolve results
 - `F113` **P2** Remove the fixed one-million-yield semantic cap
@@ -371,7 +395,10 @@ The rest are listed here as they stood.
 - `F123` **P1** Support bound constructors in NewPromiseCapability
 - `F124` **P2** Preserve NewTarget through default Proxy construction
 - `F125` **P1** Preserve both observable species lookups in `finally`
+  (re-probed 2026-10-14: still open; `promise_finally` in `natives/promise.rs`
+  logs `ctor,species` where XS and V8 log `ctor,species,ctor,species`)
 - `F126` **P2** Preserve Promise native names in function stringification
+  (fixed: the Promise natives use `alloc_named_method` and stringify as XS does)
 - `F127` **P2** Include every standard Promise static in the completeness gate
 - `F128` **P2** Charge for accessor-based thenable probes (partial)
 - `F129` **P2** Account for callable `finally` wrapper creation (partial)
@@ -424,12 +451,11 @@ The rest are listed here as they stood.
 
 ### String delete, boxing, ArrayBuffer slice and transfer
 
-10 open, 6 of them P1.
+9 open, 6 of them P1.
 
 - `F161` **P1** Route delete opcodes through String exotic `[[Delete]]`
 - `F162` **P1** Meter sloppy String, Symbol, and BigInt boxing
 - `F163` **P1** Calibrate each ArrayBuffer slice protocol branch
-- `F164` **P2** Make the slice suite enforce the project's meter-parity contract
 - `F165` **P1** Reject transfer of a petrified ArrayBuffer
 - `F166` **P1** Charge the transfer frame and result allocation
 - `F167` **P1** Release inaccessible backing chunks when detaching
@@ -450,7 +476,7 @@ The rest are listed here as they stood.
 
 ### arguments MOP, Error construction, global environment
 
-14 open, 13 of them P1; `F177` through `F180` since fixed.
+14 open, 13 of them P1; `F177` through `F180` and `F190` since fixed.
 
 - `F177` **P1** Read arguments-object length through the property MOP (fixed)
 - `F178` **P1** Meter generic CreateListFromArrayLike reads in apply (fixed)
@@ -464,7 +490,8 @@ The rest are listed here as they stood.
 - `F187` **P2** Meter Error-to-string allocation in encoded bytes
 - `F188` **P1** Calibrate CopyObject's newly enabled MOP paths
 - `F189` **P1** Resolve inherited properties in the global Object Environment Record
-- `F190` **P1** Reject strict assignment to an unbound identifier
+- `F190` **P1** Reject strict assignment to an unbound identifier (fixed:
+  both engines throw ReferenceError)
 - `F191` **P1** Charge SET_VARIABLE before rejected or throwing global writes exit
 
 ### Array iterator

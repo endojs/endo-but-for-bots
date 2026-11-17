@@ -160,6 +160,51 @@ fn host_roots_reacquire_after_source_drop_and_collection() {
     assert!(b.define_global_value("foreign", &root).is_err());
 }
 
+/// A machine built with `global_names` snapshots and restores.
+///
+/// `Interp::restore_shared_machine` validates a snapshot's stored
+/// `intrinsic_roots` against a reference machine built by
+/// `new_shared_realm_machine()` — with **no** global names — on the premise that
+/// construction-time instance indices do not depend on them. Every other test in
+/// this file uses `Machine::new()`, so none of them can see that premise break.
+///
+/// It broke. Running lockdown step 2 before the root enumeration materialized
+/// one lazily-held prototype member, and that single instance landed at an arena
+/// index downstream of the property slots `install_intrinsic_bindings` writes —
+/// which `global_names` changes. The stored roots ended at 1544 where the
+/// reference ended at 1602, and the reopen failed with
+/// `Corrupt("restore session did not validate")`. The only thing that caught it
+/// was `rust/endo/tests/ironhorse_runtime_compiler.rs`, in the OUTER cargo
+/// workspace, which the engine's own `cargo test --workspace` does not build.
+///
+/// So this test exists to keep that failure inside this workspace. It asserts
+/// the round trip AND, in the same breath, that lockdown step 2 did run — the
+/// two are in tension, and pinning only one of them is how this got through.
+#[test]
+fn a_machine_with_global_names_survives_a_snapshot_round_trip() {
+    let m = Machine::with_start_global_names(Some(&[
+        "Object".to_string(),
+        "JSON".to_string(),
+        "TypeError".to_string(),
+    ]));
+    let c = m.new_compartment();
+    eval(&c, "var answer = 42; 0");
+    let cid = c.snapshot_id().unwrap();
+    let restored = roundtrip(&m);
+    let c = restored.claim_compartment(cid).unwrap();
+    assert_eq!(eval(&c, "answer"), "42");
+    assert_eq!(
+        eval(
+            &c,
+            "try { ({}).constructor.constructor('return 1')(); 'REACHED' } \
+             catch (e) { e.name + ': ' + e.message }"
+        ),
+        "TypeError: secure mode",
+        "step 2 must survive the round trip; a restored machine that reports \
+         is_locked_down() with a live evaluator is the bug this pairs with"
+    );
+}
+
 fn empty_policy(ids: &[EnvironmentId]) -> MachineRestorePolicy {
     MachineRestorePolicy {
         host_callables: Default::default(),
@@ -179,6 +224,117 @@ fn empty_policy(ids: &[EnvironmentId]) -> MachineRestorePolicy {
             })
             .collect(),
         meter_host: None,
+    }
+}
+
+/// A store whose `fail_at`-th slot-page read (counting from zero) fails
+/// with an injected I/O error; every other read is the inner store's.
+struct FailingNthRead {
+    inner: ironhorse_snapshot::store::MemoryStore,
+    reads: std::cell::Cell<u32>,
+    fail_at: u32,
+}
+
+impl ironhorse_snapshot::store::HeapStore for FailingNthRead {
+    fn manifest(
+        &self,
+    ) -> Result<ironhorse_snapshot::store::StoreManifest, ironhorse_snapshot::store::StoreError>
+    {
+        self.inner.manifest()
+    }
+    fn read_small_state(&self) -> Result<Vec<u8>, ironhorse_snapshot::store::StoreError> {
+        self.inner.read_small_state()
+    }
+    fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, ironhorse_snapshot::store::StoreError> {
+        let n = self.reads.get();
+        self.reads.set(n + 1);
+        if n == self.fail_at {
+            return Err(ironhorse_snapshot::store::StoreError::Io(
+                "injected read failure".to_string(),
+            ));
+        }
+        self.inner.read_slot_page(page)
+    }
+    fn read_chunk_extent(
+        &self,
+        ext: u32,
+    ) -> Result<Vec<u8>, ironhorse_snapshot::store::StoreError> {
+        self.inner.read_chunk_extent(ext)
+    }
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), ironhorse_snapshot::store::StoreError> {
+        self.inner.inventory()
+    }
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, ironhorse_snapshot::store::StoreError> {
+        self.inner.read_free_seg(seg)
+    }
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, ironhorse_snapshot::store::StoreError> {
+        self.inner.page_edges()
+    }
+    fn commit_verified(
+        &mut self,
+        verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
+    ) -> Result<(), ironhorse_snapshot::store::StoreError> {
+        self.inner.commit_verified(verify)
+    }
+}
+
+/// A row read that fails in any step of a shared lazy resume (the
+/// restore, reading the environment ids and the meter, adopting the
+/// machine under its policy) comes back as the resume's own error: every
+/// slot-page read the resume makes is failed in turn, and none may escape
+/// as a panic or leave the resume succeeding. Today every read lands in
+/// open or the restore itself; a change that makes a later step fault
+/// without its catch fails here.
+#[test]
+fn a_failed_row_read_in_any_step_of_a_shared_resume_is_its_error() {
+    use ironhorse_snapshot::machine::{
+        begin_shared_store_session, resume_shared_from_store_lazy_with,
+    };
+    use ironhorse_snapshot::store::{export_to_container, import_from_container, MemoryStore};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+    let signature = Signature::new("shared-store");
+    let container = {
+        let m = Machine::new();
+        let a = m.new_compartment();
+        eval(&a, "var answer = 42; var log = []; var f = () => answer; 0");
+        let mut store = MemoryStore::new();
+        drop(
+            begin_shared_store_session(m, &signature, &mut store, 0)
+                .ok()
+                .unwrap(),
+        );
+        export_to_container(&store).unwrap()
+    };
+    let attempt = |fail_at: u32| {
+        let mut inner = MemoryStore::new();
+        import_from_container(&container, &signature, &mut inner).unwrap();
+        let store = Rc::new(RefCell::new(FailingNthRead {
+            inner,
+            reads: Cell::new(0),
+            fail_at,
+        }));
+        let result = resume_shared_from_store_lazy_with(store.clone(), &signature, |ids, _| {
+            Ok(empty_policy(ids))
+        })
+        .map(drop);
+        let reads = store.borrow().reads.get();
+        (result, reads)
+    };
+    let (clean, total) = attempt(u32::MAX);
+    clean.expect("the resume succeeds when no read fails");
+    assert!(total > 1, "the resume reads slot pages: {total}");
+    for fail_at in 0..total {
+        let (result, _) = attempt(fail_at);
+        assert_eq!(
+            result.err(),
+            Some(ironhorse_snapshot::store::StoreError::Io(
+                "injected read failure".to_string()
+            )),
+            "slot-page read {fail_at} of {total}"
+        );
     }
 }
 
@@ -404,6 +560,7 @@ fn restored_prospective_permit_applies_to_computed_names_and_preserves_deletions
                 "foreign['Da' + 'te'] = 42; delete foreign['Da' + 'te']; 0",
             );
         }
+        assert_eq!(eval(&b, "typeof Map.prototype.get"), "function");
         let id = a.snapshot_id().unwrap();
         let restored = roundtrip(&m); // Explicitly reattach an unrestricted prospective global-names list.
         let a = restored.claim_compartment(id).unwrap();
@@ -415,6 +572,7 @@ fn restored_prospective_permit_applies_to_computed_names_and_preserves_deletions
             eval(&a, "typeof Date"),
             if delete { "undefined" } else { "function" }
         );
+        assert_eq!(eval(&a, "typeof Map"), "function");
     }
 }
 
@@ -1110,4 +1268,51 @@ fn host_functions_created_after_collection_remain_persistable() {
         .unwrap()
         .unwrap();
     assert!(from_snapshot_bytes(&bytes, &signature).is_ok());
+}
+
+/// A queued NATIVE promise job survives a shared-machine checkpoint.
+///
+/// Shared-machine evaluation deliberately leaves promise jobs queued, so
+/// `promise_jobs` is ordinary carried state at this boundary, not an
+/// exceptional one. The shared serializer had its own reaction encoder with a
+/// catch-all `unreachable!`, so the two carries the persist gate had already
+/// started admitting — async generators (format 23) and `Array.fromAsync`
+/// accumulations (format 24, architecture finding F127) — reached a host
+/// panic from ordinary guest code instead of a snapshot. The gate said yes
+/// and the writer aborted the process.
+///
+/// Both arms drain AFTER the restore, so each asserts the job came back
+/// pointing at the right carried row, not merely that the write did not
+/// panic. Found in review of the F127 carry.
+#[test]
+fn queued_native_promise_jobs_survive_a_shared_checkpoint() {
+    for (label, source, drain, expected) in [
+        (
+            "fromAsync",
+            "var result; Array.fromAsync([1, 2]).then(x => result = x.join(',')); 0",
+            "result",
+            "1,2",
+        ),
+        (
+            "async generator",
+            "var result; \
+             async function* g() { yield 1; yield 2; } \
+             (async () => { var out = []; for await (var v of g()) out.push(v); \
+                            result = out.join(','); })(); 0",
+            "result",
+            "1,2",
+        ),
+    ] {
+        let m = Machine::new();
+        let a = m.new_compartment();
+        let aid = a.snapshot_id().unwrap();
+        assert_eq!(eval(&a, source), "0", "{label}: fixture");
+        // The checkpoint is taken with the jobs still queued: that is the
+        // boundary the defect was reachable from.
+        let restored = roundtrip(&m);
+        let ra = restored.claim_compartment(aid).unwrap();
+        let outcome = restored.run_promise_jobs();
+        assert!(outcome.completed, "{label}: drain {:?}", outcome.halt);
+        assert_eq!(eval(&ra, drain), expected, "{label}: resumed result");
+    }
 }

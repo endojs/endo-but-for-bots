@@ -11,18 +11,18 @@ built-ins/AsyncGeneratorPrototype/return/request-queue-order-state-executing.js 
 built-ins/AsyncGeneratorPrototype/return/request-queue-order-state-executing.js strict pass
 built-ins/AsyncGeneratorPrototype/return/return-promise.js sloppy pass
 built-ins/AsyncGeneratorPrototype/return/return-promise.js strict pass
-built-ins/AsyncGeneratorPrototype/return/return-state-completed-broken-promise.js sloppy skip:async:reported-failure
-built-ins/AsyncGeneratorPrototype/return/return-state-completed-broken-promise.js strict skip:async:reported-failure
+built-ins/AsyncGeneratorPrototype/return/return-state-completed-broken-promise.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Expected rejection (the oracle completed)"
+built-ins/AsyncGeneratorPrototype/return/return-state-completed-broken-promise.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Expected rejection (the oracle completed)"
 built-ins/AsyncGeneratorPrototype/return/return-state-completed.js sloppy pass
 built-ins/AsyncGeneratorPrototype/return/return-state-completed.js strict pass
-built-ins/AsyncGeneratorPrototype/return/return-suspendedStart-broken-promise.js sloppy skip:async:reported-failure
-built-ins/AsyncGeneratorPrototype/return/return-suspendedStart-broken-promise.js strict skip:async:reported-failure
+built-ins/AsyncGeneratorPrototype/return/return-suspendedStart-broken-promise.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Expected rejection (the oracle completed)"
+built-ins/AsyncGeneratorPrototype/return/return-suspendedStart-broken-promise.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Expected rejection (the oracle completed)"
 built-ins/AsyncGeneratorPrototype/return/return-suspendedStart-promise.js sloppy pass
 built-ins/AsyncGeneratorPrototype/return/return-suspendedStart-promise.js strict pass
 built-ins/AsyncGeneratorPrototype/return/return-suspendedStart.js sloppy pass
 built-ins/AsyncGeneratorPrototype/return/return-suspendedStart.js strict pass
-built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-broken-promise-try-catch.js sloppy skip:async:reported-failure
-built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-broken-promise-try-catch.js strict skip:async:reported-failure
+built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-broken-promise-try-catch.js sloppy fail:"async: Test262:AsyncTestFailure:TypeError: cannot coerce undefined to object (the oracle completed)"
+built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-broken-promise-try-catch.js strict fail:"async: Test262:AsyncTestFailure:TypeError: cannot coerce undefined to object (the oracle completed)"
 built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-promise.js sloppy pass
 built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-promise.js strict pass
 built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-try-finally-return.js sloppy pass

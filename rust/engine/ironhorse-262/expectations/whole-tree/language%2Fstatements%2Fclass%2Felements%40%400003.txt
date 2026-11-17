@@ -7,12 +7,12 @@ language/statements/class/elements/fields-computed-name-propname-constructor.js 
 language/statements/class/elements/fields-computed-name-propname-constructor.js strict pass
 language/statements/class/elements/fields-computed-name-static-computed-var-propname-constructor.js sloppy pass
 language/statements/class/elements/fields-computed-name-static-computed-var-propname-constructor.js strict pass
-language/statements/class/elements/fields-computed-name-static-computed-var-propname-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/elements/fields-computed-name-static-computed-var-propname-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/elements/fields-computed-name-static-computed-var-propname-prototype.js sloppy pass
+language/statements/class/elements/fields-computed-name-static-computed-var-propname-prototype.js strict pass
 language/statements/class/elements/fields-computed-name-static-propname-constructor.js sloppy pass
 language/statements/class/elements/fields-computed-name-static-propname-constructor.js strict pass
-language/statements/class/elements/fields-computed-name-static-propname-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/elements/fields-computed-name-static-propname-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/elements/fields-computed-name-static-propname-prototype.js sloppy pass
+language/statements/class/elements/fields-computed-name-static-propname-prototype.js strict pass
 language/statements/class/elements/fields-duplicate-privatenames.js sloppy pass
 language/statements/class/elements/fields-duplicate-privatenames.js strict pass
 language/statements/class/elements/fields-hash-constructor-is-a-valid-name.js sloppy pass
@@ -29,12 +29,12 @@ language/statements/class/elements/fields-string-name-static-propname-constructo
 language/statements/class/elements/fields-string-name-static-propname-constructor.js strict pass
 language/statements/class/elements/fields-string-name-static-propname-prototype.js sloppy pass
 language/statements/class/elements/fields-string-name-static-propname-prototype.js strict pass
-language/statements/class/elements/get-access-of-missing-private-getter.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: get operation on private accessor without getter should throw TypeError Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/elements/get-access-of-missing-private-getter.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: get operation on private accessor without getter should throw TypeError Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/elements/get-access-of-missing-private-static-getter.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: get operation on private accessor without getter should throw TypeError Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/elements/get-access-of-missing-private-static-getter.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: get operation on private accessor without getter should throw TypeError Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/elements/get-access-of-missing-shadowed-private-getter.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: subclass private accessor should shadow super class private accessor Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/elements/get-access-of-missing-shadowed-private-getter.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: subclass private accessor should shadow super class private accessor Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/elements/get-access-of-missing-private-getter.js sloppy pass
+language/statements/class/elements/get-access-of-missing-private-getter.js strict pass
+language/statements/class/elements/get-access-of-missing-private-static-getter.js sloppy pass
+language/statements/class/elements/get-access-of-missing-private-static-getter.js strict pass
+language/statements/class/elements/get-access-of-missing-shadowed-private-getter.js sloppy pass
+language/statements/class/elements/get-access-of-missing-shadowed-private-getter.js strict pass
 language/statements/class/elements/grammar-private-field-optional-chaining.js sloppy pass
 language/statements/class/elements/grammar-private-field-optional-chaining.js strict pass
 language/statements/class/elements/indirect-eval-contains-arguments.js sloppy pass

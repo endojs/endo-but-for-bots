@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="940" viewBox="0 0 1500 940"><rect width="1500" height="940" fill="#f8fafc"/><g font-family="system-ui,sans-serif" fill="#334155">
+<text x="36" y="45" font-size="29" text-anchor="start">Inside the VM: GC rounds and execution / promise jobs</text>
+<text x="36" y="76" font-size="18" text-anchor="start">Median instrumented send · trial 8 · 155.9 ms accepted + inbox ready</text>
+<path d="M 365.000,210.000 A 130,130 0 1 1 272.739,431.585 L 313.902,390.724 A 72,72 0 1 0 365.000,268.000 Z" fill="#4c1d95" stroke="#f8fafc"><title>garbage-collection 1: 42.171 ms</title></path>
+<path d="M 365.000,124.000 A 216,216 0 0 1 365.005,124.000 L 365.003,207.000 A 133,133 0 0 0 365.000,207.000 Z" fill="#a855f7" stroke="#f8fafc"><title>Admission: 0.000 ms</title></path>
+<path d="M 365.005,124.000 A 216,216 0 0 1 368.042,124.021 L 366.873,207.013 A 133,133 0 0 0 365.003,207.000 Z" fill="#65a30d" stroke="#f8fafc"><title>Unattributed / profiler: 0.151 ms</title></path>
+<path d="M 368.042,124.021 A 216,216 0 0 1 369.576,124.048 L 367.817,207.030 A 133,133 0 0 0 366.873,207.013 Z" fill="#9333ea" stroke="#f8fafc"><title>Gather roots: 0.076 ms</title></path>
+<path d="M 369.576,124.048 A 216,216 0 0 1 369.733,124.052 L 367.914,207.032 A 133,133 0 0 0 367.817,207.030 Z" fill="#84cc16" stroke="#f8fafc"><title>Clear marks / seed: 0.008 ms</title></path>
+<path d="M 369.733,124.052 A 216,216 0 0 1 579.144,368.255 L 496.857,357.398 A 133,133 0 0 0 367.914,207.032 Z" fill="#7c3aed" stroke="#f8fafc"><title>Trace slots / edges: 18.025 ms</title></path>
+<path d="M 579.144,368.255 A 216,216 0 0 1 579.038,369.044 L 496.792,357.884 A 133,133 0 0 0 496.857,357.398 Z" fill="#0284c7" stroke="#f8fafc"><title>Ephemeron fixpoint: 0.040 ms</title></path>
+<path d="M 579.038,369.044 A 216,216 0 0 1 578.926,369.857 L 496.723,358.384 A 133,133 0 0 0 496.792,357.884 Z" fill="#059669" stroke="#f8fafc"><title>Prune weak state: 0.041 ms</title></path>
+<path d="M 578.926,369.857 A 216,216 0 0 1 387.207,554.855 L 378.674,472.295 A 133,133 0 0 0 496.723,358.384 Z" fill="#2563eb" stroke="#f8fafc"><title>Sweep slots: 14.260 ms</title></path>
+<path d="M 387.207,554.855 A 216,216 0 0 1 377.787,555.621 L 372.873,472.767 A 133,133 0 0 0 378.674,472.295 Z" fill="#64748b" stroke="#f8fafc"><title>Gather chunk roots: 0.469 ms</title></path>
+<path d="M 377.787,555.621 A 216,216 0 0 1 239.433,515.752 L 287.683,448.218 A 133,133 0 0 0 372.873,472.767 Z" fill="#0d9488" stroke="#f8fafc"><title>Compact chunks: 7.291 ms</title></path>
+<path d="M 239.433,515.752 A 216,216 0 0 1 226.224,505.521 L 279.550,441.918 A 133,133 0 0 0 287.683,448.218 Z" fill="#d97706" stroke="#f8fafc"><title>Rewrite chunk holders: 0.830 ms</title></path>
+<path d="M 226.224,505.521 A 216,216 0 0 1 212.629,493.098 L 271.179,434.269 A 133,133 0 0 0 279.550,441.918 Z" fill="#be185d" stroke="#f8fafc"><title>Prune late tables: 0.915 ms</title></path>
+<path d="M 212.629,493.098 A 216,216 0 0 1 212.166,492.636 L 270.894,433.984 A 133,133 0 0 0 271.179,434.269 Z" fill="#b45309" stroke="#f8fafc"><title>Compact code: 0.032 ms</title></path>
+<path d="M 212.166,492.636 A 216,216 0 0 1 211.920,492.389 L 270.742,433.832 A 133,133 0 0 0 270.894,433.984 Z" fill="#475569" stroke="#f8fafc"><title>Compact reactions: 0.017 ms</title></path>
+<path d="M 211.920,492.389 A 216,216 0 0 1 211.705,492.173 L 270.610,433.699 A 133,133 0 0 0 270.742,433.832 Z" fill="#e11d48" stroke="#f8fafc"><title>Rederive side ledger: 0.015 ms</title></path>
+<path d="M 272.739,431.585 A 130,130 0 0 1 365.000,210.000 L 365.000,268.000 A 72,72 0 0 0 313.902,390.724 Z" fill="#1e40af" stroke="#f8fafc"><title>garbage-collection 2: 25.240 ms</title></path>
+<path d="M 211.705,492.173 A 216,216 0 0 1 211.698,492.166 L 270.606,433.695 A 133,133 0 0 0 270.610,433.699 Z" fill="#a855f7" stroke="#f8fafc"><title>Admission: 0.000 ms</title></path>
+<path d="M 211.698,492.166 A 216,216 0 0 1 209.863,490.295 L 269.476,432.543 A 133,133 0 0 0 270.606,433.695 Z" fill="#65a30d" stroke="#f8fafc"><title>Unattributed / profiler: 0.130 ms</title></path>
+<path d="M 209.863,490.295 A 216,216 0 0 1 209.219,489.627 L 269.079,432.131 A 133,133 0 0 0 269.476,432.543 Z" fill="#9333ea" stroke="#f8fafc"><title>Gather roots: 0.046 ms</title></path>
+<path d="M 209.219,489.627 A 216,216 0 0 1 209.154,489.559 L 269.039,432.090 A 133,133 0 0 0 269.079,432.131 Z" fill="#84cc16" stroke="#f8fafc"><title>Clear marks / seed: 0.005 ms</title></path>
+<path d="M 209.154,489.559 A 216,216 0 0 1 211.989,187.541 L 270.785,246.125 A 133,133 0 0 0 269.039,432.090 Z" fill="#7c3aed" stroke="#f8fafc"><title>Trace slots / edges: 16.613 ms</title></path>
+<path d="M 211.989,187.541 A 216,216 0 0 1 212.437,187.093 L 271.061,245.849 A 133,133 0 0 0 270.785,246.125 Z" fill="#0284c7" stroke="#f8fafc"><title>Ephemeron fixpoint: 0.031 ms</title></path>
+<path d="M 212.437,187.093 A 216,216 0 0 1 212.796,186.736 L 271.282,245.629 A 133,133 0 0 0 271.061,245.849 Z" fill="#059669" stroke="#f8fafc"><title>Prune weak state: 0.025 ms</title></path>
+<path d="M 212.796,186.736 A 216,216 0 0 1 220.857,179.131 L 276.245,240.946 A 133,133 0 0 0 271.282,245.629 Z" fill="#2563eb" stroke="#f8fafc"><title>Sweep slots: 0.551 ms</title></path>
+<path d="M 220.857,179.131 A 216,216 0 0 1 227.763,173.201 L 280.498,237.295 A 133,133 0 0 0 276.245,240.946 Z" fill="#64748b" stroke="#f8fafc"><title>Gather chunk roots: 0.452 ms</title></path>
+<path d="M 227.763,173.201 A 216,216 0 0 1 351.188,124.442 L 356.495,207.272 A 133,133 0 0 0 280.498,237.295 Z" fill="#0d9488" stroke="#f8fafc"><title>Compact chunks: 6.700 ms</title></path>
+<path d="M 351.188,124.442 A 216,216 0 0 1 362.385,124.016 L 363.390,207.010 A 133,133 0 0 0 356.495,207.272 Z" fill="#d97706" stroke="#f8fafc"><title>Rewrite chunk holders: 0.557 ms</title></path>
+<path d="M 362.385,124.016 A 216,216 0 0 1 363.796,124.003 L 364.259,207.002 A 133,133 0 0 0 363.390,207.010 Z" fill="#be185d" stroke="#f8fafc"><title>Prune late tables: 0.070 ms</title></path>
+<path d="M 363.796,124.003 A 216,216 0 0 1 364.445,124.001 L 364.658,207.000 A 133,133 0 0 0 364.259,207.002 Z" fill="#b45309" stroke="#f8fafc"><title>Compact code: 0.032 ms</title></path>
+<path d="M 364.445,124.001 A 216,216 0 0 1 364.681,124.000 L 364.803,207.000 A 133,133 0 0 0 364.658,207.000 Z" fill="#475569" stroke="#f8fafc"><title>Compact reactions: 0.012 ms</title></path>
+<path d="M 364.681,124.000 A 216,216 0 0 1 365.000,124.000 L 365.000,207.000 A 133,133 0 0 0 364.803,207.000 Z" fill="#e11d48" stroke="#f8fafc"><title>Rederive side ledger: 0.016 ms</title></path>
+<text x="365" y="345" font-size="27" text-anchor="middle">67.41 ms</text>
+<text x="230" y="110" font-size="24" text-anchor="start">Garbage collection</text>
+<rect x="40" y="577" width="14" height="14" rx="3" fill="#7c3aed"/>
+<text x="65" y="590" font-size="16" text-anchor="start">Trace slots / edges</text>
+<text x="560" y="590" font-size="16" text-anchor="start">34.638 ms</text>
+<rect x="40" y="600" width="14" height="14" rx="3" fill="#2563eb"/>
+<text x="65" y="613" font-size="16" text-anchor="start">Sweep slots</text>
+<text x="560" y="613" font-size="16" text-anchor="start">14.811 ms</text>
+<rect x="40" y="623" width="14" height="14" rx="3" fill="#0d9488"/>
+<text x="65" y="636" font-size="16" text-anchor="start">Compact chunks</text>
+<text x="560" y="636" font-size="16" text-anchor="start">13.991 ms</text>
+<rect x="40" y="646" width="14" height="14" rx="3" fill="#d97706"/>
+<text x="65" y="659" font-size="16" text-anchor="start">Rewrite chunk holders</text>
+<text x="560" y="659" font-size="16" text-anchor="start">1.387 ms</text>
+<rect x="40" y="669" width="14" height="14" rx="3" fill="#be185d"/>
+<text x="65" y="682" font-size="16" text-anchor="start">Prune late tables</text>
+<text x="560" y="682" font-size="16" text-anchor="start">0.985 ms</text>
+<rect x="40" y="692" width="14" height="14" rx="3" fill="#64748b"/>
+<text x="65" y="705" font-size="16" text-anchor="start">Gather chunk roots</text>
+<text x="560" y="705" font-size="16" text-anchor="start">0.922 ms</text>
+<rect x="40" y="715" width="14" height="14" rx="3" fill="#65a30d"/>
+<text x="65" y="728" font-size="16" text-anchor="start">Unattributed / profiler</text>
+<text x="560" y="728" font-size="16" text-anchor="start">0.281 ms</text>
+<rect x="40" y="738" width="14" height="14" rx="3" fill="#9333ea"/>
+<text x="65" y="751" font-size="16" text-anchor="start">Gather roots</text>
+<text x="560" y="751" font-size="16" text-anchor="start">0.122 ms</text>
+<rect x="40" y="761" width="14" height="14" rx="3" fill="#0284c7"/>
+<text x="65" y="774" font-size="16" text-anchor="start">Ephemeron fixpoint</text>
+<text x="560" y="774" font-size="16" text-anchor="start">0.071 ms</text>
+<rect x="40" y="784" width="14" height="14" rx="3" fill="#059669"/>
+<text x="65" y="797" font-size="16" text-anchor="start">Prune weak state</text>
+<text x="560" y="797" font-size="16" text-anchor="start">0.066 ms</text>
+<rect x="40" y="807" width="14" height="14" rx="3" fill="#b45309"/>
+<text x="65" y="820" font-size="16" text-anchor="start">Compact code</text>
+<text x="560" y="820" font-size="16" text-anchor="start">0.065 ms</text>
+<rect x="40" y="830" width="14" height="14" rx="3" fill="#e11d48"/>
+<text x="65" y="843" font-size="16" text-anchor="start">Rederive side ledger</text>
+<text x="560" y="843" font-size="16" text-anchor="start">0.031 ms</text>
+<rect x="40" y="853" width="14" height="14" rx="3" fill="#475569"/>
+<text x="65" y="866" font-size="16" text-anchor="start">Compact reactions</text>
+<text x="560" y="866" font-size="16" text-anchor="start">0.029 ms</text>
+<path d="M 1115.000,210.000 A 130,130 0 1 1 1088.176,212.798 L 1100.144,269.549 A 72,72 0 1 0 1115.000,268.000 Z" fill="#4c1d95" stroke="#f8fafc"><title>execution-and-jobs 1: 59.299 ms</title></path>
+<path d="M 1115.000,124.000 A 216,216 0 0 1 1115.789,124.001 L 1115.486,207.001 A 133,133 0 0 0 1115.000,207.000 Z" fill="#0d9488" stroke="#f8fafc"><title>Unattributed / profiler: 0.036 ms</title></path>
+<path d="M 1115.789,124.001 A 216,216 0 0 1 1235.081,160.454 L 1188.939,229.446 A 133,133 0 0 0 1115.486,207.001 Z" fill="#2563eb" stroke="#f8fafc"><title>Initial script: 5.718 ms</title></path>
+<path d="M 1235.081,160.454 A 216,216 0 1 1 1070.431,128.648 L 1087.557,209.862 A 133,133 0 1 0 1188.939,229.446 Z" fill="#7c3aed" stroke="#f8fafc"><title>Promise job drain: 53.545 ms</title></path>
+<path d="M 1088.176,212.798 A 130,130 0 0 1 1109.142,210.132 L 1111.756,268.073 A 72,72 0 0 0 1100.144,269.549 Z" fill="#1e40af" stroke="#f8fafc"><title>finalizer-callbacks 2: 1.589 ms</title></path>
+<path d="M 1070.431,128.648 A 216,216 0 0 1 1079.994,126.856 L 1093.445,208.758 A 133,133 0 0 0 1087.557,209.862 Z" fill="#0d9488" stroke="#f8fafc"><title>Unattributed / profiler: 0.440 ms</title></path>
+<path d="M 1079.994,126.856 A 216,216 0 0 1 1105.267,124.219 L 1109.007,207.135 A 133,133 0 0 0 1093.445,208.758 Z" fill="#7c3aed" stroke="#f8fafc"><title>Promise job drain: 1.149 ms</title></path>
+<path d="M 1109.142,210.132 A 130,130 0 0 1 1115.000,210.000 L 1115.000,268.000 A 72,72 0 0 0 1111.756,268.073 Z" fill="#115e59" stroke="#f8fafc"><title>outbound-extraction 3: 0.440 ms</title></path>
+<path d="M 1105.267,124.219 A 216,216 0 0 1 1105.904,124.192 L 1109.399,207.118 A 133,133 0 0 0 1109.007,207.135 Z" fill="#0d9488" stroke="#f8fafc"><title>Unattributed / profiler: 0.029 ms</title></path>
+<path d="M 1105.904,124.192 A 216,216 0 0 1 1115.000,124.000 L 1115.000,207.000 A 133,133 0 0 0 1109.399,207.118 Z" fill="#2563eb" stroke="#f8fafc"><title>Initial script: 0.411 ms</title></path>
+<text x="1115" y="345" font-size="27" text-anchor="middle">61.33 ms</text>
+<text x="980" y="110" font-size="24" text-anchor="start">Execution and jobs</text>
+<rect x="790" y="577" width="14" height="14" rx="3" fill="#7c3aed"/>
+<text x="815" y="590" font-size="16" text-anchor="start">Promise job drain</text>
+<text x="1310" y="590" font-size="16" text-anchor="start">54.694 ms</text>
+<rect x="790" y="600" width="14" height="14" rx="3" fill="#2563eb"/>
+<text x="815" y="613" font-size="16" text-anchor="start">Initial script</text>
+<text x="1310" y="613" font-size="16" text-anchor="start">6.129 ms</text>
+<rect x="790" y="623" width="14" height="14" rx="3" fill="#0d9488"/>
+<text x="815" y="636" font-size="16" text-anchor="start">Unattributed / profiler</text>
+<text x="1310" y="636" font-size="16" text-anchor="start">0.504 ms</text>
+<text x="36" y="895" font-size="16" text-anchor="start">Inner ring: GC round / run interval. Outer ring: exclusive measured subphase. Hover sectors for values.</text>
+<text x="36" y="925" font-size="16" text-anchor="start">Elapsed time, not CPU samples. Unattributed includes scope setup, trace emission, and uninstrumented work.</text>
+</g></svg>

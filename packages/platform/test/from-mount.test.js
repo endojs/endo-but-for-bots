@@ -86,11 +86,14 @@ const makeMockMount = () => {
         return fromUtf8(node.content);
       },
       // Mirrors the real `EndoMountFile.streamBase64(synPromise)`: an
-      // `@endo/exo-stream` reader pump over the whole content, base64
+      // `@endo/exo-stream` reader pump over bounded file chunks, base64
       // encoded. The `synPromise` argument drives the flow-control chain.
       streamBase64(synPromise) {
         async function* contentBytes() {
-          yield node.content;
+          const content = /** @type {Uint8Array} */ (node.content);
+          for (let offset = 0; offset < content.length; offset += 64 * 1024) {
+            yield content.subarray(offset, offset + 64 * 1024);
+          }
         }
         const pump = makeReaderPump(mapReader(contentBytes(), encodeBase64));
         return pump(synPromise);
@@ -342,6 +345,28 @@ test('write at a nonzero offset splices into existing content', async t => {
   t.is(fromUtf8(await backend.read(['range.bin'])), '0XY0');
 });
 
+test('large Mount writes, ranged overwrites and resizes obey byte-stream frame bounds', async t => {
+  const backend = makeFromMountBackend(makeMockMount());
+  const original = Uint8Array.from(
+    { length: 338_000 },
+    (_, index) => index % 251,
+  );
+  await backend.write(['scene.png'], original);
+  t.deepEqual(await backend.read(['scene.png']), original);
+  const patch = new Uint8Array(90_000).fill(255);
+  await backend.write(['scene.png'], patch, 70_000n);
+  const expected = original.slice();
+  expected.set(patch, 70_000);
+  t.deepEqual(await backend.read(['scene.png']), expected);
+  await backend.setStat(['scene.png'], { size: 500_000n });
+  const extended = await backend.read(['scene.png']);
+  t.is(extended.length, 500_000);
+  t.deepEqual(extended.subarray(0, expected.length), expected);
+  t.true(extended.subarray(expected.length).every(byte => byte === 0));
+  await backend.setStat(['scene.png'], { size: 100_000n });
+  t.deepEqual(await backend.read(['scene.png']), expected.subarray(0, 100_000));
+});
+
 test('write creates missing parent directories via Mount.write', async t => {
   // The adapter's write relies on the real Mount.write calling makePath to
   // create intermediate parents. Exercise that path directly (the mock now
@@ -423,9 +448,7 @@ test('snapshot fetches Mount content into a BlobRef', async t => {
   await E(opened).close();
   const file = await E(root).lookup('x');
   const blob = await E(file).snapshot();
-  const info = await E(blob).getInfo();
-  t.is(info.algorithm, 'sha256');
-  t.is(info.size, 4n);
+  t.is(await E(blob).size(), 4n);
 });
 
 test('xattrs on Mount-adapted FS: unset xattr reports ENODATA', async t => {

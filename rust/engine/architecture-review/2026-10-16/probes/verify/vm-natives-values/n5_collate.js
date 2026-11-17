@@ -1,0 +1,13 @@
+const u = undefined, r = [];
+r.push('a'.localeCompare('A'));
+r.push('ä'.localeCompare('z', 'de'));
+r.push(['b', 'a', 'C', 'á'].sort((x, y) => x.localeCompare(y)).join());
+r.push('a'.localeCompare('á', u, { sensitivity: 'base' }));
+r.push('Straße'.localeCompare('Strasse', u, { sensitivity: 'base' }));
+r.push(['ä', 'a', 'z'].sort(new Intl.Collator('de').compare).join());
+r.push('b1'.localeCompare('a2', u, { numeric: true }));
+r.push('a10b2'.localeCompare('a10b10', u, { numeric: true }));
+r.push(new Intl.Collator('en', { sensitivity: 'accent' }).compare('a', 'A'));
+r.push(new Intl.Collator('en', { sensitivity: 'accent' }).resolvedOptions().sensitivity);
+r.push(new Intl.Collator('en', { sensitivity: 'base' }).compare('a', 'A'));
+throw new Error(JSON.stringify(r));

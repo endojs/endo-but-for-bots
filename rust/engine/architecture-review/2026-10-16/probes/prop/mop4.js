@@ -1,0 +1,28 @@
+var R = {};
+function t(name, f) { try { R[name] = f(); } catch (e) { R[name] = 'throws ' + e.name + ': ' + e.message; } }
+t('instanceof_proxy_ctor', function () { var log = []; var P = new Proxy(function () {}, { get: function (t, k) { log.push(String(k)); return t[k]; } }); var r = ({}) instanceof P; return r + '|' + log.join(); });
+t('construct_newtarget_proxy', function () { var log = []; var NT = new Proxy(function () {}, { get: function (t, k) { log.push(String(k)); return k === 'prototype' ? Array.prototype : t[k]; } }); var o = Reflect.construct(function () {}, [], NT); return (Object.getPrototypeOf(o) === Array.prototype) + '|' + log.join(); });
+t('construct_builtin_newtarget_proxy', function () { var log = []; var NT = new Proxy(function () {}, { get: function (t, k) { log.push(String(k)); return k === 'prototype' ? Array.prototype : t[k]; } }); var o = Reflect.construct(Map, [], NT); return (Object.getPrototypeOf(o) === Array.prototype) + '|' + log.join(); });
+t('class_extends_proxy_proto_getter', function () { var log = []; var B = new Proxy(class {}, { get: function (t, k) { log.push(String(k)); return t[k]; } }); class C extends B {} new C(); return log.join(); });
+t('regexp_exec_shadow', function () { var re = /a/; re.exec = function () { return null; }; return re.test('a'); });
+t('regexp_exec_proto_accessor', function () { var re = /a/; var p = Object.create(RegExp.prototype); Object.defineProperty(p, 'exec', { get: function () { return function () { return null; }; } }); Object.setPrototypeOf(re, p); return re.test('a'); });
+t('regexp_flags_getter_override', function () { var re = /a/g; Object.defineProperty(re, 'global', { value: false }); return 'aaa'.replace(re, 'b'); });
+t('species_accessor_on_instance', function () { var a = [1, 2]; Object.defineProperty(a, 'constructor', { get: function () { return { [Symbol.species]: function (n) { return { length: 0, tag: 'S' }; } }; } }); return a.map(function (x) { return x; }).tag; });
+t('species_proxy_array', function () { var log = []; var p = new Proxy([1, 2], { get: function (t, k) { log.push(String(k)); return t[k]; } }); Array.prototype.map.call(p, function (x) { return x; }); return log.join(); });
+t('forin_shadow_nonenum', function () { var proto = { a: 1, b: 2 }; var o = Object.create(proto); Object.defineProperty(o, 'a', { value: 1, enumerable: false }); var ks = []; for (var k in o) ks.push(k); return ks.join(); });
+t('forin_delete_during', function () { var o = { a: 1, b: 2, c: 3 }; var ks = []; for (var k in o) { ks.push(k); delete o.b; } return ks.join(); });
+t('forin_add_during', function () { var o = { a: 1 }; var ks = []; for (var k in o) { ks.push(k); o.z = 1; } return ks.join(); });
+t('forin_proto_proxy', function () { var log = []; var o = Object.create(new Proxy({ x: 1 }, { ownKeys: function (t) { log.push('ownKeys'); return Reflect.ownKeys(t); } })); o.y = 1; var ks = []; for (var k in o) ks.push(k); return ks.join() + '|' + log.join(); });
+t('forin_typedarray', function () { var ta = new Uint8Array(3); ta.x = 1; var ks = []; for (var k in ta) ks.push(k); return ks.join(); });
+t('forin_string_wrapper', function () { var s = new String('ab'); s.x = 1; var ks = []; for (var k in s) ks.push(k); return ks.join(); });
+t('forin_index_order', function () { var o = { b: 1 }; o[2] = 1; o[1] = 1; var ks = []; for (var k in o) ks.push(k); return ks.join(); });
+t('json_stringify_getter', function () { var o = {}; Object.defineProperty(o, 'a', { get: function () { return 5; }, enumerable: true }); return JSON.stringify(o); });
+t('json_stringify_proxy', function () { var log = []; var p = new Proxy({ a: 1 }, { get: function (t, k) { log.push(String(k)); return t[k]; } }); return JSON.stringify(p) + '|' + log.join(); });
+t('json_rawJSON_forged', function () { if (typeof JSON.rawJSON !== 'function') return 'no rawJSON'; var fake = Object.freeze(Object.create(null, { rawJSON: { value: '1' } })); return JSON.stringify(fake); });
+t('global_accessor_var', function () { Object.defineProperty(globalThis, 'gacc', { get: function () { return 42; }, configurable: true }); return eval('gacc'); });
+t('global_proxy_proto', function () { var log = []; var saved = Object.getPrototypeOf(globalThis); try { Object.setPrototypeOf(globalThis, new Proxy(saved, { has: function (t, k) { log.push('has:' + String(k)); return Reflect.has(t, k); } })); try { eval('zzUndefinedName'); } catch (e) { } } finally { Object.setPrototypeOf(globalThis, saved); } return log.join(); });
+t('arguments_callee_getter_proxy', function () { return 1; });
+t('error_message_getter', function () { var e = new Error('x'); Object.defineProperty(e, 'message', { get: function () { return 'G'; } }); return String(e); });
+t('error_name_proxy_proto', function () { var E = function () {}; E.prototype = new Proxy({ name: 'N', message: 'M' }, {}); return Error.prototype.toString.call(new E()); });
+t('tostringtag_getter', function () { var o = {}; Object.defineProperty(o, Symbol.toStringTag, { get: function () { return 'T'; } }); return Object.prototype.toString.call(o); });
+throw new Error(JSON.stringify(R));

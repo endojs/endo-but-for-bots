@@ -1,0 +1,14 @@
+const out = {};
+const t = (k, f) => { try { out[k] = f(); } catch (e) { out[k] = "throws " + e.name; } };
+const r = /a/gi;
+t("dotGlobal", () => r.global);
+t("bracketGlobal", () => r["global"]);
+t("destructure", () => { const { global, source, flags } = r; return [global, source, flags]; });
+t("reflectGet", () => Reflect.get(r, "global"));
+t("inOp", () => "global" in r);
+t("shadowOwn", () => { const s = /b/; Object.defineProperty(s, "global", { value: 42 }); return s.global; });
+t("subclassFlags", () => { class R extends RegExp { get flags() { return "zz"; } } return new R("a", "g").flags; });
+t("protoSourceDot", () => RegExp.prototype.source);
+t("protoFlagsDot", () => RegExp.prototype.flags);
+t("genericFlags", () => { const g = Object.getOwnPropertyDescriptor(RegExp.prototype, "flags"); return g ? g.get.call({ global: true, sticky: true }) : "no-descriptor"; });
+throw new Error(JSON.stringify(out));

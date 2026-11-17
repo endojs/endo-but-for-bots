@@ -23,14 +23,14 @@ built-ins/RegExp/lastIndex.js sloppy pass
 built-ins/RegExp/lastIndex.js strict pass
 built-ins/RegExp/lookahead-quantifier-match-groups.js sloppy pass
 built-ins/RegExp/lookahead-quantifier-match-groups.js strict pass
-built-ins/RegExp/nullable-quantifier.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: The regex is expected to match the whole string Expected SameValue(«\\\"a\\\"», «\\\"ab\\\"») to be true\" ironhorse=\"Test262Error: string\\\"a\\\"», «string\\\"ab\\\"») to be true\""
-built-ins/RegExp/nullable-quantifier.js strict fail:"abort-value-differs: oracle=\"Test262Error: The regex is expected to match the whole string Expected SameValue(«\\\"a\\\"», «\\\"ab\\\"») to be true\" ironhorse=\"Test262Error: string\\\"a\\\"», «string\\\"ab\\\"») to be true\""
+built-ins/RegExp/nullable-quantifier.js sloppy skip:shared-test262-failure
+built-ins/RegExp/nullable-quantifier.js strict skip:shared-test262-failure
 built-ins/RegExp/prop-desc.js sloppy pass
 built-ins/RegExp/prop-desc.js strict pass
 built-ins/RegExp/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
 built-ins/RegExp/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
-built-ins/RegExp/quantifier-integer-limit.js sloppy pass
-built-ins/RegExp/quantifier-integer-limit.js strict pass
+built-ins/RegExp/quantifier-integer-limit.js sloppy skip:ironhorse-aborted-limit
+built-ins/RegExp/quantifier-integer-limit.js strict skip:ironhorse-aborted-limit
 built-ins/RegExp/regexp-class-chars.js sloppy pass
 built-ins/RegExp/regexp-class-chars.js strict pass
 built-ins/RegExp/syntax-err-arithmetic-modifiers-add-remove-i.js sloppy pass

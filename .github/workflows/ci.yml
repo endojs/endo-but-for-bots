@@ -63,7 +63,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: yarn
@@ -152,7 +152,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.x
           cache: yarn
@@ -196,7 +196,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -218,6 +218,23 @@ jobs:
         run: yarn install --immutable
 
       # end macro
+
+      # @endo/preact-container and @endo/preact-social both begin their
+      # `test` script with `playwright install chromium`, and Turbo runs the
+      # two in parallel. Playwright serializes installs on a lock in its
+      # browser cache and gives up after about eight minutes, so one slow
+      # Chromium download fails the other package before its tests start.
+      # Install here first, through both workspaces in case their Playwright
+      # versions ever differ, so both scripts find Chromium present. Turbo's
+      # strict env mode withholds PLAYWRIGHT_BROWSERS_PATH and XDG_CACHE_HOME
+      # from its tasks; unset them so this install lands where the tasks look.
+      - name: Install Playwright Chromium
+        if: contains(env.CI_PACKAGES, '@endo/preact-')
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          unset PLAYWRIGHT_BROWSERS_PATH XDG_CACHE_HOME
+          yarn workspace @endo/preact-container playwright install chromium
+          yarn workspace @endo/preact-social playwright install chromium
 
       # The detector selects changed workspaces and recursive dependents.
       # Turbo builds their prerequisites and runs only these exact names.
@@ -253,7 +270,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js 22.x
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.x
           cache: yarn
@@ -324,7 +341,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -371,7 +388,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -407,7 +424,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: yarn
@@ -444,7 +461,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: yarn
@@ -483,7 +500,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -545,7 +562,7 @@ jobs:
 
       # The tests run on the XS engine; Node is just driving the harness.
       - name: Use Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: endo/.node-version
           cache: yarn
@@ -635,7 +652,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: yarn
@@ -678,7 +695,36 @@ jobs:
         # cfg(feature = "ironhorse-engine"), so without the pin a
         # default-feature flip would turn this step into a 0-test
         # green pass with no error (wave-3 finding).
-        run: cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler
+        #
+        # The second command exists for the same reason the --features
+        # pin does: naming only --test targets runs NO unit tests, and
+        # this is the only lane that builds the endo crate at all. That
+        # gap let an assertion pinning a lockdown bypass --
+        # `(()=>{}).constructor('return 42')()` returning "42" -- stay
+        # green through the commits that closed it, because nothing ran
+        # it. 29 tests, under a second.
+        #
+        # SCOPED to `ironhorse_engine::` deliberately, and not widened to
+        # the whole lib. A bare `--lib` runs ~300 more, including the
+        # `inproc` tests that drive real xsnap machines across threads
+        # and deliberately panic one of them; on this runner that
+        # segfaults (signal 11), while ten local runs across five
+        # `--test-threads` settings stay green. The likely cause is
+        # already written down in this PR: `xsnap::Machine::eval`
+        # installs no outermost `txJump` and takes SIGSEGV instead of
+        # returning `None`, and its only callers are `#[cfg(test)]` --
+        # exactly the population a bare `--lib` switches on. Fixing that
+        # is a `c_setjmp` guard in `xsnap-platform.c`, XS-glue work with
+        # its own reproduction pinned in `tests/js_machine_trait.rs`.
+        # Widen this filter once that lands; widening it before would
+        # gate the lane on a defect nothing here can verify a fix for.
+        #
+        # Two commands, not one: a filter argument applies to every
+        # selected target, so folding it into the line above would
+        # silently filter the three integration suites down to nothing.
+        run: |
+          cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
+          cargo test --locked -p endo --features ironhorse-engine --lib ironhorse_engine::
 
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:
@@ -732,6 +778,12 @@ jobs:
 
       - name: Check ironhorse engine formatting
         run: cargo +1.88.0 fmt --manifest-path rust/engine/Cargo.toml --all -- --check
+      # The stack-lanes probes and the snapshot footprint harness are standalone
+      # cargo roots outside the workspace (rust/engine/stack-lanes/probe/Cargo.toml,
+      # rust/engine/stack-lanes/memory/probe/Cargo.toml,
+      # rust/engine/ironhorse-snapshot/footprint/Cargo.toml), so `fmt --all` never sees them.
+      - name: Check standalone-root formatting
+        run: rustfmt +1.88.0 --edition 2021 --check rust/engine/stack-lanes/probe/src/main.rs rust/engine/stack-lanes/cases.rs rust/engine/ironhorse-snapshot/footprint/src/main.rs rust/engine/stack-lanes/memory/probe/src/main.rs
 
       - name: Check SQLite heap-store formatting
         run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check
@@ -741,7 +793,11 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-thixotrope-ironhorse']) }}
     name: test-thixotrope-ironhorse
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Serial native recovery tests plus worker compilation exceed 30 minutes,
+    # each supervisor test starting the clock's and the control socket's
+    # adapter processes. AVA retains its three-minute inactivity guard and
+    # per-test deadlines.
+    timeout-minutes: 45
     steps:
       - name: Require successful change detection
         if: needs.changes.result != 'success'
@@ -753,7 +809,7 @@ jobs:
           persist-credentials: false
       - run: corepack enable
       - name: Use Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: yarn
@@ -771,6 +827,8 @@ jobs:
             ${{ runner.os }}-thixotrope-ironhorse-
       - name: Build real SQLite worker
         run: cargo build --locked --release -p thixotrope-ironhorse-worker
+      - name: Test the worker's heap opening and crank admission
+        run: cargo test --locked --release -p thixotrope-ironhorse-worker
       - name: Bundle SES and OCapN peer
         run: corepack yarn workspace @endo/thixotrope build:ironhorse-bundles
       - name: Test two demos and twelve adversarial persistence scenarios
@@ -786,18 +844,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The debug lanes run the whole engine suite twice (platform and
+          # deterministic Math) and already took 27 (macOS) and 29 (Linux)
+          # minutes; a slow cache restore alone tipped macOS past 30 with
+          # every step green. Their bound is for a hang, not for that drift.
           - profile: debug
             check: test-ironhorse
             os: ubuntu-latest
+            timeout: 45
           - profile: release
             check: test-ironhorse-release
             os: ubuntu-latest
+            timeout: 30
           # Run the same golden snapshots on a second host platform.
+          # The macOS runners take 23 to 28 minutes for these steps from a
+          # cold build, which left no room for the cache save under 30.
           - profile: debug
             check: test-ironhorse-macos
             os: macos-latest
+            timeout: 45
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeout }}
 
     steps:
       - name: Require successful change detection
@@ -877,7 +944,7 @@ jobs:
 
       - name: Retain platform Math bits
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: math-${{ matrix.check }}
           path: |
@@ -916,7 +983,7 @@ jobs:
         run: |
           cargo test --locked -p ironhorse-vm --features cost-calibration --lib
           cargo test --locked -p ironhorse-vm --features cost-calibration --test golden_computrons
-          cargo test --locked -p ironhorse-vm --features consensus --test golden_computrons
+          cargo test --locked -p ironhorse-vm --features consensus --test golden_computrons --test consensus_ceiling_caps
       - name: Reject calibration in consensus builds
         working-directory: rust/engine
         run: |
@@ -939,7 +1006,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: math-test-ironhorse*
           path: math-vectors
@@ -953,7 +1020,7 @@ jobs:
           exit "$status"
       - name: Retain comparison evidence even on divergence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: math-differences
           path: math-*-differences.tsv
@@ -992,7 +1059,7 @@ jobs:
       - run: corepack enable
 
       - name: Use Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: yarn
@@ -1056,6 +1123,32 @@ jobs:
         working-directory: rust/engine
         run: cargo +1.88.0 clippy --locked --workspace --no-deps -- -D warnings
 
+      - name: Vendor test262 at the pinned SHA
+        # `corpus_compiler_totality.rs` compiles every test262 source and
+        # requires that none of them panics -- the F063 gate that does not
+        # depend on someone having thought of the shape. It needs the corpus,
+        # which is not in the repository, and without it the test returns
+        # early and reports a green pass that measured nothing (the trap the
+        # SES bundle steps above already document).
+        #
+        # A shallow single-SHA fetch, ~30s, from the same `TEST262_REVISION`
+        # the nightly sweep pins so there is one home for the SHA. `.git` is
+        # dropped afterwards: the sweep reads `harness/` and `test/` only.
+        #
+        # OUTSIDE `rust/engine/target`, which the cache step above saves: the
+        # corpus is ~270 MB and belongs in neither the build cache nor its key.
+        # `TEST262_DIR` on the test step below points at it.
+        run: |
+          set -euo pipefail
+          source rust/engine/ironhorse-262/TEST262_REVISION
+          dir="$GITHUB_WORKSPACE/test262-src"
+          mkdir -p "$dir"
+          git -C "$dir" init -q
+          git -C "$dir" remote add origin "$TEST262_REPO"
+          git -C "$dir" fetch --depth 1 -q origin "$TEST262_SHA"
+          git -C "$dir" checkout -q "$TEST262_SHA"
+          rm -rf "$dir/.git"
+
       - name: Test oracle-linked engine crates (rust/engine workspace)
         working-directory: rust/engine
         # The engine's native recursion is bounded by its own budget
@@ -1070,6 +1163,10 @@ jobs:
           RUST_MIN_STACK: '33554432'
           # Assert rather than skip: the bundle was generated above.
           IRONHORSE_SES_BOOT_REQUIRED: '1'
+          # Same contract for the corpus vendored above: a missing checkout is
+          # red here rather than a silent early return.
+          TEST262_DIR: ${{ github.workspace }}/test262-src
+          IRONHORSE_COMPILER_TOTALITY_REQUIRED: '1'
         run: cargo test --locked -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz --features ironhorse-compile/parity,ironhorse-regexp/parity
       - name: Test the SES realm profiles and prelude reach (artifacts above)
         working-directory: rust/engine
@@ -1102,6 +1199,250 @@ jobs:
           --strict-skip-reasons
           --repeat 3 --expectations ironhorse-262/expectations/ironhorse.txt
           ../../packages/test262-runner/test262/test/ironhorse
+  fuzz-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['fuzz-ironhorse']) }}
+    name: fuzz-ironhorse
+
+    env:
+      # JOB level, not step level: the cache keys below interpolate it, and
+      # a step-level definition would leave them reading an empty string —
+      # which silently detaches this lane's build cache from the nightly
+      # one and makes a toolchain bump invisible to the key.
+      # The SAME pin as ironhorse-deep-fuzz.yml and
+      # `ironhorse-fuzz/fuzz/rust-toolchain.toml` (bump them together).
+      FUZZ_TOOLCHAIN: nightly-2026-08-15
+
+    runs-on: ubuntu-latest
+    # A TRIPWIRE, not a search: every target for a few seconds each over
+    # the checked-in seed corpus and whatever the nightly lane has
+    # accreted. The search is `ironhorse-deep-fuzz.yml`, minutes per
+    # target on a schedule. This lane exists so a pull request that
+    # reintroduces a fixed trophy fails on the pull request rather than
+    # at 3am, which is what the deep lane's header claimed for a job
+    # that did not exist (F039).
+    #
+    # The ceiling is a first estimate, not a measurement: the fuzzing
+    # itself is 14 x 30s = 7 minutes, and everything else is the cold
+    # build — cargo-fuzz from source, the engine graph and the XS oracle C
+    # sources, release with a sanitizer, across fourteen binaries. Narrow
+    # it once a few runs have reported their real duration.
+    timeout-minutes: 60
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch XS oracle submodule
+        # The ironhorse-fuzz lib links the XS oracle for its differential
+        # targets. Anonymous shallow fetch can hit transient throttling on
+        # shared runner egress; retry before failing, and fail LOUD if all
+        # attempts leave the sources absent.
+        run: |
+          for i in 1 2 3; do
+            git submodule update --init --depth 1 c/moddable && break
+            sleep $((10 * i))
+          done
+          test -f c/moddable/xs/sources/xsAll.h
+
+      - name: Cache Cargo + fuzz build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            rust/engine/ironhorse-fuzz/fuzz/target
+          key: ${{ runner.os }}-ironhorse-fuzz-build-${{ env.FUZZ_TOOLCHAIN }}-${{ hashFiles('rust/engine/ironhorse-fuzz/fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-fuzz-build-${{ env.FUZZ_TOOLCHAIN }}-
+
+      - name: Restore fuzz corpus
+        # RESTORE ONLY, deliberately. A cache written by a pull-request run
+        # is scoped to that pull request's ref and nothing else can ever
+        # read it, so saving here would write an entry no lane restores
+        # while pushing the repository's shared cache quota — and evicting
+        # the yarn and xsnap caches the rest of CI depends on. The flow is
+        # one-way: the nightly lane's discoveries reach this tripwire
+        # through the default branch's cache scope, and this tripwire's
+        # own accretion is not worth keeping for 30 seconds of search.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: rust/engine/ironhorse-fuzz/fuzz/corpus
+          key: ${{ runner.os }}-ironhorse-fuzz-corpus-
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-fuzz-corpus-
+
+      - name: Install pinned nightly toolchain and cargo-fuzz
+        run: |
+          rustup toolchain install "$FUZZ_TOOLCHAIN" --profile minimal
+          command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
+
+      - name: Check fuzz lockfile freshness
+        working-directory: rust/engine/ironhorse-fuzz
+        # `cargo fuzz run` itself does not take --locked, so a stale
+        # committed fuzz/Cargo.lock would silently float new registry deps
+        # at build time. The nightly lane has always had this gate; it
+        # belongs on the lane that runs on pull requests too, or the defect
+        # class it guards reaches the PR green and the nightly red.
+        run: |
+          cargo +"$FUZZ_TOOLCHAIN" fetch --locked --manifest-path fuzz/Cargo.toml || {
+            echo "::error::fuzz/Cargo.lock is stale — run 'cargo update --workspace' in rust/engine/ironhorse-fuzz/fuzz and commit the lock"
+            exit 1
+          }
+
+      - name: Seed the corpus from the checked-in seeds
+        working-directory: rust/engine/ironhorse-fuzz
+        run: |
+          # `nullglob`: without it an unmatched pattern runs the loop once
+          # with the literal `fuzz/seeds/*/` and creates a directory named
+          # `*`. A missing seed tree is a real failure, and on the tripwire
+          # lane a silent no-op would be invisible, so say what happened.
+          shopt -s nullglob
+          seeded=0
+          for d in fuzz/seeds/*/; do
+            t=$(basename "$d")
+            mkdir -p "fuzz/corpus/$t"
+            cp -n "$d"*.bin "fuzz/corpus/$t/" 2>/dev/null || true
+            seeded=$((seeded + 1))
+          done
+          test "$seeded" -gt 0 || { echo "::error::fuzz/seeds/ is empty or absent"; exit 1; }
+          echo "seeded $seeded targets; corpus now holds $(find fuzz/corpus -name '*.bin' | wc -l) inputs"
+
+      - name: Fuzz tripwire (seconds per target)
+        working-directory: rust/engine/ironhorse-fuzz
+        env:
+          FUZZ_BUDGET: '30'
+        run: |
+          # `|| true`: GitHub runs this with `-eo pipefail`, so a `grep`
+          # that matches nothing would kill the step before the diagnostic
+          # below could print.
+          targets=$(sed -n 's/^name = "\(.*\)"$/\1/p' fuzz/Cargo.toml | grep -v '^ironhorse-fuzz-targets$' || true)
+          test -n "$targets" || { echo "::error::no fuzz targets found in fuzz/Cargo.toml"; exit 1; }
+          # `-s none`: NO sanitizer. The roster used to be the four
+          # pure-Rust targets; it is now every target, which includes the
+          # differential ones that link the Moddable XS C sources. Running
+          # those under cargo-fuzz's default AddressSanitizer plus
+          # LeakSanitizer would make this lane a sanitizer run over XS —
+          # a genuinely useful thing, and one the repository already does
+          # deliberately and separately in `ironhorse-sanitizers.yml`,
+          # where the leak suppressions and the expectations live. The
+          # engine itself is `forbid(unsafe_code)`, so what a sanitizer
+          # would add here is XS findings this lane is not set up to
+          # triage, arriving as red runs on unrelated pull requests.
+          rc=0
+          for t in $targets; do
+            cargo +"$FUZZ_TOOLCHAIN" fuzz run -s none "$t" -- -max_total_time="$FUZZ_BUDGET" -print_final_stats=1 || rc=1
+          done
+          exit "$rc"
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ironhorse-fuzz-tripwire-artifacts
+          path: rust/engine/ironhorse-fuzz/fuzz/artifacts/
+          if-no-files-found: ignore
+
+  # WASM-BLOCKERS.md B7: the native and wasm32 probes of this tree, handed the
+  # same programs (the stack-lanes corpus, every family around its ceiling,
+  # and the snippets in rust/engine/stack-lanes/differential/, including the
+  # B7 repros), must agree on halt, result, computrons, meter checks and
+  # bytecode. A divergence passes only when
+  # rust/engine/stack-lanes/expected-divergence/wasmtime.json lists it, and a
+  # listed one that no longer diverges fails, so each B7 fix removes its
+  # entries. This job runs the fast shard; `cross_target.py --shard slow` has
+  # the repros that need gigabytes natively or minutes on wasm32.
+  cross-target-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['cross-target-ironhorse']) }}
+    name: cross-target-ironhorse
+
+    runs-on: ubuntu-latest
+    # Two engine builds (native, and wasm32 with -Zbuild-std) and the fast
+    # shard on both targets.
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+      # The Wasmtime CLI lane A runs under (ironhorse-full-test262.yml); bump
+      # both together.
+      WASMTIME_VERSION: v49.0.0
+      WASMTIME_SHA256: a956c279ac6e80109369a285db30fc46f68239fa1bbeb03ccfa8e913bbca85fc
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo + probe targets
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # The probe is a standalone cargo root with its own target
+          # directory; it holds both builds and the wasm32 standard library.
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/engine/stack-lanes/probe/target
+          key: ${{ runner.os }}-cross-target-${{ hashFiles('rust/engine/Cargo.lock', 'rust/engine/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cross-target-
+
+      - name: Install the pinned toolchain's wasm target and rust-src
+        # The wasm probe is built with -Zbuild-std (WASM-BLOCKERS.md B1),
+        # which needs rust-src. rustup picks the channel from
+        # rust/engine/rust-toolchain.toml.
+        working-directory: rust/engine
+        run: |
+          set -euo pipefail
+          rustup target add wasm32-wasip1
+          rustup component add rust-src
+
+      - name: Install Wasmtime
+        run: |
+          set -euo pipefail
+          archive="wasmtime-${WASMTIME_VERSION}-x86_64-linux"
+          curl -fsSL -o wasmtime.tar.xz \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/${archive}.tar.xz"
+          echo "${WASMTIME_SHA256}  wasmtime.tar.xz" | sha256sum --check
+          tar -xJf wasmtime.tar.xz
+          echo "WASMTIME=${GITHUB_WORKSPACE}/${archive}/wasmtime" >> "$GITHUB_ENV"
+
+      - name: Set up Node
+        # The lane scripts' tests run node/run.cjs when Node is present.
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.x
+
+      - name: Test the lane scripts
+        run: python3 -m unittest discover -s rust/engine/stack-lanes -p 'test_*.py'
+
+      - name: Build the probe, native and wasm32
+        working-directory: rust/engine/stack-lanes
+        run: python3 build_probe.py
+
+      - name: Compare native and wasm32 (fast shard)
+        working-directory: rust/engine/stack-lanes
+        run: python3 cross_target.py --no-build --output cross-target.json
+
+      - name: Upload the comparison
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cross-target
+          path: rust/engine/stack-lanes/cross-target.json
+          if-no-files-found: ignore
+
   test-ocapn-python:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-ocapn-python']) }}
@@ -1133,7 +1474,7 @@ jobs:
         working-directory: endo
 
       - name: Use Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: endo/.node-version
           cache: yarn
@@ -1235,3 +1576,70 @@ jobs:
           # is identical.  Drift indicates somebody changed Rust source
           # without re-running build.sh.
           git diff --exit-code packages/ocapn-noise/gen/ocapn-noise.wasm
+
+  # The engine's official wasm build (rust/engine/WASM-BLOCKERS.md B1, option
+  # 1): std rebuilt with unwinding on the pinned toolchain for both wasm
+  # targets, through the one script that holds the recipe, then the snapshot's
+  # 32-bit overflow refusals on WASI. The -Zbuild-std artifacts live in the
+  # cached target directory; a cold run rebuilds std twice.
+  build-ironhorse-wasm:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['build-ironhorse-wasm']) }}
+    name: build-ironhorse-wasm
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+
+    steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo + the engine's wasm targets
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/engine/target
+          # The rebuilt std is keyed by what it is built from and with: the
+          # lockfile, the toolchain pin (its rust-src) and the recipe's flags.
+          key: ${{ runner.os }}-ironhorse-wasm-${{ hashFiles('rust/engine/Cargo.lock', 'rust/engine/rust-toolchain.toml', 'rust/engine/scripts/build-wasm.py') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-wasm-
+
+      - name: Set up Node
+        # test-snapshot-wasi.py runs its test binary through node:wasi.
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.x
+
+      - name: Install rust-src and the wasm targets on the pinned toolchain
+        # rustup picks the channel from rust/engine/rust-toolchain.toml.
+        # rustup stamps rust-src with its install time, so on a fresh runner
+        # Cargo would find std's sources newer than the cached -Zbuild-std
+        # artifacts and rebuild std and everything above it. The sources are
+        # fixed by the toolchain pin, which is in the cache key, so their
+        # mtimes are pinned to the toolchain's release date instead.
+        working-directory: rust/engine
+        run: |
+          set -euo pipefail
+          rustup component add rust-src
+          rustup target add wasm32-wasip1 wasm32-unknown-unknown
+          find "$(rustc --print sysroot)/lib/rustlib/src" -exec touch -h -d '2025-11-07T00:00:00Z' {} +
+
+      - name: Test the build script
+        run: python3 rust/engine/scripts/test-build-wasm.py
+
+      - name: Build the engine for wasm32-wasip1 and wasm32-unknown-unknown
+        run: python3 rust/engine/scripts/build-wasm.py
+
+      - name: Run the snapshot's 32-bit overflow refusals on WASI
+        run: python3 rust/engine/scripts/test-snapshot-wasi.py

@@ -1,0 +1,23 @@
+var out = {};
+function t(name, f){ try { out[name] = f(); } catch (e) { out[name] = 'THROW ' + (e && e.name) + ':' + String(e && e.message); } }
+t('len_set', function(){ var a = []; a.length = 3000000000; return String(a.length); });
+t('len_ctor', function(){ return String(new Array(3000000000).length); });
+t('len_max', function(){ var a = []; a[4294967294] = 1; return String(a.length); });
+t('len_beyond', function(){ var a = []; a[4294967295] = 1; return String(a.length) + ' ' + Object.keys(a).join(','); });
+t('keys_big', function(){ var a = []; a[3000000000] = 1; return Object.keys(a).join(','); });
+t('lastIndexOf_big', function(){ var a = []; a[3000000000] = 'x'; return String(a.lastIndexOf('x')); });
+t('findLastIndex_big', function(){ var a = []; a[3000000000] = 'x'; a.length = 3000000001; return String(a.findLastIndex(function(v){ return v === 'x'; })); });
+t('at_big', function(){ var a = []; a[3000000000] = 'x'; return String(a.at(-1)); });
+t('entries_big', function(){ var a = []; a[2147483648] = 'x'; var it = a.entries(); return 'skip'; });
+t('arguments_len', function(){ return String((function(){ return arguments.length; })(1,2,3)); });
+t('fn_length_big', function(){ var f = function(){}; Object.defineProperty(f, 'length', {value: 3000000000}); return String(f.length); });
+t('str_len', function(){ return String('abc'.length); });
+t('bind_len', function(){ var f = function(a,b,c){}; Object.defineProperty(f, 'length', {value: 2147483650}); return String(f.bind().length); });
+t('bind_len2', function(){ var f = function(a,b,c){}; Object.defineProperty(f, 'length', {value: -0}); return String(f.bind().length) + String(Object.is(f.bind().length, -0)); });
+t('bind_len3', function(){ var f = function(a,b,c){}; Object.defineProperty(f, 'length', {value: 1e21}); return String(f.bind().length); });
+t('idx_key_4294967295', function(){ var o = {}; o[4294967295] = 1; o[1] = 2; return Object.keys(o).join(','); });
+t('idx_order', function(){ var o = {b:1}; o[4294967294] = 1; o[4294967295] = 2; o[1] = 3; o['-0'] = 4; o['01'] = 5; return Object.keys(o).join(','); });
+t('ta_big_index_key', function(){ var a = new Int8Array(2); a['-0'] = 1; a['1.5'] = 2; a['1e3'] = 3; return Object.keys(a).join(',') + ' ' + String(a['-0']); });
+t('canonical_numeric', function(){ var a = new Int8Array(2); a['0x1'] = 5; return Object.keys(a).join(','); });
+t('splice_big', function(){ var a = {length: 4294967296}; return 'skip'; });
+throw new Error(JSON.stringify(out));

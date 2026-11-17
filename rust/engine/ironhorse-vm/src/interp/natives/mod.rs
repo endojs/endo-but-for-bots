@@ -1,16 +1,23 @@
 //! Native builtin implementations, grouped by JavaScript subsystem.
+mod annex_b;
 mod array;
+mod base64;
 mod bigint;
 mod buffer;
 mod collection;
+mod compartment;
 mod date;
 mod dispatch;
 mod intl;
 mod json;
+pub use json::JsonSourceTree;
 mod number;
 mod promise;
 mod reflect;
 mod regexp;
 mod resource;
 mod string;
+mod sum_precise;
 mod temporal;
+mod uri;
+mod weak;

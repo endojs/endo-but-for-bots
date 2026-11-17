@@ -23,7 +23,7 @@ impl ironhorse_vm::SourceCompiler for TestCompiler {
         raw_budget: u64,
         charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        match ironhorse_compile::compile_atoms_budgeted_with_limit(
+        match ironhorse_compile::compile_atoms_budgeted_firewalled(
             source,
             ironhorse_compile::Goal::Eval,
             strict,
@@ -39,11 +39,20 @@ impl ironhorse_vm::SourceCompiler for TestCompiler {
             Err(ironhorse_compile::CompileError::MeterAbort) => {
                 Err(ironhorse_vm::SourceCompileError::MeterAbort)
             }
+            // A caught compiler panic is an engine fault, not a coverage
+            // gap (architecture finding F063).
+            Err(ironhorse_compile::CompileError::Invariant(detail)) => {
+                Err(ironhorse_vm::SourceCompileError::Invariant(detail))
+            }
             Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
                 ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                     kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
                     ..
                 }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpHostAllocationFailed,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::HostAllocationFailed),
                 ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                     kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
                     ..
@@ -123,6 +132,25 @@ fn object_statics_throw_catchable_type_errors_with_xs_messages() {
         "var r=0; try { Object.defineProperties(1,{}) } \
          catch(e){ r=(e instanceof TypeError)+':'+e.name+': '+e.message } r",
         "true:TypeError: invalid object",
+    );
+}
+
+/// `new Symbol()` had no construct arm, so it fell through to the native
+/// dispatcher's catch-all and halted the engine with
+/// `NotImplemented("native-call:Symbol")`. ECMA-262 makes it a TypeError, and
+/// XS throws one before it coerces the description.
+#[test]
+fn constructing_a_symbol_throws_a_catchable_type_error() {
+    assert_catches(
+        "var r=0; try { new Symbol() } \
+         catch(e){ r=(e instanceof TypeError)+':'+e.name+': '+e.message } r",
+        "true:TypeError: new: Symbol",
+    );
+    assert_catches(
+        "var coerced = false; var r=0; \
+         try { new Symbol({ toString: function () { coerced = true; return 'd'; } }) } \
+         catch(e){ r=e.name+':'+coerced } r",
+        "TypeError:false",
     );
 }
 

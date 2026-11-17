@@ -167,16 +167,18 @@ impl<'scope> HostCallContext<'scope> {
         }));
         match result {
             Ok(offset) => Ok(self.value(Slot::of(Kind::String, Payload::String(offset)))),
-            Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
-                self.stopped = Some(Step::Host(Halt::HeapExhausted));
-                Err(HostCallError::Stopped)
-            }
-            Err(payload) => {
-                self.stopped = Some(Step::Host(Halt::EngineInvariant(
-                    "host:string-allocation-panicked",
-                )));
-                std::panic::resume_unwind(payload)
-            }
+            Err(payload) => match crate::interp::resource_halt(&*payload) {
+                Some(halt) => {
+                    self.stopped = Some(Step::Host(halt));
+                    Err(HostCallError::Stopped)
+                }
+                None => {
+                    self.stopped = Some(Step::Host(Halt::EngineInvariant(
+                        "host:string-allocation-panicked",
+                    )));
+                    std::panic::resume_unwind(payload)
+                }
+            },
         }
     }
 
@@ -193,6 +195,7 @@ impl<'scope> HostCallContext<'scope> {
         }
         let args: Vec<_> = args.iter().map(|v| v.slot).collect();
         let native_depth = self.interp.native_depth;
+        let held = self.interp.held_total;
         let jumps = self.interp.jumps.clone();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.interp
@@ -201,14 +204,21 @@ impl<'scope> HostCallContext<'scope> {
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(payload) => {
-                self.interp.native_depth = native_depth;
+                // The panic skipped the loops' releases. Restoring the depth
+                // drops the charges of the frames the callback left, and the
+                // call stack may hold an `eval` unit's frames in place of the
+                // caller's, so no frame may release a charge later: the units
+                // the caller's frames held leave the depth now, and their
+                // loops release none.
+                self.interp.native_depth = native_depth - held;
+                self.interp.clear_held();
                 self.interp.jumps = jumps;
-                self.stopped = Some(Step::Host(if payload.is::<crate::value::HeapExhausted>() {
-                    Halt::HeapExhausted
-                } else {
-                    Halt::EngineInvariant("host:guest-call-panicked")
-                }));
-                if payload.is::<crate::value::HeapExhausted>() {
+                let resource = crate::interp::resource_halt(&*payload);
+                let contained = resource.is_some();
+                self.stopped = Some(Step::Host(
+                    resource.unwrap_or(Halt::EngineInvariant("host:guest-call-panicked")),
+                ));
+                if contained {
                     return Err(HostCallError::Stopped);
                 }
                 std::panic::resume_unwind(payload);
@@ -251,7 +261,7 @@ impl Interp {
             .get(&data.id)
             .cloned()
             .ok_or(Step::Host(Halt::Refused("host:missing-service")))?;
-        let args = self.stack[base + 4..base + 4 + argc].to_vec();
+        let args = self.frame_arguments(base, argc)?;
         let this = self.stack[base];
         let mut context = HostCallContext {
             interp: self,
@@ -317,8 +327,10 @@ impl Interp {
         }));
         match result {
             Ok(result) => result,
-            Err(payload) if payload.is::<crate::value::HeapExhausted>() => Err(Halt::HeapExhausted),
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => match crate::interp::resource_halt(&*payload) {
+                Some(halt) => Err(halt),
+                None => std::panic::resume_unwind(payload),
+            },
         }
     }
 }

@@ -8,14 +8,17 @@ mod migration_fixtures;
 
 use common::TempDir;
 use ironhorse_snapshot::store::HeapStoreCommit;
-use migration_fixtures::{FIXTURE_CRANKS, FIXTURE_RESULTS};
+use ironhorse_snapshot::CommitToken;
+use migration_fixtures::{write_stage1_file_store, FIXTURE_CRANKS, FIXTURE_RESULTS, STAGE1_PROBE};
 
 use ironhorse_snapshot::machine::{checkpoint_to_store, resume_from_store};
 use ironhorse_snapshot::store::{
     export_to_container, import_from_container, migrate_store, root_hash, store_to_image,
-    validate_store, HeapStore, MemoryStore, StoreError, STORE_SCHEMA_VERSION,
+    validate_store, validate_store_content, HeapStore, MemoryStore, StoreError, StoreManifest,
+    STORE_SCHEMA_VERSION,
 };
 use ironhorse_snapshot::store_file::FileStore;
+use ironhorse_snapshot::store_sections::small_state_at_schema;
 use ironhorse_snapshot::{Signature, SnapshotError};
 
 fn sig() -> Signature {
@@ -41,16 +44,21 @@ fn current_boot_fixture_image() -> ironhorse_snapshot::image::MachineImage {
     m.snapshot_image_for_testing(&sig()).unwrap()
 }
 
+/// A schema-5 store of the current boot's fixture machine, in what an older
+/// build left that migration reads: the rows as this build writes them, the
+/// small state cut back to schema 5's six sections, and the manifest in
+/// schema 5's layout, written through the migration hook. The file is in the
+/// current layout, without the row-leaf hashes an older build's file kept,
+/// which migration drops anyway (the legacy layout's own read is
+/// `store_file`'s to test).
 fn write_matching_boot_v5_fixture(path: &std::path::Path) {
-    use ironhorse_snapshot::store::{
-        combine_root, image_to_batch_unchecked, leaf_hash, LEAF_SMALL,
-    };
+    use ironhorse_snapshot::store::image_to_batch_unchecked;
     let image = current_boot_fixture_image();
     let mut store = FileStore::open(path).unwrap();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
-    let mut manifest = store.manifest().unwrap();
+    let current = store.manifest().unwrap();
     let mut small = store.read_small_state().unwrap();
     // Schema 5 contains the original six sections. All later fixture state
     // is boot-derived or empty, so the ladder may append empty new tables.
@@ -60,19 +68,12 @@ fn write_matching_boot_v5_fixture(path: &std::path::Path) {
         end += 4 + len;
     }
     small.truncate(end);
-    manifest.store_schema = 5;
-    manifest.cranks = 0;
-    let (pages, exts) = store.leaf_hashes().unwrap();
-    manifest.root = combine_root(
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &store.free_leaf_hashes().unwrap(),
-        &store.page_edges().unwrap(),
-    );
-    store
-        .replace_manifest_and_small_for_migration(&manifest, &small)
-        .unwrap();
+    let v5 = StoreManifest {
+        store_schema: 5,
+        cranks: 0,
+        ..current.clone()
+    };
+    store.replace_for_migration(&current, &v5, &small).unwrap();
 }
 
 #[test]
@@ -116,6 +117,7 @@ fn assert_resumes_and_reads(store: &mut dyn HeapStore) {
     assert_eq!(o.result, FIXTURE_RESULTS[1]);
     let epoch = checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after migrate");
     assert_eq!(epoch, epoch_before + 1, "epoch chain continues");
+    validate_store_content(store, &sig()).expect("the extended store validates");
 }
 
 #[test]
@@ -136,7 +138,7 @@ fn v5_file_store_migrates_in_place_and_keeps_working() {
         manifest.store_schema, STORE_SCHEMA_VERSION,
         "migration restamped the store to the current schema"
     );
-    validate_store(&store, &sig()).expect("migrated store recombines to its v6 root");
+    validate_store_content(&store, &sig()).expect("the migrated store validates");
     drop(store);
 
     // Reopen before mutating: migration is idempotent — the second
@@ -228,14 +230,8 @@ impl HeapStore for ForeignCostTableStore {
     fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
         self.0.inventory()
     }
-    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
-        self.0.leaf_hashes()
-    }
     fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
         self.0.read_free_seg(seg)
-    }
-    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
-        self.0.free_leaf_hashes()
     }
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
         self.0.page_edges()
@@ -246,9 +242,11 @@ impl HeapStore for ForeignCostTableStore {
     ) -> Result<(), StoreError> {
         panic!("migration must not commit to a store it cannot resume");
     }
-    fn replace_manifest_for_migration(
+    fn replace_for_migration(
         &mut self,
-        _manifest: &ironhorse_snapshot::store::StoreManifest,
+        _from: &StoreManifest,
+        _to: &StoreManifest,
+        _small: &[u8],
     ) -> Result<(), StoreError> {
         panic!("migration must not restamp a store it cannot resume");
     }
@@ -287,12 +285,10 @@ fn drop_guard_bytes(path: &std::path::Path, expected: &[u8]) {
 }
 
 #[test]
-fn v5_splice_refuses_an_externally_truncated_file() {
-    // Review wave 4, F6: the v5→v6 splice re-reads the durable file
-    // while the ladder verified the CACHED view loaded at open. A file
-    // truncated in that window must fail closed on the header's own
-    // length claim, not panic on the slice. (The 6→7 step already
-    // bounds every offset it reads.)
+fn migration_refuses_an_externally_truncated_file() {
+    // Review wave 4, F6: the migration reads the durable file, not the
+    // view cached at open. A file truncated after open must fail closed
+    // on the header's own length claim, not panic on a slice.
     let dir = TempDir::new("ih-migrate-truncated");
     let path = dir.join("store.ihstore");
     write_matching_boot_v5_fixture(&path);
@@ -307,13 +303,10 @@ fn v5_splice_refuses_an_externally_truncated_file() {
         .set_len(20)
         .expect("truncate below the manifest region");
 
-    // Since the ladder re-reads the manifest DURABLY before each step
-    // (review wave 5, the stale-splice window), the truncation is now
-    // caught at that read and names the block it could not decode,
-    // rather than at the splice's own length check further in. Either
-    // is a named fail-closed refusal, which is the property; the
-    // splice's check stays as the backstop for a truncation landing
-    // inside the step itself, after the ladder has read.
+    // The migration reads the manifest DURABLY (review wave 5, the
+    // stale-handle window), so the truncation is caught at that read and
+    // names the block it could not decode. The write re-reads the file
+    // too, for a truncation landing after the migration's read.
     match migrate_store(&mut store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(msg))) => {
             assert!(
@@ -325,98 +318,77 @@ fn v5_splice_refuses_an_externally_truncated_file() {
     }
 }
 
-/// A store whose migration writes report success WITHOUT persisting —
-/// the out-of-tree backend bug the ladder's progress guard exists for.
-/// Everything else delegates to a real v5 `FileStore`, so the ladder
-/// takes its genuine first step and only the write is a lie.
-struct NoOpMigrationStore(FileStore);
+/// A v5 file store that counts the migration's durable reads and writes.
+struct CountingMigrationStore {
+    inner: FileStore,
+    rereads: std::cell::Cell<u32>,
+    writes: u32,
+}
 
-impl HeapStore for NoOpMigrationStore {
-    fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
-        self.0.manifest()
+impl HeapStore for CountingMigrationStore {
+    fn manifest(&self) -> Result<StoreManifest, StoreError> {
+        self.inner.manifest()
+    }
+    fn reread_manifest(&self) -> Result<StoreManifest, StoreError> {
+        self.rereads.set(self.rereads.get() + 1);
+        self.inner.reread_manifest()
     }
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
-        self.0.read_small_state()
+        self.inner.read_small_state()
     }
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
-        self.0.read_slot_page(page)
+        self.inner.read_slot_page(page)
     }
     fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
-        self.0.read_chunk_extent(ext)
+        self.inner.read_chunk_extent(ext)
     }
     fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
-        self.0.inventory()
-    }
-    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
-        self.0.leaf_hashes()
+        self.inner.inventory()
     }
     fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
-        self.0.read_free_seg(seg)
-    }
-    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
-        self.0.free_leaf_hashes()
+        self.inner.read_free_seg(seg)
     }
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
-        self.0.page_edges()
+        self.inner.page_edges()
     }
     fn commit_verified(
         &mut self,
         verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
     ) -> Result<(), StoreError> {
-        self.0.commit_verified(verify)
+        self.inner.commit_verified(verify)
     }
-    // The lie: reports success, persists nothing.
-    fn replace_manifest_for_migration(
+    fn replace_for_migration(
         &mut self,
-        _manifest: &ironhorse_snapshot::store::StoreManifest,
+        from: &StoreManifest,
+        to: &StoreManifest,
+        small: &[u8],
     ) -> Result<(), StoreError> {
-        Ok(())
+        self.writes += 1;
+        self.inner.replace_for_migration(from, to, small)
     }
 }
 
+/// The ladder runs in memory: the whole v5-to-current migration reads the
+/// store's manifest once and writes once, so no backend answer can keep
+/// it looping and a crash leaves the store either untouched or current.
 #[test]
-fn ladder_refuses_a_backend_that_does_not_advance() {
-    // Review wave 4, F5: without the progress guard this spins forever
-    // (read schema 5, "migrate", read schema 5, …). With it, the second
-    // sighting of the same schema fails closed.
-    let dir = TempDir::new("ih-migrate-noprogress");
+fn the_ladder_reads_the_manifest_once_and_writes_once() {
+    let dir = TempDir::new("ih-migrate-once");
     let path = dir.join("store.ihstore");
     write_matching_boot_v5_fixture(&path);
-
-    // Run under an explicit deadline. AGENTS.md requires one on any test
-    // guarding a deadlock or hang, and this is exactly that: WITHOUT the
-    // guard the ladder spins forever, so the regression signal would be
-    // an unattributed CI job timeout rather than a named failure (review
-    // wave 5). With the deadline the bite-check reports the hang as this
-    // test, by name, in seconds.
-    let (tx, rx) = std::sync::mpsc::channel();
-    let probe = std::thread::spawn(move || {
-        let mut store = NoOpMigrationStore(FileStore::open(&path).expect("open v5 store"));
-        let r = migrate_store(&mut store, &sig());
-        assert_eq!(
-            r,
-            Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "migration did not advance the store schema"
-            )))
-        );
-        // Render inside the thread: StoreError is not Send-friendly to
-        // move across as-is, and the string is all the assertion needs.
-        let _ = tx.send(match r {
-            Err(StoreError::Snapshot(SnapshotError::Corrupt(msg))) => Ok(msg.to_string()),
-            other => Err(format!("{other:?}")),
-        });
-    });
-    match rx.recv_timeout(std::time::Duration::from_secs(20)) {
-        Ok(Ok(msg)) => {
-            assert!(msg.contains("advance"), "named failure: {msg}");
-            probe.join().expect("probe thread");
-        }
-        Ok(Err(other)) => panic!("expected a no-progress refusal, got {other}"),
-        Err(_) => panic!(
-            "the ladder did not terminate within 20s — the progress guard \
-             is gone and migrate_store is spinning"
-        ),
-    }
+    let mut store = CountingMigrationStore {
+        inner: FileStore::open(&path).expect("open v5 store"),
+        rereads: std::cell::Cell::new(0),
+        writes: 0,
+    };
+    assert!(migrate_store(&mut store, &sig()).expect("migrates"));
+    assert_eq!((store.rereads.get(), store.writes), (1, 1));
+    assert_eq!(
+        store.inner.manifest().unwrap().store_schema,
+        STORE_SCHEMA_VERSION
+    );
+    assert!(!migrate_store(&mut store, &sig()).expect("already current"));
+    assert_eq!((store.rereads.get(), store.writes), (2, 1));
 }
 
 /// Review wave 5: since `open()` stopped migrating, the gap between
@@ -468,126 +440,6 @@ fn a_stale_handle_does_not_splice_over_a_store_another_handle_upgraded() {
     );
     validate_store(&store, &sig()).expect("still validates");
     assert_resumes_and_reads(&mut store);
-}
-
-/// A store whose reported schema CYCLES rather than advancing — the
-/// second shape of the same backend bug `NoOpMigrationStore` models.
-/// Writes really happen; only the reported schema lies, alternating
-/// 5, 6, 5, 6, ...
-struct CyclingMigrationStore {
-    inner: FileStore,
-    reads: std::cell::Cell<u32>,
-}
-
-impl CyclingMigrationStore {
-    fn cycled(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
-        let mut m = self.inner.manifest()?;
-        let n = self.reads.get();
-        self.reads.set(n + 1);
-        m.store_schema = if n % 2 == 0 { 5 } else { 6 };
-        Ok(m)
-    }
-}
-
-impl HeapStore for CyclingMigrationStore {
-    // Only the LADDER's read lies. The steps read `manifest()` and see
-    // the truth, so each one migrates real content correctly and the
-    // test isolates the guard rather than tripping a root check.
-    fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
-        self.inner.manifest()
-    }
-    fn reread_manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
-        self.cycled()
-    }
-    fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
-        self.inner.read_small_state()
-    }
-    fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
-        self.inner.read_slot_page(page)
-    }
-    fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
-        self.inner.read_chunk_extent(ext)
-    }
-    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
-        self.inner.inventory()
-    }
-    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
-        self.inner.leaf_hashes()
-    }
-    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
-        self.inner.read_free_seg(seg)
-    }
-    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
-        self.inner.free_leaf_hashes()
-    }
-    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
-        self.inner.page_edges()
-    }
-    fn commit_verified(
-        &mut self,
-        verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
-    ) -> Result<(), StoreError> {
-        self.inner.commit_verified(verify)
-    }
-    fn replace_manifest_for_migration(
-        &mut self,
-        manifest: &ironhorse_snapshot::store::StoreManifest,
-    ) -> Result<(), StoreError> {
-        self.inner.replace_manifest_for_migration(manifest)
-    }
-    fn replace_manifest_and_small_for_migration(
-        &mut self,
-        manifest: &ironhorse_snapshot::store::StoreManifest,
-        small: &[u8],
-    ) -> Result<(), StoreError> {
-        self.inner
-            .replace_manifest_and_small_for_migration(manifest, small)
-    }
-}
-
-#[test]
-fn ladder_refuses_a_backend_whose_schema_cycles() {
-    // Review wave 5: the wave-4 progress guard compared each schema
-    // only against the IMMEDIATELY previous one, so a backend reporting
-    // 5, 6, 5, 6, ... never repeated consecutively and spun forever.
-    // Requiring a STRICT advance closes both shapes with one comparison
-    // and bounds the loop by the schema range.
-    //
-    // Under a deadline for the same reason as the no-progress test: the
-    // regression is a hang, and a hang must fail by name.
-    let dir = TempDir::new("ih-migrate-cycle");
-    let path = dir.join("store.ihstore");
-    write_matching_boot_v5_fixture(&path);
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    let probe = std::thread::spawn(move || {
-        let mut store = CyclingMigrationStore {
-            inner: FileStore::open(&path).expect("open v5 store"),
-            reads: std::cell::Cell::new(0),
-        };
-        let r = migrate_store(&mut store, &sig());
-        assert_eq!(
-            r,
-            Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "migration did not advance the store schema"
-            )))
-        );
-        let _ = tx.send(match r {
-            Err(StoreError::Snapshot(SnapshotError::Corrupt(msg))) => Ok(msg.to_string()),
-            other => Err(format!("{other:?}")),
-        });
-    });
-    match rx.recv_timeout(std::time::Duration::from_secs(20)) {
-        Ok(Ok(msg)) => {
-            assert!(msg.contains("advance"), "named failure: {msg}");
-            probe.join().expect("probe thread");
-        }
-        Ok(Err(other)) => panic!("expected a no-advance refusal, got {other}"),
-        Err(_) => panic!(
-            "the ladder did not terminate within 20s — the progress guard \
-             still only compares against the previous schema"
-        ),
-    }
 }
 
 /// Review wave 5: an old-but-decodable store is not corrupt, and the
@@ -647,4 +499,111 @@ fn v5_container_imports_and_round_trips_unchanged() {
         "container round-trips byte-identically across the schema bump"
     );
     assert_resumes_and_reads(&mut store);
+}
+
+/// The boot layout of the build that wrote the stage-1 fixture
+/// (`regenerate_stage1_file_store_fixture`, which only a schema-35 build can
+/// run). The fixture is frozen, so this is too.
+const STAGE1_FIXTURE_BOOT: [u8; 32] = [
+    210, 205, 173, 102, 192, 135, 146, 200, 62, 10, 111, 223, 170, 167, 104, 132, 31, 246, 118, 18,
+    42, 255, 101, 204, 150, 227, 222, 102, 95, 182, 69, 250,
+];
+
+/// The committed stage-1 fixture, a schema-35 store in the file store's
+/// layout before schema 36, is refused by this build and left untouched.
+///
+/// The fixture's history is frozen, so only a build with the boot layout
+/// that wrote it could migrate it, and no build since the realm's
+/// `%ThrowTypeError%`, `@@species` getters and Number formatting methods
+/// has that layout (the deterministic-math provider never had it). The
+/// migration's boot gate refuses before writing and names both layouts.
+/// [`stage1_history_at_schema_35_migrates_and_resumes`] migrates the same
+/// history under this build's own layout.
+#[test]
+fn stage1_file_store_fixture_refuses_a_later_boot_layout() {
+    let dir = TempDir::new("ih-stage1-fixture");
+    let path = dir.join("heap.ihstore");
+    std::fs::copy(fixture("store-v35-stage1.ihstore"), &path).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    assert_eq!(&before[..8], b"IHSTORE5");
+    let mut store = FileStore::open(&path).unwrap();
+    assert_eq!(store.manifest().unwrap().store_schema, 35);
+    let current = ironhorse_vm::Interp::boot_fingerprint();
+    assert_ne!(current, STAGE1_FIXTURE_BOOT);
+    match migrate_store(&mut store, &sig()) {
+        Err(StoreError::Snapshot(SnapshotError::BootLayoutMismatch { expected, found })) => {
+            assert_eq!(expected, current);
+            assert_eq!(found, Some(STAGE1_FIXTURE_BOOT));
+        }
+        other => panic!("the fixture must be refused: {other:?}"),
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+/// A schema-35 store of the stage-1 history under this build's own boot
+/// layout migrates in place: the manifest moves to the current schema and
+/// nothing else, the store passes both validator levels, and it resumes
+/// where it stopped, and the resumed machine checkpoints into it.
+///
+/// The history is written fresh and its manifest restamped to schema 35
+/// through the migration hook, as an older build's store would read; the
+/// file is in the current layout, since reading the legacy layout is
+/// `store_file`'s to test.
+#[test]
+fn stage1_history_at_schema_35_migrates_and_resumes() {
+    let dir = TempDir::new("ih-stage1-v35");
+    let path = dir.join("heap.ihstore");
+    write_stage1_file_store(&path);
+    let mut store = FileStore::open(&path).unwrap();
+    let current = store.manifest().unwrap();
+    let old = StoreManifest {
+        store_schema: 35,
+        ..current.clone()
+    };
+    let small =
+        small_state_at_schema(&store.read_small_state().unwrap(), old.store_schema).unwrap();
+    store.replace_for_migration(&current, &old, &small).unwrap();
+    drop(store);
+
+    let mut store = FileStore::open(&path).unwrap();
+    assert_eq!(store.manifest().unwrap(), old);
+    assert!(migrate_store(&mut store, &sig()).expect("migrates"));
+    let migrated = store.manifest().unwrap();
+    assert_eq!(
+        migrated,
+        StoreManifest {
+            store_schema: STORE_SCHEMA_VERSION,
+            ..old
+        },
+        "only the schema moves"
+    );
+    validate_store(&store, &sig()).expect("metadata-scale validation");
+    validate_store_content(&store, &sig()).expect("full validation");
+    let mut session = resume_from_store(&store, &sig()).expect("the store resumes");
+    assert_eq!((session.epoch(), session.token()), (4, migrated.token));
+    let (code, symbols) = ironhorse_compile::compile_atoms(STAGE1_PROBE.0).unwrap();
+    let code = session
+        .machine_mut()
+        .relink_crank(&code, &ironhorse_vm::parse_symbols(&symbols))
+        .unwrap();
+    let o = session.machine_mut().run(&code);
+    assert!(o.completed, "{:?}", o.halt);
+    assert_eq!(o.result, STAGE1_PROBE.1);
+    assert_eq!(
+        checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoints"),
+        5
+    );
+    validate_store_content(&store, &sig()).expect("validates after the checkpoint");
+}
+
+/// The stage-1 fixture's history, written fresh on every run at the current
+/// schema: a lazy resume, the first checkpoint after it, a full collection
+/// and incremental checkpoints each leave a store that passes the full
+/// validator.
+#[test]
+fn stage1_history_writes_valid_stores() {
+    let dir = TempDir::new("ih-stage1-history");
+    let path = dir.join("heap.ihstore");
+    write_stage1_file_store(&path);
+    validate_store_content(&FileStore::open(&path).unwrap(), &sig()).expect("validates");
 }

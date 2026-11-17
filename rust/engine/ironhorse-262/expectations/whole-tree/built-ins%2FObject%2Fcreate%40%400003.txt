@@ -27,8 +27,8 @@ built-ins/Object/create/15.2.3.5-4-98.js sloppy pass
 built-ins/Object/create/15.2.3.5-4-98.js strict pass
 built-ins/Object/create/15.2.3.5-4-99.js sloppy pass
 built-ins/Object/create/15.2.3.5-4-99.js strict pass
-built-ins/Object/create/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be create; name value should be create"
-built-ins/Object/create/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be create; name value should be create"
+built-ins/Object/create/name.js sloppy pass
+built-ins/Object/create/name.js strict pass
 built-ins/Object/create/not-a-constructor.js sloppy pass
 built-ins/Object/create/not-a-constructor.js strict pass
 built-ins/Object/create/properties-arg-to-object-bigint.js sloppy pass

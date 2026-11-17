@@ -10,6 +10,14 @@ mod ordinary;
 mod proxy;
 mod read_index;
 
+/// Where the ordinary levels of a `[[HasProperty]]` walk end: an answer and
+/// its `fxOrdinaryHasProperty` frame count, or a Proxy (and the frames
+/// counted before it), whose own internal method takes over.
+pub(super) enum HasLevels {
+    Answered(bool, u64),
+    Proxy(crate::value::SlotIndex, u64),
+}
+
 impl Interp {
     /// Read a computed (`AT`-key) property (`GET_PROPERTY_AT`): an array index
     /// reads the item (or `undefined` for a hole / past the end); a named key
@@ -365,10 +373,21 @@ impl Interp {
             }
             current = self.instance_prototype(current);
         }
+        // A strict method's primitive receiver refuses a new or inherited
+        // data property (OrdinarySetWithOwnDescriptor step 2.c); XS, which
+        // converts it to an object first, words the error as for a
+        // non-extensible object, or fails the conversion itself.
+        if matches!(receiver.kind, Kind::Undefined | Kind::Null) {
+            return self.catchable_type_error_msg(cannot_coerce_to_object(receiver.kind));
+        }
+        if receiver.kind != Kind::Reference {
+            let name = self.property_debug_name(id);
+            return self.catchable_type_error_msg(format!("set {name}: not extensible"));
+        }
         let Payload::Reference(object) = receiver.value else {
             return self.catchable_type_error_msg("set: receiver is not an object".into());
         };
-        if receiver.kind != Kind::Reference || self.proxies.contains_key(&object) {
+        if self.proxies.contains_key(&object) {
             return self.catchable_type_error_msg("set: receiver rejected assignment".into());
         }
         let descriptor = self
@@ -394,6 +413,130 @@ impl Interp {
         self.catchable_type_error_msg(format!("set {name}: {reason}"))
     }
 
+    /// Whether a NEW_PROPERTY is the compiler's `caller` define on a sloppy
+    /// async function, which this departure drops: an async function has
+    /// no own `caller` (ECMA-262 17.1, Forbidden Extensions). XS's compiler
+    /// defines `caller` (undefined, non-enumerable) on every sloppy plain
+    /// function, async ones included, and Ironhorse's compiler keeps XS's
+    /// bytes. Only that define matches: its value and attributes, onto a
+    /// function whose [[Prototype]] is still %AsyncFunction.prototype%, as
+    /// it is between ASYNC_FUNCTION and the define.
+    pub(in crate::interp) fn is_async_function_caller_define(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        property_flag: u8,
+    ) -> bool {
+        property_flag == XS_DONT_ENUM_FLAG
+            && value.kind == Kind::Undefined
+            && self.instance_prototype(inst) == self.async_function_proto
+            && self.functions.contains_key(&inst)
+            && id == self.intern_static_key("caller")
+    }
+
+    /// The wrapper prototype of a primitive base (ToObject's), or `None`
+    /// for an object, `null` or `undefined`.
+    pub(in crate::interp) fn primitive_wrapper_proto(
+        &self,
+        base: Slot,
+    ) -> Option<crate::value::SlotIndex> {
+        match base.kind {
+            Kind::String => Some(self.string_proto),
+            Kind::Integer | Kind::Number => Some(self.number_proto),
+            Kind::Boolean => Some(self.boolean_proto),
+            Kind::Symbol => Some(self.symbol_proto),
+            Kind::BigInt => Some(self.bigint_proto),
+            _ => None,
+        }
+    }
+
+    /// Whether `id` names one of a primitive string's own properties, its
+    /// `length` or an index below it: read-only, so a write refuses.
+    pub(in crate::interp) fn string_owns_key(&self, base: Slot, id: u16) -> bool {
+        match (base.value, self.scalar_key_text(id)) {
+            (Payload::String(off), Some(name)) => {
+                let length = self.str_content(off).len() / 2;
+                name == "length"
+                    || string_to_index(&name).is_some_and(|index| (index as usize) < length)
+            }
+            _ => false,
+        }
+    }
+
+    /// PutValue on a primitive base (ES2024 6.2.5.6): `ToObject(base).[[Set]]`
+    /// with the primitive itself as the receiver. A string's own indices and
+    /// `length` are read-only, so the write is refused; otherwise the
+    /// wrapper prototype's chain answers, so an inherited setter or a Proxy
+    /// `set` trap runs, and a new property is refused because the receiver
+    /// is not an object (OrdinarySetWithOwnDescriptor step 2.c). A setter
+    /// runs in place, as on an object.
+    pub(in crate::interp) fn primitive_set_in_place(
+        &mut self,
+        code: &[u8],
+        base: Slot,
+        proto: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+    ) -> Result<SetInPlace, Step> {
+        if self.string_owns_key(base, id) {
+            return Ok(SetInPlace::Done(false));
+        }
+        self.set_property_in_place(code, proto, id, value, base)
+    }
+
+    /// The strict TypeError for a refused primitive write, in XS's words: a
+    /// string's own key and a new property are `not extensible`, an
+    /// inherited read-only property `not writable`, a getter-only accessor
+    /// `no setter`.
+    pub(in crate::interp) fn failed_primitive_set_error(
+        &mut self,
+        base: Slot,
+        proto: crate::value::SlotIndex,
+        id: u16,
+    ) -> Step {
+        if self.string_owns_key(base, id) {
+            let error = self.internal_error(
+                "TypeError",
+                format!("set {}: not extensible", self.property_debug_name(id)),
+            );
+            self.raise_js(error)
+        } else {
+            self.failed_set_error(proto, id, "set")
+        }
+    }
+
+    /// [`Self::property_at_set`] on a primitive base: the wrapper
+    /// prototype's [[Set]] with the primitive as the receiver. Out of line, so
+    /// the object path, which a Proxy `set` trap or an inherited setter
+    /// re-enters level after level, does not carry this path's frame.
+    #[inline(never)]
+    fn primitive_base_set_at(
+        &mut self,
+        code: &[u8],
+        obj: Slot,
+        proto: crate::value::SlotIndex,
+        key: Slot,
+        value: Slot,
+    ) -> Result<(), Step> {
+        let id = match key.value {
+            Payload::At(id, index) if id == crate::value::XS_NO_ID => {
+                self.intern_key(index.to_string())?
+            }
+            Payload::At(id, _) => id,
+            _ => return Err(Step::Host(Halt::EngineInvariant("set_property_at:key"))),
+        };
+        let accepted = if self.string_owns_key(obj, id) {
+            false
+        } else {
+            self.mop_set(code, proto, id, value, obj)?
+        };
+        if !accepted && self.strict {
+            return Err(self.failed_primitive_set_error(obj, proto, id));
+        }
+        Ok(())
+    }
+
     /// Write a computed (`AT`-key) property. `define` distinguishes
     /// `NEW_PROPERTY_AT` (a literal/`Object.defineProperty`-style define,
     /// which meters one extra built-in step) from `SET_PROPERTY_AT` (a plain
@@ -411,17 +554,12 @@ impl Interp {
         if matches!(obj.kind, Kind::Null | Kind::Undefined) {
             return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)));
         }
-        // A primitive symbol carries `Payload::Reference(desc)` — its
-        // description slot, NOT an instance. Without this guard `sym[k] = v`
-        // reached THROUGH the symbol into the description: it ran that
-        // object's setters and stored on it, which let an object handed to
-        // `Symbol()` be written through a value that is routinely treated as
-        // opaque. A symbol joins the other primitive receivers here: the write
-        // stores nothing. (XS additionally throws for the strict form, as it
-        // does for every primitive receiver; that gap is the standing
-        // `property_at_set`-on-primitives divergence, not this one.)
-        if obj.kind == Kind::Symbol {
-            return Ok(());
+        // A primitive base, matched on its KIND: a primitive symbol carries
+        // `Payload::Reference(desc)`, its description slot, NOT an instance,
+        // and must never be written through. PutValue runs the wrapper's
+        // [[Set]] with the primitive as the receiver.
+        if let Some(proto) = self.primitive_wrapper_proto(obj) {
+            return self.primitive_base_set_at(code, obj, proto, key, value);
         }
         let inst = match obj.value {
             Payload::Reference(i) => i,
@@ -447,7 +585,9 @@ impl Interp {
                     configurable: Some(true),
                     ..OrdinaryDescriptor::default()
                 };
-                self.proxy_define_own_property(code, inst, key_id, desc)?;
+                if !self.proxy_define_own_property(code, inst, key_id, desc)? {
+                    return Err(self.define_rejected_error(Some(key_id)));
+                }
             } else {
                 let accepted = self.proxy_set(code, inst, key_id, value, obj)?;
                 // The spec rejects a false strict Proxy Set; pinned XS ignores
@@ -484,7 +624,9 @@ impl Interp {
                     configurable: Some(true),
                     ..OrdinaryDescriptor::default()
                 };
-                self.ordinary_define_own_property(inst, id, descriptor);
+                if !self.ordinary_define_own_property(inst, id, descriptor) {
+                    return Err(self.define_rejected_error(Some(id)));
+                }
                 self.meter.tick_builtin();
             } else {
                 let _ = self.ordinary_set(code, inst, id, value, obj)?;
@@ -508,7 +650,9 @@ impl Interp {
                             configurable: Some(true),
                             ..OrdinaryDescriptor::default()
                         };
-                        let _ = self.array_define_index(inst, Some(key_id), index, descriptor)?;
+                        if !self.array_define_index(inst, Some(key_id), index, descriptor)? {
+                            return Err(self.define_rejected_error(None));
+                        }
                         self.meter.tick_builtin();
                     } else {
                         let accepted = self.ordinary_set(code, inst, key_id, value, obj)?;
@@ -516,31 +660,32 @@ impl Interp {
                             return Err(self.failed_set_error(inst, key_id, "set"));
                         }
                     }
-                } else if !define
-                    && (self.arrays[&inst]
-                        .items()
-                        .get(&index)
-                        .is_some_and(|item| item.flag & XS_DONT_SET_FLAG != 0)
-                        || index >= self.arrays[&inst].length && !self.array_length_writable(inst)
-                        || !self.instance_extensible(inst)
-                            && !self.arrays[&inst].items().contains_key(&index))
-                {
-                    if self.strict {
-                        let reason = if self.arrays[&inst]
-                            .items()
-                            .get(&index)
-                            .is_some_and(|item| item.flag & XS_DONT_SET_FLAG != 0)
-                        {
-                            "not writable"
-                        } else {
-                            "not extensible"
+                    Ok(())
+                } else if define {
+                    // CreateDataPropertyOrThrow. A literal's fresh array takes
+                    // the item store directly; a class field defined on an
+                    // object a base constructor returned may meet a frozen,
+                    // non-extensible or fixed-length array, which must refuse
+                    // rather than be written through.
+                    if self.array_item_define_is_plain(inst, index) {
+                        self.array_item_set(inst, index, value, define);
+                    } else {
+                        let descriptor = OrdinaryDescriptor {
+                            value: Some(value),
+                            writable: Some(true),
+                            enumerable: Some(true),
+                            configurable: Some(true),
+                            ..OrdinaryDescriptor::default()
                         };
-                        return Err(self.catchable_type_error_msg(format!("set ?: {reason}")));
+                        if !self.array_define_index(inst, None, index, descriptor)? {
+                            return Err(self.define_rejected_error(None));
+                        }
+                        self.meter.tick_builtin();
                     }
+                    Ok(())
                 } else {
-                    self.array_item_set(inst, index, value, define);
+                    self.array_index_set(code, inst, index, key_id, value, obj)
                 }
-                Ok(())
             } else {
                 // An ordinary object keeps its index properties BY INDEX, the
                 // way XS's `fxOrdinarySetProperty` grows an internal
@@ -556,14 +701,20 @@ impl Interp {
                             configurable: Some(true),
                             ..OrdinaryDescriptor::default()
                         };
-                        if self.index_prop_define(inst, index, descriptor).is_some() {
-                            self.meter.tick_builtin();
-                            return Ok(());
+                        match self.index_prop_define(inst, index, descriptor) {
+                            Some(true) => {
+                                self.meter.tick_builtin();
+                                return Ok(());
+                            }
+                            Some(false) => return Err(self.define_rejected_error(None)),
+                            None => {}
                         }
-                    } else if self
-                        .ordinary_index_set(code, inst, index, value, obj)?
-                        .is_some()
+                    } else if let Some(accepted) =
+                        self.ordinary_index_set(code, inst, index, value, obj)?
                     {
+                        if !accepted && self.strict {
+                            return Err(self.failed_index_set_error(inst, index, "set"));
+                        }
                         return Ok(());
                     }
                     // Fall through: the narrow shapes the index store cannot
@@ -580,10 +731,15 @@ impl Interp {
                         configurable: Some(true),
                         ..OrdinaryDescriptor::default()
                     };
-                    self.ordinary_define_own_property(inst, id, descriptor);
+                    if !self.ordinary_define_own_property(inst, id, descriptor) {
+                        return Err(self.define_rejected_error(None));
+                    }
                     self.meter.tick_builtin();
                 } else {
-                    let _ = self.ordinary_set(code, inst, id, value, obj)?;
+                    let accepted = self.ordinary_set(code, inst, id, value, obj)?;
+                    if !accepted && self.strict {
+                        return Err(self.failed_index_set_error(inst, index, "set"));
+                    }
                 }
                 Ok(())
             }
@@ -601,14 +757,26 @@ impl Interp {
                 }
                 return Ok(());
             }
-            let accepted = self.array_define_length(
-                code,
-                inst,
+            // A definition is CreateDataProperty's complete descriptor, which
+            // an array's non-configurable `length` refuses.
+            let descriptor = if define {
+                OrdinaryDescriptor {
+                    value: Some(value),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                }
+            } else {
                 OrdinaryDescriptor {
                     value: Some(value),
                     ..OrdinaryDescriptor::default()
-                },
-            )?;
+                }
+            };
+            let accepted = self.array_define_length(code, inst, descriptor)?;
+            if !accepted && define {
+                return Err(self.define_rejected_error(Some(id)));
+            }
             if !accepted && self.strict {
                 // Preserve the spec's failed length-shrink error. XS's array
                 // length setter ignores fxSetArrayLength's false return.
@@ -625,13 +793,95 @@ impl Interp {
                     configurable: Some(true),
                     ..OrdinaryDescriptor::default()
                 };
-                self.ordinary_define_own_property(inst, id, descriptor);
+                if !self.ordinary_define_own_property(inst, id, descriptor) {
+                    return Err(self.define_rejected_error(Some(id)));
+                }
                 self.meter.tick_builtin();
             } else {
                 let _ = self.ordinary_set(code, inst, id, value, obj)?;
             }
             Ok(())
         }
+    }
+
+    /// The TypeError a failed CreateDataPropertyOrThrow throws from a
+    /// definition opcode: XS's `set %s: const` (`XS_CODE_NEW_PROPERTY`), whose
+    /// name is `?` for an index key.
+    pub(super) fn define_rejected_error(&mut self, id: Option<u16>) -> Step {
+        let name = id.map_or_else(|| "?".to_string(), |id| self.property_debug_name(id));
+        self.catchable_type_error_msg(format!("set {name}: const"))
+    }
+
+    /// `OrdinarySet` of an index on an Array receiver that stores it as an
+    /// item (ECMA-262 10.1.9.2): an own item is written in place unless it is
+    /// read-only; an index the array lacks is decided up the chain first —
+    /// an inherited setter runs, an inherited non-writable value or a
+    /// Proxy's refusal rejects — and only a write left to the receiver meets
+    /// its own `[[DefineOwnProperty]]`, which a non-extensible array or a
+    /// fixed `length` the index would grow refuses.
+    fn array_index_set(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+        name: Option<u16>,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<(), Step> {
+        let reject = |vm: &mut Self, reason: &str| -> Result<(), Step> {
+            if vm.strict {
+                return Err(vm.catchable_type_error_msg(format!("set ?: {reason}")));
+            }
+            Ok(())
+        };
+        if let Some(item) = self.arrays[&inst].items().get(&index) {
+            if item.flag & XS_DONT_SET_FLAG != 0 {
+                return reject(self, "not writable");
+            }
+            self.array_item_set(inst, index, value, false);
+            return Ok(());
+        }
+        let start = self.instance_prototype(inst);
+        if !start.is_null() {
+            match self.index_set_walk(code, start, index, name, value, receiver)? {
+                IndexSetWalk::Create => {}
+                IndexSetWalk::Done(true) => return Ok(()),
+                IndexSetWalk::Done(false) => {
+                    if self.strict {
+                        return Err(self.failed_index_set_error(inst, index, "set"));
+                    }
+                    return Ok(());
+                }
+                // Only a TypedArray receiver defers, and this one is an Array.
+                IndexSetWalk::Defer => {
+                    return Err(Step::Host(Halt::EngineInvariant("array_index_set:defer")))
+                }
+            }
+        }
+        // The walk may have run guest code (a Proxy handler's `set` getter):
+        // decide on the array as it is now. An index it now holds in a named
+        // slot decides alone, without a second copy in the items.
+        if let Some(id) = self
+            .index_read_key_id(index)
+            .filter(|&id| self.find_property(inst, id).is_some())
+        {
+            if !self.set_named_index_on_receiver(code, inst, id, value)? && self.strict {
+                return Err(self.failed_set_error(inst, id, "set"));
+            }
+            return Ok(());
+        }
+        let a = &self.arrays[&inst];
+        if a.items().contains_key(&index) {
+            if a.items()[&index].flag & XS_DONT_SET_FLAG != 0 {
+                return reject(self, "not writable");
+            }
+        } else if !self.instance_extensible(inst)
+            || index >= a.length && !self.array_length_writable(inst)
+        {
+            return reject(self, "not extensible");
+        }
+        self.array_item_set(inst, index, value, false);
+        Ok(())
     }
 
     // ---- the `mop_*` dispatchers: an object's internal method, proxy-aware ---
@@ -644,7 +894,11 @@ impl Interp {
     // each of these is where a guest-shaped chain recurses on the host stack.
     // The `_inner` body is the internal method; the guarded entry charges
     // [`LIGHT_FRAME_COST`] around it and halts with [`Halt::ReentryLimit`]
-    // past [`NATIVE_DEPTH_LIMIT`].
+    // past [`NATIVE_DEPTH_LIMIT`]. A Proxy whose trap is absent forwards the
+    // method to its target; the `proxy_*` arm walks such layers in a loop
+    // ([`Self::forwarding_loop`]) instead of re-entering the guarded entry
+    // per layer, charging each layer the unit that entry would have and
+    // holding them all until the method returns (STACK-DEPTH-REFACTOR.md B1).
 
     /// `O.[[GetPrototypeOf]]()` as a slot (`Reference(proto)` or `Null`).
     pub(super) fn mop_get_prototype(
@@ -784,6 +1038,14 @@ impl Interp {
     ) -> Result<bool, Step> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_prevent_extensions(code, inst);
+        }
+        // A TypedArray whose length a resize can change refuses
+        // (ECMA-262 10.4.5.2 step 1, `IsTypedArrayFixedLength`; XS's
+        // `fxTypedArrayPreventExtensions`).
+        if let Some(&ta) = self.typed_arrays.get(&inst) {
+            if !self.ta_is_fixed_length(ta) {
+                return Ok(false);
+            }
         }
         self.materialize_intrinsic_own_surface(inst);
         self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
@@ -1024,17 +1286,43 @@ impl Interp {
         inst: crate::value::SlotIndex,
         id: u16,
     ) -> Result<(bool, u64), Step> {
+        match self.mop_has_ordinary_levels(code, inst, id)? {
+            HasLevels::Answered(found, frames) => Ok((found, frames)),
+            // A Proxy answers through `fxProxyHasProperty`, which does not
+            // run the ordinary push/pop at its own level.
+            HasLevels::Proxy(proxy, frames) => Ok((self.proxy_has(code, proxy, id)?, frames)),
+        }
+    }
+
+    /// The ordinary levels of `[[HasProperty]]` from `inst`: the answer and
+    /// its frame count, or the first Proxy the chain reaches and the frames
+    /// counted before it.
+    pub(super) fn mop_has_ordinary_levels(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<HasLevels, Step> {
         let mut current = inst;
         let mut frames = 0u64;
         loop {
             if self.proxies.contains_key(&current) {
-                // A Proxy answers through `fxProxyHasProperty`, which does not
-                // run the ordinary push/pop at its own level.
-                return Ok((self.proxy_has(code, current, id)?, frames));
+                return Ok(HasLevels::Proxy(current, frames));
+            }
+            // A TypedArray answers a canonical numeric key itself and never
+            // consults its prototype (ES2024 10.4.5.2), wherever it sits in
+            // the chain being walked.
+            if let Some(&ta) = self.typed_arrays.get(&current) {
+                if let Some(n) = self.ta_canonical_numeric_id(id) {
+                    return Ok(HasLevels::Answered(
+                        self.ta_valid_index(ta, n).is_some(),
+                        frames,
+                    ));
+                }
             }
             if self.object_own_property_present(code, current, id)? {
                 // Found own: `fxOrdinaryHasProperty` returns before its push.
-                return Ok((true, frames));
+                return Ok(HasLevels::Answered(true, frames));
             }
             // This level did not find the property own, so XS's
             // `fxOrdinaryHasProperty` ran its `mxPushUndefined`/`mxPop` pair
@@ -1045,7 +1333,7 @@ impl Interp {
             frames += 1;
             let prototype = self.instance_prototype(current);
             if prototype.is_null() {
-                return Ok((false, frames));
+                return Ok(HasLevels::Answered(false, frames));
             }
             current = prototype;
         }
@@ -1166,15 +1454,21 @@ impl Interp {
         after_active_trap: bool,
     ) -> Result<Slot, Step> {
         if self.proxies.contains_key(&inst) {
+            // The Proxy path takes the metering as one argument
+            // (STACK-DEPTH-REFACTOR.md A3); this body and its guarded entry
+            // keep the four scalars, as packing them here changed how LLVM
+            // inlined their callers on the heavy re-entry paths.
             return self.proxy_get_with_metering(
                 code,
                 inst,
                 key,
                 receiver,
-                proxy_trap_metering,
-                meter_terminal_wrapper,
-                meter_forwarded_target,
-                after_active_trap,
+                GetMetering {
+                    proxy_trap: proxy_trap_metering,
+                    terminal_wrapper: meter_terminal_wrapper,
+                    forwarded_target: meter_forwarded_target,
+                    after_active_trap,
+                },
             );
         }
         if meter_forwarded_target {
@@ -1234,6 +1528,150 @@ impl Interp {
             }
         }
         self.ordinary_get(code, inst, id, receiver)
+    }
+
+    /// A `[[Get]]` of `key` for `receiver` from `leg` on
+    /// (STACK-DEPTH-REFACTOR.md B9), for the step that re-entered `mop_get`:
+    /// [`Self::ordinary_get`]'s at a prototype it delegates to. The read then
+    /// runs to its end in [`Self::get_legs`]'s loop, one frame chain however
+    /// many objects it crosses. A Proxy's forward to its target still enters
+    /// `mop_get_with_proxy_metering` once, as before, so that a getter or trap
+    /// one crossing away runs under the frames it always did; the loop takes
+    /// over at that target's next Proxy.
+    #[inline(never)]
+    pub(super) fn get_from(
+        &mut self,
+        code: &[u8],
+        leg: GetLeg,
+        key: ReadKey,
+        receiver: Slot,
+    ) -> Result<Slot, Step> {
+        self.with_forwarding_walk(|vm, held| vm.get_legs(code, leg, key, receiver, held))
+    }
+
+    /// The rest of a `[[Get]]` from `leg` on. A read that crosses from an
+    /// ordinary object to a Proxy prototype and on to the Proxy's ordinary
+    /// target re-entered `mop_get` and `mop_get_with_proxy_metering` at each
+    /// crossing, a native frame chain and a unit per object. This takes each
+    /// leg in turn instead: it charges the next object the unit its guarded
+    /// entry charged, adds it to the units the walk holds (`held`, released
+    /// when the read returns, as the recursion released them), and meters the
+    /// object as that entry did, so `native_depth` and the meter at each step
+    /// are what the recursion had and a prototype cycle through a Proxy halts
+    /// at the same depth.
+    pub(super) fn get_legs(
+        &mut self,
+        code: &[u8],
+        mut leg: GetLeg,
+        key: ReadKey,
+        receiver: Slot,
+        held: &mut usize,
+    ) -> Result<Slot, Step> {
+        loop {
+            let (next, metering) = match leg {
+                GetLeg::Value(value) => return Ok(value),
+                GetLeg::Prototype(parent) => (parent, self.get_entry_metering(parent, key)),
+                GetLeg::Target(target, metering) => (target, metering),
+            };
+            // The unit the guarded entry charged.
+            self.forwarding_hop(held)?;
+            // `mop_get_with_proxy_metering_inner`'s first step. Each leg runs
+            // out of line, so that a getter or trap it calls runs under its
+            // frame and this loop's small one alone.
+            leg = if self.proxies.contains_key(&next) {
+                self.proxy_get_leg(code, next, key, receiver, metering, held)?
+            } else {
+                self.mop_get_leg(code, next, key, receiver, metering)?
+            };
+        }
+    }
+
+    /// How [`Self::mop_get`] meters a read of `key` from `inst`: as the read
+    /// of the Array Iterator's active `get` trap if that read is aimed here,
+    /// else as an ordinary `[[Get]]`.
+    fn get_entry_metering(&self, inst: crate::value::SlotIndex, key: ReadKey) -> GetMetering {
+        match self
+            .array_iterator_proxy_get_context
+            .filter(|context| context.target == inst)
+            .filter(|context| self.refresh_read_key(context.key) == key)
+        {
+            Some(context) => GetMetering {
+                proxy_trap: context.trap_metering,
+                terminal_wrapper: context.meter_terminal_wrapper,
+                forwarded_target: false,
+                after_active_trap: true,
+            },
+            None => GetMetering::default(),
+        }
+    }
+
+    /// One leg of [`Self::get_legs`] at an object that is not a Proxy:
+    /// [`Self::mop_get_with_proxy_metering_inner`] for `inst`, which ends with
+    /// the value or at the next object the read goes on with. Kept apart from
+    /// that body, which every `[[Get]]` runs, so that its frame and the
+    /// inlining around it stay as they were: keep the two in step.
+    #[inline(never)]
+    fn mop_get_leg(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        key: ReadKey,
+        receiver: Slot,
+        metering: GetMetering,
+    ) -> Result<GetLeg, Step> {
+        if metering.forwarded_target {
+            let terminal_is_wrapper = self.wrapper_data.contains_key(&inst);
+            self.charge_and_check(if metering.after_active_trap {
+                if metering.proxy_trap == ARRAY_ITERATOR_PROXY_VALUE_METERING {
+                    ARRAY_ITERATOR_PROXY_VALUE_ACTIVE_FORWARD_TARGET_METERING
+                } else {
+                    ARRAY_ITERATOR_PROXY_ACTIVE_FORWARD_TARGET_METERING
+                }
+            } else if metering.proxy_trap == ARRAY_ITERATOR_PROXY_VALUE_METERING
+                && !terminal_is_wrapper
+            {
+                ARRAY_ITERATOR_PROXY_VALUE_FORWARD_TARGET_METERING
+            } else {
+                ARRAY_ITERATOR_PROXY_FORWARD_TARGET_METERING
+            })?;
+        }
+        if metering.terminal_wrapper {
+            if let Some(value) = self.wrapper_data.get(&inst) {
+                if value.kind == Kind::String {
+                    self.charge_and_check(if metering.forwarded_target {
+                        ARRAY_ITERATOR_PROXY_STRING_RECEIVER_METERING
+                    } else {
+                        ARRAY_ITERATOR_STRING_RECEIVER_METERING
+                    })?;
+                } else if matches!(value.kind, Kind::Symbol | Kind::BigInt) {
+                    self.meter
+                        .tick_raw(ARRAY_ITERATOR_WIDE_PRIMITIVE_RECEIVER_METERING);
+                }
+            }
+        }
+        let id = match key {
+            ReadKey::Id(id) => id,
+            ReadKey::Index(index) => {
+                return self
+                    .uninterned_index_get(code, inst, index, receiver)
+                    .map(GetLeg::Value)
+            }
+        };
+        if self.find_property(inst, id).is_none() {
+            if let Some(&typed_array) = self.typed_arrays.get(&inst) {
+                if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                    return Ok(GetLeg::Value(
+                        self.ta_indexed_element_get(typed_array, index),
+                    ));
+                }
+            }
+            if let Some(d) = self.exotic_own_descriptor(inst, id) {
+                if d.is_data() {
+                    return Ok(GetLeg::Value(d.value.unwrap_or_else(Slot::undefined)));
+                }
+            }
+        }
+        self.ordinary_get_walk(code, inst, id, receiver)
     }
 
     /// Whether a RegExp property lookup reaches the VM's implicit intrinsic
@@ -1304,7 +1742,10 @@ impl Interp {
             }
         }
         let fi = self.functions.get(&inst)?;
-        if self.scalar_key_text(id).as_deref() == Some("length") {
+        // A deleted `length` or `name` stays deleted (ledger F082): `delete`
+        // records a tombstone rather than unlinking a slot.
+        let deleted = self.deleted_fn_meta.contains(&(inst, id));
+        if !deleted && self.scalar_key_text(id).as_deref() == Some("length") {
             return Some(OrdinaryDescriptor {
                 value: Some(Slot::integer(fi.arity as i32)),
                 writable: Some(false),
@@ -1313,7 +1754,7 @@ impl Interp {
                 ..OrdinaryDescriptor::default()
             });
         }
-        if Some(id) == self.name_id {
+        if !deleted && Some(id) == self.name_id {
             return Some(OrdinaryDescriptor {
                 value: Some(Slot::of(Kind::String, Payload::String(fi.name_chunk))),
                 writable: Some(false),
@@ -1434,11 +1875,16 @@ impl Interp {
             let descriptor = self
                 .index_prop_descriptor(current, index)
                 .or_else(|| self.named_index_descriptor(current, index))
+                .or_else(|| self.exotic_index_descriptor(current, index))
                 .or_else(|| self.exotic_index_own_descriptor(current, index));
             if let Some(descriptor) = descriptor {
                 if descriptor.is_accessor() {
                     reason = "no setter";
-                } else if descriptor.writable == Some(false) {
+                } else if descriptor.writable == Some(false)
+                    // XS reports a String wrapper's own character as
+                    // "not extensible".
+                    && !(current == inst && self.wrapper_data.contains_key(&current))
+                {
                     reason = "not writable";
                 }
                 break;
@@ -1468,6 +1914,10 @@ impl Interp {
         })
     }
 
+    /// Out of line, as `llm` built it: folded into the `with_native_frame`
+    /// closure of [`Self::mop_set`], it made that closure a 384-byte frame of
+    /// its own on every level an inherited Proxy `set` trap re-enters.
+    #[inline(never)]
     pub(super) fn mop_set_inner(
         &mut self,
         code: &[u8],
@@ -1500,6 +1950,125 @@ impl Interp {
             }
         }
         self.ordinary_set(code, inst, id, value, receiver)
+    }
+
+    /// [`Self::proxy_set`]'s `[[Set]]` of the target a Proxy forwarded to, not
+    /// itself a Proxy, which re-entered `mop_set` (STACK-DEPTH-REFACTOR.md
+    /// B9): the assignment runs to its end in [`Self::set_legs`]'s loop, one
+    /// frame chain however many objects it crosses. [`Self::get_from`] for an
+    /// assignment, entered from the other side of a crossing:
+    /// [`Self::ordinary_set`]'s delegation to a Proxy prototype still enters
+    /// `mop_set` once, as before, since LLVM folds that entry into
+    /// `ordinary_set` and a `set` trap there runs under `proxy_set`'s frame
+    /// alone; the loop takes over at the Proxy's forward.
+    #[inline(never)]
+    pub(super) fn set_from(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<bool, Step> {
+        self.with_forwarding_walk(|vm, held| {
+            vm.set_legs(code, SetLeg::Next(target), id, value, receiver, held)
+        })
+    }
+
+    /// The rest of a `[[Set]]` from `leg` on: [`Self::get_legs`]'s loop for
+    /// an assignment. Each object it goes on with is charged the unit
+    /// `mop_set` charged it and held until the assignment returns, so a
+    /// setter, a trap or the receiver's update at the end runs at the depth
+    /// the recursion ran it.
+    fn set_legs(
+        &mut self,
+        code: &[u8],
+        mut leg: SetLeg,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+        held: &mut usize,
+    ) -> Result<bool, Step> {
+        loop {
+            let next = match leg {
+                SetLeg::Done(accepted) => return Ok(accepted),
+                SetLeg::Next(next) => next,
+            };
+            // The unit `mop_set` or a forwarding hop charged.
+            self.forwarding_hop(held)?;
+            // `mop_set_inner` for the next object, a step at a time: each step
+            // runs out of line, so that a trap, a setter or the receiver's
+            // update runs under its frame and this loop's small one alone.
+            leg = if self.proxies.contains_key(&next) {
+                self.proxy_set_leg(code, next, id, value, receiver)?
+            } else if self.typed_arrays.contains_key(&next) {
+                match self.typed_array_set_leg(code, next, id, value, receiver)? {
+                    Some(accepted) => SetLeg::Done(accepted),
+                    None => self.ordinary_set_walk(code, next, id, value, receiver)?,
+                }
+            } else {
+                self.ordinary_set_walk(code, next, id, value, receiver)?
+            };
+        }
+    }
+
+    /// The Proxy step of [`Self::set_legs`]: one layer of `proxy_set`'s
+    /// forwarding loop, ending with the trap's result or at the target, Proxy
+    /// or not, which the recursive shape charged as a forwarding hop or
+    /// through `mop_set`.
+    #[inline(never)]
+    fn proxy_set_leg(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<SetLeg, Step> {
+        Ok(
+            match self.proxy_set_step(code, proxy, id, value, receiver)? {
+                ProxyStep::Done(accepted) => SetLeg::Done(accepted),
+                ProxyStep::Forward(target) => SetLeg::Next(target),
+            },
+        )
+    }
+
+    /// The TypedArray step of [`Self::set_legs`]: [`Self::mop_set_inner`]'s
+    /// integer-indexed element, which answers the whole `[[Set]]`, or `None`
+    /// for a key that names none, which the ordinary walk then takes. Kept
+    /// apart from that body, which every `[[Set]]` runs: keep the two in step.
+    #[inline(never)]
+    fn typed_array_set_leg(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<Option<bool>, Step> {
+        let Some(&ta) = self.typed_arrays.get(&inst) else {
+            return Ok(None);
+        };
+        let numeric_index = if self.is_symbol_key_id(id) {
+            None
+        } else {
+            self.scalar_key_text(id)
+                .and_then(|name| canonical_numeric_index_string(&name))
+        };
+        let Some(index) = numeric_index else {
+            return Ok(None);
+        };
+        let target = Slot::of(Kind::Reference, Payload::Reference(inst));
+        if self.same_value(target, receiver) {
+            self.ta_indexed_element_set(code, ta, index, value)?;
+            return Ok(Some(true));
+        }
+        if self.ta_valid_index(ta, index).is_none() {
+            return Ok(Some(true));
+        }
+        let key = self.property_key_slot(id)?;
+        self.set_data_on_receiver(code, receiver, key, value)
+            .map(Some)
     }
 
     /// `O.[[Delete]](P)`.
@@ -1536,10 +2105,11 @@ impl Interp {
                     if item.flag & XS_DONT_DELETE_FLAG != 0 {
                         return Ok(false);
                     }
-                    self.arrays
-                        .get_mut(&inst)
-                        .unwrap()
-                        .remove_item(&index, &mut self.side_refs);
+                    self.arrays.get_mut(&inst).unwrap().remove_item(
+                        &index,
+                        &mut self.side_refs,
+                        &mut self.chunks,
+                    );
                     return Ok(true);
                 }
             }
@@ -1606,12 +2176,9 @@ impl Interp {
             let ordinary_ids = self.ordered_own_key_ids(inst);
             self.admit_scratch::<u32>(idxs.len() + ordinary_ids.len())?;
             idxs.try_reserve(ordinary_ids.len())
-                .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                .map_err(|_| Step::Host(Halt::HostAllocationFailed))?;
             self.charge_builtin_work((ordinary_ids.len() + idxs.len()) as u64)?;
-            idxs.extend(ordinary_ids.iter().filter_map(|id| {
-                self.scalar_key_text(*id)
-                    .and_then(|name| string_to_index(&name))
-            }));
+            idxs.extend(ordinary_ids.iter().filter_map(|&id| self.key_id_index(id)));
             idxs.sort_unstable();
             idxs.dedup();
             for i in idxs {
@@ -1631,11 +2198,7 @@ impl Interp {
                 self.push_prepaid_scratch(&mut out, key)?;
             }
             for id in ordinary_ids {
-                if (!is_arguments && id == length_id)
-                    || self
-                        .scalar_key_text(id)
-                        .is_some_and(|name| string_to_index(&name).is_some())
-                {
+                if (!is_arguments && id == length_id) || self.key_id_index(id).is_some() {
                     continue;
                 }
                 self.charge_builtin_work(1)?;
@@ -1646,13 +2209,9 @@ impl Interp {
         }
         // Integer-indexed TypedArray own keys: each live element index in
         // ascending order, then ordinary string and symbol expandos. A
-        // detached view has zero observable indexed keys.
+        // detached or out-of-bounds view has zero observable indexed keys.
         if let Some(&ta) = self.typed_arrays.get(&inst) {
-            let length = if self.detached_buffers.contains(&ta.buffer) {
-                0
-            } else {
-                ta.length
-            };
+            let length = self.ta_length_or_zero(ta);
             let mut out = Vec::new();
             for index in 0..length {
                 self.charge_builtin_work(1)?;
@@ -1660,10 +2219,7 @@ impl Interp {
                 self.push_prepaid_scratch(&mut out, key)?;
             }
             for id in self.ordered_own_key_ids(inst) {
-                if self
-                    .scalar_key_text(id)
-                    .is_some_and(|name| string_to_index(&name).is_some())
-                {
+                if self.key_id_index(id).is_some() {
                     continue;
                 }
                 self.charge_builtin_work(1)?;
@@ -1704,7 +2260,7 @@ impl Interp {
             let mut index_expandos: Vec<(u32, u16)> = ordinary_ids
                 .iter()
                 .filter_map(|&id| {
-                    let index = string_to_index(&self.scalar_key_text(id)?)?;
+                    let index = self.key_id_index(id)?;
                     (index as usize >= units).then_some((index, id))
                 })
                 .collect();
@@ -1721,11 +2277,7 @@ impl Interp {
             for id in ordinary_ids {
                 // Every index-named expando is already placed above, in range
                 // as a unit and out of range as its own key.
-                if id == length_id
-                    || self
-                        .scalar_key_text(id)
-                        .is_some_and(|name| string_to_index(&name).is_some())
-                {
+                if id == length_id || self.key_id_index(id).is_some() {
                     continue;
                 }
                 self.charge_builtin_work(1)?;
@@ -1744,45 +2296,37 @@ impl Interp {
             let prototype_id = self.intern_static_key("prototype");
             let has_proto = self.ctor_prototype.contains_key(&inst);
             let ordinary_ids = self.ordered_own_key_ids(inst);
-            for &id in &ordinary_ids {
-                if !self.is_symbol_key_id(id)
-                    && self
-                        .scalar_key_text(id)
-                        .is_some_and(|name| string_to_index(&name).is_some())
-                {
+            // A function is an ordinary object for index storage, so `f[1] = 1`
+            // lands in the index store. Listing only the index-NAMED slots
+            // here hid such a property from every key walk — and so from
+            // `Object.freeze`, which left it writable while `Object.isFrozen`
+            // answered `true`.
+            for index in self.own_index_keys(inst, &ordinary_ids) {
+                self.charge_builtin_work(1)?;
+                let key = self.read_key_slot(ReadKey::Index(index))?;
+                self.push_prepaid_scratch(&mut out, key)?;
+            }
+            // A deleted `length` or `name` is gone from the head of the list;
+            // a later definition appends it, as XS appends a new slot.
+            let length_live = !self.deleted_fn_meta.contains(&(inst, length_id));
+            let name_live = !self.deleted_fn_meta.contains(&(inst, name_id));
+            for (id, live) in [(length_id, length_live), (name_id, name_live)] {
+                if live {
                     self.charge_builtin_work(1)?;
                     let key = self.property_key_slot(id)?;
                     self.push_prepaid_scratch(&mut out, key)?;
                 }
             }
-            self.charge_builtin_work(1)?;
-            let key = self.property_key_slot(length_id)?;
-            self.push_prepaid_scratch(&mut out, key)?;
-            self.charge_builtin_work(1)?;
-            let key = self.property_key_slot(name_id)?;
-            self.push_prepaid_scratch(&mut out, key)?;
             if has_proto {
                 self.charge_builtin_work(1)?;
                 let key = self.property_key_slot(prototype_id)?;
                 self.push_prepaid_scratch(&mut out, key)?;
             }
-            let intrinsic_ids = self.intrinsic_own_string_order(inst).unwrap_or_default();
-            for &id in &intrinsic_ids {
-                if ordinary_ids.contains(&id) {
-                    self.charge_builtin_work(1)?;
-                    let key = self.property_key_slot(id)?;
-                    self.push_prepaid_scratch(&mut out, key)?;
-                }
-            }
             for id in ordinary_ids {
-                if id == length_id
-                    || id == name_id
+                if (id == length_id && length_live)
+                    || (id == name_id && name_live)
                     || (has_proto && id == prototype_id)
-                    || intrinsic_ids.contains(&id)
-                    || (!self.is_symbol_key_id(id)
-                        && self
-                            .scalar_key_text(id)
-                            .is_some_and(|name| string_to_index(&name).is_some()))
+                    || self.key_id_index(id).is_some()
                 {
                     continue;
                 }
@@ -1797,17 +2341,56 @@ impl Interp {
         // Index keys ascending, then the named chain — `fxOrdinaryOwnKeys`
         // queues the internal index chunk before `fxQueueIDKeys`. These keys
         // are spelled from the index, so listing them mints nothing.
-        for index in self.index_prop_indices(inst) {
+        for index in self.own_index_keys(inst, &ids) {
             self.charge_builtin_work(1)?;
             let key = self.read_key_slot(ReadKey::Index(index))?;
             self.push_prepaid_scratch(&mut out, key)?;
         }
         for id in ids {
+            if self.key_id_index(id).is_some() {
+                continue;
+            }
             self.charge_builtin_work(1)?;
             let key = self.property_key_slot(id)?;
             self.push_prepaid_scratch(&mut out, key)?;
         }
         Ok(out)
+    }
+
+    /// The canonical array index a key id spells, or `None` for any other
+    /// string key and for every symbol key.
+    pub(super) fn key_id_index(&self, id: u16) -> Option<u32> {
+        // Read in place: an index name is ASCII, which CESU-8 spells as
+        // itself, and every own-key walk asks this of each key. The tables
+        // must agree, as in [`Self::scalar_key_text`].
+        let name = self.symbol_names.get((id as usize).checked_sub(1)?)?;
+        if self.symbol_ids.get(name) != Some(&id) {
+            return None;
+        }
+        std::str::from_utf8(name.as_bytes())
+            .ok()
+            .and_then(string_to_index)
+    }
+
+    /// Every array-index key `inst` owns, ascending: the index store merged
+    /// with the index-NAMED slots among `ordinary_ids`.
+    ///
+    /// An ordinary object keeps an index property in the store until an
+    /// accessor descriptor promotes it to a named slot, and an exotic shape
+    /// keeps its index expandos by name throughout. XS holds every index key
+    /// in the one `XS_ARRAY_KIND` chunk, so `fxOrdinaryOwnKeys` lists them
+    /// all ahead of the named chain; listing the store and then the names put
+    /// a promoted `"2"` after a stored `3`, against OrdinaryOwnPropertyKeys.
+    pub(super) fn own_index_keys(
+        &self,
+        inst: crate::value::SlotIndex,
+        ordinary_ids: &[u16],
+    ) -> Vec<u32> {
+        let mut indices = self.index_prop_indices(inst);
+        indices.extend(ordinary_ids.iter().filter_map(|&id| self.key_id_index(id)));
+        indices.sort_unstable();
+        indices.dedup();
+        indices
     }
 
     /// An ordinary object's own key ids in `[[OwnPropertyKeys]]` order:
@@ -1823,8 +2406,7 @@ impl Interp {
             if self.is_symbol_key_id(*id) {
                 (2u8, 0u32)
             } else {
-                self.scalar_key_text(*id)
-                    .and_then(|name| string_to_index(&name))
+                self.key_id_index(*id)
                     .map(|index| (0u8, index))
                     .unwrap_or((1u8, 0))
             }

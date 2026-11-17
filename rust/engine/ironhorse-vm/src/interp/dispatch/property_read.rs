@@ -3,7 +3,14 @@
 use super::super::*;
 
 impl Interp {
-    pub(super) fn dispatch_get_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
+    /// `GET_PROPERTY`: the read's value pushed, or a getter entered in place
+    /// (STACK-DEPTH-REFACTOR.md C7), whose body to continue at; the loop sets
+    /// where its frame returns.
+    pub(super) fn dispatch_get_property(
+        &mut self,
+        code: &[u8],
+        id: u16,
+    ) -> Result<Option<usize>, Step> {
         let obj = self.pop_checked()?;
         let v = match obj.value {
             Payload::Reference(inst)
@@ -195,8 +202,7 @@ impl Interp {
                 Slot::boolean(self.disposable_stacks[&inst].disposed)
             }
             Payload::Reference(inst)
-                if ((obj.kind == Kind::Reference && self.array_buffers.contains_key(&inst))
-                    && !self.shared_buffers.contains(&inst))
+                if (obj.kind == Kind::Reference && self.array_buffers.contains_key(&inst))
                     || (obj.kind == Kind::Reference && self.typed_arrays.contains_key(&inst))
                     || (obj.kind == Kind::Reference && self.data_views.contains_key(&inst)) =>
             {
@@ -204,14 +210,6 @@ impl Interp {
                 // prototypes. Ordinary lookup preserves guest
                 // deletion, replacement, and own-property shadows.
                 (self.mop_get(code, inst, id, obj))?
-            }
-            Payload::Reference(inst)
-                if Some(id) == self.byte_length_id
-                    && (obj.kind == Kind::Reference && self.array_buffers.contains_key(&inst))
-                    && self.shared_buffers.contains(&inst) =>
-            {
-                self.meter.tick_raw(ARRAY_BUFFER_BYTE_LENGTH_GET_METERING);
-                Slot::integer(self.array_buffers[&inst].length as i32)
             }
             Payload::Reference(inst)
                 if (obj.kind == Kind::Reference && self.regexps.contains_key(&inst)) =>
@@ -293,7 +291,7 @@ impl Interp {
                     .iter()
                     .find_map(|(function, owner)| (*owner == inst).then_some(*function));
                 let function = existing.unwrap_or_else(|| {
-                    let f = self.alloc_method(NativeMethod::CollatorCompare);
+                    let f = self.alloc_named_method(NativeMethod::CollatorCompare, "", 2);
                     self.collator_compare_functions.insert(f, inst);
                     f
                 });
@@ -354,7 +352,10 @@ impl Interp {
             // that throws (the `format` accessor read on a
             // non-NumberFormat `this`, or any user getter) inside a
             // `try` would escape its handler.
-            Payload::Reference(inst) => (self.mop_get(code, inst, id, obj))?,
+            Payload::Reference(inst) => match (self.get_property_in_place(code, inst, id, obj))? {
+                GetInPlace::Value(value) => value,
+                GetInPlace::Entered(body_start) => return Ok(Some(body_start)),
+            },
             // A primitive string boxes to `%String.prototype%`
             // (XS's `fxCoerceToString`/string behavior): `.length`
             // is the UTF-16 code-unit count; any other name
@@ -384,6 +385,6 @@ impl Interp {
             _ => Slot::undefined(),
         };
         self.push(v);
-        Ok(())
+        Ok(None)
     }
 }

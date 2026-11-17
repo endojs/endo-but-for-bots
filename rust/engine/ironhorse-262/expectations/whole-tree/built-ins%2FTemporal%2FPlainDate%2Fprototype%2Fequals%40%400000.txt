@@ -65,8 +65,8 @@ built-ins/Temporal/PlainDate/prototype/equals/builtin.js sloppy skip:oracle-host
 built-ins/Temporal/PlainDate/prototype/equals/builtin.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDate/prototype/equals/calendar-temporal-object.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDate/prototype/equals/calendar-temporal-object.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/PlainDate/prototype/equals/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainDate/prototype/equals/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainDate/prototype/equals/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDate/prototype/equals/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDate/prototype/equals/length.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDate/prototype/equals/length.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDate/prototype/equals/name.js sloppy skip:oracle-host-missing-temporal

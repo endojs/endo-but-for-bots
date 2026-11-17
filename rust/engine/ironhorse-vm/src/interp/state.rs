@@ -167,6 +167,20 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     host_callbacks: std::rc::Weak<host::HostRegistry>,
+    #[boot_new(std::rc::Weak::new())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Host-owned compiler policies keyed by the environment whose lifetime
+    /// they serve. Weak here prevents a compiler that captures a compartment
+    /// from forming a cycle through the interpreter.
+    compiler_registry: std::rc::Weak<crate::compartment::CompilerRegistry>,
     #[boot_new(false)]
     #[gc_root(none)]
     #[quiescent(retained)]
@@ -251,6 +265,23 @@ pub struct Interp {
     /// for the exception/`this` semantics that observe it; the covered
     /// subset does not yet branch on it.
     strict: bool,
+    #[boot_new(false)]
+    #[gc_root(none)]
+    #[quiescent(false)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Set by `CURRENT` in a sloppy frame and taken by the `CONST_LOCAL` or
+    /// `CONST_CLOSURE` that binds a function expression's own name, which
+    /// then ignores a sloppy write: the binding is immutable, but only a
+    /// strict write to it throws (CreateImmutableBinding(name, false),
+    /// ES2024 15.2.5; XS's `ignore` in `fxRunID`). The compiler always emits
+    /// the two together, so it is never set at a crank boundary.
+    callee_binding_pending: bool,
     #[boot_new(Meter::new())]
     #[gc_root(none)]
     #[quiescent(retained)]
@@ -405,11 +436,29 @@ pub struct Interp {
     /// overflowing the real thread stack. (A recursion with its own small node
     /// budget — the compact `flat` path's 1,024-node pre-check — and a
     /// redispatch that loops instead, such as the bound-function fold and the
-    /// `call`/`apply` trampolines in [`Self::invoke_value`], need no charge.)
+    /// `call`/`apply` trampolines in [`Self::invoke_value`] and the bound
+    /// `instanceof` walk in [`Self::instanceof_operator`], need no charge.)
     /// Always `0` at a crank boundary. A leaked charge indicates an unwound
     /// native entry; accepting it would make a restored twin halt at a different
     /// recursion depth, so the boundary policy refuses it.
     native_depth: usize,
+    #[boot_new(0)]
+    #[gc_root(none)]
+    #[quiescent(zero)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The part of [`Self::native_depth`] that frames on [`Self::call_stack`]
+    /// hold (the sum of their `CallerState::held`; STACK-DEPTH-REFACTOR.md
+    /// §4.5), so that a path restoring the depth it saved can tell the units
+    /// those frames released in between, which the recursive shape released
+    /// later, from its own. An `eval` that parks the call stack parks this
+    /// with it. Always `0` at a crank boundary.
+    held_total: usize,
     #[boot_new(Tracked::new(
         Vec::new(),
         snapshot_dirt.clone(),
@@ -1759,6 +1808,41 @@ pub struct Interp {
     /// entries. Maintained by every counted mutation in
     /// [`crate::bulk`]; whole-row drops decrement via `drop_refs`.
     side_refs: SideRefCounts,
+    #[boot_new(std::collections::HashMap::new())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(late, map)]
+    #[gc_chunk(none)]
+    #[gc_slots(map, guest_compartment)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Per-instance guest `Compartment` internal slots, keyed by the instance
+    /// slot like [`Self::proxies`]. Membership is the brand every
+    /// `Compartment.prototype` method checks. See [`GuestCompartmentData`];
+    /// `designs/ironhorse-guest-compartment.md` states the ownership contract.
+    ///
+    /// NOT a snapshot table yet: the environment itself already travels (the
+    /// `Environments` section, with its `host_owned` flag), but the
+    /// instance-to-global association does not, so a machine holding a guest
+    /// compartment is refused at the persist gate rather than silently
+    /// restored without one. See [`Interp::stored_unpersistable_row_inner`].
+    guest_compartments: std::collections::HashMap<crate::value::SlotIndex, GuestCompartmentData>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The realm's `%Compartment.prototype%` (a boot object), so a
+    /// `new Compartment()` instance chains to it and its methods resolve.
+    /// `SlotIndex::NULL` until `create_compartment` runs.
+    compartment_proto: crate::value::SlotIndex,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[gc_root(index)]
     #[quiescent(retained)]
@@ -1806,6 +1890,77 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     weakset_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The realm's `%WeakRef.prototype%` (a boot object), so a
+    /// `new WeakRef(o)` instance chains to it and `deref` resolves.
+    weak_ref_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The realm's `%FinalizationRegistry.prototype%` (a boot object), so a
+    /// `new FinalizationRegistry(f)` instance chains to it and
+    /// `register`/`unregister` resolve.
+    finalization_registry_proto: crate::value::SlotIndex,
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::WeakRefs.mask()))]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(weak_ref)]
+    #[runtime_keys(none)]
+    #[gc_hook(late, map)]
+    #[gc_chunk(none)]
+    #[gc_slots(map, weak_ref)]
+    #[gc_weak(weak_ref)]
+    #[snapshot_table(WeakRefs, 43, 43, Serialized, "weak_refs")]
+    /// Per-instance `WeakRef` internal slots (XS's `XS_WEAK_REF_KIND`
+    /// property, `xsMapSet.c`), keyed by the instance slot like
+    /// [`Self::proxies`]. Membership is the brand `deref` checks. The target
+    /// is a WEAK edge: full marking never follows it, and the dead-key prune
+    /// (`fxMarkWeakStuff`) nulls a target the fixpoint left unmarked; the
+    /// conservative partial collector pins it instead. See [`WeakRefData`].
+    /// Travels as the `WKRF` atom (schema 37 / format 25): the owner and its
+    /// target, nulled or live.
+    weak_refs: Tracked<std::collections::HashMap<crate::value::SlotIndex, WeakRefData>>,
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::FinalizationRegistries.mask()))]
+    #[gc_root(registries_with_cells)]
+    #[quiescent(retained)]
+    #[persist_refs(finalization)]
+    #[runtime_keys(none)]
+    #[gc_hook(early, map)]
+    #[gc_chunk(finalization)]
+    #[gc_slots(map, finalization_registry)]
+    #[gc_weak(finalization_registry)]
+    #[snapshot_table(FinalizationRegistries, 44, 44, Serialized, "finalization_registries")]
+    /// Per-instance `FinalizationRegistry` internal slots (XS's
+    /// `XS_FINALIZATION_REGISTRY_KIND` closure and its `[[Cells]]`,
+    /// `xsMapSet.c`), keyed by the instance slot. Membership is the brand
+    /// `register`/`unregister` check. The callback and every cell's holdings
+    /// are STRONG edges from the registry; cell targets and tokens are weak,
+    /// nulled by the dead-key prune (`fxMarkFinalizationRegistry`), which also
+    /// flags the registry for the next job boundary's cleanup. A registry
+    /// with cells is a ROOT, as XS's `mxFinalizationRegistries` list makes
+    /// it: its callback still runs for a target that dies after the guest
+    /// drops the registry. Holdings may be chunk-bearing (a string), so the
+    /// table is an EARLY row with a chunk-remap policy. See
+    /// [`FinalizationRegistryData`]. Travels as the `FNRG` atom (schema 37 /
+    /// format 25): the callback, the CHANGED flag and every cell.
+    finalization_registries:
+        Tracked<std::collections::HashMap<crate::value::SlotIndex, FinalizationRegistryData>>,
     #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Buffers.mask()))]
     #[gc_root(none)]
     #[quiescent(retained)]
@@ -2025,6 +2180,21 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
+    /// The private prototype of every for-in enumerator (XS's
+    /// `mxEnumeratorFunction.prototype`, a boot object): it inherits
+    /// `%IteratorPrototype%` and owns the enumerator's `next`, which no
+    /// global names.
+    enumerator_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
     iterator_proto: crate::value::SlotIndex,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[gc_root(index)]
@@ -2037,6 +2207,23 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     iterator_wrapper_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The realm's `%IteratorHelperPrototype%` (a boot object chaining to
+    /// `%Iterator.prototype%`): the prototype every lazy helper instance
+    /// produced by `map`/`filter`/`take`/`drop`/`flatMap` chains to. Like the
+    /// sibling built-in iterator prototypes, it carries `next` and `return`
+    /// only; its own `Symbol.toStringTag` is unread on the covered surface and
+    /// omitted.
+    iterator_helper_proto: crate::value::SlotIndex,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[gc_root(index)]
     #[quiescent(retained)]
@@ -2450,9 +2637,13 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(GenRunStack, 22, 22, EmptyAtBoundary, "gen_run_stack")]
-    /// The stack of generators currently executing on a nested
-    /// [`Self::resume_generator`] dispatch (its top is the innermost). The
-    /// `YIELD` arm reads the top to snapshot the right instance.
+    /// The stack of generators currently executing, on a nested
+    /// [`Self::resume_generator`] dispatch or resumed in their callers' loop
+    /// (STACK-DEPTH-REFACTOR.md C4). The `YIELD` arm reads the top, the
+    /// innermost, to snapshot the right instance. A throw can leave a body
+    /// resumed in place while the entries of nested dispatches above it
+    /// still wait for their drivers to pop them, so that body's frame drops
+    /// its own entry, by its `call_depth_base`.
     gen_run_stack: Vec<GenRunFrame>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
@@ -2645,6 +2836,83 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// Settlement order until the first report. Root every candidate until the job drain decides which remains unhandled.
     pending_rejections: Vec<crate::value::SlotIndex>,
+    #[boot_new(Vec::new())]
+    #[gc_root(indices)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The inert `constructor` stand-ins `lockdown()` installs, minted at boot
+    /// in `create_locked_down_constructors` and wired by step 2, in the order
+    /// `locked_down_prototypes` gives.
+    ///
+    /// XS mints these inside `fx_lockdown` with `fxDuplicateInstance`, and
+    /// following that literally put them ABOVE `boot_slot_count`, where
+    /// `function_persists` has no reconstruction recipe -- so
+    /// `Function.prototype.constructor` held a reference to a non-persisting
+    /// native and a locked-down machine could not be stored at all. Measured:
+    /// `before lockdown: None`, `after lockdown: Some("a stored reference to a
+    /// non-persisted native function")`.
+    ///
+    /// The divergence from XS is only in WHEN the objects are created, never in
+    /// what a guest can observe: they are unreferenced until step 2 wires them,
+    /// and being boot instances they are already in step 5's derived root set.
+    locked_down_constructors: Vec<crate::value::SlotIndex>,
+    #[boot_new(std::collections::HashSet::new())]
+    #[gc_root(indices)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The intrinsic objects whose boot surface may still be partly
+    /// uninstalled: every holder in the boot rosters but the global object,
+    /// until [`Self::materialize_intrinsic_own_surface`] completes it. A
+    /// guest's first new key on one installs the rest first, so every boot
+    /// key precedes it. Derived at boot and never persisted: a restored
+    /// machine starts with every holder pending, and completing a complete
+    /// surface again changes nothing.
+    pending_surfaces: std::collections::HashSet<crate::value::SlotIndex>,
+    #[boot_new(std::collections::HashMap::new())]
+    #[gc_root(keys)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Each intrinsic object's keys by their place in its creation order
+    /// ([`intrinsic_order::INTRINSIC_KEY_ORDER`]), so a member installed
+    /// lazily takes its place among the others
+    /// ([`Self::place_intrinsic_key`]). Derived at boot and never persisted:
+    /// the boot fingerprint covers the tables it comes from.
+    intrinsic_key_ranks: std::collections::HashMap<
+        crate::value::SlotIndex,
+        &'static crate::interp::intrinsic_order::IntrinsicKeyRanks,
+    >,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[gc_root(index)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Private boolean slot, allocated below `boot_slot_count`. No guest
+    /// object refers to it; only successful lockdown writes true. Its index
+    /// is boot-derived and its value travels with the slot arena.
+    lockdown_complete: crate::value::SlotIndex,
     #[boot_new(std::collections::VecDeque::new())]
     #[gc_root(jobs)]
     #[quiescent(empty)]
@@ -2681,20 +2949,32 @@ pub struct Interp {
     /// [`ReactionKind::Combine`]'s combinator index; append-only within a run,
     /// consumed as its element reactions drain. See [`CombinatorState`].
     combinators: Tracked<Vec<CombinatorState>>,
-    #[boot_new(Vec::new())]
+    #[boot_new(Tracked::new(
+        Vec::new(),
+        snapshot_dirt.clone(),
+        SnapshotSection::AsyncInstances.mask(),
+    ))]
     #[gc_root(none)]
     #[quiescent(retained)]
-    #[persist_refs(none)]
+    #[persist_refs(from_async)]
     #[runtime_keys(none)]
     #[gc_hook(held, mutable)]
     #[gc_chunk(from_async)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
-    #[snapshot_table(none)]
+    #[snapshot_table(FromAsync, 42, 42, Serialized, "from_async")]
     /// In-flight `Array.fromAsync` native async state machines. Append-only
     /// within a run; indexed by the [`ReactionKind::FromAsyncNext`]/… payload.
     /// See [`FromAsyncData`].
-    from_async: Vec<FromAsyncData>,
+    ///
+    /// Carried in the `ASYN` payload behind the async generators since format
+    /// 24 (architecture finding F127). It was a documented SATELLITE of
+    /// `combinators` before that — riding its coverage but deliberately not
+    /// travelling, on the argument that the persist gate refused every machine
+    /// holding a live entry, so rebuilding the table empty was observationally
+    /// exact. That argument was sound and its premise is gone: the gate admits
+    /// the `FromAsync*` kinds now, so the table travels.
+    from_async: Tracked<Vec<FromAsyncData>>,
     #[boot_new(None)]
     #[gc_root(none)]
     #[quiescent(retained)]

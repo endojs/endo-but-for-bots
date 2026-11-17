@@ -27,6 +27,78 @@ impl Interp {
     }
 
     pub(super) fn render_at(&self, s: &Slot, depth: usize) -> Result<String, Step> {
+        let mut out = String::new();
+        self.render_into(s, depth, &mut out)?;
+        Ok(out)
+    }
+
+    /// Append the render of `s` to `out`. An array renders its elements
+    /// joined with commas, each in turn; the nesting is an explicit stack of
+    /// open arrays (STACK-DEPTH-REFACTOR.md B8), each charged
+    /// [`Self::render_descend`] before its first element as the recursion
+    /// was, so the same render is refused at the same depth on a flat host
+    /// stack.
+    fn render_into(&self, s: &Slot, depth: usize, out: &mut String) -> Result<(), Step> {
+        // (array, next index, the depth its elements render at)
+        let mut open: Vec<(crate::value::SlotIndex, u32, usize)> = Vec::new();
+        let mut next = Some((*s, depth));
+        loop {
+            if let Some((value, depth)) = next.take() {
+                match value.value {
+                    // An `arguments` object is stored in the array side table
+                    // for its indexed elements but renders as its tag, below.
+                    Payload::Reference(r)
+                        if !self.arguments_objects.contains(&r) && self.arrays.contains_key(&r) =>
+                    {
+                        // An array stringifies through `Array.prototype.toString`
+                        // → `join(",")`: each index in `[0, length)` rendered,
+                        // holes and `undefined`/`null` rendered as the empty
+                        // string, joined with commas.
+                        open.push((r, 0, self.render_descend(depth)?));
+                    }
+                    _ => out.push_str(&self.render_leaf(&value, depth)?),
+                }
+            }
+            let Some(top) = open.last_mut() else {
+                return Ok(());
+            };
+            let (r, i, depth) = *top;
+            let a = &self.arrays[&r];
+            if i >= a.length {
+                open.pop();
+                continue;
+            }
+            top.1 += 1;
+            if i > 0 {
+                out.push(',');
+            }
+            if let Some(item) = a.items().get(&i) {
+                if item.kind != Kind::Undefined && item.kind != Kind::Null {
+                    next = Some((*item, depth));
+                }
+            } else if let Some(id) = self.symbol_ids.get(i.to_string()).copied() {
+                // A restrictive `defineProperty` descriptor moves the index
+                // out of the compact item table and into the ordinary
+                // property chain. Include a materialized data index in the
+                // diagnostic as the guest `join` path's MOP read does. (An
+                // accessor would require re-entering guest code after the run
+                // and remains outside this read-only renderer.)
+                if let Some(property) = self.find_property(r, id) {
+                    let item = self.slots.get(property);
+                    if item.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0
+                        && item.kind != Kind::Undefined
+                        && item.kind != Kind::Null
+                    {
+                        next = Some((item, depth));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The render of a value that is not an array (see
+    /// [`Self::render_into`]).
+    fn render_leaf(&self, s: &Slot, depth: usize) -> Result<String, Step> {
         Ok(match s.value {
             Payload::String(off) => self.str_text_lossy(off),
             // A BigInt completion renders as its decimal magnitude (XS's
@@ -41,45 +113,11 @@ impl Interp {
                     // builtinTag is `Arguments` (its prototype is
                     // `Object.prototype`, so `String(arguments)` does NOT run
                     // `Array.prototype.join`). It is stored in the array side
-                    // table for its indexed elements, so this arm precedes the
-                    // array arm to keep the join from mis-rendering `1,2` where
-                    // the oracle reports `[object Arguments]`.
+                    // table for its indexed elements, so `render_into` leaves
+                    // it to this arm rather than joining it, which would
+                    // mis-render `1,2` where the oracle reports
+                    // `[object Arguments]`.
                     "[object Arguments]".to_string()
-                } else if let Some(a) = self.arrays.get(&r) {
-                    // An array stringifies through `Array.prototype.toString` →
-                    // `join(",")`: each index in `[0, length)` rendered, holes
-                    // and `undefined`/`null` rendered as the empty string,
-                    // joined with commas.
-                    let depth = self.render_descend(depth)?;
-                    let mut out = String::new();
-                    for i in 0..a.length {
-                        if i > 0 {
-                            out.push(',');
-                        }
-                        if let Some(item) = a.items().get(&i) {
-                            if item.kind != Kind::Undefined && item.kind != Kind::Null {
-                                out.push_str(&self.render_at(item, depth)?);
-                            }
-                        } else if let Some(id) = self.symbol_ids.get(i.to_string()).copied() {
-                            // A restrictive `defineProperty` descriptor moves
-                            // the index out of the compact item table and into
-                            // the ordinary property chain. Include a
-                            // materialized data index in the diagnostic as the
-                            // guest `join` path's MOP read does. (An accessor
-                            // would require re-entering guest code after the
-                            // run and remains outside this read-only renderer.)
-                            if let Some(property) = self.find_property(r, id) {
-                                let item = self.slots.get(property);
-                                if item.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0
-                                    && item.kind != Kind::Undefined
-                                    && item.kind != Kind::Null
-                                {
-                                    out.push_str(&self.render_at(&item, depth)?);
-                                }
-                            }
-                        }
-                    }
-                    out
                 } else if self.typed_arrays.contains_key(&r) {
                     // A TypedArray's `toString` IS `Array.prototype.toString`
                     // (`%TypedArray%.prototype.toString === Array.prototype.
@@ -89,7 +127,7 @@ impl Interp {
                     // `Object.prototype.toString`. Render each in-bounds element.
                     let ta = self.typed_arrays[&r];
                     let mut out = String::new();
-                    for i in 0..ta.length {
+                    for i in 0..self.ta_length_or_zero(ta) {
                         if i > 0 {
                             out.push(',');
                         }
@@ -237,6 +275,100 @@ impl Interp {
             object = self.instance_prototype(object);
         }
         "<prototype cycle>".to_string()
+    }
+
+    /// ECMAScript `ToString` of an escaping thrown value, run IN the guest.
+    ///
+    /// This is the symmetric twin of the oracle shim's
+    /// `endor_error_from_exception` (`xs-oracle/csrc/xs_shim.c:126`), which
+    /// runs `fxToString` on `mxException` inside a `mxTry`/`mxCatch` and falls
+    /// back to the literal `(exception stringification threw)` when the
+    /// stringification itself throws. XS reports what a guest `toString`
+    /// returns, so a `Test262Error` whose prototype `toString` yields
+    /// `"Test262Error: " + this.message` (`harness/sta.js:18`) is reported by
+    /// that name. Nothing readable without running guest code can produce that
+    /// string, which is why [`Self::render_uncaught`]'s guest-free
+    /// approximation cannot match it and must not try.
+    ///
+    /// **The cost is not charged.** The shim reads `out->computrons`,
+    /// `meter_raw`, `heap_count` and `chunks_size` from the machine BEFORE it
+    /// stringifies (`xs_shim.c:507-510`; 512 is the stringify call
+    /// those reads are contrasted with), so XS's reported meter excludes the
+    /// diagnostic render. Snapshotting the meter and the dispatch count across
+    /// it is therefore what makes the two engines comparable, not a
+    /// convenience: charging it here would make every throwing case's
+    /// computrons disagree with an oracle that does not charge it.
+    ///
+    /// Callable only where a live `code` buffer exists, because `ToPrimitive`
+    /// threads it into `call_primitive_method` to resume the dispatch loop.
+    /// That is the throw's own exit in `run_inner`, which still holds both.
+    fn render_thrown_with_guest(&mut self, code: &[u8], value: Slot) -> Result<String, Step> {
+        let meter = self.meter.state();
+        let dispatched = self.n_dispatched;
+        // Bound the window. The default boundary spends ZERO guest
+        // instructions, so opting in must not hand a thrown value unbounded
+        // execution: `throw {toString(){ while(true){} }}` otherwise never
+        // returns, and the in-repo harness suites run with `case_timeout` 0.
+        // A finite `step_limit` bounds dispatches AND, via the bounded-mode
+        // wedge guard (`dispatch.rs:193`), live slots at
+        // `BOUNDED_RUN_SLOT_CEILING` — so an allocating render trips
+        // `Halt::StepLimit` instead of panicking through `heap_exhausted()`
+        // and rewriting the run's verdict to `HeapExhausted`. Either way the
+        // halt propagates below rather than becoming a string.
+        let step_limit = self.step_limit;
+        self.step_limit = dispatched.saturating_add(RENDER_DISPATCH_BUDGET);
+        let rendered = self.to_string_units(code, value);
+        self.step_limit = step_limit;
+        self.meter.restore(meter);
+        self.n_dispatched = dispatched;
+        match rendered {
+            Ok(units) => Ok(SymbolName::from_units(&units).to_string()),
+            // A GUEST throw inside `toString` is the shim's own sentinel case:
+            // `endor_error_from_exception` catches it and reports this literal.
+            // An `Object.create(null)` with no `toString` reaches it in both
+            // engines.
+            Err(Step::Threw { .. }) => Ok("(exception stringification threw)".to_string()),
+            // Anything else is the ENGINE saying it cannot continue --
+            // `NotImplemented`, `Refused`, `StepLimit`, `EngineInvariant`, an
+            // escaped control transfer. Collapsing those into the sentinel
+            // above would make a port coverage gap indistinguishable from a
+            // guest throw and record it as AGREEMENT with the oracle, which is
+            // the laundering this whole change exists to undo, one layer down.
+            // `finish_step` turns it into the honest halt instead, and the 262
+            // harness names it (`declined_verdict`, `xst.rs:891`).
+            Err(fault) => Err(fault),
+        }
+    }
+
+    /// [`Self::render_thrown_with_guest`] for the one throw that escapes a
+    /// run, leaving every other `Step` to the guest-free boundary.
+    pub(super) fn finish_step_rendering_throws(
+        &mut self,
+        code: &[u8],
+        step: Step,
+        enabled: bool,
+    ) -> Halt {
+        // RELABEL, never construct. `throw_construction_sites.rs` locks
+        // `Halt::Throw` to the two places that may create one, and this is not
+        // a third: `finish_step` still builds the halt, off the same unwound
+        // jump chain, and only its diagnostic text is replaced afterwards.
+        if let (true, Step::Threw { value, .. }) = (enabled, &step) {
+            let value = *value;
+            match self.render_thrown_with_guest(code, value) {
+                Ok(text) => {
+                    let mut halt = self.finish_step(step);
+                    if let Halt::Throw { rendered, .. } = &mut halt {
+                        *rendered = text;
+                    }
+                    return halt;
+                }
+                // The render faulted. Report the fault, not the throw: the
+                // guest's own verdict is no longer the whole story, and a
+                // silently sentinel-ised gap is worse than a named halt.
+                Err(fault) => return self.finish_step(fault),
+            }
+        }
+        self.finish_step(step)
     }
 
     /// Once a throw reaches the host, rendering must not resume the guest or

@@ -3,7 +3,12 @@
 use super::super::*;
 
 impl Interp {
-    pub(super) fn dispatch_eval_reference(&mut self, code: &[u8], name: u16) -> Result<(), Step> {
+    pub(super) fn dispatch_eval_reference(
+        &mut self,
+        code: &[u8],
+        name: u16,
+        next_opcode: Option<u8>,
+    ) -> Result<(), Step> {
         // Additive `with`/eval environment walk: consult the active
         // environment chain first (XS's `mxEnvironment` walk). When
         // an object environment binds `name` (scopable), push a real
@@ -16,7 +21,18 @@ impl Interp {
         // walk; that throw is a catchable guest error.
         let resolved = (self.resolve_env_reference(code, name))?;
         if let Some(target) = resolved {
-            self.push(Slot::of(Kind::Reference, Payload::Reference(target)));
+            let reference = Slot::of(Kind::Reference, Payload::Reference(target));
+            // A call through a `with` object's binding takes that object as
+            // its receiver (WithBaseObject): when the callee load follows,
+            // XS overwrites the `undefined` receiver the call pushed below.
+            if next_opcode == Some(Opcode::XS_CODE_GET_THIS_VARIABLE as u8)
+                && !self.is_environment_instance(target)
+            {
+                if let Some(receiver) = self.stack.last_mut() {
+                    *receiver = reference;
+                }
+            }
+            self.push(reference);
             return Ok(());
         }
         let env = if self.id_map.contains_key(&name) {
@@ -74,6 +90,15 @@ impl Interp {
         }
         let v = if self.id_map.contains_key(&name) {
             self.resolve_frame_get(name)
+        } else if let Some(&cell) = self.environment.global_lexicals.get(&name) {
+            // A compartment's `globalLexicals` sit BETWEEN the frame and the
+            // global object, so they shadow a global of the same name and are
+            // shadowed in turn by anything the evaluated source declares
+            // (which lands in `id_map`). Not a property of the global object
+            // and not reached through its [[Get]]: the binding is a standalone
+            // cell, which is what keeps it off `globalThis`.
+            let cell = self.slots.get(cell);
+            Some(Slot::of(cell.kind, cell.value))
         } else if self.environment.global_props.contains_key(&name) {
             // A global object binding is an Object Environment
             // Record binding. Read it through the object's full
@@ -290,6 +315,41 @@ impl Interp {
             // unmetered: XS's own chain walk is already folded into
             // this arm's measured cost, and both forms stay
             // bit-exact against the pin.
+            if let Some(&cell) = self.environment.global_lexicals.get(&name) {
+                // The write-side twin of the lexical arm in
+                // `dispatch_get_variable`: assignment reaches the cell, never
+                // the global object, so it neither creates nor overwrites a
+                // global of the same name.
+                if self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0 {
+                    // A non-writable source descriptor makes the lexical a
+                    // `const` BINDING, not a non-writable property, and the
+                    // difference is exactly the strictness question: a store
+                    // to an immutable binding throws however strict the
+                    // assigning code is (ECMA-262 9.1.1.1.5 `SetMutableBinding`
+                    // step 2 forces `S` to true), which is why `const c = 1;
+                    // c = 2` throws in sloppy code too. Both of this engine's
+                    // other const paths -- the frame-local one above and the
+                    // `with`-object `EnvironmentSet::Const` -- already throw
+                    // unconditionally; gating this one on `self.strict` made
+                    // the compartment's OWN evaluators (`globalThis.eval`,
+                    // `globalThis.Function`, which run sloppy source) silently
+                    // discard the write. `evaluate` is always strict, so no
+                    // test saw it.
+                    let error = self.internal_error(
+                        "TypeError",
+                        format!("set {}: const", self.property_debug_name(name)),
+                    );
+                    return Err(self.raise_js(error));
+                }
+                let slot = self.slots.get_mut(cell);
+                slot.kind = value.kind;
+                slot.value = value.value;
+                // The store is one built-in step, as it is in the
+                // object-environment and global arms beside this one.
+                self.meter.tick_builtin();
+                self.push(value);
+                return Ok(());
+            }
             let own_global = self.environment.global_props.contains_key(&name);
             let resolvable = own_global || self.mop_has(code, self.object_proto, name)?;
             if !resolvable && self.strict {

@@ -29,8 +29,8 @@ built-ins/Proxy/revocable/revoke-returns-undefined.js sloppy pass
 built-ins/Proxy/revocable/revoke-returns-undefined.js strict pass
 built-ins/Proxy/revocable/revoke.js sloppy pass
 built-ins/Proxy/revocable/revoke.js strict pass
-built-ins/Proxy/revocable/target-is-revoked-function-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"object\"», «string\"function\"») to be true"
-built-ins/Proxy/revocable/target-is-revoked-function-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"object\"», «string\"function\"») to be true"
+built-ins/Proxy/revocable/target-is-revoked-function-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"object\"», «\"function\"») to be true"
+built-ins/Proxy/revocable/target-is-revoked-function-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"object\"», «\"function\"») to be true"
 built-ins/Proxy/revocable/target-is-revoked-proxy.js sloppy pass
 built-ins/Proxy/revocable/target-is-revoked-proxy.js strict pass
 built-ins/Proxy/revocable/tco-fn-realm.js sloppy skip:feature:tail-call-optimization

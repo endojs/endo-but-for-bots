@@ -1,0 +1,507 @@
+--- a/ironhorse-vm/src/interp/frames.rs
++++ b/ironhorse-vm/src/interp/frames.rs
+@@ -89,6 +89,30 @@
+         result
+     }
+ 
++    /// PROTOTYPE (stack-depth report): run a forwarding walk that charges one
++    /// light unit per hop through `hop` and releases every held unit on every
++    /// return path, so `native_depth` at each point of the walk equals the
++    /// value the recursive shape (one `with_native_frame` per hop) produced.
++    #[inline]
++    pub(super) fn with_forwarding_walk<T>(
++        &mut self,
++        f: impl FnOnce(&mut Self, &mut usize) -> Result<T, Step>,
++    ) -> Result<T, Step> {
++        let mut held = 0usize;
++        let result = f(self, &mut held);
++        self.leave_native_frame(held);
++        result
++    }
++
++    /// One hop of [`Self::with_forwarding_walk`]: the check-and-charge the
++    /// recursive shape's `with_native_frame(LIGHT_FRAME_COST, ..)` performed.
++    #[inline]
++    pub(super) fn forwarding_hop(&mut self, held: &mut usize) -> Result<(), Step> {
++        self.enter_native_frame(LIGHT_FRAME_COST)?;
++        *held += LIGHT_FRAME_COST;
++        Ok(())
++    }
++
+     /// One step of an iterative prototype-chain walk that may pass through a
+     /// Proxy (`OrdinaryHasInstance`, `Object.prototype.isPrototypeOf`). A
+     /// Proxy forwards `[[GetPrototypeOf]]` to its target, and a spec-legal
+--- a/ironhorse-vm/src/interp/property.rs
++++ b/ironhorse-vm/src/interp/property.rs
+@@ -797,8 +797,32 @@
+         inst: crate::value::SlotIndex,
+         id: u16,
+     ) -> Result<Option<OrdinaryDescriptor>, Step> {
+-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+-            vm.mop_get_own_property_inner(code, inst, id)
++        // PROTOTYPE: see `mop_get_with_proxy_metering`.
++        self.with_forwarding_walk(|vm, held| {
++            let mut inst = inst;
++            loop {
++                vm.forwarding_hop(held)?;
++                if vm.proxies.contains_key(&inst) {
++                    let (target, handler) =
++                        vm.proxy_target_handler(inst, "getOwnPropertyDescriptor")?;
++                    match vm.proxy_trap(code, handler, "getOwnPropertyDescriptor")? {
++                        None => {
++                            inst = target;
++                            continue;
++                        }
++                        Some(trap) => {
++                            return vm.proxy_get_own_property_trapped(
++                                code,
++                                target,
++                                handler,
++                                trap,
++                                ReadKey::Id(id),
++                            )
++                        }
++                    }
++                }
++                return vm.mop_get_own_property_inner(code, inst, id);
++            }
+         })
+     }
+ 
+@@ -950,8 +974,27 @@
+         id: u16,
+         desc: OrdinaryDescriptor,
+     ) -> Result<bool, Step> {
+-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+-            vm.mop_define_own_property_inner(code, inst, id, desc)
++        // PROTOTYPE: see `mop_get_with_proxy_metering`.
++        self.with_forwarding_walk(|vm, held| {
++            let mut inst = inst;
++            loop {
++                vm.forwarding_hop(held)?;
++                if vm.proxies.contains_key(&inst) {
++                    let (target, handler) = vm.proxy_target_handler(inst, "defineProperty")?;
++                    match vm.proxy_trap(code, handler, "defineProperty")? {
++                        None => {
++                            inst = target;
++                            continue;
++                        }
++                        Some(trap) => {
++                            return vm.proxy_define_own_property_trapped(
++                                code, target, handler, trap, id, desc,
++                            )
++                        }
++                    }
++                }
++                return vm.mop_define_own_property_inner(code, inst, id, desc);
++            }
+         })
+     }
+ 
+@@ -1139,17 +1182,51 @@
+         meter_forwarded_target: bool,
+         after_active_trap: bool,
+     ) -> Result<Slot, Step> {
+-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+-            vm.mop_get_with_proxy_metering_inner(
+-                code,
+-                inst,
+-                key,
+-                receiver,
+-                proxy_trap_metering,
+-                meter_terminal_wrapper,
+-                meter_forwarded_target,
+-                after_active_trap,
+-            )
++        // PROTOTYPE: trap-absent Proxy layers are a tail call of the same
++        // internal method on the target; walk them with a cursor.
++        self.with_forwarding_walk(|vm, held| {
++            let mut inst = inst;
++            let mut meter_forwarded_target = meter_forwarded_target;
++            loop {
++                vm.forwarding_hop(held)?;
++                if vm.proxies.contains_key(&inst) {
++                    let (target, handler) = vm.proxy_target_handler(inst, "get")?;
++                    match vm.proxy_trap(code, handler, "get")? {
++                        None => {
++                            if proxy_trap_metering != 0 {
++                                vm.meter.tick_raw(ARRAY_ITERATOR_PROXY_FORWARD_METERING);
++                            }
++                            meter_forwarded_target =
++                                meter_forwarded_target || proxy_trap_metering != 0;
++                            inst = target;
++                            continue;
++                        }
++                        Some(trap) => {
++                            return vm.proxy_get_trapped(
++                                code,
++                                target,
++                                handler,
++                                trap,
++                                key,
++                                receiver,
++                                proxy_trap_metering,
++                                meter_forwarded_target,
++                                meter_terminal_wrapper,
++                            )
++                        }
++                    }
++                }
++                return vm.mop_get_with_proxy_metering_inner(
++                    code,
++                    inst,
++                    key,
++                    receiver,
++                    proxy_trap_metering,
++                    meter_terminal_wrapper,
++                    meter_forwarded_target,
++                    after_active_trap,
++                );
++            }
+         })
+     }
+ 
+@@ -1463,8 +1540,25 @@
+         value: Slot,
+         receiver: Slot,
+     ) -> Result<bool, Step> {
+-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+-            vm.mop_set_inner(code, inst, id, value, receiver)
++        // PROTOTYPE: see `mop_get_with_proxy_metering`.
++        self.with_forwarding_walk(|vm, held| {
++            let mut inst = inst;
++            loop {
++                vm.forwarding_hop(held)?;
++                if vm.proxies.contains_key(&inst) {
++                    let (target, handler) = vm.proxy_target_handler(inst, "set")?;
++                    match vm.proxy_trap(code, handler, "set")? {
++                        None => {
++                            inst = target;
++                            continue;
++                        }
++                        Some(trap) => {
++                            return vm.proxy_set_trapped(code, target, handler, trap, id, value, receiver)
++                        }
++                    }
++                }
++                return vm.mop_set_inner(code, inst, id, value, receiver);
++            }
+         })
+     }
+ 
+--- a/ironhorse-vm/src/interp/property/proxy.rs
++++ b/ironhorse-vm/src/interp/property/proxy.rs
+@@ -371,6 +371,19 @@
+             Some(t) => t,
+             None => return self.mop_define_own_property(code, target, id, desc),
+         };
++        self.proxy_define_own_property_trapped(code, target, handler, trap, id, desc)
++    }
++
++    /// PROTOTYPE: the trap-present half of [`Self::proxy_define_own_property`].
++    pub(in crate::interp) fn proxy_define_own_property_trapped(
++        &mut self,
++        code: &[u8],
++        target: crate::value::SlotIndex,
++        handler: crate::value::SlotIndex,
++        trap: Slot,
++        id: u16,
++        desc: OrdinaryDescriptor,
++    ) -> Result<bool, Step> {
+         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+         let key = self.property_key_slot(id)?;
+@@ -606,6 +619,21 @@
+             Some(t) => t,
+             None => return self.mop_set(code, target, id, value, receiver),
+         };
++        self.proxy_set_trapped(code, target, handler, trap, id, value, receiver)
++    }
++
++    /// PROTOTYPE: the trap-present half of [`Self::proxy_set`].
++    #[allow(clippy::too_many_arguments)]
++    pub(in crate::interp) fn proxy_set_trapped(
++        &mut self,
++        code: &[u8],
++        target: crate::value::SlotIndex,
++        handler: crate::value::SlotIndex,
++        trap: Slot,
++        id: u16,
++        value: Slot,
++        receiver: Slot,
++    ) -> Result<bool, Step> {
+         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+         let key = self.property_key_slot(id)?;
+--- a/ironhorse-vm/src/interp/invoke.rs
++++ b/ironhorse-vm/src/interp/invoke.rs
+@@ -347,6 +347,18 @@
+         this: Slot,
+         initial_args: &[Slot],
+     ) -> Result<Slot, Step> {
++        // PROTOTYPE: trap-absent `[[Call]]` Proxy layers join the loop below.
++        self.with_forwarding_walk(|vm, held| vm.invoke_value_walk(code, func, this, initial_args, held))
++    }
++
++    fn invoke_value_walk(
++        &mut self,
++        code: &[u8],
++        func: Slot,
++        this: Slot,
++        initial_args: &[Slot],
++        held: &mut usize,
++    ) -> Result<Slot, Step> {
+         // The bound-function fold and the `Function.prototype.call`/`apply`
+         // trampolines below each redispatch to another callable. They loop
+         // here rather than recurse: neither enters a charged frame, so a chain
+@@ -357,6 +369,9 @@
+         let mut func = func;
+         let mut this = this;
+         let mut owned_args: Option<Vec<Slot>> = None;
++        // PROTOTYPE: whether `args` is a list this activation would have
++        // received as a fresh `invoke_value` argument (never rebuilt by a step).
++        let mut args_fresh = true;
+         loop {
+             let args: &[Slot] = owned_args.as_deref().unwrap_or(initial_args);
+             let f = match func.value {
+@@ -364,7 +379,55 @@
+                 _ => return Err(self.catchable_type_error_msg("call: not a function".into())),
+             };
+             if self.proxies.contains_key(&f) {
+-                return self.proxy_call(code, f, this, args);
++                // PROTOTYPE: `proxy_call` + `proxy_call_inner`, with the
++                // trap-absent forward and the trap call both continuing
++                // this loop (both were tail calls of `invoke_value`).
++                self.forwarding_hop(held)?;
++                let (target, handler) = self.proxy_target_handler(f, "apply")?;
++                let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
++                match self.proxy_trap(code, handler, "apply")? {
++                    None => {
++                        let metering = if self.proxies.contains_key(&target) {
++                            PROXY_CALL_FORWARD_PROXY_METERING
++                        } else if self.bound_functions.contains_key(&target) {
++                            PROXY_CALL_FORWARD_BOUND_METERING
++                        } else if self.native_of(target).is_some() {
++                            PROXY_CALL_FORWARD_NATIVE_METERING
++                        } else if let Some(method) = self.method_of(target) {
++                            if matches!(
++                                method,
++                                NativeMethod::CollForEach
++                                    | NativeMethod::CollEntries
++                                    | NativeMethod::CollKeys
++                                    | NativeMethod::CollValues
++                                    | NativeMethod::CollClear
++                            ) {
++                                PROXY_CALL_FORWARD_METHOD_METERING
++                            } else {
++                                PROXY_CALL_FORWARD_NATIVE_METERING
++                            }
++                        } else {
++                            PROXY_CALL_FORWARD_USER_METERING
++                        };
++                        self.charge_and_check(metering)?;
++                        // The recursive shape re-entered `invoke_value` with
++                        // these arguments as a FRESH list: a bound target's
++                        // fold then pays `reserve_work_scratch` for them.
++                        args_fresh = true;
++                        func = target_slot;
++                        continue;
++                    }
++                    Some(trap) => {
++                        self.meter.tick_raw(PROXY_CALL_TRAP_METERING);
++                        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
++                        let arg_array = self.array_from_slots(args);
++                        owned_args = Some(vec![target_slot, this, arg_array]);
++                        args_fresh = true;
++                        func = trap;
++                        this = handler_slot;
++                        continue;
++                    }
++                }
+             }
+             // Promise resolve/reject functions carry a native-method marker for
+             // reflection, but their [[Call]] settles the captured promise.
+@@ -400,12 +463,11 @@
+                 // exists, so the chain is acyclic and this terminates.
+                 let mut current = f;
+                 let mut this_arg = this;
+-                let mut combined: Vec<Slot> = match owned_args.take() {
+-                    Some(rebuilt) => rebuilt,
+-                    None => Self::fill_scratch(
+-                        self.reserve_work_scratch(initial_args.len())?,
+-                        initial_args.iter().copied(),
+-                    ),
++                let mut combined: Vec<Slot> = if args_fresh {
++                    let buffer = self.reserve_work_scratch(args.len())?;
++                    Self::fill_scratch(buffer, args.iter().copied())
++                } else {
++                    owned_args.take().expect("a rebuilt argument list")
+                 };
+                 while let Some(data) = self.bound_functions.get(&current) {
+                     let target = data.target;
+@@ -426,6 +488,7 @@
+                 func = Slot::of(Kind::Reference, Payload::Reference(current));
+                 this = this_arg;
+                 owned_args = Some(combined);
++                args_fresh = false;
+                 continue;
+             }
+             let fi = match self.functions.get(&f) {
+@@ -459,6 +522,7 @@
+                 func = this;
+                 this = this_arg;
+                 owned_args = Some(forwarded);
++                args_fresh = false;
+                 continue;
+             }
+             if method == Some(NativeMethod::FunctionApply) {
+@@ -485,6 +549,7 @@
+                 func = this;
+                 this = this_arg;
+                 owned_args = Some(forwarded);
++                args_fresh = false;
+                 continue;
+             }
+             if native.is_some() || method.is_some() {
+@@ -527,16 +592,59 @@
+         args: &[Slot],
+         new_target: Slot,
+     ) -> Result<Slot, Step> {
+-        let f = match func.value {
+-            Payload::Reference(f) if func.kind == Kind::Reference => f,
+-            _ => return Err(self.catchable_type_error_msg("new: not a constructor".into())),
+-        };
+-        if !self.is_constructor_value(func) {
+-            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
+-        }
+-        if self.proxies.contains_key(&f) {
+-            return self.proxy_construct(code, f, args, new_target);
+-        }
++        // PROTOTYPE: trap-absent `[[Construct]]` Proxy layers loop here.
++        self.with_forwarding_walk(|vm, held| {
++            let mut func = func;
++            loop {
++                let f = match func.value {
++                    Payload::Reference(f) if func.kind == Kind::Reference => f,
++                    _ => return Err(vm.catchable_type_error_msg("new: not a constructor".into())),
++                };
++                if !vm.is_constructor_value(func) {
++                    return Err(vm.catchable_type_error_msg("new: not a constructor".into()));
++                }
++                if vm.proxies.contains_key(&f) {
++                    vm.forwarding_hop(held)?;
++                    let (target, handler) = vm.proxy_target_handler(f, "construct")?;
++                    let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
++                    match vm.proxy_trap(code, handler, "construct")? {
++                        None => {
++                            func = target_slot;
++                            continue;
++                        }
++                        Some(trap) => {
++                            let handler_slot =
++                                Slot::of(Kind::Reference, Payload::Reference(handler));
++                            let arg_array = vm.array_from_slots(args);
++                            let result = vm.invoke_value(
++                                code,
++                                trap,
++                                handler_slot,
++                                &[target_slot, arg_array, new_target],
++                            )?;
++                            if result.kind != Kind::Reference {
++                                return Err(vm.catchable_type_error_msg(
++                                    "(proxy).construct: not an object".into(),
++                                ));
++                            }
++                            return Ok(result);
++                        }
++                    }
++                }
++                return vm.construct_value_nonproxy(code, func, f, args, new_target);
++            }
++        })
++    }
++
++    /// PROTOTYPE: the non-Proxy tail of [`Self::construct_value`].
++    fn construct_value_nonproxy(
++        &mut self,
++        code: &[u8],
++        func: Slot,
++        f: crate::value::SlotIndex,
++        args: &[Slot],
++        new_target: Slot,
++    ) -> Result<Slot, Step> {
+         if let Some(n) = self.native_of(f) {
+             let target = match new_target.value {
+                 Payload::Reference(target) if new_target.kind == Kind::Reference => target,
+--- a/ironhorse-vm/src/interp/function.rs
++++ b/ironhorse-vm/src/interp/function.rs
+@@ -69,35 +69,44 @@
+         value: Slot,
+         constructor: Slot,
+     ) -> Result<bool, Step> {
+-        let ctor = match constructor.value {
+-            Payload::Reference(ctor) if constructor.kind == Kind::Reference => ctor,
+-            _ => {
+-                return Err(self.catchable_type_error_msg(
+-                    match constructor.kind {
+-                        Kind::Undefined => "cannot coerce undefined to object",
+-                        Kind::Null => "cannot coerce null to object",
+-                        _ => "call: not a function",
+-                    }
+-                    .into(),
+-                ))
++        // PROTOTYPE: `OrdinaryHasInstance` step 2 (a bound constructor) is a
++        // tail call of `InstanceofOperator` on the target; loop over it.
++        let mut constructor = constructor;
++        loop {
++            let ctor = match constructor.value {
++                Payload::Reference(ctor) if constructor.kind == Kind::Reference => ctor,
++                _ => {
++                    return Err(self.catchable_type_error_msg(
++                        match constructor.kind {
++                            Kind::Undefined => "cannot coerce undefined to object",
++                            Kind::Null => "cannot coerce null to object",
++                            _ => "call: not a function",
++                        }
++                        .into(),
++                    ))
++                }
++            };
++            self.meter.tick_raw(INSTANCEOF_METERING);
++            let has_instance_id = self
++                .well_known_symbol_property_id("hasInstance")
++                .expect("well-known hasInstance symbol");
++            let method = self.mop_get(code, ctor, has_instance_id, constructor)?;
++            if method.kind != Kind::Undefined && method.kind != Kind::Null {
++                if !self.is_callable_value(method) {
++                    return Err(self.catchable_type_error_msg("call: not a function".into()));
++                }
++                let result = self.invoke_value(code, method, constructor, &[value])?;
++                return Ok(self.truthy(&result));
+             }
+-        };
+-        self.meter.tick_raw(INSTANCEOF_METERING);
+-        let has_instance_id = self
+-            .well_known_symbol_property_id("hasInstance")
+-            .expect("well-known hasInstance symbol");
+-        let method = self.mop_get(code, ctor, has_instance_id, constructor)?;
+-        if method.kind != Kind::Undefined && method.kind != Kind::Null {
+-            if !self.is_callable_value(method) {
++            if !self.is_callable_value(constructor) {
+                 return Err(self.catchable_type_error_msg("call: not a function".into()));
+             }
+-            let result = self.invoke_value(code, method, constructor, &[value])?;
+-            return Ok(self.truthy(&result));
+-        }
+-        if !self.is_callable_value(constructor) {
+-            return Err(self.catchable_type_error_msg("call: not a function".into()));
++            if let Some(target) = self.bound_functions.get(&ctor).map(|bound| bound.target) {
++                constructor = Slot::of(Kind::Reference, Payload::Reference(target));
++                continue;
++            }
++            return self.ordinary_has_instance(code, constructor, value);
+         }
+-        self.ordinary_has_instance(code, constructor, value)
+     }
+ 
+     /// ECMAScript `OrdinaryHasInstance(C, O)`, including bound-function

@@ -325,9 +325,9 @@ fn scope_err(src: &str) -> String {
 
 #[test]
 fn duplicate_lexical_is_error() {
-    assert_eq!(scope_err("let a; let a;"), "duplicate variable");
-    assert_eq!(scope_err("let a; var a;"), "duplicate variable");
-    assert_eq!(scope_err("const b = 1; let b = 2;"), "duplicate variable");
+    assert_eq!(scope_err("let a; let a;"), "duplicate variable a");
+    assert_eq!(scope_err("let a; var a;"), "duplicate variable a");
+    assert_eq!(scope_err("const b = 1; let b = 2;"), "duplicate variable b");
 }
 
 #[test]
@@ -337,7 +337,7 @@ fn duplicate_strict_argument_is_error() {
     // resolve to it); strict, it is a duplicate-argument early error.
     assert_eq!(
         scope_err("function f(a, a) { 'use strict'; }"),
-        "duplicate argument"
+        "duplicate argument a"
     );
     assert_dump(
         "function f(a, a) { return a; }",

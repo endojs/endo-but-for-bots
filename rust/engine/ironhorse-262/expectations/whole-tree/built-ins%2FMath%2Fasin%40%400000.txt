@@ -9,10 +9,10 @@ built-ins/Math/asin/S15.8.2.3_A4.js sloppy pass
 built-ins/Math/asin/S15.8.2.3_A4.js strict pass
 built-ins/Math/asin/S15.8.2.3_A5.js sloppy pass
 built-ins/Math/asin/S15.8.2.3_A5.js strict pass
-built-ins/Math/asin/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Math/asin/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Math/asin/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be asin; name value should be asin"
-built-ins/Math/asin/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be asin; name value should be asin"
+built-ins/Math/asin/length.js sloppy pass
+built-ins/Math/asin/length.js strict pass
+built-ins/Math/asin/name.js sloppy pass
+built-ins/Math/asin/name.js strict pass
 built-ins/Math/asin/not-a-constructor.js sloppy pass
 built-ins/Math/asin/not-a-constructor.js strict pass
 built-ins/Math/asin/prop-desc.js sloppy pass

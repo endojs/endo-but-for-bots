@@ -1,0 +1,21 @@
+[package]
+name = "ih-stack-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# A standalone root, deliberately outside the rust/engine workspace: the wasm
+# build uses the unstable panic=unwind workaround of WASM-BLOCKERS.md B1
+# (RUSTC_BOOTSTRAP and -Zbuild-std), which the workspace's --locked builds must
+# not inherit. build_probe.py copies the workspace Cargo.lock here before
+# building, so the probe resolves every dependency the engine does.
+[workspace]
+
+[dependencies]
+ironhorse-vm = { path = "../../ironhorse-vm", features = ["consensus"] }
+ironhorse-compile = { path = "../../ironhorse-compile" }
+ironhorse-runtime = { path = "../../ironhorse-runtime" }
+
+# Match the workspace: guest-influenced arithmetic must not silently wrap.
+[profile.release]
+overflow-checks = true

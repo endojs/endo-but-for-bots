@@ -17,7 +17,6 @@
 //!   iterated-array-changed-by-tonumber.js`.
 
 use ironhorse_262::{dual_run, Agreement};
-use ironhorse_vm::Halt;
 
 fn assert_result_agrees(source: &str) {
     let dr = dual_run(source).expect("the XS oracle machine must start");
@@ -108,32 +107,16 @@ fn typed_array_from_array_snapshots_before_coercion() {
 }
 
 #[test]
-fn typed_array_from_array_with_overridden_iterator_is_an_honest_skip() {
+fn typed_array_from_array_with_overridden_iterator_interleaves_reads() {
     // The front-loaded snapshot models the spec's `IteratorToList`, which is
-    // selected ONLY for the intact default array iterator. When the source's
-    // @@iterator is overridden (here set to `undefined`), the spec instead
-    // takes `InitializeTypedArrayFromArrayLike`, whose step 5 INTERLEAVES
-    // `Get(k)` with `Set` — so a mutating `valueOf` changes later reads
-    // (`new Uint8Array(a)[1]` is `99` on XS/V8/SM/JSC, `2` under a front-loaded
-    // snapshot). Ironhorse does not model the array-like interleaving path, so
-    // it must SKIP honestly (`Halt::NotImplemented`) rather than snapshot the
-    // wrong semantics and silently over-accept `2`.
-    let source = "var a=[{valueOf:function(){a[1]=99;return 1;}},2]; \
-                  a[Symbol.iterator]=undefined; new Uint8Array(a)[1];";
-    let dr = dual_run(source).expect("the XS oracle machine must start");
-    assert_eq!(
-        dr.agreement,
-        Agreement::OracleOnlyComplete,
-        "override case must be an ironhorse skip, not a shared completion \
-         (ironhorse halt: {:?}; oracle={:?} ironhorse={:?})",
-        dr.ironhorse_halt,
-        dr.oracle_result,
-        dr.ironhorse_result,
-    );
-    assert!(
-        matches!(&dr.ironhorse_halt, Halt::NotImplemented(op) if op.contains("from-array-like")),
-        "expected the from-array-like honest skip, got {:?}",
-        dr.ironhorse_halt,
+    // selected ONLY for an iterable source. When the source's @@iterator is
+    // `undefined`, the spec instead takes `InitializeTypedArrayFromArrayLike`,
+    // whose step 5 INTERLEAVES `Get(k)` with `Set` — so a mutating `valueOf`
+    // changes later reads (`new Uint8Array(a)[1]` is `99` on XS/V8/SM/JSC,
+    // `2` under a front-loaded snapshot).
+    assert_result_agrees(
+        "var a=[{valueOf:function(){a[1]=99;return 1;}},2]; \
+         a[Symbol.iterator]=undefined; new Uint8Array(a)[1];",
     );
 }
 

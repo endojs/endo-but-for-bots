@@ -1,10 +1,10 @@
 # engine=ironhorse features=default corpus=built-ins/Iterator/prototype/windows tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/Iterator/prototype/windows/argument-effect-order.js sloppy skip:shared-test262-failure
 built-ins/Iterator/prototype/windows/argument-effect-order.js strict skip:shared-test262-failure
-built-ins/Iterator/prototype/windows/argument-validation-failure-close-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: return getter is still consulted Expected SameValue(«0», «1») to be true\" ironhorse=\"Test262Error: number0», «number1») to be true\""
-built-ins/Iterator/prototype/windows/argument-validation-failure-close-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: return getter is still consulted Expected SameValue(«0», «1») to be true\" ironhorse=\"Test262Error: number0», «number1») to be true\""
-built-ins/Iterator/prototype/windows/argument-validation-failure-closes-underlying.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: iterator closed when windowSize is undefined Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
-built-ins/Iterator/prototype/windows/argument-validation-failure-closes-underlying.js strict fail:"abort-value-differs: oracle=\"Test262Error: iterator closed when windowSize is undefined Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
+built-ins/Iterator/prototype/windows/argument-validation-failure-close-throws.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/windows/argument-validation-failure-close-throws.js strict skip:shared-test262-failure
+built-ins/Iterator/prototype/windows/argument-validation-failure-closes-underlying.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/windows/argument-validation-failure-closes-underlying.js strict skip:shared-test262-failure
 built-ins/Iterator/prototype/windows/callable.js sloppy skip:shared-positive-test-failure
 built-ins/Iterator/prototype/windows/callable.js strict skip:shared-positive-test-failure
 built-ins/Iterator/prototype/windows/exhaustion-does-not-call-return.js sloppy skip:shared-positive-test-failure
@@ -15,8 +15,8 @@ built-ins/Iterator/prototype/windows/get-next-method-throws.js sloppy skip:share
 built-ins/Iterator/prototype/windows/get-next-method-throws.js strict skip:shared-test262-failure
 built-ins/Iterator/prototype/windows/get-return-method-throws.js sloppy skip:shared-positive-test-failure
 built-ins/Iterator/prototype/windows/get-return-method-throws.js strict skip:shared-positive-test-failure
-built-ins/Iterator/prototype/windows/is-function.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
-built-ins/Iterator/prototype/windows/is-function.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/Iterator/prototype/windows/is-function.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/windows/is-function.js strict skip:shared-test262-failure
 built-ins/Iterator/prototype/windows/iterator-already-exhausted.js sloppy skip:shared-positive-test-failure
 built-ins/Iterator/prototype/windows/iterator-already-exhausted.js strict skip:shared-positive-test-failure
 built-ins/Iterator/prototype/windows/iterator-return-method-throws.js sloppy skip:shared-positive-test-failure

@@ -169,4 +169,4 @@ language/expressions/call/tco-non-eval-global.js sloppy skip:feature:tail-call-o
 language/expressions/call/tco-non-eval-with.js sloppy skip:feature:tail-call-optimization
 language/expressions/call/trailing-comma.js sloppy pass
 language/expressions/call/trailing-comma.js strict pass
-language/expressions/call/with-base-obj.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: via CallExpression Expected SameValue(«[object Object]», «[object Object]») to be true"
+language/expressions/call/with-base-obj.js sloppy pass

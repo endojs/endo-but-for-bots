@@ -1,0 +1,4 @@
+host compartment: completed=true result={"F":false,"E":false,"C":false,"G":false,"sameF":false} halt=Return
+guest child of host compartment: completed=true result={"F":false,"E":false,"C":false,"G":false,"sameF":false} halt=Return
+host-compartment Function mutable: completed=true result=1 halt=Return
+mutate child Function: completed=true result=42 halt=Return

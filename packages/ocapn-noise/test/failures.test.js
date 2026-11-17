@@ -8,6 +8,13 @@ import {
   PREFIXED_SYN_LENGTH,
   SYNACK_LENGTH,
 } from '../src/bindings.js';
+import {
+  addOrderTwoPoint,
+  edwardsToMontgomery,
+  makePrefixedSyn,
+  scalarFromSeed,
+  x25519,
+} from './_noise-ik-msg1.js';
 
 const path = fileURLToPath(new URL('../gen/ocapn-noise.wasm', import.meta.url));
 const bytes = /** @type {Uint8Array<ArrayBuffer>} */ (readFileSync(path));
@@ -303,4 +310,191 @@ test('SYN intended for a different responder is rejected', async t => {
       message: /SYN intended for different responder/,
     },
   );
+});
+
+test('SYN claiming a verifying key other than its Noise static is rejected', async t => {
+  // The attacker holds its own Ed25519 seed (and so its own X25519
+  // static) but claims the victim's verifying key in the encrypted SYN
+  // payload.  The Noise handshake itself would complete, since every
+  // DH uses the attacker's real static; the responder must refuse to
+  // attribute the session to the victim.
+  const attackerKeys = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator().signingKeys;
+  const victimKeys = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator().signingKeys;
+
+  const impostor = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+    signingKeys: {
+      privateKey: attackerKeys.privateKey,
+      publicKey: victimKeys.publicKey,
+    },
+    supportedEncodings: [1, 2],
+  }).asInitiator();
+
+  const responder = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+    supportedEncodings: [2, 3],
+  }).asResponder();
+
+  const { prefixedSyn } = performSynExchange(impostor, responder);
+
+  const synack = new Uint8Array(SYNACK_LENGTH);
+  t.throws(() => responder.responderReadSynWriteSynack(prefixedSyn, synack), {
+    message: /initiator verifying key does not match its Noise static key/,
+  });
+});
+
+const makeIdentity = () =>
+  makeOcapnSessionCryptography({ wasmModule, getRandomValues }).asInitiator()
+    .signingKeys;
+
+const makeResponder = () =>
+  makeOcapnSessionCryptography({ wasmModule, getRandomValues }).asResponder();
+
+test('independently built SYN from an honest initiator is accepted', async t => {
+  // Control for the hand-built SYNs below: with honest inputs the
+  // test harness's message 1 is indistinguishable from the WASM's.
+  const responder = makeResponder();
+  const initiator = makeIdentity();
+  const prefixedSyn = makePrefixedSyn({
+    responderVerifyingKey: responder.signingKeys.publicKey,
+    initiatorStatic: edwardsToMontgomery(initiator.publicKey),
+    staticSharedSecret: x25519(
+      scalarFromSeed(initiator.privateKey),
+      edwardsToMontgomery(responder.signingKeys.publicKey),
+    ),
+    claimedVerifyingKey: initiator.publicKey,
+  });
+  const { initiatorVerifyingKey } = responder.responderReadSynWriteSynack(
+    prefixedSyn,
+    new Uint8Array(SYNACK_LENGTH),
+  );
+  t.deepEqual(initiatorVerifyingKey, initiator.publicKey);
+});
+
+test('SYN claiming a small-order verifying key is rejected', async t => {
+  // A small-order static makes `ss` all zeros, so an initiator holding
+  // no keys at all can complete message 1.  The identity point is the
+  // case only the small-order check catches: it is torsion-free and
+  // its Montgomery form (0) matches the static.
+  const identity = new Uint8Array(32);
+  identity[0] = 1;
+  const orderFour = new Uint8Array(32);
+  for (const claimedVerifyingKey of [identity, orderFour]) {
+    const responder = makeResponder();
+    const prefixedSyn = makePrefixedSyn({
+      responderVerifyingKey: responder.signingKeys.publicKey,
+      initiatorStatic: edwardsToMontgomery(claimedVerifyingKey),
+      staticSharedSecret: new Uint8Array(32),
+      claimedVerifyingKey,
+    });
+    t.throws(
+      () =>
+        responder.responderReadSynWriteSynack(
+          prefixedSyn,
+          new Uint8Array(SYNACK_LENGTH),
+        ),
+      {
+        message: /initiator verifying key does not match its Noise static key/,
+      },
+    );
+  }
+});
+
+test('SYN claiming a key with a small-order component is rejected', async t => {
+  // X25519 clamping makes every scalar a multiple of 8, which erases a
+  // small-order component: the holder of A can complete `ss` against a
+  // static of u(A + T).  Without the torsion check, the holder of one
+  // key could claim several.
+  const responder = makeResponder();
+  const holder = makeIdentity();
+  const claimedVerifyingKey = addOrderTwoPoint(holder.publicKey);
+  const prefixedSyn = makePrefixedSyn({
+    responderVerifyingKey: responder.signingKeys.publicKey,
+    initiatorStatic: edwardsToMontgomery(claimedVerifyingKey),
+    staticSharedSecret: x25519(
+      scalarFromSeed(holder.privateKey),
+      edwardsToMontgomery(responder.signingKeys.publicKey),
+    ),
+    claimedVerifyingKey,
+  });
+  t.throws(
+    () =>
+      responder.responderReadSynWriteSynack(
+        prefixedSyn,
+        new Uint8Array(SYNACK_LENGTH),
+      ),
+    {
+      message: /initiator verifying key does not match its Noise static key/,
+    },
+  );
+});
+
+test('initiatorWriteSyn rejects a small-order intended responder key', async t => {
+  // 32 zero bytes is the order-4 Ed25519 point. `derive_remote_static_pubkey`
+  // must refuse it: a weak responder static makes the `es`/`ss` DH
+  // results all zeros, destroying identity hiding and letting a party
+  // with no keys complete the handshake.
+  const { initiatorWriteSyn } = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator();
+  const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+  t.throws(() => initiatorWriteSyn(new Uint8Array(32), prefixedSyn), {
+    message: /not a valid, strong ed25519 verifying key/,
+  });
+});
+
+test('initiatorWriteSyn rejects a torsion-carrying intended responder key', async t => {
+  // A + T for a torsion point T is not small-order, so only the
+  // `is_torsion_free` check catches it. Build one from a real key.
+  const strong = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator().signingKeys;
+  const torsionKey = addOrderTwoPoint(strong.publicKey);
+  const { initiatorWriteSyn } = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator();
+  const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+  t.throws(() => initiatorWriteSyn(torsionKey, prefixedSyn), {
+    message: /not a valid, strong ed25519 verifying key/,
+  });
+});
+
+test('initiatorWriteSyn accepts a strong intended responder key', async t => {
+  // Control: a normally-generated key still dials.
+  const responder = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asResponder().signingKeys;
+  const { initiatorWriteSyn } = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator();
+  const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+  t.notThrows(() => initiatorWriteSyn(responder.publicKey, prefixedSyn));
+});
+
+test('initiatorWriteSyn rejects the identity point as responder key', async t => {
+  // The Edwards identity (0, 1) encodes as y=1: byte 0 is 0x01, the rest
+  // zero. It is order 1, so only the `is_weak` check catches it.
+  const identity = new Uint8Array(32);
+  identity[0] = 1;
+  const { initiatorWriteSyn } = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator();
+  const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+  t.throws(() => initiatorWriteSyn(identity, prefixedSyn), {
+    message: /not a valid, strong ed25519 verifying key/,
+  });
 });

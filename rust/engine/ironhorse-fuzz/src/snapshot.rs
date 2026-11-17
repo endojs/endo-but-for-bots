@@ -7,7 +7,8 @@
 //!   [`roundtrip_program_is_invariant`]): a machine state serialized with
 //!   [`ironhorse_snapshot::write_machine_unchecked`], read back with
 //!   [`ironhorse_snapshot::read_machine`], and re-serialized must be
-//!   **byte-identical**, including non-reflexive NaN payloads. The
+//!   **byte-identical**, NaN payloads included, and read back to an equal
+//!   image. The
 //!   generated-image arm folds fuzzer bytes into an adversarially-shaped
 //!   slot/chunk arena graph directly (fast, oracle-free); the program arm
 //!   **drives the engine** with a generated program — objects, closures,
@@ -52,31 +53,33 @@ pub fn fuzz_snapshot_sig() -> Signature {
 /// A cursor over fuzzer-provided bytes, folding raw input into a machine image
 /// deterministically (a local copy of the lib's `Bytes` driver — the snapshot
 /// arms need `u32`/`ChunkOffset` draws the grammar driver does not expose).
-struct Cursor<'a> {
-    data: &'a [u8],
-    pos: usize,
+/// Same finite byte source, so all three cursors in the crate share one
+/// length-feedback story rather than two of them quietly wrapping.
+pub(crate) struct Cursor<'a> {
+    u: arbitrary::Unstructured<'a>,
 }
 
 impl<'a> Cursor<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Cursor { data, pos: 0 }
-    }
-    fn byte(&mut self) -> u8 {
-        if self.data.is_empty() {
-            return 0;
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        Cursor {
+            u: arbitrary::Unstructured::new(data),
         }
-        let b = self.data[self.pos % self.data.len()];
-        self.pos = self.pos.wrapping_add(1);
-        b
     }
-    fn choice(&mut self, n: u8) -> u8 {
+    /// One byte, or zero once the input is exhausted. FINITE, like the
+    /// grammar driver in `lib.rs` and for the same reason (F040): a
+    /// wrapping cursor makes every input infinitely long and defeats
+    /// libFuzzer's length feedback.
+    pub(crate) fn byte(&mut self) -> u8 {
+        self.u.arbitrary::<u8>().unwrap_or(0)
+    }
+    pub(crate) fn choice(&mut self, n: u8) -> u8 {
         if n == 0 {
             0
         } else {
             self.byte() % n
         }
     }
-    fn u32(&mut self) -> u32 {
+    pub(crate) fn u32(&mut self) -> u32 {
         let mut v = 0u32;
         for _ in 0..4 {
             v = (v << 8) | self.byte() as u32;
@@ -379,9 +382,26 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     }
     let n_dates = ((c.byte() % 4) as usize).min(cap as usize);
     let dates: Vec<ironhorse_snapshot::image::DateImage> = (0..n_dates)
-        .map(|owner| ironhorse_snapshot::image::DateImage {
-            owner: owner as u32,
-            value_bits: ((c.u32() as u64) << 32) | c.u32() as u64,
+        .map(|owner| {
+            let drawn = ((c.u32() as u64) << 32) | c.u32() as u64;
+            // A Date's time value is a Number, and a Number NaN has no
+            // observable payload in JavaScript, so `encode_dates`
+            // deliberately canonicalizes one (its own
+            // `date_encoding_canonicalizes_nan_and_refuses_duplicate_owners`
+            // pins that). A live machine therefore never holds a
+            // non-canonical NaN here, and drawing one would make the model
+            // half of the round-trip invariant fail on an image no engine
+            // can produce. Slot payloads are different and keep their raw
+            // NaN bits, which is why `payload` draws freely.
+            let value_bits = if f64::from_bits(drawn).is_nan() {
+                f64::NAN.to_bits()
+            } else {
+                drawn
+            };
+            ironhorse_snapshot::image::DateImage {
+                owner: owner as u32,
+                value_bits,
+            }
         })
         .collect();
 
@@ -781,6 +801,11 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         unhandled_rejection: None,
         async_instances: Vec::new(),
         async_generators: Vec::new(),
+        // The generator does not mint `Array.fromAsync` accumulations: each
+        // one must be anchored by a `FromAsync*` reaction on a live promise,
+        // and an unanchored row is refused by the decoder, so an arbitrary
+        // one would only ever exercise that refusal.
+        from_async: Vec::new(),
         promises: prms_promises,
         functions: prms_functions,
         guards: prms_guards,
@@ -830,13 +855,12 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
 /// snapshot must **read back** (a decode failure on our own output is a
 /// defect), and **write → read → write must be byte-identical**.
 ///
-/// Byte-equality is the always-applicable invariant. When `img` is reflexive
-/// under `MachineImage`'s derived `PartialEq` (it contains no NaN), value
-/// equality is checked too. The second check catches a writer that silently
-/// omits a model field: byte idempotence alone would accept both writes
-/// dropping the same field. A NaN-bearing image cannot use derived value
-/// equality (`NaN != NaN`), so it keeps the bit-exact byte check; the slot
-/// codec's `nan_bits_preserved` lock covers that payload directly.
+/// The image read back must also equal the one written. That catches a
+/// writer that silently omits a model field, which byte idempotence alone
+/// would accept when both writes drop the same field. `Payload` compares
+/// numbers by their bits, so a NaN-bearing image equals its round trip too;
+/// the generator builds its NaNs through `Slot::of`, which canonicalizes them
+/// as the writer does.
 pub fn roundtrip_image_is_invariant(img: &MachineImage) -> Result<(), RoundtripDivergence> {
     let sig = fuzz_snapshot_sig();
     let bytes = write_machine_unchecked(img);
@@ -858,8 +882,7 @@ pub fn roundtrip_image_is_invariant(img: &MachineImage) -> Result<(), RoundtripD
             ),
         });
     }
-    let reflexive_twin = img.clone();
-    if img == &reflexive_twin && &back != img {
+    if &back != img {
         return Err(RoundtripDivergence {
             detail: "write→read changed the decoded machine model".to_string(),
         });
@@ -1004,7 +1027,7 @@ pub fn suspend_resume_is_transparent(
 /// This is the productive malformed corpus: the mutant still passes the
 /// `VERS`/`SIGN` gates often enough to reach the atom-payload decoders where a
 /// corrupt count field would, unclamped, drive an unbounded allocation.
-fn mutate_bytes(base: &[u8], data: &[u8]) -> Vec<u8> {
+pub(crate) fn mutate_bytes(base: &[u8], data: &[u8]) -> Vec<u8> {
     let mut out = base.to_vec();
     if out.is_empty() {
         return out;
@@ -1089,7 +1112,7 @@ mod tests {
     fn seed_bytes(seed: u32, salt: u8) -> Vec<u8> {
         let s = seed.to_le_bytes();
         let mut buf = Vec::new();
-        for k in 0..(20 + (seed % 40)) {
+        for k in 0..(80 + (seed % 160)) {
             buf.push(
                 s[(k as usize) % 4]
                     .wrapping_add((k as u8).wrapping_mul(29))
@@ -1266,24 +1289,21 @@ mod tests {
     }
 
     #[test]
-    fn nan_payload_round_trips_byte_exact_but_not_parteq() {
+    fn nan_payload_round_trips_byte_exact_and_equal() {
         // Locked trophy (snapshot_roundtrip campaign, originally seed
         // input `22 03 ff ff`, 2026-07-16): an input that generates a
         // machine image carrying a `Number(NaN)` payload. The container
         // round-trips **byte-exactly** (the codec preserves the NaN bit
-        // pattern — the real invariant), but `MachineImage`'s derived
-        // `PartialEq` reports the decoded image unequal to the original
-        // because `NaN != NaN`. The fix is not in the codec (it is
-        // correct) but in the invariant: `roundtrip_image_is_invariant`
-        // asserts write→read→write **byte-equality**, not value
-        // equality, so a non-reflexive float payload is not a false
-        // trophy. The reader's quiescence gate requires an empty stack,
-        // so the seed places the NaN in heap slot 0 (no chunks, one slot,
-        // arm 4, bits 0x7ff8_0000_…).
+        // pattern). It was a false trophy while `Payload` compared numbers
+        // as floats, so `NaN != NaN` made the decoded image unequal to the
+        // original; `Payload` now compares numbers by their bits, and the
+        // decoded image equals the original as well. The reader's
+        // quiescence gate requires an empty stack, so the seed places the
+        // NaN in heap slot 0 (no chunks, one slot, arm 4, bits
+        // 0x7ff8_0000_…).
         let data = [0x00u8, 0x00, 0x04, 0x7f, 0xf8, 0x00, 0x00, 0x00];
         let img = gen_machine_image(&data);
-        // The image genuinely contains a NaN payload (the condition that made
-        // the derived PartialEq fire).
+        // The image genuinely contains a NaN payload.
         let has_nan = img
             .slots
             .iter()
@@ -1304,6 +1324,7 @@ mod tests {
             bytes,
             "write→read→write byte-identical"
         );
+        assert!(back == img, "the NaN-carrying image reads back equal");
     }
 
     #[test]

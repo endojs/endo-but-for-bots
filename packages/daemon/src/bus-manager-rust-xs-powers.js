@@ -154,7 +154,7 @@ export const makeXsFilePowers = () => {
    * Binary-safe range read returning `[offset, offset + length)`. The XS
    * host has no native pread primitive, so this reads the whole file and
    * slices — correct, if not as I/O-efficient as the Node powers' windowed
-   * read. Mirrors the `BlobRef.fetch` clamp: a short read past EOF returns
+   * read. Mirrors byte-range clamping: a short read past EOF returns
    * the available bytes, and `offset` at/beyond EOF returns empty.
    *
    * @type {FilePowers['readFileRange']}

@@ -51,17 +51,9 @@ export const snapshotTreeMethods = (store, sha256) => {
     // encoding of the child references in the manifest); callers that need hex
     // convert at the callsite.
     sha256: () => encodeBase64(decodeHex(sha256)),
-    // `getInfo()` is the uniform content-address identity accessor, matching
-    // the blob/live-blob shape so generic code can read a content hash off any
-    // blob *or* tree via `getInfo().hash`. `size` is the byte length of the
-    // tree's own manifest (the content-addressed object), not the recursive
-    // total of its files.
-    getInfo: async () =>
-      harden({
-        algorithm: 'sha256',
-        hash: encodeBase64(decodeHex(sha256)),
-        size: size ? await size() : await byteLengthOfReader(makeFileReader),
-      }),
+    // `size` is the byte length of the tree's own manifest (the
+    // content-addressed object), not the recursive total of its files.
+    size: async () => (size ? size() : byteLengthOfReader(makeFileReader)),
     /**
      * @param {...string} petNamePath
      */
@@ -121,7 +113,7 @@ export const snapshotTreeMethods = (store, sha256) => {
     /** @param {string} [method] */
     help: method =>
       method === undefined
-        ? 'SnapshotTree: immutable content-addressed directory snapshot (sha256, getInfo, has, list, lookup).'
+        ? 'SnapshotTree: immutable content-addressed directory snapshot (sha256, size, has, list, lookup).'
         : `No documentation for method ${method}.`,
   });
 };

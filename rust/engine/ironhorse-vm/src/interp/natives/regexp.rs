@@ -297,11 +297,13 @@ impl Interp {
         unicode: bool,
     ) -> u64 {
         if unicode {
-            if let Ok(i) = usize::try_from(index) {
-                if i + 1 < subject.len()
-                    && (0xD800..=0xDBFF).contains(&subject[i])
-                    && (0xDC00..=0xDFFF).contains(&subject[i + 1])
-                {
+            // `index` is a guest ToLength (up to 2**53 - 1); never form
+            // `index + 1` in the host's usize, which is 32 bits on wasm32.
+            let pair = usize::try_from(index)
+                .ok()
+                .and_then(|i| subject.get(i..i.checked_add(2)?));
+            if let Some(&[lead, trail]) = pair {
+                if (0xD800..=0xDBFF).contains(&lead) && (0xDC00..=0xDFFF).contains(&trail) {
                     return index.saturating_add(2);
                 }
             }
@@ -345,6 +347,9 @@ impl Interp {
             }
             Err(ironhorse_regexp::CompileError::ResourceLimit) => {
                 return Err(Step::Host(Halt::HeapExhausted))
+            }
+            Err(ironhorse_regexp::CompileError::HostAllocationFailed) => {
+                return Err(Step::Host(Halt::HostAllocationFailed))
             }
             Ok(p) => p,
             Err(ironhorse_regexp::CompileError::Syntax(reason)) => {
@@ -545,6 +550,9 @@ impl Interp {
             )
         };
         self.charge_and_check(outcome.match_meter_raw - charged)?;
+        if outcome.host_allocation_failed {
+            return Err(Step::Host(Halt::HostAllocationFailed));
+        }
         if outcome.resource_limit {
             return Err(Step::Host(Halt::HeapExhausted));
         }
@@ -906,11 +914,13 @@ impl Interp {
                 iterable: matcher,
                 index: u32::from(global) | (u32::from(full_unicode) << 1),
                 kind: 9,
+                coll_seq: 0,
                 generation: 0,
                 result: anchor,
                 done: false,
                 enum_keys: std::rc::Rc::default(),
                 str_bytes: std::rc::Rc::new(units_to_be16(subject)),
+                enum_visited: None,
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iterator))
@@ -922,14 +932,7 @@ impl Interp {
         value: Slot,
         done: bool,
     ) -> Slot {
-        let value_id = self
-            .value_id
-            .unwrap_or_else(|| self.intern_static_key("value"));
-        let done_id = self
-            .done_id
-            .unwrap_or_else(|| self.intern_static_key("done"));
-        self.value_id = Some(value_id);
-        self.done_id = Some(done_id);
+        let (value_id, done_id) = self.iterator_result_ids();
         let result = self.slots.alloc(Slot::instance(self.object_proto));
         self.set_own_unmetered(result, value_id, value);
         self.set_own_unmetered(result, done_id, Slot::boolean(done));
@@ -1088,7 +1091,7 @@ impl Interp {
         {
             let a = self.arrays.get_mut(&result).unwrap();
             for (i, s) in items {
-                a.insert_item(i, s, &mut self.side_refs);
+                a.insert_item(i, s, &mut self.side_refs, &mut self.chunks);
             }
             a.length = captures.len() as u32;
         }
@@ -1189,8 +1192,13 @@ impl Interp {
                 self.meter.tick_slot_alloc();
                 {
                     let a = self.arrays.get_mut(&pair).unwrap();
-                    a.insert_item(0, Slot::integer(from), &mut self.side_refs);
-                    a.insert_item(1, Slot::integer(to), &mut self.side_refs);
+                    a.insert_item(
+                        0,
+                        Slot::integer(from),
+                        &mut self.side_refs,
+                        &mut self.chunks,
+                    );
+                    a.insert_item(1, Slot::integer(to), &mut self.side_refs, &mut self.chunks);
                     a.length = 2;
                 }
                 let s = Slot::of(Kind::Reference, Payload::Reference(pair));
@@ -1205,7 +1213,7 @@ impl Interp {
         {
             let a = self.arrays.get_mut(&arr).unwrap();
             for (i, s) in items {
-                a.insert_item(i, s, &mut self.side_refs);
+                a.insert_item(i, s, &mut self.side_refs, &mut self.chunks);
             }
             a.length = captures.len() as u32;
         }
@@ -2011,6 +2019,94 @@ impl Interp {
         Ok(out)
     }
 
+    /// `Call(method, receiver, args)` for a String method's RegExp protocol
+    /// call, `method` being what [`Self::string_protocol_method`] read. When
+    /// it is the intrinsic `RegExp.prototype` method itself, the method's body
+    /// is called directly (STACK-DEPTH-REFACTOR.md C3): [`Self::invoke_value`]
+    /// would enter `call_native_method` and its two dispatchers, four frames
+    /// with its own on every level of a nest that re-enters through the
+    /// protocol (a `replace` callback, a user `exec`, a `@@species` getter).
+    /// The direct call builds the same value-stack frame, charges the same
+    /// native activation and counts the same builtin as that dispatch, which
+    /// consults no meter, so every outcome is the same. It mirrors
+    /// `invoke_value_turns`, `call_native_method` and
+    /// `call_native_method_inner`, which point back here.
+    pub(in crate::interp) fn invoke_regexp_protocol(
+        &mut self,
+        code: &[u8],
+        method: Slot,
+        receiver: Slot,
+        args: &[Slot],
+    ) -> Result<Slot, Step> {
+        match self.intrinsic_regexp_protocol(method) {
+            Some(m) => self.regexp_protocol_in_place(code, m, method, receiver, args),
+            None => self.invoke_value(code, method, receiver, args),
+        }
+    }
+
+    /// The intrinsic RegExp protocol method `method` is, if it is one: the
+    /// native method [`Self::invoke_value`] would dispatch, after its Proxy,
+    /// promise-function and bound-function tests.
+    fn intrinsic_regexp_protocol(&self, method: Slot) -> Option<NativeMethod> {
+        let Payload::Reference(f) = method.value else {
+            return None;
+        };
+        if method.kind != Kind::Reference
+            || self.proxies.contains_key(&f)
+            || self.promise_functions.contains_key(&f)
+            || self.bound_functions.contains_key(&f)
+        {
+            return None;
+        }
+        let fi = self.functions.get(&f)?;
+        if fi.native.is_some() {
+            return None;
+        }
+        match fi.method? {
+            m @ (NativeMethod::RegExpMatch
+            | NativeMethod::RegExpMatchAll
+            | NativeMethod::RegExpReplace
+            | NativeMethod::RegExpSearch
+            | NativeMethod::RegExpSplit) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// [`Self::invoke_regexp_protocol`]'s direct call: the frame
+    /// `invoke_value` pushes for a native method (`[THIS, FUNCTION, RESULT,
+    /// FRAME]` and the arguments), `call_native_method`'s heavy charge and
+    /// builtin count around the method, and the frame cut on every return.
+    #[inline(never)]
+    fn regexp_protocol_in_place(
+        &mut self,
+        code: &[u8],
+        m: NativeMethod,
+        method: Slot,
+        receiver: Slot,
+        args: &[Slot],
+    ) -> Result<Slot, Step> {
+        let base = self.stack.len();
+        self.push(receiver);
+        self.push(method);
+        self.push(Slot::undefined());
+        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+        for a in args {
+            self.push(*a);
+        }
+        let result = self.with_native_frame(HEAVY_FRAME_COST, |vm| {
+            vm.cost.on_builtin(m);
+            let this = vm.stack.get(base).copied().unwrap_or_else(Slot::undefined);
+            let arg0 = vm
+                .stack
+                .get(base + 4)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            vm.regexp_protocol(m, base, code, this, arg0)
+        });
+        self.stack.truncate(base);
+        result
+    }
+
     /// `GetMethod(value, @@name)` for String prototype protocols. The protocol
     /// is consulted only when `value` is an Object; primitive arguments proceed
     /// directly to coercion without reading their wrapper prototypes. Object
@@ -2068,7 +2164,7 @@ impl Interp {
             }
             let method = self.string_protocol_method(code, regexp, "matchAll")?;
             if !matches!(method.kind, Kind::Undefined | Kind::Null) {
-                return self.invoke_value(code, method, regexp, &[receiver]);
+                return self.invoke_regexp_protocol(code, method, regexp, &[receiver]);
             }
         }
 
@@ -2081,7 +2177,7 @@ impl Interp {
         let global = self.new_string_units(&[b'g' as u16]);
         let matcher = self.construct_value(code, constructor, &[regexp, global], constructor)?;
         let method = self.string_protocol_method(code, matcher, "matchAll")?;
-        self.invoke_value(code, method, matcher, &[subject])
+        self.invoke_regexp_protocol(code, method, matcher, &[subject])
     }
 
     /// ECMA-262 `IsRegExp(argument)`: non-objects are never RegExps; an
@@ -2224,7 +2320,7 @@ impl Interp {
         let n = segments.len() as u32;
         let a = self.arrays.get_mut(&array).unwrap();
         for (i, s) in segments.into_iter().enumerate() {
-            a.insert_item(i as u32, s, &mut self.side_refs);
+            a.insert_item(i as u32, s, &mut self.side_refs, &mut self.chunks);
         }
         a.length = n;
         Slot::of(Kind::Reference, Payload::Reference(array))
@@ -2430,4 +2526,105 @@ fn regexp_rendered_source_len(source: &[u16]) -> usize {
         escaped = unit == 0x5c && !escaped;
     }
     length
+}
+
+/// `HEX[n]` is the lower-case hexadecimal digit for `n`, as `RegExp.escape`
+/// writes them.
+const HEX_LOWER: &[u8; 16] = b"0123456789abcdef";
+
+impl Interp {
+    /// `RegExp.escape(S)` (ES2025 22.2.5.1): a String argument, else a
+    /// TypeError; each code point of it as `EncodeForRegExpEscape` writes it,
+    /// with a leading decimal digit or ASCII letter written as `\xHH`. Each
+    /// input unit is charged before it is read, and each output growth is
+    /// admitted before the scratch buffer grows.
+    /// Out of line from the method dispatcher, whose frame every native
+    /// re-entry carries (`benches/stack_height.py`).
+    #[inline(never)]
+    pub(in crate::interp) fn regexp_escape(
+        &mut self,
+        argc: usize,
+        arg0: Slot,
+    ) -> Result<Slot, Step> {
+        let Payload::String(off) = arg0.value else {
+            return Err(self.catchable_type_error_msg("string: not a string".into()));
+        };
+        if argc < 1 || arg0.kind != Kind::String {
+            return Err(self.catchable_type_error_msg("string: not a string".into()));
+        }
+        let len = self.str_len(off);
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while pos < len {
+            self.charge_and_check(crate::meter::STRING_METERING)?;
+            let first = self
+                .str_unit_at(off, pos as u32)
+                .expect("escape index within string");
+            pos += 1;
+            let mut c = u32::from(first);
+            if (0xd800..=0xdbff).contains(&first) && pos < len {
+                let second = self
+                    .str_unit_at(off, pos as u32)
+                    .expect("escape index within string");
+                if (0xdc00..=0xdfff).contains(&second) {
+                    self.charge_and_check(crate::meter::STRING_METERING)?;
+                    pos += 1;
+                    c = 0x10000 + ((c - 0xd800) << 10) + (u32::from(second) - 0xdc00);
+                }
+            }
+            let hex_byte = |byte: u32| {
+                [
+                    b'\\',
+                    b'x',
+                    HEX_LOWER[(byte >> 4) as usize],
+                    HEX_LOWER[(byte & 15) as usize],
+                ]
+                .map(u16::from)
+            };
+            if out.is_empty() && u8::try_from(c).is_ok_and(|byte| byte.is_ascii_alphanumeric()) {
+                self.extend_reserved_units(&mut out, &hex_byte(c))?;
+            } else if let Some(syntax) = u8::try_from(c)
+                .ok()
+                .filter(|byte| b"^$\\.*+?()[]{}|/".contains(byte))
+            {
+                self.extend_reserved_units(&mut out, &[u16::from(b'\\'), u16::from(syntax)])?;
+            } else if let Some(control) = match c {
+                0x09 => Some(b't'),
+                0x0a => Some(b'n'),
+                0x0b => Some(b'v'),
+                0x0c => Some(b'f'),
+                0x0d => Some(b'r'),
+                _ => None,
+            } {
+                self.extend_reserved_units(&mut out, &[u16::from(b'\\'), u16::from(control)])?;
+            } else if u8::try_from(c).is_ok_and(|byte| b",-=<>#&!%:;@~'`\"".contains(&byte))
+                || super::super::text::is_ecma_whitespace(c)
+                || (0xd800..=0xdfff).contains(&c)
+            {
+                if c <= 0xff {
+                    self.extend_reserved_units(&mut out, &hex_byte(c))?;
+                } else {
+                    // Only BMP code points reach here: a lone surrogate, or
+                    // a WhiteSpace or LineTerminator code point.
+                    let unit = c as u16;
+                    let escaped = [
+                        b'\\',
+                        b'u',
+                        HEX_LOWER[(unit >> 12) as usize],
+                        HEX_LOWER[((unit >> 8) & 15) as usize],
+                        HEX_LOWER[((unit >> 4) & 15) as usize],
+                        HEX_LOWER[(unit & 15) as usize],
+                    ];
+                    self.extend_reserved_units(&mut out, &escaped.map(u16::from))?;
+                }
+            } else if let Ok(unit) = u16::try_from(c) {
+                self.extend_reserved_units(&mut out, &[unit])?;
+            } else {
+                let scalar = char::from_u32(c).expect("a paired surrogate is a scalar");
+                let mut buffer = [0u16; 2];
+                self.extend_reserved_units(&mut out, scalar.encode_utf16(&mut buffer))?;
+            }
+        }
+        Ok(self.new_reserved_string_units(&out))
+    }
 }

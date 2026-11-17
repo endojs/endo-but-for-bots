@@ -83,3 +83,33 @@ fn duplicate_private_element_rows_are_refused() {
         Ok(_) => panic!("duplicate private element rows must not restore"),
     }
 }
+
+/// A private method stays read-only across a resume: the method mark is the
+/// stored element's `XS_DONT_SET_FLAG`, which the slot record carries. The
+/// re-add refusal holds too, since it reads the restored rows.
+#[test]
+fn a_private_method_stays_read_only_after_resume() {
+    const SETUP: &str = "var B = 0; var C = 0; var c = 0; var t = 0; \
+         B = class { constructor(o) { return o; } }; \
+         C = class extends B { \
+           #m() { return 1; } \
+           #f = 2; \
+           constructor(o) { super(o); } \
+           probe() { \
+             var r = []; \
+             try { this.#m = 5; r.push('wrote'); } catch (e) { r.push(String(e)); } \
+             this.#f = 3; \
+             r.push(typeof this.#m, this.#f); \
+             return r.join(); \
+           } \
+         }; \
+         c = new C(); t = 7; t";
+    const PROBE: &str = "var c; var C; var t; t = c.probe(); \
+         try { new C(c); t += ',none'; } catch (e) { t += ',' + String(e); } t";
+    let mut memory = MemoryStore::new();
+    let observed = twin(SETUP, &[PROBE], &mut memory);
+    assert_eq!(
+        observed[0].2, "TypeError: set #m: not writable,function,3,TypeError: set #m: const",
+        "{observed:?}"
+    );
+}

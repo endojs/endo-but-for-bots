@@ -10,16 +10,14 @@
 //! empty bytecode, which halted with `Halt::Decode("pc 0 past end 0")` and was
 //! misreported as `parse-or-decode`. Both engines reject the source with a
 //! SyntaxError; the differential must cover the case without depending on
-//! XS's platform-dependent diagnostic detail or parse-stub metering. The
-//! runtime `new RegExp(bad)` path (also here) already throws the bare
-//! `SyntaxError`; this pins the literal path to the same semantic behavior.
+//! parse-stub metering. The literal's rejection carries the parser's message,
+//! which is XS's.
 
 use ironhorse_262::{dual_run, Agreement};
 
 /// Every source is a program that never runs because it contains a parse-phase
-/// early error. XS may render its bytecode-stub rejection as either bare
-/// `SyntaxError` or a platform-specific diagnostic; IronHorse must present its
-/// compile rejection as a bare `SyntaxError` throw.
+/// early error. IronHorse must present its compile rejection as a
+/// `SyntaxError` throw carrying the parser's message, which is XS's.
 fn shared_syntax_error_rejection(source: &str) {
     let run = dual_run(source).expect("the pinned XS oracle machine must start");
     assert_eq!(
@@ -27,13 +25,13 @@ fn shared_syntax_error_rejection(source: &str) {
         Agreement::BothAbort,
         "{source}: expected both engines to reject the source at parse: {run:?}"
     );
-    assert_eq!(
-        run.ironhorse_error, "SyntaxError",
+    assert!(
+        run.ironhorse_error.starts_with("SyntaxError: "),
         "{source}: ironhorse must throw a SyntaxError, not decode empty bytecode: {run:?}"
     );
-    assert!(
-        run.oracle_error == "SyntaxError" || run.oracle_error.starts_with("SyntaxError:"),
-        "{source}: the oracle must also reject with SyntaxError: {run:?}"
+    assert_eq!(
+        run.ironhorse_error, run.oracle_error,
+        "{source}: both engines must reject with the same SyntaxError: {run:?}"
     );
 }
 
@@ -60,7 +58,10 @@ fn invalid_regexp_literal_does_not_decode_empty_bytecode() {
     let run = dual_run("var r = /(a)\\2/; r").expect("oracle must start");
     match &run.ironhorse_halt {
         ironhorse_vm::Halt::Throw { rendered, .. } => {
-            assert_eq!(rendered, "SyntaxError", "{run:?}")
+            assert_eq!(
+                rendered, "SyntaxError: (a)\\2 invalid reference number \\2",
+                "{run:?}"
+            )
         }
         other => panic!("expected a SyntaxError throw, got {other:?}: {run:?}"),
     }

@@ -14,12 +14,14 @@
         "packages/ocapn",
         "packages/ocapn-noise",
         "packages/test262-runner",
+        "packages/ironhorse-prelude",
         "packages/hardened262",
         "packages/ses/types.test-d.ts",
         "packages/conversation-tree",
         "packages/demo",
         "packages/fae",
         "packages/familiar",
+        "packages/floot-android/android/app/src/main/assets/chat",
         "packages/eventual-send-test",
         "packages/harden-test",
         "packages/hex-test",
@@ -28,6 +30,7 @@
         "packages/lal",
         "packages/monaco-wrapper",
         "packages/platform",
+        "packages/thixotrope",
         "packages/preact-container",
         "packages/preact-social",
         "packages/parser-pipeline/test/fixture/*-error.js",
@@ -42,6 +45,7 @@
     ],
     "include": [
         "./**/*.ts",
-        "packages/**/*.js"
+        "packages/**/*.js",
+        "scripts/test/**/*.js"
     ],
 }

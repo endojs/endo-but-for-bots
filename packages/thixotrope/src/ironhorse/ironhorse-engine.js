@@ -1,0 +1,363 @@
+// @ts-check
+/** @import { FilePowers } from '../platform/files.js' */
+/** @import { HashPowers } from '../platform/hashes.js' */
+/** @import { PathPowers } from '../platform/paths.js' */
+/** @import { SpawnedProcess, ProcessPowers } from '../platform/processes.js' */
+/** @import { TimerPowers } from '../platform/timers.js' */
+import harden from '@endo/harden';
+import { acquireIronhorseRuntime, hashFile } from './ironhorse-runtime.js';
+import { makeIronhorseLimits } from './ironhorse-limits.js';
+
+import { WorkerHaltError } from '../core/worker-engine.js';
+import { withExpiry } from '../platform/timers.js';
+
+/** @import { WorkerEngine } from '../core/worker-engine.js' */
+/** @import { LimitInput } from './ironhorse-limits.js' */
+
+/**
+ * Ironhorse with immutable sleep images. Each incarnation uses a private
+ * writable copy, which the worker commits when it closes, not per crank.
+ * Recovery ALWAYS starts at the snapshot paired with the transport's journal
+ * cut, never at an abandoned incarnation's copy. This keeps the existing
+ * journal/sequence protocol valid without a distributed transaction between
+ * heap and hub.
+ *
+ * @param {object} powers
+ * @param {ProcessPowers} powers.processes
+ * @param {FilePowers} powers.files
+ * @param {PathPowers} powers.paths
+ * @param {TimerPowers} powers.timers
+ * @param {HashPowers} powers.hashes
+ * @param {object} options
+ * @param {string} options.workerBinary
+ * @param {Array<string>} options.bootPaths trusted bootstrap files
+ * @param {string} options.storePath private directory for heap images
+ * @param {LimitInput} [options.crankBudget]
+ * @param {LimitInput} [options.bootstrapBudget]
+ * @param {LimitInput} [options.slotCeiling]
+ * @param {LimitInput} [options.chunkCeiling]
+ * @param {LimitInput} [options.requestTimeoutMs] watchdog for compiler/host faults
+ * @returns {WorkerEngine}
+ */
+export const makeIronhorseEngine = (
+  { processes, files, paths, timers, hashes },
+  {
+    workerBinary,
+    bootPaths,
+    storePath,
+    crankBudget,
+    bootstrapBudget,
+    slotCeiling,
+    chunkCeiling,
+    requestTimeoutMs,
+  },
+) => {
+  const limits = makeIronhorseLimits({
+    crankBudget,
+    bootstrapBudget,
+    slotCeiling,
+    chunkCeiling,
+    requestTimeoutMs,
+  });
+  const timeoutMs = limits.requestTimeoutMs;
+  const { spawn } = processes;
+  const {
+    copyFile,
+    makeDirectory,
+    makeTempDirectory,
+    realPath,
+    rename,
+    remove,
+    syncPath,
+  } = files;
+  const { dirname, join, resolve: resolvePath } = paths;
+  const { setTimer, clearTimer } = timers;
+
+  const images = resolvePath(storePath, 'snapshots');
+  const work = resolvePath(storePath, 'incarnations');
+  /** @param {unknown} ref */
+  const imagePath = ref => {
+    if (typeof ref !== 'string' || !/^[a-f0-9]{64}$/.test(ref)) {
+      throw Error('Invalid Ironhorse snapshot reference');
+    }
+    return join(images, `${ref}.sqlite`);
+  };
+  /**
+   * A directory-safe form of a worker's debug name.
+   * @param {string} name
+   */
+  const slugOf = name =>
+    name
+      .replace(/[^A-Za-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40);
+
+  /** @type {Awaited<ReturnType<typeof acquireIronhorseRuntime>> | undefined} */
+  let runtime;
+  let acquiring = false;
+  /** @type {Set<() => Promise<void>>} */
+  const incarnations = new Set();
+  const stopWorkers = async () => {
+    await Promise.all([...incarnations].map(stop => stop()));
+  };
+  return harden({
+    canSnapshot: true,
+    assertStoreOwnership: () => {
+      if (!runtime) throw Error('Ironhorse state directory is not owned');
+      runtime.assertOwned();
+    },
+    acquireStore: async statePath => {
+      if (runtime || acquiring)
+        throw Error('Ironhorse engine already owns a store');
+      if (!statePath) throw Error('Ironhorse requires a filesystem store');
+      acquiring = true;
+      try {
+        if (
+          resolvePath(storePath) !== resolvePath(statePath, 'heaps') ||
+          (await realPath(statePath)) !== (await realPath(dirname(storePath)))
+        ) {
+          throw Error(
+            'Ironhorse heaps must belong to the daemon state directory',
+          );
+        }
+        await makeDirectory(storePath);
+        if (
+          (await realPath(storePath)) !==
+          join(await realPath(statePath), 'heaps')
+        ) {
+          throw Error('Ironhorse heaps directory must not be a symlink');
+        }
+        runtime = await acquireIronhorseRuntime(
+          { processes, files, paths, hashes },
+          {
+            statePath,
+            workerBinary,
+            bootPaths,
+            limits,
+            onLost: () => {
+              void stopWorkers().catch(() => {});
+            },
+          },
+        );
+      } finally {
+        acquiring = false;
+      }
+      return async () => {
+        await stopWorkers();
+        await runtime?.release();
+        runtime = undefined;
+      };
+    },
+    releaseSnapshot: async ref => remove(imagePath(ref), { force: true }),
+    start: async ({ debugName, snapshot, onOutbound, onOutboundBatch }) => {
+      if (!runtime)
+        throw Error(
+          'Acquire the Ironhorse state directory before starting workers',
+        );
+      const owned = runtime;
+      owned.assertOwned();
+      await makeDirectory(images);
+      await makeDirectory(work);
+      // Name the incarnation after its worker, so `ls` and the heap path in
+      // `ps` tell an operator which vat is whose. Diagnostic only: nothing
+      // looks an incarnation up by name.
+      const directory = await makeTempDirectory(
+        join(work, `vat-${slugOf(debugName)}-`),
+      );
+      const heap = join(directory, 'heap.sqlite');
+      try {
+        if (snapshot != null) {
+          const source = imagePath(snapshot);
+          if ((await hashFile(hashes, source)) !== snapshot) {
+            throw Error('Ironhorse snapshot digest mismatch');
+          }
+          await copyFile(source, heap);
+        }
+      } catch (error) {
+        await remove(directory, { recursive: true, force: true });
+        throw error;
+      }
+
+      let terminated = false;
+      /** @type {SpawnedProcess | undefined} */
+      let child;
+      /** @type {Promise<number | null> | undefined} */
+      let exited;
+      /** @type {{ resolve: (value: any) => void, reject: (error: Error) => void } | undefined} */
+      let pending;
+
+      /** @param {Error} error */
+      const fail = error => {
+        pending?.reject(error);
+        pending = undefined;
+        child?.kill('SIGKILL');
+      };
+
+      /** @param {object} [message] */
+      const request = message =>
+        new Promise((resolve, reject) => {
+          if (!child || terminated || pending) {
+            reject(Error('Ironhorse worker is unavailable or busy'));
+            return;
+          }
+          const timer = setTimer(
+            () => fail(Error('Ironhorse worker request timed out')),
+            timeoutMs,
+          );
+          pending = {
+            resolve: value => {
+              clearTimer(timer);
+              resolve(value);
+            },
+            reject: error => {
+              clearTimer(timer);
+              reject(error);
+            },
+          };
+          if (message) child.input(0)?.write(`${JSON.stringify(message)}\n`);
+        });
+
+      let combinedDelivery = false;
+      const launch = async () => {
+        if (terminated)
+          throw Error('Ironhorse worker was terminated during startup');
+        owned.assertOwned();
+        child = spawn(
+          owned.workerBinary,
+          [
+            heap,
+            owned.profile,
+            join(storePath, 'active.lock'),
+            JSON.stringify(limits),
+            ...owned.bootPaths,
+          ],
+          {
+            stdio: ['pipe', 'pipe', 'inherit'],
+          },
+        );
+        const workerProcess = child;
+        void workerProcess.failed.then(fail);
+        exited = workerProcess.exited.then(code => {
+          if (pending)
+            fail(Error(`Ironhorse worker exited (${code ?? 'signaled'})`));
+          return code;
+        });
+        void (async () => {
+          await null;
+          try {
+            for await (const line of workerProcess.lines(1)) {
+              try {
+                const reply = JSON.parse(line);
+                const waiter = pending;
+                if (!waiter) throw Error('Unsolicited Ironhorse reply');
+                if (reply.op === 'fatal') {
+                  fail(new WorkerHaltError(String(reply.message)));
+                } else if (reply.op === 'error') {
+                  // A malformed request; the worker and its heap stay up.
+                  pending = undefined;
+                  waiter.reject(Error(String(reply.message)));
+                } else {
+                  if (!['ready', 'result'].includes(reply.op))
+                    throw Error('Invalid Ironhorse reply');
+                  pending = undefined;
+                  waiter.resolve(reply);
+                }
+              } catch (error) {
+                fail(/** @type {Error} */ (error));
+              }
+            }
+          } catch (error) {
+            fail(/** @type {Error} */ (error));
+          }
+        })();
+        const ready = await request();
+        owned.assertOwned();
+        if (ready.op !== 'ready')
+          throw Error('Ironhorse boot protocol mismatch');
+        combinedDelivery =
+          Array.isArray(ready.features) &&
+          ready.features.includes('deliver-v1');
+      };
+
+      const close = async () => {
+        // The escalation must be cleared even when the wait fails: a surviving
+        // SIGKILL timer holds the host's event loop and fires at a child that
+        // has already gone.
+        const code = await withExpiry(
+          timers,
+          timeoutMs,
+          () => child?.kill('SIGKILL'),
+          () => {
+            child?.input(0)?.end(`${JSON.stringify({ op: 'close' })}\n`);
+            return exited;
+          },
+        );
+        child = undefined;
+        if (code !== 0)
+          throw Error('Ironhorse failed to close its SQLite heap');
+      };
+
+      const terminate = async () => {
+        terminated = true;
+        child?.kill('SIGKILL');
+        await exited;
+        await remove(directory, { recursive: true, force: true });
+        incarnations.delete(terminate);
+      };
+      incarnations.add(terminate);
+      try {
+        await launch();
+      } catch (error) {
+        await terminate();
+        throw error;
+      }
+      return harden({
+        deliver: async message => {
+          owned.assertOwned();
+          // The queue and dispatch function belong to the trusted worker
+          // bootstrap; the guest evaluator receives neither one.
+          const source = `thixotropeDispatch(${JSON.stringify(JSON.stringify(message))});`;
+          const budget =
+            message.t === 'init' ? limits.bootstrapBudget : limits.crankBudget;
+          let reply;
+          if (combinedDelivery) {
+            // The native operation runs dispatch jobs and the complete
+            // finalizer cascade before extracting outbound, with no extra GC
+            // for the allocation-only bridge read.
+            reply = await request({
+              op: 'deliver',
+              source,
+              budget,
+              drainBudget: limits.crankBudget,
+            });
+          } else {
+            // A pinned older runtime must replay its original two evaluations.
+            // Do not change its collection/finalization schedule on restart.
+            await request({ op: 'eval', source, budget });
+            reply = await request({
+              op: 'eval',
+              source: 'JSON.stringify(thixotropeTakeOutbound())',
+              budget: limits.crankBudget,
+            });
+          }
+          const frames = JSON.parse(reply.result);
+          if (onOutboundBatch !== undefined) onOutboundBatch(frames);
+          else for (const frame of frames) onOutbound(frame);
+        },
+        snapshot: async () => {
+          await close(); // SQLite folds the WAL before the file is copied.
+          const ref = await hashFile(hashes, heap);
+          const temporary = join(directory, 'snapshot.sqlite');
+          await copyFile(heap, temporary);
+          await syncPath(temporary);
+          await rename(temporary, imagePath(ref));
+          await syncPath(images);
+          await launch();
+          return ref;
+        },
+        terminate,
+      });
+    },
+  });
+};
+harden(makeIronhorseEngine);

@@ -50,8 +50,28 @@ const materializeRecord = (baseDir, record, created, skipped) => {
     fs.writeFileSync(dest, body);
   } else if (record.type === 'symlink') {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
+    // On Windows, `symlinkSync` requires an explicit `type` ('file' | 'dir' |
+    // 'junction') — it cannot always infer the link kind from a target that is
+    // absent or not yet stat-able, and creating a directory symlink without
+    // `type` throws `EINVAL`. Infer the kind from the target when it exists on
+    // disk, defaulting to 'dir' for our directory-pointing fixture links; the
+    // `optional` catch below still drops links a platform cannot create.
+    const targetPath = path.resolve(
+      path.dirname(dest),
+      /** @type {string} */ (record.target),
+    );
+    /** @type {'dir' | 'file'} */
+    let symlinkType;
     try {
-      fs.symlinkSync(/** @type {string} */ (record.target), dest);
+      symlinkType = fs.statSync(targetPath).isDirectory() ? 'dir' : 'file';
+    } catch {
+      // Target not yet present (e.g. an above-root sibling created in a
+      // separate pass); default to 'dir' so a directory symlink materializes
+      // on Windows rather than throwing for want of a type.
+      symlinkType = 'dir';
+    }
+    try {
+      fs.symlinkSync(/** @type {string} */ (record.target), dest, symlinkType);
       created.add(record.path);
     } catch (error) {
       if (record.optional) {

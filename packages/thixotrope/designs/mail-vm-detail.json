@@ -1,0 +1,274 @@
+{
+  "trial": 8,
+  "totalMs": 155.870361328125,
+  "intervals": [
+    {
+      "parent": "execution-and-jobs",
+      "pid": 12899,
+      "startMs": 12.96337890625,
+      "ms": 59.298828125,
+      "parts": {
+        "unattributed": 0.03564453125,
+        "run-initial-script": 5.718017578125,
+        "run-promise-jobs": 53.545166015625
+      },
+      "counters": {
+        "run-initial-script": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "run-promise-jobs": {
+          "events": 2,
+          "count": 51,
+          "secondary": 0
+        }
+      }
+    },
+    {
+      "parent": "garbage-collection",
+      "pid": 12899,
+      "startMs": 72.280029296875,
+      "ms": 42.17138671875,
+      "parts": {
+        "gc-admission": 0.000244140625,
+        "unattributed": 0.15087890625,
+        "gc-roots": 0.076171875,
+        "gc-clear-seed": 0.0078125,
+        "gc-mark-edges": 18.025146484375,
+        "gc-ephemerons": 0.03955078125,
+        "gc-prune-weak": 0.040771484375,
+        "gc-sweep-slots": 14.260009765625,
+        "gc-chunk-roots": 0.469482421875,
+        "gc-compact-chunks": 7.291259765625,
+        "gc-rewrite-chunks": 0.830078125,
+        "gc-prune-late": 0.9150390625,
+        "gc-compact-code": 0.032470703125,
+        "gc-compact-reactions": 0.017333984375,
+        "gc-side-ledger": 0.01513671875
+      },
+      "counters": {
+        "gc-admission": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-roots": {
+          "events": 1,
+          "count": 901,
+          "secondary": 0
+        },
+        "gc-borrow-tables": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-clear-seed": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-mark-edges": {
+          "events": 3,
+          "count": 49507,
+          "secondary": 80366
+        },
+        "gc-ephemerons": {
+          "events": 3,
+          "count": 248,
+          "secondary": 0
+        },
+        "gc-prune-weak": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-sweep-slots": {
+          "events": 1,
+          "count": 36577,
+          "secondary": 345550
+        },
+        "gc-chunk-roots": {
+          "events": 1,
+          "count": 16690,
+          "secondary": 0
+        },
+        "gc-compact-chunks": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-rewrite-chunks": {
+          "events": 1,
+          "count": 192,
+          "secondary": 0
+        },
+        "gc-prune-late": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-compact-code": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-compact-reactions": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-side-ledger": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        }
+      }
+    },
+    {
+      "parent": "finalizer-callbacks",
+      "pid": 12899,
+      "startMs": 114.47119140625,
+      "ms": 1.588623046875,
+      "parts": {
+        "unattributed": 0.439697265625,
+        "run-promise-jobs": 1.14892578125
+      },
+      "counters": {
+        "run-promise-jobs": {
+          "events": 2,
+          "count": 3,
+          "secondary": 0
+        }
+      }
+    },
+    {
+      "parent": "garbage-collection",
+      "pid": 12899,
+      "startMs": 116.0751953125,
+      "ms": 25.23974609375,
+      "parts": {
+        "gc-admission": 0.00048828125,
+        "unattributed": 0.130126953125,
+        "gc-roots": 0.046142578125,
+        "gc-clear-seed": 0.004638671875,
+        "gc-mark-edges": 16.612548828125,
+        "gc-ephemerons": 0.031494140625,
+        "gc-prune-weak": 0.025146484375,
+        "gc-sweep-slots": 0.550537109375,
+        "gc-chunk-roots": 0.4521484375,
+        "gc-compact-chunks": 6.699951171875,
+        "gc-rewrite-chunks": 0.556640625,
+        "gc-prune-late": 0.070068359375,
+        "gc-compact-code": 0.0322265625,
+        "gc-compact-reactions": 0.01171875,
+        "gc-side-ledger": 0.015869140625
+      },
+      "counters": {
+        "gc-admission": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-roots": {
+          "events": 1,
+          "count": 901,
+          "secondary": 0
+        },
+        "gc-borrow-tables": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-clear-seed": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-mark-edges": {
+          "events": 3,
+          "count": 49509,
+          "secondary": 80368
+        },
+        "gc-ephemerons": {
+          "events": 3,
+          "count": 248,
+          "secondary": 0
+        },
+        "gc-prune-weak": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-sweep-slots": {
+          "events": 1,
+          "count": 568,
+          "secondary": 345550
+        },
+        "gc-chunk-roots": {
+          "events": 1,
+          "count": 16689,
+          "secondary": 0
+        },
+        "gc-compact-chunks": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-rewrite-chunks": {
+          "events": 1,
+          "count": 2,
+          "secondary": 0
+        },
+        "gc-prune-late": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-compact-code": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-compact-reactions": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "gc-side-ledger": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        }
+      }
+    },
+    {
+      "parent": "outbound-extraction",
+      "pid": 12899,
+      "startMs": 141.874267578125,
+      "ms": 0.43994140625,
+      "parts": {
+        "unattributed": 0.02880859375,
+        "run-initial-script": 0.4111328125
+      },
+      "counters": {
+        "run-initial-script": {
+          "events": 1,
+          "count": 0,
+          "secondary": 0
+        },
+        "run-promise-jobs": {
+          "events": 2,
+          "count": 0,
+          "secondary": 0
+        }
+      }
+    }
+  ],
+  "notes": [
+    "Each parent is partitioned exclusively into sibling spans plus explicit unattributed remainder.",
+    "Counts are observed slots/edges/jobs, not unique graph edges. Promise drain secondary counts thenable jobs.",
+    "GC sweep secondary is arena slot capacity. GC ephemeron count is proposed edges.",
+    "Timing excludes per-opcode clocks and per-job clocks. Short intervals include timer/trace overhead."
+  ]
+}

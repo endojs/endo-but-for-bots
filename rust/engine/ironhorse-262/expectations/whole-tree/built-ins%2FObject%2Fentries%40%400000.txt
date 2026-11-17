@@ -3,10 +3,10 @@ built-ins/Object/entries/exception-during-enumeration.js sloppy pass
 built-ins/Object/entries/exception-during-enumeration.js strict pass
 built-ins/Object/entries/exception-not-object-coercible.js sloppy pass
 built-ins/Object/entries/exception-not-object-coercible.js strict pass
-built-ins/Object/entries/function-length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Object/entries/function-length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
-built-ins/Object/entries/function-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be entries; name value should be entries"
-built-ins/Object/entries/function-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be entries; name value should be entries"
+built-ins/Object/entries/function-length.js sloppy pass
+built-ins/Object/entries/function-length.js strict pass
+built-ins/Object/entries/function-name.js sloppy pass
+built-ins/Object/entries/function-name.js strict pass
 built-ins/Object/entries/function-property-descriptor.js sloppy pass
 built-ins/Object/entries/function-property-descriptor.js strict pass
 built-ins/Object/entries/getter-adding-key.js sloppy pass

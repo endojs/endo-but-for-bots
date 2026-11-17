@@ -1,28 +1,28 @@
 # engine=ironhorse features=default corpus=language/expressions/compound-assignment tip=be13516fb6441b950ba8a3df97eb34062c186972
-language/expressions/compound-assignment/left-hand-side-private-reference-method-add.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-add.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-bitand.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-bitand.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-bitor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-bitor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-bitxor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-bitxor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-div.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-div.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-exp.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-exp.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-lshift.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-lshift.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-mod.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-mod.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-mult.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-mult.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-rshift.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-rshift.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-srshift.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-srshift.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-sub.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/compound-assignment/left-hand-side-private-reference-method-sub.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/compound-assignment/left-hand-side-private-reference-method-add.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-add.js strict pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-bitand.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-bitand.js strict pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-bitor.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-bitor.js strict pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-bitxor.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-bitxor.js strict pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-div.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-div.js strict pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-exp.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-exp.js strict pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-lshift.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-lshift.js strict pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-mod.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-mod.js strict pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-mult.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-mult.js strict pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-rshift.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-rshift.js strict pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-srshift.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-srshift.js strict pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-sub.js sloppy pass
+language/expressions/compound-assignment/left-hand-side-private-reference-method-sub.js strict pass
 language/expressions/compound-assignment/left-hand-side-private-reference-readonly-accessor-property-add.js sloppy pass
 language/expressions/compound-assignment/left-hand-side-private-reference-readonly-accessor-property-add.js strict pass
 language/expressions/compound-assignment/left-hand-side-private-reference-readonly-accessor-property-bitand.js sloppy pass

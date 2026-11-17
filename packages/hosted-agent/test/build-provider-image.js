@@ -13,6 +13,7 @@ import process from 'node:process';
 const tag = process.argv[2];
 if (!tag || !/^[a-z0-9][a-z0-9._:/-]*$/.test(tag))
   throw Error('Provide a local listener image tag');
+if (process.argv.length > 3) throw Error('Unexpected listener build arguments');
 const directory = await mkdtemp(join(tmpdir(), 'endo-provider-build-'));
 try {
   await build({

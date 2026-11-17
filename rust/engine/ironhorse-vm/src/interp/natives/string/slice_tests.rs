@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 #[test]
 fn slice_methods_do_not_decode_whole_receivers() {
-    for method in ["slice", "substring"] {
+    for method in ["slice", "substring", "substr"] {
         for receiver in ["s", "new String(s)", "{toString(){return s}}"] {
             let (setup, symbols) = ironhorse_compile::compile_atoms(&format!(
                 "var s='x'.repeat(1048576);var receiver={receiver};"
@@ -50,7 +50,11 @@ fn slicing_lazy_strings_reads_only_the_requested_range() {
             self.bytes[start..(start + CHUNK_EXTENT_BYTES as usize).min(self.bytes.len())].to_vec()
         }
     }
-    for method in [NativeMethod::StringSlice, NativeMethod::StringSubstring] {
+    for method in [
+        NativeMethod::StringSlice,
+        NativeMethod::StringSubstring,
+        NativeMethod::StringSubstr,
+    ] {
         let extent = CHUNK_EXTENT_BYTES as usize;
         let mut chunks = ChunkArena::new();
         chunks.alloc(&vec![0; extent - 9]);
@@ -96,7 +100,7 @@ fn slicing_lazy_strings_reads_only_the_requested_range() {
         // A refusal must precede even a one-unit payload read in a cold
         // middle extent. Reading the receiver length faults only its header.
         vm.chunks = ChunkArena::lazy_from_parts(byte_size, source);
-        vm.chunks.set_ceiling(byte_size);
+        vm.chunks.set_ceiling(byte_size).unwrap();
         reads.borrow_mut().clear();
         vm.stack[4] = Slot::integer(extent as i32);
         vm.stack[5] = Slot::integer(extent as i32 + 1);

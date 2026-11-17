@@ -17,7 +17,7 @@
 //!   JavaScript identifier, so no `with` binding can ever name one.)
 //!
 //! Companion to `with_statement.rs`, which covers the ordinary-object cluster
-//! and gates it bit-exact.
+//! and gates its observables.
 //!
 //! **What the exotic half fixed.** These are not hypothetical: measured on the
 //! parent commit (`f109e8f42`), four of the programs below answered a SILENT
@@ -84,12 +84,14 @@
 
 use ironhorse_262::{dual_run, Agreement};
 
-/// The program runs end-to-end bit-exact with the XS oracle (value + computrons).
+/// The program runs end-to-end observably agreeing with the XS oracle
+/// (completion + value; the computrons in the message are diagnostics only —
+/// XS-computron parity is a non-goal).
 fn exact(source: &str) {
     let run = dual_run(source).expect("the XS oracle machine must start");
     assert!(
         run.observables_agree(),
-        "not bit-exact: {source}\n  oracle_result={} ironhorse_result={}\n  oracle_computrons={} ironhorse_computrons={}",
+        "observable divergence: {source}\n  oracle_result={} ironhorse_result={}\n  oracle_computrons={} ironhorse_computrons={}",
         run.oracle_result,
         run.ironhorse_result,
         run.oracle_computrons,

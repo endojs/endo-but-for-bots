@@ -15,15 +15,17 @@
 //   { type: 'abort', reason }             stream failed
 
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { projectUsage } from '@endo/hosted-agent/token-usage.js';
 
 /**
  * @typedef {(
  *   | { type: 'phase', phase: string }
  *   | { type: 'delta', text: string }
  *   | { type: 'final', text: string }
+ *   | { type: 'thinking', id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean }
  *   | { type: 'tool_call', id: string, name: string, args: string }
- *   | { type: 'tool_result', id: string, name: string, result: string }
- *   | { type: 'usage', inputTokens: number, outputTokens: number, turns: number }
+ *   | { type: 'tool_result', id: string, name: string, result: string, failed?: boolean }
+ *   | ({ type: 'usage', turns: number, incompleteTurns: number } & import('@endo/hosted-agent/token-usage.js').TokenUsage)
  *   | { type: 'end' }
  *   | { type: 'abort', reason: string }
  * )} ReplyEvent
@@ -51,6 +53,8 @@ export const makeReplyChannel = (onClose = null) => {
     delta: text => push({ type: 'delta', text: `${text}` }),
     /** @param {string} text */
     final: text => push({ type: 'final', text: `${text}` }),
+    /** @param {{ id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean }} event */
+    thinking: event => push({ type: 'thinking', ...event }),
     /** @param {{ id: string, name: string, args: string }} call */
     toolCall: ({ id, name, args }) =>
       push({
@@ -59,21 +63,23 @@ export const makeReplyChannel = (onClose = null) => {
         name: `${name}`,
         args: `${args}`,
       }),
-    /** @param {{ id: string, name: string, result: string }} result */
-    toolResult: ({ id, name, result }) =>
+    /** @param {{ id: string, name: string, result: string, failed?: boolean }} result */
+    toolResult: ({ id, name, result, failed }) =>
       push({
         type: 'tool_result',
         id: `${id}`,
         name: `${name}`,
         result: `${result}`,
+        ...(failed === undefined ? {} : { failed }),
       }),
-    /** @param {{ inputTokens: number, outputTokens: number, turns: number }} u */
+    /** @param {Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage> & { turns: number, incompleteTurns?: number }} u */
     usage: u =>
       push({
         type: 'usage',
-        inputTokens: Math.trunc(u.inputTokens) || 0,
-        outputTokens: Math.trunc(u.outputTokens) || 0,
+        // The five disjoint counts, and how full the window is now.
+        ...projectUsage(u),
         turns: Math.trunc(u.turns) || 0,
+        incompleteTurns: Math.trunc(u.incompleteTurns || 0) || 0,
       }),
     end: () => push({ type: 'end' }),
     /** @param {unknown} reason */

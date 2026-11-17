@@ -6,15 +6,29 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { passableAsJustin, makeMarshal } from '@endo/marshal';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { Far } from '@endo/pass-style';
+import { makePromiseKit } from '@endo/promise-kit';
+import { DEFAULT_WORKLOAD_LIMITS } from '@endo/hosted-agent/workload-limits.js';
+import {
+  planContextCompaction,
+  summarizeContext,
+} from '@endo/lal/providers/index.js';
 import {
   makeConversationTree,
   makeEndoPetstoreBackend,
 } from '@endo/conversation-tree';
 
-import { makeRotatingProvider } from './src/provider-cache.js';
+import {
+  decodeImageResult,
+  imageResultText,
+} from '@endo/hosted-agent/image-result.js';
+import { makeProviderOwner } from './src/provider-owner.js';
+import { restoreInboxConversation } from './src/inbox-conversation.js';
 import { discoverTools, executeTool } from './src/tools.js';
 import {
   makeListPetnamesTool,
+  makeDescribeCapabilityTool,
+  makeReadSourcesTool,
   makeLookupTool,
   makeStoreTool,
   makeRemoveTool,
@@ -27,26 +41,26 @@ import {
   makeListMessagesTool,
   makeDismissTool,
   makeExecTool,
+  makeViewImageTool,
   makeReadChannelTool,
 } from './src/tool-makers.js';
 import { extractToolCallsFromContent } from './src/extract-tool-calls.js';
-import { runAgenticTurn } from './src/turn-engine.js';
+import { DEFAULT_MAX_TOOL_ROUNDS, runAgenticTurn } from './src/turn-engine.js';
 import {
   assertAgentName,
   composeSubagentSystemPrompt,
   isSameFormula,
   makeSubagentDelegations,
   makeSubagentTools,
+  DEFAULT_SUBAGENT_LIMITS,
+  selectFaeWorkloadEnv,
 } from './src/subagent.js';
-import {
-  DEFAULT_MAX_SUBAGENT_DEPTH,
-  provisionFaeAgent,
-} from './src/subagent-host.js';
+import { provisionFaeAgent } from './src/subagent-host.js';
 import { AUTH_SECRET_PETNAME } from './src/credentials.js';
+import { readFaeWorkloadConfig } from './src/workload-config.js';
 
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
-const MAX_TOOL_ROUNDS = 32;
 
 /**
  * Errors whose text this agent wrote itself, and may therefore mail back.
@@ -93,12 +107,24 @@ reasoning, steps, logs, or recaps to a channel.
 
 ## Tools
 - **exec** — Run JavaScript with powers, E, harden. Use for multi-step tasks.
+- **viewImage** — See a PNG/JPEG/WebP held by an Endo blob, mount, or workspace.
 - **reply** — Private inbox reply to sender by message number.
 - **adopt** — Store a message reference under a pet name.
 - **list/lookup/store/remove** — Manage your pet name directory.
 - **send** — Send unsolicited inbox message to a named agent.
 - **adoptTool** — Install a FaeTool capability from a message.
 - **dismiss** — Dismiss a handled message.
+
+## Images and visual verification
+
+For visual pages, scenes, and interfaces, verify the rendered result before claiming
+it works. Discover an available browser capability or use Playwright/Chromium through
+your granted shell. Render at desktop and mobile sizes, collect console/page errors,
+save screenshots to a readable Endo workspace or mount, and use viewImage to inspect
+them. Fix visible defects and render again. A syntax check does not verify rendering.
+If browser access, shell execution, or image input is unavailable, say what could not
+be verified; do not claim you saw the result. Do not publish merely to obtain a
+screenshot unless publishing is part of the user's request.
 
 ## Subagents (only when the tools below are listed)
 
@@ -158,7 +184,15 @@ Example: if a message says "Here is @counter for you", adopt it:
  * @typedef {object} ProviderConstructorConfig
  * @property {string} host - LAL host URL.
  * @property {string} model - LAL model identifier.
- * @property {string} authToken - LAL auth token.
+ */
+
+/**
+ * @typedef {object} SubscriptionProviderConfig
+ * @property {'subscription-responses'} kind
+ * @property {any} subscription - Existing subscription, never credentials.
+ * @property {string} model
+ * @property {string} [reasoningEffort]
+ * @property {number} [contextLength] - Provider-observed catalog metadata.
  */
 
 /**
@@ -172,7 +206,7 @@ Example: if a message says "Here is @counter for you", adopt it:
  *
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | undefined} context - Context for cancellation
- * @param {ProviderConstructorConfig | InjectedProviderConfig} providerConfig - LLM provider config. Pass `provider` to inject a pre-built provider (e.g. for tests); otherwise host/model/authToken are used to construct one.
+ * @param {ProviderConstructorConfig | SubscriptionProviderConfig | InjectedProviderConfig} providerConfig - Token-free HTTP config, subscription recipe, or an injected provider.
  * @param {string} [systemPrompt] - Override system prompt (defaults to guestSystemPrompt)
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability. Present only
@@ -185,6 +219,12 @@ Example: if a message says "Here is @counter for you", adopt it:
  * @param {() => Promise<string>} [options.provideAuthToken] - Reads the auth
  *   token afresh for each turn, so a rotated secret reaches a running agent and
  *   a revoked one stops it. Absent when the caller injected a built provider.
+ * @param {string} [options.sessionId] - Stable pool identity, required for subscriptions.
+ * @param {boolean} [options.forceCompaction] Acceptance-only trigger.
+ * @param {string} [options.providerIdentity] Locator of the exact retained provider recipe.
+ * @param {typeof DEFAULT_SUBAGENT_LIMITS} [options.subagentLimits]
+ * @param {number} [options.maxToolRounds]
+ * @param {number} [options.requestTimeoutMs]
  * @returns {Promise<void>}
  */
 export const spawnWorkerLoop = async (
@@ -192,7 +232,18 @@ export const spawnWorkerLoop = async (
   context,
   providerConfig,
   systemPrompt,
-  { spawner, timers, provideAuthToken, delegatedPrompt } = {},
+  {
+    spawner,
+    timers,
+    provideAuthToken,
+    delegatedPrompt,
+    sessionId,
+    forceCompaction = false,
+    providerIdentity,
+    subagentLimits = DEFAULT_SUBAGENT_LIMITS,
+    maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
+    requestTimeoutMs = DEFAULT_WORKLOAD_LIMITS.inferenceTimeoutMs,
+  } = {},
 ) => {
   /**
    * The agent's cancellation promise, boxed.
@@ -226,16 +277,63 @@ export const spawnWorkerLoop = async (
 
   // Resolved per turn rather than captured when the loop starts, so a rotated
   // secret reaches an agent that is already running and a revoked one stops
-  // its next turn. See `makeRotatingProvider`.
-  const currentProvider = makeRotatingProvider({
+  // its next turn. Subscription-backed providers leave credential custody to
+  // the retained subscription capability instead.
+  const providerOwner = makeProviderOwner({
     config: providerConfig,
+    sessionId,
+    requestTimeoutMs,
     ...(provideAuthToken ? { provideAuthToken } : {}),
   });
+  const loopAbort = new AbortController();
+  const loopCancelled = makePromiseKit();
+  void loopCancelled.promise.catch(() => undefined);
+  // Wait for admitted evidence writers, not a borrowed model's stalled read.
+  // Failed publication stays retained and fences the loop instead of allowing
+  // another turn to obscure known effects that were not durably recorded.
+  const evidenceWrites = new Set();
+  const retainWrite = () => {
+    const completion = makePromiseKit();
+    evidenceWrites.add(completion.promise);
+    void completion.promise.then(
+      () => evidenceWrites.delete(completion.promise),
+      error => {
+        loopAbort.abort(error);
+        loopCancelled.reject(error);
+      },
+    );
+    return completion;
+  };
+  const disposeProvider = async () => {
+    const settled = await Promise.allSettled([
+      providerOwner.dispose(),
+      ...evidenceWrites,
+    ]);
+    const failures = settled
+      .filter(result => result.status === 'rejected')
+      .map(result => result.reason);
+    if (failures.length)
+      throw new AggregateError(
+        failures,
+        'Fae provider/evidence disposal failed',
+      );
+  };
+  const stopProvider = () => {
+    loopAbort.abort(Error('Fae agent cancelled'));
+    loopCancelled.reject(loopAbort.signal.reason);
+    return disposeProvider();
+  };
+  // Every route owns conversation writers; the subscription route also owns
+  // late-endpoint cleanup. A borrowed provider owns neither our tree nor its
+  // cleanup acknowledgement. This is cancellation, not permanent GC.
+  if (context) {
+    await E(context).addDisposalHook(Far('FaeLoopDisposal', stopProvider));
+  }
 
   /**
    * The provider a turn runs on, resolved once when the turn starts.
    *
-   * Not once per round: a turn may take up to `MAX_TOOL_ROUNDS` provider calls,
+   * Not once per round: a turn may make many provider calls,
    * and reading the secret for each of them would multiply the daemon's audit
    * trail by the model's tool use — burying the retry pattern that trail exists
    * to show, and paying three eventual-sends per round for it. Per turn is the
@@ -250,7 +348,10 @@ export const spawnWorkerLoop = async (
    * @returns {Promise<{message: object}>}
    */
   const chat = async (messages, toolSchemas) =>
-    turnProvider.chat(messages, toolSchemas);
+    Promise.race([
+      turnProvider.chat(messages, toolSchemas, loopAbort.signal),
+      loopCancelled.promise,
+    ]);
 
   const effectivePrompt = composeSubagentSystemPrompt(
     systemPrompt || guestSystemPrompt,
@@ -258,42 +359,17 @@ export const spawnWorkerLoop = async (
   );
   const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
 
-  /**
-   * Find or create the root node that carries the system prompt.
-   * If the system prompt has changed since the last root was created,
-   * start a fresh conversation tree so old messages with stale
-   * instructions don't confuse the LLM.
-   *
-   * @returns {Promise<string>} rootNodeId
-   */
-  const getOrCreateRoot = async () => {
-    const roots = await tree.getRoots();
-    if (roots.length > 0) {
-      const existingRoot = await tree.getNode(roots[0].id);
-      if (existingRoot) {
-        const rootMsg = existingRoot.messages[0];
-        if (rootMsg && rootMsg.content === effectivePrompt) {
-          return roots[0].id;
-        }
-        // System prompt changed — start fresh
-        console.error(
-          '[fae] System prompt changed, creating fresh conversation tree',
-        );
-      }
-    }
-    const root = await tree.addNode(null, [
-      { role: 'system', content: effectivePrompt },
-    ]);
-    return root.id;
-  };
-
-  const rootNodeIdP = getOrCreateRoot();
+  // Restore before following the replaying mailbox. Starting from an arbitrary
+  // root or forgetting admission receipts would rerun old tools after restart.
+  let conversation;
 
   // Built-in tools: petname ops + mail (no filesystem tools for guest)
   /** @type {Map<string, object>} */
   const localTools = new Map();
   localTools.set('list', makeListPetnamesTool(powers));
   localTools.set('lookup', makeLookupTool(powers));
+  localTools.set('describeCapability', makeDescribeCapabilityTool(powers));
+  localTools.set('readSources', makeReadSourcesTool(powers));
   localTools.set('store', makeStoreTool(powers));
   localTools.set('remove', makeRemoveTool(powers));
   localTools.set('adopt', makeAdoptTool(powers));
@@ -320,19 +396,21 @@ export const spawnWorkerLoop = async (
   localTools.set('editMessage', makeEditMessageTool(powers));
   localTools.set('messageHistory', makeMessageHistoryTool(powers));
   localTools.set('exec', makeExecTool(powers));
+  localTools.set('viewImage', makeViewImageTool(powers));
   localTools.set('readChannel', makeReadChannelTool(powers));
 
   // Delegation is capability-gated: without a spawner there are no subagent
   // tools and `claim` has nothing to match, so the inbox loop below behaves
   // exactly as it did before.
   const delegations = makeSubagentDelegations(
-    harden({ powers, ...(timers ? { timers } : {}) }),
+    harden({ powers, limits: subagentLimits, ...(timers ? { timers } : {}) }),
   );
   if (spawner) {
     for (const [name, tool] of makeSubagentTools({
       powers,
       spawner,
       delegations,
+      limits: subagentLimits,
       // The inbox loop dismisses every claimed reply (see below), so a reply's
       // attachments cannot be adopted afterwards; the tool must not say they
       // can.
@@ -379,20 +457,34 @@ export const spawnWorkerLoop = async (
       replyTracker.anyToolCalled = true;
 
       let result;
-      try {
-        result = await executeTool(name, args, toolMap);
-        console.log(`[tool] ${name} -> ${passableAsJustin(result, false)}`);
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        result = harden({ error: errorMessage });
-        console.error(`[tool] ${name} error: ${errorMessage}`);
+      let failed = false;
+      if (loopAbort.signal.aborted) {
+        result = harden({
+          error: 'Not executed: Fae agent cancelled before tool admission',
+        });
+        failed = true;
+      } else {
+        try {
+          result = await executeTool(name, args, toolMap);
+          console.log(
+            `[tool] ${name} -> ${decodeImageResult(result) ? imageResultText(result) : passableAsJustin(result, false)}`,
+          );
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          result = harden({ error: errorMessage });
+          failed = true;
+          console.error(`[tool] ${name} error: ${errorMessage}`);
+        }
       }
 
       results.push({
         role: 'tool',
-        content: passableAsJustin(result, false),
+        content: decodeImageResult(result)
+          ? result
+          : passableAsJustin(result, false),
         tool_call_id: /** @type {any} */ (toolCall).id,
+        ...(failed ? { failed: true } : {}),
       });
     }
 
@@ -413,28 +505,77 @@ export const spawnWorkerLoop = async (
    * @returns {Promise<{ answered: boolean, exhausted: boolean, leafId: string, message?: any }>} the turn outcome
    */
   const runAgenticLoop = async (initialSchemas, initialToolMap, leafNodeId) => {
+    let toolWrite;
+    let responseUsage;
+    let forced = false;
+    const turnImages = new Map();
+    let unseenImages = false;
     const firstTools = harden({
       schemas: initialSchemas,
       toolMap: initialToolMap,
     });
     const outcome = await runAgenticTurn({
       leafId: leafNodeId,
-      maxRounds: MAX_TOOL_ROUNDS,
+      signal: loopAbort.signal,
+      maxRounds: maxToolRounds,
       getTools: round =>
         round === 0 ? firstTools : discoverTools(powers, localTools),
-      getContext: async currentLeafId => {
-        const providerContext = await tree.getPath(currentLeafId);
+      getContext: async (currentLeafId, tools) => {
+        let providerContext = await conversation.getContext(currentLeafId);
+        const reading = await conversation.getLatestUsage(currentLeafId);
+        // Give a newly read image to the model before any summary can replace
+        // it with a receipt. Prior request usage does not include these pixels.
+        const plan = unseenImages
+          ? undefined
+          : planContextCompaction(providerContext, {
+              tools: tools.schemas,
+              // Only caller-supplied exact next-model catalog metadata is a
+              // capacity guarantee. A router's previous served model is not.
+              windowTokens: providerConfig.contextLength ?? 0,
+              usedTokens: reading?.context?.usedTokens ?? 0,
+              force: forceCompaction && !forced,
+            });
+        if (plan) {
+          const checkpoint = await summarizeContext(
+            plan,
+            messages => chat(messages, []),
+            loopAbort.signal,
+          );
+          loopAbort.signal.throwIfAborted();
+          const write = retainWrite();
+          try {
+            const node = await conversation.appendCheckpoint(
+              currentLeafId,
+              checkpoint.summary,
+              checkpoint.retained,
+            );
+            currentLeafId = node.id;
+            providerContext = checkpoint.context;
+            forced = true;
+            write.resolve(undefined);
+          } catch (error) {
+            write.reject(error);
+            throw error;
+          }
+        }
         console.log(
           `[fae] context has ${providerContext.length} messages, sending to LLM`,
         );
-        return providerContext;
+        return harden({ leafId: currentLeafId, messages: providerContext });
       },
       invoke: async (providerContext, tools) => {
         const response = await chat(providerContext, tools.schemas);
+        unseenImages = false;
+        loopAbort.signal.throwIfAborted();
+        responseUsage = response.usage;
         const responseMessage = response.message;
         if (responseMessage) {
           const rm = /** @type {any} */ (responseMessage);
-          if ((!rm.tool_calls || rm.tool_calls.length === 0) && rm.content) {
+          if (
+            !rm.responsesOutput &&
+            (!rm.tool_calls || rm.tool_calls.length === 0) &&
+            rm.content
+          ) {
             const extracted = extractToolCallsFromContent(rm.content);
             if (extracted.toolCalls) {
               rm.tool_calls = extracted.toolCalls;
@@ -450,19 +591,109 @@ export const spawnWorkerLoop = async (
       getToolCalls: message =>
         Array.isArray(message.tool_calls) ? message.tool_calls : [],
       runTools: async (calls, tools) => {
-        const results = await processToolCalls(calls, tools.toolMap);
-        console.log(`[fae] tool results: ${JSON.stringify(results, null, 2)}`);
-        return results;
+        toolWrite = retainWrite();
+        try {
+          const results = await processToolCalls(calls, tools.toolMap);
+          for (const result of results) {
+            if (decodeImageResult(result.content)) {
+              unseenImages = true;
+            }
+          }
+          console.log(
+            `[fae] tool results: ${JSON.stringify(
+              results.map(result => ({
+                ...result,
+                content: imageResultText(result.content),
+              })),
+              null,
+              2,
+            )}`,
+          );
+          return results;
+        } catch (error) {
+          toolWrite.reject(error);
+          throw error;
+        }
       },
       commitStep: async (currentLeafId, message, results) => {
-        const node = await tree.addNode(currentLeafId, [message, ...results]);
-        return node.id;
+        try {
+          const node = await conversation.append(
+            currentLeafId,
+            [message, ...results],
+            { providerUsage: responseUsage ?? null },
+          );
+          for (const result of results) {
+            if (decodeImageResult(result.content)) {
+              const key = JSON.stringify([result.tool_call_id, result.content]);
+              turnImages.set(key, (turnImages.get(key) ?? 0) + 1);
+            }
+          }
+          toolWrite.resolve(undefined);
+          return node.id;
+        } catch (error) {
+          toolWrite.reject(error);
+          throw error;
+        }
       },
       commitFinal: async (currentLeafId, message) => {
-        const node = await tree.addNode(currentLeafId, [message]);
-        if (message.content) console.log(`[fae] ${message.content}`);
-        return node.id;
+        const write = retainWrite();
+        try {
+          const node = await conversation.append(currentLeafId, [message], {
+            providerUsage: responseUsage ?? null,
+          });
+          write.resolve(undefined);
+          if (message.content) console.log(`[fae] ${message.content}`);
+          return node.id;
+        } catch (error) {
+          write.reject(error);
+          throw error;
+        }
       },
+    }).catch(async error => {
+      if (turnImages.size === 0) throw error;
+      // handleMessage retains the whole turn completion obligation, so stop
+      // acknowledgement waits for this checkpoint before finishTurn clears
+      // its fence. Never admit another inference or tool while cancelling.
+      // Keep original tool nodes as evidence. On a rejected request, stop
+      // replaying this turn's images via a durable context checkpoint. Match
+      // newest occurrences first so successful earlier images survive even
+      // if a provider reuses tool IDs or reads the same file again.
+      const providerContext = await conversation.getContext(
+        conversation.getLeafId(),
+      );
+      const remaining = new Map(turnImages);
+      let changed = false;
+      const retained = [...providerContext]
+        .reverse()
+        .map(message => {
+          if (message.role !== 'tool') return message;
+          const key = JSON.stringify([message.tool_call_id, message.content]);
+          const count = remaining.get(key) ?? 0;
+          if (!count) return message;
+          remaining.set(key, count - 1);
+          changed = true;
+          return {
+            ...message,
+            content: `${imageResultText(message.content)} [Not replayed after an incomplete turn; use viewImage again if needed.]`,
+          };
+        })
+        .reverse()
+        .filter(message => message.role !== 'system');
+      if (changed) {
+        const write = retainWrite();
+        try {
+          await conversation.appendCheckpoint(
+            conversation.getLeafId(),
+            'The previous turn did not complete. Its new image inputs are represented by receipts below; original tool evidence is retained.',
+            retained,
+          );
+          write.resolve(undefined);
+        } catch (publicationError) {
+          write.reject(publicationError);
+          throw publicationError;
+        }
+      }
+      throw error;
     });
     return outcome;
   };
@@ -509,12 +740,6 @@ export const spawnWorkerLoop = async (
    * @returns {Promise<void>}
    */
   const runAgent = async () => {
-    await initializeIntroducedTools();
-
-    await E(powers).send('@host', ['Fae agent ready.'], [], []);
-
-    /** @type {string | undefined} */
-    const selfLocator = await E(powers).locate('@self');
     const cancelled = await getCancelled();
     // `whenCancelled` is a `Promise<never>`: it never fulfills, and a
     // *rejection* is the ordinary deliberate-cancellation path, carrying the
@@ -524,15 +749,21 @@ export const spawnWorkerLoop = async (
     // Something must be: `runAgent` returns normally afterwards, so the
     // driver's own `.catch` never fires and an agent that simply goes quiet is
     // otherwise indistinguishable from one that was never wired up.
-    const cancelledSignal = cancelled
+    const contextStopped = cancelled
       ? cancelled.promise.then(
           () => {
+            void stopProvider().catch(error =>
+              console.error('[fae] provider cleanup failed:', error),
+            );
             console.error(
               '[fae] cancellation signal fulfilled, which it never should; stopping the inbox loop',
             );
             return { cancelled: true };
           },
           reason => {
+            void stopProvider().catch(error =>
+              console.error('[fae] provider cleanup failed:', error),
+            );
             console.error(
               '[fae] stopping the inbox loop:',
               /** @type {Error} */ (reason)?.message ?? reason,
@@ -541,11 +772,45 @@ export const spawnWorkerLoop = async (
           },
         )
       : null;
+    const cancelledSignal = Promise.race([
+      loopCancelled.promise.then(
+        () => ({ cancelled: true }),
+        () => ({ cancelled: true }),
+      ),
+      ...(contextStopped ? [contextStopped] : []),
+    ]);
 
-    // Track the most recent leaf across messages so that follow-up
-    // messages from the same sender continue the conversation rather
-    // than branching from the root (which would lose all context).
-    let lastLeafId = await rootNodeIdP;
+    // Restoration can create a root and publish its selection. Retain that
+    // startup publication before starting it; disposal cannot acknowledge and
+    // then let the detached startup write new state or announce readiness.
+    if (loopAbort.signal.aborted) return;
+    const startup = retainWrite();
+    try {
+      conversation = await restoreInboxConversation({
+        powers,
+        tree,
+        prompt: effectivePrompt,
+        providerIdentity: JSON.stringify([
+          'common-context-v1',
+          providerConfig.kind ?? 'http',
+          providerConfig.host ?? '',
+          providerConfig.model ?? 'injected',
+          providerIdentity ?? 'borrowed',
+        ]),
+      });
+      startup.resolve(undefined);
+    } catch (error) {
+      startup.reject(error);
+      throw error;
+    }
+    if (loopAbort.signal.aborted) return;
+    await initializeIntroducedTools();
+    if (loopAbort.signal.aborted) return;
+    await E(powers).send('@host', ['Fae agent ready.'], [], []);
+
+    /** @type {string | undefined} */
+    const selfLocator = await E(powers).locate('@self');
+    if (loopAbort.signal.aborted) return;
 
     /**
      * Track inbound message numbers we have already processed.  Re-emission
@@ -567,7 +832,7 @@ export const spawnWorkerLoop = async (
      *
      * @param {any} message
      */
-    const handleMessage = async message => {
+    const runMessage = async message => {
       const {
         from: fromId,
         number,
@@ -578,35 +843,7 @@ export const spawnWorkerLoop = async (
         replyTo,
       } = message;
 
-      // Read the credential before anything else. A revoked or unreadable
-      // secret is a fact about this deployment that no peer should be able to
-      // read off a reply, so this failure — like a provider's — is answered
-      // generically and logged in full.
-      try {
-        turnProvider = await currentProvider();
-      } catch (error) {
-        console.error(
-          '[fae] provider unavailable:',
-          error instanceof Error ? error.message : String(error),
-        );
-        await E(powers).reply(
-          number,
-          ['This agent cannot reach its language model right now.'],
-          [],
-          [],
-        );
-        return;
-      }
-
-      await rootNodeIdP;
-
       console.error(`[fae] New message #${number} from ${fromId}`);
-
-      // Discover tools (picks up newly adopted tools each turn)
-      const { schemas: toolSchemas, toolMap } = await discoverTools(
-        powers,
-        localTools,
-      );
 
       let textContent;
       if (type === 'package' && Array.isArray(strings)) {
@@ -623,37 +860,69 @@ export const spawnWorkerLoop = async (
         textContent = `(${type || 'unknown'} message)`;
       }
 
-      // Determine the parent node for this message:
-      //  1. If replyTo matches a node in the tree, branch from there
-      //  2. Otherwise continue from the last leaf (preserves context)
-      let parentId = lastLeafId;
-      if (typeof replyTo === 'string') {
-        const existingNode = await tree.getNode(replyTo);
-        if (existingNode !== null) {
-          parentId = replyTo;
-        }
+      // Retain admission before provider selection or any effectful tool call.
+      // A queued but unadmitted message can run after restart; an admitted one
+      // cannot, even if its outcome is unknown. Selection is acknowledged too.
+      if (loopAbort.signal.aborted) return;
+      const parentId = await conversation.parentForReply(replyTo);
+      if (loopAbort.signal.aborted) return;
+      const admission = retainWrite();
+      let userNode;
+      try {
+        await conversation.beginTurn();
+        userNode = await conversation.append(
+          parentId,
+          [
+            {
+              role: 'user',
+              content: `[Inbox message #${number}] ${textContent}\n\nUse reply(messageNumber: ${number}, ...) to respond to this message.`,
+            },
+          ],
+          { messageId, inboundNumber: number },
+        );
+        admission.resolve(undefined);
+      } catch (error) {
+        admission.reject(error);
+        throw error;
       }
 
-      const userNode = await tree.addNode(
-        parentId,
-        [
-          {
-            role: 'user',
-            content: `[Inbox message #${number}] ${textContent}\n\nUse reply(messageNumber: ${number}, ...) to respond to this message.`,
-          },
-        ],
-        { messageId },
-      );
+      // A revoked or unreadable credential is not a peer-visible diagnostic.
+      try {
+        turnProvider = await Promise.race([
+          providerOwner.forTurn(),
+          loopCancelled.promise,
+        ]);
+        loopAbort.signal.throwIfAborted();
+      } catch (error) {
+        if (loopAbort.signal.aborted) return;
+        console.error(
+          '[fae] provider unavailable:',
+          error instanceof Error ? error.message : String(error),
+        );
+        await E(powers).reply(
+          number,
+          ['This agent cannot reach its language model right now.'],
+          [],
+          [],
+        );
+        return;
+      }
 
       try {
+        // Discover tools (picks up newly adopted tools each turn).
+        const { schemas: toolSchemas, toolMap } = await discoverTools(
+          powers,
+          localTools,
+        );
+        loopAbort.signal.throwIfAborted();
         replyTracker.sent = false;
         const outcome = await runAgenticLoop(toolSchemas, toolMap, userNode.id);
-        lastLeafId = outcome.leafId;
+        loopAbort.signal.throwIfAborted();
         if (!outcome.answered) {
           throw senderVisible(
             Error(
               outcome.exhausted
-                ? `FAE turn exceeded ${MAX_TOOL_ROUNDS} tool rounds`
+                ? `FAE turn exceeded ${maxToolRounds} tool rounds`
                 : 'FAE provider returned no assistant message',
             ),
           );
@@ -663,7 +932,8 @@ export const spawnWorkerLoop = async (
         // tool, send the content as a fallback reply so the sender
         // (e.g. a Whylip UI) actually receives it.
         if (!replyTracker.sent) {
-          const finalNode = await tree.getNode(lastLeafId);
+          const finalNode = await tree.getNode(outcome.leafId);
+          loopAbort.signal.throwIfAborted();
           if (finalNode) {
             const lastMsg = finalNode.messages[finalNode.messages.length - 1];
             if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content) {
@@ -675,6 +945,7 @@ export const spawnWorkerLoop = async (
           }
         }
       } catch (error) {
+        if (loopAbort.signal.aborted) return;
         const errorMessage =
           error instanceof Error ? error.message : String(error);
         console.error('[fae] turn failed:', errorMessage);
@@ -688,6 +959,32 @@ export const spawnWorkerLoop = async (
           [],
           [],
         );
+      }
+    };
+
+    const handleMessage = async message => {
+      // This narrow obligation covers settling the durable turn fence, not a
+      // borrowed provider read: chat/selection are independently cancel-raced.
+      const completion = retainWrite();
+      try {
+        await runMessage(message);
+        // claim() settles an ask synchronously, but its receipt is retained in
+        // that same stack before the waiting tool can resume. Drain those
+        // writers too before clearing the turn fence; exclude our own promise.
+        const writes = await Promise.allSettled(
+          [...evidenceWrites].filter(write => write !== completion.promise),
+        );
+        const failures = writes
+          .filter(write => write.status === 'rejected')
+          .map(write => write.reason);
+        if (failures.length) {
+          throw new AggregateError(failures, 'Fae turn publication failed');
+        }
+        await conversation.finishTurn();
+        completion.resolve(undefined);
+      } catch (error) {
+        completion.reject(error);
+        throw error;
       }
     };
 
@@ -726,10 +1023,10 @@ export const spawnWorkerLoop = async (
 
     const turnWorker = (async () => {
       for (;;) {
-        if (stopping) return;
+        if (stopping || loopAbort.signal.aborted) return;
         if (pendingTurns.length === 0) {
           if (pumpEnded) return;
-          // eslint-disable-next-line no-await-in-loop
+
           await new Promise(resolve => {
             wakeWorker = resolve;
           });
@@ -738,7 +1035,6 @@ export const spawnWorkerLoop = async (
         }
         const message = pendingTurns.shift();
         try {
-          // eslint-disable-next-line no-await-in-loop
           await handleMessage(message);
         } catch (error) {
           // `handleMessage` already mails its own failures back to the sender;
@@ -759,12 +1055,10 @@ export const spawnWorkerLoop = async (
     try {
       while (true) {
         const nextMessage = messageIterator.next();
-        const raced = cancelledSignal
-          ? await Promise.race([
-              cancelledSignal,
-              nextMessage.then(result => ({ cancelled: false, result })),
-            ])
-          : { cancelled: false, result: await nextMessage };
+        const raced = await Promise.race([
+          cancelledSignal,
+          nextMessage.then(result => ({ cancelled: false, result })),
+        ]);
         if (raced.cancelled) {
           // Queued turns are abandoned rather than drained: cancellation must
           // be prompt, and an in-flight provider call can take minutes.
@@ -789,6 +1083,10 @@ export const spawnWorkerLoop = async (
           number,
           done: messageDone = true,
         } = /** @type {any} */ (message);
+        if (loopAbort.signal.aborted) {
+          stopping = true;
+          return;
+        }
 
         // Offer every message — including this agent's own outbound mail — to
         // the delegation registry before any other routing. It learns a
@@ -797,6 +1095,14 @@ export const spawnWorkerLoop = async (
         // instead.
         const delegated = delegations.claim(message);
         if (delegated.claimed) {
+          const receipt = retainWrite();
+          try {
+            await conversation.recordClaimedReply(number);
+            receipt.resolve(undefined);
+          } catch (error) {
+            receipt.reject(error);
+            throw error;
+          }
           console.error(
             `[fae] Message #${number} answers a pending subagent ask`,
           );
@@ -835,7 +1141,10 @@ export const spawnWorkerLoop = async (
           // Re-emission of a previously-processed number means the sender
           // edited a settled message.  Do not start a new turn; the
           // history is available via the messageHistory tool.
-          if (seenInboundNumbers.has(number)) {
+          if (
+            seenInboundNumbers.has(number) ||
+            conversation.hasAdmission(number)
+          ) {
             console.error(
               `[fae] Message #${number} was edited after settlement; ` +
                 `not rerunning. Use messageHistory(${number}) for the prior text.`,
@@ -847,6 +1156,14 @@ export const spawnWorkerLoop = async (
           enqueueTurn(message);
         }
       }
+    } catch (error) {
+      // A failed mailbox cannot be allowed to leave a late provider response
+      // capable of admitting tools. Normal EOF still drains admitted turns.
+      stopping = true;
+      loopAbort.abort(error);
+      loopCancelled.reject(error);
+      void Promise.resolve(messageIterator.return?.()).catch(() => undefined);
+      throw error;
     } finally {
       // Nothing can feed `claim` once this loop is out, so an ask that kept
       // waiting would hold the queue open for its whole timeout — up to an
@@ -864,7 +1181,11 @@ export const spawnWorkerLoop = async (
   };
 
   // Start the worker loop
-  await runAgent();
+  try {
+    await runAgent();
+  } finally {
+    await disposeProvider();
+  }
 };
 harden(spawnWorkerLoop);
 
@@ -884,10 +1205,15 @@ const spawnerSpecifier = new URL('subagent-spawner.js', import.meta.url).href;
  *
  * @param {import('@endo/eventual-send').FarRef<object>} guestPowers
  * @param {Promise<object> | object | undefined} _context
+ * @param root0
+ * @param root0.env
  * @returns {Promise<object>}
  */
-// eslint-disable-next-line no-underscore-dangle
-export const make = async (guestPowers, _context) => {
+
+export const make = async (guestPowers, _context, { env = {} } = {}) => {
+  const workloadEnv = selectFaeWorkloadEnv(env);
+  const { maxSubagents, maxDepth: defaultMaxDepth } =
+    readFaeWorkloadConfig(workloadEnv);
   /** @type {any} */
   const powers = guestPowers;
 
@@ -923,9 +1249,7 @@ export const make = async (guestPowers, _context) => {
       // either could enumerate and tear down the other's subagent.
       assertAgentName(name);
       const maxDepth =
-        maxSubagentDepth === undefined
-          ? DEFAULT_MAX_SUBAGENT_DEPTH
-          : maxSubagentDepth;
+        maxSubagentDepth === undefined ? defaultMaxDepth : maxSubagentDepth;
       if (!Number.isInteger(maxDepth) || maxDepth < 0) {
         throw new Error('maxSubagentDepth must be a non-negative integer.');
       }
@@ -954,6 +1278,8 @@ export const make = async (guestPowers, _context) => {
         spawnerSpecifier,
         depth: 0,
         maxDepth,
+        maxSubagents,
+        workloadEnv,
         systemPrompt,
         pin,
       });

@@ -168,20 +168,72 @@ fn each_phase_boundary_refuses_without_panicking_or_emitting_partial_atoms() {
 
 #[test]
 fn embedding_host_retains_charges_across_a_compiler_unwind() {
+    // The coder's own early-error path UNWINDS: `Coder::report_kind` resumes
+    // with a private payload that `compile_parser` catches, because a reported
+    // error has to stop the pass the way XS's `longjmp` stops it. So the
+    // shared meter still has to survive an unwind between the work and the
+    // receipt, which is what this asserts.
+    //
+    // The fixture used to be a source that PANICKED the coder, caught here
+    // with `catch_unwind`. That is no longer available and its absence is the
+    // point: the static-block fold now returns a structured `Unsupported`
+    // rather than dying (architecture finding F063), so there is no known
+    // source that panics this compiler to use as a fixture.
     let meter = ironhorse_compile::ParseMeter::with_budget(u64::MAX);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ironhorse_compile::compile_atoms_with_meter(
-            "class C { static { let x=1; } }",
-            false,
-            meter.clone(),
-        )
-    }));
-    assert!(
-        result.is_err(),
-        "fixture reaches the existing named coder gap"
+    let error = ironhorse_compile::compile_atoms_with_meter(
+        "class C { static { let x=1; } }",
+        false,
+        meter.clone(),
+    )
+    .expect_err("the static-block fold is a named coder gap");
+    assert_eq!(
+        error.kind,
+        ParseErrorKind::Unsupported,
+        "the fold must stay a named coverage gap, not become a SyntaxError"
     );
-    assert!(meter.raw() > 0);
-    assert!(!meter.exhausted());
+    assert!(meter.raw() > 0, "the work before the fold is still billed");
+    assert!(!meter.exhausted(), "the host did not refuse");
+}
+
+/// A reported early error stops the coder where it is reported. Gated by COST:
+/// the coder charges per node, so a pass that walked the whole program after
+/// reporting would bill for it.
+///
+/// This is the property `Coder::report_kind`'s unwind exists for, and it has a
+/// history. The first version latched the error and RETURNED, guarding one
+/// panic site out of eighty-odd with a `poisoned()` flag; the pass walked on
+/// and died at an unguarded site, losing the classification it had just
+/// recorded. A flag nothing reads cannot be tested; a cost can.
+#[test]
+fn a_reported_early_error_stops_the_pass() {
+    let bill = |source: &str| {
+        let meter = ironhorse_compile::ParseMeter::with_budget(u64::MAX);
+        let _ = ironhorse_compile::compile_atoms_with_meter(source, false, meter.clone());
+        meter.raw()
+    };
+    // Two programs with the SAME tail, differing only in whether the first
+    // statement reports an early error. Both pay the full parse and scope —
+    // those phases finish before the coder starts — so the difference between
+    // them is the coder's bill for the tail, and nothing else.
+    let tail = "function f(a, b) { return a + b; } ".repeat(200);
+    let short = bill("({a = 1});");
+    let reported = bill(&format!("({{a = 1}}); {tail}"));
+    let whole = bill(&format!("1; {tail}"));
+    assert!(
+        whole > short * 10,
+        "the fixture's tail must dominate the cost, or this gate proves \
+         nothing: short={short} whole={whole}"
+    );
+    let coded_tail = whole.saturating_sub(reported);
+    assert!(
+        coded_tail * 4 > whole,
+        "coding continued past a reported early error. The erroring program \
+         billed {reported} and the identical non-erroring one {whole}: a \
+         difference of {coded_tail}, which is the coder's share of the tail. \
+         A pass that stops at the error leaves roughly half the bill unspent \
+         (parse and scope still run in full); a pass that walks on leaves \
+         none."
+    );
 }
 
 #[test]

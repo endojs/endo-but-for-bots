@@ -1,5 +1,76 @@
 # @endo/floot
 
+For the Secrets-backed OpenRouter API provider, see [OpenRouter setup](./OPENROUTER.md).
+
+## Assistant presets
+
+In the shared web/Android UI, open Settings → Assistant presets → Manage presets.
+Edit a preset's instructions, model, reasoning effort, default objects and internet policy;
+save a copy to create a custom preset, or reset a built-in preset.
+The Voice shortcut selector chooses which preset Android assistant invocations use.
+
+The built-in voice preset uses Fae Codex / gpt-5.6-sol with an isolated Podman shell,
+a workspace, and public internet enabled.
+Internet policy belongs to the attached shell, independently of the inference backend.
+General presets can include a workspace and shell; the shell requires the workspace.
+Hosted CLI backends keep their own environment and policy controls.
+The new-session picker uses saved defaults unless explicitly overridden.
+
+Additional endowments are explicit object paths, resolved once when granted.
+Editing a name or copying a preset preserves that object identity across devices.
+Presets are scoped to a Floot factory and stored in one bounded record.
+Changes apply to new sessions; existing sessions and their delegates retain their
+original instructions and authority recipe, even after a preset is deleted.
+Delegates inherit their parent's current approved network policy.
+Existing sessions without a shell need a new session to gain one.
+
+Factory API: `getPresetConfiguration()` returns a revision and presets;
+`savePreset(preset, revision)`, `deletePreset(id, revision)`,
+`resetPreset(id, revision)` and `setVoicePreset(id, revision)` reject stale edits.
+After a conflict or uncertain save, reload before retrying.
+`createAssistantSession()` creates a spoken session from the selected voice preset.
+Explicit grants have `{petName, sourcePath, value}` where `value` is an object capability;
+these references stay in the host controller and are never passed to the confined view.
+
+## Durable turn recovery
+
+Factory-created sessions keep append-only turn journals in factory-owned storage,
+outside ordinary guest powers.
+One `floot-private-sessions` directory is rooted in the factory host; each
+session has its own directory containing its schema, turn records, and network
+policy audit. Appending history does not grow the host's name inventory or scan
+other sessions. Terminal deletion drains and closes the writers, stops the
+backends, releases environment bindings, and unlinks the session directory so
+its records can be collected. Failed deletion remains retryable after restart.
+Flat journals from older releases are not imported.
+`getTurns()` exposes evidence; on an idle session,
+`resolveTurn(turnId, note)` acknowledges unknown outcomes after independent checks
+of external effects. It never replays or undoes work. Endo tool intents precede
+dispatch; provider-native activity is observation, not write-ahead authorization.
+
+Guest-journal migration is not supported. Retire incompatible sessions using
+their old release before deployment, preserving workspace roots, Secrets and
+renewal owners. Malformed journals fail closed.
+Uncertain storage writes fence the incarnation; revival reads durable evidence.
+
+This boundary excludes ordinary guests, not administrators: full-control and
+machine-admin presets deliberately receive factory-host powers. Standalone
+`makeStreamingAgent` callers must explicitly supply `journalPowers`; omission
+or null is refused before guest storage or backend access.
+Callers are responsible for keeping this storage private from the session guest;
+capability identity alone cannot establish isolation.
+Journal status reports `storage: 'explicit'`, not an inferred privacy guarantee.
+
+`getJournalStatus()` reports the event count as a decimal string, the retained and
+archived turn counts, and explicit storage provision. There is no event limit:
+long text is stored by reference (`getTurnContent`), replay is bounded by
+snapshots, and settled turns beyond the retained window are archived
+(`getArchivedTurns`). Outcome acknowledgement consumes an event.
+Endo tool outputs and error text are capped at 32,768 UTF-16 code units before
+journaling or delivery to either a provider or hosted model, including an
+explicit truncation notice. The notice asks for filtering or pagination; it
+does not imply that an operation failed. Short outputs are unchanged.
+
 A streaming LLM agent harness for the Endo daemon, plus the two voice caplets
 that make it a hands-free voice assistant.
 
@@ -21,6 +92,36 @@ that make it a hands-free voice assistant.
   Mail remains serialized through the session's execution queue.
   Turns survive browser disconnects, but daemon restarts recover committed history
   rather than live turn handles.
+- **Queued submissions** (`src/pending-queue.js`, `src/session-submissions.js`)
+  — `session.enqueue(text)` accepts a message and returns `{ id }`. It becomes a
+  turn at once if nothing is ahead of it; otherwise it waits in a durable
+  per-session queue in the factory host's pet store, whether or not the caller
+  stays connected, and the daemon starts it when its turn comes. A message sent
+  behind a running turn therefore outlives the page that sent it.
+  Dispatch is at most once: an entry is marked `dispatching` before its turn
+  starts and removed when the turn journal has the input, and one found
+  `dispatching` after a restart becomes `interrupted` and is never sent again
+  on its own. A queue that comes back from a restart non-empty, a turn that was
+  refused before it began, and an emergency stop all hold the queue until
+  `sendPending(id)` or a new `enqueue`; `listPending()`, `editPending()` and
+  `cancelPending()` manage what waits. At most 100 messages wait at once.
+- **Subscriptions** (`src/session-watch.js`) — a view is told when state changes
+  instead of asking again on a timer. `session.watch()` is a disposable stream:
+  a snapshot (settled transcript, the UI turn in flight, what the agent is
+  running whoever started it, queued submissions, execution state, network
+  policy, usage), then one event per change. The transcript travels as
+  `{ version, base, keep, append }`: keep the first `keep` messages, append the
+  rest. It holds settled turns only; a running turn is rendered from its own
+  `watch()`. `factory.watchSessions()` does the same for the session list, where
+  the operator API includes every session. The UI lists only user-initiated
+  roots: the UI passes `createSession({ userInitiated: true, ... })`.
+  Programmatic creation defaults to internal, and subagents are always hidden.
+  `setSessionUserInitiated(id, false)` corrects existing workflow sessions;
+  the flag survives restart and changes the list without stopping their work.
+  Older root records default to user initiated.
+  Each session carries an `activity` of `passive`, `working` or `error`. A
+  read that fails or never answers is retried while someone is watching, and
+  closing a stream detaches that viewer only. `help('watch')` has the wire format.
 - **Voice caplets** (`voice/`) — two independent, swappable daemon objects,
   provisioned under the `floot/` inventory directory (`FLOOT_DIR`):
   - `floot/stt` — speech-to-text via [Moonshine](https://github.com/moonshine-ai/moonshine)
@@ -102,8 +203,11 @@ The voice id encodes its path: `en_GB-alba-medium` → `en/en_GB/alba/medium/`.
    A daemon that runs it from `ENDO_EXTRA` forwards only `ENDO_`-prefixed
    variables, so every knob is also read as `ENDO_FLOOT_*` and the key as
    `ENDO_FLOOT_AUTH_TOKEN`.
-   `FLOOT_MAX_TOOL_ROUNDS` (default 48) caps the provider calls one turn may
-   make before Floot gives up with its tool-step fallback.
+   `FLOOT_MAX_TOOL_ROUNDS` (default 1024, shared with standalone Fae) caps
+   direct-provider rounds before the tool-step fallback. Each round is a model
+   response plus all requested tool results; parallel calls share one round.
+   It is a finite runaway-loop guard, not a model context limit. Hosted CLI
+   backends have their own loops and do not use this setting.
 
 3. **Provision the voice caplets.** Ensure `uv`, `piper`, and a voice model are
    present, then:
@@ -138,6 +242,38 @@ pet-name. To use a different engine, provision a replacement object exposing the
 same interface (`transcribe` / `synthesize`) under the same pet-name — no change
 to the factory or UI is required.
 
+## System prompts
+
+A session's system prompt is composed (`src/system-prompt.js`) from one
+standard base — what is true of every Floot session: a guest of the daemon,
+acting on capabilities, with the petstore and mail tools — plus sections chosen
+by three facts about the session:
+
+- **How it is driven.** `createSession({ spoken: true })` says the replies are
+  read aloud, and adds the voice rules (short, no markdown, never read code
+  aloud). The Floot space passes it. A session made by any other caller of the
+  factory does not get them, and a subagent never does: its reader is its
+  parent.
+- **Where its model runs.** A hosted backend declares a `promptEnvironment` in
+  its descriptor (see BACKEND-DESIGN.md). A model in a sandbox is told the names
+  Endo's tools carry in its tool list, that its own shell and file tools are
+  not Endo's `exec`, that its workspace is a directory it can edit, and what
+  the container-mount tools do. A model behind the provider API is told none
+  of that, and instead how to write files through `exec`.
+- **Its preset**, which decides the objects in its petstore and so the
+  sections that explain them.
+
+The composed text is stored in the session's registry entry at creation,
+together with the context it was composed from (`promptContext`).
+A session keeps the prompt it started with; an edit to a section reaches new
+sessions only.
+The one exception is a preset that bumps its `promptVersion` (below), and the
+recorded context is what lets that migration compose the new text for the same
+backend and the same kind of driver.
+A `systemPrompt` passed to `createSession` still replaces the preset's
+entirely, and a subagent's instructions are still appended beneath its
+parent's preset prompt rather than substituted for it.
+
 ## Subagents
 
 A session may delegate to a subagent session and converse with it over the
@@ -146,6 +282,12 @@ A subagent session runs on its parent's backend and model, records its parent in
 the session registry, and is released with it.
 Set `FLOOT_MAX_SUBAGENT_DEPTH=0` to withhold the tools entirely.
 See [@endo/fae's SUBAGENTS.md](../fae/SUBAGENTS.md).
+
+Pending subagent requests consume their correlated replies automatically.
+Other replies remain in the mailbox for explicit inspection and capability
+adoption; they do not start model turns or generate automatic acknowledgments.
+This also applies after a restart, when a reply's original waiter may be gone.
+Send a new message or request to start new work.
 
 ## Provider credentials
 
@@ -165,22 +307,34 @@ read once and would otherwise need a restart.
 
 ## Plan and rate limits
 
-`getAccount(refresh?)` on the factory, and on each session facet, reports the
-subscription plan behind this deployment's credential, how much of each rate
-limit is left, and — per session — what the conversation has cost at the current
-list price.
-A provider-backed session also gets an `accountStatus` tool, so the model can
-answer those questions where the user asked them.
-A session on a hosted backend does not: it runs the backend's own tool loop over
-a tool set projected before the session agent exists.
-`getAccount(refresh?)` answers the same questions to a UI either way.
+`getAccount(refresh?)` on the factory reports the configured direct-provider
+oracle's subscription plan and rate limits.
+On a session, it instead reports explicitly published accounts matching the
+session's backend and optional subscription pin, plus separate session usage
+when the session is already open.
+Otherwise `usageUnavailable` explains the omission: account inspection does not
+open a session agent or acquire a backend solely to read usage.
+`accounts` contains data only; `selection` is `subscription-pin` or
+`configured-accounts`, and `complete: false` identifies unavailable sources.
+Automatic pools can list several configured accounts; these mappings do not
+prove current runtime eligibility, routing, or which account paid for past turns.
+No aggregate session cost is estimated without per-account usage attribution.
+Both provider-backed and hosted factory sessions expose the same read-only
+`accountStatus` tool over this session-specific report.
 
 Every figure carries `observedAt` and a source of `observed`, `declared`,
 `remembered`, or `unavailable`, so a declared figure is never mistaken for a
 measured one.
-Provision it by pointing `FLOOT_ACCOUNT_PROFILE` at a JSON profile when running
-setup; without one, `getAccount()` reports that no oracle is available and the
-tool is absent.
+Provision it by pointing `FLOOT_ACCOUNT_PROFILE` at a JSON profile and setting
+`FLOOT_ACCOUNT_AUTHORITY` to the operator's explicit account identifier when running
+setup; without a profile, the factory's `getAccount()` reports no direct oracle.
+Session reports and tools return no matching accounts when none are published,
+without falling back to the factory's direct-provider oracle.
+Account discovery identifies accounts by provider, declared authority and optional
+pool member, separately from runtime names and read-only observer formulas.
+Multiple runtimes sharing that declared identity share one capacity card.
+Setup publishes these bindings in the controller profile, without another
+credential or renewal owner.
 See [@endo/hosted-agent's ACCOUNT-ORACLE.md](../hosted-agent/ACCOUNT-ORACLE.md).
 
 ## Design → implementation → review
@@ -216,14 +370,26 @@ const { fid, factory } = await provisionDevReview({
   reviewers: [reviewerA, reviewerB], // distinct reviewer Floot guest powers
   initiator,     // guest powers of the Floot conversation preparing the design
   operator,      // human operator's mail handle
+  // implementationTimeoutMs: 21_600_000, // opt in to a six-hour deadline
 });
 ```
+
+Implementation has no deadline by default (`implementationTimeoutMs: Infinity`).
+No timer is scheduled and elapsed time does not consume review rounds.
+To impose a deadline, pass a positive integer number of milliseconds to
+`provisionDevReview` (or `makeDevReviewChart` / `makeReviewedChangeChart` when
+constructing a chart directly).
+The configured timeout applies to each implementation attempt; expiry consumes
+one round and retries under the existing budget policy.
+Reviewer and infrastructure deadlines retain their existing policies.
+Charts are saved in factories and runs, so changing this setup option applies to
+newly provisioned workflows, not existing factories or runs.
 
 The participants here are guest **controls** used only during setup. A Floot
 factory host holds them under `session-agent-<session-id>`; the public session
 facet returned by `createSession` is not a guest control. Create dedicated
-implementation/reviewer sessions, obtain their guest controls through the
-provisioning host, and pass those to setup. Use a dedicated implementation
+implementation/reviewer sessions with `userInitiated: false`, obtain their guest
+controls through the provisioning host, and pass those to setup. Use a dedicated implementation
 worktree. This helper does not allocate a new worktree or new agents per run.
 If running multiple projects concurrently, give each a separate worktree and
 participant sessions rather than changing the same project grant mid-run.
@@ -322,3 +488,51 @@ The preset's prompt is versioned (`promptVersion`): a bump migrates the prompt
 of every existing `machine-admin` session exactly once on the factory's next
 registry load, leaving custom and delegated prompts untouched. Ordinary preset
 edits never reach a live session.
+
+## Reading images and checking visual work
+
+Floot and Fae expose `viewImage` for models that accept image inputs.
+It reads an existing Endo blob, mount, tree, or git workspace:
+
+```json
+{"petName":"workspace","path":["screenshots","mobile.png"]}
+```
+
+Omit `path` when the petname already names a readable blob.
+For a git workspace the tool resolves `worktree()` before looking up the file.
+Paths are relative segments; the tool grants no host filesystem or URL access.
+It accepts PNG, JPEG, and WebP bytes up to 2 MiB, checking the actual streamed
+size as well as the declared size when available.
+Resize larger screenshots before reading them.
+HTML and SVG need rendering first.
+
+When building a scene or interface, the agent should discover a browser capability
+or use Playwright/Chromium through its granted shell, render at desktop and mobile
+sizes, inspect page errors, and read the saved screenshots with `viewImage`.
+It should fix visible defects and repeat the check before reporting the result as
+verified.
+If the browser or shell is unavailable, it must say what remains unverified.
+This feature does not provision a browser or expand the shell's network authority.
+
+The selected model must support vision; provider/model rejections remain errors,
+not a fallback that pretends the image was seen.
+Supported transports are Fae's Responses, OpenAI-compatible, Anthropic, and Ollama
+providers, plus the hosted Codex and Claude tool bridges.
+Hosted OpenCode does not advertise `viewImage` yet because its native recovery
+format rejects image attachments.
+
+Image bytes use a bounded, versioned tool-result envelope across the existing
+text transcript and journal interfaces.
+Provider adapters decode it into native image blocks; ordinary user and assistant
+text is never decoded as an image.
+Text-output truncation does not cut image payloads.
+Live and restored UI history show a short image receipt instead of base64, while
+private session journals retain the bytes for replay without re-reading the file.
+Images therefore follow the same deletion and cleanup lifecycle as the session.
+Compaction summarizes image receipts and the agent's observations, never base64
+as text tokens; recent retained images remain intact.
+For API provider sessions, a later turn represents images from an incomplete turn
+as receipts, so a rejected image does not keep every later request failing.
+The agent may explicitly read a corrected image again with `viewImage`.
+Original journal bytes remain available as evidence, including after restart.
+Opaque hosted backend checkpoints retain their native recovery policy.

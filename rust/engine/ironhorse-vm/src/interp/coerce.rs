@@ -23,6 +23,30 @@ impl Interp {
         Ok(capped as u64)
     }
 
+    /// `thisBooleanValue`, `thisNumberValue` and `thisStringValue`: a
+    /// primitive of `kind` (`Kind::Number` admits an integer too), or the
+    /// one a wrapper holds, else XS's TypeError (`this: not a number`).
+    pub(super) fn this_primitive(&mut self, this: Slot, kind: Kind) -> Result<Slot, Step> {
+        let of_kind = |slot: Slot| match kind {
+            Kind::Number => matches!(slot.kind, Kind::Integer | Kind::Number),
+            _ => slot.kind == kind,
+        };
+        if of_kind(this) {
+            return Ok(this);
+        }
+        if let (Kind::Reference, Payload::Reference(r)) = (this.kind, this.value) {
+            if let Some(prim) = self.wrapper_data.get(&r).copied().filter(|&p| of_kind(p)) {
+                return Ok(prim);
+            }
+        }
+        let name = match kind {
+            Kind::Boolean => "boolean",
+            Kind::Number => "number",
+            _ => "string",
+        };
+        Err(self.catchable_type_error_msg(format!("this: not a {name}")))
+    }
+
     /// Build a primitive-wrapper object (`new Boolean`/`Number`/`String`)
     /// around the already-computed primitive `prim`. Meters the native
     /// `Object` empty-object cost plus [`WRAPPER_CONSTRUCT_EXTRA`], chains the
@@ -282,6 +306,31 @@ impl Interp {
     /// target, or an escaping `Throw`) the caller propagates with `?`.
     pub(super) fn to_index_arg(&mut self, code: &[u8], value: Slot) -> Result<u32, Step> {
         let n = self.to_number_f64(code, value)?;
+        self.index_from_number(n)
+    }
+
+    /// XS's `fxArgToSafeByteLength`, the half of an `ArrayBuffer` length
+    /// check that precedes a subclass's prototype read: ToNumber, then a
+    /// negative or unsafe length fails. The allocation ceiling
+    /// ([`Self::index_from_number`]) is applied after the read.
+    pub(super) fn safe_byte_length(&mut self, code: &[u8], value: Slot) -> Result<f64, Step> {
+        let n = self.to_number_f64(code, value)?;
+        let t = if n.is_nan() { 0.0 } else { n.trunc() };
+        if t < 0.0 {
+            return Err(self.catchable_range_error_msg("byteLength < 0".into()));
+        }
+        if t > 9_007_199_254_740_991.0 {
+            return Err(self.catchable_range_error_msg("byteLength too big".into()));
+        }
+        Ok(t)
+    }
+
+    /// The range half of [`Self::to_index_arg`], for a value already
+    /// converted with `ToNumber`. XS's TypedArray constructor converts its
+    /// length, then reads a subclass's prototype, and only then rejects an
+    /// out-of-range length; its buffer constructors apply this allocation
+    /// ceiling after the read too.
+    pub(super) fn index_from_number(&mut self, n: f64) -> Result<u32, Step> {
         let t = if n.is_nan() { 0.0 } else { n.trunc() };
         if t < 0.0 {
             return Err(self.catchable_range_error_msg("byteLength < 0".into()));
@@ -321,6 +370,48 @@ impl Interp {
             length
         } else {
             t as u32
+        }
+    }
+
+    /// Whether a dense search (`indexOf`, `lastIndexOf`, `includes`) can read
+    /// its `fromIndex` argument without running guest code: absent, a Number,
+    /// or, when `undefined_is_default`, `undefined`. Anything else needs
+    /// ToIntegerOrInfinity, which can call `valueOf`, throw or shrink the
+    /// array, so the caller takes the generic path, which scans to the length
+    /// it read first.
+    pub(super) fn search_from_index_is_plain(
+        &self,
+        base: usize,
+        argc: usize,
+        undefined_is_default: bool,
+    ) -> bool {
+        argc < 2
+            || match self.stack.get(base + 4 + 1).map(|slot| slot.kind) {
+                Some(Kind::Integer | Kind::Number) => true,
+                Some(Kind::Undefined) => undefined_is_default,
+                _ => false,
+            }
+    }
+
+    /// The first index `lastIndexOf` examines (ES2024 23.1.3.20 steps 4-6),
+    /// for a Number `fromIndex` at `base`+1 or, absent, `length - 1`; `None`
+    /// when nothing is scanned.
+    pub(super) fn arg_to_last_index(&self, base: usize, argc: usize, length: u32) -> Option<u32> {
+        let last = length.checked_sub(1)?;
+        if argc < 2 {
+            return Some(last);
+        }
+        let n = self
+            .stack
+            .get(base + 4 + 1)
+            .and_then(numeric_of)
+            .unwrap_or(0.0);
+        let t = if n.is_nan() { 0.0 } else { n.trunc() };
+        if t >= 0.0 {
+            Some(if t >= f64::from(last) { last } else { t as u32 })
+        } else {
+            let k = f64::from(length) + t;
+            (k >= 0.0).then_some(k as u32)
         }
     }
 
@@ -555,6 +646,28 @@ impl Interp {
         Ok(())
     }
 
+    /// `IsLooselyEqual` of a BigInt and a String (ES2024 7.2.14 steps 6-7):
+    /// the string is read with `StringToBigInt`, and one that is not an
+    /// integer literal is never equal. Like the relational comparison, the
+    /// exact values are compared without allocating the parsed BigInt.
+    fn bigint_string_loose_eq(&self, a: Slot, b: Slot) -> bool {
+        let (big, string) = if a.kind == Kind::BigInt {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        let (Payload::BigInt(x), Payload::String(y)) = (big.value, string.value) else {
+            return false;
+        };
+        let text = self.str_scalar_text(y);
+        text.as_deref()
+            .and_then(parse_bigint_string)
+            .is_some_and(|(ny, my)| {
+                let (nx, mx) = self.read_bigint(x);
+                bi_cmp(nx, &mx, ny, &my).is_eq()
+            })
+    }
+
     /// Equality (`===`/`!==`/`==`/`!=`). String↔string compares content
     /// bytes; string↔{null,undefined,symbol} is unequal on both operators;
     /// loose string↔{number,boolean} applies `ToNumber` after any object
@@ -623,12 +736,8 @@ impl Interp {
                 }
             }
             (Kind::String, Kind::Symbol) | (Kind::Symbol, Kind::String) => false,
-            (Kind::String, _) | (_, Kind::String) => {
-                if strict {
-                    false // `===` across types is false without coercion
-                } else {
-                    return Err(Step::Host(Halt::NotImplemented("equal"))); // `==` needs ToNumber(string)
-                }
+            (Kind::String, Kind::BigInt) | (Kind::BigInt, Kind::String) => {
+                !strict && self.bigint_string_loose_eq(a, b)
             }
             // BigInt `===`/`==`. Both BigInt: compare sign+magnitude
             // (`fxBigIntCompare` → `fxBigInt_comp`). The compare itself neither
@@ -688,16 +797,6 @@ impl Interp {
                 }
             }
             (Kind::BigInt, Kind::Symbol) | (Kind::Symbol, Kind::BigInt) => false,
-            // BigInt↔String still needs arbitrary-precision StringToBigInt and
-            // its allocation metering. Keep that boundary named rather than
-            // round through an imprecise Number.
-            (Kind::BigInt, _) | (_, Kind::BigInt) => {
-                if strict {
-                    false
-                } else {
-                    return Err(Step::Host(Halt::NotImplemented("equal")));
-                }
-            }
             _ => {
                 if strict {
                     strict_equals(&a, &b)

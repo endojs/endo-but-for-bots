@@ -26,6 +26,7 @@
 //! Decoding preserves legacy NaN bits; re-encoding normalizes them. Raw
 //! chunk/ArrayBuffer bytes are outside this codec and remain unchanged.
 
+use crate::sink::Sink;
 use ironhorse_vm::value::canonicalize_nan;
 use ironhorse_vm::{ChunkOffset, Kind, Payload, Slot, SlotIndex};
 
@@ -55,6 +56,13 @@ pub enum SlotCodecError {
 
 /// Serialize one slot into `out` (appends exactly [`SLOT_RECORD_BYTES`]).
 pub fn encode_slot(slot: &Slot, out: &mut Vec<u8>) {
+    put_slot(slot, out);
+}
+
+/// [`encode_slot`] into any sink: the one record encoder behind every
+/// `HEAP`, `STAC` and side-table slot the crate writes.
+#[inline]
+pub(crate) fn put_slot<S: Sink>(slot: &Slot, out: &mut S) {
     let mut rec = [0u8; SLOT_RECORD_BYTES];
     rec[0] = slot.kind as u8;
     rec[1] = slot.flag;
@@ -63,7 +71,7 @@ pub fn encode_slot(slot: &Slot, out: &mut Vec<u8>) {
     let (tag, data): (u8, [u8; 10]) = encode_payload(&slot.value);
     rec[8] = tag;
     rec[10..20].copy_from_slice(&data);
-    out.extend_from_slice(&rec);
+    out.put(&rec);
 }
 
 fn encode_payload(p: &Payload) -> (u8, [u8; 10]) {

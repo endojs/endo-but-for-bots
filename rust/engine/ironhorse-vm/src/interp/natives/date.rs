@@ -61,13 +61,7 @@ impl Interp {
                     let Payload::Reference(inst) = object.value else {
                         unreachable!("ToObject result")
                     };
-                    let id = self
-                        .symbol_ids
-                        .get("toISOString")
-                        .copied()
-                        .ok_or(Step::Host(Halt::EngineInvariant(
-                            "Date.toJSON:toISOString-key",
-                        )))?;
+                    let id = self.intern_implicit_key("toISOString");
                     let method = self.mop_get(code, inst, id, object)?;
                     return self.invoke_value(code, method, object, &[]);
                 }
@@ -87,6 +81,32 @@ impl Interp {
                         );
                     }
                     let clipped = time_clip(self.to_number_f64(code, arg(&self.stack, 0))?);
+                    self.dates.insert(inst, clipped);
+                    return Ok(Slot::number(clipped));
+                }
+                if op == 36 {
+                    // Annex B `setYear(year)` (B.2.3.2): convert the year,
+                    // then put its full year (0..99 meaning 1900..1999) into
+                    // the date, an invalid date counting as +0. Only `year`
+                    // is read, and a conversion that throws leaves the date
+                    // as it was.
+                    let year = self.to_number_f64(code, arg(&self.stack, 0))?;
+                    if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
+                        return Err(
+                            self.catchable_type_error_msg("this: read-only Date instance".into())
+                        );
+                    }
+                    let base_t = if t.is_finite() { t } else { 0.0 };
+                    let (_, month, day, _, hour, minute, second, millis) = civil_fields(base_t, 0);
+                    let clipped = date_from_components([
+                        year,
+                        month as f64 - 1.0,
+                        day as f64,
+                        hour as f64,
+                        minute as f64,
+                        second as f64,
+                        millis as f64,
+                    ]);
                     self.dates.insert(inst, clipped);
                     return Ok(Slot::number(clipped));
                 }
@@ -113,14 +133,15 @@ impl Interp {
                         );
                     }
                     // SetFullYear alone recovers an invalid Date from +0. Every
-                    // other setter preserves NaN after performing the required
-                    // argument coercions above.
+                    // other setter on a Date that was invalid when it read the
+                    // time value returns NaN and leaves the Date as it is
+                    // (ES2024 21.4.4.20 step 6 and its siblings): a coercion
+                    // above may have set a valid time, which must survive.
                     let base_t = if t.is_finite() {
                         t
                     } else if op == 34 {
                         0.0
                     } else {
-                        self.dates.insert(inst, f64::NAN);
                         return Ok(Slot::number(f64::NAN));
                     };
                     let (year, month, day, _, hour, minute, second, millis) =
@@ -198,6 +219,8 @@ impl Interp {
                 let (year, month, day, weekday, hour, minute, second, millis) = civil_fields(t, 0);
                 Ok(match op {
                     12 => Slot::number(year as f64),
+                    // Annex B `getYear` (B.2.3.1): the year less 1900.
+                    35 => Slot::number(year as f64 - 1900.0),
                     13 => Slot::integer(month as i32 - 1),
                     14 => Slot::integer(day as i32),
                     15 => Slot::integer(weekday as i32),

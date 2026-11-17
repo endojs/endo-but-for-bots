@@ -203,9 +203,10 @@ impl Interp {
     /// Construct `SuppressedError(error, suppressed, message)`. Disposal
     /// chaining uses the first two fields directly (and passes no
     /// message); ordinary constructor calls share the same realm
-    /// prototype and non-enumerable own fields, and ToString a present,
-    /// non-undefined message argument exactly as `build_error` does
-    /// (metered — XS's `fx_Error_aux` message path). The field keys are
+    /// prototype and non-enumerable own fields. `message` is the
+    /// constructor's already-converted message (its caller runs ToString,
+    /// which may call guest code, and meters it as `build_error` does —
+    /// XS's `fx_Error_aux` message path). The field keys are
     /// INTERNED, not looked up: XS's key table is machine-global, so
     /// the own properties exist whether or not the constructing crank
     /// compiled the names (locked by `error_own_properties.rs`).
@@ -213,7 +214,7 @@ impl Interp {
         &mut self,
         error: Slot,
         suppressed: Slot,
-        message_arg: Option<Slot>,
+        message: Option<Vec<u16>>,
     ) -> Slot {
         let inst = self.new_object();
         if let Some(proto) = self
@@ -223,14 +224,6 @@ impl Interp {
         {
             self.slots.get_mut(inst).value = Payload::Reference(proto);
         }
-        let message: Option<Vec<u16>> = match message_arg {
-            Some(a) if a.kind != Kind::Undefined => {
-                let units = self.to_string_units_metered(a);
-                self.meter.tick_raw(ERROR_MESSAGE_METERING);
-                Some(units)
-            }
-            _ => None,
-        };
         let frames = self.capture_error_frames();
         self.error_data.insert(
             inst,
@@ -273,7 +266,7 @@ impl Interp {
         for (i, mut v) in errors.into_iter().enumerate() {
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            arr_data.insert_item(i as u32, v, &mut self.side_refs);
+            arr_data.insert_item(i as u32, v, &mut self.side_refs, &mut self.chunks);
         }
         arr_data.length = n as u32;
         self.arrays.insert(arr_inst, arr_data);

@@ -38,6 +38,8 @@ fn production_full_collection_releases_weak_entries_and_chunk_garbage() {
     assert!(entries(session.machine()) + 190 < before_entries);
     assert!(session.machine().chunks().byte_size() < before_chunks / 2);
     checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
+    ironhorse_snapshot::store::validate_store_content(&store, &signature)
+        .expect("the store validates");
     let mut restored = resume_from_store(&store, &signature).unwrap();
     assert_eq!(
         session.machine().write_snapshot(&signature).unwrap(),
@@ -68,6 +70,8 @@ fn full_collection_refuses_unsafe_or_stale_boundaries_before_mutation() {
     let mut other = resume_from_store(&store, &signature).unwrap();
     run(other.machine_mut(), "var different=1");
     checkpoint_to_store(&mut other, &signature, &mut store).unwrap();
+    ironhorse_snapshot::store::validate_store_content(&store, &signature)
+        .expect("the store validates");
     assert!(matches!(
         full_collect(&mut session, &store),
         Err(StoreError::BaselineMismatch { .. })

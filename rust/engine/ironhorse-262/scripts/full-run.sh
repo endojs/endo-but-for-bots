@@ -31,7 +31,8 @@
 #   --jobs N           batch parallelism. Default: min(nproc/2, 8). This bounds
 #                      peak memory (concurrent oracle processes).
 #   --oracle on|off    gate on the XS oracle (default on).
-#   --case-timeout N   per-case wall-clock seconds, 1..3600 (default 60).
+#   --case-timeout N   wall-clock seconds for each mode of a case, 1..3600
+#                      (default 60).
 #                      The batch watchdog remains an independent outer bound.
 #   --no-fetch         do not clone; require --test262-dir.
 #   --expectations-dir DIR  gate every batch against committed shards + manifest.

@@ -23,6 +23,36 @@ impl Interp {
         idx
     }
 
+    /// Bind one of a compartment's `globalLexicals`.
+    ///
+    /// A standalone cell, deliberately NOT linked into the global object's
+    /// property list and deliberately absent from `binding_names`: a lexical
+    /// is a scope between the global and the evaluated source, so
+    /// `getOwnPropertyNames(compartment.globalThis)` must not see it and
+    /// `compartment.globalThis.name` must read `undefined`.
+    /// `CompartmentEnvironment::global_lexicals` carries the rest of the
+    /// contract; `dispatch_get_variable` and `dispatch_set_variable` are the
+    /// two sites that consult it.
+    ///
+    /// Not metered here: the caller (`construct_compartment`) charges the
+    /// allocation, as it does for the endowments beside it.
+    pub(super) fn define_global_lexical(
+        &mut self,
+        id: u16,
+        value: Slot,
+        writable: bool,
+    ) -> crate::value::SlotIndex {
+        let mut cell = Slot::property(id, value.value);
+        cell.kind = value.kind;
+        cell.next = crate::value::SlotIndex::NULL;
+        if !writable {
+            cell.flag |= XS_DONT_SET_FLAG;
+        }
+        let idx = self.slots.alloc(cell);
+        self.environment.global_lexicals.insert(id, idx);
+        idx
+    }
+
     /// Materialize a new own global property at run time (a hoisted
     /// `var`, or a sloppy assignment creating a global), metering the
     /// allocation exactly where `fxNewSlot`/`fxNewChunk` run:
@@ -351,6 +381,9 @@ impl Interp {
             prop.next = head;
             let idx = self.slots.alloc(prop);
             self.slots.get_mut(inst).next = idx;
+            if self.installing_intrinsics {
+                self.place_intrinsic_key(inst, idx);
+            }
         }
     }
 
@@ -388,6 +421,9 @@ impl Interp {
             prop.next = head;
             let idx = self.slots.alloc(prop);
             self.slots.get_mut(inst).next = idx;
+            if self.installing_intrinsics {
+                self.place_intrinsic_key(inst, idx);
+            }
         }
         self.accessors.insert((inst, id), AccessorData { get, set });
     }
@@ -600,6 +636,24 @@ impl Interp {
         self.append_environment_capture(env, id, Slot::of(Kind::Closure, Payload::Reference(cell)));
     }
 
+    /// A `MODULE` envelope's function slot: the function and its record, or
+    /// `None` when the slot holds anything but a function. Corrupt bytecode
+    /// can put any value in either slot, so it is looked up, not indexed.
+    /// The lookup lives here rather than in the dispatch loop, whose
+    /// callee-class probes `tests/dispatch_probe_chain.rs` counts: a module
+    /// envelope is checked once per module, not on any call.
+    pub(super) fn module_envelope_function(
+        &self,
+        slot: Slot,
+    ) -> Option<(crate::value::SlotIndex, &FuncInfo)> {
+        match slot.value {
+            Payload::Reference(function) if slot.kind == Kind::Reference => {
+                self.functions.get(&function).map(|info| (function, info))
+            }
+            _ => None,
+        }
+    }
+
     /// `XS_CODE_BEGIN_SLOPPY`'s `this` binding: an `undefined`/`null` `this`
     /// in a sloppy function frame binds to the realm global. Recorded for
     /// the `this`/method semantics that observe it; the covered call
@@ -627,7 +681,7 @@ impl Interp {
     /// ([`crate::meter::SLOT_ALLOCATION_METERING`], 256 raw) exactly where
     /// `fxNewHostInstance` allocates it — measured against the pin as the
     /// whole construct overhead over a plain call.
-    pub(super) fn run_constructor(&mut self) {
+    pub(super) fn run_constructor(&mut self, code: &[u8]) -> Result<(), Step> {
         // `fxRunConstructor` runs `fxBeginHost`/`fxEndHost` around
         // `fxGetPrototypeFromConstructor` and then `fxNewHostInstance`. Beyond
         // the instance `fxNewSlot` ([`crate::meter::SLOT_ALLOCATION_METERING`],
@@ -641,11 +695,28 @@ impl Interp {
         // (fxGetPrototypeFromConstructor), defaulting to %Object.prototype% —
         // so `(new F()) instanceof F` holds. Reading the prototype is a
         // property get (unmetered), already folded into the measured cost.
-        let proto = self
-            .prototype_of(self.target_func)
-            .unwrap_or(self.object_proto);
+        //
+        // A `new.target` whose `prototype` is not an own data property — a
+        // Proxy answering through its trap, an accessor, or a bound function
+        // that inherits it — takes the observable read; every other
+        // constructor's `prototype` is the data slot the cache reads.
+        let target = self.target_func;
+        let observable = self.proxies.contains_key(&target)
+            || self.prototype_key_id.is_some_and(|pid| {
+                match self.ordinary_get_own_descriptor(target, pid) {
+                    Some(descriptor) => descriptor.is_accessor(),
+                    None => !self.ctor_prototype.contains_key(&target),
+                }
+            });
+        let proto = if observable {
+            self.get_prototype_from_constructor(code, self.target_func, self.object_proto)?
+        } else {
+            self.prototype_of(self.target_func)
+                .unwrap_or(self.object_proto)
+        };
         let inst = self.slots.alloc(Slot::instance(proto));
         self.this_val = Slot::of(Kind::Reference, Payload::Reference(inst));
+        Ok(())
     }
 
     pub(super) fn bind_this_sloppy(&mut self) {
@@ -851,6 +922,10 @@ impl Interp {
             return EnvironmentSet::Uninitialized;
         }
         if slot.flag & XS_DONT_SET_FLAG != 0 {
+            // A sloppy write to a function expression's own name is ignored.
+            if slot.flag & XS_DONT_ENUM_FLAG != 0 && !self.strict {
+                return EnvironmentSet::Written;
+            }
             return EnvironmentSet::Const;
         }
         slot.kind = value.kind;
@@ -1035,8 +1110,11 @@ impl Interp {
             // `with`/eval path; a plain write uses `SET_CLOSURE` by index.
             if self.locals[i].kind == Kind::Closure {
                 if let Payload::Reference(cell) = self.locals[i].value {
-                    if self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0 {
-                        return false;
+                    let flag = self.slots.get(cell).flag;
+                    if flag & XS_DONT_SET_FLAG != 0 {
+                        // A sloppy write to a function expression's own name
+                        // is ignored.
+                        return flag & XS_DONT_ENUM_FLAG != 0 && !self.strict;
                     }
                     let c = self.slots.get_mut(cell);
                     c.kind = value.kind;
@@ -1045,7 +1123,7 @@ impl Interp {
                 }
             }
             if self.locals[i].flag & XS_DONT_SET_FLAG != 0 {
-                return false;
+                return self.locals[i].flag & XS_DONT_ENUM_FLAG != 0 && !self.strict;
             }
             self.locals[i].kind = value.kind;
             self.locals[i].value = value.value;

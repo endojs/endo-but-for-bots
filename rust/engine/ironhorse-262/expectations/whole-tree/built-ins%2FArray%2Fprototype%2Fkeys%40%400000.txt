@@ -5,18 +5,18 @@ built-ins/Array/prototype/keys/iteration.js sloppy pass
 built-ins/Array/prototype/keys/iteration.js strict pass
 built-ins/Array/prototype/keys/length.js sloppy pass
 built-ins/Array/prototype/keys/length.js strict pass
-built-ins/Array/prototype/keys/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be keys; name value should be keys"
-built-ins/Array/prototype/keys/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be keys; name value should be keys"
+built-ins/Array/prototype/keys/name.js sloppy pass
+built-ins/Array/prototype/keys/name.js strict pass
 built-ins/Array/prototype/keys/not-a-constructor.js sloppy pass
 built-ins/Array/prototype/keys/not-a-constructor.js strict pass
 built-ins/Array/prototype/keys/prop-desc.js sloppy pass
 built-ins/Array/prototype/keys/prop-desc.js strict pass
-built-ins/Array/prototype/keys/resizable-buffer-grow-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/keys/resizable-buffer-grow-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/keys/resizable-buffer-shrink-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/keys/resizable-buffer-shrink-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/keys/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/keys/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/keys/resizable-buffer-grow-mid-iteration.js sloppy skip:shared-positive-test-failure
+built-ins/Array/prototype/keys/resizable-buffer-grow-mid-iteration.js strict skip:shared-positive-test-failure
+built-ins/Array/prototype/keys/resizable-buffer-shrink-mid-iteration.js sloppy skip:shared-positive-test-failure
+built-ins/Array/prototype/keys/resizable-buffer-shrink-mid-iteration.js strict skip:shared-positive-test-failure
+built-ins/Array/prototype/keys/resizable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/Array/prototype/keys/resizable-buffer.js strict skip:shared-positive-test-failure
 built-ins/Array/prototype/keys/return-abrupt-from-this.js sloppy pass
 built-ins/Array/prototype/keys/return-abrupt-from-this.js strict pass
 built-ins/Array/prototype/keys/returns-iterator-from-object.js sloppy pass

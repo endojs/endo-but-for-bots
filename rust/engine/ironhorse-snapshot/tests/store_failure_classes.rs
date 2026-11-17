@@ -24,6 +24,7 @@ fn expected(sample: &StoreError) -> StoreFailure {
         | StoreError::PendingStateUnsupported { .. }
         | StoreError::Empty
         | StoreError::Unsupported(_)
+        | StoreError::TokenSource(_)
         | StoreError::BatchRejected(_)
         | StoreError::EpochMismatch { .. }
         | StoreError::BaselineMismatch { .. }
@@ -52,6 +53,7 @@ fn every_variant() -> Vec<StoreError> {
         StoreError::PendingStateUnsupported { row: "modules" },
         StoreError::Empty,
         StoreError::Unsupported("migrate a manifest in place"),
+        StoreError::TokenSource("the source keeps returning zero or the predecessor"),
         StoreError::BatchRejected(Box::new(StoreError::SummaryMismatch { page: 1 })),
         StoreError::EpochMismatch {
             expected: 4,

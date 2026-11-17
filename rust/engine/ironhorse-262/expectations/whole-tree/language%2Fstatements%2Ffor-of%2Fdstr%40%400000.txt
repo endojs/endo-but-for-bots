@@ -82,8 +82,8 @@ language/statements/for-of/dstr/array-elem-nested-obj.js sloppy pass
 language/statements/for-of/dstr/array-elem-nested-obj.js strict pass
 language/statements/for-of/dstr/array-elem-put-const.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
 language/statements/for-of/dstr/array-elem-put-const.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/for-of/dstr/array-elem-put-let.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
-language/statements/for-of/dstr/array-elem-put-let.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/for-of/dstr/array-elem-put-let.js sloppy pass
+language/statements/for-of/dstr/array-elem-put-let.js strict pass
 language/statements/for-of/dstr/array-elem-put-obj-literal-optchain-prop-ref-init.js sloppy pass
 language/statements/for-of/dstr/array-elem-put-obj-literal-optchain-prop-ref-init.js strict pass
 language/statements/for-of/dstr/array-elem-put-obj-literal-prop-ref-init-active.js sloppy pass

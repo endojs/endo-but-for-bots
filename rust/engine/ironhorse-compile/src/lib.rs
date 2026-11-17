@@ -44,12 +44,14 @@ pub(crate) mod token;
 pub(crate) mod token_flags;
 pub use ast::{Item, Node, Value, TREE_DEPTH_LIMIT};
 pub use coder::{
-    compile, compile_atoms, compile_atoms_budgeted, compile_atoms_budgeted_with_limit,
-    compile_atoms_goal, compile_atoms_goal_with_meter, compile_atoms_units_budgeted_with_limit,
+    compile, compile_atoms, compile_atoms_budgeted, compile_atoms_budgeted_firewalled,
+    compile_atoms_budgeted_with_limit, compile_atoms_goal, compile_atoms_goal_with_meter,
+    compile_atoms_units_budgeted_firewalled, compile_atoms_units_budgeted_with_limit,
+    compile_atoms_units_eval_firewalled, compile_atoms_units_eval_with_meter,
     compile_atoms_units_with_meter, compile_atoms_with, compile_atoms_with_budget,
     compile_atoms_with_meter, compile_module, compile_module_atoms, compile_with,
-    declares_top_level_var_or_function, script_goal_deviates, CompileError, CompileReport,
-    CompiledAtoms,
+    declares_top_level_var_or_function, script_goal_deviates, with_xs_bytes, CompileError,
+    CompileReport, CompiledAtoms, EvalContext,
 };
 pub use error::{LexError, LexErrorKind};
 pub use lexer::{BigIntLiteral, Lexeme, Lexer};

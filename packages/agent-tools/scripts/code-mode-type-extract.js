@@ -56,7 +56,8 @@ import { getTag, passStyleOf } from '@endo/pass-style';
  *
  * @typedef {object} AuxType
  * @property {string} name Type name (may be generic, e.g. `ERef<T>`).
- * @property {string} text Right-hand side of the `type <name> = <text>` alias.
+ * @property {string} text Alias right-hand side, or preserved interface heritage.
+ * @property {'interface'} [kind] Preserve load-bearing interface indirection.
  *
  * @typedef {object} GlobalTypeIR
  * @property {string} rootName Name of the global's root object type, e.g. `WritableEndoGit`.
@@ -212,6 +213,7 @@ const flattenDeclaration = (source, rootName, globalName) => {
       .filter(statement => ts.isTypeAliasDeclaration(statement))
       .map(statement => [statement.name.text, statement]),
   );
+  const interfaces = sourceFile.statements.filter(ts.isInterfaceDeclaration);
   const root = allAliases.get(rootName);
   if (root === undefined) {
     throw new Error(`missing generated root alias: ${rootName}`);
@@ -219,6 +221,17 @@ const flattenDeclaration = (source, rootName, globalName) => {
   const aliases = new Map(allAliases);
   aliases.delete(rootName);
   const requiredAnchors = recursiveAliasNames(aliases);
+  // Interfaces deliberately break recursive alias expansion. Keep aliases
+  // referenced by their heritage named, rather than erasing that boundary.
+  for (const declaration of interfaces) {
+    const visit = node => {
+      if (ts.isIdentifier(node) && aliases.has(node.text)) {
+        requiredAnchors.add(node.text);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(declaration);
+  }
   for (const [name, declaration] of aliases) {
     if (isPrimitiveAnchor(name, declaration)) {
       requiredAnchors.add(name);
@@ -437,6 +450,32 @@ const flattenDeclaration = (source, rootName, globalName) => {
     const aux = [
       ...(rootDoc === undefined || rootDoc === '' ? [] : [rootDoc]),
       ...retainedAliases,
+      ...interfaces.map(declaration => {
+        const transformed = ts.transform(declaration, [
+          context => {
+            const visit = node => {
+              if (
+                ts.isTypeReferenceNode(node) &&
+                ts.isIdentifier(node.typeName) &&
+                node.typeName.text === rootName
+              ) {
+                return ts.factory.createTypeQueryNode(
+                  ts.factory.createIdentifier(globalName),
+                );
+              }
+              return ts.visitEachChild(node, visit, context);
+            };
+            return node => ts.visitNode(node, visit);
+          },
+        ]);
+        const text = printer.printNode(
+          ts.EmitHint.Unspecified,
+          transformed.transformed[0],
+          sourceFile,
+        );
+        transformed.dispose();
+        return text;
+      }),
     ].join('\n');
     if (aux.length + body.length > DECLARATION_MAX_CHARACTERS) {
       throw new Error(
@@ -523,7 +562,13 @@ const renderObjectType = members =>
  * @returns {string}
  */
 const renderAuxTypes = auxTypes =>
-  auxTypes.map(a => `type ${a.name} = ${a.text};`).join('\n');
+  auxTypes
+    .map(a =>
+      a.kind === 'interface'
+        ? `interface ${a.name} extends ${a.text} {}`
+        : `type ${a.name} = ${a.text};`,
+    )
+    .join('\n');
 
 /**
  * The single renderer applied to every IR regardless of source: synthesize the
@@ -578,6 +623,7 @@ export const renderDeclaration = (ir, options) => {
       ),
     },
     ...ir.auxTypes.map((type, index) => ({
+      ...(type.kind === undefined ? {} : { kind: type.kind }),
       name: rewrite(auxNames[index]),
       text: rewrite(type.text),
     })),
@@ -1141,6 +1187,54 @@ const extractTsAliasesIR = ({ rootModule, rootType, memberFilter }) => {
   };
 
   /**
+   * Resolve only explicitly declared string/number literal constants. Computed
+   * keys and typeof queries need values, not type-alias lookup. Never evaluate
+   * an initializer or substitute an unknown value for a property identity.
+   * @param {string} name
+   * @param {string} fileName
+   * @param {Set<string>} [seen]
+   * @returns {ts.StringLiteral | ts.NumericLiteral | undefined}
+   */
+  const literalConstant = (name, fileName, seen = new Set()) => {
+    const key = `${fileName}:${name}`;
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    const module = moduleFor(fileName);
+    for (const statement of module.sourceFile.statements.filter(
+      ts.isVariableStatement,
+    )) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (
+          ts.isIdentifier(declaration.name) &&
+          declaration.name.text === name &&
+          declaration.type !== undefined &&
+          ts.isLiteralTypeNode(declaration.type)
+        ) {
+          const { literal } = declaration.type;
+          if (ts.isStringLiteral(literal))
+            return ts.factory.createStringLiteral(literal.text);
+          if (ts.isNumericLiteral(literal))
+            return ts.factory.createNumericLiteral(literal.text);
+        }
+      }
+    }
+    const binding = module.importMap.get(name);
+    if (binding !== undefined) {
+      const target = resolveTypeModule(binding.specifier, fileName);
+      if (target !== undefined)
+        return literalConstant(binding.exportedName, target, seen);
+    }
+    for (const specifier of module.starExports) {
+      const target = resolveTypeModule(specifier, fileName);
+      if (target !== undefined) {
+        const literal = literalConstant(name, target, seen);
+        if (literal !== undefined) return literal;
+      }
+    }
+    return undefined;
+  };
+
+  /**
    * @param {string} key
    * @param {string} preferredName
    * @param {string} fileName
@@ -1464,21 +1558,66 @@ const extractTsAliasesIR = ({ rootModule, rootType, memberFilter }) => {
     // An interface is printed from its flattened member map so inherited
     // members, method signatures, and overload sets survive; a type alias is
     // printed as authored.
-    const text = ts.isTypeAliasDeclaration(current)
-      ? printer.printNode(
-          ts.EmitHint.Unspecified,
-          transformType(current.type, fileName),
-          moduleFor(fileName).sourceFile,
-        )
-      : renderMemberBlock(
-          declarationMembers(current, fileName, new Set([key])),
-        );
+    // Empty auxiliary interfaces preserve their heritage as references and
+    // remain interfaces: recursive types can depend on that indirection.
+    // Unlike flattening root members, this needs no generic substitution.
+    // Nonempty generic interfaces still refuse unsupported flattening.
+    const bases =
+      ts.isInterfaceDeclaration(current) && current.members.length === 0
+        ? (current.heritageClauses ?? []).flatMap(clause =>
+            clause.token === ts.SyntaxKind.ExtendsKeyword
+              ? [...clause.types]
+              : [],
+          )
+        : [];
+    const genericHeritage = bases.some(base => {
+      if (!ts.isIdentifier(base.expression)) return false;
+      const found = resolveReference(base.expression.text, fileName);
+      return (found?.declaration?.typeParameters?.length ?? 0) > 0;
+    });
+    const text = genericHeritage
+      ? bases
+          .map(base => {
+            if (!ts.isIdentifier(base.expression)) {
+              throw Error(
+                `unsupported extends clause ${base.getText()} in ${fileName}`,
+              );
+            }
+            const found = resolveReference(base.expression.text, fileName);
+            if (found === undefined || found.declaration === undefined) {
+              throw Error(
+                `cannot preserve extends ${base.expression.text}: no reachable declaration from ${fileName}`,
+              );
+            }
+            return printer.printNode(
+              ts.EmitHint.Unspecified,
+              transformType(
+                ts.factory.createTypeReferenceNode(
+                  base.expression.text,
+                  base.typeArguments,
+                ),
+                fileName,
+              ),
+              moduleFor(fileName).sourceFile,
+            );
+          })
+          .join(', ')
+      : ts.isTypeAliasDeclaration(current)
+        ? printer.printNode(
+            ts.EmitHint.Unspecified,
+            transformType(current.type, fileName),
+            moduleFor(fileName).sourceFile,
+          )
+        : renderMemberBlock(
+            declarationMembers(current, fileName, new Set([key])),
+          );
     auxTypes.set(key, {
       name: `${outputName.replace(/<.*>$/u, '')}${typeParameterDefaults(
         current,
         fileName,
       )}`,
       text,
+      ...(genericHeritage ? { kind: /** @type {const} */ ('interface') } : {}),
     });
     building.delete(key);
     return outputName;
@@ -1539,6 +1678,31 @@ const extractTsAliasesIR = ({ rootModule, rootType, memberFilter }) => {
         };
         /** @param {ts.Node} current */
         const visit = current => {
+          if (
+            ts.isComputedPropertyName(current) &&
+            ts.isIdentifier(current.expression)
+          ) {
+            const literal = literalConstant(current.expression.text, fromFile);
+            if (literal === undefined) {
+              throw Error(
+                `cannot resolve computed property ${current.expression.text} in ${fromFile}`,
+              );
+            }
+            return literal;
+          }
+          if (
+            ts.isTypeQueryNode(current) &&
+            ts.isIdentifier(current.exprName)
+          ) {
+            const literal = literalConstant(current.exprName.text, fromFile);
+            if (literal !== undefined)
+              return ts.factory.createLiteralTypeNode(literal);
+            if (moduleFor(fromFile).importMap.has(current.exprName.text)) {
+              throw Error(
+                `cannot resolve imported value ${current.exprName.text} in ${fromFile}`,
+              );
+            }
+          }
           if (ts.isImportTypeNode(current)) {
             const found = importedDeclaration(current, fromFile);
             // Code mode is intentionally self-contained: a type no `@endo/*`

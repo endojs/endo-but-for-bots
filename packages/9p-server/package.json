@@ -21,7 +21,8 @@
     "./src/server.js": "./src/server.js",
     "./src/wire.js": "./src/wire.js",
     "./src/types.js": "./src/types.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./mount-caplet.js": "./mount-caplet.js"
   },
   "scripts": {
     "build": "exit 0",
@@ -31,13 +32,15 @@
     "lint:eslint": "eslint '**/*.js'"
   },
   "dependencies": {
+    "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "@endo/platform": "workspace:^"
+    "@endo/platform": "workspace:^",
+    "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
     "@endo/far": "workspace:^",

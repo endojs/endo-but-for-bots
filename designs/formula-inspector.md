@@ -123,14 +123,14 @@ The Value modal grows a fourth action alongside the existing three (Close, Save,
 
 | Action | Keyboard | Manual |
 |--------|----------|--------|
-| Close | `Escape` (front face) | Click × or backdrop |
+| Close | `Escape` (front face) | Click x or backdrop |
 | Save | `Enter` (in name field) | Click Save button |
 | Enter Profile | `Shift+P` (proposed) | Click "Enter Profile" |
 | **Flip to Formula / Flip to Value** | **`F`** | **Click the gear icon in the modal header (front face) or the "Show value" button in the back face header** |
 
 `F` is reachable from both faces.
 On the front face it flips to the back; on the back face it flips to the front.
-The front face's flip affordance is a gear icon in the modal header opposite the close ×, with `aria-label="Show formula"`; the back face's flip-back affordance is a "Show value" button in the back face header, with `aria-label="Show value"`.
+The front face's flip affordance is a gear icon in the modal header opposite the close x, with `aria-label="Show formula"`; the back face's flip-back affordance is a "Show value" button in the back face header, with `aria-label="Show value"`.
 The modeline gains a `F flip to formula` hint on the front face and a `F flip to value` hint on the back face per [`chat-invariants.md`](chat-invariants.md) § Modeline Completeness.
 
 The same modal back face is reachable directly from each inventory row.
@@ -172,14 +172,14 @@ The back face is divided into a fixed header (formula-type badge, title, help te
 The property list shape is the same across all formula types: an ordered list of rows, each row a `<dt>label</dt><dd>value-or-reference-button</dd>` pair.
 Per-type variations differ only in *which* properties are listed and in the per-property classifier (see § Literal-vs-reference resolution).
 
-The catalog covers all 33 formula types currently in [`packages/daemon/src/formula-type.js`](../packages/daemon/src/formula-type.js).
+The catalog covers the formula types enumerated in [`packages/daemon/src/formula-type.js`](../packages/daemon/src/formula-type.js); this section names the types rather than pinning a total that would silently drift out of date.
 
-| Formula type | Header text | Properties (label → render) |
+| Formula type | Header text | Properties (label -> render) |
 |---|---|---|
 | `eval` | "Evaluation": code run inside a worker | `source` literal (code block, monospace), `endowments` record (list-of-references, one button per binding labeled by codeName), `worker` reference |
 | `lookup` | "Lookup": name traversal | `hub` reference, `path` literal (array of names rendered as breadcrumbs) |
-| `guest` | "Guest": sub-agent of a host | `hostAgent` reference, `hostHandle` reference |
-| `host` | "Host": agent identity | `handle`, `hostHandle`, `keypair`, `worker`, `inspector`, `petStore`, `mailboxStore`, `mailHub`, `endo`, `networks`, `pins` (all references) |
+| `guest` | "Guest": sub-agent of a host | `hostAgent`, `hostHandle`, `handle`, `petStore`, `mailboxStore`, `mailHub`, `worker`, `networks`, `planes` references, plus optional `guestPins` (guest-visible `@pins`) and `hostPins` (host-only, hidden) references |
+| `host` | "Host": agent identity | `handle`, `hostHandle`, `mainWorker`, `nodeWorker`, `registry`, `inspector`, `petStore`, `mailboxStore`, `mailHub`, `endo`, `networks`, `planes`, `pins` (all references) |
 | `directory` | "Directory": naming hub | `petStore` reference |
 | `pet-store` | "Pet store": name-to-id table | (no daemon-side metadata; show empty state "No formula properties; this is a leaf store.") |
 | `mailbox-store` | "Mailbox store" | (empty state, as `pet-store`) |
@@ -202,7 +202,7 @@ The catalog covers all 33 formula types currently in [`packages/daemon/src/formu
 | `handle` | "Handle": receive-half of an agent | (empty state) |
 | `keypair` | "Keypair": Ed25519 key material | `publicKey` literal (hex). The private key is **not** displayed; the row shows "Private key not displayed" in its place. |
 | `endo` | "Endo bootstrap" | (lists root references when the formula is loaded; deferred to follow-up) |
-| `invitation` | "Invitation" | `hostAgent` reference, `hostHandle` reference, `guestName` literal |
+| `invitation` | "Invitation" | `invitingAgent` reference (host **or** guest), `invitingHandle` reference, `guestName` literal |
 | `pet-inspector` | "Pet inspector" | `petStore` reference |
 | `least-authority` | "Least authority" | (empty state) |
 | `known-peers-store` | "Known peers store" | (empty state) |
@@ -228,7 +228,7 @@ flowchart LR
     R -- list --> BL[list-of-reference-buttons, one per entry, labeled by entry key]
 ```
 
-The daemon returns formula-identifier strings (`{64-char number}:{64-char node}` per [`daemon-256-bit-identifiers.md`](daemon-256-bit-identifiers.md)) for properties that retain other formulas, plain JS values for literals, and records (key→identifier maps) for list-of-references properties.
+The daemon returns formula-identifier strings (`{64-char number}:{64-char node}` per [`daemon-256-bit-identifiers.md`](daemon-256-bit-identifiers.md)) for properties that retain other formulas, plain JS values for literals, and records (key->identifier maps) for list-of-references properties.
 
 **The reference button is labeled by the property name in the formula schema, not by the target's pet name.**
 For an `eval` formula, the row whose value is the formula's `worker` is rendered as a button reading "worker", *not* "@my-worker" (the worker often has no pet name in the user's store).
@@ -272,10 +272,10 @@ The user then has the choice to flip again.
 
 **The reference walk does not unwind cycles.**
 The user has a mental model of how many layers they have gone down; the modal does not meddle with it.
-If the user navigates A → B → A, the stack reads `[A, B, A]` and Backspace pops one frame at a time.
-A → B → A → Backspace returns to B, not to the entry-point A.
+If the user navigates A -> B -> A, the stack reads `[A, B, A]` and Backspace pops one frame at a time.
+A -> B -> A -> Backspace returns to B, not to the entry-point A.
 
-Rationale: cycle-unwinding (coalescing A → B → A into a single frame returning to the earlier A) is an invisible behavior that diverges from the click count the user just performed.
+Rationale: cycle-unwinding (coalescing A -> B -> A into a single frame returning to the earlier A) is an invisible behavior that diverges from the click count the user just performed.
 The principle of least surprise (kriskowal 2026-06-12 inline comment on PR #439) is that a Backspace pops exactly one click's worth of navigation, regardless of whether the target identifier appears earlier in the stack.
 This matches browser-back behavior and is the simplest semantics to reason about.
 
@@ -327,7 +327,7 @@ sequenceDiagram
 The per-type layouts are a small registry in the Chat client.
 
 - A new file `packages/chat/formula-view-component.js` (sibling of `packages/chat/value-component.js`) renders the modal back face.
-- A registry `packages/chat/formula-view-registry.js` maps formula type → `{ header, helpText, propertyList }` per the *Formula-view layout taxonomy* table.
+- A registry `packages/chat/formula-view-registry.js` maps formula type -> `{ header, helpText, propertyList }` per the *Formula-view layout taxonomy* table.
 - `packages/chat/value-component.js` grows the flip control, the back-face mount point, and the back-stack.
 - The inventory-row gear icon (rendered in `packages/chat/inventory-component.js` per [`chat-components.md`](chat-components.md) § Inventory panel) opens the Value modal already flipped to the back face for the row's value.
 - CSS variables added: `--card-flip-duration`, `--card-flip-easing`; the reduced-motion rule overrides duration to `0ms` and disables the rotation.
@@ -347,7 +347,7 @@ The per-type layouts are a small registry in the Chat client.
 | **CLI verb**: `inspect` versus `examine` versus `formula` | **`inspect`** | Parallel to the existing `endo inspect` proposal in this document's prior draft; parallel to the *Pop the bonnet* metaphor in the concept page; parallel to the single-word noun-style-verb shape of `endo paths`, `endo locate`, `endo show`. |
 | **Chat surface count**: dedicated inspector panel plus modal back face versus single modal back face | **Single modal back face** | The modal back face is the everyday-inspection moment (one flip, no context switch); an inventory-row gear icon reaches it directly so the power-user entry point is preserved without a separate panel. Considered and rejected: *dedicated inspector panel with read/edit toggle and retention-paths embed*. Reason: kriskowal review 2026-06-13: "We only need one surface. ... While one formula captures state, we do not need these to be user editable at this stage of development." |
 | **Navigation model**: stack versus replace | **Stack** | Preserves entry-point context across the reference walk; matches user expectation from browser-back; bounded only by user clicks. Considered and rejected: *replace*. Reason: loses context after one click. Maintainer ack 2026-06-12: "Stack model sounds good to me." |
-| **Cycle handling**: leave-as-is versus de-duplicate | **Leave as-is (principle of least surprise)** | The user's mental model of stack depth matches their click count; coalescing A → B → A into one frame back to A is an invisible behavior that diverges from that mental model. Maintainer ruling 2026-06-12: "Principle of least surprise: do not unwind cycles. The user has a mental model of how many layers they have gone down that we should not meddle with." |
+| **Cycle handling**: leave-as-is versus de-duplicate | **Leave as-is (principle of least surprise)** | The user's mental model of stack depth matches their click count; coalescing A -> B -> A into one frame back to A is an invisible behavior that diverges from that mental model. Maintainer ruling 2026-06-12: "Principle of least surprise: do not unwind cycles. The user has a mental model of how many layers they have gone down that we should not meddle with." |
 | **Reference-button label**: property name versus target pet name | **Property name** | The property name is on the formula and always present; the target's pet name is a user-side decoration that may or may not exist. Labeling by property name keeps the back face truthful and consistent across users. |
 | **Escape on back face**: flip-to-front versus close-modal | **Flip-to-front** | Matches `chat-invariants.md` § Escape Consistency. Two Escapes from the back face closes the modal, consistent with the modal-stack metaphor. |
 | **Promise rendering**: status-aware (subscribe + error-tracing) versus static `store` reference | **Status-aware** | A `promise` formula's interesting content is its eventual value (or rejection); a static `store` reference reveals only the substrate. The subscribe-and-button-to-view-next-value pattern matches kriskowal's directive 2026-06-12 and the error-tracing integration uses the existing `EndoHost.traces()` facet rather than introducing a new error surface. |
@@ -392,7 +392,7 @@ Exercise what is implemented.
 - **Inventory gear entry test**: click the gear icon on an inventory row; assert the modal opens already flipped to the back face for that row's value, identical to opening the modal and pressing `F`.
 - **Reduced-motion test**: set `prefers-reduced-motion: reduce`; assert the flip uses cross-fade rather than rotation.
 - **Screen-reader smoke test**: assert the `aria-live` region updates on flip and that focus moves to the back-face title on flip-to-back.
-- **Cycle test**: construct a formula graph A → B → A; navigate A → B → A; assert stack depth `2/3` indicator; pop twice to A (no coalescing).
+- **Cycle test**: construct a formula graph A -> B -> A; navigate A -> B -> A; assert stack depth `2/3` indicator; pop twice to A (no coalescing).
 - **Keypair test**: assert that the `keypair` back face shows the `publicKey` row and explicitly does not show a `privateKey` row.
 - **Promise-formula test**: a pending promise renders the "View next value" button; resolving the promise updates the back face to show the resolved value's reference button; a rejected promise renders the rejection reason plus a "View trace" button that fetches the `TraceReport`.
 

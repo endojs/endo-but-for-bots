@@ -220,7 +220,7 @@ pub struct Scope {
     /// bare arrow-ness, not just the `arrow_default` conjunction.
     pub is_arrow: bool,
     /// Whether this scope's node carries the **direct-`eval`** hoist extra
-    /// (`hoist_call`'s `add_extra`), as opposed to a `with`-poisoned scope
+    /// (the hoist walk's `Call` arm's `add_extra`), as opposed to a `with`-poisoned scope
     /// (which sets `SCOPE_EVAL` on `flags` but leaves the node clean). The
     /// coder's `fxScopeCodingBody`/`fxScopeCodedBody` key on this, not on the
     /// poisoned `flags`. Computed once the node's extras are populated
@@ -323,12 +323,14 @@ pub struct ScopeTree {
     /// private method values bind in the class scope and are captured as aliases.
     /// Keyed with `node_id`.
     pub class_field_init_inst: NodeTable<usize>,
-    /// A class **member** node ID (`PropertyAt` / `PrivateProperty`) →
+    /// A class **field member** node ID (`Property`, `PropertyAt`, or
+    /// `PrivateProperty`) →
     /// the **field-init function scope** use-closure alias declares its
     /// `atAccess` / `symbolAccess` / `valueAccess` resolve to (XS's
     /// `fxFieldNodeBind` looking each access up from inside the `instanceInit`
     /// function scope). Present only for a member bound inside a real
-    /// field-init scope ([`ScopeTree::class_field_init_inst`]); the coder
+    /// instance or static field-init scope; plain properties have an empty
+    /// receipt and static blocks have no receipt. The coder
     /// reads these to emit the field body's `GET_CLOSURE` / `NEW_PRIVATE`
     /// with the function-frame retrieve slot (not the class-scope index). A
     /// get/set accessor pair shares one brand slot (the `symbolAccess`
@@ -449,16 +451,30 @@ pub(crate) fn run_goal_metered(
     goal: Goal,
     meter: crate::meter::ParseMeter<'_>,
 ) -> Result<ScopeTree, ParseError> {
-    run_goal_with_access_log(root, goal, meter, false)
+    run_goal_with_access_log(root, goal, meter, false, false)
 }
 
 /// The private compiler consumes resolutions, not the diagnostic access log.
+#[cfg(test)]
 pub(crate) fn run_goal_for_compile(
     root: &Item,
     goal: Goal,
     meter: crate::meter::ParseMeter<'_>,
 ) -> Result<ScopeTree, ParseError> {
-    run_goal_with_access_log(root, goal, meter, true)
+    run_goal_with_access_log(root, goal, meter, true, false)
+}
+
+/// The compiler's scoping pass. `private_environment` marks a direct eval
+/// whose caller's environment can supply private names: a strict eval scope
+/// then declares an unresolved `#name` for `EVAL_PRIVATE` to bind at run
+/// time.
+pub(crate) fn run_goal_for_compile_with(
+    root: &Item,
+    goal: Goal,
+    meter: crate::meter::ParseMeter<'_>,
+    private_environment: bool,
+) -> Result<ScopeTree, ParseError> {
+    run_goal_with_access_log(root, goal, meter, true, private_environment)
 }
 
 fn run_goal_with_access_log(
@@ -466,6 +482,7 @@ fn run_goal_with_access_log(
     goal: Goal,
     meter: crate::meter::ParseMeter<'_>,
     omit_access_log: bool,
+    private_environment: bool,
 ) -> Result<ScopeTree, ParseError> {
     let root_node = match root {
         Item::Node(n) => n.as_ref(),
@@ -475,6 +492,7 @@ fn run_goal_with_access_log(
         meter,
         goal,
         omit_access_log,
+        private_environment,
         ..Scoper::default()
     };
     // fxParserHoist
@@ -525,11 +543,14 @@ struct DeclareIndex {
 #[derive(Default)]
 struct Scoper<'a> {
     meter: crate::meter::ParseMeter<'a>,
-    /// Tree levels currently on the native stack (see [`TREE_DEPTH_LIMIT`]
-    /// and [`Self::descend`]).
+    /// Tree levels currently entered, on the native stack or a walk's (see
+    /// [`TREE_DEPTH_LIMIT`] and [`Self::descend`]).
     depth: u32,
     /// The [`Goal`] this run is scoping for (see `run_goal`).
     goal: Goal,
+    /// Whether a strict eval scope may leave a private name for its caller's
+    /// environment to supply (a direct eval; see [`run_goal_for_compile_with`]).
+    private_environment: bool,
     scopes: Vec<Scope>,
     // Most block scopes have no declarations. Keep only a pointer-sized
     // vacancy for them; allocate the lookup tables on the first declaration.
@@ -604,6 +625,28 @@ struct Scoper<'a> {
     /// A class node ID → its bind-time static field-init function scope
     /// (see [`ScopeTree::class_field_init_static`]).
     class_field_init_static: NodeTable<usize>,
+}
+
+/// XS's `duplicate variable %s` (`xsScope.c`), which names the binding.
+#[cold]
+#[inline(never)]
+fn duplicate_variable(line: u32, symbol: &Sym) -> ParseError {
+    duplicate_binding(line, "variable", symbol)
+}
+
+/// XS's `duplicate argument %s` and `duplicate variable %s` (`xsScope.c`),
+/// out of line so the recursive hoisting walk does not carry its `format!`.
+#[cold]
+#[inline(never)]
+fn duplicate_binding(line: u32, what: &str, symbol: &Sym) -> ParseError {
+    ParseError {
+        line,
+        kind: crate::parser::ParseErrorKind::Syntax,
+        message: match symbol {
+            Sym::Named(name) => format!("duplicate {what} {name}"),
+            Sym::Anon(_) => format!("duplicate {what}"),
+        },
+    }
 }
 
 fn err(line: u32, msg: &str) -> ParseError {
@@ -756,6 +799,7 @@ impl Scoper<'_> {
     /// its body) inside it so their inner scopes chain through the field
     /// function. `is_static` members carry a `Body` static block whose body is
     /// child 0; a data field's value is child 1. Returns the scope index.
+    #[inline(never)]
     fn hoist_field_init_scope(
         &mut self,
         members: &[&Node],
@@ -797,8 +841,7 @@ impl Scoper<'_> {
     fn field_init_alias(&mut self, fi: usize, class_scope: usize, class_id: u32) -> Option<u32> {
         let d = self.declare_ref(class_scope, class_id);
         let symbol = d.symbol.clone()?;
-        let line = d.line;
-        self.scope_lookup(fi, &symbol, line, false, false)
+        self.scope_lookup(fi, &symbol, None, false)
             .map(|(_, id)| id)
     }
 
@@ -1017,104 +1060,122 @@ impl Scoper<'_> {
     /// `si`, creating function-scope closure aliases as XS does. Returns
     /// the resolved `(scope, declare id)` or `None` for a global / `with`
     /// / eval-shadowed access. `closure_flag` marks captures.
+    /// `private_member` is the access's line when it names a private member
+    /// (`#x`), which a direct eval may leave to its caller's environment.
+    ///
+    /// XS recurses once per scope; this climbs in a loop, keeping the
+    /// function scopes it leaves (from each of which the lookup continues as
+    /// a capture), then gives each of them a closure alias for what was
+    /// found, outermost first, as the recursion did on its way back.
     fn scope_lookup(
         &mut self,
         si: usize,
         symbol: &Sym,
-        sym_line: u32,
-        is_private_member: bool,
+        private_member: Option<u32>,
         closure_flag: bool,
     ) -> Option<(usize, u32)> {
-        match self.scopes[si].token {
-            Token::Eval => {
-                let mut found = self.scope_get_declare(si, symbol);
-                if let Some(id) = found {
-                    // A hoisted `var`/`Define` (sloppy eval, or any Script)
-                    // is unresolved: the access takes the symbol path to
-                    // the global-object property `EVAL_ENVIRONMENT` creates.
-                    let hoists = self.eval_scope_hoists_vars(si);
-                    let dtok = self.declare_ref(si, id).token;
-                    if hoists && (dtok == Token::Var || dtok == Token::Define) {
-                        found = None;
-                    } else if closure_flag {
-                        self.declare_mut(si, id).flags |= dflags::CLOSURE;
+        let mut si = si;
+        let mut closure_flag = closure_flag;
+        let mut left: Vec<usize> = Vec::new();
+        let mut resolved = loop {
+            match self.scopes[si].token {
+                Token::Eval => {
+                    let mut found = self.scope_get_declare(si, symbol);
+                    if let Some(id) = found {
+                        // A hoisted `var`/`Define` (sloppy eval, or any
+                        // Script) is unresolved: the access takes the symbol
+                        // path to the global-object property
+                        // `EVAL_ENVIRONMENT` creates.
+                        let hoists = self.eval_scope_hoists_vars(si);
+                        let dtok = self.declare_ref(si, id).token;
+                        if hoists && (dtok == Token::Var || dtok == Token::Define) {
+                            found = None;
+                        } else if closure_flag {
+                            self.declare_mut(si, id).flags |= dflags::CLOSURE;
+                        }
                     }
-                }
-                // XS's `fxScopeLookup` synthesizes a `Private` brand declare
-                // here for a strict eval scope (`XS_TOKEN_PRIVATE_MEMBER`),
-                // deferring the "undefined private property" check to run time.
-                // The static oracle-shim compile drives the whole assembled
-                // program as one eval goal, so this Eval scope is the top-level
-                // program with no enclosing class — an unresolved `#name` at
-                // this point is the `AllPrivateNamesValid` early error and can
-                // never resolve at run time. Leaving `found = None` lets
-                // `bind_private_member` report "invalid private identifier" (a
-                // parse-phase rejection), matching XS's own SyntaxError verdict
-                // for these sources. A future direct-eval implementation must
-                // resolve a private name against the *real* enclosing private
-                // environment, never a synthesized top-level brand.
-                let _ = is_private_member;
-                found.map(|id| (si, id))
-            }
-            Token::Function => {
-                if let Some(id) = self.scope_get_declare(si, symbol) {
-                    if closure_flag {
-                        self.declare_mut(si, id).flags |= dflags::CLOSURE;
-                    }
-                    Some((si, id))
-                } else if (self.scope_node_flags(si) & SCOPE_EVAL != 0)
-                    && (self.scope_node_flags(si) & SCOPE_STRICT == 0)
-                {
-                    // eval can create variables that override closures
-                    None
-                } else if let Some(parent) = self.scopes[si].parent {
-                    let resolved =
-                        self.scope_lookup(parent, symbol, sym_line, is_private_member, true);
-                    if let Some((rscope, rid)) = resolved {
-                        let rline = self.declare_ref(rscope, rid).line;
-                        let mut alias =
-                            self.new_declare(si, Token::NoToken, Some(symbol.clone()), rline);
-                        alias.flags |= dflags::CLOSURE | dflags::USE_CLOSURE;
-                        alias.alias = Some((rscope, rid));
-                        let aid = self.scope_add_declare(si, alias);
+                    // XS's `fxScopeLookup` synthesizes a `Private` brand
+                    // declare here for a strict eval scope
+                    // (`XS_TOKEN_PRIVATE_MEMBER`), deferring the "undefined
+                    // private property" check to run time. Only a direct eval
+                    // does so here: its caller's environment holds the
+                    // class's private names, which `EVAL_PRIVATE` binds
+                    // before the body runs. The static compile drives a whole
+                    // program as one eval goal, where an unresolved `#name`
+                    // is the `AllPrivateNamesValid` early error; leaving
+                    // `found = None` lets `bind_private_member` report it,
+                    // matching XS's SyntaxError for these sources.
+                    if let Some(line) = private_member.filter(|_| {
+                        found.is_none()
+                            && self.private_environment
+                            && self.scope_node_flags(si) & SCOPE_STRICT != 0
+                    }) {
+                        let mut private =
+                            self.new_declare(si, Token::Private, Some(symbol.clone()), line);
+                        private.flags |= dflags::CLOSURE;
+                        found = Some(self.scope_add_declare(si, private));
                         self.scopes[si].closure_count += 1;
-                        Some((si, aid))
+                    }
+                    break found.map(|id| (si, id));
+                }
+                Token::Function => {
+                    if let Some(id) = self.scope_get_declare(si, symbol) {
+                        if closure_flag {
+                            self.declare_mut(si, id).flags |= dflags::CLOSURE;
+                        }
+                        break Some((si, id));
+                    } else if (self.scope_node_flags(si) & SCOPE_EVAL != 0)
+                        && (self.scope_node_flags(si) & SCOPE_STRICT == 0)
+                    {
+                        // eval can create variables that override closures
+                        break None;
+                    } else if let Some(parent) = self.scopes[si].parent {
+                        left.push(si);
+                        si = parent;
+                        closure_flag = true;
                     } else {
-                        None
+                        break None;
                     }
-                } else {
-                    None
                 }
-            }
-            Token::Program => {
-                if let Some(id) = self.scope_get_declare(si, symbol) {
-                    let dtok = self.declare_ref(si, id).token;
-                    if dtok == Token::Var || dtok == Token::Define {
-                        None
+                Token::Program => {
+                    if let Some(id) = self.scope_get_declare(si, symbol) {
+                        let dtok = self.declare_ref(si, id).token;
+                        if dtok == Token::Var || dtok == Token::Define {
+                            break None;
+                        }
+                        break Some((si, id));
+                    }
+                    break None;
+                }
+                Token::With => {
+                    // a with object can shadow any variable
+                    break None;
+                }
+                _ => {
+                    if let Some(id) = self.scope_get_declare(si, symbol) {
+                        if closure_flag {
+                            self.declare_mut(si, id).flags |= dflags::CLOSURE;
+                        }
+                        break Some((si, id));
+                    } else if let Some(parent) = self.scopes[si].parent {
+                        si = parent;
                     } else {
-                        Some((si, id))
+                        break None;
                     }
-                } else {
-                    None
                 }
             }
-            Token::With => {
-                // a with object can shadow any variable
-                None
-            }
-            _ => {
-                if let Some(id) = self.scope_get_declare(si, symbol) {
-                    if closure_flag {
-                        self.declare_mut(si, id).flags |= dflags::CLOSURE;
-                    }
-                    Some((si, id))
-                } else if let Some(parent) = self.scopes[si].parent {
-                    self.scope_lookup(parent, symbol, sym_line, is_private_member, closure_flag)
-                } else {
-                    None
-                }
-            }
+        };
+        while let Some(function) = left.pop() {
+            let Some((rscope, rid)) = resolved else { break };
+            let rline = self.declare_ref(rscope, rid).line;
+            let mut alias = self.new_declare(function, Token::NoToken, Some(symbol.clone()), rline);
+            alias.flags |= dflags::CLOSURE | dflags::USE_CLOSURE;
+            alias.alias = Some((rscope, rid));
+            let aid = self.scope_add_declare(function, alias);
+            self.scopes[function].closure_count += 1;
+            resolved = Some((function, aid));
         }
+        resolved
     }
 }
 
@@ -1141,44 +1202,19 @@ impl Scoper<'_> {
         result
     }
 
-    /// `fxNodeDispatchHoist` — dispatch one node's hoist.
+    /// `fxNodeDispatchHoist` — dispatch one node's hoist. The arms run in
+    /// the hoist walk (`scoper/walk.rs`).
     fn hoist_dispatch(&mut self, node: &Node) -> Result<(), ParseError> {
-        self.descend(node.line, |s| s.hoist_dispatch_inner(node))
-    }
-
-    fn hoist_dispatch_inner(&mut self, node: &Node) -> Result<(), ParseError> {
-        match node.token {
-            Token::Program => self.hoist_program(node),
-            Token::Module => self.hoist_module(node),
-            Token::Block => self.hoist_block(node),
-            Token::Body => self.hoist_body(node),
-            Token::Function | Token::Generator => self.hoist_function(node),
-            Token::Call | Token::New => self.hoist_call(node),
-            Token::Catch => self.hoist_catch(node),
-            Token::Coalesce => self.hoist_coalesce(node),
-            Token::Arg | Token::Var | Token::Let | Token::Const | Token::Using => {
-                self.hoist_declare(node)
-            }
-            Token::Define => self.hoist_define(node),
-            Token::For => self.hoist_for(node),
-            Token::ForIn | Token::ForOf | Token::ForAwaitOf => self.hoist_for_in_of(node),
-            Token::Switch => self.hoist_switch(node),
-            Token::With => self.hoist_with(node),
-            Token::String => self.hoist_string(node),
-            Token::Import => self.hoist_import(node),
-            Token::Export => self.hoist_export(node),
-            Token::Class => self.hoist_class(node),
-            // fold: Host — deferred (see report).
-            _ => self.hoist_children(node),
-        }
+        self.descend(node.line, |s| s.hoist_walk(node))
     }
 
     /// `fxClassNodeHoist` — create the class's block scopes: a `symbolScope`
     /// binding the class name (a `const` closure visible in the body) when
-    /// named, and the class body scope. The private / computed-key / field
-    /// declares that populate the body scope are deferred; the method-only
-    /// surface adds none. Children `[symbol, heritage, items, constructorInit,
+    /// named, and the class body scope holding private brands, computed field
+    /// keys, private method values and the instance initializer closure.
+    /// Children `[symbol, heritage, items, constructorInit,
     /// instanceInit, constructor]`.
+    #[inline(never)]
     fn hoist_class(&mut self, node: &Node) -> Result<(), ParseError> {
         let former = self.class_node;
         let symbol = child_sym(node, 0);
@@ -1352,13 +1388,6 @@ impl Scoper<'_> {
         Ok(())
     }
 
-    /// `fxNodeHoist` / `fxNodeDistribute` default — hoist every child node.
-    fn hoist_children(&mut self, node: &Node) -> Result<(), ParseError> {
-        for item in &node.children {
-            self.hoist_item(item)?;
-        }
-        Ok(())
-    }
     fn hoist_item(&mut self, item: &Item) -> Result<(), ParseError> {
         match item {
             Item::Node(n) => self.hoist_dispatch(n),
@@ -1372,6 +1401,7 @@ impl Scoper<'_> {
         }
     }
 
+    #[inline(never)]
     fn hoist_program(&mut self, node: &Node) -> Result<(), ParseError> {
         // XS: XS_TOKEN_EVAL when parser->flags has mxEvalFlag, else PROGRAM.
         let token = if self.node_flags(node) & SCOPE_EVAL != 0 {
@@ -1393,6 +1423,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_module(&mut self, node: &Node) -> Result<(), ParseError> {
         let si = self.scope_new(node, Token::Module);
         self.function_scope = Some(si);
@@ -1407,168 +1438,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
-    fn hoist_block(&mut self, node: &Node) -> Result<(), ParseError> {
-        let si = self.scope_new(node, Token::Block);
-        self.node_scope.insert(node_id(node), (si, None));
-        if let Some(stmt) = child(node, 0) {
-            self.hoist_item(stmt)?;
-        }
-        self.fx_scope_hoisted(si);
-        Ok(())
-    }
-
-    fn hoist_body(&mut self, node: &Node) -> Result<(), ParseError> {
-        let si = self.scope_new(node, Token::Block);
-        self.body_scope = Some(si);
-        self.node_scope.insert(node_id(node), (si, None));
-        let env = self.environment_node;
-        self.environment_node = Some(node_id(node));
-        if let Some(stmt) = child(node, 0) {
-            self.hoist_item(stmt)?;
-        }
-        self.environment_node = env;
-        self.fx_scope_hoisted(si);
-        Ok(())
-    }
-
-    fn hoist_function(&mut self, node: &Node) -> Result<(), ParseError> {
-        let function_scope = self.function_scope;
-        let body_scope = self.body_scope;
-        let si = self.scope_new(node, Token::Function);
-        self.function_scope = Some(si);
-        self.body_scope = None;
-        self.node_scope.insert(node_id(node), (si, None));
-        // named function expression: a CONST self-binding define.
-        if let Some(sym) = child_sym(node, 0) {
-            let s = Sym::Named(sym);
-            let d = self.new_declare(si, Token::Define, Some(s.clone()), node.line);
-            self.scope_add_declare(si, d);
-            self.scope_add_define(si, Some(s), node.line);
-        }
-        // params (children[1])
-        if let Some(params) = child(node, 1) {
-            self.hoist_item(params)?;
-        }
-        // `arguments` injection (`fxFunctionNodeHoist`, before the body).
-        // A function that references or declares `arguments`, or that the
-        // parser already marked as containing `eval`, has the flag *now* —
-        // inject here, before the body's own `var arguments`/`arguments`
-        // parameter is hoisted, so the two merge into one declare (XS relies
-        // on the synthetic being present first).
-        let injected = self.inject_arguments(si, node);
-        // body (children[2])
-        if let Some(body) = child(node, 2) {
-            self.hoist_item(body)?;
-        }
-        // A *body-level direct `eval`* only marks the function node once its
-        // call is hoisted (`hoist_call`'s `add_extra`), too late for the pass
-        // above. Inject now if that discovery set the flag and nothing was
-        // injected yet. Such a function has no `var arguments`/`arguments`
-        // parameter (those would have set the flag at parse), so this never
-        // double-injects; the body's declares live in the separate body
-        // scope, so the `arguments` `Var` still follows the parameters.
-        if !injected {
-            self.inject_arguments(si, node);
-        }
-        self.fx_scope_hoisted(si);
-        self.body_scope = body_scope;
-        self.function_scope = function_scope;
-        Ok(())
-    }
-
-    fn hoist_call(&mut self, node: &Node) -> Result<(), ParseError> {
-        // children[0] = reference, children[1] = params
-        if let Some(reference) = child_node(node, 0) {
-            if reference.token == Token::Access {
-                if let Some(sym) = child_sym(reference, 0) {
-                    if sym == "eval" {
-                        self.scope_eval(self.scope);
-                        if let Some(fs) = self.function_scope {
-                            let fptr = self.scopes[fs].node_id;
-                            self.add_extra(fptr, flags::ARGUMENTS | SCOPE_EVAL);
-                        }
-                        if let Some(env) = self.environment_node {
-                            self.add_extra(env, SCOPE_EVAL);
-                        }
-                        // params->flags |= mxEvalParametersFlag — coder use.
-                    }
-                }
-            }
-        }
-        if let Some(reference) = child(node, 0) {
-            self.hoist_item(reference)?;
-        }
-        if let Some(params) = child(node, 1) {
-            self.hoist_item(params)?;
-        }
-        Ok(())
-    }
-
-    fn hoist_catch(&mut self, node: &Node) -> Result<(), ParseError> {
-        // children[0] = parameter (or Null), children[1] = statement
-        let has_param = matches!(child(node, 0), Some(Item::Node(_)));
-        if has_param {
-            let scope = self.scope_new(node, Token::Block);
-            self.scopes[scope].simple_catch_parameter =
-                matches!(child(node, 0), Some(Item::Node(param)) if param.token == Token::Let);
-            if let Some(param) = child(node, 0) {
-                self.hoist_item(param)?;
-            }
-            let statement_scope = self.scope_new(node, Token::Block);
-            if let Some(stmt) = child(node, 1) {
-                self.hoist_item(stmt)?;
-            }
-            self.fx_scope_hoisted(statement_scope);
-            self.fx_scope_hoisted(scope);
-            self.node_scope
-                .insert(node_id(node), (scope, Some(statement_scope)));
-            // duplicate: a statementScope declare that also names a
-            // parameter is a redeclaration error.
-            let names: Vec<(Option<Sym>, u32)> = self.scopes[statement_scope]
-                .declares
-                .iter()
-                .map(|d| (d.symbol.clone(), d.line))
-                .collect();
-            for (sym, line) in names {
-                if let Some(s) = &sym {
-                    if self.scope_get_declare(scope, s).is_some() {
-                        return Err(err(line, "duplicate variable"));
-                    }
-                }
-            }
-        } else {
-            let statement_scope = self.scope_new(node, Token::Block);
-            if let Some(stmt) = child(node, 1) {
-                self.hoist_item(stmt)?;
-            }
-            self.fx_scope_hoisted(statement_scope);
-            self.node_scope
-                .insert(node_id(node), (statement_scope, None));
-        }
-        Ok(())
-    }
-
-    fn hoist_coalesce(&mut self, node: &Node) -> Result<(), ParseError> {
-        // early error: mixing ?? with && / || without parentheses
-        if let Some(l) = child_node(node, 0) {
-            if l.token == Token::And {
-                return Err(err(node.line, "missing () around &&"));
-            }
-            if l.token == Token::Or {
-                return Err(err(node.line, "missing () around ||"));
-            }
-        }
-        if let Some(r) = child_node(node, 1) {
-            if r.token == Token::And {
-                return Err(err(node.line, "missing () around &&"));
-            }
-            if r.token == Token::Or {
-                return Err(err(node.line, "missing () around ||"));
-            }
-        }
-        self.hoist_children(node)
-    }
-
+    #[inline(never)]
     fn hoist_declare(&mut self, node: &Node) -> Result<(), ParseError> {
         let symbol = child_sym(node, 0).map(Sym::Named);
         let symbol = match symbol {
@@ -1587,7 +1457,7 @@ impl Scoper<'_> {
                     | flags::NOT_SIMPLE_PARAMETERS
                     | flags::STRICT;
                 if dtok == Token::Arg && (fnf & dup_ctx != 0) {
-                    return Err(err(node.line, "duplicate argument"));
+                    return Err(duplicate_binding(node.line, "argument", &symbol));
                 }
             } else {
                 let d = self.new_declare(function_scope, Token::Arg, Some(symbol), node.line);
@@ -1609,7 +1479,7 @@ impl Scoper<'_> {
                 }
             }
             if existing.is_some() {
-                return Err(err(node.line, "duplicate variable"));
+                return Err(duplicate_variable(node.line, &symbol));
             }
             let mut d = self.new_declare(scope, node.token, Some(symbol), node.line);
             if node.token == Token::Using && node.flags & flags::AWAITING != 0 {
@@ -1624,6 +1494,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_var(
         &mut self,
         symbol: &Sym,
@@ -1657,7 +1528,7 @@ impl Scoper<'_> {
             }
         }
         if conflict.is_some() {
-            return Err(err(line, "duplicate variable"));
+            return Err(duplicate_variable(line, symbol));
         }
         // add to bodyScope unless already an arg/var in functionScope
         let cover = self
@@ -1679,11 +1550,14 @@ impl Scoper<'_> {
         Ok(())
     }
 
-    fn hoist_define(&mut self, node: &Node) -> Result<(), ParseError> {
+    /// `fxDefineNodeHoist` up to its initializer, which the walk hoists:
+    /// `false` when there is no symbol, and so no initializer to hoist.
+    #[inline(never)]
+    fn hoist_define(&mut self, node: &Node) -> Result<bool, ParseError> {
         // children[0] = symbol, children[1] = initializer (function)
         let symbol = match child_sym(node, 0) {
             Some(s) => Sym::Named(s),
-            None => return Ok(()),
+            None => return Ok(false),
         };
         let scope = self.scope.unwrap();
         let body_scope = self.body_scope.unwrap();
@@ -1700,7 +1574,7 @@ impl Scoper<'_> {
             if let Some(id) = self.scope_get_declare(body_scope, &symbol) {
                 let dtok = self.declare_ref(body_scope, id).token;
                 if dtok == Token::Const || dtok == Token::Let {
-                    return Err(err(node.line, "duplicate variable"));
+                    return Err(duplicate_variable(node.line, &symbol));
                 }
             } else {
                 let mut have = false;
@@ -1720,51 +1594,13 @@ impl Scoper<'_> {
             self.scope_add_define(body_scope, Some(symbol.clone()), node.line);
         } else {
             if self.scope_get_declare(scope, &symbol).is_some() {
-                return Err(err(node.line, "duplicate variable"));
+                return Err(duplicate_variable(node.line, &symbol));
             }
             let d = self.new_declare(scope, Token::Define, Some(symbol.clone()), node.line);
             self.scope_add_declare(scope, d);
             self.scope_add_define(scope, Some(symbol.clone()), node.line);
         }
-        // dispatch the initializer (function), with its self-symbol nulled
-        // (fxDefineNodeHoist nulls initializer->symbol so the function's
-        // named-expression self-binding is not created for a declaration).
-        if let Some(init) = child_node(node, 1) {
-            self.hoist_function_no_self(init)?;
-        }
-        Ok(())
-    }
-
-    /// Hoist a function node but suppress the named-expression self CONST
-    /// (used for a function *declaration*'s initializer).
-    fn hoist_function_no_self(&mut self, node: &Node) -> Result<(), ParseError> {
-        if node.token != Token::Function && node.token != Token::Generator {
-            return self.hoist_dispatch(node);
-        }
-        let function_scope = self.function_scope;
-        let body_scope = self.body_scope;
-        let si = self.scope_new(node, Token::Function);
-        self.function_scope = Some(si);
-        self.body_scope = None;
-        self.node_scope.insert(node_id(node), (si, None));
-        if let Some(params) = child(node, 1) {
-            self.hoist_item(params)?;
-        }
-        // See `hoist_function` for the two-phase `arguments` injection: once
-        // before the body (references / parser-known `eval`) so a body
-        // `var arguments` merges, and once after (body-level direct `eval`
-        // discovered during the body walk).
-        let injected = self.inject_arguments(si, node);
-        if let Some(body) = child(node, 2) {
-            self.hoist_item(body)?;
-        }
-        if !injected {
-            self.inject_arguments(si, node);
-        }
-        self.fx_scope_hoisted(si);
-        self.body_scope = body_scope;
-        self.function_scope = function_scope;
-        Ok(())
+        Ok(true)
     }
 
     /// `fxFunctionNodeHoist`'s synthetic `arguments` `Var`: a non-arrow
@@ -1787,59 +1623,7 @@ impl Scoper<'_> {
         }
     }
 
-    fn hoist_for(&mut self, node: &Node) -> Result<(), ParseError> {
-        let si = self.scope_new(node, Token::Block);
-        self.node_scope.insert(node_id(node), (si, None));
-        for i in 0..4 {
-            if let Some(c) = child(node, i) {
-                self.hoist_item(c)?;
-            }
-        }
-        self.fx_scope_hoisted(si);
-        Ok(())
-    }
-
-    fn hoist_for_in_of(&mut self, node: &Node) -> Result<(), ParseError> {
-        let si = self.scope_new(node, Token::Block);
-        self.node_scope.insert(node_id(node), (si, None));
-        for i in 0..3 {
-            if let Some(c) = child(node, i) {
-                self.hoist_item(c)?;
-            }
-        }
-        self.fx_scope_hoisted(si);
-        Ok(())
-    }
-
-    fn hoist_switch(&mut self, node: &Node) -> Result<(), ParseError> {
-        // children[0] = expression, children[1] = items (list of Case)
-        if let Some(expr) = child(node, 0) {
-            self.hoist_item(expr)?;
-        }
-        let si = self.scope_new(node, Token::Block);
-        self.node_scope.insert(node_id(node), (si, None));
-        if let Some(items) = child(node, 1) {
-            self.hoist_item(items)?;
-        }
-        self.fx_scope_hoisted(si);
-        Ok(())
-    }
-
-    fn hoist_with(&mut self, node: &Node) -> Result<(), ParseError> {
-        // children[0] = expression, children[1] = statement
-        if let Some(expr) = child(node, 0) {
-            self.hoist_item(expr)?;
-        }
-        let si = self.scope_new(node, Token::With);
-        self.node_scope.insert(node_id(node), (si, None));
-        self.scope_eval(self.scopes[si].parent);
-        if let Some(stmt) = child(node, 1) {
-            self.hoist_item(stmt)?;
-        }
-        self.fx_scope_hoisted(si);
-        Ok(())
-    }
-
+    #[inline(never)]
     fn hoist_string(&mut self, node: &Node) -> Result<(), ParseError> {
         // `fxStringNodeHoist`: a string carrying `mxStringLegacyFlag` (a
         // legacy octal or `\8`/`\9`) inside a strict scope becomes
@@ -1867,6 +1651,7 @@ impl Scoper<'_> {
     /// a bare `import "m"` declares one anonymous slot. The `from`/`with`
     /// re-export attributes are coder-side. Modules are strict, so
     /// importing `arguments`/`eval` is an early error.
+    #[inline(never)]
     fn hoist_import(&mut self, node: &Node) -> Result<(), ParseError> {
         let scope = self.scope.unwrap();
         let strict = self.node_flags(node) & SCOPE_STRICT != 0;
@@ -1903,7 +1688,7 @@ impl Scoper<'_> {
                 return Err(err(spec.line, "invalid import"));
             }
             if self.scope_get_declare(scope, &sym).is_some() {
-                return Err(err(spec.line, "duplicate variable"));
+                return Err(duplicate_variable(spec.line, &sym));
             }
             let mut d = self.new_declare(scope, Token::Let, Some(sym), spec.line);
             d.flags |= dflags::CLOSURE | dflags::USE_CLOSURE;
@@ -1921,6 +1706,7 @@ impl Scoper<'_> {
     /// name in the export-link set, raising a duplicate-export early
     /// error. The `export … from` re-export indirection (which synthesizes
     /// indirect `let` bindings) is folded (see report).
+    #[inline(never)]
     fn hoist_export(&mut self, node: &Node) -> Result<(), ParseError> {
         // `export … from "m"` — a re-export. XS synthesizes one anonymous
         // module-scope `let` per specifier (its `importSpecifier` *and*
@@ -2055,57 +1841,19 @@ impl Scoper<'_> {
         });
     }
 
-    /// `fxNodeDispatchBind`.
+    /// `fxNodeDispatchBind`. The arms run in the bind walk
+    /// (`scoper/walk.rs`).
     fn bind_dispatch(&mut self, node: &Node) -> Result<(), ParseError> {
-        self.descend(node.line, |s| s.bind_dispatch_inner(node))
-    }
-
-    fn bind_dispatch_inner(&mut self, node: &Node) -> Result<(), ParseError> {
-        match node.token {
-            Token::Program => self.bind_program(node),
-            Token::Module => self.bind_module(node),
-            Token::Block | Token::Body => self.bind_block(node),
-            Token::Function | Token::Generator => self.bind_function(node),
-            Token::Access => self.bind_access(node),
-            Token::Arg | Token::Var | Token::Let | Token::Const | Token::Using => {
-                self.bind_declare_node(node)
-            }
-            Token::Define => self.bind_define(node),
-            Token::Assign => self.bind_assign(node),
-            Token::Binding => self.bind_binding(node),
-            Token::Catch => self.bind_catch(node),
-            Token::For => self.bind_for(node),
-            Token::ForIn | Token::ForOf | Token::ForAwaitOf => self.bind_for_in_of(node),
-            Token::Switch => self.bind_switch(node),
-            Token::With => self.bind_with(node),
-            Token::Try => self.bind_try(node),
-            Token::Array => self.bind_array(node),
-            Token::ArrayBinding => self.bind_array_binding(node),
-            Token::Object => self.bind_object(node),
-            Token::ObjectBinding => self.bind_object_binding(node),
-            Token::Params => self.bind_params(node),
-            Token::ParamsBinding => self.bind_params_binding(node),
-            Token::Spread => self.bind_spread(node),
-            Token::Delegate => self.bind_delegate(node),
-            Token::Template => self.bind_template(node),
-            Token::This | Token::Target => self.bind_this_target(node),
-            Token::Super => self.bind_super(node),
-            Token::Increment | Token::Decrement => self.bind_postfix(node),
-            Token::Export => self.bind_export(node),
-            Token::Class => self.bind_class(node),
-            Token::PrivateMember | Token::PrivateIdentifier => self.bind_private_member(node),
-            Token::Delete => self.bind_delete(node),
-            // fold: Field — deferred.
-            _ => self.bind_children(node),
-        }
+        self.descend(node.line, |s| s.bind_walk(node))
     }
 
     /// `fxClassNodeBind` — reserve the two frame slots the class coder uses
     /// for its prototype and constructor temporaries (so the enclosing
     /// scope's frame count includes them), then bind the heritage,
-    /// constructor, and members. The class/symbol scopes (fields, private
-    /// members, a named-class binding) are the deferred class-hoisting fold;
-    /// a base class with methods needs only the two-slot reservation.
+    /// constructor, and members. Hoisting already created the class/symbol
+    /// scopes and any instance/static initializer function scopes; binding
+    /// fills their capture and frame-count receipts for the coder.
+    #[inline(never)]
     fn bind_class(&mut self, node: &Node) -> Result<(), ParseError> {
         let former = self.class_node;
         self.push_variables(2);
@@ -2244,6 +1992,7 @@ impl Scoper<'_> {
     /// captures interleave), or, for a `static { … }` block, its body.
     /// `scopeCount == scopeMaximum` = the captured closures plus the peak
     /// temporary depth of the field values. Records each member's fi aliases.
+    #[inline(never)]
     fn bind_field_init_scope(
         &mut self,
         fi: usize,
@@ -2306,12 +2055,6 @@ impl Scoper<'_> {
         Ok(())
     }
 
-    fn bind_children(&mut self, node: &Node) -> Result<(), ParseError> {
-        for item in &node.children {
-            self.bind_item(item)?;
-        }
-        Ok(())
-    }
     fn bind_item(&mut self, item: &Item) -> Result<(), ParseError> {
         match item {
             Item::Node(n) => self.bind_dispatch(n),
@@ -2329,6 +2072,7 @@ impl Scoper<'_> {
         *self.node_scope.get(&node_id(node)).expect("scope for node")
     }
 
+    #[inline(never)]
     fn bind_program(&mut self, node: &Node) -> Result<(), ParseError> {
         let (si, _) = self.scope_of(node);
         self.fx_scope_binding(si);
@@ -2340,6 +2084,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_module(&mut self, node: &Node) -> Result<(), ParseError> {
         let (si, _) = self.scope_of(node);
         self.fx_scope_binding(si);
@@ -2351,95 +2096,27 @@ impl Scoper<'_> {
         Ok(())
     }
 
-    fn bind_block(&mut self, node: &Node) -> Result<(), ParseError> {
-        let (si, _) = self.scope_of(node);
-        self.fx_scope_binding(si);
-        let disp = self.scopes[si].disposable_count > 0;
-        if disp {
-            self.push_variables(2);
-        }
-        if let Some(stmt) = child(node, 0) {
-            self.bind_item(stmt)?;
-        }
-        if disp {
-            self.pop_variables(2);
-        }
-        self.fx_scope_bound(si);
-        Ok(())
-    }
-
-    fn bind_function(&mut self, node: &Node) -> Result<(), ParseError> {
-        let (si, _) = self.scope_of(node);
-        let level = self.scope_level;
-        let maximum = self.scope_maximum;
-        self.scope_level = 0;
-        self.scope_maximum = 0;
-        self.fx_scope_binding(si);
-        if let Some(params) = child(node, 1) {
-            self.bind_item(params)?;
-        }
-        // A base class constructor captures the class's `instanceInit`
-        // closure (`fxFunctionNodeBind`'s `mxBaseFlag` branch) so it can
-        // call the field initializer on entry — a use-closure alias in the
-        // constructor scope targeting the class body scope's declare.
-        if self.node_flags(node) & crate::ast::flags::BASE != 0 {
-            if let Some(cnode) = self.class_node {
-                if let Some(&(rscope, rid)) = self.class_instance_init.get(&cnode) {
-                    let d = self.declare_ref(rscope, rid);
-                    let (rline, rsym) = (d.line, d.symbol.clone());
-                    let mut alias = self.new_declare(si, Token::NoToken, rsym, rline);
-                    alias.flags |= dflags::CLOSURE | dflags::USE_CLOSURE;
-                    alias.alias = Some((rscope, rid));
-                    self.scope_add_declare(si, alias);
-                    self.scopes[si].closure_count += 1;
-                }
-            }
-        }
-        if let Some(body) = child(node, 2) {
-            self.bind_item(body)?;
-        }
-        self.fx_scope_bound(si);
-        self.scope_counts.insert(si, self.scope_maximum);
-        self.scope_maximum = maximum;
-        self.scope_level = level;
-        Ok(())
-    }
-
+    #[inline(never)]
     fn bind_access(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
-            let resolved =
-                self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, false, false);
+            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), None, false);
             self.record_access(&sym, node.line, resolved);
             self.resolutions.insert(node_id(node), resolved);
         }
         Ok(())
     }
 
-    /// `delete` of a private member reference (`delete obj.#x`, including
-    /// the parenthesized/covered form `delete (this.#x)`) is an early
-    /// SyntaxError — XS reports it from `fxPrivateMemberNodeCodeDelete`.
-    /// The target is found by unwrapping a single-item parenthesized
-    /// sequence exactly as the coder's `codeDelete` dispatch does (a
-    /// multi-item `delete (a, b.#x)` is a value-`delete`, not an error).
-    fn bind_delete(&mut self, node: &Node) -> Result<(), ParseError> {
-        if let Some(target) = node.children.first() {
-            if delete_target_is_private(target) {
-                return Err(err(node.line, "delete private property"));
-            }
-        }
-        self.bind_children(node)
-    }
-
     /// `fxPrivateMemberNodeBind` — a private member access (`obj.#x`,
     /// `obj.#m()`) and the `#x in obj` brand check (`PrivateIdentifier`)
     /// share this bind. The node's own `symbol` (child 0, the `#name`)
-    /// resolves through the class-scope closures the declaration slice
-    /// installed (`symbolAccess`), with the `is_private_member` flag set so a
-    /// strict `eval` scope synthesizes the brand declare (mirroring
-    /// `fxScopeLookup`'s `XS_TOKEN_PRIVATE_MEMBER` branch); an unresolved
-    /// `#name` is XS's "invalid private identifier". The reference (child 1)
-    /// binds after the lookup, matching `fxPrivateMemberNodeDistribute`.
+    /// resolves through the class-scope closures hoisting installed
+    /// (`symbolAccess`). An unresolved `#name` is an early error, unless a
+    /// strict direct eval's scope declares it for its caller's environment
+    /// to supply (see [`Scoper::scope_lookup`]). The walk binds the
+    /// reference (child 1) after this lookup, matching
+    /// `fxPrivateMemberNodeDistribute`.
+    #[inline(never)]
     fn bind_private_member(&mut self, node: &Node) -> Result<(), ParseError> {
         // A private member accessed on `super` (`super.#x`, `super.#m()`)
         // is invalid syntax: the reference base carries the `super` flag.
@@ -2451,25 +2128,22 @@ impl Scoper<'_> {
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
             let resolved =
-                self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, true, false);
+                self.scope_lookup(scope, &Sym::Named(sym.clone()), Some(node.line), false);
             if resolved.is_none() {
                 return Err(err(node.line, "invalid private identifier"));
             }
             self.resolutions.insert(node_id(node), resolved);
-        }
-        if let Some(reference) = child(node, 1) {
-            self.bind_item(reference)?;
         }
         Ok(())
     }
 
     /// `fxDeclareNodeBind` — a declaration node in the tree resolves its
     /// own symbol (so the coder learns its slot).
+    #[inline(never)]
     fn bind_declare_node(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
-            let resolved =
-                self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, false, false);
+            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), None, false);
             // `self->declaration = declaration` — record that this declaration
             // binds (drives `fxScopeCodeStoreAll` eligibility).
             if let Some((rscope, rid)) = resolved {
@@ -2481,234 +2155,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
-    fn bind_define(&mut self, node: &Node) -> Result<(), ParseError> {
-        if let Some(sym) = child_sym(node, 0) {
-            let scope = self.scope.unwrap();
-            let resolved =
-                self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, false, false);
-            if let Some((rscope, rid)) = resolved {
-                self.declare_mut(rscope, rid).bound = true;
-            }
-            self.record_access(&sym, node.line, resolved);
-            self.resolutions.insert(node_id(node), resolved);
-        }
-        if let Some(init) = child(node, 1) {
-            self.bind_item(init)?;
-        }
-        Ok(())
-    }
-
-    fn bind_assign(&mut self, node: &Node) -> Result<(), ParseError> {
-        // children[0]=reference, children[1]=value
-        if let Some(reference) = child(node, 0) {
-            self.bind_item(reference)?;
-        }
-        if let Some(value) = child(node, 1) {
-            self.bind_item(value)?;
-        }
-        Ok(())
-    }
-
-    fn bind_binding(&mut self, node: &Node) -> Result<(), ParseError> {
-        // children[0]=target, children[1]=initializer
-        if let Some(target) = child(node, 0) {
-            self.bind_item(target)?;
-        }
-        if let Some(init) = child(node, 1) {
-            self.bind_item(init)?;
-        }
-        Ok(())
-    }
-
-    fn bind_catch(&mut self, node: &Node) -> Result<(), ParseError> {
-        let (scope, statement_scope) = self.scope_of(node);
-        let has_param = matches!(child(node, 0), Some(Item::Node(_)));
-        if has_param {
-            let st = statement_scope.unwrap();
-            self.fx_scope_binding(scope);
-            if let Some(param) = child(node, 0) {
-                self.bind_item(param)?;
-            }
-            self.fx_scope_binding(st);
-            let disp = self.scopes[st].disposable_count > 0;
-            if disp {
-                self.push_variables(2);
-            }
-            if let Some(stmt) = child(node, 1) {
-                self.bind_item(stmt)?;
-            }
-            if disp {
-                // NOTE: XS's fxCatchNodeBind pushes (not pops) here too;
-                // transliterated faithfully.
-                self.push_variables(2);
-            }
-            self.fx_scope_bound(st);
-            self.fx_scope_bound(scope);
-        } else {
-            // `scope` holds the statementScope when there is no parameter.
-            self.fx_scope_binding(scope);
-            let disp = self.scopes[scope].disposable_count > 0;
-            if disp {
-                self.push_variables(2);
-            }
-            if let Some(stmt) = child(node, 1) {
-                self.bind_item(stmt)?;
-            }
-            if disp {
-                self.push_variables(2);
-            }
-            self.fx_scope_bound(scope);
-        }
-        Ok(())
-    }
-
-    fn bind_for(&mut self, node: &Node) -> Result<(), ParseError> {
-        let (si, _) = self.scope_of(node);
-        self.fx_scope_binding(si);
-        let disp = self.scopes[si].disposable_count > 0;
-        if disp {
-            self.push_variables(2);
-        }
-        for i in 0..4 {
-            if let Some(c) = child(node, i) {
-                self.bind_item(c)?;
-            }
-        }
-        if disp {
-            self.pop_variables(2);
-        }
-        self.fx_scope_bound(si);
-        Ok(())
-    }
-
-    fn bind_for_in_of(&mut self, node: &Node) -> Result<(), ParseError> {
-        let (si, _) = self.scope_of(node);
-        self.push_variables(6);
-        self.fx_scope_binding(si);
-        for i in 0..3 {
-            if let Some(c) = child(node, i) {
-                self.bind_item(c)?;
-            }
-        }
-        self.fx_scope_bound(si);
-        self.pop_variables(6);
-        Ok(())
-    }
-
-    fn bind_switch(&mut self, node: &Node) -> Result<(), ParseError> {
-        if let Some(expr) = child(node, 0) {
-            self.bind_item(expr)?;
-        }
-        let (si, _) = self.scope_of(node);
-        self.fx_scope_binding(si);
-        let disp = self.scopes[si].disposable_count > 0;
-        if disp {
-            self.push_variables(2);
-        }
-        if let Some(items) = child(node, 1) {
-            self.bind_item(items)?;
-        }
-        if disp {
-            self.pop_variables(2);
-        }
-        self.fx_scope_bound(si);
-        Ok(())
-    }
-
-    fn bind_with(&mut self, node: &Node) -> Result<(), ParseError> {
-        if let Some(expr) = child(node, 0) {
-            self.bind_item(expr)?;
-        }
-        let (si, _) = self.scope_of(node);
-        self.fx_scope_binding(si);
-        if let Some(stmt) = child(node, 1) {
-            self.bind_item(stmt)?;
-        }
-        self.fx_scope_bound(si);
-        Ok(())
-    }
-
-    fn bind_try(&mut self, node: &Node) -> Result<(), ParseError> {
-        self.push_variables(3);
-        for i in 0..3 {
-            if let Some(c) = child(node, i) {
-                self.bind_item(c)?;
-            }
-        }
-        self.pop_variables(3);
-        Ok(())
-    }
-
-    fn bind_array(&mut self, node: &Node) -> Result<(), ParseError> {
-        self.push_variables(1);
-        let spread = node.flags & flags::SPREAD != 0;
-        if spread {
-            self.push_variables(2);
-        }
-        self.bind_children(node)?;
-        if spread {
-            self.pop_variables(2);
-        }
-        self.pop_variables(1);
-        Ok(())
-    }
-
-    fn bind_array_binding(&mut self, node: &Node) -> Result<(), ParseError> {
-        self.push_variables(6);
-        self.bind_children(node)?;
-        self.pop_variables(6);
-        Ok(())
-    }
-
-    fn bind_object(&mut self, node: &Node) -> Result<(), ParseError> {
-        self.push_variables(1);
-        // `fxObjectNodeBind`: copy each property's method/getter/setter flag
-        // onto its value function node before binding it, so the parameter
-        // arity early error (getter → 0 params, setter → 1 non-rest) fires
-        // for object-literal accessors — whose parser leaves those flags on
-        // the *property*, not the function. Recorded in `node_extra` (not the
-        // AST) exactly as XS's binder mutates the node in place; the coder
-        // relays the accessor bit from the property, so bytecode is unchanged.
-        if let Some(Item::List(items)) = child(node, 0) {
-            for item in items {
-                let Item::Node(p) = item else { continue };
-                if p.token != Token::Property && p.token != Token::PropertyAt {
-                    continue;
-                }
-                if let Some(Item::Node(value)) = p.children.get(1) {
-                    if value.token == Token::Function || value.token == Token::Generator {
-                        let bits = p.flags & (flags::METHOD | flags::GETTER | flags::SETTER);
-                        if bits != 0 {
-                            self.add_extra(node_id(value), bits);
-                        }
-                    }
-                }
-            }
-        }
-        self.bind_children(node)?;
-        self.pop_variables(1);
-        Ok(())
-    }
-
-    fn bind_object_binding(&mut self, node: &Node) -> Result<(), ParseError> {
-        self.push_variables(2);
-        self.bind_children(node)?;
-        self.pop_variables(2);
-        Ok(())
-    }
-
-    fn bind_params(&mut self, node: &Node) -> Result<(), ParseError> {
-        let spread = node.flags & flags::SPREAD != 0;
-        if spread {
-            self.push_variables(1);
-            self.bind_children(node)?;
-            self.pop_variables(1);
-        } else {
-            self.bind_children(node)?;
-        }
-        Ok(())
-    }
-
+    #[inline(never)]
     fn bind_params_binding(&mut self, node: &Node) -> Result<(), ParseError> {
         // `fxParamsBindingNodeBind`: getter/setter/plain parameter-count
         // early errors — a getter takes no parameters, a setter exactly one
@@ -2766,79 +2213,79 @@ impl Scoper<'_> {
                 }
             }
         }
-        self.bind_children(node)
-    }
-
-    fn bind_spread(&mut self, node: &Node) -> Result<(), ParseError> {
-        self.push_variables(1);
-        self.bind_children(node)?;
-        self.pop_variables(1);
         Ok(())
     }
 
-    fn bind_delegate(&mut self, node: &Node) -> Result<(), ParseError> {
-        self.push_variables(5);
-        if let Some(expr) = child(node, 0) {
-            self.bind_item(expr)?;
+    /// `fxObjectNodeBind`'s accessor flags: copy each property's
+    /// method/getter/setter flag onto its value function node before binding
+    /// it, so the parameter arity early error (getter → 0 params, setter → 1
+    /// non-rest) fires for object-literal accessors — whose parser leaves
+    /// those flags on the *property*, not the function. Recorded in
+    /// `node_extra` (not the AST) exactly as XS's binder mutates the node in
+    /// place; the coder relays the accessor bit from the property, so
+    /// bytecode is unchanged.
+    fn bind_object_accessor_flags(&mut self, node: &Node) {
+        if let Some(Item::List(items)) = child(node, 0) {
+            for item in items {
+                let Item::Node(p) = item else { continue };
+                if p.token != Token::Property && p.token != Token::PropertyAt {
+                    continue;
+                }
+                if let Some(Item::Node(value)) = p.children.get(1) {
+                    if value.token == Token::Function || value.token == Token::Generator {
+                        let bits = p.flags & (flags::METHOD | flags::GETTER | flags::SETTER);
+                        if bits != 0 {
+                            self.add_extra(node_id(value), bits);
+                        }
+                    }
+                }
+            }
         }
-        self.pop_variables(5);
-        Ok(())
     }
 
-    fn bind_template(&mut self, node: &Node) -> Result<(), ParseError> {
-        // children[0]=reference (Null for untagged), children[1]=items
-        let tagged = matches!(child(node, 0), Some(Item::Node(_)));
-        if tagged {
-            self.push_variables(2);
-            self.bind_children(node)?;
-            self.pop_variables(2);
-        } else {
-            self.bind_children(node)?;
+    /// `fxFunctionNodeBind`'s `mxBaseFlag` branch, between the parameters
+    /// and the body: a base class constructor captures the class's
+    /// `instanceInit` closure so it can call the field initializer on entry
+    /// — a use-closure alias in the constructor scope targeting the class
+    /// body scope's declare.
+    fn bind_base_constructor(&mut self, node: &Node, si: usize) {
+        if self.node_flags(node) & crate::ast::flags::BASE != 0 {
+            if let Some(cnode) = self.class_node {
+                if let Some(&(rscope, rid)) = self.class_instance_init.get(&cnode) {
+                    let d = self.declare_ref(rscope, rid);
+                    let (rline, rsym) = (d.line, d.symbol.clone());
+                    let mut alias = self.new_declare(si, Token::NoToken, rsym, rline);
+                    alias.flags |= dflags::CLOSURE | dflags::USE_CLOSURE;
+                    alias.alias = Some((rscope, rid));
+                    self.scope_add_declare(si, alias);
+                    self.scopes[si].closure_count += 1;
+                }
+            }
         }
-        Ok(())
     }
 
-    fn bind_this_target(&mut self, _node: &Node) -> Result<(), ParseError> {
-        self.scope_arrow(self.scope);
-        Ok(())
-    }
-
-    fn bind_super(&mut self, node: &Node) -> Result<(), ParseError> {
-        self.scope_arrow(self.scope);
-        if let Some(params) = child(node, 0) {
-            self.bind_item(params)?;
-        }
-        // A `super(...)` in a derived class captures the class's `instanceInit`
-        // closure (`fxSuperNodeBind`) so it can call the field initializer
-        // once `this` exists. The lookup walks up from the current scope,
-        // creating the function-boundary alias XS resolves to.
+    /// `fxSuperNodeBind`, after the arguments: a `super(...)` in a derived
+    /// class captures the class's `instanceInit` closure so it can call the
+    /// field initializer once `this` exists. The lookup walks up from the
+    /// current scope, creating the function-boundary alias XS resolves to.
+    fn bind_super_instance_init(&mut self, node: &Node) {
         if let Some(cnode) = self.class_node {
             if let Some(&(rscope, rid)) = self.class_instance_init.get(&cnode) {
                 if let Some(sym) = self.declare_ref(rscope, rid).symbol.clone() {
                     let scope = self.scope.unwrap();
-                    if let Some(resolved) = self.scope_lookup(scope, &sym, node.line, false, false)
-                    {
+                    if let Some(resolved) = self.scope_lookup(scope, &sym, None, false) {
                         self.super_instance_init.insert(node_id(node), resolved);
                     }
                 }
             }
         }
-        Ok(())
-    }
-
-    fn bind_postfix(&mut self, node: &Node) -> Result<(), ParseError> {
-        if let Some(left) = child(node, 0) {
-            self.bind_item(left)?;
-        }
-        self.push_variables(1);
-        self.pop_variables(1);
-        Ok(())
     }
 
     /// `fxExportNodeBind` (the local-export half) — resolve each exported
     /// local name and mark its declaration a closure|useClosure indirect
     /// binding, or raise `unknown variable` if it does not resolve. A
     /// re-export (`export … from`) is bound at load time, not here.
+    #[inline(never)]
     fn bind_export(&mut self, node: &Node) -> Result<(), ParseError> {
         if matches!(child(node, 1), Some(Item::Node(_))) {
             return Ok(());
@@ -2861,7 +2308,7 @@ impl Scoper<'_> {
         };
         for (name, as_name, line) in specs {
             let sym = Sym::Named(name.clone());
-            let resolved = self.scope_lookup(scope, &sym, line, false, false);
+            let resolved = self.scope_lookup(scope, &sym, None, false);
             match resolved {
                 Some((si, id)) => {
                     let export_name = as_name.or_else(|| Some(name.clone()));
@@ -3008,8 +2455,13 @@ fn decl_flags(flags: u32) -> String {
     s
 }
 
+mod walk;
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod invariants;
 
 #[cfg(test)]
 mod lazy_declare_index_tests {

@@ -44,8 +44,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::STAC),
                 present(_image): true,
-                encode(state): {
-                    crate::image::encode_stack(&state.stack)
+                encode(state, out): {
+                    crate::image::encode_stack_into(&state.stack, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_stack(bytes).map(|value| crate::image::encode_stack(&value))
@@ -68,8 +68,8 @@ macro_rules! snapshot_payloads {
                 decode_container: [],
                 atom: None,
                 present(_image): false,
-                encode(_state): {
-                    crate::image::encode_u32s(&[])
+                encode(_state, out): {
+                    crate::image::encode_u32s_into(&[], out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_u32s(bytes).map(|_| crate::image::encode_u32s(&[]))
@@ -98,8 +98,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::KEYS),
                 present(_image): true,
-                encode(state): {
-                    crate::image::encode_strings(&state.keys)
+                encode(state, out): {
+                    crate::image::encode_strings_into(&state.keys, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_strings(bytes).map(|value| crate::image::encode_strings(&value))
@@ -132,8 +132,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::NAME),
                 present(_image): true,
-                encode(state): {
-                    crate::image::encode_names(&state.names)
+                encode(state, out): {
+                    crate::image::encode_names_into(&state.names, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_names(bytes).map(|value| crate::image::encode_names(&value))
@@ -164,7 +164,7 @@ macro_rules! snapshot_payloads {
                     // alias a symbol id onto a string key at restore — see
                     // `Interp::restore_symbol_key_table`). Checked here where names
                     // and symbols are both in hand; `validate_store` mirrors it for
-                    // the store path.
+                    // the store path, whose resume the restore itself guards.
                     if (symbols.next_id as usize) <= small.names.len() {
                         return Err(SnapshotError::Corrupt(
                             "symbol-key table: counter inside the name table",
@@ -175,8 +175,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::SYMB),
                 present(_image): true,
-                encode(state): {
-                    crate::image::encode_symbol_keys(&state.symbols)
+                encode(state, out): {
+                    crate::image::encode_symbol_keys_into(&state.symbols, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_symbol_keys(bytes).map(|value| crate::image::encode_symbol_keys(&value))
@@ -224,8 +224,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::METR),
                 present(_image): true,
-                encode(state): {
-                    state.meter.encode()
+                encode(state, out): {
+                    state.meter.encode_into(out)
                 },
                 canonicalize(bytes): {
                     crate::image::MeterImage::decode(bytes).map(|value| value.encode())
@@ -309,8 +309,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ARRY),
                 present(image): !image.arrays.is_empty(),
-                encode(state): {
-                    crate::image::encode_arrays(&state.arrays)
+                encode(state, out): {
+                    crate::image::encode_arrays_into(&state.arrays, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_arrays(bytes).map(|value| crate::image::encode_arrays(&value))
@@ -369,8 +369,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::IDXP),
                 present(image): !image.index_props.is_empty(),
-                encode(state): {
-                    crate::image::encode_index_props(&state.index_props)
+                encode(state, out): {
+                    crate::image::encode_index_props_into(&state.index_props, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_index_props(bytes).map(|value| crate::image::encode_index_props(&value))
@@ -430,8 +430,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::COLL),
                 present(image): !image.collections.is_empty(),
-                encode(state): {
-                    crate::image::encode_collections(&state.collections)
+                encode(state, out): {
+                    crate::image::encode_collections_into(&state.collections, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_collections(bytes).map(|value| crate::image::encode_collections(&value))
@@ -482,8 +482,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::REGY),
                 present(image): !image.registry.is_empty(),
-                encode(state): {
-                    crate::image::encode_registry(&state.registry)
+                encode(state, out): {
+                    crate::image::encode_registry_into(&state.registry, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_registry(bytes).map(|value| crate::image::encode_registry(&value))
@@ -551,8 +551,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ERRD),
                 present(image): !image.errors.is_empty(),
-                encode(state): {
-                    crate::image::encode_errors(&state.errors)
+                encode(state, out): {
+                    crate::image::encode_errors_into(&state.errors, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_errors(bytes).map(|value| crate::image::encode_errors(&value))
@@ -608,8 +608,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ESTK),
                 present(image): image.errors.iter().any(|error| !error.frames.is_empty()),
-                encode(state): {
-                    crate::image::encode_error_frames(&state.errors)
+                encode(state, out): {
+                    crate::image::encode_error_frames_into(&state.errors, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_error_frames(bytes).map(|_| bytes.to_vec())
@@ -624,11 +624,12 @@ macro_rules! snapshot_payloads {
                         interp
                             .array_buffers_snapshot()
                             .into_iter()
-                            .map(|(owner, data, length, flags)| crate::image::BufferImage {
+                            .map(|(owner, data, length, flags, max_length)| crate::image::BufferImage {
                                 owner,
                                 data,
                                 length,
                                 flags,
+                                max_length,
                             })
                             .collect()
                     } else {
@@ -642,13 +643,23 @@ macro_rules! snapshot_payloads {
                     // every buffer's backing extent lies inside the chunk arena, and
                     // every live view names a buffer ROW whose length covers the view.
                     // Detached buffers retain the former view geometry, whose observable
-                    // accessors project zero lengths. A view that merely named an in-bounds
-                    // SLOT with no buffer row would restore without a backing allocation.
-                    let buffer_shape = |slot: u32| -> Option<(u32, bool)> {
+                    // accessors project zero lengths. A view on a resizable buffer may be
+                    // out of bounds after a shrink, but never past the buffer's maximum,
+                    // and only such a buffer has length-tracking views. A view that merely
+                    // named an in-bounds SLOT with no buffer row would restore without a
+                    // backing allocation.
+                    let buffer_shape = |slot: u32| -> Option<&crate::image::BufferImage> {
                         buffers
                             .binary_search_by_key(&slot, |b| b.owner)
                             .ok()
-                            .map(|i| (buffers[i].length, buffers[i].flags & 1 != 0))
+                            .map(|i| &buffers[i])
+                    };
+                    let covers = |b: &crate::image::BufferImage, offset: u32, end: Option<u64>| {
+                        if b.flags & crate::image::BUFFER_RESIZABLE != 0 {
+                            end.unwrap_or(offset as u64) <= b.max_length as u64
+                        } else {
+                            end.is_some_and(|end| b.flags & 1 != 0 || end <= b.length as u64)
+                        }
                     };
                     for b in buffers {
                         owned(b.owner)?;
@@ -668,9 +679,10 @@ macro_rules! snapshot_payloads {
                             .ok_or(SnapshotError::Corrupt(
                                 "typed-arrays side table: unknown element kind",
                             ))?;
-                        let covered = buffer_shape(t.buffer).is_some_and(|(len, detached)| {
-                            detached || t.offset as u64 + ((t.length as u64) << shift) <= len as u64
-                        });
+                        let end = (t.length != ironhorse_vm::VIEW_LENGTH_TRACKING)
+                            .then(|| t.offset as u64 + ((t.length as u64) << shift));
+                        let covered =
+                            buffer_shape(t.buffer).is_some_and(|b| covers(b, t.offset, end));
                         if !covered {
                             return Err(SnapshotError::Corrupt(
                                 "typed-arrays side table: view geometry past its buffer",
@@ -680,9 +692,10 @@ macro_rules! snapshot_payloads {
                     for d in data_views {
                         owned(d.owner)?;
                         owned(d.buffer)?;
-                        let covered = buffer_shape(d.buffer).is_some_and(|(len, detached)| {
-                            detached || d.offset as u64 + d.size as u64 <= len as u64
-                        });
+                        let end = (d.size != ironhorse_vm::VIEW_LENGTH_TRACKING)
+                            .then(|| d.offset as u64 + d.size as u64);
+                        let covered =
+                            buffer_shape(d.buffer).is_some_and(|b| covers(b, d.offset, end));
                         if !covered {
                             return Err(SnapshotError::Corrupt(
                                 "data-views side table: view geometry past its buffer",
@@ -697,7 +710,7 @@ macro_rules! snapshot_payloads {
                     let ok = interp.restore_typed_array_family(
                         buffers
                             .into_iter()
-                            .map(|b| (b.owner, b.data, b.length, b.flags))
+                            .map(|b| (b.owner, b.data, b.length, b.flags, b.max_length))
                             .collect(),
                         typed_arrays
                             .into_iter()
@@ -737,8 +750,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ABUF),
                 present(image): !image.buffers.is_empty(),
-                encode(state): {
-                    crate::image::encode_buffers(&state.buffers)
+                encode(state, out): {
+                    crate::image::encode_buffers_into(&state.buffers, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_buffers(bytes).map(|value| crate::image::encode_buffers(&value))
@@ -793,8 +806,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::TARR),
                 present(image): !image.typed_arrays.is_empty(),
-                encode(state): {
-                    crate::image::encode_typed_arrays(&state.typed_arrays)
+                encode(state, out): {
+                    crate::image::encode_typed_arrays_into(&state.typed_arrays, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_typed_arrays(bytes).map(|value| crate::image::encode_typed_arrays(&value))
@@ -848,8 +861,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::DVIW),
                 present(image): !image.data_views.is_empty(),
-                encode(state): {
-                    crate::image::encode_data_views(&state.data_views)
+                encode(state, out): {
+                    crate::image::encode_data_views_into(&state.data_views, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_data_views(bytes).map(|value| crate::image::encode_data_views(&value))
@@ -914,8 +927,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::WRAP),
                 present(image): !image.wrappers.is_empty(),
-                encode(state): {
-                    crate::image::encode_wrappers(&state.wrappers)
+                encode(state, out): {
+                    crate::image::encode_wrappers_into(&state.wrappers, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_wrappers(bytes).map(|value| crate::image::encode_wrappers(&value))
@@ -985,8 +998,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::REGX),
                 present(image): !image.regexps.is_empty(),
-                encode(state): {
-                    crate::image::encode_regexps(&state.regexps)
+                encode(state, out): {
+                    crate::image::encode_regexps_into(&state.regexps, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_regexps(bytes).map(|value| crate::image::encode_regexps(&value))
@@ -1036,8 +1049,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ARGB),
                 present(image): !image.arguments_brands.is_empty(),
-                encode(state): {
-                    crate::image::encode_arguments_brands(&state.arguments_brands)
+                encode(state, out): {
+                    crate::image::encode_arguments_brands_into(&state.arguments_brands, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_arguments_brands(bytes)
@@ -1120,8 +1133,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::TMPR),
                 present(image): !image.temporal.is_empty(),
-                encode(state): {
-                    crate::image::encode_temporal(&state.temporal)
+                encode(state, out): {
+                    crate::image::encode_temporal_into(&state.temporal, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_temporal(bytes).map(|value| crate::image::encode_temporal(&value))
@@ -1212,8 +1225,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::INTL),
                 present(image): !image.intl.is_empty(),
-                encode(state): {
-                    crate::image::encode_intl(&state.intl)
+                encode(state, out): {
+                    crate::image::encode_intl_into(&state.intl, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_intl(bytes).map(|value| crate::image::encode_intl(&value))
@@ -1231,7 +1244,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [iterators: [ironhorse_vm::snapshot_api::IteratorRow] = &[]],
-                gate: [End, [iterators], ([tables], [owned], [], [names_len], [], [], [], [], [], []) {
+                gate: [WeakRefs, [iterators], ([tables], [owned], [], [names_len], [], [], [], [], [], []) {
                     // The iterator cursors: weak owner and result slots bounded; a
                     // collection cursor must name a COVERING collections row (its
                     // `next()` indexes the table unconditionally) with the carried
@@ -1285,6 +1298,19 @@ macro_rules! snapshot_payloads {
                                 "iterator cursors: invalid RegExp String Iterator",
                             ));
                         }
+                        if (10..=15).contains(&r.kind)
+                            && lazy_helper_malformed(
+                                r.iterable,
+                                r.result,
+                                r.done,
+                                r.enum_keys.is_empty(),
+                                r.str_bytes.is_empty(),
+                            )
+                        {
+                            return Err(SnapshotError::Corrupt(
+                                "iterator cursors: malformed lazy Iterator helper",
+                            ));
+                        }
                         if r.kind == 3
                             && r.enum_keys
                                 .iter()
@@ -1296,7 +1322,7 @@ macro_rules! snapshot_payloads {
                         }
                     }
                 }],
-                restore: [End, [iterators], (interp) {
+                restore: [WeakRefs, [iterators], (interp) {
                     // The iterator cursors (schema 13): validated at decode/bounds
                     // (kinds, cursor ranges, the covering-collection cross-check);
                     // restored AFTER the collections so the covering rows are in hand
@@ -1308,7 +1334,7 @@ macro_rules! snapshot_payloads {
                         ));
                     }
                 }],
-                initialize: [End;
+                initialize: [WeakRefs;
                     #[doc = " The built-in iterator cursors (schema 13; the `ITER` encoding)."]
                     iterators: Vec<ironhorse_vm::snapshot_api::IteratorRow> = Default::default()],
                 legacy_label: "small state iterators section",
@@ -1331,8 +1357,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ITER),
                 present(image): !image.iterators.is_empty(),
-                encode(state): {
-                    crate::image::encode_iterators(&state.iterators)
+                encode(state, out): {
+                    crate::image::encode_iterators_into(&state.iterators, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_iterators(bytes).map(|value| crate::image::encode_iterators(&value))
@@ -1390,8 +1416,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::DATE),
                 present(image): !image.dates.is_empty(),
-                encode(state): {
-                    crate::image::encode_dates(&state.dates)
+                encode(state, out): {
+                    crate::image::encode_dates_into(&state.dates, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_dates(bytes).map(|value| crate::image::encode_dates(&value))
@@ -1558,8 +1584,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::FUNC),
                 present(image): !image.function_state.is_empty(),
-                encode(state): {
-                    crate::image::encode_function_state(&state.function_state)
+                encode(state, out): {
+                    crate::image::encode_function_state_into(&state.function_state, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_function_state(bytes)
@@ -1645,8 +1671,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::PROX),
                 present(image): !image.proxy_state.is_empty(),
-                encode(state): {
-                    crate::image::encode_proxy_state(&state.proxy_state)
+                encode(state, out): {
+                    crate::image::encode_proxy_state_into(&state.proxy_state, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_proxy_state(bytes).map(|value| crate::image::encode_proxy_state(&value))
@@ -1727,8 +1753,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::ACCS),
                 present(image): !image.accessors.is_empty(),
-                encode(state): {
-                    crate::image::encode_accessors(&state.accessors)
+                encode(state, out): {
+                    crate::image::encode_accessors_into(&state.accessors, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_accessors(bytes).map(|value| crate::image::encode_accessors(&value))
@@ -1818,8 +1844,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::IBFN),
                 present(image): !image.intl_bound_functions.is_empty(),
-                encode(state): {
-                    crate::image::encode_intl_bound_functions(&state.intl_bound_functions)
+                encode(state, out): {
+                    crate::image::encode_intl_bound_functions_into(&state.intl_bound_functions, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_intl_bound_functions(bytes)
@@ -1900,8 +1926,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::PRIV),
                 present(image): !image.private_elements.is_empty(),
-                encode(state): {
-                    crate::image::encode_private_elements(&state.private_elements)
+                encode(state, out): {
+                    crate::image::encode_private_elements_into(&state.private_elements, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_private_elements(bytes)
@@ -1959,8 +1985,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::DISP),
                 present(image): !image.disposable_stacks.is_empty(),
-                encode(state): {
-                    crate::image::encode_disposable_stacks(&state.disposable_stacks)
+                encode(state, out): {
+                    crate::image::encode_disposable_stacks_into(&state.disposable_stacks, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_disposable_stacks(bytes)
@@ -2156,8 +2182,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::GENR),
                 present(image): !image.generators.is_empty(),
-                encode(state): {
-                    crate::image::encode_generators(&state.generators)
+                encode(state, out): {
+                    crate::image::encode_generators_into(&state.generators, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_generators(bytes).map(|value| crate::image::encode_generators(&value))
@@ -2238,6 +2264,37 @@ macro_rules! snapshot_payloads {
                                 "async generator reaction: missing or duplicate instance",
                             ));
                         }
+                    }
+                    // The `Array.fromAsync` arena is anchored the same way
+                    // (architecture finding F127): each accumulation is named
+                    // by exactly one pending `FromAsync*` reaction, and the
+                    // writer emits the arena COMPACTED, so an unreferenced row
+                    // or a second reference to one can only be crafted.
+                    let mut from_async_anchors = std::collections::BTreeSet::new();
+                    for reaction in promise_cluster
+                        .promises
+                        .iter()
+                        .flat_map(|p| &p.reactions)
+                        .chain(tables.function_state.shared.iter().flat_map(|s| s.jobs.iter()).filter(|j| !j.thenable).map(|j| &j.reaction))
+                    {
+                        if !(7..=10).contains(&reaction.kind) {
+                            continue;
+                        }
+                        if reaction.a as usize >= promise_cluster.from_async.len()
+                            || !from_async_anchors.insert(reaction.a)
+                        {
+                            return Err(SnapshotError::Corrupt(
+                                "fromAsync reaction: missing or duplicate accumulation",
+                            ));
+                        }
+                    }
+                    if from_async_anchors.len() != promise_cluster.from_async.len() {
+                        return Err(SnapshotError::Corrupt(
+                            "fromAsync: accumulations not densely referenced",
+                        ));
+                    }
+                    for row in &promise_cluster.from_async {
+                        owned(row.target)?;
                     }
                     for row in &promise_cluster.async_generators {
                         owned(row.owner)?;
@@ -2452,8 +2509,8 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::PRMS),
                 present(image): !image.promise_cluster.is_empty(),
-                encode(state): {
-                    crate::image::encode_promise_cluster(&state.promise_cluster)
+                encode(state, out): {
+                    crate::image::encode_promise_cluster_into(&state.promise_cluster, out)
                 },
                 canonicalize(bytes): {
                     crate::image::decode_promise_cluster_payload(bytes)
@@ -2471,26 +2528,33 @@ macro_rules! snapshot_payloads {
                 initialize: [],
                 legacy_label: "small state async section",
                 decode_legacy(state, bytes): {
-                    let (instances, generators) = if bytes.is_empty() {
+                    let (instances, generators, from_async) = if bytes.is_empty() {
                         Default::default()
                     } else {
                         crate::image::decode_async_section(bytes)?
                     };
                     state.promise_cluster.async_instances = instances;
                     state.promise_cluster.async_generators = generators;
+                    state.promise_cluster.from_async = from_async;
                 },
                 decode_container: [NameFloor, extend, (r, [version], [small]) {
-                    let (instances, generators) = match r.find(crate::format::ASYN) {
+                    let (instances, generators, from_async) = match r.find(crate::format::ASYN) {
                         Some(a) => {
                             let section = decode_async_section(a.payload)?;
-                            if section.0.is_empty() && section.1.is_empty() {
+                            if section.0.is_empty() && section.1.is_empty() && section.2.is_empty() {
                                 return Err(SnapshotError::Corrupt("ASYN atom present but empty"));
                             }
-                            // The generator trailer is a format-23 addition:
-                            // a container stamped older cannot carry one.
+                            // The generator trailer is a format-23 addition and
+                            // the fromAsync one a format-24 addition: a
+                            // container stamped older cannot carry either.
                             if !section.1.is_empty() && version.format_version < 23 {
                                 return Err(SnapshotError::Corrupt(
                                     "async generators: trailer in a pre-format-23 container",
+                                ));
+                            }
+                            if !section.2.is_empty() && version.format_version < 24 {
+                                return Err(SnapshotError::Corrupt(
+                                    "fromAsync: trailer in a pre-format-24 container",
                                 ));
                             }
                             section
@@ -2499,19 +2563,26 @@ macro_rules! snapshot_payloads {
                     };
                     small.promise_cluster.async_instances = instances;
                     small.promise_cluster.async_generators = generators;
+                    small.promise_cluster.from_async = from_async;
                 }],
                 atom: Some(crate::format::ASYN),
                 present(image): !image.promise_cluster.async_section_is_empty(),
-                encode(state): {
-                    crate::image::encode_async_section(
+                encode(state, out): {
+                    crate::image::encode_async_section_into(
                         &state.promise_cluster.async_instances,
                         &state.promise_cluster.async_generators,
+                        &state.promise_cluster.from_async,
+                        out,
                     )
                 },
                 canonicalize(bytes): {
                     crate::image::decode_async_section(bytes)
-                        .map(|(instances, generators)| {
-                            crate::image::encode_async_section(&instances, &generators)
+                        .map(|(instances, generators, from_async)| {
+                            crate::image::encode_async_section(
+                                &instances[..],
+                                &generators[..],
+                                &from_async[..],
+                            )
                         })
                 },
                 slot_visit: shared,
@@ -2561,7 +2632,7 @@ macro_rules! snapshot_payloads {
                         )));
                     }
                 },
-                decode_container: [End, replace, (r, [], [small]) {
+                decode_container: [WeakRefs, replace, (r, [], [small]) {
                     let name_floor = match r.find(crate::format::NFLR) {
                         Some(a) => {
                             if a.payload.len() != 4 {
@@ -2595,10 +2666,9 @@ macro_rules! snapshot_payloads {
                 }],
                 atom: Some(crate::format::NFLR),
                 present(image): image.name_floor.is_some(),
-                encode(state): {
-                    match state.name_floor {
-                        Some(floor) => floor.to_be_bytes().to_vec(),
-                        None => Vec::new(),
+                encode(state, out): {
+                    if let Some(floor) = state.name_floor {
+                        out.put(&floor.to_be_bytes());
                     }
                 },
                 canonicalize(bytes): {
@@ -2612,12 +2682,144 @@ macro_rules! snapshot_payloads {
                 },
                 slot_visit: metadata,
             }
+            WeakRefs {
+                image_field: weak_refs,
+                builder: none,
+                live: [weak_refs: Vec<ironhorse_vm::snapshot_api::WeakRefRow> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::WeakRefs) {
+                        interp.weak_refs_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
+                bounds: [weak_refs: [ironhorse_vm::snapshot_api::WeakRefRow] = &[]],
+                gate: [FinalizationRegistries, [weak_refs], ([], [owned], [], [], [], [], [], [], [], []) {
+                    // A WeakRef's owner is live; its target is live or cleared
+                    // (`u32::MAX`), never a free slot: the dead-key prune nulls a
+                    // target before the sweep frees it.
+                    for row in weak_refs {
+                        owned(row.owner)?;
+                        if row.target != u32::MAX {
+                            owned(row.target)?;
+                        }
+                    }
+                }],
+                restore: [FinalizationRegistries, [weak_refs], (interp) {
+                    interp.restore_weak_refs(weak_refs)
+                        .map_err(|_| SnapshotError::Corrupt("side-table restore: malformed WeakRefs row"))?;
+                }],
+                initialize: [FinalizationRegistries;
+                    #[doc = " `WeakRef` targets (schema 37; `WKRF`)."]
+                    weak_refs: Vec<ironhorse_vm::snapshot_api::WeakRefRow> = Default::default()],
+                legacy_label: "small state weak-ref section",
+                decode_legacy(state, bytes): {
+                    state.weak_refs = if bytes.is_empty() {
+                        Default::default()
+                    } else {
+                        crate::image::decode_weak_refs(bytes)?
+                    };
+                },
+                decode_container: [FinalizationRegistries, replace, (r, [], []) {
+                    let weak_refs = match r.find(crate::format::WKRF) {
+                        Some(a) => present_and_non_empty(
+                            decode_weak_refs(a.payload)?,
+                            "WKRF atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    weak_refs
+                }],
+                atom: Some(crate::format::WKRF),
+                present(image): !image.weak_refs.is_empty(),
+                encode(state, out): {
+                    crate::image::encode_weak_refs_into(&state.weak_refs, out)
+                },
+                canonicalize(bytes): {
+                    crate::image::decode_weak_refs(bytes)
+                        .map(|value| crate::image::encode_weak_refs(&value))
+                },
+                slot_visit: metadata,
+            }
+            FinalizationRegistries {
+                image_field: finalization_registries,
+                builder: none,
+                live: [finalization_registries: Vec<ironhorse_vm::snapshot_api::FinalizationRegistryRow> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::FinalizationRegistries) {
+                        interp.finalization_registries_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
+                bounds: [finalization_registries: [ironhorse_vm::snapshot_api::FinalizationRegistryRow] = &[]],
+                gate: [End, [finalization_registries], ([], [owned], [], [], [], [], [], [], [], []) {
+                    // The registry's owner is live; each cell's target and token
+                    // are live or absent (`u32::MAX`); the callback is a reference
+                    // (its callability is the restored functions' cross-table
+                    // obligation, as a disposal method's is). The decoder already
+                    // refused a CHANGED flag with no dead cell behind it.
+                    for row in finalization_registries {
+                        owned(row.owner)?;
+                        if row.callback.kind != Kind::Reference {
+                            return Err(SnapshotError::Corrupt(
+                                "finalization registries: cleanup callback is not a reference",
+                            ));
+                        }
+                        for cell in &row.cells {
+                            if cell.target != u32::MAX {
+                                owned(cell.target)?;
+                            }
+                            if cell.token != u32::MAX {
+                                owned(cell.token)?;
+                            }
+                        }
+                    }
+                }],
+                restore: [End, [finalization_registries], (interp) {
+                    interp.restore_finalization_registries(finalization_registries)
+                        .map_err(|_| SnapshotError::Corrupt("side-table restore: malformed FinalizationRegistries row"))?;
+                }],
+                initialize: [End;
+                    #[doc = " `FinalizationRegistry` callbacks, flags and cells (schema 37; `FNRG`)."]
+                    finalization_registries: Vec<ironhorse_vm::snapshot_api::FinalizationRegistryRow> = Default::default()],
+                legacy_label: "small state finalization-registry section",
+                decode_legacy(state, bytes): {
+                    state.finalization_registries = if bytes.is_empty() {
+                        Default::default()
+                    } else {
+                        crate::image::decode_finalization_registries(bytes)?
+                    };
+                },
+                decode_container: [End, replace, (r, [], []) {
+                    let finalization_registries = match r.find(crate::format::FNRG) {
+                        Some(a) => present_and_non_empty(
+                            decode_finalization_registries(a.payload)?,
+                            "FNRG atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    finalization_registries
+                }],
+                atom: Some(crate::format::FNRG),
+                present(image): !image.finalization_registries.is_empty(),
+                encode(state, out): {
+                    crate::image::encode_finalization_registries_into(
+                        &state.finalization_registries,
+                        out,
+                    )
+                },
+                canonicalize(bytes): {
+                    crate::image::decode_finalization_registries(bytes)
+                        .map(|value| crate::image::encode_finalization_registries(&value))
+                },
+                slot_visit: slots,
+            }
         }
     };
 }
 pub(crate) use snapshot_payloads;
 
 use crate::format::FourCc;
+use crate::sink::Sink;
 use crate::store::StoreError;
 use crate::store_sections::SmallSection;
 use crate::SnapshotError;
@@ -2666,7 +2868,7 @@ macro_rules! define_payloads {
         decode_container: [$($container_next:ident, $container_mode:ident, ($reader:ident, [$($version:ident)?], [$($small:ident)?]) $container:block)?],
         atom: $atom:expr,
         present($image:ident): $present:expr,
-        encode($state:ident): $encode:block,
+        encode($state:ident, $out:ident): $encode:block,
         canonicalize($bytes:ident): $canonicalize:block,
         slot_visit: $slot_visit:ident,
     })*) => {
@@ -2713,7 +2915,8 @@ macro_rules! define_payloads {
                 $($($init_field: small.$init_field,)?) *
             };
             // The retired small-state free-list payload is not authoritative:
-            // the store's independently validated arena segments supply it.
+            // the store's free-list segment rows supply it (the slot arena
+            // checks the entries as it is built).
             image.slot_free = slot_free;
             image
         }
@@ -2759,8 +2962,30 @@ macro_rules! define_payloads {
             Ok(state)
         }
         pub(crate) fn encode_payload(state: &crate::store::SmallState, section: SmallSection) -> Vec<u8> {
+            let mut out = Vec::new();
+            encode_payload_into(state, section, &mut out);
+            out
+        }
+        /// [`encode_payload`] into any sink: the one definition of every
+        /// section's bytes, which the store's framed sections, the image
+        /// writer's atoms and the streaming writer's sizing and write
+        /// passes all share.
+        pub(crate) fn encode_payload_into<S: crate::sink::Sink>(
+            state: &crate::store::SmallState,
+            section: SmallSection,
+            out: &mut S,
+        ) {
             match section {
-                $(SmallSection::$section => { let $state = state; $encode },)*
+                $(SmallSection::$section => { let $state = state; let $out = out; $encode },)*
+            }
+        }
+        /// Whether the container carries `section`'s atom for this small
+        /// state: the roster's content-determined omission rule, asked of
+        /// a [`crate::store::SmallState`] rather than an image (the two
+        /// hold the payload fields under the same names).
+        pub(crate) fn section_present(state: &crate::store::SmallState, section: SmallSection) -> bool {
+            match section {
+                $(SmallSection::$section => { let $image = state; $present },)*
             }
         }
         /// Emit payload atoms in the historical order, with content-determined
@@ -2784,8 +3009,13 @@ macro_rules! define_payloads {
                                 writer.atom(tag, &floor.to_be_bytes())?;
                             }
                         } else {
-                            let $state = image;
-                            writer.atom(tag, &$encode)?;
+                            let mut payload = Vec::new();
+                            {
+                                let $state = image;
+                                let $out = &mut payload;
+                                $encode
+                            }
+                            writer.atom(tag, &payload)?;
                         }
                     }
                 }
@@ -2801,18 +3031,18 @@ macro_rules! define_payloads {
 }
 snapshot_payloads!(define_payloads);
 
-pub(crate) const fn canonical_atom_order() -> [FourCc; 36] {
+pub(crate) const fn canonical_atom_order() -> [FourCc; 38] {
     use crate::format::{BLOC, CREA, HEAP, SIGN, VERS};
-    let mut tags = [VERS; 36];
+    let mut tags = [VERS; 38];
     tags[1] = SIGN;
     tags[2] = CREA;
     tags[3] = BLOC;
     tags[4] = HEAP;
     let mut at = 5;
     let mut row = 0;
-    let mut seen = 0u32;
+    let mut seen = 0u64;
     while row < PAYLOADS.len() {
-        let bit = 1u32 << PAYLOADS[row].section.id();
+        let bit = 1u64 << PAYLOADS[row].section.id();
         assert!(seen & bit == 0);
         seen |= bit;
         if let Some(tag) = PAYLOADS[row].atom {
@@ -3026,6 +3256,8 @@ mod tests {
                 "PrivateElements",
                 "DisposableStacks",
                 "Iterators",
+                "WeakRefs",
+                "FinalizationRegistries",
             ]
         );
     }
@@ -3280,6 +3512,8 @@ mod tests {
                 "Promises",
                 "AsyncInstances",
                 "NameFloor",
+                "WeakRefs",
+                "FinalizationRegistries",
             ]
         );
         for (next, expected) in [
@@ -3446,6 +3680,8 @@ mod tests {
                 "Temporal",
                 "Intl",
                 "Iterators",
+                "WeakRefs",
+                "FinalizationRegistries",
             ]
         );
         for (next, expected) in [
@@ -3568,6 +3804,8 @@ mod tests {
         "intl",
         "name_floor",
         "iterators",
+        "weak_refs",
+        "finalization_registries",
     ];
 
     fn small_field_chain(rows: &[PayloadDesc]) -> Result<Vec<&str>, &'static str> {
@@ -3829,7 +4067,7 @@ mod tests {
                 *b"SYMB", *b"METR", *b"ARRY", *b"IDXP", *b"COLL", *b"REGY", *b"ERRD", *b"ESTK",
                 *b"ABUF", *b"TARR", *b"DVIW", *b"WRAP", *b"REGX", *b"ARGB", *b"TMPR", *b"INTL",
                 *b"ITER", *b"DATE", *b"FUNC", *b"PROX", *b"ACCS", *b"IBFN", *b"PRIV", *b"DISP",
-                *b"GENR", *b"PRMS", *b"ASYN", *b"NFLR",
+                *b"GENR", *b"PRMS", *b"ASYN", *b"NFLR", *b"WKRF", *b"FNRG",
             ]
         );
     }

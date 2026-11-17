@@ -266,6 +266,10 @@ impl Interp {
         validate_restore_chain(&slots, self.environment.global_obj, &mut Default::default())?;
         self.slots = slots;
         self.chunks = chunks;
+        // The restored arena carries no side-storage ledger; charge it for
+        // whatever tables exist now. The row restores re-derive it as they
+        // rebuild their tables.
+        self.rederive_side_reserved();
         self.stack = stack;
         self.meter.restore(meter);
         // SymbolTables ledger row: only `symbol_names` is serialized; the
@@ -277,16 +281,15 @@ impl Interp {
         // (Consumes `symbol_names`, so this both sets the forward table and
         // rebuilds the rest.)
         self.bind_program_symbols(&symbol_names);
-        // The installed-names floor defaults to the full
-        // restored table — the conservative choice when no floor
-        // traveled (a pre-schema-12 store or container): no partial
-        // install pass may then touch any restored id, which can never
-        // clobber or resurrect a guest edit. When the snapshot carries
-        // the live floor (the `NFLR` atom / small-state section), the
-        // resume path narrows this via
-        // [`Self::restore_installed_names_floor`], so names interned
-        // DURING the last install pass stay lazily installable exactly
-        // as they were live (the `ListFormat.prototype.format` case).
+        // The installed-names floor defaults to the full restored table — the
+        // conservative choice when no floor traveled (a pre-schema-12 store or
+        // container): no partial intrinsic-surface pass may touch a restored
+        // id. When the snapshot carries the live floor (the `NFLR` atom /
+        // small-state section), the resume path narrows this via
+        // [`Self::restore_installed_names_floor`], so names interned DURING the
+        // last install pass stay lazily installable exactly as they were live
+        // (the `ListFormat.prototype.format` case). Per-environment global
+        // catch-up uses `binding_names`, not this machine-wide floor.
         self.installed_names_len = self.symbol_names.len();
         // GlobalProps ledger row: the global object's own-property slots
         // (intrinsic bindings and runtime-materialized `var`/sloppy globals
@@ -296,6 +299,7 @@ impl Interp {
         // state, and boot leaves it empty. Rebuild it by walking the restored
         // chain, so a global created in an earlier crank resolves after resume.
         self.rebuild_global_props();
+        self.rebuild_binding_history();
         // Accessors ledger row, the boot-seeded half: a `proto_accessors`
         // install's PROPERTY slot travels in the arena but its side-table
         // getter entry does not; re-derive it from the boot seeds (the
@@ -304,17 +308,13 @@ impl Interp {
         Ok(())
     }
 
-    /// The installed-names floor: ids at or below it keep
-    /// their existing binding on partial install passes; ids above it —
-    /// names interned during an install pass (the Intl member keys, the
-    /// `format` accessor key) or by the guest — are re-considered,
-    /// create-only, by the next growing relink. Real machine state: a
-    /// resumed machine must adopt the live machine's floor, not the
-    /// restored table's length, or a boot name interned during the last
-    /// install pass can never lazily install after resume (the
-    /// `ListFormat.prototype.format` divergence the Intl carry twins
-    /// caught — the continuous machine installs it at its next growing
-    /// relink; a full-table floor refuses it forever).
+    /// The machine-wide intrinsic-surface floor. Ids above it — names interned
+    /// during an install pass (the Intl member keys, the `format` accessor key)
+    /// or by the guest — are reconsidered, create-only, by the next growing
+    /// relink. A resumed machine must adopt the live floor, not the restored
+    /// table's length, or a boot name interned during the last pass can never
+    /// lazily install after resume. Per-environment global bindings are caught
+    /// up independently from their serialized `binding_names` history.
     pub fn installed_names_floor(&self) -> u32 {
         self.installed_names_len as u32
     }
@@ -328,6 +328,7 @@ impl Interp {
             return false;
         }
         self.installed_names_len = floor as usize;
+        self.rebuild_binding_history();
         true
     }
 
@@ -411,10 +412,25 @@ impl Interp {
     /// serialization: `(owner slot, spec length, items ascending by
     /// index)`. Item values are ordinary [`Slot`]s — their slot/chunk
     /// references round-trip with the arenas.
+    ///
+    /// `%Array.prototype%`'s row is boot state: boot registers the empty
+    /// array, and a restore starts from a booted machine. It is stored only
+    /// once a program has given it a length, so a pristine image carries no
+    /// array rows.
     pub fn arrays_snapshot(&self) -> Vec<ArraySnapshot> {
+        // A snapshot point is where a restore re-derives the side-storage
+        // ledger from these rows, so the live ledger must already equal it.
+        debug_assert_eq!(
+            self.chunks.side_reserved(),
+            self.side_storage_charge(),
+            "side-storage ledger drifted from the tables"
+        );
         let mut out: Vec<ArraySnapshot> = self
             .arrays
             .iter()
+            .filter(|(owner, a)| {
+                **owner != self.array_proto || a.length != 0 || !a.items().is_empty()
+            })
             .map(|(owner, a)| {
                 (
                     owner.0,
@@ -452,6 +468,63 @@ impl Interp {
             })
             .collect();
         out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out
+    }
+
+    /// [`Self::arrays_snapshot`] read in place: the same rows in the same
+    /// owner-ascending order, with the same `%Array.prototype%` omission,
+    /// borrowed rather than copied (the streaming snapshot writer's view;
+    /// WASM-BLOCKERS.md B7). The vector holds one small view per array, not
+    /// the items.
+    pub fn arrays_rows(&self) -> Vec<ArrayRowView<'_>> {
+        let mut out: Vec<ArrayRowView<'_>> = self
+            .arrays
+            .iter()
+            .filter(|(owner, a)| {
+                **owner != self.array_proto || a.length != 0 || !a.items().is_empty()
+            })
+            .map(|(owner, a)| ArrayRowView {
+                owner: owner.0,
+                length: a.length,
+                items: a.items(),
+            })
+            .collect();
+        out.sort_unstable_by_key(|row| row.owner);
+        out
+    }
+
+    /// [`Self::index_props_snapshot`] read in place (see
+    /// [`Self::arrays_rows`]); the view's `length` is the row's high-water
+    /// mark.
+    pub fn index_props_rows(&self) -> Vec<ArrayRowView<'_>> {
+        let mut out: Vec<ArrayRowView<'_>> = self
+            .index_props
+            .iter()
+            .map(|(owner, props)| ArrayRowView {
+                owner: owner.0,
+                length: props.length,
+                items: props.items(),
+            })
+            .collect();
+        out.sort_unstable_by_key(|row| row.owner);
+        out
+    }
+
+    /// [`Self::collections_snapshot`] read in place (see
+    /// [`Self::arrays_rows`]): one small view per collection, the entries
+    /// borrowed from the live table.
+    pub fn collections_rows(&self) -> Vec<CollectionRowView<'_>> {
+        let mut out: Vec<CollectionRowView<'_>> = self
+            .collections
+            .iter()
+            .map(|(owner, c)| CollectionRowView {
+                owner: owner.0,
+                kind: c.kind.code(),
+                table_length: c.table_length,
+                data: c,
+            })
+            .collect();
+        out.sort_unstable_by_key(|row| row.owner);
         out
     }
 
@@ -539,17 +612,79 @@ impl Interp {
         if self.intrinsics.contains_key("$262") {
             return Some("a test262 `$262` host object, which no snapshot carries");
         }
-        // A pending reaction whose KIND names an `Array.fromAsync` step
-        // points at `from_async` state the image does not carry. Every
-        // such in-flight accumulation is anchored by exactly one
-        // `FromAsync*` reaction on a live promise — an unanchored entry is
-        // unreachable and compacted away — so refusing by kind here is the
-        // whole gate for that satellite, checked before the doomed-set
-        // early return below because it is independent of function slots.
-        // Async functions carry their frames in ASYN, and async generators
-        // their instances beside them, so the `AsyncAwait` and
-        // `AsyncGenerator*` kinds resume. The side tables are walked in
-        // full in both variants, as below.
+        // A live guest `Compartment` ([`Interp::guest_compartments`]),
+        // refused on PRESENCE for the same reason `$262` is, and with the same
+        // shape of defect behind it.
+        //
+        // The compartment's ENVIRONMENT already travels -- the `Environments`
+        // section carries every entry of `inactive_environments`, with the
+        // `host_owned` flag deciding which get a restored lease. What does not
+        // travel is the instance-to-global association this table holds, nor
+        // the lease that keeps the environment out of `reap_environments`'s
+        // reach. A resumed machine would therefore hold a `Compartment`
+        // instance that is no longer branded: `c.evaluate(...)` on it would be
+        // `TypeError: not a compartment`, and its environment would be
+        // collectable while the guest still references the object that used to
+        // own it.
+        //
+        // The doomed-set walk below cannot see this either. It refuses a
+        // machine that stored an unpersistable NATIVE; a compartment instance
+        // is an ordinary `Kind::Instance` slot whose entire compartment-ness
+        // is membership here, so the walk finds nothing to object to and the
+        // checkpoint would succeed. Presence is the honest question.
+        //
+        // This is phase 1's stated cost, not a permanent one:
+        // `designs/ironhorse-guest-compartment.md` § 7 specifies the two-column
+        // table that lifts it.
+        if !self.guest_compartments.is_empty() {
+            return Some(
+                "a live guest `Compartment`, whose environment binding no snapshot carries",
+            );
+        }
+        // Presence of the INSTANCE is not the whole question, because the
+        // instance is not what carries the state. Two things outlive it.
+        //
+        // First, `globalLexicals`. They live on the ENVIRONMENT, which
+        // survives its instance (a retained function keeps `global_env`, and
+        // hence the environment, alive), and `EnvironmentRow` has no column
+        // for them: `shared_machine_snapshot` would write the environment and
+        // drop its lexicals on the floor, and the restored crank would answer
+        // a `ReferenceError` -- or, worse, an unshadowed global -- where the
+        // pre-checkpoint crank answered the bound value. A lexical is also not
+        // arena-chain-resident, so there is nothing for `rebuild_global_props`
+        // to recover it from. Refuse on the state itself, not on its holder.
+        //
+        // Second, `shared_compartments`. `construct_compartment` sets it, and
+        // it is what makes `shared_machine_snapshot` return `Some` at all. On
+        // a machine with no shared-realm primordial profile the emitted image
+        // carries empty `intrinsic_roots`, which restore compares against
+        // `new_shared_realm_machine`'s populated set and refuses as a
+        // "shared primordial profile mismatch". Writing bytes that no restore
+        // can ever accept is worse than refusing to write them: catch the
+        // asymmetry on the write side, where the caller can still act on it.
+        if std::iter::once(&self.environment)
+            .chain(self.inactive_environments.values())
+            .any(|env| !env.global_lexicals.is_empty())
+        {
+            return Some(
+                "a guest `Compartment`'s `globalLexicals`, for which `EnvironmentRow` has no column",
+            );
+        }
+        if self.shared_compartments && self.realm.intrinsics().roots.is_empty() {
+            return Some(
+                "a guest `Compartment` built on a machine with no shared-realm primordial profile, whose image no restore would accept",
+            );
+        }
+        // Every reaction kind now names state some atom carries, so this
+        // refuses only a kind that does not (architecture finding F127
+        // closed the last of them). Async functions carry their frames in
+        // `ASYN`, async generators their instances beside them, and the
+        // `Array.fromAsync` accumulations follow those — so the
+        // `AsyncAwait`, `AsyncGenerator*` and `FromAsync*` kinds all resume.
+        // The check stays, rather than becoming unreachable code: a new
+        // reaction kind added without a carry must be refused here rather
+        // than resumed against state nothing wrote. The side tables are
+        // walked in full in both variants, as below.
         let async_reaction = self
             .promises
             .values()
@@ -566,6 +701,10 @@ impl Interp {
                         | ReactionKind::AsyncGeneratorAwait(_)
                         | ReactionKind::AsyncGeneratorYield(_)
                         | ReactionKind::AsyncGeneratorReturn(_)
+                        | ReactionKind::FromAsyncNext(_)
+                        | ReactionKind::FromAsyncElem(_)
+                        | ReactionKind::FromAsyncMap(_)
+                        | ReactionKind::FromAsyncClose(_)
                         | ReactionKind::FinallyReturn
                         | ReactionKind::FinallyAwait(_)
                         | ReactionKind::Combine(_, _)
@@ -654,8 +793,14 @@ impl Interp {
         self.functions.get(&function).is_some_and(|info| {
             (info.native.is_none() && info.method.is_none())
                 || (self.shared_compartments
-                    && (matches!(info.native, Some(Native::Eval | Native::Function))
-                        || (info.native == Some(Native::Host) && info.host.is_some())))
+                    && (matches!(
+                        info.native,
+                        // The three per-compartment copies `compartment_evaluator`
+                        // mints. Each is re-derived at restore from its boot
+                        // primordial plus an `EvaluatorRow` (`shared_persist.rs`),
+                        // so a stored reference to one is not a dangling native.
+                        Some(Native::Eval | Native::Function | Native::Compartment)
+                    ) || (info.native == Some(Native::Host) && info.host.is_some())))
         })
     }
 
@@ -827,35 +972,53 @@ impl Interp {
 
     /// Quiescent snapshot of the `array_buffers` side table (ledger
     /// `ArrayBuffers` row, the `ABUF` atom), ascending by owning slot:
-    /// `(owner slot, backing chunk offset, byte length, flags)`. The
-    /// backing BYTES travel with the chunk arena (`BLOC`); this row is
-    /// the geometry that makes them readable. Flags fold the two
-    /// satellite brand sets in: bit 0 = detached
+    /// `(owner slot, backing chunk offset, byte length, flags, maximum byte
+    /// length)`. The backing BYTES travel with the chunk arena (`BLOC`);
+    /// this row is the geometry that makes them readable. Flags fold the
+    /// two satellite brand sets and resizability in: bit 0 = detached
     /// ([`Self::detached_buffers`]), bit 1 = shared
-    /// ([`Self::shared_buffers`]).
-    pub fn array_buffers_snapshot(&self) -> Vec<(u32, u32, u32, u8)> {
-        let mut out: Vec<(u32, u32, u32, u8)> = self
+    /// ([`Self::shared_buffers`]), bit 2 = resizable (growable when
+    /// shared), whose maximum is the fifth field — 0 for a fixed-length
+    /// buffer.
+    pub fn array_buffers_snapshot(&self) -> Vec<(u32, u32, u32, u8, u32)> {
+        let mut out: Vec<(u32, u32, u32, u8, u32)> = self
             .array_buffers
             .iter()
             .map(|(owner, b)| {
                 let flags = u8::from(self.detached_buffers.contains(owner))
-                    | (u8::from(self.shared_buffers.contains(owner)) << 1);
-                (owner.0, b.data.0, b.length, flags)
+                    | (u8::from(self.shared_buffers.contains(owner)) << 1)
+                    | (u8::from(b.max_length.is_some()) << 2);
+                (
+                    owner.0,
+                    b.data.0,
+                    b.length,
+                    flags,
+                    b.max_length.unwrap_or(0),
+                )
             })
             .collect();
-        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out.sort_unstable_by_key(|(owner, _, _, _, _)| *owner);
         out
     }
 
     /// Quiescent snapshot of the `typed_arrays` side table (ledger
     /// `TypedArrays` row, the `TARR` atom), ascending by owning slot:
     /// `(owner slot, element kind, buffer slot, byte offset, element
-    /// length)`. `kind` indexes [`TYPED_ARRAY_TYPES`].
+    /// length)`. `kind` indexes [`TYPED_ARRAY_TYPES`]; a length-tracking
+    /// view's length is [`VIEW_LENGTH_TRACKING`].
     pub fn typed_arrays_snapshot(&self) -> Vec<(u32, u8, u32, u32, u32)> {
         let mut out: Vec<(u32, u8, u32, u32, u32)> = self
             .typed_arrays
             .iter()
-            .map(|(owner, t)| (owner.0, t.kind, t.buffer.0, t.offset, t.length))
+            .map(|(owner, t)| {
+                (
+                    owner.0,
+                    t.kind,
+                    t.buffer.0,
+                    t.offset,
+                    t.array_length.unwrap_or(VIEW_LENGTH_TRACKING),
+                )
+            })
             .collect();
         out.sort_unstable_by_key(|(owner, _, _, _, _)| *owner);
         out
@@ -863,12 +1026,20 @@ impl Interp {
 
     /// Quiescent snapshot of the `data_views` side table (ledger
     /// `DataViews` row, the `DVIW` atom), ascending by owning slot:
-    /// `(owner slot, buffer slot, byte offset, byte length)`.
+    /// `(owner slot, buffer slot, byte offset, byte length)`, the length of
+    /// a length-tracking view being [`VIEW_LENGTH_TRACKING`].
     pub fn data_views_snapshot(&self) -> Vec<(u32, u32, u32, u32)> {
         let mut out: Vec<(u32, u32, u32, u32)> = self
             .data_views
             .iter()
-            .map(|(owner, d)| (owner.0, d.buffer.0, d.offset, d.size))
+            .map(|(owner, d)| {
+                (
+                    owner.0,
+                    d.buffer.0,
+                    d.offset,
+                    d.byte_length.unwrap_or(VIEW_LENGTH_TRACKING),
+                )
+            })
             .collect();
         out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
         out
@@ -879,14 +1050,18 @@ impl Interp {
     /// freshly restored machine whose tables are empty, AFTER the
     /// arenas are in place (the buffer extents are validated against
     /// the restored chunk arena). Validates every row — an unknown
-    /// element kind, a flags byte outside the two brand bits, a NULL
-    /// or out-of-arena backing extent, a view naming a buffer with no
-    /// row, or live view geometry past its buffer's length — before any
-    /// family table changes. Detached buffers retain their views' former geometry
-    /// because the observable accessors project those views as zero-length.
+    /// element kind, a flags byte outside the three defined bits, a
+    /// maximum below its buffer's length or past the allocation ceiling,
+    /// a NULL or out-of-arena backing extent, a view naming a buffer with
+    /// no row, a length-tracking view on a fixed-length buffer, or view
+    /// geometry its buffer could never have covered — before any family
+    /// table changes. Detached buffers retain their views' former geometry
+    /// because the observable accessors project those views as zero-length;
+    /// a view on a resizable buffer may likewise be out of bounds, but never
+    /// past the buffer's maximum.
     pub(super) fn restore_typed_array_family(
         &mut self,
-        buffers: Vec<(u32, u32, u32, u8)>,
+        buffers: Vec<(u32, u32, u32, u8, u32)>,
         views: Vec<(u32, u8, u32, u32, u32)>,
         data_views: Vec<(u32, u32, u32, u32)>,
     ) -> Result<(), RestoreError> {
@@ -906,9 +1081,16 @@ impl Interp {
                 return Err(refuse("owner has multiple buffer-family brands"));
             }
         }
-        for &(_, data, length, flags) in &buffers {
-            if flags > 0b11 {
+        for &(_, data, length, flags, max_length) in &buffers {
+            if flags > 0b111 {
                 return Err(refuse("unknown buffer flags"));
+            }
+            if if flags & 0b100 != 0 {
+                max_length < length || max_length > 0x7FFF_FFFF
+            } else {
+                max_length != 0
+            } {
+                return Err(refuse("buffer maximum disagrees with its length"));
             }
             let stored_length = self
                 .chunks
@@ -922,39 +1104,53 @@ impl Interp {
                 return Err(refuse("buffer length disagrees with backing state"));
             }
         }
+        // `(byte length, flags, maximum)` of the buffer a view names.
         let buffer_state = |owner| {
             buffers
                 .binary_search_by_key(&owner, |row| row.0)
                 .ok()
-                .map(|index| (buffers[index].2, buffers[index].3))
+                .map(|index| (buffers[index].2, buffers[index].3, buffers[index].4))
                 .ok_or_else(|| refuse("view has no buffer row"))
         };
+        // Whether a view's byte range `[offset, end)` (`None` for a
+        // length-tracking view) is one its buffer could hold.
+        let covered =
+            |offset: u32, end: Option<u64>, (buffer_length, flags, max): (u32, u8, u32)| {
+                if flags & 0b100 != 0 {
+                    end.unwrap_or(u64::from(offset)) <= u64::from(max)
+                } else {
+                    end.is_some() && (flags & 1 != 0 || end <= Some(u64::from(buffer_length)))
+                }
+            };
         for &(_, kind, buffer, offset, length) in &views {
             let ty = TYPED_ARRAY_TYPES
                 .get(kind as usize)
                 .ok_or_else(|| refuse("unknown typed-array kind"))?;
-            let (buffer_length, flags) = buffer_state(buffer)?;
+            let state = buffer_state(buffer)?;
             if offset % (1u32 << ty.shift) != 0 {
                 return Err(refuse("typed-array offset is not aligned"));
             }
-            let end = u64::from(offset) + (u64::from(length) << ty.shift);
-            if flags & 1 == 0 && end > u64::from(buffer_length) {
+            let end = (length != VIEW_LENGTH_TRACKING)
+                .then(|| u64::from(offset) + (u64::from(length) << ty.shift));
+            if !covered(offset, end, state) {
                 return Err(refuse("typed-array range exceeds buffer"));
             }
         }
         for &(_, buffer, offset, size) in &data_views {
-            let (buffer_length, flags) = buffer_state(buffer)?;
-            if flags & 1 == 0 && u64::from(offset) + u64::from(size) > u64::from(buffer_length) {
+            let state = buffer_state(buffer)?;
+            let end = (size != VIEW_LENGTH_TRACKING).then(|| u64::from(offset) + u64::from(size));
+            if !covered(offset, end, state) {
                 return Err(refuse("data-view range exceeds buffer"));
             }
         }
-        for (owner, data, length, flags) in buffers {
+        for (owner, data, length, flags, max_length) in buffers {
             let owner = crate::value::SlotIndex(owner);
             self.array_buffers.insert(
                 owner,
                 ArrayBufferData {
                     data: crate::value::ChunkOffset(data),
                     length,
+                    max_length: (flags & 0b100 != 0).then_some(max_length),
                 },
             );
             if flags & 1 != 0 {
@@ -965,13 +1161,17 @@ impl Interp {
             }
         }
         for (owner, kind, buffer, offset, length) in views {
+            let resizable_buffer = self.array_buffers[&crate::value::SlotIndex(buffer)]
+                .max_length
+                .is_some();
             self.typed_arrays.insert(
                 crate::value::SlotIndex(owner),
                 TypedArrayData {
                     kind,
                     buffer: crate::value::SlotIndex(buffer),
                     offset,
-                    length,
+                    array_length: (length != VIEW_LENGTH_TRACKING).then_some(length),
+                    resizable_buffer,
                 },
             );
         }
@@ -981,7 +1181,7 @@ impl Interp {
                 DataViewData {
                     buffer: crate::value::SlotIndex(buffer),
                     offset,
-                    size,
+                    byte_length: (size != VIEW_LENGTH_TRACKING).then_some(size),
                 },
             );
         }
@@ -993,10 +1193,16 @@ impl Interp {
     /// each primitive wrapper instance's boxed value. The value is an
     /// ordinary [`Slot`] — its chunk reference (a boxed String)
     /// round-trips with the arenas.
+    ///
+    /// The String, Number and Boolean prototypes' rows are boot state that
+    /// no program can change (`""`, `+0`, `false`), and a restore starts
+    /// from a booted machine, so they are never stored.
     pub fn wrappers_snapshot(&self) -> Vec<(u32, Slot)> {
+        let boot = [self.string_proto, self.number_proto, self.boolean_proto];
         let mut out: Vec<(u32, Slot)> = self
             .wrapper_data
             .iter()
+            .filter(|(owner, _)| !boot.contains(owner))
             .map(|(owner, v)| (owner.0, *v))
             .collect();
         out.sort_unstable_by_key(|(owner, _)| *owner);
@@ -1865,6 +2071,7 @@ impl Interp {
         const ROW: &str = "IntlBoundFunctions";
         let refuse = |reason| RestoreError { row: ROW, reason };
         self.validate_restore_owners(rows.iter().map(|row| row.function), ROW)?;
+        let mut owners = std::collections::BTreeSet::new();
         for row in &rows {
             self.validate_restore_owner(row.owner, ROW)?;
             if self
@@ -1872,6 +2079,11 @@ impl Interp {
                 .contains_key(&crate::value::SlotIndex(row.function))
             {
                 return Err(refuse("function owner already has metadata"));
+            }
+            // One bound function per Intl object: a second would make the
+            // `compare` getter's reverse lookup depend on hash order.
+            if !owners.insert(row.owner) {
+                return Err(refuse("Intl owner has more than one bound function"));
             }
             let owner = crate::value::SlotIndex(row.owner);
             match row.kind {
@@ -2109,6 +2321,128 @@ impl Interp {
         Ok(())
     }
 
+    /// The `WeakRef` rows (`WKRF`), owner-ascending: a cleared target
+    /// travels as `u32::MAX`, exactly as the live table holds it.
+    pub fn weak_refs_snapshot(&self) -> Vec<WeakRefRow> {
+        let mut rows: Vec<WeakRefRow> = self
+            .weak_refs
+            .iter()
+            .map(|(owner, data)| WeakRefRow {
+                owner: owner.0,
+                target: data.target.0,
+            })
+            .collect();
+        rows.sort_unstable_by_key(|row| row.owner);
+        rows
+    }
+
+    /// Validate and restore the `WeakRef` rows as one batch. A live target
+    /// must name a live instance: the dead-key prune nulls a target before
+    /// the sweep frees it, so an honest row never names a free slot.
+    pub(super) fn restore_weak_refs(&mut self, rows: Vec<WeakRefRow>) -> Result<(), RestoreError> {
+        self.validate_restore_owners(rows.iter().map(|row| row.owner), "WeakRefs")?;
+        for row in &rows {
+            if row.target != u32::MAX {
+                self.validate_restore_owner(row.target, "WeakRefs")?;
+            }
+        }
+        for row in rows {
+            self.weak_refs.insert(
+                crate::value::SlotIndex(row.owner),
+                WeakRefData {
+                    target: crate::value::SlotIndex(row.target),
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// The `FinalizationRegistry` rows (`FNRG`), owner-ascending, each with
+    /// its cells in registration order; a dead target or absent token
+    /// travels as `u32::MAX`.
+    pub fn finalization_registries_snapshot(&self) -> Vec<FinalizationRegistryRow> {
+        let mut rows: Vec<FinalizationRegistryRow> = self
+            .finalization_registries
+            .iter()
+            .map(|(owner, data)| FinalizationRegistryRow {
+                owner: owner.0,
+                callback: data.callback,
+                changed: data.changed,
+                cells: data
+                    .cells
+                    .iter()
+                    .map(|cell| FinalizationCellRow {
+                        target: cell.target.0,
+                        holdings: cell.holdings,
+                        token: cell.token.0,
+                    })
+                    .collect(),
+            })
+            .collect();
+        rows.sort_unstable_by_key(|row| row.owner);
+        rows
+    }
+
+    /// Validate and restore the `FinalizationRegistry` rows as one batch.
+    /// The callback must be a reference (construction checked callability;
+    /// its identity is the cross-table obligation restored functions and
+    /// proxies carry); live targets and tokens must name live instances;
+    /// a registry flagged CHANGED must hold at least one dead cell, since
+    /// the cleanup clears the flag once none remain.
+    pub(super) fn restore_finalization_registries(
+        &mut self,
+        rows: Vec<FinalizationRegistryRow>,
+    ) -> Result<(), RestoreError> {
+        self.validate_restore_owners(rows.iter().map(|row| row.owner), "FinalizationRegistries")?;
+        for row in &rows {
+            if row.callback.kind != Kind::Reference {
+                return Err(RestoreError {
+                    row: "FinalizationRegistries",
+                    reason: "cleanup callback is not a reference",
+                });
+            }
+            if row.changed && row.cells.iter().all(|cell| cell.target != u32::MAX) {
+                return Err(RestoreError {
+                    row: "FinalizationRegistries",
+                    reason: "registry flagged for cleanup holds no dead cell",
+                });
+            }
+            for cell in &row.cells {
+                if cell.target != u32::MAX {
+                    self.validate_restore_owner(cell.target, "FinalizationRegistries")?;
+                }
+                if cell.token != u32::MAX {
+                    self.validate_restore_owner(cell.token, "FinalizationRegistries")?;
+                }
+            }
+        }
+        self.validate_restore_values(
+            rows.iter().flat_map(|row| {
+                std::iter::once(row.callback).chain(row.cells.iter().map(|cell| cell.holdings))
+            }),
+            "FinalizationRegistries",
+        )?;
+        for row in rows {
+            self.finalization_registries.insert(
+                crate::value::SlotIndex(row.owner),
+                FinalizationRegistryData {
+                    callback: row.callback,
+                    changed: row.changed,
+                    cells: row
+                        .cells
+                        .into_iter()
+                        .map(|cell| FinalizationCell {
+                            target: crate::value::SlotIndex(cell.target),
+                            holdings: cell.holdings,
+                            token: crate::value::SlotIndex(cell.token),
+                        })
+                        .collect(),
+                },
+            );
+        }
+        Ok(())
+    }
+
     pub(super) fn saved_frame_snapshot(
         &self,
         frame: &SavedFrame,
@@ -2231,6 +2565,19 @@ impl Interp {
                     {
                         return Err(refuse("invalid suspended property key"));
                     }
+                }
+                (Kind::EnvReference, _)
+                    if value.flag & crate::value::SUPER_PRIMITIVE_RECEIVER != 0 =>
+                {
+                    // A computed super reference with a non-object receiver.
+                    let Some(receiver) = value.super_receiver() else {
+                        return Err(refuse("invalid suspended super reference"));
+                    };
+                    if value.id != 0 || value.next.is_null() {
+                        return Err(refuse("invalid suspended super reference"));
+                    }
+                    self.validate_restore_value_shape(receiver, ROW)?;
+                    self.validate_restore_owner(value.next.0, ROW)?;
                 }
                 (Kind::EnvReference, Payload::Reference(receiver)) => {
                     if value.id != 0 || value.flag != 0 {
@@ -2435,6 +2782,9 @@ impl Interp {
             .collect();
         let live_comb: std::collections::BTreeSet<u32> =
             self.snapshot_combinator_map().into_keys().collect();
+        let fa_map: std::collections::HashMap<u32, u32> =
+            self.snapshot_from_async_map().into_iter().collect();
+        let live_from_async: std::collections::BTreeSet<u32> = fa_map.keys().copied().collect();
         let guard_map: std::collections::HashMap<usize, u32> = live_guards
             .iter()
             .enumerate()
@@ -2540,10 +2890,14 @@ impl Interp {
                                 ReactionKind::AsyncGeneratorAwait(i) => (4, i.0, 0),
                                 ReactionKind::AsyncGeneratorYield(i) => (5, i.0, 0),
                                 ReactionKind::AsyncGeneratorReturn(i) => (6, i.0, 0),
-                                ReactionKind::FromAsyncNext(fa) => (7, fa, 0),
-                                ReactionKind::FromAsyncElem(fa) => (8, fa, 0),
-                                ReactionKind::FromAsyncMap(fa) => (9, fa, 0),
-                                ReactionKind::FromAsyncClose(fa) => (10, fa, 0),
+                                // Remapped onto the compacted arena, exactly as
+                                // `Combine` is: the writer emits live entries
+                                // densely, so a raw index would point at the
+                                // wrong row (architecture finding F127).
+                                ReactionKind::FromAsyncNext(fa) => (7, fa_map[&fa], 0),
+                                ReactionKind::FromAsyncElem(fa) => (8, fa_map[&fa], 0),
+                                ReactionKind::FromAsyncMap(fa) => (9, fa_map[&fa], 0),
+                                ReactionKind::FromAsyncClose(fa) => (10, fa_map[&fa], 0),
                                 ReactionKind::FinallyAwait(rejected) => (11, rejected as u32, 0),
                             };
                             PromiseReactionRow {
@@ -2593,6 +2947,39 @@ impl Interp {
                         reject: c.reject,
                         remaining: c.remaining,
                         results: c.results.0,
+                    }
+                })
+                .collect(),
+            from_async: live_from_async
+                .iter()
+                .map(|&old| {
+                    let f = &self.from_async[old as usize];
+                    let mut flags = 0u8;
+                    if f.target_is_array {
+                        flags |= FromAsyncRow::TARGET_IS_ARRAY;
+                    }
+                    if f.mapping {
+                        flags |= FromAsyncRow::MAPPING;
+                    }
+                    if f.settled {
+                        flags |= FromAsyncRow::SETTLED;
+                    }
+                    if f.sync_wrapped {
+                        flags |= FromAsyncRow::SYNC_WRAPPED;
+                    }
+                    FromAsyncRow {
+                        resolve: f.resolve,
+                        reject: f.reject,
+                        target: f.target.0,
+                        k: f.k,
+                        len: f.len,
+                        mapfn: f.mapfn,
+                        this_arg: f.this_arg,
+                        iterator: f.iterator,
+                        next_method: f.next_method,
+                        array_like: f.array_like,
+                        close_error: f.close_error,
+                        flags,
                     }
                 })
                 .collect(),
@@ -2832,9 +3219,25 @@ impl Interp {
                             comb_pending[r.a as usize] += 1;
                             ReactionKind::CombineDirect(r.a, r.b)
                         }
-                        // The `FromAsync*` kinds name machinery no atom
-                        // carries; the decoder refuses them and so does
-                        // this verb — as it does the crafted shapes above.
+                        // The four `Array.fromAsync` steps, carried in `ASYN`
+                        // since format 24 (architecture finding F127). Each
+                        // indexes the accumulation arena and, like the other
+                        // native reactions, carries no callback slots — a row
+                        // that carries any is crafted.
+                        7..=10
+                            if (r.a as usize) < snap.from_async.len()
+                                && r.b == 0
+                                && [r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
+                                    .iter()
+                                    .all(|slot| slot.kind == Kind::Undefined) =>
+                        {
+                            match r.kind {
+                                7 => ReactionKind::FromAsyncNext(r.a),
+                                8 => ReactionKind::FromAsyncElem(r.a),
+                                9 => ReactionKind::FromAsyncMap(r.a),
+                                _ => ReactionKind::FromAsyncClose(r.a),
+                            }
+                        }
                         _ => return None,
                     };
                     Some(PromiseReaction {
@@ -3124,6 +3527,31 @@ impl Interp {
                 results: crate::value::SlotIndex(c.results),
             })
             .collect();
+        // The `Array.fromAsync` arena, restored densely in the order the
+        // writer compacted it, so the remapped reaction payloads index it
+        // (architecture finding F127). Rebuilding it EMPTY was sound only
+        // while the persist gate refused every machine holding one.
+        *self.from_async = snap
+            .from_async
+            .iter()
+            .map(|f| FromAsyncData {
+                resolve: f.resolve,
+                reject: f.reject,
+                target: crate::value::SlotIndex(f.target),
+                target_is_array: f.has(FromAsyncRow::TARGET_IS_ARRAY),
+                k: f.k,
+                mapfn: f.mapfn,
+                mapping: f.has(FromAsyncRow::MAPPING),
+                this_arg: f.this_arg,
+                settled: f.has(FromAsyncRow::SETTLED),
+                iterator: f.iterator,
+                next_method: f.next_method,
+                sync_wrapped: f.has(FromAsyncRow::SYNC_WRAPPED),
+                array_like: f.array_like,
+                len: f.len,
+                close_error: f.close_error,
+            })
+            .collect();
         Ok(())
     }
 
@@ -3149,6 +3577,18 @@ impl Interp {
                     ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
                         self.combinators.get(ci as usize).is_some_and(|c| {
                             self.is_callable_value(c.resolve) && self.is_callable_value(c.reject)
+                        })
+                    }
+                    // The same shape for the `Array.fromAsync` arena: the
+                    // reaction indexes a row, and that row's result
+                    // capability must be callable or the next step settles
+                    // nothing (architecture finding F127).
+                    ReactionKind::FromAsyncNext(fa)
+                    | ReactionKind::FromAsyncElem(fa)
+                    | ReactionKind::FromAsyncMap(fa)
+                    | ReactionKind::FromAsyncClose(fa) => {
+                        self.from_async.get(fa as usize).is_some_and(|f| {
+                            self.is_callable_value(f.resolve) && self.is_callable_value(f.reject)
                         })
                     }
                     _ => true,
@@ -3195,6 +3635,40 @@ impl Interp {
                 }
             }
         }
+        // The `Array.fromAsync` flags that make a CLAIM ABOUT ANOTHER TABLE,
+        // checked here because that is where every table is in place
+        // (architecture finding F127). A carried flag is a claim, not
+        // evidence, and each of these two decides a branch that assumes its
+        // own table agrees:
+        //
+        // `target_is_array` sends the accumulator through the dense store,
+        // which unwraps `self.arrays` — so a bit set over a non-Array target
+        // is an engine panic on the next crank, reachable from one flipped
+        // byte in a store. It is DERIVED at both mint sites
+        // (`self.arrays.contains_key(&target)`), so the honest value is
+        // recomputable and a disagreement is corruption by definition.
+        //
+        // `sync_wrapped` says the iterator is a sync one wrapped as async,
+        // which decides whether a step's result is awaited or read directly.
+        // Set over a genuinely async iterator, the resumed accumulation reads
+        // a promise as a `{value, done}` step and walks forever until the
+        // meter stops it. That one is not derivable from the row, so the
+        // check is the weaker one it admits: a flag about an iterator is
+        // nonsense without an iterator, which the decoder already refuses —
+        // this is the in-memory twin of that rule, for the store path.
+        //
+        // The third clause is the in-memory twin of a rule the container
+        // decoder already enforces: an iterator with no `next` method has
+        // nothing to step, so the accumulation's result promise would never
+        // settle. The store path does not run that decoder, and a silent
+        // permanent stall is the one outcome worse than a refusal, so the
+        // rule is stated on both sides rather than on the container alone.
+        let from_async_valid = self.from_async.iter().all(|f| {
+            let iterated = f.iterator.kind == Kind::Reference;
+            f.target_is_array == self.arrays.contains_key(&f.target)
+                && (!f.sync_wrapped || iterated)
+                && (!iterated || f.next_method.kind == Kind::Reference)
+        });
         // A request's capability is an ordinary resolving pair whose
         // promise is the request's own result promise; the awaited
         // promise an active request waits on may be unreachable (a
@@ -3221,7 +3695,7 @@ impl Interp {
                     .as_ref()
                     .is_none_or(|f| self.functions.contains_key(&f.cur_func))
         });
-        reactions_valid && generators_valid && self.async_instances.iter().all(|(owner, a)| {
+        reactions_valid && generators_valid && from_async_valid && self.async_instances.iter().all(|(owner, a)| {
             let function = |slot: Slot| match slot.value {
                 Payload::Reference(f) => self.promise_functions.get(&f),
                 _ => None,
@@ -3502,6 +3976,8 @@ impl Interp {
         install(&mut self.segments, t.segments);
         install(&mut self.segment_iterators, t.segment_iterators);
         install(&mut self.date_time_formats, t.date_time_formats);
+        // Restored `%Segments%` objects keep their inputs and segment lists.
+        self.rederive_side_reserved();
         Ok(())
     }
 
@@ -3510,7 +3986,7 @@ impl Interp {
     /// Free-listed owners are skipped (a swept cursor's row names
     /// nothing, and its collection may be gone). Two normalizations
     /// at the boundary (see [`IteratorRow`]): a collection cursor's
-    /// physical entry index becomes the live-entry ORDINAL — matching
+    /// position (an entry sequence number) becomes the live-entry ORDINAL — matching
     /// the `COLL` row's tombstone compaction — and a stale cursor
     /// (its collection's clear-generation moved) emits `done: true`,
     /// exactly the latch its next `next()` would have set.
@@ -3525,10 +4001,10 @@ impl Interp {
                     continue;
                 };
                 let stale = c.generation() != st.generation;
-                let ordinal = c.entries()[..(st.index as usize).min(c.entries().len())]
-                    .iter()
-                    .filter(|e| e.is_some())
-                    .count() as u32;
+                let ordinal = c.live_ordinal(&crate::bulk::CollCursor {
+                    seq: st.coll_seq,
+                    hint: st.index,
+                });
                 (ordinal, st.done || stale)
             } else {
                 (st.index, st.done)
@@ -3553,9 +4029,11 @@ impl Interp {
     /// instance with no restored collection (its `next()` indexes the
     /// table unconditionally) or a cursor past the live-entry list, a
     /// string cursor past its text or splitting a UTF-16 unit, or a
-    /// RegExp String Iterator with invalid mode bits or malformed UTF-16, or
-    /// a for-in cursor past its key list or holding a key id outside the
-    /// restored name table.
+    /// RegExp String Iterator with invalid mode bits or malformed UTF-16, a
+    /// lazy Iterator helper missing its underlying iterator or its holder
+    /// array, or a for-in cursor without the level it steps or its result,
+    /// past its key list, or holding a key id outside the restored name
+    /// table.
     pub(super) fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> Result<(), RestoreError> {
         const ROW: &str = "Iterators";
         self.validate_restore_owners(rows.iter().map(|row| row.owner), ROW)?;
@@ -3583,13 +4061,46 @@ impl Interp {
         }
 
         for r in &rows {
-            if r.kind > 9 {
+            if r.kind > 15 {
                 return Err(RestoreError {
                     row: ROW,
                     reason: "malformed iterator state",
                 });
             }
             match r.kind {
+                // The five lazy Iterator helpers. `iterable` is the underlying
+                // iterator and `result` the holder array carrying the captured
+                // `next`, the mapper/predicate or remaining count, and
+                // flatMap's live inner iterator; `index` is the callback
+                // counter and `done` the exhaustion latch, both unconstrained.
+                // The re-entrancy latch rides `generation`, which the row does
+                // not carry: a snapshot is only taken at a quiescent point,
+                // where no helper is mid-step, so restore's zero is always the
+                // live value. `Iterator.concat` (kind 15) has no underlying
+                // iterator: its `iterable` is the internal Array of
+                // `(item, open method)` pairs, which must really be one.
+                10..=15 => {
+                    // A spent helper has released its underlying iterator, so
+                    // `iterable` is NULL on a DONE row and must not be on one
+                    // that can still yield. The holder array survives either
+                    // way, emptied by `helper_finish`.
+                    if (!r.done && r.iterable == crate::value::SlotIndex::NULL.0)
+                        || r.result == crate::value::SlotIndex::NULL.0
+                        || !r.enum_keys.is_empty()
+                        || !r.str_bytes.is_empty()
+                        || !self.arrays.contains_key(&crate::value::SlotIndex(r.result))
+                        || (r.kind == 15
+                            && !r.done
+                            && !self
+                                .arrays
+                                .contains_key(&crate::value::SlotIndex(r.iterable)))
+                    {
+                        return Err(RestoreError {
+                            row: ROW,
+                            reason: "malformed iterator state",
+                        });
+                    }
+                }
                 5..=7 => {
                     let Some(c) = self.collections.get(&crate::value::SlotIndex(r.iterable)) else {
                         return Err(RestoreError {
@@ -3597,7 +4108,7 @@ impl Interp {
                             reason: "malformed iterator state",
                         });
                     };
-                    if r.index as usize > c.entries().len() {
+                    if r.index as usize > c.physical_len() {
                         return Err(RestoreError {
                             row: ROW,
                             reason: "malformed iterator state",
@@ -3613,7 +4124,14 @@ impl Interp {
                     }
                 }
                 3 => {
-                    if r.index as usize > r.enum_keys.len() {
+                    // The level being stepped is always an object: even
+                    // `for (k in null)` names `%Object.prototype%`, and
+                    // `enumerator_next` reads its own properties and writes
+                    // its result.
+                    if r.iterable == crate::value::SlotIndex::NULL.0
+                        || r.result == crate::value::SlotIndex::NULL.0
+                        || r.index as usize > r.enum_keys.len()
+                    {
                         return Err(RestoreError {
                             row: ROW,
                             reason: "malformed iterator state",
@@ -3669,11 +4187,20 @@ impl Interp {
                     iterable: crate::value::SlotIndex(r.iterable),
                     index: r.index,
                     kind: r.kind,
+                    // A collection cursor's persisted index is a live-entry
+                    // ordinal, which is the sequence number the restored
+                    // list gives that entry (`CollectionData::restored_cursor`).
+                    coll_seq: if (5..=7).contains(&r.kind) {
+                        u64::from(r.index)
+                    } else {
+                        0
+                    },
                     generation: 0,
                     result: crate::value::SlotIndex(r.result),
                     done: r.done,
                     enum_keys: std::rc::Rc::new(r.enum_keys),
                     str_bytes: std::rc::Rc::new(r.str_bytes),
+                    enum_visited: None,
                 },
             );
         }
@@ -3909,9 +4436,9 @@ impl Interp {
             for (index, value) in items {
                 // Through the counted accessor, like every other restore
                 // insert, so the side-ref page counts the partial collector
-                // reads are rebuilt in lockstep — but UNMETERED: the guest
-                // paid for this store when it built it.
-                self.index_prop_store(owner, index, value);
+                // reads are rebuilt in lockstep — but UNMETERED and
+                // UNCHARGED: the guest paid for this store when it built it.
+                self.index_prop_restore(owner, index, value);
             }
             // Restore the mark itself, after the inserts (which only raise it
             // to the greatest index they carry). A row whose items are all
@@ -3924,7 +4451,7 @@ impl Interp {
             let mut a = crate::bulk::ArrayData::default();
             a.length = length;
             for (index, value) in items {
-                a.insert_item(index, value, &mut self.side_refs);
+                a.restore_item(index, value, &mut self.side_refs);
             }
             self.arrays.insert(crate::value::SlotIndex(owner), a);
         }
@@ -3933,7 +4460,7 @@ impl Interp {
                 .expect("collection kind was validated before restore");
             let mut c = crate::bulk::CollectionData::new(kind, table_length);
             for (key, value) in entries {
-                c.push_entry(key, value, &mut self.side_refs);
+                c.restore_entry(key, value, &mut self.side_refs);
             }
             self.collections.insert(crate::value::SlotIndex(owner), c);
         }
@@ -3942,6 +4469,7 @@ impl Interp {
             self.symbol_registry.insert(key.clone(), desc);
             self.symbol_registry_keys.insert(desc, key);
         }
+        self.rederive_side_reserved();
         Ok(())
     }
 
@@ -3964,6 +4492,23 @@ impl Interp {
             self.environment.global_props.insert(s.id, cur);
             cur = s.next;
         }
+    }
+
+    /// Reconstruct the standalone environment's per-global binding history.
+    ///
+    /// Shared-machine images replace this environment with their serialized
+    /// environment rows, which carry `binding_names` directly. A standalone
+    /// image instead carries the historical numeric name floor. Treating ids
+    /// below that floor as bound is the conservative legacy rule that preserves
+    /// deletion markers; surviving global-property ids cover later bindings.
+    fn rebuild_binding_history(&mut self) {
+        self.environment.binding_names.clear();
+        self.environment
+            .binding_names
+            .extend((1..=self.installed_names_len).map(|id| id as u16));
+        self.environment
+            .binding_names
+            .extend(self.environment.global_props.keys().copied());
     }
 
     /// Whether the machine stands at a QUIESCENT crank boundary — the
@@ -4032,6 +4577,30 @@ impl Interp {
         self.chunks.clear_dirty_after_commit(false);
     }
 
+    /// Acknowledge the slot arena's free list as the store now holds it,
+    /// after a successful commit. See
+    /// [`crate::SlotArena::acknowledge_free_list`].
+    pub fn acknowledge_free_list(&mut self) -> crate::FreeListAck {
+        self.slots.acknowledge_free_list()
+    }
+
+    /// The slot arena's free list as it was restored from the store,
+    /// keeping what restore itself popped for the next checkpoint. See
+    /// [`crate::SlotArena::free_list_baseline`].
+    pub fn free_list_baseline(&self) -> crate::FreeListAck {
+        self.slots.free_list_baseline()
+    }
+
+    /// Stop relying on a lazy backing that belongs to another store: fault
+    /// every page and extent in and mark them all unbacked, so nothing is
+    /// evicted and nothing faults from that store again. A store session
+    /// calls this when it binds a machine unbound from an earlier session.
+    /// No-op on a detached machine.
+    pub fn abandon_backing(&mut self) {
+        self.slots.abandon_backing();
+        self.chunks.abandon_backing();
+    }
+
     /// Check the store session's backing authority before committing bytes.
     /// This exposes no authority and does not read or mutate any heap page.
     pub fn check_backing_authority(
@@ -4044,9 +4613,9 @@ impl Interp {
         Ok(())
     }
 
-    /// Acknowledge a commit to the pinned backing and advance its geometry.
-    /// The store adapter must update its page source to the committed state
-    /// first. Only the authority minted with these arenas can authorize this.
+    /// Acknowledge a commit to the pinned backing and advance its geometry,
+    /// after the commit has landed in the store the page source reads. Only
+    /// the authority minted with these arenas can authorize this.
     /// A capability for any other pair is refused before changing metadata.
     pub fn acknowledge_backing_commit(
         &mut self,

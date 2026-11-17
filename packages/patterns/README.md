@@ -56,6 +56,7 @@ M.symbol()        // Matches registered/well-known symbols
 
 // Constrained primitives
 M.nat()           // Non-negative bigint
+M.safeInteger()   // Number that is a safe integer (no NaN, Infinity, or fraction)
 M.gte(5)          // Number >= 5
 M.lte(100)        // Number <= 100
 ```

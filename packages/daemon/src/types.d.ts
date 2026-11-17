@@ -21,6 +21,7 @@ import type {
   TreeEntry,
 } from '@endo/platform/fs/lite/types';
 import type { ContentKind, ContentSourceHint } from './locator.js';
+import type { makeSessionOwner } from './session-owner.js';
 
 // Branded string types for pet names and special names
 declare const PetNameBrand: unique symbol;
@@ -221,6 +222,10 @@ export type GuestFormula = {
   worker: FormulaIdentifier;
   networks: FormulaIdentifier;
   planes: FormulaIdentifier;
+  /** The guest-visible and guest-mutable pin directory (`@pins`). */
+  guestPins?: FormulaIdentifier;
+  /** The host-only pin directory retained by the guest formula. */
+  hostPins?: FormulaIdentifier;
 };
 
 export type LeastAuthorityFormula = {
@@ -406,6 +411,50 @@ export interface EndoShell {
 
 export type ShellDeferredTaskParams = {
   shellId: FormulaIdentifier;
+};
+
+export type EnvironmentRecipe = {
+  policy: Pick<ShellPolicy, 'allowedCommands' | 'timeoutMs' | 'maxOutputBytes'>;
+  networkPolicy: 'off' | 'public-internet';
+};
+
+export interface EnvironmentAdmin {
+  inspect(): Promise<{
+    phase: 'idle' | 'active' | 'disposed';
+    networkPolicy: 'off' | 'public-internet';
+    interrupted: boolean;
+    active: boolean;
+  }>;
+  stop(): Promise<void>;
+  /**
+   * Operator attestation after independently excluding a lost owner's admission
+   * and proving its native producers/resources stopped. Only cold interrupted
+   * environments with no acquired controller accept this. Records the evidence
+   * before reopening admission; does not perform or establish native cleanup.
+   */
+  acknowledgeExternalCleanup(note: string): Promise<void>;
+  setNetworkPolicy(policy: 'off' | 'public-internet'): Promise<void>;
+  dispose(): Promise<void>;
+  help(): string;
+}
+
+export type EnvironmentKit = { shell: EndoShell; admin: EnvironmentAdmin };
+export type EnvironmentFormula = {
+  type: 'environment';
+  runner: FormulaIdentifier;
+  workspace: FormulaIdentifier;
+  state: FormulaIdentifier;
+  recipe: EnvironmentRecipe;
+};
+export type EnvironmentFacetFormula = {
+  type: 'environment-facet';
+  environment: FormulaIdentifier;
+  facet: 'shell' | 'admin';
+};
+export type EnvironmentDeferredTaskParams = {
+  environmentId: FormulaIdentifier;
+  shellId: FormulaIdentifier;
+  adminId: FormulaIdentifier;
 };
 
 /**
@@ -644,9 +693,46 @@ export type ChannelMessage = {
 
 export type InvitationFormula = {
   type: 'invitation';
-  hostAgent: FormulaIdentifier;
-  hostHandle: FormulaIdentifier;
+  /**
+   * The inviting `EndoAgent` — an `EndoHost` (via `EndoHost.invite`) or an
+   * `EndoGuest` (via `EndoGuest.invite`). Network mediation is not drawn from
+   * this agent; the daemon supplies it internally (see `makeInvitation`), so a
+   * guest inviter gains no network authority.
+   *
+   * Optional because a record minted before the
+   * `hostAgent`/`hostHandle` -> `invitingAgent`/`invitingHandle` rename
+   * carries only the deprecated {@link hostAgent}; every read coerces
+   * `invitingAgent ?? hostAgent`, so an on-disk record may satisfy this shape
+   * through the fallback field alone.
+   */
+  invitingAgent?: FormulaIdentifier;
+  /**
+   * The inviting agent's handle, which the locator's `from` names. Optional
+   * for the same legacy reason as {@link invitingAgent}; reads coerce
+   * `invitingHandle ?? hostHandle`.
+   */
+  invitingHandle?: FormulaIdentifier;
+  /**
+   * The pet-name path in the inviting agent's own store that retains this
+   * pending invitation. Deliberately NOT renamed to `correspondentName`
+   * alongside the `EndoHost.accept`/`EndoGuest.accept` and CLI rename: this is a
+   * persisted on-disk field, so renaming it would be a stored-record schema
+   * change. The concept it names is the correspondent's pet name.
+   */
   guestName: NameOrPath;
+  /**
+   * @deprecated Legacy field name for {@link invitingAgent}, persisted by
+   * records minted before the `hostAgent`/`hostHandle` ->
+   * `invitingAgent`/`invitingHandle` rename, and the fallback source reads
+   * coerce from. Read-only: newly minted invitations never set it, but reads
+   * coerce it so existing production databases need not be purged.
+   */
+  hostAgent?: FormulaIdentifier;
+  /**
+   * @deprecated Legacy field name for {@link invitingHandle}. See
+   * {@link hostAgent}.
+   */
+  hostHandle?: FormulaIdentifier;
 };
 
 export type InvitationDeferredTaskParams = {
@@ -676,6 +762,8 @@ export type Formula =
   | ScratchMountFormula
   | GitFormula
   | ShellFormula
+  | EnvironmentFormula
+  | EnvironmentFacetFormula
   | HttpClientFormula
   | GitCredentialFormula
   | GitRemoteFormula
@@ -798,6 +886,12 @@ export interface Invitation {
     hostNameFromGuest?: string,
   ): Promise<{ syncedStoreNumber: FormulaNumber }>;
   locate(): Promise<string>;
+  /**
+   * Revoke this pending, unaccepted invitation through the object itself.
+   * Single-use: a no-op once the invitation has been accepted, and it revokes
+   * exactly this invitation, leaving any sibling invitation redeemable.
+   */
+  cancel(reason?: Error): Promise<void>;
 }
 
 export interface Topic<
@@ -818,6 +912,8 @@ export interface Context {
    * The identifier for the associated formula.
    */
   id: FormulaIdentifier;
+  /** Refuse further acquisition through this original context after cancellation. */
+  assertActive: () => void;
   /**
    * Cancel the value, preparing it for garbage collection. Cancellation
    * propagates to all values that depend on this value.
@@ -959,6 +1055,13 @@ export interface NameHub {
     locator: string,
   ): AsyncGenerator<LocatorNameChange, undefined, undefined>;
   list(...petNamePath: string[]): Promise<Array<Name>>;
+  /**
+   * Return a snapshot of the values at the directory's immediate pet names.
+   * The names and their values are captured in one directory turn, so a
+   * concurrent mutation cannot shift the association between enumeration and
+   * lookup.
+   */
+  listValues(): Promise<Array<unknown>>;
   listIdentifiers(...petNamePath: string[]): Promise<Array<string>>;
   listLocators(...petNamePath: string[]): Promise<Record<string, string>>;
   followNameChanges(
@@ -974,11 +1077,68 @@ export interface NameHub {
   copy(fromPetName: string[], toPetName: string[]): Promise<void>;
 }
 
+export interface ReadableNameHub {
+  help(method?: string): string;
+  has(...petNamePath: string[]): Promise<boolean>;
+  list(...petNamePath: string[]): Promise<Array<Name>>;
+  /**
+   * Resolve a pet-name path to the value named at it.
+   *
+   * Attenuation is SHALLOW: only this hub's own mutators (`storeIdentifier`,
+   * `remove`, `makeDirectory`, `writeText`, ...) are withheld. A path that
+   * resolves to a nested capability-bearing value — a sub-`EndoDirectory`, an
+   * agent handle, a worker — is returned as the live, fully-authorized object,
+   * NOT a further read-only view. A holder of the read-only hub can therefore
+   * reach and mutate every writable capability in the transitively reachable
+   * name graph, not merely one literal level down. In particular, if the
+   * backing directory names itself, an ancestor, or the grantor's own agent,
+   * `lookup` of that name hands back the fully writable hub and the narrowing
+   * is void — so this attenuation is only meaningful over a directory whose
+   * reachable graph holds no writable path back to the grantor. Callers that
+   * need a recursively read-only surface must re-attenuate the result
+   * themselves (or arrange that the backing directory contains no nested
+   * writable capabilities). Contrast `EndoMount.readOnly()`, whose
+   * {@link ReadableTreeView} narrowing is recursive through nested lookups.
+   */
+  lookup(petNamePath: string | readonly string[]): Promise<unknown>;
+  /** See {@link ReadableNameHub.lookup}: attenuation is shallow, not recursive. */
+  maybeLookup(
+    petNamePath: string | readonly string[],
+  ): Promise<unknown | undefined>;
+}
+
 export interface EndoDirectory extends NameHub {
   makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
   readText(petNamePath: string | string[]): Promise<string>;
   maybeReadText(petNamePath: string | string[]): Promise<string | undefined>;
   writeText(petNamePath: string | string[], content: string): Promise<void>;
+  /**
+   * Mint a read-only view of this directory as a {@link ReadableNameHub}. The
+   * attenuation is SHALLOW — it withholds this directory's mutators but does
+   * not recursively narrow values returned by `lookup`/`maybeLookup`; see
+   * {@link ReadableNameHub.lookup}. A view of a directory that contains nested
+   * writable directories still hands those nested directories out live.
+   *
+   * `async` (returns a `Promise<ReadableNameHub>`), unlike the synchronous,
+   * recursively-narrowing `EndoMount.readOnly()` / `EndoMountFile.readOnly()`:
+   * a directory is a live `NameHub` that can name heterogeneous capabilities
+   * (workers, agents, sub-directories), so a recursive structural narrowing of
+   * the kind a content-addressed mount tree admits is not generally possible,
+   * and the mint forwards through eventual-send. A caller feature-detecting
+   * `readOnly` across the `EndoMount*` / `EndoDirectory` family must not assume
+   * a uniform sync/recursive contract; `await` erases the sync/async tell.
+   *
+   * Optional at the type level even though the runtime `DirectoryInterface`
+   * guard (`interfaces.js`) requires it unconditionally: a standalone
+   * `EndoDirectory` (and the `mailHub`/`messageHub` directories) always
+   * implements it, but `EndoAgent extends EndoDirectory` while the agent
+   * exos (`EndoGuest`/`EndoHost`) do not yet carry `readOnly` in their
+   * guards, so `E(host).readOnly()` rejects at runtime today. The `?` keeps
+   * that gap type-honest for agents. Whether to implement `readOnly` on
+   * agents (or move it off the base interface) is decided by the slice of
+   * #1125 that first consumes it.
+   */
+  readOnly?(): Promise<ReadableNameHub>;
 }
 
 /**
@@ -1113,6 +1273,15 @@ export type MakeDirectoryNode = (
   ) => Promise<ContentSourceHint[]>,
 ) => EndoDirectory & ContentLocatable;
 
+/** The answer of `submitOnce`. */
+export type SubmitOnceResult = {
+  /** The message id of the value message that answers the form. */
+  messageId: FormulaNumber;
+  attempt: string;
+  /** Whether this call is the one that sent it. */
+  first: boolean;
+};
+
 export interface Mail {
   handle: () => Handle;
   // Partial inheritance from StoreController:
@@ -1170,6 +1339,18 @@ export interface Mail {
     guestHandleId: string;
   };
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
+  /**
+   * Submit values for a form at most once per `attempt`. The attempt is
+   * kept in this mailbox, durably, before the answer is delivered, and marked
+   * answered once the form's sender has received it. A call with a known
+   * attempt sends no new answer and returns the first call's message id.
+   * Attempts are kept until the form is dismissed, at most 64 per form.
+   */
+  submitOnce(
+    messageNumber: bigint,
+    values: Record<string, unknown>,
+    attempt: string,
+  ): Promise<SubmitOnceResult>;
   sendValue(
     messageNumber: bigint,
     petNameOrPath: string | string[],
@@ -1232,14 +1413,29 @@ export interface EndoReadable {
   ): Promise<StreamNode<string, undefined>>;
   text(): Promise<string>;
   json(): Promise<unknown>;
-  getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  sha256(): Promise<string>;
+  size(): Promise<bigint>;
+  bytes(): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): select the
+   * half-open byte interval `[start, end)` relative to the receiver and return
+   * a new `EndoReadable` with exactly the authority to read it. Ranges compose
+   * and construction reads no bytes, so it resolves synchronously.
+   */
+  byteRange(start: bigint, end: bigint): EndoReadable;
+  /**
+   * Select lines `[startLine, endLine)` (0-based, end-exclusive, LF boundaries,
+   * CRLF preserved) of the receiver's current bytes and return the byte slice
+   * as an `EndoReadable`. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<EndoReadable>;
   help(method?: string): string;
 }
 
 export interface EndoReadableTree {
   sha256(): string;
-  getInfo(): Promise<BlobInfo>;
+  size(): Promise<bigint>;
   has(...pathSegments: string[]): Promise<boolean>;
   list(...pathSegments: string[]): Promise<readonly string[]>;
   lookup(
@@ -1265,8 +1461,7 @@ export type MountNameChange =
   { add: string; type: 'file' | 'directory' } | { remove: string };
 
 /**
- * The `{ algorithm, hash, size }` content-address triple returned by a rich
- * blob's `getInfo()`. `hash` is base64; `algorithm` is `'sha256'`.
+ * A content address and byte length used internally by CAS compositions.
  */
 export type BlobInfo = {
   algorithm: string;
@@ -1285,8 +1480,22 @@ export interface ReadableBlobView {
   ): Promise<StreamNode<string, undefined>>;
   text(): Promise<string>;
   json(): Promise<unknown>;
-  getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  sha256(): Promise<string>;
+  size(): Promise<bigint>;
+  bytes(): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): a new
+   * read-only `ReadableBlob` view over the selected byte interval of the live
+   * file. Construction reads no bytes, so it resolves synchronously.
+   */
+  byteRange(start: bigint, end: bigint): ReadableBlobView;
+  /**
+   * A read-only `ReadableBlob` view over the byte slice of lines
+   * `[startLine, endLine)` (0-based, end-exclusive, LF boundaries) of the live
+   * file's current bytes. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<ReadableBlobView>;
   help(method?: string): string;
 }
 
@@ -1334,8 +1543,22 @@ export interface EndoMountFile {
     synPromise: ERef<StreamNode<Passable, Passable>>,
   ): Promise<StreamNode<string, undefined>>;
   json(): Promise<unknown>;
-  getInfo(): Promise<BlobInfo>;
-  fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;
+  sha256(): Promise<string>;
+  size(): Promise<bigint>;
+  bytes(): Promise<PassableBytesReader>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): a
+   * read-only `ReadableBlob` view over the selected byte interval of the live
+   * file. Construction reads no bytes, so it resolves synchronously.
+   */
+  byteRange(start: bigint, end: bigint): ReadableBlobView;
+  /**
+   * A read-only `ReadableBlob` view over the byte slice of lines
+   * `[startLine, endLine)` (0-based, end-exclusive, LF boundaries) of the live
+   * file's current bytes. It reads bytes to find LF boundaries, so it resolves
+   * asynchronously.
+   */
+  textRange(startLine: number, endLine: number): Promise<ReadableBlobView>;
   writeText(content: string): Promise<void>;
   append(content: string): Promise<void>;
   writeBytes(readableRef: ERef<PassableBytesReader>): Promise<void>;
@@ -1469,9 +1692,13 @@ export interface EndoMountControl {
 
 export interface EndoWorker {}
 
-export type MakeHostOrGuestOptions = {
+export type MakeAgentOptions = {
   agentName?: string | string[];
   introducedNames?: Record<string, string>;
+  /** A caller-selected directory to expose to the new agent as `@pins`. */
+  pins?: EndoDirectory;
+  /** A caller-selected directory to expose as `@nets`. */
+  networks?: EndoDirectory;
 };
 
 export type MakeCapletOptions = {
@@ -1581,7 +1808,47 @@ export interface EndoGuest extends EndoAgent {
     petName: string | string[],
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
+  /**
+   * Submit values for a form at most once per `attempt`. The attempt is
+   * kept in this mailbox, durably, before the answer is delivered, and marked
+   * answered once the form's sender has received it. A call with a known
+   * attempt sends no new answer and returns the first call's message id.
+   * Attempts are kept until the form is dismissed, at most 64 per form.
+   */
+  submitOnce(
+    messageNumber: bigint,
+    values: Record<string, unknown>,
+    attempt: string,
+  ): Promise<SubmitOnceResult>;
   sendValue: Mail['sendValue'];
+  /**
+   * Mint a single-use invitation whose locator's `from` names this guest's
+   * handle, so an acceptor binds this guest (not the top host) under its chosen
+   * pet name. Acceptance stores the acceptor's handle in this guest's pet store
+   * under `correspondentName`. Network mediation runs through an internal
+   * daemon broker; this call confers no `getPeerInfo`/`addPeerInfo`, host facet,
+   * peer enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
+   * implementation.
+   */
+  invite(correspondentName: string | string[]): Promise<Invitation>;
+  /**
+   * Redeem an invitation locator into THIS guest, binding the relationship to
+   * the calling guest — no replacement guest is minted on the acceptor side.
+   * The guest accepts *as itself*: its `@self` handle is the identity presented
+   * to the inviter, and the inviter's handle is bound reciprocally under
+   * `correspondentName` (a pet name this guest chooses; the inviter chooses its
+   * own independently, so the two may differ). A path nests the binding under a
+   * directory that must already exist. Shares `EndoHost.accept`'s
+   * implementation; confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
+   * enumeration, or outbound-dialing surface. Redeeming a genuine invitation
+   * registers the inviter's daemon and agent key additively only (never
+   * redirecting an existing route), with the agent-key write deferred until the
+   * invitation is proven.
+   */
+  accept(
+    invitationLocator: string,
+    correspondentName: string | string[],
+  ): Promise<void>;
 }
 
 export type SecretState = 'active' | 'revoked';
@@ -1658,6 +1925,12 @@ export interface SecretCatalogEntry {
 
 export interface SecretCatalog {
   list(): Promise<SecretCatalogEntry[]>;
+  /**
+   * Select administration by an exact read facet from this secret manager.
+   * Requires catalog authority; foreign or wrapped facets are refused.
+   * Revoked records remain administrable, but deleted records are refused.
+   */
+  adminFor(blob: SecretBlob): Promise<SecretAdmin>;
 }
 
 export type SecretAuditEvent = {
@@ -1686,6 +1959,21 @@ export interface SecretManagerDirectory {
 export type FarEndoGuest = FarRef<EndoGuest>;
 
 export interface EndoHost extends EndoAgent {
+  /**
+   * Provide a daemon-local administrative owner for a private directory.
+   * Creates missing directory parents; refuses a changed retained binding.
+   * Disposable record/client capabilities are not exported to the caller.
+   * Another host cannot claim the same directory in this daemon incarnation.
+   * A revived host formula also cannot take over its earlier incarnation's
+   * claim; cancellation does not prove that admitted cleanup has drained.
+   * Owners and their client forwarding facets are fenced when this host or
+   * the original directory incarnation is cancelled; that fence is not native
+   * cleanup proof.
+   */
+  provideSessionOwner(
+    recordsPath: NameOrPath,
+    controllerSpecifier?: string,
+  ): Promise<ReturnType<typeof makeSessionOwner>>;
   form(
     recipientNameOrPath: string | string[],
     description: string,
@@ -1723,7 +2011,8 @@ export interface EndoHost extends EndoAgent {
    * read-write parent may still be narrowed to a read-only child.
    */
   provideSubMount(
-    mountName: string | string[],
+    /** The parent by pet name, or the daemon-minted mount capability itself. */
+    mountName: string | string[] | EndoMount,
     subpath: string[],
     newName: string | string[],
     opts?: { readOnly?: boolean },
@@ -1761,6 +2050,18 @@ export interface EndoHost extends EndoAgent {
     petName: string | string[],
     policy: ShellPolicy,
   ): Promise<EndoShell>;
+  /**
+   * Capture exact local or remote runner/workspace dependencies. Passive
+   * restoration never starts native work. Retain the admin root until explicit
+   * disposal succeeds; dropping roots does not implement environment GC.
+   */
+  provideEnvironment(
+    runner: object,
+    workspace: EndoMount,
+    adminName: NameOrPath,
+    shellName: NameOrPath,
+    recipe: EnvironmentRecipe,
+  ): Promise<EnvironmentKit>;
   /**
    * Mint a confined outbound-HTTP `HttpClient`, persist its formula, and bind
    * the use-facing client to `petName`. Unlike `provideShell` / `provideGit`
@@ -1876,13 +2177,15 @@ export interface EndoHost extends EndoAgent {
   provideHostPath(cap: unknown): Promise<string>;
   provideGuest(
     petName?: string | string[],
-    opts?: MakeHostOrGuestOptions,
+    opts?: MakeAgentOptions,
   ): Promise<EndoGuest>;
   provideHost(
     petName?: string | string[],
-    opts?: MakeHostOrGuestOptions,
+    opts?: MakeAgentOptions,
   ): Promise<EndoHost>;
   makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
+  /** Create a directory without returning its collectible capability to the caller. */
+  createDirectory(petNamePath: string | string[]): Promise<void>;
   provideWorker(petNamePath: string | string[]): Promise<EndoWorker>;
   evaluate(
     workerPetName: string | string[] | undefined,
@@ -1951,10 +2254,10 @@ export interface EndoHost extends EndoAgent {
     locator: string,
     petNameOrPath: string | string[],
   ): Promise<void>;
-  invite(guestName: string | string[]): Promise<Invitation>;
+  invite(correspondentName: string | string[]): Promise<Invitation>;
   accept(
     invitationLocator: string,
-    guestName: string | string[],
+    correspondentName: string | string[],
   ): Promise<void>;
   endow(
     messageNumber: bigint,
@@ -1963,6 +2266,18 @@ export interface EndoHost extends EndoAgent {
     resultName?: string | string[],
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
+  /**
+   * Submit values for a form at most once per `attempt`. The attempt is
+   * kept in this mailbox, durably, before the answer is delivered, and marked
+   * answered once the form's sender has received it. A call with a known
+   * attempt sends no new answer and returns the first call's message id.
+   * Attempts are kept until the form is dismissed, at most 64 per form.
+   */
+  submitOnce(
+    messageNumber: bigint,
+    values: Record<string, unknown>,
+    attempt: string,
+  ): Promise<SubmitOnceResult>;
   sendValue: Mail['sendValue'];
   /**
    * Returns the privileged read-only diagnostics facet: formula
@@ -1979,6 +2294,17 @@ export interface EndoHost extends EndoAgent {
    * `EndoInspector` already denotes the per-formula reference walker.)
    */
   diagnostics(): Promise<EndoDiagnostics>;
+  /**
+   * Read the stored construction environment of a local make-unconfined,
+   * make-archive, or make-from-tree formula without reviving it.
+   * Returns an empty record when the supported formula has no stored env.
+   * Rejects other formula types and cross-peer identifiers.
+   * Values may contain credentials: this method is available only on EndoHost,
+   * not on guests, diagnostics, or ordinary formula inspection records.
+   */
+  getFormulaEnvironment(
+    identifier: FormulaIdentifier,
+  ): Promise<Record<string, string>>;
   /**
    * Snapshot every retention path from a GC root to the target,
    * identified by an endo:// locator. Pet-store edges along the
@@ -2336,6 +2662,15 @@ export type FilePowers = {
   // Node powers omit it. Declared here so the XS factory's return value
   // structurally satisfies FilePowers without an excess-property error.
   readLink?: (path: string) => Promise<string | undefined>;
+  /**
+   * Optional platform-native search engine. When present, `provideSearch`
+   * (`@endo/platform/fs/search`) uses it verbatim in place of the normative JS
+   * engine, and the mount's `glorp` dispatches to the engine's own `glorp`
+   * member for a single fused enumerate-and-scan pass. Structurally optional so
+   * the Node powers (which
+   * rely on the JS engine) satisfy `FilePowers` without it.
+   */
+  search?: import('@endo/platform/fs/search.types').Search;
   pathIdentity: (path: string) => Promise<string>;
   statPath: (path: string) => Promise<{
     kind: 'file' | 'directory' | 'symlink';
@@ -2578,6 +2913,7 @@ export type DaemonicPowers = {
 export type FormulateResult<T> = Promise<{
   id: FormulaIdentifier;
   value: T;
+  context: Context;
 }>;
 
 export type DeferredTask<T extends Record<string, string | string[]>> = (
@@ -2606,6 +2942,8 @@ type FormulateNumberedGuestParams = {
   workerId: FormulaIdentifier;
   networksDirectoryId: FormulaIdentifier;
   planesDirectoryId: FormulaIdentifier;
+  guestPinsDirectoryId: FormulaIdentifier;
+  hostPinsDirectoryId: FormulaIdentifier;
   pinned: FormulaIdentifier[];
 };
 
@@ -2639,6 +2977,8 @@ type FormulateNumberedHostParams = {
 };
 
 export type FormulaValueTypes = {
+  environment: EnvironmentKit;
+  'environment-facet': EndoShell | EnvironmentAdmin;
   directory: EndoDirectory;
   mount: EndoMount;
   network: EndoNetwork;
@@ -2704,12 +3044,9 @@ export interface DaemonCore {
     workerLabel?: string,
   ) => FormulateResult<unknown>;
 
+  /** Transfers one transient pin; release after publication or its failure. */
   formulateDirectory: (
     nodeNumber?: NodeNumber,
-  ) => FormulateResult<EndoDirectory>;
-
-  formulateDirectoryForStore: (
-    storeId: FormulaIdentifier,
   ) => FormulateResult<EndoDirectory>;
 
   getPeerIdForNodeIdentifier: (
@@ -2757,6 +3094,8 @@ export interface DaemonCore {
     hostHandleId: FormulaIdentifier,
     deferredTasks: DeferredTasks<AgentDeferredTaskParams>,
     workerLabel?: string,
+    guestPinsDirectoryId?: FormulaIdentifier,
+    networksDirectoryId?: FormulaIdentifier,
   ) => FormulateResult<EndoGuest>;
 
   /**
@@ -2770,6 +3109,8 @@ export interface DaemonCore {
     hostAgentId: FormulaIdentifier,
     hostHandleId: FormulaIdentifier,
     workerLabel?: string,
+    guestPinsDirectoryId?: FormulaIdentifier,
+    networksDirectoryId?: FormulaIdentifier,
   ) => Promise<Readonly<FormulateNumberedGuestParams>>;
 
   formulateChannel: (
@@ -2809,6 +3150,8 @@ export interface DaemonCore {
   formulateNetworksDirectory: () => FormulateResult<EndoDirectory>;
 
   getFormulaForId: (id: FormulaIdentifier) => Promise<Formula>;
+
+  getActiveContext: (id: FormulaIdentifier) => Context | undefined;
 
   formulateNumberedGuest: (
     identifiers: FormulateNumberedGuestParams,
@@ -2866,6 +3209,12 @@ export interface DaemonCore {
     policy: ShellPolicy,
     deferredTasks: DeferredTasks<ShellDeferredTaskParams>,
   ) => FormulateResult<EndoShell>;
+  formulateEnvironment: (
+    runner: FormulaIdentifier,
+    workspace: FormulaIdentifier,
+    recipe: EnvironmentRecipe,
+    deferredTasks: DeferredTasks<EnvironmentDeferredTaskParams>,
+  ) => FormulateResult<EnvironmentKit>;
 
   formulateHttpClient: (
     policy: HttpClientPolicy,
@@ -2888,11 +3237,28 @@ export interface DaemonCore {
   ) => FormulateResult<GitRemote>;
 
   formulateInvitation: (
-    hostAgentId: FormulaIdentifier,
-    hostHandleId: FormulaIdentifier,
+    invitingAgentId: FormulaIdentifier,
+    invitingHandleId: FormulaIdentifier,
     guestName: NameOrPath,
     deferredTasks: DeferredTasks<InvitationDeferredTaskParams>,
   ) => FormulateResult<Invitation>;
+
+  /**
+   * Acceptor-side invitation redemption shared by `EndoHost.accept` and
+   * `EndoGuest.accept`. Binds the relationship into the calling agent (accepts
+   * as itself; mints no replacement guest), sourcing the accepting agent's
+   * handle addresses from its own `@nets`. Peer registration and remote
+   * agent-key routing stay behind this daemon-core capability, so a guest
+   * acceptor is handed no dialing or peer-registration authority.
+   */
+  acceptInvitation: (args: {
+    invitationLocator: string;
+    acceptingHandleId: FormulaIdentifier;
+    acceptingNetworksDirectoryId: FormulaIdentifier;
+    bindCorrespondent: (
+      remoteHandleLocator: string,
+    ) => Promise<(() => Promise<void>) | undefined>;
+  }) => Promise<void>;
 
   formulateUnconfined: (
     hostAgentId: FormulaIdentifier,
@@ -2904,6 +3270,7 @@ export interface DaemonCore {
     env?: Record<string, string>,
     trustedShims?: string[],
     workerLabel?: string,
+    retainWorker?: (id: FormulaIdentifier, context: Context) => void,
   ) => FormulateResult<unknown>;
 
   formulateWorker: (

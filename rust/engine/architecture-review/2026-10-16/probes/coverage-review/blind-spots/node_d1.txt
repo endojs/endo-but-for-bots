@@ -1,0 +1,16 @@
+../../../probes/coverage-review/blind-spots/d1.js:58
+throw new Error(JSON.stringify(out));
+^
+
+Error: [["lit-proto",true],["lit-proto-null",true],["lit-proto-prim",true],["lit-proto-computed","true,__proto__"],["lit-proto-shorthand","true,__proto__"],["lit-proto-string",true],["lit-proto-method","true,function"],["lit-dup","{\"a\":2}"],["lit-get-then-data","{\"value\":2,\"writable\":true,\"enumerable\":true,\"configurable\":true}"],["lit-data-then-get","function,false,true,true"],["lit-get-set-merge","function,function"],["lit-get-data-set","undefined,function,"],["lit-order","1,2,4294967294,b,a,-1,01,4294967295"],["lit-computed-order","k1,v1,k2,v2"],["lit-computed-tostring","ts,vkk"],["fn-name-symbol","get [s]"],["fn-name-symbol2","[s]|\"\""],["fn-name-class-anon","k,c,function"],["fn-name-numeric","1,1.5"],["fn-name-assign","f,g,\"\""],["fn-name-default-param","a"],["fn-name-destr-default","a,b"],["fn-name-logical-assign","a,b,c"],["fn-name-cover","\"f\""],["method-super","base+o"],["method-not-ctor","TypeError"],["method-no-prototype","false,true,false"],["spread-getters","a|{\"a\":9,\"b\":2}|4|false"],["spread-null","{\"0\":\"a\",\"1\":\"b\"}"],["spread-proxy-order","ownKeys,gopd:a,get:a,gopd:b,get:b"],["rest-destructure","{\"b\":2,\"c\":3}"],["rest-destructure-computed","2{\"a\":1,\"c\":3}"],["rest-destructure-numeric-key","x{\"2\":\"z\",\"01\":\"y\"}"],["rest-proxy-order","get:a,ownKeys,gopd:b,get:b"],["forin-shadow","b"],["forin-delete-during","a,c"],["forin-add-during","a"],["forin-order","0,c,1,2,b,a"],["forin-string","0,1,2"],["forin-ta","0,1,foo"],["forin-proxy","ownKeys,gpo,gopd:a,k:a,gopd:b,k:b"],["forin-symbol-skip","a"],["forin-null",0],["forin-array-holes","0,2,x"],["instanceof-hasInstance","true,false"],["instanceof-bound","true,false"],["instanceof-nonobj","TypeError"],["instanceof-proto-getter-throws","THROW TypeError: Cannot redefine property: prototype"],["instanceof-primitive-lhs","THROW TypeError: Cannot redefine property: prototype"],["in-private","TypeError"],["new-target-arrow",true],["class-field-computed-once","1:1"],["class-accessor-static-order","a,b,sz,init"],["obj-lit-numeric-key-norm","1,16,1000,0.5"]]
+    at Object.<anonymous> (../../../probes/coverage-review/blind-spots/d1.js:58:7)
+    at Module._compile (node:internal/modules/cjs/loader:1706:14)
+    at Object..js (node:internal/modules/cjs/loader:1839:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49
+
+Node.js v22.22.0

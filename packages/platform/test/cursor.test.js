@@ -62,25 +62,20 @@ test('Cursor.close releases the cursor; subsequent reads are empty and idempoten
   t.deepEqual(await E(cursor).read(), { entries: [], atEnd: true });
 });
 
-test('Cursor.stream resumes from current position when reopened', async t => {
+test('Cursor stream termination closes its listing until rewind', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
   await populateDir(root);
   const cursor = await E(root).list();
-
-  // First stream: consume only 2 entries, then close.
-  const it1 = iterateReader(await E(cursor).stream());
-  const { value: first } = await it1.next();
-  const { value: second } = await it1.next();
-  await it1.return();
-
-  // Second stream: should start AFTER the second entry.
-  const remaining = await collectStream(await E(cursor).stream());
-  t.is(remaining.length, 3);
-
-  const all = [first.name, second.name, ...remaining.map(e => e.name)];
-  // Every original entry shows up exactly once.
-  t.deepEqual(all.sort(), ['a', 'b', 'c', 'd', 'e']);
+  t.teardown(() => E(cursor).close());
+  const first = iterateReader(await E(cursor).stream());
+  await first.next();
+  await first.next();
+  await first.return();
+  t.deepEqual(await collectStream(await E(cursor).stream()), []);
+  await E(cursor).rewind();
+  const all = await collectStream(await E(cursor).stream());
+  t.deepEqual(all.map(entry => entry.name).sort(), ['a', 'b', 'c', 'd', 'e']);
 });
 
 test('Cursor.skip advances without reading', async t => {

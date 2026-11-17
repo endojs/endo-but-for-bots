@@ -1,5 +1,7 @@
-//! Read-only source registries for in-tree invariant tests, not execution APIs.
-//! This explicit list does not expose interpreter implementation modules.
+//! Hooks for in-tree invariant tests, not execution APIs: read-only source
+//! registries, and a builder for the reviver's source tree, whose teardown
+//! `tests/teardown_allocation.rs` checks. This explicit list does not expose
+//! interpreter implementation modules.
 pub use crate::interp::boundary::QUIESCENCE_SOURCE;
 pub use crate::interp::gc_tables::{
     BULK_EDGE_SOURCE, CHUNK_WALK_SOURCE, EPHEMERON_SOURCE, FULL_EDGE_SOURCE, FULL_SWEEP_SOURCE,
@@ -8,4 +10,6 @@ pub use crate::interp::gc_tables::{
 };
 pub use crate::interp::persistence::{PERSIST_HOLDER_SOURCE, RUNTIME_KEY_HOLDER_SOURCE};
 pub use crate::interp::roots::ROOT_SOURCE;
-pub use crate::interp::{INTERP_FIELDS, XS_ENVIRONMENT_BEHAVIOR_ID, XS_INTERNAL_FLAG};
+pub use crate::interp::{
+    JsonSourceTree, INTERP_FIELDS, XS_ENVIRONMENT_BEHAVIOR_ID, XS_INTERNAL_FLAG,
+};

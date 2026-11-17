@@ -46,7 +46,9 @@ fn wrapped(code: &str) -> String {
 /// `xs-oracle/csrc/xs_shim.c:373-381`, ironhorse's `create_hardened_globals`
 /// at `ironhorse-vm/src/interp/boot.rs:2086`). `Compartment` is the exception:
 /// XS builds it into every realm (`xsModule.c:207`), so it is the one name
-/// here that no embedder chose.
+/// here that no embedder chose -- and, since
+/// `designs/ironhorse-guest-compartment.md`, ironhorse builds it into every
+/// realm too.
 const CENSUS: &str = "['lockdown','harden','petrify','mutabilities','Compartment',\
     'HandledPromise','assert']\
     .map(function(n){ return n + '=' + (typeof globalThis[n]); }).join(' ') \
@@ -59,12 +61,23 @@ const IRONHORSE_PRISTINE: &[(&str, &str)] = &[
     // `polyfills.js` runs, so NOT the polyfill's deep-freeze `harden`.
     ("harden", "function"),
     ("petrify", "function"),
-    // The two `create_hardened_globals` declines, with an honest
-    // `Halt::NotImplemented` rather than a wrong value.
-    ("lockdown", "undefined"),
+    // Also `create_hardened_globals`'s, since the native `lockdown()` landed
+    // (`ironhorse-vm::Interp::do_lockdown`,
+    // `designs/ironhorse-native-lockdown.md`). Like its two siblings it is
+    // present BEFORE `polyfills.js` and before the boot bundle, which is what
+    // this census is for: attribution, not availability.
+    ("lockdown", "function"),
+    // The one remaining `create_hardened_globals` decline. Unbound, with no
+    // dispatch: a reference is a plain `ReferenceError`. An earlier revision
+    // of this table said both this and `lockdown` declined "with an honest
+    // `Halt::NotImplemented` rather than a wrong value", which was never
+    // measured and was not true of either.
     ("mutabilities", "undefined"),
-    // XS builds this into the realm; ironhorse has no equivalent.
-    ("Compartment", "undefined"),
+    // XS builds this into the realm, and ironhorse now does too
+    // (`Native::Compartment`, `designs/ironhorse-guest-compartment.md`). It is
+    // a realm intrinsic on both sides rather than an embedder's choice, so it
+    // is the one row here that no host installs and none can decline.
+    ("Compartment", "function"),
 ];
 
 #[test]
@@ -172,36 +185,52 @@ fn ses_boot_bundle_agrees_and_installs_only_handled_promise() {
 
     // (4) The gap, pinned so it can neither widen nor close silently.
     //
-    //     `Compartment` is the one entry XS builds into every realm, so it is
-    //     the one name the DAEMON's XS actually has that ironhorse lacks:
+    //     `mutabilities` is now the WHOLE of it, and it is an embedder's
+    //     choice rather than a realm intrinsic: `xs_shim.c` installs it for
+    //     differential testing and `create_hardened_globals` declines it, with
+    //     its reason recorded there. `Compartment` used to be this row --
+    //     the one entry XS builds into every realm and ironhorse lacked --
+    //     and is not any more.
+    //
     //     `rust/endo/xsnap` declares `fx_lockdown`/`fx_harden` in `ffi.rs:274`
     //     and calls neither (`lib.rs:917`), so the daemon's realm has no
-    //     `lockdown` either. The oracle's `lockdown`/`mutabilities` below are
+    //     `lockdown` either. The oracle's `lockdown`/`mutabilities` are
     //     `xs_shim.c`'s installs, present for differential testing — they are
     //     NOT what the daemon runs on.
     //
-    //     So stage 4's remaining work is not "make the bundle run", and it is
-    //     not "match the oracle's globals". It is `Compartment`, plus whatever
-    //     guest-visible `lockdown` the daemon decides it needs — neither of
-    //     which any boot bundle here supplies. See
+    //     So stage 4's remaining work is not "make the bundle run", it is not
+    //     "match the oracle's globals", it is no longer "plus whatever
+    //     guest-visible `lockdown` the daemon decides it needs" — ironhorse
+    //     binds one (`designs/ironhorse-native-lockdown.md`) — and it is no
+    //     longer `Compartment` either
+    //     (`designs/ironhorse-guest-compartment.md`). See
     //     `designs/ironhorse-ses-compartment-equivalence.md`.
     assert!(
         pristine.oracle_result.contains("Compartment=function"),
         "XS builds Compartment into every realm (xsModule.c:207): {}",
         pristine.oracle_result
     );
+    // Rewritten to REQUIRE it, as the previous revision of this assertion
+    // asked whoever landed it to do: it used to demand
+    // `Compartment=undefined` and to say that a bar requiring the opposite
+    // was the right response to a guest `Compartment` landing. A regression
+    // that unbinds the global has to fail here rather than quietly reopening
+    // the gap.
     assert!(
-        after.ironhorse_result.contains("Compartment=undefined"),
-        "ironhorse is expected to still lack Compartment (named skip \
-         `compartment:intrinsic-surface`); if it now has one, this bar must \
-         be rewritten to require it: {}",
+        after.ironhorse_result.contains("Compartment=function"),
+        "ironhorse binds a guest Compartment (`Native::Compartment`), and the \
+         boot bundle must not disturb it: {}",
         after.ironhorse_result
     );
+    // Rewritten to REQUIRE it, as the previous revision of this assertion
+    // asked whoever landed it to do. `ses-mode:lockdown-unimplemented` is gone
+    // from `SesMode::unimplemented_skip` and `lockdown` from
+    // `DEFAULT_ENDOR_SKIP_FEATURES`; a regression that unbinds the global has
+    // to fail here rather than quietly reopening the gap.
     assert!(
-        after.ironhorse_result.contains("lockdown=undefined"),
-        "ironhorse is expected to still lack lockdown (named skip \
-         `ses-mode:lockdown-unimplemented`, `ironhorse-262/src/xst.rs:159`); \
-         if it now has one, this bar must be rewritten to require it: {}",
+        after.ironhorse_result.contains("lockdown=function"),
+        "ironhorse binds its own guest lockdown (`Interp::do_lockdown`), and \
+         the boot bundle must not disturb it: {}",
         after.ironhorse_result
     );
 

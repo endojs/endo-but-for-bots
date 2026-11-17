@@ -1,0 +1,85 @@
+534	intl402/Temporal/ZonedDateTime	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 534
+506	built-ins/Temporal/PlainDateTime	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 506
+453	intl402/Temporal/PlainDate	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 453
+444	built-ins/RegExp/property-escapes	unsupported	ironhorse-aborted-limit	RGX-1 regexp match-state cap 444
+442	intl402/Temporal/PlainDateTime	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 442
+422	language/expressions/dynamic-import	unsupported	unsupported-opcode:module:dynamic-import	BOOT-7 modules (static linking / dynamic import / TLA) 422
+405	built-ins/Temporal/PlainDate	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 405
+382	built-ins/Temporal/ZonedDateTime	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 382
+334	annexB/language/eval-code	fail	shared-positive-test-failure	CMP-12 Annex B sloppy syntax 333; T262-9 $262 hooks (createRealm/evalScript/...) 1
+304	built-ins/Temporal/PlainYearMonth	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 304
+288	intl402/Temporal/PlainYearMonth	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 288
+253	built-ins/Temporal/PlainTime	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 253
+241	built-ins/Temporal/Instant	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 241
+197	language/module-code/top-level-await	unsupported	unsupported-opcode:module:top-level-await	BOOT-7 modules (static linking / dynamic import / TLA) 197
+181	built-ins/Temporal/Duration	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 181
+148	language/expressions/dynamic-import	fail	shared-positive-test-failure	import defer / source phase syntax rejected (proposal; lens row) 148
+116	annexB/language/function-code	fail	shared-positive-test-failure	CMP-12 Annex B sloppy syntax 116
+113	annexB/language/global-code	fail	shared-positive-test-failure	CMP-12 Annex B sloppy syntax 97; T262-9 $262 hooks (createRealm/evalScript/...) 16
+108	built-ins/RegExp/unicodeSets	fail	shared-positive-test-failure	T262-2 split-Script artifact (passes as one Script) 108
+101	built-ins/Temporal/PlainMonthDay	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 101
+97	built-ins/TypedArray/prototype	fail	shared-positive-test-failure	T262-2 split-Script artifact (passes as one Script) 94; absent: immutable ArrayBuffer (proposal; lens row) 3
+90	built-ins/Iterator/prototype	fail	shared-positive-test-failure	absent: Iterator.prototype.chunks/windows (lens row) 55; absent: Iterator.prototype.includes (lens row) 25; absent: Iterator.prototype.join (proposal; lens row) 10
+87	language/import/import-defer	unsupported	module:compiler-rejected	import defer / source phase syntax rejected (proposal; lens row) 86; proposal nonextensible-applies-to-private (lens proposal list) 1
+81	built-ins/Array/prototype	fail	shared-positive-test-failure	T262-2 split-Script artifact (passes as one Script) 71; T262-9 $262 hooks (createRealm/evalScript/...) 10
+77	intl402/Locale/prototype	fail	oracle-host-missing-global:Intl	absent: Intl.Locale info getters (proposal; lens row) 55; CORE-3/NVAL-4 accessors only on static GET 20; NVAL-8/NVAL-5/NVAL-6 Intl data/semantics 2
+76	built-ins/Function/prototype	fail	shared-positive-test-failure	T262-2 split-Script artifact (passes as one Script) 70; T262-9 $262 hooks (createRealm/evalScript/...) 5; OTHER: Object: Conforms to NativeFunction Syntax: "undefined" ([ { a(){} }.a ](){ }) 1
+75	intl402/DurationFormat/prototype	fail	oracle-host-missing-global:Intl	absent: Intl.DurationFormat (lens row) 72; NVAL-6/7 Temporal 2; NVAL-8/NVAL-5/NVAL-6 Intl data/semantics 1
+68	built-ins/RegExp/prototype	fail	oracle-gate-off:oracle-only-complete	RGX-2 RegExp accessors not properties 68
+62	intl402/DateTimeFormat/prototype	fail	oracle-host-missing-global:Intl	NVAL-8/NVAL-5/NVAL-6 Intl data/semantics 34; NVAL-6/7 Temporal 25; Temporal/Intl calendars (NVAL-7, lens row) 3
+54	annexB/language/eval-code	fail	shared-test262-failure	CMP-12 Annex B sloppy syntax 54
+54	intl402/Temporal/PlainMonthDay	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 54
+46	intl402/NumberFormat/prototype	fail	oracle-host-missing-global:Intl	NVAL-8/NVAL-5/NVAL-6 Intl data/semantics 46
+44	intl402/RelativeTimeFormat/prototype	fail	oracle-host-missing-global:Intl	absent: Intl.RelativeTimeFormat (lens row) 42; NVAL-8/NVAL-5/NVAL-6 Intl data/semantics 2
+43	annexB/built-ins/String	fail	shared-test262-failure	absent: Annex B String HTML methods (lens row) 43
+41	built-ins/Iterator/prototype	fail	shared-test262-failure	absent: Iterator.prototype.includes (lens row) 15; absent: Iterator.prototype.chunks/windows (lens row) 14; absent: Iterator.prototype.join (proposal; lens row) 6; OTHER: Object: Expected a RangeError to be thrown but no exception was thrown at all 4; OTHER: Object: Expected a RangeError but got a Test262Error 2
+41	built-ins/Temporal/PlainDate	fail	oracle-gate-off:abort-value-differs	NVAL-6/7 Temporal 41
+39	annexB/built-ins/String	fail	shared-positive-test-failure	absent: Annex B String HTML methods (lens row) 39
+38	language/module-code/namespace	unsupported	unsupported-opcode:module:static-linking	BOOT-7 modules (static linking / dynamic import / TLA) 38
+36	built-ins/Iterator/zipKeyed	fail	shared-positive-test-failure	absent: Iterator.zip/zipKeyed (lens row) 36
+36	intl402/DateTimeFormat/prototype	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 36
+35	built-ins/Temporal/PlainYearMonth	fail	oracle-gate-off:abort-value-differs	NVAL-6/7 Temporal 35
+30	built-ins/Temporal/PlainDateTime	fail	oracle-gate-off:abort-value-differs	NVAL-6/7 Temporal 30
+30	intl402/RelativeTimeFormat/constructor	fail	oracle-host-missing-global:Intl	absent: Intl.RelativeTimeFormat (lens row) 30
+29	intl402/Temporal/PlainMonthDay	fail	oracle-gate-off:abort-value-differs	NVAL-6/7 Temporal 29
+28	annexB/built-ins/RegExp	fail	shared-positive-test-failure	absent: legacy RegExp statics (proposal; lens row) 19; Annex B.1.2 regexp grammar (XS parity, regexp map note) 9
+28	built-ins/Iterator/zip	fail	shared-positive-test-failure	absent: Iterator.zip/zipKeyed (lens row) 28
+27	built-ins/TypedArray/prototype	fail	oracle-gate-off:oracle-only-complete	NOBJ-12 TypedArray change-array-by-copy 26; OTHER: TypeError: detached buffer (Testing with Float64Array and makePassthrough.) 1
+25	annexB/built-ins/RegExp	fail	shared-test262-failure	NEW RegExp.prototype.compile no-op stub 18; absent: legacy RegExp statics (proposal; lens row) 7
+24	language/module-code/top-level-await	fail	engine-invariant:await:no-async-instance	NEW await in module-level class heritage loses AWAITING (EngineInvariant) 24
+23	built-ins/Promise/allKeyed	fail	async:reported-failure	absent: Promise.allKeyed/allSettledKeyed (proposal; lens row) 23
+23	built-ins/Promise/allSettledKeyed	fail	async:reported-failure	absent: Promise.allKeyed/allSettledKeyed (proposal; lens row) 23
+23	built-ins/Temporal/ZonedDateTime	fail	oracle-gate-off:abort-value-differs	NVAL-6/7 Temporal 23
+22	built-ins/Temporal/PlainMonthDay	fail	oracle-gate-off:abort-value-differs	NVAL-6/7 Temporal 22
+21	built-ins/Temporal/PlainTime	fail	oracle-gate-off:abort-value-differs	NVAL-6/7 Temporal 21
+20	intl402/DisplayNames/prototype	fail	oracle-host-missing-global:Intl	absent: Intl.DisplayNames (lens row) 13; NVAL-8/NVAL-5/NVAL-6 Intl data/semantics 7
+20	intl402/Intl/getCanonicalLocales	fail	oracle-host-missing-global:Intl	NVAL-8/NVAL-5/NVAL-6 Intl data/semantics 20
+20	intl402/Temporal/Duration	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 20
+19	language/expressions/class	fail	shared-positive-test-failure	T262-9 $262 hooks (createRealm/evalScript/...) 10; decorators proposal: @ rejected (lens row) 9
+16	intl402/Temporal/Instant	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 16
+16	language/expressions/class	fail	async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject rea	CORE-2/FN-1 AsyncFromSyncIterator 16
+16	language/statements/class	fail	async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject rea	CORE-2/FN-1 AsyncFromSyncIterator 16
+15	language/import/import-attributes	unsupported	compiler-unimplemented:module	BOOT-7 modules (static linking / dynamic import / TLA) 15
+14	built-ins/ArrayBuffer/prototype	fail	shared-positive-test-failure	absent: immutable ArrayBuffer (proposal; lens row) 14
+14	built-ins/Promise/allKeyed	fail	shared-positive-test-failure	absent: Promise.allKeyed/allSettledKeyed (proposal; lens row) 14
+13	annexB/language/global-code	fail	shared-test262-failure	CMP-12 Annex B sloppy syntax 12; T262-9 $262 hooks (createRealm/evalScript/...) 1
+13	built-ins/ArrayBuffer/prototype	fail	shared-test262-failure	absent: immutable ArrayBuffer (proposal; lens row) 13
+13	language/statements/class	fail	shared-positive-test-failure	decorators proposal: @ rejected (lens row) 13
+12	built-ins/Promise/allSettledKeyed	fail	shared-positive-test-failure	absent: Promise.allKeyed/allSettledKeyed (proposal; lens row) 12
+12	built-ins/Temporal/Now	fail	oracle-gate-off:abort-value-differs	NVAL-6/7 Temporal 12
+12	built-ins/TypedArrayConstructors/internals	fail	shared-positive-test-failure	T262-9 $262 hooks (createRealm/evalScript/...) 12
+12	intl402/Temporal/PlainDate	fail	oracle-gate-off:abort-value-differs	NVAL-6/7 Temporal 12
+12	intl402/Temporal/PlainTime	fail	oracle-host-missing-global:Temporal	NVAL-6/7 Temporal 12
+12	language/expressions/class	fail	async: Test262:AsyncTestFailure:TypeError: call: not a function (the o	CORE-2/FN-1 AsyncFromSyncIterator 12
+12	language/statements/class	fail	async: Test262:AsyncTestFailure:TypeError: call: not a function (the o	CORE-2/FN-1 AsyncFromSyncIterator 12
+11	built-ins/DataView/prototype	fail	shared-positive-test-failure	absent: immutable ArrayBuffer (proposal; lens row) 11
+11	built-ins/Proxy/construct	fail	shared-positive-test-failure	T262-9 $262 hooks (createRealm/evalScript/...) 11
+11	built-ins/WeakMap/prototype	fail	shared-positive-test-failure	NOBJ-13 symbols as weak keys 11
+11	intl402/Collator/prototype	fail	oracle-host-missing-global:Intl	NVAL-8/NVAL-5/NVAL-6 Intl data/semantics 10; CORE-3/NVAL-4 accessors only on static GET 1
+11	intl402/Intl/supportedValuesOf	fail	oracle-host-missing-global:Intl	NVAL-8/NVAL-5/NVAL-6 Intl data/semantics 8; Temporal/Intl calendars (NVAL-7, lens row) 1; absent: Intl.DisplayNames (lens row) 1; absent: Intl.RelativeTimeFormat (lens row) 1
+11	intl402/NumberFormat/prototype	unsupported	unsupported-opcode:Intl.NumberFormat:formatRange	Intl NotImplemented (lens rows) 11
+11	intl402/Temporal/PlainYearMonth	fail	oracle-gate-off:abort-value-differs	NVAL-6/7 Temporal 11
+11	language/expressions/compound-assignment	fail	ironhorse failed a harness assertion the oracle passed: Test262Error: 	NEW PutValue/GetBindingValue skip HasProperty re-check 11
+11	language/module-code/top-level-await	unsupported	unsupported-opcode:module:static-linking	BOOT-7 modules (static linking / dynamic import / TLA) 11
+10	intl402/Temporal/ZonedDateTime	unsupported	unsupported-opcode:Temporal.ZonedDateTime.toLocaleString:needs-intl	NVAL-6/7 Temporal 10
+10	language/module-code/top-level-await	unsupported	unsupported-opcode:module:dynamic-import	BOOT-7 modules (static linking / dynamic import / TLA) 10

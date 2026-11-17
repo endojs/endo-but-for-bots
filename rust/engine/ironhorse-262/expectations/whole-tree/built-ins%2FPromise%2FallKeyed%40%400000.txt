@@ -5,8 +5,8 @@ built-ins/Promise/allKeyed/arg-not-object-reject-bigint.js sloppy skip:async:rep
 built-ins/Promise/allKeyed/arg-not-object-reject-bigint.js strict skip:async:reported-failure
 built-ins/Promise/allKeyed/arg-not-object-reject.js sloppy skip:async:reported-failure
 built-ins/Promise/allKeyed/arg-not-object-reject.js strict skip:async:reported-failure
-built-ins/Promise/allKeyed/capability-executor-not-callable.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: executor not called at all Expected SameValue(«\\\"\\\"», «\\\"a\\\"») to be true\" ironhorse=\"Test262Error: string\\\"\\\"», «string\\\"a\\\"») to be true\""
-built-ins/Promise/allKeyed/capability-executor-not-callable.js strict fail:"abort-value-differs: oracle=\"Test262Error: executor not called at all Expected SameValue(«\\\"\\\"», «\\\"a\\\"») to be true\" ironhorse=\"Test262Error: string\\\"\\\"», «string\\\"a\\\"») to be true\""
+built-ins/Promise/allKeyed/capability-executor-not-callable.js sloppy skip:shared-test262-failure
+built-ins/Promise/allKeyed/capability-executor-not-callable.js strict skip:shared-test262-failure
 built-ins/Promise/allKeyed/capability-resolve-throws-reject.js sloppy skip:async:reported-failure
 built-ins/Promise/allKeyed/capability-resolve-throws-reject.js strict skip:async:reported-failure
 built-ins/Promise/allKeyed/ctx-ctor-constructed.js sloppy skip:shared-positive-test-failure
@@ -15,8 +15,8 @@ built-ins/Promise/allKeyed/ctx-ctor-throws.js sloppy skip:shared-test262-failure
 built-ins/Promise/allKeyed/ctx-ctor-throws.js strict skip:shared-test262-failure
 built-ins/Promise/allKeyed/ctx-non-ctor.js sloppy pass
 built-ins/Promise/allKeyed/ctx-non-ctor.js strict pass
-built-ins/Promise/allKeyed/extensible.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected true but got false\" ironhorse=\"Test262Error: booleanfalse\""
-built-ins/Promise/allKeyed/extensible.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected true but got false\" ironhorse=\"Test262Error: booleanfalse\""
+built-ins/Promise/allKeyed/extensible.js sloppy skip:shared-test262-failure
+built-ins/Promise/allKeyed/extensible.js strict skip:shared-test262-failure
 built-ins/Promise/allKeyed/get-value-not-called-for-non-enumerable.js sloppy skip:async:reported-failure
 built-ins/Promise/allKeyed/get-value-not-called-for-non-enumerable.js strict skip:async:reported-failure
 built-ins/Promise/allKeyed/get-value-throws-reject.js sloppy skip:async:reported-failure

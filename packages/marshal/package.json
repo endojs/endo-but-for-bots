@@ -51,6 +51,7 @@
     "@endo/harden": "workspace:^",
     "@endo/hex": "workspace:^",
     "@endo/immutable-arraybuffer": "workspace:^",
+    "@endo/memoize": "workspace:^",
     "@endo/nat": "workspace:^",
     "@endo/pass-style": "workspace:^"
   },

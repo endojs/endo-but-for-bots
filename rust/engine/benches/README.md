@@ -1,6 +1,6 @@
 # Performance instruments (F106/F122)
 
-Run the general snapshot controls across four test targets, serially in release mode:
+Run the general snapshot controls across five test targets, serially in release mode:
 
 ```sh
 export CARGO_INCREMENTAL=0
@@ -34,7 +34,54 @@ Reports identify same-host comparisons separately from historical context.
 Both measured sides record a SHA-256 digest of the fixture sources and toolchain pin,
 plus the compiler and relevant build environment; a check refuses mismatched provenance.
 The archived reference uses its own build directory even if `CARGO_TARGET_DIR` is set.
-The pinned revision, 48-metric roster, 1.25x floor, and growth policies are unchanged.
+The roster is 52 metrics.
+`reentry_bench` added four call and re-entry workloads (guest calls, guest recursion,
+`forEach` callbacks and getter reads) for the dispatch-split gate of
+[`STACK-DEPTH-REFACTOR.md`](../STACK-DEPTH-REFACTOR.md) §4.3, which `dispatch_bench`'s
+straight-line loops do not cross.
+
+The baseline is pinned at `3a30ab1e9`, the end of stack-depth Phase 1, and all 52 medians
+were measured there with `--write-baseline` and today's fixtures on 2026-10-01, on a shared
+4-core Linux x86_64 host.
+The previous pin, `51b99651`, could not build `attached_bench` and `gc_bench` once they
+called `Interp::slots()` and `Interp::chunks()` (2026-09-10), so every nightly check from
+2026-09-11 to 2026-10-01 failed building the reference, before it measured the candidate.
+Re-pin whenever a fixture needs an API the pinned revision lacks: build the pinned revision
+with today's fixtures, `benches/` and toolchain pin copied in, and run `--write-baseline`
+there with `IRONHORSE_REFERENCE_COMMIT` naming it, which is what a check does to its
+reference.
+The 1.25x floor and the growth policies are unchanged.
+[`results/repin-3a30ab1e9.json`](results/repin-3a30ab1e9.json) keeps the evidence below.
+Measured against each other with today's fixtures, in four rounds alternating which runs
+first (`pin_drift_ab`), the new pin is no slower than the old on any of the 13 metrics of
+`dispatch_bench`, `reentry_bench` and `wake_latency_bench`: the dispatch, call and re-entry
+workloads run at 0.87-1.00x of the old pin's medians, the placeholder workloads at
+0.04-0.70x and the wake workloads at 0.12-0.22x.
+So a check against the old pin would also have let regressions of up to those factors
+through in the placeholder and wake workloads.
+
+`run.py` runs every target `RUNS` (three) times on each side and keeps each metric's median
+across those runs, and a check alternates the sides run by run, so load that changes
+during a check moves both sides alike.
+For each metric it prints
+`BENCH_CHECK <metric> reference=<ms> candidate=<ms> ratio=<candidate/reference>`.
+Both sides' medians come from the same number of runs, and the baseline records that
+number (`provenance.runs`).
+The reason is noise on a shared host.
+Most of the GC, slide, placeholder and wake timings take a few milliseconds (the
+attached-store rounds and the largest collections tens), and the medians of five to nine
+samples their fixtures used to take moved by up to 2.2x between runs of one binary: 34 of
+those 45 metrics exceeded 1.25x across five interleaved runs, and the nightly check of
+2026-09-10 failed on `slide_500_front_ms` at 1.28x.
+Their fixtures now take 21 samples per measurement (12 of 45 above 1.25x across five
+runs), and the median of three runs brings the worst case of nine runs from 27 to 10 of 45.
+That narrows the noise rather than removing it.
+Before the runs alternated, a check measured the whole reference and then the whole
+candidate, minutes apart: the first check against the new pin flagged `calls_ms`,
+`recursion_ms`, `chunks_ms` and `callbacks_ms` at 1.33-1.54x and `slide_2000_tail_ms` at
+1.26x, and four interleaved rounds of the same two binaries put all seven dispatch, call
+and re-entry workloads at 0.96-1.05x.
+On a shared host, re-run a flagged workload before treating it as a regression.
 The 1A records below also retain local predecessor and original-branch comparisons.
 Those additional references provide diagnostic evidence; they do not replace the
 repository gate against `baseline.json` or create additional CI thresholds.
@@ -65,6 +112,76 @@ The existing nightly full-test262 workflow runs both instruments in an independe
 job, and uploads their logs and JSON even when a gate fails.
 Ordinary PR CI does not run timing assertions.
 
+## Native stack height (Phase 0a)
+
+The native lane of `STACK-DEPTH-REFACTOR.md` §5 Phase 0a: how much host stack each
+recursion family and compiler pin uses today, so that the refactors the report proposes can
+be measured against a baseline instead of estimated.
+
+```sh
+python3 rust/engine/benches/stack_height.py --check --output stack-height-report.json
+```
+
+The instrument is `ironhorse-vm/tests/stack_height.rs`.
+Each case runs on a fresh thread of `NATIVE_STACK_BYTES`; before each stage under measurement
+(compiling the source; running it on a fresh machine) the unused stack below the caller's
+frame is painted with a sentinel, and afterwards the lowest dirtied byte gives the stage's
+high-water mark in bytes.
+One run per case, read to the byte, no bisection and no engine instrumentation.
+The paint stops 2 KiB below the stage's frame (`STAGE_GAP` in `stack-lanes/paint.rs`), so a
+stage that uses less reads 2,048 B; every case uses more, the least being an empty program's
+run at 2,287 B.
+The gap is measured from the stage's frame, not rounded to a page: rounded, the least a
+stage could read ranged from 8.3 to 12.3 KB with the address of the stage's frame, and a
+stage that used less read that instead.
+The cases are the `native_recursion_budget` scenarios at their halting and accepted sizes
+(the report's 25 family cases) plus the accepted compiler pins of
+`ironhorse-compile/tests/recursion_bounds.rs`, and a few in-place walks as controls.
+Each case reports a `.compile` mark and, unless it is a compiler pin, a `.run` mark with its
+outcome (`completed`, `ReentryLimit`, ...).
+
+Frame sizes are a property of the build, so the marks move when the compiler, target or
+profile does.
+`stack-height-baseline.json` records that provenance with the marks, and the check refuses a
+mismatch unless `--ignore-provenance` is passed.
+Within one build the marks still vary from run to run: the standard library seeds its hash
+tables randomly in each process, which changes what runs at a case's deepest point.
+Over 24 identical runs, 20 of the 429 marks moved, by at most 184 B, which is 0.14% of the
+127,487 B mark it moved; the largest share was 152 B of 7,343 B, 2.07%.
+The variation is a frame or two, a number of bytes rather than a share of the mark.
+With the seeds pinned (an `LD_PRELOAD` that fixes `getrandom`) twelve runs were
+byte-identical, with address-space randomization on or off; turning it off alone did not
+make two runs agree.
+A case fails when it grows past the baseline by more than the baseline's `slack` (2%) or its
+`slack_bytes` (256 B), whichever is larger, which absorbs that variation, or when its outcome
+changes; an outcome change is an acceptance change, which the report says needs a versioned
+release.
+A case well under the baseline is reported as a note: lower the baseline explicitly, never as
+part of a check.
+
+```sh
+python3 rust/engine/benches/stack_height.py --write-baseline
+```
+
+That is the ratchet: each refactor that lands lowers the marks it claims to lower, and the
+baseline follows.
+The baseline names the engine tree it was measured at rather than the commit: the hash of
+HEAD's `rust/engine` tree with the baseline file left out.
+A rebase-merge rewrites the commit but not the tree, so the name still finds the measured
+source on the target branch.
+The baseline file is left out because it lies inside the tree it names; without it, writing and
+committing the baseline leaves the hash where it was, so the baseline's own commit holds the
+tree it records.
+`--write-baseline` refuses a checkout with uncommitted engine changes, which HEAD's tree does
+not hold: commit them, write the baseline, and commit it on its own.
+`--allow-dirty` writes one anyway and records `"dirty": true`.
+The check prints whether the checkout holds the baseline's tree.
+The marks are native; they show whether a refactor shrinks frames, and they do not predict
+which cases trap on Wasmtime or V8, whose frames differ (report §1.2-§1.4).
+The wasm lanes of Phase 0, which run the same corpus under Wasmtime, Node and
+workerd and report per-function frame sizes, live in `rust/engine/stack-lanes/`
+(its README describes them).
+
 ## XS microbenchmark comparison
 
 The separate XS microbenchmark comparison is runnable with:
@@ -92,7 +209,60 @@ and `Interp::run`, including completion rendering.
 These are fresh-machine microbenchmarks, not steady-state daemon workloads.
 Allocation churn is not a direct measurement of collection pauses or heap footprint.
 The report always marks the full stage-8 envelope unavailable until its remaining
-daemon, comparable heap-footprint, and code-size measurements exist.
+daemon and comparable heap-footprint measurements exist.
+
+## Code size (F106/F122)
+
+The envelope's other footprint clause — "code size within 2x of `libxs.a`" —
+now has an instrument:
+
+```sh
+python3 rust/engine/benches/code_size.py            # report
+python3 rust/engine/benches/code_size.py --check-code-size   # and fail above 2x
+```
+
+It sums `.text` across the Moddable XS translation units in `libxsoracle.a`
+(excluding this repository's own `xs_shim` object) and across the release
+rlibs of the engine crates, and reports the ratio against the design's bar.
+`xs_compare.py` includes the same measurement in its report.
+
+The engine is currently around **6x** XS by this measure, against a 2x bar.
+That number is reported and not gated: an rlib carries every monomorphized
+instantiation the crate emitted, including ones a linker would discard, so it
+is an upper bound rather than a linked-binary figure, and gating a bar the
+tree is nowhere near would redden every run without saying anything the
+number does not. The point of the instrument is that the clause stopped being
+unfalsifiable; `--check-code-size` is the gate for when the bar is reachable.
+
+## Heap footprint (F106/F122)
+
+The envelope's other footprint clause — "heap within 1.1x" — also has an
+instrument now, and both sides of it:
+
+```sh
+RUST_MIN_STACK=33554432 cargo test --release -p ironhorse-262 \
+  --test xs_footprint_bench -- --ignored --nocapture --test-threads=1
+```
+
+The oracle shim reports XS's own `currentHeapCount` and `currentChunksSize`;
+the engine reports `SlotArena::xs_accounted_byte_size` (XS's 32-byte unit, so
+the ratio reads the bar as written) and `SlotArena::resident_byte_size` (what
+the process actually holds). `xs_compare.py` runs it and folds the result in.
+
+The measured picture is not one number. On property access, calls and string
+work the engine sits at roughly **0.2x** XS, because XS boots a much larger
+intrinsics set. On allocation churn it sits at about **2.5x**, above the 1.1x
+bar — which is where the design's parenthesis, "the slot accounting is
+identical by construction; overhead can come only from arena bookkeeping",
+stops being true: nothing collects within a crank, so churned garbage is
+still resident at the boundary. That is the residue of F010/F076, and this is
+the first measurement that shows its cost.
+
+Reported, not gated, for the same reason as code size.
+
+The one clause of the envelope still without an instrument is the
+four-variant daemon benchmark, whose fourth arm stays blocked until
+`endor worker -e ironhorse` speaks the worker protocol.
 
 ## Daemon arm: explicitly blocked
 

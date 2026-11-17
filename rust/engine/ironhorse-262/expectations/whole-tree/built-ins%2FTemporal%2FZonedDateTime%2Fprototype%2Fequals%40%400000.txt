@@ -85,8 +85,8 @@ built-ins/Temporal/ZonedDateTime/prototype/equals/different-instant-not-equal.js
 built-ins/Temporal/ZonedDateTime/prototype/equals/different-instant-not-equal.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/equals/different-time-zone-not-equal.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/equals/different-time-zone-not-equal.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/ZonedDateTime/prototype/equals/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/ZonedDateTime/prototype/equals/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/ZonedDateTime/prototype/equals/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/equals/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/equals/leap-second.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/equals/leap-second.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/equals/length.js sloppy skip:oracle-host-missing-temporal

@@ -11,10 +11,10 @@ built-ins/DataView/prototype/byteOffset/name.js sloppy pass
 built-ins/DataView/prototype/byteOffset/name.js strict pass
 built-ins/DataView/prototype/byteOffset/prop-desc.js sloppy pass
 built-ins/DataView/prototype/byteOffset/prop-desc.js strict pass
-built-ins/DataView/prototype/byteOffset/resizable-array-buffer-auto.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/DataView/prototype/byteOffset/resizable-array-buffer-auto.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/DataView/prototype/byteOffset/resizable-array-buffer-fixed.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/DataView/prototype/byteOffset/resizable-array-buffer-fixed.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/DataView/prototype/byteOffset/resizable-array-buffer-auto.js sloppy pass
+built-ins/DataView/prototype/byteOffset/resizable-array-buffer-auto.js strict pass
+built-ins/DataView/prototype/byteOffset/resizable-array-buffer-fixed.js sloppy pass
+built-ins/DataView/prototype/byteOffset/resizable-array-buffer-fixed.js strict pass
 built-ins/DataView/prototype/byteOffset/return-byteoffset-sab.js sloppy pass
 built-ins/DataView/prototype/byteOffset/return-byteoffset-sab.js strict pass
 built-ins/DataView/prototype/byteOffset/return-byteoffset.js sloppy pass

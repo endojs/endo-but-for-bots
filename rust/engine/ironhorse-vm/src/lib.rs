@@ -7,8 +7,8 @@
 //! Guest strings use UTF-16; symbol-name conversion is shared through `ironhorse-text`.
 //! [`SourceCompiler`] supplies dynamic compilation without a production compiler dependency.
 //! [`gc::GcHooks`] connects the collector to references held outside the arenas.
-//! [`Halt`] includes [`Halt::HeapExhausted`] and [`Halt::Panic`]; resource stops and
-//! engine faults are not catchable guest exceptions.
+//! [`Halt`] includes [`Halt::HeapExhausted`], [`Halt::HostAllocationFailed`] and
+//! [`Halt::Panic`]; resource stops and engine faults are not catchable guest exceptions.
 //!
 //! [`Machine`] owns one frozen intrinsic graph and shared heap. Each
 //! [`Compartment`] retains a [`Realm`] with independent globals and compiler policy.
@@ -28,6 +28,7 @@ mod intl_profile;
 mod math;
 pub use math::MATH_PROVIDER;
 mod bulk;
+mod side_storage;
 mod side_tables;
 mod snapshot_dirty;
 pub use snapshot_dirty::{SnapshotBaseline, SnapshotDirty, SnapshotSection};
@@ -65,9 +66,9 @@ pub use gc::{GcStats, Heap};
 #[doc(hidden)]
 pub use interp::SIDE_TABLES;
 pub use interp::{
-    dtf_component_key_static, error_name_static, CompiledSource, Halt, Interp, Native, PanicKind,
-    RelinkError, RestoreError, RestoreSession, RunOutcome, SourceCompileError, SourceCompiler,
-    TYPED_ARRAY_TYPES,
+    dtf_component_key_static, error_name_static, CompiledSource, EvalContext, Halt, Interp, Native,
+    PanicKind, RelinkError, RestoreError, RestoreSession, RunOutcome, SourceCompileError,
+    SourceCompiler, TYPED_ARRAY_TYPES, VIEW_LENGTH_TRACKING,
 };
 pub use interp::{CompartmentEnvironment, DecodeError, Realm};
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
@@ -81,8 +82,9 @@ pub use opcode::{instruction_len, Opcode};
 pub use side_tables::TableDesc;
 pub use symbols::{parse_symbols, parse_symbols_checked, SymbolName};
 pub use value::{
-    BackingCommitAuthority, ChunkArena, ChunkOffset, ChunkSlice, Kind, PageSource, Payload, Slot,
-    SlotArena, SlotIndex, CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE,
+    BackingCommitAuthority, CeilingRefused, ChunkArena, ChunkOffset, ChunkSlice, FreeListAck, Kind,
+    PageSource, Payload, Slot, SlotArena, SlotIndex, CHUNK_EXTENT_BYTES,
+    CONSENSUS_MAX_CHUNK_CEILING, CONSENSUS_MAX_SLOT_CEILING, SLOTS_PER_PAGE,
 };
 
 /// The native (thread) stack, in bytes, the engine requires for its

@@ -877,35 +877,46 @@ pub(super) fn parse_temporal_duration(text: &str) -> Option<TemporalDurationReco
     saw.then_some(out)
 }
 
+/// The Temporal proposal's TemporalDurationToString with `precision` "auto".
+///
+/// The seconds part is TimeDurationFromComponents(0, 0, seconds,
+/// milliseconds, microseconds, nanoseconds), an exact integer: each field is
+/// an `i64`, so the sum is far inside `i128` and sub-second units carry into
+/// whole seconds (`ms = 1500` renders `PT1.5S`). It is written whenever it is
+/// nonzero or every unit from minutes up is zero, so the zero duration is
+/// `PT0S`.
 pub(super) fn format_temporal_duration(d: TemporalDurationRecord) -> String {
-    if d.sign() == 0 {
-        return "PT0S".to_string();
-    }
-    let sign = if d.sign() < 0 { "-" } else { "" };
-    let f = d.fields().map(i64::unsigned_abs);
-    let mut s = format!("{sign}P");
-    for (v, mark) in [(f[0], "Y"), (f[1], "M"), (f[2], "W"), (f[3], "D")] {
+    use core::fmt::Write as _;
+    let f = d.fields();
+    let mut s = String::from(if d.sign() < 0 { "-P" } else { "P" });
+    for (v, mark) in [(f[0], 'Y'), (f[1], 'M'), (f[2], 'W'), (f[3], 'D')] {
         if v != 0 {
-            s.push_str(&format!("{v}{mark}"));
+            let _ = write!(s, "{}{mark}", v.unsigned_abs());
         }
     }
-    if f[4..].iter().any(|&v| v != 0) {
+    let mut time = String::new();
+    for (v, mark) in [(f[4], 'H'), (f[5], 'M')] {
+        if v != 0 {
+            let _ = write!(time, "{}{mark}", v.unsigned_abs());
+        }
+    }
+    let seconds = i128::from(f[6]) * 1_000_000_000
+        + i128::from(f[7]) * 1_000_000
+        + i128::from(f[8]) * 1_000
+        + i128::from(f[9]);
+    if seconds != 0 || f[..6].iter().all(|&v| v == 0) {
+        let magnitude = seconds.unsigned_abs();
+        let _ = write!(time, "{}", magnitude / 1_000_000_000);
+        let fraction = magnitude % 1_000_000_000;
+        if fraction != 0 {
+            let digits = format!("{fraction:09}");
+            let _ = write!(time, ".{}", digits.trim_end_matches('0'));
+        }
+        time.push('S');
+    }
+    if !time.is_empty() {
         s.push('T');
-        if f[4] != 0 {
-            s.push_str(&format!("{}H", f[4]));
-        }
-        if f[5] != 0 {
-            s.push_str(&format!("{}M", f[5]));
-        }
-        let fraction = f[7] * 1_000_000 + f[8] * 1_000 + f[9];
-        if f[6] != 0 || fraction != 0 {
-            if fraction == 0 {
-                s.push_str(&format!("{}S", f[6]));
-            } else {
-                let digits = format!("{fraction:09}");
-                s.push_str(&format!("{}.{}S", f[6], digits.trim_end_matches('0')));
-            }
-        }
+        s.push_str(&time);
     }
     s
 }

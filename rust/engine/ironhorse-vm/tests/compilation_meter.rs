@@ -15,7 +15,7 @@ impl SourceCompiler for Compiler {
         charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<CompiledSource, SourceCompileError> {
         self.compiling.set(true);
-        let result = ironhorse_compile::compile_atoms_budgeted_with_limit(
+        let result = ironhorse_compile::compile_atoms_budgeted_firewalled(
             source,
             ironhorse_compile::Goal::Eval,
             strict,
@@ -40,6 +40,11 @@ impl SourceCompiler for Compiler {
             Err(ironhorse_compile::CompileError::MeterAbort) => Err(SourceCompileError::MeterAbort),
             Err(ironhorse_compile::CompileError::Parse(e)) => {
                 Err(SourceCompileError::Syntax(e.message))
+            }
+            // A caught compiler panic is an engine fault, not a coverage
+            // gap (architecture finding F063).
+            Err(ironhorse_compile::CompileError::Invariant(detail)) => {
+                Err(SourceCompileError::Invariant(detail))
             }
         }
     }

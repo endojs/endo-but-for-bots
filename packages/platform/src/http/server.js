@@ -130,7 +130,7 @@ export const HttpServerInterface = M.interface('HttpServer', {
  * @param {HttpHandler} opts.handler  the request handler.
  * @param {HttpAddress} [opts.address]  the address to bind. Defaults
  *   to `{ host: '127.0.0.1', port: 0 }` (loopback, OS-assigned port).
- * @returns {object} an exo implementing {@link HttpServerInterface}.
+ * @returns An exo implementing {@link HttpServerInterface}.
  */
 export const makeHttpServer = ({
   backend,
@@ -201,17 +201,13 @@ export const makeHttpServer = ({
     lifecycle = 'stopped';
   };
 
-  return makeExo(
-    'HttpServer',
-    HttpServerInterface,
-    /** @type {any} */ ({
-      start,
-      stop,
-      whenBound: () => boundPromise,
-      getAddress: () => boundAddress,
-      help: () =>
-        `Platform HTTP server (${lifecycle}). Call start() to bind; whenBound() resolves to { host, port } once listening.`,
-    }),
-  );
+  return makeExo('HttpServer', HttpServerInterface, {
+    start,
+    stop,
+    whenBound: () => boundPromise,
+    getAddress: () => boundAddress,
+    help: () =>
+      `Platform HTTP server (${lifecycle}). Call start() to bind; whenBound() resolves to { host, port } once listening.`,
+  });
 };
 harden(makeHttpServer);

@@ -5,10 +5,10 @@ built-ins/TypedArrayConstructors/of/BigInt/argument-number-value-throws.js slopp
 built-ins/TypedArrayConstructors/of/BigInt/argument-number-value-throws.js strict pass
 built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-does-not-instantiate-ta-throws.js sloppy pass
 built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-does-not-instantiate-ta-throws.js strict pass
-built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-other-instance.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-other-instance.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-smaller-instance-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-smaller-instance-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-other-instance.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-other-instance.js strict pass
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-smaller-instance-throws.js sloppy pass
+built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-smaller-instance-throws.js strict pass
 built-ins/TypedArrayConstructors/of/BigInt/custom-ctor.js sloppy pass
 built-ins/TypedArrayConstructors/of/BigInt/custom-ctor.js strict pass
 built-ins/TypedArrayConstructors/of/BigInt/inherited.js sloppy pass

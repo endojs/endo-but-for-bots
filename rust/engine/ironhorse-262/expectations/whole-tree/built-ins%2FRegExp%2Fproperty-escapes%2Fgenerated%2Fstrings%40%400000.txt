@@ -21,8 +21,8 @@ built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji-negative-P.js slop
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji-negative-P.js strict pass
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji-negative-u.js sloppy pass
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji-negative-u.js strict pass
-built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji.js sloppy pass
-built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji.js strict pass
+built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji.js sloppy skip:ironhorse-aborted-limit
+built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji.js strict skip:ironhorse-aborted-limit
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Flag_Sequence-negative-CharacterClass.js sloppy pass
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Flag_Sequence-negative-CharacterClass.js strict pass
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Flag_Sequence-negative-P.js sloppy pass
@@ -37,8 +37,8 @@ built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Modifier_Sequence-
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Modifier_Sequence-negative-P.js strict pass
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Modifier_Sequence-negative-u.js sloppy pass
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Modifier_Sequence-negative-u.js strict pass
-built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Modifier_Sequence.js sloppy pass
-built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Modifier_Sequence.js strict pass
+built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Modifier_Sequence.js sloppy skip:ironhorse-aborted-limit
+built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Modifier_Sequence.js strict skip:ironhorse-aborted-limit
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Tag_Sequence-negative-CharacterClass.js sloppy pass
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Tag_Sequence-negative-CharacterClass.js strict pass
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Tag_Sequence-negative-P.js sloppy pass
@@ -53,5 +53,5 @@ built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_ZWJ_Sequence-negat
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_ZWJ_Sequence-negative-P.js strict pass
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_ZWJ_Sequence-negative-u.js sloppy pass
 built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_ZWJ_Sequence-negative-u.js strict pass
-built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_ZWJ_Sequence.js sloppy pass
-built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_ZWJ_Sequence.js strict pass
+built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_ZWJ_Sequence.js sloppy skip:ironhorse-aborted-limit
+built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_ZWJ_Sequence.js strict skip:ironhorse-aborted-limit

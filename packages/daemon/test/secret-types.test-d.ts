@@ -1,9 +1,13 @@
 import { expectTypeOf } from 'expect-type';
 
-import type { SecretAdmin, SecretBlob } from '../src/types.js';
+import type { SecretAdmin, SecretBlob, SecretCatalog } from '../src/types.js';
 
 declare const admin: SecretAdmin;
 declare const blob: SecretBlob;
+declare const catalog: SecretCatalog;
+
+expectTypeOf(catalog.adminFor(blob)).resolves.toEqualTypeOf<SecretAdmin>();
+expectTypeOf(catalog.adminFor).parameter(0).toEqualTypeOf<SecretBlob>();
 
 // A replacement reports the generation it committed. This is what a holder
 // staging a multi-step change pins its second write to, so a contract that

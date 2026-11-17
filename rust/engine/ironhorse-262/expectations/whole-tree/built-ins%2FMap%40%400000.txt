@@ -57,5 +57,5 @@ built-ins/Map/prototype-of-map.js sloppy pass
 built-ins/Map/prototype-of-map.js strict pass
 built-ins/Map/undefined-newtarget.js sloppy pass
 built-ins/Map/undefined-newtarget.js strict pass
-built-ins/Map/valid-keys.js sloppy skip:ironhorse-missing-global:WeakRef
-built-ins/Map/valid-keys.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/Map/valid-keys.js sloppy pass
+built-ins/Map/valid-keys.js strict pass

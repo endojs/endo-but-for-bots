@@ -6,29 +6,56 @@ use Opcode::*;
 impl Interp {
     pub(super) fn dispatch_for_of(&mut self, code: &[u8], op: Opcode) -> Result<(), Step> {
         let iterable = self.pop_checked()?;
-        // A guest-defined `@@iterator` takes precedence over the
-        // intrinsic dense fast paths below. Accessor lookup and a
-        // user iterator method both re-enter the interpreter; the
-        // returned object is then driven by the compiler-emitted
-        // `next`/`done`/`value` loop.
-        let custom_iterator = match iterable.value {
-            Payload::Reference(instance) => {
-                let symbol_name = if op == XS_CODE_FOR_AWAIT_OF {
-                    "asyncIterator"
-                } else {
-                    "iterator"
-                };
-                let symbol_id = self
-                    .well_known_symbol_property_id(symbol_name)
-                    .unwrap_or(crate::value::XS_NO_ID);
-                if symbol_id == crate::value::XS_NO_ID {
-                    None
-                } else {
-                    let method = (self.mop_get(code, instance, symbol_id, iterable))?;
-                    (method.kind != Kind::Undefined).then_some(method)
+        // GetIterator reads `@@iterator` (`@@asyncIterator` for
+        // `for await`) through [[Get]] on the operand, or on its
+        // wrapper prototype for a primitive, before anything else:
+        // a getter and a user method both re-enter the interpreter,
+        // and the returned object is then driven by the
+        // compiler-emitted `next`/`done`/`value` loop. The dense fast
+        // paths below are taken only when no program text can have
+        // reached the symbol (its key was never interned), so the
+        // intrinsic method is certainly still in place.
+        let symbol_name = if op == XS_CODE_FOR_AWAIT_OF {
+            "asyncIterator"
+        } else {
+            "iterator"
+        };
+        let symbol_id = self
+            .well_known_symbol_property_id(symbol_name)
+            .unwrap_or(crate::value::XS_NO_ID);
+        let custom_iterator = if symbol_id == crate::value::XS_NO_ID
+            || matches!(iterable.kind, Kind::Null | Kind::Undefined)
+        {
+            None
+        } else {
+            let holder = match iterable.value {
+                Payload::Reference(_) if iterable.kind == Kind::Symbol => self.symbol_proto,
+                Payload::Reference(instance) => instance,
+                Payload::String(_) if iterable.kind == Kind::String => self.string_proto,
+                Payload::Integer(_) | Payload::Number(_) => self.number_proto,
+                Payload::BigInt(_) => self.bigint_proto,
+                _ if iterable.kind == Kind::Boolean => self.boolean_proto,
+                _ => crate::value::SlotIndex::NULL,
+            };
+            let method = if holder.is_null() {
+                Slot::undefined()
+            } else {
+                (self.mop_get(code, holder, symbol_id, iterable))?
+            };
+            if matches!(method.kind, Kind::Undefined | Kind::Null) {
+                // A sync operand with no `@@iterator`: GetMethod gives
+                // undefined, and XS calls it (`fxCallInstance`'s "call:
+                // not a function"), raised in-frame so an enclosing `try`
+                // in the same activation observes it. `for await` falls
+                // back to the synchronous iterator below.
+                if op != XS_CODE_FOR_AWAIT_OF {
+                    let error = self.internal_error("TypeError", "call: not a function".into());
+                    return Err(self.raise_js(error));
                 }
+                None
+            } else {
+                Some(method)
             }
-            _ => None,
         };
         if let Some(method) = custom_iterator {
             self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
@@ -101,7 +128,11 @@ impl Interp {
                 let it_kind = match self.collections[&i].kind {
                     CollKind::Map => 7u8,
                     CollKind::Set => 6u8,
-                    _ => return Err(Step::Host(Halt::NotImplemented("for_of:weak-collection"))),
+                    // A WeakMap or WeakSet has no `@@iterator`.
+                    _ => {
+                        let error = self.internal_error("TypeError", "call: not a function".into());
+                        return Err(self.raise_js(error));
+                    }
                 };
                 self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
                 let it = self.make_collection_iterator(i, it_kind);
@@ -137,36 +168,47 @@ impl Interp {
         Ok(())
     }
 
-    pub(super) fn dispatch_for_in(&mut self) -> Result<(), Step> {
+    pub(super) fn dispatch_for_in(&mut self, code: &[u8]) -> Result<(), Step> {
         let obj = self.pop_checked()?;
-        let inst = match obj.value {
-            // A primitive symbol carries `Payload::Reference(desc)`
-            // — its description slot, NOT an instance — so this
-            // must precede the generic arm, or the loop enumerates
-            // an object handed to `Symbol()` and hands the guest
-            // its keys. XS boxes the primitive (`fxToInstance`) and
-            // enumerates the wrapper: no own properties, so the
-            // enumerable set is exactly `%Symbol.prototype%`'s
-            // chain (empty, since every built-in there is
-            // `XS_DONT_ENUM` — but a guest-added enumerable
-            // property on it does show up, as the spec says).
-            // Enumerating that prototype directly gets the same
-            // keys without the wrapper allocation XS pre-pays for
-            // in the enumerator's own cost.
-            Payload::Reference(_) if obj.kind == Kind::Symbol && !self.symbol_proto.is_null() => {
-                self.symbol_proto
+        // XS's `fx_Enumerator` boxes a primitive (`fxToInstance`) and
+        // enumerates the wrapper, metered as ToObject's two slots and
+        // dispatch: a String wrapper owns its indices, and every other one
+        // owns nothing, so its prototype's chain is the enumerable set.
+        let native = match obj.kind {
+            // `undefined`/`null`: a loop over nothing. XS's `fx_Enumerator`
+            // builds the enumerator and returns before collecting a key.
+            Kind::Undefined | Kind::Null => {
+                let it = self.make_enumerator(code, crate::value::SlotIndex::NULL)?;
+                self.push(it);
+                return Ok(());
             }
-            // `undefined`/`null` for-in is a legal empty loop, but
-            // its zero-key enumerator setup is a later increment;
-            // an object receiver is the covered case.
-            Payload::Reference(i) if obj.kind != Kind::Symbol => i,
+            // A primitive symbol carries `Payload::Reference(desc)` — its
+            // description slot, NOT an instance — so it must not be
+            // enumerated as an object. Its wrapper's chain is
+            // `%Symbol.prototype%`'s, enumerated directly at the cost the
+            // enumerator has always charged for it.
+            Kind::Symbol if !self.symbol_proto.is_null() => {
+                let it = self.make_enumerator(code, self.symbol_proto)?;
+                self.push(it);
+                return Ok(());
+            }
+            Kind::Symbol => Some(Native::Symbol),
+            Kind::String => Some(Native::String),
+            Kind::Integer | Kind::Number => Some(Native::Number),
+            Kind::Boolean => Some(Native::Boolean),
+            Kind::BigInt => Some(Native::BigInt),
+            _ => None,
+        };
+        let inst = match (native, obj.value) {
+            (Some(native), _) => self.box_primitive_to_instance(native, obj),
+            (None, Payload::Reference(inst)) if obj.kind == Kind::Reference => inst,
             _ => {
                 return Err(Step::Host(Halt::NotImplemented(
                     "for_in:non-object-receiver",
                 )))
             }
         };
-        let it = self.make_enumerator(inst);
+        let it = self.make_enumerator(code, inst)?;
         self.push(it);
         Ok(())
     }

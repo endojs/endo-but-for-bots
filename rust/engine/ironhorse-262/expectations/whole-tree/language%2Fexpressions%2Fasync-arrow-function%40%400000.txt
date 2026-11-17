@@ -78,8 +78,8 @@ language/expressions/async-arrow-function/params-trailing-comma-multiple.js slop
 language/expressions/async-arrow-function/params-trailing-comma-multiple.js strict pass
 language/expressions/async-arrow-function/params-trailing-comma-single.js sloppy pass
 language/expressions/async-arrow-function/params-trailing-comma-single.js strict pass
-language/expressions/async-arrow-function/prototype.js sloppy skip:unsupported-opcode:Iterator.helper
-language/expressions/async-arrow-function/prototype.js strict skip:unsupported-opcode:Iterator.helper
+language/expressions/async-arrow-function/prototype.js sloppy pass
+language/expressions/async-arrow-function/prototype.js strict pass
 language/expressions/async-arrow-function/rest-param-strict-body.js sloppy pass
 language/expressions/async-arrow-function/rest-param-strict-body.js strict pass
 language/expressions/async-arrow-function/rest-params-trailing-comma-early-error.js sloppy pass

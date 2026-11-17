@@ -123,6 +123,7 @@ type TFLeafMap<Payload> = {
   byteArray: Uint8Array;
   string: Payload;
   number: Payload;
+  safeInteger: Payload;
   bigint: Payload;
   nat: Payload;
   symbol: Payload;

@@ -75,8 +75,8 @@ built-ins/Temporal/ZonedDateTime/compare/compares-exact-time-not-clock-time.js s
 built-ins/Temporal/ZonedDateTime/compare/compares-exact-time-not-clock-time.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/compare/disregard-time-zone-ids-if-exact-times-are-equal.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/compare/disregard-time-zone-ids-if-exact-times-are-equal.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/ZonedDateTime/compare/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/ZonedDateTime/compare/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/ZonedDateTime/compare/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/compare/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/compare/leap-second.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/compare/leap-second.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/compare/length.js sloppy skip:oracle-host-missing-temporal

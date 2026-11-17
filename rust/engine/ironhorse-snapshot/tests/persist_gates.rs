@@ -27,6 +27,7 @@
 #[path = "common/compile.rs"]
 mod guest_compile;
 use guest_compile::compile;
+use ironhorse_snapshot::CommitToken;
 
 use ironhorse_snapshot::machine::MachineSnapshotError;
 use ironhorse_snapshot::machine::{
@@ -111,6 +112,38 @@ fn a_completed_machine_still_passes_the_blob_verbs() {
         .expect("a quiescent completed machine snapshots as before");
 }
 
+/// A catchable failure after `new Compartment` has created its environment is
+/// still a failed construction: it must not switch a standalone interpreter to
+/// the shared-compartment persistence profile or retain the provisional
+/// environment.
+#[test]
+fn persistence_remains_available_after_failed_guest_compartment_construction() {
+    let (code, names) = compile(
+        "var caught = false; \
+         try { new Compartment({ globals: { NaN: 1 } }); } \
+         catch (error) { caught = error instanceof TypeError; } \
+         caught;",
+    );
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    let outcome = machine.run(&code);
+    assert!(outcome.completed, "the constructor failure is catchable");
+    assert_eq!(outcome.result, "true");
+    let bytes = machine
+        .write_snapshot(&sig())
+        .expect("a failed construction does not change snapshot eligibility");
+    let resumed = from_snapshot_bytes(&bytes, &sig())
+        .expect("a failed construction leaves a restorable snapshot");
+    resumed
+        .write_snapshot(&sig())
+        .expect("the restored machine remains snapshot-eligible");
+
+    let mut store = MemoryStore::new();
+    begin_store_session(resumed, &sig(), &mut store)
+        .map_err(|(_, error)| error)
+        .expect("the store verb remains available after the failure");
+}
+
 /// The former W6-12 refusal flips once retained function state travels:
 /// a blob carries an eval-defined function and its defining segment.
 #[test]
@@ -124,7 +157,7 @@ fn a_live_eval_function_round_trips_the_blob_verbs() {
             raw_budget: u64,
             charge: &mut dyn FnMut(u64) -> bool,
         ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-            match ironhorse_compile::compile_atoms_budgeted_with_limit(
+            match ironhorse_compile::compile_atoms_budgeted_firewalled(
                 source,
                 ironhorse_compile::Goal::Eval,
                 strict,
@@ -140,11 +173,20 @@ fn a_live_eval_function_round_trips_the_blob_verbs() {
                 Err(ironhorse_compile::CompileError::MeterAbort) => {
                     Err(ironhorse_vm::SourceCompileError::MeterAbort)
                 }
+                // A caught compiler panic is an engine fault, not a coverage
+                // gap (architecture finding F063).
+                Err(ironhorse_compile::CompileError::Invariant(detail)) => {
+                    Err(ironhorse_vm::SourceCompileError::Invariant(detail))
+                }
                 Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
                     ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                         kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
                         ..
                     }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpHostAllocationFailed,
+                        ..
+                    }) => Err(ironhorse_vm::SourceCompileError::HostAllocationFailed),
                     ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                         kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
                         ..
@@ -315,15 +357,17 @@ fn a_resumed_machine_reattaches_without_moving_the_meter_deadline() {
 // guest-storable runtime mint -- the promise resolver, whose
 // `FuncInfo` restore now rebuilds -- every reachable machine's doomed
 // set is EMPTY and the traversal is a future-proofing net: a NEW
-// runtime `alloc_method` mint that escapes to the guest re-arms it,
+// runtime native-method mint that escapes to the guest re-arms it,
 // and the fixtures below (which mint resolvers into every holder
 // shape the traversal walks) become its regression bed.
 //
-// The refuse-on-hold arms that remain are the ASYNC ones: a promise
-// reaction whose kind would resume a still-Pending async frame, and a
-// live async generator (a guest-held object whose row `.next()`
-// consults in every state). Both refuse by name until their atoms
-// land -- the recorded lift.
+// The async refuse-on-hold arms are GONE, one carry at a time: async
+// activations (`ASYN`, format 14), async generators (format 23) and the
+// `Array.fromAsync` accumulations (format 24, architecture finding F127's
+// last clause) all travel now. The kind check stays rather than becoming
+// unreachable code — a NEW reaction kind added without a carry must be
+// refused here rather than resumed against state nothing wrote — and the
+// test below is the one that would notice if a carry regressed.
 
 fn resolver_fixture(tail: &str) -> Interp {
     let src = format!(
@@ -437,11 +481,19 @@ fn a_live_async_generator_persists_in_every_verb() {
     }
 }
 
-/// The one async-flavored refusal that remains: an `Array.fromAsync`
-/// accumulation mid-flight, anchored by a `FromAsync*` reaction whose
-/// state no atom carries.
+/// The LAST async-flavored refusal, and it is gone: an `Array.fromAsync`
+/// accumulation mid-flight now persists (architecture finding F127's final
+/// clause).
+///
+/// This test used to assert the refusal, and it was the residue written down
+/// — "a promise reaction that would resume a non-persisted async frame". The
+/// `from_async` arena rides the `ASYN` payload behind the async generators at
+/// format 24, so the gate admits the machine and the accumulation resumes.
+/// `ironhorse-snapshot/tests/from_async_carry.rs` proves it comes back with
+/// the right elements; this proves the GATE stopped refusing, which is the
+/// half that lives here.
 #[test]
-fn a_mid_flight_array_from_async_refuses_every_persist_verb() {
+fn a_mid_flight_array_from_async_no_longer_refuses_any_persist_verb() {
     let (b, n) = compile(
         "var p = 0; var t = 0; p = Array.fromAsync([new Promise(function () {})]); t = 7; t",
     );
@@ -449,10 +501,42 @@ fn a_mid_flight_array_from_async_refuses_every_persist_verb() {
     m.link_intrinsics(&n);
     let out = m.run(&b);
     assert!(out.completed, "fixture crank: {:?}", out.halt);
-    assert_every_persist_verb_refuses(
-        m,
-        "a promise reaction that would resume a non-persisted async frame",
+    assert_eq!(
+        m.stored_unpersistable_row(),
+        None,
+        "the gate must no longer name a holder for a mid-flight fromAsync"
     );
+    assert!(
+        m.write_snapshot(&sig()).is_ok(),
+        "the blob verb must accept it"
+    );
+    let mut store = MemoryStore::new();
+    assert!(
+        begin_store_session(m, &sig(), &mut store).is_ok(),
+        "the store verb must accept it"
+    );
+}
+
+/// The three persist verbs still agree on a refusal, and name it identically.
+///
+/// This check used to ride the `Array.fromAsync` refusal above; F127's carry
+/// took that fixture away, and the property is independent of which row is
+/// refused. The `$262` host is what a QUIESCENT machine can still hold that
+/// no atom carries — a conformance machine is not a persistable one — so it
+/// is the fixture now. Without this, `stored_unpersistable_row` could start
+/// disagreeing with `write_snapshot`, or the store verb could refuse through
+/// a different gate, and only the row-by-row tests above would notice.
+#[test]
+fn every_persist_verb_refuses_a_held_row_by_the_same_name() {
+    let (b, n) = compile("var x = 0; x = 41; x");
+    let mut m = Interp::new();
+    // BEFORE `link_intrinsics`, which is the installer's own precondition.
+    m.install_test262_host();
+    m.link_intrinsics(&n);
+    let out = m.run(&b);
+    assert!(out.completed, "fixture crank: {:?}", out.halt);
+    assert!(m.is_quiescent(), "the refusal must not be quiescence's");
+    assert_every_persist_verb_refuses(m, "a test262 `$262` host object, which no snapshot carries");
 }
 
 #[test]
@@ -864,18 +948,21 @@ fn the_image_of_a_halted_machine_is_unobtainable() {
         Ok(_) => panic!("an ungated image of a halted machine must not exist"),
         Err(other) => panic!("refused by the wrong gate: {other:?}"),
     }
-    // And the pending-row arm refuses the image by name too.
-    let (b, n) = compile(
-        "var p = 0; var t = 0; p = Array.fromAsync([new Promise(function () {})]); t = 7; t",
-    );
+    // And the pending-row arm refuses the image by name too. The fixture was
+    // a mid-flight `Array.fromAsync` until format 24 carried those
+    // (architecture finding F127); the `$262` host is what is left that a
+    // quiescent machine can hold and no snapshot carries.
+    let (b, n) = compile("var x = 0; x = 41; x");
     let mut m = Interp::new();
+    // BEFORE `link_intrinsics`, which is the installer's own precondition.
+    m.install_test262_host();
     m.link_intrinsics(&n);
     assert!(m.run(&b).completed);
     match m.snapshot_image_for_testing(&sig()) {
         Err(MachineSnapshotError::PendingStateUnsupported { row }) => {
             assert_eq!(
                 row,
-                "a promise reaction that would resume a non-persisted async frame"
+                "a test262 `$262` host object, which no snapshot carries"
             )
         }
         other => panic!("the image must refuse by the pending row's name: {other:?}"),
@@ -894,15 +981,18 @@ fn the_image_of_a_halted_machine_is_unobtainable() {
 }
 
 /// An external caller can no longer poison a runnable machine's property
-/// records. Malformed keys supplied in an offline image must be refused by
-/// eager adoption. Lazy adoption defers heap validation, so publication must
-/// still refuse if attachment itself does not.
+/// records. A container holding a malformed key is refused at decode. A
+/// store is trusted (the store-seam design's trust model), so neither resume
+/// path audits one for a malformed key; the full validator refuses it, and a
+/// machine resumed from it still cannot publish it, so the key cannot
+/// travel on.
 #[test]
 fn a_stored_unregistered_key_id_refuses_adoption_or_publication() {
     use ironhorse_snapshot::{
         image::write_machine_unchecked,
-        machine::{from_snapshot_bytes, resume_from_store, resume_from_store_lazy},
-        store::{image_to_batch_unchecked, HeapStoreCommit},
+        machine::{from_snapshot_bytes, resume_from_store, resume_from_store_lazy, StoreSession},
+        store::{image_to_batch_unchecked, validate_store_content, HeapStoreCommit},
+        SnapshotError,
     };
     use std::{cell::RefCell, rc::Rc};
     let (b, n) = compile("var x = 0; x = 41; x");
@@ -922,34 +1012,44 @@ fn a_stored_unregistered_key_id_refuses_adoption_or_publication() {
     assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_err());
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
-    assert!(resume_from_store(&store, &sig()).is_err());
-    if let Ok(lazy) = resume_from_store_lazy(Rc::new(RefCell::new(store)), &sig()) {
-        use ironhorse_snapshot::SnapshotError;
-        const REFUSAL: &str = "stored property id outside the name and symbol-key tables";
+    const REFUSAL: &str = "stored property id outside the name and symbol-key tables";
+    assert_eq!(
+        validate_store_content(&store, &sig()).err(),
+        Some(StoreError::Snapshot(SnapshotError::Corrupt(
+            "stored property id outside the name and symbol-key tables"
+        )))
+    );
+    let publication_refuses = |session: StoreSession| {
         assert!(matches!(
-            lazy.machine().snapshot_image(&sig()),
+            session.machine().snapshot_image(&sig()),
             Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(
                 REFUSAL
             )))
         ));
         assert!(matches!(
-            lazy.machine().write_snapshot(&sig()),
+            session.machine().write_snapshot(&sig()),
             Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(
                 REFUSAL
             )))
         ));
         let mut destination = MemoryStore::new();
         assert!(matches!(
-            begin_store_session(lazy.into_machine(), &sig(), &mut destination),
+            begin_store_session(session.into_machine(), &sig(), &mut destination),
             Err((_, StoreError::Snapshot(SnapshotError::Corrupt(REFUSAL))))
         ));
         assert!(
             destination.manifest().is_err(),
             "refused publication writes nothing"
         );
-    }
+    };
+    // Resume trusts the stored ids; publication is where they are audited.
+    publication_refuses(resume_from_store(&store, &sig()).expect("eager resume adopts the store"));
+    publication_refuses(
+        resume_from_store_lazy(Rc::new(RefCell::new(store)), &sig())
+            .expect("lazy resume adopts the store"),
+    );
 }
 
 /// A metered crank the host refuses at a TOP-LEVEL loop-closing check:
@@ -1224,4 +1324,103 @@ fn a_container_without_meter_identity_is_refused() {
         from_snapshot_bytes(&writer.finish().unwrap(), &sig()),
         Err(SnapshotError::Corrupt("missing METR identity"))
     ));
+}
+
+/// A guest `Compartment`'s state outlives its INSTANCE, so the persist gate
+/// cannot key on the instance table alone.
+///
+/// `guest_compartments` empties as soon as the collector prunes the dead
+/// instance's row, and the gate then had nothing to object to -- but the
+/// compartment's ENVIRONMENT survives (a retained function keeps
+/// `global_env`, and hence the environment, alive), and the environment is
+/// what carries both pieces of unpersistable state:
+///
+/// - `globalLexicals`, for which `EnvironmentRow` has no column. The image
+///   would keep the environment and silently drop its bindings, so the
+///   restored crank answers a `ReferenceError` -- or an unshadowed global --
+///   where the pre-checkpoint crank answered the bound value. A lexical is
+///   not arena-chain-resident either, so `rebuild_global_props` has nothing
+///   to recover it from.
+/// - `shared_compartments`, which `construct_compartment` sets and which is
+///   what makes `shared_machine_snapshot` emit at all. On a machine with no
+///   shared-realm primordial profile the image carries empty
+///   `intrinsic_roots`, and restore refuses it as a
+///   "shared primordial profile mismatch" -- bytes written that no restore
+///   can ever accept, with nothing said at write time.
+///
+/// Both are refused on the write side now, where the caller can still act.
+#[test]
+fn a_dead_compartment_instance_does_not_open_the_persist_gate() {
+    struct TestCompiler;
+    impl ironhorse_vm::SourceCompiler for TestCompiler {
+        fn compile_source(
+            &self,
+            source: &str,
+            strict: bool,
+            raw_budget: u64,
+            charge: &mut dyn FnMut(u64) -> bool,
+        ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+            match ironhorse_compile::compile_atoms_budgeted_with_limit(
+                source,
+                ironhorse_compile::Goal::Eval,
+                strict,
+                raw_budget,
+                charge,
+            ) {
+                Ok(c) => Ok(ironhorse_vm::CompiledSource {
+                    bytecode: c.bytecode,
+                    symbols: c.symbols,
+                    parse_meter_raw: c.parse_meter_raw,
+                    parse_computrons: c.parse_computrons,
+                }),
+                Err(ironhorse_compile::CompileError::MeterAbort) => {
+                    Err(ironhorse_vm::SourceCompileError::MeterAbort)
+                }
+                Err(e) => Err(ironhorse_vm::SourceCompileError::Syntax(format!("{e:?}"))),
+            }
+        }
+    }
+
+    // `options` names the compartment's construction; `row` is the gate the
+    // surviving environment must trip once the instance is gone.
+    for (options, row) in [
+        (
+            "{ globalLexicals: { secret: 42 } }",
+            "a guest `Compartment`'s `globalLexicals`, for which `EnvironmentRow` has no column",
+        ),
+        (
+            "{}",
+            "a guest `Compartment` built on a machine with no shared-realm primordial profile, \
+             whose image no restore would accept",
+        ),
+    ] {
+        let (b, n) = compile(&format!(
+            "var f = 0; f = new Compartment({options})\
+             .evaluate('(function () {{ return 1; }})'); 0;"
+        ));
+        let mut m = Interp::new();
+        m.set_source_compiler(std::rc::Rc::new(TestCompiler));
+        m.link_intrinsics(&n);
+        assert!(m.run(&b).completed);
+        // The instance is unreachable. Collecting it empties
+        // `guest_compartments`, which is precisely what used to satisfy the
+        // presence gate while the environment carried on.
+        m.collect_garbage().unwrap();
+        match m.write_snapshot(&sig()) {
+            Err(MachineSnapshotError::PendingStateUnsupported { row: named }) => {
+                assert_eq!(named, row, "refused by the wrong gate for {options}")
+            }
+            other => panic!("must refuse {options}: {other:?}"),
+        }
+        let mut store = MemoryStore::new();
+        match begin_store_session(m, &sig(), &mut store) {
+            Err((_, StoreError::PendingStateUnsupported { row: named })) => {
+                assert_eq!(named, row, "the store verb refuses by the same name")
+            }
+            Err((_, other)) => {
+                panic!("the store verb refused {options} by the wrong gate: {other:?}")
+            }
+            Ok(_) => panic!("the store verb must refuse {options}"),
+        }
+    }
 }

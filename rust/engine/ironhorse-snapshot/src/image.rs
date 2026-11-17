@@ -26,7 +26,8 @@ use crate::atom::{AtomReader, AtomWriter};
 use crate::format::{
     Signature, SnapshotError, Version, BLOC, CREA, HEAP, KEYS, METR, NAME, SIGN, STAC, SYMB, VERS,
 };
-use crate::slot_codec::{decode_slots, encode_slots, SLOT_RECORD_BYTES};
+use crate::sink::Sink;
+use crate::slot_codec::{decode_slots, SLOT_RECORD_BYTES};
 use ironhorse_vm::snapshot_api::{
     CollatorData, DateTimeFormatData, IntlTables, IteratorRow, ListFormatData, LocaleData,
     NumberFormatData, PluralRulesData, SegmentIteratorData, SegmenterData, SegmentsData,
@@ -85,14 +86,18 @@ impl MeterImage {
 
     pub(crate) fn encode(&self) -> Vec<u8> {
         let mut v = Vec::new();
-        v.extend_from_slice(&self.index.to_be_bytes());
-        v.extend_from_slice(&self.interval.to_be_bytes());
-        v.extend_from_slice(&self.count.to_be_bytes());
-        let vb = self.cost_table_version.as_bytes();
-        v.extend_from_slice(&(vb.len() as u32).to_be_bytes());
-        v.extend_from_slice(vb);
-        v.extend_from_slice(&self.cost_table_digest);
+        self.encode_into(&mut v);
         v
+    }
+
+    pub(crate) fn encode_into<S: Sink>(&self, v: &mut S) {
+        v.put(&self.index.to_be_bytes());
+        v.put(&self.interval.to_be_bytes());
+        v.put(&self.count.to_be_bytes());
+        let vb = self.cost_table_version.as_bytes();
+        v.put(&(vb.len() as u32).to_be_bytes());
+        v.put(vb);
+        v.put(&self.cost_table_digest);
     }
 
     pub(crate) fn decode(p: &[u8]) -> Result<MeterImage, SnapshotError> {
@@ -255,22 +260,30 @@ pub struct ErrorImage {
 /// One `ArrayBuffer` instance's serialized side-table row (the `ABUF`
 /// atom / small-state buffers section): the owning slot, the backing
 /// store's chunk offset (the bytes themselves travel with the chunk
-/// arena in `BLOC`), the byte length, and the brand flags (bit 0 =
-/// detached, bit 1 = shared; all other bits refused). Ascending by
-/// owner in serialized form.
+/// arena in `BLOC`), the byte length, the brand flags (bit 0 =
+/// detached, bit 1 = shared, bit 2 = resizable; all other bits refused),
+/// and a resizable buffer's maximum byte length (0 otherwise; format 26).
+/// Ascending by owner in serialized form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BufferImage {
     pub owner: u32,
     pub data: u32,
     pub length: u32,
     pub flags: u8,
+    pub max_length: u32,
 }
+
+/// [`BufferImage::flags`] bit 2: the buffer is resizable (growable, when
+/// shared), and its row carries [`BufferImage::max_length`].
+pub const BUFFER_RESIZABLE: u8 = 0b100;
 
 /// One TypedArray instance's serialized side-table row (the `TARR`
 /// atom / small-state typed-arrays section): the owning slot, the
 /// element kind (an index into `ironhorse_vm::TYPED_ARRAY_TYPES`,
 /// refused past it), the backing buffer's slot, the byte offset, and
-/// the element length. Ascending by owner in serialized form.
+/// the element length, which is `ironhorse_vm::VIEW_LENGTH_TRACKING` for
+/// a view that tracks a resizable buffer's length (format 26). Ascending
+/// by owner in serialized form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypedArrayImage {
     pub owner: u32,
@@ -282,8 +295,9 @@ pub struct TypedArrayImage {
 
 /// One DataView instance's serialized side-table row (the `DVIW` atom
 /// / small-state data-views section): the owning slot, the backing
-/// buffer's slot, the byte offset, and the byte length. Ascending by
-/// owner in serialized form.
+/// buffer's slot, the byte offset, and the byte length, which is
+/// `ironhorse_vm::VIEW_LENGTH_TRACKING` for a length-tracking view (format
+/// 26). Ascending by owner in serialized form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DataViewImage {
     pub owner: u32,
@@ -446,6 +460,10 @@ pub struct MachineImage {
     pub private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot,
     /// `DISP`: explicit resource-management stacks.
     pub disposable_stacks: Vec<ironhorse_vm::snapshot_api::DisposableStackRow>,
+    /// `WKRF`: `WeakRef` targets.
+    pub weak_refs: Vec<ironhorse_vm::snapshot_api::WeakRefRow>,
+    /// `FNRG`: `FinalizationRegistry` callbacks, cleanup flags and cells.
+    pub finalization_registries: Vec<ironhorse_vm::snapshot_api::FinalizationRegistryRow>,
     /// `GENR`: synchronous generator saved activations.
     pub generators: Vec<ironhorse_vm::snapshot_api::GeneratorRow>,
     /// `PRMS`: the promise cluster — settlement state, resolving
@@ -742,6 +760,22 @@ impl MachineImage {
         self
     }
 
+    pub fn with_weak_refs(
+        mut self,
+        weak_refs: Vec<ironhorse_vm::snapshot_api::WeakRefRow>,
+    ) -> MachineImage {
+        self.weak_refs = weak_refs;
+        self
+    }
+
+    pub fn with_finalization_registries(
+        mut self,
+        finalization_registries: Vec<ironhorse_vm::snapshot_api::FinalizationRegistryRow>,
+    ) -> MachineImage {
+        self.finalization_registries = finalization_registries;
+        self
+    }
+
     pub fn with_generators(
         mut self,
         generators: Vec<ironhorse_vm::snapshot_api::GeneratorRow>,
@@ -777,19 +811,36 @@ impl MachineImage {
         let chunks = ChunkArena::from_image(self.chunks.clone());
         (slots, chunks)
     }
+
+    /// [`Self::to_arenas`], refusing an out-of-range or duplicate free
+    /// entry, or a live count the free list does not account for, instead
+    /// of panicking. The store's eager resume restores through here from
+    /// a free list no validator has checked (the store-seam design's trust
+    /// model), so a bad one must come back as an error.
+    pub fn try_to_arenas(&self) -> Result<(SlotArena, ChunkArena), SnapshotError> {
+        let slots =
+            SlotArena::try_from_image(self.slots.clone(), self.slot_free.clone(), self.slot_live)
+                .map_err(|_| SnapshotError::Corrupt("invalid slot arena image"))?;
+        let chunks = ChunkArena::from_image(self.chunks.clone());
+        Ok((slots, chunks))
+    }
 }
 
 // --- string-list and slot-list atom payload helpers ---
 
 pub(crate) fn encode_strings(list: &[String]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(list.len() as u32).to_be_bytes());
+    encode_strings_into(list, &mut v);
+    v
+}
+
+pub(crate) fn encode_strings_into<S: Sink>(list: &[String], v: &mut S) {
+    v.put(&(list.len() as u32).to_be_bytes());
     for s in list {
         let b = s.as_bytes();
-        v.extend_from_slice(&(b.len() as u32).to_be_bytes());
-        v.extend_from_slice(b);
+        v.put(&(b.len() as u32).to_be_bytes());
+        v.put(b);
     }
-    v
 }
 
 pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
@@ -834,13 +885,17 @@ pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
 
 pub(crate) fn encode_names(list: &[SymbolName]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(list.len() as u32).to_be_bytes());
+    encode_names_into(list, &mut v);
+    v
+}
+
+pub(crate) fn encode_names_into<S: Sink>(list: &[SymbolName], v: &mut S) {
+    v.put(&(list.len() as u32).to_be_bytes());
     for s in list {
         let b = s.as_bytes();
-        v.extend_from_slice(&(b.len() as u32).to_be_bytes());
-        v.extend_from_slice(b);
+        v.put(&(b.len() as u32).to_be_bytes());
+        v.put(b);
     }
-    v
 }
 
 pub(crate) fn decode_names(p: &[u8]) -> Result<Vec<SymbolName>, SnapshotError> {
@@ -884,12 +939,16 @@ pub(crate) fn decode_names(p: &[u8]) -> Result<Vec<SymbolName>, SnapshotError> {
 }
 
 pub(crate) fn encode_u32s(list: &[u32]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(4 + list.len() * 4);
-    v.extend_from_slice(&(list.len() as u32).to_be_bytes());
-    for &x in list {
-        v.extend_from_slice(&x.to_be_bytes());
-    }
+    let mut v = Vec::new();
+    encode_u32s_into(list, &mut v);
     v
+}
+
+pub(crate) fn encode_u32s_into<S: Sink>(list: &[u32], v: &mut S) {
+    v.put(&(list.len() as u32).to_be_bytes());
+    for &x in list {
+        v.put(&x.to_be_bytes());
+    }
 }
 
 pub(crate) fn decode_u32s(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
@@ -919,14 +978,42 @@ pub(crate) fn decode_u32s(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
 /// HEAP payload: `[slot_count][free_count][live][free…][records…]`.
 fn encode_heap(image: &MachineImage) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(image.slots.len() as u32).to_be_bytes());
-    v.extend_from_slice(&(image.slot_free.len() as u32).to_be_bytes());
-    v.extend_from_slice(&image.slot_live.to_be_bytes());
-    for &f in &image.slot_free {
-        v.extend_from_slice(&f.to_be_bytes());
-    }
-    v.extend_from_slice(&encode_slots(&image.slots));
+    encode_heap_into(
+        image.slots.len() as u32,
+        &image.slot_free,
+        image.slot_live,
+        image.slots.iter().copied(),
+        &mut v,
+    );
     v
+}
+
+/// [`encode_heap`] from the parts, with the records supplied by any
+/// iterator — an image's owned vector or a live arena read in place — so
+/// the image writer and the streaming writer share one `HEAP` encoding.
+/// `slot_count` must be the iterator's length: the header is written first.
+pub(crate) fn encode_heap_into<S: Sink>(
+    slot_count: u32,
+    slot_free: &[u32],
+    slot_live: u32,
+    records: impl Iterator<Item = Slot>,
+    v: &mut S,
+) {
+    v.put(&slot_count.to_be_bytes());
+    v.put(&(slot_free.len() as u32).to_be_bytes());
+    v.put(&slot_live.to_be_bytes());
+    for &f in slot_free {
+        v.put(&f.to_be_bytes());
+    }
+    for record in records {
+        crate::slot_codec::put_slot(&record, v);
+    }
+}
+
+/// The exact length of the `HEAP` payload [`encode_heap_into`] writes for
+/// these counts, for the streaming writer's sizing pass.
+pub(crate) fn heap_payload_len(slot_count: u32, free_count: usize) -> u64 {
+    12 + 4 * free_count as u64 + SLOT_RECORD_BYTES as u64 * slot_count as u64
 }
 
 fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
@@ -949,22 +1036,24 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
         free.push(u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]));
         i += 4;
     }
-    // checked_mul, not `*`: on a 32-bit usize the product can wrap,
-    // and a wrapped `want` would satisfy the truncation gate below
-    // while `slot_count` stays attacker-sized — falsifying the bound
-    // the `seen` scratch depends on. The scratch bound must hold on
-    // every target, including 32-bit hosts.
-    let want = slot_count
-        .checked_mul(SLOT_RECORD_BYTES)
-        .ok_or(SnapshotError::Corrupt("HEAP record count"))?;
-    if p.len() - i < want {
+    // Sized in u64, where a u32 count times the record width cannot
+    // overflow: in usize the product wraps on a 32-bit host, and a wrapped
+    // `want` would satisfy the truncation gate below while `slot_count`
+    // stays attacker-sized, falsifying the bound the `seen` scratch
+    // depends on. Every target refuses an oversized count as truncation,
+    // with the same message, and `want` fits in usize once it is known to
+    // be at most the payload's length.
+    let want = slot_count as u64 * SLOT_RECORD_BYTES as u64;
+    if ((p.len() - i) as u64) < want {
         return Err(SnapshotError::Corrupt("HEAP records truncated"));
     }
+    let want = want as usize;
     if p.len() - i != want {
         return Err(SnapshotError::Corrupt("HEAP trailing bytes"));
     }
-    // Semantic gates on the free list, matching the store path's
-    // (`validate_store`): every index in range, no duplicates. An
+    // Semantic gates on the free list, matching the store validator's
+    // (`validate_store`) and the VM's own as it builds the slot arena:
+    // every index in range, no duplicates. An
     // out-of-range entry would panic the arena's free-bitmap rebuild
     // at construction (the snapshot_decoder fuzz target found that
     // panic within its first half-minute once the toolchain ran
@@ -1057,32 +1146,105 @@ impl<'a> Cursor<'a> {
 /// canonical order), items index-ascending.
 pub(crate) fn encode_arrays(arrays: &[ArrayImage]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(arrays.len() as u32).to_be_bytes());
-    for a in arrays {
-        v.extend_from_slice(&a.owner.to_be_bytes());
-        v.extend_from_slice(&a.length.to_be_bytes());
-        v.extend_from_slice(&(a.items.len() as u32).to_be_bytes());
-        for (index, value) in &a.items {
-            v.extend_from_slice(&index.to_be_bytes());
-            crate::slot_codec::encode_slot(value, &mut v);
+    encode_arrays_into(arrays, &mut v);
+    v
+}
+
+/// One `ARRY`/`IDXP` row as the encoder reads it: an owned [`ArrayImage`]
+/// or [`IndexPropsImage`], or a live table row borrowed in place
+/// ([`ironhorse_vm::snapshot_api::ArrayRowView`]). The second word is the
+/// array's spec length or the index store's high-water mark; the wire
+/// layout is the same.
+pub(crate) trait ArrayRowLike {
+    fn owner(&self) -> u32;
+    fn length(&self) -> u32;
+    fn item_count(&self) -> usize;
+    fn for_each_item(&self, f: &mut dyn FnMut(u32, &Slot));
+}
+
+impl ArrayRowLike for ArrayImage {
+    fn owner(&self) -> u32 {
+        self.owner
+    }
+    fn length(&self) -> u32 {
+        self.length
+    }
+    fn item_count(&self) -> usize {
+        self.items.len()
+    }
+    fn for_each_item(&self, f: &mut dyn FnMut(u32, &Slot)) {
+        for (index, value) in &self.items {
+            f(*index, value);
         }
     }
-    v
+}
+
+impl ArrayRowLike for IndexPropsImage {
+    fn owner(&self) -> u32 {
+        self.owner
+    }
+    fn length(&self) -> u32 {
+        self.high_water
+    }
+    fn item_count(&self) -> usize {
+        self.items.len()
+    }
+    fn for_each_item(&self, f: &mut dyn FnMut(u32, &Slot)) {
+        for (index, value) in &self.items {
+            f(*index, value);
+        }
+    }
+}
+
+impl ArrayRowLike for ironhorse_vm::snapshot_api::ArrayRowView<'_> {
+    fn owner(&self) -> u32 {
+        self.owner
+    }
+    fn length(&self) -> u32 {
+        self.length
+    }
+    fn item_count(&self) -> usize {
+        self.item_count()
+    }
+    fn for_each_item(&self, f: &mut dyn FnMut(u32, &Slot)) {
+        for (index, value) in self.items() {
+            f(index, &value);
+        }
+    }
+}
+
+/// The `ARRY` and `IDXP` payload: `[row_count]` then per row
+/// `[owner][length][item_count]([index][slot record])*`. Rows are
+/// owner-ascending and items index-ascending as the vm's snapshots order
+/// them; the encoder writes what it is given.
+pub(crate) fn encode_array_rows_into<S: Sink, R: ArrayRowLike>(rows: &[R], v: &mut S) {
+    v.put(&(rows.len() as u32).to_be_bytes());
+    for a in rows {
+        v.put(&a.owner().to_be_bytes());
+        v.put(&a.length().to_be_bytes());
+        v.put(&(a.item_count() as u32).to_be_bytes());
+        a.for_each_item(&mut |index, value| {
+            v.put(&index.to_be_bytes());
+            crate::slot_codec::put_slot(value, v);
+        });
+    }
+}
+
+/// Encode the arrays side table (the `ARRY` payload / small-state
+/// arrays section). Input is owner-ascending (the vm snapshot's
+/// canonical order), items index-ascending.
+pub(crate) fn encode_arrays_into<S: Sink>(arrays: &[ArrayImage], v: &mut S) {
+    encode_array_rows_into(arrays, v);
 }
 
 pub(crate) fn encode_index_props(rows: &[IndexPropsImage]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
-    for r in rows {
-        v.extend_from_slice(&r.owner.to_be_bytes());
-        v.extend_from_slice(&r.high_water.to_be_bytes());
-        v.extend_from_slice(&(r.items.len() as u32).to_be_bytes());
-        for (index, value) in &r.items {
-            v.extend_from_slice(&index.to_be_bytes());
-            crate::slot_codec::encode_slot(value, &mut v);
-        }
-    }
+    encode_index_props_into(rows, &mut v);
     v
+}
+
+pub(crate) fn encode_index_props_into<S: Sink>(rows: &[IndexPropsImage], v: &mut S) {
+    encode_array_rows_into(rows, v);
 }
 
 pub(crate) fn decode_index_props(p: &[u8]) -> Result<Vec<IndexPropsImage>, SnapshotError> {
@@ -1239,18 +1401,81 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
 /// small-state collections section).
 pub(crate) fn encode_collections(collections: &[CollectionImage]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(collections.len() as u32).to_be_bytes());
-    for coll in collections {
-        v.extend_from_slice(&coll.owner.to_be_bytes());
-        v.push(coll.kind);
-        v.extend_from_slice(&coll.table_length.to_be_bytes());
-        v.extend_from_slice(&(coll.entries.len() as u32).to_be_bytes());
-        for (key, value) in &coll.entries {
-            crate::slot_codec::encode_slot(key, &mut v);
-            crate::slot_codec::encode_slot(value, &mut v);
+    encode_collections_into(collections, &mut v);
+    v
+}
+
+/// One `COLL` row as the encoder reads it: an owned [`CollectionImage`] or
+/// a live table row borrowed in place
+/// ([`ironhorse_vm::snapshot_api::CollectionRowView`]).
+pub(crate) trait CollectionRowLike {
+    fn owner(&self) -> u32;
+    fn kind(&self) -> u8;
+    fn table_length(&self) -> u32;
+    fn entry_count(&self) -> usize;
+    fn for_each_entry(&self, f: &mut dyn FnMut(&Slot, &Slot));
+}
+
+impl CollectionRowLike for CollectionImage {
+    fn owner(&self) -> u32 {
+        self.owner
+    }
+    fn kind(&self) -> u8 {
+        self.kind
+    }
+    fn table_length(&self) -> u32 {
+        self.table_length
+    }
+    fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+    fn for_each_entry(&self, f: &mut dyn FnMut(&Slot, &Slot)) {
+        for (key, value) in &self.entries {
+            f(key, value);
         }
     }
-    v
+}
+
+impl CollectionRowLike for ironhorse_vm::snapshot_api::CollectionRowView<'_> {
+    fn owner(&self) -> u32 {
+        self.owner
+    }
+    fn kind(&self) -> u8 {
+        self.kind
+    }
+    fn table_length(&self) -> u32 {
+        self.table_length
+    }
+    fn entry_count(&self) -> usize {
+        self.entry_count()
+    }
+    fn for_each_entry(&self, f: &mut dyn FnMut(&Slot, &Slot)) {
+        for (key, value) in self.entries() {
+            f(&key, &value);
+        }
+    }
+}
+
+/// The `COLL` payload: `[row_count]` then per row
+/// `[owner][kind][table_length][entry_count]([key record][value record])*`.
+pub(crate) fn encode_collection_rows_into<S: Sink, R: CollectionRowLike>(rows: &[R], v: &mut S) {
+    v.put(&(rows.len() as u32).to_be_bytes());
+    for coll in rows {
+        v.put(&coll.owner().to_be_bytes());
+        v.put_u8(coll.kind());
+        v.put(&coll.table_length().to_be_bytes());
+        v.put(&(coll.entry_count() as u32).to_be_bytes());
+        coll.for_each_entry(&mut |key, value| {
+            crate::slot_codec::put_slot(key, v);
+            crate::slot_codec::put_slot(value, v);
+        });
+    }
+}
+
+/// Encode the collections side table (the `COLL` payload /
+/// small-state collections section).
+pub(crate) fn encode_collections_into<S: Sink>(collections: &[CollectionImage], v: &mut S) {
+    encode_collection_rows_into(collections, v);
 }
 
 pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, SnapshotError> {
@@ -1332,19 +1557,24 @@ pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, Snaps
 /// symbols section). See [`SymbolKeyImage`] for the wire form and the
 /// legacy-empty byte-stability rule.
 pub(crate) fn encode_symbol_keys(symbols: &SymbolKeyImage) -> Vec<u8> {
+    let mut v = Vec::new();
+    encode_symbol_keys_into(symbols, &mut v);
+    v
+}
+
+pub(crate) fn encode_symbol_keys_into<S: Sink>(symbols: &SymbolKeyImage, v: &mut S) {
     if symbols.next_id == u16::MAX - 1 && symbols.pairs.is_empty() {
         // Canonical empty: the legacy empty-u32-list bytes, so every
         // pre-table blob and store stays byte-identical.
-        return vec![0, 0, 0, 0];
+        v.put(&[0, 0, 0, 0]);
+        return;
     }
-    let mut v = Vec::with_capacity(6 + symbols.pairs.len() * 6);
-    v.extend_from_slice(&symbols.next_id.to_be_bytes());
-    v.extend_from_slice(&(symbols.pairs.len() as u32).to_be_bytes());
+    v.put(&symbols.next_id.to_be_bytes());
+    v.put(&(symbols.pairs.len() as u32).to_be_bytes());
     for &(id, desc) in &symbols.pairs {
-        v.extend_from_slice(&id.to_be_bytes());
-        v.extend_from_slice(&desc.to_be_bytes());
+        v.put(&id.to_be_bytes());
+        v.put(&desc.to_be_bytes());
     }
-    v
 }
 
 pub(crate) fn decode_symbol_keys(p: &[u8]) -> Result<SymbolKeyImage, SnapshotError> {
@@ -1402,13 +1632,17 @@ pub(crate) fn decode_symbol_keys(p: &[u8]) -> Result<SymbolKeyImage, SnapshotErr
 
 pub(crate) fn encode_registry(registry: &[RegistryImage]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(registry.len() as u32).to_be_bytes());
-    for e in registry {
-        v.extend_from_slice(&(e.key.len() as u32).to_be_bytes());
-        v.extend_from_slice(&e.key);
-        v.extend_from_slice(&e.descriptor.to_be_bytes());
-    }
+    encode_registry_into(registry, &mut v);
     v
+}
+
+pub(crate) fn encode_registry_into<S: Sink>(registry: &[RegistryImage], v: &mut S) {
+    v.put(&(registry.len() as u32).to_be_bytes());
+    for e in registry {
+        v.put(&(e.key.len() as u32).to_be_bytes());
+        v.put(&e.key);
+        v.put(&e.descriptor.to_be_bytes());
+    }
 }
 
 pub(crate) fn decode_registry(p: &[u8]) -> Result<Vec<RegistryImage>, SnapshotError> {
@@ -1462,26 +1696,30 @@ pub(crate) fn decode_registry(p: &[u8]) -> Result<Vec<RegistryImage>, SnapshotEr
 /// bytes when present.
 pub(crate) fn encode_errors(errors: &[ErrorImage]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(errors.len() as u32).to_be_bytes());
+    encode_errors_into(errors, &mut v);
+    v
+}
+
+pub(crate) fn encode_errors_into<S: Sink>(errors: &[ErrorImage], v: &mut S) {
+    v.put(&(errors.len() as u32).to_be_bytes());
     for e in errors {
-        v.extend_from_slice(&e.owner.to_be_bytes());
+        v.put(&e.owner.to_be_bytes());
         let name = e.name.as_bytes();
-        v.extend_from_slice(&(name.len() as u32).to_be_bytes());
-        v.extend_from_slice(name);
+        v.put(&(name.len() as u32).to_be_bytes());
+        v.put(name);
         match &e.message {
             Some(m) => {
-                v.push(1);
+                v.put_u8(1);
                 let scalar = m.to_text();
                 let m = scalar
                     .as_ref()
                     .map_or_else(|| m.as_bytes(), |s| s.as_bytes());
-                v.extend_from_slice(&(m.len() as u32).to_be_bytes());
-                v.extend_from_slice(m);
+                v.put(&(m.len() as u32).to_be_bytes());
+                v.put(m);
             }
-            None => v.push(0),
+            None => v.put_u8(0),
         }
     }
-    v
 }
 
 pub(crate) fn decode_errors(p: &[u8]) -> Result<Vec<ErrorImage>, SnapshotError> {
@@ -1560,20 +1798,25 @@ pub(crate) fn decode_errors(p: &[u8]) -> Result<Vec<ErrorImage>, SnapshotError> 
 /// would have made a v10 container undecodable by a v11 reader and
 /// forced a rewrite-a-middle-section migration for a field that is
 /// naturally optional.
+#[cfg(test)]
 pub(crate) fn encode_error_frames(errors: &[ErrorImage]) -> Vec<u8> {
-    let rows: Vec<&ErrorImage> = errors.iter().filter(|e| !e.frames.is_empty()).collect();
     let mut v = Vec::new();
-    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    encode_error_frames_into(errors, &mut v);
+    v
+}
+
+pub(crate) fn encode_error_frames_into<S: Sink>(errors: &[ErrorImage], v: &mut S) {
+    let rows: Vec<&ErrorImage> = errors.iter().filter(|e| !e.frames.is_empty()).collect();
+    v.put(&(rows.len() as u32).to_be_bytes());
     for e in rows {
-        v.extend_from_slice(&e.owner.to_be_bytes());
-        v.extend_from_slice(&(e.frames.len() as u32).to_be_bytes());
+        v.put(&e.owner.to_be_bytes());
+        v.put(&(e.frames.len() as u32).to_be_bytes());
         for f in &e.frames {
             let f = f.as_bytes();
-            v.extend_from_slice(&(f.len() as u32).to_be_bytes());
-            v.extend_from_slice(f);
+            v.put(&(f.len() as u32).to_be_bytes());
+            v.put(f);
         }
     }
-    v
 }
 
 /// Decode the error-frame side table, refusing the non-canonical
@@ -1612,17 +1855,26 @@ pub(crate) fn decode_error_frames(p: &[u8]) -> Result<Vec<(u32, Vec<String>)>, S
 
 /// Encode the array-buffers side table (the `ABUF` payload /
 /// small-state buffers section). Input is owner-ascending. Wire form
-/// per row: `u32 owner`, `u32 data`, `u32 length`, `u8 flags`.
+/// per row: `u32 owner`, `u32 data`, `u32 length`, `u8 flags`, and, only
+/// when `flags` has [`BUFFER_RESIZABLE`], `u32 max_length` — so a table
+/// with no resizable buffer encodes exactly as format 25 did.
 pub(crate) fn encode_buffers(buffers: &[BufferImage]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(4 + buffers.len() * 13);
-    v.extend_from_slice(&(buffers.len() as u32).to_be_bytes());
-    for b in buffers {
-        v.extend_from_slice(&b.owner.to_be_bytes());
-        v.extend_from_slice(&b.data.to_be_bytes());
-        v.extend_from_slice(&b.length.to_be_bytes());
-        v.push(b.flags);
-    }
+    let mut v = Vec::new();
+    encode_buffers_into(buffers, &mut v);
     v
+}
+
+pub(crate) fn encode_buffers_into<S: Sink>(buffers: &[BufferImage], v: &mut S) {
+    v.put(&(buffers.len() as u32).to_be_bytes());
+    for b in buffers {
+        v.put(&b.owner.to_be_bytes());
+        v.put(&b.data.to_be_bytes());
+        v.put(&b.length.to_be_bytes());
+        v.put_u8(b.flags);
+        if b.flags & BUFFER_RESIZABLE != 0 {
+            v.put(&b.max_length.to_be_bytes());
+        }
+    }
 }
 
 pub(crate) fn decode_buffers(p: &[u8]) -> Result<Vec<BufferImage>, SnapshotError> {
@@ -1634,13 +1886,26 @@ pub(crate) fn decode_buffers(p: &[u8]) -> Result<Vec<BufferImage>, SnapshotError
         let data = c.u32()?;
         let length = c.u32()?;
         let flags = c.u8()?;
-        // Only the two brand bits (detached, shared) exist; anything
-        // else is a non-canonical encoding.
-        if flags > 0b11 {
+        // Only the two brand bits (detached, shared) and the resizable bit
+        // exist; anything else is a non-canonical encoding.
+        if flags > 0b111 {
             return Err(SnapshotError::Corrupt(
                 "array-buffers side table: unknown flag bits",
             ));
         }
+        let max_length = if flags & BUFFER_RESIZABLE != 0 {
+            let max_length = c.u32()?;
+            // A maximum below the length, or past the allocation ceiling,
+            // is no buffer the engine could have made.
+            if max_length < length || max_length > 0x7FFF_FFFF {
+                return Err(SnapshotError::Corrupt(
+                    "array-buffers side table: maximum out of range",
+                ));
+            }
+            max_length
+        } else {
+            0
+        };
         // Strictly-ascending owners, for the sibling decoders' reason.
         if out
             .last()
@@ -1655,6 +1920,7 @@ pub(crate) fn decode_buffers(p: &[u8]) -> Result<Vec<BufferImage>, SnapshotError
             data,
             length,
             flags,
+            max_length,
         });
     }
     c.done()?;
@@ -1665,16 +1931,20 @@ pub(crate) fn decode_buffers(p: &[u8]) -> Result<Vec<BufferImage>, SnapshotError
 /// small-state typed-arrays section). Wire form per row: `u32 owner`,
 /// `u8 kind`, `u32 buffer`, `u32 offset`, `u32 length`.
 pub(crate) fn encode_typed_arrays(views: &[TypedArrayImage]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(4 + views.len() * 17);
-    v.extend_from_slice(&(views.len() as u32).to_be_bytes());
-    for t in views {
-        v.extend_from_slice(&t.owner.to_be_bytes());
-        v.push(t.kind);
-        v.extend_from_slice(&t.buffer.to_be_bytes());
-        v.extend_from_slice(&t.offset.to_be_bytes());
-        v.extend_from_slice(&t.length.to_be_bytes());
-    }
+    let mut v = Vec::new();
+    encode_typed_arrays_into(views, &mut v);
     v
+}
+
+pub(crate) fn encode_typed_arrays_into<S: Sink>(views: &[TypedArrayImage], v: &mut S) {
+    v.put(&(views.len() as u32).to_be_bytes());
+    for t in views {
+        v.put(&t.owner.to_be_bytes());
+        v.put_u8(t.kind);
+        v.put(&t.buffer.to_be_bytes());
+        v.put(&t.offset.to_be_bytes());
+        v.put(&t.length.to_be_bytes());
+    }
 }
 
 pub(crate) fn decode_typed_arrays(p: &[u8]) -> Result<Vec<TypedArrayImage>, SnapshotError> {
@@ -1718,15 +1988,19 @@ pub(crate) fn decode_typed_arrays(p: &[u8]) -> Result<Vec<TypedArrayImage>, Snap
 /// data-views section). Wire form per row: `u32 owner`, `u32 buffer`,
 /// `u32 offset`, `u32 size`.
 pub(crate) fn encode_data_views(views: &[DataViewImage]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(4 + views.len() * 16);
-    v.extend_from_slice(&(views.len() as u32).to_be_bytes());
-    for d in views {
-        v.extend_from_slice(&d.owner.to_be_bytes());
-        v.extend_from_slice(&d.buffer.to_be_bytes());
-        v.extend_from_slice(&d.offset.to_be_bytes());
-        v.extend_from_slice(&d.size.to_be_bytes());
-    }
+    let mut v = Vec::new();
+    encode_data_views_into(views, &mut v);
     v
+}
+
+pub(crate) fn encode_data_views_into<S: Sink>(views: &[DataViewImage], v: &mut S) {
+    v.put(&(views.len() as u32).to_be_bytes());
+    for d in views {
+        v.put(&d.owner.to_be_bytes());
+        v.put(&d.buffer.to_be_bytes());
+        v.put(&d.offset.to_be_bytes());
+        v.put(&d.size.to_be_bytes());
+    }
 }
 
 pub(crate) fn decode_data_views(p: &[u8]) -> Result<Vec<DataViewImage>, SnapshotError> {
@@ -1762,12 +2036,16 @@ pub(crate) fn decode_data_views(p: &[u8]) -> Result<Vec<DataViewImage>, Snapshot
 /// the slot record.
 pub(crate) fn encode_wrappers(wrappers: &[WrapperImage]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(wrappers.len() as u32).to_be_bytes());
-    for w in wrappers {
-        v.extend_from_slice(&w.owner.to_be_bytes());
-        crate::slot_codec::encode_slot(&w.value, &mut v);
-    }
+    encode_wrappers_into(wrappers, &mut v);
     v
+}
+
+pub(crate) fn encode_wrappers_into<S: Sink>(wrappers: &[WrapperImage], v: &mut S) {
+    v.put(&(wrappers.len() as u32).to_be_bytes());
+    for w in wrappers {
+        v.put(&w.owner.to_be_bytes());
+        crate::slot_codec::put_slot(&w.value, v);
+    }
 }
 
 pub(crate) fn decode_wrappers(p: &[u8]) -> Result<Vec<WrapperImage>, SnapshotError> {
@@ -1796,27 +2074,31 @@ pub(crate) fn decode_wrappers(p: &[u8]) -> Result<Vec<WrapperImage>, SnapshotErr
 /// bytes, `u32 flags_len` + bytes, `u64 legacy lastIndex bits`.
 pub(crate) fn encode_regexps(regexps: &[RegExpImage]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(regexps.len() as u32).to_be_bytes());
+    encode_regexps_into(regexps, &mut v);
+    v
+}
+
+pub(crate) fn encode_regexps_into<S: Sink>(regexps: &[RegExpImage], v: &mut S) {
+    v.put(&(regexps.len() as u32).to_be_bytes());
     for r in regexps {
-        v.extend_from_slice(&r.owner.to_be_bytes());
+        v.put(&r.owner.to_be_bytes());
         // Retain legacy UTF-8 bytes for scalar sources. Non-scalar sources
         // use canonical CESU-8, which old decoders reject explicitly.
         let scalar = r.source.to_text();
         let src = scalar
             .as_ref()
             .map_or_else(|| r.source.as_bytes(), |s| s.as_bytes());
-        v.extend_from_slice(&(src.len() as u32).to_be_bytes());
-        v.extend_from_slice(src);
+        v.put(&(src.len() as u32).to_be_bytes());
+        v.put(src);
         let flags = r.flags.as_bytes();
-        v.extend_from_slice(&(flags.len() as u32).to_be_bytes());
-        v.extend_from_slice(flags);
-        v.extend_from_slice(
+        v.put(&(flags.len() as u32).to_be_bytes());
+        v.put(flags);
+        v.put(
             &canonicalize_nan(f64::from_bits(r.last_index_bits))
                 .to_bits()
                 .to_be_bytes(),
         );
     }
-    v
 }
 
 pub(crate) fn decode_regexps(p: &[u8]) -> Result<Vec<RegExpImage>, SnapshotError> {
@@ -1858,17 +2140,21 @@ pub(crate) fn decode_regexps(p: &[u8]) -> Result<Vec<RegExpImage>, SnapshotError
 
 /// Encode Date `[[DateValue]]` rows: count, then `(owner, raw f64 bits)`.
 pub(crate) fn encode_dates(dates: &[DateImage]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(4 + dates.len() * 12);
-    v.extend_from_slice(&(dates.len() as u32).to_be_bytes());
+    let mut v = Vec::new();
+    encode_dates_into(dates, &mut v);
+    v
+}
+
+pub(crate) fn encode_dates_into<S: Sink>(dates: &[DateImage], v: &mut S) {
+    v.put(&(dates.len() as u32).to_be_bytes());
     for d in dates {
-        v.extend_from_slice(&d.owner.to_be_bytes());
-        v.extend_from_slice(
+        v.put(&d.owner.to_be_bytes());
+        v.put(
             &canonicalize_nan(f64::from_bits(d.value_bits))
                 .to_bits()
                 .to_be_bytes(),
         );
     }
-    v
 }
 
 pub(crate) fn decode_dates(p: &[u8]) -> Result<Vec<DateImage>, SnapshotError> {
@@ -1897,71 +2183,78 @@ pub(crate) fn encode_function_state(
     state: &ironhorse_vm::snapshot_api::FunctionStateSnapshot,
 ) -> Vec<u8> {
     let mut v = Vec::new();
-    let text = |v: &mut Vec<u8>, value: &str| {
-        v.extend_from_slice(&(value.len() as u32).to_be_bytes());
-        v.extend_from_slice(value.as_bytes());
+    encode_function_state_into(state, &mut v);
+    v
+}
+
+pub(crate) fn encode_function_state_into<S: Sink>(
+    state: &ironhorse_vm::snapshot_api::FunctionStateSnapshot,
+    v: &mut S,
+) {
+    let text = |v: &mut S, value: &str| {
+        v.put(&(value.len() as u32).to_be_bytes());
+        v.put(value.as_bytes());
     };
-    v.extend_from_slice(&(state.segments.len() as u32).to_be_bytes());
+    v.put(&(state.segments.len() as u32).to_be_bytes());
     for segment in &state.segments {
-        v.extend_from_slice(&(segment.len() as u32).to_be_bytes());
-        v.extend_from_slice(segment);
+        v.put(&(segment.len() as u32).to_be_bytes());
+        v.put(segment);
     }
-    v.extend_from_slice(&(state.functions.len() as u32).to_be_bytes());
+    v.put(&(state.functions.len() as u32).to_be_bytes());
     for row in &state.functions {
-        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.put(&row.owner.to_be_bytes());
         match (row.segment, row.body_start) {
             (Some(segment), Some(start)) => {
-                v.push(1);
-                v.extend_from_slice(&segment.to_be_bytes());
-                v.extend_from_slice(&start.to_be_bytes());
-                v.extend_from_slice(&row.body_len.to_be_bytes());
+                v.put_u8(1);
+                v.put(&segment.to_be_bytes());
+                v.put(&start.to_be_bytes());
+                v.put(&row.body_len.to_be_bytes());
             }
-            (None, None) => v.push(0),
+            (None, None) => v.put_u8(0),
             _ => unreachable!("function snapshot body and segment must travel together"),
         }
-        v.extend_from_slice(&row.closures.to_be_bytes());
-        text(&mut v, &row.name);
-        v.extend_from_slice(&row.arity.to_be_bytes());
-        v.extend_from_slice(&row.name_chunk.to_be_bytes());
-        v.push(row.is_generator as u8);
-        v.extend_from_slice(&row.home.to_be_bytes());
-        v.push(match row.class_derived {
+        v.put(&row.closures.to_be_bytes());
+        text(v, &row.name);
+        v.put(&row.arity.to_be_bytes());
+        v.put(&row.name_chunk.to_be_bytes());
+        v.put_u8(row.is_generator as u8);
+        v.put(&row.home.to_be_bytes());
+        v.put_u8(match row.class_derived {
             None => 0,
             Some(false) => 1,
             Some(true) => 2,
         });
     }
-    v.extend_from_slice(&(state.bound_functions.len() as u32).to_be_bytes());
+    v.put(&(state.bound_functions.len() as u32).to_be_bytes());
     for row in &state.bound_functions {
-        v.extend_from_slice(&row.owner.to_be_bytes());
-        v.extend_from_slice(&row.target.to_be_bytes());
-        crate::slot_codec::encode_slot(&row.this_arg, &mut v);
-        v.extend_from_slice(&(row.args.len() as u32).to_be_bytes());
+        v.put(&row.owner.to_be_bytes());
+        v.put(&row.target.to_be_bytes());
+        crate::slot_codec::put_slot(&row.this_arg, v);
+        v.put(&(row.args.len() as u32).to_be_bytes());
         for arg in &row.args {
-            crate::slot_codec::encode_slot(arg, &mut v);
+            crate::slot_codec::put_slot(arg, v);
         }
     }
-    v.extend_from_slice(&(state.ctor_prototypes.len() as u32).to_be_bytes());
+    v.put(&(state.ctor_prototypes.len() as u32).to_be_bytes());
     for &(owner, prototype) in &state.ctor_prototypes {
-        v.extend_from_slice(&owner.to_be_bytes());
-        v.extend_from_slice(&prototype.to_be_bytes());
+        v.put(&owner.to_be_bytes());
+        v.put(&prototype.to_be_bytes());
     }
-    v.extend_from_slice(&(state.deleted_meta.len() as u32).to_be_bytes());
+    v.put(&(state.deleted_meta.len() as u32).to_be_bytes());
     for &(owner, id) in &state.deleted_meta {
-        v.extend_from_slice(&owner.to_be_bytes());
-        v.extend_from_slice(&id.to_be_bytes());
+        v.put(&owner.to_be_bytes());
+        v.put(&id.to_be_bytes());
     }
     if let Some(rows) = &state.native_names {
-        v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+        v.put(&(rows.len() as u32).to_be_bytes());
         for &(owner, offset) in rows {
-            v.extend_from_slice(&owner.to_be_bytes());
-            v.extend_from_slice(&offset.to_be_bytes());
+            v.put(&owner.to_be_bytes());
+            v.put(&offset.to_be_bytes());
         }
     }
     if let Some(shared) = &state.shared {
-        shared_codec::encode(shared, &mut v);
+        shared_codec::encode(shared, v);
     }
-    v
 }
 
 pub(crate) fn decode_function_state(
@@ -2124,20 +2417,27 @@ pub(crate) fn encode_proxy_state(
     state: &ironhorse_vm::snapshot_api::ProxyStateSnapshot,
 ) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(state.proxies.len() as u32).to_be_bytes());
-    for row in &state.proxies {
-        v.extend_from_slice(&row.owner.to_be_bytes());
-        v.extend_from_slice(&row.target.to_be_bytes());
-        v.extend_from_slice(&row.handler.to_be_bytes());
-        v.push(row.revoked as u8);
-    }
-    v.extend_from_slice(&(state.revokers.len() as u32).to_be_bytes());
-    for row in &state.revokers {
-        v.extend_from_slice(&row.owner.to_be_bytes());
-        v.extend_from_slice(&row.proxy.to_be_bytes());
-        v.extend_from_slice(&row.name_chunk.to_be_bytes());
-    }
+    encode_proxy_state_into(state, &mut v);
     v
+}
+
+pub(crate) fn encode_proxy_state_into<S: Sink>(
+    state: &ironhorse_vm::snapshot_api::ProxyStateSnapshot,
+    v: &mut S,
+) {
+    v.put(&(state.proxies.len() as u32).to_be_bytes());
+    for row in &state.proxies {
+        v.put(&row.owner.to_be_bytes());
+        v.put(&row.target.to_be_bytes());
+        v.put(&row.handler.to_be_bytes());
+        v.put_u8(row.revoked as u8);
+    }
+    v.put(&(state.revokers.len() as u32).to_be_bytes());
+    for row in &state.revokers {
+        v.put(&row.owner.to_be_bytes());
+        v.put(&row.proxy.to_be_bytes());
+        v.put(&row.name_chunk.to_be_bytes());
+    }
 }
 
 pub(crate) fn decode_proxy_state(
@@ -2194,21 +2494,28 @@ pub(crate) fn decode_proxy_state(
 
 pub(crate) fn encode_accessors(rows: &[ironhorse_vm::snapshot_api::AccessorRow]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    encode_accessors_into(rows, &mut v);
+    v
+}
+
+pub(crate) fn encode_accessors_into<S: Sink>(
+    rows: &[ironhorse_vm::snapshot_api::AccessorRow],
+    v: &mut S,
+) {
+    v.put(&(rows.len() as u32).to_be_bytes());
     for row in rows {
-        v.extend_from_slice(&row.owner.to_be_bytes());
-        v.extend_from_slice(&row.id.to_be_bytes());
+        v.put(&row.owner.to_be_bytes());
+        v.put(&row.id.to_be_bytes());
         for value in [row.get, row.set] {
             match value {
-                None => v.push(0),
+                None => v.put_u8(0),
                 Some(slot) => {
-                    v.push(1);
-                    crate::slot_codec::encode_slot(&slot, &mut v);
+                    v.put_u8(1);
+                    crate::slot_codec::put_slot(&slot, v);
                 }
             }
         }
     }
-    v
 }
 
 pub(crate) fn decode_accessors(
@@ -2254,17 +2561,24 @@ pub(crate) fn encode_intl_bound_functions(
     rows: &[ironhorse_vm::snapshot_api::IntlBoundFunctionRow],
 ) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
-    for row in rows {
-        v.push(row.kind);
-        v.extend_from_slice(&row.function.to_be_bytes());
-        v.extend_from_slice(&row.owner.to_be_bytes());
-        v.extend_from_slice(&(row.name.len() as u32).to_be_bytes());
-        v.extend_from_slice(row.name.as_bytes());
-        v.extend_from_slice(&row.name_chunk.to_be_bytes());
-        v.extend_from_slice(&row.arity.to_be_bytes());
-    }
+    encode_intl_bound_functions_into(rows, &mut v);
     v
+}
+
+pub(crate) fn encode_intl_bound_functions_into<S: Sink>(
+    rows: &[ironhorse_vm::snapshot_api::IntlBoundFunctionRow],
+    v: &mut S,
+) {
+    v.put(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        v.put_u8(row.kind);
+        v.put(&row.function.to_be_bytes());
+        v.put(&row.owner.to_be_bytes());
+        v.put(&(row.name.len() as u32).to_be_bytes());
+        v.put(row.name.as_bytes());
+        v.put(&row.name_chunk.to_be_bytes());
+        v.put(&row.arity.to_be_bytes());
+    }
 }
 
 pub(crate) fn decode_intl_bound_functions(
@@ -2273,6 +2587,9 @@ pub(crate) fn decode_intl_bound_functions(
     let mut c = Cursor::new(p, "Intl bound-function state");
     let count = c.u32()? as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 17));
+    // An Intl object has at most one bound function: restore would keep
+    // both rows, and the `compare` getter would pick one by hash order.
+    let mut owners = std::collections::BTreeSet::new();
     for _ in 0..count {
         let kind = c.u8()?;
         if kind > 1 {
@@ -2292,6 +2609,11 @@ pub(crate) fn decode_intl_bound_functions(
             ));
         }
         let owner = c.u32()?;
+        if !owners.insert(owner) {
+            return Err(SnapshotError::Corrupt(
+                "Intl bound-function state: owner has more than one row",
+            ));
+        }
         let name_len = c.u32()? as usize;
         let name = String::from_utf8(c.bytes(name_len)?.to_vec())
             .map_err(|_| SnapshotError::Corrupt("Intl bound-function state: name not UTF-8"))?;
@@ -2312,27 +2634,34 @@ pub(crate) fn encode_private_elements(
     state: &ironhorse_vm::snapshot_api::PrivateElementSnapshot,
 ) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(state.values.len() as u32).to_be_bytes());
+    encode_private_elements_into(state, &mut v);
+    v
+}
+
+pub(crate) fn encode_private_elements_into<S: Sink>(
+    state: &ironhorse_vm::snapshot_api::PrivateElementSnapshot,
+    v: &mut S,
+) {
+    v.put(&(state.values.len() as u32).to_be_bytes());
     for row in &state.values {
-        v.extend_from_slice(&row.receiver.to_be_bytes());
-        v.extend_from_slice(&row.brand.to_be_bytes());
-        crate::slot_codec::encode_slot(&row.value, &mut v);
+        v.put(&row.receiver.to_be_bytes());
+        v.put(&row.brand.to_be_bytes());
+        crate::slot_codec::put_slot(&row.value, v);
     }
-    v.extend_from_slice(&(state.accessors.len() as u32).to_be_bytes());
+    v.put(&(state.accessors.len() as u32).to_be_bytes());
     for row in &state.accessors {
-        v.extend_from_slice(&row.receiver.to_be_bytes());
-        v.extend_from_slice(&row.brand.to_be_bytes());
+        v.put(&row.receiver.to_be_bytes());
+        v.put(&row.brand.to_be_bytes());
         for value in [row.get, row.set] {
             match value {
-                None => v.push(0),
+                None => v.put_u8(0),
                 Some(slot) => {
-                    v.push(1);
-                    crate::slot_codec::encode_slot(&slot, &mut v);
+                    v.put_u8(1);
+                    crate::slot_codec::put_slot(&slot, v);
                 }
             }
         }
     }
-    v
 }
 
 pub(crate) fn decode_private_elements(
@@ -2397,19 +2726,149 @@ pub(crate) fn encode_disposable_stacks(
     rows: &[ironhorse_vm::snapshot_api::DisposableStackRow],
 ) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    encode_disposable_stacks_into(rows, &mut v);
+    v
+}
+
+pub(crate) fn encode_disposable_stacks_into<S: Sink>(
+    rows: &[ironhorse_vm::snapshot_api::DisposableStackRow],
+    v: &mut S,
+) {
+    v.put(&(rows.len() as u32).to_be_bytes());
     for row in rows {
-        v.extend_from_slice(&row.owner.to_be_bytes());
-        v.push(row.disposed as u8);
-        v.push(row.asynchronous as u8);
-        v.extend_from_slice(&(row.records.len() as u32).to_be_bytes());
+        v.put(&row.owner.to_be_bytes());
+        v.put_u8(row.disposed as u8);
+        v.put_u8(row.asynchronous as u8);
+        v.put(&(row.records.len() as u32).to_be_bytes());
         for record in &row.records {
-            crate::slot_codec::encode_slot(&record.resource, &mut v);
-            crate::slot_codec::encode_slot(&record.method, &mut v);
-            v.push(record.pass_resource as u8);
+            crate::slot_codec::put_slot(&record.resource, v);
+            crate::slot_codec::put_slot(&record.method, v);
+            v.put_u8(record.pass_resource as u8);
         }
     }
+}
+
+pub(crate) fn encode_weak_refs(rows: &[ironhorse_vm::snapshot_api::WeakRefRow]) -> Vec<u8> {
+    let mut v = Vec::new();
+    encode_weak_refs_into(rows, &mut v);
     v
+}
+
+pub(crate) fn encode_weak_refs_into<S: Sink>(
+    rows: &[ironhorse_vm::snapshot_api::WeakRefRow],
+    v: &mut S,
+) {
+    v.put(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        v.put(&row.owner.to_be_bytes());
+        v.put(&row.target.to_be_bytes());
+    }
+}
+
+pub(crate) fn decode_weak_refs(
+    p: &[u8],
+) -> Result<Vec<ironhorse_vm::snapshot_api::WeakRefRow>, SnapshotError> {
+    let mut c = Cursor::new(p, "weak refs");
+    let count = c.u32()? as usize;
+    let mut rows = Vec::with_capacity(count.min(p.len() / 8));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if rows
+            .last()
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::WeakRefRow| owner <= row.owner)
+        {
+            return Err(SnapshotError::Corrupt(
+                "weak refs: owners not strictly ascending",
+            ));
+        }
+        let target = c.u32()?;
+        rows.push(ironhorse_vm::snapshot_api::WeakRefRow { owner, target });
+    }
+    c.done()?;
+    Ok(rows)
+}
+
+pub(crate) fn encode_finalization_registries(
+    rows: &[ironhorse_vm::snapshot_api::FinalizationRegistryRow],
+) -> Vec<u8> {
+    let mut v = Vec::new();
+    encode_finalization_registries_into(rows, &mut v);
+    v
+}
+
+pub(crate) fn encode_finalization_registries_into<S: Sink>(
+    rows: &[ironhorse_vm::snapshot_api::FinalizationRegistryRow],
+    v: &mut S,
+) {
+    v.put(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        v.put(&row.owner.to_be_bytes());
+        crate::slot_codec::put_slot(&row.callback, v);
+        v.put_u8(row.changed as u8);
+        v.put(&(row.cells.len() as u32).to_be_bytes());
+        for cell in &row.cells {
+            v.put(&cell.target.to_be_bytes());
+            crate::slot_codec::put_slot(&cell.holdings, v);
+            v.put(&cell.token.to_be_bytes());
+        }
+    }
+}
+
+pub(crate) fn decode_finalization_registries(
+    p: &[u8],
+) -> Result<Vec<ironhorse_vm::snapshot_api::FinalizationRegistryRow>, SnapshotError> {
+    let mut c = Cursor::new(p, "finalization registries");
+    let count = c.u32()? as usize;
+    let mut rows = Vec::with_capacity(count.min(p.len() / (SLOT_RECORD_BYTES + 9)));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if rows.last().is_some_and(
+            |row: &ironhorse_vm::snapshot_api::FinalizationRegistryRow| owner <= row.owner,
+        ) {
+            return Err(SnapshotError::Corrupt(
+                "finalization registries: owners not strictly ascending",
+            ));
+        }
+        let callback = c.slot()?;
+        if callback.kind != Kind::Reference {
+            return Err(SnapshotError::Corrupt(
+                "finalization registries: cleanup callback is not a reference",
+            ));
+        }
+        let changed = match c.u8()? {
+            0 => false,
+            1 => true,
+            _ => {
+                return Err(SnapshotError::Corrupt(
+                    "finalization registries: bad boolean byte",
+                ))
+            }
+        };
+        let cell_count = c.u32()? as usize;
+        let mut cells = Vec::with_capacity(cell_count.min(p.len() / (SLOT_RECORD_BYTES + 8)));
+        for _ in 0..cell_count {
+            cells.push(ironhorse_vm::snapshot_api::FinalizationCellRow {
+                target: c.u32()?,
+                holdings: c.slot()?,
+                token: c.u32()?,
+            });
+        }
+        // The cleanup clears the flag once no dead cell remains, so a flagged
+        // registry with every target alive can only be crafted.
+        if changed && cells.iter().all(|cell| cell.target != u32::MAX) {
+            return Err(SnapshotError::Corrupt(
+                "finalization registries: flagged registry holds no dead cell",
+            ));
+        }
+        rows.push(ironhorse_vm::snapshot_api::FinalizationRegistryRow {
+            owner,
+            callback,
+            changed,
+            cells,
+        });
+    }
+    c.done()?;
+    Ok(rows)
 }
 
 pub(crate) fn decode_disposable_stacks(
@@ -2465,17 +2924,17 @@ pub(crate) fn decode_disposable_stacks(
     Ok(rows)
 }
 
-fn encode_frame_slots(v: &mut Vec<u8>, rows: &[Slot]) {
-    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+fn encode_frame_slots<S: Sink>(v: &mut S, rows: &[Slot]) {
+    v.put(&(rows.len() as u32).to_be_bytes());
     for row in rows {
-        crate::slot_codec::encode_slot(row, v);
+        crate::slot_codec::put_slot(row, v);
     }
 }
-fn encode_frame_id_map(v: &mut Vec<u8>, rows: &[(u16, u64)]) {
-    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+fn encode_frame_id_map<S: Sink>(v: &mut S, rows: &[(u16, u64)]) {
+    v.put(&(rows.len() as u32).to_be_bytes());
     for &(id, index) in rows {
-        v.extend_from_slice(&id.to_be_bytes());
-        v.extend_from_slice(&index.to_be_bytes());
+        v.put(&id.to_be_bytes());
+        v.put(&index.to_be_bytes());
     }
 }
 // GENR and ASYN use a u32::MAX count prefix for the extended saved-frame
@@ -2483,60 +2942,67 @@ fn encode_frame_id_map(v: &mut Vec<u8>, rows: &[(u16, u64)]) {
 // both container atoms and framed store sections have u32 payload lengths.
 // Within an extended row, u32::MAX denotes legacy implicit segment identity;
 // a serialized segment table cannot contain enough entries to use that index.
-fn encode_saved_frame(
-    v: &mut Vec<u8>,
+fn encode_saved_frame<S: Sink>(
+    v: &mut S,
     row: &ironhorse_vm::snapshot_api::SavedFrameRow,
     explicit_segments: bool,
 ) {
     encode_frame_slots(v, &row.locals);
     encode_frame_id_map(v, &row.id_map);
     encode_frame_slots(v, &row.args);
-    crate::slot_codec::encode_slot(&row.this_val, v);
-    crate::slot_codec::encode_slot(&row.env, v);
-    v.extend_from_slice(&row.cur_func.to_be_bytes());
-    v.push(row.cur_target as u8);
-    v.extend_from_slice(&row.target_func.to_be_bytes());
-    v.push(row.strict as u8);
-    crate::slot_codec::encode_slot(&row.result, v);
+    crate::slot_codec::put_slot(&row.this_val, v);
+    crate::slot_codec::put_slot(&row.env, v);
+    v.put(&row.cur_func.to_be_bytes());
+    v.put_u8(row.cur_target as u8);
+    v.put(&row.target_func.to_be_bytes());
+    v.put_u8(row.strict as u8);
+    crate::slot_codec::put_slot(&row.result, v);
     encode_frame_slots(v, &row.stack_slice);
-    v.extend_from_slice(&(row.jumps.len() as u32).to_be_bytes());
+    v.put(&(row.jumps.len() as u32).to_be_bytes());
     for jump in &row.jumps {
-        v.extend_from_slice(&jump.target_pc.to_be_bytes());
+        v.put(&jump.target_pc.to_be_bytes());
         if explicit_segments {
-            v.extend_from_slice(&jump.segment.unwrap_or(u32::MAX).to_be_bytes());
+            v.put(&jump.segment.unwrap_or(u32::MAX).to_be_bytes());
         }
-        v.extend_from_slice(&jump.stack_offset.to_be_bytes());
-        v.extend_from_slice(&jump.locals_len.to_be_bytes());
+        v.put(&jump.stack_offset.to_be_bytes());
+        v.put(&jump.locals_len.to_be_bytes());
         encode_frame_id_map(v, &jump.id_map);
-        v.extend_from_slice(&jump.call_depth_offset.to_be_bytes());
-        crate::slot_codec::encode_slot(&jump.env, v);
-        v.push(jump.flag);
+        v.put(&jump.call_depth_offset.to_be_bytes());
+        crate::slot_codec::put_slot(&jump.env, v);
+        v.put_u8(jump.flag);
     }
-    v.extend_from_slice(&row.resume_pc.to_be_bytes());
+    v.put(&row.resume_pc.to_be_bytes());
 }
 
 pub(crate) fn encode_generators(rows: &[ironhorse_vm::snapshot_api::GeneratorRow]) -> Vec<u8> {
+    let mut v = Vec::new();
+    encode_generators_into(rows, &mut v);
+    v
+}
+
+pub(crate) fn encode_generators_into<S: Sink>(
+    rows: &[ironhorse_vm::snapshot_api::GeneratorRow],
+    v: &mut S,
+) {
     let explicit_segments = rows
         .iter()
         .filter_map(|row| row.frame.as_ref())
         .any(|frame| frame.jumps.iter().any(|jump| jump.segment.is_some()));
-    let mut v = Vec::new();
     if explicit_segments {
-        v.extend_from_slice(&u32::MAX.to_be_bytes());
+        v.put(&u32::MAX.to_be_bytes());
     }
-    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    v.put(&(rows.len() as u32).to_be_bytes());
     for row in rows {
-        v.extend_from_slice(&row.owner.to_be_bytes());
-        v.push(row.state);
+        v.put(&row.owner.to_be_bytes());
+        v.put_u8(row.state);
         match &row.frame {
-            None => v.push(0),
+            None => v.put_u8(0),
             Some(saved) => {
-                v.push(1);
-                encode_saved_frame(&mut v, saved, explicit_segments);
+                v.put_u8(1);
+                encode_saved_frame(v, saved, explicit_segments);
             }
         }
     }
-    v
 }
 
 fn u64_value(c: &mut Cursor<'_>) -> Result<u64, SnapshotError> {
@@ -2684,58 +3150,91 @@ pub(crate) fn decode_generators(
 pub(crate) fn encode_async_section(
     instances: &[ironhorse_vm::snapshot_api::AsyncRow],
     generators: &[ironhorse_vm::snapshot_api::AsyncGeneratorRow],
+    from_async: &[ironhorse_vm::snapshot_api::FromAsyncRow],
 ) -> Vec<u8> {
+    let mut v = Vec::new();
+    encode_async_section_into(instances, generators, from_async, &mut v);
+    v
+}
+
+pub(crate) fn encode_async_section_into<S: Sink>(
+    instances: &[ironhorse_vm::snapshot_api::AsyncRow],
+    generators: &[ironhorse_vm::snapshot_api::AsyncGeneratorRow],
+    from_async: &[ironhorse_vm::snapshot_api::FromAsyncRow],
+    v: &mut S,
+) {
     let explicit_segments = instances
         .iter()
         .map(|row| &row.frame)
         .chain(generators.iter().filter_map(|row| row.frame.as_ref()))
         .any(|frame| frame.jumps.iter().any(|jump| jump.segment.is_some()));
-    let mut v = Vec::new();
     if explicit_segments {
-        v.extend_from_slice(&u32::MAX.to_be_bytes());
+        v.put(&u32::MAX.to_be_bytes());
     }
-    v.extend_from_slice(&(instances.len() as u32).to_be_bytes());
+    v.put(&(instances.len() as u32).to_be_bytes());
     for row in instances {
-        v.extend_from_slice(&row.owner.to_be_bytes());
-        v.extend_from_slice(&row.result_promise.to_be_bytes());
-        crate::slot_codec::encode_slot(&row.resolve, &mut v);
-        crate::slot_codec::encode_slot(&row.reject, &mut v);
-        encode_saved_frame(&mut v, &row.frame, explicit_segments);
+        v.put(&row.owner.to_be_bytes());
+        v.put(&row.result_promise.to_be_bytes());
+        crate::slot_codec::put_slot(&row.resolve, v);
+        crate::slot_codec::put_slot(&row.reject, v);
+        encode_saved_frame(v, &row.frame, explicit_segments);
     }
-    if generators.is_empty() {
-        return v;
+    if generators.is_empty() && from_async.is_empty() {
+        return;
     }
     let encode_request =
-        |v: &mut Vec<u8>, request: &ironhorse_vm::snapshot_api::AsyncGeneratorRequestRow| {
-            v.push(request.status);
-            crate::slot_codec::encode_slot(&request.value, v);
-            crate::slot_codec::encode_slot(&request.resolve, v);
-            crate::slot_codec::encode_slot(&request.reject, v);
+        |v: &mut S, request: &ironhorse_vm::snapshot_api::AsyncGeneratorRequestRow| {
+            v.put_u8(request.status);
+            crate::slot_codec::put_slot(&request.value, v);
+            crate::slot_codec::put_slot(&request.resolve, v);
+            crate::slot_codec::put_slot(&request.reject, v);
         };
-    v.extend_from_slice(&(generators.len() as u32).to_be_bytes());
+    v.put(&(generators.len() as u32).to_be_bytes());
     for row in generators {
-        v.extend_from_slice(&row.owner.to_be_bytes());
-        v.push(row.state);
+        v.put(&row.owner.to_be_bytes());
+        v.put_u8(row.state);
         match &row.frame {
-            None => v.push(0),
+            None => v.put_u8(0),
             Some(frame) => {
-                v.push(1);
-                encode_saved_frame(&mut v, frame, explicit_segments);
+                v.put_u8(1);
+                encode_saved_frame(v, frame, explicit_segments);
             }
         }
-        v.extend_from_slice(&(row.requests.len() as u32).to_be_bytes());
+        v.put(&(row.requests.len() as u32).to_be_bytes());
         for request in &row.requests {
-            encode_request(&mut v, request);
+            encode_request(v, request);
         }
         match &row.active {
-            None => v.push(0),
+            None => v.put_u8(0),
             Some(request) => {
-                v.push(1);
-                encode_request(&mut v, request);
+                v.put_u8(1);
+                encode_request(v, request);
             }
         }
     }
-    v
+    // The `Array.fromAsync` accumulations, after the generators (architecture
+    // finding F127). A payload with no accumulations is byte-identical to what
+    // format 23 wrote; one with accumulations but no generators carries a zero
+    // generator count as a positional placeholder, which is the only case where
+    // that count may be zero and the decoder enforces it.
+    if from_async.is_empty() {
+        return;
+    }
+    v.put(&(from_async.len() as u32).to_be_bytes());
+    for row in from_async {
+        crate::slot_codec::put_slot(&row.resolve, v);
+        crate::slot_codec::put_slot(&row.reject, v);
+        v.put(&row.target.to_be_bytes());
+        v.put(&row.k.to_be_bytes());
+        v.put(&row.len.to_be_bytes());
+        crate::slot_codec::put_slot(&row.mapfn, v);
+        crate::slot_codec::put_slot(&row.this_arg, v);
+        crate::slot_codec::put_slot(&row.iterator, v);
+        crate::slot_codec::put_slot(&row.next_method, v);
+        crate::slot_codec::put_slot(&row.array_like, v);
+        crate::slot_codec::put_slot(&row.close_error, v);
+        v.put_u8(row.flags);
+    }
 }
 
 /// Decode the `ASYN` payload into its activations and generator rows,
@@ -2750,6 +3249,7 @@ pub(crate) fn decode_async_section(
     (
         Vec<ironhorse_vm::snapshot_api::AsyncRow>,
         Vec<ironhorse_vm::snapshot_api::AsyncGeneratorRow>,
+        Vec<ironhorse_vm::snapshot_api::FromAsyncRow>,
     ),
     SnapshotError,
 > {
@@ -2775,84 +3275,165 @@ pub(crate) fn decode_async_section(
         });
     }
     let mut generators: Vec<ironhorse_vm::snapshot_api::AsyncGeneratorRow> = Vec::new();
+    let mut from_async: Vec<ironhorse_vm::snapshot_api::FromAsyncRow> = Vec::new();
     if c.done().is_err() {
         let count = c.u32()? as usize;
-        if count == 0 {
+        // A zero generator count is legal ONLY as the positional placeholder
+        // for a `from_async` section behind it; with nothing behind it, it is
+        // the redundant trailer the writer never emits.
+        if count == 0 && c.done().is_ok() {
             return Err(SnapshotError::Corrupt(
                 "async generators: redundant empty trailer",
             ));
         }
-        let decode_request = |c: &mut Cursor<'_>| {
-            let status = c.u8()?;
-            if status > 2 {
-                return Err(SnapshotError::Corrupt(
-                    "async generators: invalid request status",
-                ));
-            }
-            Ok(ironhorse_vm::snapshot_api::AsyncGeneratorRequestRow {
-                status,
-                value: c.slot()?,
-                resolve: c.slot()?,
-                reject: c.slot()?,
-            })
-        };
-        generators.reserve(count.min(p.len() / 12));
-        for _ in 0..count {
-            let owner = c.u32()?;
-            if generators.last().is_some_and(|row| owner <= row.owner) {
-                return Err(SnapshotError::Corrupt(
-                    "async generators: owners not strictly ascending",
-                ));
-            }
-            let state = c.u8()?;
-            if state > 3 {
-                return Err(SnapshotError::Corrupt("async generators: invalid state"));
-            }
-            let frame = match c.u8()? {
-                0 => None,
-                1 => Some(decode_saved_frame(&mut c, p, explicit_segments)?),
-                _ => return Err(SnapshotError::Corrupt("async generators: bad frame tag")),
-            };
-            let request_count = c.u32()? as usize;
-            let mut requests = Vec::with_capacity(request_count.min(p.len() / 12));
-            for _ in 0..request_count {
-                requests.push(decode_request(&mut c)?);
-            }
-            let active = match c.u8()? {
-                0 => None,
-                1 => Some(decode_request(&mut c)?),
-                _ => {
+        if count != 0 {
+            let decode_request = |c: &mut Cursor<'_>| {
+                let status = c.u8()?;
+                if status > 2 {
                     return Err(SnapshotError::Corrupt(
-                        "async generators: bad active request tag",
-                    ))
+                        "async generators: invalid request status",
+                    ));
                 }
+                Ok(ironhorse_vm::snapshot_api::AsyncGeneratorRequestRow {
+                    status,
+                    value: c.slot()?,
+                    resolve: c.slot()?,
+                    reject: c.slot()?,
+                })
             };
-            let row = ironhorse_vm::snapshot_api::AsyncGeneratorRow {
-                owner,
-                state,
-                frame,
-                requests,
-                active,
-            };
-            // The row's own shape invariants, shared with the restore path
-            // and the store gate so no admission point is looser than the
-            // reader that has to accept what it writes.
-            if !row.frame_matches_state() {
-                return Err(SnapshotError::Corrupt(
-                    "async generators: state and frame disagree",
-                ));
+            generators.reserve(count.min(p.len() / 12));
+            for _ in 0..count {
+                let owner = c.u32()?;
+                if generators.last().is_some_and(|row| owner <= row.owner) {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: owners not strictly ascending",
+                    ));
+                }
+                let state = c.u8()?;
+                if state > 3 {
+                    return Err(SnapshotError::Corrupt("async generators: invalid state"));
+                }
+                let frame = match c.u8()? {
+                    0 => None,
+                    1 => Some(decode_saved_frame(&mut c, p, explicit_segments)?),
+                    _ => return Err(SnapshotError::Corrupt("async generators: bad frame tag")),
+                };
+                let request_count = c.u32()? as usize;
+                let mut requests = Vec::with_capacity(request_count.min(p.len() / 12));
+                for _ in 0..request_count {
+                    requests.push(decode_request(&mut c)?);
+                }
+                let active = match c.u8()? {
+                    0 => None,
+                    1 => Some(decode_request(&mut c)?),
+                    _ => {
+                        return Err(SnapshotError::Corrupt(
+                            "async generators: bad active request tag",
+                        ))
+                    }
+                };
+                let row = ironhorse_vm::snapshot_api::AsyncGeneratorRow {
+                    owner,
+                    state,
+                    frame,
+                    requests,
+                    active,
+                };
+                // The row's own shape invariants, shared with the restore path
+                // and the store gate so no admission point is looser than the
+                // reader that has to accept what it writes.
+                if !row.frame_matches_state() {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: state and frame disagree",
+                    ));
+                }
+                if !row.requests_match_state() {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: request queue disagrees with state",
+                    ));
+                }
+                if !row.start_frame_is_fresh() {
+                    return Err(SnapshotError::Corrupt(
+                        "async generators: start frame is not fresh",
+                    ));
+                }
+                generators.push(row);
             }
-            if !row.requests_match_state() {
-                return Err(SnapshotError::Corrupt(
-                    "async generators: request queue disagrees with state",
-                ));
+        }
+        // The `Array.fromAsync` accumulations (architecture finding F127).
+        if c.done().is_err() {
+            let count = c.u32()? as usize;
+            if count == 0 {
+                return Err(SnapshotError::Corrupt("fromAsync: redundant empty trailer"));
             }
-            if !row.start_frame_is_fresh() {
-                return Err(SnapshotError::Corrupt(
-                    "async generators: start frame is not fresh",
-                ));
+            // Eight slots plus twenty-one scalar bytes (target, k, len,
+            // flags): the row's true minimum width, so a declared count
+            // cannot reserve more than the payload could hold.
+            from_async.reserve(count.min(p.len() / (8 * SLOT_RECORD_BYTES + 21)));
+            for _ in 0..count {
+                let row = ironhorse_vm::snapshot_api::FromAsyncRow {
+                    resolve: c.slot()?,
+                    reject: c.slot()?,
+                    target: c.u32()?,
+                    k: u64_value(&mut c)?,
+                    len: u64_value(&mut c)?,
+                    mapfn: c.slot()?,
+                    this_arg: c.slot()?,
+                    iterator: c.slot()?,
+                    next_method: c.slot()?,
+                    array_like: c.slot()?,
+                    close_error: c.slot()?,
+                    flags: c.u8()?,
+                };
+                // An unknown bit is corrupt, the same rule every other row in
+                // this cluster applies to a non-boolean boolean byte.
+                if row.flags & !ironhorse_vm::snapshot_api::FromAsyncRow::FLAGS != 0 {
+                    return Err(SnapshotError::Corrupt("fromAsync: unknown flag bit"));
+                }
+                // `mapping` is what says `mapfn` is callable; a cleared flag
+                // with a reference in the slot is a row that would call
+                // something the writer never intended.
+                if !row.has(ironhorse_vm::snapshot_api::FromAsyncRow::MAPPING)
+                    && row.mapfn.kind == Kind::Reference
+                {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: mapfn present without the mapping flag",
+                    ));
+                }
+                // The two input paths are exclusive: an iterator, or an
+                // array-like with a length. `sync_wrapped` is a property of an
+                // iterator and means nothing without one.
+                let iterated = row.iterator.kind == Kind::Reference;
+                if !iterated
+                    && (row.next_method.kind == Kind::Reference
+                        || row.has(ironhorse_vm::snapshot_api::FromAsyncRow::SYNC_WRAPPED))
+                {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: iterator state without an iterator",
+                    ));
+                }
+                // And the other direction, which is the one a stall hides
+                // in: an iterator with no `next` method is admitted by every
+                // clause above, and the resumed accumulation then has nothing
+                // to step — its result promise never settles at all. A
+                // permanent silent stall is worse than a refusal.
+                if iterated && row.next_method.kind != Kind::Reference {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: an iterator without its next method",
+                    ));
+                }
+                if iterated && row.len != 0 {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: an iterated accumulation carries a length",
+                    ));
+                }
+                if !iterated && row.k > row.len {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: index past the array-like length",
+                    ));
+                }
+                from_async.push(row);
             }
-            generators.push(row);
         }
     }
     c.done()?;
@@ -2867,13 +3448,13 @@ pub(crate) fn decode_async_section(
             "generator frame: redundant segment prefix",
         ));
     }
-    Ok((rows, generators))
+    Ok((rows, generators, from_async))
 }
 
 /// The activations half of [`encode_async_section`] alone.
 #[cfg(test)]
 pub(crate) fn encode_async_instances(rows: &[ironhorse_vm::snapshot_api::AsyncRow]) -> Vec<u8> {
-    encode_async_section(rows, &[])
+    encode_async_section(rows, &[], &[])
 }
 
 /// [`decode_async_section`] for a payload with no generator trailer.
@@ -2881,8 +3462,9 @@ pub(crate) fn encode_async_instances(rows: &[ironhorse_vm::snapshot_api::AsyncRo
 pub(crate) fn decode_async_instances(
     p: &[u8],
 ) -> Result<Vec<ironhorse_vm::snapshot_api::AsyncRow>, SnapshotError> {
-    let (rows, generators) = decode_async_section(p)?;
+    let (rows, generators, from_async) = decode_async_section(p)?;
     assert!(generators.is_empty(), "payload carries generator rows");
+    assert!(from_async.is_empty(), "payload carries fromAsync rows");
     Ok(rows)
 }
 
@@ -2896,47 +3478,54 @@ pub(crate) fn encode_promise_cluster(
     c: &ironhorse_vm::snapshot_api::PromiseClusterSnapshot,
 ) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(c.promises.len() as u32).to_be_bytes());
+    encode_promise_cluster_into(c, &mut v);
+    v
+}
+
+pub(crate) fn encode_promise_cluster_into<S: Sink>(
+    c: &ironhorse_vm::snapshot_api::PromiseClusterSnapshot,
+    v: &mut S,
+) {
+    v.put(&(c.promises.len() as u32).to_be_bytes());
     for row in &c.promises {
-        v.extend_from_slice(&row.owner.to_be_bytes());
-        v.push(row.state);
-        crate::slot_codec::encode_slot(&row.result, &mut v);
-        v.push(row.ever_handled as u8);
-        v.extend_from_slice(&(row.reactions.len() as u32).to_be_bytes());
+        v.put(&row.owner.to_be_bytes());
+        v.put_u8(row.state);
+        crate::slot_codec::put_slot(&row.result, v);
+        v.put_u8(row.ever_handled as u8);
+        v.put(&(row.reactions.len() as u32).to_be_bytes());
         for r in &row.reactions {
-            crate::slot_codec::encode_slot(&r.on_fulfilled, &mut v);
-            crate::slot_codec::encode_slot(&r.on_rejected, &mut v);
-            crate::slot_codec::encode_slot(&r.resolve, &mut v);
-            crate::slot_codec::encode_slot(&r.reject, &mut v);
-            v.push(r.kind);
-            v.extend_from_slice(&r.a.to_be_bytes());
-            v.extend_from_slice(&r.b.to_be_bytes());
+            crate::slot_codec::put_slot(&r.on_fulfilled, v);
+            crate::slot_codec::put_slot(&r.on_rejected, v);
+            crate::slot_codec::put_slot(&r.resolve, v);
+            crate::slot_codec::put_slot(&r.reject, v);
+            v.put_u8(r.kind);
+            v.put(&r.a.to_be_bytes());
+            v.put(&r.b.to_be_bytes());
         }
     }
-    v.extend_from_slice(&(c.functions.len() as u32).to_be_bytes());
+    v.put(&(c.functions.len() as u32).to_be_bytes());
     for row in &c.functions {
-        v.extend_from_slice(&row.function.to_be_bytes());
-        v.extend_from_slice(&row.promise.to_be_bytes());
-        v.push(row.reject as u8);
-        v.extend_from_slice(&row.guard.to_be_bytes());
-        v.extend_from_slice(&row.name_chunk.to_be_bytes());
+        v.put(&row.function.to_be_bytes());
+        v.put(&row.promise.to_be_bytes());
+        v.put_u8(row.reject as u8);
+        v.put(&row.guard.to_be_bytes());
+        v.put(&row.name_chunk.to_be_bytes());
     }
-    v.extend_from_slice(&(c.guards.len() as u32).to_be_bytes());
+    v.put(&(c.guards.len() as u32).to_be_bytes());
     for &g in &c.guards {
-        v.push(g as u8);
+        v.put_u8(g as u8);
     }
-    v.extend_from_slice(&(c.combinators.len() as u32).to_be_bytes());
+    v.put(&(c.combinators.len() as u32).to_be_bytes());
     for row in &c.combinators {
-        v.push(row.kind);
-        crate::slot_codec::encode_slot(&row.resolve, &mut v);
-        crate::slot_codec::encode_slot(&row.reject, &mut v);
-        v.extend_from_slice(&row.remaining.to_be_bytes());
-        v.extend_from_slice(&row.results.to_be_bytes());
+        v.put_u8(row.kind);
+        crate::slot_codec::put_slot(&row.resolve, v);
+        crate::slot_codec::put_slot(&row.reject, v);
+        v.put(&row.remaining.to_be_bytes());
+        v.put(&row.results.to_be_bytes());
     }
     if let Some(owner) = c.unhandled_rejection {
-        v.extend_from_slice(&owner.to_be_bytes());
+        v.put(&owner.to_be_bytes());
     }
-    v
 }
 
 /// Decode and CROSS-VALIDATE the promise cluster. Beyond the per-field
@@ -2945,9 +3534,10 @@ pub(crate) fn encode_promise_cluster(
 /// discipline every compound atom follows (a view names a buffer row, a
 /// generator frame names a function row):
 ///
-/// - async generators and Array.fromAsync (bytes 4–10) are refused by name —
-///   it would resume machinery no atom carries, and the persist gate
-///   refuses the machine before an honest writer can emit one; byte 11 is the
+/// - a reaction kind past 12 is refused by name: it would resume machinery no
+///   atom carries. Bytes 4–6 are the async-generator kinds, carried in `ASYN`
+///   since format 23, and bytes 7–10 the `Array.fromAsync` kinds, carried
+///   there since format 24 (architecture finding F127); byte 11 is the
 ///   resumable second half of `Promise.prototype.finally`, and byte 12 is a
 ///   synchronous combinator element callback retained by a custom `then`;
 /// - a settled promise carries no reactions (settlement drains them,
@@ -3028,10 +3618,11 @@ pub(crate) fn decode_promise_cluster_payload(
             let resolve = c.slot()?;
             let reject = c.slot()?;
             let kind = c.u8()?;
-            // 0–3, the three async-generator kinds (4–6), `FinallyAwait`
-            // and `CombineDirect` resume; the `FromAsync*` kinds (7–10)
-            // name machinery no atom carries.
-            if kind > 6 && kind != 11 && kind != 12 {
+            // 0–3, the three async-generator kinds (4–6), the four
+            // `FromAsync*` kinds (7–10, carried in `ASYN` since format 24 —
+            // architecture finding F127), `FinallyAwait` (11) and
+            // `CombineDirect` (12) all resume. 13 and up name nothing.
+            if kind > 12 {
                 return Err(SnapshotError::Corrupt(
                     "promise cluster: reaction kind does not resume",
                 ));
@@ -3222,9 +3813,13 @@ pub(crate) fn decode_promise_cluster_payload(
                         "promise cluster: malformed direct combinator callback"
                     }));
                 }
-            } else if (3..=6).contains(&r.kind) {
-                // An `AsyncAwait` or `AsyncGenerator*` reaction carries its
-                // instance in `a` and nothing else.
+            } else if (3..=10).contains(&r.kind) {
+                // A NATIVE reaction — `AsyncAwait`, `AsyncGenerator*`, or one
+                // of the four `Array.fromAsync` steps — carries its instance
+                // or arena index in `a` and nothing else. It has no guest
+                // callbacks and no capability, because the machinery it
+                // resumes is the engine's own (architecture finding F127
+                // brought the `FromAsync*` kinds into this class).
                 if r.b != 0
                     || ![r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
                         .iter()
@@ -3279,18 +3874,25 @@ pub(crate) fn decode_promise_cluster_payload(
         combinators,
         async_instances: Vec::new(),
         async_generators: Vec::new(),
+        // `PRMS` carries none of these three; `ASYN` does, and the roster
+        // merges the two payloads into one cluster.
+        from_async: Vec::new(),
     })
 }
 
 /// Encode the arguments-exotic brand owners (the `ARGB` payload /
 /// small-state arguments section): a `u32` count then ascending owners.
 pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(4 + owners.len() * 4);
-    v.extend_from_slice(&(owners.len() as u32).to_be_bytes());
-    for o in owners {
-        v.extend_from_slice(&o.to_be_bytes());
-    }
+    let mut v = Vec::new();
+    encode_arguments_brands_into(owners, &mut v);
     v
+}
+
+pub(crate) fn encode_arguments_brands_into<S: Sink>(owners: &[u32], v: &mut S) {
+    v.put(&(owners.len() as u32).to_be_bytes());
+    for o in owners {
+        v.put(&o.to_be_bytes());
+    }
 }
 
 pub(crate) fn decode_arguments_brands(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
@@ -3316,37 +3918,41 @@ pub(crate) fn decode_arguments_brands(p: &[u8]) -> Result<Vec<u32>, SnapshotErro
 /// values travel as big-endian two's-complement bytes.
 pub(crate) fn encode_temporal(t: &TemporalImage) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(t.instants.len() as u32).to_be_bytes());
-    for (owner, ns) in &t.instants {
-        v.extend_from_slice(&owner.to_be_bytes());
-        v.extend_from_slice(&ns.to_be_bytes());
-    }
-    v.extend_from_slice(&(t.durations.len() as u32).to_be_bytes());
-    for (owner, f) in &t.durations {
-        v.extend_from_slice(&owner.to_be_bytes());
-        for x in f {
-            v.extend_from_slice(&x.to_be_bytes());
-        }
-    }
-    v.extend_from_slice(&(t.plains.len() as u32).to_be_bytes());
-    for (owner, kind, year, f) in &t.plains {
-        v.extend_from_slice(&owner.to_be_bytes());
-        v.push(*kind);
-        v.extend_from_slice(&year.to_be_bytes());
-        for x in f {
-            v.extend_from_slice(&x.to_be_bytes());
-        }
-    }
-    v.extend_from_slice(&(t.zoneds.len() as u32).to_be_bytes());
-    for (owner, ns, tz, off) in &t.zoneds {
-        v.extend_from_slice(&owner.to_be_bytes());
-        v.extend_from_slice(&ns.to_be_bytes());
-        let tzb = tz.as_bytes();
-        v.extend_from_slice(&(tzb.len() as u32).to_be_bytes());
-        v.extend_from_slice(tzb);
-        v.extend_from_slice(&off.to_be_bytes());
-    }
+    encode_temporal_into(t, &mut v);
     v
+}
+
+pub(crate) fn encode_temporal_into<S: Sink>(t: &TemporalImage, v: &mut S) {
+    v.put(&(t.instants.len() as u32).to_be_bytes());
+    for (owner, ns) in &t.instants {
+        v.put(&owner.to_be_bytes());
+        v.put(&ns.to_be_bytes());
+    }
+    v.put(&(t.durations.len() as u32).to_be_bytes());
+    for (owner, f) in &t.durations {
+        v.put(&owner.to_be_bytes());
+        for x in f {
+            v.put(&x.to_be_bytes());
+        }
+    }
+    v.put(&(t.plains.len() as u32).to_be_bytes());
+    for (owner, kind, year, f) in &t.plains {
+        v.put(&owner.to_be_bytes());
+        v.put_u8(*kind);
+        v.put(&year.to_be_bytes());
+        for x in f {
+            v.put(&x.to_be_bytes());
+        }
+    }
+    v.put(&(t.zoneds.len() as u32).to_be_bytes());
+    for (owner, ns, tz, off) in &t.zoneds {
+        v.put(&owner.to_be_bytes());
+        v.put(&ns.to_be_bytes());
+        let tzb = tz.as_bytes();
+        v.put(&(tzb.len() as u32).to_be_bytes());
+        v.put(tzb);
+        v.put(&off.to_be_bytes());
+    }
 }
 
 pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> {
@@ -3450,152 +4056,156 @@ pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> 
 /// strips it; see `Interp::intl_snapshot`).
 pub(crate) fn encode_intl(t: &IntlTables) -> Vec<u8> {
     let mut v = Vec::new();
-    fn s(v: &mut Vec<u8>, s: &str) {
+    encode_intl_into(t, &mut v);
+    v
+}
+
+pub(crate) fn encode_intl_into<S: Sink>(t: &IntlTables, v: &mut S) {
+    fn s<S: Sink>(v: &mut S, s: &str) {
         let b = s.as_bytes();
-        v.extend_from_slice(&(b.len() as u32).to_be_bytes());
-        v.extend_from_slice(b);
+        v.put(&(b.len() as u32).to_be_bytes());
+        v.put(b);
     }
-    fn os(v: &mut Vec<u8>, o: &Option<String>) {
+    fn os<S: Sink>(v: &mut S, o: &Option<String>) {
         match o {
             Some(x) => {
-                v.push(1);
+                v.put_u8(1);
                 s(v, x);
             }
-            None => v.push(0),
+            None => v.put_u8(0),
         }
     }
-    fn ou32(v: &mut Vec<u8>, o: &Option<u32>) {
+    fn ou32<S: Sink>(v: &mut S, o: &Option<u32>) {
         match o {
             Some(x) => {
-                v.push(1);
-                v.extend_from_slice(&x.to_be_bytes());
+                v.put_u8(1);
+                v.put(&x.to_be_bytes());
             }
-            None => v.push(0),
+            None => v.put_u8(0),
         }
     }
-    v.extend_from_slice(&(t.locales.len() as u32).to_be_bytes());
+    v.put(&(t.locales.len() as u32).to_be_bytes());
     for (owner, r) in &t.locales {
-        v.extend_from_slice(&owner.to_be_bytes());
-        s(&mut v, &r.tag);
-        s(&mut v, &r.language);
-        os(&mut v, &r.script);
-        os(&mut v, &r.region);
-        v.extend_from_slice(&(r.variants.len() as u32).to_be_bytes());
+        v.put(&owner.to_be_bytes());
+        s(v, &r.tag);
+        s(v, &r.language);
+        os(v, &r.script);
+        os(v, &r.region);
+        v.put(&(r.variants.len() as u32).to_be_bytes());
         for x in &r.variants {
-            s(&mut v, x);
+            s(v, x);
         }
-        v.extend_from_slice(&(r.unicode.len() as u32).to_be_bytes());
+        v.put(&(r.unicode.len() as u32).to_be_bytes());
         for (k, val) in &r.unicode {
-            s(&mut v, k);
-            s(&mut v, val);
+            s(v, k);
+            s(v, val);
         }
     }
-    v.extend_from_slice(&(t.collators.len() as u32).to_be_bytes());
+    v.put(&(t.collators.len() as u32).to_be_bytes());
     for (owner, r) in &t.collators {
-        v.extend_from_slice(&owner.to_be_bytes());
-        s(&mut v, &r.locale);
-        s(&mut v, &r.usage);
-        s(&mut v, &r.sensitivity);
-        s(&mut v, &r.collation);
-        v.push(r.numeric as u8);
-        s(&mut v, &r.case_first);
-        v.push(r.ignore_punctuation as u8);
+        v.put(&owner.to_be_bytes());
+        s(v, &r.locale);
+        s(v, &r.usage);
+        s(v, &r.sensitivity);
+        s(v, &r.collation);
+        v.put_u8(r.numeric as u8);
+        s(v, &r.case_first);
+        v.put_u8(r.ignore_punctuation as u8);
     }
-    v.extend_from_slice(&(t.list_formats.len() as u32).to_be_bytes());
+    v.put(&(t.list_formats.len() as u32).to_be_bytes());
     for (owner, r) in &t.list_formats {
-        v.extend_from_slice(&owner.to_be_bytes());
-        s(&mut v, &r.locale);
-        s(&mut v, &r.kind);
-        s(&mut v, &r.style);
+        v.put(&owner.to_be_bytes());
+        s(v, &r.locale);
+        s(v, &r.kind);
+        s(v, &r.style);
     }
-    v.extend_from_slice(&(t.plural_rules.len() as u32).to_be_bytes());
+    v.put(&(t.plural_rules.len() as u32).to_be_bytes());
     for (owner, r) in &t.plural_rules {
-        v.extend_from_slice(&owner.to_be_bytes());
-        s(&mut v, &r.locale);
-        s(&mut v, &r.kind);
-        s(&mut v, &r.notation);
-        v.extend_from_slice(&r.minimum_integer_digits.to_be_bytes());
-        v.extend_from_slice(&r.minimum_fraction_digits.to_be_bytes());
-        v.extend_from_slice(&r.maximum_fraction_digits.to_be_bytes());
-        ou32(&mut v, &r.minimum_significant_digits);
-        ou32(&mut v, &r.maximum_significant_digits);
-        s(&mut v, &r.rounding_type);
-        s(&mut v, &r.rounding_priority);
-        s(&mut v, &r.rounding_mode);
-        v.extend_from_slice(&r.rounding_increment.to_be_bytes());
-        s(&mut v, &r.trailing_zero_display);
+        v.put(&owner.to_be_bytes());
+        s(v, &r.locale);
+        s(v, &r.kind);
+        s(v, &r.notation);
+        v.put(&r.minimum_integer_digits.to_be_bytes());
+        v.put(&r.minimum_fraction_digits.to_be_bytes());
+        v.put(&r.maximum_fraction_digits.to_be_bytes());
+        ou32(v, &r.minimum_significant_digits);
+        ou32(v, &r.maximum_significant_digits);
+        s(v, &r.rounding_type);
+        s(v, &r.rounding_priority);
+        s(v, &r.rounding_mode);
+        v.put(&r.rounding_increment.to_be_bytes());
+        s(v, &r.trailing_zero_display);
     }
-    v.extend_from_slice(&(t.number_formats.len() as u32).to_be_bytes());
+    v.put(&(t.number_formats.len() as u32).to_be_bytes());
     for (owner, r) in &t.number_formats {
-        v.extend_from_slice(&owner.to_be_bytes());
-        s(&mut v, &r.locale);
-        s(&mut v, &r.numbering_system);
-        s(&mut v, &r.style);
-        s(&mut v, &r.notation);
-        s(&mut v, &r.compact_display);
-        s(&mut v, &r.sign_display);
-        s(&mut v, &r.use_grouping);
-        os(&mut v, &r.currency);
-        s(&mut v, &r.currency_display);
-        s(&mut v, &r.currency_sign);
-        os(&mut v, &r.unit);
-        s(&mut v, &r.unit_display);
-        v.extend_from_slice(&r.minimum_integer_digits.to_be_bytes());
-        v.extend_from_slice(&r.minimum_fraction_digits.to_be_bytes());
-        v.extend_from_slice(&r.maximum_fraction_digits.to_be_bytes());
-        ou32(&mut v, &r.minimum_significant_digits);
-        ou32(&mut v, &r.maximum_significant_digits);
-        s(&mut v, &r.rounding_type);
-        s(&mut v, &r.rounding_priority);
-        s(&mut v, &r.rounding_mode);
-        v.extend_from_slice(&r.rounding_increment.to_be_bytes());
-        s(&mut v, &r.trailing_zero_display);
+        v.put(&owner.to_be_bytes());
+        s(v, &r.locale);
+        s(v, &r.numbering_system);
+        s(v, &r.style);
+        s(v, &r.notation);
+        s(v, &r.compact_display);
+        s(v, &r.sign_display);
+        s(v, &r.use_grouping);
+        os(v, &r.currency);
+        s(v, &r.currency_display);
+        s(v, &r.currency_sign);
+        os(v, &r.unit);
+        s(v, &r.unit_display);
+        v.put(&r.minimum_integer_digits.to_be_bytes());
+        v.put(&r.minimum_fraction_digits.to_be_bytes());
+        v.put(&r.maximum_fraction_digits.to_be_bytes());
+        ou32(v, &r.minimum_significant_digits);
+        ou32(v, &r.maximum_significant_digits);
+        s(v, &r.rounding_type);
+        s(v, &r.rounding_priority);
+        s(v, &r.rounding_mode);
+        v.put(&r.rounding_increment.to_be_bytes());
+        s(v, &r.trailing_zero_display);
     }
-    v.extend_from_slice(&(t.segmenters.len() as u32).to_be_bytes());
+    v.put(&(t.segmenters.len() as u32).to_be_bytes());
     for (owner, r) in &t.segmenters {
-        v.extend_from_slice(&owner.to_be_bytes());
-        s(&mut v, &r.locale);
-        s(&mut v, &r.granularity);
+        v.put(&owner.to_be_bytes());
+        s(v, &r.locale);
+        s(v, &r.granularity);
     }
-    v.extend_from_slice(&(t.segments.len() as u32).to_be_bytes());
+    v.put(&(t.segments.len() as u32).to_be_bytes());
     for (owner, r) in &t.segments {
-        v.extend_from_slice(&owner.to_be_bytes());
-        v.extend_from_slice(&(r.units.len() as u32).to_be_bytes());
+        v.put(&owner.to_be_bytes());
+        v.put(&(r.units.len() as u32).to_be_bytes());
         for u in &r.units {
-            v.extend_from_slice(&u.to_be_bytes());
+            v.put(&u.to_be_bytes());
         }
-        v.extend_from_slice(&(r.segments.len() as u32).to_be_bytes());
+        v.put(&(r.segments.len() as u32).to_be_bytes());
         for &(start, end, word) in &r.segments {
-            v.extend_from_slice(&(start as u32).to_be_bytes());
-            v.extend_from_slice(&(end as u32).to_be_bytes());
-            v.push(word as u8);
+            v.put(&(start as u32).to_be_bytes());
+            v.put(&(end as u32).to_be_bytes());
+            v.put_u8(word as u8);
         }
-        s(&mut v, &r.granularity);
+        s(v, &r.granularity);
     }
-    v.extend_from_slice(&(t.segment_iterators.len() as u32).to_be_bytes());
+    v.put(&(t.segment_iterators.len() as u32).to_be_bytes());
     for (owner, r) in &t.segment_iterators {
-        v.extend_from_slice(&owner.to_be_bytes());
-        v.extend_from_slice(&r.segments_inst.0.to_be_bytes());
-        v.extend_from_slice(&(r.pos as u32).to_be_bytes());
+        v.put(&owner.to_be_bytes());
+        v.put(&r.segments_inst.0.to_be_bytes());
+        v.put(&(r.pos as u32).to_be_bytes());
     }
-    v.extend_from_slice(&(t.date_time_formats.len() as u32).to_be_bytes());
+    v.put(&(t.date_time_formats.len() as u32).to_be_bytes());
     for (owner, r) in &t.date_time_formats {
-        v.extend_from_slice(&owner.to_be_bytes());
-        s(&mut v, &r.locale);
-        s(&mut v, &r.calendar);
-        s(&mut v, &r.numbering_system);
-        s(&mut v, &r.time_zone);
-        v.extend_from_slice(&r.offset_minutes.to_be_bytes());
-        os(&mut v, &r.hour_cycle);
-        v.extend_from_slice(&(r.components.len() as u32).to_be_bytes());
+        v.put(&owner.to_be_bytes());
+        s(v, &r.locale);
+        s(v, &r.calendar);
+        s(v, &r.numbering_system);
+        s(v, &r.time_zone);
+        v.put(&r.offset_minutes.to_be_bytes());
+        os(v, &r.hour_cycle);
+        v.put(&(r.components.len() as u32).to_be_bytes());
         for (k, val) in &r.components {
-            s(&mut v, k);
-            s(&mut v, val);
+            s(v, k);
+            s(v, val);
         }
-        os(&mut v, &r.date_style);
-        os(&mut v, &r.time_style);
+        os(v, &r.date_style);
+        os(v, &r.time_style);
     }
-    v
 }
 
 pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
@@ -3660,7 +4270,7 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
             // `BTreeMap` in strictly-ascending key order, so a
             // duplicated or unordered key can only be crafted — and
             // silently accepting it re-canonicalizes, breaking the
-            // write(read(bytes)) == bytes identity the seals pin.
+            // write(read(bytes)) == bytes identity the golden pins hold.
             if prev_key.as_ref().is_some_and(|p| k <= *p) {
                 return Err(SnapshotError::Corrupt(
                     "intl side table: unicode keys not strictly ascending",
@@ -3887,23 +4497,27 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
 /// in owner order.
 pub(crate) fn encode_iterators(rows: &[IteratorRow]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
-    for r in rows {
-        v.extend_from_slice(&r.owner.to_be_bytes());
-        v.push(r.kind);
-        v.extend_from_slice(&r.iterable.to_be_bytes());
-        v.extend_from_slice(&r.index.to_be_bytes());
-        v.push(r.done as u8);
-        v.extend_from_slice(&r.result.to_be_bytes());
-        v.extend_from_slice(&(r.enum_keys.len() as u32).to_be_bytes());
-        for &(id, idx) in &r.enum_keys {
-            v.extend_from_slice(&id.to_be_bytes());
-            v.extend_from_slice(&idx.to_be_bytes());
-        }
-        v.extend_from_slice(&(r.str_bytes.len() as u32).to_be_bytes());
-        v.extend_from_slice(&r.str_bytes);
-    }
+    encode_iterators_into(rows, &mut v);
     v
+}
+
+pub(crate) fn encode_iterators_into<S: Sink>(rows: &[IteratorRow], v: &mut S) {
+    v.put(&(rows.len() as u32).to_be_bytes());
+    for r in rows {
+        v.put(&r.owner.to_be_bytes());
+        v.put_u8(r.kind);
+        v.put(&r.iterable.to_be_bytes());
+        v.put(&r.index.to_be_bytes());
+        v.put_u8(r.done as u8);
+        v.put(&r.result.to_be_bytes());
+        v.put(&(r.enum_keys.len() as u32).to_be_bytes());
+        for &(id, idx) in &r.enum_keys {
+            v.put(&id.to_be_bytes());
+            v.put(&idx.to_be_bytes());
+        }
+        v.put(&(r.str_bytes.len() as u32).to_be_bytes());
+        v.put(&r.str_bytes);
+    }
 }
 
 /// The self-contained shape gate for an `Iterator.from` wrapper cursor (kind
@@ -3927,6 +4541,30 @@ fn iterator_from_wrapper_malformed(
         || done
         || !enum_keys_empty
         || !str_bytes_empty
+}
+
+/// The self-contained shape gate for a lazy Iterator helper cursor (kinds
+/// 10-14: map, filter, take, drop, flatMap). Each wraps a live underlying
+/// iterator and retains a holder array in `result` carrying the captured
+/// `next`, the mapper/predicate or remaining count, and flatMap's live inner
+/// iterator. `index` is the callback counter, so it is unconstrained; the
+/// for-in and string payloads are always empty.
+///
+/// `done` is load-bearing here rather than free: a spent helper RELEASES its
+/// underlying iterator (`helper_finish`), so `iterable` is NULL on a done row
+/// — the same shape a live string cursor carries — and must NOT be on a row
+/// that can still yield. The holder survives either way, emptied.
+///
+/// Shared by both gates for the same reason as
+/// [`iterator_from_wrapper_malformed`].
+fn lazy_helper_malformed(
+    iterable: u32,
+    result: u32,
+    done: bool,
+    enum_keys_empty: bool,
+    str_bytes_empty: bool,
+) -> bool {
+    result == u32::MAX || !enum_keys_empty || !str_bytes_empty || (!done && iterable == u32::MAX)
 }
 
 /// The self-contained shape gate for a RegExp String Iterator cursor (kind 9):
@@ -3961,10 +4599,11 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
             ));
         }
         let kind = c.u8()?;
-        // The engine's cursor kinds are 0..=9 (array values/keys/entries,
+        // The engine's cursor kinds are 0..=15 (array values/keys/entries,
         // for-in, string, collection keys/values/entries, Iterator.from
-        // generic wrappers, and RegExp String Iterator).
-        if kind > 9 {
+        // generic wrappers, RegExp String Iterator, the five lazy Iterator
+        // helpers map/filter/take/drop/flatMap, and Iterator.concat).
+        if kind > 15 {
             return Err(SnapshotError::Corrupt("iterator cursors: unknown kind"));
         }
         let iterable = c.u32()?;
@@ -3993,9 +4632,29 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
                 "iterator cursors: string cursor outside its text",
             ));
         }
+        if (10..=15).contains(&kind)
+            && lazy_helper_malformed(
+                iterable,
+                result,
+                done,
+                enum_keys.is_empty(),
+                str_bytes.is_empty(),
+            )
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: malformed lazy Iterator helper",
+            ));
+        }
         if kind == 3 && index as usize > enum_keys.len() {
             return Err(SnapshotError::Corrupt(
                 "iterator cursors: for-in cursor past its key list",
+            ));
+        }
+        // A for-in cursor always names the prototype level it steps (even
+        // `for (k in null)` names `%Object.prototype%`) and its result.
+        if kind == 3 && (iterable == u32::MAX || result == u32::MAX) {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: for-in cursor without its level or result",
             ));
         }
         if kind == 8
@@ -4081,6 +4740,7 @@ static EMPTY_PROMISE_CLUSTER: ironhorse_vm::snapshot_api::PromiseClusterSnapshot
         functions: Vec::new(),
         guards: Vec::new(),
         combinators: Vec::new(),
+        from_async: Vec::new(),
         async_instances: Vec::new(),
         async_generators: Vec::new(),
         unhandled_rejection: None,
@@ -4401,8 +5061,11 @@ fn check_stored_bounds(
     const OOB: SnapshotError = SnapshotError::Corrupt("slot index out of arena bounds");
     const OOC: SnapshotError = SnapshotError::Corrupt("chunk offset out of arena bounds");
     const FREE: SnapshotError = SnapshotError::Corrupt("side table names a free slot");
-    // The free set, as a bitmap (entries already range-checked and
-    // deduplicated by both decode paths). It cuts BOTH ways: a freed heap record is OPAQUE — the sweep does not
+    // The free set, as a bitmap. The container decode range-checks and
+    // deduplicates the entries first; the store paths build their arenas,
+    // which refuse a bad free list, after this runs, so here an entry out
+    // of range is ignored and a duplicate marks once. The free set cuts
+    // BOTH ways: a freed heap record is OPAQUE — the sweep does not
     // scrub it and chunk compaction remaps MARKED slots only, so an
     // honest post-GC snapshot legitimately holds freed records whose
     // stale chunk offsets sit outside the compacted arena, and nothing
@@ -4458,9 +5121,15 @@ fn check_stored_bounds(
 
 pub(crate) fn encode_stack(stack: &[Slot]) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(&(stack.len() as u32).to_be_bytes());
-    v.extend_from_slice(&encode_slots(stack));
+    encode_stack_into(stack, &mut v);
     v
+}
+
+pub(crate) fn encode_stack_into<S: Sink>(stack: &[Slot], v: &mut S) {
+    v.put(&(stack.len() as u32).to_be_bytes());
+    for slot in stack {
+        crate::slot_codec::put_slot(slot, v);
+    }
 }
 
 pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
@@ -4468,16 +5137,15 @@ pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
         return Err(SnapshotError::Corrupt("STAC header"));
     }
     let count = u32::from_be_bytes([p[0], p[1], p[2], p[3]]) as usize;
-    // checked_mul for the same reason as `decode_heap`'s twin gate: on
-    // a 32-bit usize the product can wrap to a small `want` that
+    // Sized in u64 for the same reason as `decode_heap`'s twin gate: in
+    // usize the product can wrap on a 32-bit host to a small `want` that
     // satisfies the truncation gate below, silently short-decoding the
-    // stack. Both gates must reject overflow on every target.
-    let want = count
-        .checked_mul(SLOT_RECORD_BYTES)
-        .ok_or(SnapshotError::Corrupt("STAC record count"))?;
-    if p.len() - 4 < want {
+    // stack. Every target refuses an oversized count with the same message.
+    let want = count as u64 * SLOT_RECORD_BYTES as u64;
+    if ((p.len() - 4) as u64) < want {
         return Err(SnapshotError::Corrupt("STAC records truncated"));
     }
+    let want = want as usize;
     if p.len() - 4 != want {
         return Err(SnapshotError::Corrupt("STAC trailing bytes"));
     }
@@ -4531,6 +5199,15 @@ fn encode_machine(image: &MachineImage) -> Result<Vec<u8>, SnapshotError> {
         // The generator trailer of `ASYN` is a format-23 shape: an older
         // reader would refuse the payload's trailing bytes.
         version.format_version = version.format_version.max(23);
+    }
+    if !image.promise_cluster.from_async.is_empty() {
+        // And the `Array.fromAsync` trailer behind it is a format-24 shape
+        // (architecture finding F127). Without this the writer would emit a
+        // container it cannot read back: an image whose stamp came from
+        // somewhere other than the current writer — a decoded older image
+        // republished, or one deliberately marker-stamped — carries the
+        // trailer under a stamp the reader refuses by name.
+        version.format_version = version.format_version.max(24);
     }
     if image.function_state.native_names.is_some() {
         version.format_version = version.format_version.max(18);
@@ -5051,12 +5728,43 @@ mod tests {
             owner: 1,
             data: 4,
             length: 8,
-            flags: 4,
+            flags: 8,
+            max_length: 0,
         }];
         assert!(matches!(
             decode_buffers(&encode_buffers(&bad_flags)),
             Err(SnapshotError::Corrupt(_))
         ));
+        // A resizable buffer's maximum covers its length and fits the
+        // allocation ceiling; the round trip keeps it, and a fixed buffer's
+        // row carries none.
+        let resizable = vec![BufferImage {
+            owner: 1,
+            data: 4,
+            length: 8,
+            flags: BUFFER_RESIZABLE,
+            max_length: 16,
+        }];
+        assert_eq!(
+            encode_buffers(&resizable).len(),
+            encode_buffers(&bad_flags).len() + 4
+        );
+        assert_eq!(
+            decode_buffers(&encode_buffers(&resizable)).unwrap(),
+            resizable
+        );
+        for max_length in [7, 0x8000_0000] {
+            let bad_max = vec![BufferImage {
+                max_length,
+                ..resizable[0].clone()
+            }];
+            assert!(matches!(
+                decode_buffers(&encode_buffers(&bad_max)),
+                Err(SnapshotError::Corrupt(
+                    "array-buffers side table: maximum out of range"
+                ))
+            ));
+        }
         // Duplicate owners in each table.
         let dup_buf = vec![
             BufferImage {
@@ -5064,12 +5772,14 @@ mod tests {
                 data: 4,
                 length: 8,
                 flags: 0,
+                max_length: 0,
             },
             BufferImage {
                 owner: 2,
                 data: 16,
                 length: 8,
                 flags: 0,
+                max_length: 0,
             },
         ];
         assert!(matches!(
@@ -5114,12 +5824,14 @@ mod tests {
                 data: 4,
                 length: 8,
                 flags: 0b10,
+                max_length: 0,
             },
             BufferImage {
                 owner: 3,
                 data: 16,
                 length: 0,
                 flags: 0b01,
+                max_length: 0,
             },
         ];
         assert_eq!(decode_buffers(&encode_buffers(&ok_b)).unwrap(), ok_b);
@@ -5152,6 +5864,7 @@ mod tests {
             data: 60,
             length: 8,
             flags: 0,
+            max_length: 0,
         }];
         assert!(check_image_slot_bounds(
             &[],
@@ -5181,6 +5894,7 @@ mod tests {
             data: 2,
             length: 8,
             flags: 0,
+            max_length: 0,
         }];
         assert!(check_image_slot_bounds(
             &[],
@@ -5211,6 +5925,7 @@ mod tests {
             data: u32::MAX,
             length: 0,
             flags: 0,
+            max_length: 0,
         }];
         assert!(check_image_slot_bounds(
             &[],
@@ -5271,6 +5986,7 @@ mod tests {
             data: 4,
             length: 8,
             flags: 0,
+            max_length: 0,
         }];
         let kind_u32 = ironhorse_vm::TYPED_ARRAY_TYPES
             .iter()
@@ -5645,7 +6361,10 @@ mod tests {
             enum_keys: vec![],
             str_bytes: vec![],
         };
-        for kind in 0..=9 {
+        // 10-14 are the lazy Iterator helpers, whose self-contained shape
+        // gate the fixture row already satisfies (a live iterable, a holder
+        // in `result`, and empty for-in and string payloads).
+        for kind in 0..=15 {
             assert_eq!(
                 decode_iterators(&encode_iterators(&[row(kind)])).unwrap(),
                 vec![row(kind)]
@@ -5664,11 +6383,40 @@ mod tests {
                 ))
             );
         }
-        for kind in [10, 255] {
+        for kind in [16, 255] {
             assert_eq!(
                 decode_iterators(&encode_iterators(&[row(kind)])),
                 Err(SnapshotError::Corrupt("iterator cursors: unknown kind"))
             );
+        }
+        // A lazy helper row missing its underlying iterator or its holder is
+        // refused by shape, not by kind.
+        for kind in 10..=15 {
+            for broken in [
+                IteratorRow {
+                    iterable: u32::MAX,
+                    ..row(kind)
+                },
+                IteratorRow {
+                    result: u32::MAX,
+                    ..row(kind)
+                },
+                IteratorRow {
+                    str_bytes: vec![0, b'a'],
+                    ..row(kind)
+                },
+                IteratorRow {
+                    enum_keys: vec![(0, 0)],
+                    ..row(kind)
+                },
+            ] {
+                assert_eq!(
+                    decode_iterators(&encode_iterators(&[broken])),
+                    Err(SnapshotError::Corrupt(
+                        "iterator cursors: malformed lazy Iterator helper"
+                    ))
+                );
+            }
         }
         for value in [2, 255] {
             let mut bytes = encode_iterators(&[row(0)]);
@@ -5700,11 +6448,25 @@ mod tests {
         assert!(decode_iterators(&encode_iterators(&[forin.clone()])).is_ok());
         forin.index = 2;
         assert_eq!(
-            decode_iterators(&encode_iterators(&[forin])),
+            decode_iterators(&encode_iterators(&[forin.clone()])),
             Err(SnapshotError::Corrupt(
                 "iterator cursors: for-in cursor past its key list"
             ))
         );
+        forin.index = 1;
+        for field in 0..2 {
+            let mut invalid = forin.clone();
+            match field {
+                0 => invalid.iterable = u32::MAX,
+                _ => invalid.result = u32::MAX,
+            }
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: for-in cursor without its level or result"
+                ))
+            );
+        }
         // Reset each independent malformed wrapper component from its valid row.
         for field in 0..6 {
             let mut invalid = row(8);
@@ -6345,6 +7107,8 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            weak_refs: Vec::new(),
+            finalization_registries: Vec::new(),
             generators: Vec::new(),
             promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
@@ -6546,6 +7310,8 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            weak_refs: Vec::new(),
+            finalization_registries: Vec::new(),
             generators: Vec::new(),
             promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
@@ -6710,6 +7476,14 @@ mod tests {
             assert!(matches!(
                 decode_disposable_stacks(bytes),
                 Err(SnapshotError::Corrupt("disposable stacks"))
+            ));
+            assert!(matches!(
+                decode_weak_refs(bytes),
+                Err(SnapshotError::Corrupt("weak refs"))
+            ));
+            assert!(matches!(
+                decode_finalization_registries(bytes),
+                Err(SnapshotError::Corrupt("finalization registries"))
             ));
             assert!(matches!(
                 decode_generators(bytes),
@@ -6919,6 +7693,21 @@ mod tests {
             ))
         );
         assert_eq!(
+            append(crate::format::WKRF, encode_weak_refs(&image.weak_refs)),
+            Err(SnapshotError::Corrupt(
+                "WKRF atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::FNRG,
+                encode_finalization_registries(&image.finalization_registries)
+            ),
+            Err(SnapshotError::Corrupt(
+                "FNRG atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
             append(crate::format::GENR, encode_generators(&image.generators)),
             Err(SnapshotError::Corrupt(
                 "GENR atom present but empty; the writer omits it"
@@ -7064,6 +7853,8 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            weak_refs: Vec::new(),
+            finalization_registries: Vec::new(),
             generators: Vec::new(),
             promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
@@ -7603,6 +8394,7 @@ mod side_table_order_refusals {
             data: 0,
             length: 0,
             flags: 0,
+            max_length: 0,
         };
         let mut second = first.clone();
         second.owner = 3;
@@ -7904,12 +8696,13 @@ mod side_table_field_refusals {
             data: 0,
             length: 0,
             flags: 0,
+            max_length: 0,
         };
-        for flags in 0..=3 {
+        for flags in 0..=7 {
             buffer.flags = flags;
             assert!(decode_buffers(&encode_buffers(&[buffer.clone()])).is_ok());
         }
-        for flags in [4, 128, 255] {
+        for flags in [8, 128, 255] {
             buffer.flags = flags;
             assert_eq!(
                 decode_buffers(&encode_buffers(&[buffer.clone()])),
@@ -8430,6 +9223,113 @@ mod object_state_refusals {
 }
 
 #[cfg(test)]
+mod weak_decoder_refusals {
+    use super::*;
+    use ironhorse_vm::snapshot_api::{FinalizationCellRow, FinalizationRegistryRow, WeakRefRow};
+    use ironhorse_vm::value::SlotIndex;
+
+    fn reference(index: u32) -> Slot {
+        Slot::of(Kind::Reference, Payload::Reference(SlotIndex(index)))
+    }
+
+    /// Owners ascend strictly in both tables, a registry's CHANGED byte is a
+    /// boolean, its callback is a reference and, when flagged, it holds a
+    /// dead cell; a cleared target and an absent token travel as `u32::MAX`.
+    #[test]
+    fn weak_ref_and_registry_rows_are_ordered_and_well_formed() {
+        let rows = vec![
+            WeakRefRow {
+                owner: 2,
+                target: 5,
+            },
+            WeakRefRow {
+                owner: 3,
+                target: u32::MAX,
+            },
+        ];
+        assert_eq!(decode_weak_refs(&encode_weak_refs(&rows)).unwrap(), rows);
+        for owner in [2, 1] {
+            let mut unordered = rows.clone();
+            unordered[1].owner = owner;
+            assert_eq!(
+                decode_weak_refs(&encode_weak_refs(&unordered)),
+                Err(SnapshotError::Corrupt(
+                    "weak refs: owners not strictly ascending"
+                ))
+            );
+        }
+
+        let first = FinalizationRegistryRow {
+            owner: 4,
+            callback: reference(6),
+            changed: true,
+            cells: vec![
+                FinalizationCellRow {
+                    target: u32::MAX,
+                    holdings: Slot::integer(1),
+                    token: u32::MAX,
+                },
+                FinalizationCellRow {
+                    target: 7,
+                    holdings: Slot::undefined(),
+                    token: 8,
+                },
+            ],
+        };
+        let mut second = first.clone();
+        second.owner = 5;
+        second.changed = false;
+        let both = vec![first.clone(), second.clone()];
+        assert_eq!(
+            decode_finalization_registries(&encode_finalization_registries(&both)).unwrap(),
+            both
+        );
+        for owner in [4, 3] {
+            second.owner = owner;
+            assert_eq!(
+                decode_finalization_registries(&encode_finalization_registries(&[
+                    first.clone(),
+                    second.clone()
+                ])),
+                Err(SnapshotError::Corrupt(
+                    "finalization registries: owners not strictly ascending"
+                ))
+            );
+        }
+        // The CHANGED byte follows the row count, the owner and the callback.
+        let bytes = encode_finalization_registries(std::slice::from_ref(&first));
+        let changed_at = 8 + SLOT_RECORD_BYTES;
+        assert_eq!(bytes[changed_at], 1);
+        for value in [2, 255] {
+            let mut invalid = bytes.clone();
+            invalid[changed_at] = value;
+            assert_eq!(
+                decode_finalization_registries(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "finalization registries: bad boolean byte"
+                ))
+            );
+        }
+        let mut not_callable = first.clone();
+        not_callable.callback = Slot::integer(1);
+        assert_eq!(
+            decode_finalization_registries(&encode_finalization_registries(&[not_callable])),
+            Err(SnapshotError::Corrupt(
+                "finalization registries: cleanup callback is not a reference"
+            ))
+        );
+        let mut all_alive = first;
+        all_alive.cells.remove(0);
+        assert_eq!(
+            decode_finalization_registries(&encode_finalization_registries(&[all_alive])),
+            Err(SnapshotError::Corrupt(
+                "finalization registries: flagged registry holds no dead cell"
+            ))
+        );
+    }
+}
+
+#[cfg(test)]
 mod function_decoder_refusals {
     use super::*;
     use ironhorse_vm::snapshot_api::{BoundFunctionRow, FunctionRow, FunctionStateSnapshot};
@@ -8726,6 +9626,7 @@ mod intl_bound_decoder_refusals {
         let mut second = first.clone();
         second.function = 3;
         second.kind = 1;
+        second.owner = 4;
         assert_eq!(
             decode_intl_bound_functions(&encode_intl_bound_functions(&[
                 first.clone(),
@@ -8733,6 +9634,15 @@ mod intl_bound_decoder_refusals {
             ]))
             .unwrap(),
             vec![first.clone(), second.clone()]
+        );
+        // One Intl object has one bound function, whatever the rows' kinds.
+        let mut repeated = second.clone();
+        repeated.owner = first.owner;
+        assert_eq!(
+            decode_intl_bound_functions(&encode_intl_bound_functions(&[first.clone(), repeated])),
+            Err(SnapshotError::Corrupt(
+                "Intl bound-function state: owner has more than one row"
+            ))
         );
         for function in [2, 1] {
             second.function = function;
@@ -8910,6 +9820,7 @@ mod generator_decoder_refusals {
                 requests: vec![],
                 active: None,
             }],
+            &[],
         );
         let mut with_trailer = |version: u32| {
             image.version.format_version = version;
@@ -8961,12 +9872,12 @@ mod generator_decoder_refusals {
         };
         // An honest trailer round-trips and is absent when empty.
         let rows = vec![completed(3), completed(7)];
-        let bytes = encode_async_section(&[], &rows);
+        let bytes = encode_async_section(&[], &rows, &[]);
         assert_eq!(
             decode_async_section(&bytes).unwrap(),
-            (vec![], rows.clone())
+            (vec![], rows.clone(), vec![])
         );
-        assert_eq!(encode_async_section(&[], &[]), 0u32.to_be_bytes());
+        assert_eq!(encode_async_section(&[], &[], &[]), 0u32.to_be_bytes());
         // Every cut after the (valid, empty) instance prefix is refused.
         for end in 5..bytes.len() {
             assert!(
@@ -8983,7 +9894,11 @@ mod generator_decoder_refusals {
             ))
         );
         assert_eq!(
-            decode_async_section(&encode_async_section(&[], &[completed(5), completed(5)])),
+            decode_async_section(&encode_async_section(
+                &[],
+                &[completed(5), completed(5)],
+                &[]
+            )),
             Err(SnapshotError::Corrupt(
                 "async generators: owners not strictly ascending"
             ))
@@ -8991,7 +9906,7 @@ mod generator_decoder_refusals {
         // One frameless completed row: instances count (4), trailer count
         // (4), owner (4), state (1), frame tag (1), request count (4),
         // active tag (1).
-        let one = encode_async_section(&[], &[completed(5)]);
+        let one = encode_async_section(&[], &[completed(5)], &[]);
         assert_eq!(one.len(), 19);
         let mut bad_frame_tag = one.clone();
         bad_frame_tag[13] = 2;
@@ -9026,7 +9941,7 @@ mod generator_decoder_refusals {
             ..completed(5)
         };
         assert_eq!(
-            decode_async_section(&encode_async_section(&[], &[queued_without_active])),
+            decode_async_section(&encode_async_section(&[], &[queued_without_active], &[])),
             Err(SnapshotError::Corrupt(
                 "async generators: request queue disagrees with state"
             ))
@@ -9036,7 +9951,7 @@ mod generator_decoder_refusals {
             ..completed(5)
         };
         assert_eq!(
-            decode_async_section(&encode_async_section(&[], &[bad_status])),
+            decode_async_section(&encode_async_section(&[], &[bad_status], &[])),
             Err(SnapshotError::Corrupt(
                 "async generators: invalid request status"
             ))
@@ -9046,7 +9961,7 @@ mod generator_decoder_refusals {
             active: Some(request(1)),
             ..completed(5)
         };
-        let bytes = encode_async_section(&[], std::slice::from_ref(&returning));
+        let bytes = encode_async_section(&[], std::slice::from_ref(&returning), &[]);
         assert_eq!(decode_async_section(&bytes).unwrap().1, vec![returning]);
         // An Awaiting instance is serving a request; one with nothing
         // active would be re-encoded unreadably after its next request.
@@ -9056,7 +9971,7 @@ mod generator_decoder_refusals {
             ..completed(5)
         };
         assert_eq!(
-            decode_async_section(&encode_async_section(&[], &[awaiting_nothing])),
+            decode_async_section(&encode_async_section(&[], &[awaiting_nothing], &[])),
             Err(SnapshotError::Corrupt(
                 "async generators: request queue disagrees with state"
             ))
@@ -9070,7 +9985,7 @@ mod generator_decoder_refusals {
             ..completed(5)
         };
         assert_eq!(
-            decode_async_section(&encode_async_section(&[], &[started_mid_body])),
+            decode_async_section(&encode_async_section(&[], &[started_mid_body], &[])),
             Err(SnapshotError::Corrupt(
                 "async generators: start frame is not fresh"
             ))
@@ -9083,7 +9998,8 @@ mod generator_decoder_refusals {
         assert_eq!(
             decode_async_section(&encode_async_section(
                 &[],
-                std::slice::from_ref(&started_fresh)
+                std::slice::from_ref(&started_fresh),
+                &[]
             ))
             .unwrap()
             .1,
@@ -9449,6 +10365,196 @@ mod generator_decoder_refusals {
     }
 }
 
+/// The `Array.fromAsync` accumulation trailer's decoder (architecture
+/// finding F127), which rides behind the generators in `ASYN`.
+#[cfg(test)]
+mod from_async_decoder_refusals {
+    use super::*;
+
+    /// One in-flight `Array.fromAsync` accumulation on the array-like path,
+    /// which is the shortest honest row: no iterator, no map function.
+    fn from_async_row() -> ironhorse_vm::snapshot_api::FromAsyncRow {
+        ironhorse_vm::snapshot_api::FromAsyncRow {
+            resolve: Slot::undefined(),
+            reject: Slot::undefined(),
+            target: 3,
+            k: 1,
+            len: 2,
+            mapfn: Slot::undefined(),
+            this_arg: Slot::undefined(),
+            iterator: Slot::undefined(),
+            next_method: Slot::undefined(),
+            array_like: Slot::undefined(),
+            close_error: Slot::undefined(),
+            flags: ironhorse_vm::snapshot_api::FromAsyncRow::TARGET_IS_ARRAY,
+        }
+    }
+
+    /// The `fromAsync` trailer is a format-24 addition (architecture finding
+    /// F127), so a container stamped older that carries one is refused by
+    /// name — the writer-side stamp bump's reader-side twin, and the reason
+    /// the carry cannot be read back into a machine built before it existed.
+    #[test]
+    fn from_async_trailer_is_tied_to_the_format_stamp() {
+        let signature = Signature::new("ironhorse-test-sig-v1");
+        let mut image = MachineImage::from_arenas(
+            signature.clone(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            Vec::new(),
+            SymbolKeyImage::default(),
+        );
+        let trailer = encode_async_section(&[], &[], &[from_async_row()]);
+        let mut with_trailer = |version: u32| {
+            image.version.format_version = version;
+            let bytes = write_machine_unchecked(&image);
+            let parsed = AtomReader::parse(&bytes).unwrap();
+            assert!(parsed.find(crate::format::ASYN).is_none());
+            let mut writer = AtomWriter::new();
+            for atom in parsed.atoms() {
+                writer.atom(atom.tag, atom.payload).unwrap();
+            }
+            writer.atom(crate::format::ASYN, &trailer).unwrap();
+            read_machine(&writer.finish().unwrap(), &signature)
+        };
+        assert_eq!(
+            with_trailer(23),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: trailer in a pre-format-24 container"
+            ))
+        );
+        // At 24 the trailer passes the stamp gate and is refused by the
+        // NEXT rule instead. Named exactly rather than asserted `is_err`:
+        // this arm exists to show the stamp gate stopped being the reason,
+        // and any unrelated failure would satisfy a bare `is_err`. The image
+        // carries no promises, so the accumulation is unanchored and the
+        // density check fires before anything looks at the crafted target.
+        assert_eq!(
+            with_trailer(24),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: accumulations not densely referenced"
+            ))
+        );
+    }
+
+    /// The writer-side twin of that stamp gate: an image carrying an
+    /// accumulation is STAMPED at 24, so the writer cannot emit a container
+    /// its own reader refuses.
+    ///
+    /// The generator trailer has had this floor since format 23. Without the
+    /// matching one here, an image whose stamp came from somewhere other than
+    /// the current writer — a decoded older image republished, or one
+    /// deliberately marker-stamped the way the golden-corpus controls are —
+    /// is written and then unreadable by name.
+    #[test]
+    fn writing_an_accumulation_raises_the_format_stamp() {
+        let signature = Signature::new("ironhorse-test-sig-v1");
+        let mut image = MachineImage::from_arenas(
+            signature.clone(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            Vec::new(),
+            SymbolKeyImage::default(),
+        );
+        image.promise_cluster.from_async = vec![from_async_row()];
+        image.version.format_version = 23;
+        let bytes = write_machine_unchecked(&image);
+        let stamped = AtomReader::parse(&bytes).unwrap();
+        assert!(
+            stamped.find(crate::format::ASYN).is_some(),
+            "the trailer must actually be written"
+        );
+        // The refusal below must be the crafted target's, never the stamp's.
+        assert_ne!(
+            read_machine(&bytes, &signature),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: trailer in a pre-format-24 container"
+            )),
+            "the writer emitted a container its own reader refuses"
+        );
+    }
+
+    /// The `ASYN` `fromAsync` trailer's byte-level refusals. The generator
+    /// count in front of it doubles as a positional placeholder, so the
+    /// arrangement itself — not just the rows — has shapes no honest encoder
+    /// emits.
+    #[test]
+    fn from_async_trailer_refusals() {
+        use ironhorse_vm::snapshot_api::FromAsyncRow;
+        let reference = |i: u32| {
+            Slot::of(
+                Kind::Reference,
+                Payload::Reference(ironhorse_vm::SlotIndex(i)),
+            )
+        };
+        // An honest trailer round-trips, and rides behind a zero generator
+        // count when the machine holds no generators.
+        let rows = vec![from_async_row()];
+        let bytes = encode_async_section(&[], &[], &rows);
+        assert_eq!(
+            decode_async_section(&bytes).unwrap(),
+            (vec![], vec![], rows.clone())
+        );
+        // Every cut after the instance and generator counts is refused.
+        for end in 9..bytes.len() {
+            assert!(
+                decode_async_section(&bytes[..end]).is_err(),
+                "fromAsync trailer truncated at {end}"
+            );
+        }
+        // A present-but-empty trailer is not an encoding of anything. Three
+        // zero counts: no instances, no generators, no accumulations.
+        let redundant = [0u32.to_be_bytes(); 3].concat();
+        assert_eq!(
+            decode_async_section(&redundant),
+            Err(SnapshotError::Corrupt("fromAsync: redundant empty trailer"))
+        );
+        let refused = |mutate: &dyn Fn(&mut FromAsyncRow)| {
+            let mut row = from_async_row();
+            mutate(&mut row);
+            decode_async_section(&encode_async_section(&[], &[], &[row])).map(|_| ())
+        };
+        assert_eq!(
+            refused(&|row| row.flags = FromAsyncRow::FLAGS + 1),
+            Err(SnapshotError::Corrupt("fromAsync: unknown flag bit"))
+        );
+        assert_eq!(
+            refused(&|row| row.mapfn = reference(4)),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: mapfn present without the mapping flag"
+            ))
+        );
+        assert_eq!(
+            refused(&|row| row.next_method = reference(4)),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: iterator state without an iterator"
+            ))
+        );
+        assert_eq!(
+            refused(&|row| {
+                row.iterator = reference(4);
+                row.next_method = reference(5);
+            }),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: an iterated accumulation carries a length"
+            ))
+        );
+        assert_eq!(
+            refused(&|row| row.k = row.len + 1),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: index past the array-like length"
+            ))
+        );
+        // `k == len` is the last honest index: the walk has consumed every
+        // element and the accumulation is about to settle.
+        assert!(refused(&|row| row.k = row.len).is_ok());
+    }
+}
+
 #[cfg(test)]
 mod promise_decoder_refusals {
     use super::*;
@@ -9489,6 +10595,7 @@ mod promise_decoder_refusals {
             combinators: vec![],
             async_instances: vec![],
             async_generators: vec![],
+            from_async: vec![],
             unhandled_rejection: None,
         }
     }
@@ -9920,7 +11027,11 @@ mod promise_decoder_refusals {
                 ))
             );
         }
-        for kind in [7, 8, 9, 10, 13, 255] {
+        // 13 and up name nothing. 7-10 USED to be here: they are the
+        // `Array.fromAsync` steps, and `ASYN` has carried them since format
+        // 24 (architecture finding F127), so they decode like the other
+        // native kinds below rather than being refused.
+        for kind in [13, 14, 255] {
             let mut bad = baseline.clone();
             bad.promises[0].reactions[0].kind = kind;
             assert_eq!(
@@ -9930,9 +11041,10 @@ mod promise_decoder_refusals {
                 ))
             );
         }
-        // The async-generator kinds decode like `AsyncAwait`: the instance
-        // in `a`, nothing else; the instance itself is checked by the gate.
-        for kind in [4, 5, 6] {
+        // The async-generator and `Array.fromAsync` kinds decode like
+        // `AsyncAwait`: the index in `a`, nothing else; the row itself is
+        // checked by the gate.
+        for kind in [4, 5, 6, 7, 8, 9, 10] {
             let mut resumed = baseline.clone();
             resumed.promises[0].reactions[0].kind = kind;
             resumed.promises[0].reactions[0].b = 0;
@@ -10540,6 +11652,7 @@ mod buffer_geometry_refusals {
             data: 4,
             length: 8,
             flags: 0,
+            max_length: 0,
         }
     }
 

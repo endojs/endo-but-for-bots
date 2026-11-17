@@ -91,23 +91,11 @@ export const readAuthToken = async blob => {
 harden(readAuthToken);
 
 /**
- * Namespaces whose plaintext-fallback warning has already been printed.
- *
- * Keyed on the namespace, not the pet name: the name is the same module
- * constant for every caller, so two unmigrated agents sharing a worker would
- * print one line between them — and the line names no agent, so an operator
- * could not tell which.
- */
-const warnedNamespaces = new WeakSet();
-
-/**
  * Resolve the auth token a provider should use.
  *
- * A `SecretBlob` endowed under `AUTH_SECRET_PETNAME` wins: it is durable,
- * auditable, replaceable without re-provisioning, and revocable. A token
- * carried inline in the provider config is the pre-secret-manager arrangement
- * and is still honoured so an existing deployment keeps working, but it is
- * plaintext in the pet store and cannot be rotated or revoked.
+ * Authentication comes only from a `SecretBlob` endowed under
+ * `AUTH_SECRET_PETNAME`. Obsolete inline credentials are rejected even beside
+ * a Secret. Tokenless provider configurations remain usable without a Secret.
  *
  * Read this on every provider construction rather than caching it: a rotated
  * secret keeps the same capability, so a held token is a stale token. The
@@ -126,27 +114,10 @@ export const resolveAuthToken = async ({
   petName = AUTH_SECRET_PETNAME,
 }) => {
   await null;
+  !Object.hasOwn(config, 'authToken') ||
+    Fail`Inline provider authToken is unsupported; import the credential into Secrets and remove the field`;
   if (await E(powers).has(petName)) {
     return readAuthToken(await E(powers).lookup(petName));
-  }
-  const inline = config.authToken;
-  if (typeof inline === 'string' && inline !== '') {
-    // Once, not once per turn: this is now on the per-turn path, and a
-    // deployment that has not migrated would otherwise emit the same line for
-    // every message it ever answers.
-    if (typeof powers === 'object' && powers !== null) {
-      if (!warnedNamespaces.has(powers)) {
-        warnedNamespaces.add(powers);
-        console.error(
-          `[credentials] no ${petName} capability; using the plaintext token in the provider config. Re-run setup to move it into @secrets.`,
-        );
-      }
-    } else {
-      console.error(
-        `[credentials] no ${petName} capability; using the plaintext token in the provider config. Re-run setup to move it into @secrets.`,
-      );
-    }
-    return inline;
   }
   return '';
 };
@@ -199,8 +170,7 @@ harden(hasAuthSecret);
  * capability rather than a value.
  *
  * `@secrets` is carried only by the daemon's root host, so this fails on a
- * child host. A caller that can still function with a plaintext token should
- * catch and say so rather than silently downgrading.
+ * child host. Callers must propagate the failure, never persist plaintext.
  *
  * @param {object} options
  * @param {any} options.hostAgent - An agent carrying `@secrets`.

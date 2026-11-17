@@ -3,7 +3,14 @@
 
 import '@endo/init';
 import test from 'ava';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+// Internal test harness, deliberately not a runtime package export.
+// eslint-disable-next-line import/no-relative-packages
+import { exercisePromptCancellation } from '../../hosted-agent/test/prompt-cancellation-conformance.js';
+// eslint-disable-next-line import/no-relative-packages
+import { exerciseFailedTurnSuccessor } from '../../hosted-agent/test/failed-turn-conformance.js';
 
 import {
   makeClaudeClient,
@@ -19,6 +26,7 @@ const procOut = new WeakMap(); // proc -> stdout byte chunks
 const procKilled = new WeakMap(); // proc -> boolean
 
 const enc = new TextEncoder();
+const sha256 = text => createHash('sha256').update(text).digest('hex');
 
 /**
  * Build an AsyncIterable<Uint8Array> from a list of byte chunks.
@@ -38,8 +46,9 @@ const bytesIterable = chunks =>
  * the i-th spawned process emits. The returned wrapper exposes
  * recorders that are *not* reachable from the slice/proc objects.
  * @param outputs
+ * @param {(() => Promise<{ code: number | null, signal: string | null }>)} [waitForExit]
  */
-const makeFakeSlice = (outputs = []) => {
+const makeFakeSlice = (outputs = [], waitForExit = undefined) => {
   const spawned = [];
   let i = 0;
   let disposed = false;
@@ -57,6 +66,7 @@ const makeFakeSlice = (outputs = []) => {
           procKilled.set(proc, true);
         },
         async wait() {
+          if (waitForExit) return waitForExit();
           return harden({ code: 0, signal: null });
         },
       };
@@ -97,6 +107,9 @@ const baseArgs = (fake, mount, extra = {}) => ({
   backend: 'podman',
   rootfsLabel: 'oci:example/claude:latest',
   makeStdoutIterable,
+  restoreTranscript: async () => restoredReceipt,
+  projectNativeContext: () => restoredReceipt,
+  sha256,
   ...extra,
 });
 
@@ -107,6 +120,1244 @@ const drain = async reader => {
   }
   return events;
 };
+
+const compactNotice = harden({
+  type: 'system',
+  subtype: 'compact_boundary',
+  session_id: 'native-session',
+  uuid: 'boundary',
+});
+const capturedContext = harden({
+  type: 'endo_compaction',
+  summary: 'Earlier facts',
+  retainedTail: [
+    { kind: 'message', role: 'assistant', content: 'Latest answer' },
+  ],
+  nativeContext: {
+    format: 'claude-code-jsonl-v1',
+    transcript: 'synthetic native payload',
+  },
+});
+const jsonBytes = value => enc.encode(`${JSON.stringify(value)}\n`);
+
+const nativeCheckpoint = harden({
+  kind: 'native-context',
+  format: 'claude-code-jsonl-v1',
+  payload: 'synthetic validated by sandbox helper',
+  context: [{ kind: 'compaction', summary: 'earlier' }],
+});
+const restoredUuid = '00000000-0000-4000-8000-000000000001';
+const continuedTranscript = harden([
+  { kind: 'message', role: 'user', content: 'Journal-owned previous turn' },
+]);
+const restoredReceipt = harden({
+  payload: 'restored prefix',
+  sessionId: restoredUuid,
+  leafUuid: '00000000-0000-4000-8000-000000000002',
+  prefixSha256: sha256('restored prefix'),
+});
+const nativeWire = (prompt = 'hello') => {
+  const user = '00000000-0000-4000-8000-000000000010';
+  const assistant = '00000000-0000-4000-8000-000000000011';
+  const content = [{ type: 'text', text: 'Latest answer' }];
+  const message = {
+    id: 'msg-1',
+    type: 'message',
+    model: 'synthetic-model',
+    role: 'assistant',
+    content,
+  };
+  const raw = [
+    { type: 'system', subtype: 'init' },
+    {
+      type: 'stream_event',
+      event: { type: 'message_start', message: { ...message, content: [] } },
+    },
+    {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      },
+    },
+    {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'Latest answer' },
+      },
+    },
+    { type: 'assistant', uuid: assistant, message },
+    { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } },
+    { type: 'stream_event', event: { type: 'message_stop' } },
+    {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'Latest answer',
+    },
+  ].map(event => ({ ...event, session_id: restoredUuid }));
+  const rows = [
+    {
+      type: 'user',
+      uuid: user,
+      parentUuid: null,
+      sessionId: restoredUuid,
+      message: { role: 'user', content: prompt },
+    },
+    {
+      type: 'assistant',
+      uuid: assistant,
+      parentUuid: user,
+      sessionId: restoredUuid,
+      message,
+    },
+  ];
+  const captured = {
+    type: 'endo_context',
+    retainedTail: [
+      { kind: 'message', role: 'user', content: prompt },
+      { kind: 'message', role: 'assistant', content: 'Latest answer' },
+    ],
+    nativeContext: {
+      format: 'claude-code-jsonl-v1',
+      transcript: `${rows.map(row => JSON.stringify(row)).join('\n')}\n`,
+    },
+  };
+  return { raw, output: raw.map(jsonBytes), rows, captured };
+};
+
+for (const field of ['sessionId', 'leafUuid', 'prefixSha256']) {
+  test(`native restore refuses altered ${field} receipt before prompt admission`, async t => {
+    const receipt = {
+      ...restoredReceipt,
+      [field]:
+        field === 'prefixSha256'
+          ? sha256('different')
+          : '00000000-0000-4000-8000-000000000099',
+    };
+    const fake = makeFakeSlice([[jsonBytes(receipt)], []]);
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        makeStdinWriter: async () => ({
+          next: async () => ({ done: false }),
+          return: async () => ({ done: true }),
+        }),
+        makeStderrIterable: () => bytesIterable([]),
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(
+      await client.send('must not run', { transcript: [nativeCheckpoint] }),
+    );
+    t.is(fake.spawned.length, 1);
+    t.is(fake.spawned[0].argv[0], 'node');
+    t.regex(events.at(-1).reason, /differs from host projection/);
+  });
+}
+
+test('ordinary completed native turn captures covered context without a compaction event', async t => {
+  const wire = nativeWire();
+  const fake = makeFakeSlice([wire.output, [jsonBytes(wire.captured)]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('hello'));
+  t.deepEqual(JSON.parse(fake.spawned[1].argv[2]), {
+    type: 'endo_capture',
+    session_id: restoredUuid,
+    coverage_before_uuid: null,
+  });
+  t.deepEqual(events.at(-2).checkpoint.context, wire.captured.retainedTail);
+  t.is(events.at(-1).type, 'end');
+});
+
+test('prompt process stdin is ended at spawn without writing', async t => {
+  // Live 2026-09-25: an open stdin pipe made the CLI wait 3 s and print a
+  // warning that a failed turn then showed the user.
+  const wire = nativeWire();
+  const fake = makeFakeSlice([wire.output, [jsonBytes(wire.captured)]]);
+  /** @type {Array<{ argv: string[], wrote: number, ended: boolean }>} */
+  const pipes = [];
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStdinWriter: async proc => {
+        const pipe = { argv: proc.argv, wrote: 0, ended: false };
+        pipes.push(pipe);
+        return {
+          next: async () => {
+            pipe.wrote += 1;
+            return { done: false };
+          },
+          return: async () => {
+            pipe.ended = true;
+            return { done: true };
+          },
+        };
+      },
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('hello'));
+  t.is(events.at(-1).type, 'end');
+  const prompt = pipes.filter(pipe => pipe.argv[0] === 'claude');
+  t.is(prompt.length, 1);
+  t.deepEqual(
+    { wrote: prompt[0].wrote, ended: prompt[0].ended },
+    { wrote: 0, ended: true },
+  );
+});
+
+test('a stdin that cannot be ended does not fail the turn', async t => {
+  const wire = nativeWire();
+  const fake = makeFakeSlice([wire.output, [jsonBytes(wire.captured)]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStdinWriter: async () => {
+        throw Error('stdin already closed');
+      },
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('hello'));
+  t.is(events.at(-1).type, 'end');
+});
+
+for (const witnessMode of ['valid', 'missing', 'changed']) {
+  test(`pinned compaction ${witnessMode} witness is verified but never journaled`, async t => {
+    const f = JSON.parse(
+      await readFile(
+        new URL('./fixtures/coverage-compaction-turn.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const rows = f.nativeTranscript.trimEnd().split('\n').map(JSON.parse);
+    const captured = {
+      type: 'endo_compaction',
+      summary: rows.find(row => row.isCompactSummary).message.content,
+      retainedTail: [],
+      nativeContext: {
+        format: 'claude-code-jsonl-v1',
+        transcript: f.nativeTranscript,
+      },
+      ...(witnessMode === 'missing'
+        ? {}
+        : {
+            compactionWitness:
+              witnessMode === 'valid'
+                ? f.compactionWitness
+                : f.compactionWitness.replace(f.prompt, 'tampered prompt'),
+          }),
+    };
+    const receipt = {
+      sessionId: f.sessionId,
+      leafUuid: f.beforeUuid,
+      payload: f.beforePayload,
+      prefixSha256: sha256(f.beforePayload),
+    };
+    const fake = makeFakeSlice([
+      f.events.map(jsonBytes),
+      [jsonBytes(captured)],
+    ]);
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        restoreTranscript: async () => receipt,
+        makeStderrIterable: () => bytesIterable([]),
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(
+      await client.send(f.prompt, { transcript: continuedTranscript }),
+    );
+    const checkpoint = events.find(
+      event => event.type === 'endo_native_context',
+    );
+    if (witnessMode === 'valid') {
+      t.is(events.at(-1).type, 'end', events.at(-1).reason);
+      t.is(checkpoint.checkpoint.payload, f.nativeTranscript);
+      t.false(Object.hasOwn(checkpoint.checkpoint, 'compactionWitness'));
+      t.false(Object.hasOwn(checkpoint, 'compactionWitness'));
+      t.is(
+        JSON.parse(fake.spawned[1].argv[2]).coverage_before_uuid,
+        f.beforeUuid,
+      );
+    } else {
+      t.is(events.at(-1).type, 'abort');
+      t.is(checkpoint, undefined);
+    }
+  });
+}
+
+test('subagent failure does not replace mainline coverage or fail its completed turn', async t => {
+  const wire = nativeWire();
+  const raw = [
+    ...wire.raw.slice(0, -1),
+    {
+      type: 'result',
+      is_error: true,
+      parent_tool_use_id: 'child',
+      session_id: restoredUuid,
+    },
+    wire.raw.at(-1),
+  ];
+  const fake = makeFakeSlice([raw.map(jsonBytes), [jsonBytes(wire.captured)]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('hello'));
+  t.is(events.at(-2).type, 'endo_native_context');
+  t.is(events.at(-1).type, 'end');
+});
+
+for (const failure of [
+  'missing-hash',
+  'compaction',
+  'stale-prompt',
+  'partial-tail',
+  'unobserved-init-only',
+]) {
+  test(`native coverage refuses ${failure} without publishing a replacement`, async t => {
+    const wire = nativeWire();
+    let raw = wire.raw;
+    if (failure === 'compaction')
+      raw = [
+        ...raw.slice(0, -1),
+        { ...compactNotice, session_id: restoredUuid },
+      ];
+    if (failure === 'unobserved-init-only') raw = raw.slice(0, 1);
+    if (failure === 'partial-tail')
+      raw = [
+        ...raw.slice(0, -1),
+        {
+          type: 'stream_event',
+          session_id: restoredUuid,
+          event: {
+            type: 'message_start',
+            message: {
+              id: 'msg-2',
+              type: 'message',
+              model: 'synthetic-model',
+              role: 'assistant',
+              content: [],
+            },
+          },
+        },
+        {
+          type: 'stream_event',
+          session_id: restoredUuid,
+          event: {
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'text', text: '' },
+          },
+        },
+        {
+          type: 'stream_event',
+          session_id: restoredUuid,
+          event: {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'unpersisted' },
+          },
+        },
+      ];
+    if (failure === 'stale-prompt')
+      wire.captured.nativeContext.transcript =
+        wire.captured.nativeContext.transcript.replace('hello', 'old prompt');
+    const fake = makeFakeSlice([
+      raw.map(jsonBytes),
+      [jsonBytes(wire.captured)],
+    ]);
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        ...(failure === 'missing-hash' ? { sha256: undefined } : {}),
+        makeStderrIterable: () => bytesIterable([]),
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(await client.send('hello'));
+    t.false(events.some(event => event.type === 'endo_native_context'));
+    t.is(events.at(-1).type, 'abort');
+    if (failure === 'missing-hash' || failure === 'compaction')
+      t.is(fake.spawned.length, 1);
+    if (failure === 'compaction') t.regex(events.at(-1).reason, /coverage/);
+  });
+}
+
+for (const mode of [
+  'native',
+  'portable',
+  'changed-prefix',
+  'changed-session',
+  'missing-receipt',
+]) {
+  test(`restored native coverage checks trusted ${mode} receipt`, async t => {
+    const wire = nativeWire('next');
+    const oldRecord = {
+      type: 'user',
+      uuid: restoredReceipt.leafUuid,
+      parentUuid: null,
+      sessionId: restoredUuid,
+      message: { role: 'user', content: 'trusted historical prompt' },
+    };
+    const prefix = `${JSON.stringify(oldRecord)}\n`;
+    const receipt = {
+      ...restoredReceipt,
+      payload: prefix,
+      prefixSha256: sha256(prefix),
+    };
+    const expected = { ...receipt };
+    const checkpoint = {
+      kind: 'native-context',
+      format: 'claude-code-jsonl-v1',
+      payload: prefix,
+      context: [
+        { kind: 'message', role: 'user', content: oldRecord.message.content },
+      ],
+    };
+    wire.rows[0].parentUuid = receipt.leafUuid;
+    wire.captured.nativeContext.transcript = `${prefix}${wire.rows.map(row => JSON.stringify(row)).join('\n')}\n`;
+    wire.captured.retainedTail = [
+      ...checkpoint.context,
+      ...wire.captured.retainedTail,
+    ];
+    if (mode === 'changed-prefix')
+      wire.captured.nativeContext.transcript =
+        wire.captured.nativeContext.transcript.replace(
+          'trusted historical prompt',
+          'altered historical prompt',
+        );
+    if (mode === 'changed-session')
+      receipt.sessionId = '00000000-0000-4000-8000-000000000099';
+    if (mode === 'missing-receipt') delete receipt.prefixSha256;
+    const portable = mode === 'portable';
+    const fake = makeFakeSlice([
+      ...(portable ? [] : [[jsonBytes(receipt)]]),
+      wire.output,
+      [jsonBytes(wire.captured)],
+    ]);
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        restoreTranscript: async () => receipt,
+        projectNativeContext: () => expected,
+        makeStdinWriter: async () => ({
+          next: async () => ({ done: false }),
+          return: async () => ({ done: true }),
+        }),
+        makeStderrIterable: () => bytesIterable([]),
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(
+      await client.send('next', {
+        transcript: portable ? checkpoint.context : [checkpoint],
+      }),
+    );
+    const valid = mode === 'native' || portable;
+    t.is(
+      events.some(event => event.type === 'endo_native_context'),
+      valid,
+    );
+    t.is(events.at(-1).type, valid ? 'end' : 'abort');
+    if (mode === 'missing-receipt') t.is(fake.spawned.length, 1);
+  });
+}
+
+test('native restoration writes only to helper stdin before admitting the prompt', async t => {
+  const fake = makeFakeSlice([[jsonBytes(restoredReceipt)], []]);
+  const writes = [];
+  let ended = false;
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStdinWriter: async () => ({
+        next: async chunk => {
+          writes.push(new TextDecoder().decode(chunk));
+          return { done: false };
+        },
+        return: async () => {
+          ended = true;
+          return { done: true };
+        },
+      }),
+      restoreTranscript: async () => {
+        throw Error('Portable restoration must not run');
+      },
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(
+    await client.send('continue', { transcript: [nativeCheckpoint] }),
+  );
+  t.deepEqual(fake.spawned[0].argv, ['node', '/opt/endo/restore-context.mjs']);
+  t.deepEqual(writes, [
+    JSON.stringify({ checkpoint: nativeCheckpoint, suffix: [] }),
+  ]);
+  t.true(ended);
+  t.true(fake.spawned[1].argv.includes(restoredUuid));
+  t.is(events.at(-1).type, 'end');
+});
+
+test('native continuation without journal context refuses instead of starting fresh', async t => {
+  const wire = nativeWire('first');
+  const fake = makeFakeSlice([wire.output, [jsonBytes(wire.captured)]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  await drain(await client.send('first'));
+  const events = await drain(await client.send('second'));
+  t.is(events.at(-1).type, 'abort');
+  t.regex(events.at(-1).reason, /requires host-journal context/);
+  t.is(fake.spawned.length, 2);
+});
+
+test('failed native exit does not certify an unverified capture cut', async t => {
+  const fake = makeFakeSlice(
+    [
+      [
+        jsonBytes({
+          type: 'system',
+          subtype: 'init',
+          session_id: restoredUuid,
+        }),
+      ],
+      [jsonBytes({ ...capturedContext, type: 'endo_context' })],
+    ],
+    async () => ({ code: 1, signal: null }),
+  );
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStderrIterable: () => bytesIterable([enc.encode('original failure')]),
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('first'));
+  t.false(events.some(event => event.type === 'endo_native_context'));
+  t.is(fake.spawned.length, 1);
+  t.is(events.at(-1).type, 'abort');
+  t.regex(events.at(-1).reason, /exited with code 1/);
+  t.regex(events.at(-1).reason, /original failure/);
+});
+
+test('incomplete failed native result with zero exit does not certify context', async t => {
+  const fake = makeFakeSlice(
+    [
+      [
+        jsonBytes({
+          type: 'system',
+          subtype: 'init',
+          session_id: restoredUuid,
+        }),
+        jsonBytes({ type: 'result', is_error: true, errors: ['failed turn'] }),
+      ],
+      [],
+    ],
+    async () => ({ code: 0, signal: null }),
+  );
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStderrIterable: () => bytesIterable([enc.encode('original failure')]),
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('first'));
+  t.false(events.some(event => event.type === 'endo_native_context'));
+  t.true(events.some(event => event.type === 'result' && event.is_error));
+  t.is(fake.spawned.length, 1);
+});
+
+test('a confirmed failed turn restores supplied context for its successful successor', async t => {
+  const first = nativeWire('first');
+  first.raw.at(-1).is_error = true;
+  first.raw.at(-1).subtype = 'error_max_turns';
+  const second = nativeWire('second');
+  const prefix = first.captured.nativeContext.transcript;
+  const receipt = harden({
+    payload: prefix,
+    sessionId: restoredUuid,
+    leafUuid: first.rows.at(-1).uuid,
+    prefixSha256: sha256(prefix),
+  });
+  second.rows[0].uuid = '00000000-0000-4000-8000-000000000020';
+  second.rows[0].parentUuid = receipt.leafUuid;
+  second.rows[1].uuid = '00000000-0000-4000-8000-000000000021';
+  second.rows[1].parentUuid = second.rows[0].uuid;
+  second.raw.find(event => event.type === 'assistant').uuid =
+    second.rows[1].uuid;
+  second.captured.nativeContext.transcript =
+    prefix + second.rows.map(row => `${JSON.stringify(row)}\n`).join('');
+  const fake = makeFakeSlice([
+    first.raw.map(jsonBytes),
+    [jsonBytes(first.captured)],
+    second.raw.map(jsonBytes),
+    [jsonBytes(second.captured)],
+  ]);
+  const restored = [];
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      restoreTranscript: async records => {
+        restored.push(records);
+        return receipt;
+      },
+      makeStderrIterable: () => bytesIterable([]),
+    }),
+  );
+  t.teardown(() => client.terminate());
+  await exerciseFailedTurnSuccessor(t, {
+    fail: async () => {
+      const reader = await client.send('first');
+      const events = await drain(reader);
+      t.regex(events.at(-1).reason, /reported a failed turn/);
+      t.true(events.some(event => event.type === 'endo_native_context'));
+      return events;
+    },
+    succeed: async () => {
+      const reader = await client.send('second', {
+        transcript: continuedTranscript,
+      });
+      return drain(reader);
+    },
+    admitted: () =>
+      fake.spawned
+        .filter(proc => proc.argv[0] !== 'node')
+        .map(proc => proc.argv[2]),
+  });
+  t.deepEqual(restored, [continuedTranscript]);
+  const resumed = fake.spawned.filter(proc => proc.argv[0] !== 'node')[1];
+  t.true(resumed.argv.includes('--resume'));
+  t.true(resumed.argv.includes(restoredUuid));
+  t.false(resumed.argv.includes('--continue'));
+  for (const proc of fake.spawned.filter(item => item.argv[0] === 'claude')) {
+    t.is(proc.argv[proc.argv.indexOf('--disallowedTools') + 1], 'Agent,Task');
+  }
+});
+
+for (const exitCode of [0, 1, 7]) {
+  for (const helperFails of [false, true]) {
+    test(`covered failure exit ${exitCode} ${helperFails ? 'retains original diagnostics when capture fails' : 'checkpoints then aborts'}`, async t => {
+      const wire = nativeWire();
+      wire.raw.at(-1).is_error = true;
+      wire.raw.at(-1).subtype = 'error_max_turns';
+      wire.raw.at(-1).result = 'diagnostic only, not dialogue';
+      let waits = 0;
+      const fake = makeFakeSlice(
+        [
+          wire.raw.map(jsonBytes),
+          helperFails ? [] : [jsonBytes(wire.captured)],
+        ],
+        async () => {
+          waits += 1;
+          return { code: waits === 1 ? exitCode : 0, signal: null };
+        },
+      );
+      const client = makeClaudeClient(
+        baseArgs(fake, makeFakeMount(), {
+          makeStderrIterable: proc =>
+            bytesIterable([
+              enc.encode(
+                proc.argv[0] === 'node'
+                  ? 'helper diagnostic'
+                  : 'producer diagnostic',
+              ),
+            ]),
+        }),
+      );
+      t.teardown(() => client.terminate());
+      const events = await drain(await client.send('hello'));
+      t.is(fake.spawned.length, 2);
+      t.is(events.at(-1).type, 'abort');
+      t.regex(events.at(-1).reason, /producer diagnostic/);
+      t.regex(
+        events.at(-1).reason,
+        exitCode === 0
+          ? /reported a failed turn/
+          : new RegExp(`exited with code ${exitCode}`),
+      );
+      t.is(
+        events.some(event => event.type === 'endo_native_context'),
+        !helperFails,
+      );
+      if (helperFails) t.regex(events.at(-1).reason, /Context capture failed/);
+      else t.is(events.at(-2).type, 'endo_native_context');
+    });
+  }
+}
+
+for (const invalid of [
+  'missing',
+  'subagent-only',
+  'wrong-subtype',
+  'missing-boolean',
+  'nonzero-success',
+  'signal-failure',
+  'partial-failure',
+]) {
+  test(`terminal evidence ${invalid} never publishes native context`, async t => {
+    const wire = nativeWire();
+    if (invalid === 'missing') wire.raw.pop();
+    if (invalid === 'subagent-only')
+      wire.raw.at(-1).parent_tool_use_id = 'child';
+    if (invalid === 'wrong-subtype') wire.raw.at(-1).subtype = 'unsupported';
+    if (invalid === 'missing-boolean') delete wire.raw.at(-1).is_error;
+    if (invalid.endsWith('failure')) {
+      wire.raw.at(-1).is_error = true;
+      wire.raw.at(-1).subtype = 'error_max_turns';
+    }
+    if (invalid === 'partial-failure') wire.raw.splice(-2, 1);
+    const fake = makeFakeSlice(
+      [wire.raw.map(jsonBytes), [jsonBytes(wire.captured)]],
+      async () => ({
+        code: invalid === 'nonzero-success' ? 1 : 0,
+        signal: invalid === 'signal-failure' ? 'SIGTERM' : null,
+      }),
+    );
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        makeStderrIterable: () => bytesIterable([]),
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(await client.send('hello'));
+    t.false(events.some(event => event.type === 'endo_native_context'));
+    t.is(events.at(-1).type, 'abort');
+    t.is(fake.spawned.length, 1);
+  });
+}
+
+test('native restore sends terminal notice suffix to helper without replaying it as prompt', async t => {
+  const fake = makeFakeSlice([[jsonBytes(restoredReceipt)], []]);
+  const suffix = [
+    {
+      kind: 'message',
+      role: 'assistant',
+      content: '[Floot turn failed: example]',
+    },
+  ];
+  const writes = [];
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStdinWriter: async () => ({
+        next: async chunk => {
+          writes.push(new TextDecoder().decode(chunk));
+          return { done: false };
+        },
+        return: async () => ({ done: true }),
+      }),
+    }),
+  );
+  t.teardown(() => client.terminate());
+  await drain(
+    await client.send('new prompt', {
+      transcript: [nativeCheckpoint, ...suffix],
+    }),
+  );
+  t.deepEqual(JSON.parse(writes[0]), { checkpoint: nativeCheckpoint, suffix });
+  t.true(fake.spawned[1].argv.includes('new prompt'));
+  t.false(fake.spawned[1].argv.includes(suffix[0].content));
+});
+
+test('failed native restore does not admit a Claude prompt', async t => {
+  const fake = makeFakeSlice([[jsonBytes({ sessionId: '../invalid' })]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStdinWriter: async () => ({
+        next: async () => ({ done: false }),
+        return: async () => ({ done: true }),
+      }),
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(
+    await client.send('continue', { transcript: [nativeCheckpoint] }),
+  );
+  t.is(fake.spawned.length, 1);
+  t.true(procKilled.get(fake.spawned[0]));
+  t.is(events.at(-1).type, 'abort');
+});
+
+test('cancelling native restore during stdin acquisition never writes or admits prompt', async t => {
+  t.timeout(5000);
+  let release;
+  const held = new Promise(resolve => {
+    release = resolve;
+  });
+  let enter;
+  const entered = new Promise(resolve => {
+    enter = resolve;
+  });
+  let wrote = false;
+  const fake = makeFakeSlice([[jsonBytes(restoredReceipt)]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStdinWriter: async () => {
+        enter();
+        await held;
+        return {
+          next: async () => {
+            wrote = true;
+            return { done: false };
+          },
+          return: async () => ({ done: true }),
+        };
+      },
+    }),
+  );
+  t.teardown(async () => {
+    release();
+    await client.terminate();
+  });
+  const reading = drain(
+    await client.send('continue', { transcript: [nativeCheckpoint] }),
+  );
+  await entered;
+  const interrupted = client.interrupt();
+  await Promise.resolve();
+  release();
+  await interrupted;
+  await reading;
+  t.false(wrote);
+  t.is(fake.spawned.length, 1);
+  t.true(procKilled.get(fake.spawned[0]));
+});
+
+test('ordinary capture runs inside the slice and publishes only after clean completion', async t => {
+  const wire = nativeWire();
+  const fake = makeFakeSlice([nativeWire().output, [jsonBytes(wire.captured)]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      env: { CLAUDE_CONFIG_DIR: '/claude-config' },
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('hello'));
+  t.is(fake.spawned.length, 2);
+  t.deepEqual(fake.spawned[1].argv, [
+    'node',
+    '/opt/endo/capture-compaction.mjs',
+    JSON.stringify({
+      type: 'endo_capture',
+      session_id: restoredUuid,
+      coverage_before_uuid: null,
+    }),
+  ]);
+  t.is(fake.spawned[1].opts.cwd, '/workspace');
+  t.is(fake.spawned[1].opts.env.CLAUDE_CONFIG_DIR, '/claude-config');
+  t.deepEqual(events.slice(-2), [
+    {
+      type: 'endo_native_context',
+      checkpoint: {
+        kind: 'native-context',
+        format: wire.captured.nativeContext.format,
+        payload: wire.captured.nativeContext.transcript,
+        context: wire.captured.retainedTail,
+      },
+    },
+    { type: 'end' },
+  ]);
+});
+
+for (const failure of ['empty', 'extra', 'malformed', 'exit']) {
+  // A reply that streamed and passed coverage stands when only capture fails
+  // (live 2026-09-25: completed replies were shown as failed turns). No
+  // checkpoint is published; the next turn restores from the host journal.
+  test(`failed ${failure} capture never publishes a checkpoint and keeps the reply`, async t => {
+    let waits = 0;
+    const outputs =
+      failure === 'empty'
+        ? []
+        : failure === 'extra'
+          ? [jsonBytes(capturedContext), jsonBytes(capturedContext)]
+          : failure === 'malformed'
+            ? [jsonBytes({ type: 'endo_compaction', summary: 3 })]
+            : [jsonBytes(capturedContext)];
+    const fake = makeFakeSlice([nativeWire().output, outputs], async () => {
+      waits += 1;
+      return {
+        code: failure === 'exit' && waits === 2 ? 1 : 0,
+        signal: null,
+      };
+    });
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        makeStderrIterable: () => bytesIterable([]),
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(await client.send('hello'));
+    t.false(events.some(event => event.type === 'endo_native_context'));
+    t.is(events.at(-1).type, 'end');
+    // The helper is stopped; the finished claude process is left alone.
+    t.true(procKilled.get(fake.spawned[1]) === true);
+  });
+}
+
+test('a non-fatal capture failure logs a static reason, never transcript content', async t => {
+  /** @type {string[]} */
+  const warnings = [];
+  const fake = makeFakeSlice([
+    nativeWire().output,
+    [enc.encode('{"type":"endo_context","SECRET_TRANSCRIPT_TEXT":')],
+  ]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStderrIterable: () =>
+        bytesIterable([
+          enc.encode(
+            'Claude compaction capture failed: Unsupported context attachment\nSECRET_STDERR_TEXT\n',
+          ),
+        ]),
+      warn: message => warnings.push(message),
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('hello'));
+  t.is(events.at(-1).type, 'end');
+  const logged = warnings.join('\n');
+  t.regex(logged, /native context not captured/);
+  t.regex(logged, /Unsupported context attachment/);
+  t.false(logged.includes('SECRET'));
+});
+
+for (const captureSucceeds of [false, true]) {
+  test(`next turn restores host context after ${captureSucceeds ? 'successful' : 'failed'} capture`, async t => {
+    const fake = makeFakeSlice([
+      nativeWire('first').output,
+      captureSucceeds ? [jsonBytes(nativeWire('first').captured)] : [],
+      [],
+    ]);
+    const restored = [];
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        restoreTranscript: async records => {
+          restored.push(records);
+          return restoredReceipt;
+        },
+        makeStderrIterable: () => bytesIterable([]),
+      }),
+    );
+    t.teardown(() => client.terminate());
+    await drain(await client.send('first'));
+    const transcript = harden([
+      { kind: 'message', role: 'user', content: 'Host-selected context' },
+    ]);
+    await drain(await client.send('next', { transcript }));
+    t.deepEqual(restored, [transcript]);
+    t.true(fake.spawned[2].argv.includes(restoredUuid));
+    t.false(fake.spawned[2].argv.includes('stale-native'));
+    t.false(fake.spawned[2].argv.includes('--continue'));
+  });
+}
+
+for (const failedTurn of [false, true]) {
+  test(`interrupt during ${failedTurn ? 'failed' : 'successful'} turn capture kills its process and publishes no checkpoint`, async t => {
+    t.timeout(5000);
+    let release;
+    const held = new Promise(resolve => {
+      release = resolve;
+    });
+    let entered;
+    const started = new Promise(resolve => {
+      entered = resolve;
+    });
+    const wire = nativeWire();
+    if (failedTurn) {
+      wire.raw.at(-1).is_error = true;
+      wire.raw.at(-1).subtype = 'error_max_turns';
+    }
+    const fake = makeFakeSlice([wire.raw.map(jsonBytes)]);
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        makeStderrIterable: () => bytesIterable([]),
+        makeStdoutIterable: proc =>
+          proc.argv[0] === 'node'
+            ? {
+                async *[Symbol.asyncIterator]() {
+                  entered();
+                  await held;
+                  yield jsonBytes(capturedContext);
+                },
+              }
+            : makeStdoutIterable(proc),
+      }),
+    );
+    t.teardown(async () => {
+      release();
+      await client.terminate();
+    });
+    const reading = drain(await client.send('hello'));
+    await started;
+    const stopping = client.interrupt();
+    await Promise.resolve();
+    release();
+    await stopping;
+    const events = await reading;
+    t.true(procKilled.get(fake.spawned[1]));
+    t.false(events.some(event => event.type === 'endo_native_context'));
+  });
+}
+
+for (const phase of ['provision', 'restore']) {
+  for (const cancellation of ['reader', 'interrupt']) {
+    test(`${cancellation} cancellation during ${phase} prevents prompt spawn`, async t => {
+      t.timeout(5000);
+      let release;
+      let entered;
+      const gate = new Promise(resolve => {
+        release = resolve;
+      });
+      const started = new Promise(resolve => {
+        entered = resolve;
+      });
+      const fake = makeFakeSlice();
+      const mount = makeFakeMount();
+      let restores = 0;
+      const client = makeClaudeClient(
+        baseArgs(fake, mount, {
+          ...(phase === 'provision'
+            ? {
+                slice: undefined,
+                mountHandle: undefined,
+                provision: async () => {
+                  entered();
+                  await gate;
+                  return { slice: fake.slice, mountHandle: mount.handle };
+                },
+              }
+            : {}),
+          restoreTranscript: async () => {
+            await null;
+            restores += 1;
+            if (phase === 'restore' && restores === 1) {
+              entered();
+              await gate;
+            }
+            return restoredReceipt;
+          },
+        }),
+      );
+      t.teardown(async () => {
+        release();
+        await client.terminate();
+      });
+      const transcript = [
+        { kind: 'message', role: 'user', content: 'earlier' },
+      ];
+      let first;
+      let next;
+      let interrupted;
+      await exercisePromptCancellation(t, {
+        start: async () => {
+          first = await client.send('must not execute', { transcript });
+          await started;
+        },
+        cancel: async () => {
+          if (cancellation === 'reader') await iterateReader(first).return();
+          else {
+            interrupted = client.interrupt();
+            interrupted.catch(() => {});
+            await new Promise(resolve => setImmediate(resolve));
+          }
+        },
+        whileHeld: async () => {
+          next = await client.send('next requested turn', { transcript });
+          await new Promise(resolve => setImmediate(resolve));
+        },
+        release,
+        settle: async () => {
+          if (interrupted) await interrupted;
+          t.is((await drain(next)).at(-1).type, 'end');
+        },
+        admitted: () => fake.spawned.map(proc => proc.argv[2]),
+        expected: ['next requested turn'],
+      });
+      t.is(restores, phase === 'restore' ? 2 : 1);
+    });
+  }
+}
+
+test('raw stream backpressures a burst larger than the delivery queue', async t => {
+  t.timeout(10_000);
+  const rows = Array.from({ length: 3000 }, (_, index) => ({
+    type: 'stream_event',
+    index,
+    event: {
+      type: 'content_block_delta',
+      delta: { type: 'input_json_delta', partial_json: 'x' },
+    },
+  }));
+  const fake = makeFakeSlice([
+    [enc.encode(`${rows.map(row => JSON.stringify(row)).join('\n')}\n`)],
+  ]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  const reader = await client.send('work');
+  // Give the producer a turn with no consumer: it must park, not overflow.
+  await new Promise(resolve => setTimeout(resolve, 20));
+  t.false(Boolean(procKilled.get(fake.spawned[0])));
+  const events = await drain(reader);
+  t.deepEqual(events.slice(0, rows.length), rows);
+  t.is(events.at(-1).type, 'end');
+});
+
+test('closing a queued reader skips its restoration without interrupting the active turn', async t => {
+  t.timeout(5000);
+  let release;
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  let entered;
+  const active = new Promise(resolve => {
+    entered = resolve;
+  });
+  const fake = makeFakeSlice();
+  const restored = [];
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      restoreTranscript: async records => {
+        restored.push(records);
+        return restoredReceipt;
+      },
+      makeStdoutIterable: proc => {
+        if (proc === fake.spawned[0])
+          return harden({
+            async *[Symbol.asyncIterator]() {
+              entered();
+              await gate;
+              yield new Uint8Array();
+            },
+          });
+        return makeStdoutIterable(proc);
+      },
+    }),
+  );
+  t.teardown(async () => {
+    release();
+    await client.terminate();
+  });
+  const first = await client.send('first');
+  await active;
+  const cancelled = await client.send('must not execute', {
+    transcript: [
+      { kind: 'message', role: 'user', content: 'must not restore' },
+    ],
+  });
+  await iterateReader(cancelled).return();
+  t.is(fake.spawned.length, 1);
+  t.false(Boolean(procKilled.get(fake.spawned[0])));
+  t.deepEqual(restored, []);
+  release();
+  t.is((await drain(first)).at(-1).type, 'end');
+  const successor = await client.send('third', {
+    transcript: continuedTranscript,
+  });
+  t.is((await drain(successor)).at(-1).type, 'end');
+  t.deepEqual(
+    fake.spawned.map(proc => proc.argv[2]),
+    ['first', 'third'],
+  );
+  t.deepEqual(restored, [continuedTranscript]);
+  t.false(Boolean(procKilled.get(fake.spawned[0])));
+});
+
+test('interrupt owns a late spawn handle without replaying its admitted prompt', async t => {
+  t.timeout(5000);
+  let releaseSpawn;
+  const spawnGate = new Promise(resolve => {
+    releaseSpawn = resolve;
+  });
+  let entered;
+  const spawning = new Promise(resolve => {
+    entered = resolve;
+  });
+  let releaseKill;
+  const killGate = new Promise(resolve => {
+    releaseKill = resolve;
+  });
+  const admitted = [];
+  let kills = 0;
+  let lateReads = 0;
+  const lateProc = harden({
+    async kill() {
+      kills += 1;
+      await killGate;
+    },
+  });
+  const fake = makeFakeSlice();
+  const slice = harden({
+    async spawn(argv, options) {
+      await null;
+      admitted.push(argv[2]);
+      if (admitted.length === 1) {
+        entered();
+        await spawnGate;
+        return lateProc;
+      }
+      return fake.slice.spawn(argv, options);
+    },
+    dispose: () => fake.slice.dispose(),
+  });
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      slice,
+      makeStdoutIterable: proc => {
+        if (proc === lateProc) lateReads += 1;
+        return makeStdoutIterable(proc);
+      },
+    }),
+  );
+  t.teardown(async () => {
+    releaseSpawn();
+    releaseKill();
+    await client.terminate();
+  });
+  const first = await client.send('first');
+  await spawning;
+  t.deepEqual(
+    admitted,
+    ['first'],
+    'argv already dispatched before cancellation',
+  );
+  let settled = 0;
+  const interrupted = client.interrupt().then(() => {
+    settled += 1;
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  t.is(settled, 0);
+  t.is(kills, 0, 'no handle exists yet');
+  releaseSpawn();
+  await new Promise(resolve => setImmediate(resolve));
+  t.is(kills, 1);
+  t.is(settled, 0, 'the late handle kill acknowledgement is still owned');
+  t.is(lateReads, 0);
+  releaseKill();
+  await interrupted;
+  t.is(settled, 1);
+  t.deepEqual(await drain(first), [], 'a closed reader cannot report success');
+  const successor = await client.send('second', {
+    transcript: continuedTranscript,
+  });
+  const events = await drain(successor);
+  t.is(events.at(-1).type, 'end');
+  t.is(events.filter(event => ['end', 'abort'].includes(event.type)).length, 1);
+  t.deepEqual(admitted, ['first', 'second']);
+  t.is(kills, 1);
+  t.is(lateReads, 0);
+});
+
+test('interrupt releases a producer waiting behind a full raw queue', async t => {
+  t.timeout(5000);
+  const fake = makeFakeSlice([
+    [
+      enc.encode(
+        Array.from({ length: 3000 }, () => '{"type":"system"}\n').join(''),
+      ),
+    ],
+  ]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  await client.send('work');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await client.interrupt();
+  t.true(procKilled.get(fake.spawned[0]));
+});
 
 test('parseStreamJsonLines parses newline-delimited JSON across chunk boundaries', async t => {
   const chunks = [
@@ -138,7 +1389,6 @@ test('parseStreamJsonLines yields a trailing line with no newline', async t => {
 test('parseStreamJsonLines throws on a malformed line', async t => {
   await t.throwsAsync(
     async () => {
-      // eslint-disable-next-line no-unused-vars
       for await (const _ of parseStreamJsonLines(
         bytesIterable([enc.encode('not json\n')]),
       )) {
@@ -179,19 +1429,23 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
   t.false(argv.includes('--continue'));
 });
 
-test('resumePriorConversation makes the first send use --continue', async t => {
-  const fake = makeFakeSlice([[]]);
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), { resumePriorConversation: true }),
-  );
-  await drain(await client.send('after restart'));
-  t.is(fake.spawned.length, 1);
-  // A session reincarnated after a daemon restart, whose persistent config dir
-  // already held a transcript, resumes it on its very first post-restart turn
-  // rather than forking a fresh, context-free conversation.
-  t.true(fake.spawned[0].argv.includes('--continue'));
-  const status = await client.status();
-  t.true(status.conversationStarted);
+test('an oversized event fails with channel diagnostics and kills its producer', async t => {
+  t.timeout(5000);
+  const fake = makeFakeSlice([
+    [
+      enc.encode(
+        `${JSON.stringify({ type: 'system', text: 'x'.repeat(8 * 1024 * 1024) })}\n`,
+      ),
+    ],
+  ]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  const reader = await client.send('work');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await t.throwsAsync(drain(reader), {
+    message: /channel=claude-raw:sess-0001, reason=oversized-event/,
+  });
+  t.true(procKilled.get(fake.spawned[0]));
 });
 
 test('an mcpConfigPath adds --mcp-config and --strict-mcp-config', async t => {
@@ -215,21 +1469,50 @@ test('without an mcpConfigPath no MCP flags are passed', async t => {
   t.false(fake.spawned[0].argv.includes('--mcp-config'));
 });
 
-test('send() adds --continue after the first turn and forwards --model', async t => {
+for (const mcpConfigPath of [undefined, '/endo-mcp/mcp.json']) {
+  test(`native delegation is denied on fresh and resumed turns ${mcpConfigPath ? 'with' : 'without'} Endo tools`, async t => {
+    t.timeout(5000);
+    const fake = makeFakeSlice([[], []]);
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), { mcpConfigPath }),
+    );
+    t.teardown(() => client.terminate());
+    await drain(await client.send('first'));
+    await drain(
+      await client.send('second', { transcript: continuedTranscript }),
+    );
+    t.false(fake.spawned[0].argv.includes('--resume'));
+    t.true(fake.spawned[1].argv.includes('--resume'));
+    for (const { argv } of fake.spawned) {
+      t.is(argv[argv.indexOf('--disallowedTools') + 1], 'Agent,Task');
+      t.true(argv.includes('--dangerously-skip-permissions'));
+      // Keep the Endo MCP bridge available for managed delegation.
+      if (mcpConfigPath)
+        t.is(argv[argv.indexOf('--mcp-config') + 1], mcpConfigPath);
+    }
+  });
+}
+
+test('send() restores journal context after first turn and forwards --model', async t => {
   const fake = makeFakeSlice([[], []]);
   const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), { model: 'claude-sonnet-4-6' }),
+    baseArgs(fake, makeFakeMount(), {
+      model: 'claude-sonnet-4-6',
+      reasoningEffort: 'max',
+    }),
   );
 
   await drain(await client.send('first'));
-  await drain(await client.send('second'));
+  await drain(await client.send('second', { transcript: continuedTranscript }));
 
   t.is(fake.spawned.length, 2);
   t.false(fake.spawned[0].argv.includes('--continue'));
-  t.true(fake.spawned[1].argv.includes('--continue'));
+  t.true(fake.spawned[1].argv.includes('--resume'));
+  t.false(fake.spawned[1].argv.includes('--continue'));
   for (const proc of fake.spawned) {
     t.true(proc.argv.includes('--model'));
     t.true(proc.argv.includes('claude-sonnet-4-6'));
+    t.is(proc.argv[proc.argv.indexOf('--effort') + 1], 'max');
   }
 });
 
@@ -240,7 +1523,7 @@ test('a constructor systemPrompt adds --append-system-prompt to every spawn', as
   );
 
   await drain(await client.send('first'));
-  await drain(await client.send('second'));
+  await drain(await client.send('second', { transcript: continuedTranscript }));
 
   t.is(fake.spawned.length, 2);
   for (const proc of fake.spawned) {
@@ -274,17 +1557,17 @@ test('overlapping sends queue and run in order (serialized)', async t => {
 
   // Fire both sends before draining the first; they must serialize, not race.
   const r1 = await client.send('first');
-  const r2 = await client.send('second');
+  const r2 = await client.send('second', { transcript: continuedTranscript });
   await drain(r1);
   await drain(r2);
 
   t.is(fake.spawned.length, 2);
   t.is(fake.spawned[0].argv[2], 'first');
   t.is(fake.spawned[1].argv[2], 'second');
-  // The second turn ran strictly after the first, so it resumes with
-  // --continue. A concurrent race would not guarantee this.
+  // Queued sends restore their explicitly supplied context independently.
   t.false(fake.spawned[0].argv.includes('--continue'));
-  t.true(fake.spawned[1].argv.includes('--continue'));
+  t.true(fake.spawned[1].argv.includes('--resume'));
+  t.false(fake.spawned[1].argv.includes('--continue'));
 });
 
 test('a stream error surfaces as an abort terminal event', async t => {
@@ -329,10 +1612,19 @@ test('interrupt() throws when idle and closes-and-kills the in-flight turn', asy
   const first = await replies.next();
   t.is(first.value.type, 'system');
 
-  await client.interrupt();
+  // interrupt() is a barrier: it kills the process and returns only once the
+  // turn has ended. The fake's stdout ends when unblocked, as a killed
+  // process's would.
+  let interrupted = false;
+  const interrupting = client.interrupt().then(() => {
+    interrupted = true;
+  });
+  await null;
   t.true(procKilled.get(fake.spawned[0]));
-
-  unblock(); // let the (now-orphaned) producer task drain and exit
+  t.false(interrupted, 'not over while the producer is still running');
+  unblock();
+  await interrupting;
+  t.true(interrupted);
 });
 
 test('interrupt() with a queued turn kills the in-flight turn, not the queued one', async t => {
@@ -359,12 +1651,13 @@ test('interrupt() with a queued turn kills the in-flight turn, not the queued on
   t.is(first.value.type, 'system'); // A is producing
   t.is(fake.spawned.length, 1, 'only the in-flight turn has spawned');
 
-  await client.interrupt();
+  const interrupting = client.interrupt();
+  await null;
   // interrupt targeted the in-flight A (killing its process), not the
   // still-queued B — which would previously have been closed instead.
   t.true(procKilled.get(fake.spawned[0]));
-
   unblock();
+  await interrupting;
 });
 
 test('a stream-error abort folds claude stderr into the reason', async t => {
@@ -388,6 +1681,194 @@ test('a stream-error abort folds claude stderr into the reason', async t => {
   // The process is killed before stderr is read (so the captured stream EOFs).
   t.true(procKilled.get(fake.spawned[0]));
 });
+
+test('invalid stderr deadline is refused before process or diagnostic acquisition', t => {
+  const fake = makeFakeSlice();
+  let reads = 0;
+  for (const stderrReadTimeoutMs of [0, -1, NaN, Infinity, 2 ** 31]) {
+    t.throws(
+      () =>
+        makeClaudeClient(
+          baseArgs(fake, makeFakeMount(), {
+            stderrReadTimeoutMs,
+            makeStderrIterable: () => {
+              reads += 1;
+              return bytesIterable([]);
+            },
+          }),
+        ),
+      { message: /stderr/i },
+    );
+  }
+  t.is(fake.spawned.length, 0);
+  t.is(reads, 0);
+});
+
+for (const partial of [false, true]) {
+  for (const lateFailure of [false, true]) {
+    test(`stderr deadline ends abort (${partial ? 'partial diagnostic' : 'first read'}, late ${lateFailure ? 'rejection' : 'chunk'})`, async t => {
+      t.timeout(5000);
+      let resolveRead;
+      let rejectRead;
+      const stalled = new Promise((resolve, reject) => {
+        resolveRead = resolve;
+        rejectRead = reject;
+      });
+      t.teardown(() => resolveRead({ done: true }));
+      let pulls = 0;
+      let returns = 0;
+      const fake = makeFakeSlice([[enc.encode('not json\n')]]);
+      const client = makeClaudeClient(
+        baseArgs(fake, makeFakeMount(), {
+          stderrReadTimeoutMs: 20,
+          makeStderrIterable: () =>
+            harden({
+              [Symbol.asyncIterator]() {
+                return this;
+              },
+              next() {
+                pulls += 1;
+                if (partial && pulls === 1)
+                  return Promise.resolve({
+                    done: false,
+                    value: enc.encode('partial diagnostic'),
+                  });
+                return stalled;
+              },
+              return() {
+                returns += 1;
+                return Promise.resolve({ done: true });
+              },
+            }),
+        }),
+      );
+      t.teardown(() => client.terminate());
+      const events = await drain(await client.send('x'));
+      t.is(events.length, 1);
+      t.is(events[0].type, 'abort');
+      t.regex(events[0].reason, /malformed stream-json line/);
+      if (partial) t.regex(events[0].reason, /partial diagnostic/);
+      t.true(procKilled.get(fake.spawned[0]));
+      const completed = JSON.stringify(events);
+      if (lateFailure) rejectRead(Error('late stderr failure'));
+      else resolveRead({ done: false, value: enc.encode('must not append') });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      t.is(pulls, partial ? 2 : 1, 'a timed-out read cannot pull again');
+      t.is(returns, 1, 'the iterator receives one cleanup request');
+      t.is(JSON.stringify(events), completed);
+    });
+  }
+}
+
+test('stderr deadline bounds a stalled iterator return after its size cutoff', async t => {
+  t.timeout(5000);
+  let releaseReturn;
+  const stalledReturn = new Promise(resolve => {
+    releaseReturn = resolve;
+  });
+  t.teardown(() => releaseReturn({ done: true }));
+  let pulls = 0;
+  let returns = 0;
+  const fake = makeFakeSlice([[enc.encode('not json\n')]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      stderrReadTimeoutMs: 20,
+      stderrReadLimit: 8,
+      makeStderrIterable: () =>
+        harden({
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          next() {
+            pulls += 1;
+            return Promise.resolve({
+              done: false,
+              value: enc.encode('diagnostic cutoff'),
+            });
+          },
+          return() {
+            returns += 1;
+            return stalledReturn;
+          },
+        }),
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('x'));
+  t.is(events.length, 1);
+  t.is(events[0].type, 'abort');
+  t.regex(events[0].reason, /diagnostic cutoff/);
+  t.is(pulls, 1);
+  t.is(returns, 1);
+  t.true(procKilled.get(fake.spawned[0]));
+});
+
+for (const [label, status] of [
+  ['undefined', undefined],
+  ['empty', {}],
+  ['null exit and signal', { code: null, signal: null }],
+  ['zero with signal', { code: 0, signal: 'SIGTERM' }],
+]) {
+  test(`unconfirmed clean exit (${label}) never starts capture`, async t => {
+    const wire = nativeWire();
+    const fake = makeFakeSlice(
+      [wire.output, [jsonBytes(wire.captured)]],
+      async () => status,
+    );
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        makeStderrIterable: () => bytesIterable([]),
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(await client.send('hello'));
+    t.is(fake.spawned.length, 1);
+    t.false(events.some(event => event.type === 'endo_native_context'));
+    t.is(events.at(-1).type, 'abort');
+    t.regex(
+      events.at(-1).reason,
+      label === 'zero with signal'
+        ? /killed by SIGTERM/
+        : /completion status was not confirmed/,
+    );
+    if (label !== 'zero with signal') t.true(procKilled.get(fake.spawned[0]));
+  });
+}
+
+for (const [label, failure] of [
+  ['error', Error('exit status unavailable')],
+  ['false', false],
+  ['undefined', undefined],
+]) {
+  test(`failed exit observation (${label}) aborts rather than certifying success`, async t => {
+    t.timeout(5000);
+    const partial = { type: 'assistant', text: 'partial answer' };
+    const fake = makeFakeSlice(
+      [[enc.encode(`${JSON.stringify(partial)}\n`)]],
+      async () => {
+        throw failure;
+      },
+    );
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), {
+        makeStderrIterable: proc => {
+          t.true(procKilled.get(proc), 'kill precedes diagnostic read');
+          return bytesIterable([enc.encode('process diagnostic')]);
+        },
+      }),
+    );
+    t.teardown(() => client.terminate());
+    const events = await drain(await client.send('work'));
+    t.deepEqual(events, [
+      partial,
+      {
+        type: 'abort',
+        reason: `${failure instanceof Error ? failure.message : String(failure)}\n--- stderr ---\nprocess diagnostic`,
+      },
+    ]);
+    t.true(procKilled.get(fake.spawned[0]));
+  });
+}
 
 test('terminate() disposes the slice, unmounts, and rejects subsequent send', async t => {
   const fake = makeFakeSlice([[]]);
@@ -413,6 +1894,8 @@ test('a lazy provision thunk runs once on first send and is reused', async t => 
     workspaceMountPoint: '/tmp/claude-sandbox-sess-lazy',
     backend: 'podman',
     makeStdoutIterable,
+    sha256,
+    restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisionCount += 1;
       return { slice: fake.slice, mountHandle: mount.handle };
@@ -422,7 +1905,7 @@ test('a lazy provision thunk runs once on first send and is reused', async t => 
   // Not provisioned until first use.
   t.is(provisionCount, 0);
   await drain(await client.send('one'));
-  await drain(await client.send('two'));
+  await drain(await client.send('two', { transcript: continuedTranscript }));
   t.is(provisionCount, 1);
   t.is(fake.spawned.length, 2);
 
@@ -440,6 +1923,8 @@ test('terminate() before any lazy provision creates nothing', async t => {
     workspaceMountPoint: '/tmp/claude-sandbox-sess-noop',
     backend: 'podman',
     makeStdoutIterable,
+    sha256,
+    restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisionCount += 1;
       return { slice: makeFakeSlice().slice };
@@ -459,7 +1944,7 @@ test('status() reports session metadata', async t => {
   t.is(status.rootfs, 'oci:example/claude:latest');
   t.is(status.workspaceMountPoint, '/tmp/claude-sandbox-sess-0001');
   t.false(status.terminated);
-  t.false(status.conversationStarted);
+  t.false(Object.hasOwn(status, 'conversationStarted'));
 });
 
 test('help() describes the ClaudeClient surface', async t => {
@@ -468,96 +1953,75 @@ test('help() describes the ClaudeClient surface', async t => {
   t.regex(client.help(), /send\(prompt/);
 });
 
-test('detectPriorConversation decides --continue per spawn', async t => {
-  const fake = makeFakeSlice([[], [], []]);
-  let persisted = false;
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), {
-      detectPriorConversation: () => persisted,
-    }),
-  );
+for (const option of [
+  'detectPriorConversation',
+  'resolveResumeSessionId',
+  'describeTranscripts',
+  'conversationStarted',
+]) {
+  test(`obsolete ${option} presence is rejected before resources`, t => {
+    const fake = makeFakeSlice();
+    let provisions = 0;
+    t.throws(
+      () =>
+        makeClaudeClient(
+          baseArgs(fake, makeFakeMount(), {
+            [option]: undefined,
+            provision: async () => {
+              provisions += 1;
+              return { slice: fake.slice };
+            },
+          }),
+        ),
+      { message: /Obsolete Claude ambient-continuation/ },
+    );
+    t.is(provisions, 0);
+    t.is(fake.spawned.length, 0);
+  });
+}
 
-  // First turn: no transcript yet → fresh conversation.
-  await drain(await client.send('first'));
-  t.false(fake.spawned[0].argv.includes('--continue'));
-
-  // Simulate claude having persisted the first turn's transcript.
-  persisted = true;
-  await drain(await client.send('second'));
-  t.true(fake.spawned[1].argv.includes('--continue'));
-
-  // Transcript gone again (e.g. config dir wiped) → detector wins over the
-  // in-memory conversationStarted flag, so the turn does not pass a
-  // --continue that has nothing to resume.
-  persisted = false;
-  await drain(await client.send('third'));
-  t.false(fake.spawned[2].argv.includes('--continue'));
-});
-
-test('a first turn killed before claude persisted does not poison the next with --continue', async t => {
-  // The in-memory flag alone would flip to true after the first spawn even
-  // when the process was killed before writing a transcript; the detector
-  // (still reporting no transcript) must override it.
+test('every send restores supplied journal context, never ambient continuation', async t => {
+  const restored = [];
   const fake = makeFakeSlice([[], []]);
   const client = makeClaudeClient(
     baseArgs(fake, makeFakeMount(), {
-      detectPriorConversation: () => false,
-    }),
-  );
-  await drain(await client.send('killed early'));
-  await drain(await client.send('retry'));
-  t.is(fake.spawned.length, 2);
-  t.false(fake.spawned[0].argv.includes('--continue'));
-  t.false(fake.spawned[1].argv.includes('--continue'));
-});
-
-test('a detector throw falls back to the in-memory flag', async t => {
-  const fake = makeFakeSlice([[], []]);
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), {
-      detectPriorConversation: () => {
-        throw new Error('EACCES');
+      restoreTranscript: async records => {
+        restored.push(records);
+        return restoredReceipt;
       },
     }),
   );
-  await drain(await client.send('first'));
-  await drain(await client.send('second'));
-  t.false(fake.spawned[0].argv.includes('--continue'));
-  t.true(fake.spawned[1].argv.includes('--continue'));
+  t.teardown(() => client.terminate());
+  await drain(await client.send('first', { transcript: continuedTranscript }));
+  await drain(await client.send('second', { transcript: continuedTranscript }));
+  t.deepEqual(restored, [continuedTranscript, continuedTranscript]);
+  for (const proc of fake.spawned) {
+    t.true(proc.argv.includes('--resume'));
+    t.true(proc.argv.includes(restoredUuid));
+    t.false(proc.argv.includes('--continue'));
+  }
 });
 
-test('initialPrompt is skipped when a prior conversation exists', async t => {
-  // The prompt rides in the formula env, so a reincarnated formula would
-  // otherwise re-fire it as a spurious extra turn on every daemon restart.
+test('admitted prompt without native init still fences a later context-free send', async t => {
   const fake = makeFakeSlice([[]]);
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), {
-      initialPrompt: 'hello',
-      detectPriorConversation: () => true,
-    }),
-  );
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  t.teardown(() => client.terminate());
+  await drain(await client.send('first'));
+  const result = await drain(await client.send('missing history'));
+  t.is(result.at(-1).type, 'abort');
+  t.regex(result.at(-1).reason, /requires host-journal context/);
+  t.is(fake.spawned.length, 1);
+});
+
+test('fresh construction does not dispatch an unobserved prompt', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  await new Promise(resolve => setImmediate(resolve));
+  t.is(fake.spawned.length, 0);
   await drain(await client.send('next'));
   t.is(fake.spawned.length, 1);
   t.is(fake.spawned[0].argv[2], 'next');
-  t.true(fake.spawned[0].argv.includes('--continue'));
-});
-
-test('initialPrompt is fired and drained at construction', async t => {
-  const fake = makeFakeSlice([[enc.encode('{"type":"result"}\n')], []]);
-  const client = makeClaudeClient(
-    baseArgs(fake, makeFakeMount(), { initialPrompt: 'hello' }),
-  );
-
-  // The next explicit send awaits the initial prompt's completion, so
-  // by the time it resolves the initial spawn has already happened.
-  await drain(await client.send('next'));
-
-  t.is(fake.spawned.length, 2);
-  t.is(fake.spawned[0].argv[2], 'hello');
-  t.is(fake.spawned[1].argv[2], 'next');
-  // The second turn continues the conversation started by the initial
-  // prompt.
-  t.true(fake.spawned[1].argv.includes('--continue'));
+  t.false(fake.spawned[0].argv.includes('--continue'));
 });
 
 // ---------------------------------------------------------------------------
@@ -602,6 +2066,8 @@ test('terminate() racing a mount recreate never re-provisions', async t => {
     workspacePath: '/workspace',
     backend: 'podman',
     makeStdoutIterable,
+    sha256,
+    restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisionCount += 1;
       return {
@@ -676,6 +2142,8 @@ test('a send racing a mount recreate waits for the teardown gate', async t => {
     workspacePath: '/workspace',
     backend: 'podman',
     makeStdoutIterable,
+    sha256,
+    restoreTranscript: async () => restoredReceipt,
     provision: async extras => {
       provisionCount += 1;
       const n = provisionCount;
@@ -701,7 +2169,7 @@ test('a send racing a mount recreate waits for the teardown gate', async t => {
     harden([{ cap: harden({}), innerPath: '/mnt/r', mode: 'rw' }]),
   );
   await unmountStartedP; // the old workspace unmount is in progress
-  const sendP = client.send('two'); // races the recreate
+  const sendP = client.send('two', { transcript: continuedTranscript }); // races the recreate
   await new Promise(r => setTimeout(r, 20));
   // The gate holds: no provision may overlap the teardown, or the fresh 9P
   // mounts could be unmounted by the old slice's teardown.
@@ -810,6 +2278,8 @@ test('setExtraMounts refuses eager and terminated clients without recording', as
     workspaceMountPoint: '/tmp/x',
     backend: 'podman',
     makeStdoutIterable,
+    sha256,
+    restoreTranscript: async () => restoredReceipt,
     provision: async () => {
       provisions += 1;
       return { slice: makeFakeSlice([]).slice };

@@ -716,10 +716,12 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays
-                .get_mut(&arr)
-                .unwrap()
-                .insert_item(i as u32, item, &mut self.side_refs);
+            self.arrays.get_mut(&arr).unwrap().insert_item(
+                i as u32,
+                item,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -741,20 +743,25 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays
-                .get_mut(&arr)
-                .unwrap()
-                .insert_item(i as u32, item, &mut self.side_refs);
+            self.arrays.get_mut(&arr).unwrap().insert_item(
+                i as u32,
+                item,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
     }
 
     /// A single list element must be a String (ECMA-402 StringListFromIterable
-    /// step: `If Type(next) is not String, throw a TypeError`).
-    fn list_element_string(&mut self, value: Slot) -> Result<Vec<u16>, Step> {
+    /// step: `If Type(next) is not String, throw a TypeError`). The element is
+    /// kept by reference: copying each one before the list is complete let a
+    /// list of many references to one long string exhaust host memory before
+    /// a later non-String element threw.
+    fn list_element_string(&mut self, value: Slot) -> Result<crate::value::ChunkOffset, Step> {
         match value.value {
-            Payload::String(off) if value.kind == Kind::String => Ok(self.str_units(off)),
+            Payload::String(off) if value.kind == Kind::String => Ok(off),
             _ => Err(self
                 .catchable_type_error_msg("Intl.ListFormat: list elements must be strings".into())),
         }
@@ -769,21 +776,15 @@ impl Interp {
         &mut self,
         code: &[u8],
         iterable: Slot,
-    ) -> Result<Vec<Vec<u16>>, Step> {
+    ) -> Result<StringList, Step> {
         if iterable.kind == Kind::Undefined {
-            return Ok(Vec::new());
+            return Ok(StringList::Values(Vec::new()));
         }
         if iterable.kind == Kind::String {
             if let Payload::String(off) = iterable.value {
-                let units = self.str_units(off);
-                let mut result = Vec::new();
-                for decoded in char::decode_utf16(units) {
-                    result.push(match decoded {
-                        Ok(ch) => ch.encode_utf16(&mut [0u16; 2]).to_vec(),
-                        Err(error) => vec![error.unpaired_surrogate()],
-                    });
-                }
-                return Ok(result);
+                // Each code point is one element; they are read in order from
+                // this one copy rather than kept as a vector apiece.
+                return Ok(StringList::CodePoints(self.str_units(off)));
             }
         }
         let obj = match iterable.value {
@@ -824,13 +825,13 @@ impl Interp {
                     let s = self.list_element_string(item)?;
                     result.push(s);
                 }
-                return Ok(result);
+                return Ok(StringList::Values(result));
             }
             // An intrinsic array iterator handed in directly
             // (`array[Symbol.iterator]()`): read its remaining array elements.
             if let Some(state) = self.iterators.get(&obj) {
                 if state.done {
-                    return Ok(Vec::new());
+                    return Ok(StringList::Values(Vec::new()));
                 }
                 let source = state.iterable;
                 let start = state.index;
@@ -851,7 +852,7 @@ impl Interp {
                         st.index = length;
                         st.done = true;
                     }
-                    return Ok(result);
+                    return Ok(StringList::Values(result));
                 }
             }
             return Err(
@@ -892,7 +893,7 @@ impl Interp {
             };
             let done = self.mop_get(code, step_inst, done_id, step)?;
             if self.truthy(&done) {
-                return Ok(result);
+                return Ok(StringList::Values(result));
             }
             let value = self.mop_get(code, step_inst, value_id, step)?;
             if value.kind != Kind::String {
@@ -905,7 +906,7 @@ impl Interp {
                 ));
             }
             let s = match value.value {
-                Payload::String(off) => self.str_units(off),
+                Payload::String(off) => off,
                 _ => {
                     return Err(self.catchable_type_error_msg(
                         "Intl.ListFormat: list elements must be strings".into(),
@@ -928,7 +929,7 @@ impl Interp {
         data: &mut PluralRulesData,
         mnfd_default: u32,
         mxfd_default: u32,
-        _compact: bool,
+        compact: bool,
     ) -> Result<(), Step> {
         data.minimum_integer_digits = self
             .intl_get_number_option(code, options, "minimumIntegerDigits", 1.0, 21.0, Some(1))?
@@ -1044,6 +1045,30 @@ impl Interp {
             }
         } else if has_sd {
             data.rounding_type = "significantDigits".to_string();
+        } else if compact && !has_fd {
+            // `SetNumberFormatDigitOptions` step 17: compact notation with
+            // neither digit family named resolves to morePrecision over
+            // (0,0) fraction digits and (1,2) significant digits. That is
+            // what renders 1,234 as `1.2K` and 12,345 as `12K` — the
+            // fraction arm alone would give `1K` and `12K`, and the
+            // significant arm alone `1.2K` and `12K`. This parameter was
+            // accepted and ignored for as long as compact silently
+            // formatted as standard (F062).
+            //
+            // NOT conditioned on `rounding_increment`. The spec does not
+            // condition step 17 on it; it throws at step 25 when an
+            // increment is combined with a rounding type other than
+            // `fractionDigits`, which the gate below does. Routing
+            // compact-with-increment to `fractionDigits` instead made the
+            // constructor succeed and then format 1,234 as `0K`.
+            data.rounding_type = "morePrecision".to_string();
+            // Step 17 sets the COMPUTED priority as well, which
+            // `resolvedOptions().roundingPriority` reports.
+            data.rounding_priority = "morePrecision".to_string();
+            data.minimum_fraction_digits = 0;
+            data.maximum_fraction_digits = 0;
+            data.minimum_significant_digits = Some(1);
+            data.maximum_significant_digits = Some(2);
         } else {
             data.rounding_type = "fractionDigits".to_string();
             // Plain fraction-digit rounding: apply the caller defaults when the
@@ -1054,6 +1079,16 @@ impl Interp {
             }
             data.minimum_significant_digits = None;
             data.maximum_significant_digits = None;
+        }
+        // `SetNumberFormatDigitOptions` step 25: a rounding increment is
+        // only meaningful against fraction digits. Reached now that compact
+        // resolves to `morePrecision` rather than being routed around it.
+        if rounding_increment != 1 && data.rounding_type != "fractionDigits" {
+            return Err(self.catchable_type_error_msg(
+                "Intl.NumberFormat: roundingIncrement requires fraction-digit \
+                 rounding"
+                    .into(),
+            ));
         }
         Ok(())
     }
@@ -1251,6 +1286,39 @@ impl Interp {
             None => "auto".to_string(),
         };
 
+        // The named skip for compact notation in a locale whose
+        // compact-decimal data this engine does not model.
+        //
+        // Placed HERE, after the last option read, on purpose. ECMA-402's
+        // `InitializeNumberFormat` has an observable option-read sequence
+        // that `constructor-order` style tests check; refusing earlier
+        // skipped the `useGrouping` and `signDisplay` getters and turned a
+        // bad `signDisplay` into this message instead of its own RangeError.
+        //
+        // A `Halt::NotImplemented`, NOT a catchable error. This engine's
+        // named skip is an uncatchable, self-naming halt — the same one
+        // `Intl.NumberFormat.prototype.formatRange` takes — and a
+        // `RangeError` here would be a fabricated spec-shaped error that a
+        // guest cannot tell from "you passed an invalid option".
+        //
+        // Compact is per-locale DATA, not an algorithm: the affixes differ,
+        // and so do the magnitudes the patterns sit on (Japanese groups by
+        // ten thousands), so `de` compact formatted with `en` patterns would
+        // be a guest-observable wrong value at a surface no differential
+        // test can see, because XS ships no `Intl` (F062).
+        //
+        // Known inconsistency, recorded rather than hidden: this file
+        // already formats other locales' number data with `en`'s — `fr`
+        // grouping, `hi` digit grouping, the `de` percent separator — and
+        // does not skip for those. Those are wrong values of the same class
+        // and are not this finding's; applying the doctrine here is not a
+        // reason to add another.
+        if notation == "compact" && !crate::intl_number::compact_locale_is_modeled(&locale_base) {
+            return Err(Step::Host(Halt::NotImplemented(
+                "Intl.NumberFormat:compact-locale",
+            )));
+        }
+
         Ok(NumberFormatData {
             locale: locale_base,
             numbering_system,
@@ -1409,12 +1477,99 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays
-                .get_mut(&arr)
-                .unwrap()
-                .insert_item(i as u32, item, &mut self.side_refs);
+            self.arrays.get_mut(&arr).unwrap().insert_item(
+                i as u32,
+                item,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
+    }
+}
+
+/// The list `Intl.ListFormat` formats, as StringListFromIterable produced it,
+/// without a copy of each element: the String values themselves, or the code
+/// points of one primitive string.
+pub(in crate::interp) enum StringList {
+    Values(Vec<crate::value::ChunkOffset>),
+    CodePoints(Vec<u16>),
+}
+
+impl Interp {
+    /// Append one `{type, value}` part object to a `formatToParts` result.
+    pub(in crate::interp) fn list_format_push_part(
+        &mut self,
+        arr: crate::value::SlotIndex,
+        index: u32,
+        ty: &'static str,
+        value: &[u16],
+    ) {
+        let obj = self.slots.alloc(Slot::instance(self.object_proto));
+        let value_slot = self.new_string_units(value);
+        let type_slot = self.intl_string(ty);
+        // Insert in `type`, `value` enumeration order.
+        self.define_descriptor_field(obj, "type", type_slot);
+        self.define_descriptor_field(obj, "value", value_slot);
+        let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
+        item.id = 0;
+        item.next = crate::value::SlotIndex::NULL;
+        self.arrays.get_mut(&arr).unwrap().insert_item(
+            index,
+            item,
+            &mut self.side_refs,
+            &mut self.chunks,
+        );
+    }
+
+    /// How many elements `list` holds.
+    pub(in crate::interp) fn string_list_len(list: &StringList) -> usize {
+        match list {
+            StringList::Values(values) => values.len(),
+            StringList::CodePoints(units) => char::decode_utf16(units.iter().copied()).count(),
+        }
+    }
+
+    /// The UTF-16 length of every element of `list` together.
+    pub(in crate::interp) fn string_list_units(&self, list: &StringList) -> u64 {
+        match list {
+            StringList::Values(values) => values
+                .iter()
+                .map(|&off| self.chunks.len_of(off) as u64 / 2)
+                .sum(),
+            StringList::CodePoints(units) => units.len() as u64,
+        }
+    }
+
+    /// The next element of `list` in order, read from the heap (or the
+    /// iterated string) only now. `at` is the element index for a list of
+    /// values and the code-unit offset for a list of code points.
+    pub(in crate::interp) fn string_list_next(
+        &self,
+        list: &StringList,
+        at: &mut usize,
+    ) -> Vec<u16> {
+        match list {
+            StringList::Values(values) => {
+                let units = self.str_units(values[*at]);
+                *at += 1;
+                units
+            }
+            StringList::CodePoints(units) => {
+                let width = match units.get(*at..*at + 2) {
+                    Some(&[lead, trail])
+                        if (0xD800..=0xDBFF).contains(&lead)
+                            && (0xDC00..=0xDFFF).contains(&trail) =>
+                    {
+                        2
+                    }
+                    _ => 1,
+                };
+                let element = units[*at..*at + width].to_vec();
+                *at += width;
+                element
+            }
+        }
     }
 }

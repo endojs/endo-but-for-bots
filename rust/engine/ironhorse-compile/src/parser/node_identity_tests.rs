@@ -72,3 +72,79 @@ fn exhausted_identity_space_is_rejected_at_every_parse_exit() {
         assert_eq!(error.unwrap_err().message, "too many AST nodes");
     }
 }
+
+/// Every public parse entry point routes its tree through `finish_tree`.
+///
+/// `node_id` (scoper.rs:362) carries a RELEASE-mode `assert_ne!` against the
+/// `u32::MAX` sentinel `new_node` hands out once the identity space is
+/// exhausted, and 39 production call sites reach it. Nothing downstream
+/// checks for the sentinel, so the only thing standing between an exhausted
+/// parse and a release-mode abort is that `finish_tree` refuses the tree at
+/// the parse exit (architecture finding F063).
+///
+/// `exhausted_identity_space_is_rejected_at_every_parse_exit` above asserts
+/// that for the four entry points someone wrote down. This asserts the list
+/// is the whole list: a fifth `pub fn parse_*` added without `finish_tree`
+/// would reopen the abort, and it would pass that test by not being in it.
+#[test]
+fn every_public_parse_entry_point_calls_finish_tree() {
+    const SOURCES: &[(&str, &str)] = &[
+        ("parser.rs", include_str!("../parser.rs")),
+        ("parser/stmt.rs", include_str!("stmt.rs")),
+    ];
+
+    let mut found = Vec::new();
+    for (name, source) in SOURCES {
+        for (offset, _) in source.match_indices("pub fn parse_") {
+            let signature_end = match source[offset..].find('{') {
+                Some(brace) => offset + brace,
+                None => panic!("{name}: no body brace after a `pub fn parse_`"),
+            };
+            let signature = source[offset..signature_end].trim().to_string();
+
+            // Walk the body by brace depth: a nested block or a closure must
+            // not end the scan early, or a `finish_tree` in a later arm would
+            // read as present when it is not.
+            let bytes = source.as_bytes();
+            let mut depth = 0usize;
+            let mut end = signature_end;
+            for (index, byte) in bytes.iter().enumerate().skip(signature_end) {
+                match byte {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = index;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            assert!(
+                depth == 0 && end > signature_end,
+                "{name}: unbalanced body in {signature}"
+            );
+
+            let body = &source[signature_end..end];
+            assert!(
+                body.contains("finish_tree"),
+                "{name}: `{signature}` returns a tree without `finish_tree`, so an \
+                 exhausted identity space would reach `node_id`'s release-mode assert",
+            );
+            found.push(signature);
+        }
+    }
+
+    // The scan must actually have found the entry points. A pattern that
+    // stops matching — a reformat putting `pub fn` and `parse_` on separate
+    // lines, a move to another module — would otherwise leave this test green
+    // while checking nothing.
+    assert_eq!(
+        found.len(),
+        4,
+        "expected the four known parse entry points, found {found:?}; \
+         if one was added, cover it in \
+         `exhausted_identity_space_is_rejected_at_every_parse_exit` too",
+    );
+}

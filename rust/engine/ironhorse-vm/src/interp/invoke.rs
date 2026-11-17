@@ -1,6 +1,41 @@
 //! Callable dispatch and callbacks that can re-enter the interpreter.
 use super::*;
 
+/// What `RUN` makes of a plain call of a bound function
+/// ([`Interp::bound_call`]) or a Proxy ([`Interp::proxy_run_call`]).
+pub(super) enum RunCall {
+    /// The callee's frame is entered in the caller's loop: continue at its
+    /// body.
+    Entered(usize),
+    /// Call this callee, with this receiver and these arguments, through
+    /// [`Interp::invoke_value`].
+    Call(Slot, Slot, Vec<Slot>),
+}
+
+/// Whether `m` is one of the `Iterator.prototype` accessor setters that
+/// [`Interp::call_native_method`] dispatches apart.
+fn is_iterator_setter(m: NativeMethod) -> bool {
+    matches!(
+        m,
+        NativeMethod::IteratorConstructorSetter | NativeMethod::IteratorToStringTagSetter
+    )
+}
+
+/// Whether `RUN` calls the native method `m` through
+/// [`Interp::native_run_call`], which can run its callee in the caller's loop:
+/// `Reflect.apply`, `Reflect.construct` (STACK-DEPTH-REFACTOR.md C2) and a
+/// generator's `next`, `return` and `throw` (C4).
+pub(super) fn runs_callee_in_place(m: NativeMethod) -> bool {
+    matches!(
+        m,
+        NativeMethod::ReflectApply
+            | NativeMethod::ReflectConstruct
+            | NativeMethod::GeneratorNext
+            | NativeMethod::GeneratorReturn
+            | NativeMethod::GeneratorThrow
+    )
+}
+
 impl Interp {
     /// Invoke a callback through the shared, complete ECMAScript `Call`
     /// dispatcher. Native algorithms use this name at callback-taking sites;
@@ -21,6 +56,11 @@ impl Interp {
     /// bound functions return through the shared Call operation. Bytecode
     /// callbacks run nested dispatch until their frame returns, restoring the
     /// caller's activation. Propagate callback throws and meter aborts.
+    // Out of line, as it was before the bound-call fold moved out of
+    // `invoke_value`: inlined there, it made `invoke_value`'s frame, which a
+    // native-to-native nest (`join` stringifying an array) holds twice a
+    // level, 160 B larger.
+    #[inline(never)]
     pub(super) fn run_user_callback(
         &mut self,
         code: &[u8],
@@ -45,67 +85,67 @@ impl Interp {
         if self.bound_functions.contains_key(&f) {
             return self.invoke_value(code, func, this, args);
         }
-        let (this_eff, func_eff, args_eff): (Slot, Slot, Vec<Slot>) =
-            if let Some(m) = self.method_of(f) {
-                // A **native-method** callback (`a.map(nf.format)` — the
-                // NumberFormat bound-format function; or any prototype method
-                // passed by reference). Dispatch it through the same seam
-                // `invoke_getter` uses: build the [THIS, FUNCTION, RESULT, FRAME]
-                // frame + args and call `call_native_method`. A bound native
-                // (`nf.format`) recovers its owning instance from its side table,
-                // not from `this`, so the callback's `this` is irrelevant. On a
-                // throw `call_native_method` returns WITHOUT truncating, so the
-                // stack is restored to `base` before propagating.
-                let base = self.stack.len();
-                self.push(this);
-                self.push(func);
-                self.push(Slot::undefined());
-                self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                for a in args {
-                    self.push(*a);
+        if let Some(m) = self.method_of(f) {
+            // A **native-method** callback (`a.map(nf.format)` — the
+            // NumberFormat bound-format function; or any prototype method
+            // passed by reference). Dispatch it through the same seam
+            // `invoke_getter` uses: build the [THIS, FUNCTION, RESULT, FRAME]
+            // frame + args and call `call_native_method`. A bound native
+            // (`nf.format`) recovers its owning instance from its side table,
+            // not from `this`, so the callback's `this` is irrelevant. On a
+            // throw `call_native_method` returns WITHOUT truncating, so the
+            // stack is restored to `base` before propagating.
+            let base = self.stack.len();
+            self.push(this);
+            self.push(func);
+            self.push(Slot::undefined());
+            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+            for a in args {
+                self.push(*a);
+            }
+            return match self.call_native_method(m, base, args.len(), code) {
+                Ok(()) => self.pop_checked(),
+                Err(h) => {
+                    self.stack.truncate(base);
+                    Err(h)
                 }
-                return match self.call_native_method(m, base, args.len(), code) {
-                    Ok(()) => self.pop_checked(),
-                    Err(h) => {
-                        self.stack.truncate(base);
-                        Err(h)
-                    }
-                };
-            } else if let Some(native) = self.functions[&f].native {
-                // A native *callable* callback (`[..].map(parseInt)`,
-                // `[..].forEach(print)`, `arr.filter(Boolean)`, …). It reaches
-                // the `call_native` seam rather than `call_native_method`; drive
-                // it through the same in-place frame the native-method branch
-                // uses. A native *constructor* invoked as a callback (no `new`,
-                // so `has_target = false`) either produces its call-completion
-                // or throws a catchable TypeError inside `call_native`, matching
-                // the oracle. On a throw `call_native` may return WITHOUT
-                // truncating, so restore the stack to `base` before propagating.
-                let base = self.stack.len();
-                self.push(this);
-                self.push(func);
-                self.push(Slot::undefined());
-                self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                for a in args {
-                    self.push(*a);
-                }
-                return match self.call_native(native, base, args.len(), false, code) {
-                    Ok(()) => self.pop_checked(),
-                    Err(h) => {
-                        self.stack.truncate(base);
-                        Err(h)
-                    }
-                };
-            } else {
-                (this, func, args.to_vec())
             };
-        let argc = args_eff.len();
-        // Push the callee frame geometry [THIS, FUNCTION, RESULT, FRAME] + args.
-        self.push(this_eff);
-        self.push(func_eff);
+        } else if let Some(native) = self.functions[&f].native {
+            // A native *callable* callback (`[..].map(parseInt)`,
+            // `[..].forEach(print)`, `arr.filter(Boolean)`, …). It reaches
+            // the `call_native` seam rather than `call_native_method`; drive
+            // it through the same in-place frame the native-method branch
+            // uses. A native *constructor* invoked as a callback (no `new`,
+            // so `has_target = false`) either produces its call-completion
+            // or throws a catchable TypeError inside `call_native`, matching
+            // the oracle. On a throw `call_native` may return WITHOUT
+            // truncating, so restore the stack to `base` before propagating.
+            let base = self.stack.len();
+            self.push(this);
+            self.push(func);
+            self.push(Slot::undefined());
+            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+            for a in args {
+                self.push(*a);
+            }
+            return match self.call_native(native, base, args.len(), false, code) {
+                Ok(()) => self.pop_checked(),
+                Err(h) => {
+                    self.stack.truncate(base);
+                    Err(h)
+                }
+            };
+        }
+        let argc = args.len();
+        // Push the callee frame geometry [THIS, FUNCTION, RESULT, FRAME] + args,
+        // straight from the caller's list. Copying it into a fresh `Vec` first
+        // was an allocation whose failure aborts the host, which a list the
+        // caller had reserved fallibly (a Proxy `apply` trap's) then reached.
+        self.push(this);
+        self.push(func);
         self.push(Slot::undefined());
         self.push(Slot::of(Kind::Uninitialized, Payload::None));
-        for a in &args_eff {
+        for a in args {
             self.push(*a);
         }
         let body_start = self.enter_call(argc, 0, false)?;
@@ -117,7 +157,7 @@ impl Interp {
         // a native driver such as `Array.prototype.map`, or the `Function`
         // result invoked as a callback). Same-segment callbacks keep using the
         // passed `code` with no allocation.
-        let callee_seg = match func_eff.value {
+        let callee_seg = match func.value {
             Payload::Reference(f) => self.callee_segment(f),
             _ => None,
         };
@@ -308,31 +348,93 @@ impl Interp {
         // crate. A method that invokes another native without entering
         // `dispatch_at` — `Array.prototype.join` stringifying an element that
         // is itself an array, `Function.prototype.call` trampolining, an
-        // accessor's native setter re-entering itself — nests this frame on
-        // the host stack, so it is charged at the heavy class and bounded by
-        // [`NATIVE_DEPTH_LIMIT`].
-        self.with_native_frame(HEAVY_FRAME_COST, |vm| {
-            // These accessors can recursively Set their own copied descriptor.
-            // Keep the large dispatch frame out of that forwarding cycle.
-            if matches!(
-                m,
-                NativeMethod::IteratorConstructorSetter | NativeMethod::IteratorToStringTagSetter
-            ) {
-                vm.cost.on_builtin(m);
-                let this = vm.stack.get(base).copied().unwrap_or_else(Slot::undefined);
-                let arg0 = vm
-                    .stack
-                    .get(base + 4)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let result = vm.iterator_prototype_setter(code, m, this, arg0)?;
-                vm.stack.truncate(base);
-                vm.push(result);
-                Ok(())
-            } else {
-                vm.call_native_method_inner(m, base, argc, code)
-            }
-        })
+        // accessor's native setter re-entering itself — nests the dispatch's
+        // frames on the host stack, so it is charged at the heavy class and
+        // bounded by [`NATIVE_DEPTH_LIMIT`]. `call_native_method_in_place`
+        // repeats this charge for `RUN`, `native_run_call` for `RUN`'s
+        // `Reflect.apply`, `Reflect.construct` and generator methods, and `invoke_regexp_protocol`
+        // (natives/regexp.rs) for the intrinsic RegExp protocol methods it
+        // calls in place: keep the four in step.
+        self.enter_native_frame(HEAVY_FRAME_COST)?;
+        let result = self.call_native_method_body(m, base, argc, code);
+        self.leave_native_frame(HEAVY_FRAME_COST);
+        result
+    }
+
+    /// [`Self::call_native_method`] for `RUN`'s arm for a native method,
+    /// which every level of a nest that re-enters through a native method
+    /// called from bytecode (`forEach`, `sort`, `map`) passes. It charges the activation around the dispatcher itself, with
+    /// no frame between: `with_native_frame` and its closure left two (560 B
+    /// natively), and on wasm, which has no sibling calls, the wrapper's
+    /// body leaves one.
+    #[inline(always)]
+    pub(super) fn call_native_method_in_place(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<(), Step> {
+        self.enter_native_frame(HEAVY_FRAME_COST)?;
+        let result = if is_iterator_setter(m) {
+            self.iterator_setter_out_of_line(m, base, code)
+        } else {
+            self.call_native_method_inner(m, base, argc, code)
+        };
+        self.leave_native_frame(HEAVY_FRAME_COST);
+        result
+    }
+
+    /// The activation [`Self::call_native_method`] charges. In an optimized
+    /// native build its call of `call_native_method_inner` compiles to a
+    /// sibling call, so a level carries that frame and not this one.
+    #[inline(never)]
+    fn call_native_method_body(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<(), Step> {
+        if is_iterator_setter(m) {
+            self.iterator_setter(m, base, code)
+        } else {
+            self.call_native_method_inner(m, base, argc, code)
+        }
+    }
+
+    /// [`Self::iterator_setter`], out of line for `RUN`'s arm.
+    #[cold]
+    #[inline(never)]
+    fn iterator_setter_out_of_line(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        code: &[u8],
+    ) -> Result<(), Step> {
+        self.iterator_setter(m, base, code)
+    }
+
+    /// The `Iterator.prototype` `constructor` and `@@toStringTag` setters,
+    /// which can recursively Set their own copied descriptor: kept out of
+    /// the large dispatch frame and that forwarding cycle.
+    #[inline]
+    fn iterator_setter(&mut self, m: NativeMethod, base: usize, code: &[u8]) -> Result<(), Step> {
+        self.cost.on_builtin(m);
+        let this = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let arg0 = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let result = self.iterator_prototype_setter(code, m, this, arg0)?;
+        self.stack.truncate(base);
+        self.push(result);
+        Ok(())
     }
 
     /// The single complete `Call(F, thisArg, args)` dispatcher. Promise
@@ -346,16 +448,380 @@ impl Interp {
         this: Slot,
         initial_args: &[Slot],
     ) -> Result<Slot, Step> {
+        // A Proxy's `[[Call]]` forwards to its target when `apply` is absent
+        // and calls the trap otherwise; both are tail calls, taken as further
+        // turns of the loop in `invoke_value_turns`, each Proxy layer charged
+        // one unit that is held until the call returns, as the recursion
+        // through each layer's `[[Call]]` held it (STACK-DEPTH-REFACTOR.md
+        // B1). A local holds the units, not a closure: a closure around this
+        // frame made every heavy callback level larger (the report's A3).
+        let mut held = 0usize;
+        let result = self.invoke_value_turns(code, func, this, initial_args, &mut held);
+        self.leave_native_frame(held);
+        result
+    }
+
+    /// BoundFunctionExoticObject.[[Call]] for the chain of bound functions
+    /// from `f`, with `this` and the argument list `args` the call received:
+    /// each link prepends its bound arguments and substitutes its bound
+    /// receiver, charged as the recursive form charged it. Returns the first
+    /// target that is not a bound function, with the receiver and arguments
+    /// to call it with. `bind` always allocates a fresh exotic whose target
+    /// already exists, so the chain is acyclic and this terminates.
+    pub(super) fn fold_bound_chain(
+        &mut self,
+        f: crate::value::SlotIndex,
+        this: Slot,
+        args: Vec<Slot>,
+    ) -> Result<(Slot, Slot, Vec<Slot>), Step> {
+        let mut current = f;
+        let mut this_arg = this;
+        let mut combined = args;
+        while let Some(data) = self.bound_functions.get(&current) {
+            let target = data.target;
+            let receiver = data.this_arg;
+            let length = data
+                .args
+                .len()
+                .checked_add(combined.len())
+                .ok_or(Step::Host(Halt::HeapExhausted))?;
+            self.charge_and_check(BIND_CALL_METERING + length as u64 * BIND_CALL_PER_ARG)?;
+            let mut next = self.reserve_scratch(length)?;
+            next.extend_from_slice(&self.bound_functions[&current].args);
+            next.extend_from_slice(&combined);
+            combined = next;
+            this_arg = receiver;
+            current = target;
+        }
+        Ok((
+            Slot::of(Kind::Reference, Payload::Reference(current)),
+            this_arg,
+            combined,
+        ))
+    }
+
+    /// `RUN`'s plain call of the bound function `bf`, its frame of `argc`
+    /// arguments beginning at `base` (STACK-DEPTH-REFACTOR.md C1). The chain
+    /// folds as the first turn of [`Self::invoke_value`] folds it, with the
+    /// same charges. A target that [`Self::calls_in_place`] then has its
+    /// frame entered in the caller's loop ([`Self::enter_in_place`]). Any
+    /// other target goes back to `RUN` to call through `invoke_value`.
+    #[inline(never)]
+    pub(super) fn bound_call(
+        &mut self,
+        bf: crate::value::SlotIndex,
+        base: usize,
+        argc: usize,
+        ret_pc: usize,
+    ) -> Result<RunCall, Step> {
+        let args = self.frame_arguments(base, argc)?;
+        let this = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        self.stack.truncate(base);
+        let combined = Self::fill_scratch(self.reserve_work_scratch(args.len())?, args);
+        let (target, receiver, combined) = self.fold_bound_chain(bf, this, combined)?;
+        if !self.calls_in_place(target) {
+            return Ok(RunCall::Call(target, receiver, combined));
+        }
+        self.enter_in_place(target, receiver, combined, ret_pc, None, 0)
+            .map(RunCall::Entered)
+    }
+
+    /// `RUN`'s plain call of the Proxy `proxy`, its frame of `argc` arguments
+    /// beginning at `base` (STACK-DEPTH-REFACTOR.md C1). The layer charges
+    /// the light unit `[[Call]]` charged around the whole call and takes
+    /// [`Self::proxy_call_step`]. A callee, the `apply` trap or the target
+    /// the call forwards to, that [`Self::calls_in_place`] then has its frame
+    /// entered in the caller's loop, holding the light unit as well as the
+    /// heavy one until its `END`. Any other callee goes back to `RUN` to call
+    /// through `invoke_value` with the light unit still charged, for `RUN` to
+    /// release when the call returns, as `[[Call]]` released it. An error
+    /// before either releases it here.
+    #[inline(never)]
+    pub(super) fn proxy_run_call(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        base: usize,
+        argc: usize,
+        ret_pc: usize,
+    ) -> Result<RunCall, Step> {
+        let args = self.frame_arguments(base, argc)?;
+        let this = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        self.stack.truncate(base);
+        self.enter_native_frame(LIGHT_FRAME_COST)?;
+        let call = self.proxy_run_step(code, proxy, this, args, ret_pc);
+        if call.is_err() {
+            self.leave_native_frame(LIGHT_FRAME_COST);
+        }
+        call
+    }
+
+    /// The layer of [`Self::proxy_run_call`] after its charge.
+    fn proxy_run_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        this: Slot,
+        args: Vec<Slot>,
+        ret_pc: usize,
+    ) -> Result<RunCall, Step> {
+        let (callee, receiver, args) = match self.proxy_call_step(code, proxy, this, &args)? {
+            ProxyCall::Forward(target) => (
+                Slot::of(Kind::Reference, Payload::Reference(target)),
+                this,
+                args,
+            ),
+            ProxyCall::Trap {
+                trap,
+                handler,
+                args: trap_args,
+            } => {
+                // Reserved fallibly, as `invoke_proxy_turn` reserves the
+                // list, so the host's refusal is `HeapExhausted`, not an
+                // abort.
+                let list = Self::reserved_vec(trap_args.len())?;
+                (trap, handler, Self::fill_scratch(list, trap_args))
+            }
+        };
+        if !self.calls_in_place(callee) {
+            return Ok(RunCall::Call(callee, receiver, args));
+        }
+        self.enter_in_place(callee, receiver, args, ret_pc, None, LIGHT_FRAME_COST)
+            .map(RunCall::Entered)
+    }
+
+    /// `RUN`'s call of a native method `m` whose callee can run in the
+    /// caller's loop, its frame of `argc` arguments beginning at `base`: the
+    /// intrinsic `Reflect.apply` or `Reflect.construct`
+    /// (STACK-DEPTH-REFACTOR.md C2, [`Self::reflect_run_step`]) or a
+    /// generator's `next`, `return` or `throw` (C4,
+    /// [`Self::generator_run_step`]). The call charges the heavy unit and
+    /// counts the builtin as [`Self::call_native_method`] does. A callee run
+    /// in place keeps the unit, in the frame it enters, and the call returns
+    /// where that frame's code continues; otherwise its result has replaced
+    /// the call's frame and it returns `None`. An error leaves the frame, as
+    /// the native's did, and releases the unit.
+    #[inline(never)]
+    pub(super) fn native_run_call(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        ret_pc: usize,
+        code: &[u8],
+    ) -> Result<Option<usize>, Step> {
+        self.enter_native_frame(HEAVY_FRAME_COST)?;
+        self.cost.on_builtin(m);
+        let entry = if matches!(
+            m,
+            NativeMethod::ReflectApply | NativeMethod::ReflectConstruct
+        ) {
+            self.reflect_run_step(m, base, argc, ret_pc, code)
+        } else {
+            self.generator_run_step(m, base, ret_pc, code)
+        };
+        if !matches!(entry, Ok(Some(_))) {
+            self.leave_native_frame(HEAVY_FRAME_COST);
+        }
+        entry
+    }
+
+    /// `Reflect.apply` or `Reflect.construct` for [`Self::native_run_call`]
+    /// (C2): takes [`Self::reflect_call_operands`]. A target that
+    /// [`Self::calls_in_place`] then has its frame entered in the caller's
+    /// loop above the `Reflect` call's frame, which stays on the value stack
+    /// as it did while the target ran, holding the heavy unit with the one
+    /// its nested `dispatch_at` charged until its `END`. The frame begins at
+    /// `base`, so that `END` cuts the `Reflect` call's frame with it and
+    /// leaves the result where the call's would have been: returns where the
+    /// target's body starts. Any other target is called here, through
+    /// `invoke_value` or `construct_value` as [`Self::call_reflect`] calls
+    /// it, and its result replaces the frame: returns `None`.
+    fn reflect_run_step(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        ret_pc: usize,
+        code: &[u8],
+    ) -> Result<Option<usize>, Step> {
+        let construct = m == NativeMethod::ReflectConstruct;
+        let (target, second, args) = self.reflect_call_operands(m, base, argc, code)?;
+        if !self.calls_in_place(target) {
+            let result = if construct {
+                self.construct_value(code, target, &args, second)?
+            } else {
+                self.invoke_value(code, target, second, &args)?
+            };
+            self.stack.truncate(base);
+            self.push(result);
+            return Ok(None);
+        }
+        // A construct's receiver is the uninitialized placeholder, as
+        // `run_callback_construct` pushes it.
+        let (receiver, new_target) = if construct {
+            (Slot::of(Kind::Uninitialized, Payload::None), Some(second))
+        } else {
+            (second, None)
+        };
+        let body_start =
+            self.enter_in_place(target, receiver, args, ret_pc, new_target, HEAVY_FRAME_COST)?;
+        self.call_stack
+            .last_mut()
+            .expect("enter_call pushed the frame")
+            .stack_base = base;
+        Ok(Some(body_start))
+    }
+
+    /// A generator's `next`, `return` or `throw` (method `m`) for
+    /// [`Self::native_run_call`] (C4): the receiver checked as the native
+    /// checks it, then [`Self::resume_generator_in_place`], whose result
+    /// replaces the call's frame unless the body was entered in place. Out of
+    /// line, so that the frame of `native_run_call`, which a `Reflect` call
+    /// of a target not run in place holds, stays the size C2 left it.
+    #[inline(never)]
+    fn generator_run_step(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        ret_pc: usize,
+        code: &[u8],
+    ) -> Result<Option<usize>, Step> {
+        let this = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let sent = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let gen = match this.value {
+            Payload::Reference(r) if self.generators.contains_key(&r) => r,
+            _ => return Err(self.catchable_type_error_msg("this: not a Generator instance".into())),
+        };
+        let status = match m {
+            NativeMethod::GeneratorNext => GenStatus::Next,
+            NativeMethod::GeneratorReturn => GenStatus::Return,
+            _ => GenStatus::Throw,
+        };
+        match self.resume_generator_in_place(code, gen, sent, status, base, ret_pc)? {
+            GenResume::Value(result) => {
+                self.stack.truncate(base);
+                self.push(result);
+                Ok(None)
+            }
+            GenResume::Entered(resume_pc) => Ok(Some(resume_pc)),
+        }
+    }
+
+    /// Enter the frame [`Self::run_user_callback`] would build for `func`, or
+    /// [`Self::run_callback_construct`] to construct it for `new_target`
+    /// (latching a new target other than `func` as it does), which
+    /// [`Self::calls_in_place`], in the caller's loop to return to
+    /// `ret_pc`, and return where its body starts. The nested `dispatch_at`
+    /// the callee ran in charged its activation after `enter_call` and
+    /// checked no meter on entry, so the frame holds that charge, with the
+    /// `outer` units its caller charged around the call, until it returns
+    /// (its `END`, whose meter check is the one `RUN` made after the call
+    /// returned, or the `START_*` of a generator or async body), is unwound,
+    /// or outlives the loop that runs it.
+    pub(super) fn enter_in_place<A>(
+        &mut self,
+        func: Slot,
+        receiver: Slot,
+        args: A,
+        ret_pc: usize,
+        new_target: Option<Slot>,
+        outer: usize,
+    ) -> Result<usize, Step>
+    where
+        A: IntoIterator<Item = Slot>,
+        A::IntoIter: ExactSizeIterator,
+    {
+        let args = args.into_iter();
+        let argc = args.len();
+        self.push(receiver);
+        self.push(func);
+        self.push(Slot::undefined());
+        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+        for arg in args {
+            self.push(arg);
+        }
+        if let (Some(new_target), Payload::Reference(f)) = (new_target, func.value) {
+            let new_target = match new_target.value {
+                Payload::Reference(target) if new_target.kind == Kind::Reference => target,
+                _ => f,
+            };
+            self.pending_new_target = (new_target != f).then_some(new_target);
+        }
+        let body_start = self.enter_call(argc, ret_pc, new_target.is_some())?;
+        self.enter_native_frame(HEAVY_FRAME_COST)?;
+        let held = outer + HEAVY_FRAME_COST;
+        self.call_stack
+            .last_mut()
+            .expect("enter_call pushed the frame")
+            .held = held;
+        self.held_total += held;
+        Ok(body_start)
+    }
+
+    /// Whether a call of `func` reaches the bytecode path of
+    /// [`Self::run_user_callback`] over this loop's buffer: the turns of
+    /// [`Self::invoke_value`] pass it through (not a Proxy, a promise
+    /// resolving function, a bound function, a native function or a native
+    /// method) and its body lives in the active segment. Such a call can run
+    /// in place in the dispatch loop (STACK-DEPTH-REFACTOR.md C1, C2).
+    pub(super) fn calls_in_place(&self, func: Slot) -> bool {
+        let Payload::Reference(f) = func.value else {
+            return false;
+        };
+        func.kind == Kind::Reference
+            && !self.proxies.contains_key(&f)
+            && !self.promise_functions.contains_key(&f)
+            && !self.bound_functions.contains_key(&f)
+            && self
+                .functions
+                .get(&f)
+                .is_some_and(|fi| fi.native.is_none() && fi.method.is_none())
+            && self.callee_segment(f) == self.active_segment
+    }
+
+    /// The loop of [`Self::invoke_value`], charging each Proxy layer it
+    /// passes into `held`.
+    #[inline(always)]
+    fn invoke_value_turns(
+        &mut self,
+        code: &[u8],
+        func: Slot,
+        this: Slot,
+        initial_args: &[Slot],
+        held: &mut usize,
+    ) -> Result<Slot, Step> {
         // The bound-function fold and the `Function.prototype.call`/`apply`
         // trampolines below each redispatch to another callable. They loop
         // here rather than recurse: neither enters a charged frame, so a chain
         // `c = c.call.bind(c)` (bound wrapper → `call` → bound wrapper …) of
         // 10,000 links overflowed the host stack while the pinned XS completes
         // it. `owned_args` is the argument list the last step rebuilt; until a
-        // step rebuilds one, `initial_args` serves.
+        // step rebuilds one, `initial_args` serves. `args_fresh` is whether
+        // this turn received its list as a fresh `invoke_value` call would
+        // (the first turn, and every turn after a Proxy layer): a bound
+        // target then copies it into admitted scratch rather than taking over
+        // a list a step rebuilt.
         let mut func = func;
         let mut this = this;
         let mut owned_args: Option<Vec<Slot>> = None;
+        let mut args_fresh = true;
         loop {
             let args: &[Slot] = owned_args.as_deref().unwrap_or(initial_args);
             let f = match func.value {
@@ -363,7 +829,13 @@ impl Interp {
                 _ => return Err(self.catchable_type_error_msg("call: not a function".into())),
             };
             if self.proxies.contains_key(&f) {
-                return self.proxy_call(code, f, this, args);
+                if let Some(trap_args) =
+                    self.invoke_proxy_turn(code, f, &mut func, &mut this, args, held)?
+                {
+                    owned_args = Some(trap_args);
+                }
+                args_fresh = true;
+                continue;
             }
             // Promise resolve/reject functions carry a native-method marker for
             // reflection, but their [[Call]] settles the captured promise.
@@ -389,42 +861,21 @@ impl Interp {
             // target.
             if self.bound_functions.contains_key(&f) {
                 // Fold the whole chain iteratively rather than recursing once
-                // per wrapper: a 20,000-link chain overflowed the real thread
-                // stack and aborted the host, while the pinned XS completes the
-                // same program. `enter_construct_bound` already folds the
-                // construct side this way. Each level prepends its own bound
-                // arguments and replaces the receiver, and is charged exactly
-                // as the recursive form charged it, so the meter is unchanged.
-                // `bind` always allocates a fresh exotic whose target already
-                // exists, so the chain is acyclic and this terminates.
-                let mut current = f;
-                let mut this_arg = this;
-                let mut combined: Vec<Slot> = match owned_args.take() {
-                    Some(rebuilt) => rebuilt,
-                    None => Self::fill_scratch(
-                        self.reserve_work_scratch(initial_args.len())?,
-                        initial_args.iter().copied(),
-                    ),
+                // per wrapper (`fold_bound_chain`): a 20,000-link chain
+                // overflowed the real thread stack and aborted the host, while
+                // the pinned XS completes the same program.
+                // `enter_construct_bound` already folds the construct side this
+                // way.
+                let combined: Vec<Slot> = if args_fresh {
+                    Self::fill_scratch(self.reserve_work_scratch(args.len())?, args.iter().copied())
+                } else {
+                    owned_args.take().expect("a step rebuilt the argument list")
                 };
-                while let Some(data) = self.bound_functions.get(&current) {
-                    let target = data.target;
-                    let receiver = data.this_arg;
-                    let length = data
-                        .args
-                        .len()
-                        .checked_add(combined.len())
-                        .ok_or(Step::Host(Halt::HeapExhausted))?;
-                    self.charge_and_check(BIND_CALL_METERING + length as u64 * BIND_CALL_PER_ARG)?;
-                    let mut next = self.reserve_scratch(length)?;
-                    next.extend_from_slice(&self.bound_functions[&current].args);
-                    next.extend_from_slice(&combined);
-                    combined = next;
-                    this_arg = receiver;
-                    current = target;
-                }
-                func = Slot::of(Kind::Reference, Payload::Reference(current));
-                this = this_arg;
+                let (target, receiver, combined) = self.fold_bound_chain(f, this, combined)?;
+                func = target;
+                this = receiver;
                 owned_args = Some(combined);
+                args_fresh = false;
                 continue;
             }
             let fi = match self.functions.get(&f) {
@@ -458,6 +909,7 @@ impl Interp {
                 func = this;
                 this = this_arg;
                 owned_args = Some(forwarded);
+                args_fresh = false;
                 continue;
             }
             if method == Some(NativeMethod::FunctionApply) {
@@ -484,8 +936,15 @@ impl Interp {
                 func = this;
                 this = this_arg;
                 owned_args = Some(forwarded);
+                args_fresh = false;
                 continue;
             }
+            // `invoke_regexp_protocol` (natives/regexp.rs) calls the intrinsic
+            // RegExp protocol methods without this dispatch, after the same
+            // tests as the turns above, and `calls_in_place` repeats them to
+            // enter a bound call's target, a Proxy call's trap or target or a
+            // `Reflect.apply` or `Reflect.construct` target in place: keep the
+            // three in step.
             if native.is_some() || method.is_some() {
                 // Native / native-method: build the [THIS, FUNCTION, RESULT,
                 // FRAME] frame + args, dispatch, and take the pushed result.
@@ -526,16 +985,137 @@ impl Interp {
         args: &[Slot],
         new_target: Slot,
     ) -> Result<Slot, Step> {
-        let f = match func.value {
-            Payload::Reference(f) if func.kind == Kind::Reference => f,
-            _ => return Err(self.catchable_type_error_msg("new: not a constructor".into())),
+        // A Proxy with no `construct` trap forwards to its target: the loop
+        // in `construct_value_turns` takes each forward as a further turn,
+        // charging the layer one unit held until the construction returns,
+        // as the recursion through `proxy_construct` held it (B1).
+        let mut held = 0usize;
+        let result = self.construct_value_turns(code, func, args, new_target, &mut held);
+        self.leave_native_frame(held);
+        result
+    }
+
+    /// One Proxy layer of [`Self::invoke_value_turns`], out of line so the
+    /// step's trap lookup never widens the frame every call level shares:
+    /// charge the layer, then either forward to the target (the argument list
+    /// is unchanged) or turn to the `apply` trap, whose fresh argument list
+    /// is returned.
+    #[inline(never)]
+    fn invoke_proxy_turn(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        func: &mut Slot,
+        this: &mut Slot,
+        args: &[Slot],
+        held: &mut usize,
+    ) -> Result<Option<Vec<Slot>>, Step> {
+        self.forwarding_hop(held)?;
+        match self.proxy_call_step(code, proxy, *this, args)? {
+            ProxyCall::Forward(target) => {
+                *func = Slot::of(Kind::Reference, Payload::Reference(target));
+                Ok(None)
+            }
+            ProxyCall::Trap {
+                trap,
+                handler,
+                args: trap_args,
+            } => {
+                *func = trap;
+                *this = handler;
+                // A heap list, not a local array: the list outlives this turn,
+                // and a three-slot array in the loop's frame would widen every
+                // call level. Reserved fallibly so the host's refusal is
+                // `HeapExhausted`, not an abort. It is not admitted against the
+                // heap profile, as the argument array the step just built is
+                // not: admission's meter check would land after the step's
+                // unchecked ticks and move a checkpoint the recursion did not
+                // have.
+                let list = Self::reserved_vec(trap_args.len())?;
+                Ok(Some(Self::fill_scratch(list, trap_args)))
+            }
+        }
+    }
+
+    /// One bound layer of [`Self::construct_value_turns`]: BoundFunction
+    /// [[Construct]] (ECMA-262 10.4.1.2). Prepend the bound arguments to
+    /// `args`, returning the new list; let a `newTarget` naming the bound
+    /// function `f` name its target instead; and turn `func` to the target.
+    /// Charged as [`Self::invoke_value`] charges a bound call. Out of line, so
+    /// its locals do not widen the frame every construct level holds.
+    #[inline(never)]
+    fn bound_construct_step(
+        &mut self,
+        f: crate::value::SlotIndex,
+        func: &mut Slot,
+        new_target: &mut Slot,
+        args: &[Slot],
+    ) -> Result<Vec<Slot>, Step> {
+        let data = &self.bound_functions[&f];
+        let target = data.target;
+        let length = data
+            .args
+            .len()
+            .checked_add(args.len())
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        self.charge_and_check(BIND_CALL_METERING + length as u64 * BIND_CALL_PER_ARG)?;
+        let mut next = self.reserve_scratch(length)?;
+        next.extend_from_slice(&self.bound_functions[&f].args);
+        next.extend_from_slice(args);
+        if self.same_value(*new_target, *func) {
+            *new_target = Slot::of(Kind::Reference, Payload::Reference(target));
+        }
+        *func = Slot::of(Kind::Reference, Payload::Reference(target));
+        Ok(next)
+    }
+
+    /// The loop of [`Self::construct_value`].
+    #[inline(always)]
+    fn construct_value_turns(
+        &mut self,
+        code: &[u8],
+        func: Slot,
+        args: &[Slot],
+        new_target: Slot,
+        held: &mut usize,
+    ) -> Result<Slot, Step> {
+        let mut func = func;
+        let mut new_target = new_target;
+        // A bound function's construct rebuilds the argument list.
+        let mut bound_args: Option<Vec<Slot>> = None;
+        let f = loop {
+            let args = bound_args.as_deref().unwrap_or(args);
+            let f = match func.value {
+                Payload::Reference(f) if func.kind == Kind::Reference => f,
+                _ => return Err(self.catchable_type_error_msg("new: not a constructor".into())),
+            };
+            // A revoked Proxy layer is left to its construct step, which
+            // throws the revocation error.
+            let refused = if self.proxies.contains_key(&f) {
+                self.proxy_construct_refused(f)
+            } else {
+                !self.is_constructor_value(func)
+            };
+            if refused {
+                return Err(self.catchable_type_error_msg("new: not a constructor".into()));
+            }
+            if self.bound_functions.contains_key(&f) {
+                let next = self.bound_construct_step(f, &mut func, &mut new_target, args)?;
+                bound_args = Some(next);
+                continue;
+            }
+            if !self.proxies.contains_key(&f) {
+                break f;
+            }
+            self.forwarding_hop(held)?;
+            match self.proxy_construct_step(code, f, args, new_target)? {
+                ProxyStep::Forward(target) => {
+                    func = Slot::of(Kind::Reference, Payload::Reference(target));
+                }
+                ProxyStep::Done(result) => return Ok(result),
+            }
         };
-        if !self.is_constructor_value(func) {
-            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
-        }
-        if self.proxies.contains_key(&f) {
-            return self.proxy_construct(code, f, args, new_target);
-        }
+        let args = bound_args.as_deref().unwrap_or(args);
         if let Some(n) = self.native_of(f) {
             let target = match new_target.value {
                 Payload::Reference(target) if new_target.kind == Kind::Reference => target,
@@ -590,7 +1170,13 @@ impl Interp {
                 "proxy:construct-nonuser-target",
             )));
         }
-        let _ = new_target;
+        // `Reflect.construct(F, args, G)` (and a Proxy forwarding a construct)
+        // names G as `new.target`. Discarding it built the object from F's
+        // prototype and reported F as `new.target`.
+        let new_target = match new_target.value {
+            Payload::Reference(target) if new_target.kind == Kind::Reference => target,
+            _ => f,
+        };
         let argc = args.len();
         self.push(Slot::of(Kind::Uninitialized, Payload::None)); // THIS (construct)
         self.push(func);
@@ -599,6 +1185,7 @@ impl Interp {
         for a in args {
             self.push(*a);
         }
+        self.pending_new_target = (new_target != f).then_some(new_target);
         let body_start = self.enter_call(argc, 0, true)?;
         let return_depth = self.call_stack.len();
         let callee_seg = self.callee_segment(f);

@@ -1,0 +1,22 @@
+[package]
+name = "ih-snapshot-footprint"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# A standalone root, deliberately outside the rust/engine workspace, for the
+# same reason as stack-lanes/probe: the wasm32 build uses the unstable
+# panic=unwind workaround of WASM-BLOCKERS.md B1 (RUSTC_BOOTSTRAP and
+# -Zbuild-std), which the workspace's --locked builds must not inherit.
+# scripts/snapshot-footprint.py copies the workspace Cargo.lock here before
+# building, so the harness resolves every dependency the engine does.
+[workspace]
+
+[dependencies]
+ironhorse-vm = { path = "../../ironhorse-vm" }
+ironhorse-compile = { path = "../../ironhorse-compile" }
+ironhorse-snapshot = { path = ".." }
+
+# Match the workspace: guest-influenced arithmetic must not silently wrap.
+[profile.release]
+overflow-checks = true

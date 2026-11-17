@@ -1861,7 +1861,10 @@ mod tests {
         // An SES-mode / strict-only pre-skip is a genuine
         // engine gap (the actionable backlog), not a declared/structural skip.
         assert_eq!(
-            classify(Verdict::PreSkip, "ses-mode:lockdown-unimplemented"),
+            classify(
+                Verdict::PreSkip,
+                "ses-mode:lockdown-compartment-unimplemented"
+            ),
             Category::Unsupported
         );
         assert_eq!(

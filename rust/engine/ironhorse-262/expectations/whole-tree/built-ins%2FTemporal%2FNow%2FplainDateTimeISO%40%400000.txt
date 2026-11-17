@@ -13,8 +13,8 @@ built-ins/Temporal/Now/plainDateTimeISO/return-value-calendar.js sloppy skip:ora
 built-ins/Temporal/Now/plainDateTimeISO/return-value-calendar.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Now/plainDateTimeISO/time-zone-undefined.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Now/plainDateTimeISO/time-zone-undefined.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Now/plainDateTimeISO/timezone-string-datetime.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
-built-ins/Temporal/Now/plainDateTimeISO/timezone-string-datetime.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/Now/plainDateTimeISO/timezone-string-datetime.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError: Temporal: invalid or unsupported time zone\""
+built-ins/Temporal/Now/plainDateTimeISO/timezone-string-datetime.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError: Temporal: invalid or unsupported time zone\""
 built-ins/Temporal/Now/plainDateTimeISO/timezone-string-leap-second.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Now/plainDateTimeISO/timezone-string-leap-second.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Now/plainDateTimeISO/timezone-string-sub-minute-offset.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: -12:12:59.9 is not a valid time zone string Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: -12:12:59.9 is not a valid time zone string Expected a RangeError to be thrown but no exception was thrown at all\""

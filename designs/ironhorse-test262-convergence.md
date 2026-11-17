@@ -151,14 +151,15 @@ in or out with existing tooling (`--features-include`, as
 - `ironhorse-dual-run` — the case participates in the differential gate
   (result agreement with the XS oracle is a red build on
   divergence).
-- `ironhorse-meter-exact` — the case additionally carries the landed
-  bit-exact computron evidence: on the pinned oracle it has
-  historically metered identically, and the runner reports any drift
-  prominently. Per the accuracy-over-parity doctrine
-  ([ironhorse-engine § Metering](ironhorse-engine.md)) this
-  marker is **advisory** — a computron delta against XS is telemetry.
-  The legacy `--gate-meter-exact` flag is retained for compatibility and
-  cannot turn oracle costs into a failure.
+- `ironhorse-meter-exact` — **historical, no longer emitted** (retired
+  2026-09-15). The tag recorded that the case had, at generation time,
+  metered identically on the pinned oracle. It was always **advisory**
+  under the accuracy-over-parity doctrine
+  ([ironhorse-engine § Metering](ironhorse-engine.md)) — a computron delta
+  against XS is telemetry, and the legacy `--gate-meter-exact` flag cannot
+  turn oracle costs into a failure — but its *name* re-taught the retired
+  XS-parity framing, so `corpus-to-262` no longer writes it. Committed
+  cases still carrying it are inert; a future regeneration drops it.
   The local golden corpus supplies the release-cost regression gate.
 - `ironhorse-meter-determinism` — the case is in the determinism set:
   the runner re-runs it (`--repeat N`) and identical raw costs, results, errors, halt reasons,

@@ -25,10 +25,10 @@ built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/byteoffset-to-number-th
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/byteoffset-to-number-throws-sab.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/byteoffset-to-number-throws.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/byteoffset-to-number-throws.js strict pass
-built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/custom-proto-access-throws-sab.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/custom-proto-access-throws-sab.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/custom-proto-access-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/custom-proto-access-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/custom-proto-access-throws-sab.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/custom-proto-access-throws-sab.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/custom-proto-access-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/custom-proto-access-throws.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/defined-length-and-offset-sab.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/defined-length-and-offset-sab.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/defined-length-and-offset.js sloppy pass
@@ -95,10 +95,10 @@ built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/toindex-byteoffset.js s
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/toindex-byteoffset.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/typedarray-backed-by-sharedarraybuffer.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/typedarray-backed-by-sharedarraybuffer.js strict pass
-built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/use-custom-proto-if-object-sab.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"BigInt64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/use-custom-proto-if-object-sab.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"BigInt64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/use-custom-proto-if-object.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"BigInt64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/use-custom-proto-if-object.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"BigInt64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/use-custom-proto-if-object-sab.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/use-custom-proto-if-object-sab.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/use-custom-proto-if-object.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/use-custom-proto-if-object.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/use-default-proto-if-custom-proto-is-not-object-sab.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/use-default-proto-if-custom-proto-is-not-object-sab.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/buffer-arg/use-default-proto-if-custom-proto-is-not-object.js sloppy pass

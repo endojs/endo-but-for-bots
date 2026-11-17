@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1000" viewBox="0 0 1400 1000" role="img" aria-labelledby="title desc">
+<title id="title">Colocated mail latency: fine-grained wall-time sunburst</title>
+<desc id="desc">Concurrent filesystem and VM work is represented separately, so every millisecond is counted once. Rings show wall owner, subsystem, and operation.</desc>
+<rect width="1400" height="1000" fill="#f8fafc"/><g font-family="system-ui, sans-serif">
+<text x="44" y="54" font-size="32" fill="#334155" font-weight="650" text-anchor="start">Reference + hub append log (experiment)</text>
+<text x="44" y="86" font-size="17" fill="#64748b" font-weight="400" text-anchor="start">Colocated mailbox · fresh measured send · trial 8 · median of 9 instrumented sends</text>
+<text x="44" y="114" font-size="17" fill="#64748b" font-weight="400" text-anchor="start">Contact lookup 0.0 ms → Send / notification 181.6 ms</text>
+<path d="M 402.000,293.000 A 163,163 0 0 1 561.255,490.739 L 487.978,474.755 A 88,88 0 0 0 402.000,368.000 Z" fill="#2563eb" stroke="#f8fafc" stroke-width="1"><title>Filesystem only: 51.621 ms (28.42%)</title></path>
+<path d="M 402.000,214.000 A 242,242 0 0 1 643.344,473.807 L 567.550,468.215 A 166,166 0 0 0 402.000,290.000 Z" fill="#4a7eee" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Hub state: 47.541 ms (26.17%)</title></path>
+<text x="552.20" y="316.48" transform="rotate(47.11 552.20 316.48)" font-size="14" fill="#fff" font-weight="600" text-anchor="middle">Hub state</text>
+<path d="M 402.000,135.000 A 321,321 0 0 1 402.466,135.000 L 402.356,211.000 A 245,245 0 0 0 402.000,211.000 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Hub state / Filesystem setup: 0.042 ms (0.02%)</title></path>
+<path d="M 402.466,135.000 A 321,321 0 0 1 407.061,135.040 L 405.863,211.030 A 245,245 0 0 0 402.356,211.000 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Hub state / Open: 0.414 ms (0.23%)</title></path>
+<path d="M 407.061,135.040 A 321,321 0 0 1 410.205,135.105 L 408.262,211.080 A 245,245 0 0 0 405.863,211.030 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Hub state / Write bytes: 0.283 ms (0.16%)</title></path>
+<path d="M 410.205,135.105 A 321,321 0 0 1 721.564,425.674 L 645.904,432.854 A 245,245 0 0 0 408.262,211.080 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Hub state / File fsync: 41.938 ms (23.09%)</title></path>
+<text x="595.77" y="248.37" transform="rotate(43.02 595.77 248.37)" font-size="13" fill="#243247" font-weight="600" text-anchor="middle">File fsync</text>
+<path d="M 721.564,425.674 A 321,321 0 0 1 721.701,427.154 L 646.009,433.983 A 245,245 0 0 0 645.904,432.854 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Hub state / Close: 0.134 ms (0.07%)</title></path>
+<path d="M 721.701,427.154 A 321,321 0 0 1 722.120,432.249 L 646.328,437.872 A 245,245 0 0 0 646.009,433.983 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Hub state / Rename: 0.460 ms (0.25%)</title></path>
+<path d="M 722.120,432.249 A 321,321 0 0 1 722.130,479.620 L 646.336,474.028 A 245,245 0 0 0 646.328,437.872 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Hub state / Directory fsync: 4.270 ms (2.35%)</title></path>
+<path d="M 643.344,473.807 A 242,242 0 0 1 643.308,474.292 L 567.525,468.547 A 166,166 0 0 0 567.550,468.215 Z" fill="#4a7eee" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Other files: 0.058 ms (0.03%)</title></path>
+<path d="M 722.130,479.620 A 321,321 0 0 1 722.128,479.644 L 646.334,474.046 A 245,245 0 0 0 646.336,474.028 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Other files / Filesystem setup: 0.002 ms (0.00%)</title></path>
+<path d="M 722.128,479.644 A 321,321 0 0 1 722.117,479.793 L 646.326,474.160 A 245,245 0 0 0 646.334,474.046 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Other files / exists: 0.013 ms (0.01%)</title></path>
+<path d="M 722.117,479.793 A 321,321 0 0 1 722.082,480.263 L 646.299,474.519 A 245,245 0 0 0 646.326,474.160 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Other files / readFile: 0.042 ms (0.02%)</title></path>
+<path d="M 643.308,474.292 A 242,242 0 0 1 638.440,507.576 L 564.186,491.378 A 166,166 0 0 0 567.525,468.547 Z" fill="#4a7eee" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Worker journal: 4.022 ms (2.21%)</title></path>
+<path d="M 722.082,480.263 A 321,321 0 0 1 722.079,480.299 L 646.297,474.546 A 245,245 0 0 0 646.299,474.519 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Worker journal / Filesystem setup: 0.003 ms (0.00%)</title></path>
+<path d="M 722.079,480.299 A 321,321 0 0 1 722.075,480.347 L 646.294,474.583 A 245,245 0 0 0 646.297,474.546 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Worker journal / exists: 0.004 ms (0.00%)</title></path>
+<path d="M 722.075,480.347 A 321,321 0 0 1 722.060,480.547 L 646.283,474.735 A 245,245 0 0 0 646.294,474.583 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Worker journal / Open: 0.018 ms (0.01%)</title></path>
+<path d="M 722.060,480.547 A 321,321 0 0 1 722.048,480.701 L 646.274,474.853 A 245,245 0 0 0 646.283,474.735 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Worker journal / Write bytes: 0.014 ms (0.01%)</title></path>
+<path d="M 722.048,480.701 A 321,321 0 0 1 715.664,524.232 L 641.401,508.078 A 245,245 0 0 0 646.274,474.853 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Worker journal / File fsync: 3.966 ms (2.18%)</title></path>
+<path d="M 715.664,524.232 A 321,321 0 0 1 715.625,524.412 L 641.371,508.215 A 245,245 0 0 0 641.401,508.078 Z" fill="#6d96f2" stroke="#f8fafc" stroke-width="1"><title>Filesystem only / Worker journal / Close: 0.017 ms (0.01%)</title></path>
+<path d="M 561.255,490.739 A 163,163 0 1 1 365.364,297.171 L 382.221,370.252 A 88,88 0 1 0 487.978,474.755 Z" fill="#7c3aed" stroke="#f8fafc" stroke-width="1"><title>VM only: 123.473 ms (67.97%)</title></path>
+<path d="M 638.440,507.576 A 242,242 0 1 1 347.607,220.192 L 364.689,294.247 A 166,166 0 1 0 564.186,491.378 Z" fill="#925bf0" stroke="#f8fafc" stroke-width="1"><title>VM only / Native delivery: 123.473 ms (67.97%)</title></path>
+<text x="257.91" y="601.82" transform="rotate(404.66 257.91 601.82)" font-size="14" fill="#fff" font-weight="600" text-anchor="middle">Native delivery</text>
+<path d="M 715.625,524.412 A 321,321 0 0 1 715.226,526.218 L 641.067,509.593 A 245,245 0 0 0 641.371,508.215 Z" fill="#a77bf3" stroke="#f8fafc" stroke-width="1"><title>VM only / Native delivery / Compile / relink: 0.167 ms (0.09%)</title></path>
+<path d="M 715.226,526.218 A 321,321 0 0 1 231.525,727.991 L 271.887,663.595 A 245,245 0 0 0 641.067,509.593 Z" fill="#a77bf3" stroke="#f8fafc" stroke-width="1"><title>VM only / Native delivery / Execute / jobs: 55.222 ms (30.40%)</title></path>
+<text x="511.34" y="718.11" transform="rotate(337.36 511.34 718.11)" font-size="13" fill="#243247" font-weight="600" text-anchor="middle">Execute / jobs</text>
+<path d="M 231.525,727.991 A 321,321 0 0 1 307.443,149.243 L 329.831,221.871 A 245,245 0 0 0 271.887,663.595 Z" fill="#a77bf3" stroke="#f8fafc" stroke-width="1"><title>VM only / Native delivery / GC: 65.994 ms (36.33%)</title></path>
+<text x="120.41" y="419.06" transform="rotate(277.47 120.41 419.06)" font-size="13" fill="#243247" font-weight="600" text-anchor="middle">GC</text>
+<path d="M 307.443,149.243 A 321,321 0 0 1 319.816,145.699 L 339.274,219.166 A 245,245 0 0 0 329.831,221.871 Z" fill="#a77bf3" stroke="#f8fafc" stroke-width="1"><title>VM only / Native delivery / Finalizers: 1.159 ms (0.64%)</title></path>
+<path d="M 319.816,145.699 A 321,321 0 0 1 325.231,144.315 L 343.407,218.110 A 245,245 0 0 0 339.274,219.166 Z" fill="#a77bf3" stroke="#f8fafc" stroke-width="1"><title>VM only / Native delivery / Extraction compile: 0.503 ms (0.28%)</title></path>
+<path d="M 325.231,144.315 A 321,321 0 0 1 329.851,143.213 L 346.933,217.269 A 245,245 0 0 0 343.407,218.110 Z" fill="#a77bf3" stroke="#f8fafc" stroke-width="1"><title>VM only / Native delivery / Extract frames: 0.428 ms (0.24%)</title></path>
+<path d="M 365.364,297.171 A 163,163 0 0 1 367.275,296.742 L 383.253,370.020 A 88,88 0 0 0 382.221,370.252 Z" fill="#0d9488" stroke="#f8fafc" stroke-width="1"><title>Filesystem + VM: 0.347 ms (0.19%)</title></path>
+<path d="M 347.607,220.192 A 242,242 0 0 1 350.445,219.555 L 366.636,293.811 A 166,166 0 0 0 364.689,294.247 Z" fill="#36a69c" stroke="#f8fafc" stroke-width="1"><title>Filesystem + VM / Hub state: 0.347 ms (0.19%)</title></path>
+<path d="M 329.851,143.213 A 321,321 0 0 1 332.932,142.519 L 349.284,216.739 A 245,245 0 0 0 346.933,217.269 Z" fill="#5db7af" stroke="#f8fafc" stroke-width="1"><title>Filesystem + VM / Hub state / Directory fsync + Compile / relink: 0.284 ms (0.16%)</title></path>
+<path d="M 332.932,142.519 A 321,321 0 0 1 332.971,142.510 L 349.315,216.732 A 245,245 0 0 0 349.284,216.739 Z" fill="#5db7af" stroke="#f8fafc" stroke-width="1"><title>Filesystem + VM / Hub state / Close + Compile / relink: 0.004 ms (0.00%)</title></path>
+<path d="M 332.971,142.510 A 321,321 0 0 1 332.979,142.508 L 349.321,216.731 A 245,245 0 0 0 349.315,216.732 Z" fill="#5db7af" stroke="#f8fafc" stroke-width="1"><title>Filesystem + VM / Hub state / Filesystem setup + Compile / relink: 0.001 ms (0.00%)</title></path>
+<path d="M 332.979,142.508 A 321,321 0 0 1 333.615,142.369 L 349.806,216.624 A 245,245 0 0 0 349.321,216.731 Z" fill="#5db7af" stroke="#f8fafc" stroke-width="1"><title>Filesystem + VM / Hub state / Remove scratch + Compile / relink: 0.059 ms (0.03%)</title></path>
+<path d="M 367.275,296.742 A 163,163 0 0 1 376.482,295.010 L 388.223,369.085 A 88,88 0 0 0 383.253,370.020 Z" fill="#d97706" stroke="#f8fafc" stroke-width="1"><title>Host JS only: 1.662 ms (0.91%)</title></path>
+<path d="M 350.445,219.555 A 242,242 0 0 1 356.138,218.385 L 370.541,293.008 A 166,166 0 0 0 366.636,293.811 Z" fill="#df8e30" stroke="#f8fafc" stroke-width="1"><title>Host JS only / hub.table-serialization: 0.694 ms (0.38%)</title></path>
+<path d="M 333.615,142.369 A 321,321 0 0 1 341.166,140.817 L 355.569,215.440 A 245,245 0 0 0 349.806,216.624 Z" fill="#e6a458" stroke="#f8fafc" stroke-width="1"><title>Host JS only / hub.table-serialization: 0.694 ms (0.38%)</title></path>
+<path d="M 356.138,218.385 A 242,242 0 0 1 362.619,217.226 L 374.987,292.213 A 166,166 0 0 0 370.541,293.008 Z" fill="#df8e30" stroke="#f8fafc" stroke-width="1"><title>Host JS only / hub.json-serialization: 0.787 ms (0.43%)</title></path>
+<path d="M 341.166,140.817 A 321,321 0 0 1 349.764,139.279 L 362.131,214.266 A 245,245 0 0 0 355.569,215.440 Z" fill="#e6a458" stroke="#f8fafc" stroke-width="1"><title>Host JS only / hub.json-serialization: 0.787 ms (0.43%)</title></path>
+<path d="M 362.619,217.226 A 242,242 0 0 1 364.114,216.984 L 376.012,292.047 A 166,166 0 0 0 374.987,292.213 Z" fill="#df8e30" stroke="#f8fafc" stroke-width="1"><title>Host JS only / ui.projection: 0.181 ms (0.10%)</title></path>
+<path d="M 349.764,139.279 A 321,321 0 0 1 351.746,138.958 L 363.644,214.021 A 245,245 0 0 0 362.131,214.266 Z" fill="#e6a458" stroke="#f8fafc" stroke-width="1"><title>Host JS only / ui.projection: 0.181 ms (0.10%)</title></path>
+<path d="M 376.482,295.010 A 163,163 0 0 1 402.000,293.000 L 402.000,368.000 A 88,88 0 0 0 388.223,369.085 Z" fill="#94a3b8" stroke="#f8fafc" stroke-width="1"><title>Other / unmeasured: 4.545 ms (2.50%)</title></path>
+<path d="M 364.114,216.984 A 242,242 0 0 1 396.378,214.065 L 398.144,290.045 A 166,166 0 0 0 376.012,292.047 Z" fill="#a6b3c4" stroke="#f8fafc" stroke-width="1"><title>Other / unmeasured / Bridge / IPC gap: 3.873 ms (2.13%)</title></path>
+<path d="M 351.746,138.958 A 321,321 0 0 1 394.543,135.087 L 396.309,211.066 A 245,245 0 0 0 363.644,214.021 Z" fill="#b7c1cf" stroke="#f8fafc" stroke-width="1"><title>Other / unmeasured / Bridge / IPC gap: 3.873 ms (2.13%)</title></path>
+<path d="M 396.378,214.065 A 242,242 0 0 1 402.000,214.000 L 402.000,290.000 A 166,166 0 0 0 398.144,290.045 Z" fill="#a6b3c4" stroke="#f8fafc" stroke-width="1"><title>Other / unmeasured / Worker reply gap: 0.672 ms (0.37%)</title></path>
+<path d="M 394.543,135.087 A 321,321 0 0 1 402.000,135.000 L 402.000,211.000 A 245,245 0 0 0 396.309,211.066 Z" fill="#b7c1cf" stroke="#f8fafc" stroke-width="1"><title>Other / unmeasured / Worker reply gap: 0.672 ms (0.37%)</title></path>
+<text x="402" y="452" font-size="27" fill="#334155" font-weight="650" text-anchor="middle">181.6 ms</text>
+<text x="402" y="480" font-size="12" fill="#64748b" font-weight="400" text-anchor="middle">accepted + inbox ready</text>
+<text x="785" y="179" font-size="15" fill="#64748b" font-weight="600" text-anchor="start">EXCLUSIVE WALL-TIME SECTORS</text>
+<rect x="785" y="203" width="14" height="14" rx="3" fill="#2563eb"/>
+<text x="813" y="216" font-size="18" fill="#334155" font-weight="600" text-anchor="start">Filesystem only</text>
+<text x="1348" y="216" font-size="17" fill="#334155" font-weight="400" text-anchor="end">51.6 ms · 28.4%</text>
+<text x="813" y="247" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">Hub state</text>
+<text x="1348" y="247" font-size="15" fill="#64748b" font-weight="400" text-anchor="end">47.5 ms</text>
+<text x="813" y="271" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">Worker journal</text>
+<text x="1348" y="271" font-size="15" fill="#64748b" font-weight="400" text-anchor="end">4.0 ms</text>
+<rect x="785" y="299" width="14" height="14" rx="3" fill="#7c3aed"/>
+<text x="813" y="312" font-size="18" fill="#334155" font-weight="600" text-anchor="start">VM only</text>
+<text x="1348" y="312" font-size="17" fill="#334155" font-weight="400" text-anchor="end">123.5 ms · 68.0%</text>
+<text x="813" y="343" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">Native delivery</text>
+<text x="1348" y="343" font-size="15" fill="#64748b" font-weight="400" text-anchor="end">123.5 ms</text>
+<rect x="785" y="371" width="14" height="14" rx="3" fill="#0d9488"/>
+<text x="813" y="384" font-size="18" fill="#334155" font-weight="600" text-anchor="start">Filesystem + VM</text>
+<text x="1348" y="384" font-size="17" fill="#334155" font-weight="400" text-anchor="end">0.3 ms · 0.2%</text>
+<text x="813" y="415" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">Hub state</text>
+<text x="1348" y="415" font-size="15" fill="#64748b" font-weight="400" text-anchor="end">0.3 ms</text>
+<rect x="785" y="443" width="14" height="14" rx="3" fill="#d97706"/>
+<text x="813" y="456" font-size="18" fill="#334155" font-weight="600" text-anchor="start">Host JS only</text>
+<text x="1348" y="456" font-size="17" fill="#334155" font-weight="400" text-anchor="end">1.7 ms · 0.9%</text>
+<text x="813" y="487" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">hub.json-serialization</text>
+<text x="1348" y="487" font-size="15" fill="#64748b" font-weight="400" text-anchor="end">0.8 ms</text>
+<text x="813" y="511" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">hub.table-serialization</text>
+<text x="1348" y="511" font-size="15" fill="#64748b" font-weight="400" text-anchor="end">0.7 ms</text>
+<text x="813" y="535" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">ui.projection</text>
+<text x="1348" y="535" font-size="15" fill="#64748b" font-weight="400" text-anchor="end">0.2 ms</text>
+<rect x="785" y="563" width="14" height="14" rx="3" fill="#94a3b8"/>
+<text x="813" y="576" font-size="18" fill="#334155" font-weight="600" text-anchor="start">Other / unmeasured</text>
+<text x="1348" y="576" font-size="17" fill="#334155" font-weight="400" text-anchor="end">4.5 ms · 2.5%</text>
+<text x="813" y="607" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">Bridge / IPC gap</text>
+<text x="1348" y="607" font-size="15" fill="#64748b" font-weight="400" text-anchor="end">3.9 ms</text>
+<text x="813" y="631" font-size="15" fill="#64748b" font-weight="400" text-anchor="start">Worker reply gap</text>
+<text x="1348" y="631" font-size="15" fill="#64748b" font-weight="400" text-anchor="end">0.7 ms</text>
+<text x="44" y="837" font-size="17" fill="#334155" font-weight="400" text-anchor="start">Read the rings outward: wall-time owner → subsystem / request → operation.</text>
+<text x="44" y="869" font-size="16" fill="#64748b" font-weight="400" text-anchor="start">Filesystem + VM sectors are simultaneous work, not extra time added to either total.</text>
+<text x="44" y="899" font-size="16" fill="#64748b" font-weight="400" text-anchor="start">Other includes IPC, scheduling, instrumentation and host work not covered by explicit spans.</text>
+<text x="44" y="929" font-size="16" fill="#64748b" font-weight="400" text-anchor="start">Execution includes promise jobs. Finalizer callbacks are separate from garbage collection.</text>
+<text x="44" y="959" font-size="16" fill="#64748b" font-weight="400" text-anchor="start">Service endpoint only: HTTP, browser rendering and screen presentation are excluded.</text>
+</g></svg>

@@ -23,7 +23,7 @@ macro_rules! persist_holder {
         $emit! { $vm.$field.values().flat_map(|a| a.items().iter().map(|(_, v)| v)).any($names) }
     };
     ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, collections) => {
-        $emit! { $vm.$field.values().flat_map(|c| c.entries().iter().flatten().flat_map(|e| [&e.0, &e.1])).any($names) }
+        $emit! { $vm.$field.values().flat_map(|c| c.live_entries().flat_map(|e| [&e.0, &e.1])).any($names) }
     };
     ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, accessors) => {
         $emit! { $vm.$field.values().any(|d| d.get.as_ref().is_some_and($names) || d.set.as_ref().is_some_and($names)) }
@@ -36,6 +36,19 @@ macro_rules! persist_holder {
     };
     ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, proxies) => {
         $emit! { $vm.$field.values().any(|p| $index(p.target.0) || $index(p.handler.0)) }
+    };
+    // A WeakRef holds its target as a bare index; a cleared one holds none.
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, weak_ref) => {
+        $emit! { $vm.$field.values().any(|w| !w.target.is_null() && $index(w.target.0)) }
+    };
+    // A registry holds its callback and each cell's holdings as values, and
+    // each cell's target and token as bare indices (absent once dead).
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, finalization) => {
+        $emit! { $vm.$field.values().any(|r| $names(&r.callback) || r.cells.iter().any(|c| {
+            $names(&c.holdings)
+                || (!c.target.is_null() && $index(c.target.0))
+                || (!c.token.is_null() && $index(c.token.0))
+        })) }
     };
     ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, disposable) => {
         $emit! { $vm.$field.values().flat_map(|d| d.records.iter()).any(|r| $names(&r.resource) || $names(&r.method)) }
@@ -77,6 +90,17 @@ macro_rules! persist_holder {
     // mirrors: `Array.prototype.values.call(x)` keeps `ToObject(x)` here.
     ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, iterators) => {
         $emit! { $vm.$field.values().any(|s| $index(s.iterable.0)) }
+    };
+    // An `Array.fromAsync` accumulation holds the result capability, the
+    // map function and its `thisArg`, the iterator and its `next`, the
+    // array-like input, and a pending close error — and the accumulator
+    // object as a bare index no heap property mirrors, exactly as an
+    // iterator's iterated object is (architecture finding F127).
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, from_async) => {
+        $emit! { $vm.$field.iter().any(|f| $index(f.target.0)
+            || $names(&f.resolve) || $names(&f.reject) || $names(&f.mapfn)
+            || $names(&f.this_arg) || $names(&f.iterator) || $names(&f.next_method)
+            || $names(&f.array_like) || $names(&f.close_error)) }
     };
 }
 

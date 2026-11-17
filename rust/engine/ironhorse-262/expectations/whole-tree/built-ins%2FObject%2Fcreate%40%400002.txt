@@ -85,8 +85,8 @@ built-ins/Object/create/15.2.3.5-4-316.js sloppy pass
 built-ins/Object/create/15.2.3.5-4-316.js strict pass
 built-ins/Object/create/15.2.3.5-4-32.js sloppy pass
 built-ins/Object/create/15.2.3.5-4-32.js strict pass
-built-ins/Object/create/15.2.3.5-4-33.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: descriptor: not an object"
-built-ins/Object/create/15.2.3.5-4-33.js strict fail:"ironhorse threw where the oracle completed: TypeError: descriptor: not an object"
+built-ins/Object/create/15.2.3.5-4-33.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-33.js strict pass
 built-ins/Object/create/15.2.3.5-4-34.js sloppy pass
 built-ins/Object/create/15.2.3.5-4-34.js strict pass
 built-ins/Object/create/15.2.3.5-4-35.js sloppy pass

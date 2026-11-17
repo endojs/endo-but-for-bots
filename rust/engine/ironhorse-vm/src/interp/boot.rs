@@ -86,6 +86,21 @@ impl Interp {
         let snapshot_dirt = SnapshotDirt::default();
         let mut interp = boot_fresh!(snapshot_dirt, slots, chunks, global_obj, static_str);
         interp.create_intrinsics();
+        interp.pending_surfaces = interp.intrinsic_surface_holders();
+        interp.intrinsic_key_ranks = interp.intrinsic_key_ranks_at_boot();
+        // **After `create_intrinsics`, before `boot_slot_count` is fixed.**
+        // Both halves of that are load-bearing. After, because boot's own
+        // constructor wiring reads `ctor_prototype` back to install
+        // `prototype.constructor`, so a stand-in visible during
+        // `create_intrinsics` installs lockdown's effect at boot. Before,
+        // because `function_persists` admits a function below
+        // `boot_slot_count` by index and has no recipe for one above it --
+        // which is why minting these when a guest calls `lockdown()` made the
+        // machine unsnapshottable.
+        interp.create_locked_down_constructors();
+        interp.lockdown_complete = interp
+            .slots
+            .alloc(Slot::of(Kind::Boolean, Payload::Boolean(false)));
         interp.boot_slot_count = interp.slots.capacity();
         interp
     }
@@ -145,6 +160,20 @@ impl Interp {
         let mut default_keys: Vec<_> = self.default_keys.iter().copied().collect();
         default_keys.sort_unstable();
         term(format!("default_keys={default_keys:?}").as_bytes());
+        // The order each intrinsic object's keys are created in, and the
+        // holder each order resolved to: a snapshot whose intrinsics were
+        // laid out by other tables must be refused.
+        for (path, keys) in super::intrinsic_order::INTRINSIC_KEY_ORDER {
+            let holder = self.resolve_intrinsic_holder(path);
+            term(format!("intrinsic_key_order={path}@{holder:?}={keys:?}").as_bytes());
+        }
+        term(
+            format!(
+                "global_key_order={:?}",
+                super::intrinsic_order::GLOBAL_KEY_ORDER
+            )
+            .as_bytes(),
+        );
         term(format!("global_obj={:?}", self.realm.global_object()).as_bytes());
         term(format!("intl_object={:?}", self.intl_object).as_bytes());
         term(format!("temporal_object={:?}", self.temporal_object).as_bytes());
@@ -192,16 +221,38 @@ impl Interp {
         );
         term(format!("error_stack_accessor={:?}", self.error_stack_accessor).as_bytes());
         term(format!("template_cache={:?}", self.template_cache).as_bytes());
+        // The boot-minted `lockdown()` stand-ins. They are boot-derived
+        // identities below `boot_slot_count`, so the ledger requires them here:
+        // a snapshot written by a build with a different set must be refused,
+        // exactly as for any other boot-layout change.
+        term(
+            format!(
+                "locked_down_constructors={:?}",
+                self.locked_down_constructors
+            )
+            .as_bytes(),
+        );
+        term(format!("lockdown_complete={:?}", self.lockdown_complete).as_bytes());
         term(format!("object_proto={:?}", self.object_proto).as_bytes());
         term(format!("function_proto={:?}", self.function_proto).as_bytes());
         term(format!("array_proto={:?}", self.array_proto).as_bytes());
+        term(format!("compartment_proto={:?}", self.compartment_proto).as_bytes());
         term(format!("map_proto={:?}", self.map_proto).as_bytes());
         term(format!("set_proto={:?}", self.set_proto).as_bytes());
         term(format!("weakmap_proto={:?}", self.weakmap_proto).as_bytes());
         term(format!("weakset_proto={:?}", self.weakset_proto).as_bytes());
+        term(format!("weak_ref_proto={:?}", self.weak_ref_proto).as_bytes());
+        term(
+            format!(
+                "finalization_registry_proto={:?}",
+                self.finalization_registry_proto
+            )
+            .as_bytes(),
+        );
         term(format!("arraybuffer_proto={:?}", self.arraybuffer_proto).as_bytes());
         term(format!("dataview_proto={:?}", self.dataview_proto).as_bytes());
         term(format!("array_iterator_proto={:?}", self.array_iterator_proto).as_bytes());
+        term(format!("enumerator_proto={:?}", self.enumerator_proto).as_bytes());
         term(format!("string_proto={:?}", self.string_proto).as_bytes());
         term(format!("number_proto={:?}", self.number_proto).as_bytes());
         term(format!("boolean_proto={:?}", self.boolean_proto).as_bytes());
@@ -233,6 +284,7 @@ impl Interp {
         term(format!("regexp_split_method={:?}", self.regexp_split_method).as_bytes());
         term(format!("iterator_proto={:?}", self.iterator_proto).as_bytes());
         term(format!("iterator_wrapper_proto={:?}", self.iterator_wrapper_proto).as_bytes());
+        term(format!("iterator_helper_proto={:?}", self.iterator_helper_proto).as_bytes());
         term(format!("map_iterator_proto={:?}", self.map_iterator_proto).as_bytes());
         term(format!("set_iterator_proto={:?}", self.set_iterator_proto).as_bytes());
         term(
@@ -371,10 +423,9 @@ impl Interp {
                 Native::DisposableStack | Native::AsyncDisposableStack => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
-                // `%Array.prototype%` is itself an (empty) exotic array in XS;
-                // ironhorse models it as an ordinary boot object chaining to
-                // %Object.prototype% (its own array-ness is unobservable to the
-                // covered grammar, which never reads `Array.prototype.length`).
+                // `%Array.prototype%` is itself an empty exotic array
+                // (ES2024 23.1.3), as XS's `fxNewArrayInstance` builds it: it
+                // joins `arrays` once it is known as `array_proto` below.
                 Native::Array => self.slots.alloc(Slot::instance(object_proto)),
                 // `%Map.prototype%` / `%Set.prototype%` / `%WeakMap.prototype%`
                 // / `%WeakSet.prototype%`: plain boot objects chaining to
@@ -384,6 +435,19 @@ impl Interp {
                 Native::Map | Native::Set | Native::WeakMap | Native::WeakSet => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
+                // `%WeakRef.prototype%` / `%FinalizationRegistry.prototype%`:
+                // plain boot objects chaining to %Object.prototype%, carrying
+                // `deref` and `register`/`unregister` bound below. The
+                // per-instance target and cells live in the `weak_refs` and
+                // `finalization_registries` side tables.
+                Native::WeakRef | Native::FinalizationRegistry => {
+                    self.slots.alloc(Slot::instance(object_proto))
+                }
+                // `%Compartment.prototype%`: a plain boot object chaining to
+                // %Object.prototype%, carrying the members `create_compartment`
+                // binds below. The per-instance environment handle lives in the
+                // `guest_compartments` side table, not on the prototype.
+                Native::Compartment => self.slots.alloc(Slot::instance(object_proto)),
                 Native::Iterator => self.slots.alloc(Slot::instance(object_proto)),
                 // `%ArrayBuffer.prototype%`: a plain boot object chaining to
                 // %Object.prototype%, carrying the `byteLength` accessor and
@@ -434,6 +498,14 @@ impl Interp {
                 // iterated here — it has no `.prototype`. Unreachable in this loop.
                 Native::Proxy => unreachable!("Proxy is not a create_intrinsics loop entry"),
                 Native::Eval => unreachable!("eval is not a constructor-loop entry"),
+                // These are minted after `create_intrinsics`, then receive
+                // their `prototype` when lockdown wires them. They are not
+                // `intrinsics()` entries, so this loop never sees one.
+                Native::LockedDownConstructor => {
+                    unreachable!(
+                        "locked-down constructors are minted separately after create_intrinsics"
+                    )
+                }
                 // `%GeneratorFunction%` / `%AsyncFunction%` /
                 // `%AsyncGeneratorFunction%` are non-global and created
                 // separately (below), never yielded by `intrinsics()`.
@@ -474,6 +546,24 @@ impl Interp {
                     .push((proto, "BYTES_PER_ELEMENT", Slot::integer(size)));
             }
         }
+        // Each NativeError constructor's [[Prototype]] is %Error% (ES2024
+        // 20.5.6.2, 20.5.7.2), as XS's `fxBuildError` builds them.
+        if let Some(&error_ctor) = self.intrinsics.get("Error") {
+            for name in [
+                "EvalError",
+                "RangeError",
+                "ReferenceError",
+                "SyntaxError",
+                "TypeError",
+                "URIError",
+                "AggregateError",
+                "SuppressedError",
+            ] {
+                if let Some(&ctor) = self.intrinsics.get(name) {
+                    self.slots.get_mut(ctor).value = Payload::Reference(error_ctor);
+                }
+            }
+        }
         // Remember `%Array.prototype%` — every array literal / `new Array`
         // instance chains to it so its methods resolve up the chain.
         self.array_proto = self
@@ -481,6 +571,9 @@ impl Interp {
             .get("Array")
             .and_then(|&c| self.ctor_prototype.get(&c).copied())
             .unwrap_or(crate::value::SlotIndex::NULL);
+        if !self.array_proto.is_null() {
+            self.arrays.insert(self.array_proto, ArrayData::default());
+        }
         self.iterator_proto = self
             .intrinsics
             .get("Iterator")
@@ -523,6 +616,8 @@ impl Interp {
             ));
             let from = self.alloc_named_method(NativeMethod::IteratorFrom, "from", 1);
             self.proto_methods.push((iterator_ctor, "from", from));
+            let concat = self.alloc_named_method(NativeMethod::IteratorConcat, "concat", 0);
+            self.proto_methods.push((iterator_ctor, "concat", concat));
             // `%WrapForValidIteratorPrototype%` is shared by every generic
             // iterator wrapper, including calls inherited through a subclass
             // of `Iterator`. It is deliberately distinct from each built-in
@@ -537,6 +632,20 @@ impl Interp {
                 .push((self.iterator_wrapper_proto, "next", wrapper_next));
             self.proto_methods
                 .push((self.iterator_wrapper_proto, "return", wrapper_return));
+            // `%IteratorHelperPrototype%` is shared by every instance the five
+            // lazy helpers return. It inherits the helper surface from
+            // `%Iterator.prototype%` (so `iter.map(f).filter(g)` chains) while
+            // keeping a distinct identity and its own `next`/`return`. Like the
+            // sibling built-in iterator prototypes above, its own
+            // `Symbol.toStringTag` is unread on the covered surface and omitted.
+            self.iterator_helper_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
+            let helper_next = self.alloc_named_method(NativeMethod::IteratorHelperNext, "next", 0);
+            let helper_return =
+                self.alloc_named_method(NativeMethod::IteratorHelperReturn, "return", 0);
+            self.proto_methods
+                .push((self.iterator_helper_proto, "next", helper_next));
+            self.proto_methods
+                .push((self.iterator_helper_proto, "return", helper_return));
             for (op, (name, arity)) in [
                 ("map", 1u32),
                 ("filter", 1),
@@ -561,64 +670,47 @@ impl Interp {
         // The `Array.prototype` methods ironhorse models (dense fast paths), bound
         // as own properties of `%Array.prototype%` at link time only when the
         // program references the method name.
-        for (name, m) in [
-            ("push", NativeMethod::ArrayPush),
-            ("pop", NativeMethod::ArrayPop),
-            ("indexOf", NativeMethod::ArrayIndexOf),
-            ("join", NativeMethod::ArrayJoin),
-            ("values", NativeMethod::ArrayValues),
-            ("keys", NativeMethod::ArrayKeys),
-            ("entries", NativeMethod::ArrayEntries),
-            ("includes", NativeMethod::ArrayIncludes),
-            ("lastIndexOf", NativeMethod::ArrayLastIndexOf),
-            ("fill", NativeMethod::ArrayFill),
-            ("reverse", NativeMethod::ArrayReverse),
-            ("slice", NativeMethod::ArraySlice),
-            ("concat", NativeMethod::ArrayConcat),
-            ("at", NativeMethod::ArrayAt),
-            ("shift", NativeMethod::ArrayShift),
-            ("unshift", NativeMethod::ArrayUnshift),
-            ("copyWithin", NativeMethod::ArrayCopyWithin),
-            ("with", NativeMethod::ArrayWith),
-            ("forEach", NativeMethod::ArrayForEach),
-            ("map", NativeMethod::ArrayMap),
-            ("some", NativeMethod::ArraySome),
-            ("every", NativeMethod::ArrayEvery),
-            ("find", NativeMethod::ArrayFind),
-            ("findIndex", NativeMethod::ArrayFindIndex),
-            ("filter", NativeMethod::ArrayFilter),
-            ("reduce", NativeMethod::ArrayReduce),
-            ("reduceRight", NativeMethod::ArrayReduceRight),
-            ("findLast", NativeMethod::ArrayFindLast),
-            ("findLastIndex", NativeMethod::ArrayFindLastIndex),
-            ("toReversed", NativeMethod::ArrayToReversed),
-            ("splice", NativeMethod::ArraySplice),
-            ("flat", NativeMethod::ArrayFlat),
-            ("flatMap", NativeMethod::ArrayFlatMap),
-            ("toSpliced", NativeMethod::ArrayToSpliced),
-            ("toString", NativeMethod::ArrayToString),
-            ("sort", NativeMethod::ArraySort),
-            ("toSorted", NativeMethod::ArrayToSorted),
-            ("toLocaleString", NativeMethod::ArrayToLocaleString),
+        for (name, arity, m) in [
+            ("push", 1, NativeMethod::ArrayPush),
+            ("pop", 0, NativeMethod::ArrayPop),
+            ("indexOf", 1, NativeMethod::ArrayIndexOf),
+            ("join", 1, NativeMethod::ArrayJoin),
+            ("values", 0, NativeMethod::ArrayValues),
+            ("keys", 0, NativeMethod::ArrayKeys),
+            ("entries", 0, NativeMethod::ArrayEntries),
+            ("includes", 1, NativeMethod::ArrayIncludes),
+            ("lastIndexOf", 1, NativeMethod::ArrayLastIndexOf),
+            ("fill", 1, NativeMethod::ArrayFill),
+            ("reverse", 0, NativeMethod::ArrayReverse),
+            ("slice", 2, NativeMethod::ArraySlice),
+            ("concat", 1, NativeMethod::ArrayConcat),
+            ("at", 1, NativeMethod::ArrayAt),
+            ("shift", 0, NativeMethod::ArrayShift),
+            ("unshift", 1, NativeMethod::ArrayUnshift),
+            ("copyWithin", 2, NativeMethod::ArrayCopyWithin),
+            ("with", 2, NativeMethod::ArrayWith),
+            ("forEach", 1, NativeMethod::ArrayForEach),
+            ("map", 1, NativeMethod::ArrayMap),
+            ("some", 1, NativeMethod::ArraySome),
+            ("every", 1, NativeMethod::ArrayEvery),
+            ("find", 1, NativeMethod::ArrayFind),
+            ("findIndex", 1, NativeMethod::ArrayFindIndex),
+            ("filter", 1, NativeMethod::ArrayFilter),
+            ("reduce", 1, NativeMethod::ArrayReduce),
+            ("reduceRight", 1, NativeMethod::ArrayReduceRight),
+            ("findLast", 1, NativeMethod::ArrayFindLast),
+            ("findLastIndex", 1, NativeMethod::ArrayFindLastIndex),
+            ("toReversed", 0, NativeMethod::ArrayToReversed),
+            ("splice", 2, NativeMethod::ArraySplice),
+            ("flat", 0, NativeMethod::ArrayFlat),
+            ("flatMap", 1, NativeMethod::ArrayFlatMap),
+            ("toSpliced", 2, NativeMethod::ArrayToSpliced),
+            ("toString", 0, NativeMethod::ArrayToString),
+            ("sort", 1, NativeMethod::ArraySort),
+            ("toSorted", 1, NativeMethod::ArrayToSorted),
+            ("toLocaleString", 0, NativeMethod::ArrayToLocaleString),
         ] {
-            let mf = match m {
-                NativeMethod::ArraySort | NativeMethod::ArrayToSorted => {
-                    self.alloc_named_method(m, name, 1)
-                }
-                NativeMethod::ArrayPush => self.alloc_named_method(m, name, 1),
-                NativeMethod::ArrayPop => self.alloc_named_method(m, name, 0),
-                NativeMethod::ArrayShift => self.alloc_named_method(m, name, 0),
-                NativeMethod::ArrayUnshift => self.alloc_named_method(m, name, 1),
-                NativeMethod::ArraySlice => self.alloc_named_method(m, name, 2),
-                NativeMethod::ArrayConcat => self.alloc_named_method(m, name, 1),
-                NativeMethod::ArrayWith | NativeMethod::ArrayToSpliced => {
-                    self.alloc_named_method(m, name, 2)
-                }
-                NativeMethod::ArrayToReversed => self.alloc_named_method(m, name, 0),
-                NativeMethod::ArrayFlat => self.alloc_named_method(m, name, 0),
-                NativeMethod::ArrayFlatMap => self.alloc_named_method(m, name, 1),
-                _ => self.alloc_method(m),
-            };
+            let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((self.array_proto, name, mf));
         }
         // Shared `%TypedArray.prototype%` methods live on the abstract
@@ -705,6 +797,28 @@ impl Interp {
         let of = self.alloc_named_method(NativeMethod::TypedArrayOf, "of", 0);
         self.proto_methods.push((typed_array_ctor, "from", from));
         self.proto_methods.push((typed_array_ctor, "of", of));
+        // `%Uint8Array%`'s own base64 and hex members, as XS's
+        // `fxBuildDataView` installs them on that constructor and prototype.
+        if let Some(&uint8_array) = self.intrinsics.get("Uint8Array") {
+            for (name, method, arity) in [
+                ("fromBase64", NativeMethod::Uint8ArrayFromBase64, 1),
+                ("fromHex", NativeMethod::Uint8ArrayFromHex, 1),
+            ] {
+                let function = self.alloc_named_method(method, name, arity);
+                self.proto_methods.push((uint8_array, name, function));
+            }
+            if let Some(&proto) = self.ctor_prototype.get(&uint8_array) {
+                for (name, method, arity) in [
+                    ("setFromBase64", NativeMethod::Uint8ArraySetFromBase64, 1),
+                    ("setFromHex", NativeMethod::Uint8ArraySetFromHex, 1),
+                    ("toBase64", NativeMethod::Uint8ArrayToBase64, 0),
+                    ("toHex", NativeMethod::Uint8ArrayToHex, 0),
+                ] {
+                    let function = self.alloc_named_method(method, name, arity);
+                    self.proto_methods.push((proto, name, function));
+                }
+            }
+        }
         // Allocated now and installed under the well-known symbol key during
         // intrinsic linking, once that realm-local key id is available.
         let _ = self.alloc_named_method(
@@ -717,8 +831,16 @@ impl Interp {
         // `values`/`keys`/`entries` chain to it).
         let array_iter_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
         self.array_iterator_proto = array_iter_proto;
-        let next_mf = self.alloc_method(NativeMethod::ArrayIteratorNext);
+        let next_mf = self.alloc_named_method(NativeMethod::ArrayIteratorNext, "next", 0);
         self.proto_methods.push((array_iter_proto, "next", next_mf));
+        // The for-in enumerators' private prototype (XS's
+        // `mxEnumeratorFunction.prototype`): it inherits
+        // `%IteratorPrototype%` and holds a `next` no global reaches.
+        let enumerator_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
+        self.enumerator_proto = enumerator_proto;
+        let enumerator_next = self.alloc_named_method(NativeMethod::EnumeratorNext, "next", 0);
+        self.proto_methods
+            .push((enumerator_proto, "next", enumerator_next));
         // Collection iterators have distinct intrinsic prototypes and `next`
         // function identities.  They share the iterator-state representation
         // with Array iterators, but the methods must reject an iterator of the
@@ -745,7 +867,7 @@ impl Interp {
         // `Array.isArray` — a static bound as an own property of the `Array`
         // constructor instance (not the prototype).
         if let Some(&array_ctor) = self.intrinsics.get("Array") {
-            let mf = self.alloc_method(NativeMethod::ArrayIsArray);
+            let mf = self.alloc_named_method(NativeMethod::ArrayIsArray, "isArray", 1);
             self.proto_methods.push((array_ctor, "isArray", mf));
             let of = self.alloc_named_method(NativeMethod::ArrayOf, "of", 0);
             self.proto_methods.push((array_ctor, "of", of));
@@ -762,9 +884,9 @@ impl Interp {
         if let Some(&symbol_ctor) = self.intrinsics.get("Symbol") {
             if let Some(p) = self.prototype_of(symbol_ctor) {
                 self.symbol_proto = p;
-                let t = self.alloc_method(NativeMethod::SymbolToString);
+                let t = self.alloc_named_method(NativeMethod::SymbolToString, "toString", 0);
                 self.proto_methods.push((p, "toString", t));
-                let v = self.alloc_method(NativeMethod::SymbolValueOf);
+                let v = self.alloc_named_method(NativeMethod::SymbolValueOf, "valueOf", 0);
                 self.proto_methods.push((p, "valueOf", v));
                 // The property id remains lazy because it is symbol-keyed,
                 // but the function identity must be boot-minted so snapshot
@@ -791,9 +913,9 @@ impl Interp {
                     "Symbol",
                 ));
             }
-            let f = self.alloc_method(NativeMethod::SymbolFor);
+            let f = self.alloc_named_method(NativeMethod::SymbolFor, "for", 1);
             self.proto_methods.push((symbol_ctor, "for", f));
-            let k = self.alloc_method(NativeMethod::SymbolKeyFor);
+            let k = self.alloc_named_method(NativeMethod::SymbolKeyFor, "keyFor", 1);
             self.proto_methods.push((symbol_ctor, "keyFor", k));
         }
         // The collection prototypes (`%Map.prototype%` &co.), remembered so a
@@ -924,6 +1046,42 @@ impl Interp {
                 }
             }
         }
+        // `%WeakRef.prototype%` and `%FinalizationRegistry.prototype%`
+        // (`fxBuildWeakRef`/`fxBuildFinalizationRegistry`, `xsMapSet.c`):
+        // remembered so a `new WeakRef(o)` / `new FinalizationRegistry(f)`
+        // instance chains to the right one, and their methods bound with the
+        // `name`/`length` XS gives them (`deref` 0, `register` 2,
+        // `unregister` 1). `cleanupSome` is not bound: the pin compiles it
+        // out (`#if 0 // removed from FinalizationRegistry specification`).
+        self.weak_ref_proto = self
+            .intrinsics
+            .get("WeakRef")
+            .and_then(|&c| self.ctor_prototype.get(&c).copied())
+            .unwrap_or(crate::value::SlotIndex::NULL);
+        if !self.weak_ref_proto.is_null() {
+            let deref = self.alloc_named_method(NativeMethod::WeakRefDeref, "deref", 0);
+            self.proto_methods
+                .push((self.weak_ref_proto, "deref", deref));
+        }
+        self.finalization_registry_proto = self
+            .intrinsics
+            .get("FinalizationRegistry")
+            .and_then(|&c| self.ctor_prototype.get(&c).copied())
+            .unwrap_or(crate::value::SlotIndex::NULL);
+        if !self.finalization_registry_proto.is_null() {
+            for (m_name, arity, m) in [
+                ("register", 2, NativeMethod::FinalizationRegistryRegister),
+                (
+                    "unregister",
+                    1,
+                    NativeMethod::FinalizationRegistryUnregister,
+                ),
+            ] {
+                let mf = self.alloc_named_method(m, m_name, arity);
+                self.proto_methods
+                    .push((self.finalization_registry_proto, m_name, mf));
+            }
+        }
         // `Map.groupBy` / `Object.groupBy` (array-grouping proposal) — statics
         // bound as own properties of their constructor instance (not the
         // prototype), each with a proper `.name`/`.length` (arity 2).
@@ -961,17 +1119,15 @@ impl Interp {
             "transferToFixedLength",
             transfer_to_fixed,
         ));
-        for (name, m) in [
-            ("resize", NativeMethod::ArrayBufferResize),
-            ("concat", NativeMethod::ArrayBufferConcat),
+        for (name, arity, m) in [
+            ("resize", 1, NativeMethod::ArrayBufferResize),
+            ("concat", 1, NativeMethod::ArrayBufferConcat),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((self.arraybuffer_proto, name, mf));
         }
         for (name, method) in [
-            // All supported buffers are fixed length, so these getters have
-            // the same receiver checks, detachment behavior, and result.
-            ("byteLength", NativeMethod::ArrayBufferMaxByteLengthGetter),
+            ("byteLength", NativeMethod::ArrayBufferByteLengthGetter),
             ("detached", NativeMethod::ArrayBufferDetachedGetter),
             (
                 "maxByteLength",
@@ -988,10 +1144,43 @@ impl Interp {
                 "ArrayBuffer",
             ));
         }
+        // `%SharedArrayBuffer.prototype%` (`fxBuildAtomics`): the
+        // `byteLength`/`growable`/`maxByteLength` accessors and the `grow` and
+        // `slice` methods, in XS's order.
+        let shared_proto = self.intrinsic_prototype("SharedArrayBuffer");
+        if !shared_proto.is_null() {
+            for (name, method) in [
+                (
+                    "byteLength",
+                    NativeMethod::SharedArrayBufferByteLengthGetter,
+                ),
+                ("growable", NativeMethod::SharedArrayBufferGrowableGetter),
+                (
+                    "maxByteLength",
+                    NativeMethod::SharedArrayBufferMaxByteLengthGetter,
+                ),
+            ] {
+                let getter = self.alloc_named_method(method, &format!("get {name}"), 0);
+                self.proto_accessors.push((
+                    shared_proto,
+                    ProtoAccessorKey::String(name),
+                    getter,
+                    None,
+                    "SharedArrayBuffer",
+                ));
+            }
+            for (name, method, arity) in [
+                ("grow", NativeMethod::SharedArrayBufferGrow, 1),
+                ("slice", NativeMethod::SharedArrayBufferSlice, 2),
+            ] {
+                let mf = self.alloc_named_method(method, name, arity);
+                self.proto_methods.push((shared_proto, name, mf));
+            }
+        }
         // `ArrayBuffer.isView` — a static bound as an own property of the
         // `ArrayBuffer` constructor instance (not the prototype).
         if let Some(&ab_ctor) = self.intrinsics.get("ArrayBuffer") {
-            let is_view = self.alloc_method(NativeMethod::ArrayBufferIsView);
+            let is_view = self.alloc_named_method(NativeMethod::ArrayBufferIsView, "isView", 1);
             self.proto_methods.push((ab_ctor, "isView", is_view));
             // Installed under the well-known symbol key during the full
             // intrinsic-link pass, once that realm-local key id is available.
@@ -1040,6 +1229,7 @@ impl Interp {
             ("getUint32", "setUint32", 9),
             ("getFloat32", "setFloat32", 2),
             ("getFloat64", "setFloat64", 3),
+            ("getFloat16", "setFloat16", 11),
             ("getBigInt64", "setBigInt64", 0),
             ("getBigUint64", "setBigUint64", 1),
         ];
@@ -1081,12 +1271,12 @@ impl Interp {
         // helpers through the ordinary prototype walk.
         let generator_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
         self.generator_proto = generator_proto;
-        for (name, m) in [
-            ("next", NativeMethod::GeneratorNext),
-            ("return", NativeMethod::GeneratorReturn),
-            ("throw", NativeMethod::GeneratorThrow),
+        for (name, arity, m) in [
+            ("next", 1, NativeMethod::GeneratorNext),
+            ("return", 1, NativeMethod::GeneratorReturn),
+            ("throw", 1, NativeMethod::GeneratorThrow),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((generator_proto, name, mf));
         }
         // `%AsyncFunction.prototype%` (XS's `mxAsyncFunctionPrototype`,
@@ -1113,7 +1303,11 @@ impl Interp {
             let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((async_generator_proto, name, mf));
         }
-        self.async_iterator_identity = self.alloc_method(NativeMethod::AsyncIteratorIdentity);
+        self.async_iterator_identity = self.alloc_named_method(
+            NativeMethod::AsyncIteratorIdentity,
+            "[Symbol.asyncIterator]",
+            0,
+        );
         self.iterator_identity =
             self.alloc_named_method(NativeMethod::AsyncIteratorIdentity, "[Symbol.iterator]", 0);
         self.async_generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
@@ -1216,6 +1410,12 @@ impl Interp {
                 let mf = self.alloc_named_method(m, name, 1);
                 self.proto_methods.push((promise_ctor, name, mf));
             }
+            let with_resolvers =
+                self.alloc_named_method(NativeMethod::PromiseWithResolvers, "withResolvers", 0);
+            self.proto_methods
+                .push((promise_ctor, "withResolvers", with_resolvers));
+            let promise_try = self.alloc_named_method(NativeMethod::PromiseTry, "try", 1);
+            self.proto_methods.push((promise_ctor, "try", promise_try));
             // Installed under the well-known symbol key during the full
             // intrinsic-link pass, once that realm-local key id is available.
             let _ = self.alloc_named_method(
@@ -1233,13 +1433,13 @@ impl Interp {
             .get("RegExp")
             .and_then(|&c| self.ctor_prototype.get(&c).copied())
             .unwrap_or(crate::value::SlotIndex::NULL);
-        for (name, m) in [
-            ("exec", NativeMethod::RegExpExec),
-            ("test", NativeMethod::RegExpTest),
-            ("toString", NativeMethod::RegExpToString),
-            ("compile", NativeMethod::RegExpCompile),
+        for (name, arity, m) in [
+            ("exec", 1, NativeMethod::RegExpExec),
+            ("test", 1, NativeMethod::RegExpTest),
+            ("toString", 0, NativeMethod::RegExpToString),
+            ("compile", 2, NativeMethod::RegExpCompile),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((self.regexp_proto, name, mf));
         }
         self.regexp_replace_method =
@@ -1254,26 +1454,31 @@ impl Interp {
             self.alloc_named_method(NativeMethod::RegExpSplit, "[Symbol.split]", 2);
         let _ =
             self.alloc_named_method(NativeMethod::RegExpSpeciesGetter, "get [Symbol.species]", 0);
+        if let Some(&regexp_ctor) = self.intrinsics.get("RegExp") {
+            let escape = self.alloc_named_method(NativeMethod::RegExpEscape, "escape", 1);
+            self.proto_methods.push((regexp_ctor, "escape", escape));
+        }
         for (native, methods) in [
             (
                 Native::DisposableStack,
                 &[
-                    ("use", NativeMethod::DisposableStackUse),
-                    ("adopt", NativeMethod::DisposableStackAdopt),
-                    ("defer", NativeMethod::DisposableStackDefer),
-                    ("move", NativeMethod::DisposableStackMove),
-                    ("dispose", NativeMethod::DisposableStackDispose),
+                    ("use", 1, NativeMethod::DisposableStackUse),
+                    ("adopt", 2, NativeMethod::DisposableStackAdopt),
+                    ("defer", 1, NativeMethod::DisposableStackDefer),
+                    ("move", 0, NativeMethod::DisposableStackMove),
+                    ("dispose", 0, NativeMethod::DisposableStackDispose),
                 ][..],
             ),
             (
                 Native::AsyncDisposableStack,
                 &[
-                    ("use", NativeMethod::AsyncDisposableStackUse),
-                    ("adopt", NativeMethod::AsyncDisposableStackAdopt),
-                    ("defer", NativeMethod::AsyncDisposableStackDefer),
-                    ("move", NativeMethod::AsyncDisposableStackMove),
+                    ("use", 1, NativeMethod::AsyncDisposableStackUse),
+                    ("adopt", 2, NativeMethod::AsyncDisposableStackAdopt),
+                    ("defer", 1, NativeMethod::AsyncDisposableStackDefer),
+                    ("move", 0, NativeMethod::AsyncDisposableStackMove),
                     (
                         "disposeAsync",
+                        0,
                         NativeMethod::AsyncDisposableStackDisposeAsync,
                     ),
                 ][..],
@@ -1281,8 +1486,8 @@ impl Interp {
         ] {
             if let Some(&ctor) = self.intrinsics.get(native.display_name()) {
                 if let Some(proto) = self.prototype_of(ctor) {
-                    for &(name, method) in methods {
-                        let function = self.alloc_method(method);
+                    for &(name, arity, method) in methods {
+                        let function = self.alloc_named_method(method, name, arity);
                         self.proto_methods.push((proto, name, function));
                     }
                 }
@@ -1295,18 +1500,42 @@ impl Interp {
         // `valueOf`/`toString` over the wrapped primitive; %Function.prototype%
         // a `toString`.
         let obj_methods = [
-            ("toString", NativeMethod::ObjectToString),
-            ("toLocaleString", NativeMethod::ObjectToLocaleString),
-            ("valueOf", NativeMethod::ObjectValueOf),
-            ("hasOwnProperty", NativeMethod::ObjectHasOwnProperty),
-            ("isPrototypeOf", NativeMethod::ObjectIsPrototypeOf),
+            ("toString", 0, NativeMethod::ObjectToString),
+            ("toLocaleString", 0, NativeMethod::ObjectToLocaleString),
+            ("valueOf", 0, NativeMethod::ObjectValueOf),
+            ("hasOwnProperty", 1, NativeMethod::ObjectHasOwnProperty),
+            ("isPrototypeOf", 1, NativeMethod::ObjectIsPrototypeOf),
             (
                 "propertyIsEnumerable",
+                1,
                 NativeMethod::ObjectPropertyIsEnumerable,
             ),
         ];
-        for (name, m) in obj_methods {
-            let mf = self.alloc_method(m);
+        for (name, arity, m) in obj_methods {
+            let mf = self.alloc_named_method(m, name, arity);
+            self.proto_methods.push((object_proto, name, mf));
+        }
+        // Annex B's `%Object.prototype%` members (B.2.2), as XS's
+        // `fxBuildObject` installs them: the non-enumerable, configurable
+        // `__proto__` accessor and the four legacy accessor helpers.
+        let proto_getter =
+            self.alloc_named_method(NativeMethod::ObjectProtoGetter, "get __proto__", 0);
+        let proto_setter =
+            self.alloc_named_method(NativeMethod::ObjectProtoSetter, "set __proto__", 1);
+        self.proto_accessors.push((
+            object_proto,
+            ProtoAccessorKey::String("__proto__"),
+            proto_getter,
+            Some(proto_setter),
+            "__proto__",
+        ));
+        for (name, m, arity) in [
+            ("__defineGetter__", NativeMethod::ObjectDefineGetter, 2),
+            ("__defineSetter__", NativeMethod::ObjectDefineSetter, 2),
+            ("__lookupGetter__", NativeMethod::ObjectLookupGetter, 1),
+            ("__lookupSetter__", NativeMethod::ObjectLookupSetter, 1),
+        ] {
+            let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((object_proto, name, mf));
         }
         // `Object.*` statics — own methods of the `Object` constructor
@@ -1323,91 +1552,117 @@ impl Interp {
                 self.alloc_named_method(NativeMethod::ObjectFromEntries, "fromEntries", 1);
             self.proto_methods
                 .push((object_ctor, "fromEntries", from_entries));
-            let create = self.alloc_method(NativeMethod::ObjectCreate);
+            let create = self.alloc_named_method(NativeMethod::ObjectCreate, "create", 2);
             self.proto_methods.push((object_ctor, "create", create));
-            let keys = self.alloc_method(NativeMethod::ObjectKeys);
+            let keys = self.alloc_named_method(NativeMethod::ObjectKeys, "keys", 1);
             self.proto_methods.push((object_ctor, "keys", keys));
-            let gopd = self.alloc_method(NativeMethod::ObjectGetOwnPropertyDescriptor);
+            let gopd = self.alloc_named_method(
+                NativeMethod::ObjectGetOwnPropertyDescriptor,
+                "getOwnPropertyDescriptor",
+                2,
+            );
             self.proto_methods
                 .push((object_ctor, "getOwnPropertyDescriptor", gopd));
-            let get_own_property_names = self.alloc_method(NativeMethod::ObjectGetOwnPropertyNames);
+            let get_own_property_names = self.alloc_named_method(
+                NativeMethod::ObjectGetOwnPropertyNames,
+                "getOwnPropertyNames",
+                1,
+            );
             self.proto_methods
                 .push((object_ctor, "getOwnPropertyNames", get_own_property_names));
-            let defprop = self.alloc_method(NativeMethod::ObjectDefineProperty);
+            let defprop =
+                self.alloc_named_method(NativeMethod::ObjectDefineProperty, "defineProperty", 3);
             self.proto_methods
                 .push((object_ctor, "defineProperty", defprop));
-            let defprops = self.alloc_method(NativeMethod::ObjectDefineProperties);
+            let defprops = self.alloc_named_method(
+                NativeMethod::ObjectDefineProperties,
+                "defineProperties",
+                2,
+            );
             self.proto_methods
                 .push((object_ctor, "defineProperties", defprops));
-            let gopds = self.alloc_method(NativeMethod::ObjectGetOwnPropertyDescriptors);
+            let gopds = self.alloc_named_method(
+                NativeMethod::ObjectGetOwnPropertyDescriptors,
+                "getOwnPropertyDescriptors",
+                1,
+            );
             self.proto_methods
                 .push((object_ctor, "getOwnPropertyDescriptors", gopds));
-            let gops = self.alloc_method(NativeMethod::ObjectGetOwnPropertySymbols);
+            let gops = self.alloc_named_method(
+                NativeMethod::ObjectGetOwnPropertySymbols,
+                "getOwnPropertySymbols",
+                1,
+            );
             self.proto_methods
                 .push((object_ctor, "getOwnPropertySymbols", gops));
-            let values = self.alloc_method(NativeMethod::ObjectValues);
+            let values = self.alloc_named_method(NativeMethod::ObjectValues, "values", 1);
             self.proto_methods.push((object_ctor, "values", values));
-            let entries = self.alloc_method(NativeMethod::ObjectEntries);
+            let entries = self.alloc_named_method(NativeMethod::ObjectEntries, "entries", 1);
             self.proto_methods.push((object_ctor, "entries", entries));
-            let prevext = self.alloc_method(NativeMethod::ObjectPreventExtensions);
+            let prevext = self.alloc_named_method(
+                NativeMethod::ObjectPreventExtensions,
+                "preventExtensions",
+                1,
+            );
             self.proto_methods
                 .push((object_ctor, "preventExtensions", prevext));
-            let seal = self.alloc_method(NativeMethod::ObjectSeal);
+            let seal = self.alloc_named_method(NativeMethod::ObjectSeal, "seal", 1);
             self.proto_methods.push((object_ctor, "seal", seal));
-            let freeze = self.alloc_method(NativeMethod::ObjectFreeze);
+            let freeze = self.alloc_named_method(NativeMethod::ObjectFreeze, "freeze", 1);
             self.proto_methods.push((object_ctor, "freeze", freeze));
-            let isext = self.alloc_method(NativeMethod::ObjectIsExtensible);
+            let isext =
+                self.alloc_named_method(NativeMethod::ObjectIsExtensible, "isExtensible", 1);
             self.proto_methods
                 .push((object_ctor, "isExtensible", isext));
-            let issealed = self.alloc_method(NativeMethod::ObjectIsSealed);
+            let issealed = self.alloc_named_method(NativeMethod::ObjectIsSealed, "isSealed", 1);
             self.proto_methods.push((object_ctor, "isSealed", issealed));
-            let isfrozen = self.alloc_method(NativeMethod::ObjectIsFrozen);
+            let isfrozen = self.alloc_named_method(NativeMethod::ObjectIsFrozen, "isFrozen", 1);
             self.proto_methods.push((object_ctor, "isFrozen", isfrozen));
-            let getproto = self.alloc_method(NativeMethod::ObjectGetPrototypeOf);
+            let getproto =
+                self.alloc_named_method(NativeMethod::ObjectGetPrototypeOf, "getPrototypeOf", 1);
             self.proto_methods
                 .push((object_ctor, "getPrototypeOf", getproto));
-            let setproto = self.alloc_method(NativeMethod::ObjectSetPrototypeOf);
+            let setproto =
+                self.alloc_named_method(NativeMethod::ObjectSetPrototypeOf, "setPrototypeOf", 2);
             self.proto_methods
                 .push((object_ctor, "setPrototypeOf", setproto));
         }
-        let fp_tostring = self.alloc_method(NativeMethod::FunctionToString);
+        let fp_tostring = self.alloc_named_method(NativeMethod::FunctionToString, "toString", 0);
         self.proto_methods
             .push((func_proto, "toString", fp_tostring));
-        let fp_call = self.alloc_method(NativeMethod::FunctionCall);
+        let fp_call = self.alloc_named_method(NativeMethod::FunctionCall, "call", 1);
         self.proto_methods.push((func_proto, "call", fp_call));
-        let fp_apply = self.alloc_method(NativeMethod::FunctionApply);
+        let fp_apply = self.alloc_named_method(NativeMethod::FunctionApply, "apply", 2);
         self.proto_methods.push((func_proto, "apply", fp_apply));
-        let fp_bind = self.alloc_method(NativeMethod::FunctionBind);
+        let fp_bind = self.alloc_named_method(NativeMethod::FunctionBind, "bind", 1);
         self.proto_methods.push((func_proto, "bind", fp_bind));
-        // Every Error prototype (base + each subtype) gets `toString`.
-        let error_protos: Vec<crate::value::SlotIndex> = {
-            let mut v = vec![error_proto];
-            for (_, native) in Native::intrinsics() {
-                if matches!(
-                    native,
-                    Native::EvalError
-                        | Native::RangeError
-                        | Native::ReferenceError
-                        | Native::SyntaxError
-                        | Native::TypeError
-                        | Native::URIError
-                        | Native::AggregateError
-                ) {
-                    if let Some(&c) = self.intrinsics.get(native.display_name()) {
-                        if let Some(p) = self.prototype_of(c) {
-                            v.push(p);
-                        }
-                    }
-                }
-            }
-            v
-        };
-        for p in error_protos {
-            let mf = self.alloc_method(NativeMethod::ErrorToString);
-            self.proto_methods.push((p, "toString", mf));
+        // `%ThrowTypeError%`, one per realm: AddRestrictedFunctionProperties
+        // gives `%Function.prototype%` `caller` and `arguments` accessors
+        // whose getter and setter are both this function, as XS's
+        // `fxBuildFunction` does; a strict `arguments.callee` reuses it
+        // ([`Self::throw_type_error_function`]). Link freezes it.
+        let thrower = self.alloc_named_method(NativeMethod::ThrowTypeError, "", 0);
+        for name in ["caller", "arguments"] {
+            self.proto_accessors.push((
+                func_proto,
+                ProtoAccessorKey::String(name),
+                thrower,
+                Some(thrower),
+                "Function",
+            ));
         }
-        // The inherited Error prototype `name` (per type) and `message` (""
-        // on `%Error.prototype%`, inherited by subtypes). Placing `name` on
+        // `toString` lives on `%Error.prototype%` alone; each NativeError
+        // prototype inherits it (ES2024 20.5.6.3 lists only `constructor`,
+        // `message` and `name` there, as XS's `fxBuildError` installs).
+        let error_to_string = self.alloc_named_method(NativeMethod::ErrorToString, "toString", 0);
+        self.proto_methods
+            .push((error_proto, "toString", error_to_string));
+        if let Some(&error_ctor) = self.intrinsics.get("Error") {
+            let is_error = self.alloc_named_method(NativeMethod::ErrorIsError, "isError", 1);
+            self.proto_methods.push((error_ctor, "isError", is_error));
+        }
+        // Each Error prototype's own `name` (per type) and `message` (""),
+        // `%Error.prototype%`'s here and every NativeError's below. Placing `name` on
         // the prototype — not the instance — is what makes `err.name` resolve
         // up the chain while `err.hasOwnProperty('name')` is `false`, as XS.
         self.proto_data
@@ -1430,11 +1685,13 @@ impl Interp {
                     | Native::TypeError
                     | Native::URIError
                     | Native::AggregateError
+                    | Native::SuppressedError
             ) {
                 if let Some(&c) = self.intrinsics.get(native.display_name()) {
                     if let Some(p) = self.prototype_of(c) {
                         self.proto_data
                             .push((p, "name", native.display_name().to_string()));
+                        self.proto_data.push((p, "message", String::new()));
                     }
                 }
             }
@@ -1484,19 +1741,51 @@ impl Interp {
                     } else if native == Native::Boolean {
                         self.boolean_proto = p;
                     }
-                    let v = self.alloc_method(NativeMethod::WrapperValueOf);
+                    let (value_of, to_string) = match native {
+                        Native::Boolean => (
+                            NativeMethod::BooleanValueOf,
+                            Some(NativeMethod::BooleanToString),
+                        ),
+                        // `Number.prototype.toString` is radix-aware and
+                        // registered with the other Number methods below.
+                        Native::Number => (NativeMethod::NumberValueOf, None),
+                        _ => (
+                            NativeMethod::StringValueOf,
+                            Some(NativeMethod::StringToString),
+                        ),
+                    };
+                    let v = self.alloc_named_method(value_of, "valueOf", 0);
                     self.proto_methods.push((p, "valueOf", v));
-                    let t = self.alloc_method(NativeMethod::WrapperToString);
-                    self.proto_methods.push((p, "toString", t));
+                    if let Some(to_string) = to_string {
+                        let t = self.alloc_named_method(to_string, "toString", 0);
+                        self.proto_methods.push((p, "toString", t));
+                    }
                 }
             }
+        }
+        // `%String.prototype%`, `%Number.prototype%` and `%Boolean.prototype%`
+        // are themselves wrappers, of "", +0 and false (ES2024 22.1.3,
+        // 21.1.3, 20.3.3), as XS builds them with `fxNewStringInstance` and
+        // its siblings.
+        if !self.string_proto.is_null() {
+            let empty = self.new_string_units(&[]);
+            self.wrapper_data.insert(self.string_proto, empty);
+        }
+        if !self.number_proto.is_null() {
+            self.wrapper_data
+                .insert(self.number_proto, Slot::integer(0));
+        }
+        if !self.boolean_proto.is_null() {
+            self.wrapper_data
+                .insert(self.boolean_proto, Slot::boolean(false));
         }
         if let Some(&bigint_ctor) = self.intrinsics.get("BigInt") {
             if let Some(proto) = self.prototype_of(bigint_ctor) {
                 self.bigint_proto = proto;
-                let value_of = self.alloc_method(NativeMethod::BigIntValueOf);
+                let value_of = self.alloc_named_method(NativeMethod::BigIntValueOf, "valueOf", 0);
                 self.proto_methods.push((proto, "valueOf", value_of));
-                let to_string = self.alloc_method(NativeMethod::BigIntToString);
+                let to_string =
+                    self.alloc_named_method(NativeMethod::BigIntToString, "toString", 0);
                 self.proto_methods.push((proto, "toString", to_string));
                 let to_locale_string = self.alloc_named_method(
                     NativeMethod::BigIntToLocaleString,
@@ -1514,15 +1803,18 @@ impl Interp {
         self.create_math();
         self.create_string_proto();
         self.create_number_globals();
+        self.create_uri_globals();
         self.create_date();
         self.create_json();
         self.create_atomics();
         self.create_reflect();
         self.create_proxy();
+        self.create_compartment();
         self.create_eval();
         self.create_intl();
         self.create_temporal();
         self.create_hardened_globals();
+        self.create_species_accessors();
         // The test262 `$262` host object is NOT part of the boot: a hardened
         // realm's global surface must be auditable, and a host object
         // carrying an ArrayBuffer-detach primitive is exactly what lockdown
@@ -1530,8 +1822,8 @@ impl Interp {
         // [`Self::install_test262_host`] before linking.
 
         // Native function instances must inherit call/apply/bind through
-        // Function.prototype just as guest functions do. alloc_method can run
-        // before that prototype exists, so boot fixes null prototypes here.
+        // Function.prototype just as guest functions do. A native method can be
+        // allocated before that prototype exists, so boot fixes null prototypes here.
         // Only null prototypes are touched; later guest changes are preserved.
         // This boot pass does not rewrite stored heap records during restore.
         if let Some(fp) = self
@@ -1599,11 +1891,15 @@ impl Interp {
             .push((collator_proto, "constructor", collator));
         self.proto_methods.push((intl, "Collator", collator));
 
-        for (name, method) in [
-            ("getCanonicalLocales", NativeMethod::IntlGetCanonicalLocales),
-            ("supportedValuesOf", NativeMethod::IntlSupportedValuesOf),
+        for (name, arity, method) in [
+            (
+                "getCanonicalLocales",
+                1,
+                NativeMethod::IntlGetCanonicalLocales,
+            ),
+            ("supportedValuesOf", 1, NativeMethod::IntlSupportedValuesOf),
         ] {
-            let f = self.alloc_method(method);
+            let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((intl, name, f));
         }
         let list_format = self.alloc_named_native(Native::ListFormat);
@@ -1691,15 +1987,16 @@ impl Interp {
             );
             self.proto_methods.push((ctor, "supportedLocalesOf", f));
         }
-        for (name, method) in [
-            ("toString", NativeMethod::LocaleToString),
-            ("maximize", NativeMethod::LocaleMaximize),
-            ("minimize", NativeMethod::LocaleMinimize),
+        for (name, arity, method) in [
+            ("toString", 0, NativeMethod::LocaleToString),
+            ("maximize", 0, NativeMethod::LocaleMaximize),
+            ("minimize", 0, NativeMethod::LocaleMinimize),
         ] {
-            let f = self.alloc_method(method);
+            let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((locale_proto, name, f));
         }
-        let resolved = self.alloc_method(NativeMethod::CollatorResolvedOptions);
+        let resolved =
+            self.alloc_named_method(NativeMethod::CollatorResolvedOptions, "resolvedOptions", 0);
         self.proto_methods
             .push((collator_proto, "resolvedOptions", resolved));
         for (name, method, arity) in [
@@ -1818,33 +2115,35 @@ impl Interp {
         self.proto_methods.push((instant, "prototype", ip));
         self.proto_methods.push((ip, "constructor", instant));
         self.proto_methods.push((temporal, "Instant", instant));
-        for (name, method) in [
-            ("from", NativeMethod::TemporalInstantFrom),
+        for (name, arity, method) in [
+            ("from", 1, NativeMethod::TemporalInstantFrom),
             (
                 "fromEpochMilliseconds",
+                1,
                 NativeMethod::TemporalInstantFromEpochMilliseconds,
             ),
             (
                 "fromEpochNanoseconds",
+                1,
                 NativeMethod::TemporalInstantFromEpochNanoseconds,
             ),
-            ("compare", NativeMethod::TemporalInstantCompare),
+            ("compare", 2, NativeMethod::TemporalInstantCompare),
         ] {
-            let f = self.alloc_method(method);
+            let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((instant, name, f));
         }
-        for (name, method) in [
-            ("add", NativeMethod::TemporalInstantAdd),
-            ("subtract", NativeMethod::TemporalInstantSubtract),
-            ("until", NativeMethod::TemporalInstantUntil),
-            ("since", NativeMethod::TemporalInstantSince),
-            ("round", NativeMethod::TemporalInstantRound),
-            ("equals", NativeMethod::TemporalInstantEquals),
-            ("toString", NativeMethod::TemporalInstantToString),
-            ("toJSON", NativeMethod::TemporalInstantToJSON),
-            ("valueOf", NativeMethod::TemporalInstantValueOf),
+        for (name, arity, method) in [
+            ("add", 1, NativeMethod::TemporalInstantAdd),
+            ("subtract", 1, NativeMethod::TemporalInstantSubtract),
+            ("until", 1, NativeMethod::TemporalInstantUntil),
+            ("since", 1, NativeMethod::TemporalInstantSince),
+            ("round", 1, NativeMethod::TemporalInstantRound),
+            ("equals", 1, NativeMethod::TemporalInstantEquals),
+            ("toString", 0, NativeMethod::TemporalInstantToString),
+            ("toJSON", 0, NativeMethod::TemporalInstantToJSON),
+            ("valueOf", 0, NativeMethod::TemporalInstantValueOf),
         ] {
-            let f = self.alloc_method(method);
+            let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((ip, name, f));
         }
 
@@ -1855,26 +2154,26 @@ impl Interp {
         self.proto_methods.push((duration, "prototype", dp));
         self.proto_methods.push((dp, "constructor", duration));
         self.proto_methods.push((temporal, "Duration", duration));
-        for (name, method) in [
-            ("from", NativeMethod::TemporalDurationFrom),
-            ("compare", NativeMethod::TemporalDurationCompare),
+        for (name, arity, method) in [
+            ("from", 1, NativeMethod::TemporalDurationFrom),
+            ("compare", 2, NativeMethod::TemporalDurationCompare),
         ] {
-            let f = self.alloc_method(method);
+            let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((duration, name, f));
         }
-        for (name, method) in [
-            ("with", NativeMethod::TemporalDurationWith),
-            ("negated", NativeMethod::TemporalDurationNegated),
-            ("abs", NativeMethod::TemporalDurationAbs),
-            ("add", NativeMethod::TemporalDurationAdd),
-            ("subtract", NativeMethod::TemporalDurationSubtract),
-            ("round", NativeMethod::TemporalDurationRound),
-            ("total", NativeMethod::TemporalDurationTotal),
-            ("toString", NativeMethod::TemporalDurationToString),
-            ("toJSON", NativeMethod::TemporalDurationToJSON),
-            ("valueOf", NativeMethod::TemporalDurationValueOf),
+        for (name, arity, method) in [
+            ("with", 1, NativeMethod::TemporalDurationWith),
+            ("negated", 0, NativeMethod::TemporalDurationNegated),
+            ("abs", 0, NativeMethod::TemporalDurationAbs),
+            ("add", 1, NativeMethod::TemporalDurationAdd),
+            ("subtract", 1, NativeMethod::TemporalDurationSubtract),
+            ("round", 1, NativeMethod::TemporalDurationRound),
+            ("total", 1, NativeMethod::TemporalDurationTotal),
+            ("toString", 0, NativeMethod::TemporalDurationToString),
+            ("toJSON", 0, NativeMethod::TemporalDurationToJSON),
+            ("valueOf", 0, NativeMethod::TemporalDurationValueOf),
         ] {
-            let f = self.alloc_method(method);
+            let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((dp, name, f));
         }
 
@@ -1993,6 +2292,34 @@ impl Interp {
         }
     }
 
+    /// `get [Symbol.species]` on `Array`, `Map`, `Set`, `SharedArrayBuffer`
+    /// and `%TypedArray%` (ES2024 23.1.2.5, 24.1.2.3, 24.2.2.2, 25.2.4.3,
+    /// 23.2.2.4): a configurable accessor with no setter, a distinct getter
+    /// per constructor. The full link installs them under the well-known key.
+    fn create_species_accessors(&mut self) {
+        let typed_array = self.functions.iter().find_map(|(&function, info)| {
+            (info.native == Some(Native::TypedArrayBase)).then_some(function)
+        });
+        let constructors = ["Array", "Map", "Set", "SharedArrayBuffer"]
+            .map(|name| (self.intrinsics.get(name).copied(), name))
+            .into_iter()
+            .chain([(typed_array, "TypedArray")]);
+        for (constructor, guard) in constructors {
+            let Some(constructor) = constructor else {
+                continue;
+            };
+            let getter =
+                self.alloc_named_method(NativeMethod::SpeciesGetter, "get [Symbol.species]", 0);
+            self.proto_accessors.push((
+                constructor,
+                ProtoAccessorKey::WellKnownSymbol("species"),
+                getter,
+                None,
+                guard,
+            ));
+        }
+    }
+
     /// Build `%eval%` as a special non-constructor native function. It has no
     /// `.prototype`; string-source execution is handled by `XS_CODE_EVAL`,
     /// while an indirect call reaches the same explicit evaluator gap.
@@ -2024,22 +2351,22 @@ impl Interp {
         self.intrinsics.insert("Atomics", atomics);
         // (name, op-code) — the op-code indexes the dispatch in the
         // NativeMethod::Atomic arm.
-        for (name, op) in [
-            ("add", 0u8),
-            ("and", 1),
-            ("compareExchange", 2),
-            ("exchange", 3),
-            ("load", 4),
-            ("or", 5),
-            ("store", 6),
-            ("sub", 7),
-            ("xor", 8),
-            ("isLockFree", 9),
-            ("wait", 10),
-            ("notify", 11),
-            ("waitAsync", 12),
+        for (name, arity, op) in [
+            ("add", 3, 0u8),
+            ("and", 3, 1),
+            ("compareExchange", 4, 2),
+            ("exchange", 3, 3),
+            ("load", 2, 4),
+            ("or", 3, 5),
+            ("store", 3, 6),
+            ("sub", 3, 7),
+            ("xor", 3, 8),
+            ("isLockFree", 1, 9),
+            ("wait", 4, 10),
+            ("notify", 3, 11),
+            ("waitAsync", 4, 12),
         ] {
-            let mf = self.alloc_method(NativeMethod::Atomic(op));
+            let mf = self.alloc_named_method(NativeMethod::Atomic(op), name, arity);
             self.proto_methods.push((atomics, name, mf));
         }
     }
@@ -2058,45 +2385,104 @@ impl Interp {
         let object_proto = self.object_proto;
         let reflect = self.slots.alloc(Slot::instance(object_proto));
         self.intrinsics.insert("Reflect", reflect);
-        for (name, m) in [
-            ("getPrototypeOf", NativeMethod::ReflectGetPrototypeOf),
-            ("setPrototypeOf", NativeMethod::ReflectSetPrototypeOf),
-            ("isExtensible", NativeMethod::ReflectIsExtensible),
-            ("preventExtensions", NativeMethod::ReflectPreventExtensions),
+        for (name, arity, m) in [
+            ("getPrototypeOf", 1, NativeMethod::ReflectGetPrototypeOf),
+            ("setPrototypeOf", 2, NativeMethod::ReflectSetPrototypeOf),
+            ("isExtensible", 1, NativeMethod::ReflectIsExtensible),
+            (
+                "preventExtensions",
+                1,
+                NativeMethod::ReflectPreventExtensions,
+            ),
             (
                 "getOwnPropertyDescriptor",
+                2,
                 NativeMethod::ReflectGetOwnPropertyDescriptor,
             ),
-            ("defineProperty", NativeMethod::ReflectDefineProperty),
-            ("ownKeys", NativeMethod::ReflectOwnKeys),
-            ("has", NativeMethod::ReflectHas),
-            ("get", NativeMethod::ReflectGet),
-            ("set", NativeMethod::ReflectSet),
-            ("deleteProperty", NativeMethod::ReflectDeleteProperty),
-            ("apply", NativeMethod::ReflectApply),
-            ("construct", NativeMethod::ReflectConstruct),
+            ("defineProperty", 3, NativeMethod::ReflectDefineProperty),
+            ("ownKeys", 1, NativeMethod::ReflectOwnKeys),
+            ("has", 2, NativeMethod::ReflectHas),
+            ("get", 2, NativeMethod::ReflectGet),
+            ("set", 3, NativeMethod::ReflectSet),
+            ("deleteProperty", 2, NativeMethod::ReflectDeleteProperty),
+            ("apply", 3, NativeMethod::ReflectApply),
+            ("construct", 2, NativeMethod::ReflectConstruct),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((reflect, name, mf));
         }
     }
 
     /// Bind the Hardened-JavaScript global functions (`xsLockdown.c`) the
-    /// embedder installs — `harden`/`petrify` — as native function instances in
-    /// `intrinsics`, so [`Self::link_intrinsics`] binds them into the global
-    /// object under the program-local id the XS compiler assigned each name
-    /// (`typeof harden === "function"`). `lockdown` (transitively freezing the
-    /// shared intrinsics, taming Date/Math, the idempotence throw) and
-    /// `mutabilities` (the `fxVerify*` mutable-residue report) are the reported
-    /// scope fold of this child — a program that references either self-names an
-    /// honest `Halt::NotImplemented` rather than a wrong value (see their dispatch).
+    /// embedder installs — `harden`, `petrify` and `lockdown` — as native
+    /// function instances in `intrinsics`, so [`Self::link_intrinsics`] binds
+    /// them into the global object under the program-local id the XS compiler
+    /// assigned each name (`typeof harden === "function"`).
+    ///
+    /// `lockdown` is [`Interp::do_lockdown`], scoped in
+    /// `designs/ironhorse-native-lockdown.md`. `mutabilities` (the `fxVerify*`
+    /// mutable-residue report, `xsLockdown.c:486`) is still NOT bound and has
+    /// no dispatch at all: `typeof mutabilities` answers `"undefined"` and
+    /// calling it is an ordinary
+    /// `ReferenceError: get mutabilities: undefined variable`.
+    ///
+    /// An earlier revision of this comment claimed `lockdown` and
+    /// `mutabilities` were a "reported scope fold" that self-names an honest
+    /// `Halt::NotImplemented`, and pointed at "their dispatch". Measured
+    /// 2026-09-16: there was no such dispatch and no `NativeMethod` variant for
+    /// either name. `lockdown` now has both; `mutabilities` still answers with
+    /// a `ReferenceError`, which is the better of the two — an absent global
+    /// reads as absent — so it stays as it is.
+    ///
+    /// **Adding a name here moves [`Self::boot_fingerprint`]**, which hashes
+    /// this map's names and slot indices and every `functions` entry including
+    /// its `NativeMethod` variant. `Signature::check_boot` then refuses any
+    /// snapshot written by a build with a different set, so the
+    /// `ironhorse-snapshot` golden identity fixtures are regenerated whenever
+    /// this loop changes.
     fn create_hardened_globals(&mut self) {
-        for (name, m) in [
-            ("harden", NativeMethod::GlobalHarden),
-            ("petrify", NativeMethod::GlobalPetrify),
+        // These three are observable guest functions whose `name`/`length` XS
+        // pins. The shim installs them as
+        // `fxNextHostFunctionProperty(..., fx_harden, 1, "harden", ...)`,
+        // `(..., fx_lockdown, 0, "lockdown", ...)` and
+        // `(..., fx_petrify, 1, "petrify", ...)` (`xst.c:428-429`), so the
+        // arities are 1, 0, 1.
+        //
+        // Measured before this change: oracle
+        // `lockdown=lockdown/0 harden=harden/1 petrify=petrify/1`, ironhorse
+        // `lockdown=/0 harden=/0 petrify=/0`. `harden` and `petrify` predate
+        // native lockdown and were wrong in both name and arity; `lockdown`
+        // was wrong only in name, its arity already being 0. The same one-line
+        // change closes all three, so all three are fixed here rather than
+        // leaving two anonymous siblings beside a named newcomer.
+        for (name, m, arity) in [
+            ("harden", NativeMethod::GlobalHarden, 1),
+            ("petrify", NativeMethod::GlobalPetrify, 1),
+            ("lockdown", NativeMethod::GlobalLockdown, 0),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = self.alloc_named_method(m, name, arity);
             self.intrinsics.insert(name, mf);
+        }
+    }
+
+    /// Mint the inert `constructor` stand-ins `lockdown()` installs.
+    ///
+    /// Only the OBJECTS are made here. The `ctor_prototype` pairing and the
+    /// `prototype.constructor` rewiring are step 2's, at lockdown time --
+    /// registering either at boot would make boot install lockdown's effect.
+    ///
+    /// `Compartment.prototype` is here since the guest `Compartment` landed
+    /// (`designs/ironhorse-guest-compartment.md`), which is `fx_lockdown`
+    /// step 2's fifth call and the sixth pair in
+    /// [`Self::locked_down_prototypes`]. A `SlotIndex::NULL` prototype is
+    /// skipped so a partial boot mints nothing dangling.
+    fn create_locked_down_constructors(&mut self) {
+        for (prototype, arity) in self.locked_down_prototypes() {
+            if prototype == crate::value::SlotIndex::NULL {
+                continue;
+            }
+            let inert = self.mint_locked_down_constructor(arity);
+            self.locked_down_constructors.push(inert);
         }
     }
 
@@ -2176,13 +2562,7 @@ impl Interp {
             },
         );
         self.intrinsics.insert("Proxy", f);
-        let revocable = self.alloc_method(NativeMethod::ProxyRevocable);
-        let revocable_name = self.alloc_str_text("revocable");
-        self.functions.update(&revocable, |info| {
-            info.name = "revocable".to_string();
-            info.name_chunk = revocable_name;
-            info.arity = 2;
-        });
+        let revocable = self.alloc_named_method(NativeMethod::ProxyRevocable, "revocable", 2);
         self.proto_methods.push((f, "revocable", revocable));
     }
 
@@ -2197,6 +2577,8 @@ impl Interp {
         for (name, m, arity) in [
             ("stringify", NativeMethod::JsonStringify, 3),
             ("parse", NativeMethod::JsonParse, 2),
+            ("rawJSON", NativeMethod::JsonRawJson, 1),
+            ("isRawJSON", NativeMethod::JsonIsRawJson, 1),
         ] {
             let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((json, name, mf));
@@ -2210,13 +2592,13 @@ impl Interp {
         // `Number.isFinite`/`isInteger`/`isNaN`/`isSafeInteger` — statics on
         // the constructor instance; the numeric constants — its data props.
         if let Some(&ctor) = self.intrinsics.get("Number") {
-            for (name, m) in [
-                ("isFinite", NativeMethod::NumberIsFinite),
-                ("isInteger", NativeMethod::NumberIsInteger),
-                ("isNaN", NativeMethod::NumberIsNaN),
-                ("isSafeInteger", NativeMethod::NumberIsSafeInteger),
+            for (name, arity, m) in [
+                ("isFinite", 1, NativeMethod::NumberIsFinite),
+                ("isInteger", 1, NativeMethod::NumberIsInteger),
+                ("isNaN", 1, NativeMethod::NumberIsNaN),
+                ("isSafeInteger", 1, NativeMethod::NumberIsSafeInteger),
             ] {
-                let mf = self.alloc_method(m);
+                let mf = self.alloc_named_method(m, name, arity);
                 self.proto_methods.push((ctor, name, mf));
             }
             for (name, v) in [
@@ -2235,26 +2617,33 @@ impl Interp {
                 self.proto_value_data.push((ctor, name, Slot::number(v)));
             }
         }
-        // `Number.prototype.toString` (radix-aware) overrides the wrapper's
-        // plain `toString` on `%Number.prototype%`; a later push wins the
-        // link-time set, so this must follow the wrapper registration.
+        // `Number.prototype.toString` (radix-aware) and the other Number
+        // methods on `%Number.prototype%`.
         if !self.number_proto.is_null() {
-            let mf = self.alloc_method(NativeMethod::NumberToString);
+            let mf = self.alloc_named_method(NativeMethod::NumberToString, "toString", 1);
             self.proto_methods.push((self.number_proto, "toString", mf));
             let to_locale_string =
                 self.alloc_named_method(NativeMethod::NumberToLocaleString, "toLocaleString", 0);
             self.proto_methods
                 .push((self.number_proto, "toLocaleString", to_locale_string));
+            for (name, method) in [
+                ("toExponential", NativeMethod::NumberToExponential),
+                ("toFixed", NativeMethod::NumberToFixed),
+                ("toPrecision", NativeMethod::NumberToPrecision),
+            ] {
+                let function = self.alloc_named_method(method, name, 1);
+                self.proto_methods.push((self.number_proto, name, function));
+            }
         }
         // The numeric global functions, bound into the global object by name
         // (a native function instance, so `typeof parseInt === "function"`).
-        for (name, m) in [
-            ("parseInt", NativeMethod::GlobalParseInt),
-            ("parseFloat", NativeMethod::GlobalParseFloat),
-            ("isNaN", NativeMethod::GlobalIsNaN),
-            ("isFinite", NativeMethod::GlobalIsFinite),
+        for (name, arity, m) in [
+            ("parseInt", 2, NativeMethod::GlobalParseInt),
+            ("parseFloat", 1, NativeMethod::GlobalParseFloat),
+            ("isNaN", 1, NativeMethod::GlobalIsNaN),
+            ("isFinite", 1, NativeMethod::GlobalIsFinite),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = self.alloc_named_method(m, name, arity);
             self.intrinsics.insert(name, mf);
             // `Number.parseInt` and `Number.parseFloat` are aliases of the
             // corresponding global functions, including function identity.
@@ -2266,10 +2655,74 @@ impl Interp {
         }
     }
 
+    fn create_uri_globals(&mut self) {
+        for (name, method) in [
+            ("encodeURI", NativeMethod::UriEncode),
+            ("encodeURIComponent", NativeMethod::UriEncodeComponent),
+            ("decodeURI", NativeMethod::UriDecode),
+            ("decodeURIComponent", NativeMethod::UriDecodeComponent),
+            // Annex B's legacy percent encoding (B.2.1).
+            ("escape", NativeMethod::GlobalEscape),
+            ("unescape", NativeMethod::GlobalUnescape),
+        ] {
+            let function = self.alloc_named_method(method, name, 1);
+            self.intrinsics.insert(name, function);
+        }
+    }
+
     /// Register the `Date` statics and the bounded, deterministic UTC profile
     /// of `%Date.prototype%`. The embedding supplies no time-zone database;
     /// local-time operations therefore use UTC, matching the engine's existing
     /// deterministic Intl/Temporal host profile.
+    /// Register `%Compartment.prototype%`'s members (`fx_Compartment`,
+    /// `xsModule.c:2864`), scoped in `designs/ironhorse-guest-compartment.md`.
+    ///
+    /// Phase 1 binds the non-module surface: `evaluate`, the `globalThis`
+    /// getter, and `Symbol.toStringTag`. `import`/`importNow` are phase 2 and
+    /// are deliberately absent rather than present-and-refusing -- an absent
+    /// method reads as absent, which is the same judgement
+    /// `create_hardened_globals` records for `mutabilities`.
+    ///
+    /// `Symbol.toStringTag` is NOT installed here. It is a symbol-keyed data
+    /// property and the well-known symbol key ids do not exist until
+    /// `link_intrinsics` mints them, so it is installed there
+    /// ([`Self::install_intrinsic_bindings`]) against `compartment_proto`.
+    ///
+    /// **Adding a member here moves [`Self::boot_fingerprint`]**, like
+    /// `create_hardened_globals`; see that function's note.
+    fn create_compartment(&mut self) {
+        let Some(&ctor) = self.intrinsics.get("Compartment") else {
+            return;
+        };
+        let Some(proto) = self.prototype_of(ctor) else {
+            return;
+        };
+        self.compartment_proto = proto;
+        let evaluate = self.alloc_named_method(NativeMethod::CompartmentEvaluate, "evaluate", 1);
+        self.proto_methods.push((proto, "evaluate", evaluate));
+        // `globalThis` is an ACCESSOR on the prototype, not a data property on
+        // the instance: `getOwnPropertyDescriptor(Compartment.prototype,
+        // 'globalThis')` must report `{get, set: undefined, enumerable: false,
+        // configurable: true}`, and an instance must carry no own property of
+        // that name at all (`prototype/globalThis/defaults.js` enumerates a
+        // compartment's globals and compares them by identity with the outer
+        // realm's, so an own `globalThis` on the INSTANCE would not be seen,
+        // but `evaluate.js` reads `parent.globalThis.Compartment` through the
+        // prototype's getter).
+        let global_this = self.alloc_named_method(
+            NativeMethod::CompartmentGlobalThisGetter,
+            "get globalThis",
+            0,
+        );
+        self.proto_accessors.push((
+            proto,
+            ProtoAccessorKey::String("globalThis"),
+            global_this,
+            None,
+            "Compartment",
+        ));
+    }
+
     fn create_date(&mut self) {
         let Some(&ctor) = self.intrinsics.get("Date") else {
             return;
@@ -2282,6 +2735,9 @@ impl Interp {
             let f = self.alloc_named_method(NativeMethod::Date(op), name, arity);
             self.proto_methods.push((ctor, name, f));
         }
+        // Annex B's `toGMTString` is the same function object as
+        // `toUTCString` (B.2.3.2), which the table lists first.
+        let mut to_utc_string = None;
         for (name, op, arity) in [
             ("getTime", 10u8, 0u32),
             ("valueOf", 11, 0),
@@ -2304,7 +2760,6 @@ impl Interp {
             ("getTimezoneOffset", 20, 0),
             ("toISOString", 21, 0),
             ("toUTCString", 22, 0),
-            ("toGMTString", 22, 0),
             ("toString", 23, 0),
             ("toDateString", 24, 0),
             ("toTimeString", 25, 0),
@@ -2327,9 +2782,29 @@ impl Interp {
             ("setUTCMonth", 33, 2),
             ("setFullYear", 34, 3),
             ("setUTCFullYear", 34, 3),
+            // Annex B (B.2.3.1, B.2.3.2).
+            ("getYear", 35, 0),
+            ("setYear", 36, 1),
         ] {
-            let f = self.alloc_named_method(NativeMethod::Date(op), name, arity);
+            let f = match (name, to_utc_string) {
+                ("toGMTString", Some(f)) => f,
+                _ => self.alloc_named_method(NativeMethod::Date(op), name, arity),
+            };
+            if name == "toUTCString" {
+                to_utc_string = Some(f);
+            }
             self.proto_methods.push((proto, name, f));
+        }
+        // Annex B's `toGMTString` (B.2.3.3) is the `toUTCString` function
+        // object itself, as XS's `fxBuildDate` installs it.
+        if let Some((_, _, to_utc_string)) = self
+            .proto_methods
+            .iter()
+            .find(|(holder, name, _)| *holder == proto && *name == "toUTCString")
+            .copied()
+        {
+            self.proto_methods
+                .push((proto, "toGMTString", to_utc_string));
         }
         // The symbol-key id is minted lazily, but this identity belongs to the
         // realm's boot graph so snapshots can rederive it at the same slot.
@@ -2366,6 +2841,7 @@ impl Interp {
             ("at", 1, StringAt),
             ("slice", 2, StringSlice),
             ("substring", 2, StringSubstring),
+            ("substr", 2, StringSubstr),
             ("indexOf", 1, StringIndexOf),
             ("lastIndexOf", 1, StringLastIndexOf),
             ("includes", 1, StringIncludes),
@@ -2429,45 +2905,49 @@ impl Interp {
         self.math_object = math;
         self.intrinsics.insert("Math", math);
         use MathId::*;
-        for (name, id) in [
-            ("abs", Abs),
-            ("acos", Acos),
-            ("acosh", Acosh),
-            ("asin", Asin),
-            ("asinh", Asinh),
-            ("atan", Atan),
-            ("atanh", Atanh),
-            ("atan2", Atan2),
-            ("cbrt", Cbrt),
-            ("ceil", Ceil),
-            ("clz32", Clz32),
-            ("cos", Cos),
-            ("cosh", Cosh),
-            ("exp", Exp),
-            ("expm1", Expm1),
-            ("floor", Floor),
-            ("fround", Fround),
-            ("hypot", Hypot),
-            ("imul", Imul),
-            ("log", Log),
-            ("log1p", Log1p),
-            ("log10", Log10),
-            ("log2", Log2),
-            ("max", Max),
-            ("min", Min),
-            ("pow", Pow),
-            ("round", Round),
-            ("sign", Sign),
-            ("sin", Sin),
-            ("sinh", Sinh),
-            ("sqrt", Sqrt),
-            ("tan", Tan),
-            ("tanh", Tanh),
-            ("trunc", Trunc),
+        for (name, arity, id) in [
+            ("abs", 1, Abs),
+            ("acos", 1, Acos),
+            ("acosh", 1, Acosh),
+            ("asin", 1, Asin),
+            ("asinh", 1, Asinh),
+            ("atan", 1, Atan),
+            ("atanh", 1, Atanh),
+            ("atan2", 2, Atan2),
+            ("cbrt", 1, Cbrt),
+            ("ceil", 1, Ceil),
+            ("clz32", 1, Clz32),
+            ("cos", 1, Cos),
+            ("cosh", 1, Cosh),
+            ("exp", 1, Exp),
+            ("expm1", 1, Expm1),
+            ("floor", 1, Floor),
+            ("fround", 1, Fround),
+            ("hypot", 2, Hypot),
+            ("imul", 2, Imul),
+            ("log", 1, Log),
+            ("log1p", 1, Log1p),
+            ("log10", 1, Log10),
+            ("log2", 1, Log2),
+            ("max", 2, Max),
+            ("min", 2, Min),
+            ("pow", 2, Pow),
+            ("round", 1, Round),
+            ("sign", 1, Sign),
+            ("sin", 1, Sin),
+            ("sinh", 1, Sinh),
+            ("sqrt", 1, Sqrt),
+            ("tan", 1, Tan),
+            ("tanh", 1, Tanh),
+            ("trunc", 1, Trunc),
         ] {
-            let mf = self.alloc_method(NativeMethod::Math(id));
+            let mf = self.alloc_named_method(NativeMethod::Math(id), name, arity);
             self.proto_methods.push((math, name, mf));
         }
+        let f16round = self.alloc_named_method(NativeMethod::Math(F16round), "f16round", 1);
+        self.proto_methods.push((math, "f16round", f16round));
+        let sum_precise = self.alloc_named_method(NativeMethod::MathSumPrecise, "sumPrecise", 1);
+        self.proto_methods.push((math, "sumPrecise", sum_precise));
         // The numeric constants (`fxNextNumberProperty`, XS's `C_M_*`): the
         // exact IEEE doubles from `math.h`, reproduced by Rust's
         // `std::f64::consts` (identical bit patterns).
@@ -2488,25 +2968,11 @@ impl Interp {
     /// Allocate a native prototype-method function instance. Native methods
     /// are ordinary callable objects, so they inherit `%Function.prototype%`;
     /// test262's property helpers rely on that when they capture uncurried
-    /// primordials with `Function.prototype.call.bind(nativeMethod)`.
-    pub(super) fn alloc_method(&mut self, m: NativeMethod) -> crate::value::SlotIndex {
-        let f = self.slots.alloc(Slot::instance(self.function_proto));
-        let name_chunk = self.alloc_str_text("");
-        self.functions.insert(
-            f,
-            FuncInfo {
-                method: Some(m),
-                name_chunk,
-                ..FuncInfo::default()
-            },
-        );
-        f
-    }
-
-    /// Like [`Self::alloc_method`] but with the specified `name` and `length`
-    /// (arity), so the method's `.name`/`.length` own data properties match the
-    /// specification — `verifyProperty`/`propertyHelper` reads these from
-    /// [`FuncInfo`].
+    /// primordials with `Function.prototype.call.bind(nativeMethod)`. Its
+    /// `name` and `length` (arity) are the specified ones, so the method's
+    /// `.name`/`.length` own data properties match the specification —
+    /// `verifyProperty`/`propertyHelper` reads these from [`FuncInfo`]. An
+    /// anonymous built-in (a Proxy revoker, a bound `compare`) passes `""`.
     pub(super) fn alloc_named_method(
         &mut self,
         m: NativeMethod,

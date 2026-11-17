@@ -38,6 +38,8 @@ export interface SafeEventTarget {
   readonly value: string | number | boolean | undefined;
   readonly checked: boolean | undefined;
   readonly selectedIndex: number | undefined;
+  /** Caret position for text controls; never a live DOM selection. */
+  readonly selectionStart?: number;
 }
 
 /**

@@ -7,8 +7,8 @@ built-ins/Temporal/Duration/prototype/abs/builtin.js sloppy skip:oracle-host-mis
 built-ins/Temporal/Duration/prototype/abs/builtin.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/abs/length.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/abs/length.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Duration/prototype/abs/name.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/prototype/abs/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/abs/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/abs/name.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/abs/new-object.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/abs/new-object.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/abs/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"

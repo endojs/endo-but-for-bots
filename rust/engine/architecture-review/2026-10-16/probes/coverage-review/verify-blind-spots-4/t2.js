@@ -1,0 +1,1 @@
+console.log("a"); Promise.resolve().then(()=>console.log("b")); Promise.resolve().then(()=>{throw 1});

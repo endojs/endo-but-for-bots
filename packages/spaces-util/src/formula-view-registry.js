@@ -73,7 +73,24 @@ const REGISTRY = {
       'mailboxStore',
       'mailHub',
       'worker',
+      'networks',
+      'planes',
+      'guestPins',
+      'hostPins',
     ],
+    overrideLabels: {
+      // The guest-visible/guest-mutable pins directory (surfaced to the
+      // guest as `@pins`) and the formula-held, host-only pins directory
+      // that has no guest special name. Both are optional on the record:
+      // guest formulas minted before pin directories existed carry neither,
+      // and the inspector shows the "(not yet exposed)" row for those
+      // permanently. The formula store is immutable and reincarnation only
+      // re-runs `make()` against the same persisted fields, so it never adds
+      // these fields to an already-persisted record — a legacy guest gains
+      // them only by being re-minted, not by a worker restart.
+      guestPins: 'Guest pins (@pins)',
+      hostPins: 'Host pins (hidden)',
+    },
   },
   host: {
     header: 'Host',
@@ -83,12 +100,14 @@ const REGISTRY = {
       'hostHandle',
       'mainWorker',
       'nodeWorker',
+      'registry',
       'inspector',
       'petStore',
       'mailboxStore',
       'mailHub',
       'endo',
       'networks',
+      'planes',
       'pins',
     ],
   },
@@ -247,7 +266,10 @@ const REGISTRY = {
   invitation: {
     header: 'Invitation',
     helpText: 'Pending guest enrollment.',
-    propertyList: ['hostAgent', 'hostHandle', 'guestName'],
+    // The inviting agent may be a host or a guest; the record renames the
+    // legacy `hostAgent`/`hostHandle` fields to `invitingAgent`/
+    // `invitingHandle` (coercing legacy records on read).
+    propertyList: ['invitingAgent', 'invitingHandle', 'guestName'],
   },
   'pet-inspector': {
     header: 'Pet inspector',

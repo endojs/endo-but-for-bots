@@ -1,0 +1,6 @@
+{
+  "config": {
+    "max_wasm_stack": 409600
+  },
+  "expected_traps": []
+}

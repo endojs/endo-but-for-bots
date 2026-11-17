@@ -41,5 +41,5 @@ built-ins/Set/set-undefined-newtarget.js sloppy pass
 built-ins/Set/set-undefined-newtarget.js strict pass
 built-ins/Set/set.js sloppy pass
 built-ins/Set/set.js strict pass
-built-ins/Set/valid-values.js sloppy skip:ironhorse-missing-global:WeakRef
-built-ins/Set/valid-values.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/Set/valid-values.js sloppy pass
+built-ins/Set/valid-values.js strict pass

@@ -59,8 +59,8 @@ intl402/Locale/constructor-options-script-valid-undefined.js sloppy skip:oracle-
 intl402/Locale/constructor-options-script-valid-undefined.js strict skip:oracle-host-missing-intl
 intl402/Locale/constructor-options-script-valid.js sloppy skip:oracle-host-missing-intl
 intl402/Locale/constructor-options-script-valid.js strict skip:oracle-host-missing-intl
-intl402/Locale/constructor-options-throwing-getters.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: new Intl.Locale(\\\"en\\\", {get language() {throw new CustomError();}}) throws CustomError Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: new Intl.Locale(\\\"en\\\", {get language() {throw new CustomError();}}) throws CustomError Expected a CustomError to be thrown but no exception was thrown at all\""
-intl402/Locale/constructor-options-throwing-getters.js strict fail:"abort-value-differs: oracle=\"Test262Error: new Intl.Locale(\\\"en\\\", {get language() {throw new CustomError();}}) throws CustomError Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: new Intl.Locale(\\\"en\\\", {get language() {throw new CustomError();}}) throws CustomError Expected a CustomError to be thrown but no exception was thrown at all\""
+intl402/Locale/constructor-options-throwing-getters.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: new Intl.Locale(\\\"en\\\", {get language() {throw new CustomError();}}) throws CustomError Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: new Intl.Locale(\\\"en\\\", {get variants() {throw new CustomError();}}) throws CustomError Expected a CustomError to be thrown but no exception was thrown at all\""
+intl402/Locale/constructor-options-throwing-getters.js strict fail:"abort-value-differs: oracle=\"Test262Error: new Intl.Locale(\\\"en\\\", {get language() {throw new CustomError();}}) throws CustomError Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: new Intl.Locale(\\\"en\\\", {get variants() {throw new CustomError();}}) throws CustomError Expected a CustomError to be thrown but no exception was thrown at all\""
 intl402/Locale/constructor-options-variants-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: new Intl.Locale(\\\"en\\\", {variants: \\\"\\\"}) throws RangeError Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: new Intl.Locale(\\\"en\\\", {variants: \\\"\\\"}) throws RangeError Expected a RangeError to be thrown but no exception was thrown at all\""
 intl402/Locale/constructor-options-variants-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: new Intl.Locale(\\\"en\\\", {variants: \\\"\\\"}) throws RangeError Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: new Intl.Locale(\\\"en\\\", {variants: \\\"\\\"}) throws RangeError Expected a RangeError to be thrown but no exception was thrown at all\""
 intl402/Locale/constructor-options-variants-valid.js sloppy skip:oracle-host-missing-global:Intl
@@ -119,5 +119,5 @@ intl402/Locale/reject-duplicate-variants-in-tlang.js sloppy skip:oracle-host-mis
 intl402/Locale/reject-duplicate-variants-in-tlang.js strict skip:oracle-host-missing-global:Intl
 intl402/Locale/reject-duplicate-variants.js sloppy skip:oracle-host-missing-intl
 intl402/Locale/reject-duplicate-variants.js strict skip:oracle-host-missing-intl
-intl402/Locale/subclassing.js sloppy skip:oracle-host-missing-global:Intl
-intl402/Locale/subclassing.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/subclassing.js sloppy skip:oracle-host-missing-intl
+intl402/Locale/subclassing.js strict skip:oracle-host-missing-intl

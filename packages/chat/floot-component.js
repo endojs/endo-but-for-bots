@@ -7,8 +7,35 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { FlootApp } from '@endo/space-floot';
+import { makeReplyFold } from '@endo/floot/src/reply-fold.js';
+import { applyTranscript } from '@endo/floot/src/transcript-delta.js';
+import {
+  resolveMentions,
+  validateChatMessage,
+} from '@endo/floot/src/session-mentions.js';
+import {
+  makeFlootComposer,
+  decodeChatDraft,
+  chatDraftText,
+  encodeChatDraft,
+} from './floot-mentions.js';
+import { makePresetSettings } from './preset-settings.js';
+import {
+  makeSessionDrafts,
+  makeSubmissionClient,
+} from './floot-submission-client.js';
+import {
+  pendingAssistantInvocation,
+  acknowledgeAssistantInvocation,
+  claimAssistantInvocation,
+} from './assistant-launch.js';
+import { exportFlootObjects } from './floot-transfer.js';
 import { h, renderConfined, unmount } from './setup-preact-container.js';
 import { makeScreenWakeLock } from './wake-lock.js';
+import { makeFlootRecovery } from './floot-recovery.js';
+import { makeFlootNetwork } from './floot-network.js';
+import { makeFlootExecution } from './floot-execution.js';
+import { isUserSession, normalizePending } from './floot-session-state.js';
 
 // The view's controller/state/message shapes are defined (and enforced at the
 // `h(FlootApp, …)` boundary) by `@endo/space-floot`'s own types; like the other
@@ -16,27 +43,89 @@ import { makeScreenWakeLock } from './wake-lock.js';
 // them.
 
 // ── Background turns ─────────────────────────────────────────────────────────
-// A Floot turn runs on the daemon (`session.startTurn`). This side is a view: it
-// pulls the turn's disposable `watch()` stream and stops the turn only by
-// calling `cancel()`. Dropping the stream — unmount, tab close, gateway loss —
+// A Floot turn runs on the daemon, which also decides when one starts: this
+// side submits text (`session.enqueue`) and is told of the turn through the
+// session's `watch()`. It is a view: it pulls the turn's disposable `watch()`
+// stream and stops the turn only by calling `cancel()`. Dropping the stream — unmount, tab close, gateway loss —
 // detaches this viewer and leaves the turn running to finish and persist.
 // The loop is kept HERE, outside any component instance, so a remounted
 // component reattaches to the accumulated state of a still-streaming reply and
 // shows a "thinking" indicator. The entry is removed once the turn ends, so a
 // finished reply simply falls back to getHistory().
 /**
- * @typedef {{ role: 'assistant' | 'tool', text?: string, id?: string,
- *   name?: string, args?: string, result?: string | null }} TurnMessage
+ * What Floot reports a session has used: five disjoint token counts, how many
+ * turns completed or did not, and how full the model's window is now
+ * (`windowTokens` is 0 when the backend does not say).
+ *
+ * @typedef {{
+ *   inputTokens: number,
+ *   outputTokens: number,
+ *   cachedInputTokens: number,
+ *   cacheWriteInputTokens: number,
+ *   reasoningOutputTokens: number,
+ *   context?: { usedTokens: number, windowTokens: number },
+ *   turns?: number,
+ *   incompleteTurns?: number,
+ * }} FlootUsage
+ */
+
+const USAGE_COUNTS = /** @type {const} */ ([
+  'inputTokens',
+  'outputTokens',
+  'cachedInputTokens',
+  'cacheWriteInputTokens',
+  'reasoningOutputTokens',
+]);
+
+/**
+ * The counts and the context of a usage event or snapshot, as numbers. A
+ * daemon from before the newer counts sends two of them; the rest read as 0.
+ *
+ * @param {any} value
+ * @returns {FlootUsage}
+ */
+export const usageOf = value => {
+  const count = (/** @type {unknown} */ n) =>
+    typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+  /** @type {any} */
+  const usage = {};
+  for (const key of USAGE_COUNTS) usage[key] = count(value?.[key]);
+  const usedTokens = count(value?.context?.usedTokens);
+  const windowTokens = count(value?.context?.windowTokens);
+  if (usedTokens > 0 || windowTokens > 0) {
+    usage.context = { usedTokens, windowTokens };
+  }
+  return usage;
+};
+
+/**
+ * How full the window is, as a whole percent, or null when its size is not
+ * known.
+ *
+ * @param {FlootUsage | null | undefined} usage
+ */
+export const contextPercent = usage => {
+  const context = usage?.context;
+  if (!context || !(context.windowTokens > 0)) return null;
+  return Math.min(
+    100,
+    Math.round((context.usedTokens / context.windowTokens) * 100),
+  );
+};
+
+/**
+ * @typedef {import('@endo/floot/src/reply-fold.js').FoldedMessage} TurnMessage
  * @typedef {{
  *   sessionId: string,
  *   ref: Promise<any>,
+ *   target: any,
  *   retire: () => void,
  *   messages: TurnMessage[],
  *   streamingText: string,
  *   phase: string,
  *   done: boolean,
  *   error: string | null,
- *   usage: { inputTokens: number, outputTokens: number, turns: number } | null,
+ *   usage: FlootUsage | null,
  *   whenDone: Promise<void>,
  *   subscribe: (fn: (ev: { type: string }) => void) => () => void,
  *   stop: () => void,
@@ -77,10 +166,6 @@ const startFlootTurn = (registry, key, sessionId, turnRef) => {
   const listeners = new Set();
   /** @type {TurnMessage[]} */
   const messages = [];
-  // Tool calls in one batch run concurrently, so results arrive out of order —
-  // track each pending call by its id and pair its result back by id.
-  /** @type {Map<string, TurnMessage>} */
-  const pendingTools = new Map();
   let stopped = false;
   /** @type {() => void} */
   let resolveDone = () => {};
@@ -104,6 +189,9 @@ const startFlootTurn = (registry, key, sessionId, turnRef) => {
   const turn = {
     sessionId,
     ref: Promise.resolve(turnRef),
+    // The turn itself, for telling one observation from another: the session
+    // names the turn in flight by this same presence.
+    target: turnRef,
     retire() {
       // Retiring an obsolete observation never cancels daemon execution.
       if (registry.get(key) === turn) registry.delete(key);
@@ -138,91 +226,38 @@ const startFlootTurn = (registry, key, sessionId, turnRef) => {
   };
   registry.set(key, turn);
 
+  // The same fold the daemon runs: a view opens on the turn's state as of
+  // the moment `watch()` ran, so no event is lost to the round trip and a
+  // reattaching component repaints a turn already in progress; the events
+  // after it are applied the way the daemon applied them. Usage is projected
+  // to the counts this component shows.
+  const fold = makeReplyFold({
+    projectUsage: reported => ({
+      ...usageOf(reported),
+      turns: reported.turns,
+      incompleteTurns: reported.incompleteTurns || 0,
+    }),
+  });
   (async () => {
     try {
       for await (const raw of await repliesP) {
         const value = /** @type {any} */ (raw);
         if (value.type === 'snapshot') {
-          // A view opens on the turn's state as of the moment `watch()` ran, so
-          // no event is lost to the round trip and a reattaching component
-          // repaints a turn already in progress. Adopt it wholesale.
-          const { status } = value;
-          messages.length = 0;
-          // The snapshot arrives hardened; a pending tool message is still
-          // waiting for its result to be written into it, so keep copies.
-          messages.push(
-            ...status.messages.map((/** @type {TurnMessage} */ message) => ({
-              ...message,
-            })),
-          );
-          pendingTools.clear();
-          for (const message of messages) {
-            if (message.role === 'tool' && message.id && !message.result) {
-              pendingTools.set(message.id, message);
-            }
-          }
-          turn.streamingText = status.streamingText;
-          turn.phase = status.phase;
-          turn.usage = status.usage;
-          turn.error = status.error;
+          fold.adopt(turn, value.status);
           emit({ type: 'snapshot' });
-        } else if (value.type === 'delta') {
-          turn.streamingText += value.text;
-          emit({ type: 'delta' });
-        } else if (value.type === 'final') {
-          turn.streamingText = value.text;
-          emit({ type: 'final' });
-        } else if (value.type === 'tool_call') {
-          if (turn.streamingText.trim()) {
-            messages.push({
-              role: 'assistant',
-              text: turn.streamingText.trim(),
-            });
-          }
-          turn.streamingText = '';
-          const toolMsg = {
-            role: /** @type {const} */ ('tool'),
-            id: value.id,
-            name: value.name,
-            args: value.args,
-            result: /** @type {string | null} */ (null),
-          };
-          pendingTools.set(value.id, toolMsg);
-          messages.push(toolMsg);
-          emit({ type: 'tool_call' });
-        } else if (value.type === 'tool_result') {
-          const toolMsg = pendingTools.get(value.id);
-          if (toolMsg) {
-            toolMsg.result = value.result;
-            pendingTools.delete(value.id);
-          }
-          emit({ type: 'tool_result' });
-        } else if (value.type === 'phase') {
-          turn.phase = value.phase;
-          emit({ type: 'phase' });
-        } else if (value.type === 'usage') {
-          turn.usage = {
-            inputTokens: value.inputTokens,
-            outputTokens: value.outputTokens,
-            turns: value.turns,
-          };
-          emit({ type: 'usage' });
-        } else if (value.type === 'end') {
-          break;
-        } else if (value.type === 'abort') {
-          turn.error = value.reason;
-          emit({ type: 'abort' });
-          break;
+          // eslint-disable-next-line no-continue
+          continue;
         }
-      }
-      if (turn.streamingText.trim()) {
-        messages.push({ role: 'assistant', text: turn.streamingText.trim() });
-        turn.streamingText = '';
+        const terminal = fold.apply(turn, value);
+        if (value.type === 'end') break;
+        emit({ type: value.type });
+        if (terminal) break;
       }
     } catch (err) {
       turn.error = /** @type {Error} */ (err)?.message || String(err);
       emit({ type: 'abort' });
     } finally {
+      fold.finish(turn);
       turn.done = true;
       if (registry.get(key) === turn) registry.delete(key);
       emit({ type: 'done' });
@@ -488,6 +523,11 @@ export const flootComponent = (
   audioPath,
   ttsPath,
 ) => {
+  const submissionClient = makeSubmissionClient(
+    localStorage,
+    () => `${Date.now()}-${crypto.randomUUID()}`,
+  );
+  const sessionDrafts = makeSessionDrafts(submissionClient.draft, localStorage);
   // Resolve the floot factory by walking the profile path.
   /** @type {any} */
   let factory = rootPowers;
@@ -553,37 +593,82 @@ export const flootComponent = (
 
   // ── View-model state (read by getState, mutated by the host engine) ─────────
   /**
-   * @typedef {{ role: 'user' | 'assistant' | 'tool', text?: string,
-   *   meta?: { mail?: { from?: string } },
-   *   name?: string, args?: string, result?: string | null }} HistoryMessage
+   * @typedef {{ role: 'user' | 'assistant' | 'tool' | 'thinking', text?: string,
+   *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
+   *   meta?: { mail?: { from?: string }, message?: {strings: string[], names: string[]} },
+   *   name?: string, args?: string, result?: string | null, failed?: boolean }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
-   *   model: string, messages: HistoryMessage[], facet: any, loaded: boolean }}
+   *   model: string, backendId?: string, modelId?: string,
+   *   effectiveModelId?: string, reasoningEffort?: string, subscription?: string,
+   *   messages: HistoryMessage[], facet: any, loaded: boolean,
+   *   lifecycle?: string,
+   *   activity?: 'passive' | 'working' | 'error', pendingCount?: number,
+   *   transcript: { version: number, messages: readonly any[] } | null,
+   *   current: { input: string | null, message?: {strings: string[], names: string[]}, turn: any, pendingId?: string } | null,
+   *   running: { input: string, from?: string } | null,
+   *   pending: import('./floot-session-state.js').PendingState,
+   *   displayTurn: FlootTurn | null,
+   *   tail?: { input: string | null, message?: {strings: string[], names: string[]}, turn: FlootTurn } | null,
+   *   transcriptStale?: boolean }}
    *   FlootSession
+   *
+   * `messages` is the settled transcript the session pushes; `current` is the
+   * UI turn in flight and `displayTurn` this page's observation of it;
+   * `running` is whatever the agent is running, which for a mail turn is all
+   * there is; `pending` is the daemon's queue of submissions not yet run.
    * @typedef {{ id: string, title: string, description: string }} FlootPreset
    * @typedef {{ id: string, title: string, description: string,
-   *   default: boolean }} FlootModel
+   *   default: boolean, backendId?: string, backendTitle?: string, modelId?: string,
+   *   defaultReasoningEffort?: string | null, reasoningEfforts?: string[],
+   *   supportedNetworkPolicies?: string[], subscriptions?: { id: string, label: string }[],
+   *   subscriptionIds?: string[] }} FlootModel
+   * How a backend's discovery stands, per account: what the factory's
+   * `listModelCatalogs()` says, so an empty picker can say why.
+   * @typedef {{ backendId: string, accounts: Array<{ subscriptionId: string,
+   *   label?: string, pinnedOnly?: boolean, state: string,
+   *   observedAt: number | null, modelCount: number }> }} FlootCatalog
    */
 
   /** @type {FlootPreset[]} */
   let presets = [];
   /** @type {FlootModel[]} */
   let models = [];
+  /** @type {FlootCatalog[]} */
+  let catalogs = [];
+  /** Why the last discovery read failed, for the picker; `''` when it did not. */
+  let discoveryError = '';
+  /** @type {Array<{ id: string, title?: string, subscriptions: any[], supportedNetworkPolicies: string[] }>} */
+  let backends = [];
   /** @type {FlootSession[]} */
   let sessions = [];
   /** @type {string | null} */
   let activeSessionId = null;
+  let activeAssistantId = '';
+  let assistantRequested = false;
+  /** @type {Promise<void> | undefined} */
+  let assistantReady;
+  let assistantPreparing = false;
   /** @type {Map<string, 'idle' | 'streaming' | 'error'>} */
   const sessionStatus = new Map();
 
   let status = 'Loading sessions…';
+  const textDraft = text =>
+    encodeChatDraft({ strings: [text], petNames: [], edgeNames: [] });
   let inputText = '';
   let settingsOpen = false;
   // Whether the transcript should follow new content to the bottom. Tracked
   // host-side (see the scroll observer at mount) because the confined view
   // cannot touch DOM scroll positions.
   let stick = true;
-  /** @type {{ inputTokens: number, outputTokens: number } | null} */
+  /** @type {FlootUsage | null} */
   let usage = null;
+  // What each backend's account has left, as the daemon publishes it
+  // (`factory.watchAccounts()`). Plain data; see floot/src/account-watch.js.
+  /** @type {any[]} */
+  let accounts = [];
+  // The one redeem a person asked for from this page, and how it went.
+  /** @type {{ key: string, busy: boolean, message: string, error: boolean } | null} */
+  let accountAction = null;
 
   // Voice/meter state (pure data — no audio objects).
   let voiceTranscript = '';
@@ -599,7 +684,9 @@ export const flootComponent = (
   // "Screen wake lock"). A no-op until then, because `notify` runs during setup
   // and reaching a `let` before its declaration would throw.
   let updateWakeLock = () => {};
+  let syncComposer = () => {};
   const notify = () => {
+    syncComposer();
     try {
       updateWakeLock();
     } catch {
@@ -613,6 +700,11 @@ export const flootComponent = (
       }
     }
   };
+  /** What "ready" says: with no session, where to start one. */
+  const readyStatus = () =>
+    sessions.length
+      ? 'Ready.'
+      : 'Ready. No sessions yet: start one with New session.';
   const setStatus = (/** @type {string} */ s) => {
     status = s;
     notify();
@@ -650,47 +742,52 @@ export const flootComponent = (
     return session.facet;
   };
 
-  const liveTurnFor = (/** @type {string} */ id) => {
-    const turn = turnsForFactory(factory).get(id);
-    return turn && !turn.done ? turn : null;
+  // A session has work outstanding while a turn is in flight or a submission
+  // waits behind one. Both are the daemon's to say (see `applySessionEvent`).
+  const hasOutstandingWork = () => {
+    const session = sessions.find(s => s.id === activeSessionId);
+    return Boolean(
+      session && (session.current || session.pending.entries.length > 0),
+    );
   };
+  const recovery = makeFlootRecovery({
+    notify,
+    isBusy: hasOutstandingWork,
+  });
+  const network = makeFlootNetwork({
+    notify,
+    isBusy: () =>
+      Boolean(recovery.getState().resolving || hasOutstandingWork()),
+  });
+  const execution = makeFlootExecution({ notify });
+  /** @type {ReturnType<typeof makeFlootComposer> | undefined} */
+  let composer;
 
-  /** @param {any[]} history
-   * @returns {HistoryMessage[]} */
+  /**
+   * @param {any[]} history
+    @returns {HistoryMessage[]} */
   const historyMessages = history => {
     return history.map((/** @type {any} */ m) =>
       m.role === 'tool'
-        ? { role: 'tool', name: m.name, args: m.args, result: m.result }
+        ? {
+            role: 'tool',
+            name: m.name,
+            args: m.args,
+            result: m.result,
+            ...(m.failed === undefined ? {} : { failed: m.failed }),
+          }
         : {
-            role: m.role === 'user' ? 'user' : 'assistant',
+            role:
+              m.role === 'user'
+                ? 'user'
+                : m.role === 'thinking'
+                  ? 'thinking'
+                  : 'assistant',
             text: m.content,
+            ...(m.thinking ? { thinking: m.thinking } : {}),
             ...(m.meta ? { meta: m.meta } : {}),
           },
     );
-  };
-
-  // Pull the spoken transcript for a session from its guest into the cache.
-  const loadHistory = async (
-    /** @type {FlootSession} */ session,
-    historyP = E(facetFor(session)).getHistory(),
-    accept = () => true,
-  ) => {
-    const previousMessages = session.messages;
-    const previousLength = previousMessages.length;
-    try {
-      const history = await historyP;
-      // A new submission or refresh takes precedence over stale history I/O.
-      if (
-        !accept() ||
-        session.messages !== previousMessages ||
-        session.messages.length !== previousLength
-      )
-        return;
-      session.messages = historyMessages(history);
-    } catch {
-      // leave whatever we have; history just won't repaint
-    }
-    session.loaded = true;
   };
 
   // Create a new session on the factory and prepend it to the local list.
@@ -699,19 +796,54 @@ export const flootComponent = (
    * @param {string} [presetId]
    * @param {string} [model]
    * @param {string} [reasoningEffort]
+   * @param {string} [subscription] one of the backend's subscriptions; absent
+   *   or `auto` leaves the choice to the backend
+   * @param {string} [networkPolicy]
+   * @param {string} [assistantId]
    */
-  const createSession = async (title, presetId, model, reasoningEffort) => {
-    const requiresRecordForm = Boolean(
-      reasoningEffort || (model && model.includes(':')),
-    );
-    const facet = requiresRecordForm
-      ? await E(factory).createSession({
+  const createSession = async (
+    title,
+    presetId,
+    model,
+    reasoningEffort,
+    subscription,
+    networkPolicy,
+    assistantId = '',
+  ) => {
+    const selected = models.find(candidate => candidate.id === model);
+    if (
+      model &&
+      (!selected ||
+        typeof selected.backendId !== 'string' ||
+        selected.backendId === '' ||
+        typeof selected.modelId !== 'string' ||
+        selected.modelId === '')
+    ) {
+      throw Error(
+        'Selected model has no current backend/model identity; reopen the session picker',
+      );
+    }
+    // Always the record form: it is the only one that can say this session is
+    // driven from here, where replies are read aloud. The factory composes
+    // the voice rules into the system prompt of a session that says so, and
+    // of no other.
+    const facet = await (assistantId
+      ? E(factory).createAssistantSession()
+      : E(factory).createSession({
           title: title || DEFAULT_TITLE,
+          spoken: true,
+          userInitiated: true,
           ...(presetId ? { presetId } : {}),
-          ...(model ? { model } : {}),
+          ...(selected?.backendId
+            ? {
+                backendId: selected.backendId,
+                modelId: selected.modelId,
+              }
+            : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
-        })
-      : await E(factory).createSession(title || DEFAULT_TITLE, presetId, model);
+          ...(subscription && subscription !== 'auto' ? { subscription } : {}),
+          ...(networkPolicy ? { networkPolicy } : {}),
+        }));
     const info = await E(facet).getInfo();
     /** @type {FlootSession} */
     const session = {
@@ -720,30 +852,36 @@ export const flootComponent = (
       createdAt: info.createdAt || Date.now(),
       presetId: info.presetId || DEFAULT_PRESET_ID,
       model: info.model || '',
+      backendId: info.backendId || 'provider',
+      modelId: info.modelId || '',
+      effectiveModelId: info.effectiveModelId || '',
+      reasoningEffort: info.reasoningEffort || '',
+      subscription: info.subscription || 'auto',
       messages: [],
       facet,
       loaded: true,
+      transcript: null,
+      current: null,
+      running: null,
+      pending: normalizePending(null),
+      displayTurn: null,
     };
+    // A later invocation or unmount owns the UI now; still let the session
+    // watcher expose any successfully created session for inspection.
+    if (assistantId && (cancelled || activeAssistantId !== assistantId))
+      return session;
+    // The session list's own subscription reports the new session too, and
+    // usually first (`getInfo` above is a second round trip). There must be
+    // one record per session: adopt what this call learned into that one.
+    const listed = sessions.find(existing => existing.id === session.id);
+    if (listed) {
+      Object.assign(listed, { facet, loaded: true });
+      activeSessionId = listed.id;
+      return listed;
+    }
     sessions.unshift(session);
     activeSessionId = session.id;
     return session;
-  };
-
-  // Pull a session's cumulative usage from its guest and show it (cost survives
-  // restarts; a live turn updates it again via the 'usage' reply event).
-  const showSessionTokens = (/** @type {FlootSession | null} */ session) => {
-    usage = null;
-    notify();
-    if (!session) return;
-    E(facetFor(session))
-      .getUsage()
-      .then((/** @type {any} */ u) => {
-        if (activeSessionId === session.id) {
-          usage = u;
-          notify();
-        }
-      })
-      .catch(() => {});
   };
 
   // ── Snapshot ────────────────────────────────────────────────────────────────
@@ -759,10 +897,12 @@ export const flootComponent = (
           name: m.name,
           args: m.args,
           result: m.result == null ? null : m.result,
+          ...(m.failed === undefined ? {} : { failed: m.failed }),
         }
       : {
-          role: /** @type {'user' | 'assistant'} */ (m.role),
+          role: /** @type {'user' | 'assistant' | 'thinking'} */ (m.role),
           text: m.text || '',
+          ...(m.thinking ? { thinking: m.thinking } : {}),
           .../** @type {any} */ (
             /** @type {{ meta?: unknown }} */ (m).meta
               ? { meta: /** @type {{ meta?: unknown }} */ (m).meta }
@@ -770,25 +910,128 @@ export const flootComponent = (
           ),
         };
 
+  // What a session runs on, in words. The factory reports ids; the titles come
+  // from the catalogs already loaded for the new-session picker. A session
+  // whose backend or model has since left the catalog still says which it was,
+  // by id, rather than going blank.
+  const backendLabelOf = (/** @type {FlootSession} */ s) => {
+    const id = s.backendId || 'provider';
+    const known = backends.find(b => b.id === id);
+    if (known?.title) return known.title;
+    return id === 'provider' ? 'Fae' : id;
+  };
+  const modelLabelOf = (/** @type {FlootSession} */ s) => {
+    const backendId = s.backendId || 'provider';
+    const known =
+      models.find(m => m.id === s.model) ||
+      models.find(
+        m =>
+          (m.backendId || 'provider') === backendId && m.modelId === s.modelId,
+      );
+    if (known?.title) return known.title;
+    if (s.modelId || s.model) return s.modelId || s.model;
+    // An unpinned session runs whatever the factory is configured with. The
+    // catalog's `default` flag is a picker pre-selection, not a statement of
+    // what runs (a configured model outside the catalog leaves the flag on a
+    // model the session never uses), so it is not borrowed here. A factory
+    // that knows reports it as `effectiveModelId`.
+    if (s.effectiveModelId) {
+      const effective = models.find(
+        m =>
+          (m.backendId || 'provider') === backendId &&
+          (m.id === s.effectiveModelId || m.modelId === s.effectiveModelId),
+      );
+      return `${effective?.title || s.effectiveModelId} (default)`;
+    }
+    return 'default model';
+  };
+
   const getState = () => {
     const session = getActiveSession();
-    const liveTurn = session ? liveTurnFor(session.id) : null;
-    const base = session ? session.messages : [];
-    const sent = liveTurn ? [...base, ...liveTurn.messages] : base;
-    // Queued submissions render after the live turn's output: they run after
-    // it, and hiding them until then reads as a swallowed message. The view
-    // lifts them out by `pending` and puts them below the thinking indicator.
-    const queued = session
-      ? queuedSends
-          .filter(q => q.sessionId === session.id)
-          .map(q => ({
-            role: /** @type {const} */ ('user'),
-            text: q.text,
-            pending: true,
-            pendingId: q.id,
-          }))
+    const current = session ? session.current : null;
+    const shown = session ? session.displayTurn : null;
+    // The settled transcript, then the turn in flight: its prompt and this
+    // page's observation of its output. With no UI turn, whatever the agent is
+    // running on its own (a mail turn) still shows its prompt, so a session
+    // that is working never looks idle.
+    /** @type {Array<HistoryMessage | TurnMessage>} */
+    const sent = session ? [...session.messages] : [];
+    if (current) {
+      if (typeof current.input === 'string') {
+        sent.push({
+          role: 'user',
+          text: current.input,
+          ...(current.message ? { meta: { message: current.message } } : {}),
+        });
+      }
+      if (shown) sent.push(...shown.messages);
+    } else if (session?.tail) {
+      // The turn is over but the transcript that contains it could not be
+      // read yet: what was on screen stays there until it can.
+      if (typeof session.tail.input === 'string') {
+        sent.push({
+          role: 'user',
+          text: session.tail.input,
+          ...(session.tail.message
+            ? { meta: { message: session.tail.message } }
+            : {}),
+        });
+      }
+      sent.push(...session.tail.turn.messages);
+    } else if (session?.running) {
+      sent.push({
+        role: 'user',
+        text: session.running.input,
+        ...(session.running.from
+          ? { meta: { mail: { from: session.running.from } } }
+          : {}),
+      });
+    }
+    // Submissions not yet run render after the live turn's output: they run
+    // after it, and hiding them until then reads as a swallowed message. The
+    // view lifts them out by `pending` and puts them below the thinking
+    // indicator. First the daemon's queue, then what this page has sent and
+    // the daemon has not yet acknowledged.
+    const queuedEntries = session
+      ? session.pending.entries.filter(
+          // The entry being dispatched IS the turn in flight.
+          entry => !(entry.state === 'dispatching' && current),
+        )
       : [];
+    const queued = [
+      ...queuedEntries.map(entry => ({
+        role: /** @type {const} */ ('user'),
+        text: entry.text,
+        ...(entry.message ? { meta: { message: entry.message } } : {}),
+        pending: true,
+        pendingId: entry.id,
+        pendingState:
+          entry.state === 'dispatching'
+            ? /** @type {const} */ ('sending')
+            : /** @type {'queued' | 'interrupted'} */ (entry.state),
+      })),
+      // What this page has sent and the daemon has not yet been seen to have:
+      // shown until the daemon's own report of that very message arrives, so
+      // it is on screen exactly once throughout (see `reconcileSends`).
+      ...(session
+        ? inFlightSends
+            .filter(send => send.sessionId === session.id && !send.seen)
+            .map(send => ({
+              role: /** @type {const} */ ('user'),
+              text: send.text,
+              ...(send.message ? { meta: { message: send.message } } : {}),
+              pending: true,
+              pendingId: `local-${send.id}`,
+              pendingState: /** @type {const} */ ('sending'),
+            }))
+        : []),
+    ];
     const allMessages = [...sent.map(toViewMessage), ...queued];
+    const liveTurn = current && shown && !shown.done ? shown : null;
+    // A turn this page has seen finish is not one it can stop, even while the
+    // session has yet to report it gone (that waits for the transcript).
+    const stoppable = Boolean(current) && !(shown && shown.done);
+    const working = stoppable || Boolean(!current && session?.running);
     return harden({
       sessions: sessions.map(s => ({
         id: s.id,
@@ -796,35 +1039,79 @@ export const flootComponent = (
         createdAt: s.createdAt,
         presetId: s.presetId,
         model: s.model,
-        status: liveTurnFor(s.id)
-          ? /** @type {const} */ ('streaming')
-          : sessionStatus.get(s.id) || 'idle',
+        backendLabel: backendLabelOf(s),
+        modelLabel: modelLabelOf(s),
+        reasoningEffort: s.reasoningEffort || '',
+        subscription: s.subscription || 'auto',
+        // The daemon says what each session is doing; for the one on screen
+        // this page knows of a turn the moment it is told, and of a failure
+        // the moment it sees one.
+        status:
+          s.id === activeSessionId && (s.current || s.running)
+            ? /** @type {const} */ ('working')
+            : sessionStatus.get(s.id) || s.activity || 'passive',
         messageCount: s.messages.length,
+        // For the session on screen the subscription is fresher than the list.
+        pendingCount:
+          s.id === activeSessionId
+            ? s.pending.entries.length
+            : s.pendingCount || 0,
         loaded: s.loaded,
+        lifecycle: s.lifecycle,
       })),
       activeSessionId,
-      presets: presets.map(p => ({
-        id: p.id,
-        title: p.title,
-        description: p.description,
-      })),
+      presets: presets.map(p => ({ ...p })),
+      presetSettings: presetSettings.getState(),
       models: models.map(m => ({
         id: m.id,
         title: m.title,
         description: m.description,
         default: m.default,
+        backendId: m.backendId,
+        backendTitle: m.backendTitle,
+        modelId: m.modelId,
+        defaultReasoningEffort: m.defaultReasoningEffort,
+        reasoningEfforts: m.reasoningEfforts,
+        supportedNetworkPolicies: m.supportedNetworkPolicies || [],
+        // What a session on this model's backend may be pinned to.
+        subscriptions: m.subscriptions || [],
+        // Which of those accounts list this model.
+        subscriptionIds: m.subscriptionIds || [],
+      })),
+      discoveryError,
+      catalogs: catalogs.map(c => ({
+        backendId: c.backendId,
+        backendTitle: backends.find(b => b.id === c.backendId)?.title,
+        accounts: (c.accounts || []).map(a => ({
+          subscriptionId: a.subscriptionId,
+          label: a.label,
+          pinnedOnly: a.pinnedOnly === true,
+          state: a.state,
+          observedAt: a.observedAt,
+          modelCount: a.modelCount,
+        })),
       })),
       messages: allMessages,
       streamingText: liveTurn ? liveTurn.streamingText : '',
-      phase: liveTurn ? liveTurn.phase : '',
-      busy: Boolean(liveTurn),
-      loaded: session ? session.loaded : false,
+      phase: liveTurn ? liveTurn.phase : (working && 'thinking') || '',
+      // `busy` offers Stop, which needs a turn this page can cancel.
+      busy: stoppable,
+      working,
+      pendingHold: session?.pending.hold?.message || '',
+      // No session is nothing to load: the pane says hello, not "loading".
+      loaded: session ? session.loaded : true,
       status,
-      input: inputText,
+      input: chatDraftText(inputText),
       settingsOpen,
+      recovery: recovery.getState(),
+      network: network.getState(),
+      execution: execution.getState(),
+      unavailable: Boolean(session?.lifecycle && session.lifecycle !== 'ready'),
       usage: usage
-        ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
+        ? { ...usageOf(usage), contextPercent: contextPercent(usage) }
         : null,
+      accounts,
+      accountAction,
       voice: {
         hasMic,
         hasTts,
@@ -853,36 +1140,101 @@ export const flootComponent = (
   };
 
   // ── Conversation lifecycle ──────────────────────────────────────────────────
+  // The daemon owns the conversation: the transcript, the turn in flight, and
+  // the queue of submissions waiting for their turn. This page subscribes to
+  // the active session (`watch()`) and renders what it is told; sending is
+  // `enqueue`, and the daemon decides when that becomes a turn. Nothing here
+  // is a queue, a lock or a timer, so switching session, reloading or closing
+  // the tab loses nothing, and a second page sees the same thing.
   let cancelled = false;
-  let busy = false;
   let turnCancelled = false;
-  // Submissions accepted while a turn is still running (typed mid-stream, or a
-  // voice utterance after a soft barge-in) queue on submitChain. They must stay
-  // VISIBLE while queued: submit() clears the compose box immediately, and the
-  // optimistic session push only happens once the queued turn actually starts,
-  // so without this the message vanishes until the prior turn finishes.
-  //
-  // The queue is per-mount, unlike the turn registry above, which deliberately
-  // survives unmount. Leaving the space therefore drops whatever had not run
-  // yet, while the turn it was queued behind keeps going — the pre-existing
-  // behaviour, now more visible because the message looked accepted. Making it
-  // survive means holding the queue beside `inFlightTurns`; until then, a
-  // message queued behind a long turn is only as durable as the tab.
-  /** @type {Array<{ id: number, sessionId: string, text: string }>} */
-  let queuedSends = [];
-  let nextQueuedSendId = 1;
+
+  // Submissions this page has handed to the daemon and not yet had
+  // acknowledged. Not a queue — each is one request in flight — but the
+  // message must stay on screen for that round trip: `submit` clears the
+  // compose box at once, and the daemon's own report of it (a queued entry, or
+  // the turn it became) can arrive before or after the acknowledgement.
+  /**
+   * `pendingId` is the daemon's id for the message, once known (from the
+   * acknowledgement, or claimed from the daemon's report); `acked` is the
+   * acknowledgement having arrived; `seen` is the daemon having reported that
+   * very message, as a queue entry or as the turn it became; `before` is
+   * what the daemon had already reported when it was sent, which is therefore
+   * not it.
+   *
+   * @typedef {{ id: number, sessionId: string, text: string,
+   *   message?: {strings: string[], names: string[]}, pendingId?: string, acked: boolean, seen: boolean,
+   *   before: Set<string> }} InFlightSend
+   */
+  /** @type {InFlightSend[]} */
+  let inFlightSends = [];
+  let nextInFlightId = 1;
+  // Queue ids of submissions this page made. The reply to one of them is
+  // spoken here; one made from another page is that page's to speak.
+  // Kept only while the daemon still reports the message: an id is dropped
+  // once it has been seen and is no longer queued or running.
+  /** @type {Map<string, { seen: boolean }>} */
+  const ownSubmissions = new Map();
+
+  /** @param {FlootSession} session */
+  const reportedSubmissions = session => [
+    ...session.pending.entries.map(entry => ({
+      id: entry.id,
+      text: entry.text,
+      ...(entry.message ? { meta: { message: entry.message } } : {}),
+    })),
+    ...(session.current?.pendingId
+      ? [{ id: session.current.pendingId, text: session.current.input }]
+      : []),
+  ];
 
   /**
-   * Forget a queued placeholder. Reports whether it was still there, so the
-   * caller can repaint only when something actually changed.
+   * Match what the daemon reports against what this page has sent. By id once
+   * the acknowledgement has said what the id is; before that, the oldest
+   * unmatched send claims the first report with its text that was not there
+   * when it was sent and that no other send has claimed — so two identical
+   * messages sent back to back are two messages. A placeholder goes once its
+   * message has been both acknowledged and seen (or, after a fresh snapshot,
+   * acknowledged: whatever became of it is in that snapshot).
    *
-   * @param {number} id 0 for "no placeholder was made"
-   * @returns {boolean}
+   * @param {FlootSession} session
+   * @param {boolean} snapshot
    */
-  const dropQueued = id => {
-    if (!id || !queuedSends.some(q => q.id === id)) return false;
-    queuedSends = queuedSends.filter(q => q.id !== id);
-    return true;
+  const reconcileSends = (session, snapshot) => {
+    const reported = reportedSubmissions(session);
+    const claimed = new Set(
+      inFlightSends.map(send => send.pendingId).filter(Boolean),
+    );
+    for (const send of inFlightSends) {
+      if (send.sessionId === session.id && !send.seen) {
+        if (send.pendingId) {
+          send.seen = reported.some(item => item.id === send.pendingId);
+        } else {
+          const match = reported.find(
+            item =>
+              item.text === send.text &&
+              !send.before.has(item.id) &&
+              !claimed.has(item.id),
+          );
+          if (match) {
+            send.pendingId = match.id;
+            send.seen = true;
+            claimed.add(match.id);
+          }
+        }
+      }
+    }
+    inFlightSends = inFlightSends.filter(
+      send =>
+        send.sessionId !== session.id ||
+        !send.acked ||
+        !(send.seen || snapshot),
+    );
+    const live = new Set(reported.map(item => item.id));
+    for (const [id, record] of ownSubmissions) {
+      if (live.has(id)) record.seen = true;
+      else if (record.seen || snapshot) ownSubmissions.delete(id);
+    }
   };
 
   /** @type {FlootTurn | null} */
@@ -892,366 +1244,651 @@ export const flootComponent = (
   /** @type {(() => void) | null} */
   let detachActiveTurnView = null;
 
-  /** @type {Promise<void>} */
-  let submitChain = Promise.resolve();
-  /** @type {Promise<void> | null} */
-  let turnPromise = null;
-  let opening = harden({});
-  let viewReady = Promise.resolve();
-  /** @type {WeakMap<FlootSession, FlootTurn>} */
-  const displayedPrompts = new WeakMap();
+  const isBusy = () => {
+    const session = getActiveSession();
+    return Boolean(
+      session?.current && !(session.displayTurn && session.displayTurn.done),
+    );
+  };
 
-  // Cancel the in-flight turn (Stop button or voice barge-in). Returns a promise
-  // that resolves once the turn has fully unwound.
+  // Cancel the in-flight turn (Stop button). Unlike leaving the space, which
+  // lets the turn keep running, this tears it down.
   const cancelTurn = () => {
-    if (!busy) return Promise.resolve();
+    const session = getActiveSession();
+    if (!session?.current) return;
     turnCancelled = true;
-    // Stop button: explicitly tear the turn down (unlike leaving the space,
-    // which lets it keep running in the background).
-    if (activeTurn) activeTurn.stop();
+    if (activeTurn && activeTurn.target === session.current.turn) {
+      activeTurn.stop();
+    } else {
+      E(session.current.turn)
+        .cancel()
+        .catch((/** @type {Error} */ error) =>
+          setStatus(`error: ${error.message}`),
+        );
+    }
     stopTts(); // also silences any spoken reply in progress
-    return turnPromise || Promise.resolve();
   };
 
   // Voice barge-in: the user started speaking over a live reply. Unlike the Stop
   // button's hard cancel, don't abort the turn — just silence its spoken reply
   // (dropping the audio stream is what tells the daemon to stop speaking it)
   // and let it finish in the background (and in history). The user's
-  // interjection is queued after it (submitChain waits on the running turn).
+  // interjection is queued behind it by the daemon.
   const softBargeIn = () => {
-    if (!busy) return;
+    if (!isBusy()) return;
     stopTts();
     setStatus('continuing in background…');
   };
 
-  // Attach this component's view to a background turn — the one it just started,
-  // or one still running after a remount. Notifies the view as the turn's events
-  // arrive and resolves when the turn ends. Detaching (on unmount) leaves the
-  // turn running.
+  // Attach this component's view to the observation of a turn — one the daemon
+  // just reported, or one still running after a remount. Repaints as the
+  // turn's events arrive. Detaching (on unmount, or when another turn is
+  // attached) leaves the turn running.
   /**
    * @param {FlootTurn} turn
    * @param {FlootSession} session
-   * @returns {Promise<void>}
    */
   const attachTurnView = (turn, session) => {
-    busy = true;
+    if (detachActiveTurnView) detachActiveTurnView();
     turnCancelled = false;
     activeTurn = turn;
     sessionStatus.delete(session.id);
-    setStatus(`${turn.phase || 'thinking'}…`);
+    status = `${turn.phase || 'thinking'}…`;
     if (turn.usage) usage = turn.usage;
-    notify();
 
-    return new Promise(resolve => {
-      let detached = false;
-      let unsubscribe = () => {};
-      const detach = () => {
-        if (detached) return;
-        detached = true;
-        unsubscribe();
-        if (detachActiveTurnView === detach) {
-          detachActiveTurnView = null;
-          activeTurn = null;
-          busy = false;
-          notify();
-        }
-        resolve();
-      };
-      detachActiveTurnView = detach;
+    let detached = false;
+    let unsubscribe = () => {};
+    const detach = () => {
+      if (detached) return;
+      detached = true;
+      unsubscribe();
+      if (detachActiveTurnView === detach) {
+        detachActiveTurnView = null;
+        activeTurn = null;
+      }
+    };
+    detachActiveTurnView = detach;
 
-      /** @param {{ type: string }} ev */
-      const onEvent = ev => {
-        if (detached) return;
-        if (ev.type === 'superseded') {
-          detach();
-          // Another view may retire our shared observation. Reconcile this
-          // component too, before its released submissions resume.
-          // eslint-disable-next-line no-use-before-define
-          openActiveHistory();
-          return;
-        }
-        // Attachment completion is independent of selection and history I/O.
-        // Deletion can change selection while the old turn is still unwinding.
-        if (ev.type === 'done' && activeSessionId !== turn.sessionId) {
-          detach();
-          return;
-        }
-        if (activeSessionId !== turn.sessionId) return;
-        if (ev.type === 'snapshot') {
-          // The turn's state as of the moment this view opened. Repaint from
-          // it; speech, if any, is the daemon's own view of the same turn.
-          if (turn.usage) usage = turn.usage;
-          setStatus(`${turn.phase || 'thinking'}…`);
-        } else if (ev.type === 'delta' || ev.type === 'final') {
-          notify();
-        } else if (ev.type === 'tool_call') {
-          notify();
-        } else if (ev.type === 'tool_result') {
-          notify();
-        } else if (ev.type === 'phase') {
-          setStatus(`${turn.phase}…`);
-        } else if (ev.type === 'usage') {
-          usage = turn.usage;
-          notify();
-        } else if (ev.type === 'abort') {
+    /** @param {{ type: string }} ev */
+    const onEvent = ev => {
+      if (detached) return;
+      if (ev.type === 'superseded') {
+        // Another view retired the shared observation. The session's own
+        // subscription says what is current; nothing to reconcile here.
+        detach();
+        notify();
+        return;
+      }
+      if (activeSessionId !== turn.sessionId) {
+        if (ev.type === 'done') detach();
+        return;
+      }
+      if (ev.type === 'snapshot') {
+        // The turn's state as of the moment this view opened. Repaint from
+        // it; speech, if any, is the daemon's own view of the same turn.
+        if (turn.usage) usage = turn.usage;
+        setStatus(`${turn.phase || 'thinking'}…`);
+      } else if (ev.type === 'phase') {
+        setStatus(`${turn.phase}…`);
+      } else if (ev.type === 'usage') {
+        usage = turn.usage;
+        notify();
+      } else if (ev.type === 'abort') {
+        sessionStatus.set(turn.sessionId, 'error');
+        notify();
+      } else if (ev.type === 'done') {
+        const stopped = turnCancelled;
+        if (turn.error) {
           sessionStatus.set(turn.sessionId, 'error');
-          notify();
-        } else if (ev.type === 'done') {
-          const stopped = turnCancelled;
-          if (turn.error) {
-            sessionStatus.set(turn.sessionId, 'error');
-            status = `error: ${turn.error}`;
-          } else {
-            sessionStatus.set(turn.sessionId, 'idle');
-            status = stopped ? 'stopped.' : 'Ready.';
-          }
-          // Fold the finished turn's output into the session optimistically so
-          // the reply doesn't blink out between the turn ending (it leaves the
-          // registry) and the canonical history reload landing.
-          session.messages.push(.../** @type {any[]} */ (turn.messages));
-          notify();
-          // Repaint from the daemon's canonical transcript (now including this
-          // turn's persisted reply) so the turn's output is never double-shown.
-          detach();
-          void loadHistory(session).then(() => {
-            if (!cancelled && activeSessionId === session.id) notify();
-          });
+          // One line in the status bar; the whole reason, stderr included,
+          // stays under "Details" on the turn's status in the conversation.
+          const firstLine = String(turn.error).split('\n', 1)[0].trim();
+          status = `Turn did not finish: ${
+            firstLine.length > 120 ? `${firstLine.slice(0, 119)}…` : firstLine
+          }`;
+        } else {
+          sessionStatus.delete(turn.sessionId);
+          status = stopped ? 'stopped.' : 'Ready.';
         }
-      };
-      unsubscribe = turn.subscribe(onEvent);
-      // Settle immediately if the turn finished between start and subscribe.
-      if (turn.done) onEvent({ type: 'done' });
-    });
+        // The turn's output stays on screen (it is `session.displayTurn`)
+        // until the session reports the turn gone, which it does only after
+        // publishing the transcript that contains it: the reply never blinks.
+        detach();
+        notify();
+      } else {
+        notify();
+      }
+    };
+    unsubscribe = turn.subscribe(onEvent);
+    // Settle immediately if the turn finished between start and subscribe.
+    if (turn.done) onEvent({ type: 'done' });
   };
 
   /**
-   * @param {string} text
-   * @param {number} [queuedId] the placeholder this turn is running, if any
+   * The session reported which UI turn is in flight (or that none is).
+   *
+   * @param {FlootSession} session
+   * @param {any} reported `{ input, turn, pendingId? }` or null
+   * @param {boolean} fresh false when this is the snapshot: the turn was
+   *   already under way when this page looked, so it is not this page's to
+   *   start speaking.
    */
-  const runConverse = async (text, queuedId = 0) => {
-    let session = getActiveSession();
-    if (!session) session = await createSession();
-
-    // The queued placeholder is superseded by the optimistic session push
-    // below — the same text, now part of the running turn's transcript.
-    dropQueued(queuedId);
-    session.messages.push({ role: 'user', text });
-    // Sending a message is an explicit "follow along" intent — re-stick.
+  const setCurrentTurn = (session, reported, fresh) => {
+    const next =
+      reported && reported.turn
+        ? {
+            input: typeof reported.input === 'string' ? reported.input : null,
+            turn: reported.turn,
+            ...(reported.message ? { message: reported.message } : {}),
+            ...(typeof reported.pendingId === 'string'
+              ? { pendingId: reported.pendingId }
+              : {}),
+          }
+        : null;
+    const previous = session.current;
+    session.current = next;
+    network.setCurrent(Boolean(next));
+    if (!next) {
+      // The transcript that contains the finished turn has normally arrived
+      // already. If it could not be read, what was on screen stays as a tail
+      // until it can, rather than the prompt and reply blinking out.
+      session.tail =
+        previous && session.displayTurn && session.transcriptStale
+          ? {
+              input: previous.input,
+              turn: session.displayTurn,
+              ...(previous.message ? { message: previous.message } : {}),
+            }
+          : null;
+      session.displayTurn = null;
+      if (previous && activeSessionId === session.id && !activeTurn) {
+        // Its observation never reported an end here (it was detached, or
+        // belonged to another page): leave a truthful status behind.
+        if (status.endsWith('…')) status = 'Ready.';
+      }
+      return;
+    }
+    if (previous && previous.turn === next.turn) return;
+    // This page's own submission has become a turn: the placeholder for the
+    // round trip has done its job.
+    const registry = turnsForFactory(factory);
+    let turn = registry.get(session.id) || null;
+    if (turn && turn.target !== next.turn) {
+      // An observation of an earlier turn; retiring it never cancels anything.
+      turn.retire();
+      turn = null;
+    }
+    if (!turn) {
+      turn = startFlootTurn(registry, session.id, session.id, next.turn);
+    }
+    session.displayTurn = turn;
     stick = true;
-    if (session.title === DEFAULT_TITLE) {
-      session.title = autoTitle(text);
-      E(factory)
-        .renameSession(session.id, session.title)
-        .catch(() => {});
+    if (activeSessionId === session.id) {
+      attachTurnView(turn, session);
+      // This page's own message: known by the id the acknowledgement gave,
+      // or, when the turn beat the acknowledgement here, by the placeholder
+      // that claimed it (`reconcileSends`, which has already run).
+      const own = Boolean(
+        next.pendingId &&
+        (ownSubmissions.has(next.pendingId) ||
+          inFlightSends.some(send => send.pendingId === next.pendingId)),
+      );
+      if (fresh && own && ttsEnabled && ttsServer) speakTurn(turn);
+    }
+  };
+
+  // ── The active session's subscription ───────────────────────────────────────
+  // The status line a transcript failure wrote, so its recovery clears that
+  // line and no other.
+  let transcriptErrorStatus = '';
+  /** @type {{ close: () => void } | null} */
+  let sessionView = null;
+  // A subscription that ends without saying why (the daemon gave up on a
+  // reader opened too late) is opened again, but not for ever: a stream that
+  // keeps ending at once is a fault to report, not a loop to spin in.
+  let quietEndings = 0;
+
+  const reopenSessionView = () => openActiveSession(false);
+
+  /**
+   * @param {FlootSession} session
+   * @param {any} event
+   * @returns {boolean} false when the view must be reopened
+   */
+  const applySessionEvent = (session, event) => {
+    const snapshot = event.type === 'snapshot';
+    // Set by the block after the turn is adopted, so it sees both reports.
+    let reconcile = snapshot;
+    if (snapshot || event.type === 'transcript') {
+      const delta = snapshot ? event.transcript : event;
+      if (delta) {
+        const next = applyTranscript(
+          snapshot ? null : session.transcript,
+          delta,
+        );
+        // A gap: an event was missed. Reopen rather than guess.
+        if (!next) return false;
+        session.transcript = next;
+        session.messages = historyMessages(next.messages);
+        session.loaded = true;
+        session.tail = null;
+        if (session.transcriptStale) {
+          session.transcriptStale = false;
+          if (status === transcriptErrorStatus) status = 'Ready.';
+        }
+      } else if (snapshot) {
+        session.transcript = null;
+        session.loaded = true;
+        if (event.transcriptError) {
+          session.transcriptStale = true;
+          transcriptErrorStatus = `error: ${event.transcriptError}`;
+          status = transcriptErrorStatus;
+        }
+      }
+    }
+    if (event.type === 'transcript-error') {
+      session.transcriptStale = true;
+      transcriptErrorStatus = `error: ${event.message}`;
+      status = transcriptErrorStatus;
+    }
+    if (snapshot || event.type === 'pending') {
+      session.pending = normalizePending(event.pending);
+      reconcile = true;
+    }
+    if (snapshot || event.type === 'running') {
+      session.running =
+        event.running && typeof event.running.input === 'string'
+          ? {
+              input: event.running.input,
+              ...(typeof event.running.from === 'string'
+                ? { from: event.running.from }
+                : {}),
+            }
+          : null;
+    }
+    if (snapshot || event.type === 'turn') {
+      // Adopt the report first, so the reconciliation below can match this
+      // page's send to the turn before the turn asks whether it is its own.
+      const reported = event.turn;
+      if (reported && reported.turn && typeof reported.pendingId === 'string') {
+        const provisional = {
+          input: typeof reported.input === 'string' ? reported.input : null,
+          turn: reported.turn,
+          pendingId: reported.pendingId,
+        };
+        const held = session.current;
+        session.current = provisional;
+        reconcileSends(session, snapshot);
+        session.current = held;
+      }
+      setCurrentTurn(session, event.turn, !snapshot);
+      reconcile = true;
+    }
+    if (reconcile) reconcileSends(session, snapshot);
+    if ((snapshot || event.type === 'execution') && event.execution) {
+      execution.adopt(event.execution);
+    }
+    if ((snapshot || event.type === 'network') && event.network) {
+      network.adopt(event.network, Boolean(session.current));
+    }
+    if ((snapshot || event.type === 'usage') && event.usage) {
+      usage = usageOf(event.usage);
+    }
+    if (event.type === 'journal') void recovery.refresh();
+    return true;
+  };
+
+  // Open (or reopen) the subscription on the active session, closing whichever
+  // one was open. Selection never waits for a turn: the session left behind
+  // keeps running on the daemon, and its queue with it.
+  /** @param {boolean} [reselect] false when reopening the same session */
+  const openActiveSession = (reselect = true) => {
+    composer?.close();
+    if (sessionView) sessionView.close();
+    sessionView = null;
+    if (detachActiveTurnView) detachActiveTurnView();
+    // Opening a session starts at the latest message.
+    stick = true;
+    const session = getActiveSession();
+    const ready = Boolean(
+      session && (!session.lifecycle || session.lifecycle === 'ready'),
+    );
+    if (reselect) {
+      void execution.select(session ? facetFor(session) : null);
+      void recovery.select(
+        session && ready ? facetFor(session) : null,
+        session && !ready
+          ? `Session unavailable (${session.lifecycle}). Inspect the service; no recovery action is safe here.`
+          : '',
+      );
+      void network.select(
+        session && ready ? facetFor(session) : null,
+        session && !ready
+          ? 'Session unavailable. Network policy changes are disabled.'
+          : '',
+      );
+      usage = null;
+    }
+    try {
+      inputText = sessionDrafts.select(
+        session ? `floot-send:${profilePath.join('/')}:${session.id}` : null,
+        inputText,
+      );
+    } catch {
+      inputText = '';
+      setStatus(
+        'Saved submission could not be read. Inspect browser storage before retrying.',
+      );
+    }
+    if (!session) {
+      notify();
+      return;
+    }
+    if (!ready) {
+      session.loaded = true;
+      setStatus(`Session unavailable (${session.lifecycle}).`);
+      return;
+    }
+    // A turn this page was already observing (a remount, or a session it
+    // switched away from and back to) paints at once; the snapshot confirms.
+    if (session.displayTurn && !session.displayTurn.done) {
+      attachTurnView(session.displayTurn, session);
     }
     notify();
 
-    // Start the turn on the daemon — it keeps running if this space is left —
-    // then render it through the shared view. A spoken reply is a second view
-    // of the same turn, which the daemon speaks (see speakTurn).
-    const speakLive = ttsEnabled && Boolean(ttsServer);
-    const turnRef = E(facetFor(session)).startTurn(text);
-    const turn = startFlootTurn(
-      turnsForFactory(factory),
-      session.id,
-      session.id,
-      turnRef,
-    );
-    displayedPrompts.set(session, turn);
-    if (speakLive) speakTurn(turn);
-    await attachTurnView(turn, session);
+    let closed = false;
+    /** @type {{ return: () => Promise<unknown> } | null} */
+    let stream = null;
+    const view = {
+      close() {
+        closed = true;
+        if (stream) void Promise.resolve(stream.return()).catch(() => {});
+      },
+    };
+    sessionView = view;
+    const live = () => !cancelled && !closed && sessionView === view;
+    (async () => {
+      const reader = iterateReader(await E(facetFor(session)).watch(), {
+        buffer: 4,
+      });
+      stream = reader;
+      if (!live()) {
+        view.close();
+        return;
+      }
+      let ended = false;
+      for await (const event of reader) {
+        if (!live()) break;
+        const value = /** @type {any} */ (event);
+        if (value.type === 'end') {
+          ended = true;
+          break;
+        }
+        if (!applySessionEvent(session, value)) {
+          reopenSessionView();
+          return;
+        }
+        if (value.type !== 'snapshot') quietEndings = 0;
+        notify();
+      }
+      if (!ended && live()) {
+        quietEndings += 1;
+        if (quietEndings <= 3) {
+          reopenSessionView();
+        } else {
+          setStatus('error: the session stopped reporting; reload to retry.');
+        }
+        return;
+      }
+      if (ended && live()) {
+        // Deleted from somewhere else. The session list says so too; this
+        // just stops the view pretending the session is still there.
+        session.loaded = true;
+        setStatus('This session was deleted.');
+      }
+    })().catch((/** @type {Error} */ error) => {
+      if (live()) {
+        // Nothing is known about this session now; what was last known (a
+        // turn, a queue) may be long gone, and must not offer a Stop.
+        session.loaded = true;
+        session.current = null;
+        session.running = null;
+        session.displayTurn = null;
+        session.pending = normalizePending(null);
+        setStatus(`error: ${error.message}`);
+      }
+    });
   };
 
-  // Serialize submissions so an auto-sent voice utterance can't overlap a typed
-  // message: each turn waits for the previous.
+  // Hand a message to the daemon. It starts at once if the session is idle and
+  // otherwise waits its turn there — whether or not this page stays open.
   const submit = (/** @type {string} */ raw) => {
+    if (assistantPreparing) {
+      setStatus('Starting your assistant session…');
+      return;
+    }
+    if (execution.getState().blocked) {
+      setStatus(
+        'Session stopped or stopping. Inspect Settings before resuming.',
+      );
+      return;
+    }
+    if (network.getState().changing || network.getState().blocked) {
+      setStatus(
+        'Finish or retry the sandbox network policy change before sending.',
+      );
+      return;
+    }
+    const selected = getActiveSession();
+    if (selected?.lifecycle && selected.lifecycle !== 'ready') {
+      setStatus(
+        'Session unavailable. Inspect its lifecycle and service before sending.',
+      );
+      return;
+    }
+    if (recovery.getState().resolving) {
+      setStatus(
+        'Sending is blocked while a journal resolution is pending. Inspect the Journal.',
+      );
+      return;
+    }
     // An explicit send supersedes any buffered voice continuation.
     if (resumeTimer) {
       clearTimeout(resumeTimer);
       resumeTimer = 0;
     }
     pendingUtterance = '';
-    const text = (raw || '').trim();
-    if (!text) return submitChain;
+    const draft = raw || '';
+    let structured;
+    let text;
+    try {
+      structured = decodeChatDraft(draft);
+      text = chatDraftText(draft);
+      if (structured.petNames.length)
+        validateChatMessage({
+          strings: structured.strings,
+          names: structured.edgeNames,
+        });
+    } catch (error) {
+      setStatus(/** @type {Error} */ (error).message);
+      return;
+    }
+    if (!text) return;
+    composer?.close();
     // Create/resume the audio context now, still inside the user's Send
     // gesture: a browser refuses autoplay when the first resume happens only
     // after the remote round trips that start the turn and its speech.
     if (ttsEnabled && ttsServer) prepareTts();
     inputText = '';
-    const submittedSessionId = activeSessionId;
-    // Stand a placeholder up now, so the message is visible for as long as it
-    // waits. Without an active session nothing is queued ahead of it, so it
-    // dispatches straight away and needs none.
-    let queuedId = 0;
-    if (submittedSessionId) {
-      queuedId = nextQueuedSendId;
-      nextQueuedSendId += 1;
-      queuedSends.push({ id: queuedId, sessionId: submittedSessionId, text });
+    /** @type {{key: string, value: string} | null} */
+    let savedDraft = null;
+    try {
+      savedDraft = sessionDrafts.save(draft);
+    } catch {
+      inputText = draft;
+      setStatus(
+        'This draft could not be saved on this device. Nothing was sent.',
+      );
+      notify();
+      return;
     }
+    // Sending a message is an explicit "follow along" intent — re-stick.
+    stick = true;
+
+    /** @type {InFlightSend} */
+    const send = {
+      id: nextInFlightId,
+      sessionId: selected ? selected.id : '',
+      text,
+      message: structured.petNames.length
+        ? { strings: structured.strings, names: structured.edgeNames }
+        : undefined,
+      acked: false,
+      seen: false,
+      before: new Set(
+        selected ? reportedSubmissions(selected).map(item => item.id) : [],
+      ),
+    };
+    nextInFlightId += 1;
+    inFlightSends.push(send);
     notify();
-    submitChain = submitChain.then(async () => {
-      try {
-        // A shared observation can be superseded while we await its completion.
-        // Join the replacement view and turn too before dispatching queued
-        // input.
-        for (;;) {
-          const ready = viewReady;
-          // eslint-disable-next-line no-await-in-loop
-          await ready;
-          if (
-            cancelled ||
-            (submittedSessionId && activeSessionId !== submittedSessionId)
-          )
-            return;
-          const previous = turnPromise;
-          // eslint-disable-next-line no-await-in-loop
-          if (previous) await previous;
-          if (
-            cancelled ||
-            (submittedSessionId && activeSessionId !== submittedSessionId)
-          )
-            return;
-          if (ready === viewReady && previous === turnPromise) break;
-        }
-        // Read the text back off the placeholder at the moment the turn starts,
-        // rather than closing over what was typed: a queued message can be
-        // edited or deleted while it waits, and the edit has to be what
-        // actually runs. A missing placeholder means it was deleted — skip the
-        // turn entirely.
-        let queuedText = text;
-        if (queuedId) {
-          const queued = queuedSends.find(q => q.id === queuedId);
-          if (!queued) return;
-          queuedText = queued.text;
-        }
-        turnPromise = runConverse(queuedText, queuedId).catch(error => {
-          if (!cancelled) setStatus(`error: ${error.message}`);
-        });
-        await turnPromise;
-      } finally {
-        // However this entry exits — deleted, superseded session, or the turn
-        // having adopted it — the placeholder must not outlive it.
-        if (dropQueued(queuedId) && !cancelled) notify();
+
+    (async () => {
+      let session = selected;
+      if (!session) {
+        // Sending with no session is the person's own act of starting one.
+        session = await createSession();
+        send.sessionId = session.id;
+        openActiveSession();
+        savedDraft = sessionDrafts.save(draft);
       }
-    });
-    return submitChain;
+      if (session.title === DEFAULT_TITLE) {
+        session.title = autoTitle(text);
+        E(factory)
+          .renameSession(session.id, session.title)
+          .catch(() => {});
+        notify();
+      }
+      const accepted = await submissionClient.submit(
+        facetFor(session),
+        `floot-send:${profilePath.join('/')}:${session.id}`,
+        draft,
+        () => sessionDrafts.acknowledge(savedDraft),
+        structured.petNames.length
+          ? () => resolveMentions(rootPowers, structured.petNames)
+          : undefined,
+      );
+      send.acked = true;
+      if (accepted && typeof accepted.id === 'string') {
+        send.pendingId = accepted.id;
+        ownSubmissions.set(accepted.id, { seen: false });
+      }
+      // The placeholder stays until the daemon's own report of this message
+      // has been seen: the acknowledgement can arrive first (the report waits
+      // its turn behind a transcript read), and dropping the placeholder on
+      // it would take the message off the screen in between.
+      reconcileSends(session, false);
+    })()
+      .catch((/** @type {Error} */ error) => {
+        if (cancelled) return;
+        inFlightSends = inFlightSends.filter(other => other !== send);
+        // This failure belongs to the session that submitted it. Selection may
+        // have changed while waiting, and the outcome may still be uncertain.
+        if (error.name === 'SubmissionChangedError') {
+          try {
+            // A delayed discovery must not reoffer a request another view has
+            // already resolved or explicitly discarded with a fresh retry ID.
+            sessionDrafts.acknowledge(savedDraft);
+          } catch {
+            // Still report why this view did not dispatch.
+          }
+        } else if (!send.seen && !send.acked) {
+          try {
+            if (send.sessionId) {
+              inputText = sessionDrafts.restore(
+                `floot-send:${profilePath.join('/')}:${send.sessionId}`,
+                draft,
+                inputText,
+              );
+            } else if (!getActiveSession() && !inputText) inputText = draft;
+          } catch {
+            // The durable retry remains authoritative when draft storage fails.
+          }
+        }
+        setStatus(`error: ${error.message}`);
+      })
+      .finally(() => {
+        if (!cancelled) notify();
+      });
   };
 
   /**
-   * Rewrite a queued submission while it waits. No effect once its turn has
-   * started: the placeholder is gone by then.
+   * @param {string} action
+   * @param {Promise<unknown>} result
+   */
+  const reportQueueFailure = (action, result) => {
+    Promise.resolve(result).catch((/** @type {Error} */ error) => {
+      if (!cancelled) setStatus(`${action} failed: ${error.message}`);
+    });
+  };
+
+  /**
+   * Rewrite a queued submission while it waits. The daemon refuses once its
+   * turn has started.
    *
-   * @param {number} id
+   * @param {number | string} id
    * @param {string} raw
    */
   const editPending = (id, raw) => {
     const text = (raw || '').trim();
+    const session = getActiveSession();
     // An empty edit is a no-op rather than a delete: deleting has its own
     // button, and losing a message by clearing the box would be a surprising
     // way to lose one.
-    if (!text) return;
-    if (!queuedSends.some(q => q.id === id)) return;
-    queuedSends = queuedSends.map(q => (q.id === id ? { ...q, text } : q));
-    notify();
+    if (!text || !session || typeof id !== 'string') return;
+    reportQueueFailure('Edit', E(facetFor(session)).editPending(id, text));
   };
 
   /**
-   * Drop a queued submission before it runs. Its chain entry is already
-   * scheduled, so removing the placeholder is what cancels it: the entry finds
-   * nothing and skips its turn.
+   * Drop a queued submission before it runs.
    *
-   * @param {number} id
+   * @param {number | string} id
    */
   const cancelPending = id => {
-    if (dropQueued(id)) notify();
+    const session = getActiveSession();
+    if (!session || typeof id !== 'string') return;
+    reportQueueFailure('Delete', E(facetFor(session)).cancelPending(id));
+  };
+
+  /**
+   * "Send now": release a held queue, send an interrupted message again, or —
+   * for the head of the queue behind a running turn — cut that turn short.
+   * Which of those applies is the daemon's call; only the head may end a turn.
+   *
+   * @param {number | string} id
+   */
+  const sendPendingNow = id => {
+    const session = getActiveSession();
+    if (!session || typeof id !== 'string') return;
+    const [head] = session.pending.entries;
+    if (session.current && head && head.id === id) {
+      turnCancelled = true;
+      stopTts();
+    }
+    ownSubmissions.set(id, { seen: true });
+    reportQueueFailure('Send', E(facetFor(session)).sendPending(id));
   };
 
   // ── Session actions (controller callbacks) ──────────────────────────────────
-  const openActiveHistory = () => {
-    const generation = harden({});
-    opening = generation;
-    // Opening a session starts at the latest message.
-    stick = true;
-    const session = getActiveSession();
-    if (!session) {
-      viewReady = Promise.resolve();
-      usage = null;
-      notify();
-      return;
-    }
-    showSessionTokens(session);
-    const stillSelected = () =>
-      !cancelled && opening === generation && activeSessionId === session.id;
-    viewReady = (async () => {
-      // Recover the daemon's handle after a reload or transport loss. The
-      // browser registry is only a cache; it is never the source of liveness.
-      const current = await E(facetFor(session)).getCurrentTurn();
-      if (!stillSelected()) return;
-      let turn = liveTurnFor(session.id);
-      if (turn && (!current || (await turn.ref) !== current.turn)) {
-        if (!stillSelected()) return;
-        turn.retire();
-        turn = null;
-      }
-      if (!stillSelected()) return;
-      if (!current) {
-        await loadHistory(session);
-        if (stillSelected()) notify();
-        return;
-      }
-      if (!turn) {
-        turn = startFlootTurn(
-          turnsForFactory(factory),
-          session.id,
-          session.id,
-          current.turn,
-        );
-      }
-      if (displayedPrompts.get(session) !== turn) {
-        const adoptedTurn = turn;
-        const prompt =
-          typeof current.input === 'string'
-            ? [{ role: /** @type {const} */ ('user'), text: current.input }]
-            : [];
-        session.messages = prompt;
-        session.loaded = false;
-        displayedPrompts.set(session, turn);
-        // Discovery exposes the handle before queued mail establishes history.
-        // Observe/cancel now; install only this turn's baseline when it arrives.
-        void Promise.resolve(current.history)
-          .then(history => {
-            if (
-              !stillSelected() ||
-              adoptedTurn.done ||
-              liveTurnFor(session.id) !== adoptedTurn ||
-              displayedPrompts.get(session) !== adoptedTurn
-            )
-              return;
-            session.messages = [...historyMessages(history), ...prompt];
-            session.loaded = true;
-            notify();
-          })
-          .catch(error => {
-            if (stillSelected() && liveTurnFor(session.id) === adoptedTurn)
-              setStatus(`error: ${error.message}`);
-          });
-      }
-      if (!busy) turnPromise = attachTurnView(turn, session);
-      notify();
-    })().catch(error => {
-      if (stillSelected()) setStatus(`error: ${error.message}`);
-    });
-  };
-
   const selectSession = (/** @type {string} */ id) => {
-    if (busy) return; // don't switch context mid-turn
-    // A per-message replay plays without setting busy; silence it so it doesn't
-    // keep speaking over the session we're switching to.
+    if (id === activeSessionId) return;
+    // A per-message replay, or the reply being spoken, belongs to the session
+    // being left; the turn itself carries on without this page.
     stopTts();
     activeSessionId = id;
-    turnPromise = null;
+    quietEndings = 0;
     setStatus('Ready.');
-    openActiveHistory();
+    openActiveSession();
   };
 
   const deleteSessionById = (/** @type {string} */ id) => {
@@ -1263,31 +1900,48 @@ export const flootComponent = (
     stopTts();
     sessions = sessions.filter(s => s.id !== id);
     sessionStatus.delete(id);
-    if (activeSessionId === id) {
-      // Deletion owns daemon teardown; the UI need not wait for it to release
-      // its attachment or submission queue. Late events cannot affect a new view.
-      if (detachActiveTurnView) detachActiveTurnView();
+    inFlightSends = inFlightSends.filter(send => send.sessionId !== id);
+    const wasActive = activeSessionId === id;
+    if (wasActive) {
+      // Deletion owns daemon teardown; the UI need not wait for it. The
+      // status line was the deleted session's turn's; its end will never be
+      // reported here.
       activeSessionId = sessions.length ? sessions[0].id : null;
-      turnPromise = null;
+      status = readyStatus();
     }
     E(factory)
       .deleteSession(id)
       .catch(err => setStatus(`error: ${err.message}`));
     notify();
-    openActiveHistory();
+    if (wasActive) openActiveSession();
   };
 
   /**
    * @param {string} [presetId]
    * @param {string} [model]
    * @param {string} [reasoningEffort]
+   * @param {string} [subscription]
+   * @param {string} [networkPolicy]
    */
-  const newSession = (presetId, model, reasoningEffort) => {
-    if (busy) return;
-    createSession(undefined, presetId, model, reasoningEffort)
+  const newSession = (
+    presetId,
+    model,
+    reasoningEffort,
+    subscription,
+    networkPolicy,
+  ) => {
+    createSession(
+      undefined,
+      presetId,
+      model,
+      reasoningEffort,
+      subscription,
+      networkPolicy,
+    )
       .then(() => {
         stick = true;
-        notify();
+        setStatus('Ready.');
+        openActiveSession();
       })
       .catch(err => setStatus(`error: ${err.message}`));
   };
@@ -1308,6 +1962,7 @@ export const flootComponent = (
   // ── Mic input (optional) ─────────────────────────────────────────────────────
   let micActive = false; // mic open and listening
   let speaking = false; // currently inside a detected utterance
+  let voiceCommitId = 0;
   let calibrating = false;
   // Actionable guidance shown when the browser/OS denies mic access (distinct
   // from the transient status line, since it needs to persist until retried).
@@ -1326,6 +1981,14 @@ export const flootComponent = (
   let calibSamples = [];
   /** @type {Uint8Array[]} */
   let preroll = [];
+  // A permission request can outlive pause, stop, a new request, or unmount.
+  let micRequestId = 0;
+  let audioSuspended = false;
+  const audioAllowed = () =>
+    !cancelled &&
+    $parent.isConnected &&
+    !audioSuspended &&
+    $parent.ownerDocument.visibilityState !== 'hidden';
   let micInRate = 16_000;
   /** @type {MediaStream | null} */
   let mediaStream = null;
@@ -1358,16 +2021,19 @@ export const flootComponent = (
   const drainTranscript = async (
     /** @type {any} */ textReader,
     /** @type {any} */ ownChannel,
+    /** @type {number} */ requestId,
   ) => {
     let last = '';
     try {
       for await (const raw of iterateReader(textReader, { buffer: 4 })) {
         const value = /** @type {any} */ (raw);
-        if (cancelled) break;
+        if (!audioAllowed() || requestId !== micRequestId) break;
         if (value.type === 'partial' || value.type === 'final') {
           last = value.text;
           // Show buffered continuation text ahead of the live partial.
-          inputText = pendingUtterance ? `${pendingUtterance} ${last}` : last;
+          inputText = textDraft(
+            pendingUtterance ? `${pendingUtterance} ${last}` : last,
+          );
           voiceTranscript = last;
           notify();
         } else if (value.type === 'end') {
@@ -1378,10 +2044,19 @@ export const flootComponent = (
         }
       }
     } catch (err) {
-      setStatus(`mic error: ${/** @type {Error} */ (err).message}`);
+      if (audioAllowed() && requestId === micRequestId)
+        setStatus(`mic error: ${/** @type {Error} */ (err).message}`);
     } finally {
-      if (ownChannel === channel) channel = null;
+      if (ownChannel === channel) {
+        // A recognizer may finish before VAD silence (for example its own
+        // endpoint detector fired). Close that utterance before arming a send.
+        channel?.end();
+        channel = null;
+        speaking = false;
+        silenceStart = 0;
+      }
     }
+    if (!audioAllowed() || requestId !== micRequestId) return;
     const text = filterTranscript(last);
     inputText = '';
     voiceTranscript = '';
@@ -1410,19 +2085,37 @@ export const flootComponent = (
     // Keep the buffered utterance visible in the compose box for the whole
     // grace window. Blanking it made recognized speech vanish for about a
     // second before it sent, which reads as a swallowed message.
-    inputText = pendingUtterance;
+    inputText = textDraft(pendingUtterance);
     notify();
     if (resumeTimer) clearTimeout(resumeTimer);
     if (!pendingUtterance) return;
+    voiceCommitId += 1;
+    const commitId = voiceCommitId;
     resumeTimer = window.setTimeout(() => {
       resumeTimer = 0;
-      pendingUtterance = '';
       // The buffer has been sitting in the compose box as ordinary editable
       // text for the whole grace window, so the box IS the buffer: a correction
       // typed there is what sends, and clearing it cancels the send. Sending
       // what was recognized instead would silently discard the edit.
-      const full = inputText.trim();
-      if (full) submit(full);
+      const requestId = micRequestId;
+      // Transcription starts while provisioning runs, but a finalized utterance
+      // may only go to the new session, never the previously selected one.
+      void Promise.resolve(assistantReady)
+        .then(() => {
+          const full = inputText.trim();
+          if (
+            full &&
+            micActive &&
+            audioAllowed() &&
+            requestId === micRequestId &&
+            commitId === voiceCommitId &&
+            !speaking
+          ) {
+            pendingUtterance = '';
+            submit(full);
+          }
+        })
+        .catch(() => {});
     }, VAD.RESUME_GRACE_MS);
   };
 
@@ -1458,7 +2151,7 @@ export const flootComponent = (
   // Open a fresh transcribe() stream for the utterance just detected and flush
   // the pre-roll so the word's onset isn't clipped.
   const beginUtterance = () => {
-    if (speaking || !audioServer) return;
+    if (speaking || !audioServer || !micActive || !audioAllowed()) return;
     // If we're within the post-utterance grace, this is a continuation of the
     // same thought: cancel the pending send and keep the buffered text.
     if (resumeTimer) {
@@ -1466,18 +2159,19 @@ export const flootComponent = (
       resumeTimer = 0;
     }
     speaking = true;
+    voiceCommitId += 1;
     // Never let a reply talk over a live recording: silence any TTS still
     // playing or scheduled ahead.
     stopTts();
     speechStart = Date.now();
     silenceStart = 0;
     // Preserve any buffered continuation text; a fresh utterance clears it.
-    inputText = pendingUtterance;
+    inputText = textDraft(pendingUtterance);
     notify();
     channel = makeAudioChannel();
     const ownChannel = channel;
     const textReader = E(audioServer).transcribe(channel.reader);
-    drainTranscript(textReader, ownChannel);
+    drainTranscript(textReader, ownChannel, micRequestId);
     for (const frame of preroll) ownChannel.writeBytes(frame);
     preroll = [];
   };
@@ -1495,7 +2189,7 @@ export const flootComponent = (
           .return()
           .catch(() => {});
       channel = null;
-      inputText = pendingUtterance;
+      inputText = textDraft(pendingUtterance);
       notify();
       return;
     }
@@ -1518,6 +2212,10 @@ export const flootComponent = (
   // noise-floor drift, onset/barge-in, and end-of-speech silence detection.
   const vadLoop = () => {
     if (!micActive) return;
+    if (!audioAllowed()) {
+      stopAudio();
+      return;
+    }
     const now = Date.now();
     const vol = computeRms();
 
@@ -1551,7 +2249,7 @@ export const flootComponent = (
         noiseFloor = (1 - VAD.EMA_ALPHA) * noiseFloor + VAD.EMA_ALPHA * vol;
       }
       // While the assistant is replying require a louder onset (barge-in).
-      let onsetThreshold = busy ? bargeThreshold : speechThreshold;
+      let onsetThreshold = isBusy() ? bargeThreshold : speechThreshold;
       // If our own TTS is audibly playing (even after the text turn finished),
       // demand more headroom still so speaker→mic leakage can't self-barge.
       if (ttsAudible()) {
@@ -1561,7 +2259,7 @@ export const flootComponent = (
         );
       }
       if (vol > onsetThreshold) {
-        if (busy) softBargeIn();
+        if (isBusy()) softBargeIn();
         beginUtterance();
       }
     } else if (vol > speechThreshold) {
@@ -1575,8 +2273,8 @@ export const flootComponent = (
     rafId = requestAnimationFrame(vadLoop);
   };
 
-  const startMic = async () => {
-    if (micActive || !audioServer) return;
+  const startMic = async (immediate = false) => {
+    if (micActive || !audioServer || !audioAllowed()) return;
     // Preflight the two environment failures that deny the mic *without* a
     // browser prompt, so the user gets an explanation instead of silence:
     //   1. a non-secure context (mic is HTTPS/localhost only), and
@@ -1600,8 +2298,10 @@ export const flootComponent = (
     // Still inside the tap: prime the audio context now, since a hands-free
     // reply starts from the utterance timer, not a gesture.
     if (ttsEnabled && ttsServer) prepareTts();
+    micRequestId += 1;
+    const requestId = micRequestId;
     micActive = true;
-    calibrating = true;
+    calibrating = !immediate;
     calibStart = Date.now();
     calibSamples = [];
     noiseFloor = 0;
@@ -1612,13 +2312,18 @@ export const flootComponent = (
     try {
       // Called synchronously off the tap (no await precedes it) so the user
       // gesture that mobile browsers require is still in effect.
-      mediaStream = await media.getUserMedia({
+      const acquired = await media.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
       });
+      if (!audioAllowed() || requestId !== micRequestId || !micActive) {
+        acquired.getTracks().forEach(track => track.stop());
+        return;
+      }
+      mediaStream = acquired;
       audioCtx = new AudioContext();
       source = audioCtx.createMediaStreamSource(mediaStream);
       analyser = audioCtx.createAnalyser();
@@ -1627,6 +2332,7 @@ export const flootComponent = (
       processor = audioCtx.createScriptProcessor(4096, 1, 1);
       micInRate = audioCtx.sampleRate;
       processor.onaudioprocess = e => {
+        if (!audioAllowed() || requestId !== micRequestId || !micActive) return;
         const data = e.inputBuffer.getChannelData(0);
         const pcm = toPcm16le(data, micInRate, 16_000);
         if (!pcm.length) return;
@@ -1641,12 +2347,22 @@ export const flootComponent = (
       source.connect(analyser);
       source.connect(processor);
       processor.connect(audioCtx.destination);
+      if (immediate) {
+        // Do not discard the first second of an assistant invocation as noise
+        // calibration. Open transcription before the first PCM callback.
+        beginUtterance();
+        setStatus(
+          assistantPreparing ? 'Listening · starting assistant…' : 'listening…',
+        );
+      }
       rafId = requestAnimationFrame(vadLoop);
     } catch (err) {
-      micActive = false;
-      calibrating = false;
+      if (!audioAllowed() || requestId !== micRequestId) return;
+      stopMic();
+      const failedRequestId = micRequestId;
       const name = /** @type {Error} */ (err).name;
       const message = /** @type {Error} */ (err).message;
+      console.error(`[floot microphone] ${name}: ${message}`);
       if (name === 'NotAllowedError' || name === 'SecurityError') {
         // Say where the block is, as far as this browser will tell. A site
         // permission of 'denied' means the browser's site settings. Chrome
@@ -1666,6 +2382,7 @@ export const flootComponent = (
           // Permissions API unsupported, or 'microphone' isn't a known name on
           // this browser — leave permState empty and give generic guidance.
         }
+        if (!audioAllowed() || failedRequestId !== micRequestId) return;
         const android =
           typeof navigator !== 'undefined' &&
           /android/i.test(navigator.userAgent || '');
@@ -1720,7 +2437,10 @@ export const flootComponent = (
         micError = 'No microphone was found on this device.';
       } else if (name === 'NotReadableError') {
         micError =
-          'The microphone is in use by another app. Close it and tap 🎤 again.';
+          `The microphone could not start. This can be an app or system audio ` +
+          `configuration problem, or another app using the microphone. ` +
+          `Check microphone access in system settings and try again. ` +
+          `Details: ${name}: ${message}`;
       } else {
         micError = `Could not start the microphone: ${message}`;
       }
@@ -1730,6 +2450,7 @@ export const flootComponent = (
   };
 
   const stopMic = () => {
+    micRequestId += 1;
     if (!micActive) return;
     micActive = false;
     calibrating = false;
@@ -1805,13 +2526,103 @@ export const flootComponent = (
   });
 
   updateWakeLock = () => {
-    screenWakeLock.set(!cancelled && Boolean(micActive || ttsSpeaking || busy));
+    screenWakeLock.set(
+      audioAllowed() && Boolean(micActive || ttsSpeaking || isBusy()),
+    );
   };
 
   // The browser drops the lock when the page is hidden and does not restore it.
   // Registered with the other listeners at mount, below, so a throw during setup
   // cannot strand it on the document with no disposer to remove it.
-  const onVisibilityChange = () => screenWakeLock.refresh();
+  const stopAudio = () => {
+    stopMic();
+    stopTts();
+    void ttsCtx?.suspend().catch(() => {});
+  };
+  const launchAssistant = async () => {
+    const request = pendingAssistantInvocation();
+    if (!request || !audioAllowed() || !hasMic) return;
+    if (activeAssistantId === request.id) return;
+    activeAssistantId = request.id;
+    try {
+      /** @type {Promise<void> | undefined} */
+      let ready;
+      const claimed = await claimAssistantInvocation(
+        localStorage,
+        navigator.locks,
+        request.id,
+        {
+          isCurrent: () => audioAllowed() && activeAssistantId === request.id,
+          start: () => {
+            assistantRequested = true;
+            stopAudio();
+            assistantPreparing = true;
+            // Use the explicit identity without waiting for model discovery.
+            // Start creation and capture in the same admitted lock turn.
+            ready = createSession(
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              request.id,
+            ).then(() => {
+              if (cancelled || activeAssistantId !== request.id) return;
+              assistantPreparing = false;
+              const transcript = inputText;
+              openActiveSession();
+              inputText = transcript;
+              setStatus(micActive ? 'listening…' : 'Ready.');
+            });
+            assistantReady = ready;
+            void startMic(true);
+          },
+        },
+      );
+      if (!claimed && (!audioAllowed() || activeAssistantId !== request.id)) {
+        if (activeAssistantId === request.id) activeAssistantId = '';
+        return;
+      }
+      acknowledgeAssistantInvocation(request.id);
+      await ready;
+    } catch (error) {
+      console.error('[floot assistant setup]', error);
+      acknowledgeAssistantInvocation(
+        request.id,
+        `Assistant setup failed: ${/** @type {Error} */ (error).message}`,
+      );
+      if (cancelled || activeAssistantId !== request.id) return;
+      assistantPreparing = false;
+      assistantReady = undefined;
+      const transcript = inputText;
+      stopAudio();
+      inputText = transcript;
+      setStatus(
+        `Assistant setup failed: ${/** @type {Error} */ (error).message}`,
+      );
+    }
+  };
+  const onAssistantInvocation = () => {
+    void launchAssistant();
+  };
+  window.addEventListener('endo-assistant', onAssistantInvocation);
+
+  const suspendAudio = () => {
+    audioSuspended = true;
+    stopAudio();
+    updateWakeLock();
+  };
+  const resumeAudio = () => {
+    audioSuspended = false;
+    updateWakeLock();
+  };
+  const onVisibilityChange = () => {
+    if (wakeLockDoc.visibilityState === 'hidden') stopAudio();
+    screenWakeLock.refresh();
+  };
+  window.addEventListener('endo-suspend', suspendAudio);
+  window.addEventListener('endo-resume', resumeAudio);
 
   // Each request for playback. stopTts() bumps it too, so a request that
   // resumes after the audio context resumed (mute, Stop, barge-in, or unmount
@@ -1822,6 +2633,7 @@ export const flootComponent = (
   // Create/resume the audio context. Also called synchronously from the Send
   // gesture (see submit) so autoplay is allowed by the time audio arrives.
   const prepareTts = () => {
+    if (!audioAllowed()) return Promise.resolve();
     try {
       if (!ttsCtx) ttsCtx = new AudioContext();
     } catch {
@@ -1870,7 +2682,7 @@ export const flootComponent = (
     /** @type {Uint8Array} */ bytes,
     /** @type {number} */ sampleRate,
   ) => {
-    if (!ttsCtx) return;
+    if (!ttsCtx || !audioAllowed()) return;
     const frames = Math.floor(bytes.length / 2);
     if (!frames) return;
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
@@ -1908,12 +2720,17 @@ export const flootComponent = (
     /** @type {any} */ audioReader,
     /** @type {FlootTurn | null} */ speechTurn = null,
   ) => {
-    if (!ttsServer) return;
+    if (!ttsServer || !audioAllowed()) {
+      void iterateReader(audioReader)
+        .return()
+        .catch(() => {});
+      return;
+    }
     ttsRequestSeq += 1;
     const mySeq = ttsRequestSeq;
     await prepareTts();
     if (
-      cancelled ||
+      !audioAllowed() ||
       !ttsCtx ||
       mySeq !== ttsRequestSeq ||
       (speechTurn && !ttsEnabled)
@@ -1936,7 +2753,7 @@ export const flootComponent = (
     try {
       for await (const raw of audio) {
         const value = /** @type {any} */ (raw);
-        if (cancelled || myId !== ttsPlaybackId) break;
+        if (!audioAllowed() || myId !== ttsPlaybackId) break;
         if (value.type === 'bytes') {
           enqueuePcm(base64ToBytes(value.b64), value.sampleRate || 22_050);
         } else if (value.type === 'end' || value.type === 'abort') {
@@ -1962,7 +2779,7 @@ export const flootComponent = (
   // Play a finished message through TTS by feeding its whole text as one delta.
   // Independent of the live turn: starting a replay supersedes any other audio.
   const replayMessage = (/** @type {string} */ text) => {
-    if (!ttsServer || !text.trim()) return;
+    if (!ttsServer || !text.trim() || !audioAllowed()) return;
     const feed = makeTextFeed();
     feed.delta(text);
     feed.end();
@@ -1998,7 +2815,7 @@ export const flootComponent = (
   // that rejects (no such voice, TTS unreachable) just ends the iteration in
   // playAudioStream; the text reply is unaffected.
   const speakTurn = (/** @type {FlootTurn} */ turn) => {
-    if (!ttsServer) return;
+    if (!ttsServer || !audioAllowed()) return;
     playAudioStream(E(turn.ref).speak(ttsServer, currentTtsOptions()), turn);
   };
 
@@ -2053,36 +2870,142 @@ export const flootComponent = (
   };
 
   // ── Controller (the view's only handle on the host engine) ───────────────────
+  const presetSettings = makePresetSettings({
+    factory,
+    rootPowers,
+    changed: () => {
+      if (!cancelled) notify();
+    },
+    catalogChanged: async () => {
+      presets = await E(factory).listPresets();
+      if (!cancelled) notify();
+    },
+  });
+
   const controller = harden({
     getState,
+    async forgetUnconfirmedSend() {
+      const session = getActiveSession();
+      if (
+        !session ||
+        !window.confirm(
+          'The earlier message may already have run. Check the conversation first. Forget its saved retry ID?',
+        )
+      )
+        return;
+      try {
+        await submissionClient.forget(
+          `floot-send:${profilePath.join('/')}:${session.id}`,
+        );
+        setStatus('Saved submission cleared.');
+      } catch (error) {
+        setStatus(/** @type {Error} */ (error).message);
+      }
+    },
+    async exportObjects() {
+      try {
+        const text = await exportFlootObjects(rootPowers, {
+          profilePath,
+          audioPath,
+          ttsPath,
+        });
+        if (cancelled) return;
+        const dialog = document.createElement('dialog');
+        const label = document.createElement('p');
+        label.textContent =
+          'Import this into Floot on another Endo. Anyone with these references can use this controller and the included speech services. Share only with a trusted device.';
+        const content = document.createElement('textarea');
+        content.value = text;
+        content.readOnly = true;
+        content.rows = 12;
+        content.cols = 55;
+        content.style.maxWidth = '100%';
+        content.setAttribute('aria-label', 'Floot object export');
+        const copy = document.createElement('button');
+        copy.textContent = 'Copy export';
+        copy.onclick = () => {
+          void navigator.clipboard.writeText(text).then(
+            () => {
+              copy.textContent = 'Copied';
+            },
+            () => {
+              content.focus();
+              content.select();
+            },
+          );
+        };
+        const close = document.createElement('button');
+        close.textContent = 'Close';
+        close.onclick = () => dialog.close();
+        dialog.onclose = () => dialog.remove();
+        dialog.append(label, content, copy, close);
+        document.body.append(dialog);
+        dialog.showModal();
+      } catch (err) {
+        setStatus(`Export failed: ${/** @type {Error} */ (err).message}`);
+      }
+    },
+    refreshDiscovery() {
+      void readDiscovery();
+    },
+    emergencyStop() {
+      // Queued prompts are not a request to resume a stopped session: the
+      // daemon holds them until the user sends one (they are kept, not lost).
+      stopTts();
+      void execution.stop();
+    },
+    resumeSession() {
+      void execution.resume();
+    },
+    refreshNetworkPolicy() {
+      void network.refresh();
+    },
+    setNetworkPolicy(/** @type {string} */ policy) {
+      void network.set(policy);
+    },
+    resolveNetworkPolicyRequest(
+      /** @type {string} */ id,
+      /** @type {boolean} */ approve,
+      /** @type {string} */ note,
+    ) {
+      void network.resolve(id, approve, note);
+    },
+    refreshRecovery() {
+      void recovery.refresh();
+    },
+    resolveTurn(
+      /** @type {string} */ turnId,
+      /** @type {string} */ note,
+      /** @type {boolean} */ confirmed,
+    ) {
+      if (network.getState().changing) return;
+      void recovery.resolve(turnId, note, confirmed);
+    },
     subscribe(/** @type {() => void} */ listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    send(/** @type {string | undefined} */ text) {
-      submit(typeof text === 'string' ? text : inputText);
+    send(/** @type {string | undefined} */ text = undefined) {
+      submit(
+        typeof text === 'string'
+          ? textDraft(text)
+          : (composer?.read() ?? inputText),
+      );
     },
     stop() {
       cancelTurn();
     },
-    // Queue-jump for the pending submission at the head of the queue. It is
-    // already scheduled on submitChain directly behind the turn in flight, so
-    // "send now" is precisely "cut that turn short": cancelling releases it.
-    //
-    // Only the head. Every entry runs the message it was scheduled with, so
-    // cancelling on behalf of a LATER one would end a turn that is not in front
-    // of it — throwing away that reply — and still leave it waiting. The view
-    // offers the control on the head row alone; this is the check that makes
-    // that a rule rather than a convention.
-    sendPendingNow(/** @type {number} */ id) {
-      const head = queuedSends.find(q => q.sessionId === activeSessionId);
-      if (!busy || !head || head.id !== id) return;
-      cancelTurn();
+    // Queue-jump. For the head of the queue behind a running turn this cuts
+    // that turn short; the daemon enforces "only the head", since ending a
+    // turn on behalf of a later message would throw a reply away and still
+    // leave that message waiting. On a held queue it is what releases it.
+    sendPendingNow(/** @type {number | string} */ id) {
+      sendPendingNow(id);
     },
-    editPending(/** @type {number} */ id, /** @type {string} */ text) {
+    editPending(/** @type {number | string} */ id, /** @type {string} */ text) {
       editPending(id, text);
     },
-    cancelPending(/** @type {number} */ id) {
+    cancelPending(/** @type {number | string} */ id) {
       cancelPending(id);
     },
     selectSession(/** @type {string} */ id) {
@@ -2092,8 +3015,71 @@ export const flootComponent = (
       /** @type {string | undefined} */ presetId,
       /** @type {string | undefined} */ model,
       /** @type {string | undefined} */ reasoningEffort,
+      /** @type {string | undefined} */ subscription,
+      /** @type {string | undefined} */ networkPolicy,
     ) {
-      newSession(presetId, model, reasoningEffort);
+      newSession(presetId, model, reasoningEffort, subscription, networkPolicy);
+    },
+    /** Ask each account's provider for its figures now. */
+    refreshAccounts() {
+      void Promise.resolve(factory)
+        .then(resolved => E(resolved).refreshAccounts())
+        .catch(() => {});
+    },
+    /**
+     * Spend one banked rate-limit reset. A credit is scarce and the call
+     * cannot be undone, so the person confirms here, in the host page.
+     * @param key
+     * @param question
+     * @param action
+     */
+    redeemAccountReset(
+      /** @type {string} */ key,
+      /** @type {string} */ question,
+      /** @type {'redeem' | 'replay' | 'abandon'} */ action = 'redeem',
+    ) {
+      if (accountAction?.busy) return;
+      if (!window.confirm(question)) return;
+      accountAction = { key, busy: true, message: '', error: false };
+      notify();
+      void Promise.resolve(factory)
+        .then(resolved => {
+          // The view says which it means. "Ask again" is never a redeem: if
+          // the unconfirmed one was settled while the question was open, the
+          // daemon answers with how and spends nothing.
+          if (action === 'abandon') {
+            return E(resolved).abandonAccountReset(key);
+          }
+          return E(resolved).redeemAccountReset(
+            key,
+            action === 'replay' ? { replay: true } : {},
+          );
+        })
+        .then(
+          answer => {
+            // The outcome arrives with the account, as `reset.last`; a later
+            // ask that was refused leaves it pending, and that is said here.
+            accountAction =
+              answer?.pending === true && answer?.outcome === 'refused'
+                ? {
+                    key,
+                    busy: false,
+                    message:
+                      'That ask was refused; the earlier one is still unconfirmed.',
+                    error: true,
+                  }
+                : null;
+          },
+          error => {
+            accountAction = {
+              key,
+              busy: false,
+              message: /** @type {Error} */ (error)?.message || 'Failed',
+              error: true,
+            };
+          },
+        )
+        .finally(() => notify());
     },
     renameSession(/** @type {string} */ id, /** @type {string} */ title) {
       renameSession(id, title);
@@ -2117,12 +3103,41 @@ export const flootComponent = (
     replayMessage(/** @type {string} */ text) {
       replayMessage(text);
     },
+    loadPresetSettings() {
+      void presetSettings.load();
+    },
+    savePreset(preset) {
+      void presetSettings.save(preset);
+    },
+    deletePreset(id) {
+      void presetSettings.remove(id);
+    },
+    resetPreset(id) {
+      void presetSettings.reset(id);
+    },
+    setVoicePreset(id) {
+      void presetSettings.selectVoice(id);
+    },
     toggleSettings() {
       settingsOpen = !settingsOpen;
+      if (settingsOpen) void network.refresh();
+      if (settingsOpen) void execution.refresh();
+      if (settingsOpen) {
+        void Promise.resolve(factory)
+          .then(resolved => E(resolved).refreshAccounts())
+          .catch(error =>
+            setStatus(`Capacity refresh failed: ${error.message}`),
+          );
+      }
       notify();
     },
     setInput(/** @type {string} */ text) {
       inputText = text;
+      try {
+        sessionDrafts.save(text);
+      } catch {
+        setStatus('This draft could not be saved on this device.');
+      }
       notify();
     },
   });
@@ -2142,6 +3157,30 @@ export const flootComponent = (
     allowedAttrs: ['target'],
   });
 
+  composer = makeFlootComposer({
+    document: $parent.ownerDocument,
+    powers: rootPowers,
+    onInput: draft => controller.setInput(draft),
+    onSend: () => controller.send(),
+  });
+  const mountComposer = () => {
+    const anchor = $mount.querySelector('[data-floot-composer]');
+    if (composer && anchor && composer.node.parentNode !== anchor)
+      anchor.appendChild(composer.node);
+  };
+  syncComposer = () => {
+    const state = controller.getState();
+    composer?.sync(
+      inputText,
+      state.unavailable ||
+        state.network?.changing ||
+        state.network?.blocked ||
+        state.recovery?.resolving,
+    );
+  };
+  syncComposer();
+  mountComposer();
+
   // Sticky-bottom transcript scrolling lives HOST-side: the confined view cannot
   // touch DOM nodes (the renderer strips refs), so the host owns `$mount` and
   // nudges `.floot-messages` to the bottom after each render while the reader is
@@ -2158,6 +3197,7 @@ export const flootComponent = (
   $mount.addEventListener('scroll', onScrollCapture, true);
   wakeLockDoc.addEventListener('visibilitychange', onVisibilityChange);
   const scrollObserver = new MutationObserver(() => {
+    mountComposer();
     if (!stick) return;
     const el = /** @type {HTMLElement | null} */ (
       $mount.querySelector('.floot-messages')
@@ -2258,126 +3298,328 @@ export const flootComponent = (
   }
 
   // ── Initial load ─────────────────────────────────────────────────────────────
-  // Load the session list from the factory (most-recent first), seeding a
-  // default session if the factory has none, then repaint the active history.
-  let recoveryRefreshTimer;
-  // A session stuck in a non-ready lifecycle (a failed creation, a hosted
-  // backend that is no longer installed) never becomes ready on its own, and
-  // the factory only recovers at startup. Poll a bounded number of times with
-  // a widening delay, then stop and let the user get on with a new session
-  // rather than spinning on three CapTP round trips forever.
-  const RECOVERY_ATTEMPTS = 8;
-  let recoveryAttempt = 0;
-  const loadInitialSessions = async () => {
-    try {
-      factory = await factory;
-      const [metas, presetList, modelList] = await Promise.all([
-        E(factory).listSessions(),
-        E(factory)
-          .listPresets()
-          .catch(() => []),
-        E(factory).listModels(),
-      ]);
-      presets = presetList;
-      models = modelList;
-      // `listSessions()` is a remote call, so its result is unknown here;
-      // materialize it once as an array both the filter and the recovery
-      // check below can read.
-      const allMetas = /** @type {any[]} */ ([...metas]);
-      const readyMetas = allMetas.filter(
-        (/** @type {any} */ meta) =>
-          !meta.lifecycle || meta.lifecycle === 'ready',
-      );
-      sessions = readyMetas
-        .sort(
-          (/** @type {any} */ a, /** @type {any} */ b) =>
-            (b.createdAt || 0) - (a.createdAt || 0),
-        )
-        .map((/** @type {any} */ m) => ({
-          id: m.id,
-          title: m.title || DEFAULT_TITLE,
-          createdAt: m.createdAt || 0,
-          presetId: m.presetId || DEFAULT_PRESET_ID,
-          model: m.model || '',
-          messages: [],
-          facet: null,
-          loaded: false,
-        }));
+  // Subscribe to the factory's session list (most-recent first), selecting a
+  // user session if there is one, then open the active session.
+  // The list stays subscribed: a session made elsewhere (another page, an agent
+  // starting workflow participants), a rename, a deletion and activity all
+  // arrive here without being asked for. Only user-initiated roots enter the
+  // view, so hidden work is never auto-selected or opened.
+  /** @param {any} m a session record as the factory reports it */
+  const adoptSessionMeta = m => {
+    const existing = sessions.find(s => s.id === m.id);
+    const fields = {
+      title: m.title || DEFAULT_TITLE,
+      createdAt: m.createdAt || 0,
+      presetId: m.presetId || DEFAULT_PRESET_ID,
+      model: m.model || '',
+      backendId: m.backendId || 'provider',
+      modelId: m.modelId || '',
+      effectiveModelId: m.effectiveModelId || '',
+      reasoningEffort: m.reasoningEffort || '',
+      subscription: m.subscription || 'auto',
+      lifecycle: m.lifecycle,
+      activity: m.activity,
+      pendingCount: Number(m.pendingCount) || 0,
+    };
+    if (existing) {
+      Object.assign(existing, fields);
+      return existing;
+    }
+    /** @type {FlootSession} */
+    const session = {
+      id: m.id,
+      ...fields,
+      messages: [],
+      facet: null,
+      loaded: false,
+      transcript: null,
+      current: null,
+      running: null,
+      pending: normalizePending(null),
+      displayTurn: null,
+    };
+    sessions.push(session);
+    return session;
+  };
+  const sortSessions = () => {
+    sessions.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  };
+  /** @type {ReturnType<typeof iterateReader> | null} */
+  let sessionListStream = null;
+
+  /** @param {any} event */
+  const applyListEvent = event => {
+    if (event.type === 'session' && event.session) {
+      if (!isUserSession(event.session)) {
+        applyListEvent({ type: 'removed', id: event.session.id });
+        return;
+      }
+      const known = sessions.some(s => s.id === event.session.id);
+      const wasReady = sessions.find(s => s.id === event.session.id)?.lifecycle;
+      const session = adoptSessionMeta(event.session);
+      if (!known) sortSessions();
+      // The session on screen became usable (or stopped being): reopen it.
       if (
-        !sessions.length &&
-        allMetas.length > 0 &&
-        recoveryAttempt < RECOVERY_ATTEMPTS
+        session.id === activeSessionId &&
+        (wasReady || 'ready') !== (session.lifecycle || 'ready')
       ) {
-        recoveryAttempt += 1;
+        openActiveSession();
+      } else if (
+        activeSessionId === null &&
+        (!session.lifecycle || session.lifecycle === 'ready')
+      ) {
+        // Nothing was open (a fresh space, or the last session deleted): a
+        // session started from another page is the one to show, as the
+        // first listed is at load.
+        activeSessionId = session.id;
+        status = readyStatus();
+        openActiveSession();
+      }
+      // A circle this page painted red gives way once the daemon says better.
+      if (session.activity !== 'error') sessionStatus.delete(session.id);
+    } else if (event.type === 'removed' && typeof event.id === 'string') {
+      const index = sessions.findIndex(s => s.id === event.id);
+      if (index >= 0) {
+        sessions = sessions.filter(s => s.id !== event.id);
+        sessionStatus.delete(event.id);
+        if (activeSessionId === event.id) {
+          activeSessionId = sessions.length ? sessions[0].id : null;
+          status = readyStatus();
+          openActiveSession();
+        }
+      }
+    }
+  };
+
+  // Follow the list for the life of the mount. A stream that ends or fails is
+  // opened again (a few times, not for ever), and the fresh snapshot is
+  // reconciled against what is on screen, so the sidebar never freezes
+  // silently on a list that stopped reporting.
+  /** @param {ReturnType<typeof iterateReader<any>>} first */
+  const followSessionList = async first => {
+    let list = first;
+    let failures = 0;
+    while (!cancelled) {
+      let heard = false;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        for await (const event of list) {
+          if (cancelled) return;
+          heard = true;
+          if (event.type === 'snapshot' && Array.isArray(event.sessions)) {
+            const visible = event.sessions.filter(isUserSession);
+            const listed = new Set(visible.map((/** @type {any} */ m) => m.id));
+            for (const meta of visible) adoptSessionMeta(meta);
+            for (const gone of sessions.filter(s => !listed.has(s.id))) {
+              applyListEvent({ type: 'removed', id: gone.id });
+            }
+            sortSessions();
+          } else {
+            applyListEvent(event);
+          }
+          notify();
+        }
+      } catch {
+        // Falls through to the reopen below.
+      }
+      if (cancelled) return;
+      failures = heard ? 1 : failures + 1;
+      if (failures > 3) {
         setStatus(
-          `Recovering sessions… (${recoveryAttempt}/${RECOVERY_ATTEMPTS})`,
-        );
-        recoveryRefreshTimer = setTimeout(
-          () => {
-            // The user may have created a session and started talking while
-            // this was armed. Reloading would replace the session list and
-            // reset the active session out from under them.
-            if (!cancelled && !sessions.length) void loadInitialSessions();
-          },
-          250 * 2 ** (recoveryAttempt - 1),
+          'error: the session list stopped reporting; reload to retry.',
         );
         return;
       }
-      recoveryAttempt = 0;
-      const strandedCount = allMetas.length - sessions.length;
-      if (!sessions.length) {
-        await createSession();
-      } else {
-        activeSessionId = sessions[0].id;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        list = iterateReader(await E(factory).watchSessions(), { buffer: 4 });
+        sessionListStream = list;
+      } catch (error) {
+        setStatus(`error: ${/** @type {Error} */ (error).message}`);
+        return;
       }
-      // Say so rather than reporting a clean "Ready." over sessions the
-      // factory could not revive; they are still listed by the factory and an
-      // operator has to deal with them.
-      setStatus(
-        strandedCount > 0
-          ? `Ready. ${strandedCount} session(s) could not be recovered.`
-          : 'Ready.',
+    }
+  };
+
+  // Subscribe to the accounts, separately from the sessions: a daemon from
+  // before `watchAccounts()` has no such method, and a page that cannot show
+  // balances still has to show sessions. The stream is reopened when it ends
+  // (the daemon closes the oldest readers past a bound) and not when the
+  // method is missing.
+  /** @type {any} */
+  let accountsStream = null;
+  const followAccounts = async () => {
+    await null;
+    for (let pause = 2000; !cancelled; pause = Math.min(pause * 2, 60_000)) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const resolved = await factory;
+        // eslint-disable-next-line no-await-in-loop
+        const stream = iterateReader(await E(resolved).watchAccounts(), {
+          buffer: 1,
+        });
+        accountsStream = stream;
+        // eslint-disable-next-line no-await-in-loop
+        for await (const event of stream) {
+          if (cancelled) return;
+          const value = /** @type {any} */ (event);
+          if (value?.type === 'accounts' && Array.isArray(value.accounts)) {
+            accounts = value.accounts;
+            pause = 2000;
+            notify();
+          }
+        }
+      } catch (error) {
+        // A daemon from before `watchAccounts()`: nothing to follow, ever.
+        // Any other failure is an outage and is tried again.
+        const message = /** @type {Error} */ (error)?.message || '';
+        if (
+          message.includes('watchAccounts') &&
+          /has no method|is not a function/i.test(message)
+        ) {
+          return;
+        }
+      }
+      if (cancelled) return;
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, pause));
+    }
+  };
+
+  /** @type {Promise<void> | undefined} */
+  let discoveryP;
+  /**
+   * Read what each backend's accounts list now, and how their discovery
+   * stands. Read at load beside the session list, never ahead of it (a slow
+   * provider must not hold the sessions back), and again whenever the picker
+   * opens, so what an outage at load said is not left standing once the
+   * provider is back. One read at a time; a second ask joins it.
+   */
+  const readDiscovery = () => {
+    discoveryP ??= (async () => {
+      try {
+        const [modelList, catalogList] = await Promise.all([
+          E(factory).listModels(),
+          // How each backend's discovery stands; a factory from before it
+          // could say leaves the picker without the status line.
+          E(factory)
+            .listModelCatalogs()
+            .catch(() => []),
+        ]);
+        if (cancelled) return;
+        discoveryError = '';
+        catalogs = Array.isArray(catalogList) ? catalogList : [];
+        models = modelList.map(m => {
+          const backend = backends.find(b => b.id === m.backendId);
+          return {
+            ...m,
+            backendTitle: backend?.title,
+            subscriptions: backend?.subscriptions || [],
+            supportedNetworkPolicies: backend?.supportedNetworkPolicies || [],
+          };
+        });
+        notify();
+      } catch (err) {
+        // Said in the picker, where it matters, not over the status line
+        // the session load and turns write.
+        if (cancelled) return;
+        discoveryError = `${/** @type {Error} */ (err).message}`.slice(0, 200);
+        notify();
+      } finally {
+        discoveryP = undefined;
+      }
+    })();
+    return discoveryP;
+  };
+
+  const loadInitialSessions = async () => {
+    try {
+      factory = await factory;
+      const [listReader, presetList, backendList] = await Promise.all([
+        E(factory).watchSessions(),
+        E(factory)
+          .listPresets()
+          .catch(() => []),
+        E(factory)
+          .listBackends()
+          .catch(() => []),
+      ]);
+      const list = iterateReader(listReader, { buffer: 4 });
+      sessionListStream = list;
+      if (cancelled) {
+        void Promise.resolve(list.return()).catch(() => {});
+        return;
+      }
+      presets = presetList;
+      backends = backendList.map((/** @type {any} */ b) => ({
+        id: b.id,
+        title: b.title,
+        subscriptions: Array.isArray(b.subscriptions) ? b.subscriptions : [],
+        supportedNetworkPolicies: Array.isArray(b.supportedNetworkPolicies)
+          ? b.supportedNetworkPolicies
+          : [],
+      }));
+      void readDiscovery();
+      // The first event is the list as it stands. Unavailable sessions are
+      // retained too: hiding them would hide recovery work.
+      const first = /** @type {any} */ ((await list.next()).value);
+      const metas = /** @type {any[]} */ (
+        first && first.type === 'snapshot'
+          ? first.sessions.filter(isUserSession)
+          : []
       );
-      openActiveHistory();
+      for (const meta of metas) adoptSessionMeta(meta);
+      sortSessions();
+      const strandedCount = metas.filter(
+        m => m.lifecycle && m.lifecycle !== 'ready',
+      ).length;
+      // No session is made just so there is one: the first is the person's
+      // to start, with the backend and model they choose.
+      if (!assistantRequested) {
+        activeSessionId = sessions.length
+          ? (
+              sessions.find(s => !s.lifecycle || s.lifecycle === 'ready') ||
+              sessions[0]
+            ).id
+          : null;
+        // Say so rather than reporting a clean "Ready." over sessions the
+        // factory could not revive; they are still listed by the factory and an
+        // operator has to deal with them.
+        setStatus(
+          strandedCount > 0
+            ? `Ready. ${strandedCount} session(s) could not be recovered.`
+            : readyStatus(),
+        );
+        openActiveSession();
+      }
+      void followSessionList(list);
     } catch (err) {
-      setStatus(`error: ${/** @type {Error} */ (err).message}`);
+      if (!cancelled) setStatus(`error: ${/** @type {Error} */ (err).message}`);
     }
   };
   void loadInitialSessions();
-
-  // Mail-driven workflow completions do not have a UI reply stream. Refresh
-  // idle history so the readiness message appears while this space is open.
-  // Never overwrite an optimistic/in-flight user turn with an older snapshot.
-  let historyTimer;
-  const refreshMailHistory = async () => {
-    const session = getActiveSession();
-    if (session && !busy && !liveTurnFor(session.id)) {
-      const previousCount = session.messages.length;
-      await loadHistory(
-        session,
-        undefined,
-        () => !cancelled && !busy && !liveTurnFor(session.id),
-      );
-      if (
-        !cancelled &&
-        activeSessionId === session.id &&
-        session.messages.length > previousCount
-      ) {
-        notify();
-      }
-    }
-    if (!cancelled) historyTimer = setTimeout(refreshMailHistory, 3000);
-  };
-  historyTimer = setTimeout(refreshMailHistory, 3000);
+  void followAccounts();
+  // A cold launch may arrive before this space and its listeners are mounted.
+  void launchAssistant();
 
   return () => {
     cancelled = true;
+    if (accountsStream) {
+      void Promise.resolve(accountsStream.return()).catch(() => {});
+    }
+    void recovery.select(null);
+    void network.select(null);
+    void execution.select(null);
     wakeLockDoc.removeEventListener('visibilitychange', onVisibilityChange);
+    window.removeEventListener('endo-suspend', suspendAudio);
+    window.removeEventListener('endo-resume', resumeAudio);
+    window.removeEventListener('endo-assistant', onAssistantInvocation);
     // `cancelled` is set, so this releases rather than re-requests.
     updateWakeLock();
-    clearTimeout(historyTimer);
-    if (recoveryRefreshTimer !== undefined) {
-      clearTimeout(recoveryRefreshTimer);
+    // Closing a subscription detaches this page and nothing else.
+    if (sessionView) sessionView.close();
+    if (sessionListStream) {
+      void Promise.resolve(sessionListStream.return?.()).catch(() => {});
     }
     // Leave any in-flight turn running in the background — just detach our view
     // (don't return the reader, which would abort the agent). The turn finishes
@@ -2396,6 +3638,7 @@ export const flootComponent = (
       ttsCtx = null;
     }
     scrollObserver.disconnect();
+    composer?.dispose();
     $mount.removeEventListener('scroll', onScrollCapture, true);
     unmount($mount);
     $mount.remove();

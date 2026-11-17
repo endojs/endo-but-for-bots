@@ -5,7 +5,7 @@ annexB/language/statements/for-in/const-initializer.js sloppy pass
 annexB/language/statements/for-in/const-initializer.js strict pass
 annexB/language/statements/for-in/let-initializer.js sloppy pass
 annexB/language/statements/for-in/let-initializer.js strict pass
-annexB/language/statements/for-in/nonstrict-initializer.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: missing ;\" ironhorse=\"SyntaxError\""
+annexB/language/statements/for-in/nonstrict-initializer.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: SyntaxError: missing ;"
 annexB/language/statements/for-in/strict-initializer.js strict pass
 annexB/language/statements/for-in/var-arraybindingpattern-initializer.js sloppy pass
 annexB/language/statements/for-in/var-arraybindingpattern-initializer.js strict pass

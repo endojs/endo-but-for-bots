@@ -109,6 +109,7 @@ impl Interp {
                             key,
                             val,
                             &mut self.side_refs,
+                            &mut self.chunks,
                         );
                         self.collection_table_resize(inst);
                     }
@@ -129,6 +130,7 @@ impl Interp {
                         key,
                         Slot::undefined(),
                         &mut self.side_refs,
+                        &mut self.chunks,
                     );
                     self.collection_table_resize(inst);
                 }
@@ -138,7 +140,7 @@ impl Interp {
                 let key = self.normalize_coll_key(arg0);
                 let v = self
                     .collection_find(inst, &key)
-                    .map(|p| self.collections[&inst].entries()[p].unwrap().1)
+                    .map(|p| self.collections[&inst].value_at(p))
                     .unwrap_or_else(Slot::undefined);
                 Ok(v)
             }
@@ -157,10 +159,11 @@ impl Interp {
                 let key = self.normalize_coll_key(arg0);
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections
-                            .get_mut(&inst)
-                            .unwrap()
-                            .remove_entry(p, &mut self.side_refs);
+                        self.collections.get_mut(&inst).unwrap().remove_entry(
+                            p,
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
                         // `fxDeleteEntry` calls `fxResizeEntries` (a Map/Set may
                         // shrink its address chunk; a weak unlink is
                         // allocation-free).
@@ -233,7 +236,7 @@ impl Interp {
         // AND no `add`/`set` descriptor exists anywhere on the receiver's chain
         // (a truly unbound intrinsic); a user who cleared `add` to `undefined`
         // leaves a descriptor, so that case still throws per specification.
-        if adder.kind == Kind::Undefined && !self.chain_has_descriptor(inst, method_id) {
+        if adder.kind == Kind::Undefined && self.adder_awaits_installation(inst, kind, method_id) {
             debug_assert!(
                 self.functions
                     .values()
@@ -344,6 +347,7 @@ impl Interp {
                     key,
                     value,
                     &mut self.side_refs,
+                    &mut self.chunks,
                 );
                 self.collection_table_resize(inst);
             }
@@ -381,6 +385,42 @@ impl Interp {
         }
     }
 
+    /// Whether an absent `set`/`add` is the intrinsic adder that sparse
+    /// installation has not yet put on the collection prototype — the only
+    /// absence the constructors may recover from. The name must never have
+    /// been installed (its id is above the machine-wide installation floor,
+    /// so no guest can have deleted it) and the receiver's chain must reach
+    /// the intrinsic prototype. Recovering on bare absence substituted the
+    /// intrinsic adder after `delete Map.prototype.set`, or for a subclass
+    /// whose prototype no longer inherits from `Map.prototype`, where XS and
+    /// V8 throw a TypeError.
+    fn adder_awaits_installation(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        kind: CollKind,
+        method_id: u16,
+    ) -> bool {
+        let intrinsic = match kind {
+            CollKind::Map => self.map_proto,
+            CollKind::Set => self.set_proto,
+            CollKind::WeakMap => self.weakmap_proto,
+            CollKind::WeakSet => self.weakset_proto,
+        };
+        if usize::from(method_id) <= self.installed_names_len
+            || self.chain_has_descriptor(inst, method_id)
+        {
+            return false;
+        }
+        let mut level = inst;
+        while !level.is_null() {
+            if level == intrinsic {
+                return true;
+            }
+            level = self.instance_prototype(level);
+        }
+        false
+    }
+
     fn populate_collection_from_iterable_inner(
         &mut self,
         code: &[u8],
@@ -412,7 +452,7 @@ impl Interp {
         // can be absent from the prototype until this constructor reaches it.
         // Recover only genuine absence; an explicit guest `undefined` remains
         // observable and fails the callable check.
-        if adder.kind == Kind::Undefined && !self.chain_has_descriptor(inst, method_id) {
+        if adder.kind == Kind::Undefined && self.adder_awaits_installation(inst, kind, method_id) {
             debug_assert!(
                 self.functions
                     .values()
@@ -582,13 +622,7 @@ impl Interp {
     /// the same [`NativeMethod::ArrayIteratorNext`], which branches on kind).
     pub(in crate::interp) fn make_string_iterator(&mut self, bytes: Vec<u8>) -> Slot {
         self.meter.tick_raw(STRING_ITERATOR_CREATE_METERING);
-        let result = self.slots.alloc(Slot::instance(self.object_proto));
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::undefined());
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(false));
-        }
+        let result = self.new_reused_iterator_result();
         let iter = self.slots.alloc(Slot::instance(self.array_iterator_proto));
         self.iterators.insert(
             iter,
@@ -596,11 +630,13 @@ impl Interp {
                 iterable: crate::value::SlotIndex::NULL,
                 index: 0,
                 kind: 4,
+                coll_seq: 0,
                 generation: 0,
                 result,
                 done: false,
                 enum_keys: std::rc::Rc::default(),
                 str_bytes: std::rc::Rc::new(bytes),
+                enum_visited: None,
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iter))
@@ -623,13 +659,7 @@ impl Interp {
     ) -> Slot {
         self.meter.tick_raw(COLLECTION_ITERATOR_CREATE_METERING);
         let coll_generation = self.collections.get(&inst).map_or(0, |c| c.generation());
-        let result = self.slots.alloc(Slot::instance(self.object_proto));
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::undefined());
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(false));
-        }
+        let result = self.new_reused_iterator_result();
         let proto = match self.collections.get(&inst).map(|c| c.kind) {
             Some(CollKind::Map) => self.map_iterator_proto,
             Some(CollKind::Set) => self.set_iterator_proto,
@@ -642,11 +672,13 @@ impl Interp {
                 iterable: inst,
                 index: 0,
                 kind,
+                coll_seq: 0,
                 generation: coll_generation,
                 result,
                 done: false,
                 enum_keys: std::rc::Rc::default(),
                 str_bytes: std::rc::Rc::default(),
+                enum_visited: None,
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iter))
@@ -725,11 +757,13 @@ impl Interp {
                 iterable: iterator_inst,
                 index: 0,
                 kind: 8,
+                coll_seq: 0,
                 generation: 0,
                 result: next_holder,
                 done: false,
                 enum_keys: std::rc::Rc::default(),
                 str_bytes: std::rc::Rc::default(),
+                enum_visited: None,
             },
         );
         Ok(Slot::of(Kind::Reference, Payload::Reference(wrapper)))
@@ -795,6 +829,882 @@ impl Interp {
             return Err(self.catchable_type_error_msg("call: not a function".into()));
         }
         self.call_any(code, return_method, iterator, &[])
+    }
+
+    /// The lazy Iterator helpers' shared holder layout. A helper's
+    /// [`IterState::result`] names an internal Array whose items carry the
+    /// captured iterator record and per-helper state; an Array keeps the
+    /// otherwise arbitrary [`Slot`]s on the ordinary GC and snapshot paths
+    /// (the row's `result` edge marks the holder, and the holder's own items
+    /// are traced and persisted like any other array's) without minting
+    /// name-table ids for internal field names.
+    const HELPER_NEXT: u32 = 0;
+    /// The mapper/predicate (kinds 10, 11, 14), the remaining count as a
+    /// number (kinds 12, 13), or the next item's position (kind 15).
+    const HELPER_ARG: u32 = 1;
+    /// `flatMap`'s or `Iterator.concat`'s live inner iterator, or `undefined`
+    /// between inner runs.
+    const HELPER_INNER: u32 = 2;
+    /// `flatMap`'s live inner `next` method, or `undefined`. `Iterator.concat`
+    /// keeps its inner `next` in [`Self::HELPER_NEXT`], as it has no outer one.
+    const HELPER_INNER_NEXT: u32 = 3;
+
+    fn helper_get(&self, holder: crate::value::SlotIndex, index: u32) -> Slot {
+        self.arrays
+            .get(&holder)
+            .and_then(|data| data.items().get(&index).copied())
+            .unwrap_or_else(Slot::undefined)
+    }
+
+    fn helper_set(&mut self, holder: crate::value::SlotIndex, index: u32, value: Slot) {
+        if let Some(data) = self.arrays.get_mut(&holder) {
+            data.insert_item(index, value, &mut self.side_refs, &mut self.chunks);
+        }
+    }
+
+    /// Latch a lazy helper completed and release everything it held. Every
+    /// exit that stops yielding — normal exhaustion, a throw out of the
+    /// underlying iterator, a throwing callback, `take`'s limit, and
+    /// `return()` — goes through here, so a later `next()` reports done
+    /// without touching the underlying iterator again.
+    ///
+    /// A completed generator's closure is unreachable, so EVERY edge it held
+    /// has to go, not just the callback. The captured `next` and the
+    /// underlying iterator are equally dead once `done` latches, because both
+    /// `next()` and `return()` short-circuit on `done` before reading either.
+    /// Releasing only some of them left a spent helper pinning its entire
+    /// source object graph for as long as anything referenced it — a cached
+    /// `.take(n)` view, a helper parked in a Map — and a snapshot wrote that
+    /// garbage out with it.
+    ///
+    /// `iterable` drops to NULL, which is not a new state for this table: a
+    /// live string cursor (kind 4) already carries one. The three restore
+    /// gates admit it for a row that is `done`, and only for such a row.
+    fn helper_finish(&mut self, helper: crate::value::SlotIndex) {
+        let holder = self.iterators.get(&helper).map(|state| state.result);
+        if let Some(holder) = holder {
+            // Empty the holder rather than writing `undefined` over each slot:
+            // a map/filter/take/drop helper only ever populated items 0 and 1,
+            // so overwriting all four GREW its item map on the way to being
+            // spent. `clear_items` drops every item's side reference and
+            // leaves nothing behind.
+            if let Some(data) = self.arrays.get_mut(&holder) {
+                data.clear_items(&mut self.side_refs, &mut self.chunks);
+            }
+        }
+        if let Some(state) = self.iterators.get_mut(&helper) {
+            state.done = true;
+            state.iterable = crate::value::SlotIndex::NULL;
+        }
+    }
+
+    /// `CreateIterResultObject(value, done)`. Generator-backed helpers allocate
+    /// a fresh result on every `next()`, unlike the built-in cursors above,
+    /// which mutate and return one reused object.
+    /// `CreateIterResultObject`, charged NOTHING — deliberately, and this is
+    /// the third answer this function has given.
+    ///
+    /// The spec creates a fresh object per call, so this allocates three slots
+    /// (the instance and one per own property) and `a === b` is correctly
+    /// `false` across two `next()`s. XS does not: `fx_IteratorHelper_prototype_next`
+    /// (`xsGenerator.c`) reads `instance->next` and MUTATES it in place, so it
+    /// allocates the result once at helper creation and answers `true` — an XS
+    /// deviation this engine does not copy.
+    ///
+    /// The meter, though, must match XS, and XS pays nothing here. Charging
+    /// per slot put the helpers 768 raw per `next()` OVER the oracle, linear
+    /// in iteration length: measured on the done fast path, XS 1327104 vs
+    /// 1327872 here, and removing these three ticks lands on XS exactly.
+    /// Charging once — the original — was 256 over.
+    ///
+    /// `regexp_string_iterator_result` is the settled precedent: same three
+    /// slots, same fresh-where-XS-reuses shape, no charge, and its per-`next()`
+    /// cost has always matched XS. The slots still cost the HEAP, which the
+    /// collector and the chunk ceiling account for; what is not charged is the
+    /// METER, because the oracle does not charge it.
+    fn helper_iter_result(&mut self, value: Slot, done: bool) -> Slot {
+        let value_id = self.intern_static_key("value");
+        let done_id = self.intern_static_key("done");
+        let result = self.slots.alloc(Slot::instance(self.object_proto));
+        self.set_own_unmetered(result, value_id, value);
+        self.set_own_unmetered(result, done_id, Slot::boolean(done));
+        Slot::of(Kind::Reference, Payload::Reference(result))
+    }
+
+    /// `IteratorStepValue(record)` over an explicit `(iterator, next)` pair.
+    /// `Ok(Ok(None))` is the exhausted step. A throw out of `next`, a
+    /// non-object step result, or a throwing `done`/`value` getter all
+    /// propagate WITHOUT calling `return`: the spec's IteratorStepValue sets
+    /// [[Done]] before returning the abrupt completion, so its caller's
+    /// IfAbruptCloseIterator finds a closed record and skips the close. This
+    /// function sets no latch itself — the caller latches the helper on the
+    /// way out — so the distinction it implements is only "do not close".
+    pub(in crate::interp) fn helper_step_value(
+        &mut self,
+        code: &[u8],
+        iterator: Slot,
+        next_method: Slot,
+    ) -> Result<Result<Option<Slot>, Slot>, Step> {
+        if !self.is_callable_value(next_method) {
+            return Ok(Err(
+                self.internal_error("TypeError", "call: not a function".into())
+            ));
+        }
+        let step =
+            match self.array_from_try(|this| this.call_any(code, next_method, iterator, &[]))? {
+                Ok(step) => step,
+                Err(error) => return Ok(Err(error)),
+            };
+        let step_inst = match step.value {
+            Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
+            _ => {
+                return Ok(Err(self.internal_error(
+                    "TypeError",
+                    "iterator result: not an object".into(),
+                )))
+            }
+        };
+        let done_id = self.intern_static_key("done");
+        let done = match self.array_from_try(|this| this.mop_get(code, step_inst, done_id, step))? {
+            Ok(done) => done,
+            Err(error) => return Ok(Err(error)),
+        };
+        if self.truthy(&done) {
+            return Ok(Ok(None));
+        }
+        let value_id = self.intern_static_key("value");
+        let value =
+            match self.array_from_try(|this| this.mop_get(code, step_inst, value_id, step))? {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            };
+        Ok(Ok(Some(value)))
+    }
+
+    /// `GetIteratorFlattenable(value, reject-primitives)` followed by
+    /// GetIteratorDirect: returns the `(iterator, next)` pair `flatMap` drives.
+    /// A primitive — string included, since `flatMap` rejects primitives —
+    /// and a non-object `@@iterator` result are both TypeErrors.
+    fn helper_iterator_flattenable(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+    ) -> Result<Result<(Slot, Slot), Slot>, Step> {
+        let Payload::Reference(inst) = value.value else {
+            return Ok(Err(
+                self.internal_error("TypeError", "iterator: not an object".into())
+            ));
+        };
+        if value.kind != Kind::Reference {
+            return Ok(Err(
+                self.internal_error("TypeError", "iterator: not an object".into())
+            ));
+        }
+        // A halt, not a panic: this runs on a guest-driven `flatMap` step, and
+        // the two other engine invariants this path can raise are registered
+        // halts. The symbol is minted at boot, so neither can fire post-boot,
+        // but a guest-reachable frame should not be the one place that aborts
+        // the process instead of unwinding the crank.
+        let Some(iterator_id) = self.well_known_symbol_property_id("iterator") else {
+            return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-symbol")));
+        };
+        let method =
+            match self.array_from_try(|this| this.mop_get(code, inst, iterator_id, value))? {
+                Ok(method) => method,
+                Err(error) => return Ok(Err(error)),
+            };
+        let iterator = if matches!(method.kind, Kind::Undefined | Kind::Null) {
+            value
+        } else {
+            if !self.is_callable_value(method) {
+                return Ok(Err(
+                    self.internal_error("TypeError", "call: not a function".into())
+                ));
+            }
+            match self.array_from_try(|this| this.call_any(code, method, value, &[]))? {
+                Ok(iterator) => iterator,
+                Err(error) => return Ok(Err(error)),
+            }
+        };
+        let Payload::Reference(iterator_inst) = iterator.value else {
+            return Ok(Err(
+                self.internal_error("TypeError", "iterator: not an object".into())
+            ));
+        };
+        if iterator.kind != Kind::Reference {
+            return Ok(Err(
+                self.internal_error("TypeError", "iterator: not an object".into())
+            ));
+        }
+        let next_id = self.intern_static_key("next");
+        let next_method = match self
+            .array_from_try(|this| this.mop_get(code, iterator_inst, next_id, iterator))?
+        {
+            Ok(next_method) => next_method,
+            Err(error) => return Ok(Err(error)),
+        };
+        Ok(Ok((iterator, next_method)))
+    }
+
+    /// Create one of the lazy Iterator helpers (`map`, `filter`, `take`,
+    /// `drop`, `flatMap`) behind a native try boundary. Like the eager helpers
+    /// below, these drive the PUBLIC direct-iterator protocol rather than
+    /// ironhorse's iterator side table, so a user iterator, a Proxy, an
+    /// accessor `next`, or an overridden built-in `next` all stay observable.
+    pub(in crate::interp) fn iterator_lazy_helper(
+        &mut self,
+        code: &[u8],
+        op: u8,
+        this: Slot,
+        base: usize,
+    ) -> Result<Slot, Step> {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            machine.iterator_lazy_helper_inner(code, op, this, base)
+        });
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(self.raise_js(error)),
+            Err(halt) => Err(halt),
+        }
+    }
+
+    /// The shared creation steps. The operation ids follow `create_intrinsics`:
+    /// 0 map, 1 filter, 2 take, 3 drop, 4 flatMap; the stored `IterState.kind`
+    /// is the id plus ten.
+    fn iterator_lazy_helper_inner(
+        &mut self,
+        code: &[u8],
+        op: u8,
+        iterator: Slot,
+        base: usize,
+    ) -> Result<Result<Slot, Slot>, Step> {
+        let inst = match iterator.value {
+            Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
+            _ => {
+                return Ok(Err(
+                    self.internal_error("TypeError", "this: not an object".into())
+                ))
+            }
+        };
+        let arg0 = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+
+        // ES2025 builds the INCOMPLETE iterator record before validating the
+        // argument, so an argument fault closes the receiver — IteratorClose
+        // observes `return` — while `next` has not been read yet. The original
+        // error always wins over a fault from `return`.
+        let captured = match op {
+            0 | 1 | 4 => {
+                if !self.is_callable_value(arg0) {
+                    let error = self.internal_error(
+                        "TypeError",
+                        match op {
+                            1 => "predicate: not a function",
+                            _ => "mapper: not a function",
+                        }
+                        .into(),
+                    );
+                    return Ok(Err(self.array_from_close(code, iterator, error)?));
+                }
+                arg0
+            }
+            2 | 3 => {
+                let limit = match self.array_from_try(|this| this.to_number_f64(code, arg0))? {
+                    Ok(limit) => limit,
+                    Err(error) => return Ok(Err(self.array_from_close(code, iterator, error)?)),
+                };
+                // NaN is rejected BEFORE ToIntegerOrInfinity, which would
+                // otherwise fold it to +0 and silently accept `take(NaN)`.
+                if limit.is_nan() {
+                    let error = self.internal_error("RangeError", "invalid count".into());
+                    return Ok(Err(self.array_from_close(code, iterator, error)?));
+                }
+                // ToIntegerOrInfinity: truncate toward zero, keeping infinities.
+                // `-0.5` truncates to `-0`, which is NOT negative, so it is the
+                // accepted zero limit rather than a RangeError.
+                let limit = limit.trunc();
+                if limit < 0.0 {
+                    let error = self.internal_error("RangeError", "invalid count".into());
+                    return Ok(Err(self.array_from_close(code, iterator, error)?));
+                }
+                Slot::number(if limit == 0.0 { 0.0 } else { limit })
+            }
+            _ => {
+                return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-id")));
+            }
+        };
+
+        // GetIteratorDirect. A throwing `next` getter propagates WITHOUT a
+        // close: the spec reaches it with a plain `?`, after the argument
+        // checks above have already had their chance to close.
+        let next_id = self.intern_static_key("next");
+        let next_method =
+            match self.array_from_try(|this| this.mop_get(code, inst, next_id, iterator))? {
+                Ok(next_method) => next_method,
+                Err(error) => return Ok(Err(error)),
+            };
+
+        self.meter.tick_builtin();
+        let holder = self.new_array();
+        if let Some(data) = self.arrays.get_mut(&holder) {
+            data.length = 4;
+        }
+        self.helper_set(holder, Self::HELPER_NEXT, next_method);
+        self.helper_set(holder, Self::HELPER_ARG, captured);
+        // `insert_item` charges nothing — its callers do. Every sibling that
+        // builds an array with items pays for the chunk (`toArray`, the
+        // collection-cursor entries pair, `flat_into`); without this the
+        // holder was the one array in the engine built with a length and
+        // items and charged for neither. Four slots, the fixed layout, so a
+        // later `flatMap` inner write cannot grow it.
+        self.charge_and_check(self.array_chunk_size_metering(4))?;
+        self.meter.tick_slot_alloc();
+        let helper = self.slots.alloc(Slot::instance(self.iterator_helper_proto));
+        self.iterators.insert(
+            helper,
+            IterState {
+                iterable: inst,
+                index: 0,
+                kind: op + 10,
+                coll_seq: 0,
+                // `generation` is the re-entrancy latch for these kinds, not a
+                // collection clear-generation. A snapshot is only taken at a
+                // quiescent point, where no helper is mid-step, so the row
+                // needs no field for it and restore's zero is always right.
+                generation: 0,
+                result: holder,
+                done: false,
+                enum_keys: std::rc::Rc::default(),
+                str_bytes: std::rc::Rc::default(),
+                enum_visited: None,
+            },
+        );
+        Ok(Ok(Slot::of(Kind::Reference, Payload::Reference(helper))))
+    }
+
+    /// Resolve the receiver of a `%IteratorHelperPrototype%` method to its
+    /// live helper state, enforcing the brand and the "already running"
+    /// re-entrancy refusal a generator-backed helper performs.
+    fn helper_receiver(
+        &mut self,
+        this: Slot,
+    ) -> Result<Result<(crate::value::SlotIndex, IterState), Slot>, Step> {
+        let Payload::Reference(helper) = this.value else {
+            return Ok(Err(
+                self.internal_error("TypeError", "this: not an iterator".into())
+            ));
+        };
+        if this.kind != Kind::Reference {
+            return Ok(Err(
+                self.internal_error("TypeError", "this: not an iterator".into())
+            ));
+        }
+        let Some(state) = self
+            .iterators
+            .get(&helper)
+            .filter(|state| (10..=15).contains(&state.kind))
+            .cloned()
+        else {
+            return Ok(Err(
+                self.internal_error("TypeError", "this: not an iterator".into())
+            ));
+        };
+        if state.generation != 0 {
+            // A generator-backed helper refuses a re-entrant request; a mapper
+            // that calls its own helper's `next()` lands here rather than
+            // corrupting the half-advanced state.
+            return Ok(Err(
+                self.internal_error("TypeError", "iterator: already running".into())
+            ));
+        }
+        Ok(Ok((helper, state)))
+    }
+
+    /// `%IteratorHelperPrototype%.next()`, out of line rather than inlined into
+    /// a union of every iterator method's arms (`native_method_iterator`):
+    /// each level of a chain of lazy helpers (`it.take(5)`, `it.map(f)`,
+    /// nested) re-enters through it, so a level carries this frame and the
+    /// thin dispatcher's.
+    #[inline(never)]
+    pub(in crate::interp) fn iterator_helper_next(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Slot, Step> {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            machine.iterator_helper_next_inner(code, this)
+        });
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(self.raise_js(error)),
+            Err(halt) => Err(halt),
+        }
+    }
+
+    fn iterator_helper_next_inner(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Result<Slot, Slot>, Step> {
+        let (helper, state) = match self.helper_receiver(this)? {
+            Ok(pair) => pair,
+            Err(error) => return Ok(Err(error)),
+        };
+        if state.done {
+            let result = self.helper_iter_result(Slot::undefined(), true);
+            return Ok(Ok(result));
+        }
+        if let Some(live) = self.iterators.get_mut(&helper) {
+            live.generation = 1;
+        }
+        let stepped = self.iterator_helper_step(code, helper, &state);
+        // Clear the latch on EVERY exit, including a host halt: leaving it set
+        // would turn a recoverable halt into a permanently poisoned helper.
+        if let Some(live) = self.iterators.get_mut(&helper) {
+            live.generation = 0;
+        }
+        match stepped {
+            Ok(Ok(Some(value))) => {
+                let result = self.helper_iter_result(value, false);
+                Ok(Ok(result))
+            }
+            Ok(Ok(None)) => {
+                self.helper_finish(helper);
+                let result = self.helper_iter_result(Slot::undefined(), true);
+                Ok(Ok(result))
+            }
+            Ok(Err(error)) => {
+                self.helper_finish(helper);
+                Ok(Err(error))
+            }
+            Err(halt) => Err(halt),
+        }
+    }
+
+    /// Advance one lazy helper by a single yielded value. `Ok(Ok(None))` is
+    /// exhaustion; the caller latches the helper done for both that and a
+    /// throw.
+    fn iterator_helper_step(
+        &mut self,
+        code: &[u8],
+        helper: crate::value::SlotIndex,
+        state: &IterState,
+    ) -> Result<Result<Option<Slot>, Slot>, Step> {
+        let holder = state.result;
+        let underlying = Slot::of(Kind::Reference, Payload::Reference(state.iterable));
+        let next_method = self.helper_get(holder, Self::HELPER_NEXT);
+
+        match state.kind {
+            // take: the limit is consumed BEFORE the underlying step, and
+            // reaching zero closes the underlying iterator with a NORMAL
+            // completion — a fault from that `return` is the helper's throw.
+            12 => {
+                let remaining = to_number(&self.helper_get(holder, Self::HELPER_ARG));
+                if remaining <= 0.0 {
+                    return match self.iterator_close_normal(code, underlying, Slot::undefined())? {
+                        Ok(_) => Ok(Ok(None)),
+                        Err(error) => Ok(Err(error)),
+                    };
+                }
+                if remaining.is_finite() {
+                    self.helper_set(holder, Self::HELPER_ARG, Slot::number(remaining - 1.0));
+                }
+                self.helper_step_value(code, underlying, next_method)
+            }
+            // drop: discard the prefix, then mirror the underlying iterator.
+            13 => {
+                let mut remaining = to_number(&self.helper_get(holder, Self::HELPER_ARG));
+                // Bounded like the map/filter and flatMap arms. `drop(Infinity)`
+                // over an endless iterator never decrements, so without this the
+                // prefix loop's only exits are exhaustion, a throw, or whatever
+                // the meter reaches first — the one lazy arm relying on that.
+                let mut budget = 1_000_000u64;
+                while remaining > 0.0 {
+                    budget = match budget.checked_sub(1) {
+                        Some(left) => left,
+                        None => return Err(Step::Host(Halt::StepLimit(self.n_dispatched))),
+                    };
+                    if remaining.is_finite() {
+                        remaining -= 1.0;
+                        // Write the decrement back before stepping, so a throw
+                        // out of the underlying iterator cannot leave the
+                        // prefix waiting to be dropped a second time.
+                        self.helper_set(holder, Self::HELPER_ARG, Slot::number(remaining));
+                    }
+                    match self.helper_step_value(code, underlying, next_method)? {
+                        Ok(Some(_)) => {}
+                        Ok(None) => return Ok(Ok(None)),
+                        Err(error) => return Ok(Err(error)),
+                    }
+                }
+                self.helper_step_value(code, underlying, next_method)
+            }
+            // flatMap: drain the live inner iterator first, then take the next
+            // outer value and flatten it.
+            14 => self.iterator_helper_flat_map_step(code, helper, holder, underlying, next_method),
+            15 => self.iterator_concat_step(code, holder, state.iterable),
+            // map and filter.
+            kind @ (10 | 11) => {
+                let callback = self.helper_get(holder, Self::HELPER_ARG);
+                for _ in 0..1_000_000u64 {
+                    let value = match self.helper_step_value(code, underlying, next_method)? {
+                        Ok(Some(value)) => value,
+                        Ok(None) => return Ok(Ok(None)),
+                        Err(error) => return Ok(Err(error)),
+                    };
+                    let counter = self.helper_counter(helper);
+                    let args = [value, Slot::number(counter)];
+                    let produced = match self.helper_call_callback(code, callback, &args)? {
+                        Ok(produced) => produced,
+                        Err(error) => {
+                            return Ok(Err(self.array_from_close(code, underlying, error)?))
+                        }
+                    };
+                    if kind == 10 {
+                        return Ok(Ok(Some(produced)));
+                    }
+                    if self.truthy(&produced) {
+                        return Ok(Ok(Some(value)));
+                    }
+                }
+                Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+            }
+            _ => Err(Step::Host(Halt::EngineInvariant("Iterator:helper-kind"))),
+        }
+    }
+
+    /// Call a lazy helper's callback (`map`, `filter`, `flatMap`) behind a
+    /// native try boundary. Out of line: a chain of helpers re-enters through
+    /// each level's underlying step, not through this call, so the boundary's
+    /// temporaries stay out of the frame every level of a chain holds
+    /// ([`Self::iterator_helper_next`]). A nest that re-enters through the
+    /// callback carries both frames.
+    #[inline(never)]
+    fn helper_call_callback(
+        &mut self,
+        code: &[u8],
+        callback: Slot,
+        args: &[Slot],
+    ) -> Result<Result<Slot, Slot>, Step> {
+        self.array_from_try(|this| this.call_any(code, callback, Slot::undefined(), args))
+    }
+
+    /// Read the helper's callback counter and post-increment it.
+    ///
+    /// The counter saturates rather than wrapping, so the argument can never
+    /// silently restart at zero. Saturation is not, however, unreachable: the
+    /// counter is the PERSISTED `IteratorRow::index`, and the dispatch step
+    /// limit resets every crank, so a helper that survives enough resumes is
+    /// bounded by nothing. At `u32::MAX` the index sticks there instead of
+    /// continuing, where the spec's is unbounded — a divergence, but a
+    /// contained and monotonic one, and widening it is a row-schema change.
+    fn helper_counter(&mut self, helper: crate::value::SlotIndex) -> f64 {
+        let Some(state) = self.iterators.get_mut(&helper) else {
+            return 0.0;
+        };
+        let counter = state.index;
+        state.index = state.index.saturating_add(1);
+        counter as f64
+    }
+
+    /// One `flatMap` step. The inner iterator lives in the holder across
+    /// `next()` calls, so a partially drained inner survives; an abrupt inner
+    /// step closes the OUTER iterator, matching IfAbruptCloseIterator on the
+    /// outer record in the spec's closure.
+    ///
+    /// Out of line, so the inner-iterator machinery stays out of the frame
+    /// every level of a chain of `take`, `drop`, `map` or `filter` helpers
+    /// holds ([`Self::iterator_helper_next`]). A chain of `flatMap` helpers
+    /// re-enters through this step, so it carries both frames.
+    #[inline(never)]
+    fn iterator_helper_flat_map_step(
+        &mut self,
+        code: &[u8],
+        helper: crate::value::SlotIndex,
+        holder: crate::value::SlotIndex,
+        underlying: Slot,
+        next_method: Slot,
+    ) -> Result<Result<Option<Slot>, Slot>, Step> {
+        for _ in 0..1_000_000u64 {
+            let inner = self.helper_get(holder, Self::HELPER_INNER);
+            if inner.kind == Kind::Reference {
+                let inner_next = self.helper_get(holder, Self::HELPER_INNER_NEXT);
+                match self.helper_step_value(code, inner, inner_next)? {
+                    Ok(Some(value)) => return Ok(Ok(Some(value))),
+                    Ok(None) => {
+                        self.helper_set(holder, Self::HELPER_INNER, Slot::undefined());
+                        self.helper_set(holder, Self::HELPER_INNER_NEXT, Slot::undefined());
+                    }
+                    Err(error) => return Ok(Err(self.array_from_close(code, underlying, error)?)),
+                }
+                continue;
+            }
+            let value = match self.helper_step_value(code, underlying, next_method)? {
+                Ok(Some(value)) => value,
+                Ok(None) => return Ok(Ok(None)),
+                Err(error) => return Ok(Err(error)),
+            };
+            let callback = self.helper_get(holder, Self::HELPER_ARG);
+            let counter = self.helper_counter(helper);
+            let args = [value, Slot::number(counter)];
+            let mapped = match self.helper_call_callback(code, callback, &args)? {
+                Ok(mapped) => mapped,
+                Err(error) => return Ok(Err(self.array_from_close(code, underlying, error)?)),
+            };
+            let (inner, inner_next) = match self.helper_iterator_flattenable(code, mapped)? {
+                Ok(pair) => pair,
+                Err(error) => return Ok(Err(self.array_from_close(code, underlying, error)?)),
+            };
+            self.helper_set(holder, Self::HELPER_INNER, inner);
+            self.helper_set(holder, Self::HELPER_INNER_NEXT, inner_next);
+        }
+        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+    }
+
+    /// `Iterator.concat(...items)` (ES2026 27.1.3.2.1, XS's
+    /// `fx_Iterator_concat`): check every item is an object with a callable
+    /// `@@iterator`, then answer an Iterator Helper (kind 15) that opens each
+    /// item with the method read here, in order, and yields what it yields.
+    /// Out of line from the method dispatcher, whose frame every native
+    /// re-entry carries (`benches/stack_height.py`).
+    #[inline(never)]
+    pub(in crate::interp) fn iterator_concat(
+        &mut self,
+        code: &[u8],
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Step> {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            machine.iterator_concat_inner(code, base, argc)
+        });
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(self.raise_js(error)),
+            Err(halt) => Err(halt),
+        }
+    }
+
+    fn iterator_concat_inner(
+        &mut self,
+        code: &[u8],
+        base: usize,
+        argc: usize,
+    ) -> Result<Result<Slot, Slot>, Step> {
+        let Some(iterator_id) = self.well_known_symbol_property_id("iterator") else {
+            return Err(Step::Host(Halt::EngineInvariant("Iterator.concat:symbol")));
+        };
+        let items = self.frame_arguments(base, argc)?;
+        // The list of `(item, open method)` pairs, an internal Array like the
+        // helpers' holder, so the GC and snapshot paths carry it.
+        self.meter.tick_builtin();
+        let list = self.new_array();
+        for (position, &item) in items.iter().enumerate() {
+            let Payload::Reference(inst) = item.value else {
+                return Ok(Err(self.internal_error(
+                    "TypeError",
+                    format!("items[{position}]: not an object"),
+                )));
+            };
+            if item.kind != Kind::Reference {
+                return Ok(Err(self.internal_error(
+                    "TypeError",
+                    format!("items[{position}]: not an object"),
+                )));
+            }
+            let method =
+                match self.array_from_try(|this| this.mop_get(code, inst, iterator_id, item))? {
+                    Ok(method) => method,
+                    Err(error) => return Ok(Err(error)),
+                };
+            if !self.is_callable_value(method) {
+                return Ok(Err(self.internal_error(
+                    "TypeError",
+                    format!("items[{position}]: not iterable"),
+                )));
+            }
+            self.charge_builtin_work(1)?;
+            let at = (position as u32) * 2;
+            if let Some(data) = self.arrays.get_mut(&list) {
+                data.length = at + 2;
+                data.insert_item(at, item, &mut self.side_refs, &mut self.chunks);
+                data.insert_item(at + 1, method, &mut self.side_refs, &mut self.chunks);
+            }
+        }
+        let pairs = (items.len() as u32) * 2;
+        self.charge_and_check(self.array_chunk_size_metering(pairs))?;
+        let holder = self.new_array();
+        if let Some(data) = self.arrays.get_mut(&holder) {
+            data.length = 4;
+        }
+        self.helper_set(holder, Self::HELPER_ARG, Slot::integer(0));
+        self.charge_and_check(self.array_chunk_size_metering(4))?;
+        self.meter.tick_slot_alloc();
+        let helper = self.slots.alloc(Slot::instance(self.iterator_helper_proto));
+        self.iterators.insert(
+            helper,
+            IterState {
+                iterable: list,
+                index: 0,
+                kind: 15,
+                coll_seq: 0,
+                generation: 0,
+                result: holder,
+                done: false,
+                enum_keys: std::rc::Rc::default(),
+                str_bytes: std::rc::Rc::default(),
+                enum_visited: None,
+            },
+        );
+        Ok(Ok(Slot::of(Kind::Reference, Payload::Reference(helper))))
+    }
+
+    /// One `Iterator.concat` step: drain the live inner iterator, then open
+    /// the next item with its captured method. A throw from opening, from
+    /// `next`, or from the result propagates without a close, as the
+    /// specification's `?` does; the caller latches the helper done.
+    ///
+    /// Out of line for the reason `iterator_helper_flat_map_step` is: a
+    /// `take`, `drop`, `map` or `filter` chain re-enters through
+    /// `iterator_helper_next` once per level and never through this step, so
+    /// inlined it would grow the frame every level of those chains carries.
+    #[inline(never)]
+    fn iterator_concat_step(
+        &mut self,
+        code: &[u8],
+        holder: crate::value::SlotIndex,
+        list: crate::value::SlotIndex,
+    ) -> Result<Result<Option<Slot>, Slot>, Step> {
+        for _ in 0..1_000_000u64 {
+            let inner = self.helper_get(holder, Self::HELPER_INNER);
+            if inner.kind == Kind::Reference {
+                let inner_next = self.helper_get(holder, Self::HELPER_NEXT);
+                match self.helper_step_value(code, inner, inner_next)? {
+                    Ok(Some(value)) => return Ok(Ok(Some(value))),
+                    Ok(None) => {
+                        self.helper_set(holder, Self::HELPER_INNER, Slot::undefined());
+                        self.helper_set(holder, Self::HELPER_NEXT, Slot::undefined());
+                    }
+                    Err(error) => return Ok(Err(error)),
+                }
+                continue;
+            }
+            let position = to_number(&self.helper_get(holder, Self::HELPER_ARG)) as u32;
+            let pairs = self.arrays.get(&list).map_or(0, |data| data.length / 2);
+            if position >= pairs {
+                return Ok(Ok(None));
+            }
+            self.helper_set(holder, Self::HELPER_ARG, Slot::integer(position as i32 + 1));
+            let item = self.helper_get(list, position * 2);
+            let method = self.helper_get(list, position * 2 + 1);
+            let opened = match self.array_from_try(|this| this.call_any(code, method, item, &[]))? {
+                Ok(opened) => opened,
+                Err(error) => return Ok(Err(error)),
+            };
+            let Payload::Reference(opened_inst) = opened.value else {
+                return Ok(Err(
+                    self.internal_error("TypeError", "iterator: not an object".into())
+                ));
+            };
+            if opened.kind != Kind::Reference {
+                return Ok(Err(
+                    self.internal_error("TypeError", "iterator: not an object".into())
+                ));
+            }
+            // GetIteratorDirect: `next` is read once and called as it is.
+            let next_id = self.intern_static_key("next");
+            let next_method = match self
+                .array_from_try(|this| this.mop_get(code, opened_inst, next_id, opened))?
+            {
+                Ok(next_method) => next_method,
+                Err(error) => return Ok(Err(error)),
+            };
+            self.helper_set(holder, Self::HELPER_INNER, opened);
+            self.helper_set(holder, Self::HELPER_NEXT, next_method);
+        }
+        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+    }
+
+    /// `%IteratorHelperPrototype%.return()`: the return completion the spec
+    /// delivers to the closure's suspended `Yield`, whose
+    /// IfAbruptCloseIterator closes the underlying iterator. A `flatMap` with
+    /// a live inner iterator closes the inner one first.
+    pub(in crate::interp) fn iterator_helper_return(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Slot, Step> {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            machine.iterator_helper_return_inner(code, this)
+        });
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(self.raise_js(error)),
+            Err(halt) => Err(halt),
+        }
+    }
+
+    fn iterator_helper_return_inner(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+    ) -> Result<Result<Slot, Slot>, Step> {
+        let (helper, state) = match self.helper_receiver(this)? {
+            Ok(pair) => pair,
+            Err(error) => return Ok(Err(error)),
+        };
+        if state.done {
+            let result = self.helper_iter_result(Slot::undefined(), true);
+            return Ok(Ok(result));
+        }
+        // Read the live inner iterator BEFORE latching: `helper_finish` clears
+        // the holder, and a `flatMap` suspended inside an inner iterator must
+        // still close that inner one.
+        let inner = self.helper_get(state.result, Self::HELPER_INNER);
+        // Latch before closing: a `return` method that reaches back into this
+        // helper must see a completed one, and the closes must not run twice.
+        self.helper_finish(helper);
+        if state.kind == 15 {
+            // `Iterator.concat` has no underlying iterator of its own: only the
+            // inner iterator it is suspended in, if any, is closed. Its list of
+            // items is internal. A helper suspended at a yield closes it while
+            // executing (`GeneratorResumeAbrupt`), so a `return()` or `next()`
+            // reached from that close is refused as already running.
+            if inner.kind == Kind::Reference {
+                if let Some(live) = self.iterators.get_mut(&helper) {
+                    live.generation = 1;
+                }
+                let closed = self.iterator_close_normal(code, inner, Slot::undefined());
+                if let Some(live) = self.iterators.get_mut(&helper) {
+                    live.generation = 0;
+                }
+                if let Err(error) = closed? {
+                    return Ok(Err(error));
+                }
+            }
+            let result = self.helper_iter_result(Slot::undefined(), true);
+            return Ok(Ok(result));
+        }
+        let underlying = Slot::of(Kind::Reference, Payload::Reference(state.iterable));
+        if inner.kind == Kind::Reference {
+            if let Err(error) = self.iterator_close_normal(code, inner, Slot::undefined())? {
+                // IfAbruptCloseIterator(backupCompletion, iterated): a FAILING
+                // inner close still closes the outer iterator, and the inner's
+                // error stays the winner. Returning here instead leaked the
+                // outer iterator whenever an inner `return` misbehaved — a
+                // generator's `finally` would never run.
+                return Ok(Err(self.array_from_close(code, underlying, error)?));
+            }
+        }
+        match self.iterator_close_normal(code, underlying, Slot::undefined())? {
+            Ok(_) => {
+                let result = self.helper_iter_result(Slot::undefined(), true);
+                Ok(Ok(result))
+            }
+            Err(error) => Ok(Err(error)),
+        }
     }
 
     /// Invoke one of the eager Iterator helpers (`reduce`, `toArray`,
@@ -968,7 +1878,12 @@ impl Interp {
                         let data = self.arrays.get_mut(&array).unwrap();
                         data.length = length;
                         for (index, value) in items.iter().enumerate() {
-                            data.insert_item(index as u32, *value, &mut self.side_refs);
+                            data.insert_item(
+                                index as u32,
+                                *value,
+                                &mut self.side_refs,
+                                &mut self.chunks,
+                            );
                         }
                         if length != 0 {
                             self.charge_and_check(self.array_chunk_size_metering(length))?;
@@ -1061,58 +1976,69 @@ impl Interp {
             }
         }
         let st = self.iterators[&iter].clone();
-        let len = self
-            .collections
-            .get(&st.iterable)
-            .map(|c| c.entries().len() as u32)
-            .unwrap_or(0);
-        let mut live_index = st.index;
-        while live_index < len
-            && self.collections[&st.iterable].entries()[live_index as usize].is_none()
-        {
-            live_index += 1;
-        }
-        let (new_value, new_done, next_index): (Slot, bool, u32) = if st.done || live_index >= len {
-            (Slot::undefined(), true, st.index)
+        let mut cursor = crate::bulk::CollCursor {
+            seq: st.coll_seq,
+            hint: st.index,
+        };
+        let next = if st.done {
+            None
         } else {
-            // A keys/values yield carries no residual; an entries yield charges
-            // the pair-construction frame ([`COLLECTION_ITERATOR_ENTRY_METERING`])
-            // plus the two-element pair chunk (below).
-            if st.kind == 7 {
-                self.meter.tick_raw(COLLECTION_ITERATOR_ENTRY_METERING);
-            }
-            let (k, v) = self.collections[&st.iterable].entries()[live_index as usize].unwrap();
-            let is_set = matches!(self.collections[&st.iterable].kind, CollKind::Set);
-            let value = match st.kind {
-                5 => k, // keys
-                // values: a Map yields the value half; a Set stores its value
-                // in the key half, so it yields the key.
-                6 if is_set => k,
-                6 => v,
-                _ => {
-                    // entries: `[key, value]` (a Set yields `[value, value]`).
-                    let (a, b) = if is_set { (k, k) } else { (k, v) };
-                    let pair = self.new_array();
-                    let arr = self.arrays.get_mut(&pair).unwrap();
-                    arr.length = 2;
-                    arr.insert_item(0, Slot::of(a.kind, a.value), &mut self.side_refs);
-                    arr.insert_item(1, Slot::of(b.kind, b.value), &mut self.side_refs);
-                    self.meter.tick_raw(self.array_chunk_size_metering(2));
-                    Slot::of(Kind::Reference, Payload::Reference(pair))
+            self.collections
+                .get(&st.iterable)
+                .and_then(|c| c.next_live(&mut cursor))
+        };
+        let (new_value, new_done) = match next {
+            None => (Slot::undefined(), true),
+            Some((k, v)) => {
+                // A keys/values yield carries no residual; an entries yield
+                // charges the pair-construction frame
+                // ([`COLLECTION_ITERATOR_ENTRY_METERING`]) plus the
+                // two-element pair chunk (below).
+                if st.kind == 7 {
+                    self.meter.tick_raw(COLLECTION_ITERATOR_ENTRY_METERING);
                 }
-            };
-            (value, false, live_index + 1)
+                let is_set = matches!(self.collections[&st.iterable].kind, CollKind::Set);
+                let value = match st.kind {
+                    5 => k, // keys
+                    // values: a Map yields the value half; a Set stores its
+                    // value in the key half, so it yields the key.
+                    6 if is_set => k,
+                    6 => v,
+                    _ => {
+                        // entries: `[key, value]` (a Set yields `[value, value]`).
+                        let (a, b) = if is_set { (k, k) } else { (k, v) };
+                        let pair = self.new_array();
+                        let arr = self.arrays.get_mut(&pair).unwrap();
+                        arr.length = 2;
+                        arr.insert_item(
+                            0,
+                            Slot::of(a.kind, a.value),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
+                        arr.insert_item(
+                            1,
+                            Slot::of(b.kind, b.value),
+                            &mut self.side_refs,
+                            &mut self.chunks,
+                        );
+                        self.meter.tick_raw(self.array_chunk_size_metering(2));
+                        Slot::of(Kind::Reference, Payload::Reference(pair))
+                    }
+                };
+                (value, false)
+            }
         };
         if let Some(s) = self.iterators.get_mut(&iter) {
-            s.index = next_index;
+            if !st.done {
+                s.coll_seq = cursor.seq;
+                s.index = cursor.hint;
+            }
             s.done = new_done;
         }
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(new_done));
-        }
+        let (vid, did) = self.iterator_result_ids();
+        self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
+        self.set_own_unmetered(result, did, Slot::boolean(new_done));
         Slot::of(Kind::Reference, Payload::Reference(result))
     }
 
@@ -1192,13 +2118,14 @@ impl Interp {
         } else {
             MAP_FOREACH_FRAME_METERING
         })?;
-        // Index into the insertion list. Deletions leave tombstones and
+        // Walk the insertion order by sequence number. Deletions leave
+        // tombstones (or compact them away underneath the cursor) and
         // additions append, matching XS's live linked-list walk. A
         // `clear()` from inside the callback bumps the collection's
         // generation and ends the walk (XS's purge — the cursor never
         // reaches post-clear appends).
         let start_generation = self.collections.get(&inst).map_or(0, |c| c.generation());
-        let mut i = 0u32;
+        let mut cursor = crate::bulk::CollCursor::default();
         loop {
             if self
                 .collections
@@ -1207,17 +2134,12 @@ impl Interp {
             {
                 break;
             }
-            let entry = self
+            let Some((k, v)) = self
                 .collections
                 .get(&inst)
-                .and_then(|c| c.entries().get(i as usize));
-            let (k, v) = match entry {
-                Some(Some(kv)) => *kv,
-                Some(None) => {
-                    i += 1;
-                    continue;
-                }
-                None => break,
+                .and_then(|c| c.next_live(&mut cursor))
+            else {
+                break;
             };
             self.meter.tick_raw(COLLECTION_FOREACH_PER_ENTRY_METERING);
             // Map: cb(value, key, coll). Set: cb(value, value, coll) — the
@@ -1226,7 +2148,6 @@ impl Interp {
             let cb_key = k;
             let cb_args = [cb_val, cb_key, this];
             self.run_callback(code, callback, this_arg, &cb_args)?;
-            i += 1;
         }
         Ok(Slot::undefined())
     }
@@ -1265,12 +2186,7 @@ impl Interp {
     fn collection_live_keys(&self, inst: crate::value::SlotIndex) -> Vec<Slot> {
         self.collections
             .get(&inst)
-            .map(|c| {
-                c.entries()
-                    .iter()
-                    .filter_map(|e| e.map(|(k, _)| k))
-                    .collect()
-            })
+            .map(|c| c.live_entries().map(|&(k, _)| k).collect())
             .unwrap_or_default()
     }
 
@@ -1429,6 +2345,7 @@ impl Interp {
                 key,
                 Slot::undefined(),
                 &mut self.side_refs,
+                &mut self.chunks,
             );
             self.collection_table_resize(inst);
         }
@@ -1456,6 +2373,9 @@ impl Interp {
                 while let Some(v) = self.set_keys_iterator_step(code, iter, next)? {
                     let v = self.canonicalize_set_key(v);
                     if !self.key_list_contains(&result, &v) {
+                        self.admit_transient(
+                            (result.len() as u64 + 1) * crate::side_storage::SLOT_BYTES,
+                        )?;
                         result.push(v);
                     }
                 }
@@ -1467,20 +2387,12 @@ impl Interp {
                 if (this_len as f64) <= other_size {
                     // Walk THIS in order; keep those the other set `has`. `has`
                     // may mutate THIS, so re-check the element is still present.
-                    let mut i = 0u32;
-                    loop {
-                        let entry = self
-                            .collections
-                            .get(&inst)
-                            .and_then(|c| c.entries().get(i as usize));
-                        let k = match entry {
-                            Some(Some((k, _))) => *k,
-                            Some(None) => {
-                                i += 1;
-                                continue;
-                            }
-                            None => break,
-                        };
+                    let mut cursor = crate::bulk::CollCursor::default();
+                    while let Some((k, _)) = self
+                        .collections
+                        .get(&inst)
+                        .and_then(|c| c.next_live(&mut cursor))
+                    {
                         let in_other = self.call_primitive_method(code, has, obj, &[k])?;
                         if self.truthy(&in_other)
                             && self.collection_find(inst, &k).is_some()
@@ -1488,7 +2400,6 @@ impl Interp {
                         {
                             result.push(k);
                         }
-                        i += 1;
                     }
                 } else {
                     // Iterate the OTHER set's keys; keep those THIS contains.
@@ -1538,6 +2449,9 @@ impl Interp {
                     if in_this {
                         result.retain(|e| !self.same_value_zero(e, &v));
                     } else if !self.key_list_contains(&result, &v) {
+                        self.admit_transient(
+                            (result.len() as u64 + 1) * crate::side_storage::SLOT_BYTES,
+                        )?;
                         result.push(v);
                     }
                 }
@@ -1550,25 +2464,16 @@ impl Interp {
                 if (this_keys.len() as f64) > other_size {
                     return Ok(Slot::boolean(false));
                 }
-                let mut i = 0u32;
-                loop {
-                    let entry = self
-                        .collections
-                        .get(&inst)
-                        .and_then(|c| c.entries().get(i as usize));
-                    let k = match entry {
-                        Some(Some((k, _))) => *k,
-                        Some(None) => {
-                            i += 1;
-                            continue;
-                        }
-                        None => break,
-                    };
+                let mut cursor = crate::bulk::CollCursor::default();
+                while let Some((k, _)) = self
+                    .collections
+                    .get(&inst)
+                    .and_then(|c| c.next_live(&mut cursor))
+                {
                     let in_other = self.call_primitive_method(code, has, obj, &[k])?;
                     if !self.truthy(&in_other) {
                         return Ok(Slot::boolean(false));
                     }
-                    i += 1;
                 }
                 Ok(Slot::boolean(true))
             }
@@ -1592,25 +2497,16 @@ impl Interp {
                 // No common element. Walk the smaller side.
                 let this_len = self.collection_live_len(inst);
                 if (this_len as f64) <= other_size {
-                    let mut i = 0u32;
-                    loop {
-                        let entry = self
-                            .collections
-                            .get(&inst)
-                            .and_then(|c| c.entries().get(i as usize));
-                        let k = match entry {
-                            Some(Some((k, _))) => *k,
-                            Some(None) => {
-                                i += 1;
-                                continue;
-                            }
-                            None => break,
-                        };
+                    let mut cursor = crate::bulk::CollCursor::default();
+                    while let Some((k, _)) = self
+                        .collections
+                        .get(&inst)
+                        .and_then(|c| c.next_live(&mut cursor))
+                    {
                         let in_other = self.call_primitive_method(code, has, obj, &[k])?;
                         if self.truthy(&in_other) {
                             return Ok(Slot::boolean(false));
                         }
-                        i += 1;
                     }
                 } else {
                     let (iter, next) = self.get_keys_iterator(code, obj, keys)?;
@@ -1689,13 +2585,14 @@ impl Interp {
                     .copied()
                     .unwrap_or_else(Slot::undefined);
                 if let Some(p) = self.collection_find(inst, &key) {
-                    return Ok(self.collections[&inst].entries()[p].unwrap().1);
+                    return Ok(self.collections[&inst].value_at(p));
                 }
                 self.charge_new_entry_slots(3);
                 self.collections.get_mut(&inst).unwrap().push_entry(
                     key,
                     value,
                     &mut self.side_refs,
+                    &mut self.chunks,
                 );
                 self.collection_table_resize(inst);
                 Ok(value)
@@ -1710,7 +2607,7 @@ impl Interp {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 if let Some(p) = self.collection_find(inst, &key) {
-                    return Ok(self.collections[&inst].entries()[p].unwrap().1);
+                    return Ok(self.collections[&inst].value_at(p));
                 }
                 // `Call(callbackfn, undefined, « key »)`. The callback may mutate
                 // the map (including inserting `key` itself); the computed value
@@ -1730,6 +2627,7 @@ impl Interp {
                             key,
                             value,
                             &mut self.side_refs,
+                            &mut self.chunks,
                         );
                         self.collection_table_resize(inst);
                     }
@@ -1803,6 +2701,9 @@ impl Interp {
         let mut buckets: Vec<(Slot, Vec<Slot>)> = Vec::new();
         let mut reprs: Vec<(Option<u16>, Vec<u16>)> = Vec::new();
         let mut index: i32 = 0;
+        // Every recorded value and bucket, at declared widths, bounded by the
+        // chunk ceiling before it is kept.
+        let mut recorded: u64 = 0;
 
         // A closure would need `&mut self`, so record inline. `record` buckets
         // one produced value under the callback's (coerced) result.
@@ -1814,6 +2715,11 @@ impl Interp {
                     callbackfn,
                     Slot::undefined(),
                     &[value, Slot::integer(index)],
+                )?;
+                recorded += 1;
+                self.admit_transient(
+                    recorded * crate::side_storage::SLOT_BYTES
+                        + (buckets.len() as u64 + 1) * crate::side_storage::GROUP_BUCKET_BYTES,
                 )?;
                 if is_map {
                     let key = self.normalize_coll_key(key);
@@ -1839,92 +2745,50 @@ impl Interp {
             }};
         }
 
-        // GetIterator(items) + the iterate/step loop, with the same intrinsic
-        // fast paths `for..of` uses (dense array, string), and the generic
-        // `@@iterator` protocol for everything else. Arrays/strings the tests
-        // never re-decorate iterate observationally identically to the real
-        // iterator; a plain object with a nullish/absent `@@iterator` throws.
-        match items.value {
-            Payload::Reference(i) if self.arrays.contains_key(&i) => {
-                let mut k = 0u32;
-                loop {
-                    let len = match self.arrays.get(&i) {
-                        Some(a) => a.length,
-                        None => break,
-                    };
-                    if k >= len {
-                        break;
-                    }
-                    let value = self
-                        .arrays
-                        .get(&i)
-                        .and_then(|a| a.items().get(&k))
-                        .copied()
-                        .unwrap_or_else(Slot::undefined);
-                    record!(value);
-                    k += 1;
-                }
+        // GetIterator(items, sync) + the iterate/step loop: `@@iterator` is
+        // read through [[Get]] on the object, or on a primitive's wrapper
+        // prototype, so a deleted, replaced or patched iterator is observed
+        // exactly as `for..of` observes it.
+        if items.kind == Kind::Null {
+            return Err(self.catchable_type_error_msg("cannot coerce null to object".into()));
+        }
+        let iter_id = self
+            .well_known_symbol_property_id("iterator")
+            .unwrap_or(crate::value::XS_NO_ID);
+        let holder = match items.value {
+            Payload::Reference(_) if items.kind == Kind::Symbol => self.symbol_proto,
+            Payload::Reference(obj) => obj,
+            Payload::String(_) if items.kind == Kind::String => self.string_proto,
+            Payload::Integer(_) | Payload::Number(_) => self.number_proto,
+            Payload::BigInt(_) => self.bigint_proto,
+            _ if items.kind == Kind::Boolean => self.boolean_proto,
+            _ => crate::value::SlotIndex::NULL,
+        };
+        let method = if iter_id == crate::value::XS_NO_ID || holder.is_null() {
+            Slot::undefined()
+        } else {
+            self.mop_get(code, holder, iter_id, items)?
+        };
+        if method.kind == Kind::Undefined || method.kind == Kind::Null {
+            return Err(self.catchable_type_error_msg("call: not a function".into()));
+        }
+        let iterator = self.call_primitive_method(code, method, items, &[])?;
+        let iter_inst = match iterator.value {
+            Payload::Reference(x) if iterator.kind == Kind::Reference => x,
+            _ => return Err(self.catchable_type_error_msg("iterator: not an object".into())),
+        };
+        let next_id = self.intern_static_key("next");
+        let next = self.mop_get(code, iter_inst, next_id, iterator)?;
+        // A defensive bound against a pathological non-terminating guest
+        // iterator; the tested iterables are short.
+        for _ in 0..1_000_000 {
+            let step = self.call_primitive_method(code, next, iterator, &[])?;
+            let done = self.iter_result_member(code, step, true)?;
+            if self.truthy(&done) {
+                break;
             }
-            Payload::String(off) if items.kind == Kind::String => {
-                let bytes = self.str_content(off).to_vec();
-                let it = self.make_string_iterator(bytes);
-                let iter_inst = match it.value {
-                    Payload::Reference(x) => x,
-                    _ => {
-                        return Err(Step::Host(Halt::EngineInvariant(
-                            "group-by:invalid-string-iterator",
-                        )))
-                    }
-                };
-                loop {
-                    let result = self.string_iterator_next(iter_inst)?;
-                    let done = self.iter_result_member(code, result, true)?;
-                    if self.truthy(&done) {
-                        break;
-                    }
-                    let value = self.iter_result_member(code, result, false)?;
-                    record!(value);
-                }
-            }
-            Payload::Reference(obj) => {
-                // GetIterator(items, sync): `method = ? GetMethod(items,
-                // @@iterator)`; a nullish/absent method throws TypeError.
-                let iter_id = self
-                    .well_known_symbol_property_id("iterator")
-                    .unwrap_or(crate::value::XS_NO_ID);
-                let method = if iter_id == crate::value::XS_NO_ID {
-                    Slot::undefined()
-                } else {
-                    self.mop_get(code, obj, iter_id, items)?
-                };
-                if method.kind == Kind::Undefined || method.kind == Kind::Null {
-                    return Err(self.catchable_type_error_msg("call: not a function".into()));
-                }
-                let iterator = self.call_primitive_method(code, method, items, &[])?;
-                let iter_inst = match iterator.value {
-                    Payload::Reference(x) if iterator.kind == Kind::Reference => x,
-                    _ => {
-                        return Err(self.catchable_type_error_msg("iterator: not an object".into()))
-                    }
-                };
-                let next_id = self.intern_static_key("next");
-                let next = self.mop_get(code, iter_inst, next_id, iterator)?;
-                // A defensive bound against a pathological non-terminating guest
-                // iterator; the tested iterables are short.
-                for _ in 0..1_000_000 {
-                    let step = self.call_primitive_method(code, next, iterator, &[])?;
-                    let done = self.iter_result_member(code, step, true)?;
-                    if self.truthy(&done) {
-                        break;
-                    }
-                    let value = self.iter_result_member(code, step, false)?;
-                    record!(value);
-                }
-            }
-            _ if items.kind == Kind::Null => {
-                return Err(self.catchable_type_error_msg("cannot coerce null to object".into()))
-            }
-            _ => return Err(self.catchable_type_error_msg("call: not a function".into())),
+            let value = self.iter_result_member(code, step, false)?;
+            record!(value);
         }
 
         if is_map {
@@ -1963,10 +2827,12 @@ impl Interp {
         for (key, values) in buckets {
             let array = self.group_array_from_values(values);
             self.charge_new_entry_slots(3);
-            self.collections
-                .get_mut(&inst)
-                .unwrap()
-                .push_entry(key, array, &mut self.side_refs);
+            self.collections.get_mut(&inst).unwrap().push_entry(
+                key,
+                array,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
             self.collection_table_resize(inst);
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -2037,10 +2903,12 @@ impl Interp {
             let mut v = v;
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            self.arrays
-                .get_mut(&inst)
-                .unwrap()
-                .insert_item(i as u32, v, &mut self.side_refs);
+            self.arrays.get_mut(&inst).unwrap().insert_item(
+                i as u32,
+                v,
+                &mut self.side_refs,
+                &mut self.chunks,
+            );
         }
         self.arrays.get_mut(&inst).unwrap().length = n;
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -2096,12 +2964,9 @@ impl Interp {
             s.index = next_index;
             s.done = new_done;
         }
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(new_done));
-        }
+        let (vid, did) = self.iterator_result_ids();
+        self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
+        self.set_own_unmetered(result, did, Slot::boolean(new_done));
         Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
     }
 
@@ -2210,11 +3075,12 @@ impl Interp {
             } else {
                 crate::value::canonicalize_nan(value).to_bits()
             }),
-            Payload::String(off) => CollKey::String(self.chunks.payload(off).to_vec()),
-            Payload::BigInt(off) => {
-                let (negative, magnitude) = self.read_bigint(off);
-                CollKey::BigInt(negative, magnitude)
+            // Content classes: the hash of the key, never a copy of it.
+            // `collection_find` confirms a match by comparing the keys.
+            Payload::String(off) => {
+                CollKey::String(CollKey::content_hash(&*self.chunks.payload(off)))
             }
+            Payload::BigInt(off) => CollKey::BigInt(CollKey::content_hash(self.read_bigint(off))),
             Payload::Reference(reference) => CollKey::Reference(reference),
             Payload::At(..) => unreachable!("internal property key in a collection"),
         }
@@ -2223,7 +3089,11 @@ impl Interp {
     /// The index of `key` among `inst`'s entries by SameValueZero, or `None`.
     fn collection_find(&self, inst: crate::value::SlotIndex, key: &Slot) -> Option<usize> {
         let data = self.collections.get(&inst)?;
-        data.find(&self.coll_index_key(key), |key| self.coll_index_key(key))
+        data.find(
+            &self.coll_index_key(key),
+            |stored| self.coll_index_key(stored),
+            |stored| self.strict_equal(stored, key),
+        )
     }
 
     /// Charge the metering of an inserting `fxSetEntry`/`fxSetWeakEntry` new

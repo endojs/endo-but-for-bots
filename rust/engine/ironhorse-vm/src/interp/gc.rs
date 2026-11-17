@@ -98,6 +98,15 @@ impl Interp {
     /// Only quiescent machines may collect. Refusal changes no state and
     /// does not queue work; consumers choose when to retry. Collector faults
     /// remain panics and permanently disqualify the machine.
+    ///
+    /// The sweep runs no guest code and charges the meter nothing: a dead
+    /// `WeakRef` target is nulled and a `FinalizationRegistry` whose target
+    /// died is flagged, and its cleanup callbacks wait for the operator's
+    /// [`Self::notify_finalizations`] or, failing that, the end of the next
+    /// completed crank's drain. [`Self::finalization_cleanup_pending`] says
+    /// which state the machine is in; a pending cleanup persists and resumes
+    /// as such, so an operator whose snapshots must carry none notifies
+    /// before it snapshots.
     pub fn collect_garbage(&mut self) -> Result<crate::gc::GcStats, crate::gc::GcAdmissionError> {
         self.admit_collection()?;
         self.gc_failed = true;
@@ -115,6 +124,8 @@ impl Interp {
 
         self.compact_code_segments();
         self.compact_reaction_arenas();
+        // Dropped rows and pruned weak entries release their side storage.
+        self.rederive_side_reserved();
 
         self.gc_failed = false;
         Ok(stats)
@@ -239,8 +250,8 @@ impl Interp {
             .filter(|(i, _)| live_comb.contains(&(*i as u32)))
             .map(|(_, e)| e)
             .collect();
-        let old = std::mem::take(&mut self.from_async);
-        self.from_async = old
+        let old = self.from_async.take();
+        *self.from_async = old
             .into_iter()
             .enumerate()
             .filter(|(i, _)| live_fa.contains(&(*i as u32)))
@@ -339,6 +350,7 @@ impl Interp {
         self.prune_dead_tables(&dead);
         self.compact_code_segments();
         self.compact_reaction_arenas();
+        self.rederive_side_reserved();
         self.gc_failed = false;
         Ok(freed.len() as u32)
     }

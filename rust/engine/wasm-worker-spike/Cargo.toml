@@ -1,0 +1,26 @@
+[package]
+name = "ih-wasm-worker-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# A standalone root, deliberately outside the rust/engine workspace: the wasm
+# build uses the unstable panic=unwind workaround of WASM-BLOCKERS.md B1
+# (RUSTC_BOOTSTRAP and -Zbuild-std), which the workspace's --locked builds must
+# not inherit. run.py copies the workspace Cargo.lock here before building, so
+# the spike resolves every dependency the engine does.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ironhorse-vm = { path = "../ironhorse-vm", features = ["consensus"] }
+ironhorse-compile = { path = "../ironhorse-compile" }
+# `store-suite` compiles the backend acceptance suite into the library so the
+# Durable Object can run it against the store below.
+ironhorse-snapshot = { path = "../ironhorse-snapshot", features = ["store-suite"] }
+
+# Match the workspace: guest-influenced arithmetic must not silently wrap.
+[profile.release]
+overflow-checks = true

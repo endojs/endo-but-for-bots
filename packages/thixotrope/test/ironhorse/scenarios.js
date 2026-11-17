@@ -4,7 +4,10 @@ import test from '@endo/ses-ava/test.js';
 import { appendFile, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { listenerSource, producerSource } from '../../src/demo-promise-vats.js';
+import {
+  listenerSource,
+  producerSource,
+} from '../../src/ironhorse/demo-promise-vats.js';
 import { makeFixture, settled } from './_fixture.js';
 
 // Every scenario owns a daemon and two Ironhorse processes. These are serial
@@ -278,6 +281,56 @@ test.serial(
 );
 
 test.serial(
+  'completed-crank garbage is reclaimed across snapshot recovery',
+  async t => {
+    t.timeout(120_000);
+    const f = await makeFixture(t, {
+      ownerSource: `(() => {
+        const retained = { count: 0 };
+        const aliases = [retained, retained];
+        return Far('AllocationChurn', {
+          churn: () => {
+            const temporary = [];
+            for (let i = 0; i < 20000; i += 1) {
+              temporary.push({ index: i, owner: retained, label: 'temporary' });
+            }
+            if (temporary[19999].owner !== retained) throw Error('lost owner');
+            retained.count += 1;
+            return retained.count;
+          },
+          read: () => harden({
+            count: retained.count,
+            same: aliases[0] === retained && aliases[1] === retained,
+          }),
+        });
+      })()`,
+      guestSource: `Far('ChurnCaller', {
+        churn: () => E(counter).churn(),
+        read: () => E(counter).read(),
+      })`,
+    });
+    // Each crank fits comfortably in the heap, but their discarded objects
+    // together exceed the default slot ceiling without between-crank GC.
+    // Retained identity and state must survive both collection and restore.
+    for (let phase = 0; phase < 2; phase += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const caller = await f.guest();
+      for (let round = 0; round < 6; round += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        t.is(await E(caller).churn(), phase * 6 + round + 1);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await f.restart();
+      // eslint-disable-next-line no-await-in-loop
+      t.deepEqual(await E(await f.guest()).read(), {
+        count: (phase + 1) * 6,
+        same: true,
+      });
+    }
+  },
+);
+
+test.serial(
   'a corrupted sleep image is refused without leaking an incarnation',
   async t => {
     t.timeout(120_000);
@@ -311,5 +364,51 @@ test.serial(
     await f.restart(true);
     t.is(await f.daemon.getWorker(f.ownerId).evaluate('40 + 2'), 42);
     t.is(await f.daemon.getWorker(f.guestId).evaluate('6 * 7'), 42);
+  },
+);
+
+test.serial(
+  "a worker's settled answers are released from the hub by its collector",
+  async t => {
+    t.timeout(120_000);
+    const f = await makeFixture(t);
+    /** The owner's answer rows, and the guest's routes to answers it asked. */
+    const owed = () => {
+      const state = f.store.getHubState();
+      const rows = Object.values(state?.refs ?? {}).filter(
+        row => row.backing === 'answer' && row.origin === f.ownerId,
+      ).length;
+      const routes = Object.keys(
+        state?.sessions?.[f.guestId]?.answersOwed ?? {},
+      ).length;
+      return { rows, routes };
+    };
+    const QUESTIONS = 12;
+    let caller = await f.guest();
+    for (let i = 1; i <= QUESTIONS; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(caller).incr(), BigInt(i));
+    }
+    // Each call made one answer row at the owner and one route on the guest,
+    // and only the guest's op:gc-answers releases them. With WeakRef in the
+    // realm, the guest's collector drops each settled answer in the crank
+    // that settled it, and the gc frame travels with that delivery's
+    // outbound, so nearly nothing is left owed.
+    let after = owed();
+    t.true(after.rows <= 2, `answer rows ${after.rows} of ${QUESTIONS}`);
+    t.true(after.routes <= 2, `answer routes ${after.routes} of ${QUESTIONS}`);
+
+    // A crash replays both journals from the start, gc frames included: the
+    // regenerated frames keep their numbers, the hub's watermark drops them,
+    // and the counts stay bounded.
+    await f.restart(true);
+    caller = await f.guest();
+    for (let i = 1; i <= QUESTIONS; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(caller).incr(), BigInt(QUESTIONS + i));
+    }
+    after = owed();
+    t.true(after.rows <= 2, `answer rows ${after.rows} after replay`);
+    t.true(after.routes <= 2, `answer routes ${after.routes} after replay`);
   },
 );

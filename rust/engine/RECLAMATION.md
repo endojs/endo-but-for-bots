@@ -24,7 +24,7 @@ Generational collection remains explicitly not resume-invariant.
 ## Integrity and compatibility
 
 Exact collection requires a quiescent interpreter and a clean, current store checkpoint.
-The adapter verifies the session epoch and seal before mutation.
+The adapter verifies the session epoch and commit token before mutation.
 It does not choose or increment the consumer's collection counter.
 The managed embedding checkpoints a successful event and rewinds on collection or checkpoint
 failure, including a collector panic.
@@ -33,7 +33,9 @@ The failure is reported separately, so the consumer can retry collection without
 Fault tests cover these counters, durable state, and retry behavior.
 
 The existing failure latch, derived side-reference indexes, corruption checks, lazy backing
-rules, authenticated cadence, and old root/seal validation remain required.
+rules, the cadence succession rule, and migration's validation of its result (which replaced its
+old root/seal validation when the store-seam design's phase 13 retired roots and seals) remain
+required.
 Raw arena collectors are isolated-graph APIs, not a supported route around Interp admission.
 Temporary promise-root ranges remain because the implementation reads settlement state from
 them and preserves their operands on host halts; removing them needs a separate execution
@@ -51,7 +53,13 @@ historical fixture files remain preserved.
 
 The existing defaults remain one million slot addresses and 256 MiB of chunk storage.
 Custom ceilings are host policy and must be reapplied after restore.
-These limits do not bound total process memory or all aggregate side-table allocations.
+These limits do not bound total process memory.
+Array items, index properties, Map/Set/WeakMap/WeakSet entries and `Intl.Segmenter` results are
+charged against the chunk ceiling at declared widths (`ironhorse-vm/src/side_storage.rs`).
+Deletes and clears release their charge at once, and garbage collection releases the charge of
+the rows it drops.
+A restore derives the charge from the restored tables rather than persisting it.
+Other side tables are still not charged (see `WASM-BLOCKERS.md` B7).
 No collection runs within a crank.
 Allocations can reuse previously reclaimed space, but newly unreachable garbage waits until
 a supported boundary.

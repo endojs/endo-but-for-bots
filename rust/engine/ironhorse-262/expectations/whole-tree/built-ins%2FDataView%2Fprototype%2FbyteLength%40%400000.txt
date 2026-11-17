@@ -13,10 +13,10 @@ built-ins/DataView/prototype/byteLength/name.js sloppy pass
 built-ins/DataView/prototype/byteLength/name.js strict pass
 built-ins/DataView/prototype/byteLength/prop-desc.js sloppy pass
 built-ins/DataView/prototype/byteLength/prop-desc.js strict pass
-built-ins/DataView/prototype/byteLength/resizable-array-buffer-auto.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/DataView/prototype/byteLength/resizable-array-buffer-auto.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/DataView/prototype/byteLength/resizable-array-buffer-fixed.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/DataView/prototype/byteLength/resizable-array-buffer-fixed.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/DataView/prototype/byteLength/resizable-array-buffer-auto.js sloppy pass
+built-ins/DataView/prototype/byteLength/resizable-array-buffer-auto.js strict pass
+built-ins/DataView/prototype/byteLength/resizable-array-buffer-fixed.js sloppy pass
+built-ins/DataView/prototype/byteLength/resizable-array-buffer-fixed.js strict pass
 built-ins/DataView/prototype/byteLength/return-bytelength-sab.js sloppy pass
 built-ins/DataView/prototype/byteLength/return-bytelength-sab.js strict pass
 built-ins/DataView/prototype/byteLength/return-bytelength.js sloppy pass

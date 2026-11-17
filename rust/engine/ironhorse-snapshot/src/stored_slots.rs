@@ -6,10 +6,10 @@ use crate::store::SmallState;
 use ironhorse_vm::snapshot_api::{
     AccessorRow, AsyncGeneratorRequestRow, AsyncGeneratorRow, AsyncRow, BoundFunctionRow,
     CombinatorRow, DisposableStackRow, DisposalRecordRow, EnvironmentRow, EvaluatorRow,
-    FunctionStateSnapshot, GeneratorRow, HostFunctionRow, ModuleGraphSnapshot, ModuleRecordRow,
-    PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot,
-    PromiseJobRow, PromiseReactionRow, PromiseRow, SavedFrameRow, SavedJumpRow,
-    SharedMachineSnapshot,
+    FinalizationCellRow, FinalizationRegistryRow, FromAsyncRow, FunctionStateSnapshot,
+    GeneratorRow, HostFunctionRow, ModuleGraphSnapshot, ModuleRecordRow, PrivateAccessorRow,
+    PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot, PromiseJobRow,
+    PromiseReactionRow, PromiseRow, SavedFrameRow, SavedJumpRow, SharedMachineSnapshot, WeakRefRow,
 };
 use ironhorse_vm::Slot;
 
@@ -63,7 +63,11 @@ macro_rules! metadata_row {
         };
     };
 }
-metadata_row!(crate::image::BufferImage, [owner, data, length, flags]);
+metadata_row!(WeakRefRow, [owner, target]);
+metadata_row!(
+    crate::image::BufferImage,
+    [owner, data, length, flags, max_length]
+);
 metadata_row!(
     ironhorse_vm::snapshot_api::CollatorData,
     [
@@ -365,6 +369,14 @@ row!(DisposalRecordRow {
     slots: [resource, method],
     metadata: [pass_resource]
 });
+row!(FinalizationRegistryRow {
+    slots: [callback, cells],
+    metadata: [owner, changed]
+});
+row!(FinalizationCellRow {
+    slots: [holdings],
+    metadata: [target, token]
+});
 row!(GeneratorRow {
     slots: [frame],
     metadata: [state, owner]
@@ -386,7 +398,13 @@ row!(SavedJumpRow {
     ]
 });
 row!(PromiseClusterSnapshot {
-    slots: [async_instances, async_generators, promises, combinators],
+    slots: [
+        async_instances,
+        async_generators,
+        from_async,
+        promises,
+        combinators
+    ],
     metadata: [functions, guards, unhandled_rejection]
 });
 row!(AsyncGeneratorRow {
@@ -408,6 +426,22 @@ row!(PromiseReactionRow {
 row!(CombinatorRow {
     slots: [resolve, reject],
     metadata: [kind, remaining, results]
+});
+// `target` is a slot INDEX rather than a `Slot`, so it is metadata here and
+// is remapped by the image's index machinery, exactly as `CombinatorRow`'s
+// `results` is (architecture finding F127).
+row!(FromAsyncRow {
+    slots: [
+        resolve,
+        reject,
+        mapfn,
+        this_arg,
+        iterator,
+        next_method,
+        array_like,
+        close_error,
+    ],
+    metadata: [target, k, len, flags]
 });
 row!(AsyncRow {
     slots: [frame, resolve, reject],
@@ -447,7 +481,7 @@ macro_rules! define_payload_visitors {
         decode_container: [$($container:tt)*],
         atom: $atom:expr,
         present($image:ident): $present:expr,
-        encode($state:ident): $encode:block,
+        encode($state:ident, $out:ident): $encode:block,
         canonicalize($bytes:ident): $canonicalize:block,
         slot_visit: $visit:ident,
     })*) => {

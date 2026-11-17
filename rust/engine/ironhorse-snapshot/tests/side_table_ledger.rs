@@ -17,6 +17,7 @@
 mod carry;
 mod common;
 use carry::{compile, sig, twin};
+use ironhorse_snapshot::CommitToken;
 
 use common::TempDir;
 use ironhorse_snapshot::store::HeapStoreCommit;
@@ -56,6 +57,32 @@ fn resumed_array_length_and_elements_read_like_uninterrupted() {
         ],
         // 10 + 0 + 18 + 8
         "36",
+    );
+}
+
+/// `%Array.prototype%` is an array and the String, Number and Boolean
+/// prototypes are wrappers from boot. Their rows are boot state, stored only
+/// once a program changes them, so a resume keeps their shape either way.
+#[test]
+fn resumed_exotic_prototypes_keep_their_shape() {
+    assert_twin(
+        "ih-ledger-twin-exotic-pristine",
+        [
+            "var t = 1; t",
+            "var t; t = [Array.isArray(Array.prototype), Array.prototype.length, \
+             String.prototype.length, Number.prototype.valueOf(), \
+             Boolean.prototype.valueOf(), \
+             Object.prototype.toString.call(String.prototype)].join(); t",
+        ],
+        "true,0,0,0,false,[object String]",
+    );
+    assert_twin(
+        "ih-ledger-twin-exotic-changed",
+        [
+            "Array.prototype.push(5, 6); var t = 1; t",
+            "var t; t = [Array.prototype.length, [][1], Array.isArray(Array.prototype)].join(); t",
+        ],
+        "2,6,true",
     );
 }
 
@@ -188,7 +215,13 @@ fn side_tables_round_trip_the_container_and_stay_canonical() {
         .expect("gated image");
     assert!(empty.arrays.is_empty() && empty.collections.is_empty() && empty.registry.is_empty());
     let empty_bytes = write_machine_unchecked(&empty);
-    for tag in [b"ARRY".as_slice(), b"COLL".as_slice(), b"REGY".as_slice()] {
+    // The boot prototypes' array and wrapper rows are boot state.
+    for tag in [
+        b"ARRY".as_slice(),
+        b"COLL".as_slice(),
+        b"REGY".as_slice(),
+        b"WRAP".as_slice(),
+    ] {
         assert!(
             !empty_bytes.windows(4).any(|w| w == tag),
             "side-table-free container carries no ledger atoms",
@@ -445,8 +478,10 @@ fn a_read_miss_mints_an_id_but_stores_none_so_it_still_persists() {
 /// counter — a stored property id outside BOTH key tables (the name
 /// table and the symbol-key table) maps to nothing, can only come from
 /// crafted or torn bytes (or a pre-unification build that persisted a
-/// then-unresumable intern), and is refused as corrupt at adoption
-/// rather than laundered into a session's checkpoints.
+/// then-unresumable intern), and is refused as corrupt wherever foreign
+/// bytes are adopted (a container's decode, its import into a store).
+/// A store is trusted, so a store that already holds one is refused by
+/// the full validator, and the machine it resumes cannot publish it.
 #[test]
 fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     use ironhorse_snapshot::image::MachineImage;
@@ -512,20 +547,33 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     );
 
     // And a store that already holds one — committed straight, as a
-    // build predating the gate would have — is refused at the eager
-    // resume rather than laundered into this session's checkpoints.
+    // build predating the gate would have — is what the full validator
+    // refuses; the machine an eager resume adopts from it cannot publish
+    // the id onward.
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&poisoned, 1, ""))
+        .commit(&image_to_batch_unchecked(&poisoned, 1, CommitToken::ZERO))
         .expect("the raw commit models an older writer");
     assert_eq!(
-        resume_from_store(&store, &sig()).err(),
+        ironhorse_snapshot::store::validate_store_content(&store, &sig()).err(),
         Some(StoreError::Snapshot(
             ironhorse_snapshot::format::SnapshotError::Corrupt(
                 "stored property id outside the name and symbol-key tables",
             ),
         )),
-        "a poisoned store is not adopted",
+        "the validator refuses a poisoned store",
+    );
+    let session = resume_from_store(&store, &sig()).expect("resume trusts the stored ids");
+    assert!(
+        matches!(
+            session.machine().snapshot_image(&sig()),
+            Err(ironhorse_snapshot::machine::MachineSnapshotError::Snapshot(
+                ironhorse_snapshot::format::SnapshotError::Corrupt(
+                    "stored property id outside the name and symbol-key tables"
+                )
+            ))
+        ),
+        "a machine resumed from a poisoned store cannot publish it"
     );
 }
 

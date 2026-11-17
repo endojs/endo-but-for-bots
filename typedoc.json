@@ -53,6 +53,7 @@
     "packages/skel",
     "packages/stream-types-test",
     "packages/syrup",
+    "packages/ironhorse-prelude/",
     "packages/test262-runner/",
     "packages/where",
     "packages/space-whylip",
@@ -60,7 +61,7 @@
     "packages/space-file-explorer",
     "api-docs/"
   ],
-  "plugin": ["typedoc-plugin-mermaid"],
+  "plugin": ["typedoc-plugin-mermaid", "./scripts/typedoc-package-sources.mjs"],
   "name": "Endo",
   "titleLink": "https://endojs.org",
   "entryPointStrategy": "packages",

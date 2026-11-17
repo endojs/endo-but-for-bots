@@ -9,6 +9,11 @@ import {
   translateClaudeTurn,
 } from '../src/claude-hosted-events.js';
 
+/** @import { ERef } from '@endo/eventual-send' */
+/** @import { PassableReader } from '@endo/exo-stream' */
+/** @import { HostedTurnEvent } from '../src/claude-hosted-events.js' */
+
+/** @param {ERef<PassableReader<HostedTurnEvent>>} reader */
 const drain = async reader => {
   const events = [];
   for await (const value of iterateReader(reader)) {
@@ -16,6 +21,150 @@ const drain = async reader => {
   }
   return events;
 };
+
+test('native images outside portable limits do not stop subsequent events', t => {
+  const translator = makeClaudeHostedTranslator();
+  const events = translator.handle({
+    type: 'user',
+    message: {
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'gif',
+          content: [
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/gif',
+                data: 'R0lGODlh',
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  t.regex(
+    events.find(event => event.type === 'tool-result')?.result ?? '',
+    /Image pixels are unavailable in this replay/,
+  );
+  const next = translator.handle({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'Next event' }] },
+  });
+  t.true(
+    next.some(
+      event => event.type === 'text-delta' && event.text === 'Next event',
+    ),
+  );
+});
+
+test('native tool error flags are mapped without classifying literal error text', t => {
+  for (const isError of [true, false, undefined]) {
+    const translator = makeClaudeHostedTranslator();
+    const events = translator.handle({
+      type: 'user',
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool',
+            content: 'Error: literal',
+            ...(isError === undefined ? {} : { is_error: isError }),
+          },
+        ],
+      },
+    });
+    const result = events.find(event => event.type === 'tool-result');
+    t.is(result?.ok, isError === undefined ? undefined : !isError);
+    t.is(result?.result, 'Error: literal');
+  }
+});
+
+test('completed-turn capture follows native result and precedes terminal delivery', async t => {
+  const raw = makeBufferedReader();
+  const retainedTail = [
+    { kind: 'tool-call', id: 't', name: 'Bash', args: '{}' },
+    { kind: 'tool-result', id: 't', content: 'ok' },
+    { kind: 'message', role: 'assistant', content: 'Done.' },
+  ];
+  const checkpoint = {
+    kind: 'native-context',
+    format: 'claude-code-jsonl-v1',
+    payload: 'synthetic native payload',
+    context: [{ kind: 'compaction', summary: 'Earlier work' }, ...retainedTail],
+  };
+  raw.push({ type: 'result', subtype: 'success', result: 'Done.' });
+  raw.push({ type: 'endo_native_context', checkpoint });
+  raw.push({ type: 'end' });
+  const events = await drain(translateClaudeTurn(raw.reader));
+  t.deepEqual(events.slice(-2), [
+    { type: 'native-context', checkpoint },
+    { type: 'end' },
+  ]);
+  t.false(events.some(event => event.type === 'tool-call'));
+});
+
+test('malformed capture fails translation without publishing a checkpoint', async t => {
+  const raw = makeBufferedReader();
+  raw.push({ type: 'endo_native_context', checkpoint: 42 });
+  raw.push({ type: 'end' });
+  const events = await drain(translateClaudeTurn(raw.reader));
+  t.false(events.some(event => event.type === 'native-context'));
+  t.is(events.at(-1)?.type, 'abort');
+});
+
+test('translated delivery backpressures bursts and drains in order', async t => {
+  t.timeout(10_000);
+  const raw = makeBufferedReader();
+  for (let i = 0; i < 3000; i += 1) {
+    raw.push({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `${i},` }] },
+    });
+  }
+  raw.push({ type: 'end' });
+  const reader = translateClaudeTurn(raw.reader);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const events = await drain(reader);
+  t.is(
+    events
+      .filter(e => e.type === 'text-delta')
+      .map(e => e.text)
+      .join(''),
+    Array.from({ length: 3000 }, (_, i) => `${i},`).join(''),
+  );
+  t.is(events.at(-1)?.type, 'end');
+});
+
+test('closing a backpressured translated reader closes its raw producer', async t => {
+  t.timeout(5000);
+  let closed = false;
+  const raw = makeBufferedReader({
+    onClose: () => {
+      closed = true;
+    },
+  });
+  for (let i = 0; i < 3000; i += 1) {
+    raw.push({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: `${i},` }] },
+    });
+  }
+  const iterator = iterateReader(translateClaudeTurn(raw.reader), {
+    buffer: 0,
+  });
+  await iterator.next();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await iterator.return();
+  // Closure crosses two credit readers; yield until both have observed it.
+  for (let i = 0; i < 100 && !closed; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+  t.true(closed);
+});
 
 test('translator maps stream-json events onto hosted turn events', t => {
   const translator = makeClaudeHostedTranslator();
@@ -77,7 +226,14 @@ test('translator maps stream-json events onto hosted turn events', t => {
       result: 'file contents',
     },
     { type: 'text-delta', text: 'Done.' },
-    { type: 'usage', inputTokens: 11, outputTokens: 7 },
+    {
+      type: 'usage',
+      inputTokens: 11,
+      outputTokens: 7,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 0,
+    },
     { type: 'end' },
   ]);
 });
@@ -258,7 +414,14 @@ test('a result with text and no streamed reply surfaces the result text once', t
   ];
   t.deepEqual(log, [
     { type: 'text-delta', text: 'The thing is done.' },
-    { type: 'usage', inputTokens: 3, outputTokens: 2 },
+    {
+      type: 'usage',
+      inputTokens: 3,
+      outputTokens: 2,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 0,
+    },
     { type: 'end' },
   ]);
 });
@@ -308,7 +471,14 @@ test('translateClaudeTurn streams a full turn and ends it', async t => {
     { type: 'phase', phase: 'claude session starting' },
     { type: 'phase', phase: 'responding' },
     { type: 'text-delta', text: 'On it.' },
-    { type: 'usage', inputTokens: 3, outputTokens: 2 },
+    {
+      type: 'usage',
+      inputTokens: 3,
+      outputTokens: 2,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 0,
+    },
     { type: 'end' },
   ]);
 });
@@ -319,6 +489,71 @@ test('an in-band abort from the client passes through with its reason', async t 
   push({ type: 'abort', reason: 'claude exited with code 1' });
   const events = await drain(hosted);
   t.deepEqual(events, [{ type: 'abort', reason: 'claude exited with code 1' }]);
+});
+
+for (const terminal of ['end', 'abort']) {
+  test(`structured Claude errors survive ${terminal}`, async t => {
+    const { push, reader } = makeBufferedReader();
+    const hosted = translateClaudeTurn(reader);
+    push({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      errors: [
+        'Model access refused',
+        null,
+        { private: 'do not stringify' },
+        '',
+        'Account diagnostic',
+      ],
+    });
+    push({ type: terminal, reason: 'claude exited with code 1' });
+    t.deepEqual(await drain(hosted), [
+      {
+        type: 'abort',
+        reason: `claude turn failed: Model access refused\nAccount diagnostic${terminal === 'abort' ? '\nclaude exited with code 1' : ''}`,
+      },
+    ]);
+  });
+}
+
+test('result text and structured errors are both preserved', t => {
+  const translator = makeClaudeHostedTranslator();
+  translator.handle({
+    type: 'result',
+    is_error: true,
+    result: 'Summary',
+    errors: ['Detail'],
+  });
+  t.deepEqual(translator.finish('transport failed'), [
+    {
+      type: 'abort',
+      reason: 'claude turn failed: Summary\nDetail\ntransport failed',
+    },
+  ]);
+});
+
+test('structured error remains visible when raw producer closes without terminal', async t => {
+  t.timeout(5000);
+  const { push, reader, close } = makeBufferedReader();
+  const iterator = iterateReader(translateClaudeTurn(reader));
+  push({
+    type: 'result',
+    is_error: true,
+    errors: ['Provider refused model'],
+    usage: {},
+  });
+  t.like((await iterator.next()).value, { type: 'usage' });
+  close();
+  const remaining = [];
+  for await (const event of iterator) remaining.push(event);
+  t.deepEqual(remaining, [
+    {
+      type: 'abort',
+      reason:
+        'claude turn failed: Provider refused model\nclaude turn ended without a terminal event',
+    },
+  ]);
 });
 
 test('closing the hosted reader closes the raw reader (kills the turn)', async t => {
@@ -368,5 +603,290 @@ test('a raw reader closed by its producer ends the turn as an abort, not a reply
   for await (const event of iterator) rest.push(event);
   t.deepEqual(rest, [
     { type: 'abort', reason: 'claude turn ended without a terminal event' },
+  ]);
+});
+
+test('usage counts the cache reads and writes, and reports the last request as context', t => {
+  const translator = makeClaudeHostedTranslator();
+  const usageEvents = [
+    // First request of the turn.
+    {
+      type: 'stream_event',
+      event: {
+        type: 'message_start',
+        message: {
+          id: 'msg_1',
+          model: 'claude-main',
+          usage: {
+            input_tokens: 4,
+            cache_read_input_tokens: 30_000,
+            cache_creation_input_tokens: 500,
+            output_tokens: 1,
+          },
+        },
+      },
+    },
+    {
+      type: 'stream_event',
+      event: { type: 'message_delta', usage: { output_tokens: 120 } },
+    },
+    // The complete message repeats what message_start already reported.
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_1',
+        model: 'claude-main',
+        content: [{ type: 'tool_use', id: 'toolu_9', name: 'Bash', input: {} }],
+        usage: {
+          input_tokens: 4,
+          cache_read_input_tokens: 30_000,
+          output_tokens: 1,
+        },
+      },
+    },
+    // A subagent's request is another window and is ignored.
+    {
+      type: 'assistant',
+      parent_tool_use_id: 'toolu_9',
+      message: {
+        id: 'msg_sub',
+        content: [{ type: 'text', text: 'sub' }],
+        usage: { input_tokens: 999_999, output_tokens: 1 },
+      },
+    },
+    // Second request.
+    {
+      type: 'stream_event',
+      event: {
+        type: 'message_start',
+        message: {
+          id: 'msg_2',
+          model: 'claude-main',
+          usage: {
+            input_tokens: 6,
+            cache_read_input_tokens: 30_500,
+            cache_creation_input_tokens: 200,
+            output_tokens: 1,
+          },
+        },
+      },
+    },
+    {
+      type: 'stream_event',
+      event: { type: 'message_delta', usage: { output_tokens: 40 } },
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      result: 'ok',
+      usage: {
+        input_tokens: 10,
+        cache_read_input_tokens: 60_500,
+        cache_creation_input_tokens: 700,
+        output_tokens: 160,
+      },
+      modelUsage: {
+        'claude-small': { inputTokens: 900_000, contextWindow: 100_000 },
+        'claude-main': { inputTokens: 10, contextWindow: 200_000 },
+      },
+    },
+  ]
+    .flatMap(event => translator.handle(event))
+    .filter(event => event.type === 'usage');
+  t.deepEqual(usageEvents, [
+    { type: 'usage', context: { usedTokens: 30_624, windowTokens: 0 } },
+    { type: 'usage', context: { usedTokens: 30_746, windowTokens: 0 } },
+    {
+      type: 'usage',
+      inputTokens: 10,
+      outputTokens: 160,
+      cachedInputTokens: 60_500,
+      cacheWriteInputTokens: 700,
+      reasoningOutputTokens: 0,
+      context: { usedTokens: 30_746, windowTokens: 200_000 },
+    },
+  ]);
+});
+
+test('without partial messages the assistant event is the per-request usage', t => {
+  const translator = makeClaudeHostedTranslator();
+  const usageEvents = [
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_1',
+        content: [{ type: 'text', text: 'hi' }],
+        usage: {
+          input_tokens: 5,
+          cache_read_input_tokens: 95,
+          output_tokens: 10,
+        },
+      },
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      result: 'hi',
+      usage: {
+        input_tokens: 5,
+        cache_read_input_tokens: 95,
+        output_tokens: 10,
+      },
+      // One unnamed entry: it is the window.
+      modelUsage: { 'claude-x': { contextWindow: 1000 } },
+    },
+  ]
+    .flatMap(event => translator.handle(event))
+    .filter(event => event.type === 'usage');
+  t.deepEqual(usageEvents.at(0), {
+    type: 'usage',
+    context: { usedTokens: 110, windowTokens: 0 },
+  });
+  t.deepEqual(usageEvents.at(-1)?.context, {
+    usedTokens: 110,
+    windowTokens: 1000,
+  });
+});
+
+test('a failed turn reports the window without erasing what was read', t => {
+  const translator = makeClaudeHostedTranslator();
+  const usageEvents = [
+    // The CLI's own placeholder around an API error: not a request.
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_synthetic',
+        model: '<synthetic>',
+        content: [{ type: 'text', text: 'API Error' }],
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    },
+    {
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      modelUsage: { 'claude-main': { contextWindow: 200_000 } },
+    },
+  ]
+    .flatMap(event => translator.handle(event))
+    .filter(event => event.type === 'usage');
+  // No request was read, so no occupancy is claimed: a consumer that merges
+  // this over an earlier reading keeps that reading's occupancy.
+  t.deepEqual(usageEvents, [
+    {
+      type: 'usage',
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      reasoningOutputTokens: 0,
+      context: { usedTokens: 0, windowTokens: 200_000 },
+    },
+  ]);
+});
+
+test('the window is the main model’s, through a variant suffix and past side models', t => {
+  const windowAfter = (model, modelUsage) => {
+    const translator = makeClaudeHostedTranslator();
+    return [
+      {
+        type: 'assistant',
+        message: {
+          id: 'msg_1',
+          model,
+          content: [{ type: 'text', text: 'hi' }],
+          usage: { input_tokens: 10, output_tokens: 1 },
+        },
+      },
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'hi',
+        usage: { input_tokens: 10, output_tokens: 1 },
+        modelUsage,
+      },
+    ]
+      .flatMap(event => translator.handle(event))
+      .filter(event => event.type === 'usage')
+      .at(-1)?.context?.windowTokens;
+  };
+  // A side model that read far more input does not decide the window.
+  t.is(
+    windowAfter('claude-x', {
+      'claude-x[1m]': { contextWindow: 1_000_000, inputTokens: 10 },
+      'claude-small': { contextWindow: 200_000, inputTokens: 5000 },
+    }),
+    1_000_000,
+  );
+  // An unnamed model falls back to the largest window listed.
+  t.is(
+    windowAfter(undefined, {
+      'claude-small': { contextWindow: 200_000, inputTokens: 5000 },
+      'claude-big': { contextWindow: 500_000, inputTokens: 1 },
+    }),
+    500_000,
+  );
+  t.is(windowAfter('claude-x', undefined), 0);
+});
+
+test('a message is read once, however many content blocks repeat it', t => {
+  const translator = makeClaudeHostedTranslator();
+  const message = {
+    id: 'msg_1',
+    model: 'claude-main',
+    usage: { input_tokens: 5, cache_read_input_tokens: 95, output_tokens: 10 },
+  };
+  const usageEvents = [
+    {
+      type: 'assistant',
+      message: { ...message, content: [{ type: 'text', text: 'a' }] },
+    },
+    {
+      type: 'assistant',
+      message: {
+        ...message,
+        content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} }],
+      },
+    },
+  ]
+    .flatMap(event => translator.handle(event))
+    .filter(event => event.type === 'usage');
+  t.is(usageEvents.length, 1);
+});
+
+test('a request that does not say its usage is not completed with the last one’s', t => {
+  const translator = makeClaudeHostedTranslator();
+  const usageEvents = [
+    {
+      type: 'stream_event',
+      event: {
+        type: 'message_start',
+        message: {
+          id: 'msg_1',
+          model: 'claude-main',
+          usage: { input_tokens: 1000, output_tokens: 1 },
+        },
+      },
+    },
+    {
+      type: 'stream_event',
+      event: { type: 'message_delta', usage: { output_tokens: 50 } },
+    },
+    // The next request starts without usage; its delta must not be spliced
+    // onto the first request's input.
+    {
+      type: 'stream_event',
+      event: { type: 'message_start', message: { id: 'msg_2' } },
+    },
+    {
+      type: 'stream_event',
+      event: { type: 'message_delta', usage: { output_tokens: 7 } },
+    },
+  ]
+    .flatMap(event => translator.handle(event))
+    .filter(event => event.type === 'usage');
+  t.deepEqual(usageEvents, [
+    { type: 'usage', context: { usedTokens: 1050, windowTokens: 0 } },
   ]);
 });

@@ -14,20 +14,27 @@ const SecretBase64Shape = M.string({
   stringLengthLimit: Number.MAX_SAFE_INTEGER,
 });
 
+/**
+ * The `{ ifGeneration }` precondition travels with the write, because a
+ * rotation that cannot be made conditional cannot avoid overwriting a
+ * replacement it never read. So does the generation it commits, which is what a
+ * write-ahead protocol pins its second write to.
+ *
+ * The closed rest is load-bearing, exactly as it is on the secret manager's own
+ * guard: two-argument `M.splitRecord` leaves unlisted properties unconstrained,
+ * so a misspelled `{ ifGeneraton }` would pass here, arrive as `undefined`, and
+ * turn a conditional write into a blind overwrite of the operator's credential.
+ *
+ * Named so that every facet offering this method shares one guard rather than a
+ * transcription of it — a transcription that dropped the closed rest would fail
+ * open in exactly that way.
+ */
+export const ReplaceBase64MethodGuard = M.call(SecretBase64Shape)
+  .optional(M.splitRecord({}, { ifGeneration: M.bigint() }, harden({})))
+  .returns(M.promise());
+
 export const SecretRotatorInterface = M.interface('SecretRotator', {
-  // The `{ ifGeneration }` precondition travels with the write, because a
-  // rotation that cannot be made conditional cannot avoid overwriting a
-  // replacement it never read. So does the generation it commits, which is what
-  // a write-ahead protocol pins its second write to.
-  //
-  // The closed rest is load-bearing, exactly as it is on the secret manager's
-  // own guard: two-argument `M.splitRecord` leaves unlisted properties
-  // unconstrained, so a misspelled `{ ifGeneraton }` would pass here, arrive as
-  // `undefined`, and turn a conditional write into a blind overwrite of the
-  // operator's credential.
-  replaceBase64: M.call(SecretBase64Shape)
-    .optional(M.splitRecord({}, { ifGeneration: M.bigint() }, harden({})))
-    .returns(M.promise()),
+  replaceBase64: ReplaceBase64MethodGuard,
 });
 
 /**

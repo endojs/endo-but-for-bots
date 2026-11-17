@@ -1,0 +1,16 @@
+const s = new DisposableStack();
+const r = {};
+r.dot = s.disposed;
+r.computed = String(s['dispo' + 'sed']);
+r.reflect = String(Reflect.get(s, 'disposed'));
+r.inOp = 'disposed' in s;
+r.desc = String(Object.getOwnPropertyDescriptor(DisposableStack.prototype, 'disposed'));
+s.dispose();
+r.dotAfter = s.disposed;
+r.reflectAfter = String(Reflect.get(s, 'disposed'));
+const plain = { disposed: 7 };
+r.plain = plain.disposed;
+const t = new DisposableStack(); Object.defineProperty(t, 'disposed', { value: 'shadow' });
+r.shadowDot = t.disposed;
+r.shadowReflect = Reflect.get(t, 'disposed');
+throw new Error(JSON.stringify(r));

@@ -1,0 +1,38 @@
+--- a/rust/thixotrope-ironhorse-worker/src/main.rs
++++ b/rust/thixotrope-ironhorse-worker/src/main.rs
+@@ -120,0 +121,11 @@
++
++fn mail_trace_start() -> (std::time::Instant, f64) {
++    (std::time::Instant::now(), std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64() * 1000.0)
++}
++fn mail_trace_end(phase: &str, request: &str, started: (std::time::Instant, f64)) {
++    let duration_ms = started.0.elapsed().as_secs_f64() * 1000.0;
++    eprintln!("{}", json!({"kind":"mail.vm", "pid":std::process::id(),
++        "phase":phase, "request":request, "start":started.1, "ms":duration_ms}));
++}
++
+@@ -121,0 +133,3 @@
++    let extracting = source == "JSON.stringify(thixotropeTakeOutbound())";
++    let request = if source.starts_with("thixotropeDispatch(") || extracting { "deliver" } else { "other" };
++    let compile_started = mail_trace_start();
+@@ -177,0 +192,2 @@
++    mail_trace_end(if extracting { "extraction-compilation" } else { "compile-and-relink" }, request, compile_started);
++    let run_started = mail_trace_start();
+@@ -178,0 +195 @@
++    mail_trace_end(if extracting { "outbound-extraction" } else { "execution-and-jobs" }, request, run_started);
+@@ -188 +205,2 @@
+-    sweep_and_notify(session.machine_mut(), budget)?;
++    let request = if source.starts_with("thixotropeDispatch(") { "deliver" } else { "other" };
++    sweep_and_notify(session.machine_mut(), budget, request)?;
+@@ -240 +258 @@
+-fn sweep_and_notify(m: &mut Interp, budget: u64) -> Result<(), String> {
++fn sweep_and_notify(m: &mut Interp, budget: u64, request: &str) -> Result<(), String> {
+@@ -242,0 +261 @@
++        let gc_started = mail_trace_start();
+@@ -244,0 +264 @@
++        mail_trace_end("garbage-collection", request, gc_started);
+@@ -260,0 +281 @@
++        let finalize_started = mail_trace_start();
+@@ -261,0 +283 @@
++        mail_trace_end("finalizer-callbacks", request, finalize_started);

@@ -1,0 +1,12 @@
+zz_audit_cov_91.rs (ironhorse-vm, release, CARGO_TARGET_DIR=$SCRATCH/audit-target; deleted after run):
+AUDIT k=125   n=3200  captures=400000  completed=true computrons=   3300923 ms=   155.5 ns/computron=    47.1
+AUDIT k=500   n=800   captures=400000  completed=true computrons=   3227622 ms=   388.9 ns/computron=   120.5
+AUDIT k=2000  n=200   captures=400000  completed=true computrons=   3209299 ms=   932.1 ns/computron=   290.4
+AUDIT k=8000  n=50    captures=400000  completed=true computrons=   3204720 ms=  4121.7 ns/computron=  1286.1
+
+dispose_use.js:        ironhorse-xst `Error: use(5)=5 | num-dispose | async-use:accepted`; bun 1.4.2 `use(5):TypeError | async-use:TypeError`; node 22 lacks DisposableStack
+dispose_using_sync.js: ironhorse-xst `Error: using5:ok | num-dispose`; bun `Error: using5:TypeError`
+dispose_awaitusing2.js: ironhorse-xst loops (timeout rc=124) = await using accepted and fell back to @@dispose; bun rc=0 (TypeError, see awaitusing_bun_check.js -> `awaitusing:TypeError`)
+template_site_keys.js:    ironhorse-xst `Error: evals=64406 err=RangeError: property key space exhausted | new key afterwards: RangeError: property key space exhausted`; node `evals=80000 err=none | new key afterwards: ok`
+template_site_control.js: ironhorse-xst `Error: evals=80000 err=none | new key afterwards: ok` (same as node)
+ab_concat.js: ironhorse-xst `concat=function | own=byteLength,concat,constructor,...`; node `concat=absent`

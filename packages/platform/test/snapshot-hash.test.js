@@ -1,9 +1,8 @@
 // @ts-check
 
 // Pins the base64 spelling of the lite `SnapshotBlob` / `SnapshotTree`
-// `sha256()` accessor and the uniform `getInfo()` identity accessor. The
-// content-store address is hex internally; every *public* hash accessor
-// (`sha256()` and `getInfo().hash`) returns base64. A revert to hex would
+// `sha256()` accessor. The content-store address is hex internally; the public
+// hash accessor returns base64. A revert to hex would
 // silently break out-of-repo consumers, so assert the encoding directly. See
 // designs/fs-interface-consolidation.md § "Content hash".
 
@@ -22,7 +21,7 @@ const sampleHex =
 
 const expectedBase64 = encodeBase64(decodeHex(sampleHex));
 
-// A reader over a fixed payload, for the `getInfo().size` drain fallback.
+// A reader over a fixed payload, for the `size()` drain fallback.
 const makeBytesReader = bytes => () => {
   let sent = false;
   return harden({
@@ -35,7 +34,7 @@ const makeBytesReader = bytes => () => {
 };
 
 // `withSize` toggles whether the store's `fetch` result surfaces a cheap
-// `size()` (the real content-store path) or omits it (forcing `getInfo` to
+// `size()` (the real content-store path) or omits it (forcing `size()` to
 // drain `makeFileReader` to count bytes).
 const makeStubStore = (bytes, withSize) =>
   harden({
@@ -68,36 +67,26 @@ test('SnapshotTree.sha256() returns the digest as base64, not hex', t => {
   t.not(tree.sha256(), sampleHex, 'must not be the hex content-store address');
 });
 
-test('SnapshotBlob.getInfo() returns the base64 triple (store size path)', async t => {
+test('SnapshotBlob.size() uses the store size path', async t => {
   const blob = snapshotBlobMethods(
     /** @type {any} */ (makeStubStore(new Uint8Array(7), true)),
     sampleHex,
   );
-  t.deepEqual(await blob.getInfo(), {
-    algorithm: 'sha256',
-    hash: expectedBase64,
-    size: 7n,
-  });
+  t.is(await blob.size(), 7n);
 });
 
-test('SnapshotBlob.getInfo() falls back to draining bytes when the store has no size()', async t => {
+test('SnapshotBlob.size() falls back to draining bytes', async t => {
   const blob = snapshotBlobMethods(
     /** @type {any} */ (makeStubStore(new Uint8Array(5), false)),
     sampleHex,
   );
-  const info = await blob.getInfo();
-  t.is(info.hash, expectedBase64);
-  t.is(info.size, 5n);
+  t.is(await blob.size(), 5n);
 });
 
-test('SnapshotTree.getInfo() returns the manifest identity triple', async t => {
+test('SnapshotTree.size() returns the manifest size', async t => {
   const tree = snapshotTreeMethods(
     /** @type {any} */ (makeStubStore(new Uint8Array(9), true)),
     sampleHex,
   );
-  t.deepEqual(await tree.getInfo(), {
-    algorithm: 'sha256',
-    hash: expectedBase64,
-    size: 9n,
-  });
+  t.is(await tree.size(), 9n);
 });

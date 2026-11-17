@@ -5,8 +5,8 @@ built-ins/isFinite/S15.1.2.5_A2.7.js sloppy pass
 built-ins/isFinite/S15.1.2.5_A2.7.js strict pass
 built-ins/isFinite/not-a-constructor.js sloppy pass
 built-ins/isFinite/not-a-constructor.js strict pass
-built-ins/isFinite/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isFinite name descriptor value should be isFinite; isFinite name value should be isFinite"
-built-ins/isFinite/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isFinite name descriptor value should be isFinite; isFinite name value should be isFinite"
+built-ins/isFinite/prop-desc.js sloppy pass
+built-ins/isFinite/prop-desc.js strict pass
 built-ins/isFinite/return-abrupt-from-tonumber-number-symbol.js sloppy pass
 built-ins/isFinite/return-abrupt-from-tonumber-number-symbol.js strict pass
 built-ins/isFinite/return-abrupt-from-tonumber-number.js sloppy pass

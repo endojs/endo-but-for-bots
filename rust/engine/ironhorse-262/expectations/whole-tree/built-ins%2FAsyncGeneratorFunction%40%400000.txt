@@ -5,8 +5,8 @@ built-ins/AsyncGeneratorFunction/has-instance.js sloppy pass
 built-ins/AsyncGeneratorFunction/has-instance.js strict pass
 built-ins/AsyncGeneratorFunction/instance-await-expr-in-param.js sloppy pass
 built-ins/AsyncGeneratorFunction/instance-await-expr-in-param.js strict pass
-built-ins/AsyncGeneratorFunction/instance-construct-throws.js sloppy skip:unsupported-opcode:async-generator:new-target
-built-ins/AsyncGeneratorFunction/instance-construct-throws.js strict skip:unsupported-opcode:async-generator:new-target
+built-ins/AsyncGeneratorFunction/instance-construct-throws.js sloppy pass
+built-ins/AsyncGeneratorFunction/instance-construct-throws.js strict pass
 built-ins/AsyncGeneratorFunction/instance-length.js sloppy pass
 built-ins/AsyncGeneratorFunction/instance-length.js strict pass
 built-ins/AsyncGeneratorFunction/instance-name.js sloppy pass
@@ -23,8 +23,8 @@ built-ins/AsyncGeneratorFunction/invoked-as-function-no-arguments.js sloppy pass
 built-ins/AsyncGeneratorFunction/invoked-as-function-no-arguments.js strict pass
 built-ins/AsyncGeneratorFunction/invoked-as-function-single-argument.js sloppy pass
 built-ins/AsyncGeneratorFunction/invoked-as-function-single-argument.js strict pass
-built-ins/AsyncGeneratorFunction/is-a-constructor.js sloppy skip:unsupported-opcode:Iterator.helper
-built-ins/AsyncGeneratorFunction/is-a-constructor.js strict skip:unsupported-opcode:Iterator.helper
+built-ins/AsyncGeneratorFunction/is-a-constructor.js sloppy pass
+built-ins/AsyncGeneratorFunction/is-a-constructor.js strict pass
 built-ins/AsyncGeneratorFunction/length.js sloppy pass
 built-ins/AsyncGeneratorFunction/length.js strict pass
 built-ins/AsyncGeneratorFunction/name.js sloppy pass

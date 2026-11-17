@@ -9,8 +9,8 @@ built-ins/Error/prototype/stack/getter-error-instance.js sloppy pass
 built-ins/Error/prototype/stack/getter-error-instance.js strict pass
 built-ins/Error/prototype/stack/getter-error-prototype.js sloppy pass
 built-ins/Error/prototype/stack/getter-error-prototype.js strict pass
-built-ins/Error/prototype/stack/getter-foreign-new-target.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Error: [[Prototype]] is the new.target prototype Expected SameValue(«Error», «[object Object]») to be true"
-built-ins/Error/prototype/stack/getter-foreign-new-target.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Error: [[Prototype]] is the new.target prototype Expected SameValue(«Error», «[object Object]») to be true"
+built-ins/Error/prototype/stack/getter-foreign-new-target.js sloppy pass
+built-ins/Error/prototype/stack/getter-foreign-new-target.js strict pass
 built-ins/Error/prototype/stack/getter-no-error-data.js sloppy pass
 built-ins/Error/prototype/stack/getter-no-error-data.js strict pass
 built-ins/Error/prototype/stack/getter-not-a-constructor.js sloppy pass
@@ -49,8 +49,8 @@ built-ins/Error/prototype/stack/setter-non-writable-stack.js sloppy skip:shared-
 built-ins/Error/prototype/stack/setter-non-writable-stack.js strict skip:shared-test262-failure
 built-ins/Error/prototype/stack/setter-not-a-constructor.js sloppy pass
 built-ins/Error/prototype/stack/setter-not-a-constructor.js strict pass
-built-ins/Error/prototype/stack/setter-own-accessor.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Error: own setter received the value Expected SameValue(«undefined», «\\\"sentinel\\\"») to be true\" ironhorse=\"Test262Error: undefinedundefined», «string\\\"sentinel\\\"») to be true\""
-built-ins/Error/prototype/stack/setter-own-accessor.js strict fail:"abort-value-differs: oracle=\"Test262Error: Error: own setter received the value Expected SameValue(«undefined», «\\\"sentinel\\\"») to be true\" ironhorse=\"Test262Error: undefinedundefined», «string\\\"sentinel\\\"») to be true\""
+built-ins/Error/prototype/stack/setter-own-accessor.js sloppy skip:shared-test262-failure
+built-ins/Error/prototype/stack/setter-own-accessor.js strict skip:shared-test262-failure
 built-ins/Error/prototype/stack/setter-proxy-trap-rejects.js sloppy skip:shared-test262-failure
 built-ins/Error/prototype/stack/setter-proxy-trap-rejects.js strict skip:shared-test262-failure
 built-ins/Error/prototype/stack/setter-proxy-trap-throws.js sloppy skip:shared-test262-failure

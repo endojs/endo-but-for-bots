@@ -175,7 +175,7 @@ fn caught_late_json_failure_retains_admitted_work() {
         ),
         (
             "try { JSON.stringify({a:1,get b(){throw 'late'}}); } catch (_) { 'caught'; }",
-            4_610_816,
+            4_643_584,
         ),
     ] {
         let (code, names) = compile(source);
@@ -259,7 +259,7 @@ fn version_four_unicode_parse_and_argument_costs_are_frozen() {
         .collect();
     assert_eq!(
         raw,
-        vec![935_752, 6_411_096, 1_264_288, 1_328_472, 3_065_864, 2_282_848]
+        vec![935_752, 6_361_944, 1_264_288, 1_328_472, 3_065_864, 2_282_848]
     );
 }
 

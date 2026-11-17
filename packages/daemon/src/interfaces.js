@@ -11,8 +11,9 @@ import {
   pathEntryMethodGuards,
   pathEntryIssuerMethodGuards,
   rangeReadMethodGuards,
-  getInfoMethodGuard,
+  rangeAttenuationMethodGuards,
 } from '@endo/platform/fs/lite';
+import { EnvironmentRecipeShape } from '@endo/exo-shell/environment-interfaces.js';
 import {
   NamePathShape,
   NameOrPathShape,
@@ -38,8 +39,14 @@ const LocatorShape = M.string();
 // Message numbers are non-negative BigInts
 const MessageNumberShape = M.bigint();
 
+// Mail dialogue and formula construction data have workload admission at their
+// harness/setup boundary. Their structural text profile must also admit older
+// retained values after those workload settings are lowered.
+const RetainedTextShape = M.string({ stringLengthLimit: 0x7fff_ffff });
+const MessageStringsShape = M.arrayOf(RetainedTextShape);
+
 // Environment variables as string-to-string record
-const EnvShape = M.recordOf(M.string(), M.string());
+const EnvShape = M.recordOf(M.string(), RetainedTextShape);
 
 // Options for makeUnconfined and makeArchive
 const MakeCapletOptionsShape = M.splitRecord(
@@ -82,10 +89,12 @@ export const ResponderInterface = M.interface('EndoResponder', {
 // clients) can consume them without depending on the daemon. They are imported
 // above; the daemon adds only the registry/locator surface below.
 
-// The documentation-contract interface for the narrow read surface. It is not
-// used to build an exo directly (each surface assembles its own guard from the
-// records); it names the contract that `__getMethodNames__`-based feature
-// detection keys on (namehub-interface-unification.md Decision 3).
+// The interface for the narrow read surface. It both names the contract that
+// `__getMethodNames__`-based feature detection keys on
+// (namehub-interface-unification.md Decision 3) AND is used directly to build
+// the read-only views (`makeReadOnlyDirectoryView` in directory.js, and the
+// mailbox/message hub views in manager.js). Editing it therefore changes the
+// argument guard those exos enforce — it is not documentation-only.
 export const ReadableNameHubInterface = M.interface('ReadableNameHub', {
   ...readableNameHubMethodGuards,
 });
@@ -102,6 +111,7 @@ export const nameHubMethodGuards = harden({
   locate: M.call().rest(NamePathShape).returns(M.promise()),
   reverseLocate: M.call(LocatorShape).returns(M.promise()),
   followLocatorNameChanges: M.call(LocatorShape).returns(M.remotable()),
+  listValues: M.call().returns(M.promise()),
   listIdentifiers: M.call().rest(NamePathShape).returns(M.promise()),
   listLocators: M.call().rest(NamePathShape).returns(M.promise()),
   followNameChanges: M.call().returns(M.remotable()),
@@ -190,6 +200,7 @@ export const SecretImporterInterface = M.interface('SecretImporter', {
 
 export const SecretCatalogInterface = M.interface('SecretCatalog', {
   list: M.call().returns(M.promise()),
+  adminFor: M.call(M.remotable()).returns(M.promise()),
 });
 
 export const SecretAuditReaderInterface = M.interface('SecretAuditReader', {
@@ -231,6 +242,11 @@ export const HandleInterface = M.interface(
 export const DirectoryInterface = M.interface('EndoDirectory', {
   ...nameHubMethodGuards,
   ...directoryFileMethodGuards,
+  // Result awaited before the return is checked (`callWhen`) and pinned to a
+  // `ReadableNameHub` remotable, matching the sibling `EndoMount`/`EndoMountFile`
+  // `readOnly()` guards (which return `M.remotable('ReadableTree')` /
+  // `M.remotable('ReadableBlob')`) and the declared `Promise<ReadableNameHub>`.
+  readOnly: M.callWhen().returns(M.remotable('ReadableNameHub')),
 });
 
 export const GuestInterface = M.interface('EndoGuest', {
@@ -278,7 +294,7 @@ export const GuestInterface = M.interface('EndoGuest', {
   // Send a package message
   send: M.call(
     NameOrPathShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
@@ -287,14 +303,14 @@ export const GuestInterface = M.interface('EndoGuest', {
   // Reply to a message
   reply: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   ).returns(M.promise()),
   // Edit a message the caller previously sent
   editMessage: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
@@ -324,18 +340,29 @@ export const GuestInterface = M.interface('EndoGuest', {
     MessageNumberShape, // messageNumber
     M.record(), // values
   ).returns(M.promise()),
+  // Submit values for a form at most once per attempt
+  submitOnce: M.call(
+    MessageNumberShape, // messageNumber
+    M.record(), // values
+    M.string(), // attempt
+  ).returns(M.promise()),
   // Send a retained value as a reply
   sendValue: M.call(
     MessageNumberShape, // messageNumber
     NameOrPathShape, // petNameOrPath
   ).returns(M.promise()),
   // Internal: deliver a message
-  deliver: M.call(M.record()).returns(),
+  deliver: M.call(M.record()).returns(M.promise()),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
+  // Mint a guest-owned invitation (network mediation stays internal)
+  invite: M.call(NameOrPathShape).returns(M.promise()),
+  // Redeem an invitation into this guest (accepts as itself; no minted guest)
+  accept: M.call(LocatorShape, NameOrPathShape).returns(M.promise()),
 });
 
 export const HostInterface = M.interface('EndoHost', {
+  createDirectory: M.call(NameOrPathShape).returns(M.promise()),
   // Name hub — the shared read (incl. `help`) + registry/locator/mutation
   // surface, plus the directory file-I/O surface.
   ...nameHubMethodGuards,
@@ -367,13 +394,13 @@ export const HostInterface = M.interface('EndoHost', {
     .returns(M.promise()),
   send: M.call(
     NameOrPathShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
     .optional(MessageNumberShape)
     .returns(M.promise()),
-  deliver: M.call(M.record()).returns(),
+  deliver: M.call(M.record()).returns(M.promise()),
   // Send a form to a recipient
   form: M.call(
     NameOrPathShape, // recipientName
@@ -389,6 +416,10 @@ export const HostInterface = M.interface('EndoHost', {
   storeValue: M.call(M.any(), NameOrPathShape).returns(M.promise()),
   // Check in a remote readable-tree Exo, storing content-addressed
   storeTree: M.call(M.remotable(), NameOrPathShape).returns(M.promise()),
+  // Administrative session records and lifecycle remain daemon-local.
+  provideSessionOwner: M.call(NameOrPathShape)
+    .optional(M.string())
+    .returns(M.promise()),
   // Mount an external directory. `deniedSegments` replaces the mount's
   // default restricted-segment set (an empty array disables denial).
   provideMount: M.call(M.string(), NameOrPathShape)
@@ -411,7 +442,8 @@ export const HostInterface = M.interface('EndoHost', {
     .returns(M.promise()),
   // Mint a sub-mount rooted at a subdirectory of an existing mount
   provideSubMount: M.call(
-    NameOrPathShape,
+    // The parent by pet name, or the daemon-minted mount capability itself.
+    M.or(NameOrPathShape, M.remotable()),
     M.arrayOf(M.string()),
     NameOrPathShape,
   )
@@ -440,6 +472,13 @@ export const HostInterface = M.interface('EndoHost', {
     NameOrPathShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('Shell')),
+  provideEnvironment: M.callWhen(
+    M.remotable(),
+    M.remotable(),
+    NameOrPathShape,
+    NameOrPathShape,
+    EnvironmentRecipeShape,
+  ).returns(harden({ shell: M.remotable(), admin: M.remotable() })),
   // Mint a confined outbound-HTTP client from a host-owned `fetch` seam. No
   // mount arg: the Network tier is rooted in the fetch seam, not a mount.
   provideHttpClient: M.callWhen(
@@ -554,14 +593,14 @@ export const HostInterface = M.interface('EndoHost', {
   // Reply to a message
   reply: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   ).returns(M.promise()),
   // Edit a message the caller previously sent
   editMessage: M.call(
     MessageNumberShape,
-    M.arrayOf(M.string()),
+    MessageStringsShape,
     EdgeNamesShape,
     NamesOrPathsShape,
   )
@@ -584,6 +623,12 @@ export const HostInterface = M.interface('EndoHost', {
     MessageNumberShape, // messageNumber
     M.record(), // values
   ).returns(M.promise()),
+  // Submit values for a form at most once per attempt
+  submitOnce: M.call(
+    MessageNumberShape, // messageNumber
+    M.record(), // values
+    M.string(), // attempt
+  ).returns(M.promise()),
   // Send a retained value as a reply
   sendValue: M.call(
     MessageNumberShape, // messageNumber
@@ -598,6 +643,9 @@ export const HostInterface = M.interface('EndoHost', {
   // `EndoInspector` already denotes the per-formula reference walker.)
   // See `designs/formula-inspector.md`.
   diagnostics: M.call().returns(M.promise()),
+  // Read sensitive stored caplet environment. This is deliberately excluded
+  // from the separately delegable read-only diagnostics facet.
+  getFormulaEnvironment: M.call(IdShape).returns(M.promise()),
   // Snapshot every retention path from a GC root to the target locator
   listRetentionPaths: M.call(LocatorShape).returns(M.promise()),
   // Subscribe to retention-path changes for a target locator
@@ -672,7 +720,6 @@ export const ChannelInvitationInterface = M.interface('EndoChannelInvitation', {
   help: M.call().optional(M.string()).returns(M.string()),
   join: M.call(M.string()).returns(M.promise()),
 });
-harden(ChannelInvitationInterface);
 
 export const AttenuatorInterface = M.interface('EndoChannelAttenuator', {
   setInvitationValidity: M.call(M.boolean()).returns(M.promise()),
@@ -680,11 +727,11 @@ export const AttenuatorInterface = M.interface('EndoChannelAttenuator', {
   getHeatConfig: M.call().returns(M.promise()),
   temporaryBan: M.call(M.number()).returns(M.promise()),
 });
-harden(AttenuatorInterface);
 
 export const InvitationInterface = M.interface('EndoInvitation', {
   accept: M.call(IdShape).optional(M.string()).returns(M.promise()),
   locate: M.call().returns(M.promise()),
+  cancel: M.call().optional(M.error()).returns(M.promise()),
 });
 
 export const InspectorHubInterface = M.interface('EndoInspectorHub', {
@@ -699,16 +746,20 @@ export const InspectorInterface = M.interface('EndoInspector', {
 
 // `EndoBlob` is the daemon's immutable-bytes cap and the CapTP remote-read
 // target. It carries the whole-value `readableBlobMethodGuards` (help / text /
-// json / streamBase64) plus the range-I/O `rangeReadMethodGuards` (getInfo /
-// fetch) — i.e. exactly the shared `ReadableBlobRangeInterface`. The content
-// hash is reported by `getInfo().hash` (base64); there is no separate
-// `sha256()` accessor (the daemon's internals always already hold the hex
-// digest from `contentStore.store()` / the formula, so the cap method was
-// only ever a remote accessor, now superseded by `getInfo`). See
+// json / streamBase64) plus the named `rangeReadMethodGuards` (`sha256`,
+// `size`, and `bytes`). See
 // designs/fs-interface-consolidation.md § C4.
 export const BlobInterface = M.interface('EndoBlob', {
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  // Range *attenuation* (`byteRange` / `textRange`,
+  // designs/readableblob-range-attenuation.md): return a new `EndoBlob` with
+  // exactly the authority to read the selected byte / line interval, so ranges
+  // compose and can be handed to anything that accepts a readable blob. The
+  // derived cap re-invokes the same factory with a composed absolute interval
+  // over the same content-store address / captured bytes — no formula, name, or
+  // persistence entry for a derived range.
+  ...rangeAttenuationMethodGuards,
 });
 
 const PathSegmentsShape = M.arrayOf(M.string());
@@ -765,24 +816,37 @@ export const MountInterface = M.interface('EndoMount', {
   grep: M.callWhen(M.string())
     .optional(
       M.await(M.arrayOf(M.string())),
+      // The rest is closed (`{}`) so a typo'd option key (e.g. `maxResult`)
+      // fails loudly at the exo boundary instead of slipping through the
+      // default `M.any()` rest. `maxResults` is admitted as a number; the
+      // method body further constrains it to a non-negative safe integer
+      // capped at `GREP_MAX_RESULTS` (NaN/Infinity/negatives reject).
       M.splitRecord(
         {},
         { maxResults: M.number(), followSymlinks: M.boolean() },
+        {},
       ),
     )
     .returns(M.array()),
   // Fused glob+grep composition. Both patterns are required positionals (unlike
   // grep's optional `paths`), so the operation can be pushed down to native code
   // as a single fused enumerate-and-scan call. The reference implementation
-  // composes the delegated surface: `grep(grepPattern, glob(globPattern))`. See
-  // designs/platform-search-pushdown.md § "The Array surface".
+  // composes the delegated surface: `grep(grepPattern, glob(globPattern))`, or
+  // dispatches to a native `search.glorp` when the file powers supply one.
   // `followSymlinks` reaches the enumeration half only; grep's half receives an
   // explicit path array, which is followed regardless.
+  // ReDoS hazard: `pattern` is a caller-supplied ECMAScript RegExp source
+  // compiled with `new RegExp(pattern)` and tested per line on the daemon's
+  // single event loop — a catastrophic backtracking source can stall the
+  // daemon (measured tens of seconds from one short line). There is no
+  // portable per-call CPU bound in pure JS; a native engine may impose one.
+  // See designs/platform-search-pushdown.md § "The Array surface".
   glorp: M.call(M.string(), M.string())
     .optional(
       M.splitRecord(
         {},
         { maxResults: M.number(), followSymlinks: M.boolean() },
+        {},
       ),
     )
     .returns(M.promise()),
@@ -841,8 +905,7 @@ export const MountInterface = M.interface('EndoMount', {
 // overlapping methods (`streamBase64`, `text`, `json`, `writeText`,
 // `writeBytes`, `append`, `snapshot`) carry the same shapes as
 // `PlatformFileInterface`; `stat`, `help`, and the `rangeReadMethodGuards`
-// (`getInfo` / `fetch`) are mount-specific extensions.  `getInfo` / `fetch`
-// expose the rich `BlobRef` range-I/O surface over the *live* file.
+// are mount-specific extensions over the live file.
 // `readOnly` narrows to a structural ReadableBlob view that carries the same
 // rich surface.
 export const MountFileInterface = M.interface('EndoMountFile', {
@@ -853,9 +916,14 @@ export const MountFileInterface = M.interface('EndoMountFile', {
   list: M.call().returns(M.promise()),
   // Whole-value read surface (help / streamBase64 / text / json) shared with
   // every other readable blob, plus the rich `rangeReadMethodGuards`
-  // (getInfo / fetch) over the live file, plus the mount-file write surface.
+  // over the live file, plus the mount-file write surface.
   ...readableBlobMethodGuards,
   ...rangeReadMethodGuards,
+  // Range *attenuation* (`byteRange` / `textRange`): return a read-only
+  // `ReadableBlob` view over the selected byte / line interval of the *live*
+  // file — each read on the derived view still observes the source, subject to
+  // the fixed interval. See designs/readableblob-range-attenuation.md.
+  ...rangeAttenuationMethodGuards,
   writeText: M.call(M.string()).returns(M.promise()),
   append: M.call(M.string()).returns(M.promise()),
   writeBytes: M.call(M.remotable()).returns(M.promise()),
@@ -903,8 +971,8 @@ export {
 // the `SnapshotTree` shape. See designs/fs-interface-consolidation.md § C3.
 export const ReadableTreeInterface = M.interface('EndoReadableTree', {
   ...readableTreeMethodGuards,
-  ...getInfoMethodGuard,
   sha256: M.call().returns(M.string()),
+  size: M.call().returns(M.promise()),
 });
 
 // `EndoRegistry` brokers npm-style package resolution and tarball fetch

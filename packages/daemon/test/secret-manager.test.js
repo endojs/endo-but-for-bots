@@ -3,6 +3,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { E } from '@endo/eventual-send';
+import { Far } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import {
@@ -85,6 +86,101 @@ const makeHarness = () => {
     makeDirectory,
   };
 };
+
+test('catalog selects administration by exact read identity, not a mutable path', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  const first = await E(importer).createBase64(
+    'original',
+    'First',
+    btoa('first'),
+  );
+  const second = await E(importer).createBase64(
+    'replacement',
+    'Second',
+    btoa('second'),
+  );
+  const firstGrant = harness.bindings[0].grantId;
+  const secondGrant = harness.bindings[1].grantId;
+  const firstBlob = await E(directory).lookup(['use', firstGrant]);
+  const secondBlob = await E(directory).lookup(['use', secondGrant]);
+  const catalog = await E(directory).lookup('catalog');
+  const firstAdmin = await E(catalog).adminFor(firstBlob);
+  t.is((await E(firstAdmin).getSummary()).secretId, first.secretId);
+  t.is(
+    (await E(await E(catalog).adminFor(secondBlob)).getSummary()).secretId,
+    second.secretId,
+  );
+  harness.bindings.splice(0, 1);
+  harness.bindings[0].name = 'original';
+  t.is(await E(catalog).adminFor(firstBlob), firstAdmin);
+  await E(firstAdmin).replaceBase64(btoa('updated'), { ifGeneration: 1n });
+  t.is(await E(firstBlob).readBase64(), btoa('updated'));
+  t.is(await E(secondBlob).readBase64(), btoa('second'));
+
+  // Rebuilding the manager restores identity through the persisted grant, not
+  // by preserving the old incarnation's WeakMap or looking at its pet names.
+  const restarted = harness.makeDirectory(harness.makeManager());
+  const restartedBlob = await E(restarted).lookup(['use', firstGrant]);
+  const restartedCatalog = await E(restarted).lookup('catalog');
+  const restartedAdmin = await E(restartedCatalog).adminFor(restartedBlob);
+  t.is((await E(restartedAdmin).getSummary()).secretId, first.secretId);
+  await t.throwsAsync(() => E(restartedCatalog).adminFor(firstBlob), {
+    message: /UNKNOWN_GRANT/,
+  });
+});
+
+test('catalog refuses wrapped and foreign facets without invoking them; revoked records remain administrable', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  await E(await E(directory).lookup('create')).createBase64(
+    'test',
+    'Test',
+    btoa('test'),
+  );
+  const blob = await E(directory).lookup(['use', harness.bindings[0].grantId]);
+  const catalog = await E(directory).lookup('catalog');
+  let calls = 0;
+  const wrapped = Far('WrappedSecretBlob', {
+    readBase64: () => {
+      calls += 1;
+      return E(blob).readBase64();
+    },
+    readBase64WithGeneration: () => {
+      calls += 1;
+      return E(blob).readBase64WithGeneration();
+    },
+  });
+  await t.throwsAsync(() => E(catalog).adminFor(wrapped), {
+    message: /UNKNOWN_GRANT/,
+  });
+  const other = makeHarness();
+  const otherDirectory = other.makeDirectory(other.makeManager());
+  await E(await E(otherDirectory).lookup('create')).createBase64(
+    'test',
+    'Other',
+    btoa('other'),
+  );
+  const foreign = await E(otherDirectory).lookup([
+    'use',
+    other.bindings[0].grantId,
+  ]);
+  await t.throwsAsync(() => E(catalog).adminFor(foreign), {
+    message: /UNKNOWN_GRANT/,
+  });
+  t.is(calls, 0);
+  const admin = await E(catalog).adminFor(blob);
+  await E(admin).revoke();
+  t.is(await E(catalog).adminFor(blob), admin);
+  await t.throwsAsync(() => E(admin).replaceBase64(btoa('forbidden')), {
+    message: /REVOKED/,
+  });
+  await E(admin).delete();
+  await t.throwsAsync(() => E(catalog).adminFor(blob), {
+    message: /UNKNOWN_SECRET/,
+  });
+});
 
 test('secret facets remain separated and durable across manager restart', async t => {
   const harness = makeHarness();

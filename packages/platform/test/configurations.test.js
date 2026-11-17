@@ -278,8 +278,7 @@ test("snapshot() on a layer file reflects the layer's content, not the backing",
   const file = await E(root).lookup('shared');
   const blob = await E(file).snapshot();
   t.truthy(blob);
-  const info = await E(blob).getInfo();
-  t.is(info.size, BigInt('layer-content'.length));
+  t.is(await E(blob).size(), BigInt('layer-content'.length));
 });
 
 // ---------- watch through composition (weakness probe) ----------

@@ -1,11 +1,12 @@
 // @ts-nocheck
 
 // Establish a perimeter:
-// eslint-disable-next-line import/order
+
 import '@endo/init/debug.js';
 
 import test from 'ava';
 import url from 'url';
+import os from 'os';
 import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
@@ -18,6 +19,9 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { sha256 } from '@endo/sha256';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
@@ -25,6 +29,7 @@ import { ZipReader } from '@endo/zip/reader.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { makeSessionRecordStore } from '../src/session-record-store.js';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import { makeCryptoPowers } from '../src/manager-node-powers.js';
 import { makeDaemonDatabase } from '../src/manager-database-node.js';
@@ -168,7 +173,6 @@ const waitForText = async (filePath, matcher, opts = {}) => {
   const matches = text =>
     matcher instanceof RegExp ? matcher.test(text) : text.includes(matcher);
 
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     // eslint-disable-next-line no-await-in-loop
     const text = await fs.promises.readFile(filePath, 'utf-8').catch(() => '');
@@ -193,7 +197,7 @@ const waitForCondition = async (predicate, opts = {}) => {
   await null;
   const { timeoutMs = 2000, intervalMs = 50 } = opts;
   const startTime = Date.now();
-  // eslint-disable-next-line no-constant-condition
+
   while (true) {
     // eslint-disable-next-line no-await-in-loop
     if (await predicate()) {
@@ -247,10 +251,22 @@ const makeConfig = (...root) => {
     statePath: path.join(dirname, ...root, 'state'),
     ephemeralStatePath: path.join(dirname, ...root, 'run'),
     cachePath: path.join(dirname, ...root, 'cache'),
+    // Use a short socket path under the OS temp dir to stay within the ~104
+    // char Unix socket path limit; a long CI (or worktree) checkout path can
+    // otherwise push `<dirname>/tmp/<config>/endo.sock` over the limit. The
+    // last root segment carries a unique per-test/config id suffix, and the
+    // base-36 process id keeps two concurrent runs (two worktrees, two CI
+    // containers sharing `/tmp`) from deriving the SAME absolute socket path —
+    // a collision where one run's `purge`/`clean` unlinks the other's live
+    // socket. The slice is trimmed to leave the pid room within the length
+    // budget. (This mirrors `_multiplayer-suite.js`'s makeConfig.)
     sockPath:
       process.platform === 'win32'
-        ? raw`\\?\pipe\endo-${root.join('-')}-test.sock`
-        : path.join(dirname, ...root, 'endo.sock'),
+        ? raw`\\?\pipe\endo-${process.pid.toString(36)}-${root.join('-')}-test.sock`
+        : path.join(
+            os.tmpdir(),
+            `endo-${process.pid.toString(36)}-${root.join('-').slice(-32)}.sock`,
+          ),
     address: '127.0.0.1:0',
     pets: new Map(),
     values: new Map(),
@@ -271,25 +287,32 @@ const makeHost = async (config, cancelled) => {
   // teardown-induced connection closure as an unhandled rejection.
   closed.catch(() => {});
   const bootstrap = getBootstrap();
-  return { host: E(bootstrap).host() };
+  const host = E(bootstrap).host();
+  // A test that never uses the host must not turn teardown into an unhandled
+  // rejection: if the daemon has not answered `host()` when teardown stops it,
+  // CapTP rejects the pending question with "Termination requested".  Tests
+  // that do use the host still see the rejection through their own `await`.
+  host.catch(() => {});
+  return { host };
 };
 
 /**
  * @param {ExecutionContext<any>} t
+ * @param {string} [configName]
  * @returns {Promise<ReturnType<prepareConfig> & ReturnType<makeHost>>}
  */
-const prepareHost = async t => {
-  // eslint-disable-next-line no-use-before-define
-  const { cancel, cancelled, config } = await prepareConfig(t);
+const prepareHost = async (t, configName = t.title) => {
+  const { cancel, cancelled, config } = await prepareConfig(t, { configName });
   const { host } = await makeHost(config, cancelled);
   return { cancel, cancelled, config, host };
 };
 
 /**
  * @param {ExecutionContext<any>} t
+ * @param {string} [configName]
  */
-const prepareHostWithTestNetwork = async t => {
-  const { host } = await prepareHost(t);
+const prepareHostWithTestNetwork = async (t, configName = t.title) => {
+  const { host } = await prepareHost(t, configName);
 
   // Store the listen address before the network service starts.
   await E(host).storeValue('127.0.0.1:0', 'tcp-listen-addr');
@@ -437,11 +460,15 @@ const getConfigDirectoryName = (testTitle, testConfigIndex) => {
  * @param {ExecutionContext<any>} t
  * @param {object} [options]
  * @param {boolean} [options.gcEnabled]
+ * @param {string} [options.configName] Short name for platforms with small socket paths.
  */
-const prepareConfig = async (t, { gcEnabled = true } = {}) => {
+const prepareConfig = async (
+  t,
+  { gcEnabled = true, configName = t.title } = {},
+) => {
   const { cancelled, cancel } = makeCancelKit();
   const config = {
-    ...makeConfig('tmp', getConfigDirectoryName(t.title, t.context.length)),
+    ...makeConfig('tmp', getConfigDirectoryName(configName, t.context.length)),
     gcEnabled,
   };
 
@@ -462,11 +489,26 @@ const prepareConfig = async (t, { gcEnabled = true } = {}) => {
 const testNeedsNodeWorker =
   process.env.ENDO_BIN && !process.env.ENDO_NODE_WORKER_BIN ? test.skip : test;
 
+// A leaked rejection (typically a daemon's graceful-disconnect reason,
+// "Termination requested", arriving on a promise nobody observes) is reported
+// by ava only after the whole file has run, so its report cannot say which
+// test leaked it.  Log it when it happens, naming the test in flight; ava
+// still fails the file.
+let testInFlight = '(no test yet)';
+process.on('unhandledRejection', reason => {
+  console.error(
+    `Unhandled rejection while running ${JSON.stringify(testInFlight)}:`,
+    reason,
+  );
+});
+
 test.beforeEach(t => {
+  testInFlight = t.title;
   t.context = [];
 });
 
 test.afterEach.always(async t => {
+  testInFlight = `${t.title} (teardown)`;
   // Stop all daemons first, then cancel the client connections.
   // Stopping first avoids an unhandled rejection race: if cancel() fires
   // before the daemon has shut down, CapTP teardown can produce derivative
@@ -501,6 +543,97 @@ test('lifecycle', async t => {
   t.pass();
 });
 
+testNeedsNodeWorker(
+  'durable environment restores passively and retains exact runner/workspace identities',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config } = await prepareConfig(t, {
+      configName: 'posix',
+    });
+    const runnerSpecifier = new URL('./_environment-runner.js', import.meta.url)
+      .href;
+    const workspaceSpecifier = new URL(
+      './_native-session-dependency.js',
+      import.meta.url,
+    ).href;
+    const recipe = harden({
+      policy: {
+        allowedCommands: ['sh'],
+        timeoutMs: 1000,
+        maxOutputBytes: 4096,
+      },
+      networkPolicy: 'off',
+    });
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('audit');
+      const runner = await E(host).makeUnconfined(
+        'runner-worker',
+        runnerSpecifier,
+        { powersName: 'audit', resultName: 'runner' },
+      );
+      const workspace = await E(host).makeUnconfined(
+        'workspace-worker',
+        workspaceSpecifier,
+        {
+          powersName: 'audit',
+          resultName: 'workspace',
+          env: { LABEL: 'original' },
+        },
+      );
+      const kit = await E(host).provideEnvironment(
+        runner,
+        workspace,
+        'environment-admin',
+        'shell',
+        recipe,
+      );
+      await E(host).remove('runner');
+      await E(host).remove('workspace');
+      t.deepEqual(await E(kit.shell).inspect(), recipe.policy);
+      t.is((await E(kit.admin).inspect()).phase, 'idle');
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      const audit = await E(host).lookup('audit');
+      const shell = await E(host).lookup('shell');
+      const admin = await E(host).lookup('environment-admin');
+      t.deepEqual(await E(shell).inspect(), recipe.policy);
+      t.is((await E(admin).inspect()).phase, 'idle');
+      t.is(await E(audit).readText('runner-revivals'), '1');
+      t.is(await E(audit).readText('revivals-original'), '1');
+      // Rebinding the old name cannot redirect the recipe's dependency.
+      await E(host).makeUnconfined('replacement-worker', workspaceSpecifier, {
+        powersName: 'audit',
+        resultName: 'workspace',
+        env: { LABEL: 'replacement' },
+      });
+      t.is((await E(shell).exec('sh', harden([]))).stdout, 'original');
+      t.is(await E(audit).readText('runner-revivals'), '2');
+      t.is(await E(audit).readText('revivals-original'), '2');
+      await E(admin).stop();
+    }
+    // Planned restart explicitly stops native ownership first. Daemon process
+    // exit alone is not that acknowledgement (cold active intents fence).
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      const audit = await E(host).lookup('audit');
+      const admin = await E(host).lookup('environment-admin');
+      t.is((await E(admin).inspect()).phase, 'idle');
+      t.is(await E(audit).readText('runner-revivals'), '2');
+      const shell = await E(host).lookup('shell');
+      t.is((await E(shell).exec('sh', harden([]))).stdout, 'original');
+      t.is(await E(audit).readText('runner-revivals'), '3');
+      await E(admin).stop();
+      await E(admin).dispose();
+      t.is((await E(admin).inspect()).phase, 'disposed');
+      t.is(await E(audit).readText('revivals-replacement'), '1');
+    }
+  },
+);
+
 test('failure to start', async t => {
   await null;
   const cleanup = async () => {
@@ -517,6 +650,18 @@ test('failure to start', async t => {
     await cleanup();
     const configSubDirectory = `failure-to-start~${'0'.repeat(200)}`;
     const config = makeConfig('tmp', configSubDirectory);
+    // makeConfig now parks sockPath under the OS temp dir to dodge the ~104
+    // char Unix socket limit, but this test's whole point is a start that
+    // fails, which it induces precisely by that over-long socket path. Restore
+    // the long in-state-dir sockPath here so `start` still fails to bind.
+    if (process.platform !== 'win32') {
+      config.sockPath = path.join(
+        dirname,
+        'tmp',
+        configSubDirectory,
+        'endo.sock',
+      );
+    }
     await purge(config);
     await t.throwsAsync(() => start(config));
   } finally {
@@ -597,6 +742,893 @@ test('store formula values', async t => {
     t.is(2, await E(counter).incr());
   }
 });
+
+test.serial(
+  'session records retain exact references without activating clients',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, {
+      gcEnabled: true,
+      configName: 'rec',
+    });
+    const plan = '{"sessionId":"session-a"}';
+    let references;
+    let recordId;
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const activations = await E(host).makeDirectory('activations');
+      const directory = await E(host).makeDirectory('session-records');
+      const store = makeSessionRecordStore(directory);
+      const providerSource = label => `
+      E(activations).writeText(${JSON.stringify(label)}, 'activated').then(() =>
+        makeExo('Provider', M.interface('Provider', {
+          identity: M.call().returns(M.string()),
+          removeSession: M.call(M.string()).returns(M.promise()),
+        }), {
+          identity: () => ${JSON.stringify(label)},
+          removeSession: sessionId => E(activations).writeText('cleaned',
+            ${JSON.stringify(label)} + ':' + sessionId),
+        })
+      )
+    `;
+      await E(host).evaluate(
+        '@main',
+        providerSource('provider-a'),
+        ['activations'],
+        ['activations'],
+        'provider',
+      );
+      const providerId = await E(host).identify('provider');
+      await t.throwsAsync(
+        () =>
+          E(host).evaluate(
+            '@main',
+            `
+      E(activations).writeText('client', 'activated').then(() => {
+        throw Error('Client cannot initialize');
+      })
+    `,
+            ['activations'],
+            ['activations'],
+            'client',
+          ),
+        {
+          message: /Client cannot initialize/,
+        },
+      );
+      const clientId = await E(host).identify('client');
+      references = harden({ provider: providerId, client: clientId });
+      await store.create('session-a', plan, references);
+      recordId = (await store.inspect('session-a')).identifier;
+
+      await E(host).evaluate(
+        '@main',
+        providerSource('provider-b'),
+        ['activations'],
+        ['activations'],
+        'provider',
+      );
+      await E(host).remove('client');
+      t.true(formulaExistsInDb(config.statePath, providerId));
+      t.true(formulaExistsInDb(config.statePath, clientId));
+      await E(activations).remove('provider-a');
+      await E(activations).remove('provider-b');
+      await E(activations).remove('client');
+    }
+
+    await restart(config);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const activations = await E(host).lookup('activations');
+      const store = makeSessionRecordStore(
+        await E(host).lookup('session-records'),
+      );
+      const expected = harden({ identifier: recordId, plan, references });
+      t.deepEqual(await store.inspect('session-a'), expected);
+      t.false(await E(activations).has('client'));
+      t.false(await E(activations).has('provider-a'));
+      t.false(await E(activations).has('provider-b'));
+
+      await t.throwsAsync(
+        () => E(host).lookupById(expected.references.client),
+        { message: /Client cannot initialize/ },
+      );
+      t.true(await E(activations).has('client'));
+      t.false(await E(activations).has('provider-a'));
+      t.false(await E(activations).has('provider-b'));
+      await E(activations).remove('client');
+
+      await t.throwsAsync(
+        () =>
+          store.remove('session-a', async record => {
+            t.is(record.plan, plan);
+            t.deepEqual(record.references, references);
+            const provider = await E(host).lookupById(
+              record.references.provider,
+            );
+            t.is(await E(provider).identity(), 'provider-a');
+            throw Error('Cleanup must be retried');
+          }),
+        { message: /Cleanup must be retried/ },
+      );
+      t.deepEqual(await store.inspect('session-a'), expected);
+      t.false(await E(activations).has('client'));
+      t.false(await E(activations).has('provider-b'));
+
+      await store.remove('session-a', async record => {
+        const provider = await E(host).lookupById(record.references.provider);
+        await E(provider).removeSession('session-a');
+      });
+      t.is(await E(activations).readText('cleaned'), 'provider-a:session-a');
+      t.is(await store.inspect('session-a'), undefined);
+      t.false(await E(activations).has('provider-b'));
+      t.false(formulaExistsInDb(config.statePath, references.provider));
+      t.false(formulaExistsInDb(config.statePath, references.client));
+    }
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'daemon-local session owner removes one session while sibling workers survive',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const modulePath = url.fileURLToPath(
+      new URL('./_session-owner-probe.js', import.meta.url),
+    );
+    const plan = 'original approved workspace and storage';
+    const sendText = async (client, text) => {
+      await null;
+      const events = [];
+      for await (const event of iterateReader(await E(client).send(text))) {
+        events.push(event);
+      }
+      return events;
+    };
+    let original;
+    let recordId;
+    let referencesId;
+    let siblingId;
+    const makeProbe = async (host, name) => {
+      await E(host).provideWorker(name);
+      return E(host).makeUnconfined(name, modulePath, {
+        powersName: '@agent',
+        resultName: `${name}-probe`,
+      });
+    };
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('audit');
+      for (const label of ['a', 'b']) {
+        // Distinct worker formulas prevent same-worker placement from hiding
+        // collection that would otherwise kill a shared supervisor.
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).provideWorker(`client-worker-${label}`);
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).makeUnconfined(`client-worker-${label}`, modulePath, {
+          powersName: 'audit',
+          resultName: `client-${label}`,
+          env: harden({ ROLE: 'client', LABEL: label }),
+        });
+      }
+      await E(host).provideWorker('storage-worker');
+      await E(host).evaluate(
+        'storage-worker',
+        `makeExo('Storage', M.interface('Storage', {
+          remove: M.callWhen(M.string()).returns(M.undefined()),
+        }), {
+          remove: async plan => {
+            await E(audit).writeText('removed-plan', plan);
+            if (!(await E(audit).has('allow-remove'))) {
+              throw Error('Storage removal pending');
+            }
+            await E(audit).writeText('storage-removed', 'yes');
+          },
+        })`,
+        ['audit'],
+        ['audit'],
+        'storage-a',
+      );
+      await E(host).makeDirectory('private-a');
+      original = harden({
+        client: await E(host).identify('client-a'),
+        storage: await E(host).identify('storage-a'),
+        directory: await E(host).identify('private-a'),
+      });
+      siblingId = await E(host).identify('client-b');
+      const probe = await makeProbe(host, 'administration');
+      const record = await E(probe).create('a', plan, original);
+      recordId = record.identifier;
+      referencesId = await E(host).identify(
+        'owned-sessions',
+        'a',
+        'references',
+      );
+      await E(probe).create('b', 'sibling plan', { client: siblingId });
+      t.deepEqual(record.references, original);
+      // Retire public bindings. Only the records retain original resources.
+      for (const name of ['client-a', 'storage-a', 'private-a', 'client-b']) {
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).storeValue('replacement must not be used', name);
+      }
+      for (const identifier of Object.values(original)) {
+        t.true(formulaExistsInDb(config.statePath, identifier));
+      }
+    }
+
+    await restart(config);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const probe = await makeProbe(host, 'recovered-administration');
+      const peer = await makeProbe(host, 'other-administration');
+      const audit = await E(host).lookup('audit');
+      const record = await E(probe).inspect('a');
+      t.like(record, { identifier: recordId, plan, phase: 'ready' });
+      t.deepEqual(record.references, original);
+      t.false(await E(audit).has('stopped-a'));
+      const clientA = await E(probe).client('a');
+      const clientB = await E(peer).client('b');
+      t.deepEqual(await sendText(clientA, 'before stop'), [
+        { type: 'text', text: 'a:before stop' },
+      ]);
+      t.is(await E(peer).client('a'), clientA);
+      await E(peer).stop('a');
+      t.is(await E(audit).readText('stopped-a'), 'yes');
+      t.is((await E(probe).inspect('a')).references.client, undefined);
+      t.false(formulaExistsInDb(config.statePath, original.client));
+      await t.throwsAsync(() => E(clientA).status(), { message: /stopped/ });
+      t.deepEqual(await sendText(clientB, 'still running'), [
+        { type: 'text', text: 'b:still running' },
+      ]);
+      t.is(await E(probe).ping(), 'alive');
+
+      await t.throwsAsync(() => E(probe).remove('a'), {
+        message: /Storage removal pending/,
+      });
+      t.like(await E(peer).inspect('a'), { plan, phase: 'removing' });
+      await t.throwsAsync(() => E(peer).client('a'), {
+        message: /stopped|removal/,
+      });
+      await t.throwsAsync(() => E(peer).revise('a', 'new defaults'), {
+        message: /removal/,
+      });
+      for (const identifier of [
+        recordId,
+        referencesId,
+        original.storage,
+        original.directory,
+      ]) {
+        t.true(formulaExistsInDb(config.statePath, identifier));
+      }
+      t.is(await E(audit).readText('removed-plan'), plan);
+      await E(audit).writeText('allow-remove', 'yes');
+      await E(peer).remove('a');
+      t.is(await E(audit).readText('storage-removed'), 'yes');
+      t.is(await E(probe).inspect('a'), undefined);
+      for (const identifier of [
+        recordId,
+        referencesId,
+        ...Object.values(original),
+      ]) {
+        t.false(formulaExistsInDb(config.statePath, identifier));
+      }
+      t.true(formulaExistsInDb(config.statePath, siblingId));
+      t.is(await E(clientB).status(), 'ready-b');
+      t.deepEqual(await sendText(clientB, 'after removal'), [
+        { type: 'text', text: 'b:after removal' },
+      ]);
+      t.is(await E(probe).ping(), 'alive');
+      t.is(await E(peer).ping(), 'alive');
+      await t.throwsAsync(() => E(clientA).send('stale'), {
+        message: /stopped/,
+      });
+    }
+  },
+);
+
+test.serial(
+  'session owners fence retained clients when their original directory dies',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('records-cancel');
+      await E(host).makeDirectory('records-collect');
+      await E(host).evaluate(
+        '@main',
+        `makeExo('RetainedClient', M.interface('RetainedClient', {
+        status: M.callWhen().returns(M.string()),
+      }), { status: () => 'alive' })`,
+        [],
+        [],
+        'retained-client',
+      );
+    }
+    // Exercise persisted roots, without any construction-time transient pins.
+    await restart(config);
+    const { host } = await makeHost(config, cancelled);
+    const client = await E(host).lookup('retained-client');
+    const clientId = await E(host).identify('retained-client');
+    for (const action of ['cancel', 'collect']) {
+      const name = `records-${action}`;
+      // eslint-disable-next-line no-await-in-loop
+      const owner = await E(host).provideSessionOwner(name);
+      // eslint-disable-next-line no-await-in-loop
+      const directoryId = await E(host).identify(name);
+      // eslint-disable-next-line no-await-in-loop
+      await E(owner).create('session', 'plan', { client: clientId });
+      // eslint-disable-next-line no-await-in-loop
+      const forwarded = await E(owner).client('session');
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(forwarded).status(), 'alive');
+      if (action === 'cancel') {
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).cancel(name, Error('Original records cancelled'));
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).remove(name);
+        t.false(formulaExistsInDb(config.statePath, directoryId));
+      }
+      // A public name still retains this client. Only the owner incarnation
+      // loses its authority; directory collection is not client termination.
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(client).status(), 'alive');
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(() => E(forwarded).status(), {
+        message: /Session owner directory is cancelled/,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(() => E(owner).inspect('session'), {
+        message: /Session owner directory is cancelled/,
+      });
+    }
+  },
+);
+
+test.serial(
+  'session owner directory claims reject another host and share same-host aliases',
+  async t => {
+    t.timeout(30_000);
+    const { host } = await prepareHost(t);
+    const first = await E(host).provideSessionOwner(['private', 'records']);
+    const directoryId = await E(host).identify('private', 'records');
+    await E(host).storeIdentifier('same-host-alias', directoryId);
+    t.is(await E(host).provideSessionOwner('same-host-alias'), first);
+    const child = await E(host).provideHost('other-host');
+    await E(child).storeIdentifier('other-host-alias', directoryId);
+    await t.throwsAsync(
+      () => E(child).provideSessionOwner('other-host-alias'),
+      { message: /already owned by another host/ },
+    );
+    await E(first).create('one', 'original plan', {});
+    t.is((await E(first).inspect('one')).plan, 'original plan');
+  },
+);
+
+test.serial(
+  'session owner claims survive host cancellation while admitted cleanup is pending',
+  async t => {
+    t.timeout(30_000);
+    const { host } = await prepareHost(t);
+    // This storage formula belongs to the root host and remains usable when
+    // the administrative child host is cancelled.
+    const storage = await E(host).evaluate(
+      '@main',
+      `(() => {
+        let enter;
+        let resume;
+        const entered = new Promise(resolve => { enter = resolve; });
+        const gate = new Promise(resolve => { resume = resolve; });
+        return makeExo('HeldStorage', M.interface('HeldStorage', {
+          remove: M.callWhen(M.string()).returns(M.undefined()),
+          whenEntered: M.callWhen().returns(M.undefined()),
+          release: M.callWhen().returns(M.undefined()),
+        }), {
+          remove: async () => { enter(); await gate; },
+          whenEntered: () => entered,
+          release: () => resume(),
+        });
+      })()`,
+      [],
+      [],
+      'held-storage',
+    );
+    t.teardown(() =>
+      E(storage)
+        .release()
+        .catch(() => {}),
+    );
+    const child = await E(host).provideHost('child-handle', {
+      agentName: 'child-agent',
+    });
+    const hostId = await E(host).identify('child-agent');
+    const owner = await E(child).provideSessionOwner('records');
+    const directoryId = await E(child).identify('records');
+    await E(owner).create('one', 'original cleanup plan', {
+      storage: await E(host).identify('held-storage'),
+    });
+    const removing = E(owner).remove('one');
+    await E(storage).whenEntered();
+    await E(host).cancel('child-agent');
+    const revived = await E(host).lookup('child-agent');
+    t.not(revived, child);
+    t.is(await E(host).identify('child-agent'), hostId);
+    t.is(await E(revived).identify('records'), directoryId);
+    await t.throwsAsync(() => E(revived).provideSessionOwner('records'), {
+      message: /earlier host incarnation/,
+    });
+    await t.throwsAsync(() => E(owner).inspect('one'), {
+      message: /host is cancelled/,
+    });
+    // The cancellation fence has not claimed to interrupt this native call.
+    // It can finish its original cleanup without a competing owner queue.
+    await E(storage).release();
+    await removing;
+    await t.throwsAsync(() => E(revived).provideSessionOwner('records'), {
+      message: /earlier host incarnation/,
+    });
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'native session owner activates exact dependencies after inert construction and restart',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config } = await prepareConfig(t, { configName: 'nat' });
+    const specifier = new URL(
+      './_native-session-controller.js',
+      import.meta.url,
+    ).href;
+    const probeSpecifier = new URL('./_session-owner-probe.js', import.meta.url)
+      .href;
+    const dependencySpecifier = new URL(
+      './_native-session-dependency.js',
+      import.meta.url,
+    ).href;
+    let originalA;
+    let originalB;
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('audit');
+      const backend = await E(host).makeUnconfined('@node', probeSpecifier, {
+        powersName: '@agent',
+        resultName: 'native-backend',
+        env: { CONTROLLER_SPECIFIER: specifier },
+      });
+      const auditId = await E(host).identify('audit');
+      await E(host).storeIdentifier(
+        'native-records-alias',
+        await E(host).identify('owned-sessions', 'sessions'),
+      );
+      for (const label of ['a', 'b']) {
+        // This dependency has its own worker; its revivals produce an audit
+        // effect and cannot hide in the shared backend's module cache.
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).makeUnconfined(
+          `dependency-${label}`,
+          dependencySpecifier,
+          {
+            powersName: 'audit',
+            resultName: `dependency-${label}-value`,
+            env: { LABEL: label },
+          },
+        );
+        // eslint-disable-next-line no-await-in-loop
+        const dependency = await E(host).identify(`dependency-${label}-value`);
+        // eslint-disable-next-line no-await-in-loop
+        await E(backend).create(label, label, { audit: auditId, dependency });
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).remove(`dependency-${label}-value`);
+      }
+      t.is((await E(backend).inspect('a')).phase, 'planned');
+      await t.throwsAsync(
+        E(host).provideSessionOwner(['owned-sessions'], `${specifier}?changed`),
+        {
+          message: /configuration does not match/,
+        },
+      );
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      // The nested records cannot reconstruct a different lifecycle owner,
+      // even when their alias is opened before the configured root.
+      const otherHost = await E(host).provideHost('alias-first-host');
+      await E(otherHost).storeIdentifier(
+        'nested-records',
+        await E(host).identify('native-records-alias'),
+      );
+      await t.throwsAsync(E(otherHost).provideSessionOwner('nested-records'), {
+        message: /configured owner directory/,
+      });
+      await t.throwsAsync(E(host).provideSessionOwner('native-records-alias'), {
+        message: /configured owner directory/,
+      });
+      await t.throwsAsync(
+        E(host).provideSessionOwner('native-records-alias', specifier),
+        { message: /configured owner directory/ },
+      );
+      const backend = await E(host).lookup('native-backend');
+      const audit = await E(host).lookup('audit');
+      await E(backend).inspect('a');
+      t.is(await E(audit).readText('revivals-a'), '1');
+      t.is(await E(backend).client('a'), undefined);
+      const a = await E(backend).start('a');
+      const b = await E(backend).start('b');
+      t.is(await E(a).status(), 'ready');
+      t.is(await E(b).status(), 'ready');
+      t.is(await E(audit).readText('revivals-a'), '2');
+      originalA = (await E(backend).inspect('a')).references;
+      originalB = (await E(backend).inspect('b')).references;
+      t.not(originalA.worker, originalB.worker);
+      t.not(originalA.worker, await E(host).identify('@node'));
+      t.like(readFormulaFromDb(config.statePath, originalA.worker), {
+        type: 'worker',
+        kind: 'node',
+      });
+      t.like(readFormulaFromDb(config.statePath, originalA.client), {
+        type: 'make-unconfined',
+        worker: originalA.worker,
+      });
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      const backend = await E(host).lookup('native-backend');
+      const audit = await E(host).lookup('audit');
+      t.deepEqual((await E(backend).inspect('a')).references, originalA);
+      t.is(await E(audit).readText('revivals-a'), '2');
+      await t.throwsAsync(E(backend).client('a'), {
+        message: /Explicit session start/,
+      });
+      await E(backend).start('a');
+      const b = await E(backend).start('b');
+      t.deepEqual((await E(backend).inspect('a')).references, originalA);
+      t.is(await E(audit).readText('revivals-a'), '3');
+      await E(backend).stop('a');
+      await E(backend).remove('a');
+      t.is(await E(audit).readText('stopped-a'), 'yes');
+      t.is(await E(backend).ping(), 'alive');
+      t.is(await E(b).status(), 'ready');
+      t.false(formulaExistsInDb(config.statePath, originalA.client));
+      t.false(formulaExistsInDb(config.statePath, originalA.worker));
+      t.true(formulaExistsInDb(config.statePath, originalB.worker));
+      await E(backend).remove('b');
+      t.is(await E(backend).ping(), 'alive');
+    }
+  },
+);
+
+test.serial(
+  'native owner claims and fences its nested record directory',
+  async t => {
+    t.timeout(30_000);
+    const { host } = await prepareHost(t);
+    const specifier = new URL(
+      './_native-session-controller.js',
+      import.meta.url,
+    ).href;
+    const owner = await E(host).provideSessionOwner(
+      'native-records',
+      specifier,
+    );
+    const recordsId = await E(host).identify('native-records', 'sessions');
+    await E(host).storeIdentifier('record-alias', recordsId);
+    t.is(await E(host).provideSessionOwner('record-alias', specifier), owner);
+    await t.throwsAsync(E(host).provideSessionOwner('record-alias'), {
+      message: /configuration does not match/,
+    });
+    const child = await E(host).provideHost('other-record-host');
+    await E(child).storeIdentifier('record-alias', recordsId);
+    await t.throwsAsync(
+      E(child).provideSessionOwner('record-alias', specifier),
+      { message: /already owned by another host/ },
+    );
+    await E(owner).create('one', 'original plan', {});
+    await E(host).cancel('record-alias', Error('Nested records cancelled'));
+    await t.throwsAsync(E(owner).inspect('one'), {
+      message: /record directory is cancelled/,
+    });
+    await t.throwsAsync(
+      E(host).provideSessionOwner('native-records', specifier),
+      { message: /record directory is cancelled/ },
+    );
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'native sandbox service mints over slot-free null powers and refuses stale revival after restart',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config } = await prepareConfig(t, { configName: 'ns' });
+    const specifier = new URL(
+      '../../sandbox/src/native-agent.js',
+      import.meta.url,
+    ).href;
+    const runtimeDir = path.join(config.statePath, 'native-runtime');
+    await fsp.mkdir(runtimeDir, { mode: 0o700 });
+    const env = {
+      ENDO_SANDBOX_RUNTIME_DIR: runtimeDir,
+      ENDO_SANDBOX_OWNER_ID: 'native-null-powers-acceptance',
+      ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
+      ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+    };
+    let serviceId;
+    let powersId;
+    {
+      const { host } = await makeHost(config, cancelled);
+      // The service's powers is a stored literal null: a marshal formula with
+      // no capability slots, which setup names only for the mint.
+      await E(host).storeValue(null, 'null-powers');
+      powersId = await E(host).identify('null-powers');
+      await E(host).makeUnconfined('@node', specifier, {
+        powersName: 'null-powers',
+        resultName: 'native-sandbox',
+        env,
+      });
+      serviceId = await E(host).identify('native-sandbox');
+      t.like(readFormulaFromDb(config.statePath, serviceId), {
+        type: 'make-unconfined',
+        powers: powersId,
+      });
+      t.like(readFormulaFromDb(config.statePath, powersId), {
+        type: 'marshal',
+        slots: [],
+      });
+      await E(host).remove('null-powers');
+      const service = await E(host).lookup('native-sandbox');
+      // Scopes are inert: no probe or Podman command is issued to acquire one.
+      const scope = await E(service).provideScope('a');
+      t.is(await E(service).lookupScope('a'), scope);
+      await E(scope).close();
+      t.is(await E(service).lookupScope('a'), undefined);
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      t.is(await E(host).identify('native-sandbox'), serviceId);
+      t.true(formulaExistsInDb(config.statePath, powersId));
+      // The earlier incarnation's exclusive ownership marker survives an
+      // `endo restart`, whose stop escalates to killing workers rather than
+      // awaiting the runtime's release. The owned service opens its runtime
+      // at construction, so revival itself refuses stale takeover, by design
+      // and without a sweep: recovery is operator reconciliation, and the
+      // formula and its powers stay intact meanwhile.
+      await t.throwsAsync(E(host).lookup('native-sandbox'), {
+        message: /EEXIST.*\.owner/,
+      });
+      const markers = (await fsp.readdir(runtimeDir)).filter(name =>
+        name.endsWith('.owner'),
+      );
+      t.deepEqual(markers, ['native-null-powers-acceptance.owner']);
+    }
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'native session stop closes a worker with a pending inert constructor',
+  async t => {
+    t.timeout(30_000);
+    const { host, config } = await prepareHost(t, 'pend');
+    const sibling = await E(host).evaluate(
+      '@node',
+      "makeExo('Sibling', M.interface('Sibling', { ping: M.call().returns(M.string()) }), { ping: () => 'alive' })",
+      [],
+      [],
+      'construction-sibling',
+    );
+    const owner = await E(host).provideSessionOwner(
+      'pending-session',
+      new URL('./_native-session-pending.js', import.meta.url).href,
+    );
+    await E(owner).create('one', 'plan', {});
+    const starting = E(owner).start('one');
+    const rejected = t.throwsAsync(starting, {
+      message: /cancel|stopped|disconnect|terminated/i,
+    });
+    let workerId;
+    await waitForCondition(async () => {
+      workerId = await E(host).identify(
+        'pending-session',
+        'sessions',
+        'one',
+        'references',
+        'worker',
+      );
+      return workerId !== undefined;
+    });
+    const { number } = parseId(workerId);
+    await waitForText(
+      path.join(config.statePath, 'worker', number, 'worker.log'),
+      'Native session constructor is pending',
+    );
+    const pidPath = path.join(
+      config.ephemeralStatePath,
+      'worker',
+      number,
+      'worker.pid',
+    );
+    const pid = Number(await fsp.readFile(pidPath, 'utf8'));
+    await E(owner).stop('one');
+    await rejected;
+    t.like(await E(owner).inspect('one'), {
+      phase: 'stopped',
+      references: {},
+    });
+    t.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    t.false(formulaExistsInDb(config.statePath, workerId));
+    t.is(await E(sibling).ping(), 'alive');
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'native session tools are transient across daemon restart',
+  async t => {
+    t.timeout(30_000);
+    const { config, cancelled } = await prepareConfig(t, {
+      configName: 'tool',
+    });
+    const specifier = new URL('./_native-session-tools.js', import.meta.url)
+      .href;
+    const tools = label =>
+      Far('TransientToolSet', {
+        describe: async () => harden({ toolSetId: label }),
+      });
+    {
+      const { host } = await makeHost(config, cancelled);
+      const owner = await E(host).provideSessionOwner(
+        'tool-sessions',
+        specifier,
+      );
+      await E(owner).create('one', 'plan', {});
+      const originalTools = tools('original');
+      const client = await E(owner).start('one', originalTools);
+      t.is(await E(client).status(), 'original');
+      await E(client).interrupt();
+      t.is(await E(owner).start('one', originalTools), client);
+      await t.throwsAsync(E(owner).start('one', tools('replacement')), {
+        message: /tool authority cannot change/,
+      });
+      t.false('tools' in (await E(owner).inspect('one')).references);
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      const owner = await E(host).provideSessionOwner(
+        'tool-sessions',
+        specifier,
+      );
+      await t.throwsAsync(E(owner).start('one'), {
+        message: /No tool authority is attached/,
+      });
+      await E(owner).stop('one');
+      const client = await E(owner).start('one', tools('rebound'));
+      t.is(await E(client).status(), 'rebound');
+      await E(owner).remove('one');
+    }
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'static dependency bundles retain exact capabilities across rebinding and restart',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, {
+      gcEnabled: true,
+      configName: 'dp',
+    });
+    const modulePath = url.fileURLToPath(
+      new URL('./_dependency-bundle.js', import.meta.url),
+    );
+    let originalIds;
+    let bundleId;
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('dependencies');
+      const factory = await E(host).makeDirectory(['dependencies', 'factory']);
+      const mounter = await E(host).makeDirectory(['dependencies', 'mounter']);
+      const filesystem = await E(host).makeDirectory('filesystem');
+      await E(factory).writeText('identity', 'original-factory');
+      await E(mounter).writeText('identity', 'original-mounter');
+      await E(filesystem).writeText('identity', 'original-filesystem');
+      const stateProvider = await E(host).evaluate(
+        '@main',
+        `makeExo('SessionState', M.interface('SessionState', {
+          provideSessionMount: M.call(M.string()).returns(M.promise()),
+          removeSession: M.call(M.string()).returns(M.promise()),
+        }), {
+          provideSessionMount: sessionId => E(filesystem).readText(sessionId),
+          removeSession: sessionId => E(filesystem).writeText('removed', sessionId),
+        })`,
+        ['filesystem'],
+        ['filesystem'],
+        'state-provider',
+      );
+      await E(filesystem).writeText('session-a', 'original-state');
+      originalIds = await Promise.all([
+        E(host).identify('dependencies', 'factory'),
+        E(host).identify('dependencies', 'mounter'),
+        E(host).identify('filesystem'),
+        E(host).identify('state-provider'),
+      ]);
+      await E(host).storeValue(
+        harden({
+          sandboxFactory: factory,
+          fsMounter: mounter,
+          filesystem,
+          stateProvider,
+        }),
+        'powers-input',
+      );
+      bundleId = await E(host).identify('powers-input');
+      await E(host).makeUnconfined('@main', modulePath, {
+        powersName: 'powers-input',
+        resultName: 'session-powers',
+      });
+      const powersId = await E(host).identify('session-powers');
+      t.is(readFormulaFromDb(config.statePath, powersId).powers, bundleId);
+
+      // Remove all staging and original public bindings; only the static
+      // powers formula retains the marshal bundle and its original slots.
+      await E(host).remove('powers-input');
+      await E(host).remove('dependencies');
+      await E(host).remove('filesystem');
+      await E(host).remove('state-provider');
+      await E(host).makeDirectory('dependencies');
+      const replacement = await E(host).makeDirectory([
+        'dependencies',
+        'factory',
+      ]);
+      await E(replacement).writeText('identity', 'replacement-factory');
+      await E(host).storeValue('replacement', 'filesystem');
+      await E(host).storeValue('replacement', 'state-provider');
+      await E(host).storeValue('replacement', 'powers-input');
+      for (const id of [...originalIds, bundleId]) {
+        t.true(formulaExistsInDb(config.statePath, id));
+      }
+    }
+
+    await restart(config);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const powers = await E(host).lookup('session-powers');
+      t.is(
+        await E(E(powers).sandboxFactory()).readText('identity'),
+        'original-factory',
+      );
+      t.is(
+        await E(E(powers).fsMounter()).readText('identity'),
+        'original-mounter',
+      );
+      const filesystem = await E(powers).filesystem();
+      t.is(await E(filesystem).readText('identity'), 'original-filesystem');
+      const provider = await E(powers).stateProvider();
+      t.is(
+        await E(provider).provideSessionMount('session-a'),
+        'original-state',
+      );
+      t.false(await E(filesystem).has('removed'));
+      await E(provider).removeSession('session-a');
+      t.is(await E(filesystem).readText('removed'), 'session-a');
+      // eslint-disable-next-line no-underscore-dangle
+      const methods = await E(powers).__getMethodNames__();
+      t.false(methods.includes('lookup'));
+      t.false(methods.includes('lookupById'));
+      t.false(methods.includes('agent'));
+
+      await E(host).remove('session-powers');
+      for (const id of [...originalIds, bundleId]) {
+        t.false(formulaExistsInDb(config.statePath, id));
+      }
+    }
+  },
+);
 
 test('fail to store non-formula exos', async t => {
   const noFormulaExo = makeExo('Exo', M.interface('Exo', {}), {});
@@ -688,9 +1720,7 @@ test('persist spawn and evaluation', async t => {
 test('store blob without name fails', async t => {
   const { host } = await prepareHost(t);
 
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('hello\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
   await t.throwsAsync(E(host).storeBlob(readerRef), {
     message: 'Invalid name path',
   });
@@ -701,9 +1731,7 @@ test('store with name', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    const readerRef = bytesReaderFromIterator([
-      new TextEncoder().encode('hello\n'),
-    ]);
+    const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
     const readable = await E(host).storeBlob(readerRef, 'hello-text');
     const actualText = await E(readable).text();
     t.is(actualText, 'hello\n');
@@ -717,11 +1745,11 @@ test('store with name', async t => {
   }
 });
 
-test('stored blob exposes the rich BlobRef range-I/O surface (getInfo + fetch)', async t => {
+test('stored blob exposes named digest, size, and byte reads', async t => {
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);
 
-  const payload = new TextEncoder().encode('hello world\n'); // 12 bytes
+  const payload = encodeUtf8('hello world\n'); // 12 bytes
   const readerRef = bytesReaderFromIterator([payload]);
   const blob = await E(host).storeBlob(readerRef, 'rich-blob');
 
@@ -738,21 +1766,101 @@ test('stored blob exposes the rich BlobRef range-I/O surface (getInfo + fetch)',
       out.set(c, offset);
       offset += c.length;
     }
-    return new TextDecoder().decode(out);
+    return decodeUtf8(out);
   };
 
-  // getInfo() is the blob's content-address accessor (there is no separate
-  // sha256() method — getInfo().hash, base64, is the canonical content hash).
-  const info = await E(blob).getInfo();
-  t.is(info.algorithm, 'sha256');
-  t.is(info.size, 12n);
-  t.is(info.hash, crypto.createHash('sha256').update(payload).digest('base64'));
+  t.is(await E(blob).size(), 12n);
+  t.is(await E(blob).sha256(), encodeBase64(sha256(payload)));
 
-  // fetch(offset, length) is a windowed read, clamped at EOF.
-  t.is(await collect(await E(blob).fetch(0n, 12n)), 'hello world\n');
-  t.is(await collect(await E(blob).fetch(0n, 5n)), 'hello');
-  t.is(await collect(await E(blob).fetch(6n, 100n)), 'world\n');
-  t.is(await collect(await E(blob).fetch(100n, 4n)), '');
+  // bytes() reads the full selected content.
+  t.is(await collect(await E(blob).bytes()), 'hello world\n');
+  t.is(await E(await E(blob).byteRange(0n, 5n)).text(), 'hello');
+  t.is(await E(await E(blob).byteRange(6n, 100n)).text(), 'world\n');
+  t.is(await E(await E(blob).byteRange(100n, 104n)).text(), '');
+});
+
+test('stored blob range attenuation: byteRange / textRange return derived readable blobs', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  const { host } = await makeHost(config, cancelled);
+
+  const payload = encodeUtf8('hello world\n'); // 12 bytes
+  const readerRef = bytesReaderFromIterator([payload]);
+  const blob = await E(host).storeBlob(readerRef, 'range-blob');
+
+  const b64 = bytes => encodeBase64(sha256(bytes));
+
+  // byteRange(start, end) → a derived EndoReadable over [start, end).
+  const hello = await E(blob).byteRange(0n, 5n);
+  t.is(await E(hello).text(), 'hello');
+  t.is(await E(hello).size(), 5n, 'size reports the selected length');
+  t.is(
+    await E(hello).sha256(),
+    b64(encodeUtf8('hello')),
+    'sha256 reports the selected content digest',
+  );
+
+  // A range of a range intersects (composition, never regaining authority).
+  const el = await E(hello).byteRange(1n, 3n);
+  t.is(await E(el).text(), 'el');
+  // Even a wide child range cannot escape its parent's [0,5) window.
+  const clampedChild = await E(hello).byteRange(3n, 100n);
+  t.is(await E(clampedChild).text(), 'lo');
+
+  // EOF clamp on the top-level blob.
+  const world = await E(blob).byteRange(6n, 100n);
+  t.is(await E(world).text(), 'world\n');
+
+  // start === end selects an empty blob.
+  const empty = await E(blob).byteRange(3n, 3n);
+  t.is(await E(empty).text(), '');
+  t.is(await E(empty).size(), 0n);
+
+  // byteRange composes within the selected authority.
+  t.is(await E(await E(hello).byteRange(1n, 3n)).text(), 'el');
+
+  // EINVAL: an inverted or negative byte range rejects.
+  await t.throwsAsync(E(blob).byteRange(5n, 2n), { message: /EINVAL/ });
+  await t.throwsAsync(E(blob).byteRange(-1n, 2n), { message: /EINVAL|safe/ });
+});
+
+test('stored blob textRange: line boundaries, terminal-LF, CRLF, byte/text composition', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  const { host } = await makeHost(config, cancelled);
+
+  const store = async text => {
+    const readerRef = bytesReaderFromIterator([encodeUtf8(text)]);
+    return E(host).storeBlob(
+      readerRef,
+      `tr-${Math.random().toString(36).slice(2)}`,
+    );
+  };
+
+  // LF-delimited lines, 0-based end-exclusive; agrees with lines.slice.join.
+  const lf = await store('a\nb\nc\n');
+  t.is(await E(await E(lf).textRange(0, 2)).text(), 'a\nb');
+  t.is(await E(await E(lf).textRange(1, 3)).text(), 'b\nc');
+  // endLine past the last line clamps to the end.
+  t.is(await E(await E(lf).textRange(0, 100)).text(), 'a\nb\nc\n');
+  // start === end selects nothing.
+  t.is(await E(await E(lf).textRange(1, 1)).text(), '');
+
+  // Terminal LF: the trailing empty line is addressable and empty.
+  const term = await store('a\nb\n');
+  t.is(await E(await E(term).textRange(2, 3)).text(), '');
+
+  // CRLF: the CR before LF stays content, so it is preserved.
+  const crlf = await store('x\r\ny\r\n');
+  t.is(await E(await E(crlf).textRange(0, 1)).text(), 'x\r');
+
+  // text-after-byte: a byte range then a line range of it.
+  const doc = await store('one\ntwo\nthree\n');
+  const firstEight = await E(doc).byteRange(0n, 8n); // 'one\ntwo\n'
+  t.is(await E(firstEight).text(), 'one\ntwo\n');
+  t.is(await E(await E(firstEight).textRange(0, 1)).text(), 'one');
+  // byte-after-text: a line range then a byte range of it.
+  const twoLines = await E(doc).textRange(0, 2); // 'one\ntwo'
+  t.is(await E(twoLines).text(), 'one\ntwo');
+  t.is(await E(await E(twoLines).byteRange(0n, 3n)).text(), 'one');
 });
 
 test('store blob in subdirectory', async t => {
@@ -761,9 +1869,7 @@ test('store blob in subdirectory', async t => {
   {
     const { host } = await makeHost(config, cancelled);
     await E(host).makeDirectory('subdir');
-    const readerRef = bytesReaderFromIterator([
-      new TextEncoder().encode('hello\n'),
-    ]);
+    const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
     const readable = await E(host).storeBlob(readerRef, [
       'subdir',
       'hello-text',
@@ -783,9 +1889,7 @@ test('store blob in subdirectory', async t => {
 test('store blob requires a name', async t => {
   const { host } = await prepareHost(t);
 
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('hello\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
   await t.throwsAsync(E(host).storeBlob(readerRef, []), {
     message: 'Invalid name path',
   });
@@ -855,6 +1959,83 @@ test('move renames value, for a single guest', async t => {
   t.false(await E(guest).has('ten'));
   t.true(await E(guest).has('zehn'));
 });
+
+const agentKinds = harden([
+  {
+    kind: 'guest',
+    provideAgent: (host, petName, options) =>
+      E(host).provideGuest(petName, options),
+    pinsProperty: 'guestPins',
+  },
+  {
+    kind: 'host',
+    provideAgent: (host, petName, options) =>
+      E(host).provideHost(petName, options),
+    pinsProperty: 'pins',
+  },
+]);
+
+for (const { kind, provideAgent, pinsProperty } of agentKinds) {
+  test(`provideAgent gives ${kind} a caller-selected pins directory`, async t => {
+    const { host } = await prepareHost(t);
+    const pins = await E(host).makeDirectory(`retained-${kind}-pins`);
+    const agent = await provideAgent(host, kind, {
+      agentName: `${kind}-agent`,
+      pins,
+    });
+
+    await E(host).storeValue(10, 'ten');
+    const tenId = await E(host).identify('ten');
+    await E(agent).storeIdentifier(['@pins', 'ten'], tenId);
+
+    t.is(await E(pins).identify('ten'), tenId);
+    t.deepEqual(await E(agent).list('@pins'), ['ten']);
+
+    const agentId = await E(host).identify(`${kind}-agent`);
+    const agentRecord = await E(E(host).diagnostics()).getFormula(agentId);
+    const pinsId = await E(host).identify(`retained-${kind}-pins`);
+    t.is(agentRecord.properties[pinsProperty].identifier, pinsId);
+  });
+
+  test(`provideAgent gives ${kind} a caller-selected networks directory`, async t => {
+    const { host } = await prepareHost(t);
+    const networks = await E(host).makeDirectory(`delegated-${kind}-nets`);
+    const agent = await provideAgent(host, kind, {
+      agentName: `${kind}-agent`,
+      networks,
+    });
+
+    await E(host).storeValue(10, 'network-marker');
+    const markerId = await E(host).identify('network-marker');
+    await E(networks).storeIdentifier(['loopback'], markerId);
+
+    t.deepEqual(await E(agent).list('@nets'), ['loopback']);
+
+    const agentId = await E(host).identify(`${kind}-agent`);
+    const agentRecord = await E(E(host).diagnostics()).getFormula(agentId);
+    const networksId = await E(host).identify(`delegated-${kind}-nets`);
+    t.is(agentRecord.properties.networks.identifier, networksId);
+  });
+
+  test(`provideAgent introduces ordinary and special names to ${kind}`, async t => {
+    const { host } = await prepareHost(t);
+    await E(host).storeValue(10, 'ten');
+    const agent = await provideAgent(host, kind, {
+      introducedNames: {
+        ten: 'dix',
+        '@pins': 'retained',
+        '@nets': 'connections',
+      },
+    });
+
+    t.is(await E(agent).lookup('dix'), 10);
+    t.is(await E(agent).identify('retained'), await E(host).identify('@pins'));
+    t.is(
+      await E(agent).identify('connections'),
+      await E(host).identify('@nets'),
+    );
+  });
+}
 
 test('move moves value, between different guests', async t => {
   const { host } = await prepareHost(t);
@@ -1178,6 +2359,193 @@ testNeedsNodeWorker('persist confined services and their requests', async t => {
   }
 });
 
+// Integration test for endojs/endo-but-for-bots#1125.
+//
+// Story: a guest is serviced by an agent caplet, retained in the guest's pin
+// directory, that answers every message the guest receives and then dismisses
+// it. Whether the worker holding the agent is canceled, or the whole daemon is
+// restarted, the caplet must resume the guest's autonomous responses without an
+// explicit lookup: delivering a message to the guest's mailbox auto-reincarnates
+// its pinned formulas (reincarnateMailboxPins), so the durable formula, not any
+// live process — and not a manual revival — is what carries the behavior across
+// the gap. The tests therefore never look the responder up before the
+// post-gap send; deleting the reincarnateMailboxPins call in deliver() makes
+// them hang for lack of any acknowledgment.
+
+const autoResponderLocation = url.pathToFileURL(
+  path.join(dirname, 'test', 'auto-responder-agent.js'),
+).href;
+
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Provision a guest whose mailbox is serviced by an auto-responder caplet
+ * running in a dedicated named worker. The caplet is retained in the guest's
+ * own pin directory, which is exactly the set `reincarnateMailboxPins` re-warms
+ * on every delivery to the guest — so a message arriving at the guest revives
+ * the responder with no explicit lookup. Returns the guest agent facet (for
+ * inbox inspection).
+ *
+ * @param {any} host
+ */
+const pinGuestResponder = async host => {
+  await E(host).provideWorker(['responder-worker']);
+  // A caller-selected pin directory for the guest, so the test can retain the
+  // responder in the very directory reincarnateMailboxPins walks.
+  const pins = await E(host).makeDirectory('responder-pins');
+  const guest = await E(host).provideGuest('responder', {
+    agentName: 'responder-agent',
+    pins,
+  });
+  await E(host).makeUnconfined('responder-worker', autoResponderLocation, {
+    powersName: 'responder-agent',
+    resultName: 'auto-responder',
+  });
+  // Pin the responder into the guest's pin directory. This is the retention
+  // edge reincarnateMailboxPins follows on delivery: without it, a canceled or
+  // restarted responder would stay dormant until something looked it up.
+  const responderId = await E(host).identify('auto-responder');
+  await E(pins).storeIdentifier(['auto-responder'], responderId);
+  return guest;
+};
+
+/**
+ * Send one prompt to the pinned guest and wait for the auto-responder's
+ * matching acknowledgment (`acknowledged:<prompt>`) to arrive in the sender host's own
+ * inbox. Matching on the echoed prompt skips any backlog a fresh
+ * `followMessages` replays after a restart.
+ *
+ * @param {any} host
+ * @param {AsyncIterator<any>} hostMessages
+ * @param {string} prompt
+ */
+const sendAndAwaitAcknowledgement = async (host, hostMessages, prompt) => {
+  await E(host).send('responder', [prompt], [], []);
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const { value: message } = await hostMessages.next();
+    if (
+      message.type === 'package' &&
+      message.replyTo !== undefined &&
+      message.strings?.[0] === `acknowledged:${prompt}`
+    ) {
+      return message;
+    }
+  }
+};
+
+/**
+ * Poll the guest's inbox until the named inbound prompt has been dismissed by
+ * the auto-responder.
+ *
+ * @param {ExecutionContext} t
+ * @param {any} guest
+ * @param {string} prompt
+ */
+const assertDismissed = async (t, guest, prompt) => {
+  await null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const messages = await E(guest).listMessages();
+    const pending = messages.find(
+      message =>
+        message.type === 'package' &&
+        message.replyTo === undefined &&
+        message.strings?.[0] === prompt,
+    );
+    if (pending === undefined) {
+      t.pass(`inbound ${prompt} was dismissed`);
+      return;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await delay(20);
+  }
+  t.fail(`inbound ${prompt} was never dismissed`);
+};
+
+testNeedsNodeWorker(
+  'pinned guest responder survives worker cancellation (#1125)',
+  async t => {
+    const { host } = await prepareHost(t);
+    const guest = await pinGuestResponder(host);
+    const hostMessages = iterateReader(E(host).followMessages());
+
+    // Baseline: the pinned agent answers the guest's messages and dismisses
+    // them.
+    const acknowledgement0 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-0',
+    );
+    t.deepEqual(acknowledgement0.strings, ['acknowledged:ping-0']);
+    await assertDismissed(t, guest, 'ping-0');
+
+    // Cancel the worker containing the agent; its follow loop stops with it.
+    await E(host).cancel('responder-worker');
+
+    // Do NOT look the responder up: an explicit lookup would itself
+    // re-incarnate it and mask the feature under test. Instead, send another
+    // message. Delivering it to the guest's mailbox must auto-reincarnate the
+    // pinned responder (reincarnateMailboxPins), and only a live responder ever
+    // sends the acknowledgment this awaits — so if the reincarnation call is
+    // removed from deliver(), this hangs.
+    const acknowledgement1 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-1',
+    );
+    t.deepEqual(acknowledgement1.strings, ['acknowledged:ping-1']);
+    await assertDismissed(t, guest, 'ping-1');
+
+    // The revived responder is a fresh incarnation: its counter restarted at
+    // zero and now reads one, proving a new incarnation (not a survivor)
+    // answered the post-cancel message.
+    const responder = await E(host).lookup('auto-responder');
+    t.is(await E(responder).respondedCount(), 1);
+  },
+);
+
+testNeedsNodeWorker(
+  'pinned guest responder survives a daemon restart (#1125)',
+  async t => {
+    const { cancelled, config, host } = await prepareHost(t);
+    const guest = await pinGuestResponder(host);
+    const hostMessages = iterateReader(E(host).followMessages());
+
+    // Baseline: the pinned agent answers and dismisses before the restart.
+    const acknowledgement0 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-0',
+    );
+    t.deepEqual(acknowledgement0.strings, ['acknowledged:ping-0']);
+    await assertDismissed(t, guest, 'ping-0');
+
+    await restart(config);
+
+    const { host: hostAfter } = await makeHost(config, cancelled);
+    const hostMessagesAfter = iterateReader(E(hostAfter).followMessages());
+
+    // Do NOT look the responder up after the restart. Sending to the guest must
+    // itself auto-reincarnate the pinned responder on delivery; the awaited
+    // acknowledgment can only come from a live, freshly-incarnated responder.
+    const acknowledgement1 = await sendAndAwaitAcknowledgement(
+      hostAfter,
+      hostMessagesAfter,
+      'ping-1',
+    );
+    t.deepEqual(acknowledgement1.strings, ['acknowledged:ping-1']);
+
+    const guestAfter = await E(hostAfter).lookup('responder-agent');
+    await assertDismissed(t, guestAfter, 'ping-1');
+
+    // The counter reads one on the post-restart incarnation, proving a new
+    // incarnation (not a surviving process) answered.
+    const responder = await E(hostAfter).lookup('auto-responder');
+    t.is(await E(responder).respondedCount(), 1);
+  },
+);
+
 test('guest facet receives a message for host', async t => {
   const { host } = await prepareHost(t);
 
@@ -1467,6 +2835,472 @@ const testNeedsNodeManager =
     : test.serial;
 
 testNeedsNodeManager(
+  'the OpenCode backend records a session through the daemon owner and destroy reaches its storage',
+  async t => {
+    t.timeout(120_000);
+    // Keep the Unix socket below macOS's 104-byte limit in a deep worktree.
+    // getConfigDirectoryName still supplies its unique test/config suffix.
+    const { cancelled, config } = await prepareConfig(t, { configName: 'oc' });
+    const spec = relative => new URL(`../../${relative}`, import.meta.url).href;
+    const base = config.statePath;
+    const roots = {
+      workspaceDir: path.join(base, 'opencode-workspaces'),
+      mcpDir: path.join(base, 'opencode-private'),
+    };
+    const nativeRuntime = path.join(base, 'opencode-native-runtime');
+    const brokerDir = path.join(base, 'opencode-broker');
+    for (const directory of [roots.workspaceDir, roots.mcpDir, nativeRuntime]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+    }
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const { host } = await makeHost(config, cancelled);
+    await E(host).makeDirectory('opencode-sandbox');
+    // The same services setup-host.js and setup-hosted.js mint, over the
+    // same powers shapes: host powers, a stored null, and a SecretBlob.
+    await E(host).storeValue(null, 'opencode.null-powers');
+    await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
+      powersName: 'opencode.null-powers',
+      resultName: ['opencode-sandbox', 'native-sandbox'],
+      env: {
+        ENDO_SANDBOX_RUNTIME_DIR: nativeRuntime,
+        ENDO_SANDBOX_OWNER_ID: 'opencode-acceptance-native',
+        ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
+        ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+      },
+    });
+    await E(host).remove('opencode.null-powers');
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      'opencode-auth',
+      'OpenRouter credential',
+      encodeBase64(new TextEncoder().encode('acceptance-credential')),
+    );
+    await E(host).copy(
+      ['secrets', 'opencode-auth'],
+      ['opencode-auth.broker-read'],
+    );
+    await E(host).makeUnconfined(
+      undefined,
+      spec('opencode-sandbox/src/opencode-broker-service-agent.js'),
+      {
+        // An isolated worker keeps the real broker formula/specifier while its
+        // catalog read is deterministic and unexpected fetch requests are refused.
+        workerTrustedShims: [
+          new URL('./opencode-catalog-shim.js', import.meta.url).href,
+        ],
+        powersName: 'opencode-auth.broker-read',
+        resultName: ['opencode-sandbox', 'broker-service'],
+        env: {
+          OPENCODE_BROKER_CONFIG: JSON.stringify({
+            ownerId: 'opencode-acceptance',
+            directory: brokerDir,
+            imageRef: `localhost/opencode@${digest}`,
+            imageDigest: digest,
+            listenerImageRef: `localhost/listener@${digest}`,
+            accountAuthority: 'openrouter-main',
+          }),
+        },
+      },
+    );
+    await E(host).remove('opencode-auth.broker-read');
+    const brokerId = await E(host).identify(
+      'opencode-sandbox',
+      'broker-service',
+    );
+    const brokerFormula = readFormulaFromDb(config.statePath, brokerId);
+    t.not(brokerFormula.worker, await E(host).identify('@node'));
+    await E(host).storeValue(null, 'opencode.storage-null-powers');
+    await E(host).makeUnconfined(
+      '@node',
+      spec('opencode-sandbox/src/opencode-session-storage-module.js'),
+      {
+        powersName: 'opencode.storage-null-powers',
+        resultName: ['opencode-sandbox', 'session-storage'],
+        env: {
+          OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          OPENCODE_MCP_DIR: roots.mcpDir,
+        },
+      },
+    );
+    await E(host).remove('opencode.storage-null-powers');
+    const backend = await E(host).makeUnconfined(
+      '@node',
+      spec('opencode-sandbox/src/opencode-backend-module.js'),
+      {
+        powersName: '@agent',
+        resultName: ['opencode-sandbox', 'backend'],
+        env: {
+          OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          OPENCODE_MCP_DIR: roots.mcpDir,
+        },
+      },
+    );
+    t.is((await E(backend).describe()).id, 'opencode');
+    const tools = Far('HostedToolSet', {
+      describe: async () =>
+        harden({ dynamicTools: [], toolSetId: 'acceptance' }),
+      execute: async () => 'ok',
+      help: () => 'acceptance tools',
+    });
+    // Starting reaches the native controller in its own worker. Without
+    // Podman the provider listener cannot start, so activation rejects; the
+    // owner keeps the record, its exact dependencies, and the private
+    // directories the backend prepared. This is wiring evidence only. On a
+    // host without procfs (macOS) the runtime refuses before admission; on
+    // Linux the grant is admitted and the listener's start failure is
+    // reported as a failed admission.
+    const refused = /procfs process identity|Provider grant admission failed/;
+    await t.throwsAsync(
+      E(backend).create(
+        harden({
+          sessionId: 'one',
+          networkPolicy: 'off',
+          model: 'openrouter/openrouter/free',
+        }),
+        tools,
+      ),
+      { message: refused },
+    );
+    // The interrupted start is retried through its own cleanup on the next
+    // request, which then fails at the same native boundary rather than being
+    // refused for an unfinished startup.
+    await t.throwsAsync(
+      E(backend).create(
+        harden({
+          sessionId: 'one',
+          networkPolicy: 'off',
+          model: 'openrouter/openrouter/free',
+        }),
+        tools,
+      ),
+      { message: refused },
+    );
+    const recordPath = [
+      'opencode-sandbox',
+      'session-records',
+      'sessions',
+      'one',
+    ];
+    const record = await E(host).lookup(recordPath);
+    const plan = JSON.parse(await E(record).readText('plan'));
+    t.is(plan.sessionId, 'one');
+    t.is(plan.model, 'openrouter/openrouter/free');
+    t.is(plan.rootfs, `oci:localhost/opencode@${digest}`);
+    t.false(Object.hasOwn(plan, 'nativeProfile'));
+    t.is(await E(record).maybeReadText('lifecycle'), 'starting');
+    t.deepEqual([...(await E(record).list('references'))].sort(), [
+      'brokerService',
+      'client',
+      'sandboxService',
+      'storage',
+      'worker',
+    ]);
+    t.is(
+      await E(host).identify(...recordPath, 'references', 'sandboxService'),
+      await E(host).identify('opencode-sandbox', 'native-sandbox'),
+    );
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.access(directory);
+    }
+    // Destroy stops through the controller, which closes the scopes it
+    // acquired, then the recorded storage owner removes the directories and
+    // the record releases its dependencies.
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+    t.false(await E(host).has(...recordPath));
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(fsp.access(directory), { code: 'ENOENT' });
+    }
+    await t.throwsAsync(
+      fsp.access(path.join(roots.mcpDir, plan.sandboxSessionId)),
+      {
+        code: 'ENOENT',
+      },
+    );
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+  },
+);
+
+testNeedsNodeManager(
+  'the Claude backend records a session through the daemon owner and destroy reaches its storage',
+  async t => {
+    t.timeout(120_000);
+    // Keep the Unix socket below macOS's 104-byte limit in a deep worktree.
+    // getConfigDirectoryName still supplies its unique test/config suffix.
+    const { cancelled, config } = await prepareConfig(t, { configName: 'cl' });
+    const spec = relative => new URL(`../../${relative}`, import.meta.url).href;
+    const base = config.statePath;
+    const roots = {
+      workspaceDir: path.join(base, 'claude-workspaces'),
+      mcpDir: path.join(base, 'claude-private'),
+    };
+    const stateDir = path.join(base, 'claude-state');
+    const nativeRuntime = path.join(base, 'claude-native-runtime');
+    const brokerDir = path.join(base, 'claude-broker');
+    for (const directory of [roots.workspaceDir, roots.mcpDir, nativeRuntime]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+    }
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const { host } = await makeHost(config, cancelled);
+    await E(host).makeDirectory('claude-sandbox');
+    // The same services setup-host.js and setup-hosted.js mint, over the
+    // same powers shapes: no powers, a stored null, a SecretBlob, the state
+    // provider, and host powers for the backend.
+    await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-state-provider-module.js'),
+      {
+        powersName: '@none',
+        resultName: ['claude-sandbox', 'state-provider'],
+        env: { ENDO_CLAUDE_STATE_DIR: stateDir },
+      },
+    );
+    await E(host).storeValue(null, 'claude.null-powers');
+    await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
+      powersName: 'claude.null-powers',
+      resultName: ['claude-sandbox', 'native-sandbox'],
+      env: {
+        ENDO_SANDBOX_RUNTIME_DIR: nativeRuntime,
+        ENDO_SANDBOX_OWNER_ID: 'claude-acceptance-native',
+        ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
+        ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+      },
+    });
+    await E(host).remove('claude.null-powers');
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      'claude-creds',
+      'Anthropic oauthToken',
+      encodeBase64(new TextEncoder().encode('sk-ant-oat01-acceptance')),
+    );
+    await E(host).copy(
+      ['secrets', 'claude-creds'],
+      ['claude-creds.broker-read'],
+    );
+    await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-broker-service-agent.js'),
+      {
+        workerTrustedShims: [
+          new URL('./claude-catalog-shim.js', import.meta.url).href,
+        ],
+        powersName: 'claude-creds.broker-read',
+        resultName: ['claude-sandbox', 'broker-service'],
+        env: {
+          CLAUDE_BROKER_CONFIG: JSON.stringify({
+            ownerId: 'claude-acceptance',
+            directory: brokerDir,
+            imageRef: `localhost/claude@${digest}`,
+            imageDigest: digest,
+            listenerImageRef: `localhost/listener@${digest}`,
+            accountAuthority: 'claude-main',
+            credentialKind: 'oauthToken',
+          }),
+        },
+      },
+    );
+    await E(host).remove('claude-creds.broker-read');
+    await E(host).copy(
+      ['claude-sandbox', 'state-provider'],
+      ['claude.state-provider-powers'],
+    );
+    await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-session-storage-module.js'),
+      {
+        powersName: 'claude.state-provider-powers',
+        resultName: ['claude-sandbox', 'session-storage'],
+        env: {
+          CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          CLAUDE_MCP_DIR: roots.mcpDir,
+        },
+      },
+    );
+    await E(host).remove('claude.state-provider-powers');
+    const backend = await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-backend-module.js'),
+      {
+        powersName: '@agent',
+        resultName: ['claude-sandbox', 'backend'],
+        env: {
+          CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          CLAUDE_MCP_DIR: roots.mcpDir,
+        },
+      },
+    );
+    t.is((await E(backend).describe()).id, 'claude');
+    const tools = Far('HostedToolSet', {
+      describe: async () =>
+        harden({ dynamicTools: [], toolSetId: 'acceptance' }),
+      execute: async () => 'ok',
+      help: () => 'acceptance tools',
+    });
+    // Starting reaches the native controller in its own worker. Without
+    // Podman the provider listener cannot start, so activation rejects; the
+    // owner keeps the record, its exact dependencies, and the private
+    // directories the backend prepared. This is wiring evidence only. On a
+    // host without procfs (macOS) the runtime refuses before admission; on
+    // Linux the grant is admitted and the listener's start failure is
+    // reported as a failed admission.
+    const refused = /procfs process identity|Provider grant admission failed/;
+    await t.throwsAsync(
+      E(backend).create(harden({ sessionId: 'one' }), tools),
+      { message: refused },
+    );
+    // The interrupted start is retried through its own cleanup on the next
+    // request, which then fails at the same native boundary rather than being
+    // refused for an unfinished startup.
+    await t.throwsAsync(
+      E(backend).create(harden({ sessionId: 'one' }), tools),
+      { message: refused },
+    );
+    const recordPath = ['claude-sandbox', 'session-records', 'sessions', 'one'];
+    const record = await E(host).lookup(recordPath);
+    const plan = JSON.parse(await E(record).readText('plan'));
+    t.is(plan.sessionId, 'one');
+    // The plan carries the broker's pinned image and credential kind and the
+    // request's network policy; no credential and no image reach the backend
+    // environment.
+    t.is(plan.rootfs, `oci:localhost/claude@${digest}`);
+    t.is(plan.networkPolicy, 'off');
+    t.is(plan.credentialKind, 'oauthToken');
+    t.false(Object.hasOwn(plan, 'nativeProfile'));
+    t.is(await E(record).maybeReadText('lifecycle'), 'starting');
+    t.deepEqual([...(await E(record).list('references'))].sort(), [
+      'brokerService',
+      'client',
+      'sandboxService',
+      'stateProvider',
+      'storage',
+      'worker',
+    ]);
+    t.is(
+      await E(host).identify(...recordPath, 'references', 'brokerService'),
+      await E(host).identify('claude-sandbox', 'broker-service'),
+    );
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.access(directory);
+    }
+    // Activation stops at the broker, before the state provider is asked for
+    // the session's persistent config directory, so none exists yet.
+    await t.throwsAsync(
+      fsp.access(path.join(stateDir, plan.sandboxSessionId)),
+      { code: 'ENOENT' },
+    );
+    // Destroy stops through the controller, which closes the scope and
+    // revokes the grant it acquired, then the recorded storage owner removes
+    // the directories, and the record releases its dependencies.
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+    t.false(await E(host).has(...recordPath));
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+      path.join(roots.mcpDir, plan.sandboxSessionId),
+      path.join(stateDir, plan.sandboxSessionId),
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(fsp.access(directory), { code: 'ENOENT' });
+    }
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+  },
+);
+
+testNeedsNodeManager(
+  'native OpenCode broker retains its exact secret after name replacement and restart',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config, host } = await prepareHost(t);
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      'broker-original',
+      'Original broker credential',
+      encodeBase64(new TextEncoder().encode('original-test-credential')),
+    );
+    await E(importer).createBase64(
+      'broker-replacement',
+      'Replacement broker credential',
+      encodeBase64(new TextEncoder().encode('replacement-test-credential')),
+    );
+    const original = await E(host).identify('secrets', 'broker-original');
+    const replacement = await E(host).identify('secrets', 'broker-replacement');
+    await E(host).storeIdentifier('broker-key', original);
+    const imageDigest = `sha256:${'a'.repeat(64)}`;
+    const directory = path.join(config.statePath, 'broker-runtime');
+    const env = {
+      OPENCODE_BROKER_CONFIG: JSON.stringify({
+        ownerId: 'native-broker-acceptance',
+        directory,
+        imageRef: `localhost/opencode@${imageDigest}`,
+        imageDigest,
+        listenerImageRef: `localhost/provider@${imageDigest}`,
+        accountAuthority: 'openrouter-main',
+      }),
+    };
+    const specifier = new URL(
+      '../../opencode-sandbox/src/opencode-broker-service-agent.js',
+      import.meta.url,
+    ).href;
+    const service = await E(host).makeUnconfined('broker-operator', specifier, {
+      powersName: 'broker-key',
+      resultName: 'broker-service',
+      env,
+    });
+    const serviceId = await E(host).identify('broker-service');
+    const formula = readFormulaFromDb(config.statePath, serviceId);
+    t.like(formula, { type: 'make-unconfined', powers: original, env });
+    t.false(JSON.stringify(formula).includes('original-test-credential'));
+    const scopeSpec = harden({
+      providerOrigin: 'https://openrouter.ai',
+      accountRef: 'openrouter-main',
+      model: 'test/model',
+    });
+    const a = await E(service).provideScope('a', scopeSpec);
+    const b = await E(service).provideScope('b', scopeSpec);
+    await E(a).revoke();
+    t.is(await E(service).lookupScope('b'), b);
+    t.false(fs.existsSync(directory));
+    await E(host).remove('broker-key');
+    await E(host).storeIdentifier('broker-key', replacement);
+    await E(host).remove('secrets', 'broker-original');
+    t.true(formulaExistsInDb(config.statePath, original));
+
+    await restart(config);
+    const { host: recoveredHost } = await makeHost(config, cancelled);
+    t.is(await E(recoveredHost).identify('broker-key'), replacement);
+    t.is(readFormulaFromDb(config.statePath, serviceId).powers, original);
+    const recovered = await E(recoveredHost).lookup('broker-service');
+    // Only inert handles were issued: this does not claim native crash cleanup.
+    const recoveredScope = await E(recovered).provideScope(
+      'after-restart',
+      scopeSpec,
+    );
+    await E(recoveredScope).revoke();
+    t.false(fs.existsSync(directory));
+    t.true(formulaExistsInDb(config.statePath, original));
+    const audit = await E(recoveredHost).lookup(['@secrets', 'audit']);
+    t.false((await E(audit).list()).some(event => event.operation === 'read'));
+  },
+);
+
+testNeedsNodeManager(
   'secret lookup capabilities and values survive restart',
   async t => {
     const { cancelled, config, host } = await prepareHost(t);
@@ -1478,7 +3312,7 @@ testNeedsNodeManager(
     const summary = await E(importer).createBase64(
       'release',
       'Publish release artifacts',
-      encodeBase64(new TextEncoder().encode(canary)),
+      encodeBase64(encodeUtf8(canary)),
     );
     t.is(summary.state, 'active');
     t.is(summary.description, 'Publish release artifacts');
@@ -1489,19 +3323,13 @@ testNeedsNodeManager(
     t.is(formula.type, 'lookup');
     t.false(JSON.stringify(formula).includes(canary));
     const blob = await E(host).lookup(['secrets', 'release']);
-    t.is(
-      new TextDecoder().decode(decodeBase64(await E(blob).readBase64())),
-      canary,
-    );
+    t.is(decodeUtf8(decodeBase64(await E(blob).readBase64())), canary);
 
     await restart(config);
     const { host: hostAfter } = await makeHost(config, cancelled);
     const blobAfter = await E(hostAfter).lookup(['secrets', 'release']);
     t.is(await E(blobAfter).getDescription(), 'Publish release artifacts');
-    t.is(
-      new TextDecoder().decode(decodeBase64(await E(blobAfter).readBase64())),
-      canary,
-    );
+    t.is(decodeUtf8(decodeBase64(await E(blobAfter).readBase64())), canary);
 
     const guest = await E(hostAfter).provideGuest('secret-recipient');
     await E(hostAfter).send(
@@ -1513,22 +3341,19 @@ testNeedsNodeManager(
     const [message] = await E(guest).listMessages();
     await E(guest).adopt(message.number, 'credential', 'release-credential');
     const delegated = await E(guest).lookup('release-credential');
-    t.is(
-      new TextDecoder().decode(decodeBase64(await E(delegated).readBase64())),
-      canary,
-    );
+    t.is(decodeUtf8(decodeBase64(await E(delegated).readBase64())), canary);
 
     const sqlite = await fsp.readFile(
       path.join(config.statePath, 'endo.sqlite'),
     );
-    t.false(sqlite.includes(new TextEncoder().encode(canary)));
+    t.false(sqlite.includes(encodeUtf8(canary)));
     const secretFiles = await fsp.readdir(
       path.join(config.statePath, 'secret-store-v1'),
     );
     const envelope = await fsp.readFile(
       path.join(config.statePath, 'secret-store-v1', secretFiles[0]),
     );
-    t.false(envelope.includes(new TextEncoder().encode(canary)));
+    t.false(envelope.includes(encodeUtf8(canary)));
 
     const catalog = await E(hostAfter).lookup(['@secrets', 'catalog']);
     await E(hostAfter).copy(['secrets', 'release'], ['release-alias']);
@@ -2863,6 +4688,289 @@ testNeedsNodeWorker('cancel because of requested capability', async t => {
   );
 });
 
+testNeedsNodeWorker.serial(
+  'pool identity capability journal survives real daemon reconstruction',
+  async t => {
+    t.timeout(30_000);
+    const base = await fsp.mkdtemp('/tmp/endo-pool-identity-');
+    const { cancel, cancelled } = makeCancelKit();
+    const config = {
+      ...makeConfig('unused'),
+      statePath: path.join(base, 'state'),
+      ephemeralStatePath: path.join(base, 'run'),
+      cachePath: path.join(base, 'cache'),
+      sockPath: path.join(base, 'endo.sock'),
+    };
+    t.context.push({ cancel, cancelled, config });
+    t.teardown(async () => {
+      await stop(config);
+      await fsp.rm(base, { recursive: true, force: true });
+    });
+    await start(config);
+    let { host } = await makeHost(config, cancelled);
+    await E(host).evaluate(
+      '@node',
+      "makeExo('SecretA', M.interface('SecretA', { tag: M.call().returns(M.string()) }), { tag: () => 'a' })",
+      [],
+      [],
+      'key-a',
+    );
+    await E(host).evaluate(
+      '@node',
+      "makeExo('SecretB', M.interface('SecretB', { tag: M.call().returns(M.string()) }), { tag: () => 'b' })",
+      [],
+      [],
+      'key-b',
+    );
+    const specifier = new URL(
+      '../../hosted-agent/test/_pool-identity-probe.js',
+      import.meta.url,
+    ).href;
+    const probe = await E(host).makeUnconfined('@node', specifier, {
+      powersName: '@agent',
+      resultName: 'identity-probe',
+    });
+    const a = harden({ id: 'a', secretName: 'key-a', accountRef: 'account-a' });
+    const b = harden({ id: 'b', secretName: 'key-b', accountRef: 'account-b' });
+    const first = await E(probe).bind(harden([a]));
+    t.is(first[0].authority, await E(host).lookup('key-a'));
+    await E(probe).bind(harden([a, b]));
+    await E(probe).bind(harden([b]));
+    await restart(config);
+    ({ host } = await makeHost(config, cancelled));
+    const revived = await E(host).lookup('identity-probe');
+    const restored = await E(revived).bind(harden([b]));
+    t.is(restored[0].authority, await E(host).lookup('key-b'));
+    t.is(await E(restored[0].authority).tag(), 'b');
+    await t.throwsAsync(E(revived).bind(harden([a, b])), {
+      message: /journal is fenced/,
+    });
+    // Recreate only the probe journal, then rebound the same pet name to a
+    // different real formula. Persisted capability identity must detect it.
+    const fresh = await E(host).makeUnconfined('@node', specifier, {
+      powersName: '@agent',
+      resultName: 'identity-probe-2',
+    });
+    await E(host).storeValue(await E(host).lookup('key-a'), 'key-b');
+    await t.throwsAsync(E(fresh).bind(harden([b])), {
+      message: /journal is fenced/,
+    });
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'pooled retirement drains renewal before real formula replacement',
+  async t => {
+    t.timeout(30_000);
+    const base = await fsp.mkdtemp('/tmp/endo-pool-drain-');
+    const { cancel, cancelled } = makeCancelKit();
+    const config = {
+      ...makeConfig('unused'),
+      statePath: path.join(base, 'state'),
+      ephemeralStatePath: path.join(base, 'run'),
+      cachePath: path.join(base, 'cache'),
+      sockPath: path.join(base, 'endo.sock'),
+    };
+    t.context.push({ cancel, cancelled, config });
+    t.teardown(async () => {
+      await stop(config);
+      await fsp.rm(base, { recursive: true, force: true });
+    });
+    await start(config);
+    const { host } = await makeHost(config, cancelled);
+    const control = await E(host).makeUnconfined(
+      '@node',
+      new URL(
+        '../../hosted-agent/test/_catalog-lifecycle-control.js',
+        import.meta.url,
+      ).href,
+      { powersName: '@none', resultName: 'pool-control' },
+    );
+    await E(host).evaluate(
+      '@node',
+      "makeExo('Spare', M.interface('Spare', { renew: M.call().returns(M.promise()) }), { renew: async () => undefined })",
+      [],
+      [],
+      'pool-spare',
+    );
+    await E(host).storeValue(
+      harden({
+        members: [
+          { id: 'work', secretName: 'pool-control', accountRef: 'work' },
+        ],
+      }),
+      'subscriptions',
+    );
+    const owner = await E(host).makeUnconfined(
+      '@node',
+      new URL(
+        '../../hosted-agent/test/_pool-retirement-owner.js',
+        import.meta.url,
+      ).href,
+      { powersName: '@agent', resultName: 'pool-owner' },
+    );
+    const identity = await E(host).identify('pool-owner');
+    await E(host).storeIdentifier(['@pins', 'pool-owner'], identity);
+    const keeper = await E(host).evaluate(
+      '@node',
+      "E(owner).accountSource('work').then(account => makeExo('PoolAccountKeeper', M.interface('PoolAccountKeeper', { refresh: M.call().returns(M.promise()), observe: M.call().returns(M.promise()) }), { refresh: () => E(account).refresh(), observe: () => E(account).observe() }))",
+      ['owner'],
+      ['pool-owner'],
+      'pool-account-keeper',
+    );
+    const reading = E(keeper).refresh();
+    const readResult = reading.catch(() => undefined);
+    await E(control).entered();
+    await E(host).storeValue(
+      harden({
+        members: [{ id: 'home', secretName: 'pool-spare', accountRef: 'home' }],
+      }),
+      'subscriptions',
+    );
+    const retirement = E(owner).subscriptions();
+    void retirement.catch(() => {});
+    await waitForCondition(async () => {
+      try {
+        await E(keeper).observe();
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    await E(host).cancel('pool-owner');
+    await waitForCondition(async () =>
+      (await E(control).events()).includes('close-start'),
+    );
+    let replaced = false;
+    const replacement = E(host)
+      .lookup(['@pins', 'pool-owner'])
+      .then(value => {
+        replaced = true;
+        return value;
+      });
+    void replacement.catch(() => {});
+    t.false(replaced);
+    t.false((await E(control).events()).includes('close-ack'));
+    await E(control).release();
+    const next = await replacement;
+    await readResult;
+    t.deepEqual(await E(control).events(), [
+      'construct',
+      'renew-start',
+      'close-start',
+      'renew-finish',
+      'close-ack',
+    ]);
+    await t.throwsAsync(E(keeper).refresh(), {
+      message: /closed|cancel|revok/i,
+    });
+    t.deepEqual(
+      (await E(next).subscriptions()).map(member => member.id),
+      ['home'],
+    );
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'catalog formula reconstruction drains admitted renewal before replacement',
+  async t => {
+    t.timeout(30_000);
+    // Keep native socket paths below macOS's limit even in a deep worktree.
+    const base = await fsp.mkdtemp('/tmp/endo-catalog-');
+    const { cancel, cancelled } = makeCancelKit();
+    const config = {
+      ...makeConfig('unused'),
+      statePath: path.join(base, 'state'),
+      ephemeralStatePath: path.join(base, 'run'),
+      cachePath: path.join(base, 'cache'),
+      sockPath: path.join(base, 'endo.sock'),
+    };
+    t.context.push({ cancel, cancelled, config });
+    t.teardown(async () => {
+      await stop(config);
+      await fsp.rm(base, { recursive: true, force: true });
+    });
+    await start(config);
+    const { host } = await makeHost(config, cancelled);
+    const fixture = name =>
+      new URL(
+        `../../hosted-agent/test/_catalog-lifecycle-${name}.js`,
+        import.meta.url,
+      ).href;
+    const control = await E(host).makeUnconfined('@node', fixture('control'), {
+      powersName: '@none',
+      resultName: 'catalog-control',
+    });
+    const original = await E(host).makeUnconfined('@node', fixture('owner'), {
+      powersName: 'catalog-control',
+      resultName: 'catalog-owner',
+    });
+    const identity = await E(host).identify('catalog-owner');
+    await E(host).storeIdentifier(['@pins', 'catalog-owner'], identity);
+    // This keeper holds the old facet inside its worker, independently of
+    // cancellation revoking the client's CapTP route to the owner formula.
+    const keeper = await E(host).evaluate(
+      '@node',
+      "makeExo('OldCatalogKeeper', M.interface('OldCatalogKeeper', { read: M.call().returns(M.promise()) }), { read: () => E(original).modelCatalog() })",
+      ['original'],
+      ['catalog-owner'],
+      'catalog-keeper',
+    );
+    const reading = E(original).modelCatalog();
+    const oldResult = reading.then(
+      () => 'served',
+      () => 'rejected',
+    );
+    await E(control).entered();
+    await E(host).cancel('catalog-owner');
+    await waitForCondition(async () =>
+      (await E(control).events()).includes('close-start'),
+    );
+    let replaced = false;
+    const replacement = E(host)
+      .lookup(['@pins', 'catalog-owner'])
+      .then(value => {
+        replaced = true;
+        return value;
+      });
+    void replacement.catch(() => {});
+    await t.throwsAsync(E(keeper).read(), { message: /closed|cancel|revok/i });
+    t.deepEqual(await E(control).events(), [
+      'construct',
+      'renew-start',
+      'close-start',
+    ]);
+    t.false(replaced);
+    await E(control).release();
+    const next = await replacement;
+    t.is(await oldResult, 'rejected');
+    t.deepEqual(await E(control).events(), [
+      'construct',
+      'renew-start',
+      'close-start',
+      'renew-finish',
+      'close-ack',
+      'construct',
+    ]);
+    t.is(await E(host).identify('@pins', 'catalog-owner'), identity);
+    await t.throwsAsync(E(keeper).read(), { message: /closed|cancel|revok/i });
+    t.deepEqual(await E(next).modelCatalog(), {
+      accounts: [
+        {
+          subscriptionId: 'default',
+          state: 'current',
+          observedAt: 1,
+          models: [],
+        },
+      ],
+    });
+    t.deepEqual((await E(control).events()).slice(-2), [
+      'renew-start',
+      'renew-finish',
+    ]);
+  },
+);
+
 testNeedsNodeWorker(
   'unconfined service can respond to cancellation',
   async t => {
@@ -2936,6 +5044,7 @@ testNeedsNodeWorker(
     await E(host).makeUnconfined('worker', counterPath, {
       powersName: '@none',
       resultName: 'counter',
+      env: { ENDO_TEST_PRIVATE_ENV: 'environment-canary' },
     });
 
     const counterId = await E(host).identify('counter');
@@ -2946,6 +5055,42 @@ testNeedsNodeWorker(
     t.is(record.properties.specifier.value, counterPath);
     t.is(record.properties.worker.kind, 'reference');
     t.is(record.properties.powers.kind, 'reference');
+    t.false('env' in record.properties);
+    t.false(JSON.stringify(record).includes('environment-canary'));
+    t.deepEqual(await E(host).getFormulaEnvironment(counterId), {
+      ENDO_TEST_PRIVATE_ENV: 'environment-canary',
+    });
+    await t.throwsAsync(
+      E(E(host).diagnostics()).getFormulaEnvironment(counterId),
+      {
+        message: /target has no method "getFormulaEnvironment"/u,
+      },
+    );
+  },
+);
+
+test.serial(
+  'getFormulaEnvironment reads persisted environment after startup failure',
+  async t => {
+    const { host } = await prepareHost(t, 'env');
+    const missing = path.join(
+      dirname,
+      'test',
+      'missing-environment-fixture.js',
+    );
+    await t.throwsAsync(
+      E(host).makeUnconfined(undefined, missing, {
+        powersName: '@none',
+        resultName: 'failed-caplet',
+        env: { ENDO_RUNTIME_DIRECTORY: '/host/private/runtime' },
+      }),
+    );
+    const identifier = await E(host).identify('failed-caplet');
+    t.truthy(identifier);
+    t.deepEqual(await E(host).getFormulaEnvironment(identifier), {
+      ENDO_RUNTIME_DIRECTORY: '/host/private/runtime',
+    });
+    await t.throwsAsync(E(host).lookup('failed-caplet'));
   },
 );
 
@@ -2978,6 +5123,7 @@ testNeedsNodeWorker(
     // direct `getFormula` call that exposes the `worker` reference.
     const counterId = await E(host).identify('counter');
     const counterRecord = await E(E(host).diagnostics()).getFormula(counterId);
+    t.deepEqual(await E(host).getFormulaEnvironment(counterId), {});
     t.is(counterRecord.properties.worker.kind, 'reference');
     const workerId = counterRecord.properties.worker.identifier;
 
@@ -3082,9 +5228,7 @@ test('evaluate name resolved by lookup path', async t => {
 test('list special names', async t => {
   const { host } = await prepareHost(t);
 
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('hello\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
   await E(host).storeBlob(readerRef, 'hello-text');
 
   /** @type {string[]} */
@@ -3204,6 +5348,12 @@ test('the diagnostics facet is absent on the guest facet', async t => {
   await t.throwsAsync(() => E(guest).getFormula(tenId), {
     message: /target has no method "getFormula"/u,
   });
+  await t.throwsAsync(() => E(guest).getFormulaEnvironment(tenId), {
+    message: /target has no method "getFormulaEnvironment"/u,
+  });
+  await t.throwsAsync(() => E(host).getFormulaEnvironment(tenId), {
+    message: /has no construction environment/u,
+  });
 });
 
 test('getFormula rejects cross-peer locators', async t => {
@@ -3223,6 +5373,9 @@ test('getFormula rejects cross-peer locators', async t => {
     number: formulaNumber,
   });
   await t.throwsAsync(() => E(E(host).diagnostics()).getFormula(crossPeerId), {
+    message: /cross-peer/u,
+  });
+  await t.throwsAsync(() => E(host).getFormulaEnvironment(crossPeerId), {
     message: /cross-peer/u,
   });
 });
@@ -3298,6 +5451,87 @@ test('read unknown node id', async t => {
     message: /No peer found for node identifier /u,
   });
 });
+
+testNeedsNodeWorker.serial(
+  'an adopted remote capability is endowable by name, unlike a bare presence',
+  async t => {
+    t.timeout(120_000);
+    const host = await prepareHostWithTestNetwork(t, 'rc');
+    const peer = await prepareHostWithTestNetwork(t, 'rc');
+    await E(host).addPeerInfo(await E(peer).getPeerInfo());
+    await E(peer).addPeerInfo(await E(host).getPeerInfo());
+    const remote = await E(peer).makeDirectory('project');
+    await E(remote).writeText('identity', 'remote-project');
+    await t.throwsAsync(E(host).storeValue(remote, 'bare-presence'), {
+      message: /No corresponding formula/,
+    });
+    const invitation = await E(peer).invite('recipient');
+    await E(host).accept(await E(invitation).locate(), 'sender');
+    await E(peer).send('recipient', ['workspace'], ['filesystem'], ['project']);
+    const messages = await E(host).listMessages();
+    const pkg = messages.find(
+      message =>
+        message.type === 'package' && message.strings?.[0] === 'workspace',
+    );
+    t.truthy(pkg);
+    await E(host).adopt(pkg.number, 'filesystem', ['remote-project']);
+    const identity = await E(host).evaluate(
+      '@main',
+      "E(project).readText('identity')",
+      ['project'],
+      ['remote-project'],
+      'probe-result',
+    );
+    t.is(identity, 'remote-project');
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'portable environment Shell crosses two daemon peers without private admin',
+  async t => {
+    t.timeout(60_000);
+    const remote = await prepareHostWithTestNetwork(t, 'er');
+    const local = await prepareHostWithTestNetwork(t, 'el');
+    await E(local).addPeerInfo(await E(remote).getPeerInfo());
+    await E(remote).makeDirectory('audit');
+    const runner = await E(remote).makeUnconfined(
+      'runner-worker',
+      new URL('./_environment-runner.js', import.meta.url).href,
+      { powersName: 'audit', resultName: 'runner' },
+    );
+    const workspace = await E(remote).makeUnconfined(
+      'workspace-worker',
+      new URL('./_native-session-dependency.js', import.meta.url).href,
+      {
+        powersName: 'audit',
+        resultName: 'workspace',
+        env: { LABEL: 'remote-workspace' },
+      },
+    );
+    const policy = harden({
+      allowedCommands: ['sh'],
+      timeoutMs: 1000,
+      maxOutputBytes: 4096,
+    });
+    const kit = await E(remote).provideEnvironment(
+      runner,
+      workspace,
+      'environment-admin',
+      'shell',
+      harden({ policy, networkPolicy: 'off' }),
+    );
+    await E(local).storeLocator(['shell'], await E(remote).locate('shell'));
+    const shell = await E(local).lookup('shell');
+    t.deepEqual(await E(shell).inspect(), policy);
+    t.is((await E(shell).exec('sh', harden([]))).stdout, 'remote-workspace');
+    t.false(await E(local).has('environment-admin'));
+    await E(kit.admin).stop();
+    await E(kit.admin).dispose();
+    await t.throwsAsync(E(shell).exec('sh', harden([])), {
+      message: /disposed/,
+    });
+  },
+);
 
 testNeedsNodeWorker('read remote value', async t => {
   const hostA = await prepareHostWithTestNetwork(t);
@@ -3572,6 +5806,13 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   const invitationLocator = await E(invitation).locate();
   await E(hostB).accept(invitationLocator, 'alice');
 
+  // Acceptance replaces each invitation-side result name with the remote
+  // handle. It does not need a second, synthetic local guest under @pins.
+  t.truthy(await E(hostA).identify('bob'));
+  t.truthy(await E(hostB).identify('alice'));
+  t.is(await E(hostA).identify('@pins', 'guest-bob'), undefined);
+  t.is(await E(hostB).identify('@pins', 'guest-alice'), undefined);
+
   // create value to share
   await E(hostA).evaluate('@main', '"hello, world!"', [], [], ['salutations']);
   const expectedSalutationsLocator = await E(hostA).locate('salutations');
@@ -3597,6 +5838,385 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   t.is(actualParsed.number, expectedParsed.number);
   t.is(actualParsed.node, expectedParsed.node);
 });
+
+testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
+  const hostA = await prepareHostWithTestNetwork(t);
+  const hostB = await prepareHostWithTestNetwork(t);
+
+  const guestA = await E(hostA).provideGuest('guest-a-handle', {
+    agentName: 'guest-a',
+  });
+  const invitation = await E(guestA).invite('guest-b');
+  const invitationLocator = await E(invitation).locate();
+  await E(hostB).accept(invitationLocator, 'guest-a');
+
+  // The invitation's result name is the durable connection edge. Acceptance
+  // replaces the invitation with the remote accepter handle without minting
+  // and pinning an otherwise-unreachable local guest on either side.
+  t.truthy(await E(guestA).identify('guest-b'));
+  t.truthy(await E(hostB).identify('guest-a'));
+  t.is(await E(guestA).identify('@pins', 'guest-guest-b'), undefined);
+  t.is(await E(hostA).identify('@pins', 'guest-guest-b'), undefined);
+  t.is(await E(hostB).identify('@pins', 'guest-guest-a'), undefined);
+
+  // The host-only directory remains available for deliberate hidden pins, but
+  // invitation acceptance no longer adds a redundant synthetic guest to it.
+  const guestAId = await E(hostA).identify('guest-a');
+  const guestARecord = await E(E(hostA).diagnostics()).getFormula(guestAId);
+  const guestPinsId = guestARecord.properties.guestPins.identifier;
+  const hostPinsId = guestARecord.properties.hostPins.identifier;
+  t.not(guestPinsId, hostPinsId);
+  const hostPins = await E(hostA).lookupById(hostPinsId);
+  t.is(await E(hostPins).identify('guest-guest-b'), undefined);
+
+  await E(guestA).send('guest-b', ['Hello from guest A'], [], []);
+  await E(hostB).send('guest-a', ['Hello from guest B'], [], []);
+
+  const messagesForGuestB = await E(hostB).listMessages();
+  t.true(
+    messagesForGuestB.some(
+      message =>
+        message.type === 'package' &&
+        message.strings?.[0] === 'Hello from guest A',
+    ),
+  );
+
+  const messagesForGuestA = await E(guestA).listMessages();
+  t.true(
+    messagesForGuestA.some(
+      message =>
+        message.type === 'package' &&
+        message.strings?.[0] === 'Hello from guest B',
+    ),
+  );
+});
+
+test('EndoGuest.invite nests the invitation at a directory path', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest-handle', {
+    agentName: 'guest-agent',
+  });
+  await E(guest).makeDirectory('peers');
+  const invitation = await E(guest).invite(['peers', 'bob']);
+  t.truthy(await E(invitation).locate());
+  t.true(await E(guest).has('peers', 'bob'));
+  t.false(await E(guest).has('bob'));
+});
+
+testNeedsNodeWorker(
+  'EndoGuest.accept binds into the calling guest (same daemon)',
+  async t => {
+    // Both the inviting and accepting guest live in ONE daemon — the
+    // minion.town shape, where the app's inviter and invitee guests are
+    // siblings under a single daemon. No network is required.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+
+    const invitation = await E(guestA).invite('to-b');
+    const invitationLocator = await E(invitation).locate();
+    // The invitee redeems into ITSELF via the guest facet, not through a host.
+    await E(guestB).accept(invitationLocator, 'to-a');
+
+    // Reciprocal binding, each under its own independently chosen pet name.
+    t.truthy(await E(guestA).identify('to-b'));
+    t.truthy(await E(guestB).identify('to-a'));
+
+    // Accepting as itself mints no replacement guest on either side.
+    t.is(await E(guestA).identify('@pins', 'guest-to-b'), undefined);
+    t.is(await E(guestB).identify('@pins', 'guest-to-a'), undefined);
+
+    // Same-daemon acceptance registers NO peer: the inviter's daemon is this
+    // daemon, so writing a self-peer (or a self-referential remote-agent-key
+    // row) would be spurious. NOTE: this end-to-end check does NOT by itself pin
+    // the same-daemon skips — both agents here have empty `@nets`, so the
+    // orthogonal `hints.length > 0` / `addresses.length > 0` guards keep the peer
+    // store empty even if a same-daemon skip were removed (prover round 4). The
+    // skips are pinned load-bearingly by the multiplayer-suite test "same-daemon
+    // accept writes no peer route with reachable @nets on both sides", which
+    // gives both sides non-empty addresses so only the skips prevent the write.
+    t.deepEqual(
+      await E(host).listKnownPeers(),
+      [],
+      'same-daemon accept writes no known-peer entry',
+    );
+
+    // The bound handles are each guest's OWN handle — the acceptor bound the
+    // inviter's handle (not the top host's), and vice versa.
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    const guestBHandleId = await E(host).identify('guest-b-handle');
+    t.is(
+      parseLocator(await E(guestB).locate('to-a')).number,
+      parseId(guestAHandleId).number,
+      "acceptor's 'to-a' is the inviting guest's own handle",
+    );
+    t.is(
+      parseLocator(await E(guestA).locate('to-b')).number,
+      parseId(guestBHandleId).number,
+      "inviter's 'to-b' is the accepting guest's own handle",
+    );
+
+    // Mail flows both directions over the shared daemon's mailbox substrate.
+    await E(guestA).send('to-b', ['Hello from A'], [], []);
+    await E(guestB).send('to-a', ['Hello from B'], [], []);
+
+    const messagesForB = await E(guestB).listMessages();
+    t.true(
+      messagesForB.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'Hello from A',
+      ),
+      "B received A's message",
+    );
+    const messagesForA = await E(guestA).listMessages();
+    t.true(
+      messagesForA.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'Hello from B',
+      ),
+      "A received B's message",
+    );
+
+    // Single-use: a replay of the spent invitation is rejected.
+    await t.throwsAsync(
+      () => E(guestB).accept(invitationLocator, 'to-a-again'),
+      undefined,
+      'replayed invitation is rejected',
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'accept rolls back its speculative bind when the invitation is rejected (same daemon)',
+  async t => {
+    // The acceptor-side pet-name bind is written from the caller-supplied
+    // locator BEFORE the invitation is proven (so a bad name path cannot strand
+    // a spent invitation). A rejected accept — forged, unspent, or replayed —
+    // must therefore roll that bind back rather than leave the chosen name
+    // pointing at the unverified handle; least of all may it silently clobber a
+    // pre-existing correspondent already bound under that name.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+    const guestC = await E(host).provideGuest('guest-c-handle', {
+      agentName: 'guest-c',
+    });
+
+    // B binds a genuine correspondent (A's handle) under 'contact'.
+    const invAB = await E(guestA).invite('to-b');
+    await E(guestB).accept(await E(invAB).locate(), 'contact');
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    t.is(
+      parseLocator(await E(guestB).locate('contact')).number,
+      parseId(guestAHandleId).number,
+      "'contact' initially names A's handle",
+    );
+
+    // Produce a spent invitation from a DIFFERENT correspondent (C), so a
+    // successful clobber would be observable as C's handle replacing A's.
+    const invCB = await E(guestC).invite('to-b-2');
+    const spentCLocator = await E(invCB).locate();
+    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
+
+    // Redeeming the now-spent invitation from C, reusing the name that already
+    // holds A, must reject AND leave 'contact' bound to A (not C, not stray).
+    await t.throwsAsync(
+      () => E(guestB).accept(spentCLocator, 'contact'),
+      undefined,
+      'a spent invitation is rejected',
+    );
+    t.is(
+      parseLocator(await E(guestB).locate('contact')).number,
+      parseId(guestAHandleId).number,
+      "'contact' still names A's handle after the rejected accept",
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'accept rollback removes a FRESH name it speculatively bound (same daemon)',
+  async t => {
+    // The rollback restores "whatever the pet name held before". The existing
+    // rollback test only covers the branch where a prior binding existed (so
+    // rollback re-stores it); this covers the OTHER branch — a name that held
+    // nothing before the speculative bind — where rollback must `remove()` the
+    // phantom binding, not leave it pointing at the unverified handle. Deleting
+    // the `priorLocator === undefined ? remove() : storeLocator()` split's
+    // remove() arm reddens here.
+    const { host } = await prepareHost(t);
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+    const guestC = await E(host).provideGuest('guest-c-handle', {
+      agentName: 'guest-c',
+    });
+
+    // Produce a spent invitation from C.
+    const invCB = await E(guestC).invite('to-b');
+    const spentCLocator = await E(invCB).locate();
+    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
+
+    // 'fresh-contact' has never been bound. Redeeming the now-spent invitation
+    // under it must reject AND leave 'fresh-contact' unbound — the speculative
+    // bind removed, not left as a phantom pointing at C's unverified handle.
+    t.is(
+      await E(guestB).identify('fresh-contact'),
+      undefined,
+      'the fresh name is unbound before the rejected accept',
+    );
+    await t.throwsAsync(
+      () => E(guestB).accept(spentCLocator, 'fresh-contact'),
+      undefined,
+      'a spent invitation is rejected',
+    );
+    t.is(
+      await E(guestB).identify('fresh-contact'),
+      undefined,
+      'the fresh name is unbound again after the rejected accept (phantom removed)',
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'duplicate accept(sameLocator, sameName) never loses the winner (same daemon)',
+  async t => {
+    // A client that naively retries its own accept(sameLocator, sameName) —
+    // no attacker required — starts two accepts of the SAME single-use
+    // invitation under the SAME correspondent name. The required outcome:
+    // exactly one wins, and the loser's `E(invitation).accept()` rejection
+    // (single-use) and its correspondent-bind rollback do NOT strand the
+    // winner's binding — 'contact' still names A's handle afterward.
+    //
+    // NOTE: this test asserts the OUTCOME, not the serialization mechanism.
+    // prover round 4 showed that removing the `acceptInvitationJobs.enqueue`
+    // wrapper leaves this same-daemon case green, because same-process
+    // eventual-send delivery ordering already serializes these two calls (the
+    // acceptor's writes here touch no network, so no interleaving await opens
+    // the check-then-act window the queue closes). The daemon-wide queue is
+    // load-bearing for the CROSS-daemon race — a forged locator racing a genuine
+    // one for the same not-yet-known peer, where real network awaits interleave
+    // — which this same-daemon shape cannot exercise. This test remains a useful
+    // guard on the duplicate-accept outcome; it does not claim to pin the queue.
+    const { host } = await prepareHost(t);
+    const guestA = await E(host).provideGuest('guest-a-handle', {
+      agentName: 'guest-a',
+    });
+    const guestB = await E(host).provideGuest('guest-b-handle', {
+      agentName: 'guest-b',
+    });
+
+    const invitation = await E(guestA).invite('to-b');
+    const invitationLocator = await E(invitation).locate();
+
+    const results = await Promise.allSettled([
+      E(guestB).accept(invitationLocator, 'contact'),
+      E(guestB).accept(invitationLocator, 'contact'),
+    ]);
+    const fulfilled = results.filter(r => r.status === 'fulfilled');
+    t.is(fulfilled.length, 1, 'exactly one duplicate accept succeeds');
+
+    // The winner's bind survives the loser's rollback: 'contact' still names
+    // A's handle rather than having been un-named.
+    const guestAHandleId = await E(host).identify('guest-a-handle');
+    const contactLocator = await E(guestB).locate('contact');
+    t.truthy(
+      contactLocator,
+      "'contact' remains bound after the duplicate race",
+    );
+    t.is(
+      parseLocator(contactLocator).number,
+      parseId(guestAHandleId).number,
+      "'contact' still names A's handle after the losing duplicate rolled back",
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'EndoGuest transitive invite chain I -> J -> K (same daemon)',
+  async t => {
+    // A guest that has accepted an invitation can itself invite and accept
+    // further guests: "a guest may invite more guests, transitively."
+    const { host } = await prepareHost(t);
+    const guestI = await E(host).provideGuest('i-handle', { agentName: 'i' });
+    const guestJ = await E(host).provideGuest('j-handle', { agentName: 'j' });
+    const guestK = await E(host).provideGuest('k-handle', { agentName: 'k' });
+
+    const invIJ = await E(guestI).invite('j');
+    await E(guestJ).accept(await E(invIJ).locate(), 'i');
+
+    // J, an accepted guest, now extends its OWN invitation to K.
+    const invJK = await E(guestJ).invite('k');
+    await E(guestK).accept(await E(invJK).locate(), 'j');
+
+    t.truthy(await E(guestI).identify('j'));
+    t.truthy(await E(guestJ).identify('i'));
+    t.truthy(await E(guestJ).identify('k'));
+    t.truthy(await E(guestK).identify('j'));
+
+    // Mail flows along each hop of the chain.
+    await E(guestI).send('j', ['I to J'], [], []);
+    await E(guestJ).send('k', ['J to K'], [], []);
+
+    const messagesForJ = await E(guestJ).listMessages();
+    t.true(
+      messagesForJ.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'I to J',
+      ),
+      "J received I's message",
+    );
+    const messagesForK = await E(guestK).listMessages();
+    t.true(
+      messagesForK.some(
+        message =>
+          message.type === 'package' && message.strings?.[0] === 'J to K',
+      ),
+      "K received J's message",
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'accept keeps distinct result names for paths that a naive join would collide',
+  async t => {
+    const hostA = await prepareHostWithTestNetwork(t);
+    const hostB = await prepareHostWithTestNetwork(t);
+
+    // `['team-a', 'bob']` and `['team', 'a-bob']` flatten to the same string
+    // under a bare `path.join('-')`. Acceptance retains each connection at its
+    // actual directory path, without deriving a second flattened pin key.
+    await E(hostA).makeDirectory('team-a');
+    await E(hostA).makeDirectory('team');
+
+    const invitation1 = await E(hostA).invite(['team-a', 'bob']);
+    const invitation2 = await E(hostA).invite(['team', 'a-bob']);
+
+    await E(hostB).accept(await E(invitation1).locate(), 'peer-1');
+    await E(hostB).accept(await E(invitation2).locate(), 'peer-2');
+
+    const firstId = await E(hostA).identify('team-a', 'bob');
+    const secondId = await E(hostA).identify('team', 'a-bob');
+    t.truthy(firstId);
+    t.truthy(secondId);
+    await E(hostA).remove('team-a', 'bob');
+    t.is(await E(hostA).identify('team-a', 'bob'), undefined);
+    t.is(await E(hostA).identify('team', 'a-bob'), secondId);
+
+    // No implicit invitation-retention pin is necessary or created.
+    const retentionPins = [...(await E(hostA).list('@pins'))].filter(name =>
+      name.startsWith('guest-'),
+    );
+    t.deepEqual(retentionPins, []);
+  },
+);
 
 test('reverse locate local value', async t => {
   const { host } = await prepareHost(t);
@@ -4386,6 +7006,267 @@ test('form multi-submission: same form submitted twice produces two value messag
   t.is(value2.replyTo, formMsg.messageId);
 });
 
+/**
+ * @param {any} agent
+ */
+const listValueMessages = async agent => {
+  const messages = await E(agent).listMessages();
+  return messages.filter(message => message.type === 'value');
+};
+
+/**
+ * Guest sends the host a one-field form; returns the host's form message.
+ *
+ * @param {any} host
+ * @param {any} guest
+ */
+const sendAnswerForm = async (host, guest) => {
+  const hostIterator = iterateReader(E(host).followMessages());
+  await E(guest).form(
+    '@host',
+    'Once',
+    harden([{ name: 'answer', label: 'Answer' }]),
+  );
+  const { value: formMsg } = await hostIterator.next();
+  return formMsg;
+};
+
+test('submitOnce sends one answer per attempt', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  const first = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'first' }),
+    'attempt-1',
+  );
+  t.true(first.first);
+  t.is(typeof first.messageId, 'string');
+
+  // Same attempt, even with other values: the first answer, nothing sent.
+  const again = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'changed' }),
+    'attempt-1',
+  );
+  t.false(again.first);
+  t.is(again.messageId, first.messageId);
+
+  const guestValues = await listValueMessages(guest);
+  t.is(guestValues.length, 1);
+  t.is(guestValues[0].messageId, first.messageId);
+  t.is(guestValues[0].replyTo, formMsg.messageId);
+  t.is((await listValueMessages(host)).length, 1);
+
+  // Another attempt is another answer.
+  const other = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'second' }),
+    'attempt-2',
+  );
+  t.true(other.first);
+  t.not(other.messageId, first.messageId);
+  t.is((await listValueMessages(guest)).length, 2);
+});
+
+test('submitOnce with concurrent calls of one attempt sends once', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  const results = await Promise.all(
+    [1, 2, 3].map(() =>
+      E(host).submitOnce(formMsg.number, harden({ answer: 'x' }), 'same'),
+    ),
+  );
+  t.is(results.filter(result => result.first).length, 1);
+  t.is(new Set(results.map(result => result.messageId)).size, 1);
+  t.is((await listValueMessages(guest)).length, 1);
+});
+
+test('submitOnce retry after the sent copy is lost delivers no second answer', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  const first = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'only' }),
+    'cut',
+  );
+
+  // The state a crash between delivery and the sent copy leaves: the attempt
+  // is kept and the form's sender holds the answer, but the member's mailbox
+  // has no sent copy.
+  const [sentCopy] = await listValueMessages(host);
+  await E(host).dismiss(sentCopy.number);
+  t.is((await listValueMessages(host)).length, 0);
+
+  const retry = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'only' }),
+    'cut',
+  );
+  t.false(retry.first);
+  t.is(retry.messageId, first.messageId);
+
+  const guestValues = await listValueMessages(guest);
+  t.is(guestValues.length, 1, 'the sender holds one answer');
+  const hostValues = await listValueMessages(host);
+  t.is(hostValues.length, 1, 'the member holds its sent copy again');
+  t.is(hostValues[0].messageId, first.messageId);
+});
+
+test('submitOnce retry after the sender dismissed the answer sends nothing', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  const first = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'only' }),
+    'read',
+  );
+  const [received] = await listValueMessages(guest);
+  await E(guest).dismiss(received.number);
+  // And the member's sent copy is missing, as after a crash between
+  // delivery and the sent copy.
+  const [sentCopy] = await listValueMessages(host);
+  await E(host).dismiss(sentCopy.number);
+
+  const retry = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'only' }),
+    'read',
+  );
+  t.false(retry.first);
+  t.is(retry.messageId, first.messageId);
+  t.is(
+    (await listValueMessages(guest)).length,
+    0,
+    'the dismissed answer is not delivered again',
+  );
+  t.is((await listValueMessages(host)).length, 1);
+});
+
+test('submitOnce attempts survive a daemon restart', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  /** @type {bigint} */
+  let formNumber;
+  /** @type {string} */
+  let messageId;
+  {
+    const { host } = await makeHost(config, cancelled);
+    const guest = await E(host).provideGuest('guest', {
+      agentName: 'guest-agent',
+    });
+    const formMsg = await sendAnswerForm(host, guest);
+    formNumber = formMsg.number;
+    ({ messageId } = await E(host).submitOnce(
+      formNumber,
+      harden({ answer: 'before' }),
+      'durable',
+    ));
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const retry = await E(host).submitOnce(
+      formNumber,
+      harden({ answer: 'after' }),
+      'durable',
+    );
+    t.false(retry.first);
+    t.is(retry.messageId, messageId);
+    const guest = await E(host).lookup('guest-agent');
+    const guestValues = await listValueMessages(guest);
+    t.is(guestValues.length, 1);
+    t.is(guestValues[0].messageId, messageId);
+  }
+});
+
+test('submitOnce refuses a malformed attempt', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  for (const attempt of ['', 'a/b', 'x'.repeat(129), 'sp ace']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        E(host).submitOnce(formMsg.number, harden({ answer: 'a' }), attempt),
+      { message: /Invalid attempt/ },
+    );
+  }
+  t.is((await listValueMessages(guest)).length, 0);
+});
+
+test('submitOnce refuses an attempt that already answered another form', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formA = await sendAnswerForm(host, guest);
+  await E(guest).form(
+    '@host',
+    'Twice',
+    harden([{ name: 'answer', label: 'Answer' }]),
+  );
+  const forms = (await E(host).listMessages()).filter(
+    message => message.type === 'form',
+  );
+  t.is(forms.length, 2);
+  const formB = forms[1];
+  t.not(formB.messageId, formA.messageId);
+
+  const first = await E(host).submitOnce(
+    formA.number,
+    harden({ answer: 'a' }),
+    'shared',
+  );
+  t.true(first.first);
+  await t.throwsAsync(
+    () => E(host).submitOnce(formB.number, harden({ answer: 'b' }), 'shared'),
+    { message: /already answered another form/ },
+  );
+  const guestValues = await listValueMessages(guest);
+  t.is(guestValues.length, 1);
+  t.is(guestValues[0].replyTo, formA.messageId);
+});
+
+test('submitOnce attempts go with their dismissed form, and are bounded per form', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  const formMsg = await sendAnswerForm(host, guest);
+
+  for (let i = 0; i < 64; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(host).submitOnce(formMsg.number, harden({ answer: 'a' }), `a${i}`);
+  }
+  await t.throwsAsync(
+    () => E(host).submitOnce(formMsg.number, harden({ answer: 'a' }), 'a64'),
+    { message: /already holds 64 attempts/ },
+  );
+  // A known attempt still answers at the bound.
+  const known = await E(host).submitOnce(
+    formMsg.number,
+    harden({ answer: 'a' }),
+    'a0',
+  );
+  t.false(known.first);
+  t.is((await listValueMessages(guest)).length, 64);
+
+  await E(host).dismiss(formMsg.number);
+  // The attempt went with the form: a retry finds neither.
+  await t.throwsAsync(
+    () => E(host).submitOnce(formMsg.number, harden({ answer: 'a' }), 'a0'),
+    { message: /No such message/ },
+  );
+  t.is((await listValueMessages(guest)).length, 64);
+});
+
 test('form field patterns survive a daemon restart', async t => {
   const { cancelled, config } = await prepareConfig(t);
 
@@ -4701,7 +7582,7 @@ test('form value message @value is addressable via @mail/N/@value', async t => {
  * @param {string} content
  */
 const makeFarBlob = content => {
-  const bytes = new TextEncoder().encode(content);
+  const bytes = encodeUtf8(content);
   return bytesReaderFromIterator([bytes]);
 };
 
@@ -4732,9 +7613,7 @@ const makeFarTree = children => {
 test('locateContent resolves a readable-blob to an xt-only magnet URN', async t => {
   const { host } = await prepareHost(t);
   const payload = 'content-locator payload\n';
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode(payload),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8(payload)]);
   await E(host).storeBlob(readerRef, 'payload-blob');
 
   const contentLocator = await E(host).locateContent('payload-blob');
@@ -4767,9 +7646,7 @@ test('locateContent returns undefined for an unknown name', async t => {
 
 test('storeContent returns the same xt-only locator as locateContent', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('publish me\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('publish me\n')]);
   await E(host).storeBlob(readerRef, 'to-publish');
   const located = await E(host).locateContent('to-publish');
   const stored = await E(host).storeContent('to-publish');
@@ -4791,9 +7668,7 @@ test('storeContent rejects a non-content formula', async t => {
 
 test('reverseLocateContent finds the pet names for a content locator', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('reverse me\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('reverse me\n')]);
   await E(host).storeBlob(readerRef, 'reverse-blob');
   const contentLocator = await E(host).locateContent('reverse-blob');
   const names = await E(host).reverseLocateContent(contentLocator);
@@ -4802,9 +7677,7 @@ test('reverseLocateContent finds the pet names for a content locator', async t =
 
 test('reverseLocateContent returns all matching names, deduped and sorted', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('shared content\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('shared content\n')]);
   await E(host).storeBlob(readerRef, 'zeta-name');
   // A second pet name for the same content formula (same content identity).
   await E(host).copy(['zeta-name'], ['alpha-name']);
@@ -4815,9 +7688,7 @@ test('reverseLocateContent returns all matching names, deduped and sorted', asyn
 
 test('reverseLocateContent returns an empty array when no content matches', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('lonely\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('lonely\n')]);
   await E(host).storeBlob(readerRef, 'lonely-blob');
   const contentLocator = await E(host).locateContent('lonely-blob');
   await E(host).remove('lonely-blob');
@@ -4837,9 +7708,7 @@ test('internalizeContentLocator rejects a malformed content locator', async t =>
 test('listContent lists only content-bearing entries', async t => {
   const { host } = await prepareHost(t);
   await E(host).storeValue(10, 'ten');
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('listed\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('listed\n')]);
   await E(host).storeBlob(readerRef, 'listed-blob');
   const record = await E(host).listContent();
   t.true('listed-blob' in record);
@@ -4849,9 +7718,7 @@ test('listContent lists only content-bearing entries', async t => {
 
 test('internalizeContentLocator parses a content locator', async t => {
   const { host } = await prepareHost(t);
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('parse me\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('parse me\n')]);
   await E(host).storeBlob(readerRef, 'parse-blob');
   const contentLocator = await E(host).locateContent('parse-blob');
   const internalized = await E(host).internalizeContentLocator(contentLocator);
@@ -4882,9 +7749,7 @@ test('a guest carries the content-locate family', async t => {
   const guest = await E(host).provideGuest('guest', {
     agentName: 'guest-agent',
   });
-  const readerRef = bytesReaderFromIterator([
-    new TextEncoder().encode('guest blob\n'),
-  ]);
+  const readerRef = bytesReaderFromIterator([encodeUtf8('guest blob\n')]);
   await E(host).storeBlob(readerRef, 'guest-blob');
   await E(host).move(['guest-blob'], ['guest-agent', 'guest-blob']);
   const contentLocator = await E(guest).locateContent('guest-blob');
@@ -4893,7 +7758,7 @@ test('a guest carries the content-locate family', async t => {
 
 test('HTTP web-seed loads and verifies a readable blob', async t => {
   const { host, config } = await prepareHost(t);
-  const originalBytes = new TextEncoder().encode('web-seed payload\n');
+  const originalBytes = encodeUtf8('web-seed payload\n');
   await E(host).storeBlob(bytesReaderFromIterator([originalBytes]), 'original');
   const originalLocator = await E(host).locateContent('original');
   const { hash } = parseContentLocator(originalLocator);
@@ -4904,7 +7769,7 @@ test('HTTP web-seed loads and verifies a readable blob', async t => {
   // The first source deliberately serves another valid blob. `loadContent`
   // must reject it on the xt mismatch and continue to the second web seed.
   await E(host).storeBlob(
-    bytesReaderFromIterator([new TextEncoder().encode('wrong payload\n')]),
+    bytesReaderFromIterator([encodeUtf8('wrong payload\n')]),
     'wrong',
   );
   const wrongLocator = await E(host).locateContent('wrong');
@@ -5462,10 +8327,8 @@ test('provideGit tree exposes immutable commit contents', async t => {
   const main = await E(tree).lookup(['src', 'main.js']);
   t.is(await E(main).text(), 'export default 1;\n');
 
-  // GitBlob exposes the rich BlobRef range-I/O surface (getInfo + fetch).
-  const mainInfo = await E(main).getInfo();
-  t.is(mainInfo.algorithm, 'sha256');
-  t.is(mainInfo.size, 18n); // 'export default 1;\n'
+  // GitBlob exposes the rich BlobRef named-read surface.
+  t.is(await E(main).size(), 18n); // 'export default 1;\n'
   /** @param {any} reader */
   const collectText = async reader => {
     const chunks = [];
@@ -5479,10 +8342,10 @@ test('provideGit tree exposes immutable commit contents', async t => {
       out.set(c, off);
       off += c.length;
     }
-    return new TextDecoder().decode(out);
+    return decodeUtf8(out);
   };
-  t.is(await collectText(await E(main).fetch(0n, 6n)), 'export');
-  t.is(await collectText(await E(main).fetch(0n, 18n)), 'export default 1;\n');
+  t.is(await E(await E(main).byteRange(0n, 6n)).text(), 'export');
+  t.is(await collectText(await E(main).bytes()), 'export default 1;\n');
 
   await fs.promises.writeFile(
     path.join(repoPath, 'src', 'main.js'),
@@ -6148,6 +9011,67 @@ test('provideSubMount read-only attenuation confines writes', async t => {
   // Cross-reference: the backing directory is untouched on disk.
   const actual = await fs.promises.readdir(path.join(mountPath, 'src'));
   t.deepEqual(actual, ['main.js']);
+});
+
+test('provideSubMount takes the parent as a capability and refuses a derived view', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-cap');
+  await createMountFixture(mountPath, {
+    'index.html': '<p>hello</p>\n',
+  });
+
+  // A holder that was handed the mount, not its name: another agent.
+  const parent = await E(host).provideMount(mountPath, 'submount-cap-parent');
+  const holder = await E(host).provideHost('submount-cap-holder');
+  t.false(await E(holder).has('submount-cap-parent'));
+
+  const child = await E(holder).provideSubMount(parent, [], 'retained', {
+    readOnly: true,
+  });
+  t.deepEqual(await E(child).list(), ['index.html']);
+  await t.throwsAsync(E(child).writeText(['added.html'], 'nope'), {
+    message: /read-only/,
+  });
+  // It is named where the holder asked, so the holder retains it.
+  t.true(await E(holder).has('retained'));
+  const again = await E(holder).lookup(['retained']);
+  t.is(await E(await E(again).lookup('index.html')).text(), '<p>hello</p>\n');
+
+  // A view derived from the mount has no formula and cannot be a parent:
+  // what is retained must be something the daemon can revive.
+  const view = await E(parent).readOnly();
+  await t.throwsAsync(
+    E(holder).provideSubMount(view, [], 'from-view', { readOnly: true }),
+    { message: /daemon-minted mount cap/ },
+  );
+  t.false(await E(holder).has('from-view'));
+});
+
+test('provideSubMount carries the parent deny list into the child', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-deny');
+  await createMountFixture(mountPath, {
+    'index.html': '<p>hello</p>\n',
+    'secrets/key.pem': 'PRIVATE\n',
+  });
+  const parent = await E(host).provideMount(mountPath, 'submount-deny-parent', {
+    deniedSegments: ['secrets'],
+  });
+  await t.throwsAsync(E(parent).lookup(['secrets', 'key.pem']));
+
+  const child = await E(host).provideSubMount(
+    parent,
+    [],
+    'submount-deny-child',
+    {
+      readOnly: true,
+    },
+  );
+  t.is(await E(await E(child).lookup('index.html')).text(), '<p>hello</p>\n');
+  await t.throwsAsync(E(child).lookup(['secrets', 'key.pem']));
+  t.false((await E(child).list()).includes('secrets'));
 });
 
 test('provideSubMount isolates the child from parent siblings', async t => {
@@ -7349,6 +10273,75 @@ testNeedsNodeWorker(
   },
 );
 
+testNeedsNodeWorker.serial(
+  'failed caplet publication does not formulate its fresh native worker',
+  async t => {
+    t.timeout(30_000);
+    const { host, config } = await prepareHost(t, 'pub');
+    const modulePath = path.join(dirname, 'test', 'move-hub.js');
+    await t.throwsAsync(
+      () =>
+        E(host).makeUnconfined('unpublished-worker', modulePath, {
+          powersName: '@none',
+          resultName: ['missing-parent', 'client'],
+        }),
+      { message: /missing-parent/ },
+    );
+    // Worker-name publication is a separate deferred task and can succeed
+    // before result-name publication fails. The retained identity must not
+    // have acquired a process: no worker formula was persisted/evaluated.
+    const workerId = await E(host).identify('unpublished-worker');
+    t.is(typeof workerId, 'string');
+    t.false(formulaExistsInDb(config.statePath, workerId));
+
+    await E(host).makeUnconfined('published-worker', modulePath, {
+      powersName: '@none',
+      resultName: 'published-client',
+    });
+    const publishedWorkerId = await E(host).identify('published-worker');
+    const clientId = await E(host).identify('published-client');
+    t.like(readFormulaFromDb(config.statePath, publishedWorkerId), {
+      type: 'worker',
+      kind: 'node',
+      label: 'published-worker',
+    });
+    t.like(readFormulaFromDb(config.statePath, clientId), {
+      type: 'make-unconfined',
+      worker: publishedWorkerId,
+    });
+    t.not(publishedWorkerId, await E(host).identify('@node'));
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'failed caplet publication releases automatic powers construction pins',
+  async t => {
+    const { host, config } = await prepareHost(t, 'pins');
+    await E(host).provideGuest('retained-control');
+    const controlId = await E(host).identify('retained-control');
+    await t.throwsAsync(
+      E(host).makeUnconfined(
+        'failed-worker',
+        path.join(dirname, 'test', 'move-hub.js'),
+        {
+          powersName: 'failed-powers',
+          resultName: ['missing-parent', 'client'],
+        },
+      ),
+      { message: /missing-parent/ },
+    );
+    const powersId = await E(host).identify('failed-powers');
+    t.is(typeof powersId, 'string');
+    const powers = readFormulaFromDb(config.statePath, powersId);
+    const workerId = powers.worker;
+    t.true(formulaExistsInDb(config.statePath, workerId));
+    await E(host).remove('failed-powers');
+    t.false(formulaExistsInDb(config.statePath, powersId));
+    t.false(formulaExistsInDb(config.statePath, workerId));
+    t.true(formulaExistsInDb(config.statePath, controlId));
+  },
+);
+
 test('Phase 6: guest.lookup("@node") rejects', async t => {
   const { host } = await prepareHost(t);
 
@@ -7849,5 +10842,271 @@ test.serial(
     t.true((await messages.return()).done);
     t.true((await pendingName).done);
     t.true((await pendingMessage).done);
+  },
+);
+
+test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir');
+  await E(host).storeValue(1, 'one-src');
+  await E(host).storeValue(2, 'two-src');
+  const oneId = await E(host).identify('one-src');
+  const twoId = await E(host).identify('two-src');
+  await E(directory).storeIdentifier(['one'], oneId);
+  await E(directory).storeIdentifier(['two'], twoId);
+
+  const readOnlyDirectory = await E(directory).readOnly();
+
+  // Reads round-trip against the backing directory.
+  t.deepEqual([...(await E(readOnlyDirectory).list())].sort(), ['one', 'two']);
+  t.true(await E(readOnlyDirectory).has('one'));
+  t.false(await E(readOnlyDirectory).has('absent'));
+  t.is(
+    await E(readOnlyDirectory).lookup('one'),
+    await E(directory).lookup('one'),
+  );
+  t.is(await E(readOnlyDirectory).maybeLookup('absent'), undefined);
+
+  // The read-only view exposes no mutators at all. The expectation pins "no
+  // such method" by name, so a passing assertion cannot be a coincidental
+  // unrelated rejection (a dead worker, a formulation failure).
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).storeIdentifier(['three'], oneId),
+    { message: /storeIdentifier/ },
+    'storeIdentifier is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).remove('one'),
+    { message: /remove/ },
+    'remove is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).makeDirectory('nested'),
+    { message: /makeDirectory/ },
+    'makeDirectory is not available on a read-only view',
+  );
+
+  // Malformed arguments are rejected at THIS boundary by the ReadableNameHub
+  // interface guard (makeExo), not only downstream at the backing directory.
+  // `lookup` requires a string or string[]; a number must be refused by the
+  // guard before it forwards. This is the behavioral proof the interface
+  // guard is live on the guest-facing view.
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).lookup(42),
+    { message: /ReadableNameHub/ },
+    'a wrong-typed argument is rejected at the read-only exo boundary',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).has(42),
+    { message: /ReadableNameHub/ },
+    'has rejects a non-string path segment at the exo boundary',
+  );
+
+  // A live write to the backing directory is observable through the view,
+  // confirming it is a live attenuation rather than a snapshot.
+  await E(host).storeValue(3, 'three-src');
+  const threeId = await E(host).identify('three-src');
+  await E(directory).storeIdentifier(['three'], threeId);
+  t.true(await E(readOnlyDirectory).has('three'));
+});
+
+test('EndoDirectory.readOnly() attenuation is shallow: nested directories are handed out live and writable', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir-shallow');
+  // A nested directory under the backing directory.
+  const nested = await E(directory).makeDirectory('nested');
+  await E(host).storeValue(1, 'seed-src');
+  const seedId = await E(host).identify('seed-src');
+  await E(nested).storeIdentifier(['seed'], seedId);
+
+  const readOnlyDirectory = await E(directory).readOnly();
+
+  // Looking the nested directory up THROUGH the read-only view returns the
+  // live, fully-writable nested directory — NOT a further read-only view. This
+  // is the security-relevant half of the documented contract: attenuation is
+  // shallow, so a holder of the read-only view can mutate one level down.
+  const nestedViaView = await E(readOnlyDirectory).lookup('nested');
+  await E(host).storeValue(2, 'added-src');
+  const addedId = await E(host).identify('added-src');
+  // The write through the looked-up nested directory succeeds — proving it is
+  // the live capability, not a read-only attenuation.
+  await t.notThrowsAsync(
+    E(/** @type {any} */ (nestedViaView)).storeIdentifier(['added'], addedId),
+    'a nested directory reached through the read-only view is writable',
+  );
+  // And the write is observable back through the view's nested lookup.
+  t.true(await E(/** @type {any} */ (nestedViaView)).has('added'));
+  t.true(await E(nested).has('added'));
+});
+
+test('EndoDirectory.readOnly() is memoized: repeated calls return the same view', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir-memo');
+  const first = await E(directory).readOnly();
+  const second = await E(directory).readOnly();
+  // Memoized per directory: the same capability is returned each call, rather
+  // than minting a fresh worker + formula per invocation.
+  t.is(first, second);
+});
+
+test('mailHub.readOnly() mirrors reads and rejects every mutator', async t => {
+  // The mailbox hub (`@mail`) is one of the two guest-reachable `readOnly()`
+  // call sites in manager.js; its view is minted eagerly at hub construction
+  // from scope-captured has/list/lookup/maybeLookup, so this pins that closure
+  // capture and the guard round-trip through `makeExo` — not just the shared
+  // factory the unit test exercises in isolation.
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+  const hostMessages = iterateReader(E(host).followMessages());
+  await E(guest).send('@host', ['hello'], [], []);
+  await hostMessages.next();
+
+  const mailHub = await E(host).lookup(['@mail']);
+  const readOnlyMail = await E(mailHub).readOnly();
+
+  // Reads round-trip against the backing mailbox hub.
+  const names = [...(await E(readOnlyMail).list())];
+  t.true(Array.isArray(names));
+
+  // No mutator survives on the view (they are present-but-throwing on the hub,
+  // absent entirely on the read-only view).
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMail)).remove('1'),
+    { message: /remove/ },
+    'remove is not available on the mailbox read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMail)).makeDirectory('nested'),
+    { message: /makeDirectory/ },
+    'makeDirectory is not available on the mailbox read-only view',
+  );
+  // The interface guard is live on this call site too: a wrong-typed argument
+  // is rejected at the view boundary.
+  await t.throwsAsync(E(/** @type {any} */ (readOnlyMail)).lookup(42), {
+    message: /ReadableNameHub/,
+  });
+});
+
+test('messageHub.readOnly() mirrors reads and rejects every mutator', async t => {
+  // The per-message hub (`@mail/<number>`) is the second guest-reachable
+  // `readOnly()` call site in manager.js. Same eager-mint shape as the mailbox
+  // hub, exercised here through a real daemon.
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+  const hostMessages = iterateReader(E(host).followMessages());
+  await E(guest).send('@host', ['hello'], [], []);
+  const { value: hostMessage } = await hostMessages.next();
+  await E(host).reply(hostMessage.number, ['hi'], [], []);
+  const { value: replyMessage } = await hostMessages.next();
+
+  const messageHub = await E(host).lookup([
+    '@mail',
+    String(replyMessage.number),
+  ]);
+  const readOnlyMessage = await E(messageHub).readOnly();
+
+  const names = [...(await E(readOnlyMessage).list())];
+  t.true(names.includes('@from'));
+
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyMessage)).remove('@from'),
+    { message: /remove/ },
+    'remove is not available on the message read-only view',
+  );
+  await t.throwsAsync(E(/** @type {any} */ (readOnlyMessage)).has(42), {
+    message: /ReadableNameHub/,
+  });
+});
+
+test('EndoHost/EndoGuest do not carry readOnly() at runtime today', async t => {
+  // `EndoAgent extends EndoDirectory` at the type level and `EndoDirectory.readOnly`
+  // is declared optional, but the agent guards (GuestInterface/HostInterface) do
+  // NOT spread `readOnly`, so `E(host).readOnly()` / `E(guest).readOnly()` reject.
+  // This pins that documented gap: a future accidental widening of the agent
+  // interfaces to include `readOnly` would redden here rather than silently ship.
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  await t.throwsAsync(
+    E(/** @type {any} */ (host)).readOnly(),
+    { message: /readOnly/ },
+    'readOnly is not on the host agent interface',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (guest)).readOnly(),
+    { message: /readOnly/ },
+    'readOnly is not on the guest agent interface',
+  );
+});
+test.serial(
+  'fresh concurrent directories collect after removal without a restart',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const { host } = await makeHost(config, cancelled);
+    const directories = await Promise.all(
+      ['first', 'second', 'third'].map(async name => {
+        const directory = await E(host).makeDirectory(name);
+        await E(directory).writeText('value', name);
+        const id = await E(host).identify(name);
+        const formula = readFormulaFromDb(config.statePath, id);
+        const valueId = await E(directory).identify('value');
+        return { name, directory, ids: [id, formula.petStore, valueId] };
+      }),
+    );
+    for (const { ids } of directories) {
+      for (const id of ids) t.true(formulaExistsInDb(config.statePath, id));
+    }
+    const [first, ...siblings] = directories;
+    await E(host).remove(first.name);
+    for (const id of first.ids)
+      t.false(formulaExistsInDb(config.statePath, id));
+    for (const { name, directory, ids } of siblings) {
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(directory).readText('value'), name);
+      for (const id of ids) t.true(formulaExistsInDb(config.statePath, id));
+    }
+    await Promise.all(siblings.map(({ name }) => E(host).remove(name)));
+    for (const { ids } of siblings) {
+      for (const id of ids) t.false(formulaExistsInDb(config.statePath, id));
+    }
+  },
+);
+
+test.serial(
+  'fresh agent directory dependencies collect with their owning agents',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const { host } = await makeHost(config, cancelled);
+    const [child, guest] = await Promise.all([
+      E(host).provideHost('child-handle', { agentName: 'child-agent' }),
+      E(host).provideGuest('guest-handle', { agentName: 'guest-agent' }),
+    ]);
+    const directoryIds = await Promise.all([
+      E(child).identify('@planes'),
+      E(guest).identify('@nets'),
+      E(guest).identify('@planes'),
+    ]);
+    const ids = directoryIds.flatMap(id => [
+      id,
+      readFormulaFromDb(config.statePath, id).petStore,
+    ]);
+    for (const id of ids) t.true(formulaExistsInDb(config.statePath, id));
+    await Promise.all(
+      ['child-handle', 'child-agent', 'guest-handle', 'guest-agent'].map(name =>
+        E(host).remove(name),
+      ),
+    );
+    await waitForCondition(() =>
+      ids.every(id => !formulaExistsInDb(config.statePath, id)),
+    );
+    for (const id of ids) t.false(formulaExistsInDb(config.statePath, id));
+    // Bootstrap dependencies remain retained by the rooted Endo/host formulas.
+    for (const name of ['@planes', '@nets', '@pins']) {
+      // eslint-disable-next-line no-await-in-loop
+      const directory = await E(host).lookup(name);
+      // eslint-disable-next-line no-await-in-loop
+      t.true(Array.isArray(await E(directory).list()));
+    }
   },
 );

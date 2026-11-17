@@ -114,7 +114,7 @@ Out of scope:
 | `copy` | yes | no | mount has no copy, by design |
 | `readText`, `maybeReadText`, `writeText` | no (delegated to mount via `DirectoryInterface`) | yes | mount-only |
 | `makeDirectory` | no (in `DirectoryInterface`) | yes | mount-only |
-| `readOnly`, `snapshot` | no | yes | mount-only |
+| `readOnly`, `snapshot` | no (but see note) | yes | `snapshot` mount-only; `readOnly` since extended to `EndoDirectory` |
 
 Two columns make `EndoMount` stand apart:
 
@@ -315,7 +315,13 @@ method name in the same way.
   and a sub-mount for directories; neither is a `NameHub`.
   Nested hub-walking through a mount terminates at a leaf the
   way it does at a `ReadableTree`.
-- `readOnly()` and `snapshot()` stay mount-specific.
+- `snapshot()` stays mount-specific. `readOnly()` was mount-specific when
+  this design was written, but the #1125 read-only-directory-attenuation
+  slice subsequently added an `EndoDirectory.readOnly()` that mints a
+  shallow, read-only `ReadableNameHub` view (see "Read-only attenuation"
+  below). It is a distinct, shallower contract from `EndoMount.readOnly()`
+  (async and one-hop, versus the mount's sync recursive narrowing), not a
+  unification of the two.
 
 ## Alternatives Considered
 
@@ -479,7 +485,11 @@ the dispatching consumer treats them differently because they
 
 `EndoMount.readOnly()` returns a read-only mount that retains
 read methods and rejects write methods.
-A read-only `NameHub` is not a thing today.
+A read-only `NameHub` was not a thing when this design was written;
+the #1125 read-only-directory-attenuation slice has since introduced
+one — `EndoDirectory.readOnly()` mints a `ReadableNameHub` view
+conforming to `ReadableNameHubInterface`, exactly the read subset this
+section anticipated.
 If `MountInterface` becomes a superset of `NameHubInterface`,
 `readOnly()`'s return type has to satisfy the read subset of
 `NameHubInterface` plus the read mount methods, which the

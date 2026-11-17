@@ -4,7 +4,7 @@ import harden from '@endo/harden';
 import { h, Fragment } from 'preact';
 
 /** @import { VNode } from 'preact' */
-/** @import { FlootState, FlootController, FlootVoiceState, FlootSafeEvent } from './types.js' */
+/** @import { FlootState, FlootController, FlootVoiceState } from './types.js' */
 
 // The VAD level meter (shown only while the mic is open). The host pre-scales
 // the level / noise-floor / threshold to 0..100 percentages so the view stays
@@ -32,15 +32,7 @@ const VadMeter = (/** @type {FlootVoiceState} */ voice) =>
  * @returns {VNode}
  */
 export const ComposeBar = ({ state, controller }) => {
-  const { input, busy, voice } = state;
-
-  const onKeyDown = (/** @type {FlootSafeEvent} */ e) => {
-    // Enter sends; Shift+Enter inserts a newline.
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      controller.send();
-    }
-  };
+  const { busy, voice } = state;
 
   const micButton =
     voice && voice.hasMic
@@ -49,8 +41,9 @@ export const ComposeBar = ({ state, controller }) => {
           {
             type: 'button',
             class: `floot-mic${voice.micActive ? ' listening' : ''}${
-              voice.speaking ? ' recording' : ''
-            }${voice.micError ? ' error' : ''}`,
+              voice.micActive && voice.speaking ? ' recording' : ''
+            }${voice.micError ? ' floot-mic-error' : ''}`,
+            'aria-pressed': voice.micActive,
             'aria-label': voice.micActive
               ? 'Stop listening'
               : 'Start listening',
@@ -92,15 +85,7 @@ export const ComposeBar = ({ state, controller }) => {
     h(
       'div',
       { class: 'floot-compose' },
-      h('textarea', {
-        class: 'floot-input',
-        rows: 1,
-        placeholder: 'Message Floot…',
-        value: input || '',
-        onInput: (/** @type {FlootSafeEvent} */ e) =>
-          controller.setInput(e.target.value),
-        onKeyDown,
-      }),
+      h('div', { class: 'floot-composer-anchor', 'data-floot-composer': '' }),
       micButton,
       speakerButton,
       h(
@@ -108,6 +93,12 @@ export const ComposeBar = ({ state, controller }) => {
         {
           type: 'button',
           class: `floot-send${busy ? ' cancel' : ''}`,
+          disabled:
+            !busy &&
+            (state.unavailable ||
+              state.network?.changing ||
+              state.network?.blocked ||
+              state.recovery?.resolving),
           'aria-label': busy ? 'Stop' : 'Send',
           onClick: () => (busy ? controller.stop() : controller.send()),
         },

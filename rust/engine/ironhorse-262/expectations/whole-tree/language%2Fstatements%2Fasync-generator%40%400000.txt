@@ -46,8 +46,8 @@ language/statements/async-generator/rest-param-strict-body.js sloppy pass
 language/statements/async-generator/rest-param-strict-body.js strict pass
 language/statements/async-generator/rest-params-trailing-comma-early-error.js sloppy pass
 language/statements/async-generator/rest-params-trailing-comma-early-error.js strict pass
-language/statements/async-generator/return-undefined-implicit-and-explicit.js sloppy skip:async:reported-failure
-language/statements/async-generator/return-undefined-implicit-and-explicit.js strict skip:async:reported-failure
+language/statements/async-generator/return-undefined-implicit-and-explicit.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [tick 1, tick 2, g1 ret, g2 ret] and expected [tick 1, g1 ret, g2 ret, tick 2, g3 ret, g4 ret] should have the same contents. Ticks for implicit and explicit return undefined (the oracle completed)"
+language/statements/async-generator/return-undefined-implicit-and-explicit.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [tick 1, tick 2, g1 ret, g2 ret] and expected [tick 1, g1 ret, g2 ret, tick 2, g3 ret, g4 ret] should have the same contents. Ticks for implicit and explicit return undefined (the oracle completed)"
 language/statements/async-generator/unscopables-with-in-nested-fn.js sloppy pass
 language/statements/async-generator/unscopables-with.js sloppy pass
 language/statements/async-generator/yield-as-binding-identifier-escaped.js sloppy pass
@@ -68,18 +68,18 @@ language/statements/async-generator/yield-identifier-spread-strict.js strict pas
 language/statements/async-generator/yield-identifier-strict.js strict pass
 language/statements/async-generator/yield-promise-reject-next-catch.js sloppy pass
 language/statements/async-generator/yield-promise-reject-next-catch.js strict pass
-language/statements/async-generator/yield-promise-reject-next-for-await-of-async-iterator.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-promise-reject-next-for-await-of-async-iterator.js strict skip:async:reported-failure
+language/statements/async-generator/yield-promise-reject-next-for-await-of-async-iterator.js sloppy pass
+language/statements/async-generator/yield-promise-reject-next-for-await-of-async-iterator.js strict pass
 language/statements/async-generator/yield-promise-reject-next-for-await-of-sync-iterator.js sloppy pass
 language/statements/async-generator/yield-promise-reject-next-for-await-of-sync-iterator.js strict pass
-language/statements/async-generator/yield-promise-reject-next-yield-star-async-iterator.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-promise-reject-next-yield-star-async-iterator.js strict skip:async:reported-failure
+language/statements/async-generator/yield-promise-reject-next-yield-star-async-iterator.js sloppy pass
+language/statements/async-generator/yield-promise-reject-next-yield-star-async-iterator.js strict pass
 language/statements/async-generator/yield-promise-reject-next-yield-star-sync-iterator.js sloppy pass
 language/statements/async-generator/yield-promise-reject-next-yield-star-sync-iterator.js strict pass
 language/statements/async-generator/yield-promise-reject-next.js sloppy pass
 language/statements/async-generator/yield-promise-reject-next.js strict pass
-language/statements/async-generator/yield-return-then-getter-ticks.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-return-then-getter-ticks.js strict skip:async:reported-failure
+language/statements/async-generator/yield-return-then-getter-ticks.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [start, tick 1, get then, tick 2, get then] and expected [start, tick 1, get then, tick 2] should have the same contents. Ticks for return with thenable getter (the oracle completed)"
+language/statements/async-generator/yield-return-then-getter-ticks.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: Actual [start, tick 1, get then, tick 2, get then] and expected [start, tick 1, get then, tick 2] should have the same contents. Ticks for return with thenable getter (the oracle completed)"
 language/statements/async-generator/yield-spread-arr-multiple.js sloppy pass
 language/statements/async-generator/yield-spread-arr-multiple.js strict pass
 language/statements/async-generator/yield-spread-arr-single.js sloppy pass
@@ -108,8 +108,8 @@ language/statements/async-generator/yield-star-getiter-async-not-callable-string
 language/statements/async-generator/yield-star-getiter-async-not-callable-string-throw.js strict pass
 language/statements/async-generator/yield-star-getiter-async-not-callable-symbol-throw.js sloppy pass
 language/statements/async-generator/yield-star-getiter-async-not-callable-symbol-throw.js strict pass
-language/statements/async-generator/yield-star-getiter-async-null-sync-get-abrupt.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-star-getiter-async-null-sync-get-abrupt.js strict skip:async:reported-failure
+language/statements/async-generator/yield-star-getiter-async-null-sync-get-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/async-generator/yield-star-getiter-async-null-sync-get-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
 language/statements/async-generator/yield-star-getiter-async-returns-abrupt.js sloppy pass
 language/statements/async-generator/yield-star-getiter-async-returns-abrupt.js strict pass
 language/statements/async-generator/yield-star-getiter-async-returns-boolean-throw.js sloppy pass
@@ -124,10 +124,10 @@ language/statements/async-generator/yield-star-getiter-async-returns-symbol-thro
 language/statements/async-generator/yield-star-getiter-async-returns-symbol-throw.js strict pass
 language/statements/async-generator/yield-star-getiter-async-returns-undefined-throw.js sloppy pass
 language/statements/async-generator/yield-star-getiter-async-returns-undefined-throw.js strict pass
-language/statements/async-generator/yield-star-getiter-async-undefined-sync-get-abrupt.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-star-getiter-async-undefined-sync-get-abrupt.js strict skip:async:reported-failure
-language/statements/async-generator/yield-star-getiter-sync-get-abrupt.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-star-getiter-sync-get-abrupt.js strict skip:async:reported-failure
+language/statements/async-generator/yield-star-getiter-async-undefined-sync-get-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/async-generator/yield-star-getiter-async-undefined-sync-get-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/async-generator/yield-star-getiter-sync-get-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/async-generator/yield-star-getiter-sync-get-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
 language/statements/async-generator/yield-star-getiter-sync-not-callable-boolean-throw.js sloppy pass
 language/statements/async-generator/yield-star-getiter-sync-not-callable-boolean-throw.js strict pass
 language/statements/async-generator/yield-star-getiter-sync-not-callable-number-throw.js sloppy pass
@@ -138,8 +138,8 @@ language/statements/async-generator/yield-star-getiter-sync-not-callable-string-
 language/statements/async-generator/yield-star-getiter-sync-not-callable-string-throw.js strict pass
 language/statements/async-generator/yield-star-getiter-sync-not-callable-symbol-throw.js sloppy pass
 language/statements/async-generator/yield-star-getiter-sync-not-callable-symbol-throw.js strict pass
-language/statements/async-generator/yield-star-getiter-sync-returns-abrupt.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-star-getiter-sync-returns-abrupt.js strict skip:async:reported-failure
+language/statements/async-generator/yield-star-getiter-sync-returns-abrupt.js sloppy fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
+language/statements/async-generator/yield-star-getiter-sync-returns-abrupt.js strict fail:"async: Test262:AsyncTestFailure:Test262Error: Test262Error: reject reason Expected SameValue(«TypeError: call: not a function», «[object Object]») to be true (the oracle completed)"
 language/statements/async-generator/yield-star-getiter-sync-returns-boolean-throw.js sloppy pass
 language/statements/async-generator/yield-star-getiter-sync-returns-boolean-throw.js strict pass
 language/statements/async-generator/yield-star-getiter-sync-returns-null-throw.js sloppy pass
@@ -176,8 +176,8 @@ language/statements/async-generator/yield-star-next-not-callable-symbol-throw.js
 language/statements/async-generator/yield-star-next-not-callable-symbol-throw.js strict pass
 language/statements/async-generator/yield-star-next-not-callable-undefined-throw.js sloppy pass
 language/statements/async-generator/yield-star-next-not-callable-undefined-throw.js strict pass
-language/statements/async-generator/yield-star-next-then-get-abrupt.js sloppy skip:async:reported-failure
-language/statements/async-generator/yield-star-next-then-get-abrupt.js strict skip:async:reported-failure
+language/statements/async-generator/yield-star-next-then-get-abrupt.js sloppy pass
+language/statements/async-generator/yield-star-next-then-get-abrupt.js strict pass
 language/statements/async-generator/yield-star-next-then-non-callable-boolean-fulfillpromise.js sloppy pass
 language/statements/async-generator/yield-star-next-then-non-callable-boolean-fulfillpromise.js strict pass
 language/statements/async-generator/yield-star-next-then-non-callable-null-fulfillpromise.js sloppy pass

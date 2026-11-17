@@ -24,9 +24,10 @@
 //!
 //! [`crate::store::STORE_SCHEMA_VERSION`] governs the paged-store representation,
 //! manifest and small-state layout. A change needs a schema bump plus a verified
-//! migration step or explicit refusal. [`crate::store::migrate_store`] authenticates
-//! old state before restamping and advances monotonically through supported schemas.
-//! It does not translate execution semantics across meter releases.
+//! migration step or explicit refusal. [`crate::store::migrate_store`] advances
+//! monotonically through supported schemas in memory and checks the result against
+//! the stored rows before its one write. It does not translate execution semantics
+//! across meter releases.
 //!
 //! [`ironhorse_vm::snapshot_api::ROW_SCHEMA_VERSION`] owns the capture/restore
 //! declarations. `tests/row_schema.rs` fingerprints row fields, order, aliases
@@ -36,7 +37,14 @@
 //! CI compares the ledger prefix and wire constants with the PR base revision
 //! (`scripts/check-row-schema.py`), rejecting repins and reused wire releases.
 //! Do not replace historical pins. Encoding-only releases may advance either
-//! wire version without changing the row schema. Row release 1 records the
+//! wire version without changing the row schema. Row release 6 (container
+//! format 25, store schema 37) adds the `WeakRef` and `FinalizationRegistry`
+//! rows; the schema 36 → 37 ladder step appends their two sections empty.
+//! Container format 26 and store schema 37 → 38 are an encoding-only release
+//! within row release 6: the buffer and view rows gain a resizable buffer's
+//! maximum and the length-tracking view sentinel, and the 37 → 38 step is an
+//! identity restamp.
+//! Row release 1 records the
 //! existing format 20/store 31 contract without changing persisted bytes.
 //!
 //! # Intl data and derived identity
@@ -46,6 +54,18 @@
 //! profile to locked ICU versions, checksums, dependency edges and root features;
 //! CI rejects stale generation. Custom data builds are outside this profile.
 //! In-tree locale algorithm/table changes still require deliberate release review.
+//!
+//! **Release review, 2026-09-16.** `Intl.NumberFormat` compact notation
+//! landed with in-tree CLDR `en` affixes and a corrected rounding carry
+//! (architecture finding F062). Guest-visible output changed —
+//! `{notation:'compact'}.format(12345)` went from `12,345` to `12K`, and a
+//! magnitude below the least kept place now rounds away from zero where it
+//! reported zero — so a snapshot written before resumes after with a
+//! matching boot fingerprint and a different answer for the same program.
+//! The fingerprint does not move because `INTL_DATA_VERSION` binds the ICU
+//! DEPENDENCY graph and these tables are ours, which is exactly the case
+//! the sentence above reserves for review rather than for automation.
+//! Recorded here because the alternative is that it is recorded nowhere.
 //!
 //! [`ironhorse_vm::Interp::boot_fingerprint`] hashes ordered intrinsic layout,
 //! the Intl profile and the selected deterministic Math provider. SIGN therefore

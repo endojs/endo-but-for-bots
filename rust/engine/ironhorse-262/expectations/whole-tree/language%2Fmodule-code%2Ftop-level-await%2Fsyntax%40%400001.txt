@@ -1,5 +1,5 @@
 # engine=ironhorse features=default corpus=language/module-code/top-level-await/syntax tip=be13516fb6441b950ba8a3df97eb34062c186972
-language/module-code/top-level-await/syntax/for-await-expr-regexp.js sloppy skip:module:compiler-rejected
+language/module-code/top-level-await/syntax/for-await-expr-regexp.js sloppy skip:unsupported-opcode:module:top-level-await
 language/module-code/top-level-await/syntax/for-await-expr-template-literal.js sloppy skip:unsupported-opcode:module:top-level-await
 language/module-code/top-level-await/syntax/for-await-expr-this.js sloppy skip:unsupported-opcode:module:top-level-await
 language/module-code/top-level-await/syntax/for-in-await-expr-array-literal.js sloppy skip:unsupported-opcode:module:top-level-await

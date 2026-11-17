@@ -181,8 +181,8 @@ language/statements/for/dstr/let-obj-ptrn-rest-val-obj.js sloppy pass
 language/statements/for/dstr/let-obj-ptrn-rest-val-obj.js strict pass
 language/statements/for/dstr/var-ary-init-iter-close.js sloppy pass
 language/statements/for/dstr/var-ary-init-iter-close.js strict pass
-language/statements/for/dstr/var-ary-init-iter-get-err-array-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
-language/statements/for/dstr/var-ary-init-iter-get-err-array-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
+language/statements/for/dstr/var-ary-init-iter-get-err-array-prototype.js sloppy pass
+language/statements/for/dstr/var-ary-init-iter-get-err-array-prototype.js strict pass
 language/statements/for/dstr/var-ary-init-iter-get-err.js sloppy pass
 language/statements/for/dstr/var-ary-init-iter-get-err.js strict pass
 language/statements/for/dstr/var-ary-init-iter-no-close.js sloppy pass

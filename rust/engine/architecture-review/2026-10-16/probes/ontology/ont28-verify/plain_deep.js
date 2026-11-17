@@ -1,0 +1,2 @@
+function nest() { nest(); }
+nest();

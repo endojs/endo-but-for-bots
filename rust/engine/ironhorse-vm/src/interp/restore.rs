@@ -21,6 +21,8 @@ const RESTORE_ROWS: &[&str] = &[
     "intl_bound_functions",
     "private_elements",
     "disposable_stacks",
+    "weak_refs",
+    "finalization_registries",
     "generators",
     "promise_cluster",
     "temporal_records",
@@ -96,6 +98,29 @@ impl RestoreSession {
                 reason: "restored machine is not quiescent",
             });
         }
+        // Constructor wiring is observable before lockdown completes. Read
+        // the private completion marker, never guest-reachable graph edges.
+        let complete = self.interp.slots.get(self.interp.lockdown_complete);
+        let locked_down = match (complete.kind, complete.value) {
+            (Kind::Boolean, Payload::Boolean(value)) => value,
+            _ => {
+                return Err(RestoreError {
+                    row: "lockdown_complete",
+                    reason: "invalid completion marker",
+                })
+            }
+        };
+        if self.interp.shared_compartments && !locked_down {
+            return Err(RestoreError {
+                row: "lockdown_complete",
+                reason: "shared realm is not locked down",
+            });
+        }
+        self.interp
+            .realm()
+            .intrinsics()
+            .locked_down
+            .set(locked_down);
         self.interp.migrate_restored_layout();
         if self.interp.id_space_exhausted {
             return Err(RestoreError {
@@ -377,7 +402,7 @@ impl RestoreSession {
     }
     pub fn restore_typed_array_family(
         &mut self,
-        buffers: Vec<(u32, u32, u32, u8)>,
+        buffers: Vec<(u32, u32, u32, u8, u32)>,
         views: Vec<(u32, u8, u32, u32, u32)>,
         data_views: Vec<(u32, u32, u32, u32)>,
     ) -> Result<(), RestoreError> {
@@ -484,6 +509,21 @@ impl RestoreSession {
     ) -> Result<(), RestoreError> {
         self.admit("disposable_stacks")?;
         let result = self.interp.restore_disposable_stacks(rows);
+        self.failed = result.err();
+        result
+    }
+    pub fn restore_weak_refs(&mut self, rows: Vec<WeakRefRow>) -> Result<(), RestoreError> {
+        self.admit("weak_refs")?;
+        let result = self.interp.restore_weak_refs(rows);
+        self.failed = result.err();
+        result
+    }
+    pub fn restore_finalization_registries(
+        &mut self,
+        rows: Vec<FinalizationRegistryRow>,
+    ) -> Result<(), RestoreError> {
+        self.admit("finalization_registries")?;
+        let result = self.interp.restore_finalization_registries(rows);
         self.failed = result.err();
         result
     }
@@ -883,7 +923,7 @@ mod tests {
 
     #[test]
     fn typed_array_family_is_validated_before_any_buffer_or_view_is_installed() {
-        for case in 0..12 {
+        for case in 0..17 {
             let mut interp = Interp::new();
             let buffer = interp.new_object().0;
             let view = interp.new_object().0;
@@ -893,7 +933,7 @@ mod tests {
                 .iter()
                 .position(|ty| ty.shift == 1)
                 .unwrap() as u8;
-            let mut buffers = vec![(buffer, data, 8, 0)];
+            let mut buffers = vec![(buffer, data, 8, 0, 0)];
             let mut views = vec![(view, kind, buffer, 0, 4)];
             let mut data_views = vec![(data_view, buffer, 1, 3)];
             let expected = match case {
@@ -906,7 +946,7 @@ mod tests {
                     "owner has multiple buffer-family brands"
                 }
                 2 => {
-                    buffers[0].3 = 4;
+                    buffers[0].3 = 8;
                     "unknown buffer flags"
                 }
                 3 => {
@@ -942,6 +982,34 @@ mod tests {
                     buffers[0].1 = 4;
                     "chunk offset references a free block"
                 }
+                // A resizable buffer's maximum covers its length; a fixed one
+                // has none.
+                11 => {
+                    buffers[0].3 = 4;
+                    buffers[0].4 = 7;
+                    "buffer maximum disagrees with its length"
+                }
+                12 => {
+                    buffers[0].4 = 16;
+                    "buffer maximum disagrees with its length"
+                }
+                // Only a resizable buffer has length-tracking views.
+                13 => {
+                    views[0].4 = crate::VIEW_LENGTH_TRACKING;
+                    "typed-array range exceeds buffer"
+                }
+                14 => {
+                    data_views[0].3 = crate::VIEW_LENGTH_TRACKING;
+                    "data-view range exceeds buffer"
+                }
+                // A view on a resizable buffer may be out of bounds, but
+                // never past the buffer's maximum.
+                15 => {
+                    buffers[0].3 = 4;
+                    buffers[0].4 = 16;
+                    views[0].4 = 9;
+                    "typed-array range exceeds buffer"
+                }
                 _ => {
                     interp.chunks = ChunkArena::from_image(vec![8, 0, 0, 0]);
                     buffers[0].1 = 4;
@@ -971,7 +1039,7 @@ mod tests {
         assert_eq!(empty as usize, interp.chunks.byte_size());
         interp
             .restore_typed_array_family(
-                vec![(buffer, data, 0, 1), (empty_buffer, empty, 0, 0)],
+                vec![(buffer, data, 0, 1, 0), (empty_buffer, empty, 0, 0, 0)],
                 vec![(view, 0, buffer, 16, 4)],
                 vec![(data_view, buffer, 16, 4)],
             )
@@ -987,6 +1055,46 @@ mod tests {
         assert_eq!(
             interp.array_buffers[&crate::value::SlotIndex(empty_buffer)].length,
             0
+        );
+    }
+
+    #[test]
+    fn typed_restore_keeps_maximums_tracking_views_and_shrunk_geometry() {
+        let mut interp = Interp::new();
+        let buffer = interp.new_object().0;
+        let tracking = interp.new_object().0;
+        let fixed = interp.new_object().0;
+        let data_view = interp.new_object().0;
+        let data = interp.chunks.alloc(&[0; 4]).0;
+        let kind = TYPED_ARRAY_TYPES
+            .iter()
+            .position(|ty| ty.shift == 1)
+            .unwrap() as u8;
+        // A resizable buffer shrunk to 4 of its 16 bytes, under a tracking
+        // view, a fixed view now past its end, and a tracking DataView.
+        interp
+            .restore_typed_array_family(
+                vec![(buffer, data, 4, 0b100, 16)],
+                vec![
+                    (tracking, kind, buffer, 2, crate::VIEW_LENGTH_TRACKING),
+                    (fixed, kind, buffer, 0, 6),
+                ],
+                vec![(data_view, buffer, 8, crate::VIEW_LENGTH_TRACKING)],
+            )
+            .unwrap();
+        let buffer = crate::value::SlotIndex(buffer);
+        assert_eq!(interp.array_buffers[&buffer].max_length, Some(16));
+        let tracking = interp.typed_arrays[&crate::value::SlotIndex(tracking)];
+        assert_eq!(tracking.array_length, None);
+        assert_eq!(interp.ta_length(tracking), Some(1));
+        let fixed = interp.typed_arrays[&crate::value::SlotIndex(fixed)];
+        assert_eq!(interp.ta_length(fixed), None);
+        let data_view = interp.data_views[&crate::value::SlotIndex(data_view)];
+        assert_eq!(data_view.byte_length, None);
+        assert_eq!(interp.dv_byte_length(data_view), None);
+        assert_eq!(
+            interp.array_buffers_snapshot(),
+            vec![(buffer.0, data, 4, 0b100, 16)]
         );
     }
 
@@ -1026,20 +1134,22 @@ mod tests {
 
     #[test]
     fn bound_intl_rows_are_prevalidated_before_function_installation() {
-        for case in 0..4 {
-            let (code, names) =
-                ironhorse_compile::compile_atoms("var c = new Intl.Collator('en');").unwrap();
+        for case in 0..5 {
+            let (code, names) = ironhorse_compile::compile_atoms(
+                "var c = new Intl.Collator('en'); var d = new Intl.Collator('en');",
+            )
+            .unwrap();
             let mut interp = Interp::new();
             interp.link_intrinsics(&crate::parse_symbols(&names));
             assert!(interp.run(&code).completed);
-            let owner = interp.intl_snapshot().collators[0].0;
+            let collators = interp.intl_snapshot().collators;
             let first = interp.new_object();
             let second = interp.new_object();
             let mut rows = vec![
                 IntlBoundFunctionRow {
                     kind: 0,
                     function: first.0,
-                    owner,
+                    owner: collators[0].0,
                     name: "compare".into(),
                     name_chunk: u32::MAX,
                     arity: 2,
@@ -1047,7 +1157,7 @@ mod tests {
                 IntlBoundFunctionRow {
                     kind: 0,
                     function: second.0,
-                    owner,
+                    owner: collators[1].0,
                     name: "compare".into(),
                     name_chunk: u32::MAX,
                     arity: 2,
@@ -1057,13 +1167,15 @@ mod tests {
                 0 => rows[1].function = first.0,
                 1 => rows[1].owner = second.0,
                 2 => rows[1].name_chunk = 1,
-                _ => rows[1].kind = 2,
+                3 => rows[1].kind = 2,
+                _ => rows[1].owner = rows[0].owner,
             }
             let before = interp.functions.len();
-            assert_eq!(
-                interp.restore_intl_bound_functions(rows).unwrap_err().row,
-                "IntlBoundFunctions"
-            );
+            let error = interp.restore_intl_bound_functions(rows).unwrap_err();
+            assert_eq!(error.row, "IntlBoundFunctions");
+            if case == 4 {
+                assert_eq!(error.reason, "Intl owner has more than one bound function");
+            }
             assert_eq!(interp.functions.len(), before);
             assert!(!interp.functions.contains_key(&first));
         }
@@ -1240,6 +1352,134 @@ mod tests {
         assert_eq!(interp.iterators_snapshot()[0].result, holder.0);
     }
 
+    /// A lazy Iterator helper row (kinds 10-14) needs both an underlying
+    /// iterator and a HOLDER ARRAY; its for-in and string payloads are always
+    /// empty. Each of those is refused, because the encoder writes `kind`
+    /// unconditionally — nothing upstream would have caught a row this shape
+    /// on the way out.
+    #[test]
+    fn lazy_iterator_helper_rows_require_an_iterator_and_a_holder_array() {
+        for case in 0..5 {
+            let mut interp = Interp::new();
+            let owner = interp.new_object().0;
+            let iterable = interp.new_object().0;
+            let holder = interp.new_array().0;
+            let mut row = IteratorRow {
+                owner,
+                iterable,
+                result: holder,
+                kind: 10,
+                index: 3,
+                done: false,
+                enum_keys: vec![],
+                str_bytes: vec![],
+            };
+            match case {
+                0 => row.iterable = crate::value::SlotIndex::NULL.0,
+                1 => row.result = crate::value::SlotIndex::NULL.0,
+                2 => row.enum_keys = vec![(0, 0)],
+                3 => row.str_bytes = vec![0, b'a'],
+                // A live slot that is not an array: the holder's items are
+                // where the captured `next` and callback live.
+                _ => row.result = interp.new_object().0,
+            }
+            assert_eq!(
+                interp.restore_iterators(vec![row]).unwrap_err().row,
+                "Iterators",
+                "case {case}"
+            );
+            assert!(interp.iterators_snapshot().is_empty(), "case {case}");
+        }
+    }
+
+    /// The well-formed shape of the same row restores, and round-trips with
+    /// its counter and its holder.
+    #[test]
+    fn a_lazy_iterator_helper_row_round_trips_its_counter_and_holder() {
+        for kind in 10..=14u8 {
+            let mut interp = Interp::new();
+            let owner = interp.new_object().0;
+            let iterable = interp.new_object().0;
+            let holder = interp.new_array().0;
+            interp
+                .restore_iterators(vec![IteratorRow {
+                    owner,
+                    iterable,
+                    result: holder,
+                    kind,
+                    index: 7,
+                    done: false,
+                    enum_keys: vec![],
+                    str_bytes: vec![],
+                }])
+                .unwrap();
+            let row = &interp.iterators_snapshot()[0];
+            assert_eq!((row.kind, row.index, row.result), (kind, 7, holder));
+        }
+    }
+
+    /// An `Iterator.concat` helper row (kind 15) keeps its list of items in an
+    /// internal Array named by `iterable`. That list restores; a live
+    /// `iterable` that is not an Array is refused, as its items are where the
+    /// open methods live.
+    #[test]
+    fn an_iterator_concat_row_requires_its_list_to_be_an_array() {
+        for list_is_array in [true, false] {
+            let mut interp = Interp::new();
+            let owner = interp.new_object().0;
+            let list = if list_is_array {
+                interp.new_array().0
+            } else {
+                interp.new_object().0
+            };
+            let holder = interp.new_array().0;
+            let restored = interp.restore_iterators(vec![IteratorRow {
+                owner,
+                iterable: list,
+                result: holder,
+                kind: 15,
+                index: 0,
+                done: false,
+                enum_keys: vec![],
+                str_bytes: vec![],
+            }]);
+            if list_is_array {
+                restored.unwrap();
+                assert_eq!(interp.iterators_snapshot()[0].iterable, list);
+            } else {
+                assert_eq!(restored.unwrap_err().row, "Iterators");
+                assert!(interp.iterators_snapshot().is_empty());
+            }
+        }
+    }
+
+    /// Kind 16 is the next unused cursor kind. The decoder must refuse it
+    /// rather than restore a row whose `next()` would index a table it does
+    /// not understand.
+    #[test]
+    fn a_cursor_kind_above_the_lazy_helpers_is_still_refused() {
+        let mut interp = Interp::new();
+        let owner = interp.new_object().0;
+        let iterable = interp.new_object().0;
+        let holder = interp.new_array().0;
+        assert_eq!(
+            interp
+                .restore_iterators(vec![IteratorRow {
+                    owner,
+                    iterable,
+                    result: holder,
+                    kind: 16,
+                    index: 0,
+                    done: false,
+                    enum_keys: vec![],
+                    str_bytes: vec![],
+                }])
+                .unwrap_err()
+                .row,
+            "Iterators"
+        );
+    }
+
     #[test]
     fn bulk_restore_preserves_lazy_content_keys_duplicates_and_high_water_marks() {
         struct NoChunkReads;
@@ -1344,6 +1584,8 @@ mod tests {
             let mut interp = Interp::new();
             let owner = interp.new_object();
             let descriptor = interp.slots.alloc(Slot::undefined());
+            // The booted tables, `%Array.prototype%`'s row among them.
+            let booted_arrays = interp.arrays_snapshot();
             let mut arrays = vec![(owner.0, 1, vec![(0, Slot::integer(1))])];
             let mut indices = vec![];
             let mut collections = vec![];
@@ -1396,7 +1638,7 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.row, "BulkSideTables");
             assert_eq!(error.reason, expected, "case {case}");
-            assert!(interp.arrays_snapshot().is_empty());
+            assert_eq!(interp.arrays_snapshot(), booted_arrays);
             assert!(interp.index_props_snapshot().is_empty());
             assert!(interp.collections_snapshot().is_empty());
             assert!(interp.symbol_registry_snapshot().is_empty());

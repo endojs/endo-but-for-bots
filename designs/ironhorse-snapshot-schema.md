@@ -3,6 +3,7 @@
 |             |                    |
 | ----------- | ------------------ |
 | **Created** | 2026-09-08         |
+| **Updated** | 2026-09-24         |
 | **Author**  | kumavis (prompted) |
 | **Status**  | Reference          |
 
@@ -11,7 +12,9 @@
 This index collects requirements for the snapshot schema from different uses of the same heap.
 It separates observed experiments, proposed logical requirements, and future physical-layout choices.
 The existing [snapshot store seam](ironhorse-snapshot-store-seam.md) remains the implementation design;
-these contributions do not replace its format, store interface, migration rules, or integrity model.
+these contributions do not replace its format, store interface, migration rules, or trust model
+(its 2026-09-24 decision to trust the resident store, which its phase 13 implemented by removing
+the row hashes, root and seal chain).
 
 The surgery experiments are implemented in the experiment branch.
 The GC and debugging documents are analyses and implementation proposals, not new collectors or
@@ -68,7 +71,7 @@ instrumentation and reproducible baselines exist.
 | Related design                                                       | Relationship                                                                                            |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | [Ironhorse engine](ironhorse-engine.md)                              | Value model, execution semantics, snapshot requirements, and performance envelope.                      |
-| [Snapshot store seam](ironhorse-snapshot-store-seam.md)              | Existing canonical image, backend abstraction, integrity, paging, checkpoint, and migration mechanisms. |
+| [Snapshot store seam](ironhorse-snapshot-store-seam.md)              | Existing canonical image, backend abstraction, trust model, paging, checkpoint, and migration.          |
 | [Debugger recovery](ironhorse-debugger-recovery-and-uncaught.md)     | Related live-debugger proposal; offline snapshot inspection has a distinct execution contract.          |
 | [Vat replacement](../packages/thixotrope/designs/vat-replacement.md) | Application-level upgrade motivation and obligations beyond heap validity.                              |
 

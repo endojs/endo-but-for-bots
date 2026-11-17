@@ -145,6 +145,26 @@ pub enum Item {
     List(Vec<Item>),
 }
 
+impl Item {
+    /// The expression a run of single-item parentheses wraps: `(eval)` and
+    /// `((eval))` are `eval`. A parenthesized expression keeps its Reference
+    /// (ES2024 13.2.9.2), so a call through one is a call through the
+    /// expression inside. Only parentheses make a one-item `Expressions`
+    /// node in an operand position.
+    pub fn without_parentheses(&self) -> &Item {
+        let mut item = self;
+        while let Item::Node(node) = item {
+            match (node.token, node.children.first()) {
+                (Token::Expressions, Some(Item::List(items))) if items.len() == 1 => {
+                    item = &items[0];
+                }
+                _ => break,
+            }
+        }
+        item
+    }
+}
+
 /// The deepest tree the compiler will build or walk, in [`Node::depth`]
 /// levels.
 ///
@@ -520,4 +540,66 @@ fn dump_string(units: &[u16]) -> String {
     }
     out.push('"');
     out
+}
+
+/// Tear a tree down without the recursive drop glue, which took one host
+/// frame chain per tree level: a refused 5,000-term `1+1+…` overflowed a
+/// 512 KiB wasm stack freeing its partial tree (STACK-DEPTH-REFACTOR.md
+/// D1c). Nor does it allocate: a heap worklist would grow in a destructor,
+/// where a refusal can only abort.
+///
+/// The child list being emptied is the worklist. A child that has children
+/// of its own (a node's, or a node list's) becomes the next one: its last
+/// child moves into the slot the outer worklist's pop just freed, and the
+/// outer worklist, as an [`Item::List`], into the slot that move frees,
+/// swapped to index 0 so it resumes once the inner one is exhausted. Every
+/// push lands in a slot a pop freed, so no buffer grows, and only childless
+/// nodes ever drop. `ironhorse-vm/tests/teardown_allocation.rs` drops deep,
+/// wide and branching trees on a small stack and requires no allocation.
+impl Drop for Node {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        let mut work = std::mem::take(&mut self.children);
+        // How many outer worklists are parked, each at index 0 of the next.
+        let mut links = 0usize;
+        loop {
+            if work.len() > usize::from(links > 0) {
+                let mut children = match work.pop() {
+                    Some(Item::Node(mut node)) => std::mem::take(&mut node.children),
+                    Some(Item::List(list)) => list,
+                    Some(Item::Symbol(_) | Item::Null) => continue,
+                    None => break,
+                };
+                let Some(child) = children.pop() else {
+                    continue;
+                };
+                push_in_place(&mut work, child);
+                let outer = std::mem::replace(&mut work, children);
+                push_in_place(&mut work, Item::List(outer));
+                let top = work.len() - 1;
+                work.swap(0, top);
+                links += 1;
+            } else if links > 0 {
+                // Only the link is left: resume the outer worklist.
+                match work.pop() {
+                    Some(Item::List(outer)) => work = outer,
+                    other => {
+                        debug_assert!(false, "a parked worklist is a node list: {other:?}");
+                        break;
+                    }
+                }
+                links -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+/// Push into the slot a pop freed, which never reallocates.
+fn push_in_place(list: &mut Vec<Item>, item: Item) {
+    debug_assert!(list.len() < list.capacity());
+    list.push(item);
 }

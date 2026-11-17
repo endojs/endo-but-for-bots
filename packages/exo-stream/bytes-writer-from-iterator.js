@@ -3,13 +3,13 @@
 import { makeExo } from '@endo/exo';
 import { decodeBase64 } from '@endo/base64';
 
-import { PassableBytesWriterInterface } from './type-guards.js';
+import { CloseablePassableBytesWriterInterface } from './type-guards.js';
 import { makeWriterPump } from './writer-pump.js';
 import { asyncIterate } from './async-iterate.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { Pattern } from '@endo/patterns' */
-/** @import { SomehowAsyncIterable, PassableBytesWriter, MakeBytesWriterOptions } from './types.js' */
+/** @import { SomehowAsyncIterable, CloseablePassableBytesWriter, MakeBytesWriterOptions } from './types.js' */
 
 /**
  * Convert a local sink AsyncIterator to a remote PassableBytesWriter reference
@@ -40,7 +40,7 @@ import { asyncIterate } from './async-iterate.js';
  * @template {Passable} [TWriteReturn=undefined]
  * @param {SomehowAsyncIterable<unknown, Uint8Array, TWriteReturn>} iterator
  * @param {MakeBytesWriterOptions<TWriteReturn>} [options]
- * @returns {PassableBytesWriter<TWriteReturn>}
+ * @returns {CloseablePassableBytesWriter<TWriteReturn>}
  */
 export const bytesWriterFromIterator = (iterator, options = {}) => {
   const { buffer = 0, writeReturnPattern } = options;
@@ -69,13 +69,14 @@ export const bytesWriterFromIterator = (iterator, options = {}) => {
 
   const pump = makeWriterPump(decodingIterator, { buffer });
 
-  return /** @type {PassableBytesWriter<TWriteReturn>} */ (
+  return /** @type {CloseablePassableBytesWriter<TWriteReturn>} */ (
     /** @type {unknown} */ (
       makeExo(
         'PassableBytesWriter',
-        PassableBytesWriterInterface,
+        CloseablePassableBytesWriterInterface,
         /** @type {any} */ ({
           streamBase64: pump,
+          close: pump.close,
 
           /**
            * Returns the pattern for validating TWriteReturn (return value).

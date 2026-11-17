@@ -27,6 +27,7 @@ import {
   readFrameFromStream,
   writeFrameToStream,
 } from './envelope.js';
+import { installShutdownSignals } from './shutdown-signals.js';
 
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { Config } from './types.js' */
@@ -184,6 +185,12 @@ const main = async () => {
     const agentIdPath = filePowers.joinPath(statePath, 'root');
     await filePowers.writeFileText(agentIdPath, `${agentId}\n`);
 
+    // Record self as official daemon process so killDaemonProcess targets
+    // the node daemon (which owns workers) rather than the supervisor.  This
+    // must precede the ready signal: a resolved start() lets callers act on
+    // endo.pid immediately (stop() reads it to kill the daemon).
+    await updateRecordedPid();
+
     // Signal readiness to supervisor.
     await sendEnvelope(0, 'ready');
     console.log('Endo daemon (bus) ready, signaled supervisor');
@@ -195,17 +202,21 @@ const main = async () => {
 
   const servicesStopped = Promise.all(services.map(({ stopped }) => stopped));
 
-  // Record self as official daemon process so killDaemonProcess targets
-  // the node daemon (which owns workers) rather than the supervisor.
-  await updateRecordedPid();
-
   // Wait for services to end normally
   await servicesStopped;
   cancel(new Error('Terminated normally'));
   cancelGracePeriod(new Error('Terminated normally'));
 };
 
-process.once('SIGINT', () => cancel(new Error('SIGINT')));
+// Graceful SIGTERM/SIGINT with a bounded force-exit backstop, and orphan-exit
+// under ENDO_EXIT_WHEN_ORPHANED, matching the node-supervised manager. The
+// bus supervisor owns its XS workers over its own channel, so cancellation
+// (not a pid-file sweep) is what tears them down.
+installShutdownSignals({
+  cancel,
+  graceMs: Number(process.env.ENDO_SHUTDOWN_GRACE_MS) || 5000,
+  exitWhenOrphaned: process.env.ENDO_EXIT_WHEN_ORPHANED === '1',
+});
 
 // @ts-ignore Yes, we can assign to exitCode, typedoc.
 process.exitCode = 1;

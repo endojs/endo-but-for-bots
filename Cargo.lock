@@ -2816,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-compile"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ironhorse-meter",
  "ironhorse-regexp",
@@ -2826,11 +2826,11 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-meter"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "ironhorse-regexp"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ironhorse-meter",
  "ironhorse-unicode",
@@ -2838,7 +2838,7 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-runtime"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ironhorse-compile",
  "ironhorse-vm",
@@ -2846,7 +2846,7 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-snapshot"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ironhorse-compile",
  "ironhorse-vm",
@@ -2864,15 +2864,15 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-text"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "ironhorse-unicode"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "ironhorse-vm"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "icu_normalizer",
  "icu_segmenter",

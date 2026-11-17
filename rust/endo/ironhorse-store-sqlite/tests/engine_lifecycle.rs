@@ -551,10 +551,12 @@ fn truncated_database_fails_closed_not_wrong() {
 
 /// The single-writer-per-path model is enforced, not assumed
 /// (collaborator-review follow-up): under `locking_mode=EXCLUSIVE`
-/// the first connection to touch the file holds it, so a second
-/// opener fails closed at its first query (the application_id gate)
-/// with SQLITE_BUSY after the busy timeout, instead of silently
-/// racing the writer. ~5s: the second opener waits out busy_timeout.
+/// the first opener takes the database's exclusive lock at open and
+/// keeps it, so a second opener fails closed at its first query (the
+/// application_id gate) with SQLITE_BUSY after the busy timeout,
+/// instead of silently racing the writer. This case is a fresh file,
+/// whose creation writes anyway; the next test covers an existing
+/// store. ~5s: the second opener waits out busy_timeout.
 #[test]
 fn second_opener_fails_closed_under_exclusive_locking() {
     let dir = common::TempDir::new(&format!(
@@ -569,6 +571,98 @@ fn second_opener_fails_closed_under_exclusive_locking() {
         Ok(_) => panic!("second opener must fail closed while the first holds the file"),
     }
     drop(first);
+}
+
+/// The same exclusion for a store that already exists, which is the
+/// case the fresh-file test above cannot see: creating a database
+/// writes (the application_id stamp, the schema, the WAL switch), but
+/// opening a committed store whose edge index is attested writes
+/// nothing (issue #1330), so open must take the database lock
+/// explicitly. The per-open edge rebuild used to take it as a side
+/// effect. A raw connection with no busy wait makes the refusal
+/// immediate and names its code.
+#[test]
+fn second_opener_of_an_existing_store_fails_closed() {
+    let dir = tmp_dir("exclusive-existing");
+    let path = dir.join("heap.sqlite");
+    let (bytecode, names) = compile("var x = 5;");
+    let mut store = SqliteHeapStore::open(&path).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&names);
+    assert!(m.run(&bytecode).completed);
+    drop(
+        begin_store_session(m, &sig(), &mut store)
+            .map_err(|(_, e)| e)
+            .unwrap(),
+    );
+    store.close().unwrap();
+
+    let first = SqliteHeapStore::open(&path).expect("first opener");
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    raw.busy_timeout(std::time::Duration::ZERO).unwrap();
+    match raw.query_row("PRAGMA application_id", [], |r| r.get::<_, i32>(0)) {
+        Err(rusqlite::Error::SqliteFailure(e, _))
+            if e.code == rusqlite::ErrorCode::DatabaseBusy => {}
+        other => panic!("second opener must fail closed at its first query, got {other:?}"),
+    }
+    drop(raw);
+    first.close().unwrap();
+}
+
+/// A store open cannot lock is refused at open, not found out at its first
+/// checkpoint: SQLite runs `BEGIN IMMEDIATE` on a read-only database as a
+/// plain read transaction, so the lock above would silently be no lock at
+/// all, and every later commit would fail. The refusal is a capability the
+/// medium lacks, which a retry cannot change, so it classifies as a refusal
+/// rather than transient I/O. A `mode=ro` URI stands in for a
+/// write-protected file, whose mode root would ignore.
+#[test]
+fn read_only_store_is_refused_at_open() {
+    let dir = tmp_dir("read-only");
+    let path = dir.join("heap.sqlite");
+    let (bytecode, names) = compile("var x = 5;");
+    let mut store = SqliteHeapStore::open(&path).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&names);
+    assert!(m.run(&bytecode).completed);
+    drop(
+        begin_store_session(m, &sig(), &mut store)
+            .map_err(|(_, e)| e)
+            .unwrap(),
+    );
+    store.close().unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    match SqliteHeapStore::open(format!("file:{}?mode=ro", path.display())) {
+        Err(error @ StoreError::Unsupported(what)) => {
+            assert!(what.contains("read-only"), "named refusal: {what}");
+            assert_eq!(
+                error.classify(),
+                ironhorse_snapshot::store::StoreFailure::Refused
+            );
+        }
+        other => panic!("a read-only store must be refused at open, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "the refused open left the store untouched"
+    );
+
+    // A fresh (empty) database opened read-only is refused the same way,
+    // before the fresh-store stamp tries to write it.
+    let fresh = dir.join("fresh.sqlite");
+    std::fs::write(&fresh, b"").unwrap();
+    match SqliteHeapStore::open(format!("file:{}?mode=ro", fresh.display())) {
+        Err(StoreError::Unsupported(what)) => {
+            assert!(what.contains("read-only"), "named refusal: {what}")
+        }
+        other => panic!("a fresh read-only database must be refused, got {other:?}"),
+    }
+    assert!(
+        std::fs::read(&fresh).unwrap().is_empty(),
+        "nothing was written"
+    );
 }
 
 /// Side-table ledger (G1) through SQLite: an array, a Map, and a
@@ -609,9 +703,10 @@ fn side_tables_survive_sqlite_sleep_cycles() {
 /// exercised only against the reference backends and the shared
 /// metamorphic suite, which holds ONE connection open for a whole
 /// scenario — so nothing ran a carried row through a
-/// last-connection close, WAL folding, `SqliteHeapStore::init`, a lost
-/// and reconstructed `root_cache`, a rebuilt `edge_pairs`, and a lazy
-/// read after reopen.
+/// last-connection close, WAL folding, `SqliteHeapStore::init`, section
+/// digests read back from the store by the first checkpoint after a
+/// resume, an `edge_pairs` trusted on its epoch marker, and a lazy read
+/// after reopen.
 ///
 /// `run_scenario` is that lifecycle, and its locks are the strong ones:
 /// every crank's value against an uninterrupted baseline, the final

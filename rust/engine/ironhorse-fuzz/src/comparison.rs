@@ -71,6 +71,58 @@ mod tests {
             .starts_with("result:"));
     }
 
+    /// The `differential_source` crash of 2026-09-18
+    /// (`crash-7fc45770f3c4e8e481b84f9caca3f0a5408c319b`).
+    ///
+    /// Both engines held the SAME double: byte-identical IEEE-754
+    /// (`247,255,255,255,255,199,102,195`) and both answered `true` to
+    /// `expr === -51298814505516984`. XS rendered the exact midpoint down,
+    /// which ties-to-even reads back as `-51298814505516976`. Comparing
+    /// against the spec spelling of the oracle's exact double ignores XS's
+    /// biased boundary spelling entirely.
+    #[test]
+    fn a_biased_boundary_spelling_is_not_a_value_divergence() {
+        let spec = |n: f64| xs_oracle::number_to_ecma_string(n);
+        let held = -51298814505516984.0_f64;
+        assert!(results_agree(
+            "-51298814505516980",
+            Some(&spec(held)),
+            &ironhorse_vm::value::number_to_ecma_string(held)
+        ));
+        // The positive-signed member of the same class.
+        let held = 51298814505517064.0_f64;
+        assert!(results_agree(
+            "51298814505517060",
+            Some(&spec(held)),
+            &ironhorse_vm::value::number_to_ecma_string(held)
+        ));
+        // XS's boundary spelling itself is not the spec spelling.
+        assert!(!results_agree(
+            "51298814505517060",
+            Some(&spec(held)),
+            "51298814505517060"
+        ));
+    }
+
+    /// The exact-double rule must not swallow a real one-ulp disagreement.
+    #[test]
+    fn an_adjacent_double_spelled_exactly_is_still_a_divergence() {
+        let spec = |n: f64| xs_oracle::number_to_ecma_string(n);
+        for (oracle, ironhorse) in [
+            (51298814505517056.0_f64, 51298814505517064.0_f64),
+            (57632001481506816.0, 57632001481506824.0),
+            (51298814505517052.0, 51298814505517064.0),
+            (0.5, 0.5000000000000001),
+        ] {
+            assert_ne!(oracle.to_bits(), ironhorse.to_bits());
+            assert!(!results_agree(
+                &oracle.to_string(),
+                Some(&spec(oracle)),
+                &ironhorse_vm::value::number_to_ecma_string(ironhorse)
+            ));
+        }
+    }
+
     #[test]
     fn numeric_spelling_policy_is_preserved() {
         let spec = Some("57632001481506820");

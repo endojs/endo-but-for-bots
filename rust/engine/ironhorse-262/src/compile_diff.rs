@@ -20,6 +20,12 @@
 //! byte difference a genuine finding (see `rust/engine/README.md` § "Script
 //! goal vs. the oracle's eval framing").
 //!
+//! Ironhorse's compiler also departs from XS's on purpose in a few places
+//! (`ironhorse_compile::with_xs_bytes` lists them). This harness compiles
+//! under `with_xs_bytes`, so it compares XS's bytes for those and every
+//! other byte as usual; `coder_byte_identity.rs` pins that each departure
+//! still departs.
+//!
 //! **Stage bar** (design § Feasibility Verdict): `divergent == 0` *and*
 //! accept/reject agreement, over the full corpus. A byte divergence on a
 //! program both engines accept is the KILL CRITERION signal — it is never
@@ -151,7 +157,7 @@ fn oracle_compile_module(source: &str) -> Option<(bool, Vec<u8>)> {
 /// the module counterpart of [`ironhorse_compile`].
 fn ironhorse_compile_module(source: &str) -> Result<Result<Vec<u8>, String>, String> {
     let caught = panic::catch_unwind(AssertUnwindSafe(|| {
-        ironhorse_compile::compile_module(source)
+        ironhorse_compile::with_xs_bytes(|| ironhorse_compile::compile_module(source))
     }));
     match caught {
         Ok(Ok(bytes)) => Ok(Ok(bytes)),
@@ -166,7 +172,7 @@ fn ironhorse_compile_module(source: &str) -> Result<Result<Vec<u8>, String>, Str
 fn ironhorse_compile(source: &str) -> Result<Result<Vec<u8>, String>, String> {
     // The eval-goal entry: the goal the oracle shim compiles (module doc).
     let caught = panic::catch_unwind(AssertUnwindSafe(|| {
-        ironhorse_compile::compile_with(source, false)
+        ironhorse_compile::with_xs_bytes(|| ironhorse_compile::compile_with(source, false))
     }));
     match caught {
         Ok(Ok(bytes)) => Ok(Ok(bytes)),

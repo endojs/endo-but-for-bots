@@ -19,8 +19,8 @@ language/expressions/typeof/null.js sloppy pass
 language/expressions/typeof/null.js strict pass
 language/expressions/typeof/number.js sloppy pass
 language/expressions/typeof/number.js strict pass
-language/expressions/typeof/proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"object\"», «string\"function\"») to be true"
-language/expressions/typeof/proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"object\"», «string\"function\"») to be true"
+language/expressions/typeof/proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"object\"», «\"function\"») to be true"
+language/expressions/typeof/proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"object\"», «\"function\"») to be true"
 language/expressions/typeof/string.js sloppy pass
 language/expressions/typeof/string.js strict pass
 language/expressions/typeof/symbol.js sloppy pass

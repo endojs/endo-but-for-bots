@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=language/statements/class/elements/syntax/valid tip=be13516fb6441b950ba8a3df97eb34062c186972
 language/statements/class/elements/syntax/valid/grammar-class-body-ctor-no-heritage.js sloppy pass
 language/statements/class/elements/syntax/valid/grammar-class-body-ctor-no-heritage.js strict pass
-language/statements/class/elements/syntax/valid/grammar-field-accessor.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: missing ;\" ironhorse=\"SyntaxError\""
-language/statements/class/elements/syntax/valid/grammar-field-accessor.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: missing ;\" ironhorse=\"SyntaxError\""
+language/statements/class/elements/syntax/valid/grammar-field-accessor.js sloppy skip:shared-positive-test-failure
+language/statements/class/elements/syntax/valid/grammar-field-accessor.js strict skip:shared-positive-test-failure
 language/statements/class/elements/syntax/valid/grammar-field-classelementname-initializer-alt.js sloppy pass
 language/statements/class/elements/syntax/valid/grammar-field-classelementname-initializer-alt.js strict pass
 language/statements/class/elements/syntax/valid/grammar-field-classelementname-initializer.js sloppy pass

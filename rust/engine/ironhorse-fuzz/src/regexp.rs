@@ -7,33 +7,41 @@
 //! **supported** grammar only (the `i`/`u`/`v` flags and named captures
 //! are out of this increment's scope, so the arm never generates them),
 //! plus a subject over an overlapping small alphabet so matches actually
-//! occur. [`differential_check_regexp`] then pins the matched answer,
-//! every capture's byte offsets, and the per-step match meter bit-exact.
-//! Any divergence is a finding. A pattern the port names `Unsupported`
-//! is skipped honestly (`Ok(())`), never reported as a divergence.
+//! occur. [`differential_check_regexp`] then pins the matched answer and
+//! every capture's byte offsets. Any RESULT divergence is a finding.
+//! Per-step match-meter drift against the pin is advisory calibration
+//! telemetry, never a finding: XS-computron parity is a non-goal
+//! (`designs/ironhorse-engine.md` § Metering). A pattern the port names
+//! `Unsupported` is skipped honestly (`Ok(())`), never reported as a
+//! divergence.
 
 use crate::Divergence;
 
 /// A cursor over fuzzer bytes, driving the grammar deterministically.
 struct Bytes<'a> {
-    data: &'a [u8],
-    pos: usize,
+    u: arbitrary::Unstructured<'a>,
 }
 
 impl<'a> Bytes<'a> {
     fn new(data: &'a [u8]) -> Self {
-        Bytes { data, pos: 0 }
-    }
-    fn next(&mut self) -> u8 {
-        if self.data.is_empty() {
-            return 0;
+        Bytes {
+            u: arbitrary::Unstructured::new(data),
         }
-        let b = self.data[self.pos % self.data.len()];
-        self.pos = self.pos.wrapping_add(1);
-        b
+    }
+    /// One byte, or zero once the input is exhausted. FINITE, like the
+    /// grammar driver in `lib.rs` and for the same reason (F040): a cursor
+    /// that wraps makes every input infinitely long, so adding a byte
+    /// reshuffles the case instead of extending it and libFuzzer's length
+    /// feedback has nothing to climb.
+    fn next(&mut self) -> u8 {
+        self.u.arbitrary::<u8>().unwrap_or(0)
     }
     fn choice(&mut self, n: u8) -> u8 {
-        self.next() % n
+        if n == 0 {
+            0
+        } else {
+            self.next() % n
+        }
     }
 }
 
@@ -275,7 +283,8 @@ pub fn differential_check_regexp_within(
     match compiled {
         Err(
             ironhorse_regexp::CompileError::BudgetExceeded
-            | ironhorse_regexp::CompileError::ResourceLimit,
+            | ironhorse_regexp::CompileError::ResourceLimit
+            | ironhorse_regexp::CompileError::HostAllocationFailed,
         ) => {
             return Err(Divergence {
                 source,
@@ -327,14 +336,13 @@ pub fn differential_check_regexp_within(
             });
         }
     }
+    // Match-meter drift against the pin is advisory calibration telemetry,
+    // never a finding: XS-computron parity is a non-goal.
     if outcome.match_meter_raw != oracle.match_meter_raw {
-        return Err(Divergence {
-            source,
-            detail: format!(
-                "match meter ironhorse={} pin={}",
-                outcome.match_meter_raw, oracle.match_meter_raw
-            ),
-        });
+        eprintln!(
+            "{source}: match meter drift (advisory) ironhorse={} pin={}",
+            outcome.match_meter_raw, oracle.match_meter_raw
+        );
     }
     // Agreement — report whether it was a real (compiled + matched) hit.
     Ok(outcome.matched)
@@ -345,10 +353,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_regexps_agree_bit_exact_with_the_pin() {
+    fn generated_regexps_agree_with_the_pin() {
         // Structure-aware seed sweep: every generated pattern/subject is
-        // matched on both ironhorse and the XS pin and pinned bit-exact
-        // (matched, captures, and the per-step match meter). Zero
+        // matched on both ironhorse and the XS pin and compared on results
+        // (matched + captures; match-meter drift is advisory). Zero
         // divergence over the sweep is the fuzz-arm bar.
         let mut checked = 0usize;
         let mut matched_any = false;
@@ -356,7 +364,7 @@ mod tests {
         for seed in 0u32..3000 {
             let data = seed.to_le_bytes();
             let mut buf = Vec::new();
-            for k in 0..(10 + (seed % 20)) {
+            for k in 0..(40 + (seed % 80)) {
                 buf.push(data[(k as usize) % 4].wrapping_add((k as u8).wrapping_mul(13)));
             }
             let case = gen_regexp(&buf);

@@ -66,18 +66,37 @@ type FilesystemStats = {
     type?: string;
 };
 type PassableBytesReader<TReadReturn = undefined> = {
+    stream?: (synPromise: ERef<StreamNode<unknown, TReadReturn>>) => Promise<StreamNode<Uint8Array, TReadReturn>>;
     streamBase64: (synPromise: ERef<StreamNode<unknown, TReadReturn>>) => Promise<StreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
-type DirectoryPage = {
-    entries: DirectoryEntry[];
-    atEnd: boolean;
+type BlobRef = {
+    sha256: () => Promise<string>;
+    size: () => Promise<bigint>;
+    bytes: () => ERef<PassableBytesReader>;
+    text: () => Promise<string>;
+    json: () => Promise<unknown>;
+    byteRange: (start: bigint, end: bigint) => BlobRef;
+    textRange: (startLine: number, endLine: number) => Promise<BlobRef>;
+    help: (method?: string) => string;
+};
+type StreamEndpointClose = {
+    close: () => Promise<void>;
+};
+type PassableBytesWriter<TWriteReturn = undefined> = {
+    streamBase64: (synPromise: ERef<StreamNode<string, TWriteReturn>>) => Promise<StreamNode<undefined, TWriteReturn>>;
+    writeReturnPattern: () => unknown | undefined;
 };
 type PassableReader<TRead = unknown, TReadReturn = unknown> = {
     stream: (synPromise: ERef<StreamNode<undefined, TReadReturn>>) => Promise<StreamNode<TRead, TReadReturn>>;
     readPattern: () => unknown | undefined;
     readReturnPattern: () => unknown | undefined;
 };
+type DirectoryPage = {
+    entries: DirectoryEntry[];
+    atEnd: boolean;
+};
+type CloseablePassableReader<TRead = unknown, TReadReturn = unknown> = PassableReader<TRead, TReadReturn> & StreamEndpointClose;
 type DirectoryEntry = {
     name: string;
     kind: 'file';
@@ -138,7 +157,7 @@ type File = {
 };
 type Cursor = {
     read: (limit?: bigint) => Promise<DirectoryPage>;
-    stream: () => ERef<PassableReader<DirectoryEntry>>;
+    stream: () => ERef<CloseablePassableReader<DirectoryEntry>>;
     toArray: () => Promise<DirectoryEntry[]>;
     skip: (n: bigint) => Promise<void>;
     rewind: () => Promise<void>;
@@ -153,8 +172,8 @@ type OpenFileOptions = {
     append?: boolean;
 };
 type OpenFile = {
-    read: (offset?: bigint, length?: bigint) => ERef<PassableBytesReader>;
-    write: (offset?: bigint) => ERef<PassableBytesWriter>;
+    read: (offset?: bigint, length?: bigint) => ERef<CloseablePassableBytesReader>;
+    write: (offset?: bigint) => ERef<CloseablePassableBytesWriter>;
     truncate: (size: bigint) => Promise<void>;
     fsync: () => Promise<void>;
     lock: (opts: LockOpts) => ERef<Lock>;
@@ -169,22 +188,9 @@ type WatchFromResult = {
     cursor: Cursor;
     watcher: NodeWatcher;
 };
-type PassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64: (synPromise: ERef<StreamNode<string, TWriteReturn>>) => Promise<StreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern: () => unknown | undefined;
-};
-type BlobRef = {
-    getInfo: () => {
-        algorithm: string;
-        hash: string;
-        size: bigint;
-    };
-    fetch: (offset: bigint, length: bigint) => ERef<PassableBytesReader>;
-    text: () => Promise<string>;
-    json: () => Promise<unknown>;
-    help: (method?: string) => string;
-};
 type LockType = 'shared' | 'exclusive';
+type CloseablePassableBytesReader<TReadReturn = undefined> = PassableBytesReader<TReadReturn> & StreamEndpointClose;
+type CloseablePassableBytesWriter<TWriteReturn = undefined> = PassableBytesWriter<TWriteReturn> & StreamEndpointClose;
 type LockOpts = {
     type: LockType;
     start?: bigint;
@@ -240,8 +246,11 @@ type MountEndoMountFile = {
     text: () => Promise<string>;
     streamBase64: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
     json: () => Promise<unknown>;
-    getInfo: () => Promise<MountBlobInfo>;
-    fetch: (offset: bigint, length: bigint) => Promise<MountPassableBytesReader>;
+    sha256: () => Promise<string>;
+    size: () => Promise<bigint>;
+    bytes: () => Promise<MountPassableBytesReader>;
+    byteRange: (start: bigint, end: bigint) => MountReadableBlobView;
+    textRange: (startLine: number, endLine: number) => Promise<MountReadableBlobView>;
     writeText: (content: string) => Promise<void>;
     append: (content: string) => Promise<void>;
     writeBytes: (readableRef: MountERef<MountPassableBytesReader>) => Promise<void>;
@@ -261,11 +270,7 @@ type MountReadableTreeView = {
 };
 type MountSnapshotTree = MountReadableTree & {
     sha256: () => string;
-    getInfo: () => Promise<{
-        algorithm: string;
-        hash: string;
-        size: bigint;
-    }>;
+    size: () => Promise<bigint>;
 };
 type MountEndoMountStat = {
     kind: 'file' | 'directory' | 'symlink';
@@ -296,12 +301,8 @@ type MountStreamNode<Y = undefined, R = undefined> = MountStreamYieldNode<Y, R> 
     value: R;
     promise: null;
 };
-type MountBlobInfo = {
-    algorithm: string;
-    hash: string;
-    size: bigint;
-};
 type MountPassableBytesReader<TReadReturn = undefined> = {
+    stream?: (synPromise: MountERef<MountStreamNode<unknown, TReadReturn>>) => Promise<MountStreamNode<Uint8Array, TReadReturn>>;
     streamBase64: (synPromise: MountERef<MountStreamNode<unknown, TReadReturn>>) => Promise<MountStreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
@@ -309,8 +310,11 @@ type MountReadableBlobView = {
     streamBase64: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
-    getInfo: () => Promise<MountBlobInfo>;
-    fetch: (offset: bigint, length: bigint) => Promise<MountPassableBytesReader>;
+    sha256: () => Promise<string>;
+    size: () => Promise<bigint>;
+    bytes: () => Promise<MountPassableBytesReader>;
+    byteRange: (start: bigint, end: bigint) => MountReadableBlobView;
+    textRange: (startLine: number, endLine: number) => Promise<MountReadableBlobView>;
     help: (method?: string) => string;
 };
 type MountTreeEntry = {

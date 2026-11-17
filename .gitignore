@@ -147,3 +147,8 @@ api-docs
 packages/*/tmp/
 packages/*/test/tmp/
 .turbo/
+
+# Python bytecode. The repo has a few checker scripts (rust/engine/scripts);
+# running one used to leave a tracked .pyc modified in `git status`.
+__pycache__/
+*.pyc

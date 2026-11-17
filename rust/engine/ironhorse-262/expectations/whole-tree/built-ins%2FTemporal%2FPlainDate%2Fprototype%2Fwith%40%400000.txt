@@ -11,8 +11,8 @@ built-ins/Temporal/PlainDate/prototype/with/constrain-days.js sloppy skip:oracle
 built-ins/Temporal/PlainDate/prototype/with/constrain-days.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDate/prototype/with/copy-properties-not-undefined.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDate/prototype/with/copy-properties-not-undefined.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/PlainDate/prototype/with/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainDate/prototype/with/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainDate/prototype/with/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDate/prototype/with/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDate/prototype/with/leap-year.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDate/prototype/with/leap-year.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDate/prototype/with/length.js sloppy skip:oracle-host-missing-temporal

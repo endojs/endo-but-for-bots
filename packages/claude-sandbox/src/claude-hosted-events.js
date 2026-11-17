@@ -1,4 +1,5 @@
 // @ts-check
+import { imageResultFromBlocks } from '@endo/hosted-agent/image-result.js';
 // Translate the raw `claude -p --output-format stream-json` events a
 // ClaudeClient reply reader yields into the provider-neutral hosted turn events
 // Floot's hosted-turn consumer understands:
@@ -7,24 +8,31 @@
 //   { type: 'text-delta', text }              next chunk of assistant text
 //   { type: 'tool-call', id, name, args }     a tool the CLI is invoking
 //   { type: 'tool-result', id, name, result } that tool's output
-//   { type: 'usage', inputTokens, outputTokens }
+//   { type: 'native-context', checkpoint }  validated opaque native context
+//   { type: 'usage', ...counts, context? }     see @endo/hosted-agent/token-usage.js
 //   { type: 'end' } | { type: 'abort', reason }
 //
-// Nothing Claude-specific crosses the hosted seam: Floot persists the tool
-// activity and the final text from these events exactly as it does for any
-// other hosted backend, and the CLI's own event vocabulary stays behind this
-// package's capability boundary.
+// Floot persists tool activity and text through the same hosted vocabulary as
+// other backends. It also retains opaque native-context records for restoration
+// without interpreting their Claude-specific contents; the CLI's wire event
+// vocabulary stays behind this package's capability boundary.
 
-import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { makeHostedTurnChannel } from '@endo/hosted-agent/turn-channel.js';
+import { projectContext, tokenCount } from '@endo/hosted-agent/token-usage.js';
+import { assertTranscriptRecord } from '@endo/hosted-agent/transcript-records.js';
+
+/** @import { TranscriptContextRecord, TranscriptNativeContext } from '@endo/hosted-agent/transcript-records.js' */
 
 /**
  * @typedef {(
  *   | { type: 'phase', phase: string }
  *   | { type: 'text-delta', text: string }
  *   | { type: 'tool-call', id: string, name: string, args: string }
- *   | { type: 'tool-result', id: string, name: string, result: string }
- *   | { type: 'usage', inputTokens: number, outputTokens: number }
+ *   | { type: 'tool-result', id: string, name: string, result: string, ok?: boolean }
+ *   | { type: 'compaction', summary: string, retainedTail?: readonly TranscriptContextRecord[] }
+ *   | { type: 'native-context', checkpoint: TranscriptNativeContext }
+ *   | ({ type: 'usage' } & Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage>)
  *   | { type: 'end' }
  *   | { type: 'abort', reason: string }
  * )} HostedTurnEvent
@@ -38,6 +46,8 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
  * @returns {string}
  */
 const renderToolResultText = content => {
+  const image = imageResultFromBlocks(content);
+  if (image !== undefined) return image;
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
@@ -52,13 +62,71 @@ const renderToolResultText = content => {
 };
 
 /**
+ * What one Anthropic `usage` object says a request put in the window: its
+ * three input kinds, which are disjoint, plus its output.
+ *
+ * @param {any} usage
+ */
+const windowUse = usage =>
+  tokenCount(usage?.input_tokens) +
+  tokenCount(usage?.cache_read_input_tokens) +
+  tokenCount(usage?.cache_creation_input_tokens) +
+  tokenCount(usage?.output_tokens);
+
+/**
+ * A model id without a variant suffix such as `[1m]`.
+ * @param name
+ */
+const baseModel = (/** @type {string} */ name) =>
+  name.replace(/\[[^\]]*\]$/, '');
+
+/**
+ * The context window of the model that ran the main conversation, from the
+ * `result` event's `modelUsage`, which is keyed by model and may also list a
+ * small model the CLI used on the side, or a subagent's. The named model
+ * wins, then the same model under a variant suffix (`[1m]`); failing both,
+ * the largest window listed, since the side models are the small ones.
+ *
+ * @param {any} modelUsage
+ * @param {string | undefined} model
+ */
+const contextWindowOf = (modelUsage, model) => {
+  if (modelUsage === null || typeof modelUsage !== 'object') return 0;
+  const entries = Object.entries(modelUsage).filter(
+    ([, entry]) => entry !== null && typeof entry === 'object',
+  );
+  const windowOf = (/** @type {[string, unknown] | undefined} */ found) =>
+    found ? tokenCount(/** @type {any} */ (found[1]).contextWindow) : 0;
+  if (model !== undefined) {
+    const named =
+      entries.find(([name]) => name === model) ||
+      entries.find(([name]) => baseModel(name) === baseModel(model));
+    if (windowOf(named) > 0) return windowOf(named);
+  }
+  return Math.max(0, ...entries.map(entry => windowOf(entry)));
+};
+
+/**
+ * Whether an API message's usage says anything. The CLI writes placeholder
+ * messages of its own (model `<synthetic>`, all-zero usage) into the stream,
+ * for instance around an API error; they are not requests.
+ *
+ * @param {any} message
+ */
+const isRealRequest = message =>
+  message?.model !== '<synthetic>' &&
+  message?.usage !== null &&
+  typeof message?.usage === 'object' &&
+  windowUse(message.usage) > 0;
+
+/**
  * Stateful translator from raw `claude -p` stream-json events to hosted turn
  * events. `handle(event)` returns the hosted events one raw event maps to;
  * `finish()` returns the terminal event once the raw stream has ended cleanly.
  *
  * @returns {{
  *   handle: (event: any) => HostedTurnEvent[],
- *   finish: () => HostedTurnEvent[],
+ *   finish: (terminalReason?: string) => HostedTurnEvent[],
  * }}
  */
 export const makeClaudeHostedTranslator = () => {
@@ -87,6 +155,34 @@ export const makeClaudeHostedTranslator = () => {
   // substantive event so the UI does not keep saying "session starting" while
   // the model is already responding or using a tool.
   let starting = false;
+  // What the main conversation's latest API request put in the window, and
+  // the model that served it. `result.usage` covers the whole turn, so it
+  // cannot say this; each request's own usage can. With partial messages the
+  // input kinds arrive on `message_start` and the final output on
+  // `message_delta`; without them the complete `assistant` event carries both.
+  /** @type {{ input: number, output: number } | undefined} */
+  let lastRequest;
+  /** @type {string | undefined} */
+  let lastModel;
+  // The message whose usage `lastRequest` holds, so the complete `assistant`
+  // events that repeat it (one per content block) do not report it again.
+  /** @type {string | undefined} */
+  let readMessageId;
+  // Whether the request now streaming gave its usage on `message_start`, so
+  // a `message_delta` completes that reading and not an earlier request's.
+  let streamingRequest = false;
+  const contextEvent = () =>
+    lastRequest === undefined || lastRequest.input + lastRequest.output === 0
+      ? []
+      : [
+          /** @type {HostedTurnEvent} */ ({
+            type: 'usage',
+            context: {
+              usedTokens: lastRequest.input + lastRequest.output,
+              windowTokens: 0,
+            },
+          }),
+        ];
 
   /** @param {any} event */
   const handle = event => {
@@ -105,6 +201,17 @@ export const makeClaudeHostedTranslator = () => {
     // stream — a consumer would otherwise persist it as the assistant's answer.
     if (event.parent_tool_use_id) return out;
     switch (event.type) {
+      case 'endo_native_context': {
+        const checkpoint = assertTranscriptRecord(event.checkpoint);
+        if (checkpoint.kind !== 'native-context') {
+          throw Error('Expected Claude native context checkpoint');
+        }
+        out.push({
+          type: 'native-context',
+          checkpoint,
+        });
+        break;
+      }
       case 'system': {
         // Lifecycle diagnostics (subtype 'init' etc.) — surface as a phase so
         // the UI shows sandbox startup instead of dead air.
@@ -122,7 +229,35 @@ export const makeClaudeHostedTranslator = () => {
             typeof streamEvent.message?.id === 'string'
               ? streamEvent.message.id
               : undefined;
+          // A new request: whatever the last one read no longer describes
+          // the one streaming, whether or not this one says its usage.
+          streamingRequest = false;
+          if (isRealRequest(streamEvent.message)) {
+            const started = streamEvent.message.usage;
+            lastRequest = {
+              input: windowUse({ ...started, output_tokens: 0 }),
+              output: tokenCount(started.output_tokens),
+            };
+            streamingRequest = true;
+            readMessageId = currentMessageId;
+            if (typeof streamEvent.message.model === 'string') {
+              lastModel = streamEvent.message.model;
+            }
+          }
           streamedCurrentAssistant = false;
+        }
+        if (
+          streamEvent?.type === 'message_delta' &&
+          streamEvent.usage &&
+          streamingRequest &&
+          lastRequest !== undefined
+        ) {
+          // The request is complete: its output count is final.
+          lastRequest = {
+            input: lastRequest.input,
+            output: tokenCount(streamEvent.usage.output_tokens),
+          };
+          out.push(...contextEvent());
         }
         if (
           streamEvent?.type === 'content_block_delta' &&
@@ -148,6 +283,23 @@ export const makeClaudeHostedTranslator = () => {
           typeof messageId === 'string' && streamedMessageIds.size > 0
             ? streamedMessageIds.has(messageId)
             : streamedCurrentAssistant;
+        // Without partial messages this event is the only per-request usage.
+        // With them, `message_start` already read this message; either way a
+        // message is read once, though it arrives once per content block.
+        if (
+          isRealRequest(event.message) &&
+          !(typeof messageId === 'string' && messageId === readMessageId)
+        ) {
+          if (typeof event.message.model === 'string') {
+            lastModel = event.message.model;
+          }
+          lastRequest = {
+            input: windowUse({ ...event.message.usage, output_tokens: 0 }),
+            output: tokenCount(event.message.usage.output_tokens),
+          };
+          readMessageId = typeof messageId === 'string' ? messageId : undefined;
+          out.push(...contextEvent());
+        }
         for (const block of blocks) {
           if (block?.type === 'text' && block.text) {
             leaveStarting('responding');
@@ -183,6 +335,9 @@ export const makeClaudeHostedTranslator = () => {
               id,
               name: toolNames.get(id) || 'tool',
               result: renderToolResultText(block.content),
+              ...(typeof block.is_error === 'boolean'
+                ? { ok: !block.is_error }
+                : {}),
             });
           }
         }
@@ -200,7 +355,9 @@ export const makeClaudeHostedTranslator = () => {
           // whatever text happened to stream and be persisted as a normal
           // assistant reply. Record it; finish() raises it.
           errorReason =
-            resultText ||
+            [resultText, ...(Array.isArray(event.errors) ? event.errors : [])]
+              .filter(item => typeof item === 'string' && item.trim() !== '')
+              .join('\n') ||
             (typeof event.subtype === 'string' && event.subtype) ||
             'claude reported an error';
         } else if (resultText !== undefined && !streamedAny) {
@@ -211,10 +368,27 @@ export const makeClaudeHostedTranslator = () => {
           out.push({ type: 'text-delta', text: resultText });
         }
         if (event.usage && typeof event.usage === 'object') {
+          // The whole turn, every request of it. Anthropic's input kinds are
+          // already disjoint, and it does not count thinking apart from
+          // output. Reading `input_tokens` alone dropped the cache reads and
+          // writes, which are most of a long session.
+          const context = projectContext({
+            usedTokens:
+              lastRequest === undefined
+                ? 0
+                : lastRequest.input + lastRequest.output,
+            windowTokens: contextWindowOf(event.modelUsage, lastModel),
+          });
           out.push({
             type: 'usage',
-            inputTokens: Number(event.usage.input_tokens) || 0,
-            outputTokens: Number(event.usage.output_tokens) || 0,
+            inputTokens: tokenCount(event.usage.input_tokens),
+            outputTokens: tokenCount(event.usage.output_tokens),
+            cachedInputTokens: tokenCount(event.usage.cache_read_input_tokens),
+            cacheWriteInputTokens: tokenCount(
+              event.usage.cache_creation_input_tokens,
+            ),
+            reasoningOutputTokens: 0,
+            ...(context === undefined ? {} : { context }),
           });
         }
         break;
@@ -225,13 +399,19 @@ export const makeClaudeHostedTranslator = () => {
     return out;
   };
 
-  const finish = () =>
-    errorReason === undefined
+  /** @param {string} [terminalReason] */
+  const finish = terminalReason =>
+    errorReason === undefined && terminalReason === undefined
       ? [/** @type {HostedTurnEvent} */ ({ type: 'end' })]
       : [
           /** @type {HostedTurnEvent} */ ({
             type: 'abort',
-            reason: `claude turn failed: ${errorReason}`,
+            reason: [
+              ...(errorReason === undefined
+                ? []
+                : [`claude turn failed: ${errorReason}`]),
+              ...(terminalReason === undefined ? [] : [terminalReason]),
+            ].join('\n'),
           }),
         ];
 
@@ -247,46 +427,54 @@ harden(makeClaudeHostedTranslator);
  * the ClaudeClient reader itself offers.
  *
  * @param {any} rawReader - the reader `ClaudeClient.send()` returned.
- * @returns {object} a buffered hosted-event reader
+ * @returns {ReturnType<typeof makeHostedTurnChannel>['reader']} a buffered hosted-event reader
  */
 export const translateClaudeTurn = rawReader => {
   const translator = makeClaudeHostedTranslator();
-  const { push, reader, setOnClose } = makeBufferedReader();
   const rawIterator = iterateReader(/** @type {any} */ (rawReader), {
     buffer: 8,
   });
-  setOnClose(() => {
-    rawIterator.return().catch(() => {});
+  const { push, write, reader } = makeHostedTurnChannel({
+    name: 'claude-translated',
+    onConsumerClosed: () => {
+      rawIterator.return().catch(() => {});
+    },
   });
   (async () => {
     try {
       for await (const raw of rawIterator) {
         const event = /** @type {any} */ (raw);
         if (event?.type === 'end') {
-          for (const translated of translator.finish()) push(translated);
+          for (const translated of translator.finish()) {
+            // eslint-disable-next-line no-await-in-loop
+            if (!(await write(translated))) return;
+          }
           return;
         }
         if (event?.type === 'abort') {
-          push({
-            type: 'abort',
-            reason: `${event.reason || 'claude turn aborted'}`,
-          });
+          for (const terminal of translator.finish(
+            `${event.reason || 'claude turn aborted'}`,
+          ))
+            push(terminal);
           return;
         }
-        for (const translated of translator.handle(event)) push(translated);
+        for (const translated of translator.handle(event)) {
+          // eslint-disable-next-line no-await-in-loop
+          if (!(await write(translated))) return;
+        }
       }
       // The raw reader ended without an in-band terminal: its producer closed
       // it (the client's interrupt() or terminate() killed the process), so
       // whatever streamed is a truncated reply and must not read as complete.
-      push({
-        type: 'abort',
-        reason: 'claude turn ended without a terminal event',
-      });
+      for (const terminal of translator.finish(
+        'claude turn ended without a terminal event',
+      ))
+        push(terminal);
     } catch (error) {
-      push({
-        type: 'abort',
-        reason: error instanceof Error ? error.message : String(error),
-      });
+      for (const terminal of translator.finish(
+        error instanceof Error ? error.message : String(error),
+      ))
+        push(terminal);
     }
   })();
   return reader;

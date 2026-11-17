@@ -286,6 +286,9 @@ fn b(op: Opcode) -> u8 {
 thread_local! {
     pub(super) static GC_AT_STEP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     pub(super) static GC_HITS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// A step at which the dispatch loop panics, for the abort paths that
+    /// unwind native activations without returning a `Step`.
+    pub(super) static PANIC_AT_STEP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 #[test]
@@ -467,8 +470,13 @@ fn hidden_control_latches_independently_refuse_quiescence() {
     assert!(m.is_quiescent());
 }
 
+/// `super(...)` keeps its `new.target` in the RESULT slot of the frame it
+/// builds, and RUN arms the one-shot register only when it enters the
+/// parent. A halt while the arguments evaluate must therefore leave the
+/// register empty, the frame holding the derived constructor as its target,
+/// and nothing for the next crank to inherit.
 #[test]
-fn pending_new_target_is_rooted_and_gated_after_every_non_throw_halt() {
+fn a_super_target_survives_every_non_throw_halt_in_its_frame() {
     use crate::opcode::instruction_len;
     use crate::value::SlotIndex;
     let cases = [
@@ -517,23 +525,40 @@ fn pending_new_target_is_rooted_and_gated_after_every_non_throw_halt() {
             "{kind}: {:?}",
             out.halt
         );
-        let target = m
-            .pending_new_target
-            .unwrap_or_else(|| panic!("{kind}: SUPER must still be armed at the halt"));
         assert!(
-            m.gc_roots().contains(&target),
-            "{kind}: pending target must be rooted"
+            m.pending_new_target.is_none(),
+            "{kind}: SUPER armed the register before RUN"
         );
+        // The pending `super` frame: [THIS(uninitialized), FUNCTION,
+        // RESULT(new.target), FRAME]. The corrupted `CLASS` of the
+        // EngineInvariant case pops three slots before it halts, so there the
+        // frame — and with it anything to keep alive — is gone.
+        let derived = m
+            .functions
+            .iter()
+            .find_map(|(&function, info)| (info.name == "B").then_some(function))
+            .expect("class B");
+        let target = m.stack.windows(4).find_map(|frame| {
+            match (frame[0].kind, frame[2].kind, frame[2].value) {
+                (Kind::Uninitialized, Kind::Reference, Payload::Reference(target)) => Some(target),
+                _ => None,
+            }
+        });
+        if kind == "EngineInvariant" {
+            assert_eq!(target, None, "{kind}: the frame was popped");
+        } else {
+            assert_eq!(
+                target,
+                Some(derived),
+                "{kind}: the SUPER frame must hold B as its new.target"
+            );
+        }
         assert!(
             !m.is_quiescent(),
             "{kind}: halted activation must not persist"
         );
         assert_eq!(m.collect_garbage(), Err(NotQuiescent));
         assert_eq!(m.free_pages(&[]), Err(NotQuiescent));
-        assert!(
-            !m.slots.free_list().contains(&target.0),
-            "{kind}: collection lost the target"
-        );
         m.reattach_meter_host(Box::new(|_| true));
         let (next, names) = ironhorse_compile::compile_atoms(
             "class K { constructor() { this.ok = new.target === K; } } new K().ok",
@@ -863,15 +888,16 @@ fn side_ref_undercount_blocks_quiescence_and_page_freeing() {
         0,
         Slot::of(Kind::Reference, Payload::Reference(value)),
         &mut interp.side_refs,
+        &mut interp.chunks,
     );
     // Simulate a missed counted mutation. Removing the remaining
     // entry detects the missing count without a debug-only panic.
     interp.side_refs = SideRefCounts::new();
-    interp
-        .arrays
-        .get_mut(&array)
-        .unwrap()
-        .remove_item(&0, &mut interp.side_refs);
+    interp.arrays.get_mut(&array).unwrap().remove_item(
+        &0,
+        &mut interp.side_refs,
+        &mut interp.chunks,
+    );
     assert!(!interp.is_quiescent());
     assert_eq!(
         interp.free_pages(&[value.0 / crate::value::SLOTS_PER_PAGE]),
@@ -904,6 +930,7 @@ fn side_ref_parity_mismatch_refuses_reclamation_including_release() {
         0,
         Slot::of(Kind::Reference, Payload::Reference(value)),
         &mut interp.side_refs,
+        &mut interp.chunks,
     );
     assert!(interp.is_quiescent());
     assert!(interp.side_table_ref_page_bits()[next_page as usize]);
@@ -914,11 +941,11 @@ fn side_ref_parity_mismatch_refuses_reclamation_including_release() {
     assert_eq!(interp.free_pages(&[next_page]), Err(NotQuiescent));
     assert!(!interp.slots.is_free_index(value));
     // Repairing the bitmap does not permit this machine to persist.
-    interp
-        .arrays
-        .get_mut(&array)
-        .unwrap()
-        .remove_item(&0, &mut SideRefCounts::new());
+    interp.arrays.get_mut(&array).unwrap().remove_item(
+        &0,
+        &mut SideRefCounts::new(),
+        &mut interp.chunks,
+    );
     interp.side_table_ref_page_bits();
     assert!(!interp.is_quiescent());
 }
@@ -940,6 +967,7 @@ fn tail_masked_bulk_reference(interp: &mut Interp) -> (crate::value::SlotIndex, 
         0,
         Slot::of(Kind::Reference, Payload::Reference(interp.object_proto)),
         &mut interp.side_refs,
+        &mut interp.chunks,
     );
     (array, next_page)
 }
@@ -995,20 +1023,22 @@ fn side_ref_parity_sees_an_off_by_one_beside_a_surviving_reference() {
     let value = interp.new_object();
     let page = value.0 / crate::value::SLOTS_PER_PAGE;
     let reference = Slot::of(Kind::Reference, Payload::Reference(value));
-    interp
-        .arrays
-        .get_mut(&array)
-        .unwrap()
-        .insert_item(0, reference, &mut interp.side_refs);
+    interp.arrays.get_mut(&array).unwrap().insert_item(
+        0,
+        reference,
+        &mut interp.side_refs,
+        &mut interp.chunks,
+    );
     assert_eq!(interp.side_ref_parity(), Ok(()));
     let before = interp.side_table_ref_page_bits();
     // A mutation that forgot its increment: the same page, one more item.
     let mut bypassed = SideRefCounts::new();
-    interp
-        .arrays
-        .get_mut(&array)
-        .unwrap()
-        .insert_item(1, reference, &mut bypassed);
+    interp.arrays.get_mut(&array).unwrap().insert_item(
+        1,
+        reference,
+        &mut bypassed,
+        &mut interp.chunks,
+    );
     let mismatch = interp.side_ref_parity().unwrap_err();
     assert_eq!(
         (mismatch.page, mismatch.counted, mismatch.walked),
@@ -1437,6 +1467,72 @@ fn legacy_date_prototype_snapshot_row_is_migrated_away() {
         Some(5678.0),
         "ordinary Date instance rows still restore"
     );
+}
+
+#[test]
+fn compiler_registry_is_host_owned_and_weak() {
+    let mut interp = Interp::new();
+    let registry = std::rc::Rc::new(crate::compartment::CompilerRegistry::default());
+    interp.attach_compiler_registry(&registry);
+    assert!(interp.compiler_registry.upgrade().is_some());
+    drop(registry);
+    assert!(interp.compiler_registry.upgrade().is_none());
+}
+
+#[test]
+fn a_failed_pending_global_install_remains_retryable() {
+    let mut interp = Interp::new();
+    interp.link_intrinsics(&[]);
+    let floor = interp.installed_names_len;
+    let map_name: SymbolName = "Map".into();
+    let map_id = interp.append_name_key(&map_name);
+    interp.shared_compartments = true;
+    assert!(!interp.environment.binding_names.contains(&map_id));
+
+    interp.set_slot_ceiling(interp.slots.capacity()).unwrap();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        interp.intern_key_reserved(map_name.clone());
+    }))
+    .expect_err("runtime global materialization reaches the slot ceiling");
+    assert!(failure.is::<crate::value::HeapExhausted>());
+    assert_eq!(interp.installed_names_len, floor);
+    assert!(!interp.environment.binding_names.contains(&map_id));
+    assert!(!interp.environment.global_props.contains_key(&map_id));
+
+    interp.set_slot_ceiling(u32::MAX).unwrap();
+    interp.install_pending_intrinsics();
+    assert!(interp.environment.binding_names.contains(&map_id));
+    assert!(interp.environment.global_props.contains_key(&map_id));
+}
+
+#[test]
+fn a_failed_pending_surface_install_retains_its_roster_for_retry() {
+    let mut interp = Interp::new();
+    interp.link_intrinsics(&[]);
+    let floor = interp.installed_names_len;
+    let map_name: SymbolName = "map".into();
+    let map_id = interp.append_name_key(&map_name);
+    interp.shared_compartments = true;
+
+    interp.set_slot_ceiling(interp.slots.capacity()).unwrap();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        interp.install_pending_intrinsics();
+    }))
+    .expect_err("the pending prototype allocation reaches the slot ceiling");
+    assert!(failure.is::<crate::value::HeapExhausted>());
+    assert_eq!(interp.installed_names_len, floor);
+    assert!(interp
+        .ordinary_get_own_descriptor(interp.array_proto, map_id)
+        .is_none());
+
+    interp.set_slot_ceiling(u32::MAX).unwrap();
+    interp.install_pending_intrinsics();
+    let map = interp
+        .ordinary_get_own_descriptor(interp.array_proto, map_id)
+        .and_then(|descriptor| descriptor.value)
+        .expect("retry installs Array.prototype.map");
+    assert!(matches!(map.value, Payload::Reference(function)
+        if interp.method_of(function) == Some(NativeMethod::ArrayMap)));
 }
 
 #[test]
@@ -1890,12 +1986,13 @@ fn unarmed_meter_accumulates_without_checking() {
 }
 
 #[test]
-fn user_function_call_runs_and_meters_bit_exact() {
+fn user_function_call_runs_and_meters_deterministically() {
     // The exact XS bytecode for `(function(x){return x+1})(5)`
     // (captured from the oracle), run oracle-free: the frame machinery
     // (`constructor_function`/`code`/`function_environment`/`call`/
     // `run_1`/`argument`/`end`) must produce the completion `6` and the
-    // XS computron count `30` — a standing lock on the definition-site
+    // frozen own cost `30` (captured from XS at bring-up; now Iron
+    // Horse's own release cost) — a standing lock on the definition-site
     // allocation metering and dispatch-metered stack frames, so a
     // regression is caught without linking C.
     let code: [u8; 44] = [
@@ -1907,14 +2004,17 @@ fn user_function_call_runs_and_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "6", "the call returns x+1 with x=5");
-    assert_eq!(out.computrons, 30, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 30,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn nested_user_function_calls_run_and_meter_bit_exact() {
+fn nested_user_function_calls_run_and_meter_deterministically() {
     // `(function(){return (function(){return 1})()})()`, captured from
     // the oracle: two definitions and two nested calls, completion `1`,
-    // XS computrons `36`.
+    // frozen own cost `36` (captured from XS at bring-up).
     let code: [u8; 51] = [
         0x0b, 0x00, 0x4b, 0xe0, 0x38, 0x00, 0x00, 0x2e, 0x1c, 0x0b, 0x00, 0xe0, 0x38, 0x00, 0x00,
         0x2e, 0x06, 0x0b, 0x00, 0x72, 0x01, 0xbb, 0x44, 0x58, 0x92, 0x42, 0xe0, 0x89, 0x01, 0x00,
@@ -1925,11 +2025,14 @@ fn nested_user_function_calls_run_and_meter_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "1");
-    assert_eq!(out.computrons, 36, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 36,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn closure_capture_and_mutation_run_and_meter_bit_exact() {
+fn closure_capture_and_mutation_run_and_meter_deterministically() {
     // The exact XS bytecode for
     // `var mk=function(){var c=0; return function(){c=c+1; return c}};
     //  var f=mk(); f(); f()` (captured from the oracle), run
@@ -1937,7 +2040,7 @@ fn closure_capture_and_mutation_run_and_meter_bit_exact() {
     // (`new_closure`/`store`/`function_environment`/`retrieve`/
     // `get_closure`/`pull_closure`) shares one heap cell between the
     // factory frame and the returned closure, so the two `f()` calls
-    // mutate `c` to `2`, and the computron count matches XS's `87` —
+    // mutate `c` to `2`, and the frozen own cost is `87` (captured from XS at bring-up) —
     // a standing lock on the cell-allocation metering without linking C.
     let code: [u8; 131] = [
         0x0b, 0x00, 0x9e, 0x02, 0x86, 0x02, 0x00, 0xe0, 0xe6, 0x01, 0x92, 0x86, 0x03, 0x00, 0xe0,
@@ -1957,7 +2060,10 @@ fn closure_capture_and_mutation_run_and_meter_bit_exact() {
         out.result, "2",
         "the shared closure cell mutates across the two f() calls"
     );
-    assert_eq!(out.computrons, 87, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 87,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
@@ -2029,6 +2135,7 @@ fn every_opcode_decodes_and_dispatches_without_panic_or_decode_error() {
             | Halt::Throw { .. }
             | Halt::MeterAbort
             | Halt::HeapExhausted
+            | Halt::HostAllocationFailed
             | Halt::StepLimit(_)
             | Halt::NotImplemented(_)
             | Halt::Refused(_)
@@ -2043,12 +2150,13 @@ fn every_opcode_decodes_and_dispatches_without_panic_or_decode_error() {
 }
 
 #[test]
-fn caught_throw_runs_and_meters_bit_exact() {
+fn caught_throw_runs_and_meters_deterministically() {
     // The exact XS bytecode for `try { throw 7 } catch (e) { e }`
     // (captured from the oracle), run oracle-free: `catch` pushes a
     // jump, `throw` unwinds to it restoring the stack/scope cuts,
     // `exception` binds the thrown 7 into `e`, and the completion is
-    // `7` with the XS computron count `38` — a standing lock on the
+    // `7` at the frozen own cost `38` (captured from XS at bring-up) —
+    // a standing lock on the
     // jump-chain semantics and dispatch-only exception metering.
     let code: [u8; 59] = [
         0x0b, 0x00, 0x4b, 0x9e, 0x04, 0x8b, 0x8b, 0x8b, 0x72, 0x00, 0xb5, 0x02, 0x92, 0x29, 0x08,
@@ -2063,15 +2171,18 @@ fn caught_throw_runs_and_meters_bit_exact() {
         out.result, "7",
         "the catch binds and returns the thrown value"
     );
-    assert_eq!(out.computrons, 38, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 38,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn uncaught_throw_escapes_to_host_and_meters_bit_exact() {
+fn uncaught_throw_escapes_to_host_and_meters_deterministically() {
     // The exact XS bytecode for `throw 7` (captured from the oracle),
     // run oracle-free: with no handler on the jump chain the throw
     // escapes to the host as `Halt::Throw("7")`, and the computron
-    // count is XS's `6` — the escaping opcode is un-metered and the
+    // count is the frozen own cost `6` — the escaping opcode is un-metered and the
     // host-boundary constant `THROW_HOST_ESCAPE_METERING` is accrued
     // (`begin`, `eval_environment`, `integer` = 3 metered opcodes plus
     // the 3-dispatch invocation baseline, the escaping `throw` dropped).
@@ -2083,7 +2194,10 @@ fn uncaught_throw_escapes_to_host_and_meters_bit_exact() {
         "no handler ⇒ escape to host"
     );
     assert!(!out.completed);
-    assert_eq!(out.computrons, 6, "bit-exact host-escape computrons vs XS");
+    assert_eq!(
+        out.computrons, 6,
+        "frozen own host-escape computron cost (release determinism pin)"
+    );
 }
 
 #[test]
@@ -2092,7 +2206,7 @@ fn bare_intrinsic_reference_renders_as_native_function() {
     // begin_sloppy, eval_environment, eval_reference #1,
     // get_variable #1, set_result, return. With the intrinsic linked to
     // symbol id 1 the completion is the native function, rendered by
-    // Function.prototype.toString's host-function form, at XS's 9
+    // Function.prototype.toString's host-function form, at the frozen own cost of 9
     // computrons (pure dispatch + program setup).
     let code: [u8; 11] = [
         0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0xbb, 0xa9,
@@ -2103,14 +2217,17 @@ fn bare_intrinsic_reference_renders_as_native_function() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "function [\"Boolean\"] (){[native code]}");
-    assert_eq!(out.computrons, 9, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 9,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn native_boolean_call_coerces_and_meters_bit_exact() {
+fn native_boolean_call_coerces_and_meters_deterministically() {
     // The exact XS bytecode for `Boolean(1)` (captured from the
     // oracle): the native call path runs ToBoolean and returns `true`
-    // at XS's 13 computrons — the native adds no metering beyond the
+    // at the frozen own cost of 13 computrons — the native adds no metering beyond the
     // call's dispatch.
     let code: [u8; 17] = [
         0x0b, 0x00, 0x4b, 0xe0, 0x4d, 0x01, 0x00, 0x66, 0x01, 0x00, 0x28, 0x72, 0x01, 0xab, 0x01,
@@ -2122,16 +2239,19 @@ fn native_boolean_call_coerces_and_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "true");
-    assert_eq!(out.computrons, 13, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 13,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn user_constructor_new_runs_and_meters_bit_exact() {
+fn user_constructor_new_runs_and_meters_deterministically() {
     // The exact XS bytecode for `function F(a){this.x=a}; (new F(5)).x`
     // (captured from the oracle): the construct path — `new` reshaping the
     // frame with the uninitialized `this` placeholder, `begin`'s
     // fxRunConstructor allocating the fresh instance, the body setting
-    // `this.x`, `end` returning `this` — yields `5` at XS's 43
+    // `this.x`, `end` returning `this` — yields `5` at the frozen own cost of 43
     // computrons, a standing lock on the construct frame geometry and its
     // fixed host-frame metering without linking C.
     let code: [u8; 69] = [
@@ -2145,14 +2265,17 @@ fn user_constructor_new_runs_and_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "5", "new F(5).x reads the constructed property");
-    assert_eq!(out.computrons, 43, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 43,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn symbol_create_and_typeof_meters_bit_exact() {
+fn symbol_create_and_typeof_meters_deterministically() {
     // The exact XS bytecode for `typeof Symbol()` (captured from the
     // oracle): `Symbol()` creates a fresh symbol primitive, `typeof`
-    // reads "symbol", at XS's 13 computrons (the symbol-creation cost
+    // reads "symbol", at the frozen own cost of 13 computrons (the symbol-creation cost
     // plus dispatch).
     let code: [u8; 16] = [
         0x0b, 0x00, 0x4b, 0xe0, 0x4d, 0x01, 0x00, 0x66, 0x01, 0x00, 0x28, 0xab, 0x00, 0xde, 0xbb,
@@ -2164,7 +2287,10 @@ fn symbol_create_and_typeof_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "symbol");
-    assert_eq!(out.computrons, 13, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 13,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
@@ -2205,11 +2331,11 @@ fn bare_symbol_completion_is_a_completion_the_harness_coerces_to_a_typeerror() {
 }
 
 #[test]
-fn object_prototype_method_dispatch_meters_bit_exact() {
+fn object_prototype_method_dispatch_meters_deterministically() {
     // The exact XS bytecode for `({a:1}).hasOwnProperty('a')` (captured
     // from the oracle): `.hasOwnProperty` resolves up the prototype chain
     // to %Object.prototype%'s native method, which is dispatched with the
-    // object as receiver and answers `true` at XS's 21 computrons.
+    // object as receiver and answers `true` at the frozen own cost of 21 computrons.
     let code: [u8; 33] = [
         0x0b, 0x00, 0x4b, 0x9e, 0x01, 0x8b, 0x90, 0xb5, 0x01, 0x5c, 0x01, 0x72, 0x01, 0x89, 0x01,
         0x00, 0x72, 0x00, 0xe2, 0x01, 0x42, 0x60, 0x02, 0x00, 0x28, 0xc9, 0x02, 0x61, 0x00, 0xab,
@@ -2221,14 +2347,17 @@ fn object_prototype_method_dispatch_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "true");
-    assert_eq!(out.computrons, 21, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 21,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn instanceof_prototype_chain_walk_meters_bit_exact() {
+fn instanceof_prototype_chain_walk_meters_deterministically() {
     // The exact XS bytecode for `({}) instanceof Object` (captured from
     // the oracle): the object's prototype chain reaches %Object.prototype%
-    // = Object.prototype, so the result is `true` at XS's 19 computrons
+    // = Object.prototype, so the result is `true` at the frozen own cost of 19 computrons
     // (the fxOrdinaryHasInstance host-frame call + the object-chain walk,
     // 4 computrons over the dispatch).
     let code: [u8; 20] = [
@@ -2241,15 +2370,18 @@ fn instanceof_prototype_chain_walk_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "true");
-    assert_eq!(out.computrons, 19, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 19,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn new_error_constructs_renders_and_meters_bit_exact() {
+fn new_error_constructs_renders_and_meters_deterministically() {
     // The exact XS bytecode for `new Error('boom')` (captured from the
     // oracle): the native Error constructor builds an error object whose
     // completion stringifies `Error: boom` (Error.prototype.toString) at
-    // XS's 13 computrons.
+    // the frozen own cost of 13 computrons.
     let code: [u8; 21] = [
         0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0x84, 0xc9, 0x05, 0x62, 0x6f, 0x6f,
         0x6d, 0x00, 0xab, 0x01, 0xbb, 0xa9,
@@ -2260,7 +2392,10 @@ fn new_error_constructs_renders_and_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "Error: boom");
-    assert_eq!(out.computrons, 13, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 13,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 /// Build a small ordinary-object graph `{a:1, b:{c:2}}` in a fresh arena
@@ -2295,7 +2430,8 @@ fn harden_freezes_target_transitively_and_returns_it() {
     // `harden({a:1, b:{c:2}})`: the target and every instance reachable from
     // it are prevented-extensions + every own data property stamped
     // non-writable/non-configurable, and each reached instance marked
-    // `XS_DONT_MARSHALL_FLAG` (the visited set). harden returns its argument.
+    // `XS_DONT_MARSHALL_FLAG` (the visited set), which the OUTERMOST walk's
+    // completion makes permanent. harden returns its argument.
     let (mut interp, outer, inner, id_a, _id_b, id_c) = build_harden_graph();
     let arg = Slot::of(Kind::Reference, Payload::Reference(outer));
     let r = interp.do_harden(&[], arg).expect("harden ok");
@@ -2322,6 +2458,41 @@ fn harden_freezes_target_transitively_and_returns_it() {
         .do_harden(&[], Slot::number(3.0))
         .expect("harden prim ok");
     assert_eq!(prim.kind, Kind::Number);
+}
+
+/// Marks left behind by a walk that never returned are not evidence.
+///
+/// Every ordinary exit from `do_harden` accounts for its marks -- completion
+/// makes them permanent, failure revokes them. One exit does not: a Rust panic
+/// through the walk (heap exhaustion in a host allocation, say) unwinds past
+/// both, and a supervisor that catches it and KEEPS the interpreter would hold
+/// marks for a freeze that never happened. `Halt::HeapExhausted` is not that
+/// case -- it is an ordinary `Err` and takes the revoke path.
+///
+/// This reproduces the state such an unwind leaves -- an instance marked, and
+/// recorded as provisionally marked, with no walk running -- and pins that the
+/// next walk drops it rather than short-circuiting on it. Delete the sweep at
+/// the top of `do_harden` and `inner` comes back extensible.
+#[test]
+fn harden_drops_marks_left_by_a_walk_that_never_returned() {
+    let (mut interp, _outer, inner, _id_a, _id_b, _id_c) = build_harden_graph();
+    interp.slots.get_mut(inner).flag |= XS_DONT_MARSHALL_FLAG;
+    interp
+        .realm
+        .intrinsics()
+        .harden_marks
+        .borrow_mut()
+        .push(inner);
+    let arg = Slot::of(Kind::Reference, Payload::Reference(inner));
+    let _ = interp.do_harden(&[], arg).expect("harden ok");
+    assert!(
+        interp.slots.get(inner).flag & XS_DONT_PATCH_FLAG != 0,
+        "the stale mark must not short-circuit the freeze"
+    );
+    assert!(
+        interp.realm.intrinsics().harden_marks.borrow().is_empty(),
+        "a completed walk leaves no provisional marks"
+    );
 }
 
 #[test]
@@ -2361,11 +2532,11 @@ fn harden_transitive_freeze_worklist_completes() {
 }
 
 #[test]
-fn uncaught_thrown_error_escapes_with_real_error_value_bit_exact() {
+fn uncaught_thrown_error_escapes_with_real_error_value() {
     // The exact XS bytecode for `throw new TypeError('nope')` (captured
     // from the oracle): an uncaught real Error escapes to the host as
     // `TypeError: nope` (graduating abort-value parity from primitive
-    // throws) at XS's 12 computrons.
+    // throws) at the frozen own cost of 12 computrons.
     let code: [u8; 21] = [
         0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0x84, 0xc9, 0x05, 0x6e, 0x6f, 0x70,
         0x65, 0x00, 0xab, 0x01, 0xd7, 0xa9,
@@ -2375,14 +2546,17 @@ fn uncaught_thrown_error_escapes_with_real_error_value_bit_exact() {
     let out = interp.run(&code);
     assert_eq!(out.halt.thrown_rendering(), Some("TypeError: nope"));
     assert!(!out.completed);
-    assert_eq!(out.computrons, 12, "bit-exact host-escape computrons vs XS");
+    assert_eq!(
+        out.computrons, 12,
+        "frozen own host-escape computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn native_object_construct_allocates_and_meters_bit_exact() {
+fn native_object_construct_allocates_and_meters_deterministically() {
     // The exact XS bytecode for `new Object()` (captured from the
     // oracle): the native Object constructor allocates a fresh empty
-    // object (rendered `[object Object]`) at XS's 11 computrons — one
+    // object (rendered `[object Object]`) at the frozen own cost of 11 computrons — one
     // fxNewObject plus one built-in step, the fractional gap over a bare
     // object literal.
     let code: [u8; 14] = [
@@ -2394,13 +2568,16 @@ fn native_object_construct_allocates_and_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "[object Object]");
-    assert_eq!(out.computrons, 11, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 11,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
 fn value_global_undefined_resolves_pure_dispatch() {
     // The exact XS bytecode for `undefined` (captured from the
-    // oracle): the value global resolves to `undefined` at XS's 9
+    // oracle): the value global resolves to `undefined` at the frozen own cost of 9
     // computrons (pure dispatch — a global read meters no built-in step).
     let code: [u8; 11] = [
         0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0xbb, 0xa9,
@@ -2874,14 +3051,14 @@ fn runtime_key_scan_keeps_arena_precedence_and_tail_minimum() {
     let second = vm.slots.alloc(key(8));
     vm.stack.push(key(6));
     let mut array = ArrayData::default();
-    array.insert_item(0, key(7), &mut vm.side_refs);
-    array.insert_item(1, key(5), &mut vm.side_refs);
+    array.insert_item(0, key(7), &mut vm.side_refs, &mut vm.chunks);
+    array.insert_item(1, key(5), &mut vm.side_refs, &mut vm.chunks);
     vm.arrays.insert(owner, array);
     let mut indexed = ArrayData::default();
-    indexed.insert_item(0, key(4), &mut vm.side_refs);
+    indexed.insert_item(0, key(4), &mut vm.side_refs, &mut vm.chunks);
     vm.index_props.insert(owner, indexed);
     let mut collection = CollectionData::new(CollKind::Map, 4);
-    collection.push_entry(key(2), key(1), &mut vm.side_refs);
+    collection.push_entry(key(2), key(1), &mut vm.side_refs, &mut vm.chunks);
     vm.collections.insert(owner, collection);
     // The key diagnostic has never walked every native-reference holder.
     // Reusing persist_refs would incorrectly include this lower witness.
@@ -3734,4 +3911,627 @@ fn a_stale_evaluator_environment_row_restores_without_restoring_the_pin() {
         restored.functions[&function].global_env.is_null(),
         "the stale pin must be dropped, not applied"
     );
+}
+
+/// The nests the in-place tests run, each level calling the next through a
+/// call `RUN` enters in the caller's dispatch loop (STACK-DEPTH-REFACTOR.md
+/// C1, C2, C4, C7), and the innermost calling `bottom`: through a bound
+/// function, a Proxy that forwards to `f`, a Proxy whose `apply` trap calls
+/// `f`, `Reflect.apply`, `Reflect.construct`, a getter, a setter and a
+/// generator's `next`. Each defines `wrap`, which gives a function the same
+/// kind of call, and comes with its ceiling and the depth the refusal one
+/// level past it reports.
+const IN_PLACE_NESTS: [(&str, &str, usize, usize); 8] = [
+    (
+        "bound",
+        "function f(n, bottom) { return n > 0 ? f.bind(null, n - 1, bottom)() : bottom(); } \
+         function wrap(w) { return w.bind(null); }",
+        127,
+        2049,
+    ),
+    (
+        "forward",
+        "function f(n, bottom) { return n > 0 ? fp(n - 1, bottom) : bottom(); } \
+         var fp = new Proxy(f, {}); \
+         function wrap(w) { return new Proxy(w, {}); }",
+        119,
+        2056,
+    ),
+    (
+        "trap",
+        "function f(n, bottom) { return n > 0 ? ft(n - 1, bottom) : bottom(); } \
+         var ft = new Proxy(function () {}, { apply: function (t, s, a) { return f(a[0], a[1]); } }); \
+         function wrap(w) { return new Proxy(function () {}, { apply: function () { return w(); } }); }",
+        119,
+        2056,
+    ),
+    (
+        "Reflect.apply",
+        "function f(n, bottom) { return n > 0 ? Reflect.apply(f, null, [n - 1, bottom]) : bottom(); } \
+         function wrap(w) { return function () { return Reflect.apply(w, null, []); }; }",
+        63,
+        2064,
+    ),
+    (
+        "Reflect.construct",
+        "function f(n, bottom) { return n > 0 ? Reflect.construct(F, [n - 1, bottom]).v : bottom(); } \
+         function F(n, bottom) { this.v = f(n, bottom); } \
+         function wrap(w) { function W() { this.v = w(); } return function () { return Reflect.construct(W, []).v; }; }",
+        63,
+        2064,
+    ),
+    (
+        "getter",
+        "function f(n, bottom) { return n > 0 ? { get x() { return f(n - 1, bottom); } }.x : bottom(); } \
+         function wrap(w) { var o = { get x() { return w(); } }; return function () { return o.x; }; }",
+        119,
+        2056,
+    ),
+    (
+        "setter",
+        "function f(n, bottom) { if (n <= 0) return bottom(); var r; ({ set x(v) { r = f(v, bottom); } }).x = n - 1; return r; } \
+         function wrap(w) { var o = { set x(v) { w(); } }; return function () { o.x = 0; }; }",
+        119,
+        2056,
+    ),
+    (
+        "generator",
+        "function f(n, bottom) { if (n <= 0) return bottom(); var r; function* g() { r = f(n - 1, bottom); } g().next(); return r; } \
+         function wrap(w) { function* g() { w(); } return function () { g().next(); }; }",
+        63,
+        2064,
+    ),
+];
+
+fn in_place_machine(nest: &str, program: &str) -> (Interp, Vec<u8>) {
+    let source = format!("{nest} {program}");
+    let (code, symbols) = ironhorse_compile::compile_atoms(&source).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    (m, code)
+}
+
+/// No charge outlives the crank: the depth is zero, the frames the halted
+/// activation retains hold none, and the next crank's nest completes at its
+/// ceiling and is refused one level past it, as with nested loops.
+fn assert_no_charge_survives(m: &mut Interp, nest: &(&str, &str, usize, usize), kind: &str) {
+    let &(name, nest, ceiling, refused_at) = nest;
+    assert_eq!(
+        m.native_depth, 0,
+        "{name} {kind}: native depth after the crank"
+    );
+    assert!(
+        m.call_stack.iter().all(|frame| frame.held == 0),
+        "{name} {kind}: a retained frame still holds units"
+    );
+    m.reattach_meter_host(Box::new(|_| true));
+    for (depth, completes) in [(ceiling, true), (ceiling + 1, false)] {
+        let (next, names) = ironhorse_compile::compile_atoms(&format!(
+            "{nest} f({depth}, function () {{ return 'bottom'; }})"
+        ))
+        .unwrap();
+        let next = m
+            .relink_crank(&next, &crate::parse_symbols(&names))
+            .unwrap();
+        let out = m.run(&next);
+        if completes {
+            assert!(out.completed, "{name} {kind}: f({depth}): {:?}", out.halt);
+            assert_eq!(out.result, "bottom", "{name} {kind}: f({depth})");
+        } else {
+            assert!(
+                matches!(
+                    out.halt,
+                    Halt::ReentryLimit { depth, limit: 2048 } if depth == refused_at
+                ),
+                "{name} {kind}: f({depth}): {:?}",
+                out.halt
+            );
+        }
+        assert_eq!(
+            m.native_depth, 0,
+            "{name} {kind}: native depth after f({depth})"
+        );
+    }
+}
+
+#[test]
+fn in_place_frames_release_their_charge_after_every_halt() {
+    let cases = [
+        ("StepLimit", "f(60, function () { while (true) {} })"),
+        ("MeterAbort", "f(60, function () { while (true) {} })"),
+        (
+            "StackOverflow",
+            "function deep() { return deep(); } f(60, deep)",
+        ),
+        ("ReentryLimit", "f(200, function () { return 0; })"),
+        ("Throw", "f(60, function () { throw new Error('bottom'); })"),
+    ];
+    for nest in &IN_PLACE_NESTS {
+        for (kind, program) in cases {
+            let (mut m, code) = in_place_machine(nest.1, program);
+            if kind == "MeterAbort" {
+                let mut checks = 0;
+                m.arm_meter(
+                    1,
+                    Box::new(move |_| {
+                        checks += 1;
+                        checks < 400
+                    }),
+                );
+            }
+            let out = if kind == "StepLimit" {
+                m.run_bounded(&code, 200_000)
+            } else {
+                m.run(&code)
+            };
+            assert!(
+                format!("{:?}", out.halt).starts_with(kind),
+                "{} {kind}: {:?}",
+                nest.0,
+                out.halt
+            );
+            assert!(
+                m.call_stack.len() > 50,
+                "{} {kind}: the halt must come from inside the in-place frames",
+                nest.0
+            );
+            assert_no_charge_survives(&mut m, nest, kind);
+        }
+    }
+}
+
+#[test]
+fn in_place_frames_release_their_charge_after_a_panic_or_heap_exhaustion() {
+    for nest in &IN_PLACE_NESTS {
+        // A panic unwinds every native activation without the loops'
+        // releases: the generic handler zeroes the depth and the frames'
+        // units.
+        let (mut m, code) = in_place_machine(nest.1, "f(60, function () { while (true) {} })");
+        PANIC_AT_STEP.with(|step| step.set(Some(200_000)));
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.run(&code)));
+        PANIC_AT_STEP.with(|step| step.set(None));
+        assert!(
+            panicked.is_err(),
+            "{}: the dispatch loop must panic",
+            nest.0
+        );
+        assert!(
+            m.call_stack.len() > 50,
+            "{}: the panic must come from inside the in-place frames",
+            nest.0
+        );
+        assert_no_charge_survives(&mut m, nest, "panic");
+
+        // So does heap exhaustion, which unwinds as a panic payload.
+        let (mut m, code) = in_place_machine(
+            nest.1,
+            "f(60, function () { var a = []; for (;;) a.push({}); })",
+        );
+        m.set_slot_ceiling(m.slots.capacity() + 2_000).unwrap();
+        let out = m.run(&code);
+        m.set_slot_ceiling(u32::MAX).unwrap();
+        assert!(
+            matches!(out.halt, Halt::HeapExhausted),
+            "{}: {:?}",
+            nest.0,
+            out.halt
+        );
+        assert_no_charge_survives(&mut m, nest, "HeapExhausted");
+    }
+}
+
+#[test]
+fn a_call_that_is_not_entered_in_place_releases_its_units() {
+    // `RUN` charges a Proxy layer's unit before it looks up the trap, and a
+    // `Reflect.apply`, `Reflect.construct` or generator method call's before it
+    // reads its operands, and `GET_PROPERTY` or `SET_PROPERTY` its light unit
+    // before it walks an ordinary object for an accessor. A revoked Proxy, a
+    // throwing `apply` getter, a trap that is not callable, a target that
+    // cannot be called or constructed, an argument list that is not an object
+    // or whose reads throw, a receiver that is not a generator, all throw
+    // before any frame holds the units; a native, bound or Proxy callee is
+    // called through `invoke_value` or `construct_value`. So is a native, bound
+    // or Proxy accessor, through `invoke_getter` or `invoke_setter`; a Proxy
+    // holder's trap that throws throws before any accessor is found; a typed
+    // array holder or parent, or a frozen property, takes no accessor; a
+    // running generator throws, and one completed, or not started for a
+    // `return` or `throw`, gives its result without its body; and an accessor
+    // or generator body run in place throws from its frame, a class one as
+    // its body begins.
+    // Each gives the units back, or 200 rounds leave the next nest no budget.
+    let (name, nest, ceiling, _) = IN_PLACE_NESTS[2];
+    for (setup, call) in [
+        (
+            "var r = Proxy.revocable(function () {}, {}); r.revoke(); var p = r.proxy;",
+            "p()",
+        ),
+        (
+            "var p = new Proxy(function () {}, { get apply() { throw 1; } });",
+            "p()",
+        ),
+        ("var p = new Proxy(function () {}, { apply: 1 });", "p()"),
+        ("var p = new Proxy(JSON.parse, {});", "p('{')"),
+        ("var p = new Proxy(JSON.parse, {});", "p('1')"),
+        (
+            "var p = new Proxy(function (f) { return f(); }, { apply: Reflect.apply });",
+            "p(function () { throw 2; })",
+        ),
+        (
+            "var p = new Proxy(new Proxy(function () {}, {}), {});",
+            "p()",
+        ),
+        (
+            "var p = new Proxy(function () {}, { apply: function () { throw 3; }.bind(null) });",
+            "p()",
+        ),
+        ("var p = 1;", "Reflect.apply(p, null, [])"),
+        ("var p = function () {};", "Reflect.apply(p, null, 1)"),
+        (
+            "var p = function () {};",
+            "Reflect.apply(p, null, { get length() { throw 4; } })",
+        ),
+        ("var p = JSON.parse;", "Reflect.apply(p, null, ['{'])"),
+        ("var p = Math.max;", "Reflect.apply(p, null, [1, 2])"),
+        (
+            "var p = function () { throw 5; }.bind(null);",
+            "Reflect.apply(p, null, [])",
+        ),
+        (
+            "var p = new Proxy(function () { throw 6; }, {});",
+            "Reflect.apply(p, null, [])",
+        ),
+        ("var p = () => 1;", "Reflect.construct(p, [])"),
+        (
+            "var p = function () {};",
+            "Reflect.construct(p, [], Math.max)",
+        ),
+        (
+            "var p = function () {};",
+            "Reflect.construct(p, { length: 1, get 0() { throw 7; } })",
+        ),
+        ("var p = RegExp;", "Reflect.construct(p, ['['])"),
+        ("var p = Array;", "Reflect.construct(p, [3])"),
+        ("var p = Date;", "Reflect.construct(p, [0])"),
+        (
+            "var p = new Proxy(function () { throw 8; }, {});",
+            "Reflect.construct(p, [])",
+        ),
+        (
+            "var p = Object.defineProperty([1, 2], 'g', { get: Array.prototype.join });",
+            "p.g",
+        ),
+        (
+            "var p = Object.defineProperty({}, 'g', { get: function () { throw 9; }.bind(null) });",
+            "p.g",
+        ),
+        (
+            "var p = Object.defineProperty({}, 'g', { get: new Proxy(function () { throw 10; }, {}) });",
+            "p.g",
+        ),
+        (
+            "var p = Object.defineProperty({}, 'g', { get: class {} });",
+            "p.g",
+        ),
+        (
+            "var p = Object.create(new Proxy({}, { get: function () { throw 11; } }));",
+            "p.g",
+        ),
+        ("var p = { get g() { throw 12; } };", "p.g"),
+        (
+            "var p = Object.defineProperty([], 's', { set: Array.prototype.push });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.defineProperty({}, 's', { set: function () { throw 13; }.bind(null) });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.defineProperty({}, 's', { set: new Proxy(function () { throw 14; }, {}) });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.defineProperty({}, 's', { set: class {} });",
+            "p.s = 1",
+        ),
+        (
+            "var p = Object.create(new Proxy({}, { set: function () { throw 15; } }));",
+            "p.s = 1",
+        ),
+        ("var p = new Uint8Array(1);", "p.NaN = 1"),
+        ("var p = Object.create(new Uint8Array(1));", "p.NaN = 1"),
+        (
+            "var p = Object.freeze({ s: 1 });",
+            "(function () { 'use strict'; p.s = 2; })()",
+        ),
+        ("var p = { set s(v) { throw 16; } };", "p.s = 1"),
+        (
+            "var p = (function* () {})().next;",
+            "p.call({})",
+        ),
+        (
+            "function* g() { yield 1; } var p = g(); p.next(); p.next();",
+            "p.next()",
+        ),
+        ("function* g() { yield 1; } var p = g();", "g().return(1)"),
+        ("function* g() { yield 1; } var p = g();", "g().throw(17)"),
+        (
+            "function* g() { p.next(); } var p = g();",
+            "g(); p = g(); p.next()",
+        ),
+        (
+            "function* g() { yield 1; throw 18; } var p;",
+            "p = g(); p.next(); p.next()",
+        ),
+    ] {
+        let (mut m, code) = in_place_machine(
+            nest,
+            &format!(
+                "{setup} for (var i = 0; i < 200; i++) {{ try {{ {call}; }} catch (e) {{}} }} \
+                 f({ceiling}, function () {{ return 'bottom'; }})"
+            ),
+        );
+        let out = m.run(&code);
+        assert!(out.completed, "{name} {setup}: {:?}", out.halt);
+        assert_eq!(out.result, "bottom", "{name} {setup}");
+        assert_eq!(m.native_depth, 0, "{name} {setup}");
+        assert_eq!(m.held_total, 0, "{name} {setup}");
+    }
+}
+
+#[test]
+fn a_reflect_call_run_in_place_leaves_its_result_where_the_call_was() {
+    // The `Reflect` call's frame stays on the value stack under the target's
+    // frame; the target's `END`, or the `START` of a generator, async
+    // function or async generator, cuts both, so operands pending around the
+    // call see its result in its place, and the program leaves the stack
+    // empty. A construct's new target is the one `Reflect.construct` names.
+    let program = "function F(a) { this.a = a; } \
+        function G() {} \
+        function NT() { this.nt = new.target === G; } \
+        function* g(a) { yield a; yield a + 1; } \
+        async function af() { return 1; } \
+        async function* ag() {} \
+        var r = [0, Reflect.apply(function (a) { return a; }, null, [1]), 2].join() + ';' + \
+            [0, ...Reflect.apply(g, null, [5]), 9].join() + ';' + \
+            (10 + Reflect.construct(F, [4]).a * 3) + ';' + \
+            [Reflect.construct(NT, [], G).nt, Reflect.construct(NT, []).nt].join() + ';' + \
+            [typeof Reflect.apply(af, null, []).then, typeof Reflect.apply(ag, null, []).next, 'x'].join() + ';' + \
+            Reflect.apply(Reflect.apply, null, [function (a, b) { return a + b; }, null, [1, 2]]); r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(
+        out.result,
+        "0,1,2;0,5,6,9;22;true,false;function,function,x;3"
+    );
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert_eq!(m.native_depth, 0);
+}
+
+#[test]
+fn a_getter_run_in_place_leaves_its_value_where_the_read_was() {
+    // A getter's `END`, or the `START` of a generator, async or async
+    // generator getter, pushes its result as the read's value and returns
+    // past the read, so operands pending around it see the value in its place,
+    // a method read through a getter is then called, and the program leaves
+    // the stack empty.
+    let program = "var o = { \
+            get one() { return 1; }, \
+            get self() { return this; }, \
+            get af() { return (async function () {})(); }, \
+            get m() { var self = this; return function (a) { return [self === o, a].join('/'); }; } \
+        }; \
+        Object.defineProperty(o, 'gen', { get: function* () { yield 7; } }); \
+        Object.defineProperty(o, 'agen', { get: async function* () {} }); \
+        Object.defineProperty(o, 'async', { get: async function () {} }); \
+        var r = [0, o.one, 2].join() + ';' + \
+            [0, ...o.gen, 9].join() + ';' + \
+            (10 + o.self.self.one * 3) + ';' + \
+            [typeof o.async.then, typeof o.agen.next, typeof o.af.then, 'x'].join() + ';' + \
+            o.m(4) + ';' + `${o.one}${o.self.one}`; r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(
+        out.result,
+        "0,1,2;0,7,9;13;function,function,function,x;true/4;11"
+    );
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
+}
+
+#[test]
+fn a_setter_run_in_place_leaves_the_value_assigned_where_the_assignment_was() {
+    // A setter's `END`, or the `START` of a generator, async or async
+    // generator setter, drops its result and pushes the value assigned, which
+    // reassigning its parameter or `arguments[0]` does not replace, and
+    // returns past the assignment, so operands pending around it see the
+    // value in its place and the program leaves the stack empty.
+    let program = "var log = []; \
+        var o = { \
+            set a(v) { log.push(v); return 'dropped'; }, \
+            set re(v) { v = 'reassigned'; arguments[0] = 'mapped'; log.push(v); } \
+        }; \
+        Object.defineProperty(o, 'gen', { set: function* (v) { log.push('never'); } }); \
+        Object.defineProperty(o, 'agen', { set: async function* (v) {} }); \
+        Object.defineProperty(o, 'async', { set: async function (v) { log.push('async' + v); } }); \
+        var r = [0, o.a = 1, 2].join() + ';' + \
+            (o.a = o.re = 3) + ';' + \
+            (10 + (o.gen = 4) * 3) + ';' + \
+            [o.agen = 5, o.async = 6, 'x'].join() + ';' + \
+            `${o.a = 7}${o.re = 8}` + ';' + log.join(); r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "0,1,2;3;22;5,6,x;78;1,mapped,3,async6,7,mapped");
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
+}
+
+#[test]
+fn a_generator_resumed_in_place_leaves_its_result_where_the_call_was() {
+    // A generator body's `YIELD` and `END`, resumed by `next`, `return` or
+    // `throw`, push the `{value, done}` result where the call was, so
+    // operands pending around it see the result in its place; the program
+    // leaves the stack empty and no generator run entry behind.
+    let program = "function* g(a) { var x = yield a; try { yield x * 2; } finally { yield 'f'; } return 'r'; } \
+        var it = g(1); \
+        var r = [0, it.next().value, 2].join() + ';' + \
+            (10 + it.next(3).value * 3) + ';' + \
+            `${it.return(9).value}|${it.next().value}|${JSON.stringify(it.next())}` + ';' + \
+            [g(5).next(0).value, ...[g(6).next().value]].join() + ';'; \
+        function* h() { try { yield 1; } catch (e) { yield 'c' + e; } } \
+        var hi = h(); hi.next(); r += [hi.throw('t').value, hi.next().done].join(); r";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "0,1,2;28;f|9|{\"done\":true};5,6;ct,true");
+    assert!(m.stack.is_empty(), "{} slots left", m.stack.len());
+    assert!(m.gen_run_stack.is_empty());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
+}
+
+#[test]
+fn a_generator_resumed_in_place_is_done_after_a_halt_in_its_body() {
+    // A halt or an uncaught throw inside a body resumed in place leaves the
+    // generator completed, as `resume_generator` left it once its nested
+    // loop returned: the next crank's `next` gives `{done: true}` rather
+    // than "generator is running".
+    let cases = [
+        ("StepLimit", "while (true) {}"),
+        ("MeterAbort", "while (true) {}"),
+        ("StackOverflow", "(function deep() { return deep(); })()"),
+        ("ReentryLimit", "f(200, function () { return 0; })"),
+        ("Throw", "throw new Error('body')"),
+    ];
+    for (kind, body) in cases {
+        let (mut m, code) = in_place_machine(
+            IN_PLACE_NESTS[7].1,
+            &format!("function* halted() {{ yield 0; {body}; }} var it = halted(); it.next(); f(20, function () {{ return it.next(); }})"),
+        );
+        if kind == "MeterAbort" {
+            let mut checks = 0;
+            m.arm_meter(
+                1,
+                Box::new(move |_| {
+                    checks += 1;
+                    checks < 400
+                }),
+            );
+        }
+        let out = if kind == "StepLimit" {
+            m.run_bounded(&code, 200_000)
+        } else {
+            m.run(&code)
+        };
+        assert!(
+            format!("{:?}", out.halt).starts_with(kind),
+            "{kind}: {:?}",
+            out.halt
+        );
+        m.reattach_meter_host(Box::new(|_| true));
+        let (next, names) = ironhorse_compile::compile_atoms("JSON.stringify(it.next())").unwrap();
+        let next = m
+            .relink_crank(&next, &crate::parse_symbols(&names))
+            .unwrap();
+        let out = m.run(&next);
+        assert!(out.completed, "{kind}: {:?}", out.halt);
+        assert_eq!(out.result, "{\"done\":true}", "{kind}");
+        assert_eq!(m.native_depth, 0, "{kind}");
+    }
+}
+
+#[test]
+fn a_throw_past_a_generator_resumed_in_place_completes_each_generator_it_leaves() {
+    // A generator `resume_generator` still runs in a nested loop, inside a
+    // body resumed in place, throws to a handler below both. The throw
+    // leaves the in-place frame before the nested loop returns, so that
+    // frame must drop its own run entry, not the inner generator's still
+    // above it: both generators end completed, not "running" (the C4
+    // pre-commit review's regression).
+    let program = "function* boom() { throw new Error('boom'); } \
+        var resumers = [function (g) { return Reflect.apply(g.next, g, []); }, function (g) { return g.next.call(g); }]; \
+        var out = []; \
+        for (var i = 0; i < resumers.length; i++) { \
+            var inner = boom(); \
+            var outer = (function* () { resumers[i](inner); yield 1; })(); \
+            try { outer.next(); } catch (e) { out.push(String(e)); } \
+            out.push(JSON.stringify(outer.next()), JSON.stringify(inner.next())); \
+        } \
+        out.join('|')";
+    let (code, symbols) = ironhorse_compile::compile_atoms(program).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    let out = m.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    let once = "Error: boom|{\"done\":true}|{\"done\":true}";
+    assert_eq!(out.result, format!("{once}|{once}"));
+    assert!(m.gen_run_stack.is_empty());
+    assert_eq!(m.native_depth, 0);
+    assert_eq!(m.held_total, 0);
+}
+
+#[test]
+fn a_walk_that_throws_past_in_place_frames_restores_only_its_own_charge() {
+    // Each throw from inside an explicit-stack walk, caught below the
+    // in-place frame that called it, pops that frame inside the walk; the
+    // walk's restore must not charge its units again, or 200 rounds leave the
+    // next nest no budget (the C1 pre-commit review's regression).
+    for (name, nest, ceiling, _) in IN_PLACE_NESTS {
+        for walk in [
+            "JSON.parse('{')",
+            "JSON.stringify({ toJSON: function () { throw 1; } })",
+            "JSON.parse('{\"a\":[1]}', function (k, w) { if (k === 'a') throw 2; return w; })",
+            "[[1]].flatMap(function () { throw 3; })",
+        ] {
+            let (mut m, code) = in_place_machine(
+                nest,
+                &format!(
+                    "function w() {{ return {walk}; }} var wb = wrap(w); \
+                     for (var i = 0; i < 200; i++) {{ try {{ wb(); }} catch (e) {{}} }} \
+                     f({ceiling}, function () {{ return 'bottom'; }})"
+                ),
+            );
+            let out = m.run(&code);
+            assert!(out.completed, "{name} {walk}: {:?}", out.halt);
+            assert_eq!(out.result, "bottom", "{name} {walk}");
+            assert_eq!(m.native_depth, 0, "{name} {walk}");
+            assert_eq!(m.held_total, 0, "{name} {walk}");
+        }
+    }
+}
+
+/// Every binary16 value converts to its double and back to its own bits, and
+/// a double exactly between two neighbors rounds to the one with an even
+/// last bit, so `Float16Array`, `DataView` and `Math.f16round` round once,
+/// ties to even.
+#[test]
+fn binary16_conversions_round_trip_and_round_ties_to_even() {
+    use crate::interp::{f16_bits_to_f64, f64_to_f16_bits};
+    for bits in 0..=u16::MAX {
+        let value = f16_bits_to_f64(bits);
+        if value.is_nan() {
+            assert_eq!(f64_to_f16_bits(value), 0x7E00, "{bits:#06x}");
+            continue;
+        }
+        assert_eq!(f64_to_f16_bits(value), bits, "{bits:#06x}");
+    }
+    for bits in 0..0x7C00u16 {
+        let (low, high) = (f16_bits_to_f64(bits), f16_bits_to_f64(bits + 1));
+        let middle = (low + high) / 2.0;
+        let even = if bits & 1 == 0 { bits } else { bits + 1 };
+        assert_eq!(f64_to_f16_bits(middle), even, "{bits:#06x}");
+        assert_eq!(f64_to_f16_bits(-middle), even | 0x8000, "-{bits:#06x}");
+    }
 }

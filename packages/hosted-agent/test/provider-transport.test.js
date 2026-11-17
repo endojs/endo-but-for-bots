@@ -1,9 +1,15 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
+import { defined } from '../../../scripts/test/defined.js';
 
-import { isCredentialRejection } from '../src/provider-broker.js';
+import {
+  isCredentialRejection,
+  isSubscriptionExhaustion,
+} from '../src/provider-broker.js';
 import { makeProviderFetchTransport } from '../src/provider-transport.js';
+
+/** @import { ProviderTransportDiagnostic } from '../src/provider-transport.js' */
 
 const request = harden({
   url: 'https://api.example.test/v1/responses',
@@ -14,11 +20,15 @@ const request = harden({
   maxResponseBytes: 10n,
 });
 
-/** @param {any} fetch */
-const setup = fetch => {
+/**
+ * @param {any} fetch
+ * @param {(diagnostic: ProviderTransportDiagnostic) => void | Promise<void>} [onDiagnostic]
+ */
+const setup = (fetch, onDiagnostic = undefined) => {
   const timers = new Set();
   const transport = makeProviderFetchTransport({
     fetch,
+    onDiagnostic,
     timeoutMs: 100,
     maxRequestBytes: 100n,
     maxResponseBytes: 10n,
@@ -38,6 +48,338 @@ const setup = fetch => {
     },
   };
 };
+
+test('any well-shaped header reaches the network; the route is not this layer\u2019s to bind', async t => {
+  // The subscription headers were once admitted only for the fixed ChatGPT
+  // route. The general name rule matches both of their names, so that binding
+  // is gone: which route a session may reach is the broker's decision (it
+  // pins the origin and the inference path per grant), and this layer's job
+  // is that no header can terminate itself or begin another.
+  let dispatched = 0;
+  /** @type {any} */
+  let sent;
+  const subject = setup(async (_url, options) => {
+    dispatched += 1;
+    sent = options.headers;
+    return new Response('ok');
+  });
+  t.teardown(subject.dispose);
+  const subscription = {
+    ...request,
+    url: 'https://chatgpt.com/backend-api/codex/responses',
+    headers: {
+      ...request.headers,
+      'chatgpt-account-id': 'account-1',
+      originator: 'codex_cli_rs',
+    },
+  };
+  t.deepEqual(await E(subject.transport).request(subscription), {
+    status: 200,
+    body: 'ok',
+  });
+  t.is(sent['chatgpt-account-id'], 'account-1');
+
+  // The same headers on another https route are no longer refused here.
+  t.deepEqual(
+    await E(subject.transport).request({ ...subscription, url: request.url }),
+    {
+      status: 200,
+      body: 'ok',
+    },
+  );
+
+  // What is still refused is a value that could forge a second header.
+  await t.throwsAsync(() =>
+    E(subject.transport).request({
+      ...subscription,
+      headers: {
+        ...subscription.headers,
+        'chatgpt-account-id': 'bad\r\nheader',
+      },
+    }),
+  );
+  // ...and a name that could carry a separator.
+  await t.throwsAsync(() =>
+    E(subject.transport).request({
+      ...subscription,
+      headers: { ...subscription.headers, 'bad name': 'x' },
+    }),
+  );
+  t.is(dispatched, 2, 'only the two well-shaped requests reached fetch');
+});
+
+for (const { label, headers, detail } of [
+  {
+    label: 'malformed name',
+    headers: { 'bad name-canary': 'value-canary' },
+    detail: 'header name',
+  },
+  {
+    label: 'oversized name',
+    // Above transport's 64-character name limit, below Exo's key limit.
+    headers: { ['name-canary'.repeat(8)]: 'value-canary' },
+    detail: 'header name',
+  },
+  {
+    label: 'invalid value',
+    headers: { 'x-private-name-canary': 'value-canary\r\ninjected' },
+    detail: 'header value',
+  },
+]) {
+  test(`request diagnostics do not echo a ${label}`, async t => {
+    const diagnostics = [];
+    let fetches = 0;
+    const subject = setup(
+      async () => {
+        fetches += 1;
+        return new Response('unexpected');
+      },
+      diagnostic => {
+        diagnostics.push(diagnostic);
+      },
+    );
+    t.teardown(subject.dispose);
+    await t.throwsAsync(
+      () =>
+        E(subject.transport).request(
+          harden({
+            ...request,
+            headers: /** @type {Record<string,string>} */ (headers),
+          }),
+        ),
+      {
+        message: 'Provider transport failed',
+      },
+    );
+    t.deepEqual(diagnostics, [{ stage: 'request', detail }]);
+    t.false(JSON.stringify(diagnostics).includes('canary'));
+    t.is(fetches, 0);
+  });
+}
+
+test('host diagnostics contain only fixed stages and bounded HTTP status', async t => {
+  const diagnostics = [];
+  const capture = diagnostic => {
+    t.true(Object.isFrozen(diagnostic));
+    diagnostics.push(diagnostic);
+  };
+  const denied = setup(
+    async () =>
+      new Response('body-canary-secret', {
+        status: 429,
+        headers: { 'www-authenticate': 'header-canary-secret' },
+      }),
+    capture,
+  );
+  t.teardown(denied.dispose);
+  await t.throwsAsync(() => E(denied.transport).request(request), {
+    message: 'Provider transport failed',
+  });
+  const broken = setup(async () => {
+    throw Error('exception-canary-secret');
+  }, capture);
+  t.teardown(broken.dispose);
+  await t.throwsAsync(() => E(broken.transport).request(request), {
+    message: 'Provider transport failed',
+  });
+  const invalid = setup(async () => {
+    t.fail('invalid requests must not dispatch');
+  }, capture);
+  t.teardown(invalid.dispose);
+  await t.throwsAsync(() =>
+    E(invalid.transport).request({
+      ...request,
+      body: 'body-canary'.repeat(20),
+    }),
+  );
+  // A refused body's bounded prefix is the ONE response content a host
+  // observer sees, and only for a response that was refused. It is what turns
+  // "502, usually temporary" into a cause an operator can act on: a status
+  // alone cannot distinguish an unentitled model from an undeclared beta
+  // capability. `detail` names which request-stage check refused, and is a
+  // fixed string, never request data.
+  t.deepEqual(diagnostics, [
+    {
+      stage: 'response',
+      status: 429,
+      refusal: '[redacted: upstream echoed the credential]',
+    },
+    { stage: 'fetch' },
+    { stage: 'request', detail: 'request shape' },
+  ]);
+  // Everything else still stays out: the upstream's response HEADERS, and the
+  // text of an exception thrown by fetch.
+  const rendered = JSON.stringify(diagnostics);
+  t.false(rendered.includes('header-canary-secret'));
+  t.false(rendered.includes('exception-canary-secret'));
+  // The oversized request's own body never becomes a diagnostic.
+  t.false(rendered.includes('body-canary-body-canary'));
+});
+
+test('a refusal is bounded, and never echoes the credential it carried', async t => {
+  const diagnostics = [];
+  const echoed = setup(
+    async () =>
+      new Response(`denied: Bearer canary-secret ${'x'.repeat(4096)}`, {
+        status: 400,
+      }),
+    diagnostic => {
+      diagnostics.push(diagnostic);
+    },
+  );
+  t.teardown(echoed.dispose);
+  await t.throwsAsync(() => E(echoed.transport).request(request), {
+    message: 'Provider transport failed',
+  });
+  t.is(diagnostics.length, 1);
+  const [{ refusal }] = diagnostics;
+  t.false(
+    `${refusal}`.includes('canary-secret'),
+    'a body echoing the credential is withheld entirely',
+  );
+  const bounded = setup(
+    async () => new Response('d'.repeat(4096), { status: 400 }),
+    diagnostic => {
+      diagnostics.push(diagnostic);
+    },
+  );
+  t.teardown(bounded.dispose);
+  await t.throwsAsync(() => E(bounded.transport).request(request));
+  t.true(`${diagnostics[1].refusal}`.length <= 1024);
+});
+
+for (const fixture of /** @type {Array<{ name: string, headers: Record<string, string>, body: string, expected: string }>} */ ([
+  {
+    name: 'bare bearer',
+    headers: { authorization: 'Bearer demo-only-token' },
+    body: 'invalid token demo-only-token',
+    expected: '[redacted: upstream echoed the credential]',
+  },
+  {
+    name: 'API key',
+    headers: { 'x-api-key': 'demo-only-token' },
+    body: 'invalid token demo-only-token',
+    expected: '[redacted: upstream echoed the credential]',
+  },
+  {
+    name: 'excerpt boundary',
+    headers: { authorization: 'Bearer demo-only-token' },
+    body: `${'x'.repeat(1018)}demo-only-token`,
+    expected: 'x'.repeat(1018),
+  },
+  {
+    name: 'chunk boundary',
+    headers: { authorization: 'Bearer demo-only-token' },
+    body: 'invalid token demo-only-',
+    expected: 'invalid token ',
+  },
+  {
+    name: 'API key chunk boundary',
+    headers: { 'x-api-key': 'demo-only-token' },
+    body: 'invalid token demo-only-',
+    expected: 'invalid token ',
+  },
+  {
+    name: 'full header chunk boundary',
+    headers: { authorization: 'Bearer demo-only-token' },
+    body: 'invalid token Bearer demo-only-',
+    expected: 'invalid token ',
+  },
+])) {
+  test(`refusal diagnostics screen ${fixture.name}`, async t => {
+    const diagnostics = [];
+    let pulls = 0;
+    const subject = setup(
+      async () => ({
+        status: 400,
+        redirected: false,
+        headers: new Headers(),
+        body: {
+          getReader: () => ({
+            read: async () => {
+              pulls += 1;
+              return {
+                done: false,
+                value: new TextEncoder().encode(fixture.body),
+              };
+            },
+            cancel: async () => {},
+            releaseLock: () => {},
+          }),
+        },
+      }),
+      diagnostic => {
+        diagnostics.push(diagnostic);
+      },
+    );
+    t.teardown(subject.dispose);
+    await t.throwsAsync(
+      () =>
+        E(subject.transport).request(
+          harden({
+            ...request,
+            headers: fixture.headers,
+          }),
+        ),
+      { message: 'Provider transport failed' },
+    );
+    t.deepEqual(diagnostics, [
+      { stage: 'response', status: 400, refusal: fixture.expected },
+    ]);
+    t.is(pulls, 1, 'screening does not consume another upstream chunk');
+  });
+}
+
+test('diagnostic observer failures cannot change provider outcomes', async t => {
+  for (const observer of [
+    () => {
+      throw Error('observer-canary-secret');
+    },
+    async () => {
+      throw Error('observer-canary-secret');
+    },
+  ]) {
+    const denied = setup(
+      async () => new Response('secret', { status: 401 }),
+      observer,
+    );
+    t.teardown(denied.dispose);
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(denied.transport).request(request), {
+      message: 'Provider credential rejected',
+    });
+  }
+});
+
+test('body failures and idle deadlines emit one sanitized diagnostic', async t => {
+  t.timeout(1000);
+  const diagnostics = [];
+  const { response } = streamResponse([new Uint8Array([0xff])]);
+  const invalid = setup(
+    async () => response,
+    value => {
+      diagnostics.push(value);
+    },
+  );
+  t.teardown(invalid.dispose);
+  await t.throwsAsync(() => E(invalid.transport).request(request), {
+    message: 'Provider response lost',
+  });
+  const idle = setup(
+    async () => new Response(new ReadableStream()),
+    value => {
+      diagnostics.push(value);
+    },
+  );
+  t.teardown(idle.dispose);
+  const streaming = await E(idle.transport).requestStream(request);
+  idle.timeout();
+  await t.throwsAsync(() => E(streaming.reader).next(), { message: /stopped/ });
+  t.deepEqual(diagnostics, [
+    { stage: 'body', status: 200 },
+    { stage: 'timeout', status: 200 },
+  ]);
+});
 
 /**
  * @param {Uint8Array[]} chunks
@@ -102,7 +444,7 @@ test('streamed overflow cancels a response without content length', async t => {
   ]);
   const { transport } = setup(async () => response);
   await t.throwsAsync(() => E(transport).request(request), {
-    message: 'Provider transport failed',
+    message: 'Provider response lost',
   });
   t.true(cancelled());
   t.false(response.body?.locked);
@@ -112,7 +454,7 @@ test('invalid UTF8 and HTTP errors never expose raw payload or headers', async t
   const { response } = streamResponse([new Uint8Array([0xff])]);
   const lease = setup(async () => response);
   await t.throwsAsync(() => E(lease.transport).request(request), {
-    message: 'Provider transport failed',
+    message: 'Provider response lost',
   });
   // A rejected credential is classified, because a refreshing broker has one
   // decision to make and the status class is enough to make it. That is the
@@ -170,7 +512,7 @@ test('timeout settles even when fetch ignores abort and cancels a late response'
   const pending = E(transport).request(request);
   await started;
   timeout();
-  await t.throwsAsync(pending, { message: 'Provider transport failed' });
+  await t.throwsAsync(pending, { message: 'Provider response lost' });
   const { response, cancelled } = streamResponse([new Uint8Array(1)]);
   deliver(response);
   await held;
@@ -212,6 +554,111 @@ test('dispose aborts a pending body read and refuses subsequent dispatch', async
   t.is(lease.timers.size, 0);
 });
 
+test('owner close waits for late response body cancellation and retains uncertainty', async t => {
+  /** @type {(response: Response) => void} */
+  let returnFetch = () => {
+    throw Error('Missing fetch gate');
+  };
+  /** @type {(value?: unknown) => void} */
+  let releaseCancel = () => {
+    throw Error('Missing cancellation gate');
+  };
+  let entered;
+  const began = new Promise(resolve => {
+    entered = resolve;
+  });
+  const fetching = new Promise(resolve => {
+    returnFetch = resolve;
+  });
+  const cancelling = new Promise(resolve => {
+    releaseCancel = resolve;
+  });
+  const lease = setup(async () => {
+    entered();
+    return fetching;
+  });
+  const response = E(lease.transport).request(request);
+  const failedRequest = t.throwsAsync(response);
+  await began;
+  let closed = false;
+  const closing = lease.close().then(() => {
+    closed = true;
+  });
+  defined(returnFetch)(
+    new Response(new ReadableStream({ cancel: () => cancelling })),
+  );
+  await failedRequest;
+  await null;
+  t.false(closed);
+  defined(releaseCancel)();
+  await closing;
+  t.true(closed);
+  const uncertain = setup(
+    async () =>
+      new Response(
+        new ReadableStream({
+          cancel: async () => {
+            throw Error('lost cancel ack');
+          },
+        }),
+      ),
+  );
+  await E(uncertain.transport).requestStream(request);
+  await t.throwsAsync(uncertain.close(), { message: /cleanup uncertain/ });
+  await t.throwsAsync(uncertain.close(), { message: /cleanup uncertain/ });
+});
+
+for (let delay = 0; delay <= 8; delay += 1) {
+  test(`close drains the fetch-to-reader handoff at microtask ${delay}`, async t => {
+    let cancellations = 0;
+    /** @type {(value?: any) => void} */
+    let release = () => {
+      throw Error('Test gate is not initialized');
+    };
+    const paused = new Promise(resolve => {
+      release = resolve;
+    });
+    const response = new Response(
+      new ReadableStream({
+        cancel: () => {
+          cancellations += 1;
+          return paused;
+        },
+      }),
+    );
+    let closing;
+    let acknowledged = false;
+    const lease = setup(() => {
+      closing = (async () => {
+        for (let index = 0; index < delay; index += 1) {
+          // eslint-disable-next-line no-await-in-loop
+          await null;
+        }
+        await lease.close();
+        acknowledged = true;
+      })();
+      return Promise.resolve(response);
+    });
+    const pending = E(lease.transport).requestStream(request);
+    const settled = pending.then(
+      () => 'stream',
+      () => 'refused',
+    );
+    // Advance beyond the tested handoff without wall-clock assumptions.
+    for (let index = 0; index < 30; index += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await null;
+    }
+    t.is(cancellations, 1);
+    t.false(acknowledged, 'body cleanup must finish before acknowledgement');
+    release();
+    await closing;
+    await settled;
+    t.false(defined(response.body).locked);
+    t.true(acknowledged);
+  });
+}
+
 test('request bounds, header smuggling and redirects are rejected', async t => {
   const lease = setup(async () => {
     t.fail('must not fetch');
@@ -221,7 +668,7 @@ test('request bounds, header smuggling and redirects are rejected', async t => {
     { ...request, url: 'http://api.example.test' },
     { ...request, body: 'x'.repeat(101) },
     { ...request, headers: { authorization: 'token\r\nInjected: yes' } },
-    { ...request, headers: { cookie: 'ambient' } },
+    { ...request, headers: { 'in valid': 'x' } },
   ]) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => E(lease.transport).request(harden(bad)), {
@@ -265,4 +712,107 @@ test('incremental cancellation settles an outstanding pull', async t => {
   await E(response.reader).return();
   await t.throwsAsync(pull, { message: /failed/ });
   t.is(lease.timers.size, 0);
+});
+
+const tapped = (fetch, onReading) =>
+  makeProviderFetchTransport({
+    fetch,
+    onReading,
+    timeoutMs: 1000,
+    maxRequestBytes: 100n,
+    maxResponseBytes: 100n,
+  });
+
+test('a served response’s rate-limit headers are read, and no header crosses', async t => {
+  const readings = [];
+  const { transport } = tapped(
+    async () =>
+      new Response('ok', {
+        status: 200,
+        headers: {
+          'x-codex-primary-used-percent': '12',
+          'x-codex-primary-window-minutes': '300',
+          'x-codex-secondary-used-percent': '64',
+          'set-cookie': 'canary-secret',
+        },
+      }),
+    reading => readings.push(reading),
+  );
+  const response = await E(transport).request(request);
+  t.deepEqual(Object.keys(response).sort(), ['body', 'status']);
+  t.is(readings.length, 1);
+  t.is(readings[0].status, 200);
+  t.false(readings[0].exhausted);
+  t.deepEqual(
+    readings[0].rateLimits.windows.map(window => window.usedPercent),
+    [12, 64],
+  );
+  t.false(JSON.stringify(readings).includes('canary-secret'));
+  t.true(Object.isFrozen(readings[0]));
+});
+
+test('a drained subscription is classified, after its reading is delivered', async t => {
+  const order = [];
+  const { transport } = tapped(
+    async () =>
+      new Response('{"error":{"type":"usage_limit_reached"}}', {
+        status: 429,
+        headers: {
+          'x-codex-primary-used-percent': '100',
+          'x-codex-primary-reset-at': '1790000000',
+          'x-codex-rate-limit-reached-type': 'rate_limit_reached',
+        },
+      }),
+    reading => order.push(['reading', reading.exhausted, reading.status]),
+  );
+  const refusal = await t.throwsAsync(
+    () =>
+      E(transport)
+        .request(request)
+        .finally(() => order.push(['settled'])),
+    { message: 'Provider subscription exhausted' },
+  );
+  t.true(isSubscriptionExhaustion(refusal));
+  t.false(isCredentialRejection(refusal));
+  // The observer heard before the caller did, so whoever handles the refusal
+  // already knows until when the subscription is blocked.
+  t.deepEqual(order, [['reading', true, 429], ['settled']]);
+
+  // Throttling — a 429 with room left — stays an ordinary failure, and is
+  // still read.
+  const throttledReadings = [];
+  const throttled = tapped(
+    async () =>
+      new Response('slow down', {
+        status: 429,
+        headers: { 'x-codex-primary-used-percent': '40' },
+      }),
+    reading => throttledReadings.push(reading),
+  );
+  const failure = await t.throwsAsync(() =>
+    E(throttled.transport).request(request),
+  );
+  t.false(isSubscriptionExhaustion(failure));
+  t.is(throttledReadings[0].exhausted, false);
+});
+
+test('an observer that throws, or headers that say nothing, change nothing', async t => {
+  const throwing = tapped(
+    async () =>
+      new Response('ok', {
+        status: 200,
+        headers: { 'x-codex-primary-used-percent': '12' },
+      }),
+    () => {
+      throw Error('observer bug');
+    },
+  );
+  t.is((await E(throwing.transport).request(request)).body, 'ok');
+  const silent = [];
+  const plain = tapped(
+    async () => new Response('ok', { status: 200 }),
+    reading => silent.push(reading),
+  );
+  t.is((await E(plain.transport).request(request)).body, 'ok');
+  t.deepEqual(silent, []);
 });

@@ -226,15 +226,17 @@ const assertPackageDescriptor = allegedPackageDescriptor => {
  * Asserts that the given `PackageDescriptor` has a non-empty `name`.
  *
  * `name` is required by {@link PackageDescriptor} and the compartment mapper
- * relies on it to label and link compartments. Without it, downstream
- * failures are obscure (for example, the bundler reports an undefined name
- * far from the offending `package.json`). This surfaces a precise
- * diagnostic that points at the offending file so the misconfiguration
- * is easy to fix.
+ * relies on it to label and link compartments. Without it, downstream failures
+ * are obscure (for example, the bundler reports an undefined name far from the
+ * offending `package.json`). This surfaces a precise diagnostic that points at
+ * the offending file so the misconfiguration is easy to fix.
+ *
+ * The names of the entry compartment and attenuators compartment are reserved
+ * and cannot be used.
  *
  * @param {PackageDescriptor} packageDescriptor
- * @param {string} packageDescriptorLocation - URL of the `package.json`
- * file that produced this descriptor, used to attribute errors.
+ * @param {string} packageDescriptorLocation - URL of the `package.json` file
+ * that produced this descriptor, used to attribute errors.
  * @returns {void}
  */
 const assertPackageDescriptorHasName = (
@@ -245,6 +247,11 @@ const assertPackageDescriptorHasName = (
   if (name === undefined || name === '') {
     throw Error(
       `package.json at ${q(packageDescriptorLocation)} must have a "name" field; consider naming it after the parent directory`,
+    );
+  }
+  if (name === ENTRY_COMPARTMENT || name === ATTENUATORS_COMPARTMENT) {
+    throw Error(
+      `package.json at ${q(packageDescriptorLocation)} must not have a "name" field of ${q(name)}. This might indicate malware.`,
     );
   }
 };
@@ -974,11 +981,32 @@ const translateGraph = (
       label,
       sourceDirname,
       internalAliases,
-      patterns,
+      patterns: inferredPatterns,
       parsers,
       types,
       packageDescriptor,
     } = graph[dependeeLocation];
+
+    // Patterns installed on this compartment.
+    //
+    // A package's own "exports" patterns are keyed by the subpath an *importer*
+    // asks for, so they must never be installed verbatim: "./cjs/*" means
+    // "pkg/cjs/*" to the outside world, and Node never re-resolves a package's
+    // own internal specifiers through "exports". Installed as-is, they hijack
+    // those specifiers, either loading the wrong module in silence; or, when the
+    // pattern matches its own output as "./cjs/*" -> "./cjs/*.cjs" does,
+    // appending another suffix on every pass until an OOM exception. Fun!
+    //
+    // Export patterns still reach this compartment name-prefixed, via
+    // `digestExternalAliases` below: reflexively so the package can reference
+    // itself by name, and onto each dependee so it can reference this one.
+    //
+    // Only "imports" patterns, which are keyed by "#" and are internal by
+    // definition, belong to the package's own compartment as inferred.
+    const patterns = inferredPatterns.filter(({ from }) =>
+      from.startsWith('#'),
+    );
+
     /** @type {Record<string, CompartmentModuleConfiguration>} */
     const moduleDescriptors = create(null);
     /** @type {Record<string, ScopeDescriptor<PackageCompartmentDescriptorName>>} */

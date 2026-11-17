@@ -1,0 +1,27 @@
+# The spike as a Worker with one SQLite-backed Durable Object class. run.py
+# fills in the socket address, the local-disk storage path and the V8 flags,
+# copies worker.js and the wasm module beside this file and starts
+# `workerd serve` on the socket below.
+using Workerd = import "/workerd/workerd.capnp";
+
+const config :Workerd.Config = (
+  services = [
+    (name = "spike", worker = .spike),
+    (name = "disk", disk = (path = "@DISK@", writable = true)),
+  ],
+  sockets = [ (name = "http", address = "@ADDRESS@", http = (), service = "spike") ],
+  v8Flags = [ @V8_FLAGS@ ],
+);
+
+const spike :Workerd.Worker = (
+  modules = [
+    (name = "worker.js", esModule = embed "worker.js"),
+    (name = "spike.wasm", wasm = embed "spike.wasm"),
+  ],
+  compatibilityDate = "2026-09-01",
+  durableObjectNamespaces = [
+    (className = "Spike", uniqueKey = "ironhorse-spike-v1", enableSql = true),
+  ],
+  durableObjectStorage = (localDisk = "disk"),
+  bindings = [ (name = "SPIKE", durableObjectNamespace = "Spike") ],
+);

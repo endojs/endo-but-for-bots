@@ -22,7 +22,8 @@ JOBS = (
     "test-async-hooks", "test-hermes", "test-xs", "build-xsnap",
     "test-thixotrope-ironhorse", "format-ironhorse", "test-ironhorse",
     "test-ironhorse-calibration", "compare-ironhorse-math",
-    "test-ironhorse-oracle", "oracle-sanitizers", "test-ocapn-python",
+    "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
+    "cross-target-ironhorse", "build-ironhorse-wasm", "test-ocapn-python",
     "build-wasm", "browser-tests", "guile-interop", "viable-release",
     "depcheck", "check-action-pins", "package-uniformity", "filter-tests",
 )
@@ -35,17 +36,30 @@ JS_JOBS = {
 RUST_JOBS = {
     "build-xsnap", "test-thixotrope-ironhorse", "format-ironhorse",
     "test-ironhorse", "test-ironhorse-calibration", "compare-ironhorse-math",
-    "test-ironhorse-oracle", "oracle-sanitizers", "build-wasm",
+    "test-ironhorse-oracle", "oracle-sanitizers", "fuzz-ironhorse",
+    "cross-target-ironhorse", "build-ironhorse-wasm", "build-wasm",
 }
 WORKFLOWS = {
     ".github/workflows/browser-test.yml": {"browser-tests"},
     ".github/workflows/ocapn-guile-interop.yml": {"guile-interop"},
     ".github/workflows/depcheck.yml": {"depcheck"},
     ".github/workflows/ironhorse-sanitizers.yml": {"oracle-sanitizers"},
+    # The one entry whose job lives in a DIFFERENT file. The deep-fuzz
+    # workflow and ci.yml's fuzz-ironhorse tripwire share a roster shell
+    # and a corpus cache family, so editing one is a reason to run the
+    # other; every sibling entry above maps a workflow to the job it
+    # defines.
+    ".github/workflows/ironhorse-deep-fuzz.yml": {"fuzz-ironhorse"},
 }
 CORE = {
     "ironhorse-meter", "ironhorse-vm", "ironhorse-snapshot",
     "ironhorse-compile", "ironhorse-regexp", "ironhorse-store-sqlite",
+}
+# The engine members rust/engine/scripts/build-wasm.py builds for wasm; its
+# test holds this set to the script's list.
+WASM_CRATES = {
+    "ironhorse-meter", "ironhorse-text", "ironhorse-unicode", "ironhorse-regexp",
+    "ironhorse-vm", "ironhorse-compile", "ironhorse-runtime", "ironhorse-snapshot",
 }
 
 
@@ -270,7 +284,23 @@ def classify(paths, graphs, all_jobs=False):
         jobs["oracle-sanitizers"] |= bool(crates & {
             "xs-oracle", "ironhorse-compile", "ironhorse-regexp", "ironhorse-262", "ironhorse-fuzz",
         })
+        # The pull-request fuzz tripwire. Same reach as the deep lane it
+        # guards: any engine crate can move a fuzz target's subject.
+        jobs["fuzz-ironhorse"] |= any(
+            n.startswith("rust:rust/engine/") for n in rust_affected
+        )
+        # The native-against-wasm32 differential (WASM-BLOCKERS.md B7): any
+        # engine crate, or a crate one depends on, can move a program's
+        # outcome on one target.
+        jobs["cross-target-ironhorse"] |= any(
+            n.startswith("rust:rust/engine/") for n in rust_affected
+        )
         jobs["build-wasm"] |= "ocapn_noise_protocol_facilities" in crates
+        # The engine's wasm build: the members it builds, through the graph,
+        # so that a change to ironhorse-text selects it for ironhorse-vm. The
+        # host-only members (the oracle bindings, the test262 runner, the fuzz
+        # targets, the stack-lanes probe) do not.
+        jobs["build-ironhorse-wasm"] |= bool(core_crates & WASM_CRATES)
 
     for path in paths:
         if shared_js(path):
@@ -304,6 +334,11 @@ def classify(paths, graphs, all_jobs=False):
             jobs["check-action-pins"] = True
         if path.endswith(".rs") and (under(path, "rust/engine") or under(path, "rust/endo/ironhorse-store-sqlite")):
             jobs["format-ironhorse"] = True
+        # Every engine change but documentation: the probe's sources, which no
+        # crate graph sees (`stack-lanes/`), its corpus and snippets, the lane
+        # scripts and the expected lists are all inputs of the comparison.
+        if under(path, "rust/engine") and not path.endswith(".md"):
+            jobs["cross-target-ironhorse"] = True
         if path in {
             "c/moddable", ".gitmodules", "rust/endo/xsnap/xsnap-platform.c",
             "rust/endo/xsnap/xsnap-platform.h",
@@ -341,10 +376,15 @@ def classify(paths, graphs, all_jobs=False):
         # `boot.js`, but listing it would select this lane on every SES change,
         # and a SES change already runs `test-thixotrope-ironhorse`, which
         # builds the same bundle).
-        if under(path, "packages/test262-runner/src") or path in {
-            "packages/test262-runner/scripts/generate-preludes.js",
-            "packages/thixotrope/scripts/bundle-ironhorse-worker.mjs",
-        }:
+        if (
+            under(path, "packages/test262-runner/src")
+            or under(path, "packages/ironhorse-prelude")
+            or path
+            in {
+                "packages/test262-runner/scripts/generate-preludes.js",
+                "packages/thixotrope/scripts/bundle-ironhorse-worker.mjs",
+            }
+        ):
             jobs["test-ironhorse-oracle"] = True
         if path in {
             "rust/engine/scripts/test-math-vectors.py", "rust/engine/scripts/compare-math-vectors.py",
@@ -363,8 +403,29 @@ def classify(paths, graphs, all_jobs=False):
         if under(path, "packages/test262-runner/test262/test/ironhorse"):
             # ironhorse-compile integration tests include these files directly.
             jobs["test-ironhorse"] = True
+        if path in {
+            "rust/engine/stack-lanes/sweep-pins.json",
+            "rust/engine/stack-lanes/cases.rs",
+            "rust/engine/stack-lanes/paint.rs",
+        }:
+            # Engine tests include these by path from outside any crate:
+            # ironhorse-compile's `recursion_bounds.rs` reads the sweep's
+            # ceilings from `sweep-pins.json`, and ironhorse-vm's
+            # `native_recursion_budget.rs` and `stack_height.rs` compile the
+            # stack-lane corpus and painter.
+            jobs["test-ironhorse"] = True
         if path == "packages/ocapn-noise/gen/ocapn-noise.wasm":
             jobs["build-wasm"] = True
+        # The wasm build's own inputs that no crate owns: the recipe and its
+        # test, the probe build the test holds to the recipe, the WASI test
+        # script the job runs, and the engine's toolchain pin, whose rust-src
+        # the recipe rebuilds std from.
+        if path in {
+            "rust/engine/scripts/build-wasm.py", "rust/engine/scripts/test-build-wasm.py",
+            "rust/engine/stack-lanes/build_probe.py", "rust/engine/scripts/test-snapshot-wasi.py",
+            "rust/engine/rust-toolchain.toml",
+        }:
+            jobs["build-ironhorse-wasm"] = True
         if path == "rust/engine/scripts/compare-math-vectors.py":
             jobs["test-ironhorse"] = True
         if under(path, "docs") or path.endswith((".md", ".sh")) or PurePosixPath(path).name.startswith("typedoc") or path in {".shellcheckrc", "SECURITY.md"}:

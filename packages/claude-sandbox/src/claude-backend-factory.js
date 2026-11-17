@@ -1,292 +1,121 @@
 // @ts-check
 // Claude Code as a Floot hosted backend.
 //
-// Floot discovers hosted backends through `HostedBackendFactoryInterface`
-// (@endo/hosted-agent): `describe()` names the backend, `listModels()` offers
-// its catalog, and `create(spec, toolSet)` hands back one session's `run`
-// facet (the turn protocol Floot's hosted-turn consumer drives) and its
-// factory-only `admin` facet. This module is that seam for the Claude CLI
-// runtime in @endo/claude-sandbox:
+// The factory itself is the shared one (`@endo/hosted-agent/backend-factory-kit.js`):
+// it validates Floot's request, serializes operations per session, retains
+// each session's termination until the daemon owner's stop succeeds, and
+// exposes the hosted turn protocol. This module declares what is Claude's:
 //
-// - Each session is one isolated ClaudeClient formula (a `claude -p` process
-//   per turn inside a rootless Podman slice over a projected workspace and a
-//   persistent per-session config dir), provisioned lazily by the injected
-//   provisioner and reincarnated by the daemon across restarts.
+// - Each session is one record the daemon session owner keeps: a `claude -p`
+//   process per turn inside a rootless Podman slice over a projected
+//   workspace and a persistent per-session config dir, activated by the
+//   native controller (src/claude-native-controller.js) the owner starts.
 // - The Endo tools Floot pins for the session — the `HostedToolSet` it passes
-//   to `create` — reach the CLI over a per-session MCP socket
-//   (src/mcp-bridge.js, src/mcp-socket-server.js) bind-mounted read-only into
-//   the slice. Only JSON crosses that socket; the guest capabilities stay in
-//   Floot's worker on the far end of `E(toolSet).execute`.
+//   to `create` — reach the CLI over a per-session MCP socket the controller
+//   runs (src/mcp-socket-server.js) bind-mounted read-only into the slice.
+//   Only JSON crosses that socket; the guest capabilities stay in Floot's
+//   worker on the far end of `E(toolSet).execute`.
 // - Turn events are translated from the CLI's stream-json wire into the
-//   provider-neutral hosted events (src/claude-hosted-events.js), so nothing
-//   Claude-specific reaches Floot.
+//   provider-neutral hosted events (src/claude-hosted-events.js). Floot also
+//   retains validated opaque native-context records for Claude restoration;
+//   it does not interpret the CLI's wire vocabulary.
+// - The reasoning effort is the runtime's own axis: checked in shape here,
+//   and against the efforts the runtime drives each model at in the
+//   provisioner.
 //
-// Continuity is the CLI's own transcript: every turn resumes the conversation
-// persisted in the session's config dir, so there is no checkpoint to
-// acknowledge and `acknowledge()` is a no-op. The descriptor says so
-// (`continuity: 'transcript'`) so a consumer can mirror what that transcript
-// retains — a delivered prompt survives an aborted or failed turn there.
+// Floot's host journal owns conversation continuity. The client restores its
+// selected native-context checkpoint plus portable suffix before a turn, or
+// reconstructs portable records when no native checkpoint is available.
+// `transcript` declares per-turn reconstruction and permits portable fallback
+// when native context would hide tool evidence. Partial turns remain journalled
+// after failure/cancellation; arbitrary surviving CLI files are not authority.
+// Native context is emitted through turn events; `acknowledge()` is a separate
+// operational no-op here, not the operation that saves that context.
 
-import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
-import { makeExo } from '@endo/exo';
 import {
-  HostedBackendFactoryInterface,
-  HostedTurnBackendAdminInterface,
-  HostedTurnBackendInterface,
-  normalizeHostedModelDescriptor,
-} from '@endo/hosted-agent';
+  isIdleInterrupt,
+  makeHostedBackendFactory,
+} from '@endo/hosted-agent/backend-factory-kit.js';
 
 import { translateClaudeTurn } from './claude-hosted-events.js';
+import { assertClaudeEffort } from './claude-effort.js';
+import { DEFAULT_SERVER_NAME } from './mcp-socket-server.js';
+
+/** @import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js' */
+/** @import { DeclaredSubscription } from '@endo/hosted-agent/subscription-lister.js' */
+
+export { NETWORK_POLICIES } from '@endo/hosted-agent/backend-factory-kit.js';
+
+/** @typedef {import('@endo/hosted-agent/session-provisioner.js').SessionRequest} SessionRequest */
 
 /** The backend id Floot pins sessions to (`claude:<model>`). */
 export const CLAUDE_BACKEND_ID = 'claude';
 harden(CLAUDE_BACKEND_ID);
 
 /**
- * The Anthropic models the CLI runtime offers, ordered faster/lighter to
- * stronger. Ids are passed verbatim to `claude --model`, so they must be valid
- * Anthropic model ids. The CLI has no reasoning-effort knob.
- */
-export const CLAUDE_CLI_MODELS = harden(
-  [
-    {
-      id: 'claude-haiku-4-5-20251001',
-      title: 'Claude Haiku 4.5',
-      description: 'Fastest and lightest — best for quick, simple turns.',
-      default: true,
-    },
-    {
-      id: 'claude-sonnet-4-6',
-      title: 'Claude Sonnet 4.6',
-      description: 'Balanced speed and capability.',
-      default: false,
-    },
-    {
-      id: 'claude-sonnet-5',
-      title: 'Claude Sonnet 5',
-      description: 'Stronger reasoning at Sonnet-class latency.',
-      default: false,
-    },
-    {
-      id: 'claude-opus-4-8',
-      title: 'Claude Opus 4.8',
-      description: 'High capability for hard reasoning and agentic work.',
-      default: false,
-    },
-    {
-      id: 'claude-opus-5',
-      title: 'Claude Opus 5',
-      description: 'Most capable — deepest reasoning and longest-horizon work.',
-      default: false,
-    },
-  ].map(model =>
-    normalizeHostedModelDescriptor({
-      ...model,
-      defaultReasoningEffort: null,
-      reasoningEfforts: [],
-    }),
-  ),
-);
-
-/**
- * Floot session ids double as pet-name and path components on the host, so
- * they are bounded to the provisioner's namespace.
- *
- * @param {unknown} sessionId
- * @returns {string}
- */
-const assertSessionId = sessionId => {
-  (typeof sessionId === 'string' &&
-    /^[a-z0-9][a-z0-9-]{0,127}$/.test(sessionId)) ||
-    Fail`Claude sessionId must be a bounded lowercase path component`;
-  return /** @type {string} */ (sessionId);
-};
-
-/**
- * `ClaudeClient.interrupt()` refuses when nothing is in flight. For a
- * cancellation barrier that is success, not failure: the turn it would have
- * stopped has already ended (or its reader was closed first, which is what
- * kills the process).
- *
- * @param {unknown} error
- */
-const isIdleInterrupt = error =>
-  error instanceof Error &&
-  /no in-flight prompt to interrupt/.test(error.message);
-
-/**
- * @typedef {object} ToolBridge
- * @property {string} socketDir - host directory holding the socket, relay, and
- *   MCP config; bind-mounted read-only into the slice.
- * @property {string} innerDir - slice path the directory mounts at.
- * @property {string} configPath - slice-internal path of the `mcp.json`.
- * @property {() => number} pendingCalls - Endo tool calls in flight.
- * @property {() => Promise<void>} close - stop the listener (idempotent).
- */
-
-/**
- * Build the trusted lifecycle owner for Claude CLI backend sessions.
+ * Build the trusted lifecycle owner for Claude CLI backend sessions over the
+ * daemon session owner's three operations.
  *
  * @param {object} powers
- * @param {(sessionId: string, options: { mcp: { socketDir: string, innerDir: string, configPath: string }, model?: string, workspaceDir?: string }) => Promise<any>} powers.provisionClient
- *   Provision (or reopen) the session's ClaudeClient formula with the tool
- *   bridge mount, and return the client capability.
- * @param {(sessionId: string) => Promise<void>} powers.cancelClient
- *   Tear down the client's live incarnation — its slice, mounts, and
- *   credential grant — so the formula reincarnates fresh on the next
- *   `provisionClient`. Durable state (workspace, transcript) survives.
+ * @param {(sessionId: string, request: Record<string, any>, toolSet: any) => Promise<any>} powers.provisionSession
+ *   Record (or reopen) the session's plan with the daemon owner and start its
+ *   native controller with the pinned tool set, returning the client facet.
+ * @param {(sessionId: string) => Promise<void>} powers.stopSession
+ *   The owner's stop: fences the facet, awaits the controller's native cleanup
+ *   acknowledgement, and retains failure for retry. The workspace and the
+ *   persistent transcript survive.
  * @param {(sessionId: string) => Promise<void>} powers.removeSession
- *   Idempotently destroy the session's durable state: the client formula, its
- *   filesystems, and their backing directories.
- * @param {(sessionId: string, toolSet: any) => Promise<ToolBridge>} powers.startToolBridge
- *   Start the per-session MCP socket server over the pinned tool set.
- * @param {(sessionId: string) => Promise<void>} powers.removeToolBridge
- *   Delete the session's socket directory.
- * @param {ReadonlyArray<any>} [powers.models] - hosted model descriptors.
+ *   The owner's removal: native cleanup, then the recorded storage owner's
+ *   deletion, retaining failure and refusing reuse until it succeeds.
+ * @param {ReturnType<typeof makeBackendCatalog>} powers.catalog What each
+ *   account of the broker lists, as the Claude Code runtime offers it; a
+ *   new session's pin is admitted by it in the provisioner.
+ * @param {boolean} [powers.publicInternetEnabled] Verified operator broker policy.
+ * @param {() => Promise<DeclaredSubscription[]>} [powers.listSubscriptions]
  */
 export const makeClaudeBackendFactory = ({
-  provisionClient,
-  cancelClient,
+  provisionSession,
+  stopSession,
   removeSession,
-  startToolBridge,
-  removeToolBridge,
-  models = CLAUDE_CLI_MODELS,
-}) => {
-  const catalog = harden(models.map(normalizeHostedModelDescriptor));
-  const listModels = async () => catalog;
-
-  // One live instance per session. `create` and `destroy` for one session id
-  // run in order, and either stops an instance this factory still runs before
-  // acting: a second `create` for a live session is the session's new owner (a
-  // Floot factory rebuilt without a daemon restart revives every session it
-  // records, while the old instance's admin facet died with the old factory),
-  // not a request for a duplicate that would race the same CLI transcript.
-  /** @type {Map<string, { terminate: () => Promise<void> }>} */
-  const live = new Map();
-  /** @type {Map<string, Promise<void>>} */
-  const sessionChains = new Map();
-  /**
-   * @template T
-   * @param {string} sessionId
-   * @param {() => Promise<T>} operation
-   * @returns {Promise<T>}
-   */
-  const inSessionOrder = (sessionId, operation) => {
-    const previous = sessionChains.get(sessionId) || Promise.resolve();
-    const result = previous.then(operation);
-    const settled = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    sessionChains.set(sessionId, settled);
-    void settled.then(() => {
-      if (sessionChains.get(sessionId) === settled) {
-        sessionChains.delete(sessionId);
+  catalog,
+  publicInternetEnabled = false,
+  listSubscriptions = async () => [],
+}) =>
+  makeHostedBackendFactory({
+    label: 'Claude',
+    provisionSession,
+    stopSession,
+    removeSession,
+    catalog,
+    publicInternetEnabled,
+    listSubscriptions,
+    describe: () => ({
+      id: CLAUDE_BACKEND_ID,
+      title: 'Claude Code',
+      continuity: 'transcript',
+      nativeContextFormat: 'claude-code-jsonl-v1',
+      providerId: 'anthropic',
+      // What a system prompt must know about this place. Claude Code lists
+      // an MCP server's tools as `mcp__<server>__<tool>`; the CLI has its
+      // own shell and file tools; the hosted policy mounts the session
+      // workspace at /workspace, the CLI's working directory.
+      promptEnvironment: {
+        toolNamePrefix: `mcp__${DEFAULT_SERVER_NAME}__`,
+        toolNames: {},
+        nativeTools: true,
+        workspacePath: '/workspace',
+      },
+    }),
+    readRequest: spec => {
+      if (spec.reasoningEffort !== undefined && spec.reasoningEffort !== '') {
+        assertClaudeEffort(spec.reasoningEffort);
       }
-    });
-    return result;
-  };
-  /** @param {string} sessionId */
-  const stopLive = async sessionId => {
-    const current = live.get(sessionId);
-    if (current) await current.terminate();
-  };
-
-  /**
-   * @param {Record<string, any>} spec
-   * @param {any} toolSet
-   */
-  const createSession = async (spec, toolSet) => {
-    const { sessionId } = spec;
-    if (spec.model !== undefined && spec.model !== '') {
-      catalog.some(model => model.id === spec.model) ||
-        Fail`Unknown Claude model ${q(spec.model)}`;
-    }
-    spec.reasoningEffort === undefined ||
-      spec.reasoningEffort === '' ||
-      Fail`The Claude CLI runtime has no reasoning-effort setting`;
-    // A predecessor that cannot stop — an unsettled Endo tool call — refuses
-    // the successor rather than running beside it.
-    await stopLive(sessionId);
-    const bridge = await startToolBridge(sessionId, toolSet);
-    let client;
-    try {
-      client = await provisionClient(sessionId, {
-        mcp: {
-          socketDir: bridge.socketDir,
-          innerDir: bridge.innerDir,
-          configPath: bridge.configPath,
-        },
-        ...(spec.model ? { model: spec.model } : {}),
-        ...(spec.workspaceHostPath
-          ? { workspaceDir: `${spec.workspaceHostPath}` }
-          : {}),
-      });
-    } catch (error) {
-      await bridge.close().catch(() => {});
-      throw error;
-    }
-
-    let terminated = false;
-    // The CLI is stopped once; a retry after a refused teardown (an Endo tool
-    // call still running host-side) resumes from there.
-    let clientStopped = false;
-    /** @type {Promise<void> | undefined} */
-    let cleanupInFlight;
-    /** @param {number} pending */
-    const refuseUnsettled = pending => {
-      pending === 0 ||
-        Fail`Claude session has ${q(pending)} unsettled Endo tool call(s)`;
-    };
-    const terminate = () => {
-      if (terminated) return Promise.resolve();
-      if (cleanupInFlight) return cleanupInFlight;
-      cleanupInFlight = (async () => {
-        await null;
-        if (!clientStopped) {
-          // An unsettled Endo tool call refuses the stop before anything is
-          // torn down: killing the CLI under it would leave the call running
-          // host-side with no reader for its result while this reported
-          // success.
-          refuseUnsettled(bridge.pendingCalls());
-          // Stop the CLI here, awaited, rather than leaving it to the formula
-          // cancellation below. The worker-side teardown (slice, both 9P
-          // mounts, their pet names, the credential grant) has to be finished
-          // before a successor's provision() can run, or the predecessor's
-          // unmount, name removal, and grant revocation land on the
-          // successor's mount, name, and grant.
-          try {
-            await E(client).terminate();
-          } catch (error) {
-            // An unreachable worker: the formula cancellation below is the
-            // durable teardown, so a failed direct stop is no reason to keep
-            // the session alive.
-            console.error(
-              `[claude-sandbox] direct stop of session ${sessionId} failed; relying on cancellation:`,
-              error instanceof Error ? error.message : String(error),
-            );
-          }
-          clientStopped = true;
-        }
-        // A call that raced the check above is still running host-side; it has
-        // to settle before the session is declared stopped.
-        refuseUnsettled(bridge.pendingCalls());
-        await bridge.close();
-        // A stop, not a deletion: the workspace and the transcript stay for
-        // the next revival.
-        await cancelClient(sessionId);
-        terminated = true;
-        if (live.get(sessionId)?.terminate === terminate) {
-          live.delete(sessionId);
-        }
-      })().finally(() => {
-        if (!terminated) cleanupInFlight = undefined;
-      });
-      return cleanupInFlight;
-    };
-
-    const run = makeExo('HostedTurnBackend', HostedTurnBackendInterface, {
+      return spec.reasoningEffort
+        ? { reasoningEffort: spec.reasoningEffort }
+        : {};
+    },
+    makeRun: ({ client, spec, subscription }) => ({
       /**
        * Start one CLI turn. The session's pinned model rides every spawn and
        * the caller's system prompt (Floot's session persona) is appended to
@@ -298,16 +127,25 @@ export const makeClaudeBackendFactory = ({
        */
       async send(prompt, options = {}) {
         const systemPrompt = options.systemPrompt || spec.systemPrompt;
+        // Forward continuity options intact: the host-selected transcript,
+        // including native context, must reach the client for restoration.
+        // Rebuilding only model/persona fields would discard that authority.
         const raw = await E(client).send(
           prompt,
           harden({
+            ...options,
             ...(spec.model ? { model: spec.model } : {}),
+            ...(spec.reasoningEffort
+              ? { reasoningEffort: spec.reasoningEffort }
+              : {}),
             ...(systemPrompt ? { systemPrompt } : {}),
           }),
         );
         return translateClaudeTurn(raw);
       },
-      models: listModels,
+      // What this session's account lists: the pinned one's, or any not
+      // set aside.
+      models: () => catalog.offered(subscription),
       /**
        * Kill the in-flight `claude -p`. The client serializes turns behind
        * the killed process's exit, so a prompt sent after this resolves cannot
@@ -320,75 +158,21 @@ export const makeClaudeBackendFactory = ({
           if (!isIdleInterrupt(error)) throw error;
         }
       },
-      // Continuity is the CLI transcript; there is no checkpoint to commit.
+      // No separate operational checkpoint is pending acknowledgement here.
+      // Native context is carried by turn events and retained by Floot's
+      // journal, not committed by this hook.
       async acknowledge(_checkpoint) {
         await null;
       },
       async status() {
-        const status = await E(client).status();
-        return harden({
-          ...status,
-          pendingToolCalls: bridge.pendingCalls(),
-          toolBridge: harden({
-            innerDir: bridge.innerDir,
-            configPath: bridge.configPath,
-          }),
-        });
+        return E(client).status();
       },
       help: method =>
         method
           ? `Hosted Claude CLI backend run method: ${method}`
-          : 'Hosted Claude CLI backend: send, models, interrupt, acknowledge (no-op; the CLI transcript is the continuity), and status.',
-    });
-    const admin = makeExo(
-      'HostedTurnBackendAdmin',
-      HostedTurnBackendAdminInterface,
-      {
-        terminate,
-        help: () =>
-          'Factory-only Claude CLI lifecycle administration: terminate (stops the slice and the tool bridge; keeps the workspace and transcript).',
-      },
-    );
-    live.set(sessionId, harden({ terminate }));
-    return harden({ run, admin });
-  };
-
-  /**
-   * @param {Record<string, any>} spec
-   * @param {any} toolSet
-   */
-  const create = async (spec, toolSet) => {
-    const sessionId = assertSessionId(spec?.sessionId);
-    return inSessionOrder(sessionId, () => createSession(spec, toolSet));
-  };
-
-  /** @param {Record<string, any>} spec */
-  const destroy = async spec => {
-    const sessionId = assertSessionId(spec?.sessionId);
-    return inSessionOrder(sessionId, async () => {
-      // Never underneath a running CLI.
-      await stopLive(sessionId);
-      await removeSession(sessionId);
-      await removeToolBridge(sessionId);
-    });
-  };
-
-  return makeExo('ClaudeBackendFactory', HostedBackendFactoryInterface, {
-    async describe() {
-      return harden({
-        id: CLAUDE_BACKEND_ID,
-        title: 'Claude Code',
-        kind: 'hosted',
-        continuity: 'transcript',
-        toolOwnership: 'endo',
-      });
-    },
-    listModels,
-    create,
-    destroy,
-    help() {
-      return 'Claude CLI backend factory: describe, listModels, create, and idempotent destroy.';
-    },
+          : 'Hosted Claude CLI backend: send, models, interrupt, acknowledge (operational no-op; Floot retains native context), and status.',
+    }),
+    adminHelp:
+      'Factory-only Claude CLI lifecycle administration: terminate (the daemon owner stops the native controller and its tool bridge; keeps the workspace and transcript).',
   });
-};
 harden(makeClaudeBackendFactory);

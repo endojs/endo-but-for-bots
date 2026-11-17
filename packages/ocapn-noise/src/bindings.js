@@ -325,11 +325,15 @@ export const makeOcapnSessionCryptography = ({
       );
     } else if (code === 3) {
       throw new Error(
-        'OCapN Noise Protocol intended responder key is not a valid ed25519 verifying key',
+        'OCapN Noise Protocol intended responder key is not a valid, strong ed25519 verifying key',
       );
     } else if (code === 4) {
       throw new Error(
         "OCapN Noise Protocol could not write initiator's SYN message",
+      );
+    } else if (code !== 0) {
+      throw new Error(
+        `Failed invariant: OCapN Noise Protocol initiator_write_syn returned unknown code ${code}`,
       );
     }
 
@@ -390,6 +394,14 @@ export const makeOcapnSessionCryptography = ({
       throw new Error(
         "OCapN Noise Protocol responder cannot read initiator's SYN message",
       );
+    } else if (readCode === 5) {
+      throw new Error(
+        'OCapN Noise Protocol initiator verifying key does not match its Noise static key',
+      );
+    } else if (readCode !== 0) {
+      throw new Error(
+        `Failed invariant: OCapN Noise Protocol responder_read_syn returned unknown code ${readCode}`,
+      );
     }
 
     // Negotiate against the initiator's freshly-decrypted offer set.
@@ -429,6 +441,10 @@ export const makeOcapnSessionCryptography = ({
       throw new Error(
         'Failed invariant: OCapN Noise Protocol responder handshake did not complete after msg 2',
       );
+    } else if (writeCode !== 0) {
+      throw new Error(
+        `Failed invariant: OCapN Noise Protocol responder_write_synack returned unknown code ${writeCode}`,
+      );
     }
 
     synack.set(buffer.subarray(SYNACK_OFFSET, SYNACK_OFFSET + SYNACK_LENGTH));
@@ -464,6 +480,10 @@ export const makeOcapnSessionCryptography = ({
     } else if (code === 2) {
       throw new Error(
         "OCapN Noise Protocol initiator cannot read responder's SYNACK message",
+      );
+    } else if (code !== 0) {
+      throw new Error(
+        `Failed invariant: OCapN Noise Protocol initiator_read_synack returned unknown code ${code}`,
       );
     }
 

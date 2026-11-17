@@ -1,0 +1,9 @@
+{
+  "config": {
+    "shadow_stack": 4194304,
+    "v8_flags": [
+      "--no-liftoff"
+    ]
+  },
+  "expected_traps": []
+}

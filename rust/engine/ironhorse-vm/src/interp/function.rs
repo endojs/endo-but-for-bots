@@ -58,46 +58,171 @@ impl Interp {
         })
     }
 
+    /// The `[[Prototype]]` of a derived class's prototype object
+    /// (ClassDefinitionEvaluation, XS's `fxRunExtends`). The heritage must be
+    /// a constructor — a Proxy or bound function over one included — and its
+    /// `prototype`, read with an observable `Get`, must be an object or `null`.
+    ///
+    /// The previous check accepted any function and read `prototype` from the
+    /// property cache, so `class C extends F {}` with `F.prototype = 3` built a
+    /// class whose instances silently inherited from nothing, where XS and V8
+    /// throw a TypeError, and a Proxy over a constructor was refused.
+    pub(super) fn class_heritage_prototype(
+        &mut self,
+        code: &[u8],
+        heritage: Slot,
+    ) -> Result<crate::value::SlotIndex, Step> {
+        if heritage.kind == Kind::Null {
+            return Ok(crate::value::SlotIndex::NULL);
+        }
+        let constructor = match heritage.value {
+            Payload::Reference(constructor)
+                if heritage.kind == Kind::Reference && self.slot_is_constructor(constructor) =>
+            {
+                constructor
+            }
+            _ => {
+                return Err(
+                    self.catchable_type_error_msg("extends: class is not a constructor".into())
+                )
+            }
+        };
+        let id = self.intern_static_key("prototype");
+        match self.mop_get(code, constructor, id, heritage)? {
+            Slot {
+                kind: Kind::Null, ..
+            } => Ok(crate::value::SlotIndex::NULL),
+            Slot {
+                kind: Kind::Reference,
+                value: Payload::Reference(prototype),
+                ..
+            } => Ok(prototype),
+            _ => {
+                Err(self
+                    .catchable_type_error_msg("extends: class prototype is not an object".into()))
+            }
+        }
+    }
+
+    /// `GetPrototypeFromConstructor(newTarget, …)` for an object a native
+    /// constructor creates, when a derived constructor's `super()` or a
+    /// `Reflect.construct` names the `new.target`.
+    ///
+    /// `None` keeps the intrinsic prototype the constructor allocates with.
+    /// That is the answer when `newTarget.prototype` is not an object, and the
+    /// answer for a direct `new`, whose `new.target` is the native itself: its
+    /// `prototype` is a non-writable, non-configurable data property holding
+    /// that intrinsic, so the read observes nothing and is skipped, leaving the
+    /// meter of every plain `new Map()` as it was.
+    ///
+    /// The read itself is observable — a getter, or a Proxy `new.target`'s
+    /// `get` trap — so call this at the step where the specification and XS's
+    /// `fxGetPrototypeFromConstructor` perform it, then give the new object
+    /// the prototype with [`Self::adopt_prototype`] once it exists.
+    pub(super) fn derived_construct_prototype(
+        &mut self,
+        code: &[u8],
+        new_target: Option<crate::value::SlotIndex>,
+        derived: bool,
+    ) -> Result<Option<crate::value::SlotIndex>, Step> {
+        let Some(target) = new_target.filter(|_| derived) else {
+            return Ok(None);
+        };
+        let id = self.intern_static_key("prototype");
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(target));
+        Ok(match self.mop_get(code, target, id, receiver)? {
+            Slot {
+                kind: Kind::Reference,
+                value: Payload::Reference(prototype),
+                ..
+            } => Some(prototype),
+            _ => None,
+        })
+    }
+
+    /// Give a just-created native instance the prototype
+    /// [`Self::derived_construct_prototype`] chose, if it chose one. The
+    /// instance keeps every internal slot its side tables hold, so a Map
+    /// subclass instance is still a Map and an Array subclass instance is
+    /// still an exotic Array.
+    pub(super) fn adopt_prototype(
+        &mut self,
+        object: Slot,
+        prototype: Option<crate::value::SlotIndex>,
+    ) -> Slot {
+        if let (Some(prototype), Payload::Reference(instance)) = (prototype, object.value) {
+            if object.kind == Kind::Reference {
+                self.slots.get_mut(instance).value = Payload::Reference(prototype);
+            }
+        }
+        object
+    }
+
     /// ECMAScript `InstanceofOperator(O, C)`. The right operand must be an
     /// object; its `@@hasInstance` method is read through the full MOP and, if
     /// present, called with `C` as `this` and `O` as its sole argument.
     /// Otherwise `C` must be callable and falls through to
     /// [`Self::ordinary_has_instance`].
+    ///
+    /// `OrdinaryHasInstance` on a bound function is a tail call of
+    /// `InstanceofOperator` on its target (step 2), so a chain of bound
+    /// functions with no `@@hasInstance` is walked here as a loop: one tick and
+    /// one `@@hasInstance` Get per layer, in the recursion's order (its second
+    /// callability check per layer was pure and is not repeated). The walk was
+    /// never charged against the native-recursion budget, so a loop keeps
+    /// acceptance unchanged while its host stack stays flat at any depth
+    /// (STACK-DEPTH-REFACTOR.md B2).
     pub(super) fn instanceof_operator(
         &mut self,
         code: &[u8],
         value: Slot,
         constructor: Slot,
     ) -> Result<bool, Step> {
-        let ctor = match constructor.value {
-            Payload::Reference(ctor) if constructor.kind == Kind::Reference => ctor,
-            _ => {
-                return Err(self.catchable_type_error_msg(
-                    match constructor.kind {
-                        Kind::Undefined => "cannot coerce undefined to object",
-                        Kind::Null => "cannot coerce null to object",
-                        _ => "call: not a function",
-                    }
-                    .into(),
-                ))
+        let mut constructor = constructor;
+        loop {
+            let ctor = match constructor.value {
+                Payload::Reference(ctor) if constructor.kind == Kind::Reference => ctor,
+                _ => {
+                    return Err(self.catchable_type_error_msg(
+                        match constructor.kind {
+                            Kind::Undefined => "cannot coerce undefined to object",
+                            Kind::Null => "cannot coerce null to object",
+                            _ => "call: not a function",
+                        }
+                        .into(),
+                    ))
+                }
+            };
+            self.meter.tick_raw(INSTANCEOF_METERING);
+            let has_instance_id = self
+                .well_known_symbol_property_id("hasInstance")
+                .expect("well-known hasInstance symbol");
+            let method = self.mop_get(code, ctor, has_instance_id, constructor)?;
+            if method.kind != Kind::Undefined && method.kind != Kind::Null {
+                if !self.is_callable_value(method) {
+                    return Err(self.catchable_type_error_msg("call: not a function".into()));
+                }
+                let result = self.invoke_value(code, method, constructor, &[value])?;
+                return Ok(self.truthy(&result));
             }
-        };
-        self.meter.tick_raw(INSTANCEOF_METERING);
-        let has_instance_id = self
-            .well_known_symbol_property_id("hasInstance")
-            .expect("well-known hasInstance symbol");
-        let method = self.mop_get(code, ctor, has_instance_id, constructor)?;
-        if method.kind != Kind::Undefined && method.kind != Kind::Null {
-            if !self.is_callable_value(method) {
+            if !self.is_callable_value(constructor) {
                 return Err(self.catchable_type_error_msg("call: not a function".into()));
             }
-            let result = self.invoke_value(code, method, constructor, &[value])?;
-            return Ok(self.truthy(&result));
+            // `ordinary_has_instance`'s own bound step, taken here in place:
+            // `constructor` is a callable reference, so its checks before that
+            // step pass, and they only read.
+            if let Some(target) = self.bound_target(ctor) {
+                constructor = Slot::of(Kind::Reference, Payload::Reference(target));
+                continue;
+            }
+            return self.ordinary_has_instance(code, constructor, value);
         }
-        if !self.is_callable_value(constructor) {
-            return Err(self.catchable_type_error_msg("call: not a function".into()));
-        }
-        self.ordinary_has_instance(code, constructor, value)
+    }
+
+    /// The `[[BoundTargetFunction]]` of a bound function exotic, `None` for
+    /// any other object.
+    fn bound_target(&self, ctor: crate::value::SlotIndex) -> Option<crate::value::SlotIndex> {
+        self.bound_functions.get(&ctor).map(|bound| bound.target)
     }
 
     /// ECMAScript `OrdinaryHasInstance(C, O)`, including bound-function
@@ -116,8 +241,8 @@ impl Interp {
             Payload::Reference(ctor) => ctor,
             _ => return Ok(false),
         };
-        if let Some(bound) = self.bound_functions.get(&ctor).cloned() {
-            let target = Slot::of(Kind::Reference, Payload::Reference(bound.target));
+        if let Some(target) = self.bound_target(ctor) {
+            let target = Slot::of(Kind::Reference, Payload::Reference(target));
             return self.instanceof_operator(code, value, target);
         }
         let mut object = match value.value {
@@ -180,6 +305,17 @@ impl Interp {
     /// `function_environment` opcodes. Meters the measured allocation
     /// cluster [`FUNCTION_DEFINE_METERING`].
     pub(super) fn new_function(&mut self, name: u16) -> crate::value::SlotIndex {
+        self.new_function_with_prototype(name, true)
+    }
+
+    /// [`Self::new_function`], with the default `.prototype` object's
+    /// `constructor` back-reference only when `constructor_link`: a generator
+    /// function's prototype object has none (ES2024 15.5.4, 27.3.4).
+    fn new_function_with_prototype(
+        &mut self,
+        name: u16,
+        constructor_link: bool,
+    ) -> crate::value::SlotIndex {
         self.meter.tick_raw(FUNCTION_DEFINE_METERING);
         // `fxNewFunctionInstance` runs `fxRenameFunction`; naming the
         // instance with a real id (an inferred `var f = function(){}` or a
@@ -231,7 +367,7 @@ impl Interp {
         // [`FUNCTION_DEFINE_METERING`] cluster, so it is written unmetered —
         // and only when the program names `constructor` (otherwise the property
         // is unobservable and non-`constructor` programs stay byte-identical).
-        if let Some(cid) = self.constructor_id {
+        if let Some(cid) = self.constructor_id.filter(|_| constructor_link) {
             self.set_own_unmetered_with_flag(
                 proto,
                 cid,
@@ -270,7 +406,7 @@ impl Interp {
     /// function instance; that extra allocation cluster over the plain
     /// `function` define is the calibrated [`GENERATOR_FUNCTION_EXTRA_METERING`].
     pub(super) fn new_generator_function(&mut self, name: u16) -> crate::value::SlotIndex {
-        let f = self.new_function(name);
+        let f = self.new_function_with_prototype(name, false);
         // Re-chain the function instance's own `[[Prototype]]` to
         // `%GeneratorFunction.prototype%` (XS's `mxGeneratorFunctionPrototype`)
         // rather than `%Function.prototype%`, so `(function*(){}).constructor`
@@ -444,11 +580,51 @@ impl Interp {
         matches!(v.value, Payload::Reference(r) if v.kind == Kind::Reference && self.slot_is_callable(r))
     }
 
+    /// The constructor a `super(...)` in the running function calls (XS's
+    /// `XS_CODE_SUPER`): the derived constructor's [[Prototype]]. An arrow
+    /// function has no [[Construct]] and no class of its own, so from one XS
+    /// takes the class its home object's own `constructor` names, and its
+    /// [[Prototype]]. `NULL` when there is none; the caller throws.
+    pub(super) fn super_parent(&self) -> crate::value::SlotIndex {
+        let function = if self.slot_is_constructor(self.cur_func) {
+            self.cur_func
+        } else {
+            let home = self
+                .functions
+                .get(&self.cur_func)
+                .map(|info| info.home)
+                .unwrap_or(crate::value::SlotIndex::NULL);
+            if home.is_null() {
+                return crate::value::SlotIndex::NULL;
+            }
+            let Some(&id) = self.symbol_ids.get("constructor") else {
+                return crate::value::SlotIndex::NULL;
+            };
+            match self
+                .find_property(home, id)
+                .map(|property| self.slots.get(property))
+            {
+                Some(Slot {
+                    kind: Kind::Reference,
+                    value: Payload::Reference(class),
+                    ..
+                }) => class,
+                _ => return crate::value::SlotIndex::NULL,
+            }
+        };
+        self.instance_prototype(function)
+    }
+
     /// `IsConstructor(v)` (ECMA-262 7.2.4). A bound/proxy callable follows its
-    /// target. Native prototype methods, `eval`, `Symbol`, and `BigInt` have no
-    /// `[[Construct]]`. A user function has it only when its constructor opcode
-    /// retained a default-prototype link; generator functions use that link for
-    /// their generator instances but are themselves non-constructable.
+    /// target. Native prototype methods and `eval` have no `[[Construct]]`.
+    /// `Symbol` and `BigInt` do — the specification makes them constructors
+    /// whose construction throws, so `Reflect.construct(Symbol, [])`, an
+    /// `extends Symbol` class's `super()` and `Array.of.call(BigInt)` reach
+    /// that TypeError (`new: Symbol` or `new: BigInt`, as XS says) rather than
+    /// "not a constructor", and either can be a `new.target`. A user function
+    /// has it only when its constructor opcode retained a default-prototype
+    /// link; generator functions use that link for their generator instances
+    /// but are themselves non-constructable.
     pub(super) fn is_constructor_value(&self, v: Slot) -> bool {
         matches!(v.value, Payload::Reference(r) if v.kind == Kind::Reference && self.slot_is_constructor(r))
     }
@@ -474,10 +650,9 @@ impl Interp {
         }
         match self.functions.get(&r) {
             Some(fi) if fi.method.is_some() => false,
-            Some(fi) if fi.native.is_some() => !matches!(
-                fi.native,
-                Some(Native::Host | Native::Eval | Native::Symbol | Native::BigInt)
-            ),
+            Some(fi) if fi.native.is_some() => {
+                !matches!(fi.native, Some(Native::Host | Native::Eval))
+            }
             Some(fi) => !fi.is_generator && self.ctor_prototype.contains_key(&r),
             None => false,
         }
@@ -500,6 +675,25 @@ impl Interp {
         }
     }
 
+    /// [[Get]] of a property whose own descriptor is `own`: its value, or
+    /// its getter called on `receiver` (undefined without one).
+    fn own_descriptor_value(
+        &mut self,
+        code: &[u8],
+        own: OrdinaryDescriptor,
+        receiver: Slot,
+    ) -> Result<Slot, Step> {
+        if let Some(value) = own.value {
+            return Ok(value);
+        }
+        match own.get {
+            Some(getter) if getter.kind != Kind::Undefined => {
+                self.run_callback(code, getter, receiver, &[])
+            }
+            _ => Ok(Slot::undefined()),
+        }
+    }
+
     /// `Function.prototype.bind(thisArg, ...boundArgs)`
     /// (`fx_Function_prototype_bind`): create a bound function. The receiver
     /// (`this`, at `base`) must be a modeled function; `thisArg` is arg 0 and the
@@ -508,7 +702,12 @@ impl Interp {
     /// its `.name` is `"bound "` + the target's name; calling it invokes the
     /// target with the bound `this` + bound args prepended through
     /// [`Self::invoke_value`].
-    pub(super) fn make_bound_function(&mut self, base: usize, argc: usize) -> Result<Slot, Step> {
+    pub(super) fn make_bound_function(
+        &mut self,
+        code: &[u8],
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Step> {
         let this = self
             .stack
             .get(base)
@@ -519,18 +718,29 @@ impl Interp {
         // shape is handled directly by the call opcode. A **native** receiver
         // (native constructor/method) is equally in `functions`, so it binds
         // through the same record — its bound call re-dispatches the native.
-        // `Function.prototype.bind` step 2 (ECMA-262 20.2.3.2): if the target
-        // is **not callable**, throw a TypeError (catchable). A callable proxy
-        // is bindable per spec, but a bound-of-proxy call is not yet modeled,
-        // so keep the honest skip rather than throw wrongly.
+        // A callable Proxy binds too: its bound call and construct go through
+        // the general Call and Construct. `Function.prototype.bind` step 2
+        // (ECMA-262 20.2.3.2): if the target is **not callable**, throw a
+        // TypeError (catchable).
         let target = match this.value {
-            Payload::Reference(r) if self.functions.contains_key(&r) => r,
-            Payload::Reference(r) if self.slot_is_callable(r) => {
-                return Err(Step::Host(Halt::NotImplemented(
-                    "bind:non-user-function-receiver",
-                )));
+            Payload::Reference(r)
+                if self.functions.contains_key(&r) || self.slot_is_callable(r) =>
+            {
+                r
             }
             _ => return Err(self.catchable_type_error_msg("this: not a Function instance".into())),
+        };
+        let proxy_target = self.proxies.contains_key(&target);
+        // BoundFunctionCreate takes its [[Prototype]] from the target's
+        // [[GetPrototypeOf]] (ECMA-262 10.4.1.3 step 1), a Proxy's trap
+        // included, before `length` and `name` are read.
+        let proto = if proxy_target {
+            match self.mop_get_prototype(code, target)?.value {
+                Payload::Reference(proto) => proto,
+                _ => crate::value::SlotIndex::NULL,
+            }
+        } else {
+            self.instance_prototype(target)
         };
         let this_arg = self
             .stack
@@ -563,22 +773,65 @@ impl Interp {
         } else {
             Vec::new()
         };
-        // Bound `.length` = max(0, target.length - boundArgs) and bound `.name`
-        // = "bound " + target.name (XS reads the target's own `length`/`name`).
-        let target_arity = self.functions.get(&target).map(|fi| fi.arity).unwrap_or(0);
-        let bound_len = target_arity.saturating_sub(nbound);
-        let name_length = self
-            .functions
-            .get(&target)
-            .map(|info| self.str_content(info.name_chunk).len() / 2)
-            .unwrap_or(0);
+        // `Function.prototype.bind` steps 4-10 (ECMA-262 20.2.3.2): the bound
+        // `length` is max(0, target.length - boundArgs) when the target has an
+        // own `length` holding a Number, else 0, and the bound `name` is
+        // "bound " + target.name when that is a String. Both go through the
+        // target's [[GetOwnProperty]] and [[Get]], so a deleted, redefined or
+        // inherited `length`/`name` is the one bound, as in
+        // `fx_Function_prototype_bind`.
+        //
+        // A function's own descriptors are read without a native frame; only
+        // a getter, or a `name` inherited after a delete, runs the general
+        // [[Get]]. A frame here would lower every bound-call nesting ceiling
+        // by one. A Proxy target answers through its traps: HasOwnProperty
+        // (`getOwnPropertyDescriptor`), then Get (`get`).
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let length_id = self.intern_static_key("length");
+        let name_id = self.intern_static_key("name");
+        let mut bound_len = 0.0f64;
+        let own_length = if proxy_target {
+            self.mop_get_own_property(code, target, length_id)?
+        } else {
+            self.mop_get_own_property_inner(code, target, length_id)?
+        };
+        if let Some(own) = own_length {
+            let target_length = if proxy_target {
+                self.mop_get(code, target, length_id, target_slot)?
+            } else {
+                self.own_descriptor_value(code, own, target_slot)?
+            };
+            let target_length = match numeric_of(&target_length) {
+                Some(n) if n.is_nan() => 0.0,
+                Some(n) => n.trunc(),
+                None => 0.0,
+            };
+            bound_len = (target_length - f64::from(nbound)).max(0.0);
+        }
+        let target_name = if proxy_target {
+            self.mop_get(code, target, name_id, target_slot)?
+        } else {
+            match self.mop_get_own_property_inner(code, target, name_id)? {
+                Some(own) => self.own_descriptor_value(code, own, target_slot)?,
+                None => self.mop_get(code, target, name_id, target_slot)?,
+            }
+        };
+        let name_chunk = match target_name.value {
+            Payload::String(off) if target_name.kind == Kind::String => Some(off),
+            _ => None,
+        };
+        let name_length = name_chunk.map_or(0, |off| self.str_content(off).len() / 2);
         let mut bound_units = self.reserve_work_scratch(name_length + 6)?;
         bound_units.extend("bound ".encode_utf16());
-        if let Some(info) = self.functions.get(&target) {
-            bound_units.extend(self.str_units(info.name_chunk));
+        if let Some(off) = name_chunk {
+            bound_units.extend(self.str_units(off));
         }
         let bound_name = SymbolName::from_units(&bound_units).to_string();
-        let inst = self.slots.alloc(Slot::instance(self.function_proto));
+        // A length that `FuncInfo.arity` cannot hold (Infinity, or past
+        // i32::MAX, which the synthesized property reads as an integer) is an
+        // ordinary own data property with the same attributes instead.
+        let synthesized_len = (bound_len <= f64::from(i32::MAX)).then_some(bound_len as u32);
+        let inst = self.slots.alloc(Slot::instance(proto));
         let name_chunk = self.chunks.alloc(&units_to_be16(&bound_units));
         // Register in `functions` (native/method None) so `.length`/`.name`
         // read back the bound values through the ordinary GET_PROPERTY arm.
@@ -587,7 +840,7 @@ impl Interp {
             FuncInfo {
                 name: bound_name,
                 name_chunk,
-                arity: bound_len,
+                arity: synthesized_len.unwrap_or(0),
                 ..FuncInfo::default()
             },
         );
@@ -599,6 +852,21 @@ impl Interp {
                 args: bound_args,
             },
         );
+        if synthesized_len.is_none() {
+            let defined = self.mop_define_own_property(
+                code,
+                inst,
+                length_id,
+                OrdinaryDescriptor {
+                    value: Some(Slot::number(bound_len)),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                },
+            )?;
+            debug_assert!(defined, "a fresh bound function accepts its length");
+        }
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
@@ -643,5 +911,66 @@ impl Interp {
                 self.mop_define_own_property(code, robj, id, desc)
             }
         }
+    }
+
+    /// SetFunctionName for a definition the compiler flagged `XS_NAME_FLAG`
+    /// (XS's `fxRenameFunction` from `fxOrdinaryDefineOwnProperty` and
+    /// `fxDefinePrivateProperty`): an anonymous function or class value takes
+    /// its key's name, `prefix`ed for an accessor; a symbol key gives its
+    /// description in brackets, or the empty string without one. Only a
+    /// function whose own `name` is still the synthesized empty string is
+    /// renamed: a class that defined its own `name`, or deleted it in a static
+    /// block, keeps that, as the specification names a class before its
+    /// static elements run.
+    pub(in crate::interp) fn name_defined_function(
+        &mut self,
+        value: Slot,
+        key: DefinedKey,
+        prefix: &str,
+    ) {
+        let Payload::Reference(f) = value.value else {
+            return;
+        };
+        let Some(name_id) = self.name_id else {
+            return;
+        };
+        let anonymous = value.kind == Kind::Reference
+            && self
+                .functions
+                .get(&f)
+                .is_some_and(|info| info.name.is_empty())
+            && !self.deleted_fn_meta.contains(&(f, name_id))
+            && self.find_property(f, name_id).is_none();
+        if !anonymous {
+            return;
+        }
+        let mut units: Vec<u16> = prefix.encode_utf16().collect();
+        match key {
+            DefinedKey::Index(index) => units.extend(index.to_string().encode_utf16()),
+            DefinedKey::Id(id) => match self.symbol_key_ids.descriptor(id) {
+                Some(descriptor) => {
+                    if let Payload::String(off) = self.slots.get(descriptor).value {
+                        units.push(u16::from(b'['));
+                        units.extend(self.str_units(off));
+                        units.push(u16::from(b']'));
+                    }
+                }
+                None => {
+                    if let Some(name) = (id as usize)
+                        .checked_sub(1)
+                        .and_then(|i| self.symbol_names.get(i))
+                    {
+                        units.extend(name.to_units());
+                    }
+                }
+            },
+        }
+        let name_chunk = self.chunks.alloc(&units_to_be16(&units));
+        let name = SymbolName::from_units(&units).to_string();
+        self.functions.update(&f, |info| {
+            info.name = name;
+            info.name_chunk = name_chunk;
+        });
+        self.meter.tick_builtin_some(2);
     }
 }

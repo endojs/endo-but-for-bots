@@ -1,0 +1,293 @@
+// @ts-check
+import {
+  imageResultFromBlocks,
+  anthropicToolContent,
+} from '@endo/hosted-agent/image-result.js';
+
+/**
+ * Write a Claude Code transcript from the stack's transcript records, so a
+ * revived session resumes the conversation the stack holds rather than one the
+ * guest's own store happened to keep.
+ *
+ * Claude Code names each conversation `projects/<project>/<session-uuid>.jsonl`
+ * and fills it with one envelope per line: `uuid` and `parentUuid` chaining the
+ * records into a list, `sessionId`, `cwd`, `gitBranch`, `timestamp`,
+ * `isSidechain`, `userType`, `entrypoint` and `version` describing the
+ * incarnation that wrote it, and `message` carrying a verbatim Anthropic API
+ * message. That last part is what makes this writable at all: the payload is
+ * the API's own shape, not a private encoding, so a tool call is an assistant
+ * `tool_use` block and its result a user `tool_result` block — exactly the
+ * distinction a restored transcript has to preserve.
+ *
+ * The schema here was captured by observation
+ * (`designs/hosted-agent-sandbox-unification.md`), not from a specification.
+ * That is acceptable because the image is pinned by digest, so it cannot
+ * change without a deliberate bump — and it is only acceptable while a bump
+ * re-runs the round-trip conformance test, because a format that drifted
+ * silently would resume empty rather than fail.
+ *
+ * @module
+ */
+
+import { Fail } from '@endo/errors';
+import {
+  pairToolCalls,
+  selectActiveTranscript,
+} from '@endo/hosted-agent/transcript-records.js';
+
+import { claudeToolInput } from './claude-tool-input.js';
+
+/** What Claude Code records for a turn the user typed. */
+const USER_TYPE = 'external';
+
+/**
+ * A deterministic v4-shaped identifier.
+ *
+ * Restoration must be reproducible: writing the same records twice has to
+ * produce the same transcript, or a retried revival forks a second
+ * conversation out of the same history. So the ids come from a counter seeded
+ * by the session, never from randomness.
+ *
+ * @param {string} sessionUuid
+ * @param {number} index
+ */
+const recordUuid = (sessionUuid, index) => {
+  const seed = `${sessionUuid}`.replace(/-/g, '').padEnd(32, '0').slice(0, 32);
+  const counter = index.toString(16).padStart(8, '0');
+  const body = `${counter}${seed.slice(8)}`;
+  return [
+    body.slice(0, 8),
+    body.slice(8, 12),
+    `4${body.slice(13, 16)}`,
+    `a${body.slice(17, 20)}`,
+    body.slice(20, 32),
+  ].join('-');
+};
+
+/**
+ * @param {readonly any[]} records Transcript records from the stack.
+ * @param {object} options
+ * @param {string} options.sessionUuid The Claude Code session id this
+ * transcript belongs to; the file is named for it and every envelope repeats
+ * it.
+ * @param {string} options.cwd The slice path Claude Code runs in.
+ * @param {string} options.version The pinned CLI version, as Claude Code
+ * stamps on the records it writes itself.
+ * @param {string} [options.model] Recorded on assistant messages; Claude Code
+ * writes the model that produced them.
+ * @param {string} [options.gitBranch]
+ * @param {() => string} [options.now] ISO timestamps, injectable so a test
+ * gets a stable file.
+ * @returns {string} JSONL, one envelope per line.
+ */
+export const writeClaudeTranscript = (
+  records,
+  {
+    sessionUuid,
+    cwd,
+    version,
+    model = 'unknown',
+    gitBranch = '',
+    now = () => new Date().toISOString(),
+  },
+) => {
+  (typeof sessionUuid === 'string' && sessionUuid !== '') ||
+    Fail`a Claude transcript needs the session id it is named for`;
+  (typeof cwd === 'string' && cwd.startsWith('/')) ||
+    Fail`a Claude transcript needs the slice path its session runs in`;
+  // Everything before the last compaction is history the model no longer
+  // carries. Claude Code has no compaction record of its own, so the summary
+  // is written as the conversation's opening exchange and the superseded span
+  // is not replayed — which is what the boundary means.
+  const { active } = selectActiveTranscript(records);
+  active.every(
+    record =>
+      record.kind !== 'native-context' &&
+      !(record.kind === 'message' && record.providerContext),
+  ) || Fail`Native Claude context requires the sandbox-native importer`;
+  const { pairs } = pairToolCalls(active, { perTurn: true });
+  const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
+  // The Messages API accepts only `[A-Za-z0-9_-]` in a tool_use id. Floot
+  // names recovered evidence `recovered:<turn>:<call>`, which the CLI would
+  // send and the API refuse. Each call gets one API-safe id, distinct from
+  // every other id in the file, shared by the result written beside it.
+  const safeIds = new Set(
+    active
+      .filter(record => record.kind === 'tool-call')
+      .map(record => record.id)
+      .filter(id => /^[A-Za-z0-9_-]+$/.test(id)),
+  );
+  /** @type {Map<any, string>} */
+  const idFor = new Map();
+  const apiId = record => {
+    if (!idFor.has(record)) {
+      let id = record.id;
+      if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+        const base = id.replace(/[^A-Za-z0-9_-]/g, '_');
+        id = base;
+        for (let n = 2; safeIds.has(id); n += 1) id = `${base}_${n}`;
+        safeIds.add(id);
+      }
+      idFor.set(record, id);
+    }
+    return idFor.get(record);
+  };
+
+  let index = 0;
+  /** @type {string | null} */
+  let parentUuid = null;
+  const lines = [];
+  /**
+   * @param {'user' | 'assistant'} type
+   * @param {any} message
+   */
+  const emit = (type, message) => {
+    const uuid = recordUuid(sessionUuid, index);
+    index += 1;
+    lines.push(
+      JSON.stringify({
+        parentUuid,
+        isSidechain: false,
+        userType: USER_TYPE,
+        cwd,
+        sessionId: sessionUuid,
+        version,
+        gitBranch,
+        type,
+        message,
+        uuid,
+        timestamp: now(),
+      }),
+    );
+    parentUuid = uuid;
+  };
+
+  const [compaction] = active;
+  if (compaction?.kind === 'compaction') {
+    emit('user', {
+      role: 'user',
+      content: compaction.summary,
+    });
+  }
+
+  for (const record of active) {
+    if (record.kind === 'message') {
+      emit(
+        record.role,
+        record.role === 'user'
+          ? { role: 'user', content: record.content }
+          : {
+              model,
+              type: 'message',
+              role: 'assistant',
+              content: [{ type: 'text', text: record.content }],
+              stop_reason: 'end_turn',
+              stop_sequence: null,
+            },
+      );
+    } else if (record.kind === 'tool-call') {
+      emit('assistant', {
+        model,
+        type: 'message',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: apiId(record),
+            name: record.name,
+            input: claudeToolInput(record.args),
+          },
+        ],
+        stop_reason: 'tool_use',
+        stop_sequence: null,
+      });
+      // The result follows its call immediately. A call the turn never settled
+      // still gets one, saying so: Claude Code refuses a `tool_use` with no
+      // answering `tool_result`, and an interrupted turn must restore as an
+      // interrupted turn rather than as a conversation that cannot load.
+      const result = resultFor.get(record);
+      emit('user', {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: apiId(record),
+            content: anthropicToolContent(
+              result ? result.content : 'Tool call did not complete.',
+            ),
+            ...(result?.failed ? { is_error: true } : {}),
+          },
+        ],
+      });
+    }
+    // A `compaction` record is the boundary itself and carries no turn of its
+    // own; its summary opened the file above.
+  }
+  return lines.length > 0 ? `${lines.join('\n')}\n` : '';
+};
+harden(writeClaudeTranscript);
+
+/**
+ * Read a transcript back as records.
+ *
+ * The inverse of the writer, and the reason the round-trip conformance suite
+ * can judge a restoration at all: without it a format change would be caught
+ * only by a live session resuming empty. It reads what Claude Code itself
+ * writes, not merely what this module emits, so a transcript the CLI extended
+ * is readable too.
+ *
+ * @param {string} text
+ * @returns {readonly any[]}
+ */
+export const readClaudeTranscript = text => {
+  const records = [];
+  const envelopes = text
+    .split('\n')
+    .filter(line => line !== '')
+    .map(line => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        throw Fail`Claude transcript line is not JSON`;
+      }
+    })
+    .filter(envelope => envelope?.message);
+  for (const envelope of envelopes) {
+    const { content } = envelope.message;
+    if (typeof content === 'string') {
+      records.push({ kind: 'message', role: envelope.type, content });
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block?.type === 'text') {
+          records.push({
+            kind: 'message',
+            role: envelope.type,
+            content: block.text,
+          });
+        } else if (block?.type === 'tool_use') {
+          records.push({
+            kind: 'tool-call',
+            id: block.id,
+            name: block.name,
+            args: JSON.stringify(block.input ?? {}),
+          });
+        } else if (block?.type === 'tool_result') {
+          records.push({
+            kind: 'tool-result',
+            id: block.tool_use_id,
+            content:
+              typeof block.content === 'string'
+                ? block.content
+                : (imageResultFromBlocks(block.content) ??
+                  JSON.stringify(block.content ?? '')),
+            ...(block.is_error ? { failed: true } : {}),
+          });
+        }
+        // This portable projection omits reasoning. Faithful restoration uses
+        // the separately preserved native-context payload, never this alone.
+      }
+    }
+  }
+  return harden(records);
+};
+harden(readClaudeTranscript);

@@ -5,12 +5,14 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { mustMatch } from '@endo/patterns';
 
 import { asyncIterate } from './async-iterate.js';
+import { makePumpLifecycle } from './pump-lifecycle.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { SomehowAsyncIterable, StreamNode, WriterPumpOptions } from './types.js' */
 
 const { freeze } = Object;
+const promiseThen = Promise.prototype.then;
 
 /**
  * Creates a Writer responder pump (Consumer side).
@@ -35,7 +37,7 @@ const { freeze } = Object;
  * @template {Passable} [TWriteReturn=undefined]
  * @param {SomehowAsyncIterable<unknown, TWrite, TWriteReturn>} iterable
  * @param {WriterPumpOptions} [options]
- * @returns {(synPromise: ERef<StreamNode<TWrite, TWriteReturn>>) => Promise<StreamNode<undefined, TWriteReturn>>}
+ * @returns {((synPromise: ERef<StreamNode<TWrite, TWriteReturn>>) => Promise<StreamNode<undefined, TWriteReturn>>) & {close: () => Promise<void>}}
  */
 export const makeWriterPump = (iterable, options = {}) => {
   const { buffer = 0, writePattern, writeReturnPattern } = options;
@@ -43,6 +45,8 @@ export const makeWriterPump = (iterable, options = {}) => {
     /** @type {AsyncIterator<unknown, TWriteReturn, TWrite> & { return?: (value?: TWriteReturn) => Promise<IteratorResult<unknown, TWriteReturn>> | IteratorResult<unknown, TWriteReturn> }} */ (
       asyncIterate(iterable)
     );
+
+  const lifecycle = makePumpLifecycle(iterator);
 
   /**
    * @param {ERef<StreamNode<TWrite, TWriteReturn>>} synPromise
@@ -53,6 +57,13 @@ export const makeWriterPump = (iterable, options = {}) => {
     const { promise: ackHead, resolve: initialAckResolve } = makePromiseKit();
     /** @type {(value: StreamNode<undefined, TWriteReturn> | PromiseLike<StreamNode<undefined, TWriteReturn>>) => void} */
     let ackResolve = initialAckResolve;
+    let ackPromise = ackHead;
+    const closing = makePromiseKit();
+    let closed = false;
+    const finish = lifecycle.admit(() => {
+      closed = true;
+      closing.resolve(harden({ value: undefined, promise: null }));
+    });
 
     (async () => {
       await null;
@@ -65,25 +76,27 @@ export const makeWriterPump = (iterable, options = {}) => {
           if (i < buffer) {
             const { promise, resolve } = makePromiseKit();
             ackResolve(freeze({ value: undefined, promise }));
+            ackPromise = promise;
             ackResolve = resolve;
           }
 
           // Wait for syn (data from initiator)
           const synNode = /** @type {StreamNode<TWrite, TWriteReturn>} */ (
-            await synPromise
+            await new Promise((resolve, reject) => {
+              Reflect.apply(promiseThen, Promise.resolve(synPromise), [
+                resolve,
+                reject,
+              ]);
+              Reflect.apply(promiseThen, closing.promise, [resolve, reject]);
+            })
           );
 
-          if (synNode.promise === null) {
+          if (closed || synNode.promise === null) {
             // Initiator done - close local iterator
-            let returnValue = synNode.value;
-            if (iterator.return) {
-              released = true;
-              const returned =
-                /** @type {IteratorReturnResult<TWriteReturn>} */ (
-                  await iterator.return(returnValue)
-                );
-              returnValue = returned.value;
-            }
+            const value = closed ? undefined : synNode.value;
+            released = true;
+            const returned = await lifecycle.release(value);
+            const returnValue = returned.value;
             if (writeReturnPattern !== undefined) {
               mustMatch(returnValue, writeReturnPattern);
             }
@@ -103,32 +116,39 @@ export const makeWriterPump = (iterable, options = {}) => {
           }
 
           // Push received value to local iterator
-          await iterator.next(synNode.value);
+          await lifecycle.next(synNode.value);
 
           // Ack after buffer phase
           if (i >= buffer) {
             const { promise, resolve } = makePromiseKit();
             ackResolve(freeze({ value: undefined, promise }));
+            ackPromise = promise;
             ackResolve = resolve;
           }
         }
       } catch (err) {
-        if (iterator.return && !released) {
+        if (!released) {
           released = true;
           try {
-            await iterator.return();
+            await lifecycle.release();
           } catch {
             // The initiator sees the error that ended the stream, not one
             // its cleanup raised on top of it.
           }
         }
         // Abort: resolve tail with rejection
-        ackResolve(Promise.reject(err));
+        ackPromise.catch(() => undefined);
+        const rejection = Promise.reject(err);
+        rejection.catch(() => undefined);
+        ackResolve(rejection);
+      } finally {
+        finish();
       }
     })();
 
     return ackHead;
   };
 
-  return pump;
+  return harden(Object.assign(pump, { close: lifecycle.close }));
 };
+harden(makeWriterPump);

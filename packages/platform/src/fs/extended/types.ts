@@ -10,6 +10,9 @@
 
 import type { ERef } from '@endo/eventual-send';
 import type {
+  CloseablePassableReader,
+  CloseablePassableBytesReader,
+  CloseablePassableBytesWriter,
   PassableBytesReader,
   PassableBytesWriter,
   PassableReader,
@@ -131,7 +134,7 @@ export type DirectoryPage = {
 
 export type Cursor = {
   read: (limit?: bigint) => Promise<DirectoryPage>;
-  stream: () => ERef<PassableReader<DirectoryEntry>>;
+  stream: () => ERef<CloseablePassableReader<DirectoryEntry>>;
   toArray: () => Promise<DirectoryEntry[]>;
   skip: (n: bigint) => Promise<void>;
   rewind: () => Promise<void>;
@@ -236,10 +239,25 @@ export type BlobInfo = {
  * carries are captured at snapshot time and are independent of later writes.
  */
 export type BlobRef = {
-  getInfo: () => BlobInfo;
-  fetch: (offset: bigint, length: bigint) => ERef<PassableBytesReader>;
+  sha256: () => Promise<string>;
+  size: () => Promise<bigint>;
+  bytes: () => ERef<PassableBytesReader>;
   text: () => Promise<string>;
   json: () => Promise<unknown>;
+  /**
+   * Range *attenuation* (designs/readableblob-range-attenuation.md): select the
+   * half-open byte interval `[start, end)` relative to the receiver and return
+   * a new `BlobRef` over exactly those bytes. Ranges compose (a range of a
+   * range intersects) and `start === end` selects an empty blob; construction
+   * reads no bytes, so it resolves synchronously.
+   */
+  byteRange: (start: bigint, end: bigint) => BlobRef;
+  /**
+   * Select lines `[startLine, endLine)` (0-based, end-exclusive, LF
+   * boundaries, CRLF preserved) of the captured bytes and return the byte
+   * slice as a `BlobRef`.
+   */
+  textRange: (startLine: number, endLine: number) => Promise<BlobRef>;
   help: (method?: string) => string;
 };
 
@@ -277,8 +295,11 @@ export type Lock = {
 };
 
 export type OpenFile = {
-  read: (offset?: bigint, length?: bigint) => ERef<PassableBytesReader>;
-  write: (offset?: bigint) => ERef<PassableBytesWriter>;
+  read: (
+    offset?: bigint,
+    length?: bigint,
+  ) => ERef<CloseablePassableBytesReader>;
+  write: (offset?: bigint) => ERef<CloseablePassableBytesWriter>;
   truncate: (size: bigint) => Promise<void>;
   fsync: () => Promise<void>;
   lock: (opts: LockOpts) => ERef<Lock>;

@@ -19,8 +19,8 @@ built-ins/Temporal/PlainDateTime/prototype/with/constrain-day.js sloppy skip:ora
 built-ins/Temporal/PlainDateTime/prototype/with/constrain-day.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDateTime/prototype/with/copy-properties-not-undefined.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDateTime/prototype/with/copy-properties-not-undefined.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/PlainDateTime/prototype/with/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainDateTime/prototype/with/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/prototype/with/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/with/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/with/length.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/with/length.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/with/month-and-monthcode-must-agree.js sloppy skip:oracle-host-missing-global:Temporal

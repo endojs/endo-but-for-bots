@@ -186,9 +186,13 @@ test('PATTERN: snapshot + fetch — read bytes without holding the file open', a
   await E(oh).close();
 
   // Original bytes still served by the BlobRef.
-  const head = await collectBytes(await E(blob).fetch(0n, 16n));
+  const head = await collectBytes(
+    await E(await E(blob).byteRange(0n, 16n)).bytes(),
+  );
   t.is(new TextDecoder().decode(head), 'A'.repeat(16));
-  const tail = await collectBytes(await E(blob).fetch(1008n, 16n));
+  const tail = await collectBytes(
+    await E(await E(blob).byteRange(1008n, 1024n)).bytes(),
+  );
   t.is(new TextDecoder().decode(tail), 'A'.repeat(16));
 });
 

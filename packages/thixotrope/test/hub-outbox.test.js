@@ -9,8 +9,12 @@ import {
 import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeOcapnHub } from '../src/hub.js';
-import { makeDurableNetLayer } from '../src/durable-netlayer.js';
+import { makeOcapnHub } from '../src/net/hub.js';
+import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
+
+import { makeNodePowers } from '../src/platform/node/powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @param {Uint8Array} bytes */
 const hex = bytes =>
@@ -183,7 +187,7 @@ test.serial(
     let logical;
     /** @type {Array<{n: bigint, sequence: string | undefined}>} */
     const recorded = [];
-    const layer = await makeDurableNetLayer({
+    const layer = await makeDurableNetLayer(nodePowers, {
       handlers: /** @type {any} */ ({
         makeConnection: (netlayer, isOutgoing, operations) => {
           logical = { netlayer, isOutgoing, ...operations };
@@ -245,3 +249,210 @@ test.serial(
     ]);
   },
 );
+
+test('outbox batches accepted-prefix removal with the next sequence commit', t => {
+  /** @type {any} */
+  let state = {
+    version: 2,
+    refs: {},
+    publications: {},
+    sessions: {
+      destination: {
+        durable: true,
+        queue: ['00', '01'],
+        queueSequences: ['', ''],
+        nextDelivery: '0',
+      },
+    },
+  };
+  let commits = 0;
+  const hub = makeOcapnHub({
+    codec: syrupCodec,
+    store: {
+      getState: () => state,
+      setState: next => {
+        state = JSON.parse(JSON.stringify(next));
+        commits += 1;
+      },
+    },
+  });
+  const sent = [];
+  hub.attachSession('destination', {
+    durable: true,
+    requireAcceptance: true,
+    send: (bytes, sequence) => {
+      const saved = state.sessions.destination;
+      t.is(
+        saved.queueSequences[0],
+        sequence,
+        'replay identity is durable before wire',
+      );
+      t.is(
+        saved.queue[0],
+        hex(bytes),
+        'frame ownership is durable before wire',
+      );
+      sent.push(sequence);
+      return true;
+    },
+  });
+  t.deepEqual(sent, ['1', '2']);
+  t.is(
+    commits,
+    4,
+    'attach, first sequence, next sequence plus removal, final removal',
+  );
+  t.deepEqual(state.sessions.destination.queue, []);
+});
+
+test('failed final outbox commit replays the accepted tail with its original identity', t => {
+  /** @type {any} */
+  let state = {
+    version: 2,
+    refs: {},
+    publications: {},
+    sessions: {
+      destination: {
+        durable: true,
+        queue: ['00', '01'],
+        queueSequences: ['', ''],
+        nextDelivery: '0',
+      },
+    },
+  };
+  let fail = true;
+  const store = {
+    getState: () => state,
+    setState: next => {
+      if (fail && next.sessions.destination.queue.length === 0) {
+        throw Error('injected final commit failure');
+      }
+      state = JSON.parse(JSON.stringify(next));
+    },
+  };
+  const accepted = new Set();
+  const sends = [];
+  const adapter = {
+    durable: true,
+    requireAcceptance: true,
+    send: (_bytes, sequence) => {
+      sends.push(sequence);
+      accepted.add(sequence);
+      return true;
+    },
+  };
+  const first = makeOcapnHub({ codec: syrupCodec, store });
+  t.throws(() => first.attachSession('destination', adapter), {
+    message: /injected final commit failure/,
+  });
+  t.deepEqual(state.sessions.destination.queueSequences, ['2']);
+  fail = false;
+  const restored = makeOcapnHub({ codec: syrupCodec, store });
+  restored.attachSession('destination', adapter);
+  t.deepEqual(sends, ['1', '2', '2']);
+  t.deepEqual([...accepted], ['1', '2']);
+  t.deepEqual(state.sessions.destination.queue, []);
+});
+
+test('sequence commit failure exposes no frame to the transport', t => {
+  /** @type {any} */
+  let state = {
+    version: 2,
+    refs: {},
+    publications: {},
+    sessions: {
+      destination: {
+        durable: true,
+        queue: ['00'],
+        queueSequences: [''],
+        nextDelivery: '0',
+      },
+    },
+  };
+  let fail = true;
+  const store = {
+    getState: () => state,
+    setState: next => {
+      if (fail && next.sessions.destination.queueSequences[0] === '1') {
+        throw Error('injected sequence commit failure');
+      }
+      state = JSON.parse(JSON.stringify(next));
+    },
+  };
+  const sent = [];
+  const adapter = {
+    durable: true,
+    send: (_bytes, sequence) => {
+      sent.push(sequence);
+      return true;
+    },
+  };
+  const hub = makeOcapnHub({ codec: syrupCodec, store });
+  t.throws(() => hub.attachSession('destination', adapter), {
+    message: /sequence commit failure/,
+  });
+  t.deepEqual(sent, []);
+  t.deepEqual(state.sessions.destination.queueSequences, ['']);
+  fail = false;
+  makeOcapnHub({ codec: syrupCodec, store }).attachSession(
+    'destination',
+    adapter,
+  );
+  t.deepEqual(sent, ['1']);
+});
+
+for (const crash of [false, true]) {
+  test(`deferred cleanup retains replay identity (crash: ${crash})`, t => {
+    /** @type {any} */
+    let state = {
+      version: 2,
+      refs: {},
+      publications: {},
+      sessions: {
+        destination: {
+          durable: true,
+          queue: ['00', '01'],
+          queueSequences: ['', ''],
+          nextDelivery: '0',
+        },
+      },
+    };
+    let commits = 0;
+    const store = {
+      getState: () => state,
+      setState: next => {
+        state = JSON.parse(JSON.stringify(next));
+        commits += 1;
+      },
+    };
+    const sends = [];
+    const owned = new Set();
+    const adapter = {
+      durable: true,
+      requireAcceptance: true,
+      deferCleanup: true,
+      send: (_bytes, sequence) => {
+        t.is(state.sessions.destination.queueSequences[0], sequence);
+        sends.push(sequence);
+        owned.add(sequence);
+        return true;
+      },
+    };
+    const hub = makeOcapnHub({ codec: syrupCodec, store });
+    const sink = hub.attachSession('destination', adapter);
+    t.is(commits, 3, 'no final cleanup commit');
+    t.deepEqual(state.sessions.destination.queueSequences, ['2']);
+    if (crash) {
+      makeOcapnHub({ codec: syrupCodec, store }).attachSession(
+        'destination',
+        adapter,
+      );
+      t.deepEqual(sends, ['1', '2', '2']);
+    } else {
+      sink.flush();
+      t.is(commits, 4, 'explicit flush commits deferred removals');
+      t.deepEqual(state.sessions.destination.queue, []);
+    }
+    t.deepEqual([...owned], ['1', '2'], 'receiver applies each identity once');
+  });
+}

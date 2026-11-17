@@ -292,6 +292,9 @@ test.serial('first root message becomes profile header', async t => {
 
   await push(makeMessage(0, 'This is my bio'));
 
+  // The empty header exists from the initial render; the bio body only once
+  // the pushed message has rendered.
+  await waitFor(() => !!$parent.querySelector('.microblog-header-bio'));
   const $header = $parent.querySelector('.microblog-header');
   t.truthy($header, 'header should exist');
   t.true(
@@ -311,6 +314,7 @@ test.serial('second root message renders as a post', async t => {
   await push(makeMessage(0, 'Bio'));
   await push(makeMessage(1, 'My first post'));
 
+  await waitFor(() => !!$parent.querySelector('.microblog-post'));
   const $posts = $parent.querySelectorAll('.microblog-post');
   t.is($posts.length, 1, 'should have one post');
   t.true(
@@ -347,6 +351,7 @@ test.serial('posts appear newest-first', async t => {
   await push(makeMessage(2, 'Second post'));
   await push(makeMessage(3, 'Third post'));
 
+  await waitFor(() => $parent.querySelectorAll('.microblog-post').length === 3);
   const $posts = $parent.querySelectorAll('.microblog-post');
   t.is($posts.length, 3, 'should have three posts');
 
@@ -403,6 +408,7 @@ test.serial('post shows relative timestamp', async t => {
   await push(makeMessage(0, 'Bio'));
   await push(makeMessage(1, 'Recent post'));
 
+  await waitFor(() => !!$parent.querySelector('.microblog-post-time'));
   const $time = $parent.querySelector('.microblog-post-time');
   t.truthy($time, 'should have a time element');
   t.true($time.textContent.length > 0, 'time should have content');
@@ -416,6 +422,7 @@ test.serial('post has interaction bar with reply, share, fork', async t => {
   await push(makeMessage(0, 'Bio'));
   await push(makeMessage(1, 'A post'));
 
+  await waitFor(() => !!$parent.querySelector('.microblog-actions'));
   const $actions = $parent.querySelector('.microblog-actions');
   t.truthy($actions, 'should have interaction bar');
 
@@ -446,6 +453,9 @@ test.serial('clicking reply button triggers onReply', async t => {
   await push(makeMessage(0, 'Bio'));
   await push(makeMessage(1, 'Reply to this'));
 
+  await waitFor(
+    () => !!$parent.querySelector('.microblog-post .microblog-action-btn'),
+  );
   const $replyBtn = $parent.querySelector(
     '.microblog-post .microblog-action-btn',
   );
@@ -466,6 +476,9 @@ test.serial('clicking share button triggers onShare with heritage', async t => {
   await push(makeMessage(1, 'A shareable post'));
 
   // reply (↩), react (bridged), comments (💬), share (⇗), fork (⑂).
+  await waitFor(
+    () => !!$parent.querySelector('.microblog-post .microblog-actions'),
+  );
   const $actions = $parent.querySelector('.microblog-post .microblog-actions');
   const $btns = $actions.querySelectorAll('.microblog-action-btn');
   // Share button has the ⇗ icon.
@@ -486,6 +499,10 @@ test.serial('replies become comments, not new posts', async t => {
   await push(makeMessage(1, 'A post'));
   await push(makeMessage(2, 'A comment on the post', { replyTo: 1 }));
 
+  // The count only renders once the reply has been folded into the post.
+  await waitFor(
+    () => !!$parent.querySelector('.microblog-post .microblog-action-count'),
+  );
   const $posts = $parent.querySelectorAll('.microblog-post');
   t.is($posts.length, 1, 'reply should not create a new post');
 
@@ -501,6 +518,12 @@ test.serial('edit-type replies do not render as posts', async t => {
   await push(makeMessage(1, 'Original post'));
   await push(makeMessage(2, 'Edited text', { replyTo: 1, replyType: 'edit' }));
 
+  // Wait for the edit itself to land, so the count below covers it.
+  await waitFor(() =>
+    [...$parent.querySelectorAll('.microblog-post')].some(p =>
+      p.textContent.includes('Edited text'),
+    ),
+  );
   const $posts = $parent.querySelectorAll('.microblog-post');
   t.is($posts.length, 1, 'edit should not create a second post');
 });
@@ -516,6 +539,12 @@ test.serial(
     await push(makeMessage(3, 'Reply to comment', { replyTo: 2 }));
 
     // Click the comments toggle (the action button carrying a count).
+    await waitFor(
+      () =>
+        !!$parent.querySelector(
+          '.microblog-post > .microblog-actions .microblog-action-count',
+        ),
+    );
     const $actionBtns = $parent.querySelectorAll(
       '.microblog-post > .microblog-actions .microblog-action-btn',
     );
@@ -538,6 +567,9 @@ test.serial(
     t.truthy($commentActions, 'comment should have its own action bar');
 
     // The nested comment shows its own reply count of 1.
+    await waitFor(
+      () => !!$commentSection.querySelector('.microblog-action-count'),
+    );
     const $nestedCount = $commentSection.querySelector(
       '.microblog-action-count',
     );

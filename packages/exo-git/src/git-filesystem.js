@@ -22,12 +22,10 @@
  * are not cached here; callers that want CAS-backed caching compose
  * `withCachedReads(fs, cas)` in endo-fs.
  *
- * The backend also implements the optional content-address hooks
- * `qidFor` / `blobInfoFor` (see designs/endo-fs-from-git.md Goal 2):
- * wrap-backend probes for them and, when present, sources the QID
- * `pathId` from the git object OID and the `BlobRef` hash from the
- * `git-sha1` blob OID, so same-blob identity survives across paths and
- * refs instead of degrading to the path-hash / SHA-256 defaults.
+ * The backend also implements the optional `qidFor` content-address hook (see
+ * designs/endo-fs-from-git.md Goal 2), so QID `pathId` values come from git
+ * object OIDs and same-object identity survives across paths and refs. Blob
+ * snapshots independently expose the SHA-256 of their raw bytes.
  *
  * See `designs/endo-fs-from-git.md` for the contract.
  */
@@ -123,12 +121,12 @@ export const makeGitFsBackend = ({ backend, treeOid }) => {
   const pathCache = new Map();
 
   // Synchronous mirror of `pathCache`, holding only the *resolved,
-  // non-null* entries.  `qidFor`/`blobInfoFor` (below) need the git
+  // non-null* entries. `qidFor` (below) needs the git
   // OID for a path *synchronously* — `Node.getQid()` is a sync getter
   // in the `@endo/platform` wrap-backend contract — but `resolvePath`
   // is async.  Every path whose exo wrap-backend hands out has already
   // been walked (`lookup`/`list` await `backend.kind` first), so its
-  // OID is available here by the time `getQid`/`snapshot` runs.  The
+  // OID is available here by the time `getQid` runs. The
   // root (`[]`) is seeded eagerly because `Filesystem.root()` mints the
   // root Directory exo without a resolve.  A miss (a path minted by
   // some future non-resolving route) returns `undefined`, and
@@ -416,23 +414,6 @@ export const makeGitFsBackend = ({ backend, treeOid }) => {
         pathId,
         version: 0n,
       });
-    },
-
-    /**
-     * Report the git-native content hash for a blob path: the
-     * `git-sha1` OID itself (git hashes the framed payload
-     * `blob <size>\0<bytes>`, so this is NOT the SHA-256 of the raw
-     * bytes — a consumer comparing hashes across sources must
-     * distinguish `git-sha1` from `sha256`).  Returns `undefined` for a
-     * non-file path (or a cold cache), so wrap-backend falls back to its
-     * SHA-256-over-captured-bytes `BlobRef`.
-     *
-     * @param {string[]} path
-     */
-    blobInfoFor(path) {
-      const entry = resolvedSync.get(path.join('\0'));
-      if (entry === undefined || entry.kind !== 'file') return undefined;
-      return harden({ algorithm: 'git-sha1', hash: entry.oid });
     },
   });
 };

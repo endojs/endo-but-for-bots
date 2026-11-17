@@ -25,11 +25,16 @@ import { encodeHex } from '@endo/hex';
 import { sha256 } from '@endo/sha256';
 import { mapReader } from '@endo/stream';
 // `GitBlob` exposes the whole-value read surface plus the richer `BlobRef`
-// range-I/O surface (`getInfo` / `fetch`), so a remote reader of a git tree can
+// named read surface (`sha256` / `size` / `bytes`), so a remote reader can
 // learn a blob's content hash + size in one round-trip and read byte ranges.
 // See designs/fs-interface-consolidation.md § C4.
-import { ReadableBlobRangeInterface } from '@endo/platform/fs/lite';
-import { toSafeNumber } from '@endo/platform/fs/extended/shared/helpers.js';
+import {
+  ReadableBlobRangeInterface,
+  assertByteRange,
+  assertLineRange,
+  composeByteInterval,
+  lineRangeToByteSlice,
+} from '@endo/platform/fs/lite';
 import {
   GitTreeInterface,
   gitBlobHelp,
@@ -2298,72 +2303,122 @@ export const makeNativeGitBackend = ({
   };
 
   /**
+   * `interval` is the absolute byte interval over the git object's bytes this
+   * blob exposes: `{ start, end }` with `end === undefined` meaning "to the
+   * object's end" — an unattenuated blob over the whole object. A `range` /
+   * `textRange` attenuation re-invokes this factory with a composed interval
+   * (the same OID plus the interval), so the derived blob has the same
+   * `ReadableBlobRange` interface, a range of a range intersects, and no new
+   * object is written for a derived range.
+   *
    * @param {string} blobOid
+   * @param {{ start: number, end: number | undefined }} [interval]
    * @returns {unknown}
    */
-  const makeGitBlob = blobOid =>
-    makeExo('GitBlob', ReadableBlobRangeInterface, {
+  const makeGitBlob = (blobOid, interval = { start: 0, end: undefined }) => {
+    const { start, end } = interval;
+    const isFull = start === 0 && end === undefined;
+    // Git serves whole objects; the selection is sliced from the materialized
+    // bytes (matching the in-memory `BlobRef`). `subarray` is an O(1) view.
+    /** @returns {Promise<Uint8Array>} the blob's currently selected bytes */
+    const readSelected = async () => {
+      const bytes = await readBlobBytes(blobOid);
+      return end === undefined
+        ? bytes.subarray(start)
+        : bytes.subarray(start, end);
+    };
+    return makeExo('GitBlob', ReadableBlobRangeInterface, {
       /**
        * @param {unknown} synPromise
        */
       streamBase64(synPromise) {
+        if (isFull) {
+          const pump = makeReaderPump(
+            mapReader(streamBlobBytes(blobOid), encodeBase64),
+          );
+          return pump(/** @type {any} */ (synPromise));
+        }
+        // Attenuated view: stream the selected bytes as one base64 chunk.
         const pump = makeReaderPump(
-          mapReader(streamBlobBytes(blobOid), encodeBase64),
+          mapReader(
+            /** @type {any} */ (
+              (async function* selected() {
+                const bytes = await readSelected();
+                if (bytes.length > 0) yield bytes;
+              })()
+            ),
+            encodeBase64,
+          ),
         );
         return pump(/** @type {any} */ (synPromise));
       },
 
       async text() {
-        const bytes = await readBlobBytes(blobOid);
-        return utf8Decoder.decode(bytes);
+        return utf8Decoder.decode(await readSelected());
       },
 
       async json() {
-        const bytes = await readBlobBytes(blobOid);
-        return JSON.parse(utf8Decoder.decode(bytes));
+        return JSON.parse(utf8Decoder.decode(await readSelected()));
       },
 
       // The `{ algorithm, hash, size }` content-address triple, computed as
-      // sha256 over the blob's bytes (base64, matching the extended `BlobRef`).
-      // Note this is a content sha256, distinct from the git object's own
-      // sha1 OID.
-      async getInfo() {
-        const bytes = await readBlobBytes(blobOid);
-        const hash = encodeBase64(sha256(bytes));
-        return harden({
-          algorithm: 'sha256',
-          hash,
-          size: BigInt(bytes.length),
-        });
+      // sha256 over the *selected* bytes (base64, matching the extended
+      // `BlobRef`). Note this is a content sha256, distinct from the git
+      // object's own sha1 OID; for an attenuated view it is the selection's own
+      // digest over the bytes readable through it.
+      async sha256() {
+        const bytes = await readSelected();
+        return encodeBase64(sha256(bytes));
+      },
+      async size() {
+        return BigInt((await readSelected()).length);
+      },
+      async bytes() {
+        const bytes = await readSelected();
+        return bytesReaderFromIterator(
+          (bytes.length > 0 ? [bytes] : [])[Symbol.iterator](),
+        );
       },
 
-      // Windowed read of `[offset, offset + length)`, clamped at EOF. Git
-      // serves whole objects, so the window is sliced from the materialized
-      // bytes (matching the in-memory `BlobRef.fetch`).
+      // Range *attenuation*: `range` resolves synchronously (no bytes read) to
+      // a new `GitBlob` over the composed byte interval, intersected with this
+      // blob's authority; `textRange` selects a line range of the current bytes
+      // and returns a `GitBlob` over the corresponding byte slice.
       /**
-       * @param {bigint} offset
-       * @param {bigint} length
+       * @param {bigint} rangeStart
+       * @param {bigint} rangeEnd
        */
-      async fetch(offset, length) {
-        // Validate at the bigint→Number boundary (same `toSafeNumber` the
-        // daemon and `BlobRef` paths use) so a negative offset can't slip
-        // through to `subarray` and silently return the tail of the object.
-        const off = toSafeNumber(offset, 'offset');
-        const len = toSafeNumber(length, 'length');
-        if (len <= 0) {
-          return bytesReaderFromIterator([][Symbol.iterator]());
-        }
-        const bytes = await readBlobBytes(blobOid);
-        const end = Math.min(off + len, bytes.length);
-        const slice =
-          off >= bytes.length ? new Uint8Array(0) : bytes.subarray(off, end);
-        return bytesReaderFromIterator(
-          (slice.length > 0 ? [slice] : [])[Symbol.iterator](),
+      byteRange(rangeStart, rangeEnd) {
+        const { start: s, end: e } = assertByteRange(rangeStart, rangeEnd);
+        const composed = composeByteInterval(start, end, s, e);
+        return makeGitBlob(blobOid, composed);
+      },
+      /**
+       * @param {number} startLine
+       * @param {number} endLine
+       */
+      async textRange(startLine, endLine) {
+        const { startLine: s, endLine: e } = assertLineRange(
+          startLine,
+          endLine,
         );
+        if (e <= s) {
+          return makeGitBlob(blobOid, { start, end: start });
+        }
+        const bytes = await readSelected();
+        const slice = lineRangeToByteSlice(bytes, s, e);
+        const composed = composeByteInterval(
+          start,
+          end,
+          slice.start,
+          slice.end,
+        );
+        return makeGitBlob(blobOid, composed);
       },
 
       help: makeHelp(gitBlobHelp),
     });
+  };
 
   /**
    * @param {string} treeOid

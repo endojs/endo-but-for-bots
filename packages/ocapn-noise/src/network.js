@@ -77,6 +77,28 @@ const hexToBytes = hex => {
 };
 
 /**
+ * Assert that a peer key (an `np` designator / peer keyId) is canonical
+ * lowercase hex for a 32-byte Ed25519 key. `hexToBytes` maps any non-hex
+ * character to a zero byte, so a length-only check would let
+ * `'z'.repeat(64)` through as 32 zero bytes (a small-order key); and the
+ * raw string keys the `active`, `inProgress`, and `waiters` maps, so a
+ * non-canonical spelling of a peer already held would split into a
+ * distinct, duplicate entry. Every entry point that keys those maps by a
+ * caller-supplied peer key runs this first.
+ *
+ * @param {string} keyId
+ * @returns {KeyIdHex}
+ */
+const assertCanonicalKeyId = keyId => {
+  if (typeof keyId !== 'string' || !/^[0-9a-f]{64}$/.test(keyId)) {
+    throw makeError(
+      X`ocapn-noise: peer designator must be 64 lowercase hex chars (a 32-byte Ed25519 key), got ${q(keyId)}`,
+    );
+  }
+  return /** @type {KeyIdHex} */ (keyId);
+};
+
+/**
  * Return a genuine, integer-indexable `Uint8Array` covering the contents
  * of `buf`.
  *
@@ -137,11 +159,23 @@ const expectFrameLength = (bytes, expected, label) => {
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 /**
- * Cap on how many simultaneous handshakes can be in flight for a given
- * peer. Combined with the handshake timeout, this bounds the work a
- * single misbehaving peer can pin in a responder.
+ * Cap on how many inbound handshakes can be mid-flight for one of our
+ * local identities before the peer has proven itself. Combined with the
+ * handshake timeout, this bounds the WASM instances and Diffie-Hellman
+ * work a flood against a single one of our identities can pin. When the
+ * cap is full, the oldest unproven handshake is evicted to admit the new
+ * one, so a flood cannot hold every slot for a whole handshake timeout:
+ * a genuine peer, which proves itself within about one round trip, is
+ * only displaced by an attacker sustaining a full cap's worth of new
+ * handshakes per round trip.
+ *
+ * This is deliberately keyed on the responder's own identity, not on
+ * the claimed peer: IK message 1 is replayable (Noise §7.7 destination
+ * property 2) and its payload is attacker-chosen, so a pre-auth cap
+ * keyed on the claimed peer would let a replay of one genuine peer's
+ * SYN exhaust that peer's budget and lock the peer out.
  */
-const MAX_IN_PROGRESS_PER_PEER = 8;
+const DEFAULT_MAX_IN_PROGRESS_PER_LOCAL_KEY = 256;
 
 /** Maximum number of unconsumed peer-initiated sessions to buffer. */
 const MAX_PENDING_INBOUND_SESSIONS = 256;
@@ -196,12 +230,14 @@ const withTimeout = (promise, ms, label, stream) => {
  * @param {{
  *   codec: OcapnCodec,
  *   handshakeTimeoutMs?: number,
+ *   maxInProgressPerLocalKey?: number,
  * }} options
  * @returns {OcapnNoiseNetwork}
  */
 export const makeOcapnNoiseNetwork = ({
   codec,
   handshakeTimeoutMs = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+  maxInProgressPerLocalKey = DEFAULT_MAX_IN_PROGRESS_PER_LOCAL_KEY,
 }) => {
   const cryptography = makeCryptography(codec);
 
@@ -245,12 +281,15 @@ export const makeOcapnNoiseNetwork = ({
   /** @type {Map<KeyIdHex, number>} */
   const inProgress = new Map();
   /**
-   * Membership-test wrapper: returns true iff a fresh handshake to
-   * `peerId` would push us past `MAX_IN_PROGRESS_PER_PEER`.
-   * @param {KeyIdHex} peerId
+   * Unproven inbound handshakes, keyed on our own local identity (the
+   * SYN's intended responder), not on the claimed peer, oldest first.
+   * Each entry aborts its handshake. Bounds the work an inbound flood can
+   * pin before `exchangeIdentity` proves the peer. Admitted before the
+   * Noise SYN-decrypt and released when the handshake attempt concludes,
+   * in `handleIncoming`'s `finally`.
+   * @type {Map<KeyIdHex, Set<() => void>>}
    */
-  const inProgressFull = peerId =>
-    (inProgress.get(peerId) ?? 0) >= MAX_IN_PROGRESS_PER_PEER;
+  const inFlightByLocalKey = new Map();
   /** @type {Map<KeyIdHex, { resolve: (s: OcapnNoiseSession) => void, reject: (e: Error) => void }[]>} */
   const waiters = new Map();
   /** @type {Map<KeyIdHex, string[]>} */
@@ -277,6 +316,38 @@ export const makeOcapnNoiseNetwork = ({
   /** @param {KeyIdHex} peerId */
   const bumpInProgress = peerId => {
     inProgress.set(peerId, (inProgress.get(peerId) ?? 0) + 1);
+  };
+
+  /**
+   * Admit an inbound handshake against `localKeyId`'s budget, evicting
+   * the oldest unproven handshake if the budget is full. Returns the
+   * release function for `handleIncoming`'s `finally`.
+   *
+   * @param {KeyIdHex} localKeyId
+   * @param {() => void} abort
+   * @returns {() => void}
+   */
+  const admitInbound = (localKeyId, abort) => {
+    let admitted = inFlightByLocalKey.get(localKeyId);
+    if (!admitted) {
+      admitted = new Set();
+      inFlightByLocalKey.set(localKeyId, admitted);
+    }
+    if (admitted.size >= maxInProgressPerLocalKey) {
+      const [oldest] = admitted;
+      if (oldest) {
+        admitted.delete(oldest);
+        oldest();
+      }
+    }
+    admitted.add(abort);
+    const set = admitted;
+    return () => {
+      set.delete(abort);
+      if (set.size === 0 && inFlightByLocalKey.get(localKeyId) === set) {
+        inFlightByLocalKey.delete(localKeyId);
+      }
+    };
   };
 
   /**
@@ -330,22 +401,44 @@ export const makeOcapnNoiseNetwork = ({
    */
   const pendingInbound = [];
 
+  /**
+   * Local outbound dials (`runInitiator`) in flight per peer. Only we
+   * can start them, and their handshake steps carry their own timeouts
+   * (the transport's `connect` does not), so a settlement deadline never
+   * cuts one short.
+   *
+   * @type {Map<KeyIdHex, number>}
+   */
+  const outboundInFlight = new Map();
+
+  /**
+   * Per-peer settlement deadline. Settlement normally waits for every
+   * in-flight handshake to the peer (so crossed hellos run the tiebreaker
+   * over both), but each inbound SYN, including a replayed one, adds to
+   * that set. Once no local dial to the peer is in flight and something
+   * is waiting on the outcome (a proven candidate, or a caller), the
+   * deadline settles over whatever has been proven within one more
+   * `handshakeTimeoutMs`. A stream of replays therefore delays a dial by
+   * at most that much, and a failed outbound dial still rejects its
+   * waiters. A genuine crossed hello whose second direction takes longer
+   * than that to prove can still be settled without it.
+   *
+   * @type {Map<KeyIdHex, ReturnType<typeof setTimeout>>}
+   */
+  const settleDeadlines = new Map();
+
   /** @param {KeyIdHex} peerId */
-  const decrementAndSettle = peerId => {
-    if (isShutdown) {
-      // `shutdown()` already cleared `inProgress`, `candidates`,
-      // `active`, and `waiters`, and closed every candidate it knew
-      // about. A late-arriving handshake whose own `recordCandidate`
-      // call now sees `isShutdown === true` will close itself; nothing
-      // here is safe to touch.
-      return;
+  const shouldSettleEarly = peerId =>
+    !outboundInFlight.has(peerId) &&
+    (candidates.has(peerId) || waiters.has(peerId));
+
+  /** @param {KeyIdHex} peerId */
+  const settle = peerId => {
+    const deadline = settleDeadlines.get(peerId);
+    if (deadline !== undefined) {
+      clearTimeout(deadline);
+      settleDeadlines.delete(peerId);
     }
-    const next = (inProgress.get(peerId) ?? 0) - 1;
-    if (next > 0) {
-      inProgress.set(peerId, next);
-      return;
-    }
-    inProgress.delete(peerId);
 
     const fresh = candidates.get(peerId) ?? [];
     candidates.delete(peerId);
@@ -404,7 +497,7 @@ export const makeOcapnNoiseNetwork = ({
     waiters.delete(peerId);
     if (queue.length > 0) {
       for (const { resolve } of queue) resolve(winner.session);
-    } else if (!inboundClosed) {
+    } else if (!inboundClosed && !winner.session.isInitiator) {
       // Nobody is waiting on provideSession for this peer; this is a
       // peer-initiated session. Hand it off to the inboundSessions
       // iterable for the embedding client to wire up. If the queue
@@ -419,6 +512,45 @@ export const makeOcapnNoiseNetwork = ({
     }
   };
 
+  /** @param {KeyIdHex} peerId */
+  const decrementAndSettle = peerId => {
+    if (isShutdown) {
+      // `shutdown()` already cleared `inProgress`, `candidates`,
+      // `active`, and `waiters`, and closed every candidate it knew
+      // about. A late-arriving handshake whose own `recordCandidate`
+      // call now sees `isShutdown === true` will close itself; nothing
+      // here is safe to touch.
+      return;
+    }
+    const next = (inProgress.get(peerId) ?? 0) - 1;
+    if (next > 0) {
+      inProgress.set(peerId, next);
+      if (!settleDeadlines.has(peerId) && shouldSettleEarly(peerId)) {
+        // Handshakes still in flight keep their own count; when they
+        // finish they settle again, and a late candidate then meets the
+        // `existing` branch of `settle` (or becomes a fresh session if
+        // this settlement found none).
+        settleDeadlines.set(
+          peerId,
+          setTimeout(() => {
+            settleDeadlines.delete(peerId);
+            // A local dial started since arming will settle when it
+            // finishes; do not reject its caller out from under it.
+            if (isShutdown || !shouldSettleEarly(peerId)) return;
+            try {
+              settle(peerId);
+            } catch (_err) {
+              // Only a candidate's best-effort teardown can throw here.
+            }
+          }, handshakeTimeoutMs),
+        );
+      }
+      return;
+    }
+    inProgress.delete(peerId);
+    settle(peerId);
+  };
+
   /**
    * Forget the active entry for `peerId` if (and only if) it still
    * matches the supplied candidate. Wired into `buildSession.close` so
@@ -431,6 +563,15 @@ export const makeOcapnNoiseNetwork = ({
   const forgetActive = (peerId, candidate) => {
     if (active.get(peerId) === candidate) {
       active.delete(peerId);
+    }
+    // A candidate that closes while still awaiting settlement (its peer
+    // hung up, or re-dialed, before a straggler finished) must not be
+    // picked as the winner.
+    const pending = candidates.get(peerId);
+    const index = pending ? pending.indexOf(candidate) : -1;
+    if (pending && index !== -1) {
+      pending.splice(index, 1);
+      if (pending.length === 0) candidates.delete(peerId);
     }
     // Drop any stale recent-error trail; if the peer reconnects, a
     // fresh failure history is more useful than the previous one.
@@ -789,25 +930,29 @@ export const makeOcapnNoiseNetwork = ({
    */
   const runInitiator = async (localKey, location, peerEd25519) => {
     const { transport, hints } = selectOutgoingTransport(location);
-    const stream = await transport.connect(hints);
     const peerId = toHex(peerEd25519);
 
+    // Build the SYN before dialing: `initiatorWriteSyn` rejects a weak or
+    // malformed responder key, and a locator carrying one must not cause
+    // an outbound connection to the hints it names.
+    const noise = makeOcapnSessionCryptography({
+      wasmModule,
+      getRandomValues,
+      signingKeys: {
+        privateKey: localKey.privateKey,
+        publicKey: localKey.publicKey,
+      },
+    });
+    const asInit = noise.asInitiator();
+    const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+    const { initiatorReadSynack } = asInit.initiatorWriteSyn(
+      peerEd25519,
+      prefixedSyn,
+    );
+    const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
+
+    const stream = await transport.connect(hints);
     try {
-      const noise = makeOcapnSessionCryptography({
-        wasmModule,
-        getRandomValues,
-        signingKeys: {
-          privateKey: localKey.privateKey,
-          publicKey: localKey.publicKey,
-        },
-      });
-      const asInit = noise.asInitiator();
-      const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
-      const { initiatorReadSynack } = asInit.initiatorWriteSyn(
-        peerEd25519,
-        prefixedSyn,
-      );
-      const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
       await stream.writer.next(prefixedSyn);
 
       const synack = await withTimeout(
@@ -891,6 +1036,15 @@ export const makeOcapnNoiseNetwork = ({
     await null;
     /** @type {KeyIdHex | undefined} */
     let registeredPeerId;
+    /** @type {(() => void) | undefined} */
+    let releaseInbound;
+    /** @type {(reason: Error) => void} */
+    let rejectEvicted = () => {};
+    /** @type {Promise<never>} */
+    const evicted = new Promise((_resolve, reject) => {
+      rejectEvicted = reject;
+    });
+    evicted.catch(() => {});
     try {
       const prefixedSyn = await withTimeout(
         readFrame(stream.reader),
@@ -906,18 +1060,23 @@ export const makeOcapnNoiseNetwork = ({
         return;
       }
 
-      // Cheap-prefix gating: cap concurrent in-progress handshakes
+      // Pre-authentication DoS bound. Cap concurrent inbound handshakes
       // per local identity before paying for any Noise IK SYN-decrypt
       // (the per-handshake cost includes a `WebAssembly.Instance`
-      // construction and a Diffie-Hellman). The peer's verifying key
-      // is encrypted in the SYN payload and not visible until after
-      // the decrypt, so we have no source-IP-equivalent identifier
-      // here; the per-identity cap bounds the responder's exposure
-      // when an attacker spams one of our identities with junk SYNs.
-      if (inProgressFull(intendedKeyId)) {
-        await stream.writer.return(undefined);
-        return;
-      }
+      // construction and a Diffie-Hellman). This is keyed on our own
+      // identity, never the claimed peer: the peer's verifying key is
+      // both encrypted and replayable, so it cannot bound anything
+      // before `exchangeIdentity`. A full budget evicts its oldest
+      // unproven handshake (closing its stream and failing its pending
+      // `exchangeIdentity`) rather than refusing this one. The slot is
+      // released in `finally`.
+      releaseInbound = admitInbound(intendedKeyId, () => {
+        rejectEvicted(
+          Error('ocapn-noise: evicted by newer inbound handshakes'),
+        );
+        Promise.resolve(stream.writer.return(undefined)).catch(() => {});
+        Promise.resolve(stream.reader.return(undefined)).catch(() => {});
+      });
 
       const noise = makeOcapnSessionCryptography({
         wasmModule,
@@ -931,71 +1090,98 @@ export const makeOcapnNoiseNetwork = ({
       const synack = new Uint8Array(SYNACK_LENGTH);
       // IK msg 1 (read) + msg 2 (write) finalize the handshake in
       // one bindings call.  No further wire message is required.
+      // The bindings reject a SYN whose claimed `initiatorVerifyingKey`
+      // does not match the static key Noise authenticated, so an
+      // initiator cannot claim a key it does not hold.
       const { initiatorVerifyingKey, encrypt, decrypt, handshakeHash } =
         asResp.responderReadSynWriteSynack(prefixedSyn, synack);
       const initiatorKeyHex = toHex(initiatorVerifyingKey);
-      // Re-check against the verified peer identity now that we know
-      // who they really are, in case a single peer is saturating the
-      // cap by hitting many of our identities at once.
-      if (inProgressFull(initiatorKeyHex)) {
+
+      // Late crossed hello against an ADOPTED session: refuse before we
+      // answer. `decrementAndSettle` never displaces an adopted session,
+      // so finishing this handshake would mint a session we immediately
+      // close — and the peer may have adopted it by then, tearing it out
+      // from under their CapTP layer (the two sides can even close each
+      // other's adopted sessions mutually). Refuse before SYNACK so the
+      // peer's dial fails fast and its own settlement converges on the
+      // session both sides already share. A replayed SYN that lands here
+      // is simply refused, which is harmless. An UNCLAIMED session
+      // (still in `pendingInbound`) is deliberately left alone here and
+      // handled after `exchangeIdentity`, so a replay cannot displace it.
+      const adopted = active.get(initiatorKeyHex);
+      if (adopted && pendingInbound.indexOf(adopted.session) === -1) {
         await stream.writer.return(undefined);
         return;
       }
-      // Late crossed hello: we already hold an active session with
-      // this peer. `decrementAndSettle` never displaces an adopted
-      // session, so finishing this handshake would mint a session we
-      // immediately close — and the peer may have adopted it by then,
-      // tearing it out from under their CapTP layer (the two sides
-      // can even close each other's adopted sessions mutually).
-      // Refuse before SYNACK instead: the peer's dial fails fast, and
-      // its own settlement converges on the session both sides
-      // already share.
-      //
-      // Exception: an active session still sitting unclaimed in
-      // `pendingInbound` has no consumer whose read side would ever
-      // notice the peer closing it. A fresh SYN from that same peer
-      // is evidence the peer's side of it is gone (a live peer's dial
-      // would have been answered from its own active cache), so
-      // displace the unclaimed session and let this handshake
-      // proceed.
-      const existingActive = active.get(initiatorKeyHex);
-      if (existingActive) {
-        const pendingIndex = pendingInbound.indexOf(existingActive.session);
-        if (pendingIndex === -1) {
-          await stream.writer.return(undefined);
-          return;
-        }
-        pendingInbound.splice(pendingIndex, 1);
-        // `close` fires the session's onClose, which forgets the
-        // active entry; the copy already queued on `inboundSessions`
-        // surfaces as a dead session, exactly as the
-        // MAX_PENDING_INBOUND_SESSIONS overflow path leaves one.
-        existingActive.close();
-      }
+
+      // Register this inbound against the peer now, before we answer, so
+      // a concurrent outbound `provideSession` to the same peer waits for
+      // it in `decrementAndSettle` and both directions run the
+      // crossed-hello tiebreaker over the same pair of ephemerals.
+      // Without this, the two sides can each settle on their own outbound
+      // and then mutually close the other's session ("Session
+      // disconnected"). A replayed SYN reaches here too and holds this
+      // slot until it times out, but `settleDeadlines` caps how long the
+      // peer's settlement waits on it, and it cannot displace the peer's
+      // existing session (deferred to after `exchangeIdentity`).
+      // The count is released in the `catch` or in `decrementAndSettle`.
       registeredPeerId = initiatorKeyHex;
       bumpInProgress(initiatorKeyHex);
       const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
-      await stream.writer.next(synack);
+      await Promise.race([
+        withTimeout(
+          stream.writer.next(synack),
+          handshakeTimeoutMs,
+          'SYNACK write',
+          stream,
+        ),
+        evicted,
+      ]);
 
       const {
         peerLocation,
         peerLocationSignature,
         location,
         locationSignature,
-      } = await withTimeout(
-        exchangeIdentity(
-          localKey,
-          stream.reader,
-          stream.writer,
-          encrypt,
-          decrypt,
-          initiatorVerifyingKey,
-          handshakeHash,
+      } = await Promise.race([
+        withTimeout(
+          exchangeIdentity(
+            localKey,
+            stream.reader,
+            stream.writer,
+            encrypt,
+            decrypt,
+            initiatorVerifyingKey,
+            handshakeHash,
+          ),
+          handshakeTimeoutMs,
+          'post-handshake identity exchange',
+          stream,
         ),
-        handshakeTimeoutMs,
-        'post-handshake identity exchange',
-        stream,
-      );
+        evicted,
+      ]);
+
+      // The peer is now proven live under `initiatorKeyHex`. Displacing a
+      // stale UNCLAIMED session for this peer (a reconnect whose old
+      // session still sits unconsumed in `pendingInbound`) is deferred to
+      // here so a replayed SYN — which never completes `exchangeIdentity`
+      // — can never close it. The early `bumpInProgress` above keeps
+      // `inProgress` >= 1 for this peer until our own `decrementAndSettle`
+      // below. A settlement deadline may still have promoted another
+      // proven handshake meanwhile; if that one is unclaimed, this newer
+      // proven session supersedes it exactly as a reconnect would.
+      const unclaimed = active.get(initiatorKeyHex);
+      if (unclaimed) {
+        const pendingIndex = pendingInbound.indexOf(unclaimed.session);
+        if (pendingIndex !== -1) {
+          pendingInbound.splice(pendingIndex, 1);
+          // `close` fires the session's onClose, which forgets the
+          // active entry; the copy already queued on `inboundSessions`
+          // surfaces as a dead session, exactly as the
+          // MAX_PENDING_INBOUND_SESSIONS overflow path leaves one.
+          unclaimed.close();
+        }
+      }
 
       /** @type {Candidate | undefined} */
       let candidate;
@@ -1021,6 +1207,9 @@ export const makeOcapnNoiseNetwork = ({
       };
 
       recordCandidate(initiatorKeyHex, candidate);
+      // `decrementAndSettle` decrements before anything in it can throw,
+      // so the `catch` below must not decrement a second time.
+      registeredPeerId = undefined;
       decrementAndSettle(initiatorKeyHex);
     } catch (err) {
       if (registeredPeerId) {
@@ -1037,6 +1226,8 @@ export const makeOcapnNoiseNetwork = ({
       } catch (_e) {
         // ignore
       }
+    } finally {
+      if (releaseInbound) releaseInbound();
     }
   };
 
@@ -1166,12 +1357,7 @@ export const makeOcapnNoiseNetwork = ({
     if (!rk) {
       throw makeError(X`ocapn-noise: unknown local keyId ${q(localKeyId)}`);
     }
-    if (remote.designator.length !== 64) {
-      throw makeError(
-        X`ocapn-noise: peer designator must be a 32-byte Ed25519 key (got ${q(remote.designator.length)} chars)`,
-      );
-    }
-    const peerId = remote.designator;
+    const peerId = assertCanonicalKeyId(remote.designator);
     const peerEd25519 = hexToBytes(peerId);
 
     // If we already have an active session for this peer, reuse it
@@ -1201,20 +1387,46 @@ export const makeOcapnNoiseNetwork = ({
     // wait for settlement: either our own handshake graduates, or a
     // concurrent inbound handshake (crossed hello) wins.
     bumpInProgress(peerId);
+    outboundInFlight.set(peerId, (outboundInFlight.get(peerId) ?? 0) + 1);
+    const outboundDone = () => {
+      const left = (outboundInFlight.get(peerId) ?? 0) - 1;
+      if (left > 0) outboundInFlight.set(peerId, left);
+      else outboundInFlight.delete(peerId);
+    };
+    // Two-argument `then`: a throw while settling a successful handshake
+    // must not reach the failure handler and decrement a second time.
     runInitiator(rk, remote, peerEd25519)
-      .then(candidate => {
-        recordCandidate(peerId, candidate);
-        decrementAndSettle(peerId);
-      })
-      .catch(err => {
-        recordError(peerId, /** @type {Error} */ (err));
-        decrementAndSettle(peerId);
-      });
+      .then(
+        candidate => {
+          outboundDone();
+          recordCandidate(peerId, candidate);
+          decrementAndSettle(peerId);
+        },
+        err => {
+          outboundDone();
+          recordError(peerId, /** @type {Error} */ (err));
+          decrementAndSettle(peerId);
+        },
+      )
+      // Settlement can only throw from a candidate's teardown, which this
+      // module treats as best-effort everywhere else.
+      .catch(() => {});
     return awaitActiveSession(peerId);
   };
 
   /** @type {OcapnNoiseNetwork['waitForInboundSession']} */
-  const waitForInboundSession = peerKeyId => {
+  const waitForInboundSession = rawPeerKeyId => {
+    // Validate/canonicalize like `provideSession`: this keys `active` and
+    // `waiters`, so a non-canonical argument would park a waiter that
+    // never resolves and grow the map. Surface the failure as a rejection
+    // (not a synchronous throw) so this method's contract matches
+    // `provideSession`'s: always Promise-returning.
+    let peerKeyId;
+    try {
+      peerKeyId = assertCanonicalKeyId(rawPeerKeyId);
+    } catch (err) {
+      return Promise.reject(err);
+    }
     const existing = active.get(peerKeyId);
     if (existing) return Promise.resolve(existing.session);
     return awaitActiveSession(peerKeyId);
@@ -1239,12 +1451,18 @@ export const makeOcapnNoiseNetwork = ({
     }
     waiters.clear();
     inProgress.clear();
+    for (const [, deadline] of settleDeadlines) clearTimeout(deadline);
+    settleDeadlines.clear();
+    outboundInFlight.clear();
+    inFlightByLocalKey.clear();
     // Close any candidates that recorded themselves between
     // `runInitiator` resolution and `decrementAndSettle`. After this
     // sweep, future `recordCandidate` calls short-circuit on
     // `isShutdown` and close their candidate inline.
     for (const [, list] of candidates) {
-      for (const c of list) c.close();
+      // Copy first: each close drops the candidate from `list` via
+      // `forgetActive`, which would otherwise skip the next one.
+      for (const c of [...list]) c.close();
     }
     candidates.clear();
     recentErrors.clear();

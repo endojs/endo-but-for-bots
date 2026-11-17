@@ -191,6 +191,12 @@ const main = async () => {
     const agentIdPath = filePowers.joinPath(statePath, 'root');
     await filePowers.writeFileText(agentIdPath, `${agentId}\n`);
 
+    // Record self as official daemon process so killDaemonProcess targets
+    // the node daemon (which owns workers) rather than engo.  Do so BEFORE
+    // signaling ready: a resolved start() promises a usable daemon, and an
+    // early stop() reads endo.pid to kill it (see manager-node.js).
+    await updateRecordedPid();
+
     // Signal readiness to engo supervisor.
     await sendEnvelope(0, 'ready');
     console.log('Endo daemon (go platform) ready, signaled engo');
@@ -201,10 +207,6 @@ const main = async () => {
   }
 
   const servicesStopped = Promise.all(services.map(({ stopped }) => stopped));
-
-  // Record self as official daemon process so killDaemonProcess targets
-  // the node daemon (which owns workers) rather than engo.
-  await updateRecordedPid();
 
   // Wait for services to end normally
   await servicesStopped;

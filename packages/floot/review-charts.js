@@ -46,7 +46,6 @@ import { M } from '@endo/patterns';
 import { endoReleaseChart, nixosConfigChangeChart } from './deploy-charts.js';
 
 const HOUR_MS = 3_600_000;
-const SIX_HOURS_MS = 21_600_000;
 const DAY_MS = 86_400_000;
 const WEEK_MS = 604_800_000;
 
@@ -238,6 +237,8 @@ const developerTimedOut = harden([
  * @param {object} options
  * @param {string} options.name - chart name
  * @param {number} options.version - chart version
+ * @param {number} [options.implementationTimeoutMs] - optional positive integer
+ *   milliseconds per implementation attempt; Infinity (the default) creates no timer
  * @param {object} [options.deploy] - the deploy chart to spawn once the
  *   panel passes the change
  * @param {string[]} [options.deployEndowments] - endowment names handed to
@@ -255,6 +256,7 @@ const developerTimedOut = harden([
 export const makeReviewedChangeChart = ({
   name,
   version,
+  implementationTimeoutMs = Infinity,
   deploy,
   deployEndowments = ['performer', 'operator'],
   deployParams,
@@ -263,6 +265,23 @@ export const makeReviewedChangeChart = ({
   invalidSubmissionFeedback = malformedSubmission[0].feedback,
   captureOnSubmit = { head: { $event: 'value.head' } },
 }) => {
+  if (
+    implementationTimeoutMs !== Infinity &&
+    (!Number.isInteger(implementationTimeoutMs) || implementationTimeoutMs <= 0)
+  )
+    throw Error(
+      'implementationTimeoutMs must be a positive integer or Infinity',
+    );
+  const implementationDeadline =
+    implementationTimeoutMs === Infinity
+      ? []
+      : [
+          {
+            kind: 'after',
+            ms: implementationTimeoutMs,
+            emit: { type: 'develop-timed-out' },
+          },
+        ];
   const proposes = deploy !== undefined;
 
   // Where a passed review leads: straight to the `approved` terminal for
@@ -331,11 +350,7 @@ export const makeReviewedChangeChart = ({
             outcome: 'submitted',
             failure: 'submit-failed',
           },
-          {
-            kind: 'after',
-            ms: SIX_HOURS_MS,
-            emit: { type: 'develop-timed-out' },
-          },
+          ...implementationDeadline,
         ],
         on: {
           submitted: [
@@ -384,8 +399,8 @@ export const makeReviewedChangeChart = ({
             },
           ],
           // Adjusting the budget while the implementer works is an
-          // internal transition: no target, so the pending ask and its
-          // deadline are untouched.
+          // internal transition: no target, so the pending ask and any
+          // configured deadline are untouched.
           'set-remaining': [
             {
               when: SetRemainingShape,

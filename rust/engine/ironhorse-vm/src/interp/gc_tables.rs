@@ -279,6 +279,18 @@ macro_rules! gc_chunk {
         }
         }
     };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, finalization) => {
+        $emit! {
+            // A registry stores raw Slot COPIES: its callback and each
+            // cell's holdings (any value, so a string or BigInt chunk).
+            for r in $vm.$field.values_mut() {
+                slot_chunk(&mut r.callback, $visit);
+                for c in &mut r.cells {
+                    slot_chunk(&mut c.holdings, $visit);
+                }
+        }
+        }
+    };
     ($emit:ident, $vm:ident, $field:ident, $visit:ident, slot_vec) => {
         $emit! {
             for s in $vm.$field.iter_mut() {
@@ -403,7 +415,23 @@ interp_state!(define_chunk_walk);
 // partial-page enumeration. Only collection strength differs between the walks.
 macro_rules! gc_slot_row {
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, environment) => {
-        $emit! { if let Some(owner) = $row.unhandled_rejection { $visit(owner); } }
+        $emit! {
+            if let Some(owner) = $row.unhandled_rejection { $visit(owner); }
+            // A `globalLexicals` cell is the one piece of environment state
+            // that rides no arena edge: `define_global_lexical` leaves
+            // `next` NULL and links the cell nowhere, so that the name stays
+            // invisible on `globalThis`. Global *properties* need no edge
+            // here because `create_global_property` links them into the
+            // global object's chain. The root walk in `roots.rs` covers
+            // lexicals only while the environment's owner lease is alive,
+            // and that lease belongs to the `Compartment` INSTANCE, not to
+            // the environment: a retained function keeps `global_env` --
+            // hence this row -- alive long after its instance is swept.
+            // Tracing the cells from the row's own live global object is
+            // what makes their lifetime the compartment's rather than the
+            // instance's.
+            for cell in $row.global_lexicals.values() { $visit(*cell); }
+        }
     };
 
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, none) => {
@@ -451,6 +479,46 @@ macro_rules! gc_slot_row {
         $emit! {
             $visit($row.target);
             $visit($row.handler);
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, guest_compartment) => {
+        $emit! {
+            $visit($row.global);
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, weak_ref) => {
+        $emit! {
+            // The target is a WEAK edge: precise full marking never
+            // follows it (the dead-key prune nulls a target the
+            // fixpoint left unmarked), while the conservative partial
+            // walk pins its page so a page free cannot strand the row.
+            if !$full && !$row.target.is_null() {
+                $visit($row.target);
+            }
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, finalization_registry) => {
+        $emit! {
+            // The callback and every cell's holdings are STRONG
+            // edges from the registry (XS links them off the
+            // registry's callback slot); a cell's target and token
+            // are weak, followed only by the conservative partial
+            // walk, as a WeakRef target is.
+            $row.callback.each_ref_slot(&mut *$visit);
+            for c in &$row.cells {
+                c.holdings.each_ref_slot(&mut *$visit);
+                if !$full {
+                    if !c.target.is_null() {
+                        $visit(c.target);
+                    }
+                    if !c.token.is_null() {
+                        $visit(c.token);
+                    }
+                }
+            }
 
         }
     };
@@ -778,6 +846,25 @@ macro_rules! gc_weak {
 
         }
     };
+    ($emit:ident, trace, $vm:ident, $field:ident, $slots:ident, $visit:ident, weak_ref) => {
+        $emit! {
+            // A WeakRef adds no conditional edge: its target is
+            // reachable, if at all, through other state, and the
+            // prune below clears the ones the fixpoint left
+            // unmarked. Named here so the weak inventory is complete.
+            let _ = $vm.$field.len();
+
+        }
+    };
+    ($emit:ident, trace, $vm:ident, $field:ident, $slots:ident, $visit:ident, finalization_registry) => {
+        $emit! {
+            // A registry's strong edges (callback, holdings) ride the
+            // ordinary row walk; its targets and tokens condition
+            // nothing, so there is no conditional edge to report.
+            let _ = $vm.$field.len();
+
+        }
+    };
     ($emit:ident, trace, $vm:ident, $field:ident, $slots:ident, $visit:ident, symbol_keys) => {
         $emit! {            // Symbol-key descriptors: a marked property record
             // whose id is an interned symbol key keeps the
@@ -826,6 +913,44 @@ macro_rules! gc_weak {
                     });
                     key_live
                 });
+            }
+
+        }
+    };
+    ($emit:ident, prune, $vm:ident, $field:ident, $slots:ident, $visit:ident, weak_ref) => {
+        $emit! {
+            // `fxMarkWeakStuff`: a live WeakRef whose target stayed
+            // unmarked through the fixpoint drops it before the
+            // sweep reclaims the target, so `deref` answers
+            // `undefined` rather than a reused slot.
+            for (inst, w) in $vm.$field.iter_mut() {
+                if $slots.is_marked(*inst) && !w.target.is_null() && !$slots.is_marked(w.target) {
+                    w.target = SlotIndex::NULL;
+                }
+            }
+
+        }
+    };
+    ($emit:ident, prune, $vm:ident, $field:ident, $slots:ident, $visit:ident, finalization_registry) => {
+        $emit! {
+            // `fxMarkFinalizationRegistry`: a live registry's cell
+            // whose target stayed unmarked is queued for cleanup
+            // (target nulled, registry flagged CHANGED); a dead
+            // token is dropped so `unregister` cannot match a
+            // reused slot.
+            for (inst, r) in $vm.$field.iter_mut() {
+                if !$slots.is_marked(*inst) {
+                    continue;
+                }
+                for c in &mut r.cells {
+                    if !c.target.is_null() && !$slots.is_marked(c.target) {
+                        c.target = SlotIndex::NULL;
+                        r.changed = true;
+                    }
+                    if !c.token.is_null() && !$slots.is_marked(c.token) {
+                        c.token = SlotIndex::NULL;
+                    }
+                }
             }
 
         }

@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=language/statements/let tip=be13516fb6441b950ba8a3df97eb34062c186972
 language/statements/let/block-local-closure-get-before-initialization.js sloppy pass
 language/statements/let/block-local-closure-get-before-initialization.js strict pass
-language/statements/let/block-local-closure-set-before-initialization.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
-language/statements/let/block-local-closure-set-before-initialization.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/let/block-local-closure-set-before-initialization.js sloppy pass
+language/statements/let/block-local-closure-set-before-initialization.js strict pass
 language/statements/let/block-local-use-before-initialization-in-declaration-statement.js sloppy pass
 language/statements/let/block-local-use-before-initialization-in-declaration-statement.js strict pass
 language/statements/let/block-local-use-before-initialization-in-prior-statement.js sloppy pass
@@ -21,16 +21,16 @@ language/statements/let/fn-name-gen.js sloppy pass
 language/statements/let/fn-name-gen.js strict pass
 language/statements/let/function-local-closure-get-before-initialization.js sloppy pass
 language/statements/let/function-local-closure-get-before-initialization.js strict pass
-language/statements/let/function-local-closure-set-before-initialization.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
-language/statements/let/function-local-closure-set-before-initialization.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/let/function-local-closure-set-before-initialization.js sloppy pass
+language/statements/let/function-local-closure-set-before-initialization.js strict pass
 language/statements/let/function-local-use-before-initialization-in-declaration-statement.js sloppy pass
 language/statements/let/function-local-use-before-initialization-in-declaration-statement.js strict pass
 language/statements/let/function-local-use-before-initialization-in-prior-statement.js sloppy pass
 language/statements/let/function-local-use-before-initialization-in-prior-statement.js strict pass
 language/statements/let/global-closure-get-before-initialization.js sloppy pass
 language/statements/let/global-closure-get-before-initialization.js strict pass
-language/statements/let/global-closure-set-before-initialization.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
-language/statements/let/global-closure-set-before-initialization.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError to be thrown but no exception was thrown at all"
+language/statements/let/global-closure-set-before-initialization.js sloppy pass
+language/statements/let/global-closure-set-before-initialization.js strict pass
 language/statements/let/global-use-before-initialization-in-declaration-statement.js sloppy pass
 language/statements/let/global-use-before-initialization-in-declaration-statement.js strict pass
 language/statements/let/global-use-before-initialization-in-prior-statement.js sloppy pass

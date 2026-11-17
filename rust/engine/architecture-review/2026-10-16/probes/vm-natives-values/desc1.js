@@ -1,0 +1,11 @@
+const r = [];
+const T = (f) => { try { r.push(String(f())); } catch (e) { r.push(e.name + ':' + e.message); } };
+T(() => JSON.stringify(Object.getOwnPropertyDescriptor(Intl.Collator.prototype, 'compare')));
+T(() => typeof new Intl.Collator().compare);
+T(() => JSON.stringify(Object.getOwnPropertyDescriptor(Temporal.Duration.prototype, 'blank')));
+T(() => 'blank' in Temporal.Duration.prototype);
+T(() => Temporal.Duration.from('PT0S').blank);
+T(() => JSON.stringify(Object.getOwnPropertyNames(Temporal.PlainDate.prototype).slice(0, 8)));
+T(() => JSON.stringify(Object.getOwnPropertyDescriptor(Intl.DateTimeFormat.prototype, 'format')));
+T(() => JSON.stringify(Object.getOwnPropertyDescriptor(Temporal.PlainDate.prototype, 'year')));
+throw new Error(JSON.stringify(r));

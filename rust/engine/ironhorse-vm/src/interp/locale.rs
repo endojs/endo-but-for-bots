@@ -300,15 +300,20 @@ fn list_patterns(locale: &str, kind: &str, style: &str) -> [&'static str; 4] {
 /// Assemble the `{type, value}` parts of a formatted list per the ECMA-402
 /// CreatePartsFromList algorithm.
 /// Segment `units` (UTF-16 code units) at the requested granularity using the
-/// pinned `icu_segmenter` Unicode data, returning each `(start, end,
-/// is_word_like)` in code-unit offsets. `is_word_like` is meaningful only for
-/// `word` granularity (always `false` otherwise). Boundaries the segmenter
-/// yields are `[0, b1, …, len]`; the leading `0` is dropped so each segment is
-/// the half-open range from the previous boundary.
-pub(super) fn segment_units(granularity: &str, units: &[u16]) -> Vec<(usize, usize, bool)> {
+/// pinned `icu_segmenter` Unicode data, handing each `(start, end,
+/// is_word_like)` in code-unit offsets to `emit`. `is_word_like` is meaningful
+/// only for `word` granularity (always `false` otherwise). Boundaries the
+/// segmenter yields are `[0, b1, …, len]`; the leading `0` is dropped so each
+/// segment is the half-open range from the previous boundary. Stops, returning
+/// false, as soon as `emit` refuses a segment, so the caller can admit the
+/// list it retains one segment at a time.
+pub(super) fn segment_units(
+    granularity: &str,
+    units: &[u16],
+    mut emit: impl FnMut((usize, usize, bool)) -> bool,
+) -> bool {
     use icu_segmenter::options::{SentenceBreakInvariantOptions, WordBreakInvariantOptions};
     use icu_segmenter::{GraphemeClusterSegmenter, SentenceSegmenter, WordSegmenter};
-    let mut segs = Vec::new();
     let mut prev = 0usize;
     match granularity {
         "word" => {
@@ -317,7 +322,9 @@ pub(super) fn segment_units(granularity: &str, units: &[u16]) -> Vec<(usize, usi
                 if b == 0 {
                     continue;
                 }
-                segs.push((prev, b, wt.is_word_like()));
+                if !emit((prev, b, wt.is_word_like())) {
+                    return false;
+                }
                 prev = b;
             }
         }
@@ -327,7 +334,9 @@ pub(super) fn segment_units(granularity: &str, units: &[u16]) -> Vec<(usize, usi
                 if b == 0 {
                     continue;
                 }
-                segs.push((prev, b, false));
+                if !emit((prev, b, false)) {
+                    return false;
+                }
                 prev = b;
             }
         }
@@ -337,12 +346,14 @@ pub(super) fn segment_units(granularity: &str, units: &[u16]) -> Vec<(usize, usi
                 if b == 0 {
                     continue;
                 }
-                segs.push((prev, b, false));
+                if !emit((prev, b, false)) {
+                    return false;
+                }
                 prev = b;
             }
         }
     }
-    segs
+    true
 }
 
 fn two_digit(n: u32) -> String {
@@ -698,38 +709,22 @@ pub(super) fn format_date_time_range_parts(
     (parts, false)
 }
 
-pub(super) fn list_format_parts(
-    data: &ListFormatData,
-    list: &[Vec<u16>],
-) -> Vec<(&'static str, Vec<u16>)> {
+/// The literal `Intl.ListFormat` places before element `index` (from 1) of
+/// an `elements`-long list, per the ECMA-402 CreatePartsFromList algorithm:
+/// the pair pattern for two elements, otherwise the start pattern before the
+/// second element, the end pattern before the last, and the middle pattern
+/// between.
+pub(super) fn list_separator(data: &ListFormatData, elements: usize, index: usize) -> &'static str {
     let [two, start, middle, end] = list_patterns(&data.locale, &data.kind, &data.style);
-    let n = list.len();
-    let mut parts: Vec<(&'static str, Vec<u16>)> = Vec::new();
-    if n == 0 {
-        return parts;
+    if elements == 2 {
+        two
+    } else if index + 1 == elements {
+        end
+    } else if index == 1 {
+        start
+    } else {
+        middle
     }
-    if n == 1 {
-        parts.push(("element", list[0].clone()));
-        return parts;
-    }
-    if n == 2 {
-        parts.push(("element", list[0].clone()));
-        parts.push(("literal", two.encode_utf16().collect()));
-        parts.push(("element", list[1].clone()));
-        return parts;
-    }
-    parts.push(("element", list[0].clone()));
-    parts.push(("literal", start.encode_utf16().collect()));
-    for i in 1..n - 1 {
-        parts.push(("element", list[i].clone()));
-        if i < n - 2 {
-            parts.push(("literal", middle.encode_utf16().collect()));
-        } else {
-            parts.push(("literal", end.encode_utf16().collect()));
-        }
-    }
-    parts.push(("element", list[n - 1].clone()));
-    parts
 }
 
 /// The plural categories a locale distinguishes for a given `type`, in the

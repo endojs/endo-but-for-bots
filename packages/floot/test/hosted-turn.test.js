@@ -9,6 +9,442 @@ import {
   hostedTurnPartialOf,
   runHostedTurn,
 } from '../src/hosted-turn.js';
+import { usageCounts } from './helpers/usage.js';
+
+test('dispatch persistence gates hosted send and precedes cancellation observation', async t => {
+  t.timeout(5000);
+  const calls = [];
+  const client = harden({
+    async send() {
+      calls.push('send');
+      return readerFromIterator(
+        (async function* () {
+          yield { type: 'abort', reason: 'sent' };
+        })(),
+      );
+    },
+    async interrupt() {
+      calls.push('interrupt');
+    },
+  });
+  await t.throwsAsync(
+    runHostedTurn({
+      client,
+      text: 'not sent',
+      writer: {},
+      beforeSend: async () => {
+        throw Error('marker write failed');
+      },
+    }),
+    { message: 'marker write failed' },
+  );
+  t.deepEqual(calls, []);
+  const controller = new AbortController();
+  const result = await runHostedTurn({
+    client,
+    text: 'cancelled during marker write',
+    writer: {},
+    signal: controller.signal,
+    beforeSend: async () => {
+      calls.push('marker');
+      controller.abort();
+    },
+  });
+  t.false(result.delivered);
+  t.deepEqual(calls, ['marker']);
+});
+
+for (const mode of [
+  'abort',
+  'text',
+  'tool',
+  'thinking',
+  'compaction',
+  'reader failure',
+  'cancel',
+  'seal failure',
+]) {
+  test(`failed native snapshot completeness: ${mode}`, async t => {
+    t.timeout(10_000);
+    const checkpoint = harden({
+      kind: 'native-context',
+      format: 'claude-code-jsonl-v1',
+      payload: 'signed bytes',
+      context: [],
+    });
+    const controller = new AbortController();
+    const records = [];
+    let seals = 0;
+    const client = harden({
+      send: async () =>
+        readerFromIterator(
+          (async function* () {
+            yield { type: 'native-context', checkpoint };
+            if (mode === 'text') yield { type: 'text-delta', text: 'later' };
+            if (mode === 'thinking')
+              yield { type: 'thinking-delta', text: 'later' };
+            if (mode === 'tool') {
+              yield {
+                type: 'tool-call',
+                id: 'later',
+                name: 'effect',
+                args: '{}',
+              };
+              yield { type: 'tool-result', id: 'later', result: 'done' };
+            }
+            if (mode === 'compaction')
+              yield { type: 'compaction', summary: 'later' };
+            if (mode === 'reader failure') throw Error('reader failed');
+            if (mode === 'cancel') controller.abort();
+            yield { type: 'usage', inputTokens: 1 };
+            yield { type: 'abort', reason: 'producer stopped' };
+          })(),
+        ),
+      interrupt: async () => {},
+    });
+    const result = runHostedTurn({
+      client,
+      text: 'go',
+      signal: controller.signal,
+      writer: harden({
+        setPhase() {},
+        delta() {},
+        thinking() {},
+        toolCall() {},
+        toolResult() {},
+      }),
+      recordTranscript: async (_ordinal, record) => {
+        records.push(record);
+      },
+      completeTranscript: async count => {
+        seals += 1;
+        t.is(count, `${records.length}`);
+        if (mode === 'seal failure') throw Error('seal failed');
+      },
+    });
+    if (mode === 'cancel') await result;
+    else
+      await t.throwsAsync(result, {
+        message:
+          mode === 'seal failure'
+            ? /seal failed/
+            : mode === 'reader failure'
+              ? /reader failed/
+              : /producer stopped/,
+      });
+    t.is(seals, ['abort', 'seal failure'].includes(mode) ? 1 : 0);
+    t.deepEqual(records[0], checkpoint);
+  });
+}
+
+test('native context is journaled atomically without becoming tool execution or presentation', async t => {
+  const checkpoint = harden({
+    kind: 'native-context',
+    format: 'claude-code-jsonl-v1',
+    payload: 'opaque signed native context',
+    context: [
+      { kind: 'tool-call', id: 'retained', name: 'Bash', args: '{}' },
+      { kind: 'tool-result', id: 'retained', content: 'already done' },
+    ],
+  });
+  const writes = [];
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          yield { type: 'native-context', checkpoint };
+          yield { type: 'end' };
+        })(),
+      ),
+  });
+  const result = await runHostedTurn({
+    client,
+    text: 'go',
+    writer: harden({ setPhase() {} }),
+    recordTranscript: async (ordinal, record) => {
+      writes.push({ ordinal, record });
+    },
+    completeTranscript: async count => {
+      t.is(count, '1');
+      t.deepEqual(writes, [{ ordinal: '0', record: checkpoint }]);
+    },
+  });
+  t.deepEqual(result.toolCalls, []);
+  t.false(JSON.stringify(result.segments).includes(checkpoint.payload));
+});
+
+for (const mode of ['missing recorder', 'failed write']) {
+  test(`native context refuses ${mode} without reporting completion`, async t => {
+    let sealed = false;
+    let interrupted = false;
+    const checkpoint = harden({
+      kind: 'native-context',
+      format: 'claude-code-jsonl-v1',
+      payload: 'signed native payload',
+      context: [],
+    });
+    const client = harden({
+      send: async () =>
+        readerFromIterator(
+          (async function* () {
+            yield { type: 'native-context', checkpoint };
+            yield { type: 'end' };
+          })(),
+        ),
+      interrupt: async () => {
+        interrupted = true;
+      },
+    });
+    await t.throwsAsync(
+      runHostedTurn({
+        client,
+        text: 'go',
+        writer: harden({ setPhase() {} }),
+        ...(mode === 'failed write'
+          ? {
+              recordTranscript: async () => {
+                throw Error('storage unavailable');
+              },
+            }
+          : {}),
+        completeTranscript: async () => {
+          sealed = true;
+        },
+      }),
+      {
+        message:
+          mode === 'failed write'
+            ? /storage unavailable/
+            : /requires durable transcript/,
+      },
+    );
+    t.false(sealed);
+    t.true(interrupted);
+  });
+}
+
+test('failed hosted turns preserve retained context without emitting tool activity', async t => {
+  const retainedTail = harden([
+    { kind: 'message', role: 'user', content: 'retained request' },
+  ]);
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          yield { type: 'compaction', summary: 'summary', retainedTail };
+          throw Error('stream failed');
+        })(),
+      ),
+    interrupt: async () => {},
+  });
+  const error = await t.throwsAsync(
+    runHostedTurn({ client, text: 'go', writer: harden({ setPhase() {} }) }),
+  );
+  t.deepEqual(hostedTurnPartialOf(error)?.segments, [
+    { type: 'compaction', summary: 'summary', retainedTail },
+  ]);
+  t.deepEqual(hostedTurnPartialOf(error)?.toolCalls, []);
+});
+
+test('compaction retained context is validated and charged to the turn bound', async t => {
+  for (const retainedTail of [
+    [{ kind: 'compaction', summary: 'nested' }],
+    [{ kind: 'tool-call', id: 'c', name: 'read', args: '{}' }],
+    [{ kind: 'tool-result', id: 'c', content: 'orphan' }],
+    [{ kind: 'message', role: 'user', content: 'x'.repeat(2000) }],
+  ]) {
+    let interrupted = false;
+    const client = harden({
+      send: async () =>
+        readerFromIterator(
+          (async function* () {
+            yield { type: 'compaction', summary: 'summary', retainedTail };
+            yield { type: 'end' };
+          })(),
+        ),
+      interrupt: async () => {
+        interrupted = true;
+      },
+    });
+    // Check each producer's interruption before starting the next case.
+    // eslint-disable-next-line no-await-in-loop
+    const error = await t.throwsAsync(
+      runHostedTurn({
+        client,
+        text: 'go',
+        writer: harden({ setPhase() {} }),
+        maxRetainedChars: 1000,
+      }),
+    );
+    t.regex(
+      error.message,
+      /must not contain context replacements|retained transcript bound|settled tool calls|answers no call/,
+    );
+    t.true(interrupted);
+    t.deepEqual(hostedTurnPartialOf(error)?.segments, []);
+  }
+});
+
+test('thinking anchors split canonical text without entering model context', async t => {
+  const records = [];
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          yield { type: 'text-delta', text: 'before' };
+          yield { type: 'thinking-delta', text: 'reasoning' };
+          yield { type: 'text-delta', text: 'after' };
+          yield { type: 'thinking-delta', text: 'before call' };
+          yield { type: 'tool-call', id: 'c', name: 'read', args: '{}' };
+          yield { type: 'thinking-delta', text: 'before result' };
+          yield { type: 'tool-result', id: 'c', result: 'ok' };
+          yield { type: 'thinking-delta', text: 'more reasoning' };
+          yield { type: 'compaction', summary: 'summary' };
+          yield { type: 'end' };
+        })(),
+      ),
+  });
+  const result = await runHostedTurn({
+    client,
+    text: 'go',
+    writer: harden({
+      thinking() {},
+      delta() {},
+      setPhase() {},
+      toolCall() {},
+      toolResult() {},
+    }),
+    recordTranscript: async (ordinal, record) => {
+      t.is(ordinal, `${records.length}`);
+      records.push(record);
+    },
+  });
+  t.deepEqual(
+    result.segments.flatMap(s =>
+      s.type === 'thinking' ? [s.beforeTranscriptOrdinal] : [],
+    ),
+    ['1', '2', '3', '4'],
+  );
+  t.deepEqual(
+    records.map(r => r.kind),
+    ['message', 'message', 'tool-call', 'tool-result', 'compaction'],
+  );
+  t.false(JSON.stringify(records).includes('reasoning'));
+});
+
+test('public thinking is bounded display-only data with settled timing', async t => {
+  const thinking = [];
+  const deltas = [];
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          yield { type: 'thinking-delta', text: 'x'.repeat(70_000) };
+          yield { type: 'text-delta', text: 'Answer' };
+          yield { type: 'end' };
+        })(),
+      ),
+  });
+  const result = await runHostedTurn({
+    client,
+    text: 'go',
+    writer: harden({
+      thinking: event => thinking.push(event),
+      setPhase: () => {},
+      delta: text => deltas.push(text),
+    }),
+  });
+  t.deepEqual(deltas, ['Answer']);
+  t.is(result.finalContent, 'Answer');
+  const segment = result.segments[0];
+  t.is(segment.type, 'thinking');
+  if (segment.type !== 'thinking') return;
+  t.is(segment.text.length, 65_536);
+  t.true(segment.truncated);
+  t.true(
+    typeof segment.endedAt === 'number' && segment.endedAt >= segment.startedAt,
+  );
+  t.is(thinking.at(-1).text, '');
+  t.is(thinking.at(-1).endedAt, segment.endedAt);
+});
+
+test('reasoning preview bounds block metadata without failing the turn', async t => {
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          for (let i = 0; i < 100; i += 1) {
+            yield { type: 'thinking-delta', text: 'x' };
+            yield { type: 'text-delta', text: '' };
+          }
+          yield { type: 'end' };
+        })(),
+      ),
+  });
+  const result = await runHostedTurn({
+    client,
+    text: 'go',
+    writer: harden({ thinking: () => {}, delta: () => {}, setPhase: () => {} }),
+  });
+  t.is(result.segments.length, 64);
+  t.like(result.segments.at(-1), { type: 'thinking', truncated: true });
+});
+
+test('send response loss still confirms producer stop and records uncertainty', async t => {
+  t.timeout(5000);
+  let stopped = false;
+  const error = await t.throwsAsync(
+    runHostedTurn({
+      client: harden({
+        send: async () => {
+          throw Error('send response lost after producer start');
+        },
+        interrupt: async () => {
+          stopped = true;
+        },
+      }),
+      text: 'go',
+      writer: harden({}),
+    }),
+    { message: /send response lost/ },
+  );
+  t.true(stopped);
+  t.true(hostedTurnPartialOf(error)?.outcomeUnknown);
+});
+
+for (const events of [
+  [{ type: 'tool-result', id: 'orphan', result: 'changed' }],
+  [{ type: 'tool-call', id: '', name: 'exec', args: '{}' }],
+  [
+    { type: 'tool-call', id: 'same', name: 'exec', args: '{}' },
+    { type: 'tool-call', id: 'same', name: 'exec', args: '{}' },
+  ],
+]) {
+  test(`malformed native tool identity is not successful: ${JSON.stringify(events)}`, async t => {
+    let stopped = false;
+    const error = await t.throwsAsync(
+      runHostedTurn({
+        client: harden({
+          send: async () =>
+            readerFromIterator(
+              (async function* () {
+                yield* events;
+                yield { type: 'end' };
+              })(),
+            ),
+          interrupt: async () => {
+            stopped = true;
+          },
+        }),
+        text: 'go',
+        writer: harden({ setPhase() {}, toolCall() {}, toolResult() {} }),
+      }),
+      { message: /Hosted tool/ },
+    );
+    t.true(stopped);
+    t.true(hostedTurnPartialOf(error)?.outcomeUnknown);
+  });
+}
 
 test('hosted turns translate normalized lifecycle events', async t => {
   const output = [];
@@ -22,9 +458,24 @@ test('hosted turns translate normalized lifecycle events', async t => {
           yield { type: 'commentary-delta', text: 'Checking…' };
           yield { type: 'tool-call', id: '1', name: 'shell', args: '{}' };
           yield { type: 'tool-result', id: '1', name: 'shell', result: 'ok' };
-          yield { type: 'usage', inputTokens: 3, outputTokens: 1 };
+          yield {
+            type: 'usage',
+            inputTokens: 3,
+            outputTokens: 1,
+            cachedInputTokens: 100,
+            context: { usedTokens: 104, windowTokens: 1000 },
+          };
           yield { type: 'text-delta', text: 'Done' };
-          yield { type: 'usage', inputTokens: 5, outputTokens: 2 };
+          // A reading that does not know the window keeps the size known.
+          yield {
+            type: 'usage',
+            inputTokens: 5,
+            outputTokens: 2,
+            cachedInputTokens: 104,
+            reasoningOutputTokens: 9,
+            context: { usedTokens: 120, windowTokens: 0 },
+            anything: 'else is dropped',
+          };
           yield { type: 'end' };
         })(),
       );
@@ -42,14 +493,34 @@ test('hosted turns translate normalized lifecycle events', async t => {
     text: 'go',
     writer,
     systemPrompt: 'stay scoped',
+    transcript: [{ kind: 'message', role: 'user', content: 'prior dialogue' }],
   });
   t.deepEqual(result, {
     delivered: true,
     finalContent: 'Done',
-    usage: { inputTokens: 8, outputTokens: 3 },
+    // Counts add across the turn's model calls; the context is the last one.
+    usage: usageCounts({
+      inputTokens: 8,
+      outputTokens: 3,
+      cachedInputTokens: 204,
+      reasoningOutputTokens: 9,
+      context: { usedTokens: 120, windowTokens: 1000 },
+    }),
     toolCalls: [{ id: '1', name: 'shell', args: '{}', result: 'ok' }],
+    segments: [
+      {
+        type: 'tools',
+        calls: [{ id: '1', name: 'shell', args: '{}', result: 'ok' }],
+      },
+      { type: 'text', text: 'Done' },
+    ],
   });
   t.truthy(optionsSeen);
+  t.deepEqual(
+    /** @type {any} */ (optionsSeen).transcript,
+    [{ kind: 'message', role: 'user', content: 'prior dialogue' }],
+    'the records are handed over as records',
+  );
   t.is(
     /** @type {{ systemPrompt?: string }} */ (
       /** @type {unknown} */ (optionsSeen)
@@ -58,8 +529,61 @@ test('hosted turns translate normalized lifecycle events', async t => {
   );
   t.deepEqual(output[0], ['phase', 'thinking']);
   t.false(output.some(([, value]) => value === 'Checking…'));
+  t.true(
+    output.some(
+      ([kind, value]) => kind === 'phase' && value.startsWith('progress: '),
+    ),
+    'commentary surfaces as a bounded live phase, not answer text',
+  );
   t.true(output.some(([kind]) => kind === 'call'));
   t.true(output.some(([kind]) => kind === 'result'));
+});
+
+test('segments preserve text/tool interleaving and group same-round calls', async t => {
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* events() {
+          yield { type: 'text-delta', text: 'Let me look.' };
+          yield { type: 'tool-call', id: 'a', name: 'read', args: '{}' };
+          yield { type: 'tool-result', id: 'a', name: 'read', result: 'file' };
+          yield { type: 'text-delta', text: 'Now ' };
+          yield { type: 'tool-call', id: 'b', name: 'grep', args: '{}' };
+          yield { type: 'tool-call', id: 'c', name: 'write', args: '{}' };
+          yield { type: 'tool-result', id: 'b', name: 'grep', result: 'hit' };
+          yield { type: 'tool-result', id: 'c', name: 'write', result: 'ok' };
+          yield { type: 'text-delta', text: 'Done.' };
+          yield { type: 'end' };
+        })(),
+      ),
+  });
+  const result = await runHostedTurn({
+    client,
+    text: 'go',
+    writer: harden({
+      setPhase() {},
+      delta() {},
+      toolCall() {},
+      toolResult() {},
+    }),
+  });
+  t.deepEqual(result.segments, [
+    { type: 'text', text: 'Let me look.' },
+    {
+      type: 'tools',
+      calls: [{ id: 'a', name: 'read', args: '{}', result: 'file' }],
+    },
+    { type: 'text', text: 'Now ' },
+    {
+      type: 'tools',
+      calls: [
+        { id: 'b', name: 'grep', args: '{}', result: 'hit' },
+        { id: 'c', name: 'write', args: '{}', result: 'ok' },
+      ],
+    },
+    { type: 'text', text: 'Done.' },
+  ]);
+  t.is(result.finalContent, 'Let me look.Now Done.');
 });
 
 test('a pre-aborted hosted turn never reaches the client', async t => {
@@ -84,6 +608,7 @@ test('a pre-aborted hosted turn never reaches the client', async t => {
     finalContent: '',
     usage: undefined,
     toolCalls: [],
+    segments: [],
   });
 });
 
@@ -109,6 +634,7 @@ test('aborting while send is pending interrupts startup promptly', async t => {
     finalContent: '',
     usage: undefined,
     toolCalls: [],
+    segments: [],
   });
   t.is(interrupts, 1);
 });
@@ -261,7 +787,9 @@ test('hosted turn abort is a failed turn that reports what was delivered', async
   t.deepEqual(hostedTurnPartialOf(refused), {
     delivered: false,
     finalContent: '',
+    usage: undefined,
     toolCalls: [],
+    segments: [],
   });
 
   // A failure after the backend started the turn keeps what streamed: the
@@ -287,15 +815,27 @@ test('hosted turn abort is a failed turn that reports what was delivered', async
   t.deepEqual(hostedTurnPartialOf(failed), {
     delivered: true,
     finalContent: 'partial',
+    usage: undefined,
     toolCalls: [{ id: '1', name: 'shell', args: '{}', result: null }],
+    segments: [
+      {
+        type: 'tools',
+        calls: [{ id: '1', name: 'shell', args: '{}', result: null }],
+      },
+      { type: 'text', text: 'partial' },
+    ],
   });
   // Any other error carries no partial: the prompt never reached the backend.
   t.is(hostedTurnPartialOf(Error('send refused')), undefined);
 });
 
-test('a tool the backend never reported on is settled at turn end', async t => {
+test('an unresolved tool at turn end fails with an honest partial record', async t => {
   const output = [];
+  let interrupts = 0;
   const client = harden({
+    interrupt: async () => {
+      interrupts += 1;
+    },
     send: async () =>
       readerFromIterator(
         (async function* events() {
@@ -303,6 +843,7 @@ test('a tool the backend never reported on is settled at turn end', async t => {
           yield { type: 'tool-call', id: '2', name: 'lookup', args: '{}' };
           yield { type: 'tool-result', id: '2', name: 'lookup', result: 'ok' };
           yield { type: 'text-delta', text: 'Done' };
+          yield { type: 'usage', inputTokens: 7, outputTokens: 3 };
           yield { type: 'end' };
         })(),
       ),
@@ -313,11 +854,17 @@ test('a tool the backend never reported on is settled at turn end', async t => {
     toolCall: () => {},
     toolResult: value => output.push(value),
   });
-  const result = await runHostedTurn({ client, text: 'go', writer });
-  // The persisted record says what happened instead of carrying an empty
-  // result, and the live view receives the settlement it was waiting for.
-  t.deepEqual(result.toolCalls, [
-    { id: '1', name: 'shell', args: '{}', result: UNREPORTED_TOOL_RESULT },
+  const error = await t.throwsAsync(
+    runHostedTurn({ client, text: 'go', writer }),
+    {
+      message: /unsettled tool calls/,
+    },
+  );
+  const partial = hostedTurnPartialOf(error);
+  t.is(interrupts, 1);
+  t.deepEqual(partial?.usage, usageCounts({ inputTokens: 7, outputTokens: 3 }));
+  t.deepEqual(partial?.toolCalls, [
+    { id: '1', name: 'shell', args: '{}', result: null },
     { id: '2', name: 'lookup', args: '{}', result: 'ok' },
   ]);
   t.deepEqual(output, [
@@ -372,4 +919,186 @@ test('send failure during cancellation waits for the interrupt outcome', async t
     instanceOf: AggregateError,
     message: /interrupt failed/,
   });
+});
+
+for (const failure of ['EOF', 'reader rejection']) {
+  test(`${failure} waits for explicit interruption and preserves partial usage`, async t => {
+    t.timeout(5000);
+    let finishInterrupt = () => {};
+    const barrier = new Promise(resolve => {
+      finishInterrupt = () => resolve(undefined);
+    });
+    t.teardown(finishInterrupt);
+    let interruptStarted = () => {};
+    const started = new Promise(resolve => {
+      interruptStarted = () => resolve(undefined);
+    });
+    const turn = runHostedTurn({
+      client: harden({
+        send: async () =>
+          readerFromIterator(
+            (async function* events() {
+              yield { type: 'text-delta', text: 'partial' };
+              yield { type: 'usage', inputTokens: 4, outputTokens: 2 };
+              if (failure === 'reader rejection') throw Error('reader broke');
+            })(),
+          ),
+        interrupt: async () => {
+          interruptStarted();
+          await barrier;
+        },
+      }),
+      text: 'go',
+      writer: harden({ delta: () => {} }),
+    });
+    let settled = false;
+    void turn.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const rejected = t.throwsAsync(turn, {
+      message: failure === 'EOF' ? /without a terminal/ : /reader broke/,
+    });
+    await started;
+    t.false(settled);
+    finishInterrupt();
+    const error = await rejected;
+    t.deepEqual(hostedTurnPartialOf(error), {
+      delivered: true,
+      outcomeUnknown: true,
+      finalContent: 'partial',
+      toolCalls: [],
+      segments: [{ type: 'text', text: 'partial' }],
+      usage: usageCounts({ inputTokens: 4, outputTokens: 2 }),
+    });
+  });
+}
+
+test('abnormal EOF with a failed interrupt quarantines with partial evidence', async t => {
+  const error = await t.throwsAsync(
+    runHostedTurn({
+      client: harden({
+        send: async () =>
+          readerFromIterator(
+            (async function* events() {
+              yield { type: 'text-delta', text: 'partial' };
+            })(),
+          ),
+        interrupt: async () => {
+          throw Error('not stopped');
+        },
+      }),
+      text: 'go',
+      writer: harden({ delta: () => {} }),
+    }),
+    { message: /^Hosted turn cancellation failed:/ },
+  );
+  t.is(hostedTurnPartialOf(error)?.finalContent, 'partial');
+  t.deepEqual(hostedTurnPartialOf(error)?.segments, [
+    { type: 'text', text: 'partial' },
+  ]);
+});
+
+test('normalized abort is already a terminal barrier and retains usage', async t => {
+  let interrupts = 0;
+  const error = await t.throwsAsync(
+    runHostedTurn({
+      client: harden({
+        send: async () =>
+          readerFromIterator(
+            (async function* events() {
+              yield { type: 'usage', inputTokens: 2, outputTokens: 1 };
+              yield { type: 'abort', reason: 'stopped' };
+            })(),
+          ),
+        interrupt: async () => {
+          interrupts += 1;
+        },
+      }),
+      text: 'go',
+      writer: harden({}),
+    }),
+    { message: 'stopped' },
+  );
+  t.is(interrupts, 0);
+  t.deepEqual(
+    hostedTurnPartialOf(error)?.usage,
+    usageCounts({ inputTokens: 2, outputTokens: 1 }),
+  );
+});
+
+test('durable tool recording failure stops the producer before exposing the tool', async t => {
+  let interrupts = 0;
+  let published = 0;
+  const error = await t.throwsAsync(
+    runHostedTurn({
+      client: harden({
+        send: async () =>
+          readerFromIterator(
+            (async function* events() {
+              yield { type: 'tool-call', id: 'one', name: 'exec', args: '{}' };
+              yield { type: 'end' };
+            })(),
+          ),
+        interrupt: async () => {
+          interrupts += 1;
+        },
+      }),
+      text: 'go',
+      writer: harden({
+        setPhase: () => {},
+        toolCall: () => {
+          published += 1;
+        },
+      }),
+      recordToolEvent: async () => {
+        throw Error('journal unavailable');
+      },
+    }),
+    { message: /journal unavailable/ },
+  );
+  t.is(interrupts, 1);
+  t.is(published, 0);
+  t.deepEqual(hostedTurnPartialOf(error)?.toolCalls, [
+    { id: 'one', name: 'exec', args: '{}', result: null },
+  ]);
+});
+
+test('a turn that outgrows its retained transcript bound fails with what it kept, and stops the producer', async t => {
+  let interrupts = 0;
+  let pulled = 0;
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* () {
+          for (;;) {
+            pulled += 1;
+            yield { type: 'text-delta', text: 'x'.repeat(100) };
+          }
+        })(),
+      ),
+    interrupt: async () => {
+      interrupts += 1;
+    },
+  });
+  const deltas = [];
+  const error = await t.throwsAsync(
+    runHostedTurn({
+      client,
+      text: 'go',
+      writer: harden({ delta: d => deltas.push(d), setPhase() {} }),
+      maxRetainedChars: 1000,
+    }),
+    { message: /retained transcript bound of 1000/ },
+  );
+  t.is(interrupts, 1, 'the producer is stopped, not left streaming');
+  t.true(pulled <= 12, 'the bound is applied as events arrive, not after');
+  const partial = hostedTurnPartialOf(error);
+  t.is(partial?.finalContent.length, 1000, 'what was retained is reported');
+  t.true(partial?.delivered);
+  t.true(partial?.outcomeUnknown, 'a failed mid-stream turn is uncertain');
 });

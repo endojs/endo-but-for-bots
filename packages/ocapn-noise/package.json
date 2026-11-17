@@ -66,13 +66,13 @@
     "@endo/lockdown": "workspace:^",
     "@endo/marshal": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "@types/ws": "^8.18.1",
+    "@types/ws": "^8.18.2",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
     "ses": "workspace:^",
     "typescript": "catalog:dev",
-    "ws": "^8.21.3"
+    "ws": "^8.22.0"
   },
   "files": [
     "./*.d.ts",

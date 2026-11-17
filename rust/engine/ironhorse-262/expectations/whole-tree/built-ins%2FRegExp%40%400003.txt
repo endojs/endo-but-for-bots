@@ -91,8 +91,8 @@ built-ins/RegExp/S15.10.4.1_A5_T8.js sloppy pass
 built-ins/RegExp/S15.10.4.1_A5_T8.js strict pass
 built-ins/RegExp/S15.10.4.1_A5_T9.js sloppy pass
 built-ins/RegExp/S15.10.4.1_A5_T9.js strict pass
-built-ins/RegExp/S15.10.4.1_A6_T1.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Object]\"», «string\"[object RegExp]\"») to be true"
-built-ins/RegExp/S15.10.4.1_A6_T1.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Object]\"», «string\"[object RegExp]\"») to be true"
+built-ins/RegExp/S15.10.4.1_A6_T1.js sloppy pass
+built-ins/RegExp/S15.10.4.1_A6_T1.js strict pass
 built-ins/RegExp/S15.10.4.1_A7_T1.js sloppy pass
 built-ins/RegExp/S15.10.4.1_A7_T1.js strict pass
 built-ins/RegExp/S15.10.4.1_A7_T2.js sloppy pass

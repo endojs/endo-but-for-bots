@@ -2,6 +2,7 @@ import 'ses';
 import fs from 'fs';
 import { makeBundle } from '@endo/compartment-mapper/bundle.js';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { readCodecPolyfill } from '@endo/ironhorse-prelude/codec-polyfill.js';
 
 const resolve = (rel, abs) => fileURLToPath(new URL(rel, abs).toString());
 const root = new URL('..', import.meta.url).toString();
@@ -35,22 +36,12 @@ const main = async () => {
   await write('prelude/node.js', `${nodePrelude}\n;\n`);
   await write('prelude/xs.js', `${xsPrelude}\n;\n`);
   // Ironhorse has no host `TextEncoder`/`TextDecoder` — node's prelude takes
-  // them from `node:util` and XS's needs none. Prepend the codec section of
-  // the daemon's own `polyfills.js`, sliced at its next section marker
-  // exactly as `packages/thixotrope/scripts/bundle-ironhorse-worker.mjs`
-  // slices it. The `assert` and `harden` sections below that marker are
-  // deliberately excluded: the first collides with test262's `assert` and the
-  // second installs `Object[Symbol.for('harden')]`, which makes SES's
-  // `repairIntrinsics` refuse.
-  const polyfills = (
-    await read(
-      pathToFileURL(
-        resolve('../../../rust/endo/xsnap/src/polyfills.js', import.meta.url),
-      ).toString(),
-    )
-  )
-    .toString()
-    .split('// -- assert polyfill --')[0];
+  // them from `node:util` and XS's needs none. The codec section of the
+  // daemon's own `polyfills.js`, shared with
+  // `packages/thixotrope/scripts/bundle-ironhorse-worker.mjs` rather than
+  // sliced here a second time. That module documents why everything below the
+  // marker is excluded, and fails loudly if the marker is gone.
+  const polyfills = readCodecPolyfill();
   await write('prelude/ironhorse.js', `${polyfills}\n${ironhorsePrelude}\n;\n`);
 };
 

@@ -296,6 +296,11 @@ pub mod engine {
             Halt::StackOverflow(n) => {
                 format!("value stack overflow ({n} slots in use)")
             }
+            Halt::HostAllocationFailed => {
+                "host allocation failed (a host limit, not the program's; \
+                 restore the last commit in a fresh instance)"
+                    .to_string()
+            }
             Halt::ReentryLimit { depth, limit } => {
                 format!("native recursion limit (attempted weighted depth {depth}; limit {limit})")
             }
@@ -606,6 +611,14 @@ pub mod engine {
             Ok(Err(ironhorse_compile::ParseError {
                 kind:
                     ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpHostAllocationFailed,
+                        ..
+                    }),
+                ..
+            })) => Err(MachineError::Halt(Halt::HostAllocationFailed)),
+            Ok(Err(ironhorse_compile::ParseError {
+                kind:
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
                         kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
                         ..
                     }),
@@ -841,8 +854,9 @@ pub mod engine {
     /// the last checkpoint instead of persisting partial effects.
     #[derive(Debug, Clone)]
     pub struct HeapStoreOptions {
-        /// The heap database path. Created when absent; resumed (with
-        /// full succession validation) when present.
+        /// The heap database path. Created when absent; resumed when
+        /// present, after the compatibility gates (the store's content is
+        /// trusted; commits keep their succession checks).
         pub path: std::path::PathBuf,
         /// The worker's callback-table signature. The snapshot layer
         /// appends its engine-owned boot-layout generation, and the
@@ -946,6 +960,30 @@ pub mod engine {
     /// exceptions before anything runs: runtime-interned ids present
     /// (table extension would collide until the ledger's KEYS row
     /// lands), or bytecode the instruction walker cannot decode.
+    ///
+    /// What a checkpoint REFUSES (architecture finding F127's second
+    /// clause: an embedder meets this here, not only in the side-table
+    /// ledger). Beyond the quiescence gate — a crank that did not reach a
+    /// boundary is rewound rather than stored, which is the crashed-crank
+    /// contract above — the remaining refusals are about what the crank
+    /// LEFT BEHIND.
+    /// Suspended async state is no longer part of that set: `await`,
+    /// async generators and in-flight `Array.fromAsync` accumulations all
+    /// travel (formats 14, 23 and 24 respectively), so a vat parked on a
+    /// host response checkpoints and resumes.
+    /// Three things still refuse, each by name, and each is a property of
+    /// the embedding rather than of the guest program:
+    /// an active or heap-backed HOST MODULE GRAPH, because a host module's
+    /// contents are the embedder's and no atom carries them;
+    /// the test262 `$262` object, because a conformance machine is not a
+    /// persistable one;
+    /// and a stored reference to a NATIVE FUNCTION restore cannot
+    /// reconstruct, which is reachable only by minting one outside the
+    /// boot image and letting the guest keep it.
+    /// A [`MachineError`] naming one of those is a fail-closed refusal
+    /// with the store untouched, not a corrupted checkpoint: the crank's
+    /// effects are discarded and the machine rewinds, exactly as a failed
+    /// flush does.
     pub struct PersistentMachine {
         store: std::rc::Rc<std::cell::RefCell<ironhorse_store_sqlite::SqliteHeapStore>>,
         session: Option<ironhorse_snapshot::machine::SharedStoreSession>,
@@ -1025,6 +1063,40 @@ pub mod engine {
         MachineError::Store(Box::new(e))
     }
 
+    /// Run `f`, turning a store fault — a row read that failed under a
+    /// lazy fault, which the page source raises as a typed unwind
+    /// (`ironhorse_snapshot::machine::StoreFault`) — into the store's own
+    /// error, and re-raising every other panic. A machine a fault unwound
+    /// out of mid-crank must be rewound by the caller.
+    fn catch_store_fault<T>(
+        f: impl FnOnce() -> Result<T, MachineError>,
+    ) -> Result<T, MachineError> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+            Ok(result) => result,
+            Err(payload) => match ironhorse_snapshot::machine::store_fault_of(payload) {
+                Ok(error) => Err(store_err(error)),
+                Err(payload) => std::panic::resume_unwind(payload),
+            },
+        }
+    }
+
+    /// What a collection that unwound reports. A row read that failed
+    /// while the collection faulted the heap in is the store's error, not
+    /// a collector panic; any other panic left the heap mid-sweep. Whether
+    /// the machine survives depends on the caller's rewind, not on this.
+    fn collection_panic(payload: Box<dyn std::any::Any + Send>) -> Result<u32, MachineError> {
+        let payload = match ironhorse_snapshot::machine::store_fault_of(payload) {
+            Ok(error) => return Err(store_err(error)),
+            Err(payload) => payload,
+        };
+        let message = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .unwrap_or_else(|| "non-string collection panic".to_string());
+        Err(MachineError::CollectionPanicked(message))
+    }
+
     impl MachineError {
         /// The class a supervisor acts on when the STORE refused, derived
         /// from the store's own error: retry a [`StoreFailure::Transient`],
@@ -1044,8 +1116,11 @@ pub mod engine {
     impl PersistentMachine {
         /// Open (creating or resuming) a store-backed machine at
         /// `options.path`. An empty database binds a fresh boot
-        /// machine at epoch 1; a populated one is validated against
-        /// its sealed root and resumed lazily.
+        /// machine at epoch 1; a populated one is migrated if it is
+        /// older, checked for compatibility (signature, boot layout,
+        /// cost table) and resumed lazily. Its content is trusted, as
+        /// the store-seam design's trust model has it: a row the resume
+        /// needs and cannot read is reported as the store's error.
         pub fn open(options: &HeapStoreOptions) -> Result<PersistentMachine, MachineError> {
             use ironhorse_snapshot::machine::begin_shared_store_session;
             use ironhorse_snapshot::store::{HeapStore, StoreError};
@@ -1237,24 +1312,30 @@ pub mod engine {
                 },
             )
             .map_err(store_err)?;
-            session
-                .machine()
-                .with_persistence(|interp| match meter.check_interval() {
-                    Some(interval) => interp.attach_meter_host(interval, meter_host(ceiling)),
-                    None if interp.meter_is_armed() => {
-                        interp.reattach_meter_host(Box::new(|_| true));
-                    }
-                    None => {}
-                })
-                .map_err(MachineError::Halt)?;
-            let start = session
-                .machine()
-                .claim_compartment(start_id.unwrap())
-                .map_err(MachineError::Halt)?;
-            session
-                .machine()
-                .release_unclaimed_roots()
-                .map_err(MachineError::Halt)?;
+            // Claiming the start compartment and releasing the unclaimed
+            // roots can fault pages in, so a failed row read there is the
+            // store's error too.
+            let start = catch_store_fault(|| {
+                session
+                    .machine()
+                    .with_persistence(|interp| match meter.check_interval() {
+                        Some(interval) => interp.attach_meter_host(interval, meter_host(ceiling)),
+                        None if interp.meter_is_armed() => {
+                            interp.reattach_meter_host(Box::new(|_| true));
+                        }
+                        None => {}
+                    })
+                    .map_err(MachineError::Halt)?;
+                let start = session
+                    .machine()
+                    .claim_compartment(start_id.unwrap())
+                    .map_err(MachineError::Halt)?;
+                session
+                    .machine()
+                    .release_unclaimed_roots()
+                    .map_err(MachineError::Halt)?;
+                Ok(start)
+            })?;
             Ok((session, start))
         }
 
@@ -1395,7 +1476,10 @@ pub mod engine {
             let checkpoint_due = pending_after >= self.cadence.checkpoint_every.max(1)
                 || collect_due
                 || self.checkpoint_after_rewind;
-            let prepared = (|| -> Result<_, MachineError> {
+            // A row read that fails under a lazy fault unwinds out of the
+            // crank as a store fault; it comes back here as the store's
+            // error.
+            let prepared = catch_store_fault(|| -> Result<_, MachineError> {
                 let session = self.session.as_mut().ok_or(MachineError::SessionLost)?;
                 // The store's durable counter is the schedule's input,
                 // so it must travel with the commit that makes these
@@ -1417,9 +1501,22 @@ pub mod engine {
                 } else {
                     (outcome, None, crank_start_raw)
                 })
-            })();
+            });
             let (mut outcome, checkpointed, crank_start_raw) = match prepared {
                 Ok(prepared) => prepared,
+                // Only a store fault reaches here as a store error: the
+                // crank crashed mid-flight, so it rewinds like a halted
+                // crank and reports what the store said.
+                Err(error @ MachineError::Store(_)) => {
+                    if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
+                        return Err(MachineError::Poisoned {
+                            during: "a crank",
+                            lost_to: Box::new(rewind_err),
+                            recovering_from: Some(Box::new(error)),
+                        });
+                    }
+                    return Err(error);
+                }
                 Err(error) => return Err(self.rewind_preparation_error(error)),
             };
             if !outcome.completed {
@@ -1530,6 +1627,18 @@ pub mod engine {
         /// must coordinate it. Collection may fault in the full heap and makes
         /// the following checkpoint rewrite relocated records.
         ///
+        /// The sweep only flags the `FinalizationRegistry` instances whose
+        /// targets died; their cleanup callbacks are this operator's to run,
+        /// and it runs them here, before the checkpoint, so no checkpoint of
+        /// this machine carries a pending cleanup. The callbacks' own garbage
+        /// can flag more registries, so the step repeats, sweep then notify,
+        /// until a sweep flags nothing; each sweep needs the clean boundary a
+        /// checkpoint restores, so every notification is checkpointed before
+        /// the next sweep, and the meter bounds the loop as it bounds any
+        /// crank. One collection event is counted however many sweeps it
+        /// took. A callback's uncaught throw halts the machine; the
+        /// collection then fails with that halt and rewinds.
+        ///
         /// Pending completed cranks are flushed first. A collection or checkpoint
         /// failure rewinds to that durable boundary: delivery remains committed,
         /// while the failed collection event is not counted. Returns slots freed.
@@ -1541,25 +1650,59 @@ pub mod engine {
                     .collections()
                     .checked_add(1)
                     .ok_or(MachineError::Refused(Refusal::CollectionCounterExhausted))?;
-                let stats = session
-                    .full_collect(&*self.store.borrow())
-                    .map_err(store_err)?;
                 session.set_collections(collections);
-                session
-                    .checkpoint(&self.signature, &mut *self.store.borrow_mut())
-                    .map_err(store_err)?;
-                Ok(stats.slots_reclaimed)
+                let mut reclaimed: u32 = 0;
+                loop {
+                    let stats = session
+                        .full_collect(&*self.store.borrow())
+                        .map_err(store_err)?;
+                    reclaimed = reclaimed.saturating_add(stats.slots_reclaimed);
+                    let pending = session
+                        .machine()
+                        .with_persistence(|interp| interp.finalization_cleanup_pending())
+                        .map_err(MachineError::Halt)?;
+                    if pending {
+                        // The notification is a crank: it continues the
+                        // machine's meter under a crank's budget, with the
+                        // check callback every crank runs under, so a
+                        // cascade of callbacks ends where a runaway crank
+                        // would.
+                        let state = session
+                            .machine()
+                            .with_persistence(|interp| interp.meter_state())
+                            .map_err(MachineError::Halt)?;
+                        let mut meter = VMeter::new();
+                        meter.restore(state);
+                        if let (Some(interval), Some(limit)) =
+                            (self.meter.check_interval(), self.meter.crank_limit())
+                        {
+                            self.crank_ceiling
+                                .set((state.index >> 16).saturating_add(limit));
+                            meter.rearm(interval);
+                        }
+                        let host = if meter.is_armed() {
+                            Some(if self.meter.check_interval().is_some() {
+                                meter_host(&self.crank_ceiling)
+                            } else {
+                                Box::new(|_| true) as Box<dyn FnMut(u64) -> bool>
+                            })
+                        } else {
+                            None
+                        };
+                        let outcome = session.machine().notify_finalizations(Some(meter), host);
+                        if !outcome.completed {
+                            return Err(MachineError::Halt(outcome.halt));
+                        }
+                    }
+                    session
+                        .checkpoint(&self.signature, &mut *self.store.borrow_mut())
+                        .map_err(store_err)?;
+                    if !pending {
+                        return Ok(reclaimed);
+                    }
+                }
             }))
-            .unwrap_or_else(|payload| {
-                let message = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                    .unwrap_or_else(|| "non-string collection panic".to_string());
-                // A panic left the heap mid-sweep. Whether the machine
-                // survives depends on the rewind below, not on this.
-                Err(MachineError::CollectionPanicked(message))
-            });
+            .unwrap_or_else(collection_panic);
             // Only the rewind's OWN failure loses the machine. A collection
             // that failed and was then rewound leaves a quiescent, usable
             // machine — `collector_panic_rewinds_to_the_committed_heap`
@@ -1647,7 +1790,13 @@ pub mod engine {
             let r = {
                 let session = self.session.as_mut().ok_or(MachineError::SessionLost)?;
                 session.set_cranks(total);
-                session.checkpoint(&self.signature, &mut *self.store.borrow_mut())
+                // A lazy fault during the checkpoint, an engine defect
+                // since the store is borrowed for the commit, unwinds as a
+                // store fault; it comes back as the store's error and
+                // rewinds like any failed flush.
+                ironhorse_snapshot::machine::catch_store_fault(|| {
+                    session.checkpoint(&self.signature, &mut *self.store.borrow_mut())
+                })
             };
             match r {
                 Ok(_epoch) => {
@@ -1771,6 +1920,55 @@ pub mod engine {
                 MachineError::Refused(Refusal::CrankCounterExhausted).store_failure(),
                 None
             );
+        }
+
+        /// The daemon's own catch, which wraps the open path's claim of the
+        /// start compartment beside the snapshot crate's catches, turns a
+        /// store fault into the store's error and lets every other panic
+        /// through.
+        #[test]
+        fn a_store_fault_comes_back_as_the_stores_error() {
+            let caught = catch_store_fault::<()>(|| {
+                std::panic::resume_unwind(Box::new(ironhorse_snapshot::machine::StoreFault(
+                    StoreError::MissingRow("slot page", 3),
+                )))
+            });
+            let Err(MachineError::Store(error)) = caught else {
+                panic!("expected the store's error, got {caught:?}");
+            };
+            assert_eq!(*error, StoreError::MissingRow("slot page", 3));
+            let other = std::panic::catch_unwind(|| {
+                catch_store_fault::<()>(|| panic!("not a store fault"))
+            })
+            .expect_err("re-raised");
+            assert_eq!(other.downcast_ref::<&str>(), Some(&"not a store fault"));
+        }
+
+        /// A collection that a store fault unwound reports the store's own
+        /// error; any other panic is a collector panic, whatever its
+        /// payload. (`tests/ironhorse_store_worker.rs` drives the store
+        /// fault through a real collection.)
+        #[test]
+        fn a_collection_unwound_by_a_store_fault_reports_the_stores_error() {
+            let Err(MachineError::Store(error)) = collection_panic(Box::new(
+                ironhorse_snapshot::machine::StoreFault(StoreError::MissingRow("chunk extent", 7)),
+            )) else {
+                panic!("expected the store's error");
+            };
+            assert_eq!(*error, StoreError::MissingRow("chunk extent", 7));
+            for (payload, message) in [
+                (
+                    Box::new("sweep invariant") as Box<dyn std::any::Any + Send>,
+                    "sweep invariant",
+                ),
+                (Box::new(String::from("owned")), "owned"),
+                (Box::new(7_u8), "non-string collection panic"),
+            ] {
+                let Err(MachineError::CollectionPanicked(found)) = collection_panic(payload) else {
+                    panic!("expected a collector panic");
+                };
+                assert_eq!(found, message);
+            }
         }
 
         /// `Poisoned` means the machine is gone, and nothing else may claim
@@ -2048,9 +2246,80 @@ pub mod engine {
                     .unwrap(),
                 "42"
             );
+            // The dynamic-function route, which needs the source compiler
+            // `with_bounds` wired above: its completion renders through the
+            // same job drain. Through the compartment's OWN `Function`
+            // binding, which is what a guest has -- NOT through
+            // `(()=>{}).constructor`, which `VmMachine::new` locks down at
+            // construction and `the_prototype_chain_evaluator_is_denied`
+            // below pins as refused.
+            assert_eq!(machine.eval("Function('return 42')()").unwrap(), "42");
+        }
+
+        /// The prototype-chain route to the ORIGINAL `Function` is closed.
+        ///
+        /// `VmMachine::new` performs the whole lockdown operation at
+        /// construction, and its step 2 replaces the five function-family and
+        /// `Date` prototypes' `constructor` with an inert stand-in. Reaching an
+        /// evaluator that way is the cross-compartment leak lockdown exists to
+        /// deny, so an ephemeral `Machine` must refuse it rather than compile.
+        ///
+        /// This asserts the refusal rather than merely avoiding the shape: the
+        /// assertion above once read `(()=>{}).constructor('return 42')()` and
+        /// expected `"42"`, i.e. it pinned the bypass. Nothing caught that when
+        /// lockdown closed it, because `ci.yml`'s `-p endo` step names three
+        /// `--test` targets and never ran the unit tests.
+        ///
+        /// Four distinct poisoned slots, not six: the first three spellings all
+        /// resolve to `Function.prototype.constructor` (measured in-engine —
+        /// `(()=>{}).constructor === (function(){}).constructor` and
+        /// `=== ({}).constructor.constructor` are both `true`), and only the
+        /// generator / async / async-generator rows reach constructors of their
+        /// own. They are kept because they are the spellings a guest actually
+        /// writes, not because each is a separate slot.
+        ///
+        /// `ironhorse-vm`'s `realms.rs` covers the same five evaluator families
+        /// against a bare VM machine; what this adds is the endo `Machine`
+        /// wrapper's ephemeral path, where `with_bounds` builds the machine and
+        /// each `eval` gets a fresh Realm.
+        #[test]
+        fn the_prototype_chain_evaluator_is_denied_on_an_ephemeral_machine() {
+            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            for family in [
+                "(()=>{}).constructor",
+                "({}).constructor.constructor",
+                "(function(){}).constructor",
+                "Object.getPrototypeOf(function*(){}).constructor",
+                "Object.getPrototypeOf(async function(){}).constructor",
+                "Object.getPrototypeOf(async function*(){}).constructor",
+            ] {
+                let source = format!(
+                    "try {{ {family}('return 1')(); 'REACHED' }} \
+                     catch (e) {{ e.name + ': ' + e.message }}"
+                );
+                assert_eq!(
+                    machine.eval(&source).unwrap(),
+                    "TypeError: secure mode",
+                    "{family} still reaches an evaluator on an ephemeral machine"
+                );
+            }
+            // `Date` is the fifth prototype lockdown poisons and the one that is
+            // not an evaluator. Dropped from the loop above because it takes no
+            // source argument; asserted here so all five are covered.
             assert_eq!(
-                machine.eval("(()=>{}).constructor('return 42')()").unwrap(),
-                "42"
+                machine
+                    .eval(
+                        "try { Date.prototype.constructor(); 'REACHED' } \
+                         catch (e) { e.name + ': ' + e.message }"
+                    )
+                    .unwrap(),
+                "TypeError: secure mode",
+            );
+            // And `Date` itself must keep working through its own binding, so
+            // the poisoning is the constructor edge and not the intrinsic.
+            assert_eq!(
+                machine.eval("typeof new Date().getTime()").unwrap(),
+                "number"
             );
         }
 
@@ -2223,6 +2492,7 @@ pub mod engine {
                     limit: 2048,
                 },
                 Halt::MeterAbort,
+                Halt::HostAllocationFailed,
                 Halt::EngineInvariant("bitwise:stack-underflow"),
                 engine_fault(),
                 Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds {
@@ -2274,6 +2544,7 @@ pub mod engine {
                     limit: 2048,
                 },
                 Halt::MeterAbort,
+                Halt::HostAllocationFailed,
                 Halt::EngineInvariant("bitwise:stack-underflow"),
                 engine_fault(),
                 Halt::Decode(ironhorse_vm::DecodeError::InvalidSymbols),

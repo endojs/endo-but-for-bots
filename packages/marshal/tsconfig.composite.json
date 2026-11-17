@@ -30,6 +30,9 @@
       "path": "../immutable-arraybuffer/tsconfig.composite.json"
     },
     {
+      "path": "../memoize/tsconfig.composite.json"
+    },
+    {
       "path": "../nat/tsconfig.composite.json"
     },
     {

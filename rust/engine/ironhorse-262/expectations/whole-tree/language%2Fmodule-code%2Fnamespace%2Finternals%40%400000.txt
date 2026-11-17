@@ -1,5 +1,5 @@
 # engine=ironhorse features=default corpus=language/module-code/namespace/internals tip=be13516fb6441b950ba8a3df97eb34062c186972
-language/module-code/namespace/internals/define-own-property.js sloppy skip:unsupported-opcode:module:static-linking
+language/module-code/namespace/internals/define-own-property.js sloppy skip:module:compiler-byte-divergence
 language/module-code/namespace/internals/delete-exported-init.js sloppy skip:unsupported-opcode:module:static-linking
 language/module-code/namespace/internals/delete-exported-uninit.js sloppy skip:unsupported-opcode:module:static-linking
 language/module-code/namespace/internals/delete-non-exported.js sloppy skip:unsupported-opcode:module:static-linking

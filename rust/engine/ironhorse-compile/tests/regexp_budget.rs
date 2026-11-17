@@ -81,6 +81,13 @@ fn invalid_literal_retains_regexp_residual_once() {
     lexer.next().unwrap();
     let before = lexer.meter().raw();
     let error = lexer.read_regexp(false).unwrap_err();
-    assert_eq!(error.kind, ironhorse_compile::LexErrorKind::InvalidRegExp);
+    assert_eq!(
+        error.kind,
+        ironhorse_compile::LexErrorKind::InvalidRegExpPattern
+    );
+    assert_eq!(
+        lexer.take_regexp_diagnostic().as_deref(),
+        Some("( invalid sequence")
+    );
     assert_eq!(lexer.meter().raw() - before, expected.work_meter_raw);
 }

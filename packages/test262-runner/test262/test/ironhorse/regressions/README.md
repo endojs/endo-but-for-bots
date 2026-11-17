@@ -48,8 +48,10 @@ parse-negative skips.
 
 ## Current trophy inventory
 
-The differential campaign runs its arms bit-exact by construction — each arm is
-armed only once its grammar region is bit-exact against the oracle — so the
+The differential campaign arms each fuzz arm only once its grammar region
+holds result agreement against the oracle (historically this arming bar was
+stated as "bit-exact", computrons included; the computron half is retired —
+XS-computron parity is a non-goal, and cost drift is advisory), so the
 **source-level runtime axis carries no residual named trophies**: every runtime
 divergence found during bring-up was folded into the stage corpus (now the
 `test/ironhorse/language` and `test/ironhorse/built-ins` trees) as it was fixed, not kept as a

@@ -10,9 +10,9 @@ impl Interp {
     /// is empty (the throw escapes every JS handler and reaches the host boundary), so
     /// the caller yields `Halt::Throw`.
     pub(super) fn unwind_to_jump(&mut self) -> Option<ResumeTarget> {
-        // A throw between `XS_CODE_SUPER` (which arms the pending
-        // new-target for the construct about to happen) and the
-        // construct frame that consumes it abandons that construct.
+        // A throw between `run_*` arming a `super()` frame's pending
+        // new-target and the construct frame that consumes it (a
+        // non-constructor callee, say) abandons that construct.
         // Leaving it armed would give a later constructor the stale target
         // as its `new.target`. Disarm BEFORE the
         // empty-chain return below, so the uncaught direct

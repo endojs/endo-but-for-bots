@@ -1,0 +1,23 @@
+var out = {};
+function t(name, f){ try { out[name] = f(); } catch (e) { out[name] = 'THROW ' + (e && e.name) + ':' + String(e && e.message); } }
+t('dot', function(){ var r = /ab/gi; return [r.flags, r.source, String(r.global), String(r.sticky)].join('|'); });
+t('computed', function(){ var r = /ab/gi; var k = 'flags', s = 'source', g = 'global'; return [String(r[k]), String(r[s]), String(r[g])].join('|'); });
+t('computed_literal', function(){ var r = /ab/gi; return [String(r['flags']), String(r['source'])].join('|'); });
+t('reflect_get', function(){ var r = /ab/gi; return [String(Reflect.get(r, 'flags')), String(Reflect.get(r, 'source')), String(Reflect.get(r, 'global'))].join('|'); });
+t('in', function(){ var r = /ab/gi; return [String('flags' in r), String('source' in r), String('global' in r)].join('|'); });
+t('proto_source', function(){ return String(RegExp.prototype.source); });
+t('proto_flags', function(){ return String(RegExp.prototype.flags); });
+t('proto_global', function(){ return String(RegExp.prototype.global); });
+t('gopd_flags', function(){ var d = Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags'); return d ? typeof d.get : 'none'; });
+t('own_names', function(){ return Object.getOwnPropertyNames(RegExp.prototype).sort().join(','); });
+t('own_shadow_source', function(){ var r = /a/; Object.defineProperty(r, 'source', {value: 'own'}); return r.source + ' ' + r['source']; });
+t('own_global_flags', function(){ var r = /a/gi; Object.defineProperty(r, 'global', {value: false}); return r.flags; });
+t('subclass', function(){ class R extends RegExp { get flags(){ return 'sub'; } } var r = new R('a','g'); var k='flags'; return r.flags + ' ' + r[k]; });
+t('obj_with_proto', function(){ var o = Object.create(/a/g); return String(o.global) + ' ' + String(o.flags); });
+t('proxy', function(){ var p = new Proxy(/a/g, {}); return String(p.flags) + ' ' + String(p.global); });
+t('destructure', function(){ var {flags, source, global} = /ab/gi; return [String(flags), String(source), String(global)].join('|'); });
+t('optional_chain', function(){ var r = /ab/gi; return String(r?.flags); });
+t('replace_subclass', function(){ class R extends RegExp { get flags(){ return 'g'; } } var r = new R('a'); return 'aaa'.replace(r, 'b'); });
+t('tostring', function(){ return String(/a/gi); });
+t('tostring_generic', function(){ return RegExp.prototype.toString.call({source: 'x', flags: 'y'}); });
+throw new Error(JSON.stringify(out));

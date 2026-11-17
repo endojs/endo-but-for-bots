@@ -1,6 +1,21 @@
 //! Function.call, Function.apply, and bound-constructor frame preparation.
 use super::*;
 
+/// What [`Interp::dot_apply_operands`] made of `f.apply(thisArg, argArray)`.
+enum DotApply {
+    /// An ordinary user function: the in-place trampoline runs it.
+    Bytecode,
+    /// A bound function, a Proxy or a receiver that needs the abstract Call,
+    /// called with `this` and the arguments through `invoke_value`.
+    Invoke(Slot, Slot, Vec<Slot>),
+    /// A native whose frame of this many arguments is pushed at the base.
+    Native(Native, usize),
+    /// A native method whose frame of this many arguments is pushed.
+    Method(NativeMethod, usize),
+    /// Neither, with the frame pushed: nothing to call.
+    Pushed,
+}
+
 impl Interp {
     /// Must a `.call`/`.apply` receiver take the abstract-Call dispatcher
     /// ([`Self::invoke_value`]) rather than the native-frame fast path? A
@@ -106,8 +121,44 @@ impl Interp {
     /// [`Self::call_dot_call_native`]. An ordinary user function returns
     /// `Ok(false)` for the in-place trampoline. Every native, native-method,
     /// and bound receiver accepts modeled array-like shapes through
-    /// `CreateListFromArrayLike`.
+    /// `CreateListFromArrayLike`. The receiver is called here, from `RUN`'s
+    /// frame, which expands this; the operands and the argument list are
+    /// read out of line ([`Self::dot_apply_operands`]), so that their
+    /// buffers do not widen that frame, which every level of a nest through
+    /// `RUN` holds, and a nest through `.apply` holds no frame of theirs.
     pub(super) fn call_dot_apply_native(&mut self, base: usize, code: &[u8]) -> Result<bool, Step> {
+        match self.dot_apply_operands(base, code)? {
+            DotApply::Bytecode => Ok(false),
+            DotApply::Invoke(target, this_arg, forwarded) => {
+                match self.invoke_value(code, target, this_arg, &forwarded) {
+                    Ok(value) => {
+                        self.push(value);
+                        Ok(true)
+                    }
+                    Err(halt) => {
+                        self.stack.truncate(base);
+                        Err(halt)
+                    }
+                }
+            }
+            DotApply::Native(native, forwarded_len) => {
+                self.call_native(native, base, forwarded_len, false, code)?;
+                Ok(true)
+            }
+            DotApply::Method(method, forwarded_len) => {
+                self.call_native_method(method, base, forwarded_len, code)?;
+                Ok(true)
+            }
+            DotApply::Pushed => Ok(true),
+        }
+    }
+
+    /// The receiver, `this` and argument list of [`Self::call_dot_apply_native`]
+    /// with the checks, reads and charges that precede its call: the call's
+    /// frame cut, and for a native or native method its own frame pushed in
+    /// its place.
+    #[inline(never)]
+    fn dot_apply_operands(&mut self, base: usize, code: &[u8]) -> Result<DotApply, Step> {
         let target = self
             .stack
             .get(base)
@@ -118,14 +169,14 @@ impl Interp {
         }
         let target_ref = match target.value {
             Payload::Reference(r) => r,
-            _ => return Ok(false),
+            _ => return Ok(DotApply::Bytecode),
         };
         let native = self.native_of(target_ref);
         let method = self.method_of(target_ref);
         let is_bound = self.bound_functions.contains_key(&target_ref);
         let is_proxy = self.proxies.contains_key(&target_ref);
         if native.is_none() && method.is_none() && !is_bound && !is_proxy {
-            return Ok(false);
+            return Ok(DotApply::Bytecode);
         }
         let this_arg = self
             .stack
@@ -174,17 +225,7 @@ impl Interp {
             self.meter.tick_raw(CALLABLE_PROXY_DOT_TRAMPOLINE_METERING);
         }
         if is_bound || is_proxy || self.needs_abstract_call(target_ref, method) {
-            let result = self.invoke_value(code, target, this_arg, &forwarded);
-            return match result {
-                Ok(value) => {
-                    self.push(value);
-                    Ok(true)
-                }
-                Err(halt) => {
-                    self.stack.truncate(base);
-                    Err(halt)
-                }
-            };
+            return Ok(DotApply::Invoke(target, this_arg, forwarded));
         }
         self.push(this_arg);
         self.push(target);
@@ -193,12 +234,11 @@ impl Interp {
         for arg in forwarded {
             self.push(arg);
         }
-        if let Some(native) = native {
-            self.call_native(native, base, forwarded_len, false, code)?;
-        } else if let Some(method) = method {
-            self.call_native_method(method, base, forwarded_len, code)?;
-        }
-        Ok(true)
+        Ok(match (native, method) {
+            (Some(native), _) => DotApply::Native(native, forwarded_len),
+            (None, Some(method)) => DotApply::Method(method, forwarded_len),
+            (None, None) => DotApply::Pushed,
+        })
     }
 
     /// `Function.prototype.call` trampoline: reshape the call frame from
@@ -391,6 +431,47 @@ impl Interp {
         }
     }
 
+    /// Whether `new bf(...)` ends at a bytecode constructor, which
+    /// [`Self::enter_construct_bound`] enters in place. A native target
+    /// constructs through [`Self::construct_value`] instead (as a Proxy
+    /// target would, once `bind` accepts one).
+    #[inline(never)]
+    pub(super) fn bound_construct_enters_bytecode(&self, bf: crate::value::SlotIndex) -> bool {
+        let mut current = bf;
+        while let Some(data) = self.bound_functions.get(&current) {
+            current = data.target;
+        }
+        self.functions
+            .get(&current)
+            .is_some_and(|fi| fi.native.is_none() && fi.method.is_none())
+    }
+
+    /// `new boundF(...)` for a bound function whose ultimate target is not
+    /// bytecode (see [`Self::bound_construct_enters_bytecode`]): take the
+    /// frame at `base` apart and run BoundFunction [[Construct]] through the
+    /// general construct, `new.target` the bound function unless a `super()`
+    /// named its own. A Proxy target takes this path too. Out of line, so the
+    /// dispatch loop's `RUN` arm, which every native re-entry holds, does not
+    /// carry its locals.
+    #[inline(never)]
+    pub(super) fn construct_bound_native(
+        &mut self,
+        code: &[u8],
+        bf: crate::value::SlotIndex,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Step> {
+        let args = self.frame_arguments(base, argc)?;
+        let new_target = self.pending_new_target.take().unwrap_or(bf);
+        self.stack.truncate(base);
+        self.construct_value(
+            code,
+            Slot::of(Kind::Reference, Payload::Reference(bf)),
+            &args,
+            Slot::of(Kind::Reference, Payload::Reference(new_target)),
+        )
+    }
+
     /// A bound function's **construct** (`new boundF(...)`, ECMA-262 10.4.1.2
     /// `[[Construct]]`): construct the ultimate target with the bound leading
     /// arguments prepended to the call arguments, and the fresh instance's
@@ -405,8 +486,10 @@ impl Interp {
     /// outermost bound is the bound itself, and step 5 (`SameValue(F, newTarget)
     /// → target`) applies at every level, so the effective `new.target` is the
     /// ultimate target — its `.prototype` becomes the instance's prototype
-    /// (via [`Self::run_constructor`] reading `target_func`). A native or
-    /// non-constructor ultimate target is not yet modeled and self-names.
+    /// (via [`Self::run_constructor`] reading `target_func`). The caller
+    /// sends any other target through [`Self::construct_value`]
+    /// ([`Self::bound_construct_enters_bytecode`]).
+    #[inline(never)]
     pub(super) fn enter_construct_bound(
         &mut self,
         bf: crate::value::SlotIndex,
@@ -456,8 +539,11 @@ impl Interp {
         for a in acc {
             self.stack.push(a);
         }
-        // `new.target` resolves to the ultimate target (see the doc comment).
-        self.pending_new_target = Some(target);
+        // `new.target` resolves to the ultimate target (see the doc comment),
+        // unless a `super()` names its own: BoundFunction [[Construct]]
+        // substitutes the target only for a `newTarget` that is the bound
+        // function itself.
+        self.pending_new_target = Some(self.pending_new_target.take().unwrap_or(target));
         self.charge_and_check(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG)?;
         self.enter_call(total, ret_pc, true)
     }

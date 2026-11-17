@@ -71,8 +71,8 @@ built-ins/Temporal/PlainDate/prototype/until/calendar-temporal-object.js sloppy 
 built-ins/Temporal/PlainDate/prototype/until/calendar-temporal-object.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDate/prototype/until/exact-multiple-of-larger-unit.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDate/prototype/until/exact-multiple-of-larger-unit.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/PlainDate/prototype/until/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainDate/prototype/until/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainDate/prototype/until/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDate/prototype/until/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDate/prototype/until/largestunit-default.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDate/prototype/until/largestunit-default.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDate/prototype/until/largestunit-invalid-string.js sloppy skip:oracle-host-missing-global:Temporal

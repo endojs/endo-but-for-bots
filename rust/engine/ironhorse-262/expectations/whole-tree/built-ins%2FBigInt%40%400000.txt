@@ -21,8 +21,8 @@ built-ins/BigInt/constructor-trailing-leading-spaces.js sloppy pass
 built-ins/BigInt/constructor-trailing-leading-spaces.js strict pass
 built-ins/BigInt/infinity-throws-rangeerror.js sloppy pass
 built-ins/BigInt/infinity-throws-rangeerror.js strict pass
-built-ins/BigInt/is-a-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «booleantrue») to be true"
-built-ins/BigInt/is-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «booleantrue») to be true"
+built-ins/BigInt/is-a-constructor.js sloppy pass
+built-ins/BigInt/is-a-constructor.js strict pass
 built-ins/BigInt/length.js sloppy pass
 built-ins/BigInt/length.js strict pass
 built-ins/BigInt/name.js sloppy pass

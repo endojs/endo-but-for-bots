@@ -15,9 +15,9 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
 
-/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
-import { guestHelp, makeHelp } from './help-text.js';
+import { guestHelp, mailHelp, makeHelp } from './help-text.js';
 
 /**
  * @param {object} args
@@ -26,6 +26,8 @@ import { guestHelp, makeHelp } from './help-text.js';
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
+ * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
+ * @param {DaemonCore['acceptInvitation']} args.acceptInvitation
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
@@ -42,6 +44,8 @@ export const makeGuestMaker = ({
   formulateEval,
   formulateReadableBlob,
   formulateMarshalValue,
+  formulateInvitation,
+  acceptInvitation,
   getFormulaForId,
   getAllNetworkAddresses,
   getAllContentSources,
@@ -64,6 +68,8 @@ export const makeGuestMaker = ({
    * @param {FormulaIdentifier} mainWorkerId
    * @param {FormulaIdentifier} networksDirectoryId
    * @param {FormulaIdentifier} planesDirectoryId
+   * @param {FormulaIdentifier | undefined} guestPinsDirectoryId
+   * @param {FormulaIdentifier | undefined} hostPinsDirectoryId
    * @param {Context} context
    */
   const makeGuest = async (
@@ -78,6 +84,8 @@ export const makeGuestMaker = ({
     mainWorkerId,
     networksDirectoryId,
     planesDirectoryId,
+    guestPinsDirectoryId,
+    hostPinsDirectoryId,
     context,
   ) => {
     context.thisDiesIfThatDies(hostHandleId);
@@ -90,6 +98,12 @@ export const makeGuestMaker = ({
     context.thisDiesIfThatDies(mainWorkerId);
     context.thisDiesIfThatDies(networksDirectoryId);
     context.thisDiesIfThatDies(planesDirectoryId);
+    if (guestPinsDirectoryId !== undefined) {
+      context.thisDiesIfThatDies(guestPinsDirectoryId);
+    }
+    if (hostPinsDirectoryId !== undefined) {
+      context.thisDiesIfThatDies(hostPinsDirectoryId);
+    }
 
     const baseController = await provideStoreController(petStoreId);
     const mailboxController = await provideStoreController(mailboxStoreId);
@@ -103,6 +117,11 @@ export const makeGuestMaker = ({
     }
     specialNames['@nets'] = networksDirectoryId;
     specialNames['@planes'] = planesDirectoryId;
+    // The guest-visible pin directory is distinct from the host-only pin
+    // directory, which is deliberately absent from special names.
+    if (guestPinsDirectoryId !== undefined) {
+      specialNames['@pins'] = guestPinsDirectoryId;
+    }
     const specialStore = makePetSitter(baseController, specialNames);
 
     const getNetworkAddresses = () =>
@@ -133,6 +152,7 @@ export const makeGuestMaker = ({
       locate,
       reverseLocate,
       list,
+      listValues,
       listIdentifiers,
       listLocators,
       locateContent,
@@ -189,6 +209,7 @@ export const makeGuestMaker = ({
       define: mailboxDefine,
       form: mailboxForm,
       submit: mailboxSubmit,
+      submitOnce: mailboxSubmitOnce,
       sendValue: mailboxSendValue,
     } = mailbox;
 
@@ -305,6 +326,10 @@ export const makeGuestMaker = ({
     const submit = (messageNumber, values) =>
       mailboxSubmit(messageNumber, values);
 
+    /** @type {EndoGuest['submitOnce']} */
+    const submitOnce = (messageNumber, values, attempt) =>
+      mailboxSubmitOnce(messageNumber, values, attempt);
+
     /** @type {EndoGuest['sendValue']} */
     const sendValue = (messageNumber, petNameOrPath) =>
       mailboxSendValue(messageNumber, petNameOrPath);
@@ -338,6 +363,99 @@ export const makeGuestMaker = ({
       await unpinTransient(id);
     };
 
+    /**
+     * Mint a single-use invitation owned by this guest. This shares
+     * `EndoHost.invite`'s implementation (`formulateInvitation`): the resulting
+     * invitation's locator `from` names *this guest's* handle, so an acceptor
+     * binds this guest rather than the top host. The invitation id is retained
+     * under `correspondentName` in this guest's own pet store so it survives a
+     * restart,
+     * and acceptance overwrites that slot with the accepted handle (consume
+     * once). Network mediation is supplied internally by the daemon inside the
+     * invitation formula, so this call hands the guest no `getPeerInfo`,
+     * `addPeerInfo`, host facet, peer enumeration, or outbound-dialing surface:
+     * a guest inviter gains no *dialing or peer-registration* authority. Note
+     * this is narrower than "no network authority" — the invitation URL the
+     * guest can then obtain via `locate()` does embed this daemon's advertised
+     * connection-hint addresses (by design; every invitation, host- or
+     * guest-issued, encodes them), so a guest learns and can forward those
+     * addresses even with an empty `@nets`. That disclosure is inherent to
+     * issuing a redeemable invitation and grants no authority to act on the
+     * addresses.
+     * @param {NameOrPath} correspondentName
+     */
+    const invite = async correspondentName => {
+      const { namePath, petName: correspondentPetName } =
+        petNamePathFrom(correspondentName);
+      /** @type {DeferredTasks<InvitationDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        namePath.length === 1
+          ? specialStore.storeIdentifier(
+              correspondentPetName,
+              identifiers.invitationId,
+            )
+          : E(directory).storeIdentifier(namePath, identifiers.invitationId),
+      );
+      const { value } = await formulateInvitation(
+        guestId,
+        handleId,
+        correspondentName,
+        tasks,
+      );
+      return value;
+    };
+
+    /**
+     * Redeem an invitation locator into THIS guest. Acceptance binds the
+     * relationship to the calling guest — no replacement guest is minted on the
+     * acceptor side. The guest accepts *as itself*: its own `@self` handle is
+     * the identity presented to the inviter, and the inviter's handle is bound
+     * reciprocally under `correspondentName`, a pet name this guest chooses in
+     * its own directory (a path nests under a directory that must already
+     * exist). The inviter independently chooses its own pet name for this
+     * guest, so the two names may differ.
+     *
+     * This shares one implementation with `EndoHost.accept` via the daemon-core
+     * `acceptInvitation` helper. Peer registration and remote-agent-key routing
+     * stay behind that helper (and the invitation formula's own daemon-mediated
+     * accept), so a guest acceptor gains no `getPeerInfo`/`addPeerInfo`, host
+     * facet, peer enumeration, or outbound-dialing surface — exactly as a guest
+     * inviter does not. Redeeming a genuine invitation does have a bounded,
+     * additive effect on shared routing: the inviter's daemon is registered as
+     * a peer and its agent key recorded, but only additively (a known peer is
+     * never re-addressed and a mapped agent key never redirected), and the
+     * agent-key write happens only after the invitation is proven, so a forged
+     * locator mutates nothing. Reachability follows this guest's own `@nets`: an
+     * empty `@nets` (the default) still accepts same-daemon peers but leaves the
+     * guest undialable across daemons (the anonymizing-persona default).
+     * @param {string} invitationLocator
+     * @param {NameOrPath} correspondentName
+     */
+    const accept = async (invitationLocator, correspondentName) => {
+      const { namePath } = petNamePathFrom(correspondentName);
+      return acceptInvitation({
+        invitationLocator,
+        acceptingHandleId: handleId,
+        acceptingNetworksDirectoryId: networksDirectoryId,
+        bindCorrespondent: async remoteHandleLocator => {
+          await null;
+          // Snapshot whatever `correspondentName` held before this speculative
+          // bind so a rejected invitation can restore it rather than clobber a
+          // pre-existing correspondent bound under the same name.
+          const priorLocator = await E(directory).locate(...namePath);
+          await E(directory).storeLocator(namePath, remoteHandleLocator);
+          return async () => {
+            if (priorLocator === undefined) {
+              await E(directory).remove(...namePath);
+            } else {
+              await E(directory).storeLocator(namePath, priorLocator);
+            }
+          };
+        },
+      });
+    };
+
     /** @type {EndoGuest} */
     const guest = {
       // Directory
@@ -347,6 +465,7 @@ export const makeGuestMaker = ({
       locate,
       reverseLocate,
       list,
+      listValues,
       listIdentifiers,
       listLocators,
       locateContent,
@@ -393,14 +512,17 @@ export const makeGuestMaker = ({
       storeBlob,
       storeValue,
       submit,
+      submitOnce,
       sendValue,
+      invite,
+      accept,
     };
 
     return makeExo(
       'EndoGuest',
       GuestInterface,
       /** @type {any} */ ({
-        help: makeHelp(guestHelp),
+        help: makeHelp(guestHelp, [mailHelp]),
         ...guest,
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {

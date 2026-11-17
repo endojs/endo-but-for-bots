@@ -1,0 +1,285 @@
+{
+  "date": "2026-10-18",
+  "node": "22.21.1",
+  "platform": "darwin arm64",
+  "baseline_commit": "7bc2b425d",
+  "subscription_commit": "af1d200dd",
+  "hub_commit": "6c94df21e",
+  "native_worker_sha256": "519bc30198aa199ceb20346ca939556c33f16c642266e7d6f960e9519e42660f",
+  "method": [
+    "Separate disposable daemon per variant, run sequentially; three value-bearing seed messages followed by three measured text-only loopback sends.",
+    "One service subscriber; thresholds set beyond the experiment; all measured snapshot counts are zero.",
+    "visibleMs waits for both send acceptance and pushed inbox state; it can overestimate callback arrival if a push precedes the send response.",
+    "No HTTP, browser rendering, or screen presentation is measured.",
+    "hubMs measures synchronous hub file replacements, excluding JSON serialization before the filesystem wrapper.",
+    "Worker deliveries are sampled via a following status request; they include runtime activity beyond application calls.",
+    "Small exploratory sample, no p99 claim; all outliers retained.",
+    "Mailbox co-location is benchmark-only; old durable objects retain legacy interfaces until migrated."
+  ],
+  "variants": {
+    "legacy_original_hub": {
+      "trials": [
+        {
+          "mode": "legacy",
+          "trial": 0,
+          "epoch": 1792294543816,
+          "acceptedMs": 827.4307499999995,
+          "visibleMs": 6584.576375000004,
+          "hubWrites": 459,
+          "hubMs": 4442.947448000035,
+          "deliveries": 59,
+          "snapshots": 0
+        },
+        {
+          "mode": "legacy",
+          "trial": 1,
+          "epoch": 1792294550697,
+          "acceptedMs": 910.7492079999938,
+          "visibleMs": 7253.065374999991,
+          "hubWrites": 495,
+          "hubMs": 4728.5015330000315,
+          "deliveries": 63,
+          "snapshots": 0
+        },
+        {
+          "mode": "legacy",
+          "trial": 2,
+          "epoch": 1792294558246,
+          "acceptedMs": 940.9710420000047,
+          "visibleMs": 19182.11675,
+          "hubWrites": 1179,
+          "hubMs": 12425.869701000003,
+          "deliveries": 188,
+          "snapshots": 0
+        }
+      ],
+      "median": {
+        "acceptedMs": 910.7492079999938,
+        "visibleMs": 7253.065374999991,
+        "hubWrites": 495,
+        "hubMs": 4728.5015330000315,
+        "deliveries": 63
+      }
+    },
+    "push_original_hub": {
+      "trials": [
+        {
+          "mode": "push",
+          "trial": 0,
+          "epoch": 1792294679778,
+          "acceptedMs": 905.1151249999966,
+          "visibleMs": 1017.0150419999991,
+          "hubWrites": 54,
+          "hubMs": 539.9749180000217,
+          "deliveries": 7,
+          "snapshots": 0
+        },
+        {
+          "mode": "push",
+          "trial": 1,
+          "epoch": 1792294685322,
+          "acceptedMs": 2104.8252920000086,
+          "visibleMs": 2220.6585420000047,
+          "hubWrites": 57,
+          "hubMs": 539.9177139999083,
+          "deliveries": 29,
+          "snapshots": 0
+        },
+        {
+          "mode": "push",
+          "trial": 2,
+          "epoch": 1792294688142,
+          "acceptedMs": 850.2458749999932,
+          "visibleMs": 960.6129169999913,
+          "hubWrites": 57,
+          "hubMs": 535.7531220000674,
+          "deliveries": 8,
+          "snapshots": 0
+        }
+      ],
+      "median": {
+        "acceptedMs": 905.1151249999966,
+        "visibleMs": 1017.0150419999991,
+        "hubWrites": 57,
+        "hubMs": 539.9177139999083,
+        "deliveries": 8
+      }
+    },
+    "push_outbox_batch_only": {
+      "trials": [
+        {
+          "mode": "push",
+          "trial": 0,
+          "epoch": 1792294787773,
+          "acceptedMs": 839.7248749999999,
+          "visibleMs": 954.1783339999965,
+          "hubWrites": 54,
+          "hubMs": 517.3146269999852,
+          "deliveries": 7,
+          "snapshots": 0
+        },
+        {
+          "mode": "push",
+          "trial": 1,
+          "epoch": 1792294789369,
+          "acceptedMs": 855.8179579999996,
+          "visibleMs": 976.8804999999993,
+          "hubWrites": 57,
+          "hubMs": 562.9580419999984,
+          "deliveries": 8,
+          "snapshots": 0
+        },
+        {
+          "mode": "push",
+          "trial": 2,
+          "epoch": 1792294791007,
+          "acceptedMs": 859.5825000000041,
+          "visibleMs": 978.2662500000006,
+          "hubWrites": 57,
+          "hubMs": 554.3674999998912,
+          "deliveries": 8,
+          "snapshots": 0
+        }
+      ],
+      "median": {
+        "acceptedMs": 855.8179579999996,
+        "visibleMs": 976.8804999999993,
+        "hubWrites": 57,
+        "hubMs": 554.3674999998912,
+        "deliveries": 8
+      }
+    },
+    "colocated_outbox_batch_only": {
+      "trials": [
+        {
+          "mode": "colocated",
+          "trial": 0,
+          "epoch": 1792294877983,
+          "acceptedMs": 8160.174958000003,
+          "visibleMs": 8160.244332999995,
+          "hubWrites": 304,
+          "hubMs": 4921.64782399984,
+          "deliveries": 79,
+          "snapshots": 0
+        },
+        {
+          "mode": "colocated",
+          "trial": 1,
+          "epoch": 1792294886612,
+          "acceptedMs": 510.1144170000043,
+          "visibleMs": 510.12608299999556,
+          "hubWrites": 27,
+          "hubMs": 259.06016499998805,
+          "deliveries": 3,
+          "snapshots": 0
+        },
+        {
+          "mode": "colocated",
+          "trial": 2,
+          "epoch": 1792294887550,
+          "acceptedMs": 513.1439170000085,
+          "visibleMs": 513.1546670000098,
+          "hubWrites": 27,
+          "hubMs": 261.53470500004187,
+          "deliveries": 3,
+          "snapshots": 0
+        }
+      ],
+      "median": {
+        "acceptedMs": 513.1439170000085,
+        "visibleMs": 513.1546670000098,
+        "hubWrites": 27,
+        "hubMs": 261.53470500004187,
+        "deliveries": 3
+      }
+    },
+    "push_batched_heads": {
+      "trials": [
+        {
+          "mode": "push",
+          "trial": 0,
+          "epoch": 1792295015327,
+          "acceptedMs": 718.0125419999968,
+          "visibleMs": 805.5222089999879,
+          "hubWrites": 36,
+          "hubMs": 354.0822060000064,
+          "deliveries": 7,
+          "snapshots": 0
+        },
+        {
+          "mode": "push",
+          "trial": 1,
+          "epoch": 1792295016667,
+          "acceptedMs": 710.3090419999935,
+          "visibleMs": 794.676999999996,
+          "hubWrites": 38,
+          "hubMs": 364.9005830000242,
+          "deliveries": 8,
+          "snapshots": 0
+        },
+        {
+          "mode": "push",
+          "trial": 2,
+          "epoch": 1792295020813,
+          "acceptedMs": 2098.518875000009,
+          "visibleMs": 2098.535167000009,
+          "hubWrites": 36,
+          "hubMs": 353.8900449999346,
+          "deliveries": 38,
+          "snapshots": 0
+        }
+      ],
+      "median": {
+        "acceptedMs": 718.0125419999968,
+        "visibleMs": 805.5222089999879,
+        "hubWrites": 36,
+        "hubMs": 354.0822060000064,
+        "deliveries": 8
+      }
+    },
+    "colocated_batched_heads": {
+      "trials": [
+        {
+          "mode": "colocated",
+          "trial": 0,
+          "epoch": 1792295095003,
+          "acceptedMs": 415.88937499999884,
+          "visibleMs": 415.95754200000374,
+          "hubWrites": 16,
+          "hubMs": 157.44233400002122,
+          "deliveries": 2,
+          "snapshots": 0
+        },
+        {
+          "mode": "colocated",
+          "trial": 1,
+          "epoch": 1792295095780,
+          "acceptedMs": 423.3084999999992,
+          "visibleMs": 423.31883299999754,
+          "hubWrites": 18,
+          "hubMs": 173.8805440000433,
+          "deliveries": 3,
+          "snapshots": 0
+        },
+        {
+          "mode": "colocated",
+          "trial": 2,
+          "epoch": 1792295096544,
+          "acceptedMs": 427.11074999999255,
+          "visibleMs": 427.1201250000013,
+          "hubWrites": 18,
+          "hubMs": 176.0600400000112,
+          "deliveries": 3,
+          "snapshots": 0
+        }
+      ],
+      "median": {
+        "acceptedMs": 423.3084999999992,
+        "visibleMs": 423.31883299999754,
+        "hubWrites": 18,
+        "hubMs": 173.8805440000433,
+        "deliveries": 3
+      }
+    }
+  }
+}

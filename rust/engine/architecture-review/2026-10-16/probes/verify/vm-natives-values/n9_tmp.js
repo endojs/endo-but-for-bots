@@ -1,0 +1,1 @@
+try { const v = new Intl.NumberFormat('de',{notation:'compact'}).format(12345); throw new Error('value:' + String(v).length); } catch (e) { throw new Error('caught ' + e.name + ': ' + e.message.slice(0,80)); }

@@ -45,6 +45,9 @@ export const endoHelp = helpMap.get('Endo Bootstrap') || {};
 export const readableTreeHelp = helpMap.get('ReadableTree') || {};
 
 /** @type {HelpText} */
+export const readableNameHubHelp = helpMap.get('ReadableNameHub') || {};
+
+/** @type {HelpText} */
 export const mountHelp = helpMap.get('EndoMount') || {};
 
 /** @type {HelpText} */
@@ -56,6 +59,7 @@ harden(guestHelp);
 harden(hostHelp);
 harden(blobHelp);
 harden(readableTreeHelp);
+harden(readableNameHubHelp);
 harden(mountHelp);
 harden(mountFileHelp);
 harden(endoHelp);

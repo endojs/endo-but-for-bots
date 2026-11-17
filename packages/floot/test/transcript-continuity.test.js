@@ -1,9 +1,7 @@
 // @ts-check
-// A hosted backend whose continuity is its own transcript (a CLI resuming the
-// conversation it persisted) retains every delivered prompt and whatever
-// streamed before a stop or a failure. The tree is display-only on that path,
-// so it must mirror what the transcript retains, or the history the UI shows
-// and the context the model resumes with drift apart.
+// The shared hosted journal retains delivered prompts, streamed replies and
+// tool evidence across cancellation and failure. These tests exercise that
+// common contract, not a backend-specific native-context restoration mode.
 import test from '@endo/ses-ava/prepare-endo.js';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
@@ -16,6 +14,19 @@ import {
 import { UNSETTLED_TOOL_RESULT } from '../src/hosted-turn.js';
 import { makeReplyChannel } from '../src/stream.js';
 import { makeFlootToolRegistry } from '../src/tool-registry.js';
+import { usageCounts } from './helpers/usage.js';
+
+const failedHistory = (messages, state, status) => [
+  ...messages.map(message => ({
+    ...message,
+    meta: { turnId: '1', turnState: state },
+  })),
+  {
+    role: 'assistant',
+    content: status,
+    meta: { turnId: '1', turnState: state, turnStatus: true },
+  },
+];
 
 const makeFakePowers = () => {
   const store = new Map();
@@ -51,40 +62,39 @@ const makeFakePowers = () => {
 const makeFakeHostedClient = () => {
   /** @type {Array<ReturnType<typeof makeBufferedReader>>} */
   const turns = [];
+  const waiters = new Map();
   const client = harden({
     async send() {
       const channel = makeBufferedReader();
       turns.push(channel);
+      waiters.get(turns.length)?.();
       return channel.reader;
     },
     async interrupt() {
       await null;
     },
   });
-  return { client, turns };
+  return {
+    client,
+    turns,
+    /** @param {number} count */
+    waitForTurn: count =>
+      turns.length >= count
+        ? Promise.resolve()
+        : new Promise(resolve => waiters.set(count, resolve)),
+  };
 };
 
-/**
- * @param {Array<unknown>} turns
- * @param {number} count
- */
-const waitForTurn = async (turns, count) => {
-  await null;
-  for (let tries = 0; turns.length < count && tries < 100; tries += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    await null;
-  }
-};
-
-test('a stopped turn on a transcript backend keeps the prompt and partial reply', async t => {
+test('a stopped hosted turn keeps the prompt, tool result and partial reply', async t => {
+  t.timeout(5000);
   const powers = makeFakePowers();
-  const { client, turns } = makeFakeHostedClient();
+  const { client, turns, waitForTurn } = makeFakeHostedClient();
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   const controller = new AbortController();
   const { writer, reader } = makeReplyChannel(() => controller.abort());
@@ -95,7 +105,7 @@ test('a stopped turn on a transcript backend keeps the prompt and partial reply'
     undefined,
     controller.signal,
   );
-  await waitForTurn(turns, 1);
+  await waitForTurn(1);
   turns[0].push({ type: 'tool-call', id: 'tool-1', name: 'Write', args: '{}' });
   turns[0].push({
     type: 'tool-result',
@@ -115,28 +125,42 @@ test('a stopped turn on a transcript backend keeps the prompt and partial reply'
   await replies.return();
   await turnP;
 
-  t.deepEqual(await agent.getHistory(), [
-    { role: 'user', content: 'long task' },
-    { role: 'tool', name: 'Write', args: '{}', result: 'wrote index.html' },
-    { role: 'assistant', content: 'working' },
-  ]);
-  // Nothing completed: usage is not counted.
-  t.deepEqual(await agent.getUsage(), {
-    inputTokens: 0,
-    outputTokens: 0,
-    turns: 0,
-  });
+  t.deepEqual(
+    await agent.getHistory(),
+    failedHistory(
+      [
+        { role: 'user', content: 'long task' },
+        {
+          role: 'tool',
+          id: 'tool-1',
+          name: 'Write',
+          args: '{}',
+          result: 'wrote index.html',
+        },
+        { role: 'assistant', content: 'working' },
+      ],
+      'cancelled',
+      'Turn cancelled.',
+    ),
+  );
+  // Nothing completed, and the backend reported no tokens for what it
+  // streamed; the turn is counted as one that did not settle.
+  t.deepEqual(
+    await agent.getUsage(),
+    usageCounts({ turns: 0, incompleteTurns: 1 }),
+  );
 });
 
-test('a failed turn on a transcript backend keeps the delivered prompt', async t => {
+test('a failed hosted turn keeps the delivered prompt', async t => {
+  t.timeout(5000);
   const powers = makeFakePowers();
-  const { client, turns } = makeFakeHostedClient();
+  const { client, turns, waitForTurn } = makeFakeHostedClient();
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   const { writer, reader } = makeReplyChannel();
   const replyP = (async () => {
@@ -146,7 +170,7 @@ test('a failed turn on a transcript backend keeps the delivered prompt', async t
     return events;
   })();
   const turnP = agent.converse('do it', writer);
-  await waitForTurn(turns, 1);
+  await waitForTurn(1);
   // The backend took the prompt (it started the turn), then failed it.
   turns[0].push({ type: 'phase', phase: 'claude session starting' });
   turns[0].push({
@@ -157,36 +181,49 @@ test('a failed turn on a transcript backend keeps the delivered prompt', async t
   const events = await replyP;
   t.is(events.at(-1)?.type, 'abort');
 
-  t.deepEqual(await agent.getHistory(), [{ role: 'user', content: 'do it' }]);
+  t.deepEqual(
+    await agent.getHistory(),
+    failedHistory(
+      [{ role: 'user', content: 'do it' }],
+      'failed',
+      'Turn failed: claude turn failed: error_max_turns',
+    ),
+  );
 
   // The next turn builds on that prompt rather than orphaning it.
   const second = makeReplyChannel();
   const secondP = agent.converse('retry', second.writer);
-  await waitForTurn(turns, 2);
+  await waitForTurn(2);
   turns[1].push({ type: 'text-delta', text: 'done' });
   turns[1].push({ type: 'end' });
   await secondP;
   t.deepEqual(
     (await agent.getHistory()).map(message => message.content),
-    ['do it', 'retry', 'done'],
+    [
+      'do it',
+      'Turn failed: claude turn failed: error_max_turns',
+      'retry',
+      'done',
+    ],
   );
 });
 
 test('a failed turn keeps the tool activity and text that streamed before it', async t => {
+  t.timeout(5000);
   // error_max_turns and error_during_execution end a turn whose transcript
   // already holds every tool round and the text before the error.
   const powers = makeFakePowers();
-  const { client, turns } = makeFakeHostedClient();
+  const { client, turns, waitForTurn } = makeFakeHostedClient();
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   const { writer } = makeReplyChannel();
   const turnP = agent.converse('build it', writer);
-  await waitForTurn(turns, 1);
+  await waitForTurn(1);
   turns[0].push({ type: 'tool-call', id: 'tool-1', name: 'Write', args: '{}' });
   turns[0].push({
     type: 'tool-result',
@@ -201,43 +238,111 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
     reason: 'claude turn failed: error_max_turns',
   });
   await t.throwsAsync(() => turnP, { message: /error_max_turns/ });
-  t.deepEqual(await agent.getHistory(), [
-    { role: 'user', content: 'build it' },
-    { role: 'tool', name: 'Write', args: '{}', result: 'wrote index.html' },
-    { role: 'tool', name: 'Read', args: '{}', result: UNSETTLED_TOOL_RESULT },
-    { role: 'assistant', content: 'almost' },
-  ]);
+  t.deepEqual(
+    await agent.getHistory(),
+    failedHistory(
+      [
+        { role: 'user', content: 'build it' },
+        {
+          role: 'tool',
+          id: 'tool-1',
+          name: 'Write',
+          args: '{}',
+          result: 'wrote index.html',
+        },
+        {
+          role: 'tool',
+          id: 'tool-2',
+          name: 'Read',
+          args: '{}',
+          // The mirrored partial names its own reason for the missing result
+          // rather than the journal's generic placeholder.
+          result: UNSETTLED_TOOL_RESULT,
+        },
+        { role: 'assistant', content: 'almost' },
+      ],
+      'outcome-unknown',
+      'Turn outcome-unknown: claude turn failed: error_max_turns',
+    ),
+  );
+  const nextP = agent.converse(
+    'Answer an unrelated question',
+    makeReplyChannel().writer,
+  );
+  await waitForTurn(2);
+  turns[1].push({ type: 'text-delta', text: 'Unrelated answer' });
+  turns[1].push({ type: 'end' });
+  await nextP;
+  const [prior, next] = await agent.getTurns();
+  t.is(prior.state, 'outcome-unknown');
+  t.is(prior.resolution, undefined);
+  t.is(next.state, 'completed');
+  const transcript = await agent.getTranscript();
+  t.is(transcript.filter(record => record.kind === 'tool-call').length, 2);
+  t.true(
+    transcript.some(
+      record =>
+        record.kind === 'tool-result' && record.content === 'wrote index.html',
+    ),
+  );
+  t.true(
+    transcript.some(
+      record =>
+        record.kind === 'message' &&
+        record.content.includes(
+          'Floot turn outcome-unknown: claude turn failed: error_max_turns',
+        ),
+    ),
+  );
+  const restored = await makeStreamingAgent(
+    powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => client },
+    'test prompt',
+    { journalPowers: powers },
+  );
+  t.deepEqual(await restored.getTranscript(), transcript);
 });
 
-test('a prompt the backend never took is not mirrored', async t => {
+test('a leading backend refusal remains a durable failed dispatch', async t => {
+  t.timeout(5000);
   // A spawn refusal, or a stop before dispatch, arrives as a leading abort:
-  // the transcript has no such prompt, so the tree must not show one.
+  // the transcript has no such prompt, but the journal still reports the
+  // attempted dispatch and its failure rather than silently dropping it.
   const powers = makeFakePowers();
-  const { client, turns } = makeFakeHostedClient();
+  const { client, turns, waitForTurn } = makeFakeHostedClient();
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   const { writer } = makeReplyChannel();
   const turnP = agent.converse('do it', writer);
-  await waitForTurn(turns, 1);
+  await waitForTurn(1);
   turns[0].push({ type: 'abort', reason: 'claude exited with code 1' });
   await t.throwsAsync(() => turnP, { message: /code 1/ });
-  t.deepEqual(await agent.getHistory(), []);
+  t.deepEqual(
+    await agent.getHistory(),
+    failedHistory(
+      [{ role: 'user', content: 'do it' }],
+      'failed',
+      'Turn failed: claude exited with code 1',
+    ),
+  );
 });
 
-test('a checkpoint-reconciled backend still drops a stopped or failed turn', async t => {
+test('a cancelled text-only hosted turn remains in the journal', async t => {
+  t.timeout(5000);
   const powers = makeFakePowers();
-  const { client, turns } = makeFakeHostedClient();
+  const { client, turns, waitForTurn } = makeFakeHostedClient();
   const agent = await makeStreamingAgent(
     powers,
     undefined,
-    { hostedClient: client },
+    { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { hostedContinuity: 'opaque-reconciled' },
+    { journalPowers: powers },
   );
   const controller = new AbortController();
   const { writer, reader } = makeReplyChannel(() => controller.abort());
@@ -248,12 +353,57 @@ test('a checkpoint-reconciled backend still drops a stopped or failed turn', asy
     undefined,
     controller.signal,
   );
-  await waitForTurn(turns, 1);
+  await waitForTurn(1);
   turns[0].push({ type: 'text-delta', text: 'working' });
   await replies.next();
   await replies.return();
   await turnP;
-  t.deepEqual(await agent.getHistory(), []);
+  t.deepEqual(
+    await agent.getHistory(),
+    failedHistory(
+      [
+        { role: 'user', content: 'long task' },
+        { role: 'assistant', content: 'working' },
+      ],
+      'cancelled',
+      'Turn cancelled.',
+    ),
+  );
+});
+
+test('public thinking persists after failure and restart but is absent from model transcript', async t => {
+  t.timeout(5000);
+  const powers = makeFakePowers();
+  const { client, turns, waitForTurn } = makeFakeHostedClient();
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => client },
+    'prompt',
+    { journalPowers: powers },
+  );
+  const run = agent.converse('go', makeReplyChannel().writer);
+  await waitForTurn(1);
+  turns[0].push({ type: 'thinking-delta', text: 'public reasoning' });
+  turns[0].push({ type: 'abort', reason: 'failure' });
+  await t.throwsAsync(run, { message: /failure/ });
+  const history = await agent.getHistory();
+  const thought = history.find(message => message.role === 'thinking');
+  t.is(thought?.content, 'public reasoning');
+  t.is(typeof thought?.thinking.endedAt, 'number');
+  t.false(
+    (await agent.getTranscript()).some(record =>
+      record.content?.includes('public reasoning'),
+    ),
+  );
+  const restored = await makeStreamingAgent(
+    powers,
+    undefined,
+    { kind: 'hosted', provideHostedClient: () => client },
+    'prompt',
+    { journalPowers: powers },
+  );
+  t.deepEqual(await restored.getHistory(), history);
 });
 
 test('extra tools join the session catalog beside the built-ins', async t => {

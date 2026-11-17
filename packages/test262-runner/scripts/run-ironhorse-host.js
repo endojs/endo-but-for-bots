@@ -20,17 +20,23 @@
 //                              not-implemented skip list so the cases are
 //                              attempted rather than pre-skipped on the marker.
 //
-// Today endor's guest `lockdown()`/`Compartment` surface is a named scope
-// fold (only the host-side realm API + guest `harden`/`petrify` are landed),
-// so `-l` FAILS CLOSED: `endot-ih` refuses to start and this script exits
-// nonzero. That is not a CI gate — the `ses-xs-parity` axis is a ratchet and
-// fails no build (see the package README, "Ratchet, not a gate"). It is that
-// a ratchet is only worth the number it records, and every case reporting an
-// honest named skip while the run exits 0 records nothing while looking like
-// a passing third host. The lane starts measuring by landing the guest
-// surface, or by handing `endot-ih` a prelude that supplies it — not by
-// skipping. For a compatibility count today, use `test262:ironhorse-host`,
-// which drives ironhorse as a plain test262 host with no oracle.
+// `-l` used to FAIL CLOSED here: the guest `lockdown()`/`Compartment` surface
+// was a named scope fold, so `endot-ih` refused to start and this script
+// exited nonzero rather than pre-skipping every case and exiting 0 — a lane
+// that records nothing while looking like a passing third host. That is not a
+// CI gate either way; the `ses-xs-parity` axis is a ratchet and fails no build
+// (see the package README, "Ratchet, not a gate"). It is that a ratchet is
+// only worth the number it records.
+//
+// The guest `lockdown()` has since landed, so the lane starts and reports a
+// real number: 0 of 8 covered, 8 named skips. Two skip on
+// `feature:Compartment`, which is still a scope fold; the other six want
+// globals (`frozenBytes`, `compareBytes`, `concatBytes`, `passStyleOf`,
+// `environment`) that no engine has natively, so ironhorse and the XS oracle
+// fail them identically — agreement, hence a skip rather than a divergence.
+// The package README's § The engine lane's zero has the breakdown. For a
+// compatibility count today, use `test262:ironhorse-host`, which drives
+// ironhorse as a plain test262 host with no oracle.
 // Prerequisite (as for the xs
 // host's `xst`): the `c/moddable` submodule for the XS oracle and a Rust
 // toolchain; `cargo` must be on PATH.

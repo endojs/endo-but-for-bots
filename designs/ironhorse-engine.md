@@ -37,7 +37,7 @@ extraction, engine-trait deferral, transcendental providers and consumer-owned G
 | 4. Hardened JavaScript | Partial — bar not met | Object integrity operations exist (`harden`, `petrify`, faithful to `xsLockdown.c`). Shared Realm extraction is implemented. The boot-bundle half of the acceptance is measured and met (`ironhorse-262/tests/stage4_ses_boot.rs`); SES parity acceptance remains open and named skips are not passing acceptance. The deliverable column assumes the native route, which is now an open choice: `rust/thixotrope-ironhorse-worker` already reaches guest `lockdown` and `Compartment` through the SES shim instead, and the two routes exclude each other — [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md). |
 | 5. Compiler port | Landed; full bar not reverified | Lexer, parser, scoper and coder are the default compiler. Historical byte-identity measurements cover named corpora; budgeted compilation and golden costs now share the runtime release identity. No fresh full-conformance oracle run is claimed here. |
 | 6. Snapshots | Partial | Container/store persistence, checked restore and supervisor tests exist. Historically accepted subset expanded substantially; live activations and unsupported side-table states still fail closed. Complete daemon worker protocol integration remains open. |
-| 7. Debugger | Not started as an accepted engine surface | No standalone debugger crate or reproduced xsbug/CapTP acceptance is present. Orchestration labels such as “stage-7 child” in historical evidence do not name this roadmap stage. |
+| 7. Debugger | Not started as an accepted engine surface | No standalone debugger crate or reproduced xsbug/CapTP acceptance is present. Orchestration labels such as "stage-7 child" in historical evidence do not name this roadmap stage. |
 | 8. Parity closure and hardening | Partial — bar not met | Debug/release/macOS, sanitizer and benchmark gates exist. Full result equality, the XS-relative performance/footprint envelope and daemon benchmark arm remain open. |
 | 9. Ecosystem validation | Not started as a completed campaign | No zero-divergence daemon/Agoric corpus acceptance record establishes this bar. |
 
@@ -49,7 +49,7 @@ Matching release, initial state, inputs and host policy are still required.
 The ordinary platform-provider default remains scoped per binary/platform.
 The canonical cost-table SHA-256 identity describes weights, while the boot
 fingerprint also distinguishes provider and locked ICU data profiles.
-This qualification applies to every “deterministic per release” claim below.
+This qualification applies to every "deterministic per release" claim below.
 W6 §4 and [the implementation record](../rust/engine/DETERMINISM-METERING.md)
 record C1–C4 prerequisites, C7 oracle scope, and independent cross-host vectors.
 
@@ -92,6 +92,22 @@ Kill criteria, named up front:
 - The stage 8 performance envelope (geometric mean within 2.0x of
   XS) proves unreachable by more than 2x after the planned
   optimization pass.
+
+  This criterion is LIVE and, as of 2026-09-16, partially
+  instrumented rather than unevaluable (F106/F122).
+  The throughput half is measured: `benches/xs_compare.py`
+  `--check-micro` fails above 2.0x geometric mean on the
+  microbenchmark corpus, nightly.
+  The four-variant daemon arm remains blocked on the worker
+  protocol, and `bench-daemon.js` reports that blocker rather than
+  timing a substitute.
+  Both footprint clauses are measured too: code size at about 6x
+  against a 2x bar, and heap between 0.2x and 2.5x against a 1.1x
+  bar depending on whether the workload churns.
+  So the criterion has an early-warning device for the first time,
+  on the throughput clause; it does not yet have one on the whole
+  envelope, and the README's acceptance table records stage 8 as
+  BAR NOT MET.
 
 ## What Is the Problem Being Solved?
 
@@ -395,11 +411,17 @@ that geometry.
 
 ### Metering (requirement 1a)
 
-**Doctrine (2026-07-04, maintainer directive): accuracy over
-parity.** The meter's purpose is to be the best available
-**deterministic proxy for real (wall-clock) execution cost**, not
-to reproduce XS's computron counts. XS-computron parity is an
-explicit non-goal. Two properties are separated:
+**Doctrine (2026-07-04, maintainer directive; reaffirmed
+2026-09-15): accuracy over parity.** The meter's purpose is to be
+the best available **deterministic proxy for real (wall-clock)
+execution cost**, not to reproduce XS's computron counts. To that
+end Iron Horse's meter MAY diverge from XS's computron counts.
+XS-computron parity is an explicit **non-goal — not a deferred
+goal**: no future stage, defect item, or test may reintroduce it as
+a bar (an optional XS-compatible meter *version* remains possible
+under § Agoric consensus compatibility, conditional (c), which is a
+compatibility surface, not a parity requirement on the native
+meter). Two properties are separated:
 
 - **Determinism within a release binary and platform.**
   The frozen increment points and integer weights determine the charge for a
@@ -669,7 +691,7 @@ Intrinsics contains primordial references and lockdown state, with no interprete
 Boot initializes and freezes the complete graph once; BootTemplate is removed.
 
 Functions and suspended frames capture their defining compartment environment.
-Nested A → B → A calls and promise callbacks use the dispatcher context stack.
+Nested A -> B -> A calls and promise callbacks use the dispatcher context stack.
 Host reentry is refused under the exclusive machine borrow.
 Rooted host values preserve ordinary reference identity and survive collection;
 raw arena coordinates are refused as endowments.
@@ -831,9 +853,9 @@ PR #600 review). The repo already carries a curated, pinned
 test262 subset under `packages/test262-runner/test262/` (the tc39
 `test` and `harness` trees plus additional Moddable and Hardened
 JavaScript tests) and a `test262-harness`-driven runner that today
-proves XS↔Node HardenedJS parity by running the tests marked with
+proves XS<->Node HardenedJS parity by running the tests marked with
 the `ses-xs-parity` feature on both the `xst` (XS) and `node`
-hosts against a SES prelude. ironhorse-262 drives its Ironhorse↔XS
+hosts against a SES prelude. ironhorse-262 drives its Ironhorse<->XS
 **pass-vector (result) parity** off that **same** tree and the
 **same** `ses-xs-parity` feature markers (recording computrons as
 advisory telemetry, § Metering) rather than pinning a
@@ -889,6 +911,35 @@ Fuzzing starts in stage 1 (targets 1 and 2 exist as soon as the
 interpreter subset does) and runs nightly in CI with a checked-in
 corpus and a trophies ledger.
 
+This sentence described an intent for longer than it described the tree, and
+the gap was invisible because each half was true somewhere (F039).
+The nightly lane existed but ran four pure-Rust targets and none of the
+differential ones; "checked-in corpus" was contradicted by
+`ironhorse-fuzz/fuzz/.gitignore`, which excluded `corpus/`, so the only corpus
+lived in a GitHub Actions cache and an eviction reset the search to zero
+silently.
+
+What is true now, stated narrowly.
+Both lanes read their roster from `fuzz/Cargo.toml`, so every declared target
+is fuzzed: `ironhorse-deep-fuzz.yml` for minutes per target nightly, and a
+`fuzz-ironhorse` tripwire in `ci.yml` for seconds per target on every
+engine-relevant pull request.
+`ironhorse-fuzz/fuzz/seeds/` is a checked-in, *derived* seed corpus, built from
+the engine's own writers by
+`cargo run -p ironhorse-fuzz --bin write-seed-corpus` and held current by a
+test, so it cannot go stale the way a collected corpus does.
+What is NOT checked in is the accreted corpus: `corpus/` is still a gitignored
+working directory that lives in the Actions cache, so an eviction still costs
+whatever the search has found since the seeds.
+That is a smaller claim than "a checked-in corpus" and it is the one that
+holds.
+
+Two clauses in item 1 above remain UNMET and are not made true by any of this:
+the generators are `arbitrary`-driven now, but there is no corpus splicing in
+the Fuzzilli style.
+Recorded here because the failure this passage is correcting was precisely a
+true half standing in for a false one.
+
 ### Endor integration (requirement 8)
 
 **Current status:** direct embedding exists in `rust/endo/src/ironhorse_engine.rs`;
@@ -928,6 +979,32 @@ its actual goals:
 - **Footprint**: heap within 1.1x (the slot accounting is
   identical by construction; overhead can come only from arena
   bookkeeping); engine code size within 2x of `libxs.a`.
+
+  *Measured 2026-09-16, and both halves of this clause need
+  amending rather than repeating (F106/F122).*
+  "The slot accounting is identical by construction" was never
+  true: the engine's record is 24 bytes, XS accounts 32, and the
+  per-slot bookkeeping vectors, the chunk arena and the side
+  tables sit outside the accounting entirely.
+  `SlotArena::resident_byte_size` is the honest slot term now, and
+  the comparison has an XS side: the oracle shim reports
+  `currentHeapCount` and `currentChunksSize`, so
+  `ironhorse-262/tests/xs_footprint_bench.rs` can measure both
+  engines over one workload.
+  The answer is not one number. On property access, calls and
+  string work the engine sits near 0.2x XS, which is mostly XS
+  booting a larger intrinsics set. On allocation churn it sits near
+  2.5x, above the bar — and that is precisely where the
+  parenthesis fails, because nothing collects within a crank, so
+  churned garbage is still resident at the boundary.
+  The residue of F010/F076 now has a measured cost.
+  The code-size half now has an instrument,
+  `benches/code_size.py`, and the answer is about **6x**, not
+  within 2x — static-library text against static-library text,
+  an upper bound on a linked artifact.
+  The bar stands as the design's target; what has changed is that
+  it is a measurement rather than an assertion, and the measurement
+  says the target is a long way off.
 - **Latency**: no regression on the pump-loop properties the
   performance design fought for (no sleeps, no polling).
 
@@ -960,73 +1037,6 @@ deliberate: interpreter behavior and compiler behavior are separated
 so a *result* divergence (or a flagged advisory computron/allocation
 drift) always has exactly one suspect.
 
-**Doctrine-transition note (2026-07-04).** The acceptance bars above
-are restated to **result agreement + a deterministic-per-release
-meter**, per the accuracy-over-parity doctrine (§ Metering),
-superseding the earlier "(result, computron) parity against XS"
-framing. The landed-stage records below (stage 2a, stage 2b, and the
-in-flight stage 3) were built and accepted under the *superseded*
-parity doctrine, and did in fact achieve bit-exact computron
-agreement with XS on their covered grammars. That evidence is
-**retained** — as a strong *result*-correctness and
-allocation-faithfulness signal and as free calibration data — but it
-is no longer the bar: those stages already satisfy, a fortiori, the
-weaker result-agreement bar, and future stages are held only to
-result agreement plus meter determinism. No landed work is
-invalidated by the doctrine change; the historical amendment prose
-below is preserved as written, with its "bit-exact computron parity"
-language read as the (now advisory) evidence it produced, not as a
-standing requirement.
-
-**Stage-2 amendment (supervisor, 2026-07-02).** Stage 2 executes as two
-sub-stages on this PR, because the stage-2 build established — and the
-supervisor verified against the pin's `xsMemory.c` — that bit-exact
-computron parity on *any* program that allocates at run time requires
-the allocation-faithful object heap first: XS meters every `fxNewSlot`
-(`XS_SLOT_ALLOCATION_METERING`, 1<<8), every chunk byte
-(`XS_CHUNK_ALLOCATION_METERING`, 1), and built-in steps (1<<14) on the
-property paths, so the count depends on the engine's exact allocation
-sequence, not just its dispatch sequence. **Stage 2a (landed):** program
-frame + scope/variable/loop interpreter over compiler-emitted bytecode,
-GC v1 (mark-sweep + chunk slide-compaction, ordinary unit-tested), real
-`Compartment.evaluate` global binding, and the instruction-length
-walker; its new grammar is verified for **result agreement only** and
-deliberately kept out of the bit-exact corpus rather than faked.
-**Stage 2b (next):** the object model — instances, prototypes, property
-behaviors, closures via heap cells, exceptions' jump-chain, call/return
-frame switching, full 245-opcode coverage (built-ins stubbed) — with
-allocation-faithful metering; the original stage-2 acceptance bar
-(bit-exact test262 `language/` dual-run agreement on the covered
-grammar) is 2b's bar, and the 2a grammar graduates into the bit-exact
-corpus as the heap makes its computrons faithful. Meter-check placement
-moves with the frame machinery: per the pin's `xsRun.c`, checks belong
-at the `mxFirstCode` sites (call entry, return-into-a-JS-caller, catch
-resume) and at backward branches; XS runs **no** check when
-END/RETURN exits to the C caller, and `fxBeginMetering` scales the
-host's interval `<<16` and resets `meterIndex` — both to be matched
-exactly (stage-2a review findings 1 and 2).
-
-**Stage-2b complete (2026-07-03).** The three-part 2b orchestration landed:
-child 1 the allocation-faithful object heap, child 2 call/return frame
-switching and closures via heap cells, child 3 exceptions (the XS
-jump-buffer chain with the JS/host flag reduced to a structural predicate:
-`catch`/`uncatch`/`exception`/`throw`/`rethrow`, uncaught propagation to the
-host boundary with its measured host-escape metering), full 245-opcode
-decode+dispatch coverage (built-ins stubbed — each opcode executes with
-faithful stack/frame/meter effects where its semantics need no built-in, or
-halts `Unsupported` self-naming where they do), and the tightened
-`DualRun::is_bit_exact` (a shared abort compares thrown value AND computrons,
-like the completion arm). The stage-2 acceptance bar is met as the real
-test262 `language/` dual-run runner (`ironhorse_262::test262`): every test it
-runs end-to-end agrees bit-exactly (result/thrown-value AND computron) with
-the XS oracle — **zero divergence** — with the covered/skipped split
-stated honestly (each skip named by the unsupported opcode or built-in gap,
-never folded into a pass rate). The covered grammar is what stage 2b models;
-the built-ins the bulk of `language/` needs arrive in later stages, growing
-the covered count against the same zero-divergence bar. The differential
-fuzz grammar now spans objects, calls, closures, and thrown-and-caught
-exceptions, all bit-exact.
-
 **Stage-3 decomposition (supervisor, 2026-07-03).** The stage-2b review
 (s5, all acceptance evidence independently reproduced; all three s4
 findings verified closed) accepted stage 2 and confirmed stage 3 is
@@ -1053,7 +1063,7 @@ meter's internal fast/slow-path consistency within a release):
    width-not-depth geometry) so stack-exhaustion aborts are bit-exact —
    deterministic stack overflow is consensus-relevant in the xsnap
    lineage — and decompose the measured `FUNCTION_*` definition
-   constants analytically to retire the ≤~288-raw per-definition
+   constants analytically to retire the <=~288-raw per-definition
    residuals.
 2. **fundamentals** — constructor calls (`to_instance`/`new`/`target`/
    `instantiate`), Object, Function.prototype (`call`/`apply`/`bind`/
@@ -1272,7 +1282,7 @@ annotations inline mark exactly what changed.
    stay `-e xs` / `-e endor-rs`, and `endor-xs` / `endor-rs` /
    `endocr` name the resulting build variants. **Open — routed to
    the maintainer, not resolved here:** the user-facing CLI binary
-   was renamed `endor` → `endot`
+   was renamed `endor` -> `endot`
    ([issuecomment-4900059356](https://github.com/endojs/endo-but-for-bots/pull/600#issuecomment-4900059356)),
    which this north-star reads against — if `endor` is to name the
    Rust Endo tool, the `endot` binary rename likely wants reverting
@@ -1292,32 +1302,32 @@ annotations inline mark exactly what changed.
    `endor-xs` / `endor-rs` / `endocr` are retired as variant names
    (the combined C-and-Rust build is now just "the `xs-oracle`
    harness", still the sole place C is compiled in). The full
-   before→after map: crates `endor-vm` → `ironhorse-vm`,
-   `endor-compile` → `ironhorse-compile`, `endor-snapshot` →
-   `ironhorse-snapshot`, `endor-regexp` → `ironhorse-regexp`,
-   `endor-262` → `ironhorse-262`, `endor-fuzz` → `ironhorse-fuzz`,
-   `endor-oracle` → `xs-oracle` (the oracle binds the XS engine, so
-   it names what it binds); the test262 runner `endor-xst` →
-   `endot-ih`; the cargo feature `endor-engine` →
-   `ironhorse-engine`; the daemon seam module `endor_engine` →
+   before->after map: crates `endor-vm` -> `ironhorse-vm`,
+   `endor-compile` -> `ironhorse-compile`, `endor-snapshot` ->
+   `ironhorse-snapshot`, `endor-regexp` -> `ironhorse-regexp`,
+   `endor-262` -> `ironhorse-262`, `endor-fuzz` -> `ironhorse-fuzz`,
+   `endor-oracle` -> `xs-oracle` (the oracle binds the XS engine, so
+   it names what it binds); the test262 runner `endor-xst` ->
+   `endot-ih`; the cargo feature `endor-engine` ->
+   `ironhorse-engine`; the daemon seam module `endor_engine` ->
    `ironhorse_engine`; the snapshot image magic
-   `ENDOR_MAGIC`/`b"ENDR"` → `IRONHORSE_MAGIC`/`b"IRON"`; the
-   differential labels `ENDOR-REJECTED` / `ENDOR-ONLY-ACCEPT` →
+   `ENDOR_MAGIC`/`b"ENDR"` -> `IRONHORSE_MAGIC`/`b"IRON"`; the
+   differential labels `ENDOR-REJECTED` / `ENDOR-ONLY-ACCEPT` ->
    `IRONHORSE-REJECTED` / `IRONHORSE-ONLY-ACCEPT`; the corpus
    feature labels `endor-dual-run`, `endor-meter-exact`,
-   `endor-meter-determinism` → `ironhorse-dual-run`,
+   `endor-meter-determinism` -> `ironhorse-dual-run`,
    `ironhorse-meter-exact`, `ironhorse-meter-determinism`; the host
-   script `yarn test262:endor` → `yarn test262:ironhorse`; this
-   document family `xs2rust-endor-*.md` → `ironhorse-*.md`. The
+   script `yarn test262:endor` -> `yarn test262:ironhorse`; this
+   document family `xs2rust-endor-*.md` -> `ironhorse-*.md`. The
    `endor` daemon binary, the tool-facing design docs
    (`daemon-endor-architecture`, `endor-run-expanded`,
-   `endor-npm-registry-proxy`, …), and `ENDOR_REGISTRY_LIVE_TEST`
+   `endor-npm-registry-proxy`, ...), and `ENDOR_REGISTRY_LIVE_TEST`
    keep their names — they name the binding, not the engine.
    Retained transitional identifiers, deliberately not rewritten:
    the branch `xs2rust-endor`; historical job basenames
    (`xs2rust-endor-strings-utf16`, `xs2rust-endor-build-stage3`,
    `port-endor-oracle-bump-8-3-1`,
-   `xs2rust-endor-meter-calibration-stage-c1`…`-c4`); the program
+   `xs2rust-endor-meter-calibration-stage-c1`...`-c4`); the program
    name `port-xs-to-rust-memory-safe-engine`; commit messages; the
    quoted 2026-07-17 directive above; and the verification-ledger
    blockquotes in `rust/engine/CHANGELOG.md`, whose crate names and

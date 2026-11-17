@@ -5,9 +5,12 @@
 # comparison and generation logic lives in the ironhorse-fuzz lib, which the
 # engine workspace builds and unit-tests without a libFuzzer toolchain.
 #
-# NOTE: fuzzing no longer runs in pull-request CI — a garden background service
-# drives these targets continuously over a persistent corpus and files each finding
-# as a standing repair PR. These targets remain fully runnable locally.
+# NOTE: both CI lanes read their roster from THIS FILE's `[[bin]]` names rather
+# than naming a subset, so adding a target here is all it takes to have it
+# fuzzed — by `ci.yml`'s `fuzz-ironhorse` tripwire on every engine-relevant
+# pull request and by `ironhorse-deep-fuzz.yml` nightly. A garden background
+# service drives them continuously as well. These targets remain fully
+# runnable locally.
 [package]
 name = "ironhorse-fuzz-targets"
 version = "0.0.0"
@@ -85,11 +88,29 @@ path = "fuzz_targets/guest_no_abort.rs"
 test = false
 doc = false
 
-[workspace]
-# Own workspace: cargo-fuzz builds this tree in isolation.
-
 [[bin]]
 name = "utf16_boundary"
 path = "fuzz_targets/utf16_boundary.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "store_decoder"
+path = "fuzz_targets/store_decoder.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "differential_stage3_surface"
+path = "fuzz_targets/differential_stage3_surface.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "differential_cranks"
+path = "fuzz_targets/differential_cranks.rs"
+test = false
+doc = false
+
+[workspace]
+# Own workspace: cargo-fuzz builds this tree in isolation.

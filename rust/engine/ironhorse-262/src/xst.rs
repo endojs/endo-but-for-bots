@@ -22,7 +22,7 @@
 use crate::expectations::{Mode, Outcome};
 use crate::frontmatter::{self, Frontmatter, Negative};
 use crate::report::CaseRecord;
-use crate::{dual_run, dual_run_async, Agreement, AsyncDualRun, DualRun, IronhorseCompile};
+use crate::{Agreement, AsyncDualRun, DualRun, IronhorseCompile};
 use ironhorse_vm::halt_labels::{is_not_implemented_label, is_refused_label};
 use ironhorse_vm::{Halt, RunOutcome};
 use std::collections::{BTreeMap, HashSet};
@@ -53,21 +53,25 @@ pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
     // host exclusion below, not a feature pre-skip.
     "tail-call-optimization",
     "IsHTMLDDA",
-    // The guest Hardened-JavaScript surface ironhorse does not yet expose as a
-    // guest-callable intrinsic: `lockdown()` (a named scope fold in
-    // `ironhorse-vm::interp::create_hardened_globals`) and the `Compartment`
-    // constructor (a named scope fold in `ironhorse-vm::compartment`, modeled as
-    // a host-side Rust realm API, not a guest intrinsic). ironhorse DOES land the
-    // guest `harden`/`petrify` globals, so those are never skipped. This is
-    // the direct `xst262.c` `gxFeatures` analogue — a feature the *engine*
-    // does not implement — and is trimmed as the guest surface lands. A
-    // `ses-xs-parity` test that needs either self-names `feature:Compartment`
-    // / `feature:lockdown` here rather than a generic run-time abort.
-    "lockdown",
-    "Compartment",
-    // Hardened-JavaScript / SES parity opt-in set: needs the stage-4
-    // lockdown/Compartment surface, not yet landed. Opt in explicitly with
-    // `--features-include ses-xs-parity` once it does.
+    // `lockdown` LEFT this list: `create_hardened_globals` binds it alongside
+    // `harden` and `petrify` (`designs/ironhorse-native-lockdown.md`).
+    // `Compartment` left it too: `Native::Compartment` is a guest intrinsic
+    // (`designs/ironhorse-guest-compartment.md`), so a case declaring
+    // `features: [Compartment]` now RUNS rather than pre-skipping, and the two
+    // `ses-xs-parity` cases that declare it are covered.
+    // `mutabilities` was never on it and is still unbound; nothing in the
+    // corpus declares it as a feature.
+    //
+    // A note kept from when `Compartment` was listed, because the file's own
+    // history is misleading on it: an earlier revision of this comment called
+    // these a "named scope fold" that self-names an honest
+    // `Halt::NotImplemented`. Measured 2026-09-16, an unbound global was a
+    // plain `ReferenceError` with no dispatch behind it at all. Do not infer
+    // a halt from an absence.
+    //
+    // Hardened-JavaScript / SES parity opt-in set: selects a corpus rather
+    // than naming a surface, so it stays opt-in through `--features-include`
+    // however much of that surface has landed.
     "ses-xs-parity",
 ];
 
@@ -80,15 +84,22 @@ pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
 /// engine design promises: the `ses-xs-parity` axis runs `xst -l`, `node`
 /// with the SES prelude, and `endot-ih -l`.
 ///
-/// Because the guest surface these modes need (`lockdown()`, the
-/// `Compartment` intrinsic) is a named scope fold ironhorse does not yet expose
-/// (only the host-side realm API + the guest `harden`/`petrify` globals are
-/// landed), a case run under a mode other than [`SesMode::None`] is a
-/// whole-case *named* pre-skip ([`SesMode::unimplemented_skip`]) rather than
-/// a generic abort or a false failure — the honest split. When the guest
-/// `lockdown`/`Compartment`
-/// surface lands, `unimplemented_skip` returns `None` and the mode's prelude
-/// ([`SesMode::prelude`]) is applied to the assembled source.
+/// `lockdown()` is a guest-callable native. [`SesMode::Lockdown`] runs it in
+/// a setup Script after the harness and before compiling/evaluating the case.
+/// It must be a separate phase: prepending a call to the case would let case
+/// declarations shadow it and would disable raw directive prologues/hashbangs.
+/// The executable regressions live in `tests/lockdown_setup.rs`.
+///
+/// `Compartment` has landed too (`Native::Compartment`,
+/// `designs/ironhorse-guest-compartment.md`), so a corpus case that reads
+/// `Compartment.prototype` RUNS under `-l` rather than pre-skipping on
+/// `feature:Compartment`. The `-c`/`-lc` wraps are still whole-case *named*
+/// pre-skips ([`SesMode::unimplemented_skip`]) — not because the constructor
+/// is missing, but because nobody has yet run the corpus under a compartment
+/// wrap and read the result. See that function.
+///
+/// The three remain independent: `lockdown()` landing did nothing for
+/// `-c`/`-lc`, and neither did `Compartment`'s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SesMode {
     /// No lockdown/compartment setup (the default; `xst` with no `-l`/`-c`).
@@ -125,27 +136,15 @@ impl SesMode {
         }
     }
 
-    /// The Hardened-JavaScript prelude/wrap the mode applies to the assembled
-    /// case — `xst`'s `lockdown()` call and/or `Compartment` evaluation. This
-    /// is the shape that runs *once the guest surface lands*; today
-    /// [`Self::unimplemented_skip`] short-circuits before it is reached, so it
-    /// is the documented target, exercised by a unit test but not yet on the
-    /// live run path. `{body}` is where the assembled source is spliced.
-    pub fn prelude(self) -> &'static str {
-        match self {
-            SesMode::None => "{body}",
-            SesMode::Lockdown => "lockdown();\n{body}",
-            // The compartment wrap evaluates the assembled body in a fresh
-            // compartment over the (optionally locked-down) shared intrinsics
-            // — `new Compartment().evaluate(<body>)` in `xst`. ironhorse splices
-            // the body directly (not as a string) since the guest evaluator
-            // is what lands; until then this is unreached.
-            SesMode::Compartment => "new Compartment().evaluate(function(){\n{body}\n});",
-            SesMode::LockdownCompartment => {
-                "lockdown();\nnew Compartment().evaluate(function(){\n{body}\n});"
-            }
-        }
-    }
+    // **There is deliberately no `prelude()` here.** There was: a
+    // `"lockdown();\n{body}"` template whose only callers were its own unit
+    // tests, which is how `-l` came to run a whole corpus unlocked while a
+    // green test asserted on the template (§ Status of
+    // `designs/ironhorse-native-lockdown.md`). What the mode contributes now
+    // is written once, in `assemble`, where the setup Script is built, and
+    // `a_lockdown_mode_actually_splices_the_call` asserts on what that
+    // PRODUCES. A second description of the same thing is what there is no
+    // room for.
 
     /// The honest named skip a mode incurs while its guest surface is a scope
     /// fold, or `None` once ironhorse exposes the guest `lockdown`/`Compartment`
@@ -162,7 +161,21 @@ impl SesMode {
     pub fn unimplemented_skip(self) -> Option<&'static str> {
         match self {
             SesMode::None => None,
-            SesMode::Lockdown => Some("ses-mode:lockdown-unimplemented"),
+            // `lockdown()` is a guest-callable native
+            // (`ironhorse-vm::Interp::do_lockdown`), so `-l` runs the corpus
+            // rather than pre-skipping it.
+            SesMode::Lockdown => None,
+            // Still folded, but NOT for the reason recorded here until the
+            // guest `Compartment` landed. `new Compartment()` exists now
+            // (`designs/ironhorse-guest-compartment.md`), so the wrap is
+            // expressible; what has not happened is measuring the corpus
+            // under it. Turning these on means running 35891 files in a
+            // compartment against the oracle in both modes and reading the
+            // result, which is its own change and its own number.
+            //
+            // The skip reasons keep their names so `report.rs`'s
+            // classification and the expectation files that quote them do not
+            // churn ahead of that measurement.
             SesMode::Compartment => Some("ses-mode:compartment-unimplemented"),
             SesMode::LockdownCompartment => Some("ses-mode:lockdown-compartment-unimplemented"),
         }
@@ -189,8 +202,13 @@ pub struct Config {
     /// installs both. Ironhorse with `prelude/ironhorse.js` takes the same
     /// shape: its own `harden`, the shim's `lockdown`.
     ///
-    /// [`SesMode`] is the separate, NATIVE route and stays unimplemented. A
-    /// prelude does not make `-l` work; it makes `-l` unnecessary.
+    /// [`SesMode`] is the separate, NATIVE route. Its `-l` half is now
+    /// implemented, so the two routes to a locked-down realm coexist and a
+    /// caller picks one: `--prelude prelude/ironhorse.js` runs SES's
+    /// `lockdown()` (which overwrites the native binding, exactly as it
+    /// overwrites XS's), while `-l` alone runs the engine's. `-c`/`-lc` still
+    /// need a guest `Compartment` and a prelude is still the only way to get
+    /// one.
     pub prelude: Option<String>,
     /// Compatibility flag: XS cost drift is always advisory.
     /// Ironhorse's release corpus, not oracle cost parity, gates metering.
@@ -212,7 +230,8 @@ pub struct Config {
     /// endot-ih's skip-list `--features-include`). Empty = no filter. Used
     /// to restrict a whole-tree walk to the `ses-xs-parity` axis.
     pub feature_filter: Vec<String>,
-    /// `--case-timeout SECS`: the hard per-case wall-clock bound. Both the XS
+    /// `--case-timeout SECS`: the hard wall-clock bound on each mode a case
+    /// runs, so a default two-mode case gets twice it. Both the XS
     /// oracle and the ironhorse VM can non-terminate on a pathological source
     /// (e.g. `for (const i = 0; i < 1; i++) {}`, where a missing
     /// assign-to-const `TypeError` spins the loop), so each case is dispatched
@@ -276,8 +295,9 @@ pub enum Verdict {
     /// extension over `xst`).
     RunSkip(String),
     /// A real failure the bar forbids: a divergence from the oracle verdict
-    /// or observable, an over-acceptance, a gated meter-exact violation, or
-    /// a determinism failure. The report's `fail:` section.
+    /// or observable, an over-acceptance, a stale engine-versioned raw meter
+    /// pin (Iron Horse's OWN frozen cost — never XS's), or a determinism
+    /// failure. The report's `fail:` section.
     Fail(String),
 }
 
@@ -326,6 +346,16 @@ fn preskip(reason: &str) -> CaseResult {
 ///
 /// `ses-xs-parity` is deliberately NOT here: it selects a corpus rather than
 /// naming a surface, and stays opt-in through `--features-include`.
+///
+/// **Both names are now inert**, and the list is kept for what it says rather
+/// than for what it does. The filter below is an intersection with
+/// [`DEFAULT_ENDOR_SKIP_FEATURES`], and neither `lockdown` nor `Compartment`
+/// is on that list any more -- the engine binds both
+/// (`designs/ironhorse-native-lockdown.md`,
+/// `designs/ironhorse-guest-compartment.md`). Keeping them makes the pair
+/// readable as "the surface a prelude supplies" rather than as "the surface
+/// the engine lacks", which are now disjoint: a prelude still supplies both,
+/// it is simply no longer the only way to get either.
 const FEATURES_SUPPLIED_BY_PRELUDE: &[&str] = &["lockdown", "Compartment"];
 
 /// The effective feature skip set: the default not-implemented list minus
@@ -411,65 +441,141 @@ pub fn ironhorse_negative_ok(ty: &str, run: &DualRun) -> bool {
     }
 }
 
-/// Assemble the sloppy source both engines run — the standard test262 order
-/// (`sta.js`, `assert.js`, each `includes:` file, the body), or the body
-/// verbatim for a `raw` test. Structural shapes the differential cannot
-/// model (`module`, `async`) are handled by the caller before this; a
-/// missing harness file is a named structural skip.
-/// `prelude` is `--prelude`'s source, evaluated after the harness includes and
-/// before the body -- the ordering `packages/test262-runner`'s own
-/// `test262:xs:text-codec-arraybuffer` documents (`sta.js assert.js
-/// compareArray.js prelude/xs.js <case>`), and the one a SES prelude requires:
-/// it captures test262's `assert` on the way past, which means `assert.js` has
-/// to have run already.
+/// Separately compiled test setup and subject. Harness includes and optional
+/// SES prelude run before native lockdown. Raw subjects omit the harness and
+/// optional prelude, while still receiving the host-selected native lockdown.
+#[derive(Debug)]
+struct Assembly {
+    setup: String,
+    body: String,
+}
+
+/// Test setup and subject are different scripts, as in xst262.c. Concatenating
+/// them lets case declarations hijack lockdown and destroys raw directive
+/// prologues/hashbangs. Setup ends with an inert completion value so capturing
+/// it cannot run guest coercion between phases.
 ///
-/// A `raw`-flagged case gets NO prelude, for the same reason it gets no
-/// harness: `raw` means the executed Script is exactly this source, and
-/// prepending a megabyte of shim would change what the case is testing.
+/// This is also where the `ironhorse-meter-5-raw-N` pins changed meaning: the
+/// subject's raw cost is now its own, where a concatenated source charged it
+/// for the harness as well. The 66 harness-using pins in `test/ironhorse/`
+/// were regenerated against the case script alone, each dropping the same
+/// 9,182,752 raw units; the `raw`-flagged pins, which never carried a harness,
+/// are unchanged. `corpus_conversion_equivalence` is the gate that reads them.
 fn assemble(
     harness_dir: &Path,
     src: &str,
     fm: &Frontmatter,
     prelude: Option<&str>,
-) -> Result<String, String> {
-    if fm.flags.iter().any(|f| f == "raw") {
-        return Ok(src.to_string());
+    ses_mode: SesMode,
+) -> Result<Assembly, String> {
+    let mut setup = String::new();
+    if !fm.flags.iter().any(|f| f == "raw") {
+        let read = |name: &str| -> Result<String, String> {
+            std::fs::read_to_string(harness_dir.join(name))
+                .map_err(|e| format!("structural:missing-harness:{name}:{e}"))
+        };
+        setup.push_str(&read("sta.js")?);
+        setup.push_str("\n;\n");
+        setup.push_str(&read("assert.js")?);
+        setup.push_str("\n;\n");
+        for inc in &fm.includes {
+            setup.push_str(&read(inc)?);
+            setup.push_str("\n;\n");
+        }
+        if let Some(prelude) = prelude {
+            setup.push_str(prelude);
+            setup.push_str("\n;\n");
+        }
     }
-    let read = |name: &str| -> Result<String, String> {
-        std::fs::read_to_string(harness_dir.join(name))
-            .map_err(|e| format!("structural:missing-harness:{}:{}", name, e))
-    };
-    let mut out = String::new();
-    out.push_str(&read("sta.js")?);
-    out.push('\n');
-    out.push_str(&read("assert.js")?);
-    out.push('\n');
-    for inc in &fm.includes {
-        out.push_str(&read(inc)?);
-        out.push('\n');
+    match ses_mode {
+        SesMode::None => {}
+        SesMode::Lockdown => setup.push_str("lockdown();\n"),
+        _ => return Err(ses_mode.unimplemented_skip().unwrap().into()),
     }
-    if let Some(prelude) = prelude {
-        out.push_str(prelude);
-        out.push_str("\n;\n");
-    }
-    out.push_str(src);
-    Ok(out)
+    setup.push_str("void 0;\n");
+    Ok(Assembly {
+        setup,
+        body: src.into(),
+    })
 }
 
-/// Assemble the strict variant of a normal test262 script.  The directive is
-/// inserted at the beginning of the executed Script. The harness is part of
-/// that Script in this runner, so putting it before only the body would be
-/// inert rather than a Directive Prologue.
 fn assemble_strict(
     harness_dir: &Path,
     src: &str,
     fm: &Frontmatter,
     prelude: Option<&str>,
-) -> Result<String, String> {
-    Ok(format!(
-        "\"use strict\";\n{}",
-        assemble(harness_dir, src, fm, prelude)?
-    ))
+    ses_mode: SesMode,
+) -> Result<Assembly, String> {
+    let mut assembly = assemble(harness_dir, src, fm, prelude, ses_mode)?;
+    // A hashbang must remain the first line even when the host requests strict
+    // execution; the directive belongs immediately after that comment.
+    assembly.body = if src.starts_with("#!") {
+        let line_end = src.find('\n').map_or(src.len(), |i| i + 1);
+        format!(
+            "{}\n\"use strict\";\n{}",
+            &src[..line_end],
+            &src[line_end..]
+        )
+    } else {
+        format!("\"use strict\";\n{src}")
+    };
+    Ok(assembly)
+}
+
+fn run_assembly(assembly: &Assembly, signal: Option<&str>) -> Option<Vec<AsyncDualRun>> {
+    crate::dual_run_scripts(&[&assembly.setup, &assembly.body], signal)
+}
+
+fn phase_fingerprint(runs: &[AsyncDualRun]) -> Vec<Fingerprint> {
+    runs.iter().map(Fingerprint::asynchronous).collect()
+}
+
+/// Classify a setup phase that did not complete.
+///
+/// A structural stop IronHorse names in setup is the same honest named skip it
+/// would be in the body: a harness include that reaches an unimplemented
+/// opcode, or a profile refusal, means the case never ran, and reporting that
+/// as a conformance failure counts a case IronHorse declined as a case
+/// IronHorse got wrong. Concatenation used to give those cases the body's
+/// classification for free, because there was only one script.
+///
+/// Everything else stays a failure, and deliberately: a harness or `--prelude`
+/// that THROWS is a broken lane rather than a property of the case, and a
+/// setup error must never be able to satisfy a negative case's expectation
+/// (`lockdown_setup.rs::setup_errors_cannot_satisfy_a_negative_case`).
+fn setup_halt_verdict(halt: &Halt) -> Verdict {
+    match halt {
+        // One refusal is never the case's business: the mode's own
+        // `lockdown()` giving up means `-l` did not lock anything down, and a
+        // named skip would turn that into a quiet wave of unrun cases. The
+        // lane has been mis-read that way once already (§ Status of
+        // `designs/ironhorse-native-lockdown.md`).
+        Halt::Refused(op) if op.starts_with("lockdown:") => {
+            Verdict::Fail(format!("setup failed: the mode's lockdown refused: {op}"))
+        }
+        Halt::NotImplemented(op) => declined_verdict(op),
+        Halt::Refused(op) => refused_verdict(op),
+        Halt::Decode(_) => Verdict::RunSkip("parse-or-decode".into()),
+        other => Verdict::Fail(format!("setup failed: ironhorse={other:?}")),
+    }
+}
+
+fn setup_failure(runs: &[AsyncDualRun]) -> Option<Verdict> {
+    if runs.len() == 2 {
+        return None;
+    }
+    let Some(phase) = runs.first() else {
+        return Some(Verdict::Fail("setup did not execute".into()));
+    };
+    Some(match setup_halt_verdict(&phase.run.ironhorse_halt) {
+        // The oracle's side belongs in the message only when this is a
+        // failure; a named skip is IronHorse's own classification.
+        Verdict::Fail(_) => Verdict::Fail(format!(
+            "setup failed: oracle={:?} ironhorse={:?}",
+            phase.run.oracle_error, phase.run.ironhorse_halt
+        )),
+        named => named,
+    })
 }
 
 struct Eval {
@@ -481,9 +587,14 @@ struct Eval {
 /// frontmatter (the negative/positive split). Shared by the synchronous
 /// [`evaluate`] path and the async path ([`run_async_case`]), which supplies
 /// its own dual-run so it can additionally read the completion latch.
-// Proprietary corpus cases may pin an engine-versioned raw total rather than
-// XS computrons: ironhorse-meter-5-raw-N. Keep semantics and strict-mode rules
-// identical, and reject malformed/conflicting pins when the gate is enabled.
+// Proprietary corpus cases may pin an engine-versioned raw total, for example
+// `ironhorse-meter-9-raw-N`: Iron Horse's own frozen cost, the only meter
+// value the gate can fail on. The historical `ironhorse-meter-exact` tag
+// (XS-computron evidence) also matches this predicate but activates no gate:
+// XS cost drift is always advisory (XS-computron parity is a non-goal), and
+// the generator no longer emits that tag. Keep semantics and strict-mode
+// rules identical, and reject malformed/conflicting pins when the gate is
+// enabled.
 fn is_exact_meter_feature(feature: &str) -> bool {
     feature.starts_with("ironhorse-meter-") && feature != "ironhorse-meter-determinism"
 }
@@ -503,12 +614,12 @@ fn verdict_for(cfg: &Config, run: &DualRun, fm: &Frontmatter, meter_exact_gate: 
     if meter_exact_gate && !pins.is_empty() {
         if pins.len() != 1
             || fm.features.iter().any(|f| f == "ironhorse-meter-exact")
-            || ironhorse_vm::meter::COST_TABLE_VERSION != "ironhorse-meter-5"
+            || ironhorse_vm::meter::COST_TABLE_VERSION != "ironhorse-meter-9"
         {
             return Verdict::Fail("invalid or incompatible version-4 meter pin".into());
         }
         let Some(expected) = pins[0]
-            .strip_prefix("ironhorse-meter-5-raw-")
+            .strip_prefix("ironhorse-meter-9-raw-")
             .and_then(|n| n.parse::<u64>().ok())
         else {
             return Verdict::Fail("invalid version-4 raw meter pin".into());
@@ -524,26 +635,27 @@ fn verdict_for(cfg: &Config, run: &DualRun, fm: &Frontmatter, meter_exact_gate: 
 }
 
 /// Evaluate one assembled sloppy source against the oracle differential.
-fn evaluate(cfg: &Config, source: &str, fm: &Frontmatter, meter_exact_gate: bool) -> Eval {
-    let run = match dual_run(source) {
-        Some(r) => r,
-        None => {
-            return Eval {
-                outcome: Verdict::RunSkip("oracle-machine-error".into()),
-                computron_gap: false,
-            }
-        }
+fn evaluate(cfg: &Config, assembly: &Assembly, fm: &Frontmatter, meter_exact_gate: bool) -> Eval {
+    let Some(runs) = run_assembly(assembly, None) else {
+        return Eval {
+            outcome: Verdict::RunSkip("oracle-machine-error".into()),
+            computron_gap: false,
+        };
     };
-    let outcome = if determinism_violation(cfg.repeat, &Fingerprint::sync(&run), || {
-        dual_run(source).map(|run| Fingerprint::sync(&run))
+    if let Some(outcome) = setup_failure(&runs) {
+        return Eval {
+            outcome,
+            computron_gap: false,
+        };
+    }
+    let run = &runs.last().unwrap().run;
+    let outcome = if determinism_violation(cfg.repeat, &phase_fingerprint(&runs), || {
+        run_assembly(assembly, None).map(|runs| phase_fingerprint(&runs))
     }) {
         nondeterministic(cfg.repeat)
     } else {
-        verdict_for(cfg, &run, fm, meter_exact_gate)
+        verdict_for(cfg, run, fm, meter_exact_gate)
     };
-    // The computron comparison is advisory (accuracy-over-parity): a covered
-    // case whose computrons drift from the oracle's is telemetry, folded
-    // into the report's `advisory:` section, never a failure on its own.
     let computron_gap =
         matches!(outcome, Verdict::Covered) && run.oracle_computrons != run.ironhorse_computrons;
     Eval {
@@ -1210,12 +1322,16 @@ fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
 /// * **oracle surprise** — the XS oracle did NOT reject a source test262 marks as
 ///   an early error; the differential authority disagrees, so we do not claim
 ///   coverage (`negative-oracle-unexpected`).
-/// * **compiler coverage gap** — ironhorse-compile panicked, or declined an
-///   unported-but-valid construct ([`IronhorseCompile::Unsupported`]); either is
-///   an Ironhorse compiler gap named `compiler-unimplemented:<phase>` (→
+/// * **compiler coverage gap** — ironhorse-compile declined an
+///   unported-but-valid construct ([`IronhorseCompile::Unsupported`]): an
+///   Ironhorse compiler gap named `compiler-unimplemented:<phase>` (→
 ///   `Category::Unsupported`), never a covered early error. A refusal to *parse*
 ///   an unported construct must not be counted as a correct *rejection* of a
 ///   forbidden one.
+/// * **compiler fault** — ironhorse-compile PANICKED
+///   ([`IronhorseCompile::Panicked`]): not a gap and not a skip but a
+///   `Fail` named `compiler-panicked:<phase>` (→
+///   `Category::IronhorseFailure`), which reddens `met_bar`.
 fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
     if xs_oracle::is_resource_abort(run.oracle_exit_status) {
         return Verdict::RunSkip("oracle-host-stack-limit".into());
@@ -1231,16 +1347,33 @@ fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdi
     let oracle_parse_rejected = !run.oracle_parsed || oracle_negative_ok(&neg.ty, run);
 
     match &run.ironhorse_compile {
-        // ironhorse-compile reached a deferred/unimplemented path — it either
-        // folded (panicked) or returned a structured `Unsupported`-kind error
-        // for an unported-but-valid construct. Both are an Ironhorse *compiler
+        // A structured `Unsupported`-kind error: ironhorse-compile declined an
+        // unported-but-valid construct. That is an Ironhorse *compiler
         // coverage gap*, named `compiler-unimplemented:<phase>` (→
         // `Category::Unsupported`), never a covered early error and never
         // silently relabeled a pass: a front end that merely cannot parse the
-        // construct has not *rejected* the forbidden one.
-        IronhorseCompile::Panicked(_) | IronhorseCompile::Unsupported(_) => {
+        // construct has not *rejected* the forbidden one. A panic is a
+        // different thing and takes the arm below.
+        IronhorseCompile::Unsupported(_) => {
             Verdict::RunSkip(format!("compiler-unimplemented:{}", neg.phase))
         }
+
+        // A PANIC is not, and it is not a SKIP either. It is the compiler
+        // violating its own invariant, so it is a `Fail` under its own label
+        // (-> `Category::IronhorseFailure`, the report's headline correctness
+        // column, and a red `met_bar`).
+        //
+        // It shared `compiler-unimplemented:<phase>` with the coverage gap
+        // above for five revisions, which is the distinction a consensus
+        // engine needs and the one it did not have: an engine fault read as
+        // missing coverage (architecture finding F063). Filing it as a named
+        // RunSkip instead was the first attempt at the split and was still
+        // wrong twice over: an unclassified skip label falls to
+        // `Category::Infrastructure`, i.e. "oracle/harness non-results, NOT
+        // Ironhorse gaps", so the fault left the Ironhorse column entirely;
+        // and a skip is by construction excused, which is what a fault must
+        // never be.
+        IronhorseCompile::Panicked(_) => Verdict::Fail(format!("compiler-panicked:{}", neg.phase)),
 
         // ironhorse's own front end raised the early error.
         IronhorseCompile::Rejected(_) => {
@@ -1366,6 +1499,9 @@ const ASYNC_SIGNAL_NAME: &str = "__endorAsyncSignal";
 /// defines to write the same sentinel — so either path records the same
 /// `Test262:AsyncTest{Complete,Failure:…}` marker string.
 const ASYNC_PRELUDE: &str = r#"function $DONE(error) {
+  if (typeof __endorAsyncSignal === 'string' && __endorAsyncSignal.indexOf('Test262:AsyncTestFailure') === 0) {
+    return;
+  }
   if (error) {
     if (typeof error === 'object' && error !== null && 'name' in error) {
       __endorAsyncSignal = 'Test262:AsyncTestFailure:' + error.name + ': ' + error.message;
@@ -1376,7 +1512,12 @@ const ASYNC_PRELUDE: &str = r#"function $DONE(error) {
     __endorAsyncSignal = 'Test262:AsyncTestComplete';
   }
 }
-function print(msg) { __endorAsyncSignal = '' + msg; }
+function print(msg) {
+  if (typeof __endorAsyncSignal === 'string' && __endorAsyncSignal.indexOf('Test262:AsyncTestFailure') === 0) {
+    return;
+  }
+  __endorAsyncSignal = '' + msg;
+}
 "#;
 
 /// Run one case (source text) through the full mode/verdict machinery.
@@ -1434,13 +1575,8 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         run_strict = false;
     }
 
-    // SES lockdown/compartment mode (`-l`/`-lc`/`-c`): the mode's guest
-    // surface (`lockdown()`, the `Compartment` intrinsic) is a named scope
-    // fold ironhorse does not yet expose, so a case run under any mode is a
-    // whole-case named pre-skip — the honest split. When the guest surface
-    // lands, this seam
-    // ([`SesMode::unimplemented_skip`]) returns `None` and the mode's
-    // [`SesMode::prelude`] is applied to the assembled source instead.
+    // Native lockdown runs during setup. Only the two modes requiring a
+    // guest Compartment still refuse before execution.
     if let Some(reason) = cfg.ses_mode.unimplemented_skip() {
         return CaseResult {
             verdict: Verdict::PreSkip(reason.into()),
@@ -1466,10 +1602,10 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         return result;
     }
 
-    let run_mode = |source: &str| evaluate(cfg, source, &fm, meter_exact_gate);
+    let run_mode = |source: &Assembly| evaluate(cfg, source, &fm, meter_exact_gate);
 
     let sloppy = if run_sloppy {
-        match assemble(harness_dir, src, &fm, cfg.prelude.as_deref()) {
+        match assemble(harness_dir, src, &fm, cfg.prelude.as_deref(), cfg.ses_mode) {
             Ok(source) => Some(run_mode(&source)),
             Err(reason) => return preskip(&reason),
         }
@@ -1477,7 +1613,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         None
     };
     let strict = if run_strict {
-        match assemble_strict(harness_dir, src, &fm, cfg.prelude.as_deref()) {
+        match assemble_strict(harness_dir, src, &fm, cfg.prelude.as_deref(), cfg.ses_mode) {
             Ok(source) => Some(run_mode(&source)),
             Err(reason) => return preskip(&reason),
         }
@@ -1589,6 +1725,46 @@ fn evaluate_module_compile(
 
     if let Some(negative) = &fm.negative {
         if negative.phase == "parse" {
+            // No module body will execute, but requested setup still must
+            // succeed. Keep its errors outside the expected parse rejection,
+            // and do not run queued jobs after that early error.
+            if cfg.ses_mode != SesMode::None || cfg.prelude.is_some() {
+                let assembly =
+                    match assemble(harness_dir, src, fm, cfg.prelude.as_deref(), cfg.ses_mode) {
+                        Ok(assembly) => assembly,
+                        Err(reason) => return preskip(&reason),
+                    };
+                let prepared = crate::dual_run_scripts_checkpoint(&[&assembly.setup], None, false);
+                let failure = match prepared.as_deref() {
+                    Some([phase]) if phase.run.agreement == Agreement::BothComplete => {
+                        let baseline = phase_fingerprint(std::slice::from_ref(phase));
+                        determinism_violation(cfg.repeat, &baseline, || {
+                            crate::dual_run_scripts_checkpoint(&[&assembly.setup], None, false)
+                                .map(|runs| phase_fingerprint(&runs))
+                        })
+                        .then(|| nondeterministic(cfg.repeat))
+                    }
+                    Some(runs) => Some(match runs.first() {
+                        Some(phase) => match setup_halt_verdict(&phase.run.ironhorse_halt) {
+                            Verdict::Fail(_) => Verdict::Fail(format!(
+                                "setup failed: oracle={:?} ironhorse={:?}",
+                                phase.run.oracle_error, phase.run.ironhorse_halt
+                            )),
+                            named => named,
+                        },
+                        None => Verdict::Fail("setup did not execute".into()),
+                    }),
+                    None => Some(Verdict::RunSkip("oracle-machine-error".into())),
+                };
+                if let Some(verdict) = failure {
+                    return CaseResult {
+                        verdict,
+                        strict_skipped: false,
+                        computron_gap: false,
+                        mode_outcomes: Vec::new(),
+                    };
+                }
+            }
             let ironhorse_rejected = match &ironhorse {
                 Ok(Err(error)) => {
                     if matches!(
@@ -1649,18 +1825,15 @@ fn evaluate_module_compile(
             if cfg.oracle && (bytes != oracle.bytecode || symbols != oracle.symbols) {
                 Verdict::RunSkip("module:compiler-byte-divergence".into())
             } else {
-                let assembled = match assemble(harness_dir, src, fm, cfg.prelude.as_deref()) {
-                    Ok(source) => source,
-                    Err(reason) => return preskip(&reason),
-                };
-                // `assemble` returns `src` unchanged for a `raw`-flagged
-                // module. There the compile above already produced the exact
-                // bytes `run_accepted_module` would recompute, and (under
-                // `--oracle`) already byte-checked them, so hand them over
-                // rather than paying a second IronHorse compile and a second
-                // fork of the pinned oracle compiler per case.
-                let precompiled = (assembled == src).then_some((bytes, symbols));
-                run_accepted_module(cfg, fm, &assembled, precompiled)
+                let assembled =
+                    match assemble(harness_dir, src, fm, cfg.prelude.as_deref(), cfg.ses_mode) {
+                        Ok(source) => source,
+                        Err(reason) => return preskip(&reason),
+                    };
+                // Setup is a separate Script, so it cannot alter module
+                // source or byte identity. Reuse the original compilation.
+                let precompiled = (assembled.body == src).then_some((bytes, symbols));
+                run_accepted_module(cfg, fm, &assembled.body, &assembled.setup, precompiled)
             }
         }
         Ok(Ok(_)) if cfg.oracle => Verdict::Fail(format!(
@@ -1696,12 +1869,36 @@ static MODULE_ORACLE_RUN: AtomicU64 = AtomicU64::new(0);
 /// `globalThis.result` value the XS module oracle exposes. The module envelope
 /// itself completes with `undefined`; the follow-up reader is a separate crank
 /// in the same realm and is excluded from the module halt classification.
-fn run_ironhorse_module(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
+fn run_ironhorse_module(
+    bytecode: &[u8],
+    symbols: &[u8],
+    setup: &str,
+) -> Result<RunOutcome, Verdict> {
     let names = ironhorse_vm::parse_symbols(symbols);
-    let mut machine = crate::interp_with_source_bridge(&names);
-    let mut outcome = machine.run(bytecode).host_coerced();
+    let mut machine = crate::interp_with_source_bridge(&[]);
+    let prepared = crate::run_setup(&mut machine, setup);
+    if !prepared.completed {
+        // The same classification the script path gives a setup stop; the
+        // module body's own halts are classified below, and a gap should not
+        // read as a skip or a failure depending on which phase surfaced it.
+        return Err(setup_halt_verdict(&prepared.halt));
+    }
+    let bytecode = machine
+        .relink_crank(bytecode, &names)
+        .map_err(|e| Verdict::Fail(format!("module:relink:{e:?}")))?;
+    // Same as the script path: the module body is the subject, so its escaping
+    // throw is rendered the way the oracle shim renders its own.
+    let mut outcome = machine
+        .run_rendering_throws_in_guest(&bytecode)
+        .host_coerced();
+    // Setup ran on this machine, so the cumulative totals carry its cost; the
+    // oracle resets `meterIndex` after its own setup (`xs_shim.c`), and
+    // `dual_run_scripts_checkpoint` normalizes the script path the same way.
+    outcome.computrons = outcome.computrons_this_run;
+    outcome.meter_raw = outcome.meter_raw_this_run;
+    outcome.dispatched = outcome.dispatched_this_run;
     if !outcome.completed {
-        return outcome;
+        return Ok(outcome);
     }
 
     let (reader, reader_symbols) = match ironhorse_compile::compile_atoms("globalThis.result") {
@@ -1709,7 +1906,7 @@ fn run_ironhorse_module(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
         Err(_) => {
             outcome.completed = false;
             outcome.halt = Halt::NotImplemented("module:result-reader-compile");
-            return outcome;
+            return Ok(outcome);
         }
     };
     let reader_names = ironhorse_vm::parse_symbols(&reader_symbols);
@@ -1718,7 +1915,7 @@ fn run_ironhorse_module(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
         Err(_) => {
             outcome.completed = false;
             outcome.halt = Halt::NotImplemented("module:result-reader-link");
-            return outcome;
+            return Ok(outcome);
         }
     };
     let observed = machine.run(&reader).host_coerced();
@@ -1728,13 +1925,16 @@ fn run_ironhorse_module(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
         outcome.completed = false;
         outcome.halt = observed.halt;
     }
-    outcome
+    Ok(outcome)
 }
 
 /// Materialize one source as `main.mjs`, run it through the pinned XS module
 /// loader, and remove only the file/directory created here. The unique suffix
 /// avoids sharing filesystem state between bounded case workers.
-fn run_oracle_single_module(source: &str) -> Result<xs_oracle::ModuleRunOutcome, String> {
+fn run_oracle_single_module(
+    source: &str,
+    setup: &str,
+) -> Result<xs_oracle::ModuleRunOutcome, String> {
     let dir = loop {
         let serial = MODULE_ORACLE_RUN.fetch_add(1, Ordering::Relaxed);
         let candidate = std::env::temp_dir().join(format!(
@@ -1752,10 +1952,12 @@ fn run_oracle_single_module(source: &str) -> Result<xs_oracle::ModuleRunOutcome,
         let _ = std::fs::remove_dir(&dir);
         return Err(format!("oracle-module-write:{error}"));
     }
-    let outcome = xs_oracle::run_module_dir(&dir, "main.mjs");
+    let outcome = xs_oracle::run_module_dir_with_setup(&dir, "main.mjs", setup);
     let _ = std::fs::remove_file(&main);
     let _ = std::fs::remove_dir(&dir);
-    outcome.ok_or_else(|| "oracle-machine-error".into())
+    outcome
+        .ok_or_else(|| String::from("oracle-machine-error"))?
+        .map_err(|e| format!("setup failed: oracle={:?}", e.error))
 }
 
 /// Convert the executable module pair into the runner's existing four-valued
@@ -1820,6 +2022,7 @@ fn run_accepted_module(
     cfg: &Config,
     fm: &Frontmatter,
     source: &str,
+    setup: &str,
     // The `(bytecode, symbols)` the caller already compiled from a source
     // byte-identical to `source`, and already byte-checked against the oracle.
     // `Some` skips both compiles and the divergence gate, all three of which
@@ -1855,7 +2058,10 @@ fn run_accepted_module(
         }
     }
 
-    let ironhorse = run_ironhorse_module(&bytecode, &symbols);
+    let ironhorse = match run_ironhorse_module(&bytecode, &symbols, setup) {
+        Ok(run) => run,
+        Err(verdict) => return verdict,
+    };
     let observed = |run: &RunOutcome| {
         (
             run.completed,
@@ -1869,7 +2075,7 @@ fn run_accepted_module(
     let baseline = (bytecode.clone(), symbols.clone(), observed(&ironhorse));
     if determinism_violation(cfg.repeat, &baseline, || {
         let (code, names) = ironhorse_compile::compile_module_atoms(source).ok()?;
-        let outcome = observed(&run_ironhorse_module(&code, &names));
+        let outcome = observed(&run_ironhorse_module(&code, &names, setup).ok()?);
         Some((code, names, outcome))
     }) {
         return nondeterministic(cfg.repeat);
@@ -1887,8 +2093,9 @@ fn run_accepted_module(
     }
 
     let oracle = if cfg.oracle {
-        match run_oracle_single_module(source) {
+        match run_oracle_single_module(source, setup) {
             Ok(outcome) => outcome,
+            Err(reason) if reason.starts_with("setup failed:") => return Verdict::Fail(reason),
             Err(reason) => return Verdict::RunSkip(reason),
         }
     } else {
@@ -1924,10 +2131,10 @@ fn run_async_case(
     strict_mode: bool,
     meter_exact_gate: bool,
 ) -> CaseResult {
-    let assembled = match if strict_mode {
-        assemble_strict(harness_dir, src, fm, cfg.prelude.as_deref())
+    let mut assembled = match if strict_mode {
+        assemble_strict(harness_dir, src, fm, cfg.prelude.as_deref(), cfg.ses_mode)
     } else {
-        assemble(harness_dir, src, fm, cfg.prelude.as_deref())
+        assemble(harness_dir, src, fm, cfg.prelude.as_deref(), cfg.ses_mode)
     } {
         Ok(s) => s,
         Err(reason) => {
@@ -1939,9 +2146,9 @@ fn run_async_case(
             }
         }
     };
-    let source = format!("{ASYNC_PRELUDE}{assembled}");
+    assembled.setup = format!("{ASYNC_PRELUDE}{}", assembled.setup);
 
-    let async_run = match dual_run_async(&source, ASYNC_SIGNAL_NAME) {
+    let runs = match run_assembly(&assembled, Some(ASYNC_SIGNAL_NAME)) {
         Some(a) => a,
         None => {
             return CaseResult {
@@ -1953,6 +2160,15 @@ fn run_async_case(
         }
     };
 
+    if let Some(verdict) = setup_failure(&runs) {
+        return CaseResult {
+            verdict,
+            strict_skipped: false,
+            computron_gap: false,
+            mode_outcomes: Vec::new(),
+        };
+    }
+    let async_run = runs.last().unwrap();
     let base = verdict_for(cfg, &async_run.run, fm, meter_exact_gate);
     let computron_gap = matches!(base, Verdict::Covered)
         && async_run.run.oracle_computrons != async_run.run.ironhorse_computrons;
@@ -1961,19 +2177,18 @@ fn run_async_case(
     // execution (script + microtask drain) — only then is the async completion
     // latch meaningful; a divergence keeps its base Fail/skip.
     let outcome = match base {
-        Verdict::Covered => refine_async(&async_run),
+        Verdict::Covered => refine_async(async_run),
         other => other,
     };
 
     // Preserve the async runner, completion sentinel, and rejection latch.
-    let verdict =
-        if determinism_violation(cfg.repeat, &Fingerprint::asynchronous(&async_run), || {
-            dual_run_async(&source, ASYNC_SIGNAL_NAME).map(|run| Fingerprint::asynchronous(&run))
-        }) {
-            nondeterministic(cfg.repeat)
-        } else {
-            outcome
-        };
+    let verdict = if determinism_violation(cfg.repeat, &phase_fingerprint(&runs), || {
+        run_assembly(&assembled, Some(ASYNC_SIGNAL_NAME)).map(|runs| phase_fingerprint(&runs))
+    }) {
+        nondeterministic(cfg.repeat)
+    } else {
+        outcome
+    };
 
     CaseResult {
         verdict,
@@ -2024,29 +2239,38 @@ fn combine_mode_results(sloppy: Option<CaseResult>, strict: Option<CaseResult>) 
     }
 }
 
-/// Refine a differentially-`Covered` async case by its `$DONE` completion
-/// latch (the did-not-run / success / failure trichotomy `xst262.c` computes
-/// after `fxRunLoop`), plus the unhandled-rejection latch. Only the clean
-/// success path counts as covered; every other shape is an honest named skip —
-/// never a `Fail`, because on a `Covered` base the oracle *agreed* with ironhorse,
-/// so a non-success signal reflects the shared execution (an oracle-side
-/// failure or a test that never signaled), not an ironhorse defect.
+/// Layer the async completion verdict on a `Covered` differential: the
+/// `$DONE` sentinel each engine's prelude recorded after its microtask drain,
+/// plus ironhorse's unhandled-rejection latch. Only the clean success path
+/// counts as covered. When ironhorse did not succeed but the oracle's own
+/// `$DONE` reported `Test262:AsyncTestComplete`, ironhorse failed where XS
+/// passed: a gating `async:` failure naming what ironhorse reported. Any
+/// other non-success is a named skip, because the oracle did not succeed
+/// either (both reported failure, or neither signaled).
 fn refine_async(async_run: &AsyncDualRun) -> Verdict {
-    if async_run.ironhorse_unhandled_rejection {
-        return Verdict::RunSkip("async:unhandled-rejection".into());
-    }
-    match async_run.ironhorse_signal.as_deref() {
-        Some("Test262:AsyncTestComplete") => Verdict::Covered,
-        Some(s) if s.starts_with("Test262:AsyncTestFailure") => {
-            Verdict::RunSkip("async:reported-failure".into())
+    let skip = if async_run.ironhorse_unhandled_rejection {
+        "async:unhandled-rejection"
+    } else {
+        match async_run.ironhorse_signal.as_deref() {
+            Some("Test262:AsyncTestComplete") => return Verdict::Covered,
+            Some(s) if s.starts_with("Test262:AsyncTestFailure") => "async:reported-failure",
+            // A signal that is neither the success marker nor a known failure
+            // marker: some other `print` output, honestly named, not covered.
+            Some(_) => "async:unexpected-signal",
+            // The did-not-run latch: `$DONE` was never called (nor `print`).
+            None => "async:no-completion-signal",
         }
-        // A signal that is neither the success marker nor a known failure
-        // marker: some other `print` output — honestly named, not covered.
-        Some(_) => Verdict::RunSkip("async:unexpected-signal".into()),
-        // The did-not-run latch: `$DONE` was never called (nor `print`), so the
-        // async test never signaled completion on the shared execution.
-        None => Verdict::RunSkip("async:no-completion-signal".into()),
+    };
+    if async_run.oracle_signal.as_deref() == Some("Test262:AsyncTestComplete")
+        && !async_run.ironhorse_unhandled_rejection
+    {
+        let reported = async_run
+            .ironhorse_signal
+            .as_deref()
+            .unwrap_or("no completion signal");
+        return Verdict::Fail(format!("async: {reported} (the oracle completed)"));
     }
+    Verdict::RunSkip(skip.into())
 }
 
 /// The xst-shaped report over a set of cases: `mode:` / `skip:` / `fail:`
@@ -2092,6 +2316,30 @@ impl XstReport {
     /// discipline — zero divergence on whatever the covered grammar reaches).
     pub fn met_bar(&self) -> bool {
         self.total > 0 && self.failures.is_empty()
+    }
+
+    /// How many cases the compiler PANICKED on.
+    ///
+    /// These are `failures`, not `run_skips`: an unported construct is
+    /// uncovered ground and is excused by name, a panic is an engine fault
+    /// and is not excused at all. The two carried one label until F063.
+    /// `met_bar` already forbids them along with every other failure; this
+    /// exists so a caller can say which failure it means.
+    pub fn compiler_panics(&self) -> usize {
+        self.failures
+            .iter()
+            .filter(|(_, detail)| detail.starts_with("compiler-panicked:"))
+            .count()
+    }
+
+    /// The cases those panics were filed under, `path: detail`, for a failure
+    /// message that names what to look at.
+    pub fn compiler_panic_labels(&self) -> Vec<String> {
+        self.failures
+            .iter()
+            .filter(|(_, detail)| detail.starts_with("compiler-panicked:"))
+            .map(|(path, detail)| format!("{path}: {detail}"))
+            .collect()
     }
 
     /// Fold one case's result in, attributed to `path`, retaining a per-case
@@ -2265,6 +2513,13 @@ fn yaml_quote(s: &str) -> String {
 /// the main thread's ~8 MiB — so a deeply-nested source that ran before would
 /// overflow and SIGSEGV the whole batch (uncatchable by `catch_unwind`), the
 /// exact wedge the bound exists to prevent.
+///
+/// `timeout` bounds each mode the case runs, not the case: a default
+/// two-mode case runs sloppy and strict, each on both engines, under twice
+/// the bound. One bound around both modes left a slow but terminating case
+/// (the `copyWithin/coerced-values-*-detached.js` files, about 23 s of XS
+/// per mode) a few seconds from the 60 s sweep bound, so the nightly sweep
+/// recorded it as an `oracle-nontermination` on some nights only.
 fn run_case_bounded(
     cfg: &Config,
     harness_dir: &Path,
@@ -2274,6 +2529,22 @@ fn run_case_bounded(
     run_case_bounded_with(cfg, harness_dir, src, timeout, run_case)
 }
 
+/// The number of modes [`run_case`] runs for `src`, at least one: the
+/// multiplier [`run_case_bounded`] applies to its per-mode bound.
+fn bounded_mode_count(src: &str) -> u32 {
+    let fm = frontmatter::parse(src);
+    if fm.flags.iter().any(|flag| flag == "module")
+        || fm
+            .features
+            .iter()
+            .any(|feature| is_exact_meter_feature(feature))
+    {
+        return 1;
+    }
+    let (run_sloppy, run_strict, _) = strict_mode_status(&fm.flags);
+    (u32::from(run_sloppy) + u32::from(run_strict)).max(1)
+}
+
 fn run_case_bounded_with(
     cfg: &Config,
     harness_dir: &Path,
@@ -2281,6 +2552,8 @@ fn run_case_bounded_with(
     timeout: std::time::Duration,
     runner: impl FnOnce(&Config, &Path, &str) -> CaseResult + Send + 'static,
 ) -> CaseResult {
+    // The reasons below name the per-mode bound, the one the caller chose.
+    let bound = timeout * bounded_mode_count(src);
     let (tx, rx) = std::sync::mpsc::channel();
     let owned_config = cfg.clone();
     let owned_harness_directory = harness_dir.to_path_buf();
@@ -2303,7 +2576,7 @@ fn run_case_bounded_with(
         // never dropped (forfeits the bound for this one case only).
         Err(_) => return run_case(cfg, harness_dir, src),
     };
-    match rx.recv_timeout(timeout) {
+    match rx.recv_timeout(bound) {
         Ok(r) => {
             let _ = handle.join();
             r
@@ -2324,8 +2597,9 @@ fn run_case_bounded_with(
             let verdict = if ironhorse_terminates_alone(
                 harness_dir,
                 src,
-                timeout,
+                bound,
                 cfg.prelude.as_deref(),
+                cfg.ses_mode,
             ) {
                 Verdict::RunSkip(format!(
                     "oracle-nontermination: oracle failed to terminate within {}s (ironhorse terminates alone)",
@@ -2386,6 +2660,7 @@ fn ironhorse_terminates_alone(
     src: &str,
     timeout: std::time::Duration,
     prelude: Option<&str>,
+    ses_mode: SesMode,
 ) -> bool {
     let fm = frontmatter::parse(src);
     let (mut run_sloppy, mut run_strict, only_strict) = strict_mode_status(&fm.flags);
@@ -2402,26 +2677,26 @@ fn ironhorse_terminates_alone(
     }
     let mut sources = Vec::new();
     if run_sloppy {
-        if let Ok(source) = assemble(harness_dir, src, &fm, prelude) {
+        if let Ok(source) = assemble(harness_dir, src, &fm, prelude, ses_mode) {
             sources.push(source);
         }
     }
     if run_strict {
-        if let Ok(source) = assemble_strict(harness_dir, src, &fm, prelude) {
+        if let Ok(source) = assemble_strict(harness_dir, src, &fm, prelude, ses_mode) {
             sources.push(source);
         }
     }
     let attribution_started = std::time::Instant::now();
     for mut source in sources {
         if fm.flags.iter().any(|flag| flag == "async") {
-            source = format!("{ASYNC_PRELUDE}{source}");
+            source.setup = format!("{ASYNC_PRELUDE}{}", source.setup);
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let spawn = std::thread::Builder::new()
             .name("ironhorse-xst-attribute".into())
             .stack_size(CASE_THREAD_STACK_BYTES)
             .spawn(move || {
-                let _ = tx.send(crate::ironhorse_only_run(&source));
+                let _ = tx.send(crate::ironhorse_only_scripts(&source.setup, &source.body));
             });
         if spawn.is_err() {
             return false;
@@ -2493,6 +2768,7 @@ pub fn run_files(cfg: &Config, harness_dir: &Path, root: &Path, files: &[PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{dual_run, dual_run_async};
 
     #[test]
     fn module_parse_negative_runs_both_module_front_ends() {
@@ -2630,19 +2906,150 @@ mod tests {
     }
 
     #[test]
-    fn ses_mode_prelude_and_skip_seam() {
-        // The default runs the body verbatim and needs no guest surface.
-        assert_eq!(SesMode::None.prelude(), "{body}");
-        assert_eq!(SesMode::None.unimplemented_skip(), None);
-        // A lockdown mode's prelude calls the guest `lockdown()` — the shape
-        // that runs once the guest surface lands.
-        assert!(SesMode::Lockdown.prelude().starts_with("lockdown();"));
-        assert!(SesMode::Compartment.prelude().contains("Compartment"));
-        // Until it lands, every non-None mode is a distinct named skip.
-        assert_eq!(
-            SesMode::Lockdown.unimplemented_skip(),
-            Some("ses-mode:lockdown-unimplemented")
+    fn a_lockdown_mode_actually_splices_the_call() {
+        // The regression test for a wire that was never connected.
+        // `SesMode::prelude()` existed and was unit-tested here for its SHAPE,
+        // but nothing called it: `assemble` spliced only the `--prelude` file,
+        // so `-l` ran the corpus unlocked while reporting `ses-mode=l`. A
+        // 6053-file differential against the XS oracle came back byte-identical
+        // with and without `-l` and was read as agreement rather than as the
+        // no-op it was.
+        //
+        // Asserting on `prelude()`'s shape cannot catch that. This asserts on
+        // the separate setup and body that `assemble` produces.
+        // `tests/lockdown_setup.rs` checks their actual execution too.
+        // **Not a silent skip.** The corpus is committed at
+        // `packages/test262-runner/test262`, so `locate_test262` answering
+        // `None` means the checkout is broken, not that this case is
+        // inapplicable. Returning early here would make the guard against a
+        // disconnected `-l` wire itself vacuous -- the same class of green
+        // that let the wire go unnoticed in the first place.
+        let (_root, harness) = crate::test262::locate_test262().expect(
+            "the committed test262 subset must be locatable; a silent skip here \
+             would make this splice guard vacuous",
         );
+        let fm = frontmatter::parse("1 + 1;\n");
+        let mut cfg = Config::default();
+
+        cfg.ses_mode = SesMode::None;
+        let unlocked = assemble(&harness, "1 + 1;\n", &fm, None, cfg.ses_mode).expect("assembles");
+        assert!(
+            !unlocked.setup.contains("lockdown()"),
+            "the default mode must not lock down"
+        );
+
+        cfg.ses_mode = SesMode::Lockdown;
+        let locked = assemble(&harness, "1 + 1;\n", &fm, None, cfg.ses_mode).expect("assembles");
+        let call = locked.setup.find("lockdown();").expect(
+            "`-l` must put the `lockdown()` call in the setup Script; \
+             lifting the pre-skip alone runs the corpus UNLOCKED",
+        );
+
+        // Order, not just presence (`xst262.c:1257-1272`): the harness runs
+        // first, the call next, the body last. Freezing before
+        // `propertyHelper.js` would break the harness itself.
+        assert_eq!(locked.body, "1 + 1;\n");
+        let assert_js = locked
+            .setup
+            .find("Test262Error")
+            .expect("the harness is present");
+        assert!(
+            assert_js < call,
+            "order must be harness, then lockdown(), then body -- got \
+             harness@{assert_js} call@{call}"
+        );
+
+        // And it survives the strict wrap, whose directive must still lead.
+        let strict =
+            assemble_strict(&harness, "1 + 1;\n", &fm, None, SesMode::Lockdown).expect("assembles");
+        assert!(strict.body.starts_with("\"use strict\";"));
+        assert!(strict.setup.contains("lockdown();"));
+    }
+
+    /// A `raw` case skips the harness, not the mode: `xst262.c` calls
+    /// `lockdown()` before running the file whatever the file is.
+    #[test]
+    fn a_raw_case_still_takes_the_lockdown_wrap() {
+        // **Not a silent skip.** The corpus is committed at
+        // `packages/test262-runner/test262`, so `locate_test262` answering
+        // `None` means the checkout is broken, not that this case is
+        // inapplicable. Returning early here would make the guard against a
+        // disconnected `-l` wire itself vacuous -- the same class of green
+        // that let the wire go unnoticed in the first place.
+        let (_root, harness) = crate::test262::locate_test262().expect(
+            "the committed test262 subset must be locatable; a silent skip here \
+             would make this splice guard vacuous",
+        );
+        let src = "/*---\nflags: [raw]\n---*/\n1 + 1;\n";
+        let fm = frontmatter::parse(src);
+        let raw = assemble(&harness, src, &fm, None, SesMode::Lockdown).expect("assembles");
+        assert!(raw.setup.starts_with("lockdown();"), "got {raw:?}");
+        assert_eq!(raw.body, src);
+        assert!(
+            !raw.setup.contains("Test262Error"),
+            "raw must still skip the harness"
+        );
+    }
+
+    /// A setup phase that did not complete is classified, not lumped.
+    ///
+    /// Setup became its own Script when the runner stopped concatenating it
+    /// onto the case, and the first version of that reported EVERY setup stop
+    /// as `Verdict::Fail`. A harness include that reaches an unimplemented
+    /// opcode, or a refusal the profile names, is the same honest named skip
+    /// there that it is in the body -- while a harness that THROWS stays a
+    /// failure, because a broken lane is not a case property and because a
+    /// setup error must never satisfy a negative case.
+    #[test]
+    fn a_setup_stop_keeps_the_bodys_halt_classification() {
+        assert_eq!(
+            setup_halt_verdict(&Halt::Refused("atomics:wait-notify")),
+            Verdict::RunSkip("refused:atomics:wait-notify".into())
+        );
+        // Drawn from the registry rather than named: this assertion is about
+        // the CLASSIFICATION, and hard-coding a label made it rot the day the
+        // lazy Iterator helpers were implemented and `Iterator.helper` was
+        // retired from `NOT_IMPLEMENTED_LABELS`.
+        let declined = ironhorse_vm::halt_labels::NOT_IMPLEMENTED_LABELS
+            .first()
+            .expect("the engine declines at least one thing");
+        assert_eq!(
+            setup_halt_verdict(&Halt::NotImplemented(declined)),
+            Verdict::RunSkip(format!("unsupported-opcode:{declined}"))
+        );
+        assert_eq!(
+            setup_halt_verdict(&Halt::Decode(ironhorse_vm::DecodeError::MissingBytecode)),
+            Verdict::RunSkip("parse-or-decode".into())
+        );
+        // An unregistered label is a harness failure wherever it appears.
+        assert!(matches!(
+            setup_halt_verdict(&Halt::Refused("not-a-registered-label")),
+            Verdict::Fail(reason) if reason.starts_with("unregistered-halt-label:")
+        ));
+        // The mode's own operation refusing is a broken lane, not a case that
+        // could not run, even though the label IS registered as a refusal.
+        assert!(matches!(
+            setup_halt_verdict(&Halt::Refused("lockdown:intrinsic-graph")),
+            Verdict::Fail(reason) if reason.contains("the mode's lockdown refused")
+        ));
+        assert!(matches!(
+            setup_halt_verdict(&Halt::synthetic_throw("SyntaxError")),
+            Verdict::Fail(reason) if reason.starts_with("setup failed:")
+        ));
+    }
+
+    #[test]
+    fn ses_mode_skip_seam() {
+        // The default runs the body verbatim and needs no guest surface.
+        assert_eq!(SesMode::None.unimplemented_skip(), None);
+        // `-l` calls the guest `lockdown()`, which is a landed native, so the
+        // mode runs rather than short-circuiting. What it splices is asserted
+        // in `a_lockdown_mode_actually_splices_the_call`, against `assemble`'s
+        // output rather than against a template.
+        assert_eq!(SesMode::Lockdown.unimplemented_skip(), None);
+        // The two modes that need `new Compartment()` are still named skips,
+        // and `-lc` is one even though its lockdown half now works: a mode is
+        // skipped when ANY surface it needs is missing.
         assert_eq!(
             SesMode::Compartment.unimplemented_skip(),
             Some("ses-mode:compartment-unimplemented")
@@ -2654,18 +3061,29 @@ mod tests {
     }
 
     #[test]
-    fn ses_mode_makes_a_case_a_named_preskip() {
-        // With a lockdown mode armed, a plain covered-grammar case is a whole-
-        // case named pre-skip (the guest `lockdown()` surface is a scope
-        // fold), never a failure — even though the case itself runs fine with
-        // no mode. The harness dir is irrelevant: the mode short-circuits
-        // before assembly.
+    fn a_compartment_mode_makes_a_case_a_named_preskip() {
+        // With a compartment mode armed, a plain covered-grammar case is a
+        // whole-case named pre-skip (there is no guest `Compartment`), never a
+        // failure — even though the case itself runs fine with no mode. The
+        // harness dir is irrelevant: the mode short-circuits before assembly.
         let mut cfg = Config::default();
-        cfg.ses_mode = SesMode::Lockdown;
+        cfg.ses_mode = SesMode::Compartment;
         let r = run_case(&cfg, Path::new("/nonexistent"), "1 + 1;");
         assert_eq!(
             r.verdict,
-            Verdict::PreSkip("ses-mode:lockdown-unimplemented".into())
+            Verdict::PreSkip("ses-mode:compartment-unimplemented".into())
+        );
+
+        // `-l` does NOT short-circuit: `lockdown()` is a landed native, so the
+        // mode reaches assembly and the case runs. It cannot reach a verdict
+        // here (the harness dir does not exist), which is the point — the
+        // failure it takes is about the missing harness, not about the mode.
+        cfg.ses_mode = SesMode::Lockdown;
+        let r = run_case(&cfg, Path::new("/nonexistent"), "1 + 1;");
+        assert_ne!(
+            r.verdict,
+            Verdict::PreSkip("ses-mode:lockdown-unimplemented".into()),
+            "a landed lockdown must not pre-skip"
         );
     }
 
@@ -2673,13 +3091,21 @@ mod tests {
     fn a_prelude_lifts_the_skips_for_the_surface_it_supplies() {
         let mut cfg = Config::default();
         let bare = effective_skip_features(&cfg);
-        assert!(bare.contains("lockdown") && bare.contains("Compartment"));
+        // **The lift is now INERT, and that is the assertion.** The filter is
+        // an intersection of `FEATURES_SUPPLIED_BY_PRELUDE` with the default
+        // skip list, and both of its names have left that list: `lockdown`
+        // when `create_hardened_globals` bound one, `Compartment` when
+        // `Native::Compartment` landed. Nothing remains for a prelude to lift,
+        // because the engine supplies both natively.
+        assert!(!bare.contains("lockdown"));
+        assert!(!bare.contains("Compartment"));
 
         cfg.prelude = Some("globalThis.lockdown = () => {};".into());
         let with_prelude = effective_skip_features(&cfg);
-        assert!(
-            !with_prelude.contains("lockdown") && !with_prelude.contains("Compartment"),
-            "a prelude supplies these, so naming them missing is no longer honest"
+        assert_eq!(
+            bare, with_prelude,
+            "with neither supplied name still on the default list, a prelude \
+             has nothing to lift and must not change the set"
         );
         // It supplies a surface, not a corpus, and not an engine capability.
         assert!(with_prelude.contains("ses-xs-parity"));
@@ -2687,16 +3113,26 @@ mod tests {
     }
 
     #[test]
-    fn guest_lockdown_and_compartment_are_skip_features() {
-        // The two real `ses-xs-parity` tests in the subset declare
-        // `Compartment` / `lockdown` features; ironhorse lacks the guest surface,
-        // so they are named `feature:*` skips (the `gxFeatures` analogue) even
-        // when `ses-xs-parity` itself is opted in.
+    fn neither_guest_compartment_nor_lockdown_is_a_skip_feature() {
+        // The `ses-xs-parity` cases declare `Compartment` and `lockdown`
+        // features. ironhorse binds both as guest globals now
+        // (`designs/ironhorse-native-lockdown.md`,
+        // `designs/ironhorse-guest-compartment.md`), so neither is a named
+        // `feature:*` skip (the `gxFeatures` analogue) and a case declaring
+        // either RUNS.
+        //
+        // This assertion was the asymmetry between them, and asserted that a
+        // case declaring BOTH still skipped on the `Compartment` half. It no
+        // longer does. What that bought is honesty rather than coverage: both
+        // cases now run under `-l` and both fail on both engines, because
+        // `lockdown()` has frozen `Compartment.prototype` before the case asks
+        // whether it is configurable. `packages/test262-runner/README.md`
+        // carries the measurement.
         let mut cfg = Config::default();
         cfg.features_include = vec!["ses-xs-parity".into()];
         let skip = effective_skip_features(&cfg);
-        assert!(skip.contains("Compartment"));
-        assert!(skip.contains("lockdown"));
+        assert!(!skip.contains("Compartment"));
+        assert!(!skip.contains("lockdown"));
         assert!(!skip.contains("ses-xs-parity"));
     }
 
@@ -3236,11 +3672,11 @@ mod tests {
             eprintln!("test262 subset absent; skipping assembled oracle-exclusion regression");
             return;
         };
+        // The vendored `set/array-arg-targetbuffer-detached-on-get-src-value-
+        // throws.js` predates ES2022's `TypedArraySetElement`; Ironhorse now
+        // fails it with XS (upstream test262 replaced it with the `-no-throw`
+        // case both pass), so it is no longer an oracle-only failure.
         for (relative, _former_skip) in [
-            (
-                "built-ins/TypedArray/prototype/set/array-arg-targetbuffer-detached-on-get-src-value-throws.js",
-                "oracle-xs-typedarray-set-detach",
-            ),
             (
                 "built-ins/TypedArray/prototype/sort/detached-buffer-comparefn.js",
                 "oracle-xs-typedarray-sort-detach",
@@ -3257,8 +3693,11 @@ mod tests {
             let source = std::fs::read_to_string(test_root.join(relative))
                 .unwrap_or_else(|error| panic!("read {relative}: {error}"));
             let result = run_case(&Config::default(), &harness, &source);
-            assert!(matches!(result.verdict, Verdict::Fail(ref reason) if reason.contains("Test262Error:")),
-                "assembled official case {relative}: {:?}", result.verdict);
+            assert!(
+                matches!(result.verdict, Verdict::Fail(ref reason) if reason.contains("Test262Error:")),
+                "assembled official case {relative}: {:?}",
+                result.verdict
+            );
         }
     }
 
@@ -3426,18 +3865,25 @@ mod tests {
     }
 
     #[test]
-    fn early_error_compile_panic_is_a_named_compiler_gap() {
-        // A deferred/unimplemented coder path (a panic caught by the compile
-        // seam) is an Ironhorse compiler coverage gap — a named `unsupported`,
-        // never a covered early error and never silently a pass.
+    fn early_error_compile_panic_is_a_named_compiler_fault() {
+        // A panic caught by the compile seam is the compiler violating its own
+        // invariant: a FAILURE under its own label, never a covered early
+        // error, never a coverage gap, and never an excused skip.
         let run = synthetic_early(
             Agreement::BothAbort,
             false,
-            IronhorseCompile::Panicked("static block with lexical declarations deferred".into()),
+            IronhorseCompile::Panicked("some coder invariant".into()),
         );
         let cfg = Config::default();
         let v = evaluate_negative_early(&cfg, &run, &early_negative("parse"));
-        assert_eq!(v, Verdict::RunSkip("compiler-unimplemented:parse".into()));
+        assert_eq!(v, Verdict::Fail("compiler-panicked:parse".into()));
+        assert_eq!(
+            crate::report::classify(crate::report::Verdict::Fail, "compiler-panicked:parse"),
+            crate::report::Category::IronhorseFailure
+        );
+        // And it is NOT the coverage gap it used to share a label with. An
+        // unclassified RunSkip label falls through to `Infrastructure`
+        // ("not Ironhorse gaps"), which is where filing this as a skip put it.
         assert_eq!(
             crate::report::classify(
                 crate::report::Verdict::RunSkip,
@@ -3465,6 +3911,40 @@ mod tests {
             evaluate_negative_early(&cfg, &run, &early_negative("parse")),
             Verdict::Covered
         );
+    }
+
+    #[test]
+    fn the_case_bound_applies_to_each_mode() {
+        // A runner that takes 1.5 bounds: a two-mode case has two bounds and
+        // completes; a single-mode case has one and times out.
+        let slow = |_: &Config, _: &Path, _: &str| {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            CaseResult {
+                verdict: Verdict::Covered,
+                strict_skipped: false,
+                computron_gap: false,
+                mode_outcomes: Vec::new(),
+            }
+        };
+        let bound = std::time::Duration::from_secs(1);
+        let cfg = Config::default();
+        let both = run_case_bounded_with(&cfg, Path::new("."), "1;", bound, slow);
+        assert_eq!(both.verdict, Verdict::Covered);
+        for flag in ["onlyStrict", "noStrict", "raw"] {
+            let source = format!("/*---\nflags: [{flag}]\n---*/\n1;");
+            assert_eq!(bounded_mode_count(&source), 1, "{flag}");
+            let one = run_case_bounded_with(&cfg, Path::new("."), &source, bound, slow);
+            assert_eq!(
+                one.verdict,
+                Verdict::RunSkip(
+                    "oracle-nontermination: oracle failed to terminate within 1s (ironhorse terminates alone)"
+                        .into()
+                ),
+                "{flag}"
+            );
+        }
+        assert_eq!(bounded_mode_count("1;"), 2);
+        assert_eq!(bounded_mode_count("/*---\nflags: [module]\n---*/\n1;"), 1);
     }
 
     #[test]
@@ -3531,7 +4011,13 @@ mod tests {
         // buggy sloppy-only probe would run the loop and hang to `false`.
         let strict_diverges = "/*---\nflags: [onlyStrict]\n---*/\nwith ({}) { while (true) {} }\n";
         assert!(
-            ironhorse_terminates_alone(&harness, strict_diverges, std::time::Duration::from_secs(10), None),
+            ironhorse_terminates_alone(
+                &harness,
+                strict_diverges,
+                std::time::Duration::from_secs(10),
+                None,
+                SesMode::None,
+            ),
             "an onlyStrict case must be probed via its strict assembly (a strict early error terminates), not the sloppy infinite loop"
         );
 
@@ -3543,7 +4029,8 @@ mod tests {
                 &harness,
                 strict_hang,
                 std::time::Duration::from_secs(2),
-                None
+                None,
+                SesMode::None,
             ),
             "a strict-only infinite loop is an ironhorse hang, not oracle non-termination"
         );
@@ -3698,7 +4185,7 @@ mod tests {
         run.result_agrees = true;
         run.ironhorse_meter_raw = 42;
         let mut fm = Frontmatter {
-            features: vec!["ironhorse-meter-5-raw-42".into()],
+            features: vec!["ironhorse-meter-9-raw-42".into()],
             ..Frontmatter::default()
         };
         assert!(matches!(
@@ -3712,13 +4199,13 @@ mod tests {
         ));
         run.result_agrees = true;
         for tags in [
-            vec!["ironhorse-meter-5-raw-0"],
-            vec!["ironhorse-meter-5-raw-nope"],
-            vec!["ironhorse-meter-5-raw-18446744073709551616"],
+            vec!["ironhorse-meter-9-raw-0"],
+            vec!["ironhorse-meter-9-raw-nope"],
+            vec!["ironhorse-meter-9-raw-18446744073709551616"],
             vec!["ironhorse-meter-3-raw-42"],
             vec!["ironhorse-meter-4-raw-42"],
-            vec!["ironhorse-meter-5-raw-42", "ironhorse-meter-5-raw-42"],
-            vec!["ironhorse-meter-exact", "ironhorse-meter-5-raw-42"],
+            vec!["ironhorse-meter-9-raw-42", "ironhorse-meter-9-raw-42"],
+            vec!["ironhorse-meter-exact", "ironhorse-meter-9-raw-42"],
         ] {
             fm.features = tags.into_iter().map(str::to_owned).collect();
             assert!(
@@ -3727,7 +4214,7 @@ mod tests {
                 fm.features
             );
         }
-        fm.features = vec!["ironhorse-meter-5-raw-0".into()];
+        fm.features = vec!["ironhorse-meter-9-raw-0".into()];
         run.ironhorse_meter_raw = 0;
         assert!(matches!(
             verdict_for(&cfg, &run, &fm, true),
@@ -4150,27 +4637,34 @@ mod tests {
 
     #[test]
     fn an_unlanded_intrinsic_is_a_named_missing_global_skip() {
-        // The pinned oracle binds `Compartment` in an empty program; the
+        // The pinned oracle binds `mutabilities` in an empty program; the
         // port does not. That is a host intrinsic the port lacks: an honest
         // coverage gap that names the intrinsic to land.
+        //
+        // This used to probe `Compartment`, which ironhorse now binds
+        // (`designs/ironhorse-guest-compartment.md`). `mutabilities` is the
+        // remaining member of the Hardened-JavaScript global set that XS's
+        // shim installs and ironhorse does not -- `create_hardened_globals`
+        // records the decision to leave it as an ordinary `ReferenceError`
+        // rather than a refusing stub.
         assert_eq!(
-            probe_global("Compartment"),
+            probe_global("mutabilities"),
             Ok(GlobalBinding {
                 oracle: true,
                 ironhorse: false
             })
         );
         let run = synthetic_oracle_only(Halt::synthetic_throw(
-            "ReferenceError: get Compartment: undefined variable",
+            "ReferenceError: get mutabilities: undefined variable",
         ));
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
-            Verdict::RunSkip("ironhorse-missing-global:Compartment".into())
+            Verdict::RunSkip("ironhorse-missing-global:mutabilities".into())
         );
         assert_eq!(
             crate::report::classify(
                 crate::report::Verdict::RunSkip,
-                "ironhorse-missing-global:Compartment"
+                "ironhorse-missing-global:mutabilities"
             ),
             crate::report::Category::Unsupported
         );
@@ -4179,13 +4673,13 @@ mod tests {
     #[test]
     fn a_program_declared_name_the_oracle_also_binds_is_still_a_failure() {
         // The probe alone would call this a missing intrinsic (the oracle
-        // binds `Compartment`, ironhorse does not), but the program declared
-        // its own `Compartment`, so ironhorse failing to resolve it is a
+        // binds `mutabilities`, ironhorse does not), but the program declared
+        // its own `mutabilities`, so ironhorse failing to resolve it is a
         // scope-resolution lie about the program's binding.
         let mut run = synthetic_oracle_only(Halt::synthetic_throw(
-            "ReferenceError: get Compartment: undefined variable",
+            "ReferenceError: get mutabilities: undefined variable",
         ));
-        run.source = "var Compartment = {}; Compartment.x = 1;".into();
+        run.source = "var mutabilities = {}; mutabilities.x = 1;".into();
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::Fail(detail) if detail.starts_with("spurious ReferenceError")
@@ -4519,20 +5013,93 @@ mod tests {
             run: synthetic_abort(Halt::Return, ""),
             ironhorse_signal: signal.map(|s| s.to_string()),
             ironhorse_unhandled_rejection: unhandled,
+            oracle_signal: None,
+        }
+    }
+
+    fn synthetic_async_against(
+        signal: Option<&str>,
+        unhandled: bool,
+        oracle: Option<&str>,
+    ) -> AsyncDualRun {
+        AsyncDualRun {
+            oracle_signal: oracle.map(|s| s.to_string()),
+            ..synthetic_async(signal, unhandled)
         }
     }
 
     #[test]
-    fn refine_async_only_narrows_covered_to_honest_skips() {
+    fn refine_async_fails_what_only_the_oracle_completed() {
+        let complete = Some("Test262:AsyncTestComplete");
+        // XS's own `$DONE` succeeded where ironhorse's did not: ironhorse's
+        // failure, gated, with what ironhorse reported.
+        assert_eq!(
+            refine_async(&synthetic_async_against(
+                Some("Test262:AsyncTestFailure:TypeError: x"),
+                false,
+                complete
+            )),
+            Verdict::Fail(
+                "async: Test262:AsyncTestFailure:TypeError: x (the oracle completed)".into()
+            )
+        );
+        assert_eq!(
+            refine_async(&synthetic_async_against(None, false, complete)),
+            Verdict::Fail("async: no completion signal (the oracle completed)".into())
+        );
+        // Both succeeded, or both failed: unchanged.
+        assert_eq!(
+            refine_async(&synthetic_async_against(complete, false, complete)),
+            Verdict::Covered
+        );
+        assert!(matches!(
+            refine_async(&synthetic_async_against(
+                Some("Test262:AsyncTestFailure:X"),
+                false,
+                Some("Test262:AsyncTestFailure:Y")
+            )),
+            Verdict::RunSkip(r) if r == "async:reported-failure"
+        ));
+        // The unhandled-rejection latch is ironhorse's alone, so it stays a skip.
+        assert!(matches!(
+            refine_async(&synthetic_async_against(complete, true, complete)),
+            Verdict::RunSkip(r) if r == "async:unhandled-rejection"
+        ));
+    }
+
+    #[test]
+    fn the_oracle_reports_its_own_done_after_the_checkpoint() {
+        let run = |body: &str| {
+            let setup = format!("{ASYNC_PRELUDE}");
+            let runs = crate::dual_run_scripts(&[&setup, body], Some(ASYNC_SIGNAL_NAME))
+                .expect("oracle machine available");
+            let last = runs.last().unwrap();
+            (last.oracle_signal.clone(), last.ironhorse_signal.clone())
+        };
+        let complete = Some("Test262:AsyncTestComplete".to_string());
+        assert_eq!(
+            run("Promise.resolve().then(function () { $DONE(); });"),
+            (complete.clone(), complete.clone())
+        );
+        assert_eq!(run("1;"), (None, None));
+        // A failure is sticky: a later `$DONE()` does not overwrite it.
+        let failed = Some("Test262:AsyncTestFailure:Test262Error: first".to_string());
+        assert_eq!(
+            run("$DONE('first'); Promise.resolve().then(function () { $DONE(); });"),
+            (failed.clone(), failed)
+        );
+    }
+
+    #[test]
+    fn refine_async_without_the_oracles_success_narrows_to_named_skips() {
         // The clean `$DONE()` success is the only covered shape.
         assert_eq!(
             refine_async(&synthetic_async(Some("Test262:AsyncTestComplete"), false)),
             Verdict::Covered
         );
-        // A reported async failure, an unexpected signal, and the did-not-run
-        // latch each become a NAMED skip — never a `Fail` (on a `Covered` base
-        // the oracle agreed with ironhorse, so a non-success signal is a shared
-        // outcome, not an ironhorse defect).
+        // Without the oracle's success, a reported async failure, an
+        // unexpected signal, and the did-not-run latch each become a NAMED
+        // skip, not a `Fail`.
         assert!(matches!(
             refine_async(&synthetic_async(Some("Test262:AsyncTestFailure:X"), false)),
             Verdict::RunSkip(r) if r == "async:reported-failure"

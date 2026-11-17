@@ -3,6 +3,9 @@
   "files": [],
   "references": [
     {
+      "path": "packages/agent-mcp-stdio/tsconfig.composite.json"
+    },
+    {
       "path": "packages/agent-tools/tsconfig.composite.json"
     },
     {
@@ -39,6 +42,9 @@
       "path": "packages/cbor/tsconfig.composite.json"
     },
     {
+      "path": "packages/cbor-frame/tsconfig.composite.json"
+    },
+    {
       "path": "packages/chacha12/tsconfig.composite.json"
     },
     {
@@ -52,6 +58,9 @@
     },
     {
       "path": "packages/cjs-module-analyzer/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/claude/tsconfig.composite.json"
     },
     {
       "path": "packages/claude-sandbox/tsconfig.composite.json"
@@ -165,6 +174,9 @@
       "path": "packages/import-bundle/tsconfig.composite.json"
     },
     {
+      "path": "packages/inference/tsconfig.composite.json"
+    },
+    {
       "path": "packages/init/tsconfig.composite.json"
     },
     {
@@ -196,6 +208,9 @@
     },
     {
       "path": "packages/netstring/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/npm-registry-server/tsconfig.composite.json"
     },
     {
       "path": "packages/ocapn/tsconfig.composite.json"

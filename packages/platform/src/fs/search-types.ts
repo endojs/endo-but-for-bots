@@ -83,6 +83,18 @@ export type Search = {
       | AsyncIterable<Array<string>>,
     options?: GrepOptions,
   ) => AsyncGenerator<Array<GrepMatch>>;
+  /**
+   * Fused glob+grep: enumerate files matching `globPattern` and search each for
+   * `regexSource`. The native-override seam a platform with a single fused
+   * enumerate-and-scan walk substitutes; the JS reference composes `globPaths`
+   * into `grepFiles`. Honors the same deny/confinement/`maxResults` rules.
+   */
+  glorp: (
+    root: string,
+    globPattern: string,
+    regexSource: string,
+    options?: GrepOptions,
+  ) => AsyncGenerator<Array<GrepMatch>>;
 };
 
 /**

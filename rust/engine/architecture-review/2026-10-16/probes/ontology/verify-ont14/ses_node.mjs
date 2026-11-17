@@ -1,0 +1,11 @@
+import '/home/user/endo-but-for-bots/packages/ses/index.js';
+globalThis.tag = 'start';
+lockdown();
+const out = {};
+const c = new Compartment({ globals: { tag: 'c', startEval: eval, startFunction: Function } });
+out.startEvalCalledFromC = c.evaluate("(0, startEval)('tag')");
+out.startFunctionCalledFromC = c.evaluate("startFunction('return tag')()");
+out.startEvalWritesFromC = c.evaluate("(0, startEval)('var leaked = 1'); typeof globalThis.leaked");
+out.leakedOnStart = typeof globalThis.leaked;
+out.cEvalCalledFromStart = (0, c.evaluate('eval'))('tag');
+console.log(JSON.stringify(out));

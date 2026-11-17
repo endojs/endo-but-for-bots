@@ -27,6 +27,7 @@
  * @property {(id: string) => Promise<ConversationNode | null>} getNode
  * @property {(parentId: string | null) => Promise<ConversationNode[]>} getChildren
  * @property {() => Promise<ConversationNode[]>} getRoots
+ * @property {() => Promise<ConversationNode[]>} getNodes - Every retained node, including unselected branches.
  */
 
 /**
@@ -36,6 +37,7 @@
  * @property {(leafId: string) => Promise<ChatMessage[]>} getPath
  * @property {(parentId: string) => Promise<ConversationNode[]>} getChildren
  * @property {() => Promise<ConversationNode[]>} getRoots
+ * @property {() => Promise<ConversationNode[]>} getNodes
  */
 
 export {};

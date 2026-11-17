@@ -1,0 +1,66 @@
+--- a/ironhorse-vm/src/interp/natives/dispatch.rs
++++ b/ironhorse-vm/src/interp/natives/dispatch.rs
+@@ -1656,11 +1656,63 @@
+         Ok(())
+     }
+ 
++    /// EXPERIMENT (scratch only): thin dispatcher so the recursive
++    /// forEach path does not carry the monolithic frame.
+     #[inline(never)]
+     pub(in crate::interp) fn call_native_method_inner(
+         &mut self,
+         m: NativeMethod,
+         base: usize,
++        argc: usize,
++        code: &[u8],
++    ) -> Result<(), Step> {
++        if m == NativeMethod::ArrayForEach {
++            let this = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
++            if self.dense_array_this(this).is_some() {
++                return self.experiment_array_foreach(m, base, argc, code);
++            }
++        }
++        self.call_native_method_inner_all(m, base, argc, code)
++    }
++
++    #[inline(never)]
++    fn experiment_array_foreach(
++        &mut self,
++        m: NativeMethod,
++        base: usize,
++        argc: usize,
++        code: &[u8],
++    ) -> Result<(), Step> {
++        let _ = argc;
++        self.cost.on_builtin(m);
++        let this = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
++        let arg0 = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
++        let inst = self.dense_array_this(this).expect("checked");
++        let callback = arg0;
++        if !self.is_callable_value(callback) {
++            return Err(self.catchable_type_error_msg("callback: not a function".into()));
++        }
++        let this_arg = self.stack.get(base + 4 + 1).copied().unwrap_or_else(Slot::undefined);
++        let length = self.arrays[&inst].length;
++        self.meter.tick_raw(ARRAY_FOREACH_FRAME_METERING);
++        for i in 0..length {
++            let item = self.arrays[&inst].items().get(&i).copied();
++            if let Some(item) = item {
++                self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
++                let cb_args = [item, Slot::integer(i as i32), this];
++                self.run_callback(code, callback, this_arg, &cb_args)?;
++            }
++        }
++        self.stack.truncate(base);
++        self.push(Slot::undefined());
++        Ok(())
++    }
++
++    #[inline(never)]
++    pub(in crate::interp) fn call_native_method_inner_all(
++        &mut self,
++        m: NativeMethod,
++        base: usize,
+         argc: usize,
+         code: &[u8],
+     ) -> Result<(), Step> {

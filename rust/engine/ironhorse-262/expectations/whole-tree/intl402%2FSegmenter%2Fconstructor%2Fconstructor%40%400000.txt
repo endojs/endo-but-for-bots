@@ -37,5 +37,5 @@ intl402/Segmenter/constructor/constructor/options-valid-combinations.js sloppy s
 intl402/Segmenter/constructor/constructor/options-valid-combinations.js strict skip:oracle-host-missing-intl
 intl402/Segmenter/constructor/constructor/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
 intl402/Segmenter/constructor/constructor/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
-intl402/Segmenter/constructor/constructor/subclassing.js sloppy skip:oracle-host-missing-global:Intl
-intl402/Segmenter/constructor/constructor/subclassing.js strict skip:oracle-host-missing-global:Intl
+intl402/Segmenter/constructor/constructor/subclassing.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/subclassing.js strict skip:oracle-host-missing-intl
