@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-26 |
+| **Updated** | 2026-11-17 |
 | **Author** | kriscendobot (prompted) |
 | **Status** | Proposed |
 | **Source** | Replaces the closed, pre-`@endo/inference` proposal in [PR #1102](https://github.com/endojs/endo-but-for-bots/pull/1102), after the confinement core in [PR #1015](https://github.com/endojs/endo-but-for-bots/pull/1015) merged and the daemon and inference dependencies below landed |

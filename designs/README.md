@@ -584,7 +584,7 @@ LLM-agent stack).*
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
 | [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | In Progress |
 | [endo-claude-inference-backends](endo-claude-inference-backends.md) | 2026-09-28 | 2026-09-30 | Draft |
-| [endo-child-agent-factory](endo-child-agent-factory.md) | 2026-10-26 | 2026-10-26 | Proposed |
+| [endo-child-agent-factory](endo-child-agent-factory.md) | 2026-10-26 | 2026-11-17 | Proposed |
 | [endo-guest-stdio-mcp](endo-guest-stdio-mcp.md) | 2026-09-08 | 2026-09-24 | In Progress |
 | [agent-confined-application-makers](agent-confined-application-makers.md) | 2026-09-24 | 2026-10-01 | Proposed |
 | [endo-workflow](endo-workflow.md) | 2026-08-17 | 2026-09-02 | In Progress |
