@@ -25,9 +25,7 @@
 
 use ironhorse_262::{dual_run_cranks, Agreement};
 
-use crate::{
-    gen_program, gen_stage2b_program, gen_stage3_arrays_program,
-};
+use crate::{gen_program, gen_stage2b_program, gen_stage3_arrays_program};
 
 /// A per-crank divergence between ironhorse and the XS oracle.
 #[derive(Debug)]
@@ -176,13 +174,10 @@ pub fn differential_check_cranks(sequence: &[String]) -> Result<usize, CrankDive
             // a Number completion must be the ECMA-262 spelling of the
             // oracle's exact double, so XS dtoa spelling quirks are not
             // read as value divergences.
-            Agreement::BothComplete if !run.result_agrees =>
-            {
-                Some(format!(
-                    "crank result divergence: oracle {:?} against ironhorse {:?}",
-                    run.oracle_result, run.ironhorse_result
-                ))
-            }
+            Agreement::BothComplete if !run.result_agrees => Some(format!(
+                "crank result divergence: oracle {:?} against ironhorse {:?}",
+                run.oracle_result, run.ironhorse_result
+            )),
             Agreement::BothAbort if !run.error_agrees => Some(format!(
                 "crank abort divergence: oracle {:?} against ironhorse {:?} ({:?})",
                 run.oracle_error, run.ironhorse_error, run.ironhorse_halt
