@@ -5405,3 +5405,252 @@ shrink its cranks (pages, rounds) and move records out of the vat (an archive), 
 the slope are the engine's (C-7, C-21).
 Decision: M2 measures the session vat's slot capacity next to snapshot size and decides an archive
 in M2 (milestones W2.5); C-7 and C-21 go to the core owner with these numbers.
+
+### J-9360 2026-11-17 M1b follow-ups scope and commits - good fit
+Evidence: J-0397's open list and the "Not fixed" notes of the M1b outcome table. Commits (harness only;
+nothing outside `packages/thixotrope-harness`, so no CORE-CHANGES entry): contract `913bb6d22e`
+(`StagedText.digest`, `StartListener.attached`, blob texts; `m1b-interfaces.md` 17.1-17.4), fixes
+`e627d33b45` (blobs, Composer, provider, context cache, list publisher, digests), `7ab0009027` (exec
+scope), `b81cd703dc` (no data keys, lint rule), contract `beb48b46bf` and fix `8bab501b78` (inline
+submissions over `inlineBytes`, 17.5), tests and journal after. Every item got a test that fails on
+the source before its fix (checked by putting the HEAD version of the changed files back and running
+the new tests): 13 of the 14 adapter tests in `test/adapter/m1b-followups-blobs.test.js` (the 14th
+asserts the new settings exist), the 2 digest tests, the 2 list-publisher tests, 3 of the 4 new exec
+tests (the 4th is a timing row), the inline-size test.
+Reading: items (1)-(8) are closed in harness code except where an entry below says "not done".
+Decision: see J-9361..J-9370.
+
+
+### J-9361 2026-11-17 M1b follow-ups blob disk quotas and files nobody holds - deviation
+Evidence: J-0393 (no quota; refused submissions and stagings whose handle never left the adapter keep
+their files). `e627d33b45`: `config/defaults.js` `blobLimits` (`sessionBytes` 1 GiB, `daemonBytes`
+16 GiB); the blob store charges each staging to the session it is for (Composer: the submitted
+session; provider, adapter tools, `TurnPorts.writers`/`content`: the session whose ports they are,
+built per `ops.open`) and refuses before writing (`textOf.blobSessionQuota`/`blobDaemonQuota` inside
+`stagingFailed`); writers per piece; deletions refunded; the daemon count starts from the files the
+start sweep finds. Provider stagings are `.part` files (`stagePending`, write + fsync) named with one
+directory fsync for the round (`commit`) right before `progress`/`roundFinal`/`roundFailed`; a round
+cancelled or failed after staging drops them; a crash before the commit leaves `.part`, which the
+start sweep deletes (fsyncs per staging unchanged). The Composer deletes the file of a submission the
+session refused before storing it (the queue's refusal texts, its guard, `inlineTooLarge`); a break
+keeps it. Found on the way: a burst of more than about 96 concurrent stagings failed with "the manager
+minted no blob handles" (the stock counted waits, not empty refills; a 64-call round of 9 KB
+arguments hit it); the start sweep summed sizes with `total += await` (lost updates). Both fixed.
+Measured (Node, real files, the scripted provider through the endpoint and the Composer with a fake
+session; `BLOBS_DISK_TURNS=1000`, `test/adapter/m1b-blobs-provider.test.js` serial test; inputs 200 B
+to 64 KB, replies 500 B to 200 KB, a 1 MiB streamed reply every 100th turn, a 20 KB tool argument
+every 10th, every 25th submission refused; `e627d33b45`, load 3.4-4.0):
+{"metric":"blobs.disk","turns":1000,"files":1080,"onDiskBytes":68456727,"referencedBytes":68456727,"unreferencedBytes":0,"parts":0,"refusedSubmissions":40,"stagedBytes":71878237,"discarded":193,"sessionUsage":53574860,"ms":18400,"commit":"e627d33b45","loadAvg":[3.44,4.02,3.35]}
+68.5 MB on disk after 1,000 turns, every byte held by a record (the 3.4 MB difference to the bytes
+staged is superseded checkpoints and refused submissions, deleted). Before the change the same run
+would also keep the staged refused submissions (20 of the 40, about 0.9 MB, by the size cycle) and
+any round cancelled after staging (not measured: the old store has no API the test drives).
+Deviation: "a sweep at adapter start for files no manager handle names" is not built. The manager
+keeps `WeakMap<Blob, key>` only and vats have no `WeakRef` (guest rule), so it cannot say which keys
+still have a holder; that needs a strong key table (which would keep every handle alive) or an engine
+query. The commit-before-send order makes the crash-window orphans `.part` files instead; what is left
+is a file named while the message carrying it was being sent at a crash, and files whose holders all
+dropped them (M2 delete, M13).
+Reading: the disk is bounded per session and per daemon; nothing a session refused or never received
+stays. The per-session count after a restart is what that session's context and reads touch (trust on
+first use, J-9364), not its whole history.
+Decision: done except the manager-liveness sweep (contract 17.1 says why).
+
+
+### J-9362 2026-11-17 M1b follow-ups list publisher after an adapter-only restart - good fit
+Evidence: advisory 1 (J-0397): the factory fetched the list publisher only at daemon starts, so after
+the adapter process alone restarted every row change went to a tombstone (sendOnly, dropped) until
+the next start. `e627d33b45`: the manager sends `attached()` to its start listeners when an
+incarnation attaches outside `lifecycle.started()` and it is not the first attach; the factory's
+listener refreshes the publisher (`m1bInterfaces.StartListener`, contract 17.4). Tests: the manager
+over a fake adapter manager (an adapter-only restart is heard as `attached`, a daemon start as
+`started` only) and the factory over fakes (the change after `attached()` goes to publisher 2); both
+fail on the old source.
+Reading: one manager sendOnly per adapter restart; batches between the exit and the refresh are lost,
+as at a daemon start (viewers re-read from the rev).
+Decision: done. Not exercised in a real daemon (no integration file kills the adapter alone).
+
+
+### J-9363 2026-11-17 M1b follow-ups StagedText digest - good fit
+Evidence: advisory 5, contract 16.8: staged duplicates compared by bytes and preview, so another
+text with the same length and first 1,024 units was a duplicate. `913bb6d22e` (optional `digest`, 64
+units) and `e627d33b45`: every staging computes SHA-256 in the adapter (`stage`, `stagePending`,
+writers incrementally per piece); `sameSubmission` compares digest and bytes (no digest on either
+side: as before; on one side only: different). Tests: unit (`sameSubmission`, and `enqueueOnce`
+refusing a reused request id for a same-length same-preview text) fail on the old source; adapter
+(digests equal Node's SHA-256).
+Reading: a 1 MiB staging hashes in about 2-3 ms in Node; no vat cost (the vat compares strings).
+Decision: done.
+
+
+### J-9364 2026-11-17 M1b follow-ups blob provenance - good fit
+Evidence: advisory 8: a `StagedText.blob` from the exec vat was shape-checked only, and one `Content`
+per incarnation read any handle for anyone. Rule (contract 17.3): a session reads only blobs staged
+for it and can name only handles it was given. (1) handles are unforgeable manager exos and no method
+maps a key, digest or text to one; (2) handles reach a session only through its own traffic, and its
+exec vat is its own; (3) since `e627d33b45` the adapter records the owner session of each binding,
+and a session's `TurnPorts.content` and the context cache refuse another session's handle
+(`texts.blobNotOwned`; the round fails with `stagingFailed`, an exec source read fails the call);
+(4) after a restart the first session that presents a handle holds it. The incarnation-wide
+`Content` (operators, tests, the gateway) is never given to a vat. Tests: session B's ports cannot
+read A's exec result; the context cache refuses a record of B naming A's blob, before and after a
+store restart; both fail on the old source.
+Reading: even a session vat or exec vat that obtained another session's handle cannot have it read
+for it or sent to its model. Weak point: (4) after a restart.
+Decision: done.
+
+
+### J-9365 2026-11-17 M1b follow-ups context cache timing and the prepared entry - good fit
+Evidence: advisory 6: one `timing` record was shared, so two sessions preparing at once reset and
+added into each other's; the entry being prepared was never evicted, whatever its size.
+`e627d33b45`: a timing record per prepare; an entry over `maxTextUnits` on its own is dropped after
+its projection is built (`stats().oversize`). Tests: two sessions at once (A's reads slow): A's
+`timing.blobs` was 2 (B's object) on the old source, 1 now; a 5,000-unit entry with
+`maxTextUnits` 1,000 is not kept (kept on the old source).
+Reading: an oversize session rebuilds every round (its cost is J-0395's `context.rebuild`), which is
+the bound working; the default 128 Mi units is far above any session measured.
+Decision: done.
+
+
+### J-9366 2026-11-17 M1b follow-ups name-table exhaustion in session and factory vats - awkward
+Evidence: J-0390, J-0397 (4): only the exec vat detects "property key space exhausted". Audit of
+`guest/**` outside `guest/exec/` for forms that turn data into property names (every `JSON.parse`,
+object spread of foreign data, `Object.fromEntries`, computed member write, computed key,
+`Object.defineProperty`/`Reflect.*` with a variable key, `M.splitRecord` rest, error-message path):
+- `JSON.parse`: none in session or factory code; `guest/lib/transcript-records.js` `parseTranscript`
+  is imported by the adapter only (no vat bundle includes it).
+- computed writes keyed by values fixed in code, converted: the pool's `spares[kind]` and
+  `failures[kind]` (Maps now), `turn.js` usage sums over `COUNT_KEYS` (named keys), `live.js`
+  `{ ...event, [field]: cut }` (a switch naming each field), `records.js` `ordered[slot]` (an array
+  index; now `splice`). `interfaces.js` `lazyTable` defines its own fixed builder names (disabled with
+  the reason).
+- spreads of foreign records (`{ ...record, input }`, `{ ...usage.context }`, `{ ...rowPatch }`)
+  copy keys the record already had; they mint nothing new.
+- `M.splitRecord` rests: every guard's rest is `{}` (closed) except `CreateOptions`'
+  `networkPolicy: M.any()` and `model: M.any()`, which the factory refuses by name; a record's keys
+  are interned when the vat decodes the message, before any guard runs, so no guest change can stop a
+  sender's fresh keys (architecture 7: the gateway checks keys before sending; C-6 asks the engine to
+  make exhaustion a halt).
+- error-message paths: messages are string values; nothing builds a key from one.
+So no path in the session or factory vat mints a name from model, provider, tool or browser data
+after decoding. `b81cd703dc` adds the guest lint rule `thixotrope-harness-guest/no-data-keys`
+(`JSON.parse`, `Object.fromEntries`, computed member writes and object keys, `defineProperty`/
+`Reflect.set`/`Reflect.defineProperty` with a non-literal key; off for `guest/exec/**`), with 7 dirty
+and 1 clean case in `test/guest-lint.test.js`.
+Guard test: `status()` does not expose a vat's name count. It is read from the vat's snapshot: the
+`NAME` section (`small_sections` id 3 in `heaps/snapshots/<ref>.sqlite`) starts with a big-endian u32
+count of the vat's interned names (`rust/engine/ironhorse-snapshot/src/image.rs` `encode_names`; a
+template session vat holds 7,473). `test/integration/m1b-followups.test.js` first uses every public
+entry point of the session (submissions inline and staged, `startTurn`, `rename`, receipts, history
+cursors, `getInfo`, `listPending`, `getUsage`, `getCurrentTurn`, `watch`) and the factory
+(`createSession`, `findSession`, `listSessions`, `listPresets`, `sessionListFeed`) with constant data,
+stops cleanly, reads both counts, then feeds more than 100,000 distinct keys as data through the same
+entry points (a 100,000-key reply, 64 echo calls with 100 distinct argument keys each, 192 calls to
+distinct unknown tool names, a 100,000-key staged submission, 600-key inline submissions, distinct
+titles, ids and cursors), stops cleanly and reads them again; it asserts growth of at most 32 names
+each. First run: refused by the test itself (a backend presence the client held before the clean
+restart was retired, fixed in the file); the second run was waiting for the run lock (held by the
+core agent's `c7-core` workload) when this entry was written: the result is J-9371 when it lands; if J-9371 is absent the run did not get the lock in this unit.
+Reading: the harness side is as safe as guest code can make it; decode-time interning of a sender's
+record keys stays the engine's (C-6) and the gateway's.
+Decision: audit, conversions and lint rule done; the vat measurement is in the integration file for
+the later step to run.
+
+
+### J-9367 2026-11-17 M1b follow-ups what model code sees in the exec scope - good fit
+Evidence: advisory 7: `Compartment` and `lockdown` were reachable from the exec scope and stack strings
+were said to show host paths. `7ab0009027`: `HIDDEN_GLOBALS` (`Compartment`, `lockdown`,
+`repairIntrinsics`, `HandledPromise`) are deleted from the compartment's global object (shadowed with
+`undefined` where not configurable); text returning to the model (results, error messages, parse
+hints) has absolute host paths and `file://` URLs cut to `<host>/<file name>`
+(`render.js` `redactHostPaths`; roots /Users, /home, /private, /tmp, /var, /opt, /nix, /root, /usr,
+/Volumes, /run, /srv, /mnt, /etc and drive letters; `/api/v1/items` is left alone). Node tests: the
+four names are gone, the endowments remain, paths are cut; 3 fail on the old source. Real vat
+(`test/integration/m1b-followups.test.js`, release worker `7cda4467...`, crank budget 50 M, slot
+ceiling 4,000,000, `8bab501b78-dirty` = the integration file only, load 2.4-2.7), what model code
+sees on `globalThis` (names whose value is not `undefined`), exactly:
+{"metric":"exec.scope.globals","names":["AggregateError","Array","ArrayBuffer","BigInt","BigInt64Array","BigUint64Array","Boolean","DataView","Date","Error","EvalError","Function","Infinity","Int16Array","Int32Array","Int8Array","Iterator","JSON","Map","Math","NaN","Number","Object","Promise","Proxy","RangeError","ReferenceError","Reflect","RegExp","Set","String","Symbol","SyntaxError","Temporal","TextDecoder","TextEncoder","TypeError","URIError","Uint16Array","Uint32Array","Uint8Array","Uint8ClampedArray","WeakMap","WeakSet","decodeURI","decodeURIComponent","encodeURI","encodeURIComponent","escape","eval","globalThis","harden","isFinite","isNaN","parseFloat","parseInt","unescape"],"hits":["stepped"],"commit":"8bab501b78-dirty","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.38,2.45,2.73]}
+plus the parameters `powers` (empty), `E`, `harden`, `console` (discarding) and `sleep`. In the vat a
+stack string is the message line only (`"Error: deep"`, `"TypeError: cannot coerce null to object"`,
+`"Error: x"`): Ironhorse puts no frames or paths in `stack`, so the paths the advisory saw are Node's
+(the unit lane's SES compartment shows `packages/ses/src/make-evaluate.js` frames). The redaction is
+kept as a guard for engine messages and other workers.
+Reading: `Date` and `Temporal` are visible though the exec description says "No Date"; in a vat they
+read the vat's clock policy (not measured here). `eval` and `Function` stay: they evaluate in the same
+compartment, with the same globals.
+Decision: done; `Date`/`Temporal` in the exec scope is for the PM (the description or the scope should
+change).
+
+
+### J-9368 2026-11-17 M1b follow-ups the exec call fence: what one more step can do - good fit
+Evidence: J-0391: since `e48dffe8f7` only sleeps asked for after the call are dead; a sleep in flight
+still answers and its code takes one more step. Quantified on the old program (Node, test fails
+there): that step ran, wrote the scope (`hits.push('stepped')`) and its `E(target).hit()` and
+`E.sendOnly(target).hit()` were delivered after the cancel (the test that expects only 'stepped'
+fails there). In M1b the scope holds no remote reference (`powers` is empty), so the step could
+reach only local objects; with M5's powers it could send to a capability after the cancel. Fix
+`7ab0009027`: `E` and `powers` are made per call, like `sleep`; a closed call's `E`, `E.sendOnly`,
+`E.get`, `E.when`, `E.resolve` go to a promise that never settles (nothing leaves the vat, nothing
+answers); `HandledPromise` is hidden (J-9367), so no send bypasses the call's `E`; an `E` kept on
+`globalThis` is dead in later calls. No answer is wrapped. What the step can still do: change the
+scope's own globals, and compute until the crank budget (a runaway then halts the exec vat, which is
+retired, as any runaway). Real vat (same run as J-9367): cancel during a 4 s sleep whose
+continuation pushes 'stepped' then sends to a local target: the next call reads `["stepped"]`.
+Cost, 100 answered sleeps from one body: Node, 20 runs, median 1.33 ms before, 1.24 ms after (no
+difference); in a vat, per-call endowments, 5 calls after the first:
+{"metric":"exec.sends.answered","unit":"ms","n":5,"median":7050,"min":5301,"max":8021,"all":[5301,7285,5981,7050,8021],"budget":{"median":8000},"commit":"8bab501b78-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.38,2.45,2.73]}
+against J-0395's 6,668 ms median (4,258-8,516) without per-call `E`; the calls slow down one after
+another on one exec vat as J-0395 describes (C-7), so this is within that spread, not an A/B.
+Reading: the fence now covers every door model code has (sleep, E, powers); M5 must keep powers per
+call, built inside `makeCall`.
+Decision: done; a same-template A/B in a vat was not run (the old program is not in the template).
+
+
+### J-9369 2026-11-17 M1b follow-ups remaining advisories in harness files - awkward
+Evidence: open advisories in files this unit owns: J-0397 (9) (a replaced spare's pre-minted host),
+(11) (test-strength notes; their text is not in the repository), and M1a's J-0296 (7) and (10).
+(a) J-0296 (7), done: the Submission guard bounds inline text by units (8,192), so up to about
+24.6 KB of UTF-8 could be stored inline by a caller that skipped the Composer. Contract `beb48b46bf`
+(`textOf.inlineTooLarge`, contract 17.5) and `8bab501b78`: `enqueueOnce` and `startTurn` refuse inline
+text over `inlineBytes` before storing anything; the Composer counts it as a refusal that frees its
+staged file. Test (`m1b-blobs-session`): 5,000 x U+00E9 (10,000 bytes) refused by both; fails on the
+old source. The M1a queue preview test now uses the longest admitted inline text (2,730 x U+20AC); its
+view is still cut to a frame.
+(b) J-0397 (9), analysed, not changed: a spare's host facet is held by the pool's spare record and,
+after a take, by the creation; a discarded or replaced spare drops both, and the manager keeps hosts
+only in `WeakMap`s (`sessionOfHost`, `bindWaits`), so nothing holds the facet strongly once the
+factory's import is released; in the replace path the replacement spare's host goes unused and is
+dropped with the creation. Whether the hub's GC frames release it in a real daemon was not measured
+(it needs the manager vat's export count before and after a discard).
+(c) J-0296 (10) (an idle lost session stays `ready` until called): not done; the worker controller
+has no status query that does not wake the vat, so the start listener would have to wake every idle
+session (D-5 forbids it).
+Reading: (a) moves the frame rule into the session; (b) and (c) need a core query the harness lacks.
+Decision: (a) done; (b), (c) and (11) stay open for the PM.
+
+
+### J-9370 2026-11-17 M1b follow-ups tests, lint and what the later step re-runs - perf
+Evidence: unit lane after the last change: 464 passed, 38 skipped (was 434 / 38); `corepack yarn
+lint:types` 0 errors; eslint 0 errors on every changed file; prettier clean. The streamed-checkpoint
+test of J-0393 ("checkpoints still come", >= 3) is load-sensitive: in the full lane it saw 4 at HEAD
+and 2 when this unit's fsync-heavy adapter tests ran beside it; those two tests are serial tests in
+the same file now (AVA runs them before the file's concurrent tests), and the lane passes (8
+checkpoints in the last run). No change outside `packages/thixotrope-harness`; no cargo, no core
+change, no worker rebuild. Integration files the later step must re-run (one per invocation, under
+the run lock), with what each covers here:
+- `m1b-followups.test.js` (new): name-table flood (J-9366), exec scope globals, stacks and fence
+  (J-9367, J-9368; passed once), `exec.sends.answered` (passed once, median 7,050 ms).
+- `m1b-content.test.js`: staged submissions and replies through the new commit order, digests,
+  per-session Content (acceptance 2, 7).
+- `m1b-context-restart.test.js`: the context cache's owner check and TOFU after restarts (acceptance 8).
+- `m1b-exec-tool.test.js`, `m1b-exec-tool-restart.test.js`, `m1b-qc.test.js`: the exec program
+  (hidden globals, per-call E), exec writers per session (acceptance 3, 4, 5, 10, 11; QC).
+- `m1b-live.test.js`, `m1b-pool.test.js`, `m1b-pool-restart.test.js`: list feed with the factory's new
+  StartListener and the pool's Maps (acceptance 1, 6, 9, 12).
+- `m1a-slice.test.js`, `m1a-slice-restart.test.js`, `m1a-slice-crash.test.js`,
+  `m1a-provision.test.js`: Composer refusal handling, session inline bound, manager attach notice.
+Perf: `perf/exec.perf.mjs` (`exec.sends.answered`, `exec.trivial`, `exec.first`; the exec program grew
+63,067 -> 65,514 bytes), `perf/turn.perf.mjs` (staging moved to commit-before-send).
+Reading: everything that runs in Node is green; the real-vat run of this unit's own file passed its
+exec half and is pending on the name-table half.
+Decision: the later step runs the list above.
