@@ -9,13 +9,30 @@ import harden from '@endo/harden';
  * for `status`, not a benchmark.
  * @param {WorkerEngine} rawEngine
  * @param {TimerPowers} timers
- * @returns {{ engine: WorkerEngine, timings: () => Record<'delivery' | 'snapshot' | 'wake', { count: number, milliseconds: number }> }}
+ * @returns {{ engine: WorkerEngine, timings: () => Record<'delivery' | 'snapshot' | 'wake', { count: number, milliseconds: number }>, deliveryHistogram: () => { bounds: number[], counts: number[], maxMs: number } }}
  */
 export const makeMeasuredEngine = (rawEngine, timers) => {
   const metrics = {
     delivery: { count: 0n, milliseconds: 0 },
     snapshot: { count: 0n, milliseconds: 0 },
     wake: { count: 0n, milliseconds: 0 },
+  };
+  /**
+   * Deliveries (cranks) by wall time: cumulative counts per bucket, the
+   * last bucket open; a reader takes the difference of two readings for
+   * a window's distribution (perf: crank p95 under load).
+   */
+  const deliveryBounds = harden([
+    5, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 2000, 5000,
+  ]);
+  const deliveryCounts = deliveryBounds.map(() => 0).concat([0]);
+  let deliveryMaxMs = 0;
+  /** @param {number} ms */
+  const countDelivery = ms => {
+    let i = 0;
+    while (i < deliveryBounds.length && ms > deliveryBounds[i]) i += 1;
+    deliveryCounts[i] += 1;
+    if (ms > deliveryMaxMs) deliveryMaxMs = ms;
   };
   /**
    * @template T
@@ -27,8 +44,10 @@ export const makeMeasuredEngine = (rawEngine, timers) => {
     try {
       return await operation();
     } finally {
+      const ms = timers.monotonicNow() - start;
       metrics[name].count += 1n;
-      metrics[name].milliseconds += timers.monotonicNow() - start;
+      metrics[name].milliseconds += ms;
+      if (name === 'delivery') countDelivery(ms);
     }
   };
   const engine = harden({
@@ -60,6 +79,12 @@ export const makeMeasuredEngine = (rawEngine, timers) => {
       snapshot: report(metrics.snapshot),
       wake: report(metrics.wake),
     });
-  return harden({ engine, timings });
+  const deliveryHistogram = () =>
+    harden({
+      bounds: deliveryBounds,
+      counts: [...deliveryCounts],
+      maxMs: deliveryMaxMs,
+    });
+  return harden({ engine, timings, deliveryHistogram });
 };
 harden(makeMeasuredEngine);

@@ -236,7 +236,11 @@ export const serveThixotrope = async (
   const configPath = paths.join(statePath, 'workspace.json');
   /** @type {WorkspaceTable | undefined} */
   let config;
-  const { engine: measured, timings } = makeMeasuredEngine(rawEngine, timers);
+  const {
+    engine: measured,
+    timings,
+    deliveryHistogram,
+  } = makeMeasuredEngine(rawEngine, timers);
   const pendingDisconnects = makeInFlight();
   // The views each live control connection holds, by its facet, for the
   // stop to end together.
@@ -669,6 +673,7 @@ export const serveThixotrope = async (
           ...(ironhorseLimits ? { ironhorse: ironhorseLimits } : {}),
           workers: daemon.inspectWorkers(),
           timings: timings(),
+          deliveryHistogram: deliveryHistogram(),
           gc: daemon.inspectGc(),
           hub: daemon.inspectHub(),
         }),
