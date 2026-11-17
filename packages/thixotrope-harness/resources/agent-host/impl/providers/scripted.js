@@ -40,6 +40,11 @@
  * transcript records' JSON, the whole and per turn, a turn starting at each
  * user message), so a test can compare contexts across a restart.
  *
+ * M2 W2.6: a script round with `times` stands for that many rounds in a row
+ * (`scriptRoundAt`; the round-limit probe), and the `context` line also
+ * carries `{ systemBytes, systemDigest }` of the request's system prompt
+ * (seam 1 of m2-interfaces.md 2.4), read in full when staged.
+ *
  * Node only.
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
@@ -179,6 +184,40 @@ export const contextDigests = transcript => {
   });
 };
 harden(contextDigests);
+
+/**
+ * The script round that stands for `round` of a script turn: rounds in
+ * order, each `times` times (M2 W2.6, default once), or undefined past the
+ * end.
+ * @param {any} scriptTurn
+ * @param {number} round
+ */
+export const scriptRoundAt = (scriptTurn, round) => {
+  if (scriptTurn === undefined) return undefined;
+  let left = round;
+  for (const scripted of scriptTurn.rounds) {
+    const times = /** @type {number} */ (scripted.times ?? 1);
+    if (left < times) return scripted;
+    left -= times;
+  }
+  return undefined;
+};
+harden(scriptRoundAt);
+
+/**
+ * What the `context` line records of a request's system prompt (M2 W2.6):
+ * its UTF-8 bytes and a 16-hex digest of its text, or nothing without one.
+ * A staged prompt is read through the blob store first.
+ * @param {string | undefined} system
+ */
+export const systemDigest = system =>
+  system === undefined
+    ? {}
+    : {
+        systemBytes: Buffer.byteLength(system),
+        systemDigest: sha(system).slice(0, 16),
+      };
+harden(systemDigest);
 
 /** @param {unknown} error */
 const messageOf = error =>
@@ -368,6 +407,16 @@ export const makeScriptedProvider = ({
       if (logContext) {
         const ms = now() - t0;
         const { transcript, timing } = projection;
+        // M2 W2.6: the system prompt the request carries (seam 1), in full.
+        /** @type {string | undefined} */
+        let system;
+        if (isStaged(req.system)) {
+          system = await blobs
+            ?.read(req.system.blob, owner)
+            .catch(() => undefined);
+        } else if (typeof req.system === 'string') {
+          system = req.system;
+        }
         // Digested off the round's path, as `later` does for its lines.
         timers.after(0, () => {
           try {
@@ -375,6 +424,7 @@ export const makeScriptedProvider = ({
               ...where,
               ms,
               ...contextDigests(transcript),
+              ...systemDigest(system),
               ...(timing === undefined
                 ? {}
                 : {
@@ -412,7 +462,7 @@ export const makeScriptedProvider = ({
     } else {
       scriptTurn = chosen.get(turn);
     }
-    const scripted = scriptTurn?.rounds[round];
+    const scripted = scriptRoundAt(scriptTurn, round);
     if (scripted === undefined) {
       log('round-failed', where);
       E.sendOnly(sink).roundFailed(
