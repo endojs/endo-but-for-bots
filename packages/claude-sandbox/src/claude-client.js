@@ -517,6 +517,11 @@ export const makeClaudeClient = args => {
       // There is no interactive permission channel in print mode, so let the
       // CLI execute its agentic tool loop within that OS-level boundary.
       '--dangerously-skip-permissions',
+      // Delegation must use Endo's session-owned spawnSubagent capability.
+      // Deny both the current tool and its older name on every fresh/resumed
+      // process, including recovery. Permission bypass is not a tool filter.
+      '--disallowedTools',
+      'Agent,Task',
     ];
     if (mcpConfigPath) {
       // Wire the session's Endo tool bridge (mounted Unix socket) and ignore

@@ -5,6 +5,7 @@ import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 
+import { makePendingQueue } from '../src/pending-queue.js';
 import { makeSessionTurnSlot } from '../src/session-turn-slot.js';
 
 /**
@@ -202,4 +203,42 @@ test('CapTP discovery exposes a queued turn before its history promise settles',
   await E(turn).whenFinished();
   t.like(await view.next(), { value: { type: 'end' } });
   t.is(await E(connection.session).getCurrentTurn(), null);
+});
+
+test('mention receipts recover across real CapTP record serialization', async t => {
+  t.timeout(5000);
+  const values = new Map();
+  const host = Far('Host', {
+    has: name => values.has(name),
+    lookup: name => values.get(name),
+    storeValue: (value, name) => {
+      values.set(name, value);
+    },
+    remove: name => {
+      values.delete(name);
+    },
+  });
+  const queue = makePendingQueue({ host, id: 'mentions' });
+  const requestId = `${Date.now()}-00000000-0000-4000-8000-000000000000`;
+  const message = harden({ strings: ['Read ', ''], names: ['docs'] });
+  const entry = await queue.enqueue('Read @docs', {
+    message,
+    requestId,
+    mentions: harden([
+      { path: ['docs'], identity: 'document-id', value: Far('Document', {}) },
+    ]),
+  });
+  await queue.complete(entry.id);
+  const wire = connect(
+    Far('SessionReceipts', { getSubmissionReceipt: queue.receipt }),
+  );
+  t.teardown(wire.disconnect);
+  t.teardown(() => queue.destroy());
+  const receipt = await E(wire.session).getSubmissionReceipt(
+    'Read @docs',
+    requestId,
+    harden([{ path: ['docs'], identity: 'document-id' }]),
+    message,
+  );
+  t.deepEqual(receipt, { id: entry.id });
 });

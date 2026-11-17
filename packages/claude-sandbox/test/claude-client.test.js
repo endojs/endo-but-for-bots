@@ -725,6 +725,9 @@ test('a confirmed failed turn restores supplied context for its successful succe
   t.true(resumed.argv.includes('--resume'));
   t.true(resumed.argv.includes(restoredUuid));
   t.false(resumed.argv.includes('--continue'));
+  for (const proc of fake.spawned.filter(item => item.argv[0] === 'claude')) {
+    t.is(proc.argv[proc.argv.indexOf('--disallowedTools') + 1], 'Agent,Task');
+  }
 });
 
 for (const exitCode of [0, 1, 7]) {
@@ -1465,6 +1468,30 @@ test('without an mcpConfigPath no MCP flags are passed', async t => {
   await drain(await client.send('do a thing'));
   t.false(fake.spawned[0].argv.includes('--mcp-config'));
 });
+
+for (const mcpConfigPath of [undefined, '/endo-mcp/mcp.json']) {
+  test(`native delegation is denied on fresh and resumed turns ${mcpConfigPath ? 'with' : 'without'} Endo tools`, async t => {
+    t.timeout(5000);
+    const fake = makeFakeSlice([[], []]);
+    const client = makeClaudeClient(
+      baseArgs(fake, makeFakeMount(), { mcpConfigPath }),
+    );
+    t.teardown(() => client.terminate());
+    await drain(await client.send('first'));
+    await drain(
+      await client.send('second', { transcript: continuedTranscript }),
+    );
+    t.false(fake.spawned[0].argv.includes('--resume'));
+    t.true(fake.spawned[1].argv.includes('--resume'));
+    for (const { argv } of fake.spawned) {
+      t.is(argv[argv.indexOf('--disallowedTools') + 1], 'Agent,Task');
+      t.true(argv.includes('--dangerously-skip-permissions'));
+      // Keep the Endo MCP bridge available for managed delegation.
+      if (mcpConfigPath)
+        t.is(argv[argv.indexOf('--mcp-config') + 1], mcpConfigPath);
+    }
+  });
+}
 
 test('send() restores journal context after first turn and forwards --model', async t => {
   const fake = makeFakeSlice([[], []]);

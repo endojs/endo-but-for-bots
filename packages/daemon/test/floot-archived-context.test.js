@@ -1,4 +1,5 @@
 // @ts-check
+/* eslint-disable import/no-relative-packages -- Cross-package storage integration. */
 import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
@@ -8,6 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { makeEndoClient, start, stop } from '../index.js';
+import { createPrivateTurnStorage } from '../../floot/src/private-turn-storage.js';
 
 test.serial(
   'archived checkpoint and late tool evidence survive a cold daemon restart',
@@ -47,10 +49,7 @@ test.serial(
     };
     await start(config);
     let host = await connect();
-    await E(host).storeValue(
-      harden({ version: 1, sessionId: 'archive-context' }),
-      'floot-private-turn-15-archive-context-schema',
-    );
+    await createPrivateTurnStorage(host, 'archive-context');
     await E(host).provideWorker('archive-context-worker');
     let fixture = await E(host).makeUnconfined(
       'archive-context-worker',

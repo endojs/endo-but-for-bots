@@ -5,6 +5,7 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
+import { directoryHost } from './_directory-host.js';
 
 /**
  * A factory over an in-memory host with one hosted backend, which records the
@@ -127,16 +128,11 @@ const makeWorld = ({ promptEnvironment, subscriptions, listing } = {}) => {
   /** @type {Map<string, unknown>} */
   const hostStore = new Map([['codex-backend', backend]]);
   const host = Far('PromptHost', {
-    list: () => harden([...hostStore.keys()]),
-    has: name => hostStore.has(name),
-    lookup: name => hostStore.get(name),
+    ...directoryHost(hostStore),
     locate: name => `locator:${name}`,
     copy: () => undefined,
     provideGuest: (_name, { agentName }) => {
       hostStore.set(agentName, makeGuest());
-    },
-    storeValue: (value, name) => {
-      hostStore.set(name, value);
     },
     remove: name => {
       hostStore.delete(name);

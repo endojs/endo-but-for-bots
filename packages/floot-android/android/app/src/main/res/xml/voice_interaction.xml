@@ -1,0 +1,5 @@
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:recognitionService=""
+    android:sessionService="org.endo.floot.FlootSessionService"
+    android:settingsActivity="org.endo.floot.MainActivity"
+    android:supportsAssist="true" android:supportsLaunchVoiceAssistFromKeyguard="false" />

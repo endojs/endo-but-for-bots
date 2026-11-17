@@ -30,6 +30,14 @@ structure into Floot's metadata.
 
 ## Turn durability
 
+### Codex reasoning effort
+
+`codex-reasoning.js` exports `codexResponsesEffort` for the Fae Codex picker and
+subscription Responses adapter.
+It maps the pinned Codex CLI's `ultra` option to its wire value, `max`, preserves
+supported Responses efforts, and returns `undefined` for unknown values.
+New Fae sessions offer the wire values; retained `ultra` recipes still work.
+
 ### Snapshot storage
 
 `snapshot-journal.js` provides `makeSnapshotJournal` for versioned snapshots in

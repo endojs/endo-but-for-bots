@@ -369,3 +369,26 @@ test('a queue that cannot be read is a hold, not a refusal to open the session',
   await submissions.destroy();
   t.false(store.has('floot-pending-3-abc'));
 });
+
+test('duplicate submission does not dispatch twice or release a restart hold', async t => {
+  t.timeout(5000);
+  const host = makeHost();
+  const { submissions, started } = makeSession(host);
+  const requestId = `${Date.now()}-11111111-1111-4111-8111-111111111111`;
+  const [a, b] = await Promise.all([
+    submissions.submit('only once', requestId),
+    submissions.submit('only once', requestId),
+  ]);
+  t.is(a.id, b.id);
+  t.is(started.length, 1);
+  const restored = makeSession(host);
+  await restored.submissions.ready();
+  const hold = restored.submissions.read().hold;
+  t.truthy(hold);
+  t.deepEqual(await restored.submissions.submit('only once', requestId), a);
+  t.deepEqual(restored.submissions.read().hold, hold);
+  t.is(restored.started.length, 0);
+  started[0].finish();
+  await submissions.close();
+  await restored.submissions.close();
+});

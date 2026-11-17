@@ -580,6 +580,14 @@ test('spawnSubagent binds the subagent under the parent’s own authority', asyn
     harden({ name: 'helper', systemPrompt: 'be terse' }),
   );
   t.regex(result, /Spawned subagent "helper"/);
+  for (const guidance of [
+    spawnTool.help(),
+    spawnTool.schema().function.description,
+  ]) {
+    t.true(guidance.includes('recursively fact-check'));
+    t.true(guidance.includes('no additional capabilities'));
+    t.true(guidance.includes('concrete stopping condition'));
+  }
   t.deepEqual(spawned[0], {
     name: 'helper',
     options: { systemPrompt: 'be terse' },
@@ -868,5 +876,7 @@ test('a parent may add to a subagent’s standing prompt but not replace it', t 
   );
   t.true(composed.startsWith(base));
   t.true(composed.includes('You are a subagent.'));
+  t.true(composed.includes('recursively fact-check'));
+  t.true(composed.includes('Do the assigned work yourself by default'));
   t.true(composed.includes('rm -rf /'));
 });

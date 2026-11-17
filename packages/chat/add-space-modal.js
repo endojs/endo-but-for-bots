@@ -1,5 +1,5 @@
 // @ts-check
-/* eslint-disable no-use-before-define */
+
 /* eslint-disable no-await-in-loop */
 
 import harden from '@endo/harden';
@@ -12,6 +12,7 @@ import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { assertValidLocator } from '@endo/spaces-util/locator.js';
 import { petNamePathsAutocomplete } from '@endo/spaces-util/petname-paths-autocomplete.js';
+import { importFlootObjects } from './floot-transfer.js';
 import { ALL_ICONS, IconSelector } from './icon-selector.js';
 import { createSchemePicker } from './scheme-picker.js';
 import { Fragment, h, renderConfined } from './setup-preact-container.js';
@@ -101,6 +102,7 @@ The scene runs in a sandboxed iframe with no network access.`;
  * @property {Array<{ id: string, name: string, icon: string, profilePath: string[] }>} existingChannelSpaces
  * @property {string} whylipName
  * @property {string} whylipAgentName
+ * @property {string} flootImport
  * @property {string} flootAudioPath
  * @property {string} flootTtsPath
  * @property {string} workflowServicePath
@@ -856,6 +858,30 @@ const FlootForm = ({ view, on }) =>
   h(
     FormShell,
     { title: 'Floot Chat', on },
+    h(
+      'div',
+      { class: 'add-space-field' },
+      h(
+        'label',
+        { htmlFor: 'floot-import' },
+        'Import Floot objects from another Endo',
+      ),
+      h('textarea', {
+        id: 'floot-import',
+        class: 'add-space-input',
+        value: view.flootImport,
+        placeholder:
+          'Paste the export from Floot settings, or select local objects below.',
+        onInput: (/** @type {{target: {value: string}}} */ event) =>
+          on.flootImportInput(event.target.value),
+      }),
+      h(
+        'div',
+        { class: 'field-hint' },
+        'Imports references into this Endo. The agent and voice services continue running on their original host.',
+      ),
+    ),
+
     h(IconField, { view, on }),
     h(PathSelectorField, {
       label: 'Floot Agent Path',
@@ -1089,6 +1115,7 @@ harden(AddSpaceView);
  * @property {(mode: 'new' | 'existing') => void} channelPersonaMode
  * @property {(value: string) => void} whylipNameInput
  * @property {(value: string) => void} whylipAgentNameInput
+ * @property {(value: string) => void} flootImportInput
  * @property {(value: string) => void} flootAudioInput
  * @property {(value: string) => void} flootTtsInput
  * @property {(value: string) => void} workflowServiceInput
@@ -1142,6 +1169,7 @@ export const createAddSpaceModal = ({
   /** @type {string} */
   let whylipAgentName = '';
   /** @type {string} */
+  let flootImport = '';
   let flootAudioPath = '';
   /** @type {string} */
   let flootTtsPath = '';
@@ -1231,6 +1259,7 @@ export const createAddSpaceModal = ({
         : [],
       whylipName,
       whylipAgentName,
+      flootImport,
       flootAudioPath,
       flootTtsPath,
       workflowServicePath,
@@ -1347,12 +1376,11 @@ export const createAddSpaceModal = ({
         const names = await E(host).list('floot');
         for (const name of names) {
           try {
-            // eslint-disable-next-line no-await-in-loop
             const obj =
               /** @type {{ __getMethodNames__: () => Promise<string[]> }} */ (
                 await E(host).lookup(['floot', name])
               );
-            // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
+            // eslint-disable-next-line no-underscore-dangle
             const methods = await E(obj).__getMethodNames__();
             if (
               methods.includes('createSession') &&
@@ -1674,6 +1702,9 @@ export const createAddSpaceModal = ({
     },
     whylipAgentNameInput: value => {
       whylipAgentName = value;
+    },
+    flootImportInput: value => {
+      flootImport = value;
     },
     flootAudioInput: value => {
       flootAudioPath = value;
@@ -2364,6 +2395,29 @@ export const createAddSpaceModal = ({
    * Handle floot chat form submission.
    */
   const handleFlootSubmit = async () => {
+    if (isSubmitting) return;
+    if (flootImport.trim()) {
+      isSubmitting = true;
+      error = null;
+      render();
+      try {
+        const paths = await importFlootObjects(powers, flootImport.trim());
+        await onSubmit({
+          name: 'Imported Floot',
+          icon: selectedIcon,
+          layout: 'floot',
+          scheme: schemePicker ? schemePicker.getValue() : 'auto',
+          ...paths,
+        });
+        hide({ restoreScheme: false });
+        onClose();
+      } catch (err) {
+        error = `Import failed: ${/** @type {Error} */ (err).message}`;
+        isSubmitting = false;
+        render();
+      }
+      return;
+    }
     if (!pathAutocomplete) return;
 
     const paths = pathAutocomplete.getValue();
@@ -2593,6 +2647,7 @@ export const createAddSpaceModal = ({
     connectExistingSpaceId = null;
     whylipName = '';
     whylipAgentName = '';
+    flootImport = '';
     flootAudioPath = '';
     flootTtsPath = '';
     workflowServicePath = '';

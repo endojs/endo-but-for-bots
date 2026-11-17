@@ -82,6 +82,7 @@ export const make = host => {
           : E(host).lookup(...args),
     locate: (...args) => E(host).locate(...args),
     copy: (...args) => E(host).copy(...args),
+    createDirectory: (...args) => E(host).createDirectory(...args),
     provideGuest: (...args) => {
       if (!nativeEnabled) return E(host).provideGuest(...args);
       // Isolate late backend acquisition/disposal from guest collection's

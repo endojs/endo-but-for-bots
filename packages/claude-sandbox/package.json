@@ -54,6 +54,9 @@
     "eslint": "catalog:dev"
   },
   "ava": {
+    "require": [
+      "./test/_preload-concordance.js"
+    ],
     "files": [
       "test/**/*.test.js",
       "!test/ninep-flow.test.js"

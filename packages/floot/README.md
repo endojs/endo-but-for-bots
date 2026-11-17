@@ -2,10 +2,48 @@
 
 For the Secrets-backed OpenRouter API provider, see [OpenRouter setup](./OPENROUTER.md).
 
+## Assistant presets
+
+In the shared web/Android UI, open Settings → Assistant presets → Manage presets.
+Edit a preset's instructions, model, reasoning effort, default objects and internet policy;
+save a copy to create a custom preset, or reset a built-in preset.
+The Voice shortcut selector chooses which preset Android assistant invocations use.
+
+The built-in voice preset uses Fae Codex / gpt-5.6-sol with an isolated Podman shell,
+a workspace, and public internet enabled.
+Internet policy belongs to the attached shell, independently of the inference backend.
+General presets can include a workspace and shell; the shell requires the workspace.
+Hosted CLI backends keep their own environment and policy controls.
+The new-session picker uses saved defaults unless explicitly overridden.
+
+Additional endowments are explicit object paths, resolved once when granted.
+Editing a name or copying a preset preserves that object identity across devices.
+Presets are scoped to a Floot factory and stored in one bounded record.
+Changes apply to new sessions; existing sessions and their delegates retain their
+original instructions and authority recipe, even after a preset is deleted.
+Delegates inherit their parent's current approved network policy.
+Existing sessions without a shell need a new session to gain one.
+
+Factory API: `getPresetConfiguration()` returns a revision and presets;
+`savePreset(preset, revision)`, `deletePreset(id, revision)`,
+`resetPreset(id, revision)` and `setVoicePreset(id, revision)` reject stale edits.
+After a conflict or uncertain save, reload before retrying.
+`createAssistantSession()` creates a spoken session from the selected voice preset.
+Explicit grants have `{petName, sourcePath, value}` where `value` is an object capability;
+these references stay in the host controller and are never passed to the confined view.
+
 ## Durable turn recovery
 
 Factory-created sessions keep append-only turn journals in factory-owned storage,
-outside ordinary guest powers. `getTurns()` exposes evidence; on an idle session,
+outside ordinary guest powers.
+One `floot-private-sessions` directory is rooted in the factory host; each
+session has its own directory containing its schema, turn records, and network
+policy audit. Appending history does not grow the host's name inventory or scan
+other sessions. Terminal deletion drains and closes the writers, stops the
+backends, releases environment bindings, and unlinks the session directory so
+its records can be collected. Failed deletion remains retryable after restart.
+Flat journals from older releases are not imported.
+`getTurns()` exposes evidence; on an idle session,
 `resolveTurn(turnId, note)` acknowledges unknown outcomes after independent checks
 of external effects. It never replays or undoes work. Endo tool intents precede
 dispatch; provider-native activity is observation, not write-ahead authorization.
@@ -28,6 +66,10 @@ archived turn counts, and explicit storage provision. There is no event limit:
 long text is stored by reference (`getTurnContent`), replay is bounded by
 snapshots, and settled turns beyond the retained window are archived
 (`getArchivedTurns`). Outcome acknowledgement consumes an event.
+Endo tool outputs and error text are capped at 32,768 UTF-16 code units before
+journaling or delivery to either a provider or hosted model, including an
+explicit truncation notice. The notice asks for filtering or pagination; it
+does not imply that an operation failed. Short outputs are unchanged.
 
 A streaming LLM agent harness for the Endo daemon, plus the two voice caplets
 that make it a hands-free voice assistant.
@@ -446,3 +488,51 @@ The preset's prompt is versioned (`promptVersion`): a bump migrates the prompt
 of every existing `machine-admin` session exactly once on the factory's next
 registry load, leaving custom and delegated prompts untouched. Ordinary preset
 edits never reach a live session.
+
+## Reading images and checking visual work
+
+Floot and Fae expose `viewImage` for models that accept image inputs.
+It reads an existing Endo blob, mount, tree, or git workspace:
+
+```json
+{"petName":"workspace","path":["screenshots","mobile.png"]}
+```
+
+Omit `path` when the petname already names a readable blob.
+For a git workspace the tool resolves `worktree()` before looking up the file.
+Paths are relative segments; the tool grants no host filesystem or URL access.
+It accepts PNG, JPEG, and WebP bytes up to 2 MiB, checking the actual streamed
+size as well as the declared size when available.
+Resize larger screenshots before reading them.
+HTML and SVG need rendering first.
+
+When building a scene or interface, the agent should discover a browser capability
+or use Playwright/Chromium through its granted shell, render at desktop and mobile
+sizes, inspect page errors, and read the saved screenshots with `viewImage`.
+It should fix visible defects and repeat the check before reporting the result as
+verified.
+If the browser or shell is unavailable, it must say what remains unverified.
+This feature does not provision a browser or expand the shell's network authority.
+
+The selected model must support vision; provider/model rejections remain errors,
+not a fallback that pretends the image was seen.
+Supported transports are Fae's Responses, OpenAI-compatible, Anthropic, and Ollama
+providers, plus the hosted Codex and Claude tool bridges.
+Hosted OpenCode does not advertise `viewImage` yet because its native recovery
+format rejects image attachments.
+
+Image bytes use a bounded, versioned tool-result envelope across the existing
+text transcript and journal interfaces.
+Provider adapters decode it into native image blocks; ordinary user and assistant
+text is never decoded as an image.
+Text-output truncation does not cut image payloads.
+Live and restored UI history show a short image receipt instead of base64, while
+private session journals retain the bytes for replay without re-reading the file.
+Images therefore follow the same deletion and cleanup lifecycle as the session.
+Compaction summarizes image receipts and the agent's observations, never base64
+as text tokens; recent retained images remain intact.
+For API provider sessions, a later turn represents images from an incomplete turn
+as receipts, so a rejected image does not keep every later request failing.
+The agent may explicitly read a corrected image again with `viewImage`.
+Original journal bytes remain available as evidence, including after restart.
+Opaque hosted backend checkpoints retain their native recovery policy.

@@ -698,6 +698,7 @@ export const makeAssetServerKit = async ({
     // itself a directory) is a 404; we never return a `200` until the
     // resolved node is confirmed to be a readable file.
     let fileNode;
+    let directory = false;
     let size;
     let fileName = pathSegments[pathSegments.length - 1] || mount.index;
     try {
@@ -713,6 +714,7 @@ export const makeAssetServerKit = async ({
       // eslint-disable-next-line no-underscore-dangle
       let methods = await E(node).__getMethodNames__();
       if (!methods.includes('open')) {
+        directory = true;
         // Directory (or other non-file): serve its index file, and
         // label the response by the index's name, not the directory's.
         node = E(node).lookup(mount.index);
@@ -738,6 +740,23 @@ export const makeAssetServerKit = async ({
         return unavailableResponse();
       }
       return plainResponse(404, 'Not found\n');
+    }
+
+    if (directory && !requestUrl.pathname.endsWith('/')) {
+      // Rebuild from the resolved capability path, never an untrusted origin
+      // or raw leading slashes. Encode segments before adding the unchanged
+      // query so special names cannot become URL syntax or response headers.
+      const pathname = `/${[token, ...pathSegments].map(encodeURIComponent).join('/')}/`;
+      return {
+        status: 308,
+        headers: [
+          ['Location', `${pathname}${requestUrl.search}`],
+          ['Content-Length', '0'],
+          ['Cache-Control', 'no-cache'],
+          ['Referrer-Policy', 'no-referrer'],
+          ['X-Content-Type-Options', 'nosniff'],
+        ],
+      };
     }
 
     // Annotate as tuples: a bare array literal infers as `string[][]`,

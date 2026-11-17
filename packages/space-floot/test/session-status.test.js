@@ -80,8 +80,15 @@ for (const block of chatCss.matchAll(/(^|[{}])([^{}@]+)\{/g)) {
     if (match) bareGlobals.add(match[1]);
   }
 }
-// Reused on purpose: a highlighted token takes chat's token colours.
-const ALLOWED = new Set(['token']);
+// Reused on purpose: Floot uses Chat's shared mention chips and picker.
+const ALLOWED = new Set([
+  'token',
+  'chat-token',
+  'token-menu',
+  'token-menu-item',
+  'token-menu-empty',
+  'token-menu-hint',
+]);
 const forbidden = [...bareGlobals].filter(name => !ALLOWED.has(name));
 
 test('chat really does style a bare .error (the premise of these tests)', t => {

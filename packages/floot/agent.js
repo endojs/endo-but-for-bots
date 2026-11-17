@@ -21,6 +21,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { promisify } from 'node:util';
 
 import { Fail, q } from '@endo/errors';
+import { codexResponsesEffort } from '@endo/hosted-agent/codex-reasoning.js';
 import { claudeToolInput } from '@endo/claude-sandbox/src/claude-tool-input.js';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -35,6 +36,7 @@ import {
   SubagentSpawnerInterface,
   assertSubagentCapabilities,
   assertSubagentName,
+  composeSubagentSystemPrompt,
   isSameFormula,
   makeSubagentDelegations,
   DEFAULT_SUBAGENT_LIMITS,
@@ -56,7 +58,12 @@ import {
 } from '@endo/hosted-agent/openrouter-model-read.js';
 import { addUsage, projectUsage } from '@endo/hosted-agent/token-usage.js';
 
+import {
+  decodeImageResult,
+  imageResultText,
+} from '@endo/hosted-agent/image-result.js';
 import { createStreamingProvider } from './providers/index.js';
+import { makeSubagentAdmission } from './src/subagent-admission.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
 import { projectJournalTurnHistory } from './src/journal-history.js';
 import { readContextTranscript } from './src/context-transcript.js';
@@ -71,10 +78,10 @@ import { makeJournalUsageReader } from './src/journal-usage.js';
 import { hostedTurnPartialOf, runHostedTurn } from './src/hosted-turn.js';
 import { makePublishTool } from './src/publish-tool.js';
 import {
-  DEVELOPMENT_PRESET_ID,
   DEVELOPMENT_BACKENDS,
   DEVELOPMENT_NETWORK_POLICIES,
   lookupEnvironmentAdmin,
+  environmentAdminName,
   provideDevelopmentEnvironment,
   makeDevelopmentTools,
 } from './src/development-environment.js';
@@ -82,6 +89,11 @@ import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeSessionListWatch, makeSessionWatch } from './src/session-watch.js';
 import { makeAccountsWatch } from './src/account-watch.js';
 import { makePendingQueue } from './src/pending-queue.js';
+import {
+  validateChatMessage,
+  chatMessageText,
+} from './src/session-mentions.js';
+import { makeSessionAttachments } from './src/session-attachments.js';
 import { makeSessionSubmissions } from './src/session-submissions.js';
 import {
   PROVIDER_PROMPT_ENVIRONMENT,
@@ -102,12 +114,20 @@ import {
 import {
   createPrivateTurnStorage,
   providePrivateTurnStorage,
+  providePrivateNetworkStorage,
   retirePrivateTurnStorage,
 } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
+import { boundToolOutput, MAX_TOOL_OUTPUT_CHARS } from './src/tool-output.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
 import { DEFAULT_TRANSCRIPT_LIMITS } from './src/journal-transcript.js';
 import { readFlootWorkloadConfig } from './src/workload-config.js';
+import {
+  BUILTIN_PRESETS,
+  makePresetCatalog,
+  sessionPreset,
+  presetHasShell,
+} from './src/preset-catalog.js';
 
 // Direct-provider turns share Fae's finite runaway-loop guard. A round is one
 // model response and all of its tool results, not one individual tool call.
@@ -199,6 +219,12 @@ const makeBufferingWriter = () => {
 
 const FlootFactoryInterface = M.interface('FlootFactory', {
   createSession: M.callWhen(M.record()).returns(M.remotable()),
+  createAssistantSession: M.callWhen().returns(M.remotable()),
+  getPresetConfiguration: M.callWhen().returns(M.record()),
+  savePreset: M.callWhen(M.record(), M.string()).returns(M.record()),
+  deletePreset: M.callWhen(M.string(), M.string()).returns(M.record()),
+  resetPreset: M.callWhen(M.string(), M.string()).returns(M.record()),
+  setVoicePreset: M.callWhen(M.string(), M.string()).returns(M.record()),
   listSessions: M.callWhen().returns(M.arrayOf(M.record())),
   watchSessions: M.callWhen().returns(M.remotable()),
   watchAccounts: M.callWhen().returns(M.remotable()),
@@ -244,6 +270,21 @@ const FlootSessionInterface = M.interface('FlootSession', {
   // A message is whatever a person pasted; the default 100k-character limit
   // on a guarded string would refuse a long log. `startTurn` has none either.
   enqueue: M.callWhen(M.string(MESSAGE_LIMITS)).returns(M.record()),
+  enqueueOnce: M.callWhen(M.string(MESSAGE_LIMITS), M.string()).returns(
+    M.record(),
+  ),
+  enqueueMessageOnce: M.callWhen(
+    M.record(),
+    M.string(),
+    M.arrayOf(M.record()),
+  ).returns(M.record()),
+  getSubmissionReceipt: M.callWhen(
+    M.string(MESSAGE_LIMITS),
+    M.string(),
+    M.arrayOf(M.record()),
+  )
+    .optional(M.record())
+    .returns(M.or(M.null(), M.record())),
   listPending: M.callWhen().returns(M.record()),
   editPending: M.callWhen(M.string(), M.string(MESSAGE_LIMITS)).returns(
     M.undefined(),
@@ -282,76 +323,14 @@ const FlootSessionInterface = M.interface('FlootSession', {
 // first time the session's agent is built. Provisioned objects are referenced
 // by the session guest. The development environment additionally keeps its
 // private admin rooted on the factory host for explicit native storage cleanup.
-const PRESETS = [
-  {
-    id: DEVELOPMENT_PRESET_ID,
-    title: 'Development environment',
-    description:
-      'A git workspace and isolated POSIX Shell with a persistent home for installed tools. Native storage cleanup is manual on its private admin.',
-    objects: [
-      { kind: 'git-workspace', petName: 'workspace' },
-      { kind: 'development-environment', petName: 'shell' },
-    ],
-  },
-  {
-    id: 'general',
-    title: 'General assistant',
-    description: 'A blank session with no project workspace.',
-    objects: [],
-  },
-  {
-    id: 'new-project',
-    title: 'New project',
-    description:
-      'Start a project with a writable, git-backed workspace ready to populate.',
-    objects: [{ kind: 'git-workspace', petName: 'workspace' }],
-  },
-  {
-    id: 'full-control',
-    title: 'Full Endo control',
-    description:
-      'Full control of the Endo daemon via an "endo" host reference. High access — handle with care.',
-    objects: [
-      { kind: 'host-powers', petName: 'endo' },
-      { kind: 'code-mount', petName: 'endo-src', required: false },
-    ],
-  },
-  {
-    id: 'machine-admin',
-    title: 'Machine admin (NixOS)',
-    description:
-      "Full Endo control PLUS proposing this host's NixOS configuration changes and Endo releases through operator-approved deploy workflows. Root-equivalent machine control — handle with extreme care.",
-    objects: [
-      { kind: 'host-powers', petName: 'endo' },
-      { kind: 'code-mount', petName: 'endo-src', required: false },
-      // The raw caplet: the session is not a machine admin without it.
-      { kind: 'nixos-admin', petName: 'nixos', grantName: 'nixos-admin' },
-      // The deploy connections: optional, so the session still opens on a
-      // host without the workflow service — its prompt then reports that
-      // deployment is unavailable rather than falling back to the caplet.
-      {
-        kind: 'workflow-factory',
-        petName: 'deploy-endo',
-        grantName: 'deploy-endo-factory',
-        required: false,
-      },
-      {
-        kind: 'workflow-factory',
-        petName: 'change-nixos',
-        grantName: 'change-nixos-factory',
-        required: false,
-      },
-    ],
-  },
-];
 // How many distinct serving models one turn records; a router rarely uses
 // more than a handful, and the record is for reading.
 const MAX_SERVED_BY = 16;
 const DEFAULT_PRESET_ID = 'general';
 export const getPreset = id =>
-  PRESETS.find(p => p.id === id) ||
-  /** @type {(typeof PRESETS)[number]} */ (
-    PRESETS.find(p => p.id === DEFAULT_PRESET_ID)
+  BUILTIN_PRESETS.find(p => p.id === id) ||
+  /** @type {(typeof BUILTIN_PRESETS)[number]} */ (
+    BUILTIN_PRESETS.find(p => p.id === DEFAULT_PRESET_ID)
   );
 harden(getPreset);
 
@@ -527,6 +506,7 @@ const provisionPresetObjects = async (
  * @param {string} [options.nativeContextFormat] - Required hosted restoration format, recorded before dispatch.
  * @param {boolean} [options.portableContextFallback] - The backend rebuilds its conversation from supplied records every turn (`continuity: 'transcript'`), so context it cannot restore natively may be handed over as portable records instead of refused.
  * @param {string} [options.reasoningEffort] - Pinned reasoning selection.
+ * @param {ReturnType<typeof makeSessionAttachments>} [options.attachments] - Private mailbox delivery for structured UI turns.
  * @param {any} options.journalPowers - Explicit journal storage. The caller must
  *   supply private storage not exposed to the session guest. Capability identity
  *   alone does not establish that confinement.
@@ -553,6 +533,7 @@ const provisionPresetObjects = async (
  *     signal?: AbortSignal,
  *     onStart?: (history: Array<Record<string, any>>) => void,
  *     onBegun?: () => Promise<void>,
+ *     references?: import('./src/session-mentions.js').SessionMention[],
  *   ) => Promise<void>,
  *   getHistory: () => Promise<Array<Record<string, any>>>,
  *   getSettledHistory: () => Promise<Array<Record<string, any>>>,
@@ -594,6 +575,7 @@ export const makeStreamingAgent = async (
     forceCompaction = false,
     stopEnvironment,
     journalPowers,
+    attachments,
     onChange,
   } = { journalPowers: undefined },
 ) => {
@@ -747,9 +729,14 @@ export const makeStreamingAgent = async (
     /** @type {{ result: unknown } | { error: unknown }} */
     let outcome;
     try {
-      outcome = { result: await executeTracked(run) };
+      outcome = { result: boundToolOutput(`${await executeTracked(run)}`) };
     } catch (error) {
-      outcome = { error };
+      const message = error instanceof Error ? error.message : String(error);
+      const bounded = boundToolOutput(
+        message,
+        MAX_TOOL_OUTPUT_CHARS - 'Error: '.length,
+      );
+      outcome = { error: bounded === message ? error : Error(bounded) };
     }
     await turnJournal.append(turnId, {
       type: 'tool-result',
@@ -798,6 +785,8 @@ export const makeStreamingAgent = async (
   );
   const settledMail = new Set();
   const toolRegistry = makeFlootToolRegistry(powers, {
+    // OpenCode's native-context importer currently rejects image attachments.
+    imageInputs: backendId !== 'opencode',
     settledMail,
     ...(extraTools ? { extraTools } : {}),
     ...(spawner ? { spawner, delegations, subagentLimits } : {}),
@@ -816,6 +805,21 @@ export const makeStreamingAgent = async (
   let turnChain = Promise.resolve();
   let stopped = false;
   let quarantineError;
+  let attachmentQuarantineError;
+  const cleanupAttachments = async () => {
+    try {
+      await attachments?.cleanup();
+    } catch (error) {
+      attachmentQuarantineError = Error(
+        `Attachment cleanup failed: ${error.message}`,
+        { cause: error },
+      );
+      // Attachment recovery must never clear an independent containment failure.
+      quarantineError ??= attachmentQuarantineError;
+      stopInbox();
+      throw attachmentQuarantineError;
+    }
+  };
   const turnControllers = new Set();
 
   // Assemble the user message. A string is used as-is; a reader is drained
@@ -880,7 +884,17 @@ export const makeStreamingAgent = async (
     if (stopped) throw Error('Floot session agent is shutting down');
   };
 
-  const runTurnBody = async (text, writer, meta, signal, turnId) => {
+  const runTurnBody = async (
+    text,
+    writer,
+    meta,
+    signal,
+    turnId,
+    attachmentContext = '',
+  ) => {
+    const turnPrompt = attachmentContext
+      ? `${effectivePrompt}\n\n${attachmentContext}`
+      : effectivePrompt;
     await prepareHostedClient(signal);
     if (stopped || signal?.aborted) return;
     const acknowledgedCheckpoint = hostedClient
@@ -977,7 +991,7 @@ export const makeStreamingAgent = async (
           text: await hostedRecoveryText(text, turnId),
           writer,
           signal,
-          systemPrompt: effectivePrompt,
+          systemPrompt: turnPrompt,
           acknowledgedCheckpoint,
           // The stack owns the transcript: hand the backend this
           // conversation as records it can rebuild its CLI's native store
@@ -1039,6 +1053,7 @@ export const makeStreamingAgent = async (
     let transcriptOrdinal = 0;
     let inputRecorded = false;
     let compactedContext;
+    let unseenImages = false;
     let forced = false;
     let lastRequestContext;
     let requestObservationInitialized = false;
@@ -1112,7 +1127,7 @@ export const makeStreamingAgent = async (
             runtime.providerFormat,
           );
           context = [
-            { role: 'system', content: effectivePrompt },
+            { role: 'system', content: turnPrompt },
             ...path.filter(message => message.role !== 'system'),
             ...stagedMessages,
           ];
@@ -1125,12 +1140,16 @@ export const makeStreamingAgent = async (
             requestObservationInitialized = true;
           }
         }
-        const plan = planContextCompaction(context, {
-          tools: tools.providerSchemas,
-          windowTokens: contextLength ?? 0,
-          usedTokens: lastRequestContext?.usedTokens ?? 0,
-          force: forceCompaction && !forced,
-        });
+        // The previous usage reading predates new image tool results. Let the
+        // model inspect them once before a summary may replace them with receipts.
+        const plan = unseenImages
+          ? undefined
+          : planContextCompaction(context, {
+              tools: tools.providerSchemas,
+              windowTokens: contextLength ?? 0,
+              usedTokens: lastRequestContext?.usedTokens ?? 0,
+              force: forceCompaction && !forced,
+            });
         if (plan) {
           writer.setPhase('compacting context');
           const checkpoint = await summarizeContext(
@@ -1206,6 +1225,7 @@ export const makeStreamingAgent = async (
               activeJournalUsage = turnUsage;
             },
           );
+          unseenImages = false;
         } catch (error) {
           if (streamed !== '') {
             await recordProviderTranscript({
@@ -1317,7 +1337,7 @@ export const makeStreamingAgent = async (
           writer.toolResult({
             id: call.id,
             name: `${name}`,
-            result: `${resultText}`,
+            result: imageResultText(`${resultText}`),
             failed: 'error' in outcome,
           });
           console.error(
@@ -1331,6 +1351,9 @@ export const makeStreamingAgent = async (
           };
         };
         const results = await Promise.all(normalizedCalls.map(runOne));
+        unseenImages ||= results.some(result =>
+          decodeImageResult(result.content),
+        );
         for (const result of results) {
           await recordProviderTranscript({
             kind: 'tool-result',
@@ -1400,7 +1423,7 @@ export const makeStreamingAgent = async (
   };
 
   const admissionErrors = new WeakSet();
-  const runTurn = async (input, writer, meta, signal, onBegun) => {
+  const runTurn = async (input, writer, meta, signal, onBegun, references) => {
     const text = await resolveUserText(input);
     try {
       await turnJournal.assertReady();
@@ -1420,6 +1443,7 @@ export const makeStreamingAgent = async (
       ...(nativeContextFormat === undefined ? {} : { nativeContextFormat }),
       ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(meta?.mail === undefined ? {} : { mail: meta.mail }),
+      ...(meta?.message === undefined ? {} : { message: meta.message }),
     });
     activeJournalTurn = turnId;
     activeJournalSignal = signal;
@@ -1460,6 +1484,7 @@ export const makeStreamingAgent = async (
           : {}),
       }),
     );
+    let attachmentPackage;
     let output = '';
     const observedWriter = {
       ...writer,
@@ -1491,7 +1516,26 @@ export const makeStreamingAgent = async (
         });
         return;
       }
-      await runTurnBody(text, observedWriter, meta, signal, turnId);
+      if (references?.length) {
+        if (!attachments || !meta?.message)
+          throw Error('Structured attachments unavailable');
+        attachmentPackage = await attachments.open(
+          meta.message,
+          references,
+          turnId,
+          () => {
+            if (stopped || signal?.aborted) throw Error('Turn cancelled');
+          },
+        );
+      }
+      await runTurnBody(
+        text,
+        observedWriter,
+        meta,
+        signal,
+        turnId,
+        attachmentPackage?.context,
+      );
       await stoppedEnvironment();
       if (signal?.aborted && completedJournalTurn !== turnId) {
         await turnJournal.append(turnId, {
@@ -1533,9 +1577,13 @@ export const makeStreamingAgent = async (
     } finally {
       signal?.removeEventListener('abort', stopOnAbort);
       await environmentStop;
-      activeJournalTurn = undefined;
-      activeJournalSignal = undefined;
-      notifyChange('turn-settled');
+      try {
+        await cleanupAttachments();
+      } finally {
+        activeJournalTurn = undefined;
+        activeJournalSignal = undefined;
+        notifyChange('turn-settled');
+      }
     }
   };
 
@@ -1560,7 +1608,15 @@ export const makeStreamingAgent = async (
     }
   };
 
-  const converse = (input, writer, meta, signal, onStart, onBegun) => {
+  const converse = (
+    input,
+    writer,
+    meta,
+    signal,
+    onStart,
+    onBegun,
+    references,
+  ) => {
     if (recordsOnly) {
       const error = Error('Records-only session cannot run turns');
       writer.abort(error.message);
@@ -1582,37 +1638,42 @@ export const makeStreamingAgent = async (
       if (onStart) onStart(await getHistory());
       return stopped
         ? Promise.reject(Error('Floot session agent is shutting down'))
-        : runTurn(input, writer, meta, turnController.signal, onBegun).catch(
-            err => {
-              // Failed containment is independent of historical uncertainty.
-              // Broken transports can fail this barrier without a user abort.
-              if (
-                err?.name === 'HostedTurnCancellationError' ||
-                `${err?.message || ''}`.includes(
-                  'Hosted turn cancellation failed:',
-                )
-              ) {
-                quarantineError = err;
-                stopped = true;
-                stopInbox();
-                writer.abort(err.message);
-                throw err;
-              }
-              // A cancelled turn (`FlootTurn.cancel`, or shutdown) aborts
-              // `signal`, tearing down the in-flight provider stream. That's a
-              // clean stop, not a failure, and the turn's owner has already
-              // closed the reply channel, so swallow it.
-              if (turnController.signal.aborted) {
-                if (stopped) writer.abort('Floot session agent shut down');
-                return;
-              }
-              // runTurn has no internal catch, so on failure the writer is still
-              // unsettled — abort it here or every consumer (UI stream and the mail
-              // inbox's turnDone) would hang forever. Rethrow so callers still see it.
-              writer.abort(err instanceof Error ? err.message : String(err));
+        : runTurn(
+            input,
+            writer,
+            meta,
+            turnController.signal,
+            onBegun,
+            references,
+          ).catch(err => {
+            // Failed containment is independent of historical uncertainty.
+            // Broken transports can fail this barrier without a user abort.
+            if (
+              err?.name === 'HostedTurnCancellationError' ||
+              `${err?.message || ''}`.includes(
+                'Hosted turn cancellation failed:',
+              )
+            ) {
+              quarantineError = err;
+              stopped = true;
+              stopInbox();
+              writer.abort(err.message);
               throw err;
-            },
-          );
+            }
+            // A cancelled turn (`FlootTurn.cancel`, or shutdown) aborts
+            // `signal`, tearing down the in-flight provider stream. That's a
+            // clean stop, not a failure, and the turn's owner has already
+            // closed the reply channel, so swallow it.
+            if (turnController.signal.aborted) {
+              if (stopped) writer.abort('Floot session agent shut down');
+              return;
+            }
+            // runTurn has no internal catch, so on failure the writer is still
+            // unsettled — abort it here or every consumer (UI stream and the mail
+            // inbox's turnDone) would hang forever. Rethrow so callers still see it.
+            writer.abort(err instanceof Error ? err.message : String(err));
+            throw err;
+          });
     });
     const releaseTurn = () => {
       signal?.removeEventListener('abort', forwardAbort);
@@ -1872,6 +1933,10 @@ export const makeStreamingAgent = async (
             continue;
           }
           handled.add(number);
+          // The admitted UI turn owns this package through tool settlement.
+          // It must not be dismissed or dispatched by the ordinary inbox.
+          // eslint-disable-next-line no-continue
+          if (attachments?.owns(message.messageId)) continue;
           // Offer every message — this session's own outbound mail included —
           // to the delegation registry first. It learns a delegation's identity
           // from the echo of the send and consumes the matching reply, which
@@ -2014,6 +2079,14 @@ export const makeStreamingAgent = async (
     const failures = /** @type {PromiseRejectedResult[]} */ (settled)
       .filter(result => result.status === 'rejected')
       .map(result => result.reason);
+    try {
+      await attachments?.cleanup();
+      if (quarantineError === attachmentQuarantineError)
+        quarantineError = undefined;
+      attachmentQuarantineError = undefined;
+    } catch (error) {
+      failures.push(error);
+    }
     if (runtime.kind === 'provider') {
       try {
         await runtime.disposeProvider?.();
@@ -2085,6 +2158,8 @@ export const makeStreamingAgent = async (
   const getContextTranscript = async excludeTurnId =>
     readContextTranscript(turnJournal, excludeTurnId, {
       portableFallback: portableContextFallback,
+      omitIncompleteImages: runtimeKind === 'provider',
+      reconciledNativeSuffix: nativeContextFormat === 'codex-rollout-v1',
       toolArgumentKey:
         nativeContextFormat === 'claude-code-jsonl-v1'
           ? args => JSON.stringify(claudeToolInput(args))
@@ -2350,15 +2425,9 @@ export const composeSessionSystemPrompt = ({
   requestedPrompt,
   delegated = false,
 }) => {
-  if (!requestedPrompt) return presetPrompt;
-  if (!delegated) return `${requestedPrompt}`;
-  return [
-    presetPrompt,
-    '---',
-    'You are a subagent. Your parent agent gave you these standing ' +
-      'instructions, which do not replace anything above:',
-    `${requestedPrompt}`,
-  ].join('\n\n');
+  if (delegated)
+    return composeSubagentSystemPrompt(presetPrompt, requestedPrompt, true);
+  return requestedPrompt ? `${requestedPrompt}` : presetPrompt;
 };
 harden(composeSessionSystemPrompt);
 
@@ -2432,6 +2501,7 @@ export const make = async (
   // mail-only Handle after a restart, leaving provideGuest/locate unavailable on
   // revived sessions). `powers` here is the factory's own host.
   const getHost = () => powers;
+  const presetCatalog = makePresetCatalog(powers);
 
   // The provider config (backend kind, default model, auth token) lives behind
   // the `llm-provider` capability handle. Resolve it once and cache it; every
@@ -2773,8 +2843,21 @@ export const make = async (
               // flattened one marks only the direct provider's configured
               // model, which is what an unpinned session runs.
               default: backendId === undefined ? false : model.default,
-              defaultReasoningEffort: model.defaultReasoningEffort,
-              reasoningEfforts: model.reasoningEfforts,
+              defaultReasoningEffort:
+                id === 'fae-codex'
+                  ? (codexResponsesEffort(model.defaultReasoningEffort) ?? null)
+                  : model.defaultReasoningEffort,
+              reasoningEfforts:
+                id === 'fae-codex'
+                  ? [
+                      ...new Set(
+                        model.reasoningEfforts.flatMap(effort => {
+                          const wire = codexResponsesEffort(effort);
+                          return wire === undefined ? [] : [wire];
+                        }),
+                      ),
+                    ]
+                  : model.reasoningEfforts,
               ...(model.contextLength === undefined
                 ? {}
                 : { contextLength: model.contextLength }),
@@ -2978,14 +3061,13 @@ export const make = async (
    *
    * @param {string} id
    * @param {any} sessionGuest
-   * @param {{ id: string, objects: Array<{ kind: string, petName: string }> }} preset
+   * @param {{ id: string, templateId: string, objects: Array<{ kind: string, petName: string }> }} preset
    * @returns {Promise<Map<string, any>>}
    */
   const buildExtraTools = async (id, sessionGuest, preset) => {
-    const tools =
-      preset.id === DEVELOPMENT_PRESET_ID
-        ? makeDevelopmentTools(await E(sessionGuest).lookup('shell'))
-        : new Map();
+    const tools = presetHasShell(preset)
+      ? makeDevelopmentTools(await E(sessionGuest).lookup('shell'))
+      : new Map();
     // A fresh agent replaces the tool instance and nothing else: the
     // publication belongs to the session, is recorded with it, and is served
     // by the asset server whether or not any tool instance exists. It ends
@@ -3342,7 +3424,7 @@ export const make = async (
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, userInitiated?: boolean, presetId?: string, systemPrompt: string, backendId: string, modelId: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, userInitiated?: boolean, presetId?: string, presetSnapshot?: any, systemPrompt: string, backendId: string, modelId: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
@@ -3457,10 +3539,20 @@ export const make = async (
       // out to be unreadable is not the only record.
       if (sequence >= BigInt(REGISTRY_JOURNAL_DEPTH)) {
         const oldest = sequence - BigInt(REGISTRY_JOURNAL_DEPTH);
-        const staleName = `${REGISTRY_PREFIX}${`${oldest}`.padStart(20, '0')}`;
-        await E(powers)
-          .remove(staleName)
-          .catch(() => undefined);
+        // Retry every obsolete name, including a removal whose acknowledgement
+        // failed in an earlier incarnation. Never revive old snapshot payloads.
+        const staleNames = (await E(powers).list()).filter(
+          staleName =>
+            /^floot-sessions-v1-\d{20}$/.test(staleName) &&
+            BigInt(staleName.slice(REGISTRY_PREFIX.length)) <= oldest,
+        );
+        for (const staleName of staleNames) {
+          await E(powers)
+            .remove(staleName)
+            .catch(error => {
+              console.error('[floot-factory] registry pruning failed:', error);
+            });
+        }
       }
     });
     // Preserve rejection for the caller while keeping later writes possible
@@ -3763,8 +3855,7 @@ export const make = async (
     else if (stopFences.has(id)) state = 'stopping';
     return harden({
       state,
-      supported:
-        isHostedSession(entry) || entry?.presetId === DEVELOPMENT_PRESET_ID,
+      supported: isHostedSession(entry) || presetHasShell(sessionPreset(entry)),
     });
   };
   const executionState = async id =>
@@ -3786,7 +3877,7 @@ export const make = async (
     const stopping = (async () => {
       const entry = await assertSessionReady(id);
       const hosted = isHostedSession(entry);
-      if (!hosted && entry.presetId !== DEVELOPMENT_PRESET_ID) {
+      if (!hosted && !presetHasShell(sessionPreset(entry))) {
         stopFences.delete(id);
         throw Error('This backend has no hosted sandbox to stop');
       }
@@ -3909,6 +4000,7 @@ export const make = async (
     return executionState(id);
   };
   const networkControllers = new Map();
+  const networkStorages = new Map();
   // Sessions whose incarnation is being replaced: a network policy change or
   // a rebind stops the old one and provisions the next.
   const incarnationChanges = new Set();
@@ -3920,22 +4012,26 @@ export const make = async (
   const pendingRebinds = new Map();
   const developmentAdmin = async id => {
     const entry = (await loadRegistry()).find(item => item.id === id);
-    return entry?.presetId === DEVELOPMENT_PRESET_ID
+    return presetHasShell(sessionPreset(entry))
       ? lookupEnvironmentAdmin(getHost(), id, { checkGuest: true })
       : undefined;
   };
   const networkController = id => {
     if (!networkControllers.has(id)) {
+      const storage = providePrivateNetworkStorage(getHost(), id);
+      // E sends below observe failures; do not leave a rejected open unhandled.
+      void storage.catch(() => {});
+      networkStorages.set(id, storage);
       networkControllers.set(
         id,
         makeSessionNetworkPolicy({
-          host: getHost(),
+          host: storage,
           id,
           onChange: () => touchSession(id, 'network'),
           supported: async () => {
             const entry = (await loadRegistry()).find(item => item.id === id);
             if (!entry) throw Error('Unknown Floot session');
-            if (entry.presetId === DEVELOPMENT_PRESET_ID)
+            if (presetHasShell(sessionPreset(entry)))
               return DEVELOPMENT_NETWORK_POLICIES;
             if (!isHostedSession(entry)) return [];
             return (
@@ -4077,15 +4173,15 @@ export const make = async (
         // Resolve the session's preset to pick its system prompt and provision
         // its objects. The prompt was snapshotted into the registry at creation
         // (so catalog edits don't retroactively change live sessions); the
-        // object set is read from the catalog by id (objects are provisioned
-        // once and idempotency makes re-reads harmless).
+        // authority recipe is also snapshotted: edits never grant new powers
+        // to a retained session or its later delegates.
         await loadRegistry();
         const entry = (registry || []).find(s => s.id === id);
         const suspended =
           stopFences.has(id) ||
           (entry?.executionState && entry.executionState !== 'running');
         if (suspended && !observeOnly) assertSessionAdmission(id);
-        const preset = getPreset(entry?.presetId || DEFAULT_PRESET_ID);
+        const preset = sessionPreset(entry);
         const sessionPrompt = entry.systemPrompt;
         await provisionPresetObjects(
           host,
@@ -4100,6 +4196,13 @@ export const make = async (
             shellOutputBytes: workload.shellOutputBytes,
           },
         );
+        for (const endowment of preset.endowments) {
+          if (!(await E(sessionGuest).has(endowment.petName)))
+            await E(sessionGuest).storeValue(
+              endowment.value,
+              endowment.petName,
+            );
+        }
         // Session-scoped extra tools (the bounded workspace publisher for a
         // session with a git workspace). Threaded into the tool registry, so
         // the API tool loop and a hosted backend's pinned tool set see the
@@ -4176,7 +4279,7 @@ export const make = async (
             );
           }
         } catch (error) {
-          if (preset.id === DEVELOPMENT_PRESET_ID) throw error;
+          if (presetHasShell(preset)) throw error;
           console.error(
             `[floot-factory] could not build extra tools for session ${id}:`,
             error instanceof Error ? error.message : String(error),
@@ -4378,6 +4481,7 @@ export const make = async (
             transcriptLimits: workload.transcriptLimits,
             subagentLimits: workload.subagentLimits,
             journalPowers,
+            attachments: makeSessionAttachments(host, sessionGuest, id),
             backendId: entry.backendId,
             nativeContextFormat,
             portableContextFallback,
@@ -4385,7 +4489,7 @@ export const make = async (
             contextLength:
               entry.inferenceRecipe?.contextLength ?? entry.contextLength,
             forceCompaction: env?.FLOOT_FORCE_COMPACTION === 'true',
-            ...(preset.id === DEVELOPMENT_PRESET_ID
+            ...(presetHasShell(preset)
               ? {
                   stopEnvironment: async () => {
                     const admin = await lookupEnvironmentAdmin(host, id, {
@@ -4521,10 +4625,11 @@ export const make = async (
           await agent.converse(
             input,
             writer,
-            undefined,
+            options.message ? harden({ message: options.message }) : undefined,
             signal,
             setHistory,
             options.onBegun,
+            options.mentions,
           );
         },
         () => {
@@ -4683,6 +4788,26 @@ export const make = async (
           await assertSessionReady(id);
           assertSessionAdmission(id);
           return submissionsFor(id).submit(text);
+        },
+        async enqueueOnce(text, requestId) {
+          await assertSessionReady(id);
+          assertSessionAdmission(id);
+          return submissionsFor(id).submit(text, requestId);
+        },
+        async enqueueMessageOnce(message, requestId, mentions) {
+          await assertSessionReady(id);
+          assertSessionAdmission(id);
+          message = validateChatMessage(message);
+          return submissionsFor(id).submit(
+            chatMessageText(message),
+            requestId,
+            mentions,
+            message,
+          );
+        },
+        async getSubmissionReceipt(text, requestId, manifest, message) {
+          await assertSessionReady(id);
+          return submissionsFor(id).receipt(text, requestId, manifest, message);
         },
         async listPending() {
           await assertSessionReady(id);
@@ -4894,6 +5019,12 @@ export const make = async (
             return 'setNetworkPolicy(policy) — Operator-only idle-session policy change. Stops old sandbox before the next generation. Public mode permits public HTTP/HTTPS uploads and downloads.';
           if (methodName === 'resolveNetworkPolicyRequest')
             return 'resolveNetworkPolicyRequest(id, approve, note) — Operator-only idle decision for an exact pending request. A model request alone grants nothing.';
+          if (methodName === 'getSubmissionReceipt')
+            return 'getSubmissionReceipt(text, requestId, manifest, message?) — Recover an acknowledgement without resolving source inventory names. Manifest contains the originally persisted {path, identity} pairs. Returns {id} for an accepted matching request, or null if unknown; never starts work or releases restart holds.';
+          if (methodName === 'enqueueMessageOnce')
+            return 'enqueueMessageOnce({strings,names}, requestId, references) — Queue a structured Chat message with captured {path,identity,value} attachments. The admitted turn receives a real Endo package and may adopt or adoptTool its references. Unadopted attachments are dismissed after the turn. Reuse the same request ID, message and references on retry; getSubmissionReceipt recovers an accepted send without resolving changed source names.';
+          if (methodName === 'enqueueOnce')
+            return 'enqueueOnce(text, requestId) — Durable duplicate-safe enqueue. Generate requestId as Date.now() + a hyphen + crypto.randomUUID() before sending, persist it with the draft, and reuse it only for retries of the same text. Receipts survive dispatch and restart for 24 hours; expired IDs are rejected, never submitted again. A duplicate does not release queue restart holds. Requires an updated Floot host.';
           if (methodName === 'enqueue')
             return 'enqueue(text) — Accept a message and return { id }. It becomes a turn at once if nothing is ahead of it; otherwise it waits in the session’s durable queue, whether or not the caller stays connected, and runs when its turn comes. The turn it becomes carries the same id as turn.pendingId. Dispatch is at most once: a message the service was sending when it restarted comes back "interrupted" and is never sent again on its own. A queue that comes back from a restart non-empty, a refused turn, or an emergency stop holds the queue until sendPending() or a new enqueue(). Prefer this to startTurn() for anything a person typed.';
           if (methodName === 'listPending')
@@ -4926,7 +5057,7 @@ export const make = async (
     return facet;
   };
 
-  const cleanupSessionResources = async entry => {
+  const cleanupSessionResources = async (entry, { terminal = false } = {}) => {
     const { id } = entry;
     const environmentAdmin = await developmentAdmin(id);
     const failures = [];
@@ -5045,6 +5176,9 @@ export const make = async (
     } catch (error) {
       failures.push(error);
     }
+    // A stop preserves the environment's owned native storage for revival.
+    // Terminal deletion must dispose it before dropping the private admin.
+    if (terminal && environmentAdmin) await E(environmentAdmin).dispose();
     const host = getHost();
     for (const name of [`session-${id}`, `session-agent-${id}`]) {
       try {
@@ -5094,7 +5228,10 @@ export const make = async (
       // Still stop live work if intent publication failed during creation
       // rollback. Ordinary cleanup preserves the journal needed by a durable
       // `creating` entry; only namespace retirement requires this acknowledgement.
-      await cleanupSessionResources(entry);
+      await networkControllers.get(id)?.close();
+      await cleanupSessionResources(entry, {
+        terminal: !('error' in terminalIntent),
+      });
       if ('error' in terminalIntent) throw terminalIntent.error;
       for (const [journal, sessionId] of privateJournals) {
         if (sessionId === id) {
@@ -5104,7 +5241,19 @@ export const make = async (
           privateJournals.delete(journal);
         }
       }
+      const networkStorage = networkStorages.get(id);
+      if (networkStorage) await E(networkStorage).close();
+      // These facets were stopped above; only terminal deletion releases their
+      // durable roots. Incarnation replacement must retain them for revival.
+      for (const name of [
+        environmentAdminName(id),
+        `floot-environment-shell-${id}`,
+      ]) {
+        if (await E(getHost()).has(name)) await E(getHost()).remove(name);
+      }
       await retirePrivateTurnStorage(getHost(), id);
+      networkStorages.delete(id);
+      networkControllers.delete(id);
     } catch (error) {
       const current = (registry || []).findIndex(session => session.id === id);
       if (current >= 0) {
@@ -5130,9 +5279,14 @@ export const make = async (
    *
    * @param {Record<string, any>} options
    * @param inheritedInferenceRecipe
+   * @param inheritedPreset
    * @returns {Promise<string>} the new session id
    */
-  const provisionSession = async (options, inheritedInferenceRecipe) => {
+  const provisionSession = async (
+    options,
+    inheritedInferenceRecipe = undefined,
+    inheritedPreset = undefined,
+  ) => {
     if (
       options.systemPrompt !== undefined &&
       (typeof options.systemPrompt !== 'string' ||
@@ -5152,8 +5306,28 @@ export const make = async (
       throw Error('createSession userInitiated must be a boolean');
     }
     await loadRegistry();
-    const preset = getPreset(options.presetId || DEFAULT_PRESET_ID);
-    if (preset.id === DEVELOPMENT_PRESET_ID) {
+    const preset =
+      inheritedPreset ||
+      (await presetCatalog.get(options.presetId || DEFAULT_PRESET_ID));
+    if (
+      options.backendId === undefined &&
+      options.modelId === undefined &&
+      preset.backendId
+    ) {
+      options = {
+        ...options,
+        backendId: preset.backendId,
+        modelId: preset.modelId,
+        reasoningEffort:
+          options.reasoningEffort === undefined
+            ? preset.reasoningEffort || undefined
+            : options.reasoningEffort,
+      };
+    }
+    if (options.networkPolicy === undefined && preset.networkPolicy) {
+      options = { ...options, networkPolicy: preset.networkPolicy };
+    }
+    if (presetHasShell(preset)) {
       if (!DEVELOPMENT_BACKENDS.includes(options.backendId || 'provider'))
         throw Error(
           'The development preset uses Fae inference; hosted CLI backends already own their environment',
@@ -5321,14 +5495,14 @@ export const make = async (
     }
     if (
       !isHostedSession({ backendId }) &&
-      preset.id !== DEVELOPMENT_PRESET_ID &&
+      !presetHasShell(preset) &&
       options.networkPolicy !== undefined
     ) {
       throw Error('Only a hosted backend has a sandbox network policy');
     }
     // Snapshot the preset's id and prompt so later catalog edits don't change
-    // a live session. The object set is re-read from the catalog by id in
-    // getAgent (objects are provisioned once, idempotently). A model is pinned
+    // a live session. The object set and explicit capabilities are captured
+    // with it for revival and delegation. A model is pinned
     // only when the caller chose a known one; otherwise the session follows
     // the factory's configured default model.
     //
@@ -5344,10 +5518,16 @@ export const make = async (
       containerMounts: isHostedSession({ backendId }),
     });
     const sessionPrompt = composeSessionSystemPrompt({
-      presetPrompt: composePresetPrompt({
-        presetId: preset.id,
-        context: promptContext,
-      }),
+      presetPrompt: [
+        composePresetPrompt({
+          presetId: preset.templateId,
+          objects: preset.objects,
+          context: promptContext,
+        }),
+        preset.instructions,
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
       requestedPrompt: options.systemPrompt,
       delegated,
     });
@@ -5360,6 +5540,7 @@ export const make = async (
       createdAt: Date.now(),
       userInitiated: !delegated && options.userInitiated === true,
       presetId: preset.id,
+      presetSnapshot: preset,
       systemPrompt: sessionPrompt,
       // Creation context is descriptive metadata, not a migration recipe.
       promptContext,
@@ -5477,27 +5658,31 @@ export const make = async (
     assertPublished(id);
     const index = (registry || []).findIndex(session => session.id === id);
     if (index === -1) throw Error(`Unknown session "${id}".`);
+    // Fence the parent before any await or recursive teardown. In-flight
+    // spawns must roll back; later spawns cannot enter a deleting subtree.
+    /** @type {any[]} */ (registry)[index] = harden({
+      .../** @type {any[]} */ (registry)[index],
+      lifecycle: 'deleting',
+    });
+    await saveRegistry();
+    await subagentAdmission.waitForChildren(id);
     const children = (registry || []).filter(
       session => session.parentSessionId === id,
     );
     for (const child of children) {
       await releaseSession(child.id);
     }
-    // `finishSessionDeletion` rebinds `registry`, so re-find rather than
-    // reusing the index computed before the recursion.
-    const current = (registry || []).findIndex(session => session.id === id);
-    if (current === -1) return;
-    /** @type {any[]} */ (registry)[current] = harden({
-      .../** @type {any[]} */ (registry)[current],
-      lifecycle: 'deleting',
-    });
-    await saveRegistry();
     await finishSessionDeletion(id);
   };
 
   // Layers of delegation a session tree may reach. 0 withholds the subagent
   // tools from every session.
   const maxSubagentDepth = workload.maxSubagentDepth;
+  const subagentAdmission = makeSubagentAdmission({
+    getSessions: () => registry || [],
+    maxSubagents: workload.maxSubagents,
+    maxDepth: maxSubagentDepth,
+  });
 
   // Provider calls one turn may make before the tool-step fallback. Read once
   // here, where a bad value is a deployment error the operator sees at
@@ -5540,66 +5725,69 @@ export const make = async (
             `Subagent system prompt must be a string of at most ${workload.subagentLimits.maxTaskChars} characters`,
           );
         }
-        const siblings = await listSubagents();
-        if (siblings.some(session => session.subagentName === name)) {
-          throw Error(`Subagent "${name}" already exists.`);
-        }
-        if (siblings.length >= workload.maxSubagents) {
-          throw Error(
-            `Subagent limit of ${workload.maxSubagents} reached; stop one first.`,
-          );
-        }
-        const parent = (registry || []).find(
-          session => session.id === parentId,
-        );
-        if (!parent) throw Error('Parent session no longer exists');
-        // A subagent runs on the same backend and model as its parent: it is
-        // extra context, not a way to reach a backend this session was not
-        // provisioned for.
-        const inheritedModel = {
-          backendId: parent.backendId,
-          modelId: parent.modelId,
-          ...(parent.reasoningEffort
-            ? { reasoningEffort: parent.reasoningEffort }
-            : {}),
-          // And on the same subscription: a session pinned to one must
-          // not have its delegates drain another.
-          ...(parent.subscription ? { subscription: parent.subscription } : {}),
-        };
-        const childId = await provisionSession(
-          {
-            title: `${parent?.title || 'Session'} / ${name}`,
-            presetId: parent?.presetId,
-            ...inheritedModel,
-            ...(childPrompt ? { systemPrompt: childPrompt } : {}),
-            parentSessionId: parentId,
-            subagentName: name,
-            subagentDepth: depth,
-          },
-          parent.inferenceRecipe,
-        );
+        await loadRegistry();
+        const reservation = subagentAdmission.reserve(parentId, name, depth);
         try {
-          const child = await E(getHost()).lookup(`session-agent-${childId}`);
-          for (const capability of capabilities) {
-            !(await E(child).has(capability.name)) ||
-              Fail`Subagent inventory name ${capability.name} already exists`;
-          }
-          for (const capability of capabilities) {
-            await E(child).storeValue(capability.value, capability.name);
-          }
-          const locator = await E(getHost()).locate(`session-${childId}`);
-          return harden({ name, locator });
-        } catch (error) {
+          const parent = (registry || []).find(
+            session => session.id === parentId,
+          );
+          if (!parent) throw Error('Parent session no longer exists');
+          // A subagent runs on the same backend and model as its parent: it is
+          // extra context, not a way to reach a backend this session was not
+          // provisioned for.
+          const inheritedModel = {
+            backendId: parent.backendId,
+            modelId: parent.modelId,
+            ...(parent.reasoningEffort
+              ? { reasoningEffort: parent.reasoningEffort }
+              : {}),
+            // And on the same subscription: a session pinned to one must
+            // not have its delegates drain another.
+            ...(parent.subscription
+              ? { subscription: parent.subscription }
+              : {}),
+          };
+          const childId = await provisionSession(
+            {
+              title: `${parent?.title || 'Session'} / ${name}`,
+              presetId: parent?.presetId,
+              ...inheritedModel,
+              networkPolicy: await networkController(parentId).forTurn(),
+              ...(childPrompt ? { systemPrompt: childPrompt } : {}),
+              parentSessionId: parentId,
+              subagentName: name,
+              subagentDepth: depth,
+            },
+            parent.inferenceRecipe,
+            sessionPreset(parent),
+          );
           try {
-            await releaseSession(childId);
-          } catch (cleanupError) {
-            throw new AggregateError(
-              [error, cleanupError],
-              'Subagent capability introduction and cleanup failed',
-              { cause: error },
-            );
+            reservation.assertParent();
+            const child = await E(getHost()).lookup(`session-agent-${childId}`);
+            for (const capability of capabilities) {
+              !(await E(child).has(capability.name)) ||
+                Fail`Subagent inventory name ${capability.name} already exists`;
+            }
+            for (const capability of capabilities) {
+              await E(child).storeValue(capability.value, capability.name);
+            }
+            const locator = await E(getHost()).locate(`session-${childId}`);
+            reservation.assertParent();
+            return harden({ name, locator });
+          } catch (error) {
+            try {
+              await releaseSession(childId);
+            } catch (cleanupError) {
+              throw new AggregateError(
+                [error, cleanupError],
+                'Subagent capability introduction and cleanup failed',
+                { cause: error },
+              );
+            }
+            throw error;
           }
-          throw error;
+        } finally {
+          reservation.release();
         }
       },
 
@@ -5625,7 +5813,7 @@ export const make = async (
       /** @param {string} [methodName]  */
       help(methodName) {
         if (methodName === 'spawn') {
-          return 'spawn(name, { systemPrompt?, capabilities?: [{ name, value }] }) — Create a subagent with its own inventory, install only explicit capabilities, and return { name, locator }.';
+          return 'spawn(name, { systemPrompt?, capabilities?: [{ name, value }] }) — Create a subagent with its own inventory, install only explicit capabilities, and return { name, locator }. All descendants share one tree budget; delegate distinct tasks, never recursive fact checking.';
         }
         if (methodName === 'stop') {
           return 'stop(name) — Delete a subagent session and every session beneath it.';
@@ -5643,9 +5831,37 @@ export const make = async (
   // Fire-and-forget: load the registry and build each agent, which starts its
   // inbox loop. New sessions start their loops in getAgent at creation time.
   const startAllInboxes = async () => {
-    const reg = await loadRegistry();
+    await loadRegistry();
     ownership.assertOpen();
-    for (const s of reg) {
+    // A crash can leave a deletion fence above still-live descendants. Finish
+    // the entire subtree before reviving any inbox, not just the fenced row.
+    const failedCleanup = new Set();
+    const cleanupEntries = (registry || []).filter(s =>
+      ['deleting', 'error'].includes(s.lifecycle),
+    );
+    for (const s of cleanupEntries) {
+      if ((registry || []).some(entry => entry.id === s.id)) {
+        try {
+          await releaseSession(s.id);
+        } catch (error) {
+          failedCleanup.add(s.id);
+          console.error(
+            `[floot-factory] cleanup recovery failed for session-${s.id}:`,
+            error,
+          );
+        }
+      }
+    }
+    const reg = registry || [];
+    // A failed teardown retains its records for retry, but cannot restart work.
+    for (;;) {
+      const size = failedCleanup.size;
+      for (const s of reg) {
+        if (failedCleanup.has(s.parentSessionId)) failedCleanup.add(s.id);
+      }
+      if (size === failedCleanup.size) break;
+    }
+    for (const s of reg.filter(entry => !failedCleanup.has(entry.id))) {
       // Read each queue, so the list can say which sessions have messages
       // held over from before the restart. Nothing is dispatched: a queue
       // that comes back non-empty is held until the user sends.
@@ -5671,14 +5887,6 @@ export const make = async (
             );
           });
         }
-      } else if (s.lifecycle === 'deleting' || s.lifecycle === 'error') {
-        ownership.track(finishSessionDeletion(s.id)).catch(error => {
-          console.error(
-            `[floot-factory] cleanup recovery failed for session-${s.id}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        });
       } else {
         const recoverCreating = async () => {
           if (s.lifecycle === 'creating') {
@@ -5767,6 +5975,16 @@ export const make = async (
         [...submissions.values()].map(entry => attempt(() => entry.close())),
       );
       await Promise.all(
+        [...networkControllers.values()].map(controller =>
+          attempt(() => controller.close()),
+        ),
+      );
+      await Promise.all(
+        [...networkStorages.values()].map(storage =>
+          attempt(() => E(storage).close()),
+        ),
+      );
+      await Promise.all(
         [...privateJournals.keys()].map(journal =>
           attempt(() => E(journal).close()),
         ),
@@ -5775,6 +5993,7 @@ export const make = async (
         Promise.all([
           registryWrite,
           voicePrefsWrite,
+          presetCatalog.whenIdle(),
           ...publishChains.values(),
         ]),
       );
@@ -5804,6 +6023,32 @@ export const make = async (
      * @param {Record<string, any>} options
      * @returns {Promise<object>} an opaque session facet
      */
+    async createAssistantSession() {
+      const preset = await presetCatalog.voice();
+      return getFacet(
+        await provisionSession(
+          { presetId: preset.id, spoken: true, userInitiated: true },
+          undefined,
+          preset,
+        ),
+      );
+    },
+    async getPresetConfiguration() {
+      return presetCatalog.read();
+    },
+    async savePreset(preset, revision) {
+      return presetCatalog.save(preset, revision);
+    },
+    async deletePreset(id, revision) {
+      return presetCatalog.remove(id, revision);
+    },
+    async resetPreset(id, revision) {
+      return presetCatalog.reset(id, revision);
+    },
+    async setVoicePreset(id, revision) {
+      return presetCatalog.selectVoice(id, revision);
+    },
+
     async createSession(options) {
       // The delegation fields are minted by the spawner, never accepted from a
       // caller: a session that claimed another's parentage would join that
@@ -5875,19 +6120,36 @@ export const make = async (
     async listPresets() {
       const configured = await E(getHost()).has('environment-runner');
       return harden(
-        PRESETS.filter(
-          preset => preset.id !== DEVELOPMENT_PRESET_ID || configured,
-        ).map(({ id, title, description }) => ({
-          id,
-          title,
-          description,
-          ...(id === DEVELOPMENT_PRESET_ID
-            ? {
-                backendIds: DEVELOPMENT_BACKENDS,
-                supportedNetworkPolicies: DEVELOPMENT_NETWORK_POLICIES,
-              }
-            : {}),
-        })),
+        (await presetCatalog.read()).presets
+          .filter(preset => !presetHasShell(preset) || configured)
+          .map(
+            ({
+              id,
+              title,
+              description,
+              templateId,
+              backendId,
+              modelId,
+              reasoningEffort,
+              networkPolicy,
+              objects,
+            }) => ({
+              id,
+              title,
+              description,
+              templateId,
+              backendId,
+              modelId,
+              reasoningEffort,
+              networkPolicy,
+              ...(presetHasShell({ objects })
+                ? {
+                    backendIds: DEVELOPMENT_BACKENDS,
+                    supportedNetworkPolicies: DEVELOPMENT_NETWORK_POLICIES,
+                  }
+                : {}),
+            }),
+          ),
       );
     },
 
@@ -6092,15 +6354,27 @@ export const make = async (
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken,userInitiated}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listModelCatalogs(); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); setSessionUserInitiated(id,boolean); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), getInfo(), and, for a hosted session, rebind(bindings).';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort,systemPrompt,spoken,userInitiated}) -> session facet (spoken: true adds the voice rules to its system prompt); listSessions() includes backend/model/reasoning/lifecycle/activity metadata; watchSessions() subscribes to that list; watchAccounts() subscribes to what each backend’s account has left; refreshAccounts(); redeemAccountReset(key, options?); abandonAccountReset(key); listBackends(); listModels(backendId?); listModelCatalogs(); listPresets(); createAssistantSession(); getPresetConfiguration()/savePreset(preset,revision)/deletePreset(id,revision)/resetPreset(id,revision)/setVoicePreset(id,revision); getSession(id); renameSession(id,title); deleteSession(id); setSessionUserInitiated(id,boolean); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn, history } | null, watch(), getHistory(), getUsage(), getInfo(), and, for a hosted session, rebind(bindings).';
       }
       const docs = {
         createSession:
-          'createSession(options) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", only when advertised by the hosted backend; omission keeps the API default off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), spoken, and userInitiated (defaults to false; the UI passes true for conversations the user starts). The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
+          'createSession(options) — Create an isolated session. Options can select title, presetId, backendId, modelId, reasoningEffort, networkPolicy ("off" or "public-internet", enforced by the preset’s attached Podman shell or a hosted backend advertising policy controls; omission uses the preset default, otherwise off), subscription ("auto", the default, lets the backend drain whichever of its subscriptions resets soonest and hand a turn over when one runs out; an id from the backend’s `subscriptions` pins the session to that one), systemPrompt (replaces the preset’s), spoken, and userInitiated (defaults to false; the UI passes true for conversations the user starts). The preset’s system prompt is composed once, here, for the backend the session runs on, and kept for the session’s life. `spoken: true` says the replies are read aloud (the Floot space passes it) and adds the voice rules; leave it out for a session whose replies are read as text. Returns its opaque facet.',
         listBackends:
           'listBackends() — Return the live provider and hosted backend descriptors. A hosted descriptor may carry `providerId` (whose credential it spends) and `subscriptions` ([{ id, label }], the subscriptions its broker declares); createSession’s `subscription` takes one of those ids.',
         listSessions:
           'listSessions() — Return metadata [{id, title, createdAt, presetId, model, backendId, modelId, effectiveModelId, reasoningEffort, subscription, lifecycle, activity, pendingCount}] for all sessions, including workflow participants and subagents. `userInitiated` is false for internal sessions; the UI lists only user-initiated roots. `subscription` is "auto" or the id the session was pinned to. `effectiveModelId` is the pinned model, or for an unpinned provider session the configured model as of now (empty for a hosted session that pins none); `activity` is passive | working | error; `pendingCount` is how many submissions wait their turn.',
+        createAssistantSession:
+          'createAssistantSession() — Create a fresh spoken, user-initiated session from the factory’s selected voice preset, including its model and endowment defaults. No fallback to another preset on failure.',
+        getPresetConfiguration:
+          'getPresetConfiguration() — Return {revision, voicePresetId, presets}. Presets include templateId, instructions, model defaults, generated objects, and explicitly granted endowments. Treat returned capabilities as authority, not display data.',
+        savePreset:
+          'savePreset(preset, revision) — Create or edit a preset using the last-read revision. Additional endowments are explicit {petName, sourcePath, value} object capabilities. Changes affect only future sessions and never rewrite existing sessions or their delegated authority. Stale revisions fail; reload before retrying.',
+        deletePreset:
+          'deletePreset(id, revision) — Delete a custom preset. Built-ins and the selected voice preset cannot be deleted. Existing sessions keep their snapshots.',
+        resetPreset:
+          'resetPreset(id, revision) — Restore a built-in preset for future sessions.',
+        setVoicePreset:
+          'setVoicePreset(id, revision) — Select the preset used by Android assistant invocations across devices connected to this factory.',
         listPresets:
           'listPresets() — Return the available session presets [{id, title, description}].',
         listModels:

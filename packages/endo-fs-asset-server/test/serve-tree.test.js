@@ -186,6 +186,35 @@ test('root and directory paths select index.html', async t => {
   t.is(decode(await collectBody(dir.body)), '<h1>app</h1>');
 });
 
+test('directory redirects are same-origin, preserve queries, and precede conditional handling', async t => {
+  const handler = makeTreeRequestHandler({ tree: site() });
+  for (const method of ['GET', 'HEAD']) {
+    const response = await E(handler)(
+      harden({
+        method,
+        url: '/app?next=https%3A%2F%2Fevil.example&x=%0D%0A',
+        headers: [['If-None-Match', '*']],
+      }),
+    );
+    t.is(response.status, 308);
+    t.is(response.body, undefined);
+    t.is(
+      response.headers.find(([name]) => name === 'Location')[1],
+      '/app/?next=https%3A%2F%2Fevil.example&x=%0D%0A',
+    );
+    t.is(
+      response.headers.find(([name]) => name === 'Referrer-Policy')[1],
+      'no-referrer',
+    );
+  }
+  const root = await get(handler, '/%2F?x=1');
+  t.is(root.status, 308);
+  t.is(root.headers.find(([name]) => name === 'Location')[1], '/?x=1');
+  const encoded = await get(handler, '/%2Fapp');
+  t.is(encoded.headers.find(([name]) => name === 'Location')[1], '/app/');
+  t.is((await get(handler, '/missing')).status, 404);
+});
+
 test('every response carries the security baseline', async t => {
   const handler = makeTreeRequestHandler({ tree: site() });
   for (const path of ['/style.css', '/nope.txt']) {

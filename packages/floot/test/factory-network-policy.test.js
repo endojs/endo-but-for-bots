@@ -6,6 +6,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
+import { directoryHost } from './_directory-host.js';
 import { makePromiseKit } from './_promise-kit.js';
 
 const self = `endo://${'a'.repeat(64)}/${'b'.repeat(64)}?type=handle`;
@@ -168,8 +169,8 @@ const makeWorld = async (
       ['session-agent-one', guest],
       ['codex-backend', backend],
       [
-        'floot-private-turn-3-one-schema',
-        harden({ version: 1, sessionId: 'one' }),
+        'floot-private-sessions/one/schema',
+        harden({ version: 2, sessionId: 'one' }),
       ],
       [
         'floot-sessions-v1-00000000000000000000',
@@ -194,28 +195,25 @@ const makeWorld = async (
     ]),
   );
   const host = Far('NetworkHost', {
-    has: name => hostStore.has(name),
-    lookup: async name => {
-      await beforeLookup(name);
-      return hostStore.get(name);
-    },
-    list: () => harden([...hostStore.keys()]),
-    storeValue: (value, name) => {
-      if (writeFails && name.startsWith('floot-sessions-v1-'))
-        throw Error('registry write failed');
-      if (journalWriteFails && name.includes('-floot-turn-event-'))
-        throw Error('journal write uncertain');
-      hostStore.set(name, value);
-      if (name.startsWith('floot-sessions-v1-')) {
-        storedExecutionState = value.sessions.find(
-          entry => entry.id === 'one',
-        )?.executionState;
-        events.push(
-          `registry:${value.sessions.find(entry => entry.id === 'one')?.lifecycle || 'absent'}`,
-        );
-      }
-    },
-    remove: name => hostStore.delete(name),
+    ...directoryHost(hostStore, {
+      onLookup: name => beforeLookup(name),
+      beforeStore: (value, name) => {
+        if (writeFails && name.startsWith('floot-sessions-v1-'))
+          throw Error('registry write failed');
+        if (journalWriteFails && name.includes('/floot-turn-event-'))
+          throw Error('journal write uncertain');
+      },
+      afterStore: (value, name) => {
+        if (name.startsWith('floot-sessions-v1-')) {
+          storedExecutionState = value.sessions.find(
+            entry => entry.id === 'one',
+          )?.executionState;
+          events.push(
+            `registry:${value.sessions.find(entry => entry.id === 'one')?.lifecycle || 'absent'}`,
+          );
+        }
+      },
+    }),
     provideGuest: (_name, { agentName }) => {
       hostStore.set(agentName, guest);
     },
@@ -412,7 +410,7 @@ test('resume drains retired journal reads and preserves history across repeated 
   const release = makePromiseKit();
   let held = false;
   world.beforeLookup(name => {
-    if (!held && name.includes('-floot-turn-content-')) {
+    if (!held && name.includes('/floot-turn-content-')) {
       held = true;
       entered.resolve(undefined);
       return release.promise;
@@ -470,7 +468,7 @@ test('emergency stop supersedes resume while its journal closure drains', async 
   const release = makePromiseKit();
   let held = false;
   world.beforeLookup(name => {
-    if (!held && name.includes('-floot-turn-content-')) {
+    if (!held && name.includes('/floot-turn-content-')) {
       held = true;
       entered.resolve(undefined);
       return release.promise;
@@ -518,7 +516,7 @@ test('factory disposal fences resume while its journal closure drains', async t 
   const release = makePromiseKit();
   let held = false;
   world.beforeLookup(name => {
-    if (!held && name.includes('-floot-turn-content-')) {
+    if (!held && name.includes('/floot-turn-content-')) {
       held = true;
       entered.resolve(undefined);
       return release.promise;
@@ -736,7 +734,10 @@ test('admitted deletion retries classified setup cleanup but preserves journal o
   t.true(world.events.includes('registry:error'));
   t.false(world.events.includes('registry:absent'));
   const names = await E(world.host).list();
-  t.true(names.includes('floot-private-turn-3-one-schema'));
+  t.true(names.includes('floot-private-sessions'));
+  t.true(
+    await E(await E(world.host).lookup('floot-private-sessions')).has('one'),
+  );
   t.is(world.creates.length, 1);
   t.is(world.sends.length, 0);
 });
@@ -1147,7 +1148,7 @@ test('rebind drains an admitted journal read and fences the retired storage face
   const release = makePromiseKit();
   let held = false;
   world.beforeLookup(name => {
-    if (!held && name.includes('-floot-turn-content-')) {
+    if (!held && name.includes('/floot-turn-content-')) {
       held = true;
       entered.resolve(undefined);
       return release.promise;

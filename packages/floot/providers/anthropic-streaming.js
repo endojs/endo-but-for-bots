@@ -1,4 +1,5 @@
 // @ts-check
+import { anthropicToolContent } from '@endo/hosted-agent/image-result.js';
 /**
  * Streaming Anthropic provider for the Floot agent.
  *
@@ -90,7 +91,7 @@ const toAnthropicMessages = messages => {
           {
             type: 'tool_result',
             tool_use_id: toolUseId,
-            content: msg.content,
+            content: anthropicToolContent(msg.content),
             ...(msg.failed === undefined ? {} : { is_error: msg.failed }),
           },
         ],

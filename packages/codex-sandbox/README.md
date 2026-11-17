@@ -13,6 +13,20 @@ identity, tool-set binding and recovery markers.
 Thread creation and subsequent write-ahead/settlement updates await that writer;
 a failed write prevents dispatch or continuation rather than saving identity alone.
 
+Native Codex subagents are disabled with both `multi_agent` feature flags.
+Delegation goes through Floot's Endo `spawnSubagent` tool, which owns the helper's
+session, capabilities, and recovery journal.
+The broker-backed transport verifies the effective feature configuration before
+admitting a turn.
+
+For recovery, Floot can supply a complete native checkpoint followed by settled
+dialogue and tool records from a later failed turn.
+The client reconciles its outstanding turn, restores the checkpoint into a fresh
+thread, and injects the later records before dispatching a new prompt.
+Injection records historical tool results without executing tools again.
+Unknown outcomes require resolution and all tool calls must be accounted for;
+evidence hidden within an unsafe checkpoint still prevents continuation.
+
 ```js
 import { makeCodexClient } from '@endo/codex-sandbox';
 import { startAppServerTransport } from '@endo/codex-sandbox/app-server-transport.js';

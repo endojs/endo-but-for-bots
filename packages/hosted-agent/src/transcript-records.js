@@ -1,4 +1,6 @@
 // @ts-check
+import { Fail, q } from '@endo/errors';
+import { imageResultFromBlocks, responsesToolOutput } from './image-result.js';
 
 /**
  * The stack's own record of a hosted conversation, in one format every
@@ -28,8 +30,6 @@
  *
  * @module
  */
-
-import { Fail, q } from '@endo/errors';
 
 /** Roles a dialogue record may carry. Tool traffic has its own kinds. */
 const MESSAGE_ROLES = harden(['user', 'assistant']);
@@ -454,7 +454,9 @@ export const responsesApiItems = records => {
       items.push({
         type: 'function_call_output',
         call_id: record.id,
-        output: result ? result.content : 'Tool call did not complete.',
+        output: responsesToolOutput(
+          result ? result.content : 'Tool call did not complete.',
+        ),
       });
     }
     // A `tool-result` was emitted with its call above.
@@ -504,7 +506,8 @@ export const readResponsesApiItems = items => {
         content:
           typeof item.output === 'string'
             ? item.output
-            : JSON.stringify(item.output ?? ''),
+            : (imageResultFromBlocks(item.output) ??
+              JSON.stringify(item.output ?? '')),
       });
     }
   }

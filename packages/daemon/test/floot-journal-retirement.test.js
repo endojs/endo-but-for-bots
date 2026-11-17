@@ -12,7 +12,6 @@ import { makeEndoClient, start, stop } from '../index.js';
 for (const [kind, after] of [
   ['value', false],
   ['value', true],
-  ['schema', true],
   ['gc', false],
 ]) {
   test.serial(
@@ -105,11 +104,9 @@ for (const [kind, after] of [
         ]);
       }
       const expectedIds = survivorId ? [survivorId] : [];
-      const prefix = `floot-private-turn-${id.length}-${id}-`;
+      const prefix = `floot-private-sessions/${id}`;
       /** @type {string[]} */
-      const before = (await E(host).list()).filter(name =>
-        name.startsWith(prefix),
-      );
+      const before = await E(host).list('floot-private-sessions', id);
       t.true(before.length > 1);
       if (kind !== 'gc') await E(powers).armRemoval(prefix, kind, after);
       await t.throwsAsync(E(factory).deleteSession(id), {
@@ -132,11 +129,7 @@ for (const [kind, after] of [
           failedRegistry.sessions[0].lifecycle,
         ),
       );
-      const remaining = (await E(host).list()).filter(name =>
-        name.startsWith(prefix),
-      );
-      if (kind === 'schema') t.deepEqual(remaining, []);
-      else t.true(remaining.includes(`${prefix}schema`));
+      t.is(await E(host).has('floot-private-sessions', id), !after);
 
       // A new daemon and worker reconstruct the persisted terminal intent; no
       // old factory objects or injected fault state are reused.
@@ -168,8 +161,8 @@ for (const [kind, after] of [
         t.is((await E(nextTurn).getStatus()).error, null);
       }
       t.deepEqual(
-        (await E(revivedHost).list()).filter(name => name.startsWith(prefix)),
-        [],
+        await E(revivedHost).has('floot-private-sessions', id),
+        false,
       );
       t.deepEqual(await E(revivedHost).lookup('unrelated-retirement-data'), {
         preserved: true,
@@ -187,10 +180,7 @@ for (const [kind, after] of [
         (await readRegistry(finalHost)).sessions.map(entry => entry.id),
         expectedIds,
       );
-      t.deepEqual(
-        (await E(finalHost).list()).filter(name => name.startsWith(prefix)),
-        [],
-      );
+      t.deepEqual(await E(finalHost).has('floot-private-sessions', id), false);
     },
   );
 }

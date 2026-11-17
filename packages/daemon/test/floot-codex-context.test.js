@@ -1,4 +1,5 @@
 // @ts-check
+/* eslint-disable import/no-relative-packages -- Cross-package storage integration. */
 import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
@@ -9,6 +10,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 import { makeEndoClient, start, stop } from '../index.js';
+import { createPrivateTurnStorage } from '../../floot/src/private-turn-storage.js';
 
 test.serial(
   'Codex client native capture and journal restoration cross two daemon restarts',
@@ -49,10 +51,7 @@ test.serial(
     };
     await start(config);
     let host = await connect();
-    await E(host).storeValue(
-      harden({ version: 1, sessionId: 'codex-context' }),
-      'floot-private-turn-13-codex-context-schema',
-    );
+    await createPrivateTurnStorage(host, 'codex-context');
     await E(host).provideWorker('codex-context-worker');
     let fixture = await E(host).makeUnconfined(
       'codex-context-worker',

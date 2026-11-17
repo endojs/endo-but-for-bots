@@ -45,10 +45,45 @@ const NEXT_MESSAGE_NUMBER_NAME = /** @type {PetName} */ ('next-number');
 const messageNumberNamePattern = /^(0|[1-9][0-9]*)$/;
 
 /**
+ * `submitOnce` keeps each attempt in the mailbox store under
+ * `attempt-<attempt>`, bound to the formula of the value message it sends,
+ * and binds `answered-<attempt>` to the same formula once the form's sender
+ * has received it. An attempt is a caller's retry key: 1 to 128 letters,
+ * digits, `-` or `_`.
+ */
+const ATTEMPT_NAME_PREFIX = 'attempt-';
+const ANSWERED_NAME_PREFIX = 'answered-';
+const attemptPattern = /^[A-Za-z0-9_-]{1,128}$/;
+const attemptNamePattern = /^(attempt|answered)-([A-Za-z0-9_-]{1,128})$/;
+
+/**
+ * The most attempts a mailbox keeps for one form. Attempts are kept until the
+ * member dismisses the form they answer, so this bounds what one undismissed
+ * form can hold. A further new attempt for that form is refused; a known
+ * attempt still answers.
+ */
+export const MAX_ATTEMPTS_PER_FORM = 64;
+
+/**
+ * @param {unknown} attempt
+ * @returns {asserts attempt is string}
+ */
+const assertAttempt = attempt => {
+  if (typeof attempt !== 'string' || !attemptPattern.test(attempt)) {
+    throw new Error(
+      `Invalid attempt ${q(attempt)}: expected 1 to 128 letters, digits, "-" or "_"`,
+    );
+  }
+};
+
+/**
  * @param {string} name
  */
 export const assertMailboxStoreName = name => {
   if (name === NEXT_MESSAGE_NUMBER_NAME) {
+    return;
+  }
+  if (attemptNamePattern.test(name)) {
     return;
   }
   if (!messageNumberNamePattern.test(name)) {
@@ -307,6 +342,15 @@ export const makeMailboxMaker = ({
     /** @type {Topic<StampedMessage>} */
     const messagesTopic = makeChangeTopic();
     const mailboxStoreJobs = makeSerialJobs();
+    /** Serializes `submitOnce`, so two calls with one attempt send once. */
+    const attemptJobs = makeSerialJobs();
+    /**
+     * The attempts this mailbox keeps, by the message id of the form each
+     * answers. Loaded from the mailbox store's `attempt-*` and `answered-*`
+     * names.
+     * @type {Map<string, Set<string>>}
+     */
+    const attemptsByForm = new Map();
     let nextMessageNumber = 0n;
 
     /** @type {Mail['listMessages']} */
@@ -562,7 +606,26 @@ export const makeMailboxMaker = ({
               String(messageNumber)
             );
             await mailboxStore.remove(messageNumberName);
+            const dismissed = messages.get(messageNumber);
             messages.delete(messageNumber);
+            if (dismissed !== undefined && dismissed.type === 'form') {
+              // A dismissed form takes the attempts that answered it.
+              const attempts = attemptsByForm.get(dismissed.messageId);
+              if (attempts !== undefined) {
+                attemptsByForm.delete(dismissed.messageId);
+                for (const attempt of attempts) {
+                  for (const prefix of [
+                    ATTEMPT_NAME_PREFIX,
+                    ANSWERED_NAME_PREFIX,
+                  ]) {
+                    const name = /** @type {PetName} */ (`${prefix}${attempt}`);
+                    if (mailboxStore.identifyLocal(name) !== undefined) {
+                      await mailboxStore.remove(name);
+                    }
+                  }
+                }
+              }
+            }
             dismissal.resolve();
           });
           return undefined;
@@ -815,6 +878,39 @@ export const makeMailboxMaker = ({
         }
       });
 
+      const attemptNames = mailboxStore
+        .list()
+        .filter(name => attemptNamePattern.test(name));
+      const attemptRecords = await Promise.allSettled(
+        attemptNames.map(async name => {
+          const id = mailboxStore.identifyLocal(/** @type {PetName} */ (name));
+          if (id === undefined) {
+            return undefined;
+          }
+          const formula = await getFormulaForId(
+            /** @type {FormulaIdentifier} */ (id),
+          );
+          if (formula.type !== 'message' || formula.replyTo === undefined) {
+            return undefined;
+          }
+          const match = /** @type {RegExpExecArray} */ (
+            attemptNamePattern.exec(name)
+          );
+          return { attempt: match[2], replyTo: formula.replyTo };
+        }),
+      );
+      for (const entry of attemptRecords) {
+        if (entry.status === 'fulfilled' && entry.value !== undefined) {
+          const { attempt, replyTo } = entry.value;
+          let attempts = attemptsByForm.get(replyTo);
+          if (attempts === undefined) {
+            attempts = new Set();
+            attemptsByForm.set(replyTo, attempts);
+          }
+          attempts.add(attempt);
+        }
+      }
+
       if (
         storedNextNumber === undefined ||
         storedNextNumber !== computedNextNumber
@@ -843,6 +939,18 @@ export const makeMailboxMaker = ({
     const deliver = async envelope => {
       await mailboxStoreJobs.enqueue(async () => {
         assertMessageEnvelope(envelope);
+        // Delivery is idempotent by sender and message id: a sender that
+        // re-posts a message after a crash (`submitOnce`) must not leave a
+        // second copy. Message ids are random 256-bit numbers, so a match
+        // is a redelivery.
+        for (const held of messages.values()) {
+          if (
+            held.messageId === envelope.messageId &&
+            held.from === envelope.from
+          ) {
+            return;
+          }
+        }
         const messageNumber = nextMessageNumber;
         const date = new Date().toISOString();
         const done =
@@ -1404,13 +1512,14 @@ export const makeMailboxMaker = ({
       });
     };
 
-    /** @type {Mail['submit']} */
-    const submit = async (messageNumber, values) => {
-      const {
-        fields,
-        messageId: formMessageId,
-        guestHandleId,
-      } = getForm(messageNumber);
+    /**
+     * Check `values` against the form's fields, with the form's defaults
+     * applied, and marshal them. The caller must unpin the returned id.
+     *
+     * @param {FormField[]} fields
+     * @param {Record<string, unknown>} values
+     */
+    const marshalFormValues = async (fields, values) => {
       const defaults = Object.fromEntries(
         fields.map(({ name, default: defaultValue }) => [name, defaultValue]),
       );
@@ -1435,22 +1544,47 @@ export const makeMailboxMaker = ({
         marshalTasks,
         pinTransient,
       );
+      return marshalledId;
+    };
 
+    /**
+     * Build a value message envelope answering a form, addressed back to the
+     * form's sender.
+     *
+     * @param {FormulaNumber} formMessageId
+     * @param {string} guestHandleId
+     * @param {FormulaIdentifier} valueId
+     */
+    const makeFormAnswer = async (formMessageId, guestHandleId, valueId) => {
+      const valueMessageId = /** @type {FormulaNumber} */ (
+        await randomHex256()
+      );
+      /** @type {ValueMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} */
+      const valueEnvelope = harden({
+        type: /** @type {const} */ ('value'),
+        from: /** @type {FormulaIdentifier} */ (selfId),
+        to: /** @type {FormulaIdentifier} */ (guestHandleId),
+        messageId: valueMessageId,
+        replyTo: formMessageId,
+        valueId,
+      });
+      return valueEnvelope;
+    };
+
+    /** @type {Mail['submit']} */
+    const submit = async (messageNumber, values) => {
+      const {
+        fields,
+        messageId: formMessageId,
+        guestHandleId,
+      } = getForm(messageNumber);
+      const marshalledId = await marshalFormValues(fields, values);
       try {
-        // Build a value message envelope addressed back to the form sender.
-        const valueMessageId = /** @type {FormulaNumber} */ (
-          await randomHex256()
+        const valueEnvelope = await makeFormAnswer(
+          formMessageId,
+          guestHandleId,
+          marshalledId,
         );
-        /** @type {ValueMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} */
-        const valueEnvelope = harden({
-          type: /** @type {const} */ ('value'),
-          from: /** @type {FormulaIdentifier} */ (selfId),
-          to: /** @type {FormulaIdentifier} */ (guestHandleId),
-          messageId: valueMessageId,
-          replyTo: formMessageId,
-          valueId: marshalledId,
-        });
-
         const recipientHandle = await provideHandle(
           /** @type {FormulaIdentifier} */ (guestHandleId),
         );
@@ -1458,6 +1592,173 @@ export const makeMailboxMaker = ({
       } finally {
         unpinTransient(marshalledId);
       }
+    };
+
+    /**
+     * Deliver a kept form answer to the form's sender, record that it was
+     * delivered, then write this mailbox's sent copy.
+     *
+     * @param {ValueMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} valueEnvelope
+     * @param {FormulaIdentifier} attemptId
+     * @param {PetName} answeredName
+     */
+    const deliverAnswer = async (valueEnvelope, attemptId, answeredName) => {
+      const recipientHandle = await provideHandle(valueEnvelope.to);
+      const envelope = makeEnvelope();
+      outbox.set(envelope, valueEnvelope);
+      await E(recipientHandle).receive(envelope, selfId);
+      await mailboxStoreJobs.enqueue(() =>
+        mailboxStore.storeIdentifier(answeredName, attemptId),
+      );
+      await deliver(valueEnvelope);
+    };
+
+    /**
+     * Answer a `submitOnce` call whose attempt this mailbox already keeps.
+     *
+     * @param {string | number | bigint} messageNumber
+     * @param {string} attempt
+     * @param {FormulaIdentifier} knownId
+     * @param {PetName} answeredName
+     */
+    const answerKnownAttempt = async (
+      messageNumber,
+      attempt,
+      knownId,
+      answeredName,
+    ) => {
+      const kept = /** @type {MessageFormula} */ (
+        await getFormulaForId(knownId)
+      );
+      const normalizedNumber = coerceMessageNumber(messageNumber);
+      const asked =
+        normalizedNumber === undefined
+          ? undefined
+          : messages.get(normalizedNumber);
+      if (
+        asked !== undefined &&
+        asked.type === 'form' &&
+        asked.messageId !== kept.replyTo
+      ) {
+        throw new Error(`Attempt ${q(attempt)} already answered another form`);
+      }
+      /** @type {ValueMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} */
+      const keptEnvelope = harden({
+        type: /** @type {const} */ ('value'),
+        from: /** @type {FormulaIdentifier} */ (kept.from),
+        to: /** @type {FormulaIdentifier} */ (kept.to),
+        messageId: /** @type {FormulaNumber} */ (kept.messageId),
+        replyTo: /** @type {FormulaNumber} */ (kept.replyTo),
+        valueId: /** @type {FormulaIdentifier} */ (kept.valueId),
+      });
+      if (mailboxStore.identifyLocal(answeredName) === undefined) {
+        await deliverAnswer(keptEnvelope, knownId, answeredName);
+      } else {
+        // The sender has it: at most restore this mailbox's sent copy.
+        await deliver(keptEnvelope);
+      }
+      return harden({
+        messageId: keptEnvelope.messageId,
+        attempt,
+        first: false,
+      });
+    };
+
+    /**
+     * Send a form answer at most once per attempt.
+     *
+     * The attempt is kept in this mailbox's store as `attempt-<attempt>`,
+     * bound to the formula of the value message, durably, before anything is
+     * delivered. Once the form's sender has received the message, the store
+     * also binds `answered-<attempt>` to it, before this mailbox writes its
+     * sent copy. A call with a known attempt sends no new message and answers
+     * with the first call's message id:
+     *
+     * - `answered-<attempt>` is held: the form's sender has the answer. Nothing
+     *   is sent to it; only a missing sent copy is written.
+     * - Only `attempt-<attempt>` is held: the first call was cut short before
+     *   the sender's delivery was recorded. The same message (same id, same
+     *   values) is delivered again. Delivery is idempotent by sender and
+     *   message id while the recipient holds the message.
+     *
+     * Attempts are kept until the member dismisses the form they answer, at
+     * most `MAX_ATTEMPTS_PER_FORM` for one form.
+     *
+     * @type {Mail['submitOnce']}
+     */
+    const submitOnce = (messageNumber, values, attempt) => {
+      assertAttempt(attempt);
+      const attemptName = /** @type {PetName} */ (
+        `${ATTEMPT_NAME_PREFIX}${attempt}`
+      );
+      const answeredName = /** @type {PetName} */ (
+        `${ANSWERED_NAME_PREFIX}${attempt}`
+      );
+      return attemptJobs.enqueue(async () => {
+        const knownId = /** @type {FormulaIdentifier | undefined} */ (
+          mailboxStore.identifyLocal(attemptName)
+        );
+        if (knownId !== undefined) {
+          return answerKnownAttempt(
+            messageNumber,
+            attempt,
+            knownId,
+            answeredName,
+          );
+        }
+
+        const {
+          fields,
+          messageId: formMessageId,
+          guestHandleId,
+        } = getForm(messageNumber);
+        const formAttempts = attemptsByForm.get(formMessageId);
+        if (
+          formAttempts !== undefined &&
+          formAttempts.size >= MAX_ATTEMPTS_PER_FORM
+        ) {
+          throw new Error(
+            `Form ${q(messageNumber)} already holds ${MAX_ATTEMPTS_PER_FORM} attempts; dismiss it or retry a known attempt`,
+          );
+        }
+        const marshalledId = await marshalFormValues(fields, values);
+        try {
+          const valueEnvelope = await makeFormAnswer(
+            formMessageId,
+            guestHandleId,
+            marshalledId,
+          );
+          // Keep the attempt, durably, before anything is delivered.
+          const attemptFormula = makeMessageFormula(
+            valueEnvelope,
+            new Date().toISOString(),
+            true,
+          );
+          const attemptId = await mailboxStoreJobs.enqueue(async () => {
+            const { id } = await formulateMessage(attemptFormula, pinTransient);
+            try {
+              await mailboxStore.storeIdentifier(attemptName, id);
+            } finally {
+              unpinTransient(id);
+            }
+            let attempts = attemptsByForm.get(formMessageId);
+            if (attempts === undefined) {
+              attempts = new Set();
+              attemptsByForm.set(formMessageId, attempts);
+            }
+            attempts.add(attempt);
+            return id;
+          });
+          await deliverAnswer(valueEnvelope, attemptId, answeredName);
+          return harden({
+            messageId: valueEnvelope.messageId,
+            attempt,
+            first: true,
+          });
+        } finally {
+          unpinTransient(marshalledId);
+        }
+      });
     };
 
     /** @type {Mail['sendValue']} */
@@ -1786,6 +2087,7 @@ export const makeMailboxMaker = ({
       getDefineRequest,
       getForm,
       submit,
+      submitOnce,
       sendValue,
       deliverValueById,
       editMessage,

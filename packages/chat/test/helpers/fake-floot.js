@@ -96,6 +96,7 @@ harden(staticSessionListWatch);
  * @param {number} [options.count]
  * @param {(turn: FakeTurn) => unknown} [options.turnStatus] what a turn's
  *   `watch()` snapshot reports
+ * @param {(turn: object) => any} [options.onSpeak] test observer for a spoken turn
  * @param {boolean} [options.autoBegin] whether a turn's input is journaled the
  *   moment it starts (true), or when the test calls `turn.begin()`
  */
@@ -103,6 +104,7 @@ export const makeFakeDaemon = ({
   count = 2,
   turnStatus = () => undefined,
   autoBegin = true,
+  onSpeak,
 } = {}) => {
   /** @type {Map<string, unknown>} */
   const store = new Map();
@@ -133,10 +135,21 @@ export const makeFakeDaemon = ({
   const cancelledTurns = [];
   let nextId = count;
   let failCreation = false;
+  let assistantOptions = harden({
+    presetId: 'voice',
+    backendId: 'fae-codex',
+    modelId: 'gpt-5.6-sol',
+    spoken: true,
+    userInitiated: true,
+  });
+  /** @type {(() => Promise<void>) | null} */
+  let creationGate = null;
   // Knobs a test turns to put the daemon in an awkward state.
   let transcriptDelayMs = 0;
   let transcriptFailures = 0;
   let failAfterAccepting = false;
+  /** @type {null | ((id: string, text: string) => Promise<void>)} */
+  let enqueueGate = null;
   // Every call a page makes on a session facet, by method name.
   /** @type {string[]} */
   const calls = [];
@@ -195,6 +208,7 @@ export const makeFakeDaemon = ({
       });
       let error = '';
       const ref = Far('TestFlootTurn', {
+        ...(onSpeak ? { speak: () => onSpeak(ref) } : {}),
         watch: () => channel.reader,
         getStatus: () =>
           harden({
@@ -329,6 +343,7 @@ export const makeFakeDaemon = ({
         return partsFor(id).watch.watch();
       },
       enqueue: async text => {
+        if (enqueueGate) await enqueueGate(id, text);
         const accepted = await partsFor(id).submissions.submit(text);
         if (failAfterAccepting) throw Error('acknowledgement lost');
         return accepted;
@@ -416,7 +431,9 @@ export const makeFakeDaemon = ({
       parts.get(id)?.watch.end();
       listWatch.touch();
     },
-    createSession: (...args) => {
+    createAssistantSession: () => E(factory).createSession(assistantOptions),
+    createSession: async (...args) => {
+      if (creationGate) await creationGate();
       if (failCreation) throw Error('creation unavailable');
       creations.push(args);
       const id = `s${nextId}`;
@@ -432,6 +449,10 @@ export const makeFakeDaemon = ({
     turns,
     /** The arguments of every createSession call that got as far as creating. */
     created: creations,
+    /** @param {(() => Promise<void>) | null} gate */
+    setCreationGate: gate => {
+      creationGate = gate;
+    },
     deleted,
     cancelledTurns,
     store,
@@ -450,6 +471,13 @@ export const makeFakeDaemon = ({
     touchTranscript: (/** @type {string} */ id) =>
       partsFor(id).watch.touch('transcript'),
     pendingOf: (/** @type {string} */ id) => partsFor(id).submissions.read(),
+    setAssistantOptions: options => {
+      assistantOptions = harden({
+        ...options,
+        spoken: true,
+        userInitiated: true,
+      });
+    },
     setCreationFailure: (/** @type {boolean} */ value) => {
       failCreation = value;
     },
@@ -490,6 +518,10 @@ export const makeFakeDaemon = ({
      */
     setFailAfterAccepting: (/** @type {boolean} */ value) => {
       failAfterAccepting = value;
+    },
+    /** @param {(id: string, text: string) => Promise<void>} gate */
+    setEnqueueGate: gate => {
+      enqueueGate = gate;
     },
     setHistoryReader: (/** @type {(id: string) => any} */ reader) => {
       readHistory = reader;

@@ -1,5 +1,4 @@
 // @ts-check
-/* eslint-disable no-use-before-define */
 
 import harden from '@endo/harden';
 
@@ -8,6 +7,10 @@ import harden from '@endo/harden';
 
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import {
+  pendingAssistantInvocation,
+  acknowledgeAssistantInvocation,
+} from './assistant-launch.js';
 
 import {
   Fragment,
@@ -1521,9 +1524,31 @@ export const createSpacesGutter = ({
   // Mount the confined view once; subsequent repaints go through pushState().
   renderConfined(h(SpacesGutterView, { controller }), $container);
 
+  let assistantSpacesLoaded = false;
+  const openAssistantSpace = () => {
+    const request = pendingAssistantInvocation();
+    if (!request || !$container.isConnected) return;
+    const current = spacesMap.get(activeSpaceId);
+    if (current?.mode === 'floot' && current.audioPath?.length) return;
+    const target = getSpacesArray().find(
+      space => space.mode === 'floot' && space.audioPath?.length,
+    );
+    if (target) selectSpace(target.id);
+    else if (assistantSpacesLoaded)
+      acknowledgeAssistantInvocation(
+        request.id,
+        'Add a Floot space with speech-to-text before using the assistant shortcut.',
+      );
+  };
+  window.addEventListener('endo-assistant', openAssistantSpace);
+
   // Load spaces, open the configured default space (once), then start watching.
   refresh()
-    .then(() => applyInitialDefaultSpace())
+    .then(() => {
+      assistantSpacesLoaded = true;
+      if (pendingAssistantInvocation()) openAssistantSpace();
+      else applyInitialDefaultSpace();
+    })
     .then(() => watchSpaces())
     .catch(window.reportError);
 

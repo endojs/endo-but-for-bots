@@ -339,3 +339,14 @@ test('open stored tool and factory-extra schemas remain open without re-reading 
   }
   t.is(schemaReads, readsAtSnapshot);
 });
+
+test('image capability is advertised only when backend recovery supports it', async t => {
+  const powers = Far('Powers', { list: () => harden([]) });
+  const supported = await makeFlootToolRegistry(powers).snapshot();
+  const unsupported = await makeFlootToolRegistry(powers, {
+    imageInputs: false,
+  }).snapshot();
+  t.true(supported.names.includes('viewImage'));
+  t.false(unsupported.names.includes('viewImage'));
+  t.not(supported.toolSetId, unsupported.toolSetId);
+});

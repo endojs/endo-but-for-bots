@@ -236,6 +236,9 @@ siblings),
 primitive and the nine-layer pivot from SturdyRef: `@endo/parcel`, the
 initial/shared location-authority split, `E.open`, inline marshal forms, and the
 unchanged `ocapn-sturdyref` wire tag),
+[sturdyref-shim-contract](sturdyref-shim-contract.md) (added 2026-09-30,
+revised 2026-10-14; the layer 1 Parcel shim contract and consequences for the
+existing nine-layer stack),
 [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) (added
 2026-06-23, transformed 2026-10-15; Parcel carriage and opening across
 Slot Machine: inline Smallcaps over the existing canonical-CBOR envelope,
@@ -453,6 +456,7 @@ LLM-agent stack).*
 | [runtime-container-fs-mount](runtime-container-fs-mount.md) | 2026-08-10 | 2026-09-08 | **Complete** |
 | [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | 2026-06-23 | 2026-10-15 | Proposed (Parcel carriage and opening across Slot Machine) |
 | [parcel](parcel.md) | 2026-10-14 | 2026-10-14 | Proposed |
+| [sturdyref-shim-contract](sturdyref-shim-contract.md) | 2026-09-30 | 2026-10-14 | Proposed (layer 1 Parcel contract and nine-layer pivot map) |
 | [daemon-rename-to-manager](daemon-rename-to-manager.md) | 2026-05-04 | 2026-05-05 | In Progress |
 | [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-04 | **Implemented** |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | In Progress |

@@ -293,3 +293,27 @@ test('tool ids are written in the API-safe alphabet, paired and distinct', t => 
   );
   for (const block of uses) t.regex(block.id, /^[A-Za-z0-9_-]+$/);
 });
+
+test('image tool results round-trip as native image blocks on revival', async t => {
+  const { encodeImageResult } =
+    await import('@endo/hosted-agent/image-result.js');
+  const { readClaudeTranscript } =
+    await import('../src/claude-transcript-writer.js');
+  const image = {
+    mimeType: /** @type {const} */ ('image/png'),
+    data: 'iVBORw0KGgo=',
+  };
+  const content = encodeImageResult(image);
+  const records = harden([
+    { kind: 'tool-call', id: 'image', name: 'viewImage', args: '{}' },
+    { kind: 'tool-result', id: 'image', content },
+  ]);
+  const written = writeClaudeTranscript(records, options);
+  t.deepEqual(parse(written)[1].message.content[0].content, [
+    {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: image.data },
+    },
+  ]);
+  t.is(readClaudeTranscript(written).at(-1)?.content, content);
+});

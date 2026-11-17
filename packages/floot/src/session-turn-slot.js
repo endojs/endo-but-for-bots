@@ -16,7 +16,7 @@ import { makeSessionTurn } from './session-turn.js';
  * (`pendingId`), so a view can tell its own message became this turn, and an
  * `onBegun` the runner calls once the turn journal has the input.
  *
- * @typedef {{ pendingId?: string, onBegun?: () => Promise<void> }} TurnStartOptions
+ * @typedef {{ pendingId?: string, mentions?: import('./session-mentions.js').SessionMention[], message?: import('./session-mentions.js').ChatMessage, onBegun?: () => Promise<void> }} TurnStartOptions
  *
  * @param {(input: any, writer: object, signal: AbortSignal, setHistory: (history: any[]) => void, options: TurnStartOptions) => Promise<void>} run
  * @param {() => void} [onChange] told when the slot fills and when it empties
@@ -58,6 +58,7 @@ export const makeSessionTurnSlot = (run, onChange = () => {}) => {
       // A streamed prompt may itself carry authority. Reconnecting observers
       // get display text only, never the original caller's input capability.
       const entry = harden({
+        ...(options.message ? { message: options.message } : {}),
         input: typeof input === 'string' ? input : null,
         turn,
         history,

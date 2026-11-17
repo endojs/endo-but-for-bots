@@ -216,6 +216,7 @@ export const makeTreeRequestHandler = ({ tree, index = 'index.html' }) => {
     // directory) is a 404 — we never emit a 200 we cannot fulfil. A file is
     // confirmed by the presence of `streamBase64`, not shared metadata methods.
     let blob;
+    let directory = pathSegments.length === 0;
     let fileName = pathSegments[pathSegments.length - 1] || index;
     /** @type {bigint} */
     let size;
@@ -234,6 +235,7 @@ export const makeTreeRequestHandler = ({ tree, index = 'index.html' }) => {
         if (await isBlob(node)) {
           fileName = pathSegments[pathSegments.length - 1];
         } else {
+          directory = true;
           // A directory (or non-file): serve its index.
           node = E(node).lookup(index);
           fileName = index;
@@ -246,6 +248,21 @@ export const makeTreeRequestHandler = ({ tree, index = 'index.html' }) => {
       blob = node;
     } catch {
       return plainResponse(404, 'Not found\n');
+    }
+
+    if (directory && !requestUrl.pathname.endsWith('/')) {
+      const pathname = pathSegments.length
+        ? `/${pathSegments.map(encodeURIComponent).join('/')}/`
+        : '/';
+      return {
+        status: 308,
+        headers: [
+          ['Location', `${pathname}${requestUrl.search}`],
+          ['Content-Length', '0'],
+          ['Cache-Control', 'private, no-cache'],
+          ...baselineSecurityHeaders,
+        ],
+      };
     }
 
     const etag = `"${hash}"`;

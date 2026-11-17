@@ -17,7 +17,7 @@ import { idFromLocator } from './locator.js';
 
 /** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
-import { guestHelp, makeHelp } from './help-text.js';
+import { guestHelp, mailHelp, makeHelp } from './help-text.js';
 
 /**
  * @param {object} args
@@ -209,6 +209,7 @@ export const makeGuestMaker = ({
       define: mailboxDefine,
       form: mailboxForm,
       submit: mailboxSubmit,
+      submitOnce: mailboxSubmitOnce,
       sendValue: mailboxSendValue,
     } = mailbox;
 
@@ -324,6 +325,10 @@ export const makeGuestMaker = ({
     /** @type {EndoGuest['submit']} */
     const submit = (messageNumber, values) =>
       mailboxSubmit(messageNumber, values);
+
+    /** @type {EndoGuest['submitOnce']} */
+    const submitOnce = (messageNumber, values, attempt) =>
+      mailboxSubmitOnce(messageNumber, values, attempt);
 
     /** @type {EndoGuest['sendValue']} */
     const sendValue = (messageNumber, petNameOrPath) =>
@@ -507,6 +512,7 @@ export const makeGuestMaker = ({
       storeBlob,
       storeValue,
       submit,
+      submitOnce,
       sendValue,
       invite,
       accept,
@@ -516,7 +522,7 @@ export const makeGuestMaker = ({
       'EndoGuest',
       GuestInterface,
       /** @type {any} */ ({
-        help: makeHelp(guestHelp),
+        help: makeHelp(guestHelp, [mailHelp]),
         ...guest,
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {

@@ -88,7 +88,7 @@ const COMMIT_PROP = harden({
   description: 'The commit message.',
 });
 
-const PATHS_PROP = harden({
+const PATHS_PROPERTY = harden({
   type: 'array',
   items: { type: 'string' },
   description:
@@ -97,7 +97,31 @@ const PATHS_PROP = harden({
     'under that directory. The worktree root itself is not a path designator.',
 });
 
-const CONFLICT_SIDE_PROP = harden({
+// The guard is an open record, so this documents the honored keys without
+// closing the object.
+const DIFF_OPTIONS_PROPERTY = harden({
+  type: 'object',
+  properties: {
+    cached: {
+      type: 'boolean',
+      description: 'Compare the index instead of the worktree.',
+    },
+    base: {
+      type: 'string',
+      description: 'The ref to compare from.',
+    },
+    head: {
+      type: 'string',
+      description: 'The ref to compare to; pass it with base.',
+    },
+    paths: {
+      ...PATHS_PROPERTY,
+      description: `Limit the diff to these paths. ${PATHS_PROPERTY.description}`,
+    },
+  },
+});
+
+const CONFLICT_SIDE_PROPERTY = harden({
   type: 'string',
   enum: ['ours', 'theirs'],
   description:
@@ -215,7 +239,7 @@ const gitToolSchemas = harden({
       'path. Staging is additive and never discards working-tree changes.',
     parameters: {
       type: 'object',
-      properties: { paths: PATHS_PROP },
+      properties: { paths: PATHS_PROPERTY },
       required: ['paths'],
       additionalProperties: false,
     },
@@ -233,7 +257,7 @@ const gitToolSchemas = harden({
     description: 'Show changes between commits, the index, and the worktree.',
     parameters: {
       type: 'object',
-      properties: { options: OPTIONS_PROP },
+      properties: { options: DIFF_OPTIONS_PROPERTY },
       required: [],
       additionalProperties: false,
     },
@@ -273,7 +297,7 @@ const gitToolSchemas = harden({
       'staged and the error names the path that stopped it.',
     parameters: {
       type: 'object',
-      properties: { paths: PATHS_PROP, side: CONFLICT_SIDE_PROP },
+      properties: { paths: PATHS_PROPERTY, side: CONFLICT_SIDE_PROPERTY },
       required: ['paths', 'side'],
       additionalProperties: false,
     },

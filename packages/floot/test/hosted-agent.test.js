@@ -909,3 +909,75 @@ test('hosted provisioning receives the session delegation and account catalog', 
     );
   }
 });
+
+test('hosted delegation executes the Endo spawner inside the parent journal turn', async t => {
+  t.timeout(5000);
+  const stored = [];
+  const spawned = [];
+  const base = makeFakePowers();
+  const powers = harden({
+    ...base,
+    makeDirectory: async () => {},
+    storeLocator: async (path, locator) => {
+      stored.push({ path, locator });
+    },
+  });
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    {
+      kind: 'hosted',
+      provideHostedClient: async catalog => {
+        t.false(catalog.names.includes('spawn_agent'));
+        t.true(catalog.names.includes('spawnSubagent'));
+        return harden({
+          async send() {
+            const result = await catalog.execute(
+              'spawnSubagent',
+              harden({
+                name: 'diagnostic-helper',
+                systemPrompt: 'Inspect the failure.',
+              }),
+            );
+            t.regex(result, /Spawned subagent/);
+            const channel = makeBufferedReader();
+            channel.push({
+              type: 'text-delta',
+              text: 'Delegated through Endo.',
+            });
+            channel.push({ type: 'end' });
+            return channel.reader;
+          },
+        });
+      },
+    },
+    'Use Endo delegation',
+    {
+      journalPowers: powers,
+      spawner: harden({
+        async spawn(name, options) {
+          spawned.push({ name, options });
+          return harden({ locator: 'endo:diagnostic-helper' });
+        },
+      }),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.converse('Delegate diagnostics', makeReplyChannel().writer);
+  t.deepEqual(spawned, [
+    {
+      name: 'diagnostic-helper',
+      options: { systemPrompt: 'Inspect the failure.' },
+    },
+  ]);
+  t.deepEqual(stored, [
+    {
+      path: ['subagents', 'diagnostic-helper'],
+      locator: 'endo:diagnostic-helper',
+    },
+  ]);
+  const [turn] = await agent.getTurns();
+  t.is(turn.tools[0].name, 'spawnSubagent');
+  t.true(turn.tools[0].settled);
+  t.false(turn.tools[0].failed);
+});

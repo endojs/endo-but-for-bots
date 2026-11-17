@@ -1,4 +1,8 @@
 // @ts-check
+import {
+  imageResultFromBlocks,
+  anthropicToolContent,
+} from '@endo/hosted-agent/image-result.js';
 
 /**
  * Write a Claude Code transcript from the stack's transcript records, so a
@@ -208,7 +212,9 @@ export const writeClaudeTranscript = (
           {
             type: 'tool_result',
             tool_use_id: apiId(record),
-            content: result ? result.content : 'Tool call did not complete.',
+            content: anthropicToolContent(
+              result ? result.content : 'Tool call did not complete.',
+            ),
             ...(result?.failed ? { is_error: true } : {}),
           },
         ],
@@ -272,7 +278,8 @@ export const readClaudeTranscript = text => {
             content:
               typeof block.content === 'string'
                 ? block.content
-                : JSON.stringify(block.content ?? ''),
+                : (imageResultFromBlocks(block.content) ??
+                  JSON.stringify(block.content ?? '')),
             ...(block.is_error ? { failed: true } : {}),
           });
         }

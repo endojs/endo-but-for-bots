@@ -1,5 +1,6 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { encodeImageResult } from '@endo/hosted-agent/image-result.js';
 import {
   planContextCompaction,
   summarizeContext,
@@ -25,6 +26,57 @@ const dialogue = () => [
   { role: 'tool', tool_call_id: 'call', content: 'exit 1', failed: true },
   { role: 'user', content: 'continue' },
 ];
+
+test('compaction summarizes image receipts without turning image bytes into text tokens', async t => {
+  const image = encodeImageResult({
+    mimeType: 'image/png',
+    data: 'AAAA'.repeat(20_000),
+  });
+  const messages = [
+    { role: 'user', content: 'inspect the screenshot' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        { id: 'image', function: { name: 'viewImage', arguments: '{}' } },
+      ],
+    },
+    { role: 'tool', tool_call_id: 'image', content: image },
+    { role: 'assistant', content: 'The cat is hidden behind the piano.' },
+    { role: 'user', content: 'fix the camera' },
+  ];
+  const plan = planContextCompaction(messages, { force: true });
+  if (!plan) throw Error('Expected forced plan');
+  t.true(plan.prefix.some(message => message.content === image));
+  const checkpoint = await summarizeContext(plan, async request => {
+    const text = JSON.stringify(request);
+    t.false(text.includes('AAAA'));
+    t.true(text.includes('[Image image/png; bytes retained for model input]'));
+    t.true(text.length < 3000);
+    return {
+      message: { role: 'assistant', content: 'Adjust camera to show the cat.' },
+    };
+  });
+  t.is(messages[2].content, image);
+  t.is(plan.prefix[2].content, image);
+  t.deepEqual(checkpoint.retained, messages.slice(3));
+});
+
+test('compaction keeps recent image tool groups byte-exact', async t => {
+  const image = encodeImageResult({ mimeType: 'image/png', data: 'AAAA' });
+  const messages = dialogue();
+  messages[5] = { ...messages[5], content: image };
+  const plan = planContextCompaction(messages, { force: true });
+  if (!plan) throw Error('Expected forced plan');
+  const checkpoint = await summarizeContext(plan, async () => ({
+    message: { role: 'assistant', content: 'Old work completed.' },
+  }));
+  t.is(
+    checkpoint.retained.find(message => message.role === 'tool').content,
+    image,
+  );
+  t.deepEqual(checkpoint.retained, messages.slice(3));
+});
 
 test('keeps complete recent protocol groups and summarizes only older completed work', async t => {
   const messages = dialogue();

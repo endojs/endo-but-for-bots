@@ -340,13 +340,19 @@ export const GuestInterface = M.interface('EndoGuest', {
     MessageNumberShape, // messageNumber
     M.record(), // values
   ).returns(M.promise()),
+  // Submit values for a form at most once per attempt
+  submitOnce: M.call(
+    MessageNumberShape, // messageNumber
+    M.record(), // values
+    M.string(), // attempt
+  ).returns(M.promise()),
   // Send a retained value as a reply
   sendValue: M.call(
     MessageNumberShape, // messageNumber
     NameOrPathShape, // petNameOrPath
   ).returns(M.promise()),
   // Internal: deliver a message
-  deliver: M.call(M.record()).returns(),
+  deliver: M.call(M.record()).returns(M.promise()),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
   // Mint a guest-owned invitation (network mediation stays internal)
@@ -356,6 +362,7 @@ export const GuestInterface = M.interface('EndoGuest', {
 });
 
 export const HostInterface = M.interface('EndoHost', {
+  createDirectory: M.call(NameOrPathShape).returns(M.promise()),
   // Name hub — the shared read (incl. `help`) + registry/locator/mutation
   // surface, plus the directory file-I/O surface.
   ...nameHubMethodGuards,
@@ -393,7 +400,7 @@ export const HostInterface = M.interface('EndoHost', {
   )
     .optional(MessageNumberShape)
     .returns(M.promise()),
-  deliver: M.call(M.record()).returns(),
+  deliver: M.call(M.record()).returns(M.promise()),
   // Send a form to a recipient
   form: M.call(
     NameOrPathShape, // recipientName
@@ -615,6 +622,12 @@ export const HostInterface = M.interface('EndoHost', {
   submit: M.call(
     MessageNumberShape, // messageNumber
     M.record(), // values
+  ).returns(M.promise()),
+  // Submit values for a form at most once per attempt
+  submitOnce: M.call(
+    MessageNumberShape, // messageNumber
+    M.record(), // values
+    M.string(), // attempt
   ).returns(M.promise()),
   // Send a retained value as a reply
   sendValue: M.call(

@@ -1,4 +1,5 @@
 // @ts-check
+/* eslint-disable import/no-relative-packages -- Cross-package storage integration. */
 import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
@@ -9,6 +10,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 import { makeEndoClient, start, stop } from '../index.js';
+import { createPrivateTurnStorage } from '../../floot/src/private-turn-storage.js';
 
 test.serial(
   'direct-provider ordered journal survives two cold daemon starts',
@@ -48,10 +50,7 @@ test.serial(
     };
     await start(config);
     let host = await connect();
-    await E(host).storeValue(
-      harden({ version: 1, sessionId: 'direct-journal' }),
-      'floot-private-turn-14-direct-journal-schema',
-    );
+    await createPrivateTurnStorage(host, 'direct-journal');
     await E(host).provideWorker('direct-journal-worker');
     let agent = await E(host).makeUnconfined(
       'direct-journal-worker',

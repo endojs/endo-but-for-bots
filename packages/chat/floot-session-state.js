@@ -7,7 +7,7 @@
 import harden from '@endo/harden';
 
 /**
- * @typedef {{ id: string, text: string, state: string }} PendingEntry
+ * @typedef {{ id: string, text: string, message?: {strings: string[], names: string[]}, state: string }} PendingEntry
  * @typedef {{ entries: PendingEntry[], hold: { reason: string, message: string } | null }} PendingState
  */
 
@@ -34,6 +34,7 @@ export const normalizePending = value => {
       .map((/** @type {any} */ entry) => ({
         id: entry.id,
         text: entry.text,
+        ...(entry.message ? { message: entry.message } : {}),
         state: `${entry.state || 'queued'}`,
       })),
     hold:

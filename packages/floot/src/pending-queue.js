@@ -24,10 +24,18 @@
 
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import { sha256 } from '@endo/sha256';
+import { keyEQ } from '@endo/patterns';
+import {
+  validateMentions,
+  validateChatMessage,
+  chatMessageText,
+} from './session-mentions.js';
 
 /**
  * @typedef {'queued' | 'dispatching' | 'interrupted'} PendingState
- * @typedef {{ id: string, text: string, createdAt: number, state: PendingState }} PendingEntry
+ * @typedef {import('./session-mentions.js').SessionMention} SessionMention
+ * @typedef {{ id: string, text: string, createdAt: number, state: PendingState, mentions?: SessionMention[], message?: import('./session-mentions.js').ChatMessage }} PendingEntry
  */
 
 const STATES = harden(['queued', 'dispatching', 'interrupted']);
@@ -64,6 +72,13 @@ export const makePendingQueue = ({
   /** @type {PendingEntry[]} */
   let entries = [];
   let nextSequence = 1n;
+  /** @type {{requestId: string, digest: string, id: string, createdAt: number, manifest?: {path: string[], identity: string}[], message?: import('./session-mentions.js').ChatMessage}[]} */
+  let receipts = [];
+  const retryWindow = 24 * 60 * 60 * 1000;
+  const fingerprint = (/** @type {string} */ text) =>
+    [...sha256(new TextEncoder().encode(text))]
+      .map(byte => byte.toString(16).padStart(2, '0'))
+      .join('');
   let loaded = false;
   let chain = Promise.resolve();
 
@@ -77,13 +92,14 @@ export const makePendingQueue = ({
 
   const persist = async () => {
     try {
-      if (entries.length === 0) {
+      if (entries.length === 0 && receipts.length === 0) {
         // Nothing waits: no record. A session that never queues never has one.
         if (await E(host).has(name)) await E(host).remove(name);
       } else {
         await E(host).storeValue(
           harden({
             version: 1,
+            receipts: receipts.map(receipt => ({ ...receipt })),
             nextSequence,
             entries: entries.map(entry => ({ ...entry })),
           }),
@@ -107,12 +123,26 @@ export const makePendingQueue = ({
     let read = [];
     let readSequence = nextSequence;
     let interrupted = false;
+    receipts = [];
     if (await E(host).has(name)) {
       const stored = await E(host).lookup(name);
       (stored?.version === 1 &&
         Array.isArray(stored.entries) &&
         typeof stored.nextSequence === 'bigint') ||
         Fail`Pending queue record ${q(name)} is corrupt`;
+      if (stored.receipts !== undefined) {
+        (Array.isArray(stored.receipts) &&
+          /** @type {any[]} */ (stored.receipts).length <= 4096) ||
+          Fail`Invalid submission receipts`;
+        receipts = stored.receipts.map((/** @type {any} */ receipt) => {
+          (typeof receipt.requestId === 'string' &&
+            typeof receipt.digest === 'string' &&
+            typeof receipt.id === 'string' &&
+            typeof receipt.createdAt === 'number') ||
+            Fail`Invalid submission receipt`;
+          return { ...receipt };
+        });
+      }
       read = stored.entries.map((/** @type {any} */ entry) => {
         (typeof entry?.id === 'string' &&
           typeof entry.text === 'string' &&
@@ -123,6 +153,12 @@ export const makePendingQueue = ({
         return {
           id: entry.id,
           text: entry.text,
+          ...(entry.message
+            ? { message: validateChatMessage(entry.message) }
+            : {}),
+          ...(entry.mentions?.length
+            ? { mentions: validateMentions(entry.mentions) }
+            : {}),
           createdAt: entry.createdAt,
           // This incarnation did not start that turn (or no longer knows
           // whether it did), and cannot tell whether it reached the backend.
@@ -180,7 +216,11 @@ export const makePendingQueue = ({
   };
 
   /** @param {PendingEntry} entry */
-  const project = entry => harden({ ...entry });
+  const project = entry => {
+    const display = { ...entry };
+    delete display.mentions;
+    return harden(display);
+  };
 
   /**
    * @param {PendingEntry[]} draft
@@ -199,14 +239,89 @@ export const makePendingQueue = ({
     list: () => harden(entries.map(project)),
     isLoaded: () => loaded,
     /**
+     * Read acknowledgement without resolving mutable source names again.
      * @param {string} text
-     * @param {{ claim?: boolean }} [options] `claim` marks the entry
+     * @param {string} requestId
+     * @param {{path: string[], identity: string}[]} manifest
+     * @param {import('./session-mentions.js').ChatMessage} [message]
+     */
+    receipt: (text, requestId, manifest, message = undefined) =>
+      ordered(async () => {
+        const previous = receipts.find(
+          receipt => receipt.requestId === requestId,
+        );
+        if (!previous) return null;
+        if (Number(requestId.slice(0, 13)) <= now() - retryWindow)
+          throw Error('Submission retry window expired');
+        const expected = previous.manifest || [];
+        if (
+          previous.digest !== fingerprint(assertText(text).trim()) ||
+          !keyEQ(previous.message || null, message || null) ||
+          !keyEQ(harden(expected), harden(manifest))
+        )
+          throw Error(
+            'Submission receipt does not match text and inventory objects',
+          );
+        return harden({ id: previous.id });
+      }),
+    /**
+     * @param {string} text
+     * @param {{ claim?: boolean, requestId?: string, mentions?: SessionMention[], message?: import('./session-mentions.js').ChatMessage }} [options] `claim` marks the entry
      *   `dispatching` in the same write, for a caller about to start its turn;
      *   honoured only when nothing is ahead of it.
      */
-    enqueue: (text, { claim = false } = {}) =>
+    enqueue: (
+      text,
+      { claim = false, requestId, mentions = [], message = undefined } = {},
+    ) =>
       ordered(async () => {
         const accepted = assertText(text).trim();
+        const attachments = validateMentions(mentions);
+        if (message) {
+          message = validateChatMessage(message);
+          if (
+            message.names.length !== attachments.length ||
+            chatMessageText(message) !== accepted
+          )
+            throw Error('Chat message does not match text and attachments');
+        } else if (attachments.length)
+          throw Error('Attachments require a structured chat message');
+        if (requestId !== undefined) {
+          /^\d{13}-[a-f0-9-]{36}$/.test(requestId) ||
+            Fail`Invalid submission request ID`;
+          const issued = Number(requestId.slice(0, 13));
+          (issued > now() - retryWindow && issued <= now() + 300_000) ||
+            Fail`Submission retry window expired or device clock is incorrect`;
+          const previous = receipts.find(
+            receipt => receipt.requestId === requestId,
+          );
+          if (previous) {
+            keyEQ(previous.message || null, message || null) ||
+              Fail`Submission request ID already used for a different message`;
+            keyEQ(
+              previous.manifest || harden([]),
+              harden(
+                attachments.map(({ path, identity }) => ({ path, identity })),
+              ),
+            ) ||
+              Fail`Submission request ID already used for different inventory objects`;
+            previous.digest === fingerprint(accepted) ||
+              Fail`Submission request ID already used for different text`;
+            return harden({
+              id: previous.id,
+              text: accepted,
+              createdAt: previous.createdAt,
+              state: /** @type {PendingState} */ ('queued'),
+              duplicate: true,
+            });
+          }
+          receipts = receipts.filter(
+            receipt =>
+              Number(receipt.requestId.slice(0, 13)) > now() - retryWindow,
+          );
+          receipts.length < 4096 ||
+            Fail`Submission receipt limit reached; wait for the retry window to expire`;
+        }
         return commit(draft => {
           draft.length < MAX_WAITING ||
             Fail`This session already has ${q(MAX_WAITING)} messages waiting; send or delete some first`;
@@ -219,12 +334,30 @@ export const makePendingQueue = ({
             // a stale id must not be able to cancel someone else's message.
             id: `p${createdAt.toString(36)}-${nextSequence}`,
             text: accepted,
+            ...(message ? { message } : {}),
+            ...(attachments.length ? { mentions: attachments } : {}),
             createdAt,
             state: claim && draft.length === 0 ? 'dispatching' : 'queued',
           };
           nextSequence += 1n;
           draft.push(entry);
-          return project(entry);
+          if (requestId)
+            receipts.push({
+              requestId,
+              digest: fingerprint(accepted),
+              ...(message ? { message } : {}),
+              ...(attachments.length
+                ? {
+                    manifest: attachments.map(({ path, identity }) => ({
+                      path,
+                      identity,
+                    })),
+                  }
+                : {}),
+              id: entry.id,
+              createdAt,
+            });
+          return harden({ ...entry });
         });
       }),
     /**
@@ -240,6 +373,12 @@ export const makePendingQueue = ({
           const entry = find(draft, entryId);
           entry.state !== 'dispatching' ||
             Fail`Message ${q(entryId)} is already being sent`;
+          if (entry.message?.names.length)
+            throw Error(
+              'Cancel and recompose a queued message to change its attachments',
+            );
+          if (entry.message)
+            entry.message = harden({ strings: [accepted], names: [] });
           entry.text = accepted;
           return project(entry);
         });
@@ -271,7 +410,7 @@ export const makePendingQueue = ({
         if (!head || head.state !== 'queued') return undefined;
         return commit(draft => {
           draft[0].state = 'dispatching';
-          return project(draft[0]);
+          return harden({ ...draft[0] });
         });
       }),
     /**
@@ -319,6 +458,7 @@ export const makePendingQueue = ({
     destroy: () => {
       const result = chain.then(async () => {
         entries = [];
+        receipts = [];
         loaded = true;
         if (await E(host).has(name)) await E(host).remove(name);
         changed();

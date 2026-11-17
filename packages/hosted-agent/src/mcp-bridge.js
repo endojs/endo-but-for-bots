@@ -1,11 +1,11 @@
 // @ts-check
+import { E } from '@endo/eventual-send';
+import { decodeImageResult } from './image-result.js';
 // Shared MCP protocol adapter for hosted CLI tool interactions.
 // The pinned tool set controls which host operations can be requested; active
 // turn admission and authoritative effect records belong to its executor.
 // The socket is reachable by the whole guest. MCP does not authenticate a
 // particular guest process or prevent a guest from forwarding its granted use.
-
-import { E } from '@endo/eventual-send';
 
 // The MCP revision this bridge speaks. The CLI negotiates on `initialize`;
 // if the client asks for a version we echo its choice, otherwise we advertise
@@ -199,8 +199,11 @@ export const makeMcpBridge = ({
         pending += 1;
         try {
           const text = await execute(toolName, harden({ ...args }));
+          const image = decodeImageResult(text);
           return ok(id, {
-            content: [{ type: 'text', text: `${text}` }],
+            content: image
+              ? [{ type: 'image', ...image }]
+              : [{ type: 'text', text: `${text}` }],
           });
         } catch (error) {
           // MCP convention: surface a tool failure as a result with
