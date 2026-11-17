@@ -1,0 +1,11 @@
+[package]
+name = "halt-classification-lint"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Classification-discipline lint: commit-path code routes an Ironhorse Halt through Halt::is_panic() or ExecutionOutcome, never a raw variant match (designs/ironhorse-panic.md)."
+publish = false
+
+[dependencies]
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", default-features = false, features = ["full", "parsing", "printing", "visit"] }

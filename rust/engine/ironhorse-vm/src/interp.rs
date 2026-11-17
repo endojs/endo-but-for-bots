@@ -1335,7 +1335,10 @@ pub fn error_name_static(name: &str) -> Option<&'static str> {
 /// drifts when the set changes (design `ironhorse-panic.md`
 /// § The Formal `Panic` Category). `#[non_exhaustive]` adds
 /// discovery-time friction toward this rule for out-of-crate matches; it
-/// is a convention, not a type-level guarantee.
+/// is a convention, not a type-level guarantee. The enforcement is the
+/// `halt-classification-lint` crate (`rust/halt-classification-lint`),
+/// which CI runs over the commit-path crates and which fails the build on
+/// any raw variant pattern or `==` outside its reviewed allowlist.
 // Thrown values contain floating-point numbers, so only PartialEq is derived.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]

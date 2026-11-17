@@ -2098,6 +2098,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "halt-classification-lint"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "syn",
+]
+
+[[package]]
 name = "hash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

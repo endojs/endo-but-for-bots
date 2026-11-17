@@ -317,6 +317,12 @@ def classify(paths, graphs, all_jobs=False):
             jobs["check-action-pins"] = True
         if path.endswith(".rs") and (under(path, "rust/engine") or under(path, "rust/endo/ironhorse-store-sqlite")):
             jobs["format-ironhorse"] = True
+        # The Halt classification-discipline lint (designs/ironhorse-panic.md)
+        # reads every root-workspace Rust source outside rust/engine; its own
+        # fixtures and manifest are inputs too. Root manifest changes already
+        # select every Rust job above.
+        if (path.endswith(".rs") and under(path, "rust")) or under(path, "rust/halt-classification-lint"):
+            jobs["format-ironhorse"] = True
         if path in {
             "c/moddable", ".gitmodules", "rust/endo/xsnap/xsnap-platform.c",
             "rust/endo/xsnap/xsnap-platform.h",

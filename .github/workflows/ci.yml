@@ -762,8 +762,28 @@ jobs:
       - name: Check ironhorse engine formatting
         run: cargo +1.88.0 fmt --manifest-path rust/engine/Cargo.toml --all -- --check
 
-      - name: Check SQLite heap-store formatting
-        run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check
+      - name: Check SQLite heap-store and Halt lint formatting
+        run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite --package halt-classification-lint -- --check
+
+      - name: Check Halt classification discipline
+        # designs/ironhorse-panic.md § The Formal `Panic` Category: commit-path
+        # code decides terminate-vs-commit through `Halt::is_panic()` or
+        # `ExecutionOutcome::classify`, never a raw `Halt` variant match. The
+        # rule is a convention, so this lint is its only enforcement; the
+        # fixture pair below proves it still bites (§ Verification).
+        run: |
+          cargo test --locked -p halt-classification-lint
+          cargo build --locked -p halt-classification-lint
+          lint=target/debug/halt-classification-lint
+          fixtures=rust/halt-classification-lint/fixtures
+          "$lint"
+          "$lint" "$fixtures/commit_path_routed.rs"
+          status=0
+          "$lint" "$fixtures/commit_path_raw_match.rs" || status=$?
+          if [ "$status" -ne 1 ]; then
+            echo "::error::the raw Halt::StackOverflow commit-path fixture must fail the lint with status 1, got $status"
+            exit 1
+          fi
 
   test-thixotrope-ironhorse:
     needs: changes
