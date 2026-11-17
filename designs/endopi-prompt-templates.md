@@ -93,7 +93,7 @@ The placeholder grammar is exactly Pi's:
 
 | Placeholder | Expands to |
 |---|---|
-| `$1`, `$2`, … | The *n*th argument, or empty |
+| `$1`, `$2`, ... | The *n*th argument, or empty |
 | `$@`, `$ARGUMENTS` | All arguments joined with one space |
 | `${1:-default}` | The first argument, or `default` if absent or empty |
 | `${@:-default}` | All arguments, or `default` if there are none |
