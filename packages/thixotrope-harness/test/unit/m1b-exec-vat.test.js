@@ -631,10 +631,13 @@ test('M1b QC (J-0391): model code cannot outlive its call; a kept sleep is dead'
   t.deepEqual(answer, { status: 'ok', text: '1' });
   const asked = adapter.sleeps.length;
   t.is(asked, 4, 'only what the call asked for while it ran');
-  // The timer answers every sleep: the loop's continuation must not run.
+  // The timer answers every sleep: the loop takes at most one more step,
+  // then its next sleeps are dead and it stops.
   adapter.wake();
   await settleJobs();
-  t.deepEqual(await exec('return ticks;'), { status: 'ok', text: '0' });
+  adapter.wake();
+  await settleJobs();
+  t.deepEqual(await exec('return ticks;'), { status: 'ok', text: '1' });
   t.is(adapter.sleeps.length, asked, 'no sleep was sent after the call ended');
   // A sleep kept on globalThis never settles in a later call and sends
   // nothing; the call's own sleep still reaches the timer.
@@ -647,7 +650,7 @@ test('M1b QC (J-0391): model code cannot outlive its call; a kept sleep is dead'
   t.deepEqual(adapter.sleeps.slice(asked), [5], 'only the live sleep was sent');
   adapter.wake();
   await settleJobs();
-  t.deepEqual(await exec('return ticks;'), { status: 'ok', text: '0' });
+  t.deepEqual(await exec('return ticks;'), { status: 'ok', text: '1' });
 });
 
 test('M1b QC (J-0391): abandon ends the running call; the scope and its bindings stay', async t => {
@@ -657,8 +660,10 @@ test('M1b QC (J-0391): abandon ends the running call; the scope and its bindings
     status: 'ok',
     text: '"set"',
   });
-  // A long sleep, as acceptance 3's cancelled call.
-  const pending = exec('await sleep(30000); globalThis.x = 99; return "late";');
+  // A long sleep, as acceptance 3's cancelled call, and a loop after it.
+  const pending = exec(
+    'await sleep(30000); globalThis.after = 1; await sleep(1); globalThis.after = 2; return "late";',
+  );
   await settleJobs();
   t.deepEqual(
     await exec('return x;'),
@@ -669,10 +674,15 @@ test('M1b QC (J-0391): abandon ends the running call; the scope and its bindings
   t.deepEqual(await pending, { status: 'failed', text: texts.execAbandoned });
   // The next call runs in the same scope at once (no busy, no reset).
   t.deepEqual(await exec('return x;'), { status: 'ok', text: '5' });
-  // The abandoned call's sleep is answered later: its continuation is dead.
+  // The abandoned call's sleep in flight still answers: its code runs to its
+  // next sleep, which is dead ("its effects may still happen").
+  const sent = adapter.sleeps.length;
   adapter.wake();
   await settleJobs();
-  t.deepEqual(await exec('return x;'), { status: 'ok', text: '5' });
+  adapter.wake();
+  await settleJobs();
+  t.deepEqual(await exec('return after;'), { status: 'ok', text: '1' });
+  t.is(adapter.sleeps.length, sent, 'the abandoned code sent nothing more');
   // Abandon with nothing running does nothing.
   await E(scope).abandon();
   t.deepEqual(await exec('return x + 1;'), { status: 'ok', text: '6' });

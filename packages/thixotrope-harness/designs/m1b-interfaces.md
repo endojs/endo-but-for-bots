@@ -219,9 +219,10 @@ adapter restarted; inside model code the `await` rejects (section 7).
   round's checkpoints write stay at most about 3 times its text (they were quadratic: 34 MB for a
   1 MiB reply). The answer is `true` when the session kept the checkpoint in place of the previous
   one; the adapter then deletes the previous checkpoint's file (`BlobStore.discard`). `false`, or a
-  break, keeps every file: the session may still hold or have recorded the older one. The
-  checkpoint the session holds when the round ends stays on disk (at most one per round, the size
-  of the text so far; M2's delete frees it with the session). `partial` is the round's whole text so far, staged; `tail` its last
+  break, keeps every file: the session may still hold or have recorded the older one. A round
+  that checkpointed and has text after its last checkpoint stages one more checkpoint of the whole
+  text before `roundFinal` and waits for its answer; the reply reuses that blob, so no superseded
+  checkpoint stays on disk after the round (one more session crank per such round). `partial` is the round's whole text so far, staged; `tail` its last
   `messagePreviewUnits` units. The session keeps the latest checkpoint of the current round
   **outside** the record log (it replaces the previous one; architecture 4.3 "replaces the single
   partial record") and appends it as one `Partial` record only if the round ends without
@@ -594,10 +595,12 @@ awaits, never retires).
 - **A call's end is a fence (M1b QC, J-0391).** A call ends when its body's promise settles or the
   session sends `abandon()`. `abandon()` answers the running `run` with `failed`
   `texts.execAbandoned` at once and frees the scope (no busy for the next call); a staged source
-  still being read is never evaluated. Each call gets its own `sleep`; once the call ended, that
-  `sleep` never settles again (neither new sleeps nor answers in flight), so model code cannot keep
-  the vat cranking after its call (a background `for (;;) await sleep(0)` stops at its next sleep),
-  and a `sleep` kept on `globalThis` is dead in later calls. `sleep` is the only endowment that
+  still being read is never evaluated. Each call gets its own `sleep`; a sleep asked for after the
+  call ended sends nothing and never settles. Sleeps already in flight still answer, so code the
+  call started runs at most until its next sleep (a background `for (;;) await sleep(0)` takes at
+  most one more step), cannot keep the vat cranking, and a `sleep` kept on `globalThis` is dead in
+  later calls. (Fencing the answers in flight too, with a `then` per sleep, made 100 answered
+  sleeps 2-3 x slower in a vat, J-0391.) `sleep` is the only endowment that
   reaches outside the vat in M1b (M5's `powers` must follow the same rule: a facet per call, dead
   after it).
 - **Name table (M1b QC, J-0390).** A RangeError "property key space exhausted" anywhere in a call
@@ -654,7 +657,7 @@ deadline }`. Module state (the vat has one session): `scope` (current `ExecScope
 | synchronous runaway (`MeterAbort`) or a worker crashing past `maxDeliveryAttempts` (D-17): the pending `run` breaks with the retired text | `texts.execTerminated` | retired; the next call takes a fresh vat (acceptance 4, 11) |
 | `deadline({ opId })` before the answer (`execDeadlineMs`, default 120 s; `HarnessRoot.configure` for tests) | `textOf.execTimeout(deadlineMs)` | retired (the only way to stop it); a late answer is ignored (acceptance 5) |
 | `busy` at the next call | the new call's own result, prefixed with `texts.execBusyReset` | retired before the new call |
-| turn cancelled while the call runs | `texts.execAbandoned` (recorded in the cancel crank by the `onCancel` hook settling the pending call) | **kept** (R4-49); `abandon()` (sendOnly) ends the call in the exec vat: the next call runs at once in the same scope; the abandoned code never resumes after a `sleep` (M1b QC, J-0391) |
+| turn cancelled while the call runs | `texts.execAbandoned` (recorded in the cancel crank by the `onCancel` hook settling the pending call) | **kept** (R4-49); `abandon()` (sendOnly) ends the call in the exec vat: the next call runs at once in the same scope; the abandoned code runs at most until its next `sleep` (M1b QC, J-0391) |
 | restart with the call in flight | `texts.toolOutcomeUnknown` by recovery (contract 7) | kept if the vat survived; recovery sends `abandon()` too (acceptance 10) |
 | the vat's name table ran out (`exhausted`) | `texts.execExhausted` | retired (M1b QC, J-0390) |
 | arguments over `execSourceBytes` | `textOf.execSourceTooLarge(bytes, limit)` | untouched (nothing sent) |

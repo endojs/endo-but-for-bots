@@ -8,8 +8,8 @@
  *   clean restart returns 5. A turn cancelled during a 30 s exec sleep keeps
  *   the scope: the next turn's exec, sent at once while the abandoned sleep
  *   still runs, sees `x === 5` (M1b QC, J-0391: the session tells the exec
- *   vat `abandon()`, so there is no busy reset); and an abandoned call's
- *   code after its sleep never runs (`x` is not set to 99).
+ *   vat `abandon()`, so there is no busy reset); and an abandoned loop of
+ *   sleeps stops at its next sleep.
  * - 10: SIGKILL during a 30 s exec sleep, restart: the turn is
  *   outcome-unknown as soon as the daemon serves (recovery did not wait for
  *   the exec call); the next exec works and sees `x` from before.
@@ -115,17 +115,32 @@ run('exec across cancel, a clean restart and a SIGKILL', async t => {
     ...identity,
   });
 
-  // ---- 3c: an abandoned call's code after its sleep never runs
-  const late = await execTurn(slice, session, live, 'exec late99', {
+  // ---- 3c: an abandoned loop of sleeps stops (it may finish the step its
+  // sleep in flight resumes, then its next sleep is dead)
+  const ticker = await execTurn(slice, session, live, 'exec ticker', {
     wait: 'call',
   });
-  await delay(1000);
-  await E(late.turn).cancel();
-  await E(late.turn).whenFinished();
-  // Past the abandoned 4 s sleep, and its answer.
-  await delay(5000);
-  const afterLate = await execTurn(slice, session, live, 'exec get');
-  t.is(afterLate.result, '5', 'the abandoned continuation did not run');
+  await delay(1600);
+  await E(ticker.turn).cancel();
+  await E(ticker.turn).whenFinished();
+  const ticksAtCancel = Number(
+    (await execTurn(slice, session, live, 'exec ticks')).result,
+  );
+  await delay(3000);
+  const ticksLater = Number(
+    (await execTurn(slice, session, live, 'exec ticks')).result,
+  );
+  t.true(ticksAtCancel >= 1, `the loop ran (${ticksAtCancel} ticks)`);
+  t.true(
+    ticksLater - ticksAtCancel <= 1,
+    `the abandoned loop stopped (${ticksAtCancel} -> ${ticksLater} ticks)`,
+  );
+  emit({
+    metric: 'exec.abandonedLoop',
+    ticksAtCancel,
+    ticksLater,
+    ...identity,
+  });
 
   // ---- 10: SIGKILL during a 30 s sleep
   t.is((await execTurn(slice, session, live, 'exec set')).result, '5');

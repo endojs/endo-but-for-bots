@@ -25,11 +25,12 @@
  * (`abandon()`, sendOnly, on cancel or recovery: the run answers
  * `execAbandoned` at once and the scope stays). Model code cannot outlive
  * its call (M1b QC, J-0391): `sleep` is the only endowment that reaches
- * outside the vat, and a call's `sleep` never settles once the call ended,
- * neither for sleeps asked for afterwards nor for answers still in flight.
- * Background work started by a call therefore stops at its next `sleep`
- * instead of keeping the vat cranking; a `sleep` kept on `globalThis` is
- * dead in later calls.
+ * outside the vat, and a sleep asked for after the call ended never settles
+ * (and sends nothing). Sleeps already in flight still answer, so code the
+ * call started runs at most until its next `sleep`, then stops, instead of
+ * keeping the vat cranking; a `sleep` kept on `globalThis` is dead in later
+ * calls. (Fencing the answers in flight too, with a `then` per sleep, made
+ * 100 answered sleeps 2-3 x slower in a vat, J-0391.)
  *
  * Arguments are the model's JSON text: inline, or a `StagedText` read through
  * `Content` in pages of at most `blobPageBytes` (one answered page per
@@ -139,7 +140,8 @@ const EXHAUSTED = harden({ status: 'exhausted' });
 const never = () => new Promise(() => {});
 
 /**
- * One call's life: its `sleep` endowment, live until `close()`.
+ * One call's life: its `sleep` endowment, which sends nothing and never
+ * settles once the call is closed.
  * @param {any} timer
  */
 const makeCall = timer => {
@@ -153,12 +155,7 @@ const makeCall = timer => {
   /** @param {unknown} ms */
   const sleep = ms => {
     if (!open) return never();
-    return E(timer)
-      .sleep(clampDelay(ms))
-      .then(
-        value => (open ? value : never()),
-        error => (open ? Promise.reject(error) : never()),
-      );
+    return E(timer).sleep(clampDelay(ms));
   };
   return {
     sleep: harden(sleep),

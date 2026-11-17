@@ -11,8 +11,8 @@
  *   `exhausted` and the session retires it (`texts.execExhausted`); the next
  *   exec runs on a fresh scope at the usual speed (J-0333, J-0390).
  * - Model code that starts a perpetual loop of sleeps and returns at once:
- *   the call ends `ok`, and the exec vat stops cranking (its `sleep` is dead
- *   after the call), J-0391.
+ *   the call ends `ok`, and the exec vat stops cranking (a sleep asked for
+ *   after the call is dead), J-0391.
  *
  *   THIX_HARNESS_INTEGRATION=1 node scripts/run-lock.mjs --label m1b-qc -- \
  *     corepack yarn test test/integration/m1b-qc.test.js
@@ -248,10 +248,9 @@ run(
       `exec vats cranked ${after - before} times in 5 s after the call returned`,
     );
     const ticks = await runTurn(slice, session, live, 'ticks');
-    t.is(
-      await resultOf(ticks.turn),
-      '0',
-      'the background loop never resumed after its call ended',
+    t.true(
+      Number(await resultOf(ticks.turn)) <= 1,
+      'the background loop took at most the step its sleep in flight resumed',
     );
     emit({
       metric: 'qc.execBackgroundLoop',
