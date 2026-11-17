@@ -657,6 +657,12 @@ fn err(line: u32, msg: &str) -> ParseError {
     }
 }
 
+/// The largest frame-slot count a scope may reserve. XS's `RESERVE` slot
+/// operand (and every `GET_LOCAL`-family operand indexing into the frame) is a
+/// `u16`; `fxByteCodeSize` corrupts the opcode stream past this, so both XS and
+/// this port reject at parse time (see [`Scoper::record_scope_count`]).
+const MAX_FRAME_LOCALS: i32 = 65535;
+
 /// Whether a `delete` operand's reference target is a private member (so
 /// `delete` of it is an early error). Unwraps a single-item parenthesized
 /// sequence (`Expressions` with one item) recursively, mirroring the
@@ -1830,6 +1836,46 @@ impl Scoper<'_> {
         self.scope = self.scopes[si].parent;
     }
 
+    /// Record a scope's finished frame-slot count (`scopeCount ==
+    /// scopeMaximum`), rejecting one that would exceed the frame ceiling.
+    ///
+    /// XS reserves a frame's locals with `RESERVE` (`fxCoderAddIndex(...,
+    /// XS_CODE_RESERVE_1, scopeCount)`), and every per-slot access
+    /// (`GET_LOCAL`/`SET_LOCAL`/`RETRIEVE`/`UNWIND`/…) carries the slot as an
+    /// operand whose byte width `fxByteCodeSize` selects: 1 byte ≤ 255, 2 bytes
+    /// ≤ 65535, and — past 65535 — a `+= 2` opcode bump to a `_4` variant that
+    /// **does not exist** (there is no `XS_CODE_RESERVE_4`; the id lands on an
+    /// unrelated opcode, e.g. `RESERVE_1 + 2 == RESET_CLOSURE_1`), corrupting
+    /// the bytecode. OSS-Fuzz reached this; the XS fix rejects such a frame at
+    /// parse time. Iron Horse shares the exact ceiling — its slot operand is
+    /// the same `u16` and its `width_select_index_family` ports the same broken
+    /// `+= 2` bump — so this is a memory-safety rejection, not mere XS
+    /// conformance.
+    ///
+    /// `scopeMaximum` is the peak frame depth: it already folds in **every**
+    /// path that reserves a slot — parameters, `var`/`let`/`const`,
+    /// destructuring bindings, hoisted function declarations, `catch`
+    /// bindings, captured-closure slots, and the binder's own statement
+    /// temporaries (the `for`/`try`/`with` scaffolding `push_variables`
+    /// reserves) — because each raises `scope_level` (via `push_variables` /
+    /// declare counting) into this one maximum, and nested block scopes share
+    /// the enclosing frame. Bounding it here, at each
+    /// function/program/module/field-init scope close, bounds every `RESERVE`
+    /// the coder later emits (each derives from a recorded `scope_counts`
+    /// entry) and thus every frame-slot index within it.
+    fn record_scope_count(
+        &mut self,
+        scope: usize,
+        count: i32,
+        line: u32,
+    ) -> Result<(), ParseError> {
+        if count > MAX_FRAME_LOCALS {
+            return Err(err(line, "too many variables"));
+        }
+        self.scope_counts.insert(scope, count);
+        Ok(())
+    }
+
     fn record_access(&mut self, symbol: &SymbolName, line: u32, resolved: Option<(usize, u32)>) {
         if self.omit_access_log {
             return;
@@ -1959,7 +2005,7 @@ impl Scoper<'_> {
                 .chain(static_data.iter())
                 .copied()
                 .collect();
-            self.bind_field_init_scope(ci, si, &ordered)?;
+            self.bind_field_init_scope(ci, si, &ordered, node.line)?;
             self.class_field_init_static.insert(node_id(node), ci);
         }
         if engage {
@@ -1972,7 +2018,7 @@ impl Scoper<'_> {
                 .chain(inst_data.iter())
                 .copied()
                 .collect();
-            self.bind_field_init_scope(fi, si, &ordered)?;
+            self.bind_field_init_scope(fi, si, &ordered, node.line)?;
             self.class_field_init_inst.insert(node_id(node), fi);
         }
         self.class_node = former;
@@ -1998,6 +2044,7 @@ impl Scoper<'_> {
         fi: usize,
         class_scope: usize,
         ordered: &[&Node],
+        line: u32,
     ) -> Result<(), ParseError> {
         let saved_level = self.scope_level;
         let saved_maximum = self.scope_maximum;
@@ -2049,7 +2096,7 @@ impl Scoper<'_> {
             }
         }
         self.fx_scope_bound(fi);
-        self.scope_counts.insert(fi, self.scope_maximum);
+        self.record_scope_count(fi, self.scope_maximum, line)?;
         self.scope_maximum = saved_maximum;
         self.scope_level = saved_level;
         Ok(())
@@ -2080,7 +2127,7 @@ impl Scoper<'_> {
             self.bind_item(body)?;
         }
         self.fx_scope_bound(si);
-        self.scope_counts.insert(si, self.scope_maximum);
+        self.record_scope_count(si, self.scope_maximum, node.line)?;
         Ok(())
     }
 
@@ -2092,7 +2139,7 @@ impl Scoper<'_> {
             self.bind_item(body)?;
         }
         self.fx_scope_bound(si);
-        self.scope_counts.insert(si, self.scope_maximum);
+        self.record_scope_count(si, self.scope_maximum, node.line)?;
         Ok(())
     }
 
