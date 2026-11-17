@@ -22,6 +22,7 @@ flowchart TD
     xs_oracle["xs-oracle"]
     ironhorse_262 -->|"normal"| ironhorse_compile
     ironhorse_262 -->|"normal"| ironhorse_runtime
+    ironhorse_262 -.->|"dev"| ironhorse_snapshot
     ironhorse_262 -->|"normal"| ironhorse_vm
     ironhorse_262 -->|"normal"| xs_oracle
     ironhorse_compile -->|"normal"| ironhorse_meter

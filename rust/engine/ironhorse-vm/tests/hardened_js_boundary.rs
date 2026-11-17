@@ -267,6 +267,83 @@ fn a_realistic_graph_hardens_and_every_member_is_frozen() {
 }
 
 #[test]
+fn a_frozen_ordinary_object_preserves_assignment_outcomes() {
+    assert_eq!(
+        eval(
+            "var base = {x: 1}; Object.freeze(base); \
+             base.x = 2; base.y = 3; \
+             [base.x, typeof base.y, Object.isFrozen(base), Object.isFrozen(base)].join()",
+        ),
+        "1,undefined,true,true",
+        "sloppy writes remain no-ops and repeated integrity queries agree",
+    );
+    assert_eq!(
+        eval(
+            "'use strict'; var base = {x: 1}; Object.freeze(base); var out = []; \
+             try { base.x = 2; } catch (e) { out.push(e.name); } \
+             try { base.y = 3; } catch (e) { out.push(e.name); } \
+             out.join() + ':' + base.x + ':' + typeof base.y",
+        ),
+        "TypeError,TypeError:1:undefined",
+        "the cached rejection still reaches the strict assignment throw",
+    );
+}
+
+#[test]
+fn frozen_fast_rejection_preserves_receiver_and_accessor_semantics() {
+    assert_eq!(
+        eval(
+            "var base = {x: 1}; Object.freeze(base); var child = Object.create(base); \
+             child.x = 2; [child.x, Object.hasOwn(child, 'x')].join()",
+        ),
+        "1,false",
+        "an inherited frozen data property rejects rather than shadowing",
+    );
+    assert_eq!(
+        eval(
+            "var seen = 0; var base = {}; \
+             Object.defineProperty(base, 'x', {set(v) { seen = v; }}); \
+             Object.freeze(base); var child = Object.create(base); child.x = 7; seen",
+        ),
+        "7",
+        "freezing an accessor does not suppress its inherited setter",
+    );
+    assert_eq!(
+        eval(
+            "var receiver = {x: 1}; Object.freeze(receiver); var base = {x: 2}; \
+             Reflect.set(base, 'x', 9, receiver) + ':' + receiver.x",
+        ),
+        "false:1",
+        "a distinct frozen receiver cannot be updated",
+    );
+}
+
+#[test]
+fn frozen_proxy_and_exotic_objects_keep_the_full_mop_behavior() {
+    assert_eq!(
+        eval(
+            "var log = []; var target = {x: 1}; var p = new Proxy(target, { \
+               preventExtensions(t) { log.push('prevent'); return Reflect.preventExtensions(t); }, \
+               ownKeys(t) { log.push('keys'); return Reflect.ownKeys(t); }, \
+               getOwnPropertyDescriptor(t, k) { log.push('get:' + k); return Reflect.getOwnPropertyDescriptor(t, k); }, \
+               defineProperty(t, k, d) { log.push('define:' + k); return Reflect.defineProperty(t, k, d); }, \
+               set(t, k, v, r) { log.push('set:' + k); return Reflect.set(t, k, v, r); } \
+             }); Object.freeze(p); p.x = 2; log.join('|')",
+        ),
+        "prevent|keys|get:x|define:x|set:x",
+    );
+    assert_eq!(
+        eval(
+            "var m = new Map(); Object.freeze(m); m.set('x', 1); \
+             var d = new Date(0); Object.freeze(d); d.setTime(7); \
+             m.get('x') + ':' + d.getTime()",
+        ),
+        "1:7",
+        "ordinary property integrity does not imply immutable internal slots",
+    );
+}
+
+#[test]
 fn a_hardened_function_keeps_its_name_against_redefinition() {
     let r = eval(
         "'use strict'; function f() {} var out = {v: 'no-throw'}; harden(f); \

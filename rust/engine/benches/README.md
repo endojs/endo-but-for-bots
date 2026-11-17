@@ -94,6 +94,36 @@ Allocation churn is not a direct measurement of collection pauses or heap footpr
 The report always marks the full stage-8 envelope unavailable until its remaining
 daemon, comparable heap-footprint, and code-size measurements exist.
 
+## Object-capability workload corpus
+
+The fixed six-fixture object-capability corpus runs on Ironhorse and XS at small,
+representative, and stress sizes. Its runner builds the same checked-in driver and
+generated sources against a parent revision and a candidate revision, then measures
+them in alternating order on this host. One warmup precedes seven retained samples.
+
+```sh
+export CARGO_INCREMENTAL=0
+export RUST_MIN_STACK=33554432
+python3 rust/engine/benches/ocap/run.py \
+  --parent llm-387ea66 --candidate HEAD \
+  --output rust/engine/benches/results/ocap-initial.json
+```
+
+Guest execution is the primary phase. Source generation and machine creation are
+excluded from it; setup, compile, link, collection, and checkpoint remain separate
+report fields. The report records raw samples, medians, deterministic bootstrap
+intervals, exact results and computrons, Ironhorse allocation counters, toolchain,
+host, build environment, commits, and the fixture digest. XS heap counters are null
+because the oracle does not expose them. See [ocap/README.md](ocap/README.md) for the
+Endo inventory and parameter rationale.
+
+Regenerate or check the sources independently with:
+
+```sh
+python3 rust/engine/benches/ocap/generate.py --check --digest
+python3 -m unittest discover -s rust/engine/benches/ocap -p 'test_*.py'
+```
+
 ## Daemon arm: explicitly blocked
 
 The fourth daemon variant cannot run yet.

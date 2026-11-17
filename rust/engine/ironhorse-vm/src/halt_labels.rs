@@ -282,6 +282,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "eval:relink",
     "exponentiation:stack-underflow",
     "function:missing-segment",
+    "fused-ownKeys:unknown-key",
     "gc:previous-collection-failed",
     "generator:no-frame",
     "generator:non-boundary-return",
