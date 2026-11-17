@@ -29,7 +29,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
  * @param {() => Promise<Promise<unknown> | null>} args.getCancelled
  *   Resolver returning the worker's cancellation promise (or null if no
  *   cancellation surface is configured).
- * @param {(prompt: string) => Promise<void>} args.runOneRound
+ * @param {(prompt: string, mail?: { number?: number | bigint, messageId?: string, replyTo?: string }) => Promise<void>} args.runOneRound
  *   Per-round runner, bound to this worker's `PiAgent`.
  * @returns {Promise<void>}
  */
@@ -114,7 +114,7 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
     } = inboxMessage;
 
     // Skip our own outbound messages; only act on inbound mail.
-    // eslint-disable-next-line @endo/restrict-comparison-operands
+
     if (fromLocator !== selfLocator) {
       // Skip partial (in-flight) submissions: wait until the sender
       // marks the message done before spinning up an LLM turn.
@@ -136,7 +136,11 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
       seenInboundNumbers.add(number);
       console.log(`[mail] New message #${number} (type: ${type || 'package'})`);
       try {
-        await runOneRound(formatInboundMessage());
+        await runOneRound(formatInboundMessage(), {
+          number,
+          messageId: inboxMessage.messageId,
+          replyTo: inboxMessage.replyTo,
+        });
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);

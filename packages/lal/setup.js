@@ -11,6 +11,10 @@ import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { chooseModel, fetchAvailableModels } from './model-detect.js';
+import {
+  provideTranscriptsMount,
+  TRANSCRIPTS_MOUNT_NAME,
+} from './transcript.js';
 
 const lalSpecifier = new URL('agent.js', import.meta.url).href;
 
@@ -37,6 +41,12 @@ export const main = async agent => {
       agentName: 'profile-for-lal',
     });
   }
+
+  // Lal's session transcripts live in a daemon scratch mount the host names
+  // `transcripts-for-lal`. Readers (the CLI, Chat) take its `readOnly()`
+  // facet; only the Lal harness writes.
+  await provideTranscriptsMount(agent);
+  console.log(`Transcripts mount: ${TRANSCRIPTS_MOUNT_NAME}`);
 
   await E(agent).makeUnconfined('@main', lalSpecifier, {
     powersName: 'profile-for-lal',
@@ -93,11 +103,11 @@ export const main = async agent => {
     if (message.type !== 'form' || message.from === selfLocator) {
       continue;
     }
-    // eslint-disable-next-line no-await-in-loop
+
     const [fromName] = await E(agent).reverseLocate(message.from);
     if (fromName === 'setup-lal') {
       console.log(`Found form at message ${message.number} — submitting...`);
-      // eslint-disable-next-line no-await-in-loop
+
       await E(agent).submit(message.number, { name, host, model, authToken });
       console.log('Submitted.');
       return;
