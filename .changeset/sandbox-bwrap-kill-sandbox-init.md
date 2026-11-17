@@ -2,6 +2,6 @@
 '@endo/sandbox': patch
 ---
 
-Fix bwrap sandbox processes surviving a cancellation that lands while the
-sandbox is still starting, and let teardown of a bwrap launcher that never
-finishes starting complete within its normal grace.
+Keep bwrap sandbox processes in an owned process group and add a parent-death
+supervisor, so cancellation or an unexpected daemon exit cannot strand a
+sandbox while it is still starting.
