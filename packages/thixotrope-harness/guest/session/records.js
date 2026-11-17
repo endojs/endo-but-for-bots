@@ -42,6 +42,8 @@ const shapeOfKind = new Map([
  * @property {(record: any) => number} append check, harden and append; returns its index
  * @property {() => number} count records appended so far
  * @property {(index: number) => any[]} since the records from `index` on
+ *   (a copy: callers that need only a few records use `at`)
+ * @property {(index: number) => any} at the record at `index`, or undefined
  * @property {(turnId: string) => any[]} ofTurn one turn's records in append order
  * @property {() => number} messageCount the number of `TurnStarted` records
  * @property {() => readonly string[]} turnIds turn ids in start order (do not mutate)
@@ -91,6 +93,7 @@ export const makeRecordLog = () => {
     append,
     count: () => log.length,
     since: index => log.slice(index),
+    at: index => log[index],
     ofTurn: turnId => (byTurn.get(turnId) ?? []).map(index => log[index]),
     messageCount: () => turnOrder.length,
     turnIds: () => turnOrder,

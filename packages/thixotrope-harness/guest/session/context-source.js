@@ -34,12 +34,18 @@ export const makeContextSource = ({ records, boundary = () => 0 }) =>
         from = n;
       }
       const budget = limits.contextPageBytes - SLACK;
-      const all = records.since(from);
+      // Only the page's own records are touched (M1b QC, J-0392): copying
+      // the log's tail for every page made a rebuild O(n^2 / page) and
+      // allocated O(n) in each page crank.
       /** @type {any[]} */
       const page = [];
       let used = 0;
-      for (const record of all) {
-        if (page.length >= limits.pageRecords) break;
+      for (
+        let i = from;
+        i < count && page.length < limits.pageRecords;
+        i += 1
+      ) {
+        const record = records.at(i);
         const bytes = plainBytes(record);
         if (page.length > 0 && used + bytes > budget) break;
         page.push(record);

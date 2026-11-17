@@ -977,13 +977,20 @@ export const makeTurnRunner = ({
         const call = active.calls?.running.get(opId);
         call?.entry.deadline?.(harden({ opId }), call.context);
       },
-      /** @param {any} progress W1b.1: replaces the kept checkpoint */
+      /**
+       * W1b.1: replaces the kept checkpoint. True when kept (M1b QC, J-0393):
+       * the previous checkpoint is then no longer held here.
+       * @param {any} progress
+       */
       progress({ round, partial, at }) {
         const { active } = /** @type {any} */ (this).state;
-        if (current !== active || active.state !== 'running') return;
-        if (round !== active.round || active.roundKit === undefined) return;
+        if (current !== active || active.state !== 'running') return false;
+        if (round !== active.round || active.roundKit === undefined) {
+          return false;
+        }
         see(at);
         active.checkpoint = { round, partial };
+        return true;
       },
     },
   );
