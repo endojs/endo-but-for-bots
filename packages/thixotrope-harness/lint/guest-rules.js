@@ -346,12 +346,101 @@ const asciiOutsideComments = {
   }),
 };
 
+/**
+ * Whether a computed key is fixed in the source: a string or number
+ * literal, or a template literal without expressions.
+ * @param {any} node
+ */
+const isFixedKey = node =>
+  node.type === 'Literal' ||
+  (node.type === 'TemplateLiteral' && node.expressions.length === 0);
+
+/**
+ * Callee forms that create property names from their arguments' data.
+ * @type {ReadonlyArray<{ object: string, property: string, keyArg?: number }>}
+ */
+const KEY_MINTING_CALLS = [
+  { object: 'JSON', property: 'parse' },
+  { object: 'Object', property: 'fromEntries' },
+  { object: 'Object', property: 'defineProperty', keyArg: 1 },
+  { object: 'Reflect', property: 'set', keyArg: 1 },
+  { object: 'Reflect', property: 'defineProperty', keyArg: 1 },
+];
+
+/** @type {Rule.RuleModule} */
+const noDataKeys = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        'Forbid forms that turn data into property names in session and factory vat code: JSON.parse, Object.fromEntries, a computed member write, a computed key in an object literal, Object.defineProperty / Reflect.set / Reflect.defineProperty with a key that is not a literal. A vat interns every property name it ever makes, for life, in a 16-bit table; model, provider, tool or browser data used as names exhausts it (J-0390, J-9366). Keep data in Maps or arrays of pairs.',
+    },
+    schema: [],
+    messages: {
+      call: '{{name}} makes property names from data; a vat keeps every name for life (J-9366). Keep data in Maps or arrays of pairs.',
+      write:
+        'A computed member write makes a property name from data unless the key is a literal; a vat keeps every name for life (J-9366). Use a Map (or, for an array index, say so in an eslint-disable comment).',
+      literal:
+        'A computed key in an object literal makes a property name from data; a vat keeps every name for life (J-9366). Name the key, or use a Map.',
+    },
+  },
+  create: context => ({
+    /** @param {any} node */
+    CallExpression: node => {
+      const { callee } = node;
+      if (
+        callee.type !== 'MemberExpression' ||
+        callee.computed ||
+        callee.object.type !== 'Identifier'
+      )
+        return;
+      const form = KEY_MINTING_CALLS.find(
+        f =>
+          f.object === callee.object.name &&
+          f.property === callee.property.name,
+      );
+      if (form === undefined) return;
+      if (
+        form.keyArg !== undefined &&
+        node.arguments[form.keyArg] !== undefined &&
+        isFixedKey(node.arguments[form.keyArg])
+      )
+        return;
+      context.report({
+        node,
+        messageId: 'call',
+        data: { name: `${form.object}.${form.property}` },
+      });
+    },
+    /** @param {any} node */
+    AssignmentExpression: node => {
+      const { left } = node;
+      if (
+        left.type === 'MemberExpression' &&
+        left.computed &&
+        !isFixedKey(left.property)
+      )
+        context.report({ node, messageId: 'write' });
+    },
+    /** @param {any} node */
+    Property: node => {
+      if (
+        node.computed &&
+        node.parent?.type === 'ObjectExpression' &&
+        !isFixedKey(node.key)
+      )
+        context.report({ node, messageId: 'literal' });
+    },
+  }),
+};
+
 export const guestLintPlugin = Object.freeze({
   meta: { name: 'thixotrope-harness-guest', version: '0.1.0' },
   rules: {
     'no-string-concat-in-loop': noStringConcatInLoop,
     'no-ses-rejected-source': noSesRejectedSource,
     'ascii-outside-comments': asciiOutsideComments,
+    'no-data-keys': noDataKeys,
   },
 });
 
@@ -372,6 +461,9 @@ export const guestRules = {
     'thixotrope-harness-guest/no-string-concat-in-loop': 'error',
     'thixotrope-harness-guest/no-ses-rejected-source': 'error',
     'thixotrope-harness-guest/ascii-outside-comments': 'error',
+    // Session and factory vats (J-9366); the exec program turns off the
+    // rule for itself (its vat is retired when its name table runs out).
+    'thixotrope-harness-guest/no-data-keys': 'error',
     'no-restricted-globals': [
       'error',
       ...forbiddenGuestGlobals.map(name => ({
@@ -486,5 +578,11 @@ export const makeHarnessLintConfigs = ({ nodeGlobals }) => [
       `${HARNESS}/test/fixtures/guest/**/*.js`,
     ],
     ...guestRules,
+  },
+  {
+    // Model JSON is parsed in the exec vat on purpose: a name flood there
+    // answers `exhausted` and the vat is retired (J-0390).
+    files: [`${HARNESS}/guest/exec/**/*.js`],
+    rules: { 'thixotrope-harness-guest/no-data-keys': 'off' },
   },
 ];

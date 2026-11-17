@@ -93,6 +93,8 @@ const lazyTable = builders => {
   /** @type {any} */
   const table = {};
   for (const [name, build] of Object.entries(builders)) {
+    // The names are this module's own table keys, fixed in its source.
+    // eslint-disable-next-line thixotrope-harness-guest/no-data-keys
     Object.defineProperty(table, name, {
       enumerable: true,
       get: () => {

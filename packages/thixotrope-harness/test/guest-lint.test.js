@@ -59,9 +59,48 @@ const clean = [
     'array concat in a loop',
     'export const c = xss => { let all = []; for (const xs of xss) all = all.concat(xs); return all; };\n',
   ],
+  [
+    'data in a Map; literal computed keys (J-9366)',
+    "export const f = (m, k, v) => { m.set(k, v); const o = {}; o['fixed'] = 1; o[`also`] = 2; Object.defineProperty(o, 'named', { value: 3 }); return { ['lit']: m.get(k), o }; };\n",
+  ],
 ];
 
 const dirty = [
+  [
+    'JSON.parse in session or factory code (J-9366)',
+    'export const f = text => JSON.parse(text);\n',
+    'thixotrope-harness-guest/no-data-keys',
+  ],
+  [
+    'Object.fromEntries (J-9366)',
+    'export const f = pairs => Object.fromEntries(pairs);\n',
+    'thixotrope-harness-guest/no-data-keys',
+  ],
+  [
+    'a computed member write (J-9366)',
+    'export const f = (o, k, v) => { o[k] = v; };\n',
+    'thixotrope-harness-guest/no-data-keys',
+  ],
+  [
+    'a computed += (J-9366)',
+    'export const f = (o, k) => { o[k] += 1; };\n',
+    'thixotrope-harness-guest/no-data-keys',
+  ],
+  [
+    'a computed key in an object literal (J-9366)',
+    'export const f = (k, v) => ({ [k]: v });\n',
+    'thixotrope-harness-guest/no-data-keys',
+  ],
+  [
+    'Object.defineProperty with a data key (J-9366)',
+    'export const f = (o, k) => Object.defineProperty(o, k, { value: 1 });\n',
+    'thixotrope-harness-guest/no-data-keys',
+  ],
+  [
+    'Reflect.set with a data key (J-9366)',
+    'export const f = (o, k) => Reflect.set(o, k, 1);\n',
+    'thixotrope-harness-guest/no-data-keys',
+  ],
   [
     'an import of @endo/patterns',
     "import { M } from '@endo/patterns';\nexport const s = M.any();\n",

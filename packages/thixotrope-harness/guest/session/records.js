@@ -144,7 +144,7 @@ export const inCallOrder = records => {
   );
   const ordered = [...records];
   slots.forEach((slot, k) => {
-    ordered[slot] = results[k];
+    ordered.splice(slot, 1, results[k]);
   });
   return ordered;
 };

@@ -125,13 +125,6 @@ const zeroUsage = () => ({
   cacheWriteInputTokens: 0,
   reasoningOutputTokens: 0,
 });
-const COUNT_KEYS = harden([
-  'inputTokens',
-  'outputTokens',
-  'cachedInputTokens',
-  'cacheWriteInputTokens',
-  'reasoningOutputTokens',
-]);
 
 /**
  * @typedef {object} TurnInfo a plain record kept for the session's life
@@ -869,9 +862,13 @@ export const makeTurnRunner = ({
   const addUsage = (active, usage) => {
     if (usage === undefined) return;
     const sum = active.usage ?? zeroUsage();
-    for (const key of COUNT_KEYS) {
-      sum[key] += usage[key];
-      totals[key] += usage[key];
+    // Named keys (guest rule no-data-keys, J-9366).
+    for (const into of [sum, totals]) {
+      into.inputTokens += usage.inputTokens;
+      into.outputTokens += usage.outputTokens;
+      into.cachedInputTokens += usage.cachedInputTokens;
+      into.cacheWriteInputTokens += usage.cacheWriteInputTokens;
+      into.reasoningOutputTokens += usage.reasoningOutputTokens;
     }
     if (usage.context !== undefined) {
       sum.context = harden({ ...usage.context });

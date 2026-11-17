@@ -51,6 +51,26 @@ const EVENT_BYTES = limits.frameBytes - WRAPPER_BYTES;
 const LARGE_FIELDS = harden(['input', 'args', 'result', 'text']);
 
 /**
+ * A copy of `event` with one of LARGE_FIELDS replaced, each key named in
+ * the source (guest rule no-data-keys, J-9366).
+ * @param {any} event
+ * @param {string} field
+ * @param {string} value
+ */
+const withField = (event, field, value) => {
+  switch (field) {
+    case 'input':
+      return { ...event, input: value };
+    case 'args':
+      return { ...event, args: value };
+    case 'result':
+      return { ...event, result: value };
+    default:
+      return { ...event, text: value };
+  }
+};
+
+/**
  * The event, or a copy with its large text field cut so the event fits
  * `budget` bytes.
  * @param {any} event
@@ -63,7 +83,7 @@ export const fitEvent = (event, budget = EVENT_BYTES) => {
     if (typeof value === 'string' && value.length > 0) {
       const other = messageBytes(event) - utf8Bytes(value);
       const cut = cutText(value, Math.max(0, budget - other));
-      return harden({ ...event, [field]: cut });
+      return harden(withField(event, field, cut));
     }
   }
   return event;

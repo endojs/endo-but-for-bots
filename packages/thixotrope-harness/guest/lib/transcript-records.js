@@ -172,6 +172,9 @@ export const assertTranscriptRecord = candidate => {
   /** @type {Record<string, unknown>} */
   const ordered = {};
   for (const key of fields) {
+    // `fields` is the record kind's fixed vocabulary (RECORD_FIELDS); this
+    // module runs in the adapter only (no vat program imports it).
+    // eslint-disable-next-line thixotrope-harness-guest/no-data-keys
     if (Object.hasOwn(record, key)) ordered[key] = record[key];
   }
   if (kind === 'message' && Object.hasOwn(record, 'providerContext')) {
@@ -265,6 +268,8 @@ export const parseTranscript = text => {
     line !== '' || Fail`transcript line ${q(index + 1)} is empty`;
     let parsed;
     try {
+      // Adapter only (no vat program imports this module; J-9366).
+      // eslint-disable-next-line thixotrope-harness-guest/no-data-keys
       parsed = JSON.parse(line);
     } catch (cause) {
       throw Fail`transcript line ${q(index + 1)} is not JSON: ${q(

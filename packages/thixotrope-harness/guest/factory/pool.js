@@ -152,12 +152,27 @@ export const makePool = ({
   lanes = limits.poolLanes,
   mintHost,
 }) => {
-  /** @type {Record<SpareKind, Spare[]>} ready spares, oldest first */
-  const spares = { session: [], exec: [] };
+  /**
+   * Ready spares by kind, oldest first. Maps, not records keyed by kind
+   * (guest rule no-data-keys, J-9366).
+   * @type {Map<SpareKind, Spare[]>}
+   */
+  const spares = new Map([
+    ['session', []],
+    ['exec', []],
+  ]);
+  /** @param {SpareKind} kind */
+  const sparesOf = kind => /** @type {Spare[]} */ (spares.get(kind));
   /** @type {Set<PoolCreation>} creations in flight (pool lanes only) */
   const inflight = new Set();
   /** @type {Record<SpareKind, number>} failures in a row */
-  const failures = { session: 0, exec: 0 };
+  /** @type {Map<SpareKind, number>} */
+  const failures = new Map([
+    ['session', 0],
+    ['exec', 0],
+  ]);
+  /** @param {SpareKind} kind */
+  const failuresOf = kind => /** @type {number} */ (failures.get(kind));
   /** @type {ReturnType<typeof makePromiseKit>[]} */
   let waiters = [];
   let active = false;
@@ -193,8 +208,8 @@ export const makePool = ({
 
   const status = () =>
     harden({
-      spareSessions: spares.session.length,
-      spareExec: spares.exec.length,
+      spareSessions: sparesOf('session').length,
+      spareExec: sparesOf('exec').length,
       refilling: inflight.size,
       target: {
         spareSessions: settings.spareSessions(),
@@ -218,10 +233,10 @@ export const makePool = ({
   const discardStale = () => {
     for (const kind of /** @type {SpareKind[]} */ (['session', 'exec'])) {
       const program = storeOf(kind).current();
-      const keep = spares[kind].filter(
+      const keep = sparesOf(kind).filter(
         spare => program !== undefined && spare.digest === program.digest,
       );
-      for (const spare of spares[kind]) {
+      for (const spare of sparesOf(kind)) {
         if (!keep.includes(spare)) retireFacade(spare.facade);
       }
       const target = targetOf(kind);
@@ -229,7 +244,7 @@ export const makePool = ({
         const extra = /** @type {Spare} */ (keep.pop());
         retireFacade(extra.facade);
       }
-      spares[kind] = keep;
+      spares.set(kind, keep);
     }
   };
 
@@ -275,8 +290,8 @@ export const makePool = ({
     for (const kind of /** @type {SpareKind[]} */ (['session', 'exec'])) {
       if (
         storeOf(kind).current() !== undefined &&
-        failures[kind] < MAX_REFILL_FAILURES &&
-        spares[kind].length + inflightOf(kind) < targetOf(kind)
+        failuresOf(kind) < MAX_REFILL_FAILURES &&
+        sparesOf(kind).length + inflightOf(kind) < targetOf(kind)
       )
         return kind;
     }
@@ -309,9 +324,9 @@ export const makePool = ({
             return;
           }
           inflight.delete(creation);
-          failures[kind] = 0;
+          failures.set(kind, 0);
           counts.made += 1;
-          spares[kind].push(
+          sparesOf(kind).push(
             harden({
               kind,
               facade: creation.facade,
@@ -331,7 +346,7 @@ export const makePool = ({
             return;
           }
           inflight.delete(creation);
-          failures[kind] += 1;
+          failures.set(kind, failuresOf(kind) + 1);
           counts.failed += 1;
           retireFacade(creation.facade);
           refill();
@@ -344,8 +359,8 @@ export const makePool = ({
 
   /** Clear the failure stops and refill. */
   const restartLanes = () => {
-    failures.session = 0;
-    failures.exec = 0;
+    failures.set('session', 0);
+    failures.set('exec', 0);
     active = true;
     refill();
   };
@@ -358,9 +373,9 @@ export const makePool = ({
   const take = kind => {
     active = true;
     discardStale();
-    const spare = spares[kind].shift();
+    const spare = sparesOf(kind).shift();
     if (spare !== undefined) counts.taken += 1;
-    failures[kind] = 0;
+    failures.set(kind, 0);
     refill();
     return spare;
   };
@@ -434,8 +449,8 @@ export const makePool = ({
     /** A program was loaded: retire spares of an older digest, refill. */
     programChanged: () => {
       discardStale();
-      failures.session = 0;
-      failures.exec = 0;
+      failures.set('session', 0);
+      failures.set('exec', 0);
       refill();
     },
     /**
@@ -459,8 +474,8 @@ export const makePool = ({
     /** Debug labels of the ready spares (tests). */
     labels: () =>
       harden({
-        session: spares.session.map(spare => spare.label),
-        exec: spares.exec.map(spare => spare.label),
+        session: sparesOf('session').map(spare => spare.label),
+        exec: sparesOf('exec').map(spare => spare.label),
       }),
   });
 };
