@@ -94,6 +94,9 @@ export const ENV_ALLOWLIST = Object.freeze([
   'THIXOTROPE_GC_CRANK_INTERVAL',
   // How the hub keeps its state (CC-024): `log` (default) or `file`.
   'THIXOTROPE_HUB_STORE',
+  // M2 W2.3 (m2-interfaces 9.1): the path of the Secrets wrapping key file,
+  // outside the state directory. A path, never a secret value.
+  'THIX_HARNESS_SECRETS_KEY',
 ]);
 
 /** Set by the wrapper itself, besides the allowlist. */

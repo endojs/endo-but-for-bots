@@ -1,0 +1,644 @@
+// @ts-check
+/**
+ * The Secrets store (M2 W2.3; architecture D-6; `designs/m2-interfaces.md`
+ * section 9.1; spec R7-22..R7-28).
+ *
+ * Secret values live only here, in the agent-host adapter process, and in
+ * one encrypted file of the state directory:
+ *
+ *   `<state>/agent-host/secrets.enc`: AES-256-GCM over the JSON of every
+ *   entry `{ key, label, description, generation, state, value? }`, a fresh
+ *   96-bit nonce per write, written `*.tmp` then fsync, rename, fsync of the
+ *   directory, so a SIGKILL leaves the old file or the new one.
+ *
+ * The wrapping key is a 32-byte file outside the state directory (refused
+ * inside it, and refused when its mode lets the group or others read it),
+ * created 0600 if absent. `findSecretsFiles` says where both are.
+ *
+ * The audit log (R7-24) is a second file, `secrets-audit.log`, one line per
+ * event, each line sealed on its own with the same key (deviation from
+ * section 9.1, which puts the log inside `secrets.enc`: a read is audited
+ * twice per provider round, and rewriting the whole encrypted file per read
+ * would cost far more than the 1 ms `secrets.read` budget; J-0441). Events
+ * carry no value and no bytes: `{ at, label, op, outcome, code?,
+ * generation? }`. The newest `AUDIT_KEEP` events are kept in memory; the
+ * file is rewritten to them when it holds twice as many lines.
+ *
+ * Every failure is `textOf.secretFailed(code)` with a code of
+ * `secretCodes`; nothing here ever puts a value, a key or file bytes into
+ * an error, a log line or the audit.
+ *
+ * Node only (adapter). Entries are keyed by the manager vat's `k<n>` keys
+ * (they never leave the manager-adapter pair, m2-interfaces 3.3).
+ */
+/* eslint-disable import/no-relative-packages -- guest/ is its own private package */
+import { Buffer } from 'node:buffer';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from 'node:crypto';
+import {
+  appendFileSync,
+  closeSync,
+  fsyncSync,
+  openSync,
+  renameSync,
+  writeSync,
+} from 'node:fs';
+import {
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  stat,
+  unlink,
+} from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+
+import { textOf } from '../../../../guest/lib/interfaces.js';
+import { limits } from '../../../../guest/lib/limits.js';
+/* eslint-enable import/no-relative-packages */
+
+/** The environment variable naming the wrapping key file (serve.mjs passes it). */
+export const SECRETS_KEY_VARIABLE = 'THIX_HARNESS_SECRETS_KEY';
+/** Audit events kept (m2-interfaces 9.1: the newest 10,000). */
+export const AUDIT_KEEP = 10_000;
+const FILE_FORMAT = 'thix-secrets-1';
+const AUDIT_FORMAT = 'thix-secrets-audit-1';
+const KEY_BYTES = 32;
+const NONCE_BYTES = 12;
+const TAG_BYTES = 16;
+
+/**
+ * A failure with a fixed code (R7-24): the message is the fixed text, never
+ * secret bytes; `code` lets callers branch without parsing.
+ * @param {string} code
+ */
+export const secretError = code =>
+  Object.assign(Error(textOf.secretFailed(code)), { code });
+harden(secretError);
+
+/**
+ * Where the store keeps its files for a state directory, and where the
+ * wrapping key is: `env[SECRETS_KEY_VARIABLE]` (absolute), else
+ * `~/.config/thixotrope-harness/secrets-<first 16 hex of sha256(state)>.key`.
+ *
+ * @param {object} options
+ * @param {string} options.stateDir
+ * @param {Record<string, string | undefined>} [options.env]
+ * @param {string} [options.home]
+ */
+export const findSecretsFiles = ({ stateDir, env = {}, home }) => {
+  const state = resolve(stateDir);
+  const named = env[SECRETS_KEY_VARIABLE];
+  let keyFile;
+  if (named !== undefined && named !== '') {
+    if (!isAbsolute(named))
+      throw Error(`${SECRETS_KEY_VARIABLE} must be an absolute path`);
+    keyFile = named;
+  } else {
+    const tag = createHash('sha256').update(state).digest('hex').slice(0, 16);
+    keyFile = join(
+      home ?? homedir(),
+      '.config',
+      'thixotrope-harness',
+      `secrets-${tag}.key`,
+    );
+  }
+  return harden({
+    stateDir: state,
+    file: join(state, 'agent-host', 'secrets.enc'),
+    auditFile: join(state, 'agent-host', 'secrets-audit.log'),
+    keyFile,
+  });
+};
+harden(findSecretsFiles);
+
+/**
+ * @param {string} child
+ * @param {string} parent
+ */
+const isInside = (child, parent) => {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+};
+
+/**
+ * Read the wrapping key, creating it (0600, exclusive) if absent. Refused
+ * inside `stateDir`, when not 32 bytes, or readable by group or others.
+ *
+ * @param {object} options
+ * @param {string} options.keyFile
+ * @param {string} [options.stateDir]
+ * @returns {Promise<Buffer>}
+ */
+export const loadWrappingKey = async ({ keyFile, stateDir }) => {
+  if (!isAbsolute(keyFile))
+    throw Error('the secrets key file path must be absolute');
+  if (stateDir !== undefined && isInside(keyFile, stateDir))
+    throw Error('the secrets key file must be outside the state directory');
+  let created = false;
+  try {
+    await stat(keyFile);
+  } catch (error) {
+    if (/** @type {any} */ (error).code !== 'ENOENT') throw error;
+    await mkdir(dirname(keyFile), { recursive: true, mode: 0o700 });
+    const handle = await open(keyFile, 'wx', 0o600).catch(e => {
+      if (e.code === 'EEXIST') return undefined;
+      throw e;
+    });
+    if (handle !== undefined) {
+      try {
+        await handle.writeFile(randomBytes(KEY_BYTES));
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      created = true;
+    }
+  }
+  const info = await stat(keyFile);
+  // eslint-disable-next-line no-bitwise
+  if (!created && (info.mode & 0o077) !== 0)
+    throw Error('the secrets key file must not be readable by group or others');
+  const key = await readFile(keyFile);
+  if (key.length !== KEY_BYTES)
+    throw Error('the secrets key file must hold exactly 32 bytes');
+  return key;
+};
+harden(loadWrappingKey);
+
+/**
+ * AES-256-GCM: nonce | ciphertext | tag.
+ * @param {Buffer} key
+ * @param {Buffer} plain
+ * @param {string} aad
+ */
+export const encrypt = (key, plain, aad) => {
+  const nonce = randomBytes(NONCE_BYTES);
+  const cipher = createCipheriv('aes-256-gcm', key, nonce);
+  cipher.setAAD(Buffer.from(aad, 'utf8'));
+  const body = Buffer.concat([cipher.update(plain), cipher.final()]);
+  return Buffer.concat([nonce, body, cipher.getAuthTag()]);
+};
+harden(encrypt);
+
+/**
+ * @param {Buffer} key
+ * @param {Buffer} sealed
+ * @param {string} aad
+ */
+export const decrypt = (key, sealed, aad) => {
+  if (sealed.length < NONCE_BYTES + TAG_BYTES) throw Error('sealed too short');
+  const nonce = sealed.subarray(0, NONCE_BYTES);
+  const tag = sealed.subarray(sealed.length - TAG_BYTES);
+  const body = sealed.subarray(NONCE_BYTES, sealed.length - TAG_BYTES);
+  const decipher = createDecipheriv('aes-256-gcm', key, nonce);
+  decipher.setAAD(Buffer.from(aad, 'utf8'));
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(body), decipher.final()]);
+};
+harden(decrypt);
+
+/** @param {string} path */
+const syncDirectory = async path => {
+  const handle = await open(path, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+};
+
+/**
+ * R7-25: 1-200 characters, no newline.
+ * @param {unknown} description
+ */
+export const assertDescription = description => {
+  if (
+    typeof description !== 'string' ||
+    description.length === 0 ||
+    description.length > limits.secretDescriptionUnits ||
+    description.includes('\n') ||
+    description.includes('\r')
+  )
+    throw secretError('INVALID_DESCRIPTION');
+};
+harden(assertDescription);
+
+/**
+ * @typedef {'active' | 'revoked'} SecretState
+ * @typedef {{ label: string, description: string, generation: number, state: SecretState, bytes: number, value?: string }} Entry
+ * @typedef {{ at: number, key: string, label: string, op: 'create' | 'read' | 'replace' | 'revoke' | 'delete', outcome: 'attempted' | 'succeeded' | 'failed', code?: string, generation?: number }} StoredEvent
+ * @typedef {{ at: number, label: string, op: StoredEvent['op'], outcome: StoredEvent['outcome'], code?: string, generation?: number }} AuditEvent
+ *
+ * @typedef {object} SecretStore
+ * @property {(key: string, label: string, description: string) => Promise<void>} create
+ * @property {(key: string, value: string, expectedGeneration?: number) => Promise<number>} replace
+ *   the new generation; `GENERATION_CONFLICT` for a stale expectation,
+ *   `REVOKED`, `UNKNOWN_SECRET`, `INVALID_SECRET_BYTES` (over 1 MiB)
+ * @property {(key: string) => Promise<{ value: string, generation: number }>} read
+ *   audited `attempted`, then `succeeded` or `failed` with its code
+ * @property {(key: string) => { value: string, generation: number }} readNow
+ *   the same once `ready()` has settled, synchronously (the providers'
+ *   path; `secrets.read`)
+ * @property {(key: string) => Promise<{ label: string, description: string, generation: number, state: SecretState, bytes: number }>} describe
+ * @property {(key: string) => Promise<void>} revoke drops the value
+ * @property {(key: string) => Promise<void>} delete only after revoke
+ *   (`NOT_REVOKED`)
+ * @property {(request: { key?: string, limit: number }) => Promise<AuditEvent[]>} audit
+ *   newest first, at most `auditPageEvents`
+ * @property {() => Promise<void>} ready loads the key and the files
+ * @property {() => void} close closes the audit file
+ * @property {() => Record<string, number>} stats
+ */
+
+/**
+ * @param {object} options
+ * @param {string} options.file `secrets.enc`
+ * @param {string} options.keyFile the wrapping key (outside the state dir)
+ * @param {string} [options.auditFile] default: `secrets-audit.log` next to
+ *   `file`
+ * @param {string} [options.stateDir] refuse a key file inside it
+ * @param {() => number} [options.now]
+ * @param {number} [options.auditKeep]
+ * @returns {SecretStore}
+ */
+export const makeSecretStore = ({
+  file,
+  keyFile,
+  auditFile = join(dirname(file), 'secrets-audit.log'),
+  stateDir,
+  now = () => Date.now(),
+  auditKeep = AUDIT_KEEP,
+}) => {
+  /** @type {Map<string, Entry>} */
+  const entries = new Map();
+  /** @type {StoredEvent[]} newest last */
+  let events = [];
+  let auditLines = 0;
+  /** @type {Buffer | undefined} */
+  let wrapKey;
+  /** @type {number | undefined} */
+  let auditFd;
+  /** @type {Promise<void> | undefined} */
+  let loading;
+  let loaded = false;
+  /** Writes of `secrets.enc`, one at a time. */
+  let chain = Promise.resolve();
+  const counters = { writes: 0, reads: 0, auditLines: 0, auditRewrites: 0 };
+
+  const keyOf = () => {
+    if (wrapKey === undefined) throw Error('the secrets store is not ready');
+    return wrapKey;
+  };
+
+  /** @param {StoredEvent} event */
+  const sealEvent = event =>
+    encrypt(keyOf(), Buffer.from(JSON.stringify(event), 'utf8'), AUDIT_FORMAT)
+      .toString('base64')
+      .concat('\n');
+
+  const rewriteAudit = () => {
+    const tmp = `${auditFile}.tmp`;
+    const fd = openSync(tmp, 'w', 0o600);
+    try {
+      writeSync(fd, events.map(sealEvent).join(''));
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    if (auditFd !== undefined) closeSync(auditFd);
+    auditFd = undefined;
+    renameSync(tmp, auditFile);
+    auditLines = events.length;
+    counters.auditRewrites += 1;
+  };
+
+  /**
+   * Record one event: in memory, and one sealed line appended (not fsynced:
+   * a SIGKILL may lose the newest lines; the value itself never depends on
+   * the log).
+   * @param {Omit<StoredEvent, 'at'>} partial
+   */
+  const audit = partial => {
+    /** @type {StoredEvent} */
+    const event = harden({ at: now(), ...partial });
+    events.push(event);
+    if (events.length > auditKeep) events = events.slice(-auditKeep);
+    if (auditFd === undefined) auditFd = openSync(auditFile, 'a', 0o600);
+    appendFileSync(auditFd, sealEvent(event));
+    auditLines += 1;
+    counters.auditLines += 1;
+    if (auditLines >= 2 * auditKeep) rewriteAudit();
+  };
+
+  const load = async () => {
+    wrapKey = await loadWrappingKey({ keyFile, stateDir });
+    await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+    await unlink(`${file}.tmp`).catch(() => {});
+    await unlink(`${auditFile}.tmp`).catch(() => {});
+    /** @type {Buffer | undefined} */
+    let raw;
+    try {
+      raw = await readFile(file);
+    } catch (error) {
+      if (/** @type {any} */ (error).code !== 'ENOENT') throw error;
+    }
+    if (raw !== undefined) {
+      const envelope = JSON.parse(raw.toString('utf8'));
+      if (envelope.format !== FILE_FORMAT)
+        throw Error('secrets.enc has an unknown format');
+      let plain;
+      try {
+        plain = decrypt(
+          wrapKey,
+          Buffer.from(envelope.data, 'base64'),
+          FILE_FORMAT,
+        );
+      } catch {
+        // Never the bytes: a wrong key file or a damaged file.
+        throw Error('secrets.enc cannot be opened with this key file');
+      }
+      const list = JSON.parse(plain.toString('utf8'));
+      plain.fill(0);
+      for (const { key, ...entry } of list) entries.set(key, entry);
+    }
+    let auditRaw = '';
+    try {
+      auditRaw = await readFile(auditFile, 'utf8');
+    } catch (error) {
+      if (/** @type {any} */ (error).code !== 'ENOENT') throw error;
+    }
+    const lines = auditRaw.split('\n').filter(line => line !== '');
+    auditLines = lines.length;
+    for (const line of lines.slice(-auditKeep)) {
+      try {
+        const plainEvent = decrypt(
+          wrapKey,
+          Buffer.from(line, 'base64'),
+          AUDIT_FORMAT,
+        );
+        events.push(harden(JSON.parse(plainEvent.toString('utf8'))));
+      } catch {
+        // A torn last line (SIGKILL mid-append) or a foreign line: skipped.
+      }
+    }
+    loaded = true;
+  };
+
+  const ready = () => {
+    loading ??= load();
+    return loading;
+  };
+
+  /** Write every entry, encrypted, temp then rename (one at a time). */
+  const persist = async () => {
+    const list = [...entries].map(([key, entry]) => ({ key, ...entry }));
+    const plain = Buffer.from(JSON.stringify(list), 'utf8');
+    const sealed = encrypt(keyOf(), plain, FILE_FORMAT);
+    plain.fill(0);
+    const body = JSON.stringify({
+      format: FILE_FORMAT,
+      data: sealed.toString('base64'),
+    });
+    const tmp = `${file}.tmp`;
+    const handle = await open(tmp, 'w', 0o600);
+    try {
+      await handle.writeFile(body);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await chmod(tmp, 0o600);
+    await rename(tmp, file);
+    await syncDirectory(dirname(file));
+    counters.writes += 1;
+  };
+
+  /**
+   * Run a mutation after the earlier ones; the entry map changes only once
+   * the file holding the change is durable.
+   * @template T
+   * @param {() => { result: T, apply: () => void } } plan
+   * @returns {Promise<T>}
+   */
+  const mutate = plan => {
+    const run = chain.then(async () => {
+      await ready();
+      const { result, apply } = plan();
+      const before = new Map(entries);
+      apply();
+      try {
+        await persist();
+      } catch (error) {
+        entries.clear();
+        for (const [key, entry] of before) entries.set(key, entry);
+        throw error;
+      }
+      return result;
+    });
+    chain = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
+  };
+
+  /** @param {string} key */
+  const entryOf = key => {
+    const entry = entries.get(key);
+    if (entry === undefined) throw secretError('UNKNOWN_SECRET');
+    return entry;
+  };
+
+  /**
+   * Audit `attempted`, run, audit the outcome with the fixed code.
+   * @template T
+   * @param {string} key
+   * @param {StoredEvent['op']} op
+   * @param {string} failCode used for a failure that is not a fixed one
+   * @param {() => Promise<T>} fn
+   * @param {(result: T) => number | undefined} [generationOf]
+   * @param {string} [givenLabel] the label of a secret being created
+   */
+  const audited = async (key, op, failCode, fn, generationOf, givenLabel) => {
+    await ready();
+    const label = entries.get(key)?.label ?? givenLabel ?? '';
+    audit({ key, label, op, outcome: 'attempted' });
+    try {
+      const result = await fn();
+      const generation = generationOf?.(result);
+      audit({
+        key,
+        label: entries.get(key)?.label ?? label,
+        op,
+        outcome: 'succeeded',
+        ...(generation === undefined ? {} : { generation }),
+      });
+      return result;
+    } catch (error) {
+      const fixed = /** @type {any} */ (error)?.code;
+      const code =
+        typeof fixed === 'string' && /^[A-Z_]+$/.test(fixed) ? fixed : failCode;
+      audit({ key, label, op, outcome: 'failed', code });
+      throw secretError(code);
+    }
+  };
+
+  /** @param {string} key */
+  const readNow = key => {
+    if (!loaded) throw secretError('READ_FAILED');
+    counters.reads += 1;
+    const entry = entries.get(key);
+    const label = entry?.label ?? '';
+    audit({ key, label, op: 'read', outcome: 'attempted' });
+    /** @type {string} */
+    let code = 'READ_FAILED';
+    if (entry === undefined) code = 'UNKNOWN_SECRET';
+    else if (entry.state !== 'active') code = 'REVOKED';
+    else if (entry.value !== undefined) {
+      const { value, generation } = entry;
+      audit({ key, label, op: 'read', outcome: 'succeeded', generation });
+      return harden({ value, generation });
+    }
+    audit({
+      key,
+      label,
+      op: 'read',
+      outcome: 'failed',
+      code,
+      ...(entry === undefined ? {} : { generation: entry.generation }),
+    });
+    throw secretError(code);
+  };
+
+  /** @type {SecretStore} */
+  const store = {
+    ready,
+    create: (key, label, description) =>
+      audited(
+        key,
+        'create',
+        'CREATE_FAILED',
+        () => {
+          assertDescription(description);
+          return mutate(() => {
+            if (entries.has(key)) throw secretError('CREATE_FAILED');
+            return {
+              result: undefined,
+              apply: () => {
+                entries.set(key, {
+                  label,
+                  description,
+                  generation: 0,
+                  state: 'active',
+                  bytes: 0,
+                });
+              },
+            };
+          });
+        },
+        undefined,
+        label,
+      ),
+    replace: (key, value, expectedGeneration) =>
+      audited(
+        key,
+        'replace',
+        'REPLACE_FAILED',
+        () =>
+          mutate(() => {
+            const entry = entryOf(key);
+            if (typeof value !== 'string')
+              throw secretError('INVALID_SECRET_BYTES');
+            const bytes = Buffer.byteLength(value, 'utf8');
+            if (bytes > limits.secretValueBytes)
+              throw secretError('INVALID_SECRET_BYTES');
+            if (entry.state !== 'active') throw secretError('REVOKED');
+            if (
+              expectedGeneration !== undefined &&
+              (!Number.isSafeInteger(expectedGeneration) ||
+                expectedGeneration < 0)
+            )
+              throw secretError('INVALID_GENERATION');
+            if (
+              expectedGeneration !== undefined &&
+              expectedGeneration !== entry.generation
+            )
+              throw secretError('GENERATION_CONFLICT');
+            const generation = entry.generation + 1;
+            return {
+              result: generation,
+              apply: () => {
+                entries.set(key, { ...entry, generation, bytes, value });
+              },
+            };
+          }),
+        generation => generation,
+      ),
+    read: async key => {
+      await ready();
+      return readNow(key);
+    },
+    readNow,
+    describe: async key => {
+      await ready();
+      const { label, description, generation, state, bytes } = entryOf(key);
+      return harden({ label, description, generation, state, bytes });
+    },
+    revoke: key =>
+      audited(key, 'revoke', 'REPLACE_FAILED', () =>
+        mutate(() => {
+          const entry = entryOf(key);
+          return {
+            result: undefined,
+            apply: () => {
+              const { value: _dropped, ...rest } = entry;
+              entries.set(key, { ...rest, state: 'revoked' });
+            },
+          };
+        }),
+      ),
+    delete: key =>
+      audited(key, 'delete', 'DELETE_FAILED', () =>
+        mutate(() => {
+          const entry = entryOf(key);
+          if (entry.state !== 'revoked') throw secretError('NOT_REVOKED');
+          return {
+            result: undefined,
+            apply: () => {
+              entries.delete(key);
+            },
+          };
+        }),
+      ),
+    audit: async ({ key, limit }) => {
+      await ready();
+      if (
+        !Number.isSafeInteger(limit) ||
+        limit < 0 ||
+        limit > limits.auditPageEvents
+      )
+        throw secretError('INVALID_LIMIT');
+      /** @type {AuditEvent[]} */
+      const out = [];
+      for (let i = events.length - 1; i >= 0 && out.length < limit; i -= 1) {
+        const { key: eventKey, ...event } = events[i];
+        if (key === undefined || eventKey === key) out.push(harden(event));
+      }
+      return harden(out);
+    },
+    close: () => {
+      if (auditFd !== undefined) closeSync(auditFd);
+      auditFd = undefined;
+    },
+    stats: () => harden({ ...counters, entries: entries.size }),
+  };
+  return harden(store);
+};
+harden(makeSecretStore);
