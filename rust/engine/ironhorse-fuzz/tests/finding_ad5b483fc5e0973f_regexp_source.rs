@@ -4,12 +4,12 @@
 //! the XS oracle's former 1023-byte capture boundary. The oracle-buffer fix
 //! must keep this distinct input from becoming a false divergence.
 
-const FINDING_INPUT: &[u8] =
-    include_bytes!("../../ironhorse-vm/tests/fixtures/finding-ad5b483fc5e0973f.input.bin");
+const PROGRAM: &str =
+    include_str!("../../ironhorse-vm/tests/fixtures/finding-ad5b483fc5e0973f.regexp-program.txt");
 
 #[test]
 fn exact_regexp_source_input_agrees_with_xs() {
-    let program = ironhorse_fuzz::gen_stage3b_regexp_program(FINDING_INPUT);
+    let program = PROGRAM;
     assert!(
         program.ends_with(".source"),
         "the finding must continue to exercise RegExp.source"

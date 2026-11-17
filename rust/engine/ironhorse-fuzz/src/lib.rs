@@ -2598,10 +2598,8 @@ mod tests {
     /// Regression for finding `67ca18e4febe7a34`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_67ca18e4febe7a34_large_integer_dtoa_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-67ca18e4febe7a34.input.bin");
-        let program = gen_program(data);
-        assert_eq!(program, "(226492416 * 226492416)");
+        let program =
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-67ca18e4febe7a34.program.txt");
         match differential_check(&program) {
             Ok(()) => {}
             Err(divergence) => {
@@ -2618,9 +2616,8 @@ mod tests {
     fn finding_daf6694aec7856aa_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 5da04328283592ebed204c27a9517bd883afa1109abbef2498a88c781eb546da).
-        let data: &[u8] = &[0x1b, 0x1b, 0x74];
-        let program = gen_program(data);
-        assert_eq!(program, "(226492416 * 226492416)");
+        let program =
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-daf6694aec7856aa.program.txt");
         match differential_check(&program) {
             Ok(()) => {}
             Err(divergence) => {
@@ -2768,13 +2765,7 @@ mod tests {
     fn finding_05264cccae42245a_tie_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // fe91a16f9299c9c0d4dc9a35f1f1394d57adb1f9c4de97befb98afd383949f52).
-        let data: &[u8] = &[0x1b, 0x64, 0x1b];
-        let program = gen_program(data);
-        assert!(
-            program.contains("<<"),
-            "finding program shifts: {}",
-            program
-        );
+        let program = r#"((((226492416 + 27.27) << (838860800 << 226492416)) * ((226492416 + 27.27) << (838860800 << 226492416))) + (((27.27 * 27.27) + (838860800 << 226492416)) << ((226492416 + 27.27) << (838860800 << 226492416))))"#;
         let oracle = xs_oracle::run(&program).expect("oracle machine");
         assert_eq!(oracle.result_number(), Some(51298827675632344.0));
         match differential_check(&program) {
@@ -2788,14 +2779,8 @@ mod tests {
     fn finding_931a687135cabb0c_tie_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // dca671e311ff51c7e982a8778381d2a16c177906a0465b373d68f95977589a67).
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-931a687135cabb0c.input.bin");
-        let program = gen_program(data);
-        assert!(
-            program.contains('*'),
-            "finding program is a product: {}",
-            program
-        );
+        let program =
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-931a687135cabb0c.program.txt");
         let oracle = xs_oracle::run(&program).expect("oracle machine");
         assert_eq!(oracle.result_number(), Some(385339296501991232.0));
         match differential_check(&program) {
@@ -2809,14 +2794,8 @@ mod tests {
     fn finding_d87697d49a5f8f67_even_tie_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // b4814c1b47ca2297e26e5e27a1151a79dc222cd408f51d4130a07d423229311b).
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-d87697d49a5f8f67.input.bin");
-        let program = gen_program(data);
-        assert!(
-            program.contains('*'),
-            "finding program is a product: {}",
-            program
-        );
+        let program =
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-d87697d49a5f8f67.program.txt");
         let oracle = xs_oracle::run(&program).expect("oracle machine");
         assert_eq!(oracle.result_number(), Some(2513641910770335744.0));
         match differential_check(&program) {
@@ -2830,15 +2809,8 @@ mod tests {
     fn finding_a7755caa51aa9320_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 8e9d2a47633db281147ece5720882a273ee253c94d522c64770a8f4e87f7cf31).
-        let data: &[u8] = &[0x2d, 0xf7, 0x60];
-        let program = gen_program(data);
-        // Confirm we are still exercising the finding: the generated program is
-        // the large-integer product whose value overflows 2^53.
-        assert!(
-            program.contains('*'),
-            "finding program is a product: {}",
-            program
-        );
+        let program =
+            r#"((~((~2071986176) * (~2071986176))) * (~((~2071986176) * (~2071986176))))"#;
         match differential_check(&program) {
             Ok(()) => {}
             Err(d) => panic!("finding a7755caa51aa9320 must not diverge: {:?}", d),
@@ -2850,13 +2822,8 @@ mod tests {
     fn finding_9edaa2277fb90f03_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 3add41810a522cd14a50ab2b5c48b49e76625f9b82dc4cef0b85841efb4891d2).
-        let data: &[u8] = &[0x2d, 0x1c, 0x7e, 0x5c];
-        let program = gen_program(data);
-        assert!(
-            program.contains('/'),
-            "finding program is a quotient: {}",
-            program
-        );
+        let program =
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-9edaa2277fb90f03.program.txt");
         match differential_check(&program) {
             Ok(()) => {}
             Err(d) => panic!("finding 9edaa2277fb90f03 must not diverge: {:?}", d),
@@ -2868,13 +2835,8 @@ mod tests {
     fn finding_8adaa3bbc9cda1ce_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // ae3640c01867b87df0ac9300ea7bc73ac273a010780e949beb393d945d0821bd).
-        let data: &[u8] = &[0xfc, 0x03, 0xbd];
-        let program = gen_program(data);
-        assert!(
-            program.contains('/'),
-            "finding program is a quotient: {}",
-            program
-        );
+        let program =
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-8adaa3bbc9cda1ce.program.txt");
         match differential_check(&program) {
             Ok(()) => {}
             Err(d) => panic!("finding 8adaa3bbc9cda1ce must not diverge: {:?}", d),
@@ -2886,14 +2848,8 @@ mod tests {
     fn finding_ecae051e6e8f5a27_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 08008aee2c5d688bdab03d295c367c457bba1ed3706e802ff7ec2c6cd2e40c7d).
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-ecae051e6e8f5a27.input.bin");
-        let program = gen_program(data);
-        assert!(
-            program.contains('*'),
-            "finding program is a product: {}",
-            program
-        );
+        let program =
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-ecae051e6e8f5a27.program.txt");
         let oracle = xs_oracle::run(&program).expect("oracle machine");
         assert_eq!(oracle.result_number(), Some(-396980243939421632.0));
         match differential_check(&program) {
@@ -2907,14 +2863,8 @@ mod tests {
     fn finding_aaa423e9c5d56067_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 3f59968fa7d286a962d7f5db249db8b45793530987923928c9a6b708ed1d68b8).
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-aaa423e9c5d56067.input.bin");
-        let program = gen_program(data);
-        assert!(
-            program.contains('*'),
-            "finding program is a product: {}",
-            program
-        );
+        let program =
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-aaa423e9c5d56067.program.txt");
         let oracle = xs_oracle::run(&program).expect("oracle machine");
         assert_eq!(oracle.result_number(), Some(-31032616836661248.0));
         match differential_check(&program) {
@@ -2928,13 +2878,8 @@ mod tests {
     fn finding_37e026fd30cbae19_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
         // 647d3c14b217f8fce6e2db6fc2ebd5f861669cbf3a48ca77a498505e7be15d36).
-        let data: &[u8] = &[0x1b, 0x55, 0x09];
-        let program = gen_program(data);
-        assert!(
-            program.contains('*'),
-            "finding program is a product: {}",
-            program
-        );
+        let program =
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-37e026fd30cbae19.program.txt");
         match differential_check(&program) {
             Ok(()) => {}
             Err(d) => panic!("finding 37e026fd30cbae19 must not diverge: {:?}", d),
@@ -3186,9 +3131,9 @@ mod tests {
     /// overflow) must keep this distinct input clean.
     #[test]
     fn finding_9001b34fa6dd2d80_regexp_source_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-9001b34fa6dd2d80.input.bin");
-        let program = gen_stage3b_regexp_program(data);
+        let program = include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-9001b34fa6dd2d80.regexp-program.txt"
+        );
         assert!(
             program.ends_with(".source"),
             "finding program must exercise RegExp.source"
@@ -3233,8 +3178,9 @@ mod tests {
     fn finding_3a6aab9d9d140c2c_regexp_constructor_frame_cost_gap_is_advisory() {
         // The exact minimized fuzz input (sha256
         // a2a56dbe5d42cc9e08c57cd5951103f37c9c870e28687430b0f3910297534fdb).
-        let data: &[u8] = &[0x11, 0x01, 0x00, 0x00, 0x2c, 0xdf, 0x6d, 0x6d];
-        let program = gen_stage3b_regexp_program(data);
+        let program = include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-3a6aab9d9d140c2c.regexp-program.txt"
+        );
         // Confirm we are still exercising the finding: a `new RegExp(...).exec`
         // whose `\n+` tail cannot match "aa" (so `.exec` is null).
         assert!(
@@ -3296,9 +3242,9 @@ mod tests {
     /// the same advisory class as `1cb63ec6f8e6fc22` above.
     #[test]
     fn finding_e4a8e011666d0362_regexp_exec_cost_gap_is_advisory() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-e4a8e011666d0362.input.bin");
-        let program = gen_stage3b_regexp_program(data);
+        let program = include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-e4a8e011666d0362.regexp-program.txt"
+        );
         assert!(
             program.contains(".exec(\"b\\n0\"); m ? m.index : -1"),
             "finding program is the RegExp.exec surface case: {}",
@@ -3323,9 +3269,9 @@ mod tests {
     /// while completion and result agreement remain mandatory.
     #[test]
     fn finding_c9eaa7b5ae02437a_regexp_exec_cost_gap_is_advisory() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-c9eaa7b5ae02437a.input.bin");
-        let program = gen_stage3b_regexp_program(data);
+        let program = include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-c9eaa7b5ae02437a.regexp-program.txt"
+        );
         assert!(
             program.contains("(?<=") && program.ends_with(".exec(\"1aaaaaa\")"),
             "finding program is the lookbehind RegExp.exec surface case: {}",
@@ -3441,9 +3387,9 @@ mod tests {
     fn finding_bc9529ac5818aa24_regexp_to_string_long_result_agrees() {
         // The exact minimized fuzz input (sha256
         // c4b0b8c2b5ccf49a2608eab08cc79e770fbe892697379f8a91d99f49e11b12e4).
-        let data: &[u8] =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-bc9529ac5818aa24.input.bin");
-        let program = gen_stage3b_regexp_program(data);
+        let program = include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-bc9529ac5818aa24.regexp-program.txt"
+        );
         assert!(
             program.starts_with("new RegExp(") && program.ends_with(".toString()"),
             "finding program is the RegExp.toString surface case: {}",

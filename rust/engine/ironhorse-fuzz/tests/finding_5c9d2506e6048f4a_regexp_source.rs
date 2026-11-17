@@ -4,14 +4,12 @@
 //! oracle's former capture-buffer boundary. The current oracle-buffer fix must
 //! keep that input from becoming a false differential divergence.
 
-const FINDING_INPUT: &[u8] =
-    include_bytes!("../../ironhorse-vm/tests/fixtures/finding-5c9d2506e6048f4a.input.bin");
+const PROGRAM: &str =
+    include_str!("../../ironhorse-vm/tests/fixtures/finding-5c9d2506e6048f4a.regexp-program.txt");
 
 #[test]
 fn exact_regexp_source_input_agrees_with_xs() {
-    assert_eq!(FINDING_INPUT.len(), 4, "the minimized input stays exact");
-
-    let program = ironhorse_fuzz::gen_stage3b_regexp_program(FINDING_INPUT);
+    let program = PROGRAM;
     assert!(
         program.ends_with(".source"),
         "the finding must continue to exercise RegExp.source"

@@ -1,34 +1,24 @@
-//! Ties every generated `ironhorse-vm/tests/fixtures/finding-<id>.*` artifact
-//! to the fuzz input it claims to come from.
+//! Checks every recorded `ironhorse-vm/tests/fixtures/finding-<id>.*` artifact
+//! as a durable regression lock.
 //!
 //! The VM regression tests replay these artifacts without the XS oracle or
 //! the fuzz generators, so nothing on their side can notice a fixture that no
-//! longer matches its `finding-<id>.input.bin`. This test regenerates each
-//! artifact from its input with the maintained generator, and for bytecode
-//! with the XS compiler, and requires byte identity:
+//! longer matches its `finding-<id>.input.bin`. Generator changes legitimately
+//! re-fold those bytes, so the recorded program or regexp case is the lock:
 //!
-//! - `finding-<id>.program.txt`: `gen_program(input)` (target
-//!   `differential_source`).
-//! - `finding-<id>.regexp-case.txt`: `gen_regexp(input)`, in the layout
-//!   [`format_regexp_case`] writes and `ironhorse-vm/tests/common` reads
-//!   (target `differential_regexp`).
+//! - `finding-<id>.program.txt`: the recorded `differential_source` program.
+//! - `finding-<id>.regexp-case.txt`: the recorded `differential_regexp` case,
+//!   in the layout [`format_regexp_case`] writes and
+//!   `ironhorse-vm/tests/common` reads.
 //! - `finding-<id>.bytecode.bin` and `finding-<id>.symbols.bin`: the XS
-//!   compiler's output for `gen_stage3b_regexp_program(input)` (target
-//!   `differential_regexp_surface`). Older bytecode fixtures that were
-//!   checked in without their fuzz input have nothing to regenerate from and
-//!   are skipped.
-//!
-//! Run with `IRONHORSE_BLESS_VM_FIXTURES=1` to rewrite the existing artifacts
-//! from their inputs instead of comparing.
+//!   compiler's output for the recorded `finding-<id>.regexp-program.txt`
+//!   (target `differential_regexp_surface`). Older bytecode fixtures without a
+//!   recorded program are skipped.
 
 use std::path::{Path, PathBuf};
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../ironhorse-vm/tests/fixtures")
-}
-
-fn blessing() -> bool {
-    std::env::var_os("IRONHORSE_BLESS_VM_FIXTURES").is_some()
 }
 
 /// Every `finding-<id><suffix>` fixture, as `(id, path)`, sorted by id.
@@ -46,18 +36,9 @@ fn fixtures_with_suffix(suffix: &str) -> Vec<(String, PathBuf)> {
     found
 }
 
-fn input_for(id: &str) -> Vec<u8> {
-    let path = fixtures_dir().join(format!("finding-{id}.input.bin"));
-    std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
-}
-
-/// Compare `actual` with the fixture at `path`, or rewrite it when blessing.
+/// Compare `actual` with the fixture at `path`.
 /// Returns a description of the mismatch, if any.
 fn check(path: &Path, actual: &[u8]) -> Option<String> {
-    if blessing() {
-        std::fs::write(path, actual).expect("bless fixture");
-        return None;
-    }
     let expected = std::fs::read(path).expect("fixture");
     (expected != actual).then(|| {
         format!(
@@ -83,6 +64,43 @@ fn format_regexp_case((pattern, flags, subject, start): &ironhorse_fuzz::RegExpC
     )
 }
 
+fn parse_regexp_case(text: &str) -> ironhorse_fuzz::RegExpCase {
+    let (header, pattern) = text
+        .split_once("\npattern:\n")
+        .expect("regexp case pattern");
+    let mut lines = header.lines();
+    let flags = lines
+        .next()
+        .and_then(|line| line.strip_prefix("flags: "))
+        .expect("regexp case flags")
+        .to_string();
+    let start = lines
+        .next()
+        .and_then(|line| line.strip_prefix("start: "))
+        .expect("regexp case start")
+        .parse()
+        .expect("numeric regexp case start");
+    let escaped_subject = lines
+        .next()
+        .and_then(|line| line.strip_prefix("subject: "))
+        .expect("regexp case subject");
+    assert!(lines.next().is_none(), "unexpected regexp case header line");
+    let mut subject = String::new();
+    let mut chars = escaped_subject.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            subject.push(ch);
+            continue;
+        }
+        match chars.next().expect("regexp case escape") {
+            '\\' => subject.push('\\'),
+            'n' => subject.push('\n'),
+            escape => panic!("unexpected regexp case escape: \\{escape}"),
+        }
+    }
+    (pattern.to_string(), flags, subject, start)
+}
+
 fn assert_no_mismatches(kind: &str, checked: usize, mismatches: Vec<String>) {
     assert!(checked > 0, "no {kind} fixtures found");
     assert!(
@@ -94,25 +112,34 @@ fn assert_no_mismatches(kind: &str, checked: usize, mismatches: Vec<String>) {
 }
 
 #[test]
-fn program_fixtures_match_gen_program() {
+fn recorded_program_fixtures_are_runnable() {
     let fixtures = fixtures_with_suffix(".program.txt");
     let mismatches = fixtures
         .iter()
         .filter_map(|(id, path)| {
-            check(path, ironhorse_fuzz::gen_program(&input_for(id)).as_bytes())
+            let program = std::fs::read_to_string(path).expect("program fixture");
+            xs_oracle::run(&program)
+                .is_none()
+                .then(|| format!("finding {id}: XS could not run {}", path.display()))
         })
         .collect();
     assert_no_mismatches("program", fixtures.len(), mismatches);
 }
 
 #[test]
-fn regexp_case_fixtures_match_gen_regexp() {
+fn recorded_regexp_case_fixtures_are_canonical_and_compile() {
     let fixtures = fixtures_with_suffix(".regexp-case.txt");
     let mismatches = fixtures
         .iter()
         .filter_map(|(id, path)| {
-            let case = ironhorse_fuzz::gen_regexp(&input_for(id));
-            check(path, format_regexp_case(&case).as_bytes())
+            let text = std::fs::read_to_string(path).expect("regexp case fixture");
+            let case = parse_regexp_case(&text);
+            if format_regexp_case(&case) != text {
+                return Some(format!("finding {id}: non-canonical regexp case"));
+            }
+            ironhorse_regexp::compile(&case.0, &case.1)
+                .err()
+                .map(|error| format!("finding {id}: recorded regexp does not compile: {error:?}"))
         })
         .collect();
     assert_no_mismatches("regexp case", fixtures.len(), mismatches);
@@ -124,13 +151,15 @@ fn bytecode_fixtures_match_the_xs_compiler() {
         .into_iter()
         .filter(|(id, _)| {
             fixtures_dir()
-                .join(format!("finding-{id}.input.bin"))
+                .join(format!("finding-{id}.regexp-program.txt"))
                 .exists()
         })
         .collect();
     let mut mismatches = Vec::new();
     for (id, bytecode_path) in &fixtures {
-        let program = ironhorse_fuzz::gen_stage3b_regexp_program(&input_for(id));
+        let program_path = fixtures_dir().join(format!("finding-{id}.regexp-program.txt"));
+        let program = std::fs::read_to_string(&program_path)
+            .unwrap_or_else(|error| panic!("{}: {error}", program_path.display()));
         let outcome = xs_oracle::run(&program)
             .unwrap_or_else(|| panic!("finding {id}: the XS oracle failed to start"));
         let symbols_path = fixtures_dir().join(format!("finding-{id}.symbols.bin"));

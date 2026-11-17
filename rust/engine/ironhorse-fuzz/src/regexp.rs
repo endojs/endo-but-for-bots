@@ -352,6 +352,43 @@ pub fn differential_check_regexp_within(
 mod tests {
     use super::*;
 
+    fn parse_regexp_case(text: &str) -> RegExpCase {
+        let (header, pattern) = text
+            .split_once("\npattern:\n")
+            .expect("regexp case pattern");
+        let mut lines = header.lines();
+        let flags = lines
+            .next()
+            .and_then(|line| line.strip_prefix("flags: "))
+            .expect("regexp case flags")
+            .to_string();
+        let start = lines
+            .next()
+            .and_then(|line| line.strip_prefix("start: "))
+            .expect("regexp case start")
+            .parse()
+            .expect("numeric regexp case start");
+        let escaped_subject = lines
+            .next()
+            .and_then(|line| line.strip_prefix("subject: "))
+            .expect("regexp case subject");
+        assert!(lines.next().is_none(), "unexpected regexp case header line");
+        let mut subject = String::new();
+        let mut chars = escaped_subject.chars();
+        while let Some(ch) = chars.next() {
+            if ch != '\\' {
+                subject.push(ch);
+                continue;
+            }
+            match chars.next().expect("regexp case escape") {
+                '\\' => subject.push('\\'),
+                'n' => subject.push('\n'),
+                escape => panic!("unexpected regexp case escape: \\{escape}"),
+            }
+        }
+        (pattern.to_string(), flags, subject, start)
+    }
+
     #[test]
     fn generated_regexps_agree_with_the_pin() {
         // Structure-aware seed sweep: every generated pattern/subject is
@@ -397,9 +434,9 @@ mod tests {
     /// must agree on the full value rather than the wrapped low 32 bits.
     #[test]
     fn finding_12aca768c2e73c73_match_meter_agrees_at_full_width() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-12aca768c2e73c73.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-12aca768c2e73c73.regexp-case.txt"
+        ));
         let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
         let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
 
@@ -425,10 +462,9 @@ mod tests {
         // that backtracks 83775 metered steps (raw meter 5490278400 >
         // u32::MAX). The pre-c8497fd8 oracle wrapped the pin's meter to
         // 32 bits; with the widened oracle both engines agree bit-exact.
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-1dc231089278c110.input.bin");
-        assert_eq!(data, &[0x68, 0x68, 0xbc]);
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-1dc231089278c110.regexp-case.txt"
+        ));
         assert_eq!(case.2, "00\n00");
         assert_eq!(case.3, 2);
         assert_eq!(differential_check_regexp_within(&case, u64::MAX), Ok(true));
@@ -442,10 +478,9 @@ mod tests {
         // 91920681 metered steps (raw meter 6024113750016 > u32::MAX). The
         // pre-c8497fd8 oracle wrapped the pin's meter to 32 bits; with the
         // widened oracle both engines agree bit-exact.
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-13b68e2edb67861a.input.bin");
-        assert_eq!(data.len(), 12);
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-13b68e2edb67861a.regexp-case.txt"
+        ));
         assert_eq!(case.1, "i");
         assert_eq!(case.2, "\n\n\n0 ");
         assert_eq!(case.3, 2);
@@ -460,10 +495,9 @@ mod tests {
         // after 82118 metered steps (raw meter 5381685248 > u32::MAX). The
         // pre-c8497fd8 oracle wrapped the pin's meter to 32 bits; with the
         // widened oracle both engines agree bit-exact.
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-45f4af87eaf627c7.input.bin");
-        assert_eq!(data.len(), 3);
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-45f4af87eaf627c7.regexp-case.txt"
+        ));
         assert_eq!(case.1, "");
         assert_eq!(case.2, "a\n\na\n");
         assert_eq!(case.3, 1);
@@ -476,9 +510,9 @@ mod tests {
     /// must agree on the full value rather than the wrapped low 32 bits.
     #[test]
     fn finding_29a24c1b1052ec91_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-29a24c1b1052ec91.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-29a24c1b1052ec91.regexp-case.txt"
+        ));
         assert_eq!(case.1, "i");
         assert_eq!(case.2, " bb b");
         assert_eq!(case.3, 1);
@@ -497,9 +531,9 @@ mod tests {
     /// bits. With the shim fields widened, both engines must agree.
     #[test]
     fn finding_51c6a212946102f6_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-51c6a212946102f6.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-51c6a212946102f6.regexp-case.txt"
+        ));
         assert_eq!(case.1, "s");
         assert_eq!(case.2, "aaaaaaaa");
         assert_eq!(case.3, 0);
@@ -518,9 +552,9 @@ mod tests {
     /// must agree on the full value rather than the wrapped low 32 bits.
     #[test]
     fn finding_5e7a173f899ae7a1_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-5e7a173f899ae7a1.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-5e7a173f899ae7a1.regexp-case.txt"
+        ));
         assert_eq!(case.1, "m");
         assert_eq!(case.2, "00\n00");
         assert_eq!(case.3, 2);
@@ -540,9 +574,9 @@ mod tests {
     /// must agree on the full value rather than the wrapped low 32 bits.
     #[test]
     fn finding_5eeb0aadb2004075_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-5eeb0aadb2004075.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-5eeb0aadb2004075.regexp-case.txt"
+        ));
         assert_eq!(case.1, "");
         assert_eq!(case.2, "11111111");
         assert_eq!(case.3, 0);
@@ -565,9 +599,9 @@ mod tests {
     /// must agree on the full value rather than the wrapped low 32 bits.
     #[test]
     fn finding_7072dc2d72d9e2fd_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-7072dc2d72d9e2fd.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-7072dc2d72d9e2fd.regexp-case.txt"
+        ));
         assert_eq!(case.1, "s");
         assert_eq!(case.2, "aaabaaaa");
         assert_eq!(case.3, 0);
@@ -589,9 +623,9 @@ mod tests {
     /// widened, both engines must agree on the full value.
     #[test]
     fn finding_6be90176ff07c648_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-6be90176ff07c648.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-6be90176ff07c648.regexp-case.txt"
+        ));
         assert_eq!(case.1, "m");
         assert_eq!(case.2, "\n  ab\n");
         assert_eq!(case.3, 0);
@@ -613,9 +647,9 @@ mod tests {
     /// widened, both engines must agree on the full value.
     #[test]
     fn finding_822848c732a1b805_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-822848c732a1b805.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-822848c732a1b805.regexp-case.txt"
+        ));
         assert_eq!(case.1, "m");
         assert_eq!(case.2, "  bbb");
         assert_eq!(case.3, 2);
@@ -637,9 +671,9 @@ mod tests {
     /// With the shim fields widened, both engines must agree on the full value.
     #[test]
     fn finding_79f0475dd0440b2d_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-79f0475dd0440b2d.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-79f0475dd0440b2d.regexp-case.txt"
+        ));
         assert_eq!(case.1, "m");
         assert_eq!(case.2, " \n\n \n");
         assert_eq!(case.3, 1);
@@ -658,9 +692,9 @@ mod tests {
     /// With the shim fields widened, both engines must agree on the full value.
     #[test]
     fn finding_8ea950859db8a5f7_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-8ea950859db8a5f7.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-8ea950859db8a5f7.regexp-case.txt"
+        ));
         assert_eq!(case.1, "");
         assert_eq!(case.2, " \n\n \n");
         assert_eq!(case.3, 1);
@@ -679,9 +713,9 @@ mod tests {
     /// failing match. With the shim fields widened, both engines must agree.
     #[test]
     fn finding_ac8a8e3d9d3d7f96_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-ac8a8e3d9d3d7f96.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-ac8a8e3d9d3d7f96.regexp-case.txt"
+        ));
         assert_eq!(case.1, "m");
         assert_eq!(case.2, " ccc");
         assert_eq!(case.3, 0);
@@ -703,9 +737,9 @@ mod tests {
     /// failing match. With the shim fields widened, both engines must agree.
     #[test]
     fn finding_7637ac162a0b916a_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-7637ac162a0b916a.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-7637ac162a0b916a.regexp-case.txt"
+        ));
         assert_eq!(case.1, "i");
         assert_eq!(case.2, "b");
         assert_eq!(case.3, 0);
@@ -727,9 +761,9 @@ mod tests {
     /// With the shim fields widened, both engines must agree on the full value.
     #[test]
     fn finding_ab41c5d203ace017_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-ab41c5d203ace017.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-ab41c5d203ace017.regexp-case.txt"
+        ));
         assert_eq!(case.1, "");
         assert_eq!(case.2, "0");
         assert_eq!(case.3, 0);
@@ -750,10 +784,9 @@ mod tests {
     /// (pin=1452146688); with the widened oracle both engines agree.
     #[test]
     fn finding_bf6cfbd74a7487fc_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-bf6cfbd74a7487fc.input.bin");
-        assert_eq!(data, b"G+8h88");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-bf6cfbd74a7487fc.regexp-case.txt"
+        ));
         assert_eq!(
             case.0,
             include_str!("../../ironhorse-vm/tests/fixtures/finding-bf6cfbd74a7487fc.pattern.txt")
@@ -777,9 +810,9 @@ mod tests {
     /// both engines agree on the full value.
     #[test]
     fn finding_cfdc1a28296f23a1_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-cfdc1a28296f23a1.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-cfdc1a28296f23a1.regexp-case.txt"
+        ));
         assert_eq!(
             case.0,
             include_str!("../../ironhorse-vm/tests/fixtures/finding-cfdc1a28296f23a1.pattern.txt")
@@ -807,9 +840,9 @@ mod tests {
     /// agree with the port at full width.
     #[test]
     fn finding_ed616f6ec22095dc_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-ed616f6ec22095dc.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-ed616f6ec22095dc.regexp-case.txt"
+        ));
         assert_eq!(case.1, "s");
         assert_eq!(case.2, "aaaaaaaa");
         assert_eq!(case.3, 0);
@@ -833,9 +866,9 @@ mod tests {
     /// the port at full width.
     #[test]
     fn finding_fd8517d5f3071227_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-fd8517d5f3071227.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-fd8517d5f3071227.regexp-case.txt"
+        ));
         assert_eq!(
             case.0,
             include_str!("../../ironhorse-vm/tests/fixtures/finding-fd8517d5f3071227.pattern.txt")
@@ -862,9 +895,9 @@ mod tests {
     /// 1235484672; the widened oracle must agree with the port at full width.
     #[test]
     fn finding_e2a75557f762cd9c_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-e2a75557f762cd9c.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-e2a75557f762cd9c.regexp-case.txt"
+        ));
         assert_eq!(
             case.0,
             include_str!("../../ironhorse-vm/tests/fixtures/finding-e2a75557f762cd9c.pattern.txt")
@@ -892,9 +925,9 @@ mod tests {
     /// widened oracle both engines agree on the full value.
     #[test]
     fn finding_f2f53bb078bc8a4e_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-f2f53bb078bc8a4e.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-f2f53bb078bc8a4e.regexp-case.txt"
+        ));
         assert_eq!(
             case.0,
             include_str!("../../ironhorse-vm/tests/fixtures/finding-f2f53bb078bc8a4e.pattern.txt")
@@ -923,9 +956,9 @@ mod tests {
     /// value.
     #[test]
     fn finding_ccb76a40851925f9_regexp_meter_overflow_agrees() {
-        let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-ccb76a40851925f9.input.bin");
-        let case = gen_regexp(data);
+        let case = parse_regexp_case(include_str!(
+            "../../ironhorse-vm/tests/fixtures/finding-ccb76a40851925f9.regexp-case.txt"
+        ));
         assert_eq!(
             case.0,
             include_str!("../../ironhorse-vm/tests/fixtures/finding-ccb76a40851925f9.pattern.txt")

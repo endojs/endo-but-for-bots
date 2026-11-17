@@ -4,12 +4,12 @@
 //! XS oracle's former capture-buffer boundary. The oracle-buffer fix must keep
 //! that input from becoming a false differential divergence.
 
-const FINDING_INPUT: &[u8] =
-    include_bytes!("../../ironhorse-vm/tests/fixtures/finding-6ba52f2bdc534545.input.bin");
+const PROGRAM: &str =
+    include_str!("../../ironhorse-vm/tests/fixtures/finding-6ba52f2bdc534545.regexp-program.txt");
 
 #[test]
 fn exact_regexp_tostring_input_agrees_with_xs() {
-    let program = ironhorse_fuzz::gen_stage3b_regexp_program(FINDING_INPUT);
+    let program = PROGRAM;
     assert!(
         program.ends_with(".toString()"),
         "the finding must continue to exercise RegExp.prototype.toString"

@@ -1,0 +1,1 @@
+var m = new RegExp("c?(\\sc?(\\sc?(\\s\\2?[a-c]?){1,2})){1,2}", "").exec("c\nc"); m ? m.index : -1
