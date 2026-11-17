@@ -6861,3 +6861,123 @@ the real host). W2.2 (2.3) passes `spec` and `readKey: () => secretsOps.readKey(
 the vat's tool table (W2.6/W2.9). (10) An API provider's unforeseen throw is reported with its
 fixed `unexpectedFailure` text by the Endpoint, never the thrown message (R4-79).
 Decision: (1), (3), (6) for the owner; (2) is `[real-provider]`; (8) is W2.2's wiring.
+
+### J-0490 2026-11-18 M2 archive - good fit
+Evidence: `AH/archive/{segment,mirror,context-file,history,store}.js`, the archive path of
+`AH/context-cache.js` (commits 598c81914c, 1312e80025, 3c0a5eacb6, 1b54dcf22b, df735a2bfc,
+1916d1f3cf);
+`test/adapter/m2-archive-store.test.js` (12 tests), `m2-archive-kill.test.js` (3 tests, 12 kill
+points), `test/unit/m2-w28-fake-archive.test.js` (2 tests); unit lane 585 passed, 43 skipped.
+Reading: the adapter side of D-M2-1 fits Thixotrope's model with little friction. (1) The blob
+rule of D-15 (durable before the handle leaves) carries over unchanged: a segment is written as
+`.part`, fsynced, renamed and the directory fsynced before `ArchivePort.seal` answers, so the
+vat's crank Z, the only crank that drops records, can only run on a durable file. (2) The vat's
+`ArchiveState` with a chained SHA-256 digest makes the adapter's files checkable with one
+comparison; every other adapter file (manifest, `context.jsonl`, mirror) is a cache rebuilt from
+segment files or vat pages, so a SIGKILL at any point only costs a rebuild. Tests kill a child
+adapter at A1, before the write, before the fsync, before the rename, before the directory
+fsync, before the manifest, before the answer, after the answer (both outcomes: the answer
+reaches the vat, or the retired break does) and at each step of the acknowledgment (A4); after
+each, a fresh incarnation projects exactly the oracle's context, history shows every turn once
+from the newest back to turn 1, no `.part` remains, only the acknowledged segments remain, and
+the next seal succeeds. (3) Every file per session is touched by one queue, so a seal, a
+validation, an acknowledgment and mirror appends never interleave; no lock files. (4) The
+property test (3 seeds x 110 turns with 4-turn segments, and 330 turns at the real 128/32
+limits, restarts every 37 / 250 turns, random `append: []` fallbacks) shows the incremental and
+the rebuilt context through segments equal the projection of the full record list at every one
+of the requests; sealed history previews and `turnContent` equal the full list, texts included.
+Decision: built as `m2-interfaces.md` 4 specifies, with the contract changes of J-0492.
+
+### J-0491 2026-11-18 M2 archive reads at 1,000 / 5,000 / 30,000 turns - perf
+Evidence: `test/adapter/m2-archive.bench.mjs` (Node; no vat, no Ironhorse workload, so no run
+lock: the slot ceiling 4,000,000, allocation collection schedule and log hub store in the rows
+are the harness defaults, not exercised), a fake session vat at the real limits (128 kept turns,
+32 per segment), every RoundRequest through the real context cache, every due seal through the
+real ArchivePort, staged fields (5 %) as real fsynced blob files. Commits 1b54dcf22b (1,000 and
+30,000 turns, load 1.1-2.7) and 907abfd0ee-dirty (5,000, the archive code of 598c81914c plus the
+segment-order fix, load 2.5-2.9); 3 samples each, fresh incarnation per sample. Rows are JSON
+lines in `perf/_harness.mjs` format.
+| | 1,000 | 5,000 | 30,000 |
+|---|---|---|---|
+| segments / kept records | 27 / 948 | 152 / 938 | 933 / 968 |
+| `context.rebuild.adapter` median (max) | 41 (46) ms | 167 (167) ms | 985 (1,263) ms |
+| of which persisted projection + its blob files | 35 ms, 676 files | 153 ms, 3,702 files | 875 ms, 22,279 files |
+| vat pages on the rebuild (mirror tail + one gap page) | 1 | 1 | 1 |
+| estimated end to end (+95 ms page floor, 3 ms/record) | 144 ms | 265 ms | 1,361 ms |
+| `history.page` sealed, cold (first call validates) | 16 ms | 38 ms (15 ms after 1916d1f3cf) | 190 ms, max 781 (before 1916d1f3cf) |
+| `history.page` sealed, warm newest / deep `h100` | 1.6 / 2.8 ms | 1.5 / 2.7 ms | 1.7 / 3.2 ms |
+| `history.turnContent` (one archived turn) | 0.4 ms | 1.1 ms | 1.8 ms |
+| seal (A1 from the mirror, A2 three fsyncs) median / max | 17 / 22 ms | 24 / 135 ms | 18 / 142 ms |
+| adapter `prepare` per round, early / late median | 1.0 / 2.4 ms | 0.6 / 7.5 ms | 0.6 / 52 ms |
+| disk: segments / `context.jsonl` / manifest / mirror | 1.8 / 1.2 / 0.02 / 0.27 MB | 9.9 / 6.6 / 0.10 / 0.28 MB | 60 / 40 / 0.66 / 0.28 MB |
+Reading: against D-M2-1's targets the adapter's share is far below them: a rebuild after a
+restart reads one file, its blob files and one gap page, 1.0-1.3 s at 30,000 turns against 180 s
+measured at 5,000 without the archive (J-9383) and the 5 s target; a sealed history page costs
+the adapter 2-3 ms warm and is flat from 1,000 to 30,000 turns (the target 300 ms end to end is
+then the vat's newest-page crank, about 245 ms [inferred], asked once per incarnation). The cold
+page at 30,000 turns parsed the whole 40 MB projection in its first validation; 1916d1f3cf checks
+it by its last marker instead (15 ms at 5,000; 30,000 not re-measured: the manifest parse and 933
+stats remain, tens of ms [inferred]). Two costs still grow with the session, on the adapter only:
+(1) the per-round projection (`prepare` 0.6 ms early, 7.5 ms at 5,000, 52 ms at 30,000: the
+sealed transcript is copied into each round's projection and the provider gets the whole context,
+the open point of 4.13 that M8 compaction bounds); (2) the rebuild's sealed part (the persisted
+projection and its blob files, linear: 35 / 153 / 875 ms). The context cache's text bound
+(128 M units) holds about 4 sessions of 30,000 turns (30 M units each); beyond that, evictions
+cost a rebuild each. A seal costs 17-24 ms median off the vat (three fsyncs), flat.
+Decision: targets met by the adapter; the vat-side numbers (heap, snapshot, hub row flatness,
+`history.page` end to end) are W2.5's and W2.9's acceptance 15. Open, for the PM: the adapter's
+per-round projection growth until M8 (core candidate: none; it is harness work).
+
+### J-0492 2026-11-18 M2 archive - deviation
+Evidence: contract commit 3c0a5eacb6 (`m2-interfaces.md` 4.2, 4.7, 4.9, 12); the history and
+fake-archive tests.
+Reading: (1) **Segment order.** `RoundRequest.append` carries records in call order (turn.js
+`inCallOrder`: a round's tool results by call, not by arrival), so the adapter's mirror cannot
+reproduce the vat's log order. A segment therefore holds its range in segment order: log order
+with the range's tool results in call order (`inCallOrder` over the range). A range read from
+the mirror and the same range paged from the vat then make the same file (same digest), which
+the fake-archive test checks. Consequence: `History.turnContent` of an archived turn lists tool
+results in call order where `Turn.getContent` of a kept turn lists them in arrival order; the
+records are the same, the projection is order-insensitive for results, export and import carry
+the segment order. (2) **Turn spans.** A `TurnResolved` appended between two turns belongs to the
+earlier turn's span (the span runs to the next `TurnStarted`), so every range starts with a
+`TurnStarted` as the fingerprint check requires; W2.5 must cut ranges this way (the fake vat
+does). (3) **Manifest fields** `previous`, `epoch`, `turnIds`, `resolutions`, `blobBytes` added
+(History finds a turn and its resolution without reading segments; quotas). (4) A sealed
+`TurnResolved` is shown among its turn's records in History, as the vat's `ofTurn` does.
+Decision: contract changes made (3c0a5eacb6); for the owner: (1) is the only visible change.
+
+### J-0493 2026-11-18 M2 archive validation - awkward
+Evidence: `store.js` `observeNow`; test "a stale vat state never deletes a segment the vat may
+still acknowledge".
+Reading: validation deletes files the vat's chain does not name, so which vat state counts is
+delicate. (1) A history page answered before a seal can arrive after a RoundRequest that carried
+the seal: states older than the newest validated one are ignored (the vat's segment count only
+grows). (2) A segment answered in this incarnation whose answer has not been acknowledged may
+still be (crank Z pending): it is kept while it chains to the vat's head. (3) A segment answered
+by an earlier incarnation is deleted when the first state of the new incarnation does not name
+it. That relies on the hub delivering a committed answer frame to the vat before the vat sends
+anything that carries a newer `ArchiveState` to the new incarnation (M0 S9's ordering of a
+session's inbound frames). The Node tests model it; acceptance 16 (W2.5, `m2-archive-restart`)
+checks it end to end under Ironhorse. (4) A manifest that names a chain whose file is gone was
+trusted by 4.7 step 1; the first validation of an incarnation now stats the chain's files
+(152 stats at 5,000 turns), so a lost segment is reported as data loss
+(`textOf.archiveFailed('segment <n> is missing')`) rather than found later by a history read.
+Decision: as built; (3) is for W2.5's acceptance 16 to confirm.
+
+### J-0494 2026-11-18 M2 archive wiring - awkward
+Evidence: `resources/agent-host/durable.js` (W2.3) calls `E(ops).open({ backend, spec, session })`
+without `archiveKey`; `AH/index.js`, `AH/archive/store.js` `keyFor`.
+Reading: (1) The ops guard accepts an optional `archiveKey`; without one the adapter asks the
+manager's `resolveSessions` once per session and incarnation (the context cache's first prepare
+and the port's first seal share the answer): one manager crank, about 75 ms, on the first round
+after a restart. W2.7 (group B owner of `durable.js`) can pass the key in `open` to save it.
+(2) A request with `base.archive` for which no key can be found fails the round with
+`textOf.archiveFailed` rather than send a context without its sealed part. (3) W2.3's
+`AH/secrets/manager.js` is committed, but its ops handlers are not wired into `AH/index.js` here:
+wiring them makes every adapter incarnation find (and, without `THIX_HARNESS_SECRETS_KEY`,
+create) a key file under the user's home, which no W2.8 test covers; 2.3 assigns it to W2.2
+next. The M2 ops methods without handlers (`listModels`, `resolveModel`, `secret*`) throw
+`textOf.notBuilt`. (4) `scripted.js`: nothing to change; its context log digests the projection,
+which now includes the sealed part.
+Decision: for W2.2 (secrets and catalogue handlers) and W2.7 (`archiveKey` in `open`).
