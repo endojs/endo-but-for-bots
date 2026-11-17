@@ -67,7 +67,7 @@ export const turnRecords = async turn => {
 };
 
 /**
- * Submit `input` and wait for its turn's `end` event on `live`.
+ * Submit `input` and wait for its turn's `end` (or `abort`) event on `live`.
  * @param {any} slice from makeSlice
  * @param {any} session
  * @param {ReturnType<import('./_m1a-slice.js').collect>} live
@@ -82,13 +82,18 @@ export const runTurn = async (slice, session, live, input, ms = 60_000) => {
     () =>
       live.deliveries.find(
         (d, i) =>
-          i >= from && d.event.type === 'end' && d.event.turnId === turnId,
+          i >= from &&
+          (d.event.type === 'end' || d.event.type === 'abort') &&
+          d.event.turnId === turnId,
       ),
     ms,
     `turn "${input.slice(0, 40)}": end`,
     10,
   );
-  return { turn: receipt.turn, turnId, end: at.event, from };
+  // A failed turn ends with `abort` (its reason), the others with `end`.
+  const end =
+    at.event.type === 'abort' ? { ...at.event, status: 'failed' } : at.event;
+  return { turn: receipt.turn, turnId, end, from };
 };
 
 /**

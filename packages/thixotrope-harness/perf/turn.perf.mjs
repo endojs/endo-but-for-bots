@@ -39,7 +39,8 @@
  *   plain turn), budget 3; `turn.lease`: frames of a plain turn besides
  *   its start, its final round and GC frames, budget 1.
  * - `turn.tooBig.*`: a 64 KiB reply, a 300 k-character echo result and
- *   2,000-key arguments; each followed by a normal turn.
+ *   2,000-key arguments (all staged since M1b, so all complete); each
+ *   followed by a normal turn.
  * - `turn.frames`: the journal's frame kinds per turn kind.
  *
  * TURN_N (default 200) turns for turn.start; STREAM_TURNS (default 5) for
@@ -69,8 +70,6 @@ import {
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
 installGuestPrelude();
 const { E } = await import('@endo/far');
-// eslint-disable-next-line import/no-relative-packages
-const { texts } = await import('../guest/lib/interfaces.js');
 const { generatedArgs } =
   await import('../resources/agent-host/impl/providers/scripted.js');
 const { perfInputs, perfScript, STREAM_CHUNKS } =
@@ -543,25 +542,27 @@ async function measure(template, provision) {
       },
     });
   };
+  // M1b (W1b.6): text over inlineBytes is staged, so the 64 KiB reply and
+  // the 300 k-character echo output complete (M1a: the frame-limit text).
   await probe('turn.tooBig.reply64k', perfInputs.bigReply, done => {
     const p = [];
-    if (done.status !== 'failed' || done.reason !== texts.frameLimit)
+    if (done.status !== 'completed')
       p.push(`state ${done.status} ${done.reason}`);
-    if (!log().some(l => l.kind === 'frame-limit' && l.turnId === done.turnId))
-      p.push('no frame-limit line');
+    if (log().some(l => l.kind === 'frame-limit' && l.turnId === done.turnId))
+      p.push('a frame-limit line');
     return p;
   });
   await probe('turn.tooBig.echo300k', perfInputs.echo300k, done => {
     const p = [];
-    if (done.status !== 'failed' || done.reason !== texts.frameLimit)
+    if (done.status !== 'completed')
       p.push(`state ${done.status} ${done.reason}`);
     if (
-      !log().some(
+      log().some(
         l =>
           l.kind === 'echo-frame-limit' && l.opId.startsWith(`${done.turnId}/`),
       )
     )
-      p.push('no echo-frame-limit line');
+      p.push('an echo-frame-limit line');
     return p;
   });
   await probe('turn.tooBig.keys2000', perfInputs.keys, done => {
@@ -570,8 +571,10 @@ async function measure(template, provision) {
     const start = log().find(
       l => l.kind === 'echo-start' && l.opId.startsWith(`${done.turnId}/`),
     );
-    if (start?.args !== generatedArgs(2000))
-      p.push('echo did not get the arguments intact');
+    // M1b: 19 KB of arguments are staged; echo reads the blob and logs
+    // their length (the text itself is checked in m1a-slice acceptance 9).
+    if (start?.units !== generatedArgs(2000).length)
+      p.push('echo did not get the whole arguments');
     return p;
   });
 
