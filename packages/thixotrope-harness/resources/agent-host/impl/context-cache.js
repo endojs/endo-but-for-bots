@@ -42,6 +42,7 @@
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
+import { performance } from 'node:perf_hooks';
 
 import { limits } from '../../../guest/lib/limits.js';
 import { blobsOf } from '../../../guest/session/staging.js';
@@ -56,6 +57,9 @@ const abandoned = new WeakSet();
 export const isAbandoned = error =>
   typeof error === 'object' && error !== null && abandoned.has(error);
 harden(isAbandoned);
+
+/** Milliseconds, for the timing of one prepare. */
+const clock = () => performance.now();
 
 /** @param {unknown} error */
 const messageOf = error =>
@@ -102,6 +106,12 @@ export const makeContextCache = ({
   /** session -> the tail of its prepares (one at a time per session). */
   const tails = new WeakMap();
   let textUnits = 0;
+  /**
+   * Where the current prepare's time went (one prepare at a time per
+   * session; this is reset per prepare and copied into its projection).
+   * @type {{ pages: number, pageMs: number, waitResolveMs: number, readMs: number, blobs: number, projectMs?: number }}
+   */
+  let timing = { pages: 0, pageMs: 0, waitResolveMs: 0, readMs: 0, blobs: 0 };
   /** @type {CacheStats} */
   const counts = {
     appends: 0,
@@ -156,8 +166,11 @@ export const makeContextCache = ({
     }
     // Pages started resolving their handles already; this finds the rest
     // (an append's handles are usually bound here: no manager call).
+    const waited = clock();
     await Promise.all(resolving);
     await store.resolveMany(missing);
+    timing.waitResolveMs += clock() - waited;
+    const reading = clock();
     let next = 0;
     const worker = async () => {
       while (next < missing.length) {
@@ -176,6 +189,8 @@ export const makeContextCache = ({
       workers.push(worker());
     }
     await Promise.all(workers);
+    timing.readMs += clock() - reading;
+    timing.blobs += missing.length;
   };
 
   /**
@@ -211,6 +226,7 @@ export const makeContextCache = ({
     for (;;) {
       /** @type {any} */
       let page;
+      const asked = clock();
       try {
         // eslint-disable-next-line no-await-in-loop
         page = await E(context).page(...(at === undefined ? [] : [at]));
@@ -220,6 +236,8 @@ export const makeContextCache = ({
         throw lost;
       }
       counts.pages += 1;
+      timing.pages += 1;
+      timing.pageMs += clock() - asked;
       if (from < 0) {
         from = page.from;
         if (expectFrom !== undefined && from !== expectFrom) {
@@ -330,6 +348,7 @@ export const makeContextCache = ({
   const prepareNow = async (session, request) => {
     /** @type {Entry} */
     let entry;
+    timing = { pages: 0, pageMs: 0, waitResolveMs: 0, readMs: 0, blobs: 0 };
     try {
       entry = await update(session, request);
     } catch (error) {
@@ -339,6 +358,7 @@ export const makeContextCache = ({
       throw error;
     }
     trim(session);
+    const projecting = clock();
     const projected = projectRecords(entry.records, {
       texts: entry.texts,
       hooks,
@@ -348,6 +368,10 @@ export const makeContextCache = ({
       ...projected,
       epoch: entry.epoch,
       count: entry.start + entry.records.length,
+      timing: {
+        ...timing,
+        projectMs: clock() - projecting,
+      },
     };
     const started = entry.records.findLast(
       record =>

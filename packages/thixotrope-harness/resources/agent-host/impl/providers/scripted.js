@@ -333,11 +333,25 @@ export const makeScriptedProvider = ({
       }
       if (logContext) {
         const ms = now() - t0;
-        const { transcript } = projection;
+        const { transcript, timing } = projection;
         // Digested off the round's path, as `later` does for its lines.
         timers.after(0, () => {
           try {
-            log('context', { ...where, ms, ...contextDigests(transcript) });
+            log('context', {
+              ...where,
+              ms,
+              ...contextDigests(transcript),
+              ...(timing === undefined
+                ? {}
+                : {
+                    timing: Object.fromEntries(
+                      Object.entries(timing).map(([k, v]) => [
+                        k,
+                        Math.round(v * 10) / 10,
+                      ]),
+                    ),
+                  }),
+            });
           } catch {
             // Dropped.
           }

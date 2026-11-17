@@ -43,6 +43,8 @@ export const NATIVE_CONTEXT_FORMAT = 'native-context';
  * @property {number} [epoch] the cache's `{ count, epoch }` (context-cache.js)
  * @property {number} [count]
  * @property {string} [input] the full input text of the request's turn
+ * @property {{ pages: number, pageMs: number, waitResolveMs: number, readMs: number, blobs: number, projectMs: number }} [timing]
+ *   where the cache's prepare spent its time (ms; perf and the context log)
  */
 
 /**
