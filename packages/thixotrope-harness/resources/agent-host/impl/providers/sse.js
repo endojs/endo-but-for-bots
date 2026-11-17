@@ -46,14 +46,17 @@ export const SSE_DEFAULT_MAX_UNITS = 16 * 1024 * 1024;
  */
 
 /**
+ * The events of each body chunk together (a non-empty array per chunk that
+ * completed at least one event), so a consumer can coalesce what arrived at
+ * once (W2.1a: one delta per network read, not per event; J-0413).
  * @param {AsyncIterable<Uint8Array> | Iterable<Uint8Array>} chunks the
  *   response body
  * @param {object} [options]
  * @param {number} [options.maxLineUnits]
  * @param {number} [options.maxEventUnits]
- * @returns {AsyncGenerator<SseEvent, void, undefined>}
+ * @returns {AsyncGenerator<SseEvent[], void, undefined>}
  */
-export async function* parseSse(
+export async function* parseSseBatches(
   chunks,
   {
     maxLineUnits = SSE_DEFAULT_MAX_UNITS,
@@ -160,12 +163,23 @@ export async function* parseSse(
 
   for await (const chunk of chunks) {
     feed(decode(chunk));
-    yield* ready.splice(0);
+    if (ready.length > 0) yield ready.splice(0);
   }
   feed(decode());
-  yield* ready.splice(0);
+  if (ready.length > 0) yield ready.splice(0);
   if (data.length > 0 || partial.join('').trim() !== '') {
     throw new SseError(sseErrors.truncated);
   }
+}
+harden(parseSseBatches);
+
+/**
+ * The events one by one.
+ * @param {AsyncIterable<Uint8Array> | Iterable<Uint8Array>} chunks
+ * @param {Parameters<typeof parseSseBatches>[1]} [options]
+ * @returns {AsyncGenerator<SseEvent, void, undefined>}
+ */
+export async function* parseSse(chunks, options) {
+  for await (const batch of parseSseBatches(chunks, options)) yield* batch;
 }
 harden(parseSse);

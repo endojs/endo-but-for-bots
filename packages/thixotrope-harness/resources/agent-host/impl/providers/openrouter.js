@@ -6,8 +6,10 @@
  * Chat completions with `stream: true` (the Endo provider asked with
  * `stream: false`, so its UI saw each reply whole: G-03, not copied), and
  * `tools` with `tool_choice: 'auto'` when the round offers tools. The answer
- * is read as server-sent events (`sse.js`, linear): every `delta.content`
- * is published to the session's channel as it arrives (acceptance 1),
+ * is read as server-sent events (`sse.js`, linear): `delta.content` is
+ * published to the session's channel as it arrives (acceptance 1), one
+ * delta per network read (the events that arrived together are joined:
+ * publishing costs about 25 us per delta, J-0413),
  * `delta.tool_calls` fragments are joined per `index` into whole calls whose
  * arguments stay text, the `finish_reason` and the trailing usage chunk are
  * kept, `[DONE]` ends it. What the answer means is lal
@@ -62,7 +64,7 @@ import {
   postJson,
   retryAfterMs,
 } from './http.js';
-import { parseSse } from './sse.js';
+import { parseSseBatches } from './sse.js';
 import {
   makeRoundControl,
   ProviderFailure,
@@ -347,66 +349,83 @@ export async function* openRouterAttempt({
       ['via', 'provider', provider],
     ]);
   try {
-    for await (const { data } of parseSse(bodyChunks(response))) {
-      if (data === '[DONE]') {
-        done = true;
-        break;
+    // One delta per network read (J-0413): the content of every event that
+    // arrived in one body chunk is published together.
+    for await (const batch of parseSseBatches(bodyChunks(response))) {
+      /** @type {string[]} */
+      const pieces = [];
+      let unreadable = false;
+      for (const { data } of batch) {
+        if (data === '[DONE]') {
+          done = true;
+          break;
+        }
+        /** @type {any} */
+        let chunk;
+        try {
+          chunk = JSON.parse(data);
+        } catch {
+          unreadable = true;
+          break;
+        }
+        if (chunk === null || typeof chunk !== 'object') chunk = {};
+        if (model === undefined && chunk.model !== undefined)
+          model = chunk.model;
+        if (provider === undefined && chunk.provider !== undefined)
+          provider = chunk.provider;
+        if (chunk.error !== undefined && chunk.error !== null) {
+          apiError = chunk.error;
+        }
+        if (chunk.usage !== undefined && chunk.usage !== null) {
+          usage = usageFromOpenRouter(chunk.usage);
+        }
+        const choice = Array.isArray(chunk.choices)
+          ? chunk.choices[0]
+          : undefined;
+        if (choice !== undefined && choice !== null) {
+          const delta = choice.delta ?? {};
+          if (typeof delta.content === 'string' && delta.content !== '') {
+            if (!nonBlank && delta.content.trim() !== '') nonBlank = true;
+            textLength += delta.content.length;
+            pieces.push(delta.content);
+          }
+          if (Array.isArray(delta.tool_calls)) {
+            for (const fragment of delta.tool_calls) {
+              const index = Number.isInteger(fragment?.index)
+                ? fragment.index
+                : calls.size;
+              let call = calls.get(index);
+              if (call === undefined) {
+                if (calls.size >= 4096) {
+                  throw new ProviderFailure(texts.frameLimit, { delivered });
+                }
+                call = { name: '', args: [] };
+                calls.set(index, call);
+              }
+              if (typeof fragment?.id === 'string' && fragment.id !== '')
+                call.id = fragment.id;
+              const fn = fragment?.function;
+              if (typeof fn?.name === 'string' && fn.name !== '')
+                call.name = fn.name;
+              if (typeof fn?.arguments === 'string')
+                call.args.push(fn.arguments);
+            }
+          }
+          if (typeof choice.finish_reason === 'string')
+            finishReason = choice.finish_reason;
+        }
       }
-      /** @type {any} */
-      let chunk;
-      try {
-        chunk = JSON.parse(data);
-      } catch {
+      if (pieces.length > 0) {
+        delivered = true;
+        yield { delta: pieces.length === 1 ? pieces[0] : pieces.join('') };
+      }
+      if (unreadable) {
         throw new ProviderFailure(texts.openRouterUnreachable, {
-          retryable: true,
+          retryable: !delivered,
           delivered,
         });
       }
-      if (chunk === null || typeof chunk !== 'object') chunk = {};
-      if (model === undefined && chunk.model !== undefined) model = chunk.model;
-      if (provider === undefined && chunk.provider !== undefined)
-        provider = chunk.provider;
-      if (chunk.error !== undefined && chunk.error !== null) {
-        apiError = chunk.error;
-      }
-      if (chunk.usage !== undefined && chunk.usage !== null) {
-        usage = usageFromOpenRouter(chunk.usage);
-      }
-      const choice = Array.isArray(chunk.choices)
-        ? chunk.choices[0]
-        : undefined;
-      if (choice !== undefined && choice !== null) {
-        const delta = choice.delta ?? {};
-        if (typeof delta.content === 'string' && delta.content !== '') {
-          delivered = true;
-          if (!nonBlank && delta.content.trim() !== '') nonBlank = true;
-          textLength += delta.content.length;
-          yield { delta: delta.content };
-        }
-        if (Array.isArray(delta.tool_calls)) {
-          for (const fragment of delta.tool_calls) {
-            const index = Number.isInteger(fragment?.index)
-              ? fragment.index
-              : calls.size;
-            let call = calls.get(index);
-            if (call === undefined) {
-              if (calls.size >= 4096) {
-                throw new ProviderFailure(texts.frameLimit, { delivered });
-              }
-              call = { name: '', args: [] };
-              calls.set(index, call);
-            }
-            if (typeof fragment?.id === 'string' && fragment.id !== '')
-              call.id = fragment.id;
-            const fn = fragment?.function;
-            if (typeof fn?.name === 'string' && fn.name !== '')
-              call.name = fn.name;
-            if (typeof fn?.arguments === 'string') call.args.push(fn.arguments);
-          }
-        }
-        if (typeof choice.finish_reason === 'string')
-          finishReason = choice.finish_reason;
-      }
+      if (done) break;
     }
   } catch (error) {
     if (error instanceof ProviderFailure) throw error;

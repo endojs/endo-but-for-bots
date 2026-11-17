@@ -440,8 +440,13 @@ export const startFakeProviderServer = async ({
       } else if (!flushed) {
         // eslint-disable-next-line no-await-in-loop
         await new Promise(resolve => {
-          res.once('drain', resolve);
-          res.once('close', resolve);
+          const done = () => {
+            res.off('drain', done);
+            res.off('close', done);
+            resolve(undefined);
+          };
+          res.once('drain', done);
+          res.once('close', done);
         });
         if (gone) return;
       }
