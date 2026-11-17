@@ -229,9 +229,9 @@ sequenceDiagram
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit | Value crossing |
 |----------|-----------|--------|---------------|--------------------|----------------|
-| Filesystem → daemon | `setup-skills.js` | User chooses agent and whether to include cross-harness dirs | Files on disk, owned by the user | User reruns or removes the mounts | Read-only mount capability |
-| Daemon → Lal | `agent-skills` directory, mounts | Entry-name order sets precedence | Mount formulas in the daemon | Daemon persists; Lal reloads on name changes or restart | `SkillSource` reads (text) |
-| Lal → model | `@endo/skills` rendering, `readText` tool | `disable-model-invocation`, 200-skill cap | None (snapshot in memory) | Rebuilt per incarnation | Escaped descriptor list; bodies on request |
+| Filesystem -> daemon | `setup-skills.js` | User chooses agent and whether to include cross-harness dirs | Files on disk, owned by the user | User reruns or removes the mounts | Read-only mount capability |
+| Daemon -> Lal | `agent-skills` directory, mounts | Entry-name order sets precedence | Mount formulas in the daemon | Daemon persists; Lal reloads on name changes or restart | `SkillSource` reads (text) |
+| Lal -> model | `@endo/skills` rendering, `readText` tool | `disable-model-invocation`, 200-skill cap | None (snapshot in memory) | Rebuilt per incarnation | Escaped descriptor list; bodies on request |
 
 Persistent state is owned by the user's disk and the daemon's mount
 formulas. Lal commits nothing. Restart replays nothing: a new incarnation
