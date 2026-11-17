@@ -814,7 +814,16 @@ round), additive.
   in a vat); signed thinking kept as native context (staged, R4-31); stop reason checked against
   tool calls (R4-42; Fae `providers/anthropic-streaming.js`'s text, added as a contract text by
   W2.1b); 401: `texts.anthropicAuthFailed` (R4-77); other non-2xx: `textOf.anthropicHttp(status)`;
-  unreachable: `texts.anthropicUnreachable`.
+  unreachable: `texts.anthropicUnreachable`. W2.1b as built: the stop-reason text is a harness text
+  (`textOf.anthropicStopMismatch(reason, calls)`; the Fae source was not available to the build);
+  `max_tokens` with text and no tool call is delivered with the R4-78 note, as OpenRouter's `length`;
+  `max_tokens` without text or inside a tool call, `refusal` and unknown stop reasons fail with
+  `textOf.anthropicStopped(reason)`; a stream `error` event fails with
+  `textOf.anthropicApiError(details)` (` (type <error type>)` when identifier-shaped). Native context
+  is the round's thinking blocks as JSON text with the model and a digest of the round's text; it is
+  replayed only when both match (R4-31). Tool-call ids are mapped to Anthropic's id alphabet
+  injectively (`t1/r0/c0` -> `t1_2fr0_2fc0`) in each request. The round driver's events add
+  `{ nativeContext: string }` (staged with no preview into `RoundResult.nativeContext`).
 - **Failure text never carries a provider body** (R4-79): only the fixed texts above, with
   statuses, finish reasons, codes, served-by names and attempt counts.
 - **Cancel** (R4-7): `cancelRound(turn)` aborts the request (`AbortController`), so the fake
@@ -824,7 +833,12 @@ round), additive.
 
 `AH/providers/retry.js`: `withRetries({ attempt, maxAttempts, delayMs(n, retryAfterMs), sleep,
 signal })` retries an attempt only while it delivered nothing (no delta published, no usage
-reported, R4-74, R4-78).
+reported, R4-74, R4-78). W2.1b as built: `attempt(signal)` returns the attempt's events; events before the
+first delivery are held and dropped when the attempt is retried; usage counts as delivered only
+when it reports tokens (lal: "no tokens consumed"); `maxTimeoutRetries` (default 1) bounds the
+retries of timed-out attempts; `onRetry({ attempt, failure, waitMs })` observes. The Anthropic
+provider reports a stream's usage only with its outcome, so an `overloaded_error` event before any
+text is retried like a 529 (open decision 12 applied to the API slot).
 
 | provider | retried on | attempts | wait before attempt n+1 | timeout |
 |---|---|---|---|---|
@@ -988,7 +1002,7 @@ guest rules; "Node" = adapter or tests.
 | file | export | signature |
 |---|---|---|
 | `AH/providers/anthropic.js` | `makeAnthropicProvider(options)`; `anthropicKind` | 8.1 |
-| `AH/providers/retry.js` | `withRetries({ attempt, maxAttempts, delayMs, sleep, signal })`; `openRouterDelay(n, retryAfterMs)`, `anthropicDelay(n, retryAfterMs)` | 8.2 |
+| `AH/providers/retry.js` | `withRetries({ attempt, maxAttempts, delayMs, sleep, signal, maxTimeoutRetries?, onRetry? })`; `openRouterDelay(n, retryAfterMs)`, `anthropicDelay(n, retryAfterMs)`; `makeRetry({ timers, delayMs, maxAttempts?, maxTimeoutRetries?, onRetry? })` -> the providers' `retry` option `({ attempt, signal }) => AsyncIterable` | 8.2 |
 
 ### W2.2
 
@@ -1104,6 +1118,8 @@ Exact strings are in `interfaces.js`; `m2-interfaces.test.js` checks them.
 | `textOf.unknownProviderModel(id)` | `Unknown model "<id>" for the provider backend` | A.4 (Fae :600) |
 | `textOf.secretFailed(code)` | `Secret operation failed: "<code>"`, code in `secretCodes` | R7-24 (daemon `secret-manager.js:27`) |
 | `textOf.anthropicHttp(status)`, `texts.anthropicUnreachable`, `textOf.anthropicTimeout(s)` | `Anthropic API request failed (HTTP <status>)`; `Anthropic API could not be reached or sent an unreadable response`; `Anthropic API did not answer within <s> seconds` | harness (R4-79: no body; OpenRouter's wording) |
+| `textOf.anthropicStopped(reason)`, `textOf.anthropicApiError(details)` | `Anthropic API completion stopped: <reason>`; `Anthropic API returned an error<details>` | harness (W2.1b; R4-78, R4-79; OpenRouter's wording) |
+| `textOf.anthropicStopMismatch(reason, calls)` | `Anthropic API stop reason <reason> does not match the <calls> tool calls of its answer` | harness (W2.1b; R4-42) |
 | `texts.sessionDeleting` | `This session is being deleted` | harness (R4-9) |
 | `texts.turnSealed` | `This turn is archived; read it through the history service` | harness (D-M2-1) |
 | `texts.turnArchivedUnresolvable` | `This turn is archived and can no longer be resolved` | harness (4.6) |

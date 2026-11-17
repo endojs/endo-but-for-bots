@@ -542,6 +542,28 @@ export const textOf = harden({
   anthropicTimeout: seconds =>
     `Anthropic API did not answer within ${seconds} seconds`,
   /**
+   * Harness (R4-78, R4-79; OpenRouter's wording): a stop the round cannot
+   * deliver (`max_tokens` without text or inside a tool call, `refusal`, an
+   * unknown stop reason). `reason` is the API's stop reason when it has an
+   * identifier's shape, else `unknown`.
+   * @param {string} reason
+   */
+  anthropicStopped: reason => `Anthropic API completion stopped: ${reason}`,
+  /**
+   * Harness (R4-79): an `error` event in the stream (`overloaded_error`,
+   * `api_error`, ...). `details` is `textOf.servedBy([['type', t]])` or ''.
+   * @param {string} details
+   */
+  anthropicApiError: details => `Anthropic API returned an error${details}`,
+  /**
+   * Harness (R4-42: on Claude the stop reason must agree with the presence
+   * of tool calls; the Fae text was not available to this build).
+   * @param {string} reason the stop reason (identifier-shaped or `unknown`)
+   * @param {number} calls tool calls in the answer
+   */
+  anthropicStopMismatch: (reason, calls) =>
+    `Anthropic API stop reason ${reason} does not match the ${calls} tool calls of its answer`,
+  /**
    * A.4 creation error (Fae session/provider-connections.js:600).
    * @param {string} modelId
    */

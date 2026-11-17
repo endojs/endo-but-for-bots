@@ -907,6 +907,18 @@ test('the fixed M2 texts', t => {
     ),
   );
   t.is(textOf.anthropicHttp(529), 'Anthropic API request failed (HTTP 529)');
+  t.is(
+    textOf.anthropicStopped('refusal'),
+    'Anthropic API completion stopped: refusal',
+  );
+  t.is(
+    textOf.anthropicApiError(' (type overloaded_error)'),
+    'Anthropic API returned an error (type overloaded_error)',
+  );
+  t.is(
+    textOf.anthropicStopMismatch('end_turn', 1),
+    'Anthropic API stop reason end_turn does not match the 1 tool calls of its answer',
+  );
   t.is(textOf.turnDeadlineOpId('t3'), 't3/deadline');
   t.is(textOf.notBuilt('deleteSession'), 'not built yet: deleteSession');
   t.is(
