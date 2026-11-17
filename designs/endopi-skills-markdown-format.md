@@ -3,33 +3,42 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-11-17 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Parent** | [endopi](endopi.md) |
 
+## Status
+
+The format library is built in draft
+[#1643](https://github.com/endojs/endo-but-for-bots/pull/1643) as a new
+`@endo/skills` package (parser, lenient validation, discovery, prompt
+rendering, `/skill:` expansion). It is not yet wired into Lal, because Lal
+had no sanctioned way to reach skill directories. This revision settles
+that boundary (skills arrive as read-only mounts, the same shape the
+sibling [endopi-prompt-templates](endopi-prompt-templates.md) design uses
+in draft [#1671](https://github.com/endojs/endo-but-for-bots/pull/1671)),
+resolves the earlier open questions, and lists the changes #1643 needs in
+§ *Delta from #1643*.
+
 ## Motivation
 
-The Endo design [endoclaw-skill-registry](endoclaw-skill-registry.md)
-covers the daemon-side surface: skills are pet names in an EndoDirectory,
-discovered via `list` and resolved via `lookup`. What it does not cover
-is the *on-disk authoring* shape: a directory with a `SKILL.md` file at
-its root, frontmatter declaring the skill's name and description,
-free-form markdown body, optional helper scripts and reference docs
-alongside.
+[endoclaw-skill-registry](endoclaw-skill-registry.md) covers the
+daemon-side *granting* surface: skills as pet names in an EndoDirectory.
+It does not cover the *authoring* shape the coding-agent ecosystem has
+standardized on: a directory with a `SKILL.md` at its root, frontmatter
+naming and describing the skill, a free-form markdown body, and optional
+helper files alongside.
 
-Pi, Claude Code, and Codex have all adopted the [agentskills.io
-specification](https://agentskills.io/specification) for this shape.
-The result is that a skill written for any of those harnesses can be
-loaded into the others. Endo joining this format means:
+Pi, Claude Code, and Codex all read the
+[agentskills.io specification](https://agentskills.io/specification)
+shape. Endo joining it means:
 
-1. The Endo agent can consume skills written for other harnesses
-   without translation (`~/.claude/skills`, `~/.codex/skills`).
-2. A skill authored for Endo can be shared with users of other
-   harnesses.
-3. Progressive disclosure (descriptions in the system prompt; bodies
-   read on demand by the agent) reduces context cost compared to
-   inlining every skill.
+1. The Endo agent consumes skills written for other harnesses without
+   translation.
+2. A skill authored for Endo works in other harnesses.
+3. Progressive disclosure (names and descriptions in the system prompt,
+   bodies read on demand) costs less context than inlining every skill.
 
 ## Design
 
@@ -38,15 +47,15 @@ loaded into the others. Endo joining this format means:
 ```
 my-skill/
 ├── SKILL.md              # required: frontmatter + body
-├── scripts/              # optional: helper scripts the body references
-│   └── process.sh
+├── scripts/              # optional: helpers the body references
 ├── references/           # optional: details loaded on demand
-│   └── api.md
 └── assets/               # optional: templates, data
-    └── template.json
 ```
 
-### SKILL.md frontmatter (per agentskills.io)
+Only `SKILL.md` is interpreted. The other directories are ordinary files
+the model may read through the same capability that delivered the skill.
+
+### Frontmatter
 
 ```markdown
 ---
@@ -56,114 +65,257 @@ license: MIT
 compatibility: Requires git, bash.
 allowed-tools: read bash
 disable-model-invocation: false
+metadata:
+  author: example
 ---
 
 # My Skill
 
-## Usage
-
 Run `./scripts/process.sh <input>`. See [API reference](references/api.md).
 ```
 
-Validation:
+| Key | Source | Rule | On violation |
+|-----|--------|------|--------------|
+| `name` | spec | 1-64 chars; lowercase `a-z`, `0-9`, `-`; no leading, trailing, or doubled `-`; equals the directory name | warning; the directory name is used when absent |
+| `description` | spec | 1-1024 chars | absent or empty: **error**, skill not loaded; too long: warning |
+| `license` | spec | free text | none |
+| `compatibility` | spec | at most 500 chars | warning |
+| `metadata` | spec | one-level string map | non-string values dropped with a warning |
+| `allowed-tools` | spec (experimental) | whitespace-separated names | none; advisory only (§ *Authority*) |
+| `disable-model-invocation` | Pi / Claude Code | boolean | non-boolean treated as `false` with a warning |
 
-- `name`: required, max 64 chars, lowercase a-z / 0-9 / hyphens, must
-  match the parent directory name.
-- `description`: required, max 1024 chars.
-- All other fields optional.
+Unknown keys are ignored. Leniency follows Pi: a skill written for another
+harness loads with warnings rather than being rejected. Diagnostics carry
+the source label and entry name and are surfaced to the operator (Lal's
+log), never to the model.
 
-Endo follows Pi's posture: warn on violations, but remain lenient so
-foreign skills load.
+The parser reads a YAML subset with no YAML dependency: top-level
+`key: value`, single- and double-quoted values, `|` and `>` block
+scalars, and one nested level under `metadata`. Anything else is ignored
+with a warning. `SKILL.md` files over 1 MiB are rejected.
 
-### Loader
+### Sources: capability, not path
 
-A new `packages/lal/skills.js` (or shared module) provides:
+Lal is a confined guest and reads no disk. Its profile may hold the pet
+name **`agent-skills`**, naming an EndoDirectory whose entries are
+**read-only mounts**, one per skill *source* directory (a directory whose
+children are skill directories). An agent without the name has no skills.
 
-```js
-// Discovery: scan paths, parse frontmatter, return Skill[]
-const skills = await discoverSkills({
-  paths: [
-    '~/.pi/agent/skills',
-    '~/.agents/skills',
-    '~/.claude/skills',
-    '.agents/skills', // walk up from cwd to repo root
-    '.pi/skills',
-  ],
-});
+The name is `agent-skills`, not `skills`, because
+[endoclaw-skill-registry](endoclaw-skill-registry.md) reserves `skills`
+for a directory of daemon-formula skill descriptors; the two must not
+collide (§ *Integration with the registry*).
 
-// Inject into the system prompt
-const systemPrompt = buildSystemPrompt({
-  ...,
-  skills,
-});
+Lal adapts each mount to the `SkillSource` interface of `@endo/skills`
+(`list()`, `readSkillText(entry)`, `locate(entry)`) and calls
+`loadSkills(sources)`. `locate` returns a pet-name path, for example
+`agent-skills/20-agents-user/my-skill/SKILL.md`, which the model can pass
+straight to `readText`.
+
+Precedence: sources apply in entry-name order; a later source overrides
+an earlier skill of the same name, with a warning. The setup script
+prefixes entry names (`10-`, `20-`, ...) so project sources sort after
+user sources.
+
+### Setup: the user's grant
+
+A Node script, `packages/skills/setup-skills.js`
+(`endo-skills-setup <agent-pet-name> [--no-cross-harness]`), finds source
+directories, creates one read-only mount per existing directory, and
+writes them into the named agent's `agent-skills` directory, replacing
+entries it wrote before. It is the only code that reads the filesystem.
+Running it is the user's grant, the analog of Pi's project-trust step.
+
+Directories, in increasing precedence, found with the walker shared with
+prompt templates (`listConventionalDirectories({ cwd, home, leaves })`,
+§ *Shared discovery walker* in
+[endopi-prompt-templates](endopi-prompt-templates.md)):
+
+1. `~/.claude/skills`, `~/.codex/skills` (cross-harness; skipped with
+   `--no-cross-harness`)
+2. `~/.pi/agent/skills`
+3. `~/.agents/skills`
+4. `.agents/skills` in each directory from the repository root down to
+   the working directory (outside a repository, the working directory
+   only)
+5. `.claude/skills`, `.pi/skills` in the working directory
+
+This answers the old question of which project-local directory Endo
+uses: all of them, in a fixed order, because the point is to read skills
+other harnesses already wrote.
+
+### System prompt
+
+At each agent incarnation (start or restart) Lal loads the skills once
+and appends `formatSkillsForPrompt(skills, { readHint })` to its system
+prompt: a preamble plus an `<available_skills>` list of name,
+description, and location per skill. Skills with
+`disable-model-invocation: true` are omitted. Names, descriptions, and
+locations are XML-escaped so skill text cannot close its element. Lal's
+`readHint` tells the model to read a skill with
+`readText(<location minus SKILL.md>, "SKILL.md")` and to resolve relative
+references against the skill's directory path.
+
+The list is a snapshot. Lal also follows the `agent-skills` directory with
+`followNameChanges`; when an entry is added or removed it reloads, and
+the new list takes effect at the next round's system prompt. Edits
+*inside* a mounted directory take effect at the next incarnation. There
+is no cache beyond this snapshot. Rebuilding the list every round was
+rejected: it rereads every `SKILL.md` per round and changes the system
+prompt mid-conversation, which defeats provider prompt caching.
+
+Lal lists at most 200 skills, in precedence order, and logs a warning for
+the rest.
+
+### `/skill:name`
+
+An inbox message whose text starts with `/skill:<name> [args]` is
+expanded by `expandSkillCommand` before the round runs: the current
+`SKILL.md` body (reread, not the snapshot) inside a
+`<skill name location>` element, followed by the arguments. This works
+for skills hidden by `disable-model-invocation`. An unknown name produces
+an error reply to the sender and runs no model round. The transcript
+([endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md))
+records the expanded text as an ordinary user `message`, matching how
+prompt templates are recorded.
+
+Chat needs no change: it sends `/skill:` text literally, and
+[endopi-prompt-templates](endopi-prompt-templates.md) reserves the
+`skill:` prefix so no template shadows it.
+
+### Authority: skills carry text, not capabilities
+
+A skill is instructions. It gains the agent nothing the agent does not
+already hold. Consequences:
+
+- **`allowed-tools` is advisory.** Enforcing it would be a per-call
+  allowlist of tool names checked against "which skill is active", an
+  identity-style check this codebase avoids, and the notion of an
+  active skill is not well defined once several are loaded. It is parsed
+  and kept on `Skill.allowedTools` and not enforced. The structural form
+  of the same idea is a skill that *ships with* attenuated capabilities.
+  That is the registry bridge's job (Phase 4), where the grant is a held
+  capability rather than a name list.
+- **`scripts/` do not run.** Lal has no shell. A skill whose body says
+  "run `./scripts/x.sh`" works only in an agent that holds an execution
+  capability. The model can still read scripts as text. Endo adds no
+  execution path for skills.
+
+### Integration with the registry
+
+The mount path above is the *authoring* surface.
+[endoclaw-skill-registry](endoclaw-skill-registry.md) is the *granting*
+surface. The bridge (Phase 4) is a daemon-side `SkillSource` over a
+registry `skills` directory, so a skill received by `request` or mail
+appears in the same `<available_skills>` list with no filesystem write.
+It waits on that design.
+
+```mermaid
+sequenceDiagram
+  participant U as User (Node setup)
+  participant D as Daemon
+  participant L as Lal
+  participant M as Model
+  U->>D: read-only mount per source dir into agent-skills
+  L->>D: list agent-skills, readText each SKILL.md
+  L->>L: loadSkills, formatSkillsForPrompt
+  L->>M: system prompt with available_skills
+  M->>L: readText(location, SKILL.md)
+  L->>D: readText through the mount
+  D-->>L: body text
 ```
 
-The system prompt receives a compact descriptor list (name +
-description) per skill. When the agent decides it needs the skill, it
-uses `read` to load the full `SKILL.md`. The slash command
-`/skill:my-skill` forces immediate load when the model does not do so on
-its own.
+## Ownership map
 
-### Integration with the daemon-side registry
+| Boundary | Mechanism | Policy | Durable state | Lifecycle / commit | Value crossing |
+|----------|-----------|--------|---------------|--------------------|----------------|
+| Filesystem -> daemon | `setup-skills.js` | User chooses agent and whether to include cross-harness dirs | Files on disk, owned by the user | User reruns or removes the mounts | Read-only mount capability |
+| Daemon -> Lal | `agent-skills` directory, mounts | Entry-name order sets precedence | Mount formulas in the daemon | Daemon persists; Lal reloads on name changes or restart | `SkillSource` reads (text) |
+| Lal -> model | `@endo/skills` rendering, `readText` tool | `disable-model-invocation`, 200-skill cap | None (snapshot in memory) | Rebuilt per incarnation | Escaped descriptor list; bodies on request |
 
-The on-disk shape is the *authoring* surface. The
-[endoclaw-skill-registry](endoclaw-skill-registry.md) EndoDirectory is
-the *granting* surface. The bridge: a guest module that, given a
-filesystem path to a skill directory, registers the skill as a daemon
-formula and adds it to the agent's `skills/` EndoDirectory.
+Persistent state is owned by the user's disk and the daemon's mount
+formulas. Lal commits nothing. Restart replays nothing: a new incarnation
+rereads the mounts. Skill text is classified as untrusted input
+everywhere. Naming check: `@endo/skills` is a format library and names
+only format concepts (`Skill`, `SkillSource`), not agent-lifecycle ones.
 
-This composition means:
+## Security
 
-- A user authoring a skill at the command line creates files in their
-  project's `.agents/skills/<name>/`. The agent loads them at startup.
-- A user receiving a skill via the daemon's `request` mechanism receives
-  a formula in their `skills/` directory, no filesystem write needed.
+Skill text is prompt input from wherever the user mounted it, and a
+mounted directory is a prompt-injection surface. The defenses are that
+the user's setup run is the only grant, mounts are read-only, the model
+sees only escaped descriptors until it chooses to read, and a skill adds
+no authority (§ *Authority*). Diagnostics never reach the model.
 
-### Cross-harness compatibility
+## Delta from #1643
 
-Pi documents adding `~/.claude/skills` to its settings. Endo does the
-same in reverse: a setting (or default) instructs the agent to scan
-`~/.claude/skills`, `~/.codex/skills`, and the Pi paths.
+1. Add `setup-skills.js` and its bin entry (§ *Setup*). Keep
+   `discoverSkills` for Node hosts and tests, but drive it from
+   `listConventionalDirectories` once whichever of #1643 and #1640 merges
+   first exports it.
+2. Add a mount-backed `SkillSource` whose `locate` returns pet-name paths.
+3. Make the prompt preamble host-specific: `formatSkillsForPrompt(skills,
+   { readHint })`. The current text ("use the read tool", "absolute
+   path") fits only a filesystem host.
+4. Check the validator against the frontmatter table above, including
+   the 500-char `compatibility` limit and doubled or edge hyphens in
+   `name`.
+5. Wire Lal: load at incarnation, `followNameChanges` on `agent-skills`,
+   the 200-skill cap, and `/skill:` expansion in the inbox loop.
+6. Replace the design-doc *Implementation notes* section in #1643 with a
+   pointer to this revision.
+
+## Test plan
+
+- Parser: every row of the frontmatter table, block scalars, a foreign
+  Claude Code skill with unknown keys loads with warnings only.
+- Precedence: two sources defining one name; later wins, one warning.
+- Mount source: a skill under `agent-skills` lists with a pet-name
+  location that `readText` resolves, against a scratch daemon.
+- Escaping: a description containing `</skill>` renders inert.
+- Lal: adding an `agent-skills` entry changes the next round's prompt,
+  not the current one; `/skill:` on an unknown name replies with an error
+  and runs no round; a `disable-model-invocation` skill is absent from the
+  prompt but expands by command.
+- Setup: `--no-cross-harness` skips the Claude Code and Codex directories;
+  rerunning replaces its own entries and leaves others alone.
 
 ## Phased implementation
 
-1. **Frontmatter parser + discovery walker.** Parse `SKILL.md`,
-   validate, return `Skill[]`. No agent integration yet.
-2. **System-prompt injection.** Compact descriptor list appears in the
-   system prompt. The agent can `read` a skill by path on demand.
-3. **Slash command (`/skill:name`).** Forces immediate load.
-4. **Daemon-formula bridge.** A skill on disk can be granted as a
-   daemon formula per [endoclaw-skill-registry](endoclaw-skill-registry.md).
-5. **Cross-harness paths.** Default-enable scanning of Claude /
-   Codex / Pi skill directories.
+1. **Format library.** Parse, validate, discover, render, expand (#1643,
+   plus deltas 3 and 4).
+2. **Mount source and setup script.** Deltas 1 and 2.
+3. **Lal integration.** Delta 5. Fae follows the same wiring later.
+4. **Registry bridge.** A `SkillSource` over
+   [endoclaw-skill-registry](endoclaw-skill-registry.md); waits on that
+   design.
+5. **Extension packages.** A package's skills become one more mount
+   under [endopi-extension-package-manifest](endopi-extension-package-manifest.md).
 
 ## Dependencies
 
 | Design | Relationship |
 |--------|--------------|
-| [endoclaw-skill-registry](endoclaw-skill-registry.md) | Daemon-side complement (skills as EndoDirectory) |
+| [endoclaw-skill-registry](endoclaw-skill-registry.md) | Daemon-side granting surface; Phase 4 |
+| [endopi-prompt-templates](endopi-prompt-templates.md) | Shares the discovery walker and mount shape; reserves `skill:` |
+| [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md) | Records expanded `/skill:` text |
 | [endopi-extension-package-manifest](endopi-extension-package-manifest.md) | Skills shippable as packages |
 | [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | Skill grants part of provisioning |
 
 ## Open questions
 
-- Where do project-local skills live? Pi uses `.pi/skills/` and
-  `.agents/skills/`; Claude Code uses `.claude/skills/`. Endo can either
-  pick one and document it, or scan all three.
-- Does `allowed-tools` map onto capability grants? Today Pi treats it
-  experimentally; in Endo, this could be a structural grant ("this
-  skill only sees these capabilities"). The Endo answer is more
-  rigorous than Pi's; the alignment is worth doing.
-- Is the in-memory skill cache invalidated on file change? Pi
-  hot-reloads via `/reload`. Endo can use the existing
-  `filesystem-watchers` design once it lands.
+- Should cross-harness directories (`~/.claude/skills`, `~/.codex/skills`)
+  be on by default? Many of those skills assume a shell Lal lacks, so they
+  would advertise work Lal cannot do. Recommendation: on by default, as
+  the earlier revision of this design proposed, because the setup run is
+  an explicit grant and `--no-cross-harness` is available.
 
 ## Citation
 
 - [`packages/coding-agent/docs/skills.md`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md)
 - [`packages/coding-agent/src/core/skills.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/skills.ts)
 - [`packages/coding-agent/src/core/system-prompt.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/system-prompt.ts) (skill formatting block)
-- [agentskills.io specification](https://agentskills.io/specification) (external)
+- [agentskills.io specification](https://agentskills.io/specification) (external), § *Frontmatter*
 
 ## Prompt
 
