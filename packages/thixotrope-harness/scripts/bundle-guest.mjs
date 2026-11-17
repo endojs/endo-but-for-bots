@@ -21,6 +21,7 @@ import './_init.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import url from 'node:url';
 
@@ -95,6 +96,65 @@ export const escapeNonAscii = source =>
   });
 
 /**
+ * The parser compartment-mapper's module transform uses (`@endo/module-source`
+ * depends on it), reached through that package so this package declares no
+ * second copy.
+ */
+const loadParser = () => {
+  const requireHere = createRequire(import.meta.url);
+  const requireMapper = createRequire(
+    requireHere.resolve('@endo/compartment-mapper/package.json'),
+  );
+  const requireSource = createRequire(
+    requireMapper.resolve('@endo/module-source/package.json'),
+  );
+  return /** @type {{ parse: (source: string, options: object) => any }} */ (
+    requireSource('@babel/parser')
+  );
+};
+
+/**
+ * A guest module's source without its comments (J-0303): every comment is
+ * replaced by the line breaks it held (a block comment on one line by one
+ * space), so line numbers stay the same, and white space left at a line's
+ * end is dropped. Comments are found by parsing the module, never by a
+ * pattern, so text in strings, templates and regular expressions is kept.
+ * Bundle bytes are the frames a vat is staged with (session program budget
+ * 200,000 bytes; exec `execProgramBytes`), and comments were about 40 % of
+ * them.
+ *
+ * @param {string} source
+ * @param {string} [where] for error messages
+ * @returns {string}
+ */
+export const stripComments = (source, where = 'module') => {
+  /** @type {{ comments?: Array<{ start: number, end: number, type: string }> }} */
+  let ast;
+  try {
+    ast = loadParser().parse(source, {
+      sourceType: 'module',
+      allowReturnOutsideFunction: false,
+    });
+  } catch (error) {
+    throw Error(`Cannot parse ${where} to strip its comments: ${error}`);
+  }
+  const comments = [...(ast.comments ?? [])].sort((a, b) => a.start - b.start);
+  /** @type {string[]} */
+  const parts = [];
+  let at = 0;
+  for (const { start, end, type } of comments) {
+    parts.push(source.slice(at, start));
+    if (type === 'CommentBlock') {
+      const breaks = source.slice(start, end).split('\n').length - 1;
+      parts.push(breaks === 0 ? ' ' : '\n'.repeat(breaks));
+    }
+    at = end;
+  }
+  parts.push(source.slice(at));
+  return parts.join('').replace(/[ \t]+$/gm, '');
+};
+
+/**
  * @typedef {object} GuestBundle
  * @property {string} entry absolute path of the entry module
  * @property {string} guestRoot the guest package root every module lies in
@@ -110,9 +170,14 @@ export const escapeNonAscii = source =>
  * @param {object} [options]
  * @param {string} [options.guestRoot] defaults to the entry's package root,
  *   which must be a package with no dependencies
+ * @param {boolean} [options.comments] keep comments (default false:
+ *   `stripComments`)
  * @returns {Promise<GuestBundle>}
  */
-export const bundleGuest = async (entry, { guestRoot } = {}) => {
+export const bundleGuest = async (
+  entry,
+  { guestRoot, comments = false } = {},
+) => {
   const entryPath = path.resolve(entry);
   const root = path.resolve(
     guestRoot ?? findPackageRoot(path.dirname(entryPath)),
@@ -151,18 +216,30 @@ export const bundleGuest = async (entry, { guestRoot } = {}) => {
     if (isInside(file, root)) modules.add(path.relative(root, file));
     else outside.push(file);
   };
+  /**
+   * A guest module's bytes without comments; anything else unchanged.
+   * @param {string} location
+   * @param {Uint8Array} bytes
+   */
+  const stripped = (location, bytes) => {
+    if (comments || !location.endsWith('.js')) return bytes;
+    const file = url.fileURLToPath(location);
+    if (!isInside(file, root)) return bytes;
+    const text = new TextDecoder().decode(bytes);
+    return new TextEncoder().encode(stripComments(text, file));
+  };
   const recordingPowers = {
     ...readPowers,
     /** @param {string} location */
     read: async location => {
       note(location);
-      return readPowers.read(location);
+      return stripped(location, await readPowers.read(location));
     },
     /** @param {string} location */
     maybeRead: async location => {
       const bytes = await readPowers.maybeRead(location);
       if (bytes !== undefined) note(location);
-      return bytes;
+      return bytes === undefined ? bytes : stripped(location, bytes);
     },
   };
   const source = await makeBundle(
