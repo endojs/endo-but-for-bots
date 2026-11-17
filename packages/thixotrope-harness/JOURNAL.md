@@ -7185,3 +7185,110 @@ threads of one process, so a helper naming temporary directories `<pid>-<counter
 files the same directory and one removed the other's files under full-lane load (the thinking
 test failed once in the lane, never alone); the helper now uses `mkdtemp`.
 Decision: recorded. Helpers that make directories under H/tmp should use `mkdtemp`, not the pid.
+
+### J-0460 2026-11-18 M2 archive vat side - good fit
+Evidence: `guest/session/{archive,history}.js` (new), `records.js`, `context-source.js`, `turn.js`
+(commit d4591fb7a9); `test/unit/m2-w25-archive.test.js` (21 tests), `m2-w25-archive-module.test.js`
+(7 tests), helper `_m2-w25-session.js`; integration `m2-history.test.js` (acceptance 9, 2 min 3 s)
+and `m2-archive-restart.test.js` (acceptance 16, 3 min 33 s), both passing alone from the m1a
+template.
+Reading: the vat side of D-M2-1 fits the crank model directly. (1) Intent before effect is one
+heap field: crank S records `sealing` and sends `ArchivePort.seal` in the same crank, so the
+journal commits both or neither (M0 S9). (2) Durable before drop is one guard: only the answer's
+crank (Z) calls `RecordLog.dropBefore`, and only when the answer matches the intent and the range
+still starts the log; a rejection, a retired break or a mismatched answer clears the intent,
+drops nothing and retries 8 settles later. (3) Absolute record indexes and turn ordinals do not
+move when the log drops its head, so the ContextSource cursors, `RoundRequest.base` and history
+cursors kept their M1 meaning (`p<i>`, `h<n>`); `records.base()` is the only new fact readers
+need. (4) The settle crank is the one place where every kept turn is settled and no next turn
+is claimed yet, so a seal range never touches a live turn. The SIGKILL table of 4.5 is a unit
+table (9 rows, the vat's view of each: answer or break, orphan or none) over W2.8's fake: after
+every row the acknowledged segments plus the kept tail equal the full record oracle range by
+range, history shows every turn once, and the next seal succeeds (8 settles later after a
+break; an orphan's range resealed gives the same digest). In real vats the supervisor was
+SIGKILLed at S, A2, A3 and Z (rows emitted as `archive.kill.*`); the watcher's kills landed
+slightly after their files appeared, so the rows reached were: S -> after A3 with the break
+delivered (one orphan segment file, vat 0 segments); A2 -> `.part` seen, killed after the rename
+(orphan, vat unchanged); A3 -> answer committed (vat +1); Z -> after Z. After each restart: every
+turn once from the newest back to turn 1, no `.part` left, the next request's per-turn digests
+equal the ones before for 159 / 191 / 223 / 287 turns, and the next seal succeeded.
+Sealed turns' Blob handles leave the session: a unit test with WeakRefs and forced collections
+finds 0 of 64 sealed turns' input Blobs alive and every kept one alive.
+Decision: built as m2-interfaces.md 4.3-4.10 specifies; no contract change.
+
+### J-0461 2026-11-18 M2 archive flatness at 200 / 1,000 / 5,000 turns - perf
+Evidence: `perf/archive.perf.mjs` (commit e2baa09a04; the vat code at a95f2e2a16), one run,
+exec template, one session of J-9383's long-session script (a tool round and a closing round per
+turn, two staged native contexts, 9.1 deliveries per turn), grown by running every turn
+(`startTurn` outside the measured windows, the Composer inside them; W2.7's `importState` was
+not used), worker 367e78ad..., crank budget 50 M, slot ceiling 4,000,000, allocation schedule,
+log hub store, load 1.2-2.9. Each window is the 100 turns ending at the point.
+{"metric":"archive.turn.at200","msPerTurn":616.6,"perDeliveryMs":62.9,"hubMsPerTurn":286.9}
+{"metric":"archive.turn.at1000","msPerTurn":619.5,"perDeliveryMs":61.4,"hubMsPerTurn":292.5}
+{"metric":"archive.turn.at5000","msPerTurn":788,"perDeliveryMs":60.5,"hubMsPerTurn":293.8}
+{"metric":"archive.heap.at5000","heap":{"slots":409088,"ofCeiling":0.102,"snapshotBytes":24662016}}
+{"metric":"archive.hub.row.at5000","row":{"chars":14653,"ourExports":284,"answersOwed":0}}
+
+| session length | 200 | 1,000 | 5,000 | 5,000 / 200 | without the archive at 5,000 (J-9383) |
+|---|---|---|---|---|---|
+| wall time per turn | 616.6 ms | 619.5 ms | 788 ms | **1.28 (miss, target 1.25)** | 3.03-3.21 s |
+| wall per delivery (all vats) | 62.9 ms | 61.4 ms | 60.5 ms | 0.96 | 281-299 ms |
+| hub time per turn | 286.9 ms | 292.5 ms | 293.8 ms | 1.02 | 0.72 s |
+| `turn.start` median (p95) | 131 (331) ms | 127 (341) ms | 163 (344) ms | 1.24 (pass; <= 350) | 271 (1,781) ms |
+| session vat slot capacity | 409,088 (10.2 %) | 409,088 | 409,088 | 1.00 | 1,911,808 (48 %) |
+| session vat snapshot file | 24,662,016 B | same | same | 1.00 | 114 MB |
+| snapshot time each (engine, all vats) | 239 ms | 230 ms | 220 ms | 0.92 | 1.29 s |
+| hub row (chars / ourExports entries) | 13,800 / 284 | 14,281 / 284 | 14,653 / 284 | 1.06 / 1.00 | 516 KB / 10,012 |
+| kept turns / segments | 136 / 2 | 136 / 27 | 136 / 152 | | |
+| `context.rebuild` after a clean restart | 265 ms | 127 ms | 539 ms | pass (<= 5 s) | 179.6 s |
+| `history.page` newest (vat) median | 286 ms | **305 ms** | **312 ms** | 1.09; miss at 1,000 and 5,000 | 2,003 ms |
+| `history.page` archived (`History`) median | 54 ms | 55 ms | 55 ms | pass | - |
+| archive disk (segments / context.jsonl) | 95 KB / 31 KB | 1.30 MB / 0.43 MB | 7.36 MB / 2.42 MB | ~1.5 KB + 0.5 KB per archived turn | - |
+
+Reading: the archive did its job for everything that lives in the session vat and the hub: slot
+capacity, snapshot size, snapshot time, per-delivery cost, hub time per turn and the session's
+hub row are flat (0.92-1.06 x) from 200 to 5,000 turns, and the 5,000-turn session's vat is the
+same size as the 200-turn one (409,088 slots, 10 % of the ceiling, against 48 % without the
+archive). The context rebuild is 0.13-0.54 s instead of 4-180 s, one page crank plus the
+persisted projection (sealed part 21 / 59 / 276 ms, growing with the archived blob count:
+128 / 1,728 / 9,728 files). Two misses, recorded, no budget changed: (a) wall time per turn
+1.28 x at 5,000 turns: the extra 171 ms per turn is neither vat delivery time (flat, 553 ms of
+worker round trips per turn at both lengths) nor hub time (flat); the remaining candidates are
+adapter-side and grow with the transcript: the per-round projection of the whole sealed
+transcript (W2.8 J-0491: 7.5 ms per prepare at 5,000 turns, 2 prepares per turn) and the scripted
+provider's per-round `context` line, which digests the whole transcript (logContext is on because
+the measurement needs the context line) [inferred: not split by this run]. m2-interfaces 4.13
+expected this and asked W2.9's acceptance 15 to run with `logContext: false`; until M8 bounds the
+projection, the adapter's per-round cost grows. (b) `history.page` of the vat's newest page
+(6 turns, 42 records) is 286 / 305 / 312 ms median against 300: about 110 ms of floor plus about
+4.5 ms per record [inferred from min 108-111 ms and 42 records]; a bound of 40 records would put
+it at about 290 ms. It also passed at 300 turns in `m2-history` (264 ms).
+Decision: flatness targets met for slots, snapshot, hub row and `turn.start`; per-turn wall time
+misses at 1.28 x, attributed to adapter-side growth (open point 4.13; depends on M8 compaction
+and on W2.9 re-running with `logContext: false`); `history.page` misses by 2-4 % at 1,000 and
+5,000 turns: proposal for the PM, `historyPageRecords` 48 -> 40 (contract change not made).
+
+### J-0462 2026-11-18 M2 archive in the session program - awkward
+Evidence: `scripts/bundle-guest.mjs` with comments stripped, before and after this unit's files
+(other units' uncommitted work of the moment in both): 169,197 -> 186,264 bytes of the 200,000
+`sessionProgramBytes` (+17,067; archive.js 6.4 KB, history.js 6.0 KB stripped, turn.js +6 KB of
+seams and accessors less the 5.8 KB moved to history.js, records.js +2 KB).
+Reading: the vat side of the archive plus W2.6's and W2.7's seams cost 17 KB of bundle; about
+13.7 KB remain for the rest of group B (W2.6's prompt texts, W2.7's session.js switch). The
+bundler keeps indentation and line breaks, so a module costs about 1.3 x its stripped source.
+Decision: recorded for W2.9; no trimming that would cost clarity was done.
+
+### J-0463 2026-11-18 M2 archive vat side - deviation
+Evidence: `archive.js`, `turn.js`; the unit tests.
+Reading: (1) A seal answer that does not match the intent clears the intent and counts as a
+failure (retry 8 settles later); without this an adapter answering a malformed entry would stop
+sealing for the session's life. (2) Only settled turns enter a range: the range walk checks each
+turn's `TurnSettled` inside its span (an imported session may end with an unsettled turn).
+(3) `SealRequest.kinds` is built over the range in segment order (`inCallOrder`); the letter
+sequence equals log order's because only tool results move. (4) The turn deadline is armed again
+when a turn is reattached to fresh ports, and disarmed by the endpoint's `releaseTurn` at the
+settle (no separate `disarm` send). (5) `beginDelete` settles the current turn `cancelled` in the
+same crank if tool calls are in flight (7.1: it does not wait). (6) Seals are not chained in crank
+Z: an `importState` faster than seals leaves a backlog that drains one seal per import chunk or
+settle (W2.7 should know).
+Decision: within the contract; recorded for W2.7 and W2.9.
