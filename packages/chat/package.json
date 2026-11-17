@@ -43,6 +43,7 @@
     "test:xs": "exit 0",
     "setup-lal": "endo run --UNCONFINED setup-lal.js --powers @agent",
     "setup-llm-provider": "endo run --UNCONFINED setup-llm-provider.js --powers @agent",
+    "setup-prompt-templates": "endo run --UNCONFINED setup-prompt-templates.js --powers @agent",
     "test:item-actions": "node test/inventory-item-actions/run.mjs",
     "test:safe-datatransfer": "node test/safe-datatransfer/run.mjs"
   },
@@ -64,6 +65,7 @@
     "@endo/platform": "workspace:^",
     "@endo/preact-container": "workspace:^",
     "@endo/promise-kit": "workspace:^",
+    "@endo/prompt-templates": "workspace:^",
     "@endo/sha256": "workspace:^",
     "@endo/space-channel": "workspace:^",
     "@endo/space-chat": "workspace:^",

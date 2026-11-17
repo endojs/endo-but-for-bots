@@ -393,6 +393,7 @@ harden(FormView);
  * @param {(messageNumber: number) => Promise<string[]>} [options.getMessageEdgeNames] - Get edge names for a message
  * @param {(ref: unknown) => AsyncIterable<unknown>} options.iterateReader - Ref iterator factory
  * @param {() => 'inbox' | 'channel' | undefined} [options.getContext] - Returns current UI context
+ * @param {typeof getCommand} [options.resolveCommand] - Resolves a command name, for callers with commands beyond the registry
  * @returns {InlineCommandFormAPI}
  */
 export const createInlineCommandForm = ({
@@ -408,6 +409,7 @@ export const createInlineCommandForm = ({
   getMessageEdgeNames,
   iterateReader,
   getContext,
+  resolveCommand = getCommand,
 }) => {
   /** @type {string | null} */
   let currentCommand = null;
@@ -597,7 +599,7 @@ export const createInlineCommandForm = ({
       return inlineDefineInstance.isValid();
     }
 
-    const command = getCommand(currentCommand);
+    const command = resolveCommand(currentCommand);
     if (!command) return false;
 
     const validationContext = getContext ? getContext() : undefined;
@@ -1101,7 +1103,7 @@ export const createInlineCommandForm = ({
     fieldRuntimes = new Map();
     fieldOrder = [];
 
-    const command = getCommand(commandName);
+    const command = resolveCommand(commandName);
     if (!command) {
       pushViewState();
       return;
