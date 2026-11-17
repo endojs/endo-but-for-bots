@@ -41,6 +41,13 @@
  *   it out, and only the most recent `retainedTurnHandles` are kept (C-7,
  *   J-0251, J-9152).
  *
+ * - M2 (D-M2-1, W2.5): settled turns' records leave the vat in segments of
+ *   the record archive (archive.js): a seal starts in the settle crank and
+ *   the records are dropped when its durable answer arrives; turn infos of
+ *   sealed turns go with them. History pages (history.js) and the
+ *   ContextSource (context-source.js) start at the archive's `sealedTo`;
+ *   RoundRequests carry `base.archive`.
+ *
  * Data-keyed state lives in `Map`s (rule 12.10); records and events use the
  * closed shapes of `guest/lib/interfaces.js`.
  */
@@ -48,14 +55,12 @@ import { m1bInterfaces, shapes, texts, textOf } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { runAgenticTurn } from '../lib/turn-engine.js';
 import { checkSubmission } from '../lib/pending-queue.js';
-import {
-  boundToolOutput,
-  fitsFrame,
-  utf8Bytes,
-  previewText,
-} from '../lib/bounded.js';
+import { boundToolOutput, fitsFrame, previewText } from '../lib/bounded.js';
+import { makeSessionArchive } from './archive.js';
+import { makeContextSource } from './context-source.js';
+import { makeHistory } from './history.js';
 import { inCallOrder } from './records.js';
-import { blobsOf, isStaged, submissionField } from './staging.js';
+import { isStaged, submissionField } from './staging.js';
 import { toolSetFor, toolTable } from './tool-table.js';
 import { turnHooks } from './turn-hooks.js';
 
@@ -75,11 +80,6 @@ const SETTLED = harden(Error('turn settled'));
 export const CANCELLED_BEFORE_RUN =
   'the turn was cancelled before this call ran';
 
-/** Bytes kept free in a history page for its wrapper. */
-const PAGE_SLACK = 512;
-/** Bytes one ToolIntents record may take in a preview. */
-const PREVIEW_INTENTS_BYTES = 6144;
-
 /** @param {unknown} error */
 const messageOf = error => {
   if (typeof error === 'object' && error !== null) {
@@ -93,28 +93,8 @@ const messageOf = error => {
   return `${error}`;
 };
 
-/**
- * Exact UTF-8 bytes of the strings (keys included) of a plain record tree:
- * records, arrays, strings, numbers, booleans. Cheaper than `messageBytes`,
- * which asks `passStyleOf` about every node; for the vat's own records,
- * which hold no remotables.
- * @param {unknown} value
- * @returns {number}
- */
-export const plainBytes = value => {
-  if (typeof value === 'string') return utf8Bytes(value);
-  if (typeof value !== 'object' || value === null) return 0;
-  let total = 0;
-  if (Array.isArray(value)) {
-    for (const item of value) total += plainBytes(item);
-    return total;
-  }
-  for (const key of Object.keys(value)) {
-    total += key.length + plainBytes(/** @type {any} */ (value)[key]);
-  }
-  return total;
-};
-harden(plainBytes);
+// Moved to records.js (M2 W2.5); kept here for existing importers.
+export { plainBytes } from './records.js';
 
 /** @param {string} text */
 const reason = text => previewText(text, limits.reasonUnits);
@@ -138,6 +118,7 @@ const zeroUsage = () => ({
  * @property {string} [error]
  * @property {string} [resolution]
  * @property {any} [finished] promise kit while the turn is live
+ * @property {boolean} [sealed] the turn's records are archived (M2)
  */
 
 /**
@@ -182,6 +163,8 @@ const zeroUsage = () => ({
  * @property {{ round: number, partial: any } | undefined} checkpoint the
  *   latest progress of the streaming round (W1b.1): kept outside the log,
  *   appended as one Partial only if the round ends without roundFinal
+ * @property {number} [deadlineMs] the turn deadline fired (M2 seam 4): the
+ *   cancel settles `failed` with `textOf.turnDeadline`
  */
 
 /**
@@ -196,8 +179,9 @@ const zeroUsage = () => ({
  * @param {typeof turnHooks} [options.hooks]
  * @param {readonly any[]} [options.table] tool table
  * @param {number} [options.maxToolRounds]
- * @param {any} [options.contextSource] W1b.2: the session's ContextSource,
- *   sent in every RoundRequest
+ * @param {any} [options.contextSource] ignored from M2 on: the runner
+ *   builds the session's ContextSource itself (it needs the archive;
+ *   m2-interfaces.md 2.4 item 6)
  */
 export const makeTurnRunner = ({
   config,
@@ -210,7 +194,7 @@ export const makeTurnRunner = ({
   hooks = turnHooks,
   table = toolTable,
   maxToolRounds = limits.maxToolRounds,
-  contextSource,
+  contextSource: _ignoredContextSource,
 }) => {
   /**
    * Records before this index went out in a RoundRequest (W1b.2): per
@@ -225,6 +209,8 @@ export const makeTurnRunner = ({
   let core;
 
   let lastKnownTime = /** @type {number} */ (config.createdAt);
+  /** M2 seam 4: the turn deadline (0 or absent: off). */
+  const turnDeadlineMs = /** @type {number} */ (config.turnDeadlineMs ?? 0);
   /** @param {unknown} at */
   const see = at => {
     if (typeof at === 'number' && at > lastKnownTime) lastKnownTime = at;
@@ -246,6 +232,48 @@ export const makeTurnRunner = ({
    * @type {Map<string, any>}
    */
   const handles = new Map();
+  /** the session is being deleted (7.1): no claim, no seal */
+  let deleting = false;
+
+  // ------------------------------------------------------------ the archive
+
+  /**
+   * M2 W2.5 (D-M2-1; m2-interfaces.md 4): settled turns' records leave the
+   * vat in segments. Crank Z drops the sealed turns' infos; an archived
+   * outcome-unknown turn not yet resolved stays resolvable (4.6).
+   */
+  const archive = makeSessionArchive({
+    records,
+    onSealed: dropped => {
+      for (const turnId of dropped) {
+        const info = turns.get(turnId);
+        turns.delete(turnId);
+        if (info !== undefined) {
+          info.sealed = true;
+          if (
+            info.state === 'outcome-unknown' &&
+            info.resolution === undefined
+          ) {
+            archive.keepUnresolved(turnId, info);
+          }
+        }
+      }
+    },
+    onNotSealed: (error, ports) => {
+      // A retired break: the adapter restarted; its ports are tombstones
+      // unless the current turn learns that from its own lease (4.4).
+      if (isRestartSignal(error) && current?.ports !== ports) {
+        dropHeld(ports);
+      }
+    },
+  });
+  const contextSource = makeContextSource({ records, archive });
+  const history = makeHistory({
+    records,
+    turnInfo: turnId => turns.get(turnId),
+    turnHandle: info => turnHandle(info),
+    archive,
+  });
 
   /**
    * The ports of the current adapter incarnation and their tool set, held
@@ -457,6 +485,16 @@ export const makeTurnRunner = ({
     info.finished = undefined;
     // The settled turn is a record now; its Turn stays only as a recent handle.
     remember(active.turnId, active.turn);
+    // M2 (m2-interfaces.md 4.3): seal before the next entry is claimed, so
+    // the range holds only turns settled before this crank.
+    try {
+      archive.maybeSeal({
+        ports: active.ports ?? held?.ports,
+        context: contextSource,
+      });
+    } catch {
+      // Not sealed; the records stay and a later settle tries again.
+    }
 
     // Claim the next entry in this crank, so the batch carries the queue
     // after the claim (section 6.3), but a claim that throws must lose
@@ -477,6 +515,16 @@ export const makeTurnRunner = ({
     if (claimFailure !== undefined) throw claimFailure.error;
     return true;
   };
+
+  /**
+   * How a cancelled turn settles: `cancelled`, or `failed` with the turn
+   * deadline's text when the deadline cancelled it (M2 seam 4).
+   * @param {ActiveTurn} active
+   */
+  const cancelledOutcome = active =>
+    active.deadlineMs === undefined
+      ? { status: 'cancelled' }
+      : { status: 'failed', error: textOf.turnDeadline(active.deadlineMs) };
 
   // ------------------------------------------------------------ tool calls
 
@@ -591,7 +639,7 @@ export const makeTurnRunner = ({
       }
       calls.waiting = [];
       calls.issued = 0;
-      settle(active, { status: 'cancelled' });
+      settle(active, cancelledOutcome(active));
       return;
     }
     if (calls.unsettled > 0) {
@@ -759,7 +807,8 @@ export const makeTurnRunner = ({
    * @param {number} round
    */
   const roundRequest = (active, round) => {
-    const from = sentUpTo;
+    // Records below the archive's `sealedTo` are in segments (M2, 4.8).
+    const from = Math.max(sentUpTo, records.base());
     const to = records.count();
     sentUpTo = to;
     /** @type {Record<string, any>} */
@@ -767,17 +816,26 @@ export const makeTurnRunner = ({
     if (config.reasoningEffort !== undefined) {
       options.reasoningEffort = config.reasoningEffort;
     }
+    // M2 seam 2 (R4-92).
+    if (config.maxOutputTokens !== undefined) {
+      options.maxOutputTokens = config.maxOutputTokens;
+    }
+    const archived = archive.any() ? { archive: archive.state() } : {};
     const make = (/** @type {number} */ count, /** @type {any[]} */ append) =>
       harden({
         turn: active.turn,
         sink: active.sink,
         turnId: active.turnId,
         round,
-        base: harden({ count, epoch: 0 }),
+        base: harden({ count, epoch: 0, ...archived }),
         append: harden(append),
         tools: active.tools.descriptions,
         options: harden(options),
-        ...(contextSource === undefined ? {} : { context: contextSource }),
+        context: contextSource,
+        // M2 seam 1: the composed prompt, inline or staged.
+        ...(config.systemPrompt === undefined
+          ? {}
+          : { system: config.systemPrompt }),
       });
     const append = inCallOrder(records.since(from));
     if (append.length <= limits.maxAppendRecords) {
@@ -818,7 +876,7 @@ export const makeTurnRunner = ({
   const engineFailed = (active, error) => {
     if (current !== active) return;
     if (active.state === 'cancelling') {
-      settle(active, { status: 'cancelled' });
+      settle(active, cancelledOutcome(active));
     } else {
       settle(active, { status: 'failed', error: messageOf(error) });
     }
@@ -874,6 +932,19 @@ export const makeTurnRunner = ({
     if (usage.context !== undefined) {
       sum.context = harden({ ...usage.context });
       totals.context = { ...usage.context };
+    }
+    // M2 seam 3 (R4-33): the window is the catalogue's, stored at creation.
+    if (config.contextLength !== undefined) {
+      totals.context = {
+        ...totals.context,
+        windowTokens: config.contextLength,
+      };
+      if (sum.context !== undefined) {
+        sum.context = harden({
+          ...sum.context,
+          windowTokens: config.contextLength,
+        });
+      }
     }
     active.usage = sum;
   };
@@ -972,6 +1043,14 @@ export const makeTurnRunner = ({
         // Contract 2.3 item 3: to the entry of an issued, unsettled call.
         const { active } = /** @type {any} */ (this).state;
         if (current !== active) return;
+        // M2 seam 4: the turn deadline does what Turn.cancel() does and
+        // settles the turn failed (R4-49: running calls finish first).
+        if (opId === textOf.turnDeadlineOpId(active.turnId)) {
+          if (!(turnDeadlineMs > 0) || active.state !== 'running') return;
+          active.deadlineMs = turnDeadlineMs;
+          cancel(active.info);
+          return;
+        }
         const call = active.calls?.running.get(opId);
         call?.entry.deadline?.(harden({ opId }), call.context);
       },
@@ -1037,6 +1116,17 @@ export const makeTurnRunner = ({
         },
         error => onLeaseBroken(active, ports, error),
       );
+    // M2 seam 4: the turn deadline, armed when the turn starts on ports
+    // (the endpoint's releaseTurn at the settle disarms it).
+    if (turnDeadlineMs > 0) {
+      E.sendOnly(ports.endpoint).armDeadline(
+        harden({
+          turn: active.turn,
+          opId: textOf.turnDeadlineOpId(active.turnId),
+          ms: turnDeadlineMs,
+        }),
+      );
+    }
     if (again && active.request !== undefined) {
       E.sendOnly(ports.endpoint).startRound(active.request);
     } else if (!active.engineStarted) {
@@ -1238,7 +1328,7 @@ export const makeTurnRunner = ({
    * @returns {ActiveTurn | undefined}
    */
   const claimNext = () => {
-    if (current !== undefined) return undefined;
+    if (current !== undefined || deleting) return undefined;
     const item = queue.first();
     if (item !== undefined) {
       // The receipt keeps the turn id, not the turn (m2-interfaces.md 5.3).
@@ -1293,7 +1383,7 @@ export const makeTurnRunner = ({
       hook({ core, active, round: active.round });
     }
     if (active.calls === undefined || active.calls.inFlight === 0) {
-      settle(active, { status: 'cancelled' });
+      settle(active, cancelledOutcome(active));
     } else {
       // R4-49: running calls are not interrupted; settle after the last.
       flush();
@@ -1315,7 +1405,9 @@ export const makeTurnRunner = ({
       /** @param {string} [cursor] W1b.1: the turn's records in full */
       getContent(cursor) {
         const { info } = /** @type {any} */ (this).state;
-        return contentPage(info.turnId, cursor);
+        // An archived turn is read through the agent host's History (4.9).
+        if (info.sealed) throw Error(texts.turnSealed);
+        return history.content(info.turnId, cursor);
       },
       getStatus() {
         const { info } = /** @type {any} */ (this).state;
@@ -1342,6 +1434,9 @@ export const makeTurnRunner = ({
         if (info.resolution !== undefined) {
           throw Error(texts.turnAlreadyResolved);
         }
+        if (info.sealed && archive.unresolved.get(info.turnId) !== info) {
+          throw Error(texts.turnArchivedUnresolvable);
+        }
         records.append({
           kind: 'turn-resolved',
           turnId: info.turnId,
@@ -1349,6 +1444,7 @@ export const makeTurnRunner = ({
           at: lastKnownTime,
         });
         info.resolution = note;
+        archive.unresolved.delete(info.turnId);
       },
     },
   );
@@ -1388,201 +1484,67 @@ export const makeTurnRunner = ({
    * @param {string} turnId
    */
   const turnById = turnId => {
-    const info = turns.get(turnId);
+    const info = turns.get(turnId) ?? archive.unresolved.get(turnId);
     return info === undefined ? undefined : turnHandle(info);
   };
 
-  // ------------------------------------------------------------ previews
-
   /**
-   * Previews of records, by record (records are immutable): a page that
-   * shows a turn again costs a lookup per record. Records whose text needs no
-   * cut are their own preview.
-   * @type {WeakMap<object, { record: any, cut: boolean, bytes: number }>}
-   */
-  const previews = new WeakMap();
-
-  /**
-   * A record with its text fields cut to previews, and its exact string
-   * bytes (keys included, as `messageBytes` counts them).
-   * @param {any} record
-   * @returns {{ record: any, cut: boolean, bytes: number }}
-   */
-  const previewRecord = record => {
-    const known = previews.get(record);
-    if (known !== undefined) return known;
-    // A staged field is already its preview (with its blob).
-    const message = (/** @type {any} */ t) =>
-      isStaged(t) ? t : previewText(t, limits.messagePreviewUnits);
-    const tool = (/** @type {any} */ t) =>
-      isStaged(t) ? t : previewText(t, limits.toolPreviewUnits);
-    /** @type {any} */
-    let shown = record;
-    let cut = false;
-    switch (record.kind) {
-      case 'turn-started': {
-        const input = message(record.input);
-        if (input !== record.input) shown = harden({ ...record, input });
-        break;
-      }
-      case 'partial':
-      case 'round-settled': {
-        const t = message(record.text);
-        if (t !== record.text) shown = harden({ ...record, text: t });
-        break;
-      }
-      case 'turn-settled': {
-        if (record.final === undefined) break;
-        const final = message(record.final);
-        if (final !== record.final) shown = harden({ ...record, final });
-        break;
-      }
-      case 'tool-result': {
-        const result = tool(record.result);
-        if (result !== record.result) shown = harden({ ...record, result });
-        break;
-      }
-      case 'tool-intents': {
-        let bytes = 0;
-        let changed = false;
-        /** @type {any[]} */
-        const intents = [];
-        for (const intent of record.intents) {
-          const args = tool(intent.args);
-          const one =
-            args === intent.args ? intent : harden({ ...intent, args });
-          if (one !== intent) changed = true;
-          bytes += plainBytes(one);
-          if (bytes > PREVIEW_INTENTS_BYTES && intents.length > 0) {
-            changed = true;
-            break;
-          }
-          intents.push(one);
-        }
-        if (changed) shown = harden({ ...record, intents: harden(intents) });
-        break;
-      }
-      default:
-        break;
-    }
-    cut = shown !== record || blobsOf(record).length > 0;
-    const preview = harden({ record: shown, cut, bytes: plainBytes(shown) });
-    previews.set(record, preview);
-    return preview;
-  };
-
-  /** Bytes of a TurnPreview besides its records (keys, ids, state). */
-  const TURN_PREVIEW_KEYS_BYTES = 64;
-
-  /**
-   * One turn as a history page shows it: records in call order, previews,
-   * at most `historyTurnRecords` records, and at most `budget` bytes (a
-   * longer turn shows its first records and is marked cut).
+   * `Session.findTurn` (m2-interfaces.md 4.9): a kept turn's handle, or an
+   * archived unresolved one's; another archived turn throws `turnSealed`,
+   * anything else `unknownTurn`. Turn ids are `t<ordinal>` (F.2 d).
    * @param {string} turnId
-   * @param {number} [budget]
-   * @returns {{ preview: any, bytes: number }}
    */
-  const previewTurn = (turnId, budget = Infinity) => {
-    const info = /** @type {TurnInfo} */ (turns.get(turnId));
-    const ordered = inCallOrder(records.ofTurn(turnId));
-    let cut = ordered.length > limits.historyTurnRecords;
-    let bytes = TURN_PREVIEW_KEYS_BYTES + turnId.length + info.state.length;
-    /** @type {any[]} */
-    const shown = [];
-    for (const record of ordered.slice(0, limits.historyTurnRecords)) {
-      const preview = previewRecord(record);
-      if (bytes + preview.bytes > budget) {
-        cut = true;
-        break;
-      }
-      if (preview.cut) cut = true;
-      shown.push(preview.record);
-      bytes += preview.bytes;
+  const findTurn = turnId => {
+    const handle = turnById(turnId);
+    if (handle !== undefined) return handle;
+    const match = /^t([1-9][0-9]*)$/.exec(turnId);
+    if (match !== null && Number(match[1]) <= turnCounter) {
+      throw Error(texts.turnSealed);
     }
-    /** @type {Record<string, any>} */
-    const preview = {
-      turn: turnHandle(info),
-      turnId,
-      state: info.state,
-      at: info.at,
-      records: harden(shown),
-    };
-    if (cut) preview.cut = true;
-    return { preview: harden(preview), bytes };
+    throw Error(texts.unknownTurn);
   };
 
-  /**
-   * Section 3.1: newest turn first, at most `historyPageTurns` turns and
-   * `frameBytes`. The cursor `h<n>` means "the turns before the n-th".
-   * @param {string} [cursor]
-   */
-  const historyPage = cursor => {
-    const ids = records.turnIds();
-    let end = ids.length;
-    if (cursor !== undefined) {
-      const match = /^h([1-9][0-9]*)$/.exec(cursor);
-      const n = match === null ? NaN : Number(match[1]);
-      if (!(Number.isSafeInteger(n) && n <= ids.length)) {
-        throw Error(texts.badCursor);
-      }
-      end = n;
-    }
-    const budget = limits.frameBytes - PAGE_SLACK;
-    /** @type {any[]} */
-    const page = [];
-    let used = 0;
-    let index = end - 1;
-    while (index >= 0 && page.length < limits.historyPageTurns) {
-      const whole = previewTurn(ids[index]);
-      if (used + whole.bytes > budget) {
-        if (page.length > 0) break;
-        // The newest turn alone is over the page: show its first records.
-        page.push(previewTurn(ids[index], budget).preview);
-        index -= 1;
-        break;
-      }
-      page.push(whole.preview);
-      used += whole.bytes;
-      index -= 1;
-    }
-    /** @type {Record<string, any>} */
-    const result = { turns: harden(page) };
-    if (index >= 0) result.next = `h${index + 1}`;
-    return harden(result);
-  };
+  // ------------------------------------------------------------ imported records
 
   /**
-   * W1b.1 `Turn.getContent`: the turn's records in log order, in full, at
-   * most `pageRecords` and `frameBytes` per page; cursor `c<n>` (n > 0).
-   * @param {string} turnId
-   * @param {string} [cursor]
+   * W2.7 (m2-interfaces.md 2.4 item 5): append imported records in log
+   * order, rebuild the turn infos, advance the turn counter, then seal as
+   * section 4.3 allows.
+   * @param {readonly any[]} list
    */
-  const contentPage = (turnId, cursor) => {
-    const own = records.ofTurn(turnId);
-    let start = 0;
-    if (cursor !== undefined) {
-      const match = /^c([1-9][0-9]*)$/.exec(cursor);
-      start = match === null ? NaN : Number(match[1]);
-      if (!(Number.isSafeInteger(start) && start < own.length)) {
-        throw Error(texts.badCursor);
+  const importTurns = list => {
+    current === undefined || Fail`a turn is current`;
+    for (const record of list) {
+      if (record.kind === 'turn-started') {
+        record.turnId === `t${turnCounter + 1}` ||
+          Fail`imported turn ${record.turnId} is out of order`;
+      }
+      records.append(record);
+      see(record.at);
+      const info =
+        turns.get(record.turnId) ?? archive.unresolved.get(record.turnId);
+      if (record.kind === 'turn-started') {
+        turnCounter += 1;
+        turns.set(record.turnId, {
+          turnId: record.turnId,
+          input: record.input,
+          at: record.at,
+          state: 'running',
+          round: 0,
+        });
+      } else if (info === undefined) {
+        // A resolution of a turn archived before the import: nothing kept.
+      } else if (record.kind === 'turn-settled') {
+        info.state = record.status;
+        if (record.error !== undefined) info.error = record.error;
+      } else if (record.kind === 'turn-resolved') {
+        info.resolution = record.note;
+        archive.unresolved.delete(record.turnId);
+      } else if (typeof record.round === 'number') {
+        info.round = Math.max(info.round, record.round);
       }
     }
-    const budget = limits.frameBytes - PAGE_SLACK;
-    /** @type {any[]} */
-    const page = [];
-    let used = 0;
-    let index = start;
-    while (index < own.length && page.length < limits.pageRecords) {
-      const bytes = plainBytes(own[index]);
-      if (page.length > 0 && used + bytes > budget) break;
-      page.push(own[index]);
-      used += bytes;
-      index += 1;
-    }
-    /** @type {Record<string, any>} */
-    const result = { records: harden(page) };
-    if (index < own.length) result.next = `c${index}`;
-    return harden(result);
+    archive.maybeSeal({ ports: held?.ports, context: contextSource });
   };
 
   // ------------------------------------------------------------ the runner
@@ -1617,6 +1579,49 @@ export const makeTurnRunner = ({
     },
     turnHandle,
     turnById,
+    findTurn,
+    /** The archive's state and index (W2.7's export and session.js). */
+    archive: harden({
+      state: archive.state,
+      segments: archive.segments,
+      entries: archive.entries,
+    }),
+    /**
+     * The fence of `SessionInternal.deleteSelf` (7.1): no claim and no seal
+     * from now on; the current turn is cancelled without waiting for its
+     * tool calls.
+     */
+    beginDelete: () => {
+      deleting = true;
+      archive.fence();
+      const active = current;
+      if (active !== undefined) {
+        cancel(active.info);
+        if (current === active) settle(active, { status: 'cancelled' });
+      }
+      flush();
+    },
+    deleting: () => deleting,
+    importTurns,
+    /**
+     * Adopt an archive the adapter imported (W2.7), before any record.
+     * @param {{ archive: any, segments: readonly any[] }} imported
+     */
+    importArchive: imported => {
+      archive.adopt(imported);
+      turnCounter = imported.archive.sealedTurns;
+    },
+    /** @param {any} imported UsageTotals of an imported session */
+    importUsage: imported => {
+      totals.inputTokens = imported.inputTokens;
+      totals.outputTokens = imported.outputTokens;
+      totals.cachedInputTokens = imported.cachedInputTokens;
+      totals.cacheWriteInputTokens = imported.cacheWriteInputTokens;
+      totals.reasoningOutputTokens = imported.reasoningOutputTokens;
+      totals.context = { ...imported.context };
+      totals.turns = imported.turns;
+      totals.incompleteTurns = imported.incompleteTurns;
+    },
     /**
      * An outside publish broke with the retired text: the adapter
      * restarted; ports with this publisher are dead. A turn using them
@@ -1634,6 +1639,7 @@ export const makeTurnRunner = ({
      * @param {number} at
      */
     startTurn: (input, at) => {
+      if (deleting) throw Error(texts.sessionDeleting);
       // Blank and over-inlineBytes text are refused as enqueueOnce refuses
       // them; the frame rule rests on the session (J-9150, J-9369).
       checkSubmission(isStaged(input) ? input : { text: input });
@@ -1649,11 +1655,10 @@ export const makeTurnRunner = ({
       return harden({
         input: current.info.input,
         turn: current.turn,
-        history: previewTurn(current.turnId, limits.frameBytes - PAGE_SLACK)
-          .preview,
+        history: history.preview(current.turnId).preview,
       });
     },
-    historyPage,
+    historyPage: history.page,
     usage: usageTotals,
     activity: () => (current === undefined ? restActivity : 'working'),
     isLive,
