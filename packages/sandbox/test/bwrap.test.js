@@ -1994,6 +1994,86 @@ test('bwrap spawn rejects a malformed daemon /proc stat line', async t => {
   t.is(children.length, 0);
 });
 
+test('bwrap spawn rejects a daemon /proc stat line with no comm terminator', async t => {
+  if (process.platform !== 'linux') {
+    t.pass('process identity is read only on Linux');
+    return;
+  }
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({
+      env: {},
+      childProcess,
+      fs: makeStatOverrideFs(() =>
+        Array.from({ length: 30 }, (_, i) => String(i)).join(' '),
+      ),
+    })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  await t.throwsAsync(driver.spawn(slice, ['/bin/true'], {}), {
+    message: /could not read daemon process identity/,
+  });
+  t.is(children.length, 0);
+});
+
+test('process-group anchor skips its watchdog without a /proc start time', async t => {
+  if (process.platform !== 'linux') {
+    t.pass('the anchor script is exercised against a real /bin/sh on Linux');
+    return;
+  }
+  /** @type {string[]} */
+  let anchorArgs = [];
+  const { childProcess: stub } = makeStubChildProcess({ closeOnKill: true });
+  const childProcess = {
+    /**
+     * @param {string} _program
+     * @param {string[]} args
+     */
+    spawn: (_program, args) => {
+      anchorArgs = args;
+      return stub.spawn();
+    },
+  };
+  await prepareStubbedSlice(childProcess);
+  const script = anchorArgs[1];
+  t.is(typeof script, 'string');
+  // Run the captured script with the sentinel in place of a start time.
+  // A watchdog that fired at once would SIGKILL the group before the
+  // command printed.
+  const child = nodeSpawn(
+    '/bin/sh',
+    [
+      '-c',
+      script,
+      'anchor-test',
+      String(process.pid),
+      'not-applicable',
+      '/bin/sh',
+      '-c',
+      'sleep 1; echo survived',
+    ],
+    { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  let output = '';
+  child.stdout.on('data', chunk => {
+    output += chunk;
+  });
+  const exit = await new Promise(resolve => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+  try {
+    process.kill(-(/** @type {number} */ (child.pid)), 'SIGKILL');
+  } catch {
+    // The group may already be empty.
+  }
+  t.deepEqual(exit, { code: 0, signal: null });
+  t.is(output.trim(), 'survived');
+});
+
 test('failed teardown retains its child until a later close permits cleanup', async t => {
   // Guards the hang: ownership ends only on 'close', so
   // without a bound this teardown never settles and `dispose()` wedges
