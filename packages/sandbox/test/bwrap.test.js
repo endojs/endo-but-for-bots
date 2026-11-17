@@ -2026,20 +2026,20 @@ test('process-group anchor skips its watchdog without a /proc start time', async
     return;
   }
   /** @type {string[]} */
-  let anchorArgs = [];
+  let anchorArguments = [];
   const { childProcess: stub } = makeStubChildProcess({ closeOnKill: true });
   const childProcess = {
     /**
      * @param {string} _program
-     * @param {string[]} args
+     * @param {string[]} spawnArguments
      */
-    spawn: (_program, args) => {
-      anchorArgs = args;
+    spawn: (_program, spawnArguments) => {
+      anchorArguments = spawnArguments;
       return stub.spawn();
     },
   };
   await prepareStubbedSlice(childProcess);
-  const script = anchorArgs[1];
+  const script = anchorArguments[1];
   t.is(typeof script, 'string');
   // Run the captured script with the sentinel in place of a start time.
   // A watchdog that fired at once would SIGKILL the group before the
