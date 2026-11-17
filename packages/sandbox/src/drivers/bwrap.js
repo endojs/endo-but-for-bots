@@ -880,12 +880,15 @@ export const makeBwrapDriver = ({
       throw makeError(X`bwrap operation admission aborted`);
     }
     try {
-      const fs = await import('fs');
-      const parentStat = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8');
-      const closeParen = parentStat.lastIndexOf(')');
-      const parentStartTime = parentStat.slice(closeParen + 2).split(' ')[19];
-      if (closeParen < 0 || parentStartTime === undefined) {
-        throw Error('could not read daemon process identity');
+      let parentStartTime = 'not-applicable';
+      if (process.platform === 'linux') {
+        const fs = await import('fs');
+        const parentStat = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf8');
+        const closeParen = parentStat.lastIndexOf(')');
+        parentStartTime = parentStat.slice(closeParen + 2).split(' ')[19];
+        if (closeParen < 0 || parentStartTime === undefined) {
+          throw Error('could not read daemon process identity');
+        }
       }
       child = cp.spawn(
         '/bin/sh',
