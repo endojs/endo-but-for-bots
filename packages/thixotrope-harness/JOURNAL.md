@@ -7062,3 +7062,126 @@ and a session (acceptance 7 and 11 are W2.9's); no Ironhorse workload was run by
 Open for W2.7: pass `defaultBackend`/`defaultModelId` in the resolver context and in the
 `listModels` forward, and copy `resolved.contextLength`/`maxOutputTokens` into `SessionConfig`.
 Decision: as built; the factory half is W2.7's.
+
+### J-0420 2026-11-18 M2 Anthropic provider - good fit
+Evidence: `AH/providers/anthropic.js`, `retry.js`, `round.js` (`{ nativeContext }` events),
+`test/adapter/m2-w21b-anthropic.test.js` (16 tests), `m2-w21b-retry.test.js` (11),
+`test/integration/m2-providers.test.js` (3), at `081d8260ba`, `bb5ec0ad35`, `a83ac9c936`.
+Reading: the Anthropic Messages provider is a second `stream({ projection, signal })` generator
+over W2.1a's round driver, as J-0410 predicted: dispatch, progress checkpoints, staging, the one
+`roundFinal`/`roundFailed` and cancel are shared and untouched. Signed thinking never enters a
+vat as text: the round driver stages it with no preview as `RoundResult.nativeContext` (M1b's
+always-staged field), the vat keeps only the handle, and the projection replays it in process.
+Retries live entirely in the adapter between the attempt and the round: a retried attempt leaves
+nothing in the round (events before the first delivery are held and dropped), so the vat sees
+exactly one outcome per round however many requests were made, and a retry wait costs no crank.
+Through the daemon (one served m1a template state, a Secret written through the manager's
+`SecretWriter`, a `ReadGrant`, `makeBackend` of both kinds, sessions created with a model the
+catalogue knows): acceptance 1 passes on OpenRouter and Anthropic (5 deltas per reply each),
+acceptance 6 (the server saw the connection close 51 ms after `Turn.cancel()`; the turn ends
+`cancelled`) and acceptance 8 (429 with `Retry-After: 1` asked twice, turn 1,325-1,352 ms; a stream
+cut after a delta asked once and failed with `texts.openRouterUnreachable`). The file runs alone
+in about 54 s.
+Decision: good fit; no vat code, no core change, no bundle bytes (the provider and retry modules
+are adapter-only).
+
+### J-0421 2026-11-18 M2 retry and timeouts - deviation
+Evidence: `retry.js`, `anthropic.js`, `openrouter.js`, contract commit `3f53d07399`
+(`m2-interfaces.md` 8.1, 8.2, 14); open decisions 12 and 13 (architecture 13).
+Reading: implemented defaults, each a departure the plan names or a choice the spec leaves open:
+(1) Open decision 12 applied to the Anthropic API slot: an overload (HTTP 529, or a stream
+`error` event of type `overloaded_error`, also `api_error` and `rate_limit_error`) is retried
+while nothing was delivered, like any 5xx; R4-77 says only "the SDK's default retries
+[inferred]". The SDK does not retry a mid-stream error event; the harness does when no text was
+published. To make that possible the provider reports a stream's usage with its outcome, not at
+`message_start`: a failure before any text leaves the input count it was told behind (the API is
+assumed not to bill an errored request [inferred], `[real-provider]` to confirm), and a failure
+after text reports the usage seen with `roundFailed`. (2) Open decision 13: the API reports no
+window, so the provider's usage carries `windowTokens: 0` and a configured window comes from the
+session's `contextLength` (seam 3 of m2-interfaces 2.4, filled by W2.2's resolver at creation);
+nothing in the provider reads a window. (3) Anthropic schedule `min(8 s, max(Retry-After,
+500 ms x 2^(n-1)))`, 3 attempts, as the contract table; the SDK honours a Retry-After up to 60 s,
+the contract caps it at 8 s, so a long server wait is cut short (kept as written). The API's
+`retry-after-ms` header is read before `retry-after`. (4) One timeout retry for both providers
+(lal's rule; the SDK retries timeouts twice): with the 1 h default a hung request costs at most
+2 h. (5) Anthropic timeout 1 h by default (G-04: the spec's slot has none); `spec.timeoutMs`
+configures both providers and 0 turns it off. (6) "Delivered" (R4-74) is a published delta or a
+usage reading with tokens; OpenRouter's attempt no longer counts a zero usage reading as
+delivered (lal's `consumed` is "positive usage"). So an empty OpenRouter answer whose usage
+chunk reports tokens is not retried (tokens consumed), and one without tokens is. (7) Each retry
+is logged `retry` (turn id, round, attempt, wait, status, timed out); never a body.
+Decision: (1), (2) and (3) for the owner with decisions 12 and 13; (1)'s billing assumption is
+`[real-provider]`.
+
+### J-0422 2026-11-18 M2 Anthropic - deviation
+Evidence: `anthropic.js`, `m2-w21b-anthropic.test.js`, contract commit `3f53d07399`.
+Reading: (1) The Fae streaming adapter (the spec's source for R4-42's stop-reason rule and R4-77)
+is not in this tree, so the stop-reason text is a harness text,
+`textOf.anthropicStopMismatch(reason, calls)`; `textOf.anthropicStopped(reason)` and
+`textOf.anthropicApiError(details)` take OpenRouter's wording (all contract additions). (2) An
+`end_turn` with no text and no call is delivered as an empty reply (the Anthropic API returns
+those after tool results); OpenRouter's R4-78 empty-answer failure is not applied. (3)
+`max_tokens` with text and no call is delivered with the R4-78 note (the limit is the request's,
+not the model's own, but the reply is cut the same way); without text or inside a tool call it
+fails. `refusal`, `pause_turn` and unknown stop reasons fail with `anthropicStopped`. (4) Tool
+call ids are op ids (`t1/r0/c0`) outside the API's id alphabet; each request maps them
+injectively (`_` + 2 hex digits per other unit, `_5f` for `_` itself). (5) A `tool_use` without a
+result in the projection gets `texts.toolOutcomeUnknown` as an error result, since the API
+refuses a call without one (R4-32's text). (6) No thinking is requested (R4-23: the API slot has
+no effort); thinking that arrives is kept. Native context is `{ v: 1, model, textDigest, blocks }`
+as JSON text, `textDigest` the first 32 hex digits of SHA-256 of the round's whole text (the note
+included), digested as it streams; the projection replays the blocks only when both match (R4-31),
+else drops them. (7) Tool input stays text: a call with no input fragments gets `'{}'`; bad JSON
+reaches the vat as sent (R4-45 is the vat's). (8) Fixtures are written from the public stream
+shapes; `[real-provider]`: confirm `message_delta` usage fields, `signature_delta`, the
+`overloaded_error` event and `retry-after-ms` against the live API.
+Decision: (1) for the owner (a Fae text can replace the harness one); the rest as built.
+
+### J-0423 2026-11-18 M2 provider rows (Anthropic, retry) - perf
+Evidence: `node perf/provider.perf.mjs` (takes the run lock; the providers run in process
+against the fake server, no Ironhorse workload), commit `0b3fbf9c75` dirty with this unit's perf
+script (committed as `e18bda7abf`), Node 22.23.4, worker `367e78ad...`, crank budget 50 M, slot
+ceiling 4,000,000, collection schedule `allocation`, hub store `log` (recorded by the harness;
+they do not apply to an in-process run), load average 1.90-2.46.
+`provider.overhead.anthropic` (fake server hands the event to its socket -> fetch -> parser ->
+Anthropic attempt -> retry wrapper -> round driver -> channel -> `E(subscription).next()`):
+n 600, median 0.515 ms, p95 0.80, p99 2.37, max 3.53; 0 TurnSink messages while streaming; pass
+(5 ms, 0 deliveries). `provider.overhead` (OpenRouter, now through the retry wrapper): median
+0.578, p95 1.17, p99 2.68, max 3.69; pass. `provider.sse.attempt.anthropic` (40,175 text deltas,
+7.2 MB on the wire): median 122 ms, 56 MiB/s; `provider.sse.stream.anthropic` (the whole round,
+reply staged): 142 ms, 48.5 MiB/s. OpenRouter's rows are unchanged from J-0413 (attempt 140 ms,
+stream 166 ms). `provider.retry.passThrough` (the 10 MiB OpenRouter attempt bare and wrapped):
+132.0 vs 132.9 ms, about 1 ms per 10 MiB. `provider.retry.wait` (second request's arrival after
+a 429 with `Retry-After: 1`, minus 1,000 ms): median 4.9 ms, max 5.1. Daemon: `m2.providers.turn`
+(submit to `end`, 5-delta reply over 25 ms of fake-server delay) 448 ms OpenRouter, 404 ms
+Anthropic at load 1.6 (835 / 655 ms on the first, colder run at load 3.5);
+`m2.providers.cancel.closed` 51 ms; `m2.providers.retry429` 1,325-1,352 ms.
+Reading: the Anthropic path costs the same as OpenRouter's per delta; holding events costs
+nothing measurable; a retry wait is exact to about 5 ms (timer plus a new connection).
+Decision: budgets met; no budget exists for the throughput, retry and turn rows (recorded).
+
+### J-0424 2026-11-18 M2 acceptance 6 event - deviation
+Evidence: `test/integration/m2-providers.test.js` first run (acceptance 6 timed out waiting for
+`abort`), `m1a-interfaces.md` 6 (`end { status }` is the last event of every turn that is not
+failed), `guest/session/turn.js` settle, spec R4-7 and R4-79.
+Reading: milestones.md acceptance 6 says the cancelled turn has "`abort` emitted"; the session's
+event contract ends a cancelled turn with `end { status: 'cancelled' }` and emits `abort` only for
+a failed turn, which is also the spec's meaning (R4-79: `abort` with the reason of a failure;
+R4-7: the turn is recorded `cancelled`). The test checks the contract (`end`, `cancelled`) and
+that the server saw the connection close; the milestone text is the one that disagrees.
+Decision: for the PM: amend acceptance 6's wording, or have W2.6 add an `abort` for cancel (a
+change to the M1a event contract and to R5-34's "a closing `abort` counts as `end`").
+
+### J-0425 2026-11-18 M2 shared files - awkward
+Evidence: commit `3f53d07399` (staged with `git hash-object` + `update-index` from HEAD plus this
+unit's hunks), `m2-w21a-openrouter.test.js` diff in `081d8260ba`, the first full unit lane run.
+Reading: (1) `interfaces.js`, `m2-interfaces.test.js` and `m2-interfaces.md` held W2.2's
+uncommitted contract edits while this unit made its own; a plain `git add` would have committed
+them, so the contract commit was built from HEAD plus only this unit's replacements. (2) Making
+retries the OpenRouter default broke one W2.1a test that planned 429, 503 and 529 for three
+separate rounds (the first round now consumed all three); the test pins one attempt per round
+with the provider's `retry` option, its intent unchanged. (3) AVA runs test files in worker
+threads of one process, so a helper naming temporary directories `<pid>-<counter>` gave two test
+files the same directory and one removed the other's files under full-lane load (the thinking
+test failed once in the lane, never alone); the helper now uses `mkdtemp`.
+Decision: recorded. Helpers that make directories under H/tmp should use `mkdtemp`, not the pid.
