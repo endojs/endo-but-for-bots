@@ -133,6 +133,11 @@ export const templateKey = async ({ crankBudget, id }) => {
       crankBudget: String(crankBudget),
       templateVersion: TEMPLATE_VERSION,
       id,
+      // A state's slot ceiling is persisted and may not decrease (M1b QC):
+      // a template served at one ceiling cannot be served at a lower one.
+      slotCeiling: String(
+        process.env.THIXOTROPE_SLOT_CEILING ?? limits.slotCeiling,
+      ),
     }),
   );
   return hash.digest('hex').slice(0, 10);
