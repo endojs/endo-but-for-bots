@@ -85,6 +85,8 @@ polyfills, Thixotrope core, Thixotrope tests and tooling, other Endo package, up
 | CC-019 | 2026-11-17 | Thixotrope core | one hub commit per inbound burst; one journal fsync per worker flush | a GC burst cost 16.7 ms of supervisor time per frame (C-20) | `1f1194059b`, `6be1bd3403`, `a3a2b58da5` |
 | CC-020 | 2026-11-17 | Thixotrope core | `status().deliveryHistogram`: crank wall-time histogram | the `concurrency.10` check needs crank p95 | `b45da47b93` |
 | CC-021 | 2026-11-17 | Thixotrope tests | `measured-engine.test.js` passes a frame-shaped value (tsc) | `lint:types` failed on CC-020's test | `d4241fa77a` |
+| CC-022 | 2026-11-17 | Ironhorse worker | collect on an allocation schedule (slot growth, chunk growth, crank interval) and before the image at close, not after every crank; `timing` replies | a trivial delivery cost 17-126 ms of collection, growing with the session (C-7) | `3db48394c9`, `f0ff5e098b` |
+| CC-023 | 2026-11-17 | Thixotrope core | `gcPolicy`, `gcSlotAllowance`, `gcChunkAllowance`, `gcCrankInterval` limits, fixed per state directory; lane tests per schedule | choose CC-022's schedule; a replay must collect after the same cranks | `4d6a84e86f`, `2657c03f53`, `4a42dc711c` |
 
 ---
 
@@ -632,6 +634,72 @@ finding 16) and is 0. The test passes; nothing under `pkg/src` changed, so the I
 not re-run (66/66 at CC-019).
 Visible to other users: none.
 
+### CC-022 2026-11-17 Ironhorse worker - collect garbage on an allocation schedule
+Commits: `3db48394c9` perf(thixotrope-ironhorse-worker): collect garbage on an allocation schedule,
+not after every crank
+`f0ff5e098b` perf(thixotrope-ironhorse-worker): bound the allocation schedule by a crank interval
+Files: `rust/thixotrope-ironhorse-worker/src/main.rs`.
+What changed: before, `eval` and `deliver` ran `sweep_and_notify` (a full collection, then
+finalizer rounds) after every crank, and `close_heap` checkpointed without collecting. Now a
+`GcSchedule` decides. Under `gcPolicy` "allocation" it collects after a crank when the live slot count
+grew by `gcSlotAllowance` (default 131,072), or the chunk footprint (arena bytes plus charged side
+storage) by `gcChunkAllowance` (16 MiB), since the last collection or the image, or when the crank is
+the `gcCrankInterval`th (32) since then; `close_heap` sweeps (without notifying) before the checkpoint
+when any crank ran since the last collection, and the cleanups it flags stay pending in the image for
+the engine to run at the end of the next crank's drain. "every-crank", and a limits JSON with no
+`gcPolicy`, keep the old behaviour exactly; boot always runs under it. A request with
+`"timing": true` gets compile, run, collection, notification and extraction wall times and the heap
+counts in its reply.
+Motivation: J-9300: a trivial delivery to a session vat cost 17 ms new, 32 ms at 50 turns and 126 ms
+at 1,000 turns, all but 0.6 ms of it the collection; `turn.start` rose 314 -> 1,076 ms over 1,000
+turns. After (J-9303): 0.5-0.6 ms at every size; `turn.start` 170-188 ms at every length; a
+`getInfo()` round trip 81 -> 37 ms; 1,000 turns 30.6 -> 17.1 min.
+Visible to other users: the worker digest changes (runtime identity: existing state directories are
+refused). With "allocation", finalizers (an OCapN peer's gc frames) run at the next collection, up to
+32 cranks later or in the first crank after a wake; heap high-water marks rise by up to the
+allowance (J-9304). The worker's protocol is unchanged otherwise; `timing` is additive.
+Tests: 8 new worker tests (kill-and-replay at seeded points is byte-identical per delivery and to the
+next image; replay from a mid-run checkpoint; finalizers exactly once and never earlier; metering
+equal without finalizers; slot and chunk churn under the ceiling; crank interval; parsing); worker
+25/25; engine suites 2,092 passed, 0 failed (engine unchanged); Ironhorse lane 69/69 with CC-023
+(J-9302).
+Upstream notes: review the determinism argument in the `GcPolicy` doc comment and J-9301: the
+counters restart at each image, which is replay-exact because an image is written only at close and
+recorded with its journal cut before anything more is delivered; the schedule reads no ceiling
+(ceilings may rise across a restart). Cleanup callbacks run in other runs than before, which moves
+their run overhead (0.15 computron over 100 callbacks in the test). No collection inside a crank
+(C-21, J-9305: the engine has no kept list and no in-drain safe point). Depends on CC-023 for a host
+to choose the policy; stands alone with the old behaviour otherwise.
+
+### CC-023 2026-11-17 Thixotrope core - the collection schedule limits, fixed per state directory
+Commits: `4d6a84e86f` feat(thixotrope): choose the Ironhorse collection schedule; pin it per state
+directory
+`2657c03f53` docs(thixotrope): the collection schedule is the second limit a restart cannot change
+`4a42dc711c` feat(thixotrope): gcCrankInterval; lane tests state each collection schedule's contract
+Files: `pkg/src/ironhorse/ironhorse-limits.js`, `pkg/src/ironhorse/ironhorse-runtime.js`,
+`pkg/src/ironhorse/ironhorse-engine.js`, `pkg/README.md`, `pkg/test/ironhorse-limits.test.js`,
+`pkg/test/ironhorse/limits.js`, `pkg/test/ironhorse/delivery.js`, `pkg/test/ironhorse/scenarios.js`,
+`pkg/test/ironhorse/_fixture.js`.
+What changed: `makeIronhorseLimits` gains `gcPolicy` ("allocation" default, "every-crank"),
+`gcSlotAllowance` (131,072), `gcChunkAllowance` (16,777,216) and `gcCrankInterval` (32), read from
+`THIXOTROPE_GC_POLICY`, `THIXOTROPE_GC_SLOT_ALLOWANCE`, `THIXOTROPE_GC_CHUNK_ALLOWANCE` and
+`THIXOTROPE_GC_CRANK_INTERVAL`; an allowance above half its ceiling is refused. They reach the worker
+in its limits JSON, are recorded in `runtime.json` and reported in `status().ironhorse`;
+`checkSavedManifest` refuses any change to them ("cannot change from persisted value"). Two lane
+tests asserted every-crank finalization timing; each now runs under both schedules, with the
+allocation variant asserting when the frames arrive (J-9302).
+Motivation: CC-022 needs a host setting; recovery replays a journal onto the last image and the hub
+drops replayed outbound by sequence number, so a replay under another schedule would emit other
+frames under the same numbers.
+Visible to other users: new limits and status fields; a state directory made with one schedule
+refuses another; `runtime.json` written by this version carries the four limits.
+Tests: `ironhorse-limits.test.js` 9/9 (defaults, environment, refusal of each change, a raised ceiling
+does not move the schedule); `test/ironhorse/limits.js`, `delivery.js` (4 variants), `scenarios.js`
+(settled answers under both schedules) in the lane, 69/69; Node suite and `lint:types` (J-9302).
+Upstream notes: the harness's `scripts/serve.mjs` does not pass `THIXOTROPE_GC_*` through and its
+templates do not key on them (J-9307). The refusal is strict: a schedule change needs a fresh state
+directory even after a clean shutdown, when no journal suffix would be replayed.
+
 ---
 
 ## Open candidates not yet changed
@@ -660,6 +728,9 @@ closed (CC-013, CC-015). C-20 is addressed in part by CC-018 and CC-019; page 6 
 | C-19 | a vat is not told that an adapter incarnation it holds has died | held ports compare two clocks; first turn after a restart pays a reopen |
 | C-20 (rest) | endpoint commits per frame; per-commit cost is C-2 | some bursts still cost 0.4-0.9 s of hub time (J-9213, J-9216) |
 | C-21 | the slot ceiling bounds live heap plus one crank; no collection inside a crank | the harness serves at 4,000,000 slots (persisted per state); a session's heaviest crank sets how large it may grow (J-0392) |
+
+C-7 is addressed by CC-022 and CC-023 (an allocation schedule; the fixed per-crank cost is gone,
+J-9303); the row above keeps the cost it had. C-21 is not changed: the proposal is J-9305.
 
 C-6 now also records that name-table exhaustion is a catchable RangeError, so a vat whose code
 catches it lives on degraded instead of halting (J-0333); the harness retires an exec vat that
@@ -738,6 +809,11 @@ commits that arrived through the PR 1667 merge map to CC-010.
 - `a3a2b58da5` -> CC-019
 - `b45da47b93` -> CC-020
 - `d4241fa77a` -> CC-021
+- `3db48394c9` -> CC-022
+- `4d6a84e86f` -> CC-023
+- `2657c03f53` -> CC-023
+- `f0ff5e098b` -> CC-022
+- `4a42dc711c` -> CC-023
 
 Outside that command's paths but outside `packages/thixotrope-harness` too:
 

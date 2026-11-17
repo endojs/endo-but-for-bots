@@ -5654,3 +5654,231 @@ Perf: `perf/exec.perf.mjs` (`exec.sends.answered`, `exec.trivial`, `exec.first`;
 Reading: everything that runs in Node is green; the real-vat run of this unit's own file passed its
 exec half and is pending on the name-table half.
 Decision: the later step runs the list above.
+
+### J-9300 2026-11-17 C-7 per-crank collection, before - perf
+Evidence: `perf/crank.perf.mjs` (new, this unit) on `b3573be45a` with its script uncommitted (hence
+-dirty), worker `7cda4467...` (every crank collects), crank budget 50 M, slot ceiling 4,000,000,
+CRANK_TURNS 1,000, CRANK_WORKER_N 200, load 1.9-3.7. The `crank.worker.*` rows run the worker binary
+directly on a copy of a heap (a fresh boot, then the session vat's image after 200 pings, 50 and
+1,000 turns) with a trivial dispatch (`void 0`) and with one that leaves 5,000 objects of garbage
+(`.alloc`); this worker cannot split its time.
+{"metric":"crank.worker.boot","unit":"ms","n":200,"median":6.435,"p95":6.979,"p99":7.559,"min":5.924,"max":8.332,"what":"deliver(void 0) round trip to the worker, a fresh boot","gcPolicy":"worker default","startMs":484.3,"split":"not reported by this worker","pass":null,"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.78,2.44,2.32]}
+{"metric":"crank.worker.boot.alloc","unit":"ms","n":200,"median":14.186,"p95":14.885,"p99":15.633,"min":13.862,"max":15.84,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a fresh boot","gcPolicy":"worker default","startMs":484.3,"split":"not reported by this worker","pass":null,"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.72,2.43,2.32]}
+{"metric":"crank.ping","unit":"ms","n":200,"median":81.082,"p95":115.052,"p99":148.556,"min":75.591,"max":198.676,"deliveries":{"count":220,"perOp":1.1},"engine":{"delivery":{"count":220,"ms":17436.1},"snapshot":{"count":0,"ms":0},"wake":{"count":0,"ms":0}},"what":"getInfo() round trip, control client to a new session vat","pass":null,"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.61,2.42,2.31]}
+{"metric":"crank.heap","turns":0,"heap":{"label":"spare session 1","cut":223,"slots":296704,"ofCeiling":0.074},"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.72,2.45,2.32]}
+{"metric":"crank.worker.session0","unit":"ms","n":200,"median":17.279,"p95":18.135,"p99":18.688,"min":16.863,"max":18.891,"what":"deliver(void 0) round trip to the worker, a session vat image","gcPolicy":"worker default","startMs":34.6,"split":"not reported by this worker","pass":null,"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.66,2.44,2.32]}
+{"metric":"crank.worker.session0.alloc","unit":"ms","n":200,"median":26.656,"p95":27.503,"p99":28.656,"min":26.088,"max":29.498,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a session vat image","gcPolicy":"worker default","startMs":34.6,"split":"not reported by this worker","pass":null,"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.53,2.42,2.31]}
+{"metric":"crank.turn.start.early","unit":"ms","n":47,"median":314,"p95":360,"p99":575,"min":277,"max":575,"turns":"4..50","budget":{"median":350},"pass":true,"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.54,2.41,2.31]}
+{"metric":"crank.history.page","unit":"ms","n":30,"median":571.644,"p95":667.454,"p99":723.437,"min":556.99,"max":723.437,"deliveries":{"count":30,"perOp":1},"engine":{"delivery":{"count":30,"ms":15890.9},"snapshot":{"count":1,"ms":192.2},"wake":{"count":0,"ms":0}},"turns":22,"sessionTurns":50,"budget":{"median":300},"pass":false,"exceeded":["median: 571.644 > 1.25 x 300"],"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.85,2.49,2.35]}
+{"metric":"crank.heap","turns":50,"heap":{"label":"spare session 1","cut":755,"slots":459264,"ofCeiling":0.115},"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.86,2.5,2.35]}
+{"metric":"crank.worker.session50","unit":"ms","n":200,"median":31.889,"p95":37.162,"p99":67.14,"min":29.735,"max":145.156,"what":"deliver(void 0) round trip to the worker, a session vat image","gcPolicy":"worker default","startMs":47.4,"split":"not reported by this worker","pass":null,"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.94,2.53,2.36]}
+{"metric":"crank.worker.session50.alloc","unit":"ms","n":200,"median":39.998,"p95":41.869,"p99":43.453,"min":38.366,"max":43.494,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a session vat image","gcPolicy":"worker default","startMs":47.4,"split":"not reported by this worker","pass":null,"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.79,2.51,2.35]}
+{"metric":"crank.grow","turns":100,"msPer100":144511.9,"loadAvg":[2.78,2.56,2.38]}
+{"metric":"crank.grow","turns":200,"msPer100":113619,"loadAvg":[2.53,2.52,2.39]}
+{"metric":"crank.grow","turns":300,"msPer100":139117.1,"loadAvg":[2.27,2.4,2.35]}
+{"metric":"crank.grow","turns":400,"msPer100":150203,"loadAvg":[2.54,2.59,2.44]}
+{"metric":"crank.grow","turns":500,"msPer100":167538.4,"loadAvg":[3.27,2.76,2.52]}
+{"metric":"crank.grow","turns":600,"msPer100":204327.6,"loadAvg":[3.67,3.45,2.88]}
+{"metric":"crank.grow","turns":700,"msPer100":228598.4,"loadAvg":[5.08,4.38,3.42]}
+{"metric":"crank.grow","turns":800,"msPer100":217077.1,"loadAvg":[2.52,3.35,3.18]}
+{"metric":"crank.grow","turns":900,"msPer100":230330.7,"loadAvg":[2.37,3.03,3.08]}
+{"metric":"crank.grow","turns":1000,"msPer100":241695.7,"loadAvg":[2.36,2.6,2.86]}
+{"metric":"crank.turn.start.mid","unit":"ms","n":51,"median":682,"p95":888,"p99":963,"min":609,"max":963,"turns":"450..500","budget":{"median":350},"pass":false,"exceeded":["median: 682 > 1.25 x 350"],"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.36,2.6,2.86]}
+{"metric":"crank.turn.start.late","unit":"ms","n":50,"median":1076,"p95":1324,"p99":1606,"min":976,"max":1606,"turns":"951..1000","budget":{"median":350},"pass":false,"exceeded":["median: 1076 > 1.25 x 350"],"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.36,2.6,2.86]}
+{"metric":"crank.history.page.late","unit":"ms","n":30,"median":860.146,"p95":995.628,"p99":1175.246,"min":809.21,"max":1175.246,"deliveries":{"count":31,"perOp":1.033},"engine":{"delivery":{"count":31,"ms":24846},"snapshot":{"count":0,"ms":0},"wake":{"count":0,"ms":0}},"turns":22,"sessionTurns":1000,"budget":{"median":300},"pass":false,"exceeded":["median: 860.146 > 1.25 x 300"],"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.25,2.54,2.83]}
+{"metric":"crank.heap","turns":1000,"heap":{"label":"spare session 1","cut":11317,"slots":722176,"ofCeiling":0.181},"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.31,2.55,2.83]}
+{"metric":"crank.worker.session1000","unit":"ms","n":200,"median":125.774,"p95":135.233,"p99":140.692,"min":123.029,"max":144.303,"what":"deliver(void 0) round trip to the worker, a session vat image","gcPolicy":"worker default","startMs":80.9,"split":"not reported by this worker","pass":null,"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.13,2.49,2.8]}
+{"metric":"crank.worker.session1000.alloc","unit":"ms","n":200,"median":133.238,"p95":144.521,"p99":147.785,"min":129.626,"max":148.5,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a session vat image","gcPolicy":"worker default","startMs":80.9,"split":"not reported by this worker","pass":null,"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[2.15,2.44,2.77]}
+{"metric":"crank.context.rebuild","unit":"ms","value":22606,"turns":1001,"timing":{"pages":14,"pageMs":22043.3,"waitResolveMs":508.7,"readMs":36.7,"blobs":2000,"projectMs":11.1},"status":"completed","serveMs":6132.5,"growMs":1837019.2,"deliveriesInTurn":59,"budget":{"value":5000},"pass":false,"exceeded":["value: 22606 > 1.25 x 5000"],"commit":"b3573be45a-dirty","workerSha256":"7cda4467af4b50385d6fab5ae55c3ec478792ce382be9cabe4e400daac0a1741","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[1.95,2.37,2.74]}
+Reading: the fixed cost of a crank is the collection, and it grows with the vat: a trivial delivery
+to the session vat costs 17 ms new, 32 ms after 50 turns and 126 ms after 1,000 turns (the boot
+heap alone, 6 ms, is smaller than any vat the harness runs); 5,000 objects of garbage add only 8-10
+ms. The same slope shows in the harness: `turn.start` median 314 -> 682 -> 1,076 ms over turns 4-50,
+450-500 and 951-1,000, and 100 turns took 114-145 s at the start and 242 s at the end (J-0370:
+69 -> 246 s). A `getInfo()` round trip costs 81 ms (79 ms of engine time per delivery).
+`history.page` (572 / 860 ms) and `context.rebuild` (22.6 s, 14 page cranks of about 1.6 s) miss
+their budgets as in J-0370 and J-0395.
+Decision: build the allocation schedule (J-9301) and measure again with the same script.
+
+### J-9301 2026-11-17 C-7 the collection schedule - awkward
+Evidence: `3db48394c9`, `f0ff5e098b` (worker), `4d6a84e86f`, `2657c03f53`, `4a42dc711c` (Thixotrope
+limits, tests, README); CC-022, CC-023.
+Reading: the worker now collects after a crank only when the live slot count grew by
+`gcSlotAllowance` (131,072) or the chunk footprint by `gcChunkAllowance` (16 MiB) since the last
+collection or the image, or when the crank is the `gcCrankInterval`th (32) since then; and it
+sweeps (no notification) before writing the image at close when any crank ran since the last
+collection, which keeps the guarantee of `7c8eb35860` ("collect garbage before durable crank
+checkpoints": an image carries no completed crank's garbage). The cleanups that sweep flags stay
+pending in the image and the engine runs them at the end of the first crank's drain after the wake,
+so their frames leave with that delivery. `every-crank` (the old schedule) is a setting, and is what
+a host that names no policy gets.
+Determinism: every input is the image's heap and the engine's slot and chunk counts after cranks
+replayed in journal order, plus the crank count since the last collection; no clock, no memory
+pressure, no ceiling. Two shapes were rejected. (1) A room rule (collect when less than the
+allowance is free below a ceiling) would read a setting the host may raise across a restart, so a
+crash replay under a raised ceiling could collect after other cranks; the schedule reads no ceiling,
+and the margin it costs is stated instead (J-9304). (2) A schedule independent of snapshot points
+(no collection at close, counters that survive the image) needs the baseline in the image, which
+the store format has no field for; an image is written only at close, the host records it with its
+journal cut before delivering more (`durable-worker-transport.js` `checkpointInternal`), and recovery
+never replays across it, so counters that restart at the image are replay-exact. The awkward part:
+when a finalizer runs now depends on when the host checkpointed (a sleep is a checkpoint), which is
+history the journal records, not something a replay recomputes.
+The three limits are recorded in `runtime.json` and a state directory refuses any change to them
+(`Incompatible Ironhorse runtime: gcPolicy cannot change ...`); the ceilings may still only rise.
+Finalizer latency: the first version had no crank interval, and the lane's "settled answers are
+released from the hub" scenario kept 9 of 12 answer rows owed; with the interval, owed rows over 80
+calls rise to at most 12 and fall to 1-3 at each collection (`4a42dc711c`).
+Decision: `allocation` is the default for new state directories. To bisect, run a fresh state with
+`THIXOTROPE_GC_POLICY=every-crank`. The harness's `scripts/serve.mjs` does not pass `THIXOTROPE_GC_*`
+through its environment allowlist, and test templates do not key on it (J-9307).
+
+### J-9302 2026-11-17 C-7 tests and suites - good fit
+Evidence: worker unit tests `cargo test --release -p thixotrope-ironhorse-worker` 25/25 (8 new):
+a kill at six seeded points and a replay from the image emits byte-identical outbound delivery by
+delivery and closes to a byte-identical image; a replay from a mid-run checkpoint matches the
+incarnation that continued, at four seeded checkpoints; every import of 100 is finalized exactly
+once under both schedules, never earlier than under every-crank and some later, across a checkpoint;
+the same 100 deliveries end at the same meter index under both schedules when no finalizer runs; with
+100 finalizer callbacks the meter differs by 9,656 raw units (0.15 computron), because the callbacks
+run in other runs (a later drain, fewer notification runs); slot churn (`churn(2000)`, 2,000 objects a crank)
+stays under a ceiling of live heap + allowance + one crank for 200 cranks and starts every crank with
+less than the allowance uncollected; chunk churn (a string doubled to 512 K characters each crank)
+collects in more than 5 and fewer than 50 of 100 cranks under a chunk ceiling of footprint + 3 allowances; the crank interval collects at
+cranks 8, 16, 24 and finalizes there; policy parsing and bounds. Clippy clean for the worker.
+Ironhorse lane (`corepack yarn test:ironhorse`, under the run lock): 63/66 before the lane tests were
+changed (the two `delivery` variants and the settled-answers scenario asserted every-crank
+finalization), 69/69 after `4a42dc711c` (each of those now runs under both schedules). Thixotrope
+Node suite (`corepack yarn test`): all passed but `native-install` "shutdown did not wait for the
+bundling" (a 2 s race, a replay engine, load 9); that file passed 2/2 alone. `lint:types` 0 errors;
+eslint 0 errors (warnings as before). `ironhorse-limits.test.js` 9/9. Harness unit lane 465 passed,
+41 skipped. Engine suites (`cargo test --release -p ironhorse-vm -p ironhorse-snapshot`, engine
+unchanged): 258 test binaries, 2,092 passed, 0 failed, 38 ignored (release, `CARGO_TARGET_DIR` the repository's `target`).
+Reading: the schedule is a worker-only change: no engine file changed, the boot bundles are
+byte-identical (rebuilt into a scratch directory and compared), and boot runs under every-crank, so
+the boot image, the boot fingerprint and the snapshot goldens do not move.
+Decision: nothing re-pinned. The worker digest is `7cda4467...` -> `367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25`,
+which changes the runtime identity: existing state directories are refused and test templates
+rebuild (their key covers the worker digest).
+
+### J-9303 2026-11-17 C-7 per-crank collection, after - perf
+Evidence: `perf/crank.perf.mjs` on `4a42dc711c` with the script's policy-row change uncommitted
+(-dirty), worker `367e78ad...`, schedule `allocation` (131,072 slots, 16 MiB, 32 cranks), crank
+budget 50 M, slot ceiling 4,000,000, CRANK_GC_POLICIES every-crank (the same binary and images under
+the old schedule, rows suffixed `.every-crank`), load 3.7-6.0 (higher than J-9300's).
+{"metric":"crank.worker.boot","unit":"ms","n":200,"median":0.482,"p95":0.635,"p99":8.153,"min":0.454,"max":8.431,"what":"deliver(void 0) round trip to the worker, a fresh boot","gcPolicy":"allocation","startMs":529.2,"splitMedianMs":{"compile":0.223,"run":0,"collect":0,"notify":0,"extract":0.228,"worker":0.453},"collectMs":{"n":6,"median":7.114,"p95":7.75,"p99":7.75,"min":5.996,"max":7.75},"collections":6,"policy":"allocation","liveSlots":{"first":20546,"last":20554,"max":20577},"slotCapacityMax":173346,"chunkBytesMax":2056331,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[5.9,4.85,6.05]}
+{"metric":"crank.worker.boot.alloc","unit":"ms","n":200,"median":6.021,"p95":61.422,"p99":62.469,"min":5.408,"max":62.614,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a fresh boot","gcPolicy":"allocation","startMs":529.2,"splitMedianMs":{"compile":0.269,"run":5.396,"collect":0,"notify":0,"extract":0.252,"worker":5.946},"collectMs":{"n":14,"median":55.577,"p95":56.817,"p99":56.817,"min":54.893,"max":56.817},"collections":14,"policy":"allocation","liveSlots":{"first":30563,"last":60582,"max":150671},"slotCapacityMax":173346,"chunkBytesMax":5464203,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[5.9,4.85,6.05]}
+{"metric":"crank.worker.boot.every-crank","unit":"ms","n":200,"median":7.03,"p95":8.331,"p99":9.194,"min":5.944,"max":9.419,"what":"deliver(void 0) round trip to the worker, a fresh boot","gcPolicy":"every-crank","startMs":524,"splitMedianMs":{"compile":0.259,"run":0.002,"collect":6.419,"notify":0,"extract":0.257,"worker":6.959},"collectMs":{"n":200,"median":6.419,"p95":7.559,"p99":8.5,"min":5.488,"max":8.591},"collections":200,"policy":"every-crank","liveSlots":{"first":20546,"last":20546,"max":20546},"slotCapacityMax":173346,"chunkBytesMax":2056331,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[5.98,4.88,6.06]}
+{"metric":"crank.worker.boot.every-crank.alloc","unit":"ms","n":200,"median":15.623,"p95":16.678,"p99":17.246,"min":14.625,"max":17.291,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a fresh boot","gcPolicy":"every-crank","startMs":524,"splitMedianMs":{"compile":0.251,"run":5.057,"collect":9.861,"notify":0,"extract":0.293,"worker":15.48},"collectMs":{"n":200,"median":9.861,"p95":10.745,"p99":11.241,"min":9.016,"max":11.292},"collections":200,"policy":"every-crank","liveSlots":{"first":20546,"last":20546,"max":20546},"slotCapacityMax":173346,"chunkBytesMax":2056331,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[5.98,4.88,6.06]}
+{"metric":"crank.ping","unit":"ms","n":200,"median":37.049,"p95":159.973,"p99":185.293,"min":31.98,"max":197.983,"deliveries":{"count":219,"perOp":1.095},"engine":{"delivery":{"count":219,"ms":9310.2},"snapshot":{"count":0,"ms":0},"wake":{"count":0,"ms":0}},"what":"getInfo() round trip, control client to a new session vat","pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[5.14,4.76,5.99]}
+{"metric":"crank.heap","turns":0,"heap":{"label":"spare session 1","cut":225,"slots":337408,"ofCeiling":0.084},"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[5.13,4.76,5.99]}
+{"metric":"crank.worker.session0","unit":"ms","n":200,"median":0.606,"p95":0.826,"p99":19.533,"min":0.521,"max":20.966,"what":"deliver(void 0) round trip to the worker, a session vat image","gcPolicy":"allocation","startMs":41.9,"splitMedianMs":{"compile":0.273,"run":0,"collect":0,"notify":0,"extract":0.276,"worker":0.561},"collectMs":{"n":6,"median":17.755,"p95":20.2,"p99":20.2,"min":16.584,"max":20.2},"collections":6,"policy":"allocation","liveSlots":{"first":43959,"last":43330,"max":43989},"slotCapacityMax":337308,"chunkBytesMax":10510567,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[5.13,4.76,5.99]}
+{"metric":"crank.worker.session0.alloc","unit":"ms","n":200,"median":6.287,"p95":79.433,"p99":82.766,"min":5.701,"max":82.927,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a session vat image","gcPolicy":"allocation","startMs":41.9,"splitMedianMs":{"compile":0.323,"run":5.525,"collect":0,"notify":0,"extract":0.292,"worker":6.187},"collectMs":{"n":14,"median":73.868,"p95":76.61,"p99":76.61,"min":72.222,"max":76.61},"collections":14,"policy":"allocation","liveSlots":{"first":53339,"last":83358,"max":173447},"slotCapacityMax":337308,"chunkBytesMax":13903591,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[5.04,4.75,5.97]}
+{"metric":"crank.worker.session0.every-crank","unit":"ms","n":200,"median":18.364,"p95":19.933,"p99":21.346,"min":17.131,"max":22.137,"what":"deliver(void 0) round trip to the worker, a session vat image","gcPolicy":"every-crank","startMs":38.8,"splitMedianMs":{"compile":0.281,"run":0.001,"collect":17.534,"notify":0,"extract":0.39,"worker":18.212},"collectMs":{"n":200,"median":17.534,"p95":19.024,"p99":20.431,"min":16.421,"max":21.099},"collections":200,"policy":"every-crank","liveSlots":{"first":43325,"last":43322,"max":43325},"slotCapacityMax":337308,"chunkBytesMax":10495847,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[4.88,4.72,5.96]}
+{"metric":"crank.worker.session0.every-crank.alloc","unit":"ms","n":200,"median":28.87,"p95":34.194,"p99":62.031,"min":26.107,"max":63.641,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a session vat image","gcPolicy":"every-crank","startMs":38.8,"splitMedianMs":{"compile":0.325,"run":5.629,"collect":22.045,"notify":0,"extract":0.403,"worker":28.563},"collectMs":{"n":200,"median":22.045,"p95":24.966,"p99":51.784,"min":20.159,"max":57.023},"collections":200,"policy":"every-crank","liveSlots":{"first":43322,"last":43322,"max":43322},"slotCapacityMax":337308,"chunkBytesMax":10495719,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[6.01,4.96,6.03]}
+{"metric":"crank.turn.start.early","unit":"ms","n":47,"median":170,"p95":297,"p99":302,"min":143,"max":302,"turns":"4..50","budget":{"median":350},"pass":true,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[4.34,4.66,5.88]}
+{"metric":"crank.history.page","unit":"ms","n":30,"median":592.012,"p95":651.561,"p99":765.162,"min":564.724,"max":765.162,"deliveries":{"count":30,"perOp":1},"engine":{"delivery":{"count":30,"ms":16415.7},"snapshot":{"count":1,"ms":206.3},"wake":{"count":0,"ms":0}},"turns":22,"sessionTurns":50,"budget":{"median":300},"pass":false,"exceeded":["median: 592.012 > 1.25 x 300"],"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[3.75,4.5,5.79]}
+{"metric":"crank.heap","turns":50,"heap":{"label":"spare session 1","cut":756,"slots":547584,"ofCeiling":0.137},"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[3.61,4.46,5.77]}
+{"metric":"crank.worker.session50","unit":"ms","n":200,"median":0.535,"p95":0.641,"p99":31.1,"min":0.499,"max":33.167,"what":"deliver(void 0) round trip to the worker, a session vat image","gcPolicy":"allocation","startMs":56,"splitMedianMs":{"compile":0.253,"run":0,"collect":0,"notify":0,"extract":0.257,"worker":0.513},"collectMs":{"n":6,"median":30.313,"p95":32.415,"p99":32.415,"min":29.704,"max":32.415},"collections":6,"policy":"allocation","liveSlots":{"first":69672,"last":69673,"max":69702},"slotCapacityMax":547569,"chunkBytesMax":11736477,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[3.61,4.46,5.77]}
+{"metric":"crank.worker.session50.alloc","unit":"ms","n":200,"median":5.878,"p95":92.671,"p99":96.626,"min":5.691,"max":97.034,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a session vat image","gcPolicy":"allocation","startMs":56,"splitMedianMs":{"compile":0.277,"run":5.26,"collect":0,"notify":0,"extract":0.27,"worker":5.828},"collectMs":{"n":14,"median":86.775,"p95":90.74,"p99":90.74,"min":86.25,"max":90.74},"collections":14,"policy":"allocation","liveSlots":{"first":79682,"last":109701,"max":199790},"slotCapacityMax":547569,"chunkBytesMax":14694503,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[3.48,4.42,5.75]}
+{"metric":"crank.worker.session50.every-crank","unit":"ms","n":200,"median":30.518,"p95":33.773,"p99":34.869,"min":28.808,"max":35.168,"what":"deliver(void 0) round trip to the worker, a session vat image","gcPolicy":"every-crank","startMs":53.5,"splitMedianMs":{"compile":0.275,"run":0.001,"collect":29.659,"notify":0,"extract":0.418,"worker":30.383},"collectMs":{"n":200,"median":29.659,"p95":32.906,"p99":34.014,"min":28.02,"max":34.318},"collections":200,"policy":"every-crank","liveSlots":{"first":69665,"last":69665,"max":69665},"slotCapacityMax":547569,"chunkBytesMax":11286631,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[3.6,4.43,5.75]}
+{"metric":"crank.worker.session50.every-crank.alloc","unit":"ms","n":200,"median":38.625,"p95":41.755,"p99":42.783,"min":37.693,"max":45.118,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a session vat image","gcPolicy":"every-crank","startMs":53.5,"splitMedianMs":{"compile":0.294,"run":5.303,"collect":32.501,"notify":0,"extract":0.397,"worker":38.522},"collectMs":{"n":200,"median":32.501,"p95":35.414,"p99":36.206,"min":31.556,"max":38.66},"collections":200,"policy":"every-crank","liveSlots":{"first":69665,"last":69665,"max":69665},"slotCapacityMax":547569,"chunkBytesMax":11286631,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[3.43,4.36,5.71]}
+{"metric":"crank.grow","turns":100,"msPer100":120283.5,"loadAvg":[4.24,4.42,5.66]}
+{"metric":"crank.grow","turns":200,"msPer100":82728.9,"loadAvg":[7.97,5.4,5.91]}
+{"metric":"crank.grow","turns":300,"msPer100":88971.4,"loadAvg":[5.79,5.42,5.87]}
+{"metric":"crank.grow","turns":400,"msPer100":92053.3,"loadAvg":[6.21,5.46,5.83]}
+{"metric":"crank.grow","turns":500,"msPer100":93454.7,"loadAvg":[5.07,5.25,5.71]}
+{"metric":"crank.grow","turns":600,"msPer100":99922.1,"loadAvg":[5.91,5.32,5.67]}
+{"metric":"crank.grow","turns":700,"msPer100":106836.6,"loadAvg":[6.37,5.35,5.61]}
+{"metric":"crank.grow","turns":800,"msPer100":109046.1,"loadAvg":[4.93,5.21,5.53]}
+{"metric":"crank.grow","turns":900,"msPer100":114531.2,"loadAvg":[5.36,5.19,5.47]}
+{"metric":"crank.grow","turns":1000,"msPer100":119677.9,"loadAvg":[6.02,5.51,5.56]}
+{"metric":"crank.turn.start.mid","unit":"ms","n":51,"median":182,"p95":470,"p99":612,"min":156,"max":612,"turns":"450..500","budget":{"median":350},"pass":true,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[6.02,5.51,5.56]}
+{"metric":"crank.turn.start.late","unit":"ms","n":50,"median":188,"p95":611,"p99":664,"min":161,"max":664,"turns":"951..1000","budget":{"median":350},"pass":true,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[6.02,5.51,5.56]}
+{"metric":"crank.history.page.late","unit":"ms","n":30,"median":851.564,"p95":974.165,"p99":1182.022,"min":799.839,"max":1182.022,"deliveries":{"count":30,"perOp":1},"engine":{"delivery":{"count":30,"ms":24019.2},"snapshot":{"count":1,"ms":363.3},"wake":{"count":0,"ms":0}},"turns":22,"sessionTurns":1000,"budget":{"median":300},"pass":false,"exceeded":["median: 851.564 > 1.25 x 300"],"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[4.63,5.22,5.46]}
+{"metric":"crank.heap","turns":1000,"heap":{"label":"spare session 1","cut":11351,"slots":783104,"ofCeiling":0.196},"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[4.42,5.17,5.44]}
+{"metric":"crank.worker.session1000","unit":"ms","n":200,"median":0.579,"p95":0.791,"p99":141.986,"min":0.534,"max":144.256,"what":"deliver(void 0) round trip to the worker, a session vat image","gcPolicy":"allocation","startMs":91.3,"splitMedianMs":{"compile":0.269,"run":0,"collect":0,"notify":0,"extract":0.276,"worker":0.548},"collectMs":{"n":6,"median":136.183,"p95":143.147,"p99":143.147,"min":133.089,"max":143.147},"collections":6,"policy":"allocation","liveSlots":{"first":326595,"last":326596,"max":326625},"slotCapacityMax":782878,"chunkBytesMax":23290589,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[4.42,5.17,5.44]}
+{"metric":"crank.worker.session1000.alloc","unit":"ms","n":200,"median":6.032,"p95":194.261,"p99":198.046,"min":5.72,"max":198.306,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a session vat image","gcPolicy":"allocation","startMs":91.3,"splitMedianMs":{"compile":0.286,"run":5.393,"collect":0,"notify":0,"extract":0.28,"worker":5.977},"collectMs":{"n":14,"median":189.423,"p95":191.607,"p99":191.607,"min":183.04,"max":191.607},"collections":14,"policy":"allocation","liveSlots":{"first":336605,"last":366624,"max":456713},"slotCapacityMax":782878,"chunkBytesMax":26244711,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[4.31,5.13,5.42]}
+{"metric":"crank.worker.session1000.every-crank","unit":"ms","n":200,"median":134.125,"p95":139.751,"p99":142.417,"min":120.72,"max":145.848,"what":"deliver(void 0) round trip to the worker, a session vat image","gcPolicy":"every-crank","startMs":88.4,"splitMedianMs":{"compile":0.285,"run":0.001,"collect":132.933,"notify":0,"extract":0.724,"worker":133.983},"collectMs":{"n":200,"median":132.933,"p95":138.538,"p99":141.255,"min":119.589,"max":144.483},"collections":200,"policy":"every-crank","liveSlots":{"first":326588,"last":326588,"max":326588},"slotCapacityMax":782878,"chunkBytesMax":22836839,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[4.2,5.02,5.37]}
+{"metric":"crank.worker.session1000.every-crank.alloc","unit":"ms","n":200,"median":144.403,"p95":150.118,"p99":153.68,"min":131.215,"max":153.744,"what":"deliver(void Array.from({ length: 5000 }, (_, i) => ({ i }))) round trip to the worker, a session vat image","gcPolicy":"every-crank","startMs":88.4,"splitMedianMs":{"compile":0.316,"run":5.458,"collect":137.66,"notify":0,"extract":0.729,"worker":144.287},"collectMs":{"n":200,"median":137.66,"p95":143.328,"p99":146.802,"min":124.982,"max":146.87},"collections":200,"policy":"every-crank","liveSlots":{"first":326588,"last":326588,"max":326588},"slotCapacityMax":782878,"chunkBytesMax":22836839,"slotCeiling":4000000,"pass":null,"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","crankBudget":"50000000","loadAvg":[4.71,5.08,5.38]}
+{"metric":"crank.context.rebuild","unit":"ms","value":23306,"turns":1001,"timing":{"pages":14,"pageMs":22897.3,"waitResolveMs":356.8,"readMs":35,"blobs":2000,"projectMs":10.6},"status":"completed","serveMs":4682.1,"growMs":1027507.7,"deliveriesInTurn":59,"budget":{"value":5000},"pass":false,"exceeded":["value: 23306 > 1.25 x 5000"],"commit":"4a42dc711c-dirty","workerSha256":"367e78ad1db3c096ff0d9d35c1cb3d1539ed14d8016471c296d9c2f8ceca2e25","slotCeiling":4000000,"crankBudget":"50000000","loadAvg":[5.53,5.2,5.41]}
+Reading (before -> after): a trivial delivery to the session vat 17 / 32 / 126 ms -> 0.6 / 0.5 /
+0.6 ms (new / 50 turns / 1,000 turns); the same binary under every-crank gives 18 / 31 / 134 ms, so
+the split says it all: compile 0.3, run 0.0, extraction 0.3 ms, the rest was collection. With 5,000
+objects of garbage a crank, a collection runs every 13-14 cranks (14 of 200) and costs 56 / 74 / 87
+/ 189 ms when it does (boot / new / 50 / 1,000 turns), against 10 / 22 / 33 / 138 ms every crank:
+a collection that finds 130,000 garbage slots costs more than one that finds 5,000, so the amortized
+saving is 2.5-20 x rather than 200 x, and the delivery that collects has a longer tail (p95 61-194
+ms). In the harness: `getInfo()` round trip 81 -> 37 ms (engine time per delivery 79 -> 43 ms);
+`turn.start` 314 / 682 / 1,076 -> 170 / 182 / 188 ms over turns 4-50 / 450-500 / 951-1,000 (budget
+350: now met at every length; the slope is gone); 100 turns at the end 242 -> 120 s, and growing to
+1,000 turns took 17.1 instead of 30.6 min. Not moved: `history.page` 572 -> 592 ms at 50 turns, 860
+-> 852 ms at 1,000, and `context.rebuild` 22.6 -> 23.3 s (14 page cranks): these cranks are their
+own work (about 3 ms per record, C-5), and their collection is at most 136-189 ms of a 0.8-1.6 s
+crank [inferred: from the worker rows at the same heap; the page crank's split is not measured].
+Decision: C-7 is closed for the fixed per-crank cost; `history.page` and `context.rebuild` stay with
+M2 W2.5 and J-0322 option (b).
+
+### J-9304 2026-11-17 C-7 heap high-water marks and the ceiling margin - perf
+Evidence: `crank.heap` rows of J-9300 and J-9303 (the session vat's slot capacity, pages x 256, at its
+snapshot) and the worker rows' `liveSlots` and `slotCapacityMax`.
+Reading: slot capacity (the arena's high-water mark, what the ceiling counts) 296,704 -> 337,408 (new
+session), 459,264 -> 547,584 (50 turns), 722,176 -> 783,104 (1,000 turns), against 4,000,000: 19.6 %
+at most. Live slots after a collection are much smaller (43,000 new, 70,000 at 50 turns, 327,000 at
+1,000 turns): the capacity was set by the heaviest crank, not by live data (C-21). Under the
+allocation schedule a crank starts with less than 131,072 slots (and 16 MiB of chunk footprint) of
+uncollected growth, so it fits wherever it would fit under every-crank collection with that much to
+spare: 3.3 % of the harness's 4,000,000-slot ceiling, 13 % of Thixotrope's default 1,000,000. The
+worker test bounds the high-water mark by live heap + allowance + one crank.
+Decision: the margin is accepted and stated in the Thixotrope README; the harness ceiling stays at
+4,000,000 until C-21.
+
+### J-9305 2026-11-17 C-21 a collection inside a crank - incompatible
+Evidence: `rust/engine/ironhorse-vm/src/interp/gc.rs` (`admit_collection`: only a quiescent machine,
+or one at a shared-compartment boundary, may collect), `interp/persist.rs` (`is_quiescent`),
+`interp/natives/weak.rs` and `native_ids.rs` (`WeakRef.prototype.deref` keeps its target for the rest
+of the job "which the quiescent-only collector satisfies by construction": there is no kept list),
+`RECLAMATION.md` ("No collection runs within a crank", "Native-local values across callbacks cannot
+be exposed to supported collection").
+Reading: the engine cannot collect safely inside a crank today, not even between promise jobs. Three
+pieces are missing: (1) a KeepDuringJob list rooted until the end of the crank's drain (ECMA-262
+ClearKeptObjects runs after the whole synchronous sequence; a between-jobs collection without it
+would clear a WeakRef whose target was dereferenced earlier in the same crank); (2) a safe point in
+the job drain (`run_shared_outcome` / `run_promise_jobs`) where no Rust local holds a slot index,
+with the root set proved complete there by the `gc_visitation_registry.rs` method, and
+`admit_collection` admitting exactly that point; (3) a deterministic trigger at that point (the same
+live-slot growth count as J-9301, read between jobs), with the sweep's flagged cleanups left for the
+end of the drain as now. A crank that allocates inside one synchronous job (one big marshal) would
+still need the whole allocation under the ceiling; only multi-job cranks (a 100-call round's
+answers) gain.
+Decision: not built in this unit (engine work with its own determinism proof); proposed as above.
+Expected gain: the ceiling would bound live heap plus one job instead of live heap plus one crank;
+the 4,000,000-slot setting (J-0392) could return toward 1,000,000 for the harness's cranks, which
+J-9304 shows hold 70,000-330,000 live slots with high-water marks of 340,000-780,000.
+
+### J-9306 2026-11-17 C-7 what changed for other users - deviation
+Evidence: J-9301, J-9302.
+Reading: worker digest `367e78ad...` (was `7cda4467...`): every existing Ironhorse state directory is
+refused as an incompatible runtime, as for any worker change. Boot fingerprint, boot bundles and
+snapshot goldens unchanged. New limits `gcPolicy`, `gcSlotAllowance`, `gcChunkAllowance`,
+`gcCrankInterval` in `runtime.json` and `status().ironhorse`, from `THIXOTROPE_GC_*`; fixed per state
+directory. Semantics: an OCapN peer's `gc-exports`/`gc-answers` frames (any FinalizationRegistry
+callback) leave up to 32 cranks later, or in the first crank after a wake, instead of in the crank that
+freed the target; hub answer and export rows live correspondingly longer (J-9301: at most 12 owed
+rows in the lane scenario). Computron accounting of a crank is unchanged unless finalizer callbacks
+run in it (J-9302).
+Decision: recorded as CC-022 and CC-023.
+
+### J-9307 2026-11-17 C-7 follow-ups outside this unit's files - awkward
+Evidence: this unit's ownership (worker, engine, `pkg/src/ironhorse`, the transport, their tests,
+`perf/crank.perf.mjs`).
+Reading: (1) `H/scripts/serve.mjs` passes only an allowlist of variables to the supervisor, which
+does not include `THIXOTROPE_GC_POLICY`, `THIXOTROPE_GC_SLOT_ALLOWANCE`, `THIXOTROPE_GC_CHUNK_ALLOWANCE`
+or `THIXOTROPE_GC_CRANK_INTERVAL`, so the harness always serves the defaults; (2) test templates key
+on the slot ceiling but not on these limits, and a state refuses a different schedule, so a run with
+another schedule needs its own template key; (3) `H/README.md` should list `perf/crank.perf.mjs` (about
+50 min at CRANK_TURNS 1,000: 17 min of turns, three restarts, 6-12 worker row sets) and the harness
+integration files were not run against the new schedule in this unit (the lane and the perf run were);
+any harness test that expects a gc frame in the crank that freed its import will now see it later;
+(4) `m0-results.md` page 6 still lists C-7 as open.
+Decision: for the harness owner.
