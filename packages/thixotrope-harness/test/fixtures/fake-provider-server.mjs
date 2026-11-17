@@ -424,10 +424,20 @@ export const startFakeProviderServer = async ({
       // eslint-disable-next-line no-await-in-loop
       if (wait > 0) await sleep(wait);
       if (gone) return;
-      const flushed = res.write(events[i].text);
+      /** @type {() => void} */
+      let written = () => {};
+      const handed = new Promise(resolve => {
+        written = () => resolve(undefined);
+      });
+      const flushed = res.write(events[i].text, () => written());
       record.events += 1;
       trace?.({ request: requestIndex, event: i, at: performance.now() });
-      if (!flushed) {
+      if (entry.disconnectAfter !== undefined) {
+        // Before a planned disconnect every event so far reaches the
+        // socket, so the client sees exactly `disconnectAfter` events.
+        // eslint-disable-next-line no-await-in-loop
+        await handed;
+      } else if (!flushed) {
         // eslint-disable-next-line no-await-in-loop
         await new Promise(resolve => {
           res.once('drain', resolve);

@@ -45,7 +45,12 @@ const MAX_TIMER_MS = 2_147_483_647;
 
 /**
  * @param {object} options
- * @param {{ startRound: (req: any, channel: any, prepare?: () => Promise<any>, owner?: any) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} options.provider
+ * @param {{ startRound: (req: any, channel: any, prepare?: () => Promise<any>, owner?: any) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void, unexpectedFailure?: string }} options.provider
+ *   `cancelRound` and `releaseTurn` stop the turn's round; an API provider
+ *   aborts its request with them (M2 W2.1a, R4-7: the provider's server
+ *   sees the connection close) and sends nothing more to the vat.
+ *   `unexpectedFailure` (M2): the fixed reason of a round whose provider
+ *   threw (R4-79)
  * @param {any} options.channel the session's channel (deltas go here, in-process)
  * @param {import('./timers.js').Timers} options.timers
  * @param {() => number} [options.now]
@@ -88,10 +93,15 @@ export const makeEndpoint = ({
     const project = prepare === undefined ? undefined : () => prepare(req);
     provider.startRound(req, channel, project, owner).catch(error => {
       if (released.has(req.turn)) return;
-      const reason = cutText(
-        `scripted provider failed: ${error?.message ?? error}`,
-        limits.reasonUnits,
-      );
+      // M2 W2.1a (R4-79): an API provider names a fixed text for a failure
+      // it did not foresee, so no lower layer's message (which may quote a
+      // provider body) reaches the turn's record.
+      const reason =
+        provider.unexpectedFailure ??
+        cutText(
+          `scripted provider failed: ${error?.message ?? error}`,
+          limits.reasonUnits,
+        );
       E.sendOnly(req.sink).roundFailed(
         harden({ round: req.round, reason, at: now() }),
       );

@@ -28,6 +28,7 @@ import { makeContextCache } from './context-cache.js';
 import { makeListChannel } from './list-channel.js';
 import { makeEventLog, makeScriptedProvider } from './providers/scripted.js';
 import { makeEchoTool } from './tools/echo.js';
+import { openRouterKind } from './providers/openrouter.js';
 
 /**
  * @typedef {object} BackendKind
@@ -48,6 +49,8 @@ import { makeEchoTool } from './tools/echo.js';
 export const backendKinds = harden([
   // M1a W1a.2: the scripted fake provider; offers echo.
   { kind: 'scripted', makeProvider: makeScriptedProvider, tools: ['echo'] },
+  // M2 W2.1a: OpenRouter chat completions, streamed (m2-interfaces.md 8.1).
+  openRouterKind,
 ]);
 
 /**

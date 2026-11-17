@@ -1,0 +1,671 @@
+// @ts-check
+/**
+ * The OpenRouter provider, streamed (M2 W2.1a; R4-12, R4-13, R4-41, R4-74,
+ * R4-78, R4-79, R4-108; G-03; designs/m2-interfaces.md 8.1).
+ *
+ * Chat completions with `stream: true` (the Endo provider asked with
+ * `stream: false`, so its UI saw each reply whole: G-03, not copied), and
+ * `tools` with `tool_choice: 'auto'` when the round offers tools. The answer
+ * is read as server-sent events (`sse.js`, linear): every `delta.content`
+ * is published to the session's channel as it arrives (acceptance 1),
+ * `delta.tool_calls` fragments are joined per `index` into whole calls whose
+ * arguments stay text, the `finish_reason` and the trailing usage chunk are
+ * kept, `[DONE]` ends it. What the answer means is lal
+ * `providers/openrouter.js`'s (1315bef86), adapted to a stream:
+ *
+ * - `content_filter`: `textOf.openRouterStopped('content_filter', served)`;
+ * - `length` with text and no tool call: the text plus `\n\n` and
+ *   `texts.outputLimitNote` (published as one more delta, so the transcript
+ *   and the live view agree); `length` without text, or with a tool call cut
+ *   mid-argument: `textOf.openRouterStopped('length', served)`;
+ * - neither text (after trimming) nor a tool call:
+ *   `textOf.openRouterEmpty(details)` (retryable while nothing was
+ *   delivered, R4-74: W2.1b);
+ * - an `error` object in a chunk: `textOf.openRouterApiError(details)`; a
+ *   finish reason `error`, or a stream that ends before any finish reason
+ *   (a mid-stream disconnect): `textOf.openRouterNoMessage(details)` or
+ *   `texts.openRouterUnreachable`;
+ * - a non-2xx status: `textOf.openRouterHttp(status)` (the body is never
+ *   read); no response: `texts.openRouterUnreachable`; the request timeout
+ *   (`spec.timeoutMs`, default 1 h, R4-93): `textOf.openRouterTimeout(s)`.
+ *
+ * `served` and `details` are lal's parenthesised facts, each value shown
+ * only when it has the shape of the identifier it should be (`shown`, lal's
+ * SHAPES/KEY_PREFIX/looksRandom rules, ported word for word): no provider
+ * body, and nothing shaped like a key, reaches a failure text (R4-79). The
+ * served-by model and provider of a successful round go into its
+ * `servedBy` (R4-108).
+ *
+ * The key is read through the backend's grant at every round (`readKey()`,
+ * R4-82; W2.3's read path, wired by W2.2): a read failure fails the round
+ * with `textOf.secretFailed(code)`. The model id must be `org/model`
+ * (`texts.openRouterModelPrefix`). No output limit is sent unless the round
+ * asks for one (`options.maxOutputTokens`, R4-92: OpenRouter none).
+ *
+ * Retry (R4-74, R4-105) is W2.1b's: `makeOpenRouterProvider({ retry })`
+ * takes a wrapper `({ attempt, signal }) => AsyncIterable<RoundEvent>`
+ * around one attempt (default: the single attempt). An attempt's failure is
+ * a `ProviderFailure` with `retryable`, `retryAfterMs`, `timedOut` and
+ * `delivered` (it published text or reported usage) set.
+ *
+ * Node only (adapter).
+ */
+/* eslint-disable import/no-relative-packages -- guest/ is its own private package */
+import { texts, textOf } from '../../../../guest/lib/interfaces.js';
+import { isStaged } from '../../../../guest/session/staging.js';
+import { usageFromOpenRouter } from '../../../../guest/lib/token-usage.js';
+/* eslint-enable import/no-relative-packages */
+import {
+  bodyChunks,
+  discardBody,
+  failureKind,
+  postJson,
+  retryAfterMs,
+} from './http.js';
+import { parseSse } from './sse.js';
+import {
+  makeRoundControl,
+  ProviderFailure,
+  runProviderRound,
+} from './round.js';
+import { makeEventLog } from './scripted.js';
+
+/** OpenRouter's API base (a spec's `baseUrl` replaces it: the fake server). */
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+/** R4-93: one request may take an hour. */
+export const OPENROUTER_TIMEOUT_MS = 3_600_000;
+
+// ---- What of a response may be shown (lal providers/openrouter.js:72-157)
+
+const SHAPES = harden({
+  // 429, or a symbolic code such as `rate_limited`.
+  code: /^(?:\d{1,5}|[a-z]{1,16}(?:_[a-z]{1,16}){0,3})$/,
+  // `stop`, `error`, `length`, ...
+  reason: /^[a-z]{1,16}(?:_[a-z]{1,16}){0,2}$/,
+  // `vendor/model-7b:free`: always qualified by its organization.
+  model: /^[a-z0-9][a-z0-9.-]{0,31}\/[A-Za-z0-9][A-Za-z0-9.:+-]{0,63}$/,
+  // `Google AI Studio`: at most three short words.
+  provider: /^[A-Za-z0-9][A-Za-z0-9.+-]{0,15}(?: [A-Za-z0-9.+-]{1,16}){0,2}$/,
+});
+const LONGEST_WORD = 16;
+const KEY_PREFIX =
+  /(?:^|[^A-Za-z0-9])(?:sk|pk|rk|gsk|hf|ghp|gho|ghs|ghu|glpat|xox[a-z]?|bearer)(?:[^A-Za-z]|$)/i;
+const GLUED_KEY_PREFIX = /(?:^|[^A-Za-z0-9])(?:AKIA|ASIA|AIza|eyJ)[A-Za-z0-9]/;
+
+/** @param {string} text */
+const looksRandom = text => {
+  const words = text.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  if (
+    words.some(
+      word => word.length >= 12 && /^[0-9a-f]+$/i.test(word) && /\d/.test(word),
+    )
+  ) {
+    return true;
+  }
+  const mixed = words.filter(
+    word =>
+      word.length >= 8 &&
+      /[A-Za-z]/.test(word) &&
+      (word.match(/\d/g) || []).length >= 3,
+  );
+  return mixed.length >= 2;
+};
+
+/**
+ * The value when it has the shape of `shape`'s identifier, else undefined.
+ * @param {keyof typeof SHAPES} shape
+ * @param {unknown} value
+ * @returns {string | undefined}
+ */
+export const shown = (shape, value) => {
+  const text =
+    typeof value === 'number' && Number.isFinite(value) ? `${value}` : value;
+  if (typeof text !== 'string' || !SHAPES[shape].test(text)) return undefined;
+  if (text.split(/[^A-Za-z0-9_]+/).some(word => word.length > LONGEST_WORD)) {
+    return undefined;
+  }
+  if (KEY_PREFIX.test(text) || GLUED_KEY_PREFIX.test(text)) return undefined;
+  if (looksRandom(text)) return undefined;
+  return text;
+};
+harden(shown);
+
+/**
+ * lal's `describe`: ` (label value, ...)` of the facts that may be shown.
+ * @param {Array<[string, keyof typeof SHAPES, unknown]>} facts
+ */
+export const describeFacts = facts => {
+  /** @type {[string, string][]} */
+  const parts = [];
+  for (const [label, shape, value] of facts) {
+    const text = shown(shape, value);
+    if (text !== undefined) parts.push([label, text]);
+  }
+  return textOf.servedBy(parts);
+};
+harden(describeFacts);
+
+/** @param {unknown} status */
+const retryableStatus = status =>
+  status === 408 ||
+  status === 429 ||
+  (typeof status === 'number' && status >= 500 && status <= 599);
+
+// ---- The request
+
+/**
+ * The OpenAI-compatible messages of a projection (transcript records,
+ * projection.js): an assistant message and the tool calls that follow it
+ * become one message with `tool_calls` (lal openai-compatible-messages.js);
+ * a tool result becomes a `tool` message.
+ * @param {readonly any[]} transcript
+ * @param {string | undefined} system
+ */
+export const openRouterMessages = (transcript, system) => {
+  /** @type {any[]} */
+  const messages = [];
+  if (system !== undefined && system !== '')
+    messages.push({ role: 'system', content: system });
+  /** @type {any} */
+  let assistant;
+  for (const record of transcript) {
+    if (record.kind === 'message' && record.role === 'assistant') {
+      assistant = { role: 'assistant', content: record.content ?? '' };
+      messages.push(assistant);
+    } else if (record.kind === 'tool-call') {
+      if (assistant === undefined) {
+        assistant = { role: 'assistant', content: null };
+        messages.push(assistant);
+      }
+      if (assistant.tool_calls === undefined) {
+        assistant.tool_calls = [];
+        if (assistant.content === '') assistant.content = null;
+      }
+      assistant.tool_calls.push({
+        id: record.id,
+        type: 'function',
+        function: { name: record.name, arguments: record.args },
+      });
+    } else if (record.kind === 'tool-result') {
+      messages.push({
+        role: 'tool',
+        tool_call_id: record.id,
+        content: record.content ?? '',
+      });
+    } else if (record.kind === 'message') {
+      assistant = undefined;
+      messages.push({ role: record.role, content: record.content ?? '' });
+    }
+  }
+  return messages;
+};
+harden(openRouterMessages);
+
+/**
+ * A round's tools as OpenAI-style function tools. `parameters` is JSON
+ * Schema as text (the contract's `ToolDescription`); one that does not
+ * parse is offered as an empty object schema.
+ * @param {readonly any[]} tools
+ */
+export const openRouterTools = tools =>
+  tools.map(tool => {
+    let parameters;
+    try {
+      parameters = JSON.parse(tool.parameters);
+    } catch {
+      parameters = { type: 'object', properties: {} };
+    }
+    return {
+      type: 'function',
+      function: { name: tool.name, description: tool.description, parameters },
+    };
+  });
+harden(openRouterTools);
+
+/**
+ * The request body (exported for tests).
+ * @param {object} request
+ * @param {string} request.model
+ * @param {any[]} request.messages
+ * @param {readonly any[]} request.tools
+ * @param {number} [request.maxOutputTokens]
+ * @param {string} [request.reasoningEffort]
+ */
+export const openRouterBody = ({
+  model,
+  messages,
+  tools,
+  maxOutputTokens,
+  reasoningEffort,
+}) => ({
+  model,
+  messages,
+  ...(tools.length
+    ? { tools: openRouterTools(tools), tool_choice: 'auto' }
+    : {}),
+  stream: true,
+  // OpenRouter reports usage in the last chunk of a stream when asked
+  // (usage accounting). [real-provider]: confirm the field against the API.
+  usage: { include: true },
+  ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
+  ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
+});
+harden(openRouterBody);
+
+/**
+ * One streamed attempt: the events of `runProviderRound`, or a thrown
+ * `ProviderFailure`.
+ * @param {object} options
+ * @param {string} options.url
+ * @param {string} options.key
+ * @param {any} options.body
+ * @param {AbortSignal} options.signal
+ * @param {number} options.timeoutMs
+ * @param {typeof globalThis.fetch} [options.fetch]
+ * @param {() => number} [options.now]
+ * @returns {AsyncGenerator<import('./round.js').RoundEvent, void, undefined>}
+ */
+export async function* openRouterAttempt({
+  url,
+  key,
+  body,
+  signal,
+  timeoutMs,
+  fetch,
+  now,
+}) {
+  let delivered = false;
+  const seconds = Math.round(timeoutMs / 1000);
+  /**
+   * @param {unknown} error
+   * @param {AbortSignal | undefined} requestSignal
+   */
+  const transport = (error, requestSignal) => {
+    const kind = failureKind(error, signal, requestSignal);
+    if (kind === 'aborted') return error;
+    return new ProviderFailure(
+      kind === 'timeout'
+        ? textOf.openRouterTimeout(seconds)
+        : texts.openRouterUnreachable,
+      { retryable: true, timedOut: kind === 'timeout', delivered },
+    );
+  };
+  /** @type {Response & { requestSignal?: AbortSignal }} */
+  let response;
+  try {
+    response = await postJson({
+      url,
+      headers: {
+        authorization: `Bearer ${key}`,
+        accept: 'text/event-stream',
+      },
+      body,
+      signal,
+      timeoutMs,
+      ...(fetch === undefined ? {} : { fetch }),
+    });
+  } catch (error) {
+    throw transport(error, undefined);
+  }
+  if (!response.ok) {
+    const after = retryAfterMs(response, now);
+    discardBody(response);
+    throw new ProviderFailure(textOf.openRouterHttp(response.status), {
+      retryable: retryableStatus(response.status),
+      status: response.status,
+      ...(after === undefined ? {} : { retryAfterMs: after }),
+    });
+  }
+  if (
+    !/^text\/event-stream(?:;|$)/i.test(
+      response.headers.get('content-type') ?? '',
+    )
+  ) {
+    discardBody(response);
+    throw new ProviderFailure(texts.openRouterUnreachable, { retryable: true });
+  }
+
+  /** @type {unknown} */
+  let model;
+  /** @type {unknown} */
+  let provider;
+  /** @type {string | undefined} */
+  let finishReason;
+  /** @type {any} */
+  let usage;
+  /** @type {any} */
+  let apiError;
+  let done = false;
+  let nonBlank = false;
+  let textLength = 0;
+  /** index -> the call being joined */
+  /** @type {Map<number, { id?: string, name: string, args: string[] }>} */
+  const calls = new Map();
+  const served = () =>
+    describeFacts([
+      ['served by', 'model', model],
+      ['via', 'provider', provider],
+    ]);
+  try {
+    for await (const { data } of parseSse(bodyChunks(response))) {
+      if (data === '[DONE]') {
+        done = true;
+        break;
+      }
+      /** @type {any} */
+      let chunk;
+      try {
+        chunk = JSON.parse(data);
+      } catch {
+        throw new ProviderFailure(texts.openRouterUnreachable, {
+          retryable: true,
+          delivered,
+        });
+      }
+      if (chunk === null || typeof chunk !== 'object') chunk = {};
+      if (model === undefined && chunk.model !== undefined) model = chunk.model;
+      if (provider === undefined && chunk.provider !== undefined)
+        provider = chunk.provider;
+      if (chunk.error !== undefined && chunk.error !== null) {
+        apiError = chunk.error;
+      }
+      if (chunk.usage !== undefined && chunk.usage !== null) {
+        usage = usageFromOpenRouter(chunk.usage);
+      }
+      const choice = Array.isArray(chunk.choices)
+        ? chunk.choices[0]
+        : undefined;
+      if (choice !== undefined && choice !== null) {
+        const delta = choice.delta ?? {};
+        if (typeof delta.content === 'string' && delta.content !== '') {
+          delivered = true;
+          if (!nonBlank && delta.content.trim() !== '') nonBlank = true;
+          textLength += delta.content.length;
+          yield { delta: delta.content };
+        }
+        if (Array.isArray(delta.tool_calls)) {
+          for (const fragment of delta.tool_calls) {
+            const index = Number.isInteger(fragment?.index)
+              ? fragment.index
+              : calls.size;
+            let call = calls.get(index);
+            if (call === undefined) {
+              if (calls.size >= 4096) {
+                throw new ProviderFailure(texts.frameLimit, { delivered });
+              }
+              call = { name: '', args: [] };
+              calls.set(index, call);
+            }
+            if (typeof fragment?.id === 'string' && fragment.id !== '')
+              call.id = fragment.id;
+            const fn = fragment?.function;
+            if (typeof fn?.name === 'string' && fn.name !== '')
+              call.name = fn.name;
+            if (typeof fn?.arguments === 'string') call.args.push(fn.arguments);
+          }
+        }
+        if (typeof choice.finish_reason === 'string')
+          finishReason = choice.finish_reason;
+      }
+    }
+  } catch (error) {
+    if (error instanceof ProviderFailure) throw error;
+    throw transport(error, response.requestSignal);
+  }
+  if (usage !== undefined) {
+    delivered = true;
+    yield { usage };
+  }
+  if (apiError !== undefined) {
+    throw new ProviderFailure(
+      textOf.openRouterApiError(
+        describeFacts([
+          ['code', 'code', apiError?.code],
+          ['served by', 'model', model],
+          ['via', 'provider', provider],
+        ]),
+      ),
+      {
+        retryable:
+          !delivered &&
+          retryableStatus(
+            typeof apiError?.code === 'string' && /^\d{3}$/.test(apiError.code)
+              ? Number(apiError.code)
+              : apiError?.code,
+          ),
+        delivered,
+      },
+    );
+  }
+  if (finishReason === undefined) {
+    // Cut before the model said why it stopped: not a whole answer.
+    throw new ProviderFailure(
+      done
+        ? textOf.openRouterNoMessage(
+            describeFacts([
+              ['finish_reason', 'reason', 'none'],
+              ['served by', 'model', model],
+              ['via', 'provider', provider],
+            ]),
+          )
+        : texts.openRouterUnreachable,
+      { retryable: !delivered, delivered },
+    );
+  }
+  if (finishReason === 'error') {
+    throw new ProviderFailure(
+      textOf.openRouterNoMessage(
+        describeFacts([
+          ['finish_reason', 'reason', finishReason],
+          ['served by', 'model', model],
+          ['via', 'provider', provider],
+        ]),
+      ),
+      { retryable: !delivered, delivered },
+    );
+  }
+  if (finishReason === 'content_filter') {
+    throw new ProviderFailure(
+      textOf.openRouterStopped('content_filter', served()),
+      { delivered },
+    );
+  }
+  const toolCalls = [...calls.entries()].sort((a, b) => a[0] - b[0]);
+  if (finishReason === 'length' && (textLength === 0 || toolCalls.length > 0)) {
+    throw new ProviderFailure(textOf.openRouterStopped('length', served()), {
+      delivered,
+    });
+  }
+  if (toolCalls.length === 0 && !nonBlank) {
+    // Only whitespace, or nothing: lal's empty answer.
+    throw new ProviderFailure(
+      textOf.openRouterEmpty(
+        `${describeFacts([['finish_reason', 'reason', finishReason]])}${served()}`,
+      ),
+      { retryable: !delivered, delivered },
+    );
+  }
+  if (finishReason === 'length') {
+    yield { delta: `\n\n${texts.outputLimitNote}` };
+  }
+  for (const [, call] of toolCalls) {
+    yield {
+      toolCall: {
+        ...(call.id === undefined ? {} : { callId: call.id }),
+        name: call.name,
+        args: call.args.join(''),
+      },
+    };
+  }
+  /** @type {{ modelId?: string, provider?: string }} */
+  const servedBy = {};
+  const shownModel = shown('model', model);
+  const shownProvider = shown('provider', provider);
+  if (shownModel !== undefined) servedBy.modelId = shownModel;
+  if (shownProvider !== undefined) servedBy.provider = shownProvider;
+  yield { servedBy };
+  yield { stop: finishReason };
+}
+harden(openRouterAttempt);
+
+/**
+ * The key, through the backend's grant (R4-82).
+ * @param {(() => Promise<string>) | undefined} readKey
+ */
+const keyOf = async readKey => {
+  if (readKey === undefined)
+    throw new ProviderFailure(textOf.secretFailed('READ_FAILED'));
+  try {
+    const key = await readKey();
+    if (typeof key !== 'string' || key.trim() === '') throw Error('no key');
+    return key;
+  } catch (error) {
+    const message = /** @type {Error} */ (error)?.message ?? '';
+    const code = /^Secret operation failed: "([A-Z_]+)"$/.exec(message)?.[1];
+    throw new ProviderFailure(textOf.secretFailed(code ?? 'READ_FAILED'));
+  }
+};
+
+/**
+ * @param {object} options
+ * @param {string} options.label the backend's label
+ * @param {any} [options.spec] the BackendSpec (`modelId`, `baseUrl`,
+ *   `timeoutMs`, `maxOutputTokens`, `logPath`)
+ * @param {() => Promise<string>} [options.readKey] the key, read through the
+ *   backend's grant at every round (R4-82)
+ * @param {import('../timers.js').Timers} options.timers
+ * @param {import('./scripted.js').EventLog} [options.log]
+ * @param {import('../blobs.js').BlobStore} [options.blobs]
+ * @param {typeof globalThis.fetch} [options.fetch]
+ * @param {() => number} [options.now]
+ * @param {(args: { attempt: (signal: AbortSignal) => AsyncIterable<import('./round.js').RoundEvent>, signal: AbortSignal }) => AsyncIterable<import('./round.js').RoundEvent>} [options.retry]
+ *   W2.1b's retry wrapper (default: one attempt)
+ * @param {string} [options.logPath] (as the scripted kind's options)
+ */
+export const makeOpenRouterProvider = ({
+  label,
+  spec = {},
+  readKey,
+  timers,
+  logPath = spec.logPath,
+  log = makeEventLog({ label, logPath }),
+  blobs,
+  fetch,
+  now = () => Date.now(),
+  retry = ({ attempt, signal }) => attempt(signal),
+}) => {
+  const baseUrl = String(spec.baseUrl ?? OPENROUTER_BASE_URL).replace(
+    /\/+$/,
+    '',
+  );
+  const timeoutMs = spec.timeoutMs ?? OPENROUTER_TIMEOUT_MS;
+  /** turn -> the control of its running round. */
+  /** @type {Map<any, import('./round.js').RoundControl>} */
+  const running = new Map();
+
+  /**
+   * The system prompt's text (inline, or staged: read in process).
+   * @param {any} system
+   * @param {any} owner
+   */
+  const systemText = async (system, owner) => {
+    if (system === undefined) return undefined;
+    if (!isStaged(system)) return system;
+    if (blobs === undefined) throw Error('no blob store');
+    return blobs.read(system.blob, owner);
+  };
+
+  return harden({
+    /**
+     * @param {any} req
+     * @param {any} channel
+     * @param {() => Promise<any>} [prepare]
+     * @param {any} [owner]
+     */
+    startRound: async (req, channel, prepare, owner) => {
+      running.get(req.turn)?.stop('release');
+      const control = makeRoundControl(timers);
+      running.set(req.turn, control);
+      try {
+        await runProviderRound({
+          req,
+          channel,
+          prepare,
+          blobs,
+          log,
+          owner,
+          control,
+          timers,
+          now,
+          label,
+          unreachable: texts.openRouterUnreachable,
+          stream: async function* openRouterStream({ projection, signal }) {
+            const model = req.options.modelId;
+            if (typeof model !== 'string' || !model.includes('/'))
+              throw new ProviderFailure(texts.openRouterModelPrefix);
+            const key = await keyOf(readKey);
+            let system;
+            try {
+              system = await systemText(req.system, owner);
+            } catch (error) {
+              throw new ProviderFailure(
+                textOf.stagingFailed(
+                  /** @type {Error} */ (error)?.message ?? String(error),
+                ),
+              );
+            }
+            const transcript =
+              projection?.transcript ??
+              req.append
+                .filter(
+                  (/** @type {any} */ r) =>
+                    r.kind === 'turn-started' && typeof r.input === 'string',
+                )
+                .map((/** @type {any} */ r) => ({
+                  kind: 'message',
+                  role: 'user',
+                  content: r.input,
+                }));
+            const body = openRouterBody({
+              model,
+              messages: openRouterMessages(transcript, system),
+              tools: req.tools,
+              maxOutputTokens:
+                req.options.maxOutputTokens ?? spec.maxOutputTokens,
+              reasoningEffort: req.options.reasoningEffort,
+            });
+            yield* retry({
+              signal,
+              attempt: attemptSignal =>
+                openRouterAttempt({
+                  url: `${baseUrl}/chat/completions`,
+                  key,
+                  body,
+                  signal: attemptSignal,
+                  timeoutMs,
+                  ...(fetch === undefined ? {} : { fetch }),
+                  now,
+                }),
+            });
+          },
+        });
+      } finally {
+        if (running.get(req.turn) === control) running.delete(req.turn);
+      }
+    },
+    /** The endpoint's text for a round that threw (R4-79: fixed). */
+    unexpectedFailure: texts.openRouterUnreachable,
+    /** @param {any} turn aborts its request (R4-7); logged `cancelled` */
+    cancelRound: turn => running.get(turn)?.stop('cancel'),
+    /** @param {any} turn aborts its request silently (lease released) */
+    releaseTurn: turn => running.get(turn)?.stop('release'),
+  });
+};
+harden(makeOpenRouterProvider);
+
+/** The `backendKinds` entry (AH/index.js hook table). */
+export const openRouterKind = harden({
+  kind: 'openrouter',
+  makeProvider: makeOpenRouterProvider,
+  tools: harden([]),
+});
