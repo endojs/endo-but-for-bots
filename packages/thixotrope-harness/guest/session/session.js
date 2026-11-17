@@ -81,11 +81,13 @@ export const makeSession = (
     // W1b.2: the adapter's context cache pulls records through it.
     contextSource: makeContextSource({ records }),
   });
-  // Receipts keep the turn's record; the Turn is minted when one is handed
-  // out (J-9152).
+  // Receipts keep the turn id; the Turn is minted when one is handed out
+  // while the session keeps the turn (J-9152, m2-interfaces.md 5.3).
+  // `QueueEntry.sendNow` claims through the runner (crank A).
   const queue = makeQueue({
     onChange: runner.queueChanged,
-    turnOf: runner.turnHandle,
+    turnOf: runner.turnById,
+    claim: () => runner.claimNext(),
   });
 
   /** Section 11: what recovery.js (W1a.5) works on. */

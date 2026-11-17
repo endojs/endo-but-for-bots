@@ -47,6 +47,7 @@
 import { m1bInterfaces, shapes, texts, textOf } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { runAgenticTurn } from '../lib/turn-engine.js';
+import { checkSubmission } from '../lib/pending-queue.js';
 import {
   boundToolOutput,
   fitsFrame,
@@ -1240,8 +1241,9 @@ export const makeTurnRunner = ({
     if (current !== undefined) return undefined;
     const item = queue.first();
     if (item !== undefined) {
+      // The receipt keeps the turn id, not the turn (m2-interfaces.md 5.3).
       return claim(submissionField(item.submission), lastKnownTime, info =>
-        queue.claim(item, info),
+        queue.claim(item, info.turnId),
       );
     }
     if (queue.holdReason() !== undefined) return undefined;
@@ -1377,6 +1379,17 @@ export const makeTurnRunner = ({
     const handle = known ?? makeTurn(info);
     remember(info.turnId, handle);
     return handle;
+  };
+
+  /**
+   * The Turn of a turn id while the session keeps the turn (live, kept or
+   * unresolved), else undefined (an archived turn; m2-interfaces.md 2.4,
+   * 5.3). Receipts hand it out.
+   * @param {string} turnId
+   */
+  const turnById = turnId => {
+    const info = turns.get(turnId);
+    return info === undefined ? undefined : turnHandle(info);
   };
 
   // ------------------------------------------------------------ previews
@@ -1603,6 +1616,7 @@ export const makeTurnRunner = ({
       if (held === undefined) openPorts();
     },
     turnHandle,
+    turnById,
     /**
      * An outside publish broke with the retired text: the adapter
      * restarted; ports with this publisher are dead. A turn using them
@@ -1620,15 +1634,9 @@ export const makeTurnRunner = ({
      * @param {number} at
      */
     startTurn: (input, at) => {
-      if (!isStaged(input) && input.trim() === '') {
-        throw Error(texts.blankSubmission);
-      }
-      // The frame rule rests on the session, not on its caller (J-9369).
-      if (!isStaged(input) && utf8Bytes(input) > limits.inlineBytes) {
-        throw Error(
-          textOf.inlineTooLarge(utf8Bytes(input), limits.inlineBytes),
-        );
-      }
+      // Blank and over-inlineBytes text are refused as enqueueOnce refuses
+      // them; the frame rule rests on the session (J-9150, J-9369).
+      checkSubmission(isStaged(input) ? input : { text: input });
       if (current !== undefined) throw Error(texts.activeTurn);
       const active = claim(input, at);
       flush();

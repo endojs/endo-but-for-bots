@@ -1,71 +1,51 @@
 // @ts-check
 /**
- * A session's waiting messages (M1a W1a.5; `designs/m1a-interfaces.md`
- * section 8; spec A.4 "Queue", R4-53, R4-55, R4-56).
+ * A session's queue (M1a W1a.5, M2 W2.4; `designs/m1a-interfaces.md` 8,
+ * `designs/m2-interfaces.md` 5; spec A.4 "Queue", R4-53..R4-56).
  *
- * A FIFO of waiting entries (at most `limits.maxWaiting`), one hold, and the
- * submission receipts (at most `limits.maxReceipts`) keyed by request id in a
- * `Map` (rule 12.10: request ids are data, never record keys). Each waiting
- * entry is a `QueueEntry` exo; receipts and pending rows carry it.
+ * The QueueEntry exos and the views over two parts:
+ * - `guest/lib/pending-queue.js`: the waiting entries (at most
+ *   `limits.maxWaiting`) and the receipts (at most `limits.maxReceipts` in
+ *   the 24 h window of the Composer's stamps), request ids, duplicates by
+ *   request id and by fingerprint (an inline text, or a staged text's
+ *   digest), edit, cancel, move to the head, the claim;
+ * - `submissions.js`: the hold, the release rule (R4-56), send-now.
  *
- * The heap is the durable record (orthogonal persistence), so unlike Fae's
- * pending-queue.js there is no `dispatching` or `interrupted` entry state:
- * the claim removes the entry in the crank that appends `TurnStarted`
- * (architecture 4.3), and a restart can never find an entry half-claimed.
+ * The heap is the durable record (orthogonal persistence), so unlike Fae
+ * there is no `dispatching` or `interrupted` entry state: the claim removes
+ * the entry in the crank that appends `TurnStarted` (architecture 4.3).
  *
  * What the queue decides and what it leaves to the session:
- * - `enqueueOnce` validates the request id, answers duplicates, prunes and
- *   bounds receipts, refuses a full queue, appends the entry and, for a new
- *   entry, releases every hold except `interrupted` (A.4: "a new message
- *   releases every hold except interrupted"). It never starts a turn: the
- *   session claims (`SessionCore.claimNext()`) after it.
+ * - `enqueueOnce` answers duplicates, applies the bounds, appends the entry
+ *   and, for a new entry, releases every hold except `interrupted`. It never
+ *   starts a turn: the session claims (`SessionCore.claimNext()`) after it.
  * - `first()` is the entry the session may claim, `undefined` while a hold
- *   is set. `claim(item, turn)` removes it and turns its receipt `started`
- *   with `turn`, in the caller's crank. `turn` is what the session wants
- *   kept: its plain record of the turn, which `turnOf` turns into the Turn
- *   object whenever a receipt is handed out (J-9152: a receipt keeps a record,
- *   not an exo).
- * - The receipt table (J-9152, contract section 8): at most `maxReceipts`
- *   receipts; a receipt is dropped once its request id was issued more than
- *   `retryWindowMs` before the `at` of an `enqueueOnce` (oldest first, at
- *   every `enqueueOnce`; the whole table only when it is full). A full table
- *   of live ids refuses with `texts.receiptLimit` (A.4: 4,096 kept). A
- *   receipt holds plain data and the session's record of its turn; no
- *   receipt keeps a QueueEntry that is no longer waiting (a cancelled
- *   entry's receipt names one shared stand-in whose `describe()` throws
- *   `texts.entryGone`).
+ *   is set. `claim(item, turnId)` removes it and turns its receipt
+ *   `started` with the turn id, in the caller's crank. A started receipt
+ *   keeps the turn id only (5.3): `turnOf(turnId)` gives the Turn while the
+ *   session keeps the turn, else the receipt carries `turnId` alone.
+ * - `QueueEntry.edit` replaces the text (the Composer stages it),
+ *   `cancel` drops the entry, `sendNow` moves it to the head, releases the
+ *   hold and asks the session to `claim()` (it starts at once when idle,
+ *   next when a turn runs).
  * - `onChange()` runs after every change of the entries or the hold (the
- *   session publishes `pending` and reports `queuedCount`). An `onChange`
- *   that throws is ignored: the change has happened and must not be
- *   reported to the caller as refused.
+ *   session publishes `pending` and reports `queuedCount`); one that throws
+ *   is ignored: the change has happened.
  *
  * Vat module: prelude globals only, no clock (`at` comes from the caller),
  * no data-dependent record keys.
  */
-import { interfaces, texts, textOf } from '../lib/interfaces.js';
+import { m2Interfaces, texts } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { previewText, utf8Bytes } from '../lib/bounded.js';
-import {
-  isStaged,
-  previewOf,
-  sameSubmission,
-  submissionField,
-} from './staging.js';
+import { makePendingQueue } from '../lib/pending-queue.js';
+import { makeSubmissions } from './submissions.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { defineExoClass, harden } = /** @type {GuestGlobals} */ (globalThis);
-
-/**
- * Throws an Error whose message is exactly `message` (a fixed text).
- * @param {string} message
- * @returns {never}
- */
-const refuse = message => {
-  throw Error(message);
-};
-
-/** A.4 request id: 13-digit millisecond timestamp, '-', a UUID. */
-const REQUEST_ID = /^\d{13}-[0-9a-f-]{36}$/;
+/** @import { QueueItem, Internal, StoredReceipt } from '../lib/pending-queue.js' */
+const { Fail, defineExoClass, harden } = /** @type {GuestGlobals} */ (
+  globalThis
+);
 
 /**
  * Bytes of a pending row besides its preview: the record keys `entry`,
@@ -80,18 +60,13 @@ const VIEW_OVERHEAD_BYTES = 64;
  * @typedef {any} Submission `{ text }`, or (M1b) a StagedText
  * @typedef {'restart' | 'stopped' | 'refused' | 'interrupted' | 'unavailable'} HoldReason
  * @typedef {{ reason: HoldReason, message: string }} Hold
- * @typedef {object} QueueItem
- * @property {any} entry the QueueEntry exo
- * @property {string} key `q<n>`, for page re-finding (F.2 d)
- * @property {Submission} submission
- * @property {number} at when it was submitted (the Composer's stamp)
- * @property {string} requestId
  * @typedef {object} Receipt
  * @property {string} requestId
  * @property {boolean} duplicate
  * @property {'queued' | 'started'} state
  * @property {any} [entry]
  * @property {any} [turn]
+ * @property {string} [turnId]
  * @typedef {object} PendingRow
  * @property {any} entry
  * @property {string} key
@@ -104,14 +79,13 @@ const VIEW_OVERHEAD_BYTES = 64;
  * @property {(requestId: string) => Receipt | undefined} receiptFor
  * @property {() => PendingView} view
  * @property {() => QueueItem | undefined} first
- * @property {(item: QueueItem, turn: any) => void} claim `turn` is kept in
- *   the receipt and handed out as `turnOf(turn)`
+ * @property {(item: QueueItem, turnId: any) => void} claim the receipt
+ *   keeps `turnId` and hands out `turnOf(turnId)`
  * @property {(reason: HoldReason, message: string) => void} hold
  * @property {() => void} release
  * @property {() => HoldReason | undefined} holdReason
  * @property {() => number} size
  */
-
 /**
  * `startTurn`'s refusal (R4-10; A.4 direct start): throws the fixed text
  * while a turn is current. The queue's entries and hold do not matter.
@@ -128,97 +102,19 @@ harden(assertNoActiveTurn);
  * @param {object} [options]
  * @param {() => void} [options.onChange] runs after every change of the
  *   entries or the hold
- * @param {(turn: any) => any} [options.turnOf] the Turn object of what
- *   `claim` was given (the session passes its turn record and mints the
- *   Turn); the identity by default
+ * @param {(turnId: any) => any} [options.turnOf] the Turn of a claimed
+ *   turn id, or undefined when the session no longer keeps the turn (an
+ *   archived one); the identity by default (tests)
+ * @param {() => unknown} [options.claim] the session's claim of the next
+ *   entry (`SessionCore.claimNext`), which `sendNow` asks for; does nothing
+ *   by default
  * @returns {Queue}
  */
 export const makeQueue = ({
   onChange = () => {},
-  turnOf = turn => turn,
+  turnOf = turnId => turnId,
+  claim: claimNext = () => undefined,
 } = {}) => {
-  /**
-   * Waiting entries, oldest first (a Set keeps insertion order). At most
-   * maxWaiting; claim and cancel remove from it. Not an array: in an
-   * Ironhorse vat an element pushed onto this array came out non-writable,
-   * so `splice` at the claim threw "not writable" and the claimed entry
-   * stayed waiting (W1a.7, J-0271). A Set never rewrites an element.
-   * @type {Set<Internal>}
-   */
-  const waiting = new Set();
-  /**
-   * Receipts by request id, in insertion order. Pruned by age on each
-   * enqueueOnce; at most maxReceipts.
-   * @type {Map<string, StoredReceipt>}
-   */
-  const receipts = new Map();
-  /** @type {Hold | undefined} */
-  let currentHold;
-  let nextKey = 1;
-
-  /**
-   * @typedef {object} Internal
-   * @property {QueueItem} item
-   * @property {string} preview the text cut to messagePreviewUnits
-   * @property {number} previewBytes its exact UTF-8 bytes
-   * @property {boolean} waiting false once claimed or cancelled
-   * @typedef {object} StoredReceipt
-   * @property {string} requestId
-   * @property {Submission} submission as submitted (inline or staged;
-   *   shared with the entry, so it costs no copy)
-   * @property {number} issued the request id's timestamp
-   * @property {any} entry the QueueEntry while waiting; cleared by the
-   *   claim, the shared stand-in once cancelled
-   * @property {any} [turn] set by the claim: what `claim` was given
-   */
-
-  /** @type {WeakMap<object, Internal>} */
-  const byEntry = new WeakMap();
-
-  const changed = () => {
-    try {
-      onChange();
-    } catch {
-      // The change has happened; see the module comment.
-    }
-  };
-
-  /**
-   * @param {StoredReceipt} stored
-   * @param {boolean} duplicate
-   * @returns {Receipt}
-   */
-  const receiptOf = (stored, duplicate) =>
-    stored.turn === undefined
-      ? harden({
-          requestId: stored.requestId,
-          duplicate,
-          state: 'queued',
-          entry: stored.entry,
-        })
-      : harden({
-          requestId: stored.requestId,
-          duplicate,
-          state: 'started',
-          turn: turnOf(stored.turn),
-        });
-
-  /** @param {Internal} internal */
-  const removeWaiting = internal => {
-    waiting.delete(internal);
-    internal.waiting = false;
-  };
-
-  /**
-   * After the last waiting entry left, a hold has nothing left to hold
-   * (Fae session-submissions.js cancel).
-   */
-  const clearHoldIfEmpty = () => {
-    if (waiting.size === 0 && currentHold !== undefined) {
-      currentHold = undefined;
-    }
-  };
-
   /**
    * The QueueEntry class, defined once per queue on first use. `makeExo`
    * would define a class per entry, which a vat pays for on every enqueue
@@ -231,7 +127,7 @@ export const makeQueue = ({
     if (makeEntryInstance === undefined) {
       makeEntryInstance = defineExoClass(
         'QueueEntry',
-        interfaces.QueueEntry,
+        m2Interfaces.QueueEntry,
         /** @param {Internal} state */
         state => ({ internal: state }),
         {
@@ -247,13 +143,15 @@ export const makeQueue = ({
             });
           },
           cancel() {
-            const { internal: self } = this.state;
-            if (!self.waiting) return false;
-            removeWaiting(self);
-            forgetCancelled(self);
-            clearHoldIfEmpty();
-            changed();
-            return true;
+            return submissions.cancel(this.state.internal);
+          },
+          /** @param {Submission} submission */
+          edit(submission) {
+            pending.edit(this.state.internal, submission);
+          },
+          sendNow() {
+            submissions.sendNow(this.state.internal);
+            claimNext();
           },
         },
       );
@@ -261,151 +159,75 @@ export const makeQueue = ({
     return makeEntryInstance(internal);
   };
 
-  /**
-   * The stand-in a cancelled entry's receipt names, made on first use: the
-   * cancelled QueueEntry itself is then kept only by whoever holds it.
-   * @type {any}
-   */
-  let goneEntry;
-  /**
-   * After a cancel: the receipt of this entry names the stand-in.
-   * @param {Internal} internal
-   */
-  const forgetCancelled = internal => {
-    const stored = receipts.get(internal.item.requestId);
-    if (stored === undefined || stored.entry !== internal.item.entry) return;
-    goneEntry ??= makeEntry({
-      item: /** @type {any} */ (undefined),
-      preview: '',
-      previewBytes: 0,
-      waiting: false,
-    });
-    stored.entry = goneEntry;
-  };
+  const pending = makePendingQueue({ makeEntry, onChange });
+  const submissions = makeSubmissions({ pending, onChange });
 
   /**
-   * Drop receipts whose request id was issued outside the retry window.
-   * The common case looks only at the oldest receipts (insertion order) and
-   * stops at the first live one: a vat pays about 0.27 ms per receipt
-   * visited (J-0251), so a full scan on every enqueue would cost about 1 s
-   * at maxReceipts. A receipt inserted later may have an older id (client
-   * clocks differ), so when the table is full the whole table is scanned
-   * before refusing with the receipt-limit text. Expired receipts left
-   * behind a live one cost memory only: an expired id is refused before
-   * its receipt is looked up.
-   * @param {number} at
+   * @param {StoredReceipt} stored
+   * @param {boolean} duplicate
+   * @returns {Receipt}
    */
-  const prune = at => {
-    const oldest = at - limits.retryWindowMs;
-    for (const stored of receipts.values()) {
-      if (stored.issued > oldest) break;
-      receipts.delete(stored.requestId);
+  const receiptOf = (stored, duplicate) => {
+    const { requestId } = stored;
+    if (stored.turnId === undefined) {
+      return harden({
+        requestId,
+        duplicate,
+        state: 'queued',
+        entry: stored.entry,
+      });
     }
-    if (receipts.size < limits.maxReceipts) return;
-    for (const stored of receipts.values()) {
-      if (stored.issued <= oldest) receipts.delete(stored.requestId);
-    }
+    /** @type {Receipt} */
+    const receipt = { requestId, duplicate, state: 'started' };
+    const turn = turnOf(stored.turnId);
+    if (turn !== undefined) receipt.turn = turn;
+    if (typeof stored.turnId === 'string') receipt.turnId = stored.turnId;
+    return harden(receipt);
   };
 
   /** @type {Queue['enqueueOnce']} */
   const enqueueOnce = (submission, requestId, at) => {
-    // A.4 / Fae: a blank message is refused before anything else (J-9150);
-    // a staged one never is (the Composer refused it).
-    isStaged(submission) ||
-      submission.text.trim() !== '' ||
-      refuse(texts.blankSubmission);
-    // The frame rule rests on the session, not on its caller (J-9369).
-    if (!isStaged(submission)) {
-      const bytes = utf8Bytes(submission.text);
-      bytes <= limits.inlineBytes ||
-        refuse(textOf.inlineTooLarge(bytes, limits.inlineBytes));
-    }
-    REQUEST_ID.test(requestId) || refuse(texts.invalidRequestId);
-    const issued = Number(requestId.slice(0, 13));
-    (issued > at - limits.retryWindowMs && issued <= at + limits.clockSkewMs) ||
-      refuse(texts.requestIdExpired);
-    const known = receipts.get(requestId);
-    if (known !== undefined) {
-      sameSubmission(known.submission, submission) ||
-        refuse(texts.requestIdReused);
-      return harden({ receipt: receiptOf(known, true), added: false });
-    }
-    prune(at);
-    receipts.size < limits.maxReceipts || refuse(texts.receiptLimit);
-    waiting.size < limits.maxWaiting ||
-      refuse(textOf.queueFull(limits.maxWaiting));
-
-    const key = `q${nextKey}`;
-    nextKey += 1;
-    const preview = previewOf(
-      submissionField(submission),
-      limits.messagePreviewUnits,
-    );
-    /** @type {Internal} */
-    const internal = {
-      item: /** @type {any} */ (undefined),
-      preview,
-      previewBytes: utf8Bytes(preview),
-      waiting: true,
-    };
-    const entry = makeEntry(internal);
-    internal.item = harden({
-      entry,
-      key,
-      submission,
-      at,
-      requestId,
-    });
-    byEntry.set(entry, internal);
-    waiting.add(internal);
-    /** @type {StoredReceipt} */
-    const stored = { requestId, submission, issued, entry };
-    receipts.set(requestId, stored);
-    // A new message releases every hold except interrupted (A.4, R4-56).
-    if (currentHold !== undefined && currentHold.reason !== 'interrupted') {
-      currentHold = undefined;
-    }
-    changed();
-    return harden({ receipt: receiptOf(stored, false), added: true });
+    const { stored, added } = submissions.enqueue(submission, requestId, at);
+    return harden({ receipt: receiptOf(stored, !added), added });
   };
 
   /** @type {Queue['receiptFor']} */
   const receiptFor = requestId => {
-    const stored = receipts.get(requestId);
+    const stored = pending.receipt(requestId);
     return stored === undefined ? undefined : receiptOf(stored, false);
   };
 
   /**
    * The pending rows, each preview cut so the whole view fits one frame
    * (`designs/m1a-interfaces.md` section 8). The bytes of each full preview
-   * are measured once, at enqueue; the cut is needed only when many entries
-   * carry long multi-byte previews.
+   * are measured once, at enqueue or edit; the cut is needed only when many
+   * entries carry long multi-byte previews.
    * @type {Queue['view']}
    */
   const view = () => {
+    const hold = submissions.current();
     const holdBytes =
-      currentHold === undefined
-        ? 0
-        : utf8Bytes(currentHold.reason) + utf8Bytes(currentHold.message);
+      hold === undefined ? 0 : utf8Bytes(hold.reason) + utf8Bytes(hold.message);
+    const count = pending.size();
     let bytes = VIEW_OVERHEAD_BYTES + holdBytes;
-    for (const internal of waiting) {
-      bytes +=
-        ROW_OVERHEAD_BYTES + internal.item.key.length + internal.previewBytes;
+    let keyBytes = 0;
+    for (const internal of pending.entries()) {
+      keyBytes += internal.item.key.length;
+      bytes += ROW_OVERHEAD_BYTES + internal.previewBytes;
     }
+    bytes += keyBytes;
     /** @type {number | undefined} */
     let units;
     if (bytes > limits.frameBytes) {
-      let keyBytes = 0;
-      for (const internal of waiting) keyBytes += internal.item.key.length;
       const available =
         limits.frameBytes -
         VIEW_OVERHEAD_BYTES -
         holdBytes -
         keyBytes -
-        ROW_OVERHEAD_BYTES * waiting.size;
-      units = Math.max(0, Math.floor(available / (3 * waiting.size)));
+        ROW_OVERHEAD_BYTES * count;
+      units = Math.max(0, Math.floor(available / (3 * count)));
     }
-    const entries = [...waiting].map(internal =>
+    const entries = [...pending.entries()].map(internal =>
       harden({
         entry: internal.item.entry,
         key: internal.item.key,
@@ -417,57 +239,19 @@ export const makeQueue = ({
         at: internal.item.at,
       }),
     );
-    return currentHold === undefined
-      ? harden({ entries })
-      : harden({ entries, hold: currentHold });
+    return hold === undefined ? harden({ entries }) : harden({ entries, hold });
   };
 
   /** @type {Queue['first']} */
-  const first = () =>
-    currentHold === undefined && waiting.size > 0
-      ? waiting.values().next().value?.item
-      : undefined;
+  const first = () => submissions.first()?.item;
 
   /** @type {Queue['claim']} */
-  const claim = (item, turn) => {
-    const internal = byEntry.get(item.entry);
-    (internal !== undefined && internal.item === item && internal.waiting) ||
-      refuse('claim: the entry is not waiting');
-    removeWaiting(/** @type {Internal} */ (internal));
-    const stored = receipts.get(item.requestId);
-    if (stored !== undefined && stored.entry === item.entry) {
-      stored.turn = turn;
-      // A started receipt names its Turn only; dropping the entry lets the
-      // claimed QueueEntry exo and its records be collected. Every object a
-      // vat keeps costs each later delivery (a full GC per crank, C-7;
-      // J-0251).
-      stored.entry = undefined;
-    }
-    clearHoldIfEmpty();
-    changed();
-  };
-
-  /** @type {Queue['hold']} */
-  const hold = (reason, message) => {
-    // An interrupted hold needs a decision about its message; no other
-    // reason replaces it (Fae holdForStop).
-    if (currentHold?.reason === 'interrupted' && reason !== 'interrupted') {
-      return;
-    }
-    if (currentHold?.reason === reason && currentHold.message === message) {
-      return;
-    }
-    currentHold = harden({ reason, message });
-    changed();
-  };
-
-  /** @type {Queue['release']} */
-  const release = () => {
-    if (currentHold === undefined || currentHold.reason === 'interrupted') {
-      return;
-    }
-    currentHold = undefined;
-    changed();
+  const claim = (item, turnId) => {
+    const internal = pending.first();
+    // Only the head is ever claimed (first() answers the head or nothing).
+    (internal !== undefined && internal.item === item) ||
+      Fail`claim: the entry is not waiting`;
+    submissions.take(/** @type {Internal} */ (internal), turnId);
   };
 
   return harden({
@@ -476,10 +260,10 @@ export const makeQueue = ({
     view,
     first,
     claim,
-    hold,
-    release,
-    holdReason: () => currentHold?.reason,
-    size: () => waiting.size,
+    hold: submissions.hold,
+    release: submissions.release,
+    holdReason: () => submissions.current()?.reason,
+    size: pending.size,
   });
 };
 harden(makeQueue);
