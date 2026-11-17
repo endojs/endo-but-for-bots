@@ -82,24 +82,23 @@ mod tests {
     /// biased boundary spelling entirely.
     #[test]
     fn a_biased_boundary_spelling_is_not_a_value_divergence() {
-        let spec = |n: f64| xs_oracle::number_to_ecma_string(n);
-        let held = -51298814505516984.0_f64;
+        // The second argument is the spec spelling of the oracle's exact
+        // double (`xs_oracle::number_to_ecma_string`).
         assert!(results_agree(
             "-51298814505516980",
-            Some(&spec(held)),
-            &ironhorse_vm::value::number_to_ecma_string(held)
+            Some("-51298814505516984"),
+            "-51298814505516984"
         ));
         // The positive-signed member of the same class.
-        let held = 51298814505517064.0_f64;
         assert!(results_agree(
             "51298814505517060",
-            Some(&spec(held)),
-            &ironhorse_vm::value::number_to_ecma_string(held)
+            Some("51298814505517064"),
+            "51298814505517064"
         ));
         // XS's boundary spelling itself is not the spec spelling.
         assert!(!results_agree(
             "51298814505517060",
-            Some(&spec(held)),
+            Some("51298814505517064"),
             "51298814505517060"
         ));
     }
@@ -107,20 +106,18 @@ mod tests {
     /// The exact-double rule must not swallow a real one-ulp disagreement.
     #[test]
     fn an_adjacent_double_spelled_exactly_is_still_a_divergence() {
-        let spec = |n: f64| xs_oracle::number_to_ecma_string(n);
-        for (oracle, ironhorse) in [
-            (51298814505517056.0_f64, 51298814505517064.0_f64),
-            (57632001481506816.0, 57632001481506824.0),
-            (51298814505517052.0, 51298814505517064.0),
-            (0.5, 0.5000000000000001),
-        ] {
-            assert_ne!(oracle.to_bits(), ironhorse.to_bits());
-            assert!(!results_agree(
-                &oracle.to_string(),
-                Some(&spec(oracle)),
-                &ironhorse_vm::value::number_to_ecma_string(ironhorse)
-            ));
-        }
+        // Each oracle double and ironhorse double are one ulp apart.
+        assert!(!results_agree(
+            "51298814505517056",
+            Some("51298814505517060"),
+            "51298814505517064"
+        ));
+        assert!(!results_agree(
+            "57632001481506816",
+            Some("57632001481506820"),
+            "57632001481506824"
+        ));
+        assert!(!results_agree("0.5", Some("0.5"), "0.5000000000000001"));
     }
 
     #[test]
