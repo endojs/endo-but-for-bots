@@ -274,6 +274,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "promise:resolving-fn-unexpected",
     "promise:settle-non-promise",
     "promise:unknown-finally-function",
+    "regexp:getter-operation",
     "return:non-program-frame",
     "run:argument-count",
     "set-method:unexpected-method",

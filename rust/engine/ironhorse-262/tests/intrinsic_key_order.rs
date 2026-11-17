@@ -167,22 +167,6 @@ const KEY_SET_DIFFERENCES: &[(&str, &[&str], &[&str])] = &[
             "idiv", "idivmod", "imod", "imuldiv", "irandom", "irem", "mod", "random",
         ],
     ),
-    (
-        "globalThis.RegExp.prototype",
-        &[],
-        &[
-            "dotAll",
-            "flags",
-            "global",
-            "hasIndices",
-            "ignoreCase",
-            "multiline",
-            "source",
-            "sticky",
-            "unicode",
-            "unicodeSets",
-        ],
-    ),
     ("globalThis.String.prototype", &[], &["compare"]),
 ];
 

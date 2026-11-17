@@ -1676,9 +1676,9 @@ impl Interp {
 
     /// Whether a RegExp property lookup reaches the VM's implicit intrinsic
     /// accessor without encountering an observable own/inherited override.
-    /// The default `source` and `flags` accessors are represented by the
-    /// RegExp side table rather than ordinary property slots, so constructor
-    /// copy semantics use this gate before reading that side table directly.
+    /// The default accessors are real properties on `%RegExp.prototype%`, but
+    /// their values still come from the RegExp side table. Constructor copy
+    /// semantics use this gate before reading that table directly.
     pub(super) fn regexp_getter_uses_default(
         &self,
         inst: crate::value::SlotIndex,
@@ -1686,8 +1686,23 @@ impl Interp {
     ) -> bool {
         let mut current = inst;
         while !current.is_null() {
-            if self.proxies.contains_key(&current) || self.find_property(current, id).is_some() {
+            if self.proxies.contains_key(&current) {
                 return false;
+            }
+            if self.find_property(current, id).is_some() {
+                let intrinsic_getter = current == self.regexp_proto
+                    && self
+                        .accessors
+                        .get(&(current, id))
+                        .and_then(|accessor| accessor.get)
+                        .and_then(|getter| match getter.value {
+                            Payload::Reference(function) if getter.kind == Kind::Reference => {
+                                self.method_of(function)
+                            }
+                            _ => None,
+                        })
+                        .is_some_and(|method| matches!(method, NativeMethod::RegExpGetter(_)));
+                return intrinsic_getter;
             }
             if current == self.regexp_proto {
                 return true;

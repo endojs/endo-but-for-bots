@@ -59,3 +59,16 @@ fn to_string_is_generic_and_observable() {
         agrees(source);
     }
 }
+
+#[test]
+fn prototype_accessors_are_reflective_and_brand_checked() {
+    agrees(
+        "var names=['source','flags','hasIndices','global','ignoreCase','multiline','dotAll','unicode','unicodeSets','sticky'];\
+         var primitive=[undefined,null,3,'x',true,Symbol(),4n],invalid=[{},[],function(){return arguments}(),function(){}],n=0;\
+         for(var name of names){var d=Object.getOwnPropertyDescriptor(RegExp.prototype,name);\
+           n+=typeof d.get==='function'&&d.get.length===0&&d.set===undefined&&!d.enumerable&&d.configurable;\
+           for(var value of primitive){try{d.get.call(value)}catch(error){n+=error instanceof TypeError}}\
+           if(name!=='flags'){for(var value of invalid){try{d.get.call(value)}catch(error){n+=error instanceof TypeError}}}}\
+         n",
+    );
+}

@@ -1427,7 +1427,8 @@ impl Interp {
         // `%RegExp.prototype%`: `exec`/`test`/`toString`, bound at link time
         // only when the program references the name. The per-instance compiled
         // program lives in the `regexps` side table; the `source`/`flags`/
-        // per-flag accessor getters are special-cased by id in `GET_PROPERTY`.
+        // per-flag accessor getters are real reflected accessors; branded
+        // instance reads retain an id-special-cased fast path in `GET_PROPERTY`.
         self.regexp_proto = self
             .intrinsics
             .get("RegExp")
@@ -1441,6 +1442,31 @@ impl Interp {
         ] {
             let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((self.regexp_proto, name, mf));
+        }
+        for (operation, name) in [
+            (0, "source"),
+            (1, "flags"),
+            (2, "hasIndices"),
+            (3, "global"),
+            (4, "ignoreCase"),
+            (5, "multiline"),
+            (6, "dotAll"),
+            (7, "unicode"),
+            (8, "unicodeSets"),
+            (9, "sticky"),
+        ] {
+            let getter = self.alloc_named_method(
+                NativeMethod::RegExpGetter(operation),
+                &format!("get {name}"),
+                0,
+            );
+            self.proto_accessors.push((
+                self.regexp_proto,
+                ProtoAccessorKey::String(name),
+                getter,
+                None,
+                "RegExp",
+            ));
         }
         self.regexp_replace_method =
             self.alloc_named_method(NativeMethod::RegExpReplace, "[Symbol.replace]", 2);

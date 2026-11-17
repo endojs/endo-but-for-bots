@@ -222,7 +222,8 @@ impl Interp {
                 // Any other name (`exec`/`test`/`toString`/
                 // `constructor`) resolves up the prototype chain.
                 let g = self.regexp_getter_ids;
-                if Some(id) == g.source {
+                let uses_default = self.regexp_getter_uses_default(inst, id);
+                if Some(id) == g.source && uses_default {
                     self.meter.tick_raw(REGEXP_GETTER_METERING);
                     let (bytes, allocated) = (self.regexp_source_units_metered(inst))?;
                     if allocated {
@@ -235,11 +236,11 @@ impl Interp {
                         let offset = self.chunks.alloc(&units_to_be16(&bytes));
                         Slot::of(Kind::String, Payload::String(offset))
                     }
-                } else if Some(id) == g.flags {
+                } else if Some(id) == g.flags && uses_default {
                     self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
                     let flags = self.regexps[&inst].flags.clone();
                     self.new_string_metered(flags.as_bytes())
-                } else if let Some(bit) = regexp_flag_bit_for(g, id) {
+                } else if let Some(bit) = regexp_flag_bit_for(g, id).filter(|_| uses_default) {
                     self.meter.tick_raw(REGEXP_GETTER_METERING);
                     let f = self.regexps[&inst].program.flags();
                     Slot::boolean(f & bit != 0)
