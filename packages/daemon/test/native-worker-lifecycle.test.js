@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: Far facet stubs, not guarded exos.
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/pass-style';
@@ -18,11 +19,11 @@ import { E } from '@endo/eventual-send';
 import {
   gunzip,
   makeCryptoPowers,
-  makeDaemonicControlPowers,
-  makeDaemonicPowers,
+  makeManagerControlPowers,
+  makeManagerPowers,
   makeFilePowers,
 } from '../src/manager-node-powers.js';
-import { makeDaemon } from '../src/manager.js';
+import { makeManager } from '../src/manager.js';
 
 /** @param {import('ava').ExecutionContext} t */
 const prepare = t => {
@@ -45,7 +46,7 @@ const prepare = t => {
     write: async () => {},
     fork: () => child,
   };
-  const powers = makeDaemonicControlPowers(
+  const powers = makeManagerControlPowers(
     /** @type {any} */ ({ statePath: '/state', ephemeralStatePath: '/tmp' }),
     () => '/worker.js',
     /** @type {any} */ ({
@@ -79,7 +80,7 @@ const prepare = t => {
   const make = () =>
     powers.makeWorker(
       'worker-id',
-      /** @type {any} */ (Far('Daemon', {})),
+      /** @type {any} */ (Far('Manager', {})),
       /** @type {Promise<never>} */ (cancelled.promise),
       /** @type {Promise<never>} */ (forced.promise),
     );
@@ -99,8 +100,8 @@ const prepare = t => {
 test('native worker waits for child close after cancellation and process exit', async t => {
   t.timeout(5000);
   const { make, child, cancelled, signals, closedLogs } = prepare(t);
-  const { workerTerminated, workerDaemonFacet } = await make();
-  void Promise.resolve(workerDaemonFacet).catch(() => {});
+  const { workerTerminated, workerManagerFacet } = await make();
+  void Promise.resolve(workerManagerFacet).catch(() => {});
   let complete = false;
   void workerTerminated.then(() => {
     complete = true;
@@ -132,8 +133,8 @@ test('native worker signals cancellation while post-fork setup is pending', asyn
   await nextTurn();
   t.deepEqual(fixture.signals, ['SIGTERM', 'SIGKILL']);
   held.resolve(undefined);
-  const { workerTerminated, workerDaemonFacet } = await creating;
-  void Promise.resolve(workerDaemonFacet).catch(() => {});
+  const { workerTerminated, workerManagerFacet } = await creating;
+  void Promise.resolve(workerManagerFacet).catch(() => {});
   let complete = false;
   void workerTerminated.then(() => {
     complete = true;
@@ -219,7 +220,7 @@ test.serial(
     t.teardown(() => rm(temporary, { recursive: true, force: true }));
     const cancelled = makePromiseKit();
     const filePowers = makeFilePowers({ fs, path });
-    const powers = await makeDaemonicPowers({
+    const powers = await makeManagerPowers({
       config: {
         statePath: path.join(temporary, 'state'),
         ephemeralStatePath: path.join(temporary, 'ephemeral'),
@@ -271,7 +272,7 @@ test.serial(
         void forceCancelled.catch(() => {});
         if (!deferNext) {
           return {
-            workerDaemonFacet: Far('Worker', { terminate: () => {} }),
+            workerManagerFacet: Far('Worker', { terminate: () => {} }),
             workerTerminated: workerCancelled.catch(() => {}),
           };
         }
@@ -280,7 +281,7 @@ test.serial(
         acquiring.resolve(undefined);
         await acquired.promise;
         return {
-          workerDaemonFacet: Far('LateWorker', {
+          workerManagerFacet: Far('LateWorker', {
             terminate: () => {
               terminateCalls += 1;
             },
@@ -289,7 +290,7 @@ test.serial(
         };
       },
     };
-    const daemon = await makeDaemon(
+    const daemon = await makeManager(
       { ...powers, control: /** @type {any} */ (control) },
       'worker-lifecycle-test',
       cancelled.reject,
@@ -352,7 +353,7 @@ test.serial(
     const childClosed = makePromiseKit();
     /** @type {import('node:child_process').ChildProcess | undefined} */
     let child;
-    const powers = makeDaemonicControlPowers(
+    const powers = makeManagerControlPowers(
       {
         statePath: path.join(temporary, 'state'),
         ephemeralStatePath: path.join(temporary, 'ephemeral'),
@@ -390,11 +391,11 @@ test.serial(
     });
     const result = await powers.makeWorker(
       'real-worker',
-      /** @type {any} */ (Far('Daemon', {})),
+      /** @type {any} */ (Far('Manager', {})),
       /** @type {Promise<never>} */ (cancelled.promise),
       /** @type {Promise<never>} */ (forced.promise),
     );
-    void Promise.resolve(result.workerDaemonFacet).catch(() => {});
+    void Promise.resolve(result.workerManagerFacet).catch(() => {});
     let complete = false;
     void result.workerTerminated.then(() => {
       complete = true;

@@ -32,7 +32,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeSessionRecordStore } from '../src/session-record-store.js';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import { makeCryptoPowers } from '../src/manager-node-powers.js';
-import { makeDaemonDatabase } from '../src/manager-database-node.js';
+import { makeManagerDatabase } from '../src/manager-database-node.js';
 import { makeContentDataPlaneRegistry } from '../src/content-data-plane.js';
 import { formatId, parseId } from '../src/formula-identifier.js';
 import {
@@ -47,6 +47,7 @@ import {
  * @import {EReturn} from '@endo/eventual-send';
  * @import {ExecutionContext} from 'ava';
  * @import {FormulaNumber, NodeNumber} from '../src/types.js';
+ * @import {ManagerDatabase} from '../src/manager-database.js';
  */
 
 const cryptoPowers = makeCryptoPowers(crypto);
@@ -91,10 +92,10 @@ const drainIterator = async (iteratorRef, count) => {
  * Open a read-only handle to the daemon's database for test inspection.
  *
  * @param {string} statePath
- * @returns {import('../src/manager-database.js').DaemonDatabase}
+ * @returns {ManagerDatabase}
  */
 const openTestDb = statePath => {
-  return makeDaemonDatabase({
+  return makeManagerDatabase({
     statePath,
     ephemeralStatePath: '',
     cachePath: '',
@@ -105,7 +106,7 @@ const openTestDb = statePath => {
 /**
  * Compute the on-disk JSON path for a formula in the
  * filesystem-backed persistence layout (used by the XS supervisor
- * via daemon-persistence-powers.js).
+ * via manager-persistence-powers.js).
  *
  * @param {string} statePath
  * @param {string} formulaNumber
@@ -125,7 +126,7 @@ const filesystemFormulaPath = (statePath, formulaNumber) => {
 /**
  * Check whether a formula exists in either the SQLite database
  * (Node-supervised daemon) or the filesystem JSON layout (XS
- * supervisor via daemon-persistence-powers.js).  Tests are
+ * supervisor via manager-persistence-powers.js).  Tests are
  * supervisor-agnostic, so try both.
  *
  * @param {string} statePath

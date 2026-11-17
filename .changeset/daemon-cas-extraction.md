@@ -11,7 +11,7 @@ implementations of the platform-owned `ContentStoreFilePowers` /
 rather than hand-rolling a duplicate filesystem/crypto powers object.
 
 Extract the filesystem-backed content-addressed store (`makeContentStore`)
-out of `@endo/daemon`'s `daemon-persistence-powers.js` into a new
+out of `@endo/daemon`'s `manager-persistence-powers.js` into a new
 `@endo/daemon-cas` workspace.
 The daemon now delegates its content store to the package: it derives the
 `<statePath>/store-sha256/` directory, builds the raw store, and wraps it in

@@ -13,14 +13,14 @@ import url from 'node:url';
 
 import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
-import { makeDaemon } from './manager.js';
+import { makeManager } from './manager.js';
 import {
   makeFilePowers,
   makeNetworkPowers,
   makeCryptoPowers,
   gunzip,
 } from './manager-node-powers.js';
-import { makeDaemonicBusPowers } from './bus-manager-node-powers.js';
+import { makeManagerBusPowers } from './bus-manager-node-powers.js';
 import {
   encodeEnvelope,
   decodeEnvelope,
@@ -42,7 +42,7 @@ import { installShutdownSignals } from './shutdown-signals.js';
 
 if (process.argv.length < 5) {
   throw new Error(
-    `bus-daemon-node.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
+    `bus-manager-node.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
       ', ',
     )}`,
   );
@@ -106,7 +106,7 @@ const registryPowers = {
   gunzip,
   createHash: crypto.createHash,
 };
-const powers = makeDaemonicBusPowers({
+const powers = makeManagerBusPowers({
   config,
   url,
   filePowers,
@@ -115,7 +115,7 @@ const powers = makeDaemonicBusPowers({
   sendEnvelope,
   envelopeReadStream,
 });
-const { persistence: daemonicPersistencePowers } = powers;
+const { persistence: managerPersistencePowers } = powers;
 
 const { promise: cancelled, reject: cancel } =
   /** @type {PromiseKit<never>} */ (makePromiseKit());
@@ -130,7 +130,7 @@ const updateRecordedPid = async () => {
 };
 
 const main = async () => {
-  const daemonLabel = `daemon on PID ${pid}`;
+  const managerLabel = `daemon on PID ${pid}`;
   console.log(`Endo daemon (bus) starting on PID ${pid}`);
   cancelled.catch(() => {
     console.log(`Endo daemon (bus) stopping on PID ${pid}`);
@@ -146,12 +146,12 @@ const main = async () => {
     powers.control.startEnvelopeReader();
   }
 
-  await daemonicPersistencePowers.initializePersistence();
+  await managerPersistencePowers.initializePersistence();
 
   const { endoBootstrap, cancelGracePeriod, capTpConnectionRegistrar } =
-    await makeDaemon(
+    await makeManager(
       powers,
-      daemonLabel,
+      managerLabel,
       cancel,
       cancelled,
       {},
@@ -195,7 +195,7 @@ const main = async () => {
     await sendEnvelope(0, 'ready');
     console.log('Endo daemon (bus) ready, signaled supervisor');
   } catch (error) {
-    // No IPC to parent like daemon-node.js; just log and throw.
+    // No IPC to parent like manager-node.js; just log and throw.
     console.error('Daemon startup failed:', error);
     throw error;
   }

@@ -13,14 +13,14 @@ import url from 'url';
 
 import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
-import { makeDaemon } from './manager.js';
+import { makeManager } from './manager.js';
 import {
   makeFilePowers,
   makeNetworkPowers,
   makeCryptoPowers,
   gunzip,
 } from './manager-node-powers.js';
-import { makeDaemonicGoPowers } from './manager-go-powers.js';
+import { makeManagerGoPowers } from './manager-go-powers.js';
 import {
   encodeEnvelope,
   decodeEnvelope,
@@ -33,7 +33,7 @@ const fsp = { access: fs.promises.access };
 /** @import { Config } from './types.js' */
 
 // The daemon-go entry point receives its configuration as command-line
-// arguments, identical to daemon-node.js. It also opens fd 3/4 for the
+// arguments, identical to manager-node.js. It also opens fd 3/4 for the
 // envelope protocol with the engo supervisor.
 //
 // fd 3: daemon writes envelopes to engo (child → parent)
@@ -44,7 +44,7 @@ const fsp = { access: fs.promises.access };
 
 if (process.argv.length < 5) {
   throw new Error(
-    `daemon-go.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
+    `manager-go.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
       ', ',
     )}`,
   );
@@ -111,7 +111,7 @@ const registryPowers = {
   gunzip,
   createHash: crypto.createHash,
 };
-const powers = await makeDaemonicGoPowers({
+const powers = await makeManagerGoPowers({
   config,
   cancelled,
   url,
@@ -121,7 +121,7 @@ const powers = await makeDaemonicGoPowers({
   sendEnvelope,
   envelopeReadStream,
 });
-const { persistence: daemonicPersistencePowers } = powers;
+const { persistence: managerPersistencePowers } = powers;
 
 // Engo owns endo.pid (the authoritative PID for kill). This function
 // overwrites it with the node daemon PID so that killDaemonProcess
@@ -133,7 +133,7 @@ const updateRecordedPid = async () => {
 };
 
 const main = async () => {
-  const daemonLabel = `daemon on PID ${pid}`;
+  const managerLabel = `daemon on PID ${pid}`;
   console.log(`Endo daemon (go platform) starting on PID ${pid}`);
   cancelled.catch(() => {
     console.log(`Endo daemon (go platform) stopping on PID ${pid}`);
@@ -147,16 +147,16 @@ const main = async () => {
   // This must happen after readInitEnvelope() to avoid a race on fd 4.
   powers.control.startEnvelopeReader && powers.control.startEnvelopeReader();
 
-  await daemonicPersistencePowers.initializePersistence();
+  await managerPersistencePowers.initializePersistence();
 
   const {
     endoBootstrap,
     cancelGracePeriod,
     capTpConnectionRegistrar,
     marshalSaveError,
-  } = await makeDaemon(
+  } = await makeManager(
     powers,
-    daemonLabel,
+    managerLabel,
     cancel,
     cancelled,
     {},
@@ -201,7 +201,7 @@ const main = async () => {
     await sendEnvelope(0, 'ready');
     console.log('Endo daemon (go platform) ready, signaled engo');
   } catch (error) {
-    // No IPC to parent like daemon-node.js; just log and throw.
+    // No IPC to parent like manager-node.js; just log and throw.
     console.error('Daemon startup failed:', error);
     throw error;
   }

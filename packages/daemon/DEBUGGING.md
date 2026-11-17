@@ -331,10 +331,10 @@ After an unclean daemon shutdown, worker processes may linger:
 
 ```sh
 # Find leftover worker processes
-pgrep -laf daemon-node
+pgrep -laf manager-node
 
 # Kill them
-pkill -f "daemon-node.*packages/daemon/tmp"
+pkill -f "manager-node.*packages/daemon/tmp"
 
 # Clean ephemeral state
 rm -rf packages/daemon/tmp/

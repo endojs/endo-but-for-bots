@@ -1,7 +1,7 @@
 // @ts-nocheck
 
 // Adversarial tests against the invariants claimed by the
-// content-store and scratch-mount cleanup pass in `daemon.js`.
+// content-store and scratch-mount cleanup pass in `manager.js`.
 // Each test names the invariant it attacks.  See
 // `designs/daemon-content-store-gc.md` for the contract.
 

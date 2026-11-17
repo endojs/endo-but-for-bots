@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * The `EndoWorkerFacetForDaemon` interface guard, in a module of its
+ * The `EndoWorkerFacetForManager` interface guard, in a module of its
  * own.
  *
  * Both worker implementations must guard their facet with the *same*
@@ -16,8 +16,8 @@
  *
  * Hoisting the guard here gives both a single definition to import.
  * The XS bundle pays only for `@endo/patterns`, which it already
- * retains.  `./interfaces.js` re-exports this binding, so existing
- * importers are unaffected.
+ * retains.  `./interfaces.js` re-exports this binding under the same
+ * name.
  *
  * Before this module existed the XS worker carried a hand-copy of the
  * guard, which could drift from the Node worker's silently.
@@ -35,8 +35,8 @@ const EnvShape = M.recordOf(
   M.string({ stringLengthLimit: 0x7fff_ffff }),
 );
 
-export const WorkerFacetForDaemonInterface = M.interface(
-  'EndoWorkerFacetForDaemon',
+export const WorkerFacetForManagerInterface = M.interface(
+  'EndoWorkerFacetForManager',
   {
     terminate: M.call().returns(M.promise()),
     evaluate: M.call(

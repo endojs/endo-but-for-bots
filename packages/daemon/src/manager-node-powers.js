@@ -21,15 +21,15 @@ import {
   socketLockPath,
 } from './socket-lock.js';
 import { makeSerialJobs } from './serial-jobs.js';
-import { makeDaemonDatabase } from './manager-database-node.js';
+import { makeManagerDatabase } from './manager-database-node.js';
 import { makeRegistryNodePowers } from './registry-node-powers.js';
 import { makeNodeHostToolPowers } from './host-tool-powers-node.js';
 // The shared SQLite-backed persistence powers live in
 // ./manager-persistence-powers.js so the XS-on-Rust supervisor can
 // use them without importing the Node-only graph above.
-import { makeDaemonicPersistencePowers } from './manager-persistence-powers.js';
+import { makeManagerPersistencePowers } from './manager-persistence-powers.js';
 
-export { makeDaemonicPersistencePowers };
+export { makeManagerPersistencePowers };
 
 const gunzipBuffer = promisify(zlib.gunzip);
 
@@ -129,8 +129,8 @@ export const gunzip = async bytes => {
 
 /** @import { Reader, Writer } from '@endo/stream' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
-/** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPersistencePowers, DaemonicPowers, EndoReadable, FilePowers, Formula, FormulaNumber, NetworkPowers, SocketPowers, WorkerDaemonFacet } from './types.js' */
-/** @import { DaemonDatabase } from './manager-database.js' */
+/** @import { CapTpConnectionRegistrar, Config, CryptoPowers, ManagerWorkerFacet, ManagerPersistencePowers, ManagerPowers, EndoReadable, FilePowers, Formula, FormulaNumber, NetworkPowers, SocketPowers, WorkerManagerFacet } from './types.js' */
+/** @import { ManagerDatabase } from './manager-database.js' */
 
 /**
  * @param {object} modules
@@ -1035,7 +1035,7 @@ export const makeCryptoPowers = crypto => {
  * @param {typeof import('fs')} fs
  * @param {typeof import('child_process')} popen
  */
-export const makeDaemonicControlPowers = (
+export const makeManagerControlPowers = (
   config,
   fileURLToPath,
   filePowers,
@@ -1052,7 +1052,7 @@ export const makeDaemonicControlPowers = (
 
   /**
    * @param {string} workerId
-   * @param {DaemonWorkerFacet} daemonWorkerFacet
+   * @param {ManagerWorkerFacet} managerWorkerFacet
    * @param {Promise<never>} cancelled - rejects to initiate shutdown (SIGTERM)
    * @param {Promise<never>} forceCancelled - rejects to force shutdown (SIGKILL)
    * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
@@ -1070,7 +1070,7 @@ export const makeDaemonicControlPowers = (
    */
   const makeWorker = async (
     workerId,
-    daemonWorkerFacet,
+    managerWorkerFacet,
     cancelled,
     forceCancelled,
     capTpConnectionRegistrar = undefined,
@@ -1185,7 +1185,7 @@ export const makeDaemonicControlPowers = (
         writer,
         reader,
         cancelled,
-        daemonWorkerFacet,
+        managerWorkerFacet,
         // Both ends must release discarded imports and question results.
         { gcImports: true, marshalLoadError },
         capTpConnectionRegistrar,
@@ -1200,10 +1200,10 @@ export const makeDaemonicControlPowers = (
         () => {},
       );
 
-      /** @type {ERef<WorkerDaemonFacet>} */
-      const workerDaemonFacet = getBootstrap();
+      /** @type {ERef<WorkerManagerFacet>} */
+      const workerManagerFacet = getBootstrap();
 
-      return { workerTerminated, workerDaemonFacet };
+      return { workerTerminated, workerManagerFacet };
     } catch (error) {
       // Failure after fork is still an acquired native child. Do not reject
       // construction until the original child and its stdio have closed.
@@ -1232,9 +1232,9 @@ export const makeDaemonicControlPowers = (
  * @param {FilePowers} opts.filePowers
  * @param {CryptoPowers} opts.cryptoPowers
  * @param {Parameters<typeof makeRegistryNodePowers>[0]} opts.registryPowers
- * @returns {Promise<DaemonicPowers>}
+ * @returns {Promise<ManagerPowers>}
  */
-export const makeDaemonicPowers = async ({
+export const makeManagerPowers = async ({
   config,
   cancelled,
   fs,
@@ -1249,17 +1249,17 @@ export const makeDaemonicPowers = async ({
   // Ensure state directory exists before opening database.
   await filePowers.makePath(config.statePath);
 
-  const daemonDb = makeDaemonDatabase(config);
-  cancelled.catch(() => daemonDb.close());
+  const managerDatabase = makeManagerDatabase(config);
+  cancelled.catch(() => managerDatabase.close());
 
-  const petStorePowers = makePetStoreMaker(daemonDb);
-  const daemonicPersistencePowers = makeDaemonicPersistencePowers(
-    daemonDb,
+  const petStorePowers = makePetStoreMaker(managerDatabase);
+  const managerPersistencePowers = makeManagerPersistencePowers(
+    managerDatabase,
     filePowers,
     cryptoPowers,
     config,
   );
-  const daemonicControlPowers = makeDaemonicControlPowers(
+  const managerControlPowers = makeManagerControlPowers(
     config,
     fileURLToPath,
     filePowers,
@@ -1270,8 +1270,8 @@ export const makeDaemonicPowers = async ({
   return harden({
     crypto: cryptoPowers,
     petStore: petStorePowers,
-    persistence: daemonicPersistencePowers,
-    control: daemonicControlPowers,
+    persistence: managerPersistencePowers,
+    control: managerControlPowers,
     filePowers,
     registry: makeRegistryNodePowers({
       ...registryPowers,

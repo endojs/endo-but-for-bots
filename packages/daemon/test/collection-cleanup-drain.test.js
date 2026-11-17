@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: Far facet stubs, not guarded exos.
 /** @import {FormulaNumber} from '../src/types.js' */
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
@@ -14,10 +15,10 @@ import * as url from 'node:url';
 import {
   gunzip,
   makeCryptoPowers,
-  makeDaemonicPowers,
+  makeManagerPowers,
   makeFilePowers,
 } from '../src/manager-node-powers.js';
-import { makeDaemon } from '../src/manager.js';
+import { makeManager } from '../src/manager.js';
 
 for (const failMailbox of [false, true]) {
   test.serial(
@@ -28,7 +29,7 @@ for (const failMailbox of [false, true]) {
       t.teardown(() => rm(temporary, { recursive: true, force: true }));
       const cancelled = makePromiseKit();
       t.teardown(() => cancelled.reject(Error('Test finished')));
-      const powers = await makeDaemonicPowers({
+      const powers = await makeManagerPowers({
         config: {
           statePath: path.join(temporary, 'state'),
           ephemeralStatePath: path.join(temporary, 'run'),
@@ -60,7 +61,7 @@ for (const failMailbox of [false, true]) {
       let mailHubNumber;
       /** @type {FormulaNumber[]} */
       const deleted = [];
-      const daemon = await makeDaemon(
+      const daemon = await makeManager(
         {
           ...powers,
           control: /** @type {any} */ ({
@@ -72,7 +73,9 @@ for (const failMailbox of [false, true]) {
             ) => {
               void forceCancelled.catch(() => {});
               return {
-                workerDaemonFacet: Far('UnusedWorker', { terminate: () => {} }),
+                workerManagerFacet: Far('UnusedWorker', {
+                  terminate: () => {},
+                }),
                 workerTerminated: workerCancelled.catch(() => {}),
               };
             },

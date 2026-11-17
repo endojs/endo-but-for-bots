@@ -3,7 +3,7 @@
 ---
 
 The git backend and the host spawner now reach the daemon core as
-`DaemonicPowers.hostTools` rather than as static imports of `@endo/git` and
+`ManagerPowers.hostTools` rather than as static imports of `@endo/git` and
 `@endo/host-spawner`, the way `better-sqlite3` already reached it as an
 injected `Database`. Every Node supervisor supplies them, so their behavior is
 unchanged. A supervisor that omits the group (the XS one, which has no host

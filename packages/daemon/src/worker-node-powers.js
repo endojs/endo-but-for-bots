@@ -3,13 +3,13 @@
 import harden from '@endo/harden';
 import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
 
-/** @import {MignonicPowers} from './types.js'; */
+/** @import {WorkerPowers} from './types.js'; */
 
 /**
  * @param {object} modules
  * @param {typeof import('fs')} modules.fs
  * @param {typeof import('url')} modules.url
- * @returns {MignonicPowers}
+ * @returns {WorkerPowers}
  */
 export const makePowers = ({ fs, url }) => {
   // @ts-ignore This is in fact how you open a file descriptor.

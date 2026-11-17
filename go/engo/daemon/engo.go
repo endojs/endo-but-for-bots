@@ -32,8 +32,8 @@ type Engo struct {
 	NodePath string
 
 	// DaemonScriptPath is the path to the daemon entry script.
-	// For Phase 0, this is daemon-node.js (unmodified).
-	// For Phase 1+, this will be daemon-go.js.
+	// For Phase 0, this is manager-node.js (unmodified).
+	// For Phase 1+, this will be manager-go.js.
 	DaemonScriptPath string
 
 	// SpawnSubprocess is the function used to spawn worker subprocesses.
@@ -120,13 +120,13 @@ func (e *Engo) Serve() error {
 }
 
 // spawnNodeDaemon starts the Node.js daemon as a subprocess. It runs
-// daemon-go.js (the engo-aware entry point) by default. The daemon
+// manager-go.js (the engo-aware entry point) by default. The daemon
 // receives its config as command-line arguments:
 // [sockPath, statePath, ephemeralStatePath, cachePath].
 func (e *Engo) spawnNodeDaemon() error {
 	scriptPath := e.DaemonScriptPath
 	if scriptPath == "" {
-		// Default: find daemon-node.js relative to the engo binary or
+		// Default: find manager-node.js relative to the engo binary or
 		// via ENDO_DAEMON_PATH environment variable.
 		scriptPath = os.Getenv("ENDO_DAEMON_PATH")
 		if scriptPath == "" {
