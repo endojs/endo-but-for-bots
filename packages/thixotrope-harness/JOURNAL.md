@@ -7409,3 +7409,101 @@ with the parked round (as `startRound` is parked) and take the sink from the rou
 two tests flip to red when it lands; then make them plain tests. No vat test of the deadline was
 added for that reason.
 Decision: defect reported; not fixed (not W2.6's file).
+
+### J-0480 2026-11-18 M2 delete on Thixotrope - good fit
+Evidence: `guest/factory/delete.js`; `test/unit/m2-w27-lifecycle.test.js` (9 tests);
+`test/integration/m2-lifecycle.test.js` (acceptance 13, two tests, passed twice, commit
+`dfe63dd39a`; worker `367e78ad...`, crank budget 50 M, slot ceiling 4,000,000, collection
+schedule allocation, hub store log, load 1.6-2.0).
+Reading: a delete is a record in the factory heap and a chain of answered calls, one per step
+(deleting row, `deleteSelf`, `blobPage` -> `releaseBlobs` pages, `releaseArchive`, the exec
+handle closed and both vats retired, row dropped). Orthogonal persistence makes "complete after a
+restart" cheap: the record survives as it stood; the start listener runs it again from its step,
+and a run counter makes the old run stop at its next answer (the hub may still deliver answers
+owed to it). Every step is idempotent (the manager skips forgotten handles, the adapter tolerates a
+missing archive directory, a retired vat answers the retired text), so redoing the step in flight
+is safe. Measured: a 300-turn session (152 KB of kept records, 0.6 MB of archive) deleted in
+883-1,008 ms; both list viewers saw `row-removed` 5 ms after the answer (888-1,013 ms after the
+call). SIGKILL once the row said `deleting`: after the restart the delete completed (archive
+72,610 -> 82 bytes, the vat gone). SIGKILL during `createSession` (339 ms in): every row listed
+after the restart is `ready` and the factory holds no other. Retiring a worker returns all of its
+files: the session's 41.5 MB (snapshot, worker directory) and its archive were gone when the
+delete answered.
+Decision: as built. Not handled: a delete of a session whose creation has not ended
+(`deleteSession` needs the Session, which the factory lists only once made; such a call throws
+`unknownSession`); a lost session's live-tail blobs that the adapter's mirror never saw leak
+(4.11, as W2.0 recorded).
+
+### J-0481 2026-11-18 M2 importState cost per record - perf
+Evidence: a probe under the run lock (commit `5bcaa69839` before/after, worker `367e78ad...`,
+crank budget 50 M, slot ceiling 4,000,000, allocation schedule, log store, load ~1.8): one
+`importState` crank of 8 / 24 / 48 / 96 records (one-tool-call turns, 280 bytes a record);
+`perf/import.perf.mjs` at 5,000 turns (commit `dfe63dd39a`, load 1.2-2.0).
+Reading: with the contract's `SessionExportPage` guard a records chunk cost 22.4 ms a record
+(96 records: 2,152 ms) over a 36-48 ms floor. The guard tries the eight `TurnRecord`
+alternatives on every record, and `RecordLog.append` checks each again by kind. With a structural
+guard (records as keys, contract change `5bcaa69839`) 13.2 ms a record (1,268-1,296 ms for 96).
+With the append's check also removed (experiment only, reverted) 7.1 ms: the append's per-kind
+`mustMatch` costs about 6 ms a record in a vat, the guard's alternatives about 9 ms, decoding
+and W2.5's `importTurns` the remaining 7. The same append check runs for every record a live turn
+appends (about 8 a turn, so about 50 ms of a turn's cranks). Import rate: 300 turns at 4.2
+turns/s before, 7.0 after; 5,000 turns at 7.7 turns/s (652 s; flat: 7.0, 7.8, 7.9, 7.9 turns/s per
+1,000), 417 chunks of about 96 records (1.5-1.7 s each), 75 waits for seals (57.5 s in all), 152
+segments sealed, 96 MB added to the state directory (11.2 MB of it archive). Every turn id came
+back once through `History` and the vat (5,000 in 429 pages, 21.5 s).
+Decision: structural import guard kept (contract change). Pattern matching in a vat at about
+6-9 ms a record is a core candidate for the PM (a cheaper `mustMatch`, or checks the session can
+skip for records it built itself). Fixtures can use `IMPORT_SHAPE=plain` (4 records a turn).
+
+### J-0482 2026-11-18 M2 disk.session - perf
+Evidence: `m2-lifecycle` test 1, rows `disk.session` and `disk.session.deleted` (commit
+`f427ea3b78-dirty` = `dfe63dd39a`; worker `367e78ad...`, crank budget 50 M, slot ceiling
+4,000,000, allocation schedule, log store, load 1.6-1.9).
+Reading: an idle session of 300 turns (built by `importState`, checkpointed asleep): 41.5 MB,
+of which the vat's heap snapshot 40.9 MB (`heaps/snapshots/<ref>.sqlite`), worker directory 249
+bytes, archive 0.6 MB (5 segments, `context.jsonl`, mirror), blobs 0. Budget <= 25 MB plus blobs:
+MISS by 1.66 x. The snapshot is the vat's whole heap (128-159 kept turns plus the program);
+m2-interfaces 4.13 estimated about 20 MB [inferred]. Deleting returned all 41.5 MB. Whole-
+directory deltas are useless here (another vat's snapshot replacement made the state 50 MB
+smaller meanwhile), so the row sums the session's own files.
+Decision: recorded as a miss, not re-based (D-M2-3). For W2.5/W2.9 (`archive.flat.snapshot`) and
+the PM: the snapshot size per kept turn decides this row.
+
+### J-0483 2026-11-18 M2 data-only export and import - awkward
+Evidence: `scripts/export.mjs`, `guest/session/export.js`, `guest/factory/export.js`;
+`m2-lifecycle` acceptance 14 (an export of a session with run turns and a restart-held queue plus a
+170-turn archived session, imported into a fresh state and exported again: the two files equal line
+for line; export 17.2 s, import 31.5 s, 1,370 records, 52 lines).
+Reading: the vat pages its live part (`exportState`: head, segment index, records from
+`sealedTo` within `frameBytes`, queue, end); archived turns come from `History` per turn
+(`turnContent`, `SealedText.read`), one adapter call per turn: the export of 138 archived turns
+took most of the 17 s. Import replays every record through `importState` and lets the session
+seal as it goes, so an imported session is archived exactly as a grown one, at the cost of the
+vat's per-record checks (J-0481) and the adapter paging each sealed range from the vat (the mirror
+never saw imported records). Choices: archived turns are written in segment order (tool results
+in call order; a `TurnResolved` sealed after its turn right after it); waiting entries come back
+held `restart` (an import is like a restart: nothing starts with nobody watching); a `lost`
+session is left out and counted; the import's end is reported on the row (`RowPatch.imported`,
+contract change `ae7ebe41cd`); an import still open at a daemon start is deleted. Not exported:
+exec scope bindings (they live in the exec vat's scope, never in a record: an imported session
+starts with an empty scope), secret values, presets (M5). The `archive` part (adopt segments the
+adapter wrote) is accepted by the vat but no importer writes segments: that needs an adapter-side
+writer keyed by blob keys the importer cannot mint.
+Decision: as built. A segment-copy import (adapter-side) would make 30,000-turn fixtures minutes
+instead of an hour; for the PM if W2.9 needs it.
+
+### J-0484 2026-11-18 M2 W2.7 ownership and contract edges - deviation
+Evidence: commits `bf8991f102`, `ae7ebe41cd`, `0b3fbf9c75`, `5bcaa69839`, `b272847de0`.
+Reading: (1) `guest/session/queue.js` is W2.4's (group A; nobody's in group B): two read-only
+accessors (`items`, `currentHold`) were added in their own commit, since nothing outside the
+queue could reach the waiting entries' submissions that delete and export need. (2) Contract:
+`RowPatch.imported` (additive); the W2.7 entry points as built (`makeDeletions({ admin, rows,
+hooks? })`: the list feed hears of the drop through the row table, the exec vat is closed through
+`pool.js` `closeExecHandle`); `importState`'s guard made structural (J-0481). (3) `durable.js` now
+sends `archiveKey` with `open` (J-0494), saving the adapter's `resolveSessions` crank. (4)
+`test/integration/m1b-live.test.js` keeps M1b acceptance 9's delete as `test.failing`; it now
+passes, so the integration lane will report it as an unexpected pass until W2.9 makes it a plain
+test (not W2.7's file). (5) The factory forwards `listModels` with the operator's default backend
+and model when the `ModelRequest` guard admits them (W2.2's widening), and answers `unavailable`
+when the manager is lost.
+Decision: for the PM and W2.9.

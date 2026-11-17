@@ -105,7 +105,7 @@ await runPerf('import', async ({ provision, root }) => {
       ms: result.ms,
       turnsPerSecond: round1((result.turns * 1000) / result.ms),
       recordsPerSecond: round1((result.records * 1000) / result.ms),
-      fileMBPerSecond: round1(written.bytes / 1e3 / result.ms),
+      fileKBPerSecond: round1(written.bytes / result.ms),
       fileBytes: written.bytes,
       sealWaits: result.waits,
       sealWaitMs: result.waitMs,
