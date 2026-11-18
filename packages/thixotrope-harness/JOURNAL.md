@@ -7547,3 +7547,32 @@ silently), and the blank line before the second appended entry was dropped (the 
 it).
 Decision: as built; the PM checks for duplicate numbers and runs prettier after a merge
 (`designs/process.md` section 1).
+
+### J-9510 2026-11-18 I-2 process time record: scripts/process-time.mjs - good fit, with limits
+Evidence: `node scripts/process-time.mjs <session-dir> --git-range 48d6f3e08b..HEAD` over the PM
+session (10 workflows, 73 agents, 6,438 shell commands, 276 commits) in under 1 s; unit test
+`test/unit/process-time.test.js` (synthetic transcripts, 5 tests).
+Reading: each tool call is the interval from its request to its result; an agent's wall time is
+cut at every timestamp and each piece goes to the highest-priority call in flight, else model
+time, else idle attributed to the background job in flight. Shell commands are sorted by
+patterns (run-lock workload, probe, cargo, install, unit test, lint, git, read, other); polls by
+their own words, then by the background job. The report carries only durations, counts, agent
+labels, workflow names and category names (the test checks that no command text or path leaks).
+Limits: lock wait before `runs.jsonl` is a lower bound (agents polled queued runs); `nohup`
+jobs are attributed only by keywords; "model" includes API latency.
+Decision: as built. `TIMELOG.md` keeps hand-written text outside the generated block; only the
+PM regenerates it, on the merged branch (it is `merge=union`, J-9521, so two lanes regenerating
+it would interleave blocks).
+
+### J-9511 2026-11-18 I-2 where the first 48 hours went - measurement
+Evidence: `TIMELOG.md` generated 2026-11-18 02:20 UTC, build window 2026-11-16 02:04 to
+2026-11-18 02:20 (48.3 h).
+Reading: agent time 66.3 h (1.4 agents busy on average). Run-lock workloads 36.5 h (55 %), model
+18.5 h (28 %), unit tests 3.8 h, probes 3.4 h, edits 1.6 h, idle 1.0 h, cargo 0.6 h, everything
+else under 0.5 h. Some agent was inside a run-lock workload for 33.3 h of wall time (69 %).
+31 commands ran over 30 min (31.9 h), 11 over an hour (18.8 h). Slowest workflows: core-perf
+12.5 h (10.8 h locked), m1b 10.5 h (7.8 h locked). Nothing running: 16 min in eight gaps; PM
+working time 40 min in all. Lock wait measured 10 min (lower bound).
+Decision: poor fit of the process, not of the tool: the build is bound by one serialised lane and
+by fixed-count perf runs that take hours. Biggest savings: rate-per-fixed-time perf checks and
+concurrent lanes.
