@@ -31,8 +31,18 @@ import {
   provisionSteps,
   templateIdFor,
 } from '../../scripts/provision-steps.js';
-import { ensureTemplate, startFromTemplate } from '../template/index.js';
-import { makeSlice, readLog, requestId, waitFor } from './_m1a-slice.js';
+import {
+  ensureTemplate,
+  processesUnder,
+  startFromTemplate,
+} from '../template/index.js';
+import {
+  makeSlice,
+  readLog,
+  requestId,
+  turnWithInput,
+  waitFor,
+} from './_m1a-slice.js';
 import { grepState } from './_m2-secrets.js';
 
 const harnessTmp = new URL('../../tmp/', import.meta.url).pathname;
@@ -105,8 +115,19 @@ export const startM4 = async (t, tag) => {
   useKeyFile(t, tag);
   const template = await m4Template();
   const state = await startFromTemplate(template, { t });
+  return m4View(state);
+};
+
+/**
+ * The M4 view of a served state: the slice, the Secrets manager, its
+ * subscriptions admin and the sealed writer. `state` is a template state
+ * (tests) or a perf harness `Provisioned` (perf checks: no kill or stop).
+ * @param {any} state
+ */
+export const m4View = async state => {
   const slice = await makeSlice(state);
   const view = {
+    /** @type {import('../template/index.js').TemplateState} */
     state,
     slice,
     /** @type {any} */ secrets: undefined,
@@ -126,7 +147,7 @@ export const startM4 = async (t, tag) => {
   return view.refresh();
 };
 
-/** @typedef {Awaited<ReturnType<typeof startM4>>} M4State */
+/** @typedef {Awaited<ReturnType<typeof m4View>>} M4State */
 
 /**
  * A credential value in the stored form.
@@ -319,3 +340,52 @@ export const subscriptionsStep = () => {
 };
 
 export { waitFor };
+
+/**
+ * SIGKILL the supervisor and every process under the state directory at
+ * once (the adapter and workers included, so nothing the adapter would do
+ * next reaches a server), then serve the same directory again and take new
+ * presences.
+ * @param {M4State} m4
+ */
+export const killAndRestart = async m4 => {
+  for (const { pid } of processesUnder(m4.state.root)) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Gone already.
+    }
+  }
+  await m4.state.kill();
+  const timings = await m4.state.restart();
+  await m4.refresh();
+  return timings;
+};
+
+/**
+ * The pools of the Secrets manager, in creation order.
+ * @param {M4State} m4
+ */
+export const listPools = async m4 => (await E(m4.subs).listPools()).pools;
+
+/**
+ * Wait until the turn with `input` has settled on `session`; its state.
+ * @param {any} session
+ * @param {string} input
+ * @param {number} [ms]
+ */
+export const settledState = async (session, input, ms = 30_000) => {
+  /** @type {any} */
+  let found;
+  await waitFor(
+    async () => {
+      const page = await E(session).getHistoryPage();
+      found = turnWithInput(page, input);
+      return found !== undefined && found.state !== 'running';
+    },
+    ms,
+    `the turn ${input} settled`,
+    100,
+  );
+  return found;
+};
