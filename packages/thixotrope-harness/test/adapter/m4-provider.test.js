@@ -32,6 +32,7 @@ import {
   makePoolProvider,
 } from '../../resources/agent-host/impl/subscriptions/provider.js';
 import { backendKinds } from '../../resources/agent-host/impl/providers/kinds.js';
+import { PREPARE_REQUIRED } from '../../resources/agent-host/impl/providers/api.js';
 import {
   BODY_MARKER,
   exhaustedEntry,
@@ -612,4 +613,30 @@ test('wire golden: what both pool kinds send for a recorded round (hand-over aft
     return;
   }
   t.deepEqual(json, JSON.parse(readFileSync(file, 'utf8')));
+});
+
+test('HR-SYN-3 (a): a pool round started without its projection is refused before a credential is read', async t => {
+  const s = await setup(t, { kind: 'claude-pool' });
+  s.server.setPlan([{ sse: 'claude-text.sse' }]);
+  const provider = makePoolProvider({
+    label: s.spec.label,
+    spec: s.spec,
+    backend: s.backend,
+    subscriptions: s.subscriptions,
+    timers,
+  });
+  await t.throwsAsync(
+    provider.startRound(
+      harden({
+        turn: {},
+        turnId: 't1',
+        round: 0,
+        options: { modelId: s.spec.modelId },
+      }),
+      undefined,
+      undefined,
+    ),
+    { message: PREPARE_REQUIRED },
+  );
+  t.is(s.server.requests().length, 0);
 });

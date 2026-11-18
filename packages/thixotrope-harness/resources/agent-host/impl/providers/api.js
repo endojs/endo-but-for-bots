@@ -23,8 +23,10 @@
  * retry wrapper (each retry logged `retry` with its attempt, wait, status
  * and whether it timed out) at `baseUrl + wire.path`.
  *
- * The request is built from the projection `prepare` (the session's
- * context cache) answers; without one, from the turn's input alone.
+ * `prepare` (the session's context cache) is required: the adapter's
+ * Endpoints always pass it, and the request is built from the projection
+ * it answers. A round started without one fails with the kind's
+ * `unexpectedFailure` text (the Endpoint's catch).
  *
  * Node only (adapter).
  */
@@ -33,6 +35,9 @@ import { providerBaseUrl } from './http.js';
 import { makeRetry } from './retry.js';
 import { readProviderKey, runProviderRound, systemTextOf } from './round.js';
 import { makeProviderShell } from './shell.js';
+
+/** The error of a round started without its projection (never shown). */
+export const PREPARE_REQUIRED = 'a provider round needs its projection';
 
 /**
  * @typedef {object} ApiWire
@@ -87,6 +92,7 @@ export const makeApiProvider = ({
   return makeProviderShell({
     timers,
     runRound: async (req, channel, control, prepare, owner) => {
+      if (prepare === undefined) throw Error(PREPARE_REQUIRED);
       await runProviderRound({
         req,
         channel,
@@ -105,18 +111,7 @@ export const makeApiProvider = ({
           const system = await systemTextOf(req.system, blobs, owner);
           const body = wire.body({
             model,
-            transcript:
-              projection?.transcript ??
-              req.append
-                .filter(
-                  (/** @type {any} */ r) =>
-                    r.kind === 'turn-started' && typeof r.input === 'string',
-                )
-                .map((/** @type {any} */ r) => ({
-                  kind: 'message',
-                  role: 'user',
-                  content: r.input,
-                })),
+            transcript: projection.transcript,
             system,
             req,
             spec,

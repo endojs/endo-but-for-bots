@@ -26,8 +26,9 @@ import { makeRoundControl } from './round.js';
  * @typedef {object} Provider
  * @property {(req: any, channel: any, prepare: (() => Promise<any>) | undefined, owner?: any) => Promise<void>} startRound
  *   runs one round: `prepare` is the session's context cache for it (the
- *   adapter's Endpoints always pass one), `owner` the Session presence its
- *   staged text counts against
+ *   adapter's Endpoints always pass one; the API and pool kinds require it,
+ *   the scripted double runs without one), `owner` the Session presence
+ *   its staged text counts against
  * @property {(turn: any) => void} cancelRound
  * @property {(turn: any) => void} [releaseTurn] (every shell has it; the
  *   Endpoint also takes a test provider without one)

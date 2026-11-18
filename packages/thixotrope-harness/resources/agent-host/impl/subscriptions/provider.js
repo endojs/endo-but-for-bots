@@ -49,6 +49,7 @@ import {
   systemTextOf,
 } from '../providers/round.js';
 import { makeProviderShell } from '../providers/shell.js';
+import { PREPARE_REQUIRED } from '../providers/api.js';
 import { claudeAttempt } from './messages.js';
 import { codexAttempt } from './responses.js';
 import { withOverloadRetry } from './wire.js';
@@ -134,6 +135,8 @@ export const makePoolProvider = ({
     timers,
     // `owner` is the Session presence the round serves.
     runRound: async (req, channel, control, prepare, owner) => {
+      // The wire builders read the projection's transcript (5.2).
+      if (prepare === undefined) throw Error(PREPARE_REQUIRED);
       const where = { turnId: req.turnId, round: req.round };
       await runProviderRound({
         req,

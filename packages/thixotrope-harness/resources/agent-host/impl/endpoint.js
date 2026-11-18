@@ -25,7 +25,8 @@
  * - M1b W1b.2: every round run is handed `prepare`, a thunk the provider
  *   calls first to bring the session's context cache up to the request and
  *   get the projection (context-cache.js); without `prepare` (M1a tests)
- *   the provider gets none.
+ *   the provider gets none, which only the scripted double accepts (an API
+ *   or pool round without it fails with the kind's fixed text, HR-SYN-3).
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
