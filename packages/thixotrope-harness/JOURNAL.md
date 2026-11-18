@@ -11741,3 +11741,33 @@ Fit: good where it matters: intent before effect, one publish per crank, synchro
 abandoning by generation, durable-before-drop archiving, and retired-break classification by call
 site in one helper are written down and followed. 16 findings (2 major, 7 moderate, 7 minor); no
 correctness defect found.
+
+### J-9986 2026-11-18 HR-EDGE secrets, subscriptions, gateway, UI: what three lanes left at the edge - awkward
+Evidence: `designs/arch-review/harness-edge.md` (19 findings: 3 major, 8 moderate, 8 minor).
+Six-line duplicate windows: 154 normalised lines of `subscriptions/catalog.js` repeat
+`providers/catalog.js` (paging, cache, readers); bounded JSON of a response is written 4 times;
+`messageOf` 12 times in the area (9 identical in `ui/src`); the durable temp-rename write 5 times.
+The sign-in secret is a second sealed file under the Secrets key, loaded by a third key cache
+with its own failure policy; the architecture still says it is a store entry.
+Fit: awkward: each lane reused what it could import and copied what was private; a contract that
+names "take X from M2" should say "export it", not leave the copy to the builder.
+
+### J-9987 2026-11-18 HR-EDGE UI: the feature seam carries components, not state - awkward
+Evidence: `ui/src/controller/index.js` `makeController` is one 1,235-line closure; the M4/M5
+features keep three `powers`-keyed WeakMaps and four listener sets beside it, page the inventory
+twice and look the active session up by name (`AccountChip.js:30-38`) because the controller does
+not expose the presence it holds; that branch's unit test only runs against a fake. The UI fakes
+(1,796 lines) reference no interface guard.
+Fit: awkward: slots made parallel UI work conflict-free, but without a state seam each feature
+grew its own store; fakes built with the real guards would have caught the chip's drift.
+
+### J-9988 2026-11-18 HR-EDGE time record and what to keep - fit
+Evidence: started 2026-11-18T12:52:57Z, ended 2026-11-18T13:03:55Z (report commit 2f4699370e).
+Keep: the bridge guard deriving its key and method vocabulary from the interface guards; the
+secret value path (amplification, sealed boxes, one-key `CredentialAccess`, durable-then-apply
+store); 0 import cycles in 88 modules; `pool.js` pure; wire failures as structured facts. Change
+first: a feature state seam, one sealed-file module for the wrapping key, a shared catalogue core,
+and structured close and overload signals instead of text comparison (`messages.js:281-288`,
+`accounts/feed.js:133`). `ws` is a declared dependency nobody imports beside a hand-written
+WebSocket server.
+Fit: good for safety, poor for reuse.
