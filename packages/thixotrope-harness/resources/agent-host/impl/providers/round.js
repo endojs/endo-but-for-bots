@@ -45,6 +45,7 @@
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
+import { Buffer } from 'node:buffer';
 
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
 import {
@@ -149,6 +150,10 @@ export const readProviderKey = async readKey => {
   try {
     const key = await readKey();
     if (typeof key !== 'string' || key.trim() === '') throw Error('no key');
+    if (Buffer.byteLength(key) > limits.providerTokenBytes) {
+      // R7-25, contract 9.2: never sent as a header (J-9486).
+      throw Error('Secret operation failed: "INVALID_SECRET_BYTES"');
+    }
     return key;
   } catch (error) {
     const message = /** @type {Error} */ (error)?.message ?? '';

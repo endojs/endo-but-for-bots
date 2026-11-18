@@ -18,6 +18,65 @@
  * Node only (adapter).
  */
 
+/**
+ * The fixed text of a refused provider base URL (the key is never sent to
+ * it; J-9486).
+ */
+export const BASE_URL_REFUSED =
+  'provider base URL refused: https, or http to a loopback host, with no user info, query or fragment';
+
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * A spec's base URL (else `fallback`), without trailing slashes, when the
+ * key may go there: `https:`, or `http:` to a loopback host (the fake
+ * servers), with no user info, query or fragment. Anything else throws
+ * `BASE_URL_REFUSED`, so a ReadGrant cannot carry its key to a server its
+ * holder picks over clear text, or smuggle one in a URL.
+ * @param {unknown} baseUrl
+ * @param {string} fallback
+ */
+export const providerBaseUrl = (baseUrl, fallback) => {
+  const text = String(baseUrl ?? fallback);
+  /** @type {URL} */
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw Error(BASE_URL_REFUSED);
+  }
+  const allowed =
+    (url.protocol === 'https:' ||
+      (url.protocol === 'http:' && LOOPBACK.has(url.hostname))) &&
+    url.username === '' &&
+    url.password === '' &&
+    url.search === '' &&
+    url.hash === '' &&
+    !text.includes('?') &&
+    !text.includes('#');
+  if (!allowed) throw Error(BASE_URL_REFUSED);
+  return text.replace(/\/+$/, '');
+};
+harden(providerBaseUrl);
+
+/**
+ * `chunks`, failing with `over()` once more than `maxBytes` have arrived
+ * (a round's whole stream: J-9486). Leaving the loop cancels the body.
+ * @param {AsyncIterable<Uint8Array> | Iterable<Uint8Array>} chunks
+ * @param {number} maxBytes
+ * @param {() => Error} over
+ * @returns {AsyncGenerator<Uint8Array, void, undefined>}
+ */
+export async function* boundedChunks(chunks, maxBytes, over) {
+  let bytes = 0;
+  for await (const chunk of chunks) {
+    bytes += chunk.byteLength;
+    if (bytes > maxBytes) throw over();
+    yield chunk;
+  }
+}
+harden(boundedChunks);
+
 /** Node's longest timer (a longer delay fires at once). */
 const MAX_TIMER_MS = 2_147_483_647;
 

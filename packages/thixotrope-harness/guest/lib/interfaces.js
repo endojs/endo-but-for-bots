@@ -1255,7 +1255,7 @@ const m1aShapeBuilders = {
         {
           modelId: S.ModelId,
           baseUrl: text(limits.urlUnits),
-          timeoutMs: count,
+          timeoutMs: M.and(count, M.gte(1000), M.lte(limits.maxTurnDeadlineMs)),
           maxOutputTokens: count,
           logPath: text(4096),
         },

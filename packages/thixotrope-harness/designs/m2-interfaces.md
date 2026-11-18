@@ -89,7 +89,7 @@ M1b.
 | `TurnPorts` | optional `archive: ArchivePort` | W2.8 |
 | `HistoryPage` (and its structural view) | optional `archived`, `archive` | W2.5 |
 | `SessionConfig` | optional `systemPrompt` (inline or staged), `contextLength`, `maxOutputTokens`, `turnDeadlineMs` | W2.2, W2.6 (resolvers), W2.7 (factory) |
-| `BackendSpec` | a second alternative: `{ kind: 'openrouter' \| 'anthropic', label, keyGrant: ReadGrant, modelId?, baseUrl?, timeoutMs?, maxOutputTokens?, logPath? }` | W2.3 (manager), W2.1a/b (providers) |
+| `BackendSpec` | a second alternative: `{ kind: 'openrouter' \| 'anthropic', label, keyGrant: ReadGrant, modelId?, baseUrl?, timeoutMs?, maxOutputTokens?, logPath? }`. `timeoutMs` is 1,000 ms to 1 day (0, no timeout, is refused). A provider and the catalogue refuse a `baseUrl` that is not `https:`, or `http:` to a loopback host, or that has user info, a query or a fragment (`AH/providers/http.js` `providerBaseUrl`, fixed text `BASE_URL_REFUSED`; J-9486), so a grant cannot send its key over clear text to a host its holder picks | W2.3 (manager), W2.1a/b (providers) |
 | `BackendInfo` | `kind` is `BackendKind`; optional `modelId` | W2.3 |
 | `HarnessSettings` | optional `backends`, `defaultBackend`, `defaultModelId`, `turnDeadlineMs` | W2.7 |
 | `ScriptRound` (test double) | optional `times` (1..`maxToolRounds` + 1): the round stands for that many rounds in a row, so a script of one frame reaches the real round limit (acceptance 3 in a vat) | W2.6 |
@@ -987,8 +987,11 @@ state; no test reads a real key file.
   (X25519 + AES-256-GCM, `AH/secrets/seal.js`), so the hub carries ciphertext only). The writer
   maps `secret` to its key by amplification (`sink.resolveSecrets`, never a public key or id). A
   stale `expectedGeneration` fails `GENERATION_CONFLICT`; a revoked secret `REVOKED`; a value
-  over 1 MiB `INVALID_SECRET_BYTES`; a provider token over 8,192 bytes is refused by the provider
-  at read (R7-25).
+  over 1 MiB `INVALID_SECRET_BYTES`; a provider token over 8,192 bytes (`limits.providerTokenBytes`)
+  is refused by the provider at read with `INVALID_SECRET_BYTES`, before any request, and the
+  catalogue answers unavailable (R7-25; J-9486). A round's whole streamed body is bounded by
+  `limits.roundStreamBytes` (64 MiB): past it the round fails with `texts.frameLimit` and the body
+  is cancelled.
 - `Secret.makeReadGrant()` -> `ReadGrant`; an API backend spec holds it (`keyGrant`). Providers
   read through it each round (`readKey`, R4-82, R7-28): replace takes effect at the next round
   without a restart; after `revoke` the next read fails `REVOKED` and the turn fails with

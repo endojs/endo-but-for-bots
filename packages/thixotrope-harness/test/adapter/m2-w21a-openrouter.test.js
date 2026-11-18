@@ -28,6 +28,10 @@ import { makeEndpoint } from '../../resources/agent-host/impl/endpoint.js';
 import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 import { makeChannelRegistry } from '../../resources/agent-host/impl/channels.js';
 import {
+  BASE_URL_REFUSED,
+  providerBaseUrl,
+} from '../../resources/agent-host/impl/providers/http.js';
+import {
   describeFacts,
   makeOpenRouterProvider,
   openRouterAttempt,
@@ -132,6 +136,7 @@ const testBlobs = () => {
  * @param {number} [options.round]
  * @param {any} [options.retry] the provider's retry wrapper (W2.1b;
  *   default: the provider's own retry schedule)
+ * @param {typeof globalThis.fetch} [options.fetch] instead of the network
  */
 const runRound = async (
   server,
@@ -146,6 +151,7 @@ const runRound = async (
     wait = true,
     round = 0,
     retry,
+    fetch,
   } = {},
 ) => {
   const blobs = testBlobs();
@@ -159,6 +165,7 @@ const runRound = async (
     log: (kind, fields = {}) => log.push({ kind, ...fields }),
     blobs: blobs.store,
     ...(retry === undefined ? {} : { retry }),
+    ...(fetch === undefined ? {} : { fetch }),
   });
   const channels = makeChannelRegistry();
   const owner = Far('Session', {});
@@ -692,4 +699,93 @@ test('openRouterMessages turns tool calls without an assistant text into content
       { role: 'tool', tool_call_id: 'a', content: 'r' },
     ],
   );
+});
+
+test('J-9486: a base URL the key may not go to is refused before any request', async t => {
+  const fallback = 'https://api.example.test/v1';
+  t.is(providerBaseUrl(undefined, fallback), fallback);
+  t.is(providerBaseUrl('https://api.example.test/v1//', fallback), fallback);
+  t.is(
+    providerBaseUrl('http://127.0.0.1:4100/api', fallback),
+    'http://127.0.0.1:4100/api',
+  );
+  t.is(
+    providerBaseUrl('http://localhost:9/x', fallback),
+    'http://localhost:9/x',
+  );
+  t.is(providerBaseUrl('http://[::1]:9', fallback), 'http://[::1]:9');
+  for (const bad of [
+    'http://api.example.test/v1',
+    'http://127.0.0.1.example.test/v1',
+    'ftp://127.0.0.1/x',
+    ['https://user', 'pass@api.example.test'].join(':'),
+    'https://api.example.test/v1?x=1',
+    'https://api.example.test/v1#f',
+    'https://api.example.test/v1?',
+    'not a url',
+  ]) {
+    t.throws(
+      () => providerBaseUrl(bad, fallback),
+      { message: BASE_URL_REFUSED },
+      bad,
+    );
+  }
+  t.throws(
+    () =>
+      makeOpenRouterProvider({
+        label: 'openrouter-test',
+        spec: { baseUrl: 'http://api.example.test' },
+        readKey: async () => KEY,
+        timers,
+        log: () => {},
+        blobs: /** @type {any} */ ({}),
+      }),
+    { message: BASE_URL_REFUSED },
+  );
+});
+
+test('J-9486: a key over the provider token bound fails the round before any request', async t => {
+  const server = await serverFor(t);
+  const r = await runRound(server, {
+    readKey: async () => 'k'.repeat(limits.providerTokenBytes + 1),
+  });
+  t.teardown(r.cleanup);
+  t.is(r.failures[0].reason, textOf.secretFailed('INVALID_SECRET_BYTES'));
+  t.is(server.requests().length, 0);
+  // At the bound it is sent.
+  server.setPlan([{ sse: 'openrouter-text.sse' }]);
+  const ok = await runRound(server, {
+    readKey: async () => 'k'.repeat(limits.providerTokenBytes),
+  });
+  t.teardown(ok.cleanup);
+  t.is(ok.finals.length, 1);
+});
+
+test('J-9486: a stream over the round bound fails with the frame-limit text and is cancelled', async t => {
+  const server = await serverFor(t);
+  const chunk = new TextEncoder().encode(`: ${'k'.repeat(1_048_570)}\n`);
+  let sent = 0;
+  let cancelled = false;
+  /** @type {typeof globalThis.fetch} */
+  const fetch = async () =>
+    new Response(
+      new ReadableStream({
+        pull(controller) {
+          sent += chunk.byteLength;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  const t0 = Date.now();
+  const r = await runRound(server, { fetch });
+  t.teardown(r.cleanup);
+  t.is(r.failures[0].reason, texts.frameLimit);
+  t.true(sent > limits.roundStreamBytes);
+  t.true(sent <= limits.roundStreamBytes + 4 * chunk.byteLength);
+  await until(() => cancelled);
+  t.log({ streamedBytes: sent, ms: Date.now() - t0 });
 });
