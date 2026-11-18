@@ -35,7 +35,7 @@
  * At most `inspectWindow` calls of a session are in flight; more wait, in
  * issue order. Guest rules.
  */
-import { texts, textOf } from '../../lib/interfaces.js';
+import { texts, textOf } from '../../lib/guards/session.js';
 import { texts as m5Texts } from '../../lib/interfaces-m5.js';
 import { limitsM5 } from '../../lib/limits-m5.js';
 import { isRetiredBreak } from '../../lib/retired.js';

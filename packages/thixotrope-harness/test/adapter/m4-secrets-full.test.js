@@ -115,7 +115,7 @@ test('before pages every event exactly once, per key and for all', async t => {
   store.close();
 });
 
-test('setDescription: kept, persisted, R7-25 refused, not audited', async t => {
+test('setDescription: kept, persisted, R7-25 refused, audited (J-9662 item 9)', async t => {
   const dirs = makeStoreDirs('w44-desc');
   t.teardown(dirs.done);
   const store = openStore(dirs.files);
@@ -139,10 +139,41 @@ test('setDescription: kept, persisted, R7-25 refused, not audited', async t => {
     store.setDescription('k9', 'ok'),
     failed('UNKNOWN_SECRET'),
   );
-  t.is((await store.auditPage({ limit: 1000 })).length, before);
+  // J-9662 item 9: each change is an audit event (attempted, then
+  // succeeded or failed with its code), and no event carries the text.
+  const events = (await store.auditPage({ limit: 1000 })).slice(
+    0,
+    -before || undefined,
+  );
+  t.deepEqual(
+    events
+      .slice()
+      .reverse()
+      .map(({ label, op, outcome, code }) => [label, op, outcome, code]),
+    [
+      ['one', 'setDescription', 'attempted', undefined],
+      ['one', 'setDescription', 'succeeded', undefined],
+      ['one', 'setDescription', 'attempted', undefined],
+      ['one', 'setDescription', 'failed', 'INVALID_DESCRIPTION'],
+      ['one', 'setDescription', 'attempted', undefined],
+      ['one', 'setDescription', 'failed', 'INVALID_DESCRIPTION'],
+      ['one', 'setDescription', 'attempted', undefined],
+      ['one', 'setDescription', 'failed', 'INVALID_DESCRIPTION'],
+      ['', 'setDescription', 'attempted', undefined],
+      ['', 'setDescription', 'failed', 'UNKNOWN_SECRET'],
+    ],
+  );
+  t.false(JSON.stringify(events).includes('second words'));
   store.close();
   const again = openStore(dirs.files);
   t.is((await again.describe('k1')).description, 'second words');
+  t.is(
+    (await again.auditPage({ limit: 1000 })).filter(
+      e => e.op === 'setDescription',
+    ).length,
+    10,
+    'the events are in the audit file',
+  );
   again.close();
 });
 

@@ -44,7 +44,10 @@ import { makeGatewayService } from './gateway/index.js';
 import { GATEWAY_KEY } from '../../../guest/lib/interfaces-m3.js';
 import { makeSubscriptions } from './subscriptions/index.js';
 import { claudePoolKind, codexPoolKind } from './subscriptions/provider.js';
-import { makeAccountStatusTool } from './subscriptions/account-tool.js';
+import {
+  accountStatusDescription,
+  makeAccountStatusTool,
+} from './subscriptions/account-tool.js';
 
 /**
  * @typedef {object} BackendKind
@@ -55,6 +58,11 @@ import { makeAccountStatusTool } from './subscriptions/account-tool.js';
  *
  * @typedef {object} AdapterToolKind
  * @property {string} name the tool name the model sees
+ * @property {{ name: string, description: string, parameters: string }} [description]
+ *   the `ToolDescription` the model is offered; the open handler passes it
+ *   in each `AdapterToolEntry`. A tool with a static tool-table entry of its
+ *   name (`echo`) needs none; any other is offered to the model only with
+ *   one (D-M4-9 as amended, XC)
  * @property {(options: { timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, session: any, subscriptions: any }) => any} makeTool
  */
 
@@ -82,7 +90,11 @@ export const adapterTools = harden([
   // M1a W1a.2: the echo test tool.
   { name: 'echo', makeTool: makeEchoTool },
   // M4 W4.6: account status (m4-interfaces.md 6).
-  { name: 'accountStatus', makeTool: makeAccountStatusTool },
+  {
+    name: 'accountStatus',
+    makeTool: makeAccountStatusTool,
+    description: accountStatusDescription,
+  },
 ]);
 
 /**
@@ -293,8 +305,13 @@ export const makeAgentHostImpl = ({
             const entry = tools.find(candidate => candidate.name === name);
             if (entry === undefined)
               throw Error(`No adapter tool ${name} here`);
+            // XC (D-M4-9 as amended): the description travels with the
+            // tool, so the session offers a tool it has no entry for.
             return harden({
               name,
+              ...(entry.description === undefined
+                ? {}
+                : { description: entry.description }),
               tool: entry.makeTool({
                 timers,
                 log,
@@ -372,7 +389,12 @@ export const makeAgentHostImpl = ({
     history: () => archive.history(),
     blobs,
     timers,
-    secretWriter: () => secrets().secretWriter(),
+    // The in-process write path, never the hub's SealedBox-only writer
+    // (m3-interfaces A-11).
+    secretWriter: async () => {
+      const { replaceLocal, publicKeyLocal } = secrets();
+      return harden({ replaceLocal, publicKey: publicKeyLocal });
+    },
   });
   const { bind, unbind } = makeAttach({
     ops,

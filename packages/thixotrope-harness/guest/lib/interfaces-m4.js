@@ -386,14 +386,16 @@ const m4InterfaceBuilders = {
       makePool: M.call(T.PoolSpec).returns(R('Backend')),
       listPools: M.call().returns(T.PoolPage),
       describePool: M.call(R('Backend')).returns(T.PoolDescription),
-      retirePool: M.call(R('Backend')).returns(done),
+      // XB, X-FIX: answers once the adapter has taken the push (3.1).
+      retirePool: M.callWhen(R('Backend')).returns(done),
       accounts: M.callWhen().returns(R('Accounts')),
     }),
   /** One member account of a pool (R3-233, R8-13). */
   PoolMember: () =>
     M.interface('PoolMember', {
       describe: M.call().returns(T.MemberInfo),
-      retire: M.call().returns(done),
+      // XB, X-FIX: answers once the adapter has taken the push (3.1).
+      retire: M.callWhen().returns(done),
     }),
   /**
    * A pool backend (exo name `Backend`; held by the factory and sessions):
@@ -439,6 +441,11 @@ const m4InterfaceBuilders = {
       ).returns(done),
       auditReader: M.call().returns(R('AuditReader')),
       accounts: M.call().returns(R('Accounts')),
+      // 3.1 (XB, X-FIX): the manager retired a pool or a member; answered,
+      // no argument (every pool this incarnation loaded is asked again at
+      // its next use; the retirement returns to the operator only after
+      // this answer, so the next turn sees it).
+      poolsChanged: M.call().returns(done),
     }),
   /** Adapter-local: audit pages up to 1,000 events, 0 vat deliveries (R7-63). */
   AuditReader: () =>
@@ -506,6 +513,7 @@ export const m4MethodNames = harden({
     'setSecretDescription',
     'auditReader',
     'accounts',
+    'poolsChanged',
   ],
   AuditReader: ['page'],
   Accounts: ['list', 'forBackend', 'forSession', 'refresh', 'watch'],

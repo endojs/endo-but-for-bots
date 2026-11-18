@@ -18,6 +18,7 @@ import {
 import { secretsTexts } from '../../ui/src/secrets/SecretsPanel.js';
 import { m4Limits } from '../../guest/lib/limits-m4.js';
 import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { secretWriterLabel } from '../../resources/agent-host/impl/gateway/contract-m3.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 import {
   makeFakeSecrets,
@@ -43,8 +44,12 @@ const setup = async ({ secrets = makeFakeSecrets() } = {}) => {
   runEffectsPromptly();
   const dom = makeTestDom();
   const features = [secretsFeature];
+  // The page writes through the gateway's in-process writer, found in
+  // `GatewayPowers.extras` (m3-interfaces A-11), never the hub's
+  // SealedBox-only `openWriter()`.
   const { powers, control } = makeFakePowers({
     operatorMethods: { getSecrets: () => secrets.getSecrets() },
+    extras: [{ label: secretWriterLabel, service: secrets.writer }],
   });
   const controller = makeController({
     storage: undefined,

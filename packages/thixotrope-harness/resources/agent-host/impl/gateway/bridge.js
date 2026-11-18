@@ -24,7 +24,19 @@
  * knows exactly which value each live export slot is (rule 1, the frame
  * guard's `LargeCall` identity) and how many there are: more than
  * `exportsPerConnection` closes the connection
- * (`closeCodes.tooManyObjects`; nothing more is sent on it). When a
+ * (`closeCodes.tooManyObjects`; nothing more is sent on it).
+ *
+ * Answers are bounded too (`answersPerConnection`): the bridge mirrors
+ * captp's answer table (one entry per page question, until the page drops
+ * it with `CTP_DROP`; a page's captp does so when the question's promise is
+ * collected). When a new question would exceed the bound, the oldest
+ * settled answer is forgotten on both sides: the bridge dispatches the same
+ * `CTP_DROP` the page would have sent, so captp releases the answer and its
+ * payload. A page that pipelines on a forgotten answer gets the unknown
+ * target refusal; a well-behaved page holds far fewer live questions than
+ * the bound and is never closed for it. Only a connection whose kept
+ * answers are all unsettled when the bound is reached is closed
+ * (`closeCodes.tooManyObjects`). When a
  * connection closes, captp is shut down, every `onClose` callback the
  * bootstrap registered runs (the `Live` facade closes its subscriptions),
  * and its tables are dropped. Nothing is cancelled in any vat.
@@ -42,7 +54,7 @@ import { makeCapTP, makeDefaultCapTPImportExportTables } from '@endo/captp';
 
 import { closeCodes, gatewayLimits, gatewayTexts } from './contract-m3.js';
 import { defaultGuardLimits, inspectCall } from './guard.js';
-import { isGatewayLocal } from './powers.js';
+import { isGatewayLocal, isNeverLeaving } from './powers.js';
 
 /**
  * @typedef {object} GatewaySocket what W3.1's server hands `onSocket`
@@ -59,6 +71,7 @@ import { isGatewayLocal } from './powers.js';
  * @property {number} argumentDepth
  * @property {number} callsInFlight
  * @property {number} exportsPerConnection
+ * @property {number} answersPerConnection
  * @property {number} signInDeadlineMs
  * @property {number} wsMessageBytes
  */
@@ -67,6 +80,7 @@ import { isGatewayLocal } from './powers.js';
 export const defaultBridgeLimits = harden({
   ...defaultGuardLimits,
   exportsPerConnection: gatewayLimits.exportsPerConnection,
+  answersPerConnection: gatewayLimits.answersPerConnection,
   signInDeadlineMs: gatewayLimits.signInDeadlineMs,
   wsMessageBytes: gatewayLimits.wsMessageBytes,
 });
@@ -116,6 +130,9 @@ const labelOf = value => {
  * @param {(event: Record<string, unknown>) => void} options.log
  * @param {(value: unknown) => boolean} [options.isLocal] gateway-local
  *   objects (default `powers.js` `isGatewayLocal`)
+ * @param {(value: unknown) => boolean} [options.staysLocal] gateway objects
+ *   never sent to a vat as an argument (default `powers.js`
+ *   `isNeverLeaving`)
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
  */
 export const makeBridge = ({
@@ -126,6 +143,7 @@ export const makeBridge = ({
   limits = {},
   log,
   isLocal = isGatewayLocal,
+  staysLocal = isNeverLeaving,
   timers = { setTimeout, clearTimeout },
 }) => {
   /** @type {BridgeLimits} */
@@ -149,6 +167,11 @@ export const makeBridge = ({
     /** The page's question ids the gateway answered, to what they target. */
     /** @type {Map<string, { value: unknown, local: boolean }>} */
     const answers = new Map();
+    /** Answered question ids, oldest answer first (eviction order). */
+    /** @type {Set<string>} */
+    const settled = new Set();
+    let answersPeak = 0;
+    let answersEvicted = 0;
     /** Forwarded calls to vat targets not yet answered (question ids). */
     const inFlight = new Set();
     /** `fetch` calls not yet answered. */
@@ -206,6 +229,7 @@ export const makeBridge = ({
       }
       exportsBySlot.clear();
       answers.clear();
+      settled.clear();
       inFlight.clear();
       fetches.clear();
       open.delete(handle);
@@ -216,7 +240,13 @@ export const makeBridge = ({
           // the socket is gone already
         }
       }
-      log({ event: 'gateway-connection-closed', address, code });
+      log({
+        event: 'gateway-connection-closed',
+        address,
+        code,
+        answersPeak,
+        answersEvicted,
+      });
     };
 
     /**
@@ -231,6 +261,7 @@ export const makeBridge = ({
       if (message.type === 'CTP_RETURN') {
         const { answerID } = message;
         inFlight.delete(answerID);
+        if (answers.has(answerID)) settled.add(answerID);
         if (fetches.delete(answerID) && 'result' in message && !signedIn) {
           signedIn = true;
           if (deadline !== undefined) timers.clearTimeout(deadline);
@@ -289,6 +320,37 @@ export const makeBridge = ({
     });
 
     /**
+     * Keep a new answer within `answersPerConnection` (see the header):
+     * forget the oldest settled answers, as the page's own `CTP_DROP`
+     * would; with none settled, close. Answers false when closed.
+     * @param {string} questionID
+     * @param {{ value: unknown, local: boolean }} entry
+     * @returns {boolean}
+     */
+    const keepAnswer = (questionID, entry) => {
+      while (answers.size >= settings.answersPerConnection) {
+        const oldest = settled.values().next();
+        if (oldest.done) {
+          muted = true;
+          close(closeCodes.tooManyObjects, 'too many answers');
+          return false;
+        }
+        settled.delete(oldest.value);
+        answers.delete(oldest.value);
+        answersEvicted += 1;
+        captp.dispatch({
+          type: 'CTP_DROP',
+          epoch: 0,
+          slotID: oldest.value,
+          decRefs: 0,
+        });
+      }
+      answers.set(questionID, entry);
+      if (answers.size > answersPeak) answersPeak = answers.size;
+      return true;
+    };
+
+    /**
      * Answer a page's question with an exception; nothing is dispatched.
      * @param {string} questionID
      * @param {string} text
@@ -328,6 +390,7 @@ export const makeBridge = ({
         isLargeCall,
         inFlight: inFlight.size,
         limits: settings,
+        staysLocal,
       });
       /** @type {string | undefined} */
       let text = refusal?.text;
@@ -358,7 +421,7 @@ export const makeBridge = ({
         return;
       }
       const local = held?.local === true;
-      answers.set(questionID, { value: undefined, local: false });
+      if (!keepAnswer(questionID, { value: undefined, local: false })) return;
       if (!local) inFlight.add(questionID);
       if (isFetch) fetches.add(questionID);
       captp.dispatch(message);
@@ -403,7 +466,9 @@ export const makeBridge = ({
             close(closeCodes.protocol, 'bad question id');
             return;
           }
-          answers.set(questionID, { value: bootstrap, local: true });
+          if (!keepAnswer(questionID, { value: bootstrap, local: true })) {
+            return;
+          }
           captp.dispatch(message);
           return;
         }
@@ -416,7 +481,10 @@ export const makeBridge = ({
             close(closeCodes.protocol, 'bad drop');
             return;
           }
-          if (slotID.startsWith('q-')) answers.delete(slotID);
+          if (slotID.startsWith('q-')) {
+            answers.delete(slotID);
+            settled.delete(slotID);
+          }
           captp.dispatch(message);
           return;
         }
@@ -437,6 +505,9 @@ export const makeBridge = ({
           exports: exportsBySlot.size,
           inFlight: inFlight.size,
           refused,
+          answers: answers.size,
+          answersPeak,
+          answersEvicted,
         }),
     });
     open.add(handle);

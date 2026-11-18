@@ -32,7 +32,7 @@
  * Nothing here evaluates model code. A key flood answers `exhausted`, as
  * `run` does.
  */
-import { textOf as m1Text } from '../lib/interfaces.js';
+import { textOf as m1Text } from '../lib/guards/base.js';
 import { limitsM5 } from '../lib/limits-m5.js';
 import { boundToolOutput } from '../lib/bounded.js';
 import {

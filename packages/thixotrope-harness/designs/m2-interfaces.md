@@ -36,7 +36,22 @@ Contract 1 and M1b 1.1 hold. Changes:
    `m1bShapes`, `m1bInterfaces` and `m1bMethodNames` remain as views of the M1b names over the
    folded tables (the same objects): existing imports keep working; new code imports `shapes` and
    `interfaces`. Test doubles of an interface M1b extended must implement its M1b methods
-   (`m1a-agent-host.test.js` was adapted in the fold commit).
+   (`m1a-agent-host.test.js` was adapted in the fold commit). **As built (X1, J-9942):** at M2
+   sign-off the M2 versions were folded the same way (1.3): `interfaces.X` and `methodNames.X`
+   of the ten interfaces M2 extends are the M2 versions; `m2Interfaces` and `m2MethodNames` remain
+   as views (the same objects), as do `m1bShapes` and `m1bInterfaces`; `m1bMethodNames` keeps
+   M1b's lists. Guest code reads `shapes`, `interfaces` and `methodNames`. **Where the entries live
+   (X1, J-9941, J-10002):** the tables are split by the vat programs that read them into a chain
+   of modules, `guest/lib/guards/base.js` (exec) < `guards/session.js` < `guards/factory.js` (with
+   the factory's stand-in session) < `guest/lib/interfaces.js` (the rest: Node-side code, the
+   manager's modules, tests, the gateway's vocabulary). An entry lives in the module of the lowest
+   program that reads it; each module's tables answer its own entries and every entry below it
+   (`lazyTable`, the same objects; a name defined twice in the chain throws). A guest module
+   imports its lowest program's module, never `interfaces.js`; `interfaces.js` re-exports every
+   table whole. `test/unit/guards-split.test.js` enforces it (every name a guest module reads is in
+   the table it imports, every module answers the same objects as `interfaces.js`, no program
+   bundles `interfaces.js`). A new entry goes in the module of the lowest program that reads it,
+   or in `interfaces.js` when no vat does.
 2. **Bound a crank by what it builds** (architecture rule 12.12) is now a column of every method
    table (section 3): the records, events, sends and allocation the heaviest crank a method can
    cause produces, and what bounds it.
@@ -77,6 +92,18 @@ import of a module of a unit of the same group). The unit that builds the method
 stub in the file it owns in its group. W2.9 checks that no `notBuilt` stub remains (`grep`) and
 at M2 sign-off folds `m2Interfaces` into `interfaces` in one contract commit, as W2.0 did for
 M1b.
+
+**As built (X1, J-9942; contract commit `cfa5802d1e`):** the fold is done. `interfaces.X` is the M2
+version of each of the ten; `m2Interfaces` and `m2MethodNames` are views of the folded tables (the
+same guards and arrays), kept for modules written against them; nothing switches any more. Exos
+built on a pre-M2 guard now hold the M2 one, so each implements every M2 method: the factory's
+stand-in session (`guest/factory/standin-session.js`) answers `findTurn` with its existing "no
+turns" text and refuses `blobPage`, `deleteSelf`, `exportState` and `importState` (stubs that
+throw; it has no state for them). Test doubles in `m1a-interfaces`, `m1a-queue` and
+`m1b-interfaces` gained stubs of the methods a folded guard names. A snapshot of every entry's
+digest (`test/fixtures/guard-snapshot-before-x1.json`, 493 entries, checked by
+`guards-split.test.js`) proved the fold and the split changed no guard (J-9943); later intended
+guard changes re-baseline only their own entries.
 
 ### 1.4 In-place widenings (additive; every earlier value still matches)
 
@@ -119,7 +146,7 @@ each unit adds its own lines and never edits another's (the PM resolves trivial 
 
 | file (M1a/M1b-built unless marked new) | group A | group B | what |
 |---|---|---|---|
-| `H/guest/lib/{interfaces,limits}.js`, `H/designs/m2-interfaces.md`, `H/test/unit/m2-interfaces.test.js` | W2.0 rule | W2.0 rule | contract changes only, by the rule of 2.1 |
+| `H/guest/lib/{interfaces,limits}.js`, `H/designs/m2-interfaces.md`, `H/test/unit/m2-interfaces.test.js` | W2.0 rule | W2.0 rule | contract changes only, by the rule of 2.1. As built (X1, J-9941): the entries are split over `H/guest/lib/guards/{base,session,factory}.js` and `interfaces.js` (1.1), all under the same rule; `H/test/unit/guards-split.test.js` checks the split |
 | `AH/providers/{http,sse,openrouter,round}.js` (new) | W2.1a | W2.1b | fetch, SSE parser, OpenRouter streamed, the shared provider round (8.1); W2.1b plugs `retry.js` into `openrouter.js` |
 | `AH/providers/{anthropic,retry}.js` (new) | - | W2.1b | |
 | `AH/providers/catalog.js` (new) | - | W2.2 | |
@@ -299,7 +326,7 @@ to a handle).
 | `History.page(session, cursor?)` (W2.8) | gateway, tests | (A); a live cursor costs one session crank | answered | <= frameBytes | - (adapter-local) |
 | `History.turnContent(session, turnId, cursor?)` (W2.8) | gateway, tests | (A) | answered | <= contextPageBytes | - |
 | `SealedText.read(range)`, `describe()` (W2.8) | gateway, tests | (A) | answered | <= blobPageBytes | - |
-| `SecretWriter.replace(secret, value \| SealedBox, expectedGeneration?)`, `publicKey()` (W2.3) | gateway (in process), CLI (sealed box through the hub) | (A); one manager crank to resolve the secret per incarnation | answered | <= 1.4 MB, never into a vat | adapter restarted: open a new writer |
+| `SecretWriter.replace(secret, SealedBox, expectedGeneration?)`, `publicKey()` (W2.3; as built by XA and X-FIX, J-10005, J-10055: a `SealedBox` only, 9.2; the gateway's plain-value path is the in-process `replaceLocal`) | CLI and hub clients (sealed box through the hub); the gateway writes in process (9.2) | (A); one manager crank to resolve the secret per incarnation | answered | <= 1.4 MB, never into a vat | adapter restarted: open a new writer |
 | `Composer.edit(entry, text)` (W2.4) | gateway, tests | (A), then the entry's crank | answered | <= 200,000 units in, staged over inlineBytes | session vat lost: reject |
 
 **Ops facet** (`AH/attach.js`, W2.8 owns in group A; the manager is its only caller). M2 adds,
@@ -999,10 +1026,29 @@ state; no test reads a real key file.
 - `SecretsAdmin.create({ label, description })` -> `Secret` (generation 0, no value: a read fails
   `READ_FAILED` until the first `replace`). Description 1-200 characters, no newline
   (`INVALID_DESCRIPTION`).
-- `SecretWriter.replace(secret, value | SealedBox, expectedGeneration?) -> { generation }`
-  (adapter-local; the gateway calls it in process, the CLI with a box sealed to `publicKey()`
-  (X25519 + AES-256-GCM, `AH/secrets/seal.js`), so the hub carries ciphertext only). The writer
-  maps `secret` to its key by amplification (`sink.resolveSecrets`, never a public key or id). A
+- `SecretWriter.replace(secret, SealedBox, expectedGeneration?) -> { generation }`
+  (adapter-local, reachable through the hub as `SecretsAdmin.openWriter()`): it takes only a box
+  sealed to `publicKey()` (X25519 + AES-256-GCM, `AH/secrets/seal.js`), so the hub carries
+  ciphertext only. **As changed by XA (2026-11-18, the open M2 major of M2-R1 (b)):** the exo guard
+  (`interfaces.SecretWriter`) is `replace: M.callWhen(R('Secret'), S.SealedBox).optional(count)`;
+  a plain string from any caller is refused before anything is read or written. **As built
+  (X-FIX, J-10055):** a guard refusal quotes the refused value back in the pattern library's
+  text, so the remote writer's exo guard (`AH/secrets/writer.js` `hubWriterGuard`) takes any
+  passable for the value and the method checks it against `shapes.SealedBox` with `matches`; a
+  value of the wrong shape is refused with `textOf.secretFailed('INVALID_SECRET_BYTES')`, which
+  never quotes it. What is accepted is unchanged (`interfaces.SecretWriter` still describes it);
+  only the refusal text differs, and the exo guard is no longer that contract guard object for the
+  value argument. The plain-value path is in process only:
+  `makeSecretsOps(...).replaceLocal(secret, value | SealedBox, expectedGeneration?)` (and
+  `publicKeyLocal()`), a function of the adapter that no remotable exposes and no ops handler
+  forwards. `AH/index.js` hands it to the gateway, whose gateway-local `GatewaySecretWriter` (guard
+  `AH/secrets/writer.js` `localWriterGuard`: `replace(Secret, any, count?)`, `publicKey()`; the
+  method checks the value with `assertLocalValue` against `SecretValue | SealedBox` and refuses the
+  same way) calls it with a value a page sent over its WebSocket (m3-interfaces A-11). The
+  gateway's writer is the first entry of every page's `GatewayPowers.extras` and the answer of
+  `GatewayContext.secretWriter()`; it is marked never to leave the gateway (m3-interfaces 4.4,
+  J-10054). Both paths map `secret` to its key by amplification
+  (`sink.resolveSecrets`, never a public key or id). A
   stale `expectedGeneration` fails `GENERATION_CONFLICT`; a revoked secret `REVOKED`; a value
   over 1 MiB `INVALID_SECRET_BYTES`; a provider token over 8,192 bytes (`limits.providerTokenBytes`)
   is refused by the provider at read with `INVALID_SECRET_BYTES`, before any request, and the
@@ -1015,11 +1061,20 @@ state; no test reads a real key file.
   `textOf.secretFailed('REVOKED')` (acceptance 7: the recorded reason contains no provider body).
 - `Secret.revoke()`, `delete()` (after revoke), `describe()`, `audit(limit?)`;
   `SecretsAdmin.audit(limit?)` over all secrets (newest first, at most 100 per answer).
+- An audit event's `op` is one of `create`, `read`, `replace`, `revoke`, `delete` and (XA, M4's
+  `Secret.setDescription`, J-9662 item 9) `setDescription`: the store audits a description change
+  `attempted`, then `succeeded` or `failed` with its code (`INVALID_DESCRIPTION`,
+  `UNKNOWN_SECRET`); the event carries the label, never the description text.
 - Every read is audited `attempted` then `succeeded` or `failed` with a code (R7-24); errors are
   `textOf.secretFailed(code)` with a code of `secretCodes`, never bytes.
 - Adapters never log tool arguments, results or secret values (W-13). Acceptance 7 greps the state
   directory (heaps, journals, hub image and log, blobs, archive, `secrets.enc`'s plaintext never
-  written) for the test value and finds nothing.
+  written) for the test value and finds nothing. Since XA it also proves the two paths: a
+  plain-string `replace` from a hub client is refused with `secretFailed("INVALID_SECRET_BYTES")`
+  and the value is absent from the refusal (generation unchanged; X-FIX, J-10055), and a
+  value a page wrote through the gateway's in-process writer is found nowhere under the state
+  directory after the clean stop (`test/integration/m2-secrets.test.js`; adapter level:
+  `test/adapter/m2-secret-writer-paths.test.js`).
 
 ---
 
@@ -1066,7 +1121,7 @@ means that vat is lost.
 | factory -> `Backend.listModels` / `resolveModel` (manager, guest) | manager lost | `listModels` answers `unavailable`; a creation fails with the error |
 | factory -> `SessionInternal.importState` (guest, the new vat) | new vat lost | roll the import back (7.2) |
 | adapter -> manager sink `resolveSessions` / `resolveSecrets` / `resolveGrants` (guest) | manager lost | the round fails with `textOf.secretFailed('READ_FAILED')` or `textOf.archiveFailed(message)`; `History` rejects |
-| gateway or CLI -> `SecretWriter` (adapter) | restart | open a new writer |
+| CLI or hub client -> `SecretWriter` (adapter; as built, XA J-10005: the gateway writes in process, 9.2) | restart | open a new writer |
 | Composer -> `QueueEntry.edit` (guest) | session vat lost | reject; delete a staged file |
 | provider -> `TurnSink.dispatching` (session vat) | session vat lost | as M1a: abandon; nothing sent to the provider |
 
@@ -1081,7 +1136,8 @@ guest rules; "Node" = adapter or tests.
 
 | file | export | |
 |---|---|---|
-| `guest/lib/interfaces.js` | `shapes`, `interfaces`, `methodNames` (folded); `m2Interfaces`, `m2MethodNames`; `m1bShapes`, `m1bInterfaces`, `m1bMethodNames` (views); `texts`, `textOf` (M2 additions, section 14); `secretCodes`; `archiveKindLetters` | |
+| `guest/lib/interfaces.js` | `shapes`, `interfaces`, `methodNames` (folded); `m2Interfaces`, `m2MethodNames`; `m1bShapes`, `m1bInterfaces`, `m1bMethodNames` (views); `texts`, `textOf` (M2 additions, section 14); `secretCodes`; `archiveKindLetters` | as built (X1, J-9941, J-9942): `m2Interfaces` and `m2MethodNames` are views of the folded tables too; Node side only |
+| `guest/lib/guards/{base,session,factory}.js` (vat and Node; X1) | each: `shapes`, `interfaces`, `methodNames`, `texts`, `textOf` holding its own entries and every entry below it; `base.js` also the helpers (`text`, `list`, `record`, `count`, `staged`, `R`, `done`, `lazyTable`) | 1.1; the exec program imports `base`, the session program `session`, the factory program `factory` |
 | `guest/lib/limits.js` | `limits` (M2 settings section) | |
 
 ### W2.1a (Node unless marked)
@@ -1115,8 +1171,8 @@ guest rules; "Node" = adapter or tests.
 |---|---|---|
 | `AH/secrets/store.js` | `makeSecretStore({ file, keyFile }) -> { create(key, label, description), replace(key, value, expectedGeneration?) -> generation, read(key) -> { value, generation }, describe(key), revoke(key), delete(key), audit({ key?, limit }) }` | 9.1; every read audited |
 | `AH/secrets/seal.js` | `makeSealKeys({ file })` -> `{ publicKey(), open(box) -> string }`; `sealTo(publicKey, value) -> SealedBox` (CLI) | 9.2 |
-| `AH/secrets/writer.js` | `makeSecretWriter({ store, seal, resolveSecret }) -> SecretWriter` | 9.2 |
-| `AH/secrets/manager.js` | `makeSecretsOps({ store, seal, sink }) -> { secretCreate, secretDescribe, secretRevoke, secretDelete, secretAudit, secretWriter, readKey(grant) -> Promise<string> }` | the ops handlers (3.4) and the providers' read path |
+| `AH/secrets/writer.js` | `makeSecretWriter({ store, seal, resolveSecret }) -> SecretWriter`; as built (XA, X-FIX; J-10005, J-10055): `-> { writer, replaceLocal }`, plus `localWriterGuard()` and `assertLocalValue(value)` for the gateway's writer | 9.2 |
+| `AH/secrets/manager.js` | `makeSecretsOps({ store, seal, sink }) -> { secretCreate, secretDescribe, secretRevoke, secretDelete, secretAudit, secretWriter, readKey(grant) -> Promise<string> }`; as built (XA, J-10005): also `replaceLocal(secret, value \| SealedBox, expectedGeneration?)` and `publicKeyLocal()`, in-process functions no ops handler forwards | the ops handlers (3.4), the providers' read path and the gateway's writer (9.2) |
 | `resources/agent-host/durable.js` (manager vat) | as M1a/M1b, every M2 method of 3.3 | |
 
 ### W2.4
@@ -1175,7 +1231,8 @@ guest rules; "Node" = adapter or tests.
 
 Integration: the wiring of 2.3, removal of every `notBuilt` stub, acceptance 7, 11 and 15, perf
 `throughput`, `restart.serving` (50 sessions x 300 turns by import), the 5,000-turn rows, and the
-fold of `m2Interfaces` (contract commit).
+fold of `m2Interfaces` (contract commit; as built, made by X1 at M2 sign-off, J-9942, section 16
+item 13).
 
 ---
 
@@ -1313,3 +1370,13 @@ missing `sendNow` could not be made on the M2 guard; `textOf.notBuilt` answered 
     answer (`TurnSettled.final`) and not a transcript record, so later contexts do not carry it:
     R4-47 says only that "the turn ends normally with" the text, and is silent on what later
     contexts hold, so the contract stands.
+13. **The M2 fold and the per-program guard modules** (X1, as built; J-9941..J-9944, J-10003):
+    the fold W2.9 was to make (1.3) was made at M2 sign-off; `m2Interfaces` is a view (1.1). The
+    tables were then split into `guest/lib/guards/{base,session,factory}.js` below
+    `interfaces.js` so each vat program bundles only the entries it reads (session program
+    236,583 -> 213,712 bytes, exec 105,414 -> 62,196, factory 178,390 -> 164,810; the measurements
+    of section 15 predate it). Not a guard change: a digest snapshot of all 493 entries is equal
+    before and after (J-9943).
+14. **The writers' value refusal** (X-FIX, as built; J-10055): both secret writers check the value
+    in the method and refuse a wrong one with `secretFailed("INVALID_SECRET_BYTES")`, which never
+    quotes it (9.2); the hub's writer still accepts a `SealedBox` only (XA, J-10005).

@@ -279,7 +279,7 @@ harden(assertDescription);
 /**
  * @typedef {'active' | 'revoked'} SecretState
  * @typedef {{ label: string, description: string, generation: number, state: SecretState, bytes: number, value?: string }} Entry
- * @typedef {{ at: number, key: string, label: string, op: 'create' | 'read' | 'replace' | 'revoke' | 'delete', outcome: 'attempted' | 'succeeded' | 'failed', code?: string, generation?: number }} StoredEvent
+ * @typedef {{ at: number, key: string, label: string, op: 'create' | 'read' | 'replace' | 'revoke' | 'delete' | 'setDescription', outcome: 'attempted' | 'succeeded' | 'failed', code?: string, generation?: number }} StoredEvent
  * @typedef {{ at: number, label: string, op: StoredEvent['op'], outcome: StoredEvent['outcome'], code?: string, generation?: number }} AuditEvent
  *
  * @typedef {object} SecretStore
@@ -304,7 +304,8 @@ harden(assertDescription);
  *   the adapter-local `AuditReader`'s path
  * @property {(key: string, description: string) => Promise<void>} setDescription
  *   M4 H-5: the entry's description (R7-25 rule, `INVALID_DESCRIPTION`);
- *   not audited (the audit vocabulary has no such operation)
+ *   audited `setDescription` (`attempted`, then `succeeded` or `failed`;
+ *   the event carries the label, never the description: J-9662 item 9)
  * @property {() => Promise<void>} ready loads the key and the files
  * @property {() => void} close closes the audit file
  * @property {() => Record<string, number>} stats
@@ -729,16 +730,18 @@ export const makeSecretStore = ({
     audit: request => auditEvents(request, limits.auditPageEvents),
     auditPage: request => auditEvents(request, m4Limits.auditReaderMax),
     setDescription: (key, description) =>
-      mutate(() => {
-        assertDescription(description);
-        const entry = entryOf(key);
-        return {
-          result: undefined,
-          apply: () => {
-            entries.set(key, { ...entry, description });
-          },
-        };
-      }),
+      audited(key, 'setDescription', 'INVALID_DESCRIPTION', () =>
+        mutate(() => {
+          assertDescription(description);
+          const entry = entryOf(key);
+          return {
+            result: undefined,
+            apply: () => {
+              entries.set(key, { ...entry, description });
+            },
+          };
+        }),
+      ),
     close: () => {
       if (auditFd !== undefined) closeSync(auditFd);
       auditFd = undefined;

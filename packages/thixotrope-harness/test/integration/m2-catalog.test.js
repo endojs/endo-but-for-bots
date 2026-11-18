@@ -45,7 +45,7 @@ import {
 } from '../template/index.js';
 import { startFakeProviderServer } from '../fixtures/fake-provider-server.mjs';
 import { makeSlice, requestId, sliceTemplate, waitFor } from './_m1a-slice.js';
-import { makeTestSecretValue } from './_m2-secrets.js';
+import { makeTestSecretValue, replaceSealed } from './_m2-secrets.js';
 
 takeIntegrationLock(test, 'm2 catalog test');
 
@@ -115,7 +115,7 @@ run(
       harden({ label: 'provider key', description: 'catalogue test' }),
     );
     const writer = await E(secrets).openWriter();
-    await E(writer).replace(secret, makeTestSecretValue('catalog'));
+    await replaceSealed(writer, secret, makeTestSecretValue('catalog'));
     const keyGrant = await E(secret).makeReadGrant();
     const backend = await E(slice.admin).makeBackend(
       harden({

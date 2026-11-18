@@ -9,13 +9,16 @@
  *   lazily at the pool's first use. The answer is cached; a rejected load
  *   (a retired break: the manager restarted, or the adapter is between
  *   sinks) is forgotten, so the next `load()` asks again; a new sink (the
- *   adapter re-attached to a restarted manager) is asked again too. An
- *   answer older than `stateRefreshMs` is asked again at the next `load()`
- *   (M4-FIX: the manager retires pools and members without telling the
- *   adapter, so a retirement reaches the rounds within this bound; one
- *   manager crank per pool per bound while the pool is used, none while it
- *   is idle). A failed re-ask keeps the answer it had; a retired pool's
- *   answer is final.
+ *   adapter re-attached to a restarted manager) is asked again too.
+ * - `invalidate()` (XB, m4-interfaces 3.1): the manager retired a pool or a
+ *   member and said so (`CredentialOps.poolsChanged`, answered before the
+ *   retirement returns to the operator): the
+ *   answer held, or the one being asked, is stale, and the next `load()`
+ *   asks again, so the next round sees the retirement. An answer older
+ *   than `stateRefreshMs` is asked again too, as a safety net for a push
+ *   that was lost (one manager crank per pool per bound while the pool is
+ *   used, none while it is idle). A failed re-ask keeps the answer it had
+ *   (and stays stale when it was); a retired pool's answer is final.
  * - `record(change)`: marks are sent **at once** (`E.sendOnly(sink)
  *   .poolChanged`, one manager crank per refusal, never more than one per
  *   member per round: the core reports a mark only when it changes), with
@@ -45,13 +48,14 @@ import { m4Limits } from '../../../../guest/lib/limits-m4.js';
  * @property {number} servedFlushMs served stamps are sent at most this often
  *   per pool (`subscriptionDefaults.servedFlushMs`, 1,000)
  * @property {number} stateRefreshMs a loaded `PoolState` is asked again
- *   when older (`subscriptionDefaults.poolStateRefreshMs`, 30,000; 0: never)
+ *   when older (`subscriptionDefaults.poolStateRefreshMs`, 600,000; 0:
+ *   only after `invalidate()`)
  */
 
 /** @type {BridgeSettings} */
 export const bridgeSettingsDefaults = harden({
   servedFlushMs: 1000,
-  stateRefreshMs: 30_000,
+  stateRefreshMs: 600_000,
 });
 
 /**
@@ -108,10 +112,11 @@ export const makePoolStateBridge = ({
   const sinkNow = () => (typeof sink === 'function' ? sink() : sink);
 
   /**
-   * The current load: its sink, its promise, and once answered the answer
-   * and when it was asked.
-   * @type {{ sink: any, promise: Promise<any>, at: number, state?: any } | undefined}
+   * The current load: its sink, its promise, when it was asked, whether a
+   * push made it stale, and once answered the answer.
+   * @typedef {{ sink: any, promise: Promise<any>, at: number, stale: boolean, state?: any }} Load
    */
+  /** @type {Load | undefined} */
   let loaded;
   /**
    * Served stamps waiting, latest per session.
@@ -162,13 +167,17 @@ export const makePoolStateBridge = ({
         if (
           known.state === undefined ||
           known.state.state === 'retired' ||
-          !(stateRefreshMs > 0) ||
-          now() - known.at < stateRefreshMs
+          !(
+            known.stale ||
+            (stateRefreshMs > 0 && now() - known.at >= stateRefreshMs)
+          )
         )
           return known.promise;
         // Stale: ask again; until answered, concurrent loads share the ask;
-        // a failed ask keeps the old answer (and waits another bound).
+        // a failed ask keeps the old answer (and waits another bound, or
+        // the next load when a push made it stale).
         const kept = known.state;
+        const wasStale = known.stale;
         const promise = E(target)
           .poolState(backend)
           .then(
@@ -177,9 +186,19 @@ export const makePoolStateBridge = ({
               if (loaded === entry) entry.state = fresh;
               return fresh;
             },
-            () => kept,
+            () => {
+              if (loaded === entry) entry.stale ||= wasStale;
+              return kept;
+            },
           );
-        const entry = { sink: target, promise, at: now(), state: kept };
+        /** @type {Load} */
+        const entry = {
+          sink: target,
+          promise,
+          at: now(),
+          stale: false,
+          state: kept,
+        };
         loaded = entry;
         return promise;
       }
@@ -193,8 +212,8 @@ export const makePoolStateBridge = ({
           if (loaded === entry) entry.state = answer;
           return answer;
         });
-      /** @type {{ sink: any, promise: Promise<any>, at: number, state?: any }} */
-      const entry = { sink: target, promise, at: now() };
+      /** @type {Load} */
+      const entry = { sink: target, promise, at: now(), stale: false };
       loaded = entry;
       promise.catch(() => {
         if (loaded === entry) loaded = undefined;
@@ -218,6 +237,16 @@ export const makePoolStateBridge = ({
     },
     flush: async () => {
       if (waiting.size > 0) send([]);
+    },
+    invalidate: () => {
+      // A retired pool's answer is final; anything else is asked again at
+      // the next load (an answer still being asked may predate the push).
+      // The first ask of an incarnation has no answer to keep: forget it,
+      // so the next load asks afresh instead of joining it (X-QC finding 1);
+      // its own `then` stores nothing once it is no longer `loaded`.
+      if (loaded === undefined) return;
+      if (loaded.state === undefined) loaded = undefined;
+      else if (loaded.state.state !== 'retired') loaded.stale = true;
     },
     pending: () => waiting.size,
   });

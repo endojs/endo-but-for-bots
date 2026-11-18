@@ -52,7 +52,7 @@ import {
   sliceTemplate,
   waitFor,
 } from './_m1a-slice.js';
-import { makeTestSecretValue } from './_m2-secrets.js';
+import { makeTestSecretValue, replaceSealed } from './_m2-secrets.js';
 import {
   freePort,
   gatewayAdminOf,
@@ -332,7 +332,7 @@ run(
       harden({ label: 'provider key', description: 'gateway catalogue test' }),
     );
     const writer = await E(secrets).openWriter();
-    await E(writer).replace(secret, makeTestSecretValue('m3'));
+    await replaceSealed(writer, secret, makeTestSecretValue('m3'));
     const keyGrant = await E(secret).makeReadGrant();
     const api = await E(slice.admin).makeBackend(
       harden({

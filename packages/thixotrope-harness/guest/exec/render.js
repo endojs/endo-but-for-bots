@@ -25,7 +25,7 @@
  * contract file still wins and a drift fails a test.
  */
 
-import { interfaces, shapes, textOf as m1Text } from '../lib/interfaces.js';
+import { interfaces, shapes, textOf as m1Text } from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
 import { limitsM5 } from '../lib/limits-m5.js';
 import { boundToolOutput, chunkText, utf8Bytes } from '../lib/bounded.js';

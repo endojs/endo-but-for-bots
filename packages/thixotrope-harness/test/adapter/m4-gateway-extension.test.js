@@ -2,11 +2,13 @@
 // M4 W4.6: `AH/gateway/extensions/m4-secrets.js` loads as a
 // `GatewayExtension` (contract-m3.js; designs/m4-interfaces.md 9.1 item 3)
 // whose one LargeCall targets the context's `secretWriter()` and exempts
-// `replace` only. M3's gateway is not in this lane: the context is a fake
-// with the M3 shape, and the writer a real M2 SecretWriter over a store
-// under H/tmp, so the target answers the very object a page reaches
-// through `SecretsAdmin.openWriter()`. The through-the-gateway test (frame
-// guard, `browserSecretBytes`) is W4.8's acceptance 14, after M3's merge.
+// `replace` only. The context is a fake with the M3 shape whose
+// `secretWriter()` answers a stand-in for the gateway's in-process writer
+// (XA: the object a page finds in `GatewayPowers.extras`; the hub's
+// `SecretsAdmin.openWriter()` writer takes sealed boxes only and is not a
+// LargeCall). The real gateway's writer is exercised end to end in
+// `m2-secret-writer-paths.test.js`; the browser test (frame guard,
+// `browserSecretBytes`) is W4.8's acceptance 14.
 // INT-M4: M3's real loader (`loadGatewayExtensions`, `makeLargeCalls`) and
 // vocabulary (`harnessNames`) are exercised here at adapter level.
 import '../unit/_m1a-prelude.js';
@@ -40,18 +42,10 @@ test('m4-secrets is a GatewayExtension: hardened, named, one LargeCall on replac
   t.is(typeof largeCalls[0].target, 'function');
 });
 
-test("the LargeCall target answers the context's one SecretWriter (identity)", async t => {
+test("the LargeCall target answers the context's one writer (identity)", async t => {
   const dirs = makeStoreDirs('w46-gateway');
   t.teardown(dirs.done);
-  const ops = makeSecretsOps({
-    store: openStore(dirs.files),
-    seal: makeSealKeys({
-      file: dirs.files.keyFile,
-      stateDir: dirs.files.stateDir,
-    }),
-    sink: Far('AgentHostSink', {}),
-  });
-  const writer = await ops.secretWriter();
+  const writer = Far('GatewaySecretWriter', {});
   let asked = 0;
   /** A fake `GatewayContext` with the fields M3's contract names. */
   const context = harden({
@@ -62,7 +56,7 @@ test("the LargeCall target answers the context's one SecretWriter (identity)", a
     whenAttached: (/** @type {() => void} */ callback) => callback(),
     secretWriter: async () => {
       asked += 1;
-      return ops.secretWriter();
+      return writer;
     },
     stateDir: dirs.stateDir,
     log: () => {},
@@ -95,14 +89,15 @@ test("INT-M4: M3's extension loader loads m4-secrets; makeLargeCalls exempts the
     }),
     sink: Far('AgentHostSink', {}),
   });
-  const writer = await ops.secretWriter();
+  const writer = Far('GatewaySecretWriter', {});
+  const hubWriter = await ops.secretWriter();
   const context = harden({
     live: undefined,
     composer: undefined,
     content: undefined,
     history: () => undefined,
     whenAttached: (/** @type {() => void} */ callback) => callback(),
-    secretWriter: async () => ops.secretWriter(),
+    secretWriter: async () => writer,
     stateDir: dirs.stateDir,
     log: () => {},
   });
@@ -114,6 +109,7 @@ test("INT-M4: M3's extension loader loads m4-secrets; makeLargeCalls exempts the
   await ready;
   t.true(isLargeCall(writer, 'replace'));
   t.false(isLargeCall(writer, 'close'));
+  t.false(isLargeCall(hubWriter, 'replace'), 'the hub writer is not exempt');
   t.false(isLargeCall(Far('Other', {}), 'replace'));
   t.deepEqual(
     events.filter(e => e.event === 'gateway-large-call-skip'),

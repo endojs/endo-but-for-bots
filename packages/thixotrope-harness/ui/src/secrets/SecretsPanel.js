@@ -10,7 +10,8 @@
  *
  * Values: read from a password field or a file at the moment of sending,
  * checked (`values.js`: `browserSecretBytes`, UTF-8), passed to the
- * adapter-local `SecretWriter` in one call and cleared from the field. They
+ * gateway's in-process secret writer (`daemon.js`) in one call and cleared
+ * from the field. They
  * are never kept in component state, rendered or logged.
  */
 import { E } from '@endo/far';
@@ -63,6 +64,26 @@ const messageOf = error =>
   error && typeof error === 'object' && 'message' in error
     ? String(/** @type {{ message: unknown }} */ (error).message)
     : String(error);
+
+/**
+ * Errors the panel raised itself before anything was sent (a value over the
+ * browser bound, a file that is not text, no value): the action then reads
+ * nothing from the daemon either, so a refused value sends no frame at all
+ * (m4-interfaces.md 17, acceptance 14).
+ *
+ * @type {WeakSet<object>}
+ */
+const localRefusals = new WeakSet();
+
+/**
+ * @param {string} text
+ * @returns {Error}
+ */
+const refuseLocally = text => {
+  const error = Error(text);
+  localRefusals.add(error);
+  return error;
+};
 
 /**
  * One audit event as a line (R7-24: fixed outcome and code, no bytes).
@@ -171,15 +192,20 @@ export const SecretsPanel = ({ context }) => {
     setBusy(true);
     setError('');
     setNotice('');
+    let refusedLocally = false;
     try {
       const said = await body();
       if (said) setNotice(said);
     } catch (thrown) {
+      refusedLocally =
+        typeof thrown === 'object' &&
+        thrown !== null &&
+        localRefusals.has(thrown);
       setError(messageOf(thrown));
     } finally {
       setBusy(false);
     }
-    if (reload) {
+    if (reload && !refusedLocally) {
       await load(pages).catch(thrown => setError(messageOf(thrown)));
     }
   };
@@ -215,10 +241,10 @@ export const SecretsPanel = ({ context }) => {
       const label = String(createLabel.current?.value ?? '').trim();
       const description = String(createDescription.current?.value ?? '');
       const taken = await takeValue(createValue.current, createFile.current);
-      if ('error' in taken) throw Error(taken.error);
+      if ('error' in taken) throw refuseLocally(taken.error);
       if ('value' in taken) {
         const refusal = refuseBrowserValue(taken.value);
-        if (refusal) throw Error(refusal);
+        if (refusal) throw refuseLocally(refusal);
       }
       const admin = await secretsOf(powers).admin();
       const secret = await context.call(() =>
@@ -235,10 +261,10 @@ export const SecretsPanel = ({ context }) => {
   const onReplace = entry =>
     act(async () => {
       const taken = await takeValue(rowValue.current, rowFile.current);
-      if ('error' in taken) throw Error(taken.error);
-      if ('empty' in taken) throw Error(secretsTexts.noValue);
+      if ('error' in taken) throw refuseLocally(taken.error);
+      if ('empty' in taken) throw refuseLocally(secretsTexts.noValue);
       const refusal = refuseBrowserValue(taken.value);
-      if (refusal) throw Error(refusal);
+      if (refusal) throw refuseLocally(refusal);
       await write(entry.secret, entry.generation, taken);
       setEditing(null);
       return secretsTexts.replaced;

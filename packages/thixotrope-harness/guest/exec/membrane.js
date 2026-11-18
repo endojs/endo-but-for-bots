@@ -18,9 +18,23 @@
  * `texts.powersExpired` (rule 12.13). Remotables in an answer (of a send or
  * of `E.get`) are wrapped again, and an answer holding one deeper than
  * `ANSWER_DEPTH` is refused, so no raw presence reaches model code; this
- * call's wrappers inside arguments are swapped for their
- * targets; other objects (made in this vat) pass as they are. Arguments are
- * copied, never hardened in place: the model's own objects stay its own.
+ * call's wrappers inside arguments are swapped for their targets. Arguments
+ * are copied, never hardened in place: the model's own objects stay its own.
+ * A tagged value (a CopySet, a CopyBag, ...) keeps its tag both ways (XC):
+ * its payload is measured or wrapped and the copy carries the same tag.
+ *
+ * What may leave the vat (XC; rule 12.13): a message to a wrapper (one that
+ * goes to another vat's object) may carry data and this call's wrappers
+ * only. Any other remotable in it is refused before anything is sent: a
+ * wrapper of an ended call with `texts.powersExpired`, anything else
+ * (an object model code made itself, by building a remotable by hand: the
+ * scope has no `Far`, but `Symbol.for('passStyle')` is a shared intrinsic)
+ * with `MODEL_OBJECT_TEXT`. So no other vat receives a model-made object,
+ * and a model-made object receives no call, and no raw presence as an
+ * argument, from any other vat: it is called only by model code and by this
+ * vat's own program (the inspector, for one stored through `powers.store`,
+ * which `powers.js` lets pass; recorded for the PM). A message to a
+ * non-wrapper remotable stays in this vat and is measured but not refused.
  *
  * The model's `E` is a membrane `E`: it measures every message whose target
  * is a remotable (a wrapper, an object the model made, a presence an answer
@@ -44,6 +58,41 @@ export const NESTED_PROMISE_TEXT =
   'Arguments sent to another vat may not hold unresolved promises; await them first';
 /** A send with a method name that is not a string. */
 export const METHOD_NAME_TEXT = 'Method names must be strings';
+/**
+ * A remotable model code made itself, in a message to another vat's object
+ * (XC): only objects `powers` (or their answers) gave this call may leave.
+ */
+export const MODEL_OBJECT_TEXT =
+  'Only objects obtained through powers in this call can be sent to another vat';
+
+/** The pass-style brand (`@endo/pass-style`'s `PASS_STYLE`). */
+const PASS_STYLE = Symbol.for('passStyle');
+
+/**
+ * The tag of a tagged value, else undefined. Read from own data properties
+ * only (no getter of the model's runs here).
+ * @param {object} value
+ */
+const tagOf = value => {
+  const style = Object.getOwnPropertyDescriptor(value, PASS_STYLE);
+  if (style === undefined || style.value !== 'tagged') return undefined;
+  const tag = Object.getOwnPropertyDescriptor(value, Symbol.toStringTag);
+  return typeof tag?.value === 'string' ? tag.value : undefined;
+};
+
+/**
+ * A tagged value with this tag and payload (`makeTagged`'s construction).
+ * @param {string} tag
+ * @param {unknown} payload hardened
+ */
+const tagged = (tag, payload) =>
+  harden(
+    Object.create(Object.prototype, {
+      [PASS_STYLE]: { value: 'tagged' },
+      [Symbol.toStringTag]: { value: tag },
+      payload: { value: payload, enumerable: true },
+    }),
+  );
 
 /** Estimated bytes of a value that is not a string (a number, a handle). */
 const SCALAR_BYTES = 24;
@@ -142,6 +191,18 @@ export const measureArguments = (
     if (value instanceof Error) {
       add(String(value.message).length * 3);
       return value;
+    }
+    const tag = tagOf(value);
+    if (tag !== undefined) {
+      add(tag.length * 3);
+      keys += 1;
+      if (keys > membraneMessageKeys) {
+        refusal = textOf.membraneTooManyKeys(keys, membraneMessageKeys);
+        return undefined;
+      }
+      const payload = walk(/** @type {any} */ (value).payload, depth + 1);
+      if (refusal !== undefined) return undefined;
+      return tagged(tag, payload);
     }
     const names = Object.keys(value);
     if (names.length > membraneRecordKeys) {
@@ -246,6 +307,16 @@ export const makeMembrane = ({ callE, limits = limitsM5 }) => {
       : value;
 
   /**
+   * `unwrap` for a message that leaves the vat: a remotable that is not
+   * this call's wrapper is refused (module comment).
+   * @param {any} value a remotable
+   */
+  const unwrapLeaving = value => {
+    if (targets.has(value)) return targets.get(value);
+    throw Error(isWrapper(value) ? texts.powersExpired : MODEL_OBJECT_TEXT);
+  };
+
+  /**
    * An answer with every remotable wrapped.
    * @param {unknown} value
    * @param {number} [depth]
@@ -262,6 +333,12 @@ export const makeMembrane = ({ callE, limits = limitsM5 }) => {
         wrapAnswer(v, depth),
       );
     if (value instanceof Error) return value;
+    const tag = tagOf(value);
+    if (tag !== undefined)
+      return tagged(
+        tag,
+        wrapAnswer(/** @type {any} */ (value).payload, depth + 1),
+      );
     if (Object.getPrototypeOf(value) !== Object.prototype) return value;
     return harden(
       Object.fromEntries(
@@ -300,9 +377,18 @@ export const makeMembrane = ({ callE, limits = limitsM5 }) => {
     }
     if (isWrapper(target) && !targets.has(target))
       return Promise.reject(Error(texts.powersExpired));
-    const measured = measureArguments(args, { bounds: limits, swap: unwrap });
-    if ('refusal' in measured) return Promise.reject(Error(measured.refusal));
     const real = targets.get(target);
+    /** @type {ReturnType<typeof measureArguments>} */
+    let measured;
+    try {
+      measured = measureArguments(args, {
+        bounds: limits,
+        swap: real === undefined ? unwrap : unwrapLeaving,
+      });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if ('refusal' in measured) return Promise.reject(Error(measured.refusal));
     const to = real ?? target;
     if (sendOnly) {
       callE.sendOnly(to)[name](...measured.args);

@@ -14,7 +14,7 @@
  * ordinal and `archived` is true. Every page of a session with sealed
  * segments carries the `ArchiveState` (the adapter learns it from the page).
  */
-import { texts } from '../lib/interfaces.js';
+import { texts } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { previewText } from '../lib/bounded.js';
 import { inCallOrder, plainBytes } from './records.js';

@@ -64,11 +64,16 @@ import { tailText } from './scripted.js';
  * A provider failure with a fixed text. `retryable`, `retryAfterMs` and
  * `timedOut` are for the retry wrapper (W2.1b); `delivered` says the
  * attempt already published text or reported usage (never retried, R4-74).
+ * `errorType` is the provider's symbolic error type when the failure is an
+ * error the provider reported in its stream (Anthropic's `error` event:
+ * `overloaded_error`, `api_error`, ...; `''` when it named none or an
+ * unreadable one), so a caller can tell an overload without comparing
+ * texts (M4's Claude pool, D-M4-4). It is an identifier, never prose.
  */
 export class ProviderFailure extends Error {
   /**
    * @param {string} reason one of the contract's fixed texts
-   * @param {{ retryable?: boolean, retryAfterMs?: number, timedOut?: boolean, status?: number, delivered?: boolean }} [details]
+   * @param {{ retryable?: boolean, retryAfterMs?: number, timedOut?: boolean, status?: number, delivered?: boolean, errorType?: string }} [details]
    */
   constructor(reason, details = {}) {
     super(reason);
@@ -78,6 +83,8 @@ export class ProviderFailure extends Error {
     this.timedOut = details.timedOut ?? false;
     this.status = details.status;
     this.delivered = details.delivered ?? false;
+    /** @type {string | undefined} */
+    this.errorType = details.errorType;
   }
 }
 harden(ProviderFailure);

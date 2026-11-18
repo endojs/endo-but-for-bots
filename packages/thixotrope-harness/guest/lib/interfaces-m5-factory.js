@@ -17,7 +17,7 @@
  */
 import { limits } from './limits.js';
 import { limitsM5 } from './limits-m5.js';
-import { m2Interfaces, m2MethodNames, shapes } from './interfaces.js';
+import { interfaces, methodNames, shapes } from './guards/factory.js';
 import {
   extendInterface,
   lazyTable,
@@ -254,7 +254,7 @@ export const m5FactoryInterfaces = lazyTable({
   /** M2 Operator + `getPresets`, `getInventory` (W5.1). */
   Operator: () =>
     extendInterface(
-      m2Interfaces.Operator,
+      interfaces.Operator,
       'Operator',
       m5FactoryExtensions.Operator(),
     ),
@@ -303,7 +303,7 @@ export const m5FactoryInterfaces = lazyTable({
 });
 
 export const m5FactoryMethodNames = harden({
-  Operator: harden([...m2MethodNames.Operator, 'getPresets', 'getInventory']),
+  Operator: harden([...methodNames.Operator, 'getPresets', 'getInventory']),
   PresetCatalog: harden(['list', 'configuration', 'create', 'defaultPreset']),
   Preset: harden(['describe', 'snapshot', 'save', 'delete', 'reset']),
   Inventory: harden(['list', 'add', 'addAll', 'rev']),

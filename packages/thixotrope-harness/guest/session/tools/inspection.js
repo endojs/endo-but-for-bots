@@ -31,7 +31,7 @@
  *
  * Guest rules.
  */
-import { textOf } from '../../lib/interfaces.js';
+import { textOf } from '../../lib/guards/session.js';
 import { textOf as textOfM5 } from '../../lib/interfaces-m5.js';
 import { limits } from '../../lib/limits.js';
 import { argSpecs, parseClosedArgs } from '../../lib/tool-args.js';

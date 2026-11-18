@@ -126,53 +126,156 @@ The owner's rule: we do not test anything that takes hours.
 
 ### 3.1 The regression run (the PM's list)
 
-What a lane's regression run contains, with each file's last held time from `runs.jsonl` and the
-last wall time. Last run: M2 close-out (M2-CLOSE), 2026-11-18, at `d7fce8e46c` (lane
-`endo-thix-m2r`), shared slots, load 2.3-5, three template builds sharing the machine. Commands
-from the package: `corepack yarn test`, then `corepack yarn test:integration --jobs 4`.
+What a regression run contains, with each file's held time from `runs.jsonl` and the wall time.
+Last run: cross-lane close-out (X-CLOSE), 2026-11-18 15:33-16:04 UTC, at `717e26789f` (lane
+`endo-thix-int`, M3, M4 and M5 merged), shared slots, load 2.2-4.8, with the long-session
+template chains (section 3.2) holding one or two slots beside it. Commands from the package:
+`corepack yarn test`, `corepack yarn test:integration --jobs 5`, then
+`corepack yarn test:browser --jobs 5 test/browser/*.test.mjs`.
 
-| part | file | held s | exit |
-|---|---|---|---|
-| unit + adapter | `corepack yarn test` (727 passed, 59 skipped; no slot) | 66 (wall) | 0 |
-| integration | `m1a-provision` | 180 | 0 |
-| integration | `m1a-slice` | 183 | 0 |
-| integration | `m1a-slice-crash` | 108 | 0 |
-| integration | `m1a-slice-restart` | 188 | 0 |
-| integration | `m1b-content` | 99 | 0 |
-| integration | `m1b-context-restart` | 208 | 0 |
-| integration | `m1b-exec-tool` | 171 | 0 |
-| integration | `m1b-exec-tool-restart` | 120 | 0 |
-| integration | `m1b-followups` | 266 | 0 |
-| integration | `m1b-live` | 132 | 0 |
-| integration | `m1b-pool` | 155 | 0 |
-| integration | `m1b-pool-restart` | 170 | 0 |
-| integration | `m1b-qc` | 116 | 0 |
-| integration | `m2-archive-restart` | 160 | 0 |
-| integration | `m2-archive-restart-2` | 185 | 0 |
-| integration | `m2-catalog` | 82 | 0 |
-| integration | `m2-history` | 202 | 0 |
-| integration | `m2-lifecycle` | 184 | 0 |
-| integration | `m2-lifecycle-export` | 235 | 0 |
-| integration | `m2-probes` | 76 | 0 |
-| integration | `m2-providers` | 86 | 0 |
-| integration | `m2-queue` | 146 | 0 |
-| integration | `m2-secrets` | 76 | 0 |
-| integration | `m2-turns` | 196 | 0 |
-| integration | `test/template/template.test.js` | 68 | 0 |
+**The one-run rule no longer holds.** With M3, M4 and M5 the run is 1 unit lane, 51 integration
+files and 5 browser files: **7,263 s held** (unit lane not counted), and the measured wall time was
+67 s + 1,433 s + 202 s = **1,702 s (28.4 min)** run one part after the other, against the
+20-minute rule. Even on an idle machine with all six slots it cannot fit: 7,263 / 6 = 1,211 s
+(20.2 min) plus the unit lane, before any slot is lost to packing. **PM ruling (2026-11-18,
+recorded by K1, J-10075): the regression run is split as follows**, each list one batch that
+finishes inside 20 minutes of wall at six slots:
 
-Integration: 25 files, 3,792 s held in all, **1,040 s wall** at 4 jobs (no wait for a slot);
-with the unit lane about 18 minutes of wall time, inside the 20-minute rule. No file over 5
-minutes. With 6 jobs on an idle machine the integration part would be about 11-12 minutes; with
-other lanes holding slots it is longer (M2-R3 measured 70 minutes held and 161 waited for one pass,
-J-9453).
+- **Core list** (every lane runs it): unit and adapter lanes, M0-M2 integration files and the
+  template test: 25 files, 4,029 s held, about 13-14 minutes at 5-6 jobs (longest file 297 s).
+- **Per-milestone list** (a lane runs its own; a merge runs all): M3 (3 integration files, 391 s,
+  plus 3 browser files, 422 s), M4 (11 files, 1,114 s, plus `m4-ui`, 95 s), M5 (12 files,
+  1,107 s, plus `m5-ui`, 105 s): together 26 + 5 files, 3,234 s held, about 10 minutes at 6
+  jobs.
+- A merge regression is the two lists as two batches (about 25 minutes of wall in all); each batch
+  stays inside 20 minutes. Waits for slots are reported apart from held time.
+
+| list | part | file | held s | exit |
+|---|---|---|---|---|
+| core | unit + adapter | `corepack yarn test` (1,244 passed, 115 skipped, 1 failed: `run-lock` "in-process takers racing" at load 4, passes alone; no slot) | 67 (wall) | 1, then 0 alone |
+| core | integration | `m1a-provision` | 190 | 0 |
+| core | integration | `m1a-slice` | 201 | 0 |
+| core | integration | `m1a-slice-crash` | 114 | 0 |
+| core | integration | `m1a-slice-restart` | 199 | 0 |
+| core | integration | `m1b-content` | 104 | 0 |
+| core | integration | `m1b-context-restart` | 226 | 0 |
+| core | integration | `m1b-exec-tool` | 198 | 0 |
+| core | integration | `m1b-exec-tool-restart` | 128 | 0 |
+| core | integration | `m1b-followups` | 297 | 0 |
+| core | integration | `m1b-live` | 167 | 1 (acceptance 9 rename row 638 ms against 500 at load 3-4; alone 117 s, exit 0, rename 61-158 ms) |
+| core | integration | `m1b-pool` | 144 | 0 |
+| core | integration | `m1b-pool-restart` | 125 | 0 |
+| core | integration | `m1b-qc` | 117 | 0 |
+| core | integration | `m2-archive-restart` | 166 | 0 |
+| core | integration | `m2-archive-restart-2` | 202 | 0 |
+| core | integration | `m2-catalog` | 87 | 0 |
+| core | integration | `m2-history` | 218 | 0 |
+| core | integration | `m2-lifecycle` | 189 | 0 |
+| core | integration | `m2-lifecycle-export` | 252 | 0 |
+| core | integration | `m2-probes` | 81 | 0 |
+| core | integration | `m2-providers` | 92 | 0 |
+| core | integration | `m2-queue` | 151 | 0 |
+| core | integration | `m2-secrets` | 86 | 0 |
+| core | integration | `m2-turns` | 213 | 0 |
+| core | integration | `test/template/template.test.js` | 83 | 0 |
+| M3 | integration | `m3-gateway` | 114 | 0 |
+| M3 | integration | `m3-reconnect` | 159 | 0 |
+| M3 | integration | `m3-sessions` | 118 | 0 |
+| M3 | browser | `m3-ui` | 110 | 0 |
+| M3 | browser | `m3-ui-restart` | 202 | 0 |
+| M3 | browser | `m3-ui-history` | 110 | 0 |
+| M4 | integration | `m4-accounts` | 86 | 0 |
+| M4 | integration | `m4-catalog` | 86 | 0 |
+| M4 | integration | `m4-pools` | 101 | 0 |
+| M4 | integration | `m4-provision` | 103 | 0 |
+| M4 | integration | `m4-reachability` | 86 | 0 |
+| M4 | integration | `m4-renewal` | 93 | 0 |
+| M4 | integration | `m4-restart` | 180 | 0 |
+| M4 | integration | `m4-restart-renewal` | 101 | 0 |
+| M4 | integration | `m4-retire` | 79 | 0 |
+| M4 | integration | `m4-secrets` | 89 | 0 |
+| M4 | integration | `m4-wire` | 110 | 0 |
+| M4 | browser | `m4-ui` | 95 | 0 |
+| M5 | integration | `m5-grants` | 86 | 0 |
+| M5 | integration | `m5-grants-restart` | 118 | 0 |
+| M5 | integration | `m5-labels` | 106 | 0 |
+| M5 | integration | `m5-mentions` | 74 | 0 |
+| M5 | integration | `m5-mentions-restart` | 93 | 0 |
+| M5 | integration | `m5-objects` | 95 | 0 |
+| M5 | integration | `m5-presets` | 110 | 0 |
+| M5 | integration | `m5-presets-inventory` | 98 | 0 |
+| M5 | integration | `m5-prompt` | 95 | 0 |
+| M5 | integration | `m5-reachability` | 81 | 0 |
+| M5 | integration | `m5-security` | 77 | 0 |
+| M5 | integration | `m5-snapshot` | 75 | 0 |
+| M5 | browser | `m5-ui` | 105 | 0 |
+
+Integration: 51 files, 6,641 s held, **1,433 s wall** at 5 jobs (296 s of waits for a slot in
+all, three files waiting behind the template chains); browser: 5 files, 622 s held, 202 s wall
+at 5 jobs. No file over 5 minutes (longest `m1b-followups` 297 s), none timed out. Before it, the
+milestone templates were built in shared slots (`exec` 58 s, `pool` 57 s, `m3-300` 94 s; `m1a`,
+`m4`, `m5o` were current). The previous run (M2 close-out, `d7fce8e46c`, 25 files, 3,792 s held,
+1,040 s wall at 4 jobs) is in J-9495.
 
 ### 3.2 The perf pass (the PM's list)
 
 Every `perf/*.perf.mjs`, one after another, each as
 `node scripts/run-lock.mjs --exclusive --label perf-<name> -- node perf/<name>.perf.mjs`, in one
-batch (it stops every lane). The long-session templates must exist first (`node
-perf/_long-template.mjs history journal throughput`, shared slots; they are rebuilt after any
-guest-bundle change: about 2.5 + 2.5 + 8 min for the long ones and 5 x 7 min for the busy chain).
+batch (it stops every lane); `perf/ui.perf.mjs` also needs `THIX_HARNESS_BROWSER=1`. Templates
+must exist first, built in shared slots: the long-session ones (`node perf/_long-template.mjs
+history journal throughput`; rebuilt after any guest-bundle change) and the milestone ones the
+files copy (`m1a`, `exec` and `m5o` through their helpers, `m4`, and `m3-300` with
+`node perf/_m3-client.mjs template`). Measured at X-CLOSE (shared slots, beside the regression
+run, load 2-5): long 200 / 1,000 / 5,000 held 89 / 158 / 473 s; busy 10..50 held 440, 391, 381,
+375, 357 s (one chain, 38 minutes of wall with waits); `exec` 58 s, `pool` 57 s, `m3-300` 94 s.
+
+The whole list is now 25 + 13 = 38 files (M0-M2 69.5 minutes, M3-M5 about 55 minutes; K2 split `gateway-restart` out of `gateway-session`), more
+than two hours of every lane stopped. **PM ruling (2026-11-18, recorded by K1,
+J-10075):** a milestone's recorded perf pass is its own files plus the cross-check `session`,
+`turn` and `exec` (the cross-check about 7 minutes); the whole list runs only when the PM asks
+for it (a core or worker change).
+
+**M3, M4, M5 and the cross-check** (X-CLOSE, 2026-11-18 16:12-17:19 UTC, at `404e60ea3a`, load
+1.0-2.8: 15 files, **4,004 s held (66.7 minutes), 66.8 minutes of wall**; exit 1 means a budget
+missed, each listed):
+
+| file | held s | exit | budget misses that set the exit |
+|---|---|---|---|
+| `perf/session.perf.mjs` | 156 | 0 | - (`session.createCold` 1.04 x is inside the 1.25 x rule) |
+| `perf/turn.perf.mjs` | 129 | 0 | - |
+| `perf/exec.perf.mjs` | 111 | 0 | - |
+| `perf/gateway.perf.mjs` | 329 | 0 | - |
+| `perf/gateway-session.perf.mjs` | 602 | **124** | none; every row measured by 555 s, then the clean stop after the SIGKILL window passed the box (fixed by K2: the restart rows are `perf/gateway-restart.perf.mjs`; K2 held 311 s, exit 0) |
+| `perf/ui.perf.mjs` | 438 | 1 | `ui.hubGrowth` row 1.91 x |
+| `perf/subscriptions.perf.mjs` | 208 | 1 | `subscriptions.servedWrites` 4.97 x (frames, GC included; K2 counts cranks: 1.00 per 60 s, exit 0); `subscriptions.bundles` (stale baseline) |
+| `perf/subscriptions-lifecycle.perf.mjs` | 371 | 0 | - |
+| `perf/secrets.perf.mjs` | 275 | 1 | `secrets.catalog` 2.58 x |
+| `perf/accounts.perf.mjs` | 128 | 0 | - |
+| `perf/presets.perf.mjs` | 199 | 1 | `presets.save` 1.66 x, `inventory.page` 3.65 x |
+| `perf/creation-m5.perf.mjs` | 285 | 1 | `prompt.compose` (+408 ms, 1,499 ms) |
+| `perf/exec-m5.perf.mjs` | 277 | 0 | - |
+| `perf/tools.perf.mjs` | 348 | 1 | `tools.local` +126 ms |
+| `perf/mentions.perf.mjs` | 148 | 1 | `mentions.turnStart` 388 ms, +247 ms, +0.6 deliveries |
+
+Rows and readings: `JOURNAL.md` J-10061..J-10063; verdicts: `milestones.md` M3, M4 and M5
+outcomes.
+
+**K2 mini-batch** (2026-11-18 17:59-18:28 UTC, at `46cc84bb16`, the combination of the lane and
+main with CC-026..CC-028, load 1.0-2.8: 7 files, **1,704 s held (28.4 minutes), 28.4 minutes of
+wall**, slot waits under 0.1 s; templates current, none rebuilt; rows and readings `JOURNAL.md`
+J-10077..J-10086):
+
+| file | held s | exit | budget misses that set the exit |
+|---|---|---|---|
+| `perf/archive.perf.mjs` | 246 | 0 | - (`archive.stall.at200` p99 1,239 ms, 1.24 x: inside the 1.25 x rule; M2 1.40 x) |
+| `perf/history.perf.mjs` | 236 | 1 | `archive.flat.turnStart.at1000` 1.99 x (261 ms against 131 at 200; both under 350) |
+| `perf/hub.growth.perf.mjs` | 222 | 0 | - |
+| `perf/frames.perf.mjs` | 106 | 0 | - |
+| `perf/subscriptions.perf.mjs` | 209 | 0 | - (`subscriptions.bundles` stale baseline, reported, not counted) |
+| `perf/gateway-session.perf.mjs` | 311 | 0 | - |
+| `perf/gateway-restart.perf.mjs` (new, K2) | 375 | 0 | - |
+
+**M0-M2** (last run at the M2 close-out; not rerun at X-CLOSE except the cross-check above):
 
 | file | held s | exit | budget misses that set the exit |
 |---|---|---|---|
@@ -197,7 +300,7 @@ guest-bundle change: about 2.5 + 2.5 + 8 min for the long ones and 5 x 7 min for
 | `perf/provider.perf.mjs` | 93 | 0 | - |
 | `perf/import.perf.mjs` | 118 | 0 | - |
 | `perf/archive.perf.mjs` | 238 | 1 | `archive.stall.at200` 1.40 x (C-24) |
-| `perf/history.perf.mjs` | 214 | 1 | `archive.flat.hubRow.at1000` 1.39 x |
+| `perf/history.perf.mjs` | 214 | 1 | `archive.flat.hubRow.at1000` 1.39 x (K2: 1.01 x; both reads still owed one answer after the 10 s quiescent wait; see the K2 mini-batch above) |
 | `perf/history.restart.perf.mjs` | 165 | 0 | - |
 | `perf/journal.perf.mjs` | 143 | 0 | - |
 | `perf/throughput.perf.mjs` | 158 | 0 | - |

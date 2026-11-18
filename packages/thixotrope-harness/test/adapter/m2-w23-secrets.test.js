@@ -397,18 +397,32 @@ test('ops: values are re-read every round; one sink call per grant per incarnati
 
   const value1 = makeTestSecretValue('one');
   const value2 = makeTestSecretValue('two');
-  t.deepEqual(await E(writer).replace(secret, value1), { generation: 1 });
+  // The hub writer takes sealed boxes only (a plain value is refused with a
+  // fixed text that never repeats it, X-FIX); the gateway's in-process path
+  // (`replaceLocal`) takes either.
+  const publicKey = await E(writer).publicKey();
+  const refused = await t.throwsAsync(E(writer).replace(secret, value1), {
+    message: textOf.secretFailed('INVALID_SECRET_BYTES'),
+  });
+  t.false(String(refused?.message).includes(value1));
+  t.deepEqual(await E(writer).replace(secret, sealTo(publicKey, value1)), {
+    generation: 1,
+  });
   t.is(await ops.readKey(grant), value1);
   // The CLI path: a box sealed to the writer's public key.
-  const box = sealTo(await E(writer).publicKey(), value2);
+  const box = sealTo(publicKey, value2);
   t.deepEqual(await E(writer).replace(secret, box, 1), { generation: 2 });
   t.is(await ops.readKey(grant), value2, 'the next round sees the replace');
   await t.throwsAsync(
-    E(writer).replace(secret, value1, 1),
+    E(writer).replace(secret, sealTo(publicKey, value1), 1),
     failed('GENERATION_CONFLICT'),
   );
   await t.throwsAsync(
-    E(writer).replace(Far('Secret', {}), value1),
+    ops.replaceLocal(secret, value1, 1),
+    failed('GENERATION_CONFLICT'),
+  );
+  await t.throwsAsync(
+    E(writer).replace(Far('Secret', {}), sealTo(publicKey, value1)),
     failed('UNKNOWN_SECRET'),
   );
   await t.throwsAsync(
@@ -451,7 +465,8 @@ test('state directory: after a full exercise no encoding of the value is there',
     description: 'grep test',
   });
   const writer = await ops.secretWriter();
-  await E(writer).replace(secret, value);
+  // The page's path: the plain value, in process (`replaceLocal`).
+  await ops.replaceLocal(secret, value);
   const box = sealTo(await E(writer).publicKey(), value2);
   await E(writer).replace(secret, box);
   // What the hub would keep of the CLI's call: the box, in a log line.

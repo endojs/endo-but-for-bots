@@ -183,6 +183,121 @@ test('M4-FIX: a load older than stateRefreshMs is asked again; a failed ask keep
   t.is(loads, 4);
 });
 
+test('XB: invalidate() makes the next load ask again, also during an ask, also after a failed one; retired is final; refresh 0 asks only after a push', async t => {
+  const a = member('A');
+  let state = harden({ state: 'active', members: [a], served: [] });
+  let failNext = false;
+  let loads = 0;
+  const sink = Far('AgentHostSink', {
+    poolState: async () => {
+      loads += 1;
+      if (failNext) {
+        failNext = false;
+        throw Error(RETIRED);
+      }
+      return state;
+    },
+    poolChanged: () => {},
+  });
+  const bridge = makePoolStateBridge({
+    sink,
+    backend: Far('Backend', {}),
+    timers: makeFakeTimers().timers,
+    now: () => NOW,
+    settings: { stateRefreshMs: 0 },
+  });
+  // Before any load: nothing to mark.
+  bridge.invalidate();
+  const first = await bridge.load();
+  t.is(await bridge.load(), first, 'refresh 0: cached');
+  t.is(loads, 1);
+  // A push: the next load asks again, concurrent loads share the ask.
+  state = harden({
+    state: 'active',
+    members: [{ ...a, state: 'retired' }],
+    served: [],
+  });
+  bridge.invalidate();
+  const [x, y] = await Promise.all([bridge.load(), bridge.load()]);
+  t.is(x, y);
+  t.is(loads, 2);
+  t.is(x.members[0].state, 'retired');
+  t.is(await bridge.load(), x, 'no ask without another push');
+  t.is(loads, 2);
+  // A push during an ask: the answer of that ask is stale too.
+  bridge.invalidate();
+  const during = bridge.load();
+  bridge.invalidate();
+  await during;
+  t.is(loads, 3);
+  await bridge.load();
+  t.is(loads, 4, 'asked again after the push that came during the ask');
+  // A failed ask after a push keeps the old answer and stays stale.
+  bridge.invalidate();
+  failNext = true;
+  const kept = await bridge.load();
+  t.is(kept.members[0].state, 'retired', 'the old answer');
+  t.is(loads, 5);
+  await bridge.load();
+  t.is(loads, 6, 'still stale after the failed ask');
+  // The pool is retired: final, a push asks nothing.
+  state = harden({ state: 'retired', members: [], served: [] });
+  bridge.invalidate();
+  const retired = await bridge.load();
+  t.is(retired.state, 'retired');
+  t.is(loads, 7);
+  bridge.invalidate();
+  t.is(await bridge.load(), retired);
+  t.is(loads, 7);
+});
+
+test('X-FIX: a push during the first ask of an incarnation makes the next load ask again', async t => {
+  const a = member('A');
+  let state = harden({ state: 'active', members: [a], served: [] });
+  let loads = 0;
+  /** @type {(() => void) | undefined} */
+  let releaseFirst;
+  const gate = new Promise(resolve => {
+    releaseFirst = () => resolve(undefined);
+  });
+  const sink = Far('AgentHostSink', {
+    poolState: async () => {
+      loads += 1;
+      const answer = state;
+      if (loads === 1) await gate;
+      return answer;
+    },
+    poolChanged: () => {},
+  });
+  const bridge = makePoolStateBridge({
+    sink,
+    backend: Far('Backend', {}),
+    timers: makeFakeTimers().timers,
+    now: () => NOW,
+  });
+  // The first ask is in flight (the manager answered from before the push).
+  const first = bridge.load();
+  const joined = bridge.load();
+  await settle();
+  t.is(loads, 1);
+  // The member is retired and the push arrives during that first ask.
+  state = harden({
+    state: 'active',
+    members: [{ ...a, state: 'retired' }],
+    served: [],
+  });
+  bridge.invalidate();
+  const after = bridge.load();
+  if (releaseFirst) releaseFirst();
+  t.is((await first).members[0].state, 'active', 'the ask from before');
+  t.is((await joined).members[0].state, 'active', 'joined before the push');
+  const seen = await after;
+  t.is(loads, 2, 'a load joined after the push asked again');
+  t.is(seen.members[0].state, 'retired');
+  t.is(await bridge.load(), seen, 'and that answer is the one kept');
+  t.is(loads, 2);
+});
+
 test('a new sink (manager restarted, adapter re-attached) is asked again', async t => {
   const state = harden({ state: 'active', members: [], served: [] });
   const first = makeFakeSink({ state });

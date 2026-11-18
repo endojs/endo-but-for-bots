@@ -21,7 +21,7 @@
  *
  * Vat module: prelude globals only.
  */
-import { texts, textOf } from '../lib/interfaces.js';
+import { texts, textOf } from '../lib/guards/session.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { harden } = /** @type {GuestGlobals} */ (globalThis);

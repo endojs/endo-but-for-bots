@@ -39,6 +39,16 @@ export const gatewayLimits = Object.freeze({
    * rebuilds from scratch.
    */
   exportsPerConnection: 4096,
+  /**
+   * Answers (the page's question ids, CapTP's answer table and the bridge's
+   * mirror of it) the gateway keeps for one connection. A page's captp
+   * drops each question it no longer holds (`gcImports`); past the bound
+   * the oldest settled answers are forgotten (a `CTP_DROP` is dispatched to
+   * the gateway's captp for each), so a long-lived page is never closed for
+   * it. Only when every kept answer is still unsettled is the connection
+   * closed with `closeCodes.tooManyObjects`.
+   */
+  answersPerConnection: 4096,
   /** R7-49: each failed sign-in pushes that address's next attempt this far. */
   signInPenaltyMs: 1000,
   /** R7-49: an address's entry is forgotten this long after its deadline. */
@@ -52,6 +62,13 @@ export const gatewayLimits = Object.freeze({
   /** The longest request path served (others: 414). */
   maxPathUnits: 2048,
 });
+
+/**
+ * The `GatewayPowers.extras` label of the gateway's in-process secret
+ * writer (A-11; `GatewayContext.secretWriter()`): a page writes a secret
+ * value through it, never through the hub.
+ */
+export const secretWriterLabel = 'secretWriter';
 
 /** WebSocket close codes the gateway uses (4000-4999: application). */
 export const closeCodes = Object.freeze({
@@ -80,6 +97,11 @@ export const gatewayTexts = Object.freeze({
   unknownMethod: 'unknown method',
   /** A call carrying an object or promise the browser exported. */
   browserObject: 'objects made by the page cannot be sent to the daemon',
+  /**
+   * X-FIX: a call toward a vat carrying a gateway object that never leaves
+   * the gateway (the page's secret writer).
+   */
+  gatewayObject: 'this gateway object cannot be sent to the daemon',
   /** `callsInFlight` exceeded. */
   tooManyCalls: 'too many calls in flight on this connection',
   /** Arguments nested deeper than `argumentDepth`. */
@@ -245,11 +267,14 @@ export const uiTextOf = Object.freeze({
  * @property {() => any} history the incarnation's `History`
  * @property {(callback: () => void) => void} whenAttached runs once the
  *   agent host is attached (blobs and secrets work from then on)
- * @property {() => Promise<any>} secretWriter the incarnation's one
- *   `SecretWriter` (M2 `AH/secrets/manager.js` `secretWriter`: made once
- *   per incarnation, so the same object a page reaches through
- *   `SecretsAdmin.openWriter()`, A-11). Call it only after `whenAttached`;
- *   before that it rejects. M4's `GW/extensions/m4-secrets.js` resolves its
+ * @property {() => Promise<any>} secretWriter the incarnation's in-process
+ *   secret writer (A-11): a gateway-local exo, `replace(secret, value |
+ *   SealedBox, expectedGeneration?)` and `publicKey()`, calling M2's
+ *   `replaceLocal` (`AH/secrets/writer.js`); the same object every page
+ *   finds in `GatewayPowers.extras` under `secretWriterLabel`. It is not
+ *   the hub's `SecretWriter` (`SecretsAdmin.openWriter()`), which takes a
+ *   `SealedBox` only. Call it only after `whenAttached`; before that it
+ *   rejects. M4's `GW/extensions/m4-secrets.js` resolves its
  *   `LargeCall.target` with it
  * @property {string} stateDir the daemon's state directory (read only)
  * @property {(event: Record<string, unknown>) => void} log a structured

@@ -23,7 +23,7 @@
  * `packages` parts and throw `textOf.notBuilt` until W5.6 and W5.7 register
  * them.
  */
-import { m2Interfaces, texts, textOf } from '../lib/interfaces.js';
+import { interfaces, texts, textOf } from '../lib/guards/session.js';
 import { m5Interfaces } from '../lib/interfaces-m5.js';
 import { limits } from '../lib/limits.js';
 import { labelSeeds as defaultLabelSeeds, seedsFor } from './label-seeds.js';
@@ -285,7 +285,7 @@ export const makeSession = (
     },
   });
 
-  const internal = makeExo('SessionInternal', m2Interfaces.SessionInternal, {
+  const internal = makeExo('SessionInternal', interfaces.SessionInternal, {
     rowSnapshot() {
       return harden({
         title,

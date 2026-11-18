@@ -57,7 +57,7 @@
  *
  * Vat module: prelude globals only, no clock, no data-dependent record keys.
  */
-import { texts, textOf } from './interfaces.js';
+import { texts, textOf } from './guards/session.js';
 import { limits } from './limits.js';
 import { previewText, utf8Bytes } from './bounded.js';
 

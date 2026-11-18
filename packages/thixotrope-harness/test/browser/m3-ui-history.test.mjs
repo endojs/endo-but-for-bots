@@ -243,3 +243,10 @@ run(
     t.log(`${ids.length} turns in ${clicks} pages`);
   },
 );
+
+run('rule 4a: every call the page made was admitted (XD)', async t => {
+  if (!harness) throw Error('setup failed');
+  // m3-interfaces.md 4.4 rule 4a: a method outside the gateway's `methods`
+  // is refused `gatewayTexts.unknownMethod` and logged with rule `method`.
+  t.deepEqual(harness.gatewayLog.refused('method'), []);
+});

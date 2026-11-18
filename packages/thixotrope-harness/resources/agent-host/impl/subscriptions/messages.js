@@ -39,7 +39,6 @@
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { m4Texts, m4TextOf } from '../../../../guest/lib/texts-m4.js';
-import { textOf } from '../../../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { subscriptionDefaults } from '../../../../config/defaults-m4.js';
 import {
@@ -159,12 +158,8 @@ export const claudeBody = ({
 };
 harden(claudeBody);
 
-/** The API client's error-event text prefix (`textOf.anthropicApiError`). */
-const API_ERROR = textOf.anthropicApiError('');
-/** The API client's text for an `overloaded_error` event. */
-const OVERLOADED_EVENT = textOf.anthropicApiError(
-  textOf.servedBy([['type', 'overloaded_error']]),
-);
+/** The `error` event type of an overload (D-M4-4; Anthropic's stream). */
+const OVERLOADED_ERROR = 'overloaded_error';
 
 /**
  * One streamed attempt on one member (`WireAttempt`, `types.js`). Options
@@ -278,8 +273,10 @@ export async function* claudeAttempt({
           : { retryAfterMs: error.retryAfterMs }),
       });
     }
-    if (error.reason.startsWith(API_ERROR)) {
-      const overloaded = error.reason === OVERLOADED_EVENT;
+    // An `error` event in the stream: the API client names its type
+    // (`ProviderFailure.errorType`), never a text to compare.
+    if (error.errorType !== undefined) {
+      const overloaded = error.errorType === OVERLOADED_ERROR;
       throw wireFailure(m4Texts.claudeInferenceFailed, {
         delivered: sent,
         retryable: overloaded && !sent,

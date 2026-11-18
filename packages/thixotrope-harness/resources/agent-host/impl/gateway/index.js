@@ -17,6 +17,17 @@
  * - `attached()` is called once the agent host is attached (`onSink`):
  *   `GatewayContext.whenAttached` callbacks run then, and
  *   `GatewayContext.secretWriter()` works from then on (before, it rejects).
+ *
+ * The secret writer a page uses (m3-interfaces A-11; m2-interfaces 9.2) is
+ * the gateway's own in-process writer, made once per incarnation: an exo
+ * marked gateway-local (`GatewaySecretWriter`, `AH/secrets/writer.js`
+ * `localWriterGuard`) whose `replace(secret, value | SealedBox,
+ * expectedGeneration?)` calls the secrets module's `replaceLocal`. It is in
+ * every page's `GatewayPowers.extras` under `secretWriterLabel` and is what
+ * `GatewayContext.secretWriter()` answers, so M4's `largeCalls` target is
+ * the object a page calls. The value goes from the page's WebSocket to the
+ * store in this process; the hub's `SecretWriter` (SealedBox only) is not
+ * on that path.
  * - `close()` is `unbind()` for the adapter's own shutdown.
  *
  * What is made once per incarnation, on the first bind: the extension list
@@ -47,8 +58,9 @@ import { fileURLToPath } from 'node:url';
 import { m3Interfaces } from '../../../../guest/lib/interfaces-m3.js';
 /* eslint-enable import/no-relative-packages */
 import { findBlobDir } from '../blobs.js';
+import { assertLocalValue, localWriterGuard } from '../secrets/writer.js';
 import { makeBridge } from './bridge.js';
-import { closeCodes, gatewayTexts } from './contract-m3.js';
+import { closeCodes, gatewayTexts, secretWriterLabel } from './contract-m3.js';
 import { cspHeader } from './csp.js';
 import {
   extensionCsp,
@@ -58,7 +70,11 @@ import {
   makeLargeCalls,
 } from './extensions.js';
 import { makeSignInLimiter } from './limiter.js';
-import { makeBootstrapFactory, markGatewayLocal } from './powers.js';
+import {
+  makeBootstrapFactory,
+  markGatewayLocal,
+  markNeverLeaves,
+} from './powers.js';
 import { makeGatewayServer } from './server.js';
 import { makeSignInStore } from './signin.js';
 import { makeStaticHandler } from './static.js';
@@ -100,8 +116,10 @@ const messageOf = error =>
  * @param {any} [options.blobs] the blob store (kept for later extensions;
  *   M3 reads nothing from it)
  * @param {any} [options.timers] the adapter timers (as `blobs`)
- * @param {() => Promise<any>} options.secretWriter the incarnation's one
- *   `SecretWriter` (M2 `secrets/manager.js`); called only after `attached()`
+ * @param {() => Promise<{ replaceLocal: (secret: any, value: any, expectedGeneration?: number) => Promise<{ generation: number }>, publicKey: () => Promise<string> }>} options.secretWriter
+ *   the incarnation's in-process write path (M2 `secrets/manager.js`
+ *   `replaceLocal`, `publicKeyLocal`; never the hub's `SecretWriter`);
+ *   called only after `attached()`
  * @param {string | (() => string)} [options.stateDir] default: the blob
  *   directory's grandparent (`<state>/agent-host/blobs`), found from argv at
  *   the first bind
@@ -143,6 +161,31 @@ export const makeGatewayService = ({
   /** @type {(() => void)[]} */
   let waiting = [];
 
+  /**
+   * The page's secret writer (see the header): gateway-local, guarded,
+   * one per incarnation; before the attach its methods reject.
+   */
+  const localWriter = makeExo('GatewaySecretWriter', localWriterGuard(), {
+    /**
+     * @param {any} secret
+     * @param {any} value a plain value or a `SealedBox`
+     * @param {number} [expectedGeneration]
+     */
+    replace: async (secret, value, expectedGeneration) => {
+      assertLocalValue(value);
+      if (!isAttached) throw Error(notAttachedText);
+      const path = await secretWriter();
+      return path.replaceLocal(secret, value, expectedGeneration);
+    },
+    publicKey: async () => {
+      if (!isAttached) throw Error(notAttachedText);
+      const path = await secretWriter();
+      return path.publicKey();
+    },
+  });
+  // Gateway-local, and never an argument of a call toward a vat (X-FIX).
+  markNeverLeaves(localWriter);
+
   /** @type {GatewayContext} */
   const context = harden({
     live,
@@ -158,7 +201,7 @@ export const makeGatewayService = ({
     },
     secretWriter: async () => {
       if (!isAttached) throw Error(notAttachedText);
-      return secretWriter();
+      return localWriter;
     },
     get stateDir() {
       return stateDirNow();
@@ -180,7 +223,12 @@ export const makeGatewayService = ({
   let incarnation;
   const incarnationParts = () => {
     if (incarnation === undefined) {
-      const extras = makeExtensionServices({ extensions, context, log });
+      const extras = makeExtensionServices({
+        extensions,
+        context,
+        log,
+        builtIn: [{ label: secretWriterLabel, service: localWriter }],
+      });
       const { isLargeCall } = makeLargeCalls({
         extensions,
         context,

@@ -43,7 +43,7 @@
  * through the call's `BlobWriters` in pieces of at most `blobPieceBytes`
  * when it is over `inlineBytes`. Only `{ status, text }` leaves the vat.
  */
-import { execArgumentNames, texts, textOf } from '../lib/interfaces.js';
+import { execArgumentNames, texts, textOf } from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
 import {
   EXHAUSTED,

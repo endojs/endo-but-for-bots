@@ -23,7 +23,7 @@
  * kept turn. Every record is checked against `shapes.TurnRecord` (closed
  * shapes, fixed keys) and hardened before it is kept.
  */
-import { shapes } from '../lib/interfaces.js';
+import { shapes } from '../lib/guards/session.js';
 import { utf8Bytes } from '../lib/bounded.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */

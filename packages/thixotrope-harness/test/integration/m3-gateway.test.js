@@ -21,8 +21,10 @@
  *    journal grows for the refused calls.
  * 16. A fixture extension (copied into `GW/extensions/` before the daemon
  *    starts, removed at teardown) adds a service, a route and a CSP source;
- *    its `context.secretWriter()` is the object `SecretsAdmin.openWriter()`
- *    answers; a throwing extension file is skipped.
+ *    its `context.secretWriter()` is the gateway's in-process writer the
+ *    page finds in its extras (`secretWriterLabel`), not the hub's
+ *    SealedBox-only `SecretsAdmin.openWriter()` (A-11, XA); a throwing
+ *    extension file is skipped.
  * 11. Rotation closes pages with `signInRotated`, the old secret fails and
  *    the new one (`scripts/gateway.mjs url`) works; after SIGKILL the
  *    gateway serves again on the same port with the same secret; K1: a
@@ -55,6 +57,7 @@ import { m3Texts } from '../../guest/lib/interfaces-m3.js';
 import {
   closeCodes,
   gatewayTexts,
+  secretWriterLabel,
 } from '../../resources/agent-host/impl/gateway/contract-m3.js';
 import { signInFile } from '../../resources/agent-host/impl/gateway/signin.js';
 import { emit } from '../../perf/_harness.mjs';
@@ -338,23 +341,29 @@ run(
     if (!gateway) throw Error('setup failed');
     const { powers } = await gateway.connect();
     const labels = powers.extras.map((/** @type {any} */ x) => x.label);
-    t.true(labels.includes('fixture'));
+    t.deepEqual(labels, [secretWriterLabel, 'fixture'], 'built-in first');
     const fixture = powers.extras.find(
       (/** @type {any} */ x) => x.label === 'fixture',
     ).service;
     t.is(await E(fixture).ping(), 'pong');
     // Its large-call exemption (resolved after the attach).
     t.is(await E(fixture).echoLarge('L'.repeat(100_000)), 100_000);
+    const writer = powers.extras.find(
+      (/** @type {any} */ x) => x.label === secretWriterLabel,
+    ).service;
+    t.true(await E(fixture).sameWriter(writer), "the gateway's own writer");
     const secrets = await E(powers.operator).getSecrets();
-    const writer = await E(secrets).openWriter();
-    t.true(await E(fixture).sameWriter(writer), 'the incarnation SecretWriter');
+    const hubWriter = await E(secrets).openWriter();
+    t.false(
+      await E(fixture).sameWriter(hubWriter),
+      "not the hub's SealedBox-only writer",
+    );
     const route = await fetch(`http://127.0.0.1:${gateway.port}/fixture`);
     t.is(route.status, 200);
     t.is(await route.text(), 'fixture route');
     const csp = route.headers.get('content-security-policy') ?? '';
     t.regex(csp, /img-src [^;]*blob:/);
     // The throwing file was skipped; the gateway serves (this test ran).
-    t.is(labels.length, 1);
   },
 );
 

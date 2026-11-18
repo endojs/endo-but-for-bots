@@ -40,7 +40,7 @@
  * Guest rules: prelude globals only; spares in arrays, creations in a
  * `Set`; at most `poolLanes` creations' answered sends in flight.
  */
-import { m1bInterfaces, m1bShapes } from '../lib/interfaces.js';
+import { interfaces, shapes } from '../lib/guards/factory.js';
 import { limits } from '../lib/limits.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -116,10 +116,10 @@ export const makePoolSettings = ({
     execDeadlineMs: () => current.execDeadlineMs,
     /**
      * @param {{ spareSessions?: number, spareExec?: number, execDeadlineMs?: number }} changes
-     *   checked by `m1bShapes.HarnessSettings`
+     *   checked by `shapes.HarnessSettings`
      */
     set: changes => {
-      mustMatch(changes, m1bShapes.HarnessSettings);
+      mustMatch(changes, shapes.HarnessSettings);
       if (changes.spareSessions !== undefined)
         current.spareSessions = changes.spareSessions;
       if (changes.spareExec !== undefined)
@@ -505,7 +505,7 @@ export const closeExecHandle = handle => {
 harden(closeExecHandle);
 
 /**
- * The session's exec-vat lease (`m1bInterfaces.ExecHandle`): one per
+ * The session's exec-vat lease (`interfaces.ExecHandle`): one per
  * session, held only by that session (`SessionServices.execVat`).
  * `scope()` answers the current scope (taking one from the pool the first
  * time and after a retire); `retire(scope)` retires the current one when it
@@ -521,7 +521,7 @@ export const makeExecHandle = ({ pool, settings }) => {
   /** @type {Promise<{ scope: any, facade: any }> | undefined} */
   let taking;
   let closed = false;
-  const handle = makeExo('ExecHandle', m1bInterfaces.ExecHandle, {
+  const handle = makeExo('ExecHandle', interfaces.ExecHandle, {
     async scope() {
       if (closed) throw Error(EXEC_CLOSED_TEXT);
       if (current === undefined) {

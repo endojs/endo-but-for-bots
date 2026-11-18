@@ -6,7 +6,7 @@
  * and calls `makeSpareMaker()` on its namespace. The returned `SpareMaker`
  * makes the vat's one session.
  */
-import { interfaces } from '../lib/interfaces.js';
+import { interfaces } from '../lib/guards/session.js';
 import { makeSession } from './session.js';
 
 // The exo methods are typed loosely; the interface guards check the values.

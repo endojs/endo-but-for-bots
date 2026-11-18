@@ -35,7 +35,7 @@
  */
 import '../unit/_m1a-prelude.js';
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -142,11 +142,37 @@ const newestMtime = dir => {
  */
 export const ensureUiBuilt = async () => {
   const shell = path.join(assetsDir, 'index.html');
-  if (existsSync(shell) && statSync(shell).mtimeMs >= newestMtime(uiSrcDir))
-    return { built: false };
-  const { buildUi } = await import('../../ui/build.mjs');
-  const result = await buildUi();
-  return { built: true, bytes: result.bytes, gzipBytes: result.gzipBytes };
+  const fresh = () =>
+    existsSync(shell) && statSync(shell).mtimeMs >= newestMtime(uiSrcDir);
+  if (fresh()) return { built: false };
+  // Browser files run side by side (`--jobs`): one build at a time, or two
+  // builds rename the same temporary asset and one fails with ENOENT (XD).
+  // The lock is a directory; one older than `staleMs` is a dead builder's.
+  const lock = path.join(harnessRoot, 'tmp', '.ui-build.lock');
+  const staleMs = 120_000;
+  mkdirSync(path.dirname(lock), { recursive: true });
+  for (;;) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch (error) {
+      if (/** @type {any} */ (error).code !== 'EEXIST') throw error;
+      const age =
+        Date.now() -
+        (statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
+      if (age > staleMs) rmSync(lock, { recursive: true, force: true });
+      // eslint-disable-next-line no-await-in-loop
+      else await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+  try {
+    if (fresh()) return { built: false };
+    const { buildUi } = await import('../../ui/build.mjs');
+    const result = await buildUi();
+    return { built: true, bytes: result.bytes, gzipBytes: result.gzipBytes };
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
 };
 
 /**
@@ -176,7 +202,71 @@ export const templateNamed = async template => {
  * @property {any} browser
  * @property {(url?: string, before?: (page: any) => unknown) => Promise<any>} newPage
  *   a page in a new context (another device)
+ * @property {GatewayLog} gatewayLog the gateway's log lines (rule 4a checks)
  */
+
+/**
+ * @typedef {object} GatewayLog
+ * @property {() => Record<string, any>[]} lines every gateway log line seen
+ *   so far (read now, then in order)
+ * @property {(rule?: string) => Record<string, any>[]} refused the
+ *   `gateway-refused` lines, of one guard rule when given (`method` is
+ *   `gatewayTexts.unknownMethod`, m3-interfaces.md 4.4 rule 4a)
+ * @property {() => void} stop
+ */
+
+/** The prefix of a gateway log line (`GW/index.js` `stderrLog`). */
+const GATEWAY_LINE = '{"gateway":true';
+
+/**
+ * Collect the gateway's log lines from the supervisor's stderr. The state
+ * keeps only a 16 KB tail (`scripts/serve.mjs`), so the tail is read every
+ * `everyMs` and each whole line is kept once (lines carry their `at`, so a
+ * repeated event is a new line). After a restart the tail is the new
+ * supervisor's.
+ *
+ * @param {{ stderrTail: () => string }} state
+ * @param {number} [everyMs]
+ * @returns {GatewayLog}
+ */
+export const watchGatewayLog = (state, everyMs = 200) => {
+  /** @type {Set<string>} */
+  const seen = new Set();
+  /** @type {Record<string, any>[]} */
+  const kept = [];
+  const take = () => {
+    for (const line of state.stderrTail().split('\n')) {
+      const at = line.indexOf(GATEWAY_LINE);
+      if (at >= 0) {
+        const text = line.slice(at);
+        if (!seen.has(text)) {
+          try {
+            kept.push(JSON.parse(text));
+            seen.add(text);
+          } catch {
+            // a line cut by the tail's start or not yet ended
+          }
+        }
+      }
+    }
+  };
+  const timer = setInterval(take, everyMs);
+  timer.unref?.();
+  const lines = () => {
+    take();
+    return [...kept];
+  };
+  return harden({
+    lines,
+    refused: rule =>
+      lines().filter(
+        line =>
+          line.event === 'gateway-refused' &&
+          (rule === undefined || line.rule === rule),
+      ),
+    stop: () => clearInterval(timer),
+  });
+};
 
 /**
  * @param {object} options
@@ -232,6 +322,8 @@ export const startBrowserGateway = async ({
     undo.push(async () => key.remove());
     const state = await startFromTemplate(made);
     undo.push(() => state.cleanup());
+    const gatewayLog = watchGatewayLog(state);
+    undo.push(async () => gatewayLog.stop());
     if (provision) {
       const root = await state.client.call('lookup', names.harness);
       const operator = await E(root).getOperator();
@@ -263,6 +355,7 @@ export const startBrowserGateway = async ({
       gateway,
       browser,
       newPage,
+      gatewayLog,
     };
   } catch (error) {
     await close();

@@ -9,8 +9,10 @@
  *   the rate-limit headers of a served round make it `observed`;
  * - `refresh` reads the providers now and updates the view: one batch per
  *   refresh on a watcher (R4-85: pushed, not polled);
- * - which tools the model is offered on a pool session (an observation:
- *   `accountStatus` is not offered yet, see below);
+ * - the model's part (XC, D-M4-9 as amended): the model is offered
+ *   `accountStatus` on a pool session, calls it, and the next round carries
+ *   the rendered text (the pool, its members with their provenance) as a
+ *   tool result that is not an error;
  * - after a restart the readings are `remembered`, before any round
  *   (`Accounts.forBackend` of a pool this incarnation has not used yet).
  *
@@ -27,6 +29,7 @@ import { E } from '@endo/far';
 import { emit } from '../../perf/_harness.mjs';
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
 import {
+  claudeEvents,
   readingHeaders,
   startFakeSubscriptionServer,
 } from '../fixtures/fake-subscription-server.mjs';
@@ -159,20 +162,61 @@ run(
     );
     await E(subscription).close();
 
-    // The accountStatus tool as the model sees it. Observation only: the
-    // session offers the model its tool-table entries (`toolSetFor`: echo,
-    // exec), so an adapter tool in `TurnPorts.tools` is neither offered nor
-    // executed until the tool table passes adapter tools through (M5's
-    // file; reported to the PM). The rendered text itself is W4.5's
-    // adapter test; the tool through the ports is W4.6's.
-    server.push({ sse: 'claude-text.sse' });
+    // The model's part (XC): accountStatus is offered through the session's
+    // generic adapter-tool entry, the model calls it, and the next round
+    // carries the rendered text as a tool result that is not an error.
+    server.push(
+      {
+        events: claudeEvents({
+          toolCalls: [
+            { id: 'toolu_account_1', name: 'accountStatus', args: '{}' },
+          ],
+        }),
+      },
+      { sse: 'claude-text.sse' },
+    );
     const before = posts(server).length;
-    const plain = await runTurn(m4, session, live, 'tools offered');
-    t.is(plain.status.state, 'completed', plain.status.error);
+    const called = await runTurn(m4, session, live, 'tools offered');
+    t.is(called.status.state, 'completed', called.status.error);
     const offered = (posts(server)[before]?.json?.tools ?? []).map(
       (/** @type {any} */ tl) => tl.name,
     );
-    emit({ metric: 'm4.accounts.toolOffered', offered });
+    t.true(offered.includes('accountStatus'), JSON.stringify(offered));
+    const answered = posts(server)[before + 1]?.json;
+    // The wire names the call by the session's own id (not the provider's),
+    // so find the call by its name, then its result by that id.
+    /** @type {any[]} */
+    const blocks = (answered?.messages ?? []).flatMap((/** @type {any} */ m) =>
+      Array.isArray(m.content) ? m.content : [],
+    );
+    const calls = blocks.filter(
+      b => b.type === 'tool_use' && b.name === 'accountStatus',
+    );
+    t.is(calls.length, 1, 'the call is in the next request');
+    const results = blocks.filter(
+      b => b.type === 'tool_result' && b.tool_use_id === calls[0]?.id,
+    );
+    t.is(results.length, 1, 'one result for the call');
+    const [result] = results;
+    const resultText =
+      typeof result.content === 'string'
+        ? result.content
+        : (result.content ?? []).map((/** @type {any} */ c) => c.text).join('');
+    t.not(result.is_error, true, resultText);
+    t.true(
+      resultText.includes('subscription pool "Accounts pool"'),
+      resultText,
+    );
+    t.true(resultText.includes('Account: member obs (claude)'), resultText);
+    t.true(resultText.includes('Account: member decl (claude)'), resultText);
+    // Both members were read by the refresh above: each figure says so.
+    t.true(resultText.includes('observed: read from the provider'), resultText);
+    t.true(resultText.includes('not attributed'), resultText);
+    emit({
+      metric: 'm4.accounts.toolOffered',
+      offered,
+      resultUnits: resultText.length,
+    });
 
     // Restart (readings flushed within 5 s): remembered, before any round.
     await delay(6000);
@@ -185,6 +229,6 @@ run(
     t.truthy(remembered, 'a pool not used since the restart is described');
     t.is(memberOf(remembered, 'member obs').provenance, 'remembered');
     t.is(memberOf(remembered, 'member decl').provenance, 'remembered');
-    t.is(posts(server).length, before + 1, 'no round after the restart');
+    t.is(posts(server).length, before + 2, 'no round after the restart');
   },
 );

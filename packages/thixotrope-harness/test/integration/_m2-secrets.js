@@ -25,6 +25,31 @@ import { randomBytes } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { E } from '@endo/far';
+
+import { sealTo } from '../../resources/agent-host/impl/secrets/seal.js';
+
+/**
+ * Write `value` through the hub's `SecretWriter` the way a client must
+ * (m2-interfaces 9.2): sealed to the writer's public key. The writer's
+ * guard refuses a plain value (XA).
+ * @param {any} writer `SecretsAdmin.openWriter()`
+ * @param {any} secret
+ * @param {string} value
+ * @param {number} [expectedGeneration]
+ */
+export const replaceSealed = async (
+  writer,
+  secret,
+  value,
+  expectedGeneration,
+) => {
+  const box = sealTo(await E(writer).publicKey(), value);
+  return expectedGeneration === undefined
+    ? E(writer).replace(secret, box)
+    : E(writer).replace(secret, box, expectedGeneration);
+};
+
 /**
  * A secret value for tests, built at run time.
  * @param {string} [tag]

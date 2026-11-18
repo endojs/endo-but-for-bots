@@ -22,7 +22,7 @@
  *
  * Pure; runs in vats and in Node.
  */
-import { textOf } from './interfaces.js';
+import { textOf } from './guards/session.js';
 
 /**
  * @typedef {'string' | 'integer' | 'raw' | ArgObjectSpec} ArgKind

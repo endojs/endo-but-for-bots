@@ -18,7 +18,7 @@
  *
  * Guest rules: prelude globals only; no clock; no data-dependent keys.
  */
-import { interfaces, shapes, texts } from '../lib/interfaces.js';
+import { interfaces, shapes, texts } from '../lib/guards/factory.js';
 import { limits } from '../lib/limits.js';
 import { messageBytes } from '../lib/bounded.js';
 

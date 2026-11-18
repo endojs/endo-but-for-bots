@@ -19,12 +19,15 @@ import { texts, textOf } from '../../guest/lib/interfaces.js';
 import { m4Texts, m4TextOf } from '../../guest/lib/texts-m4.js';
 /* eslint-enable import/no-relative-packages */
 import { NATIVE_CONTEXT_FORMAT } from '../../resources/agent-host/impl/projection.js';
+import { anthropicAttempt } from '../../resources/agent-host/impl/providers/anthropic.js';
 import { ProviderFailure } from '../../resources/agent-host/impl/providers/round.js';
 import {
+  CLAUDE_MESSAGES_PATH,
   claudeAttempt,
   claudeBody,
   claudeClient,
   claudeEfforts,
+  claudeHeaders,
 } from '../../resources/agent-host/impl/subscriptions/messages.js';
 import { withOverloadRetry } from '../../resources/agent-host/impl/subscriptions/wire.js';
 import {
@@ -385,6 +388,44 @@ test('overload (529 or overloaded_error) before delivery is retried on the sched
   t.deepEqual(waits, [5, 10], 'no wait after a delivery');
   t.is(server.requests().length, 4, 'not sent again');
   clean(t, late);
+});
+
+test('XB: an error event is told by its symbolic type (ProviderFailure.errorType), not its text: only overloaded_error is an overload', async t => {
+  const server = await serverFor(t);
+  // The API client names the event's type on its failure.
+  server.setPlan([{ sse: 'claude-overloaded.sse' }]);
+  const raw = await drain(
+    anthropicAttempt({
+      url: `${server.url}${CLAUDE_MESSAGES_PATH}`,
+      headers: claudeHeaders(credential.accessToken),
+      body: { model: MODEL },
+      signal: new AbortController().signal,
+      timeoutMs: 10_000,
+    }),
+  );
+  t.true(raw.error instanceof ProviderFailure);
+  t.is(raw.error.errorType, 'overloaded_error');
+  t.true(raw.error.retryable);
+  // The pool's wire reads that type: an overload, retryable before delivery.
+  server.setPlan([
+    { sse: 'claude-overloaded.sse' },
+    { sse: 'claude-error.sse' },
+    { status: 503 },
+  ]);
+  const overloaded = await drain(attempt(server));
+  t.is(overloaded.error.message, m4Texts.claudeInferenceFailed);
+  t.true(overloaded.error.overloaded);
+  t.true(overloaded.error.retryable);
+  // Another type (invalid_request_error): the same fixed text, no overload.
+  const other = await drain(attempt(server));
+  t.is(other.error.message, m4Texts.claudeInferenceFailed);
+  t.is(other.error.overloaded, undefined);
+  t.false(other.error.retryable);
+  // A status failure has no type: never read as an event.
+  const status = await drain(attempt(server));
+  t.is(status.error.message, m4TextOf.subscriptionHttp(503));
+  t.is(status.error.overloaded, undefined);
+  for (const result of [overloaded, other, status]) clean(t, result);
 });
 
 test('persistent overload: six attempts, five delays, then the failure keeps its facts', async t => {

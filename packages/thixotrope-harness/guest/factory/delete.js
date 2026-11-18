@@ -36,7 +36,7 @@
  * Guest rules: prelude globals only; records in a `Map` keyed by the row;
  * one answered send in flight per record.
  */
-import { texts } from '../lib/interfaces.js';
+import { texts } from '../lib/guards/factory.js';
 import { closeExecHandle } from './pool.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */

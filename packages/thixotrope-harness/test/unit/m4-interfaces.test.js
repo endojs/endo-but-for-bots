@@ -322,6 +322,7 @@ const methodSamples = {
     setSecretDescription: { args: ['k1', 'A description'], returns: undefined },
     auditReader: { args: [], returns: far('AuditReader') },
     accounts: { args: [], returns: far('Accounts') },
+    poolsChanged: { args: [], returns: undefined },
   },
   AuditReader: {
     page: {

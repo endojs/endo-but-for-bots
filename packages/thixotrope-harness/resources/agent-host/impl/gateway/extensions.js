@@ -188,20 +188,29 @@ export const loadGatewayExtensions = ({ dir = defaultExtensionsDir, log }) => {
 harden(loadGatewayExtensions);
 
 /**
- * The extras services of one incarnation, in file then array order, at most
- * `m3Limits.extras`. A `make` that throws, or a label already used, is
- * logged and skipped.
+ * The extras services of one incarnation: the gateway's own (`builtIn`,
+ * first: the page's secret writer, `GW/index.js`), then the extensions' in
+ * file then array order, at most `m3Limits.extras` in all. A `make` that
+ * throws, or a label already used, is logged and skipped.
  * @param {object} options
  * @param {GatewayExtension[]} options.extensions
  * @param {GatewayContext} options.context
  * @param {(event: Record<string, unknown>) => void} options.log
+ * @param {{ label: string, service: any }[]} [options.builtIn]
  * @returns {{ label: string, service: any }[]}
  */
-export const makeExtensionServices = ({ extensions, context, log }) => {
+export const makeExtensionServices = ({
+  extensions,
+  context,
+  log,
+  builtIn = [],
+}) => {
   /** @type {{ label: string, service: any }[]} */
-  const extras = [];
+  const extras = builtIn.map(({ label, service }) =>
+    harden({ label, service }),
+  );
   /** @type {Set<string>} */
-  const labels = new Set();
+  const labels = new Set(builtIn.map(({ label }) => label));
   for (const extension of extensions) {
     for (const { label, make } of extension.services ?? []) {
       /** @type {string | undefined} */

@@ -179,7 +179,13 @@ test('manager: secrets end to end through grants, writer and restart', async t =
   // The key is never in the manager: only the writer takes a value.
   const writer = await E(admin).openWriter();
   const value1 = makeTestSecretValue('one');
-  t.deepEqual(await E(writer).replace(secret, value1), { generation: 1 });
+  t.deepEqual(
+    await E(writer).replace(
+      secret,
+      sealTo(await E(writer).publicKey(), value1),
+    ),
+    { generation: 1 },
+  );
   t.is(await kit.secrets().readKey(grant), value1);
   for (const [name, ...args] of kit.calls)
     t.false(JSON.stringify(args).includes(value1), `${name} carried no value`);
@@ -221,7 +227,11 @@ test('manager: secrets end to end through grants, writer and restart', async t =
   const box = sealTo(await E(writer2).publicKey(), makeTestSecretValue('two'));
   t.deepEqual(await E(writer2).replace(secret, box, 1), { generation: 2 });
   await t.throwsAsync(
-    E(writer2).replace(secret, 'stale', 1),
+    E(writer2).replace(
+      secret,
+      sealTo(await E(writer2).publicKey(), 'stale'),
+      1,
+    ),
     failed('GENERATION_CONFLICT'),
   );
 

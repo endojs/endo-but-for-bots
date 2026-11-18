@@ -14,8 +14,11 @@
  *    one is stored and reaches the request (Claude adaptive thinking with
  *    `output_config.effort`; Codex `ultra` sent as `max`); an effort on a
  *    non-pool backend is refused; the R4-30 client header names are on
- *    every inference request. The two-part system text case waits for M5's
- *    merge (deferred, not faked here).
+ *    every inference request; a turn with an attachment (M5's R4-29 line)
+ *    sends the two-part system text (`[stored prompt, line]`) as one string
+ *    joined with a blank line, to the Claude pool as the `system` text block
+ *    after the billing block and to the Codex pool as `instructions` (XB,
+ *    after the M5 merge).
  *
  *   corepack yarn test:integration test/integration/m4-catalog.test.js
  */
@@ -27,6 +30,7 @@ import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
 import { texts } from '../../guest/lib/interfaces.js';
+import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 import { m4Texts } from '../../guest/lib/texts-m4.js';
 /* eslint-enable import/no-relative-packages */
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
@@ -251,5 +255,65 @@ run(
     t.is(codexPost.json.reasoning?.effort, 'max');
     t.is(codexPost.json.store, false);
     t.true(codexPost.headerNames.includes('authorization'));
+
+    // ---- 13. two-part system text (M5's systemTextOf, after the merge) ----
+    // A turn with an attachment carries `[stored prompt, R4-29 line]`; the
+    // pool provider joins it once per round with a blank line and both
+    // wires send one string. The line names the session's first package.
+    const line = textOfM5.mentionLine(1, ['notes']);
+    const attachments = [{ label: 'notes', value: scripted.backend }];
+    const claudeSystem = /** @type {any[]} */ (claudePost.json.system);
+    t.is(claudeSystem.length, 2, 'the billing block, then the system text');
+    const storedClaude = claudeSystem[1].text;
+    t.true(
+      typeof storedClaude === 'string' && storedClaude.length > 0,
+      'the stored prompt reaches the Claude pool',
+    );
+    server.push({ sse: 'claude-text.sse' });
+    const claudeMention = await runTurn(
+      m4,
+      withEffort.session,
+      withEffort.live,
+      'mention',
+      60_000,
+      { attachments },
+    );
+    t.is(claudeMention.status.state, 'completed', claudeMention.status.error);
+    const claudeTwo = /** @type {any} */ (posts(server).at(-1)).json.system;
+    t.is(claudeTwo.length, 2, 'still one system text block after billing');
+    t.deepEqual(claudeTwo[0], claudeSystem[0], 'the billing block unchanged');
+    t.is(claudeTwo[1].text, `${storedClaude}\n\n${line}`);
+
+    const storedCodex = codexPost.json.instructions;
+    t.true(
+      typeof storedCodex === 'string' && storedCodex.length > 0,
+      'the stored prompt reaches the Codex pool',
+    );
+    server.push({ sse: 'codex-text.sse' });
+    const codexMention = await runTurn(
+      m4,
+      ultra.session,
+      ultra.live,
+      'mention',
+      60_000,
+      { attachments },
+    );
+    t.is(codexMention.status.state, 'completed', codexMention.status.error);
+    const codexTwo = /** @type {any} */ (posts(server).at(-1)).json;
+    t.is(codexTwo.instructions, `${storedCodex}\n\n${line}`);
+
+    // The next turn without an attachment sends the stored prompt alone.
+    server.push({ sse: 'claude-text.sse' });
+    const plain = await runTurn(
+      m4,
+      withEffort.session,
+      withEffort.live,
+      'plain',
+    );
+    t.is(plain.status.state, 'completed', plain.status.error);
+    t.is(
+      /** @type {any} */ (posts(server).at(-1)).json.system[1].text,
+      storedClaude,
+    );
   },
 );

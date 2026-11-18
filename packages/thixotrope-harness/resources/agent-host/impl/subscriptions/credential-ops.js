@@ -8,6 +8,10 @@
  * the store's audit labels in step with a description edit
  * (`setSecretDescription`), and hands out the adapter-local `AuditReader`
  * and `Accounts` (R7-63, R4-84). No method answers a value (R7-26).
+ * `poolsChanged()` (answered, XB, X-FIX: the manager's retirement returns
+ * only after this answer) is the manager's word that it retired a
+ * pool or a member: every pool this incarnation loaded is asked again at
+ * its next use (m4-interfaces 3.1: the next turn fails or skips the member).
  *
  * The store is the incarnation's one Secrets store (m4-interfaces 8,
  * assumption 4): read from `secrets().store` at call time, so this facet
@@ -69,8 +73,15 @@ harden(makeSecretResolver);
  *   it (W4.5's `AccountsCore.accounts`)
  * @param {(secret: any) => Promise<string | null>} options.resolveSecret
  *   the audit reader's `Secret` filter
+ * @param {() => void} [options.poolsChanged] marks the loaded pool states
+ *   stale (`makeSubscriptions`)
  */
-export const makeCredentialOps = ({ secrets, accounts, resolveSecret }) => {
+export const makeCredentialOps = ({
+  secrets,
+  accounts,
+  resolveSecret,
+  poolsChanged = () => {},
+}) => {
   const storeOf = () => {
     const store = lazy(secrets)?.store;
     if (store === undefined) throw Error(textOf.notBuilt('credentials'));
@@ -95,6 +106,10 @@ export const makeCredentialOps = ({ secrets, accounts, resolveSecret }) => {
       return reader;
     },
     accounts: () => lazy(accounts),
+    poolsChanged: () => {
+      poolsChanged();
+      return undefined;
+    },
   });
 };
 harden(makeCredentialOps);

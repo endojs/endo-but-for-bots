@@ -98,6 +98,8 @@
  * @property {(change: PoolChange) => void} record marks are sent at once
  *   (`E.sendOnly(sink).poolChanged`), served stamps coalesced (section 5.1)
  * @property {() => Promise<void>} flush tests and shutdown
+ * @property {() => void} invalidate the manager retired a pool or a member
+ *   (`CredentialOps.poolsChanged`): the next `load` asks again
  */
 
 /**

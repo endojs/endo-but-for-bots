@@ -70,7 +70,17 @@ Contract 1, M1b 1.1 and M2 1.1 hold. M5 adds:
    target, renders and bounds the answer (tool limit, staged over `inlineBytes`) and answers the
    session with a value of the closed `InspectOutcome` shape. A hostile answer halts at most the
    exec vat; the session then retires it as for any lost exec vat and states the scope loss
-   (`texts.inspectTerminated`). Core request CC-070 would make this unnecessary.
+   (`texts.inspectTerminated`). Core request CC-070 would make this unnecessary. **As built
+   (CC-027, built from CC-070; J-10124, J-10072, J-10073):** the hub now refuses a frame over the
+   target vat's ceiling (65,536 bytes at the harness's budget) before the vat decodes it, so a
+   too-big answer from a foreign object no longer reaches the exec vat: the exec vat's call to the
+   target rejects with the hub's `FRAME_TOO_LARGE` text and the inspector answers `failed` with
+   it. A too-big answer therefore has three accepted outcomes: a staged, cut result (an answer
+   under the ceiling that is over the tool limit), `texts.inspectTerminated` (the exec vat lost
+   while it takes the answer, or a crashed worker), or the hub's refusal (an answer over the
+   ceiling; what the M5 fixtures now get, acceptance 5 and 10). The model then sees the hub's text
+   as the tool's error (`Error: <FRAME_TOO_LARGE>`) or, for `describeCapability`, the method names
+   with documentation unavailable.
 3. **D-M5-3 The exec membrane.** Model-written code in the exec vat now holds objects of other
    vats (`powers.lookup`). An argument over about 94 KB halts the receiving vat, and fresh keys
    drain its name table. Every remotable `powers` hands to model code is wrapped in a membrane
@@ -79,7 +89,9 @@ Contract 1, M1b 1.1 and M2 1.1 hold. M5 adds:
    `membraneRecordKeys` (32) keys, the message more than `membraneMessageKeys` (256) record keys
    in all, or nesting is deeper than `membraneDepth` (32). Remotable answers are wrapped again;
    membrane wrappers passed as arguments are unwrapped to their targets; objects the exec vat made
-   pass as they are. The membrane is per call and dies with it (rule 12.13): a closed call's
+   pass as they are (**as built, XC J-10027 and X-FIX J-10052: no longer**; a message to another
+   vat may carry data and this call's wrappers only, and `powers.store` takes only this call's
+   wrappers or JSON, 2.7). The membrane is per call and dies with it (rule 12.13): a closed call's
    wrappers send nowhere (they use the call's `E`). Residual risk: model code can still drip
    distinct keys into another vat over many calls (open decision O-9; core request CC-071).
 4. **D-M5-4 One label map per session, in the session vat.** The label map (`labels.js`) is the
@@ -97,7 +109,11 @@ Contract 1, M1b 1.1 and M2 1.1 hold. M5 adds:
    that extends the same interface adds one spread (M4 extends neither `Session` nor `Operator`;
    section 9.1). M5's only edits to `interfaces.js`
    are the four additive widenings of `m5Widenings`, all made by W5.3 in its first commit. M5's
-   settings are in `limits-m5.js` (no line in `limits.js` or `config/defaults.js`).
+   settings are in `limits-m5.js` (no line in `limits.js` or `config/defaults.js`). **As built
+   (X1, J-9941, J-10002):** the base tables are split per vat program
+   (`guest/lib/guards/{base,session,factory}.js` below `interfaces.js`, m2-interfaces 1.1), and
+   `interfaces-m5.js` builds on `guards/session.js`, `interfaces-m5-factory.js` on
+   `guards/factory.js`; a new entry goes in the module of the lowest program that reads it.
 6. **D-M5-6 Switch once, stub the rest** (as M2 1.3). The exos whose guards M5 extends switch to
    their M5 guard once, in one commit by their group A owner, with every M5 method present: built,
    a stub throwing `Error(textOf.notBuilt('<method>'))` (M2's text), or a forward to a runtime
@@ -137,8 +153,11 @@ file, nothing).
 `makeFactoryKit` by `makePresetCatalog({ templates, defaultsContext })` (`guest/factory/presets.js`).
 Obtained only from `Operator.getPresets()`; `SessionFactory.listPresets()` returns `catalog.list()`.
 
-- `list() -> [Preset]` in display order (built-ins first, in `builtInPresetLabels` order, then
-  user presets in creation order); at most `maxPresets` (64).
+- `list() -> [Preset]` in display order: `chat-only` first, then the other built-ins in
+  `builtInPresetLabels` order, then user presets in creation order; at most `maxPresets` (64).
+  `chat-only` leads because callers that take the first listed preset as M1a's (the M1a slice,
+  `m1a-provision`) keep working; the PM kept this order at the cross-lane merge (XC). A caller
+  that wants the default asks `defaultPreset()`.
 - `configuration() -> { revision, presets, defaultPreset }` (A.4 `getPresetConfiguration`): the
   catalogue revision (a count, F.2 e; Fae used a random UUID string, J-0716) and the current
   default (R3-20).
@@ -348,8 +367,10 @@ code, open decision O-12). **`ToolGrant`**, one per grant.
   R4-46 marker, and answers a `ToolDescription`. The grant becomes `offered`, or
   `refused-schema` with the reason (`textOf.toolSchemaInvalid`).
 - `list() -> [ToolGrantInfo]`; `ToolGrant.describe() -> ToolGrantInfo` (`{ grant, state, source,
-  name?, reason? }`); `ToolGrant.withdraw()`: state `withdrawn`, the grant is dropped from the set
-  (the handle keeps answering `withdrawn`); takes effect at the next round.
+  name?, reason?, label? }`: `name` is the model-facing name from the schema, `label` the display
+  label an `adoptTool` grant was given, 2.6; an operator grant has none); `ToolGrant.withdraw()`:
+  state `withdrawn`, the grant is dropped from the set (the handle keeps answering `withdrawn`);
+  takes effect at the next round.
 
 **Discovery at every round** (R3-6: "re-read at the start of every model round"): `toolSetFor`
 (W5.3 makes it run per round, seam S1 of 2.8) asks the dynamic sources of `toolSources` (W5.6
@@ -408,7 +429,10 @@ is a per-session counter from 1 (shared with M9's inbox, which opens packages th
 - `adoptTool({ messageNumber, edgeName, toolName })` (`'guest'` site): takes the object and grants
   it with source `adopted` through the `grants` part (W5.6), awaits its schema read, and answers
   `textOf.adoptedTool(toolName, number)` when it is offered, else a failed result with the
-  refusal. `toolName` is the grant's display label; the model-facing name is the schema's (R3-6).
+  refusal. `toolName` is the grant's display label, kept as `ToolGrantInfo.label` (the grants
+  part's `grant(tool, 'adopted', toolName)`; as built, XC J-10026: `ToolGrantInfo` gains the
+  optional `label: shapes.Label`, which an operator grant does not have, 2.5); the model-facing
+  name is the schema's (R3-6).
 - In the settle crank (`onSettle`, which recovery's settle also runs) every package of the turn
   is closed: its objects are dropped (released; R3-8). Nothing else holds them.
 
@@ -428,7 +452,26 @@ the `TurnStarted` record (transcript and archive; the objects are never recorded
   purpose; a key flood answers `exhausted` as M1b). Model code uses `E(powers).lookup('x')` or
   `await powers.lookup('x')`. Without `request.powers` (an M1b session) `powers` stays `{}`.
 - **Membrane** (`guest/exec/membrane.js`): D-M5-3. Built on the call's `E`, so it dies with the
-  call; one `WeakMap` wrapper -> target per call.
+  call; one `WeakMap` wrapper -> target per call. A tagged value (CopySet, CopyBag, ...) keeps its
+  tag both ways: in a measured message its payload is measured and swapped, in an answer its
+  payload is wrapped (XC; before, the copy was a plain `{ payload }` record).
+  **What may leave the vat** (XC, rule 12.13): a message to a wrapper (another vat's object) may
+  carry data and this call's wrappers only. A wrapper of an ended call in it is refused with
+  `texts.powersExpired`, any other remotable with `MODEL_OBJECT_TEXT` ("Only objects obtained
+  through powers in this call can be sent to another vat"), before anything is sent. Model code
+  has no `Far`, but it can build a remotable by hand (`Symbol.for('passStyle')` is a shared
+  intrinsic); such a model-made object therefore never reaches another vat through the
+  membrane, so no other vat calls it or hands it raw presences as arguments, and no model code
+  runs on another vat's call after its exec call ended. A message to a non-wrapper remotable
+  (the model's own object) stays in the vat; it is measured, not refused.
+  **`powers.store` (as built, X-FIX J-10052; rule 12.13):** `store(label, value)` takes this
+  call's wrapper (it stores the wrapper's target), or a JSON-representable value (stored as `{
+  json }`). A wrapper of an ended call answers `texts.powersExpired`; any other remotable (one
+  model code built by hand) is refused with `MODEL_OBJECT_TEXT` and nothing is sent to the
+  session, so a model-made object can never come back from `lookup` in a later call as a wrapper
+  of itself and leave the vat from there, and the inspector never calls one outside a call.
+  `m5-w54-exec` asserts it (the store is refused, the keeper receives nothing, a wrapper still
+  stores). Before X-FIX this was the residual XC recorded (J-10027 (3)).
 - **`inspect(request) -> InspectOutcome`** (`guest/exec/inspect.js`): runs beside `run` (not
   subject to `busy`), at most `inspectWindow` (16) at once (the session's client keeps the
   window); never evaluates model code. Operations: `methods` (`__getMethodNames__`, at most 128
@@ -458,6 +501,15 @@ Built by W5.3 so that no other M5 unit edits `turn.js`:
   active.ports, table, services, sources)`; `toolSetFor` (tool-table.js) adds the dynamic entries
   of `toolSources` (new hook list: `(ports, services, runtime) -> entries[]`) after the static
   table, with the name rules of 2.5. Cost: one pass over at most 128 descriptions per round.
+  Between the static table and the dynamic sources come the **adapter tools without a static
+  entry** (D-M4-9 as amended at the cross-lane merge, XC; m4-interfaces.md 6): each port tool
+  whose `AdapterToolEntry` carries a `description` naming it, and whose name no static entry has,
+  is offered through one generic entry (`adapterToolEntries`: `site: 'adapter'`, `describe()`
+  answers that description, `execute` sends `{ opId, args }` to that port's tool object; one
+  entry per port record, reused while the ports are). A port tool without a description is not
+  offered (`echo` has its static entry). Their names are in the round's built-in set (2.5), so a
+  granted tool never shadows one, and a static entry is never shadowed by one (M4's
+  `accountStatus` is the first).
 - **S2 per-turn system note.** `roundRequest` uses `systemFor(active)`: the stored prompt alone,
   or joined with `active.systemNote` (inline: text joined in the vat; staged: the two-part list).
   `AH/providers/round.js` `systemTextOf` accepts the list and joins its parts (each read as
@@ -650,7 +702,9 @@ or the factory (section 6; M5 acceptance 12). Adapter tools M4 offers through `T
 (`accountStatus`) are protected from granted names by 2.5's built-in name set.
 
 **What M4 does not do**: M4 adds no `Operator` or `Session` method (so H-2 and H-4 have no M4
-half), no `tool-table.js` entry (`accountStatus` is an adapter tool), no edit to `session.js`,
+half), no `tool-table.js` entry (`accountStatus` is an adapter tool; as built, XC J-10025: the
+model is offered it through the one generic adapter-tool entry of `tool-table.js`,
+`adapterToolEntries`, 2.8 S1, which is no M4-specific code), no edit to `session.js`,
 `turn.js`, `round.js`, `scripted.js` or `composer.js`. **Shared files** with M4: `factory.js` (M5
 owns it; M4 adds one line after the `turnDeadlineMs` copy, its H-7), `interfaces.js` (M5 owns the
 four widenings; M4 changes one line, `BackendKind`, its H-1), `session-options.js` (M4 owns it;
@@ -679,7 +733,7 @@ its record or answer.
 | inventory entries | factory heap | replay | K1 variant: after `addAll` (`m5-presets`) |
 | label map (`store`, `remove`, `adopt`, `powers.store`) | session heap | replay: the binding and its result record exactly once | K3: after the round-final crank of a `store` round; after an `adopt` (`m5-mentions-restart`) |
 | grants | session heap | replay; a grant whose schema read was in flight is re-read at the next round (2.5) | K4: after `grantTool` before the schema answer (`m5-grants-restart`) |
-| granted tool call | intent in the session (crank D), the call in the exec vat | the tool runs at most once (the hub drops the replayed crank's duplicate send); recovery records "Tool outcome unknown"; a late answer (guest-to-guest promises survive restart, fact 5) is ignored by generation; never re-sent | K5: after crank D while the fixture tool runs (delay 2 s); after the tool answered the exec vat, before the exec vat's answer (`m5-grants-restart`) |
+| granted tool call | intent in the session (crank D), the call in the exec vat | the tool runs at most once (the hub drops the replayed crank's duplicate send); recovery records "Tool outcome unknown" unless the exec vat's answer was already journaled for the session (then the replay records it, K5 second point); a late answer (guest-to-guest promises survive restart, fact 5) is ignored by generation; never re-sent | K5: after crank D while the fixture tool runs (delay 2 s); after the tool answered the exec vat, before the exec vat's answer (`m5-grants-restart`; XC: the session vat's worker is woken and held with SIGSTOP, every incarnation as it appears, before the tool is released, and the daemon is SIGKILLed once the tool's log shows the run finished. Measured: the exec vat's answer is then already in the session's hub journal (its length grows by one while the worker is held), so the replay runs it: the true result is recorded once, recovery settles the turn outcome-unknown at the next round, the tool ran once, one provider request. "Tool outcome unknown" is recorded only when the answer never reached the hub, the first point. PM ruling (K1, J-10075): the second kill point recording the true result through replay is accepted as the wanted behaviour) |
 | queue entries' attachments, open packages | session heap | entries held `restart` keep their attachments and run later with their note; a claimed turn recovered `interrupted` or `outcome-unknown` closes its package in recovery's settle | K6: after an `enqueueMessageOnce` that claimed; with two entries waiting (`m5-mentions-restart`) |
 | `ExecPowersSource`, the exec scope | session heap; exec heap | the exec call in flight is abandoned by recovery (M1b); `powers` facets of earlier calls stay dead | K7: during an exec call that awaits `powers.lookup` (`m5-objects`) |
 
@@ -813,8 +867,9 @@ found at run time (W5.7 does not import W5.6); everything else by W5.9.
    `undefined` (J-0472).
 5. **`describeCapability` and `readSources`** (R3-32; W5.5 `m5-objects`): bounded help of a
    fixture (<= 48,000 units, then the tool limit); `readSources` of a fixture `SourceReader` with
-   a search; a fixture whose `help()` answers 200 KB gives `texts.inspectTerminated` and the
-   session's next turn runs normally.
+   a search; a fixture whose `help()` answers 200 KB gives `texts.inspectTerminated` (or, since
+   core CC-027, the hub refuses the answer and `describeCapability` shows the methods with
+   documentation `unavailable`) and the session's next turn runs normally.
 6. **Granted tools** (P-65, R3-6; W5.6 `m5-grants`): a granted `echo2` is offered at the next
    round and its call returns its result; a grant named `exec` is `refused-builtin` and not
    offered; two grants named `t` are both `refused-duplicate`; withdrawing one offers the other at
@@ -835,17 +890,21 @@ found at run time (W5.7 does not import W5.6); everything else by W5.9.
 10. **Untrusted answers and the membrane** (D-M5-2, D-M5-3; W5.5 `m5-security`): exec code sends
     a 100 KiB string to a fixture object through `powers`: refused in the exec vat with
     `textOf.membraneTooLarge`, the fixture's vat answers its next call; a record of 40 keys is
-    refused; a granted tool answering 300 KB yields a staged, cut result or
-    `texts.inspectTerminated`, and the session keeps working.
+    refused; a granted tool answering 300 KB yields a staged, cut result,
+    `texts.inspectTerminated` or (since core CC-027, what happens at the harness's 65,536-byte
+    ceiling) the hub's `FRAME_TOO_LARGE` text as the tool's error, and the session keeps working.
 11. **SIGKILL** (section 5): (a) K3 and K6 (W5.7 `m5-mentions-restart`); (b) K4 and K5: the
-    fixture tool's log shows at most one run, the turn is outcome-unknown with "Tool outcome
-    unknown", no rerun (W5.6 `m5-grants-restart`); (c) K1, K2 in acceptance 2's file.
+    fixture tool's log shows at most one run, the turn is outcome-unknown, no rerun; at K5's
+    first point the call is recorded "Tool outcome unknown", at its second the true result is
+    recorded once through replay (accepted by the PM, K1 J-10075) (W5.6 `m5-grants-restart`);
+    (c) K1, K2 in acceptance 2's file.
 12. **Reachability** (W5.9 `m5-reachability`): `thix reachability` from a session vat holding
     endowments, adopted objects and grants, and from its exec vat, reaches no `PresetCatalog`,
     `Inventory`, `Operator`, factory facet, `AgentHostAdmin`, `SecretsAdmin` or Secret admin.
-13. **Inventory** (P-52 mapping; W5.1 `m5-presets`): add, page, relabel, remove; a duplicate
-    label refused; a removed entry's methods refuse; `addAll` of 51 refused by the guard.
-14. **Export and import of presets** (M2 acceptance 14's presets; W5.1 `m5-presets`): user
+13. **Inventory** (P-52 mapping; W5.1 `m5-presets-inventory`, split from `m5-presets` by XC,
+    which held 334 s): add, page, relabel, remove; a duplicate label refused; a removed entry's
+    methods refuse; `addAll` of 51 refused by the guard.
+14. **Export and import of presets** (M2 acceptance 14's presets; W5.1 `m5-presets-inventory`): user
     presets come back with label, template, instructions, model defaults (backend by label) and
     without endowments (objects are not exported; journaled).
 15. **UI** (P-49, R6-40; W5.8 `test/browser/m5-*.mjs` on M3's `startBrowserGateway({ template,
@@ -878,7 +937,7 @@ before.
 | `mentions.turnStart` turn start with 32 attachments vs none | `mentions` (W5.7) | 60 s each | median <= +100 ms and <= 350 ms; <= 3 deliveries | M2's turn start budget; 32 handles add one larger frame |
 | `prompt.compose` | `creation-m5` (W5.9) | Node: compositions over 10 s; vat: creations over a 120 s window, the largest preset and `chat-only` alternating (pool 4) | Node <= 5 ms each; vat: creation <= `chat-only` + 150 ms and <= 750 ms | composition is one `join`; the creation budget is M1b's 750 ms with the pool |
 | `session.program` / `exec.program` bundle bytes; `session.createCold` | `creation-m5` (W5.9) | one build; cold creations over a 120 s window | <= the limits after O-1; cold <= 6 s | D-4's basis (10 us per byte); O-1 |
-| too-big probes (a) 100 KiB argument through the membrane, (b) 200 KB `help`, (c) 20,000-key answer, (f) exec body of 300 k iterations ok and 10 x the per-crank ceiling terminated (carried) | `exec-m5` (W5.5) | each capped: (a) 15 s, (b) 30 s, (c) 30 s, (f) 30 s | no halt of the session vat or the target's vat; the refusal texts | facts 2 and 4 |
+| too-big probes (a) 100 KiB argument through the membrane, (b) 200 KB `help`, (c) 20,000-key answer, (f) exec body of 300 k iterations ok and 10 x the per-crank ceiling terminated (carried) | `exec-m5` (W5.5) | each capped: (a) 15 s, (b) 30 s, (c) 30 s, (f) 30 s | no halt of the session vat or the target's vat; the refusal texts. As built (CC-027, D-M5-2): (b) may now end refused by the hub (not re-measured on the combination, J-10074) | facts 2 and 4 |
 | too-big probes (d) 8,193-byte `store`, 257th label, 33 attachments; (e) a granted schema with 3,000-unit parameters | `tools` (W5.3) | each capped at 30 s | as above | as above |
 
 Files and their worst time (windows + capped probes + template setup): `tools` 4 windows + 60 s
@@ -909,7 +968,7 @@ other lane's edit is the exact line named.
 | H-2 | `guest/factory/factory.js` (Operator) | M5 (W5.1); M4 none | the Operator exo's guard becomes `extendInterface(m2Interfaces.Operator, 'Operator', m5FactoryExtensions.Operator())` (= `m5FactoryInterfaces.Operator`); M5's methods are two lines `getPresets: () => catalog.facet()`, `getInventory: () => inventory.facet()` |
 | H-3 | `guest/factory/factory.js` (`buildSessionServices` call and the config fields) | M5 (W5.1); M4 none | one field in the call, `presetSnapshot: resolved.presetSnapshot`; the config's `preset:` line becomes `catalog.configSnapshot(resolved.presetSnapshot)`; one `fitsFrame` check before `make` |
 | H-4 | `guest/session/session.js` (Session guard) | M5 (W5.3); M4 none | the Session exo's guard becomes `extendInterface(m2Interfaces.Session, 'Session', m5Extensions.Session())` (= `m5Interfaces.Session`); M5's two methods forward to the runtime |
-| H-5 | `guest/session/tool-table.js` | M5 (W5.3, appends by W5.5, W5.6, W5.7); other lane none (`accountStatus` is an adapter tool with no table entry) | M5 appends `...objectToolEntries, ...inspectionToolEntries, ...packageToolEntries` to `toolTable` and adds the `toolSources` list; import lines appended after the existing ones |
+| H-5 | `guest/session/tool-table.js` | M5 (W5.3, appends by W5.5, W5.6, W5.7); other lane none (`accountStatus` is an adapter tool with no table entry) | M5 appends `...objectToolEntries, ...inspectionToolEntries, ...packageToolEntries` to `toolTable` and adds the `toolSources` list; import lines appended after the existing ones. As built (XC, J-10025): the file also holds `adapterToolEntries(ports, table)`, the generic entry that offers each port tool with a `description` and no static entry of its name (2.8 S1); `toolSetFor` takes them after the static table and before the dynamic sources. `accountStatus` still has no table entry of its own |
 | H-6 | `guest/lib/interfaces.js` | M5 (W5.3's first commit: the four `m5Widenings`); M4 changes one line (`BackendKind`, M4 H-1); M3 makes no edit | only the four `m5Widenings`, each replacing one shape builder or field: `TurnStarted` gains the optional `{ attachments }` bag; `RoundRequest`'s optional `system` becomes `M.or(staged(S.Text), list(staged(S.Text), 2))`; `PresetSnapshot` gains the optional fields; `SessionServices`' optional bag gains `endowments`. This commit and M4's H-1 may be merged early as contract follow-ups |
 | H-7 | `AH/composer.js` | M5 (W5.7); M3 none (the fourth argument is optional) | the guard switch to `m5Interfaces.Composer` and one branch in `submit` |
 | H-8 | `AH/providers/round.js` (`systemTextOf`) | M5 (W5.3); M4 calls `systemTextOf` from its `provider.js` and makes no edit | the function body only: an array is joined part by part with a blank line |
@@ -948,7 +1007,12 @@ frame bound for a worker is journaled (`pkg/src/core/durable-worker-transport.js
 is answered with an error ("message too large for the target vat"), an answer is replaced by that
 error, a `sendOnly` is dropped and counted in `status()`. Workaround if refused: D-M5-2 (the
 inspector) and D-M5-3 (the membrane), which protect the session vat and, partly, other vats; the
-exec vat still halts on a hostile answer (the scope is lost and stated).
+exec vat still halts on a hostile answer (the scope is lost and stated). **As built:** CC-027
+(J-10115..J-10118, J-10126): the hub refuses a frame toward a worker session over its ceiling
+(`THIXOTROPE_VAT_FRAME_BYTES`, core default 32,768; the harness sets 65,536 at a crank budget of
+at least 50 M); a call's answer and resolver break with `FRAME_TOO_LARGE`, a deliver-only frame is
+dropped and logged in the supervisor's log; the ceiling is an attach option, not persisted; not bounded: adapters, transient clients, the
+endpoint, peers and hub-made frames. Outcomes for M5: D-M5-2.
 
 **CC-071 Inbound record keys do not drain a vat's permanent name table.** Motivation: fact 4; a
 model can drip distinct keys into any vat whose object it holds (the membrane bounds each message,
@@ -971,7 +1035,7 @@ session cannot tell a hostile answer (`HeapExhausted` in decode) from a worker c
 
 | id | question | default |
 |---|---|---|
-| O-1 | The session program is 186,448 of 200,000 bytes at `3588cab190` (measured in W5.0) and the exec program 84,354 of 100,000; M5 adds about 25 KB to the session (labels, three tool modules, packages, grants, `interfaces-m5.js`) and about 12 KB to exec; M3 adds 0 bytes to either and M4 at most 64. Raise `sessionProgramBytes` to 240,000 and `execProgramBytes` to 120,000 (cold creation about +0.4 s at 10 us a byte; the pool hides it), or split `interfaces.js` per vat first? | raise: W5.9 measures the merged bundles and the PM raises the limits to 240,000 / 120,000 in the M5 merge commit, with the `session.createCold` row; no lane splits `interfaces.js` now. The owner can overrule before W5.9 |
+| O-1 | The session program is 186,448 of 200,000 bytes at `3588cab190` (measured in W5.0) and the exec program 84,354 of 100,000; M5 adds about 25 KB to the session (labels, three tool modules, packages, grants, `interfaces-m5.js`) and about 12 KB to exec; M3 adds 0 bytes to either and M4 at most 64. Raise `sessionProgramBytes` to 240,000 and `execProgramBytes` to 120,000 (cold creation about +0.4 s at 10 us a byte; the pool hides it), or split `interfaces.js` per vat first? | raise: W5.9 measures the merged bundles and the PM raises the limits to 240,000 / 120,000 in the M5 merge commit, with the `session.createCold` row; no lane splits `interfaces.js` now. The owner can overrule before W5.9. After the merge (X1, cross-lane): `interfaces.js` was split per vat program after all (`guest/lib/guards/`); session 236,583 -> 213,712, exec 105,414 -> 62,196. XC (adapter tools, grant label, membrane): session 214,690, exec 63,741 of the unchanged 240,000 / 120,000 limits. As built at the close of the cross-lane units (X-FIX J-10052, K1 J-10071): session 214,690 of 240,000, exec 63,826 of 120,000, factory 164,836 (limits as raised in the M5 merge; the per-vat split, not a lower limit, made the room) |
 | O-2 | Untrusted answers go through the exec vat (D-M5-2): a hostile object can reset the model's exec scope | yes |
 | O-3 | `store` and `remove` are kept (P-17) although Appendix F would drop them; values at most 8,192 bytes, 256 KB per session, 256 labels | as stated |
 | O-4 | Preset instructions at most 4,096 units (Fae 32,768) so one preset fits a frame | 4,096 |

@@ -221,7 +221,8 @@ test('through the bridge: extras service, its large call, the writer identity', 
   attach();
   await ready;
   const secret = 'f'.repeat(64);
-  // The operator hands out the writer as SecretsAdmin.openWriter() would.
+  // The operator hands out the context's writer (a stand-in object: the
+  // real gateway offers it in `GatewayPowers.extras`, A-11).
   const operator = Far('Operator', { openWriter: () => writer });
   const names = harnessNames({ log: () => {} });
   const bridge = makeBridge({

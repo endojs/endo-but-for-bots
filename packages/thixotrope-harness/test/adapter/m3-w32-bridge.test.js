@@ -18,7 +18,10 @@ import {
 } from '../../resources/agent-host/impl/gateway/contract-m3.js';
 import { makeBridge } from '../../resources/agent-host/impl/gateway/bridge.js';
 import { checkCall } from '../../resources/agent-host/impl/gateway/guard.js';
-import { makeBootstrapFactory } from '../../resources/agent-host/impl/gateway/powers.js';
+import {
+  makeBootstrapFactory,
+  markNeverLeaves,
+} from '../../resources/agent-host/impl/gateway/powers.js';
 import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary.js';
 import { makeClient } from './_m3-captp-client.js';
 
@@ -116,6 +119,10 @@ const makeWorld = () => {
   const content = Far('Content', { read: () => 'text' });
   const history = Far('History', { page: () => harden({ turns: [] }) });
   const extra = Far('FixtureService', { ping: () => 'pong' });
+  // A gateway object that never leaves the gateway (as GW/index.js marks
+  // the page's secret writer).
+  const confined = Far('GatewaySecretWriter', { publicKey: () => 'k' });
+  markNeverLeaves(confined);
   /** @type {string[]} */
   const limiterLog = [];
   /** @type {Set<string>} */
@@ -152,7 +159,10 @@ const makeWorld = () => {
     content,
     composer,
     history: () => history,
-    extras: [{ label: 'fixture', service: extra }],
+    extras: [
+      { label: 'fixture', service: extra },
+      { label: 'confined', service: confined },
+    ],
   });
   return {
     calls,
@@ -403,6 +413,37 @@ test('page objects and page promises are refused', async t => {
   t.is(world.calls.length, before);
   await E(session).rename('still open');
   t.deepEqual(world.calls.at(-1), ['rename', 'still open']);
+});
+
+test('X-FIX: a gateway object that never leaves is refused as an argument toward a vat; it still answers its own calls', async t => {
+  const world = makeWorld();
+  const pair = connect(world);
+  const powers = await signIn(pair);
+  const writer = powers.extras.find(
+    (/** @type {any} */ x) => x.label === 'confined',
+  )?.service;
+  t.truthy(writer);
+  const factory = await E(powers.operator).getFactory();
+  const { session } = (await E(factory).listSessions()).rows[0];
+  const before = world.calls.length;
+  await t.throwsAsync(() => E(session).rename(writer), {
+    message: gatewayTexts.gatewayObject,
+  });
+  await t.throwsAsync(() => E(session).rename(harden([{ title: writer }])), {
+    message: gatewayTexts.gatewayObject,
+  });
+  t.is(world.calls.length, before, 'nothing reached the vat stand-in');
+  t.deepEqual(
+    pair.logged
+      .filter(event => event.event === 'gateway-refused')
+      .map(event => event.rule),
+    ['gatewayObject', 'gatewayObject'],
+  );
+  // The object itself, and other gateway-local objects as arguments, pass.
+  t.is(await E(writer).publicKey(), 'k');
+  await E(powers.composer).submit(session, 'hi', 'request-2');
+  t.deepEqual(world.calls.at(-1), ['submit', 2, 'request-2']);
+  t.deepEqual(pair.closes, []);
 });
 
 test('unknown targets and slots are refused; the connection stays open', async t => {
@@ -661,4 +702,83 @@ test('M3-FIX: checkCall refuses encoded symbols and unknown names', t => {
   );
   t.is(call([null, []]), gatewayTexts.unknownMethod, 'no function call');
   t.is(call(['renameX']), gatewayTexts.unknownMethod, 'no property get');
+});
+
+test('answers: past answersPerConnection the oldest settled are forgotten; the page stays open', async t => {
+  const world = makeWorld();
+  const bound = 8;
+  const pair = connect(world, { limits: { answersPerConnection: bound } });
+  const powers = await signIn(pair);
+  const factory = await E(powers.operator).getFactory();
+  const session = await E(factory).findSession('s1');
+  const calls = 60;
+  for (let i = 0; i < calls; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(session).getInfo();
+    t.true(pair.connection.stats().answers <= bound, `call ${i}`);
+  }
+  const stats = pair.connection.stats();
+  t.deepEqual(pair.closes, [], 'a long-lived page is not closed');
+  t.true(stats.answersPeak <= bound);
+  t.true(stats.answersEvicted > 0, 'old settled answers were forgotten');
+  // The connection still works, and captp released the forgotten answers
+  // (a dispatched CTP_DROP each): a pipelined call on a fresh question works.
+  t.is((await E(E(factory).findSession('s1')).getInfo()).title, 'New chat');
+  pair.client.close();
+  await tick();
+  const closed = pair.logged.find(e => e.event === 'gateway-connection-closed');
+  t.is(closed?.answersPeak, stats.answersPeak);
+  t.true(Number(closed?.answersEvicted) >= stats.answersEvicted);
+});
+
+test('answers: a pipelined call on a forgotten answer is refused, not dispatched', async t => {
+  const world = makeWorld();
+  const pair = connect(world, { limits: { answersPerConnection: 4 } });
+  await signIn(pair);
+  // q-1 is the bootstrap, q-2 the fetch: both settled and forgotten by now
+  // once enough fresh questions arrive.
+  for (let i = 0; i < 6; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await E(pair.client.bootstrap()).fetch(SECRET);
+  }
+  t.true(pair.connection.stats().answersEvicted > 0);
+  pair.sendFrame(
+    Buffer.from(
+      JSON.stringify({
+        type: 'CTP_CALL',
+        epoch: 0,
+        questionID: 'q-900',
+        target: 'q-2',
+        method: { body: JSON.stringify(['fetch', [SECRET]]), slots: [] },
+      }),
+      'utf8',
+    ),
+  );
+  await tick();
+  await tick();
+  const answer = pair.received.find(m => m.answerID === 'q-900');
+  t.truthy(answer?.exception, 'answered with a refusal');
+  t.deepEqual(pair.closes, []);
+});
+
+test('answers: when every kept answer is unsettled the connection is closed', async t => {
+  const world = makeWorld();
+  const pair = connect(world, { limits: { answersPerConnection: 4 } });
+  const powers = await signIn(pair);
+  const factory = await E(powers.operator).getFactory();
+  const session = await E(factory).findSession('s1');
+  // Each hang stays unanswered; the settled answers go first.
+  for (let i = 0; i < 6; i += 1)
+    void E(session)
+      .hang()
+      .catch(() => {});
+  for (let i = 0; i < 10 && pair.closes.length === 0; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await tick();
+  }
+  t.deepEqual(
+    pair.closes.map(c => c.code),
+    [closeCodes.tooManyObjects],
+  );
+  for (const release of world.hanging) release();
 });

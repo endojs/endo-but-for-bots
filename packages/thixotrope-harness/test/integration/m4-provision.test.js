@@ -13,8 +13,10 @@
  *   `makePool` again answers a Backend that works, and `listPools` shows
  *   one pool of that label.
  *
- * The step is called directly from `provisionSteps` (`makeProvision` does
- * not pass `subscriptions` options yet: a PM change, see the W4.6 report).
+ * Provisioning runs through `makeProvision({ subscriptions })` (XB), the
+ * template helper's runner: every registered step in order, the M1a, M3
+ * and M5 steps skipped on the provisioned state, and the `subscriptions`
+ * step (`scripts/provision-steps/40-subscriptions.js`) given the options.
  *
  *   corepack yarn test:integration test/integration/m4-provision.test.js
  */
@@ -28,6 +30,7 @@ import { E } from '@endo/far';
 import { m4Texts } from '../../guest/lib/texts-m4.js';
 /* eslint-enable import/no-relative-packages */
 import { emit } from '../../perf/_harness.mjs';
+import { makeProvision } from '../../scripts/provision-steps.js';
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
 import { startFakeSubscriptionServer } from '../fixtures/fake-subscription-server.mjs';
 import {
@@ -40,7 +43,6 @@ import {
   openSession,
   runTurn,
   startM4,
-  subscriptionsStep,
   tokenOf,
 } from './_m4.js';
 
@@ -89,17 +91,23 @@ run(
         },
       ],
     };
-    const step = subscriptionsStep();
-    const first = await step.run({
-      client: m4.state.client,
-      options: /** @type {any} */ (options),
-    });
-    t.false(first.skipped);
-    const second = await step.run({
-      client: m4.state.client,
-      options: /** @type {any} */ (options),
-    });
-    t.true(second.skipped, 'the second run changes nothing');
+    const context = { client: m4.state.client, connect: m4.state.connect };
+    /** The `subscriptions` step's report of one `makeProvision` run. */
+    const provisionOnce = async () => {
+      const reports = await makeProvision(options)(context);
+      const report = reports.find(r => r.name === 'subscriptions');
+      if (report === undefined) throw Error('no subscriptions step ran');
+      return { reports, report };
+    };
+    const first = await provisionOnce();
+    t.false(first.report.skipped);
+    t.deepEqual(
+      first.reports.filter(r => !r.skipped).map(r => r.name),
+      ['subscriptions'],
+      'only the subscriptions step changes the provisioned state',
+    );
+    const second = await provisionOnce();
+    t.true(second.report.skipped, 'the second run changes nothing');
     const pools = await listPools(m4);
     t.is(pools.length, 1);
     const backends = await E(m4.slice.factory).listBackends();
@@ -139,9 +147,7 @@ run(
     // R8-38: a revoked Secret is not rewritten by provisioning.
     await E(one.secret).revoke();
     const revokedBefore = await E(one.secret).describe();
-    await step
-      .run({ client: m4.state.client, options: /** @type {any} */ (options) })
-      .catch(() => undefined);
+    await provisionOnce().catch(() => undefined);
     const revokedAfter = await E(one.secret).describe();
     t.is(revokedAfter.state, 'revoked');
     t.is(revokedAfter.generation, revokedBefore.generation);

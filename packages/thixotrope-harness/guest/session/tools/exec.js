@@ -23,7 +23,7 @@
  * scope per session, taken once), and its calls are settled by the same
  * cancel and recovery hooks, by turn.
  */
-import { execDescription, texts, textOf } from '../../lib/interfaces.js';
+import { execDescription, texts, textOf } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { isRetiredBreak } from '../../lib/retired.js';
 import { fieldBytes, isStaged } from '../staging.js';

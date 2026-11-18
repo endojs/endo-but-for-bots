@@ -51,7 +51,7 @@
  * Data-keyed state lives in `Map`s (rule 12.10); records and events use the
  * closed shapes of `guest/lib/interfaces.js`.
  */
-import { m1bInterfaces, shapes, texts, textOf } from '../lib/interfaces.js';
+import { interfaces, shapes, texts, textOf } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { runAgenticTurn } from '../lib/turn-engine.js';
 import { checkSubmission } from '../lib/pending-queue.js';
@@ -1001,7 +1001,7 @@ export const makeTurnRunner = ({
    */
   const makeSink = defineExoClass(
     'TurnSink',
-    m1bInterfaces.TurnSink,
+    interfaces.TurnSink,
     (/** @type {ActiveTurn} */ active) => ({ active }),
     {
       /** @param {number} round */
@@ -1459,7 +1459,7 @@ export const makeTurnRunner = ({
    */
   const makeTurn = defineExoClass(
     'Turn',
-    m1bInterfaces.Turn,
+    interfaces.Turn,
     (/** @type {TurnInfo} */ info) => ({ info }),
     {
       /** @param {string} [cursor] W1b.1: the turn's records in full */

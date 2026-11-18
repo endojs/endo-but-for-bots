@@ -11672,6 +11672,667 @@ Fit: good for code (guards make a cross-lane mismatch a refused call in a unit t
 size: each lane fits its own program budget, but the session program's margin after all three is
 1.4 %, and only a merge shows it.
 
+### J-9940 2026-11-18 X1 which interface entries each vat program reads - measure
+Evidence: a scratch script parsed `guest/lib/interfaces.js` (Babel, the parser
+compartment-mapper uses) into 397 entries (each builder, method guard table entry, method list,
+fixed text and helper) with their references, then read every module each program bundles
+(`bundleGuest(...).modules`) for the table members it reads, and closed over the references.
+Of about 46.1 KB of entry text (comments and indentation stripped): session 161 entries,
+18.8 KB; exec 31, 3.0 KB; factory 104, 13.5 KB; the stand-in session 48, 6.0 KB; the manager's
+`durable*.js` 59, 6.7 KB; 17.8 KB is read by no vat program (adapter texts, Node-only guards).
+One dynamic read: `session/records.js` `shapes[name]`, by a fixed map of the eight turn record
+kinds. 18 builders were dead: 14 M1a interface builders and 4 M1b ones that a later version
+replaces in every table.
+Fit: good: the vat programs read a small, statically visible part of the contract; only one
+computed read, bounded by a fixed map.
+
+### J-9941 2026-11-18 X1 guard modules chained by program - built
+Evidence: `guest/lib/guards/base.js` (exec's entries and the helpers) < `guards/session.js` <
+`guards/factory.js` (with the stand-in session) < `guest/lib/interfaces.js` (the rest, the full
+tables for Node-side code, tests and the gateway vocabulary). Each entry lives in the module of
+the lowest program that reads it, its text moved unchanged by a generator (comments kept);
+`lazyTable(builders, below)` answers the table below through getters, so every module's
+`shapes`, `interfaces`, `methodNames`, `texts` and `textOf` hold the same objects as the full
+tables. 37 guest modules now import their program's module (exec 4 to `base`, session 20 with
+`interfaces-m5.js` to `session`, factory 13 with `interfaces-m5-factory.js` and
+`session/prompt.js` to `factory`); `interfaces-m4.js` and the manager's modules keep importing
+`interfaces.js`. Stripped module text: `base` 4.3 KB, `session` 17.4, `factory` 7.3,
+`interfaces.js` 21.7 (Node only), against 46.9 KB before. The directory is `guards/`, not
+`interfaces-*.js`: the gateway vocabulary loads every `interfaces-m*.js` by name.
+Fit: fair: a chain fits because the programs' needs nest (exec < session < factory) once shared
+library modules import the lowest module; a program that came to need an entry held higher
+must move the entry down, which `guards-split.test.js` reports.
+
+### J-9942 2026-11-18 X1 the M2 fold - built
+Evidence: m2-interfaces.md 1.3 / W2.9 (J-9414): `interfaces.X` and `methodNames.X` of the ten
+interfaces M2 extends are now the M2 versions; `m2Interfaces`, `m2MethodNames`, `m1bShapes`,
+`m1bInterfaces` stay as views (the same objects), `m1bMethodNames` keeps M1b's lists. Guest
+code reads `interfaces` / `shapes` / `methodNames` instead of the views (about 18 reads in 11 files).
+The stand-in session (`guest/factory/standin-session.js`) gained `findTurn` (throws its existing
+"no turns" text) and refusing `blobPage`, `deleteSelf`, `exportState`, `importState`; the root
+already used the M2 guard, so only its comments changed (and the stale 200,000 budget comment).
+Tests adapted as the M1b fold's were (J-0400): stub exos in `m1a-interfaces`, `m1a-queue`,
+`m1b-interfaces` implement the methods a folded guard names; two `m2-interfaces` assertions
+compare with the lists before M2 instead of `methodNames`; one new test checks the fold.
+Fit: good: the fold needed stubs in one guest exo; nothing in the adapter or the gateway made an
+exo from a pre-M2 guard.
+
+### J-9943 2026-11-18 X1 no behaviour change: guards against a snapshot - verify
+Evidence: `test/unit/_guard-snapshot.js` gives a SHA-256 per entry of a canonical form (records in
+key order, so a method order change shows; text functions by source) of every table of
+`interfaces.js`, `interfaces-m3/m4/m5/m5-factory.js`, the whole exports and
+`withGatewayAdmin(...)`, plus the gateway's `harnessNames` sets. The snapshot of `bd9a8ec070` is
+committed first (`test/fixtures/guard-snapshot-before-x1.json`, 493 entries, 258 keys, 140
+methods). After: all 493 equal, 24 of them through the fold mapping (`interfaces` 10,
+`m1bInterfaces` 4, `methodNames` 10 to the old M2 versions); key set 258 and method set 140
+identical, no file skipped; `interfaces.js` export list identical. `guards-split.test.js` also
+checks each guard module answers the same objects as `interfaces.js`, that every name a guest
+module reads from a guard table is in it (over 100 reads), and that no program bundles
+`lib/interfaces.js`.
+Fit: good: digests of a canonical form make a 63 KB fixture that proves equality of a 91 KB
+module's every guard without keeping a copy of it.
+
+### J-9944 2026-11-18 X1 guest program sizes - measure
+Evidence: `node scripts/bundle-guest.mjs`: session 236,583 -> 213,712 bytes (budget 240,000;
+26,288 left, target 215,000 met), exec 105,414 -> 62,196 (120,000; target 90,000 met), factory
+178,390 -> 164,810. Modules: session 37 -> 38 (`base` + `session` replace `interfaces.js`),
+exec 9, factory 28. Per module (stripped text, approximate): before `interfaces.js` 46.9 KB in
+all three; after, session carries `base` 4.3 + `session` 17.4, exec `base` 4.3, factory all
+three (29.0). Limits unchanged; the limits comments and the README bundle-guest row give the new
+sizes. A later comment-only edit of the guard modules left all three digests unchanged
+(`stripComments` keeps line breaks).
+Fit: good: the per-vat split met both targets with no behaviour change; the next session cut
+would be `session/turn.js` (29.6 KB) or the per-module wrapper (about 1.2 KB a module).
+
+### J-10000 2026-11-18 X1 unit and adapter lanes - test
+Evidence: `corepack yarn test` at the split: 1,220 passed, 2 failed, 109 skipped (68 s wall,
+load 2.4-2.9); the two (`run-lock` abandoned locks, `run-lock-slots` two CLI slots) are timing
+tests and pass on a rerun alone (35 passed). A first run before the test adaptations took 175 s
+under load and also timed out in `m1a-agent-host` (2,000 keys), `m1b-blobs-provider` (2) and
+`m4-renewal`; all pass alone (67 passed). Package `tsc --incremental false` exit 0; eslint 0
+errors on the guest tree and the changed tests; prettier clean.
+Fit: neutral: the lanes are sensitive to load; the X1 changes add 6 tests.
+
+### J-10001 2026-11-18 X1 daemon files in shared slots - test
+Evidence: `corepack yarn test:integration --jobs 6` (templates rebuilt for the new bundles),
+307.9 s wall, load 3.1-4.5. Held: `m1a-slice` 307.6 s (6 pass), `m2-queue` 171.9 s (2 pass,
+waited 121.4 s), `m4-pools` 179.5 s (1, waited 60.6 s), `m5-objects` 243.1 s (1),
+`m5-snapshot` 206.6 s (1; template 120.9 s), `m3-gateway` 120.8 s FAIL (ava timeout with all
+6 tests pending in setup while five files built templates). `m3-gateway` alone right after:
+119.8 s, 6 pass. `m1a.slice.createCold` 14,391 ms under that load (not comparable to a perf row).
+Fit: poor: a guest change rebuilds every template at once, and a file whose setup waits on
+another's build can hit its own test timeout; one file per slot after a guest change would avoid
+it.
+
+### J-10002 2026-11-18 X1 what the split asks of later units - fit
+Evidence: a guest module now imports `guards/<its lowest program>.js`; reading an entry held
+in a higher module fails `guards-split.test.js` (name not in the table), and the fix is to move
+the entry's text down the chain. New contract entries go in the module of the program that
+reads them, or in `interfaces.js` when no vat does. The `m3`/`m4`/`m5` contract files are
+untouched; `interfaces-m5.js` imports `guards/session.js`, `interfaces-m5-factory.js`
+`guards/factory.js`.
+Fit: fair: one more decision per new entry (where it lives), checked by a unit test rather than
+by a bundle that silently grows.
+
+### J-10003 2026-11-18 X1 contract text not updated - deviation
+Evidence: the fold is a contract change (`contract(...)` commit `cfa5802d1e`), but the unit's
+files did not include the designs: `m2-interfaces.md` 1.1, 1.3, the file table (`interfaces.js`
+row) and 16 still describe `m2Interfaces` as the M2 versions to switch to; `m5-interfaces.md`
+O-1 still says no lane splits `interfaces.js`. README had no bundle rows; the size went into the
+`bundle-guest.mjs` row.
+Decision: for the PM (forPM).
+
+### J-10004 2026-11-18 X1 time record - verified
+Evidence: first command 12:51:41Z, last 13:23:00Z (journal commit; the final date follows it); over 60 s: the unit and adapter
+lane 175 s (first run, loaded) and 68 s, the integration batch 307.9 s wall, `m3-gateway` alone
+119.9 s.
+Fit: neutral.
+
+### J-10015 2026-11-18 XB retirement reaches the adapter by a push - build
+Evidence: commit `891c4463fc`. `CredentialOps` gains `poolsChanged()` (sendOnly, no argument;
+`interfaces-m4.js` guard and `m4MethodNames`). The manager's `retirePool` and `PoolMember.retire`
+record the retirement first and then send it through `withCredentialOps` without waiting (a
+failure is ignored); with the incarnation's `CredentialOps` already fetched the push leaves in
+the retirement's crank, else after one `ops.credentials()` answer. The adapter
+(`subscriptions/index.js`) calls `bridge.invalidate()` on every pool it loaded; the bridge
+(`pool-state.js`) marks the held answer stale, also one still being asked (it may predate the
+push) and keeps it stale after a failed re-ask; a retired pool's answer stays final. The guard
+snapshot fixture of X1 is updated for the two CredentialOps entries and `poolsChanged` in the
+gateway method set (no other entry changed). New tests: manager unit (one push per retirement,
+none on a repeat, one `credentials()` per ops facet, an undeliverable push does not fail the
+retirement), bridge adapter test (invalidate before, during and after an ask, refresh 0), pool
+provider adapter test (no ask without a push; after the push the retired member is skipped, the
+retired pool fails with `m4Texts.retired` and sends nothing; a later push asks nothing).
+Fit: good: one sendOnly from the system of record, and the adapter's cache stays a cache.
+
+### J-10016 2026-11-18 XB poolStateRefreshMs 30 s -> 600 s - decision
+Evidence: `config/defaults-m4.js` and the bridge default. With the push the periodic re-read is
+only a safety net for a lost push (an adapter between incarnations loads afresh anyway). 600 s is
+twice the default `cacheLifetimeMs`; it costs at most one manager crank per used pool per 10
+minutes (0.1 per 60 s) instead of up to two per pool per 60 s at 30 s, so
+`subscriptions.servedWrites` (<= 1 manager delivery per session per 60 s) is back to the served
+stamps alone. Not measured: `perf/subscriptions.perf.mjs` was not run (no exclusive mode in this
+unit); J-9645's servedWrites miss (2 frames per 60.4 s, one a GC frame) predates the 30 s
+re-read and is a frame-versus-delivery counting question, not changed here.
+Fit: neutral.
+
+### J-10017 2026-11-18 XB catalogue copies removed; ProviderFailure.errorType - build
+Evidence: commit `2fda3d801f`. `providers/catalog.js` exports `pageOf` (module level now, with an
+`efforts` option that pool rows use; M2 rows unchanged: `reasoningEfforts: []`, no default
+effort), `readJson`, `boundedJson`, `tokenCount` and `byTitleThenId`; `subscriptions/catalog.js`
+drops its copies and reads members through `readJson` with its own body bound (8 MiB) and the
+catalogue read timeout. The two files: 183 insertions, 348 deletions (net -165). `anthropicAttempt`
+puts an `error` event's validated type on `ProviderFailure.errorType` (`''` when none); the Claude
+pool's wire (`messages.js`) tests `errorType === 'overloaded_error'` instead of comparing
+`textOf.anthropicApiError(...)` texts. New adapter test: the API client names the type, the pool
+reads overload only from `overloaded_error`, an `invalid_request_error` event is not an overload,
+a 503 has no type. M2 and M4 catalogue and provider adapter tests pass unchanged.
+Fit: good: a symbolic field where a fixed text was being parsed.
+
+### J-10018 2026-11-18 XB acceptance 13 (two-part system), 16 (makeProvision), 17 (retire) - verified
+Evidence: commit `9e6c6b1a26`. `m4-catalog`: a turn with one attachment on the Claude pool sends
+`system` = [billing block, `<stored prompt>\n\n<R4-29 line>`], on the Codex pool `instructions`
+= the same join; the next plain turn sends the stored prompt alone (exact string compares; the
+line is `mentionLine(1, ['notes'])`). `m4-provision`: the step runs through
+`makeProvision({ subscriptions })`; the first run changes only `subscriptions`, the second skips
+it; R8-31, R8-38 and K-1 as before. New `m4-retire`: the member that served (sticky) is retired
+and the next turn, submitted at once, is served by the other member; the pool is retired and the
+next turn fails with `m4Texts.retired`, nothing sent. Measured (shared slots, load about 3.3):
+retire answered in 55 ms, the next turn 633 ms; retirePool 266 ms, the failing turn 576 ms. The
+member retirement was the incarnation's first CredentialOps use (the push waited for one
+`credentials()` answer) and still won the race to the next turn; the window is not closed by
+construction (D-M4-10).
+Held: m4-retire 140.7 s, m4-catalog 154.5 s, m4-provision 170.2 s (3 at once, 170.3 s wall).
+Fit: good.
+
+### J-10019 2026-11-18 XB every M4 integration file on the merged tree - measure
+Evidence: at `9e6c6b1a26` plus another unit's uncommitted Secrets-writer work in the shared
+worktree (the template ids hash the working tree, so it was in the daemon), shared slots, 3 jobs,
+load 2.9-3.8: m4-reachability 87.2 s, m4-accounts 92.3, m4-pools 101.1, m4-renewal 104.7,
+m4-restart-renewal 119.7, m4-secrets 104.7, m4-restart 207.3, m4-wire 143.5; 8 files 355.5 s
+wall, all pass. With J-10018 all eleven M4 integration files pass; none near 5 minutes. The m4
+template was rebuilt once in the first batch (manager and guest/lib sources changed).
+Fit: neutral.
+
+### J-10020 2026-11-18 XB unit, adapter, typecheck, bundles - verified
+Evidence: M4 unit and adapter files with the M2 catalogue and Anthropic tests and
+`guards-split`: 226 passed (before the unit: 184 in the M4 files alone). `tsc`: 0 errors.
+eslint: 0 errors on every changed file (warnings as before). Bundles (`node
+scripts/bundle-guest.mjs`), before and after: session 213,712, exec 62,196, factory 164,810,
+unchanged: no vat program imports `interfaces-m4.js`; the manager (`durable.js`, installed
+natively) carries the change and its size is not measured.
+Fit: neutral.
+
+### J-10021 2026-11-18 XB time record - verified
+Evidence: first command 13:23:35Z. Over 60 s: integration batch 1 (3 files) 170.3 s wall,
+batch 2 (8 files) 355.5 s wall. Unit runs 4-10 s, `tsc` 6 s.
+Fit: neutral.
+
+### J-10005 2026-11-18 XA SecretWriter.replace takes a SealedBox only; the gateway writes in process - build
+Evidence: commits a0f4bba9a8, a3e8bba8f9 (tests), 81fc8a96a2 (contract m2-interfaces 9.2, m3-interfaces
+A-11); `AH/secrets/writer.js`, `AH/secrets/manager.js`, `AH/index.js` (secretWriter lines),
+`GW/index.js`, `GW/extensions.js`, `GW/contract-m3.js`, `GW/extensions/m4-secrets.js`,
+`UI/src/secrets/daemon.js`, `guest/lib/interfaces.js` (`SecretWriter`).
+Reading: closes the open M2 major (M2-R1 (b), J-9486). The hub-reachable `SecretWriter` guard is
+now `replace(R('Secret'), S.SealedBox, count?)`: a plain string is refused by the exo guard before
+the method runs. `makeSecretsOps` gains `replaceLocal(secret, value | SealedBox, expected?)` and
+`publicKeyLocal()`, plain functions no remotable and no ops handler exposes. `AH/index.js` hands the
+gateway `{ replaceLocal, publicKey }`; `GW/index.js` makes one gateway-local `GatewaySecretWriter`
+exo per incarnation (guard `localWriterGuard` in `AH/secrets/writer.js`: plain value or box),
+offers it first in every page's `GatewayPowers.extras` under `secretWriterLabel` and answers it from
+`GatewayContext.secretWriter()`, so the m4-secrets `LargeCall` target is the object a page calls.
+The UI's Secrets panel takes its writer from the extras, not from `openWriter()`. Before the attach
+the writer's methods reject `notAttachedText`. Tests that sent plain values through the hub seal
+first (`_m2-secrets.js` `replaceSealed`: m2-catalog, m2-providers, m3-sessions; adapter m2-w23-secrets,
+m2-w23-manager). New adapter file `m2-secret-writer-paths.test.js` (3 tests): guard refusal leaves
+generation 0 and only the create events in the audit; `replaceLocal` with plain and boxed values and
+the generation check; a real gateway on loopback with a Node CapTP page: refused before attach, plain
+write in process, 200 KiB value through the LargeCall, the hub writer refused, no value in any log line.
+Bundles (`node scripts/bundle-guest.mjs`) before and after: session 213,712, exec 62,196, factory
+164,810, unchanged (no vat program bundles `interfaces.js`; the manager's `durable.js` carries the
+guard change, size not measured).
+Fit: good: the decision fits the rule "vats decide, Node adapters are the data path"; the page
+had full operator authority before (it could open the writer), so the built-in extra adds none.
+
+### J-10006 2026-11-18 XA acceptance 7 proves both write paths through the daemon - verified
+Evidence: `test/integration/m2-secrets.test.js` at `00274da6a6`, shared slot, load 3.5-3.7: exit 0,
+held 137.0 s (waited 31.0 s). A hub client's `E(writer).replace(other, plain)` is refused with the
+guard's text (`SecretWriter ... Must be a copyRecord`), `other` stays at generation 0. A page
+(serveGateway + Node CapTP client over a real WebSocket) creates a Secret through the operator's
+`SecretsAdmin` and writes a plain value through the extras writer (generation 1). After the clean
+stop the grep read 49 files, 224,870,916 bytes (control found as utf8 and utf16be): 0 hits for the
+two sealed values and the page's value. `m2.secrets.plainValue` (the refused plain value's text,
+which the hub carried in the request): hits [] .
+Fit: good.
+
+### J-10007 2026-11-18 XA Secret.setDescription is an audit event - build
+Evidence: commit 7e98649106 (`AH/secrets/store.js`, `test/adapter/m4-secrets-full.test.js`, guard
+snapshot), the `AuditEvent` op in a0f4bba9a8; J-9662 item 9.
+Reading: `store.setDescription` runs through `audited(...)`: `attempted`, then `succeeded` or
+`failed` with `INVALID_DESCRIPTION` / `UNKNOWN_SECRET`; the event carries the label, never the text.
+`shapes.AuditEvent.op` admits `'setDescription'` (otherwise the manager vat's `Secret.audit` and the
+M4 AuditReader return guards would refuse a page holding one). The X1 guard snapshot re-baselined
+exactly the nine entries that embed it or the writer guard (`shapes.AuditEvent`, `AuditPage`,
+`interfaces.SecretsAdmin`, `Secret`, `SecretWriter`, `m4Shapes.AuditReaderPage`,
+`m4Interfaces.SecretsAdmin`, `Secret`, `AuditReader`); vocabulary unchanged. The test now asserts
+the ten events of five calls, none containing the text, kept across a reopen.
+Fit: good. The ReadGrant stale-description half of item 9 is not in this unit.
+
+### J-10008 2026-11-18 XA the bridge's answer table is bounded; measured in the 60 s windows - measure
+Evidence: commit 00274da6a6 (`GW/bridge.js`, `contract-m3.js` `answersPerConnection` 4,096,
+`test/adapter/m3-w32-bridge.test.js` 3 new tests, `_m3-captp-client.js` held-question count,
+`perf/gateway.perf.mjs`); run `node scripts/run-lock.mjs --shared --label perf-gateway-xa -- node
+perf/gateway.perf.mjs` at `45c705f174`, under load (load average 2.6-5.0), held 332.5 s, exit 1.
+Reading: past the bound the oldest settled answer is forgotten on both sides (the bridge dispatches
+the page's own `CTP_DROP q-n` to its captp, which frees captp's answer and payload); a call
+pipelined on it is refused `notSignedIn`; only a table of unsettled answers closes (4008). Per
+window, the questions a client held at once (asked, not yet dropped; an upper bound of the
+gateway's table): ui.call 984 (1,372 calls), ui.submit 1,697 (355 samples, 3 calls each), ui.deltaFanout
+1,746 on the main page and about 300 on each of the 4 others; bound 4,096, `boundHit` false in
+every window. Server side (`gateway-connection-closed`): the main page answersPeak 1,746,
+answersEvicted 0; 11,499 fetch connections peak 2; the probes connection (closed by its 4,097-export
+probe, 4008) peaked at 4,096 with 12 evicted. Rows (under load): gateway.fetch median 0.73 ms,
+gateway.guard 0.122 ms, ui.call 29.1 ms, ui.submit 66.1 ms, ui.deltaFanout median 1 ms; exit 1 is
+the carried miss ui.deltaFanout 0.01 deliveries per delta (budget 0), not this unit.
+Fit: poor margin: a Node client with `gcImports` drops its questions only when V8 collects them, so
+a busy page holds about 1,000 questions a minute; 1,746 after three windows is 43 % of the bound.
+A page running longer than about 4 busy minutes without a major GC will see evictions (it stays open;
+only pipelining on an old answer is refused). A browser's GC cadence is not measured.
+
+### J-10009 2026-11-18 XA integration, adapter and unit lanes on the change - verified
+Evidence: shared slots, `THIX_AGENT=XA`. Integration: m2-secrets 137.0 s held; batch of 5 at once
+(320.8 s wall): m3-gateway 207.4 s held (waited 113.3), m3-sessions 196.2 (waited 101.6),
+m4-secrets 116.2, m2-catalog 116.6, m2-providers 110.1; all exit 0. Adapter and unit files of the
+gateway, secrets and interfaces (m3-w31-*, m3-w32-*, m4-gateway-extension, m2-w23-*, m2-w29-ops-guard,
+m4-secrets-full, m4-login, m2-secret-writer-paths, m5-gateway-vocabulary, m4-ui-secrets,
+m2/m4-interfaces, guards-split, m3-w33-gateway-admin): 155 passed. Whole `corepack yarn test`
+(68 s): 1 failure, `run-lock` "in-process takers racing" under load; alone 17 of 17 pass (the
+X1-reported load flake). `tsc` 0; eslint 0 errors on the changed files.
+Fit: neutral.
+
+### J-10010 2026-11-18 XA what is left for the contract and the next units - fit
+Evidence: J-10005..J-10008.
+Reading: (1) the guard's refusal text is the pattern library's and quotes the refused plain string
+back to the hub caller (the hub already carried it in the request; the grep found it nowhere in the
+state). (2) Contract rows outside this unit's sections still describe the old writer: m2-interfaces
+section 3 row `SecretWriter.replace(secret, value | SealedBox ...)` and the section 12 rows of
+`writer.js` / `manager.js`; m3-interfaces 6.1 (`GatewayContext.secretWriter()` "the same object a
+page gets from openWriter"), the section 6 M4 row, W3.7 row, H4 seam text and acceptance 16. (3)
+Browser tests (`test/browser/m4-*.mjs`) were not run: the Secrets panel now needs the gateway's
+extras writer (it is there in every gateway since this unit).
+Fit: neutral.
+
+### J-10011 2026-11-18 XA time record - verified
+Evidence: first command 13:23:35Z. Over 60 s: m2-secrets integration 168.4 s wall; integration
+batch of 5, 321.4 s wall; perf gateway (shared) 332.5 s held; unit lane 68.1 s. Unit and adapter
+subsets 3-10 s; `tsc` 2 s; eslint 5-9 s.
+Fit: neutral.
+
+### J-10025 2026-11-18 XC adapter tools offered to the model (D-M4-9 as amended) - build
+Evidence: XC on claude/thix-int, commit 4212f9aff4. `toolSetFor` now takes, after the static table
+and before the dynamic sources, one generic entry per port tool whose `AdapterToolEntry` carries a
+`description` naming it and whose name no static entry has (`adapterToolEntries`, `site:
+'adapter'`, execute sends `{ opId, args }` to that port's tool object; one entry per port record,
+cached in a WeakMap while the ports live). `AdapterToolEntry` gains the optional `description:
+ToolDescription`; the agent host's `open` passes the `adapterTools` row's description; the
+accountStatus row carries `accountStatusDescription`. Static entries are never shadowed (a port
+`exec` with a description is not offered; `echo` keeps its static description) and a granted tool
+named like an offered adapter tool stays `refused-builtin`. Unit: `m5-xc-tools` (5 tests). Seven
+guard snapshot entries re-baselined: shapes.AdapterToolEntry, shapes.TurnPorts,
+m2Interfaces.Backend, m4Interfaces.PoolBackend (the description) and m5Shapes.ToolGrantInfo,
+m5Interfaces.SessionGrants, m5Interfaces.ToolGrant (the label, J-10026).
+Fit: good: a description that travels with the tool object is all the session needs; no M4 code in
+the vat.
+
+### J-10026 2026-11-18 XC ToolGrantInfo.label and the preset list order - build
+Evidence: commits 4212f9aff4, e8195a5401. The grants part's `grant(tool, source, label?)` keeps
+adoptTool's `toolName` and shows it as `ToolGrantInfo.label` (optional `shapes.Label`); an operator
+grant has none (contract 2.6). Presets `list()` keeps `chat-only` first as built; the contract text
+(2.1) and the presets.js header now say so (PM ruling b).
+Fit: neutral.
+
+### J-10027 2026-11-18 XC the exec membrane: tags kept, no model-made object leaves - fix
+Evidence: commit 46164df52e. (1) A tagged value lost its tag both ways: `measureArguments` and
+`wrapAnswer` rebuilt it from `Object.keys`, so a CopySet became a plain `{ payload }`. Both now
+rebuild it with the same tag (own `Symbol.for('passStyle')` and `Symbol.toStringTag` data
+properties; payload measured or wrapped). (2) What a model-made object could receive: model code has
+no `Far`, but builds a remotable by hand (`Symbol.for('passStyle')` is a shared intrinsic; shown in
+`m5-w54-exec`). Before, the membrane passed such an object to another vat as is; that vat could
+call it after the exec call ended (model code outliving its call, rule 12.13) and hand it raw
+presences, which reached model code unwrapped. Now a message to a wrapper may carry data and this
+call's wrappers only: an ended call's wrapper is refused with `powersExpired`, any other remotable
+with `MODEL_OBJECT_TEXT`, before anything is sent. Both new tests fail on the old membrane and pass
+on the new. (3) Residual, pinned by a test and left for the PM: `powers.store` (powers.js, not this
+unit's file) passes any remotable to the session; `lookup` in a later call answers it as a wrapper
+of itself, which can then leave; the inspector also calls it outside a call. One check in `store`
+closes it.
+Fit: poor for the old contract text ("other objects made in this vat pass as they are"): a vat
+cannot tell its own remotables from presences, so the rule has to be "only this call's wrappers
+leave".
+
+### J-10028 2026-11-18 XC M4 acceptance 7's model part and K5's second kill point - test
+Evidence: commits dc82cc2950, d467cfa893, d1aaffe7c4, d907ea0e35. `m4-accounts`: the first request
+offers `accountStatus`, the fake server answers a tool call, and the next request carries one
+`tool_result` (found by the wire's call id: the Anthropic wire names calls by the session's own id,
+not the provider's) with the rendered pool, both members and their `observed` provenance, not an
+error. First attempts failed on the test's own expectations (provider id; `Plan: max` is not shown
+once the refresh made the declared member observed), not on the product. `m5-grants-restart` K5b: a
+pooled session runs in a spare vat (`spare session 1`), so its worker is found by journal growth in
+a plain turn; vats sleep while they wait, so the worker is woken (`getInfo`, not awaited) and held
+with SIGSTOP (each incarnation as it appears, 20 ms ps poll) before the tool is released. Measured:
+the session's journal grows by 1 while its worker is held (the hub appends the exec vat's answer
+before the worker runs it), and after the SIGKILL the replay records the true result `slow: slow
+after` once; recovery settles the turn outcome-unknown; the tool ran once; one provider request;
+the next turn completes. So "Tool outcome unknown" is only for an answer that never reached the
+hub; the contract's K5 row now says so. First full-batch run hit the 600 s box: a failed step left
+the stopper polling; it now stops in a `finally`.
+Fit: good: SIGSTOP on a vat worker gives a kill point between two vats' cranks without a core hook;
+poor: the session label of a pooled session is not findable by key.
+
+### J-10029 2026-11-18 XC m5-presets split and the M5 integration files on the merged tree - verified
+Evidence: commit 79eb56a721: acceptance 2, K1, K2 stay in `m5-presets`; 13, 14 move to
+`m5-presets-inventory`; helpers in `_m5-presets.js`. Final batch at d907ea0e35, shared slots,
+`--jobs 3`, load 1.7-2.0, templates already built: 13 files, 434.4 s wall, all exit 0. Held s:
+m5-grants-restart 116.9, m5-presets 118.1 (was 334 in one file), m5-presets-inventory 94.0,
+m5-objects 103.4, m5-labels 99.0, m5-mentions-restart 93.9, m5-prompt 89.5, m4-accounts 89.4,
+m5-grants 79.1, m5-security 75.6, m5-mentions 75.5, m5-reachability 74.9, m5-snapshot 72.1. The
+first batch at 3a3d2e229f (templates rebuilt in it: m1b template 55.6 s) passed 11 files and failed
+m4-accounts (test expectation) and m5-grants-restart (box, J-10028). Unit lane (`corepack yarn
+test`): 1,241 passed, 110 skipped, 0 failed, 65 s. `tsc` 0; eslint 0 errors on changed files.
+Fit: good: every M5 file is under 2 minutes held once templates exist.
+
+### J-10030 2026-11-18 XC bundle sizes - measured
+Evidence: `node scripts/bundle-guest.mjs` before (bd9a8ec070 tip with X1/XA/XB) and after: session
+213,712 -> 214,690 (+978: generic adapter entries, grant label), exec 62,196 -> 63,741 (+1,545:
+membrane tags and leaving rule), factory 164,810 -> 164,836 (+26: the ToolGrantInfo shape in
+interfaces-m5.js). Limits unchanged (240,000 / 120,000).
+Fit: neutral; the session stays under X1's 215,000 target with 310 bytes to spare.
+
+### J-10031 2026-11-18 XC time record - verified
+Evidence: first command 13:53:08Z. Over 60 s: unit lane 66 s and 65 s; integration batch 1 (13
+files) 605.4 s wall; m4-accounts alone 130.8 (in batch), 76.1, 88.8 s; m5-grants-restart alone
+101.0, 110.8, 98.8, 99.0, 93.1, 100.9 s (diagnosis runs); a probe run of m5-grants 79 s; final
+batch 434.4 s wall. Everything else under 10 s.
+Fit: neutral.
+
+### J-10035 2026-11-18 XD M3 browser files on the merged tree - verified
+Evidence: first run (`--jobs 3`, load 1.6-1.9): `m3-ui-history` passed (171.4 s, the `m3-300`
+template rebuilt in it); `m3-ui` and `m3-ui-restart` failed in 1.6 s with ENOENT renaming
+`assets/.main-<hash>.js.tmp`: two files built the UI at once (`ensureUiBuilt` had no lock). Fixed
+in `test/browser/_harness.mjs` with a directory lock under `tmp/` (stale after 120 s); every later
+side-by-side run built once. After the fix all three pass. Send now: `m3-ui-restart` acceptance 12
+sends now with no running turn (after a restart), so the M2-review behaviour (the session cancels
+the running turn) had no browser check; `m3-ui` gains one: a stalled turn, a queued message, Send
+now on its row: the stalled turn ends `cancelled` (the scripted provider logs `cancelled` for its
+turn id), the entry completes next, the queue is empty (0.95 s). The page sends no cancel of its
+own. Sealed-only writer: the page's writer is the gateway's extras service (J-10036 writes through
+it, including the 1 MiB probe).
+Fit: good.
+
+### J-10036 2026-11-18 XD M4 acceptance 14 and 15 (browser part) - test
+Evidence: new `test/browser/m4-ui.test.mjs` on the `m4` template with the fake subscription and
+OAuth servers; one test, 22-34 s in the page, 79-89 s held. Account chips: a pool session, a turn
+sent from the page; member a's token was expired, so the round renewed it (1 refresh POST, served
+`renewed`); a chip shows the served round's 37% without a reload. Subscriptions panel: the page's
+`getSecrets()` -> `subscriptions()` -> `accounts()` reach the real manager vat and the adapter's
+`Accounts`; the pool shows two members; Refresh reads both (2 usage GETs) and both become
+`observed`. Secrets panel: create (gen 1), replace (gen 2), a Node sealed replace then a page
+replace at the shown generation fails `GENERATION_CONFLICT` and the row re-reads gen 3, description
+edited, audit lists `create succeeded` and `replace succeeded`, revoke, delete after revoke. Size
+probe from a file input: 1,040,382 random letters (JSON 1,040,384 bytes) go through the large-call
+writer; the row shows `gen 4 · 1040382 bytes`; 1,040,383 letters are refused in the page with
+`m4Texts.secretTooLargeForBrowser`, the secret is unchanged. Defect found: after that refusal the
+panel still re-read the catalogue (frames left the page); `ui/src/secrets/SecretsPanel.js` now
+marks its own refusals and skips the re-read. The literal "no frame is sent" cannot hold: the page's
+live subscriptions (accounts `next()`, the session view) send frames at any time; the test asserts
+that no frame in the second after the refusal carries the value and none calls a Secrets method.
+Acceptance 15 (browser part): no access token, refresh token, typed value or 64-byte probe marker
+in HTTP requests, received frames or the DOM; credentials in no sent frame; after a clean stop
+none of them under the state directory (grep 3.5-5 s) or in the stderr tail; the pool label is
+found (control).
+Fit: good: the M4 panels needed no change to work through the real gateway; poor: acceptance 14's
+frame count wording.
+
+### J-10037 2026-11-18 XD M5 acceptance 15 in the browser - fix
+Evidence: `m5-ui` had never run. Three defects: (1) the test made a session with no backend (the
+`m2` template configures none): it now makes a scripted backend after the start; (2) the
+attachment chip never showed: the transcript record of a turn the page watched is the live
+`turn-start` event, which carries no `attachments` (`TurnStarted` does); the controller's settled
+re-read now copies `attachments` onto the entry's record, so the chips show once the turn settles
+(not while it runs: that needs `attachments` on the vat's `turn-start` event, a guest change not
+made); (3) `attachmentsLost` never showed: drafts are resent at attach, before any session is on
+screen, and the error was dropped; it is now kept per session and shown when that session opens.
+The test also resends a plain draft with an A.4 id for real after the reload (one receipt, one
+completed turn, the draft cleared). Passes: 25-48 s in the page, 84-107 s held.
+Fit: good.
+
+### J-10038 2026-11-18 XD rule 4a in the browser - test
+Evidence: `startBrowserGateway` answers `gatewayLog` (the gateway's stderr lines read from the
+supervisor's 16 KB tail every 200 ms). `m4-ui` sends from the page a raw `CTP_CALL`
+`noSuchMethodXD` to three vat presences (Operator from the powers record, SecretsAdmin returned by
+`getSecrets`, SessionFactory returned by `getFactory`): each is answered `gatewayTexts.unknownMethod`
+and the gateway logged exactly three refusals, all rule `method`, so every other call of the page
+(M3 shell, M4 panels and chips, renewal turn) was admitted. `m3-ui`, `m3-ui-restart`,
+`m3-ui-history` and `m5-ui` assert no `method` refusal. Finding: through the hub every vat presence
+arrives with the alleged interface `Remote Object N`, so a page (or test) cannot tell vat objects
+apart by interface; the probe names them by the field or call that gave them.
+Fit: good; poor: a 16 KB stderr tail polled is a weak log source (a burst over 16 KB in 200 ms
+would lose lines); per-rule refusal counts in the bridge's `stats()` would be exact.
+
+### J-10039 2026-11-18 XD final browser batch and time record - verified
+Evidence: at e055ff7edd, `--jobs 5`, shared slots, load 2.1: 5 files, 197.9 s wall, all exit 0.
+Held s: m3-ui-restart 197.9, m3-ui 108.4, m5-ui 106.9, m3-ui-history 102.0, m4-ui 89.1; every file
+under 5 minutes. With the Send now test (8a631327f9) `m3-ui` alone 97.1 s, 6 tests pass. UI unit
+files (m3-ui-*, m4-ui-*, m5-w58-*) 105 passed; `tsc` 0; eslint 0 errors on changed files. No guest
+file changed (no bundle change, no template rebuild from XD). Time: first command 14:46:44Z.
+Over 60 s: M3 batch 1 172 s; m5-ui 67, 111, 111 s; batch of three 187 s; m4+m5 85, 92 s; m4-ui
+80 s; final batch 198 s; m3-ui 97 s.
+Fit: neutral.
+
+### J-10045 2026-11-18 X-QC secret paths after the merge - review
+Evidence: read the diff `bd9a8ec070..a3ab56ac25` of `AH/secrets/{writer,manager,store}.js`,
+`AH/index.js`, `GW/index.js`, `GW/extensions.js`, `GW/extensions/m4-secrets.js`,
+`ui/src/secrets/*`. The hub `SecretWriter` guard is `replace(R('Secret'), S.SealedBox, count?)`;
+`replaceLocal`/`publicKeyLocal` are not in the explicit ops handler list (`AH/index.js`,
+`attach.js` `M2_FORWARDS`), so no hub path reaches them; the page's writer is the gateway-local
+`GatewaySecretWriter` in `extras` (label taken first, an extension cannot claim it) and is the
+`LargeCall` target. `setDescription` events carry the label, never the text. Ran: 19 unit and
+adapter files directly (180 tests pass, 4.1 s wall), and `m2-secrets` in a shared slot (exit 0,
+82.4 s): grep of 49 files, 221.0 MB, 0 hits; `m2.secrets.plainValue` hits []. No path found by
+which a value leaves the adapter or the encrypted store. Residuals: a page could pass the
+gateway-local writer to a vat as an argument (integrity only; the value would originate in the
+vat); `m4-ui` greps the network log, DOM and state but not the page's `localStorage` /
+`sessionStorage`.
+Fit: good.
+
+### J-10046 2026-11-18 X-QC retirement push and K5 second kill point - review
+Evidence: `m4-retire` and `m5-grants-restart` pass in shared slots (81.0 s and 109.0 s held;
+batch of three 109.0 s wall, load 2.4). Duplicate push: `invalidate` is idempotent. Lost push
+after a manager or adapter restart: a new sink or incarnation loads afresh. Finding (probe under
+tmp, removed): a push that arrives while the bridge's FIRST `poolState` ask is in flight is not
+seen by a load that joins that ask (`known.state === undefined` returns the shared promise), so the
+next round got the retired member as `active`; the load after that re-asks (stale kept). With
+`poolStateRefreshMs` now 600 s and D-M4-10 (push may wait one `ops.credentials()` answer and
+travels a different path than the turn), "next turn" is not guaranteed. K5b: tool ran once,
+provider got the turn once, true result recorded once by replay; no duplicated work.
+Fit: neutral; poor: the next-turn guarantee rests on message timing.
+
+### J-10047 2026-11-18 X-QC interface split - review
+Evidence: `guards-split` (snapshot of 493 entries, 24 folded keys, vocabulary identical apart from
+XB's intended `poolsChanged`), `m1a/m1b/m2/m4-interfaces` pass. `lazyTable` throws on a name
+defined twice in the chain, so base, session and factory cannot answer different guards for one
+name. Every exo that changed table maps to the same guard object as before (M1b-only names) or to
+the old `m2Interfaces` version; the stand-in session gained `findTurn` and four refusing stubs
+because its guard is now the M2 one. Fixture re-baselines (XA 9, XB 3, XC 7 entries) all follow
+an intended guard change. Bundles at a3ab56ac25: session 214,690, exec 63,741, factory 164,836
+bytes (limits 240,000 / 120,000 unchanged).
+Fit: good.
+
+### J-10048 2026-11-18 X-QC tests and owner's rules - review
+Evidence: removed assertions are all replaced by stronger ones (sealed writes, audited
+`setDescription`, accountStatus result asserted, makeProvision path). Over 5 minutes in this lane's
+`runs.jsonl`: `m1a-slice` 307.6 s (X1, during template builds) and one `m5-grants-restart` time-out
+at 600 s while XC iterated (7 failing runs before 2 passes; 100-117 s now). Public hygiene grep of
+every added line: no absolute local path, host, non-loopback address, email or key-shaped literal.
+Adapter tools reach the model only from the session's own ports (`kind.tools` per backend) and
+never shadow a static entry or yield to a granted one. Membrane residual (powers.store) open, pinned
+by a test.
+Fit: neutral.
+
+### J-10049 2026-11-18 X-QC time record - verified
+Evidence: first command 15:11:18Z. Over 60 s: integration batch (m4-retire, m2-secrets,
+m5-grants-restart, `--jobs 3`) 109 s wall. No browser file and no perf file run; no exclusive mode.
+Fit: neutral.
+
+### J-10050 2026-11-18 X-FIX first-ask retirement push (X-QC finding 1) - fixed
+Change (`92d6ba5e7e`): `pool-state.js` `invalidate()` forgets a load that has no answer yet, so a
+load joined after a push asks `poolState` afresh; loads joined before the push still share the
+first ask. Test: `m4-pool-state` "X-FIX: a push during the first ask" (gated first answer); it
+fails on the old code ("a load joined after the push asked again") and passes now (8 tests).
+Fit: good.
+
+### J-10051 2026-11-18 X-FIX retirement waits for the adapter (X-QC finding 2) - fixed
+Change (`b8ca754892`): `PoolMember.retire` and `SubscriptionsAdmin.retirePool` are `M.callWhen`;
+the record is made first, then the manager awaits an answered `CredentialOps.poolsChanged()`
+(failures ignored), so the operator sees the retirement return only after the adapter marked its
+pool states stale; the next turn no longer races the push. Snapshot re-baselined for
+`m4Interfaces.SubscriptionsAdmin` and `m4Interfaces.PoolMember` only (vocabulary unchanged).
+`m4-manager` XB test now holds the push and asserts the retirement has not returned until it is
+answered. `m4-retire` passes (held 128.1 s; retire 127 ms, retirePool 49 ms, next turns 793 /
+441 ms; load ~2.5). The 600 s re-read stays as the safety net for a lost push. Manager program
+size (durable*.js) not measured.
+Fit: good.
+
+### J-10052 2026-11-18 X-FIX powers.store membrane (X-QC finding 3) - fixed
+Change (`77470fa5af`, guest, batched with J-10051 before any template build): `powers.store`
+refuses any remotable that is not this call's wrapper with `MODEL_OBJECT_TEXT`. The pinning
+"residual" test is flipped: the store is refused, nothing is stored, the keeper receives nothing,
+and a wrapper still stores. Bundles: exec 63,741 -> 63,826 bytes; session 214,690 and factory
+164,836 unchanged. `m5-objects` passes on a rebuilt template (build 55.1 s, held 156.1 s).
+Fit: good.
+
+### J-10053 2026-11-18 X-FIX page storage in acceptance 15 (X-QC finding 4) - fixed
+Change (`66e64c86db`): `test/browser/m4-ui.test.mjs` reads localStorage, sessionStorage and the
+IndexedDB database names before the stop and greps every credential and typed value there. Passes
+(browser file held 84.9 s).
+Fit: good.
+
+### J-10054 2026-11-18 X-FIX gateway writer never leaves (X-QC finding 5) - fixed
+Change (`0edcbaf6cc`): `powers.js` `markNeverLeaves` / `isNeverLeaving`; GW/index.js marks the
+page's writer; the call check refuses a CTP_CALL toward a non-local target whose slots name such
+an object (rule `gatewayObject`, new `gatewayTexts.gatewayObject`). Bridge adapter test: refused
+directly and nested in a record, nothing reaches the vat stand-in, the writer still answers its
+own calls. Residual: a gateway-exported promise (`p-n`) that later resolves to the writer is not
+checked; the writer is only handed out as an object in `extras`, never as a promise.
+Fit: good.
+
+### J-10055 2026-11-18 X-FIX writer refusal never quotes the value (X-QC finding 6) - fixed
+Change (`70bb2bb6c1`): both writers' exo guards take any passable for the value; the method
+checks the shape with `matches` and refuses with `secretFailed("INVALID_SECRET_BYTES")` (an
+existing fixed code; the contract guard `interfaces.SecretWriter` is unchanged, so what is
+accepted is unchanged). Tests assert the fixed text and that the value is absent from the
+message (`m2-secret-writer-paths`, `m2-w23-secrets`, `m2-secrets`).
+Fit: good; neutral: the exo guard is no longer the contract guard object for that argument.
+
+### J-10056 2026-11-18 X-FIX verification and time record
+Ran: unit and adapter lanes 1,245 passed, 115 skipped, 0 failed (66 s); `tsc` exit 0; eslint 0
+errors on touched files. Integration (shared slots): m4-retire, m4-provision, m4-pools,
+m5-objects (`--jobs 4`, 157 s wall); m4-secrets, m2-secrets (124 s wall); browser m4-ui (85 s);
+m2-secrets, m3-gateway, m5-security, m4-accounts after the gateway change (120 s wall); all exit 0,
+load 2.1-2.9. No perf file, no exclusive mode. Time: 15:17:47Z to the journal commit.
+Fit: neutral.
+
+### J-10060 2026-11-18 X-CLOSE regression run with M3, M4 and M5 merged - measure
+Evidence: at `717e26789f`, shared slots, load 2.2-4.8, with the long-session template chains
+holding one or two slots beside it. Unit and adapter lanes: 1,244 passed, 115 skipped, 1 failed
+(`run-lock` "in-process takers racing over repeatedly abandoned locks" at load 4; 17/17 alone),
+67 s. Integration `--jobs 5`: 51 files, 6,641 s held, 1,433 s wall, 296 s of waits; 50 pass,
+`m1b-live` acceptance 9 failed once (rename row 638 ms against 500 at load 3-4) and passed alone
+(117 s; rename 61-158 ms). Browser `--jobs 5`: 5 files, 622 s held, 202 s wall, all pass. Held
+by list: M0-M2 and the template test 4,029 s (25 files), M3 391 s + 422 s browser, M4 1,114 s +
+95 s, M5 1,107 s + 105 s. Longest held `m1b-followups` 297 s; no file over 5 minutes, none timed
+out. Wall in all 1,702 s (28.4 min) against the 20-minute rule; even at six slots on an idle
+machine 7,263 s / 6 is 20.2 min before the unit lane, so the rule cannot hold for one run.
+Proposed in process.md 3.1: a core list (M0-M2, about 14 min) and a per-milestone list (M3-M5
+with their browser files, about 10 min), two batches for a merge. Templates first (shared):
+`exec` 58 s, `pool` 57 s, `m3-300` 94 s (`m1a`, `m4`, `m5o` current).
+`m1a-slice-crash` and `perf/_restart.mjs` use the `m1a` template (no spare pool), so their
+`session <key>` needle names the right worker (the run's log shows `session s1` quarantined),
+which answers XC's question.
+Fit: neutral: everything passes on the merged tree; the regression run outgrew its time rule.
+
+### J-10061 2026-11-18 X-CLOSE exclusive perf pass: M3 rows and a 124 exit - measure
+Evidence: 15 files back to back in exclusive mode, 16:12-17:19 UTC at `404e60ea3a` (rows after
+the third file say `-dirty`: only `designs/milestones.md` was being edited), load 1.0-2.8, worker
+`367e78ad...`, 4,004 s held, 66.8 min wall. M3: `gateway.fetch` 0.52 ms (n 55,674, 0
+deliveries); `gateway.guard` 0.113 ms; `ui.call` 23 ms (p99 183; answers peak 1,443 of 4,096);
+`ui.submit` 42 ms; `ui.deltaFanout` 2 ms, p99 15, **0 deliveries** over 1,100 deltas to 5 clients
+(the lane's 0.007-0.010 per delta is gone); probes all refused, 0 journal growth, 4,097 exports
+closed 4008; `ui.snapshot` 31 ms; `ui.history.newest` 208 ms, `.archived` 2.2 ms;
+`ui.reconnect` 360 ms; `ui.restartReady` the gateway answers 2.2 s (clean) / 1.9 s (SIGKILL)
+before `serve()` resolves; `ui.bundle` 101,321 B gz; `ui.coldLoad` 320 ms (lane 120 ms, still
+inside 1.5 s); `ui.hubGrowth` hub 1.17 -> 1.15 MB, row exports 11 -> 21 (**1.91 x**, carried).
+Defect: `perf/gateway-session.perf.mjs` exited **124** (held 602 s): every row was printed by
+555 s (`gateway-session.fileTime`), then `state.cleanup()` (a clean stop after the 24-restart
+SIGKILL window) ran past the box. The file's guard counts windows, not its teardown. Also seen:
+the supervisor's serve time grew from 3.8 to 8.5 s across the SIGKILL series (each restart
+replays a longer unsnapshotted suffix, C-3). Not fixed here (not trivial without changing the
+file's design); proposal: move `ui.restartReady.*` to a file of its own.
+Fit: good for the gateway path; poor for viewer-driven hub row growth (CC-051 + CC-060).
+
+### J-10062 2026-11-18 X-CLOSE exclusive perf pass: M4 rows - measure
+Evidence (same pass): `subscriptions.select` 0.086 ms; `.turnStart` 114 ms (0.035 manager
+frames per turn); `.handover` 3.1 ms, 1.26 frames per refusal; `.servedWrites` **4.97** manager
+frames per session per 60 s (5 in 60.4 s, 143 turns; budget 1; W4.8 measured 2 with the 30 s
+refresh): XB's 600 s `poolStateRefreshMs` was expected to leave served stamps only and did not;
+not diagnosed. `.renewal` 1 refresh POST for each of 24 expiries, -72 ms; `.firstOpen` 827 ms
+(19 restarts; lane 688 ms; 1.10 x), 3 manager frames per first turn; `catalog.pool` warm 66 ms,
+cold 94 ms. `subscriptions.bundles` compares with `3588cab190` (before M3 and M5), so its
+session +28,242 / factory +27,762 are not M4's; the manager bundle is refused by
+`bundle-guest.mjs` (the package declares dependencies). Probes: audit 1,001 and 17 members refused
+by guards; the 8,193-byte credential now fails session creation as "Model catalog unavailable"
+(the creation's catalogue read meets it first); no halt. `secrets.credentialRead` 0.030 ms;
+`secrets.catalog` **775 ms** (57-entry first page, 2.21 manager frames per page; lane 745 ms);
+`secrets.auditReader` 26.7 ms (361 ms through the hub); `accounts.push` 0.345 ms;
+`accounts.refresh` 42 ms.
+Fit: good for the token path (all in process); poor: manager writes per served session and the
+catalogue page.
+
+### J-10063 2026-11-18 X-CLOSE exclusive perf pass: M5 rows and the M0-M2 cross-check - measure
+Evidence (same pass): `tools.local` +126 ms (640 against 513; lane +109); `labels.full` 1.023;
+`tools.inspect` 220 ms (lane 339); `grants.round` 158 ms; `exec.powersLookup` 53 ms;
+`exec.membrane` -10.8 ms (Node +0.001); `exec.scope1000` 60 ms; `presets.save` 248 ms (32
+endowments; 24 ms without); `inventory.page` 729 ms; `mentions.turnStart` 388 against 141 ms
+(+247), +0.6 deliveries per turn; `prompt.compose` Node 0.002 ms, vat largest 1,499 against
+`chat-only` 1,092 (+408); `session.program` 214,690, `exec.program` 63,826 bytes;
+`session.createCold` 6,537 ms (n 19, 120 s) and 6,249 ms (`session.perf`, n 5). Probes a, b, c,
+d, e, f pass; probe (c), a 20,000-key answer, no longer halts the workspace vat. Cross-check:
+`turn.start` 112 ms (p99 352, 2 deliveries; M2 108), `turn.delta` 0.21 ms, `turn.round` 3,
+lease 1, `install.factory` 6.55 s, `exec.first` 299 ms, `exec.trivial` 68 ms, `exec.sends` 1.13 s:
+only `session.createCold` moved (M2 5.53 s at 186,998 bytes), with the session program's size.
+Fit: good for confinement; poor for handle crossings (7-15 ms each, every M5 miss).
+
+### J-10064 2026-11-18 X-CLOSE milestone outcomes and documents - decision
+Change: `designs/milestones.md` M3 and M4 "done with open items", M5 "done" (acceptance 1-15
+pass; perf fails carried as recorded, none rated major), each with its list at the top and its
+outcome table from J-10060..J-10063 and XD's browser files; M2's SecretWriter major closed;
+the header says which milestones are done. M3's major is the 124 exit of J-10061; M4's major is
+`servedWrites` (J-10062). `process.md` 3.1 (51 + 5 files, the split proposal) and 3.2 (this
+pass, templates' times, a proposal to run a milestone's own perf files plus the cross-check);
+README test and perf commands, held times and bundle sizes; `architecture.md` status and short
+"as built" notes for the gateway, subscriptions and M5; `CORE-CHANGES.md` rows for CC-050,
+CC-051 + CC-060 (one change), CC-070..CC-073, marked requested, not built, and the accounting
+check: `git diff --stat bd9a8ec070..HEAD -- . ':!packages/thixotrope-harness'` prints nothing.
+No test or perf file was changed.
+Fit: neutral.
+
+### J-10065 2026-11-18 X-CLOSE time record - verified
+Time: 15:30:47Z to the journal commit (about 17:25Z). Commands over 60 s: milestone templates in
+parallel 94 s; unit lane 67 s; integration batch 1,434 s; long-session templates (background)
+history/journal chain 15:34-15:49, busy chain 15:34-16:12; browser batch 203 s; `m1b-live` alone
+117 s; exclusive perf pass 4,005 s (16:12:20-17:19:05). Scratch under `tmp/X-CLOSE/` removed at
+the end.
+Fit: neutral.
 ### J-9983 2026-11-18 HR-HOST review: the agent-host manager and adapter core - awkward
 
 Evidence: `designs/arch-review/harness-host.md` (HR-HOST-1..17); 13,470 lines in 33 files; the
@@ -12215,3 +12876,284 @@ two files, the harness integration files not in the list, any perf check, the M5
 32,768 (only those before 13:49:56Z did), a frame between 40 and 65 KB at a crank budget under 50 M.
 Time: core files 3 lanes about 6 min wall; harness unit 67 s; integration batch 1,090 s; reruns
 about 10 min.
+
+### J-10070 2026-11-18 K1 main merged into the integration lane - merge
+Evidence: `git merge --no-ff claude/thixotrope-harness` at `9ce9b18ffc` (merge base `bd9a8ec070`),
+merge commit `c05dc893d3`. Read: `designs/process.md`, J-9940..J-9944, J-10000..J-10065,
+J-10110..J-10129, the status lists of M2-M5 in `milestones.md`, main's diff of every shared file.
+Reading: no textual conflict. The lane had not edited `m5-security`, `m5-objects`, `m2-probes` or
+`m2-lifecycle-export` since the merge base (its M5 test changes predate it), so main's versions
+(the `hubRefused` outcome, the hub refusal of the 100 KiB probe, the short-turn import test) came
+in whole. README, `architecture.md`, `milestones.md` merged line-wise with both sides' text kept
+(main's known-failure line removed, the lane's as-built notes kept). `CORE-CHANGES.md` (union):
+main's CC-026..CC-028 entries, summary rows and accounting lines, then the lane's request table;
+no line duplicated. Resolutions in the merge commit: the request table's CC-070 row says built as
+CC-027; M2's open items show C-25 closed (main) and `checkpoint.stall` "CC-026 merged, partly
+closed". `grep -o '^### J-[0-9]*' JOURNAL.md | sort | uniq -d` and the same for `^### CC-` in
+`CORE-CHANGES.md` print nothing.
+Fit: good.
+
+### J-10071 2026-11-18 K1 unit and adapter lanes, typecheck, eslint, bundles on the combination - verified
+Evidence: at `c05dc893d3`. `corepack yarn test`: 1,246 passed, 116 skipped, 0 failed, 67 s (the
+X-CLOSE run's `run-lock` racing failure did not recur; `serve.test.js` gained main's ceiling
+test). `tsc` exit 0. eslint on the merged JavaScript files (`config/defaults.js`,
+`scripts/serve.mjs`, `test/serve.test.js`, `m2-probes`, `m2-lifecycle-export`, `m5-objects`,
+`m5-security`): 0 errors, 8 warnings of kinds already present. Prettier: clean.
+`node scripts/bundle-guest.mjs`: session 214,690, exec 63,826, factory 164,836, equal to the
+lane's (main changed no guest file).
+Fit: good.
+
+### J-10072 2026-11-18 K1 integration and browser files on the combination - test
+Evidence: `corepack yarn test:integration --jobs 5` with 35 files (shared slots, load 2.1-4.3),
+840.7 s wall, every exit 0, slot waits 9-89 ms each. Held s: m1a-slice 185.3, m1a-slice-restart
+190.3, m2-probes 88.1, m2-lifecycle 200.2, m2-lifecycle-export 285.4, m2-archive-restart 162.2,
+m2-archive-restart-2 192.7, m2-secrets 77.5, m2-queue 150.5, m3-gateway 124.7, m3-sessions 116.9,
+m3-reconnect 144.6, m4-accounts 87.5, m4-catalog 89.0, m4-pools 97.9, m4-provision 97.9,
+m4-reachability 81.7, m4-renewal 91.0, m4-restart 175.8, m4-restart-renewal 102.7, m4-retire 77.5,
+m4-secrets 89.6, m4-wire 113.7, m5-grants 85.2, m5-grants-restart 114.8, m5-labels 98.2,
+m5-mentions 76.9, m5-mentions-restart 99.5, m5-objects 96.0, m5-presets 103.6,
+m5-presets-inventory 93.4, m5-prompt 93.2, m5-reachability 76.4, m5-security 77.5, m5-snapshot
+72.3 (4,107 s in all). Browser `--jobs 5`: 196.1 s wall, every exit 0: m3-ui 110.6, m3-ui-restart
+196.0, m3-ui-history 103.7, m4-ui 90.7, m5-ui 106.6 (607.5 s). The rows say `c05dc893d3-dirty`:
+only design documents were being edited.
+Reading: the frame ceiling (65,536 toward a vat) is new for the lane's code (gateway, M4 manager
+and adapter, M5 tools and membrane). The only `FRAME_TOO_LARGE` text in either batch's output is
+the probes that ask for it: `m2.tooBig` `directError` with frontier `[49, 49]` and the next turn
+served; `m5.objects.bigHelp` and `m5.security.bigGrantedAnswer`, both `hubRefused`. No other
+message of the lane's code was refused. Not read: the supervisors' own logs (where the hub logs a
+dropped deliver-only frame), which live in each test's state directory and are removed at cleanup.
+Fit: good: the lane's code fits the ceiling on every path these files exercise.
+
+### J-10073 2026-11-18 K1 what the model sees for a too-big foreign answer - read
+Evidence: J-10072's metric rows; `guest/exec/inspect.js` (`toolExecute`, `describe`, `inspect`'s
+catch), `guest/lib/guards/base.js` `errorResult`, `pkg/src/net/hub.js` `FRAME_TOO_LARGE`,
+`test/fixtures/m5-objects.js` (`bigAnswerTool`, `bigHelp` are objects in the workspace vat).
+Reading: of the three accepted outcomes (cut and staged; `inspectTerminated`; hub refused), the
+hub refusal now happens for both. Acceptance 10: the exec vat's `E(tool).execute` rejects with the
+hub's text, `inspect` answers `failed`, and the model gets `Error: ocapn hub: the message exceeds
+the inbound frame ceiling of its target`: true, but in the core's terms, with no size and no hint
+to ask for less. Acceptance 5: `describe` swallows the failed `help()`, so the model gets the
+method names and `Documentation is unavailable; do not guess method signatures.`, which is still
+useful. A cut, staged preview cannot be restored on the harness side for these tools: the
+answering party is a foreign vat, and the hub refuses its whole frame; adapter-hosted tools
+already bound their outcomes under the ceiling (J-10125 (d)). A cheap guest change gives the
+model a useful message: in `inspect`'s catch (and `describe`'s `help` catch), when the error's
+message equals the hub's text (a copy in the guest's texts, pinned equal to `FRAME_TOO_LARGE` by a
+unit test), answer a harness text naming the operation and `vatFrameBytes`, for example "The
+tool's answer was over 65,536 bytes and was refused before it reached the sandbox; nothing of it
+is available. Ask for a smaller answer." Not built (for the PM).
+Fit: neutral: safe and no halt; the model's message is accurate but not instructive.
+
+### J-10074 2026-11-18 K1 milestone and contract text after the merge - decision
+Change: `milestones.md` M5's "after main is merged" item becomes a minor with the outcome of
+J-10072 and J-10073; `m5-interfaces.md` acceptance 5 and 10 name the hub refusal as an accepted
+outcome (as main's tests already assert). Not rerun on the combination: any perf check, including
+the too-big probes (a, b, c, e) inside `perf/exec-m5` and `perf/tools`, and the M0-M2 integration
+files not in J-10072's list (m1a-provision, m1a-slice-crash, m1b-*, m2-catalog, m2-history,
+m2-providers, m2-turns, the template test); main ran several of them at J-10124.
+Fit: neutral.
+
+### J-10075 2026-11-18 K1 PM rulings recorded - decision
+Change: `process.md` 3.1: the regression run is split into a core list (unit and adapter lanes,
+M0-M2 integration files, the template test) and a per-milestone list (M3-M5 with their browser
+files), each one batch under 20 minutes of wall at six slots. 3.2: a milestone's recorded perf
+pass is its own files plus `session`, `turn` and `exec`; the whole list only when the PM asks.
+`m5-interfaces.md` section 5 K5 row and acceptance 11 (b): K5's second kill point records the true
+result through replay; accepted. `m4-interfaces.md` 17 row 14: "no frame carries the value and no
+Secrets call is sent" (file `test/browser/m4-ui.test.mjs`), as J-10036 measured. Commit
+`96a90a1b29`.
+Fit: neutral.
+
+### J-10076 2026-11-18 K1 time record - verified
+Time: first command 17:25:39Z. Over 60 s: unit lane 67 s; integration batch 842 s wall
+(17:28:42-17:42:44Z); browser batch 197 s. Everything else under 10 s. Last command: the commit
+of this entry, then the final `date`.
+Fit: neutral.
+
+### J-10087 2026-11-18 K3 contract text brought to the code: m2 and m3 - decision
+Evidence: read `designs/process.md`, J-9940..J-9944, J-10000..J-10065, J-10070..J-10076,
+J-10115..J-10129; code read: `guest/lib/interfaces.js` (header, tables, views),
+`guest/lib/guards/base.js` header, `guest/factory/standin-session.js`, `AH/secrets/writer.js`,
+`AH/secrets/manager.js` exports, `GW/index.js`, `GW/guard.js` rule 2, `GW/powers.js`,
+`GW/extensions.js` `makeExtensionServices`, `GW/contract-m3.js` texts and limits, `GW/bridge.js`
+answers bound, `AH/index.js` gateway wiring, `test/integration/m3-gateway.test.js` acceptance 16.
+Change: `m2-interfaces.md` 1.1, 1.3, 2.2 row, 3.4 row, 9.2, the retired-break row, 12 (W2.0,
+W2.3, W2.9) and 16 items 13-14: the M2 fold done (views), the guard chain `guards/` with its rule
+and test, the stand-in session's stubs, the hub writer SealedBox-only with the
+`INVALID_SECRET_BYTES` refusal that never quotes the value, the in-process writer. Commit
+`8c6f3b3348`. `m3-interfaces.md` 4.4 rule 2 (`markNeverLeaves`, `gatewayObject`), 4.4 rule 4
+(the fold), 4.5 (close 4008, `too many answers`), A-11, 6.1 (`secretWriter()` is the gateway's
+writer, first in `extras`), 6.4 M4 row, the W3.7 work-unit row, H4, acceptance 16 (rewritten: the
+context's writer is the extras writer, not `openWriter()`'s), the W3.7 entry table (two ragged
+rows fixed, `notAttachedText`, `markNeverLeaves`), section 14 (five gateway texts). Commit
+`e554c8ebd9`.
+Fit: neutral: every change is an "as built" note naming its journal entry; no redesign.
+
+### J-10088 2026-11-18 K3 contract text brought to the code: m4 and m5 - decision
+Evidence: code read: `guest/lib/interfaces-m4.js` (`retirePool`, `retire` `M.callWhen`,
+`poolsChanged` `M.call`), `durable-subscriptions.js` `announcePoolsChanged`,
+`config/defaults-m4.js` (`poolStateRefreshMs` 600,000), `guest/session/tool-table.js`
+(`adapterToolEntries`, `toolSetFor`), `guest/exec/powers.js` `store`, `guest/exec/membrane.js`,
+`guest/lib/interfaces-m5.js` (`ToolGrantInfo`, imports), `guest/lib/limits.js`, the m5-security and
+m5-objects `hubRefused` checks.
+Change: `m4-interfaces.md` 1.3 (the vat frame ceiling, CC-027, as a backstop), 3.1 retire rows,
+3.2 `poolsChanged` row (answered and awaited), 5.1 (first-ask push), 9.1 item 3, 9.4 and D-M4-9
+(the generic adapter-tool entry; a static tool never shadowed), D-M4-10 (callWhen, the 600 s
+safety net), acceptance 17 (order by construction), the too-big probes row; K1's row 14 kept.
+Commit `ee2279eda8`. `m5-interfaces.md` D-M5-2 (three too-big outcomes: staged cut,
+`inspectTerminated`, hub refusal), D-M5-3, D-M5-5 (guard modules), 2.6 (`ToolGrantInfo.label`),
+2.7 (the `powers.store` check replaces the residual), 4.2, H-5, O-1 (session 214,690 of 240,000,
+exec 63,826 of 120,000), CC-070 as built, probe (b); K1's K5 row, 11 (b), 5 and 10 kept. Commit
+`8219782e67`.
+Fit: neutral.
+
+### J-10089 2026-11-18 K3 what was checked and what is left - verified
+Evidence: `corepack yarn prettier --check` on each of the four documents: clean; table rows
+checked for cell counts (the remaining mismatches are escaped `\|` inside cells); a grep of the
+added lines for absolute paths, hosts, addresses and key-shaped text: none. No code, test or perf
+file was run or changed (documents only).
+Reading: left for the PM, not edited because the code falls short of the contract:
+`m5-interfaces.md` 4.1 item 3 says the chips render from the turn's `TurnStarted` record; as built
+(J-10037) a turn the page watched shows its chips only once it settles, because the vat's live
+`turn-start` event carries no `attachments`. Also not re-measured here: anything numeric quoted
+from J-10051, J-10062, J-10125.
+Time: first command 17:48:11Z; no command over 60 s.
+Fit: neutral.
+
+### J-10077 2026-11-18 K2 the restart rows in a file of their own - fix
+Evidence: `d0f22b2569`: `perf/gateway-restart.perf.mjs` (new) holds `ui.restartReady.clean` and
+`.sigkill` (150 s windows, same row names, budget median 2 s); `perf/gateway-session.perf.mjs`
+keeps `ui.snapshot`, `ui.history.newest`, `.archived`, `ui.reconnect`. The restart file starts no
+restart whose window would end after 6 min (`M3_RESTART_END_MS`), times its teardown
+(`gateway-restart.teardown`: clean stop, stray sweep, removal) and reports per restart the
+supervisor's serve time and the journal frames owed a replay. Shared runs (one each, load 2-4):
+`gateway-restart` 373.5 s held, exit 0 (windows 313 s, stop 2.1 s, cleanup 35 ms);
+`gateway-session` 312.0 s held, exit 0 (windows 252 s, teardown 1.7 s). Exclusive (J-10085):
+375.2 s and 310.7 s.
+Reading: both files finish under 8 minutes held. The X-CLOSE teardown that passed the box (at
+least 45 s after the 555 s `fileTime`) was not reproduced: the stop after the SIGKILL series took
+2.1-2.2 s in both runs here. Not known why it was slow there (the stop's 60 s SIGTERM fallback is
+a candidate; not verified).
+Fit: good.
+
+### J-10078 2026-11-18 K2 why serve time grows across SIGKILL restarts - measure
+Evidence: core `daemon.js` startup sweep (every worker whose transport `owesDelivery()` is woken
+before the daemon is handed out), `durable-worker-transport.js` `ensureAwake` (replay of the
+journal from the snapshot cut) and `armCadenceTimer` (CC-026); `gateway-restart` exclusive at
+`46cc84bb16`, idle sleep 1 h, cadence 256.
+{"mode":"sigkill","restarts":24,"servedMs":[3939,3921,4169,4157,4651,4999,4727,5237,5325,6131,5845,6481,6507,7042,7007,7212,7879,7595,8370,8474,7931,7694,7984,8408],"owedReplayFrames":[52,99,158,220,274,320,366,411,458,504,560,605,652,709,757,802,849,906,959,1010,813,860,913,705]}
+{"mode":"clean","restarts":30,"servedMs":"3245..3704","owedReplayFrames":"46..79"}
+Before the last SIGKILL restart the owed frames were registry 184, workspace:default 185,
+workspace:w 178, app:harness 72, native:agentHostAdmin 46, native:clock 32, native:control 8.
+Reading: it is the journal replay. No vat sleeps (idle sleep 1 h) and a SIGKILL takes no
+snapshot, so each restart's sign-in and connect add about 48 journal frames across the awake
+workers, and the next start replays all of them before `serve()` resolves: 52 -> 1,010 frames
+over 20 kills, serve 3.9 -> 8.5 s, about 4.7 ms of serve per owed frame. A clean stop snapshots,
+so the clean series stays at 46-79 owed frames and 3.2-3.7 s. With CC-026 the growth is bounded:
+a wake whose replay leaves a cadence (256) of entries snapshots once quiet, seen twice
+(agentHostAdmin after 251, control after 255: the sum fell 1,010 -> 813 and 913 -> 705, serve
+8.5 -> 7.9 s). The bound is per worker, so with seven awake workers the
+replay can still reach about 7 x 256 frames. C-3 stands as recorded; the row passes because the
+gateway answers before `serve()` resolves (median -1.9 s).
+Fit: neutral: bounded by CC-026, not removed.
+
+### J-10079 2026-11-18 K2 servedWrites: every manager frame in the window, by kind - measure
+Evidence: `44c785a442` (`perf/_m4.mjs` `journalFrames`: the manager journal between the two
+frontiers, each frame's kind by `frameKind`, GC frames by the journal's `gc` flag, cranks as the
+core's `journalCranks` groups them). Shared run at `e554c8ebd9`-dirty (load 1.7-2.4), the row as
+X-CLOSE measured it:
+{"metric":"subscriptions.servedWrites","value":8.944,"windowMs":60374,"managerFrames":9,"turns":139,"managerFramesByKind":{"frames":9,"gcFrames":7,"cranks":2,"byKind":{"gc gc-answers":3,"deliver poolChanged":2,"gc gc-exports":4}}}
+Reading: no extra message per turn. Of 9 frames, 7 are GC frames (3 `gc-answers`, 4
+`gc-exports`), which ride with the next ordinary frame and run no crank; the 2 deliveries are
+both `poolChanged` (served stamps, `E.sendOnly`). No `poolState` ask, no answered `poolsChanged`
+(that one goes from the manager to the adapter, and only on a retirement), no accounts or usage
+traffic, no adapter-tool description. One of the 2 stamps was the warm-up turns' stamp, sent
+`servedFlushMs` (1 s) after them and so inside the window. The frame count moves with when V8
+collects in the adapter (5 at X-CLOSE, 9 here, 2 at W4.8); no lane change added a message, and
+the 600 s `poolStateRefreshMs` was already doing what XB expected.
+Fit: good: one manager crank per session per 60 s, as designed.
+
+### J-10080 2026-11-18 K2 servedWrites counts what the budget names - decision
+Change: `44c785a442`: the row is manager cranks per session per 60 s (`managerCranks`), with
+`managerFrames`, `framesPerMinute` and `managerFramesByKind` beside it; the window starts
+`servedFlushMs + 500` ms after the warm turns so their stamp lands before it. Budget unchanged
+(1). Shared run (load 2.1-4.2) and exclusive (J-10085), the same both times:
+{"metric":"subscriptions.servedWrites","unit":"manager cranks per session per 60 s","value":0.999,"windowMs":60058,"managerCranks":1,"managerFrames":2,"framesPerMinute":1.998,"turns":142,"managerFramesByKind":{"frames":2,"gcFrames":1,"cranks":1,"byKind":{"gc gc-exports":1,"deliver poolChanged":1}},"pass":true}
+Reading: cranks 1.00 per 60 s against 1 (pass); frames 2.00 per 60 s (would be 2.0 x under the
+old row). The M4 major (milestones.md) is a measurement defect, not a manager defect.
+Fit: good.
+
+### J-10081 2026-11-18 K2 the hub row read at a quiescent point - change
+Change: `46cc84bb16`: `perf/_long-session.mjs` `quiescentHubRow` polls the session's hub row
+every 100 ms until it owes no answer, at most 10 s, and the `.hub.row` row reports the first
+read, the wait and `quiescent`. The template key does not cover this file; nothing rebuilt.
+Reading (exclusive, J-10083): at 200 and 1,000 turns the row still owed one answer after 10 s
+(`quiescent: false`, waits 10,001 and 10,077 ms), at 5,000 none (2 ms). So the owed answer is a
+standing one at those points, not a call in flight; both reads that feed the 1,000 ratio now
+see the same state, which is what J-9496 asked for. Costs about 20 s of file time.
+Fit: neutral: the procedure is fairer; "quiescent" was not reached at two of three points.
+
+### J-10082 2026-11-18 K2 checkpoint.stall and archive.stall with CC-026 - perf
+Evidence: exclusive at `46cc84bb16`, load 1.3-2.4, 60 s windows.
+{"metric":"archive.stall.at200","value":1239.2,"median":629.6,"samples":79,"snapshots":4,"snapshotMsEach":236.4,"pass":true}
+{"metric":"history.stall","at200":964.6,"at1000":975.0,"at5000":1010.8,"snapshots":[2,2,2],"samples":[86,87,82]}
+Reading: `archive.stall` (session grown by 200 turns) p99 1,397 -> 1,239 ms against M2-CLOSE
+(1.40 -> 1.24 x, now inside the 1.25 x rule; median 661 -> 630); the slowest turn (208) still
+held one 264 ms snapshot, the next four none. CT's shared pair was 2,170 -> 1,195 ms (J-10112).
+`checkpoint.stall` on imported sessions moved little: 1,050 / 951 / 1,025 -> 965 / 975 / 1,011
+ms; the slowest turn at 200 and at 1,000 held no snapshot (at M2 it was the snapshot turn every
+time), and the window held 2 snapshots at each point (M2 3 / 2 / 3).
+Fit: partial: CC-026 takes the snapshot out of most slow turns; p99 is now set by turns of 9-12
+deliveries with 280-420 ms of hub time.
+
+### J-10083 2026-11-18 K2 acceptance 15 on the combination - perf
+Evidence: `perf/history.perf.mjs`, exclusive, exit 1.
+{"metric":"archive.flat.hubRow.at1000","at200":9292,"at1000":9408,"ratio":1.012,"pass":true}
+{"metric":"archive.flat.hubRow.at5000","at200":9292,"at5000":8825,"ratio":0.95,"pass":true}
+{"metric":"archive.flat.turnStart.at1000","at200":131,"at1000":261,"ratio":1.992,"pass":false}
+{"metric":"archive.flat.turnStart.at5000","at200":131,"at5000":156,"ratio":1.191,"pass":true}
+Turn 0.995 / 1.049 x, snapshot bytes 1.03 / 1.05 x, snapshot ms 0.86 / 1.04 x, slots 1.05 /
+1.04 x, hub row entries 1.01 / 0.95 x.
+Reading: the hub-row fail of J-9496 is gone (1.39 -> 1.01 x). A new fail: turn start at 1,000 is
+261 ms median against 131 at 200 (41 and 40 samples; p99 365 / 351). M2 read 247 / 251 / 264, so
+it is the 200 point that fell (to 131), and 1,000 is where M2 was; the 5,000 point is 156. Not
+explained (the start is about 2 deliveries; which of them got cheaper at 200 and 5,000 and not at
+1,000 is not measured). Recorded, not re-based.
+Fit: neutral.
+
+### J-10084 2026-11-18 K2 hub.growth and frames after CC-027 and CC-028 - perf
+Evidence: exclusive, `perf/hub.growth.perf.mjs` exit 0, `perf/frames.perf.mjs` exit 0.
+{"metric":"hub.growth","value":923416,"msPerDeliveryVsFresh":0.987,"hubPersistMsPerDelivery":[9.253,9.129],"persistCharsPerDelivery":[9572,10660],"pass":true}
+{"metric":"frames","pingFloor":20.1,"inbound":282.0,"outbound":36.6,"halt":614.9,"haltUsedVat":621.9,"evaluateProgram":2114.6,"loopRunaway":223.5}
+Reading: frames did not move with CC-027 (M2: floor 21, inbound 313, outbound 38, evaluate
+2,120 ms; the 49,152-byte halt probes are under the 65,536 ceiling and still reach the vat).
+One row changed kind: `vat.evaluateProgram.oneMessage` (a 150 k source in one message) is now
+refused by the hub (`FRAME_TOO_LARGE`, 86 ms), not by the vat; it carries no budget. `hub.growth`
+after 1,000 turns: 0.92 MB (M2 0.77 MB), 0.99 x fresh per delivery, pass against 2 MB; the size
+swings 0.74-1.20 MB between log compactions within the same run (`hub.size` points), so 0.77
+against 0.92 is inside that spread. CC-028's smaller commits are toward transient observers; this
+file's commits per delivery (9.6-10.7 K characters) have no M2-CLOSE row to compare with in the
+journal, so the shrink was neither seen nor ruled out here.
+Fit: neutral.
+
+### J-10085 2026-11-18 K2 exclusive mini-batch: subscriptions and the gateway rows - perf
+Evidence: 7 files back to back, 17:59:21-18:27:46 UTC, `46cc84bb16`, worker `367e78ad...`, load
+1.0-2.8, 1,704 s held (archive 246, history 236, hub.growth 222, frames 106, subscriptions 209,
+gateway-session 311, gateway-restart 375), slot waits 41-69 ms; templates `long` 200 / 1,000 /
+5,000 and `m3-300` current (keys unchanged; none rebuilt; the keys do not cover the core's JS).
+Against X-CLOSE: `subscriptions.select` 0.090 ms (0.086), `.turnStart` 118 ms (114; 0.014
+manager frames per turn), `.handover` 2.7 ms (3.1; 1.29 frames per refusal), `.servedWrites`
+1.00 cranks (J-10080), probes unchanged; `ui.snapshot` 31 ms (31), `ui.history.newest` 218 ms
+(208), `.archived` 2.2 ms (2.2), `ui.reconnect` 365 ms (360), `ui.restartReady.clean` -2.13 s
+(30 restarts), `.sigkill` -1.92 s (24), both before `serve()` resolves (X-CLOSE -2.2 / -1.9 s).
+Reading: every row of the 7 files passes except `archive.flat.turnStart.at1000` (J-10083).
+Fit: good.
+
+### J-10086 2026-11-18 K2 time record - verified
+Time: first command 17:48:11Z. Over 60 s: `subscriptions` shared 209 s and 213 s; `gateway-restart`
+shared 374 s; `gateway-session` shared 312 s (these three overlapped); unit lane 67 s (1,246
+passed, 116 skipped); exclusive batch 1,705 s (17:59:21-18:27:46Z). `tsc` exit 0; eslint on the
+changed files: no error, warnings of kinds already present; prettier clean. Not run: the rest of
+the perf list, `subscriptions-lifecycle` and `history.restart`/`journal` (which share the changed
+helpers `_m4.mjs` and `_long-session.mjs`). Last command: the commit of this entry.
+Fit: neutral.

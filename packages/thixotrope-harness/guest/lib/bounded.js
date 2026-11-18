@@ -20,7 +20,7 @@
  * string growth in loops (pieces are collected in arrays), no data-dependent
  * record keys.
  */
-import { textOf } from './interfaces.js';
+import { textOf } from './guards/base.js';
 import { limits } from './limits.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */

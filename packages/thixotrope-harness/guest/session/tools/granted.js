@@ -6,8 +6,8 @@
  * keeps one session's granted tools in its heap (at most `maxGrantedTools`)
  * and answers:
  *
- *   { facet, grant(tool, source), schemaRead(grant), entriesFor(ports,
- *     builtIns?), size() }
+ *   { facet, grant(tool, source, label?), schemaRead(grant),
+ *     entriesFor(ports, builtIns?), size() }
  *
  * - `facet` is the `SessionGrants` exo `Session.grants()` hands out;
  *   `grantTool(tool)` keeps a grant (`pending`, source `operator`) and, in
@@ -16,8 +16,9 @@
  *   answered call to the tool). The answer makes the grant `offered` (a
  *   `ToolDescription` the exec program checked and cut) or
  *   `refused-schema` with the reason.
- * - `grant(tool, source)` is the same for another part (W5.7 `adoptTool`,
- *   source `adopted`); `schemaRead(grant)` answers the grant's
+ * - `grant(tool, source, label?)` is the same for another part (W5.7
+ *   `adoptTool`, source `adopted`, `label` its `toolName`, shown as
+ *   `ToolGrantInfo.label`: XC, 2.6); `schemaRead(grant)` answers the grant's
  *   `ToolGrantInfo` once its schema read has settled (at once when it has).
  * - `entriesFor(ports, builtIns)` is what `grantedToolSource` answers at
  *   every round (S1): the dynamic tool-table entries of the described
@@ -97,6 +98,7 @@ const schemaReason = text => {
  * @typedef {object} Grant one granted tool (session heap)
  * @property {any} tool the granted object (never called here)
  * @property {'operator' | 'adopted'} source
+ * @property {string} [label] the display label (`adoptTool`'s `toolName`)
  * @property {string} state one of `grantStates`
  * @property {string} [reason]
  * @property {{ name: string, description: string, parameters: string }} [description]
@@ -154,6 +156,7 @@ export const makeGrants = (
     };
     if (grant.description !== undefined) info.name = grant.description.name;
     if (grant.reason !== undefined) info.reason = grant.reason;
+    if (grant.label !== undefined) info.label = grant.label;
     return harden(info);
   };
 
@@ -305,8 +308,10 @@ export const makeGrants = (
   /**
    * @param {any} tool
    * @param {'operator' | 'adopted'} source
+   * @param {string} [label] the display label (a valid label; the caller
+   *   checks it)
    */
-  const grant = (tool, source) => {
+  const grant = (tool, source, label = undefined) => {
     if (kept.size >= limitsM5.maxGrantedTools) {
       throw Error(m5Texts.grantsFull);
     }
@@ -314,6 +319,7 @@ export const makeGrants = (
     const record = {
       tool,
       source,
+      label,
       state: 'pending',
       bytes: 0,
       waiters: [],

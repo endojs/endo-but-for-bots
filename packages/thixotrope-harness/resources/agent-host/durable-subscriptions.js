@@ -11,7 +11,9 @@
  * Design rule (architecture 0-3): this vat is the system of record for what
  * persists (members, pools, marks, served records, secret labels and
  * descriptions); the adapter decides per round and does the I/O, and tells
- * this part what changed by `poolChanged` (sendOnly, coalesced). No value,
+ * this part what changed by `poolChanged` (sendOnly, coalesced); this part
+ * tells the adapter of a retirement by `CredentialOps.poolsChanged`
+ * (answered, and awaited by the retirement: XB, X-FIX). No value,
  * token or header ever reaches this vat: members hold their credential
  * Secret and its store key `k<n>`, which only the adapter's sink calls see.
  *
@@ -157,6 +159,26 @@ export const makeSubscriptionsPart = ({
   const withCredentialOps = fn =>
     withOps(async ops => fn(await credentialOpsOf(ops)));
 
+  /**
+   * Tell the adapter that a pool or a member was retired (3.1, XB, X-FIX):
+   * `CredentialOps.poolsChanged()`, answered, so the next round of every
+   * pool it loaded asks `poolState` again. The retirement is recorded
+   * before this is called; `retire` and `retirePool` then wait for this
+   * answer, so the adapter has marked its pool states stale before the
+   * operator sees the retirement return (the next turn takes another path,
+   * operator to session to adapter, and must not overtake the push). The
+   * first use in an adapter incarnation first fetches the CredentialOps
+   * (one `ops.credentials()` answer). A failure (manager lost, adapter
+   * between incarnations) is ignored: a new incarnation loads afresh, and
+   * the adapter re-reads after `poolStateRefreshMs` in any case.
+   * @returns {Promise<undefined>}
+   */
+  const announcePoolsChanged = () =>
+    withCredentialOps(credentialOps => E(credentialOps).poolsChanged()).then(
+      () => undefined,
+      () => undefined,
+    );
+
   // ---- members (R8-13, R8-31) ----
   /** PoolMember -> its record. @type {WeakMap<any, MemberRecord>} */
   const memberRecords = new WeakMap();
@@ -214,7 +236,7 @@ export const makeSubscriptionsPart = ({
        * Retire the member: out of every pool's selection; its mark and the
        * served records naming it are dropped (3.1).
        */
-      retire() {
+      async retire() {
         const member = this.self;
         const record = memberOf(member);
         if (record.state === 'retired') return undefined;
@@ -227,7 +249,7 @@ export const makeSubscriptionsPart = ({
             if (entry.member === member) served.delete(session);
           }
         }
-        return undefined;
+        return announcePoolsChanged();
       },
     },
   );
@@ -436,13 +458,13 @@ export const makeSubscriptionsPart = ({
   };
 
   /** @param {any} pool */
-  const retirePool = pool => {
+  const retirePool = async pool => {
     const record = poolOf(pool);
     if (record.state === 'retired') return undefined;
     record.state = 'retired';
     record.served.clear();
     poolList = poolList.filter(entry => entry !== pool);
-    return undefined;
+    return announcePoolsChanged();
   };
 
   /** @param {any} pool */

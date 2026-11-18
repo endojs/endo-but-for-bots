@@ -248,13 +248,23 @@ export const fakeDefaults = harden({
  * @param {ReturnType<typeof import('./_m1a-slice.js').collect>} live
  * @param {string} input
  * @param {number} [ms]
+ * @param {Record<string, unknown>} [submitOptions] the Composer's options
+ *   (M5: `attachments`)
  */
-export const runTurn = async (m4, session, live, input, ms = 60_000) => {
+export const runTurn = async (
+  m4,
+  session,
+  live,
+  input,
+  ms = 60_000,
+  submitOptions = {},
+) => {
   const from = live.deliveries.length;
   const receipt = await E(m4.slice.composer).submit(
     session,
     input,
     requestId(),
+    ...(Object.keys(submitOptions).length === 0 ? [] : [harden(submitOptions)]),
   );
   const { turnId } = await E(receipt.turn).getStatus();
   const at = await live.until(

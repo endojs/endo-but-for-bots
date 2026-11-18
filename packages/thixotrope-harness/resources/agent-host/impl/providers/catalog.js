@@ -138,10 +138,11 @@ const identifiers = value => {
 };
 
 /**
- * A positive uint32 token count, or undefined when absent.
+ * A positive uint32 token count, or undefined when absent (also M4's pool
+ * catalogue, `subscriptions/catalog.js`).
  * @param {unknown} value
  */
-const tokenCount = value => {
+export const tokenCount = value => {
   if (value === undefined || value === null) return undefined;
   if (
     typeof value !== 'number' ||
@@ -152,6 +153,7 @@ const tokenCount = value => {
     fail('model token count');
   return /** @type {number} */ (value);
 };
+harden(tokenCount);
 
 /**
  * @param {string} id
@@ -171,11 +173,12 @@ const catalogModel = (id, title, description, contextLength, maxOutputTokens) =>
   });
 
 /**
- * The JSON of a 2xx body, at most `maxBytes`, decoded as fatal UTF-8.
+ * The JSON of a 2xx body, at most `maxBytes`, decoded as fatal UTF-8; a
+ * failure is a `CatalogReadError` with a fixed text.
  * @param {Response} response
  * @param {number} maxBytes
  */
-const boundedJson = async (response, maxBytes) => {
+export const boundedJson = async (response, maxBytes) => {
   /** @type {Uint8Array[]} */
   const parts = [];
   let total = 0;
@@ -205,9 +208,12 @@ const boundedJson = async (response, maxBytes) => {
     return fail('body is not JSON');
   }
 };
+harden(boundedJson);
 
 /**
- * One GET, its 2xx body as JSON; anything else fails with a fixed text.
+ * One GET, its 2xx body as JSON (at most `maxBytes`); anything else fails
+ * with a fixed text (a `CatalogReadError`). M4's pool catalogue reads its
+ * members' model lists with it too.
  * @param {object} options
  * @param {string} options.url
  * @param {Record<string, string>} options.headers
@@ -215,7 +221,13 @@ const boundedJson = async (response, maxBytes) => {
  * @param {number} options.timeoutMs
  * @param {number} options.maxBytes
  */
-const readJson = async ({ url, headers, fetch, timeoutMs, maxBytes }) => {
+export const readJson = async ({
+  url,
+  headers,
+  fetch,
+  timeoutMs,
+  maxBytes,
+}) => {
   /** @type {Response} */
   let response;
   try {
@@ -240,6 +252,7 @@ const readJson = async ({ url, headers, fetch, timeoutMs, maxBytes }) => {
     return fail('body unreadable');
   }
 };
+harden(readJson);
 
 /**
  * One OpenRouter model, validated (hosted-agent `normalizeModel`), or
@@ -430,16 +443,17 @@ const readerFor = (spec, fetch) => {
 
 /**
  * Sort order of R4-20 after the default row: title ignoring case, then id.
- * @param {CatalogModel} a
- * @param {CatalogModel} b
+ * @param {{ id: string, title: string }} a
+ * @param {{ id: string, title: string }} b
  */
-const byTitleThenId = (a, b) => {
+export const byTitleThenId = (a, b) => {
   const ta = a.title.toLowerCase();
   const tb = b.title.toLowerCase();
   if (ta !== tb) return ta < tb ? -1 : 1;
   if (a.id !== b.id) return a.id < b.id ? -1 : 1;
   return 0;
 };
+harden(byTitleThenId);
 
 /**
  * @typedef {object} Observation
@@ -563,6 +577,141 @@ const makeOwner = ({ read, readKey, now, log }) => {
  * @property {(kind: string, fields?: Record<string, unknown>) => void} [log]
  */
 
+/**
+ * The efforts of a row: none for an API backend (M2).
+ * @returns {{ reasoningEfforts: readonly string[], defaultReasoningEffort?: string }}
+ */
+const noEfforts = () => harden({ reasoningEfforts: harden([]) });
+
+/**
+ * One page of a sorted catalogue in R4-20 order for this request (M2 8.4):
+ * the default row first on the default backend, `selectionId` `<label>:<id>`
+ * elsewhere, a cursor naming no row ends the listing, at most
+ * `modelPageRows` rows and one frame with room for the cursor. M4's pool
+ * catalogue pages with it too, giving each row its efforts (`efforts`).
+ * @template {CatalogModel} T
+ * @param {object} options
+ * @param {any} options.backend
+ * @param {any} options.spec
+ * @param {readonly T[]} options.sorted
+ * @param {Map<string, number>} options.indexOf
+ * @param {any} [options.request]
+ * @param {number} [options.maxBytes]
+ * @param {(model: T) => { reasoningEfforts: readonly string[], defaultReasoningEffort?: string }} [options.efforts]
+ * @returns {ModelPage}
+ */
+export const pageOf = ({
+  backend,
+  spec,
+  sorted,
+  indexOf,
+  request = {},
+  maxBytes = limits.frameBytes,
+  efforts = noEfforts,
+}) => {
+  const isDefault =
+    request.defaultBackend !== undefined && request.defaultBackend === backend;
+  const configured = isDefault
+    ? (request.defaultModelId ?? spec.modelId)
+    : undefined;
+  const prefix = `${spec.label}:`;
+  /** @param {string} id */
+  const selectionOf = id => (isDefault ? id : `${prefix}${id}`);
+  const defaultIndex =
+    configured === undefined ? undefined : indexOf.get(configured);
+  // R4-20: the default row first, then title ignoring case, then id.
+  /** @param {number} position */
+  const modelAt = position => {
+    if (defaultIndex === undefined) return sorted[position];
+    if (position === 0) return sorted[defaultIndex];
+    return sorted[position <= defaultIndex ? position - 1 : position];
+  };
+  /** @param {string} id */
+  const positionOf = id => {
+    const index = indexOf.get(id);
+    if (index === undefined) return undefined;
+    if (defaultIndex === undefined) return index;
+    if (index === defaultIndex) return 0;
+    return index < defaultIndex ? index + 1 : index;
+  };
+  let start = 0;
+  if (request.after !== undefined) {
+    const after = String(request.after);
+    let id;
+    if (isDefault) id = after;
+    else if (after.startsWith(prefix)) id = after.slice(prefix.length);
+    const position = id === undefined ? undefined : positionOf(id);
+    // A cursor that names no row of this catalogue ends the listing.
+    if (position === undefined) return harden({ rows: [], state: 'ok' });
+    start = position + 1;
+  }
+  const limit = Math.min(
+    request.limit ?? limits.modelPageRows,
+    limits.modelPageRows,
+  );
+  /** @type {any[]} */
+  const rows = [];
+  let position = start;
+  let more = false;
+  let total = 0;
+  for (; position < sorted.length; position += 1) {
+    const model = modelAt(position);
+    const selectionId = selectionOf(model.id);
+    // A model whose id or selection id is over its bound is left out.
+    const fits =
+      model.id.length <= limits.modelIdUnits &&
+      selectionId.length <= limits.modelCursorUnits;
+    if (fits) {
+      if (rows.length >= limit) {
+        more = true;
+        break;
+      }
+      const { reasoningEfforts, defaultReasoningEffort } = efforts(model);
+      const row = harden({
+        backend,
+        modelId: model.id,
+        selectionId,
+        title: model.title,
+        default: model.id === configured,
+        reasoningEfforts,
+        ...(model.description === '' ? {} : { description: model.description }),
+        ...(defaultReasoningEffort === undefined
+          ? {}
+          : { defaultReasoningEffort }),
+        ...(model.contextLength === undefined
+          ? {}
+          : { contextLength: model.contextLength }),
+        ...(model.maxOutputTokens === undefined
+          ? {}
+          : { maxOutputTokens: model.maxOutputTokens }),
+      });
+      // The page must fit one frame (the contract measure) with room for
+      // its cursor, which is at most this row's selection id.
+      const bytes = messageBytes(row);
+      if (
+        rows.length > 0 &&
+        PAGE_OVERHEAD_BYTES + total + bytes + messageBytes(selectionId) >
+          maxBytes
+      ) {
+        more = true;
+        break;
+      }
+      total += bytes;
+      rows.push(row);
+    }
+  }
+  /** @type {ModelPage} */
+  const page = {
+    rows: harden(rows),
+    state: 'ok',
+    ...(more && rows.length > 0
+      ? { next: rows[rows.length - 1].selectionId }
+      : {}),
+  };
+  return harden(page);
+};
+harden(pageOf);
+
 /** Backends whose catalogue one adapter incarnation keeps at once. */
 const MAX_OWNERS = 4 * limits.maxBackends;
 
@@ -610,126 +759,6 @@ export const makeCatalog = ({ fetch, now = () => Date.now() } = {}) => {
     }
     owners.set(backend, owner);
     return owner;
-  };
-
-  /**
-   * The rows of an observation in R4-20 order for this request.
-   * @param {object} options
-   * @param {any} options.backend
-   * @param {any} options.spec
-   * @param {CatalogModel[]} options.sorted
-   * @param {Map<string, number>} options.indexOf
-   * @param {any} [options.request]
-   * @param {number} [options.maxBytes]
-   * @returns {ModelPage}
-   */
-  const pageOf = ({
-    backend,
-    spec,
-    sorted,
-    indexOf,
-    request = {},
-    maxBytes = limits.frameBytes,
-  }) => {
-    const isDefault =
-      request.defaultBackend !== undefined &&
-      request.defaultBackend === backend;
-    const configured = isDefault
-      ? (request.defaultModelId ?? spec.modelId)
-      : undefined;
-    const prefix = `${spec.label}:`;
-    /** @param {string} id */
-    const selectionOf = id => (isDefault ? id : `${prefix}${id}`);
-    const defaultIndex =
-      configured === undefined ? undefined : indexOf.get(configured);
-    // R4-20: the default row first, then title ignoring case, then id.
-    /** @param {number} position */
-    const modelAt = position => {
-      if (defaultIndex === undefined) return sorted[position];
-      if (position === 0) return sorted[defaultIndex];
-      return sorted[position <= defaultIndex ? position - 1 : position];
-    };
-    /** @param {string} id */
-    const positionOf = id => {
-      const index = indexOf.get(id);
-      if (index === undefined) return undefined;
-      if (defaultIndex === undefined) return index;
-      if (index === defaultIndex) return 0;
-      return index < defaultIndex ? index + 1 : index;
-    };
-    let start = 0;
-    if (request.after !== undefined) {
-      const after = String(request.after);
-      let id;
-      if (isDefault) id = after;
-      else if (after.startsWith(prefix)) id = after.slice(prefix.length);
-      const position = id === undefined ? undefined : positionOf(id);
-      // A cursor that names no row of this catalogue ends the listing.
-      if (position === undefined) return harden({ rows: [], state: 'ok' });
-      start = position + 1;
-    }
-    const limit = Math.min(
-      request.limit ?? limits.modelPageRows,
-      limits.modelPageRows,
-    );
-    /** @type {any[]} */
-    const rows = [];
-    let position = start;
-    let more = false;
-    let total = 0;
-    for (; position < sorted.length; position += 1) {
-      const model = modelAt(position);
-      const selectionId = selectionOf(model.id);
-      // A model whose id or selection id is over its bound is left out.
-      const fits =
-        model.id.length <= limits.modelIdUnits &&
-        selectionId.length <= limits.modelCursorUnits;
-      if (fits) {
-        if (rows.length >= limit) {
-          more = true;
-          break;
-        }
-        const row = harden({
-          backend,
-          modelId: model.id,
-          selectionId,
-          title: model.title,
-          default: model.id === configured,
-          reasoningEfforts: harden([]),
-          ...(model.description === ''
-            ? {}
-            : { description: model.description }),
-          ...(model.contextLength === undefined
-            ? {}
-            : { contextLength: model.contextLength }),
-          ...(model.maxOutputTokens === undefined
-            ? {}
-            : { maxOutputTokens: model.maxOutputTokens }),
-        });
-        // The page must fit one frame (the contract measure) with room for
-        // its cursor, which is at most this row's selection id.
-        const bytes = messageBytes(row);
-        if (
-          rows.length > 0 &&
-          PAGE_OVERHEAD_BYTES + total + bytes + messageBytes(selectionId) >
-            maxBytes
-        ) {
-          more = true;
-          break;
-        }
-        total += bytes;
-        rows.push(row);
-      }
-    }
-    /** @type {ModelPage} */
-    const page = {
-      rows: harden(rows),
-      state: 'ok',
-      ...(more && rows.length > 0
-        ? { next: rows[rows.length - 1].selectionId }
-        : {}),
-    };
-    return harden(page);
   };
 
   /** A scripted backend's catalogue: its one model. */

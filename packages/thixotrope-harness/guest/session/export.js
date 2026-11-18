@@ -34,7 +34,7 @@
  * Vat module: prelude globals only; no record keys from data; every page
  * bounded by `frameBytes`.
  */
-import { texts } from '../lib/interfaces.js';
+import { texts } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { messageBytes } from '../lib/bounded.js';
 import { holdText } from './holds.js';

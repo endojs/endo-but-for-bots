@@ -1158,3 +1158,30 @@ close-out units; checked at `d7fce8e46c`, 30 commits, and again at this unit's l
 review and close-out changed nothing outside the harness, so no CC entry was added (CC-030
 onwards stay unused by M2). The core candidates it raised (C-24, C-25) are in the table of open
 candidates above and on `designs/m0-results.md` page 6.
+
+## Core requests from the M3, M4 and M5 contracts (requested, not built)
+
+Numbers CC-050..CC-079 are reserved to the three lanes' contracts (`m3-interfaces.md` 15,
+`m4-interfaces.md` 19, `m5-interfaces.md` 9.2). None was built in a lane or in the cross-lane
+integration; each harness workaround named in the contract is what runs. A row here becomes an
+entry above only when the core lane makes the change; CC-070 has (as CC-027, K1 merge).
+
+| id | from | request | status | harness workaround meanwhile |
+|---|---|---|---|---|
+| CC-050 | M3 (conditional on A-1) | export `isImportPresence(value)` from the native adapter, so the gateway knows a call goes into a vat | requested (conditional), not built | every target is a vat target except the gateway's own local objects (conservative) |
+| CC-051 + CC-060 (one change) | M3 + M4 | one hub row-format change in `pkg/src/net/hub.js`: per-entry diffs of a session's hub row (CC-051, C-2's rest; evidence `ui.hubGrowth` 1.91 x row exports) and the alleged interface name stored once per export row of the exporting peer, with `reachability({ holder })` listing `{ origin, alleged }` (CC-060, object-granular reachability for M4 acceptance 5 and M5 acceptance 12) | requested, not built | `exportsPerConnection`, `gcImports`, pages drop what they no longer show; reachability by return-guard closure (unit) plus origin-granular holdings (integration) |
+| CC-070 | M5 | refuse an oversize inbound frame at the host instead of halting the vat | **built as CC-027** (the hub's vat frame ceiling, `0edc2ab05a`, `d705b0006a`; the same change as C-25), merged into the integration lane by K1 (J-10070); the harness serves at 65,536 (`limits.vatFrameBytes`, J-10126); not fixed per state directory and deliver-only drops are logged, not counted (CC-027 upstream notes) | none needed for the frame itself; the inspector (D-M5-2) and the membrane (D-M5-3) still bound what a vat makes of an answer under the ceiling |
+| CC-071 | M5 | inbound record keys do not drain a vat's permanent name table (a per-vat quota, or exhaustion as a halt, C-6) | requested, not built | the membrane's per-message bounds (open decision O-9) |
+| CC-072 | M5 (cited by M3 and M4) | `getInterfaceGuardPayload` in the guest prelude | requested, not built | read `guard.payload.methodGuards` (pinned by a contract test) |
+| CC-073 | M5 | the exec handle can read why its vat stopped (a narrowed `status()` facet) | requested, not built | the neutral `inspectTerminated` text |
+
+CC-052..CC-059, CC-061..CC-069 and CC-074..CC-079 are not used.
+
+### Accounting check 2026-11-18 (cross-lane integration of M3, M4 and M5, X-CLOSE)
+
+Range `bd9a8ec070..HEAD` (the merged lanes, then units X1, XA, XB, XC, XD, X-QC, X-FIX and
+X-CLOSE; checked at X-CLOSE's last commit). Command:
+`git diff --stat bd9a8ec070..HEAD -- . ':!packages/thixotrope-harness'` printed nothing, and
+`git log --oneline bd9a8ec070..HEAD -- . ':!packages/thixotrope-harness'` lists no commit. The
+cross-lane work changed nothing outside the harness, so no CC entry was added; the requests above
+are rows only.

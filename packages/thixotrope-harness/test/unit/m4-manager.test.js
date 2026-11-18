@@ -42,9 +42,11 @@ const failsWith = message => ({ message });
  * A fake ops facet: records every forward; `credentials()` answers one
  * CredentialOps per facet whose `describeSecrets` knows the keys in
  * `store`.
- * @param {{ rows?: any[][] }} [options] catalogue pages for `listModels`
+ * @param {{ rows?: any[][], pushGate?: () => Promise<void> }} [options]
+ *   catalogue pages for `listModels`; `pushGate`: `poolsChanged` answers
+ *   only once it settles
  */
-const makeFakeOps = ({ rows = [[]] } = {}) => {
+const makeFakeOps = ({ rows = [[]], pushGate } = {}) => {
   /** @type {any[]} */
   const calls = [];
   /** @type {Map<string, { generation: number, state: string, bytes: number }>} */
@@ -77,6 +79,11 @@ const makeFakeOps = ({ rows = [[]] } = {}) => {
     },
     auditReader: () => auditReader,
     accounts: () => accounts,
+    poolsChanged: async () => {
+      calls.push(['poolsChanged']);
+      if (pushGate) await pushGate();
+      calls.push(['poolsChanged answered']);
+    },
   });
   const ops = Far('AgentHostOps', {
     credentials: () => {
@@ -112,7 +119,7 @@ const makeFakeOps = ({ rows = [[]] } = {}) => {
 /**
  * The part over the fake ops, with Secrets made like `durable.js` makes
  * them (a presence and a `{ key, label, description }` record).
- * @param {{ rows?: any[][] }} [options]
+ * @param {{ rows?: any[][], pushGate?: () => Promise<void> }} [options]
  */
 const makeKit = options => {
   const fake = makeFakeOps(options);
@@ -178,7 +185,7 @@ const makeKit = options => {
 
 // ---------------------------------------------------------------- members
 
-test('makeMember is idempotent by label and credential; another credential conflicts until retired', t => {
+test('makeMember is idempotent by label and credential; another credential conflicts until retired', async t => {
   const kit = makeKit();
   const credential = kit.makeSecret('token');
   const request = harden({ provider: 'claude', label: 'first', credential });
@@ -212,8 +219,8 @@ test('makeMember is idempotent by label and credential; another credential confl
     weight: 1,
     state: 'active',
   });
-  member.retire();
-  member.retire();
+  await member.retire();
+  await member.retire();
   t.is(member.describe().state, 'retired');
   const again = kit.admin.makeMember(
     harden({
@@ -226,7 +233,7 @@ test('makeMember is idempotent by label and credential; another credential confl
   t.deepEqual(kit.admin.listMembers().members, [again]);
 });
 
-test('makeMember keeps at most maxMembers; listMembers pages them', t => {
+test('makeMember keeps at most maxMembers; listMembers pages them', async t => {
   const kit = makeKit();
   const declared = harden({ plan: 'Max' });
   const members = Array.from({ length: m4Limits.maxMembers }, (_, i) =>
@@ -254,13 +261,13 @@ test('makeMember keeps at most maxMembers; listMembers pages them', t => {
   const first = kit.admin.listMembers();
   t.is(first.members.length, m4Limits.poolPageEntries);
   t.true(matches(first, m4Shapes.MemberPage));
-  members[5].retire();
+  await members[5].retire();
   t.truthy(kit.member('claude', 'one more'));
 });
 
 // ---------------------------------------------------------------- pools
 
-test('makePool is idempotent by label and spec; conflicts, kinds and member states are refused', t => {
+test('makePool is idempotent by label and spec; conflicts, kinds and member states are refused', async t => {
   const kit = makeKit();
   const a = kit.member('claude', 'a');
   const b = kit.member('claude', 'b');
@@ -299,7 +306,7 @@ test('makePool is idempotent by label and spec; conflicts, kinds and member stat
       ),
     failsWith(m4Texts.unknownMember),
   );
-  b.retire();
+  await b.retire();
   t.throws(
     () => kit.admin.makePool(harden({ ...spec, label: 'x', members: [a, b] })),
     failsWith(m4Texts.noUsableMember),
@@ -331,8 +338,8 @@ test('at most maxPools active pools; a retired pool frees its slot and refuses u
   });
   t.throws(() => kit.admin.makePool(extra), failsWith(m4Texts.poolConflict));
   const [retired] = pools;
-  kit.admin.retirePool(retired);
-  kit.admin.retirePool(retired);
+  await kit.admin.retirePool(retired);
+  await kit.admin.retirePool(retired);
   t.is(kit.admin.describePool(retired).state, 'retired');
   t.truthy(kit.admin.makePool(extra));
   t.is(kit.admin.listPools().pools.length, m4Limits.maxPools);
@@ -348,6 +355,103 @@ test('at most maxPools active pools; a retired pool frees its slot and refuses u
   }
   t.deepEqual(retired.describe(), { kind: 'codex-pool', label: 'p0' });
   t.is(kit.sink.poolState(retired).state, 'retired');
+});
+
+test('XB, X-FIX (3.1): retirePool and PoolMember.retire record at once, push poolsChanged once each and return only after the adapter answered it; a repeat pushes nothing', async t => {
+  /** @type {(() => void)[]} */
+  const held = [];
+  const kit = makeKit({
+    pushGate: () =>
+      new Promise(resolve => {
+        held.push(() => resolve(undefined));
+      }),
+  });
+  const member = kit.member('codex', 'c');
+  const other = kit.member('codex', 'd');
+  const pool = kit.admin.makePool(
+    harden({ kind: 'codex-pool', label: 'p', members: [member, other] }),
+  );
+  /** Settle the part's sends (fake ops answer locally). */
+  const settle = async () => {
+    for (let i = 0; i < 8; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await null;
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+  const count = (/** @type {string} */ what) =>
+    kit.calls.filter(([name]) => name === what).length;
+  const pushes = () => count('poolsChanged');
+  await settle();
+  t.is(pushes(), 0, 'nothing before a retirement');
+  /**
+   * Start a retirement; once the push is in the adapter, check that the
+   * retirement is recorded and has not returned; then answer the push.
+   * @param {() => Promise<unknown>} retire
+   * @param {() => void} recorded asserts the record
+   */
+  const retireHeld = async (retire, recorded) => {
+    let returned = false;
+    const done = retire().then(value => {
+      returned = true;
+      return value;
+    });
+    await settle();
+    recorded();
+    t.is(held.length, 1, 'the push reached the adapter');
+    t.false(returned, 'the retirement waits for the adapter');
+    /** @type {() => void} */ (held.pop())();
+    t.is(await done, undefined);
+    t.is(
+      kit.calls.at(-1)?.[0],
+      'poolsChanged answered',
+      'it returned after the adapter answered',
+    );
+  };
+  await retireHeld(
+    () => member.retire(),
+    () => t.is(member.describe().state, 'retired'),
+  );
+  t.is(pushes(), 1, 'one push for the member');
+  t.is(await member.retire(), undefined);
+  t.is(pushes(), 1, 'a repeated retire pushes nothing');
+  await retireHeld(
+    () => kit.admin.retirePool(pool),
+    () => t.is(kit.admin.describePool(pool).state, 'retired'),
+  );
+  t.is(pushes(), 2, 'one push for the pool');
+  t.is(await kit.admin.retirePool(pool), undefined);
+  t.is(pushes(), 2, 'a repeated retirePool pushes nothing');
+  t.is(
+    count('credentials'),
+    1,
+    'the CredentialOps is fetched once per ops facet',
+  );
+});
+
+test('XB (3.1): a push that cannot be delivered does not fail the retirement', async t => {
+  const records = new WeakMap();
+  const secret = Far('Secret', {});
+  records.set(secret, harden({ key: 'k1', label: 's', description: 'd' }));
+  const kitPart = makeSubscriptionsPart({
+    withOps: async () => {
+      throw Error('manager lost');
+    },
+    whenBound: async () => undefined,
+    archiveKeyOf: () => null,
+    secretRecords: records,
+    secretList: () => [secret],
+  });
+  const member = kitPart.admin.makeMember(
+    harden({ provider: 'claude', label: 'm', credential: secret }),
+  );
+  const pool = kitPart.admin.makePool(
+    harden({ kind: 'claude-pool', label: 'p', members: [member] }),
+  );
+  t.is(await member.retire(), undefined);
+  t.is(member.describe().state, 'retired');
+  t.is(await kitPart.admin.retirePool(pool), undefined);
+  t.is(kitPart.admin.describePool(pool).state, 'retired');
 });
 
 test('the pool Backend forwards describe, listModels, resolveModel and open with its spec', async t => {
@@ -453,7 +557,7 @@ test('resolveEffort checks the effort against the model row, else answers its de
 
 // ---------------------------------------------------------------- sink
 
-test('marks are per member, shared by every pool the member is in, and lifted by an absent mark', t => {
+test('marks are per member, shared by every pool the member is in, and lifted by an absent mark', async t => {
   const kit = makeKit();
   const a = kit.member('claude', 'a');
   const b = kit.member('claude', 'b');
@@ -490,13 +594,13 @@ test('marks are per member, shared by every pool the member is in, and lifted by
   kit.sink.poolChanged(two, harden({ marks: [{ member: b }] }));
   t.is(kit.sink.poolState(one).members[1].mark, undefined);
   kit.sink.poolChanged(one, harden({ marks: [{ member: a, mark }] }));
-  a.retire();
+  await a.retire();
   const after = kit.sink.poolState(one);
   t.is(after.members[0].state, 'retired');
   t.is(after.members[0].mark, undefined);
 });
 
-test('served records: newest wins, 256 per pool, least recently served dropped; a retired member drops its records', t => {
+test('served records: newest wins, 256 per pool, least recently served dropped; a retired member drops its records', async t => {
   const kit = makeKit();
   const a = kit.member('codex', 'a');
   const b = kit.member('codex', 'b');
@@ -536,7 +640,7 @@ test('served records: newest wins, 256 per pool, least recently served dropped; 
   t.is(last.member, b);
   // poolState with 16 members and 256 served records fits one frame.
   t.true(fitsFrame(state));
-  a.retire();
+  await a.retire();
   state = kit.sink.poolState(pool);
   t.true(state.served.every((/** @type {any} */ entry) => entry.member === b));
   kit.sink.poolChanged(

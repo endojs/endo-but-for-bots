@@ -57,6 +57,7 @@ import {
   startFakeProviderServer,
 } from '../fixtures/fake-provider-server.mjs';
 import { makeSlice, requestId, sliceTemplate, waitFor } from './_m1a-slice.js';
+import { replaceSealed } from './_m2-secrets.js';
 
 takeIntegrationLock(test, 'm2 providers test');
 
@@ -110,7 +111,7 @@ const open = async t => {
     harden({ label: 'provider key', description: 'fake server key' }),
   );
   const writer = await E(secrets).openWriter();
-  await E(writer).replace(secret, KEY);
+  await replaceSealed(writer, secret, KEY);
   const keyGrant = await E(secret).makeReadGrant();
   const openRouter = await E(slice.admin).makeBackend(
     harden({
