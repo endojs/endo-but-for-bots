@@ -8575,3 +8575,49 @@ and `make` seeds the label map and four runtime parts; the largest preset adds t
 frame). The pool hides neither, because the factory's work happens after the take. Cold creation
 grows with program bytes as D-4 predicts (about 10 us per byte: 241 KB staged in 11 pieces).
 Fit: neutral: the costs are the staging model's (C-5, C-7), not M5's logic.
+
+### J-9696 2026-11-18 M5 perf rows of the group A and B files on the merged lane - perf
+Evidence: exclusive runs 05:57-06:42 in the J-9692 copy (bundler patch), worker 367e78ad, load
+2.4-4.7, windows 60 s unless stated. `mentions` (held 150 s): `mentions.turnStart` 32
+attachments 466 ms median (n 103) vs none 144 (n 147): +322 (budget +100) and 466 (350) MISS;
++0.3 deliveries pass. `tools` (370 s): `tools.local` +109 ms per round (852 vs 743, n 37 + 37;
+budget +30) MISS, -0.9 deliveries pass; `labels.full` 1.071 (1.1) pass; `tools.inspect` 339 ms
+(n 56; 300) pass under 1.25 x; `grants.round` 215 ms with 32 offered grants (plain 255; 350) pass,
+tool set 0.018 ms in Node (10) pass; probes d1 (8,193-byte store) 3.6 s, d2 (257th label) 13.9 s,
+d3 (33 attachments, guard) 3.8 s pass; probe e was a placeholder (W5.6 never filled it): built in
+64ef7847c6, rerun alone (`TOOLS_ROWS=tooBig.e`): `refused-schema` "3074 characters of JSON; the
+limit is 2048", no halt, next turn completed, 7.9 s pass. `exec-m5` (298 s):
+`exec.powersLookup` 73 ms (150) pass; `exec.membrane` -10 ms (+5) pass, Node +0.002 ms pass;
+`exec.scope1000` 100 ms (300) pass; probe a refused in the exec vat (307,200 estimated bytes),
+next turn completed, no halt, but the row failed on its own check (it compared with a JSON string
+that kept its closing quote; fixed in 00e7e848f1); b staged 8,194 bytes, no halt pass; c the
+workspace vat halted (J-0772's cause) MISS; f1, f2 pass. `presets` (206 s): `presets.save` with
+32 endowments 264-269 ms (150) MISS, 24-36 ms without; `inventory.page` 801-804 ms (200) MISS,
+24 ms for a one-entry inventory; `inventory.fill` 22.4 s for 20 `addAll` of 50.
+Reading: the misses share one cost: handles. 32 attachments add 322 ms to a turn start, 32
+endowments 240 ms to a save, and a page of 50 entries with their values costs 800 ms, about 7-15
+ms per handle that crosses into or out of a vat in a crank. Paging the inventory by an array
+instead of walking its Map (0ed170b653) changed nothing (801 ms) and was reverted (ef525d98c0).
+`tools.local`'s 109 ms is four tool results recorded and rendered in the round-final crank plus a
+larger next request, against one echo answered by the adapter.
+Fit: poor for reference-heavy messages: per-reference cost in the engine (c-list rows and hub
+refs written per crank, C-2/C-7 family) dominates M5's preset, inventory and mention paths.
+
+### J-9697 2026-11-18 O-1 createCold before and after; the M5 regression's wall time - perf
+Evidence: `perf/session.perf.mjs` (INSTALL_N=1, CREATE_N=5), the same method on both sides, under
+`run-lock --exclusive`: M2 base `3588cab190` (short-path copy) and the M5 lane copy (J-9690
+patch), worker 367e78ad, 06:32-06:40. Before: session program 186,448 bytes, 8 pieces,
+`session.createCold` 5,619 ms median (5,466-5,768), 34.6 deliveries; `install.factory` 5.7 s.
+After: 241,361 bytes, 11 pieces, 7,220 ms (6,919-7,726), 40.6 deliveries; `install.factory` 7.3
+s. `creation-m5`'s window row: 7,341 ms (n 17). Regression: the eleven M5 integration files held
+a slot 78-211 s each, 22.7 slot-minutes in all; the five perf files held all four slots 286 + 150
++ 370 + 298 + 206 s = 21.8 minutes. Waits for the lock: 0-1,705 s per integration file and 93-437
+s per perf file, mostly behind other lanes' exclusive perf runs held back to back.
+Reading: +1.6 s of cold creation for +54,913 bytes and +6 deliveries: about 29 us per byte if all
+of it were staging, three times D-4's 10 us; part is M5's `make` (label map, parts, grants open).
+Within 6 s x 1.25 still, but the pool is what keeps creation interactive. The regression cannot
+finish in 20 minutes on four slots: the exclusive perf files alone take 21.8 minutes; with the
+integration files spread over four slots (about 6 minutes) it is about 28 minutes, before waits.
+Fit: neutral for creation; poor for the shared machine's schedule: an exclusive waiter blocks new
+shared takers, so a lane whose perf files queue back to back starves the other lanes' integration
+files (one file here waited 28 minutes for 98 s of work).
