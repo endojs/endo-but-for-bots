@@ -11867,3 +11867,103 @@ Fit: neutral.
 Evidence: first command 13:23:35Z. Over 60 s: integration batch 1 (3 files) 170.3 s wall,
 batch 2 (8 files) 355.5 s wall. Unit runs 4-10 s, `tsc` 6 s.
 Fit: neutral.
+
+### J-10005 2026-11-18 XA SecretWriter.replace takes a SealedBox only; the gateway writes in process - build
+Evidence: commits a0f4bba9a8, a3e8bba8f9 (tests), 81fc8a96a2 (contract m2-interfaces 9.2, m3-interfaces
+A-11); `AH/secrets/writer.js`, `AH/secrets/manager.js`, `AH/index.js` (secretWriter lines),
+`GW/index.js`, `GW/extensions.js`, `GW/contract-m3.js`, `GW/extensions/m4-secrets.js`,
+`UI/src/secrets/daemon.js`, `guest/lib/interfaces.js` (`SecretWriter`).
+Reading: closes the open M2 major (M2-R1 (b), J-9486). The hub-reachable `SecretWriter` guard is
+now `replace(R('Secret'), S.SealedBox, count?)`: a plain string is refused by the exo guard before
+the method runs. `makeSecretsOps` gains `replaceLocal(secret, value | SealedBox, expected?)` and
+`publicKeyLocal()`, plain functions no remotable and no ops handler exposes. `AH/index.js` hands the
+gateway `{ replaceLocal, publicKey }`; `GW/index.js` makes one gateway-local `GatewaySecretWriter`
+exo per incarnation (guard `localWriterGuard` in `AH/secrets/writer.js`: plain value or box),
+offers it first in every page's `GatewayPowers.extras` under `secretWriterLabel` and answers it from
+`GatewayContext.secretWriter()`, so the m4-secrets `LargeCall` target is the object a page calls.
+The UI's Secrets panel takes its writer from the extras, not from `openWriter()`. Before the attach
+the writer's methods reject `notAttachedText`. Tests that sent plain values through the hub seal
+first (`_m2-secrets.js` `replaceSealed`: m2-catalog, m2-providers, m3-sessions; adapter m2-w23-secrets,
+m2-w23-manager). New adapter file `m2-secret-writer-paths.test.js` (3 tests): guard refusal leaves
+generation 0 and only the create events in the audit; `replaceLocal` with plain and boxed values and
+the generation check; a real gateway on loopback with a Node CapTP page: refused before attach, plain
+write in process, 200 KiB value through the LargeCall, the hub writer refused, no value in any log line.
+Bundles (`node scripts/bundle-guest.mjs`) before and after: session 213,712, exec 62,196, factory
+164,810, unchanged (no vat program bundles `interfaces.js`; the manager's `durable.js` carries the
+guard change, size not measured).
+Fit: good: the decision fits the rule "vats decide, Node adapters are the data path"; the page
+had full operator authority before (it could open the writer), so the built-in extra adds none.
+
+### J-10006 2026-11-18 XA acceptance 7 proves both write paths through the daemon - verified
+Evidence: `test/integration/m2-secrets.test.js` at `00274da6a6`, shared slot, load 3.5-3.7: exit 0,
+held 137.0 s (waited 31.0 s). A hub client's `E(writer).replace(other, plain)` is refused with the
+guard's text (`SecretWriter ... Must be a copyRecord`), `other` stays at generation 0. A page
+(serveGateway + Node CapTP client over a real WebSocket) creates a Secret through the operator's
+`SecretsAdmin` and writes a plain value through the extras writer (generation 1). After the clean
+stop the grep read 49 files, 224,870,916 bytes (control found as utf8 and utf16be): 0 hits for the
+two sealed values and the page's value. `m2.secrets.plainValue` (the refused plain value's text,
+which the hub carried in the request): hits [] .
+Fit: good.
+
+### J-10007 2026-11-18 XA Secret.setDescription is an audit event - build
+Evidence: commit 7e98649106 (`AH/secrets/store.js`, `test/adapter/m4-secrets-full.test.js`, guard
+snapshot), the `AuditEvent` op in a0f4bba9a8; J-9662 item 9.
+Reading: `store.setDescription` runs through `audited(...)`: `attempted`, then `succeeded` or
+`failed` with `INVALID_DESCRIPTION` / `UNKNOWN_SECRET`; the event carries the label, never the text.
+`shapes.AuditEvent.op` admits `'setDescription'` (otherwise the manager vat's `Secret.audit` and the
+M4 AuditReader return guards would refuse a page holding one). The X1 guard snapshot re-baselined
+exactly the nine entries that embed it or the writer guard (`shapes.AuditEvent`, `AuditPage`,
+`interfaces.SecretsAdmin`, `Secret`, `SecretWriter`, `m4Shapes.AuditReaderPage`,
+`m4Interfaces.SecretsAdmin`, `Secret`, `AuditReader`); vocabulary unchanged. The test now asserts
+the ten events of five calls, none containing the text, kept across a reopen.
+Fit: good. The ReadGrant stale-description half of item 9 is not in this unit.
+
+### J-10008 2026-11-18 XA the bridge's answer table is bounded; measured in the 60 s windows - measure
+Evidence: commit 00274da6a6 (`GW/bridge.js`, `contract-m3.js` `answersPerConnection` 4,096,
+`test/adapter/m3-w32-bridge.test.js` 3 new tests, `_m3-captp-client.js` held-question count,
+`perf/gateway.perf.mjs`); run `node scripts/run-lock.mjs --shared --label perf-gateway-xa -- node
+perf/gateway.perf.mjs` at `45c705f174`, under load (load average 2.6-5.0), held 332.5 s, exit 1.
+Reading: past the bound the oldest settled answer is forgotten on both sides (the bridge dispatches
+the page's own `CTP_DROP q-n` to its captp, which frees captp's answer and payload); a call
+pipelined on it is refused `notSignedIn`; only a table of unsettled answers closes (4008). Per
+window, the questions a client held at once (asked, not yet dropped; an upper bound of the
+gateway's table): ui.call 984 (1,372 calls), ui.submit 1,697 (355 samples, 3 calls each), ui.deltaFanout
+1,746 on the main page and about 300 on each of the 4 others; bound 4,096, `boundHit` false in
+every window. Server side (`gateway-connection-closed`): the main page answersPeak 1,746,
+answersEvicted 0; 11,499 fetch connections peak 2; the probes connection (closed by its 4,097-export
+probe, 4008) peaked at 4,096 with 12 evicted. Rows (under load): gateway.fetch median 0.73 ms,
+gateway.guard 0.122 ms, ui.call 29.1 ms, ui.submit 66.1 ms, ui.deltaFanout median 1 ms; exit 1 is
+the carried miss ui.deltaFanout 0.01 deliveries per delta (budget 0), not this unit.
+Fit: poor margin: a Node client with `gcImports` drops its questions only when V8 collects them, so
+a busy page holds about 1,000 questions a minute; 1,746 after three windows is 43 % of the bound.
+A page running longer than about 4 busy minutes without a major GC will see evictions (it stays open;
+only pipelining on an old answer is refused). A browser's GC cadence is not measured.
+
+### J-10009 2026-11-18 XA integration, adapter and unit lanes on the change - verified
+Evidence: shared slots, `THIX_AGENT=XA`. Integration: m2-secrets 137.0 s held; batch of 5 at once
+(320.8 s wall): m3-gateway 207.4 s held (waited 113.3), m3-sessions 196.2 (waited 101.6),
+m4-secrets 116.2, m2-catalog 116.6, m2-providers 110.1; all exit 0. Adapter and unit files of the
+gateway, secrets and interfaces (m3-w31-*, m3-w32-*, m4-gateway-extension, m2-w23-*, m2-w29-ops-guard,
+m4-secrets-full, m4-login, m2-secret-writer-paths, m5-gateway-vocabulary, m4-ui-secrets,
+m2/m4-interfaces, guards-split, m3-w33-gateway-admin): 155 passed. Whole `corepack yarn test`
+(68 s): 1 failure, `run-lock` "in-process takers racing" under load; alone 17 of 17 pass (the
+X1-reported load flake). `tsc` 0; eslint 0 errors on the changed files.
+Fit: neutral.
+
+### J-10010 2026-11-18 XA what is left for the contract and the next units - fit
+Evidence: J-10005..J-10008.
+Reading: (1) the guard's refusal text is the pattern library's and quotes the refused plain string
+back to the hub caller (the hub already carried it in the request; the grep found it nowhere in the
+state). (2) Contract rows outside this unit's sections still describe the old writer: m2-interfaces
+section 3 row `SecretWriter.replace(secret, value | SealedBox ...)` and the section 12 rows of
+`writer.js` / `manager.js`; m3-interfaces 6.1 (`GatewayContext.secretWriter()` "the same object a
+page gets from openWriter"), the section 6 M4 row, W3.7 row, H4 seam text and acceptance 16. (3)
+Browser tests (`test/browser/m4-*.mjs`) were not run: the Secrets panel now needs the gateway's
+extras writer (it is there in every gateway since this unit).
+Fit: neutral.
+
+### J-10011 2026-11-18 XA time record - verified
+Evidence: first command 13:23:35Z. Over 60 s: m2-secrets integration 168.4 s wall; integration
+batch of 5, 321.4 s wall; perf gateway (shared) 332.5 s held; unit lane 68.1 s. Unit and adapter
+subsets 3-10 s; `tsc` 2 s; eslint 5-9 s.
+Fit: neutral.
