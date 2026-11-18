@@ -41,6 +41,7 @@ import { resolveAuthToken } from './src/credentials.js';
 export const make = async (powers, context, { env } = {}) => {
   const { subagentLimits, maxToolRounds, requestTimeoutMs } =
     readFaeWorkloadConfig(env ?? {});
+  const { compactionSettings } = readFaeWorkloadConfig(env ?? {});
   const systemPrompt = env?.FAE_SYSTEM_PROMPT || undefined;
   // Written by this agent's parent, not by the operator, so the loop appends it
   // to the standing prompt rather than letting it take its place.
@@ -75,6 +76,7 @@ export const make = async (powers, context, { env } = {}) => {
       systemPrompt,
       harden({
         forceCompaction: env?.FAE_FORCE_COMPACTION === 'true',
+        compactionSettings,
         providerIdentity,
         subagentLimits,
         maxToolRounds,

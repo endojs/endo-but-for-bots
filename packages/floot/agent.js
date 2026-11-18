@@ -1,6 +1,8 @@
 // @ts-nocheck - E() generics don't work well with JSDoc types for remote objects
 /* eslint-disable no-await-in-loop */
 
+/** @import {ContextCompactionSettings} from '@endo/lal/providers/index.js' */
+
 // Floot — a streaming agent harness for the Endo daemon.
 //
 // Floot mirrors fae's factory/driver/guest topology (see @endo/fae) but trades
@@ -518,7 +520,8 @@ const provisionPresetObjects = async (
  * @param {Map<string, any>} [options.extraTools] - Session-specific tools
  *   the factory built (see `makeFlootToolRegistry`).
  * @param {number} [options.contextLength] Exact selected-model catalog reading.
- * @param {boolean} [options.forceCompaction] Acceptance-only trigger.
+ * @param {boolean} [options.forceCompaction] Explicit/manual trigger; runs even when automatic compaction is disabled.
+ * @param {ContextCompactionSettings} [options.compactionSettings]
  * @param {() => Promise<void>} [options.stopEnvironment] Private execution stop barrier, distinct from inference cancellation.
  * @param {(kind: 'turn-started' | 'turn-settled' | 'turn-resolved', detail?: { input: string, from?: string }) => void} [options.onChange]
  *   Told when this session's turn records change, whoever started the turn —
@@ -573,6 +576,7 @@ export const makeStreamingAgent = async (
     extraTools,
     contextLength,
     forceCompaction = false,
+    compactionSettings = {},
     stopEnvironment,
     journalPowers,
     attachments,
@@ -1145,6 +1149,7 @@ export const makeStreamingAgent = async (
         const plan = unseenImages
           ? undefined
           : planContextCompaction(context, {
+              ...compactionSettings,
               tools: tools.providerSchemas,
               windowTokens: contextLength ?? 0,
               usedTokens: lastRequestContext?.usedTokens ?? 0,
@@ -4489,6 +4494,7 @@ export const make = async (
             contextLength:
               entry.inferenceRecipe?.contextLength ?? entry.contextLength,
             forceCompaction: env?.FLOOT_FORCE_COMPACTION === 'true',
+            compactionSettings: workload.compactionSettings,
             ...(presetHasShell(preset)
               ? {
                   stopEnvironment: async () => {

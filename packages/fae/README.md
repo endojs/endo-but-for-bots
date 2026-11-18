@@ -48,6 +48,10 @@ Fae uses the same LLM provider configuration as `@endo/lal`.
 | `LAL_MODEL` | Model name | `qwen3` (Ollama) or `claude-opus-4-5-20251101` (Anthropic) |
 | `LAL_AUTH_TOKEN` | API key (required for Anthropic, optional for local) | - |
 
+Direct-provider context compaction is enabled by default.
+`FAE_COMPACTION_RESERVE_TOKENS` reserves response headroom (default `16384`), `FAE_COMPACTION_KEEP_RECENT_TOKENS` keeps a recent verbatim tail (default `20000`), and `FAE_COMPACTION_CUSTOM_INSTRUCTIONS` adds trusted focus to every structured summary.
+Set `FAE_COMPACTION_ENABLED=false` to disable automatic compaction; an explicit forced compaction still takes precedence.
+
 Create a `.env` file from the example:
 
 ```bash

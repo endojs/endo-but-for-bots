@@ -17,6 +17,10 @@ test('Floot defaults no longer impose small development budgets', t => {
   t.is(settings.maxSubagentDepth, 2);
   t.is(settings.subagentLimits.replyTimeoutSeconds, 86_400);
   t.is(settings.subagentLimits.maxTimeoutSeconds, 604_800);
+  t.deepEqual(settings.compactionSettings, {
+    enabled: true,
+    keepRecentTokens: 20_000,
+  });
 });
 
 test('each workload setting can be overridden and malformed settings fail early', t => {
@@ -36,6 +40,10 @@ test('each workload setting can be overridden and malformed settings fail early'
     FLOOT_SUBAGENT_MAX_ANSWER_CHARS: '2048',
     FLOOT_SUBAGENT_MAX_CLOSED_ASKS: '128',
     FLOOT_SUBAGENT_MAX_KNOWN_SUBAGENTS: '256',
+    FLOOT_COMPACTION_ENABLED: 'false',
+    FLOOT_COMPACTION_RESERVE_TOKENS: '4096',
+    FLOOT_COMPACTION_KEEP_RECENT_TOKENS: '8192',
+    FLOOT_COMPACTION_CUSTOM_INSTRUCTIONS: 'Preserve file changes.',
   });
   t.deepEqual(settings.transcriptLimits, {
     maxChars: 100_000,
@@ -59,6 +67,12 @@ test('each workload setting can be overridden and malformed settings fail early'
     maxClosedAsks: 128,
     maxKnownSubagents: 256,
   });
+  t.deepEqual(settings.compactionSettings, {
+    enabled: false,
+    reserveTokens: 4096,
+    keepRecentTokens: 8192,
+    customInstructions: 'Preserve file changes.',
+  });
   t.throws(
     () => readFlootWorkloadConfig({ FLOOT_SHELL_TIMEOUT_MS: '2147483648' }),
     { message: /Invalid workload limit/ },
@@ -66,5 +80,19 @@ test('each workload setting can be overridden and malformed settings fail early'
   t.throws(
     () => readFlootWorkloadConfig({ FLOOT_SUBAGENT_MAX_TIMEOUT_SECONDS: '1' }),
     { message: /reply deadline/ },
+  );
+  t.throws(
+    () => readFlootWorkloadConfig({ FLOOT_COMPACTION_ENABLED: 'maybe' }),
+    { message: /Invalid compaction/ },
+  );
+  t.throws(
+    () =>
+      readFlootWorkloadConfig({ FLOOT_COMPACTION_CUSTOM_INSTRUCTIONS: '   ' }),
+    { message: /Invalid compaction/ },
+  );
+  t.throws(
+    () =>
+      readFlootWorkloadConfig({ FLOOT_COMPACTION_KEEP_RECENT_TOKENS: '-1' }),
+    { message: /Invalid workload limit/ },
   );
 });

@@ -1,6 +1,8 @@
 // @ts-nocheck - E() generics don't work well with JSDoc types for remote objects
 /* eslint-disable no-await-in-loop */
 
+/** @import {ContextCompactionSettings} from '@endo/lal/providers/index.js' */
+
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
@@ -220,7 +222,8 @@ Example: if a message says "Here is @counter for you", adopt it:
  *   token afresh for each turn, so a rotated secret reaches a running agent and
  *   a revoked one stops it. Absent when the caller injected a built provider.
  * @param {string} [options.sessionId] - Stable pool identity, required for subscriptions.
- * @param {boolean} [options.forceCompaction] Acceptance-only trigger.
+ * @param {boolean} [options.forceCompaction] Explicit/manual trigger; runs even when automatic compaction is disabled.
+ * @param {ContextCompactionSettings} [options.compactionSettings]
  * @param {string} [options.providerIdentity] Locator of the exact retained provider recipe.
  * @param {typeof DEFAULT_SUBAGENT_LIMITS} [options.subagentLimits]
  * @param {number} [options.maxToolRounds]
@@ -239,6 +242,7 @@ export const spawnWorkerLoop = async (
     delegatedPrompt,
     sessionId,
     forceCompaction = false,
+    compactionSettings = {},
     providerIdentity,
     subagentLimits = DEFAULT_SUBAGENT_LIMITS,
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
@@ -528,6 +532,7 @@ export const spawnWorkerLoop = async (
         const plan = unseenImages
           ? undefined
           : planContextCompaction(providerContext, {
+              ...compactionSettings,
               tools: tools.schemas,
               // Only caller-supplied exact next-model catalog metadata is a
               // capacity guarantee. A router's previous served model is not.
