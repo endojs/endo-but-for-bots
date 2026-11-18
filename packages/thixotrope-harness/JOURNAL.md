@@ -8752,3 +8752,81 @@ rule, which an orthogonally persistent vat would keep for free and a Node proces
 restart and eviction. Deletion should follow only from a persistent fact (the vat's acknowledged
 chain recorded in the manifest), never from memory.
 Decision: recorded; the stall row needs per-turn indexes and engine deltas before it is split.
+
+### J-9440 2026-11-18 M2 security review: secrets and providers, no value leaves - good fit
+Evidence: M2-R1 review of `AH/secrets/*`, the Secret, ReadGrant, SecretsAdmin and sink objects in
+`resources/agent-host/durable.js`, `AH/providers/*`, `AH/index.js`, `AH/attach.js` and
+`scripts/serve.mjs` at 6be8e868cf; `corepack yarn test test/adapter/m2-w23-secrets.test.js
+test/adapter/m2-w21a-openrouter.test.js test/adapter/m2-w21a-fake-server.test.js`: 33 passed, under
+2 s wall; adapter-level probes (no supervisor) of redirects, URL credentials, CR/LF in a key, a
+100 kB key, a torn audit tail and concurrent first key loads. The integration test
+`m2-secrets.test.js` was not rerun: the slot lock did not grant a slot within its 590 s wait.
+Reading: the only path of a value is SecretWriter (adapter) -> store (memory, then AES-256-GCM
+`secrets.enc`) -> `readNow` -> provider header; no value enters a vat, an event, a log line, the
+audit or an error text: store failures are fixed codes, HTTP failures fixed texts with statuses
+(non-2xx bodies are cancelled unread, transport errors drop their message, the stream log keeps the
+error class only), served-by names pass a key-shape filter. `redirect: 'error'` holds (a 307 to a
+second origin: no request reached it); a base URL with user info and a key with CR/LF are refused
+by fetch before any byte is sent, with the fixed text. `secrets.enc` is temp, fsync, rename,
+directory fsync, a fresh random 96-bit nonce per seal; the wrapping key is outside the state
+directory and the X25519 sealing key is derived from it, so the state directory alone opens
+nothing. The PM-accepted audit deviation holds for SIGKILL (one append is one write; no value in an
+event) with one correction in J-9441.
+Fit: good fit: amplification through the manager's WeakMaps (`resolveSecrets`, `resolveGrants`)
+gives a value no name at all, and serial keys `k<n>` from the durable heap never repeat, so a grant
+that survives `delete` resolves to a key the store no longer has (`UNKNOWN_SECRET`).
+Decision: no reject finding; fixes in J-9441 and J-9442.
+
+### J-9441 2026-11-18 M2 security review: findings in secrets - deviation
+Evidence: as J-9440; probe numbers measured at 6be8e868cf on this machine.
+Reading: (1) a holder of AgentHostAdmin and any ReadGrant can name any `baseUrl` (`text(urlUnits)`,
+`http:` to any host included); the provider then sends the key there, so a grant is in effect read
+authority. Fix: refuse a `baseUrl` that is not `https:` (or `http:` to loopback), and bind the
+allowed origin to the Secret at `create` so a grant cannot carry the key elsewhere. (2)
+`SecretWriter.replace` accepts a plain string from any remote caller (hub frames in clear, C-1).
+Fix: the exo takes only a SealedBox; the gateway gets an in-process replace that is not on the exo.
+(3) R7-25's 8,192-byte provider token bound is not checked: a 100,000-byte key went through
+`readProviderKey`. Fix: refuse it there with `INVALID_SECRET_BYTES`. (4) A torn audit line with no
+newline (power loss or disk full; not SIGKILL) glues the next append onto it: after restart, 1 of 2
+new events was lost (7 events found, 8 expected). Fix: at load, truncate the file to its last
+newline. (5) Store and sealing keys load the key file each on its own; on a fresh key file the two
+first loads raced in 1 of 50 runs ("must hold exactly 32 bytes"), the rejection is cached for the
+incarnation, and a SIGKILL between create and write leaves an empty key file forever. Fix: one
+shared load promise; write the key to a temp file, fsync, then link it into place (exclusive) and
+fsync the directory. (6) `SecretsAdmin.list` cursor is an offset: a delete between pages skips one
+Secret; the cursor is also a string. Fix: a creation serial per record kept past delete, the cursor
+the last Secret object, the next page the records with a greater serial. (7) `MAX_SECRETS` (1,024)
+lives in `durable.js` and `AUDIT_KEEP` in `store.js`, not in `limits.js`; `create` checks the count
+before its await, so concurrent creates can pass 1,024. Fix: move both to `limits.js`, count
+pending creates. (8) One wrapping key seals both the file and every audit line under random nonces
+(two lines per read); fine for years at the measured rates, but give each use its own HKDF subkey.
+Decision: (1) and (2) before M2 is marked done; the rest as follow-ups.
+
+### J-9442 2026-11-18 M2 security review: findings in providers - deviation
+Evidence: as J-9440.
+Reading: (1) no per-round bound on the streamed size: text parts and tool-call argument pieces build
+up in adapter memory until the request timeout (1 h), and `timeoutMs: 0` removes it. SSE lines and
+events are bounded (16 Mi units each), so one line cannot grow without limit, but a stream can. Fix:
+fail the round at a total of, for example, `limits.roundResultBytes` times the staging factor, and
+refuse `timeoutMs` 0 in the BackendSpec guard. (2) Retry follows the contract: nothing is retried
+after a delta or reported tokens, the key is read once per round, and Retry-After waits are capped
+(30 s or 8 s). A network failure after the request was sent and before any delta is retried, which
+may bill twice (R4-74 allows this). Re-dispatch of a round > 0 after SIGKILL was not reviewed here.
+(3) Presence-keyed caches (J-9403, C-23): `backendState` and the secrets ops' `grantKeys` and
+`secretKeys` are WeakMaps keyed by presences, so a collected presence costs one more manager crank
+and a fresh provider instance. This is not a leak, since every value is read again through the store.
+The catalogue's strong map keeps answering from its cache for up to 24 h after a revoke (only the
+model list). (4) `logPath` in a BackendSpec lets the AgentHostAdmin holder choose where the adapter
+writes its event log (no secret in it). Fix: a path under the state directory only.
+Decision: (1) before M2 is marked done; the rest recorded.
+
+### J-9443 2026-11-18 M2 security review: public-repository hygiene - defect
+Evidence: `git diff 48d6f3e08b..6be8e868cf -- packages/thixotrope-harness`, added lines only,
+scanned for credential shapes, email addresses, IPv4 addresses, domains and absolute paths.
+Reading: no credential-shaped string (test keys are `not a real key` or built at run time), no
+email address, no non-loopback address, and only public domains. Absolute local paths with the
+local account name are committed in `designs/architecture.md`, `designs/milestones.md`,
+`designs/review-feasibility.md` and `designs/survey/{apps,core,native,reuse,spec-digest,tooling}.md`
+and in `designs/survey/feasibility-probe.mjs`. These are paths of the home directory, of sibling
+checkouts, of the specification and of a session scratch directory.
+Decision: replace them with the names used elsewhere (T, E, H, `<scratch>`) before any push.
