@@ -39,7 +39,7 @@ import {
   startFromTemplate,
   takeIntegrationLock,
 } from '../template/index.js';
-import { makeSlice, round1, waitFor } from './_m1a-slice.js';
+import { makeSlice, requestId, round1, waitFor } from './_m1a-slice.js';
 import { execTemplate } from './_m1b-exec.js';
 import { runTurn, turnRecords } from './_m1b.js';
 
@@ -224,11 +224,7 @@ run('acceptance 11b: K4 and K5', async t => {
     20,
   );
   const runsBefore = await E(fixtures.slowTool).runs();
-  const receipt = await E(slice.composer).submit(
-    session,
-    'slow',
-    `${Date.now()}-k5`,
-  );
+  const receipt = await E(slice.composer).submit(session, 'slow', requestId());
   const { turnId } = await E(receipt.turn).getStatus();
   await waitFor(
     async () =>

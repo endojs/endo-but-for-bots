@@ -42,7 +42,8 @@ const { textOf: textOfM5 } = await import('../guest/lib/interfaces-m5.js');
 const { limits } = await import('../guest/lib/limits.js');
 const { limitsM5 } = await import('../guest/lib/limits-m5.js');
 /* eslint-enable import/no-relative-packages */
-const { makeSlice } = await import('../test/integration/_m1a-slice.js');
+const { makeSlice, requestId } =
+  await import('../test/integration/_m1a-slice.js');
 const { execTemplate } = await import('../test/integration/_m1b-exec.js');
 const { runTurn, turnRecords } = await import('../test/integration/_m1b.js');
 
@@ -380,7 +381,7 @@ const rows = [
         const refused = await E(s.session)
           .enqueueMessageOnce(
             harden({ text: 'x' }),
-            `${Date.now()}-probe`,
+            requestId(),
             Date.now(),
             harden(Array(limitsM5.maxAttachments + 1).fill(attachment)),
           )
