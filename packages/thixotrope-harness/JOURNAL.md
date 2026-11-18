@@ -12054,3 +12054,77 @@ files) 605.4 s wall; m4-accounts alone 130.8 (in batch), 76.1, 88.8 s; m5-grants
 101.0, 110.8, 98.8, 99.0, 93.1, 100.9 s (diagnosis runs); a probe run of m5-grants 79 s; final
 batch 434.4 s wall. Everything else under 10 s.
 Fit: neutral.
+
+### J-10035 2026-11-18 XD M3 browser files on the merged tree - verified
+Evidence: first run (`--jobs 3`, load 1.6-1.9): `m3-ui-history` passed (171.4 s, the `m3-300`
+template rebuilt in it); `m3-ui` and `m3-ui-restart` failed in 1.6 s with ENOENT renaming
+`assets/.main-<hash>.js.tmp`: two files built the UI at once (`ensureUiBuilt` had no lock). Fixed
+in `test/browser/_harness.mjs` with a directory lock under `tmp/` (stale after 120 s); every later
+side-by-side run built once. After the fix all three pass. Send now: `m3-ui-restart` acceptance 12
+sends now with no running turn (after a restart), so the M2-review behaviour (the session cancels
+the running turn) had no browser check; `m3-ui` gains one: a stalled turn, a queued message, Send
+now on its row: the stalled turn ends `cancelled` (the scripted provider logs `cancelled` for its
+turn id), the entry completes next, the queue is empty (0.95 s). The page sends no cancel of its
+own. Sealed-only writer: the page's writer is the gateway's extras service (J-10036 writes through
+it, including the 1 MiB probe).
+Fit: good.
+
+### J-10036 2026-11-18 XD M4 acceptance 14 and 15 (browser part) - test
+Evidence: new `test/browser/m4-ui.test.mjs` on the `m4` template with the fake subscription and
+OAuth servers; one test, 22-34 s in the page, 79-89 s held. Account chips: a pool session, a turn
+sent from the page; member a's token was expired, so the round renewed it (1 refresh POST, served
+`renewed`); a chip shows the served round's 37% without a reload. Subscriptions panel: the page's
+`getSecrets()` -> `subscriptions()` -> `accounts()` reach the real manager vat and the adapter's
+`Accounts`; the pool shows two members; Refresh reads both (2 usage GETs) and both become
+`observed`. Secrets panel: create (gen 1), replace (gen 2), a Node sealed replace then a page
+replace at the shown generation fails `GENERATION_CONFLICT` and the row re-reads gen 3, description
+edited, audit lists `create succeeded` and `replace succeeded`, revoke, delete after revoke. Size
+probe from a file input: 1,040,382 random letters (JSON 1,040,384 bytes) go through the large-call
+writer; the row shows `gen 4 · 1040382 bytes`; 1,040,383 letters are refused in the page with
+`m4Texts.secretTooLargeForBrowser`, the secret is unchanged. Defect found: after that refusal the
+panel still re-read the catalogue (frames left the page); `ui/src/secrets/SecretsPanel.js` now
+marks its own refusals and skips the re-read. The literal "no frame is sent" cannot hold: the page's
+live subscriptions (accounts `next()`, the session view) send frames at any time; the test asserts
+that no frame in the second after the refusal carries the value and none calls a Secrets method.
+Acceptance 15 (browser part): no access token, refresh token, typed value or 64-byte probe marker
+in HTTP requests, received frames or the DOM; credentials in no sent frame; after a clean stop
+none of them under the state directory (grep 3.5-5 s) or in the stderr tail; the pool label is
+found (control).
+Fit: good: the M4 panels needed no change to work through the real gateway; poor: acceptance 14's
+frame count wording.
+
+### J-10037 2026-11-18 XD M5 acceptance 15 in the browser - fix
+Evidence: `m5-ui` had never run. Three defects: (1) the test made a session with no backend (the
+`m2` template configures none): it now makes a scripted backend after the start; (2) the
+attachment chip never showed: the transcript record of a turn the page watched is the live
+`turn-start` event, which carries no `attachments` (`TurnStarted` does); the controller's settled
+re-read now copies `attachments` onto the entry's record, so the chips show once the turn settles
+(not while it runs: that needs `attachments` on the vat's `turn-start` event, a guest change not
+made); (3) `attachmentsLost` never showed: drafts are resent at attach, before any session is on
+screen, and the error was dropped; it is now kept per session and shown when that session opens.
+The test also resends a plain draft with an A.4 id for real after the reload (one receipt, one
+completed turn, the draft cleared). Passes: 25-48 s in the page, 84-107 s held.
+Fit: good.
+
+### J-10038 2026-11-18 XD rule 4a in the browser - test
+Evidence: `startBrowserGateway` answers `gatewayLog` (the gateway's stderr lines read from the
+supervisor's 16 KB tail every 200 ms). `m4-ui` sends from the page a raw `CTP_CALL`
+`noSuchMethodXD` to three vat presences (Operator from the powers record, SecretsAdmin returned by
+`getSecrets`, SessionFactory returned by `getFactory`): each is answered `gatewayTexts.unknownMethod`
+and the gateway logged exactly three refusals, all rule `method`, so every other call of the page
+(M3 shell, M4 panels and chips, renewal turn) was admitted. `m3-ui`, `m3-ui-restart`,
+`m3-ui-history` and `m5-ui` assert no `method` refusal. Finding: through the hub every vat presence
+arrives with the alleged interface `Remote Object N`, so a page (or test) cannot tell vat objects
+apart by interface; the probe names them by the field or call that gave them.
+Fit: good; poor: a 16 KB stderr tail polled is a weak log source (a burst over 16 KB in 200 ms
+would lose lines); per-rule refusal counts in the bridge's `stats()` would be exact.
+
+### J-10039 2026-11-18 XD final browser batch and time record - verified
+Evidence: at e055ff7edd, `--jobs 5`, shared slots, load 2.1: 5 files, 197.9 s wall, all exit 0.
+Held s: m3-ui-restart 197.9, m3-ui 108.4, m5-ui 106.9, m3-ui-history 102.0, m4-ui 89.1; every file
+under 5 minutes. With the Send now test (8a631327f9) `m3-ui` alone 97.1 s, 6 tests pass. UI unit
+files (m3-ui-*, m4-ui-*, m5-w58-*) 105 passed; `tsc` 0; eslint 0 errors on changed files. No guest
+file changed (no bundle change, no template rebuild from XD). Time: first command 14:46:44Z.
+Over 60 s: M3 batch 1 172 s; m5-ui 67, 111, 111 s; batch of three 187 s; m4+m5 85, 92 s; m4-ui
+80 s; final batch 198 s; m3-ui 97 s.
+Fit: neutral.
