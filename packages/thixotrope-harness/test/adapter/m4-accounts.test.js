@@ -355,6 +355,69 @@ test('refresh reads on demand, once per member; a failed read demotes to remembe
   sub.close();
 });
 
+test('M4-FIX: refresh is single flight per member; the model refreshes a member at most once a minute', async t => {
+  let reads = 0;
+  /** @type {(() => void)[]} */
+  const release = [];
+  const { core, clock } = await setup(t, {
+    readers: {
+      usage: async () => {
+        reads += 1;
+        await new Promise(resolve => {
+          release.push(() => resolve(undefined));
+        });
+        return readingOf(10, clock.now());
+      },
+    },
+  });
+  const pool = Far('Backend', {});
+  const m1 = memberEntry('one', 'k1');
+  core.register(pool, { kind: 'claude-pool', label: 'p', members: [m1] });
+  // Concurrent refreshes, operator and model: one provider read.
+  const both = Promise.all([
+    core.accounts.refresh(pool),
+    core.accounts.refresh(),
+    core.refreshForModel(pool),
+  ]);
+  await clock.advance(0);
+  t.is(reads, 1, 'one read in flight, shared');
+  for (const done of release.splice(0)) done();
+  await both;
+  // A looping model: no read within the minute after the last one.
+  for (let i = 0; i < 10; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await core.refreshForModel(pool);
+    // eslint-disable-next-line no-await-in-loop
+    await clock.advance(5000);
+  }
+  t.is(reads, 1, 'the model read nothing more within 60 s');
+  await clock.advance(10_000);
+  const again = core.refreshForModel(pool);
+  await clock.advance(0);
+  t.is(reads, 2, 'a minute later it reads again');
+  for (const done of release.splice(0)) done();
+  await again;
+  // The tool path is the throttled one.
+  const tool = makeAccountStatusTool({
+    subscriptions: harden({ accounts: core }),
+    backend: pool,
+  });
+  for (let i = 0; i < 5; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const outcome = await tool.execute(
+      harden({ opId: `o${i}`, args: '{"refresh":true}' }),
+    );
+    t.is(outcome.status, 'ok');
+  }
+  t.is(reads, 2, 'accountStatus {refresh:true} in a loop: no new read');
+  // The operator's refresh still reads on demand.
+  const operator = core.accounts.refresh(pool);
+  await clock.advance(0);
+  t.is(reads, 3);
+  for (const done of release.splice(0)) done();
+  await operator;
+});
+
 test('forBackend of an unregistered pool asks the readers once; not a pool is undefined', async t => {
   let describes = 0;
   const pool = Far('Backend', {});

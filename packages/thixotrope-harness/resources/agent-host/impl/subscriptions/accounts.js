@@ -33,7 +33,11 @@
  *   providers now; nothing reads a provider on a first `list`,
  *   `forBackend`, `forSession` or `watch`. A renewal never runs on an
  *   account read (m4-interfaces 7): the usage reader is given the
- *   credential as it stands.
+ *   credential as it stands. Each member is read by one flight at a time
+ *   (concurrent refreshes share it), and the model's refresh
+ *   (`accountStatus { refresh: true }`, `refreshForModel`) reads a member
+ *   at most once per `modelRefreshMs` (60 s), counting reads by any path,
+ *   so a looping model cannot hammer the providers' usage endpoints.
  * - **Readings file** (`account-file.js`): loaded lazily at the first use
  *   in an incarnation; written at most every `readingsFlushMs`.
  *
@@ -119,11 +123,14 @@ harden(isoOf);
  * @property {number} [idleMs] default `m4Limits.accountsIdleMs`
  * @property {number} [subscribers] default `channelLimits.subscribersPerSession`
  * @property {number} [readingsFlushMs] default 5,000
+ * @property {number} [modelRefreshMs] the model's refresh reads a member at
+ *   most this often (default 60,000)
  */
 
 /**
  * @typedef {AccountsCore & {
  *   register: (backend: any, info: PoolInfo) => void,
+ *   refreshForModel: (backend: any) => Promise<void>,
  *   rev: () => number,
  *   subscriberCount: () => number,
  *   close: () => Promise<void>,
@@ -190,6 +197,7 @@ export const makeAccounts = ({
   const idleMs = settings.idleMs ?? m4Limits.accountsIdleMs;
   const maxSubscribers =
     settings.subscribers ?? channelLimits.subscribersPerSession;
+  const modelRefreshMs = settings.modelRefreshMs ?? 60_000;
   const fileOf = typeof file === 'function' ? file : () => file;
   const writer = makeReadingsWriter({
     file: fileOf,
@@ -510,25 +518,63 @@ export const makeAccounts = ({
   };
 
   /**
-   * Read the providers now for these pools' active members (each member
-   * once, however many pools it is in); one publish at the end.
-   * @param {any[]} backends
+   * The usage read of each member in flight (single flight per member;
+   * bounded by the members registered).
+   * @type {Map<any, Promise<Reading | undefined>>}
    */
-  const refreshPools = async backends => {
+  const readsInFlight = new Map();
+  /**
+   * When each member's last usage read started (any path).
+   * @type {WeakMap<any, number>}
+   */
+  const lastReadAt = new WeakMap();
+
+  /**
+   * One usage read of a member, shared by concurrent refreshes.
+   * @param {(backend: any, member: MemberEntry) => Promise<Reading | undefined>} usage
+   * @param {any} backend
+   * @param {MemberEntry} entry
+   */
+  const readOnce = (usage, backend, entry) => {
+    const known = readsInFlight.get(entry.member);
+    if (known !== undefined) return known;
+    lastReadAt.set(entry.member, now());
+    const flight = usage(backend, entry).finally(() => {
+      readsInFlight.delete(entry.member);
+    });
+    readsInFlight.set(entry.member, flight);
+    return flight;
+  };
+
+  /**
+   * Read the providers now for these pools' active members (each member
+   * once, however many pools it is in); one publish at the end. A member
+   * read less than `minIntervalMs` ago and not in flight is skipped.
+   * @param {any[]} backends
+   * @param {number} [minIntervalMs]
+   */
+  const refreshPools = async (backends, minIntervalMs = 0) => {
     ensureLoaded();
     if (readers.usage === undefined) return;
     const usage = readers.usage;
     /** @type {Map<any, { backend: any, entry: MemberEntry }>} */
     const targets = new Map();
     for (const backend of backends) {
-      for (const entry of pools.get(backend)?.members ?? [])
-        if (entry.state === 'active' && !targets.has(entry.member))
+      for (const entry of pools.get(backend)?.members ?? []) {
+        const last = lastReadAt.get(entry.member);
+        const recent =
+          minIntervalMs > 0 &&
+          !readsInFlight.has(entry.member) &&
+          last !== undefined &&
+          now() - last < minIntervalMs;
+        if (entry.state === 'active' && !recent && !targets.has(entry.member))
           targets.set(entry.member, { backend, entry });
+      }
     }
     const results = await Promise.allSettled(
       [...targets.values()].map(async ({ backend, entry }) => ({
         entry,
-        reading: await usage(backend, entry),
+        reading: await readOnce(usage, backend, entry),
       })),
     );
     let changed = false;
@@ -606,6 +652,15 @@ export const makeAccounts = ({
         ...(markedUntilMs === undefined ? {} : { markedUntilMs }),
       });
       publish();
+    },
+    /**
+     * The model's refresh (`accountStatus { refresh: true }`): the pool's
+     * members not read in the last `modelRefreshMs`.
+     * @param {any} backend
+     */
+    refreshForModel: async backend => {
+      if ((await poolInfoOf(backend)) !== undefined)
+        await refreshPools([backend], modelRefreshMs);
     },
     sessionOpened: (backend, session) => {
       poolOfSession.set(session, backend);

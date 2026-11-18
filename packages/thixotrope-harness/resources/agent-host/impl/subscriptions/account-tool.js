@@ -127,8 +127,8 @@ const okOutcome = async (blobs, text) => {
 
 /**
  * @param {object} options
- * @param {{ accounts: { accounts: any } }} options.subscriptions this
- *   incarnation's `Subscriptions` (W4.6); only its `accounts` is used
+ * @param {{ accounts: { accounts: any, refreshForModel: (backend: any) => Promise<void> } }} options.subscriptions
+ *   this incarnation's `Subscriptions` (W4.6); only its `accounts` is used
  * @param {any} options.backend the session's `Backend` presence
  * @param {any} [options.session] the `Session` presence (usage)
  * @param {import('../blobs.js').BlobStore} [options.blobs] the session's
@@ -165,7 +165,10 @@ export const makeAccountStatusTool = ({
       /** @type {any} */
       let pool;
       try {
-        if (checked.refresh) await accounts.refresh(backend);
+        // At most one usage read per member per `modelRefreshMs` (M4-FIX):
+        // a model looping on refresh reads the providers once a minute.
+        if (checked.refresh)
+          await subscriptions.accounts.refreshForModel(backend);
         pool = await accounts.forBackend(backend);
       } catch {
         return failedOutcome(accountStatusFailedText);
