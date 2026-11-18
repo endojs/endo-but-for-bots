@@ -118,8 +118,10 @@ for (const killDelayMs of KILL_DELAYS) {
     if (killDelayMs > 0) await delay(killDelayMs);
     await state.kill();
     const { servedMs } = await state.restart();
+    t.log('served', round1(servedMs));
     await slice.refresh();
     const status = await E(slice.harness).whenSettled();
+    t.log('settled', status);
     const page = await E(slice.factory).listSessions();
     /** @type {any[]} */
     const listed = page.rows.filter(
@@ -148,7 +150,8 @@ for (const killDelayMs of KILL_DELAYS) {
       const session = listed[0].session;
       t.is(listed[0].state, 'ready');
       const live = await slice.subscribe(session);
-      await slice.submit(session, inputs.hi);
+      const receipt = await slice.submit(session, inputs.hi);
+      t.log('submitted', receipt.state);
       await live.until(e => e.type === 'end', 30_000);
       await live.stop();
       await waitFor(
