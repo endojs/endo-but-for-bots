@@ -9660,3 +9660,41 @@ this journal commit.
 Reading: reading the design and the hub, daemon, store and native modules took most of the time;
 term-count scripts gave the scale, and each divergent site was then read.
 Decision: none.
+
+### J-9965 2026-11-18 AR-DUP review: repeated code across the core - fit
+
+Evidence: designs/arch-review/core-duplication.md section 1; tools/find-duplicates.mjs (8-line
+windows, literal and token mode). Source 86 of 10,199 normalised lines in a repeated block (0.8 %),
+tests 949 of 17,008 (5.6 %); 0 lines shared with 21 sibling Endo packages. Promise kits, the
+serial queue, ids, error text, hex and base64, timers and durable writes each have one home or
+come from an Endo package; no fs outside platform/node.
+Reading: good fit: the core is not copy-pasted and should keep its one-home helpers. What repeats
+is semantic and small: three backoffs, three JSON-lines child clients, five "read JSON if present",
+two length-prefix readers (AR-CTRL-6), the same bytes kept hex in the hub and base64 elsewhere.
+The tests carry the real duplication: 45 files make their own temporary state, and the XS twins
+repeat 31 % of their twins and always skip, since CI never builds thixotrope-xs-worker.
+Decision: none.
+
+### J-9966 2026-11-18 AR-DUP review: excess code paths - fit
+
+Evidence: core-duplication.md AR-DUP-1..4, 6, 7; 0 of 121 exports unused, 9 test-only; 0 of 101
+compared literals without a producer; 146 catches, 32 empty or log-only, all read and deliberate.
+Reading: the excess is in modes and compatibility paths, not dead branches: the whole-file hub
+store and its one-way migration stay selectable (THIXOTROPE_HUB_STORE, undocumented); the mail UI
+probes for mailbox interfaces that WORKSPACE_VERSION and the runtime digest already make
+impossible; a hub session is seven flags with four combinations used, and "transient" is also a
+key prefix parsed at three sites. One defect found on the way: the Unix netlayer reassembles
+continuation frames with no total limit.
+Decision: none; proposed order: AR-DUP-4 (5 lines), AR-DUP-1 and -2 (about 225 lines removed),
+then AR-DUP-3 with the next hub-state version bump.
+
+### J-9967 2026-11-18 AR-DUP time record - process
+
+Evidence: start 2026-11-18T12:07:18Z, end 2026-11-18T12:20:47Z. Read-only; no test or supervisor
+run. Scratch scripts outside the repository (export uses, option keys, compared literals, catch
+classes); the duplicate finder committed at 199 lines after Prettier. Two commits: the report with
+the finder, and this entry.
+Reading: the sibling reports AR-CORE and AR-CTRL, written in parallel, already held the XS engine,
+optional seams, framing and configuration findings; this unit adds their counts and links to them
+instead of repeating them.
+Decision: none.
