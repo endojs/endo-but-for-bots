@@ -196,8 +196,6 @@ test('model defaults come from the preset; an option the caller gave wins', asyn
 
 test('a save between the snapshot and the services fails the creation with presetChanged and rolls it back', async t => {
   const gate = makePromiseKit();
-  /** @type {any} */
-  let preset;
   const kit0 = setup();
   // Hold the creation in the backend's describe(), which the resolvers
   // await together with the snapshot; save the preset meanwhile.
@@ -210,10 +208,10 @@ test('a save between the snapshot and the services fails the creation with prese
     open: async () => undefined,
   });
   const { kit, made, rows } = kit0;
-  ({ preset } = await E(kit.catalog.facet).create(
+  const { preset } = await E(kit.catalog.facet).create(
     custom({ endowments: [{ label: 'notes', value: notes }] }),
     0,
-  ));
+  );
   const creating = E(kit.factory).createSession(
     harden({ preset, backend: slowBackend }),
   );
