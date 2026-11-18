@@ -63,6 +63,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { limits as harnessLimits } from '../config/defaults.js';
 
@@ -176,6 +177,39 @@ export const hubRow = (root, key) => {
     chars: JSON.stringify(row).length,
     ourExports: Object.keys(row.ourExports ?? {}).length,
     answersOwed: Object.keys(row.answersOwed ?? {}).length,
+  };
+};
+
+/** How long `quiescentHubRow` waits for a row with no answer owed. */
+const QUIESCENT_WAIT_MS = 10_000;
+
+/**
+ * The hub row read at a quiescent point (J-9496, M2 close-out proposal): a
+ * row read with a call in flight carries its owed answer, and the 1,000-turn
+ * read of acceptance 15 caught one. Polls the row until it owes no answer,
+ * for at most `QUIESCENT_WAIT_MS`; answers that row, the first read and how
+ * long it waited (`quiescent: false` when the wait ran out).
+ * @param {string} root
+ * @param {string} key the vat's worker id
+ */
+export const quiescentHubRow = async (root, key) => {
+  const t0 = performance.now();
+  const first = hubRow(root, key);
+  let row = first;
+  while (
+    row !== undefined &&
+    row.answersOwed > 0 &&
+    performance.now() - t0 < QUIESCENT_WAIT_MS
+  ) {
+    // eslint-disable-next-line no-await-in-loop
+    await delay(100);
+    row = hubRow(root, key);
+  }
+  return {
+    row,
+    first,
+    waitedMs: Math.round(performance.now() - t0),
+    quiescent: row === undefined || row.answersOwed === 0,
   };
 };
 
@@ -703,13 +737,19 @@ export const runLongSession = async ({
         m => m.debugLabel === busiest?.debugLabel,
       );
       const workerId = sessionWorker?.id;
-      const row =
-        workerId === undefined ? undefined : hubRow(state.root, workerId);
+      const read =
+        workerId === undefined
+          ? undefined
+          : await quiescentHubRow(state.root, workerId);
+      const row = read?.row;
       summary.hubChars = row?.chars;
       summary.hubEntries = row?.ourExports;
       emit({
         metric: `${feature}.hub.row.at${point}`,
         row: row ?? null,
+        firstRead: read?.first ?? null,
+        waitedMs: read?.waitedMs ?? null,
+        quiescent: read?.quiescent ?? null,
         worker: sessionWorker?.debugLabel ?? null,
         sessionTurns: n,
         ...(await identity()),
