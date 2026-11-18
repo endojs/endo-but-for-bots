@@ -7576,3 +7576,46 @@ working time 40 min in all. Lock wait measured 10 min (lower bound).
 Decision: poor fit of the process, not of the tool: the build is bound by one serialised lane and
 by fixed-count perf runs that take hours. Biggest savings: rate-per-fixed-time perf checks and
 concurrent lanes.
+
+### J-9500 2026-11-18 I-1 tooling run lock as a machine-wide slot pool - good fit
+Evidence: `scripts/run-lock.mjs`, `test/run-lock-slots.test.js` (13 tests) and
+`test/run-lock.test.js` (17, unchanged assertions): 30 pass in about 11 s, 10 s of it the
+SIGTERM-ignoring workload's SIGKILL grace.
+Reading: the lock lives in `<THIX_HARNESS_HOME>/run-lock/` (`slot`, `slot.1`..`slot.<N-1>`,
+`slot.intent`), N = `THIX_HARNESS_RUN_SLOTS` (4). Shared takers take any free slot; `--exclusive`
+(default for `perf/*.perf.mjs`, also in process when this process's arguments name one) holds an
+intent marker, then every slot under one generation id, and drops the marker once all are held; a
+shared taker that sees a live marker waits, and one that took a slot as the marker appeared gives
+it back. Every file (slot or marker) keeps the old guarantees: hard-linked creation, generation
+nonce, break-token compare-and-delete, taker or workload alive. Re-entry is per slot and checked
+before the marker. `--max-ms` (600,000; `THIX_HARNESS_RUN_MAX_MS`) runs the workload in its own
+process group, SIGTERM then SIGKILL after 10 s, exit 124; one line per exit to `runs.jsonl`
+(O_APPEND, one write). `--lock PATH` is a private one-slot lock (`--slots N` for more).
+Decision: as built. Every taker on the machine must use the same N; a wrapper killed by SIGKILL
+logs nothing (its slot stays held by the workload record, as before).
+
+### J-9501 2026-11-18 I-1 tooling what several processes share inside one worktree - good fit, with fixes
+Evidence: audit of `test/template/index.js`, `scripts/bundle-guest.mjs`, `perf/_harness.mjs`,
+`test/spikes/_spike.js`, `test/_helpers.js`, `test/adapter/*`, `test/fixtures/fake-provider-server.mjs`.
+Reading: unsafe before: (1) two processes building the same template both renamed into `tmp/t<key>`
+after `rm` of it (the second rename fails, or a copy in progress loses its source); (2)
+`removeTemplates` deleted every `tmp/b<pid>`, including a live build; (3) `bundle-guest.mjs`
+wrote `dist-guest/<program>.js` in place (a reader could see half). Fixed: a private build lock
+`tmp/t<key>.build` with a cache re-check after the wait; the old template is renamed aside before
+the new one is renamed in; live build directories are kept; bundles are written aside and renamed.
+Already safe: copies `tmp/<6 random chars>` (cp `errorOnExist`), build dirs `tmp/b<pid>`, perf
+`tmp/pf<pid>` and `tmp/cw<pid>`, spikes `tmp/<tag><pid>`, `scratch()`/`mkdtemp` names, the fake
+provider server on port 0, sockets inside each state directory. No fixed port or socket path found.
+Left: a copy taken while `rebuild: true` (M1A_REBUILD, spike S8) replaces that template still fails.
+Decision: as built; rebuilds stay a by-hand operation.
+
+### J-9502 2026-11-18 I-1 tooling four integration files in four slots - good fit
+Evidence: `m1b-content`, `m1a-slice-crash`, `m1b-exec-tool-restart`, `m1b-pool-restart`, each
+through `run-lock.mjs --max-ms 300000`, worker `367e78ad...`, this lane's worktree, the M2 build
+running alongside (load 3.3-4.5 before). All 7 tests passed in every run.
+Reading: cold concurrent (three templates built at once): 193 s wall (files 172-193 s), load 3.4 ->
+7.0. Warm sequential: 397 s (93-107 s each). Warm concurrent: 130 s (113-130 s each), load 4.7 ->
+6.4 on 16 cores: 3.1x the throughput; each file slows by 15-25 %. No file failed only when
+concurrent. Waits for a slot 17-54 ms.
+Decision: integration files run four at a time; a milestone's integration lane is about a third of
+its serial time.
