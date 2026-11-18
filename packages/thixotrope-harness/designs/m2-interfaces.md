@@ -1232,7 +1232,7 @@ rules above independently and is the oracle the tests compare `Session.getUsage(
 | `guest/factory/delete.js` (vat) | `makeDeletions({ admin, rows, hooks? }) -> { delete(session), resume(), isDeleting(row), pending(), counts() }`; `onDelete` (hook table) | 7.1. As built (W2.7): the list feed hears of the drop through the row table (`rows.drop`), and the exec vat is closed through `pool.js` `closeExecHandle(handle)`, so neither is passed |
 | `guest/factory/export.js` (vat) | `makeFactoryExport({ rows, settings, create }) -> { exportPage(cursor?), importSession(options) }` | 7.3 |
 | `guest/factory/root.js` (vat) | `makeHarnessSettings({ pool? }) -> { set, backends, defaultBackend, defaultModelId, turnDeadlineMs, current }` | 1.4; resolvers get `defaultBackend`, `defaultModelId`, `turnDeadlineMs` in their context |
-| `guest/session/export.js` (vat) | `makeSessionExport({ records, queue, runner, config, info, rowReporter }) -> { blobPage, deleteSelf, exportState, importState, isDeleting, isImporting }` | 7.1, 7.3 |
+| `guest/session/export.js` (vat) | `makeSessionExport({ records, queue, runner, archive, fence, config, info, rowReporter }) -> { blobPage, deleteSelf, exportState, importState }` | 7.1, 7.3. Since step 3 (HR-SYN-4): the archive and the session's one delete fence `{ close(), closed() }` (made in `session.js`, read by the runner, the archive and the Session methods) are passed in; `isDeleting` and the unused `isImporting` went |
 | `guest/session/queue.js` (vat, W2.4's file) | `Queue.items()`, `Queue.currentHold()` | read by `export.js` |
 | `scripts/export.mjs` (Node) | `exportState({ client, file })`, `importState({ client, file, backends?, onProgress? })`, `treeBytes`, `importAhead`, CLI | 7.3 |
 

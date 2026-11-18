@@ -42,12 +42,15 @@ const letterOf = new Map(/** @type {any} */ (archiveKindLetters));
  *   whose records were dropped, in start order
  * @param {(error: unknown, ports: any) => void} [options.onNotSealed] the
  *   seal was rejected or broke
+ * @param {{ closed: () => boolean }} [options.fence] the session's delete
+ *   fence (7.1): no seal starts once it is closed
  */
 export const makeSessionArchive = ({
   records,
   limits = defaultLimits,
   onSealed = () => {},
   onNotSealed = () => {},
+  fence = harden({ closed: () => false }),
 }) => {
   let sealedTurns = 0;
   let digest = '';
@@ -59,7 +62,6 @@ export const makeSessionArchive = ({
   /** settles seen (maybeSeal calls), for the retry rule (4.3 item 6) */
   let settles = 0;
   let failedAt = -Infinity;
-  let fenced = false;
   /**
    * Archived outcome-unknown turns not yet resolved: turn id -> info,
    * oldest first (4.6).
@@ -131,7 +133,7 @@ export const makeSessionArchive = ({
    */
   const maybeSeal = ({ ports, context }) => {
     settles += 1;
-    if (sealing !== undefined || fenced) return false;
+    if (sealing !== undefined || fence.closed()) return false;
     if (ports?.archive === undefined) return false;
     if (entries.length >= limits.archiveMaxSegments) return false;
     if (settles - failedAt < limits.archiveSegmentTurns / 4) return false;
@@ -277,18 +279,25 @@ export const makeSessionArchive = ({
     segments,
     maybeSeal,
     sealed,
-    unresolved,
     keepUnresolved,
+    /**
+     * The info of an archived turn still resolvable, or undefined.
+     * @param {string} turnId
+     */
+    unresolvedInfo: turnId => unresolved.get(turnId),
+    /**
+     * The turn was resolved: it is no longer kept.
+     * @param {string} turnId
+     */
+    resolve: turnId => {
+      unresolved.delete(turnId);
+    },
     /** Whether the session has sealed any segment. */
     any: () => entries.length > 0,
     /** The archived turns (ordinals 1 .. sealedTurns). */
     sealedTurns: () => sealedTurns,
     /** The intent of the seal in flight, or undefined. */
     sealing: () => sealing,
-    /** No seal starts from now on (delete, 7.1). */
-    fence: () => {
-      fenced = true;
-    },
   });
 };
 harden(makeSessionArchive);

@@ -32,6 +32,8 @@ import {
   isRestartSignal as defaultIsRestartSignal,
   recoverAfterRestart as defaultRecoverAfterRestart,
 } from './recovery.js';
+import { makeSessionArchive } from './archive.js';
+import { makeContextSource } from './context-source.js';
 import { makeSessionExport } from './export.js';
 import { makeLivePublishing } from './live.js';
 import { makeRecordLog } from './records.js';
@@ -90,19 +92,38 @@ export const makeSession = (
     // `runner` is defined below; a break is reported only in a later crank.
     onStale: publisher => runner.publisherBroke(publisher),
   });
+  // The delete fence (7.1): closed once by `deleteSelf`; no claim, no
+  // direct start, no seal and no new work afterwards.
+  let deleted = false;
+  const fence = harden({
+    close: () => {
+      deleted = true;
+    },
+    closed: () => deleted,
+  });
+  // M2 (D-M2-1; m2-interfaces.md 4): settled turns' records leave the vat in
+  // segments; the archive's answers reach the runner in a later crank.
+  const archive = makeSessionArchive({
+    records,
+    onSealed: dropped => runner.onSealed(dropped),
+    onNotSealed: (error, ports) => runner.onNotSealed(error, ports),
+    fence,
+  });
+  const contextSource = makeContextSource({ records, archive });
   const runner = makeTurnRunner({
     config,
     services,
     rowReporter,
     records,
     live,
+    archive,
+    contextSource,
+    fence,
     recoverAfterRestart,
     isRestartSignal,
     hooks,
     table,
     maxToolRounds,
-    // M2 (m2-interfaces.md 2.4 item 6): the runner builds the session's
-    // ContextSource itself, over the archive.
     sources,
     getRuntime: () => runtime,
   });
@@ -150,12 +171,14 @@ export const makeSession = (
     records,
     queue,
     runner,
+    archive,
+    fence,
     config,
     info,
     rowReporter,
   });
   const refuseIfDeleting = () => {
-    if (lifecycle.isDeleting()) throw Error(texts.sessionDeleting);
+    if (fence.closed()) throw Error(texts.sessionDeleting);
   };
 
   /**

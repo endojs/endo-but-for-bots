@@ -4,8 +4,8 @@
 // live publishing, queue, recovery), over in-memory fakes of the Backend,
 // Endpoint, publisher, host facet, row reporter and an echo tool, with
 // W2.8's in-memory fake archive (test/unit/_m2-fake-archive.js) as the
-// ports' ArchivePort. Unlike session.js it hands the runner to the test
-// (runner.archive, findTurn, importTurns, ...). Import after
+// ports' ArchivePort. Unlike session.js it hands the runner and the
+// archive to the test (findTurn, importTurns, ...). Import after
 // `_m1a-prelude.js`.
 //
 // The adapter has incarnations: `restartAdapter()` kills the current one
@@ -16,6 +16,8 @@
 
 /* eslint-disable import/no-relative-packages */
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
+import { makeSessionArchive } from '../../guest/session/archive.js';
+import { makeContextSource } from '../../guest/session/context-source.js';
 import { makeLivePublishing } from '../../guest/session/live.js';
 import { makeQueue } from '../../guest/session/queue.js';
 import { inCallOrder, makeRecordLog } from '../../guest/session/records.js';
@@ -189,12 +191,29 @@ export const makeArchiveSession = async ({
     host,
     onStale: publisher => runner.publisherBroke(publisher),
   });
+  let deleted = false;
+  const fence = harden({
+    close: () => {
+      deleted = true;
+    },
+    closed: () => deleted,
+  });
+  const archive = makeSessionArchive({
+    records,
+    onSealed: dropped => runner.onSealed(dropped),
+    onNotSealed: (error, ports) => runner.onNotSealed(error, ports),
+    fence,
+  });
+  const contextSource = makeContextSource({ records, archive });
   const runner = makeTurnRunner({
     config,
     services,
     rowReporter,
     records,
     live,
+    archive,
+    contextSource,
+    fence,
     recoverAfterRestart,
     isRestartSignal,
     hooks: turnHooks,
@@ -317,7 +336,7 @@ export const makeArchiveSession = async ({
     /** @type {any[]} */
     const out = [];
     /** @type {string | undefined} */
-    let cursor = `p${runner.archive.state().sealedTo}`;
+    let cursor = `p${archive.state().sealedTo}`;
     while (cursor !== undefined) {
       // eslint-disable-next-line no-await-in-loop
       const page = await E(context).page(cursor);
@@ -337,8 +356,8 @@ export const makeArchiveSession = async ({
    * Returns a description of the first difference, or undefined.
    */
   const checkLog = async () => {
-    const state = runner.archive.state();
-    const entries = runner.archive.entries();
+    const state = archive.state();
+    const entries = archive.entries();
     if (entries.length !== state.segments) return 'index length';
     let at = 0;
     for (let ordinal = 1; ordinal <= state.segments; ordinal += 1) {
@@ -384,7 +403,7 @@ export const makeArchiveSession = async ({
       cursor = page.next;
     }
     // Archived ordinals archivedFrom .. 1 from the acknowledged segments.
-    const state = runner.archive.state();
+    const state = archive.state();
     /** @type {string[]} */
     const sealedIds = [];
     for (let ordinal = 1; ordinal <= state.segments; ordinal += 1) {
@@ -401,6 +420,12 @@ export const makeArchiveSession = async ({
 
   return {
     runner,
+    archive,
+    /** `SessionInternal.deleteSelf` as export.js does it. */
+    deleteSelf: () => {
+      fence.close();
+      runner.beginDelete();
+    },
     records,
     all,
     fake,

@@ -62,8 +62,6 @@ import {
   utf8Bytes,
   messageOf,
 } from '../lib/bounded.js';
-import { makeSessionArchive } from './archive.js';
-import { makeContextSource } from './context-source.js';
 import { makeHistory } from './history.js';
 import { inCallOrder } from './records.js';
 import { isStaged, submissionField } from './staging.js';
@@ -95,6 +93,13 @@ const reason = text => previewText(text, limits.reasonUnits);
  * @param {any} options.rowReporter
  * @param {RecordLog} options.records
  * @param {LivePublishing} options.live
+ * @param {any} options.archive the session's archive (`archive.js`), made
+ *   in session.js with its seal callbacks bound to this runner's
+ *   `onSealed` and `onNotSealed`
+ * @param {any} options.contextSource the session's ContextSource
+ *   (`context-source.js`) over that archive
+ * @param {{ closed: () => boolean }} options.fence the session's delete
+ *   fence (7.1): no claim, no direct start once closed
  * @param {(core: any, active: ActiveTurn) => boolean} options.recoverAfterRestart
  * @param {(error: unknown) => boolean} options.isRestartSignal
  * @param {typeof turnHooks} [options.hooks]
@@ -110,6 +115,9 @@ export const makeTurnRunner = ({
   rowReporter,
   records,
   live,
+  archive,
+  contextSource,
+  fence,
   recoverAfterRestart,
   isRestartSignal,
   hooks = turnHooks,
@@ -154,42 +162,7 @@ export const makeTurnRunner = ({
    * @type {Map<string, any>}
    */
   const handles = new Map();
-  /** the session is being deleted (7.1): no claim, no seal */
-  let deleting = false;
 
-  // ------------------------------------------------------------ the archive
-
-  /**
-   * M2 W2.5 (D-M2-1; m2-interfaces.md 4): settled turns' records leave the
-   * vat in segments. Crank Z drops the sealed turns' infos; an archived
-   * outcome-unknown turn not yet resolved stays resolvable (4.6).
-   */
-  const archive = makeSessionArchive({
-    records,
-    onSealed: dropped => {
-      for (const turnId of dropped) {
-        const info = turns.get(turnId);
-        turns.delete(turnId);
-        if (info !== undefined) {
-          info.sealed = true;
-          if (
-            info.state === 'outcome-unknown' &&
-            info.resolution === undefined
-          ) {
-            archive.keepUnresolved(turnId, info);
-          }
-        }
-      }
-    },
-    onNotSealed: (error, ports) => {
-      // A retired break: the adapter restarted; its ports are tombstones
-      // unless the current turn learns that from its own lease (4.4).
-      if (isRestartSignal(error) && current?.ports !== ports) {
-        dropHeld(ports);
-      }
-    },
-  });
-  const contextSource = makeContextSource({ records, archive });
   const history = makeHistory({
     records,
     turnInfo: turnId => turns.get(turnId),
@@ -255,9 +228,6 @@ export const makeTurnRunner = ({
     if (info.resolution !== undefined) status.resolution = info.resolution;
     return harden(status);
   };
-
-  const isLive = (/** @type {string} */ state) =>
-    state === 'running' || state === 'cancelling';
 
   // ------------------------------------------------------------ settle
 
@@ -1186,7 +1156,7 @@ export const makeTurnRunner = ({
    * @returns {ActiveTurn | undefined}
    */
   const claimNext = () => {
-    if (current !== undefined || deleting) return undefined;
+    if (current !== undefined || fence.closed()) return undefined;
     const item = queue.first();
     if (item !== undefined) {
       // The receipt keeps the turn id, not the turn (m2-interfaces.md 5.3).
@@ -1295,7 +1265,7 @@ export const makeTurnRunner = ({
         if (info.resolution !== undefined) {
           throw Error(texts.turnAlreadyResolved);
         }
-        if (info.sealed && archive.unresolved.get(info.turnId) !== info) {
+        if (info.sealed && archive.unresolvedInfo(info.turnId) !== info) {
           throw Error(texts.turnArchivedUnresolvable);
         }
         records.append({
@@ -1305,7 +1275,7 @@ export const makeTurnRunner = ({
           at: lastKnownTime,
         });
         info.resolution = note;
-        archive.unresolved.delete(info.turnId);
+        archive.resolve(info.turnId);
       },
     },
   );
@@ -1345,7 +1315,7 @@ export const makeTurnRunner = ({
    * @param {string} turnId
    */
   const turnById = turnId => {
-    const info = turns.get(turnId) ?? archive.unresolved.get(turnId);
+    const info = turns.get(turnId) ?? archive.unresolvedInfo(turnId);
     return info === undefined ? undefined : turnHandle(info);
   };
 
@@ -1392,7 +1362,7 @@ export const makeTurnRunner = ({
       records.append(record);
       see(record.at);
       const info =
-        turns.get(record.turnId) ?? archive.unresolved.get(record.turnId);
+        turns.get(record.turnId) ?? archive.unresolvedInfo(record.turnId);
       if (record.kind === 'turn-started') {
         turnCounter += 1;
         turns.set(record.turnId, {
@@ -1409,7 +1379,7 @@ export const makeTurnRunner = ({
         if (record.error !== undefined) info.error = record.error;
       } else if (record.kind === 'turn-resolved') {
         info.resolution = record.note;
-        archive.unresolved.delete(record.turnId);
+        archive.resolve(record.turnId);
       } else if (typeof record.round === 'number') {
         info.round = Math.max(info.round, record.round);
       }
@@ -1473,23 +1443,46 @@ export const makeTurnRunner = ({
     openPorts: () => {
       if (held === undefined) openPorts();
     },
-    turnHandle,
     turnById,
     findTurn,
-    /** The archive's state and index (W2.7's export and session.js). */
-    archive: harden({
-      state: archive.state,
-      segments: archive.segments,
-      entries: archive.entries,
-    }),
     /**
-     * The fence of `SessionInternal.deleteSelf` (7.1): no claim and no seal
-     * from now on; the current turn is cancelled without waiting for its
-     * tool calls.
+     * The archive's crank Z (m2-interfaces.md 4.4): the sealed turns' infos
+     * go; an archived outcome-unknown turn not yet resolved stays
+     * resolvable (4.6).
+     * @param {string[]} dropped
+     */
+    onSealed: dropped => {
+      for (const turnId of dropped) {
+        const info = turns.get(turnId);
+        turns.delete(turnId);
+        if (info !== undefined) {
+          info.sealed = true;
+          if (
+            info.state === 'outcome-unknown' &&
+            info.resolution === undefined
+          ) {
+            archive.keepUnresolved(turnId, info);
+          }
+        }
+      }
+    },
+    /**
+     * A seal was rejected or broke. A retired break: the adapter restarted;
+     * its ports are tombstones unless the current turn learns that from its
+     * own lease (4.4).
+     * @param {unknown} error
+     * @param {any} ports
+     */
+    onNotSealed: (error, ports) => {
+      if (isRestartSignal(error) && current?.ports !== ports) {
+        dropHeld(ports);
+      }
+    },
+    /**
+     * `SessionInternal.deleteSelf` after the session's fence closed (7.1):
+     * the current turn is cancelled without waiting for its tool calls.
      */
     beginDelete: () => {
-      deleting = true;
-      archive.fence();
       const active = current;
       if (active !== undefined) {
         cancel(active.info);
@@ -1497,7 +1490,6 @@ export const makeTurnRunner = ({
       }
       flush();
     },
-    deleting: () => deleting,
     importTurns,
     importEnd,
     /** @param {any} imported UsageTotals of an imported session */
@@ -1519,7 +1511,7 @@ export const makeTurnRunner = ({
      * @param {number} at
      */
     startTurn: (input, at) => {
-      if (deleting) throw Error(texts.sessionDeleting);
+      if (fence.closed()) throw Error(texts.sessionDeleting);
       // Blank and over-inlineBytes text are refused as enqueueOnce refuses
       // them; the frame rule rests on the session (J-9150, J-9369).
       checkSubmission(isStaged(input) ? input : { text: input });
@@ -1541,7 +1533,6 @@ export const makeTurnRunner = ({
     historyPage: history.page,
     usage: usage.totals,
     activity: () => (current === undefined ? restActivity : 'working'),
-    isLive,
   });
 };
 harden(makeTurnRunner);
