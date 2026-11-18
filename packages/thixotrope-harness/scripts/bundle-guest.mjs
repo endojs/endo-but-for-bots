@@ -15,12 +15,13 @@
  *   node scripts/bundle-guest.mjs [--out DIR] [program ...]
  * With no program, every `guest/<program>/main.js` is bundled. Each bundle
  * is written to `DIR/<program>.js` (default `dist-guest/`) and one JSON line
- * per program is printed: {"program","bytes","digest","modules"}.
+ * per program is printed: {"program","bytes","digest","modules"}. A bundle
+ * file is written aside and renamed into place, so concurrent runs are safe.
  */
 import './_init.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import url from 'node:url';
@@ -322,7 +323,12 @@ export const main = async argv => {
       path.join(options.guestRoot, program, 'main.js'),
       { guestRoot: options.guestRoot },
     );
-    await writeFile(path.join(options.out, `${program}.js`), bundle.source);
+    // Written aside and renamed into place: a reader never sees half a
+    // bundle while another process writes the same one.
+    const target = path.join(options.out, `${program}.js`);
+    const temporary = `${target}.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+    await writeFile(temporary, bundle.source);
+    await rename(temporary, target);
     const row = {
       program,
       bytes: bundle.bytes,
