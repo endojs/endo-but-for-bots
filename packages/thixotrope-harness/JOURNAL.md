@@ -13157,3 +13157,66 @@ changed files: no error, warnings of kinds already present; prettier clean. Not 
 the perf list, `subscriptions-lifecycle` and `history.restart`/`journal` (which share the changed
 helpers `_m4.mjs` and `_long-session.mjs`). Last command: the commit of this entry.
 Fit: neutral.
+
+### J-10130 2026-11-18 G1 HR-SYN-7: explicit vocabulary tables, a failing table fails the bind - built
+Evidence: `b621c04535`. `guest/lib/vocabulary-tables.js` (Node only; no vat imports it) lists the
+five tables the gateway's vocabulary reads (`interfaces.js` with `shapes`, `interfaces`,
+`m2Interfaces`; the `vocabularyShapes()` of `interfaces-m3.js`, `-m4.js`, `-m5.js`,
+`-m5-factory.js`) and an exclusion list with reasons (`guards/base.js`, `session.js`,
+`factory.js`: re-exported whole by `interfaces.js`). `GW/vocabulary.js` `harnessNames({ tables? })`
+replaced the `interfaces-m*.js` glob and the `require` loader: a listed module that fails to load
+fails the import; an entry that throws or answers no array throws naming its file, so the gateway's
+bind fails (`incarnationParts` is not cached on failure). The `guestLibDir` and `log` options and
+the `vocabulary-skip` event are gone; 8 callers updated. Contract: `m3-interfaces.md` 4.4 rule 4,
+4a and 6.3, D-M3-4 amended; `architecture.md` and the extensions README follow.
+Numbers: 258 keys and 141 method names before and after (the task text said 140; the X1 fixture
+and a run at `802bd2767c` both give 141), 28 ms to build. Bundles unchanged: exec 63,826, factory
+164,836, session 214,690 bytes, digests identical.
+Fit: good.
+
+### J-10131 2026-11-18 G1 HR-SYN-7: the zero-skip test - test
+Evidence: `test/adapter/gateway-vocabulary-tables.test.js` imports every `.js` under `guest/lib`,
+counts a module as a table module when it exports a guard or pattern (directly or as a table
+entry), and checks (1) table modules = listed + excluded, (2) every interface guard of every table
+module contributes its keys and methods, (3) the sets equal the X1 fixture's, 258 and 141.
+`m3-w32-vocabulary.test.js`'s glob test became "only the listed tables are read; a failing table
+throws". Before: with the old `vocabulary.js` restored in place, 5 of the new and changed tests
+failed (the throw test did not throw); with an extra `guest/lib/interfaces-g1probe.js` table
+module (outside the glob's reach once renamed), (1) and (2) failed naming it; file removed after.
+After: 79 vocabulary, guard and interface tests pass; unit lane 1,249 passed, 116 skipped;
+`m3-gateway` integration exit 0 in 142.5 s (shared slot). Not changed: the extension loader's
+log-and-skip (`extensions.js`), which is M3 contract 6.1 with its own tests (HR-SYN-15).
+Fit: good.
+
+### J-10132 2026-11-18 G1 the duplicate ceiling in the lint lane - built
+Evidence: `1f5dedee5a`. `corepack yarn lint:duplicates` (also part of `yarn lint`) runs
+`scripts/check-duplicates.mjs`, which runs `designs/arch-review/tools/find-duplicates.mjs`
+unchanged over `guest resources ui` and exits 1 above 3.5 %. `--ceiling N` is for its test
+(`test/unit/check-duplicates.test.js`: passes at today's share, fails at 0).
+Numbers: 865 of 26,887 normalised lines (3.22 %), 41 clusters, 196 files, 0.1 s. The review's
+3.9 % (1,033 of 26,476 at `bd9a8ec070`, `ui/src` only) has fallen with the X1 split and the
+cross-lane fixes; the ceiling is set from today's 3.22 % plus 0.28 points.
+Fit: good.
+
+### J-10133 2026-11-18 G1 rules for all later work; the fold plan - design
+Evidence: `bf969cecef`: `milestones.md` conventions gain "Rules from the harness review" (names by
+vat or concept, fold unit, export not copy with the 15-line rule and the ceiling, fakes from
+guards, manager changes batched, objects at seams, a new job names its module); its directory
+registry no longer lists `interfaces-m*.js` or `<milestone>-<name>` files. `process.md` section 6
+gives the same rules for the PM, and the unit checklist runs `lint:duplicates`. `4dd2506626`:
+`designs/arch-review/fold-plan.md`, old -> new for the five interface modules, the two limits
+modules, `texts-m4.js`, the m1b/m2 views and method-list ingredients, `m5-parts.js`,
+`defaults-m4.js`, `contract-m3.js`, `m4-secrets.js`, the provision step, four perf files, 30 test
+helpers and fixtures, and the template ids. Nothing renamed.
+Reading: `interfaces-m3.js` and `-m4.js` are imported by the manager part (`durable.js`,
+`durable-gateway.js`, `durable-subscriptions.js`), so their fold is a reinstall: the plan puts
+it in the step-4 batch or behind a listed one-line re-export.
+Fit: good.
+
+### J-10134 2026-11-18 G1 time record - verified
+Time: first command 18:38:18Z. Over 60 s: unit lane 65 s; `m3-gateway` integration 143 s
+(shared slot). `tsc` exit 0; eslint on the changed files: no error (3 warnings already present in
+`perf/gateway.perf.mjs`); prettier clean. Not run: the browser files and the other integration
+files (no guest or manager change; the gateway bind is covered by `m3-gateway`), perf. Scratch
+`tmp/G1` removed. Last command: the date after the commit of this entry.
+Fit: neutral.
