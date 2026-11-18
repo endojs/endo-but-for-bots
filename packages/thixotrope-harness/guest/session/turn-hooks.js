@@ -25,9 +25,11 @@
  *   direct start or a `turnSources` turn). W5.7 opens the turn's package
  *   and sets `active.systemNote` here.
  *
- * In M1a every list is empty. M1b W1b.4 appends the exec tool's hooks.
+ * In M1a every list is empty. M1b W1b.4 appends the exec tool's hooks;
+ * M5 W5.7 the package hooks (`tools/mentions.js`).
  */
 import { execHooks } from './tools/exec.js';
+import { mentionHooks } from './tools/mentions.js';
 
 /**
  * @typedef {(context: { core: any, active: any, round: number }) => void} TurnHook
@@ -40,11 +42,11 @@ export const turnHooks = harden({
   /** @type {TurnHook[]} */
   onCancel: [execHooks.onCancel],
   /** @type {TurnHook[]} */
-  onSettle: [],
+  onSettle: [mentionHooks.onSettle],
   /** @type {((core: any) => (undefined | { text: string, at: number }))[]} */
   turnSources: [],
   /** @type {TurnHook[]} */
-  recoverySteps: [execHooks.recoverySteps],
+  recoverySteps: [execHooks.recoverySteps, mentionHooks.recoverySteps],
   /** @type {ClaimHook[]} M5 S3 */
-  onClaim: [],
+  onClaim: [mentionHooks.onClaim],
 });

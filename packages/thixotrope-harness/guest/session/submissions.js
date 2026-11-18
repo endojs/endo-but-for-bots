@@ -75,9 +75,10 @@ export const makeSubmissions = ({ pending, onChange = () => {} }) => {
      * @param {any} submission
      * @param {string} requestId
      * @param {number} at
+     * @param {readonly { label: string, value: any }[]} [attachments] M5
      */
-    enqueue: (submission, requestId, at) => {
-      const result = pending.enqueue(submission, requestId, at);
+    enqueue: (submission, requestId, at, attachments = undefined) => {
+      const result = pending.enqueue(submission, requestId, at, attachments);
       if (result.added) userSent();
       return result;
     },

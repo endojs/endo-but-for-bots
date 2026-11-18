@@ -24,8 +24,18 @@
  *   handle (5.3: no receipt keeps a sealed turn's input alive).
  *
  * Entries are internal records `{ item, preview, previewBytes, waiting }`;
- * `item` is the hardened `{ entry, key, submission, at, requestId }` the
- * session claims (turn.js), replaced whole by an edit. `makeEntry(internal)`
+ * `item` is the hardened `{ entry, key, submission, at, requestId,
+ * attachments? }` the session claims (turn.js), replaced whole by an edit.
+ *
+ * M5 (W5.7; m5-interfaces.md 2.6): an entry may carry `attachments`
+ * (`[{ label, value }]`, checked by `packages.js`). The receipt's
+ * fingerprint covers the labels too (`StoredReceipt.labels`, not the
+ * objects): a retry under the same request id must carry the same labels
+ * in the same order. An edit keeps the attachments; a cancel and the claim
+ * drop them from the entry (after the claim the turn's package holds them,
+ * until the turn settles). Worst case of the labels kept by receipts:
+ * 4,096 x 32 labels of 80 units, about 31 MB, with the strings shared with
+ * the entry and `TurnStarted` while those are kept. `makeEntry(internal)`
  * (from queue.js) makes the QueueEntry exo of each. Hold decisions are
  * submissions.js's; this module decides nothing about when to start a turn.
  *
@@ -75,6 +85,7 @@ export const REQUEST_ID = /^\d{13}-[0-9a-f-]{36}$/;
  * @property {Submission} submission
  * @property {number} at when it was submitted (the Composer's stamp)
  * @property {string} requestId
+ * @property {readonly { label: string, value: any }[]} [attachments] M5
  * @typedef {object} Internal
  * @property {QueueItem} item
  * @property {string} preview the text cut to messagePreviewUnits
@@ -89,6 +100,7 @@ export const REQUEST_ID = /^\d{13}-[0-9a-f-]{36}$/;
  * @property {any} entry the QueueEntry while waiting; the shared stand-in
  *   once cancelled; undefined once claimed
  * @property {any} [turnId] set by the claim
+ * @property {readonly string[]} [labels] M5: the attachments' labels
  */
 
 /**
@@ -219,11 +231,27 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
     }
   };
 
-  /** @param {Internal} internal */
+  /**
+   * The entry leaves the queue and lets go of its attachments (M5).
+   * @param {Internal} internal
+   */
   const leave = internal => {
     waiting.delete(internal);
     internal.waiting = false;
+    if (internal.item.attachments !== undefined) {
+      const { attachments: _dropped, ...rest } = internal.item;
+      internal.item = harden(rest);
+    }
   };
+
+  /**
+   * M5: equal attachment labels, in order (none and `[]` are equal).
+   * @param {readonly string[] | undefined} kept
+   * @param {readonly { label: string }[] | undefined} attachments
+   */
+  const sameLabels = (kept = [], attachments = []) =>
+    kept.length === attachments.length &&
+    kept.every((label, i) => attachments[i].label === label);
 
   /**
    * The request id is checked, a duplicate answered, then the bounds: the
@@ -233,9 +261,10 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
    * @param {Submission} submission
    * @param {string} requestId
    * @param {number} at
+   * @param {readonly { label: string, value: any }[]} [attachments] M5
    * @returns {{ stored: StoredReceipt, added: boolean, internal?: Internal }}
    */
-  const enqueue = (submission, requestId, at) => {
+  const enqueue = (submission, requestId, at, attachments = undefined) => {
     checkSubmission(submission);
     REQUEST_ID.test(requestId) || refuse(texts.invalidRequestId);
     const issued = Number(requestId.slice(0, 13));
@@ -243,7 +272,8 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
       refuse(texts.requestIdExpired);
     const known = receipts.get(requestId);
     if (known !== undefined) {
-      sameFingerprint(known.fingerprint, submission) ||
+      (sameFingerprint(known.fingerprint, submission) &&
+        sameLabels(known.labels, attachments)) ||
         refuse(texts.requestIdReused);
       return { stored: known, added: false };
     }
@@ -262,7 +292,12 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
       row: undefined,
     };
     const entry = makeEntry(internal);
-    internal.item = harden({ entry, key, submission, at, requestId });
+    const attached = attachments !== undefined && attachments.length > 0;
+    internal.item = harden(
+      attached
+        ? { entry, key, submission, at, requestId, attachments }
+        : { entry, key, submission, at, requestId },
+    );
     waiting.add(internal);
     /** @type {StoredReceipt} */
     const stored = {
@@ -271,6 +306,7 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
       issued,
       entry,
     };
+    if (attached) stored.labels = harden(attachments.map(a => a.label));
     receipts.set(requestId, stored);
     changed();
     return { stored, added: true, internal };
