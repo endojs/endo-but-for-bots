@@ -119,6 +119,10 @@ test('the generated feature list: directory order, arrays, region views', async 
       path.join(outDir, summary.files[0].name),
       'utf8',
     );
+    t.true(
+      js.startsWith('// @ts-nocheck'),
+      'the package typecheck skips the generated bundle (M3-FIX)',
+    );
     /** @type {any} */
     const sandbox = {};
     sandbox.globalThis = sandbox;

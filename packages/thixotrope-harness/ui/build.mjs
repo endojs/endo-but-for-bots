@@ -176,6 +176,9 @@ export const buildUi = async ({
     target: 'es2022',
     minify,
     legalComments: 'none',
+    // The bundle lands in GW/assets/, inside the package typecheck's
+    // `resources/**/*.js`: a generated file is not type-checked (M3-FIX).
+    banner: { js: '// @ts-nocheck' },
     charset: 'utf8',
     outdir: outDir,
     plugins: [featureListPlugin],
