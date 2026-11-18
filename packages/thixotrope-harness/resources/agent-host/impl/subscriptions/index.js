@@ -331,7 +331,9 @@ export const makeSubscriptions = ({
     now,
     readCredential: async entry =>
       (await credentialOf(entry).current()).credential,
-    members: async (backend, spec) => (await loadPool(backend, spec)).members,
+    members: async (backend, spec) => [
+      ...(await loadPool(backend, spec)).members,
+    ],
   });
 
   const credentialOps = makeCredentialOps({

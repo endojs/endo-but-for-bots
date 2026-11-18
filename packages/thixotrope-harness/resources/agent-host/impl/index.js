@@ -46,13 +46,13 @@ import { makeAccountStatusTool } from './subscriptions/account-tool.js';
 /**
  * @typedef {object} BackendKind
  * @property {string} kind the `BackendSpec.kind` it serves
- * @property {(options: { label: string, spec: any, readKey?: () => Promise<string>, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend?: any, subscriptions?: any }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
+ * @property {(options: { label: string, spec: any, readKey?: () => Promise<string>, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, subscriptions: any }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
  * @property {readonly string[]} tools names in `adapterTools` this kind
  *   offers in its `TurnPorts.tools`
  *
  * @typedef {object} AdapterToolKind
  * @property {string} name the tool name the model sees
- * @property {(options: { timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend?: any, session?: any, subscriptions?: any }) => any} makeTool
+ * @property {(options: { timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, session: any, subscriptions: any }) => any} makeTool
  */
 
 /**

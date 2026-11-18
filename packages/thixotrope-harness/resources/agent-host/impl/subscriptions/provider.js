@@ -233,7 +233,6 @@ export const makePoolProvider = ({
                   for await (const event of withOverloadRetry({
                     attempt: attemptSignal =>
                       wire({
-                        member: entry,
                         credential,
                         projection,
                         request,
