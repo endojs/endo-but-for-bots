@@ -74,13 +74,17 @@ export const makeSignInLimiter = ({
     const t = now();
     sweep(t);
     if (failures.length > perMinute) {
-      return harden({ ok: false, text: m3Texts.signInCeiling });
+      return /** @type {LimiterVerdict} */ (
+        harden({ ok: false, text: m3Texts.signInCeiling })
+      );
     }
     const deadline = deadlines.get(address);
     if (deadline !== undefined && deadline > t) {
-      return harden({ ok: false, text: m3TextOf.rateLimited(deadline - t) });
+      return /** @type {LimiterVerdict} */ (
+        harden({ ok: false, text: m3TextOf.rateLimited(deadline - t) })
+      );
     }
-    return harden({ ok: true });
+    return /** @type {LimiterVerdict} */ (harden({ ok: true }));
   };
 
   /** @param {string} address */
