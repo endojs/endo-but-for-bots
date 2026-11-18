@@ -30,6 +30,27 @@ adapter; 6 seams and merge hotspots; 7 what persists and what a SIGKILL leaves; 
 acceptance; 10 performance; 11 too-big and hostile probes; 12 core requests; 13 owner questions;
 14 the fold at merge; 15 fixed texts and code blocks for the shared guard modules.
 
+
+Settle record (cross-check issues that name M6, J-0813..J-0816):
+
+| issue | where it is applied |
+|---|---|
+| X-01 session program | D-M6-18, B-1, O-12; W6.4 waits for the PM's caps |
+| X-02 shared guard files | D-M6-15, 6.1 (done by WX.1); W6.0b withdrawn |
+| X-03 part API and `turn.js` | 6.1 S-5 (WX.1), R-1 (with `requiredParts`), R-2 (one `claimNext` line) |
+| X-04 order and names | D-M6-11, D-M6-15, T-1, L-1 (M9 a partner) |
+| X-05 delete hooks, services context | D-M6-16, F-3 (b), F-4, 3.9 |
+| X-06 data between adapters, X-1 | D-M6-6, 3.4 `openImage`, `EVI/image-source.js`, O-11, acceptance 21 |
+| X-07 part state an export drops | D-M6-9, 4.5, seam X-E, O-9, acceptance 22 |
+| X-08 call table | D-M6-17, 6.1 S-6 |
+| X-09 provisioning number | P-2 (M11 takes `70-voice.js`) |
+| X-11 (a) guard placement | D-M6-10, V-1, 15.4, O-8: the table moved to `guest/lib/guards/environments.js` |
+| X-12 acceptance gaps | 1.1 (deferred and cross-lane items), D-M6-20, section 9 footer, O-13 |
+| X-13 budgets | section 10 (`cancel`, `stopCleanup`, `coldStart` recorded) |
+| X-14 box and windows | section 10 (gate rows, file times, the git rows split off), K-2 (own list) |
+| X-15 core requests | section 12 (CC-090 one row, CC-091 merged, CC-092 shared helper, CC-100 for M6 too) |
+| X-16 copies, double hardening | D-M6-13 (`resources/native-attach.js`), D-M6-19, section 14 (ceiling 2.05 %) |
+| X-17 merge order and fold | section 14 |
 ---
 
 ## 0. Measured inputs (what the numbers below are derived from)
