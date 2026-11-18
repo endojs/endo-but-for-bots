@@ -11832,3 +11832,36 @@ outside the tree. Report 527 lines; Prettier not run (not installed in this work
 the report, and these entries.
 Reading: the counts are regex heuristics; every finding cited above was read at its lines.
 Decision: none.
+
+### J-9992 2026-11-18 HR-ONTO: the harness speaks three vocabularies by origin (Fae, spec, harness) and names modules by milestone - awkward
+
+Evidence: `designs/arch-review/harness-ontology.md` HR-ONTO-1, -2, -3, -9; 546 milestone-named
+identifier sites (62 names) in 12 product files; `texts`/`textOf`/`limits` exported 3/3/2 times and
+imported under 13 aliases; `tool-result` names both a turn record and a transcript record, read and
+written in one function of `impl/projection.js`; product named Floot (model, composer), Familiar
+(title, storage keys, subprotocol) and thix (CSS, formats).
+Reading: closed shapes, fixed-text tables with spec citations and one retired-break predicate make
+the wire vocabulary exact; the drift is in what the lanes named for themselves. The per-vat split of
+`interfaces.js` now in hand is the place to adopt one naming rule (vat or concept, never milestone).
+Decision: none; glossary of 50 terms proposed for the owner, reconciled with AR-ONTO.
+
+### J-9993 2026-11-18 HR-ONTO: shared words drift from the core's senses - awkward
+
+Evidence: HR-ONTO-6, -7, -8, -13; "hub session" written 0 times in the harness; `Registration`
+is a start-listener handle beside the manager's real registration; `ExecLease`, live `Delivery`,
+the "Turn journal" panel; "seal" means archive (359 uses) and encryption (59), and the open sealed
+secret-writes work adds to the second; "label" is petname, display name and lookup key (pools,
+built-in presets); ARCH section 3 still shows `open() -> Endpoint`, `getTurnContent`, the sign-in
+secret in the Secrets store and a 200 KB session program.
+Reading: code and contracts agree with each other in every ARCH divergence found; ARCH has no
+glossary, so nothing pulled the lanes' words back together.
+Decision: none.
+
+### J-9994 2026-11-18 HR-ONTO time record - process
+
+Evidence: start 2026-11-18T12:52:57Z, end 2026-11-18T13:07:19Z. Read-only; no test run. Term
+counts by a regex scan per area and per contract, identifier lists by grep, both run outside the
+tree; each finding's sites were then read. Report 650 lines; two commits (report, these entries).
+Reading: HR-GUEST and HR-HOST had already reported several question-4 items; this unit cites them
+and adds only the cross-cutting part.
+Decision: none.
