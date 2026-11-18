@@ -223,7 +223,8 @@ run(
     });
 
     // J-9493: an export cut before its last session's `end` fails the
-    // import, which deletes that half-imported session.
+    // import, which deletes that half-imported session (the earlier, whole
+    // session of the file stays imported).
     const endAt = one.findLastIndex(line => JSON.parse(line).type === 'end');
     const file3 = path.join(tmpRoot, `${shortName('e')}.jsonl`);
     files.push(file3);
@@ -238,8 +239,11 @@ run(
         }),
       { message: /ends inside session 2; that session was not imported/ },
     );
-    t.deepEqual(await listedKeys(target.slice), keysBefore);
+    // The file's first session was whole and is imported (s3); the cut
+    // second one is deleted and never listed.
+    const keysAfter = await listedKeys(target.slice);
+    t.deepEqual(keysAfter, [...keysBefore, 's3']);
     const status = await E(target.slice.harness).status();
-    t.is(status.sessions, keysBefore.length, 'no half-imported session');
+    t.is(status.sessions, keysAfter.length, 'no half-imported session');
   },
 );
