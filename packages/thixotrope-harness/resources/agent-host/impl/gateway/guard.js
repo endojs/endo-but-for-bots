@@ -29,6 +29,8 @@
  *
  * Node module (agent-host adapter).
  */
+import { Buffer } from 'node:buffer';
+
 import { gatewayLimits, gatewayTexts } from './contract-m3.js';
 
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
@@ -100,41 +102,45 @@ const refuse = (rule, text) => harden({ rule, text });
 const checkKeys = (args, vocabulary, maxDepth) => {
   /** @type {[unknown, number][]} */
   const stack = args.map(arg => [arg, 1]);
+  /**
+   * Check a record's keys (except `skip`) and queue its values.
+   * @param {Record<string, unknown>} record
+   * @param {number} depth
+   * @param {Set<string>} [skip]
+   * @returns {boolean} false when a key is outside the vocabulary
+   */
+  const pushRecord = (record, depth, skip) => {
+    for (const [key, inner] of Object.entries(record)) {
+      if (skip === undefined || !skip.has(key)) {
+        if (!vocabulary.has(key)) return false;
+        stack.push([inner, depth + 1]);
+      }
+    }
+    return true;
+  };
   while (stack.length > 0) {
     const [value, depth] = /** @type {[unknown, number]} */ (stack.pop());
-    if (value === null || typeof value !== 'object') continue;
-    if (depth > maxDepth) return refuse('depth', gatewayTexts.tooDeep);
-    if (Array.isArray(value)) {
-      for (const inner of value) stack.push([inner, depth + 1]);
-      continue;
-    }
-    const record = /** @type {Record<string, unknown>} */ (value);
-    if (Object.hasOwn(record, QCLASS)) {
-      const qclass = record[QCLASS];
-      if (typeof qclass === 'string' && leafClasses.has(qclass)) continue;
-      if (qclass === 'tagged') {
-        stack.push([record.payload, depth + 1]);
-        continue;
-      }
-      if (qclass === 'error') {
-        for (const [key, inner] of Object.entries(record)) {
-          if (errorFields.has(key)) continue;
-          if (!vocabulary.has(key)) {
-            return refuse('keys', gatewayTexts.unexpectedField);
-          }
-          stack.push([inner, depth + 1]);
+    if (value !== null && typeof value === 'object') {
+      if (depth > maxDepth) return refuse('depth', gatewayTexts.tooDeep);
+      const record = /** @type {Record<string, unknown>} */ (value);
+      const qclass = Object.hasOwn(record, QCLASS) ? record[QCLASS] : undefined;
+      if (Array.isArray(value)) {
+        for (const inner of value) stack.push([inner, depth + 1]);
+      } else if (qclass === undefined) {
+        if (!pushRecord(record, depth)) {
+          return refuse('keys', gatewayTexts.unexpectedField);
         }
-        continue;
-      }
-      // `hilbert` (a record with its own `@qclass` key) and anything
-      // unknown: `@qclass` is never a vocabulary key.
-      return refuse('keys', gatewayTexts.unexpectedField);
-    }
-    for (const [key, inner] of Object.entries(record)) {
-      if (!vocabulary.has(key)) {
+      } else if (qclass === 'tagged') {
+        stack.push([record.payload, depth + 1]);
+      } else if (qclass === 'error') {
+        if (!pushRecord(record, depth, errorFields)) {
+          return refuse('keys', gatewayTexts.unexpectedField);
+        }
+      } else if (typeof qclass !== 'string' || !leafClasses.has(qclass)) {
+        // `hilbert` (a record with its own `@qclass` key) and anything
+        // unknown: `@qclass` is never a vocabulary key.
         return refuse('keys', gatewayTexts.unexpectedField);
       }
-      stack.push([inner, depth + 1]);
     }
   }
   return undefined;
@@ -146,8 +152,7 @@ const checkKeys = (args, vocabulary, maxDepth) => {
  */
 const isMethodShape = decoded =>
   Array.isArray(decoded) &&
-  (decoded.length === 1 ||
-    (decoded.length === 2 && Array.isArray(decoded[1])));
+  (decoded.length === 1 || (decoded.length === 2 && Array.isArray(decoded[1])));
 
 /**
  * Check one `CTP_CALL` (m3-interfaces.md 4.4); the full answer.
@@ -219,7 +224,6 @@ export const inspectCall = ({
   // 3. Frame.
   if (Buffer.byteLength(method.body, 'utf8') > limits.frameBytes) {
     const large =
-      held.local &&
       typeof name === 'string' &&
       held.value !== undefined &&
       isLargeCall(held.value, name);

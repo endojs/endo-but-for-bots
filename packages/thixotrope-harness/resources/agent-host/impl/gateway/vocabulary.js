@@ -59,14 +59,14 @@ export const collectRecordKeys = patterns => {
   const stack = [...patterns];
   while (stack.length > 0) {
     const value = stack.pop();
-    if (value === null || typeof value !== 'object') continue;
-    if (seen.has(value)) continue;
-    seen.add(value);
     let style;
-    try {
-      style = passStyleOf(value);
-    } catch {
-      continue;
+    if (value !== null && typeof value === 'object' && !seen.has(value)) {
+      seen.add(value);
+      try {
+        style = passStyleOf(value);
+      } catch {
+        style = undefined;
+      }
     }
     if (style === 'copyArray') {
       stack.push(...value);
@@ -144,6 +144,8 @@ export const harnessVocabulary = ({
   }
   for (const name of names) {
     try {
+      // The contract files are found by glob (m3-interfaces.md 6.3).
+      // eslint-disable-next-line import/no-dynamic-require
       const contract = require(join(guestLibDir, name));
       if (typeof contract.vocabularyShapes !== 'function') {
         throw Error('no vocabularyShapes() export');

@@ -60,9 +60,7 @@ const makeWorld = () => {
       }),
     /** @param {number} count */
     many: count =>
-      harden(
-        Array.from({ length: count }, (_, i) => Far(`Thing${i % 2}`, {})),
-      ),
+      harden(Array.from({ length: count }, (_, i) => Far(`Thing${i % 2}`, {}))),
   });
   const factory = Far('SessionFactory', {
     /** @param {unknown} options */
@@ -358,10 +356,7 @@ test('key guard: invented keys refused, contract keys pass', async t => {
   t.is(pair.connection.stats().refused, 2);
   const refusal = pair.logged.find(e => e.event === 'gateway-refused');
   t.like(refusal, { rule: 'keys', target: 'Alleged: SessionFactory' });
-  t.false(
-    JSON.stringify(pair.logged).includes('k1999'),
-    'no body is logged',
-  );
+  t.false(JSON.stringify(pair.logged).includes('k1999'), 'no body is logged');
 });
 
 test('depth guard: 32 levels pass, 33 are refused', async t => {
@@ -558,7 +553,10 @@ test('checkCall answers the text, or undefined to dispatch', t => {
     type: 'CTP_CALL',
     questionID: 'q-1',
     target: 'o-1',
-    method: { body: JSON.stringify(['rename', [{ unknownKey: 1 }]]), slots: [] },
+    method: {
+      body: JSON.stringify(['rename', [{ unknownKey: 1 }]]),
+      slots: [],
+    },
   };
   const targetOf = (/** @type {string} */ id) =>
     id === 'o-1' ? { value, local: false } : undefined;

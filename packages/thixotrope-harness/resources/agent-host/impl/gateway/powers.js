@@ -186,39 +186,43 @@ export const makeBootstrapFactory = ({
       liveFacade?.close();
     });
 
-    const bootstrap = makeExo('GatewayBootstrap', m3Interfaces.GatewayBootstrap, {
-      /** @param {string} secret */
-      async fetch(secret) {
-        const allowed = limiter.check(address);
-        if (!allowed.ok) throw Error(allowed.text);
-        if (!signIn.matches(secret)) {
-          limiter.failed(address);
-          log({ event: 'gateway-signin-failed', address });
-          throw Error(m3Texts.signInRefused);
-        }
-        limiter.succeeded(address);
-        if (powers !== undefined) return powers;
-        if (closed) throw Error(m3Texts.signInRefused);
-        liveFacade = makeLiveFacade(live);
-        const extraList = harden(
-          current(extras).map(({ label, service }) => {
-            markGatewayLocal(service);
-            return harden({ label, service });
-          }),
-        );
-        const historyNow = current(history);
-        markGatewayLocal(historyNow);
-        powers = harden({
-          operator: current(operator),
-          live: liveFacade.facade,
-          content,
-          composer,
-          history: historyNow,
-          extras: extraList,
-        });
-        return powers;
+    const bootstrap = makeExo(
+      'GatewayBootstrap',
+      m3Interfaces.GatewayBootstrap,
+      {
+        /** @param {string} secret */
+        async fetch(secret) {
+          const allowed = limiter.check(address);
+          if (!allowed.ok) throw Error(allowed.text);
+          if (!signIn.matches(secret)) {
+            limiter.failed(address);
+            log({ event: 'gateway-signin-failed', address });
+            throw Error(m3Texts.signInRefused);
+          }
+          limiter.succeeded(address);
+          if (powers !== undefined) return powers;
+          if (closed) throw Error(m3Texts.signInRefused);
+          liveFacade = makeLiveFacade(live);
+          const extraList = harden(
+            current(extras).map(({ label, service }) => {
+              markGatewayLocal(service);
+              return harden({ label, service });
+            }),
+          );
+          const historyNow = current(history);
+          markGatewayLocal(historyNow);
+          powers = harden({
+            operator: current(operator),
+            live: liveFacade.facade,
+            content,
+            composer,
+            history: historyNow,
+            extras: extraList,
+          });
+          return powers;
+        },
       },
-    });
+    );
     markGatewayLocal(bootstrap);
     return bootstrap;
   };

@@ -35,6 +35,9 @@
  *
  * Node module (agent-host adapter); the guest prelude is on `globalThis`.
  */
+import { Buffer } from 'node:buffer';
+import { clearTimeout, setTimeout } from 'node:timers';
+
 import { makeCapTP, makeDefaultCapTPImportExportTables } from '@endo/captp';
 
 import { closeCodes, gatewayLimits, gatewayTexts } from './contract-m3.js';
@@ -183,7 +186,6 @@ export const makeBridge = ({
       closed = true;
       if (deadline !== undefined) timers.clearTimeout(deadline);
       try {
-        // eslint-disable-next-line no-use-before-define
         captp.shutdown(Error(reason));
       } catch {
         // already disconnected
@@ -203,7 +205,6 @@ export const makeBridge = ({
       answers.clear();
       inFlight.clear();
       fetches.clear();
-      // eslint-disable-next-line no-use-before-define
       open.delete(handle);
       if (!fromPeer) {
         try {
@@ -255,7 +256,7 @@ export const makeBridge = ({
           exportsBySlot.set(slot, value);
           if (exportsBySlot.size > settings.exportsPerConnection && !muted) {
             muted = true;
-            queueMicrotask(() =>
+            void Promise.resolve().then(() =>
               close(closeCodes.tooManyObjects, 'too many objects'),
             );
           }
@@ -417,11 +418,11 @@ export const makeBridge = ({
         }
         case 'CTP_DISCONNECT':
           close(normalClose, 'disconnected');
-          return;
+          break;
         default:
           // CTP_RETURN, CTP_RESOLVE: the gateway asks a page nothing and
           // imports nothing from it, so there is nothing to settle.
-          return;
+          break;
       }
     };
 

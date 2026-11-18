@@ -73,7 +73,12 @@ test('the harness vocabulary has the M2 tables and interfaces-m3.js', t => {
   const ms = performance.now() - started;
   t.log(`vocabulary: ${keys.size} keys in ${ms.toFixed(1)} ms`);
   // M2 shapes (CreateOptions, Submission) and M3's GatewayConfig.
-  for (const key of ['requestId', 'operator', 'trustedProxies', 'publicOrigin']) {
+  for (const key of [
+    'requestId',
+    'operator',
+    'trustedProxies',
+    'publicOrigin',
+  ]) {
     t.true(keys.has(key), key);
   }
   // Every key of a GatewayConfig sample is admitted.
