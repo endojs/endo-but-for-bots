@@ -8333,3 +8333,53 @@ Fit: poor for paged object lists: objects-not-names makes every row a record wit
 every record pays the guard walk in an interpreted vat; budgets set as "one crank" do not hold
 for 50-row pages. Remedies (not made here): plain record patterns for closed records in the
 guard files, or pages of 25.
+
+### J-0790 2026-11-18 M5 packages and mentions - built
+Evidence: W5.7 commits fdd58c2a2e (packages, mentions, queue attachments), a19854f5b2 (unit
+tests), 008c12f87c (Composer), 623a2b04b2 (integration and perf files), 26978a0d2e; new
+`guest/session/packages.js`, `guest/session/tools/mentions.js`; edits to `pending-queue.js`,
+`queue.js`, `submissions.js`, `turn-hooks.js` and `AH/composer.js`. Unit `m5-w57-packages` (11)
+and `m5-w57-composer` (4), about 1 s.
+Reading: an entry keeps `attachments`; the receipt keeps the labels beside the fingerprint, so a
+retry under one request id must carry the same labels in the same order (objects not compared).
+An edit keeps them; a cancel or the claim replaces the entry's item without them, so after the
+claim only the turn's package holds the objects and `onSettle` (also run by recovery's settle,
+plus an idempotent `recoverySteps` entry) drops them. The hooks reach the session's package
+table through a WeakMap from `SessionCore` (no name). `adopt` is `site: 'session'` and settles in
+the issuing crank; `adoptTool` uses W5.6's `grant(tool, 'adopted')` and `schemaRead`. In the
+fake session: the R4-29 line on every round of its turn and not the next; `noPackage` after the
+turn; a turn recovered after an adapter restart closes its package while the held entries keep
+theirs and run later as packages #2 and #3 with their own lines.
+Fit: good: the heap is the package table, so K6 needs no code (held entries and their objects
+survive in the session heap). Packages and attachments are bounded retained state (32 per
+message; receipts' labels at most 4,096 x 32 x 80 units).
+
+### J-0791 2026-11-18 M5 W5.7 deviations from the contract - deviation
+Evidence: the files of J-0790.
+Reading: (1) `makePackages().take(number, edge, turnId?)` takes the turn id as a third argument
+(the "open in the current turn" rule); it does not remove the edge (an edge can be adopted twice,
+as Fae). (2) The packages part value is `{ table, enqueueMessageOnce }`; `table` is the
+`makePackages` object. (3) `adoptTool` is offered only with `services.execVat` (the schema read
+is an inspector call); `adopt` always (acceptance 7 needs `noPackage` after the turn). (4)
+`toolName` is checked with the endowment label rule but is not kept by the grant: W5.6's grant
+has no display label. (5) Fae's wording "in your directory" and "in the tools/ directory" is
+dropped from the `petName` and `toolName` parameter descriptions. (6) An attachment label that
+breaks the endowment rule is refused with `textOf.reservedLabel`. (7) A staged text with
+attachments is refused over 3 x 64,000 bytes with `packageTooLong(ceil(bytes / 3))`; the Composer
+checks the exact units before staging.
+Decision: reported to the PM.
+
+### J-0792 2026-11-18 M5 session program over the 262,144-byte cap - perf
+Evidence: `node scripts/bundle-guest.mjs session` at 26978a0d2e with W5.5's and W5.6's
+committed files: 272,125 bytes; `m5-mentions` (integration) failed at session creation with "A
+session program is at most 262144 bytes in this build" (298 s wall, most of it waiting for the
+run lock).
+Reading: W5.7 adds about 12.6 KB (packages.js 2.7 KB and mentions.js 5.7 KB after comment
+stripping, two module wrappers, about 0.6 KB of queue edits); W5.5 and W5.6 about 19 KB. Without
+W5.7 the bundle would be about 259.5 KB, just under the cap; with it no session can be created
+in this lane, so the two W5.7 integration files and the perf check have not run. The bundle's
+text is about 13 % leading indentation and blank lines: removing them (outside template
+literals) measures 231,377 bytes, under O-1's 240,000.
+Fit: poor on bytes, as J-0752 found: each M5 unit's modules ship whole into every session vat.
+A whitespace pass in `scripts/bundle-guest.mjs` (AST-aware, like its comment strip) recovers
+about 40 KB at once; splitting `interfaces-m5.js` per vat is the next lever.
