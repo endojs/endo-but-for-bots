@@ -656,86 +656,81 @@ test('R4-33, R4-83: five counts summed per turn; the usage event, getUsage and t
   t.deepEqual(usageOfRecords(await s.allRecords()), after);
 });
 
-// Known defect, kept failing on purpose (J-0475): seam 4 sends
-// `armDeadline` in the crank that sends `holdTurn` (answered, `M.callWhen`)
-// and `startRound`; the Endpoint drops an `armDeadline` for a turn whose
-// lease body has not run yet, or whose first round has not set its sink
-// (endpoint.js `armDeadline`: `state === undefined || state.sink ===
-// undefined`), so the deadline is never armed. Fix in AH/endpoint.js (W2.1b
-// in group B, else W2.9): park the arm with the turn as `startRound` is
-// parked, and take the sink from the parked request. `test.failing` turns
-// red when the fix lands; then make it `test`.
-test.failing(
-  'turn deadline (seam 4, G-06): off by default; when set, a turn past it fails with its text and its request is torn down',
-  async t => {
-    const s = await setup(t, { config: { turnDeadlineMs: 300 } });
-    s.server.setPlan([{ hang: true }]);
-    const turn = await s.start('hang');
-    const t0 = Date.now();
-    const status = await Promise.race([
-      s.finished(turn),
-      timers.delay(5000).then(() => {
-        throw Error('the deadline never fired');
-      }),
-    ]);
-    const ms = Date.now() - t0;
-    t.is(status.state, 'failed');
-    t.is(status.error, textOf.turnDeadline(300));
-    t.true(ms >= 250 && ms < 5000, `${ms} ms`);
-    await until(
-      () => chatRequests(s.server)[0]?.closed,
-      'the connection closed',
-    );
-    t.true(
-      s.events.some(
-        (/** @type {any} */ e) =>
-          e.type === 'abort' && e.reason === textOf.turnDeadline(300),
-      ),
-    );
-    // Default off: a session without the setting arms nothing.
-    const plain = await setup(t);
-    plain.server.setPlan([
-      {
-        events: openRouterChunks({ deltas: ['slow'], usage: RAW_USAGE }),
-        firstByteDelayMs: 500,
-      },
-    ]);
-    const ok = await plain.start('slow but fine');
-    t.is((await plain.finished(ok)).state, 'completed');
-  },
-);
+// Seam 4 sends `armDeadline` in the crank that sends `holdTurn` (answered,
+// `M.callWhen`) and `startRound`; the Endpoint keeps an arm that arrives
+// before the turn's first round and arms it when the round brings the sink
+// (J-0475 defect, fixed by W2.9).
+test('turn deadline (seam 4, G-06): off by default; when set, a turn past it fails with its text and its request is torn down', async t => {
+  const s = await setup(t, { config: { turnDeadlineMs: 300 } });
+  s.server.setPlan([{ hang: true }]);
+  const turn = await s.start('hang');
+  const t0 = Date.now();
+  const status = await Promise.race([
+    s.finished(turn),
+    timers.delay(5000).then(() => {
+      throw Error('the deadline never fired');
+    }),
+  ]);
+  const ms = Date.now() - t0;
+  t.is(status.state, 'failed');
+  t.is(status.error, textOf.turnDeadline(300));
+  t.true(ms >= 250 && ms < 5000, `${ms} ms`);
+  await until(() => chatRequests(s.server)[0]?.closed, 'the connection closed');
+  t.true(
+    s.events.some(
+      (/** @type {any} */ e) =>
+        e.type === 'abort' && e.reason === textOf.turnDeadline(300),
+    ),
+  );
+  // Default off: a session without the setting arms nothing.
+  const plain = await setup(t);
+  plain.server.setPlan([
+    {
+      events: openRouterChunks({ deltas: ['slow'], usage: RAW_USAGE }),
+      firstByteDelayMs: 500,
+    },
+  ]);
+  const ok = await plain.start('slow but fine');
+  t.is((await plain.finished(ok)).state, 'completed');
+});
 
-// The same defect at the Endpoint alone (J-0475): `holdTurn`, `armDeadline`
-// and `startRound` sent in one crank, as seam 4 sends them.
-test.failing(
-  'Endpoint: an armDeadline sent with holdTurn and startRound in one crank fires',
-  async t => {
-    /** @type {any[]} */
-    const deadlines = [];
-    const sink = Far('TurnSink', {
-      dispatching: () => true,
-      roundFinal: () => {},
-      roundFailed: () => {},
-      deadline: (/** @type {any} */ request) => deadlines.push(request),
-      progress: () => true,
-    });
-    const turn = Far('Turn', {});
-    const endpoint = makeEndpoint({
-      provider: {
-        startRound: () => new Promise(() => {}),
-        cancelRound: () => {},
-      },
-      channel: Far('Channel', {}),
-      timers,
-    });
-    void E(endpoint).holdTurn(turn);
-    E.sendOnly(endpoint).armDeadline(
-      harden({ turn, opId: textOf.turnDeadlineOpId('t1'), ms: 50 }),
-    );
-    E.sendOnly(endpoint).startRound(
-      harden({ turn, sink, turnId: 't1', round: 0 }),
-    );
-    await timers.delay(300);
-    t.deepEqual(deadlines, [{ opId: 't1/deadline' }]);
-  },
-);
+// The same at the Endpoint alone (J-0475): `holdTurn`, `armDeadline` and
+// `startRound` sent in one crank, as seam 4 sends them.
+test('Endpoint: an armDeadline sent with holdTurn and startRound in one crank fires', async t => {
+  /** @type {any[]} */
+  const deadlines = [];
+  const sink = Far('TurnSink', {
+    dispatching: () => true,
+    roundFinal: () => {},
+    roundFailed: () => {},
+    deadline: (/** @type {any} */ request) => deadlines.push(request),
+    progress: () => true,
+  });
+  const turn = Far('Turn', {});
+  const endpoint = makeEndpoint({
+    provider: {
+      startRound: () => new Promise(() => {}),
+      cancelRound: () => {},
+    },
+    channel: Far('Channel', {}),
+    timers,
+  });
+  void E(endpoint).holdTurn(turn);
+  E.sendOnly(endpoint).armDeadline(
+    harden({ turn, opId: textOf.turnDeadlineOpId('t1'), ms: 50 }),
+  );
+  E.sendOnly(endpoint).startRound(
+    harden({
+      turn,
+      sink,
+      turnId: 't1',
+      round: 0,
+      base: { count: 0, epoch: 0 },
+      append: [],
+      tools: [],
+      options: { modelId: 'm' },
+    }),
+  );
+  await timers.delay(300);
+  t.deepEqual(deadlines, [{ opId: 't1/deadline' }]);
+});

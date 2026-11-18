@@ -20,7 +20,8 @@
  * - `releaseTurn(turn)` settles the lease, stops a round still running for
  *   the turn, disarms the turn's timers and forgets the turn.
  * - `armDeadline` / `disarm`: adapter timers that call
- *   `E.sendOnly(sink).deadline({ opId })` (no M1a caller arms one).
+ *   `E.sendOnly(sink).deadline({ opId })`; an arm that arrives before the
+ *   turn's first round (which brings the sink) waits for it (M2 W2.9).
  * - M1b W1b.2: every round run is handed `prepare`, a thunk the provider
  *   calls first to bring the session's context cache up to the request and
  *   get the projection (context-cache.js); without `prepare` (M1a tests)
@@ -81,6 +82,32 @@ export const makeEndpoint = ({
   const parked = new Map();
   /** Turns released here; their late rounds and leases are ignored. */
   const released = new WeakSet();
+  /**
+   * Deadlines armed before the turn's first round ran here (turn -> opId ->
+   * ms): the session sends `holdTurn` (callWhen, its body runs later),
+   * `armDeadline` and `startRound` in one crank, so an arm usually arrives
+   * before the lease and the sink (M2 W2.9; m2-interfaces.md 2.4 seam 4).
+   * Bounded like `parked`.
+   * @type {Map<any, Map<string, number>>}
+   */
+  const early = new Map();
+
+  /**
+   * @param {HeldTurn} state
+   * @param {string} opId
+   * @param {number} ms
+   */
+  const arm = (state, opId, ms) => {
+    state.armed.get(opId)?.();
+    state.armed.delete(opId);
+    if (state.armed.size >= MAX_TIMERS_PER_TURN) return;
+    const { sink } = state;
+    const cancel = timers.after(Math.min(ms, MAX_TIMER_MS), () => {
+      state.armed.delete(opId);
+      E.sendOnly(sink).deadline(harden({ opId }));
+    });
+    state.armed.set(opId, cancel);
+  };
 
   /**
    * Run a round with the provider; a provider that throws fails the round
@@ -90,6 +117,11 @@ export const makeEndpoint = ({
    */
   const run = (state, req) => {
     state.sink = req.sink;
+    const waiting = early.get(req.turn);
+    if (waiting !== undefined) {
+      early.delete(req.turn);
+      for (const [opId, ms] of waiting) arm(state, opId, ms);
+    }
     const project = prepare === undefined ? undefined : () => prepare(req);
     provider.startRound(req, channel, project, owner).catch(error => {
       if (released.has(req.turn)) return;
@@ -113,6 +145,7 @@ export const makeEndpoint = ({
     const state = held.get(turn);
     held.delete(turn);
     parked.delete(turn);
+    early.delete(turn);
     if (state === undefined) return;
     for (const cancel of state.armed.values()) cancel();
     state.armed.clear();
@@ -169,20 +202,25 @@ export const makeEndpoint = ({
     },
     /** @param {{ turn: any, opId: string, ms: number }} request */
     armDeadline: ({ turn, opId, ms }) => {
+      if (released.has(turn)) return;
       const state = held.get(turn);
-      if (state === undefined || state.sink === undefined) return;
-      state.armed.get(opId)?.();
-      state.armed.delete(opId);
-      if (state.armed.size >= MAX_TIMERS_PER_TURN) return;
-      const { sink } = state;
-      const cancel = timers.after(Math.min(ms, MAX_TIMER_MS), () => {
-        state.armed.delete(opId);
-        E.sendOnly(sink).deadline(harden({ opId }));
-      });
-      state.armed.set(opId, cancel);
+      if (state === undefined || state.sink === undefined) {
+        // Kept until the turn's first round runs here (it brings the sink).
+        let waiting = early.get(turn);
+        if (waiting === undefined) {
+          if (early.size >= MAX_TURNS) return;
+          waiting = new Map();
+          early.set(turn, waiting);
+        }
+        if (waiting.size < MAX_TIMERS_PER_TURN || waiting.has(opId))
+          waiting.set(opId, ms);
+        return;
+      }
+      arm(state, opId, ms);
     },
     /** @param {{ turn: any, opId: string }} request */
     disarm: ({ turn, opId }) => {
+      early.get(turn)?.delete(opId);
       const state = held.get(turn);
       if (state === undefined) return;
       state.armed.get(opId)?.();
