@@ -36,6 +36,7 @@ import {
 } from '../../guest/exec/render.js';
 import {
   ANSWER_DEPTH,
+  MODEL_OBJECT_TEXT,
   NESTED_PROMISE_TEXT,
   isWrapper,
   makeMembrane,
@@ -538,6 +539,175 @@ test('measureArguments: each bound at its limit passes, one over is refused; the
   t.false(Object.isFrozen(mine));
   t.deepEqual(out[0], { a: [1] });
   t.is(out[1], target);
+});
+
+/** Model code that builds a remotable by hand (the scope has no `Far`). */
+const FORGE = [
+  'const PS = Symbol.for("passStyle");',
+  'const proto = harden(Object.create(Object.prototype, { [PS]: { value: "remotable" },',
+  '  [Symbol.toStringTag]: { value: "Alleged: mine" } }));',
+  'const mine = harden(Object.create(proto, { hello: { value: () => "hi" } }));',
+].join('\n');
+
+test('what a model-made object can receive: nothing from another vat; it never leaves through the membrane (XC)', async t => {
+  /** @type {any[]} */
+  const received = [];
+  const keeper = Far('Keeper', {
+    /** @param {unknown} x */
+    keep: x => {
+      received.push(x);
+      return 'kept';
+    },
+  });
+  const { exec, fx } = await fresh({ keeper });
+  const outcome = await exec(
+    [
+      FORGE,
+      'const k = await powers.lookup("keeper");',
+      'const n = await powers.lookup("notes");',
+      'const out = [];',
+      'for (const f of [() => E(k).keep(mine), () => E(k).keep([{ deep: mine }]),',
+      '  () => E(k).keep(harden({ mine })), () => E.sendOnly(k).keep(mine)]) {',
+      '  try { const a = await f(); out.push(a === undefined ? "sendOnly" : a); } catch (e) { out.push(e.message); }',
+      '}',
+      // A message to the model's own object stays in the vat (measured).
+      'out.push(await E(mine).hello());',
+      // This call's wrapper and data still pass.
+      'out.push(await E(k).keep(harden({ n, s: "x" })));',
+      'globalThis.oldNotes = n;',
+      'return out;',
+    ].join('\n'),
+  );
+  t.deepEqual(outcome, {
+    status: 'ok',
+    text: JSON.stringify(
+      [
+        MODEL_OBJECT_TEXT,
+        MODEL_OBJECT_TEXT,
+        MODEL_OBJECT_TEXT,
+        'sendOnly',
+        'hi',
+        'kept',
+      ],
+      null,
+      2,
+    ),
+  });
+  // The keeper (another vat's object) received the target, never the forged
+  // object nor a wrapper.
+  t.is(received.length, 1);
+  t.is(received[0].n, fx.notes);
+  // A wrapper of an ended call in a later call's message: powersExpired.
+  t.deepEqual(
+    await exec(
+      [
+        'const k = await powers.lookup("keeper");',
+        'try { await E(k).keep([globalThis.oldNotes]); return "sent"; } catch (e) { return e.message; }',
+      ].join('\n'),
+    ),
+    { status: 'ok', text: JSON.stringify(texts.powersExpired) },
+  );
+  t.is(received.length, 1, 'nothing reached the keeper');
+});
+
+test('residual (rule 12.13, for the PM): a model-made object stored through powers.store comes back wrapped and can then leave', async t => {
+  // `powers.store` (powers.js, not the membrane) passes any remotable to the
+  // session; `lookup` in a later call answers it, and the membrane wraps it
+  // like any other object, so it can then be sent to another vat, whose
+  // calls reach model code after the call that made it ended. A refusal in
+  // `store` of a remotable that is not this call's wrapper closes this; the
+  // assertions below flip then.
+  /** @type {any[]} */
+  const received = [];
+  const keeper = Far('Keeper', {
+    /** @param {unknown} x */
+    keep: x => {
+      received.push(x);
+      return 'kept';
+    },
+  });
+  const { exec } = await fresh({ keeper });
+  t.deepEqual(
+    await exec(
+      [FORGE, 'await powers.store("mine", mine);', 'return "stored";'].join(
+        '\n',
+      ),
+    ),
+    { status: 'ok', text: JSON.stringify('stored') },
+  );
+  t.deepEqual(
+    await exec(
+      [
+        'const w = await powers.lookup("mine");',
+        'const k = await powers.lookup("keeper");',
+        'return await E(k).keep(w);',
+      ].join('\n'),
+    ),
+    { status: 'ok', text: JSON.stringify('kept') },
+  );
+  t.is(received.length, 1);
+  t.false(isWrapper(received[0]));
+  // Called after both calls ended: model code runs.
+  t.is(await E(received[0]).hello(), 'hi');
+});
+
+test('tagged values keep their tag through the membrane, both ways (XC)', async t => {
+  /** @type {any[]} */
+  const seen = [];
+  const { passStyleOf } = /** @type {GuestGlobals} */ (globalThis);
+  const tags = Far('Tags', {
+    /** @param {any} x */
+    echo: x => {
+      seen.push([passStyleOf(x), x[Symbol.toStringTag]]);
+      return x;
+    },
+  });
+  const { exec, fx } = await fresh({ tags });
+  const outcome = await exec(
+    [
+      'const PS = Symbol.for("passStyle");',
+      'const tag = (t, p) => harden(Object.create(Object.prototype, { [PS]: { value: "tagged" },',
+      '  [Symbol.toStringTag]: { value: t }, payload: { value: p, enumerable: true } }));',
+      'const m = await powers.lookup("tags");',
+      'const n = await powers.lookup("notes");',
+      'const back = await E(m).echo(tag("copySet", harden(["a", "b"])));',
+      'const withCap = await E(m).echo(tag("holder", harden([n])));',
+      'return [back[Symbol.toStringTag], back.payload, withCap[Symbol.toStringTag],',
+      '  await E(withCap.payload[0]).read()];',
+    ].join('\n'),
+  );
+  t.deepEqual(outcome, {
+    status: 'ok',
+    text: JSON.stringify(
+      ['copySet', ['a', 'b'], 'holder', 'remember the milk'],
+      null,
+      2,
+    ),
+  });
+  t.deepEqual(seen, [
+    ['tagged', 'copySet'],
+    ['tagged', 'holder'],
+  ]);
+  // measureArguments alone: the copy keeps the tag, the payload is swapped.
+  const target = Far('T', {});
+  const stand = Far('W', {});
+  const copySet = harden(
+    Object.create(Object.prototype, {
+      [Symbol.for('passStyle')]: { value: 'tagged' },
+      [Symbol.toStringTag]: { value: 'copySet' },
+      payload: { value: harden([stand]), enumerable: true },
+    }),
+  );
+  t.is(passStyleOf(copySet), 'tagged');
+  const out = /** @type {any} */ (
+    measureArguments([copySet], {
+      swap: v => (v === stand ? target : v),
+    })
+  ).args[0];
+  t.is(passStyleOf(out), 'tagged');
+  t.is(out[Symbol.toStringTag], 'copySet');
+  t.is(out.payload[0], target);
+  t.truthy(fx);
 });
 
 test('inspect methods and describe render without calling the object; Fae describeCapability rules', async t => {
