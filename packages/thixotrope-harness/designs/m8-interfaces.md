@@ -8,11 +8,17 @@ fae `session-factory.js:770-940` (the decision), fae `session/compaction-checkpo
 `src/image-tool.js` and hosted-agent `src/image-result.js` (images).
 
 This contract is written against the structure of cleanup step 3
-(`arch-review/step3-plan.md`, read for this unit): the turn runner split into modules, every
+(`arch-review/step3-plan.md` at `53a8dbb9ea`): the turn runner split into modules, every
 per-session job a **runtime part** (`PartHooks`, `HookTurn`, section 2 there), one provider shell
-(`AH/providers/shell.js`, `api.js`, `kinds.js`, section 3 there). Every seam into those files is
-marked **[step 3]**; if step 3 lands differently, the settle unit moves the seam to the module that
-holds the same job (milestones rule 7) and changes nothing else here.
+(`AH/providers/shell.js`, `api.js`, `kinds.js`, section 3 there). **Settled (W8.0 settle unit):**
+every seam into a file step 3 restructures was checked against the step-3 code as built in the cleanup lane
+(`cecfa12809`: `runtime-parts.js`, `turn.js` `hookTurn`/`roundRequest`/`invoke`/`claim`,
+`session.js` `makeSession`, `turn-import.js`, `archive.js`, `tool-table.js`, `tools/objects.js`,
+`usage.js`, `providers/api.js`, `anthropic.js` `anthropicKind`, `endpoint.js`, `index.js`) and
+names the real function there; **no seam is provisional**. Seams are anchored by function and
+statement, not line number, because the lanes start only after step 3 merges. The cross-check of
+the four contracts (journal J-1410..J-1417, issues X-01..X-17) is applied here: section 2.1 says
+how each issue assigned to M8 is answered.
 
 What W8.0 committed besides this document (constants and guard builders only, no behaviour):
 
@@ -23,9 +29,11 @@ What W8.0 committed besides this document (constants and guard builders only, no
 | `guest/lib/image-guards.js` (Node only; no vat imports it) | `imageMediaTypes`, `IMAGE_ENVELOPE_PREFIX`, `imageTexts`, `imageTextOf`, `imageShapeBuilders(table)` (`ImageRequest`, `ImagePath`, `ImageReadRange`, `ImageReadPage`), `imageInterfaceBuilders(table)` (`ImageTool`, `ImageSource`), `imageMethodNames` |
 | `AH/providers/compaction-texts.js` (Node only) | `summaryInstruction` (R4-36, word for word), `summaryHeadings`, `excerptOmitted(n)`, `scriptedSummary`, `compactionSkipTexts` (the plan's and the checks' skip reasons) |
 
-These three files are frozen at W8.0: a unit that needs a change makes a
+These four files are frozen at W8.0: a unit that needs a change makes a
 `contract(thixotrope-harness): ... (W8.x)` commit that touches only them and says why in the
-journal.
+journal. Their lines in the shared guard modules (`guards/session.js`, `interfaces.js`,
+`records.js`, `vocabulary-tables.js`) are applied by the cross-lane seam unit **WX.1**, not by M8
+(section 10).
 
 ---
 
@@ -41,7 +49,7 @@ context window, image input through `viewImage`, and the context reading shown t
 | P-37; R3-30, R4-39, R4-100 (exempt) | `viewImage`: a held image source or a workspace path; bytes read, checked (2 MiB, magic bytes) and staged by the adapter; native image input on every wire; a text receipt everywhere else | 6 |
 | R4-32 (images) | images of turns that did not complete are sent as receipts | 6.5 |
 | P-27; R4-33, R6-52 | the window known for every backend kind, so `getUsage().context` and the status bar's `ctx N%` (built in M3) show a share | 7 |
-| R3-30's "path under a workspace" | the descent through a workspace object; the real workspace is M6's (cross-lane acceptance after the merge, 15) | 6.3 |
+| R3-30's "path under a workspace" | the descent through a workspace object; the real workspace is M6's (X-1 built by M6 W6.2; the cross-lane acceptance 19 is the group fold's) | 6.3 |
 
 **Not in M8:** a forced-compaction switch beyond tests (deferred by the milestone); showing images
 to the user (R6-62: none); image attachments in user messages (R4-39: user turns are text);
@@ -143,7 +151,7 @@ is not an image. *Rejected:* binary blob entries plus an `image` field on `ToolR
 the blob store, the segment writer, the cache's text loader, delete and the archive key sweep);
 passing bytes through a vat (the frame ceiling is 65,536 bytes toward a vat, CC-027; a 2 MiB
 image is 43 frames and about 21 s of inbound hardening at 10 us a byte); data references (not in
-the core: CC-101).
+the core: the data-reference spike's step 2, after core step 3; CC-101 withdrawn, section 15).
 
 **D-M8-9. At most `imagesPerRequest` (20) images go natively in one provider request**, the
 newest; older image results go as `imageTextOf.omittedReceipt`. Images of turns that did not
@@ -200,6 +208,82 @@ archive manifest's `{ epoch, boundary }` with `RoundRequest.base` and calls the 
 `compacted({ key, epoch, boundary })` (M2 4.12) when they differ: the vat's base is the truth, the
 manifest and `context.jsonl` are caches (`m2-interfaces.md` 4.7).
 
+**D-M8-17. Shared guard and part-API lines are WX.1's; M8 adds only its own part, entries and
+blocks.** (X-02, X-03.) The cross-lane seam unit WX.1 (one agent, after step 3 merges, before any
+lane unit) applies in one commit: G-1..G-5, T-1, T-2 and S-10c of section 10; the typedef members
+M8 needs (`ActiveTurn.startIndex`, `ActiveTurn.compactionAsk` in `turn-types.js`;
+`HookTurn.reading`, `Runtime.contextWindow` and the `contextWindow` option of `makeRuntime`, a
+pass-through base field, in `runtime-parts.js`); the part order and the tool order (D-M8-18); the
+`guards-split.test.js` change and the one vocabulary re-pin. M8's former unit W8.G is "done by
+WX.1". *Why:* every lane's "first, alone" guard commit fails `guards-split.test.js` (no "added"
+category) and the 258/141 vocabulary pin; four lanes doing that in turn is four rebases of the
+same tests. *Rejected:* M8 keeping W8.G with its own snapshot fix (changes what the split test
+proves, once per lane); the earlier text's expectation that the vocabulary test stays green after
+G-1 (wrong: `compacted` and the new shape keys move the pin).
+
+**D-M8-18. Fixed orders across lanes.** (X-04.) Part table: `powers, inspector, grants, exec,
+packages, environment, compaction, inbox, subagents`; M8's `compaction` part sits after M6's
+`environment` part (the part is named `environment` everywhere; the session label of M6's `Git`
+stays `workspace`, a human label). Static tool order after the package entries: M6's shell
+entries (`runCommand`, `inspectShell`), then `viewImage`, then M9's mail, requests and subagents.
+Hook order is behaviour: `compaction.beforeRound` runs after `environment`'s hooks and before
+`inbox`'s; nothing in M8 depends on another part's `beforeRound` running first.
+
+**D-M8-19. The session-program share is a request; the cap is the PM's.** (X-01, X-13.) On the
+step-3 tree the session program measures 212,483 bytes (J-1410), 27,517 of 240,000 left; the four
+lanes' stated shares sum to 34,384. M8 asks 9,000 bytes, derived: its two vat guard modules strip
+to 3,763 (J-1410: `guards/context.js` 2,351, `guards/images.js` 1,412); the part and window module
+about 3,500 and the entry about 1,500, against stripped peers `packages.js` 2,312 and
+`tools/objects.js` 4,836; the `turn.js`, `session.js`, `turn-import.js` and `archive.js` blocks
+about 300 [inferred]. Cost of the room at J-10192's measured 20 ms per KB of cold create: about
+0.18 s on 6.1 s (Q-7 corrected; the earlier "10 us a byte" was the inbound hardening rate, not
+creation). The owner rules (raise `sessionProgramBytes` or trim the lanes) and the PM sets
+per-lane caps that sum to the ruled limit **before W8.1 and W8.4 start** (the two vat units); the
+adapter units W8.2, W8.3, W8.5 and W8.6 do not change the bundle and may start after WX.1. W8.1 and
+W8.4 measure against M8's cap with `node scripts/bundle-guest.mjs`; the group fold WX.F measures
+the sum once. If the cap is below 9,000, M8 gives back about 400 bytes by moving its adapter-only
+limits (`readPageBytes`, `maxEmptyReads`, `readTimeoutMs`, `imagesPerRequest`, `pathSegments`,
+`segmentUnits`, `summaryMaxBytes`, `summaryPreviewUnits`, `anthropicContextTokens`,
+`excerptHalvings`, `imageSizingBytes`) from `guards/context.js` and `guards/images.js` into the
+Node-only `image-guards.js` and `compaction-texts.js` (a `contract(...)` commit), before cutting
+behaviour.
+
+**D-M8-20. One adapter-to-adapter data path for the group; X-1 built by M6 as specified here.**
+(X-06.) M6 pushes staged command output as vat-sized BlobWriter pieces; M8 pulls large
+`ImageSource` pages from an adapter-side source. Both are cases of the data-reference spike's
+step 1 (harness only: an adapter given the blob store directory reads the file it is pointed at).
+Default for this group (owner question Q-8): M6's unit W6.2 adds `openImage(path) -> ImageSource`
+to `Git` and `GitReader`, answered by an adapter-side exo built with `image-guards.js`'s
+`ImageSource` guard under M6's path rules (seam X-1); M8 is its second user. Both lanes accept the
+measured hub-log cost (+2.9-3.0 MB of `hub-log.jsonl` per MiB paged adapter to adapter, spike 1),
+and CC-100 is asked once, for M6 and M8 (section 15). *Rejected:* M8 building a second transfer
+protocol (two designs of one object); waiting for spike step 2 (needs core C-1 and C-2 first).
+
+**D-M8-21. A source in a vat answers small pages.** (X-13.) `frameBytes` (24,576) bounds every
+string into or out of a vat, so an `ImageSource` held in a guest vat answers pages of at most
+`limits.blobPageBytes` (20,480) base64 characters (15,360 raw bytes), whatever `maxBytes` the tool
+asks; the tool accepts any page from 0 up to the guard's 262,144 characters and advances by what it
+decoded. Only adapter-side sources (M6's X-1, Node test peers) answer full 196,608-byte pages. The
+`images.viewFromVat` budget is re-derived from this (section 13).
+
+### 2.1 The cross-check issues assigned to M8, and how they are answered
+
+| issue | answer here |
+| --- | --- |
+| X-01 session program | D-M8-19; Q-7 corrected; W8.1 and W8.4 wait for the ruling and the PM's cap (section 11) |
+| X-02 shared guard modules | D-M8-17: W8.G is done by WX.1; G-1..G-4 marked WX.1 in section 10; G-4's wrong expectation removed |
+| X-03 part API and `turn.js` | D-M8-17: WX.1 adds the typedefs and the `makeRuntime` option; M8 adds the part file, its `PartName`/`requiredParts`/`runtimeParts`/getter lines and its own `turn.js` blocks (S-5, S-7); the partner list of S-5 corrected (M6 admission, M9 `claimNext`) |
+| X-04 orders and names | D-M8-18; S-7 and section 6.3 say `environment` |
+| X-06 two data paths, X-1 missing in M6 | D-M8-20; X-1 row says M6 W6.2 builds it; owner question Q-8 |
+| X-10 `AH/index.js` in two parallel units | S-18 moved into W8.3; W8.5 commits its `makeImageTool` export first (section 11) |
+| X-11 (a) exclusion | G-4 unconditional for `image-guards.js` (and the two vat modules), applied by WX.1 |
+| X-12 cross-lane acceptance | acceptance 19 (viewImage of a workspace path) is owned by the group fold WX.F, test named there |
+| X-13 budgets | D-M8-21 and the `images.viewFromVat` row; Q-7 cites J-10192 |
+| X-14 count rows | `compaction.record`, `images.frameIntoVat` labelled gate rows; `compaction.rebuild` measured over a window |
+| X-15 core requests | CC-100 asked unconditionally for M6 and M8, into core step 3; CC-101 withdrawn, recorded as spike step 2 (section 15) |
+| X-16 the label lookup export | S-10c is WX.1's (the `export` keyword on `readArgs`); the label lookup is `context.runtime.labels.get`, already public, so nothing else is exported and nothing copied |
+| X-17 merge order | section 18: merge order M11, M6, M8, M9; M8's fold items, then the group fold WX.F |
+
 ---
 
 ## 3. Objects and interfaces
@@ -225,7 +309,7 @@ no exo, no guard.
 | object.method | caller | crank | mode | max | retired break |
 | --- | --- | --- | --- | --- | --- |
 | `ImageTool.view(ImageRequest) -> ToolOutcome` (new; `AH/tools/view-image.js`) | session vat | (A), then the session's tool-result crank | answered | in: as above; out: <= 3.5 KB | - (callee); a break of a call it makes into the target: `imageTexts.sourceLost` as a `failed` outcome |
-| `ImageSource.readBase64(ImageReadRange) -> ImageReadPage` (protocol other objects implement; M6's workspace files) | `ImageTool` | in the source's vat or adapter | answered | out: <= 262,144 characters toward the agent-host adapter (never toward a vat) | the source is lost: `failed` with `imageTexts.sourceLost` |
+| `ImageSource.readBase64(ImageReadRange) -> ImageReadPage` (protocol other objects implement; M6's workspace files) | `ImageTool` | in the source's vat or adapter | answered | out: <= 262,144 characters toward the agent-host adapter (never toward a vat) from an adapter-side source; <= `blobPageBytes` (20,480) from a source in a vat (D-M8-21) | the source is lost: `failed` with `imageTexts.sourceLost` |
 | `ImageSource.size() -> count` (optional) | `ImageTool` | as above | answered | tiny | as above |
 | `compactBeforeRound(step)` (new function, `AH/providers/compaction-round.js`) | `runProviderRound` | (A) | - | - | a break of `compacted`: send nothing more (the session is lost or restarted) |
 | `planCompaction(input)`, `summaryRequest(plan, ...)`, `checkSummary(...)`, `compactionHook` (new pure functions, `AH/providers/compaction.js`) | `compaction-round.js`; `projection-hooks.js` | (A) | - | - | - |
@@ -279,7 +363,9 @@ The envelope (a staged text, never parsed in a vat): `IMAGE_ENVELOPE_PREFIX` the
 ### 4.1 The decision (part hook `beforeRound`, crank X)
 
 Asked in the crank that sends round r's `startRound` (the claim crank for round 0, the crank of
-the round's last tool result otherwise), through `HookTurn` [step 3]. The part asks when all hold:
+the round's last tool result otherwise), through `HookTurn`: the runner's `invoke` calls
+`hooks.beforeRound(hookTurn(active))` before it reads the tool set and builds the request (as
+built at `cecfa12809`). The part asks when all hold:
 
 1. no ask of this session is pending;
 2. this turn has not ended its asks (a `skipped` ends them, D-M8-6), has fewer than
@@ -287,7 +373,7 @@ the round's last tool result otherwise), through `HookTurn` [step 3]. The part a
    than the last compaction of this turn);
 3. no `viewImage` result was recorded in round r - 1 (R4-34: postponed one round so the model
    sees each image once; the flag is cleared here whether or not it postponed);
-4. the reading `turn.reading` [step 3, seam S-5e] is `{ usedTokens, windowTokens }` with both > 0:
+4. the reading `turn.reading` (seam S-5e) is `{ usedTokens, windowTokens }` with both > 0:
    round 0 takes the session's latest reading (the previous turn's last request, R4-34), round r
    the reading of this turn's round r - 1; the window is the session's stored `contextLength`
    when it has one (R4-33, `sessionContext`);
@@ -310,7 +396,7 @@ the session has seen (the runner's `see` value); the vat has no clock.
 
 ### 4.2 The adapter's answer (crank Y)
 
-`TurnSink.compacted(result)` in the turn runner [step 3, seam S-5d]:
+`TurnSink.compacted(result)` in the turn runner's `makeSink` (`turn.js`, seam S-5d):
 
 ```js
 compacted(result) {
@@ -368,8 +454,8 @@ exists since M2).
 ### 4.5 Export and import
 
 Records export as today (the three new kinds included; the import guard is `TurnRecord`, which
-gains them). `turn-import.js` [step 3] calls `window.observe(record, index)` for each imported
-record (S-8): a `compaction` record sets epoch and boundary, so an imported session continues
+gains them). `turn-import.js` (`makeTurnImport`'s `importTurns`) calls `window.observe(record,
+records.append(record))` for each imported record (S-8; `append` answers the index): a `compaction` record sets epoch and boundary, so an imported session continues
 from the same context. Nothing else is exported for M8.
 
 ### 4.6 The runtime part `compaction` (W8.1, `guest/session/compaction.js`)
@@ -387,8 +473,12 @@ export const compactionPart = harden({
 ```
 
 State in the closure: `pending` (one ask or none), `turnId` of the per-turn state, `done`
-(<= 4), `ended`, `lastAskRound`, `imagesUnseen`. All bounded; nothing keyed by data. It reads
-`runtime.contextWindow` (S-7). It appends through `HookTurn.append`, emits through
+(<= 4), `ended`, `lastAskRound`, `imagesUnseen`. All bounded; nothing keyed by data; nothing that
+must survive export or a restart (the epoch and boundary are rebuilt from records, 4.5). It reads
+`runtime.contextWindow` (S-7) at run time, never in `make`. `compaction` is in `requiredParts`
+(the runner's `TurnSink.compacted` calls it): test tables built from `runtimeParts` get it, and
+tables built from `requiredParts` stand-ins (`m5-w53-labels.test.js`) get an empty stand-in that
+no compaction path reaches. It appends through `HookTurn.append`, emits through
 `HookTurn.emit`, writes `turn.active.compactionAsk` (as M5's `onClaim` writes
 `active.systemNote`) and reads `turn.active.startIndex`, `turn.active.info.input` and
 `turn.reading`.
@@ -396,7 +486,7 @@ State in the closure: `pending` (one ask or none), `turnId` of the per-turn stat
 ### 4.7 The context window object (W8.1, `guest/session/compaction.js`)
 
 ```js
-makeContextWindow({ records, archive }) -> {
+makeContextWindow({ records }) -> {
   epoch() -> number,            // 0 until the first compaction
   boundary() -> number,         // 0 until the first compaction
   baseFields() -> { epoch } | { epoch, boundary },
@@ -408,11 +498,17 @@ makeContextWindow({ records, archive }) -> {
 }
 ```
 
-Made in `session.js` beside the archive and the context source [step 3 makes both there]; given
-to `makeContextSource` (`boundary: () => window.boundary()`), to the archive (`epoch: () =>
-window.epoch()`), to the runner (base fields, `contextUpdate`) and to `makeRuntime` as
-`contextWindow` (S-6, S-7). State: two numbers. It holds the record log as the archive does; it
-is not a part, because parts may not hold the record log (step3-plan 2.3).
+Made in `makeSession` (`session.js`, seam S-6). As built at `cecfa12809`, `makeSession` makes
+the runtime (`makeRuntime`) **before** the record log, then the archive and the context source,
+then the runner; so S-6 moves `const records = makeRecordLog()` one statement up, makes `window =
+makeContextWindow({ records })` right after it (the window needs only the log: `floor` is
+`records.base()`, which the archive's seals move, and `isCut` reads `records.at`), and passes it to
+`makeRuntime` as `contextWindow` (the option WX.1 adds), to `makeSessionArchive` (`epoch: () =>
+window.epoch()`), to `makeContextSource` (`boundary: () => window.boundary()`) and to
+`makeTurnRunner` (`window`; the runner hands it to `makeTurnImport`). No part's `make` reads the
+record log (none may), so making the log before the runtime changes nothing else. State: two
+numbers. It holds the record log as the archive does; it is not a part, because parts may not hold
+the record log (step3-plan 2.3).
 
 ---
 
@@ -563,21 +659,24 @@ headroomBytes` (`stillOverHeadroom`).
 
 ### 6.1 The `viewImage` entry in the session vat (W8.4, `guest/session/tools/view-image.js`)
 
-A static `ToolTableEntry` (S-10b in `tool-table.js`; step 3 keeps `toolTable` static):
-`{ name: 'viewImage', site: 'adapter', describe: () => viewImageDescription, available: ports =>
-the ports offer a 'viewImage' tool, execute }`. `execute({ opId, args }, ports, context)`:
+A static `ToolTableEntry` (S-10b in `tool-table.js`; step 3 keeps `toolTable` static and every
+entry names its `site`, as built at `e5edbed850`): `{ name: 'viewImage', site: 'adapter',
+describe: () => viewImageDescription, available: ports => the ports offer a 'viewImage' tool,
+execute }`, placed after M6's shell entries (D-M8-18). `execute({ opId, args }, ports, context)`:
 
 1. `args` is the model's JSON text. The object tools' reader (`tools/objects.js` `readArgs`,
-   exported by seam S-10c) refuses staged arguments with `textOf.argumentsTooLarge` (M5 2.4.2)
+   exported by WX.1, seam S-10c; M9 imports the same export) refuses staged arguments with `textOf.argumentsTooLarge` (M5 2.4.2)
    and parses the closed record with `parseClosedArgs` and the spec `{ tool: 'viewImage',
    fields: [petName 'string', path 'raw' (optional)] }` (added to `argSpecs` by seam S-10d):
    unknown keys give the R4-43 text. A path of 64 segments of 255 characters is over
    `inlineBytes` and is refused as too large (a deviation from Fae, which accepted it; no real
    path is that long).
 2. Check `petName` (1-256 units): `viewImageTexts.badPetName`, before any send.
-3. The target: the object the session's label map holds under `petName`, through the lookup the
-   object tools use (exported by seam S-10c, "export, don't copy"); an unknown label answers that
-   tool's text.
+3. The target: `context.runtime.labels.get(petName)`, the lookup the object tools use (the
+   `Labels` object is already on `runtime`, so nothing is exported or copied); `undefined` answers
+   `textOf.unknownLabel(petName)` (the object tools' text); a `json` binding (a stored value, not
+   an object) answers `viewImageTexts.badPetName` without a send. The target is `binding.value` of
+   an `object` binding.
 4. `E(tool).view(harden({ opId, target, ...(path === undefined ? {} : { path }) }))` with `path`
    the raw JSON text of the argument (the vat never parses model JSON, rule 12.10; readSources
    passes its `items` the same way); the answer is the `ToolOutcome` (no cut: an image result is
@@ -591,21 +690,23 @@ The vat never sees bytes, a mime type or a parsed path: it passes an object and 
 `makeImageTool({ blobs, session, timers, log })` makes one `ImageTool` exo per session
 (`imageInterfaceBuilders(...).ImageTool` from `guest/lib/image-guards.js`), offered in `TurnPorts.tools` as `{ name: 'viewImage',
 tool }` (no description: the static entry has one, as `echo`) for **every** backend kind (seam
-S-18 in the open handler, one line). `view({ opId, target, path })`:
+S-18 in `AH/index.js`'s `adapterTools` and open handler, made by W8.3, which owns `index.js`; W8.5's
+first commit is the `makeImageTool` export so W8.3 can import it). `view({ opId, target, path })`:
 
 0. `path`, when given, is parsed here (a JSON array of strings, nothing else) and checked as Fae
    does (1-64 segments of 1-255 units; none is `.` or `..`; none contains `/`, `\` or NUL):
    `imageTexts.badPath`. The checked array matches `ImagePath`.
 1. Descent (R3-30): without `path`, the source is `target`. With `path`: the method names of
    `target` (`E(target).__getMethodNames__()`); `openImage` present (M6's `Git`, the session's
-   `workspace` label, m6-interfaces 3.4; seam X-1): `source = E(target).openImage(path)`; else
+   `workspace` label, m6-interfaces 3.4; seam X-1, built by M6 W6.2, D-M8-20): `source = E(target).openImage(path)`; else
    `lookup` present (any directory-like source): `source = E(target).lookup(path)`; else
    `imageTexts.notFound`. A rejection there: `imageTexts.notFound`. Fae's `worktree()` step has no
    harness counterpart (M6 has no `worktree()`).
 2. The source must list `readBase64` (else `imageTexts.notReadable`); when it lists `size`, a
    size over `maxImageBytes` refuses with `imageTexts.tooLarge` before any read.
 3. Read pages `readBase64({ offset, maxBytes: readPageBytes })` until `done`, into one
-   `Buffer.alloc(maxImageBytes)`: each page is checked (string, base64 alphabet, at most
+   `Buffer.alloc(maxImageBytes)`, advancing `offset` by the bytes each page decoded (a source in a
+   vat answers at most 15,360 bytes a page, D-M8-21): each page is checked (string, base64 alphabet, at most
    `ceil(maxBytes / 3) * 4` characters); a page that would pass `maxImageBytes` refuses
    `tooLarge` (stop reading at once); an empty page counts toward `maxEmptyReads` (64,
    `tooManyEmptyReads`); the whole read is bounded by `readTimeoutMs` (30 s, `readTimeout`); an
@@ -626,11 +727,12 @@ Measured envelope costs for 2 MiB (J-1010): base64 0.12 ms, building the envelop
 
 | source | how it reaches `viewImage` | built by |
 | --- | --- | --- |
-| a file in the session's workspace | `petName` = `workspace` (M6's `Git` writer or reader facet), `path` = segments; the descent calls `openImage(path)` | M6 (seam X-1) |
-| any object implementing `ImageSource` | a label in the session (an endowment, an adopted package attachment, a stored value) | the operator or model code in the exec vat (a source in a guest vat answers outbound; its bytes live in that vat's heap, bounded by its own limits) |
+| a file in the session's workspace | `petName` = `workspace` (M6's `Git` writer or reader facet, owned by M6's `environment` part), `path` = segments; the descent calls `openImage(path)`; pages adapter to adapter | M6 W6.2 (seam X-1, D-M8-20) |
+| any object implementing `ImageSource` | a label in the session (an endowment, an adopted package attachment, a stored object) | the operator or model code in the exec vat (a source in a guest vat answers outbound, pages of at most 20,480 characters, D-M8-21; its bytes live in that vat's heap, bounded by its own limits) |
 
-Tests before M6 merges use `ImageSource` exos built with M8's guard (fakes from the real guard,
-review rule 4), exported from a Node test peer and given to the session as an endowment.
+Tests in the M8 lane use `ImageSource` exos built with M8's guard (fakes from the real guard,
+review rule 4), exported from a Node test peer and given to the session as an endowment. The
+workspace case end to end (acceptance 19) needs M6 and M8 merged and is the group fold's (WX.F).
 
 ### 6.4 Provider translation (W8.6, `AH/providers/images.js`; seams S-19)
 
@@ -653,9 +755,9 @@ review rule 4), exported from a Node test peer and given to the session as an en
 - Not selected: the receipt (`incompleteReceipt` for an incomplete turn, `omittedReceipt` past the
   cap).
 
-The wire builders (`anthropic.js:293`, `openrouter.js:201`, `subscriptions/responses.js:296`, as
-of `9bb9f4f2ea`; step 3 keeps them as wire functions) each call these at their `tool-result`
-branch: one call per builder (S-19). Decoding costs about 12 ms per 2 MiB image per request
+The wire builders (the transcript-to-messages functions of `anthropic.js`, `openrouter.js` and
+`subscriptions/responses.js`; step 3 keeps them as wire functions behind `wire.body`, checked at
+`cecfa12809`) each call these at their `tool-result` branch: one call per builder (S-19). Decoding costs about 12 ms per 2 MiB image per request
 (JSON parse and alphabet check, J-1010); `images.js` may keep a small cache keyed by the
 envelope string (bounded at `imagesPerRequest` entries); the perf row bounds the total.
 
@@ -686,10 +788,13 @@ hub path) and whether CC-100 is needed. Spike file `test/spikes/byte-array-passi
 | P-B3 | 16, 32, 48 and 60 KiB ByteArrays toward a vat; then 64 KiB | ms per call (the per-byte inbound cost, expect about 10 us a byte, fact 2); 64 KiB refused `FRAME_TOO_LARGE` (CC-027) |
 | P-B4 | 1 MiB as eight 128 KiB ByteArray answers between two Node peers through the hub (adapter to adapter), and the same as base64 strings | ms per page; bytes added to `hub-log.jsonl` per page (are adapter frames persisted? CC-028 made disposable sessions' frames unpersisted) |
 
-Decision rule (journal entry in J-1010..J-1029, W8.5's range): P-B4 ByteArray at least 20 %
-faster than base64 and P-B2 yes: propose `readBytes` to the owner as a later widening of
-`ImageSource` (not built in M8). P-B4 shows image pages in `hub-log.jsonl`: ask CC-100. Neither
-changes M8's build.
+Decision rule (journal entry in W8.5's range, PM assigns): P-B4 ByteArray at least 20 % faster
+than base64 and P-B2 yes: propose `readBytes` to the owner as a later widening of `ImageSource`
+(not built in M8). CC-100 is asked regardless (section 15): the spike already measured adapter
+frames in `hub-log.jsonl` (+2.9-3.0 MB per MiB); P-B4 only confirms the number at 128 KiB pages
+and records it for the CC-100 row. Neither changes M8's build. P-B1 and P-B2 also settle the
+earlier survey's disagreement (J-0023 against `spike-dataref/design-ocapn.md` 7.3) for this
+build; the result is journaled as a fact, not as a design change.
 
 ---
 
@@ -698,7 +803,7 @@ changes M8's build.
 | backend kind | window the session stores at creation | source |
 | --- | --- | --- |
 | `openrouter` | the catalogue row's `context_length` | M2 catalogue |
-| `anthropic` | the catalogue row's, else `contextLimits.anthropicContextTokens` (200,000) | M8 (seam S-20, the Anthropic reader's row builder in `AH/providers/catalog.js`; after step 3 `kinds.js` `readModels`) |
+| `anthropic` | the catalogue row's, else `contextLimits.anthropicContextTokens` (200,000) | M8 (seam S-20: `anthropicKind.readModels` in `AH/providers/anthropic.js`, as built by step 3, maps each read model to `contextLength ?? anthropicContextTokens`) |
 | `claude-pool` | the pool spec's `contextLength`, else 200,000 | M4 (D-M4-5) |
 | `codex-pool` | the smallest member's reported context length; none: no window | M4 |
 | `scripted` | none; the script's `usage.context.windowTokens` reading is used | the script |
@@ -753,14 +858,14 @@ step). Lost and duplicated refer to records and effects.
 | `CompactionResult` into the vat | <= 8,192 bytes of summary inline + 0.3 KB, or a StagedText (<= 3.3 KB) | adapter, guard | `frameBytes` 24,576 (J-0193); `vatFrameBytes` 65,536 (CC-027) |
 | `CompactionReply` out of the vat | <= 4 records | the turn runner | outbound is cheap (fact 2) |
 | image | <= 2 MiB | `ImageTool` (`size()` first, then while reading) | R4-39 |
-| image page | 196,608 raw bytes (262,144 characters) toward the adapter only | `ImageTool`, `ImageReadPage` guard | adapter frames have no vat ceiling; the control socket's 8 MiB wall is not on this path |
+| image page | 196,608 raw bytes (262,144 characters) toward the adapter only; a source in a vat answers at most 20,480 characters (15,360 bytes) | `ImageTool`, `ImageReadPage` guard; the source's own vat (`frameBytes`) | adapter frames have no vat ceiling; the control socket's 8 MiB wall is not on this path; `frameBytes` 24,576 bounds a vat's answers (D-M8-21) |
 | empty pages | 64 | `ImageTool` | Fae `image-tool.js:125` |
 | read time | 30 s | `ImageTool` (adapter timer) | a hanging source must not hold the round |
 | `viewImage` arguments | petName 1-256 (vat, before any send); the whole argument text <= `inlineBytes` (vat); path 1-64 x 1-255 (adapter, before any read) | the vat entry; `ImageTool` | Fae `image-tool.js:44-56`; M5 2.4.2 |
 | images per request | 20 newest | `images.js` | D-M8-9 |
 | image sizing | 6,400 bytes per image | plan | D-M8-14 |
 | Anthropic window | 200,000 tokens | catalogue | open decision 13 |
-| session program bytes | M8 adds at most 9,000 bytes (measured: the two guard modules 2,860 and 1,516 bytes without comments; the part and window about 3.5 KB and the entry about 1.5 KB [inferred]); adapter-only guards and texts live in Node-only modules for this reason | `session.program` perf row (W8.7), `bundle-guest.mjs` in W8.1 and W8.4 | 206,907 of 240,000 at `9bb9f4f2ea` (J-10192); step 3 expects 213-216 K; M6 asks 9,000 and M9 16,384 of the same room (owner question Q-7) |
+| session program bytes | M8 asks 9,000 bytes; the PM's cap binds (D-M8-19). Basis: the two vat guard modules strip to 2,351 and 1,412 (J-1410); the part and window about 3.5 KB and the entry about 1.5 KB [inferred from stripped peers 2.3-4.8 K]; adapter-only guards and texts live in Node-only modules for this reason | `m1a-session-program.test.js` (the sum), `bundle-guest.mjs` against M8's cap in W8.1 and W8.4, `session.program` perf row (W8.7) | 212,483 of 240,000 on the step-3 tree (J-1410); the four lanes ask 34,384 (X-01, owner question Q-7) |
 
 No new retained collection grows with time: the part keeps one ask and five per-turn scalars, the
 window two numbers, the image decode cache at most 20 entries, the cache's plan input one entry
@@ -770,36 +875,46 @@ per projection (weakly held).
 
 ## 10. Seams and merge hotspots
 
-Every edit M8 makes outside its own new files, with the exact seam. "Shared" names the other
-lanes of the group expected to touch the same file (M6 containers and workspace, M9 mail and
-subagents, M11 voice) or step 3. [step 3] marks a seam in a file step 3 restructures.
+Every edit M8 makes outside its own new files, with the exact seam, checked against the step-3
+code as built (`cecfa12809`) and anchored by function. "Shared" names the other lanes of the group
+expected to touch the same file (M6 environment, M9 mail and subagents, M11 voice). Seams marked
+**WX.1** are applied by the cross-lane seam unit before any lane unit (D-M8-17); M8's units only
+rely on them.
 
-| id | file | the seam | unit | shared with |
+| id | file | the seam | applied by | shared with |
 | --- | --- | --- | --- | --- |
-| G-1 | `guest/lib/guards/session.js` | import from `./context.js`; `...contextShapeBuilders(() => shapes)` in the `shapes` builders; `S.CompactionStarted, S.Compaction, S.CompactionSkipped` appended to `TurnRecord`'s `M.or`; `...compactionKindLetters` appended to `archiveKindLetters`; `...contextSinkMethods(() => shapes)` in `methodsOf.TurnSink`; `'compacted'` appended to the `TurnSink` method names; `...compactionTexts` is **not** spread (texts stay in `context.js` until the fold) | W8.G | M6, M9 (their shapes and texts); append-only lines |
-| G-2 | `guest/lib/interfaces.js` | `RoundRequest`: optional `compaction: S.CompactionAsk`; `base`: optional `boundary: count`; `m1aMethodNames.TurnSink` gains `'compacted'` | W8.G | M6, M9 |
-| G-3 | `guest/session/records.js` | `shapeOfKind` gains the three kinds, mapped to the shape names `CompactionStarted`, `Compaction` and `CompactionSkipped` (and the JSDoc union) | W8.G | M9 if it adds record kinds |
-| G-4 | `guest/lib/vocabulary-tables.js` | `vocabularyExclusions` gains `'guards/context.js'`, `'guards/images.js'` and `'image-guards.js'` ("the context slice of session.js, spread by it"; "the viewImage description, not a guard"; "adapter and source guards, not browser-sendable") if `gateway-vocabulary-tables.test.js` flags them (it does not at this contract's commits) | W8.G | every lane adding a guard module |
-| S-5 | `guest/session/turn.js` [step 3] | (a) claim: `active.startIndex = records.append(started)` and `startIndex` in `ActiveTurn` (`turn-types.js`); (b) `roundRequest`: `base: harden({ count, ...window.baseFields(), ...archived })` (replaces `epoch: 0`) and `...(active.compactionAsk ? { compaction: active.compactionAsk } : {})`; (c) `invoke`: no `thinking` phase for a round whose request carries an ask; (d) `TurnSink.compacted` (4.2) and `contextUpdate(active)` factored out of `roundRequest`; (e) `HookTurn.reading` = `sessionContext(active.usage?.context ?? usage.totals().context, config.contextLength)` | W8.1 | M9 (restart hold in `claimNext`, step3-plan 2.4); none else |
-| S-6 | `guest/session/session.js` [step 3] | make `window = makeContextWindow({ records, archive })` after the archive; pass `boundary: () => window.boundary()` to `makeContextSource`, `epoch: () => window.epoch()` to the archive, `window` to the runner and `contextWindow: window` to `makeRuntime` | W8.1 | M6, M9 (their services and parts) |
-| S-7 | `guest/session/runtime-parts.js` [step 3] | `PartName` gains `'compaction'`; the part table appends `compactionPart` (after `packages`); `Runtime` gains the getter `compaction` and the base field `contextWindow` | W8.1 | M6 (`workspace`), M9 (`inbox`, `subagents`): one line each, append-only |
-| S-8 | `guest/session/turn-import.js` [step 3] | each imported record: `window.observe(record, index)` | W8.1 | none |
-| S-9 | `guest/session/archive.js` | the seal request's `epoch: 0` -> `epoch: epoch()` (an option of `makeSessionArchive`) | W8.1 | none |
-| S-10b | `guest/session/tool-table.js` | import `viewImageEntry`; append it to `toolTable` | W8.4 | M6 (shell, git, environment entries), M9 (mail tools if static): append-only |
-| S-10c | `guest/session/tools/objects.js` | export `readArgs` and the label lookup the object tools use, with its unknown-label text (`export` keywords) | W8.4 | none |
-| S-10d | `guest/lib/tool-args.js` | `argSpecs.viewImage = { tool: 'viewImage', fields: [field('petName', 'string'), field('path', 'raw', false)] }` | W8.4 | M9 if it adds argument specs (append-only) |
-| S-10 | `AH/projection.js` | `case 'compaction'` (the marker) and the turn's settled status for `incomplete` on tool results (5.5) | W8.3 | none |
-| S-11 | `AH/projection-hooks.js` | `projectionHooks = harden([compactionHook])` | W8.3 | none (M8 is its only user) |
-| S-12 | `AH/archive/store.js` | `compacted`: return at once when the manifest has the same `epoch` and `boundary` | W8.3 | none in the group (step 3 HOST touches `store.js` for atomic writes: rebase the three lines) |
-| S-13 | `AH/context-cache.js` | `boundary` in `Entry`; the rebase branch (5.4); the reconcile call on rebuild; `planInput` option and `planInputOf` | W8.3 | none (step 3 leaves it alone) |
-| S-14 | `AH/endpoint.js` [step 3 PROVIDERS] and `AH/index.js` | the endpoint's `project` becomes `(next = req, options = next.compaction ? { planInput: true } : {}) => prepare(next, options)`; `index.js`'s `prepare: (req, options) => contextCache.prepare(session, req, { key: archiveKey, ...options })` | W8.3 | M11 if it edits `index.js` (different lines) |
-| S-15 | `AH/providers/round.js` (`runProviderRound`, step 2b) and the shell's stream [step 3 `api.js`, pool provider] | the 2b block of 5.1; the stream accepts `tools` to replace `req.tools` (API: the body builder's tools argument; pool: its member loop passes it on) | W8.3 | M7 later (egress); none in the group |
-| S-16 | `AH/providers/scripted.js` | in `runRound`, after its dispatch step: the same 2b block with a stream yielding `scriptedSummary` | W8.3 | none |
-| S-17 | `guest/lib/transcript-records.js` (the oracle) | accept `{ kind: 'compaction', epoch, summary, directive? }` and `incomplete` on `tool-result` | W8.3 | none |
-| S-18 | `AH/index.js` | `adapterTools` gains `{ name: 'viewImage', makeTool: makeImageTool }`; the open handler offers `viewImage` with every kind's tools (`[...kind.tools, 'viewImage']`) | W8.5 | M11 if it registers there (different lines) |
-| S-19 | `AH/providers/anthropic.js`, `openrouter.js`, `AH/subscriptions/responses.js` | the `tool-result` branch of each wire builder calls `images.js` (6.4): one call each, plus the synthetic user message in `openrouter.js` | W8.6 | none in the group |
-| S-20 | `AH/providers/catalog.js` [step 3 `kinds.js` `readModels`] | the Anthropic reader's row: `contextLength ?? contextLimits.anthropicContextTokens` | W8.3 | none |
-| X-1 | M6's `Git` and `GitReader` (manager-vat exos; label `workspace`) | one read method `openImage(path) -> ImageSource`, with M6's path rules (worktree only, never `.git`, `gitPathRefused`), forwarded once through M6's manager to its adapter and answered with an **adapter-side** `ImageSource` exo (the attach pattern, D-7) built with `guest/lib/image-guards.js` `ImageSource`, so the pages (up to 262,144 characters each) go adapter to adapter and never into M6's manager vat (they would pass the 65,536-byte frame ceiling) | M6 (requested here; M6's manager part is new in M6, not yet installed, so adding the method costs no reinstall) | M6: if M6 declines, the fold adds it after the merge; until then `viewImage` with a path answers `notFound` and the acceptance uses `ImageSource` fakes |
+| G-1 | `guest/lib/guards/session.js` | import from `./context.js`; `...contextShapeBuilders(() => shapes)` in the `shapes` builders; `S.CompactionStarted, S.Compaction, S.CompactionSkipped` appended to `TurnRecord`'s `M.or`; `...compactionKindLetters` appended to `archiveKindLetters`; `...contextSinkMethods(() => shapes)` in `methodsOf.TurnSink`; `'compacted'` appended to the `TurnSink` method names; `...compactionTexts` is **not** spread (texts stay in `context.js` until the fold) | **WX.1** | M6, M9 (their shapes and texts) |
+| G-2 | `guest/lib/interfaces.js` | `RoundRequest`: optional `compaction: S.CompactionAsk`; `base`: optional `boundary: count`; `m1aMethodNames.TurnSink` gains `'compacted'` | **WX.1** | M6 |
+| G-3 | `guest/session/records.js` | `shapeOfKind` gains the three kinds, mapped to the shape names `CompactionStarted`, `Compaction` and `CompactionSkipped` (and the JSDoc union) | **WX.1** | M9 if it adds record kinds |
+| G-4 | `guest/lib/vocabulary-tables.js` | `vocabularyExclusions` gains, unconditionally, `'image-guards.js': 'adapter and source guards (builders), not browser-sendable'`, `'guards/context.js': 'the context slice of guards/session.js, spread by it'`, `'guards/images.js': 'the viewImage description and limits, not a guard'`; the vocabulary pin (258/141) re-pinned once with every lane's G-1-like entries. If the test's both-directions check refuses an exclusion for a module that exports only builders, WX.1 widens that check to accept a builder-only module with a reason | **WX.1** | every lane adding a guard module |
+| G-5 | `test/unit/guards-split.test.js`, `guard-fold-map.json` | the before-split assertion replaced by an `added` list (or retired); M8's added entries: the six shapes, `TurnSink.compacted` | **WX.1** | every lane |
+| T-1 | `guest/session/turn-types.js`, `guest/session/runtime-parts.js` (typedefs and one option) | `ActiveTurn.startIndex: number`, `ActiveTurn.compactionAsk?: CompactionAsk`; `HookTurn.reading: { usedTokens, windowTokens }`; `Runtime.contextWindow`; `makeRuntime({ ..., contextWindow })` passes it through as a base field (undefined until M8) | **WX.1** | M6 (`admit`), M9 (`take`, restart hold) |
+| T-2 | `guest/session/runtime-parts.js` | the part-table order fixed, written as a comment beside `runtimeParts` (D-M8-18) | **WX.1** | M6, M9 |
+| S-10c | `guest/session/tools/objects.js` | `export` on `readArgs` (the label lookup is `runtime.labels.get`, already public) | **WX.1** | M9 imports it |
+| S-5 | `guest/session/turn.js` | (a) `claim`: `active.startIndex = records.append(started)` (`append` answers the index); (b) `roundRequest`'s `make`: `base: harden({ count, ...window.baseFields(), ...archived })` (replaces `epoch: 0`) and `...(active.compactionAsk ? { compaction: active.compactionAsk } : {})`; (c) `invoke`: the `round > 0` `thinking` emit is skipped when `active.compactionAsk` is set (the part emits `thinking` after crank Y); (d) `makeSink` gains `compacted` (4.2), and `contextUpdate(active)` is factored out of `roundRequest` (the `from`/`to`/`sentUpTo` lines, shared, not copied); (e) `hookTurn` adds `reading: sessionContext(active.usage?.context ?? usage.totals().context, config.contextLength)` (`guest/lib/usage-counts.js`); `makeTurnImport` gets `window` | M8 W8.1 | M6 (the admission line in `claim`), M9 (`claimNext`, restart hold): different statements |
+| S-6 | `guest/session/session.js` `makeSession` | `const records = makeRecordLog()` moved above `makeRuntime`; `const window = makeContextWindow({ records })` after it; `contextWindow: window` in `makeRuntime`'s options; `epoch: () => window.epoch()` in `makeSessionArchive`'s; `boundary: () => window.boundary()` in `makeContextSource`'s; `window` in `makeTurnRunner`'s (4.7) | M8 W8.1 | M6, M9 (their services): different statements |
+| S-7 | `guest/session/runtime-parts.js` | `'compaction'` in the `PartName` union, in `requiredParts` and in `runtimeParts` (`compactionPart`, after `environment`, D-M8-18); the getter `get compaction()`; the import line | M8 W8.1 | M6 (`environment`), M9 (`inbox`, `subagents`): one line each at fixed positions |
+| S-8 | `guest/session/turn-import.js` `importTurns` | `records.append(record)` -> `window.observe(record, records.append(record))`; `window` in `makeTurnImport`'s options | M8 W8.1 | none |
+| S-9 | `guest/session/archive.js` `makeSessionArchive` | the seal request's `epoch: 0` -> `epoch: epoch()` (a new option, default `() => 0`) | M8 W8.1 | none |
+| S-10b | `guest/session/tool-table.js` `toolTable` | import `viewImageEntry`; insert it after M6's shell entries (D-M8-18) | M8 W8.4 | M6 (shell entries before it), M9 (mail tools after it) |
+| S-10d | `guest/lib/tool-args.js` | `argSpecs.viewImage = { tool: 'viewImage', fields: [field('petName', 'string'), field('path', 'raw', false)] }` | M8 W8.4 | M9 if it adds argument specs (append-only) |
+| S-10 | `AH/projection.js` | `case 'compaction'` (the marker) and the turn's settled status for `incomplete` on tool results (5.5) | M8 W8.3 | none |
+| S-11 | `AH/projection-hooks.js` | `projectionHooks = harden([compactionHook])` | M8 W8.3 | none (M8 is its only user) |
+| S-12 | `AH/archive/store.js` `compacted` | return at once when the manifest has the same `epoch` and `boundary` (after step 3 HOST's `files.js` writers) | M8 W8.3 | none |
+| S-13 | `AH/context-cache.js` | `boundary` in `Entry`; the rebase branch (5.4); the reconcile call on rebuild; `planInput` option and `planInputOf` | M8 W8.3 | none (step 3 leaves it alone) |
+| S-14 | `AH/endpoint.js` and `AH/index.js` | the endpoint's `const project = () => prepare(req)` becomes `(next = req) => prepare(next, next.compaction ? { planInput: true } : {})`; `index.js`'s `prepare: req => contextCache.prepare(session, req, { key: archiveKey })` becomes `(req, options) => contextCache.prepare(session, req, { key: archiveKey, ...options })` | M8 W8.3 | M11 if it edits `index.js` (different statements) |
+| S-18 | `AH/index.js` | `adapterTools` gains `{ name: 'viewImage', makeTool: makeImageTool }` (import from W8.5's file); the open handler's `kind.tools.map(...)` offers `viewImage` with every kind's tools (`[...kind.tools, 'viewImage']`) | M8 W8.3 (moved from W8.5, X-10) | M11 if it registers there (different statements) |
+| S-15 | `AH/providers/round.js` `runProviderRound` (step 2b); `AH/providers/api.js` `apiStream`; `AH/subscriptions/provider.js` `poolStream` | the 2b block of 5.1; each stream accepts `{ projection, signal, tools }` and builds with `tools ?? req.tools` (API: `wire.body({ ..., req: tools === undefined ? req : { ...req, tools } })`; pool: its member loop passes it on) | M8 W8.3 | M7 later (egress); none in the group |
+| S-16 | `AH/providers/scripted.js` `runRound` | after its dispatch step: the same 2b block with a stream yielding `scriptedSummary` (scripted keeps its own `runRound` until step-3 plan item (b)) | M8 W8.3 | none |
+| S-17 | `guest/lib/transcript-records.js` (the oracle) | accept `{ kind: 'compaction', epoch, summary, directive? }` and `incomplete` on `tool-result` | M8 W8.3 | none |
+| S-19 | `AH/providers/anthropic.js`, `openrouter.js`, `AH/subscriptions/responses.js` | the `tool-result` branch of each wire builder calls `images.js` (6.4): one call each, plus the synthetic user message in `openrouter.js` | M8 W8.6 | none in the group |
+| S-20 | `AH/providers/anthropic.js` `anthropicKind.readModels` | `key => readAnthropicModels(...).then(models => models.map(withWindow))`, `withWindow` = `contextLength ?? contextLimits.anthropicContextTokens` | M8 W8.6 (owns `anthropic.js`) | none |
+| X-1 | M6's `Git` and `GitReader` (manager-vat exos; label `workspace`) | one read method `openImage(path) -> ImageSource`, with M6's path rules (worktree only, never `.git`, `gitPathRefused`), forwarded once through M6's manager to its adapter and answered with an **adapter-side** `ImageSource` exo built with `guest/lib/image-guards.js` `ImageSource`, so the pages (up to 262,144 characters each) go adapter to adapter and never into M6's manager vat | **M6 W6.2** (D-M8-20; X-06 default; owner question Q-8) | M6; until both merge `viewImage` with a path on a non-`Git` target answers `notFound`, and M8's tests use `ImageSource` fakes |
+
+**Merge hotspots** (files another lane of the group also edits): `turn.js` (S-5: M6, M9),
+`session.js` (S-6: M6, M9), `runtime-parts.js` (S-7: M6, M9), `tool-table.js` (S-10b: M6, M9),
+`tool-args.js` (S-10d: M9), `AH/index.js` (S-14, S-18: M11). Each M8 edit there is one statement
+or one line at a position WX.1 fixed; a rebase that conflicts keeps both sides.
 
 Files nobody else in the group should touch and M8 does not: `channels.js`, `gateway/server.js`,
 the manager part (`resources/agent-host/*.js` outside `impl/`), `config/defaults.js`,
@@ -810,31 +925,39 @@ fold).
 
 ## 11. Work units
 
-The M8 lane is one worktree. W8.G runs first and alone (about 30 minutes); W8.1-W8.6 then run at
-the same time, each owning the files listed (disjoint); W8.7 runs last. Units talk only through
-the shapes of section 3 and the functions of section 16; a unit that needs another's function
-before it is committed writes against the signature with a fake built from the real guard.
+The M8 lane is one worktree, started after step 3 merges and WX.1 commits. W8.2, W8.3, W8.5 and
+W8.6 (adapter only, no bundle change) start at once; W8.1 and W8.4 (session program) start when
+the owner has ruled on the session program and the PM has set M8's cap (D-M8-19). W8.1-W8.6 own
+disjoint files (checked below); W8.7 runs last. Units talk only through the shapes of section 3
+and the functions of section 16; a unit that needs another's function before it is committed
+writes against the signature with a fake built from the real guard.
 
 | id | files owned | behaviour | tests (new, by subject) | depends on |
 | --- | --- | --- | --- | --- |
-| W8.G guard wiring | seams G-1, G-2, G-3, G-4 | the new shapes, kinds, letters and the `compacted` guard in the tables | `test/unit/context-guards.test.js`: each new shape accepts the section 3.3 examples and refuses an extra key; `TurnRecord` takes the three kinds; letters unique; the vocabulary test green | W8.0 |
-| W8.1 session compaction | new `guest/session/compaction.js`; seams S-5, S-6, S-7, S-8, S-9 | 4.1-4.7: the decision, the ask, crank Y, the window, export/import | `test/unit/compaction-decision.test.js` (rules 1-6 of 4.1, postponement, the per-turn bounds), `test/unit/compaction-sink.test.js` (crank Y: accept, refuse a non-cut, skipped, `go: false` after settle or a round change, usage charged without the reading, the reply's base and append), `test/unit/compaction-import.test.js` (export then import keeps epoch and boundary), the crank-order suites of step 3 unchanged (no compaction: identical records and sends) | W8.G |
-| W8.2 plan and summary | new `AH/providers/compaction.js` (`planCompaction`, `summaryRequest`, `checkSummary`, `compactionHook`) | 5.2, 5.3, the hook of 5.5 | `test/adapter/compaction-plan.test.js` (candidates, the pin, the directive, the tail budget, `C_last`, every refusal, image sizing), `test/adapter/compaction-summary.test.js` (excerpt halving to fit, the instruction text word for word, `checkSummary` refusals), `test/adapter/compaction-hook.test.js` (highest epoch first, markers dropped, no marker = identity) | W8.G; `imageReceiptText` from W8.6 (stub until its first commit) |
-| W8.3 adapter wiring | new `AH/providers/compaction-round.js`; seams S-10, S-11, S-12, S-13, S-14, S-15, S-16, S-17, S-20 | 5.1, 5.4, 5.5, 7's Anthropic window | `test/adapter/compaction-round.test.js` (against `fake-provider-server.mjs`, Anthropic and OpenRouter: the summary request has no tools and the instruction, deltas not published, `compacted` called once, the next request starts with the summary; skipped path; provider failure fails the round; cancel during the summary sends nothing), `test/adapter/context-cache-compaction.test.js` (rebase without a page, rebuild reconciles the manifest, kill points K5 and K6 with the store's trace hooks, the M1b property test with markers), `test/adapter/compaction-scripted.test.js`, a catalogue case in the existing Anthropic catalogue test | W8.G; W8.2's functions (stubs until committed) |
-| W8.4 viewImage entry | new `guest/session/tools/view-image.js`; seams S-10b, S-10c, S-10d | 6.1 | `test/unit/view-image-entry.test.js` (argument checks and texts before any send, unknown label, the request carries the object, `imageSeen` on ok only, a failed outcome passes through, the adapter-site retired break routes to recovery) | W8.G; W8.1's part API (a fake part from the section 4.6 signature) |
-| W8.5 image tool | new `AH/tools/view-image.js`; seam S-18; new spike `test/spikes/byte-array-passing.test.js` | 6.2, 6.3, the probe of 6.6 | `test/adapter/image-tool.test.js` (sources built with the `ImageSource` guard: PNG, JPEG, WebP accepted; SVG/HTML refused; `size()` over 2 MiB refused before a read; a 10 MiB source stops at 2 MiB + 1; 65 empty pages; a hanging source times out; descent through `openImage(path)` (a fake built from M6's `Git` guard once M6 commits it, else from the X-1 method alone) and `lookup(path)`; a lost source; the staged result's preview is the receipt; quota refusal) | W8.G |
-| W8.6 image wire | new `AH/providers/images.js`; seam S-19 | 6.4, 6.5 | `test/adapter/image-wire.test.js` (each wire's shape against the fake servers' recorded request bodies, only `viewImage` results decoded, a forged envelope in an `exec` result stays text, the 21st image becomes a receipt, an incomplete turn's image a receipt, a malformed envelope is text) | W8.G; W8.3's `incomplete` flag (projection) for the incomplete case (fixture transcript until then) |
-| W8.7 integration | new `test/integration/compaction.test.js`, `test/integration/compaction-archive.test.js`, `test/integration/view-image.test.js`, `perf/compaction.perf.mjs`, `perf/images.perf.mjs`; the journal (W8.7's numbers); the regression-list entry for `process.md` 3.1 (as a fold note) | acceptance 1-17 end to end, perf section 13, the probes of section 14 | the three integration files (each <= 5 min, from templates); the two perf files (each <= 10 min) | all of W8.1-W8.6 |
+| (W8.G) | done by WX.1 (G-1..G-5, T-1, T-2, S-10c) | - | - | - |
+| W8.1 session compaction | new `guest/session/compaction.js`; seams S-5 (`turn.js`), S-6 (`session.js`), S-7 (`runtime-parts.js`), S-8 (`turn-import.js`), S-9 (`archive.js`); new tests | 4.1-4.7: the decision, the ask, crank Y, the window, export/import | `test/unit/context-guards.test.js` (each new shape accepts the 3.3 examples and refuses an extra key; `TurnRecord` takes the three kinds; letters unique; a 30 KB inline summary refused), `test/unit/compaction-decision.test.js` (rules 1-6 of 4.1, postponement, the per-turn bounds), `test/unit/compaction-sink.test.js` (crank Y: accept, refuse a non-cut, skipped, `go: false` after settle or a round change, usage charged without the reading, the reply's base and append), `test/unit/compaction-import.test.js` (export then import keeps epoch and boundary); step 3's crank-order suites unchanged (no compaction: identical records and sends) | WX.1; the session-program ruling and M8's cap |
+| W8.2 plan and summary | new `AH/providers/compaction.js`; new tests | 5.2, 5.3, the hook of 5.5 | `test/adapter/compaction-plan.test.js` (candidates, the pin, the directive, the tail budget, `C_last`, every refusal, image sizing), `test/adapter/compaction-summary.test.js` (excerpt halving to fit, the instruction text word for word, `checkSummary` refusals), `test/adapter/compaction-hook.test.js` (highest epoch first, markers dropped, no marker = identity) | WX.1; `imageReceiptText` from W8.6's first commit |
+| W8.3 adapter wiring | new `AH/providers/compaction-round.js`; seams S-10 (`projection.js`), S-11 (`projection-hooks.js`), S-12 (`archive/store.js`), S-13 (`context-cache.js`), S-14 (`endpoint.js`, `index.js`), S-15 (`round.js`, `api.js`, `subscriptions/provider.js`), S-16 (`scripted.js`), S-17 (`transcript-records.js`), S-18 (`index.js`); new tests | 5.1, 5.4, 5.5; the `viewImage` adapter-tool registration | `test/adapter/compaction-round.test.js` (against `fake-provider-server.mjs`, Anthropic and OpenRouter: the summary request has no tools and the instruction, deltas not published, `compacted` called once, the next request starts with the summary; skipped path; provider failure fails the round; cancel during the summary sends nothing; K3 and K4 both orders by a fault hook), `test/adapter/context-cache-compaction.test.js` (rebase without a page, rebuild reconciles the manifest, K5 and K6 with the store's trace hooks, the M1b property test with markers), `test/adapter/compaction-scripted.test.js`, `test/adapter/image-tool-offered.test.js` (every kind's ports carry `viewImage`) | WX.1; W8.2's functions (stubs until committed); W8.5's first commit (the `makeImageTool` export) for S-18 |
+| W8.4 viewImage entry | new `guest/session/tools/view-image.js`; seams S-10b (`tool-table.js`), S-10d (`tool-args.js`); new test | 6.1 | `test/unit/view-image-entry.test.js` (argument checks and texts before any send, unknown label, a `json` binding refused, the request carries the object, `imageSeen` on ok only, a failed outcome passes through, the adapter-site retired break routes to recovery) | WX.1; the ruling and M8's cap; W8.1's part API (a fake part from the 4.6 signature) |
+| W8.5 image tool | new `AH/tools/view-image.js` (first commit: the `makeImageTool` and `imageTypeOf` exports, refusing with `notReadable` until built); new spike `test/spikes/byte-array-passing.test.js`; new test | 6.2, 6.3, the probe of 6.6 | `test/adapter/image-tool.test.js` (sources built with the `ImageSource` guard: PNG, JPEG, WebP accepted; SVG/HTML refused; `size()` over 2 MiB refused before a read; a 10 MiB source stops at 2 MiB + 1; 65 empty pages; a hanging source times out; short pages of 15,360 bytes as a vat source answers; descent through `openImage(path)` (a fake built from M6's `Git` guard once M6 commits it, else from the X-1 method alone) and `lookup(path)`; a lost source; the staged result's preview is the receipt; quota refusal; I1-I3 with the blob store's trace hooks) | WX.1 |
+| W8.6 image wire and window | new `AH/providers/images.js` (first commit: `encodeImageEnvelope`, `imageReceiptText`); seams S-19 (`anthropic.js`, `openrouter.js`, `subscriptions/responses.js`), S-20 (`anthropic.js`); new test; one case in the existing Anthropic catalogue test (`test/adapter/m2-w22-catalog.test.js`) | 6.4, 6.5, 7's Anthropic window | `test/adapter/image-wire.test.js` (each wire's shape against the fake servers' recorded request bodies, only `viewImage` results decoded, a forged envelope in an `exec` result stays text, the 21st image becomes a receipt, an incomplete turn's image a receipt, a malformed envelope is text); the catalogue case (a row without a context length gets 200,000) | WX.1; W8.3's `incomplete` flag for the incomplete case (fixture transcript until then) |
+| W8.7 integration | new `test/integration/compaction.test.js`, `test/integration/compaction-archive.test.js`, `test/integration/view-image.test.js`, `perf/compaction.perf.mjs`, `perf/images.perf.mjs`; the regression-list entry for `process.md` 3.1 (as a fold note) | acceptance 1-18 end to end, perf section 13, the probes of section 14 | the three integration files (each <= 5 min, from templates); the two perf files (each <= 10 min) | all of W8.1-W8.6 |
 
-Journal numbers: W8.0 J-1010..J-1029 (this unit's range; W8.0 uses the first few). The PM
-allocates the rest of M8's J-1000.. block per unit; suggested W8.1 J-1030.., W8.2 J-1040..,
-W8.3 J-1050.., W8.4 J-1060.., W8.5 J-1070.. (including the probe), W8.6 J-1080.., W8.7
-J-1090...
+**Disjointness check.** `AH/index.js` is W8.3's only (S-14 and S-18); `anthropic.js` is W8.6's
+only (S-19 and S-20); `api.js`, `round.js`, `subscriptions/provider.js`, `scripted.js` are
+W8.3's; `openrouter.js`, `subscriptions/responses.js` W8.6's; every `guest/session` file is W8.1's
+except `tools/view-image.js` and `tool-table.js` (W8.4); `tool-args.js` is W8.4's. No two
+parallel units own the same file; the only cross-unit imports are first-commit exports
+(`makeImageTool`, `encodeImageEnvelope`, `imageReceiptText`) and W8.2's pure functions.
 
-Commit subjects `feat(thixotrope-harness): ... (W8.n)`; a guard-table change `contract(...)`.
-Every unit: `corepack yarn lint` (types, eslint, duplicates) in the package and its own test
-files directly; guest edits are measured with `node scripts/bundle-guest.mjs` (W8.1 and W8.4
-report the session program's bytes).
+**Journal numbers.** W8.0 (this contract and its settle unit): J-1010..J-1029. Build units W8.1-
+W8.7: **PM assigns** (one range per unit, at least 20 numbers each, from M8's block; ten is not
+enough for a builder). The probe of 6.6 is journaled in W8.5's range.
+
+Commit subjects `feat(thixotrope-harness): ... (W8.n)`; a change to M8's own guard, limit or text
+files `contract(...)`. Every unit: `corepack yarn lint` (types, eslint, duplicates) in the package
+and its own test files directly; W8.1 and W8.4 report the session program's bytes from
+`node scripts/bundle-guest.mjs` against M8's cap.
 
 ---
 
@@ -890,8 +1013,8 @@ with real providers (credentials); the fake-server and scripted versions run eve
     empty pages and a lost source each answer the fixed text, and the turn continues.
     `view-image-entry.test.js`, `image-tool.test.js`.
 15. A new session on the Anthropic API stores a 200,000-token window; `getUsage().context`
-    reports it after a round, and the status bar shows a share. Catalogue test;
-    `compaction.test.js` "window" (fake server).
+    reports it after a round, and the status bar shows a share. `m2-w22-catalog.test.js` "an
+    Anthropic row without a context length" (W8.6); `compaction.test.js` "window" (fake server).
 16. Image bytes never enter a vat: during a 2 MiB `viewImage`, the largest frame into the session
     vat is under 4 KB. `perf/images.perf.mjs` gate row (an implementation count, so a perf gate,
     not an acceptance assertion).
@@ -899,6 +1022,11 @@ with real providers (credentials); the fake-server and scripted versions run eve
     uncompacted. `compaction-round.test.js`; `compaction.test.js` "skipped".
 18. **[owner]** A Claude pool session runs past 70 % of its window in normal use and compacts;
     the conversation continues coherently after it.
+19. **Cross-lane (after M6 and M8 merge; the group fold WX.F owns the test).** `viewImage` with
+    `petName` `workspace` and a path reads a PNG committed in the session's workspace through M6's
+    `Git.openImage` (X-1); the fake Anthropic server receives the same bytes; during a 2 MiB view
+    no inbound frame to M6's manager vat or the session vat exceeds 4 KB.
+    `test/integration/view-image-workspace.test.js` (WX.F; R3-30).
 
 ---
 
@@ -914,19 +1042,22 @@ during units run `--shared` and say "under load".
 | --- | --- | --- | --- | --- |
 | `compaction.plan` (adapter, no vat): `planCompaction` + `summaryRequest` on a 150,000-token context (about 600 KB of transcript, 400 turns kept) | `perf/compaction.perf.mjs` (Node section) | 60 s, repeated | <= 50 ms | sizing 0.9 ms at 667 KB, 3.4 ms at 2.7 MB (J-1010); projection 7.5 ms per prepare at 5,000 turns (J-0491), two projections; up to 24 halvings at about 1 ms; the milestone's 500 ms was a guess |
 | `compaction.overhead`: crank X to the real round's request, minus the summary call's own time (scripted summary: 0 ms) | same (integration) | 60 s of turns that compact (a scripted reading over the threshold every turn), from the base template | <= 300 ms; session deliveries +1 per compaction | the answered `compacted` call 70-76 ms (J-0161, J-9043); staging and fsync about 10-20 ms; rebase prepare <= 15 ms (row below); 1 publish |
-| `compaction.record`: session deliveries per compaction | same | as above | exactly 1 (crank Y); crank X adds none | D-M8-1 |
+| `compaction.record` (**gate row**, a count, not a rate): session deliveries per compaction, counted over the `compaction.overhead` window | same | the same 60 s window | exactly 1 (crank Y) per compaction; crank X adds none | D-M8-1 |
 | `compaction.prepareAfter`: the first prepare after a compaction | same | as above | <= 15 ms; 0 vat pages | prepare 0.6-7.5 ms (J-0491) with no page; a page would cost 1.1-1.5 s (J-9387) |
 | `compaction.flat`: per-round `prepare` time on a 5,000-turn session (long template) after one compaction, against the 200-turn session | same | 60 s per length | ratio <= 1.25 | 7.5 ms at 5,000 against 0.6 ms (J-0491) before compaction bounded the projection (J-9413) |
-| `compaction.rebuild`: the first prepare after a restart of a compacted 300-turn session | same | 5 restarts | <= 1.25 x M2's rebuild at 200 turns | `history.context.rebuild` 85-359 ms (J-9404, J-0461) |
+| `compaction.rebuild`: the first prepare after a restart of a compacted 300-turn session (latency, median and p95 with n) | same | 60 s of restart-and-prepare cycles (about 10 at 4-6 s each, J-9382) | <= 1.25 x M2's rebuild at 200 turns | `history.context.rebuild` 85-359 ms (J-9404, J-0461) |
 | `images.view`: `viewImage` of 1 MiB from an adapter-held source, tool call issued to result recorded | `perf/images.perf.mjs` | 60 s | <= 400 ms; 0 session deliveries beyond the tool result's | 6 pages at 20-25 ms per adapter hop (J-0161); staging about 20 ms; the result crank about 70 ms (J-0461: 60-63 ms per delivery) |
-| `images.viewFromVat`: the same from a source in a guest vat | same | 60 s | recorded; <= 1 s | 6 pages at about 70 ms (one delivery each in the source's vat) |
+| `images.viewFromVat`: the same from a source in a guest vat (pages of 20,480 characters, D-M8-21) | same | 60 s (about 12 samples) | recorded; <= 6 s | 1 MiB / 15,360 bytes = 69 pages, each one delivery in the source's vat at about 70 ms (J-0461, J-9043): 4.8 s, plus staging and the result crank about 0.1 s; 6 s leaves 20 % |
 | `images.requestBuild`: extra provider body build time per image in a request | same (adapter) | 60 s | <= 15 ms per 2 MiB image | parse and check 12 ms per 2 MiB (J-1010) |
 | `images.contextPrepare`: prepare with 20 images (2 MiB each) in the context | same (adapter) | 60 s | <= 50 ms; the cache entry stays under `maxTextUnits` | 56 M units of envelopes against 128 M |
-| `images.frameIntoVat` (gate for acceptance 16) | same | one 2 MiB view | max inbound frame to the session vat < 4 KB | the outcome is a StagedText (about 3.5 KB) |
-| `session.program` | existing `perf/session.perf.mjs` row | - | M8 adds <= 9,000 bytes | 206,907 of 240,000 (J-10192); guard modules measured at 4,376 bytes without comments (W8.0) |
+| `images.frameIntoVat` (**gate row** for acceptance 16, a maximum, not a rate) | same | every view of the `images.view` window (2 MiB sources) | max inbound frame to the session vat < 4 KB | the outcome is a StagedText (about 3.5 KB) |
+| `session.program` (**gate row**, a size) | existing `perf/session.perf.mjs` row | - | M8 adds <= the PM's cap (asked 9,000, D-M8-19) | 212,483 of 240,000 on the step-3 tree (J-1410); M8's vat guard modules strip to 3,763 (J-1410); cold create about 20 ms per KB (J-10192) |
 
-Expected wall time: `compaction.perf.mjs` about 7 minutes (Node section 1 min, four integration
-windows from cached templates, 5 restarts at 4-6 s, J-9382); `images.perf.mjs` about 4 minutes.
+Expected wall time: `compaction.perf.mjs` about 7 minutes (Node section 1 min, four 60 s
+integration windows from cached templates with template loads of about 20 s each, the rebuild
+window 60 s); `images.perf.mjs` about 6 minutes (five 60 s windows, the guest-vat source built
+once, about 30 s). Each stays under the 10-minute box; a file that passes 8 minutes in W8.7's pass
+is split by subject before the merge.
 
 ---
 
@@ -958,10 +1089,11 @@ Each proves the sending-side bound fires before a vat would halt (architecture 1
 
 | id | motivation | smallest change | harness workaround if refused |
 | --- | --- | --- | --- |
-| CC-100 (conditional on probe P-B4) | image pages between two adapters (a workspace adapter and the agent host) pass through the hub; if they are written to `hub-log.jsonl`, each 2 MiB image adds about 2.8 MB to the log until compaction at 1 MiB (C-1) | frames between two transient adapter sessions are not persisted (CC-028 did this for `discardOnRestart` sessions; extend it to transient-to-transient frames) | pages stay base64 and bounded; the log compacts; images are not secret, so this is cost, not exposure |
-| CC-101 | an image (or any large binary) as a data reference instead of a base64 stream: a 25-byte descriptor through the vat, bytes beside the hub (`spike-dataref/design-ocapn.md`, prototype `733deabd9b`) | land the data store and `DATA_TAG` envelope of that prototype in the core | the staged envelope of D-M8-8 (works, about 33 % larger on disk and on the hub path) |
+| CC-100 (asked unconditionally, for M6 and M8 together; routed into core step 3, the persisted session kinds) | data paged between two adapters passes through the hub and is written to `hub-log.jsonl`: the spike measured +2.9-3.0 MB of log per MiB (spike-data-references 1), so a 2 MiB image (M8, X-1) or M6's staged command output adds about 6 MB to the log until compaction (C-1); probe P-B4 only confirms the number at 128 KiB pages | frames between two transient adapter sessions are not persisted (CC-028 did this for `discardOnRestart` sessions; extend it to transient-to-transient frames), recorded as a policy of core step 3's persisted session kinds | pages stay base64 and bounded; the log compacts; images and command output are not secret, so this is cost, not exposure |
+| ~~CC-101~~ (withdrawn from this group, X-15) | a large binary as a data reference instead of base64 pages | recorded as the data-reference spike's step 2, which needs core C-1 and C-2 (core step 3) first and comes after the harness-only step 1 (D-M8-20) | - (M8 builds the staged envelope of D-M8-8, which works without it) |
 
-No other core change is needed: no image byte and no summary page enters a vat.
+No other core change is needed: no image byte and no summary page enters a vat. PM: one CC-100
+row in `CORE-CHANGES.md` naming M6 and M8.
 
 ---
 
@@ -972,7 +1104,7 @@ Signatures the units build against (types in JSDoc; all `harden`ed exports).
 **W8.1 `guest/session/compaction.js`** (vat)
 
 ```js
-export const makeContextWindow = ({ records, archive }) => ContextWindow; // 4.7
+export const makeContextWindow = ({ records }) => ContextWindow;          // 4.7
 export const compactionPart: RuntimePart;                                 // 4.6, name 'compaction'
 // part value: { hooks: { beforeRound(turn), onSettle(turn), onRecover(turn) },
 //               imageSeen(turnId: string): void,
@@ -1040,16 +1172,25 @@ tests fail loudly, never with a copy.
 | Q-4 | A plan or summary that cannot reduce the context: skip and run the round uncompacted (D-M8-6), or fail the turn as lal does? | skip |
 | Q-5 | The image source protocol is the harness's page read (`readBase64`), not Endo's `streamBase64` acknowledgement stream. Any source that must speak Endo's? | page read only |
 | Q-6 | The default Anthropic window: one value (200,000) for every model, or a per-model table in configuration? | one value |
-| Q-7 | The session program limit (240,000 bytes) is shared by M6 (asks 9,000), M8 (9,000) and M9 (16,384): 34,384 against about 24,000-27,000 left after step 3. Raise the limit (about 10 us a byte of cold creation, about +0.1 s for 10 KB; the spare pool hides it), or trim the lanes? | M8 holds to 9,000 and moved its adapter-only guards and texts out of the vat bundle; the PM rules when W8.7 and its sibling integration units have measured |
+| Q-7 | The session program limit (240,000 bytes) holds 27,517 more on the step-3 tree (212,483, J-1410); M6, M8 and M9 ask 34,384 and the likely sum is higher (X-01). Raise `sessionProgramBytes` (cold create about 20 ms per KB, J-10192: +0.18 s for M8's 9,000, about +1.1 s per +55 KB on 6.1 s; the spare pool hides it), or trim the lanes? | the owner rules before W8.1 and W8.4 start; M8 asks 9,000 and can give back about 400 bytes (D-M8-19); the PM sets the per-lane caps |
+| Q-8 | Build the data-reference spike's step 1 (an adapter reads the file it is pointed at) now as the one adapter-to-adapter data path for M6 and M8, or later? (X-06) | later: M6 W6.2 builds `openImage` as X-1 specifies; both lanes accept the hub-log cost; CC-100 asked once |
 
 ---
 
 ## 18. Fold work at the group's merge
 
-The fold unit after M6, M8, M9 and M11 merge is done when each line below is shown by a grep or
+**Merge order** (X-17): WX.1 (shared seams), then the four lanes in parallel, then merge M11, M6,
+M8, M9, each followed by its own fold; M8 merges third, after M6 (so X-1 exists), and its fold is
+items 1-3 and 6 below. Then one group fold **WX.F** does items 4 and 5 for M8 together with the
+other lanes' items: the vocabulary and the session bundle measured once against the ruled limit,
+the cross-lane acceptance tests (M8's acceptance 19), regression and perf lists, `architecture.md`
+and the `milestones.md` M6/M8/M9/M11 sections, and the ownership-check row for the group (M8 now
+edits `turn.js`, `session.js`, `runtime-parts.js`, `tool-table.js` and `context-cache.js`).
+
+M8's fold unit (after the M8 merge) and WX.F are done when each line below is shown by a grep or
 a test, not a sentence.
 
-1. Move `contextShapeBuilders`, `contextSinkMethods`, `contextMethodNames`, `compactionKinds`,
+1. (M8 fold) Move `contextShapeBuilders`, `contextSinkMethods`, `contextMethodNames`, `compactionKinds`,
    `compactionKindLetters`, `compactionTexts` into `guest/lib/guards/session.js` (shapes,
    `methodsOf.TurnSink`, method names, `archiveKindLetters`, `texts`); `viewImageArgumentNames`,
    `viewImageDescription` and `viewImageTexts` into `session.js` beside the other tool
@@ -1058,22 +1199,23 @@ a test, not a sentence.
    (`anthropicContextTokens` into `config/defaults.js`, Node only). Delete `guards/context.js`,
    `guards/images.js`, `image-guards.js` and their vocabulary exclusions. Check: `test ! -e guest/lib/guards/context.js`;
    the vocabulary test green; bundles measured.
-2. Merge `AH/providers/compaction-texts.js` (with `compactionSkipTexts`) into `AH/providers/compaction.js` and delete it.
-3. Delete the `planInput` option's fallback if every caller passes it; `turn-hooks.js` gone
+2. (M8 fold) Merge `AH/providers/compaction-texts.js` (with `compactionSkipTexts`) into `AH/providers/compaction.js` and delete it.
+3. (M8 fold) Delete the `planInput` option's fallback if every caller passes it; `turn-hooks.js` gone
    (step 3) with no `beforeRound` list left anywhere: `grep -rn beforeRound guest/session` shows
    only `PartHooks` and the compaction part.
-4. X-1 with M6: `Git.openImage` passes `image-tool.test.js`'s source cases against a real
-   workspace (`[real-git]`), `view-image.test.js` gains "a screenshot in the workspace", and a
-   probe shows no page enters M6's manager vat (its inbound frames stay under 4 KB during a 2 MiB
-   view). If M6 named the method otherwise, adjust the descent in `AH/tools/view-image.js` only.
-5. Documents: `milestones.md` M8 section replaced by sections 11-13 of this contract and its
+4. (WX.F) X-1 with M6: `Git.openImage` passes `image-tool.test.js`'s source cases against a real
+   workspace (`[real-git]`), and `test/integration/view-image-workspace.test.js` proves
+   acceptance 19 (no page enters M6's manager vat: its inbound frames stay under 4 KB during a
+   2 MiB view). If M6 named the method otherwise, adjust the descent in `AH/tools/view-image.js`
+   only.
+5. (WX.F) Documents: `milestones.md` M8 section replaced by sections 11-13 of this contract and its
    status; the ownership check line for {M6, M8, M9, M11} updated (M8's hook points are part
    seams, not `turn-hooks.js`); `architecture.md` 4.3 (the three records), 4.5 (the compaction
    paragraph: D-M8-1..-5), 9 (the new limits rows), 3.3 (`ImageTool` in the ports' tools);
    `m2-interfaces.md` 4.12 marked "built: m8-interfaces.md 5.4, 5.5"; `process.md` 3.1 (the
    three integration files with their held times) and 3.2 (the two perf files); `README.md` perf
    commands; `arch-review/harness.md` 8: HR-SYN-24 (the usage rule M8 reads) status.
-6. Duplicates: `corepack yarn lint:duplicates` at or below the ceiling; any copy over 15 lines
+6. (M8 fold) Duplicates: `corepack yarn lint:duplicates` at or below the ceiling; any copy over 15 lines
    between `AH/providers/compaction.js` and lal's port comments is a finding.
 
 ---
@@ -1085,12 +1227,13 @@ a test, not a sentence.
 
 - **P:** P-36, P-37, P-27 (window share). **R:** R3-30, R4-32 (images), R4-33, R4-34, R4-35,
   R4-36, R4-37 (open decision 13), R4-39, R4-100.
-- **Depends on:** M5 and cleanup step 3. Parallel with M6, M9, M11.
+- **Depends on:** M5, cleanup step 3 and the cross-lane seam unit WX.1; W8.1 and W8.4 also on the
+  owner's session-program ruling. Parallel with M6, M9, M11; merges after M6.
 - **Owns:** `guest/session/compaction.js`, `guest/session/tools/view-image.js`,
   `AH/providers/{compaction,compaction-round,images}.js`, `AH/tools/view-image.js`,
   `guest/lib/guards/{context,images}.js`, `guest/lib/image-guards.js` and
   `AH/providers/compaction-texts.js` (until the fold), the test and perf files of section 11;
-  seams G-1..G-4, S-5..S-20 of section 10.
+  seams S-5..S-20 of section 10 (G-1..G-5, T-1, T-2 and S-10c are WX.1's).
 - **Work units, acceptance and perf:** sections 11, 12 and 13 of `m8-interfaces.md`.
 - **Fit risk:** good. The vat decides and records; the adapter plans, summarizes and carries
   bytes; nothing large enters a vat. The risk is the number of small seams in shared files
