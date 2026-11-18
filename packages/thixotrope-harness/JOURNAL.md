@@ -8243,3 +8243,61 @@ over one `secrets.enc` would each keep their own generation in memory and would 
 the harness has one adapter per state directory, so this is never exercised, but it means the
 fence holds within an incarnation and across a restart, not between concurrent processes.
 Decision: none.
+
+### J-0630 2026-11-18 M4 W4.1 manager part and creation - build
+Evidence: commits `6d85e416f3`, `53f1a6f390`, `5ea23d9cf2`, `dcd76f84bf`;
+`test/unit/m4-{interfaces,manager,effort}.test.js`, 33 tests, about 2 s, no supervisor.
+Built: `durable-subscriptions.js` (`makeSubscriptionsPart`, `forwardSinkMethods`): members by
+`PoolMember` presence, idempotent by label, credential and provider (R8-31); pools by `Backend`
+presence (guard `m4Interfaces.PoolBackend`), idempotent by label and an equal spec, members
+compared by identity in order (R8-23, K-1); refusal marks per member, shared by every pool it is
+in; last-served records per pool in a `Map` in least-recently-served order, 256 kept; retirement
+of members (mark and served records dropped) and pools (refuse with `m4Texts.retired`, slot
+freed); `SecretsAdmin.catalog` (one `describeSecrets` call, cut to one frame by a binary search
+of `fitsFrame`), `auditReader`, `subscriptions`; `Secret.setDescription` (record first, then
+the store). H-1, H-2, H-6, H-7, H-11 as the contract states. `subscriptionEffort` resolver and
+`config/defaults-m4.js`.
+Deviations: `resolveEffort` reads the model's row through the `listModels` forward (at most 8
+pages), because `ResolvedModel` carries no efforts; a pool listing one member twice is refused
+with `m4Texts.poolConflict` (no dedicated text); a member keeps its credential's store key from
+creation, so a deleted Secret leaves the member unreadable rather than keyless.
+Decision: as described; reported to the PM.
+
+### J-0631 2026-11-18 M4 W4.1 manager part costs - perf
+Evidence: commit `dcd76f84bf`; in-process Node timing (not a perf file; W4.8 owns them), 10 s
+windows. `catalog()` of 64 secrets with full-length labels and descriptions: 17,447 samples,
+median 0.52 ms, p99 1.37 ms, page cut to 48 entries. `poolState` of 16 members (full declared
+profiles) and 256 served records: 32,885 samples, median 0.26 ms, p99 1.53 ms, 15,839 bytes.
+`poolChanged` with 32 served stamps: 275,984 samples, median 0.023 ms. Bundles (`bundle-guest`,
+against the lane base `36b3035e92`): session 186,448 -> 186,481 (+33, H-1), exec 84,354 ->
+84,387 (+33), factory 137,074 -> 143,948 (+6,874). Budgets: session/exec + <= 64 met; factory
++ <= 6 KB (6,144) **missed by 730 bytes**.
+Reading: Node figures are a floor; a vat crank costs more, but the shapes are bounded. The
+largest `PoolState` is 15.8 KB, not the contract's ~9 KB (declared profiles of 4 windows and
+256-unit labels), still inside `frameBytes`. The factory miss: `texts-m4.js` is 3,939 bytes of
+bundle, the module map entries of two new modules 1,109, `subscription-options.js` 1,555 (after
+cutting it from 2,567 source bytes), `session-options.js` +133.
+Decision: budget kept; the PM chooses between accepting +6.9 KB and copying the two effort
+texts into the resolver pinned by a test (about +2.6 KB).
+
+### J-0632 2026-11-18 A manager part spread into M2's exos - fit
+Evidence: J-0630; `m4-manager.test.js` "durable.js: the sink, SecretsAdmin and Secret carry the
+M4 methods"; `m2-w23-manager.test.js` and `m1a-agent-host.test.js` unchanged and passing.
+Reading: good fit. Extending a durable exo is a guard swap plus a spread of methods, and a sink
+made before the part reaches it through a getter, so M4 changed `durable.js` by 25 lines and the
+part is testable over a fake `withOps` with no vat. The vat keeps every pool fact in WeakMaps and
+Maps keyed by presences; orthogonal persistence makes them durable with no schema. Poor part: the
+manager cannot tell the adapter that a member or pool was retired (no ops method for it), and
+the adapter loads `poolState` once per incarnation, so a retirement reaches running rounds only
+after an adapter restart.
+Decision: reported to the PM (needs an ops method or a reload rule, W4.6's H-3).
+
+### J-0633 2026-11-18 Effort resolution through the catalogue - fit
+Evidence: `m4-effort.test.js` (7 tests), `m4-manager.test.js` "resolveEffort ...".
+Reading: mixed fit. Creation-time checks belong in the factory's resolver chain, and the pool
+answers with plain records, so the resolver adds no guard to the factory bundle. But the
+contract's `ResolvedModel` has no effort list, so `resolveEffort` pages the catalogue: one
+creation on a pool costs one `resolveModel` and one or more `listModels` manager -> adapter
+calls instead of one. A `ResolvedModel` with `reasoningEfforts` and `defaultReasoningEffort`
+would make it one call.
+Decision: none in this lane; noted for the PM.
