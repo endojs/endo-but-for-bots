@@ -8621,3 +8621,19 @@ integration files spread over four slots (about 6 minutes) it is about 28 minute
 Fit: neutral for creation; poor for the shared machine's schedule: an exclusive waiter blocks new
 shared takers, so a lane whose perf files queue back to back starves the other lanes' integration
 files (one file here waited 28 minutes for 98 s of work).
+
+### J-9698 2026-11-18 The J-9690 whitespace patch, rebuilt at the bundle level - perf
+Evidence: W5.9 after the 06:55 restart (the short-path lane copy holding the J-9690 patch was in
+a cleared temporary directory and is gone); lane HEAD 8601eb5fec, Node only, about 0.9 s.
+Applied once to the whole bundle after `makeBundle` (before `escapeNonAscii`), not per module:
+parse the bundle as a script, keep every `TemplateLiteral` and every string literal spanning a
+line, drop `[ \t]+` at each other line start. Bytes (session / exec / factory): 272,129 /
+119,763 / 195,928 -> 236,218 / 104,193 / 171,868. The bundle-level form also strips
+compartment-mapper's scaffolding indentation, so the session program is 3,782 under O-1's 240,000
+(the per-module form was 1,358 over). Checks: line counts equal, bytes equal with all blanks and
+tabs removed, Babel token streams (type and value) identical (57,841 / 24,766 / 39,367 tokens);
+the `m1a-session-program` test body run on the dedented bundle (a temporary copy, removed)
+evaluates it with the prelude alone and completes a turn. Not run in a daemon; `session.createCold`
+after the patch is unmeasured (expected below J-9697's 7,220 ms by about 36 KB of staging).
+Fit: good: a whitespace pass that keeps line numbers buys 13 % of the session program; the
+program bytes are paid per vat (D-4), so it is worth doing in the bundler, not by hand.
