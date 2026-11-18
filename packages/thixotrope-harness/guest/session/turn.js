@@ -67,6 +67,8 @@ import { inCallOrder } from './records.js';
 import { isStaged, submissionField } from './staging.js';
 import { toolSetFor, toolSources, toolTable } from './tool-table.js';
 import { makeOutbox } from './outbox.js';
+import { makeTurnImport } from './turn-import.js';
+import { makeTurnIndex } from './turn-index.js';
 import { makeUsage } from './usage.js';
 // The result of a call the turn never ran because it was cancelled first
 // (one text with the exec tool's; tools/exec.js never imports this module).
@@ -146,27 +148,21 @@ export const makeTurnRunner = ({
     if (typeof at === 'number' && at > lastKnownTime) lastKnownTime = at;
   };
 
-  let turnCounter = 0;
   let generation = 0;
   /** @type {ActiveTurn | undefined} */
   let current;
-  /**
-   * turn id -> info (records only; J-9152)
-   * @type {Map<string, TurnInfo>}
-   */
-  const turns = new Map();
-  /**
-   * Turn objects of settled turns, least recently handed out first; at most
-   * `limits.retainedTurnHandles` (a Map keeps insertion order; a hit is
-   * deleted and set again, so no element moves in place).
-   * @type {Map<string, any>}
-   */
-  const handles = new Map();
+  // Settled turns are records; Turns are minted from them (turn-index.js).
+  const index = makeTurnIndex({
+    limits,
+    archive,
+    mint: info => makeTurn(info),
+    live: () => current,
+  });
 
   const history = makeHistory({
     records,
-    turnInfo: turnId => turns.get(turnId),
-    turnHandle: info => turnHandle(info),
+    turnInfo: index.info,
+    turnHandle: index.handle,
     archive,
   });
 
@@ -308,7 +304,7 @@ export const makeTurnRunner = ({
     info.finished?.resolve(statusOf(info));
     info.finished = undefined;
     // The settled turn is a record now; its Turn stays only as a recent handle.
-    remember(active.turnId, active.turn);
+    index.remember(active.turnId, active.turn);
     // M2 (m2-interfaces.md 4.3): seal before the next entry is claimed, so
     // the range holds only turns settled before this crank.
     try {
@@ -802,11 +798,11 @@ export const makeTurnRunner = ({
         let failure;
         const seen = new Set();
         const toolCalls = result.toolCalls.map(
-          (/** @type {any} */ call, /** @type {number} */ index) => {
+          (/** @type {any} */ call, /** @type {number} */ ordinal) => {
             if (call.name === '') failure ??= texts.invalidToolCall;
             const callId =
               call.callId === ''
-                ? textOf.synthesizedCallId(result.round, index)
+                ? textOf.synthesizedCallId(result.round, ordinal)
                 : call.callId;
             if (seen.has(callId)) failure ??= texts.duplicateToolCallId;
             seen.add(callId);
@@ -1079,7 +1075,7 @@ export const makeTurnRunner = ({
    */
   const claim = (input, at, take = () => {}, item = undefined) => {
     current === undefined || Fail`a turn is current`;
-    const turnId = `t${turnCounter + 1}`;
+    const turnId = index.nextId();
     /** @type {TurnInfo} */
     const info = {
       turnId,
@@ -1120,7 +1116,7 @@ export const makeTurnRunner = ({
     };
     const turn = makeTurn(info);
     take(info);
-    turnCounter += 1;
+    index.claimed();
     generation += 1;
     /** @type {Record<string, any>} */
     const started = { kind: 'turn-started', turnId, input, at };
@@ -1134,7 +1130,7 @@ export const makeTurnRunner = ({
     records.append(started);
     active.turn = turn;
     active.sink = makeSink(active);
-    turns.set(turnId, info);
+    index.add(info);
     current = active;
     // M5 S3: after TurnStarted (hooks need the turn id), before the first
     // round request is built.
@@ -1280,134 +1276,20 @@ export const makeTurnRunner = ({
     },
   );
 
-  /**
-   * Keep `handle` as the most recently handed-out Turn of `turnId`; drop
-   * the least recently used beyond `retainedTurnHandles`.
-   * @param {string} turnId
-   * @param {any} handle
-   */
-  const remember = (turnId, handle) => {
-    handles.delete(turnId);
-    handles.set(turnId, handle);
-    if (handles.size > limits.retainedTurnHandles) {
-      const oldest = handles.keys().next().value;
-      if (oldest !== undefined) handles.delete(oldest);
-    }
-  };
-
-  /**
-   * The Turn object of a turn: the current turn's own, else a recent handle,
-   * else one minted from the record (J-9152).
-   * @param {TurnInfo} info
-   */
-  const turnHandle = info => {
-    if (current !== undefined && current.info === info) return current.turn;
-    const known = handles.get(info.turnId);
-    const handle = known ?? makeTurn(info);
-    remember(info.turnId, handle);
-    return handle;
-  };
-
-  /**
-   * The Turn of a turn id while the session keeps the turn (live, kept or
-   * unresolved), else undefined (an archived turn; m2-interfaces.md 2.4,
-   * 5.3). Receipts hand it out.
-   * @param {string} turnId
-   */
-  const turnById = turnId => {
-    const info = turns.get(turnId) ?? archive.unresolvedInfo(turnId);
-    return info === undefined ? undefined : turnHandle(info);
-  };
-
-  /**
-   * `Session.findTurn` (m2-interfaces.md 4.9): a kept turn's handle, or an
-   * archived unresolved one's; another archived turn throws `turnSealed`,
-   * anything else `unknownTurn`. Turn ids are `t<ordinal>` (F.2 d).
-   * @param {string} turnId
-   */
-  const findTurn = turnId => {
-    const handle = turnById(turnId);
-    if (handle !== undefined) return handle;
-    const match = /^t([1-9][0-9]*)$/.exec(turnId);
-    if (match !== null && Number(match[1]) <= turnCounter) {
-      throw Error(texts.turnSealed);
-    }
-    throw Error(texts.unknownTurn);
-  };
-
   // ------------------------------------------------------------ imported records
 
-  /**
-   * W2.7 (m2-interfaces.md 2.4 item 5): append imported records in log
-   * order, rebuild the turn infos, advance the turn counter, then seal as
-   * section 4.3 allows.
-   * @param {readonly any[]} list
-   */
-  const importTurns = list => {
-    current === undefined || Fail`a turn is current`;
-    for (const record of list) {
-      if (record.kind === 'turn-started') {
-        record.turnId === `t${turnCounter + 1}` ||
-          Fail`imported turn ${record.turnId} is out of order`;
-      } else if (record.kind === 'turn-settled') {
-        // Only the last started turn, once (J-9493): a settle outside its
-        // span would leave a turn running for ever.
-        (record.turnId === `t${turnCounter}` &&
-          turns.get(record.turnId)?.state === 'running') ||
-          Fail`imported settle of ${record.turnId} is out of place`;
-      } else if (record.kind === 'turn-resolved') {
-        turns.get(record.turnId)?.state !== 'running' ||
-          Fail`imported resolution of ${record.turnId} precedes its settle`;
-      }
-      records.append(record);
-      see(record.at);
-      const info =
-        turns.get(record.turnId) ?? archive.unresolvedInfo(record.turnId);
-      if (record.kind === 'turn-started') {
-        turnCounter += 1;
-        turns.set(record.turnId, {
-          turnId: record.turnId,
-          input: record.input,
-          at: record.at,
-          state: 'running',
-          round: 0,
-        });
-      } else if (info === undefined) {
-        // A resolution of a turn archived before the import: nothing kept.
-      } else if (record.kind === 'turn-settled') {
-        info.state = record.status;
-        if (record.error !== undefined) info.error = record.error;
-      } else if (record.kind === 'turn-resolved') {
-        info.resolution = record.note;
-        archive.resolve(record.turnId);
-      } else if (typeof record.round === 'number') {
-        info.round = Math.max(info.round, record.round);
-      }
-    }
-    archive.maybeSeal({ ports: held?.ports, context: contextSource });
-  };
-
-  /**
-   * When importing ends (W2.7; J-9493): a turn exported while it ran has
-   * no settle and would never get one (nothing runs it here), so it is
-   * settled `outcome-unknown`, resolvable as after a restart (R4-32, P-14),
-   * and the archive can seal past it.
-   */
-  const importEnd = () => {
-    for (const info of turns.values()) {
-      if (info.state === 'running') {
-        importTurns([
-          harden({
-            kind: 'turn-settled',
-            turnId: info.turnId,
-            status: 'outcome-unknown',
-            at: lastKnownTime,
-          }),
-        ]);
-        usage.settled('outcome-unknown');
-      }
-    }
-  };
+  const { importTurns, importEnd } = makeTurnImport({
+    records,
+    index,
+    archive,
+    usage,
+    see,
+    lastKnownTime: () => lastKnownTime,
+    idle: () => current === undefined,
+    seal: () => {
+      archive.maybeSeal({ ports: held?.ports, context: contextSource });
+    },
+  });
 
   // ------------------------------------------------------------ the runner
 
@@ -1443,29 +1325,15 @@ export const makeTurnRunner = ({
     openPorts: () => {
       if (held === undefined) openPorts();
     },
-    turnById,
-    findTurn,
+    turnById: index.byId,
+    findTurn: index.find,
     /**
      * The archive's crank Z (m2-interfaces.md 4.4): the sealed turns' infos
      * go; an archived outcome-unknown turn not yet resolved stays
      * resolvable (4.6).
      * @param {string[]} dropped
      */
-    onSealed: dropped => {
-      for (const turnId of dropped) {
-        const info = turns.get(turnId);
-        turns.delete(turnId);
-        if (info !== undefined) {
-          info.sealed = true;
-          if (
-            info.state === 'outcome-unknown' &&
-            info.resolution === undefined
-          ) {
-            archive.keepUnresolved(turnId, info);
-          }
-        }
-      }
-    },
+    onSealed: index.archived,
     /**
      * A seal was rejected or broke. A retired break: the adapter restarted;
      * its ports are tombstones unless the current turn learns that from its
