@@ -84,7 +84,7 @@ export const packageToolDescriptions = harden({
   adoptTool: harden({
     name: 'adoptTool',
     description:
-      'Adopt a capability from a mail message and install it as a tool. The adopted capability must implement the FaeTool interface (schema, execute, help). Once adopted, the tool is immediately available — use it right away.',
+      'Adopt a capability from a mail message and install it as a tool. The adopted capability must implement the FaeTool interface (schema, execute, help). Once adopted, the tool is immediately available \u2014 use it right away.',
     parameters: JSON.stringify({
       type: 'object',
       properties: {

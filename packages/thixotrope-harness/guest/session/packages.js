@@ -63,13 +63,15 @@ export const checkAttachments = (submission, attachments) => {
     seen.add(label);
   }
   const max = limitsM5.packageTextUnits;
-  if (typeof submission.text === 'string') {
-    if (submission.text.length > max) {
-      throw Error(textOf.packageTooLong(submission.text.length));
-    }
-  } else if (submission.bytes > 3 * max) {
+  const { text } = submission;
+  if (typeof text === 'string') {
+    if (text.length > max) throw Error(textOf.packageTooLong(text.length));
+  } else {
+    const bytes = /** @type {number} */ (submission.bytes);
     // A unit is at most 3 bytes, so this is a lower bound of the units.
-    throw Error(textOf.packageTooLong(Math.ceil(submission.bytes / 3)));
+    if (bytes > 3 * max) {
+      throw Error(textOf.packageTooLong(Math.ceil(bytes / 3)));
+    }
   }
 };
 harden(checkAttachments);
@@ -95,7 +97,10 @@ export const makePackages = () => {
      */
     take: (number, edge, turnId) => {
       const pkg = open.get(number);
-      if (pkg === undefined || (turnId !== undefined && pkg.turnId !== turnId)) {
+      if (
+        pkg === undefined ||
+        (turnId !== undefined && pkg.turnId !== turnId)
+      ) {
         throw Error(textOf.noPackage(number));
       }
       if (!pkg.values.has(edge)) throw Error(textOf.noEdge(number, edge));
