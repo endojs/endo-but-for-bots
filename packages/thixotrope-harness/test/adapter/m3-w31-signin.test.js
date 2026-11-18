@@ -50,7 +50,8 @@ const makeDirs = () => {
 
 /** @param {ReturnType<typeof makeSignInStore>} store */
 const secretOf = async store => {
-  const match = FRAGMENT.exec(await store.fragment('127.0.0.1:8920'));
+  const fragment = await store.fragment('127.0.0.1:8920');
+  const match = FRAGMENT.exec(fragment);
   if (!match) throw Error('fragment shape');
   return match[1];
 };

@@ -21,14 +21,12 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
-/* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import {
   decrypt,
   encrypt,
   findSecretsFiles,
   loadWrappingKey,
 } from '../secrets/store.js';
-/* eslint-enable import/no-relative-packages */
 
 /** Additional data of the sealed file (its format revision). */
 export const SIGNIN_AAD = 'thixotrope-harness-signin-1';
