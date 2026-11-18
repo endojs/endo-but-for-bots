@@ -12876,3 +12876,96 @@ two files, the harness integration files not in the list, any perf check, the M5
 32,768 (only those before 13:49:56Z did), a frame between 40 and 65 KB at a crank budget under 50 M.
 Time: core files 3 lanes about 6 min wall; harness unit 67 s; integration batch 1,090 s; reruns
 about 10 min.
+
+### J-10070 2026-11-18 K1 main merged into the integration lane - merge
+Evidence: `git merge --no-ff claude/thixotrope-harness` at `9ce9b18ffc` (merge base `bd9a8ec070`),
+merge commit `c05dc893d3`. Read: `designs/process.md`, J-9940..J-9944, J-10000..J-10065,
+J-10110..J-10129, the status lists of M2-M5 in `milestones.md`, main's diff of every shared file.
+Reading: no textual conflict. The lane had not edited `m5-security`, `m5-objects`, `m2-probes` or
+`m2-lifecycle-export` since the merge base (its M5 test changes predate it), so main's versions
+(the `hubRefused` outcome, the hub refusal of the 100 KiB probe, the short-turn import test) came
+in whole. README, `architecture.md`, `milestones.md` merged line-wise with both sides' text kept
+(main's known-failure line removed, the lane's as-built notes kept). `CORE-CHANGES.md` (union):
+main's CC-026..CC-028 entries, summary rows and accounting lines, then the lane's request table;
+no line duplicated. Resolutions in the merge commit: the request table's CC-070 row says built as
+CC-027; M2's open items show C-25 closed (main) and `checkpoint.stall` "CC-026 merged, partly
+closed". `grep -o '^### J-[0-9]*' JOURNAL.md | sort | uniq -d` and the same for `^### CC-` in
+`CORE-CHANGES.md` print nothing.
+Fit: good.
+
+### J-10071 2026-11-18 K1 unit and adapter lanes, typecheck, eslint, bundles on the combination - verified
+Evidence: at `c05dc893d3`. `corepack yarn test`: 1,246 passed, 116 skipped, 0 failed, 67 s (the
+X-CLOSE run's `run-lock` racing failure did not recur; `serve.test.js` gained main's ceiling
+test). `tsc` exit 0. eslint on the merged JavaScript files (`config/defaults.js`,
+`scripts/serve.mjs`, `test/serve.test.js`, `m2-probes`, `m2-lifecycle-export`, `m5-objects`,
+`m5-security`): 0 errors, 8 warnings of kinds already present. Prettier: clean.
+`node scripts/bundle-guest.mjs`: session 214,690, exec 63,826, factory 164,836, equal to the
+lane's (main changed no guest file).
+Fit: good.
+
+### J-10072 2026-11-18 K1 integration and browser files on the combination - test
+Evidence: `corepack yarn test:integration --jobs 5` with 35 files (shared slots, load 2.1-4.3),
+840.7 s wall, every exit 0, slot waits 9-89 ms each. Held s: m1a-slice 185.3, m1a-slice-restart
+190.3, m2-probes 88.1, m2-lifecycle 200.2, m2-lifecycle-export 285.4, m2-archive-restart 162.2,
+m2-archive-restart-2 192.7, m2-secrets 77.5, m2-queue 150.5, m3-gateway 124.7, m3-sessions 116.9,
+m3-reconnect 144.6, m4-accounts 87.5, m4-catalog 89.0, m4-pools 97.9, m4-provision 97.9,
+m4-reachability 81.7, m4-renewal 91.0, m4-restart 175.8, m4-restart-renewal 102.7, m4-retire 77.5,
+m4-secrets 89.6, m4-wire 113.7, m5-grants 85.2, m5-grants-restart 114.8, m5-labels 98.2,
+m5-mentions 76.9, m5-mentions-restart 99.5, m5-objects 96.0, m5-presets 103.6,
+m5-presets-inventory 93.4, m5-prompt 93.2, m5-reachability 76.4, m5-security 77.5, m5-snapshot
+72.3 (4,107 s in all). Browser `--jobs 5`: 196.1 s wall, every exit 0: m3-ui 110.6, m3-ui-restart
+196.0, m3-ui-history 103.7, m4-ui 90.7, m5-ui 106.6 (607.5 s). The rows say `c05dc893d3-dirty`:
+only design documents were being edited.
+Reading: the frame ceiling (65,536 toward a vat) is new for the lane's code (gateway, M4 manager
+and adapter, M5 tools and membrane). The only `FRAME_TOO_LARGE` text in either batch's output is
+the probes that ask for it: `m2.tooBig` `directError` with frontier `[49, 49]` and the next turn
+served; `m5.objects.bigHelp` and `m5.security.bigGrantedAnswer`, both `hubRefused`. No other
+message of the lane's code was refused. Not read: the supervisors' own logs (where the hub logs a
+dropped deliver-only frame), which live in each test's state directory and are removed at cleanup.
+Fit: good: the lane's code fits the ceiling on every path these files exercise.
+
+### J-10073 2026-11-18 K1 what the model sees for a too-big foreign answer - read
+Evidence: J-10072's metric rows; `guest/exec/inspect.js` (`toolExecute`, `describe`, `inspect`'s
+catch), `guest/lib/guards/base.js` `errorResult`, `pkg/src/net/hub.js` `FRAME_TOO_LARGE`,
+`test/fixtures/m5-objects.js` (`bigAnswerTool`, `bigHelp` are objects in the workspace vat).
+Reading: of the three accepted outcomes (cut and staged; `inspectTerminated`; hub refused), the
+hub refusal now happens for both. Acceptance 10: the exec vat's `E(tool).execute` rejects with the
+hub's text, `inspect` answers `failed`, and the model gets `Error: ocapn hub: the message exceeds
+the inbound frame ceiling of its target`: true, but in the core's terms, with no size and no hint
+to ask for less. Acceptance 5: `describe` swallows the failed `help()`, so the model gets the
+method names and `Documentation is unavailable; do not guess method signatures.`, which is still
+useful. A cut, staged preview cannot be restored on the harness side for these tools: the
+answering party is a foreign vat, and the hub refuses its whole frame; adapter-hosted tools
+already bound their outcomes under the ceiling (J-10125 (d)). A cheap guest change gives the
+model a useful message: in `inspect`'s catch (and `describe`'s `help` catch), when the error's
+message equals the hub's text (a copy in the guest's texts, pinned equal to `FRAME_TOO_LARGE` by a
+unit test), answer a harness text naming the operation and `vatFrameBytes`, for example "The
+tool's answer was over 65,536 bytes and was refused before it reached the sandbox; nothing of it
+is available. Ask for a smaller answer." Not built (for the PM).
+Fit: neutral: safe and no halt; the model's message is accurate but not instructive.
+
+### J-10074 2026-11-18 K1 milestone and contract text after the merge - decision
+Change: `milestones.md` M5's "after main is merged" item becomes a minor with the outcome of
+J-10072 and J-10073; `m5-interfaces.md` acceptance 5 and 10 name the hub refusal as an accepted
+outcome (as main's tests already assert). Not rerun on the combination: any perf check, including
+the too-big probes (a, b, c, e) inside `perf/exec-m5` and `perf/tools`, and the M0-M2 integration
+files not in J-10072's list (m1a-provision, m1a-slice-crash, m1b-*, m2-catalog, m2-history,
+m2-providers, m2-turns, the template test); main ran several of them at J-10124.
+Fit: neutral.
+
+### J-10075 2026-11-18 K1 PM rulings recorded - decision
+Change: `process.md` 3.1: the regression run is split into a core list (unit and adapter lanes,
+M0-M2 integration files, the template test) and a per-milestone list (M3-M5 with their browser
+files), each one batch under 20 minutes of wall at six slots. 3.2: a milestone's recorded perf
+pass is its own files plus `session`, `turn` and `exec`; the whole list only when the PM asks.
+`m5-interfaces.md` section 5 K5 row and acceptance 11 (b): K5's second kill point records the true
+result through replay; accepted. `m4-interfaces.md` 17 row 14: "no frame carries the value and no
+Secrets call is sent" (file `test/browser/m4-ui.test.mjs`), as J-10036 measured. Commit
+`96a90a1b29`.
+Fit: neutral.
+
+### J-10076 2026-11-18 K1 time record - verified
+Time: first command 17:25:39Z. Over 60 s: unit lane 67 s; integration batch 842 s wall
+(17:28:42-17:42:44Z); browser batch 197 s. Everything else under 10 s. Last command: the commit
+of this entry, then the final `date`.
+Fit: neutral.
