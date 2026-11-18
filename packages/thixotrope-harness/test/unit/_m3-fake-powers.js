@@ -727,6 +727,17 @@ export const makeFakePowers = ({
           ]);
         } else {
           publish(s, [{ type: 'pending', pending: pendingView(s) }]);
+          // As the session since the M2 review (guest/session/queue.js
+          // `cancelCurrent`, J-9491): the head's send-now cancels the running
+          // turn, whose settle starts this entry. Not a Turn.cancel call.
+          const running = s.current;
+          if (running.state === 'running') {
+            running.state = 'cancelling';
+            publish(s, [
+              { type: 'phase', turnId: running.turnId, phase: 'cancelling' },
+            ]);
+            settle(s, running, { status: 'cancelled' });
+          }
         }
       },
     });

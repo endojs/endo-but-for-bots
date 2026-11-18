@@ -1204,16 +1204,11 @@ export const makeController = ({
     sendPendingNow: entryKey =>
       guarded(async () => {
         const entry = await entryOf(entryKey);
-        const view = state.view;
-        const isHead = Boolean(
-          view && view.pending.length > 0 && view.pending[0].key === entryKey,
-        );
+        // R6-44: Send now on the head while a turn runs cancels that turn so
+        // it goes next. The session does it itself (M2 review, J-9491); a
+        // second cancel from the page could reach the turn that send-now
+        // has just started.
         await E(entry).sendNow();
-        if (isHead && view && view.busy) {
-          // R6-44: Send now on the head cancels the running turn so it goes next
-          const turn = await runningTurn();
-          if (turn) await E(turn).cancel();
-        }
       }),
 
     /**

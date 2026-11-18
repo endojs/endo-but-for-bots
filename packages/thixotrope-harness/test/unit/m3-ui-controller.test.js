@@ -495,7 +495,9 @@ test('queue rows: Send now on the head cancels the running turn; edit and delete
   await controller.sendPendingNow(pending[0].key);
   await flush();
   t.is(control.callsOf('QueueEntry', 'sendNow').length, 1);
-  t.is(control.callsOf('Turn', 'cancel').length, 1);
+  // The session cancels the running turn itself (M2 review, J-9491); the
+  // page's own cancel could reach the turn send-now has just started.
+  t.is(control.callsOf('Turn', 'cancel').length, 0);
   t.is(controller.getState().view?.messages.at(-1)?.record.input, 'queued one');
 });
 

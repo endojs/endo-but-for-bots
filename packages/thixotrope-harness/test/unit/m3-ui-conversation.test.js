@@ -399,11 +399,12 @@ test.serial(
     t.deepEqual(fake.control.pendingTexts('q'), ['one', 'two, edited', 'four']);
     t.is(rows().length, 3);
 
-    // Send now on the head: sendNow, then the running turn is cancelled
+    // Send now on the head: sendNow; the session cancels the running turn
+    // (M2 review), the page sends no Turn.cancel of its own
     await act(dom, sendNowButtons()[0], 'click');
     await flush();
     t.is(fake.control.callsOf('QueueEntry', 'sendNow').length, 1);
-    t.is(fake.control.callsOf('Turn', 'cancel').length, 1);
+    t.is(fake.control.callsOf('Turn', 'cancel').length, 0);
     t.deepEqual(
       $$('.floot-turn-status-summary').map(el => el.textContent),
       [uiTexts.turnStopped],
@@ -414,7 +415,7 @@ test.serial(
     t.is($('.thix-stop')?.textContent, uiTexts.stop);
     await act(dom, $('.thix-stop'), 'click');
     await flush();
-    t.is(fake.control.callsOf('Turn', 'cancel').length, 2);
+    t.is(fake.control.callsOf('Turn', 'cancel').length, 1);
     t.deepEqual(
       $$('.floot-turn-status-summary').map(el => el.textContent),
       [uiTexts.turnStopped, uiTexts.turnStopped],
