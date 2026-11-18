@@ -1,5 +1,11 @@
 # M3 interface contract
 
+> **Files moved since (F2, HR-SYN-1).** Paths and exports this contract names (`interfaces-m5.js`,
+> `interfaces-m5-factory.js`, `limits-m5.js`, `limits-m4.js`, `texts-m4.js`, `contract-m3.js`,
+> `defaults-m4.js`, `m5-parts.js`, `m4-secrets.js`, `m1bShapes`, `m2Interfaces`, `m5Widenings`, ...)
+> were folded or renamed; `designs/arch-review/fold-plan.md` section 6 maps each old name to the
+> new one. The text below is the contract as written.
+
 Unit W3.0 of `milestones.md` M3. This file, `guest/lib/interfaces-m3.js` (what crosses a vat
 boundary) and `resources/agent-host/impl/gateway/contract-m3.js` (Node and browser constants,
 texts and hook types) are the contract the M3 builders (group A: W3.1, W3.2, W3.3, W3.4; group

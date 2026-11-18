@@ -1,5 +1,11 @@
 # M1b interface contract
 
+> **Files moved since (F2, HR-SYN-1).** Paths and exports this contract names (`interfaces-m5.js`,
+> `interfaces-m5-factory.js`, `limits-m5.js`, `limits-m4.js`, `texts-m4.js`, `contract-m3.js`,
+> `defaults-m4.js`, `m5-parts.js`, `m4-secrets.js`, `m1bShapes`, `m2Interfaces`, `m5Widenings`, ...)
+> were folded or renamed; `designs/arch-review/fold-plan.md` section 6 maps each old name to the
+> new one. The text below is the contract as written.
+
 Unit W1b.0 of `milestones.md` M1b. This file, `guest/lib/interfaces.js` and `guest/lib/limits.js`
 are the contract the M1b builders (W1b.1-W1b.5) and the tests (W1b.6) build against without talking
 to each other. `m1a-interfaces.md` stays the M1a contract (it gets corrections only) and everything

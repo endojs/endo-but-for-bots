@@ -1,5 +1,11 @@
 # M5 interface contract
 
+> **Files moved since (F2, HR-SYN-1).** Paths and exports this contract names (`interfaces-m5.js`,
+> `interfaces-m5-factory.js`, `limits-m5.js`, `limits-m4.js`, `texts-m4.js`, `contract-m3.js`,
+> `defaults-m4.js`, `m5-parts.js`, `m4-secrets.js`, `m1bShapes`, `m2Interfaces`, `m5Widenings`, ...)
+> were folded or renamed; `designs/arch-review/fold-plan.md` section 6 maps each old name to the
+> new one. The text below is the contract as written.
+
 Unit W5.0 of `milestones.md` M5. This file, `guest/lib/interfaces-m5.js`,
 `guest/lib/interfaces-m5-factory.js` and `guest/lib/limits-m5.js` are the contract the M5 builders
 (group A: W5.1, W5.2, W5.3, W5.4; group B: W5.5, W5.6, W5.7, W5.8) and the integration unit W5.9

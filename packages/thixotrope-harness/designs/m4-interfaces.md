@@ -1,5 +1,11 @@
 # M4 interface contract
 
+> **Files moved since (F2, HR-SYN-1).** Paths and exports this contract names (`interfaces-m5.js`,
+> `interfaces-m5-factory.js`, `limits-m5.js`, `limits-m4.js`, `texts-m4.js`, `contract-m3.js`,
+> `defaults-m4.js`, `m5-parts.js`, `m4-secrets.js`, `m1bShapes`, `m2Interfaces`, `m5Widenings`, ...)
+> were folded or renamed; `designs/arch-review/fold-plan.md` section 6 maps each old name to the
+> new one. The text below is the contract as written.
+
 Unit W4.0 of `milestones.md` M4 (Secrets manager and subscription pools). This file,
 `guest/lib/interfaces-m4.js`, `guest/lib/texts-m4.js`, `guest/lib/limits-m4.js` and
 `resources/agent-host/impl/subscriptions/types.js` are the contract the M4 builders (group A:

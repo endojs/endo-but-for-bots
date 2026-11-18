@@ -1,5 +1,11 @@
 # M2 interface contract
 
+> **Files moved since (F2, HR-SYN-1).** Paths and exports this contract names (`interfaces-m5.js`,
+> `interfaces-m5-factory.js`, `limits-m5.js`, `limits-m4.js`, `texts-m4.js`, `contract-m3.js`,
+> `defaults-m4.js`, `m5-parts.js`, `m4-secrets.js`, `m1bShapes`, `m2Interfaces`, `m5Widenings`, ...)
+> were folded or renamed; `designs/arch-review/fold-plan.md` section 6 maps each old name to the
+> new one. The text below is the contract as written.
+
 Unit W2.0 of `milestones.md` M2. This file, `guest/lib/interfaces.js` and `guest/lib/limits.js` are
 the contract the nine M2 builders (group A: W2.1a, W2.3, W2.4, W2.8; group B: W2.1b, W2.2, W2.5,
 W2.6, W2.7) and the integration unit W2.9 build against without talking to each other.

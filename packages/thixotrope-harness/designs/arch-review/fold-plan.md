@@ -121,3 +121,56 @@ rebuilds the template once.
    imports keep a one-line re-export until then. That re-export is a seam the fold lists.
 3. Product renames (section 3), then test helpers (section 4): mechanical, one commit each, with a
    grep showing no `m[0-9]` file name left outside `designs/` and `JOURNAL.md`.
+
+## 6. Applied by F2 (the rename map)
+
+F2 applied part of this plan on `claude/thix-clean` (commits `319366eb5f`..`4eda82d98d`). This
+table is the reference for every contract, journal entry or test that names an old path or export.
+Contract text is not rewritten; each contract carries a note pointing here.
+
+| old | new | commit |
+| --- | --- | --- |
+| `guest/lib/limits-m5.js` `limitsM5` | `guest/lib/limits.js` `limits` (one table) | `46b5602b19` |
+| `guest/lib/interfaces-m5.js` `m5Shapes`, `m5Interfaces`, `m5MethodNames`, `texts`, `textOf` | `guards/base.js` (exec entries), `guards/session.js` (the rest): `shapes`, `interfaces`, `methodNames`, `texts`, `textOf`; Node code: `interfaces.js` | `a1373d71b9` |
+| `interfaces-m5.js` `m5ToolArgumentNames` | `guards/session.js` `toolArgumentNames` | `a1373d71b9` |
+| `interfaces-m5.js` `inspectOps` | `guards/base.js` `inspectOps` (re-exported by `session.js`, `interfaces.js`) | `a1373d71b9` |
+| `interfaces-m5.js` `objectToolNames`, `packageToolNames`, `reservedLabels`, `powersMethodNames`, `grantStates` | `guards/session.js`, same names | `a1373d71b9` |
+| `interfaces-m5.js` `m5Widenings`, `m5Extensions`, `extendInterface`, `lazyTable`, `vocabularyShapes` | deleted (the widened shapes were already the plain ones; one guard per interface) | `a1373d71b9` |
+| `guest/lib/interfaces-m5-factory.js` `m5FactoryShapes`, `m5FactoryInterfaces`, `m5FactoryMethodNames`, `texts`, `textOf`, `presetTemplateNames`, `builtInPresetLabels`, `templateObjectKinds` | `guards/factory.js` `shapes`, `interfaces`, `methodNames`, `texts`, `textOf`, same names | `a1373d71b9` |
+| `interfaces-m5-factory.js` `m5FactoryExtensions`, `vocabularyShapes`, its `PresetSnapshot` copy | deleted | `a1373d71b9` |
+| `exec/render.js` `execGuards`, `texts`, `textOf` (the copy) | `guards/base.js` `interfaces.ExecScope`, `shapes.*`, `texts`, `textOf` | `a1373d71b9` |
+| `interfaces.js` `m2Interfaces`, `m2MethodNames`, `m1bShapes`, `m1bInterfaces`, `m1bMethodNames` | `interfaces`, `methodNames`, `shapes`; M1b's lists stay the build ingredient `m1bMethodLists`; the contract tests pick their entries in `test/unit/_contract-tables.js` | `a1373d71b9` |
+| `interfaces.js` `interfaces.Preset` (M1a) | `guards/factory.js` `interfaces.Preset` (M5's five methods) | `a1373d71b9` |
+| `guest/session/m5-parts.js` `m5Parts`, `M5Part` | `guest/session/runtime-parts.js` `runtimeParts`, `RuntimePart` | `33e726b912` |
+| `config/defaults-m4.js` | `config/subscription-defaults.js` (`subscriptionDefaults` unchanged) | `33e726b912` |
+| `AH/gateway/contract-m3.js` | `AH/gateway/protocol.js` (exports unchanged) | `33e726b912` |
+| `AH/gateway/extensions/m4-secrets.js` | `AH/gateway/extensions/secrets.js` (its `name` stays `m4-secrets`) | `33e726b912` |
+| `guest/lib/limits-m4.js` `m4Limits` | `guest/lib/subscription-limits.js` `subscriptionLimits` | `93b410bf4b` |
+| `guest/lib/texts-m4.js` `m4Texts`, `m4TextOf`, `m4Codes` | `guest/lib/subscription-texts.js` `subscriptionTexts`, `subscriptionTextOf`, `subscriptionCodes` (the rest unchanged) | `93b410bf4b` |
+| `session/turn.js` `CANCELLED_BEFORE_RUN`; seven `messageOf` copies | `session/tools/exec.js` `NOT_RUN_TEXT`; `guest/lib/bounded.js` `messageOf` | `50c997c4cc` |
+
+Every guard, shape, method list and text kept its digest except the two HR-SYN-34 changed on
+purpose; `test/fixtures/guard-fold-map.json` maps each entry to its old key and lists every old
+entry no folded entry carries, with the reason.
+
+**Corrections to the plan above.**
+
+- Section 2, `limits-m4.js`: the new module is `subscription-limits.js` / `subscriptionLimits`, not
+  `host-limits.js` / `hostLimits`. The tests already call `config/defaults.js` `limits`
+  `hostLimits`, and the entries bound pools, accounts and the full Secrets surface, not the host.
+- Section 2, `PresetSnapshot`: the M5 widening was already the plain `shapes.PresetSnapshot` (equal
+  digests), as were `TurnStarted`, `RoundRequest.system` and `SessionServices.endowments`; the
+  copies were deleted, nothing was rewired.
+- Section 2, the "views" row: the gateway's `LiveSubscription` wrapper read
+  `m1bInterfaces.LiveSubscription`, which the view never held, so it ran unguarded. It still does
+  (`undefined`, said in a comment): guarding it is a behaviour change for its own fix.
+- Section 1, "the stand-ins": `factory/standin-session.js` and `standin-exec.js` used the narrower
+  guards; with one guard per interface they implement (and refuse) the M5 methods.
+
+**Not applied (left for the step-4 reinstall batch, section 5 item 2).** `interfaces-m3.js` and
+`interfaces-m4.js` stay, with their `m3*` / `m4*` exports and `vocabularyShapes`, so
+`vocabulary-tables.js` lists three modules, not one. `guards/*.js` still export their build
+ingredients (`methodsOf`, `m1aMethodNames`, `m1bMethodLists`, `m2NewMethodNames`,
+`m2VersionMethodNames`, `foldedMethodsOf`), and `interfaces.js` now exports `m1bMethodLists` for
+the contract tests. Section 3's `provision-steps/50-m5-fixtures.js` and the perf file renames, and
+all of section 4 (test helpers, fixtures, template ids), are not done.
