@@ -8322,3 +8322,38 @@ frame or a 35 ms timer; in Node the tests set `options.requestAnimationFrame` to
 Fit: good for the object rule. The chip finds its pool in each `AccountsBatch` by the `Backend`
 presence that `forSession` answered (identity, no label); the panel holds `Secret` presences from
 the catalogue and calls them directly, so no key or label lookup exists in the page.
+
+### J-0570 2026-11-18 M3 W3.5 sessions sidebar and new-session dialog - built
+Evidence: commit 32573634f4 (`ui/src/sessions/`, `test/unit/m3-ui-sessions{,-dialog}.test.js`).
+Reading: `Sidebar` and `NewSession` adapt `space-floot` `SessionSidebar` and the preset modal of
+`FlootApp`. Rows are the controller's `state.sessions`, named by their `key`; the circle is Working
+while `creating`/`deleting`, Error for any other non-ready state, else the activity (A-7). Rename is
+inline (✎ or double-click; Enter, blur save, Esc cancels; a blank or unchanged title sends
+nothing); delete asks `confirm(Delete "<title>"?)`. The dialog picks a preset by its row `index`,
+a backend by its row `index` and a model as a row of the loaded catalogue page, so no string id
+reaches the controller except the `modelId` its `newSession` takes. "Factory default" passes
+neither backend nor model. The catalogue is read when the dialog opens and on a backend change;
+the search filters loaded rows (A-9) and "More models" loads the next page.
+
+### J-0571 2026-11-18 M3 W3.5 test time and bundle share - perf
+Evidence: `corepack yarn test test/unit/m3-ui-sessions.test.js
+test/unit/m3-ui-sessions-dialog.test.js` (unit lane, no supervisor), commit 32573634f4; esbuild
+of `ui/src/sessions/index.js` with Preact external, minified.
+Measured: 14 tests in about 1.1 s of wall time for the two files. The views are 10,339 bytes
+minified / 4,202 gzip with the shared texts (`contract-m3.js` alone: 3,241 / 1,622), so about
+2.6 KB gzip of the 101,089-byte bundle the build test reported with every lane's views in it.
+Budget (`ui.coldLoad`): 600 KB gzip for the bundle.
+
+### J-0572 2026-11-18 M3 W3.5 fit and contract gaps - deviation
+Reading: (1) The controller keeps preset rows as `{ index, label, available, unavailableReason }`
+(9.1), so the preset's description (R6-38) and saved effort (R6-39) do not reach the dialog. The
+dialog reads optional `description` and `reasoningEffort` row fields; the controller must copy
+them from `describe()` (asked of the PM). R6-39 is tested with a view that adds the field. (2) The
+dialog refuses an effort only against an explicitly chosen model: with "Factory default" the page
+does not know which model the factory (or an M5 preset's own model) resolves. (3) A view that
+imports `shell/Slot.js` deadlocks the Node module graph (`features.js` -> `feature-list.js`
+top-level await -> the view): `sessions/slot.js` is a local copy, as W3.6's. (4) An effect that
+calls a controller action re-ran without end when the shell draws synchronously (the tests'
+`schedule`): Preact runs the pending effect again for a draw made from inside its effect pass.
+The tests ran out of heap (a later test in the same worker showed it). The dialog now defers the
+call by a microtask. Fit: good for the object rule; presences stay in the controller.
