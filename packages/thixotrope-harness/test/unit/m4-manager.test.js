@@ -764,7 +764,13 @@ test('durable.js: the sink, SecretsAdmin and Secret carry the M4 methods (H-2)',
   for (const name of m4SinkMethodNames)
     t.is(typeof sink[name], 'function', name);
 
+  const grant = await E(secret).makeReadGrant();
   await E(secret).setDescription('renamed');
+  // INT-M4: a grant made before the change describes the Secret as it is now.
+  t.deepEqual(await E(grant).describe(), {
+    label: 'token',
+    description: 'renamed',
+  });
   const page = await E(secrets).catalog();
   t.deepEqual(page, {
     entries: [

@@ -183,7 +183,11 @@ export const make = ({ makeManager }) => {
        */
       resolveGrants: grants =>
         // eslint-disable-next-line no-use-before-define
-        harden(grants.map(grant => grantRecords.get(grant)?.key ?? null)),
+        harden(
+          grants.map(
+            grant => secretRecords.get(grantSecrets.get(grant))?.key ?? null,
+          ),
+        ),
       /**
        * @param {any} opsFacet
        * @param {string} _incarnation
@@ -339,8 +343,12 @@ export const make = ({ makeManager }) => {
    */
   /** Secret -> its record. @type {WeakMap<any, SecretRecord>} */
   const secretRecords = new WeakMap();
-  /** ReadGrant -> the record of its Secret. @type {WeakMap<any, SecretRecord>} */
-  const grantRecords = new WeakMap();
+  /**
+   * ReadGrant -> its Secret (not a copy of the record: a description set
+   * after the grant was made is what `describe` answers; INT-M4).
+   * @type {WeakMap<any, any>}
+   */
+  const grantSecrets = new WeakMap();
   /** The live Secrets in creation order (`list`). @type {any[]} */
   let secretList = [];
   /** Creates past the bound check, not yet in `secretList`. */
@@ -388,10 +396,10 @@ export const make = ({ makeManager }) => {
         });
       },
       makeReadGrant() {
-        const record = recordOf(this.self);
+        recordOf(this.self);
         // eslint-disable-next-line no-use-before-define
         const grant = makeReadGrantExo();
-        grantRecords.set(grant, record);
+        grantSecrets.set(grant, this.self);
         return grant;
       },
       async revoke() {
@@ -424,7 +432,7 @@ export const make = ({ makeManager }) => {
     () => harden({}),
     {
       describe() {
-        const record = grantRecords.get(this.self);
+        const record = secretRecords.get(grantSecrets.get(this.self));
         if (record === undefined) throw secretError('UNKNOWN_GRANT');
         return harden({ label: record.label, description: record.description });
       },
@@ -482,7 +490,7 @@ export const make = ({ makeManager }) => {
     if (!fitsFrame(spec)) throw Error(texts.frameLimit);
     // M2: an API backend reads its key through a grant this manager
     // minted (D-6, R7-28); never key text.
-    if (spec.kind !== 'scripted' && !grantRecords.has(spec.keyGrant))
+    if (spec.kind !== 'scripted' && !grantSecrets.has(spec.keyGrant))
       throw secretError('UNKNOWN_GRANT');
     const info = harden(
       spec.modelId === undefined
