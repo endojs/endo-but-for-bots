@@ -336,9 +336,11 @@ await runPerf('exec-m5', async ({ provision }) => {
   await probe(
     'probe a',
     15_000,
+    // The exec result is the refusal text rendered as JSON: compare the
+    // opening quote and the text up to the byte count.
     r =>
       typeof r === 'string' &&
-      r.startsWith(JSON.stringify(tooLarge.slice(0, tooLarge.indexOf('0')))),
+      r.startsWith(`"${tooLarge.slice(0, tooLarge.indexOf('0'))}`),
     text,
   );
   const terminated = textOf.errorResult(textsM5.inspectTerminated);
