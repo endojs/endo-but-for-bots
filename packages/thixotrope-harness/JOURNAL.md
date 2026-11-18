@@ -11799,3 +11799,36 @@ find-duplicates.mjs`, grep counts and one read of the run log. 22 findings (2 ma
 moderate, 10 minor). Overlaps with work in hand elsewhere: the interfaces split (the six
 interfaces tests, HR-TEST-8) and sealed secret writes (the Secrets key helpers, HR-TEST-10).
 Fit: process.
+
+### J-9995 2026-11-18 HR-DUP harness duplication: lanes copied instead of extending - awkward
+Evidence: packages/thixotrope-harness/designs/arch-review/harness-duplication.md (commit
+641de6454c). 3.9 % of normalised harness source lines sit in a repeated block of 8+ lines (1,033 of
+26,476), five times the core's 0.8 %; 367 of them in four adapter pairs, each a later lane's copy
+of an earlier lane's module: pool catalogue of the model catalogue (122), scripted provider beside
+the shared round (104), the API provider wrapper three times (105), list channel of the session
+channel (60). No line is copied from the core; sibling copies are the planned ports.
+Reading: building against contracts kept the lanes apart and kept the copies apart too; a lane
+that needed a non-exported helper copied the module instead of exporting it. Production providers
+import their event log from the scripted fake.
+Decision: none; 16 findings (0 major, 8 moderate, 8 minor) for the owner.
+
+### J-9996 2026-11-18 HR-DUP harness duplication: semantic copies and scaffolding - awkward
+Evidence: same report, sections 1.4-1.5. 13 atomic file writers and 4 private syncDirectory
+copies, 5 writers without a directory fsync, while the core's writeTextAtomic goes unused; 4 perf
+window loops, 16 window settings outside PERF_WINDOW_SCALE, 42 of 76 perf variables undocumented;
+7 interface, 6 shape, 5 text and 4 limit tables kept per milestone (the per-vat split may fix it);
+transcript-records.js and journal-usage.js imported only by tests; 11 notBuilt branches whose M5
+parts are always registered; 5 exports used nowhere, 17 options nobody passes.
+Reading: the excess is milestone scaffolding that outlived its milestone, not speculative
+generality; the kept parts are good: one AES-GCM, one retry module, environment reads only in
+scripts, no TODO in source, every empty catch commented, all skips environment gates.
+Decision: none.
+
+### J-9997 2026-11-18 HR-DUP time record - process
+Evidence: start 2026-11-18T12:52:56Z, end 2026-11-18T13:04:36Z. Read-only; no supervisor started. The
+duplicate finder ran unchanged over source, scripts and perf, tests, the core and 23 sibling
+packages; export-use, import-graph, option-use and empty-catch counters were scratch scripts
+outside the tree. Report 527 lines; Prettier not run (not installed in this worktree). Two commits:
+the report, and these entries.
+Reading: the counts are regex heuristics; every finding cited above was read at its lines.
+Decision: none.
