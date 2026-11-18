@@ -9627,3 +9627,36 @@ was run; the report commit is separate from this one.
 Reading: the unit fit in one sitting because the application modules are leaves and the surveys
 needed no repetition.
 Decision: none.
+
+### J-9962 2026-11-18 AR-ONTO review: the core's vocabulary against its design - fit
+
+Evidence: `designs/arch-review/core-ontology.md` (vocabulary table, AR-ONTO-1..20, glossary);
+term counts over src, test, README, the design and ARCH plus CORE-CHANGES.
+Reading: the design's own vocabulary table holds for most terms (durable, retire, allocation key,
+installation, registration, spec, facet, keeper), and the hub's internal model (row, position,
+origin, epoch) is consistent. The divergences cluster where one mechanism was reused for another:
+the host endpoint is a pseudo-worker, so its records are named for workers (AR-ONTO-5); the hub's
+session retirement implements both vat quarantine and vat removal, so callers see one text for
+both (AR-ONTO-3, C-18); "incarnation" means a worker process in the transport and a session
+epoch in the hub, and the design defines it by the adapter case (AR-ONTO-1).
+Decision: none; findings for the owner.
+
+### J-9963 2026-11-18 AR-ONTO: names that cross the core and the harness - fit
+
+Evidence: AR-ONTO-4, AR-ONTO-6, AR-ONTO-13, AR-ONTO-14; 1,087 identifier tokens with "worker"
+against 229 with "vat" in the core; ARCH uses "session" 35 times for a session vat.
+Reading: the cheapest fix is definitional, not a rename: "worker" in code is the host's record of
+a vat, "delivery" is a frame and "crank" an evaluation, "supervisor" is the process and "daemon"
+the object inside it. Session, workspace, endpoint and lease mean different things in the two
+packages; the harness should write "hub session" whenever it means the core sense, as its
+retired-text matcher does. Persisted names (session keys, refId format, resource names, workerId,
+workspace.json, manager-heap epoch) are listed in the report and should not be renamed casually.
+Decision: none.
+
+### J-9964 2026-11-18 AR-ONTO time record - process
+
+Evidence: start 2026-11-18T12:07:18Z, end 2026-11-18T12:17:50Z. Read-only; no test run. One report commit and
+this journal commit.
+Reading: reading the design and the hub, daemon, store and native modules took most of the time;
+term-count scripts gave the scale, and each divergent site was then read.
+Decision: none.
