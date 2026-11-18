@@ -713,7 +713,29 @@ run('[browser] M4 acceptance 14, 15 (browser part) and rule 4a', async t => {
       if (sent.some(text => text.includes(needle)))
         hits.push(`sent ${needle.slice(0, 12)}`);
     }
-    t.deepEqual(hits, [], 'nothing in the network log or the DOM');
+    // The page's own storage (X-FIX): localStorage, sessionStorage and the
+    // names of its IndexedDB databases (the UI keeps none).
+    const stored = await page.evaluate(async () => {
+      const idb = /** @type {any} */ (globalThis).indexedDB;
+      const databases =
+        typeof idb?.databases === 'function'
+          ? (await idb.databases()).map((/** @type {any} */ db) => db.name)
+          : [];
+      return JSON.stringify({
+        l: { ...localStorage },
+        s: { ...sessionStorage },
+        databases,
+      });
+    });
+    t.is(typeof stored, 'string', 'the page storage was read');
+    for (const needle of [...credentials, ...typed]) {
+      if (stored.includes(needle)) hits.push(`storage ${needle.slice(0, 12)}`);
+    }
+    t.deepEqual(
+      hits,
+      [],
+      'nothing in the network log, the DOM or the page storage',
+    );
     t.true(requests.length > 0 && received.length > 0, 'the log saw traffic');
 
     // After a clean stop: nothing under the state directory.
