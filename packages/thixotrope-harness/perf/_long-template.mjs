@@ -273,6 +273,8 @@ export const specKey = async spec => {
       'scripts/export.mjs',
       'test/integration/_m2-lifecycle.js',
       'resources/agent-host/impl/archive',
+      // Turns write blob files; their layout is part of the state (HR-SYN-20).
+      'resources/agent-host/impl/blobs.js',
     ],
     extra: {
       base: await baseKeyOf(spec.kind),
