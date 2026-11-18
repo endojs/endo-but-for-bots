@@ -67,6 +67,7 @@ import { inCallOrder } from './records.js';
 import { isStaged, submissionField } from './staging.js';
 import { toolSetFor, toolSources, toolTable } from './tool-table.js';
 import { makeOutbox } from './outbox.js';
+import { makePorts } from './ports.js';
 import { makeTurnImport } from './turn-import.js';
 import { makeTurnIndex } from './turn-index.js';
 import { makeUsage } from './usage.js';
@@ -166,22 +167,6 @@ export const makeTurnRunner = ({
     archive,
   });
 
-  /**
-   * The ports of the current adapter incarnation and their tool set, held
-   * across turns (contract 6.1, J-9151); undefined until the first open
-   * answers and after a retired break showed them dead.
-   * @type {{ ports: any, tools: any } | undefined}
-   */
-  let held;
-  /** an open is in flight */
-  let opening = false;
-  /** opens asked for since the last break (bounded; see onOpened) */
-  let reopens = 0;
-  /**
-   * The latest `since` of ports whose lease broke: an open answered with
-   * ports no newer than that came from the dead incarnation.
-   */
-  let brokenSince = -1;
   /** activity of the row when no turn is current */
   let restActivity = 'passive';
 
@@ -208,6 +193,24 @@ export const makeTurnRunner = ({
     }
     flushTo(current?.ports);
   };
+
+  // ------------------------------------------------------------ ports
+
+  /**
+   * The ports of the current adapter incarnation and their tool set, held
+   * across turns (contract 6.1, J-9151; ports.js).
+   */
+  const incarnation = makePorts({
+    services,
+    live,
+    toolsFor: ports =>
+      toolSetFor(ports, table, services, sources, getRuntime()),
+    onFresh: (set, since) => onOpened(set, since),
+    onFailed: error => onOpenFailed(error),
+    flush,
+  });
+  const dropHeld = incarnation.drop;
+  const openPorts = incarnation.open;
 
   // ------------------------------------------------------------ status
 
@@ -309,7 +312,7 @@ export const makeTurnRunner = ({
     // the range holds only turns settled before this crank.
     try {
       archive.maybeSeal({
-        ports: active.ports ?? held?.ports,
+        ports: active.ports ?? incarnation.held()?.ports,
         context: contextSource,
       });
     } catch {
@@ -886,15 +889,6 @@ export const makeTurnRunner = ({
   // ------------------------------------------------------------ ports
 
   /**
-   * Ports whose incarnation is gone: stop holding them.
-   * @param {any} ports
-   */
-  const dropHeld = ports => {
-    if (held !== undefined && held.ports === ports) held = undefined;
-    live.forget(ports.publisher);
-  };
-
-  /**
    * Start the turn on these ports (crank A with held ports, crank B after an
    * open, or the crank of fresh ports after stale ones): publish its first
    * events, take the lease, run round 0. `again`: round 0 was sent once to
@@ -946,45 +940,13 @@ export const makeTurnRunner = ({
     }
   };
 
-  /** Ask the manager for this incarnation's ports (one open at a time). */
-  const openPorts = () => {
-    if (opening) return;
-    opening = true;
-    reopens += 1;
-    E(services.backend)
-      .open(services.host)
-      .then(
-        ports => {
-          opening = false;
-          onOpened(ports);
-          flush();
-        },
-        error => {
-          opening = false;
-          onOpenFailed(error);
-          flush();
-        },
-      );
-  };
-
-  /** @param {any} ports */
-  const onOpened = ports => {
-    const since = /** @type {number} */ (ports.since);
-    if (since <= brokenSince) {
-      // Answered from the incarnation whose lease broke (the open was sent
-      // before the break): ask again, a bounded number of times.
-      if (reopens < 3) {
-        openPorts();
-        return;
-      }
-      onOpenFailed(Error('the backend answered with ports that are gone'));
-      return;
-    }
-    reopens = 0;
-    held = harden({
-      ports,
-      tools: toolSetFor(ports, table, services, sources, getRuntime()),
-    });
+  /**
+   * Fresh ports are held (ports.js): start the current turn on them, or
+   * decide a turn whose lease broke before Dispatched.
+   * @param {{ ports: any, tools: any }} held
+   * @param {number} since
+   */
+  const onOpened = (held, since) => {
     const active = current;
     if (active === undefined || active.ports !== undefined) return;
     if (active.state !== 'running') return;
@@ -1004,9 +966,11 @@ export const makeTurnRunner = ({
     attachPorts(active, held, false);
   };
 
-  /** @param {unknown} error */
+  /**
+   * No ports came (ports.js).
+   * @param {unknown} error
+   */
   const onOpenFailed = error => {
-    reopens = 0;
     const active = current;
     if (active === undefined || active.ports !== undefined) return;
     if (active.reopening) {
@@ -1049,12 +1013,9 @@ export const makeTurnRunner = ({
       return;
     }
     // Before Dispatched: fresh ports tell whether the turn was in flight.
-    const since = /** @type {number} */ (ports.since);
-    if (since > brokenSince) brokenSince = since;
     active.ports = undefined;
     active.reopening = true;
-    reopens = 0;
-    openPorts();
+    incarnation.broke(ports);
     flush();
   };
 
@@ -1136,6 +1097,7 @@ export const makeTurnRunner = ({
     // round request is built.
     for (const hook of hooks.onClaim ?? []) hook({ core, active, item });
     report({ activity: 'working' });
+    const held = incarnation.held();
     if (held !== undefined) {
       attachPorts(active, held, false);
     } else {
@@ -1287,7 +1249,10 @@ export const makeTurnRunner = ({
     lastKnownTime: () => lastKnownTime,
     idle: () => current === undefined,
     seal: () => {
-      archive.maybeSeal({ ports: held?.ports, context: contextSource });
+      archive.maybeSeal({
+        ports: incarnation.held()?.ports,
+        context: contextSource,
+      });
     },
   });
 
@@ -1323,7 +1288,7 @@ export const makeTurnRunner = ({
     },
     /** Open this incarnation's ports (at creation; contract 6.1). */
     openPorts: () => {
-      if (held === undefined) openPorts();
+      if (incarnation.held() === undefined) openPorts();
     },
     turnById: index.byId,
     findTurn: index.find,
@@ -1368,11 +1333,8 @@ export const makeTurnRunner = ({
      * learns it from its lease.
      * @param {any} publisher
      */
-    publisherBroke: publisher => {
-      if (held === undefined || held.ports.publisher !== publisher) return;
-      if (current?.ports === held.ports) return;
-      held = undefined;
-    },
+    publisherBroke: publisher =>
+      incarnation.publisherBroke(publisher, current?.ports),
     /**
      * Section 6.1 direct start; refused while a turn is current (R4-10).
      * @param {any} input a string or a StagedText
