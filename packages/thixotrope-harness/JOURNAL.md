@@ -13684,3 +13684,79 @@ order; one provider shell (`makeProviderShell`) under API, pool and scripted pro
 still its own round source until plan item (b); `kinds.js` the one place `spec.kind` is matched.
 Build units SESSION, PROVIDERS, HOST with two hand-overs (`AH/index.js`, `record-preview.js`).
 Nothing run but reads; no code changed. Fit: neutral.
+
+### J-10230 2026-11-18 T3-HOST one wrapping key, failures retried (HR-SYN-5 (a)) - built
+`AH/secrets/wrapping-key.js`: `loadWrappingKey` (moved from `secrets/store.js`, in-flight
+dedupe kept) and `makeWrappingKey({ keyFile, stateDir })` -> `{ get() }`, made once per
+incarnation in `AH/index.js` `secrets()` and passed to `makeSecretStore` and `makeSealKeys`
+(both now take `wrappingKey`; the store's `keyFile`/`stateDir` and the seal's `file`/`stateDir`
+options are gone, tests build the object). Behaviour change named by the row: a failed key load,
+and a failed store or sealing-key load over it, is no longer kept until restart (the store's load
+restarts from empty). `gateway/signin.js` changed its import line only and keeps its own retrying
+cache. New test in `m4-key-race`: a group-readable key fails, chmod 600, the next `get`, `ready`
+and `publicKey` succeed; kept once loaded. Commit `bb375e0208` (the hand-over: PROVIDERS' index.js
+work after it). Fit: good.
+
+### J-10231 2026-11-18 T3-HOST one atomic write (HR-SYN-26) - built
+`AH/files.js`: `writeFileAtomic(path, data, { scratch, mode, chmod, sync, syncDirectory,
+removeScratchOnError, trace })`, `writeFileAtomicSync`, `syncDirectory`, `syncDirectorySync`.
+Users, each with its sequence unchanged: secrets.enc (fsync, chmod, rename, dir fsync), audit
+compaction (sync, no dir fsync: the old log is a superset; the audit fd is now closed before the
+scratch write rather than between fsync and rename), segments (`.part`, removed on error, trace
+steps unchanged), manifest (fsync, no dir fsync: rebuilt from segment files by `scanSegments`),
+context file and mirror (caches: no fsync at all, as before). Left, with reason in the module
+comment: the blob store's split write (parts fsynced, named later under one dir fsync; takes
+`syncDirectory` from here), the key file's `link` creation (takes `syncDirectory`),
+`gateway/signin.js` (its own `syncDirectory` copy and writer: outside this unit's files),
+`subscriptions/account-file.js` and the `scripts/*` writers (plan). No real durability gap was
+found among the writers in scope; the review's missing directory fsyncs are all caches or
+rebuildable. New `test/adapter/atomic-write-kill.test.js` (+ child): SIGKILL before each of
+write/fsync/rename/fsync-dir and after, both scratch suffixes: old file or new, at most the
+scratch left. `m2-archive-kill` and `m2-archive-store` pass. Commits `bb375e0208`, `1615ca6e5c`.
+Fit: good.
+
+### J-10232 2026-11-18 T3-HOST one channel subscriber (HR-SYN-25) - built
+`AH/channel-subscriber.js`: `makeSubscriber({ exoName, guard, queueLimit, queueBytes, onClose })`,
+`slowestOf`, `makeRevReorder({ limits, schedule, deliverBatch, deliverHeld })` (held deltas are
+the session channel's only extra) and `unrefSchedule`, the one default timer (still injected).
+`channels.js` 785 -> about 560 lines, `list-channel.js` 353 -> about 160. Wire shapes, bounds and
+`ordering()` unchanged; the session channel's `closes()` now counts by close-reason key, as the
+list channel and `next()` do (plan; `m1a-channel-bounds` asserts keys). `m1a-channels.bench`
+medians before -> after, load 2-3, shared: delta.e2e 32 subs 0.376 -> 0.402 ms, publish 32 0.035
+-> 0.030 ms, fold.perDelta 0.050 -> 0.038 ms, next.batch256 0.155 -> 0.114 ms. Duplicates
+2.99 % -> 2.85 % on the shared tree. Commit `e0a17bfba7`. Fit: good.
+
+### J-10233 2026-11-18 T3-HOST key file per supervisor (HR-SYN-21 rest) - built
+`m2-secrets`, `m2-providers`, `m2-catalog` pass `secretsKeyFile` to `startFromTemplate`;
+`useTestWrappingKey` answers `{ file, remove }` without touching `process.env`; `serveGateway`
+and `readSignIn` take `secretsKeyFile` and read the sign-in file through `supervisorEnv`; the
+`gateway.mjs url` child of `m3-gateway` gets the same env. The helper's callers changed with it
+(`m3-gateway`, `m3-sessions`, `m3-reconnect`, `test/browser/_harness.mjs`, `perf/gateway`,
+`gateway-session`, `gateway-restart`); no file under test or perf sets the variable now.
+Browser harness and the three gateway perf checks were not run. Commit `f85b129709`. Fit: good.
+
+### J-10234 2026-11-18 T3-HOST ws removed, close validated (HR-SYN-35) - built
+`ws` dropped from the package's dependencies; `corepack yarn install` at the root changed one
+line of `yarn.lock`, this workspace's entry (ws stays for ocapn, ocapn-noise, daemon,
+relay-server). Behaviour change named by the row: a one-byte close body or a code a peer may not
+send (below 1000, 1004-1006, 1015-2999, 5000+) is answered 1002; a reason that is not UTF-8
+1007 (`wsCloseCodes.invalidData`); valid codes echoed as before. New case table in
+`m3-w31-http`. Commit `cd7ad65df4`. Fit: good.
+
+### J-10235 2026-11-18 T3-HOST archive History on the vat's preview rule (HR-SYN-28) - built
+After SESSION's `5089ca64db`: `AH/archive/history.js` imports `previewRecord`, `PAGE_SLACK` and
+`TURN_PREVIEW_KEYS_BYTES` from `guest/lib/record-preview.js` (staged = keyed-staged, intent
+bytes of the shown form, `finish` the identity); its 50-line copy and three constants are gone.
+`record-preview.test.js` (SESSION's kept-against-archived test) passes; `m2-history` passes.
+Duplicates 2.02 % on the shared tree after it. Commit `20020bd82a`. Fit: good.
+
+### J-10236 2026-11-18 T3-HOST proofs and time record - verified
+Adapter lane, whole `test/adapter`, 455 passed (63 s). Integration (shared slots): first batch of
+10 files 473 s wall: m2-secrets, m4-secrets, m3-gateway, m3-sessions, m3-reconnect, m2-history
+ok; m1b-live, m2-archive-restart, m2-catalog, m2-providers failed on `Cannot import name
+execHooks`, SESSION's uncommitted guest edits in the shared tree mid-change. Rerun of those four
+after SESSION committed (`89366b1714`): all ok, 371 s wall. Bundles (no guest file changed by
+this unit; SESSION's tree): session 212,483 of 240,000, exec 62,754, factory 156,955. Over 60 s:
+the two integration batches, the adapter lane (63 s). Not run: browser lane, gateway perf
+checks, `m1a-channel-bounds` bench outside the adapter lane, power-loss behaviour (only SIGKILL is
+tested). Fit: neutral.
