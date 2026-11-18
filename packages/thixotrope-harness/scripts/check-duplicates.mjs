@@ -9,7 +9,8 @@
  * above `CEILING_PERCENT`.
  *
  * The ceiling only goes down: measured 3.22 % (865 of 26,887 lines) at
- * `802bd2767c`, ceiling 3.5 %. A change that lowers the share lowers the
+ * `802bd2767c`, ceiling 3.5 %; measured 3.00 % (802 of 26,741 lines) at
+ * `f6a844cbbf`, ceiling 3.25 %. A change that lowers the share lowers the
  * ceiling in the same commit (keep about 0.25 points of margin).
  *
  * Usage: `corepack yarn lint:duplicates` (from the package);
@@ -19,7 +20,7 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const CEILING_PERCENT = 3.5;
+const CEILING_PERCENT = 3.25;
 
 const ceilingAt = process.argv.indexOf('--ceiling');
 const ceiling =
