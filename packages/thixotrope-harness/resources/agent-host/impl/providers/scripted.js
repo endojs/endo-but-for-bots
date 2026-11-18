@@ -409,14 +409,26 @@ export const makeScriptedProvider = ({
         const ms = now() - t0;
         const { transcript, timing } = projection;
         // M2 W2.6: the system prompt the request carries (seam 1), in full.
+        // M5 (W5.3, S2, H-9): a two-part system (the prompt and the turn's
+        // R4-29 line) is read part by part and digested joined with a blank
+        // line, as round.js `systemTextOf` joins it (not imported: round.js
+        // imports this module).
         /** @type {string | undefined} */
         let system;
-        if (isStaged(req.system)) {
-          system = await blobs
-            ?.read(req.system.blob, owner)
-            .catch(() => undefined);
-        } else if (typeof req.system === 'string') {
-          system = req.system;
+        if (req.system !== undefined) {
+          /** @type {(string | undefined)[]} */
+          const parts = [];
+          for (const part of [req.system].flat()) {
+            parts.push(
+              isStaged(part)
+                ? // eslint-disable-next-line no-await-in-loop -- at most two parts
+                  await blobs?.read(part.blob, owner).catch(() => undefined)
+                : part,
+            );
+          }
+          if (parts.every(part => typeof part === 'string')) {
+            system = parts.join('\n\n');
+          }
         }
         // M2 W2.9 (acceptance 15, m2-interfaces.md 4.13): a perf run that
         // measures per-turn cost at length creates `<logPath>.nodigest`; the

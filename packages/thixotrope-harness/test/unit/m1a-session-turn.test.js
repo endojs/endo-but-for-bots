@@ -25,6 +25,12 @@ import { messageBytes } from '../../guest/lib/bounded.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+
+/**
+ * M5 appends session-site tools (the local object tools and `adopt`) that
+ * every session offers without an exec vat (m5-interfaces.md 2.4.3, 2.6).
+ */
+const alwaysOffered = harden(['list', 'lookup', 'store', 'remove', 'adopt']);
 const { Far, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
 
 /** Let every pending microtask and eventual send run. */
@@ -397,7 +403,7 @@ test('claim: enqueue on an idle session starts a turn in the same crank', async 
   );
   t.deepEqual(
     req.tools.map((/** @type {any} */ d) => d.name),
-    ['echo'],
+    ['echo', ...alwaysOffered],
   );
   t.deepEqual(req.options, { modelId: 'scripted' });
   t.is(s.leases[0].turn, receipt.turn);
@@ -598,8 +604,14 @@ test('local refusals: unknown tool (R4-43), more than maxCallsPerRound, window o
   );
   t.is(results.length, 3);
   t.is(results[0].opId, 't1/r0/c0');
-  t.is(results[0].result, `Error: ${textOf.unknownTool('nope', ['echo'])}`);
-  t.is(results[0].result, 'Error: Unknown tool: "nope". Available tools: echo');
+  t.is(
+    results[0].result,
+    `Error: ${textOf.unknownTool('nope', ['echo', ...alwaysOffered])}`,
+  );
+  t.is(
+    results[0].result,
+    'Error: Unknown tool: "nope". Available tools: echo, list, lookup, store, remove, adopt',
+  );
   t.true(results[0].failed);
   t.is(
     results[1].result,
@@ -1183,13 +1195,18 @@ test('records: closed shapes, one turn-started per turn, call order', t => {
 });
 
 test('tool table: echo only when the ports offer it', t => {
-  t.deepEqual(toolSetFor(harden({ tools: [] })).descriptions, []);
+  const without = toolSetFor(harden({ tools: [] }));
+  t.false(without.byName.has('echo'));
+  t.deepEqual(
+    without.descriptions.map((/** @type {any} */ d) => d.name),
+    alwaysOffered,
+  );
   const set = toolSetFor(
     harden({ tools: [harden({ name: 'echo', tool: Far('AdapterTool', {}) })] }),
   );
   t.deepEqual(
     set.descriptions.map((/** @type {any} */ d) => d.name),
-    ['echo'],
+    ['echo', ...alwaysOffered],
   );
   t.true(set.byName.has('echo'));
 });

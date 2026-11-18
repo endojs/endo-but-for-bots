@@ -34,13 +34,22 @@
  * `PROBE_WINDOW` at once in the start listener.
  */
 import {
-  interfaces,
   m1bInterfaces,
   m2Interfaces,
   shapes,
   texts,
 } from '../lib/interfaces.js';
+import {
+  m5FactoryExtensions,
+  texts as factoryTexts,
+} from '../lib/interfaces-m5-factory.js';
+import { extendInterface } from '../lib/interfaces-m5.js';
+import { fitsFrame } from '../lib/bounded.js';
+import { limits } from '../lib/limits.js';
 import { isRetiredBreak } from '../lib/retired.js';
+import { makeInventory } from './inventory.js';
+import { makePresetCatalog } from './presets.js';
+import { defaultTemplates } from './preset-templates.js';
 import { makeDeletions } from './delete.js';
 import { makeFactoryExport } from './export.js';
 import { makeExecHandle } from './pool.js';
@@ -124,11 +133,10 @@ export const makeFactoryKit = ({
   /** The latest `CreateOptions.at` seen (vats have no clock: time is data). */
   let latestAt = 0;
   const knownTime = lastKnownTime ?? (() => latestAt);
-  const chatOnly = makeExo('Preset', interfaces.Preset, {
-    describe: () => harden({ label: CHAT_ONLY, builtIn: true }),
-    snapshot: () => harden({ label: CHAT_ONLY }),
-  });
-  const presets = harden([chatOnly]);
+  // M5 W5.1 (seam H-1): the preset catalogue and the operator inventory.
+  const catalog = makePresetCatalog({ templates: defaultTemplates });
+  const chatOnly = catalog.builtIn(CHAT_ONLY);
+  const inventory = makeInventory();
 
   /** Increased by every daemon start (the start listener). */
   let epoch = 0;
@@ -220,10 +228,13 @@ export const makeFactoryKit = ({
   /**
    * A creation (contract 9); with `importing` (M2 W2.7, 7.3) its row stays
    * unlisted until the session reports its import's end.
-   * @param {Record<string, any>} given
+   * @param {Record<string, any>} options
    * @param {{ importing: boolean }} how
    */
-  const create = async (given, { importing }) => {
+  const create = async (options, { importing }) => {
+    // M5 W5.1 (2.3 step 1): the preset (given or default) and its model
+    // defaults, refused here before any row or vat (R4-6).
+    const given = catalog.withDefaults(options);
     // The caller has the clock (J-9150): its `at` is the session's createdAt.
     const { at } = given;
     if (typeof at === 'number' && at > latestAt) latestAt = at;
@@ -233,7 +244,7 @@ export const makeFactoryKit = ({
     /** @type {Record<string, any>} */
     // The admin stages a given system prompt over inlineBytes (W2.6's
     // resolver; W2.9 wiring).
-    const context = { defaultPreset: chatOnly, admin };
+    const context = { defaultPreset: catalog.defaultPreset(), admin };
     if (harnessSettings !== undefined) {
       const defaultBackend = harnessSettings.defaultBackend();
       const defaultModelId = harnessSettings.defaultModelId();
@@ -281,6 +292,7 @@ export const makeFactoryKit = ({
         admin,
         backend: resolved.backend,
         preset: resolved.preset,
+        presetSnapshot: resolved.presetSnapshot,
         key: row.key,
         host: creation.spareHost,
         makeExecVat:
@@ -296,7 +308,7 @@ export const makeFactoryKit = ({
         title: resolved.title,
         backendTitle: resolved.backendTitle,
         modelId: resolved.modelId,
-        preset: resolved.presetSnapshot,
+        preset: catalog.configSnapshot(resolved.presetSnapshot),
         createdAt,
         userInitiated: resolved.userInitiated,
       };
@@ -320,6 +332,10 @@ export const makeFactoryKit = ({
         services,
         rowReporter: rows.makeReporter(row),
       });
+      // M5 W5.1 (2.3 step 4): the snapshot and the endowments travel in
+      // `make`'s one message (rule 12.5).
+      if (!fitsFrame(makeArgs, limits.frameBytes))
+        throw Error(factoryTexts.presetTooLarge);
       /** @type {any} */
       let made;
       try {
@@ -398,7 +414,7 @@ export const makeFactoryKit = ({
         throw Error(texts.unknownSession);
       return row.session;
     },
-    listPresets: () => presets,
+    listPresets: () => catalog.list(),
     /** The list rev viewers subscribe from (`Live.subscribeList(rev)`). */
     sessionListFeed: () =>
       harden({ rev: listFeed === undefined ? rows.rev() : listFeed.rev() }),
@@ -408,10 +424,18 @@ export const makeFactoryKit = ({
     listModels,
   });
 
-  const operator = makeExo('Operator', m2Interfaces.Operator, {
+  // M5 W5.1 (seam H-2): `m5FactoryInterfaces.Operator`.
+  const operatorInterface = extendInterface(
+    m2Interfaces.Operator,
+    'Operator',
+    m5FactoryExtensions.Operator(),
+  );
+  const operator = makeExo('Operator', operatorInterface, {
     getFactory: () => factory,
     /** M2 W2.7: the agent host's Secrets manager (m2-interfaces.md 9). */
     getSecrets: () => E(admin).getSecrets(),
+    getPresets: () => catalog.facet,
+    getInventory: () => inventory.facet,
   });
 
   const exports = makeFactoryExport({
@@ -528,7 +552,9 @@ export const makeFactoryKit = ({
   return harden({
     factory,
     operator,
-    presets,
+    /** M5 W5.1: the preset catalogue's kit and the inventory's (tests). */
+    catalog,
+    inventory,
     chatOnly,
     startListener,
     /** The recovery run by the latest `started()` (tests). */

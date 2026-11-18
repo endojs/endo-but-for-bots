@@ -1201,6 +1201,40 @@ The whole M5 regression (11 integration files and the browser file of at most 4 
 five perf files of at most 5.5 minutes each) is at most 69 slot-minutes: about 17 minutes on four
 test slots.
 
+**Outcome (W5.9, lane m5 before the merge; M5 is not done until the PM merges the lanes).**
+Release worker `367e78ad...`, crank budget 50 M, slot ceiling 4,000,000; Apple M3 Max shared with
+the M2, M3 and M4 lanes (load 2-8). Every daemon run used a copy of the lane with the bundler
+patch of J-9690 applied (whitespace only): without it the session program (272,126 bytes) is over
+the factory's 262,144-byte cap and no session can be created. Verdicts use the 1.25 x rule; a miss
+is kept with its likely cause, not re-based.
+
+| item | result | verdict | entries |
+|---|---|---|---|
+| 1 snapshot isolation; 9 part 7 (`m5-snapshot`) | A keeps X's digest and `notes` after the save; B gets Y and lists nothing (21.8 s) | pass | J-9694 |
+| 2, 13, 14, K1, K2 (`m5-presets`) | as W5.1 wrote them | pass | J-9692 |
+| 3 (`m5-labels`, `m5-objects`), 4, 5, 8, K7 (`m5-objects`) | as written; 5's 200 KB `help` is staged, not terminated (J-0771) | pass | J-9692 |
+| 6 (`m5-grants`) | after the deep-schema fixture fix (the 40-deep fixture halted the workspace vat itself) | pass | J-9692, J-9693 |
+| 7 (`m5-mentions`) | as written | pass | J-9692 |
+| 9 without part 7 (`m5-prompt`) | as written | pass | J-9692 |
+| 10 (`m5-security`) | 300 KB granted answer: `inspectTerminated`, session goes on | pass | J-9692 |
+| 11a K3, K6 (`m5-mentions-restart`); 11b K4, K5 (`m5-grants-restart`) | after test fixes (request id format; a submit behind a restart hold has no turn); K5's tool ran once | pass | J-9692 |
+| 12 reachability (`m5-reachability`) | (a) return-guard closure has no operator or admin interface; (b) session and exec vats hold no other session or exec vat; origin granularity only (CC-060) | pass | J-9694 |
+| 15 browser (W5.8, M3 lane) | needs M3 merged | deferred | |
+| M1a, M1b, M2 unit lanes | 11 tests pinned pre-M5 hook tables; updated. `bundle-guest`, `m1a-session-program` fail on session program bytes | 2 fail until J-9690 is settled | J-9691 |
+| `session.program` / `exec.program` (240,000 / 120,000 after O-1) | 272,126 / 119,760 as the lane bundles; 241,361 / 106,277 with the per-module J-9690 patch (the daemon runs); 236,218 / 104,193 with the bundle-level form of J-9698 (Node only: evaluates and runs a turn; not run in a daemon) | **miss** as the lane bundles and with the per-module patch; pass with J-9698's form, once the PM applies it to `scripts/bundle-guest.mjs` / pass | J-9690, J-9695, J-9698 |
+| `session.createCold` (6 s), O-1 before and after | `creation-m5`: 7,341 ms median, n 17 in 120 s (241 KB program); `session.perf` same method both sides: M2 base 5,619 ms (186,448 bytes, 34.6 deliveries) -> M5 7,220 ms (241,361 bytes, 40.6 deliveries) | pass (1.20-1.22 x) | J-9695, J-9697 |
+| `prompt.compose` Node (5 ms) / vat (`chat-only` + 150, 750 ms; pool 4) | 0.002 ms / largest 1,622 vs `chat-only` 1,277 (+345), n 10 + 10 | pass / **miss** | J-9695 |
+| `tools.local` (+30 ms; 0 extra deliveries) | +109 ms (852 vs 743); -0.9 deliveries | **miss** / pass | J-9696 |
+| `labels.full` (1.1 x) | 1.071 | pass | J-9696 |
+| `tools.inspect` (300 ms) | 339 ms (n 56) | pass (1.13 x) | J-9696 |
+| `grants.round` (350 ms; tool set 10 ms) | 215 ms (n 53, plain 255); tool set 0.018 ms in Node | pass | J-9696 |
+| `exec.powersLookup` (150) / `exec.membrane` (+5) / `exec.scope1000` (300) | 73 ms / -10 ms (Node +0.002) / 100 ms | pass | J-9696 |
+| `presets.save` (150 ms) / `inventory.page` (200 ms) | 264-269 ms with 32 endowments (24-36 ms without) / 801-804 ms (one entry: 24 ms); paging by an array instead of the Map walk changed nothing (tried, reverted) | **miss** / **miss**: about 7-15 ms per handle crossing into or out of a vat | J-9696 |
+| `mentions.turnStart` (+100, 350 ms, 3 deliveries) | 466 vs 144 ms (+322); +0.3 deliveries | **miss** / pass | J-9696 |
+| probes a-f | (a) refused in the exec vat, no halt (the row failed on its own check, fixed in 00e7e848f1); (b) staged, no halt; (c) the workspace vat halted (fixture builds 20,000 keys itself); (d1-d3) refused; (e) `refused-schema` (3,074 characters, limit 2,048), no halt (7.9 s); (f1, f2) pass | (c) **miss** | J-9696 |
+| regression wall time (20 min on four slots) | integration 11 files 22.7 slot-minutes held (each <= 3.5 min); perf 21.8 minutes exclusive (five files); waits for slots 0-29 minutes per run | **miss**: the exclusive perf files alone exceed 20 minutes | J-9696 |
+| seams with M3 and M4 as landed (M4's effort lift, `systemTextOf` on pools, gateway presences) | not in this lane | deferred to the merge | |
+
 **Fit risk:** good. Persistent scope and object endowments are what Thixotrope offers; Appendix F
 drops most of Endo's name plumbing.
 

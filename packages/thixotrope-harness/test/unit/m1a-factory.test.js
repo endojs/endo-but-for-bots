@@ -563,11 +563,11 @@ test('make registers the start listener and returns the root', async t => {
   const operator = await E(root).getOperator();
   const factory = await E(operator).getFactory();
   const presets = await E(factory).listPresets();
-  t.is(presets.length, 1);
-  t.deepEqual(await E(presets[0]).describe(), {
-    label: 'chat-only',
-    builtIn: true,
-  });
+  // M5 W5.1: the catalogue lists the built-ins, `chat-only` first.
+  t.is(presets.length, 5);
+  const view = await E(presets[0]).describe();
+  t.is(view.label, 'chat-only');
+  t.true(view.builtIn);
   const session = await E(factory).createSession(harden({ backend }));
   t.is((await E(root).status()).sessions, 1);
   t.is(await E(factory).findSession('s1'), session);
@@ -746,8 +746,18 @@ test('start listener: a probe that never settles does not hold back the others',
 test('the hook tables have M1a entries and the services are attenuated', async t => {
   // M1a's three entries first; later milestones append (M2: W2.2, W2.6, W2.7).
   t.true(optionResolvers.length >= 3);
-  // M1b W1b.5 appends the execVat builder (empty without a pool).
-  t.is(serviceBuilders.length, 2);
+  // M1b W1b.5 appends the execVat builder (empty without a pool); M5 W5.1
+  // the presetEndowments builder (empty without a snapshot revision).
+  t.is(serviceBuilders.length, 3);
+  t.deepEqual(
+    await serviceBuilders[2]({
+      admin: makeFakeAdmin().admin,
+      backend,
+      preset: Far('Preset', {}),
+      key: 's1',
+    }),
+    {},
+  );
   t.deepEqual(
     await serviceBuilders[1]({
       admin: makeFakeAdmin().admin,

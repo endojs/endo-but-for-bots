@@ -10662,3 +10662,581 @@ replace, folding `m2Interfaces`, CC-051/CC-060, perf misses (`secrets.catalog`, 
 Evidence: the follow-up commits add no host name, domain, non-loopback address, e-mail or local
 path; the merge brings the lane's provider endpoint defaults (public https URLs, reviewed in the
 lane). Test URLs are loopback.
+### J-0740 2026-11-18 M5 prompt composition over a section table - deviation
+Evidence: `guest/lib/prompt-sections.js`, `guest/lib/system-prompt-base.js`,
+`guest/session/prompt.js` (commit 1258d8c2fa); `test/unit/m5-w52-prompt.test.js` (reads Fae's
+`session/system-prompt.js` at 1315bef86 from git and compares).
+Reading: the prompt is now the applying entries of the hook table `promptSections` (parts 1, 2,
+3 and 7), in part order, joined with one blank line and trimmed; M6, M9 and M12 append parts 6,
+4 and 5. For M2's inputs the joins give M2's exact layout (Floot's spoken introduction keeps its
+own trailing line break). Part 2 is Fae's guest section with three changes, all tested against
+Fae's source: the exec paragraph (M2, J-0472); the capability paragraph, rewritten for the
+per-call `powers` (`lookup`, `list`, `store`, `remove`; remove before reusing a petname); and a
+"Petstore tools" list after Fae's, naming `list`, `lookup`, `store`, `remove`,
+`describeCapability`, `readSources`, `adopt`, `adoptTool` and `exec`, with "use the ones in
+your tool list" because the inspection and package tools are not always offered. Fae's visual
+verification paragraph (browser, `viewImage`) is kept word for word though neither exists before
+M6/M8 (R4-26 lists it in part 2). Part 3 is empty (`applies` false). Part 7 is the snapshot's
+`instructions`; M2's `presetText` argument stays as an alias.
+Decision: as described. `m2-w26-prompt.test.js` keeps two M2 assertions on the old guest
+section (for the PM).
+
+### J-0741 2026-11-18 M5 prompt composition cost - perf
+Evidence: commit b9bc73ece9; a Node timing loop (scratch script, 3 s window per case, not a perf
+file: `prompt.compose` is W5.9's row); `test/integration/m5-prompt.test.js` under the run lock.
+Reading: Node composition, median 1.1 us (p99 1.7 us, 2.1 million samples) for the plain prompt,
+1.4 us (p99 2.3 us) with 4,096 three-byte units of instructions; budget <= 5 ms each. The
+composed prompt is 3,765 bytes plain and 4,061 spoken (M2: 2.9 and 3.2 KB), always inline; a
+maximal preset text puts it over `inlineBytes` and it is staged by M2's path (unit-tested). The
+integration file took 127.6 s wall (45 s template copy and start, 22 s for three sessions with
+two turns each and two refused creations).
+Fit: good. The composition runs once per creation in the factory vat and is pure text; the
+section table costs nothing that matters, and storing the result in `SessionConfig` (R4-28)
+means no vat recomposes.
+
+### J-0760 2026-11-18 M5 exec side: powers, membrane, inspector - built
+Evidence: commits 5b2444f401 (exec program), 0a9e213810 (session client); `guest/exec/{powers,
+membrane,inspect}.js`, `guest/session/tools/inspect-client.js`, `test/fixtures/m5-objects.js`;
+`test/unit/m5-w54-exec.test.js` (12 tests, about 0.3 s each, the bundle in a Node compartment
+with the prelude alone) and `m5-w54-client.test.js` (6 tests, fakes).
+Reading: per call, `powers` is `{ lookup, list, store, remove }` over the session's
+`ExecPowersSource`; after the call every method rejects with `texts.powersExpired` and sends
+nothing. The model's `E` is the call's membrane: a send to any remotable is measured in the exec
+vat (units x 3, keys per record and per message, depth) and refused before it leaves; objects
+`powers` answers are per-call wrappers (empty local remotables, `WeakMap` to the target), so a
+kept wrapper is refused in a later call, answers are wrapped again, and a wrapper returned as the
+result renders as its target. Top-level promise arguments are awaited; a nested one is refused
+(its later resolution would leave unmeasured). The inspector runs the five operations beside
+`run` (never `busy`) and builds every answer itself. The session client shares the exec tool's
+scope (one `scope()` call, `takeScope`), its cancel and recovery hooks, and the exec deadline for
+`readSources` and `toolExecute`; it keeps `inspectWindow` calls in flight.
+Decision: as described; the deviations are J-0761.
+
+### J-0761 2026-11-18 M5 exec side deviations - deviation
+Evidence: `guest/exec/render.js` (the contract copy), `guest/exec/membrane.js`,
+`guest/exec/inspect.js`, `m5-w54-exec.test.js` ("the exec copy equals the contract").
+Reading: (1) the exec program does not import `interfaces-m5.js`: it would be 13.7 KB of the
+bundle with its module wrapper. `render.js` holds a copy of the M5 `ExecScope` guard, its
+request and outcome shapes and the six texts the exec vat writes; a unit test compares each with
+the contract's (guards structurally, `deepEqual`), so a drift fails a test. (2) The shared
+outcome helpers (`argumentText`, `finish`, failed, exhausted) moved from `main.js` to
+`render.js`, not a module of their own: each module costs about 1.5 KB of wrapper. (3) The
+membrane is in the model's `E`, not in callable wrapper objects: wrappers stay empty remotables
+and every send to a remotable goes through the measured path, which also covers presences an
+answer carries inside a tagged value. `E.get` is not measured (no arguments) and its answer is
+not wrapped. (4) `readSources` does not re-check `SourceReadResult` with `matches` (one shape
+less in the bundle): a reader answer of another shape throws in the bounding loop and the item
+answers the unreadable text, as Fae's catch does. (5) The unreadable text names
+`SourceReader.read` instead of Fae's "readable blob streaming". (6) The exec side does not count
+inspector calls; the session client keeps the window.
+Decision: as described; reported to the PM.
+
+### J-0762 2026-11-18 M5 exec bundle bytes and membrane cost - perf
+Evidence: `node scripts/bundle-guest.mjs exec` at 0a9e213810; a Node timing loop (scratch
+script, 5 s window per case; the vat rows are W5.5's `exec.membrane` and W5.9's bundle row).
+Reading: the exec program is 119,760 bytes (base 87,348 at the lane start; budget 100,000 now,
+120,000 after M5's merge by O-1): 240 bytes under the raised budget, so `m1b-exec-vat`'s
+`execProgramBytes` assertion fails in this lane until the PM's raise. The contract estimated
++12 KB; W5.4 added 32.4 KB: inspect 13.1 KB, membrane 6.3, powers 2.5, the outcome helpers and
+contract copy 5.6, and about 1.5 KB of wrapper per new module. Node, per message measured: a
+small record 1.97 us, a 4,096-unit string 0.81 us, 256 keys in 8 records 202 us (the copy
+dominates), a refused 100 KiB string 0.05 us (2.5 million, 6.2 million, 24,800 and 92 million
+calls in 5 s). Budget `exec.membrane` <= +5 ms median per call in a vat.
+Fit: poor on bytes. Every module is shipped into every spare exec vat at about 10 us a byte
+(D-4), and guest code cannot share a library between vats, so the membrane and Fae's rules cost
+about 0.3 s per cold exec vat. Good on cost per call: the measure walk is bounded by the bounds
+themselves and is far below a crank.
+
+### J-0750 2026-11-18 M5 session seams, label map, local object tools - built
+Evidence: commits 1c757e81d9 (the four `m5Widenings` in `interfaces.js`), 8ed04eb4c7 (seams,
+labels, tools), d93e3661b1 and b7c4f0a76c (tests); `guest/lib/tool-args.js`,
+`guest/session/{labels,label-seeds,m5-parts}.js`, `guest/session/tools/objects.js`; edits to
+`turn.js`, `turn-hooks.js`, `tool-table.js`, `session.js`, `AH/providers/{round,scripted}.js`.
+Tests: `m5-interfaces.test.js` (10), `m5-w53-args` (7), `m5-w53-labels` (12), `m5-w53-session`
+(10), all in about 3 s; `m5-labels` integration 148 s wall with a template rebuild (90 s test).
+Reading: `parseClosedArgs` scans the model's text once and compares every key against the spec
+before keeping anything; a 20,000-key flood stops at its first key. The label map is a `Map` in
+the session heap (256 labels, 8,192 bytes per value, 262,144 bytes stored in all; a removal frees
+both). `list`, `store`, `remove` and `lookup` of JSON are `site: 'session'` and settle in the
+round-final crank (the unit test sees round 1 sent without a macrotask). S1 re-reads the tool set
+in `invoke` every round with the built-in name rules; S2 joins the turn's note inline or sends
+`[prompt, note]`; S3 `onClaim` runs after `TurnStarted` (with `attachments` labels); S4 puts the
+runtime in every `ToolContext`. In the daemon: a value stored before a SIGKILL is found after it
+(K3); 256 `store` calls in one round settle (64 run, 63 `labelTaken`, 192 too many) in 6.7 s of
+turn with no halted vat at the 4,000,000-slot ceiling; the 257th label is refused.
+Decision: as described; deviations J-0751.
+
+### J-0751 2026-11-18 M5 W5.3 deviations from the contract - deviation
+Evidence: the files of J-0750.
+Reading: (1) `scripted.js` does not call `round.js` `systemTextOf` (round.js imports scripted.js;
+`import/no-cycle` refuses the pair): it reads the parts itself and joins them with the same blank
+line, so the `context` digest is of the joined prompt as 2.8 S2 wants. (2) Dynamic tool entries
+may carry `refused(state, reason)`; `toolSetFor` calls it and lists `refused` in its answer, so
+W5.6 learns `refused-builtin`/`refused-duplicate` without recomputing; `refused-budget` stays
+W5.6's. (3) Runtime parts are read through getters (`runtime.grants` etc.) so a part made earlier
+reaches one made later; `runtime.session` carries `{ core, queue, runner, inCrank,
+refuseIfDeleting }`. `Session.grants()` answers `runtime.grants.facet`;
+`enqueueMessageOnce(...)` calls `runtime.packages.enqueueMessageOnce(submission, requestId, at,
+attachments)` inside the Session crank. (4) `lookup` of an object without cached names calls
+`runtime.inspector.lookup({ opId, label, binding }, ports, context)` (W5.5 caches with
+`labels.setMethods`). (5) The heaviest-crank QC case is in `m5-labels.test.js` (integration: it
+needs the vat's slot ceiling), not a unit `m5-w53-qc.test.js`; the unit file checks the same
+round's logic. (6) Fae's "Endo directory"/"Endo daemon" wording became "you hold"/"kept by this
+session"; `lookup` drops "(endo_exec on Codex)". (7) Blank arguments read as `{}`; missing or
+mistyped arguments answer `argumentsNotJson` with the field named.
+Decision: reported to the PM (forPM).
+
+### J-0752 2026-11-18 M5 session bundle bytes after W5.3 - perf
+Evidence: `node scripts/bundle-guest.mjs session` (out of tree) at 14761f8279.
+Reading: the session program is 233,182 bytes (189,454 after the widenings alone; 186,448 at
+the M2 base by W5.0). W5.3 adds about 44 KB: `interfaces-m5.js` 11.9 KB stripped, `tool-args`
+7.5, `objects` 6.1, `labels` 2.7, `m5-parts` 0.8, `label-seeds` 0.5, edits about 3, and about
+1.8 KB of module wrapper for each of the six new modules. O-1's raised budget is 240,000: 6.8 KB
+remain for W5.5, W5.6, W5.7 and the inspector client, which the contract estimated at about
+20 KB; the merged session program will be over 240,000 and near the 262,144-byte staged-source
+cap (`execSourceBytes`). `m1a-session-program.test.js` fails at 200,000 in this lane.
+Fit: poor on bytes, as J-0762 found for exec: every module ships into every spare session vat at
+about 10 us a byte, and the contract file the session needs carries the exec and grant shapes
+too. Good on cost per use (Node, 3 s windows): `toolSetFor` 3.7 us static, 44 us with 32
+dynamic entries; `parseClosedArgs` 1.8 us small, 16 us for 8 KB; `labels.list()` of 256 labels
+46 us.
+
+### J-0753 2026-11-18 M5 tools perf rows - perf
+Evidence: `node scripts/run-lock.mjs --exclusive --label tools -- node perf/tools.perf.mjs` at
+14761f8279 (run log: waited 75 s, held 261 s, exit 1 for the miss below); load average 4.3-6.2;
+60 s windows.
+Reading: `tools.local` (budget <= 30 ms added per round, 0 extra deliveries): MISS, +125 ms
+(local-tools turn median 686 ms, n 47; echo turn 561 ms, n 47); deliveries per turn 8.0 local
+against 8.8 echo, so the delivery half passes. Likely cause: the comparison is four calls against
+one, and the cost is outside the session vat: the scripted provider streams four tool calls,
+the session publishes eight live events instead of two and the next round carries five more
+records to project; the vat work itself is microseconds (J-0752). A fair row compares four local
+calls with four echo calls, or reads the session vat's crank time from `status().timings`; not
+changed here (budget and row as the contract states). `labels.full` (budget ratio <= 1.1):
+1.196 (256 labels 189 ms median, n 72; none 158 ms, n 72; minima 107 and 105 ms); over the
+budget as stated, inside the harness's 1.25 slack, so the row printed pass. Nothing on the turn
+start path reads the label map; the medians move with load (p95 402 and 366 ms). Probes (d): an
+8,193-byte value refused with `argumentsTooLarge` (8,219 argument bytes) in 2.8 s, the 257th
+label refused in 13.3 s (with its 256-label fill), 33 attachments refused by the `Session` guard
+in 3.5 s; no vat halted, each session's next turn completed. Probe (e) skipped: `grants()` is
+`notBuilt` until W5.6.
+Fit: good for the vat (a label map of 256 adds nothing a turn can see); the costs a tool round
+shows are the adapter's per-event and per-record path, which grows with calls, not with M5.
+
+### J-0730 2026-11-18 M5 presets and inventory - built
+Evidence: W5.1 commits 3fe1bb92d5 (catalogue, records, templates, inventory), 25e9f29187 (seams
+H-1..H-3, `presetEndowments` builder, M5 Operator), 468dd3846d (export/import of presets),
+1e14c0725a (integration). Unit: `m5-w51-presets` 16, `m5-w51-factory` 8, `m5-w51-inventory` 4,
+all pass in about 1 s each. Integration `m5-presets` (acceptance 2, 13, 14, K1, K2): 4 pass,
+178 s wall including template setup (the first test 61 s with two SIGKILL restarts).
+Reading: each preset is one exo; the catalogue reads a preset's record through a `WeakMap`
+(foreign or another catalogue's preset refused `unknownPreset` before any row); a module-level
+`WeakMap` lets the services builder read endowments at the snapshot's revision without holding
+the catalogue (`presetChanged` rolls the creation back, tested by saving while the backend's
+`describe` is held). K1 after the answer: durable; before the answer: in the run the kill landed
+first (not applied) and the retry at the old revision then succeeded once.
+Fit: good. Persistence is the heap: no store, no write queue, no lost-acknowledgment repair
+(Fae needed all three, `preset-catalog.js` `change`); compare-and-set is two integer compares
+in one crank.
+
+### J-0731 2026-11-18 M5 W5.1 deviations from the contract - deviation
+Evidence: `guest/factory/presets.js`, `guest/lib/preset-catalog.js`.
+Reading: (1) `list()` puts `chat-only` first, then the other built-ins in
+`builtInPresetLabels` order: `_m1a-slice.js` and `m1a-provision.test.js` take the first listed
+preset as M1a's; with `development` first every M1a/M2 integration creation would be refused.
+(2) `create` and `save` are synchronous because their guards are `M.call`: an edit cannot ask its
+backend's kind, so "Choose a model for this backend" is not applied at save
+(`normalizePresetRecord` applies it when given `backendKind`; creation still refuses a missing
+model on a non-default API backend, M2 `catalogueModel`). (3) `facet` is a property, as section
+10 lists it (H-2 writes `facet()`). (4) A model default fills in only when the creation uses the
+preset's backend. (5) Built-in labels are Fae's ids (`chat-only`, ...), so M1a's label holds.
+(6) Inventory cursor refusal text `Unknown inventory cursor` is the harness's (none in the
+contract). (7) Export carries user presets only; built-ins come back as shipped.
+Decision: reported to the PM (forPM).
+
+### J-0732 2026-11-18 M5 presets perf rows - perf
+Evidence: `node scripts/run-lock.mjs --exclusive --label presets -- node perf/presets.perf.mjs`
+at 379d92a6c8 (60 s windows, diagnostic probes 10 s), load average 4.8-8.3; m1a template.
+Reading: `presets.save` (32 endowments, budget median <= 150 ms): MISS, median 279 ms, p99 331,
+n 211, 1.02 deliveries per op. `inventory.page` (50 rows of 1,000, budget <= 200 ms): MISS,
+median 783 ms, p99 1,399, n 76, 1.07 deliveries per op. Probes: `factory.floor`
+(`Inventory.rev`) 22 ms; `presets.save.small` 27 ms; `inventory.page1` 28 ms; `presets.list64`
+(64 handles, lightest guard; b675ac1623, 10 s windows) 40 ms. `inventory.fill` (20 `addAll` of
+50) 22.6 s, about 22 ms an entry. So a handle in a message costs about 0.3 ms; a record of the
+row or endowment shape costs 8-15 ms each in the factory crank. Likely cause: the guard's
+pattern checks of `M.splitRecord` records (the guard files build every record with
+`splitRecord`); in Node the same `InventoryPage` check is 0.97 ms with `splitRecord` rows and
+0.41 ms with plain copyRecord patterns. Page position (first or last of 20) did not move the
+time (736-830 ms), so the inventory's `Map` walk is not the cost.
+Fit: poor for paged object lists: objects-not-names makes every row a record with handles and
+every record pays the guard walk in an interpreted vat; budgets set as "one crank" do not hold
+for 50-row pages. Remedies (not made here): plain record patterns for closed records in the
+guard files, or pages of 25.
+
+### J-0790 2026-11-18 M5 packages and mentions - built
+Evidence: W5.7 commits fdd58c2a2e (packages, mentions, queue attachments), a19854f5b2 (unit
+tests), 008c12f87c (Composer), 623a2b04b2 (integration and perf files), 26978a0d2e; new
+`guest/session/packages.js`, `guest/session/tools/mentions.js`; edits to `pending-queue.js`,
+`queue.js`, `submissions.js`, `turn-hooks.js` and `AH/composer.js`. Unit `m5-w57-packages` (11)
+and `m5-w57-composer` (4), about 1 s.
+Reading: an entry keeps `attachments`; the receipt keeps the labels beside the fingerprint, so a
+retry under one request id must carry the same labels in the same order (objects not compared).
+An edit keeps them; a cancel or the claim replaces the entry's item without them, so after the
+claim only the turn's package holds the objects and `onSettle` (also run by recovery's settle,
+plus an idempotent `recoverySteps` entry) drops them. The hooks reach the session's package
+table through a WeakMap from `SessionCore` (no name). `adopt` is `site: 'session'` and settles in
+the issuing crank; `adoptTool` uses W5.6's `grant(tool, 'adopted')` and `schemaRead`. In the
+fake session: the R4-29 line on every round of its turn and not the next; `noPackage` after the
+turn; a turn recovered after an adapter restart closes its package while the held entries keep
+theirs and run later as packages #2 and #3 with their own lines.
+Fit: good: the heap is the package table, so K6 needs no code (held entries and their objects
+survive in the session heap). Packages and attachments are bounded retained state (32 per
+message; receipts' labels at most 4,096 x 32 x 80 units).
+
+### J-0791 2026-11-18 M5 W5.7 deviations from the contract - deviation
+Evidence: the files of J-0790.
+Reading: (1) `makePackages().take(number, edge, turnId?)` takes the turn id as a third argument
+(the "open in the current turn" rule); it does not remove the edge (an edge can be adopted twice,
+as Fae). (2) The packages part value is `{ table, enqueueMessageOnce }`; `table` is the
+`makePackages` object. (3) `adoptTool` is offered only with `services.execVat` (the schema read
+is an inspector call); `adopt` always (acceptance 7 needs `noPackage` after the turn). (4)
+`toolName` is checked with the endowment label rule but is not kept by the grant: W5.6's grant
+has no display label. (5) Fae's wording "in your directory" and "in the tools/ directory" is
+dropped from the `petName` and `toolName` parameter descriptions. (6) An attachment label that
+breaks the endowment rule is refused with `textOf.reservedLabel`. (7) A staged text with
+attachments is refused over 3 x 64,000 bytes with `packageTooLong(ceil(bytes / 3))`; the Composer
+checks the exact units before staging.
+Decision: reported to the PM.
+
+### J-0792 2026-11-18 M5 session program over the 262,144-byte cap - perf
+Evidence: `node scripts/bundle-guest.mjs session` at 26978a0d2e with W5.5's and W5.6's
+committed files: 272,125 bytes; `m5-mentions` (integration) failed at session creation with "A
+session program is at most 262144 bytes in this build" (298 s wall, most of it waiting for the
+run lock).
+Reading: W5.7 adds about 12.6 KB (packages.js 2.7 KB and mentions.js 5.7 KB after comment
+stripping, two module wrappers, about 0.6 KB of queue edits); W5.5 and W5.6 about 19 KB. Without
+W5.7 the bundle would be about 259.5 KB, just under the cap; with it no session can be created
+in this lane, so the two W5.7 integration files and the perf check have not run. The bundle's
+text is about 13 % leading indentation and blank lines: removing them (outside template
+literals) measures 231,377 bytes, under O-1's 240,000.
+Fit: poor on bytes, as J-0752 found: each M5 unit's modules ship whole into every session vat.
+A whitespace pass in `scripts/bundle-guest.mjs` (AST-aware, like its comment strip) recovers
+about 40 KB at once; splitting `interfaces-m5.js` per vat is the next lever.
+
+### J-0780 2026-11-18 M5 granted tools - built
+Evidence: `guest/session/tools/granted.js` (35f3e00c02), the `grants` part and the `toolSources`
+entry (lines in 40d09eaf84), `test/unit/m5-w56-grants.test.js` (12 tests, about 1 s).
+Reading: `makeGrants(runtime)` keeps up to 32 grants in the session heap with one `ToolGrant` exo
+each, and answers `{ facet, grant(tool, source), schemaRead(grant), entriesFor(ports, builtIns),
+size }`. The schema read is an inspector `toolSchema` sent in the `grantTool` crank on the last
+ports the source saw (the open at creation feeds it, so a grant outside a turn has
+`BlobWriters`). States are set at every round: built-in names (the static table, available or
+not, plus the round's adapter tools) and duplicates are returned for `toolSetFor` to refuse again
+through `entry.refused`, so clashes with another source are caught; budget refusals are the
+source's own (oldest first, then newest refused). A pending read issued on older ports is read
+again on newer ones; a late answer after `withdraw` is ignored. A granted call is an inspector
+`toolExecute` with the exec deadline hook.
+Fit: good. Heap-resident grants need no persistence code; the per-round recompute is a pass over
+at most 32 records.
+
+### J-0781 2026-11-18 M5 W5.6 deviations and measurements - deviation
+Evidence: the files of J-0780; a Node micro-check of `toolSetFor` over 10 s per point, load
+average 7.5-8.9.
+Reading: (1) The `toolSources` entry is an arrow in `tool-table.js` that passes
+`builtInToolNames(ports)` as a fourth argument to `grantedToolSource`: importing the table from
+`granted.js` would be an import cycle that evaluates `toolSources` before `grantedToolSource` is
+bound (session.js imports `m5-parts.js` first). (2) A failed schema read of any kind (refusal,
+thrown error, `inspectTerminated`) is `refused-schema`, its reason wrapped in
+`toolSchemaInvalid` when it is not already. (3) Tool-set cost in Node: 0.0048 ms median with no
+grants, 0.0178 ms with 32 (p99 0.026 ms), against the 10 ms engine budget. (4) W5.6 adds 9,603
+bytes to the session bundle (272,125 with it, 262,522 without, at HEAD 008c12f87c).
+Decision: reported to the PM.
+
+### J-0782 2026-11-18 M5 granted tools not run in a daemon - perf
+Evidence: `corepack yarn test:integration test/integration/m5-grants.test.js`: 368 s wall
+(304 s waiting for the run lock), failed at session creation with "A session program is at
+most 262144 bytes in this build" (J-0792).
+Reading: acceptance 6, 11b (K4, K5) and the `grants.round` row are written but have not run: no
+session can be created in this lane until the bundle is under the factory's cap. Their exec-side
+half (`toolSchema`, `toolExecute` in a real exec vat, presences of workspace-vat tools passed to
+the session through the control client) is untested.
+Fit: poor on bytes (as J-0752, J-0792): every unit's session module ships into every session vat.
+
+### J-0770 2026-11-18 M5 powers source and inspection tools - built
+Evidence: commits 40d09eaf84, c7c3af7ffc; `guest/session/powers-source.js` (`powersPart`: the
+`ExecPowersSource` exo itself, one label-map operation per method), `guest/session/tools/
+inspection.js` (`describeCapability`, `readSources`, `inspectorPart`), appends in `m5-parts.js`,
+`tool-table.js` and `scripts/provision-steps.js` (H-10's two option-forwarding lines, made here
+since M3 is not in the lane, and the `m5 fixtures` step, a no-op without `options.m5Fixtures`);
+`test/unit/m5-w55-powers.test.js` (8 tests, 1.4 s).
+Reading: `lookup` of an uncached object is one inspector `methods` call whose names are cached on
+the binding; the second lookup makes no call. Fae's descriptions are kept except the sentences
+naming an Endo mount, `readText` and `endo_exec` (now `read`, exec, "a source capability that
+implements SourceReader.read"; the "scans at most 1 MiB" clause is dropped: the callee bounds its
+scan). A harness text, `"<label>" holds a stored value, not a capability; use lookup to read it`,
+answers both tools on a JSON label (Fae would fail without a reason).
+Decision: as built.
+
+### J-0771 2026-11-18 M5 objects and security in a daemon - test
+Evidence: `test/integration/m5-objects.test.js` (acceptance 3 remote, 4, 5, 8, K7: 37.6 s in the
+test, 97 s wall), `m5-security.test.js` (acceptance 10: 80.6 s, 139 s wall), both on the m5o
+template (m1b provisioning plus the fixture step; build 58-61 s). Both ran against a copy of the
+guest tree without the W5.7 (and for objects W5.6) parts, because the lane's session program
+(272,125 bytes) is over the factory's 262,144-byte cap (J-0792); the committed tests use the real
+tree.
+Reading: an undeclared name in exec reads as `undefined` (J-0472 holds). K7: the turn killed in
+a 4 s exec sleep is outcome-unknown at serving (restart served in 7.6-8.2 s); that call's
+`powers` rejects `powersExpired` after the restart; `globalThis.y` survived. A 200,000-character
+`help()` did NOT stop the exec vat: the inspector cut and staged it (8,194 bytes); a granted
+tool's 300,000-character answer did stop it (`inspectTerminated`), and the session's next turn
+completed. So the receive halt lies between 200 KB and 300 KB on this worker, not about 94 KB
+(fact 2); the contract's acceptance 5 expectation (terminated) was relaxed to "staged or
+terminated".
+Fit: good: the inspector made a hostile answer an exec-scope loss only, as designed.
+
+### J-0772 2026-11-18 M5 exec perf and tools.inspect - perf
+Evidence: commits b19a0fc1aa, 14434fb301; exclusive runs, worker 367e78ad, reduced guest tree
+(J-0771), load average 4-8, window 60 s each.
+Numbers: `exec.powersLookup` 70 ms per lookup (budget 150; 20-lookup call median 1,477 ms vs
+`return 1` 77 ms, n 22+22) pass; `exec.membrane` in vat -17.5 ms (budget +5; 20 wrapped
+`E(calc).add` to the workspace vat 1,181 ms vs 20 `E(powers).lookup` to the session vat 1,531 ms,
+n 15+15) pass, and `exec.membrane.node` +0.001 ms per call (10 s, n 7,306) pass;
+`exec.scope1000` median 91 ms, p95 457 (budget 300, n 74, making the 1,000 globals 744 ms) pass;
+`tools.inspect` median 270 ms, p95 508 (budget 300, n 74) pass. Probes: (a) 100 KiB argument
+refused in 1.1 s, no halt; (b) 200 KB help staged in 22.5 s, no halt; (f1) 300,000 iterations ok
+in 0.6 s; (f2) endless loop terminated in 5.9 s. (c) 20,000-key `help()`: the session and exec
+vats were fine (documentation "unavailable") but the workspace vat that holds the fixture halted:
+MISS of "no halt of the target's vat". Likely cause: the fixture builds the 20,000 fresh keys in
+the workspace vat itself (W5.4's `keyFlood`), so the target drains its own name table; the probe
+needs the flood made in a disposable vat. Each exec hop to another vat costs about 60-75 ms.
+Fit: membrane work is negligible (Node microseconds); the hop dominates.
+
+### J-9690 2026-11-18 M5 session program over the O-1 budget and the factory's cap - perf
+Evidence: W5.9, lane m5 at dac0dfd95b (all of group A and B), `scripts/bundle-guest.mjs` (one
+build, Node, about 0.5 s). Bytes (session / exec / factory): M2 base `3588cab190` 186,448 /
+84,354 / 137,074; lane 272,126 / 119,760 / 195,925. O-1 is raised in e59a3d8802 (session
+240,000, exec 120,000), but the session program is 32,126 bytes over it and 9,982 over the
+factory's hard cap (`maxProgramBytes` = `execSourceBytes` = 262,144): no session can be created
+in this lane ("A session program is at most 262144 bytes in this build"). The contract estimated
++25 KB for M5; it is +85.7 KB: 13 new session modules (about 59 KB of code without comments),
+about 1.3 KB of compartment-mapper scaffolding per module (48 KB in all, 37 modules), and the
+edits to `turn.js`, `session.js`, `tool-table.js`. Leading indentation is 35,911 bytes of the
+session program (31.4 KB inside the modules). A bundler change that drops indentation outside
+multi-line strings and templates (lines keep their numbers) gives 241,358 / 106,274 / 175,891,
+whitespace-only (the three bundles with all blanks and tabs removed are identical before and
+after); the session program is then 1,358 bytes over 240,000 and 20,786 under the cap. Collapsing
+the 4,838 blank lines left by stripped comments would reach about 236,500 but breaks the line
+numbers J-0303 kept. The patch is the PM's to apply (`scripts/bundle-guest.mjs` is not an M5
+file); every daemon run of W5.9 used a copy of the lane with it applied.
+Fit: poor for this engine's staging model: the program is one source evaluated in a fresh vat,
+so per-module scaffolding and indentation are paid in every session vat's staging (D-4, about
+10 us per byte); module boundaries that hook tables need cost about 1.3 KB each.
+
+### J-9691 2026-11-18 M5 appends broke M1a and M2 unit tests that pinned hook tables - defect
+Evidence: W5.9 unit lane at 8306377a78 (`ses-ava test/unit test/adapter test/*.test.js`, 65 s):
+11 failures, none run by the group B units. Fixed in 1b02d81354, 8306377a78, 1b355cea07:
+`m1a-provision-steps` (the `m5 fixtures` step), `m5-w53-labels` and `m5-w53-session` (W5.5 and
+W5.7 tool entries, the part table now registers `grants` and `packages`), `m1a-session-turn` and
+`m2-w26-turns` (every session offers `list`, `lookup`, `store`, `remove`, `adopt` without an
+exec vat, so the R4-43 text lists them), `m1a-recovery` (W5.7's recovery step), `m1a-factory`
+(the presets builder; five built-in presets listed), `m2-w26-prompt` (W5.2's documented
+rewrite of the capability paragraph and the appended tools section). Left failing until the
+bundler patch of J-9690: `bundle-guest` and `m1a-session-program` (session program bytes).
+Fit: neutral: hook tables are append-only, so a test that pins a table's whole content breaks
+on every milestone; the M5 tests now pin the merged tables.
+
+### J-9692 2026-11-18 M5 group B integration files, first daemon runs - test
+Evidence: W5.9, copy of the lane (J-9690 bundler patch) under a short path (unix socket paths),
+worker 367e78ad, m5o and m1b templates (built 53-64 s), shared slots. Held (test) time per file:
+`m5-objects` 105 s pass, `m5-security` 135 s pass, `m5-mentions` 128 s pass, `m5-labels` 181 s,
+`m5-presets` 237 s, `m5-prompt` 291 s (wall with the three together) pass; `m5-grants-restart`
+146 s FAIL, `m5-grants` 77 s FAIL, `m5-mentions-restart` 134 s FAIL. Causes and fixes:
+`m5-grants-restart` and the `attachments33` probe made request ids `Date.now()-k5`, refused by
+M2's request id rule (1ccbe46954; rerun: pass, 98 s, K5 tool ran once); `m5-mentions-restart`
+ran `runTurn` for a message submitted behind a restart hold, whose receipt has no turn
+(80c12a475a); `m5-grants`: the deep-schema fixture halted the workspace vat (J-9693; fixture
+fixed in 8c9b8eadcd). Waits for a slot were 0-870 s per file (M3 and M4 exclusive perf runs held
+all four slots back to back), against 67-146 s held.
+Fit: good: K4 (a grant whose schema read was in flight is re-read after the restart) and K5
+(the slow granted tool ran once, the turn is outcome-unknown) held across a real SIGKILL.
+
+### J-9693 2026-11-18 A vat that sends a deeply nested record halts itself - fit
+Evidence: W5.9 scratch probe (m1b template, `makeM5Fixtures`), `E(deepSchemaTool).schema()`
+from the control client: the fixture in the workspace vat builds `parameters` 40 levels of
+`{ type, properties: { a } }` (about 81 nested records) and answers it; the workspace vat's status
+then reads `guest crank halted: StackOverflow(4057)`, every later call into it is broken with the
+hub's retired text (`calc.add` included), and `m5-grants` saw that text as the grant's
+`refused-schema` reason. The exec vat and the session vat were unharmed.
+Reading: the halt is in the sender, while it encodes its own answer, not in the receiver; the
+inspector (D-M5-2) still protects the session, but a hostile fixture placed in the shared
+workspace vat takes every other fixture with it (W5.5's probe c, J-0772, is the same pattern).
+The fixture now nests 16 levels (innermost value at depth 34, refused by the inspector's bound
+of 32).
+Fit: poor: about 80 nested records exhaust a guest stack while encoding; candidate core request
+(the encoder should refuse a value too deep to send with an error, not halt the vat). Hostile
+fixtures belong in a disposable vat.
+
+### J-9694 2026-11-18 M5 acceptance 1, 9 (part 7) and 12; the eleven M5 files pass - test
+Evidence: W5.9 commits 0f0416ca58, 2b360be67e; the J-9692 copy, worker 367e78ad. `m5-snapshot`:
+a user preset with 1,533-unit three-byte instructions X (composed prompt 8,300 bytes, staged by
+the factory) and endowment `notes`; after the preset is saved with Y and no endowment, session A's
+next requests carry the same `systemDigest` and `list` still shows `notes`; session B carries Y
+as part 7 (3,808 bytes) and lists nothing; 21.8 s held. `m5-reachability` (a) the return-guard
+closure from `MakeArgs` plus `SessionGrants`, `ToolGrant`, `ExecPowersSource`, `ExecScope` (17
+interfaces) holds no `PresetCatalog`, `Preset`, `Inventory`, `InventoryEntry`, `Operator`,
+`SessionFactory`, `HarnessRoot`, `AgentHostAdmin`, `SecretsAdmin`, `Secret`, `SecretWriter`; the
+walk from `Operator` finds the four M5 operator interfaces; (b) a session with an endowment, an
+adopted attachment and an offered grant runs adopt, exec `powers.lookup` + call, the granted
+`echo2`, `list`: its vat and its exec vat hold into `app:harness`, `native:agentHostAdmin`,
+`workspace:w` (the fixtures) and each other only, no other session or exec vat, and the turn adds
+no origin; 34 s held. Reruns after the J-9692 fixes: `m5-grants` pass (40 s), `m5-grants-restart`
+pass (98 s), `m5-mentions-restart` pass (65 s). All eleven M5 integration files pass.
+Reading: object granularity for (b) waits on CC-060 (M4): origin `app:harness` is the factory
+vat, which also holds the catalogue and inventory.
+Fit: good: the snapshot is plain heap data in the session (no versioned preset store), so
+acceptance 1 needs no code beyond the factory's copy.
+
+### J-9695 2026-11-18 M5 creation perf (creation-m5) - perf
+Evidence: `perf/creation-m5.perf.mjs` (e502225489, 2b360be67e), exclusive run 05:51-05:57 in
+the J-9692 copy (bundler patch applied), worker 367e78ad, m5o template, load 2.2-4.6.
+Numbers: `session.program` 241,361 bytes, budget 240,000 strict: MISS by 1,361 (J-9690);
+`exec.program` 106,277 / 120,000 pass. `prompt.compose.node` (10 s, n 2,577,468) median 0.002
+ms, p99 0.003 ms for a 7,839-unit prompt (budget 5 ms) pass. `prompt.compose` (120 s window,
+pool 4, each creation after `whenSettled`): `chat-only` median 1,277 ms (n 10), the largest
+preset (4,096 three-byte units of instructions, prompt staged; 32 endowments) 1,622 ms (n 10):
++345 ms (budget +150) and 1,622 ms (budget 750): MISS on both. `session.createCold` (120 s, no
+spare, n 17) median 7,341 ms, p95 7,500 (budget 6,000): pass only under the 1.25 x rule (1.22 x),
+41 deliveries per creation.
+Reading: likely causes, not yet separated: the pooled `chat-only` creation is 1.5 x M2's 849 ms
+(M2 outcome table): a sleeping spare's wake now restores a heap built from a program 30 % larger,
+and `make` seeds the label map and four runtime parts; the largest preset adds the staged prompt
+(one blob write in the factory) and a 32-endowment `make` argument (about 6 KB more in one
+frame). The pool hides neither, because the factory's work happens after the take. Cold creation
+grows with program bytes as D-4 predicts (about 10 us per byte: 241 KB staged in 11 pieces).
+Fit: neutral: the costs are the staging model's (C-5, C-7), not M5's logic.
+
+### J-9696 2026-11-18 M5 perf rows of the group A and B files on the merged lane - perf
+Evidence: exclusive runs 05:57-06:42 in the J-9692 copy (bundler patch), worker 367e78ad, load
+2.4-4.7, windows 60 s unless stated. `mentions` (held 150 s): `mentions.turnStart` 32
+attachments 466 ms median (n 103) vs none 144 (n 147): +322 (budget +100) and 466 (350) MISS;
++0.3 deliveries pass. `tools` (370 s): `tools.local` +109 ms per round (852 vs 743, n 37 + 37;
+budget +30) MISS, -0.9 deliveries pass; `labels.full` 1.071 (1.1) pass; `tools.inspect` 339 ms
+(n 56; 300) pass under 1.25 x; `grants.round` 215 ms with 32 offered grants (plain 255; 350) pass,
+tool set 0.018 ms in Node (10) pass; probes d1 (8,193-byte store) 3.6 s, d2 (257th label) 13.9 s,
+d3 (33 attachments, guard) 3.8 s pass; probe e was a placeholder (W5.6 never filled it): built in
+64ef7847c6, rerun alone (`TOOLS_ROWS=tooBig.e`): `refused-schema` "3074 characters of JSON; the
+limit is 2048", no halt, next turn completed, 7.9 s pass. `exec-m5` (298 s):
+`exec.powersLookup` 73 ms (150) pass; `exec.membrane` -10 ms (+5) pass, Node +0.002 ms pass;
+`exec.scope1000` 100 ms (300) pass; probe a refused in the exec vat (307,200 estimated bytes),
+next turn completed, no halt, but the row failed on its own check (it compared with a JSON string
+that kept its closing quote; fixed in 00e7e848f1); b staged 8,194 bytes, no halt pass; c the
+workspace vat halted (J-0772's cause) MISS; f1, f2 pass. `presets` (206 s): `presets.save` with
+32 endowments 264-269 ms (150) MISS, 24-36 ms without; `inventory.page` 801-804 ms (200) MISS,
+24 ms for a one-entry inventory; `inventory.fill` 22.4 s for 20 `addAll` of 50.
+Reading: the misses share one cost: handles. 32 attachments add 322 ms to a turn start, 32
+endowments 240 ms to a save, and a page of 50 entries with their values costs 800 ms, about 7-15
+ms per handle that crosses into or out of a vat in a crank. Paging the inventory by an array
+instead of walking its Map (0ed170b653) changed nothing (801 ms) and was reverted (ef525d98c0).
+`tools.local`'s 109 ms is four tool results recorded and rendered in the round-final crank plus a
+larger next request, against one echo answered by the adapter.
+Fit: poor for reference-heavy messages: per-reference cost in the engine (c-list rows and hub
+refs written per crank, C-2/C-7 family) dominates M5's preset, inventory and mention paths.
+
+### J-9697 2026-11-18 O-1 createCold before and after; the M5 regression's wall time - perf
+Evidence: `perf/session.perf.mjs` (INSTALL_N=1, CREATE_N=5), the same method on both sides, under
+`run-lock --exclusive`: M2 base `3588cab190` (short-path copy) and the M5 lane copy (J-9690
+patch), worker 367e78ad, 06:32-06:40. Before: session program 186,448 bytes, 8 pieces,
+`session.createCold` 5,619 ms median (5,466-5,768), 34.6 deliveries; `install.factory` 5.7 s.
+After: 241,361 bytes, 11 pieces, 7,220 ms (6,919-7,726), 40.6 deliveries; `install.factory` 7.3
+s. `creation-m5`'s window row: 7,341 ms (n 17). Regression: the eleven M5 integration files held
+a slot 78-211 s each, 22.7 slot-minutes in all; the five perf files held all four slots 286 + 150
++ 370 + 298 + 206 s = 21.8 minutes. Waits for the lock: 0-1,705 s per integration file and 93-437
+s per perf file, mostly behind other lanes' exclusive perf runs held back to back.
+Reading: +1.6 s of cold creation for +54,913 bytes and +6 deliveries: about 29 us per byte if all
+of it were staging, three times D-4's 10 us; part is M5's `make` (label map, parts, grants open).
+Within 6 s x 1.25 still, but the pool is what keeps creation interactive. The regression cannot
+finish in 20 minutes on four slots: the exclusive perf files alone take 21.8 minutes; with the
+integration files spread over four slots (about 6 minutes) it is about 28 minutes, before waits.
+Fit: neutral for creation; poor for the shared machine's schedule: an exclusive waiter blocks new
+shared takers, so a lane whose perf files queue back to back starves the other lanes' integration
+files (one file here waited 28 minutes for 98 s of work).
+
+### J-9698 2026-11-18 The J-9690 whitespace patch, rebuilt at the bundle level - perf
+Evidence: W5.9 after the 06:55 restart (the short-path lane copy holding the J-9690 patch was in
+a cleared temporary directory and is gone); lane HEAD 8601eb5fec, Node only, about 0.9 s.
+Applied once to the whole bundle after `makeBundle` (before `escapeNonAscii`), not per module:
+parse the bundle as a script, keep every `TemplateLiteral` and every string literal spanning a
+line, drop `[ \t]+` at each other line start. Bytes (session / exec / factory): 272,129 /
+119,763 / 195,928 -> 236,218 / 104,193 / 171,868. The bundle-level form also strips
+compartment-mapper's scaffolding indentation, so the session program is 3,782 under O-1's 240,000
+(the per-module form was 1,358 over). Checks: line counts equal, bytes equal with all blanks and
+tabs removed, Babel token streams (type and value) identical (57,841 / 24,766 / 39,367 tokens);
+the `m1a-session-program` test body run on the dedented bundle (a temporary copy, removed)
+evaluates it with the prelude alone and completes a turn. Not run in a daemon; `session.createCold`
+after the patch is unmeasured (expected below J-9697's 7,220 ms by about 36 KB of staging).
+Fit: good: a whitespace pass that keeps line numbers buys 13 % of the session program; the
+program bytes are paid per vat (D-4), so it is worth doing in the bundler, not by hand.
+
+### J-9710 2026-11-18 M5 lane review (M5-QC): verdict and findings - review
+Evidence: M5-QC read `git log -p 36b3035e92..2f7920418f` (84 files, all under the harness
+package; none in `packages/thixotrope` or `rust/`), ran the unit, integration and seam files
+(J-9711). Verdict: accept with fixes; no security hole, no duplicated provider request or tool run
+across the kill points, no private data in a committed line (scan for paths, hosts, addresses,
+key shapes: clean). Fixes before the merge: (1) lane HEAD cannot create a session: the session
+program is 272,129 bytes, over the factory's 262,144 cap and O-1's 240,000 (`bundle-guest`,
+`m1a-session-program` fail); W5.9's bundle-level indentation pass (J-9698, not applied) gives
+236,218, only 3,782 bytes of room. (2) `test/integration/m1a-provision.test.js` line ~129 fails
+whenever the template is rebuilt: its expected step list lacks `['m5 fixtures', true]`.
+(3) The membrane lets a presence outlive its call: `membraneE.get` answers and answer parts nested
+deeper than 64 are returned unwrapped (`membrane.js` lines 221, 307), so the model keeps a raw
+presence on `globalThis` and later calls send to it (still measured, never `powersExpired`). No
+authority is gained (the model could `store` it), but rule 12.13's "dies with the call" does not
+hold; wrap `get` answers and refuse past the depth. Minor: the TS1003 that stops `lint:types` is
+`@-mention` in `contract-m3.js` line 336 (a JSDoc tag), not `[start, end)`; commit 40d09eaf84
+holds W5.6/W5.7 seam lines before their modules (unbuildable until fdd58c2a2e); acceptance 12
+is shown by guard closure plus vat edges, not object reachability; K5's second kill point is
+not written; W5.8 (acceptance 15) is not built.
+
+### J-9711 2026-11-18 M5 lane test runs and wall times (M5-QC) - test
+Evidence: M5-QC, lane 2f7920418f cloned (APFS copy, no git) to a short path with J-9698's pass
+applied to the copy's `scripts/bundle-guest.mjs` (and `@-mention` reworded in the copy's
+`contract-m3.js` for `tsc`), worker 367e78ad, 6 slots shared with three other lanes' runs.
+Unit and adapter (lane itself, no supervisor, 62 s): every M5 file and the M1a/M1b/M2 seam files
+pass except `bundle-guest` and `m1a-session-program` (272,129 bytes); both pass on the copy.
+`tsc` on the copy: clean except the copy's own patch placement. Integration, 11 M5 files, 6 at
+once, 1,695 s wall, all pass; held s: presets 334 (over the 5-minute acceptance box), security
+252, grants 258, mentions 198, labels 180, objects 192, grants-restart 177, mentions-restart 136,
+prompt 110, snapshot 98, reachability 85; waits 77-1,307 s. Seam files, 4 at once, 1,553 s
+wall: m1a-slice-restart (267), m1b-exec-tool-restart (124), m1b-qc (124), m2-catalog (89),
+m2-queue (177), m2-turns (173), m2-lifecycle (426, over 5 minutes) pass; m1a-provision (116)
+fails (J-9710 fix 2). Perf files were read, not rerun (exclusive mode stops every lane; J-9695,
+J-9696 hold the numbers): each row is a fixed window; probe c halts the workspace vat that holds
+the fixtures, so it cannot show what it names.
+Fit: poor for the shared machine: 1,695 s of wall for 2,020 s of held work at six slots, most of
+it waiting behind other lanes.
+
+### J-9720 2026-11-18 M5 review fixes (M5-FIX) - fix
+Evidence: M5-FIX on the lane after e9e87d5882, commits 6c96ed06b2..2507e005cc. (1) The
+bundle-level indentation pass (J-9698) is committed as `dropIndentation` in
+`scripts/bundle-guest.mjs`: session / exec / factory 236,218 / 105,230 / 171,868 bytes (exec
+includes this unit's membrane change, +1,037); a session can be created again. (2) The membrane:
+`E.get` through a wrapper answers a wrapper, a get on an ended call's wrapper is refused with
+`powersExpired`, and an answer holding a remotable or promise below depth 64 is refused
+(`membraneTooDeep(64)`) while plain data there passes; two unit tests in `m5-w54-exec`.
+(3) `m1a-provision` expects `['m5 fixtures', true]`. (4) Probe c's 20,000-key flood is installed
+per run in a disposable vat (`keyFloodProgram`), out of the workspace fixtures.
+Fit: good: a disposable vat is one `install` call, so a test that must watch a vat halt can put
+the victim in a vat of its own instead of next to the fixtures; poor: the membrane can only wrap
+what comes back through it, so a model-made object handed to another vat still receives raw
+presences as call arguments (not measured as a leak here; no new authority).
+
+### J-9721 2026-11-18 M5-FIX runs and wall times - test
+Evidence: M5-FIX, worker 367e78ad, shared slots. Unit (no supervisor): `bundle-guest`,
+`m5-w54-exec`, `m5-w54-client`, `m1a-session-program`, `m1b-exec-vat`: pass, about 2 s each run.
+Integration: `m1a-provision` with `M1A_REBUILD=1` pass (145 s wall, 85 s test); `m5-objects` and
+`m5-security` pass (97 s wall together, two slots; template rebuilt for the new fixture source).
+`perf/exec-m5.perf.mjs` run `--shared` with `EXEC_M5_WINDOW_MS=3000` to check the probes only
+(149 s wall; its timed rows are not measurements and are not recorded): probe c passes in 6,677 ms
+of its 30,000 ms cap, the next turn completes, no session or workspace vat halted; probes a, b, f1,
+f2 pass. The 60 s-window rows of J-9695/J-9696 are not remeasured.
+Fit: neutral: checking a probe's correctness does not need the exclusive lock; only the timed rows do.

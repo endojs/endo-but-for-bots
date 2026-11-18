@@ -1,8 +1,8 @@
 // @ts-check
 /**
- * The session's system prompt at creation (M2 W2.6; R4-26, R4-27, R4-28;
- * `designs/m2-interfaces.md` 10). Moves to M5 with the presets
- * (milestones.md "Ownership transfers").
+ * The session's system prompt at creation (M2 W2.6, owned by M5 W5.2 since
+ * the presets; R4-26, R4-27, R4-28; `designs/m2-interfaces.md` 10,
+ * `designs/m5-interfaces.md` 2.3.1). Runs in the factory bundle.
  *
  * `promptResolver` is the W2.6 entry of `guest/factory/session-options.js`
  * `optionResolvers`; it runs in the factory vat after the preset snapshot
@@ -11,8 +11,10 @@
  * - `systemPrompt` given: it replaces the composed prompt entirely (R4-27);
  *   a blank one (empty or white space only) fails creation with
  *   `texts.blankSystemPrompt`, before any row or vat is made (R4-6).
- * - otherwise the fixed composition of `guest/lib/system-prompt-base.js`
- *   (parts 1, 2 and 7), spoken when `spoken: true` was given.
+ * - otherwise the composition of `guest/lib/system-prompt-base.js` over the
+ *   section table `guest/lib/prompt-sections.js` from the resolved preset
+ *   snapshot (part 7 is its `instructions`), spoken when `spoken: true` was
+ *   given.
  * - a prompt over `inlineBytes` is staged through
  *   `E(context.admin).writersFor()` (no session yet: the session holds the
  *   StagedText from its first use, M1b 17.3), in pieces of at most
@@ -72,12 +74,9 @@ export const promptTextFor = (options, resolved) => {
     }
     return given;
   }
-  const presetText = resolved.presetSnapshot?.instructions;
   return composeSystemPrompt({
     spoken: options.spoken === true,
-    ...(typeof presetText === 'string' && presetText !== ''
-      ? { presetText }
-      : {}),
+    snapshot: resolved.presetSnapshot,
   });
 };
 harden(promptTextFor);

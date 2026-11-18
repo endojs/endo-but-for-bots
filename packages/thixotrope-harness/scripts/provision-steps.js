@@ -116,8 +116,12 @@ export const names = harden({
  */
 export const programPieceBytes = limits.frameBytes - 1024;
 
-/** The session program's size budget (architecture D-4, perf `session.program`). */
-export const sessionProgramBytes = 200_000;
+/**
+ * The session program's size budget (architecture D-4, perf
+ * `session.program`): `limits.sessionProgramBytes`, raised from 200,000 by
+ * M5 (contract O-1).
+ */
+export const sessionProgramBytes = 240_000;
 
 /**
  * @typedef {object} StepContext

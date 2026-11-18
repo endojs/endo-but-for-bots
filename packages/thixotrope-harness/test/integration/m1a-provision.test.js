@@ -140,6 +140,9 @@ run('provision, create, list, lost after restart', async t => {
         ['gateway', true],
         // M4's registered step, skipped without options.subscriptions.
         ['subscriptions', true],
+        // M5's registered step (50-m5-fixtures.js), a no-op without
+        // options.m5Fixtures.
+        ['m5 fixtures', true],
       ],
     );
     const byName = new Map(buildReports.map(r => [r.name, r]));

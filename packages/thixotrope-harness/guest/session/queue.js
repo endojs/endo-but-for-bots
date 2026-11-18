@@ -76,7 +76,8 @@ const VIEW_OVERHEAD_BYTES = 64;
  * @property {number} at
  * @typedef {{ entries: PendingRow[], hold?: Hold }} PendingView
  * @typedef {object} Queue
- * @property {(submission: Submission, requestId: string, at: number) => { receipt: Receipt, added: boolean }} enqueueOnce
+ * @property {(submission: Submission, requestId: string, at: number, attachments?: readonly { label: string, value: any }[]) => { receipt: Receipt, added: boolean }} enqueueOnce
+ *   M5: `attachments` are kept in the entry (`packages.js` checks them)
  * @property {(requestId: string) => Receipt | undefined} receiptFor
  * @property {() => PendingView} view
  * @property {() => QueueItem | undefined} first
@@ -203,8 +204,13 @@ export const makeQueue = ({
   };
 
   /** @type {Queue['enqueueOnce']} */
-  const enqueueOnce = (submission, requestId, at) => {
-    const { stored, added } = submissions.enqueue(submission, requestId, at);
+  const enqueueOnce = (submission, requestId, at, attachments = undefined) => {
+    const { stored, added } = submissions.enqueue(
+      submission,
+      requestId,
+      at,
+      attachments,
+    );
     return harden({ receipt: receiptOf(stored, !added), added });
   };
 

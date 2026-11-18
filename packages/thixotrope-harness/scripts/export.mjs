@@ -12,6 +12,8 @@
  *
  *   { type: 'factory', settings }     backends by label, default model,
  *                                     turn deadline
+ *   { type: 'presets', records }      user presets (M5 W5.1): every field
+ *                                     but the endowments, backend by label
  *   { type: 'session', head }         per session: info, config, usage,
  *                                     archive state, hold
  *   { type: 'records', from, records } in log order; every staged field is
@@ -36,9 +38,15 @@
  * imported turns are not sealed it waits for the session's seals (it reads
  * the head page's archive state).
  *
+ * Presets (M5 W5.1, acceptance 14): export reads the user presets through
+ * `Operator.getPresets()` (`describe()` each); import creates each one with
+ * `PresetCatalog.create` at the current revision, its backend matched by
+ * label as a session's.
+ *
  * Not exported (documented losses): exec scope bindings (the exec vat's
- * scope is not in any record); secret values (re-create them); presets
- * (M5). An archived turn's records come back in segment order: tool results
+ * scope is not in any record); secret values (re-create them); preset
+ * endowments and built-in presets' edits (objects are not exported; a
+ * built-in comes back as shipped). An archived turn's records come back in segment order: tool results
  * in call order, and a `TurnResolved` sealed after its turn right after it.
  */
 import './_init.mjs';
@@ -173,7 +181,63 @@ const harnessOf = async client => {
   const admin = await client.call('lookup', names.agentHost);
   const operator = await E(root).getOperator();
   const factory = await E(operator).getFactory();
-  return { root, admin, factory };
+  return { root, admin, factory, operator };
+};
+
+/**
+ * M5 W5.1: the user presets of a state as export records (endowments and
+ * built-ins left out; the backend by label).
+ * @param {any} operator
+ */
+const exportPresets = async operator => {
+  const catalog = await E(operator).getPresets();
+  const records = [];
+  for (const preset of await E(catalog).list()) {
+    const view = await E(preset).describe();
+    if (!view.builtIn) {
+      /** @type {Record<string, unknown>} */
+      const record = {
+        label: view.label,
+        template: view.template,
+        description: view.description,
+        instructions: view.instructions,
+        networkPolicy: view.networkPolicy,
+        objects: view.objects,
+      };
+      if (view.backend !== undefined)
+        record.backend = await labelOf(view.backend);
+      if (view.modelId !== undefined) record.modelId = view.modelId;
+      if (view.reasoningEffort !== undefined)
+        record.reasoningEffort = view.reasoningEffort;
+      records.push(record);
+    }
+  }
+  return records;
+};
+
+/**
+ * M5 W5.1: create each exported preset (backend matched by label).
+ * @param {any} operator
+ * @param {any[]} records
+ * @param {Map<string, any>} byLabel
+ */
+const importPresets = async (operator, records, byLabel) => {
+  const catalog = await E(operator).getPresets();
+  for (const { backend: label, ...rest } of records) {
+    /** @type {Record<string, unknown>} */
+    const record = { ...rest };
+    if (label !== undefined) {
+      const backend = byLabel.get(label);
+      if (backend === undefined)
+        throw Error(
+          `no backend labelled ${JSON.stringify(label)} in this state (preset ${JSON.stringify(rest.label)})`,
+        );
+      record.backend = backend;
+    }
+    const { revision } = await E(catalog).configuration();
+    await E(catalog).create(harden(record), revision);
+  }
+  return records.length;
 };
 
 /** @param {any} backend */
@@ -185,11 +249,11 @@ const labelOf = async backend => (await E(backend).describe()).label;
  * @param {any} options.client a control client on the harness workspace
  * @param {string} options.file
  * @param {number} [options.recordsPerLine] records per `records` line
- * @returns {Promise<{ sessions: number, skipped: number, records: number, archivedTurns: number, texts: number, ms: number }>}
+ * @returns {Promise<{ sessions: number, skipped: number, presets: number, records: number, archivedTurns: number, texts: number, ms: number }>}
  */
 export const exportState = async ({ client, file, recordsPerLine = 512 }) => {
   const t0 = performance.now();
-  const { root, admin } = await harnessOf(client);
+  const { root, admin, operator } = await harnessOf(client);
   const content = await E(admin).content();
   /** @type {any} */
   let history;
@@ -197,6 +261,7 @@ export const exportState = async ({ client, file, recordsPerLine = 512 }) => {
   const counts = {
     sessions: 0,
     skipped: 0,
+    presets: 0,
     records: 0,
     archivedTurns: 0,
     texts: 0,
@@ -236,6 +301,9 @@ export const exportState = async ({ client, file, recordsPerLine = 512 }) => {
         }
 
         await out.write({ type: 'factory', settings: exported });
+        const presets = await exportPresets(operator);
+        counts.presets = presets.length;
+        await out.write({ type: 'presets', records: presets });
       }
       for (const entry of page.sessions) {
         if (entry.state === 'lost') {
@@ -371,7 +439,7 @@ const isText = field =>
  * @param {any[]} [options.backends] backends to match by label besides the
  *   factory's `listBackends()` (a test's scripted backends)
  * @param {(progress: { session: number, records: number, turns: number, ms: number }) => void} [options.onProgress]
- * @returns {Promise<{ sessions: any[], records: number, turns: number, chunks: number, waits: number, waitMs: number, ms: number }>}
+ * @returns {Promise<{ sessions: any[], presets: number, records: number, turns: number, chunks: number, waits: number, waitMs: number, ms: number }>}
  */
 export const importState = async ({
   client,
@@ -380,14 +448,21 @@ export const importState = async ({
   onProgress,
 }) => {
   const t0 = performance.now();
-  const { root, admin, factory } = await harnessOf(client);
+  const { root, admin, factory, operator } = await harnessOf(client);
   /** @type {Map<string, any>} */
   const byLabel = new Map();
   for (const backend of [...(await E(factory).listBackends()), ...backends]) {
     const label = await labelOf(backend);
     if (!byLabel.has(label)) byLabel.set(label, backend);
   }
-  const totals = { records: 0, turns: 0, chunks: 0, waits: 0, waitMs: 0 };
+  const totals = {
+    presets: 0,
+    records: 0,
+    turns: 0,
+    chunks: 0,
+    waits: 0,
+    waitMs: 0,
+  };
   /** @type {any[]} */
   const sessions = [];
   /** @type {{ session: any, internal: any, writers: any, chunk: any[], bytes: number, from: number, turns: number, sealed: number } | undefined} */
@@ -478,6 +553,8 @@ export const importState = async ({
         changes.turnDeadlineMs = settings.turnDeadlineMs;
       if (Object.keys(changes).length > 0)
         await E(root).configure(harden(changes));
+    } else if (line.type === 'presets') {
+      totals.presets += await importPresets(operator, line.records, byLabel);
     } else if (line.type === 'session') {
       if (current !== undefined) await abandon('starts another session');
       const { head } = line;

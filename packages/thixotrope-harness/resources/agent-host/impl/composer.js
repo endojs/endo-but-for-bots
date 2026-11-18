@@ -26,10 +26,23 @@
  * nothing. The text the edit replaced is the session's to drop; a staged
  * one's file stays until the session is deleted or M13's sweep (J-0452).
  *
+ * M5 (W5.7; m5-interfaces.md 2.6, H-7): the guard is `m5Interfaces.Composer`
+ * and `submit` takes an optional fourth argument `{ attachments }`. With a
+ * non-empty list the text is first checked against `packageTextUnits`
+ * (before anything is staged), then sent with
+ * `E(session).enqueueMessageOnce(submission, requestId, at, attachments)`;
+ * otherwise `enqueueOnce` as before. The session's attachment refusals are
+ * refusals before storing (a staged file is deleted).
+ *
  * Node module (adapter); the guest prelude is on `globalThis`.
  */
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
-import { m2Interfaces, texts, textOf } from '../../../guest/lib/interfaces.js';
+import { texts, textOf } from '../../../guest/lib/interfaces.js';
+import {
+  m5Interfaces,
+  textOf as textOfM5,
+} from '../../../guest/lib/interfaces-m5.js';
+import { limitsM5 } from '../../../guest/lib/limits-m5.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { utf8Bytes } from '../../../guest/lib/bounded.js';
 import { isRetiredBreak } from '../../../guest/lib/retired.js';
@@ -56,6 +69,13 @@ const QUEUE_REFUSALS = new Set([
 const REFUSAL_PREFIXES = [
   'In "enqueueOnce" method of (Session)',
   'Inline text of ',
+  // M5: `enqueueMessageOnce`'s guard and its attachment checks
+  // (guest/session/packages.js `checkAttachments`).
+  'In "enqueueMessageOnce" method of (Session)',
+  textOfM5.tooManyAttachments(0).split('(')[0],
+  textOfM5.packageTooLong(0).split('(')[0],
+  textOfM5.reservedLabel(''),
+  textOfM5.duplicateAttachment('').split('"')[0],
 ];
 
 /** Text that starts a refusal of `QueueEntry.edit` (its guard or size). */
@@ -152,25 +172,37 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
     return receipt;
   };
 
-  return makeExo('Composer', m2Interfaces.Composer, {
+  return makeExo('Composer', m5Interfaces.Composer, {
     /**
      * @param {any} session
      * @param {string} text
      * @param {string} requestId
+     * @param {{ attachments?: any[] }} [options] M5
      */
-    async submit(session, text, requestId) {
+    async submit(session, text, requestId, options = undefined) {
       if (text.trim() === '') throw Error(texts.blankSubmission);
+      const attachments = options?.attachments ?? [];
+      if (attachments.length > 0 && text.length > limitsM5.packageTextUnits) {
+        throw Error(textOfM5.packageTooLong(text.length));
+      }
+      /** @param {any} submission */
+      const enqueue = submission =>
+        attachments.length > 0
+          ? E(session).enqueueMessageOnce(
+              submission,
+              requestId,
+              now(),
+              attachments,
+            )
+          : E(session).enqueueOnce(submission, requestId, now());
       if (utf8Bytes(text) <= limits.inlineBytes) {
-        return remember(
-          session,
-          await E(session).enqueueOnce(harden({ text }), requestId, now()),
-        );
+        return remember(session, await enqueue(harden({ text })));
       }
       const staged = await stage(text, session);
       /** @type {any} */
       let receipt;
       try {
-        receipt = await E(session).enqueueOnce(staged, requestId, now());
+        receipt = await enqueue(staged);
       } catch (error) {
         // A refusal the session makes before it stores anything (its queue
         // checks, its guard) leaves this file without a holder: delete it
