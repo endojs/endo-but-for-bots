@@ -54,6 +54,31 @@ export const markGatewayLocal = (...values) => {
 };
 harden(markGatewayLocal);
 
+/** @type {WeakSet<object>} */
+const neverLeaves = new WeakSet();
+
+/**
+ * Mark gateway-local objects that must never reach a vat (X-FIX: the page's
+ * secret writer): the bridge refuses a call toward a vat whose arguments
+ * name one (`gatewayTexts.gatewayObject`). Also marks them gateway-local.
+ * @param {...unknown} values
+ */
+export const markNeverLeaves = (...values) => {
+  markGatewayLocal(...values);
+  for (const value of values) {
+    if (value !== null && typeof value === 'object') neverLeaves.add(value);
+  }
+};
+harden(markNeverLeaves);
+
+/**
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+export const isNeverLeaving = value =>
+  value !== null && typeof value === 'object' && neverLeaves.has(value);
+harden(isNeverLeaving);
+
 /**
  * @param {unknown} value
  * @returns {boolean}

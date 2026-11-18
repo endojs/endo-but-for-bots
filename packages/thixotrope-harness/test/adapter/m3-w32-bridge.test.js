@@ -18,7 +18,10 @@ import {
 } from '../../resources/agent-host/impl/gateway/contract-m3.js';
 import { makeBridge } from '../../resources/agent-host/impl/gateway/bridge.js';
 import { checkCall } from '../../resources/agent-host/impl/gateway/guard.js';
-import { makeBootstrapFactory } from '../../resources/agent-host/impl/gateway/powers.js';
+import {
+  makeBootstrapFactory,
+  markNeverLeaves,
+} from '../../resources/agent-host/impl/gateway/powers.js';
 import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary.js';
 import { makeClient } from './_m3-captp-client.js';
 
@@ -116,6 +119,10 @@ const makeWorld = () => {
   const content = Far('Content', { read: () => 'text' });
   const history = Far('History', { page: () => harden({ turns: [] }) });
   const extra = Far('FixtureService', { ping: () => 'pong' });
+  // A gateway object that never leaves the gateway (as GW/index.js marks
+  // the page's secret writer).
+  const confined = Far('GatewaySecretWriter', { publicKey: () => 'k' });
+  markNeverLeaves(confined);
   /** @type {string[]} */
   const limiterLog = [];
   /** @type {Set<string>} */
@@ -152,7 +159,10 @@ const makeWorld = () => {
     content,
     composer,
     history: () => history,
-    extras: [{ label: 'fixture', service: extra }],
+    extras: [
+      { label: 'fixture', service: extra },
+      { label: 'confined', service: confined },
+    ],
   });
   return {
     calls,
@@ -403,6 +413,37 @@ test('page objects and page promises are refused', async t => {
   t.is(world.calls.length, before);
   await E(session).rename('still open');
   t.deepEqual(world.calls.at(-1), ['rename', 'still open']);
+});
+
+test('X-FIX: a gateway object that never leaves is refused as an argument toward a vat; it still answers its own calls', async t => {
+  const world = makeWorld();
+  const pair = connect(world);
+  const powers = await signIn(pair);
+  const writer = powers.extras.find(
+    (/** @type {any} */ x) => x.label === 'confined',
+  )?.service;
+  t.truthy(writer);
+  const factory = await E(powers.operator).getFactory();
+  const { session } = (await E(factory).listSessions()).rows[0];
+  const before = world.calls.length;
+  await t.throwsAsync(() => E(session).rename(writer), {
+    message: gatewayTexts.gatewayObject,
+  });
+  await t.throwsAsync(() => E(session).rename(harden([{ title: writer }])), {
+    message: gatewayTexts.gatewayObject,
+  });
+  t.is(world.calls.length, before, 'nothing reached the vat stand-in');
+  t.deepEqual(
+    pair.logged
+      .filter(event => event.event === 'gateway-refused')
+      .map(event => event.rule),
+    ['gatewayObject', 'gatewayObject'],
+  );
+  // The object itself, and other gateway-local objects as arguments, pass.
+  t.is(await E(writer).publicKey(), 'k');
+  await E(powers.composer).submit(session, 'hi', 'request-2');
+  t.deepEqual(world.calls.at(-1), ['submit', 2, 'request-2']);
+  t.deepEqual(pair.closes, []);
 });
 
 test('unknown targets and slots are refused; the connection stays open', async t => {

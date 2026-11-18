@@ -97,6 +97,11 @@ export const gatewayTexts = Object.freeze({
   unknownMethod: 'unknown method',
   /** A call carrying an object or promise the browser exported. */
   browserObject: 'objects made by the page cannot be sent to the daemon',
+  /**
+   * X-FIX: a call toward a vat carrying a gateway object that never leaves
+   * the gateway (the page's secret writer).
+   */
+  gatewayObject: 'this gateway object cannot be sent to the daemon',
   /** `callsInFlight` exceeded. */
   tooManyCalls: 'too many calls in flight on this connection',
   /** Arguments nested deeper than `argumentDepth`. */

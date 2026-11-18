@@ -10,6 +10,9 @@
  * 1. target: an answer or export the gateway holds (else `notSignedIn`);
  * 2. page objects: no slot the browser exported (`o+n`, `p+n`, `t+n`; else
  *    `browserObject`), and no slot the gateway does not hold (`notSignedIn`);
+ *    toward a vat, no slot naming a gateway object that never leaves the
+ *    gateway (`staysLocal`: the page's secret writer; `gatewayObject`,
+ *    X-FIX);
  * 3. frame: the body's UTF-8 bytes at most `frameBytes`, unless the target
  *    and method are a `LargeCall` (`messageTooLarge`);
  * 4. keys: every key of every plain record in the arguments, to nesting
@@ -66,8 +69,8 @@ export const defaultGuardLimits = harden({
 });
 
 /**
- * @typedef {'target' | 'browserObject' | 'frame' | 'keys' | 'depth' |
- *   'method' | 'inFlight' | 'protocol'} GuardRule
+ * @typedef {'target' | 'browserObject' | 'gatewayObject' | 'frame' |
+ *   'keys' | 'depth' | 'method' | 'inFlight' | 'protocol'} GuardRule
  */
 
 /**
@@ -208,6 +211,8 @@ const isMethodShape = decoded =>
  * @param {(target: unknown, method: string) => boolean} options.isLargeCall
  * @param {number} options.inFlight answered calls to vat targets waiting
  * @param {GuardLimits} [options.limits]
+ * @param {(value: unknown) => boolean} [options.staysLocal] gateway objects
+ *   that never go to a vat as an argument (`powers.js` `isNeverLeaving`)
  * @returns {Refusal | undefined}
  */
 export const inspectCall = ({
@@ -218,6 +223,7 @@ export const inspectCall = ({
   isLargeCall,
   inFlight,
   limits = defaultGuardLimits,
+  staysLocal = () => false,
 }) => {
   const { target, method } = message ?? {};
   if (
@@ -245,12 +251,14 @@ export const inspectCall = ({
     if (slot[1] === '+') {
       return refuse('browserObject', gatewayTexts.browserObject);
     }
-    if (
-      slot[1] !== '-' ||
-      (slot[0] !== 'o' && slot[0] !== 'p') ||
-      targetOf(slot) === undefined
-    ) {
+    const named = slot[1] === '-' ? targetOf(slot) : undefined;
+    if ((slot[0] !== 'o' && slot[0] !== 'p') || named === undefined) {
       return refuse('target', gatewayTexts.notSignedIn);
+    }
+    // X-FIX: an object that stays in the gateway (the page's secret
+    // writer) is never exported to a vat by being an argument.
+    if (!held.local && staysLocal(named.value)) {
+      return refuse('gatewayObject', gatewayTexts.gatewayObject);
     }
   }
 

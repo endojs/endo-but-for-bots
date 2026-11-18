@@ -54,7 +54,7 @@ import { makeCapTP, makeDefaultCapTPImportExportTables } from '@endo/captp';
 
 import { closeCodes, gatewayLimits, gatewayTexts } from './contract-m3.js';
 import { defaultGuardLimits, inspectCall } from './guard.js';
-import { isGatewayLocal } from './powers.js';
+import { isGatewayLocal, isNeverLeaving } from './powers.js';
 
 /**
  * @typedef {object} GatewaySocket what W3.1's server hands `onSocket`
@@ -130,6 +130,9 @@ const labelOf = value => {
  * @param {(event: Record<string, unknown>) => void} options.log
  * @param {(value: unknown) => boolean} [options.isLocal] gateway-local
  *   objects (default `powers.js` `isGatewayLocal`)
+ * @param {(value: unknown) => boolean} [options.staysLocal] gateway objects
+ *   never sent to a vat as an argument (default `powers.js`
+ *   `isNeverLeaving`)
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
  */
 export const makeBridge = ({
@@ -140,6 +143,7 @@ export const makeBridge = ({
   limits = {},
   log,
   isLocal = isGatewayLocal,
+  staysLocal = isNeverLeaving,
   timers = { setTimeout, clearTimeout },
 }) => {
   /** @type {BridgeLimits} */
@@ -386,6 +390,7 @@ export const makeBridge = ({
         isLargeCall,
         inFlight: inFlight.size,
         limits: settings,
+        staysLocal,
       });
       /** @type {string | undefined} */
       let text = refusal?.text;

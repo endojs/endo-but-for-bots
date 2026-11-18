@@ -70,7 +70,11 @@ import {
   makeLargeCalls,
 } from './extensions.js';
 import { makeSignInLimiter } from './limiter.js';
-import { makeBootstrapFactory, markGatewayLocal } from './powers.js';
+import {
+  makeBootstrapFactory,
+  markGatewayLocal,
+  markNeverLeaves,
+} from './powers.js';
 import { makeGatewayServer } from './server.js';
 import { makeSignInStore } from './signin.js';
 import { makeStaticHandler } from './static.js';
@@ -179,7 +183,8 @@ export const makeGatewayService = ({
       return path.publicKey();
     },
   });
-  markGatewayLocal(localWriter);
+  // Gateway-local, and never an argument of a call toward a vat (X-FIX).
+  markNeverLeaves(localWriter);
 
   /** @type {GatewayContext} */
   const context = harden({
