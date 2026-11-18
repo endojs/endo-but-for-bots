@@ -13812,3 +13812,119 @@ share 1.80 % (this unit's part 718 -> 478 lines), ceiling 2.05 % (`d94ad96129`).
 First command 22:56:13Z. Over 60 s: provider adapter lanes 61 s and 62 s; whole adapter lane;
 integration batch (9 files, 3 jobs) 718 s wall, m1a-slice failed once on its parallel-round
 timing ratio (1,863 against 1,078 ms under load) and passed alone (193 s). Fit: neutral.
+
+### J-10205 2026-11-18 T3-SESSION one record preview rule (HR-SYN-28, vat side) - decision
+`guest/lib/record-preview.js` holds `previewRecord(record, { isStaged, intentBytes, finish })`
+and `PAGE_SLACK`, `PREVIEW_INTENTS_BYTES`, `TURN_PREVIEW_KEYS_BYTES`; `guest/session/history.js`
+uses it (its WeakMap cache kept). What differs between the two readers is passed in: the staged
+form (StagedText or `$staged` key), how one intent is measured (the vat's `plainBytes`, the host's
+bytes of the shown form) and whether cut copies are hardened (`finish`, identity in the host).
+`test/unit/record-preview.test.js` compares a kept turn's page with the same records encoded as
+a segment keys them, every kind and cut included. Committed first (`5089ca64db`) so HOST can
+switch `AH/archive/history.js`. Fit: neutral.
+
+### J-10206 2026-11-18 T3-SESSION usage in one module, two rules written (HR-SYN-24 vat side, HR-GUEST-11) - decision
+`guest/session/turn-types.js` (types only, not bundled) types `ActiveTurn`, `TurnInfo`,
+`RoundCalls`, `ToolIntent` once; `recovery.js`'s second `ActiveTurn` went. `guest/lib/usage-counts.js`
+(`zeroCounts`, `addCounts`, `sessionContext`) and `guest/session/usage.js` (`makeUsage({
+contextLength })` -> `addRound`, `settled`, `totals`, `replace`) take the arithmetic out of
+`turn.js`, same order. `m2-interfaces.md` 12 now states the two rules (counts add by named key;
+the reading whole, the catalogue window when stored). `token-usage.js` `addUsage` was not rebuilt
+on `addCounts`: the file is not SESSION's (an adapter frame merge with clamps, another rule on
+purpose) and another unit had it open. `journal-usage.js`: comment only. Fit: neutral.
+
+### J-10207 2026-11-18 T3-SESSION golden trace of the turn runner - verified
+`test/unit/turn-runner-golden.test.js`: one `makeSession` session over fakes runs a two-round turn
+with two tool calls answered out of order, a cancel while a call runs with an entry waiting, a
+turn deadline, a restart after Dispatched (outcome unknown, then `resolve`), a held queue
+released, 165 plain turns and one seal answered by the fake archive; a second session's export
+(a turn still running) is imported into a third, which is then deleted. Every vat call in
+delivery order (endpoint, publisher, outside publisher, row reporter, archive), the records,
+history and export pages, usage, `findTurn` answers: 1,413 lines, sha256
+`eed428b3b8c7c558...`. Taken with `T3_GUEST_ROOT` on the guest tree of `70d7f1486a` (extracted with
+`git archive` under `tmp/T3-SESSION/orig`, since removed) and equal on every later commit of this
+unit. Fit: neutral.
+
+### J-10208 2026-11-18 T3-SESSION turn runner split (HR-SYN-4) - verified
+Extraction order of step3-plan 1.4, unit lane and golden trace green after each commit:
+`outbox.js` (`19ad358149`); one delete fence `{ close, closed }` made in `session.js`, the archive
+and ContextSource made there with `onSealed`/`onNotSealed` bound to the runner, the archive's
+`unresolved` behind `keepUnresolved`/`unresolvedInfo`/`resolve`, `export.js` given `archive` and
+`fence`, runner members `archive`, `deleting`, `turnHandle`, `isLive` gone and export's unused
+`isImporting` too (`c554e80661`; the archive test asserts no claim after `deleteSelf` instead of
+`runner.deleting()`); `turn-index.js` and `turn-import.js` (`31dc091ee7`); `ports.js`
+(`5116a87fab`). `turn.js` 1,728 -> 1,380 lines; each new module has a unit test at its interface
+(`session-outbox`, `session-ports`, `turn-index`, `session-usage`, the archive module test).
+Recovery (`makeRecovery`) moved with section 2. Fit: neutral.
+
+### J-10209 2026-11-18 T3-SESSION runtime parts the one extension (HR-SYN-15) - decision
+`89366b1714`: `turn-hooks.js` deleted; the exec state (module `WeakMap` by ExecHandle; checked
+first: the factory makes one handle per session, `pool.js` `makeExecHandle`) is the `exec` part
+(`state()`, hooks `onCancel`, `onRecover`; `abandon` keeps its early return when the turn has no
+running call); the package hooks are the `packages` part's (`partOf` gone); granted tools are the
+`grants` part's `tools`, and `toolSetFor(ports, table, services, runtime)` passes the round's
+built-in names to each source (computed from the table given; the product passes `toolTable`, as
+the old source assumed). Table `powers, inspector, grants, exec, packages`; `makeRuntime` combines
+hooks once (`onRecover` guarded per part, `nextTurn` first source wins), `runtime.session` and
+`part(name)` gone. `makeRecovery` per session (own generation, no WeakMap); `SessionCore` gone.
+One `enqueue` in `session.js` for both exo methods (`checkAttachments` first). Session options
+`hooks`, `toolSources`, `recoverAfterRestart` gone; tests pass a part; `perf/tools.perf.mjs`
+follows the `toolSetFor` signature. Session bundle 214,932 -> 212,477. Fit: neutral.
+
+### J-10210 2026-11-18 T3-SESSION factory start count and start-listener failure (HR-SYN-36, HR-GUEST-12) - decision
+`63f4168d04`: `guest/factory/starts.js` `makeStartCount()` made in `main.js`, given to the pool
+and the factory kit (and its delete records); `recover` counts the start first, then `onStart`
+and `resume` read it. Fields `epoch` -> `start` (heap only). Unit test: the pool reads the start
+already counted. HR-GUEST-12 (behaviour change): a rejected `onStart` registration is kept as a
+bounded message and `status()` reports it in the optional `HarnessStatus.error`; the key `error`
+was chosen because it is already in the gateway's vocabulary (`guards-split` vocabulary test
+unchanged); `test/fixtures/guard-fold-map.json` records `shapes.HarnessStatus` and
+`interfaces.HarnessRoot` as changed. Factory bundle 155,427 -> 156,955. Fit: neutral.
+
+### J-10211 2026-11-18 T3-SESSION hub-refused answers told to the model - decision
+`1e833c0a82` (model-facing text, behaviour change): `guest/exec/inspect.js` answers
+`failed(ANSWER_OVER_FRAME_TEXT)` when a granted tool's `execute` or a `help()` behind
+`describeCapability` breaks with exactly `HUB_FRAME_TOO_LARGE` (the guest copy of the core's
+`FRAME_TOO_LARGE`, pinned by `test/unit/inspector-frame-refusal.test.js`); before, the tool showed
+the hub's raw text and describe showed documentation `unavailable`. Text in the M5 texts table
+and acceptance items 5 and 10 of `m5-interfaces.md`. `test/integration/_m5-objects.js`
+`tooBigOutcome` is the one predicate of `m5-objects`, `m5-security` and perf `exec-m5` probe b.
+Exec bundle 61,688 -> 62,754. Fit: neutral.
+
+### J-10212 2026-11-18 T3-SESSION HR-SYN-23 guest seams - decision
+Done here: `site ?? 'adapter'` (every entry names its site; `site` required, `e5edbed850`),
+export's unused `isImporting`. Left, and why: `queue.release`/`assertNoActiveTurn` (`queue.js`
+is outside SESSION's files); `context-source.js` archive option (left alone by the plan); the
+factory's optional pool and settings and the root's no-pool branches (about 20 test call sites
+build a kit or root without a pool; needs the fakes of step 5's test-support layer).
+Fit: neutral.
+
+### J-10213 2026-11-18 T3-SESSION a staged deletion crossed units - finding
+SESSION staged `git rm guest/session/turn-hooks.js` while editing section 2; PROVIDERS' commit
+`74d86b8dca` took the staged deletion with its own paths, leaving HEAD unable to import
+`turn-hooks.js` until PROVIDERS restored it in `078f38b1c7`; SESSION's `89366b1714` then deleted it
+together with its importers. The index is shared by every unit in a worktree: a deletion should
+be staged in the same command as its commit (`git rm` inside the commit command), never ahead.
+Fit: worse (process).
+
+### J-10214 2026-11-18 T3-SESSION proof on the final tree - verified
+Unit lane (`test/unit/`, about 6 s) green after every commit: 676 tests at the start, 702 at the
+end (`m2-queue-heap` failed once under load and passed alone twice; `m2-w28-fake-archive` failed
+once on another unit's half-saved `blobs.js`, green after it committed). Golden digest equal on
+every commit. `lint:duplicates` 3.00 % at the start, 1.80 % at the end (ceiling lowered by other
+units to 2.05 %). Bundles (`scripts/bundle-guest.mjs`): session 206,907 -> 212,477 of 240,000,
+exec 61,688 -> 62,754, factory 155,427 -> 156,955. Integration (`--jobs 5`, shared slots, from
+`e5edbed850`, 23:29-23:40Z, 669.7 s wall, 3,052 s held, load 2.6-4.5): 14 of 15 green
+(m1a-slice-restart, m1b-followups, m2-turns, m2-queue, m2-history, m2-archive-restart and -2,
+m2-lifecycle, m2-lifecycle-export, m5-objects, m5-security, m5-grants-restart, m5-mentions,
+m5-snapshot); `m1a-slice` failed its timing bound (two parallel calls 1,922 ms against one 1,065
+ms, ratio 1.80 over 1.6; echo itself ran both in 1,058 ms) and passed alone (`--jobs 1`, 150 s,
+ratio 1.13). Not run: `test:regression:core` and `:milestones`, the perf rows (the delivery
+counts of perf/turn, session, exec, mentions and archive are for the PM's mini-pass). Fit: neutral.
+
+### J-10215 2026-11-18 T3-SESSION time record - verified
+Time: first command 22:56:13Z. Over 60 s: the integration batch 670 s (background), the `m1a-slice`
+rerun 151 s. Everything else under 60 s (unit lane about 13 s with tsc and duplicates). Read
+only: harness.md rows 4, 15, 23, 24, 28, 36 and 3.2/3.3, step3-plan.md, process.md 1-3 and 6, the
+adapter's `archive/history.js` and `segment.js`, `packages/thixotrope/src/net/hub.js`
+`FRAME_TOO_LARGE`. Scratch `tmp/T3-SESSION` removed. Fit: neutral.
