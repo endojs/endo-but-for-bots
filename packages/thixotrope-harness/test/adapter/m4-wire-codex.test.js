@@ -153,7 +153,8 @@ test('text: deltas, disjoint usage, served model; R4-30 body and header names; a
           {
             name: 'echo',
             description: 'Echo.',
-            parameters: '{"type":"object","properties":{"text":{"type":"string"}}}',
+            parameters:
+              '{"type":"object","properties":{"text":{"type":"string"}}}',
           },
         ],
       },
@@ -161,9 +162,12 @@ test('text: deltas, disjoint usage, served model; R4-30 body and header names; a
   );
   t.is(result.error, undefined);
   t.is(joined(result), 'Hello, world. How can I help?');
-  t.deepEqual(result.events.find(e => 'servedBy' in e), {
-    servedBy: { modelId: MODEL },
-  });
+  t.deepEqual(
+    result.events.find(e => 'servedBy' in e),
+    {
+      servedBy: { modelId: MODEL },
+    },
+  );
   t.like(result.events.find(e => 'usage' in e)?.usage, {
     inputTokens: 12,
     outputTokens: 7,
@@ -203,7 +207,9 @@ test('efforts: ultra is sent as max (R4-23); an unknown effort is refused before
   t.is(codexEffort('turbo'), undefined);
   const server = await serverFor(t);
   server.setPlan([{ sse: 'codex-text.sse' }]);
-  const ok = await drain(attempt(server, { request: { reasoningEffort: 'ultra' } }));
+  const ok = await drain(
+    attempt(server, { request: { reasoningEffort: 'ultra' } }),
+  );
   t.is(ok.error, undefined);
   t.deepEqual(server.requests()[0].json.reasoning, { effort: 'max' });
   const refused = await drain(
@@ -215,7 +221,10 @@ test('efforts: ultra is sent as max (R4-23); an unknown effort is refused before
 
 test('function calls keep their call ids; encrypted reasoning is native context, replayed with call identities on the next round', async t => {
   const server = await serverFor(t);
-  server.setPlan([{ sse: 'codex-tool-calls.sse' }, { sse: 'codex-reasoning.sse' }]);
+  server.setPlan([
+    { sse: 'codex-tool-calls.sse' },
+    { sse: 'codex-reasoning.sse' },
+  ]);
   const calls = await drain(attempt(server));
   t.is(calls.error, undefined);
   t.deepEqual(
@@ -323,7 +332,11 @@ test('failure events: symbolic facts and the fixed explanation, never prose; inh
     failed.error.message,
     m4TextOf.responsesFailed(
       'response.failed',
-      ['code=context_length_exceeded', 'type=invalid_request_error', 'param=input'],
+      [
+        'code=context_length_exceeded',
+        'type=invalid_request_error',
+        'param=input',
+      ],
       codexExplanations.context_length_exceeded,
     ),
   );
@@ -429,7 +442,9 @@ test('persistent overload: six attempts and five delays', async t => {
   t.is(
     result.error.message,
     textOf.afterAttempts(
-      m4TextOf.responsesFailed('response.failed', ['code=server_is_overloaded']),
+      m4TextOf.responsesFailed('response.failed', [
+        'code=server_is_overloaded',
+      ]),
       6,
     ),
   );

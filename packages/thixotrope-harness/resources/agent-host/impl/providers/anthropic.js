@@ -634,7 +634,9 @@ export async function* anthropicAttempt({
   if (apiError !== undefined) {
     const type = identifier(apiError?.type, '');
     yield* fail(
-      textOf.anthropicApiError(type === '' ? '' : textOf.servedBy([['type', type]])),
+      textOf.anthropicApiError(
+        type === '' ? '' : textOf.servedBy([['type', type]]),
+      ),
       RETRYABLE_ERRORS.has(type),
     );
   }

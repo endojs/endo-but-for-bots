@@ -28,7 +28,8 @@
  *   `GET /backend-api/wham/usage` (usage read).
  *
  * A request takes the first plan entry whose `match` fits it (an entry
- * without `match` fits any POST; a GET needs a `match`); else the route's
+ * without `match` fits any POST; a GET needs a `match`; `match.credential`,
+ * a `credentialTag` label, makes an entry one member's); else the route's
  * entry in `defaults` (option, reused for every request); else it is
  * answered 500 and recorded `unplanned`. Fixture files are read from
  * `test/fixtures/sse/subscriptions/` (option `fixtures`).
@@ -67,7 +68,11 @@ export const subscriptionFixturesDir = join(
   'subscriptions',
 );
 
-/** @typedef {import('./fake-provider-server.mjs').PlanEntry} PlanEntry */
+/**
+ * M2's plan entry; `match.credential` (a `credentialTag` label) makes an
+ * entry answer one member's requests only.
+ * @typedef {Omit<import('./fake-provider-server.mjs').PlanEntry, 'match'> & { match?: { method?: string, path?: string, credential?: string } }} PlanEntry
+ */
 /** @typedef {import('./fake-provider-server.mjs').PlanEvent} PlanEvent */
 
 /**
@@ -406,14 +411,18 @@ export const startFakeSubscriptionServer = async ({
   /**
    * @param {string} method
    * @param {string} path
+   * @param {string | undefined} credential the request's tag label
    */
-  const take = (method, path) => {
-    const index = plan.findIndex(entry =>
-      entry.match === undefined
+  const take = (method, path, credential) => {
+    const index = plan.findIndex(entry => {
+      const match = entry.match;
+      return match === undefined
         ? method === 'POST'
-        : (entry.match.method ?? 'POST') === method &&
-          (entry.match.path === undefined || entry.match.path === path),
-    );
+        : (match.method ?? 'POST') === method &&
+            (match.path === undefined || match.path === path) &&
+            (match.credential === undefined ||
+              match.credential === credential);
+    });
     if (index < 0) return defaults[`${method} ${path}`];
     const entry = plan[index];
     const remaining = (left.get(entry) ?? entry.repeat ?? 1) - 1;
@@ -473,7 +482,9 @@ export const startFakeSubscriptionServer = async ({
       }
     });
     const routed = ROUTES[`${method} ${path}`] !== undefined;
-    const entry = routed ? take(method, path) : undefined;
+    const entry = routed
+      ? take(method, path, record.credential)
+      : undefined;
     if (entry === undefined) {
       record.unplanned = true;
       res.writeHead(routed ? 500 : 404, {

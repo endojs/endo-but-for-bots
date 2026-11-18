@@ -169,8 +169,9 @@ const OVERLOADED_EVENT = textOf.anthropicApiError(
  * One streamed attempt on one member (`WireAttempt`, `types.js`). Options
  * beyond the type: `now`, `settings` (`subscriptionDefaults`), `client`
  * (`claudeClient`).
+ * The type's `member` is accepted and not read: the credential is the
+ * member's.
  * @param {object} options
- * @param {import('./types.js').MemberEntry} [options.member]
  * @param {import('./types.js').Credential} options.credential
  * @param {any} [options.projection] `{ transcript }` of the round
  * @param {{ modelId: string, reasoningEffort?: string, maxOutputTokens?: number, system?: string, tools: readonly any[] }} options.request

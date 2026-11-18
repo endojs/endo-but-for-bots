@@ -177,8 +177,8 @@ export const responsesFailureText = event => {
   const code =
     typeof error?.code === 'number' &&
     Number.isInteger(error.code) &&
-    error.code >= 0 &&
-    error.code <= 99_999
+    Number(error.code) >= 0 &&
+    Number(error.code) <= 99_999
       ? `${error.code}`
       : symbolic(error?.code);
   const type = error === event ? undefined : symbolic(error?.type);
@@ -406,8 +406,9 @@ const keptItem = item => {
 /**
  * One streamed attempt on one member (`WireAttempt`, `types.js`). Options
  * beyond the type: `now`, `settings` (`subscriptionDefaults`).
+ * The type's `member` is accepted and not read: the credential is the
+ * member's.
  * @param {object} options
- * @param {import('./types.js').MemberEntry} [options.member]
  * @param {import('./types.js').Credential} options.credential
  * @param {any} [options.projection] `{ transcript }` of the round
  * @param {{ modelId: string, reasoningEffort?: string, maxOutputTokens?: number, system?: string, tools: readonly any[] }} options.request
@@ -481,7 +482,7 @@ export async function* codexAttempt({
       headers: codexHeaders(credential),
       body,
       signal,
-      ...(timeoutMs > 0 ? { timeoutMs } : {}),
+      ...(Number(timeoutMs) > 0 ? { timeoutMs } : {}),
       fetch: observer.fetch,
     });
   } catch (error) {
@@ -528,7 +529,9 @@ export async function* codexAttempt({
       let failed;
       let unreadable = false;
       for (const { data } of batch) {
-        if (data === '[DONE]') continue;
+        // Nothing after completion counts (a `[DONE]` or `stream.done`
+        // marker, trailing metadata).
+        if (completed !== undefined || data === '[DONE]') break;
         /** @type {any} */
         let event;
         try {
@@ -546,11 +549,6 @@ export async function* codexAttempt({
           unreadable = true;
           break;
         }
-        if (completed !== undefined) {
-          // Nothing after completion counts (a `stream.done` marker or
-          // trailing metadata).
-          continue;
-        }
         const failureEvent = FAILURE_EVENTS.has(type);
         // The reference's fence: usage, response output, visible text, an
         // incomplete response or an unknown event block a retry.
@@ -562,7 +560,9 @@ export async function* codexAttempt({
               event.response.output.length !== 0)) ||
           type === 'response.incomplete' ||
           type === 'response.output_text.delta' ||
-          (!failureEvent && !BUFFERED.has(type) && type !== 'response.completed')
+          (!failureEvent &&
+            !BUFFERED.has(type) &&
+            type !== 'response.completed')
         ) {
           fenced = true;
         }
@@ -581,7 +581,7 @@ export async function* codexAttempt({
           const index = event.output_index;
           if (
             !Number.isSafeInteger(index) ||
-            index < 0 ||
+            Number(index) < 0 ||
             event.item === null ||
             typeof event.item !== 'object' ||
             typeof event.item.type !== 'string'
@@ -641,7 +641,7 @@ export async function* codexAttempt({
     });
   }
   const output =
-    Array.isArray(completed.output) && completed.output.length > 0
+    Array.isArray(completed.output) && Number(completed.output.length) > 0
       ? completed.output.map(keptItem)
       : [...items.entries()].sort((a, b) => a[0] - b[0]).map(([, i]) => i);
 

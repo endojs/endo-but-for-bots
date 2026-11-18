@@ -38,7 +38,10 @@ import {
 const MODEL = 'claude-sonnet-5';
 // A placeholder that does not look like a provider token (joined at run time).
 const TOKEN = ['fake', 'access', 'w43', 'claude'].join('-');
-const credential = harden({ accessToken: TOKEN, expiresAtMs: 4_000_000_000_000 });
+const credential = harden({
+  accessToken: TOKEN,
+  expiresAtMs: 4_000_000_000_000,
+});
 
 /** @param {import('ava').ExecutionContext} t */
 const serverFor = async t => {
@@ -122,7 +125,8 @@ test('text: deltas, usage, served model; R4-30 body and header names', async t =
           {
             name: 'echo',
             description: 'Echo the text.',
-            parameters: '{"type":"object","properties":{"text":{"type":"string"}}}',
+            parameters:
+              '{"type":"object","properties":{"text":{"type":"string"}}}',
           },
         ],
       },
@@ -217,7 +221,10 @@ test('spec maxOutputTokens applies when the request sets none', t => {
 
 test('tool use: calls with their ids; thinking kept as native context and replayed for the same model and text', async t => {
   const server = await serverFor(t);
-  server.setPlan([{ sse: 'claude-tool-use.sse' }, { sse: 'claude-thinking.sse' }]);
+  server.setPlan([
+    { sse: 'claude-tool-use.sse' },
+    { sse: 'claude-thinking.sse' },
+  ]);
   const tools = await drain(attempt(server));
   t.is(tools.error, undefined);
   t.deepEqual(
@@ -341,8 +348,7 @@ test('overload (529 or overloaded_error) before delivery is retried on the sched
   const delaysMs = [5, 10, 20, 40, 60];
   const retried = await drain(
     withOverloadRetry({
-      attempt: attemptSignal =>
-        attempt(server, { signal: attemptSignal }),
+      attempt: attemptSignal => attempt(server, { signal: attemptSignal }),
       delaysMs,
       sleep: async ms => {
         waits.push(ms);
@@ -364,8 +370,7 @@ test('overload (529 or overloaded_error) before delivery is retried on the sched
   server.setPlan([{ sse: 'claude-overloaded-late.sse' }]);
   const late = await drain(
     withOverloadRetry({
-      attempt: attemptSignal =>
-        attempt(server, { signal: attemptSignal }),
+      attempt: attemptSignal => attempt(server, { signal: attemptSignal }),
       delaysMs,
       sleep: async ms => {
         waits.push(ms);
