@@ -8185,3 +8185,56 @@ median 0.021 ms, p99 0.051 ms (428,524 samples); echo of 1 MiB median 9.98 ms, p
 samples); limiter check plus failure 0.88 us per call. The 5 ms `ui.deltaFanout` budget is not at
 risk from the framing.
 Decision: keep the built-in framing; if H6 lands `ws`, swapping is local to `server.js`.
+
+### J-0540 2026-11-18 M3 W3.2 CapTP bridge and guards - built
+Evidence: e5b5a6c5c0, 2dd747655b: `AH/gateway/{bridge,guard,powers,vocabulary,extensions}.js`,
+`test/adapter/m3-w32-{bridge,vocabulary,extensions,wire}.test.js` (27 tests, about 1.5 s, no
+supervisor), `test/adapter/_m3-captp-client.js`, `test/fixtures/gateway-extension/`.
+Reading: one captp connection per socket; the bridge parses every frame and checks each
+`CTP_CALL` on its capdata form before `dispatch`. Rule 1 needs the exact export table, and
+captp's `exportHook` sees exports but not their release, so the bridge passes captp its own
+default tables through the `makeCapTPImportExportTables` option and observes `markAsExported`
+and `deleteExport` (exact slot-to-value map and count; the 4,096 cap closes 4008 without sending
+the over-limit answer). Answers are mirrored by the page's question ids; a refused question is
+never an answer, so pipelining on it is refused too. Before sign-in only `CTP_BOOTSTRAP` and a
+`fetch` on the bootstrap pass; sign-in is detected from the `CTP_RETURN` result of a `fetch`
+question, so the bootstrap needs no callback. Calls in flight are question ids of forwarded calls
+to non-local targets, released when captp sends their `CTP_RETURN`. Gateway-local objects are a
+process-wide `WeakSet` in `powers.js` (bootstrap, Live facade and its wrapped subscriptions,
+content, composer, history, extras, every LargeCall target): the CC-050 workaround as stated,
+costing one `WeakSet` lookup per call.
+Decision: as built; W3.7 wires `makeBridge` with `isLargeCall` from `makeLargeCalls`.
+
+### J-0541 2026-11-18 M3 W3.2 guard and vocabulary - perf
+Evidence: 2dd747655b, in-process Node, one shared run-lock slot, 60 s window: `checkCall` of a
+23,983-byte call (rows of 40 vocabulary keys) median 0.099 ms, p95 0.110, p99 0.205, max 9.19
+(585,099 samples); budget `gateway.guard` median <= 2 ms (W3.8's row measures it formally).
+`harnessVocabulary` builds 258 keys in 34-36 ms from `interfaces.js` plus `interfaces-m3/m4/m5/
+m5-factory.js` (no file skipped). The contract quoted 290 keys from the M2 tables alone at W3.0;
+the walk here does not collect interface payload keys or method names (4.4), which is the likely
+difference.
+Reading: the guard is about 600 times under budget; a vat crank is tens of ms, so the guard
+never dominates.
+
+### J-0542 2026-11-18 M3 W3.2 captp in the adapter - fit
+Evidence: `m3-w32-bridge.test.js` pass-through test; `m3-w32-wire.test.js`.
+Reading: good fit where it matters: the prelude's `Far`, `E` and captp share one
+`@endo/pass-style` and one `HandledPromise` through the workspace links, so a `Far` stand-in
+passes through unchanged with identity kept per connection (A-1 holds for local remotables; a
+real OCapN presence is W3.7's to confirm). Awkward points: captp's capdata body has no depth or
+key bound of its own, a malformed slot in a call makes captp abort the whole connection
+(`rejectMalformed`) and an unknown target leaves the question unanswered, so the bridge must
+validate every slot first; marshal logs every error it sends ("Temporary logging of sent
+error"), which would put vat error texts in the adapter's log, so the bridge passes a no-op
+`marshalSaveError`. A pipelined answer as an argument (`q-n` slot) is undecodable by captp and is
+refused as an unknown target.
+
+### J-0543 2026-11-18 M3 W3.2 extensions and vocabulary by file - built
+Evidence: `extensions.js`, `GW/extensions/README.md`, fixture `fixture.js` and `throwing.js`.
+Reading: both registries are directory globs loaded with `require` (Node 22 loads ES modules
+synchronously); a file with top-level await fails `require` and is skipped like a throwing one.
+Routes on `/`, `/ws`, `/assets/*` or a taken path invalidate their file; services are capped at
+32 and a duplicate label is skipped; `makeLargeCalls` resolves extension targets after
+`whenAttached` and marks them gateway-local. The fixture's `sameWriter` compares identity in the
+adapter as acceptance 16 needs; a page-made writer is refused by rule 2 before it reaches it.
+Decision: as built.
