@@ -38,34 +38,13 @@ import { texts } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { messageBytes } from '../lib/bounded.js';
 import { holdText } from './holds.js';
+import { blobsOf } from './staging.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { E, Fail, harden, passStyleOf } = /** @type {GuestGlobals} */ (
-  globalThis
-);
+const { E, Fail, harden } = /** @type {GuestGlobals} */ (globalThis);
 
 /** Bytes kept free in an export page for its own keys and envelope. */
 const PAGE_SLACK = 2048;
-
-/**
- * Push the Blob of every staged field (`{ blob, preview, bytes }`) found in
- * a record, an entry or a staged text.
- * @param {any} value
- * @param {any[]} out
- */
-const stagedIn = (value, out) => {
-  const style = passStyleOf(value);
-  if (style === 'copyArray') {
-    for (const element of value) stagedIn(element, out);
-    return;
-  }
-  if (style !== 'copyRecord') return;
-  if ('blob' in value && passStyleOf(value.blob) === 'remotable') {
-    out.push(value.blob);
-    return;
-  }
-  for (const element of Object.values(value)) stagedIn(element, out);
-};
 
 /**
  * @param {string | undefined} cursor
@@ -145,9 +124,7 @@ export const makeSessionExport = ({
     /** @type {any[]} */
     const blobs = [];
     while (i < end) {
-      /** @type {any[]} */
-      const found = [];
-      stagedIn(i < count ? records.at(i) : more[i - count], found);
+      const found = blobsOf(i < count ? records.at(i) : more[i - count]);
       while (k < found.length && blobs.length < limits.blobResolveBatch) {
         blobs.push(found[k]);
         k += 1;
