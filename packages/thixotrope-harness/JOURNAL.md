@@ -8198,3 +8198,48 @@ in-process call of an adapter-local exo, and pattern matching grows with the rec
 just built. Fake-clock tests need a macrotask turn after each `callWhen` call: the method body
 starts a job later, so a timer it arms would otherwise be armed after the clock moved.
 Decision: none.
+
+### J-0660 2026-11-18 M4 W4.4 Secrets adapter additions - build
+Evidence: commit `3b4d10a792`; `test/adapter/m4-secrets-full.test.js` (7 tests).
+Built: `store.auditPage({ key?, limit <= 1,000, before? })`, `store.setDescription`,
+`makeSecretsOps(...).credentialFor(key)` (`secrets/credential-access.js`: read and a replace that
+must name a generation), `secrets/catalog.js` `describeKeys` (64 keys, `null` for an unknown
+key), `secrets/audit.js` `makeAuditReader` (default 100, `next` = time of the page's oldest
+event). Event times now strictly increase (`max(now, last + 1)`, continued across a reload), so
+`before` pages every event exactly once even when 1,000 events share a millisecond.
+Deviation: M2's `store.audit` keeps its 100 bound (M2's test asserts 101 is refused); the
+1,000 bound is the new `auditPage`, which only the reader calls.
+Decision: as described; reported to the PM.
+
+### J-0661 2026-11-18 M4 W4.4 credentials and write-ahead renewal - build
+Evidence: commit `ef14e29b62`; `m4-renewal.test.js` (16 tests), `m4-renewal-kill.test.js`
+(K-5, K-6 in a SIGKILLed child), each file about 1 s.
+Built: `subscriptions/credentials.js` (stored form plus `provider` and `scopes`; Claude and Codex
+login files accepted as the reference importers accept them; 8,192-byte bound) and
+`subscriptions/renewal.js` (port of `makeBrokerOAuthCredential`: single-flight, re-read in the
+flight, `CONSUMED` on an existing intent, intent pinned to the read generation, write-back pinned
+to the intent's, undo only on a provably undispatched request, adopt a newer usable credential
+after a conflict). 16 concurrent rounds near expiry: 1 refresh POST. K-5: 0 refreshes; K-6:
+exactly 1; both leave the member `CONSUMED` in the next incarnation.
+Decision: the token URL and client id are options; no provider host is named in the harness.
+
+### J-0662 2026-11-18 M4 W4.4 credential read and audit page cost - perf
+Evidence: commit `ef14e29b62`; in-process timing (not a perf file: W4.8 owns `secrets.*`), 10 s
+windows. `MemberCredential.current()` on a fresh credential (audited store read, parse):
+194,998 samples, median 0.033 ms, p99 0.18 ms; budget median <= 1 ms. `AuditReader.page({ limit:
+1,000 })` through its exo guard: 255 samples, median 32.5 ms, p99 94.6 ms; budget median <= 50 ms.
+Reading: the credential read is far inside budget. The audit page uses 65% of its budget; the
+likely cost is the return guard checking 1,000 closed records, not the store's scan.
+Decision: none now; W4.8's 60 s window is the record.
+
+### J-0663 2026-11-18 Renewal on a generation-pinned store - fit
+Evidence: J-0661; the two-holder test (intent race gives one `GENERATION_CONFLICT`, one POST)
+and the operator-replace-during-flight test (write-back conflicts, the operator's value is
+adopted, not overwritten).
+Reading: good fit. The store's generation-conditioned replace is the whole compare-and-swap that
+the reference's write-ahead protocol needs, and it lives in the adapter next to the values, so a
+renewal costs 0 vat deliveries and secrets never reach a heap. Poor part: two adapter processes
+over one `secrets.enc` would each keep their own generation in memory and would not conflict;
+the harness has one adapter per state directory, so this is never exercised, but it means the
+fence holds within an incarnation and across a restart, not between concurrent processes.
+Decision: none.
