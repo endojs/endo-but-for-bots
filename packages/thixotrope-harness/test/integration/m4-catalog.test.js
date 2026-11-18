@@ -64,12 +64,20 @@ run(
       credentialTag: value => tags.get(value) ?? 'other',
       plan: [
         {
-          match: { method: 'GET', path: '/backend-api/codex/models', credential: 'a' },
+          match: {
+            method: 'GET',
+            path: '/backend-api/codex/models',
+            credential: 'a',
+          },
           file: 'codex-models.json',
           repeat: 50,
         },
         {
-          match: { method: 'GET', path: '/backend-api/codex/models', credential: 'b' },
+          match: {
+            method: 'GET',
+            path: '/backend-api/codex/models',
+            credential: 'b',
+          },
           file: 'codex-models-b.json',
           repeat: 50,
         },
@@ -139,7 +147,12 @@ run(
     const claudePage = await E(claude.backend).listModels();
     t.deepEqual(
       claudePage.rows.map((/** @type {any} */ r) => r.modelId),
-      ['claude-fake-1', 'claude-haiku-5-5', 'claude-opus-4-6', 'claude-sonnet-5'],
+      [
+        'claude-fake-1',
+        'claude-haiku-5-5',
+        'claude-opus-4-6',
+        'claude-sonnet-5',
+      ],
     );
     t.true(
       claudePage.rows.every(
@@ -149,7 +162,13 @@ run(
     const sonnet = claudePage.rows.find(
       (/** @type {any} */ r) => r.modelId === CLAUDE_MODEL,
     );
-    t.deepEqual(sonnet.reasoningEfforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+    t.deepEqual(sonnet.reasoningEfforts, [
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
 
     // ---- 6. no member answers: unavailable ----
     const dead = await startFakeSubscriptionServer();
@@ -192,12 +211,22 @@ run(
       reasoningEffort: 'high',
     });
     server.push({ sse: 'claude-text.sse' });
-    const done = await runTurn(m4, withEffort.session, withEffort.live, 'effort');
+    const done = await runTurn(
+      m4,
+      withEffort.session,
+      withEffort.live,
+      'effort',
+    );
     t.is(done.status.state, 'completed', done.status.error);
     const claudePost = /** @type {any} */ (posts(server).at(-1));
     t.deepEqual(claudePost.json.thinking, { type: 'adaptive' });
     t.deepEqual(claudePost.json.output_config, { effort: 'high' });
-    for (const name of ['anthropic-beta', 'x-app', 'user-agent', 'authorization'])
+    for (const name of [
+      'anthropic-beta',
+      'x-app',
+      'user-agent',
+      'authorization',
+    ])
       t.true(claudePost.headerNames.includes(name), `R4-30 header ${name}`);
     t.false(claudePost.headerNames.includes('x-api-key'));
 

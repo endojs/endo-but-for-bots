@@ -154,7 +154,7 @@ export const loadWrappingKey = async ({ keyFile, stateDir }) => {
     // store and the sealing keys, `secretWriter`) used to meet an empty
     // file between the other's `open('wx')` and its write; the loser of the
     // link reads the winner's complete key.
-    const temp = `${keyFile}.tmp-${randomBytes(8).toString("hex")}`;
+    const temp = `${keyFile}.tmp-${randomBytes(8).toString('hex')}`;
     const handle = await open(temp, 'wx', 0o600);
     try {
       await handle.writeFile(randomBytes(KEY_BYTES));
