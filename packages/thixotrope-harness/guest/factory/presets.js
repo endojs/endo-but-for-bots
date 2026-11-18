@@ -4,8 +4,9 @@
  * sections 2.1 and 2.3; R3-7, R3-11..R3-17, R3-20, R4-4, R6-55).
  *
  * One catalogue per factory, in the factory vat's heap (D-3): the built-in
- * presets, then user presets in creation order, at most `maxPresets` in
- * all. Each preset is one exo for its life (open decision O-5); the
+ * presets (`chat-only` first, then the others in `builtInPresetLabels`
+ * order: the PM's ruling at the cross-lane merge, contract 2.1), then user
+ * presets in creation order, at most `maxPresets` in all. Each preset is one exo for its life (open decision O-5); the
  * catalogue keeps `records: WeakMap<Preset, PresetState>` and the factory's
  * creation reads a preset's record through it without a call (rights
  * amplification). An object the catalogue did not make is refused with
