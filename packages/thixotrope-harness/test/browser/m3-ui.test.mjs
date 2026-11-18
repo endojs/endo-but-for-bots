@@ -231,11 +231,23 @@ run(
       after.overlays.some(([, text]) => text === uiTexts.reconnecting),
       'the overlay said Reconnecting…',
     );
-    const done = await turnReaches(page, 'stream', ['completed']);
-    t.true(
-      done.text.includes('c39'),
-      'the re-attached turn streamed to its end',
-    );
+    await turnReaches(page, 'stream', ['completed']);
+    // The completed row's text settles from the live fold or the newest
+    // history page; wait for the last chunk rather than read it once.
+    const done = await waitFor(
+      async () => {
+        const rows = await turnRows(page);
+        const row = rows.reverse().find(r => r.user === 'stream');
+        return row?.text?.includes('c39') ? row : undefined;
+      },
+      15_000,
+      'the last chunk on the page',
+      100,
+    ).catch(async error => {
+      t.log(JSON.stringify((await turnRows(page)).slice(-2)));
+      throw error;
+    });
+    t.true(done.text.includes('c0 '), 'the re-attached turn kept its start');
 
     // 14. The status bar equals getUsage().
     const factory = await E(harness.client.powers.operator).getFactory();

@@ -134,7 +134,9 @@ run(
     const turn = page.locator('.thix-turn[data-state="completed"]').last();
     await turn.waitFor({ timeout: 60_000 });
     const head = turn.locator('.floot-actions-head').first();
-    t.regex((await head.textContent()) ?? '', /Thought for|Thinking/);
+    // "Thought for" joins the header only with a thinking entry, which the
+    // scripted provider cannot emit (W3.6's unit tests cover that label).
+    t.regex((await head.textContent()) ?? '', /2 actions/);
     await head.click();
     const entries = turn.locator('.floot-action-head');
     t.true((await entries.count()) >= 2, 'two tool entries');
@@ -193,6 +195,15 @@ run(
     if (!harness) throw Error('setup failed');
     const page = harness.page;
     await openSession(page, longKey);
+    await page
+      .locator('.floot-header-title', { hasText: 'm3-300' })
+      .waitFor({ timeout: 15_000 });
+    await waitFor(
+      async () => (await turnIds(page)).some(id => Number(id.slice(1)) > 2),
+      30_000,
+      'the m3-300 turns on screen',
+      100,
+    );
     await page.locator('.thix-turn').first().waitFor();
     const earlier = page.locator('.floot-history-earlier');
     let clicks = 0;

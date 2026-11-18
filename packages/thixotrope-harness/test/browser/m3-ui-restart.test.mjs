@@ -164,8 +164,16 @@ run(
     await openSession(page, key);
     await send(page, 'stall');
     await page.locator('.thix-stop').waitFor();
-    for (const text of ['q1', 'q2', 'q3']) await send(page, text);
     const rows = page.locator('.thix-queue [data-entry]');
+    for (const [i, text] of ['q1', 'q2', 'q3'].entries()) {
+      await send(page, text);
+      // One send at a time: the composer clears once the receipt is in.
+      await waitFor(
+        async () => (await rows.count()) === i + 1,
+        15_000,
+        `queued row ${text}`,
+      );
+    }
     await waitFor(
       async () => (await rows.count()) === 3,
       15_000,
@@ -230,12 +238,16 @@ run(
     const pageB = await harness.newPage();
     await openSession(pageA, key);
     await openSession(pageB, key);
+    // One backend serves every session of the file and turn ids repeat
+    // across sessions: count this turn's lines after this index.
+    const logFrom = made.log().length;
     await send(pageA, 'tool hang');
     await pageB.locator('.streaming, .thix-thinking-row').first().waitFor();
     const turnId = await waitFor(
       () =>
         made
           ?.log()
+          .slice(logFrom)
           .find(l => l.kind === 'echo-start')
           ?.opId?.split('/')[0],
       30_000,
@@ -251,7 +263,7 @@ run(
         .locator(`.floot-msg-row.status[data-turn-state="outcome-unknown"]`)
         .waitFor({ timeout: 30_000 });
     }
-    const log = made.log();
+    const log = made.log().slice(logFrom);
     t.is(
       log.filter(l => l.kind === 'request' && l.turnId === turnId).length,
       1,
