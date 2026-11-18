@@ -15,8 +15,10 @@ The LLM agent uses tool calls to interact with the Endo daemon, enabling it to:
 
 Lal's agent harness is built directly on `@earendil-works/pi-agent-core` and
 `@earendil-works/pi-ai`.
-Each worker is a single `PiAgent` whose internal message history is the
-durable transcript for the worker's lifetime.
+Each worker is a single `PiAgent`.
+Its message history is also written as a Pi-compatible JSONL session file
+in a daemon scratch mount named `transcripts-for-lal`, and a restarted
+worker resumes its newest session from that file.
 The Endo capability tool surface (the `help`, `list`, `lookup`, `send`,
 `reply`, `evaluate`, `define`, ... family) is dispatched through a
 `listTools` / `execTool` pair constructed at worker spawn; tool arguments

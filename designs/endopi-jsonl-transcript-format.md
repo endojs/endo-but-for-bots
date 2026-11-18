@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-11-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Parent** | [endopi](endopi.md) |
 
 ## Motivation
@@ -31,9 +31,18 @@ as the reference.
 
 ### File layout
 
+Lal keeps its sessions flat at the root of a daemon scratch mount that
+its host names `transcripts-for-lal`:
+
 ```
-$ENDO_STATE/sessions/<guest-id>/<timestamp>_<session-id>.jsonl
+<timestamp>_w<hex-of-worker-name>--<uuidv7>.jsonl
 ```
+
+The timestamp is zero-padded, so lexical order is chronological. The
+`w<hex>--` key scopes a file to one worker: hex holds no `-` or `_`, so
+no worker's key can appear inside another's file name. A host that does
+not use the mount (a future Fae writer, the operator CLI) has no layout
+fixed yet; see § Open questions.
 
 One file per session. Each line is a JSON object with a `type` field
 (`header`, `message`, `compaction`, `branchSummary`, `custom`). Entries
@@ -78,6 +87,16 @@ unification).
 }
 ```
 
+Lal's header also carries two `endo:` keys, which Pi readers ignore:
+`endo:worker` (the worker's name, checked exactly on resume) and, when
+known, `endo:guestId` (the worker guest's id).
+
+Lal records the Endo mail message that starts a round as a `custom`
+entry whose `custom` object has `"endo:kind": "endo:mail"`. Beside the
+kind it holds ids only, never live references: `messageId`, `replyTo`,
+and `number` (the mail number as a decimal string, since it is a
+bigint). Each field is present only when known.
+
 Pi-foreign fields (the `details` slot on `toolResult`, Endo-specific
 `replyTo` metadata, the `value`-typed messages from
 [daemon-value-message](daemon-value-message.md)) go under a `custom`
@@ -87,14 +106,19 @@ extension-namespaced entries through the `custom` role.
 ### Writer
 
 The writer is a guest-side concern, not a daemon-side concern. The Lal
-agent (or Fae) opens the file lazily on first message in a given
-session and appends one line per agent message. The file is mode 0600
-under `$ENDO_STATE/sessions/`. On daemon restart, the file is reopened
-in append mode.
+manager opens a worker's transcript when the worker is created, in the
+`transcripts-for-lal` scratch mount, and appends the round's starting
+mail and then one line per new agent message after each round. On
+restart, the manager resumes the worker's newest session file and seeds
+the agent with the messages on its current path. File permissions are
+the daemon's concern; this writer sets no mode.
 
-Atomicity: the writer flushes `O_APPEND` writes; a partial line at EOF
-is recovered on reopen by truncating to the last `\n`. Pi takes the same
-approach.
+Atomicity: the writer appends whole lines; a partial line at EOF is
+recovered on reopen by truncating to the last `\n`. Pi takes the same
+approach. The scratch mount has no truncate, so Lal's repair reads the
+file and rewrites it whole. That rewrite is not atomic: a crash between
+the read and the write can empty the file, and the next open then finds
+no header and starts a fresh session.
 
 ### Reader
 
@@ -106,7 +130,7 @@ Two readers:
    transcript-node graph the in-memory model uses.
 
 2. **The operator.** A new `endo session list` / `endo session show <id>`
-   CLI verb walks `$ENDO_STATE/sessions/` and renders sessions. The
+   CLI verb (phase 3, not started) lists and renders sessions. The
    files are usable with off-the-shelf JSONL tooling (`jq`, `fx`).
 
 ### Compaction interaction
@@ -137,14 +161,17 @@ place of the elided ones.
    [endopi-iterative-compaction](endopi-iterative-compaction.md)
    lands.
 
+## Status
+
+Phase 1 ships for Lal, with the `endo:mail` entry as the first piece of
+phase 2. The rest of phase 2, Fae, and phases 3 and 4 are not started.
+
 ## Open questions
 
-- Does the file live under `$ENDO_STATE/` (daemon state) or
-  `$HOME/.pi/agent/sessions/` (Pi-compatible default)? The
-  Pi-compatible path makes cross-harness tools work without
-  configuration; the Endo path keeps state co-located. The default
-  should be `$ENDO_STATE/sessions/` with an opt-in symlink or
-  configuration for Pi compatibility.
+- Lal answers where its files live with the `transcripts-for-lal`
+  scratch mount. Still open: whether the operator CLI and other agents
+  share that mount, and whether a Pi-compatible path
+  (`$HOME/.pi/agent/sessions/`) is offered by symlink or configuration.
 - Should `id` be Pi's UUIDv7 or Endo's 256-bit formula ID? UUIDv7 keeps
   Pi tooling working; the 256-bit form is what the daemon already uses
   on `messageId`. Suggest: store both, with the Endo ID under a

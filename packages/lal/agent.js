@@ -20,9 +20,14 @@ import {
 } from './model-resolution.js';
 import { runRound } from './round-runner.js';
 import { runInboxLoop } from './inbox-loop.js';
+import {
+  makeTranscriptRoundRunner,
+  openWorkerTranscript,
+  provideTranscriptsMount,
+} from './transcript.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
-/** @import { GuestPowers, LalContext } from './agent.types.js' */
+/** @import { GuestPowers, LalContext, TranscriptMail, WorkerTranscript } from './agent.types.js' */
 
 // pi-ai's built-in API providers (anthropic, openai, google, openrouter,
 // mistral, deepseek, groq, xai, github-copilot, and ~20 others) are registered
@@ -48,17 +53,25 @@ const LalInterface = M.interface('Lal', {
 
 /**
  * Spawn a worker loop that follows a guest's inbox and processes messages
- * using a pi-agent-core–backed PiAgent. The PiAgent's internal message
- * state is the durable transcript for the worker's lifetime; cross-restart
- * conversation continuity is intentionally not preserved by this migration
- * (see the PR body's *Memory migration* section).
+ * using a pi-agent-core–backed PiAgent.
+ *
+ * When the harness supplies a `transcript` (see `transcript.js`), the PiAgent
+ * is seeded from the resumed session's messages and every completed
+ * `user`/`assistant`/`toolResult` message is appended to the session's
+ * Pi-compatible JSONL file.
  *
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | null | undefined} context
  * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string }} workerEnv
+ * @param {{ transcript?: WorkerTranscript }} [options]
  * @returns {Promise<void>}
  */
-export const spawnWorkerLoop = async (powers, context, workerEnv) => {
+export const spawnWorkerLoop = async (
+  powers,
+  context,
+  workerEnv,
+  { transcript } = {},
+) => {
   const getCancelled = async () => {
     if (!context) return null;
     const resolvedContext = await context;
@@ -84,8 +97,7 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   // `initialState` shape, the user/assistant/toolResult `convertToLlm` filter,
   // the `reasoning ? 'medium' : 'off'` thinking default, and
   // `toolExecution: 'sequential'`) so that
-  //   (a) we are free to seed `messages` from prior transcripts when
-  //       cross-restart continuity lands (see PR body),
+  //   (a) we seed `messages` from the resumed JSONL transcript, if any,
   //   (b) we control the system prompt verbatim (no policy suffix or
   //       security-notes wrapping is applied), and
   //   (c) the per-tool parameter schema lives at the tool boundary,
@@ -115,15 +127,20 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
     model: resolvedModel,
     tools: agentTools,
     getApiKey,
+    messages: transcript ? [...transcript.seedMessages] : [],
   });
-
   /**
    * Run one chat round on the PiAgent, forwarding tool-call activity to
-   * the console (via `round-runner.js`).
+   * the console (via `round-runner.js`), and append the round's messages to
+   * the transcript.
    *
-   * @param {string} prompt - User-role content for this round.
+   * @type {(prompt: string, mail?: TranscriptMail) => Promise<void>}
    */
-  const runOneRound = prompt => runRound(piAgent, prompt);
+  const runOneRound = transcript
+    ? makeTranscriptRoundRunner({ transcript, piAgent, runRound })
+    : async prompt => {
+        await runRound(piAgent, prompt);
+      };
 
   await runInboxLoop({ powers, getCancelled, runOneRound });
 };
@@ -181,6 +198,16 @@ export const make = (guestPowers, _context) => {
     const selfLocator = await E(powers).locate('@self');
     const activeWorkers = new Map();
 
+    // The writable transcripts mount stays in the manager's closure. Worker
+    // sub-guests are never introduced to it, so model-driven tools cannot
+    // tamper with their own history.
+    let transcriptsMount;
+    try {
+      transcriptsMount = await provideTranscriptsMount(agent);
+    } catch (error) {
+      console.error('[lal] Transcripts mount unavailable:', error);
+    }
+
     // Check in the primer directory as a content-addressed readable-tree.
     // Stored once in the host namespace; each sub-guest gets a reference.
     const primerDirPath = new URL('./primer', import.meta.url).pathname;
@@ -205,14 +232,16 @@ export const make = (guestPowers, _context) => {
     // old value messages (from prior sessions) that reply to an earlier form
     // are not accidentally matched when the iterator replays history.
     /** @type {string | undefined} */
-    let formMessageId;
+    let formMessageIdentifier;
     const existingMessages = /** @type {any[]} */ (
       await E(powers).listMessages()
     );
-    for (const msg of existingMessages) {
-      // eslint-disable-next-line @endo/restrict-comparison-operands
-      if (msg.from === selfLocator && msg.type === 'form') {
-        formMessageId = msg.messageId;
+    for (const inboundMessage of existingMessages) {
+      if (
+        inboundMessage.from === selfLocator &&
+        inboundMessage.type === 'form'
+      ) {
+        formMessageIdentifier = inboundMessage.messageId;
       }
     }
 
@@ -221,23 +250,24 @@ export const make = (guestPowers, _context) => {
       const { value: message, done } = await messageIterator.next();
       if (done) break;
 
-      const msg = /** @type {any} */ (message);
+      const inboundMessage = /** @type {any} */ (message);
 
       // Capture the form's messageId from our own outbound message.
-      // eslint-disable-next-line @endo/restrict-comparison-operands
-      if (msg.from === selfLocator && msg.type === 'form') {
-        formMessageId = msg.messageId;
+      if (
+        inboundMessage.from === selfLocator &&
+        inboundMessage.type === 'form'
+      ) {
+        formMessageIdentifier = inboundMessage.messageId;
       } else if (
-        msg.type === 'value' &&
-        // eslint-disable-next-line @endo/restrict-comparison-operands
-        msg.replyTo === formMessageId
+        inboundMessage.type === 'value' &&
+        inboundMessage.replyTo === formMessageIdentifier
       ) {
         // Only process value messages that reply to our form.
         try {
           // Resolve the submitted values from the value message.
           const config =
             /** @type {{ name: string, host: string, model: string, authToken: string }} */ (
-              await E(powers).lookupById(msg.valueId)
+              await E(powers).lookupById(inboundMessage.valueId)
             );
 
           const { name } = config;
@@ -245,7 +275,7 @@ export const make = (guestPowers, _context) => {
           if (activeWorkers.has(name)) {
             // A worker is already running for this name.
             await E(powers).reply(
-              msg.number,
+              inboundMessage.number,
               [`Agent "${name}" already exists.`],
               [],
               [],
@@ -268,20 +298,40 @@ export const make = (guestPowers, _context) => {
             // Ensure the sub-guest has the primer directory.
             await provisionPrimer(guest);
 
+            let transcript;
+            if (transcriptsMount !== undefined) {
+              try {
+                transcript = await openWorkerTranscript({
+                  mount: transcriptsMount,
+                  workerName: name,
+                });
+                console.log(
+                  `[lal] Transcript for "${name}": ${transcript.fileName}`,
+                );
+              } catch (error) {
+                console.error(`[lal] Transcript for "${name}" failed:`, error);
+              }
+            }
+
             // Spawn a worker loop for this guest.
-            const workerP = spawnWorkerLoop(guest, null, {
-              LAL_HOST: config.host,
-              LAL_MODEL: config.model,
-              LAL_AUTH_TOKEN: config.authToken,
-            });
-            activeWorkers.set(name, workerP);
-            workerP.catch(error => {
+            const workerPromise = spawnWorkerLoop(
+              guest,
+              null,
+              {
+                LAL_HOST: config.host,
+                LAL_MODEL: config.model,
+                LAL_AUTH_TOKEN: config.authToken,
+              },
+              { transcript },
+            );
+            activeWorkers.set(name, workerPromise);
+            workerPromise.catch(error => {
               console.error(`[lal] Worker "${name}" error:`, error);
               activeWorkers.delete(name);
             });
 
             await E(powers).reply(
-              msg.number,
+              inboundMessage.number,
               [`Agent "${name}" is now running.`],
               [],
               [],
@@ -293,7 +343,7 @@ export const make = (guestPowers, _context) => {
           console.error('[lal] Form submission error:', errorMessage);
           try {
             await E(powers).reply(
-              msg.number,
+              inboundMessage.number,
               [`Error creating agent: ${errorMessage}`],
               [],
               [],
