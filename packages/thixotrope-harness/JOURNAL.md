@@ -8675,3 +8675,29 @@ J-9696 hold the numbers): each row is a fixed window; probe c halts the workspac
 the fixtures, so it cannot show what it names.
 Fit: poor for the shared machine: 1,695 s of wall for 2,020 s of held work at six slots, most of
 it waiting behind other lanes.
+
+### J-9720 2026-11-18 M5 review fixes (M5-FIX) - fix
+Evidence: M5-FIX on the lane after e9e87d5882, commits 6c96ed06b2..2507e005cc. (1) The
+bundle-level indentation pass (J-9698) is committed as `dropIndentation` in
+`scripts/bundle-guest.mjs`: session / exec / factory 236,218 / 105,230 / 171,868 bytes (exec
+includes this unit's membrane change, +1,037); a session can be created again. (2) The membrane:
+`E.get` through a wrapper answers a wrapper, a get on an ended call's wrapper is refused with
+`powersExpired`, and an answer holding a remotable or promise below depth 64 is refused
+(`membraneTooDeep(64)`) while plain data there passes; two unit tests in `m5-w54-exec`.
+(3) `m1a-provision` expects `['m5 fixtures', true]`. (4) Probe c's 20,000-key flood is installed
+per run in a disposable vat (`keyFloodProgram`), out of the workspace fixtures.
+Fit: good: a disposable vat is one `install` call, so a test that must watch a vat halt can put
+the victim in a vat of its own instead of next to the fixtures; poor: the membrane can only wrap
+what comes back through it, so a model-made object handed to another vat still receives raw
+presences as call arguments (not measured as a leak here; no new authority).
+
+### J-9721 2026-11-18 M5-FIX runs and wall times - test
+Evidence: M5-FIX, worker 367e78ad, shared slots. Unit (no supervisor): `bundle-guest`,
+`m5-w54-exec`, `m5-w54-client`, `m1a-session-program`, `m1b-exec-vat`: pass, about 2 s each run.
+Integration: `m1a-provision` with `M1A_REBUILD=1` pass (145 s wall, 85 s test); `m5-objects` and
+`m5-security` pass (97 s wall together, two slots; template rebuilt for the new fixture source).
+`perf/exec-m5.perf.mjs` run `--shared` with `EXEC_M5_WINDOW_MS=3000` to check the probes only
+(149 s wall; its timed rows are not measurements and are not recorded): probe c passes in 6,677 ms
+of its 30,000 ms cap, the next turn completes, no session or workspace vat halted; probes a, b, f1,
+f2 pass. The 60 s-window rows of J-9695/J-9696 are not remeasured.
+Fit: neutral: checking a probe's correctness does not need the exclusive lock; only the timed rows do.
