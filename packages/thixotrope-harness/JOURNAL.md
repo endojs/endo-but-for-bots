@@ -8536,3 +8536,23 @@ of 32).
 Fit: poor: about 80 nested records exhaust a guest stack while encoding; candidate core request
 (the encoder should refuse a value too deep to send with an error, not halt the vat). Hostile
 fixtures belong in a disposable vat.
+
+### J-9694 2026-11-18 M5 acceptance 1, 9 (part 7) and 12; the eleven M5 files pass - test
+Evidence: W5.9 commits 0f0416ca58, 2b360be67e; the J-9692 copy, worker 367e78ad. `m5-snapshot`:
+a user preset with 1,533-unit three-byte instructions X (composed prompt 8,300 bytes, staged by
+the factory) and endowment `notes`; after the preset is saved with Y and no endowment, session A's
+next requests carry the same `systemDigest` and `list` still shows `notes`; session B carries Y
+as part 7 (3,808 bytes) and lists nothing; 21.8 s held. `m5-reachability` (a) the return-guard
+closure from `MakeArgs` plus `SessionGrants`, `ToolGrant`, `ExecPowersSource`, `ExecScope` (17
+interfaces) holds no `PresetCatalog`, `Preset`, `Inventory`, `InventoryEntry`, `Operator`,
+`SessionFactory`, `HarnessRoot`, `AgentHostAdmin`, `SecretsAdmin`, `Secret`, `SecretWriter`; the
+walk from `Operator` finds the four M5 operator interfaces; (b) a session with an endowment, an
+adopted attachment and an offered grant runs adopt, exec `powers.lookup` + call, the granted
+`echo2`, `list`: its vat and its exec vat hold into `app:harness`, `native:agentHostAdmin`,
+`workspace:w` (the fixtures) and each other only, no other session or exec vat, and the turn adds
+no origin; 34 s held. Reruns after the J-9692 fixes: `m5-grants` pass (40 s), `m5-grants-restart`
+pass (98 s), `m5-mentions-restart` pass (65 s). All eleven M5 integration files pass.
+Reading: object granularity for (b) waits on CC-060 (M4): origin `app:harness` is the factory
+vat, which also holds the catalogue and inventory.
+Fit: good: the snapshot is plain heap data in the session (no versioned preset store), so
+acceptance 1 needs no code beyond the factory's copy.
