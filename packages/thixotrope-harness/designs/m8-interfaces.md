@@ -305,8 +305,8 @@ runner puts `active.compactionAsk` into the round request (seam S-5b) and does n
 `thinking` phase for that round (S-5c). Intent before effect: the record and the frame that
 carries the ask leave in one crank (architecture 4.3).
 
-`at` of `compaction-started` is the claim's `at` at round 0 and the last result's time (`see`)
-otherwise; the vat has no clock.
+`at` of `compaction-started` is the claim's `at` at round 0 and otherwise the latest adapter time
+the session has seen (the runner's `see` value); the vat has no clock.
 
 ### 4.2 The adapter's answer (crank Y)
 
@@ -553,7 +553,8 @@ headroomBytes` (`stillOverHeadroom`).
   marker the transcript is unchanged (sessions that never compacted project exactly as before:
   the M1b property test holds).
 - `context.jsonl` stores markers like any projected record (staged texts as keys); its format
-  tag does not change (a reader that does not know the kind passes it to the hook).
+  tag does not change (a reader that does not know the kind passes it to the hook). No existing
+  file needs a rewrite: no `compaction` record and no image result predates M8.
 - `transcript-records.js` (the test oracle) accepts the marker kind and `incomplete` (S-17).
 
 ---
