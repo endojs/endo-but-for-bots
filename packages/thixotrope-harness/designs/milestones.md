@@ -611,7 +611,7 @@ store, Node 22.23.4, Apple M3 Max shared with other agents (load 1.6-3.5 for the
 6-13 for the second long-session run, throughput and the 10,000/30,000-turn rows, when another
 checkout's lane ran beside this one). Integration at `81911ab991`..`84fc8cb388` (W2.9 fixes in
 J-9401); perf at `84fc8cb388`. Verdicts use the 1.25 x rule: "miss" is over the budget, "**fail**"
-over 1.25 x. JSON lines and readings are in J-9400..J-9420.
+over 1.25 x. JSON lines and readings are in J-9400..J-9414.
 
 | item | result | verdict | entries |
 |---|---|---|---|
@@ -636,11 +636,11 @@ over 1.25 x. JSON lines and readings are in J-9400..J-9420.
 | Daemon-level secrets grep | 0 hits | pass | J-9402 |
 | `queue.enqueue` (150 ms) | 126 ms (0-99 waiting), 61 ms shallow; 279 ms at 75-99 waiting | pass (deep end 1.9 x) | J-0450, J-9411 |
 | `history.page` 1,000 turns (300 ms) | newest page 332 ms (run 1); archived page 41 ms | miss (1.11 x) / pass | J-9406 |
-| `context.rebuild` 1,000 / 5,000 turns (5 s) | 290 / 359 ms (354 run 2) | pass | J-9404 |
+| `context.rebuild` 1,000 / 5,000 turns (5 s) | 290 / 359 ms (354 run 2); 429 ms at 10,000, 540 ms at 30,000 | pass | J-9404, J-9410 |
 | `hub.row` 1,000 / 5,000 turns | 10,193 / 10,260-10,326 chars, 211-212 entries (516 KB, 10,012 without the archive) | recorded; J-9335 (a) not needed for length | J-9404 |
-| `session.heap` 1,000 / 10,000 / 30,000 | see J-9410 (1,000 and 5,000: 1.07 M slots imported, 0.41 M grown, of 4,000,000) | recorded | J-9405, J-9410 |
-| `journal.snapshot` 1,000 / 10,000 / 30,000 (500 ms / 1 s / recorded) | see J-9410 | see J-9410 | J-9410 |
-| `checkpoint.stall` p99 (1 s) | 2.2-3.0 s p99 of per-turn wall time in every 100-turn window (one outlier turn per window; snapshot turns <= 1.0 s) | **fail** | J-9408 |
+| `session.heap` 1,000 / 10,000 / 30,000 | 794,880 / 791,552 / 794,624 slots (20 % of 4,000,000; plain turns imported); 1.07 M for imported tool turns, 0.41 M grown | recorded (flat) | J-9405, J-9410 |
+| `journal.snapshot` 1,000 / 10,000 / 30,000 (500 ms / 1 s / recorded) | 429 / 395 / 313 ms; 34.7-34.8 MB snapshot at each | pass / pass / recorded | J-9410 |
+| `checkpoint.stall` p99 (1 s) | 2.2-3.1 s p99 of per-turn wall time in every 100-turn window (one outlier turn per window; snapshot turns <= 1.0 s) | **fail** | J-9408 |
 | `provider.overhead` (5 ms; 0 deliveries) | 0.5-0.6 ms; 0 TurnSink messages while streaming (in process) | pass | J-0423 |
 | `secrets.read` (1 ms) | 0.018-0.025 ms | pass | W2.3 |
 | `restart.serving` 50 x 300 turns by import (15 s; 0 woken) | 4.4-5.6 s, 0 woken, 0 crashes | pass | J-9412 |

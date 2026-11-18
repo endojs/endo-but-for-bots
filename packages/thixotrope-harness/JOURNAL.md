@@ -7720,6 +7720,42 @@ the test now logs its steps. The seal restarts take 18-46 s to the first complet
 5-10 s).
 Decision: no blocking failure found; the pool timeout is reported unexplained.
 
+### J-9410 2026-11-18 M2 journal.snapshot, session.heap, checkpoint.stall at 1,000 / 10,000 / 30,000 turns - perf
+Evidence: `perf/journal.perf.mjs` at `d262a553cb` (the perf code of `84fc8cb388`), load 5.9-9.2
+(another checkout's lane beside it), worker `367e78ad...`, crank budget 50 M, slot ceiling
+4,000,000, allocation schedule, log hub store; sessions of P - 100 plain turns (4 records) imported,
+then the 100-turn window with the long-session script.
+{"metric":"journal.import.at30000","turns":29900,"records":119600,"ms":2516232,"turnsPerSecond":11.9,"sealWaits":464,"sealWaitMs":254010}
+{"metric":"journal.turn.at30000","msPerTurn":814.4,"perDeliveryMs":76.4,"hubMsPerTurn":338.3,"sessionTurns":30000}
+{"metric":"journal.heap.at30000","value":794624,"heap":{"slots":794624,"ofCeiling":0.199,"snapshotBytes":34799616}}
+{"metric":"journal.context.rebuild.at30000","value":540,"timing":{"pages":1,"pageMs":248.7,"sealedMs":220.7,"projectMs":16.8},"sameContext":true}
+{"metric":"journal.snapshot.budget.at30000","msEach":312.5,"snapshotBytes":34799616,"slots":794624}
+
+| session length | 1,000 | 10,000 | 30,000 |
+|---|---|---|---|
+| `journal.snapshot` engine time each (budget 500 ms / 1 s / recorded) | 429 ms | 395 ms | 313 ms |
+| session vat snapshot file | 34.7 MB | 34.8 MB | 34.8 MB |
+| `session.heap` slot capacity / of 4,000,000 | 794,880 / 19.9 % | 791,552 / 19.8 % | 794,624 / 19.9 % |
+| wall per turn / per delivery / hub per turn | 801 / 78.6 / 344 ms | 788 / 77.1 / 306 ms | 814 / 76.4 / 338 ms |
+| `turn.start` median (p95) | 281 (421) ms | 311 (390) ms | 313 (401) ms |
+| `checkpoint.stall` (p99 of per-turn wall; 1 s) | 2.48 s | 3.11 s | 2.71 s |
+| `history.page` newest / archived | 316 / 38 ms | 329 / 40 ms | 339 / 39 ms |
+| hub row chars / entries | 10,193 / 211 | 10,461 / 212 | 10,396 / 211 |
+| context rebuild (sealed part, projection) | 289 ms (27, 2.1) | 429 ms (109, 7.7) | 540 ms (221, 16.8) |
+| segments / archive disk | 27 / 2.6 MB | 308 / 30.4 MB | 933 / 91.8 MB |
+| import rate (plain) | 11.9 turns/s | 11.8 | 11.9 (42 min) |
+
+Reading: the session vat does not grow from 1,000 to 30,000 turns: `journal.snapshot` passes at
+1,000 and 10,000 (429 and 395 ms) and is 313 ms at 30,000; the slot capacity is 0.79 M (20 %) at
+every length, so no session of this kind is on course to the slot ceiling (J-9389's 10,000-11,000
+turns no longer applies). An import of plain turns leaves a smaller high-water than one of tool
+turns (0.79 M against 1.07 M, J-9405). `checkpoint.stall` fails at every length (J-9408) and
+`history.page` misses by 5-13 % at load 6-9 (J-9406). What grows is in the adapter: the rebuild's
+sealed part (27 -> 221 ms) and the projection (2 -> 17 ms), and the archive on disk (about 3 KB per
+plain turn) (J-9413). The 30,000-turn import took 42 minutes, 10 % of it waiting for seals.
+Decision: `journal.snapshot` passes; `session.heap` recorded (20 % of the ceiling at 30,000 turns);
+`checkpoint.stall` fail stands.
+
 ### J-9411 2026-11-18 M2 queue depth and pool create under load - perf
 Evidence: `m2-queue` (`queue.enqueue.e2e`), `m1b-pool` (`session.create.pool`), regression run.
 Reading: `queue.enqueue` round trip 126 ms median over 0-99 waiting (61 ms with 0-9), but 70 / 93 /
