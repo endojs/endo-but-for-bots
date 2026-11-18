@@ -78,7 +78,7 @@ export const uiScript = harden({
 
 /** @type {Awaited<ReturnType<typeof startBrowserGateway>> | undefined} */
 let harness;
-/** @type {{ log: () => any[] } | undefined} */
+/** @type {{ backend: any, log: () => any[] } | undefined} */
 let made;
 /** @type {string} */
 let sessionKey = '';

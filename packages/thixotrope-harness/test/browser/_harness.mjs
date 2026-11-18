@@ -185,7 +185,7 @@ export const templateNamed = async template => {
  * @param {{ width: number, height: number }} [options.viewport] default 1280 x 800
  * @param {Parameters<typeof serveGateway>[1]} [options.gateway] more `serve`
  *   options (a fixed `port` for a test that restarts the daemon)
- * @param {Function} [options.initScript] added to every browser context
+ * @param {() => void} [options.initScript] added to every browser context
  *   (`addInitScript`): runs in each page before its own scripts
  * @param {boolean} [options.lock] default true; false when the caller
  *   already holds the run lock in this process (a perf file's `runPerf`)
@@ -297,7 +297,6 @@ export const trackSockets = () => {
   class Tracked extends Native {
     /** @param {any[]} args */
     constructor(...args) {
-      // @ts-expect-error spread into the native constructor
       super(...args);
       sockets.push(this);
       test.opens.push(Date.now());

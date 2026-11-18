@@ -69,7 +69,7 @@ export const m3TemplateLog = path.join(tmpRoot, 'm3-300-scripted.log');
 export const m3TemplateOptions = async () => {
   const base = await m1aTemplateOptions();
   return {
-    id: `${base.id}.m3-300.v${M3_TEMPLATE_VERSION}`,
+    id: `${base.id}-m3-300-v${M3_TEMPLATE_VERSION}`,
     /** @param {import('../test/template/index.js').ProvisionContext} context */
     provision: async context => {
       await base.provision(context);
@@ -178,6 +178,9 @@ if (
           ...(template.buildSteps ? { steps: template.buildSteps } : {}),
         })}\n`,
       );
+    } catch (error) {
+      process.stderr.write(`m3 template: ${error}\n`);
+      process.exitCode = 1;
     } finally {
       await lock.release();
     }

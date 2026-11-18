@@ -126,7 +126,7 @@ test.after.always(async () => {
 
 /** @type {Awaited<ReturnType<typeof serveGateway>>} */
 let gateway;
-/** @type {{ log: () => any[] }} */
+/** @type {{ backend: any, log: () => any[] }} */
 let made;
 
 /**

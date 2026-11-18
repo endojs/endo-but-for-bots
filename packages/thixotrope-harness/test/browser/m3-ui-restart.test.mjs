@@ -77,7 +77,7 @@ const restartScript = harden({
 
 /** @type {Awaited<ReturnType<typeof startBrowserGateway>> | undefined} */
 let harness;
-/** @type {{ log: () => any[] } | undefined} */
+/** @type {{ backend: any, log: () => any[] } | undefined} */
 let made;
 test.after.always(async () => {
   await harness?.close();
