@@ -26,7 +26,9 @@
  *   iterations completes and an endless loop (far past the per-crank
  *   ceiling) is terminated, 30 s. Pass: the refusal or bounded text, no
  *   halt of the session vat or the fixture's (workspace) vat, and the
- *   session's next turn completes.
+ *   session's next turn completes. Probe c's flood is answered by a
+ *   disposable vat of its own (`keyFloodProgram`), which may halt: the
+ *   probe shows that the session and workspace vats do not (M5-FIX).
  *
  *   node scripts/run-lock.mjs --exclusive --label exec-m5 -- node perf/exec-m5.perf.mjs
  */
@@ -57,6 +59,8 @@ const {
   presetSession,
   turnOf,
 } = await import('../test/integration/_m5-objects.js');
+const { keyFloodName, makeDisposableKeyFlood } =
+  await import('../test/fixtures/m5-objects.js');
 
 const WINDOW_MS = Number(process.env.EXEC_M5_WINDOW_MS ?? 60_000);
 const NODE_MS = Number(process.env.EXEC_M5_NODE_MS ?? 10_000);
@@ -175,7 +179,8 @@ await runPerf('exec-m5', async ({ provision }) => {
       notes: fixtures.notes,
       calc: fixtures.calc,
       bigHelp: fixtures.bigHelp,
-      keyFlood: fixtures.keyFlood,
+      // Probe c's flood halts the vat that answers it: a disposable vat.
+      keyFlood: await makeDisposableKeyFlood(run.client),
     },
     { label: 'Exec perf', backend: made.backend },
   );
@@ -215,7 +220,10 @@ await runPerf('exec-m5', async ({ provision }) => {
     (await slice.workers())
       .filter(
         (/** @type {any} */ w) =>
-          w.failure && !/^(spare )?exec \d+$/.test(w.debugLabel ?? ''),
+          w.failure &&
+          !/^(spare )?exec \d+$/.test(w.debugLabel ?? '') &&
+          // Probe c's disposable vat may halt; it holds nothing else.
+          !String(w.debugLabel ?? '').includes(keyFloodName),
       )
       .map((/** @type {any} */ w) => w.debugLabel);
 

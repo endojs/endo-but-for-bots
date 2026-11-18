@@ -23,9 +23,6 @@
  *   (parameters of about 3,000 units, probe e), `bigAnswerTool` (answers
  *   300,000 characters), `throwingTool`;
  * - `bigHelp` (`help()` answers 200,000 characters, probe b);
- * - `keyFlood` (`help()` answers a record of 20,000 distinct keys, probe c;
- *   built on first call, so it costs the workspace vat's name table nothing
- *   until a test asks: then about 20,000 of its about 57,000 names, once);
  * - `slowTool` (`slow`): `execute` starts a run and answers when
  *   `release()` is called; `runs()` answers `{ started, finished }` (K5).
  *
@@ -203,19 +200,6 @@ export const makeFixtures = () => {
   const bigHelp = Far('bigHelp', {
     help: () => 'h'.repeat(200_000),
   });
-  /** @type {any} */
-  let flood;
-  const keyFlood = Far('keyFlood', {
-    help: () => {
-      if (flood === undefined) {
-        /** @type {[string, number][]} */
-        const entries = [];
-        for (let i = 0; i < 20_000; i += 1) entries.push([`k${i}`, i]);
-        flood = harden(Object.fromEntries(entries));
-      }
-      return flood;
-    },
-  });
 
   let started = 0;
   let finished = 0;
@@ -257,7 +241,6 @@ export const makeFixtures = () => {
     bigAnswerTool,
     throwingTool,
     bigHelp,
-    keyFlood,
     slowTool,
   });
   return Far('M5Fixtures', { all: () => all });
@@ -281,4 +264,40 @@ export const makeM5Fixtures = async client => {
   }
   const fixtures = await client.call('lookup', m5FixtureName);
   return E(fixtures).all();
+};
+
+/**
+ * Probe c's `keyFlood` (`help()` answers a record of 20,000 distinct keys)
+ * lives in a vat of its own, installed by the probe, never in the workspace
+ * vat: answering a message above about 94 KB halts the vat that sends it
+ * (J-0772, J-9696), and the probe must show that neither the session vat nor
+ * the fixtures' vat halts. Its own vat may halt; nothing else lives there.
+ */
+export const keyFloodName = 'm5KeyFlood';
+
+/** The disposable vat's program (`install`'s `make`), prelude names only. */
+export const keyFloodProgram = `({ make: () => {
+  let flood;
+  return Far('keyFlood', {
+    help: () => {
+      if (flood === undefined) {
+        const entries = [];
+        for (let i = 0; i < 20000; i += 1) entries.push(['k' + i, i]);
+        flood = harden(Object.fromEntries(entries));
+      }
+      return flood;
+    },
+  });
+} })`;
+
+/**
+ * Install the disposable key-flood vat (once per state) and answer its root.
+ * Node only.
+ * @param {any} client a control client on the harness workspace
+ */
+export const makeDisposableKeyFlood = async client => {
+  const found = await client.call('lookup', keyFloodName);
+  if (found !== undefined) return found;
+  await client.call('install', keyFloodName, keyFloodProgram, []);
+  return client.call('lookup', keyFloodName);
 };
