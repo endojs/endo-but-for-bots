@@ -21,8 +21,8 @@
  * The tables are answered by `speechGuards()`, built on first call and
  * kept (a guard costs about 1-25 ms to build, J-0201). A function export
  * is not a table to `test/adapter/gateway-vocabulary-tables.test.js`, so
- * this module does not turn that test red before W11.5 lists it in
- * `vocabulary-tables.js`; the fold (contract section 14) makes the tables
+ * this module does not turn that test red before WX.1 lists it in
+ * `vocabulary-tables.js`; the fold (contract section 17, F-3) makes the tables
  * plain exports once the module is listed.
  */
 import { limits } from './limits.js';

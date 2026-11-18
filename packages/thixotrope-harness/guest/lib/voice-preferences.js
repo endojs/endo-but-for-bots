@@ -73,8 +73,14 @@ export const voiceTexts = Object.freeze({
   presetNotUsable: 'This preset cannot be used for the voice shortcut',
   /** R6-60: a launch with an invocation id whose session is still being created. */
   launchInProgress: 'This voice launch is already starting',
-  /** configureSpeech with a direction whose settings do not fit its kind. */
+  /**
+   * `HarnessRoot.configureSpeech` with a direction whose settings do not
+   * fit its kind (D-M11-21: the settings are written on the provisioning
+   * path only).
+   */
   speechSettingsInvalid: 'Speech settings are not valid for their kind',
+  /** `HarnessRoot.configureSpeech` on a root made without the voice kit (unit tests of M1a). */
+  speechNotWired: 'Speech settings are not available in this harness',
 });
 
 /** Templated texts of the factory's `Voice` object. */
