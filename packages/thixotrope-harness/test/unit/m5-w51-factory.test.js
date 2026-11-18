@@ -17,6 +17,7 @@ import {
   textOf,
 } from '../../guest/lib/interfaces-m5-factory.js';
 import { limitsM5 } from '../../guest/lib/limits-m5.js';
+import { m4Texts } from '../../guest/lib/texts-m4.js';
 import { makeFactoryKit, stagingSources } from '../../guest/factory/factory.js';
 import { makeProgramStore } from '../../guest/factory/root.js';
 import { makeRowTable } from '../../guest/factory/rows.js';
@@ -183,14 +184,15 @@ test('model defaults come from the preset; an option the caller gave wins', asyn
   t.is(made[0].config.backendTitle, 'Scripted backend');
   await E(kit.factory).createSession(harden({ preset, modelId: 'model-b' }));
   t.is(made[1].config.modelId, 'model-b');
-  // A preset effort is refused until M4 lifts it (2.3 step 1).
+  // A preset effort goes to M4's check since M4 lifted NOT_YET (2.3 step 1;
+  // INT-M5): a backend that is not a subscription pool refuses it.
   const effort = await E(kit.catalog.facet).create(
     custom({ label: 'e', backend, modelId: 'm', reasoningEffort: 'high' }),
     1,
   );
   await t.throwsAsync(
     E(kit.factory).createSession(harden({ preset: effort.preset })),
-    { message: /reasoningEffort/ },
+    { message: m4Texts.effortNotSupported },
   );
 });
 

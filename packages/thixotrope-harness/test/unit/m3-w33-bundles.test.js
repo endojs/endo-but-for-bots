@@ -13,14 +13,21 @@ import url from 'node:url';
 import test from '@endo/ses-ava/test.js';
 
 import { bundleGuest } from '../../scripts/bundle-guest.mjs';
+import { limits } from '../../guest/lib/limits.js';
 
 const harnessRoot = path.resolve(
   url.fileURLToPath(new URL('../..', import.meta.url)),
 );
 const guestRoot = path.join(harnessRoot, 'guest');
 
-/** Program budgets at this base (m3 task rules; M5's merge raises them). */
-const BUDGETS = harden({ session: 200_000, exec: 100_000 });
+/**
+ * Program budgets: the limits' (M5's merge raised them to 240,000 and
+ * 120,000, contract O-1; INT-M5).
+ */
+const BUDGETS = harden({
+  session: limits.sessionProgramBytes,
+  exec: limits.execProgramBytes,
+});
 
 test('session and exec bundles carry no M3 module and fit their budgets', async t => {
   for (const program of ['session', 'exec', 'factory']) {
