@@ -29,6 +29,10 @@
  *   attempt after a 429 with `Retry-After: 1` lands from its scheduled
  *   wait (from the 429's arrival to the second request at the server).
  *
+ * `provider.sse.parse` is measured first, before the fake server starts: a
+ * 10 s window with no network between two network windows let the server's
+ * keep-alive timeout close the pooled connection under the next fetch.
+ *
  * Fixed windows (M2-P1, process.md section 3): each row repeats its run
  * (one round, one parse, one attempt) back to back for PROVIDER_WINDOW_MS
  * (default 10 s; nine rows, about 1.5 minutes) and reports `window`,
@@ -225,6 +229,50 @@ await runPerf('provider', async ({ root }) => {
   const blobDir = path.join(root, 'blobs');
   mkdirSync(blobDir, { recursive: true });
 
+  // ---- 10 MiB stream. Built, and its parse row measured, before the fake
+  // server starts: the parse window has no network, and a 10 s pause after
+  // the overhead window let the server's keep-alive timeout (5 s) close the
+  // pooled connection under the next fetch (ECONNRESET, M2-P1).
+  const piece = 'x'.repeat(64);
+  // As many delta events as make 10 MiB on the wire.
+  const one = sseText(openRouterChunks({ deltas: [piece] }).slice(2, 3));
+  const count = Math.floor((10 * MIB) / one.length);
+  const big = openRouterChunks({
+    deltas: Array.from({ length: count }, () => piece),
+  });
+  const text = sseText(big);
+  const bytes = new TextEncoder().encode(text);
+  /** @type {Uint8Array[]} */
+  const chunks = [];
+  for (let i = 0; i < bytes.length; i += 65_536)
+    chunks.push(bytes.subarray(i, i + 65_536));
+  /** @type {number[]} */
+  const parseMs = [];
+  let events = 0;
+  const w2 = await forWindow(async run => {
+    events = 0;
+    const t0 = performance.now();
+
+    for await (const event of parseSse(chunks)) {
+      if (event.data !== '') events += 1;
+    }
+    parseMs.push(performance.now() - t0);
+  });
+  const medianParse = [...parseMs].sort((a, b) => a - b)[
+    Math.floor(parseMs.length / 2)
+  ];
+  await stats('provider.sse.parse', parseMs, {
+    extra: {
+      ...w2.fields,
+      samples: parseMs.length,
+      bytes: bytes.length,
+      events,
+      mibPerSecond: +(bytes.length / MIB / (medianParse / 1000)).toFixed(1),
+      eventsPerSecond: Math.round(events / (medianParse / 1000)),
+      chunkBytes: 65_536,
+    },
+  });
+
   // ---- provider.overhead
   /** @type {Map<number, number>} event index -> write time */
   const written = new Map();
@@ -275,47 +323,6 @@ await runPerf('provider', async ({ root }) => {
         path: 'fake server socket write -> fetch -> parseSse -> openrouter -> runProviderRound -> channel -> E(subscription).next()',
         deliveriesSource:
           'TurnSink messages sent while streaming (in-process provider; daemon wiring is W2.2/W2.9)',
-      },
-    });
-
-    // ---- 10 MiB stream
-    const piece = 'x'.repeat(64);
-    // As many delta events as make 10 MiB on the wire.
-    const one = sseText(openRouterChunks({ deltas: [piece] }).slice(2, 3));
-    const count = Math.floor((10 * MIB) / one.length);
-    const big = openRouterChunks({
-      deltas: Array.from({ length: count }, () => piece),
-    });
-    const text = sseText(big);
-    const bytes = new TextEncoder().encode(text);
-    /** @type {Uint8Array[]} */
-    const chunks = [];
-    for (let i = 0; i < bytes.length; i += 65_536)
-      chunks.push(bytes.subarray(i, i + 65_536));
-    /** @type {number[]} */
-    const parseMs = [];
-    let events = 0;
-    const w2 = await forWindow(async run => {
-      events = 0;
-      const t0 = performance.now();
-
-      for await (const event of parseSse(chunks)) {
-        if (event.data !== '') events += 1;
-      }
-      parseMs.push(performance.now() - t0);
-    });
-    const medianParse = [...parseMs].sort((a, b) => a - b)[
-      Math.floor(parseMs.length / 2)
-    ];
-    await stats('provider.sse.parse', parseMs, {
-      extra: {
-        ...w2.fields,
-        samples: parseMs.length,
-        bytes: bytes.length,
-        events,
-        mibPerSecond: +(bytes.length / MIB / (medianParse / 1000)).toFixed(1),
-        eventsPerSecond: Math.round(events / (medianParse / 1000)),
-        chunkBytes: 65_536,
       },
     });
 
