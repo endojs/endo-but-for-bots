@@ -414,6 +414,16 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   the session's token usage, not attributed; no cost; no reset authority). Session usage comes
   from one `E(session).getUsage()` (one session delivery per tool call). On an API backend it
   says `m4Texts.noSubscriptionAccounts` (R4-91: the API account profile is unavailable).
+  **How the model is offered it** (D-M4-9 as amended at the cross-lane merge, XC): its
+  `adapterTools` row carries `description: accountStatusDescription`, the agent host's `open`
+  passes it in the tool's `AdapterToolEntry` (`{ name, tool, description? }`; the shape admits
+  the optional `description: ToolDescription`), and the session offers every port tool that has
+  a description and no static tool-table entry of its name through one generic entry
+  (`adapterToolEntries` in `guest/session/tool-table.js`: `site: 'adapter'`, `execute` sends `{
+  opId, args }` to that port's tool object; m5-interfaces.md 2.8 S1). A static entry is never
+  shadowed and a granted tool of the same name is `refused-builtin`. Acceptance 7's model part
+  (`m4-accounts.test.js`): the first request offers `accountStatus`, the model calls it, and the
+  next request carries the rendered text as a tool result that is not an error.
 - **Banked reset credits** (R4-86): shown read-only with their expiry; no redeem (decision 8).
 - **Readings file**: `<state>/agent-host/subscriptions/readings.json`, `{ format:
   'thixotrope-harness-readings-1', members: [{ key, provider, reading }] }`, no token, no header
@@ -779,13 +789,13 @@ Exact strings are in `texts-m4.js`; W4.1's test checks them.
 | table | M4 entries | unit |
 |---|---|---|
 | `AH/index.js` `backendKinds` | `claudePoolKind`, `codexPoolKind` | W4.6 |
-| `AH/index.js` `adapterTools` | `{ name: 'accountStatus', makeTool }` | W4.6 |
+| `AH/index.js` `adapterTools` | `{ name: 'accountStatus', makeTool, description: accountStatusDescription }` (the description since XC: an adapter tool without a static tool-table entry is offered to the model only with one) | W4.6, XC |
 | `guest/factory/session-options.js` `optionResolvers` | `subscriptionEffort` (last) | W4.1 |
 | `scripts/provision-steps.js` | `subscriptions`: from the provisioning options' `subscriptions: [{ kind, label, members: [{ label, provider, secretLabel, weight? }], contextLength?, ... }]`, find each Secret by label (provisioning boundary, rule 2), `makeMember`, `makePool`, add the pool to `HarnessSettings.backends`; idempotent; never writes a secret value (R8-38) | W4.6 |
 | M3's UI registry `ui/src/<dir>/feature.js` (new files, no edit) | `secrets/`, `accounts/` (and `account-chip/` if needed) | W4.7 |
 | M3's gateway registry `AH/gateway/extensions/<name>.js` (new file, no edit) | `m4-secrets.js` | W4.6 |
 | M3's vocabulary loader (reads `guest/lib/interfaces-m<N>.js`, no edit) | `vocabularyShapes()` in `interfaces-m4.js` | W4.0 (done) |
-| `guest/session/tool-table.js`, `turn-hooks.js`, `holds-table.js`, `services.js`, `projection-hooks.js`, `channel-taps.js` | none | - |
+| `guest/session/tool-table.js`, `turn-hooks.js`, `holds-table.js`, `services.js`, `projection-hooks.js`, `channel-taps.js` | none (XC's generic adapter-tool entry in `tool-table.js` serves `accountStatus` with no M4 row there) | - |
 
 ---
 
