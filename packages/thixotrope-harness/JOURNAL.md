@@ -11310,3 +11310,68 @@ Prettier clean on touched files; eslint 0 errors on them (warnings only). Shared
 m5 fixtures 0 ms (all skipped) and factory 178,390 bytes in 7,234 ms. Not run: the other ten M5
 integration files, browser files, perf.
 Fit: neutral: no wait for a slot this time.
+
+### J-9930 2026-11-18 INT-VERIFY merge commits re-derived - verify
+Evidence: each of the three merge commits (`3843600895` M3, `691115430e` M4, `f73b6940a4` M5) was
+merged again with `git merge-tree --write-tree` from its own parents and the result diffed against
+the commit. Only the files the INT reports name differ: README and `scripts/provision-steps.js`
+(M3); `durable.js`, `impl/index.js`, `secrets/store.js` and the step move with its three callers
+(M4); `pending-queue.js`, the step move and the two step-list tests (M5). Every lane-added line
+(base `36b3035e92`..lane tip) was looked up in the merged file: the only absent ones are the step
+table entries now in `scripts/provision-steps/{30,40,50}-*.js`, M4's inline key-file writer
+(replaced by the M2 review's `createWrappingKey`, same temp, sync, link and EEXIST handling plus a
+directory fsync), M4's base URL trims (now `providerBaseUrl`), M3's page-side send-now cancel, and
+test lines the reports list as adaptations. Every line the M2 review added since the base is
+present. No duplicate J- or CC- heading; the milestones.md and README tables have consistent
+columns (the one ragged table, `m3-interfaces.md` W3.7 rows, is the lane's own).
+Fit: good: `merge-tree` re-derives a merge in a second with no worktree, so a reviewer can see
+exactly what a resolver chose.
+
+### J-9931 2026-11-18 INT-VERIFY hotspot seams in the merged tree - verify
+Evidence: every seam of the three hotspot tables was looked up in the merged files: M3 H2-H5
+(gateway manager, `withGatewayAdmin`, `bindings`, `makeGatewayService`, `gateway.attached()`),
+M4 H-1..H-8 and H-11 (`BackendKind`, the six `durable.js` seams, `PoolSpec` and `credentials` in
+`attach.js`, the H-4 lines in `impl/index.js`, `NOT_YET`, the `reasoningEffort` copy,
+`subscriptionDefaults`), M5 H-1..H-11 (preset catalogue, Operator and Session guards, tool table,
+Composer guard, `systemTextOf`, export `presets`). All present; M5's are in the lane's built form
+(`catalog.withDefaults(options)`, `m5Interfaces.Session`), not the contract's literal text. No
+hotspot is resolved to one side.
+Fit: good: the one-owner-per-shared-file rule left only adjacent-line conflicts.
+
+### J-9932 2026-11-18 INT-VERIFY unit, adapter, typecheck, lint - test
+Evidence: `corepack yarn test` 1,216 passed, 109 skipped, 0 failed (66 s wall). `tsc` exit 0
+(also with `--incremental false`, 6.5 s, 497 package files). eslint on the 272 JS files changed
+since main: 0 errors, 293 warnings. `prettier --check` on the package: 8 files, none caused by the
+merge: 5 are ignored build outputs (`dist-guest/`, gateway `assets/`), 3 are M2 tests unchanged
+since main (`m2-w21b-retry`, `m2-providers`, `m1b-followups`).
+Fit: neutral.
+
+### J-9933 2026-11-18 INT-VERIFY guest program sizes - measure
+Evidence: `node scripts/bundle-guest.mjs` (written outside the tree): session 236,583 bytes
+(budget 240,000, 3,417 left), exec 105,414 (120,000, 14,586 left), factory 178,390; equal to
+INT-M5's figures. Session program: 37 modules, about 193.5 KB of module text (comments and
+indentation stripped, approximate) and about 43 KB of bundle wrapper (about 1.2 KB per module).
+Largest: `lib/interfaces.js` 47.8 KB, `session/turn.js` 29.6, `lib/interfaces-m5.js` 10.6,
+`tools/granted.js` 6.5, `lib/tool-args.js` 6.1, `tools/inspection.js` 6.1, `tools/exec.js` 6.0,
+`lib/pending-queue.js` 6.0, `session/export.js` 5.6, `tools/objects.js` 5.4. Exec: `interfaces.js`
+47.8 KB of 105.4.
+Fit: poor: `interfaces.js` is a fifth of the session program and nearly half the exec program,
+and the per-module wrapper is a sixth; splitting interfaces per vat would cut both programs.
+
+### J-9934 2026-11-18 INT-VERIFY daemon smoke in shared slots - test
+Evidence: `corepack yarn test:integration --jobs 4`, 7 files, 344.5 s wall, no wait for a slot
+(at most 64 ms), load about 2.3. Held: `m1a-provision` 119.9 s (1 test), `m1a-slice` 221.3 s
+(6), `m2-archive-restart` 221.8 s (1), `m2-queue` 207.4 s (2, send-now), `m3-gateway` 113.4 s
+(6), `m4-pools` 137.0 s (1), `m5-snapshot` 76.0 s (1). All pass; none near the 10-minute box.
+Fit: good: one file per milestone shows the three lanes' vat code and the M2 review's queue and
+archive changes run together in one daemon.
+
+### J-9935 2026-11-18 INT-VERIFY how three lanes composed - fit
+Evidence: three lanes cut from one base, merged in contract order, gave 9 conflicted files in
+all, every one at a contracted seam or in the PM-owned step table; no lane code needed a
+semantic rewrite except where the M2 review had changed behaviour under it (send-now cancel,
+URL rule and timeout bound for pools, receipt eviction under M5's labels). The step registry the
+M2 review made (one file per step) turned a three-way table conflict into three file moves.
+Fit: good for code (guards make a cross-lane mismatch a refused call in a unit test). Poor for
+size: each lane fits its own program budget, but the session program's margin after all three is
+1.4 %, and only a merge shows it.
