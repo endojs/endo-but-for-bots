@@ -9103,3 +9103,89 @@ Evidence: resumed run 08:19:14Z to the end of this entry's commit; earlier run c
 restart at about 06:55Z. Commands over 60 s: every perf run above (held times in J-9470, waits in
 J-9472), and the wait loops for them; no cargo, no exclusive mode, no core change.
 Decision: recorded.
+
+### J-9450 2026-11-18 M2 acceptance run: unit lane and every integration file, timed - good fit
+Evidence: review M2-R3, resumed run 08:19Z-09:40Z; tree `6adae9ee8e` plus M2-T1's then uncommitted
+split of acceptance 16 (committed as `403f08e744`), archive files rerun at `3d736552c4`; shared slots
+only, `--jobs 3` (4 for the archive rerun), load 3.4-7.5 with three other lanes; held times from
+`runs.jsonl` (lane `endo-thix-m2r`, agent `M2-R3`), not the batch wall times, which include waits.
+Reading: unit and adapter lane (`corepack yarn test`, no supervisor): 718 passed, 0 failed, 59
+skipped (the integration files, spikes and two serve tests, which skip without
+`THIX_HARNESS_INTEGRATION`), 72 s. Integration, held s / exit / tests: m2-providers 100 / 0 / 3;
+m2-turns **346** / 0 / 3; m2-queue 246 / 0 / 2; m2-history 285 / 0 / 1; m2-lifecycle **429** / 0 /
+3; m2-archive-restart 173-229 / 0 / 1 (5 runs); m2-archive-restart-2 198-236 / 0 / 1 (5 runs);
+m2-secrets 83 / 0 / 1; m2-catalog 89 / 0 / 1; m2-probes 78 / 0 / 1 passed + 1 known failure;
+m1a-provision 151 / 0 / 1; m1a-slice 222 / 0 / 6; m1a-slice-crash 102 / 0 / 1; m1a-slice-restart
+205 / 0 / 4; m1b-content 103 / 0 / 2; m1b-context-restart 233 / 0 / 1; m1b-exec-tool 157 / 0 / 1;
+m1b-exec-tool-restart 135 / 0 / 1; m1b-followups 207 / 0 / 3; m1b-live 157 / **1** / 3 passed 1
+failed, rerun alone 136 / 0 / 4; m1b-pool 128 / 0 / 1; m1b-pool-restart 144-244 / 0 / 3 (3 runs);
+m1b-qc 123 / 0 / 1; template 69 / 0 / 6. The m1b-live failure: "9: two list subscribers see create
+and rename within 500 ms ... rename row 1033 ms" (`m1b-live.test.js:332`, load 4.3-4.6, three files
+beside it); alone it passed: a latency budget missed under load, not a defect. Over 5 minutes:
+m2-lifecycle (429 s; 342 s in the cut-off run) and m2-turns (346 s). Over 10 minutes: none; no exit 124.
+Known failing: m2-probes "a 100 KiB inline string is refused before it is sent" (`test.failing`:
+the control client sends it, the vat guard refuses it; J-9407). Opt-in knobs, none a skipped test:
+`M1A_KILL_DELAYS_MS`, `POOL_KILL_DELAYS_MS`, `EXEC_KILL_DELAY_MS`, `M2_DELETE_KILL_DELAY_MS`,
+`M2_CREATE_KILL_DELAY_MS`, `M2_TURNS_WINDOW_MS`, `M1A_CREATE_N`, `M1A_REBUILD`. The unit lane has no
+`test.failing` left (the turn-deadline known failure of J-0475 is a plain passing test now).
+Fit: one pass of the 24 integration files held 70 minutes of slot time and waited 161 minutes
+for slots (first run of each file); spread over 6 idle slots that is about 12 minutes, so the
+20-minute rule holds only when the machine is not shared.
+Decision: no blocking failure; m2-lifecycle and m2-turns are over the 5-minute file budget.
+
+### J-9451 2026-11-18 M2 acceptance 1-16 against the tests that ran - deviation
+Evidence: J-9450's runs; the assertions read in each file at the commits of J-9450.
+Reading: **1** pass, m2-providers "acceptance 1": `deltas.length > 1` for OpenRouter and Anthropic.
+**2** pass, m2-turns "2": the R4-43 and R4-45 texts by regex, synthesized id `textOf.synthesizedCallId(0, 2)`,
+requests at rounds [0, 1]. **3** pass in Node only: `test/adapter/m2-w26-turns.test.js` "R4-47"
+(limit 2: `completed`, `texts.roundLimit`, 2 requests); in a vat the file measures a round rate over
+60 s and derives the 1,024-round time; the vat limit is a constant, so the R4-47 path is not proven
+in a vat (needs the `SessionConfig` field of J-9480). **4** pass, m2-queue "4 and 10": `queueFull`
+text, duplicate id before and after its turn, one transcript entry. **5** pass, m2-queue "5" (both
+releases, FIFO). **6** pass by the PM's ruling: `end { status: 'cancelled' }`, server sees `closed`.
+**7** pass, m2-secrets (replace, stale generation refused, 401 body absent, revoke, no request, no
+key in any encoding under the state directory). **8** pass, m2-providers "acceptance 8" (two
+requests before a delta, one after). **9** pass, m2-history (300 turns, every turn once, each page
+<= `frameBytes`, vat pages <= `historyPageRecords`); "pages of 32 turns" is not asserted.
+**10** pass, m2-queue: the second client's `listPending` and transcript equal the first's (a read,
+not a live feed). **11** pass, m2-catalog. **12** pass, m2-turns "12" (per-turn digests against
+hand-written transcripts, never-dispatched digest absent). **13** partly not proven: the SIGKILL
+case asserts the session unlisted, its vat retired and the archive total smaller than before, not
+that the session's archive and blobs are gone: in all 4 kill runs 82 bytes stayed under
+`agent-host/archive` (`archiveBefore` 72,610, `archiveAfter` 82); the clean delete asserts vat
+files and archive at 0 and emits `leftBlobBytes` 0 without asserting it; `row-removed` 5 ms.
+**14** pass for sessions, history and queues (re-export equal line for line, pending and hold
+equal, 170 turns walked); presets not exported (M5). **15** not run here: perf, exclusive pass
+(J-9404). **16** pass, 20 kills (J-9452), with the A2 point hit as written in 2 of 5 runs.
+Decision: for M2 to be marked done, 13 needs the doomed session's archive directory and blobs
+asserted gone after the kill; 3 is accepted in Node unless the PM wants the vat field.
+
+### J-9452 2026-11-18 M2 SIGKILL repetitions, and the pool +1,000 ms case - good fit
+Evidence: J-9450's runs; rows `archive.kill.*`, `m2.lifecycle.deleteKill/createKill`,
+`m1b.pool.killAfterTake`; `test/adapter/m2-archive-kill.test.js` 3 times (no supervisor).
+Reading: adapter seal kills (A1-A4 in a child): 3 runs, 3 tests each, all pass, 15-21 s. Seal kills
+in vats: S, A2, A3, Z 5 runs each (20 kills; 4 per point at `403f08e744`'s test, 1 per point at the
+version before), all pass: every turn once, same per-turn digests, no `.part` left, next seal.
+`partAtKill` 1 at A2 in 2 of 5 (the watcher's kill usually lands after the rename), once at S.
+Restart to first turn 15.7-35.1 s (served 10.0-27.3 s). Delete/create kills (m2-lifecycle "13"): 4
+runs, delete killed 0, 0, 250, 500 ms after `deleting`, create 336-1,592 ms after the call: all
+pass, nothing half-made, `s2` kept. Pool take kills: [0, 150] 3 runs, +1,000 ms 5 runs, all pass;
+each listed session ran its first turn with exactly 1 provider request; at +0 ms the take rolled
+back (listed 0) every time. The J-9409 timeout did not recur in 5 runs (served 8.9-16.4 s, load
+4.4-4.8). No duplicated provider request, tool run or exec evaluation, no lost or duplicated record
+by the tests' oracles; no state directory kept, none needed.
+Fit: good: intent before effect held at every kill point tried; the cost is the restart (10-27 s
+to serving under load).
+Decision: no blocker; the pool timeout stays unexplained and unreproduced (6 + 5 runs).
+
+### J-9453 2026-11-18 M2-R3 stale text and process - process
+Evidence: the files of J-9451; `runs.jsonl`.
+Reading: (1) milestones.md M2 outcome row 3 still says opt-in `M2_TURNS_ROUND_LIMIT=1`, known
+failure; since `3ddceecc8a` it is a 60 s round-rate window. (2) `m2-turns.test.js` header says the
+adapter test keeps the turn deadline as a known failure; it passes as a plain test. (3)
+`README.md` says `THIX_HARNESS_RUN_SLOTS` default 4; it is 6. (4) Three M1 waiters of this unit were
+stopped while waiting (exit 143, 0 held) after a wrong file path; the rerun is in J-9450.
+Time: 08:19:13Z to this commit; 46 runs, 122 min held, 252 min waited; commands over 60 s: the unit
+lane (72 s), the M2 batch (about 60 min), the kill script (about 66 min), the M1 batch (20 min), the
+archive rerun (4.2 min), m1b-live alone (2.3 min), and the wait loops for them.
+Decision: (1)-(3) for the PM or the owners of those files.
