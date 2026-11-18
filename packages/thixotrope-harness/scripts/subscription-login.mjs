@@ -196,6 +196,9 @@ export const signIn = async ({
   const scopeList = scopes ?? defaults.scopes;
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
+  // An independent OAuth state (M4-FIX): the URL is seen by the browser, its
+  // history and any proxy, so it never carries the PKCE verifier.
+  const state = randomBytes(32).toString('base64url');
   const page = new URL(authorize);
   page.search = new URLSearchParams({
     code: 'true',
@@ -205,15 +208,15 @@ export const signIn = async ({
     scope: scopeList.join(' '),
     code_challenge: challenge,
     code_challenge_method: 'S256',
-    // As the reference: the state is the verifier, checked on the paste.
-    state: verifier,
+    // Checked on the paste; unrelated to the verifier.
+    state,
   }).toString();
   const reply = await prompt(page.href);
   const parts = typeof reply === 'string' ? reply.trim().split('#') : [];
   if (
     parts.length !== 2 ||
     !/^[A-Za-z0-9_-]{1,4096}$/.test(parts[0]) ||
-    parts[1] !== verifier
+    parts[1] !== state
   )
     throw Error('Invalid authorization code or state; start a new sign-in');
   /** @type {any} */
@@ -226,7 +229,7 @@ export const signIn = async ({
         grant_type: 'authorization_code',
         client_id: oauthClient,
         code: parts[0],
-        state: verifier,
+        state,
         redirect_uri: redirect,
         code_verifier: verifier,
       }),

@@ -146,6 +146,8 @@ test('signIn: PKCE code exchange at the token endpoint writes a stored-form cred
   t.teardown(oauth.close);
   /** @type {string[]} */
   const pages = [];
+  /** @type {any[]} */
+  const tokenBodies = [];
   await signIn({
     client: s.client,
     secret: s.secret,
@@ -153,10 +155,22 @@ test('signIn: PKCE code exchange at the token endpoint writes a stored-form cred
     authorizeUrl: oauth.authorizeUrl,
     tokenUrl: oauth.tokenUrl,
     prompt: pasteFromPage(pages),
+    fetch: async (url, init) => {
+      tokenBodies.push(JSON.parse(String(init?.body)));
+      return fetch(url, init);
+    },
   });
   const page = new URL(pages[0]);
   t.is(page.searchParams.get('code_challenge_method'), 'S256');
   t.truthy(page.searchParams.get('code_challenge'));
+  // M4-FIX: the state is independent of the PKCE verifier, which never
+  // appears in the authorization URL.
+  t.is(tokenBodies.length, 1);
+  const { code_verifier: verifier, state } = tokenBodies[0];
+  t.is(typeof verifier, 'string');
+  t.is(state, page.searchParams.get('state'));
+  t.not(state, verifier);
+  t.false(pages[0].includes(verifier), 'no verifier in the URL');
   const stored = (await s.store.read('ka')).value;
   const credential = parseCredential(stored, 'claude');
   t.truthy(credential.accessToken);
