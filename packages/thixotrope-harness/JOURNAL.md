@@ -8287,3 +8287,38 @@ narrow }` (`Sidebar` also `open`). (2) The controller adds, beyond 9.1: `attach(
 `openNewSession`/`closeNewSession` (`state.newSessionOpen`), `moreRecovery`, `closeRecovery`,
 `moreModels`, `newSession({ reasoningEffort })`, `state.status` and `view.blocked`. (3) `ui/build.mjs`
 also bundles every directory's `*.css`, so view lanes ship their styles by file.
+
+### J-0690 2026-11-18 M4 W4.7 Secrets panel, Subscriptions panel, account chips - built
+Evidence: commits 5847645cee (`ui/src/secrets/`), d5b35eaa73 (`ui/src/accounts/`), 3a9ee096c2
+(`m4-ui-secrets`, `m4-ui-accounts`, `m4-ui-build` tests, `_m4-ui-fakes.js`).
+Reading: three features through M3's directory registry, no M3 file edited: `secrets`
+(`app.panel`), `accounts` (`app.panel`, "Subscriptions") and `accounts.chip` (`statusbar.chip`).
+The Secrets panel reads a value from a password field or a file only when sending, checks it
+(`browserSecretBytes` on `JSON.stringify(value)` as UTF-8; UTF-8 files only, BOM kept), passes it
+in one `SecretWriter.replace(secret, value, generationShown)` and clears the field; the value is
+never in component state or markup (the tests look for a marker in `innerHTML` and every input).
+One accounts feed per connection: `list()`, then `watch(rev)` with exactly one `next()` waiting,
+`watch(lastRev)` again after `accountsWatchClosed` (at most 3 in a row), `close()` when no
+component listens.
+
+### J-0691 2026-11-18 M4 W4.7 test times and bundle share - perf
+Evidence: `corepack yarn test test/unit/m4-ui-*.test.js` (unit lane, no supervisor); a throwaway
+build of `ui/src` with and without `secrets/` and `accounts/` (not committed), commit d5b35eaa73.
+Measured: 18 tests in about 1.5 s wall for the three files; the 1,040,382-letter size probe runs
+in the page test in well under a second. Bundle: +19,356 bytes minified, +6,314 gzip (288,393 /
+94,737 -> 307,749 / 101,051 with the other lanes' in-progress views). Budget (`ui.coldLoad`):
+600 KB gzip for the bundle; M4's share is 1 %.
+
+### J-0692 2026-11-18 M4 W4.7 fit and contract gaps - deviation
+Reading: (1) the chip's id is `accounts.chip`, not `account-chip`: M3's collector takes only
+`<dir>` or `<dir>.<part>`; one file still exports both features. (2) `UiFeature.when` is
+synchronous and the chip needs `Accounts.forSession(session)`, an answered call, so `when` only
+checks that a session is on screen and the component renders nothing for a non-pool backend.
+(3) The feature context has no `Session` object of the session on screen (`activeKey` only): the
+chip uses `controller.activeSession()` when present, else `SessionFactory.findSession(activeKey)`
+(F.2 d), one factory call per session switch. (4) Preact runs `useEffect` after an animation
+frame or a 35 ms timer; in Node the tests set `options.requestAnimationFrame` to `setImmediate`
+(`runEffectsPromptly`), and they run serially because `makeTestDom` swaps one global `document`.
+Fit: good for the object rule. The chip finds its pool in each `AccountsBatch` by the `Backend`
+presence that `forSession` answered (identity, no label); the panel holds `Secret` presences from
+the catalogue and calls them directly, so no key or label lookup exists in the page.
