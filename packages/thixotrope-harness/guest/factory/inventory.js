@@ -57,13 +57,6 @@ export const makeInventory = () => {
   const entries = new Map();
   /** @type {Map<string, any>} */
   const byLabel = new Map();
-  /**
-   * The entries in insertion order, so a page is a slice (W5.9: walking
-   * the Map to a page's position cost about 0.75 ms an entry in a vat,
-   * 804 ms for a page of 1,000 entries; J-9696).
-   * @type {any[]}
-   */
-  const order = [];
   let rev = 0;
 
   /** @param {string} label */
@@ -105,7 +98,6 @@ export const makeInventory = () => {
           const state = liveOf(entry);
           entries.delete(entry);
           byLabel.delete(state.label);
-          order.splice(order.indexOf(entry), 1);
           rev += 1;
           return undefined;
         },
@@ -113,7 +105,6 @@ export const makeInventory = () => {
     );
     entries.set(entry, { label, value });
     byLabel.set(label, entry);
-    order.push(entry);
     return entry;
   };
 
@@ -156,15 +147,17 @@ export const makeInventory = () => {
   const list = cursor => {
     const start = positionOf(cursor);
     const pageSize = limitsM5.inventoryPageEntries;
-    const rows = order.slice(start, start + pageSize).map(entry => {
-      const { label, value } = /** @type {{ label: string, value: any }} */ (
-        entries.get(entry)
-      );
-      return harden({ entry, label, value });
-    });
+    /** @type {any[]} */
+    const rows = [];
+    let position = 0;
+    for (const [entry, { label, value }] of entries) {
+      if (position >= start + pageSize) break;
+      if (position >= start) rows.push(harden({ entry, label, value }));
+      position += 1;
+    }
     /** @type {Record<string, any>} */
     const page = { rows, rev };
-    if (start + pageSize < order.length) page.next = cursorAt(start + pageSize);
+    if (start + pageSize < entries.size) page.next = cursorAt(start + pageSize);
     return harden(page);
   };
 
