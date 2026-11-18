@@ -8288,6 +8288,56 @@ narrow }` (`Sidebar` also `open`). (2) The controller adds, beyond 9.1: `attach(
 `moreModels`, `newSession({ reasoningEffort })`, `state.status` and `view.blocked`. (3) `ui/build.mjs`
 also bundles every directory's `*.css`, so view lanes ship their styles by file.
 
+### J-0590 2026-11-18 M3 W3.7 gateway wiring - built
+Evidence: commits 7f6f76130b, ab254aaa81, 78d240c887; `resources/agent-host/impl/gateway/index.js`
+(`makeGatewayService`), seams H4 (`AH/index.js`, as the contract states) and H5
+(`scripts/provision-steps.js` step `gateway`, plus a `gateway` option threaded through
+`makeProvision`), `scripts/gateway.mjs`, `test/integration/{_m3-gateway,m3-gateway,m3-sessions}*`.
+Reading: the gateway is the second registration of the agent-host resource; `bind` reads (or
+mints) the sign-in secret, listens, then attaches `GatewayOps` with the serving status, so `serve`
+answers a bound gateway. Extensions, extras, large-call targets and the vocabulary are made once
+per incarnation at the first bind; sign-in store, limiter, bridge and server per bind. An in-process
+bind (no supervisor) takes 59-79 ms. Acceptance 1, 2, 3, 10, 11, 12 (protocol), 13, 14, 16 and K1,
+K2 pass through the daemon: `m3-gateway` held its slot 138 s (both with and without W3.4's built
+shell in `GW/assets/`; with it, an asset answered with the immutable cache header), `m3-sessions`
+102-129 s. One run waited 645 s for a slot behind other lanes' exclusive perf runs.
+Decision: as built. `scripts/gateway.mjs url` refuses a state without `signin.enc` instead of
+reading it, because the secrets store's first use creates a wrapping key.
+
+### J-0591 2026-11-18 M3 W3.7 restore and kill points - perf
+Evidence: `m3-gateway.test.js` at 78d240c887 (single events, not windows: no rate is claimed).
+Reading: after SIGKILL the supervisor served again in 11.6-14.3 s (two runs) and the restored
+gateway answered `serving` on the same port 1.2-1.4 s later, with the same secret (A-3 holds: the kit restores
+`gateway` after `agent-host` with no caller). K1 (SIGKILL when the adapter logged
+`gateway-binding`, after the register crank): restored and served after restart. K2 (SIGKILL 0 and
+15 ms into `rotateSignIn`): at 0 ms the old secret stayed, at 15 ms the new one; each time exactly
+one secret signed in and no `signin.enc.tmp` was left. List feed through the gateway (acceptance
+3): a created row reached the other page 0-1 ms after the creator's answer, a rename 20-25 ms, a
+removal 0-1 ms (budget 500 ms).
+Decision: recorded. `ui.restartReady` (W3.8) measures the serving-to-fetch time properly.
+
+### J-0592 2026-11-18 M3 W3.7 pass-through in the real daemon - fit
+Evidence: acceptance 2, 10, 13 in `m3-gateway.test.js` and `m3-sessions.test.js`.
+Reading: good fit. A-1 holds for real OCapN presences: the Operator, factory, sessions, turns,
+queue entries, backends and presets passed through `@endo/captp` in the adapter with no wrapper,
+and the page saw one presence per object across calls (A-2). Refused calls (100 KiB, 2,000 keys,
+a page object, invented `networkPolicy` keys) left every worker's journal length unchanged. The
+pitfall is the same property seen from a test: a presence the test got over the control socket
+is, to the gateway, an object the page made (refused `browserObject`); a page must reach every
+object through its own connection. Objects-not-names holds end to end, and identity is per
+connection.
+Decision: tests take backends from `listBackends()` over the gateway, never from the control
+client.
+
+### J-0593 2026-11-18 M3 W3.7 hook-table seams - awkward
+Evidence: H5 at 7f6f76130b; `test/unit/m1a-provision-steps.test.js`; `templateIdFor`.
+Reading: appending a step to `provisionSteps` has two costs outside the unit. (1) The M1a unit test
+pins the table and the first run's reports, so it fails until `gateway` is added to its lists
+(owned by M1a; a PM change). (2) `templateIdFor` hashes `provision-steps.js`, so every state
+template id changes and each lane's next integration run rebuilds the m1a template once. Neither
+needs a core change.
+Decision: reported to the PM with the exact test change.
+
 ### J-0690 2026-11-18 M4 W4.7 Secrets panel, Subscriptions panel, account chips - built
 Evidence: commits 5847645cee (`ui/src/secrets/`), d5b35eaa73 (`ui/src/accounts/`), 3a9ee096c2
 (`m4-ui-secrets`, `m4-ui-accounts`, `m4-ui-build` tests, `_m4-ui-fakes.js`).
