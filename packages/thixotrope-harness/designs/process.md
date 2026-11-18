@@ -63,24 +63,33 @@ Rules:
 ## 2. Test slots
 
 Ironhorse workloads (integration tests, spikes, perf checks, the core's Ironhorse lane) take the
-run lock `scripts/run-lock.mjs`. It was one exclusive lock per checkout (`tmp/.run.lock`). Unit
-I-1's version (in this lane as this is written; its header comment is the reference) is a
-machine-wide pool of slots:
+run lock `scripts/run-lock.mjs`. It was one exclusive lock per checkout (`tmp/.run.lock`); it is
+now a machine-wide pool of slots (the script's header comment is the reference):
 
 - **Where:** `<THIX_HARNESS_HOME>/run-lock/slot`, `slot.1`, ... `slot.<N-1>`, shared by every
   worktree. N is `THIX_HARNESS_RUN_SLOTS` (default 4); every taker on the machine must use the
   same N.
 - **Shared** (default): take any free slot, wait while none is. **Exclusive** (`--exclusive`):
-  wait until every slot is free and hold all of them. A command naming a `perf/*.perf.mjs` file is
-  exclusive by default (`--shared` overrides), so perf numbers are not taken on a loaded machine.
-  An exclusive waiter sets an intent marker that stops new shared takers, so it is not starved.
-- **Time box:** `--max-ms` (default 600,000; `THIX_HARNESS_RUN_MAX_MS`): a workload that runs
-  longer gets SIGTERM, then SIGKILL 10 s later, and the wrapper exits **124**. Waiting for a slot
-  does not count.
-- **Attribution:** every exit appends a line to `<THIX_HARNESS_HOME>/runs.jsonl` with the lane
-  (worktree name), `THIX_AGENT`, label, mode, slot, time waited, time held, exit code and whether
-  it timed out. Set `THIX_AGENT` to your unit (for example `I-3`).
+  wait until every slot is free and hold all of them. A process whose own arguments name a
+  `perf/*.perf.mjs` file is exclusive by default, whether it is the CLI wrapper (`--shared`
+  overrides) or the perf check itself (`node perf/x.perf.mjs`; `yarn perf` starts each check that
+  way), so perf numbers are not taken on a loaded machine. An exclusive waiter sets an intent
+  marker that stops new shared takers, so it is not starved.
+- **Time box (CLI wrapper only):** `--max-ms` (default 600,000; `THIX_HARNESS_RUN_MAX_MS`): a
+  workload that runs longer gets SIGTERM, then SIGKILL 10 s later, and the wrapper exits **124**.
+  Waiting for a slot does not count. Processes a workload leaves in its group when it exits are
+  ended the same way before its slot is freed. A taker in process (`takeIntegrationLock`,
+  `runPerf`, a spike's `takeRunLock`) has no box: run it under the CLI wrapper, as
+  `corepack yarn test:integration` does for every integration file.
+- **Attribution:** every exit of the CLI wrapper appends a line to `<THIX_HARNESS_HOME>/runs.jsonl`
+  with the lane (worktree name), `THIX_AGENT`, label, mode, slot, time waited, time held, exit code
+  and whether it timed out. A taker in process that is not nested in a wrapper logs the same line
+  on release, with exit code null; a process that dies without releasing logs nothing. Set
+  `THIX_AGENT` to your unit (for example `I-3`).
 - Nested takers inside a held slot pass through (`THIX_HARNESS_RUN_LOCK`), as before.
+- **Transition:** a worktree whose branch predates the slot lock still takes its own
+  `tmp/.run.lock` and does not see the slots, so an exclusive perf run is machine-exclusive only
+  once every running worktree has merged it.
 
 Do not run a lane's full unit suite and its integration files at the same time against one
 `tmp/`.
@@ -89,8 +98,9 @@ Do not run a lane's full unit suite and its integration files at the same time a
 
 The owner's rule: we do not test anything that takes hours.
 
-- **No test file and no perf check runs longer than 10 minutes.** The lock enforces it (exit
-  124). A file that needs longer is split or redesigned; it is not exempted.
+- **No test file and no perf check runs longer than 10 minutes.** The CLI wrapper enforces it
+  (exit 124); `corepack yarn test:integration` wraps each file separately. A file that needs
+  longer is split or redesigned; it is not exempted.
 - **A perf check measures a rate or a latency over a fixed window** (default 60 s per measured
   point), not a count of operations, and reports per-minute or per-operation figures (turns per
   minute, deliveries per second, median and p99 ms per operation, with the number of samples the
@@ -111,10 +121,11 @@ The owner's rule: we do not test anything that takes hours.
 - Every agent records its start and end time (`date -u +%Y-%m-%dT%H:%M:%SZ` as its first and last
   command) and every command of its own that ran longer than 60 s, with its duration, and reports
   them with its result.
-- The run lock logs every Ironhorse run, its wait and its hold, to
+- The run lock logs every Ironhorse run that holds a slot, its wait and its hold, to
   `<THIX_HARNESS_HOME>/runs.jsonl` (section 2).
-- `scripts/process-time.mjs` (unit I-2, being built) regenerates `TIMELOG.md` from those reports
-  and the run log after every workflow.
+- `scripts/process-time.mjs` regenerates `TIMELOG.md` after every workflow from the PM session's
+  transcripts (each agent's tool calls and model turns, timed from the transcript) and the run
+  log; it does not read the agents' reports.
 - The PM looks at: wall time per unit and per milestone; time spent waiting for the run lock or a
   slot against time running; the longest commands; and repeated work (rebuilt templates,
   reinstalls). A unit whose waits exceed its runs, or a command near the 10-minute box, is the
