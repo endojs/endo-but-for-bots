@@ -48,7 +48,7 @@
  */
 import { interfaces, textOf, texts } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
-import { utf8Bytes } from '../../lib/bounded.js';
+import { utf8Bytes, messageOf } from '../../lib/bounded.js';
 import { isStaged } from '../staging.js';
 import { inspectDeadline, inspectFor } from './inspect-client.js';
 
@@ -59,17 +59,6 @@ const { makeExo } = /** @type {any} */ (globalThis);
 
 /** @param {string} text */
 const failed = text => harden({ status: 'failed', text });
-
-/** @param {unknown} error */
-const messageOf = error => {
-  try {
-    const { message } = /** @type {any} */ (error);
-    if (typeof message === 'string') return message;
-  } catch {
-    // fall through
-  }
-  return `${error}`;
-};
 
 /** The prefix of every `refused-schema` reason. */
 const SCHEMA_PREFIX = textOf.toolSchemaInvalid('');

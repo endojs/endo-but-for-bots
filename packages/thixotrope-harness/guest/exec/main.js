@@ -50,6 +50,7 @@ import {
   textOf,
 } from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
+import { messageOf } from '../lib/bounded.js';
 import {
   EXHAUSTED,
   argumentText,
@@ -57,7 +58,6 @@ import {
   failed,
   finish,
   isKeysExhausted,
-  messageOf,
   redactHostPaths,
   renderToolResult,
   stripCodeFence,

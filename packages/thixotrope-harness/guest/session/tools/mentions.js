@@ -35,6 +35,7 @@ import { argSpecs, parseClosedArgs } from '../../lib/tool-args.js';
 import { isValidLabel } from '../labels.js';
 import { partOf } from '../packages.js';
 import { fieldBytes, isStaged } from '../staging.js';
+import { messageOf } from '../../lib/bounded.js';
 
 /** @import { ToolTableEntry } from '../tool-table.js' */
 
@@ -42,17 +43,6 @@ import { fieldBytes, isStaged } from '../staging.js';
 const ok = text => harden({ status: 'ok', text });
 /** @param {string} text */
 const failed = text => harden({ status: 'failed', text });
-
-/** @param {unknown} error */
-const messageOf = error => {
-  try {
-    const { message } = /** @type {any} */ (error);
-    if (typeof message === 'string') return message;
-  } catch {
-    // fall through
-  }
-  return `${error}`;
-};
 
 const integerParam = harden({ type: 'integer' });
 const stringParam = harden({ type: 'string' });

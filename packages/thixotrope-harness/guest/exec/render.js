@@ -20,7 +20,12 @@
 
 import { textOf } from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
-import { boundToolOutput, chunkText, utf8Bytes } from '../lib/bounded.js';
+import {
+  boundToolOutput,
+  chunkText,
+  utf8Bytes,
+  messageOf,
+} from '../lib/bounded.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -146,24 +151,6 @@ export const redactHostPaths = text => {
     .replace(WINDOWS_PATH, (_whole, last) => `<host>/${last}`);
 };
 harden(redactHostPaths);
-
-/**
- * A thrown value's message, never throwing itself.
- * @param {unknown} error
- * @returns {string}
- */
-export const messageOf = error => {
-  try {
-    if (typeof error === 'object' && error !== null) {
-      const { message } = /** @type {{ message?: unknown }} */ (error);
-      if (typeof message === 'string') return message;
-    }
-    return String(error);
-  } catch {
-    return 'unprintable error';
-  }
-};
-harden(messageOf);
 
 /**
  * A result value as text for the model. JSON-serialisable values are

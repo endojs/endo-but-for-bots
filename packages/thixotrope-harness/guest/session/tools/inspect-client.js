@@ -39,6 +39,7 @@ import { texts, textOf } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { isRetiredBreak } from '../../lib/retired.js';
 import { NOT_RUN_TEXT, execStateOf, retireScope, takeScope } from './exec.js';
+import { messageOf } from '../../lib/bounded.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { ExecState } from './exec.js' */
@@ -49,17 +50,6 @@ const DEADLINE_OPS = harden(['readSources', 'toolExecute']);
 
 /** @param {string} text */
 const failed = text => harden({ status: 'failed', text });
-
-/** @param {unknown} error */
-const messageOf = error => {
-  try {
-    const { message } = /** @type {any} */ (error);
-    if (typeof message === 'string') return message;
-  } catch {
-    // fall through
-  }
-  return `${error}`;
-};
 
 /**
  * Calls in flight (sent, or taking the scope) per session state.

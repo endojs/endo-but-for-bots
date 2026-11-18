@@ -34,7 +34,7 @@
  */
 import { textOf } from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
-import { boundToolOutput } from '../lib/bounded.js';
+import { boundToolOutput, messageOf } from '../lib/bounded.js';
 import {
   EXHAUSTED,
   argumentText,
@@ -42,7 +42,6 @@ import {
   failed,
   finish,
   isKeysExhausted,
-  messageOf,
   redactHostPaths,
 } from './render.js';
 import { measureArguments } from './membrane.js';
