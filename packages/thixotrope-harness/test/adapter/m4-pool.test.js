@@ -11,6 +11,7 @@ import test from '@endo/ses-ava/test.js';
 import {
   makePoolCore,
   makeRefusalMarks,
+  MAX_DATED_MARK_MS,
   selectMembers,
   standingOf,
 } from '../../resources/agent-host/impl/subscriptions/pool.js';
@@ -280,6 +281,20 @@ test('a refusal outlives its reading, and an undated one backs off', t => {
   );
   t.deepEqual(labels(chosen.order), ['Home', 'Spare']);
   t.is(chosen.earliestBackMs, at('2026-09-20T17:00:00.000Z'));
+});
+
+test('M4-FIX: a dated mark reaches at most eight days ahead, whatever the provider names', t => {
+  const marks = makeRefusalMarks();
+  const w = work.member;
+  // A reset header of the year 2099 (accepted by the header parser).
+  marks.refused(w, NOW, at('2099-01-01T00:00:00.000Z'));
+  t.is(MAX_DATED_MARK_MS, 8 * 86_400_000);
+  t.is(marks.blockedUntil(w, NOW), NOW + MAX_DATED_MARK_MS);
+  t.is(marks.blockedUntil(w, NOW + MAX_DATED_MARK_MS + 1), null);
+  // A week's reset is kept as named.
+  const h = home.member;
+  marks.refused(h, NOW, NOW + 7 * 86_400_000);
+  t.is(marks.blockedUntil(h, NOW), NOW + 7 * 86_400_000);
 });
 
 test('a newer reading that shows the windows open supersedes a dated mark', t => {

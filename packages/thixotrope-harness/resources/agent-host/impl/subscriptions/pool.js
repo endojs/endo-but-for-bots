@@ -223,6 +223,12 @@ harden(standingOf);
  * @param {Partial<PoolSettings>} [options.settings]
  * @returns {RefusalMarks}
  */
+/**
+ * The furthest a dated mark reaches: the longest provider window (a week)
+ * plus a day.
+ */
+export const MAX_DATED_MARK_MS = 8 * 86_400_000;
+
 export const makeRefusalMarks = ({
   initial = [],
   onChange = () => {},
@@ -260,7 +266,12 @@ export const makeRefusalMarks = ({
   return harden({
     refused: (member, nowMs, untilMs) => {
       const before = marks.get(member);
-      const dated = untilMs !== null && untilMs > nowMs ? untilMs : null;
+      // A provider's reset time is believed up to `MAX_DATED_MARK_MS` ahead
+      // (M4-FIX): one answer cannot park a member for years.
+      const dated =
+        untilMs !== null && untilMs > nowMs
+          ? Math.min(untilMs, nowMs + MAX_DATED_MARK_MS)
+          : null;
       if (before !== undefined && before.untilMs > nowMs) {
         // Already skipped: in-flight requests report the same drain, and
         // are not refusals in a row. A later time the provider named still
