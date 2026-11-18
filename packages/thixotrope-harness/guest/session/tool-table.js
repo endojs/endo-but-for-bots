@@ -40,6 +40,9 @@ import { textOf as textOfM5 } from '../lib/interfaces-m5.js';
 import { limits } from '../lib/limits.js';
 import { execEntry } from './tools/exec.js';
 import { objectToolEntries } from './tools/objects.js';
+import { inspectionToolEntries } from './tools/inspection.js';
+import { packageToolEntries } from './tools/mentions.js';
+import { grantedToolSource } from './tools/granted.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -84,14 +87,25 @@ const echo = harden({
 });
 
 /** @type {readonly ToolTableEntry[]} */
-export const toolTable = harden([echo, execEntry, ...objectToolEntries]);
+export const toolTable = harden([
+  echo,
+  execEntry,
+  ...objectToolEntries,
+  ...inspectionToolEntries,
+  ...packageToolEntries,
+]);
 
 /**
  * M5 (S1): dynamic tool sources, asked at every round after the static
  * table. Append-only.
  * @type {readonly ToolSource[]}
  */
-export const toolSources = harden([]);
+export const toolSources = harden([
+  // W5.6: granted tools, with the round's built-in name set (2.5).
+  /** @type {ToolSource} */
+  (ports, services, runtime) =>
+    grantedToolSource(ports, services, runtime, builtInToolNames(ports)),
+]);
 
 /**
  * The round's built-in name set (2.5): every static entry's name, available

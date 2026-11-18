@@ -35,6 +35,11 @@
  * Guest rules.
  */
 
+import { powersPart } from './powers-source.js';
+import { inspectorPart } from './tools/inspection.js';
+import { grantsPart } from './tools/granted.js';
+import { packagesPart } from './packages.js';
+
 /** @import { Labels } from './labels.js' */
 
 /**
@@ -57,7 +62,12 @@
  */
 
 /** @type {readonly M5Part[]} */
-export const m5Parts = harden([]);
+export const m5Parts = harden([
+  powersPart,
+  inspectorPart,
+  grantsPart,
+  packagesPart,
+]);
 
 /**
  * @param {object} options

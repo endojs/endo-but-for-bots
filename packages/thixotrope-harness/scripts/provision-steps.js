@@ -242,8 +242,35 @@ const m1bSteps = [
   },
 ];
 
+/**
+ * The M5 fixture step (W5.5; `designs/m5-interfaces.md` H-10, section 10):
+ * a no-op answering `{ skipped: true }` unless `options.m5Fixtures` is
+ * given, which only test templates do (provisioning runs at every start,
+ * P-28). `options.m5Fixtures` is `{ name, source }` of
+ * `test/fixtures/m5-objects.js` (`m5FixtureName`, `m5FixtureSource`): the
+ * workspace vat evaluates `source` (an expression answering the fixture
+ * maker) and keeps what it makes in its inventory under `name`, once.
+ * @type {ProvisionStep}
+ */
+export const m5FixtureStep = harden({
+  name: 'm5 fixtures',
+  run: async ({ client, options }) => {
+    const fixtures = /** @type {any} */ (options).m5Fixtures;
+    if (fixtures === undefined) return { skipped: true };
+    const { name, source } = fixtures;
+    if (await has(client, name)) return { skipped: true, detail: { name } };
+    await client.call(
+      'evaluate',
+      `(inventory.set(${JSON.stringify(name)}, (${source})()), true)`,
+    );
+    if (!(await has(client, name)))
+      throw Error(`the m5 fixtures were not kept as ${name}`);
+    return { skipped: false, detail: { name } };
+  },
+});
+
 /** Hook table (append-only). */
-export const provisionSteps = harden([...m1aSteps, ...m1bSteps]);
+export const provisionSteps = harden([...m1aSteps, ...m1bSteps, m5FixtureStep]);
 
 /**
  * Load a program source into the factory in pieces.
@@ -309,6 +336,8 @@ const guestBounded = async () => {
  *   the step is skipped while it does not exist)
  * @param {PoolOption} [options.pool] default `M1A_POOL` (no spares)
  * @param {(report: StepReport) => void} [options.onStep]
+ * @param {{ name: string, source: string }} [options.m5Fixtures] (M5 W5.5)
+ *   forwarded to the steps with any other option
  * @returns {(context: { client: any, connect?: any }) => Promise<StepReport[]>}
  */
 export const makeProvision =
@@ -317,6 +346,7 @@ export const makeProvision =
     execEntry: exec = execEntry,
     pool = M1A_POOL,
     onStep,
+    ...stepOptions
   } = {}) =>
   async ({ client, connect }) => {
     if (!existsSync(entry))
@@ -329,7 +359,7 @@ export const makeProvision =
       const result = await step.run({
         client,
         connect,
-        options: { sessionEntry: entry, execEntry: exec, pool },
+        options: { ...stepOptions, sessionEntry: entry, execEntry: exec, pool },
       });
       const report = {
         name: step.name,
