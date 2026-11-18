@@ -12,15 +12,24 @@
  *     stats('feature.op', samples, { budget: { median: 250 }, ops, before, after });
  *   });
  *
- * `runPerf` takes the run lock (scripts/run-lock.mjs), keeps state in
- * `tmp/pf<pid>` (removed in `finally` unless KEEP_STATE=1), and sets the exit
- * code to 1 when any row missed its budget: a median (or p95, p99, max,
- * value) over 1.25 x budget, or deliveries per op over the budget.
+ * `runPerf` takes the run lock (scripts/run-lock.mjs) in exclusive mode,
+ * said explicitly rather than read from the command line's perf file name;
+ * `--shared` among this process's arguments takes one shared slot instead
+ * (a builder's smoke run, process.md 2) and marks every row `underLoad`. It
+ * keeps state in `tmp/pf<pid>` (removed in `finally` unless KEEP_STATE=1),
+ * and sets the exit code to 1 when any row missed its budget: a median (or
+ * p95, p99, max, value) over 1.25 x budget, or deliveries per op over the
+ * budget.
  *
  * Every row is one JSON line on stdout (and appended to PERF_OUT when set):
- *   {"metric","unit","n","median","p95","p99","min","max",
- *    "deliveries":{"count","perOp"},"hubJsonBytes","budget","pass",
- *    "commit","workerSha256","crankBudget","loadAvg", ...}
+ *   {"metric","unit","window","samples","n","median","p95","p99","min",
+ *    "max","deliveries":{"count","perOp"},"hubJsonBytes","budget","pass",
+ *    "commit","workerSha256","crankBudget","loadAvg","underLoad", ...}
+ *
+ * `window` (the measured window, process.md 3: ms, or `{ ms, elapsedMs }`)
+ * and `samples` (how many samples it held) appear only when the caller
+ * passes them to `stats` or `single`, untouched: a check measured as a rate
+ * over a fixed window reports both.
  *
  * Environment: IDLE_MS (idleSleepMs, default 3,600,000 so nothing sleeps
  * during a measurement), SNAP_EVERY (default 256), THIXOTROPE_CRANK_BUDGET
@@ -33,7 +42,7 @@
  * each `provision()` emits `<feature>.provision` with how long that took.
  *
  * Run all perf scripts, one at a time under the run lock:
- *   node perf/_harness.mjs [feature ...]
+ *   node perf/_harness.mjs [--shared] [feature ...]
  */
 import '../scripts/_init.mjs';
 import { execFileSync, spawn } from 'node:child_process';
@@ -78,6 +87,19 @@ export const crankBudget = String(
 );
 
 let failures = 0;
+
+/**
+ * The run-lock mode of a perf process: exclusive unless its arguments hold
+ * `--shared` (process.md 2: exclusive mode is for recorded numbers only).
+ * @param {readonly string[]} [argv]
+ * @returns {'shared' | 'exclusive'}
+ */
+export const perfLockMode = (argv = process.argv) =>
+  argv.includes('--shared') ? 'shared' : 'exclusive';
+
+/** The mode `runPerf` took the lock in (undefined outside `runPerf`). */
+/** @type {'shared' | 'exclusive' | undefined} */
+let lockMode;
 /** Rows that missed a budget so far in this process. */
 export const failureCount = () => failures;
 
@@ -267,26 +289,48 @@ export const deliveries = (before, after, ops) => {
 };
 
 /**
+ * The `window` and `samples` fields of a row, when given.
+ * @param {{ window?: unknown, samples?: number }} given
+ */
+const windowPassThrough = ({ window, samples }) => ({
+  ...(window === undefined ? {} : { window }),
+  ...(samples === undefined ? {} : { samples }),
+});
+
+/**
  * Emit one latency row with the standard context and budget verdict.
  * @param {string} metric
- * @param {number[]} samples milliseconds
+ * @param {number[]} values milliseconds
  * @param {object} [options]
  * @param {Budget} [options.budget]
  * @param {Timings} [options.before] engine timings before the samples
  * @param {Timings} [options.after] engine timings after the samples
- * @param {number} [options.ops] operations the samples cover (default: samples)
+ * @param {number} [options.ops] operations the samples cover (default: values)
  * @param {string} [options.root] state directory, for hubJsonBytes
+ * @param {unknown} [options.window] the measured window: ms, or
+ *   `{ ms, elapsedMs }` as `perf/_window.mjs` builds it (passed through)
+ * @param {number} [options.samples] samples the window held (passed through)
  * @param {Record<string, unknown>} [options.extra]
  */
 export const stats = async (
   metric,
-  samples,
-  { budget, before, after, ops = samples.length, root, extra = {} } = {},
+  values,
+  {
+    budget,
+    before,
+    after,
+    ops = values.length,
+    root,
+    window,
+    samples,
+    extra = {},
+  } = {},
 ) => {
-  const summary = summarize(samples);
+  const summary = summarize(values);
   const row = {
     metric,
     unit: 'ms',
+    ...windowPassThrough({ window, samples }),
     ...summary,
     ...(before && after
       ? {
@@ -304,10 +348,24 @@ export const stats = async (
  * Emit a single-value row (start, restart, install).
  * @param {string} metric
  * @param {number} value milliseconds
- * @param {{ budget?: Budget, extra?: Record<string, unknown> }} [options]
+ * @param {{ budget?: Budget, window?: unknown, samples?: number, extra?: Record<string, unknown> }} [options]
+ *   `window` and `samples` are passed through as for `stats`
  */
-export const single = async (metric, value, { budget, extra = {} } = {}) =>
-  finishRow({ metric, unit: 'ms', value: round3(value), ...extra }, budget);
+export const single = async (
+  metric,
+  value,
+  { budget, window, samples, extra = {} } = {},
+) =>
+  finishRow(
+    {
+      metric,
+      unit: 'ms',
+      ...windowPassThrough({ window, samples }),
+      value: round3(value),
+      ...extra,
+    },
+    budget,
+  );
 
 /**
  * @param {Record<string, any>} row
@@ -324,6 +382,7 @@ const finishRow = async (row, budget) => {
     ...(await runIdentity()),
     crankBudget,
     loadAvg: loadAvg(),
+    ...(lockMode === 'shared' ? { underLoad: true } : {}),
   });
 };
 
@@ -485,8 +544,10 @@ export const provision = async ({
  * @param {(tools: { root: string, provision: (options?: Partial<Parameters<typeof provision>[0]>) => Promise<Provisioned> }) => Promise<void>} fn
  */
 export const runPerf = async (feature, fn) => {
+  lockMode = perfLockMode();
   const lock = await acquireRunLock({
     label: `perf ${feature}`,
+    mode: lockMode,
     onEvent: event =>
       process.stderr.write(`run-lock: ${JSON.stringify(event)}\n`),
   });
@@ -531,8 +592,10 @@ export const runPerf = async (feature, fn) => {
   if (failures) process.exitCode = 1;
 };
 
-/** @param {string[]} features */
-const runAll = async features => {
+/** @param {string[]} args feature names, and `--shared` for every check */
+const runAll = async args => {
+  const shared = args.includes('--shared');
+  const features = args.filter(arg => arg !== '--shared');
   const names = features.length
     ? features
     : readdirSync(here)
@@ -545,7 +608,7 @@ const runAll = async features => {
     const code = await new Promise(resolve => {
       const child = spawn(
         process.execPath,
-        [path.join(here, `${name}.perf.mjs`)],
+        [path.join(here, `${name}.perf.mjs`), ...(shared ? ['--shared'] : [])],
         { stdio: 'inherit' },
       );
       child.once('exit', exitCode => resolve(exitCode ?? 1));
