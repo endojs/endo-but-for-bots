@@ -20,7 +20,7 @@ import { env, pid, stderr } from 'node:process';
 import { textOf } from '../../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { channelTaps } from './channel-taps.js';
-import { makeChannelRegistry } from './channels.js';
+import { liveProbeFromEnv, makeChannelRegistry } from './channels.js';
 import { makeComposer } from './composer.js';
 import { makeLive } from './live-service.js';
 import { makeAttach, makeOps } from './attach.js';
@@ -169,6 +169,9 @@ const once = compute => {
  *
  * @param {object} [options]
  * @param {import('./timers.js').Timers} [options.timers]
+ * @param {ReturnType<typeof liveProbeFromEnv>} [options.probe] the live
+ *   probe of the default channel registry (perf; default: the one a perf
+ *   run named in this process's environment, else none; HR-SYN-13)
  * @param {{ channelFor: (session: any) => any }} [options.channels] the
  *   session channel registry (tests may pass their own)
  * @param {readonly BackendKind[]} [options.kinds]
@@ -199,7 +202,8 @@ const once = compute => {
  */
 export const makeAgentHostImpl = ({
   timers = makeTimers(),
-  channels = makeChannelRegistry({ taps: channelTaps }),
+  probe = liveProbeFromEnv(env),
+  channels = makeChannelRegistry({ taps: channelTaps, probe }),
   kinds = backendKinds,
   tools = adapterTools,
   incarnation = `${pid}`,

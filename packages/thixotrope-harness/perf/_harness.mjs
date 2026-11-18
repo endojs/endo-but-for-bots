@@ -453,6 +453,9 @@ export const workerRss = root => {
  * @param {number} [options.snapshotEveryDeliveries]
  * @param {string} [options.secretsKeyFile] the Secrets wrapping key file of
  *   this supervisor (every restart of it), not of this process
+ * @param {Record<string, string>} [options.env] more variables for this
+ *   supervisor only (still through the allowlist), e.g. the live probe's
+ *   directory (HR-SYN-13)
  * @returns {Promise<Provisioned>}
  */
 export const provision = async ({
@@ -462,6 +465,7 @@ export const provision = async ({
   idleSleepMs: idle = idleSleepMs,
   snapshotEveryDeliveries: snapshotEvery = snapshotEveryDeliveries,
   secretsKeyFile,
+  env: extraEnv = {},
 }) => {
   const {
     TEMPLATE_WORKSPACE,
@@ -471,7 +475,7 @@ export const provision = async ({
     killStrays,
     supervisorEnv,
   } = await import('../test/template/index.js');
-  const env = supervisorEnv({ secretsKeyFile });
+  const env = { ...supervisorEnv({ secretsKeyFile }), ...extraEnv };
   const tStart = performance.now();
   /** @type {Record<string, unknown>} */
   const timings = {};

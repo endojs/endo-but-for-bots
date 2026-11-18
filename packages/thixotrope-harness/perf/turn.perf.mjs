@@ -23,7 +23,8 @@
  *   submit to the request, budget 3.
  * - `turn.delta`: a delta's publish to its arrival at a Live subscriber in
  *   the adapter process, where the browser gateway will hold its
- *   subscriptions (the channels' live probe, `tmp/live-probe/`, both times
+ *   subscriptions (the channels' live probe, writing to `tmp/live-probe/`
+ *   as this run's daemon is told in its environment, both times
  *   `performance.now()` in the adapter); budget median 5 ms;
  *   `deliveriesPerOp`: frames the session received while 50 deltas
  *   streamed, per delta, budget 0.
@@ -50,18 +51,13 @@
  * defaults to 1 h (perf/_harness.mjs), so the vat never sleeps. About 3
  * minutes.
  */
-import {
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 import {
   crankBudget,
   emit,
+  harnessRoot,
   loadAvg,
   runIdentity,
   runPerf,
@@ -80,8 +76,10 @@ const { perfInputs, perfScript, STREAM_CHUNKS } =
   await import('../test/fixtures/scripts/m1a-slice.js');
 const { makeSlice, sliceTemplate, waitFor } =
   await import('../test/integration/_m1a-slice.js');
-const { liveProbeDir } =
+const { LIVE_PROBE_VARIABLE } =
   await import('../resources/agent-host/impl/channels.js');
+/** Where this run's daemon writes its live probe lines (named in its env). */
+const liveProbeDir = path.join(harnessRoot, 'tmp', 'live-probe');
 
 const TURN_WINDOW_MS = windowMs('TURN_WINDOW_MS', 60_000);
 const STREAM_TURNS = Number(process.env.STREAM_TURNS ?? 5);
@@ -146,11 +144,10 @@ const readProbe = () => {
 
 await runPerf('turn', async ({ provision }) => {
   const template = await sliceTemplate();
-  // The adapter makes its channel registry when it starts: switch the live
-  // probe on before serving, off when done.
+  // The adapter makes its channel registry when it starts: the live probe
+  // is named in the environment of the daemon this run serves (HR-SYN-13).
   rmSync(liveProbeDir, { recursive: true, force: true });
   mkdirSync(liveProbeDir, { recursive: true });
-  writeFileSync(path.join(liveProbeDir, 'enabled'), 'perf/turn.perf.mjs\n');
   try {
     await measure(template, provision);
   } finally {
@@ -164,7 +161,10 @@ await runPerf('turn', async ({ provision }) => {
  * @param {(options: any) => Promise<any>} provision
  */
 async function measure(template, provision) {
-  const run = await provision({ template });
+  const run = await provision({
+    template,
+    env: { [LIVE_PROBE_VARIABLE]: liveProbeDir },
+  });
   const slice = await makeSlice(run);
   const label = `perf-turn-${process.pid}`;
   const made = await slice.makeBackend(harden(perfScript), { label });

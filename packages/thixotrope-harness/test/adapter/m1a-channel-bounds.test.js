@@ -20,6 +20,8 @@ import { channelLimits } from '../../config/defaults.js';
 import {
   closeReasons,
   LIVE_SUBSCRIPTION_GUARD,
+  LIVE_PROBE_VARIABLE,
+  liveProbeFromEnv,
   makeChannelRegistry,
   makeLiveProbe,
 } from '../../resources/agent-host/impl/channels.js';
@@ -383,7 +385,26 @@ test('the live probe records publish-to-arrival per delta and writes at the turn
   });
 });
 
-test('the default registry has no probe without the switch file', t => {
+test('HR-SYN-13: the default registry has no probe; one is injected, or named in the environment', async t => {
   const channel = makeChannelRegistry().channelFor(Far('Session', {}));
   t.is(channel.subscriberCount(), 0);
+  // The environment names a directory: the probe writes <dir>/<pid>.jsonl.
+  t.is(LIVE_PROBE_VARIABLE, 'THIX_HARNESS_LIVE_PROBE_DIR');
+  t.is(liveProbeFromEnv({}), null);
+  t.is(liveProbeFromEnv({ [LIVE_PROBE_VARIABLE]: 'relative/dir' }), null);
+  const dir = await mkdtemp(path.join(harnessRoot, 'tmp', 'lp-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const probe = liveProbeFromEnv({ [LIVE_PROBE_VARIABLE]: dir });
+  t.truthy(probe);
+  const probed = makeChannelRegistry({ probe }).channelFor(Far('Session', {}));
+  t.is(probed.subscriberCount(), 1);
+});
+
+test('HR-SYN-13: the adapter reads no switch file; the probe comes from its options or its environment', async t => {
+  const source = await readFile(
+    path.join(harnessRoot, 'resources', 'agent-host', 'impl', 'channels.js'),
+    'utf8',
+  );
+  t.false(source.includes('existsSync'), 'nothing is looked for on disk');
+  t.false(source.includes("'enabled'"));
 });
