@@ -61,8 +61,12 @@ export const serializeHubState = ({
       processedUpTo: String(session.processedUpTo),
       durable: session.durable,
       retired: session.retired,
-      queue: [...session.queue],
-      queueSequences: [...session.queueSequences],
+      // A disposable observer's frames are never read back: its key is
+      // swept at startup and never reattached. Keep them out of the store.
+      queue: session.discardOnRestart ? [] : [...session.queue],
+      queueSequences: session.discardOnRestart
+        ? []
+        : [...session.queueSequences],
       nextDelivery: String(session.nextDelivery),
       identity: session.identity,
       usedGiftHandoffs: [...session.usedGiftHandoffs],
