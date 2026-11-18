@@ -29,7 +29,7 @@
  *
  * Anything else, a value over 8,192 bytes (R7-25), or a credential of the
  * other provider: code `INVALID`. Errors carry a fixed text and a code
- * (`m4Codes`), never a token, a value or a parse message.
+ * (`subscriptionCodes`), never a token, a value or a parse message.
  *
  * Node only (adapter). Values never enter a vat (D-6).
  */
@@ -37,8 +37,8 @@
 import { Buffer } from 'node:buffer';
 
 import { textOf } from '../../../../guest/lib/interfaces.js';
-import { m4Limits } from '../../../../guest/lib/limits-m4.js';
-import { m4Texts } from '../../../../guest/lib/texts-m4.js';
+import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
+import { subscriptionTexts } from '../../../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 
 /**
@@ -56,14 +56,14 @@ import { m4Texts } from '../../../../guest/lib/texts-m4.js';
 
 /** Codes with their own fixed text; the rest use `textOf.secretFailed`. */
 const codeTexts = harden({
-  CONSUMED: m4Texts.credentialConsumed,
-  EXPIRED: m4Texts.credentialExpired,
-  INVALID: m4Texts.credentialInvalid,
-  REJECTED: m4Texts.credentialRejected,
+  CONSUMED: subscriptionTexts.credentialConsumed,
+  EXPIRED: subscriptionTexts.credentialExpired,
+  INVALID: subscriptionTexts.credentialInvalid,
+  REJECTED: subscriptionTexts.credentialRejected,
 });
 
 /**
- * A credential failure with a fixed code (`m4Codes`): the message is a
+ * A credential failure with a fixed code (`subscriptionCodes`): the message is a
  * fixed text, never a token or a provider body.
  * @param {string} code
  */
@@ -95,7 +95,7 @@ const isRecord = value =>
 export const assertToken = value => {
   if (
     typeof value !== 'string' ||
-    value.length > m4Limits.credentialBytes ||
+    value.length > subscriptionLimits.credentialBytes ||
     !TOKEN.test(value)
   )
     throw credentialError('INVALID');
@@ -267,7 +267,7 @@ export const parseCredential = (text, provider) => {
   if (!PROVIDERS.includes(provider)) throw credentialError('INVALID');
   if (
     typeof text !== 'string' ||
-    Buffer.byteLength(text, 'utf8') > m4Limits.credentialBytes
+    Buffer.byteLength(text, 'utf8') > subscriptionLimits.credentialBytes
   )
     throw credentialError('INVALID');
   /** @type {unknown} */

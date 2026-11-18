@@ -17,7 +17,7 @@ import {
   texts,
 } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import { makeFactoryKit, stagingSources } from '../../guest/factory/factory.js';
 import { makeProgramStore } from '../../guest/factory/root.js';
 import { makeRowTable } from '../../guest/factory/rows.js';
@@ -192,7 +192,7 @@ test('model defaults come from the preset; an option the caller gave wins', asyn
   );
   await t.throwsAsync(
     E(kit.factory).createSession(harden({ preset: effort.preset })),
-    { message: m4Texts.effortNotSupported },
+    { message: subscriptionTexts.effortNotSupported },
   );
 });
 

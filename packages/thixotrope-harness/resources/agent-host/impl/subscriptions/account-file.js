@@ -26,7 +26,7 @@ import { dirname } from 'node:path';
 import { pid } from 'node:process';
 
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { m4Limits } from '../../../../guest/lib/limits-m4.js';
+import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
 import { limits } from '../../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 
@@ -34,7 +34,7 @@ import { limits } from '../../../../guest/lib/limits.js';
 
 export const READINGS_FORMAT = 'thixotrope-harness-readings-1';
 /** The file never holds more entries than the manager keeps members. */
-const MAX_ENTRIES = m4Limits.maxMembers;
+const MAX_ENTRIES = subscriptionLimits.maxMembers;
 /** A store key is `k<n>`; anything else in the file is dropped. */
 const KEY_PATTERN = /^k[0-9]{1,15}$/;
 
@@ -80,7 +80,7 @@ export const checkReading = (candidate, source) => {
   if (!isTime(candidate.at)) return undefined;
   const windows = Array.isArray(candidate.windows)
     ? candidate.windows
-        .slice(0, m4Limits.maxWindows)
+        .slice(0, subscriptionLimits.maxWindows)
         .map(windowOf)
         .filter(window => window !== undefined)
     : [];
@@ -91,13 +91,13 @@ export const checkReading = (candidate, source) => {
     windows,
     limitReached: candidate.limitReached === true,
   };
-  const plan = boundedText(candidate.plan, m4Limits.planUnits);
+  const plan = boundedText(candidate.plan, subscriptionLimits.planUnits);
   if (plan !== undefined && plan !== '') reading.plan = plan;
-  const credits = boundedText(candidate.credits, m4Limits.planUnits);
+  const credits = boundedText(candidate.credits, subscriptionLimits.planUnits);
   if (credits !== undefined && credits !== '') reading.credits = credits;
   if (Array.isArray(candidate.banked)) {
     reading.banked = candidate.banked
-      .slice(0, m4Limits.maxBankedCredits)
+      .slice(0, subscriptionLimits.maxBankedCredits)
       .filter(
         (/** @type {any} */ credit) =>
           credit !== null && typeof credit === 'object',

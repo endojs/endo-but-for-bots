@@ -40,7 +40,7 @@ import { isExhausted, readingFromHeaders } from './rate-limit-headers.js';
 
 /**
  * A member attempt's failure: `ProviderFailure` plus the pool's facts.
- * @param {string} reason a fixed text (`m4Texts`, `m4TextOf`, M2 texts)
+ * @param {string} reason a fixed text (`subscriptionTexts`, `subscriptionTextOf`, M2 texts)
  * @param {WireFacts} [facts]
  * @returns {ProviderFailure & { exhausted?: { untilMs: number | null }, rejected?: true, overloaded?: true }}
  */

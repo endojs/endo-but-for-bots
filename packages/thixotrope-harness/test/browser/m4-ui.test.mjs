@@ -18,7 +18,7 @@
  *     is written from the page through the gateway's large-call writer
  *     (`GW/extensions/secrets.js`) and the catalogue shows its bytes and a
  *     new generation; one letter more is refused in the page with
- *     `m4Texts.secretTooLargeForBrowser` and no frame is sent. No value
+ *     `subscriptionTexts.secretTooLargeForBrowser` and no frame is sent. No value
  *     appears in the DOM or in any frame from the gateway.
  * 15 (browser part). No access token, refresh token or typed value in the
  *     page's network log (HTTP requests and frames received; credentials
@@ -40,8 +40,8 @@ import test from 'ava';
 
 import { E } from '@endo/far';
 
-import { m4Limits } from '../../guest/lib/limits-m4.js';
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { subscriptionLimits } from '../../guest/lib/subscription-limits.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import { gatewayTexts } from '../../resources/agent-host/impl/gateway/protocol.js';
 import { sealTo } from '../../resources/agent-host/impl/secrets/seal.js';
 import { startFakeOAuthServer } from '../fixtures/fake-oauth-server.mjs';
@@ -528,12 +528,12 @@ run('[browser] M4 acceptance 14, 15 (browser part) and rule 4a', async t => {
     mark('secretsBasic');
 
     // Size probe through the large-call writer: exactly the bound.
-    const fitting = letters(m4Limits.browserSecretBytes - 2);
+    const fitting = letters(subscriptionLimits.browserSecretBytes - 2);
     t.is(
       Buffer.byteLength(JSON.stringify(fitting)),
-      m4Limits.browserSecretBytes,
+      subscriptionLimits.browserSecretBytes,
     );
-    const over = letters(m4Limits.browserSecretBytes - 1);
+    const over = letters(subscriptionLimits.browserSecretBytes - 1);
     const markers = [
       fitting.slice(500_000, 500_064),
       over.slice(500_000, 500_064),
@@ -566,7 +566,7 @@ run('[browser] M4 acceptance 14, 15 (browser part) and rule 4a', async t => {
         (await panel
           .locator('.m4-error')
           .textContent()
-          .catch(() => '')) === m4Texts.secretTooLargeForBrowser,
+          .catch(() => '')) === subscriptionTexts.secretTooLargeForBrowser,
       30_000,
       'the in-page refusal',
       50,

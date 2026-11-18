@@ -11,7 +11,7 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { texts } from '../../guest/lib/interfaces.js';
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import {
   optionResolvers,
   resolveCreateOptions,
@@ -50,7 +50,7 @@ const makePool = ({
           fallback === undefined ? {} : { reasoningEffort: fallback },
         );
       if (!efforts.includes(reasoningEffort))
-        throw Error(m4Texts.unsupportedEffort);
+        throw Error(subscriptionTexts.unsupportedEffort);
       return harden({ reasoningEffort });
     },
   });
@@ -81,7 +81,7 @@ test('a pool stores the effort it accepts and refuses one it does not offer', as
         }),
         /** @type {any} */ ({ defaultPreset: preset }),
       ),
-    { message: m4Texts.unsupportedEffort },
+    { message: subscriptionTexts.unsupportedEffort },
   );
 });
 
@@ -137,7 +137,7 @@ test('an effort on an API or scripted backend is refused; none is fine', async t
           }),
           /** @type {any} */ ({ defaultPreset: preset }),
         ),
-      { message: m4Texts.effortNotSupported },
+      { message: subscriptionTexts.effortNotSupported },
       kind,
     );
     // eslint-disable-next-line no-await-in-loop
@@ -168,7 +168,7 @@ test('a malformed pool answer is refused', async t => {
           { backend, backendKind: 'claude-pool', modelId: 'm' },
           /** @type {any} */ ({}),
         ),
-      { message: m4Texts.unsupportedEffort },
+      { message: subscriptionTexts.unsupportedEffort },
     );
   }
 });

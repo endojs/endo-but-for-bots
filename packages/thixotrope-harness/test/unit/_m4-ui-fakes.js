@@ -11,7 +11,7 @@ import { Far } from '@endo/far';
 import { options as preactOptions } from 'preact';
 
 /* eslint-disable import/no-relative-packages */
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 
 const encoder = new TextEncoder();
 
@@ -261,7 +261,7 @@ export const memberAccount = (fields = {}) =>
  * A fake adapter-local `Accounts` with its channel. `publish(pools)`
  * pushes the whole view with `rev + 1` to every waiting `next()`;
  * `evict(index)` closes that subscriber (its waiting or next `next()`
- * rejects with `m4Texts.accountsWatchClosed`).
+ * rejects with `subscriptionTexts.accountsWatchClosed`).
  *
  * @param {{ pools?: any[], sessions?: Map<any, any> }} [options]
  */
@@ -275,7 +275,7 @@ export const makeFakeAccounts = ({ pools = [], sessions = new Map() } = {}) => {
    */
   /** @type {Sub[]} */
   const subs = [];
-  const closedError = () => Error(m4Texts.accountsWatchClosed);
+  const closedError = () => Error(subscriptionTexts.accountsWatchClosed);
 
   /** @param {Sub} sub */
   const answer = sub => {

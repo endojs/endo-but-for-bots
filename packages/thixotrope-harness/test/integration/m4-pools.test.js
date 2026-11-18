@@ -29,7 +29,7 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { m4TextOf } from '../../guest/lib/texts-m4.js';
+import { subscriptionTextOf } from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
 import {
@@ -189,7 +189,9 @@ run(
     t.is(failed.status.state, 'failed');
     t.is(
       failed.status.error,
-      m4TextOf.subscriptionsExhausted(new Date(resetA * 1000).toISOString()),
+      subscriptionTextOf.subscriptionsExhausted(
+        new Date(resetA * 1000).toISOString(),
+      ),
     );
     t.deepEqual(
       posts(server)

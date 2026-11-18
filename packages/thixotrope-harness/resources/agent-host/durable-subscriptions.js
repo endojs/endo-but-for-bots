@@ -27,11 +27,9 @@
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
-import {
-  m4Interfaces,
-  m4Limits,
-  m4Texts,
-} from '../../guest/lib/interfaces-m4.js';
+import { m4Interfaces } from '../../guest/lib/interfaces-m4.js';
+import { subscriptionLimits } from '../../guest/lib/subscription-limits.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import { limits } from '../../guest/lib/limits.js';
 import { fitsFrame } from '../../guest/lib/bounded.js';
 /* eslint-enable import/no-relative-packages */
@@ -224,18 +222,18 @@ export const makeSubscriptionsPart = ({
   /** @param {any} member */
   const memberOf = member => {
     const record = memberRecords.get(member);
-    if (record === undefined) throw Error(m4Texts.unknownMember);
+    if (record === undefined) throw Error(subscriptionTexts.unknownMember);
     return record;
   };
   /** @param {any} pool */
   const poolOf = pool => {
     const record = poolRecords.get(pool);
-    if (record === undefined) throw Error(m4Texts.unknownPool);
+    if (record === undefined) throw Error(subscriptionTexts.unknownPool);
     return record;
   };
   /** @param {PoolRecord} record */
   const assertActivePool = record => {
-    if (record.state === 'retired') throw Error(m4Texts.retired);
+    if (record.state === 'retired') throw Error(subscriptionTexts.retired);
   };
 
   const makeMemberExo = defineExoClass(
@@ -291,10 +289,10 @@ export const makeSubscriptionsPart = ({
         // under the label is refused until that member is retired.
         if (record.credential === credential && record.provider === provider)
           return member;
-        throw Error(m4Texts.memberConflict);
+        throw Error(subscriptionTexts.memberConflict);
       }
     }
-    if (memberList.length >= m4Limits.maxMembers)
+    if (memberList.length >= subscriptionLimits.maxMembers)
       throw secretError('CREATE_FAILED');
     const member = makeMemberExo();
     memberSerial += 1;
@@ -322,7 +320,7 @@ export const makeSubscriptionsPart = ({
   const listMembers = cursor => {
     const after = serialCursor(cursor, 'not a members cursor');
     const rest = memberList.filter(member => memberOf(member).serial > after);
-    const members = rest.slice(0, m4Limits.poolPageEntries);
+    const members = rest.slice(0, subscriptionLimits.poolPageEntries);
     return harden(
       rest.length > members.length
         ? {
@@ -395,7 +393,7 @@ export const makeSubscriptionsPart = ({
         assertActivePool(poolOf(backend));
         // R4-21: a pool has no default model unless its spec names one.
         if (modelId === undefined && spec.modelId === undefined)
-          throw Error(m4Texts.subscriptionModelRequired);
+          throw Error(subscriptionTexts.subscriptionModelRequired);
         return withOps(ops =>
           E(ops).resolveModel(
             harden(
@@ -429,7 +427,7 @@ export const makeSubscriptionsPart = ({
             ? 'max'
             : reasoningEffort;
         if (!row.reasoningEfforts.includes(listed))
-          throw Error(m4Texts.unsupportedEffort);
+          throw Error(subscriptionTexts.unsupportedEffort);
         return harden({ reasoningEffort });
       },
       /**
@@ -460,15 +458,18 @@ export const makeSubscriptionsPart = ({
   const makePool = spec => {
     if (!fitsFrame(spec)) throw Error(texts.frameLimit);
     const provider = providerOf(spec.kind);
-    if (spec.members.length === 0) throw Error(m4Texts.noUsableMember);
+    if (spec.members.length === 0)
+      throw Error(subscriptionTexts.noUsableMember);
     const seen = new Set();
     for (const member of spec.members) {
       const record = memberOf(member);
-      if (record.state !== 'active') throw Error(m4Texts.noUsableMember);
-      if (record.provider !== provider) throw Error(m4Texts.memberKind);
+      if (record.state !== 'active')
+        throw Error(subscriptionTexts.noUsableMember);
+      if (record.provider !== provider)
+        throw Error(subscriptionTexts.memberKind);
       // One attempt per member per round (R4-25): a member listed twice
       // would be tried twice.
-      if (seen.has(member)) throw Error(m4Texts.poolConflict);
+      if (seen.has(member)) throw Error(subscriptionTexts.poolConflict);
       seen.add(member);
     }
     for (const pool of poolList) {
@@ -476,10 +477,11 @@ export const makeSubscriptionsPart = ({
       if (record.spec.label === spec.label) {
         // R8-23, K-1: idempotent by label and spec.
         if (sameSpec(record.spec, spec)) return pool;
-        throw Error(m4Texts.poolConflict);
+        throw Error(subscriptionTexts.poolConflict);
       }
     }
-    if (poolList.length >= m4Limits.maxPools) throw Error(m4Texts.poolConflict);
+    if (poolList.length >= subscriptionLimits.maxPools)
+      throw Error(subscriptionTexts.poolConflict);
     const pool = makePoolBackend(spec);
     poolRecords.set(pool, { spec, state: 'active', served: new Map() });
     poolList = [...poolList, pool];
@@ -573,7 +575,7 @@ export const makeSubscriptionsPart = ({
       if (usable(member) && (kept === undefined || kept.at <= at)) {
         served.delete(session);
         served.set(session, harden({ member, at }));
-        if (served.size > m4Limits.servedRecords) {
+        if (served.size > subscriptionLimits.servedRecords) {
           const oldest = served.keys().next().value;
           served.delete(oldest);
         }
@@ -599,7 +601,7 @@ export const makeSubscriptionsPart = ({
     const serialOf = secret =>
       Number(/** @type {any} */ (secretRecords.get(secret)).key.slice(1));
     const rest = secretList().filter(secret => serialOf(secret) > after);
-    const secrets = rest.slice(0, m4Limits.catalogPageEntries);
+    const secrets = rest.slice(0, subscriptionLimits.catalogPageEntries);
     // Taken now: a delete during the describe call drops the record.
     const serials = secrets.map(serialOf);
     const recordsOf = secrets.map(secret => secretRecords.get(secret));

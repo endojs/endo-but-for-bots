@@ -15,7 +15,10 @@ import '../unit/_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { m4Texts, m4TextOf } from '../../guest/lib/texts-m4.js';
+import {
+  subscriptionTextOf,
+  subscriptionTexts,
+} from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { subscriptionDefaults } from '../../config/subscription-defaults.js';
 import { makeCredentialAccess } from '../../resources/agent-host/impl/secrets/credential-access.js';
@@ -284,7 +287,9 @@ test('claude: every member exhausted fails with the first dated reset time', asy
   t.is(r.finals.length, 0);
   t.is(
     r.failures[0]?.reason,
-    m4TextOf.subscriptionsExhausted(new Date(resetB * 1000).toISOString()),
+    subscriptionTextOf.subscriptionsExhausted(
+      new Date(resetB * 1000).toISOString(),
+    ),
   );
   t.deepEqual(s.inference(), ['a', 'b']);
   t.false(JSON.stringify(r.failures).includes(BODY_MARKER), 'no body');
@@ -335,7 +340,7 @@ test('claude: a 401 renews once and retries the same member once; a second 401 m
     second.log.some(
       (/** @type {any} */ e) =>
         e.kind === 'member-failed' &&
-        e.reason === m4TextOf.memberFailed('member a', 'REJECTED'),
+        e.reason === subscriptionTextOf.memberFailed('member a', 'REJECTED'),
     ),
   );
 });
@@ -461,7 +466,7 @@ test('an unreadable credential marks the member unusable and the next serves; a 
     modelId: CLAUDE_MODEL,
   });
   t.teardown(refused.cleanup);
-  t.is(refused.failures[0]?.reason, m4Texts.retired);
+  t.is(refused.failures[0]?.reason, subscriptionTexts.retired);
   t.is(s.inference().length, 1, 'nothing sent for the retired pool');
 });
 
@@ -488,7 +493,7 @@ test('M4-FIX: a member or pool retired in the manager stops serving once the loa
   s.status.pool = 'retired';
   await wait(30);
   const third = await s.round();
-  t.is(third.failures[0]?.reason, m4Texts.retired);
+  t.is(third.failures[0]?.reason, subscriptionTexts.retired);
   t.is(s.inference().length, 2, 'nothing sent for the retired pool');
   t.is(s.fake.loads(), 3);
   // A retired answer is final: no more asks.
@@ -532,7 +537,7 @@ test('XB (3.1): CredentialOps.poolsChanged makes the next round see a retired me
   s.subscriptions.credentialOps.poolsChanged();
   const before = s.inference().length;
   const refused = await s.round();
-  t.is(refused.failures[0]?.reason, m4Texts.retired);
+  t.is(refused.failures[0]?.reason, subscriptionTexts.retired);
   t.is(s.inference().length, before, 'nothing sent for the retired pool');
   t.is(s.fake.loads(), 3);
   // A retired answer is final: a later push asks nothing.

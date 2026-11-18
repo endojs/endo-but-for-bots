@@ -5,18 +5,18 @@
  * them alike.
  *
  * - Size: the gateway's WebSocket message bound less the CapTP envelope,
- *   `m4Limits.browserSecretBytes`, measured on the value as the CapTP JSON
+ *   `subscriptionLimits.browserSecretBytes`, measured on the value as the CapTP JSON
  *   carries it (`JSON.stringify(value)` as UTF-8, quotes and escapes
- *   included). Over it the page refuses with `m4Texts.secretTooLargeForBrowser`
+ *   included). Over it the page refuses with `subscriptionTexts.secretTooLargeForBrowser`
  *   and sends nothing.
  * - Files: a value read from a file must be UTF-8 text; any other file is
- *   refused with `m4Texts.secretNotText`.
+ *   refused with `subscriptionTexts.secretNotText`.
  *
  * The value itself is never kept, logged or rendered here.
  */
 /* eslint-disable import/no-relative-packages */
-import { m4Limits } from '../../../guest/lib/limits-m4.js';
-import { m4Texts } from '../../../guest/lib/texts-m4.js';
+import { subscriptionLimits } from '../../../guest/lib/subscription-limits.js';
+import { subscriptionTexts } from '../../../guest/lib/subscription-texts.js';
 
 /**
  * The bytes of `value` as the gateway frame carries it.
@@ -33,8 +33,8 @@ export const browserValueBytes = value =>
  * @returns {string | undefined}
  */
 export const refuseBrowserValue = value =>
-  browserValueBytes(value) > m4Limits.browserSecretBytes
-    ? m4Texts.secretTooLargeForBrowser
+  browserValueBytes(value) > subscriptionLimits.browserSecretBytes
+    ? subscriptionTexts.secretTooLargeForBrowser
     : undefined;
 
 /**
@@ -51,7 +51,7 @@ export const textOfFileBytes = bytes => {
     }).decode(bytes);
     return { value };
   } catch {
-    return { error: m4Texts.secretNotText };
+    return { error: subscriptionTexts.secretNotText };
   }
 };
 

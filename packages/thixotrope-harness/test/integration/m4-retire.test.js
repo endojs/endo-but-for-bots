@@ -14,7 +14,7 @@
  *   was sticky on the retired one and the adapter's periodic re-read
  *   (`poolStateRefreshMs`, 600 s) is far away;
  * - the pool is retired (`SubscriptionsAdmin.retirePool`): the session's
- *   next turn, submitted at once, fails with `m4Texts.retired` and nothing
+ *   next turn, submitted at once, fails with `subscriptionTexts.retired` and nothing
  *   reaches the fake server.
  *
  * The first retirement is the manager's first `CredentialOps` use in this
@@ -33,7 +33,7 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { subscriptionDefaults } from '../../config/subscription-defaults.js';
 import { emit } from '../../perf/_harness.mjs';
@@ -123,7 +123,7 @@ run(
     const third = await runTurn(m4, session, live, 'after pool retire');
     const poolTurnMs = performance.now() - t3;
     t.is(third.status.state, 'failed');
-    t.is(third.status.error, m4Texts.retired);
+    t.is(third.status.error, subscriptionTexts.retired);
     t.is(posts(server).length, before, 'nothing sent for the retired pool');
 
     emit({

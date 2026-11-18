@@ -18,9 +18,9 @@ import test from '@endo/ses-ava/test.js';
 import { texts, textOf } from '../../guest/lib/interfaces.js';
 import {
   codexExplanations,
-  m4Texts,
-  m4TextOf,
-} from '../../guest/lib/texts-m4.js';
+  subscriptionTextOf,
+  subscriptionTexts,
+} from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { NATIVE_CONTEXT_FORMAT } from '../../resources/agent-host/impl/projection.js';
 import { BASE_URL_REFUSED } from '../../resources/agent-host/impl/providers/http.js';
@@ -216,7 +216,7 @@ test('efforts: ultra is sent as max (R4-23); an unknown effort is refused before
   const refused = await drain(
     attempt(server, { request: { reasoningEffort: 'turbo' } }),
   );
-  t.is(refused.error.message, m4Texts.unsupportedEffort);
+  t.is(refused.error.message, subscriptionTexts.unsupportedEffort);
   t.is(server.requests().length, 1);
 });
 
@@ -331,7 +331,7 @@ test('failure events: symbolic facts and the fixed explanation, never prose; inh
   const failed = await drain(attempt(server));
   t.is(
     failed.error.message,
-    m4TextOf.responsesFailed(
+    subscriptionTextOf.responsesFailed(
       'response.failed',
       [
         'code=context_length_exceeded',
@@ -348,11 +348,11 @@ test('failure events: symbolic facts and the fixed explanation, never prose; inh
       type: 'response.failed',
       response: { error: { code: 'constructor', message: 'FAKE-PROSE' } },
     }),
-    m4TextOf.responsesFailed('response.failed', ['code=constructor']),
+    subscriptionTextOf.responsesFailed('response.failed', ['code=constructor']),
   );
   t.is(
     responsesFailureText({ type: 'error', code: 'rate_limit_exceeded' }),
-    m4TextOf.responsesFailed(
+    subscriptionTextOf.responsesFailed(
       'error',
       ['code=rate_limit_exceeded'],
       codexExplanations.rate_limit_exceeded,
@@ -363,7 +363,7 @@ test('failure events: symbolic facts and the fixed explanation, never prose; inh
       type: 'response.failed',
       response: { error: { code: 'sk_live_abc', param: 'bearer.x' } },
     }),
-    m4TextOf.responsesFailed('response.failed', []),
+    subscriptionTextOf.responsesFailed('response.failed', []),
     'credential-shaped values are dropped',
   );
 });
@@ -443,7 +443,7 @@ test('persistent overload: six attempts and five delays', async t => {
   t.is(
     result.error.message,
     textOf.afterAttempts(
-      m4TextOf.responsesFailed('response.failed', [
+      subscriptionTextOf.responsesFailed('response.failed', [
         'code=server_is_overloaded',
       ]),
       6,
@@ -460,12 +460,12 @@ test('HTTP: 429 exhausted carries its reset, 401 rejected, others the subscripti
     { status: 503 },
   ]);
   const exhausted = await drain(attempt(server));
-  t.is(exhausted.error.message, m4TextOf.subscriptionHttp(429));
+  t.is(exhausted.error.message, subscriptionTextOf.subscriptionHttp(429));
   t.deepEqual(exhausted.error.exhausted, { untilMs: resetSec * 1000 });
   const rejected = await drain(attempt(server));
   t.true(rejected.error.rejected);
   const other = await drain(attempt(server));
-  t.is(other.error.message, m4TextOf.subscriptionHttp(503));
+  t.is(other.error.message, subscriptionTextOf.subscriptionHttp(503));
   t.false(other.error.retryable);
   for (const result of [exhausted, rejected, other]) clean(t, result);
 });
@@ -477,18 +477,24 @@ test('empty answer, cut stream, timeout and cancel', async t => {
     { events: codexEvents({ deltas: ['a', 'b'], complete: false }) },
   ]);
   const empty = await drain(attempt(server));
-  t.is(empty.error.message, m4Texts.emptyResponsesOutput);
+  t.is(empty.error.message, subscriptionTexts.emptyResponsesOutput);
   t.deepEqual(
     empty.events.map(e => Object.keys(e)[0]),
     ['usage'],
   );
   const cut = await drain(attempt(server));
-  t.is(cut.error.message, m4TextOf.responsesFailed('stream.incomplete', []));
+  t.is(
+    cut.error.message,
+    subscriptionTextOf.responsesFailed('stream.incomplete', []),
+  );
   t.true(cut.error.delivered);
 
   server.setPlan([{ hang: true }]);
   const timedOut = await drain(attempt(server, { spec: { timeoutMs: 100 } }));
-  t.is(timedOut.error.message, m4TextOf.responsesFailed('stream.timeout', []));
+  t.is(
+    timedOut.error.message,
+    subscriptionTextOf.responsesFailed('stream.timeout', []),
+  );
   t.true(timedOut.error.timedOut);
 
   server.setPlan([{ hang: true }]);

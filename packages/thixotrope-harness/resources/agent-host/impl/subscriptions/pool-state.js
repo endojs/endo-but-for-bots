@@ -25,7 +25,7 @@
  *   any served stamps already waiting riding along. Served stamps are
  *   **coalesced**: the latest per session is kept and sent at most once per
  *   `servedFlushMs` (one second) per pool, in messages of at most
- *   `m4Limits.poolChangeServed` (32) records.
+ *   `subscriptionLimits.poolChangeServed` (32) records.
  * - `flush()`: sends what waits now (tests, shutdown).
  *
  * A send to a retired sink is lost (sendOnly): a lost mark costs one more
@@ -36,7 +36,7 @@
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
 
-import { m4Limits } from '../../../../guest/lib/limits-m4.js';
+import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @typedef {import('./types.js').PoolChange} PoolChange */
@@ -138,8 +138,8 @@ export const makePoolStateBridge = ({
     const served = [...waiting.values()];
     waiting.clear();
     if (target === undefined) return;
-    const markParts = chunks(markList, m4Limits.maxPoolMembers);
-    const servedParts = chunks(served, m4Limits.poolChangeServed);
+    const markParts = chunks(markList, subscriptionLimits.maxPoolMembers);
+    const servedParts = chunks(served, subscriptionLimits.poolChangeServed);
     const count = Math.max(markParts.length, servedParts.length);
     for (let index = 0; index < count; index += 1) {
       /** @type {PoolChange} */
@@ -226,7 +226,7 @@ export const makePoolStateBridge = ({
         waiting.set(record.session, record);
         // Retained-state bound (rule 12.6): never more stamps waiting than
         // the manager keeps per pool; the oldest would be dropped there too.
-        while (waiting.size > m4Limits.servedRecords) {
+        while (waiting.size > subscriptionLimits.servedRecords) {
           const [oldest] = waiting.keys();
           waiting.delete(oldest);
         }

@@ -9,7 +9,7 @@
  * (same `rev`) is taken as it is.
  *
  * Eviction (m4-interfaces 6): a subscriber the adapter evicted (idle, or
- * closed) answers `next()` with `m4Texts.accountsWatchClosed`; the feed
+ * closed) answers `next()` with `subscriptionTexts.accountsWatchClosed`; the feed
  * then calls `watch(lastRev)` again. Any other rejection (the connection
  * went away) stops it with the error shown; a reconnect brings new powers
  * and with them a new feed. When the last listener leaves, the feed closes
@@ -21,7 +21,7 @@
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { m4Texts } from '../../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../../guest/lib/subscription-texts.js';
 
 /** Re-watches in a row with no batch in between before the feed gives up. */
 export const REWATCH_LIMIT = 3;
@@ -130,7 +130,7 @@ const makeFeed = powers => {
       } catch (thrown) {
         if (mine !== epoch) return;
         if (
-          messageOf(thrown) !== m4Texts.accountsWatchClosed ||
+          messageOf(thrown) !== subscriptionTexts.accountsWatchClosed ||
           rewatches >= REWATCH_LIMIT
         ) {
           throw thrown;

@@ -10,20 +10,20 @@
  * Importers: the manager vat's subscriptions part
  * (`resources/agent-host/durable-subscriptions.js`), the adapter
  * (`AH/subscriptions/`, `AH/secrets/`, `AH/attach.js`), the factory's
- * effort resolver (texts only, from `texts-m4.js`), the gateway key guard
+ * effort resolver (texts only, from `subscription-texts.js`), the gateway key guard
  * (M3's vocabulary loader reads `vocabularyShapes()` below) and tests. The session and exec
  * programs never import it (their bundles have no room, m4-interfaces 1.4).
  *
  * Rules as `interfaces.js`: closed records with a fixed key vocabulary
  * (rule 12.10), every string and array bounded (`limits.js`,
- * `limits-m4.js`), objects by presence, never by name or id. Changing a
+ * `subscription-limits.js`), objects by presence, never by name or id. Changing a
  * guard here is a contract change (`contract(thixotrope-harness): ...`,
  * m4-interfaces.md updated in the same commit).
  *
  * Runs in vats (prelude globals) and in Node after `installGuestPrelude()`.
  */
 import { limits } from './limits.js';
-import { m4Limits } from './limits-m4.js';
+import { subscriptionLimits } from './subscription-limits.js';
 import { shapes } from './interfaces.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -100,8 +100,8 @@ const m4ShapeBuilders = {
     record(
       {},
       {
-        plan: text(m4Limits.planUnits),
-        windows: list(T.Window, m4Limits.maxWindows),
+        plan: text(subscriptionLimits.planUnits),
+        windows: list(T.Window, subscriptionLimits.maxWindows),
       },
     ),
   /** `SubscriptionsAdmin.makeMember` argument (R8-13, R8-35, R8-36). */
@@ -113,7 +113,7 @@ const m4ShapeBuilders = {
         credential: R('Secret'),
       },
       {
-        weight: atMost(m4Limits.maxWeight),
+        weight: atMost(subscriptionLimits.maxWeight),
         declared: T.DeclaredProfile,
       },
     ),
@@ -142,7 +142,7 @@ const m4ShapeBuilders = {
       {
         kind: T.PoolKind,
         label: S.Label,
-        members: list(R('PoolMember'), m4Limits.maxPoolMembers),
+        members: list(R('PoolMember'), subscriptionLimits.maxPoolMembers),
       },
       {
         modelId: S.ModelId,
@@ -165,15 +165,16 @@ const m4ShapeBuilders = {
     record({
       kind: T.PoolKind,
       label: S.Label,
-      members: list(R('PoolMember'), m4Limits.maxPoolMembers),
+      members: list(R('PoolMember'), subscriptionLimits.maxPoolMembers),
       state: M.or('active', 'retired'),
     }),
   MemberPage: () =>
     record(
-      { members: list(R('PoolMember'), m4Limits.poolPageEntries) },
+      { members: list(R('PoolMember'), subscriptionLimits.poolPageEntries) },
       { next: S.Cursor },
     ),
-  PoolPage: () => record({ pools: list(R('Backend'), m4Limits.maxPools) }),
+  PoolPage: () =>
+    record({ pools: list(R('Backend'), subscriptionLimits.maxPools) }),
   /**
    * A refusal mark (hosted-agent `subscription-pool.js` `makeRefusalMarks`):
    * skip the member until `untilMs`; `strikes` in a row double the undated
@@ -211,8 +212,8 @@ const m4ShapeBuilders = {
   PoolState: () =>
     record({
       state: M.or('active', 'retired'),
-      members: list(T.MemberState, m4Limits.maxPoolMembers),
-      served: list(T.ServedRecord, m4Limits.servedRecords),
+      members: list(T.MemberState, subscriptionLimits.maxPoolMembers),
+      served: list(T.ServedRecord, subscriptionLimits.servedRecords),
     }),
   /** One mark change: `mark` absent means the mark was lifted. */
   MarkChange: () => record({ member: R('PoolMember') }, { mark: T.Mark }),
@@ -221,8 +222,8 @@ const m4ShapeBuilders = {
     record(
       {},
       {
-        marks: list(T.MarkChange, m4Limits.maxPoolMembers),
-        served: list(T.ServedRecord, m4Limits.poolChangeServed),
+        marks: list(T.MarkChange, subscriptionLimits.maxPoolMembers),
+        served: list(T.ServedRecord, subscriptionLimits.poolChangeServed),
       },
     ),
   /** `PoolBackend.resolveEffort` argument (R4-23). */
@@ -248,7 +249,12 @@ const m4ShapeBuilders = {
     }),
   SecretCatalogPage: () =>
     record(
-      { entries: list(T.SecretCatalogEntry, m4Limits.catalogPageEntries) },
+      {
+        entries: list(
+          T.SecretCatalogEntry,
+          subscriptionLimits.catalogPageEntries,
+        ),
+      },
       { next: S.Cursor },
     ),
   /** `CredentialOps.describeSecrets` answer item; `null` for an unknown key. */
@@ -268,14 +274,14 @@ const m4ShapeBuilders = {
       {},
       {
         secret: R('Secret'),
-        limit: atMost(m4Limits.auditReaderMax),
+        limit: atMost(subscriptionLimits.auditReaderMax),
         before: count,
       },
     ),
   /** Newest first; `next` is the `before` of the following page. */
   AuditReaderPage: () =>
     record(
-      { events: list(S.AuditEvent, m4Limits.auditReaderMax) },
+      { events: list(S.AuditEvent, subscriptionLimits.auditReaderMax) },
       { next: count },
     ),
 
@@ -291,13 +297,16 @@ const m4ShapeBuilders = {
         usedPercent: atMost(100),
       },
       {
-        resetsAt: text(m4Limits.timeUnits),
+        resetsAt: text(subscriptionLimits.timeUnits),
         windowMinutes: count,
       },
     ),
   /** A banked Codex reset credit (R4-86): shown, never redeemed (decision 8). */
   BankedCredit: () =>
-    record({}, { expiresAt: text(m4Limits.timeUnits), label: S.Label }),
+    record(
+      {},
+      { expiresAt: text(subscriptionLimits.timeUnits), label: S.Label },
+    ),
   /** One member's account as a person or the model sees it. */
   MemberAccount: () =>
     record(
@@ -306,15 +315,15 @@ const m4ShapeBuilders = {
         provider: T.Provider,
         provenance: T.Provenance,
         state: M.or('ok', 'marked', 'unusable', 'retired'),
-        windows: list(T.Window, m4Limits.maxWindows),
+        windows: list(T.Window, subscriptionLimits.maxWindows),
         limitReached: M.boolean(),
       },
       {
-        plan: text(m4Limits.planUnits),
-        credits: text(m4Limits.planUnits),
-        banked: list(T.BankedCredit, m4Limits.maxBankedCredits),
-        at: text(m4Limits.timeUnits),
-        markedUntil: text(m4Limits.timeUnits),
+        plan: text(subscriptionLimits.planUnits),
+        credits: text(subscriptionLimits.planUnits),
+        banked: list(T.BankedCredit, subscriptionLimits.maxBankedCredits),
+        at: text(subscriptionLimits.timeUnits),
+        markedUntil: text(subscriptionLimits.timeUnits),
         code: text(limits.secretCodeUnits),
       },
     ),
@@ -325,17 +334,23 @@ const m4ShapeBuilders = {
       kind: T.PoolKind,
       label: S.Label,
       selection: 'auto',
-      members: list(T.MemberAccount, m4Limits.maxPoolMembers),
+      members: list(T.MemberAccount, subscriptionLimits.maxPoolMembers),
     }),
   /**
    * Every pool's accounts. Adapter-local: never enters a vat (8 pools x 16
    * members can exceed frameBytes; it travels gateway -> browser only).
    */
   AccountsView: () =>
-    record({ rev: count, pools: list(T.PoolAccounts, m4Limits.maxPools) }),
+    record({
+      rev: count,
+      pools: list(T.PoolAccounts, subscriptionLimits.maxPools),
+    }),
   /** One push of the accounts channel (D-8; R4-85: pushed, never polled). */
   AccountsBatch: () =>
-    record({ rev: count, pools: list(T.PoolAccounts, m4Limits.maxPools) }),
+    record({
+      rev: count,
+      pools: list(T.PoolAccounts, subscriptionLimits.maxPools),
+    }),
 };
 
 /** Shapes of M4, by name (built on first use). */
@@ -432,9 +447,9 @@ const m4InterfaceBuilders = {
   /** Adapter-local; the manager is its only caller (`ops.credentials()`, H-4). */
   CredentialOps: () =>
     M.interface('CredentialOps', {
-      describeSecrets: M.callWhen(list(S.Id, m4Limits.describeBatch)).returns(
-        list(T.SecretKeyInfo, m4Limits.describeBatch),
-      ),
+      describeSecrets: M.callWhen(
+        list(S.Id, subscriptionLimits.describeBatch),
+      ).returns(list(T.SecretKeyInfo, subscriptionLimits.describeBatch)),
       setSecretDescription: M.callWhen(
         S.Id,
         text(limits.secretDescriptionUnits),
@@ -533,13 +548,3 @@ export const m4SinkMethodNames = harden(['poolState', 'poolChanged', 'poolOf']);
  */
 export const vocabularyShapes = () =>
   harden([...Object.values(m4Shapes), ...Object.values(m4Interfaces)]);
-
-export { m4Limits } from './limits-m4.js';
-export {
-  m4Texts,
-  m4TextOf,
-  m4Codes,
-  codexExplanations,
-  poolKinds,
-  providerOfKind,
-} from './texts-m4.js';

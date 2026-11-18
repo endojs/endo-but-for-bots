@@ -18,17 +18,19 @@ import { interfaces, methodNames, shapes } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import {
   m4Interfaces,
-  m4Limits,
   m4MethodNames,
   m4Shapes,
   m4SinkMethodGuards,
   m4SinkMethodNames,
-  m4TextOf,
-  m4Texts,
-  poolKinds,
-  providerOfKind,
   vocabularyShapes,
 } from '../../guest/lib/interfaces-m4.js';
+import { subscriptionLimits } from '../../guest/lib/subscription-limits.js';
+import {
+  subscriptionTextOf,
+  subscriptionTexts,
+  poolKinds,
+  providerOfKind,
+} from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { subscriptionDefaults } from '../../config/defaults.js';
 
@@ -251,7 +253,10 @@ test('bounds that are not strings: 17 members, a 257th served record, an audit l
       m4Shapes.PoolSpec,
     ),
   );
-  const many = Array.from({ length: m4Limits.servedRecords + 1 }, () => served);
+  const many = Array.from(
+    { length: subscriptionLimits.servedRecords + 1 },
+    () => served,
+  );
   t.false(
     matches(
       harden({ state: 'active', members: [memberState], served: many }),
@@ -489,7 +494,7 @@ test('BackendKind and BackendInfo admit the pool kinds (H-1)', t => {
 
 test('Node defaults equal the vat limits where a name is in both', t => {
   const shared = Object.keys(subscriptionDefaults).filter(
-    name => name in m4Limits,
+    name => name in subscriptionLimits,
   );
   t.deepEqual(shared.sort(), [
     'auditReaderDefault',
@@ -500,7 +505,7 @@ test('Node defaults equal the vat limits where a name is in both', t => {
   for (const name of shared) {
     t.is(
       /** @type {any} */ (subscriptionDefaults)[name],
-      /** @type {any} */ (m4Limits)[name],
+      /** @type {any} */ (subscriptionLimits)[name],
       name,
     );
   }
@@ -530,51 +535,73 @@ test('Node defaults equal the vat limits where a name is in both', t => {
 });
 
 test('the fixed M4 texts (section 13)', t => {
-  t.is(m4Texts.subscriptionsExhausted, 'Provider subscriptions exhausted');
-  t.is(m4TextOf.subscriptionsExhausted(), 'Provider subscriptions exhausted');
   t.is(
-    m4TextOf.subscriptionsExhausted(ISO),
+    subscriptionTexts.subscriptionsExhausted,
+    'Provider subscriptions exhausted',
+  );
+  t.is(
+    subscriptionTextOf.subscriptionsExhausted(),
+    'Provider subscriptions exhausted',
+  );
+  t.is(
+    subscriptionTextOf.subscriptionsExhausted(ISO),
     `Provider subscriptions exhausted; the first member is expected back at ${ISO}`,
   );
-  t.is(m4Texts.claudeInferenceFailed, 'Claude subscription inference failed');
   t.is(
-    m4TextOf.subscriptionHttp(503),
+    subscriptionTexts.claudeInferenceFailed,
+    'Claude subscription inference failed',
+  );
+  t.is(
+    subscriptionTextOf.subscriptionHttp(503),
     'Subscription inference failed (HTTP 503)',
   );
-  t.is(m4Texts.emptyMessagesOutput, 'Empty Messages assistant output');
-  t.is(m4Texts.emptyResponsesOutput, 'Empty Responses assistant output');
   t.is(
-    m4TextOf.responsesFailed('response.failed', ['code=server_error'], 'Why.'),
+    subscriptionTexts.emptyMessagesOutput,
+    'Empty Messages assistant output',
+  );
+  t.is(
+    subscriptionTexts.emptyResponsesOutput,
+    'Empty Responses assistant output',
+  );
+  t.is(
+    subscriptionTextOf.responsesFailed(
+      'response.failed',
+      ['code=server_error'],
+      'Why.',
+    ),
     'Subscription inference ended unsuccessfully (response.failed; code=server_error) Why.',
   );
   t.is(
-    m4TextOf.responsesFailed('response.incomplete', []),
+    subscriptionTextOf.responsesFailed('response.incomplete', []),
     'Subscription inference ended unsuccessfully (response.incomplete)',
   );
   t.is(
-    m4Texts.unsupportedEffort,
+    subscriptionTexts.unsupportedEffort,
     'Unsupported reasoning effort for Fae subscription',
   );
   t.is(
-    m4Texts.secretTooLargeForBrowser,
+    subscriptionTexts.secretTooLargeForBrowser,
     'This value is too large to send from the browser; write it from the command line with scripts/subscription-login.mjs --value-file, which sends a sealed box',
   );
-  t.is(m4Texts.secretNotText, 'This file is not text; secrets hold text');
   t.is(
-    m4Texts.accountsWatchClosed,
+    subscriptionTexts.secretNotText,
+    'This file is not text; secrets hold text',
+  );
+  t.is(
+    subscriptionTexts.accountsWatchClosed,
     'This accounts watch is closed; watch again',
   );
   t.deepEqual(
     [
-      m4Texts.provenanceObserved,
-      m4Texts.provenanceDeclared,
-      m4Texts.provenanceRemembered,
-      m4Texts.provenanceUnavailable,
+      subscriptionTexts.provenanceObserved,
+      subscriptionTexts.provenanceDeclared,
+      subscriptionTexts.provenanceRemembered,
+      subscriptionTexts.provenanceUnavailable,
     ],
     ['observed', 'declared', 'remembered', 'unavailable'],
   );
   t.is(
-    m4TextOf.memberFailed('first', 'CONSUMED'),
+    subscriptionTextOf.memberFailed('first', 'CONSUMED'),
     'Subscription member "first" failed: "CONSUMED"',
   );
   for (const name of [
@@ -593,7 +620,7 @@ test('the fixed M4 texts (section 13)', t => {
     'credentialRejected',
     'noSubscriptionAccounts',
   ]) {
-    const value = /** @type {any} */ (m4Texts)[name];
+    const value = /** @type {any} */ (subscriptionTexts)[name];
     t.is(typeof value, 'string', name);
     t.regex(/** @type {string} */ (value), /^[^\n]+$/, name);
   }

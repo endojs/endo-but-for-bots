@@ -15,7 +15,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /* eslint-disable import/no-relative-packages */
-import { m4Shapes, m4Texts } from '../../guest/lib/interfaces-m4.js';
+import { m4Shapes } from '../../guest/lib/interfaces-m4.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import {
   accountsWatchLimitText,
@@ -483,7 +484,7 @@ test('idle eviction: 40 abandoned watchers in batches, then a new watch succeeds
   t.is(batch.rev, core.rev());
   t.is(batch.pools[0].members[0].windows[0].usedPercent, 50);
   await t.throwsAsync(() => abandoned[0].next(), {
-    message: m4Texts.accountsWatchClosed,
+    message: subscriptionTexts.accountsWatchClosed,
   });
   sub.close();
 });
@@ -510,7 +511,7 @@ test('32 live watchers make a 33rd watch fail; an idle one is evicted for a new 
   const newcomer = core.accounts.watch();
   t.is(core.subscriberCount(), 32);
   await t.throwsAsync(() => live[0].next(), {
-    message: m4Texts.accountsWatchClosed,
+    message: subscriptionTexts.accountsWatchClosed,
   });
   newcomer.close();
   for (const sub of live) sub.close();
@@ -631,7 +632,7 @@ test('accountStatus: Fae rendering with provenance, usage not attributed, no cos
   });
   const apiOutcome = await apiTool.execute(harden({ opId: 'o2', args: '' }));
   t.is(apiOutcome.status, 'ok');
-  t.true(apiOutcome.text.startsWith(m4Texts.noSubscriptionAccounts));
+  t.true(apiOutcome.text.startsWith(subscriptionTexts.noSubscriptionAccounts));
 
   const bad = await tool.execute(
     harden({ opId: 'o3', args: '{"reset":true}' }),

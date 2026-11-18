@@ -30,7 +30,7 @@ import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
 import { startFakeSubscriptionServer } from '../fixtures/fake-subscription-server.mjs';
@@ -200,12 +200,12 @@ run(
           modelId: 'gpt-fake-mini',
           reasoningEffort: 'high',
         }),
-      { message: m4Texts.unsupportedEffort },
+      { message: subscriptionTexts.unsupportedEffort },
     );
     const scripted = await m4.slice.makeBackend({ turns: [] });
     await t.throwsAsync(
       () => openSession(m4, scripted.backend, { reasoningEffort: 'high' }),
-      { message: m4Texts.effortNotSupported },
+      { message: subscriptionTexts.effortNotSupported },
     );
 
     // Claude: the effort is sent as adaptive thinking.

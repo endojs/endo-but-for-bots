@@ -63,7 +63,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { textOf } from '../../../../guest/lib/interfaces.js';
 import { limits } from '../../../../guest/lib/limits.js';
-import { m4Limits } from '../../../../guest/lib/limits-m4.js';
+import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
 /* eslint-enable import/no-relative-packages */
 
 /** The environment variable naming the wrapping key file (serve.mjs passes it). */
@@ -300,7 +300,7 @@ harden(assertDescription);
  *   newest first, at most `auditPageEvents` (M2's bound); `before` (M4):
  *   only events older than that event time
  * @property {(request: { key?: string, limit: number, before?: number }) => Promise<AuditEvent[]>} auditPage
- *   as `audit`, at most `m4Limits.auditReaderMax` (1,000; R7-63; M4 H-5):
+ *   as `audit`, at most `subscriptionLimits.auditReaderMax` (1,000; R7-63; M4 H-5):
  *   the adapter-local `AuditReader`'s path
  * @property {(key: string, description: string) => Promise<void>} setDescription
  *   M4 H-5: the entry's description (R7-25 rule, `INVALID_DESCRIPTION`);
@@ -745,7 +745,8 @@ export const makeSecretStore = ({
         }),
       ),
     audit: request => auditEvents(request, limits.auditPageEvents),
-    auditPage: request => auditEvents(request, m4Limits.auditReaderMax),
+    auditPage: request =>
+      auditEvents(request, subscriptionLimits.auditReaderMax),
     setDescription: (key, description) =>
       audited(key, 'setDescription', 'INVALID_DESCRIPTION', () =>
         mutate(() => {

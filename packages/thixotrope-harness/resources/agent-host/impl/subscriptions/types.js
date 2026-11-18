@@ -117,7 +117,7 @@
  * @typedef {object} MemberCredential
  * @property {() => Promise<{ credential: Credential, generation: number }>} current
  *   read (audited), renew when within the refresh skew of expiry
- *   (single-flight), fail with a fixed code (`m4Codes`)
+ *   (single-flight), fail with a fixed code (`subscriptionCodes`)
  * @property {(rejected: Credential) => Promise<Credential>} renewAfterRejection
  *   one renewal after a 401 for that exact credential (R4-25's one
  *   credential-refresh retry)
@@ -164,8 +164,8 @@
  * @property {() => Promise<void>} flush the readings file
  *
  * The accounts channel behind `accounts.watch()` answers a waiting `next()`
- * again after `m4Limits.accountsKeepaliveMs` with no change, evicts a
- * subscriber with no `next()` call for `m4Limits.accountsIdleMs`, and at
+ * again after `subscriptionLimits.accountsKeepaliveMs` with no change, evicts a
+ * subscriber with no `next()` call for `subscriptionLimits.accountsIdleMs`, and at
  * the subscriber cap evicts the oldest idle one before refusing
  * (m4-interfaces 6).
  */

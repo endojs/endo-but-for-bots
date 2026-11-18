@@ -17,12 +17,12 @@ import { textOf, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { fitsFrame, messageBytes } from '../../guest/lib/bounded.js';
 import {
-  m4Limits,
   m4MethodNames,
   m4Shapes,
   m4SinkMethodNames,
-  m4Texts,
 } from '../../guest/lib/interfaces-m4.js';
+import { subscriptionLimits } from '../../guest/lib/subscription-limits.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import {
   forwardSinkMethods,
@@ -205,7 +205,7 @@ test('makeMember is idempotent by label and credential; another credential confl
           credential: kit.makeSecret(),
         }),
       ),
-    failsWith(m4Texts.memberConflict),
+    failsWith(subscriptionTexts.memberConflict),
   );
   t.throws(
     () =>
@@ -241,16 +241,18 @@ test('makeMember is idempotent by label and credential; another credential confl
 test('makeMember keeps at most maxMembers; listMembers pages them', async t => {
   const kit = makeKit();
   const declared = harden({ plan: 'Max' });
-  const members = Array.from({ length: m4Limits.maxMembers }, (_, i) =>
-    kit.admin.makeMember(
-      harden({
-        provider: i % 2 ? 'codex' : 'claude',
-        label: `m${i}`,
-        credential: kit.makeSecret(),
-        weight: 3,
-        declared,
-      }),
-    ),
+  const members = Array.from(
+    { length: subscriptionLimits.maxMembers },
+    (_, i) =>
+      kit.admin.makeMember(
+        harden({
+          provider: i % 2 ? 'codex' : 'claude',
+          label: `m${i}`,
+          credential: kit.makeSecret(),
+          weight: 3,
+          declared,
+        }),
+      ),
   );
   t.throws(
     () => kit.member('claude', 'one more'),
@@ -264,7 +266,7 @@ test('makeMember keeps at most maxMembers; listMembers pages them', async t => {
     declared,
   });
   const first = kit.admin.listMembers();
-  t.is(first.members.length, m4Limits.poolPageEntries);
+  t.is(first.members.length, subscriptionLimits.poolPageEntries);
   t.true(matches(first, m4Shapes.MemberPage));
   await members[5].retire();
   t.truthy(kit.member('claude', 'one more'));
@@ -286,35 +288,35 @@ test('makePool is idempotent by label and spec; conflicts, kinds and member stat
   t.is(kit.admin.makePool(harden({ ...spec, members: [a, b] })), pool);
   t.throws(
     () => kit.admin.makePool(harden({ ...spec, members: [b, a] })),
-    failsWith(m4Texts.poolConflict),
+    failsWith(subscriptionTexts.poolConflict),
   );
   t.throws(
     () => kit.admin.makePool(harden({ ...spec, modelId: 'other' })),
-    failsWith(m4Texts.poolConflict),
+    failsWith(subscriptionTexts.poolConflict),
   );
   t.throws(
     () => kit.admin.makePool(harden({ ...spec, label: 'x', members: [a, c] })),
-    failsWith(m4Texts.memberKind),
+    failsWith(subscriptionTexts.memberKind),
   );
   t.throws(
     () => kit.admin.makePool(harden({ ...spec, label: 'x', members: [] })),
-    failsWith(m4Texts.noUsableMember),
+    failsWith(subscriptionTexts.noUsableMember),
   );
   t.throws(
     () => kit.admin.makePool(harden({ ...spec, label: 'x', members: [a, a] })),
-    failsWith(m4Texts.poolConflict),
+    failsWith(subscriptionTexts.poolConflict),
   );
   t.throws(
     () =>
       kit.admin.makePool(
         harden({ ...spec, label: 'x', members: [Far('PoolMember', {})] }),
       ),
-    failsWith(m4Texts.unknownMember),
+    failsWith(subscriptionTexts.unknownMember),
   );
   await b.retire();
   t.throws(
     () => kit.admin.makePool(harden({ ...spec, label: 'x', members: [a, b] })),
-    failsWith(m4Texts.noUsableMember),
+    failsWith(subscriptionTexts.noUsableMember),
   );
   t.deepEqual(kit.admin.describePool(pool), {
     kind: 'claude-pool',
@@ -324,14 +326,14 @@ test('makePool is idempotent by label and spec; conflicts, kinds and member stat
   });
   t.deepEqual(kit.admin.listPools(), { pools: [pool] });
   t.throws(() => kit.admin.describePool(Far('Backend', {})), {
-    message: m4Texts.unknownPool,
+    message: subscriptionTexts.unknownPool,
   });
 });
 
 test('at most maxPools active pools; a retired pool frees its slot and refuses use', async t => {
   const kit = makeKit();
   const member = kit.member('codex', 'c');
-  const pools = Array.from({ length: m4Limits.maxPools }, (_, i) =>
+  const pools = Array.from({ length: subscriptionLimits.maxPools }, (_, i) =>
     kit.admin.makePool(
       harden({ kind: 'codex-pool', label: `p${i}`, members: [member] }),
     ),
@@ -341,13 +343,16 @@ test('at most maxPools active pools; a retired pool frees its slot and refuses u
     label: 'extra',
     members: [member],
   });
-  t.throws(() => kit.admin.makePool(extra), failsWith(m4Texts.poolConflict));
+  t.throws(
+    () => kit.admin.makePool(extra),
+    failsWith(subscriptionTexts.poolConflict),
+  );
   const [retired] = pools;
   await kit.admin.retirePool(retired);
   await kit.admin.retirePool(retired);
   t.is(kit.admin.describePool(retired).state, 'retired');
   t.truthy(kit.admin.makePool(extra));
-  t.is(kit.admin.listPools().pools.length, m4Limits.maxPools);
+  t.is(kit.admin.listPools().pools.length, subscriptionLimits.maxPools);
   const { host } = kit.bindSession();
   for (const call of [
     () => retired.open(host),
@@ -356,7 +361,7 @@ test('at most maxPools active pools; a retired pool frees its slot and refuses u
     () => retired.resolveEffort(harden({ modelId: 'm' })),
   ]) {
     // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(call, failsWith(m4Texts.retired));
+    await t.throwsAsync(call, failsWith(subscriptionTexts.retired));
   }
   t.deepEqual(retired.describe(), { kind: 'codex-pool', label: 'p0' });
   t.is(kit.sink.poolState(retired).state, 'retired');
@@ -477,7 +482,7 @@ test('the pool Backend forwards describe, listModels, resolveModel and open with
   ]);
   // R4-21: no model and no spec model.
   await t.throwsAsync(() => pool.resolveModel(), {
-    message: m4Texts.subscriptionModelRequired,
+    message: subscriptionTexts.subscriptionModelRequired,
   });
   t.deepEqual(await pool.resolveModel('model-a'), { modelId: 'model-a' });
   t.deepEqual(kit.calls.at(-1), [
@@ -534,12 +539,12 @@ test('resolveEffort checks the effort against the model row, else answers its de
   });
   await t.throwsAsync(
     () => pool.resolveEffort(harden({ modelId: 'a', reasoningEffort: 'max' })),
-    failsWith(m4Texts.unsupportedEffort),
+    failsWith(subscriptionTexts.unsupportedEffort),
   );
   t.deepEqual(await pool.resolveEffort(harden({ modelId: 'b' })), {});
   await t.throwsAsync(
     () => pool.resolveEffort(harden({ modelId: 'b', reasoningEffort: 'low' })),
-    failsWith(m4Texts.unsupportedEffort),
+    failsWith(subscriptionTexts.unsupportedEffort),
   );
   // The third page: the row is found by following `next`.
   kit.calls.length = 0;
@@ -612,13 +617,18 @@ test('served records: newest wins, 256 per pool, least recently served dropped; 
   const pool = kit.admin.makePool(
     harden({ kind: 'codex-pool', label: 'p', members: [a, b] }),
   );
-  const sessions = Array.from({ length: m4Limits.servedRecords + 10 }, () =>
-    Far('Session', {}),
+  const sessions = Array.from(
+    { length: subscriptionLimits.servedRecords + 10 },
+    () => Far('Session', {}),
   );
   // In batches of the PoolChange bound, as the adapter coalesces them.
-  for (let i = 0; i < sessions.length; i += m4Limits.poolChangeServed) {
+  for (
+    let i = 0;
+    i < sessions.length;
+    i += subscriptionLimits.poolChangeServed
+  ) {
     const served = sessions
-      .slice(i, i + m4Limits.poolChangeServed)
+      .slice(i, i + subscriptionLimits.poolChangeServed)
       .map((session, j) => ({
         session,
         member: (i + j) % 2 ? b : a,
@@ -627,7 +637,7 @@ test('served records: newest wins, 256 per pool, least recently served dropped; 
     kit.sink.poolChanged(pool, harden({ served }));
   }
   let state = kit.sink.poolState(pool);
-  t.is(state.served.length, m4Limits.servedRecords);
+  t.is(state.served.length, subscriptionLimits.servedRecords);
   t.is(state.served[0].session, sessions[10]);
   // An older stamp for a kept session is ignored; a newer one moves it last.
   kit.sink.poolChanged(
@@ -660,23 +670,25 @@ test('served records: newest wins, 256 per pool, least recently served dropped; 
 test('poolState of the largest pool fits frameBytes', t => {
   const kit = makeKit();
   const declared = harden({
-    plan: 'p'.repeat(m4Limits.planUnits),
-    windows: Array.from({ length: m4Limits.maxWindows }, () => ({
+    plan: 'p'.repeat(subscriptionLimits.planUnits),
+    windows: Array.from({ length: subscriptionLimits.maxWindows }, () => ({
       name: 'primary',
       usedPercent: 50,
       resetsAt: '2026-11-18T02:11:49.000Z',
       windowMinutes: 300,
     })),
   });
-  const members = Array.from({ length: m4Limits.maxPoolMembers }, (_, i) =>
-    kit.admin.makeMember(
-      harden({
-        provider: 'claude',
-        label: `${i}`.padEnd(limits.labelUnits, 'x'),
-        credential: kit.makeSecret(),
-        declared,
-      }),
-    ),
+  const members = Array.from(
+    { length: subscriptionLimits.maxPoolMembers },
+    (_, i) =>
+      kit.admin.makeMember(
+        harden({
+          provider: 'claude',
+          label: `${i}`.padEnd(limits.labelUnits, 'x'),
+          credential: kit.makeSecret(),
+          declared,
+        }),
+      ),
   );
   const pool = kit.admin.makePool(
     harden({ kind: 'claude-pool', label: 'big', members }),
@@ -691,21 +703,28 @@ test('poolState of the largest pool fits frameBytes', t => {
     pool,
     harden({ marks: members.map(member => ({ member, mark })) }),
   );
-  for (let i = 0; i < m4Limits.servedRecords; i += m4Limits.poolChangeServed) {
+  for (
+    let i = 0;
+    i < subscriptionLimits.servedRecords;
+    i += subscriptionLimits.poolChangeServed
+  ) {
     kit.sink.poolChanged(
       pool,
       harden({
-        served: Array.from({ length: m4Limits.poolChangeServed }, (_, j) => ({
-          session: Far('Session', {}),
-          member: members[j % members.length],
-          at: 1_700_000_000_000 + i + j,
-        })),
+        served: Array.from(
+          { length: subscriptionLimits.poolChangeServed },
+          (_, j) => ({
+            session: Far('Session', {}),
+            member: members[j % members.length],
+            at: 1_700_000_000_000 + i + j,
+          }),
+        ),
       }),
     );
   }
   const state = kit.sink.poolState(pool);
   t.true(matches(state, m4Shapes.PoolState));
-  t.is(state.served.length, m4Limits.servedRecords);
+  t.is(state.served.length, subscriptionLimits.servedRecords);
   const bytes = messageBytes(state);
   t.log(`largest PoolState: ${bytes} bytes`);
   t.true(bytes <= limits.frameBytes, `${bytes} bytes`);
@@ -721,7 +740,7 @@ test('forwardSinkMethods reaches the part made after it', t => {
   const session = Far('Session', {});
   t.is(forwards.poolOf(session), undefined);
   t.throws(() => forwards.poolState(Far('Backend', {})), {
-    message: m4Texts.unknownPool,
+    message: subscriptionTexts.unknownPool,
   });
 });
 
@@ -739,14 +758,14 @@ test('catalog: labels and descriptions from the records, the rest from one descr
   const first = await kit.part.secretsAdminMethods.catalog();
   t.true(matches(first, m4Shapes.SecretCatalogPage));
   t.true(fitsFrame(first));
-  t.true(first.entries.length < m4Limits.catalogPageEntries);
+  t.true(first.entries.length < subscriptionLimits.catalogPageEntries);
   t.true(first.entries.length > 32);
   t.is(first.next, `${first.entries.length}`);
   t.deepEqual(
     kit.calls.map(([name]) => name),
     ['credentials', 'describeSecrets'],
   );
-  t.is(kit.calls[1][1].length, m4Limits.catalogPageEntries);
+  t.is(kit.calls[1][1].length, subscriptionLimits.catalogPageEntries);
   const entry = first.entries[0];
   t.deepEqual(Object.keys(entry).sort(), [
     'bytes',
@@ -919,11 +938,14 @@ test('durable.js: the sink, SecretsAdmin and Secret carry the M4 methods (H-2)',
   });
   // The sink guard refuses an oversize PoolChange.
   const session = Far('Session', {});
-  const tooMany = Array.from({ length: m4Limits.poolChangeServed + 1 }, () => ({
-    session,
-    member,
-    at: 1,
-  }));
+  const tooMany = Array.from(
+    { length: subscriptionLimits.poolChangeServed + 1 },
+    () => ({
+      session,
+      member,
+      at: 1,
+    }),
+  );
   t.throws(() => sink.poolChanged(pool, harden({ served: tooMany })));
   t.is(await E(sink).poolOf(session), undefined);
 });
@@ -932,11 +954,11 @@ test('durable.js: the sink, SecretsAdmin and Secret carry the M4 methods (H-2)',
 
 test('HR-SYN-11: catalog pages by creation serial; a delete between pages skips no secret', async t => {
   const kit = makeKit();
-  const count = m4Limits.catalogPageEntries + 6;
+  const count = subscriptionLimits.catalogPageEntries + 6;
   for (let i = 0; i < count; i += 1) kit.makeSecret(`s${i}`);
   const first = await kit.part.secretsAdminMethods.catalog();
-  t.is(first.entries.length, m4Limits.catalogPageEntries);
-  t.is(first.next, `${m4Limits.catalogPageEntries}`);
+  t.is(first.entries.length, subscriptionLimits.catalogPageEntries);
+  t.is(first.next, `${subscriptionLimits.catalogPageEntries}`);
   // A Secret of the first page is deleted between the pages (durable.js
   // drops it from the list and its record).
   const [deleted] = first.entries.map(entry => entry.secret);
@@ -946,7 +968,10 @@ test('HR-SYN-11: catalog pages by creation serial; a delete between pages skips 
   t.is(second.next, undefined);
   t.deepEqual(
     second.entries.map(entry => entry.label),
-    Array.from({ length: 6 }, (_, i) => `s${m4Limits.catalogPageEntries + i}`),
+    Array.from(
+      { length: 6 },
+      (_, i) => `s${subscriptionLimits.catalogPageEntries + i}`,
+    ),
     'the first secret after the page is not skipped',
   );
 });
@@ -954,7 +979,7 @@ test('HR-SYN-11: catalog pages by creation serial; a delete between pages skips 
 test('HR-SYN-11: listMembers pages by creation serial; a retirement between pages skips no member', async t => {
   // maxMembers equals poolPageEntries today, so the members always fit one
   // page; the cursor is still the serial of the last member a page held.
-  t.true(m4Limits.maxMembers <= m4Limits.poolPageEntries);
+  t.true(subscriptionLimits.maxMembers <= subscriptionLimits.poolPageEntries);
   const kit = makeKit();
   const members = Array.from({ length: 5 }, (_, i) =>
     kit.member(i % 2 ? 'codex' : 'claude', `m${i}`),

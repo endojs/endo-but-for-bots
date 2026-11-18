@@ -9,7 +9,7 @@
  * gateway's in-process secret writer (`context.secretWriter()`, the object a
  * page finds in `GatewayPowers.extras` under `secretWriterLabel`; M2's
  * `replaceLocal` behind it) and its `replace`, so a secret value typed in the
- * browser up to `m4Limits.browserSecretBytes` reaches the store in process
+ * browser up to `subscriptionLimits.browserSecretBytes` reaches the store in process
  * and never crosses the hub (D-6, m3-interfaces A-11). Only the gateway's
  * WebSocket message bound then holds. The hub's `SecretWriter`
  * (`SecretsAdmin.openWriter()`) takes a `SealedBox` only.

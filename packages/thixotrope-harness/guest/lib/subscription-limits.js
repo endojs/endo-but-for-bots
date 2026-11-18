@@ -1,7 +1,9 @@
 // @ts-check
 /**
- * M4 contract settings (W4.0; `designs/m4-interfaces.md` section 1.3): the
- * bounds of everything M4 adds that crosses into or out of a vat. Node-side
+ * The subscription, account and full Secrets bounds (M4's contract
+ * settings, W4.0; `designs/m4-interfaces.md` section 1.3; `limits-m4.js`
+ * `m4Limits` until the fold, F2): the bounds of everything M4 added that
+ * crosses into or out of a vat. Node-side
  * settings (stickiness, backoff, retry delays, timeouts) are in
  * `config/subscription-defaults.js` (W4.1); where a name is in both, the values must
  * be equal (`test/unit/m4-interfaces.test.js`, W4.1).
@@ -15,7 +17,7 @@
  * Units as `limits.js`: `...Bytes` UTF-8 bytes, `...Units` UTF-16 code
  * units, `...Ms` milliseconds. Plain data only (vats and Node).
  */
-export const m4Limits = harden({
+export const subscriptionLimits = harden({
   // ---- pools (R4-24, R4-90, R4-103, R8-13) ----
   /** Members of one pool; also the most a `PoolState` or mark list holds. */
   maxPoolMembers: 16,
@@ -81,7 +83,7 @@ export const m4Limits = harden({
    * `wsMessageBytes` (1,048,576) less 8 KiB for the CapTP JSON envelope.
    * Measured on the JSON-escaped value (`JSON.stringify(value)` as UTF-8)
    * before sending; larger values go through the CLI's sealed-box write
-   * (`scripts/subscription-login.mjs --value-file`, `m4Texts.secretTooLargeForBrowser`).
+   * (`scripts/subscription-login.mjs --value-file`, `subscriptionTexts.secretTooLargeForBrowser`).
    */
   browserSecretBytes: 1_040_384,
 });

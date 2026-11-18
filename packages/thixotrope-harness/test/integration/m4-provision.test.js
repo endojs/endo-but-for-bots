@@ -27,7 +27,7 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { emit } from '../../perf/_harness.mjs';
 import { makeProvision } from '../../scripts/provision-steps.js';
@@ -136,7 +136,7 @@ run(
             credential: two.secret,
           }),
         ),
-      { message: m4Texts.memberConflict },
+      { message: subscriptionTexts.memberConflict },
     );
     await E(pOne).retire();
     const rebound = await E(m4.subs).makeMember(

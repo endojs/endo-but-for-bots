@@ -9,7 +9,7 @@
  * the record and the browser's clock.
  */
 /* eslint-disable import/no-relative-packages */
-import { m4Texts } from '../../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../../guest/lib/subscription-texts.js';
 
 /**
  * A span of time in its two largest units: "3d 4h", "2h 10m", "45s".
@@ -107,12 +107,13 @@ export const accountBlocked = (account, nowMs) => {
 export const provenanceText = (account, nowMs) => {
   /** @type {Record<string, string>} */
   const words = {
-    observed: m4Texts.provenanceObserved,
-    remembered: m4Texts.provenanceRemembered,
-    declared: m4Texts.provenanceDeclared,
-    unavailable: m4Texts.provenanceUnavailable,
+    observed: subscriptionTexts.provenanceObserved,
+    remembered: subscriptionTexts.provenanceRemembered,
+    declared: subscriptionTexts.provenanceDeclared,
+    unavailable: subscriptionTexts.provenanceUnavailable,
   };
-  const word = words[account.provenance] ?? m4Texts.provenanceUnavailable;
+  const word =
+    words[account.provenance] ?? subscriptionTexts.provenanceUnavailable;
   const at = account.at === undefined ? NaN : Date.parse(account.at);
   if (
     (account.provenance === 'observed' ||

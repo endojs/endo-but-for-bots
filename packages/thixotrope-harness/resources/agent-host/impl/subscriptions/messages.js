@@ -20,9 +20,9 @@
  *   with `output_config.effort`; none: no thinking field;
  * - R4-92: `max_tokens` 16,384 unless the request or the pool spec sets
  *   `maxOutputTokens`;
- * - R4-76: an SSE `error` event fails with `m4Texts.claudeInferenceFailed`,
- *   a non-200 answer with `m4TextOf.subscriptionHttp(status)`, a completed
- *   answer with no text and no tool call with `m4Texts.emptyMessagesOutput`
+ * - R4-76: an SSE `error` event fails with `subscriptionTexts.claudeInferenceFailed`,
+ *   a non-200 answer with `subscriptionTextOf.subscriptionHttp(status)`, a completed
+ *   answer with no text and no tool call with `subscriptionTexts.emptyMessagesOutput`
  *   (the API client accepts an empty `end_turn`; a subscription does not);
  * - D-M4-4: an overload (529, or an `overloaded_error` event) before any
  *   delivery is retryable (`withOverloadRetry`, `claudeOverloadDelaysMs`);
@@ -38,7 +38,10 @@
  * Node only (adapter).
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { m4Texts, m4TextOf } from '../../../../guest/lib/texts-m4.js';
+import {
+  subscriptionTextOf,
+  subscriptionTexts,
+} from '../../../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { subscriptionDefaults } from '../../../../config/subscription-defaults.js';
 import {
@@ -196,7 +199,7 @@ export async function* claudeAttempt({
   const modelId = String(request.modelId);
   const effort = request.reasoningEffort;
   if (effort !== undefined && !claudeEfforts(modelId).includes(effort)) {
-    throw wireFailure(m4Texts.unsupportedEffort);
+    throw wireFailure(subscriptionTexts.unsupportedEffort);
   }
   const body = claudeBody({
     modelId,
@@ -244,7 +247,9 @@ export async function* claudeAttempt({
           // R4-76: a completed answer with nothing in it. Its usage is
           // reported with the failure (tokens were consumed).
           for (const held of tail) if ('usage' in held) yield held;
-          throw wireFailure(m4Texts.emptyMessagesOutput, { delivered });
+          throw wireFailure(subscriptionTexts.emptyMessagesOutput, {
+            delivered,
+          });
         }
         yield* tail.splice(0);
         yield event;
@@ -261,7 +266,7 @@ export async function* claudeAttempt({
       const status = error.status;
       const exhausted = status === 429 ? observer.exhausted() : undefined;
       const overloaded = status === 529;
-      throw wireFailure(m4TextOf.subscriptionHttp(status), {
+      throw wireFailure(subscriptionTextOf.subscriptionHttp(status), {
         status,
         delivered: sent,
         retryable: overloaded && !sent,
@@ -277,7 +282,7 @@ export async function* claudeAttempt({
     // (`ProviderFailure.errorType`), never a text to compare.
     if (error.errorType !== undefined) {
       const overloaded = error.errorType === OVERLOADED_ERROR;
-      throw wireFailure(m4Texts.claudeInferenceFailed, {
+      throw wireFailure(subscriptionTexts.claudeInferenceFailed, {
         delivered: sent,
         retryable: overloaded && !sent,
         ...(overloaded ? { overloaded: true } : {}),

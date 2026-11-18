@@ -28,7 +28,7 @@ import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
 import { textOf } from '../../guest/lib/interfaces.js';
-import { m4TextOf } from '../../guest/lib/texts-m4.js';
+import { subscriptionTextOf } from '../../guest/lib/subscription-texts.js';
 import { sealTo } from '../../resources/agent-host/impl/secrets/seal.js';
 /* eslint-enable import/no-relative-packages */
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
@@ -160,7 +160,8 @@ run(
     t.is(posts(server).length, before, 'no request after the revoke');
     t.true(
       poolLog(logPath).some(
-        l => l.reason === m4TextOf.memberFailed('the member', 'REVOKED'),
+        l =>
+          l.reason === subscriptionTextOf.memberFailed('the member', 'REVOKED'),
       ),
     );
     const revoked = (await catalogue(secrets)).find(

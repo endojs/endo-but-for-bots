@@ -40,7 +40,7 @@ import { join } from 'node:path';
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { E } from '@endo/far';
 
-import { poolKinds } from '../../../../guest/lib/texts-m4.js';
+import { poolKinds } from '../../../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { subscriptionDefaults } from '../../../../config/subscription-defaults.js';
 import { providerBaseUrl } from '../providers/http.js';

@@ -45,7 +45,7 @@
  * (`tokenUrl`, `clientId`): this module names no provider host. A member
  * with no `tokenUrl` cannot renew (`RENEWAL_FAILED`, before any write).
  *
- * Errors carry a fixed text and a code (`m4Codes`); no token, header value
+ * Errors carry a fixed text and a code (`subscriptionCodes`); no token, header value
  * or provider body is ever put in an error or logged.
  *
  * Node only (adapter).
