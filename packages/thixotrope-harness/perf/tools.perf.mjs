@@ -112,6 +112,16 @@ const script = harden({
       ],
     },
     { input: 'hello', rounds: [closing] },
+    // W5.5 (`tools.inspect`): one describeCapability of an endowed fixture.
+    {
+      input: 'inspect',
+      rounds: [
+        callRound([
+          { name: 'describeCapability', args: '{"petName":"notes"}' },
+        ]),
+        closing,
+      ],
+    },
   ],
 });
 
@@ -554,6 +564,68 @@ const rows = [
           by: 'W5.6',
         },
       });
+    },
+  },
+  {
+    // W5.5 (8.2 `tools.inspect`): `describeCapability` of a workspace-vat
+    // fixture endowed to the session, tool_call to tool_result arrival
+    // (session -> exec -> fixture -> exec -> session); budget median <=
+    // 300 ms over the window.
+    name: 'tools.inspect',
+    by: 'W5.5',
+    setup: async shared => {
+      const { makeM5Fixtures } = await import('../test/fixtures/m5-objects.js');
+      const { endowedPreset, presetSession } =
+        await import('../test/integration/_m5-objects.js');
+      const fixtures = await makeM5Fixtures(shared.run.client);
+      const made = await shared.slice.makeBackend(script);
+      const preset = await endowedPreset(
+        shared.slice,
+        { notes: fixtures.notes },
+        { label: 'Inspect perf', backend: made.backend },
+      );
+      const session = await presetSession(
+        shared.slice,
+        preset,
+        made.backend,
+        'tools inspect',
+      );
+      const live = await shared.slice.subscribe(session);
+      return { session, live, shared };
+    },
+    measure: async (windowMs, { session, live, shared }) => {
+      const once = async () => {
+        const r = await runTurn(shared.slice, session, live, 'inspect');
+        if (r.end.status !== 'completed')
+          throw Error(`inspect: ${r.end.status}`);
+        const of = (/** @type {string} */ type) =>
+          live.deliveries.find(
+            (/** @type {any} */ d, /** @type {number} */ i) =>
+              i >= r.from &&
+              d.event.type === type &&
+              d.event.turnId === r.turnId,
+          );
+        const result = of('tool_result');
+        if (
+          typeof result?.event.result !== 'string' ||
+          !result.event.result.startsWith('{"methods":')
+        )
+          throw Error(`inspect: ${String(result?.event.result).slice(0, 200)}`);
+        return result.arrivedAt - of('tool_call').arrivedAt;
+      };
+      const samples = await alternating(windowMs, ['inspect'], once);
+      const inspect = summarize(samples.inspect);
+      await single('tools.inspect', inspect.median, {
+        budget: { value: 300 },
+        extra: {
+          what: 'describeCapability of a workspace-vat fixture: tool_call to tool_result arrival',
+          inspect,
+          windowMs,
+          samples: samples.inspect.length,
+          by: 'W5.5',
+        },
+      });
+      await live.stop();
     },
   },
 ];
