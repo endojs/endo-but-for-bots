@@ -15,8 +15,11 @@
  *   measured at the fake server as the time between the two requests less
  *   the 429's answer time; 60 s. Budget <= 50 ms added, 1 manager delivery
  *   per refusal.
- * - `subscriptions.servedWrites`: manager deliveries while one session runs
- *   turns on its sticky member; 60 s. Budget <= 1 per session per 60 s.
+ * - `subscriptions.servedWrites`: manager deliveries that run a crank while
+ *   one session runs turns on its sticky member; 60 s, started once the warm
+ *   turns' served stamp has been sent. Budget <= 1 per session per 60 s.
+ *   Until K2 the row counted journal frames, GC frames included (X-CLOSE
+ *   4.97); every frame is still reported, by kind (`managerFramesByKind`).
  * - `subscriptions.bundles`: session, exec, factory and manager bundle
  *   bytes (one build). Budget: session and exec + <= 64 bytes over
  *   `3588cab190` (186,448 and 84,354), factory <= +6 KB (137,074).
@@ -38,6 +41,7 @@ const {
   FAKE_MS,
   WINDOW_MS,
   inWindow,
+  journalFrames,
   makeFrameCounter,
   startPerfM4,
   useKeyFile,
@@ -207,6 +211,11 @@ await runPerf('subscriptions', async ({ provision }) => {
     for (let i = 0; i < 3; i += 1)
       // eslint-disable-next-line no-await-in-loop
       await runTurn(m4, s.session, s.live, `warm ${i}`);
+    // The warm turns' served stamp waits up to `servedFlushMs` before it is
+    // sent: let it land before the window, so the window counts its own.
+    await new Promise(resolve =>
+      setTimeout(resolve, subscriptionDefaults.servedFlushMs + 500),
+    );
     const managerBefore = await counter.frames();
     const sessionBefore = await counter.frames(sessionLabel);
     let n = 0;
@@ -218,7 +227,14 @@ await runPerf('subscriptions', async ({ provision }) => {
       const request = posts(server)[from];
       return request === undefined ? NaN : request.receivedAt - t0;
     });
-    const managerFrames = (await counter.frames()) - managerBefore;
+    const managerAfter = await counter.frames();
+    const managerFrames = managerAfter - managerBefore;
+    const managerByKind = journalFrames(
+      m4.state.root,
+      counter.managerWorkerId,
+      managerBefore,
+      managerAfter,
+    );
     const sessionFrames = (await counter.frames(sessionLabel)) - sessionBefore;
     const turnStarts = samples.filter(Number.isFinite);
     await stats('subscriptions.turnStart', turnStarts, {
@@ -230,14 +246,20 @@ await runPerf('subscriptions', async ({ provision }) => {
         sessionFramesPerTurn: +(sessionFrames / samples.length).toFixed(2),
       },
     });
-    const perMinute = (managerFrames * 60_000) / elapsedMs;
+    // The budget names deliveries that run a manager crank (K2): GC frames
+    // ride with the next ordinary frame and run no crank of their own, so
+    // they are reported apart (`framesPerMinute`, `managerFramesByKind`).
+    const perMinute = (managerByKind.cranks * 60_000) / elapsedMs;
     await single('subscriptions.servedWrites', perMinute, {
       budget: { value: 1 },
       extra: {
-        unit: 'manager frames per session per 60 s',
+        unit: 'manager cranks per session per 60 s',
         windowMs: Math.round(elapsedMs),
+        managerCranks: managerByKind.cranks,
         managerFrames,
+        framesPerMinute: +((managerFrames * 60_000) / elapsedMs).toFixed(3),
         turns: samples.length,
+        managerFramesByKind: managerByKind,
       },
     });
 

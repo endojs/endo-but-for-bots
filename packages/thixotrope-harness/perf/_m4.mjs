@@ -11,7 +11,7 @@
  */
 import '../test/unit/_m1a-prelude.js';
 
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
@@ -19,7 +19,15 @@ import { E } from '@endo/far';
 
 import { harnessRoot } from './_harness.mjs';
 import { m4Template, m4View } from '../test/integration/_m4.js';
+import { frameKind } from '../test/integration/_m1a-slice.js';
 import { startFakeSubscriptionServer } from '../test/fixtures/fake-subscription-server.mjs';
+
+/**
+ * The core's `GC_FRAMES_PER_CRANK` (`durable-worker-transport.js`, not
+ * exported by the package): a run of journaled GC frames rides with the next
+ * ordinary frame, or is a crank of its own at this length.
+ */
+const GC_FRAMES_PER_CRANK = 64;
 
 /** Servers this process started (closed by `closeServers`). */
 /** @type {Array<{ close: () => Promise<void> }>} */
@@ -137,9 +145,68 @@ export const makeFrameCounter = async m4 => {
   if (grown.length !== 1)
     throw Error(`cannot tell the manager vat: ${JSON.stringify(grown)}`);
   const [[manager]] = grown;
+  const managerRow = (await m4.slice.workers()).find(
+    (/** @type {any} */ w) => String(w.debugLabel ?? w.workerId) === manager,
+  );
   return {
     manager,
+    /** The manager vat's worker id (its journal's directory). */
+    managerWorkerId: String(managerRow?.workerId),
     /** @param {string} [label] default the manager vat */
     frames: async (label = manager) => (await lengths()).get(label) ?? 0,
   };
+};
+
+/**
+ * The frames a worker's journal holds between two delivery frontiers, by
+ * kind (`frameKind`: `deliver <method>`, `fulfill`, `gc-answers`, ...), and
+ * the cranks they were delivered in: a run of GC frames goes with the next
+ * ordinary frame (the core's `journalCranks`), so the cranks are the
+ * ordinary frames plus any GC run that reached `GC_FRAMES_PER_CRANK` alone.
+ * A snapshot that cut the journal inside the range leaves the frames before
+ * the cut unread (`unread`).
+ * @param {string} root the state directory
+ * @param {string} workerId
+ * @param {number} from journal frontier before
+ * @param {number} to journal frontier after
+ */
+export const journalFrames = (root, workerId, from, to) => {
+  const lines = readFileSync(
+    path.join(root, 'workers', workerId, 'journal.jsonl'),
+    'utf8',
+  )
+    .trim()
+    .split('\n');
+  const base = Number(JSON.parse(lines[0]).base ?? 0);
+  const entries = lines.slice(1).map(line => JSON.parse(line));
+  const start = Math.max(from, base);
+  const picked = entries.slice(start - base, to - base);
+  /** @type {Record<string, number>} */
+  const byKind = {};
+  let gcFrames = 0;
+  let cranks = 0;
+  let gcRun = 0;
+  for (const entry of picked) {
+    const kind = frameKind(JSON.stringify({ b64: entry.b64 }));
+    const name = entry.gc === true ? `gc ${kind}` : kind;
+    byKind[name] = (byKind[name] ?? 0) + 1;
+    if (entry.gc === true) {
+      gcFrames += 1;
+      gcRun += 1;
+      if (gcRun === GC_FRAMES_PER_CRANK) {
+        cranks += 1;
+        gcRun = 0;
+      }
+    } else {
+      cranks += 1;
+      gcRun = 0;
+    }
+  }
+  return harden({
+    frames: picked.length,
+    gcFrames,
+    cranks,
+    byKind,
+    unread: start - from,
+  });
 };
