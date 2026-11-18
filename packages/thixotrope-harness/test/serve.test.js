@@ -120,6 +120,7 @@ test('the supervisor environment is the allowlist plus the budget', t => {
     PATH: '/bin',
     THIXOTROPE_TRACE: '1',
     THIXOTROPE_SLOT_CEILING: '4000000',
+    THIXOTROPE_VAT_FRAME_BYTES: '65536',
     THIXOTROPE_CRANK_BUDGET: '50000000',
     THIXOTROPE_MAX_DELIVERY_ATTEMPTS: '5',
   });
@@ -287,6 +288,33 @@ test('the collection schedule and the hub store pass through to the supervisor (
   // Unset stays unset: the supervisor applies its own defaults.
   const bare = allowlistEnvironment({}, { crankBudget: 1n });
   for (const name of Object.keys(env)) t.false(name in bare);
+});
+
+test('THIXOTROPE_VAT_FRAME_BYTES: the harness ceiling at its crank budget, a host value wins, the core default below it (CC-027)', t => {
+  t.true(ENV_ALLOWLIST.includes('THIXOTROPE_VAT_FRAME_BYTES'));
+  // Above the largest encoded frame the harness sends into a vat (an import
+  // chunk of short turns, 40,040 bytes, J-10125) and below the 94,208-byte
+  // halt at 50 M (J-0194); the supervisor accepts 1,024..8,388,608.
+  t.is(limits.vatFrameBytes, 65_536);
+  t.true(limits.vatFrameBytes > 40_040);
+  t.true(limits.vatFrameBytes < 94_208);
+  for (const crankBudget of [50_000_000n, 100_000_000n])
+    t.is(
+      allowlistEnvironment({}, { crankBudget }).THIXOTROPE_VAT_FRAME_BYTES,
+      '65536',
+    );
+  t.is(
+    allowlistEnvironment(
+      { THIXOTROPE_VAT_FRAME_BYTES: '40960' },
+      { crankBudget: 50_000_000n },
+    ).THIXOTROPE_VAT_FRAME_BYTES,
+    '40960',
+  );
+  // Below the harness budget the core's own default (32,768) stands.
+  t.false(
+    'THIXOTROPE_VAT_FRAME_BYTES' in
+      allowlistEnvironment({}, { crankBudget: 10_000_000n }),
+  );
 });
 
 test('THIXOTROPE_MAX_DELIVERY_ATTEMPTS: allowlisted, defaulted from config, validated like thix serve', t => {

@@ -11956,3 +11956,262 @@ entries).
 Reading: the area reports and verdicts carried the evidence; the synthesis merged 108 findings
 into 38 rows.
 Decision: none.
+### J-10115 2026-11-18 CH where the vat frame ceiling lives - read
+Evidence: read `H/designs/process.md` sections 2-3, `H/designs/arch-review/core-net.md` (AR-NET-3,
+-13, -16, table 2.3), `core.md` AR-SYN-8 and -11, `pkg/designs/ironhorse-limits.md`, m0-results
+`frameBytes` row and C-1, C-5, C-25, `designs/m5-interfaces.md` 9.2 (CC-070), J-9407; `pkg/src/net/hub.js`
+(outbox, routing, attach), `hub-state.js`, `core/daemon.js` (worker attach, startup order, sweep),
+`control/supervisor.js` (environment settings), `ironhorse/ironhorse-limits.js`, `evaluate-source.js`.
+Reading: no host-side ceiling on a frame into a vat existed. The engine limits record has no frame
+setting; the only core constant is `STAGING_FRAME_BYTES` 24,576 (a staging chunk, equal to the
+harness's `frameBytes`); the Unix netlayer bounds fragments only (1 MiB). Halt points: 94,208
+bytes (`HeapExhausted`) at 50 M, meter near 51 KB at 10 M, the core's default budget
+(`ironhorse-limits.js`); `test/ironhorse/key-space.js` serves 50,000-byte frames at 10 M.
+Decision: the ceiling is a hub attach option set by the daemon for worker sessions, read by the
+supervisor from `THIXOTROPE_VAT_FRAME_BYTES` like `THIXOTROPE_MAX_DELIVERY_ATTEMPTS`; default 32,768.
+
+### J-10116 2026-11-18 CH which sessions and messages the ceiling bounds - decision
+Evidence: `pkg/src/net/hub.js` `forwardToRow`, `handleMessage`, `settleToResolver`; `core/daemon.js`
+`provideWorkerSession`; commit `0edc2ab05a`.
+Reading: every message one session sends to another goes through `forwardToRow`; the check runs on
+the frame re-encoded toward the destination, inside the forward's rollback scope, so a refused
+message leaves no answer route or listener. Bounded: worker sessions only. Kinds: `op:deliver` with
+an answer (answer and resolver break with `FRAME_TOO_LARGE`), deliver-only (dropped, logged),
+`op:listen`, `op:get`/`op:index`/`op:untag`, and settlements toward the worker's own resolvers (the
+answer to its call, a promise resolution): the resolver itself breaks, so the calling vat gets a
+rejection. Not bounded: adapters, transient clients, endpoint, peers, and hub-made frames.
+Decision: no persisted state (the option is given at every attach). Known gap: after a restart, a
+frame toward a worker forwarded before that worker reattaches (only the endpoint is attached
+earlier) is not bounded.
+
+### J-10117 2026-11-18 CH hub- and daemon-level ceiling tests - test
+Evidence: `pkg/test/hub-frame-ceiling.test.js` (3 tests), `pkg/test/daemon-frame-ceiling.test.js`
+(3 tests), each in the three ses-ava configurations; the hub file also run against a copy of the
+pre-change hub (scratch, outside the tree).
+Reading: all 6 pass after; the 3 hub tests fail before (the oversized call answered 4,096; the
+oversized answer reached the caller vat; the attach option was ignored). The daemon test shows the
+journal length unchanged across a refused call and the malformed settings refused before the state
+directory exists.
+Fit: good.
+
+### J-10118 2026-11-18 CH Ironhorse ceiling test and key-space - test
+Evidence: `node scripts/run-lock.mjs --label ch-frames` (shared slot), `ava --config
+ava.ironhorse.config.mjs test/ironhorse/frame-ceiling.js test/ironhorse/key-space.js`, 98 s wall
+including the wait, load 2-3.
+Reading: `frame-ceiling` passes (11.1 s): from a transient client to a real vat, 32,768 and 1,000,000
+characters are refused with `FRAME_TOO_LARGE`, the vat's journal length is unchanged, its meta has
+no failure, and the next call is served. `key-space` passes both tests with `vatFrameBytes: 65_536`
+(it sends 49,152..50,000-byte frames on purpose). Not run against the pre-change hub at this level.
+Fit: good.
+
+### J-10119 2026-11-18 CH cost of the ceiling check - measure
+Evidence: scratch loop (outside the tree): a hub over a fake store that stringifies each committed
+state, one client frame (deliver-only, 1,072 bytes) replayed into it toward a durable worker-like
+session with the ceiling, 10 s windows, pre-change and post-change hubs interleaved, 5 windows each,
+no run lock (no supervisor or worker), load 3.2-4.7.
+Reading: pre-change 148.2 / 151.0 / 151.5 / 152.0 / 152.5 us per message (median 151.5),
+post-change 150.4 / 153.1 / 153.3 / 154.6 / 165.9 (median 153.3); 2 commits per message, 2,300
+characters per commit in both.
+Fit: no measurable per-message cost: the medians differ by 1.2 %, inside the run-to-run spread.
+
+### J-10120 2026-11-18 CH disposable frames out of the hub store - test
+Evidence: commit `0ecca1dcb0`; `pkg/test/hub-disposable-outbox.test.js` (11 tests); a run-lock
+batch (`ch-hubfiles`, 33 s) of 16 files: hub, hub-coalesce, hub-disposable-outbox, hub-outbox,
+hub-gc-batch, hub-crash-consistency, hub-log-store, hub-frame-ceiling, daemon-frame-ceiling,
+transient-hub-client, transient-daemon, local-delivery, native-adapter, daemon,
+answerer-retirement-gc, vat-reachability.
+Reading: `discardOnRestart` is set only by native adapters and transient hub clients, with fresh
+`transient:` keys; the daemon forgets every `transient:` key at startup before any reattach, and a
+restored one is detached and not durable, so its persisted queue was never sent or read; no other
+reader of persisted queues exists. The new test (worker peer and observer over the hub log store on
+in-memory files) finds the observer's answer in neither file and fails against the pre-change
+serializer; 3 assertions that pinned the old committed queue were changed to expect it empty. The
+batch passes, 104 tests in each of the three configurations.
+Fit: good; C-1 closed at rest for disposable sessions, the endpoint's frames still pass the log.
+
+### J-10121 2026-11-18 CH disposable commit size and cost - measure
+Evidence: the J-10119 loop toward a `transient:` observer session, 3 windows of 10 s each side,
+interleaved, load 3.2-3.9.
+Reading: pre-change 145.3 / 145.7 / 147.9 us per message, 2,225 characters per commit;
+post-change 137.7 / 139.0 / 140.6 us, 1,151 characters per commit (the 2,144 hex characters of the
+frame are no longer written in the first of each message's two commits).
+Fit: good: about 5 % less per forwarded frame toward an observer, half the characters committed.
+
+### J-10122 2026-11-18 CH what was run and what was not - fit
+Evidence: run-lock `ch-unit` (`corepack yarn test` in `pkg/`, after CC-027 only): exit 124 at the
+10-minute box; the log shows the lockdown and unsafe configurations complete (442 passed, 3 skipped
+each, no failure) and the endo configuration partly run with no failure. `tsc` and eslint (no new
+warning) on the changed files. Time: 12:53:55Z to the end of this unit.
+Reading: the whole core Node suite does not fit one 10-minute box under shared load (three SES
+configurations, about 4 minutes each here). Not run: the Ironhorse lane as a whole (by rule), the
+harness unit lane and integration files (other package). Harness impacts to check: `m2-probes`
+too-big `test.failing` (J-9407) may now pass or fail differently; any harness message above 32,768
+bytes into a vat now breaks with `FRAME_TOO_LARGE`.
+Decision: the PM runs the harness integration files (or sets `THIXOTROPE_VAT_FRAME_BYTES=65536`,
+which the harness's 50 M budget allows) before merging.
+
+### J-10110 2026-11-18 CT where the cadence snapshot is decided and what state covers it - read
+Evidence: `pkg/src/core/durable-worker-transport.js` (whole file: the cadence check in the crank
+delivery operation, `checkpointInternal`, `sleepInternal`, the idle timer, `enqueue`);
+`designs/arch-review/core-daemon.md` AR-CORE-1 (the transport's life cycle spread over about ten
+variables) and the snapshot row of its flow table; J-9462, J-9494; `designs/process.md` 2 and 3.
+Reading: whether a snapshot is due is already a function of three journal indices (delivered,
+cut, failed-at), so "due" needs no flag of its own and cannot be lost while a delivery is in
+flight. "The queue is empty" is already expressible: `opGeneration` unchanged since the settling
+operation was queued. The wait is a timer handle like `idleTimer`, cleared by `noteActivity`.
+Decision: no new boolean; a derived `cadenceBacklog()`, one timer handle, `checkpointQueued`
+reused; constants `CADENCE_IDLE_MS` 50 and `CADENCE_FORCE_FACTOR` 4, exported, no option (no caller
+must choose). Sleep, crash, retire and `end` untouched: each is an operation and clears the wait.
+
+### J-10111 2026-11-18 CT cadence deferral tests - test
+Evidence: `pkg/test/durable-worker-cadence.test.js` (new, 6 tests on manual timers), the three
+transport files under ses-ava, `tsc`, eslint and prettier on the changed files; commit `354e366739`.
+Reading: all 6 new tests fail against the previous transport (run on a temporary copy, removed)
+and pass after. Three tests pinned the immediate snapshot: the crash-loop failed-cadence test (now
+fires the wait; still 10 attempts for 40 frames), the session cadence test (idles 150 ms after
+each write; snapshots still at 3 and 6, one for the burst) and the never-idle test (12 calls,
+suffix within 4 x the cadence; with forcing disabled it fails, so it exercises the forced path).
+41 tests pass in each configuration. eslint: no errors, no new warning kind.
+Fit: good.
+
+### J-10112 2026-11-18 CT archive.stall before and after the deferral - measure
+Evidence: `node scripts/run-lock.mjs --shared -- node perf/archive.perf.mjs` (grown to 200 turns,
+60 s window), THIX_AGENT=CT. Before: tree `ff74574cac` with the transport of `354e366739~1` placed
+in the working tree for the run; after: `a205507543` (differs from it only in JOURNAL.md).
+{"run":"before","p99":2170.2,"median":689.5,"max":2170.2,"samples":71,"snapshots":4,"snapshotMsEach":604.9,"snapshotInSlowestTurn":1560.6,"loadAvg":[1.21,2.19,2.74]}
+{"run":"after","p99":1194.6,"median":785.2,"max":1194.6,"samples":71,"snapshots":4,"snapshotMsEach":226.3,"snapshotInSlowestTurn":0,"loadAvg":[2.93,2.08,2.5]}
+Two more after runs, not a pair: at `0edc2ab05a` with another unit's hub file uncommitted, p99 =
+max 1,252.3, median 728.4, 72 samples, 4 snapshots, load 2.4-3.4; at `354e366739` (load 4.5) p99 =
+max 4,023.6, median 1,099.4, 45 samples, 3 snapshots, the slowest turn (241, Composer) holding a
+2,193.6 ms snapshot with 1,188 ms of hub time.
+Reading: with the deferral the snapshots of the paired run fell outside the 5 slowest turns and
+p99 dropped from 2.17 s to 1.19 s; the median is within noise (load differed). One snapshot a
+window is too few to call the stall gone: at load 4.5 one still landed inside a turn, most likely
+in a gap over 50 ms between that turn's deliveries to the session vat (not verified; the forced
+limit would need about 110 turns without a quiet). The "per turn" snapshot attribution is
+status-to-status, so a snapshot in the quiet just after a turn can be counted in it.
+Fit: partial: the cadence no longer cuts a turn whose deliveries are back to back; the quiet is
+the vat's, not the turn's.
+
+### J-10113 2026-11-18 CT what was run and what was not - fit
+Evidence: run-lock `ct-core-node` (`corepack yarn test` in `pkg/`): exit 124 at the 10-minute box;
+lockdown 436 passed, unsafe 439 passed (3 skipped each, the XS files), endo cut at its start, no
+failure in the log. The transport files ran in all three configurations separately (J-10111).
+Not run: the Ironhorse lane (by rule), the harness unit lane and integration files, an exclusive
+perf pass. Not verified: which path took the in-turn snapshot of the load-4.5 run; the worst-case
+replay (1,024 entries, about 72 s at 70 ms per delivery) is computed, not measured.
+Decision: C-24 partly closed (CC-026). Follow-ups for the PM: a longer quiet (a few hundred ms)
+or a turn-end hint from the embedder; a perf row that counts snapshots inside turns by timestamps
+rather than status deltas.
+
+### J-10114 2026-11-18 CT time record - process
+Evidence: first command 12:53:54Z. Over 60 s: core Node suite 10:00 (box, exit 124); archive perf
+8:47, 4:40, 4:15 (before) and 4:16 (after), all in shared slots; no slot wait recorded above a
+few seconds. Last command: the commit of this entry.
+
+### J-10123 2026-11-18 C-VERIFY core test files for CC-026..CC-028 and neighbours - test
+Evidence: `HEAD` `d705b0006a`; each file alone as `node scripts/run-lock.mjs --label cv-<file> --
+corepack yarn ses-ava test/<file>.test.js` from `pkg/` (shared slot, three SES configurations),
+three lanes side by side; the Ironhorse files as `ava --config ava.ironhorse.config.mjs
+test/ironhorse/<file>.js`, one per run. Held seconds (`runs.jsonl`), every exit 0:
+durable-worker-cadence 1.7, durable-worker-crash-loop 1.7, durable-worker-session 5.8,
+daemon-journal-recovery 2.8, supervisor-crash-bound 130.6, worker-store-journal 3.3,
+worker-gc-cranks 1.4, worker-session-restart 8.8, delivery-storage-failures 33.8, daemon-shutdown
+1.8, hub-frame-ceiling 1.7 (4 tests), daemon-frame-ceiling 1.9, hub-disposable-outbox 2.0,
+hub-outbox 1.8, hub-coalesce 1.8, hub-crash-consistency 41.0, hub-log-store 8.2, hub-gc-batch 1.4,
+hub 2.1, transient-hub-client 1.8, transient-daemon 1.9, native-adapter 22.6, vat-reachability 1.9,
+answerer-retirement-gc 2.0, peer-replay-gc 2.6, durable-sessions 77.3, daemon 21.1; Ironhorse
+frame-ceiling 2.5 (1 test), key-space 84.4 (2 tests). The first three runs waited 80-87 s for a slot.
+Reading: no failure in any configuration. Nothing to bisect.
+Fit: good: the three changes pass every core file that covers them and their neighbours.
+
+### J-10124 2026-11-18 C-VERIFY harness lanes against the changed core - test
+Evidence: `corepack yarn test` (unit and adapter lanes, no slot): 1,216 passed, 109 skipped, exit 0,
+67 s. `corepack yarn test:integration --jobs 3` with 20 files, 1,090 s wall, no slot wait above
+28 s. Files that started before `scripts/serve.mjs` gained the ceiling (13:49:56Z) ran at the core
+default 32,768: m1a-slice 194 s, m1a-slice-restart 207, m1b-followups 284, m2-archive-restart 174,
+m2-archive-restart-2 198, m2-queue 151, m2-history 215, m2-lifecycle 184, m2-lifecycle-export 264,
+all exit 0; m2-probes 82 s exit 1 (J-10127). Later ones ran at 65,536 (J-10126): m2-providers 84,
+m2-turns 204, m3-gateway 110, m3-sessions 108, m4-catalog 91, m4-pools 140, m5-presets 145,
+m5-mentions 74, exit 0; m5-security 130 and m5-objects 122, exit 1.
+Reading: both M5 failures are their too-big probes, caused by CC-027 (the error is
+`FRAME_TOO_LARGE`, and 200-300 KB is over either ceiling): the 300 KB granted-tool answer
+(acceptance 10) and the 200 KB `help` (acceptance 5) are refused by the hub before the exec vat
+decodes them. Each probe accepted "cut and staged" or "exec vat terminated"; the tool now answers
+`Error: <FRAME_TOO_LARGE>`, and `describeCapability` answers its methods with documentation
+`unavailable` (it swallows a failed `help`). No halt, the session goes on. Fixed in `385b8a703c`
+(a third accepted outcome, `hubRefused`); reruns: m5-security 110 s exit 0, m5-objects 106 s exit 0
+(three failed attempts while matching the describe outcome, 88-123 s each).
+Fit: good after the listed test changes; the model now sees the hub's error text instead of a cut
+preview for an oversized foreign answer (M5's too-big rows, milestones.md M5, should say so).
+
+### J-10125 2026-11-18 C-VERIFY largest encoded frame the harness sends into a vat - measure
+Evidence: scratch probe (outside the tree, removed): a hub with the syrup codec, an in-process worker
+peer attached as the daemon attaches a vat, an unbounded client; the length of each frame the hub
+sent toward the worker. Bounds read: `fitsFrame`/`messageBytes` (`guest/lib/bounded.js`) count the
+UTF-8 bytes of every string, keys included, before encoding; nothing else is counted. Units guards
+(`...Units`) count UTF-16 units; `inlineBytes` checks (pending queue, adapters) count UTF-8 bytes.
+Reading (frame bytes; string bytes in brackets): (a) `startTurn` inline 8,192 B of 1-, 3- or 4-byte
+characters 8,334-8,336 [8,251]; a Composer-shaped submit with 32 attachment labels 11,021; one
+24,576 B string of any width 24,650-24,652. (b) import chunks (`scripts/export.mjs`: at most 512
+records and 24,576 B with a 2,048 slack) of `_m2-lifecycle.js` synthetic turns: tool shape input
+and answer 1 B: 279 records, 38,489 [22,526]; 20 B: 37,597; plain shape 1 B: 40,040 [22,537]; 20 B:
+38,276; the default 200/1,000 B: 28,261 and 25,267. No vat receives history pages (they leave
+vats); Content pages are `blobPageBytes` 20,480. (c) catalogue page, real row shape, 50 rows to
+24,576 B: 29,611; pool state 16 members + 256 served: 25,046; preset record at
+`presetRecordBytes`: 22,694; 32 endowments of 80 3-byte units: 9,553; 256 labelled objects 12,739;
+inventory page 50 entries 18,099. (d) tool outcome inline 8,192 B: 8,261; failed fallback 23,552 B
+(ASCII or 4-byte): 23,628; exec result inline: 8,261. (e) RoundResult at `roundResultBytes` 18,432
+with 256 minimal calls: 22,238; 137 calls with staged args and empty previews (not reachable:
+staged args carry a 256-unit preview): 27,412. Framing per item: about 9 B per integer or float,
+27 B per new remotable, 15 B per minimal tool call, 55-63 B per short turn record.
+Fit: one legitimate case exceeds 32,768: an import chunk of short turns, up to about 40 KB, because
+`frameBytes` bounds strings and not the encoding. Everything else stays under 30 KB.
+
+### J-10126 2026-11-18 C-VERIFY the harness's vat frame ceiling - decision
+Evidence: `caba497611`; `test/serve.test.js` (17 passed); the new `m2-lifecycle-export` test (an
+import of 40 short turns, 8 records each) under the run lock with the host setting
+`THIXOTROPE_VAT_FRAME_BYTES=32768`: exit 1, `FRAME_TOO_LARGE` (75 s held); with the harness
+default: exit 0 (82 s held, the test 22.8 s); `tsc`, eslint (no new warning), prettier.
+Reading: the supervisor environment is an allowlist, so the harness could not set the core's
+variable. Tightening every sender to count framing would touch many senders; raising the ceiling is
+one place. 65,536 is above the measured 40,040, below the 94,208-byte halt at 50 M (J-0194), and
+what CC-070 asked for; at 10 M the meter halts near 51 KB, so it is applied only at a budget of at
+least `limits.crankBudget`.
+Decision: `config/defaults.js` `vatFrameBytes` 65,536; `scripts/serve.mjs` allowlists
+`THIXOTROPE_VAT_FRAME_BYTES` and sets it at 50 M or more unless the host sets it; below that the
+core default (32,768) stands. README and architecture section 9 table say so.
+
+### J-10127 2026-11-18 C-VERIFY m2-probes: the hub refuses the 100 KiB inline string - test
+Evidence: `157d4cd63a`; `corepack yarn test:integration test/integration/m2-probes.test.js`
+before the change: exit 1, "unexpected pass" of the `test.failing` (82 s held); after: exit 0
+(78 s held), `directError` = `FRAME_TOO_LARGE`, frontier `[46, 46]`, the next turn completed.
+Reading: CC-027 refuses the call before it is journaled, as the W2.9 row asked.
+Decision: the known failure is a plain test asserting the hub's text, an unchanged delivery frontier
+and a served next turn; the README known-failure line is gone and milestones.md M2's open item says
+closed (C-25).
+
+### J-10128 2026-11-18 C-VERIFY CORE-CHANGES and m0-results bookkeeping - fit
+Evidence: `e83e441f18`; `git log --format='%h' --abbrev=10 48d6f3e08b..HEAD -- .
+':!packages/thixotrope-harness'` checked against `CORE-CHANGES.md`.
+Reading: summary rows added for CC-027 (`0edc2ab05a`, `d705b0006a`) and CC-028 (`0ecca1dcb0`),
+accounting lines for all three commits, CC-027's commit list names the review test. CC-027 risks
+gain (4) a call pipelined on a refused answer still reaches the real answer (pinned by
+`d705b0006a`), (5) hub-made frames such as large GC batches are not bounded, (6) the core default is
+too low for the harness (J-10125, J-10126). m0-results C-25 says the harness serves at 65,536 and
+`m2-probes` asserts the refusal; C-1 and C-24 rows were correct as written. Two older commits that
+touch files outside the harness are in no entry or accounting list: `1849414b2a` (`yarn.lock`,
+M3 UI dependencies) and `1b1f94ec93` (`.gitattributes`, new-lane.sh); left for the PM.
+Fit: good, except those two.
+
+### J-10129 2026-11-18 C-VERIFY verdicts and time record - process
+Evidence: J-10123..J-10128. First command 13:40:38Z.
+Reading: CC-026 merge (cadence, crash-loop, session and supervisor files pass; the harness
+restart files pass). CC-027 merge with the harness changes `caba497611` (ceiling 65,536) and
+`385b8a703c` (M5 probes); without the former an import of a short-turn session breaks. CC-028
+merge (hub, outbox, disposable, crash-consistency and log-store files, transient clients and
+native adapters pass). Not verified: the whole core suite in one run, the Ironhorse lane beyond its
+two files, the harness integration files not in the list, any perf check, the M5 files that ran at
+32,768 (only those before 13:49:56Z did), a frame between 40 and 65 KB at a crank budget under 50 M.
+Time: core files 3 lanes about 6 min wall; harness unit 67 s; integration batch 1,090 s; reruns
+about 10 min.

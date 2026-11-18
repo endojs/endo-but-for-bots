@@ -502,8 +502,9 @@ section). Every acceptance item passes except one ratio of 15 at 1,000 turns; re
   high-water); `session.create` with the pool 1,097 ms against 750; `concurrency.10` turn start
   3.2 x single and crank p95 500 ms (C-2's rest); `hub.growth` projected to 50 sessions 3.26 MB
   (C-2, CC-051/CC-060); `crash.restart.bound5` (C-8, C-9, by design).
-- **known failure, deferred by PM ruling 4**: the 100 KiB inline probe is refused by the vat's
-  guard, not before sending (C-25).
+- **closed** (was a known failure, deferred by PM ruling 4): the 100 KiB inline probe is now
+  refused by the hub before it reaches the vat (core CC-027, C-25); `m2-probes` asserts it as a
+  plain test: `FRAME_TOO_LARGE`, no growth of the vat's journal, the next turn served (J-10127).
 - **minor** (from M2-FIX, not fixed): delete racing a session's first seal (a leak); delete step 2
   skipping on any `blobPage` error; export of a busy session failing when a seal lands between
   pages; usage of a cancelled round dropped when the cancel settles first; one pending diff per

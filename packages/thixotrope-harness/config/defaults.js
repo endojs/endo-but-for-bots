@@ -44,6 +44,19 @@ export const limits = Object.freeze({
    */
   crankBudget: 50_000_000n,
   /**
+   * The hub's ceiling on one encoded frame into a vat
+   * (THIXOTROPE_VAT_FRAME_BYTES; core CC-027, whose default is 32,768).
+   * `frameBytes` bounds a message's string content only; its encoding adds
+   * the framing of every record, number and reference, up to 0.8 x on many
+   * small records: an import chunk of short turns (`scripts/export.mjs`, at
+   * most `pageRecords` records and `frameBytes` of strings) encodes to
+   * 40,040 bytes (J-10125). 65,536 is below the 94,208-byte halt at the 50 M
+   * budget (J-0194) and is what M5's CC-070 asked for. `scripts/serve.mjs`
+   * sets it only at a crank budget of at least `crankBudget`; below that the
+   * core default stands (the meter halts near 51 KB at 10 M).
+   */
+  vatFrameBytes: 65_536,
+  /**
    * Crashes in a row without progress after which the supervisor gives a
    * vat up and records its failure (THIXOTROPE_MAX_DELIVERY_ATTEMPTS, 2..100;
    * PR 1667, merge 3f2b90954e). Kept at the upstream default of 5: four

@@ -2,7 +2,16 @@
 import test from '@endo/ses-ava/test.js';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { E } from '@endo/far';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
+
 import { makeOcapnHub } from '../src/net/hub.js';
+import { makePipeNetwork } from '../src/net/pipe-network.js';
+import { makeWorkerPeer } from '../src/core/worker-peer.js';
+import { makeHubLogStore } from '../src/store/hub-log-store.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
+import { makeMemorySyncFiles } from './_memory-sync-files.js';
+import { makeTestOcapn } from './_util.js';
 
 /** @param {any} [initial] */
 const fixture = (initial = {}) => {
@@ -57,7 +66,8 @@ test('disposable progress stays in memory after committed output', t => {
   });
   t.deepEqual(sent, [0, 1, 2, 3]);
   t.is(f.commits(), 1, 'no commits just to advance or clear the outbox');
-  t.is(f.state().sessions['transient:observer'].queue.length, 4);
+  // The restored frames were sent, and no commit ever holds observer frames.
+  t.deepEqual(f.state().sessions['transient:observer'].queue, []);
   sink.flush();
   t.is(f.commits(), 2, 'an explicit flush persists progress');
   t.deepEqual(f.state().sessions['transient:observer'].queue, []);
@@ -118,7 +128,7 @@ test('restart discards stale observer output without undoing durable work', t =>
     onAbort: () => {},
     send: () => {},
   });
-  t.is(f.state().sessions['transient:observer'].queue.length, 4);
+  t.deepEqual(f.state().sessions['transient:observer'].queue, []);
   const restored = makeOcapnHub({ codec: syrupCodec, store: f.store });
   // The daemon sweeps old transient keys before resuming worker journals.
   restored.forgetSession('transient:observer');
@@ -172,7 +182,8 @@ test('reentrant output commits its routing before publication', t => {
       if (sends === 1) source.deliver(writer.getBytes(), 1n);
       if (sends === 3) {
         t.is(f.state().sessions.source.processedUpTo, '1');
-        t.is(f.state().sessions['transient:observer'].queue.length, 1);
+        // The frame toward the observer is not part of that commit.
+        t.deepEqual(f.state().sessions['transient:observer'].queue, []);
         t.deepEqual(Object.keys(f.state().refs), []);
       }
     },
@@ -346,3 +357,92 @@ for (const failure of ['hook', 'cleanup-once', 'cleanup-persistent']) {
     t.is(received, 1, 'duplicate source input does not repeat the decrement');
   });
 }
+
+test('frames toward a disposable observer never reach the hub log', async t => {
+  const { syncFiles, files } = makeMemorySyncFiles();
+  const logPaths = {
+    imagePath: '/s/hub-image.json',
+    logPath: '/s/hub-log.jsonl',
+    legacyPath: '/s/hub.json',
+  };
+  const store = makeHubLogStore(syncFiles, logPaths);
+  const hub = makeOcapnHub({ codec: syrupCodec, store });
+  const workerId = 'a'.repeat(32);
+  /** @type {any} */
+  let workerSink;
+  /** @type {Array<Uint8Array>} */
+  const early = [];
+  const worker = await makeWorkerPeer(makeNodePowers(), {
+    workerId,
+    debugLabel: 'teller',
+    send: frame =>
+      workerSink === undefined ? early.push(frame) : workerSink.deliver(frame),
+  });
+  t.teardown(() => worker.shutdown());
+  workerSink = hub.attachSession(workerId, {
+    send: (/** @type {Uint8Array} */ bytes) => worker.deliver(bytes),
+    durable: true,
+  });
+  for (const frame of early.splice(0)) workerSink.deliver(frame);
+  hub.publish('teller', { session: workerId, position: 0n });
+
+  const key = 'transient:observer';
+  /** @type {any} */
+  let observerSink;
+  const pipe = makePipeNetwork({
+    codec: syrupCodec,
+    workerId: key,
+    role: 'worker',
+    send: frame =>
+      observerSink === undefined
+        ? early.push(frame)
+        : observerSink.deliver(frame),
+  });
+  const client = await makeTestOcapn({
+    codec: syrupCodec,
+    network: pipe.network,
+    debugLabel: 'observer',
+  });
+  t.teardown(() => client.shutdown());
+  const session = await client.provideSession(pipe.peerLocation);
+  observerSink = hub.attachSession(key, {
+    discardOnRestart: true,
+    onAbort: () => t.fail('the observer must stay live'),
+    send: (/** @type {Uint8Array} */ bytes) => pipe.deliver(bytes),
+  });
+  for (const frame of early.splice(0)) observerSink.deliver(frame);
+
+  const bytesOf = (/** @type {string} */ text) =>
+    frozenBytes(new TextEncoder().encode(text));
+  const boot = await E(session.getBootstrap()).fetch(bytesOf('teller'));
+  const shell = await E(boot).fetch(bytesOf('shell'));
+  // Made in the vat, so only the answer toward the observer carries it.
+  const secret = await E(shell).evaluate(
+    "'observer-' + 'secret-'.repeat(8) + 'end'",
+  );
+  const marker = `observer-${'secret-'.repeat(8)}end`;
+  t.is(secret, marker);
+
+  const markerHex = Buffer.from(marker).toString('hex');
+  t.true(files.size > 0);
+  for (const [path, text] of files) {
+    t.false(text.includes(markerHex), `${path} holds no observer frame`);
+    t.false(text.includes(marker), `${path} holds no observer text`);
+  }
+
+  // A restart restores the observer with nothing queued; the daemon then
+  // forgets it, and the worker's tables are as they were.
+  const before = store.getState().sessions;
+  t.deepEqual(before[key].queue, []);
+  const restored = makeOcapnHub({
+    codec: syrupCodec,
+    store: makeHubLogStore(syncFiles, logPaths),
+  });
+  restored.forgetSession(key);
+  const after = makeHubLogStore(syncFiles, logPaths).getState().sessions;
+  t.false(key in after);
+  // Forgetting the observer releases what it held (a GC frame queues toward
+  // the worker); the worker's own progress is untouched.
+  t.is(after[workerId].processedUpTo, before[workerId].processedUpTo);
+  t.is(after[workerId].epoch, before[workerId].epoch);
+});

@@ -22,7 +22,11 @@ import { E } from '@endo/eventual-send';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makeOcapnHub } from '../src/net/hub.js';
-import { makeDurableWorkerTransport } from '../src/core/durable-worker-transport.js';
+import {
+  CADENCE_FORCE_FACTOR,
+  CADENCE_IDLE_MS,
+  makeDurableWorkerTransport,
+} from '../src/core/durable-worker-transport.js';
 import { makePipeNetwork } from '../src/net/pipe-network.js';
 import {
   makePeerJournalReplayEngine,
@@ -346,10 +350,20 @@ test('an awake worker snapshots on a delivery cadence and replays only past the 
     transport.write(frame(i));
     await transport.wake();
   };
+  /**
+   * Let the transport go quiet for longer than a due cadence snapshot waits,
+   * then wait for that snapshot to commit (a wake is queued behind it).
+   */
+  const idle = async () => {
+    await delay(CADENCE_IDLE_MS * 3);
+    await transport.wake();
+  };
 
   for (let i = 0; i < 7; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     await writeOne(i);
+    // eslint-disable-next-line no-await-in-loop
+    await idle();
   }
   t.true(transport.isAwake(), 'a cadence snapshot leaves the worker awake');
   t.is(snapshots, 2, 'at the third and the sixth delivery');
@@ -362,6 +376,7 @@ test('an awake worker snapshots on a delivery cadence and replays only past the 
   await transport.crash();
   deliveries = 0;
   await writeOne(7);
+  await idle();
   t.is(deliveries, 2, 'the wake replayed only the entry past the cut');
   t.deepEqual(
     sequences.slice(7),
@@ -370,14 +385,12 @@ test('an awake worker snapshots on a delivery cadence and replays only past the 
   );
   t.is(snapshots, 2, 'two deliveries since the cut: no snapshot yet');
 
-  // A burst queues its deliveries ahead of the snapshot the third one asks
-  // for, so one snapshot covers the whole burst.
+  // A burst is delivered before the snapshot that falls due during it,
+  // which waits for quiet, so one snapshot covers the whole burst.
   for (let i = 8; i < 13; i += 1) transport.write(frame(i));
-  // The burst's deliveries queued ahead of the first barrier, and the
-  // snapshot the third of them asked for queued behind it; the second
-  // barrier waits for that snapshot to commit.
   await transport.wake();
-  await transport.wake();
+  t.is(snapshots, 2, 'none between the burst’s deliveries');
+  await idle();
   t.is(snapshots, 3, 'one snapshot for the burst');
   t.is(store.getMeta().snapshot?.cut, 13);
   t.is(store.readJournal().length, 0);
@@ -399,7 +412,10 @@ test('a never-idle worker still bounds its journal by the snapshot cadence', asy
     E(session.getBootstrap()).fetch(bytesOf('worker')),
   ).fetch(SHELL_SWISSNUM);
   const counter = await E(shell).evaluate(COUNTER_SOURCE);
-  for (let i = 1; i <= 5; i += 1) {
+  // Calls back to back leave no quiet for a due snapshot to wait for, so the
+  // journal is bounded by the forced limit (four times the cadence) instead.
+  const calls = 12;
+  for (let i = 1; i <= calls; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     t.is(await E(counter).incr(), i);
   }
@@ -409,13 +425,14 @@ test('a never-idle worker still bounds its journal by the snapshot cadence', asy
   if (!snapshot) throw t.fail('no snapshot was taken while awake');
   t.true((snapshot.cut ?? 0) > 0);
   t.true(
-    workerStore.journalLength() - (snapshot.cut ?? 0) <= 2,
-    'the journal suffix stays within the cadence',
+    workerStore.journalLength() - (snapshot.cut ?? 0) <=
+      CADENCE_FORCE_FACTOR * 2,
+    'the journal suffix stays within the forced limit',
   );
 
   await transport.crash();
-  t.is(await E(counter).incr(), 6, 'recovered from the awake snapshot');
-  t.is(await E(counter).getCount(), 6);
+  t.is(await E(counter).incr(), calls + 1, 'recovered from the awake snapshot');
+  t.is(await E(counter).getCount(), calls + 1);
 });
 
 test('completed-crank batches retain individual identities across replay and snapshot', async t => {

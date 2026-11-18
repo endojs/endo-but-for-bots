@@ -89,6 +89,9 @@ polyfills, Thixotrope core, Thixotrope tests and tooling, other Endo package, up
 | CC-023 | 2026-11-17 | Thixotrope core | `gcPolicy`, `gcSlotAllowance`, `gcChunkAllowance`, `gcCrankInterval` limits, fixed per state directory; lane tests per schedule | choose CC-022's schedule; a replay must collect after the same cranks | `4d6a84e86f`, `2657c03f53`, `4a42dc711c` |
 | CC-024 | 2026-11-17 | Thixotrope core | hub cost counters say what each persist wrote (`persistChars`, `stats().store`) and how persists cluster (`persistRuns`) | size C-2's per-commit cost; estimate group commit | `a71e5272b5`, `87e13507b5` |
 | CC-025 | 2026-11-17 | Thixotrope core | the hub's state is a write-ahead log of deltas over an image (`hub-log-store.js`, default); `hubStore: 'file'` / `THIXOTROPE_HUB_STORE=file` keeps `hub.json`; migration one way | a commit rewrote and twice fsynced the whole `hub.json` (10-15 ms, C-2) | `72ef46f905` |
+| CC-026 | 2026-11-18 | Thixotrope core | a due cadence snapshot waits until the worker's queue has been empty 50 ms, forced at 4 x the cadence | the turn crossing the cadence waited for a 34 MB snapshot (C-24) | `354e366739` |
+| CC-027 | 2026-11-18 | Thixotrope core | the hub refuses a message whose frame toward a vat exceeds `THIXOTROPE_VAT_FRAME_BYTES` (default 32,768), breaking it with `FRAME_TOO_LARGE`; test pins a pipelined call on a refused answer | a frame of any size reached a vat's journal; above about 94 KB it halted the vat (C-25, CC-070) | `0edc2ab05a`, `d705b0006a` |
+| CC-028 | 2026-11-18 | Thixotrope core | frames queued for disposable (`discardOnRestart`) sessions are not persisted | an observer's frames sat in the hub log in clear until compaction (C-1) | `0ecca1dcb0` |
 
 ---
 
@@ -765,6 +768,179 @@ The mail experiment scripts (`scripts/measure-mail.mjs` with `THIX_MAIL_HUB=log|
 `hub.json` writes and now need `THIXOTROPE_HUB_STORE=file` to measure what they measured. Stands
 alone; CC-024's counters measure it.
 
+### CC-026 2026-11-18 Thixotrope core - a due cadence snapshot waits for the worker to be idle
+Commits: `354e366739` fix(thixotrope): defer a due cadence snapshot until the worker is idle (CT)
+Files: `pkg/src/core/durable-worker-transport.js`, `pkg/test/durable-worker-cadence.test.js` (new),
+`pkg/test/durable-worker-session.test.js`, `pkg/test/durable-worker-crash-loop.test.js`.
+Motivation: C-24 (M2-FIX, J-9494). The transport queued its cadence snapshot as soon as
+`snapshotEveryDeliveries` (256 under the supervisor) deliveries had passed since the last one,
+between one turn's deliveries, and the turn that crossed the count waited for it: 0.7-5.2 s for the
+session vat's 34 MB heap under load (J-9462), so p99 of per-turn wall time on a grown session missed
+the 1 s budget (`archive.stall.at200` 1,397 ms exclusive, J-9497; 2-6 s under load, J-9408).
+What changed: when the delivery that makes a snapshot due completes, the snapshot is no longer
+queued. It is taken once the transport's operation queue has been empty for `CADENCE_IDLE_MS`
+(50 ms, exported) on the injected timers; any operation queued meanwhile clears the wait, and the
+queue emptying again restarts it. At `CADENCE_FORCE_FACTOR` (4, exported) cadences without such a
+quiet it is queued at once, as before. State: no new flag. Whether a snapshot is due stays derived
+from the journal indices (`deliveredUpTo`, `snapshotCut`, `snapshotFailedAt`: `cadenceBacklog()`),
+so one that falls due during a delivery is found when the queue empties; "the queue is empty" is
+the existing `opGeneration` unchanged since the settling operation was queued; the wait is one timer
+handle beside `idleTimer`, cleared by the same `noteActivity`; `checkpointQueued` is reused.
+AR-CORE-1's single `state` variable would subsume these when it is built.
+Unchanged: `checkpointInternal`, the cut and truncation, replay (`journalCranks`), sleep, crash,
+retire and `end`. A sleep, crash or retirement is an operation, so it clears a pending wait; sleep
+takes its own snapshot as before and nothing is left armed; the timer does nothing once the
+incarnation is gone or the transport is closed, and is unreferenced like the idle timer. A failed
+snapshot still moves the next attempt a cadence on (`snapshotFailedAt`).
+Replay bound: a worker that is never quiet for 50 ms keeps up to 4 x 256 = 1,024 journal entries
+past its cut (plus the deliveries already queued when the forced snapshot is queued, as before),
+about 72 s of replay at the harness's 70 ms per delivery, against 256 entries (about 18 s) before.
+A worker that does go quiet snapshots 50 ms after the queue empties with 256 or more entries
+behind it, so its replay is about what it was. A wake whose replay leaves 256 or more entries now
+also snapshots once quiet, where before it waited for the next delivery to ask.
+Measurement (J-10112, `perf/archive.perf.mjs` with `--shared`, session grown to 200 turns, 60 s
+window, same tree except the transport): before median 689.5 ms, p99 = max 2,170.2 ms, 71 samples,
+4 snapshots (one inside turn 258: 1,561 ms of its 2,170 ms), load 1.2-2.7; after median 785.2 ms,
+p99 = max 1,194.6 ms, 71 samples, 4 snapshots, none among the 5 slowest turns, load 2.1-2.9. Two
+further after runs: 1,252 ms p99 (72 samples, load 2.4-3.4) and 4,024 ms p99 (45 samples, load 4.5),
+the latter with one 2,194 ms snapshot inside a turn.
+Visible to other users: a cadence snapshot happens up to 50 ms after the worker's queue empties
+instead of between deliveries, and a busy worker's journal may hold four times the cadence.
+`CADENCE_IDLE_MS` and `CADENCE_FORCE_FACTOR` are exported from the module (not from `index.js`).
+No option was added; persisted formats and the worker are unchanged.
+Tests: `durable-worker-cadence.test.js` 6 tests on manual timers (due, busy, then one snapshot
+after the quiet; due during a delivery in flight; the forced limit; a crash between due and taken
+replays every frame since the cut; sleep and retirement while deferred), all 6 failing on the
+previous transport. Three tests that pinned the immediate snapshot were updated, meaning kept (crash
+loop's failed-cadence test fires the wait; the session cadence test idles after each write; the
+never-idle test makes 12 calls and bounds the suffix by the forced limit, and fails with forcing
+disabled). The three transport files pass (41 tests in each ses-ava configuration). Core Node suite
+under the run lock: lockdown 436 passed, unsafe 439 passed, endo cut by the 10-minute box (J-10113).
+Upstream notes: the quiet is the worker's, not the turn's: under load a turn can leave the session
+vat's queue empty for more than 50 ms between its deliveries (hub time 1.2 s in the turn that held
+the snapshot at load 4.5), and a snapshot taken then still stalls that turn. Not verified which
+path that snapshot took; the forced limit would need about 110 turns without a quiet. A longer
+quiet (a few hundred ms) or a turn-end hint from the embedder would close it; both are follow-ups.
+The worst-case replay grows to 4 x the cadence. Stands alone.
+
+### CC-027 2026-11-18 Thixotrope core - the hub refuses a frame too large for its target vat
+Commits: `0edc2ab05a` fix(thixotrope): the hub refuses a frame too large for its target vat (CH);
+`d705b0006a` test(thixotrope): a call pipelined on a refused answer reaches the answer (C-QC)
+Files: `pkg/src/net/hub.js`, `pkg/src/core/daemon.js`, `pkg/src/control/supervisor.js`,
+`pkg/index.js`, `pkg/README.md` (settings table), `pkg/ava.ironhorse.config.mjs`,
+`pkg/test/hub-frame-ceiling.test.js` (new), `pkg/test/daemon-frame-ceiling.test.js` (new),
+`pkg/test/ironhorse/frame-ceiling.js` (new), `pkg/test/ironhorse/key-space.js`.
+Motivation: C-25 (M2-R2, J-9489 ruling 4) and M5's request CC-070 (`designs/m5-interfaces.md` 9.2).
+A message of any size addressed to a vat was journaled and delivered, and only the vat's own guard
+refused it: a 100 KiB inline string sent to `Session.startTurn` moved the session vat's delivery
+frontier by one (J-9407). One inbound frame above 94,208 bytes halts a vat with `HeapExhausted`
+at 50 M computrons, and the meter halts first near 51 KB at 10 M (J-0194, C-5); a halted vat is
+retired. Any caller that can reach a vat could so quarantine it. No ceiling existed anywhere on the
+host side (`frameBytes` 24,576 is the harness's own rule, `STAGING_FRAME_BYTES` the core's staging
+chunk; J-10115).
+What changed: `hub.attachSession(key, { maxInboundFrameBytes })` (process-local, given at every
+attach, never persisted). In `forwardToRow`, inside the forward's rollback scope, the frame
+re-encoded toward a bounded destination is measured; a longer one is refused before it is queued,
+committed or sent, and the prepare's answer route and listener roll back. The sender's answer and
+resolver break with the fixed text `FRAME_TOO_LARGE` ("ocapn hub: the message exceeds the inbound
+frame ceiling of its target"), exported from `pkg/src/net/hub.js` and `pkg/index.js`. When the
+refused message is a settlement aimed at a resolver the bounded session exported (the answer to a
+call the vat made, or the resolution of a promise it listens on), the hub breaks that resolver
+with the same text, so the calling vat gets a rejection instead of a hang. The daemon attaches every
+worker session (`provideWorkerSession`, ephemeral workers included) with `vatFrameBytes`, default
+`DEFAULT_VAT_FRAME_BYTES` = 32,768 (exported); the supervisor reads `THIXOTROPE_VAT_FRAME_BYTES`
+(decimal, 1,024..8,388,608) and refuses a malformed value before the state directory is touched.
+Bounded sessions and kinds (J-10116): only worker sessions. Native adapters (`transient:native:`),
+transient hub clients (`transient:`), the endpoint and peer sessions (`peer:`, `handoff:`) are not
+bounded and take large frames as before. Toward a worker, every message the hub forwards is
+bounded: `op:deliver` with an answer (the answer breaks), `op:deliver` without one (deliver-only:
+dropped, logged; nobody to tell), `op:listen`, `op:get`/`op:index`/`op:untag`, and settlements
+(`fulfill`/`break` deliveries to the worker's resolvers). Hub-made frames (fetch answers, breaks,
+GC frames) are not bounded; they are small and fixed in shape.
+Visible to other users: a call into a vat whose frame exceeds 32,768 bytes now rejects with
+`FRAME_TOO_LARGE` from the hub instead of reaching the vat (and its guard, or a halt). A call above
+the old halt point no longer retires the vat. New setting and exports; no persisted format,
+guest bundle or worker change.
+Tests: `hub-frame-ceiling.test.js` (worker peer and client through a hub over a recording store):
+an oversized call breaks to its caller, a deliver-only one is dropped, neither reaches the worker
+nor any committed state, the worker still serves, and a large answer toward the unbounded client
+passes; an oversized answer and an oversized promise resolution toward a calling worker break its
+call; a malformed ceiling is refused. All three fail against the pre-change hub (J-10117).
+`daemon-frame-ceiling.test.js` (replay engine): the default refuses a 32,768-character argument
+from a transient client with the vat's journal length unchanged, `vatFrameBytes` raises it, and
+eight malformed settings are refused before the state directory exists. Ironhorse
+`frame-ceiling.js`: from a transient client (an adapter-kind session) to a real vat, 32,768 and
+1,000,000 characters are refused, the journal does not grow, the vat has no failure and still
+serves (11.1 s; J-10118). `key-space.js` now passes `vatFrameBytes: 65_536`: its first test sends
+49,152..50,000-byte frames into a vat on purpose; both of its tests pass. Cost: no measurable change
+per forwarded message (J-10119).
+Risks: (1) the harness's `m2-probes` too-big case is a `test.failing` (J-9407) whose outcome may
+change now that the hub refuses the 100 KiB string first; not run. (2) Any harness path that sends
+more than 32,768 bytes in one message into a vat (adapter answers, staged pieces with large
+framing) now breaks; the harness rule keeps every message's text at or under `frameBytes` 24,576,
+which fits, but no harness integration file was run (J-10122). (3) After a restart, a frame forwarded
+toward a worker before that worker is reattached in this process is not bounded: the daemon
+attaches the endpoint first, then every worker, before the netlayer starts and before any adapter
+or transient client exists, so only endpoint-originated frames in that window are exposed. Frames
+already queued are not re-checked. (4) When an oversize answer to a vat's own call is refused, the
+vat's promise breaks with `FRAME_TOO_LARGE`, but the hub's answer route still points at the
+answerer's settled answer, so a call the vat pipelined on that promise still reaches the real
+(oversized) value at the answerer instead of breaking with the same reason (pinned by the test in
+`d705b0006a`). (5) Hub-made frames (fetch answers, breaks, GC frames, notably a large GC batch) are
+not bounded by the ceiling. (6) The core default of 32,768 is too low for the harness: `frameBytes`
+bounds a message's string content, not its encoding, and an import chunk of short turns encodes to
+about 38-40 KB (J-10125); the harness serves at `THIXOTROPE_VAT_FRAME_BYTES=65536` (its
+`limits.vatFrameBytes`, set by `scripts/serve.mjs` at a crank budget of 50 M or more, J-10126).
+Risk (1) is settled: `m2-probes` now asserts the hub's refusal (J-10127); risk (2) was checked by the
+probe and the integration files (J-10124, J-10125).
+Upstream notes: CC-070 asked for a default of 65,536, fixed per state directory, and deliver-only
+drops counted in `status()`. Here the default is 32,768 because the core's default crank budget is
+10 M (a 65,536-byte frame can exceed the meter there); the harness, which runs at 50 M, may set
+`THIXOTROPE_VAT_FRAME_BYTES=65536` (below the 94,208 halt). Nothing persisted depends on the
+ceiling, so it is not fixed per state directory; drops are only logged. The ceiling is not tied to
+the crank budget: a daemon that lowers its budget should lower it too. The error is typed only by
+its text (OCapN breaks carry a message); a typed break is C-18's work. Stands alone; AR-SYN-11 (a
+total limit in the Unix netlayer) is the peer-path counterpart and is not done here.
+
+### CC-028 2026-11-18 Thixotrope core - frames for disposable observers stay out of the hub's store
+Commits: `0ecca1dcb0` fix(thixotrope): frames for disposable observers stay out of the hub's store (CH)
+Files: `pkg/src/net/hub-state.js`, `pkg/test/hub-disposable-outbox.test.js`.
+Motivation: C-1 at rest (architecture review AR-SYN-8, AR-NET-13). A frame toward a disposable
+(`discardOnRestart`) session, a native adapter or a transient hub client, was pushed onto the
+session's queue and committed with the routing that produced it, then spliced off and sent; its
+removal was committed lazily. The payload sat in the hub log in clear until compaction (J-0164: a
+marker in 1,001 of 1,020 versions during 1 KiB hops) and was never read back (J-10120).
+What changed: `serializeHubState` writes `queue: []` and `queueSequences: []` for a
+`discardOnRestart` session (6 lines). Routing effects (rows, answer routes, watermarks) still
+commit before the send, which is all the disposable contract needs; the in-memory queue and its
+flush are unchanged.
+Verified (J-10120): `discardOnRestart` is set only by `pkg/src/native/adapters.js` (key
+`transient:native:<random>`) and `pkg/src/net/transient-hub-client.js` (key `transient:<random>`,
+from `daemon.openTransientClient`), and the hub requires a `transient:` key for it. Both keys are
+fresh per incarnation and never reattached; at startup the daemon forgets every `transient:` key it
+finds before any can be reattached (`core/daemon.js`, `staleTransient`), and until then a restored
+session is detached and not durable, so `flushOutbox` and `dispatchBytes` never send or keep its
+queue. Nothing else reads a persisted queue (`vat-reachability.js` reads `durable` and
+`answersOwed`; no harness tool reads queues). The set of persisted-but-discarded queues equals the
+`discardOnRestart` sessions, except test-only remote peers without a resume token
+(`transient:` keys attached with `remote` only; AR-NET table 2.3), which keep their queues.
+Visible to other users: the hub log and image no longer hold disposable sessions' frames, and each
+such commit is smaller. A state written before this change restores as before.
+Tests: a new test runs a worker peer and an observer client over the hub log store
+(`makeHubLogStore` on in-memory files): the observer's answer appears in neither file as text or
+hex; a hub restarted from the same files restores the observer with an empty queue, forgets it, and
+leaves the worker's watermark and epoch as they were. It fails against the pre-change serializer.
+Three assertions that pinned the old behaviour (the committed state held the observer's 4 seeded
+frames, or the 1 GC frame of the reentrant case) now expect an empty committed queue; their commit
+counts and ordering checks are unchanged. Hub, outbox, coalescing, crash-consistency and log-store
+files pass in all three ses-ava configurations (J-10120). Cost: per forwarded 1 KiB frame toward an
+observer 146.3 -> 139.0 us median, 2,225 -> 1,151 characters per commit (J-10121).
+Upstream notes: what remains of C-1: the endpoint session (`endpoint`, attached with no options)
+still commits each frame toward it before sending and its removal in the next commit, so
+control-plane answers pass through the hub log briefly; frames toward vats and peers are durable by
+design (worker journals, peer records). Stands alone; AR-NET-3's session kinds would make
+"disposable" a kind rather than a flag.
+
 ---
 
 ## Open candidates not yet changed
@@ -795,8 +971,13 @@ closed (CC-013, CC-015). C-20 is addressed in part by CC-018 and CC-019; page 6 
 | C-21 | the slot ceiling bounds live heap plus one crank; no collection inside a crank | the harness serves at 4,000,000 slots (persisted per state); a session's heaviest crank sets how large it may grow (J-0392) |
 | C-22 | pattern checks in a vat cost milliseconds per record | import is bounded at 7-13 turns/s; long-session templates take 8-9 min to build (J-0481, J-9464) |
 | C-23 | a Node client's presence for a remote object can be collected while the remote still exports it | adapter caches keyed by a presence must hold it strongly (J-9403) |
-| C-24 | the worker transport's cadence snapshot (every 256 deliveries) runs between a busy turn's deliveries | `checkpoint.stall` p99 2-6 s against 1 s; the turn that crosses the count waits for a 34 MB snapshot (J-9462, J-9494) |
+| C-24 | the worker transport's cadence snapshot (every 256 deliveries) runs between a busy turn's deliveries | `checkpoint.stall` p99 2-6 s against 1 s; the turn that crosses the count waits for a 34 MB snapshot (J-9462, J-9494). Partly addressed by CC-026 (deferred to 50 ms of quiet; `archive.stall.at200` 2,170 -> 1,195 ms shared, J-10112); a snapshot can still land in a gap inside a turn under load |
 | C-25 | a frame over `frameBytes` addressed to a vat is journaled and delivered; only the vat's guard refuses it | a 100 KiB inline string reaches the session vat (no halt below about 94 KB, a halt above); M5's CC-070 is the same change (J-9407, J-9489) |
+
+C-25 is closed by CC-027 (the hub refuses a frame over `THIXOTROPE_VAT_FRAME_BYTES`, default
+32,768, before it is journaled). C-1 is closed at rest for disposable sessions by CC-028; the
+endpoint's frames still pass through the hub log (CC-028 upstream notes). Both rows above keep the
+cost they had.
 
 C-2 is addressed in part by CC-025 (one append instead of a whole-file replacement; per persist
 9.8-10.7 -> 5.5-6.6 ms, J-9333); the row above keeps the cost it had, and the rest is J-9335.
@@ -888,6 +1069,10 @@ commits that arrived through the PR 1667 merge map to CC-010.
 - `a71e5272b5` -> CC-024
 - `72ef46f905` -> CC-025
 - `87e13507b5` -> CC-024
+- `354e366739` -> CC-026
+- `0edc2ab05a` -> CC-027
+- `0ecca1dcb0` -> CC-028
+- `d705b0006a` -> CC-027 (its review test)
 
 Outside that command's paths but outside `packages/thixotrope-harness` too:
 

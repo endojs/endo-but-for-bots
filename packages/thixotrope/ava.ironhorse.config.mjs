@@ -20,6 +20,7 @@ export default {
     'test/ironhorse/text-codec.js',
     'test/ironhorse/key-space.js',
     'test/ironhorse/element-attributes.js',
+    'test/ironhorse/frame-ceiling.js',
   ],
   timeout: '3m',
   concurrency: 1,

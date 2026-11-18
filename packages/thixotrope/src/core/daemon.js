@@ -150,6 +150,17 @@ const ENDPOINT_SESSION = 'endpoint';
 const START_NOTICE_MS = 10_000;
 
 /**
+ * The default ceiling on one frame into a vat, in bytes. Decoding an inbound
+ * frame costs a vat per byte (SES `harden` of the bytes): with the default
+ * 10 M crank budget 50,000-byte frames are served (`test/ironhorse/key-space.js`)
+ * and the meter halted near 51 KB; at 50 M the heap halted above 94 KB (both
+ * measured by the harness, J-0194). 32 KiB stays below both and
+ * above `STAGING_FRAME_BYTES` (24,576) with room for a message's framing.
+ * A daemon with a lower crank budget should lower it too.
+ */
+export const DEFAULT_VAT_FRAME_BYTES = 32_768;
+
+/**
  * @param {object} powers
  * @param {TimerPowers} powers.timers
  * @param {RandomPowers} powers.random
@@ -177,6 +188,11 @@ const START_NOTICE_MS = 10_000;
  *   startup
  * @param {number} [options.crashRetryDelayMs] with `maxDeliveryAttempts`,
  *   how long to wait before the first retry of a crashed worker
+ * @param {number} [options.vatFrameBytes] the longest frame the hub forwards
+ *   into a worker (see the hub's `maxInboundFrameBytes`); a longer message is
+ *   broken to its sender before it is journaled. Defaults to
+ *   `DEFAULT_VAT_FRAME_BYTES`. Sessions of adapters, clients and peers are
+ *   not bounded.
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
@@ -193,6 +209,7 @@ const buildDaemon = async (
     snapshotEveryDeliveries = undefined,
     maxDeliveryAttempts = undefined,
     crashRetryDelayMs = undefined,
+    vatFrameBytes = DEFAULT_VAT_FRAME_BYTES,
     verbose = false,
   },
 ) => {
@@ -284,6 +301,9 @@ const buildDaemon = async (
         durable: true,
         requireAcceptance: true,
         deferCleanup: true,
+        // An oversized frame would be journaled, then halt the vat that
+        // decodes it: refuse it at the hub, toward its sender.
+        maxInboundFrameBytes: vatFrameBytes,
       });
       if (workerStore.getMeta().failure !== undefined)
         hub.retireSession(workerId);
