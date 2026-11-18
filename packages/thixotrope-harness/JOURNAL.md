@@ -9552,3 +9552,39 @@ no supervisor started.
 Reading: 19 findings (2 major, 7 moderate, 10 minor); platform ports, kits and the registry design
 recorded as worth keeping.
 Decision: none.
+
+### J-9950 2026-11-18 AR-NET: structure of the hub, netlayers and stores - fit
+
+Evidence: `designs/arch-review/core-net.md` (AR-NET-2, -3, -7, -8, -17); import graph and line
+counts of `pkg/src/net/**` and `pkg/src/store/**` (6,077 lines; `hub.js` 2,803).
+Reading: the dependency direction is clean (net and store import nothing from core, control,
+native or mail; all platform access is injected), and the routing core of the hub is about 1,200
+lines. The rest of `hub.js` is gifts (about 460), outbox modes (about 400), diagnostics (about 235)
+and retirement. A session's kind is encoded three ways (key prefix, seven attach flags, three
+outbox loops) for four combinations used in production. Vat GC parses the hub's persisted tables
+instead of a hub query, which ties C-2's row-format work to `core/vat-reachability.js`. There are six
+hub-store implementations, of which the log store is the only one production needs.
+Decision: none; candidates for the core owner in the report.
+
+### J-9951 2026-11-18 AR-NET: what is persisted twice or kept forever - fit
+
+Evidence: AR-NET-4, -5, -6, -13; two scratch runs over `makeHubLogStore` with in-memory files: 200
+commits touching one peer session put 200 copies of its private key into the hub log (appends
+738 -> 3,718 characters); 100 retired peer sessions add 28,700 characters (287 each) to every
+commit's state.
+Reading: peer frames and watermarks live in both the hub log and the session record, and each
+record change is a whole-file atomic replace; retired peers are never forgotten (hub row, session
+directory, netlayer maps, re-retired at every start). For the harness this matters only if remote
+peers come into use; worker and adapter traffic does not take this path. C-1 has a three-line fix
+in the serializer (AR-NET-13).
+Decision: none.
+
+### J-9952 2026-11-18 AR-NET time record and correctness leads - process
+
+Evidence: start 12:07:16Z, report committed 12:16Z, end after this entry. No test suite run;
+duplicate-block finder, grep counts, `git log -S` and two scratch scripts only.
+Reading: two leads are PLAUSIBLE and not reproduced: a crash inside a retirement leaves a bumped
+epoch with `retired: false` that the startup reconciliation skips (AR-NET-1), and a torn single
+journal append is not repaired before the next one (AR-NET-11). An inbound `op:abort` half-detaches
+a peer session (AR-NET-10). Each has a fix of 5-10 lines and a named test to add.
+Decision: none.
