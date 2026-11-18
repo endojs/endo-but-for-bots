@@ -249,6 +249,7 @@ test('summariseRuns groups run-lock log lines by lane', t => {
     { lane: 'a', waitedMs: 10, heldMs: 100, exitCode: 0 },
     { lane: 'a', waitedMs: 5, heldMs: 300, exitCode: 1, timedOut: true },
     { lane: 'b', waitedMs: 0, heldMs: 50, exitCode: 0 },
+    { lane: 'b', waitedMs: 0, heldMs: 20, exitCode: null },
     'not a record',
   ]);
   t.deepEqual(s, [
@@ -263,9 +264,9 @@ test('summariseRuns groups run-lock log lines by lane', t => {
     },
     {
       lane: 'b',
-      runs: 1,
+      runs: 2,
       waitedMs: 0,
-      heldMs: 50,
+      heldMs: 70,
       timedOut: 0,
       failed: 0,
       maxHeldMs: 50,

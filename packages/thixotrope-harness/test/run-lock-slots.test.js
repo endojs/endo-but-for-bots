@@ -6,12 +6,13 @@
  */
 import test from '@endo/ses-ava/test.js';
 
-import { execFile } from 'node:child_process';
-import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { readFile, readdir, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
   RUN_LOCK_ENV,
+  TEMPORARY_STALE_MS,
   TIMED_OUT_EXIT,
   acquireRunLock,
   defaultLabel,
@@ -21,6 +22,7 @@ import {
   laneOf,
   namesPerfCheck,
   parseRunLockArgs,
+  processStartTime,
   scrubLabel,
   slotPaths,
 } from '../scripts/run-lock.mjs';
@@ -592,4 +594,142 @@ test('argument parsing for modes, slots and the time box', t => {
     ]),
     'node x.test.js',
   );
+});
+
+test('start times read the same in every time zone and locale', t => {
+  const script = `import(${JSON.stringify(runLockScript)}).then(m=>process.stdout.write(String(m.processStartTime(${process.pid}))))`;
+  const readIn = (/** @type {Record<string, string>} */ env) =>
+    execFileSync(process.execPath, ['-e', script], {
+      env: { ...process.env, ...env },
+    }).toString();
+  const here = String(processStartTime(process.pid));
+  t.not(here, 'undefined');
+  t.is(readIn({ TZ: 'UTC' }), here);
+  t.is(readIn({ TZ: 'Pacific/Honolulu', LC_ALL: 'de_DE.UTF-8' }), here);
+  t.is(readIn({ TZ: 'Asia/Kolkata', LANG: 'fr_FR.UTF-8' }), here);
+});
+
+test('a waiter in another time zone never breaks a live holder', async t => {
+  const dir = await scratch(t, 'rs');
+  const home = path.join(dir, 'home');
+  const lock = path.join(dir, 'lock');
+  const go = path.join(dir, 'go');
+  const body = `const fs=require('fs');const i=setInterval(()=>{if(fs.existsSync(${JSON.stringify(go)}))clearInterval(i)},20);`;
+  const holder = runCli(
+    home,
+    ['--lock', lock, '--label', 'holder', '--', process.execPath, '-e', body],
+    { TZ: 'Pacific/Honolulu' },
+  );
+  t.true(
+    await waitFor(async () => {
+      const record = await readJson(lock).catch(() => undefined);
+      return record?.workload?.pid !== undefined;
+    }),
+  );
+  const waiter = await runCli(
+    home,
+    ['--lock', lock, '--timeout-ms', '800', '--', process.execPath, '-e', ''],
+    { TZ: 'UTC' },
+  );
+  t.is(waiter.code, 1);
+  t.regex(waiter.stderr, /still held/);
+  t.notRegex(waiter.stderr, /brokeStale/);
+  await writeFile(go, '');
+  t.is((await holder).code, 0);
+});
+
+test('temporary files of dead writers are removed once old; others are kept', async t => {
+  const dir = await scratch(t, 'rs');
+  const lockPath = path.join(dir, 'lock');
+  const dead = Number(spawnSync(process.execPath, ['-e', '']).pid);
+  t.false(isProcessAlive(dead));
+  const old = new Date(Date.now() - TEMPORARY_STALE_MS - 5000);
+  const write = async (
+    /** @type {string} */ name,
+    /** @type {string} */ text,
+    /** @type {Date} */ when,
+  ) => {
+    const file = path.join(dir, name);
+    await writeFile(file, text);
+    await utimes(file, when, when);
+  };
+  const hex = (/** @type {string} */ c) => c.repeat(24);
+  const deadRecord = JSON.stringify({ pid: dead, startedAt: 'x' });
+  const liveRecord = JSON.stringify({
+    pid: process.pid,
+    startedAt: processStartTime(process.pid),
+  });
+  await write(`lock.2.n${hex('a')}`, deadRecord, old); // dead, old: removed
+  await write(`lock.intent.n${hex('b')}`, '', old); // unreadable, old: removed
+  await write(`lock.n${hex('c')}`, deadRecord, new Date()); // young: kept
+  await write(`lock.1.n${hex('d')}`, liveRecord, old); // live writer: kept
+  await write(`other.n${hex('e')}`, deadRecord, old); // not this lock's: kept
+  const lock = await acquireRunLock({ lockPath, env: {}, timeoutMs: 2000 });
+  await lock.release();
+  t.deepEqual((await readdir(dir)).sort(), [
+    `lock.1.n${hex('d')}`,
+    `lock.n${hex('c')}`,
+    `other.n${hex('e')}`,
+  ]);
+});
+
+test('an in-process taker of the machine-wide lock logs its run on release', async t => {
+  const dir = await scratch(t, 'rs');
+  const env = { THIX_HARNESS_HOME: dir, THIX_AGENT: 'agent-b' };
+  const lock = await acquireRunLock({ env, label: `it ${dir}/x.test.js` });
+  t.is(lock.slot, 0);
+  // Nested in it: passes through and logs nothing.
+  const nested = await acquireRunLock({
+    env: { ...env, [RUN_LOCK_ENV]: /** @type {string} */ (lock.id) },
+  });
+  t.true(nested.reentrant);
+  await nested.release();
+  await lock.release();
+  await lock.release(); // a second release logs nothing
+  // Opted out: no line.
+  const quiet = await acquireRunLock({ env, runLog: false });
+  await quiet.release();
+  // A private lock: no line by default.
+  const own = await acquireRunLock({ env, lockPath: path.join(dir, 'p') });
+  await own.release();
+  const rows = await runLog(dir);
+  t.is(rows.length, 1);
+  t.like(rows[0], {
+    agent: 'agent-b',
+    label: 'it x.test.js',
+    mode: 'shared',
+    slot: 0,
+    exitCode: null,
+    timedOut: false,
+  });
+  t.false(JSON.stringify(rows[0]).includes(dir), 'no absolute path');
+});
+
+test('processes a workload leaves in its group are ended before the slot is freed', async t => {
+  const dir = await scratch(t, 'rs');
+  const home = path.join(dir, 'home');
+  const lock = path.join(dir, 'lock');
+  const pidFile = path.join(dir, 'leaked');
+  // The workload starts a child in its group and exits at once.
+  const body = `const {spawn}=require('child_process');const c=spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],{stdio:'ignore'});require('fs').writeFileSync(${JSON.stringify(pidFile)},String(c.pid));c.unref();`;
+  const result = await runCli(home, [
+    '--lock',
+    lock,
+    '--label',
+    'leaker',
+    '--',
+    process.execPath,
+    '-e',
+    body,
+  ]);
+  t.is(result.code, 0);
+  t.regex(result.stderr, /"leaker" exited and left processes in its group/);
+  t.true(result.ms < 8000, `took ${result.ms} ms`);
+  const leaked = Number(await readFile(pidFile, 'utf8'));
+  t.true(await waitFor(() => !isProcessAlive(leaked), 3000));
+  t.deepEqual(
+    (await readdir(dir)).filter(name => name.startsWith('lock')),
+    [],
+  );
+  t.like((await runLog(home))[0], { label: 'leaker', exitCode: 0 });
 });

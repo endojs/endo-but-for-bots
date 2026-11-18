@@ -805,7 +805,8 @@ export const summariseRuns = runs => {
     s.heldMs += Number(r.heldMs) || 0;
     s.maxHeldMs = Math.max(s.maxHeldMs, Number(r.heldMs) || 0);
     if (r.timedOut) s.timedOut += 1;
-    if (r.exitCode !== 0 && r.exitCode !== undefined) s.failed += 1;
+    // An in-process taker logs exitCode null: not known, not a failure.
+    if (typeof r.exitCode === 'number' && r.exitCode !== 0) s.failed += 1;
     lanes.set(lane, s);
   }
   return [...lanes.values()].sort((a, b) => b.heldMs - a.heldMs);

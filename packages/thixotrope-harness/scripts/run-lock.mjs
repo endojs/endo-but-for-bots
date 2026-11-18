@@ -35,14 +35,17 @@
  * taker writes one id into every slot). `pid`/`startedAt` is the taker;
  * `workload` is the command the CLI runs under the lock, recorded as soon
  * as it is spawned. A process is the same process only when its pid exists
- * and its start time (`ps -o lstart`) matches the recorded one, so a reused
- * pid does not keep a slot alive. A slot is held while the taker OR the
+ * and its start time (`ps -o lstart`, always read with TZ=UTC and LC_ALL=C
+ * so takers in different time zones or locales agree) matches the recorded
+ * one, so a reused pid does not keep a slot alive. A slot is held while the taker OR the
  * workload is alive: a CLI wrapper killed with SIGKILL leaves its workload
  * running, and the slot with it.
  *
  * Creation is atomic with its content: the record is written to a private
  * temporary file and hard-linked to the slot path (link fails with EEXIST
- * when the slot is taken), so a reader never sees an empty slot file.
+ * when the slot is taken), so a reader never sees an empty slot file. A
+ * temporary file left by a taker killed mid-write (`<slot>.n<hex>`) is
+ * removed by the next taker once it is a minute old and its writer is dead.
  *
  * Takeover of a stale slot (or intent marker) is a compare-and-delete on
  * its generation. A taker that judges generation G stale must first create
@@ -63,11 +66,14 @@
  * deadlocking on its own parent). Re-entry is checked before the intent
  * marker, so a nested taker never waits behind an exclusive waiter.
  *
- * Time box (CLI). `--max-ms N` (default 600,000; `THIX_HARNESS_RUN_MAX_MS`
- * overrides the default): the workload runs in its own process group; when
- * it runs longer, the whole group gets SIGTERM, then SIGKILL 10 s later,
- * the slot is released, one line says so and the wrapper exits 124. The
- * wait for a slot does not count against the box.
+ * Time box (CLI only). `--max-ms N` (default 600,000;
+ * `THIX_HARNESS_RUN_MAX_MS` overrides the default): the workload runs in its
+ * own process group; when it runs longer, the whole group gets SIGTERM, then
+ * SIGKILL 10 s later, the slot is released, one line says so and the wrapper
+ * exits 124. The wait for a slot does not count against the box. A workload
+ * that exits while other processes of its group still run (a leaked
+ * supervisor) has them ended the same way before the slot is released. An
+ * in-process taker (acquireRunLock) has no time box: run it under the CLI.
  *
  * Run log (CLI). On every exit the wrapper can see (normal, time-out,
  * signal, wait time-out) it appends one JSON line to
@@ -76,7 +82,9 @@
  *  "exitCode","timedOut"}. `lane` is the basename of the git worktree the
  * command ran in, `agent` is THIX_AGENT or null. No arguments beyond the
  * label and no absolute paths are logged. A wrapper killed with SIGKILL
- * logs nothing.
+ * logs nothing. An in-process taker of the machine-wide lock logs the same
+ * line when it releases, with `exitCode` null (not known yet); one nested in
+ * a CLI holder logs nothing, since the CLI logs the run.
  *
  * Usage:
  *   node scripts/run-lock.mjs [--label NAME] [--timeout-ms N] [--max-ms N]
@@ -100,6 +108,8 @@ export const KILL_GRACE_MS = 10_000;
 export const TIMED_OUT_EXIT = 124;
 /** Break tokens a taker walks past (owners dead) before it gives up a round. */
 const MAX_BREAK_TOKENS = 64;
+/** Age after which a dead writer's temporary file is removed. */
+export const TEMPORARY_STALE_MS = 60_000;
 
 /**
  * Machine-local state: `THIX_HARNESS_HOME`, default
@@ -193,8 +203,10 @@ export const isProcessAlive = pid => {
 };
 
 /**
- * A process's start time as `ps -o lstart=` prints it, or undefined when
- * it cannot be read (no such process, no ps).
+ * A process's start time as `ps -o lstart=` prints it in UTC and the C
+ * locale, or undefined when it cannot be read (no such process, no ps).
+ * ps prints lstart in its own time zone and locale; fixing both makes the
+ * text the same whatever the caller's TZ, LANG or LC_* are.
  * @param {number} pid
  * @returns {string | undefined}
  */
@@ -203,6 +215,7 @@ export const processStartTime = pid => {
   try {
     const text = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
       stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, TZ: 'UTC', LC_ALL: 'C', LANG: 'C' },
     })
       .toString()
       .trim()
@@ -305,6 +318,35 @@ const readHolder = async file => {
   return { generation: identity, mtimeMs: info.mtimeMs };
 };
 
+/** @param {string} name */
+const isTemporaryName = name => /\.n[0-9a-f]{24}$/.test(name);
+
+/**
+ * Remove temporary files (`<base...>.n<nonce>`) beside the lock that a
+ * killed taker left: older than TEMPORARY_STALE_MS and written by a process
+ * that is gone (or unreadable). A live writer's file exists for
+ * milliseconds, so the age alone already spares it.
+ * @param {string} base
+ * @param {Liveness} liveness
+ */
+const removeDeadTemporaries = async (base, liveness) => {
+  const dir = path.dirname(base);
+  const prefix = `${path.basename(base)}.`;
+  const names = await readdir(dir).catch(() => []);
+  for (const name of names.filter(
+    n => n.startsWith(prefix) && isTemporaryName(n),
+  )) {
+    const file = path.join(dir, name);
+    const found = await readHolder(file).catch(() => undefined);
+    if (
+      found !== undefined &&
+      Date.now() - found.mtimeMs > TEMPORARY_STALE_MS &&
+      !(found.holder && isRecordAlive(found.holder, liveness))
+    )
+      await unlink(file).catch(() => {});
+  }
+};
+
 /**
  * Create `file` with `content` atomically and exclusively: write a private
  * temporary file, then hard-link it to `file`. False when `file` exists.
@@ -384,6 +426,9 @@ const removeIfOurs = async (file, id) => {
  * @property {number} [pid] the taker pid to record (default: this process)
  * @property {Record<string, string | undefined>} [env] for re-entry and the defaults
  * @property {(event: object) => void} [onEvent] waiting / broke-stale notices
+ * @property {boolean} [runLog] append a run-log line on release (default:
+ *   true for the machine-wide lock, false for a private `lockPath`; the CLI
+ *   logs itself and passes false)
  */
 
 /**
@@ -495,6 +540,7 @@ export const acquireRunLock = async ({
   pid = process.pid,
   env = process.env,
   onEvent = () => {},
+  runLog = lockPath === undefined,
 } = {}) => {
   const base = lockPath ?? defaultLockPathFor(env);
   const count = slots ?? (lockPath === undefined ? slotsFromEnv(env) : 1);
@@ -506,6 +552,7 @@ export const acquireRunLock = async ({
   const intent = intentPath(base);
   await mkdir(path.dirname(base), { recursive: true, mode: 0o700 });
   const liveness = { isAlive, startTimeOf };
+  await removeDeadTemporaries(base, liveness);
   const start = Date.now();
   const enclosing = env[RUN_LOCK_ENV];
   const self = { pid, startedAt: ownStartTime(pid, startTimeOf) };
@@ -575,33 +622,63 @@ export const acquireRunLock = async ({
     if (intentHeld) await removeIfOurs(intent, id);
     intentHeld = false;
   };
+  /** @param {number | 'all'} slot */
+  const release = async slot => {
+    const wasHeld = held.size > 0;
+    const heldMs = Date.now() - heldFrom;
+    await releaseAll();
+    if (runLog && wasHeld)
+      await appendRunLog(
+        {
+          at: new Date(start).toISOString(),
+          lane: laneOf(process.cwd()),
+          agent: env.THIX_AGENT || null,
+          label: scrubLabel(label),
+          mode: wanted,
+          slot,
+          waitedMs: heldFrom - start,
+          heldMs,
+          exitCode: null,
+          timedOut: false,
+        },
+        env,
+      ).catch(error =>
+        process.stderr.write(
+          `run-lock: run log not written: ${error.message}\n`,
+        ),
+      );
+  };
+  let heldFrom = start;
   /**
    * @param {number | 'all'} slot
    * @returns {RunLock}
    */
-  const handle = slot => ({
-    lockPath: paths[slot === 'all' ? 0 : slot],
-    id,
-    reentrant: false,
-    mode: wanted,
-    slot,
-    waitedMs: Date.now() - start,
-    recordWorkload: async workloadPid => {
-      const workload = {
-        pid: workloadPid,
-        startedAt: startTimeOf(workloadPid),
-      };
-      for (const [index, record] of held) {
-        record.workload = workload;
-        // Only a breaker of this generation could change a slot, and none
-        // acts while this process is alive.
-        const found = await readHolder(paths[index]);
-        if (found?.generation === id)
-          await replaceAtomic(paths[index], JSON.stringify(record));
-      }
-    },
-    release: releaseAll,
-  });
+  const handle = slot => {
+    heldFrom = Date.now();
+    return {
+      lockPath: paths[slot === 'all' ? 0 : slot],
+      id,
+      reentrant: false,
+      mode: wanted,
+      slot,
+      waitedMs: heldFrom - start,
+      recordWorkload: async workloadPid => {
+        const workload = {
+          pid: workloadPid,
+          startedAt: startTimeOf(workloadPid),
+        };
+        for (const [index, record] of held) {
+          record.workload = workload;
+          // Only a breaker of this generation could change a slot, and none
+          // acts while this process is alive.
+          const found = await readHolder(paths[index]);
+          if (found?.generation === id)
+            await replaceAtomic(paths[index], JSON.stringify(record));
+        }
+      },
+      release: () => release(slot),
+    };
+  };
   const giveUp = async (/** @type {unknown} */ holder) => {
     await releaseAll();
     throw Error(
@@ -940,6 +1017,7 @@ const main = async argv => {
     lock = await acquireRunLock({
       label,
       mode,
+      runLog: false,
       ...(options.lockPath === undefined ? {} : { lockPath: options.lockPath }),
       ...(options.slots === undefined ? {} : { slots: options.slots }),
       ...(options.timeoutMs === undefined
@@ -999,9 +1077,17 @@ const main = async argv => {
     );
   });
   clearTimeout(boxTimer);
-  if (timedOut && workload.pid !== undefined) {
-    // The leader is gone; give the rest of its group the same grace.
+  if (workload.pid !== undefined) {
     const pgid = workload.pid;
+    if (!timedOut && signalGroup(pgid, 0)) {
+      // The leader exited but left processes in its group (a leaked
+      // supervisor): they would run on without a slot.
+      process.stderr.write(
+        `run-lock: "${label}" exited and left processes in its group; terminating them\n`,
+      );
+      signalGroup(pgid, 'SIGTERM');
+    }
+    // The leader is gone; give the rest of its group the same grace.
     const until = Date.now() + KILL_GRACE_MS;
     while (Date.now() < until && signalGroup(pgid, 0)) await delay(100);
     signalGroup(pgid, 'SIGKILL');
