@@ -116,6 +116,14 @@ export const makeSecretsOps = ({ store, seal, sink }) => {
      * @param {string} key
      */
     credentialFor: key => makeCredentialAccess({ store, key }),
+    /**
+     * M4 W4.8: the incarnation's store and cached resolver, read by the
+     * `CredentialOps` facet (catalogue, description, audit reader;
+     * m4-interfaces 8 assumption 4) and the audit reader's `Secret` filter.
+     * Adapter-local: nothing here reaches a vat.
+     */
+    store,
+    resolveSecret,
   });
 };
 harden(makeSecretsOps);
