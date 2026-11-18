@@ -1,0 +1,538 @@
+{
+  "rounds": {
+    "anthropic: rich transcript, two-part system, a tool, request limit": {
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/v1/messages",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "x-api-key",
+              "<credential>"
+            ],
+            [
+              "anthropic-version",
+              "2023-06-01"
+            ],
+            [
+              "accept",
+              "text/event-stream"
+            ]
+          ],
+          "body": "{\"model\":\"claude-fake-1\",\"max_tokens\":1234,\"system\":\"The stored prompt.\\n\\nThe turn line.\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"first question\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"calling a tool\"},{\"type\":\"tool_use\",\"id\":\"t1_2fr0_2fc0\",\"name\":\"echo\",\"input\":{\"text\":\"a\"}},{\"type\":\"tool_use\",\"id\":\"t1_2fr0_2fc1\",\"name\":\"echo\",\"input\":{}}]},{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1_2fr0_2fc0\",\"content\":\"a\"},{\"type\":\"tool_result\",\"tool_use_id\":\"t1_2fr0_2fc1\",\"content\":\"boom\",\"is_error\":true}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"done\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"second question\"}]}],\"tools\":[{\"name\":\"echo\",\"description\":\"Echo the text.\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}}}}],\"stream\":true}"
+        }
+      ],
+      "finals": [
+        {
+          "round": 0,
+          "text": "Hello, world. How can I help?",
+          "usage": {
+            "inputTokens": 12,
+            "outputTokens": 7,
+            "cachedInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "reasoningOutputTokens": 0,
+            "context": {
+              "usedTokens": 19,
+              "windowTokens": 0
+            }
+          },
+          "at": 0,
+          "servedBy": {
+            "label": "api-test",
+            "modelId": "claude-fake-1"
+          },
+          "toolCalls": []
+        }
+      ],
+      "failures": [],
+      "log": [
+        "delta",
+        "request",
+        "round-final",
+        "round-start"
+      ]
+    },
+    "anthropic: one message, spec output limit, no system, no tools": {
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/v1/messages",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "x-api-key",
+              "<credential>"
+            ],
+            [
+              "anthropic-version",
+              "2023-06-01"
+            ],
+            [
+              "accept",
+              "text/event-stream"
+            ]
+          ],
+          "body": "{\"model\":\"claude-fake-1\",\"max_tokens\":77,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}],\"stream\":true}"
+        }
+      ],
+      "finals": [
+        {
+          "round": 0,
+          "text": "Let me check.",
+          "usage": {
+            "inputTokens": 40,
+            "outputTokens": 30,
+            "cachedInputTokens": 8,
+            "cacheWriteInputTokens": 4,
+            "reasoningOutputTokens": 0,
+            "context": {
+              "usedTokens": 82,
+              "windowTokens": 0
+            }
+          },
+          "at": 0,
+          "servedBy": {
+            "label": "api-test",
+            "modelId": "claude-fake-1"
+          },
+          "toolCalls": [
+            {
+              "callId": "toolu_fake_1",
+              "name": "exec",
+              "args": "{\"code\":\"1 + 1\"}"
+            },
+            {
+              "callId": "toolu_fake_2",
+              "name": "echo",
+              "args": "{\"text\":\"hi\"}"
+            }
+          ]
+        }
+      ],
+      "failures": [],
+      "log": [
+        "delta",
+        "request",
+        "round-final",
+        "round-start"
+      ]
+    },
+    "anthropic: a 401 fails the round": {
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/v1/messages",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "x-api-key",
+              "<credential>"
+            ],
+            [
+              "anthropic-version",
+              "2023-06-01"
+            ],
+            [
+              "accept",
+              "text/event-stream"
+            ]
+          ],
+          "body": "{\"model\":\"claude-fake-1\",\"max_tokens\":4096,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}],\"stream\":true}"
+        }
+      ],
+      "finals": [],
+      "failures": [
+        {
+          "round": 0,
+          "reason": "Anthropic API authentication failed (invalid or expired API key). Check the configured Secret.",
+          "at": 0
+        }
+      ],
+      "log": [
+        "request",
+        "round-failed",
+        "round-start"
+      ]
+    },
+    "openrouter: rich transcript, system, a tool, effort and limit": {
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/v1/chat/completions",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "authorization",
+              "<credential>"
+            ],
+            [
+              "accept",
+              "text/event-stream"
+            ]
+          ],
+          "body": "{\"model\":\"acme/model-1\",\"messages\":[{\"role\":\"system\",\"content\":\"You are terse.\"},{\"role\":\"user\",\"content\":\"first question\"},{\"role\":\"assistant\",\"content\":\"calling a tool\",\"tool_calls\":[{\"id\":\"t1/r0/c0\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"text\\\":\\\"a\\\"}\"}},{\"id\":\"t1/r0/c1\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"not json\"}}]},{\"role\":\"tool\",\"tool_call_id\":\"t1/r0/c0\",\"content\":\"a\"},{\"role\":\"tool\",\"tool_call_id\":\"t1/r0/c1\",\"content\":\"boom\"},{\"role\":\"assistant\",\"content\":\"done\"},{\"role\":\"user\",\"content\":\"second question\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"echo\",\"description\":\"Echo the text.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}}}}}],\"tool_choice\":\"auto\",\"stream\":true,\"usage\":{\"include\":true},\"max_tokens\":99,\"reasoning\":{\"effort\":\"high\"}}"
+        }
+      ],
+      "finals": [
+        {
+          "round": 0,
+          "text": "Hello, world. How can I help?",
+          "usage": {
+            "inputTokens": 12,
+            "outputTokens": 7,
+            "cachedInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "reasoningOutputTokens": 0,
+            "context": {
+              "usedTokens": 19,
+              "windowTokens": 0
+            }
+          },
+          "at": 0,
+          "servedBy": {
+            "label": "api-test",
+            "modelId": "fake-org/fake-model",
+            "provider": "Fake Provider"
+          },
+          "toolCalls": []
+        }
+      ],
+      "failures": [],
+      "log": [
+        "delta",
+        "request",
+        "round-final",
+        "round-start"
+      ]
+    },
+    "openrouter: tool calls, spec output limit": {
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/api/v1/chat/completions",
+          "headers": [
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "authorization",
+              "<credential>"
+            ],
+            [
+              "accept",
+              "text/event-stream"
+            ]
+          ],
+          "body": "{\"model\":\"acme/model-1\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true,\"usage\":{\"include\":true},\"max_tokens\":55}"
+        }
+      ],
+      "finals": [
+        {
+          "round": 0,
+          "text": "Let me check.",
+          "usage": {
+            "inputTokens": 12,
+            "outputTokens": 7,
+            "cachedInputTokens": 0,
+            "cacheWriteInputTokens": 0,
+            "reasoningOutputTokens": 0,
+            "context": {
+              "usedTokens": 19,
+              "windowTokens": 0
+            }
+          },
+          "at": 0,
+          "servedBy": {
+            "label": "api-test",
+            "modelId": "fake-org/fake-model",
+            "provider": "Fake Provider"
+          },
+          "toolCalls": [
+            {
+              "callId": "call_fake_1",
+              "name": "echo",
+              "args": "{\"text\":\"one\"}"
+            },
+            {
+              "callId": "call_fake_2",
+              "name": "echo",
+              "args": "{\"text\":\"two\"}"
+            }
+          ]
+        }
+      ],
+      "failures": [],
+      "log": [
+        "delta",
+        "request",
+        "round-final",
+        "round-start"
+      ]
+    },
+    "openrouter: a model without its organisation sends nothing": {
+      "requests": [],
+      "finals": [],
+      "failures": [
+        {
+          "round": 0,
+          "reason": "OpenRouter model must include its organization prefix",
+          "at": 0
+        }
+      ],
+      "log": [
+        "request",
+        "round-failed",
+        "round-start"
+      ]
+    }
+  },
+  "catalogues": {
+    "catalogue openrouter": {
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/api/v1/models",
+          "headers": [
+            [
+              "accept",
+              "application/json"
+            ],
+            [
+              "authorization",
+              "<credential>"
+            ]
+          ]
+        }
+      ],
+      "page": {
+        "rows": [
+          {
+            "modelId": "acme/alpha-a",
+            "selectionId": "acme/alpha-a",
+            "title": "Alpha model",
+            "default": true,
+            "reasoningEfforts": []
+          },
+          {
+            "modelId": "acme/alpha-b",
+            "selectionId": "acme/alpha-b",
+            "title": "alpha Model",
+            "default": false,
+            "reasoningEfforts": [],
+            "contextLength": 8192
+          },
+          {
+            "modelId": "anthropic/claude-sonnet-4.6",
+            "selectionId": "anthropic/claude-sonnet-4.6",
+            "title": "Anthropic: Claude Sonnet 4.6",
+            "default": false,
+            "reasoningEfforts": [],
+            "description": "Fixture text.",
+            "contextLength": 200000,
+            "maxOutputTokens": 64000
+          },
+          {
+            "modelId": "deepseek/deepseek-v4.1-flash",
+            "selectionId": "deepseek/deepseek-v4.1-flash",
+            "title": "DeepSeek: DeepSeek V4.1 Flash",
+            "default": false,
+            "reasoningEfforts": [],
+            "description": "A fast general model (fixture text written for tests).",
+            "contextLength": 163840,
+            "maxOutputTokens": 32768
+          }
+        ],
+        "state": "ok"
+      },
+      "log": [
+        {
+          "kind": "catalog-read",
+          "models": 4
+        }
+      ]
+    },
+    "catalogue anthropic": {
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/models?limit=1000",
+          "headers": [
+            [
+              "accept",
+              "application/json"
+            ],
+            [
+              "x-api-key",
+              "<credential>"
+            ],
+            [
+              "anthropic-version",
+              "2023-06-01"
+            ]
+          ]
+        }
+      ],
+      "page": {
+        "rows": [
+          {
+            "modelId": "claude-haiku-4-5",
+            "selectionId": "claude-haiku-4-5",
+            "title": "Claude Haiku 4.5",
+            "default": false,
+            "reasoningEfforts": []
+          },
+          {
+            "modelId": "claude-sonnet-4-6",
+            "selectionId": "claude-sonnet-4-6",
+            "title": "Claude Sonnet 4.6",
+            "default": false,
+            "reasoningEfforts": []
+          }
+        ],
+        "state": "ok"
+      },
+      "log": [
+        {
+          "kind": "catalog-read",
+          "models": 2
+        }
+      ]
+    },
+    "pool catalogue claude-pool": {
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/models?limit=1000",
+          "headers": [
+            [
+              "accept",
+              "application/json"
+            ],
+            [
+              "authorization",
+              "<credential>"
+            ],
+            [
+              "anthropic-beta",
+              "oauth-2025-04-20"
+            ],
+            [
+              "anthropic-version",
+              "2023-06-01"
+            ]
+          ]
+        }
+      ],
+      "page": {
+        "rows": [
+          {
+            "modelId": "claude-fake-1",
+            "selectionId": "pool:claude-fake-1",
+            "title": "Claude Fake",
+            "default": false,
+            "reasoningEfforts": []
+          },
+          {
+            "modelId": "claude-opus-4-6",
+            "selectionId": "pool:claude-opus-4-6",
+            "title": "Claude Opus 4.6",
+            "default": false,
+            "reasoningEfforts": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          },
+          {
+            "modelId": "claude-sonnet-5",
+            "selectionId": "pool:claude-sonnet-5",
+            "title": "Claude Sonnet 5",
+            "default": false,
+            "reasoningEfforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "state": "ok"
+      }
+    },
+    "pool catalogue codex-pool": {
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/backend-api/codex/models?client_version=0.152.0",
+          "headers": [
+            [
+              "accept",
+              "application/json"
+            ],
+            [
+              "authorization",
+              "<credential>"
+            ],
+            [
+              "chatgpt-account-id",
+              "account-a"
+            ],
+            [
+              "originator",
+              "codex_cli_rs"
+            ]
+          ]
+        }
+      ],
+      "page": {
+        "rows": [
+          {
+            "modelId": "gpt-fake-1",
+            "selectionId": "pool:gpt-fake-1",
+            "title": "GPT Fake 1",
+            "default": false,
+            "reasoningEfforts": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ],
+            "description": "A fake model for tests.",
+            "defaultReasoningEffort": "medium",
+            "contextLength": 272000
+          },
+          {
+            "modelId": "gpt-fake-mini",
+            "selectionId": "pool:gpt-fake-mini",
+            "title": "GPT Fake Mini",
+            "default": false,
+            "reasoningEfforts": [
+              "low",
+              "medium"
+            ],
+            "defaultReasoningEffort": "low",
+            "contextLength": 128000
+          }
+        ],
+        "state": "ok"
+      }
+    }
+  }
+}

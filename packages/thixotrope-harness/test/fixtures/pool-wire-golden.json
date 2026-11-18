@@ -1,0 +1,410 @@
+{
+  "claude-pool": {
+    "requests": [
+      {
+        "path": "/v1/messages",
+        "query": {},
+        "headerNames": [
+          "accept",
+          "accept-encoding",
+          "accept-language",
+          "anthropic-beta",
+          "anthropic-version",
+          "authorization",
+          "connection",
+          "content-length",
+          "content-type",
+          "host",
+          "sec-fetch-mode",
+          "user-agent",
+          "x-app"
+        ],
+        "credential": "a",
+        "bodyBytes": 759,
+        "json": {
+          "model": "claude-sonnet-5",
+          "max_tokens": 321,
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "first question"
+                }
+              ]
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "calling a tool"
+                },
+                {
+                  "type": "tool_use",
+                  "id": "t1_2fr0_2fc0",
+                  "name": "echo",
+                  "input": {
+                    "a": 1
+                  }
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "tool_result",
+                  "tool_use_id": "t1_2fr0_2fc0",
+                  "content": "a"
+                },
+                {
+                  "type": "text",
+                  "text": "second question"
+                }
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "name": "echo",
+              "description": "Echo the text.",
+              "input_schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ],
+          "stream": true,
+          "system": [
+            {
+              "type": "text",
+              "text": "x-anthropic-billing-header: cc_version=0.0.0; cc_entrypoint=fae;"
+            },
+            {
+              "type": "text",
+              "text": "You are a pool test."
+            }
+          ],
+          "thinking": {
+            "type": "adaptive"
+          },
+          "output_config": {
+            "effort": "high"
+          }
+        }
+      },
+      {
+        "path": "/v1/messages",
+        "query": {},
+        "headerNames": [
+          "accept",
+          "accept-encoding",
+          "accept-language",
+          "anthropic-beta",
+          "anthropic-version",
+          "authorization",
+          "connection",
+          "content-length",
+          "content-type",
+          "host",
+          "sec-fetch-mode",
+          "user-agent",
+          "x-app"
+        ],
+        "credential": "b",
+        "bodyBytes": 759,
+        "json": {
+          "model": "claude-sonnet-5",
+          "max_tokens": 321,
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "first question"
+                }
+              ]
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "calling a tool"
+                },
+                {
+                  "type": "tool_use",
+                  "id": "t1_2fr0_2fc0",
+                  "name": "echo",
+                  "input": {
+                    "a": 1
+                  }
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "tool_result",
+                  "tool_use_id": "t1_2fr0_2fc0",
+                  "content": "a"
+                },
+                {
+                  "type": "text",
+                  "text": "second question"
+                }
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "name": "echo",
+              "description": "Echo the text.",
+              "input_schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ],
+          "stream": true,
+          "system": [
+            {
+              "type": "text",
+              "text": "x-anthropic-billing-header: cc_version=0.0.0; cc_entrypoint=fae;"
+            },
+            {
+              "type": "text",
+              "text": "You are a pool test."
+            }
+          ],
+          "thinking": {
+            "type": "adaptive"
+          },
+          "output_config": {
+            "effort": "high"
+          }
+        }
+      }
+    ],
+    "finals": [
+      {
+        "round": 0,
+        "text": "Hello, world. How can I help?",
+        "usage": {
+          "inputTokens": 12,
+          "outputTokens": 7,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "reasoningOutputTokens": 0,
+          "context": {
+            "usedTokens": 19,
+            "windowTokens": 0
+          }
+        },
+        "at": 0,
+        "servedBy": {
+          "label": "claude pool",
+          "modelId": "claude-sonnet-5"
+        },
+        "toolCalls": []
+      }
+    ],
+    "failures": [],
+    "log": [
+      "delta",
+      "member-exhausted",
+      "request",
+      "round-final",
+      "round-start"
+    ]
+  },
+  "codex-pool": {
+    "requests": [
+      {
+        "path": "/backend-api/codex/responses",
+        "query": {},
+        "headerNames": [
+          "accept",
+          "accept-encoding",
+          "accept-language",
+          "authorization",
+          "connection",
+          "content-length",
+          "content-type",
+          "host",
+          "originator",
+          "sec-fetch-mode",
+          "user-agent"
+        ],
+        "credential": "a",
+        "bodyBytes": 609,
+        "json": {
+          "model": "gpt-fake-1",
+          "instructions": "You are a pool test.",
+          "input": [
+            {
+              "role": "user",
+              "content": "first question"
+            },
+            {
+              "role": "assistant",
+              "content": "calling a tool"
+            },
+            {
+              "type": "function_call",
+              "call_id": "t1_2fr0_2fc0",
+              "name": "echo",
+              "arguments": "{\"a\":1}"
+            },
+            {
+              "type": "function_call_output",
+              "call_id": "t1_2fr0_2fc0",
+              "output": "a"
+            },
+            {
+              "role": "user",
+              "content": "second question"
+            }
+          ],
+          "store": false,
+          "stream": true,
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "reasoning": {
+            "effort": "high"
+          },
+          "tools": [
+            {
+              "type": "function",
+              "name": "echo",
+              "description": "Echo the text.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "path": "/backend-api/codex/responses",
+        "query": {},
+        "headerNames": [
+          "accept",
+          "accept-encoding",
+          "accept-language",
+          "authorization",
+          "connection",
+          "content-length",
+          "content-type",
+          "host",
+          "originator",
+          "sec-fetch-mode",
+          "user-agent"
+        ],
+        "credential": "b",
+        "bodyBytes": 609,
+        "json": {
+          "model": "gpt-fake-1",
+          "instructions": "You are a pool test.",
+          "input": [
+            {
+              "role": "user",
+              "content": "first question"
+            },
+            {
+              "role": "assistant",
+              "content": "calling a tool"
+            },
+            {
+              "type": "function_call",
+              "call_id": "t1_2fr0_2fc0",
+              "name": "echo",
+              "arguments": "{\"a\":1}"
+            },
+            {
+              "type": "function_call_output",
+              "call_id": "t1_2fr0_2fc0",
+              "output": "a"
+            },
+            {
+              "role": "user",
+              "content": "second question"
+            }
+          ],
+          "store": false,
+          "stream": true,
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "reasoning": {
+            "effort": "high"
+          },
+          "tools": [
+            {
+              "type": "function",
+              "name": "echo",
+              "description": "Echo the text.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "finals": [
+      {
+        "round": 0,
+        "text": "Hello, world. How can I help?",
+        "usage": {
+          "inputTokens": 12,
+          "outputTokens": 7,
+          "cachedInputTokens": 0,
+          "cacheWriteInputTokens": 0,
+          "reasoningOutputTokens": 0,
+          "context": {
+            "usedTokens": 19,
+            "windowTokens": 0
+          }
+        },
+        "at": 0,
+        "servedBy": {
+          "label": "codex pool",
+          "modelId": "gpt-fake-1"
+        },
+        "toolCalls": []
+      }
+    ],
+    "failures": [],
+    "log": [
+      "delta",
+      "member-exhausted",
+      "request",
+      "round-final",
+      "round-start"
+    ]
+  }
+}
