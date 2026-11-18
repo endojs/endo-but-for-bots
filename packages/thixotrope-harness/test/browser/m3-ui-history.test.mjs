@@ -172,8 +172,14 @@ run(
       'the mega turn completed',
       200,
     );
+    // The live fold keeps a bounded text; the settled transcript holds the
+    // reply as a staged field. Reload, so the turn is read from its records,
+    // and Show all pages the whole reply in (J-9605).
+    await page.reload();
+    await openSession(page, liveKey);
     const showAll = mega.locator('.thix-show-all');
-    if (await showAll.count()) await showAll.first().click();
+    await showAll.first().waitFor({ timeout: 30_000 });
+    await showAll.first().click();
     const length = await waitFor(
       async () => {
         const n = await mega

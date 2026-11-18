@@ -209,6 +209,9 @@ await runPerf('gateway-session', async ({ root }) => {
       const samples = [];
       /** @type {number[]} */
       const served = [];
+      /** Ready time from the start of the supervisor's serve. */
+      /** @type {number[]} */
+      const fromStart = [];
       const end = performance.now() + RESTART_WINDOW_MS;
       let lastMs = 0;
       // Stop early rather than let one more restart pass the file's time.
@@ -246,6 +249,9 @@ await runPerf('gateway-session', async ({ root }) => {
         await poll;
         if (!readyAt) throw Error(`${metric}: no fetch within 60 s of serving`);
         samples.push(readyAt - servedAt);
+        fromStart.push(
+          Math.round(readyAt - (resolvedAt - restarted.connectedMs)),
+        );
         served.push(Math.round(restarted.servedMs));
         lastMs = performance.now() - iterationStart;
       }
@@ -254,7 +260,8 @@ await runPerf('gateway-session', async ({ root }) => {
         extra: {
           ...sampleFlags(samples, RESTART_WINDOW_MS),
           servedMs: served,
-          note: 'serving = the supervisor serve() resolving; ready = the first fetch answered',
+          readyFromServeStartMs: fromStart,
+          note: 'serving = the supervisor serve() resolving; ready = the first fetch answered (negative: the gateway answered before serve() resolved)',
         },
       });
     }
