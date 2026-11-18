@@ -240,8 +240,12 @@ export const makePoolStateBridge = ({
     invalidate: () => {
       // A retired pool's answer is final; anything else is asked again at
       // the next load (an answer still being asked may predate the push).
-      if (loaded !== undefined && loaded.state?.state !== 'retired')
-        loaded.stale = true;
+      // The first ask of an incarnation has no answer to keep: forget it,
+      // so the next load asks afresh instead of joining it (X-QC finding 1);
+      // its own `then` stores nothing once it is no longer `loaded`.
+      if (loaded === undefined) return;
+      if (loaded.state === undefined) loaded = undefined;
+      else if (loaded.state.state !== 'retired') loaded.stale = true;
     },
     pending: () => waiting.size,
   });

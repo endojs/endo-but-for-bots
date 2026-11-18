@@ -251,6 +251,53 @@ test('XB: invalidate() makes the next load ask again, also during an ask, also a
   t.is(loads, 7);
 });
 
+test('X-FIX: a push during the first ask of an incarnation makes the next load ask again', async t => {
+  const a = member('A');
+  let state = harden({ state: 'active', members: [a], served: [] });
+  let loads = 0;
+  /** @type {(() => void) | undefined} */
+  let releaseFirst;
+  const gate = new Promise(resolve => {
+    releaseFirst = () => resolve(undefined);
+  });
+  const sink = Far('AgentHostSink', {
+    poolState: async () => {
+      loads += 1;
+      const answer = state;
+      if (loads === 1) await gate;
+      return answer;
+    },
+    poolChanged: () => {},
+  });
+  const bridge = makePoolStateBridge({
+    sink,
+    backend: Far('Backend', {}),
+    timers: makeFakeTimers().timers,
+    now: () => NOW,
+  });
+  // The first ask is in flight (the manager answered from before the push).
+  const first = bridge.load();
+  const joined = bridge.load();
+  await settle();
+  t.is(loads, 1);
+  // The member is retired and the push arrives during that first ask.
+  state = harden({
+    state: 'active',
+    members: [{ ...a, state: 'retired' }],
+    served: [],
+  });
+  bridge.invalidate();
+  const after = bridge.load();
+  if (releaseFirst) releaseFirst();
+  t.is((await first).members[0].state, 'active', 'the ask from before');
+  t.is((await joined).members[0].state, 'active', 'joined before the push');
+  const seen = await after;
+  t.is(loads, 2, 'a load joined after the push asked again');
+  t.is(seen.members[0].state, 'retired');
+  t.is(await bridge.load(), seen, 'and that answer is the one kept');
+  t.is(loads, 2);
+});
+
 test('a new sink (manager restarted, adapter re-attached) is asked again', async t => {
   const state = harden({ state: 'active', members: [], served: [] });
   const first = makeFakeSink({ state });
