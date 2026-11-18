@@ -165,6 +165,32 @@ const mailShapeBuilders = {
         cutFrom: count,
       },
     ),
+  /**
+   * One message of an `inbox` export page (D-M9-21): data only. The
+   * sender's address, the ticket and the attachment objects belong to the
+   * exporting daemon and never cross an export; `edges` are the attachment
+   * labels, `postmark` kept for a later re-bind (O-M9-12). A page is bounded
+   * by `frameBytes` (the exporter checks `messageBytes`), the list by the
+   * inbox bound. `SessionExportPage.messages` (seam S9b) is a list of these.
+   */
+  InboxExportMessage: () =>
+    record(
+      {
+        number: count,
+        type: X.MailType,
+        fromTitle: text(limits.titleUnits),
+        body: X.MailBody,
+        edges: list(S.EdgeLabel, limits.maxAttachments),
+        at: count,
+        state: M.or(...inboxStates),
+      },
+      {
+        postmark: count,
+        inReplyTo: count,
+        fields: list(X.FormField, ML.formFields),
+        cutFrom: count,
+      },
+    ),
   /** `deliverMail`'s answer: the message number, or a refusal (no throw). */
   Delivery: () =>
     record({}, { number: count, duplicate: M.boolean(), refused: S.Reason }),
@@ -226,6 +252,12 @@ export const mailTexts = harden({
   requestAnswered: 'Request answered.',
   requestRejected: 'Request rejected.',
   formSubmitted: 'Form submitted.',
+  /**
+   * Harness (D-M9-21): a message that came with an imported session keeps
+   * no sender address and no ticket, so it can be read and dismissed only.
+   */
+  imported:
+    'This message came with an imported session; it can be read and dismissed, not answered',
   /** Harness (R4-49 style): an ask the parent's cancel abandoned. */
   askAbandoned:
     "Subagent ask abandoned: the turn was cancelled; the subagent's turn was cancelled too",
