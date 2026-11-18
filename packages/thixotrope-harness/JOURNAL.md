@@ -8471,3 +8471,68 @@ MISS of "no halt of the target's vat". Likely cause: the fixture builds the 20,0
 the workspace vat itself (W5.4's `keyFlood`), so the target drains its own name table; the probe
 needs the flood made in a disposable vat. Each exec hop to another vat costs about 60-75 ms.
 Fit: membrane work is negligible (Node microseconds); the hop dominates.
+
+### J-9690 2026-11-18 M5 session program over the O-1 budget and the factory's cap - perf
+Evidence: W5.9, lane m5 at dac0dfd95b (all of group A and B), `scripts/bundle-guest.mjs` (one
+build, Node, about 0.5 s). Bytes (session / exec / factory): M2 base `3588cab190` 186,448 /
+84,354 / 137,074; lane 272,126 / 119,760 / 195,925. O-1 is raised in e59a3d8802 (session
+240,000, exec 120,000), but the session program is 32,126 bytes over it and 9,982 over the
+factory's hard cap (`maxProgramBytes` = `execSourceBytes` = 262,144): no session can be created
+in this lane ("A session program is at most 262144 bytes in this build"). The contract estimated
++25 KB for M5; it is +85.7 KB: 13 new session modules (about 59 KB of code without comments),
+about 1.3 KB of compartment-mapper scaffolding per module (48 KB in all, 37 modules), and the
+edits to `turn.js`, `session.js`, `tool-table.js`. Leading indentation is 35,911 bytes of the
+session program (31.4 KB inside the modules). A bundler change that drops indentation outside
+multi-line strings and templates (lines keep their numbers) gives 241,358 / 106,274 / 175,891,
+whitespace-only (the three bundles with all blanks and tabs removed are identical before and
+after); the session program is then 1,358 bytes over 240,000 and 20,786 under the cap. Collapsing
+the 4,838 blank lines left by stripped comments would reach about 236,500 but breaks the line
+numbers J-0303 kept. The patch is the PM's to apply (`scripts/bundle-guest.mjs` is not an M5
+file); every daemon run of W5.9 used a copy of the lane with it applied.
+Fit: poor for this engine's staging model: the program is one source evaluated in a fresh vat,
+so per-module scaffolding and indentation are paid in every session vat's staging (D-4, about
+10 us per byte); module boundaries that hook tables need cost about 1.3 KB each.
+
+### J-9691 2026-11-18 M5 appends broke M1a and M2 unit tests that pinned hook tables - defect
+Evidence: W5.9 unit lane at 8306377a78 (`ses-ava test/unit test/adapter test/*.test.js`, 65 s):
+11 failures, none run by the group B units. Fixed in 1b02d81354, 8306377a78, 1b355cea07:
+`m1a-provision-steps` (the `m5 fixtures` step), `m5-w53-labels` and `m5-w53-session` (W5.5 and
+W5.7 tool entries, the part table now registers `grants` and `packages`), `m1a-session-turn` and
+`m2-w26-turns` (every session offers `list`, `lookup`, `store`, `remove`, `adopt` without an
+exec vat, so the R4-43 text lists them), `m1a-recovery` (W5.7's recovery step), `m1a-factory`
+(the presets builder; five built-in presets listed), `m2-w26-prompt` (W5.2's documented
+rewrite of the capability paragraph and the appended tools section). Left failing until the
+bundler patch of J-9690: `bundle-guest` and `m1a-session-program` (session program bytes).
+Fit: neutral: hook tables are append-only, so a test that pins a table's whole content breaks
+on every milestone; the M5 tests now pin the merged tables.
+
+### J-9692 2026-11-18 M5 group B integration files, first daemon runs - test
+Evidence: W5.9, copy of the lane (J-9690 bundler patch) under a short path (unix socket paths),
+worker 367e78ad, m5o and m1b templates (built 53-64 s), shared slots. Held (test) time per file:
+`m5-objects` 105 s pass, `m5-security` 135 s pass, `m5-mentions` 128 s pass, `m5-labels` 181 s,
+`m5-presets` 237 s, `m5-prompt` 291 s (wall with the three together) pass; `m5-grants-restart`
+146 s FAIL, `m5-grants` 77 s FAIL, `m5-mentions-restart` 134 s FAIL. Causes and fixes:
+`m5-grants-restart` and the `attachments33` probe made request ids `Date.now()-k5`, refused by
+M2's request id rule (1ccbe46954; rerun: pass, 98 s, K5 tool ran once); `m5-mentions-restart`
+ran `runTurn` for a message submitted behind a restart hold, whose receipt has no turn
+(80c12a475a); `m5-grants`: the deep-schema fixture halted the workspace vat (J-9693; fixture
+fixed in 8c9b8eadcd). Waits for a slot were 0-870 s per file (M3 and M4 exclusive perf runs held
+all four slots back to back), against 67-146 s held.
+Fit: good: K4 (a grant whose schema read was in flight is re-read after the restart) and K5
+(the slow granted tool ran once, the turn is outcome-unknown) held across a real SIGKILL.
+
+### J-9693 2026-11-18 A vat that sends a deeply nested record halts itself - fit
+Evidence: W5.9 scratch probe (m1b template, `makeM5Fixtures`), `E(deepSchemaTool).schema()`
+from the control client: the fixture in the workspace vat builds `parameters` 40 levels of
+`{ type, properties: { a } }` (about 81 nested records) and answers it; the workspace vat's status
+then reads `guest crank halted: StackOverflow(4057)`, every later call into it is broken with the
+hub's retired text (`calc.add` included), and `m5-grants` saw that text as the grant's
+`refused-schema` reason. The exec vat and the session vat were unharmed.
+Reading: the halt is in the sender, while it encodes its own answer, not in the receiver; the
+inspector (D-M5-2) still protects the session, but a hostile fixture placed in the shared
+workspace vat takes every other fixture with it (W5.5's probe c, J-0772, is the same pattern).
+The fixture now nests 16 levels (innermost value at depth 34, refused by the inspector's bound
+of 32).
+Fit: poor: about 80 nested records exhaust a guest stack while encoding; candidate core request
+(the encoder should refuse a value too deep to send with an error, not halt the vat). Hostile
+fixtures belong in a disposable vat.
