@@ -637,6 +637,23 @@ export const makeSecretStore = ({
         'CREATE_FAILED',
         () => {
           assertDescription(description);
+          // A create applied before the adapter died, sent again by the
+          // manager's one retry (HR-SYN-8): keys are the manager's, never
+          // reused, so an entry under this key as a create leaves it
+          // (same label and description, never written to) is that create.
+          // Answered without a second write; anything else is refused.
+          const known = entries.get(key);
+          if (known !== undefined) {
+            if (
+              known.label === label &&
+              known.description === description &&
+              known.generation === 0 &&
+              known.state === 'active' &&
+              known.value === undefined
+            )
+              return Promise.resolve(undefined);
+            throw secretError('CREATE_FAILED');
+          }
           return mutate(() => {
             if (entries.has(key)) throw secretError('CREATE_FAILED');
             return {
