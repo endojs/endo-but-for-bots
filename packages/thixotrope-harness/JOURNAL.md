@@ -8157,3 +8157,44 @@ sink answers are the Map keys, and the guards (`PoolChange`, `PoolState`) accept
 emits unchanged. Cost: a lost `sendOnly` at a crash is silent, so the design must tolerate one
 extra refusal per member after a restart (K-2), which it does.
 Decision: none.
+
+### J-0670 2026-11-18 M4 W4.5 accounts built - build
+Evidence: commit `aaa623d0f9`; `AH/subscriptions/{accounts,account-file,account-tool}.js`;
+`test/adapter/m4-accounts.test.js`, 14 tests, about 1 s, no supervisor.
+Reading: `makeAccounts` keeps readings per `PoolMember` presence (file entries by store key
+only), pools per `Backend` presence and session -> pool in a WeakMap. Provenance: this
+incarnation's reading is `observed`, the file's or a failed refresh's is `remembered`, else the
+member's `DeclaredProfile` (`declared`), else `unavailable`. Every reading, member state or pool
+registration publishes the whole view (`rev` + 1), built once per `rev`; nothing is queued per
+subscriber, so a slow page always gets the newest view. Only a waiting `next()` holds a timer
+(keepalive 30 s); idle viewers (no `next()` call for 60 s, none waiting) are swept at `watch`,
+publish and `next()`. Additions beyond section 12: `register(backend, { kind, label, members })`,
+the `readers` hooks `usage`, `poolOf`, `describe`, and `makeUsageReader` /
+`readingFromClaudeUsage` / `readingFromCodexUsage` (no provider URL in the source: the caller
+gives it). The tool renders Fae's text with each figure labelled by provenance.
+Decision: as described.
+
+### J-0671 2026-11-18 M4 W4.5 accounts fan-out cost - perf
+Evidence: commit `aaa623d0f9`; an in-process probe (not a perf file: W4.8 owns `accounts.push`),
+10 s window, 8 pools x 16 members, 32 subscribers each with a `next()` waiting: 55 samples,
+change -> all 32 answered median 179.5 ms, p99 259.8 ms. Breakdown, 50 calls each: building the
+full view 1.6 ms; `matches(view, AccountsView)` 5.3 ms; one guarded `list()` 5.5 ms. Small view
+(1 pool, 2 members): guarded `list()` 0.32 ms. Budget (`accounts.push`): median <= 5 ms to an
+in-process subscriber.
+Reading: one subscriber on a small pool fits; the largest view misses per subscriber, and the
+miss is the exo return guard (`AccountsSubscription.next` returns `AccountsBatch`), checked
+again for every subscriber though every answer of a `rev` is the same hardened object. A full
+fan-out is about 5.5 ms x subscribers of adapter CPU per change.
+Decision: not changed here (the guard is the W4.0 contract); options for the PM in the report.
+
+### J-0672 2026-11-18 Accounts as an adapter-local channel - fit
+Evidence: J-0670, J-0671; the 40-watcher and 32-live tests.
+Reading: good fit for the data path. Readings are observations, so they stay in Node and cost
+0 vat deliveries per change and per viewer; the manager is asked only for `poolOf` of a session
+this incarnation did not see open a pool. Presences as Map keys made readings shared by every
+pool a member is in for free. Poor fit: guards built for vat boundaries are checked on every
+in-process call of an adapter-local exo, and pattern matching grows with the record (about
+40 us per member account), so the most expensive part of a push is a check of data this module
+just built. Fake-clock tests need a macrotask turn after each `callWhen` call: the method body
+starts a job later, so a timer it arms would otherwise be armed after the clock moved.
+Decision: none.
