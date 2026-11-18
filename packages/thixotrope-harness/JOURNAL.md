@@ -13668,3 +13668,52 @@ milestones list 704 s; long-session chain 21:03-22:12 (background); exclusive mi
 process.md, README, milestones.md status parts, the unit reports. No code, test or perf file
 changed. Scratch `tmp/CL-CLOSE` removed.
 Fit: neutral.
+
+### J-0810 2026-11-18 W6.0 the M6 contract: one environments resource - decision
+Evidence: `designs/m6-interfaces.md` (sections 2, 6, 8), `resources/environments/interfaces.js`
+(51 guards and shapes built in Node with the guest prelude; every interface's method list equals
+its guard's; no absent Git method on the writer; a settings record with an extra key refused);
+`designs/arch-review/step3-plan.md` at `53a8dbb9ea` (read before fixing the session seams);
+`resources/agent-host/durable.js` (attach pattern), `pkg/src/native/contract.js`, `pkg/src/control/supervisor.js`
+`installNative` (no grants, no configuration), `packages/git/src/native-git-backend.js`
+(`GIT_BASE_ARGS`, `EXECUTABLE_REPO_CONFIG`).
+Reading: a container's `/workspace` is the workspace directory, so two resources would pass a host
+path or a guessed key between processes; one resource keeps every identity in its manager and
+finds a session's directory from the presence it was handed. Configuration travels in the service
+key's spec, since `installNative` carries none (AR-SYN-28; CC-091 asked). Commands on the turn path
+go through a per-incarnation `ShellPort` (vat -> adapter -> vat 70-76 ms) instead of the manager
+(164-175 ms per call), and a break from it is the command's unknown outcome, not a restart: the
+environments adapter can be rebuilt while the agent-host lease lives. The guard table sits beside
+the resource: no harness vat program bundles it and no browser reaches it, and in `guest/lib/` it
+would have to join or be excluded from the gateway vocabulary, which the vocabulary test refuses
+for uncovered interfaces. Session seams (part `environment`, an `admit` hook, `Session` methods)
+are designed against step 3 and marked provisional until it merges.
+Decision: D-M6-1..D-M6-14 as written; work units W6.0b (shared guard entries, first and alone),
+W6.1-W6.6 in parallel, W6.7 integration, W6.8 fold; core requests CC-090..CC-092.
+Fit: good for identities and restart (lazy, one registration); awkward where the core has no
+service shape or configuration (the attach and argv workarounds a second time).
+
+### J-0811 2026-11-18 W6.0 adapter-side costs of a command and of git - measure
+Evidence: scratch probe (outside the tree, removed): Node 22 `child_process.spawn` and the
+system git on a 10,000-file repository (100 directories x 100 files, 30 modified, 2 untracked,
+1,002 commits), load average 7.6 (other contract writers and lanes running).
+Reading: spawn `/usr/bin/true` median 1.02 ms, p95 1.37 ms (n 200); `sh -c true` 2.31 ms (n 100);
+`git status --porcelain=v2 -z --untracked-files=normal` median 30.1 ms, p95 31.1 ms (n 30), 3,755
+bytes; `git log --max-count=50` 11.8 ms (n 30); `git diff --numstat` 24.9 ms (n 30); a command
+writing 10 MiB to stdout, drained, 329 ms (n 5). The Docker CLI is installed but its daemon was
+not running (no socket); podman is absent; no container cost was measured.
+Decision: the M6 budgets are dominated by vat and manager hops, not by git or spawning:
+`environments.runTrue` <= 150 ms, `gitStatus` <= 1 s, `gitLog` <= 500 ms, `tooBig` <= 2 s
+(contract section 10); every container figure is `[real-runtime]`, recorded by the owner.
+Fit: neutral.
+
+### J-0812 2026-11-18 W6.0 departures from the spec in M6 - decision
+Evidence: SPEC R3-46, R4-81, R7-39, A.3 `runCommand`; architecture 3.4 and D-16.
+Reading: home is deleted with its session (R3-46 keeps it until an administrator disposes of it:
+the operator's delete is taken as that disposal, G-29); a failed environment stop is retried at the
+next adapter start instead of quarantining the session (R4-81; D-16); containers get configurable
+memory, process and CPU limits (W-12; R7-39 found none); `runCommand` takes no stdin (A.3 has none;
+architecture 3.4's `stdin?: Blob` dropped); the shell tool texts for an unknown outcome, a stop on
+cancel and a stop on a session without a shell are the harness's own.
+Decision: as listed; owner questions O-3, O-4, O-6, O-10 in the contract.
+Fit: neutral.
