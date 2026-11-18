@@ -109,24 +109,25 @@ const makeDaemon = () => {
       incarnation: `fake-${n}`,
       bindings: { [GATEWAY_KEY]: gatewayBinding },
     });
+    /** @type {any} */
     const inner = makeAdapter({ label: 'AgentHost', bind, unbind });
     // A retired incarnation breaks every call, the keeper's probe included.
     const adapter = harden({
       /** @param {any[]} args */
       bind: (...args) => {
         retiredGuard(life);
-        return E(inner).bind(...args);
+        return /** @type {any} */ (E(inner)).bind(...args);
       },
       /** @param {any[]} args */
       unbind: (...args) => {
         retiredGuard(life);
-        return E(inner).unbind(...args);
+        return /** @type {any} */ (E(inner)).unbind(...args);
       },
       /** @param {any[]} args */
       restore: (...args) => {
         retiredGuard(life);
         log.push(`restore ${n}`);
-        return E(inner).restore(...args);
+        return /** @type {any} */ (E(inner)).restore(...args);
       },
       __getMethodNames__: () => {
         retiredGuard(life);

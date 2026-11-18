@@ -182,7 +182,8 @@ export const makeGatewayManager = ({ manager }) => {
         try {
           await E(ops).rotateSignIn();
         } catch (error) {
-          if (isRetiredBreak(error)) throw Error(m3Texts.gatewayNotAttached);
+          if (isRetiredBreak(error))
+            throw Error(m3Texts.gatewayNotAttached, { cause: error });
           throw error;
         }
         return undefined;
