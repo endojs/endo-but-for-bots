@@ -68,6 +68,7 @@ import { makeHistory } from './history.js';
 import { inCallOrder } from './records.js';
 import { isStaged, submissionField } from './staging.js';
 import { toolSetFor, toolSources, toolTable } from './tool-table.js';
+import { makeUsage } from './usage.js';
 // The result of a call the turn never ran because it was cancelled first
 // (one text with the exec tool's; tools/exec.js never imports this module).
 import { NOT_RUN_TEXT } from './tools/exec.js';
@@ -76,6 +77,7 @@ import { turnHooks } from './turn-hooks.js';
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RecordLog } from './records.js' */
 /** @import { LivePublishing } from './live.js' */
+/** @import { ActiveTurn, TurnInfo, RoundCalls } from './turn-types.js' */
 const { E, Fail, defineExoClass, makePromiseKit, matches } =
   /** @type {GuestGlobals} */ (globalThis);
 
@@ -84,77 +86,6 @@ const SETTLED = harden(Error('turn settled'));
 
 /** @param {string} text */
 const reason = text => previewText(text, limits.reasonUnits);
-
-const zeroUsage = () => ({
-  inputTokens: 0,
-  outputTokens: 0,
-  cachedInputTokens: 0,
-  cacheWriteInputTokens: 0,
-  reasoningOutputTokens: 0,
-});
-
-/**
- * @typedef {object} TurnInfo a plain record kept for the session's life
- *   (history pages, receipts); the Turn exo is minted from it on demand
- * @property {string} turnId
- * @property {any} input a string or a StagedText
- * @property {number} at
- * @property {string} state
- * @property {number} round
- * @property {string} [error]
- * @property {string} [resolution]
- * @property {any} [finished] promise kit while the turn is live
- * @property {boolean} [sealed] the turn's records are archived (M2)
- */
-
-/**
- * @typedef {object} RoundCalls the tool calls of one round
- * @property {any[]} waiting intents in call order that were not issued at
- *   once; only appended to, read from `issued` on (no in-place element
- *   moves: C-16, QC advisory 2)
- * @property {number} issued how many of `waiting` were issued
- * @property {number} inFlight
- * @property {number} unsettled calls without a recorded result
- * @property {boolean} frameLimited
- * @property {any} kit resolves when every call has a result
- * @property {Map<string, { entry: any, context: any }>} running issued
- *   calls without a result, by op id (deadlines reach their entry)
- */
-
-/**
- * @typedef {object} ActiveTurn the current turn (vat-internal, mutable)
- * @property {any} turn
- * @property {any} sink
- * @property {string} turnId
- * @property {number} generation
- * @property {string} state 'running' | 'cancelling', then the settled status
- * @property {number} round
- * @property {boolean} dispatched
- * @property {any} ports TurnPorts, or undefined before crank B, while
- *   reopening, or after recovery
- * @property {number} claimAt the claim's time (`TurnStarted.at`)
- * @property {boolean} reopening the lease broke before Dispatched; fresh
- *   ports decide between in flight (recovery) and stale (round 0 again)
- * @property {boolean} engineStarted
- * @property {any} request the last RoundRequest sent (round 0 is sent again
- *   on fresh ports when the first ones were already dead)
- * @property {() => any[]} openIntents intents of the current round without a result
- * @property {() => void} dropPorts forget the ports (recovery: they are
- *   tombstones), and the held ports when they are the same
- * @property {TurnInfo} info
- * @property {any} tools the tool set for these ports
- * @property {RoundCalls | undefined} calls
- * @property {any} roundKit pending until the round's roundFinal
- * @property {any} usage summed counts, or undefined before any round reported
- * @property {{ round: number, partial: any } | undefined} checkpoint the
- *   latest progress of the streaming round (W1b.1): kept outside the log,
- *   appended as one Partial only if the round ends without roundFinal
- * @property {number} [deadlineMs] the turn deadline fired (M2 seam 4): the
- *   cancel settles `failed` with `textOf.turnDeadline`
- * @property {string | undefined} systemNote M5 S2: a line every round
- *   request of this turn adds to the stored prompt (W5.7's R4-29 line, set
- *   by an `onClaim` hook)
- */
 
 /**
  * @param {object} options
@@ -284,14 +215,7 @@ export const makeTurnRunner = ({
   /** activity of the row when no turn is current */
   let restActivity = 'passive';
 
-  const totals = {
-    ...zeroUsage(),
-    context: { usedTokens: 0, windowTokens: 0 },
-    turns: 0,
-    incompleteTurns: 0,
-  };
-  const usageTotals = () =>
-    harden({ ...totals, context: harden({ ...totals.context }) });
+  const usage = makeUsage({ contextLength: config.contextLength });
 
   // ------------------------------------------------------------ the outbox
 
@@ -446,13 +370,12 @@ export const makeTurnRunner = ({
     if (active.usage !== undefined) settled.usage = harden({ ...active.usage });
     records.append(settled);
 
-    totals.turns += 1;
-    if (status !== 'completed') totals.incompleteTurns += 1;
+    usage.settled(status);
 
     if (status === 'completed' && final !== undefined) {
       emit({ type: 'final', turnId: active.turnId, text: final });
     }
-    emit({ type: 'usage', turnId: active.turnId, ...usageTotals() });
+    emit({ type: 'usage', turnId: active.turnId, ...usage.totals() });
     if (status === 'failed') {
       emit({
         type: 'abort',
@@ -930,41 +853,6 @@ export const makeTurnRunner = ({
     );
   };
 
-  /**
-   * @param {ActiveTurn} active
-   * @param {any} usage
-   */
-  const addUsage = (active, usage) => {
-    if (usage === undefined) return;
-    const sum = active.usage ?? zeroUsage();
-    // Named keys (guest rule no-data-keys, J-9366).
-    for (const into of [sum, totals]) {
-      into.inputTokens += usage.inputTokens;
-      into.outputTokens += usage.outputTokens;
-      into.cachedInputTokens += usage.cachedInputTokens;
-      into.cacheWriteInputTokens += usage.cacheWriteInputTokens;
-      into.reasoningOutputTokens += usage.reasoningOutputTokens;
-    }
-    if (usage.context !== undefined) {
-      sum.context = harden({ ...usage.context });
-      totals.context = { ...usage.context };
-    }
-    // M2 seam 3 (R4-33): the window is the catalogue's, stored at creation.
-    if (config.contextLength !== undefined) {
-      totals.context = {
-        ...totals.context,
-        windowTokens: config.contextLength,
-      };
-      if (sum.context !== undefined) {
-        sum.context = harden({
-          ...sum.context,
-          windowTokens: config.contextLength,
-        });
-      }
-    }
-    active.usage = sum;
-  };
-
   // ------------------------------------------------------------ the sink
 
   /**
@@ -1029,7 +917,7 @@ export const makeTurnRunner = ({
           settled.nativeContext = result.nativeContext;
         }
         records.append(settled);
-        addUsage(active, result.usage);
+        usage.addRound(active, result.usage);
         if (failure !== undefined) {
           kit.reject(SETTLED);
           settle(active, { status: 'failed', error: failure });
@@ -1051,7 +939,7 @@ export const makeTurnRunner = ({
             partial: failure.partial,
           };
         }
-        addUsage(active, failure.usage);
+        usage.addRound(active, failure.usage);
         settle(active, { status: 'failed', error: failure.reason });
       },
       /** @param {{ opId: string }} request */
@@ -1605,8 +1493,7 @@ export const makeTurnRunner = ({
             at: lastKnownTime,
           }),
         ]);
-        totals.turns += 1;
-        totals.incompleteTurns += 1;
+        usage.settled('outcome-unknown');
       }
     }
   };
@@ -1673,16 +1560,7 @@ export const makeTurnRunner = ({
     importTurns,
     importEnd,
     /** @param {any} imported UsageTotals of an imported session */
-    importUsage: imported => {
-      totals.inputTokens = imported.inputTokens;
-      totals.outputTokens = imported.outputTokens;
-      totals.cachedInputTokens = imported.cachedInputTokens;
-      totals.cacheWriteInputTokens = imported.cacheWriteInputTokens;
-      totals.reasoningOutputTokens = imported.reasoningOutputTokens;
-      totals.context = { ...imported.context };
-      totals.turns = imported.turns;
-      totals.incompleteTurns = imported.incompleteTurns;
-    },
+    importUsage: usage.replace,
     /**
      * An outside publish broke with the retired text: the adapter
      * restarted; ports with this publisher are dead. A turn using them
@@ -1720,7 +1598,7 @@ export const makeTurnRunner = ({
       });
     },
     historyPage: history.page,
-    usage: usageTotals,
+    usage: usage.totals,
     activity: () => (current === undefined ? restActivity : 'working'),
     isLive,
   });

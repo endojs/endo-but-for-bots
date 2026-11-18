@@ -7,8 +7,9 @@
  * is a `TurnSettled` record and the tally runs over records (a page at a
  * time for export, import and archived segments).
  *
- * The rules are the session's own (contract 6.3, `guest/session/turn.js`
- * settle and `addUsage`), so `usageOfRecords(all records)` equals what
+ * The rules are the session's own (contract 6.3; `guest/lib/usage-counts.js`
+ * as `guest/session/usage.js` applies them), restated here independently as
+ * the test oracle, so `usageOfRecords(all records)` equals what
  * `Session.getUsage()` answers and what the settle's `usage` event carries:
  *
  * - the five counts are summed over every settled turn's `usage` (which is
@@ -20,7 +21,7 @@
  * - the context reading is the latest settled turn's that reported one
  *   (the last request's reading, R4-33). Fae keeps the latest non-zero used
  *   and window values independently; the harness keeps the reading whole,
- *   as `addUsage` does.
+ *   as `sessionContext` does.
  *
  * Guest and Node: plain records in, a plain hardened `UsageTotals` out; no
  * keys from data (rule 12.10).

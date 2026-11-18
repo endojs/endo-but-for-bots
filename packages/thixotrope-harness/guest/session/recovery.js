@@ -51,22 +51,10 @@ import { isRetiredBreak } from '../lib/retired.js';
 import { turnHooks } from './turn-hooks.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+/** @import { ActiveTurn } from './turn-types.js' */
 const { harden } = /** @type {GuestGlobals} */ (globalThis);
 
 /**
- * @typedef {{ opId: string, callId: string, name: string, args: string }} ToolIntent
- * @typedef {object} ActiveTurn the session's current turn (W1a.4)
- * @property {any} turn
- * @property {any} sink
- * @property {string} turnId
- * @property {number} generation
- * @property {string} state
- * @property {number} round
- * @property {boolean} dispatched
- * @property {any} ports
- * @property {() => ToolIntent[]} openIntents intents of the current round
- *   without a ToolResult
- * @property {() => void} dropPorts
  * @typedef {object} SessionCore what session.js passes in (section 11)
  * @property {{ append(record: any): number, ofTurn(turnId: string): any[] }} records
  * @property {{ size(): number, hold(reason: string, message: string): void }} queue

@@ -1208,6 +1208,22 @@ guest rules; "Node" = adapter or tests.
 | `guest/lib/system-prompt-base.js` (vat) | `composeSystemPrompt({ spoken, presetText? }) -> string` | 10 |
 | `guest/session/prompt.js`, `guest/session/usage.js` (vat) | free (hook entries) | |
 | `guest/lib/journal-usage.js` (vat) | `usageOfRecords(records) -> UsageTotals` (Fae `session/journal-usage.js`) | export and import, tests |
+| `guest/lib/usage-counts.js` (vat and Node; step 3, HR-SYN-24) | `zeroCounts()`, `addCounts(into, next)`, `sessionContext(reading, contextLength)` | the two usage rules below; `guest/session/usage.js` `makeUsage({ contextLength }) -> { addRound(active, usage), settled(status), totals(), replace(imported) }` applies them in the round and settle cranks |
+
+**The two usage rules** (R4-33; one home since step 3, `guest/lib/usage-counts.js`):
+
+1. **Counts add.** A round's five counts (`inputTokens`, `outputTokens`, `cachedInputTokens`,
+   `cacheWriteInputTokens`, `reasoningOutputTokens`) are added, by named key, to the turn's sum
+   (`TurnSettled.usage`, failed rounds included) and to the session's `UsageTotals`; every settle
+   adds one to `turns`, and one to `incompleteTurns` unless `completed`.
+2. **The context reading is whole.** The latest round that reported `context` replaces the previous
+   reading (used and window together, a 0 included); a session whose catalogue entry gave a
+   `contextLength` at creation shows that window instead of the provider's (seam 3). The totals
+   start at `{ usedTokens: 0, windowTokens: 0 }`.
+
+The adapter's `token-usage.js` `addUsage` merges provider frames by another rule on purpose (field
+by field, a 0 never replaces a known figure, counts capped); `journal-usage.js` restates the two
+rules above independently and is the oracle the tests compare `Session.getUsage()` with.
 
 ### W2.7
 
