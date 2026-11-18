@@ -13928,3 +13928,49 @@ rerun 151 s. Everything else under 60 s (unit lane about 13 s with tsc and dupli
 only: harness.md rows 4, 15, 23, 24, 28, 36 and 3.2/3.3, step3-plan.md, process.md 1-3 and 6, the
 adapter's `archive/history.js` and `segment.js`, `packages/thixotrope/src/net/hub.js`
 `FRAME_TOO_LARGE`. Scratch `tmp/T3-SESSION` removed. Fit: neutral.
+
+### J-10240 2026-11-18 T3-QC review of step 3: the turn runner split (HR-SYN-4, HR-SYN-15, HR-GUEST-11) - verified
+Read the diff `9bb9f4f2ea..66172e887d` of `guest/session/` against the old code: outbox, usage,
+ports, turn-index, turn-import and per-session recovery hold the same statements in the same order
+(no await moved, no record reordered, no send added; `held` is still set before the current turn
+is decided; `reopens` reset on every failure as before). The one fence closes in `deleteSelf`
+before `beginDelete`, as the three flags did. Runtime parts keep the old hook order (cancel: exec;
+settle: packages; recovery: exec then packages, each guarded). The golden trace digest
+`eed428b3...` was reproduced against the extracted `9bb9f4f2ea` guest and the current one. New
+test `test/unit/turn-runner-fence-order.test.js` (`582085f5ad`): delete at the very settle that
+would seal while a tool call runs, and a lease broken before Dispatched answered by stale ports
+(twice, then fresh; newer than the claim; three times in a row). Its digest was taken on the old
+guest and matches the new one. Fit: neutral.
+
+### J-10241 2026-11-18 T3-QC kill points three times - verified
+m2-archive-restart, m2-archive-restart-2, m2-lifecycle, m1b-pool-restart, m5-grants-restart and
+m5-mentions-restart, `--jobs 6` in shared slots, three rounds (216.5 s, 228.4 s and 208.7 s wall):
+all green each time. No duplicated request, no tool run twice, no lost or duplicated record was
+reported (each file asserts these). Fit: neutral.
+
+### J-10242 2026-11-18 T3-QC providers and single homes - verified
+The wire goldens were committed before the seam moved (`0e5d341e2f`) and pass. The stream order
+(model check, key, system, body) and retry wiring are as before. `makeEventLog` is byte-equal to
+the old one. The kind strings left are the pool provider map (`subscriptions/catalog.js:473`,
+`:550`, `provider.js:109`, `index.js:381`, plus the unused `handles`). The plan allows them.
+`files.js` keeps each writer's steps (segment `.part` with cleanup, the caches without fsync). Key
+loads: a failure is no longer kept, and `store.load` starts empty on a retry. Every refusal the old
+code made still refuses. No write happens before a successful load. Adapter lane 455 passed; unit
+lane 703 passed; `lint:duplicates` 1.80 % of 2.05 %. Fit: neutral.
+
+### J-10243 2026-11-18 T3-QC findings - finding
+(1) milestones.md (23-24, 1454, 1588-1589, 1846-1848, 1875) and architecture.md:612 still tell
+M6, M8, M9 and M11 to register in the deleted `turn-hooks.js`. The same goes for m5-interfaces
+1088-1112 (extender columns) and m2-interfaces 211/232 (`runner.archive`). (2) The model text
+change in `guest/exec/inspect.js` describe: a help() the hub refuses now fails the whole describe.
+Before, it kept the methods with documentation unavailable, and no row of step3-plan names this
+change. (3) Stale `SessionCore.claimNext` comments in queue.js:21, :114 and submissions.js:14.
+(4) Dead code: `subscriptions/index.js` `handles` and the `projection?.transcript ?? []`
+fallbacks in subscriptions/messages.js:210 and responses.js:451. Bundles: session
+206,907 -> 212,483, exec 61,688 -> 62,754, factory 155,427 -> 156,955. Fit: worse (docs).
+
+### J-10244 2026-11-18 T3-QC time record - verified
+First command 23:44:11Z. Over 60 s: the three kill-point rounds (217 s, 228 s, 209 s, in the
+background) and the adapter lane (63 s). Not run: the browser lane, perf rows, regression lists,
+m1a-channels bench, integration m2-secrets/providers/catalog and m3-gateway. Scratch tmp/T3-QC
+removed. Fit: neutral.
