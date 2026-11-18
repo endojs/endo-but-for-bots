@@ -171,11 +171,10 @@ export const limits = harden({
   // ---- M2 contract settings (W2.0; designs/m2-interfaces.md) ----
   /**
    * Records in one history page a session vat answers (W2.5; section 6):
-   * a page crank marshals about 3 ms per record (J-0370, J-9387), so 48
-   * records keep it near 245 ms over a floor of about 95 ms against the
-   * 300 ms `history.page` budget [inferred].
+   * a page crank marshals about 3 ms per record (J-0370, J-9387); at 48
+   * the newest page missed the 300 ms `history.page` budget, so 40 (J-9488).
    */
-  historyPageRecords: 48,
+  historyPageRecords: 40,
   /**
    * The record archive (D-M2-1; section 4): settled turns the session vat
    * keeps after a seal, the most turns one segment takes, and the record

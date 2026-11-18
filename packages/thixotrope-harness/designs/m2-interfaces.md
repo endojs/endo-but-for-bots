@@ -241,7 +241,7 @@ for a call that enters no vat).
 | method | caller | crank | mode | max | retired break | heaviest crank |
 |---|---|---|---|---|---|---|
 | `Session.findTurn(turnId) -> Turn` (W2.5) | gateway, tests | any | answered | tiny | session vat lost | none appended; one Turn minted (kept among the 32 handles) |
-| `Session.getHistoryPage(cursor?)` (changed, W2.5) | gateway, tests, `History` | any | answered | <= frameBytes | session vat lost | <= `historyPageRecords` (48) records previewed and marshalled (section 6) |
+| `Session.getHistoryPage(cursor?)` (changed, W2.5) | gateway, tests, `History` | any | answered | <= frameBytes | session vat lost | <= `historyPageRecords` (40) records previewed and marshalled (section 6) |
 | `SessionInternal.blobPage(cursor?) -> BlobPage` (W2.7) | factory (delete) | delete step 2 | answered | <= 64 handles, ~5 KB | session vat lost: skip to step 3 (7.1) | scans the kept records, queue and checkpoint (<= 159 turns), at most 64 handles out |
 | `SessionInternal.deleteSelf()` (W2.7 via `runner.beginDelete`, W2.5) | factory | delete step 1 | answered | tiny | session vat lost: continue the delete | a cancel crank (contract 6.4): <= 2 records, 2 publishes |
 | `SessionInternal.exportState(cursor?) -> SessionExportPage` (W2.7) | `scripts/export.mjs` through `HarnessRoot.exportState` | any | answered | <= frameBytes | session vat lost | <= `pageRecords` records marshalled; pages bounded by frameBytes |
@@ -325,7 +325,7 @@ What one call or answer can make a vat do in one crank, against the slot ceiling
 | session | seal answer (Z, M2) | drops a prefix; copies the kept tail (<= 159 turns) into fresh arrays | `archiveKeepTurns + archiveSegmentTurns` |
 | session | `ContextSource.page` | 512 records out | `pageRecords`, `contextPageBytes` |
 | session | `ContextSource.segments` (M2) | 64 entries out | `segmentPageEntries` |
-| session | `getHistoryPage` (M2 bound) | 48 records previewed out | `historyPageRecords`, frameBytes |
+| session | `getHistoryPage` (M2 bound) | 40 records previewed out | `historyPageRecords`, frameBytes |
 | session | `Turn.getContent` | 512 records out, frameBytes | `pageRecords` |
 | session | `exportState` / `importState` (M2) | 512 records out / frameBytes of records in, each checked | `pageRecords`, frameBytes |
 | session | `blobPage` (M2) | a scan of the kept tail, 64 handles out | 159 turns |
@@ -561,7 +561,7 @@ ordinal of the next turn to show). The vat serves ordinals > `sealedTurns`; the 
 `History` serves any.
 
 - `Session.getHistoryPage(cursor?)` (vat, W2.5): kept turns only, newest first, within 32 turns,
-  `frameBytes` and `historyPageRecords` (48) records (section 6). When the page reaches the oldest
+  `frameBytes` and `historyPageRecords` (40) records (section 6). When the page reaches the oldest
   kept turn and `sealedTurns > 0`, `next` is `h<sealedTurns>` and `archived: true`. A cursor with
   n <= `sealedTurns` answers `{ turns: [], next: cursor, archived: true, archive }`. Every page of
   a session with sealed segments carries `archive: ArchiveState`.
@@ -728,13 +728,12 @@ M1b 3.3 on the fingerprint.
 ## 6. History pages (W2.5)
 
 A vat history page holds at most `historyPageTurns` (32) turns, `frameBytes` and
-`historyPageRecords` (48) records in all: whole turns are added newest first while all three
+`historyPageRecords` (40) records in all: whole turns are added newest first while all three
 hold; the newest turn alone over the records or bytes bound shows its first records and is marked
 `cut` (as M1a's byte rule). Each turn shows at most `historyTurnRecords` records. The bound comes
-from the page crank's marshalling cost: about 3 ms per record (J-0370, J-9387), so 48 records keep
-a page crank near 245 ms over a 95 ms floor [inferred] against the 300 ms `history.page` budget;
-W2.5 measures it at 200, 1,000 and 5,000 turns and, if it misses, proposes a smaller bound as a
-contract change (no budget is re-based, D-M2-3). Archived turns are paged by `History` (4.9)
+from the page crank's marshalling cost: about 3 ms per record (J-0370, J-9387). 48 was the first
+estimate; the newest vat page missed the 300 ms `history.page` budget at 48, so the PM accepted
+40 as a contract change (J-9488; no budget is re-based, D-M2-3). Archived turns are paged by `History` (4.9)
 without a vat crank. Acceptance 9: after 300 turns, pages load back to turn 1 (across the archive:
 by then 160 turns are sealed), every page message is at most `frameBytes`, and no turn is missing
 or shown twice.
@@ -1279,8 +1278,8 @@ missing `sendNow` could not be made on the M2 guard; `textOf.notBuilt` answered 
    and hub row at the measured lengths would vary by more than 1.25 x (deviation, J-0403).
 5. **Archived turns have no Turn object in pages** (4.9); a client resolves one through
    `Session.findTurn(turnId)` (F.2 d); at most 64 archived outcome-unknown turns stay resolvable.
-6. **History page record bound 48** (6): an estimate from the measured marshalling cost; W2.5
-   measures and may propose another value.
+6. **History page record bound 40** (6): first estimated at 48 from the measured marshalling
+   cost; the newest vat page missed 300 ms at 48, so the PM accepted 40 (contract change, J-9488).
 7. **Secrets key file** (9.1): outside the state directory, path from
    `THIX_HARNESS_SECRETS_KEY`, else under `~/.config/thixotrope-harness/` (D-6; open decision 4
    stays open).
@@ -1288,12 +1287,12 @@ missing `sendNow` could not be made on the M2 guard; `textOf.notBuilt` answered 
    retries [inferred]" (R4-77) and G-04's missing timeout (deviation, J-0403).
 9. **Prompt exec paragraph** (10): rewritten for the persistent scope in M2, not M5 (deviation,
    J-0403).
-11. **Acceptance 6, a cancel's end event** (PM ruling, 2026-11-18; J-9487): the event contract
-    stands. A turn cancelled mid-stream ends its live stream with `end { status: 'cancelled' }`;
-    no `abort` event is added. The milestone's "abort emitted" is read as this end event, and the
-    provider's server sees the connection closed (8.1).
 10. **Open for the PM:** the 4,096-receipt rate cap (J-9391) is unchanged; the archive's per-session
     ceiling of 131,072 turns (4,096 segments; sealing stops beyond it); whether R4-106's `[default]`
     values should be re-stated as 128/32 in the architecture; the adapter-side growth of
     per-round projection and provider request with session length until M8 (4.13); a `lost`
     session's live-tail blobs beyond the mirror leak on delete (4.11).
+11. **Acceptance 6, a cancel's end event** (PM ruling, 2026-11-18; J-9487): the event contract
+    stands. A turn cancelled mid-stream ends its live stream with `end { status: 'cancelled' }`;
+    no `abort` event is added. The milestone's "abort emitted" is read as this end event, and the
+    provider's server sees the connection closed (8.1).
