@@ -9,7 +9,7 @@
 
 /**
  * R4-36: the instruction of the tool-less summary call, word for word as
- * lal `providers/context-compaction.js:126-137` (1315bef86); the history
+ * lal `providers/context-compaction.js:124-135` (1315bef86); the history
  * follows it as JSON in the same user message.
  */
 export const summaryInstruction =
@@ -38,7 +38,7 @@ export const summaryHeadings = harden([
 ]);
 
 /**
- * lal `providers/context-compaction.js:150`: the marker inside a halved
+ * lal `providers/context-compaction.js:154`: the marker inside a halved
  * tool excerpt of the summary input.
  * @param {number} omitted characters left out
  */

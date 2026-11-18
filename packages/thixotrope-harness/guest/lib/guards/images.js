@@ -37,7 +37,7 @@ export const imageLimits = harden({
    * into a vat).
    */
   readPageBytes: 196_608,
-  /** Empty pages before a source is refused (Fae `image-tool.js:107`). */
+  /** Empty pages before a source is refused (Fae `image-tool.js:125`). */
   maxEmptyReads: 64,
   /** The whole read, from the first call to the last page (ms). */
   readTimeoutMs: 30_000,
@@ -46,11 +46,18 @@ export const imageLimits = harden({
    * results are sent as their receipt (contract D-M8-9, open question Q-2).
    */
   imagesPerRequest: 20,
-  /** `petName` (Fae `image-tool.js:47`). */
+  /** `petName` (Fae `image-tool.js:46`). */
   petNameUnits: 256,
   /** `path` segments and their length (Fae `image-tool.js:51-53`). */
   pathSegments: 64,
   segmentUnits: 255,
+  /**
+   * The raw `path` text the vat passes on: the arguments of a local tool
+   * are at most `inlineBytes` (staged arguments are refused, M5 2.4.2),
+   * so a path of 64 segments of 255 characters is refused as too large;
+   * the bound only caps the guard.
+   */
+  pathTextUnits: 8192,
 });
 
 /** R4-39: the formats accepted, recognised by their magic bytes. */
@@ -62,7 +69,7 @@ export const imageMediaTypes = harden([
 
 /**
  * The versioned envelope a staged image result holds (hosted-agent
- * `image-result.js:6`): this prefix, then the JSON text
+ * `image-result.js:7`): this prefix, then the JSON text
  * `{"mimeType":"image/png","data":"<base64>"}`. Only results of the
  * `viewImage` tool are decoded (contract D-M8-8).
  */
@@ -101,18 +108,18 @@ export const viewImageDescription = harden({
 
 /** Fixed texts (Fae `image-tool.js` and hosted-agent `image-result.js`). */
 export const imageTexts = harden({
-  /** Fae `image-tool.js:69`. */
+  /** Fae `image-tool.js:73`. */
   badPetName: 'petName must be a nonempty name of at most 256 characters',
-  /** Fae `image-tool.js:85`. */
+  /** Fae `image-tool.js:91`. */
   badPath: 'path must contain relative file segments, not a host path',
-  /** Fae `image-tool.js:96`, `:114`. */
+  /** Fae `image-tool.js:108`, `:129`. */
   tooLarge: 'Image exceeds the 2 MiB limit; resize it before reading',
-  /** Fae `image-tool.js:99`, adapted to the harness's source method. */
+  /** Fae `image-tool.js:111`, adapted to the harness's source method. */
   notReadable:
     'Image capability must expose readBase64(); use a workspace file or an image source',
-  /** Fae `image-tool.js:108`. */
+  /** Fae `image-tool.js:125`. */
   tooManyEmptyReads: 'Image stream yielded too many empty chunks',
-  /** Fae `image-tool.js:27`. */
+  /** Fae `image-tool.js:28`. */
   unsupported:
     'Unsupported image bytes. Render or convert to PNG, JPEG or WebP first; SVG and HTML are not raster images.',
   /** The source answered something that is not a page of base64. */
@@ -125,7 +132,7 @@ export const imageTexts = harden({
   notFound: 'No image at that path',
   /** Staging the envelope failed (quota, disk). */
   notStaged: 'Image could not be kept for model input',
-  /** hosted-agent `image-result.js:69`: a preview of an image result. */
+  /** hosted-agent `image-result.js:68`: a preview of an image result. */
   receiptUnknownFormat: '[Image result; bytes retained for model input]',
 });
 
@@ -133,7 +140,7 @@ export const imageTexts = harden({
 export const imageTextOf = harden({
   /**
    * The receipt the model's transcript, the UI and history show for an
-   * image result (hosted-agent `image-result.js:73`).
+   * image result (hosted-agent `image-result.js:71`).
    * @param {string} mediaType
    */
   receipt: mediaType => `[Image ${mediaType}; bytes retained for model input]`,
@@ -162,15 +169,19 @@ export const imageTextOf = harden({
 export const imageShapeBuilders = table => ({
   /**
    * `ImageTool.view` argument (session vat -> adapter). `target` is the
-   * object the label names in the session, never a name.
+   * object the label names in the session, never a name. `path` is the
+   * model's raw JSON text of the `path` argument, as the vat received it
+   * (a vat never parses model JSON, architecture rule 12.10; the adapter
+   * parses it and applies Fae's segment checks).
    */
   ImageRequest: () =>
     record(
       { opId: table().Id, target: M.remotable('ImageTarget') },
-      {
-        path: list(text(imageLimits.segmentUnits), imageLimits.pathSegments),
-      },
+      { path: text(imageLimits.pathTextUnits) },
     ),
+  /** The path as the adapter uses it, after parsing and checking. */
+  ImagePath: () =>
+    list(text(imageLimits.segmentUnits), imageLimits.pathSegments),
   /** `ImageSource.readBase64` argument: raw byte offset and count. */
   ImageReadRange: () => record({ offset: count, maxBytes: count }),
   /** `ImageSource.readBase64` answer: base64 of at most `maxBytes` bytes. */

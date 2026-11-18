@@ -69,6 +69,12 @@ export const contextLimits = harden({
   anthropicContextTokens: 200_000,
   /** Halvings of the old tool excerpts before a summary request gives up. */
   excerptHalvings: 24,
+  /**
+   * What one image result counts in the plan's byte sizing (contract
+   * D-M8-14): about 1,600 tokens at 4 bytes a token, in place of its
+   * 2.8 MB of base64, so images do not inflate the headroom.
+   */
+  imageSizingBytes: 6400,
 });
 
 // ---------------------------------------------------------------- kinds
@@ -105,19 +111,19 @@ export const compactionTexts = harden({
   /** R4-35: an unresolved unknown tool outcome holds the boundary back. */
   pinnedByUnknownOutcome:
     'Compaction skipped: an unresolved unknown tool outcome must stay visible',
-  /** lal `context-compaction.js:58`: the fixed parts alone exceed the headroom. */
+  /** lal `context-compaction.js:59`: the fixed parts alone exceed the headroom. */
   headroomExceeded:
     'Compaction skipped: compaction instructions and tools exceed the model headroom',
-  /** lal `context-compaction.js:160`: excerpts halved to nothing still do not fit. */
+  /** lal `context-compaction.js:196`: excerpts halved to nothing still do not fit. */
   summaryInputTooLarge:
     'Compaction skipped: the summary input exceeds the model headroom',
-  /** lal `context-compaction.js:219`: empty text or tool calls. */
+  /** lal `context-compaction.js:220`: empty text or tool calls. */
   invalidSummary: 'Compaction skipped: the model returned no usable summary',
   /** `contextLimits.summaryMaxBytes`. */
   summaryTooLong: 'Compaction skipped: the summary is longer than the limit',
-  /** lal `context-compaction.js:231`: the new context is not smaller. */
+  /** lal `context-compaction.js:228`: the new context is not smaller. */
   noReduction: 'Compaction skipped: the summary did not reduce the context',
-  /** lal `context-compaction.js:233`. */
+  /** lal `context-compaction.js:230`. */
   stillOverHeadroom:
     'Compaction skipped: the summary and the retained tail exceed the model headroom',
   /** The vat refused the boundary the adapter answered (contract 4.3). */
