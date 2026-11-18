@@ -8556,3 +8556,22 @@ Reading: object granularity for (b) waits on CC-060 (M4): origin `app:harness` i
 vat, which also holds the catalogue and inventory.
 Fit: good: the snapshot is plain heap data in the session (no versioned preset store), so
 acceptance 1 needs no code beyond the factory's copy.
+
+### J-9695 2026-11-18 M5 creation perf (creation-m5) - perf
+Evidence: `perf/creation-m5.perf.mjs` (e502225489, 2b360be67e), exclusive run 05:51-05:57 in
+the J-9692 copy (bundler patch applied), worker 367e78ad, m5o template, load 2.2-4.6.
+Numbers: `session.program` 241,361 bytes, budget 240,000 strict: MISS by 1,361 (J-9690);
+`exec.program` 106,277 / 120,000 pass. `prompt.compose.node` (10 s, n 2,577,468) median 0.002
+ms, p99 0.003 ms for a 7,839-unit prompt (budget 5 ms) pass. `prompt.compose` (120 s window,
+pool 4, each creation after `whenSettled`): `chat-only` median 1,277 ms (n 10), the largest
+preset (4,096 three-byte units of instructions, prompt staged; 32 endowments) 1,622 ms (n 10):
++345 ms (budget +150) and 1,622 ms (budget 750): MISS on both. `session.createCold` (120 s, no
+spare, n 17) median 7,341 ms, p95 7,500 (budget 6,000): pass only under the 1.25 x rule (1.22 x),
+41 deliveries per creation.
+Reading: likely causes, not yet separated: the pooled `chat-only` creation is 1.5 x M2's 849 ms
+(M2 outcome table): a sleeping spare's wake now restores a heap built from a program 30 % larger,
+and `make` seeds the label map and four runtime parts; the largest preset adds the staged prompt
+(one blob write in the factory) and a 32-endowment `make` argument (about 6 KB more in one
+frame). The pool hides neither, because the factory's work happens after the take. Cold creation
+grows with program bytes as D-4 predicts (about 10 us per byte: 241 KB staged in 11 pieces).
+Fit: neutral: the costs are the staging model's (C-5, C-7), not M5's logic.
