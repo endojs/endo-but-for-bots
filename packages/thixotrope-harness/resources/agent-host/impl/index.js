@@ -42,6 +42,7 @@ import { anthropicKind } from './providers/anthropic.js';
 import { makeCatalog } from './providers/catalog.js';
 import { findSecretsFiles, makeSecretStore } from './secrets/store.js';
 import { makeSealKeys } from './secrets/seal.js';
+import { makeWrappingKey } from './secrets/wrapping-key.js';
 import { makeSecretsOps } from './secrets/manager.js';
 import { makeGatewayService } from './gateway/index.js';
 // eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
@@ -278,14 +279,19 @@ export const makeAgentHostImpl = ({
   const secrets = () => {
     if (secretsMade === undefined) {
       const files = findSecretsFiles({ stateDir: stateDirNow(), env });
+      // One wrapping key per incarnation for the store and the sealing keys
+      // (one load, one failure policy: HR-SYN-5).
+      const wrappingKey = makeWrappingKey({
+        keyFile: files.keyFile,
+        stateDir: files.stateDir,
+      });
       secretsMade = makeSecretsOps({
         store: makeSecretStore({
           file: files.file,
-          keyFile: files.keyFile,
+          wrappingKey,
           auditFile: files.auditFile,
-          stateDir: files.stateDir,
         }),
-        seal: makeSealKeys({ file: files.keyFile, stateDir: files.stateDir }),
+        seal: makeSealKeys({ wrappingKey }),
         sink: requireSink,
       });
     }

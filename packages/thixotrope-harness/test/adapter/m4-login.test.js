@@ -16,6 +16,7 @@ import test from '@endo/ses-ava/test.js';
 
 import { makeSecretsOps } from '../../resources/agent-host/impl/secrets/manager.js';
 import { makeSealKeys } from '../../resources/agent-host/impl/secrets/seal.js';
+import { makeWrappingKey } from '../../resources/agent-host/impl/secrets/wrapping-key.js';
 import { parseCredential } from '../../resources/agent-host/impl/subscriptions/credentials.js';
 import {
   findSecret,
@@ -49,8 +50,10 @@ const setup = async t => {
   const ops = makeSecretsOps({
     store,
     seal: makeSealKeys({
-      file: dirs.files.keyFile,
-      stateDir: dirs.files.stateDir,
+      wrappingKey: makeWrappingKey({
+        keyFile: dirs.files.keyFile,
+        stateDir: dirs.files.stateDir,
+      }),
     }),
     sink: Far('AgentHostSink', {
       resolveSecrets: (/** @type {any[]} */ handles) =>

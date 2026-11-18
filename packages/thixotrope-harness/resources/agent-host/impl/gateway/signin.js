@@ -21,12 +21,8 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
-import {
-  decrypt,
-  encrypt,
-  findSecretsFiles,
-  loadWrappingKey,
-} from '../secrets/store.js';
+import { decrypt, encrypt, findSecretsFiles } from '../secrets/store.js';
+import { loadWrappingKey } from '../secrets/wrapping-key.js';
 
 /** Additional data of the sealed file (its format revision). */
 export const SIGNIN_AAD = 'thixotrope-harness-signin-1';

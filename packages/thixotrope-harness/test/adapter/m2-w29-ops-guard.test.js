@@ -19,6 +19,7 @@ import { makeOps } from '../../resources/agent-host/impl/attach.js';
 import { makeSecretsOps } from '../../resources/agent-host/impl/secrets/manager.js';
 import { makeSealKeys } from '../../resources/agent-host/impl/secrets/seal.js';
 import { makeSecretStore } from '../../resources/agent-host/impl/secrets/store.js';
+import { makeWrappingKey } from '../../resources/agent-host/impl/secrets/wrapping-key.js';
 
 test('secretDescribe and secretAudit answer through the ops guard', async t => {
   const base = mkdtempSync(join(tmpdir(), 'w29-ops-'));
@@ -27,12 +28,11 @@ test('secretDescribe and secretAudit answer through the ops guard', async t => {
   const keyFile = join(base, 'secrets.key');
   const store = makeSecretStore({
     file: join(stateDir, 'agent-host', 'secrets.enc'),
-    keyFile,
-    stateDir,
+    wrappingKey: makeWrappingKey({ keyFile, stateDir }),
   });
   const secrets = makeSecretsOps({
     store,
-    seal: makeSealKeys({ file: keyFile, stateDir }),
+    seal: makeSealKeys({ wrappingKey: makeWrappingKey({ keyFile, stateDir }) }),
     sink: () => {
       throw Error('no sink in this test');
     },

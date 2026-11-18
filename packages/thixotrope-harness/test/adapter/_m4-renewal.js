@@ -11,6 +11,7 @@ import {
   findSecretsFiles,
   makeSecretStore,
 } from '../../resources/agent-host/impl/secrets/store.js';
+import { makeWrappingKey } from '../../resources/agent-host/impl/secrets/wrapping-key.js';
 
 const harnessRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
@@ -39,8 +40,10 @@ export const makeStoreDirs = tag => {
 export const openStore = (files, now) =>
   makeSecretStore({
     file: files.file,
-    keyFile: files.keyFile,
-    stateDir: files.stateDir,
+    wrappingKey: makeWrappingKey({
+      keyFile: files.keyFile,
+      stateDir: files.stateDir,
+    }),
     ...(now === undefined ? {} : { now }),
   });
 

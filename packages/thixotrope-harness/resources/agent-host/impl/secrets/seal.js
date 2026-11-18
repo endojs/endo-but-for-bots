@@ -31,7 +31,9 @@ import {
 
 import { limits } from '../../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
-import { decrypt, encrypt, loadWrappingKey, secretError } from './store.js';
+import { decrypt, encrypt, secretError } from './store.js';
+
+/** @import { WrappingKey } from './wrapping-key.js' */
 
 export const SEALED_BOX_FORMAT = 'x25519-aes-256-gcm-1';
 /** DER prefix of a PKCS#8 X25519 private key (RFC 8410) before its 32 bytes. */
@@ -112,11 +114,11 @@ harden(sealTo);
  * The adapter's sealing keys.
  *
  * @param {object} options
- * @param {string} [options.file] the wrapping key file (as the store's)
- * @param {string} [options.stateDir] refuse a key file inside it
+ * @param {WrappingKey} [options.wrappingKey] the incarnation's wrapping key
+ *   (`makeWrappingKey`, the store's)
  * @param {Buffer} [options.key] the wrapping key itself (tests)
  */
-export const makeSealKeys = ({ file, stateDir, key: givenKey }) => {
+export const makeSealKeys = ({ wrappingKey, key: givenKey }) => {
   /** @type {import('node:crypto').KeyObject | undefined} */
   let privateKey;
   /** @type {Buffer | undefined} */
@@ -141,12 +143,19 @@ export const makeSealKeys = ({ file, stateDir, key: givenKey }) => {
   };
   if (givenKey !== undefined) derive(givenKey);
 
+  /** Derives once; a failed load is not kept, the next call tries again. */
   const ready = () => {
     if (privateKey !== undefined) return Promise.resolve();
-    loading ??= (async () => {
-      if (file === undefined) throw Error('no secrets key file');
-      derive(await loadWrappingKey({ keyFile: file, stateDir }));
-    })();
+    if (loading === undefined) {
+      const attempt = (async () => {
+        if (wrappingKey === undefined) throw Error('no secrets key file');
+        derive(await wrappingKey.get());
+      })();
+      loading = attempt;
+      attempt.catch(() => {
+        if (loading === attempt) loading = undefined;
+      });
+    }
     return loading;
   };
 
