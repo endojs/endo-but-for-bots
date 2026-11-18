@@ -8283,3 +8283,53 @@ in 3.5 s; no vat halted, each session's next turn completed. Probe (e) skipped: 
 `notBuilt` until W5.6.
 Fit: good for the vat (a label map of 256 adds nothing a turn can see); the costs a tool round
 shows are the adapter's per-event and per-record path, which grows with calls, not with M5.
+
+### J-0730 2026-11-18 M5 presets and inventory - built
+Evidence: W5.1 commits 3fe1bb92d5 (catalogue, records, templates, inventory), 25e9f29187 (seams
+H-1..H-3, `presetEndowments` builder, M5 Operator), 468dd3846d (export/import of presets),
+1e14c0725a (integration). Unit: `m5-w51-presets` 16, `m5-w51-factory` 8, `m5-w51-inventory` 4,
+all pass in about 1 s each. Integration `m5-presets` (acceptance 2, 13, 14, K1, K2): 4 pass,
+178 s wall including template setup (the first test 61 s with two SIGKILL restarts).
+Reading: each preset is one exo; the catalogue reads a preset's record through a `WeakMap`
+(foreign or another catalogue's preset refused `unknownPreset` before any row); a module-level
+`WeakMap` lets the services builder read endowments at the snapshot's revision without holding
+the catalogue (`presetChanged` rolls the creation back, tested by saving while the backend's
+`describe` is held). K1 after the answer: durable; before the answer: in the run the kill landed
+first (not applied) and the retry at the old revision then succeeded once.
+Fit: good. Persistence is the heap: no store, no write queue, no lost-acknowledgment repair
+(Fae needed all three, `preset-catalog.js` `change`); compare-and-set is two integer compares
+in one crank.
+
+### J-0731 2026-11-18 M5 W5.1 deviations from the contract - deviation
+Evidence: `guest/factory/presets.js`, `guest/lib/preset-catalog.js`.
+Reading: (1) `list()` puts `chat-only` first, then the other built-ins in
+`builtInPresetLabels` order: `_m1a-slice.js` and `m1a-provision.test.js` take the first listed
+preset as M1a's; with `development` first every M1a/M2 integration creation would be refused.
+(2) `create` and `save` are synchronous because their guards are `M.call`: an edit cannot ask its
+backend's kind, so "Choose a model for this backend" is not applied at save
+(`normalizePresetRecord` applies it when given `backendKind`; creation still refuses a missing
+model on a non-default API backend, M2 `catalogueModel`). (3) `facet` is a property, as section
+10 lists it (H-2 writes `facet()`). (4) A model default fills in only when the creation uses the
+preset's backend. (5) Built-in labels are Fae's ids (`chat-only`, ...), so M1a's label holds.
+(6) Inventory cursor refusal text `Unknown inventory cursor` is the harness's (none in the
+contract). (7) Export carries user presets only; built-ins come back as shipped.
+Decision: reported to the PM (forPM).
+
+### J-0732 2026-11-18 M5 presets perf rows - perf
+Evidence: `node scripts/run-lock.mjs --exclusive --label presets -- node perf/presets.perf.mjs`
+at 379d92a6c8 (60 s windows, diagnostic probes 10 s), load average 4.8-8.3; m1a template.
+Reading: `presets.save` (32 endowments, budget median <= 150 ms): MISS, median 279 ms, p99 331,
+n 211, 1.02 deliveries per op. `inventory.page` (50 rows of 1,000, budget <= 200 ms): MISS,
+median 783 ms, p99 1,399, n 76, 1.07 deliveries per op. Probes: `factory.floor`
+(`Inventory.rev`) 22 ms; `presets.save.small` 27 ms; `inventory.page1` 28 ms; `presets.list64`
+(64 handles, lightest guard; b675ac1623, 10 s windows) 40 ms. `inventory.fill` (20 `addAll` of
+50) 22.6 s, about 22 ms an entry. So a handle in a message costs about 0.3 ms; a record of the
+row or endowment shape costs 8-15 ms each in the factory crank. Likely cause: the guard's
+pattern checks of `M.splitRecord` records (the guard files build every record with
+`splitRecord`); in Node the same `InventoryPage` check is 0.97 ms with `splitRecord` rows and
+0.41 ms with plain copyRecord patterns. Page position (first or last of 20) did not move the
+time (736-830 ms), so the inventory's `Map` walk is not the cost.
+Fit: poor for paged object lists: objects-not-names makes every row a record with handles and
+every record pays the guard walk in an interpreted vat; budgets set as "one crank" do not hold
+for 50-row pages. Remedies (not made here): plain record patterns for closed records in the
+guard files, or pages of 25.
