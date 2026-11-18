@@ -463,6 +463,7 @@ const makeGrantSession = async () => {
     liveChannel: () => Far('LivePublisher', { publish: () => {} }),
   });
   const parts = harden([
+    ...m5Parts.filter(part => part.name !== 'grants'),
     {
       name: 'grants',
       make: (/** @type {any} */ runtime) =>

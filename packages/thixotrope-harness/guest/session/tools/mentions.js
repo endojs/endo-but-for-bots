@@ -28,7 +28,7 @@
  *
  * Guest rules.
  */
-import { textOf } from '../../lib/guards/session.js';
+
 import { textOf as textOfM5 } from '../../lib/interfaces-m5.js';
 import { limits } from '../../lib/limits.js';
 import { argSpecs, parseClosedArgs } from '../../lib/tool-args.js';
@@ -130,11 +130,8 @@ const readPackage = (tool, { args, turnId }, context, nameKey) => {
   const number = parsed.values.get('messageNumber');
   const edge = parsed.values.get('edgeName');
   const name = parsed.values.get(nameKey);
-  const runtime = context?.runtime;
-  const table = runtime?.packages?.table;
-  if (table === undefined) {
-    return { outcome: failed(textOf.notBuilt('packages')) };
-  }
+  const { runtime } = context;
+  const { table } = runtime.packages;
   try {
     const value = table.take(number, edge, turnId);
     return { number, edge, name, value, runtime };
@@ -173,10 +170,7 @@ const adoptToolEntry = harden({
     if ('outcome' in read) return read.outcome;
     const { number, name, value, runtime } = read;
     if (!isValidLabel(name)) return failed(textOfM5.reservedLabel(name));
-    const grants = runtime.grants;
-    if (grants?.grant === undefined) {
-      return failed(textOf.notBuilt('adoptTool'));
-    }
+    const { grants } = runtime;
     try {
       const info = await grants.schemaRead(
         grants.grant(value, 'adopted', name),

@@ -20,10 +20,9 @@
  * label map (seeded from `services.endowments`, then `labelSeeds`) and its
  * runtime (`m5-parts.js`), and the `Session` exo takes the M5 guard:
  * `grants()` and `enqueueMessageOnce` forward to the runtime's `grants` and
- * `packages` parts and throw `textOf.notBuilt` until W5.6 and W5.7 register
- * them.
+ * `packages` parts, which every runtime has.
  */
-import { interfaces, texts, textOf } from '../lib/guards/session.js';
+import { interfaces, texts } from '../lib/guards/session.js';
 import { m5Interfaces } from '../lib/interfaces-m5.js';
 import { limits } from '../lib/limits.js';
 import { labelSeeds as defaultLabelSeeds, seedsFor } from './label-seeds.js';
@@ -268,10 +267,7 @@ export const makeSession = (
      * @param {any[]} attachments
      */
     enqueueMessageOnce(submission, requestId, at, attachments) {
-      const packages = runtime?.packages;
-      if (packages?.enqueueMessageOnce === undefined) {
-        throw Error(textOf.notBuilt('enqueueMessageOnce'));
-      }
+      const { packages } = runtime;
       refuseIfDeleting();
       return inCrank(() =>
         packages.enqueueMessageOnce(submission, requestId, at, attachments),
@@ -279,9 +275,7 @@ export const makeSession = (
     },
     /** M5 (2.5): the session's granted tools (W5.6's `grants` part). */
     grants() {
-      const facet = runtime?.grants?.facet;
-      if (facet === undefined) throw Error(textOf.notBuilt('grants'));
-      return facet;
+      return runtime.grants.facet;
     },
   });
 

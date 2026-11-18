@@ -83,7 +83,12 @@ test('blob pages hold at most 64 handles and resume inside one record', async t 
     harden({ kind: 'tool-intents', turnId: 't1', round: 0, intents }),
   );
   const queue = makeQueue();
-  const runner = { current: () => undefined, usage: () => undefined };
+  const runner = {
+    current: () => undefined,
+    archive: { state: () => undefined },
+    beginDelete: () => {},
+    usage: () => undefined,
+  };
   const lifecycle = makeSessionExport({
     records,
     queue,
@@ -174,6 +179,8 @@ test('import: a new session only, records in order, resends answered, the queue 
   const reported = [];
   const runner = {
     current: () => undefined,
+    archive: { state: () => undefined },
+    beginDelete: () => {},
     usage: () => undefined,
     see: () => {},
     /** @type {any} */

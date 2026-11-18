@@ -150,6 +150,12 @@ export const texts = harden({
 export const textOf = harden({
   ...below.textOf,
   /**
+   * The adapter's ops facets: a method whose handler this agent host was
+   * not given (m2-interfaces.md 1.3; no vat answers with it, HR-SYN-23).
+   * @param {string} method
+   */
+  notBuilt: method => `not built yet: ${method}`,
+  /**
    * Composer (M1a, no staging): a submission over inlineBytes.
    * @param {number} bytes
    * @param {number} limit

@@ -230,12 +230,6 @@ export const textOf = harden({
    * @param {string} turnId
    */
   turnDeadlineOpId: turnId => `${turnId}/deadline`,
-  /**
-   * M2 switching rule (m2-interfaces.md 1.3): an M2 method whose unit has
-   * not built it yet. Nothing may answer with this after W2.9.
-   * @param {string} method
-   */
-  notBuilt: method => `not built yet: ${method}`,
 });
 
 // ---------------------------------------------------------------- shapes

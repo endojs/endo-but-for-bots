@@ -273,11 +273,6 @@ test('a prompt over inlineBytes is staged through writersFor() in pieces within 
   await new Promise(resolve => setImmediate(resolve));
   t.is(failing.calls.abort, 1);
   t.is(failing.calls.close, 0);
-
-  // Without the admin in the resolver context (the factory passes it, W2.7).
-  await t.throwsAsync(() => promptResolver({ systemPrompt: long }, {}, {}), {
-    message: textOf.notBuilt('createSession systemPrompt over inlineBytes'),
-  });
 });
 
 test('the resolver is in the hook table after the preset snapshot; createSession options resolve a prompt', async t => {

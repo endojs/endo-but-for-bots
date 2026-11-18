@@ -23,14 +23,14 @@
  *   `makeSession` (`{ core, queue, runner, inCrank, refuseIfDeleting }`);
  * - `powers`, `inspector`, `grants`, `packages`: each part, read when used
  *   (a part made earlier in the table can reach one made later at run
- *   time, as `adoptTool` reaches `grants`), `undefined` while no entry of
- *   that name is registered.
+ *   time, as `adoptTool` reaches `grants`). All four are required: a table
+ *   without one of them is refused when the runtime is made (HR-SYN-23), so
+ *   no tool or method meets a missing part.
  *
  * What `Session.grants()` and `Session.enqueueMessageOnce` forward to:
  * `runtime.grants.facet` (the `SessionGrants` exo) and
  * `runtime.packages.enqueueMessageOnce(submission, requestId, at,
- * attachments)` (run inside the Session method's crank). Until those parts
- * are registered both methods throw `textOf.notBuilt`.
+ * attachments)` (run inside the Session method's crank).
  *
  * Guest rules.
  */
@@ -60,6 +60,17 @@ import { packagesPart } from './packages.js';
  * @property {any} packages
  * @property {(name: PartName) => any} part
  */
+
+/**
+ * The parts every runtime has (`makeRuntime` refuses a table without one).
+ * @type {readonly PartName[]}
+ */
+export const requiredParts = harden([
+  'powers',
+  'inspector',
+  'grants',
+  'packages',
+]);
 
 /** @type {readonly M5Part[]} */
 export const m5Parts = harden([
@@ -110,6 +121,9 @@ export const makeRuntime = ({
   for (const part of parts) {
     if (made.has(part.name)) throw Error(`two runtime parts ${part.name}`);
     made.set(part.name, part.make(runtime));
+  }
+  for (const name of requiredParts) {
+    if (!made.has(name)) throw Error(`no runtime part ${name}`);
   }
   return runtime;
 };

@@ -58,8 +58,8 @@ const cursorNumbers = (cursor, pattern) => {
 
 /**
  * @param {object} powers
- * @param {{ count: () => number, at: (index: number) => any, messageCount: () => number, base?: () => number }} powers.records
- *   the RecordLog (W2.5: `base()` once it seals)
+ * @param {{ count: () => number, at: (index: number) => any, messageCount: () => number, base: () => number }} powers.records
+ *   the RecordLog
  * @param {{ items: () => any[], currentHold: () => any, size: () => number, hold: (reason: any, message: string) => void, enqueueOnce: (submission: any, requestId: string, at: number) => any }} powers.queue
  *   the session's queue
  * @param {any} powers.runner the turn runner (seams of 2.4 item 5)
@@ -80,20 +80,14 @@ export const makeSessionExport = ({
   let importing = 0;
 
   /** @returns {{ sealedTo: number, sealedTurns: number, segments: number, digest: string } | undefined} */
-  const archiveState = () => runner.archive?.state();
+  const archiveState = () => runner.archive.state();
   /** @returns {number} */
-  const keptFrom = () =>
-    typeof records.base === 'function' ? records.base() : 0;
+  const keptFrom = () => records.base();
 
   const deleteSelf = () => {
     if (deleting) return undefined;
     deleting = true;
-    if (typeof runner.beginDelete === 'function') {
-      runner.beginDelete();
-    } else {
-      queue.hold('stopped', texts.sessionDeleting);
-      runner.current()?.turn.cancel();
-    }
+    runner.beginDelete();
     return undefined;
   };
 

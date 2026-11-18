@@ -16,7 +16,7 @@ import { limits } from '../../guest/lib/limits.js';
 import { limitsM5 } from '../../guest/lib/limits-m5.js';
 import { seedsFor } from '../../guest/session/label-seeds.js';
 import { isValidLabel, makeLabels } from '../../guest/session/labels.js';
-import { makeRuntime } from '../../guest/session/m5-parts.js';
+import { makeRuntime, requiredParts } from '../../guest/session/m5-parts.js';
 import {
   builtInToolNames,
   toolSetFor,
@@ -172,10 +172,17 @@ const contextOf = (labels, inspector) =>
       labels,
       services: harden({}),
       config: harden({}),
-      parts:
-        inspector === undefined
-          ? []
-          : harden([{ name: 'inspector', make: () => inspector }]),
+      // The object tools read only `labels` and `inspector`; the other
+      // required parts are empty stand-ins.
+      parts: harden(
+        requiredParts.map(name => ({
+          name,
+          make: () =>
+            name === 'inspector' && inspector !== undefined
+              ? inspector
+              : harden({}),
+        })),
+      ),
     }),
   });
 
@@ -264,10 +271,6 @@ test('lookup of an object: cached names, else the inspector part, never a method
   });
   const labels = makeLabels({
     seeds: harden([{ label: 't', value: target, source: 'endowment' }]),
-  });
-  t.deepEqual(await run('lookup', '{"petName":"t"}', contextOf(labels)), {
-    status: 'failed',
-    text: textOf.notBuilt('lookup of an object'),
   });
   /** @type {any[]} */
   const asked = [];

@@ -143,9 +143,7 @@ const readArgs = (tool, args, spec) => {
  * @returns {{ binding: any } | { outcome: any }}
  */
 const objectBinding = (context, petName) => {
-  const labels = context?.runtime?.labels;
-  if (labels === undefined)
-    return { outcome: failed(textOf.notBuilt('the label map')) };
+  const { labels } = context.runtime;
   const binding = labels.get(petName);
   if (binding === undefined)
     return { outcome: failed(textOfM5.unknownLabel(petName)) };

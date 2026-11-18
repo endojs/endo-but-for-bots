@@ -31,7 +31,9 @@ import {
 } from '../../guest/lib/bounded.js';
 import { HUB_RETIRED_MESSAGE } from '../../guest/lib/retired.js';
 import {
+  NO_CONTENT_TEXT,
   describeParseFailure,
+  isKeysExhausted,
   renderToolResult,
   stripCodeFence,
 } from '../../guest/exec/render.js';
@@ -569,10 +571,9 @@ test('a staged source over execSourceBytes is refused without reading it', async
 test('a staged source without Content, or whose read fails, fails the call and frees the scope', async t => {
   const { run, adapter } = await fresh();
   const args = adapter.stage(argsOf(`return "${'s'.repeat(9000)}".length;`));
-  const { namespace } = await load();
   t.deepEqual(await run(args, { withContent: false }), {
     status: 'failed',
-    text: namespace.NO_CONTENT_TEXT,
+    text: NO_CONTENT_TEXT,
   });
   t.deepEqual(await run(args), { status: 'ok', text: '9000' });
 
@@ -726,9 +727,8 @@ test('M1b QC (J-0391): a staged source abandoned while it is read is never evalu
 });
 
 test('M1b QC (J-0390): an exhausted name table answers exhausted, from arguments, parse or body', async t => {
-  const { namespace } = await load();
-  t.true(namespace.isKeysExhausted(RangeError('property key space exhausted')));
-  t.false(namespace.isKeysExhausted(RangeError('Invalid array length')));
+  t.true(isKeysExhausted(RangeError('property key space exhausted')));
+  t.false(isKeysExhausted(RangeError('Invalid array length')));
   const { exec } = await fresh();
   // The engine's error is simulated: Node has no 64 Ki name table.
   t.deepEqual(await exec('throw RangeError("property key space exhausted");'), {

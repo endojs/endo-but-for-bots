@@ -62,9 +62,6 @@ import { makeMembrane } from './membrane.js';
 import { makeCallPowers } from './powers.js';
 import { makeInspector } from './inspect.js';
 
-// M1b's exports, kept for its tests.
-export { NO_CONTENT_TEXT, isKeysExhausted } from './render.js';
-
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
 // The exo methods are typed loosely; the interface guard checks the values.

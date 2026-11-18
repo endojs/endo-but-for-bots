@@ -22,6 +22,7 @@ import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeQueue } from '../../guest/session/queue.js';
+import { m5Parts } from '../../guest/session/m5-parts.js';
 import { makeSession } from '../../guest/session/session.js';
 import { toolTable } from '../../guest/session/tool-table.js';
 import { turnHooks } from '../../guest/session/turn-hooks.js';
@@ -413,21 +414,22 @@ test('systemTextOf joins a two-part system, each part read as before', async t =
   );
 });
 
-test('Session (M5 guard): grants and enqueueMessageOnce throw notBuilt until their parts exist, then forward', async t => {
-  // With no part registered (the merged table registers both).
-  const s = await makeM5Session({ sessionOptions: { parts: harden([]) } });
-  t.throws(() => s.session.grants(), { message: textOf.notBuilt('grants') });
-  const attachments = harden([{ label: 'notes', value: Far('Notes', {}) }]);
-  t.throws(
-    () =>
-      s.session.enqueueMessageOnce(
-        harden({ text: 'x' }),
-        requestId(),
-        AT,
-        attachments,
-      ),
-    { message: textOf.notBuilt('enqueueMessageOnce') },
+test('Session (M5 guard): a runtime without one of its four parts is refused at construction; grants and enqueueMessageOnce forward', async t => {
+  // HR-SYN-23: a missing part is a construction error, never a model- or
+  // caller-visible "not built yet".
+  await t.throwsAsync(
+    makeM5Session({ sessionOptions: { parts: harden([]) } }),
+    {
+      message: 'no runtime part powers',
+    },
   );
+  const withoutGrants = m5Parts.filter(part => part.name !== 'grants');
+  await t.throwsAsync(
+    makeM5Session({ sessionOptions: { parts: harden(withoutGrants) } }),
+    { message: 'no runtime part grants' },
+  );
+  const attachments = harden([{ label: 'notes', value: Far('Notes', {}) }]);
+  const s = await makeM5Session();
   // The guard refuses 33 attachments before any part runs.
   t.throws(() =>
     s.session.enqueueMessageOnce(
@@ -441,6 +443,9 @@ test('Session (M5 guard): grants and enqueueMessageOnce throw notBuilt until the
   /** @type {any[]} */
   const calls = [];
   const parts = harden([
+    ...m5Parts.filter(
+      part => part.name !== 'grants' && part.name !== 'packages',
+    ),
     { name: 'grants', make: () => harden({ facet }) },
     {
       name: 'packages',

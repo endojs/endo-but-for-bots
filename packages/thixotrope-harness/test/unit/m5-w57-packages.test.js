@@ -283,7 +283,15 @@ const makeM5Session = async ({ parts = [], services = {} } = {}) => {
       services: harden({ backend, host, ...services }),
       rowReporter: Far('RowReporter', { changed: () => {} }),
     },
-    harden({ parts: harden([packagesPart, ...parts, capture]) }),
+    harden({
+      parts: harden([
+        ...m5Parts.filter(
+          part => !parts.some((/** @type {any} */ p) => p.name === part.name),
+        ),
+        ...parts,
+        capture,
+      ]),
+    }),
   );
   await drain();
   const last = () => rounds[rounds.length - 1];
@@ -576,22 +584,5 @@ test('adoptTool grants through the grants part and answers by its schema read', 
   t.deepEqual(granted, [
     [good.value, 'adopted'],
     [bad.value, 'adopted'],
-  ]);
-});
-
-test('adoptTool without a grants part answers notBuilt', async t => {
-  const s = await makeM5Session({
-    services: { execVat: Far('ExecHandle', {}) },
-  });
-  await s.send('tools', attach(['t']));
-  s.answer([
-    {
-      name: 'adoptTool',
-      args: '{"messageNumber":1,"edgeName":"t","toolName":"x"}',
-    },
-  ]);
-  await drain();
-  t.deepEqual(resultsIn(s.last()), [
-    [textOf.errorResult(textOf.notBuilt('adoptTool')), true],
   ]);
 });

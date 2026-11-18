@@ -98,9 +98,6 @@ const messageOf = error => {
   return `${error}`;
 };
 
-// Moved to records.js (M2 W2.5); kept here for existing importers.
-export { plainBytes } from './records.js';
-
 /** @param {string} text */
 const reason = text => previewText(text, limits.reasonUnits);
 
@@ -187,9 +184,6 @@ const zeroUsage = () => ({
  * @param {typeof turnHooks} [options.hooks]
  * @param {readonly any[]} [options.table] tool table
  * @param {number} [options.maxToolRounds]
- * @param {any} [options.contextSource] ignored from M2 on: the runner
- *   builds the session's ContextSource itself (it needs the archive;
- *   m2-interfaces.md 2.4 item 6)
  * @param {readonly any[]} [options.sources] M5 S1: dynamic tool sources
  * @param {() => any} [options.getRuntime] M5 S4: the session's runtime
  *   (`m5-parts.js`), for the tool set and `ToolContext.runtime`
@@ -205,7 +199,6 @@ export const makeTurnRunner = ({
   hooks = turnHooks,
   table = toolTable,
   maxToolRounds = limits.maxToolRounds,
-  contextSource: _ignoredContextSource,
   sources = toolSources,
   getRuntime = () => undefined,
 }) => {
