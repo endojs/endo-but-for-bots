@@ -185,6 +185,17 @@ for (const [receipts, waiting] of [
     session.enqueueOnce(harden({ text: `w${i}` }), rid(AT), AT);
   }
   const { samples, fields } = await overWindow(async () => {
+    // Since R6-44 (M2-FIX, J-9491) send-now cancels the running turn and the
+    // entry is claimed when it settles, so each operation takes one entry
+    // out of the queue: top it up to 99 waiting again, untimed.
+    await new Promise(resolve => setImmediate(resolve));
+    for (
+      let n = session.listPending().entries.length;
+      n < limits.maxWaiting - 1;
+      n += 1
+    ) {
+      session.enqueueOnce(harden({ text: `t${n}` }), rid(AT), AT);
+    }
     const { entries } = session.listPending();
     const last = entries[entries.length - 1].entry;
     const t0 = performance.now();
