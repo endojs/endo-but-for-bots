@@ -12,7 +12,9 @@ report it. Paths: `H/` = `packages/thixotrope-harness/`, `AH/` = `H/resources/ag
 parity checklist); "architecture n" is `designs/architecture.md` section n; "M2 n" is
 `m2-interfaces.md` section n.
 
-Decisions this contract makes (journal J-0510..J-0519):
+Decisions this contract makes (journal J-0510..J-0519; the joint cross-check of the M3, M4 and
+M5 contracts was applied to this file, the guards and the milestones section at W3.0's settle step,
+see "Cross-check" before section 1):
 
 - **D-M3-1 Pass-through bridge.** A signed-in browser holds the daemon's own objects. The gateway
   runs `@endo/captp` per WebSocket connection with the `GatewayPowers` record as the answer of
@@ -29,8 +31,11 @@ Decisions this contract makes (journal J-0510..J-0519):
   key `gateway`, `GatewaySpec` carrying the operator's `Operator`), restored by the kit at every
   start; nothing wakes a session (D-5).
 - **D-M3-4 Extensions by file, not by edit.** Later milestones add gateway services and routes as
-  files under `GW/extensions/` and UI features as `UI/src/<dir>/feature.js`; nobody edits an M3
-  file to add a panel, a route or a gateway service (section 6).
+  files under `GW/extensions/`, UI features as `UI/src/<dir>/feature.js` and browser-sendable
+  record keys as a `vocabularyShapes()` export of their own `guest/lib/interfaces-m<N>.js`; nobody
+  edits an M3 file, `ui/src/features.js` or a key table to add a panel, a route, a gateway service
+  or a record shape (section 6). M3 itself edits no shared contract file (`interfaces.js` is
+  untouched: hotspot H2 extends the manager's facet guard locally).
 - **D-M3-5 The UI is a copy-and-adapt of `space-floot` and `chat/floot-*.js` at 1315bef86**
   (architecture 7), restructured as a controller (`UI/src/controller/`) and views; the view keeps
   its look and texts, the controller speaks to `GatewayPowers` instead of pet names.
@@ -44,6 +49,20 @@ protocol (HTTP, WebSocket, sign-in, guards); 5 what M3 takes from M2; 6 extensio
 other parallel milestones; 7 restart, crash and retry; 8 security; 9 the UI (controller, client
 rules, spec mapping); 10 work units; 11 file ownership and merge hotspots; 12 acceptance; 13
 performance; 14 fixed texts; 15 core requests; 16 owner decisions; 17 module entry points.
+
+**Cross-check (applied at W3.0's settle step).** After the M3, M4 and M5 contracts were read
+together, M3 changed: (1) no edit to `guest/lib/interfaces.js` (old hotspot H1 dropped; the
+manager's facet guard is extended by `withGatewayAdmin` in H2, so the session and exec bundles do
+not grow); (2) `GatewayContext.secretWriter()` and the matching H4 statement, so M4's
+`GW/extensions/m4-secrets.js` can exempt `SecretWriter.replace` from the frame guard; (3) the
+vocabulary loader reads every `interfaces-m*.js` and skips (with a log line) a file without
+`vocabularyShapes()`, and the walk covers interface guards' argument patterns (4.4, 6.3); (4) a
+`feature.js` may export an array of features, `composer.addon` gets the input and
+`replaceRange`, every resend goes through the addon chain, `message.renderer` gets the turn's
+`TurnStarted` record, and the new-session dialog shows preset availability (6.2, 9.1, 9.2); (5)
+M3 owns only `_harness.mjs` and `m3-*.mjs` in `test/browser/`, with `startBrowserGateway` fixed
+(17); (6) the journal range is J-0510..J-0529; (7) the Node perf rows are split over two files
+and `ui.restartReady` uses a 150 s window per mode (13).
 
 ---
 
@@ -119,8 +138,12 @@ caller); **heaviest crank** (in the vat that receives it). Sizes against `frameB
 
 ### 3.1 Manager vat (durable; W3.3, `resources/agent-host/durable-gateway.js`)
 
-`AgentHostAdmin.gateway() -> GatewayAdmin` (the one method M3 adds to an existing interface;
-hotspot H1). The manager keeps one `GatewayAdmin` for its life.
+`AgentHostAdmin.gateway() -> GatewayAdmin` (the one method M3 adds to an existing interface).
+It is added only to the guard of the manager's own facet, in `durable.js`, by
+`withGatewayAdmin(m2Interfaces.AgentHostAdmin)` from `interfaces-m3.js` (hotspot H2);
+`interfaces.js` and `m2MethodNames` are not edited, so the session and exec bundles do not grow
+(0 bytes; W3.3 records it). A caller's `E(admin).gateway()` needs no guard of its own. The manager
+keeps one `GatewayAdmin` for its life.
 
 | method | caller | mode | max | retired break | what the manager does; heaviest crank |
 |---|---|---|---|---|---|
@@ -253,16 +276,32 @@ given to CapTP's `dispatch` (captp's `capdata` body format: `@qclass` encodings 
    Composer's `submit`, `edit`; M4 may add `SecretWriter.replace`); then only `wsMessageBytes`
    holds. Refusal: `messageTooLarge` (architecture 7).
 4. **Key guard.** Walking the body's JSON to depth `argumentDepth` (32; deeper: `tooDeep`), every
-   key of every plain object that is not a `@qclass` encoding must be in the **vocabulary**:
-   the set of record keys of every pattern reachable from `shapes`, `interfaces`, `m2Interfaces`
-   (while M2's tables exist), and every `vocabularyShapes()` export of a
-   `guest/lib/interfaces-m<N>.js` file (loaded by name at adapter start), plus the keys their
-   payloads use. Computed once per incarnation by walking copyRecords, copyArrays and tagged
-   payloads (measured in Node at W3.0: 290 keys from the M2 tables in 22 ms). A key outside it is
-   refused `unexpectedField` (rule 12.10; it also closes the `M.any()` fields of `CreateOptions`,
-   `networkPolicy` and `model`, through which a record of invented keys would reach the factory
-   vat). The vocabulary is a fixed set of names every harness vat's program already contains, so a
-   browser can make a vat intern at most these few hundred names, ever.
+   key of every plain object that is not a `@qclass` encoding must be in the **vocabulary** (6.3):
+   the record keys of every pattern reachable from (a) every value of `shapes`, `interfaces` and,
+   while it exists (until the W2.9 fold), `m2Interfaces` of `guest/lib/interfaces.js`, and (b) the
+   patterns answered by the `vocabularyShapes()` export of **every** `guest/lib/interfaces-m*.js`
+   file (glob `interfaces-m*.js`, so `interfaces-m3.js`, `interfaces-m4.js`, `interfaces-m5.js`,
+   `interfaces-m5-factory.js` and any later one; a file without the export, or whose import or call
+   throws, is logged `{ event: 'vocabulary-skip', file, error }` and skipped). The walk
+   (`collectRecordKeys`) descends copyRecords (keys collected, values walked), copyArrays and
+   tagged values, so it covers shapes **and** interface guards:
+   - a `match:*` tagged value (`M.splitRecord`, `M.or`, `M.arrayOf`, `M.string(limits)`, ...):
+     its payload is walked like any value (so `splitRecord`'s required and optional records give
+     their keys; a limits record adds names such as `stringLengthLimit`, harmless: fixed names
+     every program has);
+   - a `guard:interfaceGuard`: its payload's own keys and the method names (the keys of
+     `methodGuards`) are **not** collected; each method guard in `methodGuards` is walked;
+   - a `guard:methodGuard`: its payload's own keys are not collected; `argGuards`,
+     `optionalArgGuards`, `restArgGuard` and `returnGuard` are walked (an `M.await(...)` wrapper,
+     `guard:awaitArgGuard`, is walked through to its pattern; `guard:rawGuard` adds nothing).
+   No harness pattern uses `M.recordOf`; a lane that adds one gets no free keys through the
+   gateway (its keys must still be in the vocabulary). Computed once per incarnation (measured in
+   Node at W3.0: 290 keys from the M2 tables in 22 ms). A key outside it is refused `unexpectedField` (rule 12.10; it also closes
+   the `M.any()` fields of `CreateOptions`, `networkPolicy` and `model`, through which a record of
+   invented keys would reach the factory vat). The guard checks keys only: which methods an
+   object has stays the business of that object's own exo guard (an undeclared method is refused
+   by the vat as today). The vocabulary is a fixed set of names every harness vat's program
+   already contains, so a browser can make a vat intern at most these few hundred names, ever.
 5. **Calls in flight.** At most `callsInFlight` (32) answered calls per connection whose target
    is not a gateway-local object; one more is refused `tooManyCalls`.
 
@@ -335,8 +374,9 @@ verifies each):
 - A-9. `ModelPage` has no search argument: the dialog filters loaded rows client-side and loads
   further pages with `after` (R6-38's "searchable").
 - A-10. The W2.9 fold of `m2Interfaces` into `interfaces` may land before or after M3 merges; the
-  H1 seam (section 11) names the `AgentHostAdmin` table "the one `durable.js`'s facet uses", which
-  is `m2Interfaces.AgentHostAdmin` before the fold and `interfaces.AgentHostAdmin` after.
+  H2 seam (section 11) passes to `withGatewayAdmin` the `AgentHostAdmin` guard `durable.js`'s facet
+  uses, which is `m2Interfaces.AgentHostAdmin` before the fold and `interfaces.AgentHostAdmin`
+  after. Either is an `M.interface` with `payload.methodGuards` (CC-072).
 - A-11. A presence the hub returns for one of the adapter's own exports resolves to the local
   object (`pkg/src/net/hub.js:804-812`, architecture 7). So the `SecretWriter` a page obtains with
   `E(secretsAdmin).openWriter()` is the adapter's own exo, and a page's `replace(secret, value)`
@@ -360,8 +400,17 @@ adapter loads ES modules synchronously with `require`, so no top-level await) an
   any other target (`largeCalls` exempts named methods).
 - `routes: [{ kind: 'http' | 'upgrade', path, handle }]`: exact paths; an upgrade route does its
   own authentication (M11's `/audio` uses a capability token minted through an extras service).
-- `largeCalls: [{ target(context), methods }]`.
+- `largeCalls: [{ target(context), methods }]`: `target` is awaited once per incarnation, after
+  `whenAttached`; the frame guard compares a call's target with the resolved object by identity.
 - `csp: { directive: [sources] }`: added, never removed.
+
+The `GatewayContext` an extension receives (`contract-m3.js`): `live`, `composer`, `content`,
+`history()`, `whenAttached(callback)`, `secretWriter()` (the incarnation's one `SecretWriter`,
+resolved lazily from `AH/secrets/manager.js`'s `secretWriter`, which makes it once per
+incarnation, so it is the same object a page gets from `SecretsAdmin.openWriter()`, A-11; it
+rejects before the agent host is attached), `stateDir` and `log`. M4's `GW/extensions/m4-secrets.js`
+is `{ name: 'm4-secrets', largeCalls: [{ target: context => context.secretWriter(), methods:
+['replace'] }] }`.
 
 A file is owned by the milestone that adds it (`m4-secrets.js`, `m11-audio.js`, ...). A file that
 throws while loading is logged and skipped; the gateway still serves.
@@ -369,19 +418,42 @@ throws while loading is logged and skipped; the gateway still serves.
 ### 6.2 UI features (files `UI/src/<dir>/feature.js`)
 
 `UI/build.mjs` (W3.4) collects every `UI/src/*/feature.js` in directory-name order into the
-bundle; each exports `feature` (`UiFeature`). Slots (`uiSlots`): `app.panel` (header menu
-panels), `header.chip`, `statusbar.chip`, `composer.addon` (may override `send`),
-`newSession.field`, `session.settings`, `message.renderer`. A feature receives a
-`FeatureContext`: the connection's `powers` (presences), `extra(label)`, the controller
-(read-only state, `subscribe`, the actions of 9.1) and `call(fn)`. The shell renders slots; a
-feature that throws while rendering is shown as an error line in its slot, not a broken page.
-Features use `globalThis.<api>` for browser APIs (lint: section 11, H7).
+bundle (it generates the import list; `UI/src/features.js` is the collector and is never edited
+by another lane). Each file exports `feature`: **one `UiFeature` or an array of them** (so
+`UI/src/accounts/feature.js` may export M4's Subscriptions panel and its status-bar chip, and
+`UI/src/mentions/feature.js` M5's composer addon and its attachment-chip renderer); `id`s are
+unique over all files (the directory name, or `<dir>.<part>` for several), and a duplicate fails
+the build. Slots (`uiSlots`) and the props each slot's `component` receives:
+
+| slot | used by | props |
+|---|---|---|
+| `app.panel` | M4 Secrets, Subscriptions; M5 preset editor; M12 Home | `{ context }`; opened from the header menu by `label` |
+| `header.chip` | M7 Network | `{ context }` |
+| `statusbar.chip` | M4 account chips | `{ context }` |
+| `composer.addon` | M5 mentions, M11 voice | `{ context, input: { text, caret }, replaceRange(start, end, text) }` (`ComposerAddonProps`); optional `send(ComposerSendRequest)`, 9.2 |
+| `newSession.field` | M7 internet toggle | `{ context }` |
+| `session.settings` | M6 emergency stop | `{ context }` |
+| `message.renderer` | M5 attachment chips, M9 captions, M12 widgets | `{ context, turn, record }` (`MessageRendererProps`): once per turn, under the turn's user message; `record` is the turn's `TurnStarted` (or live `turn-start`) record with unknown optional fields kept |
+
+A feature receives a `FeatureContext`: the connection's `powers` (presences), `extra(label)`, the
+controller (read-only state, `subscribe`, the actions of 9.1) and `call(fn)`. The shell renders
+slots; a feature that throws while rendering is shown as an error line in its slot, not a broken
+page. Features use `globalThis.<api>` for browser APIs (lint: section 11, H7).
 
 ### 6.3 Vocabulary
 
-Every `guest/lib/interfaces-m<N>.js` exports `vocabularyShapes()`. The gateway loads them by file
-name (no list to edit), so a record shape a later milestone adds is admitted through the gateway
-once its contract file exists.
+The gateway (`GW/vocabulary.js` `harnessVocabulary`) loads **every** `guest/lib/interfaces-m*.js`
+at adapter start, `interfaces-m5-factory.js` included, and walks the patterns its
+`vocabularyShapes()` export answers; a file without that export, or whose import or call throws,
+is logged and skipped (its keys are then refused, which the lane's own browser test would show).
+The walk covers shapes and interface guards alike (4.4: an interface's method argument patterns
+are walked). The rule for a lane is one line in its own contract file, as M3's:
+
+`export const vocabularyShapes = () => harden([...Object.values(mNShapes), ...Object.values(mNInterfaces)]);`
+
+There is no table to append to: a record shape a later milestone adds is admitted through the
+gateway once its contract file exists and exports the function. Method checking is not the key
+guard's: an undeclared method is refused by the target's own exo guard.
 
 ### 6.4 With M4 (secrets manager, subscription pools) and M5 (presets, prompts, tools, grants)
 
@@ -389,12 +461,16 @@ M3 **needs nothing** from M4 or M5 to build or pass its acceptance. It **offers*
 
 | to | what M3 offers | what the other milestone adds, by file only |
 |---|---|---|
-| M4 | pass-through of `Operator.getSecrets()`, `SecretsAdmin`, `Secret`, `SecretWriter` (adapter-local: a browser's `replace` stays in the agent-host process); `largeCalls`; slots `app.panel`, `statusbar.chip` | `UI/src/secrets/feature.js` (Secrets view, `app.panel`), `UI/src/accounts/feature.js` (account chips, `statusbar.chip`), `GW/extensions/m4-secrets.js` (`largeCalls` for `SecretWriter.replace`, resolving the writer through `secretsAdmin.openWriter()`), `guest/lib/interfaces-m4.js` `vocabularyShapes()`. A secret value must fit `wsMessageBytes` (1 MiB) with its JSON envelope: M4 states its own bound |
-| M5 | `composer.addon` with `send` override (mentions travel beside the text through whatever Composer method M5 adds, e.g. a gateway extension service); `newSession.field`; `app.panel` | `UI/src/presets/feature.js`, `UI/src/mentions/feature.js`, possibly `GW/extensions/m5-mentions.js`, `guest/lib/interfaces-m5.js` `vocabularyShapes()`. Preset objects pass through as `Preset` presences |
+| M4 | pass-through of `Operator.getSecrets()`, `SecretsAdmin`, `Secret`, `SecretWriter` (adapter-local: a browser's `replace` stays in the agent-host process, A-11); `GatewayContext.secretWriter()` for its `largeCalls` target; slots `app.panel`, `statusbar.chip` | `UI/src/secrets/feature.js` (Secrets view, `app.panel`, label "Secrets"); `UI/src/accounts/feature.js` exporting an array: the Subscriptions panel (`app.panel`) and the account chip (`statusbar.chip`); `GW/extensions/m4-secrets.js` (`largeCalls: [{ target: c => c.secretWriter(), methods: ['replace'] }]`); `export const vocabularyShapes` in `guest/lib/interfaces-m4.js`; `test/browser/m4-*.mjs`. A secret value must fit `wsMessageBytes` (1 MiB) with its JSON and CapTP envelope: M4 states its own browser bound below that |
+| M5 | `composer.addon` with `ComposerAddonProps` (input text and caret, `replaceRange`) and the `send` override, used for the first send and every resend (9.2); `message.renderer` with the turn's `TurnStarted` record (attachment chips); `app.panel`; the new-session dialog reads `Preset.describe()` `available` / `unavailableReason` when present (9.1) | `UI/src/presets/feature.js` (preset editor, `app.panel`); `UI/src/mentions/feature.js` exporting an array: the mention addon (`composer.addon`, whose `send` calls `E(context.powers.composer).submit(session, text, requestId, { attachments })` and throws a fixed text on a resend whose chips a reload lost) and the attachment-chip renderer (`message.renderer`); `export const vocabularyShapes` in both `guest/lib/interfaces-m5.js` and `interfaces-m5-factory.js`; `test/browser/m5-*.mjs`. Preset objects pass through as `Preset` presences |
 
-M4 and M5 keep their UI units last (after W3.0 is merged; they need no other M3 unit until their
-own integration, where they need W3.4's shell and W3.7's gateway). The PM merges M3's group A
-before M4's or M5's UI integration runs.
+**Testing against M3 from another lane.** M4's and M5's UI component tests import
+`test/unit/_m3-fake-powers.js` (W3.4, section 17) and so run once M3's group A is merged into the
+shared branch. Their browser acceptance (M4 #14, M5 #15) is written against
+`test/browser/_harness.mjs` `startBrowserGateway` (W3.8, section 17; fixed signature) and runs, gated
+by `THIX_HARNESS_BROWSER=1`, after M3 is merged; no other acceptance item of M4 or M5 waits on M3.
+In `test/browser/`, M3 owns `_harness.mjs` and `m3-*.mjs`, M4 `m4-*.mjs`, M5 `m5-*.mjs`. The PM
+merges M3 first (its group A as early as possible), then M4, then M5.
 
 ### 6.5 Later milestones
 
@@ -469,10 +545,13 @@ re-read after each `subscribe` notification):
 { connection: 'unconfigured'|'connecting'|'open'|'reconnecting'|'starting'|'refused',
   sessions: [{ key, title, state, activity, backendTitle, modelId, effort?, messageCount,
                queuedCount }],           // from listSessions + the list feed; `key` names a row (F.2 d)
-  activeKey, presets: [{ index, label }], backends: [{ index, label, kind }],
+  activeKey,
+  presets: [{ index, label, available, unavailableReason? }], // from listPresets + describe()
+  backends: [{ index, label, kind }],
   models: { rows, state, next?, error? }, // for the new-session dialog
   view: { info, messages, streamingText, phase, busy, current?, pending, hold?,
-          usage, earlier: 'none'|'more'|'loading', status } | null,
+          usage, earlier: 'none'|'more'|'loading', status,
+          input: { text, caret }, sendError? } | null,
   recovery: { turns, next?, loading } | null, settingsOpen, drawerOpen }
 ```
 
@@ -480,10 +559,22 @@ Actions: `selectSession(key)`, `newSession({ presetIndex?, backendIndex?, modelS
 title? })`, `renameSession(key, title)`, `deleteSession(key)`, `send(text)`, `stop()`,
 `sendPendingNow(entryKey)`, `editPending(entryKey, text)`, `cancelPending(entryKey)`,
 `loadEarlier()`, `openRecovery()`, `resolveTurn(turnId, note)`, `readContent(staged) -> text`,
-`setInput(text)`, `toggleDrawer()`, `toggleSettings()`, `refreshModels(backendIndex)`. String keys
+`setInput(text, caret?)`, `replaceInput(start, end, text)` (what `replaceRange` calls),
+`toggleDrawer()`, `toggleSettings()`, `refreshModels(backendIndex)`. String keys
 appear only where the page re-finds an object it holds (F.2 d): the controller keeps
 `Map<key, Session>` from the rows it received, `Map<entryKey, QueueEntry>` from `PendingRow`s,
 turns by `turnId` from history pages.
+
+**Presets in the new-session dialog** (R6-38): the controller calls `listPresets()` and then
+`E(preset).describe()` for each and keeps `{ index, label, available, unavailableReason }`; a
+description without `available` (M2's chat-only presets) counts as available. The dialog shows an
+unavailable row disabled with its `unavailableReason` under the label; it cannot be chosen. A
+`describe()` that rejects shows the row disabled with `uiTextOf.statusError(message)`.
+
+**Records are kept as received.** Every record and event the controller stores (history-page
+records, `VatEvent`s, `PendingRow`s) is kept as the daemon sent it; the controller reads the fields
+it knows and never copies records onto M2's keys, so an optional field a later milestone adds
+(M5's `TurnStarted.attachments`) reaches `message.renderer`.
 
 ### 9.2 Client rules
 
@@ -500,11 +591,22 @@ turns by `turnId` from history pages.
 - **Live** (M1a 5): `watch()` first, then `subscribe(session, rev)`; a rev gap or a `closed`
   batch re-watches. One `next()` waiting per subscription.
 - **Exactly once** (R6-41, R6-42): before sending, the page writes `{ sessionKey, text,
-  requestId }` to `localStorage` under a Web Lock named for the session; then
-  `Composer.submit(session, text, requestId)`; on the receipt it clears the draft. After a
-  reconnect, a saved draft is checked with `getSubmissionReceipt(requestId)` and resent only if
-  there is none. Without `navigator.locks` the composer is disabled with `uiTexts.noWebLocks`.
-  `requestId` = 32 hex digits from `crypto.getRandomValues`.
+  requestId }` to `localStorage` under a Web Lock named for the session; then it sends through the
+  **addon chain**: each `composer.addon` feature with a `send`, in slot order, is called with
+  `{ context, session, text, requestId, resend: false }`; the first that answers a promise sends
+  (its promise answers the `Receipt`); if none does, the controller calls
+  `Composer.submit(session, text, requestId)`. On the receipt it clears the draft. After a
+  reconnect or reload, a saved draft is checked with `getSubmissionReceipt(requestId)`; only if it
+  answers none is it resent, **through the same chain** with `resend: true` (an addon that keeps
+  state beside the draft, such as M5's attachment chips, sees the resend and either sends the same
+  submission or throws). When a `send` (or `Composer.submit`) rejects, the draft is kept, the
+  composer's text is left as it was, and `view.sendError` shows the error's message
+  (`uiTextOf.statusError`) until the next edit or send; nothing is retried automatically except
+  the resend after a reconnect. The user's next Send in that session reuses the saved draft's
+  `requestId` with the composer's current text (no receipt exists for it, so the id is unspent;
+  if the lost original lands first, the receipt answers `duplicate: true` and the page shows the
+  original). Without `navigator.locks` the composer is disabled with
+  `uiTexts.noWebLocks`. `requestId` = 32 hex digits from `crypto.getRandomValues`.
 - **Stop** (R6-49): `E(turn).cancel()` on the running turn; leaving the page cancels nothing.
 - **Send now** (R6-44): `E(entry).sendNow()`; for the head entry while a turn runs, also
   `E(turn).cancel()` (the spec's "cancels the running turn so it goes next").
@@ -517,12 +619,12 @@ turns by `turnId` from history pages.
 |---|---|---|
 | R6-36 sidebar, status circle, two lines, "No sessions yet" | `UI/src/sessions/Sidebar.js` | rows; `uiTextOf.rowCounts` |
 | R6-37 rename (Enter, Esc, double-click title), delete with `confirm` | `Sidebar.js`, `UI/src/shell/Header.js` | `rename`, `deleteSession` |
-| R6-38, R6-39 new-session dialog | `UI/src/sessions/NewSession.js` | `listPresets`, `listBackends`, `listModels`; `ModelRow.reasoningEfforts` for R6-39; feature slot `newSession.field` |
-| R6-40 composer (Enter, Shift+Enter, IME) | `UI/src/conversation/Composer.js` | `Composer.submit`; slot `composer.addon` |
+| R6-38, R6-39 new-session dialog | `UI/src/sessions/NewSession.js` | `listPresets` + `Preset.describe()` (`available`, `unavailableReason` when present), `listBackends`, `listModels`; `ModelRow.reasoningEfforts` for R6-39; feature slot `newSession.field` |
+| R6-40 composer (Enter, Shift+Enter, IME) | `UI/src/conversation/Composer.js` | the addon chain then `Composer.submit` (9.2); slot `composer.addon` with `ComposerAddonProps` |
 | R6-43 blocked sending with a status | `Composer.js` | row state, A-5 |
 | R6-44 queue rows | `UI/src/conversation/Queue.js` | `PendingView`, `pending` events, hold line |
 | R6-45 bubble, thinking row, phase, tool groups, exec highlight, `</>`, Load earlier | `UI/src/conversation/{MessageList,ToolGroup,highlight,RawView}.js` | fold snapshot, deltas, `VatEvent`s, history pages |
-| R6-46 plain text, http(s) links in a new tab | `MessageList.js` | slot `message.renderer` for later renderers |
+| R6-46 plain text, http(s) links in a new tab | `MessageList.js` | slot `message.renderer` (`{ context, turn, record }`, once per turn under the user message) for later renderers |
 | R6-49 Stop | `Composer.js` | `Turn.cancel` |
 | R6-51 status rows, Details, recovery panel, Record acknowledgement | `UI/src/conversation/{StatusRow,Recovery}.js` | `TurnStatus`, history pages, `Turn.resolve` / `Session.findTurn` |
 | R6-52 status bar | `UI/src/shell/StatusBar.js` | `UsageTotals`; slot `statusbar.chip` |
@@ -540,13 +642,13 @@ and tests against fakes for its own group's siblings.
 | id | group | owns (disjoint) | depends on | tests | supervisor | estimate (one Opus agent) | slower if |
 |---|---|---|---|---|---|---|---|
 | W3.1 HTTP server, sign-in, limiter | A | `GW/{server,static,csp,signin,limiter}.js`, `GW/.gitignore` (`assets/`), `test/adapter/m3-w31-*.test.js` | M2 secrets store exports | adapter: shell for every path, assets and cache headers, 400 on query config, 403 on a foreign Origin, 404 off `/ws`, connection caps; limiter (penalty, cumulative, forget after 10 s, trusted-proxy keys, untrusted XFF ignored, global ceiling) with a fake clock; `signin.enc` round trip, rotation atomic (kill a child mid-write), digest compare | no | 4 h | `ws` upgrade handling and Origin edge cases; the wrapping key helper's error paths |
-| W3.2 CapTP bridge and guards | A | `GW/{bridge,guard,vocabulary,powers,extensions}.js`, `GW/extensions/` (empty, a `README.md`), `test/adapter/_m3-captp-client.js`, `test/adapter/m3-w32-*.test.js`, `test/fixtures/gateway-extension/` | M2 shapes | adapter, over an in-memory socket pair: bootstrap and `fetch`; pass-through of `Far` objects standing in for vat presences (calls, results with nested remotables, identity); each refusal of 4.4 with nothing reaching the target; `largeCalls`; exports cap; subscriptions closed at close; extension loading (a fixture extension's service, route and csp; a throwing file skipped) | no | 6 h | A-1 fails (forwarding wrappers needed, +3 h); captp's internal slot conventions differ from 4.4 (read `captp.js`) |
-| W3.3 manager side and vat contract seams | A | `resources/agent-host/durable-gateway.js`, seam lines H1 (`guest/lib/interfaces.js`), H2 (`resources/agent-host/durable.js`), H3 (`AH/attach.js`), `test/unit/m3-interfaces.test.js`, `test/unit/m3-w33-*.test.js` | this contract | unit: every M3 guard accepts the samples of `interfaces-m3.js` and refuses an extra key, an oversize string or array; `AgentHostAdmin` still has every M2 method plus `gateway`; `GatewayAdmin` with a fake kit (`register`, `close`, restore) and fake ops: serve, replace, status before and after attach, retired ops -> `starting`, rotate without ops -> `gatewayNotAttached`, stop; `makeAttach` dispatches `gateway` binds to its binding and still refuses unknown keys; bundle sizes recorded (session, exec, factory, manager) | no | 3 h | the manager-vat bundle rejects something in `interfaces-m3.js` (guest lint, bundling) |
-| W3.4 UI foundation | A | `UI/build.mjs`, `UI/index.html`, `UI/src/{main.js,features.js}`, `UI/src/{net,controller,shell,styles}/`, `test/unit/_m3-fake-powers.js`, `test/unit/m3-ui-{build,controller,shell}*.test.js` | this contract | unit (happy-dom): fragment parsing (R6-10, R6-11), reconnect schedule with a fake clock, refused -> "Server starting...", rebuild after reconnect, re-attach of a running turn, rev-gap re-watch, exactly-once draft rules with a fake lock and storage, feature collection and slot rendering (a throwing feature isolated), drawer at 640 px; build: bundle size and gzip size recorded, content-hashed names, shell embeds `GATEWAY_PROTOCOL` | no | 7 h | SES lockdown + captp in the browser bundle; bundle over 600 KB gz; happy-dom gaps |
-| W3.5 sessions UI | B | `UI/src/sessions/`, `test/unit/m3-ui-sessions*.test.js` | W3.4 | unit with `_m3-fake-powers.js`: sidebar rows and circles, empty text, live insert/rename/remove, rename keys, delete confirm, new-session dialog (presets, backends, catalogue pages, filter, Factory default, unavailable text, effort refusal R6-39), slot `newSession.field` | no | 4 h | adapting `space-floot` `FlootApp`/`SessionSidebar`/`ProviderModelFields` away from string ids |
-| W3.6 conversation UI | B | `UI/src/conversation/`, `test/unit/m3-ui-conversation*.test.js` | W3.4 | unit: streaming bubble from deltas, thinking row and phase, tool groups and "Thought for", exec highlight, raw view, plain text and links, status rows R6-51, recovery panel paging (kept and archived pages, fake `History`), acknowledgement, queue rows with Send now/Edit/Delete/Send again and the hold line, Stop, blocked sending (A-5), usage bar, large content paging | no | 7 h | `MessageList.js` (1,000+ lines) carries Endo-specific shapes; the fold events differ from Floot's |
-| W3.7 gateway wiring | B | `GW/index.js`, seam H4 (`AH/index.js`), H5 (`scripts/provision-steps.js` step), `scripts/gateway.mjs`, `test/integration/_m3-gateway.js`, `test/integration/m3-gateway.test.js`, `test/integration/m3-sessions.test.js` | W3.1, W3.2, W3.3 | integration (Node CapTP client over a real WebSocket, scripted backend): acceptance 1, 2, 3, 10, 11, 12 (protocol part), 13, 14, 16; kill points K1, K2 | **yes** | 5 h | A-3 (kit restore order) or A-1 surprises; port reuse after SIGKILL |
-| W3.8 integration | alone | `test/browser/`, `test/integration/m3-reconnect.test.js`, `perf/{ui,gateway}.perf.mjs`, `perf/_m3-client.mjs`, the M3 rows of `README.md` (PM-merged) | all | browser (Playwright, gated) and integration: acceptance 4-9, 12 (UI part), 15; K3-K5; every perf row of section 13; checks section 5 against M2 as merged; no stub left | **yes** | 6 h | Playwright set-up in a lane; the 300-turn fixture import (about 40 s) if no template is cached |
+| W3.2 CapTP bridge and guards | A | `GW/{bridge,guard,vocabulary,powers,extensions}.js`, `GW/extensions/` (empty, a `README.md` stating 6.1 and the `GatewayContext`), `test/adapter/_m3-captp-client.js`, `test/adapter/m3-w32-*.test.js`, `test/fixtures/gateway-extension/` | M2 shapes | adapter, over an in-memory socket pair: bootstrap and `fetch`; pass-through of `Far` objects standing in for vat presences (calls, results with nested remotables, identity); each refusal of 4.4 with nothing reaching the target; vocabulary (6.3): keys of `interfaces-m3.js` shapes and of an interface's method argument patterns admitted, a fixture `interfaces-m*.js` without `vocabularyShapes` logged and skipped, a throwing one skipped, a glob over a temporary `guestLibDir`; `largeCalls` (target resolved after `whenAttached`, compared by identity); exports cap; subscriptions closed at close; extension loading (a fixture extension's service, route and csp; a throwing file skipped) | no | 6 h | A-1 fails (forwarding wrappers needed, +3 h); captp's internal slot conventions differ from 4.4 (read `captp.js`) |
+| W3.3 manager side and vat contract seams | A | `resources/agent-host/durable-gateway.js`, seam lines H2 (`resources/agent-host/durable.js`), H3 (`AH/attach.js`), `test/unit/m3-interfaces.test.js`, `test/unit/m3-w33-*.test.js` | this contract | unit: every M3 guard accepts the samples of `interfaces-m3.js` and refuses an extra key, an oversize string or array; `withGatewayAdmin(m2Interfaces.AgentHostAdmin)` is an interface named `AgentHostAdmin` whose methods are exactly `[...m2MethodNames.AgentHostAdmin, ...m3AgentHostAdminMethodNames]` (pins `payload.methodGuards`, CC-072); `GatewayAdmin` with a fake kit (`register`, `close`, restore) and fake ops: serve, replace, status before and after attach, retired ops -> `starting`, rotate without ops -> `gatewayNotAttached`, stop; `makeAttach` dispatches `gateway` binds to its binding and still refuses unknown keys; bundle sizes recorded (session and exec: growth 0 bytes against `3588cab190`, since `interfaces.js` is not edited; factory; manager with its growth) | no | 3 h | the manager-vat bundle rejects something in `interfaces-m3.js` (guest lint, bundling) |
+| W3.4 UI foundation | A | `UI/build.mjs`, `UI/index.html`, `UI/src/{main.js,features.js}`, `UI/src/{net,controller,shell,styles}/`, `test/unit/_m3-fake-powers.js`, `test/unit/m3-ui-{build,controller,shell}*.test.js` | this contract | unit (happy-dom): fragment parsing (R6-10, R6-11), reconnect schedule with a fake clock, refused -> "Server starting...", rebuild after reconnect, re-attach of a running turn, rev-gap re-watch, exactly-once draft rules with a fake lock and storage, the addon chain (9.2: first `send` wins, `undefined` passes, a rejection keeps the draft and sets `sendError`, a resend goes through the chain with `resend: true` only after `getSubmissionReceipt` answered none), records kept with unknown fields, presets with `describe()` availability (missing `available` = available), feature collection (single and array exports, duplicate `id` fails the build) and slot rendering (a throwing feature isolated), drawer at 640 px; build: bundle size and gzip size recorded, content-hashed names, shell embeds `GATEWAY_PROTOCOL` | no | 7 h | SES lockdown + captp in the browser bundle; bundle over 600 KB gz; happy-dom gaps |
+| W3.5 sessions UI | B | `UI/src/sessions/`, `test/unit/m3-ui-sessions*.test.js` | W3.4 | unit with `_m3-fake-powers.js`: sidebar rows and circles, empty text, live insert/rename/remove, rename keys, delete confirm, new-session dialog (presets with an unavailable one shown disabled with its reason, backends, catalogue pages, filter, Factory default, unavailable text, effort refusal R6-39), slot `newSession.field` | no | 4 h | adapting `space-floot` `FlootApp`/`SessionSidebar`/`ProviderModelFields` away from string ids |
+| W3.6 conversation UI | B | `UI/src/conversation/`, `test/unit/m3-ui-conversation*.test.js` | W3.4 | unit: streaming bubble from deltas, thinking row and phase, tool groups and "Thought for", exec highlight, raw view, plain text and links, status rows R6-51, recovery panel paging (kept and archived pages, fake `History`), acknowledgement, queue rows with Send now/Edit/Delete/Send again and the hold line, Stop, blocked sending (A-5), `sendError` line, usage bar, large content paging; slots: a fixture `composer.addon` receives `input` and edits it with `replaceRange` (caret after the insert), a fixture `message.renderer` receives `{ context, turn, record }` with an unknown record field kept, for a kept, an archived and a live turn | no | 7 h | `MessageList.js` (1,000+ lines) carries Endo-specific shapes; the fold events differ from Floot's |
+| W3.7 gateway wiring | B | `GW/index.js`, seam H4 (`AH/index.js`), H5 (`scripts/provision-steps.js` step), `scripts/gateway.mjs`, `test/integration/_m3-gateway.js`, `test/integration/m3-gateway.test.js`, `test/integration/m3-sessions.test.js` | W3.1, W3.2, W3.3 | integration (Node CapTP client over a real WebSocket, scripted backend): acceptance 1, 2, 3, 10, 11, 12 (protocol part), 13, 14, 16 (the fixture extension also resolves `context.secretWriter()` after attach and gets the object `SecretsAdmin.openWriter()` answers); kill points K1, K2 | **yes** | 5 h | A-3 (kit restore order) or A-1 surprises; port reuse after SIGKILL |
+| W3.8 integration | alone | `test/browser/_harness.mjs`, `test/browser/m3-*.mjs`, `test/integration/m3-reconnect.test.js`, `perf/{ui,gateway,gateway-session}.perf.mjs`, `perf/_m3-client.mjs`, the M3 rows of `README.md` (PM-merged) | all | browser (Playwright, gated) and integration: acceptance 4-9, 12 (UI part), 15; K3-K5; every perf row of section 13; `startBrowserGateway` (17) used by M3's own browser files exactly as M4 and M5 will use it; checks section 5 against M2 as merged; no stub left | **yes** | 6 h | Playwright set-up in a lane; the 300-turn fixture import (about 40 s) if no template is cached |
 
 Wall time with one agent per unit: about 7 h (group A) + 7 h (group B) + 6 h (W3.8) = **20 h**.
 
@@ -555,28 +657,36 @@ Wall time with one agent per unit: about 7 h (group A) + 7 h (group B) + 6 h (W3
 ## 11. File ownership and merge hotspots
 
 Everything else M3 touches is a **new file** under `GW/`, `UI/`, `resources/agent-host/durable-gateway.js`,
-`scripts/gateway.mjs`, `guest/lib/interfaces-m3.js`, `test/**/m3-*`, `test/browser/`,
-`perf/{ui,gateway}.perf.mjs`, `perf/_m3-client.mjs`. M3 edits **no** factory, session, exec or
-provider file, no `config/defaults.js` (gateway settings are in `contract-m3.js`), no
-`tsconfig.json` (UI files are linted, not type-checked: decision 11), no root `eslint.config.js`.
+`scripts/gateway.mjs`, `guest/lib/interfaces-m3.js`, `test/**/m3-*`, `test/browser/_harness.mjs`,
+`test/unit/_m3-fake-powers.js`, `perf/{ui,gateway,gateway-session}.perf.mjs`, `perf/_m3-client.mjs`.
+M3 edits **no** factory, session, exec or provider file, no `guest/lib/interfaces.js`, no
+`config/defaults.js` (gateway settings are in `contract-m3.js`), no `tsconfig.json` (UI files are
+linted, not type-checked: decision 11), no root `eslint.config.js`.
 
 Hotspots: each is an edit to a file another lane may also edit, with the exact seam.
 
 | id | file | owner in M3 | seam (the whole M3 change) | who else may edit it |
 |---|---|---|---|---|
-| H1 | `guest/lib/interfaces.js` | W3.3 | one import line `import { m3AgentHostAdminMethods, m3AgentHostAdminMethodNames } from './interfaces-m3.js';`; one spread line `...m3AgentHostAdminMethods(),` as the **last** entry of the `AgentHostAdmin` method table `durable.js` uses (A-10); one spread `...m3AgentHostAdminMethodNames` as the last entry of that interface's name list | M4 (pool or accounts methods on `AgentHostAdmin`, if any), M5 (factory and session methods), the W2.9 fold. Proposed to M4 and M5: the same pattern (an `m<N>…Methods()` thunk in their own `interfaces-m<N>.js`, one spread line each), so three lanes add three adjacent lines and the PM's merge is a union |
-| H2 | `resources/agent-host/durable.js` | W3.3 | `import { makeGatewayManager } from './durable-gateway.js';` after the last import; `const gateway = makeGatewayManager({ manager });` right after `const manager = makeManager(...)`; `gateway: () => gateway.admin,` as the last entry of the facet's method object | M4 (pools: refusal marks, last-served records, kinds), the W2.9 fold. M3's three lines touch nothing M4 edits if M4 also appends |
+| H1 | `guest/lib/interfaces.js` | - | **none** (dropped at the cross-check): M3 does not edit it. `gateway()` is added to the manager facet's guard in H2 by `withGatewayAdmin`, so the session and exec bundles carry no M3 code (0 bytes) | owner M5 (W5.3's widenings); M4 one line (BackendKind) |
+| H2 | `resources/agent-host/durable.js` | W3.3 | three edits: `import { makeGatewayManager } from './durable-gateway.js';` and `import { withGatewayAdmin } from '../../guest/lib/interfaces-m3.js';` after the last import (two import lines); `const gateway = makeGatewayManager({ manager });` right after `const manager = makeManager(...)`; the facet line becomes `const facet = makeExo('AgentHostAdmin', withGatewayAdmin(m2Interfaces.AgentHostAdmin), {` (after the W2.9 fold `interfaces.AgentHostAdmin`) with `gateway: () => gateway.admin,` as the **last** method of its object | owner M4 (W4.1, six H-2 seams). M3's lines touch nothing M4 edits if M4 also appends; if M4 also wraps the facet guard, the wrappers nest (`withGatewayAdmin(withM4(base))`) |
 | H3 | `AH/attach.js` | W3.3 | `makeAttach({ ops, incarnation, onSink, bindings = {} })`: `bind(key, spec, epoch)` and `unbind(binding, key)` hand any key other than `SERVICE_KEY` to `bindings[key]` (`{ bind(spec), unbind() }`) and still throw for a key with no binding (about 8 lines in two functions) | M4 (ops methods in `makeOpsInterface`, a different function) |
-| H4 | `AH/index.js` | W3.7 | `import { makeGatewayService } from './gateway/index.js';` (one line); after `const composer = ...` and `archive`: `const gateway = makeGatewayService({ live, composer, content, history: () => archive.history(), blobs, timers });` (one statement); `makeAttach({ ..., bindings: { [GATEWAY_KEY]: gateway.binding } })` (one property) and `gateway.attached()` as the last line of `onSink` | M4 (`backendKinds` entries, secrets wiring), M5 (none expected) |
+| H4 | `AH/index.js` | W3.7 | `import { makeGatewayService } from './gateway/index.js';` and `import { GATEWAY_KEY } from '../../../guest/lib/interfaces-m3.js';` (two import lines after the last import); immediately **before** `const { bind, unbind } = makeAttach({`: `const gateway = makeGatewayService({ live, composer, content, history: () => archive.history(), blobs, timers, secretWriter: () => secrets().secretWriter() });` (one statement; `secretWriter` is called lazily, after `whenAttached`); `bindings: { [GATEWAY_KEY]: gateway.binding },` as the last property of the `makeAttach` options; `gateway.attached();` as the last line of `onSink` | owner M4 (W4.6, H-4 seams: subscriptions after the secrets helper, ops handlers inside `makeOps`); M5 none expected. M3's statement sits after `makeOps(...)` and before `makeAttach`, away from M4's insertions |
 | H5 | `scripts/provision-steps.js` | W3.7 | one appended step `{ name: 'gateway', run }`, skipped unless `options.gateway` (`{ port, publicOrigin?, trustedProxies? }`) is given; tests serve their own gateway on port 0 instead | hook table (append-only) |
 | H6 | `H/package.json` (PM-merged) | W3.4 asks, PM merges | dependencies `@endo/captp`, `@endo/marshal`, `ws`, `preact`, `ses`; dev `esbuild`, `happy-dom`, `@playwright/test`; scripts `build:ui` (`node ui/build.mjs`), `test:browser` | M4, M5 (their own deps) |
 | H7 | lint | - | none: UI code reads browser APIs as `globalThis.document`, `globalThis.localStorage`, ... so the root config needs no browser globals | - |
-| H8 | `JOURNAL.md` | every unit | J-0500..J-0599 (W3.0 used J-0510..J-0519) | union merge |
+| H8 | `JOURNAL.md` | every unit | J-0510..J-0529: W3.0 used J-0510..J-0519; build units take J-0520..J-0529 in unit order; further numbers from the PM | union merge |
 
-Not hotspots: `UI/src/features.js` and `GW/extensions.js` are M3's own collectors that nobody else
-edits (6.1, 6.2); the milestones conventions' "hook tables `AH/gateway/routes.js` and
-`H/ui/src/features.js`" become these directory registries (for the PM to update in the conventions
-list).
+Not hotspots (directory registries; each lane adds its own new files, nobody edits a list):
+
+| registry | collector (M3 only) | what another lane adds |
+|---|---|---|
+| `UI/src/<dir>/` | `UI/build.mjs`, `UI/src/features.js` | one directory with a `feature.js` per lane feature group: M3 `sessions`, `conversation`, `shell`, `net`, `controller`, `styles`; M4 `secrets`, `accounts` (and `account-chip` if needed); M5 `presets`, `mentions` |
+| `GW/extensions/` | `GW/extensions.js` (and its `README.md`) | M4 `m4-secrets.js`; M11 `m11-audio.js` |
+| `guest/lib/interfaces-m*.js` `vocabularyShapes()` | `GW/vocabulary.js` | the one export line in each lane's own contract file (M4: `interfaces-m4.js`; M5: `interfaces-m5.js`, `interfaces-m5-factory.js`) |
+| `test/browser/` | M3 owns `_harness.mjs` and `m3-*.mjs` | M4 `m4-*.mjs`, M5 `m5-*.mjs`, written against `startBrowserGateway` (17) |
+
+The milestones conventions' "hook tables `AH/gateway/routes.js` and `H/ui/src/features.js`" are
+these directory registries (the PM updates the conventions list).
 
 ---
 
@@ -633,38 +743,56 @@ WebSocket (`test/integration/_m3-gateway.js`); "browser" is Playwright headless 
     page instead leaves the turn running to completion.
 16. A fixture extension (`test/fixtures/gateway-extension/`, copied into `GW/extensions/` by the
     test and removed after) adds a service in `extras`, an HTTP route and a CSP source, and a
-    fixture feature adds an `app.panel`, with no M3 file edited; a throwing extension file is
-    skipped and the gateway still serves.
+    fixture feature adds an `app.panel`, with no M3 file edited; the fixture extension's
+    `context.secretWriter()`, resolved after attach, is the same object a client gets from
+    `E(E(operator).getSecrets()).openWriter()` (the client passes that presence back to a fixture
+service method `sameWriter(writer)`, which compares identities in the adapter); a throwing extension
+    file is skipped and the gateway still serves.
 
 ---
 
 ## 13. Performance
 
-Rules (D-M3-6): each row is one measured point over a **fixed window of 60 s** (unless stated)
-and reports median, p95, p99, max and the number of samples the window held; a point with too
-few samples says so and does not run longer; each perf file runs under 10 minutes in exclusive
-mode; fixtures are imported (`writeSyntheticExport` + `importState`) and cached as a template
-(`m3-300`: one 300-turn session with a tool round per turn, about 40 s to import once). Files:
-`perf/gateway.perf.mjs` (Node client rows) and `perf/ui.perf.mjs` (browser rows, `[browser]`).
+Rules (D-M3-6): each row is one measured point over a **fixed window** (60 s unless stated) and
+reports median, p95, p99, max and the number of samples the window held; a point with too few
+samples says so and does not run longer; no row counts a fixed number of runs. Each perf file
+runs under 10 minutes in exclusive mode (the run lock enforces it): before opening a window, a
+file checks its elapsed time and, if the window would end after 9 min 30 s, reports that row as
+`not measured: file time` instead of starting it. Fixtures are imported (`writeSyntheticExport`
++ `importState`) and cached as a template (`m3-300`: one 300-turn session with a tool round per
+turn, about 40 s to import once, `perf/_m3-client.mjs` `ensureM3Template()`); nothing grows a
+session by replaying turns.
 
-| metric | window | budget | why this budget |
-|---|---|---|---|
-| `gateway.fetch` sign-in to powers (Node client, loopback) | 60 s, sequential | median <= 50 ms; 0 vat deliveries | all in the adapter process; a WS round trip and a digest compare |
-| `gateway.guard` pre-dispatch check of a `frameBytes` call (in process) | 60 s | median <= 2 ms per call | must stay far below a vat crank (tens of ms) so the guard never dominates |
-| `ui.call` `E(session).listPending()` from a client | 60 s, sequential | median <= 150 ms | architecture 11 queue round trip: one session crank (about 60 ms at steady state, J-0461) plus the hub and WS hops |
-| `ui.submit` `Composer.submit` while a turn runs, receipt latency | 60 s, a turn always running | median <= 150 ms | M2 `queue.enqueue` (same path plus WS) |
-| `ui.deltaFanout` 5 clients, scripted chunks every 50 ms, adapter publish to each client's frame | 60 s | median <= 5 ms per delta, p99 recorded; 0 vat deliveries per delta | D-8: deltas never cross a vat; 0.15-0.18 ms in process today (J-9173) plus a loopback WS write |
-| `ui.snapshot` `watch()` of the `m3-300` session | 60 s | median <= 300 ms; message <= frameBytes | architecture 11 "session watch snapshot"; the archive keeps the session at 128-159 turns, so 300 stands for any length |
-| `ui.history` newest page (vat) and an archived page (`History`) through the gateway | 60 s each | <= 300 ms each | M2 `history.page` budget (vat page measured 286-312 ms, J-0461; recorded, not re-based) |
-| `ui.reconnect` socket open to rebuilt state (`fetch`, list, `subscribeList`, `watch`, `subscribe`, `getCurrentTurn`, newest page) | 60 s, repeated reconnects | median <= 1 s | R6-13 rebuild should feel immediate; about 5 vat cranks |
-| `ui.coldLoad` navigation to sessions listed (browser), bundle bytes and gzip bytes | 60 s, fresh contexts | median <= 1.5 s on loopback; bundle <= 600 KB gz | architecture 11; SES lockdown and captp dominate the bundle |
-| `ui.hubGrowth` hub image + log bytes and the session's hub row entries, while one browser reloads every 10 s and a turn runs every 5 s | 5 min | hub state <= 2 MB at the end; session row entries <= 1.25 x the start once the viewer is closed and the vat has run 32 cranks | J-9386, J-9392: viewer-held presences are hub row entries; they must be released, not accumulate |
-| `ui.restartReady` supervisor serving to the gateway accepting a `fetch`, clean restart and SIGKILL | 5 runs each (under 3 min) | <= 2 s after serving | S2 (c): restore re-attaches 62-68 ms after serving; the rest is the listen and the sign-in file read |
-| too-big probes: a 100 KiB call, 2,000 fresh keys, depth 33, 33 calls in flight, 4,097 exports | single | refused; no halt; 0 deliveries to the target vat | 4.4, 4.5 |
+| metric | file | window | budget | why this budget |
+|---|---|---|---|---|
+| `gateway.fetch` sign-in to powers (Node client, loopback) | `gateway` | 60 s, sequential | median <= 50 ms; 0 vat deliveries | all in the adapter process; a WS round trip and a digest compare |
+| `gateway.guard` pre-dispatch check of a `frameBytes` call (in process) | `gateway` | 60 s | median <= 2 ms per call | must stay far below a vat crank (tens of ms) so the guard never dominates |
+| `ui.call` `E(session).listPending()` from a client | `gateway` | 60 s, sequential | median <= 150 ms | architecture 11 queue round trip: one session crank (about 60 ms at steady state, J-0461) plus the hub and WS hops |
+| `ui.submit` `Composer.submit` while a turn runs, receipt latency | `gateway` | 60 s, a turn always running | median <= 150 ms | M2 `queue.enqueue` (same path plus WS) |
+| `ui.deltaFanout` 5 clients, scripted chunks every 50 ms, adapter publish to each client's frame | `gateway` | 60 s | median <= 5 ms per delta, p99 recorded; 0 vat deliveries per delta | D-8: deltas never cross a vat; 0.15-0.18 ms in process today (J-9173) plus a loopback WS write |
+| too-big probes: a 100 KiB call, 2,000 fresh keys, depth 33, 33 calls in flight, 4,097 exports | `gateway` | single probe each (a correctness check, not a rate; under 30 s together) | refused; no halt; 0 deliveries to the target vat | 4.4, 4.5 |
+| `ui.snapshot` `watch()` of the `m3-300` session | `gateway-session` | 60 s | median <= 300 ms; message <= frameBytes | architecture 11 "session watch snapshot"; the archive keeps the session at 128-159 turns, so 300 stands for any length |
+| `ui.history.newest` newest page (vat) through the gateway | `gateway-session` | 60 s | median <= 300 ms | M2 `history.page` budget (vat page measured 286-312 ms, J-0461; recorded, not re-based) |
+| `ui.history.archived` an archived page (`History`) through the gateway | `gateway-session` | 60 s | median <= 300 ms | as above |
+| `ui.reconnect` socket open to rebuilt state (`fetch`, list, `subscribeList`, `watch`, `subscribe`, `getCurrentTurn`, newest page) | `gateway-session` | 60 s, repeated reconnects | median <= 1 s | R6-13 rebuild should feel immediate; about 5 vat cranks |
+| `ui.restartReady.clean`, `ui.restartReady.sigkill` supervisor serving to the gateway accepting a `fetch` | `gateway-session` | restarts repeated over a 150 s window per mode (clean, SIGKILL), sample count reported | median <= 2 s after serving | S2 (c): restore re-attaches 62-68 ms after serving; the rest is the listen and the sign-in file read |
+| `ui.coldLoad` navigation to sessions listed (browser), bundle bytes and gzip bytes | `ui` | 60 s, fresh contexts | median <= 1.5 s on loopback; bundle <= 600 KB gz | architecture 11; SES lockdown and captp dominate the bundle |
+| `ui.hubGrowth` hub image + log bytes and the session's hub row entries, while one browser reloads every 10 s and a turn runs every 5 s | `ui` | 5 min | hub state <= 2 MB at the end; session row entries <= 1.25 x the start once the viewer is closed and the vat has run 32 cranks | J-9386, J-9392: viewer-held presences are hub row entries; they must be released, not accumulate |
 
-The milestone's regression run (process.md 3): unit and adapter lanes, the four integration files
-spread over the shared slots (each under 5 minutes), then the two perf files (under 10 minutes
-each) in exclusive mode: about 18 minutes.
+Files and their time (all owned by W3.8; `perf/<file>.perf.mjs`):
+
+| file | rows | measured windows | set-up | worst case |
+|---|---|---|---|---|
+| `gateway.perf.mjs` | fetch, guard, call, submit, deltaFanout, probes | 5 x 60 s + probes (30 s) | serve the `m2` template, start the supervisor (about 30 s) | about 6 min |
+| `gateway-session.perf.mjs` | snapshot, history.newest, history.archived, reconnect, restartReady (both modes) | 4 x 60 s + 2 x 150 s | `ensureM3Template()` (about 40 s when not cached), serve (about 20 s) | about 9 min with the template cached. The `m3-300` template is built before the perf files by the run's fixture step (`node perf/_m3-client.mjs template`, about 40 s, under the run lock; acceptance 8 builds it too if it runs first); uncached, the 9 min 30 s guard may report the last window `not measured: file time` |
+| `ui.perf.mjs` (`[browser]`, `THIX_HARNESS_BROWSER=1`) | coldLoad, hubGrowth | 60 s + 5 min | build the UI, serve, launch Chromium (about 1 min) | about 7 min |
+
+**Wall time.** The test files (unit and adapter lanes, about 2 min; the integration files
+`m3-gateway`, `m3-sessions`, `m3-reconnect` and the browser file `test/browser/m3-ui.mjs`, each
+under 5 minutes, on the four shared slots) take about 8 minutes. The three perf files run one
+after another in exclusive mode and take about 22 minutes. If the owner's 20-minute bound for a
+milestone's regression run includes its perf files, M3 does not fit it as stated (owner decision
+12); the windows are the owner's 60 s rule and the reviewed 150 s restart window.
 
 ---
 
@@ -711,8 +839,14 @@ requests, filed only if a measurement says so:
 - **CC-051 (conditional on `ui.hubGrowth`): per-entry diffs of a hub session row.** Motivation: a
   viewer's presences add entries to its vats' hub rows, and the log store rewrites a changed row
   whole (J-9335 (a), J-9386). This is C-2's rest, already a candidate; M3 adds evidence, not a new
-  change. Harness workaround: `exportsPerConnection`, `gcImports`, and the UI dropping pages it no
-  longer shows.
+  change. It and M4's CC-060 (an alleged interface name stored once per export row of the
+  exporting peer, not per holder entry) both change the hub row format in `pkg/src/net/hub.js`:
+  core should make them one hub-format change. Harness workaround: `exportsPerConnection`,
+  `gcImports`, and the UI dropping pages it no longer shows.
+
+**Cited, not filed: CC-072** (M5: `getInterfaceGuardPayload` in the guest prelude). M3's
+`withGatewayAdmin` reads `base.payload.methodGuards` as M5's `extendInterface` does; W3.3's unit
+test pins it. If CC-072 lands, `withGatewayAdmin` switches to the helper with no contract change.
 
 ---
 
@@ -736,6 +870,11 @@ requests, filed only if a measurement says so:
 10. **Web Locks** required (R6-41): browsers without them cannot send. Default kept.
 11. **UI type checking**: `ui/` is linted, not in `tsconfig.json` (no DOM lib in the package's
     type check). Default lint only.
+12. **Perf files and the 20-minute regression bound.** M3's test files take about 8 minutes on
+    four slots; its three perf files (each under 10 minutes, 60 s windows, 150 s restart windows)
+    take about 22 minutes in exclusive mode (13). Default: the perf pass runs after the regression
+    run, not inside its 20 minutes. If the bound includes perf, the owner says which rows to drop
+    or shorten.
 
 ---
 
@@ -748,8 +887,8 @@ Every unit exports exactly these (more is allowed; these names and signatures ar
 
 | file | export |
 |---|---|
-| `guest/lib/interfaces-m3.js` (vat, Node) | `GATEWAY_KEY`, `m3Limits`, `m3Texts`, `m3TextOf`, `m3Shapes`, `m3Interfaces`, `m3MethodNames`, `m3AgentHostAdminMethods`, `m3AgentHostAdminMethodNames`, `vocabularyShapes` |
-| `GW/contract-m3.js` (Node, browser) | `GATEWAY_PROTOCOL`, `WS_PATH`, `gatewayLimits`, `closeCodes`, `gatewayTexts`, `cspDirectives`, `reconnectDelaysMs`, `connectDeadlineMs`, `drawerMaxWidthPx`, `uiSlots`, `uiTexts`, `uiTextOf`; typedefs `GatewayContext`, `GatewayRoute`, `GatewayService`, `LargeCall`, `GatewayExtension`, `UiFeature`, `FeatureContext` |
+| `guest/lib/interfaces-m3.js` (vat, Node) | `GATEWAY_KEY`, `m3Limits`, `m3Texts`, `m3TextOf`, `m3Shapes`, `m3Interfaces`, `m3MethodNames`, `m3AgentHostAdminMethods`, `m3AgentHostAdminMethodNames`, `withGatewayAdmin(base)`, `vocabularyShapes` |
+| `GW/contract-m3.js` (Node, browser) | `GATEWAY_PROTOCOL`, `WS_PATH`, `gatewayLimits`, `closeCodes`, `gatewayTexts`, `cspDirectives`, `reconnectDelaysMs`, `connectDeadlineMs`, `drawerMaxWidthPx`, `uiSlots`, `uiTexts`, `uiTextOf`; typedefs `GatewayContext` (with `secretWriter`), `GatewayRoute`, `GatewayService`, `LargeCall`, `GatewayExtension`, `UiFeature`, `ComposerAddonProps`, `ComposerSendRequest`, `MessageRendererProps`, `FeatureContext` |
 
 ### W3.1 (Node)
 
@@ -767,7 +906,7 @@ Every unit exports exactly these (more is allowed; these names and signatures ar
 |---|---|---|
 | `GW/bridge.js` | `makeBridge` | `({ makeBootstrap, vocabulary, isLargeCall, limits?, log }) -> { connect(socket) -> { close(code, reason), stats() -> { exports, inFlight, refused } } }`; `makeBootstrap({ address, onClose }) -> GatewayBootstrap` |
 | `GW/guard.js` | `checkCall` | `({ message, targetOf, vocabulary, isLargeCall, inFlight, limits }) -> undefined \| string` (the refusal text) |
-| `GW/vocabulary.js` | `collectRecordKeys`, `harnessVocabulary` | `(patterns: any[]) -> Set<string>`; `({ guestLibDir? }) -> Set<string>` (shapes, interfaces, every `interfaces-m*.js` `vocabularyShapes()`) |
+| `GW/vocabulary.js` | `collectRecordKeys`, `harnessVocabulary` | `(patterns: any[]) -> Set<string>` (walks copyRecords, copyArrays and tagged payloads, so interface guards' method argument patterns too; 4.4); `({ guestLibDir?, log }) -> Set<string>` (`interfaces.js` tables, then every `guestLibDir/interfaces-m*.js` in name order through its `vocabularyShapes()`; a file without it or that throws: `log({ event: 'vocabulary-skip', file, error })` and skipped) |
 | `GW/powers.js` | `makeBootstrapFactory` | `({ signIn, limiter, operator, live, content, composer, history, extras }) -> ({ address, onClose }) -> GatewayBootstrap` (per connection: the `Live` facade that closes its subscriptions) |
 | `GW/extensions.js` | `loadGatewayExtensions` | `({ dir?, log }) -> GatewayExtension[]` |
 | `test/adapter/_m3-captp-client.js` | `makeClient` | `({ send, onClose? }) -> { receive(bytes), bootstrap(), close() }` (Node CapTP over any message transport) |
@@ -789,7 +928,7 @@ Every unit exports exactly these (more is allowed; these names and signatures ar
 | `UI/src/controller/index.js` | `makeController` | 9.1 |
 | `UI/src/features.js` | `features`, `featuresFor` | the collected `UiFeature`s; `(slot) -> UiFeature[]` |
 | `UI/src/shell/App.js` | `App` | Preact component `({ controller, features })` |
-| `test/unit/_m3-fake-powers.js` (Node) | `makeFakePowers` | `({ sessions?, script? }) -> { powers, control }`: Far objects with the M2 methods of 3.3, a scripted turn driver and a fake `Live` |
+| `test/unit/_m3-fake-powers.js` (Node) | `makeFakePowers` | `({ sessions?, script?, operatorMethods?, presets?, extras? }) -> { powers, control }`: Far objects with the M2 methods of 3.3, a scripted turn driver and a fake `Live`; `operatorMethods` adds methods to the fake `Operator` (M4: `getSecrets`, accounts; M5: preset catalogue), `presets` replaces the `listPresets()` answer (objects with `describe()`), `extras` fills `GatewayPowers.extras`. Fixed signature: M4's and M5's component tests use it |
 
 ### W3.5, W3.6 (browser)
 
@@ -802,6 +941,13 @@ Every unit exports exactly these (more is allowed; these names and signatures ar
 
 | file | export | signature |
 |---|---|---|
-| `GW/index.js` | `makeGatewayService` | `({ live, composer, content, history, blobs, timers, stateDir?, log? }) -> { binding: { bind(spec), unbind() }, attached(), close() }`; `bind(GatewaySpec)` listens, attaches `GatewayOps` to `spec.sink` and answers |
+| `GW/index.js` | `makeGatewayService` | `({ live, composer, content, history, blobs, timers, secretWriter, stateDir?, log? }) -> { binding: { bind(spec), unbind() }, attached(), close() }`; `bind(GatewaySpec)` listens, attaches `GatewayOps` to `spec.sink` and answers; `secretWriter: () => Promise<SecretWriter>` is passed to extensions as `GatewayContext.secretWriter` and called only after `attached()` |
 | `scripts/gateway.mjs` (Node, operator) | CLI `serve <state> --port N [--origin O] [--proxy A]...`, `status <state>`, `rotate <state>`, `stop <state>`, `url <state> [--host H]` |
 | `test/integration/_m3-gateway.js` | `serveGateway(state, options?) -> { url, origin, secret, admin, connect(options?) -> client }` |
+
+### W3.8 (Node, browser tests)
+
+| file | export | signature |
+|---|---|---|
+| `test/browser/_harness.mjs` | `startBrowserGateway` | `({ template, provision? }) -> Promise<{ page, url, client, close() }>`: serves `template` (a state template name, e.g. `'m2'`, `'m3-300'`) under the run lock, awaits `provision({ root, operator })` if given (the `HarnessRoot` and its `Operator` presences, for a lane's own set-up such as secrets or presets), before the gateway serves, builds the UI if `GW/assets/` is missing, serves the gateway on port 0, launches headless Chromium and opens `url` (the fragment sign-in URL) in `page` (a Playwright `Page`); `client` is a signed-in Node CapTP client (`serveGateway`'s `connect()`); `close()` closes the browser, the gateway and the supervisor. Callers gate their file on `THIX_HARNESS_BROWSER=1` (tag `[browser]`); called without it, it throws. This signature is fixed: M4's `m4-*.mjs` and M5's `m5-*.mjs` call it |
+| `perf/_m3-client.mjs` | `ensureM3Template`, CLI `template` | `() -> Promise<templatePath>` (imports `m3-300` once and caches it) |

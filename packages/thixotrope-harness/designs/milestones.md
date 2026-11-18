@@ -621,18 +621,28 @@ cited below.
   R6-75, R6-76, R7-2, R7-11, R7-13, R7-17, R7-46..R7-49, R8-39; fixes W-1, W-8, W-15.
 - **Depends on:** M2 (built; `m3-interfaces.md` 5 lists every M2 object and method used and the
   assumptions A-1..A-11). Parallel with M4 and M5. **W3.0 is merged before M4 or M5 start a UI
-  unit**; they add UI and gateway services by new files only (`m3-interfaces.md` 6).
+  unit**; they add UI features, gateway extensions and browser-sendable record keys by new files
+  only (`m3-interfaces.md` 6, 11 "Not hotspots"). M4's and M5's UI component tests use M3's
+  `test/unit/_m3-fake-powers.js` once M3's group A is merged; their browser acceptance (M4 #14,
+  M5 #15) uses `test/browser/_harness.mjs` `startBrowserGateway` and runs after M3 is merged. Merge
+  order M3, M4, M5.
 - **Owns (new files):** `AH/gateway/` (server, static, csp, signin, limiter, bridge, guard,
   vocabulary, powers, extensions loader, index, `contract-m3.js`; `extensions/` is a directory
   others add files to), `H/resources/agent-host/durable-gateway.js`,
   `H/guest/lib/interfaces-m3.js`, `H/ui/` (`build.mjs`, `index.html`,
   `src/{main.js,features.js,net,controller,shell,styles,sessions,conversation}`),
-  `H/scripts/gateway.mjs`, `H/test/**/m3-*`, `H/test/browser/`, `H/perf/{ui,gateway}.perf.mjs`,
-  `H/perf/_m3-client.mjs`. **Shared edits** (merge hotspots H1-H6 with their exact seams,
-  `m3-interfaces.md` 11): `guest/lib/interfaces.js` (one import, two spreads),
-  `resources/agent-host/durable.js` (three lines), `AH/attach.js` (`bindings` option),
-  `AH/index.js` (one import, one statement, one property, one line), `scripts/provision-steps.js`
-  (one appended step), `package.json` (PM-merged).
+  `H/scripts/gateway.mjs`, `H/test/**/m3-*`, `H/test/unit/_m3-fake-powers.js`,
+  `H/test/browser/_harness.mjs` and `H/test/browser/m3-*.mjs` (M4 and M5 own their own
+  `m4-*`/`m5-*` files there), `H/perf/{ui,gateway,gateway-session}.perf.mjs`,
+  `H/perf/_m3-client.mjs`. **Shared edits** (merge hotspots with their exact seams,
+  `m3-interfaces.md` 11): none in `guest/lib/interfaces.js` (H1 dropped; session and exec bundles
+  grow 0 bytes); `resources/agent-host/durable.js` (H2: two imports, `const gateway =
+  makeGatewayManager({ manager })`, the facet guard `withGatewayAdmin(m2Interfaces.AgentHostAdmin)`
+  with `gateway: () => gateway.admin` as its last method), `AH/attach.js` (H3: `bindings` option
+  of `makeAttach`), `AH/index.js` (H4: two imports, one `makeGatewayService` statement with
+  `secretWriter` before `makeAttach`, one `bindings` property, `gateway.attached()` in `onSink`),
+  `scripts/provision-steps.js` (H5: one appended step, gated on `options.gateway`), `package.json`
+  (H6, PM-merged). Journal J-0510..J-0529 (build units J-0520..J-0529).
 
 **Design in brief.** The gateway is part of the agent-host adapter and a second manager-kit
 registration (`gateway`) of its native resource, restored at every start (D-M3-3). A page signs in
@@ -648,15 +658,15 @@ W3.8 alone; files, entry points and estimates in `m3-interfaces.md` 10, 17)
 
 | id | group | files | behaviour | tests | supervisor |
 |---|---|---|---|---|---|
-| W3.0 contract | - | `designs/m3-interfaces.md`, `guest/lib/interfaces-m3.js`, `AH/gateway/contract-m3.js` | **Done** (J-0510..J-0519). Objects, protocol, seams, restart and security, units, acceptance, perf | - | no |
+| W3.0 contract | - | `designs/m3-interfaces.md`, `guest/lib/interfaces-m3.js`, `AH/gateway/contract-m3.js` | **Done** (J-0510..J-0519), with the M3/M4/M5 cross-check applied (`m3-interfaces.md` "Cross-check"). Objects, protocol, seams, restart and security, units, acceptance, perf | - | no |
 | W3.1 HTTP server, sign-in, limiter | A | `AH/gateway/{server,static,csp,signin,limiter}.js` | loopback listener; shell for every non-upgrade GET, hashed assets, CSP, 400 on query configuration; `/ws` upgrade with the Origin check and connection caps; sign-in secret in `signin.enc` (wrapping key, rotation atomic); +1,000 ms per failure per client address with trusted-proxy forwarding, forget after 10 s, global ceiling | adapter tests (fake clock, child-process kill mid-write) | no |
-| W3.2 CapTP bridge and guards | A | `AH/gateway/{bridge,guard,vocabulary,powers,extensions}.js`, the Node CapTP test client | per-connection captp; bootstrap `fetch` -> `GatewayPowers`; pass-through of daemon objects; pre-dispatch frame, key, depth, page-object and in-flight guards; export cap; per-connection `Live` facade; extension loader | adapter tests over an in-memory socket pair | no |
-| W3.3 manager side and seams | A | `resources/agent-host/durable-gateway.js`; seams H1-H3 | `AgentHostAdmin.gateway()` -> `GatewayAdmin` (`serve`, `status`, `rotateSignIn`, `stop`) over a kit registration carrying the operator; `makeAttach` `bindings` | unit: the M3 guards (contract samples), `GatewayAdmin` with a fake kit, attach dispatch; bundle sizes | no |
-| W3.4 UI foundation | A | `ui/build.mjs`, `ui/index.html`, `ui/src/{main.js,features.js,net,controller,shell,styles}`, fake powers | esbuild bundle (SES, captp, Preact) into `AH/gateway/assets/`; fragment parsing; connection with the R6-14 schedule and "Server starting..."; controller (sessions, live view, exactly-once drafts with Web Locks, rebuild and re-attach); shell, overlay, drawer, status bar, feature slots | unit with happy-dom | no |
-| W3.5 sessions UI | B | `ui/src/sessions/` | sidebar (circles, two lines, live), rename and delete, new-session dialog (presets, backends, catalogue with Factory default, R6-39) | unit with fake powers | no |
-| W3.6 conversation UI | B | `ui/src/conversation/` | streaming bubble, thinking row, tool groups, exec highlight, raw view, links, status rows, recovery panel and acknowledgement, queue rows, Stop, blocked sending, usage bar, large content | unit with fake powers | no |
-| W3.7 gateway wiring | B | `AH/gateway/index.js`, seams H4-H5, `scripts/gateway.mjs`, `test/integration/{_m3-gateway,m3-gateway,m3-sessions}*` | `makeGatewayService` composes W3.1-W3.2 for the kit binding; provisioning step; operator script (serve, status, rotate, stop, url) | integration: acceptance 1-3, 10-14 (protocol), 16; kill points K1, K2 | **yes** |
-| W3.8 integration | alone | `test/browser/`, `test/integration/m3-reconnect.test.js`, `perf/{ui,gateway}.perf.mjs`, `perf/_m3-client.mjs` | browser acceptance, kill points K3-K5, every perf row; checks `m3-interfaces.md` 5 against M2 as merged | browser (Playwright, `THIX_HARNESS_BROWSER=1`) and integration | **yes** |
+| W3.2 CapTP bridge and guards | A | `AH/gateway/{bridge,guard,vocabulary,powers,extensions}.js`, `AH/gateway/extensions/README.md`, the Node CapTP test client | per-connection captp; bootstrap `fetch` -> `GatewayPowers`; pass-through of daemon objects; pre-dispatch frame, key, depth, page-object and in-flight guards; key vocabulary from every `interfaces-m*.js` `vocabularyShapes()` (shapes and interface argument patterns; a file without it logged and skipped); export cap; per-connection `Live` facade; extension loader | adapter tests over an in-memory socket pair | no |
+| W3.3 manager side and seams | A | `resources/agent-host/durable-gateway.js`; seams H2 (`durable.js`), H3 (`AH/attach.js`) | `AgentHostAdmin.gateway()` -> `GatewayAdmin` (`serve`, `status`, `rotateSignIn`, `stop`) over a kit registration carrying the operator, added to the manager facet's guard by `withGatewayAdmin`; `makeAttach` `bindings` | unit: the M3 guards (contract samples), `withGatewayAdmin` methods = M2's plus `gateway` (pins `payload.methodGuards`, CC-072), `GatewayAdmin` with a fake kit, attach dispatch; bundle sizes (session and exec growth 0 bytes) | no |
+| W3.4 UI foundation | A | `ui/build.mjs`, `ui/index.html`, `ui/src/{main.js,features.js,net,controller,shell,styles}`, `test/unit/_m3-fake-powers.js` | esbuild bundle (SES, captp, Preact) into `AH/gateway/assets/`; fragment parsing; connection with the R6-14 schedule and "Server starting..."; controller (sessions, presets with availability, live view, records kept as received, exactly-once drafts with Web Locks sent and resent through the `composer.addon` chain, rebuild and re-attach); shell, overlay, drawer, status bar, feature slots (a `feature.js` exports one feature or an array) | unit with happy-dom | no |
+| W3.5 sessions UI | B | `ui/src/sessions/` | sidebar (circles, two lines, live), rename and delete, new-session dialog (presets from `describe()`, unavailable ones disabled with their reason; backends; catalogue with Factory default; R6-39) | unit with fake powers | no |
+| W3.6 conversation UI | B | `ui/src/conversation/` | streaming bubble, thinking row, tool groups, exec highlight, raw view, links, status rows, recovery panel and acknowledgement, queue rows, Stop, blocked sending, send-error line, usage bar, large content; `composer.addon` props (input, caret, `replaceRange`) and `message.renderer` props (`{ context, turn, record }`) | unit with fake powers | no |
+| W3.7 gateway wiring | B | `AH/gateway/index.js`, seams H4-H5, `scripts/gateway.mjs`, `test/integration/{_m3-gateway,m3-gateway,m3-sessions}*` | `makeGatewayService` composes W3.1-W3.2 for the kit binding, with `GatewayContext.secretWriter` for extensions; provisioning step; operator script (serve, status, rotate, stop, url) | integration: acceptance 1-3, 10-14 (protocol), 16; kill points K1, K2 | **yes** |
+| W3.8 integration | alone | `test/browser/_harness.mjs`, `test/browser/m3-*.mjs`, `test/integration/m3-reconnect.test.js`, `perf/{ui,gateway,gateway-session}.perf.mjs`, `perf/_m3-client.mjs` | `startBrowserGateway({ template, provision? }) -> { page, url, client, close() }` for M3, M4 and M5 browser files; browser acceptance, kill points K3-K5, every perf row; checks `m3-interfaces.md` 5 against M2 as merged | browser (Playwright, `THIX_HARNESS_BROWSER=1`) and integration | **yes** |
 
 **Acceptance tests** (each under 5 minutes; `m3-interfaces.md` 12 says which file and whether
 through the Node client or the browser)
@@ -698,25 +708,33 @@ through the Node client or the browser)
 14. The status bar shows `↑in ↓out · ctx N%` equal to `getUsage()`.
 15. ■ Stop cancels the running turn; closing the page leaves it running to completion.
 16. A fixture gateway extension and UI feature add a service, a route, a CSP source and a panel
-    with no M3 file edited; a throwing extension file is skipped.
+    with no M3 file edited; the extension's `context.secretWriter()` after attach is the object
+    `SecretsAdmin.openWriter()` answers; a throwing extension file is skipped.
 
 **Perf checks** (each a fixed window, 60 s per point unless stated, median and p95/p99 with the
-sample count; each file under 10 minutes; fixtures by import, the `m3-300` template; with the M2
-archive a 300-turn session stands for any length, J-0461)
-| check | window | budget |
-|---|---|---|
-| `gateway.fetch` sign-in to powers | 60 s | <= 50 ms; 0 vat deliveries |
-| `gateway.guard` pre-dispatch check of a `frameBytes` call | 60 s | <= 2 ms per call |
-| `ui.call` client `E(session).listPending()` | 60 s | <= 150 ms |
-| `ui.submit` `Composer.submit` while a turn runs | 60 s | <= 150 ms |
-| `ui.deltaFanout` 5 clients, adapter chunk to each WS frame | 60 s | <= 5 ms per delta; 0 vat deliveries per delta |
-| `ui.snapshot` `watch()` of the 300-turn session | 60 s | <= 300 ms; message <= `frameBytes` |
-| `ui.history` newest (vat) and archived (`History`) page through the gateway | 60 s each | <= 300 ms each |
-| `ui.reconnect` socket open to rebuilt state | 60 s | <= 1 s |
-| `ui.coldLoad` navigation to sessions listed (browser), bundle size | 60 s | <= 1.5 s; bundle <= 600 KB gz |
-| `ui.hubGrowth` hub state and the session's hub row while a browser reloads every 10 s and turns run | 5 min | hub <= 2 MB; row entries back to <= 1.25 x the start after the viewer closes |
-| `ui.restartReady` serving to the gateway answering `fetch` (clean and SIGKILL) | 5 runs each | <= 2 s |
-| too-big probes: 100 KiB call, 2,000 fresh keys, depth 33, 33 calls in flight, 4,097 exports | single | refused; no halt; 0 deliveries to the target |
+sample count; no row counts runs; each file under 10 minutes, a file reports a window it cannot
+finish by 9 min 30 s as not measured; fixtures by import, the cached `m3-300` template; with the
+M2 archive a 300-turn session stands for any length, J-0461). Files (`m3-interfaces.md` 13):
+`perf/gateway.perf.mjs` (about 6 min), `perf/gateway-session.perf.mjs` (about 9 min with the
+template cached), `perf/ui.perf.mjs` (browser, about 7 min).
+| check | file | window | budget |
+|---|---|---|---|
+| `gateway.fetch` sign-in to powers | gateway | 60 s | <= 50 ms; 0 vat deliveries |
+| `gateway.guard` pre-dispatch check of a `frameBytes` call | gateway | 60 s | <= 2 ms per call |
+| `ui.call` client `E(session).listPending()` | gateway | 60 s | <= 150 ms |
+| `ui.submit` `Composer.submit` while a turn runs | gateway | 60 s | <= 150 ms |
+| `ui.deltaFanout` 5 clients, adapter chunk to each WS frame | gateway | 60 s | <= 5 ms per delta; 0 vat deliveries per delta |
+| too-big probes: 100 KiB call, 2,000 fresh keys, depth 33, 33 calls in flight, 4,097 exports | gateway | one probe each (correctness) | refused; no halt; 0 deliveries to the target |
+| `ui.snapshot` `watch()` of the 300-turn session | gateway-session | 60 s | <= 300 ms; message <= `frameBytes` |
+| `ui.history.newest` (vat) and `ui.history.archived` (`History`) page through the gateway | gateway-session | 60 s each | <= 300 ms each |
+| `ui.reconnect` socket open to rebuilt state | gateway-session | 60 s | <= 1 s |
+| `ui.restartReady` serving to the gateway answering `fetch` | gateway-session | restarts repeated over 150 s per mode (clean, SIGKILL), sample count reported | <= 2 s |
+| `ui.coldLoad` navigation to sessions listed (browser), bundle size | ui | 60 s | <= 1.5 s; bundle <= 600 KB gz |
+| `ui.hubGrowth` hub state and the session's hub row while a browser reloads every 10 s and turns run | ui | 5 min | hub <= 2 MB; row entries back to <= 1.25 x the start after the viewer closes |
+
+Test files take about 8 minutes on four slots; the three perf files about 22 minutes in exclusive
+mode after them (owner decision 12 in `m3-interfaces.md` 16: whether the 20-minute bound covers
+perf).
 
 **Fit risk:** good. CapTP-through-adapter is the mail-UI bridge pattern
 (`pkg/src/platform/node/mail-ui-server.js`) with object references instead of tokens, and with
