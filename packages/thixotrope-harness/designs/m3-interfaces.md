@@ -271,6 +271,16 @@ given to CapTP's `dispatch` (captp's `capdata` body format: `@qclass` encodings 
 2. **Page objects.** A call whose `method.slots` name an object or promise the **browser**
    exported (`o+n`, `p+n` from the browser's side) is refused `browserObject`: no durable vat may
    hold a per-connection object (rule 12.7), and the gateway has no use for page callbacks.
+   **As built (X-FIX, J-10054): gateway-local objects that must never reach a vat.** A
+   gateway-local object marked with `GW/powers.js` `markNeverLeaves` (today only the page's
+   secret writer, `GW/index.js`; the mark also makes it gateway-local) may be the target of a
+   call, or an argument of a call to another gateway-local object (an extension's service), but a
+   call toward a target that is not gateway-local whose `method.slots` name it, directly or nested
+   in a record, is refused `gatewayObject` (`gatewayTexts.gatewayObject`, section 14) before
+   anything is dispatched (`GW/guard.js` rule 2, `isNeverLeaving`). A later lane marks any
+   gateway-local object of its own that a vat must not hold the same way. Not checked: a
+   gateway-exported promise (`p-n`) that later resolves to such an object; the writer is only ever
+   handed out as an object in `extras`, never as a promise.
 3. **Frame guard.** `Buffer.byteLength(method.body)` must be at most `frameBytes`, unless the
    target is a `LargeCall` local object and the method is one of its `methods` (M3: the
    Composer's `submit`, `edit`; M4 adds the gateway's in-process secret writer's `replace`,
@@ -279,7 +289,9 @@ given to CapTP's `dispatch` (captp's `capdata` body format: `@qclass` encodings 
 4. **Key guard.** Walking the body's JSON to depth `argumentDepth` (32; deeper: `tooDeep`), every
    key of every plain object that is not a `@qclass` encoding must be in the **vocabulary** (6.3):
    the record keys of every pattern reachable from (a) every value of `shapes`, `interfaces` and,
-   while it exists (until the W2.9 fold), `m2Interfaces` of `guest/lib/interfaces.js`, and (b) the
+   while it exists (until the W2.9 fold), `m2Interfaces` of `guest/lib/interfaces.js` (as built,
+   X1, J-9942: the fold is done and `m2Interfaces` is a view of the same guards, so it adds no
+   key; `GW/vocabulary.js` still reads it when present), and (b) the
    patterns answered by the `vocabularyShapes()` export of **every** `guest/lib/interfaces-m*.js`
    file (glob `interfaces-m*.js`, so `interfaces-m3.js`, `interfaces-m4.js`, `interfaces-m5.js`,
    `interfaces-m5-factory.js` and any later one; a file without the export, or whose import or call
@@ -336,8 +348,8 @@ target and the connection stays open. Results flow back unchecked (they come fro
   (the bridge dispatches to the gateway's captp the `CTP_DROP` the page would have sent, so the
   answer and its payload are released). A well-behaved long-lived page is never closed for it; a
   later call pipelined on a forgotten answer is refused `notSignedIn` (rule 1). Only when every
-  kept answer is still unsettled is the connection closed with `closeCodes.tooManyObjects`.
-  `stats()` of a connection reports `answers`, `answersPeak`, `answersEvicted`, and the
+  kept answer is still unsettled is the connection closed with `closeCodes.tooManyObjects`
+  (4008, reason `too many answers`; as built, XA, J-10008). `stats()` of a connection reports `answers`, `answersPeak`, `answersEvicted`, and the
   `gateway-connection-closed` log line carries the last two. Measured with `perf/gateway.perf.mjs`
   (the client's held questions per 60 s window, J-10008).
 - When a connection closes (either side, or the adapter stops it): captp `abort`, every
@@ -407,7 +419,10 @@ verifies each):
   `SealedBox` only (m2-interfaces 9.2), so a plain value can never travel through the hub in
   clear. A page writes through the gateway's own in-process writer instead: one gateway-local
   exo per incarnation (`GatewaySecretWriter`: `replace(secret, value | SealedBox,
-  expectedGeneration?)`, `publicKey()`), made by `GW/index.js` over M2's `replaceLocal`, offered
+  expectedGeneration?)`, `publicKey()`; as built, X-FIX J-10055: the exo guard takes any value and
+  the method refuses a wrong one with `secretFailed("INVALID_SECRET_BYTES")`, never quoting it;
+  X-FIX J-10054: it never leaves the gateway, 4.4 rule 2), made by `GW/index.js` over M2's
+  `replaceLocal`, offered
   first in every page's `GatewayPowers.extras` under `secretWriterLabel` (`'secretWriter'`,
   `contract-m3.js`) and answered by `GatewayContext.secretWriter()`, so M4's
   `GW/extensions/m4-secrets.js` `LargeCall` target is the object a page calls. The value goes from
@@ -438,10 +453,16 @@ adapter loads ES modules synchronously with `require`, so no top-level await) an
 - `csp: { directive: [sources] }`: added, never removed.
 
 The `GatewayContext` an extension receives (`contract-m3.js`): `live`, `composer`, `content`,
-`history()`, `whenAttached(callback)`, `secretWriter()` (the incarnation's one `SecretWriter`,
-resolved lazily from `AH/secrets/manager.js`'s `secretWriter`, which makes it once per
-incarnation, so it is the same object a page gets from `SecretsAdmin.openWriter()`, A-11; it
-rejects before the agent host is attached), `stateDir` and `log`. M4's `GW/extensions/m4-secrets.js`
+`history()`, `whenAttached(callback)`, `secretWriter()`, `stateDir` and `log`. **As built (XA,
+J-10005; X-FIX, J-10054):** `secretWriter()` answers the gateway's own in-process writer
+(`GatewaySecretWriter`, A-11), one per incarnation, made by `GW/index.js` over the secrets
+module's `replaceLocal` and `publicKeyLocal`; it is not the hub's `SecretWriter` that
+`SecretsAdmin.openWriter()` answers (SealedBox only, m2-interfaces 9.2). The same object is
+offered **first** in every page's `GatewayPowers.extras`, under `secretWriterLabel`
+(`'secretWriter'`), ahead of every extension's services (`makeExtensionServices`' `builtIn`; the
+label cannot be claimed by an extension), so the `LargeCall` target is the object a page calls.
+`secretWriter()` and the writer's methods reject with `notAttachedText` (`GW/index.js`) before the
+agent host is attached. The writer is marked never to leave the gateway (4.4 rule 2). M4's `GW/extensions/m4-secrets.js`
 is `{ name: 'm4-secrets', largeCalls: [{ target: context => context.secretWriter(), methods:
 ['replace'] }] }`.
 
@@ -494,7 +515,7 @@ M3 **needs nothing** from M4 or M5 to build or pass its acceptance. It **offers*
 
 | to | what M3 offers | what the other milestone adds, by file only |
 |---|---|---|
-| M4 | pass-through of `Operator.getSecrets()`, `SecretsAdmin`, `Secret`, `SecretWriter` (adapter-local: a browser's `replace` stays in the agent-host process, A-11); `GatewayContext.secretWriter()` for its `largeCalls` target; slots `app.panel`, `statusbar.chip` | `UI/src/secrets/feature.js` (Secrets view, `app.panel`, label "Secrets"); `UI/src/accounts/feature.js` exporting an array: the Subscriptions panel (`app.panel`) and the account chip (`statusbar.chip`); `GW/extensions/m4-secrets.js` (`largeCalls: [{ target: c => c.secretWriter(), methods: ['replace'] }]`); `export const vocabularyShapes` in `guest/lib/interfaces-m4.js`; `test/browser/m4-*.mjs`. A secret value must fit `wsMessageBytes` (1 MiB) with its JSON and CapTP envelope: M4 states its own browser bound below that |
+| M4 | pass-through of `Operator.getSecrets()`, `SecretsAdmin`, `Secret`, `SecretWriter` (adapter-local: a browser's `replace` stays in the agent-host process, A-11; as built, XA J-10005: a page writes through the gateway's own writer in `extras`, and the hub's `SecretWriter` takes a `SealedBox` only); `GatewayContext.secretWriter()` (that gateway writer) for its `largeCalls` target; slots `app.panel`, `statusbar.chip` | `UI/src/secrets/feature.js` (Secrets view, `app.panel`, label "Secrets"); `UI/src/accounts/feature.js` exporting an array: the Subscriptions panel (`app.panel`) and the account chip (`statusbar.chip`); `GW/extensions/m4-secrets.js` (`largeCalls: [{ target: c => c.secretWriter(), methods: ['replace'] }]`); `export const vocabularyShapes` in `guest/lib/interfaces-m4.js`; `test/browser/m4-*.mjs`. A secret value must fit `wsMessageBytes` (1 MiB) with its JSON and CapTP envelope: M4 states its own browser bound below that |
 | M5 | `composer.addon` with `ComposerAddonProps` (input text and caret, `replaceRange`) and the `send` override, used for the first send and every resend (9.2); `message.renderer` with the turn's `TurnStarted` record (attachment chips); `app.panel`; the new-session dialog reads `Preset.describe()` `available` / `unavailableReason` when present (9.1) | `UI/src/presets/feature.js` (preset editor, `app.panel`); `UI/src/mentions/feature.js` exporting an array: the mention addon (`composer.addon`, whose `send` calls `E(context.powers.composer).submit(session, text, requestId, { attachments })` and throws a fixed text on a resend whose chips a reload lost) and the attachment-chip renderer (`message.renderer`); `export const vocabularyShapes` in both `guest/lib/interfaces-m5.js` and `interfaces-m5-factory.js`; `test/browser/m5-*.mjs`. Preset objects pass through as `Preset` presences |
 
 **Testing against M3 from another lane.** M4's and M5's UI component tests import
@@ -685,7 +706,7 @@ and tests against fakes for its own group's siblings.
 | W3.4 UI foundation | A | `UI/build.mjs`, `UI/index.html`, `UI/src/{main.js,features.js}`, `UI/src/{net,controller,shell,styles}/`, `test/unit/_m3-fake-powers.js`, `test/unit/m3-ui-{build,controller,shell}*.test.js` | this contract | unit (happy-dom): fragment parsing (R6-10, R6-11), reconnect schedule with a fake clock, refused -> "Server starting...", rebuild after reconnect, re-attach of a running turn, rev-gap re-watch, exactly-once draft rules with a fake lock and storage, the addon chain (9.2: first `send` wins, `undefined` passes, a rejection keeps the draft and sets `sendError`, a resend goes through the chain with `resend: true` only after `getSubmissionReceipt` answered none), records kept with unknown fields, presets with `describe()` availability (missing `available` = available), feature collection (single and array exports, duplicate `id` fails the build) and slot rendering (a throwing feature isolated), drawer at 640 px; build: bundle size and gzip size recorded, content-hashed names, shell embeds `GATEWAY_PROTOCOL` | no | 7 h | SES lockdown + captp in the browser bundle; bundle over 600 KB gz; happy-dom gaps |
 | W3.5 sessions UI | B | `UI/src/sessions/`, `test/unit/m3-ui-sessions*.test.js` | W3.4 | unit with `_m3-fake-powers.js`: sidebar rows and circles, empty text, live insert/rename/remove, rename keys, delete confirm, new-session dialog (presets with an unavailable one shown disabled with its reason, backends, catalogue pages, filter, Factory default, unavailable text, effort refusal R6-39), slot `newSession.field` | no | 4 h | adapting `space-floot` `FlootApp`/`SessionSidebar`/`ProviderModelFields` away from string ids |
 | W3.6 conversation UI | B | `UI/src/conversation/`, `test/unit/m3-ui-conversation*.test.js` | W3.4 | unit: streaming bubble from deltas, thinking row and phase, tool groups and "Thought for", exec highlight, raw view, plain text and links, status rows R6-51, recovery panel paging (kept and archived pages, fake `History`), acknowledgement, queue rows with Send now/Edit/Delete/Send again and the hold line, Stop, blocked sending (A-5), `sendError` line, usage bar, large content paging; slots: a fixture `composer.addon` receives `input` and edits it with `replaceRange` (caret after the insert), a fixture `message.renderer` receives `{ context, turn, record }` with an unknown record field kept, for a kept, an archived and a live turn | no | 7 h | `MessageList.js` (1,000+ lines) carries Endo-specific shapes; the fold events differ from Floot's |
-| W3.7 gateway wiring | B | `GW/index.js`, seam H4 (`AH/index.js`), H5 (`scripts/provision-steps.js` step), `scripts/gateway.mjs`, `test/integration/_m3-gateway.js`, `test/integration/m3-gateway.test.js`, `test/integration/m3-sessions.test.js` | W3.1, W3.2, W3.3 | integration (Node CapTP client over a real WebSocket, scripted backend): acceptance 1, 2, 3, 10, 11, 12 (protocol part), 13, 14, 16 (the fixture extension also resolves `context.secretWriter()` after attach and gets the object `SecretsAdmin.openWriter()` answers); kill points K1, K2 | **yes** | 5 h | A-3 (kit restore order) or A-1 surprises; port reuse after SIGKILL |
+| W3.7 gateway wiring | B | `GW/index.js`, seam H4 (`AH/index.js`), H5 (`scripts/provision-steps.js` step), `scripts/gateway.mjs`, `test/integration/_m3-gateway.js`, `test/integration/m3-gateway.test.js`, `test/integration/m3-sessions.test.js` | W3.1, W3.2, W3.3 | integration (Node CapTP client over a real WebSocket, scripted backend): acceptance 1, 2, 3, 10, 11, 12 (protocol part), 13, 14, 16 (the fixture extension also resolves `context.secretWriter()` after attach; as built, XA J-10005: it gets the gateway's writer that the page finds first in `extras`, not the object `SecretsAdmin.openWriter()` answers); kill points K1, K2 | **yes** | 5 h | A-3 (kit restore order) or A-1 surprises; port reuse after SIGKILL |
 | W3.8 integration | alone | `test/browser/_harness.mjs`, `test/browser/m3-*.mjs`, `test/integration/m3-reconnect.test.js`, `perf/{ui,gateway,gateway-session}.perf.mjs`, `perf/_m3-client.mjs`, the M3 rows of `README.md` (PM-merged) | all | browser (Playwright, gated) and integration: acceptance 4-9, 12 (UI part), 15; K3-K5; every perf row of section 13; `startBrowserGateway` (17) used by M3's own browser files exactly as M4 and M5 will use it; checks section 5 against M2 as merged; no stub left | **yes** | 6 h | Playwright set-up in a lane; the 300-turn fixture import (about 40 s) if no template is cached |
 
 Wall time with one agent per unit: about 7 h (group A) + 7 h (group B) + 6 h (W3.8) = **20 h**.
@@ -708,7 +729,7 @@ Hotspots: each is an edit to a file another lane may also edit, with the exact s
 | H1 | `guest/lib/interfaces.js` | - | **none** (dropped at the cross-check): M3 does not edit it. `gateway()` is added to the manager facet's guard in H2 by `withGatewayAdmin`, so the session and exec bundles carry no M3 code (0 bytes) | owner M5 (W5.3's widenings); M4 one line (BackendKind) |
 | H2 | `resources/agent-host/durable.js` | W3.3 | three edits: `import { makeGatewayManager } from './durable-gateway.js';` and `import { withGatewayAdmin } from '../../guest/lib/interfaces-m3.js';` after the last import (two import lines); `const gateway = makeGatewayManager({ manager });` right after `const manager = makeManager(...)`; the facet line becomes `const facet = makeExo('AgentHostAdmin', withGatewayAdmin(m2Interfaces.AgentHostAdmin), {` (after the W2.9 fold `interfaces.AgentHostAdmin`) with `gateway: () => gateway.admin,` as the **last** method of its object | owner M4 (W4.1, six H-2 seams). M3's lines touch nothing M4 edits if M4 also appends; if M4 also wraps the facet guard, the wrappers nest (`withGatewayAdmin(withM4(base))`) |
 | H3 | `AH/attach.js` | W3.3 | `makeAttach({ ops, incarnation, onSink, bindings = {} })`: `bind(key, spec, epoch)` and `unbind(binding, key)` hand any key other than `SERVICE_KEY` to `bindings[key]` (`{ bind(spec), unbind() }`) and still throw for a key with no binding (about 8 lines in two functions) | M4 (ops methods in `makeOpsInterface`, a different function) |
-| H4 | `AH/index.js` | W3.7 | `import { makeGatewayService } from './gateway/index.js';` and `import { GATEWAY_KEY } from '../../../guest/lib/interfaces-m3.js';` (two import lines after the last import); immediately **before** `const { bind, unbind } = makeAttach({`: `const gateway = makeGatewayService({ live, composer, content, history: () => archive.history(), blobs, timers, secretWriter: () => secrets().secretWriter() });` (one statement; `secretWriter` is called lazily, after `whenAttached`); `bindings: { [GATEWAY_KEY]: gateway.binding },` as the last property of the `makeAttach` options; `gateway.attached();` as the last line of `onSink` | owner M4 (W4.6, H-4 seams: subscriptions after the secrets helper, ops handlers inside `makeOps`); M5 none expected. M3's statement sits after `makeOps(...)` and before `makeAttach`, away from M4's insertions |
+| H4 | `AH/index.js` | W3.7 | `import { makeGatewayService } from './gateway/index.js';` and `import { GATEWAY_KEY } from '../../../guest/lib/interfaces-m3.js';` (two import lines after the last import); immediately **before** `const { bind, unbind } = makeAttach({`: `const gateway = makeGatewayService({ live, composer, content, history: () => archive.history(), blobs, timers, secretWriter: () => secrets().secretWriter() });` (one statement; `secretWriter` is called lazily, after `whenAttached`; as built, XA J-10005: `secretWriter: async () => { const { replaceLocal, publicKeyLocal } = secrets(); return harden({ replaceLocal, publicKey: publicKeyLocal }); }`, the in-process write path, never the hub's writer); `bindings: { [GATEWAY_KEY]: gateway.binding },` as the last property of the `makeAttach` options; `gateway.attached();` as the last line of `onSink` | owner M4 (W4.6, H-4 seams: subscriptions after the secrets helper, ops handlers inside `makeOps`); M5 none expected. M3's statement sits after `makeOps(...)` and before `makeAttach`, away from M4's insertions |
 | H5 | `scripts/provision-steps.js` | W3.7 | one appended step `{ name: 'gateway', run }`, skipped unless `options.gateway` (`{ port, publicOrigin?, trustedProxies? }`) is given; tests serve their own gateway on port 0 instead | hook table (append-only) |
 | H6 | `H/package.json` (PM-merged) | W3.4 asks, PM merges | dependencies `@endo/captp`, `@endo/marshal`, `ws`, `preact`, `ses`; dev `esbuild`, `happy-dom`, `@playwright/test`; scripts `build:ui` (`node ui/build.mjs`), `test:browser` | M4, M5 (their own deps) |
 | H7 | lint | - | none: UI code reads browser APIs as `globalThis.document`, `globalThis.localStorage`, ... so the root config needs no browser globals | - |
@@ -782,10 +803,16 @@ WebSocket (`test/integration/_m3-gateway.js`); "browser" is Playwright headless 
 16. A fixture extension (`test/fixtures/gateway-extension/`, copied into `GW/extensions/` by the
     test and removed after) adds a service in `extras`, an HTTP route and a CSP source, and a
     fixture feature adds an `app.panel`, with no M3 file edited; the fixture extension's
-    `context.secretWriter()`, resolved after attach, is the same object a client gets from
-    `E(E(operator).getSecrets()).openWriter()` (the client passes that presence back to a fixture
-service method `sameWriter(writer)`, which compares identities in the adapter); a throwing extension
-    file is skipped and the gateway still serves.
+    `context.secretWriter()`, resolved after attach, is the gateway's own writer that the page
+    finds first in `GatewayPowers.extras` (the client passes that presence back to a fixture
+    service method `sameWriter(writer)`, which compares identities in the adapter); a throwing
+    extension file is skipped and the gateway still serves. **As built (XA, J-10005;
+    `test/integration/m3-gateway.test.js`):** the W3.0 text said the context's writer was the
+    object `E(E(operator).getSecrets()).openWriter()` answers; since XA that hub writer takes a
+    `SealedBox` only and is a different object. The test checks: the extras labels are
+    `[secretWriterLabel, 'fixture']` (the gateway's writer first); `sameWriter` answers true for
+    the writer from `extras` and false for the hub's `openWriter()` writer; the fixture's
+    large-call method takes a 100,000-byte argument.
 
 ---
 
@@ -848,6 +875,9 @@ answers `fetch`) and `contract-m3.js` (`gatewayTexts`, `uiTexts`, `uiTextOf`).
 | `gatewayTexts.messageTooLarge` | `message too large; use the composer` | architecture 7 |
 | `gatewayTexts.unexpectedField` | `unexpected field` | architecture 7 |
 | `gatewayTexts.unknownMethod` | `unknown method` | rule 4.4 4a (M3-FIX) |
+| `gatewayTexts.gatewayObject` | `this gateway object cannot be sent to the daemon` | rule 4.4 2 (as built, X-FIX J-10054) |
+| `gatewayTexts.browserObject`, `tooManyCalls`, `tooDeep`, `notSignedIn` | `objects made by the page cannot be sent to the daemon`; `too many calls in flight on this connection`; `arguments nested too deeply`; `not signed in` | rules 4.4 1, 2, 4, 5 (as built) |
+| `gatewayTexts.tooManyObjects` (close reason, code 4008) | `this page holds too many objects; reloading` | 4.5 (exports; as built, XA J-10008: also the answers table) |
 | `gatewayTexts.queryConfig` | `Configuration in the query string is not accepted; use the URL fragment` | R6-10, R7-48 (harness wording) |
 | `uiTexts.reconnecting` | `Reconnecting…` | R6-13 |
 | `uiTexts.serverStarting` | `Server starting...` | architecture 7, D-17 |
@@ -980,9 +1010,11 @@ Every unit exports exactly these (more is allowed; these names and signatures ar
 
 | file | export | signature |
 |---|---|---|
-| `GW/index.js` | `makeGatewayService` | `({ live, composer, content, history, blobs, timers, secretWriter, stateDir?, log? }) -> { binding: { bind(spec), unbind() }, attached(), close() }`; `bind(GatewaySpec)` listens, attaches `GatewayOps` to `spec.sink` and answers; `secretWriter: () => Promise<SecretWriter>` is passed to extensions as `GatewayContext.secretWriter` and called only after `attached()` |
-| `scripts/gateway.mjs` (Node, operator) | CLI `serve <state> --port N [--origin O] [--proxy A]...`, `status <state>`, `rotate <state>`, `stop <state>`, `url <state> [--host H]` |
-| `test/integration/_m3-gateway.js` | `serveGateway(state, options?) -> { url, origin, secret, admin, connect(options?) -> client }` |
+| `GW/index.js` | `makeGatewayService` | `({ live, composer, content, history, blobs, timers, secretWriter, stateDir?, log? }) -> { binding: { bind(spec), unbind() }, attached(), close() }`; `bind(GatewaySpec)` listens, attaches `GatewayOps` to `spec.sink` and answers; `secretWriter: () => Promise<SecretWriter>` is passed to extensions as `GatewayContext.secretWriter` and called only after `attached()`. As built (XA, J-10005): `secretWriter: () => Promise<{ replaceLocal, publicKey }>`, the in-process write path; the gateway makes its own writer over it (6.1) |
+| `GW/index.js` | `notAttachedText` (as built, XA) | the rejection of `secretWriter()` and of the writer's methods before `attached()` |
+| `GW/powers.js` | `markNeverLeaves(...values)`, `isNeverLeaving(value)` (as built, X-FIX J-10054) | 4.4 rule 2 |
+| `scripts/gateway.mjs` (Node, operator) | CLI | `serve <state> --port N [--origin O] [--proxy A]...`, `status <state>`, `rotate <state>`, `stop <state>`, `url <state> [--host H]` |
+| `test/integration/_m3-gateway.js` | `serveGateway` | `(state, options?) -> { url, origin, secret, admin, connect(options?) -> client }` |
 
 ### W3.8 (Node, browser tests)
 
