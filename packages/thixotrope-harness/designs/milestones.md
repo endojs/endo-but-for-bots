@@ -1,8 +1,8 @@
 # Build milestones: the Endo harness on Thixotrope
 
 Companion to `architecture.md` (decisions D-1..D-16, core changes CORE-1a/1/1b, settings in its
-section 9, budgets in its section 11). All code is written in
-`/Users/xyz/Development/endo-thixotrope-harness` on branch `claude/thixotrope-harness`.
+section 9, budgets in its section 11). All code is written in the harness checkout (T) on branch
+`claude/thixotrope-harness` and its lanes (`process.md`).
 `H/` = `packages/thixotrope-harness/`. `pkg/` = `packages/thixotrope/`. `AH/` =
 `H/resources/agent-host/impl/` (the run-time-loaded implementation, D-14).
 Endo reference files are read with `git -C <T> show 1315bef86:<path>`. Spec items are cited as
@@ -14,7 +14,7 @@ M1a" at the end of this file.
 ## Conventions for every milestone
 
 - **Ownership.** Each milestone owns the paths listed. Milestones that run in parallel own disjoint
-  paths. Shared files are of two kinds:
+  paths. Shared files and directories are of these kinds:
   - **Hook tables** (append-only: a milestone adds registration lines or table entries, never edits
     another milestone's entries; the PM resolves trivial merges). Each is created by the milestone
     named in brackets:
@@ -23,8 +23,23 @@ M1a" at the end of this file.
     `H/guest/factory/services.js` [M1a] (per-session `SessionServices` builders),
     `H/guest/factory/session-options.js` [M1a] (`createSession` option resolvers),
     `AH/index.js` [M1a] (implementation registrations), `AH/channel-taps.js` [M1a],
-    `AH/projection-hooks.js` [M1b], `AH/gateway/routes.js` [M3 W3.0], `H/ui/src/features.js`
-    [M3 W3.0], `H/scripts/provision-steps.js` [M1a].
+    `AH/projection-hooks.js` [M1b], the step table in `H/scripts/provision-steps.js` [M1a] (M0-M2
+    steps only; later milestones use the provisioning seam below).
+  - **Directory registries** (a milestone adds its own new files; nobody edits a list; the collector
+    is the only shared code and belongs to the milestone in brackets; `m3-interfaces.md` 11):
+    `AH/gateway/extensions/` [M3 W3.2] (one `<milestone>-<name>.js` per lane, loaded in name order by
+    `AH/gateway/extensions.js`: M4 `m4-secrets.js`, M11 `m11-audio.js`), `H/ui/src/<dir>/feature.js`
+    [M3 W3.4] (one directory per lane feature group, collected in directory-name order by
+    `H/ui/build.mjs` and `H/ui/src/features.js`), the `vocabularyShapes()` export of each lane's
+    `H/guest/lib/interfaces-m*.js` [M3 W3.2], and `H/test/browser/m<N>-*.mjs`. These replace the
+    hook tables `AH/gateway/routes.js` and `H/ui/src/features.js` this list named before M3's
+    contract.
+  - **Provisioning seam** [M2-T1, `scripts/provision-steps.js` header]: a later milestone's
+    provisioning step is a file `H/scripts/provision-steps/<two digits>-<name>.js` exporting
+    `steps` (a `ProvisionStep[]`), run after the table in file-name order (M3 `30-gateway.js`,
+    M4 `40-subscriptions.js`, M5 `50-m5-fixtures.js`; later milestones take further numbers);
+    `makeProvision` forwards every option it does not use itself to every step unchanged, and a step
+    that is not asked for answers `{ skipped: true }`; `has` is exported for idempotence checks.
   - **PM-merged files**: `H/package.json`, `H/perf/_harness.mjs`, `H/JOURNAL.md`. Builders append;
     the PM merges. Journal entry numbers are pre-allocated per milestone so parallel builders never
     collide: M0 J-0100.., M1a J-0200.., M1b J-0300.., M2 J-0400.., M3 J-0500.., M4 J-0600..,
@@ -66,6 +81,12 @@ M6 -> { M7 | M10 } ;  { M3, M4, M5 } -> M12 (parallel with M7, M10) ;  everythin
 
 Parallel groups: **{M3, M4, M5}**, then **{M6, M8, M9, M11}**, then **{M7, M10, M12}**. The ownership
 check at the end lists every file and hook point each group touches.
+
+**Core requests across lanes.** CC-051 (M3, `m3-interfaces.md` 13: per-entry diffs of a hub session
+row, C-2's rest) and CC-060 (M4, `m4-interfaces.md` 19: the alleged interface name stored once per
+export row, for object-granular reachability) both change the hub's row format in
+`pkg/src/net/hub.js` and its log store. They must be made as **one** core change (one format, one
+migration, one `CORE-CHANGES.md` entry), whichever lane asks first.
 
 ---
 
@@ -539,8 +560,9 @@ M2 guard once, with stubs (`textOf.notBuilt`) for methods a later unit builds (`
    returns the same id with `duplicate: true` and one transcript entry.
 5. With messages held `restart`, sending a new message or pressing send-now releases the hold and
    sends in FIFO order (R4-56).
-6. Cancel mid-stream: the fake server sees the connection closed; the turn is `cancelled`; `abort`
-   emitted.
+6. Cancel mid-stream: the fake server sees the connection closed; the turn is `cancelled`; the
+   turn's live stream ends with `end { status: 'cancelled' }` (the event contract,
+   `m2-interfaces.md` decision 11; no separate `abort` event, PM ruling 1, J-9487).
 7. Replace the API-key secret; the next turn uses it without restart; revoke it; the next turn fails
    with a recorded reason that contains no provider body. No secret value appears anywhere in the state
    directory.
@@ -561,11 +583,20 @@ M2 guard once, with stubs (`textOf.notBuilt`) for methods a later unit builds (`
 15. **A 5,000-turn session behaves like a 200-turn one** (D-M2-1; `m2-interfaces.md` 4): per-turn
     wall time, `turn.start`, the session vat's snapshot size, its slot capacity and its hub row
     bytes are each within 1.25 x of the 200-turn session's (the scripted backend with
-    `logContext: false`; sessions built by `importState`, which seals as a grown session does);
-    after a restart the next turn's context is rebuilt in at most 5 s and the provider receives
-    the same context as before (`turnDigests`); `history.page` is at most 300 ms; history pages
-    load from the newest turn back to turn 1 across archived and kept turns with every turn
-    exactly once. The same at 1,000 turns.
+    `logContext: false`); after a restart the next turn's context is rebuilt in at most 5 s and
+    the provider receives the same context as before (`turnDigests`); `history.page` is at most
+    300 ms; history pages load from the newest turn back to turn 1 across archived and kept turns
+    with every turn exactly once. The same at 1,000 turns.
+    **Procedure (fixed windows, imported templates; process.md 3):** each length (200, 1,000,
+    5,000) is a copy of a cached template of that many plain turns written by
+    `writeSyntheticExport` and loaded with `importState` (which seals as a grown session does),
+    built once per worker and bundle change by `node perf/_long-template.mjs history` (each
+    template its own boxed step). At each length one 60 s window of turns gives the per-turn
+    median and p99, `turn.start`, snapshot, seal and hub rows (`perf/history.perf.mjs`), then the
+    session vat's heap after a clean stop; history pages are read for 15 s each (newest and
+    archived), the walk goes from the newest turn to turn 1, and the context is rebuilt after a
+    clean restart (`perf/history.restart.perf.mjs`). No turn count is run to reach a length, and
+    each file stays inside its 10-minute box.
 16. **SIGKILL during a seal** (`m2-interfaces.md` 4.5): a supervisor SIGKILL after the seal crank,
     while the segment file is written (before its rename), after the adapter's answer, and after
     the answer crank; after each restart history from the newest turn back to turn 1 shows every
@@ -588,11 +619,12 @@ M2 guard once, with stubs (`textOf.notBuilt`) for methods a later unit builds (`
 | `throughput` deliveries per second at saturation (20 sessions) | recorded; journal if < 50/s |
 | `disk.session` idle session after 300 turns; after delete | <= 25 MB plus blobs; returned on delete |
 | too-big probes: 200 k-char submission accepted through the Composer, 200 k + 1 refused; a 100 KiB string sent straight to a vat method through the admin path is refused by the client library before sending | no halt |
-| `archive.flat.turn` wall time per turn (100 turns ending there), 5,000 against 200 turns | <= 1.25 x (D-M2-1) |
+| `archive.flat.turn` wall time per turn (the median over one 60 s window of turns on a copy of the imported template of that length, acceptance 15's procedure), 5,000 against 200 turns | <= 1.25 x (D-M2-1) |
 | `archive.flat.turnStart` `turn.start` median, 5,000 against 200 turns | <= 1.25 x and <= 350 ms |
 | `archive.flat.snapshot` session vat snapshot bytes and ms, 5,000 against 200 turns | <= 1.25 x (expected about 20 MB, `m2-interfaces.md` 4.13) |
 | `archive.flat.slots` session vat slot capacity, 5,000 against 200 turns | <= 1.25 x (expected about 16 % of 4,000,000) |
 | `archive.flat.hubRow` the session's hub row bytes and entries, 5,000 against 200 turns | <= 1.25 x (expected about 290 entries, 15 KB) |
+| (the `archive.flat.*` rows) | all measured by `perf/history.perf.mjs` on the same imported templates and windows as acceptance 15 (its procedure); the snapshot, slot and hub-row rows are read after the window and a clean stop, not after a turn count |
 | `context.rebuild` at 1,000 and 5,000 turns (archive) | <= 5 s each (D-M2-1) |
 | `history.page` at 1,000 and 5,000 turns: the newest page (vat) and an archived page (`History`) | <= 300 ms each (D-M2-1) |
 | `archive.seal` per seal: session crank ms (S, Z), adapter ms, bytes written, fsyncs | recorded |
@@ -1349,9 +1381,9 @@ an environment allowlist, an attach-only admin CLI, diagnostics, and the remaini
 | read and send mail | `thix inbox`, `thix send`, `thix mail` (operator inbox in M9) | acceptance 5 |
 | inspect | `thix reachability`, `harness diagnose` | acceptance 3 |
 | evaluate, create agents | dropped as admin-irrelevant: evaluation is the session's `exec`; agents are created in the UI or by `harness sessions create` | recorded |
-| P-52 named references, directories | Thixotrope inventory (README 171) and the factory's operator inventory (M5) | M5 acceptance 4-5 |
+| P-52 named references, directories | Thixotrope inventory (README 171) and the factory's operator inventory (M5) | M5 acceptance 3 (object tools) and 13 (inventory) |
 | P-52 host and guest identities, confined evaluation | vats and the exec Compartment (D-11) | M1b acceptance 3-4, M4 acceptance 5 |
-| P-52 plugin installation with explicit powers | `thix install` grants; presets' `{label, value}` endowments | M5 acceptance 5 |
+| P-52 plugin installation with explicit powers | `thix install` grants; presets' `{label, value}` endowments | M5 acceptance 8 (endowments) |
 | P-52 cancellation | `Turn.cancel`, `retire()` | M2 acceptance 6 |
 
 **Work units:** W12.1 provisioning runner: fixed order from `provision-steps.js`, each step's outcome

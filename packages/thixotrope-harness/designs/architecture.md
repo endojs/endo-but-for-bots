@@ -12,8 +12,8 @@ sequence and budgets below are the measured ones.
 Inputs: the six survey reports in `survey/` (core, native, apps, tooling, reuse,
 spec-digest), the feasibility and coverage reviews `review-feasibility.md` and `review-coverage.md` with the
 probe `survey/feasibility-probe.mjs`, spec Part I sections 1, 4 and 10, Appendix A.4 and
-Appendix F of `endo-harness-spec.md` (called SPEC). Thixotrope paths are relative to
-`/Users/xyz/Development/endo-thixotrope-harness` (called T). `pkg/` = `packages/thixotrope/`.
+Appendix F of `endo-harness-spec.md` (called SPEC). Thixotrope paths are relative to the root of
+the harness checkout (called T). `pkg/` = `packages/thixotrope/`.
 Endo reference paths are read from T's object store with `git -C T show 1315bef86:<path>`
 (never from the Endo checkout, never from T's pre-move `packages/floot/src`).
 Guesses are marked [inferred]. Decisions are numbered D-1.. so milestones and the journal can cite them.
@@ -189,7 +189,7 @@ that the prelude already provides (reuse.md section 4). Node-side code imports E
 
 What landed in M0, M1a, M1b and the core work after M1b, where, and why. `../CORE-CHANGES.md` is the
 record (CC-001..CC-025, every commit accounted for); `m0-results.md` page 3 is its commit-by-commit
-summary and page 6 lists every core-change candidate (C-1..C-21) with its status.
+summary and page 6 lists every core-change candidate (C-1..C-25) with its status.
 
 | id | change as landed | where (commit) | why |
 |---|---|---|---|
@@ -518,6 +518,16 @@ through the grant at every round (one sink call per grant per incarnation, then 
 file. The daemon-level check (acceptance 7, `m2-secrets`) replaces a key with a sealed box, revokes
 it, and greps the whole state directory (heaps, snapshots, journals, the hub image and log, blobs,
 the archive) for every encoding of both values after a clean stop: no hit, the control text found.
+After the M2 security review (M2-FIX, J-9486, J-9487): a missing key file is created whole (temp,
+fsync, link, directory fsync) and concurrent first loads share one read; a torn last audit line is
+cut at load, so a power loss or full disk loses only that line; `SecretsAdmin.list` pages by
+creation serial; the Secret and audit bounds are `limits.secretsMax` (1,024) and
+`limits.auditKeepEvents`. Providers and the catalogue refuse a base URL that is not `https:` or
+`http:` to a loopback host, or carries user info, a query or a fragment; a key over 8,192 bytes
+fails the round before any request; a round's streamed body is bounded at 64 MiB
+(`limits.roundStreamBytes`); a request timeout is at least 1 s. Open: `SecretWriter.replace`
+still accepts a plain string from a remote caller (a cross-lane contract decision with M3 A-11 and
+M4), the origin binding of a Secret's key, and per-purpose subkeys.
 
 **D-15. Blob handles are manager-minted and pre-minted.** The adapter keeps a stock of minted, empty
 `Blob` handles (minted 32 at a time with one manager crank through its attach sink); it writes and
@@ -858,8 +868,15 @@ snapshot by about 3.3 bytes per character and the state directory roughly double
   seal's intent and sends `ArchivePort.seal` with the range's fingerprint; the agent-host adapter
   writes the segment file (`.part`, fsync, rename, directory fsync, chained SHA-256 digest) before
   it answers, and the vat drops the records only in the crank of a matching answer, so a SIGKILL
-  anywhere loses or duplicates nothing (an orphan segment is deleted at the next validation against
-  the vat's `ArchiveState`, which is the truth). The vat keeps an index of `SegmentEntry` ranges and
+  anywhere loses or duplicates nothing. As built after the M2 review (M2-FIX, J-9485): no code but
+  session delete unlinks a segment file. Validation against the vat's `ArchiveState` keeps the
+  vat's chain, every file the manifest marks acknowledged and every file that chains forward from
+  the vat's state; only a file at an ordinal the vat's chain fixes with another digest is an
+  orphan, and it is renamed `<name>.orphan` and removed with the session. Whether a state is stale
+  comes from the persisted acknowledged chain, never from adapter memory (eviction or a restart
+  once let a stale page delete an acknowledged segment, J-9445). An unreadable file is kept and
+  counted, a damaged same-name file is kept as `.bad`, and an answered seal the vat never applied
+  stays on disk until the vat seals that ordinal again (at most one file per crash). The vat keeps an index of `SegmentEntry` ranges and
   one chained digest, not a handle per segment (every handle a vat holds is a hub row entry). The
   adapter keeps, per session, the segments, `context.jsonl` (the persisted projection of sealed
   turns) and `mirror.jsonl` (the kept records); a context rebuild reads them plus one vat page, and

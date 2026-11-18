@@ -11,7 +11,7 @@ second copy of an `@endo/*` library.
 - Plan: `designs/architecture.md` (facts, decisions, core changes, limits, the turn sequence,
   test and perf method, guest rules) and `designs/milestones.md` (work units, acceptance tests, perf
   checks; each finished milestone's outcome table; "Changes after M0 and M1a" at the end). What M0
-  measured and changed, and every core-change candidate with its status (C-1..C-21):
+  measured and changed, and every core-change candidate with its status (C-1..C-25):
   `designs/m0-results.md`. The M1a interface contract, crank by crank: `designs/m1a-interfaces.md`.
   Surveys and plan reviews: `designs/survey/`, `designs/review-*.md`.
 - Journal: `JOURNAL.md` records what fits Thixotrope and what does not, and every perf
