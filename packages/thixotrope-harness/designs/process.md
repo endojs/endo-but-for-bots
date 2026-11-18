@@ -341,10 +341,42 @@ At the start:
 At the end:
 
 1. Prettier and eslint on the files you changed (from the repository root), `tsc` in the package
-   if you touched JavaScript there; the unit lane passes. Do not weaken an existing test.
+   if you touched JavaScript there, `corepack yarn lint:duplicates` in the package (section 6); the
+   unit lane passes. Do not weaken an existing test.
 2. Every new or changed test file and perf check fits section 3.
 3. Commit with explicit paths, house-style subjects (`feat(thixotrope-harness): ...`). Nothing
    machine-local in the commit: no absolute paths, host names, keys or personal addresses.
 4. Journal entries in your block: what was built or measured, the numbers, good or poor fit.
 5. `date -u +%Y-%m-%dT%H:%M:%SZ`; report start, end, the commands over 60 s, and what is done,
    partial, blocked and not verified.
+
+## 6. Rules for all later work (from the harness review)
+
+The architecture review (`arch-review/harness.md` section 4) found that most of its 38 findings
+came from how lanes were run: each lane built against its contract by appending, and every merge
+kept every layer. From M6 on (PM rulings, 2026-11-18; the naming and code rules are also in
+`milestones.md` "Rules from the harness review"):
+
+- **Names.** Files, exports, types and test files are named by vat or concept, never by
+  milestone or work unit: no `m6-*`, no `interfaces-m6.js`, no W-numbers in file names; tests are
+  named for the subject and the behaviour. A contract may be per milestone; the code is not. A
+  unit that is asked for a milestone-named file proposes the concept name instead.
+- **Fold unit.** Every merge of parallel lanes ends with a fold unit, planned with the group: it
+  removes the views, widenings, seams, stubs, empty registries and copies the lanes left, and is
+  done when a grep or test shows them gone. The PM does not close a group without it.
+- **Export, don't copy.** A lane may export a helper from another lane's or an earlier
+  milestone's module rather than copy it. The export is a one-line seam listed in the contract and
+  reviewed by that module's owner. A copy of more than 15 lines is a review finding.
+- **Duplicate ceiling.** `corepack yarn lint:duplicates` (part of `yarn lint`) runs
+  `arch-review/tools/find-duplicates.mjs` over `guest`, `resources` and `ui` and fails above
+  3.5 % of normalised lines in repeated blocks (measured 3.22 %, 865 of 26,887 lines, at
+  `802bd2767c`). A change that lowers the share lowers the ceiling in the same commit; nobody
+  raises it.
+- **Fakes from the real guards.** A fake is a `makeExo` with the product's interface guard, or
+  the product's own assembly; a hand `Far` object or a re-assembled program is a review finding,
+  and so is a product branch only tests take.
+- **Manager changes batched.** A change to the agent-host manager part is a reinstall that
+  breaks live references: a contract states why it cannot live in the adapter, and a parallel
+  group lands its manager changes as one batch (one reinstall), not one per unit.
+- **Review question.** Every contract review asks: what here is a string that stands for an
+  object, a reason or a position (a glob, an error text, a label lookup, a page offset)?

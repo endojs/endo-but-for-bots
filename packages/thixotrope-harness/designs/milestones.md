@@ -32,10 +32,12 @@ M1a" at the end of this file.
     `AH/gateway/extensions/` [M3 W3.2] (one `<milestone>-<name>.js` per lane, loaded in name order by
     `AH/gateway/extensions.js`: M4 `m4-secrets.js`, M11 `m11-audio.js`), `H/ui/src/<dir>/feature.js`
     [M3 W3.4] (one directory per lane feature group, collected in directory-name order by
-    `H/ui/build.mjs` and `H/ui/src/features.js`), the `vocabularyShapes()` export of each lane's
-    `H/guest/lib/interfaces-m*.js` [M3 W3.2], and `H/test/browser/m<N>-*.mjs`. These replace the
-    hook tables `AH/gateway/routes.js` and `H/ui/src/features.js` this list named before M3's
-    contract.
+    `H/ui/build.mjs` and `H/ui/src/features.js`), and `H/test/browser/`. These replace the hook
+    tables `AH/gateway/routes.js` and `H/ui/src/features.js` this list named before M3's contract.
+    The gateway's key vocabulary is no longer a registry: a table module that adds browser-sendable
+    shapes is one entry in `H/guest/lib/vocabulary-tables.js` (HR-SYN-7; a module not listed or
+    excluded there fails `test/adapter/gateway-vocabulary-tables.test.js`). New files in these
+    directories follow the naming rule below, not `<milestone>-<name>`.
   - **Provisioning seam** [M2-T1, `scripts/provision-steps.js` header]: a later milestone's
     provisioning step is a file `H/scripts/provision-steps/<two digits>-<name>.js` exporting
     `steps` (a `ProvisionStep[]`), run after the table in file-name order (M3 `30-gateway.js`,
@@ -72,6 +74,41 @@ M1a" at the end of this file.
 - **Acceptance tests are observable behaviour** (public API, browser, network, fake-provider and
   fake-tool logs). Implementation counts (wake counters, record counts, deliveries) are perf/gate
   checks.
+
+### Rules from the harness review (binding from M6; `arch-review/harness.md` section 4)
+
+The review traced most of its findings to how M1a-M5 were built (themes T1-T7). These rules hold
+for all later work and win over any milestone section below that says otherwise (for example
+one that names `H/test/*/m6-*` or an `interfaces-m6.js`).
+
+1. **Name by vat or concept, never by milestone or work unit** (T3). Files, exports, types,
+   helpers and runtime directory tags carry no `m6`, `M6`, `interfaces-m6`, `W6.3` or `w48-`. A
+   guard goes into its vat's table (`guest/lib/guards/base.js`, `session.js`, `factory.js`, or the
+   one Node-side table); a limit into `limits.js`; a text beside its guard. Test files are named
+   for the subject and the behaviour (`gateway-vocabulary-tables.test.js`, not
+   `m3-w32-vocabulary.test.js`). A **contract** may be per milestone (`m6-interfaces.md`), the code
+   is not. Milestone ids live in contracts, the journal and commit messages only. The existing
+   milestone-named modules are renamed by the fold (`arch-review/fold-plan.md`).
+2. **Every merge of parallel lanes ends with a fold unit** (T1). Its done-criterion is deletion:
+   no view, widening, seam, `notBuilt` stub, empty registry or copy that the lanes left behind,
+   checked by a grep or a test, not a sentence in a contract.
+3. **Export, don't copy** (T2). A lane may export a helper from another lane's or an earlier
+   milestone's module instead of copying it; the export is a one-line seam listed in the lane's
+   contract and reviewed by the module's owner. Copying more than 15 lines is a review finding.
+   `corepack yarn lint:duplicates` fails above the duplicate ceiling (`scripts/check-duplicates.mjs`:
+   3.5 % of normalised lines over `guest`, `resources` and `ui`; measured 3.22 % at `802bd2767c`);
+   the ceiling only goes down.
+4. **Fakes are built from the real guards** (T5): `makeExo` with the product's interface,
+   assemblies exported by the product rather than re-assembled in a fixture; a product branch
+   that only tests take ("for tests") is a review failure.
+5. **Manager-part changes are batched** (T6): each change to the agent-host manager part
+   (`resources/agent-host/*.js` outside `impl/`) is a reinstall that breaks live references, so a
+   contract gives the reason the change cannot live in the adapter, and a parallel group makes one
+   batched manager change.
+6. **Objects and fields at the seams** (T4): a contract review asks "what here is a string that
+   stands for an object, a reason or a position?"; a list of files is explicit, never a glob.
+7. **A new job names its module** (T7): when a contract adds a job to an existing closure, it
+   names the module the job lives in.
 
 ## Order and parallelism
 
