@@ -37,7 +37,7 @@ import { messageBytes } from '../../../../guest/lib/bounded.js';
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
 import { limits } from '../../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
-import { discardBody, getJson } from './http.js';
+import { discardBody, getJson, providerBaseUrl } from './http.js';
 
 /** R4-104: an observation counts as current this long. */
 export const CATALOG_FRESH_MS = 15 * 60_000;
@@ -417,13 +417,12 @@ harden(readAnthropicModels);
  * @returns {((key: string) => Promise<CatalogModel[]>) | undefined}
  */
 const readerFor = (spec, fetch) => {
-  const trimmed = (/** @type {string} */ url) => url.replace(/\/+$/, '');
   if (spec.kind === 'openrouter') {
-    const baseUrl = trimmed(String(spec.baseUrl ?? OPENROUTER_BASE_URL));
+    const baseUrl = providerBaseUrl(spec.baseUrl, OPENROUTER_BASE_URL);
     return key => readOpenRouterModels({ baseUrl, key, fetch });
   }
   if (spec.kind === 'anthropic') {
-    const baseUrl = trimmed(String(spec.baseUrl ?? ANTHROPIC_BASE_URL));
+    const baseUrl = providerBaseUrl(spec.baseUrl, ANTHROPIC_BASE_URL);
     return key => readAnthropicModels({ baseUrl, key, fetch });
   }
   return undefined;
@@ -492,7 +491,11 @@ const makeOwner = ({ read, readKey, now, log }) => {
           // The key path's own text may name a code; it is not kept.
           throw new CatalogReadError('key unreadable');
         }
-        if (typeof key !== 'string' || key.trim() === '')
+        if (
+          typeof key !== 'string' ||
+          key.trim() === '' ||
+          Buffer.byteLength(key) > limits.providerTokenBytes
+        )
           throw new CatalogReadError('key unreadable');
         const models = await read(key);
         const sorted = [...models].sort(byTitleThenId);

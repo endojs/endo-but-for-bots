@@ -12,7 +12,7 @@
  *   turn-start's `at` (the Composer stamp) to the provider's `request` log
  *   line, as `turn.start` (both adapter clock).
  * - `concurrency.10.turnStart`: the same per turn, with all 10 sessions
- *   submitting at once, CONC_ROUNDS times. Budget: median <= 2 x the
+ *   submitting at once, round after round for CONC_WINDOW_MS. Budget: median <= 2 x the
  *   single median (computed; `budget.median` carries the number).
  * - `concurrency.10.crank`: per-delivery (crank) wall time in the
  *   supervisor during the concurrent phase, p95 from
@@ -28,7 +28,8 @@
  *
  *   cd packages/thixotrope-harness && node perf/concurrency.perf.mjs
  *
- * CONC_SESSIONS (10), CONC_ROUNDS (8), CONC_SINGLE_N (15).
+ * CONC_SESSIONS (10), CONC_WINDOW_MS (60 s of concurrent rounds; it was
+ * CONC_ROUNDS = 8), CONC_SINGLE_WINDOW_MS (30 s; it was CONC_SINGLE_N = 15).
  */
 /* eslint-disable no-await-in-loop -- phases run in order */
 import {
@@ -40,6 +41,7 @@ import {
   stats,
   summarize,
 } from './_harness.mjs';
+import { runWindow, windowFields, windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -51,8 +53,10 @@ const { execTemplate } = await import('../test/integration/_m1b-exec.js');
 const { runTurn } = await import('../test/integration/_m1b.js');
 
 const SESSIONS = Number(process.env.CONC_SESSIONS ?? 10);
-const ROUNDS = Number(process.env.CONC_ROUNDS ?? 8);
-const SINGLE_N = Number(process.env.CONC_SINGLE_N ?? 15);
+/** Concurrent rounds back to back for this window (it was CONC_ROUNDS = 8). */
+const CONC_WINDOW_MS = windowMs('CONC_WINDOW_MS', 60_000);
+/** Single-session turns for this window (it was CONC_SINGLE_N = 15). */
+const SINGLE_WINDOW_MS = windowMs('CONC_SINGLE_WINDOW_MS', 30_000);
 
 const usage = {
   inputTokens: 10,
@@ -173,12 +177,15 @@ await runPerf('concurrency', async ({ provision }) => {
   /** @type {number[]} */
   const singleTurn = [];
   const hist0 = (await state.client.call('status')).deliveryHistogram;
-  for (let i = 0; i < SINGLE_N; i += 1) {
-    const t0 = Date.now();
-    const r = await runTurn(slice, single.session, single.live, `s${i}`);
-    singleTurn.push(Date.now() - t0);
-    singleStart.push(startOf(single, r));
-  }
+  const singleWindow = await runWindow(
+    async i => {
+      const t0 = Date.now();
+      const r = await runTurn(slice, single.session, single.live, `s${i}`);
+      singleTurn.push(Date.now() - t0);
+      singleStart.push(startOf(single, r));
+    },
+    { ms: SINGLE_WINDOW_MS },
+  );
   const hist1 = (await state.client.call('status')).deliveryHistogram;
   const singleSummary = await stats(
     'concurrency.single.turnStart',
@@ -187,6 +194,7 @@ await runPerf('concurrency', async ({ provision }) => {
       extra: {
         from: 'turn-start at (Composer stamp)',
         to: 'request log line',
+        ...windowFields(singleWindow),
         turnMedianMs: summarize(singleTurn).median,
       },
     },
@@ -203,42 +211,57 @@ await runPerf('concurrency', async ({ provision }) => {
   /** @type {number[]} */
   const rowPush = [];
   let rowMissing = 0;
-  for (let round = 0; round < ROUNDS; round += 1) {
-    const results = await Promise.all(
-      sessions.map(async s => {
-        const t0 = Date.now();
-        const r = await runTurn(slice, s.session, s.live, `c${round}`, 180_000);
-        return { s, r, ms: Date.now() - t0 };
-      }),
-    );
-    for (const { s, r, ms } of results) {
-      concTurn.push(ms);
-      concStart.push(startOf(s, r));
-    }
-    // Row pushes: the first row of each session after its end arrived.
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    for (const { s, r } of results) {
-      const end = s.live.deliveries.find(
-        (/** @type {any} */ d) =>
-          d.event.type === 'end' && d.event.turnId === r.turnId,
+  const concWindow = await runWindow(
+    async round => {
+      const results = await Promise.all(
+        sessions.map(async s => {
+          const t0 = Date.now();
+          const r = await runTurn(
+            slice,
+            s.session,
+            s.live,
+            `c${round}`,
+            180_000,
+          );
+          return { s, r, ms: Date.now() - t0 };
+        }),
       );
-      const started = s.live.deliveries.find(
-        (/** @type {any} */ d) =>
-          d.event.type === 'turn-start' && d.event.turnId === r.turnId,
-      );
-      // The settle row (activity back to passive) is reported in the
-      // settle crank, as `end` is published: it may arrive first.
-      const row = list.deliveries.find(
-        d =>
-          d.event.type === 'row' &&
-          d.event.row.key === s.key &&
-          d.arrivedAt >= started.arrivedAt &&
-          d.event.row.activity !== 'working',
-      );
-      if (row) rowPush.push(row.arrivedAt - end.arrivedAt);
-      else rowMissing += 1;
-    }
-  }
+      for (const { s, r, ms } of results) {
+        concTurn.push(ms);
+        concStart.push(startOf(s, r));
+      }
+      // Row pushes: the first row of each session after its end arrived.
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      for (const { s, r } of results) {
+        const end = s.live.deliveries.find(
+          (/** @type {any} */ d) =>
+            d.event.type === 'end' && d.event.turnId === r.turnId,
+        );
+        const started = s.live.deliveries.find(
+          (/** @type {any} */ d) =>
+            d.event.type === 'turn-start' && d.event.turnId === r.turnId,
+        );
+        // The settle row (activity back to passive) is reported in the
+        // settle crank, as `end` is published: it may arrive first.
+        const row = list.deliveries.find(
+          d =>
+            d.event.type === 'row' &&
+            d.event.row.key === s.key &&
+            d.arrivedAt >= started.arrivedAt &&
+            d.event.row.activity !== 'working',
+        );
+        if (row) rowPush.push(row.arrivedAt - end.arrivedAt);
+        else rowMissing += 1;
+      }
+    },
+    { ms: CONC_WINDOW_MS, few: 3 },
+  );
+  const ROUNDS = concWindow.samples.length;
+  const concFields = {
+    ...windowFields(concWindow),
+    samples: concStart.length,
+    rounds: ROUNDS,
+  };
   const statusB = await state.client.call('status');
   await list.stop();
   const singleMedian = singleSummary.median;
@@ -246,7 +269,7 @@ await runPerf('concurrency', async ({ provision }) => {
     budget: { median: 2 * Number(singleMedian) },
     extra: {
       sessions: SESSIONS,
-      rounds: ROUNDS,
+      ...concFields,
       singleMedianMs: singleMedian,
       ratioMedian: +(
         summarize(concStart).median / Number(singleMedian)
@@ -257,13 +280,14 @@ await runPerf('concurrency', async ({ provision }) => {
   await stats('concurrency.10.turn', concTurn, {
     extra: {
       singleTurnMedianMs: summarize(singleTurn).median,
+      ...concFields,
       what: 'submit to end at the live subscriber',
     },
   });
   if (rowPush.length)
     await stats('concurrency.10.rowPush', rowPush, {
       budget: { median: 500 },
-      extra: { missing: rowMissing },
+      extra: { missing: rowMissing, ...concFields },
     });
   else
     emit({

@@ -83,15 +83,20 @@ export const makeFakeSink = () => {
  * context cache (a restart is another call over the same dirs and sink).
  * @param {{ blobDir: string, archiveDir: string, archives?: any[] }} dirs
  * @param {any} sink
- * @param {{ trace?: any, maxTextUnits?: number }} [options]
+ * @param {{ trace?: any, maxTextUnits?: number, maxSessions?: number }} [options]
  */
-export const makeIncarnation = (dirs, sink, { trace, maxTextUnits } = {}) => {
+export const makeIncarnation = (
+  dirs,
+  sink,
+  { trace, maxTextUnits, maxSessions } = {},
+) => {
   const blobs = makeBlobStore({ dir: dirs.blobDir, sink });
   const archive = makeArchiveStore({
     dir: dirs.archiveDir,
     blobs,
     sink,
     ...(trace === undefined ? {} : { trace }),
+    ...(maxSessions === undefined ? {} : { maxSessions }),
   });
   dirs.archives?.push(archive);
   const cache = makeContextCache({

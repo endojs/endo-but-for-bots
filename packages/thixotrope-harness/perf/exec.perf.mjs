@@ -28,7 +28,9 @@
  *
  *   cd packages/thixotrope-harness && node perf/exec.perf.mjs
  *
- * EXEC_FIRST_N (default 5), EXEC_TRIVIAL_N (50), EXEC_SENDS_N (5).
+ * EXEC_FIRST_N (default 5), EXEC_TRIVIAL_WINDOW_MS (30 s; it was
+ * EXEC_TRIVIAL_N = 50 turns), EXEC_SENDS_N (5). exec.first and exec.sends
+ * stay counts: each sample is a fresh session or a 100-send body.
  * Times are measured at a live subscriber: tool_call arrival to
  * tool_result arrival.
  */
@@ -46,6 +48,7 @@ import {
   single,
   stats,
 } from './_harness.mjs';
+import { runWindow, windowFields, windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -63,7 +66,8 @@ const { readField, runTurn, turnRecords, isStaged } =
   await import('../test/integration/_m1b.js');
 
 const FIRST_N = Number(process.env.EXEC_FIRST_N ?? 5);
-const TRIVIAL_N = Number(process.env.EXEC_TRIVIAL_N ?? 50);
+/** exec.trivial turns back to back for this window (it was EXEC_TRIVIAL_N = 50). */
+const TRIVIAL_WINDOW_MS = windowMs('EXEC_TRIVIAL_WINDOW_MS', 30_000);
 const SENDS_N = Number(process.env.EXEC_SENDS_N ?? 5);
 
 const usage = {
@@ -221,18 +225,23 @@ await runPerf('exec', async ({ provision }) => {
   /** @type {number[]} */
   const trivialMs = [];
   const before = await state.counters();
-  for (let i = 0; i < TRIVIAL_N; i += 1) {
-    const r = await execTurn(main.session, main.live, 'exec trivial');
-    trivialMs.push(/** @type {number} */ (r.callMs));
-  }
+  const trivialWindow = await runWindow(
+    async () => {
+      const r = await execTurn(main.session, main.live, 'exec trivial');
+      trivialMs.push(/** @type {number} */ (r.callMs));
+    },
+    { ms: TRIVIAL_WINDOW_MS },
+  );
   const after = await state.counters();
   await stats('exec.trivial', trivialMs, {
     budget: { median: 250 },
     before,
     after,
-    ops: TRIVIAL_N,
+    ops: trivialMs.length,
     extra: {
       what: 'tool_call to tool_result on a warm scope; deliveries are whole turns (two rounds each)',
+      ...windowFields(trivialWindow),
+      turnsPerMinute: windowFields(trivialWindow).opsPerMinute,
     },
   });
 

@@ -124,6 +124,91 @@ The owner's rule: we do not test anything that takes hours.
 - Anything that cannot fit is redesigned (smaller window, imported state, a Node-level test of the
   logic, a cached template), and the reason goes in the journal.
 
+### 3.1 The regression run (the PM's list)
+
+What a lane's regression run contains, with each file's last held time from `runs.jsonl` and the
+last wall time. Last run: M2 close-out (M2-CLOSE), 2026-11-18, at `d7fce8e46c` (lane
+`endo-thix-m2r`), shared slots, load 2.3-5, three template builds sharing the machine. Commands
+from the package: `corepack yarn test`, then `corepack yarn test:integration --jobs 4`.
+
+| part | file | held s | exit |
+|---|---|---|---|
+| unit + adapter | `corepack yarn test` (727 passed, 59 skipped; no slot) | 66 (wall) | 0 |
+| integration | `m1a-provision` | 180 | 0 |
+| integration | `m1a-slice` | 183 | 0 |
+| integration | `m1a-slice-crash` | 108 | 0 |
+| integration | `m1a-slice-restart` | 188 | 0 |
+| integration | `m1b-content` | 99 | 0 |
+| integration | `m1b-context-restart` | 208 | 0 |
+| integration | `m1b-exec-tool` | 171 | 0 |
+| integration | `m1b-exec-tool-restart` | 120 | 0 |
+| integration | `m1b-followups` | 266 | 0 |
+| integration | `m1b-live` | 132 | 0 |
+| integration | `m1b-pool` | 155 | 0 |
+| integration | `m1b-pool-restart` | 170 | 0 |
+| integration | `m1b-qc` | 116 | 0 |
+| integration | `m2-archive-restart` | 160 | 0 |
+| integration | `m2-archive-restart-2` | 185 | 0 |
+| integration | `m2-catalog` | 82 | 0 |
+| integration | `m2-history` | 202 | 0 |
+| integration | `m2-lifecycle` | 184 | 0 |
+| integration | `m2-lifecycle-export` | 235 | 0 |
+| integration | `m2-probes` | 76 | 0 |
+| integration | `m2-providers` | 86 | 0 |
+| integration | `m2-queue` | 146 | 0 |
+| integration | `m2-secrets` | 76 | 0 |
+| integration | `m2-turns` | 196 | 0 |
+| integration | `test/template/template.test.js` | 68 | 0 |
+
+Integration: 25 files, 3,792 s held in all, **1,040 s wall** at 4 jobs (no wait for a slot);
+with the unit lane about 18 minutes of wall time, inside the 20-minute rule. No file over 5
+minutes. With 6 jobs on an idle machine the integration part would be about 11-12 minutes; with
+other lanes holding slots it is longer (M2-R3 measured 70 minutes held and 161 waited for one pass,
+J-9453).
+
+### 3.2 The perf pass (the PM's list)
+
+Every `perf/*.perf.mjs`, one after another, each as
+`node scripts/run-lock.mjs --exclusive --label perf-<name> -- node perf/<name>.perf.mjs`, in one
+batch (it stops every lane). The long-session templates must exist first (`node
+perf/_long-template.mjs history journal throughput`, shared slots; they are rebuilt after any
+guest-bundle change: about 2.5 + 2.5 + 8 min for the long ones and 5 x 7 min for the busy chain).
+
+| file | held s | exit | budget misses that set the exit |
+|---|---|---|---|
+| `perf/exec.perf.mjs` | 107 | 0 | - |
+| `perf/frames.perf.mjs` | 107 | 0 | - |
+| `perf/turn.perf.mjs` | 127 | 0 | - |
+| `perf/session.perf.mjs` | 146 | 0 | - |
+| `perf/pool.perf.mjs` | 132 | 1 | `session.create.pool` 1.46 x |
+| `perf/concurrency.perf.mjs` | 142 | 1 | `concurrency.10` turn start, crank p95 |
+| `perf/gc.perf.mjs` | 298 | 0 | - |
+| `perf/hub.perf.mjs` | 133 | 0 | - |
+| `perf/hub.growth.perf.mjs` | 221 | 0 | - |
+| `perf/hub.sessions.perf.mjs` | 281 | 1 | `hub.growth.slope` projected to 50 sessions |
+| `perf/crank.perf.mjs` | 174 | 0 | - |
+| `perf/crank.mid.perf.mjs` | 122 | 0 | - |
+| `perf/crank.late.perf.mjs` | 224 | 0 | - |
+| `perf/install.perf.mjs` | 57 | 0 | - |
+| `perf/crash.perf.mjs` | 277 | 1 | `crash.restart.bound5` by design (C-8, C-9) |
+| `perf/restart.perf.mjs` | 226 | 0 | - |
+| `perf/restart.crash.perf.mjs` | 222 | 0 | - |
+| `perf/queue.perf.mjs` | 33 | 0 | first run exit 255 after 13 s (a conversion defect, J-9495), fixed and rerun |
+| `perf/provider.perf.mjs` | 93 | 0 | - |
+| `perf/import.perf.mjs` | 118 | 0 | - |
+| `perf/archive.perf.mjs` | 238 | 1 | `archive.stall.at200` 1.40 x (C-24) |
+| `perf/history.perf.mjs` | 214 | 1 | `archive.flat.hubRow.at1000` 1.39 x |
+| `perf/history.restart.perf.mjs` | 165 | 0 | - |
+| `perf/journal.perf.mjs` | 143 | 0 | - |
+| `perf/throughput.perf.mjs` | 158 | 0 | - |
+
+Last pass: M2 close-out (M2-CLOSE), 2026-11-18 10:48-11:58 UTC, at `6628dbf8a1`, load 1.1-2.4:
+25 files, **4,171 s held in all (69.5 minutes), 69.7 minutes of wall**, no file over 5 minutes,
+none timed out; exit 1 means a budget missed (each listed), not a harness error. The template
+builds before it held 148 + 152 + 488 s (long 200, 1,000, 5,000) and 417 + 392 + 366 + 353 + 352 s
+(busy 10..50) in shared slots, two chains side by side (about 32 minutes of wall). Rows and
+readings: `JOURNAL.md` J-9495..J-9499; verdicts: `milestones.md` M2 outcome.
+
 ## 4. Time record
 
 - Every agent records its start and end time (`date -u +%Y-%m-%dT%H:%M:%SZ` as its first and last

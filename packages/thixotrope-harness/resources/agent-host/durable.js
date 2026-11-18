@@ -44,7 +44,7 @@ const MAX_START_LISTENERS = 16;
  * this list and `Secret.delete` shortens it; it grows with what the
  * operator creates, never with turns.
  */
-const MAX_SECRETS = 1024;
+const MAX_SECRETS = limits.secretsMax;
 
 /** @param {string} code a `secretCodes` entry */
 const secretError = code => Error(textOf.secretFailed(code));
@@ -327,6 +327,13 @@ export const make = ({ makeManager }) => {
   const grantRecords = new WeakMap();
   /** The live Secrets in creation order (`list`). @type {any[]} */
   let secretList = [];
+  /** Creates past the bound check, not yet in `secretList`. */
+  let creating = 0;
+  /** @param {any} secret its creation serial */
+  const serialOf = secret =>
+    Number(
+      /** @type {SecretRecord} */ (secretRecords.get(secret)).key.slice(1),
+    );
 
   /**
    * @param {any} secret
@@ -400,28 +407,39 @@ export const make = ({ makeManager }) => {
   );
 
   const secretsAdmin = makeExo('SecretsAdmin', interfaces.SecretsAdmin, {
-    /** @param {string} [cursor] a position in creation order */
+    /**
+     * @param {string} [cursor] the creation serial of the last Secret of the
+     *   page before, so a delete between pages skips none (J-9486)
+     */
     list: cursor => {
-      const from = cursor === undefined ? 0 : Number(cursor);
-      if (!Number.isSafeInteger(from) || from < 0)
+      const after = cursor === undefined ? 0 : Number(cursor);
+      if (!Number.isSafeInteger(after) || after < 0)
         throw Error('not a secrets cursor');
-      const secrets = secretList.slice(from, from + limits.secretPageEntries);
-      const next = from + secrets.length;
+      const rest = secretList.filter(secret => serialOf(secret) > after);
+      const secrets = rest.slice(0, limits.secretPageEntries);
       return harden(
-        next < secretList.length ? { secrets, next: `${next}` } : { secrets },
+        rest.length > secrets.length
+          ? { secrets, next: `${serialOf(secrets[secrets.length - 1])}` }
+          : { secrets },
       );
     },
     /** @param {{ label: string, description: string }} request */
     create: async ({ label, description }) => {
       assertDescription(description);
-      if (secretList.length >= MAX_SECRETS) throw secretError('CREATE_FAILED');
+      if (secretList.length + creating >= MAX_SECRETS)
+        throw secretError('CREATE_FAILED');
       secretSerial += 1;
       const record = harden({ key: `k${secretSerial}`, label, description });
-      await withOps(current =>
-        E(current).secretCreate(
-          harden({ key: record.key, label, description }),
-        ),
-      );
+      creating += 1;
+      try {
+        await withOps(current =>
+          E(current).secretCreate(
+            harden({ key: record.key, label, description }),
+          ),
+        );
+      } finally {
+        creating -= 1;
+      }
       const secret = makeSecret();
       secretRecords.set(secret, record);
       secretList = [...secretList, secret];

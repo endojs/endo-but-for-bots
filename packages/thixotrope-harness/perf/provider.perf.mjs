@@ -29,9 +29,19 @@
  *   attempt after a 429 with `Retry-After: 1` lands from its scheduled
  *   wait (from the 429's arrival to the second request at the server).
  *
+ * `provider.sse.parse` is measured first, before the fake server starts: a
+ * 10 s window with no network between two network windows let the server's
+ * keep-alive timeout close the pooled connection under the next fetch.
+ *
+ * Fixed windows (M2-P1, process.md section 3): each row repeats its run
+ * (one round, one parse, one attempt) back to back for PROVIDER_WINDOW_MS
+ * (default 10 s; nine rows, about 1.5 minutes) and reports `window`,
+ * `windowMs`, `runs`, `runsPerSecond` and, from the samples, `n` (deltas for
+ * the overhead rows, runs for the others), median and p99.
+ *
  * Run under the run lock (perf/_harness.mjs): `node perf/provider.perf.mjs`.
  * Environment: PROVIDER_DELTAS (default 200), PROVIDER_DELTA_MS (default 5),
- * PROVIDER_RUNS (default 3).
+ * PROVIDER_WINDOW_MS (default 10,000).
  */
 import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
@@ -42,12 +52,8 @@ import { performance } from 'node:perf_hooks';
 await import('../scripts/_init.mjs');
 await import('../test/unit/_m1a-prelude.js');
 const { runPerf, stats } = await import('./_harness.mjs');
-const {
-  anthropicEvents,
-  openRouterChunks,
-  sseText,
-  startFakeProviderServer,
-} = await import('../test/fixtures/fake-provider-server.mjs');
+const { anthropicEvents, openRouterChunks, sseText, startFakeProviderServer } =
+  await import('../test/fixtures/fake-provider-server.mjs');
 const { makeTestBlobs } = await import('../test/adapter/_m1b-blobs.js');
 // eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
 const { interfaces } = await import('../guest/lib/interfaces.js');
@@ -69,9 +75,33 @@ const { E, Far, makeExo } = /** @type {any} */ (globalThis);
 
 const DELTAS = Number(process.env.PROVIDER_DELTAS ?? 200);
 const DELTA_MS = Number(process.env.PROVIDER_DELTA_MS ?? 5);
-const RUNS = Number(process.env.PROVIDER_RUNS ?? 3);
+const WINDOW_MS = Number(process.env.PROVIDER_WINDOW_MS ?? 10_000);
 const MIB = 1024 * 1024;
 const timers = makeTimers();
+
+/**
+ * Run `once(run)` back to back for WINDOW_MS (at least once); the row
+ * fields that say how many runs and samples the window held.
+ * @param {(run: number) => Promise<void>} once
+ */
+const forWindow = async once => {
+  const t0 = performance.now();
+  let runs = 0;
+  do {
+    await once(runs);
+    runs += 1;
+  } while (performance.now() - t0 < WINDOW_MS);
+  const windowMs = performance.now() - t0;
+  return {
+    runs,
+    fields: {
+      window: WINDOW_MS,
+      windowMs: Math.round(windowMs),
+      runs,
+      runsPerSecond: +((runs * 1000) / windowMs).toFixed(2),
+    },
+  };
+};
 
 const makeSink = () => {
   const calls = { dispatching: 0, progress: 0, roundFinal: 0, roundFailed: 0 };
@@ -130,18 +160,18 @@ const oneRound = async ({
   log = () => {},
 }) => {
   const anthropic = kind === 'anthropic';
-  const provider = (
-    anthropic ? makeAnthropicProvider : makeOpenRouterProvider
-  )({
-    label: 'perf',
-    spec: {
-      baseUrl: anthropic ? server.anthropicBaseUrl : server.openRouterBaseUrl,
+  const provider = (anthropic ? makeAnthropicProvider : makeOpenRouterProvider)(
+    {
+      label: 'perf',
+      spec: {
+        baseUrl: anthropic ? server.anthropicBaseUrl : server.openRouterBaseUrl,
+      },
+      readKey: async () => 'not a real key',
+      timers,
+      log,
+      blobs: blobs.store,
     },
-    readKey: async () => 'not a real key',
-    timers,
-    log,
-    blobs: blobs.store,
-  });
+  );
   const owner = Far('Session', {});
   const channel = makeChannelRegistry().channelFor(owner);
   let reading = Promise.resolve();
@@ -199,6 +229,50 @@ await runPerf('provider', async ({ root }) => {
   const blobDir = path.join(root, 'blobs');
   mkdirSync(blobDir, { recursive: true });
 
+  // ---- 10 MiB stream. Built, and its parse row measured, before the fake
+  // server starts: the parse window has no network, and a 10 s pause after
+  // the overhead window let the server's keep-alive timeout (5 s) close the
+  // pooled connection under the next fetch (ECONNRESET, M2-P1).
+  const piece = 'x'.repeat(64);
+  // As many delta events as make 10 MiB on the wire.
+  const one = sseText(openRouterChunks({ deltas: [piece] }).slice(2, 3));
+  const count = Math.floor((10 * MIB) / one.length);
+  const big = openRouterChunks({
+    deltas: Array.from({ length: count }, () => piece),
+  });
+  const text = sseText(big);
+  const bytes = new TextEncoder().encode(text);
+  /** @type {Uint8Array[]} */
+  const chunks = [];
+  for (let i = 0; i < bytes.length; i += 65_536)
+    chunks.push(bytes.subarray(i, i + 65_536));
+  /** @type {number[]} */
+  const parseMs = [];
+  let events = 0;
+  const w2 = await forWindow(async run => {
+    events = 0;
+    const t0 = performance.now();
+
+    for await (const event of parseSse(chunks)) {
+      if (event.data !== '') events += 1;
+    }
+    parseMs.push(performance.now() - t0);
+  });
+  const medianParse = [...parseMs].sort((a, b) => a - b)[
+    Math.floor(parseMs.length / 2)
+  ];
+  await stats('provider.sse.parse', parseMs, {
+    extra: {
+      ...w2.fields,
+      samples: parseMs.length,
+      bytes: bytes.length,
+      events,
+      mibPerSecond: +(bytes.length / MIB / (medianParse / 1000)).toFixed(1),
+      eventsPerSecond: Math.round(events / (medianParse / 1000)),
+      chunkBytes: 65_536,
+    },
+  });
+
   // ---- provider.overhead
   /** @type {Map<number, number>} event index -> write time */
   const written = new Map();
@@ -209,7 +283,7 @@ await runPerf('provider', async ({ root }) => {
     /** @type {number[]} */
     const samples = [];
     let streamingCalls = 0;
-    for (let run = 0; run < RUNS; run += 1) {
+    const w1 = await forWindow(async run => {
       written.clear();
       const deltas = Array.from({ length: DELTAS }, (_, i) => `d${i} `);
       // Events: a comment, the role chunk, then one chunk per delta.
@@ -234,7 +308,7 @@ await runPerf('provider', async ({ root }) => {
       });
       if (arrivals.length !== DELTAS)
         throw Error(`expected ${DELTAS} deltas, saw ${arrivals.length}`);
-    }
+    });
     const ops = samples.length;
     await stats('provider.overhead', samples, {
       budget: { median: 5, deliveriesPerOp: 0 },
@@ -242,51 +316,13 @@ await runPerf('provider', async ({ root }) => {
       after: { delivery: { count: streamingCalls, milliseconds: 0 } },
       ops,
       extra: {
+        ...w1.fields,
+        samples: samples.length,
         deltasPerRun: DELTAS,
         deltaSpacingMs: DELTA_MS,
-        runs: RUNS,
         path: 'fake server socket write -> fetch -> parseSse -> openrouter -> runProviderRound -> channel -> E(subscription).next()',
         deliveriesSource:
           'TurnSink messages sent while streaming (in-process provider; daemon wiring is W2.2/W2.9)',
-      },
-    });
-
-    // ---- 10 MiB stream
-    const piece = 'x'.repeat(64);
-    // As many delta events as make 10 MiB on the wire.
-    const one = sseText(openRouterChunks({ deltas: [piece] }).slice(2, 3));
-    const count = Math.floor((10 * MIB) / one.length);
-    const big = openRouterChunks({
-      deltas: Array.from({ length: count }, () => piece),
-    });
-    const text = sseText(big);
-    const bytes = new TextEncoder().encode(text);
-    /** @type {Uint8Array[]} */
-    const chunks = [];
-    for (let i = 0; i < bytes.length; i += 65_536)
-      chunks.push(bytes.subarray(i, i + 65_536));
-    /** @type {number[]} */
-    const parseMs = [];
-    let events = 0;
-    for (let run = 0; run < RUNS; run += 1) {
-      events = 0;
-      const t0 = performance.now();
-
-      for await (const event of parseSse(chunks)) {
-        if (event.data !== '') events += 1;
-      }
-      parseMs.push(performance.now() - t0);
-    }
-    const medianParse = [...parseMs].sort((a, b) => a - b)[
-      Math.floor(parseMs.length / 2)
-    ];
-    await stats('provider.sse.parse', parseMs, {
-      extra: {
-        bytes: bytes.length,
-        events,
-        mibPerSecond: +(bytes.length / MIB / (medianParse / 1000)).toFixed(1),
-        eventsPerSecond: Math.round(events / (medianParse / 1000)),
-        chunkBytes: 65_536,
       },
     });
 
@@ -295,7 +331,7 @@ await runPerf('provider', async ({ root }) => {
     const attemptMs = [];
     /** @type {number[]} deltas yielded per run (one per network read) */
     const attemptDeltas = [];
-    for (let run = 0; run < RUNS; run += 1) {
+    const w3 = await forWindow(async run => {
       server.setPlan([{ events: big }]);
       let seen = 0;
       let reads = 0;
@@ -316,12 +352,14 @@ await runPerf('provider', async ({ root }) => {
       if (seen !== count * piece.length)
         throw Error(`attempt saw ${seen} of ${count * piece.length} units`);
       attemptDeltas.push(reads);
-    }
+    });
     const medianAttempt = [...attemptMs].sort((a, b) => a - b)[
       Math.floor(attemptMs.length / 2)
     ];
     await stats('provider.sse.attempt', attemptMs, {
       extra: {
+        ...w3.fields,
+        samples: attemptMs.length,
         bytes: bytes.length,
         events: count,
         deltasYielded: attemptDeltas,
@@ -331,7 +369,7 @@ await runPerf('provider', async ({ root }) => {
 
     /** @type {number[]} */
     const streamMs = [];
-    for (let run = 0; run < RUNS; run += 1) {
+    const w4 = await forWindow(async run => {
       server.setPlan([{ events: big }]);
       const blobs = makeTestBlobs({ dir: path.join(blobDir, `s${run}`) });
       const t0 = performance.now();
@@ -340,12 +378,14 @@ await runPerf('provider', async ({ root }) => {
       streamMs.push(performance.now() - t0 - 20);
       if (calls.roundFinal !== 1)
         throw Error('the 10 MiB round did not finish');
-    }
+    });
     const medianStream = [...streamMs].sort((a, b) => a - b)[
       Math.floor(streamMs.length / 2)
     ];
     await stats('provider.sse.stream', streamMs, {
       extra: {
+        ...w4.fields,
+        samples: streamMs.length,
         bytes: bytes.length,
         deltas: count,
         replyBytes: count * piece.length,
@@ -357,7 +397,7 @@ await runPerf('provider', async ({ root }) => {
     /** @type {number[]} */
     const aSamples = [];
     let aStreamingCalls = 0;
-    for (let run = 0; run < RUNS; run += 1) {
+    const w5 = await forWindow(async run => {
       written.clear();
       const deltas = Array.from({ length: DELTAS }, (_, i) => `d${i} `);
       // Events: message_start, ping, content_block_start, then the deltas.
@@ -381,16 +421,17 @@ await runPerf('provider', async ({ root }) => {
       });
       if (arrivals.length !== DELTAS)
         throw Error(`expected ${DELTAS} deltas, saw ${arrivals.length}`);
-    }
+    });
     await stats('provider.overhead.anthropic', aSamples, {
       budget: { median: 5, deliveriesPerOp: 0 },
       before: { delivery: { count: 0, milliseconds: 0 } },
       after: { delivery: { count: aStreamingCalls, milliseconds: 0 } },
       ops: aSamples.length,
       extra: {
+        ...w5.fields,
+        samples: aSamples.length,
         deltasPerRun: DELTAS,
         deltaSpacingMs: DELTA_MS,
-        runs: RUNS,
         path: 'fake server socket write -> fetch -> parseSse -> anthropic (retry wrapper) -> runProviderRound -> channel -> E(subscription).next()',
       },
     });
@@ -401,7 +442,7 @@ await runPerf('provider', async ({ root }) => {
     const aBytes = new TextEncoder().encode(sseText(aBig)).length;
     /** @type {number[]} */
     const aAttemptMs = [];
-    for (let run = 0; run < RUNS; run += 1) {
+    const w6 = await forWindow(async run => {
       server.setPlan([{ events: aBig }]);
       let seen = 0;
       const t0 = performance.now();
@@ -417,12 +458,14 @@ await runPerf('provider', async ({ root }) => {
       aAttemptMs.push(performance.now() - t0);
       if (seen !== count * piece.length)
         throw Error(`anthropic attempt saw ${seen} units`);
-    }
+    });
     const aMedianAttempt = [...aAttemptMs].sort((a, b) => a - b)[
       Math.floor(aAttemptMs.length / 2)
     ];
     await stats('provider.sse.attempt.anthropic', aAttemptMs, {
       extra: {
+        ...w6.fields,
+        samples: aAttemptMs.length,
         bytes: aBytes,
         events: count,
         mibPerSecond: +(aBytes / MIB / (aMedianAttempt / 1000)).toFixed(1),
@@ -430,7 +473,7 @@ await runPerf('provider', async ({ root }) => {
     });
     /** @type {number[]} */
     const aStreamMs = [];
-    for (let run = 0; run < RUNS; run += 1) {
+    const w7 = await forWindow(async run => {
       server.setPlan([{ events: aBig }]);
       const blobs = makeTestBlobs({ dir: path.join(blobDir, `as${run}`) });
       const t0 = performance.now();
@@ -443,12 +486,14 @@ await runPerf('provider', async ({ root }) => {
       aStreamMs.push(performance.now() - t0 - 20);
       if (calls.roundFinal !== 1)
         throw Error('the 10 MiB Anthropic round did not finish');
-    }
+    });
     const aMedianStream = [...aStreamMs].sort((a, b) => a - b)[
       Math.floor(aStreamMs.length / 2)
     ];
     await stats('provider.sse.stream.anthropic', aStreamMs, {
       extra: {
+        ...w7.fields,
+        samples: aStreamMs.length,
         bytes: aBytes,
         deltas: count,
         mibPerSecond: +(aBytes / MIB / (aMedianStream / 1000)).toFixed(1),
@@ -461,7 +506,7 @@ await runPerf('provider', async ({ root }) => {
     const bare = [];
     /** @type {number[]} */
     const wrapped = [];
-    for (let run = 0; run < RUNS; run += 1) {
+    const w8 = await forWindow(async run => {
       for (const wrap of [false, true]) {
         server.setPlan([{ events: big }]);
         const signal = new AbortController().signal;
@@ -482,11 +527,13 @@ await runPerf('provider', async ({ root }) => {
         }
         (wrap ? wrapped : bare).push(performance.now() - t0);
       }
-    }
+    });
     const median = (/** @type {number[]} */ xs) =>
       [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
     await stats('provider.retry.passThrough', wrapped, {
       extra: {
+        ...w8.fields,
+        samples: wrapped.length,
         bytes: bytes.length,
         bareMedianMs: +median(bare).toFixed(1),
         wrappedMedianMs: +median(wrapped).toFixed(1),
@@ -495,7 +542,7 @@ await runPerf('provider', async ({ root }) => {
     });
     /** @type {number[]} */
     const waitError = [];
-    for (let run = 0; run < RUNS; run += 1) {
+    const w9 = await forWindow(async run => {
       server.setPlan([
         { status: 429, headers: { 'retry-after': '1' } },
         { events: openRouterChunks({ deltas: ['ok'] }) },
@@ -517,9 +564,11 @@ await runPerf('provider', async ({ root }) => {
       // second request's arrival minus the 1,000 ms wait is the slack.
       waitError.push(second.receivedAt - first.receivedAt - 1000);
       if (retries.length !== 1) throw Error('expected one retry');
-    }
+    });
     await stats('provider.retry.wait', waitError, {
       extra: {
+        ...w9.fields,
+        samples: waitError.length,
         scheduledMs: openRouterDelay(1, 1000),
         what: 'second request arrival - first request arrival - 1000 ms',
       },

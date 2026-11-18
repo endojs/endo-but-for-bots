@@ -793,6 +793,10 @@ closed (CC-013, CC-015). C-20 is addressed in part by CC-018 and CC-019; page 6 
 | C-19 | a vat is not told that an adapter incarnation it holds has died | held ports compare two clocks; first turn after a restart pays a reopen |
 | C-20 (rest) | endpoint commits per frame; per-commit cost is C-2 | some bursts still cost 0.4-0.9 s of hub time (J-9213, J-9216) |
 | C-21 | the slot ceiling bounds live heap plus one crank; no collection inside a crank | the harness serves at 4,000,000 slots (persisted per state); a session's heaviest crank sets how large it may grow (J-0392) |
+| C-22 | pattern checks in a vat cost milliseconds per record | import is bounded at 7-13 turns/s; long-session templates take 8-9 min to build (J-0481, J-9464) |
+| C-23 | a Node client's presence for a remote object can be collected while the remote still exports it | adapter caches keyed by a presence must hold it strongly (J-9403) |
+| C-24 | the worker transport's cadence snapshot (every 256 deliveries) runs between a busy turn's deliveries | `checkpoint.stall` p99 2-6 s against 1 s; the turn that crosses the count waits for a 34 MB snapshot (J-9462, J-9494) |
+| C-25 | a frame over `frameBytes` addressed to a vat is journaled and delivered; only the vat's guard refuses it | a 100 KiB inline string reaches the session vat (no halt below about 94 KB, a halt above); M5's CC-070 is the same change (J-9407, J-9489) |
 
 C-2 is addressed in part by CC-025 (one append instead of a whole-file replacement; per persist
 9.8-10.7 -> 5.5-6.6 ms, J-9333); the row above keeps the cost it had, and the rest is J-9335.
@@ -959,3 +963,13 @@ supervisor child) to move large atoms out of vat frames and check data-reference
 Motivation: spike dataref track T3, `designs/spike-dataref/design-engine.md` (a stand-in for an
 engine-native data handle). Visible to other users: none. Worker, boot bundles and goldens
 unchanged. CC-088 and CC-089 unused (no engine or worker change was made).
+
+### Accounting check 2026-11-18 (M2 review and close-out, M2-CLOSE)
+
+Range `6be8e868cf..HEAD` (the M2 build as integrated, then the M2 review, perf-conversion, fix and
+close-out units; checked at `d7fce8e46c`, 30 commits, and again at this unit's last commit). Command:
+`git diff --stat 6be8e868cf..HEAD -- . ':!packages/thixotrope-harness'` printed nothing, and
+`git log --oneline 6be8e868cf..HEAD -- . ':!packages/thixotrope-harness'` lists no commit. M2's
+review and close-out changed nothing outside the harness, so no CC entry was added (CC-030
+onwards stay unused by M2). The core candidates it raised (C-24, C-25) are in the table of open
+candidates above and on `designs/m0-results.md` page 6.

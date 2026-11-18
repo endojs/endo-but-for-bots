@@ -88,6 +88,7 @@ export const makeSession = (
     onChange: runner.queueChanged,
     turnOf: runner.turnById,
     claim: () => runner.claimNext(),
+    cancelCurrent: () => runner.cancelCurrent(),
   });
 
   /** Section 11: what recovery.js (W1a.5) works on. */

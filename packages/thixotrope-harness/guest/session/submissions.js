@@ -15,9 +15,8 @@
  * - No load-time `restart` hold: a restart is learned from the turn's lease
  *   (recovery.js holds `restart`); a queue that cannot be read
  *   (`unavailable`) cannot happen to a heap.
- * - Send-now moves the entry to the head (5.1) rather than answering
- *   `cancelCurrent`: the running turn is never cut short by a queued
- *   message; the entry waits at the head and starts next.
+ * - Send-now moves the entry to the head (5.1); the queue then cancels a
+ *   running turn so the entry goes next (R6-44; `queue.js`).
  *
  * The rules (R4-56): a new message (not a duplicate) or send-now releases
  * every hold except the ones that need a decision about their message

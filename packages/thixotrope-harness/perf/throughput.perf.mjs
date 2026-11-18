@@ -1,31 +1,32 @@
 // @ts-check
 /**
  * Perf check "throughput" (milestones.md M2 perf rows `restart.serving`
- * and `throughput`; W2.9), from the m1a state template served with
- * idleSleepMs 2,000:
+ * and `throughput`; W2.9; fixed windows M2-P1), from a cached template of
+ * THROUGHPUT_SESSIONS (50) sessions of THROUGHPUT_TURNS (300) synthetic
+ * turns each (shape plain: 4 records a turn; `THROUGHPUT_SHAPE=tool` for
+ * 8), imported with `importState` and bound to scripted backends with a
+ * one-round reply, served with idleSleepMs 2,000.
  *
- * 1. Setup: THROUGHPUT_SESSIONS (50) sessions of THROUGHPUT_TURNS (300)
- *    synthetic turns each, imported with `importState` (shape plain by
- *    default: 4 records a turn; `THROUGHPUT_SHAPE=tool` for 8), bound to a
- *    scripted backend with a one-round reply. `throughput.import` reports
- *    the import.
+ * 1. Setup: a copy of the template. Importing the 15,000 turns took 26
+ *    minutes (J-9412), so the template is built as a chain of boxed steps of
+ *    THROUGHPUT_BATCH (10) sessions, before and outside this check:
+ *    `node perf/_long-template.mjs throughput`. `throughput.template` names
+ *    the template and its import figures.
  * 2. `restart.serving` (M2 row; budget 15 s; gate: 0 idle vats woken): with
  *    every session vat asleep and checkpointed, SIGKILL the supervisor and
  *    serve again; serving time, woken session vats (worker rows' `wakes`,
  *    else a moved delivery frontier) and crashes. RESTART_N runs (3).
  * 3. `throughput`: THROUGHPUT_BUSY (20) of the sessions each run turns back
  *    to back (`startTurn`, then `whenFinished`) for THROUGHPUT_MS (60 s);
- *    deliveries per second (the engine's delivery count over the stretch,
- *    every vat), turns per second, and the per-delivery worker time.
- *    Recorded; the milestone asks for a journal entry when under 50/s.
+ *    deliveries per second (the engine's delivery count over the window,
+ *    every vat), turns per second, the per-delivery worker time, and the
+ *    per-turn median and p99 with the samples the window held. Recorded; the
+ *    milestone asks for a journal entry when under 50/s.
  *
  *   cd packages/thixotrope-harness && node perf/throughput.perf.mjs
  *
- * About 30 minutes with the defaults (most of it the import).
+ * About 5 minutes once the template exists.
  */
-/* eslint-disable no-await-in-loop -- phases run in order */
-import { rmSync } from 'node:fs';
-import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import {
@@ -46,28 +47,16 @@ const { killStrays, startFromTemplate } =
   await import('../test/template/index.js');
 const { makeSlice, round1, sliceTemplate, untilAsleep } =
   await import('../test/integration/_m1a-slice.js');
-const { writeSyntheticExport } =
-  await import('../test/integration/_m2-lifecycle.js');
-const { importState } = await import('../scripts/export.mjs');
+const { specsFor, useTemplate } = await import('./_long-template.mjs');
 
-const SESSIONS = Number(process.env.THROUGHPUT_SESSIONS ?? 50);
-const TURNS = Number(process.env.THROUGHPUT_TURNS ?? 300);
 const BUSY = Number(process.env.THROUGHPUT_BUSY ?? 20);
 const STRETCH_MS = Number(process.env.THROUGHPUT_MS ?? 60_000);
 const RESTART_N = Number(process.env.RESTART_N ?? 3);
-const SHAPE = process.env.THROUGHPUT_SHAPE === 'tool' ? 'tool' : 'plain';
-
-const usage = {
-  inputTokens: 10,
-  outputTokens: 5,
-  cachedInputTokens: 0,
-  cacheWriteInputTokens: 0,
-  reasoningOutputTokens: 0,
-};
-/** One round, a short reply (every turn). */
-const script = harden({
-  turns: [{ rounds: [{ chunks: [{ text: 'a short reply' }], usage }] }],
-});
+const spec = /** @type {import('./_long-template.mjs').BusySpec} */ (
+  specsFor('throughput').at(-1)
+);
+const SESSIONS = spec.sessions;
+const TURNS = spec.turns;
 
 const identity = async () => ({
   ...(await runIdentity()),
@@ -76,46 +65,33 @@ const identity = async () => ({
 });
 
 await runPerf('throughput', async ({ root }) => {
-  const template = await sliceTemplate();
-  const served = await startFromTemplate(template, {
-    root,
-    maxDeliveryAttempts: 5,
-  });
+  const used = await useTemplate(spec);
+  /** @type {any} */
+  let served;
   try {
-    const slice = await makeSlice(served);
-    const made = await slice.makeBackend(script, { label: 'Scripted' });
-
-    // ---- 1. setup by import
-    const file = path.join(path.dirname(root), `${path.basename(root)}.jsonl`);
-    const written = await writeSyntheticExport(
-      file,
-      Array.from({ length: SESSIONS }, (_, i) => ({
-        title: `busy ${i + 1}`,
-        turns: TURNS,
-        backendLabel: 'Scripted',
-        shape: SHAPE,
-      })),
+    const base = await sliceTemplate();
+    served = await startFromTemplate(
+      /** @type {any} */ ({ dir: used.dir, crankBudget: base.crankBudget }),
+      { root, maxDeliveryAttempts: 5 },
     );
-    const result = await importState({
-      client: served.client,
-      file,
-      backends: [made.backend],
-    });
-    rmSync(file, { force: true });
+    const slice = await makeSlice(served);
+
+    // ---- 1. setup: the template
     emit({
-      metric: 'throughput.import',
-      sessions: result.sessions.length,
-      turns: result.turns,
-      records: result.records,
-      fileBytes: written.bytes,
-      ms: Math.round(result.ms),
-      turnsPerSecond: round1((result.turns * 1000) / result.ms),
-      shape: SHAPE,
+      metric: 'throughput.template',
+      key: used.key,
+      sessions: used.sessionKeys.length,
+      turnsEach: TURNS,
+      shape: spec.shape,
+      batch: spec.batch,
+      lastStepImport: used.import,
+      copyMs: served.timings.copyMs,
+      servedMs: served.timings.servedMs,
+      builtAt: used.builtAt,
+      builtBy: used.commit,
       ...(await identity()),
     });
-    const keys = [];
-    for (const session of result.sessions)
-      keys.push((await E(session).getInfo()).key);
+    const keys = used.sessionKeys;
 
     // ---- 2. restart.serving
     const isSession = (/** @type {any} */ w) =>
@@ -123,7 +99,7 @@ await runPerf('throughput', async ({ root }) => {
     /** @type {number[]} */
     const servedRuns = [];
     for (let run = 1; run <= RESTART_N; run += 1) {
-      await untilAsleep(slice.workers, isSession, 20 * 60_000);
+      await untilAsleep(slice.workers, isSession, 3 * 60_000);
       const before = new Map(
         (await slice.workers()).filter(isSession).map(w => [w.debugLabel, w]),
       );
@@ -210,10 +186,13 @@ await runPerf('throughput', async ({ root }) => {
       }),
     );
     const seconds = (performance.now() - t0) / 1000;
+    const samples = turnMs.length;
     const status1 = await served.client.call('status');
     const engine = delta(status0.timings ?? {}, status1.timings ?? {});
     const deliveries = engine.delivery ?? { count: 0, ms: 0 };
     turnMs.sort((a, b) => a - b);
+    const q = (/** @type {number} */ p) =>
+      round1(turnMs[Math.min(samples - 1, Math.floor(p * samples))] ?? 0);
     const perSecond = round1(deliveries.count / seconds);
     emit({
       metric: 'throughput',
@@ -228,13 +207,18 @@ await runPerf('throughput', async ({ root }) => {
       turnsPerSecond: round1(turns / seconds),
       turns,
       failed,
-      turnMsMedian: round1(turnMs[Math.floor(turnMs.length / 2)] ?? 0),
-      turnMsP95: round1(turnMs[Math.floor(turnMs.length * 0.95)] ?? 0),
+      turnMsMedian: q(0.5),
+      turnMsP95: q(0.95),
+      turnMsP99: q(0.99),
+      window: STRETCH_MS,
+      windowMs: round1(seconds * 1000),
+      samples,
       journalIfUnder: 50,
       engine,
       ...(await identity()),
     });
   } finally {
-    await served.cleanup();
+    await served?.cleanup();
+    await used.release();
   }
 });

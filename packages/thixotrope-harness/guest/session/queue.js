@@ -26,8 +26,9 @@
  *   session keeps the turn, else the receipt carries `turnId` alone.
  * - `QueueEntry.edit` replaces the text (the Composer stages it),
  *   `cancel` drops the entry, `sendNow` moves it to the head, releases the
- *   hold and asks the session to `claim()` (it starts at once when idle,
- *   next when a turn runs).
+ *   hold and asks the session to `claim()`: it starts at once when idle;
+ *   while a turn runs, that turn is cancelled so it goes next (R6-44,
+ *   `cancelCurrent`; J-9491).
  * - `onChange()` runs after every change of the entries or the hold (the
  *   session publishes `pending` and reports `queuedCount`); one that throws
  *   is ignored: the change has happened.
@@ -111,12 +112,15 @@ harden(assertNoActiveTurn);
  * @param {() => unknown} [options.claim] the session's claim of the next
  *   entry (`SessionCore.claimNext`), which `sendNow` asks for; does nothing
  *   by default
+ * @param {() => void} [options.cancelCurrent] cancels the running turn
+ *   (R6-44: send-now on the queue head while a turn runs); nothing by default
  * @returns {Queue}
  */
 export const makeQueue = ({
   onChange = () => {},
   turnOf = turnId => turnId,
   claim: claimNext = () => undefined,
+  cancelCurrent = () => {},
 } = {}) => {
   /**
    * The QueueEntry class, defined once per queue on first use. `makeExo`
@@ -153,8 +157,18 @@ export const makeQueue = ({
             pending.edit(this.state.internal, submission);
           },
           sendNow() {
-            submissions.sendNow(this.state.internal);
+            const { internal: self } = this.state;
+            submissions.sendNow(self);
             claimNext();
+            // R6-44: still waiting at the head, unheld: a turn runs, and it
+            // is cancelled so this goes next (its settle claims).
+            if (
+              self.waiting &&
+              pending.first() === self &&
+              submissions.current() === undefined
+            ) {
+              cancelCurrent();
+            }
           },
         },
       );

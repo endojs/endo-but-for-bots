@@ -18,13 +18,17 @@
  *
  *   cd packages/thixotrope-harness && node perf/pool.perf.mjs
  *
- * POOL_CREATE_N (default 8), POOL_AWAKE_N (4), POOL_COLD_N (3),
- * POOL_REFILL_N (3).
+ * POOL_CREATE_WINDOW_MS (default 45 s of wall, the settle and sleep waits
+ * between takes included, at least 3 takes; it was POOL_CREATE_N = 8),
+ * POOL_COLD_WINDOW_MS (default 20 s, at least 3; it was POOL_COLD_N = 3);
+ * POOL_AWAKE_N (4) and POOL_REFILL_N (3) stay counts: each sample is a
+ * scenario (a spare caught awake, a refill of 2 after 2 takes).
  */
 /* eslint-disable no-await-in-loop -- steps of one scenario run in order */
 import { performance } from 'node:perf_hooks';
 
 import { runPerf, stats, workerRss } from './_harness.mjs';
+import { runWindow, windowFields, windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -37,9 +41,11 @@ const { runTurn } = await import('../test/integration/_m1b.js');
 const { inputs, sliceScript } =
   await import('../test/fixtures/scripts/m1a-slice.js');
 
-const CREATE_N = Number(process.env.POOL_CREATE_N ?? 8);
+/** Takes of a sleeping spare for this window (it was POOL_CREATE_N = 8). */
+const CREATE_WINDOW_MS = windowMs('POOL_CREATE_WINDOW_MS', 45_000);
 const AWAKE_N = Number(process.env.POOL_AWAKE_N ?? 4);
-const COLD_N = Number(process.env.POOL_COLD_N ?? 3);
+/** Cold creates for this window (it was POOL_COLD_N = 3). */
+const COLD_WINDOW_MS = windowMs('POOL_COLD_WINDOW_MS', 20_000);
 const REFILL_N = Number(process.env.POOL_REFILL_N ?? 3);
 
 /** @param {any} w */
@@ -58,23 +64,28 @@ await runPerf('pool', async ({ provision }) => {
   /** @type {any[]} */
   const pooled = [];
   const before = await state.counters();
-  for (let i = 0; i < CREATE_N; i += 1) {
-    await E(harness).whenSettled();
-    await untilAsleep(slice.workers, isSessionSpare);
-    const t0 = performance.now();
-    pooled.push(await slice.createSession(made.backend, `pooled ${i}`));
-    pooledMs.push(performance.now() - t0);
-  }
+  const pooledWindow = await runWindow(
+    async i => {
+      await E(harness).whenSettled();
+      await untilAsleep(slice.workers, isSessionSpare);
+      const t0 = performance.now();
+      pooled.push(await slice.createSession(made.backend, `pooled ${i}`));
+      pooledMs.push(performance.now() - t0);
+    },
+    { ms: CREATE_WINDOW_MS, min: 3 },
+  );
   const after = await state.counters();
   await stats('session.create.pool', pooledMs, {
     budget: { median: 750 },
     extra: {
       spare: 'asleep and checkpointed',
       note: 'deliveries include each take`s refill (createWorker, staging, evaluation)',
+      ...windowFields(pooledWindow),
+      windowIncludes: 'the settle and sleep waits between takes',
     },
     before,
     after,
-    ops: CREATE_N,
+    ops: pooledMs.length,
   });
 
   // ---- session.create.poolAwake (a spare just made, not yet asleep)
@@ -147,13 +158,16 @@ await runPerf('pool', async ({ provision }) => {
   await E(harness).whenSettled();
   /** @type {number[]} */
   const coldMs = [];
-  for (let i = 0; i < COLD_N; i += 1) {
-    const t0 = performance.now();
-    await slice.createSession(made.backend, `cold ${i}`);
-    coldMs.push(performance.now() - t0);
-  }
+  const coldWindow = await runWindow(
+    async i => {
+      const t0 = performance.now();
+      await slice.createSession(made.backend, `cold ${i}`);
+      coldMs.push(performance.now() - t0);
+    },
+    { ms: COLD_WINDOW_MS, min: 3 },
+  );
   await stats('session.create.cold', coldMs, {
     budget: { median: 6000 },
-    extra: { depends: 'C-5 (staging cost)' },
+    extra: { depends: 'C-5 (staging cost)', ...windowFields(coldWindow) },
   });
 });

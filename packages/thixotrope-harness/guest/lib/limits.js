@@ -171,11 +171,10 @@ export const limits = harden({
   // ---- M2 contract settings (W2.0; designs/m2-interfaces.md) ----
   /**
    * Records in one history page a session vat answers (W2.5; section 6):
-   * a page crank marshals about 3 ms per record (J-0370, J-9387), so 48
-   * records keep it near 245 ms over a floor of about 95 ms against the
-   * 300 ms `history.page` budget [inferred].
+   * a page crank marshals about 3 ms per record (J-0370, J-9387); at 48
+   * the newest page missed the 300 ms `history.page` budget, so 40 (J-9488).
    */
-  historyPageRecords: 48,
+  historyPageRecords: 40,
   /**
    * The record archive (D-M2-1; section 4): settled turns the session vat
    * keeps after a seal, the most turns one segment takes, and the record
@@ -215,6 +214,14 @@ export const limits = harden({
   secretDescriptionUnits: 200,
   /** A secret value (R7-25: at most 1 MiB), adapter-local only. */
   secretValueBytes: 1_048_576,
+  /** A key sent as a provider credential (R7-25, contract 9.2), bytes. */
+  providerTokenBytes: 8192,
+  /** Secrets one daemon holds (contract 9.1). */
+  secretsMax: 1024,
+  /** Audit events kept in `secrets.audit` (contract 9.1). */
+  auditKeepEvents: 10_000,
+  /** A provider round's whole streamed body, bytes (adapter memory bound). */
+  roundStreamBytes: 67_108_864,
   /** A sealed box: base64 of a 1 MiB value plus its envelope. */
   sealedBoxUnits: 1_400_000,
   /** Secrets in one `SecretsAdmin.list` page. */

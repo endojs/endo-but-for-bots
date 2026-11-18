@@ -7,11 +7,15 @@
  * 2. A response with three tool calls (an unknown tool, bad JSON, a call
  *    without an id) produces the R4-43 / R4-45 texts and a synthesized id
  *    (R4-42); the turn continues.
- * 3. At the round limit (R4-95: 1,024 rounds; one script round repeated by
- *    `times`) with an always-tool script the turn ends with the R4-47 text,
- *    status completed, after exactly 1,024 requests. Opt-in
- *    (M2_TURNS_ROUND_LIMIT=1): in a vat it takes longer than a file's
- *    5-minute budget (J-0471); the default run measures a 100-round turn.
+ * 3. At the round limit (R4-95: 1,024 rounds) a turn ends completed with
+ *    the R4-47 text after exactly that many requests. The behaviour at the
+ *    limit is proven in Node at a limit of 2
+ *    (test/adapter/m2-w26-turns.test.js); the vat's limit is the constant
+ *    `limits.maxToolRounds` (a vat test at a small limit needs a
+ *    `SessionConfig` field, J-9480), and a turn of 1,024 rounds takes about
+ *    5 minutes in a vat (J-0471). So the vat test here measures the round
+ *    rate of an always-tool turn over a fixed window (60 s, process.md 3)
+ *    and derives the 1,024-round time from it; it then cancels the turn.
  * 12. A failed turn and an outcome-unknown turn (SIGKILL while its tool
  *     runs) appear in the next round's context, the unknown result as
  *     "Tool outcome unknown"; a never-dispatched (cancelled before
@@ -37,6 +41,7 @@ import '../unit/_m1a-prelude.js';
 
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import test from 'ava';
 
@@ -49,7 +54,12 @@ import { usageOfRecords } from '../../guest/lib/journal-usage.js';
 import { composeSystemPrompt } from '../../guest/lib/system-prompt-base.js';
 /* eslint-enable import/no-relative-packages */
 import { contextDigests } from '../../resources/agent-host/impl/providers/scripted.js';
-import { emit } from '../../perf/_harness.mjs';
+import {
+  crankBudget,
+  emit,
+  loadAvg,
+  runIdentity,
+} from '../../perf/_harness.mjs';
 import {
   integrationEnabled,
   startFromTemplate,
@@ -69,8 +79,14 @@ const usage = {
   reasoningOutputTokens: 3,
 };
 
-/** Tool rounds of the long turn this file measures (1,024: opt-in test). */
+/** Tool rounds of the long turn test 2 runs to completion. */
 const PROBE_ROUNDS = 100;
+
+/**
+ * The round-rate window (process.md 3: 60 s a measured point);
+ * M2_TURNS_WINDOW_MS shortens it for a local smoke only.
+ */
+const ROUND_WINDOW_MS = Number(process.env.M2_TURNS_WINDOW_MS ?? 60_000);
 
 /**
  * Per-round times from the scripted log's `request` lines of one turn: the
@@ -309,7 +325,7 @@ run(
     }
 
     // ---- a long turn: PROBE_ROUNDS tool rounds, then a text round. The
-    // round limit itself (1,024 rounds) is the opt-in test below.
+    // round limit's cost in a vat is the window test below.
     const t0 = performance.now();
     const many = await startTurn(slice, session, 'rounds');
     const manyStatus = await waitFor(
@@ -500,69 +516,64 @@ run(
   },
 );
 
-// Acceptance 3 at the real limit (R4-95: 1,024 rounds) takes longer than
-// this file's 5-minute budget in a vat (J-0471: not finished after 200 s);
-// opt in with M2_TURNS_ROUND_LIMIT=1. The behaviour at the limit is tested
-// in Node at a limit of 2 (test/adapter/m2-w26-turns.test.js, R4-47).
-const runFull =
-  integrationEnabled && process.env.M2_TURNS_ROUND_LIMIT === '1'
-    ? test.serial
-    : test.skip;
-
-runFull(
-  '3: the round limit at 1,024 rounds ends completed with the R4-47 text [known failure: over the file budget, J-0471]',
+run(
+  '3: the round rate of an always-tool turn over a fixed window; the 1,024-round time derived',
   async t => {
-    t.timeout(30 * 60_000);
+    t.timeout(4 * 60_000);
     const { slice, session, log } = await open(t);
-    const sub = await slice.subscribe(session);
-    t.teardown(() => sub.stop());
-    // ---- acceptance 3: the real round limit
-    const t0 = performance.now();
+    // The `loop` script turn asks for a tool in every round, more rounds
+    // than the limit, so only the window or the limit can end it.
     const loop = await startTurn(slice, session, 'loop');
-    const loopStatus = await waitFor(
-      async () => {
-        const status = await E(loop).getStatus();
-        return status.state === 'running' ? undefined : status;
-      },
-      25 * 60_000,
-      'the round-limit turn',
-      500,
+    const loopId = (await E(loop).getStatus()).turnId;
+    /** @param {any} l */
+    const isRequest = l => l.kind === 'request' && l.turnId === loopId;
+    const first = await waitFor(
+      () => log().find(isRequest),
+      30_000,
+      'the first round of the loop turn',
     );
-    const loopMs = performance.now() - t0;
-    t.is(loopStatus.state, 'completed');
-    const loopId = loopStatus.turnId;
-    const loopRequests = log().filter(
-      l => l.kind === 'request' && l.turnId === loopId,
+    // The window opens at the first request (the provider's clock).
+    await delay(ROUND_WINDOW_MS);
+    const status = await E(loop).getStatus();
+    t.is(status.state, 'running', 'no limit or error ended the turn early');
+    const inWindow = log().filter(
+      l => isRequest(l) && l.at - first.at <= ROUND_WINDOW_MS,
     );
-    t.is(loopRequests.length, limits.maxToolRounds);
-    const loopRecords = await contentOf(loop);
-    const loopSettled = loopRecords.at(-1);
-    t.is(loopSettled.kind, 'turn-settled');
-    t.is(loopSettled.status, 'completed');
-    t.is(loopSettled.final, texts.roundLimit);
-    t.is(
-      loopRecords.filter(r => r.kind === 'tool-result').length,
-      limits.maxToolRounds,
+    // Rounds started after the first, within the window.
+    const rounds = inWindow.length - 1;
+    t.true(rounds > 0, 'the turn made rounds in the window');
+    t.true(rounds < limits.maxToolRounds, 'the window ends before the limit');
+    t.deepEqual(
+      inWindow.map(l => l.round),
+      inWindow.map((_, i) => i),
+      'one request a round, in order',
     );
-    await sub.until(e => e.type === 'final' && e.turnId === loopId);
-    t.true(
-      sub
-        .events()
-        .some(
-          e =>
-            e.type === 'final' &&
-            e.turnId === loopId &&
-            e.text === texts.roundLimit,
-        ),
-    );
+    await E(loop).cancel();
+    t.is((await E(loop).whenFinished()).state, 'cancelled');
+    // `roundTimes` counts requests; the window's samples are rounds.
+    const { rounds: requests, ...times } = roundTimes(inWindow);
+    const roundsPerSecond = (rounds * 1000) / ROUND_WINDOW_MS;
     emit({
-      metric: 'm2.turns.roundLimit',
-      unit: 'ms',
-      ...roundTimes(loopRequests),
-      rounds: limits.maxToolRounds,
-      records: loopRecords.length,
-      ms: round1(loopMs),
-      msPerRound: round1(loopMs / limits.maxToolRounds),
+      metric: 'm2.turns.roundRate',
+      unit: 'rounds/s',
+      window: ROUND_WINDOW_MS,
+      samples: rounds,
+      requests,
+      roundsPerSecond: +roundsPerSecond.toFixed(2),
+      ...times,
+      // Derived, not run: the limit's rounds at the window's mean rate, and
+      // at the window's last 20 gaps (any growth with the turn's length).
+      limitRounds: limits.maxToolRounds,
+      derivedLimitMs: Math.round(
+        (limits.maxToolRounds * 1000) / roundsPerSecond,
+      ),
+      derivedLimitMsAtLast:
+        times.lastRoundsMs === null
+          ? null
+          : Math.round(limits.maxToolRounds * times.lastRoundsMs),
+      ...(await runIdentity()),
+      crankBudget,
+      loadAvg: loadAvg(),
     });
   },
 );

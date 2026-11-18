@@ -603,6 +603,16 @@ test('shapes widened in place accept the M2 fields and still refuse what they re
     ),
     'subscription kinds are M4',
   );
+  // J-9486: a request timeout of 0 (none) or under a second is refused.
+  for (const timeoutMs of [0, 999, limits.maxTurnDeadlineMs + 1]) {
+    t.false(
+      matches(
+        harden({ ...widenedSamples.BackendSpec, timeoutMs }),
+        shapes.BackendSpec,
+      ),
+      `timeoutMs ${timeoutMs}`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------- methods

@@ -78,14 +78,17 @@ import { createHash } from 'node:crypto';
 
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
+import { limits } from '../../../../guest/lib/limits.js';
 import { usageFromAnthropic } from '../../../../guest/lib/token-usage.js';
 /* eslint-enable import/no-relative-packages */
 import { NATIVE_CONTEXT_FORMAT } from '../projection.js';
 import {
   bodyChunks,
+  boundedChunks,
   discardBody,
   failureKind,
   postJson,
+  providerBaseUrl,
   retryAfterMs,
 } from './http.js';
 import { parseSseBatches } from './sse.js';
@@ -501,7 +504,13 @@ export async function* anthropicAttempt({
   }
 
   try {
-    for await (const batch of parseSseBatches(bodyChunks(response))) {
+    for await (const batch of parseSseBatches(
+      boundedChunks(
+        bodyChunks(response),
+        limits.roundStreamBytes,
+        () => new ProviderFailure(texts.frameLimit, { delivered }),
+      ),
+    )) {
       /** @type {string[]} */
       const pieces = [];
       let unreadable = false;
@@ -623,7 +632,9 @@ export async function* anthropicAttempt({
   if (apiError !== undefined) {
     const type = identifier(apiError?.type, '');
     yield* fail(
-      textOf.anthropicApiError(type === '' ? '' : textOf.servedBy([['type', type]])),
+      textOf.anthropicApiError(
+        type === '' ? '' : textOf.servedBy([['type', type]]),
+      ),
       RETRYABLE_ERRORS.has(type),
     );
   }
@@ -731,10 +742,7 @@ export const makeAnthropicProvider = ({
   now = () => Date.now(),
   retry,
 }) => {
-  const baseUrl = String(spec.baseUrl ?? ANTHROPIC_BASE_URL).replace(
-    /\/+$/,
-    '',
-  );
+  const baseUrl = providerBaseUrl(spec.baseUrl, ANTHROPIC_BASE_URL);
   const timeoutMs = spec.timeoutMs ?? ANTHROPIC_TIMEOUT_MS;
   /** turn -> the control of its running round. */
   /** @type {Map<any, import('./round.js').RoundControl>} */

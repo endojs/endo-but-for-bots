@@ -8684,3 +8684,800 @@ Evidence: `spike-data-references.md` 7. Reading: Thixotrope is a control plane w
 identity; data-heavy services need a byte store beside it, with identity in the hub. The obstacles
 are C-1 and C-2 (and C-5 for reads), not the protocol or the engine. In Node "zero copy" means
 zero copies inside the object system: two kernel copies between processes.
+
+### J-9445 2026-11-18 M2 review: archive validation deletes an acknowledged segment - defect
+Evidence: review M2-R2 of 6be8e868cf; `AH/archive/store.js` `observeNow` (orphan rule) and
+`stateOf` (LRU of 64 session states); a Node probe over the real store, blob store and context
+cache with the fake vat of `test/adapter/_m2-archive-vat.js` (not committed):
+(A) incarnation 1 answers seal 2, incarnation 2 then observes the vat's state from before crank Z,
+then Z applies the answer: `{"before":2,"after":1,"applied":true,"prepare":"could not archive turns: segment 2 is missing"}`;
+(B) one incarnation, `maxSessions: 1` standing for 65 busy sessions: seal 2 acknowledged, the
+session's in-memory state evicted, a history page answered before Z observed afterwards:
+`{"before":2,"after":1,"vatSegments":2,"prepare":"could not archive turns: segment 2 is missing"}`.
+Reading: validation deletes every segment file not on the chain of the state it is given, except
+one answered in this incarnation (`answered`). It ignores a state older than `st.validated`, but
+`st.validated` is memory only: it is lost when the session's state is evicted (B) and at a restart
+(A). The manifest's `acknowledged` flag, which says the vat already named the file, is not
+consulted. (B) needs no crash; (A) needs a request with the older state to reach the new
+incarnation before the committed answer reaches the vat, which J-0493 (3) assumes cannot happen
+(the vat's inbound order) and acceptance 16 does not exercise (its turns run one at a time and a
+kill at A3 does not control where the answer is). In both, the vat then drops records whose only
+copy was deleted. Neither the store's header nor `m2-interfaces.md` 4.5/4.7 states the ordering
+assumption. Second deletion path: `scanSegments` unlinks any `seg-*.jsonl` whose read throws, so a
+transient read error (EMFILE, EIO) or a damaged acknowledged segment is deleted instead of kept;
+a final-named segment only exists after fsync and rename, so "half-written" cannot be the cause.
+Decision: fix before M2 is marked done: (1) never delete a file whose manifest entry is
+acknowledged or that forward-chains from the given state (ordinal > `state.segments`, previous
+links to `state.digest`); delete only files that conflict with the chain at an ordinal <=
+`state.segments`; (2) treat a state as stale when the manifest's acknowledged prefix already
+extends past it with the same digest at `state.segments`; (3) in `scanSegments` delete only
+`.part` and `.tmp`, rename an unverifiable segment to `.bad` and let a read error propagate;
+(4) a regression test of (A) and (B) as above.
+
+### J-9446 2026-11-18 M2 review: correctness findings besides the archive orphan rule - deviation
+Evidence: review M2-R2 of 6be8e868cf (code read; unit and adapter lanes run).
+Reading: (1) Export of a session with a turn running writes that turn without a `TurnSettled`;
+`importTurns` keeps its info `running` with no current turn, so it never settles, and once it is the
+oldest kept turn `rangeOf` stops at it: the imported session never seals again (a hostile export
+with a `TurnSettled` outside its turn's span does the same). (2) `scripts/export.mjs importState`
+returns success on an export truncated at a line boundary: the last session has no `end`, stays
+unlisted and importing until the next daemon start, then is deleted. (3) An export of a busy
+session fails with `texts.recordsSealed` when a seal lands between its head and its records pages.
+(4) `importState` still accepts an `archive` part (`adopt`) that no importer sends; a fabricated
+`ArchiveState` makes every later round fail with `archiveFailed`. (5) A delete racing a session's
+first seal: `releaseArchive` can run before the seal reaches the adapter, which then re-creates the
+directory (segment and manifest naming released blobs): a leak after delete. (6) Receipts: 4,096
+live receipts in 24 h refuse the next submission (`receiptLimit`), a rate cap against R4-53/R4-98
+("bounds what is held"). (7) Send-now never cancels the running turn; R6-44 says send-now on the
+queue head cancels the running turn so it goes next (J-0456 (1) put this to the owner). (8) Every
+enqueue republishes the whole pending view (J-0454); R4-61 asks one diff per change. (9) A
+cancelled round's usage is dropped (`roundFinal`/`roundFailed` ignored once `cancelling`).
+(10) `export.js` `stagedIn` reimplements `staging.js` `blobsOf`. (11) Delete step 2 skips to step 3
+on any `blobPage` error, not only the retired text, leaking the rest of the live tail's blobs.
+Decision: fixes proposed in the M2-R2 report; (1), (2) and J-9445 before M2 is marked done.
+
+### J-9447 2026-11-18 M2 review: what was verified, and fit - fit
+Evidence: `corepack yarn test test/unit/m2-*.test.js test/adapter/m2-archive-store.test.js
+test/adapter/m2-archive-kill.test.js test/adapter/m2-queue-composer.test.js
+test/adapter/m2-w26-turns.test.js` at 6be8e868cf: 139 tests passed, 61.6 s wall (load from three
+other lanes); no supervisor run. `checkpoint.stall` (J-9408): the window marks a turn
+`snapshotted` only on every tenth turn, so the measurement cannot place a snapshot on its turn and
+records no per-turn index; the only once-per-window event in the loop is the switch to Composer
+turns (i = W - 50 + 1).
+Reading: good fit: intent before effect plus "durable before drop" gives the seal a short crank
+table, and ordinal cursors keep history exactly-once across seals without any coordination.
+Awkward fit: the vat is the system of record but the adapter decides what to delete from a
+possibly stale view of it; transient adapter memory (`answered`, `validated`) carries a safety
+rule, which an orthogonally persistent vat would keep for free and a Node process loses at every
+restart and eviction. Deletion should follow only from a persistent fact (the vat's acknowledged
+chain recorded in the manifest), never from memory.
+Decision: recorded; the stall row needs per-turn indexes and engine deltas before it is split.
+
+### J-9440 2026-11-18 M2 security review: secrets and providers, no value leaves - good fit
+Evidence: M2-R1 review of `AH/secrets/*`, the Secret, ReadGrant, SecretsAdmin and sink objects in
+`resources/agent-host/durable.js`, `AH/providers/*`, `AH/index.js`, `AH/attach.js` and
+`scripts/serve.mjs` at 6be8e868cf; `corepack yarn test test/adapter/m2-w23-secrets.test.js
+test/adapter/m2-w21a-openrouter.test.js test/adapter/m2-w21a-fake-server.test.js`: 33 passed, under
+2 s wall; adapter-level probes (no supervisor) of redirects, URL credentials, CR/LF in a key, a
+100 kB key, a torn audit tail and concurrent first key loads. The integration test
+`m2-secrets.test.js` was not rerun: the slot lock did not grant a slot within its 590 s wait.
+Reading: the only path of a value is SecretWriter (adapter) -> store (memory, then AES-256-GCM
+`secrets.enc`) -> `readNow` -> provider header; no value enters a vat, an event, a log line, the
+audit or an error text: store failures are fixed codes, HTTP failures fixed texts with statuses
+(non-2xx bodies are cancelled unread, transport errors drop their message, the stream log keeps the
+error class only), served-by names pass a key-shape filter. `redirect: 'error'` holds (a 307 to a
+second origin: no request reached it); a base URL with user info and a key with CR/LF are refused
+by fetch before any byte is sent, with the fixed text. `secrets.enc` is temp, fsync, rename,
+directory fsync, a fresh random 96-bit nonce per seal; the wrapping key is outside the state
+directory and the X25519 sealing key is derived from it, so the state directory alone opens
+nothing. The PM-accepted audit deviation holds for SIGKILL (one append is one write; no value in an
+event) with one correction in J-9441.
+Fit: good fit: amplification through the manager's WeakMaps (`resolveSecrets`, `resolveGrants`)
+gives a value no name at all, and serial keys `k<n>` from the durable heap never repeat, so a grant
+that survives `delete` resolves to a key the store no longer has (`UNKNOWN_SECRET`).
+Decision: no reject finding; fixes in J-9441 and J-9442.
+
+### J-9441 2026-11-18 M2 security review: findings in secrets - deviation
+Evidence: as J-9440; probe numbers measured at 6be8e868cf on this machine.
+Reading: (1) a holder of AgentHostAdmin and any ReadGrant can name any `baseUrl` (`text(urlUnits)`,
+`http:` to any host included); the provider then sends the key there, so a grant is in effect read
+authority. Fix: refuse a `baseUrl` that is not `https:` (or `http:` to loopback), and bind the
+allowed origin to the Secret at `create` so a grant cannot carry the key elsewhere. (2)
+`SecretWriter.replace` accepts a plain string from any remote caller (hub frames in clear, C-1).
+Fix: the exo takes only a SealedBox; the gateway gets an in-process replace that is not on the exo.
+(3) R7-25's 8,192-byte provider token bound is not checked: a 100,000-byte key went through
+`readProviderKey`. Fix: refuse it there with `INVALID_SECRET_BYTES`. (4) A torn audit line with no
+newline (power loss or disk full; not SIGKILL) glues the next append onto it: after restart, 1 of 2
+new events was lost (7 events found, 8 expected). Fix: at load, truncate the file to its last
+newline. (5) Store and sealing keys load the key file each on its own; on a fresh key file the two
+first loads raced in 1 of 50 runs ("must hold exactly 32 bytes"), the rejection is cached for the
+incarnation, and a SIGKILL between create and write leaves an empty key file forever. Fix: one
+shared load promise; write the key to a temp file, fsync, then link it into place (exclusive) and
+fsync the directory. (6) `SecretsAdmin.list` cursor is an offset: a delete between pages skips one
+Secret; the cursor is also a string. Fix: a creation serial per record kept past delete, the cursor
+the last Secret object, the next page the records with a greater serial. (7) `MAX_SECRETS` (1,024)
+lives in `durable.js` and `AUDIT_KEEP` in `store.js`, not in `limits.js`; `create` checks the count
+before its await, so concurrent creates can pass 1,024. Fix: move both to `limits.js`, count
+pending creates. (8) One wrapping key seals both the file and every audit line under random nonces
+(two lines per read); fine for years at the measured rates, but give each use its own HKDF subkey.
+Decision: (1) and (2) before M2 is marked done; the rest as follow-ups.
+
+### J-9442 2026-11-18 M2 security review: findings in providers - deviation
+Evidence: as J-9440.
+Reading: (1) no per-round bound on the streamed size: text parts and tool-call argument pieces build
+up in adapter memory until the request timeout (1 h), and `timeoutMs: 0` removes it. SSE lines and
+events are bounded (16 Mi units each), so one line cannot grow without limit, but a stream can. Fix:
+fail the round at a total of, for example, `limits.roundResultBytes` times the staging factor, and
+refuse `timeoutMs` 0 in the BackendSpec guard. (2) Retry follows the contract: nothing is retried
+after a delta or reported tokens, the key is read once per round, and Retry-After waits are capped
+(30 s or 8 s). A network failure after the request was sent and before any delta is retried, which
+may bill twice (R4-74 allows this). Re-dispatch of a round > 0 after SIGKILL was not reviewed here.
+(3) Presence-keyed caches (J-9403, C-23): `backendState` and the secrets ops' `grantKeys` and
+`secretKeys` are WeakMaps keyed by presences, so a collected presence costs one more manager crank
+and a fresh provider instance. This is not a leak, since every value is read again through the store.
+The catalogue's strong map keeps answering from its cache for up to 24 h after a revoke (only the
+model list). (4) `logPath` in a BackendSpec lets the AgentHostAdmin holder choose where the adapter
+writes its event log (no secret in it). Fix: a path under the state directory only.
+Decision: (1) before M2 is marked done; the rest recorded.
+
+### J-9443 2026-11-18 M2 security review: public-repository hygiene - defect
+Evidence: `git diff 48d6f3e08b..6be8e868cf -- packages/thixotrope-harness`, added lines only,
+scanned for credential shapes, email addresses, IPv4 addresses, domains and absolute paths.
+Reading: no credential-shaped string (test keys are `not a real key` or built at run time), no
+email address, no non-loopback address, and only public domains. Absolute local paths with the
+local account name are committed in `designs/architecture.md`, `designs/milestones.md`,
+`designs/review-feasibility.md` and `designs/survey/{apps,core,native,reuse,spec-digest,tooling}.md`
+and in `designs/survey/feasibility-probe.mjs`. These are paths of the home directory, of sibling
+checkouts, of the specification and of a session scratch directory.
+Decision: replace them with the names used elsewhere (T, E, H, `<scratch>`) before any push.
+
+### J-9480 2026-11-18 M2 acceptance 3 in a vat as a round rate - perf
+Evidence: `test/integration/m2-turns.test.js` (commit 3ddceecc8a; run at 6adae9ee8e with other
+units' uncommitted files in the worktree, none in the session program), one run under a shared
+slot, load average 5.4-6.0 (four lanes running), m1a template, release worker 367e78ad...,
+crank budget 50 M, slot ceiling 4,000,000, collection `allocation`, hub store `log`.
+Reading: the opt-in 1,024-round test (J-0471, a known failure of about 280 s) is deleted. The
+behaviour at the limit stays proven in Node at a limit of 2 (`test/adapter/m2-w26-turns.test.js`,
+R4-47). The vat test now starts an always-tool turn, measures its rounds over a fixed 60 s window
+from the first provider request, checks that one request is made a round in order and that the
+turn is still running (no early end), cancels it, and derives the 1,024-round time:
+`{"metric":"m2.turns.roundRate","unit":"rounds/s","window":60000,"samples":205,"roundsPerSecond":3.42,"firstRoundsMs":319,"lastRoundsMs":327,"medianRoundMs":318,"limitRounds":1024,"derivedLimitMs":299707,"derivedLimitMsAtLast":334848}`
+Same run: `m2.turns.rounds` 101 rounds in 35.8 s (median 387 ms a round),
+`m2.turns.restart` served 22.3 s, recovered 24.8 s (J-0471 at load 1.7: 272 ms, 7.6 s, 8.7 s).
+The file's three tests took 70.3 s, 60.6 s and 103.1 s; the file held its slot 293 s (J-9409:
+118 s with two tests at lower load). A vat test that runs to a small limit needs a round limit
+in `SessionConfig` (a contract change; not made, see the unit's report to the PM): the session
+program passes no `maxToolRounds` option, so the vat's limit is the constant.
+Decision: acceptance 3 is the Node test at limit 2 plus this rate; the 1,024-round time is
+derived (about 300 s at 3.4 rounds/s under load), not run.
+
+### J-9481 2026-11-18 M2 acceptance 16 under the time box: two files, an imported session - perf
+Evidence: `test/integration/m2-archive-restart.test.js` (S, A3), `m2-archive-restart-2.test.js`
+(A2, Z), helper `_m2-archive-kill.js` (commit 403f08e744); three runs of both files together
+(`--jobs 2`), shared slots, load average 4.2-7.6 (four lanes), identity as J-9480.
+Reading: before, one file grew its session with 159 live turns and killed at S, A2, A3 and Z in
+turn: 274-315 s (J-9409), 366 s held in a run today, 15-minute timeout. Now each file imports one
+session of 159 plain turns (`importState`, process.md 3) and kills at two points; the second
+point's kill lands on the seal the first point's restart retries 8 settles later, so that seal is
+the first point's next-seal check (it was 23 more turns to the next 32-settle seal); the Z point
+waits 3 s for the seal answer and looks again after the next turn (it waited 10 s a turn, and
+after a failed seal every turn looks due: 7 turns cost 70 s). Timeout 8 minutes a file.
+A grown session cannot be a cached state template here: the scripted backend's `logPath` is
+absolute and persisted in the state, so a copy writes into the build directory (M2-P1's
+`perf/_long-template.mjs` solves it with a log directory outside the copies and one user at a
+time, which would serialize these two files).
+Held time per file (part 1 / part 2): run 1 (split only) 330 / 308 s; run 2 (chained seal)
+287 / 294 s; run 3 (Z fix) **198 / 233 s**, both under 4 minutes at load 4.3-4.9. Run 3 parts:
+start 17.5 / 6.4 s, import 28.4 / 20.6 s, S 31.8 s, A3 56.3 s, A2 43.6 s, Z 98.9 s; a restart's
+`servedMs` was 13-35 s (7.6 s at load 1.7, J-0471), so the restarts are most of the time and
+the times move with the machine's load. Slot waits were 2.8-16.5 minutes per file.
+Kill rows reached (m2-interfaces.md 4.5; partAtKill / segment files at kill / vat segments):
+before (J-0460): S orphan segment, vat 0; A2 orphan after the rename, vat unchanged; A3 answer
+committed, vat +1; Z after Z. Run 1: S orphan (0 / 1 / 0); A2 orphan (0 / 1 / 0); A3 vat +1;
+Z vat +1. Runs 2 and 3: S `.part` left (1 / 0 / 0); A2 `.part` left (1 / 0 / 0); A3 vat +1; Z
+vat +1. Which row an S or A2 kill hits depends on when the SIGKILL lands relative to the
+adapter's rename, as before the change: run 1 reached every row J-0460 reached; runs 2-3 reached
+the `.part` row (not reached in J-0460) instead of the orphan row. After every restart: every
+turn once, no `.part` left, the same per-turn digests (159 or 191 turns compared), and a later
+seal acknowledged (A3 and Z rows sealedByVat true; their own next seal after 24 turns).
+Decision: recorded. Each row deterministically needs a test-only pause in the archive adapter
+between A2 and A3 (a PM item); the Node table (`test/adapter/m2-archive-kill.test.js`) covers
+every row.
+
+### J-9482 2026-11-18 Provisioning seam and perf lock mode - good fit
+Evidence: `scripts/provision-steps.js` (commit c37c550222), `test/unit/m2-t1-provision-seam.test.js`
+(3 tests, 1.6 s, run today); `perf/_harness.mjs` (commit b028579c64), a Node smoke of
+`perfLockMode` and `stats` (not committed).
+Reading: `makeProvision` keeps `{ sessionEntry, execEntry, pool, onStep, stepDirectory }` and
+forwards every other option, the same values (not copies), to every step as
+`options: { ...stepOptions, sessionEntry, execEntry, pool }`: the two lines m5-interfaces.md H-10
+asks the first lane to make. Later milestones' steps are files `scripts/provision-steps/NN-name.js`
+exporting `steps`, run after the M1 table in file-name order (30 gateway, 40 subscriptions,
+50 M5 fixtures), a name already taken is refused, so lanes no longer edit one table. The tests
+check the order, that `gateway`, `subscriptions` and `m5Fixtures` arrive identical (`t.is`), and
+that a step not asked for skips. `runPerf` passes `mode` to the run lock explicitly
+(`perfLockMode`: exclusive unless `--shared`), marks shared rows `underLoad`, and `stats` /
+`record` pass `window` and `samples` through only when given (smoke: present when given, absent
+otherwise; exclusive for `x.perf.mjs`, shared with `--shared`).
+Fit: options pass as objects through a step registry keyed by file; the only names are the step
+names (diagnostic labels and the duplicate check), not lookups of the objects themselves.
+Decision: built; the lanes' merge changes are in the unit's report to the PM.
+
+### J-9483 2026-11-18 M2-T1 time record - process
+Evidence: this unit's runs (`runs.jsonl`, agent M2-T1) after the restart, 08:19-09:10 UTC.
+Reading: archive pair run 1 5 min 31 s wall; m2-turns 8 min 46 s wall (3 min 52 s waiting for a
+slot); archive pair run 2 14 min 29 s wall (9 min 40 s waiting); run 3 about 20 min wall (15-16.5
+min waiting). Slot waits were 60-80 % of this unit's wall time: six slots shared by four lanes at
+load 4-6. The earlier run before the machine restart also ran m2-turns (188 s and 294 s held) and
+the split archive files once (163 / 187 s held, part 1 exit 128, cause not recorded).
+Fit: a SIGKILL test on Thixotrope costs one supervisor restart per kill (13-45 s served under
+load), which no test-side change removes; a cheaper restart is a core matter.
+Decision: recorded.
+
+### J-9460 2026-11-18 M2 perf checks on fixed windows: wall time before and after - perf
+Evidence: one run of each converted file in a shared slot (`node scripts/run-lock.mjs --label X
+--shared -- node perf/X.perf.mjs --shared`), at `35af96bedd`..`7674255082` (perf code of
+`568aa469e7` plus `6e4ae378f6`), worker `367e78ad...`, crank budget 50 M, slot ceiling 4,000,000,
+allocation schedule, log hub store, load 3-7 with other lanes in the other slots. These are
+"under load" smokes, not recorded results (process.md section 2); the exclusive pass is a later
+unit's. Held times from `runs.jsonl`.
+Reading:
+
+| file | before (journal) | after (held) | dropped |
+|---|---|---|---|
+| `history.perf.mjs` | 30-45 min | 329 s | the 50-turn point; the 100-turn windows (now 60 s, 43-50 turns) |
+| `history.restart.perf.mjs` (split from history) | in the above | 388 s | nothing: pages over 15 s windows, walk, restart, rebuild at 200 / 1,000 / 5,000 |
+| `journal.perf.mjs` | 1-1.5 h | 181 s | the 10,000 and 30,000 points (imports 14 and 42 min): 5,000 measured, slope 1,000 -> 5,000 projected |
+| `throughput.perf.mjs` | 30-40 min | 212 s | the in-file 26-minute import: a cached 50 x 300 template |
+| `archive.perf.mjs` | about 1 h | 265 s | the grown 1,000 and 5,000 points (taken by the templates in history) |
+| `import.perf.mjs` | 652 s (5,000 tool turns) + 38.7 min (30,000) | 128 s | full-length imports: a 60 s window of the import rate, and a 300-turn walk |
+| `queue.perf.mjs` | about 1 min | 34 s | nothing (10 s per row) |
+| `provider.perf.mjs` | about 1 min | 93 s | nothing (10 s per row) |
+
+Template steps (`node perf/_long-template.mjs history journal throughput`, one boxed step each):
+long 200: 156 s, 1,000: 159 s, 5,000: 518 s; busy 10/20/30/40/50 x 300: 551 / 520 / 476 / 456 /
+444 s. Each is built once per worker and bundle change.
+Decision: every file fits the 10-minute box with room except the template steps (J-9464).
+
+### J-9461 2026-11-18 M2 acceptance 15 from cached templates: flat at 5,000 against 200 - perf
+Evidence: `perf/history.perf.mjs` as J-9460 (load 4-7), templates of 200 / 1,000 / 5,000 plain
+turns (keys `13d16dc2a049`, `0ef4adeb38bd`, `ac44a8189cc1`), a 60 s window each (49-50 / 49 / 43
+turns: per-turn wall 1,161 / 1,062 / 1,213 ms, 45 / 49 / 43 turns per minute).
+{"metric":"archive.flat.turn.at5000","at200":1161,"at5000":1213,"ratio":1.045,"pass":true}
+{"metric":"archive.flat.turnStart.at5000","at200":346,"at5000":342,"ratio":0.988,"pass":true}
+{"metric":"archive.flat.snapshot.at5000","at200":33513472,"at5000":34451456,"ratio":1.028,"pass":true}
+{"metric":"archive.flat.slots.at5000","at200":761856,"at5000":792064,"ratio":1.04,"pass":true}
+{"metric":"archive.flat.hubRow.at5000","at200":5769,"at5000":5272,"ratio":0.914,"pass":true}
+Reading: every `archive.flat.*` row passes at 1,000 and 5,000 (ratios 0.22-1.05). `history.page`
+newest 321 / 304 / 310 ms median (budget 300; 15 s windows, 59-61 samples), archived 67 / 58 / 63
+ms; walk back to turn 1: 7.4 s (1,003 turns) and 28.0 s (5,003); `context.rebuild` 383 / 410 /
+351 ms, `sameContext` true at all three. The per-turn wall (about 1.1 s) is 1.5 x J-9404's: load
+4-7 against 2-3. `archive.flat.snapshotMs` (0.22, 0.86) only says the snapshot time is noise under
+load: one or two snapshots per window.
+Decision: acceptance 15's flatness holds under load; the exclusive pass records it.
+
+### J-9462 2026-11-18 M2 checkpoint.stall split: the slow turn holds the snapshot - perf
+Evidence: the `slowest` lists of `history.stall.at<n>` and `journal.stall.at<n>` (J-9460's runs),
+each turn with its index, how it started, deliveries, hub time and the engine's snapshot count and
+time inside it.
+Reading: p99 (= the slowest turn of 43-50) was 6.3 / 1.8 / 3.9 s (history at 200 / 1,000 / 5,000)
+and 2.6 / 3.5 s (journal at 1,000 / 5,000), median 0.94-1.07 s. In every window the slowest turn is
+the one during which the engine snapshotted: at 200 turn 253 took 6,324 ms, of which the snapshot
+was 5,181 ms and 8 deliveries 805 ms; at 5,000 turn 5,026 took 3,859 ms with 2,840 ms of snapshot;
+at 1,000 the first Composer turn, 1,849 ms with 721 ms of snapshot. The next slowest turns (1.3-2.8
+s) had no snapshot and high hub time (2.1-2.5 s at 5,000): commits waiting on the supervisor's
+thread while other lanes loaded the machine. No slow turn sealed a segment. This corrects J-9408's
+inference ("not a snapshot turn"): its status poll missed the snapshot; the engine counters do not.
+Decision: budget unchanged (p99 <= 1 s); the fix unit has the cause: the session vat's synchronous
+snapshot (about 33 MB) inside a turn, and hub commit waits second. A snapshot off the turn's path
+(or at idle) is the candidate, a core question.
+
+### J-9463 2026-11-18 M2 journal at 10,000 and 30,000: largest point that fits plus slope - perf
+Evidence: `perf/journal.perf.mjs` as J-9460 (load 4-6).
+{"metric":"journal.snapshot.budget.at1000","msEach":1298.7,"budget":{"value":500},"pass":false}
+{"metric":"journal.slope.snapshot","at1000":1298.7,"at5000":1439.7,"perThousandTurns":35.25,"at10000":1616,"at30000":2321,"projected":true}
+{"metric":"journal.slope.snapshotBytes","at1000":34451456,"at5000":34467840,"perThousandTurns":4096}
+{"metric":"journal.slope.slots","at1000":792064,"at5000":792064,"perThousandTurns":0}
+{"metric":"journal.slope.turn","at1000":1073.4,"at5000":1069,"perThousandTurns":-1.1}
+Reading: the state does not grow with length (slots flat at 792,064, snapshot file +4 KB per
+1,000 turns), so a projection from 1,000 and 5,000 is sound for size. The snapshot time is not: it
+was 1.3-1.4 s each here against 312 ms at 30,000 in J-9410 (load 6-9) and 721 ms-3.3 s in J-9461's
+windows: one or two samples per window under load. The slope of 35 ms per 1,000 turns is noise of
+that size, so the projected fail at 10,000 (1,616 ms) is not evidence.
+Decision: the 10,000 and 30,000 points are replaced by 5,000 plus the slope, stated in the rows
+(`projected: true`). `journal.snapshot` needs more samples per point than a 60 s window of turns
+gives (one snapshot per 256 deliveries, about 28 turns): the exclusive pass should read it with
+`JOURNAL_SNAP_EVERY=64` (4 x the samples) or a longer window at one point.
+
+### J-9464 2026-11-18 M2 long-session templates: the 5,000 and busy steps sit near the box - perf
+Evidence: the template steps of J-9460, shared slots, load 4-7.
+{"metric":"template.long","spec":"long 5000 plain","import":{"turns":5000,"records":20000,"ms":448156,"turnsPerSecond":11.2,"sealWaits":75,"sealWaitMs":44928},"buildMs":469255}
+{"metric":"template.busy","spec":"busy 10x300 plain","import":{"sessions":10,"turns":3000,"ms":438242,"turnsPerSecond":6.8},"buildMs":496364}
+Reading: the 5,000-turn import holds 11.2 turns/s (11.0-11.6 at 200 and 1,000: flat with length,
+as J-0485), so the step is 8.6 min held; a busy step of 10 x 300 imports at 6.8-8.6 turns/s
+(10 sessions in one state import slower per turn than one long session) and holds 7.4-9.2 min.
+Both fit, but a load above about 8 would push them over the box. A step that fails exits 124 and
+the template is simply missing; nothing partial is used (the description is written last).
+Decision: kept as is. If they time out: busy steps of 5 sessions (`THROUGHPUT_BATCH=5`, 10 steps)
+and a 5,000 template chained from the 1,000 one need `importState` to append to an existing
+session (not possible today) or a segment-copy import (J-0483, a core-side candidate).
+
+### J-9465 2026-11-18 M2 provider perf over windows: an idle pooled connection reset - deviation
+Evidence: `perf/provider.perf.mjs` at `35af96bedd` failed `provider.sse.attempt` with
+"OpenRouter could not be reached" on its first request; a debug wrapper around `fetch` showed
+`TypeError: fetch failed` caused by `read ECONNRESET`. Back-to-back attempts without the earlier
+windows passed.
+Reading: the 10 s parse window (no network) sat between two network windows; the fake server's
+Node keep-alive timeout (5 s) closed the pooled connection and the next POST was sent on it. With
+three runs (W2.1a) the gap was 0.1 s, so it never showed. Fix `6e4ae378f6`: the parse row is
+measured first, before the fake server starts. After: all nine rows over 10 s windows, exit 0,
+93 s held; overhead 0.20 ms median (1,800 deltas), parse 314 MiB/s, attempt 147 ms per 10 MiB,
+stream 246 ms, Anthropic 131 / 202 ms, retry pass-through -0.4 ms, retry wait +2.7 ms.
+Decision: test-only fix. The provider itself retries a reset before any delta (J-9442 (2)), so a
+real daemon would not have failed; the bare attempt has no retry by design.
+
+### J-9466 2026-11-18 M2 throughput and restart.serving from the cached 50 x 300 template - perf
+Evidence: `perf/throughput.perf.mjs` as J-9460 (load 5-6), template `c364d231a686` (copy 7.9 s,
+served 11.0 s).
+{"metric":"restart.serving.m2","value":11485.6,"runs":[7282.3,11485.6,14372.7],"sessions":50,"turnsEach":300,"pass":true}
+{"metric":"throughput","value":22.7,"sessions":20,"window":60000,"samples":256,"turnsPerSecond":3.9,"perDeliveryMs":504.8,"turnMsMedian":3473,"turnMsP95":20511,"turnMsP99":64085.8,"engine":{"snapshot":{"count":5,"ms":142719.6},"wake":{"count":13,"ms":245256.5}}}
+Reading: `restart.serving` passes (no idle vat woken) but at 7.3-14.4 s against 4.4-5.6 s in
+J-9412: the shared machine. Throughput 22.7 deliveries/s (J-9412: 29.3) with 13 wakes taking 245 s
+of engine time inside the window and a p99 turn of 64 s: under load a sleeping session's wake
+dominates the tail.
+Decision: recorded under load only; the exclusive pass gives the number. Same suspects as J-9412.
+
+### J-9467 2026-11-18 M2-P1 fit: what suits Thixotrope in windowed checks - fit
+Evidence: J-9460..J-9466; `runs.jsonl` for this unit.
+Reading: good fit: orthogonal persistence makes a state a directory, so a 5,000-turn session or 50
+sessions is built once and copied in 1-18 s (copy) plus 6-11 s (serve), and every measured file
+starts from the same bytes; flatness can be read at any length the import can reach. Awkward:
+(1) building those states is slow (11 turns/s through the vat's per-record checks, J-0481), so the
+largest template steps sit near the box; (2) one snapshot per 256 deliveries gives one or two
+samples per 60 s window, too few for `journal.snapshot` and making `checkpoint.stall` the snapshot
+by construction; (3) a shared slot waiter has no queue: this unit's provider waiter was passed by
+later takers for 22 minutes (and 46 minutes before the restart) while other lanes' runs took and
+released slots, so a single short run can wait longer than all its work.
+Decision: (1) and (2) to the PM as core candidates; (3) to the lock's owner (a FIFO ticket for
+shared waiters).
+
+### J-9470 2026-11-18 M0/M1 perf checks over fixed windows, each under the box - perf
+Evidence: M2-P2 at a076e24bbb (windows, crank and hub split, long states by `importState`),
+f403bde907 (session and pool create rows windowed), 9fb90081b2 (hub.sessions by import to 20
+sessions with a slope to 50; restart split by part). Each file ran ONCE in a shared slot
+(`node scripts/run-lock.mjs --shared -- node perf/<f>.perf.mjs --shared`), load average 3.3-6.6,
+rows marked under load, not results. Time held in the slot (runs.jsonl), before -> after:
+crank 40-50 min (its long table 2.5 h) -> crank 175 s, crank.mid 157 s, crank.late 284 s; hub
+10-20 min -> hub 139 s, hub.growth 257 s, hub.sessions 354 s; turn 4 min -> 178 s; restart 6 min
+-> 591 s as one file (9 s from the box) -> restart 297 s, restart.crash 227 s; gc 6 min -> 457 s;
+concurrency 3 min -> 255 s; exec 3 min -> 270 s; frames (few min) -> 165 s; session 3 min ->
+236 s; pool 3 min -> 161 s; install 86 s and crash 341 s unchanged (single installs and scenario
+events, not windows). Rows carry `window` and `samples` (`perf/_window.mjs`), row names kept.
+Dropped: crank's long-session table (grown to 5,000 turns; points 200/1,000/4,000): 1,000 imported
+tool turns is the largest point (an import of 4,000 alone is about 9 min, J-9404), slope late vs
+mid, the table to 5,000 is history.perf by template; hub's 50-session point: projected from 10 and
+20 (`hub.growth.slope`, `projected: true`). Kept as counts: exec.first and exec.sends (fresh
+session or a 100-send body per sample), pool.poolAwake and pool.refill (scenarios),
+install.factory.
+Reading: every owned file now fits the box under load with at least 4 minutes to spare except gc
+(457 s, 143 s spare): its time is the 11-session setup and SIGKILL restarts (14-30 s each under
+load). Misses under load (exit 1): restart.serving median 14.0 s (budget 10 s; 5.6-9.0 s unloaded
+earlier), restart.crashingSession 23.4 s (15 s; C-8, C-9, by design), gc.restart.run 14-30 s,
+concurrency.10.turnStart 1,748 ms (562), session.create.pool 2,031 ms (750), exec.first 1,479 ms
+(750), hub.growth 1.49 x fresh. exec.trivial: 3 samples in 35 s, median 9,095 ms, min 7,249 ms
+(budget 250; M1b recorded 179-191 ms): 40 x the M1b figure is more than load explains (turn.start
+in the same hour: 275 ms) and needs the exclusive pass to tell (see forPM).
+Decision: recorded; the exclusive pass belongs to a later unit.
+
+### J-9471 2026-11-18 hub.sessions and restart did not fit; what was changed - perf
+Evidence: hub.sessions as first converted (50 sessions created cold, one turn each) timed out at
+600 s (exit 124) after the 10-session point; built by `importState` instead it timed out again
+(601 s): the 9-session import took 92 s and 88 s in two runs (0.1 sessions/s under load; cold
+creates measured 3-4 s unloaded, 7.0 s median under load in session.perf). With GROWTH_STEPS
+"10,20" it held 354 s: imports 88 s each, `hub.persist` 20.9 / 31.2 / 28.4 ms per delivery
+(fresh / 10 / 20), disk 1.05 MB; slope per 10 sessions +120,643 bytes, projected 1.07 MB at 50
+(budget 2 MB). restart.perf with both parts held 591 s; its setup of 11 sessions took 210 s under
+load (115 s in a later run).
+Reading: a session costs about the same to import as to create (the session vat's creation and
+program evaluation dominate both); the import saves the turn, not the vat. The hub's disk size
+moves with log compaction (the fresh point was not the smallest), so a two-point byte slope is
+noisy; the ms-per-delivery slope under load was negative (-2.8 per 10 sessions) and means
+nothing until the exclusive pass.
+Fit: poor fit for many-session states built per run: the cost is per vat, so the only way to 50
+sessions inside the box is a cached template (`perf/_long-template.mjs` has a "busy" kind of the
+right shape but another backend; a hub variant is a later step, not done here).
+Decision: 20 sessions kept, 50 projected and labelled; restart split into restart.perf.mjs and
+restart.crash.perf.mjs (crash part sets up one idle session).
+
+### J-9472 2026-11-18 Waiting for a shared slot dominates a perf unit - process
+Evidence: runs.jsonl, agent M2-P2, 2026-11-18: 22 shared runs held 5,878 s in all (two cut by the machine restart); waits included
+3,243 s (session), 1,736 s (restart.crash), 2,985 s and 5,002 s (crank and hub before the machine
+restart), 799 s (crank.late). A run that asked at 08:21 was granted at 09:15 while later askers
+were served first.
+Reading: the slot pool is not first come, first served; a long waiter can starve while six slots
+turn over. The unit's wall time was set by waits, not by the boxes.
+Decision: for the PM (a FIFO ticket for shared takers would bound the wait).
+
+### J-9473 2026-11-18 M2-P2 time record - process
+Evidence: resumed run 08:19:14Z to the end of this entry's commit; earlier run cut off by the machine
+restart at about 06:55Z. Commands over 60 s: every perf run above (held times in J-9470, waits in
+J-9472), and the wait loops for them; no cargo, no exclusive mode, no core change.
+Decision: recorded.
+
+### J-9450 2026-11-18 M2 acceptance run: unit lane and every integration file, timed - good fit
+Evidence: review M2-R3, resumed run 08:19Z-09:40Z; tree `6adae9ee8e` plus M2-T1's then uncommitted
+split of acceptance 16 (committed as `403f08e744`), archive files rerun at `3d736552c4`; shared slots
+only, `--jobs 3` (4 for the archive rerun), load 3.4-7.5 with three other lanes; held times from
+`runs.jsonl` (lane `endo-thix-m2r`, agent `M2-R3`), not the batch wall times, which include waits.
+Reading: unit and adapter lane (`corepack yarn test`, no supervisor): 718 passed, 0 failed, 59
+skipped (the integration files, spikes and two serve tests, which skip without
+`THIX_HARNESS_INTEGRATION`), 72 s. Integration, held s / exit / tests: m2-providers 100 / 0 / 3;
+m2-turns **346** / 0 / 3; m2-queue 246 / 0 / 2; m2-history 285 / 0 / 1; m2-lifecycle **429** / 0 /
+3; m2-archive-restart 173-229 / 0 / 1 (5 runs); m2-archive-restart-2 198-236 / 0 / 1 (5 runs);
+m2-secrets 83 / 0 / 1; m2-catalog 89 / 0 / 1; m2-probes 78 / 0 / 1 passed + 1 known failure;
+m1a-provision 151 / 0 / 1; m1a-slice 222 / 0 / 6; m1a-slice-crash 102 / 0 / 1; m1a-slice-restart
+205 / 0 / 4; m1b-content 103 / 0 / 2; m1b-context-restart 233 / 0 / 1; m1b-exec-tool 157 / 0 / 1;
+m1b-exec-tool-restart 135 / 0 / 1; m1b-followups 207 / 0 / 3; m1b-live 157 / **1** / 3 passed 1
+failed, rerun alone 136 / 0 / 4; m1b-pool 128 / 0 / 1; m1b-pool-restart 144-244 / 0 / 3 (3 runs);
+m1b-qc 123 / 0 / 1; template 69 / 0 / 6. The m1b-live failure: "9: two list subscribers see create
+and rename within 500 ms ... rename row 1033 ms" (`m1b-live.test.js:332`, load 4.3-4.6, three files
+beside it); alone it passed: a latency budget missed under load, not a defect. Over 5 minutes:
+m2-lifecycle (429 s; 342 s in the cut-off run) and m2-turns (346 s). Over 10 minutes: none; no exit 124.
+Known failing: m2-probes "a 100 KiB inline string is refused before it is sent" (`test.failing`:
+the control client sends it, the vat guard refuses it; J-9407). Opt-in knobs, none a skipped test:
+`M1A_KILL_DELAYS_MS`, `POOL_KILL_DELAYS_MS`, `EXEC_KILL_DELAY_MS`, `M2_DELETE_KILL_DELAY_MS`,
+`M2_CREATE_KILL_DELAY_MS`, `M2_TURNS_WINDOW_MS`, `M1A_CREATE_N`, `M1A_REBUILD`. The unit lane has no
+`test.failing` left (the turn-deadline known failure of J-0475 is a plain passing test now).
+Fit: one pass of the 24 integration files held 70 minutes of slot time and waited 161 minutes
+for slots (first run of each file); spread over 6 idle slots that is about 12 minutes, so the
+20-minute rule holds only when the machine is not shared.
+Decision: no blocking failure; m2-lifecycle and m2-turns are over the 5-minute file budget.
+
+### J-9451 2026-11-18 M2 acceptance 1-16 against the tests that ran - deviation
+Evidence: J-9450's runs; the assertions read in each file at the commits of J-9450.
+Reading: **1** pass, m2-providers "acceptance 1": `deltas.length > 1` for OpenRouter and Anthropic.
+**2** pass, m2-turns "2": the R4-43 and R4-45 texts by regex, synthesized id `textOf.synthesizedCallId(0, 2)`,
+requests at rounds [0, 1]. **3** pass in Node only: `test/adapter/m2-w26-turns.test.js` "R4-47"
+(limit 2: `completed`, `texts.roundLimit`, 2 requests); in a vat the file measures a round rate over
+60 s and derives the 1,024-round time; the vat limit is a constant, so the R4-47 path is not proven
+in a vat (needs the `SessionConfig` field of J-9480). **4** pass, m2-queue "4 and 10": `queueFull`
+text, duplicate id before and after its turn, one transcript entry. **5** pass, m2-queue "5" (both
+releases, FIFO). **6** pass by the PM's ruling: `end { status: 'cancelled' }`, server sees `closed`.
+**7** pass, m2-secrets (replace, stale generation refused, 401 body absent, revoke, no request, no
+key in any encoding under the state directory). **8** pass, m2-providers "acceptance 8" (two
+requests before a delta, one after). **9** pass, m2-history (300 turns, every turn once, each page
+<= `frameBytes`, vat pages <= `historyPageRecords`); "pages of 32 turns" is not asserted.
+**10** pass, m2-queue: the second client's `listPending` and transcript equal the first's (a read,
+not a live feed). **11** pass, m2-catalog. **12** pass, m2-turns "12" (per-turn digests against
+hand-written transcripts, never-dispatched digest absent). **13** partly not proven: the SIGKILL
+case asserts the session unlisted, its vat retired and the archive total smaller than before, not
+that the session's archive and blobs are gone: in all 4 kill runs 82 bytes stayed under
+`agent-host/archive` (`archiveBefore` 72,610, `archiveAfter` 82); the clean delete asserts vat
+files and archive at 0 and emits `leftBlobBytes` 0 without asserting it; `row-removed` 5 ms.
+**14** pass for sessions, history and queues (re-export equal line for line, pending and hold
+equal, 170 turns walked); presets not exported (M5). **15** not run here: perf, exclusive pass
+(J-9404). **16** pass, 20 kills (J-9452), with the A2 point hit as written in 2 of 5 runs.
+Decision: for M2 to be marked done, 13 needs the doomed session's archive directory and blobs
+asserted gone after the kill; 3 is accepted in Node unless the PM wants the vat field.
+
+### J-9452 2026-11-18 M2 SIGKILL repetitions, and the pool +1,000 ms case - good fit
+Evidence: J-9450's runs; rows `archive.kill.*`, `m2.lifecycle.deleteKill/createKill`,
+`m1b.pool.killAfterTake`; `test/adapter/m2-archive-kill.test.js` 3 times (no supervisor).
+Reading: adapter seal kills (A1-A4 in a child): 3 runs, 3 tests each, all pass, 15-21 s. Seal kills
+in vats: S, A2, A3, Z 5 runs each (20 kills; 4 per point at `403f08e744`'s test, 1 per point at the
+version before), all pass: every turn once, same per-turn digests, no `.part` left, next seal.
+`partAtKill` 1 at A2 in 2 of 5 (the watcher's kill usually lands after the rename), once at S.
+Restart to first turn 15.7-35.1 s (served 10.0-27.3 s). Delete/create kills (m2-lifecycle "13"): 4
+runs, delete killed 0, 0, 250, 500 ms after `deleting`, create 336-1,592 ms after the call: all
+pass, nothing half-made, `s2` kept. Pool take kills: [0, 150] 3 runs, +1,000 ms 5 runs, all pass;
+each listed session ran its first turn with exactly 1 provider request; at +0 ms the take rolled
+back (listed 0) every time. The J-9409 timeout did not recur in 5 runs (served 8.9-16.4 s, load
+4.4-4.8). No duplicated provider request, tool run or exec evaluation, no lost or duplicated record
+by the tests' oracles; no state directory kept, none needed.
+Fit: good: intent before effect held at every kill point tried; the cost is the restart (10-27 s
+to serving under load).
+Decision: no blocker; the pool timeout stays unexplained and unreproduced (6 + 5 runs).
+
+### J-9453 2026-11-18 M2-R3 stale text and process - process
+Evidence: the files of J-9451; `runs.jsonl`.
+Reading: (1) milestones.md M2 outcome row 3 still says opt-in `M2_TURNS_ROUND_LIMIT=1`, known
+failure; since `3ddceecc8a` it is a 60 s round-rate window. (2) `m2-turns.test.js` header says the
+adapter test keeps the turn deadline as a known failure; it passes as a plain test. (3)
+`README.md` says `THIX_HARNESS_RUN_SLOTS` default 4; it is 6. (4) Three M1 waiters of this unit were
+stopped while waiting (exit 143, 0 held) after a wrong file path; the rerun is in J-9450.
+Time: 08:19:13Z to this commit; 46 runs, 122 min held, 252 min waited; commands over 60 s: the unit
+lane (72 s), the M2 batch (about 60 min), the kill script (about 66 min), the M1 batch (20 min), the
+archive rerun (4.2 min), m1b-live alone (2.3 min), and the wait loops for them.
+Decision: (1)-(3) for the PM or the owners of those files.
+
+### J-9485 2026-11-18 M2-FIX archive validation deletes no segment (PM ruling 10) - defect
+Evidence: `AH/archive/store.js` `observeNow`, `scanSegments`, `sealNow`; `AH/archive/segment.js`
+`writeSegment`; commit 77585802a7; tests `test/adapter/m2-archive-store.test.js` "J-9485 (B)",
+"J-9485 (A)", "J-9485: a segment file that cannot be read", the rewritten "validation" test, and
+`m2-archive-kill.test.js` (18 tests, about 24 s wall, Node, no supervisor); integration
+`m2-archive-restart-2` passed in a shared slot (209 s) and `m2-archive-restart` (153 s, S
+and A3 kills) at 781c2f3bf0; the whole unit and adapter lane: 727 passed, 0 failed, 65 s wall.
+Reading: M2-R2's J-9445 is fixed in store.js only. (1) No code path outside session delete
+(`release`) unlinks a final-named segment: validation keeps every file of the vat's chain, every
+file the manifest records `acknowledged`, and every file that chains forward from the vat's state
+(any branch, any length: a seal answered in this or an earlier incarnation whose crank Z has not
+run); an orphan is only a file at an ordinal the vat's chain already fixes with another digest, and
+it is renamed `<name>.orphan` (out of scans, its blob keys still counted live, removed with the
+session). `sealNow` sets replaced entries aside the same way and refuses (never deletes) if one is
+acknowledged. (2) Staleness comes from the persisted acknowledged chain: a state that is a proper
+prefix of the manifest's acknowledged entries changes nothing; with no state in memory the
+acknowledged prefix becomes the validated state after its files are stat'ed. So LRU eviction (B)
+and a restart (A) no longer matter, and the J-0493 (3) delivery-order assumption carries nothing.
+(3) `scanSegments` keeps a file that does not verify (counted `unreadable`) and throws on a read
+error with an errno (EACCES in the test stands for EIO/EMFILE); `writeSegment` keeps a damaged file
+of the same name as `<name>.bad` before writing the verified one. The two reviewer scenarios are
+tests now: (B) `maxSessions: 1`, two segments acknowledged, the state evicted by another session,
+the pre-seal page observed: both files kept, the next prepare equals the oracle; (A) incarnation 1
+answers, incarnation 2 observes the older state, then Z: kept, acknowledged, equal to the oracle.
+Behaviour change: an answered seal the vat never applied now stays on disk until the vat seals that
+ordinal again (the same range reuses the file; another range sets it aside), at most one file per
+crash; the kill tests now assert "acknowledged plus at most the unapplied answer", and only the
+chain after the next seal.
+Fit: awkward, and now explicit: an orthogonally persistent vat keeps the acknowledged chain for
+free, while the Node adapter must persist the fact (manifest flags) before it can act on it;
+deciding deletion from adapter memory was the defect. Good: chained digests make "is this a
+prefix of what the vat named" a constant-time check.
+Decision: done; contract 4.2, 4.5 and 4.7 restated (deletion follows only from the persisted
+chain).
+
+### J-9486 2026-11-18 M2-FIX security review fixes (M2-R1) - defect
+Evidence: commits 7fb0d89457 (providers) and 3c111fc57a (secrets); tests
+`test/adapter/m2-w21a-openrouter.test.js` (three J-9486 tests), `m2-w23-secrets.test.js` (key race
+50 runs, torn audit tail), `m2-w23-manager.test.js` (delete between pages), `test/unit/
+m2-interfaces.test.js` (timeoutMs); 89 provider/secrets/interface tests passed in 5.7 s wall;
+integration `m2-secrets` 112 s, `m2-providers` 119 s, `m2-catalog` 118 s, all pass (shared slots,
+load 2.1-2.7).
+Reading: fixed: (a) `providerBaseUrl` (AH/providers/http.js) refuses a base URL that is not
+`https:` or `http:` to localhost/127.0.0.1/[::1], or has user info, a query or a fragment, with a
+fixed text, in the OpenRouter and Anthropic providers and the catalogue; (c) a round's whole
+streamed body is bounded at `limits.roundStreamBytes` (64 MiB; `boundedChunks`), past it the round
+fails with `texts.frameLimit` and the body is cancelled (test: 69.2 MB streamed before the cut,
+under 1 s), and the BackendSpec guard refuses `timeoutMs` 0 or under 1 s; (R7-25) a key over
+`limits.providerTokenBytes` (8,192 bytes) fails the round with `INVALID_SECRET_BYTES` before any
+request, and the catalogue answers unavailable; (d) concurrent loads of one key file share one
+read, and a missing key file is created as a temp file, fsynced, linked into place (EEXIST: the
+other's key wins) and the directory fsynced, so a SIGKILL leaves no empty key file (50 of 50 runs);
+(audit) a torn last audit line is cut at load, so the next event is kept (the probe's 7-of-8 case is
+a test); (e) `SecretsAdmin.list` pages by creation serial (a delete between pages skips none);
+`MAX_SECRETS` and `AUDIT_KEEP` read `limits.secretsMax` and `limits.auditKeepEvents`; `create` counts
+creates in flight. Not fixed: (b) `SecretWriter.replace` still takes a plain string from a remote
+caller: M3's A-11 relies on a page's plain `replace(secret, value)` through the gateway, and M4's
+contract on the same exo, so a SealedBox-only guard is a cross-lane contract change (design in the
+M2-FIX report); the origin binding of a Secret; HKDF subkeys per purpose; `logPath` (tests and the
+M1a slice pass absolute paths in the state root; confining it needs the adapter's state directory in
+`AH/index.js`, a file three lanes edit). Bundles: session 186,448 -> 186,612, exec 84,354 -> 84,518
+bytes (the four limits and the guard).
+Fit: good: the bounds are all in the adapter, so the vat side changed by limits and one guard only.
+Decision: (a), (c) and the R7-25 bound were "before done" items and are in; (b) for the PM.
+
+### J-9487 2026-11-18 M2-FIX PM rulings 1 and 3: the cancel's end event, the audit deviation - decision
+Evidence: commits 0c40bdf4f4 (contract 16 item 11) and 3c111fc57a (contract 9.1); J-9441, J-9486.
+Reading: ruling 1: contract decision 11 records that a cancelled turn ends `end { status:
+'cancelled' }` and no `abort` is added; no code changed. Ruling 3: the review confirmed for SIGKILL
+that no value can leak from the audit log and refuted only the torn-line case (power loss, full
+disk), which J-9486 fixed first; contract 9.1 now says what is built (`secrets-audit.log` beside
+`secrets.enc`, a sealed line per event, appended without fsync, rewritten at twice the bound), that
+a SIGKILL can lose the newest audit lines, that a torn tail is cut at load, and that the 1,024
+Secrets bound is `limits.secretsMax`.
+Decision: applied.
+
+### J-9488 2026-11-18 M2-FIX PM ruling 2: history page records 48 -> 40 - decision
+Evidence: commit 6ec6044aa0; `guest/lib/limits.js` `historyPageRecords`; contract 3, 4.9, 6 and
+decision 6; `test/unit/m2-w25-archive.test.js`, `m2-interfaces.test.js`, adapter
+`m2-archive-store.test.js` (46 tests pass); integration `m2-history` passed (224 s, shared slot)
+with the bound at 40.
+Reading: every test reads the bound from `limits`, so none needed a number changed. Session bundle
+186,612 -> 186,611 bytes.
+Decision: applied; the `history.page` row is the perf pass's to re-read.
+
+### J-9489 2026-11-18 M2-FIX PM ruling 4: the inline too-big case - decision
+Evidence: `designs/m2-interfaces.md` (no client-side size check is in the contract);
+`designs/architecture.md` 12 rule 5 (vat message builders check `frameBytes`); J-9407;
+`test/integration/m2-probes.test.js` (the `test.failing` stays).
+Reading: the milestone row asks that "the client library" refuse a 100 KiB string before sending;
+the M2 contract does not say any client checks sizes (rule 5 binds guest builders, not the control
+client), so nothing was added. The refusal today is the session vat's guard: no halt, but the frame
+is delivered.
+Decision: no change, per the ruling. Core candidate kept from M2-R2: the hub refuses a frame over
+`frameBytes` addressed to a vat before delivery.
+
+### J-9490 2026-11-18 M2-FIX PM rulings 7 and 8; findings not fixed - decision
+Evidence: the M2-FIX commits (git log 6be8e868cf..HEAD, subjects ending "(M2-FIX)").
+Reading: ruling 7: `m2Interfaces` is not folded and no export renamed; files the M3/M4/M5 lanes
+also edit were touched only as follows: `guest/lib/interfaces.js` one line (the BackendSpec
+`timeoutMs` guard); `guest/lib/limits.js` four new bounds in one hunk after `secretValueBytes`
+plus `historyPageRecords` 40 and its comment; `resources/agent-host/durable.js` (`MAX_SECRETS` from
+limits, `list` by creation serial, creates in flight counted); `guest/session/session.js` one line
+(`cancelCurrent` to the queue). `AH/index.js`, `attach.js`, `factory.js` and the texts are
+unchanged (`texts.receiptLimit` is left unused). Ruling 8: the absolute local paths in the design
+documents were accepted by the owner before the first push and are public already: nothing changed,
+no history rewritten. Not fixed, with reasons: usage of a cancelled round (the answer usually
+arrives after the cancel settled the turn and wrote its record; a fix makes settle wait, bounded,
+for the cancelled round's answer); delete racing a session's first seal (needs a release tombstone
+in the archive root or a delete that waits for the seal in flight); export of a busy session
+(retry from a fresh head, or an export lease); one `pending` diff per change (a contract change
+for M3's viewers); the `SecretWriter` plain-string path (J-9486).
+Decision: for the PM, with the designs in the M2-FIX report.
+
+### J-9491 2026-11-18 M2-FIX PM rulings 5 and 9: where the specification wins - decision
+Evidence: SPEC R6-44, R4-47, R4-83, A.4 `getUsage` and the `usage` event (read in the
+specification, not from memory of the reference); commit 8c538130dd; contract 5.1 and decision 12;
+`test/unit/m2-queue-submissions.test.js` (17 pass), `test/integration/m2-queue.test.js`
+(passed, 180 s, shared slot, at 781c2f3bf0).
+Reading: (a) R6-44 states that Send now "for the queue head cancels the running turn so it goes
+next": built. `QueueEntry.sendNow` moves the entry to the head, releases holds, claims when idle;
+when a turn runs and no hold is left it cancels that turn (`runner.cancelCurrent`, as
+`Turn.cancel()`), and the entry is claimed when the cancelled turn settles. The old unit test that
+asserted "a running turn is never cut short" now asserts the cut. (b) Usage `turns`: R4-83, A.4
+and the event say "turns, incomplete turns" only; silent on which turns count, so the contract
+(every settled turn) stands. (c) The R4-47 round-limit text: the specification says only that the
+turn "ends normally with" it; silent on later contexts, so the contract (`TurnSettled.final`, not a
+transcript record) stands. Session bundle 186,611 -> 187,018 bytes.
+Decision: applied.
+
+### J-9492 2026-11-18 M2-FIX PM ruling 6: receipts bounded by eviction - decision
+Evidence: commit 668f054b80 (its subject says 187,173; the bundle measured 187,284 bytes after it,
+from 187,018); `guest/lib/pending-queue.js` (12 lines of vat code); `test/unit/m1a-queue.test.js`,
+`m2-queue-pending.test.js` (63 queue tests pass).
+Reading: R4-98 says "4096 receipts kept" and R4-53 that the queue bounds what is held. A full
+table no longer refuses: the oldest inserted receipt is evicted, and the session keeps one number,
+the latest issue time evicted; an unknown id issued at or before it is refused with
+`texts.requestIdExpired`, so a retry whose receipt was evicted is never run twice. Retained state:
+4,096 receipts plus one number. Cost: a client whose clock lags can see a fresh id refused as
+expired while the table turns over within its lag.
+Decision: applied; contract 5.1 restated.
+
+### J-9493 2026-11-18 M2-FIX import, export and delete findings (M2-R2, M2-R3) - defect
+Evidence: commits 4282731e7d and 781c2f3bf0, `guest/session/{turn,export,archive,records}.js`,
+`scripts/export.mjs`; `test/unit/m2-w25-archive.test.js`, `m2-w27-session-export.test.js` (37 unit
+tests pass); `test/integration/m2-lifecycle.test.js` and the new `m2-lifecycle-export.test.js`
+(`m2-lifecycle` 216 s and `m2-lifecycle-export` 217 s, both pass in shared slots; the export
+file failed once on a wrong expectation of mine, fixed in 62c00f07e1; `m2-turns` 194 s, pass).
+Reading: (1) A turn exported while it ran is settled `outcome-unknown` when the import ends
+(`runner.importEnd`), counted in `turns` and `incompleteTurns`, resolvable, and sealing passes it;
+`importTurns` refuses a settle that is not of the last started, running turn and a resolution
+before its settle. (2) The `archive` import part is refused and `adopt`/`startAt` removed (no
+importer sends it). (3) `scripts/export.mjs importState`: an export that ends, or starts another
+session, inside a session deletes that half-imported session and throws naming it. (4) Acceptance
+13: both delete tests now assert the doomed session's archive directory and blob files are gone;
+the bytes left under `agent-host/archive` are other sessions' directories (the kept session's mirror
+of its live tail), recorded as `otherNewDirs`: the kill run gave
+`doomedDirs: ["h1"]` gone, `archiveAfter: 82` bytes = `otherNewDirs: ["h2"]`, the kept session `s2`.
+So M2-R3's 82 bytes are not a leak. (5) `m2-lifecycle` split: acceptance 14
+and the truncated import moved to `m2-lifecycle-export.test.js`. (6) `blobPage` uses `staging.js`
+`blobsOf`. Session bundle 187,284 -> 187,311 (import fixes) -> 186,998 bytes (one walk).
+Decision: done; the two "before done" items of M2-R2 are in.
+
+### J-9494 2026-11-18 M2-FIX checkpoint.stall: the cause is the core's cadence snapshot - perf
+Evidence: J-9462's per-turn split (engine snapshot count and time per turn, at 200, 1,000 and
+5,000 turns); `packages/thixotrope/src/core/durable-worker-transport.js` (the cadence check after
+each delivery batch), `src/control/supervisor.js` (`snapshotEveryDeliveries = 256`),
+`scripts/serve.mjs` (`--snapshot-every`); J-9463 (snapshot 34.4 MB, flat with length). No new run:
+the earlier split already holds per-phase timing, and the code path explains it.
+Reading: after every delivery batch the worker transport queues a snapshot once 256 deliveries have
+passed since the last one, whether or not a turn is in progress; the snapshot runs behind the
+queued deliveries and holds the next ones for its whole duration (0.7-5.2 s for the session vat's
+34 MB heap under load). A turn of about 9 deliveries meets one every 28 turns, so every 100-turn
+window holds 2-4, and p99 of 100 samples is that turn. It is not a seal crank (no slow turn sealed)
+and nothing in harness code does the work in one turn, so no harness change spreads it. Raising
+`--snapshot-every` would only make a window miss it (a measurement artefact, longer replay).
+Fix size (core candidate): let the cadence defer a due snapshot until the worker has been idle for
+a short time (for example 50 ms with no delivery queued), forced at 4 x the cadence: about 30 lines
+in `durable-worker-transport.js` plus a test; or shrink the session heap (SES baseline and bundle;
+a separate study).
+Fit: poor fit as configured: orthogonal persistence pays its checkpoint on the turn path of
+whichever turn crosses the count; a busy interactive vat wants checkpoints at idle.
+Decision: budget unchanged; core candidate for the PM.
+
+### J-9495 2026-11-18 M2 close-out regression run, and a perf file M2-FIX broke - deviation
+
+Evidence: `d7fce8e46c`, lane `endo-thix-m2r`, THIX_AGENT M2-CLOSE, shared slots, load 2.3-5 (two
+template chains ran beside it). `corepack yarn test`: 727 passed, 0 failed, 59 skipped, 66 s
+wall. `corepack yarn test:integration --jobs 4`: 25 files, all exit 0, 1,040 s wall, 3,792 s
+held, no wait for a slot; longest held `m1b-followups` 266 s, `m2-lifecycle-export` 235 s,
+`m1b-context-restart` 208 s, `m2-history` 202 s, `m2-turns` 196 s (per file in `process.md` 3.1).
+`m2-probes` keeps its one `test.failing` (the inline 100 KiB probe). Perf pass: the first run of
+`perf/queue.perf.mjs` exited 255 after 13 s (`TypeError: Cannot read properties of undefined
+(reading 'entry')` at the send-now window).
+Reading: the regression run fits the 20-minute rule (about 18 minutes) on a machine without other
+lanes; `m1b-live` 9 passed under load this time. The queue failure is a conversion defect left by
+a behaviour change, not a queue bug: since R6-44 (M2-FIX, J-9491) `sendNow` cancels the running
+turn and the moved entry is claimed when it settles, so each timed operation took one entry out of
+the 99, and after 98 the window read past an empty list. Fixed in `7a27c150e5`: before each
+operation (untimed) the queue is topped up to 99 waiting again; the timed part is unchanged. Rerun
+in exclusive mode: exit 0, 33 s held; `queue.sendNow.memory` median 0.204 ms, p99 6.99 ms over
+1,766 samples in 10 s (the row now includes the cancel of the running turn).
+Decision: no other test or perf file changed. The perf pass's unit (M2-P1) could not have seen it:
+the behaviour changed after its run.
+
+### J-9496 2026-11-18 M2 acceptance 15 in the exclusive pass: flat, one hub-row ratio over - perf
+
+Evidence: `perf/history.perf.mjs` and `perf/history.restart.perf.mjs` at `6628dbf8a1` (tree
+differed in `README.md` and `designs/process.md` only), exclusive, load 1.3-1.8, templates of
+200 / 1,000 / 5,000 imported plain turns rebuilt for the M2-FIX bundles (keys `6dca74ca156e`,
+`eda4379741a0`, `4ddc1164ef60`), a 60 s window of turns at each (87 / 87 / 86 samples).
+{"metric":"archive.flat.turn.at1000","at200":634.1,"at1000":637.8,"ratio":1.006,"pass":true}
+{"metric":"archive.flat.turnStart.at1000","at200":247,"at1000":251,"ratio":1.016,"pass":true}
+{"metric":"archive.flat.hubRow.at1000","at200":9374,"at1000":13010,"ratio":1.388,"pass":false}
+{"metric":"archive.flat.hubRowEntries.at1000","at200":193,"at1000":192,"ratio":0.995,"pass":true}
+{"metric":"archive.flat.turn.at5000","at200":634.1,"at5000":647.7,"ratio":1.021,"pass":true}
+{"metric":"archive.flat.turnStart.at5000","at200":247,"at5000":264,"ratio":1.069,"pass":true}
+{"metric":"archive.flat.snapshot.at5000","at200":30916608,"at5000":31989760,"ratio":1.035,"pass":true}
+{"metric":"archive.flat.slots.at5000","at200":761856,"at5000":792064,"ratio":1.04,"pass":true}
+{"metric":"archive.flat.hubRow.at5000","at200":9374,"at5000":9345,"ratio":0.997,"pass":true}
+Reading: every vat-side measure is flat (0.95-1.07 x) at 1,000 and 5,000. The one ratio over 1.25
+x is the hub row's characters at 1,000 while its entries are 0.995 x: the 1,000-turn read caught
+`answersOwed: 1`, the 200-turn read none, so the row was read with a call in flight (J-9461 read
+5,769 / 5,272 characters for the same rows under load). History pages: newest 244 / 244 / 252 ms
+at 200 / 1,000 / 5,000 (15 s windows, 81-85 samples), archived 34 / 35 / 33 ms; walks of 1,003 and
+5,003 turns, each turn once, 358 pages at 5,000, none over `frameBytes`; `context.rebuild` 219 /
+219 / 253 ms with the same context. `checkpoint.stall` p99: 1,050 / 951 / 1,025 ms (3 / 2 / 3
+snapshots in the window, the slowest turn the snapshot turn each time).
+Decision: acceptance 15 passes at 5,000 and fails at 1,000 on the row characters; recorded, not
+re-based. Proposed for the PM: read the hub row at a quiescent point (no answer owed) in
+`perf/history.perf.mjs`, a procedure fix, then re-run that file alone.
+
+### J-9497 2026-11-18 M2 recorded perf pass: 25 files exclusive, what passes and what misses - perf
+
+Evidence: every `perf/*.perf.mjs` as `node scripts/run-lock.mjs --exclusive --label perf-<name> --
+node perf/<name>.perf.mjs`, one batch 10:48-11:58 UTC, `6628dbf8a1-dirty` (docs only), worker
+`367e78ad...`, crank budget 50 M, slot ceiling 4,000,000, `allocation`, `log`, load 1.1-2.4;
+4,171 s held, no exit 124 (per file in `process.md` 3.2; every row in milestones.md M2 outcome).
+{"metric":"throughput","value":41.2,"unit":"deliveries/s","sessions":20,"window":60000,"samples":438,"perDeliveryMs":222,"turnsPerSecond":7,"turnMsP99":54926.6}
+{"metric":"restart.serving.m2","value":3863.8,"runs":[3546.6,3863.8,4180.4],"sessions":50,"turnsEach":300,"woken":[],"pass":true}
+{"metric":"archive.stall.at200","value":1396.9,"median":661.2,"samples":77,"snapshots":4,"pass":false}
+{"metric":"session.create.pool","median":1096.796,"n":8,"window":45000,"budget":{"median":750},"pass":false}
+{"metric":"concurrency.10.turnStart","median":701,"n":120,"window":60000,"budget":{"median":222},"pass":false}
+{"metric":"hub.growth.slope","value":3258370,"projected":true,"msPerDeliveryVsFresh":1.37,"pass":false}
+{"metric":"exec.trivial","median":56,"p99":345,"n":52,"window":30000,"budget":{"median":250},"pass":true}
+{"metric":"journal.snapshot.budget.at1000","msEach":245.1,"snapshotBytes":31883264,"slots":790272,"pass":true}
+{"metric":"import.rate","turnsPerSecond":7.1,"shape":"tool","window":60000,"samples":36}
+Reading: (1) M2-P2's possible regression is cleared: `exec.trivial` is 56 ms median on a quiet
+machine (9 s at load 3-7 was the load). (2) `checkpoint.stall` is at the budget's edge on imported
+sessions (0.95-1.05 x) and over it on the session `archive.perf` grows by running turns (1.40 x,
+4 snapshots in the window): the cause stays the cadence snapshot (C-24, J-9494). (3) Fails carried
+from M1b or set by core limits: `session.create.pool` 1.46 x, `concurrency.10` turn start 3.2 x
+single (M1b 6.5 x) and crank p95 500 ms, `hub.growth` projected to 50 sessions 3.26 MB and 1.37 x
+(20 sessions measured: 1.37 MB, pass), `crash.restart.bound5` 65.9 s (C-8, C-9),
+`vat.evaluateProgram` 2.12 s (1.06 x, C-5), `restart.crashingSession` 18.2 s (1.21 x). (4)
+`throughput` 41.2 deliveries/s, under the 50/s journal mark: 222 ms per delivery, and 14 session
+wakes inside the window (423 s of wake time across vats) make the p99 turn 55 s. (5)
+`disk.session` 41.7 MB (shared, `m2-lifecycle`), of it a 41.1 MB snapshot of an imported session:
+C-22's high-water. (6) Every other row of the M0, M1a, M1b and M2 tables passes.
+Decision: recorded; nothing re-based. M2 is "done with open items".
+
+### J-9498 2026-11-18 M2 close-out fit: what the exclusive numbers say about Thixotrope - fit
+
+Evidence: J-9495..J-9497; the shared-slot runs of M2-P1 and M2-P2 (J-9460..J-9473) for the same
+files.
+Reading: good fit: orthogonal persistence plus the record archive gives a session whose every
+vat-side cost is independent of its length (5,000 against 200 turns at 0.95-1.07 x), restarts
+with 50 sleeping 300-turn sessions serve in under 4.2 s and wake none, and on a quiet machine the
+whole perf pass of 25 files fits in 70 minutes with no file over 5 minutes. Poor fit, measured:
+(a) a busy vat pays its checkpoint inside whichever turn crosses the delivery count (C-24); (b)
+the hub's per-row cost grows with sessions and viewers, not turns (C-2's rest), which is where
+`concurrency.10` and `hub.growth` miss; (c) import is the only way to build long states and costs
+what live turns cost per record (C-22): the template chain is the longest step of a pass (32
+minutes of wall here). Load sensitivity is itself a finding: the same files held 1.3-2.2 x longer
+in shared slots at load 4-7 than here, and some latency rows (exec.trivial 160 x, turn.start p99)
+move far more than load explains, because every crank's host work runs on the supervisor's one
+thread.
+Decision: none beyond the candidates already filed.
+
+### J-9499 2026-11-18 M2-CLOSE time record - process
+
+Evidence: start 10:16:03Z. Unit lane 66 s; integration run 1,040 s (background); template chains
+long 200 / 1,000 / 5,000 148 / 152 / 488 s held and busy 10..50 417 / 392 / 366 / 353 / 352 s held
+(shared, both chains started at 10:16, done 10:29 and 10:48); exclusive perf batch 10:48:28 to
+11:57:29 plus the queue rerun to 11:58:11. Waits for slots: 0 s for every run (no other lane was
+active). The rest was reading and the documents.
+Reading: the close-out is bounded by the template rebuild (31.5 minutes, needed because M2-FIX
+changed the session bundle) and the exclusive pass (70 minutes, during which every lane is
+stopped). Building the busy chain beside the regression run saved about 30 minutes.
+Decision: for the PM: a guest-bundle change late in a milestone costs a template rebuild before its
+recorded pass; schedule bundle changes before the review units.

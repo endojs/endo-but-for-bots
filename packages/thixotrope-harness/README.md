@@ -11,7 +11,7 @@ second copy of an `@endo/*` library.
 - Plan: `designs/architecture.md` (facts, decisions, core changes, limits, the turn sequence,
   test and perf method, guest rules) and `designs/milestones.md` (work units, acceptance tests, perf
   checks; each finished milestone's outcome table; "Changes after M0 and M1a" at the end). What M0
-  measured and changed, and every core-change candidate with its status (C-1..C-21):
+  measured and changed, and every core-change candidate with its status (C-1..C-25):
   `designs/m0-results.md`. The M1a interface contract, crank by crank: `designs/m1a-interfaces.md`.
   Surveys and plan reviews: `designs/survey/`, `designs/review-*.md`.
 - Journal: `JOURNAL.md` records what fits Thixotrope and what does not, and every perf
@@ -65,7 +65,7 @@ growth in loops under `guest/`; review still catches what the string rule cannot
 
 Integration tests, spikes, perf checks and the `packages/thixotrope` Ironhorse lane take the run
 lock: a machine-wide pool of slots under `<THIX_HARNESS_HOME>/run-lock/` (default
-`~/.cache/thixotrope-harness`; `THIX_HARNESS_RUN_SLOTS`, default 4) shared by every worktree. A
+`~/.cache/thixotrope-harness`; `THIX_HARNESS_RUN_SLOTS`, default 6) shared by every worktree. A
 perf check takes every slot (exclusive). The CLI also boxes the workload at 10 minutes (exit 124)
 and logs each run to `<THIX_HARNESS_HOME>/runs.jsonl`; `designs/process.md` section 2 has the
 details and the script's header comment is the reference.
@@ -108,7 +108,7 @@ corepack yarn test:integration   # every file under test/integration and test/te
 ```
 
 which runs `scripts/test-integration.mjs`: each file under its own run-lock wrapper (its own
-slot, 10-minute box and run-log line), up to four files at once (`--jobs N`). Never give
+slot, 10-minute box and run-log line), up to `THIX_HARNESS_RUN_SLOTS` (6) files at once (`--jobs N`). Never give
 `corepack yarn test` several integration files at once: AVA runs files in parallel worker
 processes, and each file's `takeIntegrationLock` passes through the outer lock (a nested taker),
 so their supervisors would run side by side.
@@ -122,14 +122,34 @@ variable) and the reason in the title.
 
 The M2 acceptance files (milestones.md M2; each runs alone in under 5 minutes against the fake
 provider server on 127.0.0.1, `test/fixtures/fake-provider-server.mjs`): `m2-providers` (1, 6,
-8), `m2-turns` (2, 12; 3 at the real 1,024-round limit is opt-in with `M2_TURNS_ROUND_LIMIT=1`,
-about 280 s of turn alone, J-0471), `m2-queue` (4, 5, 10), `m2-secrets` (7, and the grep of the
-whole state directory for every encoding of the key values), `m2-history` (9), `m2-catalog`
-(11), `m2-lifecycle` (13, 14; `M2_DELETE_KILL_DELAY_MS` and `M2_CREATE_KILL_DELAY_MS` move its
-SIGKILL points), `m2-archive-restart` (16), `m2-probes` (the too-big probes). Acceptance 15 (a
-5,000-turn session behaves like a 200-turn one) is `perf/history.perf.mjs`, whose sessions are
-built by `importState`. Files that use a Secret set `THIX_HARNESS_SECRETS_KEY` to a key file under
+8), `m2-turns` (2, 12; 3 as the round rate of an always-tool turn over a 60 s window, from which
+the 1,024-round time is derived; the limit itself is proved at limit 2 in Node), `m2-queue` (4,
+5, 10), `m2-secrets` (7, and the grep of the whole state directory for every encoding of the key
+values), `m2-history` (9), `m2-catalog` (11), `m2-lifecycle` (13; `M2_DELETE_KILL_DELAY_MS` and
+`M2_CREATE_KILL_DELAY_MS` move its SIGKILL points), `m2-lifecycle-export` (14 and the truncated
+import), `m2-archive-restart` (16 at S and A3) and `m2-archive-restart-2` (16 at A2 and Z), both
+over one imported 159-turn session (`_m2-archive-kill.js`), `m2-probes` (the too-big probes).
+Acceptance 15 (a 5,000-turn session behaves like a 200-turn one) is `perf/history.perf.mjs` and
+`perf/history.restart.perf.mjs`, whose sessions are copies of templates built by `importState`.
+Files that use a Secret set `THIX_HARNESS_SECRETS_KEY` to a key file under
 `tmp/` (outside the state directory) and remove it.
+
+**Regression run** (process.md section 3; the M2 close-out at `d7fce8e46c`, 2026-11-18, load
+2.3-5): `corepack yarn test` (unit and adapter lanes: 727 passed, 59 skipped, 66 s), then
+`corepack yarn test:integration --jobs 4` (all 25 files pass, 1,040 s wall; longest held:
+`m1b-followups` 266 s, `m2-lifecycle-export` 235 s, `m1b-context-restart` 208 s, `m2-history`
+202 s). About 18 minutes in all, inside the 20-minute rule. Per-file times are in process.md
+section 3.
+
+**Known failures** (each marked `test.failing`, or opt-in, with the reason in its title):
+
+- `m2-probes`: a 100 KiB inline string sent straight to a vat method is refused by the session
+  vat's guard after delivery, not by the client before sending (PM ruling 4; core candidate C-25).
+- Latency budgets that are sensitive to load: `m1b-live` acceptance 9 (rename within 500 ms)
+  failed once at load 4.5 and passed alone (J-9450); not marked, it passes on a quiet machine.
+- Perf rows that miss by design or by a recorded core limit: `perf/crash.perf.mjs` and
+  `perf/restart.crash.perf.mjs` (C-8, C-9), `checkpoint.stall` (C-24); see the perf table below
+  and the M2 outcome table in `designs/milestones.md`.
 
 `m1a-slice-restart.test.js` repeats its SIGKILL cases (acceptance 5, 6, 7 and the held-ports
 case) once per kill delay with `M1A_KILL_DELAYS_MS=0,100,500,1500,4000` (20 tests, about 10
@@ -173,28 +193,37 @@ faster). Every metric is one JSON line on stdout (also appended to `PERF_OUT` wh
 the commit, worker sha256, crank budget and load average; the exit code is 1 when a median (or
 p95, p99, max, value) is over 1.25 x its budget or deliveries per operation are over theirs.
 `IDLE_MS` (default 1 h) and `SNAP_EVERY` set the supervisor's idle sleep and snapshot cadence;
-`FRAMES_N`, `LOOP_N`, `INSTALL_N` and `CRASH_*` shorten individual scripts.
-`perf/crash.perf.mjs` and `perf/restart.perf.mjs` exit 1 by design while a restart with a crashing
+Every repeated measurement runs for a fixed window (`perf/_window.mjs`, designs/process.md section
+3); rows carry `window` and `samples`. `PERF_WINDOW_SCALE` scales every window (a quick smoke only);
+`LOOP_N`, `INSTALL_N` and `CRASH_*` shorten individual scripts.
+`perf/crash.perf.mjs` and `perf/restart.crash.perf.mjs` exit 1 by design while a restart with a crashing
 vat misses its 15 s target (core candidates C-8, C-9). Paste the lines into `JOURNAL.md` with a
 reading and a decision.
 
+The recorded pass runs every file one after another in exclusive mode (`node scripts/run-lock.mjs
+--exclusive --label perf-<name> -- node perf/<name>.perf.mjs`, one batch, after the long-session
+templates exist); the last, the M2 close-out, held 69.5 minutes for 25 files, none over 5 minutes
+(`designs/process.md` 3.2). The times below are held time per file.
+
 | script | rows | about |
 | --- | --- | --- |
-| `perf/turn.perf.mjs` | `turn.start` (+ `.open`, `.dispatch`, `.client`, `.deliveries`), `turn.delta`, `turn.delta.client`, `turn.round`, `turn.lease`, `turn.tooBig.*`, `turn.frames` | 4 min (`TURN_N` 200) |
-| `perf/session.perf.mjs` | `session.program`, `install.factory`, `session.createCold` | 3 min |
-| `perf/restart.perf.mjs` | `restart.serving` (gate: woken session vats = 1, read from the worker rows' `wakes`), `restart.crashingSession` | 6 min |
-| `perf/gc.perf.mjs` | `gc.burst.turnStart`, `gc.burst.frames`, `gc.burst.hub`, `gc.restart` (C-17) | 6 min |
-| `perf/crash.perf.mjs` | M0's crash and restart phases (C-8..C-10) | 6 min |
-| `perf/hub.perf.mjs` | `hub.gcBurst`, `hub.gcBurst.turnStart`, `hub.growth` (C-20, C-2; `HUB_GROWTH=0` skips growth) | 10-20 min |
-| `perf/exec.perf.mjs` | `exec.first`, `exec.trivial`, `exec.sends.answered` (`.sendOnly` not measurable in M1b), `exec.runaway`, `exec.retire`, the too-big probes `tooBig.*` | 3 min |
-| `perf/pool.perf.mjs` | `session.create.pool` (+ `.poolAwake`), `session.create.cold`, `pool.refill`, `pool.firstTurn` | 3 min |
-| `perf/concurrency.perf.mjs` | `concurrency.single.turnStart`, `concurrency.10.turnStart`, `.turn`, `.crank` (from `status().deliveryHistogram`), `.rowPush`, `.gc` | 3 min |
-| `perf/history.perf.mjs` | M2: the long-session table (J-9383 form) at 50 / 200 / 1,000 / 5,000 turns, each session built by `importState` (`perf/_long-session.mjs`): `history.turn.at<n>`, `.turn.start`, `.snapshot`, `.stall`, `.seal`, `.history.page` (newest, vat) and `.archived` (`History`), `.hub.row`, `.archive` (disk), `.walk` (newest turn back to turn 1), `.heap`, `.context.rebuild` (with `sameContext`), then `archive.flat.*` (1,000 and 5,000 against 200 turns, <= 1.25 x; acceptance 15) (`HISTORY_POINTS`) | 30-45 min |
-| `perf/journal.perf.mjs` | the same rows under `journal.` at 1,000 / 10,000 / 30,000 imported turns (plain shape), `journal.snapshot.budget.at<n>` (500 ms / 1 s / recorded), `session.heap`, `checkpoint.stall` (`JOURNAL_POINTS`, `JOURNAL_SNAP_EVERY`) | 1-1.5 h |
-| `perf/throughput.perf.mjs` | 50 sessions x 300 turns by `importState`; `restart.serving.m2` (15 s; gate: no idle vat woken) and `throughput` (20 busy sessions, deliveries per second) | 30-40 min |
-| `perf/archive.perf.mjs` (W2.5), `perf/import.perf.mjs` (W2.7), `perf/queue.perf.mjs` (W2.4, Node), `perf/provider.perf.mjs` (W2.1a, W2.1b, in process) | the archive grown by running every turn; the import rate; queue costs; provider overhead and SSE rates | see each file |
-| `perf/crank.perf.mjs` | `crank.worker.<heap>[.alloc][.<policy>]` (the worker run directly on a vat image: per-delivery cost and its collection share), `crank.ping`, `crank.turn.start.early/.mid/.late`, `crank.history.page[.late]`, `crank.context.rebuild`, `crank.grow`, `crank.heap`; with `CRANK_POINTS` also `.at<n>` rows per session length; `crank.grow` carries engine and hub deltas per 100 turns (`CRANK_TURNS`, `CRANK_WORKER_N`, `CRANK_GC_POLICIES`, `CRANK_START`) | 40-50 min at 1,000 turns; the long-session table (`CRANK_TURNS=5000 CRANK_POINTS=200,1000,4000 CRANK_START=mixed`, J-9383) about 2.5 h. A session takes at most 4,096 Composer submissions in 24 h (`maxReceipts`, J-9391): `mixed` starts the unmeasured turns with `startTurn` |
-| `perf/install.perf.mjs`, `perf/frames.perf.mjs` | M0's install and frame rows (`INSTALL_N`, `FRAMES_N`, `LOOP_N`) | a few minutes each |
+| `perf/turn.perf.mjs` | `turn.start` (+ `.open`, `.dispatch`, `.client`, `.deliveries`) over a `TURN_WINDOW_MS` window (60 s), `turn.delta`, `turn.delta.client`, `turn.round`, `turn.lease`, `turn.tooBig.*`, `turn.frames` | 2.1 min exclusive (M2 close-out); 3.0 min shared under load |
+| `perf/session.perf.mjs` | `session.program`, `install.factory` (`INSTALL_N` fresh provisions, single events), `session.createCold` (`SESSION_CREATE_WINDOW_MS`, 30 s, at least 3) | 2.4 min exclusive; 3.9 min shared under load |
+| `perf/restart.perf.mjs`, `perf/restart.crash.perf.mjs` (`perf/_restart.mjs`) | `restart.serving` (11 sessions set up, then runs for `RESTART_WINDOW_MS`, 90 s, at least 3; gate: woken session vats = 1, read from the worker rows' `wakes`); `.crash`: `restart.crashingSession` (one idle session, then `CRASH_WINDOW_MS`, 120 s, at least 3); split because together they held 591 s of the box under load | 3.8 min; 3.7 min exclusive; 5.0; 3.8 min shared under load |
+| `perf/gc.perf.mjs` | `gc.burst.turnStart`, `gc.burst.frames`, `gc.burst.hub` over `GC_WINDOW_MS` (60 s), `gc.restart` (C-17; SIGKILL runs for `GC_RESTART_WINDOW_MS`, 90 s, at least 2) | 5.0 min exclusive; 7.6 min shared under load |
+| `perf/crash.perf.mjs` | M0's crash and restart phases (C-8..C-10); single scenario events, not converted to windows | 4.6 min exclusive; 5.7 min shared under load |
+| `perf/hub.perf.mjs`, `perf/hub.growth.perf.mjs`, `perf/hub.sessions.perf.mjs` (`perf/_hub.mjs`) | `hub.gcBurst`, `hub.gcBurst.turnStart` over `HUB_WINDOW_MS` (60 s); growth: `hub.persist` per `GROWTH_WINDOW_MS` window (30 s), `hub.size` sampled while a `GROWTH_TURNS` (1,000) session is built by `importState`, `hub.growth` per file (fresh and after 1,000 turns; fresh, 10 and 20 sessions, the sessions built by `importState` with one turn each, `hub.import`); `hub.growth.slope` projects 10 -> 20 sessions to 50 (`GROWTH_PROJECT`, `projected: true`): 50 sessions take 3-8 min to create or import and do not fit the box (C-20, C-2) | 2.2 min; 3.7 min; 4.7 min exclusive; 2.3; 4.3; 5.9 min shared under load |
+| `perf/exec.perf.mjs` | `exec.first`, `exec.trivial` (`EXEC_TRIVIAL_WINDOW_MS`, 30 s), `exec.sends.answered` (`.sendOnly` not measurable in M1b), `exec.runaway`, `exec.retire`, the too-big probes `tooBig.*` | 1.8 min exclusive; 4.5 min shared under load |
+| `perf/pool.perf.mjs` | `session.create.pool` (`POOL_CREATE_WINDOW_MS`, 45 s of wall with the settle waits, at least 3; + `.poolAwake`), `session.create.cold` (`POOL_COLD_WINDOW_MS`, 20 s, at least 3), `pool.refill`, `pool.firstTurn` | 2.2 min exclusive; 2.7 min shared under load |
+| `perf/concurrency.perf.mjs` | `concurrency.single.turnStart` (`CONC_SINGLE_WINDOW_MS`, 30 s), `concurrency.10.turnStart`, `.turn`, `.crank` (from `status().deliveryHistogram`), `.rowPush`, `.gc` (rounds for `CONC_WINDOW_MS`, 60 s) | 2.4 min exclusive; 4.2 min shared under load |
+| `perf/history.perf.mjs` | M2, acceptance 15's flatness: at 200 / 1,000 / 5,000 turns, each a copy of a cached template of that many imported plain turns (`perf/_long-template.mjs`), a 60 s window of turns (`perf/_long-session.mjs`; `HISTORY_WINDOW_MS`): `history.turn.at<n>` (median, p99, turns per minute), `.turn.start`, `.snapshot`, `.stall` (with the slowest turns and what they did), `.seal`, `.hub.row`, `.archive` (disk), `.heap` after a clean stop, then `archive.flat.*` (1,000 and 5,000 against 200 turns, <= 1.25 x) (`HISTORY_POINTS`, `HISTORY_SHAPE`) | 3.6 min exclusive; 5.5 min shared (load 4-7) |
+| `perf/history.restart.perf.mjs` | the rest of acceptance 15 at the same templates: `history.history.page.at<n>` and `.archived` (15 s of reads each, `HISTORY_PAGE_WINDOW_MS`), `.walk` (1,000 and 5,000: newest turn back to turn 1), a clean restart, `.heap`, `.context.rebuild` (with `sameContext`) | 2.8 min exclusive; 6.5 min shared (load 4-7) |
+| `perf/journal.perf.mjs` | the window rows under `journal.` at 1,000 and 5,000 imported plain turns (templates), `journal.snapshot.budget.at<n>`, `session.heap`, `checkpoint.stall`; 10,000 and 30,000 do not fit the box (their imports take 14 and 42 min): `journal.slope.*` per 1,000 turns and the projection at 10,000 (checked against 1 s, `projected: true`) and 30,000 (`JOURNAL_POINTS`, `JOURNAL_SNAP_EVERY`, `JOURNAL_WINDOW_MS`) | 2.4 min exclusive; 3 min shared (load 4-7) |
+| `perf/throughput.perf.mjs` | a cached template of 50 sessions x 300 turns (built in steps of 10 sessions); `restart.serving.m2` (15 s; gate: no idle vat woken) and `throughput` (20 busy sessions for 60 s, `THROUGHPUT_MS`: deliveries per second, per-turn median and p99, samples) | 2.6 min exclusive; 3.5 min shared (load 5-6) |
+| `perf/_long-template.mjs` | builds the cached templates the four files above use, under `<THIX_HARNESS_HOME>/long-session/`, keyed by the base template, the code that fills them and the spec; one boxed run-lock step per template: `node perf/_long-template.mjs history journal throughput` (`--list`, `--prune`); a perf check fails with this command when one is missing (`LONG_TEMPLATE_BUILD=1` builds it in place) | 200 and 1,000: 2.5 min each; 5,000: 8.1 min; busy 5 steps of 5.9-7.0 min (shared, load 2-5, M2 close-out; at load 4-7 the 5,000 step took 8.6 and the busy steps 7.4-9.2 min, near the box, J-9464) |
+| `perf/archive.perf.mjs` (W2.5), `perf/import.perf.mjs` (W2.7), `perf/queue.perf.mjs` (W2.4, Node), `perf/provider.perf.mjs` (W2.1a, W2.1b, in process) | a session grown to 200 turns by running turns, then the window, pages, restart and rebuild rows under `archive.` (`ARCHIVE_POINTS`); the import rate over a 60 s window and a 300-turn import walked back (`IMPORT_WINDOW_MS`); queue costs, 10 s per row (`QUEUE_WINDOW_MS`); provider overhead and SSE rates, 10 s per row (`PROVIDER_WINDOW_MS`) | 4.0 min; 2.0 min; 0.6 min; 1.6 min exclusive |
+| `perf/crank.perf.mjs`, `perf/crank.mid.perf.mjs`, `perf/crank.late.perf.mjs` (`perf/_crank.mjs`) | `crank.worker.<heap>[.alloc][.<policy>]` (the worker run directly on a vat image for `CRANK_WORKER_WINDOW_MS`, 10 s per row: per-delivery cost and its collection share), `crank.ping` (20 s), `crank.turn.start.early` (a 60 s `CRANK_WINDOW_MS` window from a new session) with its restart, `crank.context.rebuild.at<n>` and `session<n>` worker rows; `.mid` at 500 and `.late` at `CRANK_TURNS` (1,000) turns built by `importState` (tool turns): `crank.turn.start.<phase>`, `crank.grow` (wall per 100 turns from the window's rate, engine and hub deltas), `crank.history.page[.late]`, `crank.heap`, `crank.context.rebuild` (`CRANK_GC_POLICIES`). The old 2.5 h long-session table (to 5,000 turns grown) does not fit the box: 1,000 is the largest point kept, the slope is late against mid, and `perf/history.perf.mjs` holds the table to 5,000 by import | 2.9 min; 2.0 min; 3.7 min exclusive; 2.9; 2.6; 4.7 min shared under load |
+| `perf/install.perf.mjs`, `perf/frames.perf.mjs` | M0's install rows (`INSTALL_N`, single installs, not windowed) and frame rows (`FRAMES_WINDOW_MS`, 15 s per latency row; `LOOP_N`) | 1.0 min; 1.8 min exclusive; 1.4; 2.8 min shared under load |
 
 A vat is woken when its worker row's `wakes` (process-local) is above 0; `journalLength` is the
 delivery frontier, and held GC frames (`heldFrames`) wait in the journal without a crank. `turn.delta`

@@ -179,7 +179,7 @@ test('a full queue refuses with the R4-53 text and keeps no receipt', t => {
   t.is(queue.size(), limits.maxWaiting);
 });
 
-test('receipts are pruned by age and bounded at maxReceipts', t => {
+test('receipts are pruned by age and bounded at maxReceipts by evicting the oldest (J-9492)', t => {
   const queue = makeQueue();
   // Fill the receipt table with claimed submissions (the queue stays small).
   const turn = makeTurn();
@@ -189,13 +189,23 @@ test('receipts are pruned by age and bounded at maxReceipts', t => {
     if (!item) throw Error('no head');
     queue.claim(item, turn);
   }
-  t.throws(() => queue.enqueueOnce(sub('r'), rid(NOW + 5000, 99_999), NOW), {
-    message: texts.receiptLimit,
+  // Full: the next submission is taken and the oldest receipt evicted
+  // (R4-98 bounds what is kept, not how many are sent; PM ruling 6).
+  const next = rid(NOW + 5000, 99_999);
+  t.true(queue.enqueueOnce(sub('r'), next, NOW + 5000).added);
+  t.is(queue.receiptFor(rid(NOW, 0)), undefined, 'the oldest evicted');
+  t.is(queue.receiptFor(rid(NOW + 1, 1))?.state, 'started');
+  t.is(queue.receiptFor(next)?.state, 'queued');
+  // A retry of the evicted one is refused as expired, never run again.
+  t.throws(() => queue.enqueueOnce(sub('r'), rid(NOW, 0), NOW + 5000), {
+    message: texts.requestIdExpired,
   });
-  // A day later the oldest receipts expire and make room.
+  // A retry of a kept one is still a duplicate.
+  t.false(queue.enqueueOnce(sub('r'), rid(NOW + 1, 1), NOW + 5000).added);
+  // A day later the oldest receipts expire by age.
   const later = NOW + limits.retryWindowMs + 10;
-  t.true(queue.enqueueOnce(sub('r'), rid(later, 99_999), later).added);
-  t.is(queue.receiptFor(rid(NOW, 0)), undefined);
+  queue.first()?.entry.cancel();
+  t.true(queue.enqueueOnce(sub('r'), rid(later, 99_998), later).added);
   t.is(queue.receiptFor(rid(NOW + 10, 10)), undefined);
   t.is(queue.receiptFor(rid(NOW + 11, 11))?.state, 'started');
 });

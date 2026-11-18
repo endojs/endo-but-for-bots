@@ -89,7 +89,7 @@ M1b.
 | `TurnPorts` | optional `archive: ArchivePort` | W2.8 |
 | `HistoryPage` (and its structural view) | optional `archived`, `archive` | W2.5 |
 | `SessionConfig` | optional `systemPrompt` (inline or staged), `contextLength`, `maxOutputTokens`, `turnDeadlineMs` | W2.2, W2.6 (resolvers), W2.7 (factory) |
-| `BackendSpec` | a second alternative: `{ kind: 'openrouter' \| 'anthropic', label, keyGrant: ReadGrant, modelId?, baseUrl?, timeoutMs?, maxOutputTokens?, logPath? }` | W2.3 (manager), W2.1a/b (providers) |
+| `BackendSpec` | a second alternative: `{ kind: 'openrouter' \| 'anthropic', label, keyGrant: ReadGrant, modelId?, baseUrl?, timeoutMs?, maxOutputTokens?, logPath? }`. `timeoutMs` is 1,000 ms to 1 day (0, no timeout, is refused). A provider and the catalogue refuse a `baseUrl` that is not `https:`, or `http:` to a loopback host, or that has user info, a query or a fragment (`AH/providers/http.js` `providerBaseUrl`, fixed text `BASE_URL_REFUSED`; J-9486), so a grant cannot send its key over clear text to a host its holder picks | W2.3 (manager), W2.1a/b (providers) |
 | `BackendInfo` | `kind` is `BackendKind`; optional `modelId` | W2.3 |
 | `HarnessSettings` | optional `backends`, `defaultBackend`, `defaultModelId`, `turnDeadlineMs` | W2.7 |
 | `ScriptRound` (test double) | optional `times` (1..`maxToolRounds` + 1): the round stands for that many rounds in a row, so a script of one frame reaches the real round limit (acceptance 3 in a vat) | W2.6 |
@@ -241,7 +241,7 @@ for a call that enters no vat).
 | method | caller | crank | mode | max | retired break | heaviest crank |
 |---|---|---|---|---|---|---|
 | `Session.findTurn(turnId) -> Turn` (W2.5) | gateway, tests | any | answered | tiny | session vat lost | none appended; one Turn minted (kept among the 32 handles) |
-| `Session.getHistoryPage(cursor?)` (changed, W2.5) | gateway, tests, `History` | any | answered | <= frameBytes | session vat lost | <= `historyPageRecords` (48) records previewed and marshalled (section 6) |
+| `Session.getHistoryPage(cursor?)` (changed, W2.5) | gateway, tests, `History` | any | answered | <= frameBytes | session vat lost | <= `historyPageRecords` (40) records previewed and marshalled (section 6) |
 | `SessionInternal.blobPage(cursor?) -> BlobPage` (W2.7) | factory (delete) | delete step 2 | answered | <= 64 handles, ~5 KB | session vat lost: skip to step 3 (7.1) | scans the kept records, queue and checkpoint (<= 159 turns), at most 64 handles out |
 | `SessionInternal.deleteSelf()` (W2.7 via `runner.beginDelete`, W2.5) | factory | delete step 1 | answered | tiny | session vat lost: continue the delete | a cancel crank (contract 6.4): <= 2 records, 2 publishes |
 | `SessionInternal.exportState(cursor?) -> SessionExportPage` (W2.7) | `scripts/export.mjs` through `HarnessRoot.exportState` | any | answered | <= frameBytes | session vat lost | <= `pageRecords` records marshalled; pages bounded by frameBytes |
@@ -325,7 +325,7 @@ What one call or answer can make a vat do in one crank, against the slot ceiling
 | session | seal answer (Z, M2) | drops a prefix; copies the kept tail (<= 159 turns) into fresh arrays | `archiveKeepTurns + archiveSegmentTurns` |
 | session | `ContextSource.page` | 512 records out | `pageRecords`, `contextPageBytes` |
 | session | `ContextSource.segments` (M2) | 64 entries out | `segmentPageEntries` |
-| session | `getHistoryPage` (M2 bound) | 48 records previewed out | `historyPageRecords`, frameBytes |
+| session | `getHistoryPage` (M2 bound) | 40 records previewed out | `historyPageRecords`, frameBytes |
 | session | `Turn.getContent` | 512 records out, frameBytes | `pageRecords` |
 | session | `exportState` / `importState` (M2) | 512 records out / frameBytes of records in, each checked | `pageRecords`, frameBytes |
 | session | `blobPage` (M2) | a scan of the kept tail, 64 handles out | 159 turns |
@@ -397,8 +397,11 @@ digest>.jsonl`, written as `<name>.part`, fsynced, renamed, directory fsynced. J
 3. trailer: `{"end":true,"digest":"<hex>"}` with digest = SHA-256 over the previous digest
    (as hex text) followed by every byte of lines 1 and 2.
 
-A file without a trailer, or whose trailer does not verify, is half-written: it is never read,
-and is deleted when found (adapter start, or validation, 4.7).
+A `.part` file is half-written: it is never read and is deleted at adapter start. A final-named
+file exists only after fsync and rename, so one without a trailer, or whose trailer does not
+verify, is damaged: it is never read and never deleted; it stays in place and is counted
+(`unreadable`). A read error (EIO, EMFILE, EACCES) fails the operation with
+`textOf.archiveFailed`; it is never taken for damage (J-9485).
 
 ### 4.3 When the session seals
 
@@ -452,7 +455,7 @@ regenerates the same `seal` frame, and the hub drops the duplicate, M0 S9).
 | S (intent recorded, frame committed), before A1 | the `seal` breaks with the retired text during startup (it wakes the vat, as a lease break) | Z never comes: `sealing` cleared; records kept; seal again later | none / none |
 | A1 (pages pulled) | as above | as above | none / none |
 | A2 partly (`.part` written, not renamed) | as above | the `.part` is deleted at adapter start (M1b 4.6 sweep extended to the archive directory) | none / none (half-written segment discarded) |
-| A2 (renamed, fsynced, unacknowledged in the manifest) | as above | an **orphan** file: the next seal of the same range writes the same content (same digest, the same file name: the adapter verifies it and reuses it) or a different one (new file); validation (4.7) deletes any file the vat's chain does not name | none / none: readers stop at the vat's `ArchiveState` |
+| A2 (renamed, fsynced, unacknowledged in the manifest) | as above | an **orphan** file: the next seal of the same range writes the same content (same digest, the same file name: the adapter verifies it and reuses it) or a different one (new file); validation (4.7) keeps it while it chains forward from the vat's head and sets it aside (`<name>.orphan`) once the vat's chain fixes that ordinal with another digest | none / none: readers stop at the vat's `ArchiveState` |
 | A3 (answered; answer committed by the hub, Z not journaled) | the answer frame reaches the vat, or the retired break does (a break never means "not done", M0 S9) | answer: Z runs, sealed. Break: not sealed; the file is an orphan (row above) | none / none |
 | Z | - | sealed; the adapter's manifest, `context.jsonl` and mirror lag; A4 catches up at the next request (a missing marker is rebuilt from the segment file) | none / none |
 | A4 partly | - | `context.jsonl` without its marker for the segment: the unmarked tail is truncated and rebuilt from the segment file; a mirror rewrite is temp-then-rename | none / none |
@@ -502,9 +505,18 @@ Mode 0700. Inside:
 
 1. `segments` and `digest` equal the manifest's acknowledged prefix: done.
 2. Otherwise walk the segment files' headers and trailers from ordinal 1: the chain of digests
-   must reach the vat's `digest` at ordinal `segments`. Files past it, or off the chain, are
-   orphans: deleted (their blob files are not: those keys are still in the vat's live records or
-   in a later seal). Missing or broken files on the chain: ask the vat
+   must reach the vat's `digest` at ordinal `segments`. **No final-named segment file is deleted
+   outside session delete (4.11; J-9485).** Kept: every file of that chain, every file the
+   manifest records as acknowledged, and every file that chains forward from the vat's head
+   (ordinal past `segments`, `previous` linking back to `digest`: a seal answered, in this or an
+   earlier incarnation, that the vat may still apply). An orphan is only a file at an ordinal the
+   vat's chain fixes, with another digest: it is renamed `<name>.orphan` (out of every later scan,
+   its blob keys still counted live) and removed with the session. Staleness follows the persisted
+   acknowledged chain, not memory: a state that is a proper prefix of the manifest's acknowledged
+   entries (a history page answered before a seal, observed after an eviction or a restart) is
+   older than what the vat already named and changes nothing. So validation does not depend on
+   the order in which a new incarnation sees the vat's states (J-0493 (3)). Missing or broken
+   files on the chain: ask the vat
    `ContextSource.segments()` for its entries to name which; an acknowledged segment that is gone
    is data loss: the round fails with `textOf.archiveFailed('segment <n> is missing')` (never
    expected; journal it).
@@ -549,7 +561,7 @@ ordinal of the next turn to show). The vat serves ordinals > `sealedTurns`; the 
 `History` serves any.
 
 - `Session.getHistoryPage(cursor?)` (vat, W2.5): kept turns only, newest first, within 32 turns,
-  `frameBytes` and `historyPageRecords` (48) records (section 6). When the page reaches the oldest
+  `frameBytes` and `historyPageRecords` (40) records (section 6). When the page reaches the oldest
   kept turn and `sealedTurns > 0`, `next` is `h<sealedTurns>` and `archived: true`. A cursor with
   n <= `sealedTurns` answers `{ turns: [], next: cursor, archived: true, archive }`. Every page of
   a session with sealed segments carries `archive: ArchiveState`.
@@ -687,11 +699,18 @@ Contract 8 holds. M2 adds, on `QueueEntry` (`m2Interfaces.QueueEntry`; A.4 `edit
   staged file when the edit is refused (M1b 17.1 rule).
 - `cancel() -> boolean`: as contract 8.
 - `sendNow()`: moves the entry to the head and releases every hold except `interrupted` (R4-56;
-  Fae `session-submissions.js`); when idle it is claimed in the same crank (crank A); while a turn
-  runs it waits at the head. An entry no longer waiting throws `texts.entryGone`.
+  Fae `session-submissions.js`); when idle it is claimed in the same crank (crank A). While a turn
+  runs and no hold is left, that turn is cancelled as `Turn.cancel()` would (R6-44: "for the queue
+  head cancels the running turn so it goes next"; PM rulings 5 and 9, J-9491) and the entry is
+  claimed when the cancelled turn settles. An entry no longer waiting throws `texts.entryGone`.
 
-Bounds unchanged: 100 waiting (`textOf.queueFull`), receipts 4,096 kept 24 h (J-9391 records the
-rate cap; the PM rules on it), request ids per A.4.
+Bounds: 100 waiting (`textOf.queueFull`); request ids per A.4. Receipts: at most 4,096 kept, each
+at most 24 h (R4-98 "4096 receipts kept"). The bound is on what is kept, not on what is sent (PM
+ruling 6, J-9492; it was a refusal, a rate cap of 4,096 submissions per 24 h, J-9391): when the
+table is full, the oldest inserted receipt is evicted, and the session keeps one number, the latest
+issue time of an evicted receipt; an unknown request id issued at or before it is refused with
+`texts.requestIdExpired`, so a retry whose receipt was evicted is never run twice.
+`texts.receiptLimit` is no longer used.
 
 ### 5.2 Holds
 
@@ -716,13 +735,12 @@ M1b 3.3 on the fingerprint.
 ## 6. History pages (W2.5)
 
 A vat history page holds at most `historyPageTurns` (32) turns, `frameBytes` and
-`historyPageRecords` (48) records in all: whole turns are added newest first while all three
+`historyPageRecords` (40) records in all: whole turns are added newest first while all three
 hold; the newest turn alone over the records or bytes bound shows its first records and is marked
 `cut` (as M1a's byte rule). Each turn shows at most `historyTurnRecords` records. The bound comes
-from the page crank's marshalling cost: about 3 ms per record (J-0370, J-9387), so 48 records keep
-a page crank near 245 ms over a 95 ms floor [inferred] against the 300 ms `history.page` budget;
-W2.5 measures it at 200, 1,000 and 5,000 turns and, if it misses, proposes a smaller bound as a
-contract change (no budget is re-based, D-M2-3). Archived turns are paged by `History` (4.9)
+from the page crank's marshalling cost: about 3 ms per record (J-0370, J-9387). 48 was the first
+estimate; the newest vat page missed the 300 ms `history.page` budget at 48, so the PM accepted
+40 as a contract change (J-9488; no budget is re-based, D-M2-3). Archived turns are paged by `History` (4.9)
 without a vat crank. Acceptance 9: after 300 turns, pages load back to turn 1 (across the archive:
 by then 160 turns are sealed), every page message is at most `frameBytes`, and no turn is missing
 or shown twice.
@@ -958,11 +976,22 @@ W2.2 additions (contract commit of W2.2):
 `AH/secrets/store.js`: one encrypted file `<state>/agent-host/secrets.enc` (AES-256-GCM, a fresh
 nonce per write, written temp-then-rename with fsync), entries keyed by the manager's `k<n>`:
 `{ label, description, generation, state: 'active' | 'revoked', value }`, plus the audit log
-(R7-24: `{ at, label, op, outcome, code?, generation? }`, bounded: the newest 10,000 events). The
-wrapping key is a 32-byte file **outside the state directory**: the path in the adapter's
+(R7-24: `{ at, label, op, outcome, code?, generation? }`, bounded: the newest
+`limits.auditKeepEvents` = 10,000 events). **As built (deviation accepted by the PM, J-9487):** the
+audit log is not inside `secrets.enc` but its own file `<state>/agent-host/secrets-audit.log`, one
+line per event, each line sealed on its own (AES-256-GCM under the wrapping key, a fresh nonce),
+appended without fsync and rewritten (temp, fsync, rename) when it holds twice the bound. An event
+carries no value, so the log can lose events but never leak one: a SIGKILL can lose the newest
+audit lines that were not yet written back by the system; power loss or a full disk can also leave
+a torn last line, which the next load cuts at its last newline before appending (J-9486), so
+nothing beyond the torn tail is lost. At most `limits.secretsMax` = 1,024 Secrets exist at once
+(`SecretsAdmin.create` counts creates in flight; past it `CREATE_FAILED`). The wrapping key is a
+32-byte file **outside the state directory**: the path in the adapter's
 environment variable `THIX_HARNESS_SECRETS_KEY` (absolute; `scripts/serve.mjs` passes it
 through, W2.3), created 0600 if absent; without it, `~/.config/thixotrope-harness/secrets-<first 16
-hex of sha256(state path)>.key`. Tests set it to a file under `H/tmp/` and delete it with their
+hex of sha256(state path)>.key`. A missing key file is created whole or not at all (temp file
+0600, fsync, link into place, directory fsync), and concurrent first loads in one process share one
+read (J-9486). Tests set it to a file under `H/tmp/` and delete it with their
 state; no test reads a real key file.
 
 ### 9.2 Objects and flows
@@ -975,8 +1004,11 @@ state; no test reads a real key file.
   (X25519 + AES-256-GCM, `AH/secrets/seal.js`), so the hub carries ciphertext only). The writer
   maps `secret` to its key by amplification (`sink.resolveSecrets`, never a public key or id). A
   stale `expectedGeneration` fails `GENERATION_CONFLICT`; a revoked secret `REVOKED`; a value
-  over 1 MiB `INVALID_SECRET_BYTES`; a provider token over 8,192 bytes is refused by the provider
-  at read (R7-25).
+  over 1 MiB `INVALID_SECRET_BYTES`; a provider token over 8,192 bytes (`limits.providerTokenBytes`)
+  is refused by the provider at read with `INVALID_SECRET_BYTES`, before any request, and the
+  catalogue answers unavailable (R7-25; J-9486). A round's whole streamed body is bounded by
+  `limits.roundStreamBytes` (64 MiB): past it the round fails with `texts.frameLimit` and the body
+  is cancelled.
 - `Secret.makeReadGrant()` -> `ReadGrant`; an API backend spec holds it (`keyGrant`). Providers
   read through it each round (`readKey`, R4-82, R7-28): replace takes effect at the next round
   without a restart; after `revoke` the next read fails `REVOKED` and the turn fails with
@@ -1094,7 +1126,7 @@ guest rules; "Node" = adapter or tests.
 | `guest/lib/pending-queue.js` (vat) | from Fae `session/pending-queue.js`: `makePendingQueue({ onChange })`, heap Maps, no pet names | 5 |
 | `guest/session/{submissions,holds}.js` (vat) | `makeSubmissions(...)`, `holdTexts`, `releaseRule` | 5.1, 5.2 |
 | `guest/session/holds-table.js` (vat; hook table) | `holdsTable` | 13 |
-| `guest/session/queue.js` (vat) | `makeQueue({ onChange, turnOf, claim })` (`turnOf(turnId)`, `claim()` for `sendNow`) | 5 |
+| `guest/session/queue.js` (vat) | `makeQueue({ onChange, turnOf, claim, cancelCurrent })` (`turnOf(turnId)`, `claim()` and `cancelCurrent()` for `sendNow`) | 5 |
 | `AH/composer.js` | `Composer.edit` | 5.1 |
 
 ### W2.5
@@ -1253,8 +1285,8 @@ missing `sendNow` could not be made on the M2 guard; `textOf.notBuilt` answered 
    and hub row at the measured lengths would vary by more than 1.25 x (deviation, J-0403).
 5. **Archived turns have no Turn object in pages** (4.9); a client resolves one through
    `Session.findTurn(turnId)` (F.2 d); at most 64 archived outcome-unknown turns stay resolvable.
-6. **History page record bound 48** (6): an estimate from the measured marshalling cost; W2.5
-   measures and may propose another value.
+6. **History page record bound 40** (6): first estimated at 48 from the measured marshalling
+   cost; the newest vat page missed 300 ms at 48, so the PM accepted 40 (contract change, J-9488).
 7. **Secrets key file** (9.1): outside the state directory, path from
    `THIX_HARNESS_SECRETS_KEY`, else under `~/.config/thixotrope-harness/` (D-6; open decision 4
    stays open).
@@ -1262,8 +1294,22 @@ missing `sendNow` could not be made on the M2 guard; `textOf.notBuilt` answered 
    retries [inferred]" (R4-77) and G-04's missing timeout (deviation, J-0403).
 9. **Prompt exec paragraph** (10): rewritten for the persistent scope in M2, not M5 (deviation,
    J-0403).
-10. **Open for the PM:** the 4,096-receipt rate cap (J-9391) is unchanged; the archive's per-session
+10. **Open for the PM:** the 4,096-receipt rate cap (J-9391; replaced by eviction, ruling 6,
+    J-9492); the archive's per-session
     ceiling of 131,072 turns (4,096 segments; sealing stops beyond it); whether R4-106's `[default]`
     values should be re-stated as 128/32 in the architecture; the adapter-side growth of
     per-round projection and provider request with session length until M8 (4.13); a `lost`
     session's live-tail blobs beyond the mirror leak on delete (4.11).
+11. **Acceptance 6, a cancel's end event** (PM ruling, 2026-11-18; J-9487): the event contract
+    stands. A turn cancelled mid-stream ends its live stream with `end { status: 'cancelled' }`;
+    no `abort` event is added. The milestone's "abort emitted" is read as this end event, and the
+    provider's server sees the connection closed (8.1).
+12. **Where the contract and the specification were said to differ** (PM ruling 5, 2026-11-18;
+    J-9491; the specification wins where it states the behaviour): (a) send-now on the queue head
+    cancels the running turn (R6-44 states it: built, 5.1). (b) Usage `turns` counts every settled
+    turn, `incompleteTurns` the ones not completed (m1a-interfaces 6.3): R4-83, A.4 `getUsage` and
+    the `usage` event say only "turns, incomplete turns", so the specification is silent on which
+    turns count and the contract stands. (c) The round-limit text (R4-47) is the turn's final
+    answer (`TurnSettled.final`) and not a transcript record, so later contexts do not carry it:
+    R4-47 says only that "the turn ends normally with" the text, and is silent on what later
+    contexts hold, so the contract stands.

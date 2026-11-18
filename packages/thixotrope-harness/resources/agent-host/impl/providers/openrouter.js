@@ -59,13 +59,16 @@
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
+import { limits } from '../../../../guest/lib/limits.js';
 import { usageFromOpenRouter } from '../../../../guest/lib/token-usage.js';
 /* eslint-enable import/no-relative-packages */
 import {
   bodyChunks,
+  boundedChunks,
   discardBody,
   failureKind,
   postJson,
+  providerBaseUrl,
   retryAfterMs,
 } from './http.js';
 import { parseSseBatches } from './sse.js';
@@ -358,7 +361,13 @@ export async function* openRouterAttempt({
   try {
     // One delta per network read (J-0413): the content of every event that
     // arrived in one body chunk is published together.
-    for await (const batch of parseSseBatches(bodyChunks(response))) {
+    for await (const batch of parseSseBatches(
+      boundedChunks(
+        bodyChunks(response),
+        limits.roundStreamBytes,
+        () => new ProviderFailure(texts.frameLimit, { delivered }),
+      ),
+    )) {
       /** @type {string[]} */
       const pieces = [];
       let unreadable = false;
@@ -565,10 +574,7 @@ export const makeOpenRouterProvider = ({
   now = () => Date.now(),
   retry,
 }) => {
-  const baseUrl = String(spec.baseUrl ?? OPENROUTER_BASE_URL).replace(
-    /\/+$/,
-    '',
-  );
+  const baseUrl = providerBaseUrl(spec.baseUrl, OPENROUTER_BASE_URL);
   const timeoutMs = spec.timeoutMs ?? OPENROUTER_TIMEOUT_MS;
   /** turn -> the control of its running round. */
   /** @type {Map<any, import('./round.js').RoundControl>} */

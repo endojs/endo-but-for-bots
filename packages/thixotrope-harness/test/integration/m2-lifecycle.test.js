@@ -8,8 +8,8 @@
  *     completes, the session's vats and archive are gone; SIGKILL during
  *     `createSession`: after the restart nothing half-made is listed. Two
  *     list-feed subscribers see the delete (`row-removed`) within 500 ms.
- * 14. `exportState` then `importState` into a fresh state directory yields
- *     the same sessions, history and queues (presets are M5).
+ * 14 (export and import) is in m2-lifecycle-export.test.js (split for the
+ * 5-minute file budget, J-9493).
  *
  * Also measured: `disk.session` (an idle session of 300 turns, built by
  * `importState`; and what its delete returns), the delete's duration and
@@ -22,7 +22,7 @@
  */
 import '../unit/_m1a-prelude.js';
 
-import { readFile, rm, stat } from 'node:fs/promises';
+import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import test from 'ava';
@@ -31,10 +31,9 @@ import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
 import { texts } from '../../guest/lib/interfaces.js';
-import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { emit, loadAvg, runIdentity } from '../../perf/_harness.mjs';
-import { exportState, importState } from '../../scripts/export.mjs';
+import { importState } from '../../scripts/export.mjs';
 import { inputs, sliceScript } from '../fixtures/scripts/m1a-slice.js';
 import {
   integrationEnabled,
@@ -90,6 +89,16 @@ const listViewers = async slice => {
   const b = collect(await E(slice.live).subscribeList(rev));
   return { a, b };
 };
+
+/**
+ * The archive directories under a state (`h<n>`, one per session that
+ * sealed or mirrored).
+ * @param {string} root
+ */
+const archiveDirs = async root =>
+  new Set(
+    await readdir(path.join(root, 'agent-host', 'archive')).catch(() => []),
+  );
 
 /** @param {any} slice */
 const listedKeys = async slice =>
@@ -232,10 +241,12 @@ run(
     const disk2 = await waitFor(
       async () => {
         const now = await diskOf(state.root);
-        return now.archive - disk0.archive <= 0 ? now : undefined;
+        return now.archive - disk0.archive <= 0 && now.blobs - disk0.blobs <= 0
+          ? now
+          : undefined;
       },
       10_000,
-      'the archive released',
+      'the archive and its blobs released',
     );
     const vat2 = await vatDisk(state.root, `session ${key}`);
     emit({
@@ -256,6 +267,7 @@ run(
     });
     t.is(vat2.total, 0, 'the session vat files are gone');
     t.is(disk2.archive - disk0.archive, 0, 'the archive directory is gone');
+    t.true(disk2.blobs - disk0.blobs <= 0, 'its blob files are gone');
   },
 );
 
@@ -265,6 +277,8 @@ run(
     t.timeout(4 * 60_000);
     const { state, slice, backend } = await open(t);
     // A session with an archive and a kept tail.
+    const dirsBefore = await archiveDirs(state.root);
+    const blobsBefore = (await diskOf(state.root)).blobs;
     const built = await importSynthetic(state, backend, [
       { title: 'to delete', turns: 170, backendLabel: 'Scripted' },
     ]);
@@ -275,6 +289,12 @@ run(
     const archiveDir = path.join(state.root, 'agent-host', 'archive');
     const before = await diskOf(state.root);
     t.true(before.archive > 0);
+    // The doomed session's own archive directories (the template's other
+    // sessions and the kept one, made after this, are not among them).
+    const doomedDirs = [...(await archiveDirs(state.root))].filter(
+      name => !dirsBefore.has(name),
+    );
+    t.true(doomedDirs.length > 0, 'the import made an archive directory');
 
     // Kill as soon as the row says `deleting` (step 1 ran).
     const { a } = await listViewers(slice);
@@ -301,18 +321,37 @@ run(
     const after = await waitFor(
       async () => {
         const now = await diskOf(state.root);
-        return now.archive < before.archive ? now : undefined;
+        const dirs = await archiveDirs(state.root);
+        return now.archive < before.archive &&
+          now.blobs <= blobsBefore &&
+          doomedDirs.every(name => !dirs.has(name))
+          ? now
+          : undefined;
       },
       10_000,
-      'its archive released',
+      'its archive directory and blob files released',
+    );
+    const leftDirs = [...(await archiveDirs(state.root))].filter(
+      name => !dirsBefore.has(name),
     );
     emit({
       metric: 'm2.lifecycle.deleteKill',
       killDelayMs: DELETE_KILL_DELAY_MS,
       archiveBefore: before.archive,
       archiveAfter: after.archive,
+      blobsBefore,
+      blobsAfter: after.blobs,
+      doomedDirs,
+      // The kept session's own directory (its mirror of the live tail)
+      // accounts for what stays under the archive root (J-9493).
+      otherNewDirs: leftDirs,
       by: 'W2.7',
     });
+    t.true(
+      doomedDirs.every(name => !leftDirs.includes(name)),
+      'the doomed archive directory is gone',
+    );
+    t.true(after.blobs <= blobsBefore, 'its blob files are gone');
     t.true(
       (await stat(archiveDir).catch(() => undefined)) === undefined ||
         after.archive < before.archive,
@@ -368,124 +407,5 @@ run(
     const s2 = await E(slice.factory).findSession('s2');
     const receipt = await slice.submit(s2, inputs.hi);
     t.is(receipt.state, 'started');
-  },
-);
-
-/**
- * The export of a state as text lines with the keys a state assigns
- * itself left out (backend presences, staged previews are equal anyway).
- * @param {string} file
- */
-const exportLines = async file =>
-  (await readFile(file, 'utf8')).trim().split('\n');
-
-run(
-  '14: export then import into a fresh state yields the same sessions, history and queues',
-  async t => {
-    t.timeout(4 * 60_000);
-    const source = await open(t);
-    const { slice, backend } = source;
-    // s1: turns run normally, then a restart holds two waiting messages.
-    const chat = await slice.createSession(backend, 'chat');
-    await slice.submit(chat, inputs.hi);
-    await slice.submit(chat, inputs.echoOne);
-    await slice.submit(chat, inputs.stall);
-    await slice.submit(chat, 'later one');
-    await slice.submit(chat, 'later two');
-    await source.state.kill();
-    await source.state.restart();
-    await slice.refresh();
-    const s1 = await E(slice.factory).findSession('s1');
-    const held = await waitFor(
-      async () => {
-        const pending = await E(s1).listPending();
-        return pending.hold === undefined ? undefined : pending;
-      },
-      30_000,
-      'the restart hold',
-    );
-    // Whatever had not started at the kill waits, in order.
-    const heldPreviews = held.entries.map((/** @type {any} */ e) => e.preview);
-    t.deepEqual(heldPreviews.slice(-2), ['later one', 'later two']);
-    // s2: an archived session (sealed segments are read through History).
-    // The backend presence died with the client the kill closed: a new
-    // scripted backend with the same label.
-    const again = await slice.makeBackend(harden(sliceScript));
-    await importSynthetic(source.state, again.backend, [
-      { title: 'archived', turns: 170, backendLabel: 'Scripted' },
-    ]);
-    const s2 = await E(slice.factory).findSession('s2');
-    t.truthy((await E(s2).getHistoryPage()).archive);
-
-    t.log('stage: source history', new Date().toISOString());
-    const sourceHistory = (await E(s1).getHistoryPage()).turns.map(
-      (/** @type {any} */ p) => [p.turnId, p.state, p.records.length],
-    );
-    const file1 = path.join(tmpRoot, `${shortName('e')}.jsonl`);
-    files.push(file1);
-    t.log('stage: export source', new Date().toISOString());
-    const exported = await exportState({
-      client: source.state.client,
-      file: file1,
-    });
-    t.is(exported.sessions, 2);
-    t.true(exported.archivedTurns >= 32);
-    t.log('stage: cleanup source', new Date().toISOString());
-    await source.state.cleanup();
-
-    // A fresh state: the same backend label, then the import.
-    t.log('stage: open target', new Date().toISOString());
-    const target = await open(t);
-    t.log('stage: import target', new Date().toISOString());
-    const imported = await importState({
-      client: target.state.client,
-      file: file1,
-      backends: [target.backend],
-    });
-    t.is(imported.sessions.length, exported.sessions);
-    const file2 = path.join(tmpRoot, `${shortName('e')}.jsonl`);
-    files.push(file2);
-    t.log('stage: export target', new Date().toISOString());
-    await exportState({ client: target.state.client, file: file2 });
-    const [one, two] = await Promise.all([
-      exportLines(file1),
-      exportLines(file2),
-    ]);
-    t.is(two.length, one.length);
-    for (let i = 0; i < one.length; i += 1) {
-      t.deepEqual(JSON.parse(two[i]), JSON.parse(one[i]), `line ${i + 1}`);
-    }
-    // The queue and its hold, the history pages, through the objects.
-    t.log('stage: compare', new Date().toISOString());
-    const t1 = await E(target.slice.factory).findSession('s1');
-    const pending = await E(t1).listPending();
-    t.deepEqual(
-      pending.entries.map((/** @type {any} */ e) => e.preview),
-      heldPreviews,
-    );
-    t.is(pending.hold?.reason, 'restart');
-    const shown = (/** @type {any} */ page) =>
-      page.turns.map((/** @type {any} */ p) => [
-        p.turnId,
-        p.state,
-        p.records.length,
-      ]);
-    t.deepEqual(shown(await E(t1).getHistoryPage()), sourceHistory);
-    const t2 = await E(target.slice.factory).findSession('s2');
-    t.log('stage: walk', new Date().toISOString());
-    const ids = await allTurnIds(target.slice, t2);
-    t.is(ids.length, 170);
-    emit({
-      metric: 'm2.lifecycle.exportImport',
-      exportMs: exported.ms,
-      importMs: imported.ms,
-      records: imported.records,
-      lines: one.length,
-      limits: {
-        keep: limits.archiveKeepTurns,
-        segment: limits.archiveSegmentTurns,
-      },
-      by: 'W2.7',
-    });
   },
 );

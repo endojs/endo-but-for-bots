@@ -443,6 +443,23 @@ export const importState = async ({
     await throttle();
   };
 
+  /**
+   * An export that stops before a session's `end` (truncated at a line
+   * boundary): the half-imported session is deleted and the import fails,
+   * naming it, rather than report success and leave it unlisted until the
+   * next daemon start deletes it (J-9493).
+   * @param {string} why
+   */
+  const abandon = async why => {
+    const s = /** @type {NonNullable<typeof current>} */ (current);
+    current = undefined;
+    await E(factory).deleteSession(s.session);
+    sessions.pop();
+    throw Error(
+      `the export ${why} inside session ${sessions.length + 1}; that session was not imported`,
+    );
+  };
+
   const lines = readline.createInterface({
     input: createReadStream(file, { encoding: 'utf8' }),
     crlfDelay: Infinity,
@@ -462,6 +479,7 @@ export const importState = async ({
       if (Object.keys(changes).length > 0)
         await E(root).configure(harden(changes));
     } else if (line.type === 'session') {
+      if (current !== undefined) await abandon('starts another session');
       const { head } = line;
       const label = head.config.backendTitle;
       const backend = byLabel.get(label);
@@ -538,6 +556,7 @@ export const importState = async ({
       current = undefined;
     }
   }
+  if (current !== undefined) await abandon('ends');
   return {
     sessions,
     ...totals,

@@ -271,7 +271,8 @@ export const writeSegment = async (
         return harden({ ...entry, reused: true });
       }
     } catch {
-      // Broken: replaced below.
+      // Damaged: kept aside as `<name>.bad` (never removed), replaced below.
+      await rename(path, `${path}.bad`).catch(() => {});
     }
   }
   const part = `${path}.part`;
