@@ -26,7 +26,7 @@ import { runPerf, stats } from './_harness.mjs';
 // Endo packages and the code that uses them load after `_harness.mjs`
 // has locked down (`scripts/_init.mjs`): a static import would run first.
 const { E } = await import('@endo/far');
-const { inWindow, makeFrameCounter, startPerfM4, useKeyFile, closeServers } =
+const { inWindow, makeFrameCounter, startPerfM4, testKeyFile, closeServers } =
   await import('./_m4.mjs');
 const { credentialText, tokenOf } = await import('../test/integration/_m4.js');
 const { makeStoreDirs, openStore, seedCredential } =
@@ -86,9 +86,11 @@ await runPerf('secrets', async ({ provision }) => {
   }
 
   // ---- through the daemon ----
-  const dropKey = useKeyFile('perf-secrets');
+  const keyFile = testKeyFile('perf-secrets');
   try {
-    const { m4 } = await startPerfM4(provision);
+    const { m4 } = await startPerfM4(provision, {
+      secretsKeyFile: keyFile.file,
+    });
     const counter = await makeFrameCounter(m4);
     const made = [];
     for (let i = 0; i < 64; i += 8) {
@@ -155,6 +157,6 @@ await runPerf('secrets', async ({ provision }) => {
     });
   } finally {
     await closeServers();
-    dropKey();
+    keyFile.remove();
   }
 });

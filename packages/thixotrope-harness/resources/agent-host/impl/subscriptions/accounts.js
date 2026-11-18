@@ -24,7 +24,7 @@
  *   waited `accountsKeepaliveMs` (30 s) with no change is answered the
  *   current view again (same `rev`); a subscriber with no `next()` call for
  *   `accountsIdleMs` (60 s) and none waiting is idle and is evicted (its
- *   next `next()` rejects with `m4Texts.accountsWatchClosed`). Eviction is
+ *   next `next()` answers `{ closed: true, reason: 'idle' }`). Eviction is
  *   swept at each `watch`, publish and `next()`, so no per-subscriber idle
  *   timer runs; only a waiting `next()` holds a timer. A `watch` that meets
  *   the cap (`channelLimits.subscribersPerSession`, 32) after the sweep is
@@ -50,11 +50,9 @@
 import { Buffer } from 'node:buffer';
 
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import {
-  m4Interfaces,
-  m4Limits,
-  m4Texts,
-} from '../../../../guest/lib/interfaces-m4.js';
+import { m4Interfaces } from '../../../../guest/lib/interfaces-m4.js';
+import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
+import { subscriptionTexts } from '../../../../guest/lib/subscription-texts.js';
 import { limits } from '../../../../guest/lib/limits.js';
 import { boundToolOutput } from '../../../../guest/lib/bounded.js';
 /* eslint-enable import/no-relative-packages */
@@ -73,7 +71,7 @@ const { makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
 
 /**
  * The refusal of a `watch` at the subscriber cap when no subscriber is idle
- * (harness text; `texts-m4.js` has none for it, reported to the PM).
+ * (harness text; `subscription-texts.js` has none for it, reported to the PM).
  */
 export const accountsWatchLimitText =
   'Too many live accounts watchers; close one and watch again';
@@ -119,8 +117,8 @@ harden(isoOf);
 
 /**
  * @typedef {object} AccountsSettings
- * @property {number} [keepaliveMs] default `m4Limits.accountsKeepaliveMs`
- * @property {number} [idleMs] default `m4Limits.accountsIdleMs`
+ * @property {number} [keepaliveMs] default `subscriptionLimits.accountsKeepaliveMs`
+ * @property {number} [idleMs] default `subscriptionLimits.accountsIdleMs`
  * @property {number} [subscribers] default `channelLimits.subscribersPerSession`
  * @property {number} [readingsFlushMs] default 5,000
  * @property {number} [modelRefreshMs] the model's refresh reads a member at
@@ -165,7 +163,7 @@ const declaredWindow = window =>
     name: window.name,
     usedPercent: Math.min(100, Math.max(0, Number(window.usedPercent) || 0)),
     ...(typeof window.resetsAt === 'string'
-      ? { resetsAt: window.resetsAt.slice(0, m4Limits.timeUnits) }
+      ? { resetsAt: window.resetsAt.slice(0, subscriptionLimits.timeUnits) }
       : {}),
     ...(typeof window.windowMinutes === 'number'
       ? { windowMinutes: window.windowMinutes }
@@ -193,8 +191,9 @@ export const makeAccounts = ({
   settings = {},
   onError,
 }) => {
-  const keepaliveMs = settings.keepaliveMs ?? m4Limits.accountsKeepaliveMs;
-  const idleMs = settings.idleMs ?? m4Limits.accountsIdleMs;
+  const keepaliveMs =
+    settings.keepaliveMs ?? subscriptionLimits.accountsKeepaliveMs;
+  const idleMs = settings.idleMs ?? subscriptionLimits.accountsIdleMs;
   const maxSubscribers =
     settings.subscribers ?? channelLimits.subscribersPerSession;
   const modelRefreshMs = settings.modelRefreshMs ?? 60_000;
@@ -229,7 +228,7 @@ export const makeAccounts = ({
     if (loaded) return;
     loaded = true;
     for (const entry of loadReadings(fileOf())) {
-      if (fileEntries.size >= m4Limits.maxMembers) break;
+      if (fileEntries.size >= subscriptionLimits.maxMembers) break;
       fileEntries.set(entry.key, entry);
     }
   };
@@ -274,23 +273,25 @@ export const makeAccounts = ({
     if (reading !== undefined) {
       account.provenance = reading.source;
       account.windows = harden(
-        reading.windows.slice(0, m4Limits.maxWindows).map(viewWindow),
+        reading.windows.slice(0, subscriptionLimits.maxWindows).map(viewWindow),
       );
       account.limitReached = reading.limitReached;
       if (reading.plan !== undefined) account.plan = reading.plan;
       if (reading.credits !== undefined) account.credits = reading.credits;
       if (reading.banked !== undefined)
         account.banked = harden(
-          reading.banked.slice(0, m4Limits.maxBankedCredits).map(credit =>
-            harden({
-              ...(isoOf(credit.expiresAtMs) === undefined
-                ? {}
-                : { expiresAt: isoOf(credit.expiresAtMs) }),
-              ...(credit.label === undefined
-                ? {}
-                : { label: labelText(credit.label) }),
-            }),
-          ),
+          reading.banked
+            .slice(0, subscriptionLimits.maxBankedCredits)
+            .map(credit =>
+              harden({
+                ...(isoOf(credit.expiresAtMs) === undefined
+                  ? {}
+                  : { expiresAt: isoOf(credit.expiresAtMs) }),
+                ...(credit.label === undefined
+                  ? {}
+                  : { label: labelText(credit.label) }),
+              }),
+            ),
         );
       const at = isoOf(reading.at);
       if (at !== undefined) account.at = at;
@@ -298,12 +299,15 @@ export const makeAccounts = ({
       account.provenance = 'declared';
       account.windows = harden(
         (entry.declared.windows ?? [])
-          .slice(0, m4Limits.maxWindows)
+          .slice(0, subscriptionLimits.maxWindows)
           .map(declaredWindow),
       );
       account.limitReached = false;
       if (typeof entry.declared.plan === 'string')
-        account.plan = entry.declared.plan.slice(0, m4Limits.planUnits);
+        account.plan = entry.declared.plan.slice(
+          0,
+          subscriptionLimits.planUnits,
+        );
     } else {
       account.provenance = 'unavailable';
       account.windows = harden([]);
@@ -327,7 +331,9 @@ export const makeAccounts = ({
       label: labelText(info.label),
       selection: 'auto',
       members: harden(
-        info.members.slice(0, m4Limits.maxPoolMembers).map(memberAccount),
+        info.members
+          .slice(0, subscriptionLimits.maxPoolMembers)
+          .map(memberAccount),
       ),
     });
 
@@ -360,6 +366,7 @@ export const makeAccounts = ({
    * @property {{ resolve: (value: any) => void, reject: (reason: any) => void, promise: Promise<any> } | undefined} waiting
    * @property {(() => void) | undefined} cancelKeepalive
    * @property {boolean} closed
+   * @property {'idle' | 'client' | 'stopped'} [closeReason] why it was closed
    */
 
   // In `watch` order (oldest first).
@@ -370,21 +377,39 @@ export const makeAccounts = ({
   const isIdle = sub =>
     sub.waiting === undefined && now() - sub.lastCallMs >= idleMs;
 
-  /** @param {Subscriber} sub */
-  const closeSubscriber = sub => {
+  /**
+   * The answer of a closed watch: a field, never a text to compare
+   * (HR-SYN-34).
+   * @param {Subscriber} sub
+   */
+  const closedBatch = sub =>
+    harden({
+      rev,
+      pools: [],
+      closed: true,
+      reason: sub.closeReason ?? 'client',
+    });
+
+  /**
+   * @param {Subscriber} sub
+   * @param {'idle' | 'client' | 'stopped'} reason
+   */
+  const closeSubscriber = (sub, reason) => {
     if (sub.closed) return;
     sub.closed = true;
+    sub.closeReason = reason;
     subscribers.delete(sub);
     sub.cancelKeepalive?.();
     sub.cancelKeepalive = undefined;
     const { waiting } = sub;
     sub.waiting = undefined;
-    waiting?.reject(Error(m4Texts.accountsWatchClosed));
+    waiting?.resolve(closedBatch(sub));
   };
 
   /** Evict every idle subscriber (oldest first: `subscribers` is in watch order). */
   const sweep = () => {
-    for (const sub of subscribers) if (isIdle(sub)) closeSubscriber(sub);
+    for (const sub of subscribers)
+      if (isIdle(sub)) closeSubscriber(sub, 'idle');
   };
 
   /** @param {Subscriber} sub */
@@ -418,8 +443,8 @@ export const makeAccounts = ({
     subscribers.add(sub);
     return makeExo('AccountsSubscription', m4Interfaces.AccountsSubscription, {
       next: async () => {
-        if (!sub.closed && isIdle(sub)) closeSubscriber(sub);
-        if (sub.closed) throw Error(m4Texts.accountsWatchClosed);
+        if (!sub.closed && isIdle(sub)) closeSubscriber(sub, 'idle');
+        if (sub.closed) return closedBatch(sub);
         sub.lastCallMs = now();
         if (sub.waiting !== undefined) return sub.waiting.promise;
         const current = view();
@@ -436,7 +461,7 @@ export const makeAccounts = ({
         return kit.promise;
       },
       close: () => {
-        closeSubscriber(sub);
+        closeSubscriber(sub, 'client');
       },
     });
   };
@@ -462,7 +487,10 @@ export const makeAccounts = ({
       return false;
     const kept = harden(reading);
     readingOfMember.set(entry.member, kept);
-    if (fileEntries.has(entry.key) || fileEntries.size < m4Limits.maxMembers) {
+    if (
+      fileEntries.has(entry.key) ||
+      fileEntries.size < subscriptionLimits.maxMembers
+    ) {
       fileEntries.set(entry.key, {
         key: entry.key,
         provider: entry.provider,
@@ -489,7 +517,7 @@ export const makeAccounts = ({
    * @param {PoolInfo} info
    */
   const keepPool = (backend, info) => {
-    if (!pools.has(backend) && pools.size >= m4Limits.maxPools) {
+    if (!pools.has(backend) && pools.size >= subscriptionLimits.maxPools) {
       // The oldest registration goes first (the manager keeps at most
       // `maxPools` itself, so this happens only after retirements).
       const [oldest] = pools.keys();
@@ -500,7 +528,9 @@ export const makeAccounts = ({
       harden({
         kind: info.kind,
         label: info.label,
-        members: harden([...info.members].slice(0, m4Limits.maxPoolMembers)),
+        members: harden(
+          [...info.members].slice(0, subscriptionLimits.maxPoolMembers),
+        ),
       }),
     );
   };
@@ -681,7 +711,7 @@ export const makeAccounts = ({
     rev: () => rev,
     subscriberCount: () => subscribers.size,
     close: async () => {
-      for (const sub of [...subscribers]) closeSubscriber(sub);
+      for (const sub of [...subscribers]) closeSubscriber(sub, 'stopped');
       await writer.close();
     },
   });
@@ -699,13 +729,13 @@ const provenanceText = (provenance, at) => {
   const when = at === undefined ? '' : ` as of ${at}`;
   switch (provenance) {
     case 'observed':
-      return `${m4Texts.provenanceObserved}: read from the provider${when}`;
+      return `${subscriptionTexts.provenanceObserved}: read from the provider${when}`;
     case 'declared':
-      return `${m4Texts.provenanceDeclared}: declared by the operator, not measured`;
+      return `${subscriptionTexts.provenanceDeclared}: declared by the operator, not measured`;
     case 'remembered':
-      return `${m4Texts.provenanceRemembered}: last reading${when}; the provider has not been read since`;
+      return `${subscriptionTexts.provenanceRemembered}: last reading${when}; the provider has not been read since`;
     default:
-      return `${m4Texts.provenanceUnavailable}: not published by this provider`;
+      return `${subscriptionTexts.provenanceUnavailable}: not published by this provider`;
   }
 };
 
@@ -734,7 +764,7 @@ const percent = value => `${Math.round(value)}%`;
  * percent used and reset, each labelled with its provenance; the session's
  * token usage, not attributed; no cost; no reset authority. Banked reset
  * credits are listed read-only (R4-86, decision 8). Cut to the tool output
- * limit (`m4Limits.accountTextUnits`).
+ * limit (`subscriptionLimits.accountTextUnits`).
  *
  * @param {any} pool a `PoolAccounts`, or undefined for a backend that is
  *   not a pool (R4-91: the API account profile is unavailable)
@@ -744,7 +774,7 @@ export const renderAccountStatus = (pool, usage) => {
   /** @type {string[]} */
   const lines = [];
   if (pool === undefined) {
-    lines.push(`${m4Texts.noSubscriptionAccounts}.`);
+    lines.push(`${subscriptionTexts.noSubscriptionAccounts}.`);
   } else {
     lines.push(
       `Account selection: ${pool.selection} (subscription pool "${pool.label}"). These are configured accounts, not proof of runtime eligibility or the payer for previous turns.`,
@@ -803,7 +833,7 @@ export const renderAccountStatus = (pool, usage) => {
       `This session has used ${usage.inputTokens} input and ${usage.outputTokens} output tokens (not attributed to individual accounts).`,
     );
   lines.push(usageNotAttributedText);
-  return boundToolOutput(lines.join('\n'), m4Limits.accountTextUnits);
+  return boundToolOutput(lines.join('\n'), subscriptionLimits.accountTextUnits);
 };
 harden(renderAccountStatus);
 
@@ -963,7 +993,7 @@ export const readingFromCodexUsage = (payload, nowMs) => {
           typeof row === 'object' &&
           (row.status === undefined || row.status === 'available'),
       )
-      .slice(0, m4Limits.maxBankedCredits)
+      .slice(0, subscriptionLimits.maxBankedCredits)
       .map((/** @type {any} */ row) => {
         const expiresAtMs = instantMs(row.expires_at);
         return expiresAtMs === undefined ? {} : { expiresAtMs };
@@ -972,7 +1002,7 @@ export const readingFromCodexUsage = (payload, nowMs) => {
     const count = finite(resets.available_count);
     const known =
       count !== undefined && Number.isSafeInteger(count)
-        ? Math.min(count, m4Limits.maxBankedCredits)
+        ? Math.min(count, subscriptionLimits.maxBankedCredits)
         : 0;
     while (banked.length < known) banked.push({});
     reading.banked = banked;
@@ -991,7 +1021,7 @@ const USAGE_TIMEOUT_MS = 20_000;
  */
 export class UsageReadFailure extends Error {
   /**
-   * @param {string} code an `m4Codes` entry
+   * @param {string} code an `subscriptionCodes` entry
    * @param {number} [status]
    */
   constructor(code, status) {

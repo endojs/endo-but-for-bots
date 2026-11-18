@@ -1,6 +1,8 @@
 // @ts-check
 /**
- * M4 fixed texts and codes (W4.0; `designs/m4-interfaces.md` section 13).
+ * The subscription, account and full Secrets fixed texts and codes (M4's,
+ * W4.0; `designs/m4-interfaces.md` section 13; `texts-m4.js` `m4Texts`,
+ * `m4TextOf`, `m4Codes` until the fold, F2).
  *
  * Small on purpose: the factory's effort resolver imports this module, so
  * it is in the factory bundle; nothing here reaches the session program.
@@ -11,7 +13,7 @@
  * Plain data and pure functions only (vats and Node).
  */
 
-export const m4Texts = harden({
+export const subscriptionTexts = harden({
   /** R4-25 (no reset time known). */
   subscriptionsExhausted: 'Provider subscriptions exhausted',
   /** R4-76: an SSE `error` event on the Claude subscription. */
@@ -58,7 +60,7 @@ export const m4Texts = harden({
   provenanceUnavailable: 'unavailable',
   /** Harness: `Accounts.forSession` for a backend that is not a pool. */
   noSubscriptionAccounts: 'No subscription accounts are behind this backend',
-  /** The Secrets panel, over `m4Limits.browserSecretBytes` (harness). */
+  /** The Secrets panel, over `subscriptionLimits.browserSecretBytes` (harness). */
   secretTooLargeForBrowser:
     'This value is too large to send from the browser; write it from the command line with scripts/subscription-login.mjs --value-file, which sends a sealed box',
   /** `AccountsSubscription.next()` after eviction or `close()`; the page re-watches. */
@@ -67,7 +69,7 @@ export const m4Texts = harden({
   secretNotText: 'This file is not text; secrets hold text',
 });
 
-export const m4TextOf = harden({
+export const subscriptionTextOf = harden({
   /**
    * R4-25 with the G-07 improvement: the reset time of the member expected
    * back first, as ISO 8601 UTC, when any refusal named one.
@@ -75,8 +77,8 @@ export const m4TextOf = harden({
    */
   subscriptionsExhausted: resetsAt =>
     resetsAt === undefined
-      ? m4Texts.subscriptionsExhausted
-      : `${m4Texts.subscriptionsExhausted}; the first member is expected back at ${resetsAt}`,
+      ? subscriptionTexts.subscriptionsExhausted
+      : `${subscriptionTexts.subscriptionsExhausted}; the first member is expected back at ${resetsAt}`,
   /**
    * R4-76 (lal `providers/subscription-messages.js:326`), also used for a
    * Codex non-200 answer.
@@ -97,7 +99,7 @@ export const m4TextOf = harden({
       facts.length ? `; ${facts.join(', ')}` : ''
     })${explanation ? ` ${explanation}` : ''}`,
   /**
-   * Harness: a member failed with a fixed code (`m4Codes`); member labels
+   * Harness: a member failed with a fixed code (`subscriptionCodes`); member labels
    * are operator labels (F.2 a).
    * @param {string} label
    * @param {string} code
@@ -124,7 +126,7 @@ export const codexExplanations = harden({
  * Fixed codes of member failures (marks, account readings, the event log).
  * Never a provider body or a header value.
  */
-export const m4Codes = harden([
+export const subscriptionCodes = harden([
   'EXHAUSTED',
   'RATE_LIMITED',
   'UNUSABLE',

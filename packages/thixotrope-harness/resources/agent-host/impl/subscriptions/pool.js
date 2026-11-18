@@ -37,7 +37,7 @@
 /**
  * When the first blocked member is expected back (any mark, and only times a
  * provider named): the "expected back at" of a round that found every member
- * blocked (`m4TextOf.subscriptionsExhausted`).
+ * blocked (`subscriptionTextOf.subscriptionsExhausted`).
  * @typedef {{ earliestBackMs: number | null, earliestDatedBackMs: number | null }} BackTimes
  * @typedef {PoolTicket & { earliestBackMs: () => BackTimes }} PoolTicketKit
  *   `PoolTicket` (types.js) plus `earliestBackMs()` (W4.2 addition)
@@ -47,7 +47,7 @@
  */
 
 /**
- * The selection settings, as `config/defaults-m4.js` `subscriptionDefaults`
+ * The selection settings, as `config/subscription-defaults.js` `subscriptionDefaults`
  * (W4.1) names them; equal values. A caller passes `subscriptionDefaults` (or
  * a test's shorter times) as `settings`; anything left out falls back here.
  *
@@ -367,7 +367,7 @@ const refusalAgainstReading = ({ member, reading, standing, nowMs, marks }) => {
  *
  * `earliestBackMs` is when the first blocked member is expected back;
  * `earliestDatedBackMs` the same over times a provider named (the "expected
- * back at" of `m4TextOf.subscriptionsExhausted`).
+ * back at" of `subscriptionTextOf.subscriptionsExhausted`).
  *
  * @param {object} options
  * @param {readonly MemberEntry[]} options.members in declared order

@@ -22,7 +22,7 @@ import {
   formatSpan,
   provenanceText,
 } from '../../ui/src/accounts/labels.js';
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 import {
   makeFakeAccounts,
@@ -165,13 +165,16 @@ test.serial('labels: chip text, rows, provenance, blocked', t => {
     provenance: 'declared',
     plan: 'pro',
   });
-  t.is(chipText(declared, nowMs), `b: pro · ${m4Texts.provenanceDeclared}`);
+  t.is(
+    chipText(declared, nowMs),
+    `b: pro · ${subscriptionTexts.provenanceDeclared}`,
+  );
   t.is(
     chipText(
       memberAccount({ label: 'c', provenance: 'unavailable', credits: '12' }),
       nowMs,
     ),
-    `c: 12 credits · ${m4Texts.provenanceUnavailable}`,
+    `c: 12 credits · ${subscriptionTexts.provenanceUnavailable}`,
   );
   t.is(
     chipText(
@@ -183,7 +186,7 @@ test.serial('labels: chip text, rows, provenance, blocked', t => {
       }),
       nowMs,
     ),
-    `d: marked · ${m4Texts.provenanceRemembered}, 2h ago`,
+    `d: marked · ${subscriptionTexts.provenanceRemembered}, 2h ago`,
   );
   t.true(accountBlocked(memberAccount({ state: 'unusable' }), nowMs));
   const rows = accountRows(
@@ -292,7 +295,7 @@ test.serial('a watch that keeps closing stops with the text shown', async t => {
     // eslint-disable-next-line no-await-in-loop
     await flush();
   }
-  t.is(s.$('.m4-error')?.textContent, m4Texts.accountsWatchClosed);
+  t.is(s.$('.m4-error')?.textContent, subscriptionTexts.accountsWatchClosed);
   t.is(s.accounts.callsOf('Accounts.watch').length, REWATCH_LIMIT + 1);
   await s.dom.close();
 });
@@ -307,7 +310,7 @@ test.serial(
     const chips = () => s.$$('.m4-chip').map(chip => chip.textContent);
     t.deepEqual(chips(), [
       'first: 5h 40%',
-      `second: pro · ${m4Texts.provenanceDeclared}`,
+      `second: pro · ${subscriptionTexts.provenanceDeclared}`,
     ]);
     t.is(s.$('.m4-chips')?.classList.contains('all-blocked'), false);
     t.is(

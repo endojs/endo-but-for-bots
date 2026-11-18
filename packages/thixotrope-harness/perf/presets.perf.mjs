@@ -29,6 +29,7 @@
 import { performance } from 'node:perf_hooks';
 
 import { runPerf, single, stats } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -38,8 +39,8 @@ const { sliceScript } = await import('../test/fixtures/scripts/m1a-slice.js');
 const { makeSlice, sliceTemplate } =
   await import('../test/integration/_m1a-slice.js');
 
-const WINDOW_MS = Number(process.env.PRESETS_WINDOW_MS ?? 60_000);
-const PROBE_MS = Number(process.env.PRESETS_PROBE_MS ?? 10_000);
+const WINDOW_MS = windowMs('PRESETS_WINDOW_MS', 60_000);
+const PROBE_MS = windowMs('PRESETS_PROBE_MS', 10_000);
 const INVENTORY_ENTRIES = 1000;
 const PAGE = 50;
 const WARMUP = 5;

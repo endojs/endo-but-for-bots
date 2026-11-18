@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 /* eslint-disable import/no-relative-packages */
 import { shapes, textOf, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import {
   INTERRUPTED_CREATION_TEXT,
   NO_PROGRAM_TEXT,
@@ -279,7 +279,7 @@ test('refused options make no row and no vat', async t => {
       E(kit.factory).createSession(
         harden({ backend, reasoningEffort: 'high' }),
       ),
-    { message: m4Texts.effortNotSupported },
+    { message: subscriptionTexts.effortNotSupported },
   );
   await t.throwsAsync(() => E(kit.factory).createSession(harden({})), {
     message: texts.noBackend,

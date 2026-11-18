@@ -16,11 +16,6 @@ import test from '@endo/ses-ava/test.js';
 import { limits } from '../../guest/lib/limits.js';
 import {
   interfaces,
-  m1bInterfaces,
-  m1bMethodNames,
-  m1bShapes,
-  m2Interfaces,
-  m2MethodNames,
   methodNames,
   archiveKindLetters,
   secretCodes,
@@ -29,6 +24,15 @@ import {
   texts,
 } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
+import {
+  m1bInterfaces,
+  m1bMethodNames,
+  m1bShapes,
+  m2Interfaces,
+  m2MethodNames,
+  beforeM5,
+  m5Later,
+} from './_contract-tables.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { Far, makeExo, matches } = /** @type {GuestGlobals} */ (globalThis);
@@ -473,7 +477,12 @@ test('the folded tables hold every M1a, M1b and M2 shape, and nothing else', t =
     ...Object.keys(m1bShapes),
     ...Object.keys(shapeSamples),
   ]);
-  t.deepEqual(Object.keys(shapes).sort(), [...known].sort());
+  t.deepEqual(
+    Object.keys(shapes)
+      .filter(name => !m5Later.shapes.includes(name))
+      .sort(),
+    [...known].sort(),
+  );
   for (const name of Object.keys(m1bShapes)) {
     t.is(
       /** @type {any} */ (m1bShapes)[name],
@@ -493,7 +502,9 @@ test('the folded interfaces keep every M1a and M1b method, in order', t => {
     // which keeps the M1b list first.
     const folded = /** @type {any} */ (methodNames)[name];
     t.deepEqual(
-      name in m2MethodNames ? folded.slice(0, names.length) : folded,
+      name in m2MethodNames || name in m5Later.methods
+        ? folded.slice(0, names.length)
+        : folded,
       [...names],
       `${name}: the M1b list`,
     );
@@ -796,7 +807,8 @@ test('every M2 interface has method names and samples; a stub exo accepts them',
     name =>
       !(name in M1A_METHODS) &&
       !(name in m1bMethodNames) &&
-      !(name in m2Interfaces),
+      !(name in m2Interfaces) &&
+      !m5Later.interfaces.includes(name),
   );
   t.deepEqual(
     [...fresh, ...Object.keys(m2Interfaces)].sort(),
@@ -806,7 +818,7 @@ test('every M2 interface has method names and samples; a stub exo accepts them',
   for (const name of Object.keys(methodSamples)) {
     const exo = stubExo(name);
     const own = Object.keys(methodSamples[name]);
-    const names = namesOf(name);
+    const names = beforeM5(name, namesOf(name));
     t.deepEqual(names.slice(names.length - own.length), own, name);
     for (const [method, { args }] of Object.entries(methodSamples[name])) {
       calls.push(

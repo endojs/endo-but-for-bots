@@ -22,18 +22,8 @@ import { harnessRoot } from '../_helpers.js';
 import { m5FixtureSource } from '../fixtures/m5-objects.js';
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
-import {
-  m5Interfaces,
-  m5Shapes,
-  texts,
-  textOf,
-} from '../../guest/lib/interfaces-m5.js';
-import {
-  execGuards,
-  texts as execTexts,
-  textOf as execTextOf,
-} from '../../guest/exec/render.js';
+import { shapes, texts, textOf } from '../../guest/lib/interfaces.js';
+import * as render from '../../guest/exec/render.js';
 import {
   ANSWER_DEPTH,
   MODEL_OBJECT_TEXT,
@@ -212,7 +202,7 @@ const fresh = async (extra = {}) => {
   return { scope, adapter, fx, powers, mirror, exec, inspect };
 };
 
-test('the exec bundle with W5.4 fits the budget M5 raises it to (O-1); the exec copy equals the contract', async t => {
+test('the exec bundle with W5.4 fits the budget M5 raises it to (O-1); it reads the guards from guards/base.js, not a copy', async t => {
   const { bundle } = await load();
   t.log(
     JSON.stringify({
@@ -225,19 +215,13 @@ test('the exec bundle with W5.4 fits the budget M5 raises it to (O-1); the exec 
   );
   const bytes = /** @type {number} */ (bundle.bytes);
   t.true(bytes <= EXEC_BUDGET_AFTER_M5, `${bytes}`);
-  t.false(bundle.modules.includes('lib/interfaces-m5.js'));
-  // The copy is the contract's, value for value.
-  const guards = execGuards();
-  t.deepEqual(guards.ExecScope, m5Interfaces.ExecScope);
-  t.deepEqual(guards.ExecRequest, m5Shapes.ExecRequest);
-  t.deepEqual(guards.InspectRequest, m5Shapes.InspectRequest);
-  t.deepEqual(guards.InspectOutcome, m5Shapes.InspectOutcome);
-  t.is(execTexts.powersExpired, texts.powersExpired);
-  t.is(execTextOf.valueTooLarge(9, 8), textOf.valueTooLarge(9, 8));
-  t.is(execTextOf.toolSchemaInvalid('r'), textOf.toolSchemaInvalid('r'));
-  t.is(execTextOf.membraneTooLarge(9, 8), textOf.membraneTooLarge(9, 8));
-  t.is(execTextOf.membraneTooManyKeys(9, 8), textOf.membraneTooManyKeys(9, 8));
-  t.is(execTextOf.membraneTooDeep(8), textOf.membraneTooDeep(8));
+  // The exec program reads the contract's own guards and texts from
+  // guards/base.js (F2, HR-SYN-1): no copy of them is left in render.js.
+  t.false(bundle.modules.includes('lib/interfaces.js'));
+  t.true(bundle.modules.includes('lib/guards/base.js'));
+  for (const name of ['execGuards', 'texts', 'textOf']) {
+    t.false(name in render, `render.js exports no ${name}`);
+  }
 });
 
 test('powers forwards lookup, list, store and remove to the session source; JSON values parse in the exec vat', async t => {
@@ -295,7 +279,7 @@ test('powers checks labels and values in the exec vat, before sending', async t 
     LABEL_TEXT,
     LABEL_TEXT,
     LABEL_TEXT,
-    textOf.valueTooLarge(9002, limitsM5.labelValueBytes),
+    textOf.valueTooLarge(9002, limits.labelValueBytes),
     NOT_JSON_TEXT,
     NOT_JSON_TEXT,
   ]);
@@ -477,8 +461,8 @@ test('the membrane refuses an oversize argument, a 40-key record and a nested pr
     ].join('\n'),
   );
   t.deepEqual(JSON.parse(outcome.text), [
-    textOf.membraneTooLarge(307_200, limitsM5.membraneArgBytes),
-    textOf.membraneTooManyKeys(40, limitsM5.membraneRecordKeys),
+    textOf.membraneTooLarge(307_200, limits.membraneArgBytes),
+    textOf.membraneTooManyKeys(40, limits.membraneRecordKeys),
     NESTED_PROMISE_TEXT,
     'sent',
     'small',
@@ -494,12 +478,12 @@ test('measureArguments: each bound at its limit passes, one over is refused; the
   const refusal = (/** @type {unknown[]} */ args) =>
     /** @type {any} */ (measureArguments(args)).refusal;
   // Bytes: units x 3.
-  t.true(ok(['x'.repeat(limitsM5.membraneArgBytes / 3)]));
+  t.true(ok(['x'.repeat(limits.membraneArgBytes / 3)]));
   t.is(
-    refusal(['x'.repeat(limitsM5.membraneArgBytes / 3 + 1)]),
+    refusal(['x'.repeat(limits.membraneArgBytes / 3 + 1)]),
     textOf.membraneTooLarge(
-      limitsM5.membraneArgBytes + 3,
-      limitsM5.membraneArgBytes,
+      limits.membraneArgBytes + 3,
+      limits.membraneArgBytes,
     ),
   );
   // Keys of one record.
@@ -771,13 +755,13 @@ test('inspect methods and describe render without calling the object; Fae descri
   // probe b): cut to 8,000 units and flagged.
   const big = await inspect({ op: 'describe', target: fx.bigHelp });
   const bigText = JSON.parse(adapter.textOfOutcome(big.text));
-  t.is(bigText.documentation.length, limitsM5.describeDocumentationUnits);
+  t.is(bigText.documentation.length, limits.describeDocumentationUnits);
   t.true(bigText.truncated);
 });
 
 /** @param {unknown} outcome */
 const matchesOutcome = outcome =>
-  /** @type {any} */ (globalThis).matches(outcome, m5Shapes.InspectOutcome);
+  /** @type {any} */ (globalThis).matches(outcome, shapes.InspectOutcome);
 
 test('inspect readSources: Fae item rules, SourceReader per item, bounded results, staged arguments', async t => {
   const { inspect, fx, adapter } = await fresh();
@@ -883,9 +867,7 @@ test('inspect readSources: Fae item rules, SourceReader per item, bounded result
   const wideText = adapter.textOfOutcome(wideOut.text);
   const wideResult = JSON.parse(wideText).results[0];
   t.true(wideResult.outputTruncated);
-  t.true(
-    JSON.stringify(wideResult).length <= limitsM5.inspectResultUnits - 100,
-  );
+  t.true(JSON.stringify(wideResult).length <= limits.inspectResultUnits - 100);
 });
 
 test('inspect toolSchema: a ToolDescription, or refused-schema reasons', async t => {
@@ -942,7 +924,7 @@ test('inspect toolSchema: a ToolDescription, or refused-schema reasons', async t
     ),
   });
   t.is(long.status, 'ok');
-  t.is(long.description.description.length, limitsM5.grantedDescriptionUnits);
+  t.is(long.description.description.length, limits.grantedDescriptionUnits);
   t.true(long.description.description.startsWith('ddd'));
   t.true(matchesOutcome(long));
 });

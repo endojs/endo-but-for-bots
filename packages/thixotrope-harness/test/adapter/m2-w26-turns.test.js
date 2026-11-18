@@ -40,7 +40,10 @@ import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 import { makeChannelRegistry } from '../../resources/agent-host/impl/channels.js';
 import { makeContextCache } from '../../resources/agent-host/impl/context-cache.js';
 import { makeEchoTool } from '../../resources/agent-host/impl/tools/echo.js';
-import { makeOpenRouterProvider } from '../../resources/agent-host/impl/providers/openrouter.js';
+import {
+  makeOpenRouterProvider,
+  openRouterKind,
+} from '../../resources/agent-host/impl/providers/openrouter.js';
 import {
   openRouterChunks,
   startFakeProviderServer,
@@ -147,6 +150,7 @@ const setup = async (t, { maxToolRounds, config: extra = {} } = {}) => {
       provider: watched,
       channel,
       timers,
+      unexpectedFailure: openRouterKind.unexpectedFailure,
       prepare: async req => {
         const gate = prepareGate;
         if (gate !== undefined) {
@@ -724,6 +728,7 @@ test('Endpoint: an armDeadline sent with holdTurn and startRound in one crank fi
     },
     channel: Far('Channel', {}),
     timers,
+    unexpectedFailure: openRouterKind.unexpectedFailure,
   });
   void E(endpoint).holdTurn(turn);
   E.sendOnly(endpoint).armDeadline(

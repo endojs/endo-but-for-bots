@@ -10,7 +10,7 @@
  * Node only.
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { m1bInterfaces } from '../../../guest/lib/interfaces.js';
+import { interfaces } from '../../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 
 const { makeExo } = /** @type {any} */ (globalThis);
@@ -19,7 +19,7 @@ const { makeExo } = /** @type {any} */ (globalThis);
  * @param {{ store: import('./blobs.js').BlobStore }} options
  */
 export const makeContent = ({ store }) =>
-  makeExo('Content', m1bInterfaces.Content, {
+  makeExo('Content', interfaces.Content, {
     /**
      * @param {any} blob
      * @param {{ offset: number, maxBytes: number }} range

@@ -12,7 +12,7 @@ import { DRAFT_PREFIX } from '../../ui/src/controller/drafts.js';
 import {
   uiTexts,
   uiTextOf,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeFakePowers } from './_m3-fake-powers.js';
 
 /** Let eventual sends and pumps run. */

@@ -451,6 +451,11 @@ export const workerRss = root => {
  *   Default: PERF_TEMPLATE=1 means true.
  * @param {number} [options.idleSleepMs]
  * @param {number} [options.snapshotEveryDeliveries]
+ * @param {string} [options.secretsKeyFile] the Secrets wrapping key file of
+ *   this supervisor (every restart of it), not of this process
+ * @param {Record<string, string>} [options.env] more variables for this
+ *   supervisor only (still through the allowlist), e.g. the live probe's
+ *   directory (HR-SYN-13)
  * @returns {Promise<Provisioned>}
  */
 export const provision = async ({
@@ -459,9 +464,18 @@ export const provision = async ({
   template = process.env.PERF_TEMPLATE === '1',
   idleSleepMs: idle = idleSleepMs,
   snapshotEveryDeliveries: snapshotEvery = snapshotEveryDeliveries,
+  secretsKeyFile,
+  env: extraEnv = {},
 }) => {
-  const { TEMPLATE_WORKSPACE, connect, copyState, ensureTemplate, killStrays } =
-    await import('../test/template/index.js');
+  const {
+    TEMPLATE_WORKSPACE,
+    connect,
+    copyState,
+    ensureTemplate,
+    killStrays,
+    supervisorEnv,
+  } = await import('../test/template/index.js');
+  const env = { ...supervisorEnv({ secretsKeyFile }), ...extraEnv };
   const tStart = performance.now();
   /** @type {Record<string, unknown>} */
   const timings = {};
@@ -482,12 +496,15 @@ export const provision = async ({
     timings.copyMs = round3(performance.now() - tStep);
   } else await mkdir(root, { recursive: true, mode: 0o700 });
   const serve = () =>
-    serveHarness({
-      statePath: root,
-      crankBudget: BigInt(crankBudget),
-      idleSleepMs: idle,
-      snapshotEveryDeliveries: snapshotEvery,
-    });
+    serveHarness(
+      {
+        statePath: root,
+        crankBudget: BigInt(crankBudget),
+        idleSleepMs: idle,
+        snapshotEveryDeliveries: snapshotEvery,
+      },
+      { env },
+    );
   let tStep = performance.now();
   let served = await serve();
   timings.servedMs = round3(performance.now() - tStep);

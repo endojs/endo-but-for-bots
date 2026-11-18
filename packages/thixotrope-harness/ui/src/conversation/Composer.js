@@ -21,10 +21,10 @@
 import { h } from 'preact';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 
-import { uiTexts } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { ConversationSlot } from './slots.js';
 
-/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 /**
  * Whether a key event belongs to an IME composition.

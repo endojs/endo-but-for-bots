@@ -18,11 +18,7 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import {
-  interfaces,
-  m2Interfaces,
-  shapes,
-} from '../../guest/lib/interfaces.js';
+import { interfaces, shapes } from '../../guest/lib/interfaces.js';
 import { m4Interfaces } from '../../guest/lib/interfaces-m4.js';
 /* eslint-enable import/no-relative-packages */
 
@@ -68,7 +64,7 @@ const labelsIn = (pattern, into = new Set()) => {
 const guardsByName = () => {
   /** @type {Map<string, any[]>} */
   const byName = new Map();
-  for (const table of [interfaces, m2Interfaces, m4Interfaces]) {
+  for (const table of [interfaces, interfaces, m4Interfaces]) {
     for (const guard of Object.values(table)) {
       const name = guard.payload.interfaceName;
       byName.set(name, [...(byName.get(name) ?? []), guard]);

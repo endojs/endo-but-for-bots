@@ -19,6 +19,7 @@
  *   THIX_HARNESS_BROWSER=1 node scripts/run-lock.mjs --exclusive --label m3-ui -- node perf/ui.perf.mjs
  */
 import { emit, hubJsonBytes, runPerf, single, stats } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
 installGuestPrelude();
@@ -34,7 +35,7 @@ const { makeSlice, requestId } =
 const { hubRow, workerMetas } = await import('./_long-session.mjs');
 
 /** The hub-growth window (m3-interfaces.md 13: 5 minutes). */
-const GROWTH_MS = Number(process.env.M3_GROWTH_MS ?? 5 * 60_000);
+const GROWTH_MS = windowMs('M3_GROWTH_MS', 5 * 60_000);
 const RELOAD_EVERY_MS = 10_000;
 const TURN_EVERY_MS = 5000;
 /** Bundle budget, gzip bytes. */

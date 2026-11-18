@@ -14,13 +14,13 @@
  */
 import { h } from 'preact';
 
-import { uiTexts } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { Header } from './Header.js';
 import { Overlay } from './Overlay.js';
 import { FeatureHost, Slot } from './Slot.js';
 import { StatusBar } from './StatusBar.js';
 
-/** @import { UiFeature } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { UiFeature } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 /**
  * @typedef {object} ShellViews

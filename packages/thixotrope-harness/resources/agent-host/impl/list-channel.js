@@ -31,7 +31,7 @@
  * `subscribersPerSession` closes the one with the most queued bytes. A
  * closed subscriber is removed at once (it costs no further work) and its
  * `next()` answers `{ deliveries: [], closed: true, reason }` (reason: a
- * `m1bShapes.CloseReason`, as `LiveBatch.reason`).
+ * `shapes.CloseReason`, as `LiveBatch.reason`).
  *
  * Node module (adapter); reads the guest prelude from `globalThis`, which
  * the loader installs before importing `impl/index.js`.
@@ -39,7 +39,7 @@
 import { clearTimeout, setTimeout } from 'node:timers';
 
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
-import { m1bInterfaces, m1bShapes } from '../../../guest/lib/interfaces.js';
+import { interfaces, shapes } from '../../../guest/lib/interfaces.js';
 import { limits as guestLimits } from '../../../guest/lib/limits.js';
 import { messageBytes } from '../../../guest/lib/bounded.js';
 /* eslint-enable import/no-relative-packages */
@@ -142,7 +142,7 @@ const makeListSubscriber = ({ queueLimit, queueBytes, onClose }) => {
     }
   };
 
-  const facet = makeExo('ListSubscription', m1bInterfaces.ListSubscription, {
+  const facet = makeExo('ListSubscription', interfaces.ListSubscription, {
     async next() {
       if (closedFor !== undefined) return closedBatch();
       if (queue.length > 0 && waiters.length === 0) return take();
@@ -262,7 +262,7 @@ export const makeListChannel = ({
     }
   };
 
-  const publisher = makeExo('ListPublisher', m1bInterfaces.ListPublisher, {
+  const publisher = makeExo('ListPublisher', interfaces.ListPublisher, {
     /** @param {any} batch a ListPublishBatch (the guard checked it) */
     publish({ rev, events }) {
       const batchRev = /** @type {number} */ (rev);
@@ -325,7 +325,7 @@ export const makeListChannel = ({
       rev: latestRev,
       event: { type: 'list-snapshot' },
     });
-    mustMatch(first, m1bShapes.ListDelivery);
+    mustMatch(first, shapes.ListDelivery);
     subscriber.push(first, 0);
     return subscriber.facet;
   };

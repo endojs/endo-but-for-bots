@@ -22,7 +22,6 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { shapes } from '../../guest/lib/interfaces.js';
-import { m5Shapes } from '../../guest/lib/interfaces-m5.js';
 import {
   adapterToolEntries,
   toolSetFor,
@@ -231,7 +230,7 @@ test('an adopted grant shows its display label; an operator grant has none (2.6)
     name: 'lookupWeather',
     label: 'weather',
   });
-  t.true(matches(info, m5Shapes.ToolGrantInfo));
+  t.true(matches(info, shapes.ToolGrantInfo));
   const plain = await part.schemaRead(operator);
   t.is(plain.label, undefined);
   t.false('label' in plain);
@@ -242,7 +241,7 @@ test('an adopted grant shows its display label; an operator grant has none (2.6)
   t.false(
     matches(
       harden({ ...info, label: 'a/b'.repeat(100) }),
-      m5Shapes.ToolGrantInfo,
+      shapes.ToolGrantInfo,
     ),
   );
 });

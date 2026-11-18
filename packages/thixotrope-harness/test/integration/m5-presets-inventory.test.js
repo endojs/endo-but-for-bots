@@ -25,7 +25,7 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { texts, textOf } from '../../guest/lib/interfaces-m5-factory.js';
+import { textOf, texts } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { exportState, importState } from '../../scripts/export.mjs';
 import {

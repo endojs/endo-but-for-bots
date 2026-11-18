@@ -7,11 +7,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /* eslint-disable import/no-relative-packages */
-import { m1bInterfaces } from '../../guest/lib/interfaces.js';
+import { interfaces } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { makeBlobStore } from '../../resources/agent-host/impl/blobs.js';
 import { makeEndpoint } from '../../resources/agent-host/impl/endpoint.js';
-import { makeScriptedProvider } from '../../resources/agent-host/impl/providers/scripted.js';
+import {
+  makeScriptedProvider,
+  scriptedUnexpectedFailure,
+} from '../../resources/agent-host/impl/providers/scripted.js';
 import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -141,7 +144,7 @@ export const makeFakeSinkTurn = () => {
   const failures = [];
   /** @type {any[]} */
   const progress = [];
-  const turn = makeExo('Turn', m1bInterfaces.Turn, {
+  const turn = makeExo('Turn', interfaces.Turn, {
     getStatus: () =>
       harden({ turnId: 't1', state: 'running', round: 0, at: 0 }),
     cancel: () => undefined,
@@ -150,7 +153,7 @@ export const makeFakeSinkTurn = () => {
     resolve: () => undefined,
     getContent: () => harden({ records: [] }),
   });
-  const sink = makeExo('TurnSink', m1bInterfaces.TurnSink, {
+  const sink = makeExo('TurnSink', interfaces.TurnSink, {
     dispatching: () => true,
     roundFinal: (/** @type {any} */ r) => {
       finals.push(r);
@@ -187,6 +190,7 @@ export const runRoundFor = async (store, script, owner, turnId = 't1') => {
     channel: harden({ publishDelta: () => {} }),
     timers,
     owner,
+    unexpectedFailure: scriptedUnexpectedFailure,
   });
   const fake = makeFakeSinkTurn();
   void E(endpoint).holdTurn(fake.turn);

@@ -29,13 +29,13 @@
  *
  * Guest rules: prelude globals only; no clock; no sends.
  */
-import { limitsM5 } from '../lib/limits-m5.js';
+import { limits } from '../lib/limits.js';
 import {
   builtInPresetLabels,
-  m5FactoryInterfaces,
-  texts,
+  interfaces,
   textOf,
-} from '../lib/interfaces-m5-factory.js';
+  texts,
+} from '../lib/guards/factory.js';
 import {
   BUILTIN_PRESETS,
   normalizePresetRecord,
@@ -187,7 +187,7 @@ export const makePresetCatalog = ({
   const makePreset = (record, builtIn) => {
     /** @type {PresetState} */
     const state = { record, revision: 0, builtIn, deleted: false };
-    const preset = makeExo('Preset', m5FactoryInterfaces.Preset, {
+    const preset = makeExo('Preset', interfaces.Preset, {
       describe: () => viewOf(liveStateOf(preset)),
       snapshot: () => snapshotOf(liveStateOf(preset)),
       /**
@@ -282,14 +282,14 @@ export const makePresetCatalog = ({
    */
   const create = (record, expected) => {
     assertCurrent(expected);
-    if (order.length >= limitsM5.maxPresets) throw Error(texts.tooManyPresets);
+    if (order.length >= limits.maxPresets) throw Error(texts.tooManyPresets);
     const normal = normalize(record);
     const preset = makePreset(normal);
     revision += 1;
     return harden({ preset, revision });
   };
 
-  const facet = makeExo('PresetCatalog', m5FactoryInterfaces.PresetCatalog, {
+  const facet = makeExo('PresetCatalog', interfaces.PresetCatalog, {
     list,
     configuration: () =>
       harden({ revision, presets: list(), defaultPreset: defaultPreset() }),

@@ -18,17 +18,15 @@
  *
  * M5 (W5.3; m5-interfaces.md 2.4.1, 2.8, H-4): `make` builds the session's
  * label map (seeded from `services.endowments`, then `labelSeeds`) and its
- * runtime (`m5-parts.js`), and the `Session` exo takes the M5 guard:
+ * runtime (`runtime-parts.js`), and the `Session` exo takes the M5 guard:
  * `grants()` and `enqueueMessageOnce` forward to the runtime's `grants` and
- * `packages` parts and throw `textOf.notBuilt` until W5.6 and W5.7 register
- * them.
+ * `packages` parts, which every runtime has.
  */
-import { interfaces, texts, textOf } from '../lib/guards/session.js';
-import { m5Interfaces } from '../lib/interfaces-m5.js';
+import { interfaces, texts } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { labelSeeds as defaultLabelSeeds, seedsFor } from './label-seeds.js';
 import { makeLabels } from './labels.js';
-import { m5Parts, makeRuntime } from './m5-parts.js';
+import { runtimeParts, makeRuntime } from './runtime-parts.js';
 import { makeQueue as defaultMakeQueue } from './queue.js';
 import {
   isRestartSignal as defaultIsRestartSignal,
@@ -42,7 +40,7 @@ import { toolSources, toolTable } from './tool-table.js';
 import { turnHooks } from './turn-hooks.js';
 import { makeTurnRunner } from './turn.js';
 
-/** @import { Runtime } from './m5-parts.js' */
+/** @import { Runtime } from './runtime-parts.js' */
 
 // The exo methods are typed loosely; the interface guards check the values.
 const { makeExo } = /** @type {any} */ (globalThis);
@@ -57,7 +55,7 @@ const { makeExo } = /** @type {any} */ (globalThis);
  * @property {readonly any[]} [toolTable]
  * @property {typeof turnHooks} [hooks]
  * @property {readonly any[]} [toolSources] M5 S1
- * @property {readonly any[]} [parts] M5 runtime parts (`m5-parts.js`)
+ * @property {readonly any[]} [parts] M5 runtime parts (`runtime-parts.js`)
  * @property {readonly any[]} [labelSeeds] M5 (`label-seeds.js`)
  */
 
@@ -75,7 +73,7 @@ export const makeSession = (
     toolTable: table = toolTable,
     hooks = turnHooks,
     toolSources: sources = toolSources,
-    parts = m5Parts,
+    parts = runtimeParts,
     labelSeeds = defaultLabelSeeds,
   } = {},
 ) => {
@@ -185,7 +183,7 @@ export const makeSession = (
   // Contract 6.1: the ports are opened once, here, and held across turns.
   runner.openPorts();
 
-  const session = makeExo('Session', m5Interfaces.Session, {
+  const session = makeExo('Session', interfaces.Session, {
     getInfo() {
       return info();
     },
@@ -268,10 +266,7 @@ export const makeSession = (
      * @param {any[]} attachments
      */
     enqueueMessageOnce(submission, requestId, at, attachments) {
-      const packages = runtime?.packages;
-      if (packages?.enqueueMessageOnce === undefined) {
-        throw Error(textOf.notBuilt('enqueueMessageOnce'));
-      }
+      const { packages } = runtime;
       refuseIfDeleting();
       return inCrank(() =>
         packages.enqueueMessageOnce(submission, requestId, at, attachments),
@@ -279,9 +274,7 @@ export const makeSession = (
     },
     /** M5 (2.5): the session's granted tools (W5.6's `grants` part). */
     grants() {
-      const facet = runtime?.grants?.facet;
-      if (facet === undefined) throw Error(textOf.notBuilt('grants'));
-      return facet;
+      return runtime.grants.facet;
     },
   });
 

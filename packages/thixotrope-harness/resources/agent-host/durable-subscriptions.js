@@ -27,11 +27,9 @@
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
-import {
-  m4Interfaces,
-  m4Limits,
-  m4Texts,
-} from '../../guest/lib/interfaces-m4.js';
+import { m4Interfaces } from '../../guest/lib/interfaces-m4.js';
+import { subscriptionLimits } from '../../guest/lib/subscription-limits.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import { limits } from '../../guest/lib/limits.js';
 import { fitsFrame } from '../../guest/lib/bounded.js';
 /* eslint-enable import/no-relative-packages */
@@ -40,6 +38,25 @@ const { E, makeExo, defineExoClass } = /** @type {any} */ (globalThis);
 
 /** @param {string} code a `secretCodes` entry */
 const secretError = code => Error(textOf.secretFailed(code));
+
+/**
+ * A pager's cursor (HR-SYN-11): the creation serial of the last row of the
+ * page before, so a delete or a retirement between pages skips no row
+ * (J-9486). Only canonical decimal digits are one: `Number()` took `1e3`,
+ * ` 5` and `0x10`.
+ * @param {unknown} cursor
+ * @param {string} refusal the text a malformed cursor is refused with
+ * @returns {number} 0 for the first page
+ */
+export const serialCursor = (cursor, refusal) => {
+  if (cursor === undefined) return 0;
+  if (typeof cursor !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(cursor))
+    throw Error(refusal);
+  const serial = Number(cursor);
+  if (!Number.isSafeInteger(serial)) throw Error(refusal);
+  return serial;
+};
+harden(serialCursor);
 
 /**
  * Pages of the pool catalogue `resolveEffort` reads at most to find the
@@ -112,6 +129,8 @@ const sameSpec = (a, b) => {
  * @property {number} weight
  * @property {any} [declared] `DeclaredProfile`
  * @property {'active' | 'retired'} state
+ * @property {number} serial its creation serial, from 1 (`listMembers`
+ *   pages by it, HR-SYN-11)
  *
  * @typedef {object} PoolRecord
  * @property {any} spec the `PoolSpec` as given (hardened)
@@ -184,6 +203,8 @@ export const makeSubscriptionsPart = ({
   const memberRecords = new WeakMap();
   /** Active members in creation order (`maxMembers`; retired ones dropped). @type {any[]} */
   let memberList = [];
+  /** The last member's creation serial (never reused). */
+  let memberSerial = 0;
   /**
    * Refusal marks, per member, shared by every pool the member is in (5.1).
    * @type {WeakMap<any, any>}
@@ -201,18 +222,18 @@ export const makeSubscriptionsPart = ({
   /** @param {any} member */
   const memberOf = member => {
     const record = memberRecords.get(member);
-    if (record === undefined) throw Error(m4Texts.unknownMember);
+    if (record === undefined) throw Error(subscriptionTexts.unknownMember);
     return record;
   };
   /** @param {any} pool */
   const poolOf = pool => {
     const record = poolRecords.get(pool);
-    if (record === undefined) throw Error(m4Texts.unknownPool);
+    if (record === undefined) throw Error(subscriptionTexts.unknownPool);
     return record;
   };
   /** @param {PoolRecord} record */
   const assertActivePool = record => {
-    if (record.state === 'retired') throw Error(m4Texts.retired);
+    if (record.state === 'retired') throw Error(subscriptionTexts.retired);
   };
 
   const makeMemberExo = defineExoClass(
@@ -268,12 +289,13 @@ export const makeSubscriptionsPart = ({
         // under the label is refused until that member is retired.
         if (record.credential === credential && record.provider === provider)
           return member;
-        throw Error(m4Texts.memberConflict);
+        throw Error(subscriptionTexts.memberConflict);
       }
     }
-    if (memberList.length >= m4Limits.maxMembers)
+    if (memberList.length >= subscriptionLimits.maxMembers)
       throw secretError('CREATE_FAILED');
     const member = makeMemberExo();
+    memberSerial += 1;
     memberRecords.set(
       member,
       harden({
@@ -283,6 +305,7 @@ export const makeSubscriptionsPart = ({
         key: secret.key,
         weight,
         state: 'active',
+        serial: memberSerial,
         ...(declared === undefined ? {} : { declared }),
       }),
     );
@@ -291,16 +314,20 @@ export const makeSubscriptionsPart = ({
   };
 
   /**
-   * @param {string} [cursor] a position in creation order
+   * @param {string} [cursor] the creation serial of the last member of the
+   *   page before (HR-SYN-11: a retirement between pages skips none)
    */
   const listMembers = cursor => {
-    const from = cursor === undefined ? 0 : Number(cursor);
-    if (!Number.isSafeInteger(from) || from < 0)
-      throw Error('not a members cursor');
-    const members = memberList.slice(from, from + m4Limits.poolPageEntries);
-    const next = from + members.length;
+    const after = serialCursor(cursor, 'not a members cursor');
+    const rest = memberList.filter(member => memberOf(member).serial > after);
+    const members = rest.slice(0, subscriptionLimits.poolPageEntries);
     return harden(
-      next < memberList.length ? { members, next: `${next}` } : { members },
+      rest.length > members.length
+        ? {
+            members,
+            next: `${memberOf(members[members.length - 1]).serial}`,
+          }
+        : { members },
     );
   };
 
@@ -366,7 +393,7 @@ export const makeSubscriptionsPart = ({
         assertActivePool(poolOf(backend));
         // R4-21: a pool has no default model unless its spec names one.
         if (modelId === undefined && spec.modelId === undefined)
-          throw Error(m4Texts.subscriptionModelRequired);
+          throw Error(subscriptionTexts.subscriptionModelRequired);
         return withOps(ops =>
           E(ops).resolveModel(
             harden(
@@ -400,7 +427,7 @@ export const makeSubscriptionsPart = ({
             ? 'max'
             : reasoningEffort;
         if (!row.reasoningEfforts.includes(listed))
-          throw Error(m4Texts.unsupportedEffort);
+          throw Error(subscriptionTexts.unsupportedEffort);
         return harden({ reasoningEffort });
       },
       /**
@@ -431,15 +458,18 @@ export const makeSubscriptionsPart = ({
   const makePool = spec => {
     if (!fitsFrame(spec)) throw Error(texts.frameLimit);
     const provider = providerOf(spec.kind);
-    if (spec.members.length === 0) throw Error(m4Texts.noUsableMember);
+    if (spec.members.length === 0)
+      throw Error(subscriptionTexts.noUsableMember);
     const seen = new Set();
     for (const member of spec.members) {
       const record = memberOf(member);
-      if (record.state !== 'active') throw Error(m4Texts.noUsableMember);
-      if (record.provider !== provider) throw Error(m4Texts.memberKind);
+      if (record.state !== 'active')
+        throw Error(subscriptionTexts.noUsableMember);
+      if (record.provider !== provider)
+        throw Error(subscriptionTexts.memberKind);
       // One attempt per member per round (R4-25): a member listed twice
       // would be tried twice.
-      if (seen.has(member)) throw Error(m4Texts.poolConflict);
+      if (seen.has(member)) throw Error(subscriptionTexts.poolConflict);
       seen.add(member);
     }
     for (const pool of poolList) {
@@ -447,10 +477,11 @@ export const makeSubscriptionsPart = ({
       if (record.spec.label === spec.label) {
         // R8-23, K-1: idempotent by label and spec.
         if (sameSpec(record.spec, spec)) return pool;
-        throw Error(m4Texts.poolConflict);
+        throw Error(subscriptionTexts.poolConflict);
       }
     }
-    if (poolList.length >= m4Limits.maxPools) throw Error(m4Texts.poolConflict);
+    if (poolList.length >= subscriptionLimits.maxPools)
+      throw Error(subscriptionTexts.poolConflict);
     const pool = makePoolBackend(spec);
     poolRecords.set(pool, { spec, state: 'active', served: new Map() });
     poolList = [...poolList, pool];
@@ -544,7 +575,7 @@ export const makeSubscriptionsPart = ({
       if (usable(member) && (kept === undefined || kept.at <= at)) {
         served.delete(session);
         served.set(session, harden({ member, at }));
-        if (served.size > m4Limits.servedRecords) {
+        if (served.size > subscriptionLimits.servedRecords) {
           const oldest = served.keys().next().value;
           served.delete(oldest);
         }
@@ -560,14 +591,19 @@ export const makeSubscriptionsPart = ({
    * vat's records, generation, state and bytes from one `describeSecrets`
    * call; never a value (R7-26). At most `catalogPageEntries`, then cut to
    * one frame (`fitsFrame`), `next` naming the first entry left out.
-   * @param {string} [cursor] a position in creation order
+   * @param {string} [cursor] the creation serial of the last Secret of the
+   *   page before (HR-SYN-11: a delete between pages skips none, as
+   *   `SecretsAdmin.list`, J-9486)
    */
   const catalog = async cursor => {
-    const from = cursor === undefined ? 0 : Number(cursor);
-    if (!Number.isSafeInteger(from) || from < 0)
-      throw Error('not a secrets cursor');
-    const all = secretList();
-    const secrets = all.slice(from, from + m4Limits.catalogPageEntries);
+    const after = serialCursor(cursor, 'not a secrets cursor');
+    /** A Secret's creation serial: its store key `k<n>`. @param {any} secret */
+    const serialOf = secret =>
+      Number(/** @type {any} */ (secretRecords.get(secret)).key.slice(1));
+    const rest = secretList().filter(secret => serialOf(secret) > after);
+    const secrets = rest.slice(0, subscriptionLimits.catalogPageEntries);
+    // Taken now: a delete during the describe call drops the record.
+    const serials = secrets.map(serialOf);
     const recordsOf = secrets.map(secret => secretRecords.get(secret));
     const keys = harden(
       recordsOf.flatMap(record => (record === undefined ? [] : [record.key])),
@@ -605,10 +641,9 @@ export const makeSubscriptionsPart = ({
     /** @param {number} count entries of this page taken */
     const pageOf = count => {
       const taken = entries.slice(0, count).filter(Boolean);
-      const next = from + count;
       return harden(
-        next < all.length
-          ? { entries: taken, next: `${next}` }
+        count < rest.length
+          ? { entries: taken, next: `${serials[count - 1]}` }
           : { entries: taken },
       );
     };

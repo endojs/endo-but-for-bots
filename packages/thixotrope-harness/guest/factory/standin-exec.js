@@ -29,6 +29,12 @@ export const makeExecScope = () => {
       return harden({ status: 'ok', text: `calls ${calls}` });
     },
     abandon() {},
+    async inspect() {
+      return harden({
+        status: 'failed',
+        text: 'The stand-in exec vat does not inspect',
+      });
+    },
   });
 };
 harden(makeExecScope);

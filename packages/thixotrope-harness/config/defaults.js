@@ -173,4 +173,4 @@ export const blobLimits = Object.freeze({
 });
 
 // M4 (W4.1, H-11): the subscription settings.
-export { subscriptionDefaults } from './defaults-m4.js';
+export { subscriptionDefaults } from './subscription-defaults.js';

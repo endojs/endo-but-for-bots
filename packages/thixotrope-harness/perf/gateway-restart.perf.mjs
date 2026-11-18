@@ -27,6 +27,7 @@
  *   node scripts/run-lock.mjs --exclusive --label perf-gateway-restart -- node perf/gateway-restart.perf.mjs
  */
 import { du, emit, runPerf, stats } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
 installGuestPrelude();
@@ -38,9 +39,11 @@ const { connectGateway, freePort, serveGateway, useTestWrappingKey } =
   await import('../test/integration/_m3-gateway.js');
 
 /** Restart window per mode (m3-interfaces.md 13). */
-const RESTART_WINDOW_MS = Number(process.env.M3_RESTART_WINDOW_MS ?? 150_000);
+const RESTART_WINDOW_MS = windowMs('M3_RESTART_WINDOW_MS', 150_000);
 /** No restart starts whose window would end after this, from the file's start. */
-const WINDOWS_END_MS = Number(process.env.M3_RESTART_END_MS ?? 360_000);
+const WINDOWS_END_MS = windowMs('M3_RESTART_END_MS', 360_000, {
+  scaled: false,
+});
 
 /** @param {string} metric @param {string} why */
 const notMeasured = (metric, why) =>

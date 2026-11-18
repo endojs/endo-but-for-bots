@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { m1bShapes, texts, textOf } from '../../guest/lib/interfaces.js';
+import { shapes, textOf, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { make as makeManagerVat } from '../../resources/agent-host/durable.js';
@@ -53,7 +53,7 @@ test('stage: the file is written, fsynced, renamed and the directory fsynced bef
   t.teardown(blobs.cleanup);
   const text = 'é'.repeat(5000); // 10,000 bytes
   const staged = await blobs.store.stage(text);
-  t.true(matches(staged, m1bShapes.StagedText));
+  t.true(matches(staged, shapes.StagedText));
   t.is(staged.bytes, 10_000);
   t.is(staged.preview, 'é'.repeat(limits.messagePreviewUnits));
   t.deepEqual(steps, [
@@ -101,7 +101,7 @@ test('Composer: a submission over inlineBytes reaches the session only as a Stag
   t.is(seen.length, 1);
   t.deepEqual(seen[0].steps, ['write', 'fsync', 'rename', 'fsync-dir', 'bind']);
   t.is(seen[0].onDisk, text);
-  t.true(matches(seen[0].submission, m1bShapes.StagedText));
+  t.true(matches(seen[0].submission, shapes.StagedText));
   t.is(seen[0].submission.bytes, limits.inlineBytes + 1);
   // Inline at exactly inlineBytes; blank refused before staging, whatever
   // its length.
@@ -194,7 +194,7 @@ test('readPage and Content: pages of whole code points, joined they are the text
       staged.blob,
       harden({ offset, maxBytes: 1000 }),
     );
-    t.true(matches(page, m1bShapes.ContentPage));
+    t.true(matches(page, shapes.ContentPage));
     t.true(Buffer.byteLength(page.text) <= 1000);
     pages.push(page.text);
     offset = page.next;
@@ -234,7 +234,7 @@ test('BlobWriter: pieces in order, close answers the StagedText; closed and abor
     await E(writer).append(piece);
   }
   const staged = await E(writer).close();
-  t.true(matches(staged, m1bShapes.StagedText));
+  t.true(matches(staged, shapes.StagedText));
   t.is(staged.bytes, limits.blobPieceBytes + 200 + 4);
   t.is(staged.preview, 'x'.repeat(limits.toolPreviewUnits));
   t.is(await blobs.store.read(staged.blob), pieces.join(''));
@@ -314,8 +314,11 @@ test('stock: refilled below STOCK_LOW with one refill in flight; sweep removes u
     `${fake.counts.mints}`,
   );
   t.true(blobs.store.stats().stock >= STOCK_LOW - 1);
+  // The sweep is the next incarnation's (HR-SYN-9: one per incarnation, and
+  // this one swept before its first staging).
   writeFileSync(join(blobs.blobDir, 'b999.part'), 'half');
-  await blobs.store.sweep();
+  const next = makeBlobStore({ dir: blobs.blobDir, sink: fake.sink });
+  await next.sweep();
   t.false(existsSync(join(blobs.blobDir, 'b999.part')));
   t.true(existsSync(join(blobs.blobDir, 'b1')));
 });
@@ -348,7 +351,7 @@ test('manager: mintBlobs and resolveBlobs on the real sink; admin.content() and 
   t.truthy(content);
   const { sink } = spec;
   const stock = await E(sink).mintBlobs();
-  t.true(matches(stock, m1bShapes.BlobStock));
+  t.true(matches(stock, shapes.BlobStock));
   t.is(stock.length, limits.blobStockBatch);
   t.true(stock.every((/** @type {any} */ e) => /^b[0-9]+$/.test(e.key)));
   const keys = await E(sink).resolveBlobs(

@@ -307,3 +307,26 @@ export const splitBatches = (
   return groups;
 };
 harden(splitBatches);
+
+/**
+ * The message of a thrown value, for a model-facing or recorded failure
+ * text: an object's string `message`, else the value as text. Never throws
+ * (a hostile `message` getter or `toString` answers `unprintable error`).
+ * `instanceof Error` is not used: it is false across realms and for errors
+ * that crossed CapTP. The one copy for every vat (HR-SYN-27; it was written
+ * seven times, two of them able to throw on a hostile value).
+ * @param {unknown} error
+ * @returns {string}
+ */
+export const messageOf = error => {
+  try {
+    if (typeof error === 'object' && error !== null) {
+      const { message } = /** @type {{ message?: unknown }} */ (error);
+      if (typeof message === 'string') return message;
+    }
+    return String(error);
+  } catch {
+    return 'unprintable error';
+  }
+};
+harden(messageOf);

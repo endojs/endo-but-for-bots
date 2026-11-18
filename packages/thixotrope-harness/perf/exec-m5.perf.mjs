@@ -36,6 +36,7 @@
 import { performance } from 'node:perf_hooks';
 
 import { emit, runPerf, single, summarize } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -43,9 +44,7 @@ installGuestPrelude();
 const { E, Far } = await import('@endo/far');
 /* eslint-disable import/no-relative-packages */
 const { texts, textOf } = await import('../guest/lib/interfaces.js');
-const { texts: textsM5, textOf: textOfM5 } =
-  await import('../guest/lib/interfaces-m5.js');
-const { limitsM5 } = await import('../guest/lib/limits-m5.js');
+const { limits } = await import('../guest/lib/limits.js');
 const { makeMembrane } = await import('../guest/exec/membrane.js');
 /* eslint-enable import/no-relative-packages */
 const { makeSlice } = await import('../test/integration/_m1a-slice.js');
@@ -62,8 +61,8 @@ const {
 const { keyFloodName, makeDisposableKeyFlood } =
   await import('../test/fixtures/m5-objects.js');
 
-const WINDOW_MS = Number(process.env.EXEC_M5_WINDOW_MS ?? 60_000);
-const NODE_MS = Number(process.env.EXEC_M5_NODE_MS ?? 10_000);
+const WINDOW_MS = windowMs('EXEC_M5_WINDOW_MS', 60_000);
+const NODE_MS = windowMs('EXEC_M5_NODE_MS', 10_000);
 const WARMUP = 3;
 const PER_CALL = 20;
 
@@ -340,7 +339,7 @@ await runPerf('exec-m5', async ({ provision }) => {
       ? result.slice(0, 200)
       : result?.preview?.slice(0, 200);
 
-  const tooLarge = textOfM5.membraneTooLarge(0, limitsM5.membraneArgBytes);
+  const tooLarge = textOf.membraneTooLarge(0, limits.membraneArgBytes);
   await probe(
     'probe a',
     15_000,
@@ -351,7 +350,7 @@ await runPerf('exec-m5', async ({ provision }) => {
       r.startsWith(`"${tooLarge.slice(0, tooLarge.indexOf('0'))}`),
     text,
   );
-  const terminated = textOf.errorResult(textsM5.inspectTerminated);
+  const terminated = textOf.errorResult(texts.inspectTerminated);
   await probe(
     'probe b',
     30_000,

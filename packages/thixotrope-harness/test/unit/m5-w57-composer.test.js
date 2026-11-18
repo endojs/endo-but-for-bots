@@ -14,16 +14,14 @@ import { join } from 'node:path';
 
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
-import { texts } from '../../guest/lib/interfaces.js';
-import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
+import { texts, textOf } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import {
   isRefusal,
   makeComposer,
 } from '../../resources/agent-host/impl/composer.js';
 import { harnessRoot } from '../_helpers.js';
-import { blobsUntil, filesIn, makeTestBlobs } from '../adapter/_m1b-blobs.js';
+import { filesIn, makeTestBlobs } from '../adapter/_m1b-blobs.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E, Far } = /** @type {GuestGlobals} */ (globalThis);
@@ -98,7 +96,7 @@ test('the guard refuses 33 attachments; a long text is refused before staging', 
   await t.throwsAsync(() =>
     E(composer).submit(session, 'x', ID, harden({ attachments: many })),
   );
-  const long = 'x'.repeat(limitsM5.packageTextUnits + 1);
+  const long = 'x'.repeat(limits.packageTextUnits + 1);
   await t.throwsAsync(
     () =>
       E(composer).submit(
@@ -107,7 +105,7 @@ test('the guard refuses 33 attachments; a long text is refused before staging', 
         ID,
         harden({ attachments: [{ label: 'notes', value: notes }] }),
       ),
-    { message: textOfM5.packageTooLong(long.length) },
+    { message: textOf.packageTooLong(long.length) },
   );
   await t.throwsAsync(() => E(composer).submit(session, '  ', ID), {
     message: texts.blankSubmission,
@@ -116,46 +114,53 @@ test('the guard refuses 33 attachments; a long text is refused before staging', 
   t.deepEqual(filesIn(blobs.blobDir), [], 'nothing was staged');
 });
 
-test('a staged text refused for its attachments leaves no file', async t => {
+test("HR-SYN-10: a staged text with refused attachments is refused before anything is staged or sent, with the session's texts", async t => {
   const blobs = testBlobs();
   t.teardown(blobs.cleanup);
-  const { session, calls } = fakeSession(() => {
-    throw Error(textOfM5.duplicateAttachment('a'));
-  });
+  const { session, calls } = fakeSession();
   const composer = makeComposer({ now: () => AT, blobs: blobs.store });
   const notes = Far('Notes', {});
   const text = 'L'.repeat(limits.inlineBytes + 10);
+  /** @param {any[]} attachments */
+  const submit = attachments =>
+    E(composer).submit(session, text, ID, harden({ attachments }));
   await t.throwsAsync(
     () =>
-      E(composer).submit(
-        session,
-        text,
-        ID,
-        harden({
-          attachments: [
-            { label: 'a', value: notes },
-            { label: 'a', value: notes },
-          ],
-        }),
-      ),
-    { message: textOfM5.duplicateAttachment('a') },
+      submit([
+        { label: 'a', value: notes },
+        { label: 'a', value: notes },
+      ]),
+    { message: textOf.duplicateAttachment('a') },
   );
-  t.is(calls.length, 1);
-  t.is(calls[0][0], 'enqueueMessageOnce');
-  t.is(calls[0][1][0].bytes, text.length, 'sent staged');
-  await blobsUntil(() => filesIn(blobs.blobDir).length === 0);
+  await t.throwsAsync(() => submit([{ label: 'user', value: notes }]), {
+    message: textOf.reservedLabel('user'),
+  });
+  t.deepEqual(calls, [], 'the session was never called');
+  t.is(blobs.store.stats().staged, 0, 'nothing was staged');
   t.deepEqual(filesIn(blobs.blobDir), []);
 });
 
-test('isRefusal knows the attachment refusals', t => {
+test("isRefusal: only the session's state refusals, compared whole; not attachment texts, guard messages or a break (HR-SYN-10)", t => {
   for (const message of [
-    textOfM5.tooManyAttachments(40),
-    textOfM5.duplicateAttachment('x'),
-    textOfM5.reservedLabel('user'),
-    textOfM5.packageTooLong(70_000),
-    'In "enqueueMessageOnce" method of (Session): arg 3: ...',
+    texts.invalidRequestId,
+    texts.requestIdExpired,
+    texts.requestIdReused,
+    texts.receiptLimit,
+    textOf.queueFull(limits.maxWaiting),
   ]) {
     t.true(isRefusal(Error(message)), message);
   }
-  t.false(isRefusal(Error('something else')));
+  for (const message of [
+    // Checked before staging now.
+    textOf.tooManyAttachments(40),
+    textOf.duplicateAttachment('x'),
+    textOf.reservedLabel('user'),
+    textOf.packageTooLong(70_000),
+    // A staged call cannot meet these.
+    'In "enqueueMessageOnce" method of (Session): arg 3: ...',
+    `${texts.requestIdReused} and more`,
+    'something else',
+  ]) {
+    t.false(isRefusal(Error(message)), message);
+  }
 });

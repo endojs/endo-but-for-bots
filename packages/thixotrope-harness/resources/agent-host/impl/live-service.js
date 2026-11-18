@@ -12,7 +12,7 @@
  * Node module (adapter); the guest prelude is on `globalThis`.
  */
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
-import { m1bInterfaces } from '../../../guest/lib/interfaces.js';
+import { interfaces } from '../../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -28,7 +28,7 @@ const { makeExo } = /** @type {GuestGlobals} */ (globalThis);
  *   without one
  */
 export const makeLive = ({ channels, listChannel }) =>
-  makeExo('Live', m1bInterfaces.Live, {
+  makeExo('Live', interfaces.Live, {
     /**
      * @param {any} session
      * @param {number} [rev]

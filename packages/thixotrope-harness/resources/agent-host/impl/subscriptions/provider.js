@@ -2,7 +2,7 @@
 /**
  * The pool provider (M4 W4.6; `designs/m4-interfaces.md` 5.2; R4-24, R4-25,
  * R4-74, R4-75, R4-78, R4-80 (G-07), R4-105; D-M4-4): M2's provider shape
- * (`startRound`, `cancelRound`, `releaseTurn`, `unexpectedFailure`) over
+ * (`startRound`, `cancelRound`, `releaseTurn`; the kinds carry `unexpectedFailure`) over
  * M2's `runProviderRound`, with a `stream` that tries the pool's members in
  * the order the pool core chooses (W4.2) on the wire client of the pool's
  * kind (W4.3).
@@ -10,8 +10,8 @@
  * One round:
  *
  * - the pool is loaded (`Subscriptions.pool`: one `poolState` per
- *   incarnation); a retired pool fails with `m4Texts.retired` (R4-22: no
- *   fallback), a pool with no active member with `m4Texts.noUsableMember`;
+ *   incarnation); a retired pool fails with `subscriptionTexts.retired` (R4-22: no
+ *   fallback), a pool with no active member with `subscriptionTexts.noUsableMember`;
  * - the system text is resolved once, before the member loop, with M2's
  *   `systemTextOf` and passed to the wire builders as a plain string (5.2);
  * - per member, once (R4-25): its credential is read (audited; renewed near
@@ -37,10 +37,10 @@
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import {
-  m4Texts,
-  m4TextOf,
   providerOfKind,
-} from '../../../../guest/lib/texts-m4.js';
+  subscriptionTextOf,
+  subscriptionTexts,
+} from '../../../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import {
   ProviderFailure,
@@ -57,8 +57,8 @@ import { withOverloadRetry } from './wire.js';
 
 /** The fixed text of a round whose pool stream threw something unexpected. */
 const UNEXPECTED = harden({
-  claude: m4Texts.claudeInferenceFailed,
-  codex: m4TextOf.responsesFailed('stream.unreachable', []),
+  claude: subscriptionTexts.claudeInferenceFailed,
+  codex: subscriptionTextOf.responsesFailed('stream.unreachable', []),
 });
 
 /** @param {unknown} error */
@@ -161,11 +161,11 @@ export const makePoolProvider = ({
           stream: async function* poolStream({ projection, signal }) {
             const pool = await subscriptions.pool(backend, spec);
             if (pool.state === 'retired')
-              throw new ProviderFailure(m4Texts.retired);
+              throw new ProviderFailure(subscriptionTexts.retired);
             if (owner !== undefined)
               subscriptions.accounts.sessionOpened(backend, owner);
             if (!pool.members.some(entry => entry.state === 'active'))
-              throw new ProviderFailure(m4Texts.noUsableMember);
+              throw new ProviderFailure(subscriptionTexts.noUsableMember);
             // 5.2: resolved once per round, passed on as plain text.
             const system = await systemTextOf(req.system, blobs, owner);
             const options = req.options ?? {};
@@ -198,7 +198,7 @@ export const makePoolProvider = ({
               );
               note('member-failed', {
                 ...where,
-                reason: m4TextOf.memberFailed(entry.label, code),
+                reason: subscriptionTextOf.memberFailed(entry.label, code),
               });
             };
 
@@ -299,8 +299,8 @@ export const makePoolProvider = ({
             const { earliestDatedBackMs } = ticket.earliestBackMs();
             throw new ProviderFailure(
               earliestDatedBackMs === null
-                ? m4TextOf.subscriptionsExhausted()
-                : m4TextOf.subscriptionsExhausted(
+                ? subscriptionTextOf.subscriptionsExhausted()
+                : subscriptionTextOf.subscriptionsExhausted(
                     new Date(earliestDatedBackMs).toISOString(),
                   ),
             );
@@ -310,8 +310,6 @@ export const makePoolProvider = ({
         if (running.get(req.turn) === control) running.delete(req.turn);
       }
     },
-    /** The endpoint's text for a round that threw (R4-79: fixed). */
-    unexpectedFailure: unexpected,
     /** @param {any} turn aborts its request (R4-7); logged `cancelled` */
     cancelRound: turn => running.get(turn)?.stop('cancel'),
     /** @param {any} turn aborts its request silently (lease released) */
@@ -324,6 +322,8 @@ harden(makePoolProvider);
 export const claudePoolKind = harden({
   kind: 'claude-pool',
   makeProvider: makePoolProvider,
+  /** The endpoint's text for a round that threw (R4-79: fixed). */
+  unexpectedFailure: UNEXPECTED.claude,
   tools: harden(['accountStatus']),
 });
 
@@ -331,5 +331,7 @@ export const claudePoolKind = harden({
 export const codexPoolKind = harden({
   kind: 'codex-pool',
   makeProvider: makePoolProvider,
+  /** The endpoint's text for a round that threw (R4-79: fixed). */
+  unexpectedFailure: UNEXPECTED.codex,
   tools: harden(['accountStatus']),
 });

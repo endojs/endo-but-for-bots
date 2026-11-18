@@ -23,7 +23,7 @@ import {
   closeCodes,
   cspDirectives,
   gatewayTexts,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { cspHeader } from '../../resources/agent-host/impl/gateway/csp.js';
 import {
   makeGatewayServer,
@@ -593,7 +593,7 @@ test('connection caps: an untrusted peer X-Forwarded-For is ignored', async t =>
 
 /**
  * @param {import('ava').ExecutionContext} t
- * @param {Partial<Record<keyof typeof import('../../resources/agent-host/impl/gateway/contract-m3.js').gatewayLimits, number>>} [limits]
+ * @param {Partial<Record<keyof typeof import('../../resources/agent-host/impl/gateway/protocol.js').gatewayLimits, number>>} [limits]
  */
 const openEcho = async (t, limits = {}) => {
   const served = await serve(t, { limits });

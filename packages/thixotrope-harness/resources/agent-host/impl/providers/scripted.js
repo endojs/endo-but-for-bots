@@ -270,6 +270,12 @@ const makeRoundControl = timers => {
 };
 
 /**
+ * The scripted kind's fixed reason for a round whose provider threw
+ * (R4-79, HR-SYN-12): never the error's message.
+ */
+export const scriptedUnexpectedFailure = 'scripted provider failed';
+
+/**
  * @param {object} options
  * @param {string} options.label the backend's label (`servedBy.label`)
  * @param {any} options.script a `shapes.Script`

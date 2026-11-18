@@ -14,7 +14,7 @@
 import { h } from 'preact';
 import { useState } from 'preact/hooks';
 
-import { uiTexts } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { labels } from './labels.js';
 import { formatPayload } from './ToolGroup.js';
 import { endingOf, messagesOfRecords } from './transcript.js';

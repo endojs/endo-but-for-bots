@@ -27,17 +27,21 @@
   "scripts": {
     "build": "exit 0",
     "bundle": "node scripts/bundle-guest.mjs",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "yarn lint:types && yarn lint:eslint && yarn lint:duplicates",
+    "lint:duplicates": "node scripts/check-duplicates.mjs",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
     "perf": "node perf/_harness.mjs",
+    "perf:pass": "node perf/_pass.mjs",
     "test": "ses-ava",
     "test:integration": "THIX_HARNESS_INTEGRATION=1 node scripts/test-integration.mjs",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:xs": "exit 0",
     "build:ui": "node ui/build.mjs",
-    "test:browser": "THIX_HARNESS_BROWSER=1 THIX_HARNESS_INTEGRATION=1 node scripts/test-integration.mjs"
+    "test:browser": "THIX_HARNESS_BROWSER=1 THIX_HARNESS_INTEGRATION=1 node scripts/test-integration.mjs --dir test/browser",
+    "test:regression:core": "node scripts/test-integration.mjs --list core",
+    "test:regression:milestones": "node scripts/test-integration.mjs --list milestones"
   },
   "dependencies": {
     "@endo/captp": "workspace:^",

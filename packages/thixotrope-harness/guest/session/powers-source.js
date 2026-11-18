@@ -3,7 +3,7 @@
  * The session's `ExecPowersSource` (W5.5; `designs/m5-interfaces.md`
  * 2.4.4, D-11, rule 12.13): the session's label map as its exec vat reads
  * it. One exo per session, minted in `make` by the `powers` runtime part
- * (`m5-parts.js`); `tools/exec.js` sends it as `ExecRequest.powers` with
+ * (`runtime-parts.js`); `tools/exec.js` sends it as `ExecRequest.powers` with
  * every `run`, and only the exec program's closure holds it (model code
  * gets the per-call wrapper of `guest/exec/powers.js`).
  *
@@ -21,7 +21,7 @@
  *
  * Guest rules.
  */
-import { m5Interfaces } from '../lib/interfaces-m5.js';
+import { interfaces } from '../lib/guards/session.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { Labels } from './labels.js' */
@@ -33,7 +33,7 @@ const { makeExo } = /** @type {any} */ (globalThis);
  * @param {Labels} labels
  */
 export const makePowersSource = labels =>
-  makeExo('ExecPowersSource', m5Interfaces.ExecPowersSource, {
+  makeExo('ExecPowersSource', interfaces.ExecPowersSource, {
     /** @param {string} label */
     lookup(label) {
       const binding = labels.get(label);
@@ -60,7 +60,7 @@ export const makePowersSource = labels =>
 harden(makePowersSource);
 
 /**
- * The `powers` runtime part (`m5-parts.js`): its value is the
+ * The `powers` runtime part (`runtime-parts.js`): its value is the
  * `ExecPowersSource` exo itself (`tools/exec.js` sends
  * `context.runtime.powers` as `ExecRequest.powers`).
  */

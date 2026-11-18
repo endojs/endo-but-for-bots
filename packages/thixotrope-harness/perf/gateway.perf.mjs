@@ -55,7 +55,7 @@ const { inspectCall, defaultGuardLimits } =
 const { harnessNames } =
   await import('../resources/agent-host/impl/gateway/vocabulary.js');
 const { closeCodes, gatewayLimits, gatewayTexts } =
-  await import('../resources/agent-host/impl/gateway/contract-m3.js');
+  await import('../resources/agent-host/impl/gateway/protocol.js');
 
 const usage = {
   inputTokens: 10,
@@ -162,7 +162,7 @@ await runPerf('gateway', async ({ provision }) => {
 
     // ---- gateway.guard (in process)
     if (clock.fits(WINDOW_MS)) {
-      const { keys: vocabulary, methods } = harnessNames({ log: () => {} });
+      const { keys: vocabulary, methods } = harnessNames();
       // Records of vocabulary keys up to frameBytes.
       const record = { title: 'a title', key: 's1', text: 'some text here' };
       /** @type {any[]} */

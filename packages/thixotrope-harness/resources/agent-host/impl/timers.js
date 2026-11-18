@@ -9,7 +9,7 @@
 import { clearTimeout, setTimeout } from 'node:timers';
 
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { m1bInterfaces } from '../../../guest/lib/interfaces.js';
+import { interfaces } from '../../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 
 /**
@@ -45,7 +45,7 @@ harden(makeTimers);
  * @param {Timers} timers
  */
 export const makeTimerFacet = timers =>
-  /** @type {any} */ (globalThis).makeExo('Timer', m1bInterfaces.Timer, {
+  /** @type {any} */ (globalThis).makeExo('Timer', interfaces.Timer, {
     /** @param {number} ms */
     sleep: async ms => {
       await timers.delay(ms);

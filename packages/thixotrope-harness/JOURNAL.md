@@ -13157,3 +13157,514 @@ changed files: no error, warnings of kinds already present; prettier clean. Not 
 the perf list, `subscriptions-lifecycle` and `history.restart`/`journal` (which share the changed
 helpers `_m4.mjs` and `_long-session.mjs`). Last command: the commit of this entry.
 Fit: neutral.
+
+### J-10130 2026-11-18 G1 HR-SYN-7: explicit vocabulary tables, a failing table fails the bind - built
+Evidence: `b621c04535`. `guest/lib/vocabulary-tables.js` (Node only; no vat imports it) lists the
+five tables the gateway's vocabulary reads (`interfaces.js` with `shapes`, `interfaces`,
+`m2Interfaces`; the `vocabularyShapes()` of `interfaces-m3.js`, `-m4.js`, `-m5.js`,
+`-m5-factory.js`) and an exclusion list with reasons (`guards/base.js`, `session.js`,
+`factory.js`: re-exported whole by `interfaces.js`). `GW/vocabulary.js` `harnessNames({ tables? })`
+replaced the `interfaces-m*.js` glob and the `require` loader: a listed module that fails to load
+fails the import; an entry that throws or answers no array throws naming its file, so the gateway's
+bind fails (`incarnationParts` is not cached on failure). The `guestLibDir` and `log` options and
+the `vocabulary-skip` event are gone; 8 callers updated. Contract: `m3-interfaces.md` 4.4 rule 4,
+4a and 6.3, D-M3-4 amended; `architecture.md` and the extensions README follow.
+Numbers: 258 keys and 141 method names before and after (the task text said 140; the X1 fixture
+and a run at `802bd2767c` both give 141), 28 ms to build. Bundles unchanged: exec 63,826, factory
+164,836, session 214,690 bytes, digests identical.
+Fit: good.
+
+### J-10131 2026-11-18 G1 HR-SYN-7: the zero-skip test - test
+Evidence: `test/adapter/gateway-vocabulary-tables.test.js` imports every `.js` under `guest/lib`,
+counts a module as a table module when it exports a guard or pattern (directly or as a table
+entry), and checks (1) table modules = listed + excluded, (2) every interface guard of every table
+module contributes its keys and methods, (3) the sets equal the X1 fixture's, 258 and 141.
+`m3-w32-vocabulary.test.js`'s glob test became "only the listed tables are read; a failing table
+throws". Before: with the old `vocabulary.js` restored in place, 5 of the new and changed tests
+failed (the throw test did not throw); with an extra `guest/lib/interfaces-g1probe.js` table
+module (outside the glob's reach once renamed), (1) and (2) failed naming it; file removed after.
+After: 79 vocabulary, guard and interface tests pass; unit lane 1,249 passed, 116 skipped;
+`m3-gateway` integration exit 0 in 142.5 s (shared slot). Not changed: the extension loader's
+log-and-skip (`extensions.js`), which is M3 contract 6.1 with its own tests (HR-SYN-15).
+Fit: good.
+
+### J-10132 2026-11-18 G1 the duplicate ceiling in the lint lane - built
+Evidence: `1f5dedee5a`. `corepack yarn lint:duplicates` (also part of `yarn lint`) runs
+`scripts/check-duplicates.mjs`, which runs `designs/arch-review/tools/find-duplicates.mjs`
+unchanged over `guest resources ui` and exits 1 above 3.5 %. `--ceiling N` is for its test
+(`test/unit/check-duplicates.test.js`: passes at today's share, fails at 0).
+Numbers: 865 of 26,887 normalised lines (3.22 %), 41 clusters, 196 files, 0.1 s. The review's
+3.9 % (1,033 of 26,476 at `bd9a8ec070`, `ui/src` only) has fallen with the X1 split and the
+cross-lane fixes; the ceiling is set from today's 3.22 % plus 0.28 points.
+Fit: good.
+
+### J-10133 2026-11-18 G1 rules for all later work; the fold plan - design
+Evidence: `bf969cecef`: `milestones.md` conventions gain "Rules from the harness review" (names by
+vat or concept, fold unit, export not copy with the 15-line rule and the ceiling, fakes from
+guards, manager changes batched, objects at seams, a new job names its module); its directory
+registry no longer lists `interfaces-m*.js` or `<milestone>-<name>` files. `process.md` section 6
+gives the same rules for the PM, and the unit checklist runs `lint:duplicates`. `4dd2506626`:
+`designs/arch-review/fold-plan.md`, old -> new for the five interface modules, the two limits
+modules, `texts-m4.js`, the m1b/m2 views and method-list ingredients, `m5-parts.js`,
+`defaults-m4.js`, `contract-m3.js`, `m4-secrets.js`, the provision step, four perf files, 30 test
+helpers and fixtures, and the template ids. Nothing renamed.
+Reading: `interfaces-m3.js` and `-m4.js` are imported by the manager part (`durable.js`,
+`durable-gateway.js`, `durable-subscriptions.js`), so their fold is a reinstall: the plan puts
+it in the step-4 batch or behind a listed one-line re-export.
+Fit: good.
+
+### J-10134 2026-11-18 G1 time record - verified
+Time: first command 18:38:18Z. Over 60 s: unit lane 65 s; `m3-gateway` integration 143 s
+(shared slot). `tsc` exit 0; eslint on the changed files: no error (3 warnings already present in
+`perf/gateway.perf.mjs`); prettier clean. Not run: the browser files and the other integration
+files (no guest or manager change; the gateway bind is covered by `m3-gateway`), perf. Scratch
+`tmp/G1` removed. Last command: the date after the commit of this entry.
+Fit: neutral.
+
+### J-10135 2026-11-18 S1 HR-SYN-12: every backend kind names its fixed failure text - built
+Evidence: `48bb1848e9`. `BackendKind.unexpectedFailure` is required: `makeAgentHostImpl` refuses a
+kind table with a kind that has none (`assertBackendKinds`), and `makeEndpoint` takes the text
+as a required option instead of falling back to `scripted provider failed: <error.message>`. The
+scripted kind's text is the fixed `scripted provider failed`; the OpenRouter, Anthropic and pool
+kinds carry the texts their providers carried before (the providers no longer do). 13 test and
+perf call sites pass the kind's text. Before: with the old `endpoint.js` in place the two new
+endpoint tests failed (the record carried the error's message; an endpoint without the text was
+made). Fit: good; one source for the text.
+
+### J-10136 2026-11-18 S1 HR-SYN-22 and HR-SYN-9: the state layout once; one blob sweep per incarnation - built
+Evidence: `1c4f5a3a64`. `findStateDir` is the one reader of `argv[3]`; `makeAgentHostImpl` takes
+`stateDir` and works the layout out once, lazily (a caller naming only `blobDir` names
+`<state>/agent-host/blobs`); secrets, subscriptions and the gateway get that value; one quiet and
+one throwing sink getter. `BlobStore.sweep` runs once per incarnation and sets the daemon count
+(no more `+=` per bind; a rebind no longer deletes this incarnation's `.part` files, `w<pid>-<n>`
+writers included). The first staging sweeps when no bind did; until a sweep succeeds every
+staging is refused with `blobsUncountedText`. The bind reports a failed blob or archive sweep
+(`report` option, a JSON line on stderr by default) and goes on. The archive sweep stays per
+bind, now reported. New `test/adapter/agent-host-state-layout.test.js` (6 tests). Before (old
+`blobs.js`, `index.js`, old API only): a double bind counted 10,000 bytes as 20,000 and the
+`stateDir` option was ignored. Reading: an unreadable blob directory also failed staging before,
+at the directory fsync, so the old under-count needed a `readdir`-only failure. Fit: good.
+
+### J-10137 2026-11-18 S1 HR-SYN-10: Composer pre-check and one retired-break rule - built
+Evidence: `aea8c600a0`. With attachments `submit` runs the session's own `checkAttachments`
+(`guest/session/packages.js`, pure, adapter import; no bundle change) before staging. The guard
+prefixes, the inline-size prefix and the M5 texts cut at `(` are gone: the Composer's guard has
+the session's argument shapes and a staged call is never inline. A file is deleted only for the
+session's state refusals compared whole (request id invalid, expired, reused; receipt limit;
+queue full; for edit, entry gone). The shared retired-break rule is **keep**, for submit and
+edit: a break never means "not done" (M0 S9), so deleting could lose text a record holds, while
+keeping costs disk until delete or M13's sweep (M1b leak 4.7). Edit used to delete; m2-interfaces
+11 amended, with m1b 17.1 and the m5 Composer paragraph. Before: 4 new or changed tests failed on
+the old `composer.js`. Fit: good; residue is exact texts from the session's table, the
+`isRetiredBreak` idiom.
+
+### J-10138 2026-11-18 S1 HR-SYN-13 first half: the live probe injected - built
+Evidence: `84bb177365`. No file switches the probe on. `makeChannelRegistry` has none unless
+passed; `makeAgentHostImpl({ probe })` defaults to `liveProbeFromEnv(env)`, which reads
+`THIX_HARNESS_LIVE_PROBE_DIR` (added to the supervisor allowlist). `perf/turn.perf.mjs` names it
+through a new `provision({ env })` option, so only the daemon a perf run serves has it. A process
+boundary leaves launch configuration as the only injection. `BackendSpec.logPath` left for step 4.
+Not run: `perf/turn.perf.mjs` (perf, exclusive).
+Fit: neutral; the environment route is the narrowest the core allows today.
+
+### J-10139 2026-11-18 S1 HR-SYN-8: secret writes safe across a retired break - built
+Evidence: `39ab65a208` (store), `9d43c8141a` (manager). The store answers a repeated create of an
+entry that is exactly a fresh create (same label and description, generation 0, active, no
+value) without a second write; any other is `CREATE_FAILED`. `withOps(fn, retry)`: Secret.delete's
+retry takes `UNKNOWN_SECRET` as the applied delete. `m2-w23-manager` kit gained a fault hook
+(apply, then die before answering). Before: the 3 HR-SYN-8 tests failed (create threw, orphan
+entry; deleted Secret stayed listed). Fit: good.
+
+### J-10140 2026-11-18 S1 HR-SYN-11: pagers by creation serial, strict cursors - built
+Evidence: `9d43c8141a`, `088647510a` (m4-interfaces amended). `serialCursor` accepts canonical
+digits only; `list`, `catalog` and `listMembers` use it with their old refusal texts. The
+catalogue pages by the Secret's serial; members carry a `serial`. Before: 4 tests failed (a delete
+between catalogue pages skipped the first secret after the page; `1e3` was a cursor). Reading:
+`maxMembers` (64) equals `poolPageEntries` (64), so members fit one page today and the member
+skip was latent. Manager rows 8 and 11 are one batch: one reinstall. Fit: good.
+
+### J-10141 2026-11-18 S1 tests and lanes - test
+Adapter lane: 446 passed (64 s). Unit lane with `test/*.test.js`: 814 passed (15 s). Integration,
+shared slots, `--jobs 4`: m1a-slice, m1b-live, m2-secrets, m2-lifecycle, m2-queue, m4-secrets,
+m4-catalog, m4-pools all exit 0, 583.6 s wall, 1,286.9 s held, no `sweep-failed` line. `tsc` 0;
+eslint no error on changed files; prettier clean; `lint:duplicates` 3.22 % (869 of 26,998).
+Bundles (no guest file changed by S1): session 214,690, exec 63,826, factory 164,836 bytes, same
+before and after. Fit: good.
+
+### J-10142 2026-11-18 S1 rows not built here - reading
+Swallowed errors kept as do-now rows on the adapter side: only the two start-up sweeps
+(HR-SYN-9), now reported. HR-GUEST-12 (factory start listener) is guest side, not built.
+HR-SYN-22's lasting part (a core state-directory power, AR-SYN-28) and the gateway's own default
+(`gateway/index.js` still guesses when called alone) are outside S1's files. Fit: neutral.
+
+### J-10143 2026-11-18 S1 time record - verified
+Time: first command 18:52:15Z. Over 60 s: adapter lane 64 s; integration batch 583.6 s wall.
+Scratch `tmp/S1` removed. Last command: the date after this entry's commit. Fit: neutral.
+
+### J-10150 2026-11-18 S2 HR-SYN-19: every perf window through windowMs - built
+Evidence: `f740d47b03`. 24 window reads in 18 perf files (`_m3-client`, `_m4`, `archive` x2,
+`creation-m5` x2, `exec-m5` x2, `gateway-restart` x2, `history`, `history.restart`, `import` x2,
+`journal`, `mentions`, `presets` x2, `provider`, `queue`, `subscriptions-lifecycle`,
+`throughput`, `tools`, `ui`) read `Number(process.env.X ?? n)` and ignored `PERF_WINDOW_SCALE`;
+they now call `windowMs(name, fallback)`. `windowMs` takes `{ scaled, env }`; the one unscaled
+read is `M3_RESTART_END_MS`, the gateway-restart file deadline (a bound inside the box, not a
+window). `test/perf-window.test.js` (new) covers `runWindow` (min, max, back to back),
+`windowFields` and `windowMs`, and scans `perf/*.mjs` for a window variable read outside
+`windowMs`. Before: 2 of its 5 cases failed (the env option, 24 bypassing reads); after: 5 pass.
+At the default scale every window is the same number as before.
+Reading: the reviewer's unscaled candidates (`history.restart`, `gc`, `journal`) did not fail
+falsely at 0.05 (J-10153): their restart windows already hold a `runWindow` minimum (gc 2,
+restart 3, crash 3), so no other window takes `scaled: false`.
+Left for step 5 (not merged here): `_m4.inWindow`, `_m3-client.measureWindow`,
+`_long-session.overWindow` and the other private window helpers and 13 inline loops onto
+`runWindow`; the 14 medians beside `summarize`; `window` as a number in 7 rows; the perf variable
+table (README:217 still says the scale reaches "every window", now true for every read).
+Fit: good.
+
+### J-10151 2026-11-18 S2 HR-SYN-38 and the regression lists as scripts - built
+Evidence: `ab86c27484`. `scripts/test-integration.mjs`: `--dir DIR` (repeatable),
+`defaultFiles(dirs)` with `.test.js` and `.test.mjs`; `test:browser` passes `--dir
+test/browser`, `test:integration` keeps `test/integration` + `test/template` (51 files, same list
+as before). `--list core|milestones|M3|M4|M5` runs a process.md 3.1 list as one batch:
+`corepack yarn test:regression:core` (unit and adapter lanes without a slot, then the 24 M0-M2
+files and the template test) and `test:regression:milestones` (M3, M4, M5: 26 integration + 5
+browser files); integration and browser variables are set per file. Every summary now prints
+held and waited time per file from `runs.jsonl` (the wrapper's line: label, lane, start time) and
+the wall time. `test/integration-runner.test.js` (new, 5 cases; before: import failure) checks
+the defaults, `--dir`, that every integration, template and browser file is in exactly one list,
+and the run-log match.
+Run: `corepack yarn test:browser --jobs 3` with no file ran the 5 browser files, all exit 0,
+634.8 s held, 219.8 s wall (m3-ui 116, m3-ui-history 119, m3-ui-restart 213, m4-ui 86, m5-ui
+100). The two regression scripts were not run whole.
+Fit: good.
+
+### J-10152 2026-11-18 S2 HR-SYN-20, HR-SYN-21: one template key; scoped key file and spike switch - built
+Evidence: `fb6475f421`. `templateDigest`/`templateKey` (`test/template/index.js`) key every
+template: the worker binary, `boot.js`, `worker-peer.js`, every `.js` under
+`packages/thixotrope/src` but `tui/` and `web/` (WORKSPACE_VERSION's file; the regex and its
+`'?'` are gone, a missing input throws naming it), crank budget, slot ceiling and persisted serve
+settings, the id; for a provisioned template also each guest program's bundle digest (exec,
+factory, session), every file under `guest/`, the manager part (`resources/agent-host/*.js`),
+`provision-steps.js` and its step files, `bundle-guest.mjs`, `guest-prelude.js`, `config/`; plus
+the caller's `sources` (files or directories) and `extra` (JSON). Paths are hashed relative to
+the repository, so worktrees with the same content agree. Removed: `TEMPLATE_VERSION`,
+`M3_TEMPLATE_VERSION` (m3-300 now names `_m3-client.mjs`, `scripts/export.mjs`,
+`_m2-lifecycle.js` and `impl/archive`), `LONG_TEMPLATE_VERSION` (the long-session keys are
+`templateDigest` with the same sources, 12 hex digits; the description file keeps a format
+`version: 1`), the `_m4.js` extra hash and the `_m5-objects.js` fixture hash (m5o names
+`test/fixtures/m5-objects.js`). HR-SYN-21: `integrationEnabled` is `THIX_HARNESS_INTEGRATION`
+only; `startFromTemplate` and the perf `provision` take `secretsKeyFile` (`supervisorEnv`: that
+supervisor's environment, every restart of it); `useKeyFile` became `testKeyFile` in
+`test/integration/_m4.js` and `perf/_m4.mjs` and no longer sets `THIX_HARNESS_SECRETS_KEY` in the
+process. Four new cases in `template.test.js` (before: import failure; after: 9 pass).
+Rebuild, once (parallel shared slots, 175 s wall): m1a 67 s, exec 80, pool 76, m4 72, m5o 79,
+m3-300 116 (built, not imported from a cache); long 200 33 s, long 1000 169 s, busy 10x300 358 s.
+Not built: long 5000 and busy 20..50 (about 33 minutes more of chain from the X-CLOSE times).
+Runs: `template.test.js` 121 s, `m4-secrets` 112 s, `m4-restart` 181 s, `m5-objects` 199 s held,
+all exit 0. Reading: S1's manager commit `9d43c8141a` landed between the long 200 and long 1000
+builds and changed the key of long 200, which was rebuilt (26 s): the key follows the manager
+part, as intended. Left: `templateIdFor` and the m1a/m1b template options are still in product
+provisioning with their own hash in the id (HR-SYN-20's "before M6" part, HR-TEST-5); the
+other key-file setters (`useTestWrappingKey`, `m2-secrets`, `m2-providers`, `m2-catalog`) still
+set the process variable (step 3).
+Fit: good.
+
+### J-10153 2026-11-18 S2 every perf check at PERF_WINDOW_SCALE=0.05, shared - measured
+Each file as `node scripts/run-lock.mjs --shared -- node perf/<name>.perf.mjs --shared`, 3 then 2
+at once, load 3-5, beside S1's and other lanes' runs; HISTORY_POINTS=200, JOURNAL_POINTS=1000,
+THROUGHPUT_SESSIONS=10, THROUGHPUT_BUSY=10. 38 files, **4,267 s held** (the full-scale passes
+held about 8,175 s), 19:13-19:41 wall plus the two history files rerun; no time-out, no `.error`
+row, longest 385 s (crash: count-based). Held s: gateway-session 84, gateway 49, ui 106,
+subscriptions 117, secrets 67, gateway-restart 215, accounts 17, creation-m5 68,
+subscriptions-lifecycle 321, exec-m5 134, mentions 50, presets 59, tools 144, gc 219,
+concurrency 88, journal 34, crash 385, throughput 101, restart 204, restart.crash 186, hub 78,
+hub.sessions 220, crank 32, hub.growth 168, crank.mid 68, exec 85, frames 69, crank.late 147,
+turn 79, install 67, queue 4, provider 7, pool 121, session 169, import 72, archive 166,
+history.restart 22, history 45. Several include a template rebuild on demand (S1's manager
+commit invalidated them mid-run). Exit 1 in 16 files are budget misses under load and with few
+samples (the known ones: crash.restart.bound5, session.create.pool, concurrency.10, mentions,
+presets, tools.local, archive.stall); `exec.tooBig.probe.b` failed its result check, not a
+window (left for its owner). The rows are a smoke, not recorded numbers.
+Fit: good (the knob now reaches every file); poor where setup dominates (subscriptions-lifecycle,
+crash, restart, gateway-restart stay over 3 minutes).
+
+### J-10154 2026-11-18 S2 perf:pass <milestone> - built
+Evidence: `5b8d7f1d05`, `43c1fb7997`. `perf/_pass.mjs` (`corepack yarn perf:pass M2|M3|M4|M5|all
+[--no-templates]`): the milestone templates each in a boxed shared wrapper (`node perf/_pass.mjs
+templates <name>`), the long-session ones for M2 and `all`, then the milestone's checks plus
+the cross-check (session, turn, exec) back to back, each `run-lock.mjs --exclusive --label
+perf-<name>` (ui with THIX_HARNESS_BROWSER=1), and a table of held time per file from
+`runs.jsonl` and the wall time. `test/perf-pass.test.js` (new, 3 cases) checks each of the 38
+checks is in exactly one list. Only the template step was run (the six builds of J-10152); the
+exclusive pass itself was not run (it stops every lane).
+Fit: good.
+
+### J-10155 2026-11-18 S2 time record - verified
+Time: first command 18:52:15Z. Over 60 s: six template builds in parallel 175 s; long-session
+templates 19:12-19:27 (33 + 169 + 358 s builds, waits); `test:browser` 220 s wall; four
+integration files 403 s wall; perf smoke 19:13-19:41 (4,267 s held, 489 s waited); history
+reruns about 70 s; unit lane 67 s (1,284 passed, 116 skipped). `lint:duplicates` 3.22 % (869 of
+26,998). tsc: no error in the files of this unit (errors seen came from another unit's
+uncommitted adapter edits). No guest or manager change: bundles exec 63,826, factory 164,836,
+session 214,690 bytes before, unchanged by this unit. Scratch `tmp/S2` removed.
+Fit: neutral.
+
+### J-10160 2026-11-18 F2 HR-SYN-23 guest stubs and seams - built
+Evidence: `319366eb5f`. The session runtime refuses a part table without powers, inspector,
+grants or packages (`makeRuntime` throws `no runtime part <name>`), so the nine guest
+`textOf.notBuilt` sites go (`Session.grants`, `enqueueMessageOnce`, the object, inspection and
+package tools, the prompt resolver). `export.js` loses its `typeof` fallbacks (`records.base`,
+`runner.beginDelete`), the turn runner its ignored `contextSource` option, `turn.js` its
+`plainBytes` re-export, `exec/main.js` its "kept for its tests" re-export. `textOf.notBuilt`
+moves to the Node table: the adapter's ops facets (`attach.js`, `index.js`,
+`credential-ops.js`) still answer it until the step-4 reinstall (HR-SYN-2). Tests that built a
+session with a part subset now pass every real part or a stand-in; the construction test fails
+on the old `m5-parts.js`. Bytes: session 214,690 -> 213,474, exec 63,826 -> 63,590, factory
+164,836 -> 164,613. Not done: `site ?? 'adapter'`, `queue.release`/`assertNoActiveTurn`, the
+factory's optional pool and settings, `context-source.js`'s `archive === undefined`, the
+adapter's empty `channelTaps` and `live-service.js`, the dead exports.
+Fit: good (a missing part is now a construction error, as the review asked).
+
+### J-10161 2026-11-18 F2 HR-SYN-1 one limits table and the M5 fold - built
+Evidence: `46b5602b19`, `a1373d71b9`. `limits-m5.js` `limitsM5` folds into `limits.js` `limits`
+(no collision among 91 + 37 names; derived entries read the module's own `core`).
+`interfaces-m5.js` and `interfaces-m5-factory.js` fold into `guards/base.js` (exec entries),
+`guards/session.js` and `guards/factory.js`: one guard per interface under its plain name, the
+widest version (`Session` +2 methods, `Composer.submit` options, `ExecScope.inspect`, `Operator`
++2, `Preset` M5's five). The M1b and M2 views go from `interfaces.js` (23 readers rewired, the
+manager part `durable.js` among them); the exec program's copy in `render.js` goes;
+`m5Widenings` were already equal to the plain shapes. Proof: `guards-split.test.js` now compares
+through `test/fixtures/guard-fold-map.json` with the X1 snapshot plus a before-fold snapshot of
+the M5 texts and names: 128 entries re-keyed, 96 old entries removed with reasons, every digest
+equal; gateway sets 258 keys and 141 methods, unchanged. Found: the gateway's LiveSubscription
+wrapper read `m1bInterfaces.LiveSubscription`, which the view never held, so it has always run
+unguarded; kept so (behaviour-preserving), reported. Bytes: exec 63,590 -> 61,544, factory
+164,613 -> 154,740, session 213,474 -> 206,850.
+Fit: good (the session program has 33 KB of its 240 KB left, against 25 KB at the start).
+
+### J-10162 2026-11-18 F2 HR-SYN-1 renames by concept - built
+Evidence: `33e726b912`, `93b410bf4b`, `b9b535e034`, `ac3d38e184`, `aefefc1cf0`. `git mv` then
+importers, no compatibility names: `runtime-parts.js` (`runtimeParts`),
+`config/subscription-defaults.js`, `AH/gateway/protocol.js`, `AH/gateway/extensions/secrets.js`
+(its `name` stays `m4-secrets`), `subscription-limits.js` (`subscriptionLimits`; the plan said
+`host-limits.js`, corrected: `hostLimits` is the tests' name for `config/defaults.js`),
+`subscription-texts.js` (`subscriptionTexts`, `subscriptionTextOf`, `subscriptionCodes`), and
+`shapes.ExecScopeInfo` for `ExecLease`. `fold-plan.md` section 6 is the rename map; each contract
+carries a note pointing to it. Left for the step-4 reinstall: `interfaces-m3.js`,
+`interfaces-m4.js` and their `m3*`/`m4*` exports; the guards' build ingredients are still
+exported. Not done: section 4 (test helpers, template ids) and the perf file renames.
+`SealedText` is not renamed: it is an exo name that crosses CapTP. Bytes after the renames:
+factory 155,052, session 206,925 (longer names).
+Fit: neutral (mechanical; the rewriter tool's spread handling had to be fixed once).
+
+### J-10163 2026-11-18 F2 HR-SYN-27 guest helpers - built
+Evidence: `50c997c4cc`. One `messageOf` in `guest/lib/bounded.js` (the guarded form `render.js`
+had) replaces seven copies; the old copies answered the same text for every value they did not
+throw on (a symbol or a hostile `toString`). `turn.js` uses `tools/exec.js` `NOT_RUN_TEXT`
+(no cycle: `tools/exec.js` never imports `turn.js`). New `test/unit/guest-helpers.test.js`.
+Bytes: exec +144, factory +363 (bounded.js now holds it), session -18: removing six small
+functions saved little against the import lines. The adapter's and UI's copies, the serial
+queues and the surrogate-safe cuts (all outside `guest/`) are not touched.
+Fit: neutral for bytes, good for one behaviour.
+
+### J-10164 2026-11-18 F2 HR-SYN-34 closed accounts watch as a field - built
+Evidence: `4eda82d98d`. `AccountsBatch` gains optional `closed` and `reason` (`idle`, `client`,
+`stopped`); a closed watch answers `{ rev, pools: [], closed: true, reason }` instead of
+rejecting with `accountsWatchClosed`, and `ui/src/accounts/feed.js` re-watches on the field
+(bounded, then the same text shown). The gateway's key set is unchanged (both keys existed).
+Contract change: `m4-interfaces.md` 6 and its call table; the fold map lists the two changed
+guards. The Claude overload half was already done by `2fda3d801f` (`ProviderFailure.errorType`).
+Fit: good.
+
+### J-10165 2026-11-18 F2 proofs - verified
+Unit and adapter lane after every code commit: 1,283 then 1,285 passed (116 skipped; the
+baseline's one failure, `run-lock-slots` two CLI takers under load, did not recur). tsc clean;
+eslint 0 errors over guest, resources, ui/src, test, config, scripts, perf (the gitignored
+`gateway/assets/` build output excluded). `lint:duplicates` 3.22 % -> 3.00 % (802 of 26,741).
+Integration, shared, `--jobs 5`: m1a-slice, m1a-provision, m2-queue, m2-lifecycle-export,
+m3-gateway, m3-sessions, m4-pools, m4-accounts, m5-objects, m5-security, m5-snapshot all exit 0
+(387 s wall, 1,772 s held, templates rebuilt). Browser, `--jobs 5`: the five files exit 0 (195 s
+wall, 692 s held). Bundles start -> end: exec 63,826 -> 61,688, factory 164,836 -> 155,427,
+session 214,690 -> 206,907 bytes. Largest left: `guards/session.js`, `turn.js` (35 KB stripped),
+`guards/factory.js`.
+Fit: good.
+
+### J-10166 2026-11-18 F2 time record - verified
+Time: first command 19:44:03Z. Over 60 s: unit lanes about 67 s each (eleven runs); the eleven
+integration files 387 s wall; the five browser files 195 s wall; one before-check of the UI feed
+ran into AVA's 2-minute timeout. Manager part changed (`durable.js`, `durable-subscriptions.js`
+imports; `interfaces-m4.js` shape): one reinstall for the batch. Scratch `tmp/F2` removed.
+Fit: neutral.
+
+### J-10180 2026-11-18 CL-QC independent review of the step 1-2 cleanup - verified
+Evidence: `802bd2767c..f6a844cbbf` (29 commits, 281 files), read in full for the product
+modules; G1, S1, S2 and F2 reports checked against the code. No file but this journal changed.
+Behaviour-preserving commits: the fold's guard tables equal the base entries digest for digest
+(`guard-fold-map.json`); the plain names that widened (`interfaces.Session`, `Composer`,
+`ExecScope`, `Operator`, `Preset`, `shapes.ExecRequest`) were read at the base only by the stand-in
+programs and through `extendInterface` to the M5 guard, so no product exo changed guard. The seven
+`messageOf` copies answer the same text for every value they answered; `NOT_RUN_TEXT` is the
+removed `CANCELLED_BEFORE_RUN` text byte for byte. The gateway `LiveSubscription` wrapper was
+unguarded at the base too (`m1bInterfaces` never held it). Every old name of the rename map was
+grepped across guest, resources, ui, scripts, perf, test and package.json: no import is left;
+stale mentions remain only in comments (J-10182). `tsc` exit 0; the UI builds (esbuild, no missing
+export); package eslint has no error outside the ignored built asset.
+Fit: good.
+
+### J-10181 2026-11-18 CL-QC correctness fixes tried against the code - verified
+Evidence: scratch probes (removed). HR-SYN-7: the live `harnessNames` at the base (glob, no skip
+logged) and at HEAD (list) give the same 258 keys and 141 methods, compared set for set. HR-SYN-9:
+a `release` that starts before the incarnation's first sweep leaves the deleted bytes counted (9
+of 50 runs: daemon 10,000 with no file left), because `release` awaits only a sweep already in
+flight (`sweeping?.catch`). Over-count only (quota refuses early, never late), for the rest of the
+incarnation. With `await sweep().catch(() => {})` in its place: 0 of 50. HR-SYN-8: the store's
+fresh-entry answer and the delete retry's `UNKNOWN_SECRET` acceptance hold for the retry path; the
+retried create audits a second attempted/succeeded pair. HR-SYN-11: cursors are strict digits;
+member serials and the catalogue serials are heap state rebuilt by a reinstall (D-13), no
+migration needed. HR-SYN-34: no consumer besides the UI feed relied on the rejection.
+Fit: good.
+
+### J-10182 2026-11-18 CL-QC findings - verified
+1. `impl/blobs.js` `release`: start the sweep, not only wait for one in flight (J-10181).
+2. `scripts/check-duplicates.mjs`: the share is 3.00 % (802 of 26,741, 37 clusters) at
+   `f6a844cbbf`, against 3.22 % (865 of 26,895, 41 clusters) at `802bd2767c`; the script's own rule
+   ("lowers the ceiling in the same commit, about 0.25 points of margin") wants 3.25, it is 3.5.
+3. `test/integration/m5-reachability.test.js` walks `[interfaces, interfaces, interfaces,
+   interfaces]` (a mechanical rename): same result, four copies of every guard; one table.
+4. `designs/m3-interfaces.md` W3.2 export table still gives `harnessVocabulary({ guestLibDir?, log })`
+   and the `vocabulary-skip` log.
+5. Stale comments naming `interfaces-m5*.js`, `m5Shapes`, `m5FactoryShapes`: `guest/exec/main.js`,
+   `guest/exec/inspect.js`, `guest/lib/preset-catalog.js`, `guest/lib/tool-args.js`, `ui/src/presets/`,
+   `ui/src/mentions/texts.js`, two tests. Guest ones belong in the step-4 rebuild batch.
+6. Template keys hash `impl/archive` for the turn-running templates (m3-300, long) but not
+   `impl/blobs.js`, whose files those templates carry.
+Fit: good.
+
+### J-10183 2026-11-18 CL-QC runs - measured
+Unit and adapter lane: 1,285 passed, 116 skipped, 66.5 s. Shared slots, `--jobs 4`, 396.9 s wall:
+m2-secrets 127.5 s, m4-accounts 141.5, m4-pools 146.3, m4-wire 156.7, m4-retire 81.0,
+m5-reachability 138.4, m2-queue 156.0, m1b-followups 269.4; all exit 0. Bundles (no guest change
+by this unit): exec 61,688, factory 155,427, session 206,907 bytes, the figures F2 reported.
+Fit: good.
+
+### J-10184 2026-11-18 CL-QC time record - verified
+Time: first command 20:38:43Z. Over 60 s: unit lane 66.5 s; integration batch 396.9 s wall.
+Not run: browser files, perf checks, the other 43 integration files. Scratch `tmp/CL-QC` removed.
+Fit: neutral.
+
+### J-10185 2026-11-18 CL-FIX HR-SYN-9 release race - fixed
+`impl/blobs.js` `release` now awaits `sweep().catch(() => {})` (start or join the incarnation's one
+sweep) in place of `sweeping?.catch(...)` (a sweep already in flight only). New adapter test in
+`test/adapter/agent-host-state-layout.test.js`: 20 files of an earlier store, then
+`Promise.all([release(10 keys), sweep()])` on a fresh store, 20 times; the daemon count must equal
+the bytes on disk. Before the fix it failed on the first run in 3 of 3 runs, and the count was too
+LOW (4,500 against 5,000): the race refunds twice as well as leaving bytes counted, so the quota
+could also refuse late. After: 7 tests pass, 3 of 3 runs. Commit 97aaf11e4b. Adapter file only:
+a daemon restart, no reinstall.
+Fit: good.
+
+### J-10186 2026-11-18 CL-FIX hygiene findings - fixed
+Duplicate ceiling 3.5 -> 3.25 % (share 3.00 %, 802 of 26,741 lines, 37 clusters), 88f0ee93f0.
+`m5-reachability` walks `Object.values(interfaces)` once, 436b6cb9f8 (3 tests pass, 120.2 s).
+`m3-interfaces.md` W3.2 row gives `harnessNames({ tables? })` / `harnessVocabulary({ tables? })`,
+31a13e6676. Stale `interfaces-m5*.js` / `m5Shapes` / `m5FactoryShapes` / `m5ToolArgumentNames`
+comments in guest, ui and one test renamed to the guard modules, 323e42e5bc.
+Fit: good.
+
+### J-10187 2026-11-18 CL-FIX template keys and bundles - measured
+`perf/_long-template.mjs` and `perf/_m3-client.mjs` sources name `impl/blobs.js` (aaa219050c);
+checked with `templateInputs`: the m3 template's inputs list it now and did not at HEAD before.
+Those templates rebuild once. Bundles before and after the guest comment edits are byte-identical:
+exec 61,688, factory 155,427, session 206,907 bytes, same digests (the bundler drops comments), so
+the guest edits did not need the step-4 batch for bundle bytes.
+Fit: good.
+
+### J-10188 2026-11-18 CL-FIX checks - measured
+tsc exit 0; eslint on the 14 touched files: 0 errors (warnings as before, one new
+safe-await-separator warning in the new test's loop, the pattern of its neighbours); prettier
+clean on every changed hunk (`agent-host-state-layout.test.js` had formatting drift before this
+unit, outside its hunk, left alone). `m5-w58-presets` and the layout file: 13 tests pass.
+Fit: neutral.
+
+### J-10189 2026-11-18 CL-FIX time record - verified
+Time: first command 20:52:07Z. Over 60 s: m5-reachability integration 120.2 s (shared slot); one
+layout-file run went past 120 s in a loop of three. Not run: the full unit lane, other integration
+files, browser files, perf checks, template rebuilds. Scratch `tmp/CL-FIX` removed.
+Fit: neutral.
+
+### J-10190 2026-11-18 CL-CLOSE templates rebuilt under the new keys - measured
+Every template key changed with the fold (guest bundles, manager part, `impl/blobs.js`). Milestone
+templates, six in parallel shared wrappers (`node perf/_pass.mjs templates <name>`): 166 s wall;
+held `m1a` 122 s, `exec` 129, `pool` 130, `m4` 117, `m3-300` 166 (build 66, 71, 72, 58, 107 s
+inside them); `m5o` was current (CL-FIX's run). Long-session chain
+(`node perf/_long-template.mjs history journal throughput`, one shared slot beside the regression
+run and the perf pass), 21:03-22:12 UTC: held long 200 / 1,000 / 5,000 90 / 155 / 481 s, busy
+10..50 382, 384, 355, 355, 356 s (2,558 s held; 69 min of wall, 1,207 s of it waiting while the
+exclusive perf pass ran). X-CLOSE held 89 / 158 / 473 and 440..357 s: the same.
+Fit: neutral: one rebuild per bundle change, as designed (HR-SYN-20).
+
+### J-10191 2026-11-18 CL-CLOSE regression run on the cleaned tree - measured
+At `bd4c811b7b` (only documents edited), 6 jobs, shared slots, load 1.9-5.7, the long chain
+holding one slot. `corepack yarn test:regression:core`: unit and adapter lanes 1,286 passed, 116
+skipped, 67.3 s; 25 files, 4,194 s held, 859 s wall (927 s with the lanes), 24 pass. The failure:
+`m1b-exec-tool` acceptance 11 got `'4'` (the sleeping call's own answer) where the worker killed
+on every attempt should end it with the exec-terminated text (`m1b-exec-tool.test.js:270`); held
+163 s at load 4-5. Alone it passed at once (154 s held, the test 96.7 s), and it passed in every
+earlier recorded run (M2-R3, M2-CLOSE, X-CLOSE). Reading: the killer polls `ps` every 20 ms for
+the vat's incarnation path and missed the 4 s sleep under load; a load flake of a kill-timing test,
+not a cleanup defect; not fixed. `corepack yarn test:regression:milestones` (the browser files
+included): 31 files, 3,301 s held, 703 s wall, all pass; slot waits up to 340 s
+(`m3-ui-history`). Longest held `m2-lifecycle-export` 273 s. Both lists fit the 20-minute rule;
+56 files 7,494 s held against X-CLOSE's 7,263 s. Per file: `process.md` 3.1.
+Fit: good: the fold and the step 1 fixes moved no behaviour any file sees.
+
+### J-10192 2026-11-18 CL-CLOSE exclusive perf mini-pass - measured
+21:30:44-21:51:04 UTC, `70e7be3553`-dirty (documents), load 1.3-3.5, back to back exclusive:
+session 158 s held, turn 128, exec 108, gateway 329 (exit 1), subscriptions 209, exec-m5 275
+(exit 1); 1,207 s held, 1,220 s wall. Against X-CLOSE (J-10061..J-10063) and K2 (J-10085):
+`session.program` 206,907 bytes (214,690); `session.createCold` 6,095 ms median, p99 6,331, n 5
+(6,249, n 5): 154 ms less for 7,783 fewer bytes, about 20 ms per KB against the 26 ms per KB the
+M2 -> X-CLOSE growth cost (719 ms for 27,692 bytes; n 5, so within noise of that rate); `install.factory` 6.32 s (6.55); `turn.start` 118 ms, p99 462,
+2 deliveries (112, p99 352); `turn.delta` 0.20 ms (0.21); `exec.first` 295 ms (299);
+`exec.trivial` 66 ms (68); `exec.sends.answered` 1,089 ms (1,130); `gateway.fetch` 0.51 ms
+(0.52); `gateway.guard` 0.117 ms (0.113); `ui.call` 23 ms (23); `ui.submit` 43 ms (42);
+`ui.deltaFanout` 2 ms (2) but 5 deliveries over 1,100 deltas, 0.0045 per delta against 0 (X-CLOSE
+0; the lane 0.007-0.010): the carried intermittent miss, not the fold; `subscriptions.select`
+0.090 ms (0.090); `.turnStart` 248 ms, p95 321, min 97 (118): rerun alone exclusive 110 ms, p95
+322, min 96 (held 207 s), so one window with more slow turns, not a shift; `.servedWrites` 0.99
+then 1.00 cranks (1.00); `.handover` 3.4 ms (2.7); `exec.powersLookup` 53.5 ms (53);
+`exec.membrane` -9.9 ms (-10.8); `exec.scope1000` 58 ms (60). `exec.tooBig.probe.b` failed its
+check: the 200 KB help is refused by the hub since core CC-027 and `describeCapability` answers
+its methods with documentation unavailable; `m5-objects` accepts that outcome since `385b8a703c`
+(C-VERIFY) but `perf/exec-m5.perf.mjs` was not updated (S2 saw the same at J-10153). Not from the
+fold, not fixed here (the file is outside this unit). `subscriptions.bundles` still compares with
+the stale `3588cab190` baseline (session +20,459, was +28,242).
+Fit: good: the fold moved no number except the session program's size and its cold creation.
+
+### J-10193 2026-11-18 CL-CLOSE what steps 1 and 2 achieved; documents - decision
+From `802bd2767c` to `bd4c811b7b`, 38 commits by G1, S1, S2, F2, CL-QC, CL-FIX. Product source
+(`guest`, `resources`, `ui/src`, JavaScript lines): 55,037 -> 54,756 (guest 20,732 -> 20,174;
+resources 25,362 -> 25,639 with S1's fixes; ui 8,943 both). Milestone-named product files 11 ->
+2 (`interfaces-m3.js`, `interfaces-m4.js`); milestone-named identifier sites (`m1b...`, `m5...`)
+in guest, resources, ui and config 562 -> 222, distinct names 52 -> 35; `notBuilt` stubs in
+guest code 12 -> 0 (the adapter's 5 left); `lazyTable` copies 4 -> 3; guest `messageOf` 7 -> 1.
+Duplicate share 3.9 % (review, `bd9a8ec070`) -> 3.22 % (`802bd2767c`) -> 3.00 % (802 of 26,741
+lines, 37 clusters), ceiling 3.25 % in the lint lane. Bundles: session 214,690 -> 206,907,
+exec 63,826 -> 61,688, factory 164,836 -> 155,427 bytes. Rows (harness.md section 8): done
+HR-SYN-8, -9, -10, -11, -12, -34, -38; partly -1, -7, -13, -17 (by earlier work), -18, -19, -20,
+-21, -22, -23, -27, -33; open -2..-6, -14..-16, -24..-26, -28..-32, -35, -36, HR-GUEST-12; -37
+leave. Documents: `harness.md` section 8 (status of every row), `README.md` (lint, the key
+file, the live probe variable, `test:browser` with no file, the regression scripts and their last
+run, `perf:pass`, template commands, every window through `windowMs`, bundle sizes),
+`process.md` 3.1 (held and waited per file with the X-CLOSE column), 3.2 (`perf:pass`, this
+mini-pass), 6 (ceiling 3.25 %), `milestones.md` (fold notes under M1b-M5; the ceiling).
+Fit: neutral.
+
+### J-10194 2026-11-18 CL-CLOSE time record - verified
+Time: first command 20:59:40Z. Over 60 s: milestone templates 166 s (parallel); unit lanes inside
+the core list 67 s; core list 927 s; `m1b-exec-tool` alone 266 s (112 s of it waiting);
+milestones list 704 s; long-session chain 21:03-22:12 (background); exclusive mini-pass 1,220 s;
+`subscriptions` rerun 506 s (299 s waiting for the chain's step). Read only: harness.md,
+process.md, README, milestones.md status parts, the unit reports. No code, test or perf file
+changed. Scratch `tmp/CL-CLOSE` removed.
+Fit: neutral.

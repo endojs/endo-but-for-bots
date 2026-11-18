@@ -14,7 +14,7 @@
  * `AdapterToolEntry` of the session's ports, and the session offers the
  * model the tool through its generic adapter-tool entry (D-M4-9 as amended
  * at the cross-lane merge, XC; `guest/session/tool-table.js`).
- * On a backend that is not a pool it answers `m4Texts.noSubscriptionAccounts`
+ * On a backend that is not a pool it answers `subscriptionTexts.noSubscriptionAccounts`
  * (R4-91). Session usage comes from one `E(session).getUsage()` per call
  * (one session delivery); the accounts are read in process (zero manager
  * deliveries when the pool is registered in this incarnation, else the

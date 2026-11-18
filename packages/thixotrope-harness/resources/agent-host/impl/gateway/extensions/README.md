@@ -9,13 +9,14 @@ await. A file that throws while loading, has no `gatewayExtension` export,
 or exports one of the wrong shape is logged and skipped; the gateway still
 serves.
 
-A file is owned by the milestone that adds it (`m4-secrets.js`,
-`m11-audio.js`, ...).
+A file is named for what it serves, not for the milestone that adds it
+(`secrets.js`; a later `audio.js`). The extension's `name` stays what it
+was (`m4-secrets`): renaming the file (F2, HR-SYN-1) changed no name.
 
 ## The export
 
 ```js
-/** @type {import('../contract-m3.js').GatewayExtension} */
+/** @type {import('../protocol.js').GatewayExtension} */
 export const gatewayExtension = {
   name: 'm4-secrets',
   services: [{ label, make(context) }], // optional
@@ -37,13 +38,13 @@ export const gatewayExtension = {
 - `largeCalls`: `target(context)` is awaited once per incarnation, after
   `whenAttached`; the frame guard then lets the named methods of that very
   object (compared by identity) take arguments over `frameBytes`, up to
-  `wsMessageBytes`. M4's `m4-secrets.js` is
+  `wsMessageBytes`. M4's `secrets.js` is
   `{ name: 'm4-secrets', largeCalls: [{ target: context => context.secretWriter(), methods: ['replace'] }] }`.
 - `csp`: sources added per directive; nothing removes one.
 
 ## The `GatewayContext`
 
-What `make` and `target` receive (`../contract-m3.js` `GatewayContext`),
+What `make` and `target` receive (`../protocol.js` `GatewayContext`),
 objects of this adapter incarnation, none a vat facet:
 
 | property | what it is |
@@ -59,5 +60,5 @@ objects of this adapter incarnation, none a vat facet:
 
 Record keys a page sends to an extension service pass the gateway's key
 guard only if they are in the vocabulary: a milestone admits its keys with
-`export const vocabularyShapes = () => harden([...])` in its own
-`guest/lib/interfaces-m<N>.js` (section 6.3).
+a table module listed in `guest/lib/vocabulary-tables.js` (HR-SYN-7;
+`designs/m3-interfaces.md` section 6.3).

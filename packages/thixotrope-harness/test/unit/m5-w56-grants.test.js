@@ -14,15 +14,10 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { textOf } from '../../guest/lib/interfaces.js';
-import {
-  m5Shapes,
-  texts as m5Texts,
-  textOf as m5TextOf,
-} from '../../guest/lib/interfaces-m5.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
+import { textOf, shapes, texts } from '../../guest/lib/interfaces.js';
+import { limits } from '../../guest/lib/limits.js';
 import { makeSession } from '../../guest/session/session.js';
-import { m5Parts } from '../../guest/session/m5-parts.js';
+import { runtimeParts } from '../../guest/session/runtime-parts.js';
 import {
   builtInToolNames,
   toolSetFor,
@@ -165,7 +160,7 @@ const states = part =>
   part.facet.list().map((/** @type {any} */ i) => [i.name, i.state, i.reason]);
 
 test('the grants part is registered, and the source is the last toolSources entry', t => {
-  t.true(m5Parts.includes(grantsPart));
+  t.true(runtimeParts.includes(grantsPart));
   t.is(toolSources.length >= 1, true);
   t.deepEqual(grantedToolSource(makePorts(), {}, undefined), []);
 });
@@ -192,7 +187,7 @@ test('a grant named accountStatus: refused-builtin where the ports offer that ad
     [
       'accountStatus',
       'refused-builtin',
-      m5TextOf.toolNameBuiltIn('accountStatus'),
+      textOf.toolNameBuiltIn('accountStatus'),
     ],
   ]);
 
@@ -220,8 +215,8 @@ test('static names are built in whether available or not; exec is refused-builti
   // still no grant may take its name.
   t.is(set.byName.get('exec'), undefined);
   t.deepEqual(states(part), [
-    ['exec', 'refused-builtin', m5TextOf.toolNameBuiltIn('exec')],
-    ['echo', 'refused-builtin', m5TextOf.toolNameBuiltIn('echo')],
+    ['exec', 'refused-builtin', textOf.toolNameBuiltIn('exec')],
+    ['echo', 'refused-builtin', textOf.toolNameBuiltIn('echo')],
     ['echo2', 'offered', undefined],
   ]);
 });
@@ -236,12 +231,12 @@ test('two grants named t are both refused-duplicate; withdrawing one offers the 
   const set = roundOf(ports, runtime);
   t.false(offered(set).includes('t'));
   t.deepEqual(states(part), [
-    ['t', 'refused-duplicate', m5TextOf.toolNameDuplicate('t')],
-    ['t', 'refused-duplicate', m5TextOf.toolNameDuplicate('t')],
+    ['t', 'refused-duplicate', textOf.toolNameDuplicate('t')],
+    ['t', 'refused-duplicate', textOf.toolNameDuplicate('t')],
   ]);
   first.withdraw();
   t.deepEqual(first.describe().state, 'withdrawn');
-  t.is(first.describe().reason, m5Texts.grantWithdrawn);
+  t.is(first.describe().reason, texts.grantWithdrawn);
   t.is(part.facet.list().length, 1);
   const next = roundOf(ports, runtime);
   t.true(offered(next).includes('t'));
@@ -274,7 +269,7 @@ test('a clash with another dynamic source is refused through the entry hook', as
   );
   t.false(offered(set).includes('shared'));
   t.deepEqual(states(part), [
-    ['shared', 'refused-duplicate', m5TextOf.toolNameDuplicate('shared')],
+    ['shared', 'refused-duplicate', textOf.toolNameDuplicate('shared')],
   ]);
 });
 
@@ -296,7 +291,7 @@ test('past roundGrantedToolBytes the newest grants are refused-budget', async t 
   await drain();
   const set = roundOf(ports, runtime);
   const fit = Math.floor(
-    limitsM5.roundGrantedToolBytes / (each + 3 + '{"type":"object"}'.length),
+    limits.roundGrantedToolBytes / (each + 3 + '{"type":"object"}'.length),
   );
   const list = states(part);
   t.is(list.filter(([, s]) => s === 'offered').length, fit);
@@ -304,7 +299,7 @@ test('past roundGrantedToolBytes the newest grants are refused-budget', async t 
     list.slice(fit).map(([name, s, reason]) => [name, s, reason]),
     list
       .slice(fit)
-      .map(([name]) => [name, 'refused-budget', m5TextOf.toolOverBudget(name)]),
+      .map(([name]) => [name, 'refused-budget', textOf.toolOverBudget(name)]),
   );
   t.is(offered(set).filter(n => n.startsWith('g')).length, fit);
   t.deepEqual(set.refused, [], "budget refusals are the source's own");
@@ -314,15 +309,15 @@ test('the 33rd grant is refused with grantsFull; withdrawing makes room', t => {
   const { part } = makePart();
   /** @type {any[]} */
   const grants = [];
-  for (let i = 0; i < limitsM5.maxGrantedTools; i += 1) {
+  for (let i = 0; i < limits.maxGrantedTools; i += 1) {
     grants.push(part.facet.grantTool(makeTool(`g${i}`)));
   }
   t.throws(() => part.facet.grantTool(makeTool('extra')), {
-    message: m5Texts.grantsFull,
+    message: texts.grantsFull,
   });
   grants[0].withdraw();
   t.notThrows(() => part.facet.grantTool(makeTool('extra')));
-  t.is(part.size(), limitsM5.maxGrantedTools);
+  t.is(part.size(), limits.maxGrantedTools);
 });
 
 test('schema refusals: the inspector text, or wrapped; refused-schema grants are never offered', async t => {
@@ -334,7 +329,7 @@ test('schema refusals: the inspector text, or wrapped; refused-schema grants are
       'bad',
       harden({
         status: 'failed',
-        text: m5TextOf.toolSchemaInvalid('the schema has no function'),
+        text: textOf.toolSchemaInvalid('the schema has no function'),
       }),
     ),
   );
@@ -349,18 +344,18 @@ test('schema refusals: the inspector text, or wrapped; refused-schema grants are
     grant: bad,
     state: 'refused-schema',
     source: 'operator',
-    reason: m5TextOf.toolSchemaInvalid('the schema has no function'),
+    reason: textOf.toolSchemaInvalid('the schema has no function'),
   });
   t.is(
     lost.describe().reason,
-    m5TextOf.toolSchemaInvalid('exec scope terminated'),
+    textOf.toolSchemaInvalid('exec scope terminated'),
   );
   t.deepEqual(
     offered(roundOf(ports, runtime)).filter(n => n === 'bad'),
     [],
   );
   for (const info of part.facet.list()) {
-    t.true(matches(info, m5Shapes.ToolGrantInfo));
+    t.true(matches(info, shapes.ToolGrantInfo));
   }
 });
 
@@ -463,6 +458,7 @@ const makeGrantSession = async () => {
     liveChannel: () => Far('LivePublisher', { publish: () => {} }),
   });
   const parts = harden([
+    ...runtimeParts.filter(part => part.name !== 'grants'),
     {
       name: 'grants',
       make: (/** @type {any} */ runtime) =>

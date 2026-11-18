@@ -57,6 +57,7 @@ const run = (server, options = {}) =>
   runApiRound(makeAnthropicProvider, {
     baseUrl: server.anthropicBaseUrl,
     modelId: MODEL,
+    unexpectedFailure: anthropicKind.unexpectedFailure,
     ...options,
   });
 

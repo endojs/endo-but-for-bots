@@ -6,12 +6,8 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
-import {
-  m5FactoryShapes,
-  texts,
-  textOf,
-} from '../../guest/lib/interfaces-m5-factory.js';
+import { limits } from '../../guest/lib/limits.js';
+import { shapes, textOf, texts } from '../../guest/lib/interfaces.js';
 import {
   UNKNOWN_CURSOR_TEXT,
   makeInventory,
@@ -88,7 +84,7 @@ test('pages of 50 in insertion order with position cursors', async t => {
   }
   await E(facet).add('last', thing(999));
   const first = await E(facet).list();
-  t.true(matches(first, m5FactoryShapes.InventoryPage));
+  t.true(matches(first, shapes.InventoryPage));
   t.is(first.rows.length, 50);
   t.is(first.rows[0].label, 'item-0');
   t.is(first.next, 'i50');
@@ -140,17 +136,17 @@ test('addAll is all or nothing; 51 are refused by the guard', async t => {
 
 test('at most maxInventoryEntries entries', async t => {
   const { facet, size } = makeInventory();
-  const pages = Math.floor(limitsM5.maxInventoryEntries / 50);
+  const pages = Math.floor(limits.maxInventoryEntries / 50);
   for (let i = 0; i < pages; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     await E(facet).addAll(batch(i * 50, 50));
   }
-  const rest = limitsM5.maxInventoryEntries - pages * 50;
+  const rest = limits.maxInventoryEntries - pages * 50;
   await t.throwsAsync(E(facet).addAll(batch(5000, rest + 1)), {
     message: texts.inventoryFull,
   });
   await E(facet).addAll(batch(5000, rest));
-  t.is(size(), limitsM5.maxInventoryEntries);
+  t.is(size(), limits.maxInventoryEntries);
   await t.throwsAsync(E(facet).add('one-more', thing(0)), {
     message: texts.inventoryFull,
   });

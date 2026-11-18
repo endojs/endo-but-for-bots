@@ -18,9 +18,9 @@
  * Model code calls `E(powers).lookup('x')` or `await powers.lookup('x')`.
  */
 import { limits } from '../lib/limits.js';
-import { limitsM5 } from '../lib/limits-m5.js';
 import { utf8Bytes } from '../lib/bounded.js';
-import { bigintsAsDecimalStrings, texts, textOf } from './render.js';
+import { texts, textOf } from '../lib/guards/base.js';
+import { bigintsAsDecimalStrings } from './render.js';
 import { isWrapper, MODEL_OBJECT_TEXT } from './membrane.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -96,8 +96,8 @@ export const makeCallPowers = ({ source, callE, isOpen, membrane }) => {
     }
     if (typeof json !== 'string') return refuse(NOT_JSON_TEXT);
     const bytes = utf8Bytes(json);
-    if (bytes > limitsM5.labelValueBytes)
-      return refuse(textOf.valueTooLarge(bytes, limitsM5.labelValueBytes));
+    if (bytes > limits.labelValueBytes)
+      return refuse(textOf.valueTooLarge(bytes, limits.labelValueBytes));
     return callE(source).store(label, harden({ json }));
   };
 

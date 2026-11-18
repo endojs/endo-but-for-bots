@@ -3,7 +3,7 @@
  * Texts and names of the preset editor (W5.8; R6-55, P-49).
  *
  * `presetTooLarge` and `presetTemplateNames` are browser copies of
- * `guest/lib/interfaces-m5-factory.js` values (the bundle cannot import
+ * `guest/lib/guards/factory.js` values (the bundle cannot import
  * guest modules); `test/unit/m5-w58-copies.test.js` checks them equal. Every
  * other refusal the editor shows is the catalogue's own error message.
  */
@@ -20,7 +20,7 @@ export const presetTemplateNames = harden([
   'new-project',
 ]);
 
-/** Network policies (`m5FactoryShapes.NetworkPolicyName`). */
+/** Network policies (factory `shapes.NetworkPolicyName`). */
 export const networkPolicies = harden(['off', 'public-internet']);
 
 export const presetTexts = harden({

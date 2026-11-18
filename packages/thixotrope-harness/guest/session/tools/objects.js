@@ -22,11 +22,12 @@
  *
  * Guest rules.
  */
+
 import { textOf } from '../../lib/guards/session.js';
-import { textOf as textOfM5 } from '../../lib/interfaces-m5.js';
 import { limits } from '../../lib/limits.js';
 import { argSpecs, parseClosedArgs } from '../../lib/tool-args.js';
 import { fieldBytes, isStaged } from '../staging.js';
+import { messageOf } from '../../lib/bounded.js';
 
 /** @import { ToolTableEntry } from '../tool-table.js' */
 /** @import { ArgSpec } from '../../lib/tool-args.js' */
@@ -36,17 +37,6 @@ import { fieldBytes, isStaged } from '../staging.js';
 const ok = text => harden({ status: 'ok', text });
 /** @param {string} text */
 const failed = text => harden({ status: 'failed', text });
-
-/** @param {unknown} error */
-const messageOf = error => {
-  try {
-    const { message } = /** @type {any} */ (error);
-    if (typeof message === 'string') return message;
-  } catch {
-    // fall through
-  }
-  return `${error}`;
-};
 
 /**
  * The tool descriptions (Fae `src/tool-makers.js`, adapted wording noted
@@ -127,7 +117,7 @@ const readArgs = (tool, args, spec) => {
     const bytes = /** @type {number} */ (fieldBytes(args));
     return {
       outcome: failed(
-        textOfM5.argumentsTooLarge(tool, bytes, limits.inlineBytes),
+        textOf.argumentsTooLarge(tool, bytes, limits.inlineBytes),
       ),
     };
   }
@@ -154,9 +144,6 @@ const labelsOf = context => context?.runtime?.labels;
  */
 const withLabels = (context, work) => {
   const labels = labelsOf(context);
-  if (labels === undefined) {
-    return Promise.resolve(failed(textOf.notBuilt('the label map')));
-  }
   try {
     return Promise.resolve(work(labels));
   } catch (error) {
@@ -190,20 +177,14 @@ const lookupEntry = harden({
     if ('outcome' in read) return Promise.resolve(read.outcome);
     const petName = /** @type {string} */ (read.values.get('petName'));
     const labels = labelsOf(context);
-    if (labels === undefined) {
-      return Promise.resolve(failed(textOf.notBuilt('the label map')));
-    }
     const binding = labels.get(petName);
     if (binding === undefined) {
-      return Promise.resolve(failed(textOfM5.unknownLabel(petName)));
+      return Promise.resolve(failed(textOf.unknownLabel(petName)));
     }
     if (binding.kind === 'json') return Promise.resolve(ok(binding.text));
     const names = labels.methodsOf(binding);
     if (names !== undefined) return Promise.resolve(ok(capabilityLine(names)));
-    const inspector = context?.runtime?.inspector;
-    if (inspector?.lookup === undefined) {
-      return Promise.resolve(failed(textOf.notBuilt('lookup of an object')));
-    }
+    const { inspector } = context.runtime;
     // W5.5: one inspector `methods` call; it caches the names with
     // `labels.setMethods` and answers the rendered line.
     return inspector.lookup(
@@ -227,7 +208,7 @@ const storeEntry = harden({
     const value = /** @type {string} */ (read.values.get('value'));
     return withLabels(context, labels => {
       labels.bindJson(petName, value);
-      return ok(textOfM5.stored(petName));
+      return ok(textOf.stored(petName));
     });
   },
 });
@@ -244,8 +225,8 @@ const removeEntry = harden({
     const petName = /** @type {string} */ (read.values.get('petName'));
     return withLabels(context, labels =>
       labels.remove(petName)
-        ? ok(textOfM5.removed(petName))
-        : failed(textOfM5.unknownLabel(petName)),
+        ? ok(textOf.removed(petName))
+        : failed(textOf.unknownLabel(petName)),
     );
   },
 });

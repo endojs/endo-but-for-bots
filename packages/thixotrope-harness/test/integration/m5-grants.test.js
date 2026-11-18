@@ -27,7 +27,6 @@ import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
 import { textOf } from '../../guest/lib/interfaces.js';
-import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 /* eslint-enable import/no-relative-packages */
 import {
   crankBudget,
@@ -140,7 +139,7 @@ run('acceptance 6: granted tools offered, refused and withdrawn', async t => {
   );
   const execInfo = await settled(execGrant);
   t.is(execInfo.state, 'refused-builtin');
-  t.is(execInfo.reason, textOfM5.toolNameBuiltIn('exec'));
+  t.is(execInfo.reason, textOf.toolNameBuiltIn('exec'));
 
   // ---- two t: both refused-duplicate; the call is an unknown tool
   const t1 = await E(grants).grantTool(await E(fixtures.tools).make('t'));
@@ -155,7 +154,7 @@ run('acceptance 6: granted tools offered, refused and withdrawn', async t => {
   for (const g of [t1, t2]) {
     const info = await E(g).describe();
     t.is(info.state, 'refused-duplicate');
-    t.is(info.reason, textOfM5.toolNameDuplicate('t'));
+    t.is(info.reason, textOf.toolNameDuplicate('t'));
   }
 
   // ---- withdraw one t: the other is offered at the next round
@@ -183,10 +182,7 @@ run('acceptance 6: granted tools offered, refused and withdrawn', async t => {
     const info = await settled(g);
     refusals[name] = info;
     t.is(info.state, 'refused-schema', name);
-    t.true(
-      String(info.reason).startsWith(textOfM5.toolSchemaInvalid('')),
-      name,
-    );
+    t.true(String(info.reason).startsWith(textOf.toolSchemaInvalid('')), name);
   }
   t.regex(refusals.deepSchemaTool.reason, /nest deeper than 32/);
   t.regex(refusals.bigSchemaTool.reason, /characters of JSON; the limit is/);

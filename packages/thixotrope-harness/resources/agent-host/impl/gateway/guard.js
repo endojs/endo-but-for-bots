@@ -41,7 +41,7 @@
  */
 import { Buffer } from 'node:buffer';
 
-import { gatewayLimits, gatewayTexts } from './contract-m3.js';
+import { gatewayLimits, gatewayTexts } from './protocol.js';
 
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
 import { limits as guestLimits } from '../../../../guest/lib/limits.js';
@@ -61,7 +61,7 @@ import { limits as guestLimits } from '../../../../guest/lib/limits.js';
  * @property {number} callsInFlight
  */
 
-/** The bridge's default limits (contract-m3.js, limits.js). */
+/** The bridge's default limits (protocol.js, limits.js). */
 export const defaultGuardLimits = harden({
   frameBytes: guestLimits.frameBytes,
   argumentDepth: gatewayLimits.argumentDepth,

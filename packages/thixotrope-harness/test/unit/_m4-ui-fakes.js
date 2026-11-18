@@ -11,7 +11,6 @@ import { Far } from '@endo/far';
 import { options as preactOptions } from 'preact';
 
 /* eslint-disable import/no-relative-packages */
-import { m4Texts } from '../../guest/lib/texts-m4.js';
 
 const encoder = new TextEncoder();
 
@@ -261,7 +260,7 @@ export const memberAccount = (fields = {}) =>
  * A fake adapter-local `Accounts` with its channel. `publish(pools)`
  * pushes the whole view with `rev + 1` to every waiting `next()`;
  * `evict(index)` closes that subscriber (its waiting or next `next()`
- * rejects with `m4Texts.accountsWatchClosed`).
+ * answers `{ closed: true, reason: 'idle' }`, as the adapter's does).
  *
  * @param {{ pools?: any[], sessions?: Map<any, any> }} [options]
  */
@@ -275,7 +274,12 @@ export const makeFakeAccounts = ({ pools = [], sessions = new Map() } = {}) => {
    */
   /** @type {Sub[]} */
   const subs = [];
-  const closedError = () => Error(m4Texts.accountsWatchClosed);
+  /**
+   * What a closed watch answers (HR-SYN-34), as the adapter's accounts.js.
+   * @param {'idle' | 'client'} reason
+   */
+  const closedBatch = reason =>
+    harden({ rev: view.rev, pools: [], closed: true, reason });
 
   /** @param {Sub} sub */
   const answer = sub => {
@@ -314,7 +318,7 @@ export const makeFakeAccounts = ({ pools = [], sessions = new Map() } = {}) => {
       sub.facet = Far('AccountsSubscription', {
         next: () => {
           calls.push(['AccountsSubscription', 'next', subs.indexOf(sub)]);
-          if (sub.closed) return Promise.reject(closedError());
+          if (sub.closed) return Promise.resolve(closedBatch('idle'));
           return new Promise((resolve, reject) => {
             sub.waiting = { resolve, reject };
             answer(sub);
@@ -324,7 +328,7 @@ export const makeFakeAccounts = ({ pools = [], sessions = new Map() } = {}) => {
           calls.push(['AccountsSubscription', 'close', subs.indexOf(sub)]);
           sub.closed = true;
           if (sub.waiting) {
-            sub.waiting.reject(closedError());
+            sub.waiting.resolve(closedBatch('client'));
             sub.waiting = undefined;
           }
         },
@@ -348,7 +352,7 @@ export const makeFakeAccounts = ({ pools = [], sessions = new Map() } = {}) => {
       const sub = subs[index];
       sub.closed = true;
       if (sub.waiting) {
-        sub.waiting.reject(closedError());
+        sub.waiting.resolve(closedBatch('idle'));
         sub.waiting = undefined;
       }
     },

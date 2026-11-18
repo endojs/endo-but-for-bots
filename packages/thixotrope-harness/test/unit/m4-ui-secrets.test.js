@@ -16,9 +16,9 @@ import {
   textOfFileBytes,
 } from '../../ui/src/secrets/values.js';
 import { secretsTexts } from '../../ui/src/secrets/SecretsPanel.js';
-import { m4Limits } from '../../guest/lib/limits-m4.js';
-import { m4Texts } from '../../guest/lib/texts-m4.js';
-import { secretWriterLabel } from '../../resources/agent-host/impl/gateway/contract-m3.js';
+import { subscriptionLimits } from '../../guest/lib/subscription-limits.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
+import { secretWriterLabel } from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 import {
   makeFakeSecrets,
@@ -112,16 +112,22 @@ const setup = async ({ secrets = makeFakeSecrets() } = {}) => {
 test.serial(
   'values: the browser bound is measured on the JSON-escaped value',
   t => {
-    const exact = 'a'.repeat(m4Limits.browserSecretBytes - 2);
-    t.is(browserValueBytes(exact), m4Limits.browserSecretBytes);
+    const exact = 'a'.repeat(subscriptionLimits.browserSecretBytes - 2);
+    t.is(browserValueBytes(exact), subscriptionLimits.browserSecretBytes);
     t.is(refuseBrowserValue(exact), undefined);
-    t.is(refuseBrowserValue(`${exact}a`), m4Texts.secretTooLargeForBrowser);
+    t.is(
+      refuseBrowserValue(`${exact}a`),
+      subscriptionTexts.secretTooLargeForBrowser,
+    );
     // Escapes count: a quote is two bytes in the frame.
-    const quotes = '"'.repeat(m4Limits.browserSecretBytes / 2);
-    t.is(refuseBrowserValue(quotes), m4Texts.secretTooLargeForBrowser);
+    const quotes = '"'.repeat(subscriptionLimits.browserSecretBytes / 2);
+    t.is(
+      refuseBrowserValue(quotes),
+      subscriptionTexts.secretTooLargeForBrowser,
+    );
     t.deepEqual(textOfFileBytes(new Uint8Array([0x68, 0x69])), { value: 'hi' });
     t.deepEqual(textOfFileBytes(new Uint8Array([0xff, 0xfe, 0x80])), {
-      error: m4Texts.secretNotText,
+      error: subscriptionTexts.secretNotText,
     });
     // Byte-exact: a BOM is kept.
     t.is(
@@ -310,13 +316,16 @@ test.serial(
     const secrets = makeFakeSecrets();
     secrets.add('big');
     const s = await setup({ secrets });
-    const exact = 'x'.repeat(m4Limits.browserSecretBytes - 2);
+    const exact = 'x'.repeat(subscriptionLimits.browserSecretBytes - 2);
 
     await s.click(s.rowButton('big', 'replace'));
     /** @type {any} */ (s.$('[data-form="replace"] [name="value"]')).value =
       `${exact}x`;
     await s.click(s.$('[data-form="replace"] [data-action="send"]'));
-    t.is(s.$('.m4-error')?.textContent, m4Texts.secretTooLargeForBrowser);
+    t.is(
+      s.$('.m4-error')?.textContent,
+      subscriptionTexts.secretTooLargeForBrowser,
+    );
     t.is(s.secrets.callsOf('SecretWriter.replace').length, 0, 'nothing sent');
     t.is(
       /** @type {any} */ (s.$('[data-form="replace"] [name="value"]')).value,
@@ -346,7 +355,10 @@ test.serial(
       new s.dom.window.Event('submit', { bubbles: true, cancelable: true }),
     );
     await flush();
-    t.is(s.$('.m4-error')?.textContent, m4Texts.secretTooLargeForBrowser);
+    t.is(
+      s.$('.m4-error')?.textContent,
+      subscriptionTexts.secretTooLargeForBrowser,
+    );
     t.is(s.secrets.callsOf('SecretsAdmin.create').length, 0);
     await s.dom.close();
   },
@@ -371,7 +383,7 @@ test.serial(
     await s.click(s.rowButton('from-file', 'replace'));
     choose([0xff, 0xfe, 0x00, 0x80]);
     await s.click(s.$('[data-form="replace"] [data-action="send"]'));
-    t.is(s.$('.m4-error')?.textContent, m4Texts.secretNotText);
+    t.is(s.$('.m4-error')?.textContent, subscriptionTexts.secretNotText);
     t.is(s.secrets.callsOf('SecretWriter.replace').length, 0);
 
     choose([0x7b, 0x7d, 0x0a]);

@@ -45,7 +45,7 @@
  * (`tokenUrl`, `clientId`): this module names no provider host. A member
  * with no `tokenUrl` cannot renew (`RENEWAL_FAILED`, before any write).
  *
- * Errors carry a fixed text and a code (`m4Codes`); no token, header value
+ * Errors carry a fixed text and a code (`subscriptionCodes`); no token, header value
  * or provider body is ever put in an error or logged.
  *
  * Node only (adapter).
@@ -72,7 +72,7 @@ const MAX_LIFETIME_S = 366 * 86_400;
 const UNDISPATCHED = harden(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN']);
 
 /**
- * The renewal settings (`config/defaults-m4.js` `subscriptionDefaults`,
+ * The renewal settings (`config/subscription-defaults.js` `subscriptionDefaults`,
  * W4.1: `refreshSkewMs` 120,000).
  * @typedef {object} RenewalSettings
  * @property {number} [refreshSkewMs]

@@ -8,7 +8,6 @@
  * from a user preset that endows chosen fixtures from the operator
  * inventory. AVA skips files starting with an underscore.
  */
-import { createHash } from 'node:crypto';
 
 import { E } from '@endo/far';
 
@@ -18,7 +17,7 @@ import {
   loadAvg,
   runIdentity,
 } from '../../perf/_harness.mjs';
-import { makeProvision, templateIdFor } from '../../scripts/provision-steps.js';
+import { makeProvision } from '../../scripts/provision-steps.js';
 import { m5FixtureName, m5FixtureSource } from '../fixtures/m5-objects.js';
 import { ensureTemplate } from '../template/index.js';
 
@@ -63,18 +62,17 @@ const fixtureOption = harden({ name: m5FixtureName, source: m5FixtureSource });
 export const objectsTemplate = async () => {
   /** @type {any[]} */
   const steps = [];
-  const base = await templateIdFor({ pool: {}, prefix: 'm5o' });
-  const digest = createHash('sha256')
-    .update(m5FixtureSource)
-    .digest('hex')
-    .slice(0, 6);
   const run = makeProvision({
     pool: {},
     m5Fixtures: fixtureOption,
     onStep: report => steps.push(report),
   });
   const template = await ensureTemplate({
-    id: `${base}${digest}`,
+    id: 'm5o',
+    // The fixture objects' source is evaluated into the workspace; the pool
+    // is the factory's default.
+    sources: ['test/fixtures/m5-objects.js'],
+    extra: { pool: {} },
     /** @param {{ client: any, connect?: any }} context */
     provision: async context => {
       await run(context);

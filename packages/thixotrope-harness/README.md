@@ -53,7 +53,7 @@ they changed under it. Use `corepack yarn`, not a global yarn.
 
 ```sh
 corepack yarn test        # unit lane (ses-ava, lockdown); integration files and spikes skip
-corepack yarn lint        # tsc + eslint, including the guest rules in lint/guest-rules.js
+corepack yarn lint        # tsc + eslint (with the guest rules in lint/guest-rules.js) + the duplicate ceiling
 ```
 
 Run prettier from the repository root on the files you changed
@@ -131,8 +131,11 @@ import), `m2-archive-restart` (16 at S and A3) and `m2-archive-restart-2` (16 at
 over one imported 159-turn session (`_m2-archive-kill.js`), `m2-probes` (the too-big probes).
 Acceptance 15 (a 5,000-turn session behaves like a 200-turn one) is `perf/history.perf.mjs` and
 `perf/history.restart.perf.mjs`, whose sessions are copies of templates built by `importState`.
-Files that use a Secret set `THIX_HARNESS_SECRETS_KEY` to a key file under
-`tmp/` (outside the state directory) and remove it.
+Files that use a Secret give their supervisor a key file under `tmp/` (outside the state
+directory) and remove it: the M4 files and perf checks pass it to that one supervisor
+(`startFromTemplate(template, { secretsKeyFile })`, `testKeyFile` in `test/integration/_m4.js` and
+`perf/_m4.mjs`); the M2 files and `_m3-gateway.js` still set `THIX_HARNESS_SECRETS_KEY` for the
+process (HR-SYN-21, open).
 
 The M3 acceptance files (`designs/m3-interfaces.md` 12): through a Node CapTP client over a real
 loopback WebSocket, `m3-gateway` (1, 2, 10, 11, 16; K1, K2), `m3-sessions` (3, 13, 14, 12
@@ -144,6 +147,7 @@ invocation under the run lock:
 
 ```sh
 THIX_AGENT=me corepack yarn test:browser test/browser/m3-ui.test.mjs
+corepack yarn test:browser --jobs 5   # no file: every file under test/browser
 ```
 
 They start through `test/browser/_harness.mjs` `startBrowserGateway({ template, provision? })`
@@ -164,21 +168,26 @@ and OAuth servers on loopback): `m4-secrets` (1), `m4-pools` (2, 3), `m4-restart
 `m5-prompt` (9), `m5-security` (10), `m5-mentions-restart` and `m5-grants-restart` (11),
 `m5-reachability` (12), and in the browser `test/browser/m5-ui.test.mjs` (15).
 
-**Regression run** (process.md section 3.1; the cross-lane close-out X-CLOSE at `717e26789f`,
-2026-11-18, load 2.2-4.8): `corepack yarn test` (unit and adapter lanes: 1,244 passed, 115
-skipped, 67 s; one load-sensitive run-lock test failed and passed alone), then
-`corepack yarn test:integration --jobs 5` (51 files, 6,641 s held, 1,433 s wall; all pass but
-`m1b-live` 9 at load 3-4, which passed alone; longest held `m1b-followups` 297 s,
-`m2-lifecycle-export` 252 s, `m1b-context-restart` 226 s), then
-`corepack yarn test:browser --jobs 5 test/browser/*.test.mjs` (5 files, 622 s held, 202 s wall;
-longest `m3-ui-restart` 202 s). 28.4 minutes in all: over the 20-minute rule, so process.md 3.1
-proposes a core list (M0-M2, about 14 minutes) and a per-milestone list (M3-M5 with the browser
-files, about 10 minutes). Per-file times are in process.md section 3.1.
+**Regression run** (process.md section 3.1): two batches, each inside the 20-minute rule.
+
+```sh
+corepack yarn test:regression:core        # unit and adapter lanes, then the M0-M2 files and the template test
+corepack yarn test:regression:milestones  # the M3, M4 and M5 files with their browser files
+```
+
+Each prints every file's held and waited time from `runs.jsonl` and the batch's wall time; the
+lists are `regressionLists` in `scripts/test-integration.mjs`. Last run (CL-CLOSE, after the
+review's steps 1 and 2, `bd4c811b7b`, 2026-11-18, 6 jobs, load 1.9-5.7): core 1,286 unit and
+adapter tests passed (116 skipped, 67 s), 25 files, 4,194 s held, 927 s wall in all; milestones
+31 files, 3,301 s held, 703 s wall. All pass except `m1b-exec-tool` acceptance 11 once at load
+4-5, which passed alone. Per-file times are in process.md section 3.1.
 
 **Known failures** (each marked `test.failing`, or opt-in, with the reason in its title):
 
 - Latency budgets that are sensitive to load: `m1b-live` acceptance 9 (rename within 500 ms)
   failed once at load 4.5 and passed alone (J-9450); not marked, it passes on a quiet machine.
+  `m1b-exec-tool` acceptance 11 (an exec worker killed on every attempt) failed once at load 4-5
+  when the killer missed the call's 4 s window, and passed alone (J-10191).
 - Perf rows that miss by design or by a recorded core limit: `perf/crash.perf.mjs` and
   `perf/restart.crash.perf.mjs` (C-8, C-9), `checkpoint.stall` (C-24); see the perf table below
   and the M2 outcome table in `designs/milestones.md`.
@@ -216,6 +225,8 @@ S1's inbound part takes about 7 minutes per budget; S6's creation of 50 spares a
 ```sh
 node perf/frames.perf.mjs          # one check; it takes the run lock itself
 corepack yarn perf                 # every perf/<feature>.perf.mjs in turn
+corepack yarn perf:pass M4         # a milestone's recorded pass: its checks and session, turn, exec,
+                                   # exclusive, back to back, after its templates (M2, M3, M4, M5, all)
 ```
 
 Each script uses `perf/_harness.mjs`: state goes in `tmp/pf<pid>` and is removed afterwards
@@ -226,8 +237,13 @@ the commit, worker sha256, crank budget and load average; the exit code is 1 whe
 p95, p99, max, value) is over 1.25 x its budget or deliveries per operation are over theirs.
 `IDLE_MS` (default 1 h) and `SNAP_EVERY` set the supervisor's idle sleep and snapshot cadence;
 Every repeated measurement runs for a fixed window (`perf/_window.mjs`, designs/process.md section
-3); rows carry `window` and `samples`. `PERF_WINDOW_SCALE` scales every window (a quick smoke only);
-`LOOP_N`, `INSTALL_N` and `CRASH_*` shorten individual scripts.
+3); rows carry `window` and `samples`. `PERF_WINDOW_SCALE` scales every window (a quick smoke only):
+every window length goes through `windowMs` (HR-SYN-19; `test/perf-window.test.js` checks it), and
+the one unscaled read is `gateway-restart`'s file deadline `M3_RESTART_END_MS`.
+`LOOP_N`, `INSTALL_N` and `CRASH_*` shorten individual scripts. The milestone templates the
+checks copy are built with `node perf/_pass.mjs templates [m1a exec pool m4 m5o m3-300]` (under a
+shared run-lock wrapper); their keys follow the guest bundles and the manager part, so a guest
+change rebuilds them (CL-CLOSE: 166 s wall for all six in parallel).
 `perf/crash.perf.mjs` and `perf/restart.crash.perf.mjs` exit 1 by design while a restart with a crashing
 vat misses its 15 s target (core candidates C-8, C-9). Paste the lines into `JOURNAL.md` with a
 reading and a decision.
@@ -274,8 +290,9 @@ X-CLOSE, before the split); `M3_WINDOW_MS`,
 
 A vat is woken when its worker row's `wakes` (process-local) is above 0; `journalLength` is the
 delivery frontier, and held GC frames (`heldFrames`) wait in the journal without a crank. `turn.delta`
-reads an in-process subscriber in the adapter (the file `tmp/live-probe/enabled` switches it on;
-the script does this itself).
+reads an in-process subscriber in the adapter, switched on only by `THIX_HARNESS_LIVE_PROBE_DIR`
+in the served daemon's environment (`LIVE_PROBE_VARIABLE` in `resources/agent-host/impl/channels.js`; the script passes
+it to its own supervisor; nothing on disk switches it on).
 
 ## The Ironhorse lane
 
@@ -323,7 +340,7 @@ absent meanwhile.
 
 | Command | What it does |
 | --- | --- |
-| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js` without comments, refusing any module outside `guest/`. Sizes at X-CLOSE (`717e26789f`; bytes, budget): session 214,690 (240,000), exec 63,826 (120,000), factory 164,836 (X1: 213,712, 62,196, 164,810) |
+| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js` without comments, refusing any module outside `guest/`. Sizes after the review's fold (`bd4c811b7b`; bytes, budget): session 206,907 (240,000), exec 61,688 (120,000), factory 155,427 (X-CLOSE: 214,690, 63,826, 164,836) |
 
 ## Disk
 

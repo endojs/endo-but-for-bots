@@ -36,6 +36,7 @@ import {
   stats,
   summarize,
 } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -46,7 +47,6 @@ const { execEntry, guestRoot, programPieceBytes, sessionEntry } =
   await import('../scripts/provision-steps.js');
 /* eslint-disable import/no-relative-packages */
 const { limits } = await import('../guest/lib/limits.js');
-const { limitsM5 } = await import('../guest/lib/limits-m5.js');
 const { composeSystemPrompt } =
   await import('../guest/lib/system-prompt-base.js');
 /* eslint-enable import/no-relative-packages */
@@ -54,8 +54,8 @@ const { makeSlice } = await import('../test/integration/_m1a-slice.js');
 const { fixturesOf, objectsTemplate, operatorOf } =
   await import('../test/integration/_m5-objects.js');
 
-const PROMPT_WINDOW_MS = Number(process.env.PROMPT_WINDOW_MS ?? 10_000);
-const CREATION_WINDOW_MS = Number(process.env.CREATION_WINDOW_MS ?? 120_000);
+const PROMPT_WINDOW_MS = windowMs('PROMPT_WINDOW_MS', 10_000);
+const CREATION_WINDOW_MS = windowMs('CREATION_WINDOW_MS', 120_000);
 const POOL = 4;
 
 /**
@@ -77,7 +77,7 @@ const strictRow = async (row, limit) => {
 };
 
 // The largest preset's instructions: 4,096 units of three-byte text.
-const bigInstructions = '漢'.repeat(limitsM5.presetInstructionsUnits);
+const bigInstructions = '漢'.repeat(limits.presetInstructionsUnits);
 
 await runPerf('creation-m5', async ({ provision }) => {
   // ---- session.program, exec.program
@@ -144,7 +144,7 @@ await runPerf('creation-m5', async ({ provision }) => {
 
   // ---- the largest preset: 4,096-unit instructions, 32 endowments
   const labels = Array.from(
-    { length: limitsM5.maxEndowments },
+    { length: limits.maxEndowments },
     (_, i) => `e${String(i).padStart(2, '0')}`,
   );
   const held = new Set(

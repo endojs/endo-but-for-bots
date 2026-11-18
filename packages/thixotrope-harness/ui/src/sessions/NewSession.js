@@ -26,7 +26,7 @@
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 
-import { uiTexts } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { discoveryNotes, effortRefusal, matchesModel } from './rows.js';
 import { SessionsSlot } from './slot.js';
 

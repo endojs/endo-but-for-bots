@@ -18,9 +18,6 @@ import {
   execArgumentNames,
   execDescription,
   interfaces,
-  m1bInterfaces,
-  m1bMethodNames,
-  m1bShapes,
   methodNames,
   shapes,
   textOf,
@@ -28,6 +25,11 @@ import {
 } from '../../guest/lib/interfaces.js';
 import { makeLivePublishing } from '../../guest/session/live.js';
 /* eslint-enable import/no-relative-packages */
+import {
+  m1bInterfaces,
+  m1bMethodNames,
+  m1bShapes,
+} from './_contract-tables.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { Far, makeExo, makePromiseKit, matches } = /** @type {GuestGlobals} */ (
@@ -103,7 +105,7 @@ const shapeSamples = {
   ContentRange: { offset: 0, maxBytes: limits.blobPageBytes },
   ContentPage: { text: 'Hello', next: 5, done: true },
   SleepMs: 1000,
-  ExecLease: { scope: far('ExecScope'), deadlineMs: limits.execDeadlineMs },
+  ExecScopeInfo: { scope: far('ExecScope'), deadlineMs: limits.execDeadlineMs },
   ExecRequest: execRequest,
   ExecOutcome: { status: 'ok', text: staged },
   ContextPage: { from: 0, records: [turnStarted, roundSettled], next: 'p2' },
@@ -389,7 +391,7 @@ const methodSamples = {
     abandon: { args: [], returns: undefined },
   },
   ExecHandle: {
-    scope: { args: [], returns: shapeSamples.ExecLease },
+    scope: { args: [], returns: shapeSamples.ExecScopeInfo },
     retire: { args: [far('ExecScope')], returns: undefined },
   },
   ListPublisher: {
@@ -548,6 +550,8 @@ test('return guards: an exec outcome, a busy answer and a structural record page
     makeExo('ExecScope', /** @type {any} */ (m1bInterfaces.ExecScope), {
       run: async () => harden({ status: 'ok', text: 'a'.repeat(9) }),
       abandon: () => {},
+      // M5's method, in the one ExecScope guard since the fold (F2).
+      inspect: async () => harden({ status: 'exhausted' }),
     })
   );
   const answer = await exo.run(harden(execRequest));
@@ -559,6 +563,7 @@ test('return guards: an exec outcome, a busy answer and a structural record page
     makeExo('ExecScope', /** @type {any} */ (m1bInterfaces.ExecScope), {
       run: async () => harden({ status: 'busy', text: 'x' }),
       abandon: () => {},
+      inspect: async () => harden({ status: 'exhausted' }),
     })
   );
   await t.throwsAsync(
@@ -572,6 +577,7 @@ test('return guards: an exec outcome, a busy answer and a structural record page
       makeExo('ExecScope', /** @type {any} */ (m1bInterfaces.ExecScope), {
         run: async () => harden(value),
         abandon: () => {},
+        inspect: async () => harden({ status: 'exhausted' }),
       })
     ).run(harden(execRequest));
   t.deepEqual(await answers({ status: 'exhausted' }), { status: 'exhausted' });

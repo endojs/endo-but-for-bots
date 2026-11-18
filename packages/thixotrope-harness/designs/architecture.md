@@ -1060,8 +1060,9 @@ As built (M3, then the cross-lane integration): the bootstrap's `fetch(secret)` 
 `GatewayPowers`: the factory's `Operator` passed through and this incarnation's `Live`, `Content`,
 `Composer` and `History`, plus `extras` from extensions (the page's secret writer first). The
 bridge is pass-through CapTP (D-M3-1): every call is checked on its encoded form before decoding
-(frame bytes, record keys against a vocabulary built from every `interfaces-m*.js`
-`vocabularyShapes()`, method names (rule 4a), depth, page-made objects, calls in flight, exports
+(frame bytes, record keys against a vocabulary built from the interface tables listed in
+`guest/lib/vocabulary-tables.js` (HR-SYN-7: an explicit list, no glob; a failing table fails the
+bind), method names (rule 4a), depth, page-made objects, calls in flight, exports
 and answers per connection, 4,096 each). Extensions and UI features are directory registries
 (`AH/gateway/extensions/`, `ui/src/<feature>/feature.js`), so M4 and M5 added panels, chips, the
 preset editor and `@` mentions without editing M3 files. Measured (X-CLOSE): sign-in 0.5 ms, guard

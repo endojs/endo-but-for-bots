@@ -73,31 +73,30 @@
  * `limits.foldMessages` (the oldest messages are dropped): a turn that
  * exceeds them has a snapshot that no longer equals a replay.
  *
- * Live probe (perf only; `perf/turn.perf.mjs`): when the file
- * `tmp/live-probe/enabled` exists under the harness package as the adapter
- * makes its channel registry, every channel gets one more subscriber in this
- * process, as a gateway would hold, that reads with `E(subscription).next()`
- * and appends the time from each delta's publish to its arrival there
- * (`performance.now()`, ms) to `tmp/live-probe/<pid>.jsonl`, one line per
- * delta, written when the turn settles.
+ * Live probe (perf only; `perf/turn.perf.mjs`): a registry made with a
+ * `probe` gives every channel one more subscriber in this process, as a
+ * gateway would hold, that reads with `E(subscription).next()` and appends
+ * the time from each delta's publish to its arrival there
+ * (`performance.now()`, ms) to the probe's file, one line per delta, written
+ * when the turn settles. The registry has none unless one is passed: tests
+ * pass one, and a perf run that serves its own daemon names a directory in
+ * `THIX_HARNESS_LIVE_PROBE_DIR` in that daemon's environment
+ * (`liveProbeFromEnv`, read by `impl/index.js`). Nothing on disk switches it
+ * on (HR-SYN-13: it was a file under the source tree, which reached every
+ * daemon run from it).
  *
  * Node module (adapter); reads the guest prelude (`makeExo`, `M`,
  * `mustMatch`, `makePromiseKit`, `E`) from `globalThis`, which the loader
  * installs before importing `impl/index.js` (m1a-interfaces.md section 1.8).
  */
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { pid } from 'node:process';
 import { clearTimeout, setTimeout } from 'node:timers';
-import url from 'node:url';
 
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
-import {
-  interfaces,
-  m1bShapes,
-  shapes,
-} from '../../../guest/lib/interfaces.js';
+import { interfaces, shapes } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { messageBytes } from '../../../guest/lib/bounded.js';
 import {
@@ -149,7 +148,7 @@ export const LIVE_SUBSCRIPTION_GUARD = M.interface('LiveSubscription', {
         }),
       },
       // `reason` (M1b W1b.1, J-9172): the closeReasons key.
-      { closed: M.boolean(), reason: m1bShapes.CloseReason },
+      { closed: M.boolean(), reason: shapes.CloseReason },
     ),
   ),
   close: M.call().returns(M.undefined()),
@@ -657,16 +656,6 @@ const makeChannel = (
  * @typedef {ReturnType<typeof makeChannel>} Channel
  */
 
-/** The harness package's `tmp/live-probe` directory. */
-export const liveProbeDir = path.join(
-  path.dirname(url.fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  '..',
-  'tmp',
-  'live-probe',
-);
-
 /**
  * The live probe (see the module comment): one in-process subscriber per
  * channel that records each delta's publish-to-arrival time.
@@ -725,14 +714,22 @@ export const makeLiveProbe = ({ file, now = () => performance.now() }) => {
 };
 harden(makeLiveProbe);
 
+/** The variable a perf run sets in the environment of the daemon it serves. */
+export const LIVE_PROBE_VARIABLE = 'THIX_HARNESS_LIVE_PROBE_DIR';
+
 /**
- * The probe the adapter's default registry uses: on only while
- * `tmp/live-probe/enabled` exists.
+ * The live probe a perf run asked for through its daemon's environment:
+ * lines go to `<dir>/<pid>.jsonl`; `null` when the variable is unset or not
+ * an absolute path.
+ * @param {Record<string, string | undefined>} env
  */
-const probeFromSwitch = () =>
-  existsSync(path.join(liveProbeDir, 'enabled'))
-    ? makeLiveProbe({ file: path.join(liveProbeDir, `${pid}.jsonl`) })
+export const liveProbeFromEnv = env => {
+  const dir = env[LIVE_PROBE_VARIABLE];
+  return typeof dir === 'string' && path.isAbsolute(dir)
+    ? makeLiveProbe({ file: path.join(dir, `${pid}.jsonl`) })
     : null;
+};
+harden(liveProbeFromEnv);
 
 /**
  * The adapter's session channels: one per Session presence.
@@ -745,8 +742,8 @@ const probeFromSwitch = () =>
  * @param {number} [options.reorderBacklogDeliveries]
  * @param {number} [options.reorderWaitMs]
  * @param {Schedule} [options.schedule] timers (tests pass their own)
- * @param {ReturnType<typeof makeLiveProbe> | null} [options.probe] null for
- *   none (default: the live probe while its switch file exists)
+ * @param {ReturnType<typeof makeLiveProbe> | null} [options.probe] the live
+ *   probe (perf, tests); default none
  */
 export const makeChannelRegistry = ({
   taps = channelTaps,
@@ -757,7 +754,7 @@ export const makeChannelRegistry = ({
   reorderBacklogDeliveries = channelLimits.reorderBacklogDeliveries,
   reorderWaitMs = channelLimits.reorderWaitMs,
   schedule = defaultSchedule,
-  probe = probeFromSwitch(),
+  probe = null,
 } = {}) => {
   /** @type {WeakMap<object, Channel>} */
   const channels = new WeakMap();

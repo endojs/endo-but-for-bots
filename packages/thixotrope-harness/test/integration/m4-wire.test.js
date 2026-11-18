@@ -25,7 +25,10 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { m4Texts, m4TextOf } from '../../guest/lib/texts-m4.js';
+import {
+  subscriptionTextOf,
+  subscriptionTexts,
+} from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
 import {
@@ -115,19 +118,19 @@ run(
       { sse: 'claude-text.sse' },
     ]);
     t.is(late.status.state, 'failed');
-    t.is(late.status.error, m4Texts.claudeInferenceFailed);
+    t.is(late.status.error, subscriptionTexts.claudeInferenceFailed);
     t.is(late.sent, 1, 'not retried after a delivery');
     server.setPlan([]);
     const sseError = await turnWith(claude, 'claude SSE error', [
       { sse: 'claude-error.sse' },
     ]);
-    t.is(sseError.status.error, m4Texts.claudeInferenceFailed);
+    t.is(sseError.status.error, subscriptionTexts.claudeInferenceFailed);
     const http = await turnWith(claude, 'claude non-200', [{ status: 500 }]);
-    t.is(http.status.error, m4TextOf.subscriptionHttp(500));
+    t.is(http.status.error, subscriptionTextOf.subscriptionHttp(500));
     const empty = await turnWith(claude, 'claude empty', [
       { sse: 'claude-empty.sse' },
     ]);
-    t.is(empty.status.error, m4Texts.emptyMessagesOutput);
+    t.is(empty.status.error, subscriptionTexts.emptyMessagesOutput);
     const claudeRetries = poolLog(claude.logPath).filter(
       l => l.kind === 'retry',
     );
@@ -170,7 +173,7 @@ run(
     t.is(failed.status.state, 'failed');
     t.true(
       String(failed.status.error).startsWith(
-        m4TextOf.responsesFailed('response.failed', [
+        subscriptionTextOf.responsesFailed('response.failed', [
           'code=context_length_exceeded',
           'type=invalid_request_error',
           'param=input',
@@ -181,9 +184,9 @@ run(
     const codexEmpty = await turnWith(codex, 'codex empty', [
       { sse: 'codex-empty.sse' },
     ]);
-    t.is(codexEmpty.status.error, m4Texts.emptyResponsesOutput);
+    t.is(codexEmpty.status.error, subscriptionTexts.emptyResponsesOutput);
     const codexHttp = await turnWith(codex, 'codex non-200', [{ status: 503 }]);
-    t.is(codexHttp.status.error, m4TextOf.subscriptionHttp(503));
+    t.is(codexHttp.status.error, subscriptionTextOf.subscriptionHttp(503));
 
     // No prose in the transcripts either.
     for (const s of [claude, codex]) {

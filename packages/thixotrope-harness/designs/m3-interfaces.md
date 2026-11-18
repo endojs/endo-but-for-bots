@@ -1,5 +1,11 @@
 # M3 interface contract
 
+> **Files moved since (F2, HR-SYN-1).** Paths and exports this contract names (`interfaces-m5.js`,
+> `interfaces-m5-factory.js`, `limits-m5.js`, `limits-m4.js`, `texts-m4.js`, `contract-m3.js`,
+> `defaults-m4.js`, `m5-parts.js`, `m4-secrets.js`, `m1bShapes`, `m2Interfaces`, `m5Widenings`, ...)
+> were folded or renamed; `designs/arch-review/fold-plan.md` section 6 maps each old name to the
+> new one. The text below is the contract as written.
+
 Unit W3.0 of `milestones.md` M3. This file, `guest/lib/interfaces-m3.js` (what crosses a vat
 boundary) and `resources/agent-host/impl/gateway/contract-m3.js` (Node and browser constants,
 texts and hook types) are the contract the M3 builders (group A: W3.1, W3.2, W3.3, W3.4; group
@@ -32,7 +38,8 @@ see "Cross-check" before section 1):
   start; nothing wakes a session (D-5).
 - **D-M3-4 Extensions by file, not by edit.** Later milestones add gateway services and routes as
   files under `GW/extensions/`, UI features as `UI/src/<dir>/feature.js` and browser-sendable
-  record keys as a `vocabularyShapes()` export of their own `guest/lib/interfaces-m<N>.js`; nobody
+  record keys as a `vocabularyShapes()` export of their own `guest/lib/interfaces-m<N>.js` (as
+  amended, HR-SYN-7: listed in `guest/lib/vocabulary-tables.js`, the one place); nobody
   edits an M3 file, `ui/src/features.js` or a key table to add a panel, a route, a gateway service
   or a record shape (section 6). M3 itself edits no shared contract file (`interfaces.js` is
   untouched: hotspot H2 extends the manager's facet guard locally).
@@ -291,11 +298,13 @@ given to CapTP's `dispatch` (captp's `capdata` body format: `@qclass` encodings 
    the record keys of every pattern reachable from (a) every value of `shapes`, `interfaces` and,
    while it exists (until the W2.9 fold), `m2Interfaces` of `guest/lib/interfaces.js` (as built,
    X1, J-9942: the fold is done and `m2Interfaces` is a view of the same guards, so it adds no
-   key; `GW/vocabulary.js` still reads it when present), and (b) the
-   patterns answered by the `vocabularyShapes()` export of **every** `guest/lib/interfaces-m*.js`
-   file (glob `interfaces-m*.js`, so `interfaces-m3.js`, `interfaces-m4.js`, `interfaces-m5.js`,
-   `interfaces-m5-factory.js` and any later one; a file without the export, or whose import or call
-   throws, is logged `{ event: 'vocabulary-skip', file, error }` and skipped). The walk
+   key), and (b) the patterns answered by the `vocabularyShapes()` export of `interfaces-m3.js`,
+   `interfaces-m4.js`, `interfaces-m5.js` and `interfaces-m5-factory.js`. As amended (HR-SYN-7):
+   (a) and (b) are the entries of one explicit list, `guest/lib/vocabulary-tables.js`
+   `vocabularyTables`, in place of the glob `interfaces-m*.js`; a listed module that fails to load
+   fails the adapter's import of `GW/vocabulary.js`, and an entry whose `patterns()` throws or
+   answers no array throws at the gateway's bind (naming the file), never a logged skip (the
+   `vocabulary-skip` event is gone). The walk
    (`collectRecordKeys`) descends copyRecords (keys collected, values walked), copyArrays and
    tagged values, so it covers shapes **and** interface guards:
    - a `match:*` tagged value (`M.splitRecord`, `M.or`, `M.arrayOf`, `M.string(limits)`, ...):
@@ -325,8 +334,8 @@ given to CapTP's `dispatch` (captp's `capdata` body format: `@qclass` encodings 
    of `methods`. Refusal: `unknownMethod`. A vat decodes every selector and symbol as a registered
    symbol, so without this a page could make a vat register any number of fresh names. Toward a
    gateway-local object a string name stays that object's own guard's business. Browser-reachable
-   objects of later lanes must have their guards answered by `vocabularyShapes()` (6.3), or the
-   gateway refuses their methods.
+   objects of later lanes must have their guards in a table listed in `vocabulary-tables.js` (6.3),
+   or the gateway refuses their methods.
 5. **Calls in flight.** At most `callsInFlight` (32) answered calls per connection whose target
    is not a gateway-local object; one more is refused `tooManyCalls`.
 
@@ -496,18 +505,23 @@ page. Features use `globalThis.<api>` for browser APIs (lint: section 11, H7).
 
 ### 6.3 Vocabulary
 
-The gateway (`GW/vocabulary.js` `harnessVocabulary`) loads **every** `guest/lib/interfaces-m*.js`
-at adapter start, `interfaces-m5-factory.js` included, and walks the patterns its
-`vocabularyShapes()` export answers; a file without that export, or whose import or call throws,
-is logged and skipped (its keys are then refused, which the lane's own browser test would show).
-The walk covers shapes and interface guards alike (4.4: an interface's method argument patterns
-are walked). The rule for a lane is one line in its own contract file, as M3's:
+As amended (HR-SYN-7, replacing the glob and the log-and-skip rule): the gateway
+(`GW/vocabulary.js` `harnessNames`) walks the patterns of every entry of
+`guest/lib/vocabulary-tables.js` `vocabularyTables`, one explicit list next to the tables
+(`interfaces.js` and the `vocabularyShapes()` of `interfaces-m3.js`, `-m4.js`, `-m5.js`,
+`-m5-factory.js` today). A listed module that fails to load fails the adapter's import; an entry
+that throws or answers no array fails the gateway's bind with a text naming its file. Every module
+of `guest/lib/` that exports a guard or pattern is either listed or named in
+`vocabularyExclusions` with its reason (the `guards/*.js` slices, re-exported whole by
+`interfaces.js`); `test/adapter/gateway-vocabulary-tables.test.js` checks that, that every
+interface guard of such a module contributes its keys and methods, and pins the sets (258 keys,
+141 method names at `802bd2767c`). The walk covers shapes and interface guards alike (4.4: an
+interface's method argument patterns are walked).
 
-`export const vocabularyShapes = () => harden([...Object.values(mNShapes), ...Object.values(mNInterfaces)]);`
-
-There is no table to append to: a record shape a later milestone adds is admitted through the
-gateway once its contract file exists and exports the function. Method checking is not the key
-guard's: an undeclared method is refused by the target's own exo guard.
+A table module that adds browser-sendable shapes or interfaces is admitted by one entry in
+`vocabularyTables` (the module and the function answering its patterns); a renamed or new table
+module that is not listed turns that test red rather than narrowing the gateway. Method checking
+is not the key guard's: an undeclared method is refused by the target's own exo guard.
 
 ### 6.4 With M4 (secrets manager, subscription pools) and M5 (presets, prompts, tools, grants)
 
@@ -975,7 +989,7 @@ Every unit exports exactly these (more is allowed; these names and signatures ar
 |---|---|---|
 | `GW/bridge.js` | `makeBridge` | `({ makeBootstrap, vocabulary, isLargeCall, limits?, log }) -> { connect(socket) -> { close(code, reason), stats() -> { exports, inFlight, refused } } }`; `makeBootstrap({ address, onClose }) -> GatewayBootstrap` |
 | `GW/guard.js` | `checkCall` | `({ message, targetOf, vocabulary, isLargeCall, inFlight, limits }) -> undefined \| string` (the refusal text) |
-| `GW/vocabulary.js` | `collectRecordKeys`, `harnessVocabulary` | `(patterns: any[]) -> Set<string>` (walks copyRecords, copyArrays and tagged payloads, so interface guards' method argument patterns too; 4.4); `({ guestLibDir?, log }) -> Set<string>` (`interfaces.js` tables, then every `guestLibDir/interfaces-m*.js` in name order through its `vocabularyShapes()`; a file without it or that throws: `log({ event: 'vocabulary-skip', file, error })` and skipped) |
+| `GW/vocabulary.js` | `collectRecordKeys`, `harnessNames`, `harnessVocabulary` | `collectRecordKeys(patterns: any[]) -> Set<string>` (walks copyRecords, copyArrays and tagged payloads, so interface guards' method argument patterns too; 4.4); `harnessNames({ tables? }) -> { keys: Set<string>, methods: Set<string> }` and `harnessVocabulary({ tables? }) -> Set<string>` (its `keys`): the patterns of every entry of `guest/lib/vocabulary-tables.js` `vocabularyTables` (the default `tables`); an entry whose `patterns()` throws or answers no array throws, naming its file (HR-SYN-7; 4.4 rule 4) |
 | `GW/powers.js` | `makeBootstrapFactory` | `({ signIn, limiter, operator, live, content, composer, history, extras }) -> ({ address, onClose }) -> GatewayBootstrap` (per connection: the `Live` facade that closes its subscriptions) |
 | `GW/extensions.js` | `loadGatewayExtensions` | `({ dir?, log }) -> GatewayExtension[]` |
 | `test/adapter/_m3-captp-client.js` | `makeClient` | `({ send, onClose? }) -> { receive(bytes), bootstrap(), close() }` (Node CapTP over any message transport) |

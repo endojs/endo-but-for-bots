@@ -16,7 +16,10 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
-import { m4Texts, m4TextOf } from '../../guest/lib/texts-m4.js';
+import {
+  subscriptionTextOf,
+  subscriptionTexts,
+} from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { NATIVE_CONTEXT_FORMAT } from '../../resources/agent-host/impl/projection.js';
 import { anthropicAttempt } from '../../resources/agent-host/impl/providers/anthropic.js';
@@ -212,7 +215,7 @@ test('effort: adaptive thinking with the effort (R4-23); refused before any requ
       request: { modelId: 'claude-fake-1', reasoningEffort: 'high' },
     }),
   );
-  t.is(refused.error.message, m4Texts.unsupportedEffort);
+  t.is(refused.error.message, subscriptionTexts.unsupportedEffort);
   t.is(server.requests().length, 1, 'nothing sent for the refused effort');
 });
 
@@ -288,19 +291,19 @@ test('R4-76: an SSE error event, a non-200 and an empty answer give the three te
   ]);
   const error = await drain(attempt(server));
   t.true(error.error instanceof ProviderFailure);
-  t.is(error.error.message, m4Texts.claudeInferenceFailed);
+  t.is(error.error.message, subscriptionTexts.claudeInferenceFailed);
   t.false(error.error.retryable);
   t.is(error.error.overloaded, undefined);
   clean(t, error);
 
   const http = await drain(attempt(server));
-  t.is(http.error.message, m4TextOf.subscriptionHttp(500));
+  t.is(http.error.message, subscriptionTextOf.subscriptionHttp(500));
   t.is(http.error.status, 500);
   t.false(http.error.retryable);
   clean(t, http);
 
   const empty = await drain(attempt(server));
-  t.is(empty.error.message, m4Texts.emptyMessagesOutput);
+  t.is(empty.error.message, subscriptionTexts.emptyMessagesOutput);
   t.false(empty.error.retryable);
   t.deepEqual(
     empty.events.map(e => Object.keys(e)[0]),
@@ -321,7 +324,7 @@ test('429 with exhaustion headers carries exhausted and its reset; a plain 429 d
   /** @type {any[]} */
   const readings = [];
   const exhausted = await drain(attempt(server, { readings }));
-  t.is(exhausted.error.message, m4TextOf.subscriptionHttp(429));
+  t.is(exhausted.error.message, subscriptionTextOf.subscriptionHttp(429));
   t.deepEqual(exhausted.error.exhausted, { untilMs: resetSec * 1000 });
   t.false(exhausted.error.retryable);
   t.is(readings.length, 1, 'the refusal reading is observed too');
@@ -333,7 +336,7 @@ test('429 with exhaustion headers carries exhausted and its reset; a plain 429 d
   t.false(throttled.error.retryable);
 
   const rejected = await drain(attempt(server));
-  t.is(rejected.error.message, m4TextOf.subscriptionHttp(401));
+  t.is(rejected.error.message, subscriptionTextOf.subscriptionHttp(401));
   t.true(rejected.error.rejected);
   for (const result of [exhausted, throttled, rejected]) clean(t, result);
 });
@@ -381,7 +384,7 @@ test('overload (529 or overloaded_error) before delivery is retried on the sched
       signal,
     }),
   );
-  t.is(late.error.message, m4Texts.claudeInferenceFailed);
+  t.is(late.error.message, subscriptionTexts.claudeInferenceFailed);
   t.true(late.error.overloaded);
   t.true(late.error.delivered);
   t.false(late.error.retryable);
@@ -413,17 +416,17 @@ test('XB: an error event is told by its symbolic type (ProviderFailure.errorType
     { status: 503 },
   ]);
   const overloaded = await drain(attempt(server));
-  t.is(overloaded.error.message, m4Texts.claudeInferenceFailed);
+  t.is(overloaded.error.message, subscriptionTexts.claudeInferenceFailed);
   t.true(overloaded.error.overloaded);
   t.true(overloaded.error.retryable);
   // Another type (invalid_request_error): the same fixed text, no overload.
   const other = await drain(attempt(server));
-  t.is(other.error.message, m4Texts.claudeInferenceFailed);
+  t.is(other.error.message, subscriptionTexts.claudeInferenceFailed);
   t.is(other.error.overloaded, undefined);
   t.false(other.error.retryable);
   // A status failure has no type: never read as an event.
   const status = await drain(attempt(server));
-  t.is(status.error.message, m4TextOf.subscriptionHttp(503));
+  t.is(status.error.message, subscriptionTextOf.subscriptionHttp(503));
   t.is(status.error.overloaded, undefined);
   for (const result of [overloaded, other, status]) clean(t, result);
 });
@@ -447,7 +450,7 @@ test('persistent overload: six attempts, five delays, then the failure keeps its
   t.is(server.requests().length, 6);
   t.is(
     result.error.message,
-    textOf.afterAttempts(m4TextOf.subscriptionHttp(529), 6),
+    textOf.afterAttempts(subscriptionTextOf.subscriptionHttp(529), 6),
   );
   t.true(result.error.overloaded);
   t.is(result.error.status, 529);

@@ -5,7 +5,7 @@
  */
 import { PresetEditor } from './PresetEditor.js';
 
-/** @import { UiFeature } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { UiFeature } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 /** @type {UiFeature} */
 export const feature = harden({

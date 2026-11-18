@@ -18,10 +18,10 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { shapes, textOf } from '../../guest/lib/interfaces.js';
-import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeQueue } from '../../guest/session/queue.js';
+import { runtimeParts } from '../../guest/session/runtime-parts.js';
 import { makeSession } from '../../guest/session/session.js';
 import { toolTable } from '../../guest/session/tool-table.js';
 import { turnHooks } from '../../guest/session/turn-hooks.js';
@@ -188,7 +188,7 @@ test('endowments seed the label map; the object tools run in the issuing crank',
       ['lookup', '{"n":1}', false],
       ['list', JSON.stringify(['notes', 'x'], null, 2), false],
       ['remove', 'Removed "x"', false],
-      ['lookup', textOf.errorResult(textOfM5.unknownLabel('nope')), true],
+      ['lookup', textOf.errorResult(textOf.unknownLabel('nope')), true],
     ],
   );
 });
@@ -199,7 +199,7 @@ test('a seed with a reserved or taken label fails make', async t => {
     makeM5Session({
       services: { endowments: [{ label: 'user', value: notes }] },
     }),
-    { message: textOfM5.reservedLabel('user') },
+    { message: textOf.reservedLabel('user') },
   );
   await t.throwsAsync(
     makeM5Session({
@@ -210,7 +210,7 @@ test('a seed with a reserved or taken label fails make', async t => {
         ],
       },
     }),
-    { message: textOfM5.labelTaken('a') },
+    { message: textOf.labelTaken('a') },
   );
 });
 
@@ -278,7 +278,7 @@ test('S2, S3: onClaim sees the entry; the note joins every round of that turn on
       (/** @type {any} */ { active, item }) => {
         claimed.push(item);
         if (item?.attachments !== undefined) {
-          active.systemNote = textOfM5.mentionLine(
+          active.systemNote = textOf.mentionLine(
             1,
             item.attachments.map((/** @type {any} */ a) => a.label),
           );
@@ -321,7 +321,7 @@ test('S2, S3: onClaim sees the entry; the note joins every round of that turn on
     sessionOptions: { hooks, makeQueue: wrapQueue },
   });
   await s.submit('look');
-  const note = textOfM5.mentionLine(1, ['notes', 'calc']);
+  const note = textOf.mentionLine(1, ['notes', 'calc']);
   t.is(claimed.length, 1);
   t.deepEqual(
     claimed[0].attachments.map((/** @type {any} */ a) => a.label),
@@ -413,21 +413,22 @@ test('systemTextOf joins a two-part system, each part read as before', async t =
   );
 });
 
-test('Session (M5 guard): grants and enqueueMessageOnce throw notBuilt until their parts exist, then forward', async t => {
-  // With no part registered (the merged table registers both).
-  const s = await makeM5Session({ sessionOptions: { parts: harden([]) } });
-  t.throws(() => s.session.grants(), { message: textOf.notBuilt('grants') });
-  const attachments = harden([{ label: 'notes', value: Far('Notes', {}) }]);
-  t.throws(
-    () =>
-      s.session.enqueueMessageOnce(
-        harden({ text: 'x' }),
-        requestId(),
-        AT,
-        attachments,
-      ),
-    { message: textOf.notBuilt('enqueueMessageOnce') },
+test('Session (M5 guard): a runtime without one of its four parts is refused at construction; grants and enqueueMessageOnce forward', async t => {
+  // HR-SYN-23: a missing part is a construction error, never a model- or
+  // caller-visible "not built yet".
+  await t.throwsAsync(
+    makeM5Session({ sessionOptions: { parts: harden([]) } }),
+    {
+      message: 'no runtime part powers',
+    },
   );
+  const withoutGrants = runtimeParts.filter(part => part.name !== 'grants');
+  await t.throwsAsync(
+    makeM5Session({ sessionOptions: { parts: harden(withoutGrants) } }),
+    { message: 'no runtime part grants' },
+  );
+  const attachments = harden([{ label: 'notes', value: Far('Notes', {}) }]);
+  const s = await makeM5Session();
   // The guard refuses 33 attachments before any part runs.
   t.throws(() =>
     s.session.enqueueMessageOnce(
@@ -441,6 +442,9 @@ test('Session (M5 guard): grants and enqueueMessageOnce throw notBuilt until the
   /** @type {any[]} */
   const calls = [];
   const parts = harden([
+    ...runtimeParts.filter(
+      part => part.name !== 'grants' && part.name !== 'packages',
+    ),
     { name: 'grants', make: () => harden({ facet }) },
     {
       name: 'packages',

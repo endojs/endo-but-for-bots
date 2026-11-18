@@ -12,13 +12,13 @@
 import { h } from 'preact';
 import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 
-import { uiTexts } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { labels } from './labels.js';
 import { LoadEarlier, MessageList } from './MessageList.js';
 import { Queue } from './Queue.js';
 import { RawView } from './RawView.js';
 
-/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 /** Pixels from the bottom that still count as "at the bottom". */
 const STICK_PX = 48;

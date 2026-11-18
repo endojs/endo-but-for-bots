@@ -10,7 +10,7 @@
  */
 import { h } from 'preact';
 
-import { uiTexts } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { labels } from './labels.js';
 import { endingOf } from './transcript.js';
 

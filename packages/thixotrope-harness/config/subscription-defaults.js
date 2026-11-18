@@ -4,7 +4,7 @@
  * 12): pool stickiness, refusal backoff, served-record coalescing, retry
  * schedules, renewal skew, the readings file's flush period and the
  * adapter-local bounds of credential reads and the audit reader. The bounds
- * that cross into or out of a vat are `guest/lib/limits-m4.js` (`m4Limits`);
+ * that cross into or out of a vat are `guest/lib/subscription-limits.js` (`subscriptionLimits`);
  * where a name is in both, the values are equal
  * (`test/unit/m4-interfaces.test.js`).
  *

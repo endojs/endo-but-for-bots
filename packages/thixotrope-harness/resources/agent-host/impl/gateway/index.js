@@ -60,7 +60,7 @@ import { m3Interfaces } from '../../../../guest/lib/interfaces-m3.js';
 import { findBlobDir } from '../blobs.js';
 import { assertLocalValue, localWriterGuard } from '../secrets/writer.js';
 import { makeBridge } from './bridge.js';
-import { closeCodes, gatewayTexts, secretWriterLabel } from './contract-m3.js';
+import { closeCodes, gatewayTexts, secretWriterLabel } from './protocol.js';
 import { cspHeader } from './csp.js';
 import {
   extensionCsp,
@@ -80,7 +80,7 @@ import { makeSignInStore } from './signin.js';
 import { makeStaticHandler } from './static.js';
 import { harnessNames } from './vocabulary.js';
 
-/** @import { GatewayContext, GatewayExtension } from './contract-m3.js' */
+/** @import { GatewayContext, GatewayExtension } from './protocol.js' */
 
 const { E, makeExo } = /** @type {any} */ (globalThis);
 
@@ -128,8 +128,6 @@ const messageOf = error =>
  *   wrapping key is (`THIX_HARNESS_SECRETS_KEY`; default the process's)
  * @param {string} [options.extensionsDir] default `GW/extensions/`
  * @param {string} [options.assetsDir] default `GW/assets/`
- * @param {string} [options.guestLibDir] the vocabulary's `interfaces-m*.js`
- *   directory (default `guest/lib/`)
  * @param {() => number} [options.now]
  * @param {Record<string, number>} [options.serverLimits] tests only
  */
@@ -146,7 +144,6 @@ export const makeGatewayService = ({
   env = processEnv,
   extensionsDir = undefined,
   assetsDir = defaultAssetsDir,
-  guestLibDir = undefined,
   now = () => Date.now(),
   serverLimits = undefined,
 }) => {
@@ -235,10 +232,8 @@ export const makeGatewayService = ({
         builtIn: [{ target: composer, methods: ['submit', 'edit'] }],
         log,
       });
-      const names = harnessNames({
-        ...(guestLibDir === undefined ? {} : { guestLibDir }),
-        log,
-      });
+      // Throws on a table that fails (HR-SYN-7): the bind fails.
+      const names = harnessNames();
       incarnation = harden({
         extras,
         isLargeCall,

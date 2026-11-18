@@ -14,7 +14,7 @@ import { mount, usageLabel } from '../../ui/src/shell/index.js';
 import {
   uiTexts,
   uiTextOf,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 
 const flush = async (rounds = 20) => {

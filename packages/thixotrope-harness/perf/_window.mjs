@@ -12,23 +12,33 @@
  * (default unbounded). A window with fewer than `few` samples (default 10)
  * says so (`fewSamples: true`); it does not run longer.
  *
- * PERF_WINDOW_SCALE (default 1) multiplies every window: 0.25 for a quick
- * smoke, never to make a row pass.
+ * PERF_WINDOW_SCALE (default 1) multiplies every window read through
+ * `windowMs`: 0.25 for a quick smoke, never to make a row pass.
  */
 import { performance } from 'node:perf_hooks';
-
-const SCALE = Number(process.env.PERF_WINDOW_SCALE ?? 1);
 
 /** The default window of one measured point. */
 export const DEFAULT_WINDOW_MS = 60_000;
 
 /**
- * A window length from an environment variable (milliseconds), scaled.
+ * A window length from an environment variable (milliseconds), multiplied
+ * by PERF_WINDOW_SCALE. Every window length a perf check reads goes through
+ * here (test/perf-window.test.js checks it), so the scale time-boxes every
+ * check. A window that must outlast a restart, a timeout or a collection
+ * cycle passes `scaled: false` and says why beside it; its variable still
+ * sets it.
  * @param {string} name
  * @param {number} fallback
+ * @param {{ scaled?: boolean, env?: Record<string, string | undefined> }} [options]
  */
-export const windowMs = (name, fallback) =>
-  Math.max(1, Math.round(Number(process.env[name] ?? fallback) * SCALE));
+export const windowMs = (
+  name,
+  fallback,
+  { scaled = true, env = process.env } = {},
+) => {
+  const scale = scaled ? Number(env.PERF_WINDOW_SCALE ?? 1) : 1;
+  return Math.max(1, Math.round(Number(env[name] ?? fallback) * scale));
+};
 
 /**
  * @typedef {object} Window

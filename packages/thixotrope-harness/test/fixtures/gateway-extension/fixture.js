@@ -14,7 +14,7 @@
  */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-/** @import { GatewayContext, GatewayExtension } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { GatewayContext, GatewayExtension } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 const { M, makeExo } = /** @type {GuestGlobals} */ (globalThis);
 

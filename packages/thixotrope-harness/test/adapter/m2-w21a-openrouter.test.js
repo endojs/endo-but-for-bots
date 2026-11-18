@@ -177,6 +177,7 @@ const runRound = async (
     timers,
     prepare: async () => harden({ transcript }),
     owner,
+    unexpectedFailure: openRouterKind.unexpectedFailure,
   });
   const fake = makeFakeTurn({ dispatch });
   void E(endpoint).holdTurn(fake.turn);

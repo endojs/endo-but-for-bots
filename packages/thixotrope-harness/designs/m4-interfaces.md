@@ -1,5 +1,11 @@
 # M4 interface contract
 
+> **Files moved since (F2, HR-SYN-1).** Paths and exports this contract names (`interfaces-m5.js`,
+> `interfaces-m5-factory.js`, `limits-m5.js`, `limits-m4.js`, `texts-m4.js`, `contract-m3.js`,
+> `defaults-m4.js`, `m5-parts.js`, `m4-secrets.js`, `m1bShapes`, `m2Interfaces`, `m5Widenings`, ...)
+> were folded or renamed; `designs/arch-review/fold-plan.md` section 6 maps each old name to the
+> new one. The text below is the contract as written.
+
 Unit W4.0 of `milestones.md` M4 (Secrets manager and subscription pools). This file,
 `guest/lib/interfaces-m4.js`, `guest/lib/texts-m4.js`, `guest/lib/limits-m4.js` and
 `resources/agent-host/impl/subscriptions/types.js` are the contract the M4 builders (group A:
@@ -192,7 +198,7 @@ operator's root authority, R7-22; this keeps `AgentHostAdmin`, which M3 extends,
 | `CredentialOps.poolsChanged()` | same | manager (`retirePool`, `PoolMember.retire`) | answered, no argument (as built, X-FIX J-10051: guard `M.call().returns(undefined)`; XB had it sendOnly); the retirement awaits the answer | tiny | lost with a retired adapter: harmless (the retirement ignores the failure and returns), a new incarnation loads every pool afresh; the adapter also re-reads a used pool's state when it is older than `poolStateRefreshMs` (600,000 ms), the safety net |
 | `AuditReader.page({ secret?, limit?, before? })` | `SecretsAdmin.auditReader()` | gateway (in process), CLI, tests | answered | <= 1,000 events, never into a vat | restart: get a new reader |
 | `Accounts.list()`, `forBackend(pool)`, `forSession(session)`, `refresh(pool?)`, `watch(rev?)` | `SubscriptionsAdmin.accounts()` | gateway (in process), CLI, tests | answered | adapter-local | restart: get a new one |
-| `AccountsSubscription.next()`, `close()` | `Accounts.watch()` | gateway | answered | one `AccountsBatch` | restart: re-watch; idle (no `next()` call for 60 s): evicted, its next `next()` rejects with `m4Texts.accountsWatchClosed` and the page calls `watch(lastRev)` (6) |
+| `AccountsSubscription.next()`, `close()` | `Accounts.watch()` | gateway | answered | one `AccountsBatch` | restart: re-watch; idle (no `next()` call for 60 s): evicted, its next `next()` answers `{ rev, pools: [], closed: true, reason: 'idle' }` (HR-SYN-34, F2; it rejected with `m4Texts.accountsWatchClosed` before) and the page calls `watch(lastRev)` (6) |
 | `gatewayExtension` of `AH/gateway/extensions/m4-secrets.js` (W4.6) | loaded by M3's `GW/extensions.js` at adapter start | M3's bridge | - | - | - |
 | pool provider (`claudePoolKind`, `codexPoolKind` in `backendKinds`) | `backendKinds` hook (H-4) | the endpoint, per round | in process | - | - |
 | `accountStatus` adapter tool | `adapterTools` hook; offered by both pool kinds and both API kinds (`tools` lists) | the session vat through `TurnPorts.tools` (`AdapterTool.execute`, M1a) | answered | text <= 32,768 units, staged over `inlineBytes` | adapter restarted: as any adapter tool on the turn path (M2 11: outcome-unknown recovery) |
@@ -242,10 +248,13 @@ Nothing a session or exec vat can call returns a `PoolMember`, a `Secret`, a `Re
 ### 4.1 What M4 adds to M2's Secrets
 
 - **Catalogue** (R7-22, R6-67): `SecretsAdmin.catalog(cursor?)` pages the manager's list of
-  Secrets (M2's `secretList`, creation order, cursor = position as in `list`), at most 64 per
-  page and at most `frameBytes` (cut, then `next`); one `CredentialOps.describeSecrets(keys)`
-  call fills generation, state and bytes; labels and descriptions come from the manager's records
-  (the system of record). Never a value (R7-26).
+  Secrets (M2's `secretList`, creation order), at most 64 per page and at most `frameBytes` (cut,
+  then `next`); one `CredentialOps.describeSecrets(keys)` call fills generation, state and bytes;
+  labels and descriptions come from the manager's records (the system of record). Never a value
+  (R7-26). *Amended (HR-SYN-11):* the cursor is the creation serial of the last Secret the page
+  before held, as `list`'s (J-9486), not a position, so a delete between pages skips none;
+  `SubscriptionsAdmin.listMembers` pages by each member's creation serial the same way. A cursor
+  must be canonical decimal digits; anything else is refused with the existing text.
 - **Description edit** (R6-67, R7-23 `setDescription`): `Secret.setDescription(text)`.
 - **Audit reader** (R7-63: default 100, at most 1,000): `SecretsAdmin.auditReader()` returns an
   adapter-local `AuditReader`; `page({ secret?, limit = 100, before? })` answers newest first,
@@ -415,8 +424,12 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   4.5): the accounts channel itself evicts them. A `next()` that has waited
   `accountsKeepaliveMs` (30 s) with no change answers the current view again (same `rev`), so a
   live page calls `next()` at least every 30 s; a subscriber with no `next()` call for
-  `accountsIdleMs` (60 s) is idle and evicted (closed; a later `next()` rejects with
-  `m4Texts.accountsWatchClosed`; the page calls `watch(lastRev)`). A `watch` that meets the
+  `accountsIdleMs` (60 s) is idle and evicted (closed; a waiting or later `next()` answers an
+  `AccountsBatch` with `closed: true` and `reason` `idle`, `client` after the viewer's own
+  `close()`, `stopped` when the adapter's accounts core closes, and `pools: []`; the page tests
+  the field and calls `watch(lastRev)`, and shows `m4Texts.accountsWatchClosed` only after
+  `REWATCH_LIMIT` closed answers in a row. Amended by HR-SYN-34 (F2): it rejected with that text,
+  which the page compared after CapTP). A `watch` that meets the
   subscriber cap (`channelLimits.subscribersPerSession`, 32) evicts the oldest idle subscriber
   first and refuses only when none is idle. Times come from the injected `timers` (tests use a
   fake clock). W4.5 test: 40 watchers opened and abandoned (one `next()` each, then nothing),

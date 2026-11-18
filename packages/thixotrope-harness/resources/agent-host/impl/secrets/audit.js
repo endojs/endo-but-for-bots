@@ -24,7 +24,7 @@
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { m4Interfaces } from '../../../../guest/lib/interfaces-m4.js';
-import { m4Limits } from '../../../../guest/lib/limits-m4.js';
+import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
 /* eslint-enable import/no-relative-packages */
 import { secretError } from './store.js';
 
@@ -43,7 +43,11 @@ export const makeAuditReader = ({ store, resolveSecret }) =>
      */
     page: async (query = {}) => {
       await null;
-      const { secret, limit = m4Limits.auditReaderDefault, before } = query;
+      const {
+        secret,
+        limit = subscriptionLimits.auditReaderDefault,
+        before,
+      } = query;
       /** @type {string | undefined} */
       let key;
       if (secret !== undefined) {

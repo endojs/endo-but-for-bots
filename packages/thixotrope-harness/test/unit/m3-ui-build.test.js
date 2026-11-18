@@ -12,7 +12,7 @@ import url from 'node:url';
 import vm from 'node:vm';
 
 import { buildUi, listUiModules } from '../../ui/build.mjs';
-import { GATEWAY_PROTOCOL } from '../../resources/agent-host/impl/gateway/contract-m3.js';
+import { GATEWAY_PROTOCOL } from '../../resources/agent-host/impl/gateway/protocol.js';
 
 const packageDir = path.resolve(
   path.dirname(url.fileURLToPath(import.meta.url)),

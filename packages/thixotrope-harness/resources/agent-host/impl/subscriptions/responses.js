@@ -25,12 +25,12 @@
  *   the round's native context, replayed before the round's text only for
  *   the same model and text (R4-31, as `anthropic.js` checks its thinking);
  * - failures: `error`, `response.failed`, `response.incomplete` fail with
- *   `m4TextOf.responsesFailed(type, facts, explanation)`, facts symbolic
+ *   `subscriptionTextOf.responsesFailed(type, facts, explanation)`, facts symbolic
  *   only (codes, types, params, reasons; never prose, a request id or a
- *   body); a non-200 answer with `m4TextOf.subscriptionHttp(status)` (a 429
+ *   body); a non-200 answer with `subscriptionTextOf.subscriptionHttp(status)` (a 429
  *   whose headers say the subscription is used up carries `exhausted`, a
  *   401 `rejected`); an answer with no text and no call with
- *   `m4Texts.emptyResponsesOutput`; a stream cut before completion, an
+ *   `subscriptionTexts.emptyResponsesOutput`; a stream cut before completion, an
  *   unreadable event, no answer and a timeout with `responsesFailed` of the
  *   pseudo event types `stream.incomplete`, `stream.unreadable`,
  *   `stream.unreachable` and `stream.timeout` (no fixed text exists for
@@ -54,12 +54,12 @@ import { texts } from '../../../../guest/lib/interfaces.js';
 import { limits } from '../../../../guest/lib/limits.js';
 import {
   codexExplanations,
-  m4Texts,
-  m4TextOf,
-} from '../../../../guest/lib/texts-m4.js';
+  subscriptionTextOf,
+  subscriptionTexts,
+} from '../../../../guest/lib/subscription-texts.js';
 import { usageFromOpenRouter } from '../../../../guest/lib/token-usage.js';
 /* eslint-enable import/no-relative-packages */
-import { subscriptionDefaults } from '../../../../config/defaults-m4.js';
+import { subscriptionDefaults } from '../../../../config/subscription-defaults.js';
 import { anthropicToolId, textDigest } from '../providers/anthropic.js';
 import {
   bodyChunks,
@@ -208,7 +208,7 @@ export const responsesFailureText = event => {
     key !== undefined && Object.hasOwn(explanations, key)
       ? explanations[key]
       : undefined;
-  return m4TextOf.responsesFailed(
+  return subscriptionTextOf.responsesFailed(
     event.type === 'error' ? 'error' : eventTypeText(event.type),
     facts,
     explanation,
@@ -439,7 +439,7 @@ export async function* codexAttempt({
     request.reasoningEffort !== undefined &&
     codexEffort(request.reasoningEffort) === undefined
   ) {
-    throw wireFailure(m4Texts.unsupportedEffort);
+    throw wireFailure(subscriptionTexts.unsupportedEffort);
   }
   const body = codexBody({
     modelId,
@@ -471,7 +471,7 @@ export async function* codexAttempt({
     const kind = failureKind(error, signal, requestSignal);
     if (kind === 'aborted') return error;
     return wireFailure(
-      m4TextOf.responsesFailed(
+      subscriptionTextOf.responsesFailed(
         kind === 'timeout' ? 'stream.timeout' : 'stream.unreachable',
         [],
       ),
@@ -498,7 +498,7 @@ export async function* codexAttempt({
     const after = retryAfterMs(response, now);
     const exhausted = status === 429 ? observer.exhausted() : undefined;
     discardBody(response);
-    throw wireFailure(m4TextOf.subscriptionHttp(status), {
+    throw wireFailure(subscriptionTextOf.subscriptionHttp(status), {
       status,
       ...(exhausted === undefined ? {} : { exhausted }),
       ...(status === 401 ? { rejected: true } : {}),
@@ -511,7 +511,9 @@ export async function* codexAttempt({
     )
   ) {
     discardBody(response);
-    throw wireFailure(m4TextOf.responsesFailed('stream.unreadable', []));
+    throw wireFailure(
+      subscriptionTextOf.responsesFailed('stream.unreadable', []),
+    );
   }
 
   /** @type {any} */
@@ -629,9 +631,12 @@ export async function* codexAttempt({
         });
       }
       if (unreadable) {
-        throw wireFailure(m4TextOf.responsesFailed('stream.unreadable', []), {
-          delivered,
-        });
+        throw wireFailure(
+          subscriptionTextOf.responsesFailed('stream.unreadable', []),
+          {
+            delivered,
+          },
+        );
       }
     }
   } catch (error) {
@@ -641,14 +646,20 @@ export async function* codexAttempt({
     if (kind === 'timeout') throw transport(error, response.requestSignal);
     // A body that ended inside an event, bad UTF-8, a reset: not a whole
     // answer.
-    throw wireFailure(m4TextOf.responsesFailed('stream.incomplete', []), {
-      delivered,
-    });
+    throw wireFailure(
+      subscriptionTextOf.responsesFailed('stream.incomplete', []),
+      {
+        delivered,
+      },
+    );
   }
   if (completed === undefined) {
-    throw wireFailure(m4TextOf.responsesFailed('stream.incomplete', []), {
-      delivered,
-    });
+    throw wireFailure(
+      subscriptionTextOf.responsesFailed('stream.incomplete', []),
+      {
+        delivered,
+      },
+    );
   }
   const output =
     Array.isArray(completed.output) && Number(completed.output.length) > 0
@@ -703,7 +714,7 @@ export async function* codexAttempt({
       : undefined;
   if (textLength === 0 && calls.length === 0) {
     if (usage !== undefined) yield { usage };
-    throw wireFailure(m4Texts.emptyResponsesOutput, { delivered });
+    throw wireFailure(subscriptionTexts.emptyResponsesOutput, { delivered });
   }
   for (const call of calls) yield { toolCall: call };
   if (reasoning.length > 0) {

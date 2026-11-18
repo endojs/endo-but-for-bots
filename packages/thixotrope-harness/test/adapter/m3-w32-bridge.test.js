@@ -15,7 +15,7 @@ import {
   closeCodes,
   gatewayLimits,
   gatewayTexts,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeBridge } from '../../resources/agent-host/impl/gateway/bridge.js';
 import { checkCall } from '../../resources/agent-host/impl/gateway/guard.js';
 import {
@@ -30,9 +30,7 @@ const { E, Far } = /** @type {GuestGlobals} */ (globalThis);
 
 // A sign-in value built at run time (64 hex digits, not a real secret).
 const SECRET = ['0123456789abcdef'].join('').repeat(4);
-const { keys: vocabulary, methods: contractMethods } = harnessNames({
-  log: () => {},
-});
+const { keys: vocabulary, methods: contractMethods } = harnessNames();
 // The stand-ins' test-only methods (not in any contract interface).
 const testOnlyMethods = ['hang', 'many'];
 const methods = new Set([...contractMethods, ...testOnlyMethods]);

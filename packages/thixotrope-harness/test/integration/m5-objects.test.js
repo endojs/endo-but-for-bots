@@ -38,15 +38,7 @@ import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
-import {
-  texts as textsM5,
-  textOf as textOfM5,
-} from '../../guest/lib/interfaces-m5.js';
-import {
-  texts as factoryTexts,
-  textOf as factoryTextOf,
-} from '../../guest/lib/interfaces-m5-factory.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
+import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { emit, loadAvg, runIdentity } from '../../perf/_harness.mjs';
 import {
@@ -158,18 +150,18 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
     harden({ label, value: fixtures.notes });
   await refused(
     { label: 'R1', template: 'general', backend, endowments: [endow('user')] },
-    { message: factoryTextOf.reservedEndowment('user') },
+    { message: textOf.reservedEndowment('user') },
   );
   await refused(
     { label: 'R2', template: 'general', backend, endowments: [endow('a/b')] },
-    { message: factoryTextOf.reservedEndowment('a/b') },
+    { message: textOf.reservedEndowment('a/b') },
   );
   await refused(
     {
       label: 'R3',
       template: 'general',
       backend,
-      endowments: Array.from({ length: limitsM5.maxEndowments + 1 }, (_, i) =>
+      endowments: Array.from({ length: limits.maxEndowments + 1 }, (_, i) =>
         endow(`e${i}`),
       ),
     },
@@ -182,11 +174,11 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
       backend,
       endowments: [endow('n'), endow('n')],
     },
-    { message: factoryTextOf.duplicateEndowment('n') },
+    { message: textOf.duplicateEndowment('n') },
   );
   await refused(
     { label: 'R5', template: 'chat-only', backend, endowments: [endow('n')] },
-    { message: factoryTexts.chatOnlyRule },
+    { message: texts.chatOnlyRule },
   );
 
   const preset = await endowedPreset(
@@ -226,9 +218,9 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
   t.is(powers.end.status, 'completed');
   const powersResults = await resultsOf(powers.turn);
   t.deepEqual(powersResults.slice(0, 4), [
-    [textOfM5.stored('x'), false],
+    [textOf.stored('x'), false],
     ['1', false],
-    [textOfM5.removed('x'), false],
+    [textOf.removed('x'), false],
     ['true', false],
   ]);
   // J-0472: an undeclared name reads as undefined (recorded either way).
@@ -240,7 +232,7 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
 
   const expired = await runTurn(slice, session, live, 'expired');
   t.deepEqual(await resultsOf(expired.turn), [
-    [rendered(textsM5.powersExpired), false],
+    [rendered(texts.powersExpired), false],
   ]);
 
   // ---- K7: SIGKILL while an exec call sleeps before its powers.lookup
@@ -279,7 +271,7 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
   const after = await runTurn(slice, session, live, 'k7 after');
   t.is(after.end.status, 'completed');
   t.deepEqual(await resultsOf(after.turn), [
-    [rendered(textsM5.powersExpired), false],
+    [rendered(texts.powersExpired), false],
     [rendered([7, 4]), false],
   ]);
   emit({
@@ -325,7 +317,7 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
   // staged it (no halt at this worker), or the exec vat stopped and the
   // session said so. Both keep the session working (J-0771).
   const terminated =
-    big[0] === textOf.errorResult(textsM5.inspectTerminated) && big[1];
+    big[0] === textOf.errorResult(texts.inspectTerminated) && big[1];
   // Since core CC-027 the hub refuses the 200 KB help's frame toward the exec
   // vat (over THIXOTROPE_VAT_FRAME_BYTES) before the vat decodes it: the
   // help() call breaks with FRAME_TOO_LARGE, and describeCapability answers
@@ -341,7 +333,7 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
   if (!terminated && !hubRefused) {
     t.false(big[1]);
     t.true(isStaged(big[0]), 'a cut answer over inlineBytes is staged');
-    t.true(Number(big[0].bytes) <= 3 * limitsM5.inspectResultUnits);
+    t.true(Number(big[0].bytes) <= 3 * limits.inspectResultUnits);
     t.true(big[0].preview.startsWith('{"methods":'));
   }
   emit({

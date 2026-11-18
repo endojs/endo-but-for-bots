@@ -26,6 +26,7 @@ import { writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import url from 'node:url';
+import { windowMs } from './_window.mjs';
 
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
 installGuestPrelude();
@@ -43,8 +44,6 @@ const { limits } = await import('../guest/lib/limits.js');
 export const M3_TEMPLATE_TURNS = 300;
 /** Its title (the perf files and browser tests find it by its row). */
 export const M3_TEMPLATE_TITLE = 'm3-300';
-/** Bumped when the provisioning below changes. */
-const M3_TEMPLATE_VERSION = 1;
 
 const usage = {
   inputTokens: 10,
@@ -64,12 +63,23 @@ export const m3TemplateLog = path.join(tmpRoot, 'm3-300-scripted.log');
 
 /**
  * Template options for `ensureTemplate`: m1a's provisioning plus the
- * imported session.
+ * imported session. The key covers what the import writes through (this
+ * module, the export format, the synthetic export writer and the adapter's
+ * archive store) besides the harness's own provisioning (HR-SYN-20).
  */
 export const m3TemplateOptions = async () => {
   const base = await m1aTemplateOptions();
   return {
-    id: `${base.id}-m3-300-v${M3_TEMPLATE_VERSION}`,
+    id: M3_TEMPLATE_TITLE,
+    sources: [
+      url.fileURLToPath(import.meta.url),
+      'scripts/export.mjs',
+      'test/integration/_m2-lifecycle.js',
+      'resources/agent-host/impl/archive',
+      // Turns write blob files; their layout is part of the state (HR-SYN-20).
+      'resources/agent-host/impl/blobs.js',
+    ],
+    extra: { turns: M3_TEMPLATE_TURNS, script: m3TemplateScript },
     /** @param {import('../test/template/index.js').ProvisionContext} context */
     provision: async context => {
       await base.provision(context);
@@ -190,7 +200,7 @@ if (
 /** Every M3 perf file ends its windows by 9 min 30 s (m3-interfaces.md 13). */
 export const FILE_BUDGET_MS = 9.5 * 60_000;
 /** The default window of one measured point. */
-export const WINDOW_MS = Number(process.env.M3_WINDOW_MS ?? 60_000);
+export const WINDOW_MS = windowMs('M3_WINDOW_MS', 60_000);
 /** Fewer samples than this in a window are flagged `fewSamples`. */
 export const FEW_SAMPLES = 30;
 

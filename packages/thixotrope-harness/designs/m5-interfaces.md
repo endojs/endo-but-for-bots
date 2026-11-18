@@ -1,5 +1,11 @@
 # M5 interface contract
 
+> **Files moved since (F2, HR-SYN-1).** Paths and exports this contract names (`interfaces-m5.js`,
+> `interfaces-m5-factory.js`, `limits-m5.js`, `limits-m4.js`, `texts-m4.js`, `contract-m3.js`,
+> `defaults-m4.js`, `m5-parts.js`, `m4-secrets.js`, `m1bShapes`, `m2Interfaces`, `m5Widenings`, ...)
+> were folded or renamed; `designs/arch-review/fold-plan.md` section 6 maps each old name to the
+> new one. The text below is the contract as written.
+
 Unit W5.0 of `milestones.md` M5. This file, `guest/lib/interfaces-m5.js`,
 `guest/lib/interfaces-m5-factory.js` and `guest/lib/limits-m5.js` are the contract the M5 builders
 (group A: W5.1, W5.2, W5.3, W5.4; group B: W5.5, W5.6, W5.7, W5.8) and the integration unit W5.9
@@ -410,7 +416,9 @@ them; `cancel` drops them. Called by the Composer only (as `enqueueOnce`).
 `Inventory.list` and passes them back as the presences it holds; in the browser only the mention
 addon calls the four-argument form (W5.8, section 4.1 item 2), and a resend after a reconnect goes
 through the same addon, so the receipt fingerprint (text and labels) of a resend matches the
-first send or the addon refuses to resend.
+first send or the addon refuses to resend. *Amended (HR-SYN-10):* with attachments the Composer
+runs the session's `checkAttachments` before it stages anything, so an attachment refusal never
+leaves a file and the Composer recognises no attachment text afterwards (M1b 17.1 as amended).
 
 **Packages** (`guest/session/packages.js`): a per-session table `Map<number, Package>`; `number`
 is a per-session counter from 1 (shared with M9's inbox, which opens packages through the same

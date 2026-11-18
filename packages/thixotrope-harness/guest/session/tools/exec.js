@@ -27,6 +27,7 @@ import { execDescription, texts, textOf } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { isRetiredBreak } from '../../lib/retired.js';
 import { fieldBytes, isStaged } from '../staging.js';
+import { messageOf } from '../../lib/bounded.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { ToolTableEntry } from '../tool-table.js' */
@@ -120,17 +121,6 @@ export const retireScope = (state, handle, scope) => {
   if (scope === undefined || state.scope !== scope) return;
   state.scope = undefined;
   E.sendOnly(handle).retire(scope);
-};
-
-/** @param {unknown} error */
-const messageOf = error => {
-  try {
-    const { message } = /** @type {any} */ (error);
-    if (typeof message === 'string') return message;
-  } catch {
-    // fall through
-  }
-  return `${error}`;
 };
 
 /** @param {any} text */

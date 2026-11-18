@@ -28,13 +28,14 @@
  *
  * Guest rules.
  */
+
 import { textOf } from '../../lib/guards/session.js';
-import { textOf as textOfM5 } from '../../lib/interfaces-m5.js';
 import { limits } from '../../lib/limits.js';
 import { argSpecs, parseClosedArgs } from '../../lib/tool-args.js';
 import { isValidLabel } from '../labels.js';
 import { partOf } from '../packages.js';
 import { fieldBytes, isStaged } from '../staging.js';
+import { messageOf } from '../../lib/bounded.js';
 
 /** @import { ToolTableEntry } from '../tool-table.js' */
 
@@ -42,17 +43,6 @@ import { fieldBytes, isStaged } from '../staging.js';
 const ok = text => harden({ status: 'ok', text });
 /** @param {string} text */
 const failed = text => harden({ status: 'failed', text });
-
-/** @param {unknown} error */
-const messageOf = error => {
-  try {
-    const { message } = /** @type {any} */ (error);
-    if (typeof message === 'string') return message;
-  } catch {
-    // fall through
-  }
-  return `${error}`;
-};
 
 const integerParam = harden({ type: 'integer' });
 const stringParam = harden({ type: 'string' });
@@ -121,7 +111,7 @@ const readPackage = (tool, { args, turnId }, context, nameKey) => {
     const bytes = /** @type {number} */ (fieldBytes(args));
     return {
       outcome: failed(
-        textOfM5.argumentsTooLarge(tool, bytes, limits.inlineBytes),
+        textOf.argumentsTooLarge(tool, bytes, limits.inlineBytes),
       ),
     };
   }
@@ -130,11 +120,8 @@ const readPackage = (tool, { args, turnId }, context, nameKey) => {
   const number = parsed.values.get('messageNumber');
   const edge = parsed.values.get('edgeName');
   const name = parsed.values.get(nameKey);
-  const runtime = context?.runtime;
-  const table = runtime?.packages?.table;
-  if (table === undefined) {
-    return { outcome: failed(textOf.notBuilt('packages')) };
-  }
+  const { runtime } = context;
+  const { table } = runtime.packages;
   try {
     const value = table.take(number, edge, turnId);
     return { number, edge, name, value, runtime };
@@ -158,7 +145,7 @@ const adoptEntry = harden({
     } catch (error) {
       return Promise.resolve(failed(messageOf(error)));
     }
-    return Promise.resolve(ok(textOfM5.adopted(edge, number, name)));
+    return Promise.resolve(ok(textOf.adopted(edge, number, name)));
   },
 });
 
@@ -172,17 +159,14 @@ const adoptToolEntry = harden({
     const read = readPackage('adoptTool', request, context, 'toolName');
     if ('outcome' in read) return read.outcome;
     const { number, name, value, runtime } = read;
-    if (!isValidLabel(name)) return failed(textOfM5.reservedLabel(name));
-    const grants = runtime.grants;
-    if (grants?.grant === undefined) {
-      return failed(textOf.notBuilt('adoptTool'));
-    }
+    if (!isValidLabel(name)) return failed(textOf.reservedLabel(name));
+    const { grants } = runtime;
     try {
       const info = await grants.schemaRead(
         grants.grant(value, 'adopted', name),
       );
       if (info?.state === 'offered') {
-        return ok(textOfM5.adoptedTool(name, number));
+        return ok(textOf.adoptedTool(name, number));
       }
       return failed(info?.reason ?? `${info?.state}`);
     } catch (error) {
@@ -213,7 +197,7 @@ export const mentionHooks = harden({
       values: new Map(attachments.map(a => [a.label, a.value])),
       turnId: active.turnId,
     });
-    active.systemNote = textOfM5.mentionLine(number, labels);
+    active.systemNote = textOf.mentionLine(number, labels);
   },
   onSettle: closePackages,
   recoverySteps: closePackages,

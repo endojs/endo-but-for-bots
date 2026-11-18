@@ -11,7 +11,7 @@ import { makeBridge } from '../../resources/agent-host/impl/gateway/bridge.js';
 import {
   closeCodes,
   gatewayTexts,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeBootstrapFactory } from '../../resources/agent-host/impl/gateway/powers.js';
 import { makeGatewayServer } from '../../resources/agent-host/impl/gateway/server.js';
 import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary.js';
@@ -28,7 +28,7 @@ test('sign in and call through W3.1 server and the bridge', async t => {
     rename: title => title.length,
   });
   const operator = Far('Operator', { session: () => session });
-  const names = harnessNames({ log: () => {} });
+  const names = harnessNames();
   const bridge = makeBridge({
     makeBootstrap: makeBootstrapFactory({
       signIn: { matches: candidate => candidate === SECRET },

@@ -21,11 +21,9 @@
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import {
   interfaces,
-  m1bInterfaces,
-  m1bShapes,
-  m2Interfaces,
-  texts,
+  shapes,
   textOf,
+  texts,
 } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { fitsFrame } from '../../guest/lib/bounded.js';
@@ -41,6 +39,7 @@ import {
 import {
   forwardSinkMethods,
   makeSubscriptionsPart,
+  serialCursor,
 } from './durable-subscriptions.js';
 
 const { E, Far, M, defineExoClass, makeExo, makePromiseKit } =
@@ -59,6 +58,20 @@ const MAX_SECRETS = limits.secretsMax;
 
 /** @param {string} code a `secretCodes` entry */
 const secretError = code => Error(textOf.secretFailed(code));
+
+/**
+ * Whether `error` is the store's refusal with `code` (the secret error
+ * contract: the fixed text of the code, compared whole).
+ * @param {unknown} error
+ * @param {string} code
+ */
+const isSecretFailure = (error, code) => {
+  try {
+    return /** @type {any} */ (error)?.message === textOf.secretFailed(code);
+  } catch {
+    return false;
+  }
+};
 
 /**
  * R7-25: 1-200 characters, no newline (the guard bounds the length).
@@ -103,7 +116,7 @@ export const make = ({ makeManager }) => {
   const blobKeys = new WeakMap();
   const makeBlob = defineExoClass(
     'Blob',
-    m1bInterfaces.Blob,
+    interfaces.Blob,
     () => harden({}),
     {},
   );
@@ -115,28 +128,28 @@ export const make = ({ makeManager }) => {
         M.remotable('AgentHostOps'),
         M.string({ stringLengthLimit: 128 }),
       ).returns(M.number()),
-      mintBlobs: M.call().returns(m1bShapes.BlobStock),
+      mintBlobs: M.call().returns(shapes.BlobStock),
       resolveBlobs: M.call(
         M.arrayOf(M.remotable('Blob'), {
           arrayLengthLimit: limits.blobResolveBatch,
         }),
-      ).returns(m1bShapes.BlobKeys),
+      ).returns(shapes.BlobKeys),
       // M2 (m2-interfaces 3.3): keys by amplification, at most 64 a call.
       resolveSessions: M.call(
         M.arrayOf(M.remotable('Session'), {
           arrayLengthLimit: limits.blobResolveBatch,
         }),
-      ).returns(m1bShapes.BlobKeys),
+      ).returns(shapes.BlobKeys),
       resolveSecrets: M.call(
         M.arrayOf(M.remotable('Secret'), {
           arrayLengthLimit: limits.blobResolveBatch,
         }),
-      ).returns(m1bShapes.BlobKeys),
+      ).returns(shapes.BlobKeys),
       resolveGrants: M.call(
         M.arrayOf(M.remotable('ReadGrant'), {
           arrayLengthLimit: limits.blobResolveBatch,
         }),
-      ).returns(m1bShapes.BlobKeys),
+      ).returns(shapes.BlobKeys),
       // M4 (H-2): poolState, poolChanged, poolOf.
       ...m4SinkMethodGuards(),
     }),
@@ -223,19 +236,24 @@ export const make = ({ makeManager }) => {
 
   /**
    * Call the current ops facet; a retired one is replaced by reconciling
-   * once and the call is made again.
+   * once and the call is made again, as `retry` when given. A retired break
+   * does not say whether the first call was applied before the adapter
+   * died (HR-SYN-8): a call that is not idempotent passes a `retry` that
+   * accepts the applied outcome (the store answers a repeated create of
+   * the same fresh entry itself).
    * @template T
    * @param {(current: any) => Promise<T>} fn
+   * @param {(current: any) => Promise<T>} [retry]
    * @returns {Promise<T>}
    */
-  const withOps = async fn => {
+  const withOps = async (fn, retry = fn) => {
     if (ops === undefined) await reconcile();
     try {
       return await fn(ops);
     } catch (error) {
       if (!isRetiredBreak(error)) throw error;
       await reconcile();
-      return fn(ops);
+      return retry(ops);
     }
   };
 
@@ -409,8 +427,22 @@ export const make = ({ makeManager }) => {
       },
       async delete() {
         const record = recordOf(this.self);
-        // The store refuses an active secret (`NOT_REVOKED`).
-        await withOps(current => E(current).secretDelete(record.key));
+        // The store refuses an active secret (`NOT_REVOKED`). After a
+        // retired break the delete may have been applied: on the retry, a
+        // key the store no longer has is that delete (HR-SYN-8).
+        await withOps(
+          current => E(current).secretDelete(record.key),
+          current =>
+            E(current)
+              .secretDelete(record.key)
+              .catch(
+                /** @param {unknown} error */ error => {
+                  if (isSecretFailure(error, 'UNKNOWN_SECRET'))
+                    return undefined;
+                  throw error;
+                },
+              ),
+        );
         secretRecords.delete(this.self);
         secretList = secretList.filter(secret => secret !== this.self);
         return undefined;
@@ -445,9 +477,8 @@ export const make = ({ makeManager }) => {
      *   page before, so a delete between pages skips none (J-9486)
      */
     list: cursor => {
-      const after = cursor === undefined ? 0 : Number(cursor);
-      if (!Number.isSafeInteger(after) || after < 0)
-        throw Error('not a secrets cursor');
+      // Strict digits (HR-SYN-11): `Number()` took `1e3`, ` 5`, `0x10`.
+      const after = serialCursor(cursor, 'not a secrets cursor');
       const rest = secretList.filter(secret => serialOf(secret) > after);
       const secrets = rest.slice(0, limits.secretPageEntries);
       return harden(
@@ -497,7 +528,7 @@ export const make = ({ makeManager }) => {
         ? { kind: spec.kind, label: spec.label }
         : { kind: spec.kind, label: spec.label, modelId: spec.modelId },
     );
-    const backend = makeExo('Backend', m2Interfaces.Backend, {
+    const backend = makeExo('Backend', interfaces.Backend, {
       describe: () => info,
       /** @param {any} [request] a `shapes.ModelRequest` */
       listModels: async request =>
@@ -588,7 +619,7 @@ export const make = ({ makeManager }) => {
   };
 
   // M3 (m3-interfaces.md 11, H2): the M2 guard plus `gateway()`.
-  const facetGuard = withGatewayAdmin(m2Interfaces.AgentHostAdmin);
+  const facetGuard = withGatewayAdmin(interfaces.AgentHostAdmin);
   const facet = makeExo('AgentHostAdmin', facetGuard, {
     makeBackend,
     forSession,

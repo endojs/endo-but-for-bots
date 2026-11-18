@@ -101,7 +101,7 @@ export const GATEWAY_KEY = 'gateway';
 /**
  * M3 settings that bound what crosses a vat boundary. Adapter-only settings
  * (connections, WebSocket sizes, the limiter) are in
- * `resources/agent-host/impl/gateway/contract-m3.js` `gatewayLimits`.
+ * `resources/agent-host/impl/gateway/protocol.js` `gatewayLimits`.
  */
 export const m3Limits = harden({
   /** `GatewayConfig.trustedProxies`: at most this many addresses. */

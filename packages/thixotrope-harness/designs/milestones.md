@@ -32,10 +32,12 @@ M1a" at the end of this file.
     `AH/gateway/extensions/` [M3 W3.2] (one `<milestone>-<name>.js` per lane, loaded in name order by
     `AH/gateway/extensions.js`: M4 `m4-secrets.js`, M11 `m11-audio.js`), `H/ui/src/<dir>/feature.js`
     [M3 W3.4] (one directory per lane feature group, collected in directory-name order by
-    `H/ui/build.mjs` and `H/ui/src/features.js`), the `vocabularyShapes()` export of each lane's
-    `H/guest/lib/interfaces-m*.js` [M3 W3.2], and `H/test/browser/m<N>-*.mjs`. These replace the
-    hook tables `AH/gateway/routes.js` and `H/ui/src/features.js` this list named before M3's
-    contract.
+    `H/ui/build.mjs` and `H/ui/src/features.js`), and `H/test/browser/`. These replace the hook
+    tables `AH/gateway/routes.js` and `H/ui/src/features.js` this list named before M3's contract.
+    The gateway's key vocabulary is no longer a registry: a table module that adds browser-sendable
+    shapes is one entry in `H/guest/lib/vocabulary-tables.js` (HR-SYN-7; a module not listed or
+    excluded there fails `test/adapter/gateway-vocabulary-tables.test.js`). New files in these
+    directories follow the naming rule below, not `<milestone>-<name>`.
   - **Provisioning seam** [M2-T1, `scripts/provision-steps.js` header]: a later milestone's
     provisioning step is a file `H/scripts/provision-steps/<two digits>-<name>.js` exporting
     `steps` (a `ProvisionStep[]`), run after the table in file-name order (M3 `30-gateway.js`,
@@ -72,6 +74,41 @@ M1a" at the end of this file.
 - **Acceptance tests are observable behaviour** (public API, browser, network, fake-provider and
   fake-tool logs). Implementation counts (wake counters, record counts, deliveries) are perf/gate
   checks.
+
+### Rules from the harness review (binding from M6; `arch-review/harness.md` section 4)
+
+The review traced most of its findings to how M1a-M5 were built (themes T1-T7). These rules hold
+for all later work and win over any milestone section below that says otherwise (for example
+one that names `H/test/*/m6-*` or an `interfaces-m6.js`).
+
+1. **Name by vat or concept, never by milestone or work unit** (T3). Files, exports, types,
+   helpers and runtime directory tags carry no `m6`, `M6`, `interfaces-m6`, `W6.3` or `w48-`. A
+   guard goes into its vat's table (`guest/lib/guards/base.js`, `session.js`, `factory.js`, or the
+   one Node-side table); a limit into `limits.js`; a text beside its guard. Test files are named
+   for the subject and the behaviour (`gateway-vocabulary-tables.test.js`, not
+   `m3-w32-vocabulary.test.js`). A **contract** may be per milestone (`m6-interfaces.md`), the code
+   is not. Milestone ids live in contracts, the journal and commit messages only. The existing
+   milestone-named modules are renamed by the fold (`arch-review/fold-plan.md`).
+2. **Every merge of parallel lanes ends with a fold unit** (T1). Its done-criterion is deletion:
+   no view, widening, seam, `notBuilt` stub, empty registry or copy that the lanes left behind,
+   checked by a grep or a test, not a sentence in a contract.
+3. **Export, don't copy** (T2). A lane may export a helper from another lane's or an earlier
+   milestone's module instead of copying it; the export is a one-line seam listed in the lane's
+   contract and reviewed by the module's owner. Copying more than 15 lines is a review finding.
+   `corepack yarn lint:duplicates` fails above the duplicate ceiling (`scripts/check-duplicates.mjs`:
+   3.25 % of normalised lines over `guest`, `resources` and `ui`; measured 3.00 % at `f6a844cbbf`);
+   the ceiling only goes down.
+4. **Fakes are built from the real guards** (T5): `makeExo` with the product's interface,
+   assemblies exported by the product rather than re-assembled in a fixture; a product branch
+   that only tests take ("for tests") is a review failure.
+5. **Manager-part changes are batched** (T6): each change to the agent-host manager part
+   (`resources/agent-host/*.js` outside `impl/`) is a reinstall that breaks live references, so a
+   contract gives the reason the change cannot live in the adapter, and a parallel group makes one
+   batched manager change.
+6. **Objects and fields at the seams** (T4): a contract review asks "what here is a string that
+   stands for an object, a reason or a position?"; a list of files is explicit, never a glob.
+7. **A new job names its module** (T7): when a contract adds a job to an existing closure, it
+   names the module the job lives in.
 
 ## Order and parallelism
 
@@ -305,6 +342,13 @@ J-9195..J-9200.
 
 ## M1b. Exec scope, staging, context cache, pool, list feed
 
+**Files after the review's fold (CL-CLOSE, 2026-11-18).** The `m1bShapes`, `m1bInterfaces` and
+`m1bMethodNames` views of `guest/lib/interfaces.js` are gone (`a1373d71b9`): read `shapes`,
+`interfaces` and `methodNames` there (Node) or in `guest/lib/guards/*.js` (vats); M1b's method
+lists stay as the build ingredient `m1bMethodLists`. The live probe of `turn.delta` is switched on
+by `THIX_HARNESS_LIVE_PROBE_DIR`, no longer by a file (`84bb177365`). Rename map:
+`arch-review/fold-plan.md` section 6.
+
 **Status: done, with recorded perf misses for the PM to rule on.** Build commits
 `3df16eafd4..4efd2d795c` (W1b.0..W1b.6, the C-20 core change `7efa7fb3e4..a3a2b58da5`, the delivery
 histogram `b45da47b93`); QC fixes `d4241fa77a..e48dffe8f7` plus the documentation commits that follow it. Journal J-0300..J-0370, J-0390..J-0398,
@@ -486,6 +530,10 @@ a session takes at most 4,096 Composer submissions in 24 h (J-9391).
 ---
 
 ## M2. Turn loop completeness on API-key backends (with minimal secrets)
+
+**Files after the review's fold (CL-CLOSE, 2026-11-18).** The `m2Interfaces` and
+`m2MethodNames` views are gone (`a1373d71b9`; read `interfaces`, `methodNames`). Rename map:
+`arch-review/fold-plan.md` section 6.
 
 **Status: done with open items** (M2-CLOSE, 2026-11-18; the outcome table at the end of this
 section). Every acceptance item passes except one ratio of 15 at 1,000 turns; reviews M2-R1, M2-R2
@@ -775,6 +823,12 @@ inline too-big refusal (C-25).
 
 ## M3. Chat UI and gateway
 
+**Files after the review's fold (CL-CLOSE, 2026-11-18).** `AH/gateway/contract-m3.js` is
+`AH/gateway/protocol.js` (exports unchanged, `33e726b912`). The gateway's vocabulary reads the
+explicit list `guest/lib/vocabulary-tables.js`, not the glob `interfaces-m*.js` (`b621c04535`).
+`guest/lib/interfaces-m3.js` keeps its name until the step-4 reinstall. Rename map:
+`arch-review/fold-plan.md` section 6.
+
 **Status: done with open items** (X-CLOSE, 2026-11-18, after the cross-lane integration of M3, M4
 and M5; the outcome table at the end of this section). Every acceptance item passes in this run.
 Open:
@@ -994,6 +1048,14 @@ Perf files held: `gateway` 329 s, `gateway-session` 602 s (exit 124), `ui` 438 s
 
 ## M4. Secrets manager and subscription pools
 
+**Files after the review's fold (CL-CLOSE, 2026-11-18).** `config/defaults-m4.js` is
+`config/subscription-defaults.js`, `AH/gateway/extensions/m4-secrets.js` is
+`AH/gateway/extensions/secrets.js` (its `name` stays `m4-secrets`; `33e726b912`),
+`guest/lib/limits-m4.js` `m4Limits` is `subscription-limits.js` `subscriptionLimits` and
+`texts-m4.js` `m4Texts` is `subscription-texts.js` `subscriptionTexts` (`93b410bf4b`). A closed
+accounts watch answers `AccountsBatch { closed, reason }` (`4eda82d98d`). `interfaces-m4.js` keeps
+its name until the step-4 reinstall. Rename map: `arch-review/fold-plan.md` section 6.
+
 **Status: done with open items** (X-CLOSE, 2026-11-18; the outcome table at the end of this
 section). Acceptance 1-17 pass; the `[real-provider]` repeats of 3, 7, 8 and 10 are deferred
 because they need the owner's credentials and an owner's run (never by an agent). Open:
@@ -1179,6 +1241,13 @@ Perf files held: `subscriptions` 208 s (exit 1: `servedWrites`, `bundles`),
 ---
 
 ## M5. Presets, prompt composition, object and exec tools, grants, mentions
+
+**Files after the review's fold (CL-CLOSE, 2026-11-18).** `guest/lib/interfaces-m5.js` and
+`interfaces-m5-factory.js` are folded into `guest/lib/guards/base.js`, `session.js` and
+`factory.js` (one guard per interface under its plain name), `limits-m5.js` into `limits.js`, and
+`guest/session/m5-parts.js` is `runtime-parts.js` (`46b5602b19`, `a1373d71b9`, `33e726b912`). The
+session program is 206,907 bytes (was 214,690) and the exec program 61,688 (was 63,826). Rename
+map: `arch-review/fold-plan.md` section 6.
 
 **Status: done** (X-CLOSE, 2026-11-18; the outcome table at the end of this section). Acceptance
 1-15 pass, the browser item included; no blocker or major is open. Recorded and carried (not

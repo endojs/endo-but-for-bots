@@ -12,7 +12,7 @@ import test from '@endo/ses-ava/test.js';
 import { createHash } from 'node:crypto';
 
 /* eslint-disable import/no-relative-packages */
-import { m1bShapes, shapes } from '../../guest/lib/interfaces.js';
+import { shapes } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { makeFactoryKit, stagingSources } from '../../guest/factory/factory.js';
 import {
@@ -215,7 +215,7 @@ test('the pool is passive until asked, then fills to its targets', async t => {
   await settle();
   t.is(workers.length, 0, 'nothing is made before anyone asks');
   const status = await pool.whenSettled();
-  t.true(matches(status, m1bShapes.PoolStatus));
+  t.true(matches(status, shapes.PoolStatus));
   t.deepEqual(status, {
     spareSessions: limits.spareSessions,
     spareExec: limits.spareExec,
@@ -397,7 +397,7 @@ test('ExecHandle: one scope until retired; retire of another scope is ignored', 
   const handle = makeExecHandle({ pool, settings });
   // Two scope() calls at once share one take.
   const [a, b] = await Promise.all([E(handle).scope(), E(handle).scope()]);
-  t.true(matches(a, m1bShapes.ExecLease));
+  t.true(matches(a, shapes.ExecScopeInfo));
   t.is(a.scope, b.scope);
   t.is(a.deadlineMs, 5000);
   t.is(pool.counts().taken, 1);
@@ -613,7 +613,7 @@ test('the list feed publishes one batch per crank of row changes, in rev order',
   t.is(published.length, 1);
   {
     const { publisher: _p, ...wire } = published[0];
-    t.true(matches(harden(wire), m1bShapes.ListPublishBatch));
+    t.true(matches(harden(wire), shapes.ListPublishBatch));
   }
   t.is(published[0].rev, 1);
   t.deepEqual(
@@ -667,7 +667,7 @@ test('the list feed splits large changes into batches within the event and byte 
   for (const batch of batches) {
     t.true(batch.events.length <= limits.publishBatchEvents);
     const { publisher: _p, ...wire } = batch;
-    t.true(matches(harden(wire), m1bShapes.ListPublishBatch));
+    t.true(matches(harden(wire), shapes.ListPublishBatch));
     t.true(JSON.stringify(wire.events).length <= limits.frameBytes);
   }
   t.deepEqual(
@@ -739,7 +739,7 @@ test('the factory vat program wires pool, exec program and list feed into the ro
   const root = make(harden({ host: fakeAdmin.admin, vats: fake.vats }));
   await settle();
   const status0 = await E(root).status();
-  t.true(matches(status0, m1bShapes.HarnessStatus));
+  t.true(matches(status0, shapes.HarnessStatus));
   t.deepEqual(status0.pool, {
     spareSessions: 0,
     spareExec: 0,

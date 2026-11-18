@@ -10,10 +10,11 @@
  * M2 entry. M2 W2.0 folded M1b's tables into M1a's; at M2 sign-off (X1) the
  * M2 versions of the ten interfaces M2 extends were folded in the same way:
  * `interfaces.Session` is the M2 `Session` (with `findTurn`), and so on.
- * `m2Interfaces`, `m2MethodNames`, `m1bShapes`, `m1bInterfaces` and
- * `m1bMethodNames` remain as views over the folded tables (the same
- * objects), for modules written against them; new code imports `shapes`,
- * `interfaces` and `methodNames`.
+ * The fold of the harness review (F2, HR-SYN-1) removed the M1b and M2
+ * views and folded M5's tables (`interfaces-m5.js`,
+ * `interfaces-m5-factory.js`) the same way: every interface has one guard,
+ * the latest version, under its plain name (`interfaces.Session` has
+ * `enqueueMessageOnce` and `grants`), and every shape one entry.
  *
  * Where the entries live (X1): a vat program bundles every module it
  * imports whole, so the entries are split by the programs that read them
@@ -61,37 +62,27 @@ import {
 import { view } from './guards/session.js';
 import * as below from './guards/factory.js';
 
-export { execArgumentNames } from './guards/base.js';
+export { execArgumentNames, inspectOps } from './guards/base.js';
 export {
   archiveKindLetters,
   echoDescription,
   execDescription,
+  grantStates,
+  objectToolNames,
+  packageToolNames,
+  powersMethodNames,
+  reservedLabels,
+  toolArgumentNames,
 } from './guards/session.js';
+export {
+  builtInPresetLabels,
+  presetTemplateNames,
+  templateObjectKinds,
+} from './guards/factory.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
 const { M } = /** @type {GuestGlobals} */ (globalThis);
-
-/**
- * A hardened view of some names of a lazy table: each property reads the
- * table's (the same object). The M1b and M2 tables are such views since
- * their folds into the main tables.
- * @param {readonly string[]} names
- * @param {any} table
- */
-const viewOf = (names, table) => {
-  /** @type {any} */
-  const answer = {};
-  for (const name of names) {
-    // The names are this module's own table keys, fixed in its source.
-    // eslint-disable-next-line thixotrope-harness-guest/no-data-keys
-    Object.defineProperty(answer, name, {
-      enumerable: true,
-      get: () => table[name],
-    });
-  }
-  return harden(answer);
-};
 
 // ---------------------------------------------------------------- texts
 
@@ -149,6 +140,12 @@ export const texts = harden({
  */
 export const textOf = harden({
   ...below.textOf,
+  /**
+   * The adapter's ops facets: a method whose handler this agent host was
+   * not given (m2-interfaces.md 1.3; no vat answers with it, HR-SYN-23).
+   * @param {string} method
+   */
+  notBuilt: method => `not built yet: ${method}`,
   /**
    * Composer (M1a, no staging): a submission over inlineBytes.
    * @param {number} bytes
@@ -685,14 +682,6 @@ const m1aInterfaceBuilders = {
     M.interface('Registration', {
       cancel: M.call().returns(done),
     }),
-  /** A preset (M1a: the built-in `chat-only`). */
-  Preset: () =>
-    M.interface('Preset', {
-      describe: M.call().returns(
-        record({ label: S.Label, builtIn: M.boolean() }),
-      ),
-      snapshot: M.call().returns(S.PresetSnapshot),
-    }),
 };
 
 /** M1a's method names per interface, in declaration order. */
@@ -730,7 +719,6 @@ const m1aMethodNames = harden({
   ],
   RowReporter: ['changed'],
   StartListener: ['started'],
-  Preset: ['describe', 'snapshot'],
   SessionFactory: [
     'createSession',
     'listSessions',
@@ -857,7 +845,7 @@ const m1bInterfaceBuilders = {
 };
 
 /** M1b's method names per interface (M1a's first where M1b extends one). */
-const m1bMethodLists = harden({
+export const m1bMethodLists = harden({
   ...below.m1bMethodLists,
   Blob: [],
   BlobWriters: ['open'],
@@ -1156,6 +1144,7 @@ const m2NewMethodNames = harden({
 /** Method names of `m2Interfaces`: the folded ones first, then M2's. */
 const m2VersionMethodNames = harden({
   ...below.m2VersionMethodNames,
+  ExecScope: [...m1bMethodLists.ExecScope, 'inspect'],
   SessionInternal: [
     ...m1aMethodNames.SessionInternal,
     'blobPage',
@@ -1220,98 +1209,3 @@ export const methodNames = harden({
   ...m2NewMethodNames,
   ...m2VersionMethodNames,
 });
-
-/** The ten interfaces M2 extends (m2-interfaces.md 1.3). */
-const m2Names = harden([
-  'Session',
-  'SessionInternal',
-  'QueueEntry',
-  'ContextSource',
-  'SessionFactory',
-  'HarnessRoot',
-  'Operator',
-  'AgentHostAdmin',
-  'Backend',
-  'Composer',
-]);
-
-/**
- * The M2 versions as a view of the folded table (the same guards), for
- * modules written against it before the fold.
- */
-export const m2Interfaces = viewOf(m2Names, interfaces);
-
-/** Method names of `m2Interfaces`: the folded lists (the same arrays). */
-export const m2MethodNames = harden({
-  Session: methodNames.Session,
-  SessionInternal: methodNames.SessionInternal,
-  QueueEntry: methodNames.QueueEntry,
-  ContextSource: methodNames.ContextSource,
-  SessionFactory: methodNames.SessionFactory,
-  HarnessRoot: methodNames.HarnessRoot,
-  Operator: methodNames.Operator,
-  AgentHostAdmin: methodNames.AgentHostAdmin,
-  Backend: methodNames.Backend,
-  Composer: methodNames.Composer,
-});
-
-/**
- * The M1b tables as views of the folded ones (the same shape and guard
- * objects), for modules written against them before the fold. Where M2
- * extended an M1b interface the view answers the M2 version; the method
- * lists stay M1b's.
- */
-export const m1bShapes = viewOf(
-  [
-    'StagedText',
-    'Progress',
-    'ContentRange',
-    'ContentPage',
-    'SleepMs',
-    'ExecLease',
-    'ExecRequest',
-    'ExecOutcome',
-    'ContextPage',
-    'TurnContentPage',
-    'BlobStockEntry',
-    'BlobStock',
-    'BlobKeys',
-    'BlobPage',
-    'CloseReason',
-    'ListEvent',
-    'ListPublishBatch',
-    'ListSnapshotEvent',
-    'ListDelivery',
-    'ListBatch',
-    'ListFeedInfo',
-    'PoolCounts',
-    'PoolStatus',
-    'HarnessSettings',
-    'ProgramInfo',
-    'HarnessStatus',
-  ],
-  shapes,
-);
-export const m1bInterfaces = viewOf(
-  [
-    'Blob',
-    'BlobWriters',
-    'BlobWriter',
-    'Content',
-    'Timer',
-    'TurnSink',
-    'Turn',
-    'ContextSource',
-    'ExecScope',
-    'ExecHandle',
-    'ListPublisher',
-    'ListSubscription',
-    'Live',
-    'AgentHostAdmin',
-    'StartListener',
-    'SessionFactory',
-    'HarnessRoot',
-  ],
-  interfaces,
-);
-export const m1bMethodNames = m1bMethodLists;

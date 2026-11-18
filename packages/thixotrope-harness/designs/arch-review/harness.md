@@ -462,3 +462,60 @@ becomes "Turn records" if the spec allows.
 - About thirty minor findings that no verifier checked (section 3.3); re-read before acting.
 - The integration workflow's in-flight changes (split, sealed writes, adapter tools) were not read;
   findings say where they may already be in hand.
+
+---
+
+## 8. Status after steps 1 and 2
+
+Added by CL-CLOSE (2026-11-18) after the step 1 and 2 units on `claude/thix-clean` (G1, S1, S2,
+F2, then the review CL-QC and its fixes CL-FIX; journal J-10130..J-10194). The findings above are
+not rewritten. **done**: the row's fix is in; **partly**: the named part is in and the rest is
+listed; **open**: not started. Commits are on `claude/thix-clean` after `802bd2767c` unless the
+row says otherwise; journal numbers point to the numbers and proofs. The regression run and perf
+mini-pass over the cleaned tree are J-10191..J-10193.
+
+| id | status | commits, journal | what is left |
+| --- | --- | --- | --- |
+| HR-SYN-1 | partly | `46b5602b19`, `a1373d71b9`, `33e726b912`, `93b410bf4b`, `436b6cb9f8`, `323e42e5bc`; J-10160..J-10165, J-10186; rename map `fold-plan.md` 6 | `interfaces-m3.js`, `interfaces-m4.js` and their `m3*`/`m4*` exports (step 4 reinstall); the guards' build-ingredient exports; `fold-plan.md` 4 (test helpers, template ids) and the perf file names |
+| HR-SYN-2 | open | - | step 4 |
+| HR-SYN-3 | open | - | step 3 (a), plan (b) |
+| HR-SYN-4 | open | - | step 3 |
+| HR-SYN-5 | open | - | step 3 (a), plan (b) |
+| HR-SYN-6 | open | - | step 5 (a), plan (b) |
+| HR-SYN-7 | partly | `b621c04535`, `31a13e6676`; J-10130, J-10131, J-10186 | the gateway extension loader still logs and skips (`AH/gateway/extensions.js`; with HR-SYN-15); `vocabulary-tables.js` lists three modules until `interfaces-m3/m4.js` fold |
+| HR-SYN-8 | done | `39ab65a208`, `9d43c8141a` (manager); J-10135..J-10143 | the manager part needs its reinstall when deployed |
+| HR-SYN-9 | done | `1c4f5a3a64`, `97aaf11e4b` (release race found by CL-QC); J-10135..J-10143, J-10185 | - |
+| HR-SYN-10 | done | `aea8c600a0`; J-10135..J-10143 | - |
+| HR-SYN-11 | done | `9d43c8141a` (manager), `088647510a`; J-10135..J-10143 | reinstall when deployed |
+| HR-SYN-12 | done | `48bb1848e9`; J-10135..J-10143 | - |
+| HR-SYN-13 | partly | `84bb177365` (probe injected); J-10135..J-10143 | `BackendSpec.logPath` (step 4) |
+| HR-SYN-14 | open | - | step 5 |
+| HR-SYN-15 | open | - | step 3 |
+| HR-SYN-16 | open | - | step 5 |
+| HR-SYN-17 | partly, by earlier work | `2fda3d801f` (XB, merged in `79adbbbcb9`: the pool catalogue reuses M2's `pageOf` and bounded reader) | one catalogue core with per-catalogue bounds (16 MB and 8 MB still two constants), `ANTHROPIC_VERSION` twice (step 3) |
+| HR-SYN-18 | partly | `ab86c27484`, `5b8d7f1d05`, `43c1fb7997` (`test:regression:core`, `test:regression:milestones`); J-10151; `process.md` 3.1 table J-10191 | the file merges (step 5) |
+| HR-SYN-19 | partly | `f740d47b03`; J-10150, J-10153 | every window length now scales; the private window loops, the 14 medians, the two `window` row shapes and a perf variable table (step 5) |
+| HR-SYN-20 | partly | `fb6475f421`, `aaa219050c`; J-10152, J-10187 | the provisioning part: `templateIdFor` and the template options in `scripts/provision-steps.js`, `50-m5-fixtures.js` (before M6) |
+| HR-SYN-21 | partly | `fb6475f421`; J-10152 | `useTestWrappingKey` (`_m3-gateway.js`) and the `m2-secrets`, `m2-providers`, `m2-catalog` sites still set the variable process-wide (step 3) |
+| HR-SYN-22 | partly | `1c4f5a3a64`; J-10135..J-10143 | the core's state-directory power (AR-SYN-28) and the gateway's own default (step 4) |
+| HR-SYN-23 | partly | `319366eb5f`; J-10160 | `site ?? 'adapter'`, `queue.release`, `assertNoActiveTurn`, the factory's optional pool and settings, `context-source.js` archive, the adapter ops `notBuilt` branches (with HR-SYN-2), `channelTaps`, `live-service.js`, the dead exports |
+| HR-SYN-24 | open | - | with M8 |
+| HR-SYN-25 | open | - | with the next feed |
+| HR-SYN-26 | open | - | step 3 |
+| HR-SYN-27 | partly | `50c997c4cc` (guest: one `messageOf`, `NOT_RUN_TEXT`); J-10163 | the adapter and UI copies, serial queues, surrogate-safe cuts |
+| HR-SYN-28 | open | - | before M8 |
+| HR-SYN-29 | open | `4dd2506626` (plan only, `fold-plan.md` 4) | the renames and lane check (step 5) |
+| HR-SYN-30 | open | - | ARCH's nine places and its glossary |
+| HR-SYN-31 | open | - | `SealedText` is a CapTP alleged name, a wire name (F2, J-10160..J-10165) |
+| HR-SYN-32 | open | - | glossary |
+| HR-SYN-33 | partly | `b9b535e034` (`ExecLease` -> `ExecScopeInfo`); J-10160..J-10165 | the glossary; the `Registration` rename (step 4) and the other local renames |
+| HR-SYN-34 | done | `4eda82d98d` (accounts watch closes with a field); the Claude-overload half by earlier work, `2fda3d801f` (XB); J-10164 | - |
+| HR-SYN-35 | open | - | `ws` still a dependency; close codes |
+| HR-SYN-36 | open | - | the factory's three start counts |
+| HR-SYN-37 | leave | - | the owner decides |
+| HR-SYN-38 | done | `ab86c27484`; J-10151 | - |
+
+Outside the table: section 4's process changes are written as rules (`bf969cecef`:
+`milestones.md` "Rules from the harness review", `process.md` 6); the duplicate ceiling is in the
+lint lane (`1f5dedee5a`, lowered to 3.25 % by `88f0ee93f0` at 3.00 % measured); HR-GUEST-12 (the
+swallowed start-listener failure, section 3.3) is open.

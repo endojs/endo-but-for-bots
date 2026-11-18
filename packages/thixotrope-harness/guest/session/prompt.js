@@ -19,8 +19,8 @@
  *   `E(context.admin).writersFor()` (no session yet: the session holds the
  *   StagedText from its first use, M1b 17.3), in pieces of at most
  *   `blobPieceBytes` (each within frameBytes), one answered append each.
- *   The factory passes `admin` in the resolver context (W2.7's factory
- *   line); without it such a prompt fails with `textOf.notBuilt`.
+ *   The factory always passes `admin` in the resolver context (W2.7's
+ *   factory line).
  *
  * The session stores the result in `SessionConfig.systemPrompt` (the
  * factory copies it, W2.7) and sends it with every round (seam 1 of
@@ -28,7 +28,7 @@
  *
  * Guest rules: prelude globals only.
  */
-import { texts, textOf } from '../lib/guards/factory.js';
+import { texts } from '../lib/guards/factory.js';
 import { limits } from '../lib/limits.js';
 import { chunkText, utf8Bytes } from '../lib/bounded.js';
 import { composeSystemPrompt } from '../lib/system-prompt-base.js';
@@ -92,9 +92,6 @@ export const promptResolver = async (options, resolved, context) => {
   if (utf8Bytes(text) <= limits.inlineBytes) {
     resolved.systemPrompt = text;
     return;
-  }
-  if (context.admin === undefined) {
-    throw Error(textOf.notBuilt('createSession systemPrompt over inlineBytes'));
   }
   resolved.systemPrompt = await stagePrompt(context.admin, text);
 };

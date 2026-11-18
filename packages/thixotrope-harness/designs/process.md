@@ -127,11 +127,19 @@ The owner's rule: we do not test anything that takes hours.
 ### 3.1 The regression run (the PM's list)
 
 What a regression run contains, with each file's held time from `runs.jsonl` and the wall time.
-Last run: cross-lane close-out (X-CLOSE), 2026-11-18 15:33-16:04 UTC, at `717e26789f` (lane
-`endo-thix-int`, M3, M4 and M5 merged), shared slots, load 2.2-4.8, with the long-session
-template chains (section 3.2) holding one or two slots beside it. Commands from the package:
-`corepack yarn test`, `corepack yarn test:integration --jobs 5`, then
-`corepack yarn test:browser --jobs 5 test/browser/*.test.mjs`.
+Commands from the package, one batch each (S2, HR-SYN-18): `corepack yarn test:regression:core`
+(the unit and adapter lanes, then the core files) and `corepack yarn test:regression:milestones`
+(the M3, M4 and M5 files with their browser files); each prints every file's held and waited time
+and the batch's wall time. The lists live in `scripts/test-integration.mjs` `regressionLists`, and
+a unit test keeps every integration, template and browser file in exactly one list.
+
+Last run: the step 1-2 close-out (CL-CLOSE, J-10191), 2026-11-18 21:03-21:31 UTC, at
+`bd4c811b7b` (lane `endo-thix-clean`, after the review's steps 1 and 2), 6 jobs in shared slots,
+load 1.9-5.7, with the long-session template chain (section 3.2) holding one slot beside it.
+**Core list: 25 files, 4,194 s held, 859 s wall (927 s with the unit lane, 15.4 min); milestones
+list: 31 files (26 + 5 browser), 3,301 s held, 703 s wall (11.7 min).** Both fit the 20-minute
+rule. One failure, `m1b-exec-tool` (below), passed alone (154 s held). The X-CLOSE column is the
+run before (2026-11-18 15:33-16:04 UTC at `717e26789f`, `--jobs 5`).
 
 **The one-run rule no longer holds.** With M3, M4 and M5 the run is 1 unit lane, 51 integration
 files and 5 browser files: **7,263 s held** (unit lane not counted), and the measured wall time was
@@ -150,72 +158,78 @@ finishes inside 20 minutes of wall at six slots:
 - A merge regression is the two lists as two batches (about 25 minutes of wall in all); each batch
   stays inside 20 minutes. Waits for slots are reported apart from held time.
 
-| list | part | file | held s | exit |
-|---|---|---|---|---|
-| core | unit + adapter | `corepack yarn test` (1,244 passed, 115 skipped, 1 failed: `run-lock` "in-process takers racing" at load 4, passes alone; no slot) | 67 (wall) | 1, then 0 alone |
-| core | integration | `m1a-provision` | 190 | 0 |
-| core | integration | `m1a-slice` | 201 | 0 |
-| core | integration | `m1a-slice-crash` | 114 | 0 |
-| core | integration | `m1a-slice-restart` | 199 | 0 |
-| core | integration | `m1b-content` | 104 | 0 |
-| core | integration | `m1b-context-restart` | 226 | 0 |
-| core | integration | `m1b-exec-tool` | 198 | 0 |
-| core | integration | `m1b-exec-tool-restart` | 128 | 0 |
-| core | integration | `m1b-followups` | 297 | 0 |
-| core | integration | `m1b-live` | 167 | 1 (acceptance 9 rename row 638 ms against 500 at load 3-4; alone 117 s, exit 0, rename 61-158 ms) |
-| core | integration | `m1b-pool` | 144 | 0 |
-| core | integration | `m1b-pool-restart` | 125 | 0 |
-| core | integration | `m1b-qc` | 117 | 0 |
-| core | integration | `m2-archive-restart` | 166 | 0 |
-| core | integration | `m2-archive-restart-2` | 202 | 0 |
-| core | integration | `m2-catalog` | 87 | 0 |
-| core | integration | `m2-history` | 218 | 0 |
-| core | integration | `m2-lifecycle` | 189 | 0 |
-| core | integration | `m2-lifecycle-export` | 252 | 0 |
-| core | integration | `m2-probes` | 81 | 0 |
-| core | integration | `m2-providers` | 92 | 0 |
-| core | integration | `m2-queue` | 151 | 0 |
-| core | integration | `m2-secrets` | 86 | 0 |
-| core | integration | `m2-turns` | 213 | 0 |
-| core | integration | `test/template/template.test.js` | 83 | 0 |
-| M3 | integration | `m3-gateway` | 114 | 0 |
-| M3 | integration | `m3-reconnect` | 159 | 0 |
-| M3 | integration | `m3-sessions` | 118 | 0 |
-| M3 | browser | `m3-ui` | 110 | 0 |
-| M3 | browser | `m3-ui-restart` | 202 | 0 |
-| M3 | browser | `m3-ui-history` | 110 | 0 |
-| M4 | integration | `m4-accounts` | 86 | 0 |
-| M4 | integration | `m4-catalog` | 86 | 0 |
-| M4 | integration | `m4-pools` | 101 | 0 |
-| M4 | integration | `m4-provision` | 103 | 0 |
-| M4 | integration | `m4-reachability` | 86 | 0 |
-| M4 | integration | `m4-renewal` | 93 | 0 |
-| M4 | integration | `m4-restart` | 180 | 0 |
-| M4 | integration | `m4-restart-renewal` | 101 | 0 |
-| M4 | integration | `m4-retire` | 79 | 0 |
-| M4 | integration | `m4-secrets` | 89 | 0 |
-| M4 | integration | `m4-wire` | 110 | 0 |
-| M4 | browser | `m4-ui` | 95 | 0 |
-| M5 | integration | `m5-grants` | 86 | 0 |
-| M5 | integration | `m5-grants-restart` | 118 | 0 |
-| M5 | integration | `m5-labels` | 106 | 0 |
-| M5 | integration | `m5-mentions` | 74 | 0 |
-| M5 | integration | `m5-mentions-restart` | 93 | 0 |
-| M5 | integration | `m5-objects` | 95 | 0 |
-| M5 | integration | `m5-presets` | 110 | 0 |
-| M5 | integration | `m5-presets-inventory` | 98 | 0 |
-| M5 | integration | `m5-prompt` | 95 | 0 |
-| M5 | integration | `m5-reachability` | 81 | 0 |
-| M5 | integration | `m5-security` | 77 | 0 |
-| M5 | integration | `m5-snapshot` | 75 | 0 |
-| M5 | browser | `m5-ui` | 105 | 0 |
+| list | part | file | held s | waited s | exit | X-CLOSE held s |
+|---|---|---|---|---|---|---|
+| core | unit + adapter | `ses-ava` (1,286 passed, 116 skipped; no slot) | 67 (wall) | - | 0 | 67 (wall; 1 load failure) |
+| core | integration | `m1a-provision` | 227 | 0 | 0 | 190 |
+| core | integration | `m1a-slice` | 236 | 0 | 0 | 201 |
+| core | integration | `m1a-slice-crash` | 127 | 0 | 0 | 114 |
+| core | integration | `m1a-slice-restart` | 241 | 0 | 0 | 199 |
+| core | integration | `m1b-content` | 135 | 0 | 0 | 104 |
+| core | integration | `m1b-context-restart` | 228 | 19 | 0 | 226 |
+| core | integration | `m1b-exec-tool` | 163 | 0 | 1 (acceptance 11: the killed exec call answered `4`; alone 154 s, exit 0) | 198 |
+| core | integration | `m1b-exec-tool-restart` | 117 | 101 | 0 | 128 |
+| core | integration | `m1b-followups` | 268 | 0 | 0 | 297 |
+| core | integration | `m1b-live` | 174 | 5 | 0 | 167 |
+| core | integration | `m1b-pool` | 162 | 50 | 0 | 144 |
+| core | integration | `m1b-pool-restart` | 166 | 0 | 0 | 125 |
+| core | integration | `m1b-qc` | 139 | 0 | 0 | 117 |
+| core | integration | `m2-archive-restart` | 168 | 99 | 0 | 166 |
+| core | integration | `m2-archive-restart-2` | 195 | 0 | 0 | 202 |
+| core | integration | `m2-catalog` | 88 | 0 | 0 | 87 |
+| core | integration | `m2-history` | 214 | 0 | 0 | 218 |
+| core | integration | `m2-lifecycle` | 193 | 214 | 0 | 189 |
+| core | integration | `m2-lifecycle-export` | 273 | 0 | 0 | 252 |
+| core | integration | `m2-probes` | 80 | 0 | 0 | 81 |
+| core | integration | `m2-providers` | 84 | 0 | 0 | 92 |
+| core | integration | `m2-queue` | 155 | 0 | 0 | 151 |
+| core | integration | `m2-secrets` | 78 | 0 | 0 | 86 |
+| core | integration | `m2-turns` | 216 | 0 | 0 | 213 |
+| core | integration | `test/template/template.test.js` | 69 | 97 | 0 | 83 |
+| M3 | integration | `m3-gateway` | 143 | 0 | 0 | 114 |
+| M3 | integration | `m3-reconnect` | 165 | 0 | 0 | 159 |
+| M3 | integration | `m3-sessions` | 130 | 0 | 0 | 118 |
+| M3 | browser | `m3-ui` | 116 | 0 | 0 | 110 |
+| M3 | browser | `m3-ui-restart` | 215 | 0 | 0 | 202 |
+| M3 | browser | `m3-ui-history` | 92 | 340 | 0 | 110 |
+| M4 | integration | `m4-accounts` | 89 | 0 | 0 | 86 |
+| M4 | integration | `m4-catalog` | 88 | 0 | 0 | 86 |
+| M4 | integration | `m4-pools` | 97 | 0 | 0 | 101 |
+| M4 | integration | `m4-provision` | 96 | 0 | 0 | 103 |
+| M4 | integration | `m4-reachability` | 83 | 0 | 0 | 86 |
+| M4 | integration | `m4-renewal` | 96 | 0 | 0 | 93 |
+| M4 | integration | `m4-restart` | 176 | 0 | 0 | 180 |
+| M4 | integration | `m4-restart-renewal` | 108 | 0 | 0 | 101 |
+| M4 | integration | `m4-retire` | 79 | 0 | 0 | 79 |
+| M4 | integration | `m4-secrets` | 88 | 0 | 0 | 89 |
+| M4 | integration | `m4-wire` | 109 | 0 | 0 | 110 |
+| M4 | browser | `m4-ui` | 83 | 80 | 0 | 95 |
+| M5 | integration | `m5-grants` | 79 | 0 | 0 | 86 |
+| M5 | integration | `m5-grants-restart` | 107 | 0 | 0 | 118 |
+| M5 | integration | `m5-labels` | 105 | 0 | 0 | 106 |
+| M5 | integration | `m5-mentions` | 77 | 7 | 0 | 74 |
+| M5 | integration | `m5-mentions-restart` | 114 | 76 | 0 | 93 |
+| M5 | integration | `m5-objects` | 93 | 0 | 0 | 95 |
+| M5 | integration | `m5-presets` | 123 | 0 | 0 | 110 |
+| M5 | integration | `m5-presets-inventory` | 121 | 0 | 0 | 98 |
+| M5 | integration | `m5-prompt` | 90 | 104 | 0 | 95 |
+| M5 | integration | `m5-reachability` | 86 | 0 | 0 | 81 |
+| M5 | integration | `m5-security` | 87 | 0 | 0 | 77 |
+| M5 | integration | `m5-snapshot` | 72 | 0 | 0 | 75 |
+| M5 | browser | `m5-ui` | 91 | 5 | 0 | 105 |
 
-Integration: 51 files, 6,641 s held, **1,433 s wall** at 5 jobs (296 s of waits for a slot in
-all, three files waiting behind the template chains); browser: 5 files, 622 s held, 202 s wall
-at 5 jobs. No file over 5 minutes (longest `m1b-followups` 297 s), none timed out. Before it, the
-milestone templates were built in shared slots (`exec` 58 s, `pool` 57 s, `m3-300` 94 s; `m1a`,
-`m4`, `m5o` were current). The previous run (M2 close-out, `d7fce8e46c`, 25 files, 3,792 s held,
-1,040 s wall at 4 jobs) is in J-9495.
+CL-CLOSE: 56 files, 7,494 s held (X-CLOSE 7,263 s), none over 5 minutes held (longest
+`m2-lifecycle-export` 273 s, `m1b-followups` 268 s), none timed out. Waits are slot waits behind
+the template chain and the list's own files (`m3-ui-history` waited 340 s for a slot). The one
+failure, `m1b-exec-tool` acceptance 11, expected the exec call killed on every attempt to end with
+the exec-terminated text and got the call's own answer `4`: the killer did not end the worker
+inside the call's 4 s sleep at load 4-5. It passed alone at once and passed in every earlier
+recorded run (M2-R3, M2-CLOSE, X-CLOSE); read as a load flake of a kill-timing test, not a
+cleanup defect; not fixed. Before the run the milestone templates were rebuilt in shared slots
+(all six keys changed with the fold: 166 s wall in parallel; `m1a` 66 s, `exec` 71 s, `pool`
+72 s, `m4` 58 s, `m3-300` 107 s, `m5o` current). X-CLOSE's run (51 + 5 files, 7,263 s held,
+1,433 + 202 s wall at 5 jobs, one run) is in J-10060; the M2 close-out's (25 files, 1,040 s wall
+at 4 jobs) in J-9495.
 
 ### 3.2 The perf pass (the PM's list)
 
@@ -233,7 +247,10 @@ The whole list is now 25 + 13 = 38 files (M0-M2 69.5 minutes, M3-M5 about 55 min
 than two hours of every lane stopped. **PM ruling (2026-11-18, recorded by K1,
 J-10075):** a milestone's recorded perf pass is its own files plus the cross-check `session`,
 `turn` and `exec` (the cross-check about 7 minutes); the whole list runs only when the PM asks
-for it (a core or worker change).
+for it (a core or worker change). One command runs it (S2): `corepack yarn perf:pass <M2|M3|M4|M5|all>`
+brings the templates up to date in shared slots, runs the files back to back in exclusive mode
+and prints each file's held time; the lists are `perfLists` in `perf/_pass.mjs`, and a unit test
+keeps every perf check in exactly one of them.
 
 **M3, M4, M5 and the cross-check** (X-CLOSE, 2026-11-18 16:12-17:19 UTC, at `404e60ea3a`, load
 1.0-2.8: 15 files, **4,004 s held (66.7 minutes), 66.8 minutes of wall**; exit 1 means a budget
@@ -274,6 +291,20 @@ J-10077..J-10086):
 | `perf/subscriptions.perf.mjs` | 209 | 0 | - (`subscriptions.bundles` stale baseline, reported, not counted) |
 | `perf/gateway-session.perf.mjs` | 311 | 0 | - |
 | `perf/gateway-restart.perf.mjs` (new, K2) | 375 | 0 | - |
+
+**CL-CLOSE mini-pass after the review's steps 1 and 2** (2026-11-18 21:30:44-21:51:04 UTC, at
+`70e7be3553` with only these documents edited, load 1.3-3.5: 6 files, **1,207 s held, 1,220 s of
+wall**; the cross-check plus one file each of M3, M4 and M5 over folded code; templates rebuilt
+under the new keys first, section 3.1; rows and readings `JOURNAL.md` J-10192):
+
+| file | held s | exit | budget misses that set the exit |
+|---|---|---|---|
+| `perf/session.perf.mjs` | 158 | 0 | - (`session.createCold` 6,095 ms, X-CLOSE 6,249) |
+| `perf/turn.perf.mjs` | 128 | 0 | - |
+| `perf/exec.perf.mjs` | 108 | 0 | - |
+| `perf/gateway.perf.mjs` | 329 | 1 | `ui.deltaFanout` 5 deliveries over 1,100 deltas (0.0045 per delta, budget 0; X-CLOSE 0, the lane 0.007-0.010: carried, intermittent) |
+| `perf/subscriptions.perf.mjs` | 209 | 0 | - (`subscriptions.turnStart` median 248 ms, rerun 110 ms, held 207 s: one bimodal window) |
+| `perf/exec-m5.perf.mjs` | 275 | 1 | `exec.tooBig.probe.b`: the 200 KB help is refused by the hub since CC-027 and the file's check does not accept that outcome (the integration test does since `385b8a703c`); not from the fold |
 
 **M0-M2** (last run at the M2 close-out; not rerun at X-CLOSE except the cross-check above):
 
@@ -341,10 +372,42 @@ At the start:
 At the end:
 
 1. Prettier and eslint on the files you changed (from the repository root), `tsc` in the package
-   if you touched JavaScript there; the unit lane passes. Do not weaken an existing test.
+   if you touched JavaScript there, `corepack yarn lint:duplicates` in the package (section 6); the
+   unit lane passes. Do not weaken an existing test.
 2. Every new or changed test file and perf check fits section 3.
 3. Commit with explicit paths, house-style subjects (`feat(thixotrope-harness): ...`). Nothing
    machine-local in the commit: no absolute paths, host names, keys or personal addresses.
 4. Journal entries in your block: what was built or measured, the numbers, good or poor fit.
 5. `date -u +%Y-%m-%dT%H:%M:%SZ`; report start, end, the commands over 60 s, and what is done,
    partial, blocked and not verified.
+
+## 6. Rules for all later work (from the harness review)
+
+The architecture review (`arch-review/harness.md` section 4) found that most of its 38 findings
+came from how lanes were run: each lane built against its contract by appending, and every merge
+kept every layer. From M6 on (PM rulings, 2026-11-18; the naming and code rules are also in
+`milestones.md` "Rules from the harness review"):
+
+- **Names.** Files, exports, types and test files are named by vat or concept, never by
+  milestone or work unit: no `m6-*`, no `interfaces-m6.js`, no W-numbers in file names; tests are
+  named for the subject and the behaviour. A contract may be per milestone; the code is not. A
+  unit that is asked for a milestone-named file proposes the concept name instead.
+- **Fold unit.** Every merge of parallel lanes ends with a fold unit, planned with the group: it
+  removes the views, widenings, seams, stubs, empty registries and copies the lanes left, and is
+  done when a grep or test shows them gone. The PM does not close a group without it.
+- **Export, don't copy.** A lane may export a helper from another lane's or an earlier
+  milestone's module rather than copy it. The export is a one-line seam listed in the contract and
+  reviewed by that module's owner. A copy of more than 15 lines is a review finding.
+- **Duplicate ceiling.** `corepack yarn lint:duplicates` (part of `yarn lint`) runs
+  `arch-review/tools/find-duplicates.mjs` over `guest`, `resources` and `ui` and fails above
+  3.25 % of normalised lines in repeated blocks (measured 3.00 %, 802 of 26,741 lines, at
+  `f6a844cbbf` after the fold; 3.22 % at `802bd2767c`, when the ceiling was 3.5 %). A change that
+  lowers the share lowers the ceiling in the same commit; nobody raises it.
+- **Fakes from the real guards.** A fake is a `makeExo` with the product's interface guard, or
+  the product's own assembly; a hand `Far` object or a re-assembled program is a review finding,
+  and so is a product branch only tests take.
+- **Manager changes batched.** A change to the agent-host manager part is a reinstall that
+  breaks live references: a contract states why it cannot live in the adapter, and a parallel
+  group lands its manager changes as one batch (one reinstall), not one per unit.
+- **Review question.** Every contract review asks: what here is a string that stands for an
+  object, a reason or a position (a glob, an error text, a label lookup, a page offset)?

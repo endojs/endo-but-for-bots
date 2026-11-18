@@ -23,7 +23,7 @@ import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary
 import {
   gatewayTexts,
   WS_PATH,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeClient } from './_m3-captp-client.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -224,7 +224,7 @@ test('through the bridge: extras service, its large call, the writer identity', 
   // The operator hands out the context's writer (a stand-in object: the
   // real gateway offers it in `GatewayPowers.extras`, A-11).
   const operator = Far('Operator', { openWriter: () => writer });
-  const names = harnessNames({ log: () => {} });
+  const names = harnessNames();
   const bridge = makeBridge({
     makeBootstrap: makeBootstrapFactory({
       signIn: { matches: candidate => candidate === secret },

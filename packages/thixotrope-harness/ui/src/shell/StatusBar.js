@@ -6,10 +6,10 @@
  */
 import { h } from 'preact';
 
-import { uiTextOf } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+import { uiTextOf } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { Slot } from './Slot.js';
 
-/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 /**
  * The R6-52 label of a `UsageTotals` record: up = input + cached +

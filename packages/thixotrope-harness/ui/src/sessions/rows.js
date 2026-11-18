@@ -9,7 +9,7 @@
 import {
   uiTexts,
   uiTextOf,
-} from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../../resources/agent-host/impl/gateway/protocol.js';
 
 /** What the status circle says, for a reader who cannot see its colour. */
 export const statusLabels = Object.freeze({

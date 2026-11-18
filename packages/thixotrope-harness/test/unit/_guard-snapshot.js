@@ -7,7 +7,9 @@
  * the value (records keep their key order, so a method order change shows;
  * a text function is its source text), and the gateway's key and method
  * sets. `test/fixtures/guard-snapshot-before-x1.json` holds the snapshot of
- * the tree before X1 (`bd9a8ec070`); `guards-split.test.js` compares.
+ * the tree before X1 (`bd9a8ec070`) and `guard-snapshot-before-fold.json`
+ * the M5 texts and name lists it lacked, taken before the fold (F2);
+ * `guards-split.test.js` compares through `guard-fold-map.json`.
  *
  * Needs the guest prelude on globalThis (`_m1a-prelude.js` first).
  */
@@ -17,8 +19,6 @@ import { createHash } from 'node:crypto';
 import * as base from '../../guest/lib/interfaces.js';
 import * as m3 from '../../guest/lib/interfaces-m3.js';
 import * as m4 from '../../guest/lib/interfaces-m4.js';
-import * as m5 from '../../guest/lib/interfaces-m5.js';
-import * as m5Factory from '../../guest/lib/interfaces-m5-factory.js';
 /* eslint-enable import/no-relative-packages */
 import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary.js';
 
@@ -83,12 +83,7 @@ export const digestOf = value =>
 const tablesOf = () => ({
   shapes: base.shapes,
   interfaces: base.interfaces,
-  m2Interfaces: base.m2Interfaces,
-  m1bShapes: base.m1bShapes,
-  m1bInterfaces: base.m1bInterfaces,
   methodNames: base.methodNames,
-  m2MethodNames: base.m2MethodNames,
-  m1bMethodNames: base.m1bMethodNames,
   texts: base.texts,
   textOf: base.textOf,
   m3Shapes: m3.m3Shapes,
@@ -97,13 +92,6 @@ const tablesOf = () => ({
   m4Shapes: m4.m4Shapes,
   m4Interfaces: m4.m4Interfaces,
   m4MethodNames: m4.m4MethodNames,
-  m5Shapes: m5.m5Shapes,
-  m5Interfaces: m5.m5Interfaces,
-  m5MethodNames: m5.m5MethodNames,
-  m5Widenings: m5.m5Widenings,
-  m5FactoryShapes: m5Factory.m5FactoryShapes,
-  m5FactoryInterfaces: m5Factory.m5FactoryInterfaces,
-  m5FactoryMethodNames: m5Factory.m5FactoryMethodNames,
 });
 
 /** Exported values of `interfaces.js` snapshotted whole. */
@@ -114,7 +102,17 @@ const wholeOf = () => ({
   echoDescription: base.echoDescription,
   execArgumentNames: base.execArgumentNames,
   execDescription: base.execDescription,
-  withGatewayAdmin: m3.withGatewayAdmin(base.m2Interfaces.AgentHostAdmin),
+  withGatewayAdmin: m3.withGatewayAdmin(base.interfaces.AgentHostAdmin),
+  inspectOps: base.inspectOps,
+  objectToolNames: base.objectToolNames,
+  packageToolNames: base.packageToolNames,
+  toolArgumentNames: base.toolArgumentNames,
+  reservedLabels: base.reservedLabels,
+  powersMethodNames: base.powersMethodNames,
+  grantStates: base.grantStates,
+  presetTemplateNames: base.presetTemplateNames,
+  builtInPresetLabels: base.builtInPresetLabels,
+  templateObjectKinds: base.templateObjectKinds,
 });
 
 /**
@@ -139,9 +137,10 @@ export const guardSnapshot = () => {
   for (const [name, value] of Object.entries(wholeOf())) {
     entries[name] = digestOf(value);
   }
+  // A table that fails now throws (HR-SYN-7); nothing is skipped.
   /** @type {unknown[]} */
   const skipped = [];
-  const { keys, methods } = harnessNames({ log: e => skipped.push(e) });
+  const { keys, methods } = harnessNames();
   return {
     entries,
     order,

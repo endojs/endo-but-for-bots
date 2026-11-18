@@ -23,7 +23,7 @@ import {
 import { presetTexts, presetTooLarge } from '../../ui/src/presets/texts.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 
-// The catalogue's texts (factory `texts`, interfaces-m5-factory.js).
+// The catalogue's texts (factory `texts`, guest/lib/guards/factory.js).
 const STALE = 'Preset settings changed elsewhere. Reload before saving.';
 const NOT_DELETABLE = 'Built-in presets can be reset, not deleted';
 

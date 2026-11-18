@@ -14,7 +14,7 @@ import { E } from '@endo/far';
 import {
   connectDeadlineMs,
   reconnectDelaysMs,
-} from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../../resources/agent-host/impl/gateway/protocol.js';
 
 /**
  * @typedef {'connecting' | 'open' | 'reconnecting' | 'starting' | 'refused'} ConnectionState

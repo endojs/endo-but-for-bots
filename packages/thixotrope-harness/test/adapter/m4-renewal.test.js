@@ -11,7 +11,10 @@ import { createServer } from 'node:http';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { m4Codes, m4Texts } from '../../guest/lib/texts-m4.js';
+import {
+  subscriptionCodes,
+  subscriptionTexts,
+} from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { makeCredentialAccess } from '../../resources/agent-host/impl/secrets/credential-access.js';
 import {
@@ -45,7 +48,10 @@ const fakeToken = tag =>
 const rejectsWith = async (t, promise, code, secrets = []) => {
   const error = await t.throwsAsync(promise);
   t.is(/** @type {any} */ (error).code, code, error?.message);
-  t.true(m4Codes.includes(code) || code === 'INVALID_GENERATION', code);
+  t.true(
+    subscriptionCodes.includes(code) || code === 'INVALID_GENERATION',
+    code,
+  );
   for (const secret of secrets)
     t.false(String(error?.message).includes(secret), 'no secret in the text');
 };
@@ -189,7 +195,7 @@ test('parseCredential: stored form, provider logins, refusals', t => {
       parseCredential(text, /** @type {any} */ (provider)),
     );
     t.is(/** @type {any} */ (error).code, 'INVALID');
-    t.is(error?.message, m4Texts.credentialInvalid);
+    t.is(error?.message, subscriptionTexts.credentialInvalid);
   }
   // Exactly 8,192 bytes is read; one byte more is refused (R7-25).
   const base = storedCredential({ accessToken: '', expiresAtMs: 1 });

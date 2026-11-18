@@ -34,6 +34,7 @@
 import '../scripts/_init.mjs';
 
 import { performance } from 'node:perf_hooks';
+import { windowMs as windowLength } from './_window.mjs';
 
 // After lockdown (a static import would evaluate before _init's await).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -49,7 +50,7 @@ const { limits } = await import('../guest/lib/limits.js');
 
 const { E, Far } = /** @type {any} */ (globalThis);
 
-const WINDOW_MS = Number(process.env.QUEUE_WINDOW_MS ?? 10_000);
+const WINDOW_MS = windowLength('QUEUE_WINDOW_MS', 10_000);
 const WARMUP = Number(process.env.QUEUE_WARMUP ?? 20);
 
 /**

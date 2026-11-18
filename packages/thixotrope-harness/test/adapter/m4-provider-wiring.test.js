@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { makeAgentHostImpl } from '../../resources/agent-host/impl/index.js';
 import { makeCredentialAccess } from '../../resources/agent-host/impl/secrets/credential-access.js';
@@ -123,7 +123,7 @@ test('a pool open passes the ops guard and offers accountStatus, which answers t
   );
   t.is(outcome.status, 'ok');
   t.true(outcome.text.includes('member a'), outcome.text);
-  t.false(outcome.text.includes(m4Texts.noSubscriptionAccounts));
+  t.false(outcome.text.includes(subscriptionTexts.noSubscriptionAccounts));
   t.is(s.loads(), 1, 'one poolState load for the accounts');
 });
 

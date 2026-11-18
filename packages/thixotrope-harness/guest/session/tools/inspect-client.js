@@ -36,10 +36,10 @@
  * issue order. Guest rules.
  */
 import { texts, textOf } from '../../lib/guards/session.js';
-import { texts as m5Texts } from '../../lib/interfaces-m5.js';
-import { limitsM5 } from '../../lib/limits-m5.js';
+import { limits } from '../../lib/limits.js';
 import { isRetiredBreak } from '../../lib/retired.js';
 import { NOT_RUN_TEXT, execStateOf, retireScope, takeScope } from './exec.js';
+import { messageOf } from '../../lib/bounded.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { ExecState } from './exec.js' */
@@ -50,17 +50,6 @@ const DEADLINE_OPS = harden(['readSources', 'toolExecute']);
 
 /** @param {string} text */
 const failed = text => harden({ status: 'failed', text });
-
-/** @param {unknown} error */
-const messageOf = error => {
-  try {
-    const { message } = /** @type {any} */ (error);
-    if (typeof message === 'string') return message;
-  } catch {
-    // fall through
-  }
-  return `${error}`;
-};
 
 /**
  * Calls in flight (sent, or taking the scope) per session state.
@@ -74,7 +63,7 @@ const inFlight = state => {
 
 /** @param {any} state */
 const pump = state => {
-  let room = limitsM5.inspectWindow - inFlight(state);
+  let room = limits.inspectWindow - inFlight(state);
   for (const call of state.inspecting) {
     if (room <= 0) return;
     if (!call.started) {
@@ -148,7 +137,7 @@ const start = async call => {
         if (isRetiredBreak(error)) {
           // The exec vat is lost (a hostile answer, or a crash give-up).
           retireScope(state, handle, scope);
-          settle(call, failed(m5Texts.inspectTerminated), false);
+          settle(call, failed(texts.inspectTerminated), false);
         } else {
           settle(call, failed(messageOf(error)), false);
         }

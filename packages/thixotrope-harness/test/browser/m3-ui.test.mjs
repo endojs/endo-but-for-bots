@@ -37,7 +37,7 @@ import { E } from '@endo/far';
 import {
   gatewayTexts,
   uiTexts,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { usageLabel } from '../../ui/src/shell/StatusBar.js';
 import { makeSlice, waitFor } from '../integration/_m1a-slice.js';
 import {

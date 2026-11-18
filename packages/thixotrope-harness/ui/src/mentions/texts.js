@@ -10,20 +10,20 @@
 
 /**
  * The resend of a draft whose chips a page reload lost (equal to
- * `texts.attachmentsLost` of `guest/lib/interfaces-m5.js`).
+ * `texts.attachmentsLost` of `guest/lib/guards/session.js`).
  */
 export const attachmentsLost =
   'Attachments were lost when the page reloaded; attach them again';
 
-/** Attachments one message carries (`limitsM5.maxAttachments`, R4-99). */
+/** Attachments one message carries (`limits.maxAttachments`, R4-99). */
 export const maxAttachments = 32;
 
-/** An attachment's label, UTF-16 units (`limitsM5.endowmentLabelUnits`). */
+/** An attachment's label, UTF-16 units (`limits.endowmentLabelUnits`). */
 export const labelUnits = 80;
 
 /**
  * Inventory pages the suggestion list reads at most:
- * `limitsM5.maxInventoryEntries` (1,024) / `inventoryPageEntries` (50).
+ * `limits.maxInventoryEntries` (1,024) / `inventoryPageEntries` (50).
  */
 export const maxInventoryPages = 21;
 

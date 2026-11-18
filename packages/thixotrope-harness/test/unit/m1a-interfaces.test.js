@@ -633,7 +633,23 @@ const methodSamples = {
   },
   StartListener: { started: { args: [], returns: undefined } },
   Preset: {
-    describe: { args: [], returns: { label: 'chat-only', builtIn: true } },
+    // M1a answered { label, builtIn }; M5's PresetView (the one Preset
+    // guard since the fold, F2) carries every saved field.
+    describe: {
+      args: [],
+      returns: {
+        label: 'chat-only',
+        builtIn: true,
+        template: 'chat-only',
+        description: '',
+        instructions: '',
+        networkPolicy: 'off',
+        objects: [],
+        endowments: [],
+        revision: 0,
+        available: true,
+      },
+    },
     snapshot: { args: [], returns: { label: 'chat-only' } },
   },
   SessionFactory: {

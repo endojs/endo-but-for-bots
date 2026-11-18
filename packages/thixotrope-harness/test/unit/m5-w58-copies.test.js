@@ -9,12 +9,11 @@ import test from '@endo/ses-ava/test.js';
 import { Far } from '@endo/far';
 
 import { fitsFrame, messageBytes } from '../../guest/lib/bounded.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
-import { texts as m5Texts } from '../../guest/lib/interfaces-m5.js';
+import { limits } from '../../guest/lib/limits.js';
 import {
   presetTemplateNames as guestTemplateNames,
-  texts as factoryTexts,
-} from '../../guest/lib/interfaces-m5-factory.js';
+  texts,
+} from '../../guest/lib/interfaces.js';
 import {
   attachmentsLost,
   labelUnits,
@@ -33,15 +32,15 @@ import {
 import { recordOf } from '../../ui/src/presets/editor.js';
 
 test('browser copies equal the contract values', t => {
-  t.is(attachmentsLost, m5Texts.attachmentsLost);
-  t.is(presetTooLarge, factoryTexts.presetTooLarge);
+  t.is(attachmentsLost, texts.attachmentsLost);
+  t.is(presetTooLarge, texts.presetTooLarge);
   t.deepEqual([...presetTemplateNames], [...guestTemplateNames]);
-  t.is(presetRecordBytes, limitsM5.presetRecordBytes);
-  t.is(maxAttachments, limitsM5.maxAttachments);
-  t.is(labelUnits, limitsM5.endowmentLabelUnits);
+  t.is(presetRecordBytes, limits.presetRecordBytes);
+  t.is(maxAttachments, limits.maxAttachments);
+  t.is(labelUnits, limits.endowmentLabelUnits);
   t.is(
     maxInventoryPages,
-    Math.ceil(limitsM5.maxInventoryEntries / limitsM5.inventoryPageEntries),
+    Math.ceil(limits.maxInventoryEntries / limits.inventoryPageEntries),
   );
 });
 
@@ -79,17 +78,17 @@ const endowments = n =>
  */
 const recordAt = bytes => {
   const base = {
-    label: '€'.repeat(limitsM5.presetLabelUnits),
-    instructions: '€'.repeat(limitsM5.presetInstructionsUnits),
+    label: '€'.repeat(limits.presetLabelUnits),
+    instructions: '€'.repeat(limits.presetInstructionsUnits),
     backend: Far('Backend', {}),
     modelId: 'model-a',
     reasoningEffort: 'high',
-    endowments: endowments(limitsM5.maxEndowments),
+    endowments: endowments(limits.maxEndowments),
   };
   /** @type {Array<{ kind: string, label: string }>} */
   const objects = [];
   let rest = bytes - messageBytes(recordOf(formOf({ ...base, objects })));
-  while (rest > 1200 && objects.length < limitsM5.maxTemplateObjects) {
+  while (rest > 1200 && objects.length < limits.maxTemplateObjects) {
     objects.push({
       kind: 'git-workspace',
       label: `${'€'.repeat(70)}${objects.length}`,
@@ -102,7 +101,7 @@ const recordAt = bytes => {
 
 test('size check at the bound: exactly presetRecordBytes fits, one more byte does not', t => {
   const { record, rest } = recordAt(presetRecordBytes);
-  t.true(rest >= 0 && rest <= 3 * limitsM5.presetDescriptionUnits, `${rest}`);
+  t.true(rest >= 0 && rest <= 3 * limits.presetDescriptionUnits, `${rest}`);
   t.is(presetRecordSize(record), presetRecordBytes);
   t.is(messageBytes(record), presetRecordBytes);
   t.true(fitsPresetRecord(record));
@@ -120,9 +119,9 @@ test('size estimate agrees with fitsFrame on samples', t => {
     // all ASCII, every field at its bound: about 8 KB, passes on the estimate
     recordOf(
       formOf({
-        label: 'a'.repeat(limitsM5.presetLabelUnits),
-        description: 'b'.repeat(limitsM5.presetDescriptionUnits),
-        instructions: 'c'.repeat(limitsM5.presetInstructionsUnits),
+        label: 'a'.repeat(limits.presetLabelUnits),
+        description: 'b'.repeat(limits.presetDescriptionUnits),
+        instructions: 'c'.repeat(limits.presetInstructionsUnits),
         endowments: Array.from({ length: 32 }, (_, i) => ({
           label: `${'d'.repeat(77)}${String(i).padStart(3, '0')}`,
           value: Far('Thing', {}),

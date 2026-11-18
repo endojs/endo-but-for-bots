@@ -2,7 +2,7 @@
 /**
  * The adapter half of the Secrets catalogue (M4 W4.4;
  * `designs/m4-interfaces.md` 4.1; R7-22, R6-67): for a batch of store keys
- * (at most `m4Limits.describeBatch`, 64), the generation, state and byte
+ * (at most `subscriptionLimits.describeBatch`, 64), the generation, state and byte
  * count of each, or `null` for a key the store does not hold (deleted, or
  * never created because the creating call broke). Labels and descriptions
  * are not answered: the manager vat's records are the system of record for
@@ -15,7 +15,7 @@
  * Node only (adapter).
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { m4Limits } from '../../../../guest/lib/limits-m4.js';
+import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
 /* eslint-enable import/no-relative-packages */
 import { secretError } from './store.js';
 
@@ -30,7 +30,7 @@ import { secretError } from './store.js';
  * @returns {Promise<SecretKeyInfo[]>}
  */
 export const describeKeys = async ({ store, keys }) => {
-  if (!Array.isArray(keys) || keys.length > m4Limits.describeBatch)
+  if (!Array.isArray(keys) || keys.length > subscriptionLimits.describeBatch)
     throw secretError('INVALID_LIMIT');
   await store.ready();
   /** @type {SecretKeyInfo[]} */

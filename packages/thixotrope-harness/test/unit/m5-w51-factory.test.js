@@ -10,14 +10,14 @@ import test from '@endo/ses-ava/test.js';
 import { createHash } from 'node:crypto';
 
 /* eslint-disable import/no-relative-packages */
-import { shapes } from '../../guest/lib/interfaces.js';
 import {
-  m5FactoryMethodNames,
-  texts,
+  shapes,
+  methodNames,
   textOf,
-} from '../../guest/lib/interfaces-m5-factory.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+  texts,
+} from '../../guest/lib/interfaces.js';
+import { limits } from '../../guest/lib/limits.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 import { makeFactoryKit, stagingSources } from '../../guest/factory/factory.js';
 import { makeProgramStore } from '../../guest/factory/root.js';
 import { makeRowTable } from '../../guest/factory/rows.js';
@@ -96,7 +96,7 @@ test('the M5 Operator answers the one catalogue and inventory', async t => {
   t.is(await E(kit.operator).getPresets(), catalog);
   t.is(await E(kit.operator).getInventory(), kit.inventory.facet);
   t.truthy(await E(kit.operator).getFactory());
-  for (const name of m5FactoryMethodNames.Operator) {
+  for (const name of methodNames.Operator) {
     t.is(typeof (/** @type {any} */ (kit.operator)[name]), 'function', name);
   }
   const listed = await E(kit.factory).listPresets();
@@ -192,7 +192,7 @@ test('model defaults come from the preset; an option the caller gave wins', asyn
   );
   await t.throwsAsync(
     E(kit.factory).createSession(harden({ preset: effort.preset })),
-    { message: m4Texts.effortNotSupported },
+    { message: subscriptionTexts.effortNotSupported },
   );
 });
 
@@ -236,15 +236,15 @@ test('a make argument over frameBytes fails the creation with presetTooLarge', a
   const wide = (/** @type {number} */ units) => '€'.repeat(units);
   const { preset } = await E(kit.catalog.facet).create(
     harden({
-      label: wide(limitsM5.presetLabelUnits),
+      label: wide(limits.presetLabelUnits),
       template: 'general',
       // The composed prompt stays inline (under inlineBytes).
       instructions: wide(1300),
       backend,
       modelId: wide(256),
-      endowments: Array.from({ length: limitsM5.maxEndowments }, (_, i) =>
+      endowments: Array.from({ length: limits.maxEndowments }, (_, i) =>
         harden({
-          label: `${i}${wide(limitsM5.endowmentLabelUnits - 2)}`,
+          label: `${i}${wide(limits.endowmentLabelUnits - 2)}`,
           value: notes,
         }),
       ),

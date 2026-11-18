@@ -24,6 +24,7 @@
  */
 import { performance } from 'node:perf_hooks';
 import { runPerf, single, stats, emit } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 // Endo packages and the code that uses them load after `_harness.mjs`
 // has locked down (`scripts/_init.mjs`): a static import would run first.
@@ -34,7 +35,7 @@ const {
   inWindow,
   makeFrameCounter,
   startPerfM4,
-  useKeyFile,
+  testKeyFile,
   closeServers,
 } = await import('./_m4.mjs');
 const {
@@ -54,7 +55,7 @@ const { startFakeOAuthServer } =
   await import('../test/fixtures/fake-oauth-server.mjs');
 const { sealTo } = await import('../resources/agent-host/impl/secrets/seal.js');
 
-const RESTART_WINDOW_MS = Number(process.env.M4_RESTART_WINDOW_MS ?? 150_000);
+const RESTART_WINDOW_MS = windowMs('M4_RESTART_WINDOW_MS', 150_000);
 const CONCURRENT = 16;
 
 /** @param {number[]} values */
@@ -64,10 +65,12 @@ const median = values => {
 };
 
 await runPerf('subscriptions-lifecycle', async ({ provision }) => {
-  const dropKey = useKeyFile('perf-life');
+  const keyFile = testKeyFile('perf-life');
   const oauth = await startFakeOAuthServer({ delayMs: FAKE_MS });
   try {
-    const { run, m4, server } = await startPerfM4(provision);
+    const { run, m4, server } = await startPerfM4(provision, {
+      secretsKeyFile: keyFile.file,
+    });
 
     // ---- renewal: 16 concurrent rounds on an expired member ----
     const renewing = await makeValueSecret(
@@ -248,6 +251,6 @@ await runPerf('subscriptions-lifecycle', async ({ provision }) => {
   } finally {
     await oauth.close();
     await closeServers();
-    dropKey();
+    keyFile.remove();
   }
 });

@@ -1,5 +1,11 @@
 # M1b interface contract
 
+> **Files moved since (F2, HR-SYN-1).** Paths and exports this contract names (`interfaces-m5.js`,
+> `interfaces-m5-factory.js`, `limits-m5.js`, `limits-m4.js`, `texts-m4.js`, `contract-m3.js`,
+> `defaults-m4.js`, `m5-parts.js`, `m4-secrets.js`, `m1bShapes`, `m2Interfaces`, `m5Widenings`, ...)
+> were folded or renamed; `designs/arch-review/fold-plan.md` section 6 maps each old name to the
+> new one. The text below is the contract as written.
+
 Unit W1b.0 of `milestones.md` M1b. This file, `guest/lib/interfaces.js` and `guest/lib/limits.js`
 are the contract the M1b builders (W1b.1-W1b.5) and the tests (W1b.6) build against without talking
 to each other. `m1a-interfaces.md` stays the M1a contract (it gets corrections only) and everything
@@ -1029,6 +1035,14 @@ Changes after the M1b QC (J-0397's open list). Guards: `m1bShapes.StagedText` ga
   or its guard rejects the call, the session stored nothing (every refusal precedes the first write
   in `queue.js`), and the Composer deletes the file. A retired break or any other failure keeps
   it. 4.7's leak is now: a file named whose handle was in a message being sent at a crash.
+  *Amended (harness review HR-SYN-10):* the Composer checks before staging what it can (blank
+  text; M5's package length and attachments with the session's own `checkAttachments`); its own
+  guard has the session's argument shapes and a staged submission is never inline, so a staged
+  call cannot meet the session's guard or inline-size refusal. It deletes the file only for the
+  state refusals (invalid, expired or reused request id, receipt limit, queue full), each compared
+  whole with the session's text, never by prefix. A retired break keeps the file for `submit` and
+  for M2's `edit` alike (one rule): a break never means "not done", and deleting a file a record
+  holds loses the user's text.
 - **Not done: "files no manager handle names".** The manager keeps `WeakMap<Blob, key>` only, and
   vats have no `WeakRef`, so it cannot list which keys still have a holder; a sweep by manager
   liveness would need a strong key table (which would keep every handle alive) or an engine

@@ -1,6 +1,6 @@
 // @ts-check
-// M4 W4.6: `AH/gateway/extensions/m4-secrets.js` loads as a
-// `GatewayExtension` (contract-m3.js; designs/m4-interfaces.md 9.1 item 3)
+// M4 W4.6: `AH/gateway/extensions/secrets.js` loads as a
+// `GatewayExtension` (protocol.js; designs/m4-interfaces.md 9.1 item 3)
 // whose one LargeCall targets the context's `secretWriter()` and exempts
 // `replace` only. The context is a fake with the M3 shape whose
 // `secretWriter()` answers a stand-in for the gateway's in-process writer
@@ -15,7 +15,7 @@ import '../unit/_m1a-prelude.js';
 
 import test from '@endo/ses-ava/test.js';
 
-import { gatewayExtension } from '../../resources/agent-host/impl/gateway/extensions/m4-secrets.js';
+import { gatewayExtension } from '../../resources/agent-host/impl/gateway/extensions/secrets.js';
 import {
   loadGatewayExtensions,
   makeLargeCalls,
@@ -29,7 +29,7 @@ import { makeStoreDirs, openStore } from './_m4-renewal.js';
 
 const { Far } = /** @type {any} */ (globalThis);
 
-/** Keys a `GatewayExtension` may carry (contract-m3.js). */
+/** Keys a `GatewayExtension` may carry (protocol.js). */
 const EXTENSION_KEYS = ['name', 'services', 'routes', 'largeCalls', 'csp'];
 
 test('m4-secrets is a GatewayExtension: hardened, named, one LargeCall on replace', t => {
@@ -118,14 +118,8 @@ test("INT-M4: M3's extension loader loads m4-secrets; makeLargeCalls exempts the
 });
 
 test("INT-M4: the gateway's vocabulary admits M4's browser-reachable method names", t => {
-  /** @type {Record<string, unknown>[]} */
-  const events = [];
-  const { keys, methods } = harnessNames({ log: e => events.push(e) });
-  t.deepEqual(
-    events.filter(e => e.event === 'vocabulary-skip'),
-    [],
-    'interfaces-m4.js (and every interfaces-m*.js) loads',
-  );
+  // A listed table that fails throws (HR-SYN-7), so this call is the load check.
+  const { keys, methods } = harnessNames();
   for (const name of [
     'SecretsAdmin',
     'Secret',

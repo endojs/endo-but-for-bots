@@ -12,10 +12,10 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { makePresetEditor } from './editor.js';
 import { presetTemplateNames, presetTexts } from './texts.js';
 
-/** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 /** @import { EditorState } from './editor.js' */
 
-/** UTF-16 bounds of the fields (`limitsM5`), as input `maxLength`. */
+/** UTF-16 bounds of the fields (`limits`), as input `maxLength`. */
 const MAX = harden({
   label: 120,
   description: 500,

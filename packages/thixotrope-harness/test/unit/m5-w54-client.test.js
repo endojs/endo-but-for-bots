@@ -14,8 +14,7 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
-import { texts as m5Texts } from '../../guest/lib/interfaces-m5.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
+import { limits } from '../../guest/lib/limits.js';
 import { HUB_RETIRED_MESSAGE } from '../../guest/lib/retired.js';
 import {
   inspectDeadline,
@@ -174,7 +173,7 @@ test('a retired break retires the scope and answers inspectTerminated; exhausted
   });
   await drain();
   s.scopes[0].inspects[0].kit.reject(Error(HUB_RETIRED_MESSAGE));
-  t.deepEqual(await lost, failed(m5Texts.inspectTerminated));
+  t.deepEqual(await lost, failed(texts.inspectTerminated));
   t.deepEqual(s.retired, [0]);
   // The next call takes a fresh scope.
   const flood = inspect({
@@ -278,7 +277,7 @@ test('the deadline: readSources and toolExecute arm it; inspectDeadline retires 
 test('at most inspectWindow calls are in flight; the rest wait in issue order', async t => {
   const s = setup();
   const inspect = inspectFor(s.contextOf(4));
-  const n = limitsM5.inspectWindow + 2;
+  const n = limits.inspectWindow + 2;
   const calls = Array.from({ length: n }, (_, i) =>
     inspect({
       op: 'methods',
@@ -289,10 +288,10 @@ test('at most inspectWindow calls are in flight; the rest wait in issue order', 
   );
   await drain();
   const [scope] = s.scopes;
-  t.is(scope.inspects.length, limitsM5.inspectWindow);
+  t.is(scope.inspects.length, limits.inspectWindow);
   scope.inspects[0].kit.resolve(harden({ status: 'ok', methods: ['0'] }));
   await drain();
-  t.is(scope.inspects.length, limitsM5.inspectWindow + 1);
+  t.is(scope.inspects.length, limits.inspectWindow + 1);
   // Cancelling the turn: the waiting call never ran.
   execHooks.onCancel({ active: s.activeOf(4) });
   const outcomes = await Promise.all(calls);

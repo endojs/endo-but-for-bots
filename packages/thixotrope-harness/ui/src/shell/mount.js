@@ -6,10 +6,10 @@
  */
 import { h, render } from 'preact';
 
-import { drawerMaxWidthPx } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+import { drawerMaxWidthPx } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { App } from './App.js';
 
-/** @import { UiFeature } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { UiFeature } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 /** @import { ShellViews } from './App.js' */
 
 /** The media query of the drawer layout. */

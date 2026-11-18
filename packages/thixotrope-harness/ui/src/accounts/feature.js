@@ -9,7 +9,7 @@
 import { AccountChip, chipWhen } from './AccountChip.js';
 import { SubscriptionsPanel } from './SubscriptionsPanel.js';
 
-/** @type {import('../../../resources/agent-host/impl/gateway/contract-m3.js').UiFeature[]} */
+/** @type {import('../../../resources/agent-host/impl/gateway/protocol.js').UiFeature[]} */
 export const feature = harden([
   {
     id: 'accounts',

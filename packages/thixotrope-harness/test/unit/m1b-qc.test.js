@@ -9,8 +9,7 @@ import test from '@endo/ses-ava/test.js';
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
 import { makeContextSource } from '../../guest/session/context-source.js';
-import { makeRecordLog } from '../../guest/session/records.js';
-import { plainBytes } from '../../guest/session/turn.js';
+import { makeRecordLog, plainBytes } from '../../guest/session/records.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @param {number} turns */

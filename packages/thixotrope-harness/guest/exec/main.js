@@ -43,17 +43,21 @@
  * through the call's `BlobWriters` in pieces of at most `blobPieceBytes`
  * when it is over `inlineBytes`. Only `{ status, text }` leaves the vat.
  */
-import { execArgumentNames, texts, textOf } from '../lib/guards/base.js';
+import {
+  execArgumentNames,
+  interfaces,
+  texts,
+  textOf,
+} from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
+import { messageOf } from '../lib/bounded.js';
 import {
   EXHAUSTED,
   argumentText,
   describeParseFailure,
-  execGuards,
   failed,
   finish,
   isKeysExhausted,
-  messageOf,
   redactHostPaths,
   renderToolResult,
   stripCodeFence,
@@ -61,9 +65,6 @@ import {
 import { makeMembrane } from './membrane.js';
 import { makeCallPowers } from './powers.js';
 import { makeInspector } from './inspect.js';
-
-// M1b's exports, kept for its tests.
-export { NO_CONTENT_TEXT, isKeysExhausted } from './render.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -110,7 +111,7 @@ harden(clampDelay);
 /** @import { Outcome, StagedText } from './render.js' */
 
 /**
- * @typedef {object} ExecRequest `m5Shapes.ExecRequest` (guard-checked)
+ * @typedef {object} ExecRequest `guards/base.js` `shapes.ExecRequest` (guard-checked)
  * @property {string | StagedText} args
  * @property {any} writers
  * @property {any} timer
@@ -260,7 +261,7 @@ const codeOf = argsText => {
 
 /**
  * Make this vat's one persistent scope.
- * @returns {any} the `ExecScope` exo (`m5Interfaces.ExecScope`)
+ * @returns {any} the `ExecScope` exo (`interfaces.ExecScope`)
  */
 export const makeExecScope = () => {
   const compartment = new Compartment({
@@ -332,7 +333,7 @@ export const makeExecScope = () => {
     return finish(status, text, writers);
   };
 
-  return makeExo('ExecScope', execGuards().ExecScope, {
+  return makeExo('ExecScope', interfaces.ExecScope, {
     /**
      * @param {ExecRequest} request
      * @returns {Promise<Outcome | { status: 'busy' } | typeof EXHAUSTED>}
@@ -365,7 +366,7 @@ export const makeExecScope = () => {
      * Call `request.target` for the session and answer a bounded, rendered
      * outcome (D-M5-2; `inspect.js`). Runs beside `run`, never `busy`; the
      * session's client keeps at most `inspectWindow` in flight.
-     * @param {any} request `m5Shapes.InspectRequest`
+     * @param {any} request `guards/base.js` `shapes.InspectRequest`
      */
     inspect(request) {
       const { writers, content } = request;

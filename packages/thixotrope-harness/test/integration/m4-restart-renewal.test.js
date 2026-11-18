@@ -34,7 +34,7 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { m4TextOf } from '../../guest/lib/texts-m4.js';
+import { subscriptionTextOf } from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import { emit } from '../../perf/_harness.mjs';
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
@@ -205,7 +205,8 @@ run(
     );
     t.true(
       poolLog(k5.logPath).some(
-        l => l.reason === m4TextOf.memberFailed('member k5', 'CONSUMED'),
+        l =>
+          l.reason === subscriptionTextOf.memberFailed('member k5', 'CONSUMED'),
       ),
     );
 
@@ -220,7 +221,8 @@ run(
     t.is(oauth.presented(k6.serial), 1, 'K-6: presented once, never again');
     t.true(
       poolLog(k6.logPath).some(
-        l => l.reason === m4TextOf.memberFailed('member k6', 'CONSUMED'),
+        l =>
+          l.reason === subscriptionTextOf.memberFailed('member k6', 'CONSUMED'),
       ),
     );
 

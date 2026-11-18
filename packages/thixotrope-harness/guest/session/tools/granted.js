@@ -2,7 +2,7 @@
 /**
  * Granted tools (M5 W5.6; `designs/m5-interfaces.md` 2.5, R3-6, P-65).
  *
- * The `grants` runtime part (`grantsPart`, registered in `m5-parts.js`)
+ * The `grants` runtime part (`grantsPart`, registered in `runtime-parts.js`)
  * keeps one session's granted tools in its heap (at most `maxGrantedTools`)
  * and answers:
  *
@@ -46,14 +46,9 @@
  *
  * Guest rules.
  */
-import {
-  m5Interfaces,
-  texts as m5Texts,
-  textOf as m5TextOf,
-} from '../../lib/interfaces-m5.js';
+import { interfaces, textOf, texts } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
-import { limitsM5 } from '../../lib/limits-m5.js';
-import { utf8Bytes } from '../../lib/bounded.js';
+import { utf8Bytes, messageOf } from '../../lib/bounded.js';
 import { isStaged } from '../staging.js';
 import { inspectDeadline, inspectFor } from './inspect-client.js';
 
@@ -65,19 +60,8 @@ const { makeExo } = /** @type {any} */ (globalThis);
 /** @param {string} text */
 const failed = text => harden({ status: 'failed', text });
 
-/** @param {unknown} error */
-const messageOf = error => {
-  try {
-    const { message } = /** @type {any} */ (error);
-    if (typeof message === 'string') return message;
-  } catch {
-    // fall through
-  }
-  return `${error}`;
-};
-
 /** The prefix of every `refused-schema` reason. */
-const SCHEMA_PREFIX = m5TextOf.toolSchemaInvalid('');
+const SCHEMA_PREFIX = textOf.toolSchemaInvalid('');
 
 /**
  * The `refused-schema` reason of a failed schema read: the inspector's text
@@ -86,11 +70,11 @@ const SCHEMA_PREFIX = m5TextOf.toolSchemaInvalid('');
  */
 const schemaReason = text => {
   if (typeof text !== 'string' || isStaged(text)) {
-    return m5TextOf.toolSchemaInvalid('the schema could not be read');
+    return textOf.toolSchemaInvalid('the schema could not be read');
   }
   const reason = text.startsWith(SCHEMA_PREFIX)
     ? text
-    : m5TextOf.toolSchemaInvalid(text);
+    : textOf.toolSchemaInvalid(text);
   return reason.slice(0, limits.reasonUnits);
 };
 
@@ -117,7 +101,7 @@ const schemaReason = text => {
 
 /**
  * The `grants` part of one session.
- * @param {any} runtime the session's runtime (`m5-parts.js`)
+ * @param {any} runtime the session's runtime (`runtime-parts.js`)
  * @param {GrantsOptions} [options]
  */
 export const makeGrants = (
@@ -202,21 +186,14 @@ export const makeGrants = (
       if (description !== undefined && entry !== undefined) {
         const { name } = description;
         if (builtIns.has(name)) {
-          setState(grant, 'refused-builtin', m5TextOf.toolNameBuiltIn(name));
+          setState(grant, 'refused-builtin', textOf.toolNameBuiltIn(name));
           entries.push(entry);
         } else if (/** @type {number} */ (claims.get(name)) > 1) {
-          setState(
-            grant,
-            'refused-duplicate',
-            m5TextOf.toolNameDuplicate(name),
-          );
+          setState(grant, 'refused-duplicate', textOf.toolNameDuplicate(name));
           entries.push(entry);
-        } else if (
-          over ||
-          bytes + grant.bytes > limitsM5.roundGrantedToolBytes
-        ) {
+        } else if (over || bytes + grant.bytes > limits.roundGrantedToolBytes) {
           over = true;
-          setState(grant, 'refused-budget', m5TextOf.toolOverBudget(name));
+          setState(grant, 'refused-budget', textOf.toolOverBudget(name));
         } else {
           bytes += grant.bytes;
           setState(grant, 'offered');
@@ -312,8 +289,8 @@ export const makeGrants = (
    *   checks it)
    */
   const grant = (tool, source, label = undefined) => {
-    if (kept.size >= limitsM5.maxGrantedTools) {
-      throw Error(m5Texts.grantsFull);
+    if (kept.size >= limits.maxGrantedTools) {
+      throw Error(texts.grantsFull);
     }
     /** @type {Grant} */
     const record = {
@@ -325,14 +302,14 @@ export const makeGrants = (
       waiters: [],
       handle: undefined,
     };
-    const handle = makeExo('ToolGrant', m5Interfaces.ToolGrant, {
+    const handle = makeExo('ToolGrant', interfaces.ToolGrant, {
       describe() {
         return infoOf(record);
       },
       withdraw() {
         if (record.state === 'withdrawn') return;
         record.state = 'withdrawn';
-        record.reason = m5Texts.grantWithdrawn;
+        record.reason = texts.grantWithdrawn;
         kept.delete(handle);
         wake(record);
       },
@@ -344,7 +321,7 @@ export const makeGrants = (
     return handle;
   };
 
-  const facet = makeExo('SessionGrants', m5Interfaces.SessionGrants, {
+  const facet = makeExo('SessionGrants', interfaces.SessionGrants, {
     /** @param {any} tool */
     grantTool(tool) {
       return grant(tool, 'operator');
@@ -408,7 +385,7 @@ export const makeGrants = (
 };
 harden(makeGrants);
 
-/** The `m5-parts.js` entry. */
+/** The `runtime-parts.js` entry. */
 export const grantsPart = harden({
   name: /** @type {const} */ ('grants'),
   /** @param {any} runtime */

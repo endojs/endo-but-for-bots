@@ -11,7 +11,7 @@ import '../unit/_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { m1bInterfaces, texts, textOf } from '../../guest/lib/interfaces.js';
+import { interfaces, textOf, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { messageBytes } from '../../guest/lib/bounded.js';
 import { assertTranscriptRecord } from '../../guest/lib/transcript-records.js';
@@ -32,6 +32,7 @@ import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 import {
   contextDigests,
   makeScriptedProvider,
+  scriptedUnexpectedFailure,
 } from '../../resources/agent-host/impl/providers/scripted.js';
 import { makeTestBlobs } from './_m1b-blobs.js';
 import { makeRandom, makeSessionSim, USAGE } from './_m1b-context.js';
@@ -498,7 +499,7 @@ test('failures: a page that breaks abandons the round (nothing sent); a blob tha
   // sends roundFailed with textOf.stagingFailed, before dispatching(0).
   /** @type {any[]} */
   const sent = [];
-  const sink = makeExo('TurnSink', m1bInterfaces.TurnSink, {
+  const sink = makeExo('TurnSink', interfaces.TurnSink, {
     dispatching: () => {
       sent.push('dispatching');
       return true;
@@ -566,10 +567,11 @@ test('scripted provider through the endpoint: chooses its turn from the projecte
     channel: harden({ publishDelta: () => {} }),
     timers,
     prepare: req => cache.prepare(sim.session, req),
+    unexpectedFailure: scriptedUnexpectedFailure,
   });
   /** @type {any[]} */
   const finals = [];
-  const sink = makeExo('TurnSink', m1bInterfaces.TurnSink, {
+  const sink = makeExo('TurnSink', interfaces.TurnSink, {
     dispatching: () => true,
     roundFinal: (/** @type {any} */ r) => {
       finals.push(r);

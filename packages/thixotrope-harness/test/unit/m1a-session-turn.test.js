@@ -18,7 +18,7 @@ import { makeSession } from '../../guest/session/session.js';
 import { makeSpareMaker, ALREADY_MADE } from '../../guest/session/main.js';
 import { makeRecordLog, inCallOrder } from '../../guest/session/records.js';
 import { toolSetFor } from '../../guest/session/tool-table.js';
-import { CANCELLED_BEFORE_RUN } from '../../guest/session/turn.js';
+import { NOT_RUN_TEXT } from '../../guest/session/tools/exec.js';
 import { fitEvent } from '../../guest/session/live.js';
 import { makeQueue } from '../../guest/session/queue.js';
 import { messageBytes } from '../../guest/lib/bounded.js';
@@ -901,7 +901,7 @@ test('cancel waits for running calls; waiting calls never run', async t => {
   t.is(results.length, limits.callWindow + 2);
   t.is(
     results.at(-1).result.slice(0, 40),
-    `Error: ${CANCELLED_BEFORE_RUN}`.slice(0, 40),
+    `Error: ${NOT_RUN_TEXT}`.slice(0, 40),
   );
 });
 

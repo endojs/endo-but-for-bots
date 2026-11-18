@@ -144,6 +144,8 @@ export const texts = harden({
   /** Harness (R4-49): the turn was cancelled while its exec call ran. */
   execAbandoned:
     'exec call abandoned: the turn was cancelled while it ran; the code may still be running and its effects may still happen',
+  /** `ExecPowersSource` after its call ended (rule 12.13). */
+  powersExpired: 'This exec call has ended; use the powers of the current call',
 });
 
 /**
@@ -187,6 +189,33 @@ export const textOf = harden({
    * @param {string} message
    */
   stagingFailed: message => `could not stage large text: ${message}`,
+  /**
+   * @param {number} bytes
+   * @param {number} limit
+   */
+  valueTooLarge: (bytes, limit) =>
+    `Value too large to store (${bytes} bytes; limit ${limit})`,
+  /**
+   * @param {string} reason
+   */
+  toolSchemaInvalid: reason =>
+    `The granted tool's schema was refused: ${reason}`,
+  /**
+   * The exec membrane (D-M5-3): a message model code sends out of its vat.
+   * @param {number} bytes
+   * @param {number} limit
+   */
+  membraneTooLarge: (bytes, limit) =>
+    `Arguments too large to send to another vat (about ${bytes} bytes; limit ${limit}); stage large data in a blob or send it in parts`,
+  /**
+   * @param {number} keys
+   * @param {number} limit
+   */
+  membraneTooManyKeys: (keys, limit) =>
+    `Arguments carry too many record keys to send to another vat (${keys}; limit ${limit})`,
+  /** @param {number} limit */
+  membraneTooDeep: limit =>
+    `Arguments are nested too deeply to send to another vat (limit ${limit})`,
 });
 
 // ---------------------------------------------------------------- shapes
@@ -237,6 +266,21 @@ export const m1aMethodNames = harden({});
 /** `exec` as offered to the model (W1b.4); its argument names (R3-41, R4-43). */
 export const execArgumentNames = harden(['code']);
 
+/**
+ * `ExecScope.inspect` operations (D-M5-2): `methods` (`__getMethodNames__`,
+ * for `lookup`), `describe` (`describeCapability`: method names and
+ * `help(method?)`), `readSources` (`SourceReader.read` per item),
+ * `toolSchema` (a granted tool's `schema()`, checked and projected to a
+ * `ToolDescription`), `toolExecute` (a granted tool's `execute(args)`).
+ */
+export const inspectOps = harden([
+  'methods',
+  'describe',
+  'readSources',
+  'toolSchema',
+  'toolExecute',
+]);
+
 /** M1b's shapes (W1b.0); in `shapes` since M2 W2.0. */
 const m1bShapeBuilders = {
   /**
@@ -255,15 +299,22 @@ const m1bShapeBuilders = {
       },
       { digest: text(64) },
     ),
-  /** `ExecScope.run` argument (m1b-interfaces.md 3.4). */
+  /**
+   * `ExecScope.run` argument (m1b-interfaces.md 3.4); M5: + the session's
+   * `ExecPowersSource`.
+   */
   ExecRequest: () =>
     record(
       {
         args: staged(text(limits.inlineBytes)),
-        writers: M.remotable('BlobWriters'),
-        timer: M.remotable('Timer'),
+        writers: R('BlobWriters'),
+        timer: R('Timer'),
       },
-      { content: M.remotable('Content'), notice: S.Reason },
+      {
+        content: R('Content'),
+        notice: S.Reason,
+        powers: R('ExecPowersSource'),
+      },
     ),
   /**
    * `ExecScope.run` answer: a ToolOutcome; `busy` at once while a call runs;
@@ -273,6 +324,38 @@ const m1bShapeBuilders = {
     M.or(
       S.ToolOutcome,
       record({ status: 'busy' }),
+      record({ status: 'exhausted' }),
+    ),
+  /** `ExecScope.inspect` operation. */
+  InspectOp: () => M.or(...inspectOps),
+  /**
+   * `ExecScope.inspect` argument (D-M5-2): call `target` for the session
+   * and answer a bounded, rendered result. `args` is the model's JSON text
+   * (`readSources`, `toolExecute`); `method` the method `describe` asks
+   * `help` about.
+   */
+  InspectRequest: () =>
+    record(
+      {
+        op: S.InspectOp,
+        target: M.remotable(),
+        writers: R('BlobWriters'),
+      },
+      {
+        args: staged(text(limits.inlineBytes)),
+        method: text(limits.methodNameUnits),
+        content: R('Content'),
+      },
+    ),
+  /** `ExecScope.inspect` answer. */
+  InspectOutcome: () =>
+    M.or(
+      S.ToolOutcome,
+      record({
+        status: 'ok',
+        methods: list(text(limits.methodNameUnits), limits.maxMethodNames),
+      }),
+      record({ status: 'ok', description: S.ToolDescription }),
       record({ status: 'exhausted' }),
     ),
 };
@@ -295,6 +378,8 @@ const m1bInterfaceBuilders = {
       // recovery); sendOnly. The call ends now: its run answers
       // `execAbandoned`, its `sleep` never settles again, the scope is kept.
       abandon: M.call().returns(done),
+      // M5 (W5.4, D-M5-2): the session's object tools, run in this vat.
+      inspect: M.callWhen(B.InspectRequest).returns(B.InspectOutcome),
     }),
 };
 

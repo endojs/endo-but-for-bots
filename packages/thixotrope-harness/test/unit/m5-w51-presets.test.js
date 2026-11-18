@@ -12,14 +12,8 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
 import { fitsFrame, messageBytes } from '../../guest/lib/bounded.js';
-import { m5Widenings } from '../../guest/lib/interfaces-m5.js';
-import {
-  m5FactoryShapes,
-  texts,
-  textOf,
-} from '../../guest/lib/interfaces-m5-factory.js';
+import { shapes, textOf, texts } from '../../guest/lib/interfaces.js';
 import {
   BUILTIN_PRESETS,
   isEdgeLabel,
@@ -72,7 +66,7 @@ test('built-ins: listed with chat-only first, availability by template objects',
       ['voice', false, textOf.presetNeeds('git-workspace')],
     ],
   );
-  for (const view of views) t.true(matches(view, m5FactoryShapes.PresetView));
+  for (const view of views) t.true(matches(view, shapes.PresetView));
   const configuration = await E(kit.facet).configuration();
   t.is(configuration.revision, 0);
   t.is(configuration.defaultPreset, kit.builtIn('chat-only'));
@@ -192,7 +186,7 @@ test('delete, reset and the built-in rules (Fae)', async t => {
 test('at most maxPresets presets, built-ins included', async t => {
   const kit = makePresetCatalog();
   let revision = 0;
-  const room = limitsM5.maxPresets - BUILTIN_PRESETS.length;
+  const room = limits.maxPresets - BUILTIN_PRESETS.length;
   for (let i = 0; i < room; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     ({ revision } = await E(kit.facet).create(
@@ -200,7 +194,7 @@ test('at most maxPresets presets, built-ins included', async t => {
       revision,
     ));
   }
-  t.is(kit.list().length, limitsM5.maxPresets);
+  t.is(kit.list().length, limits.maxPresets);
   await t.throwsAsync(E(kit.facet).create(custom(), revision), {
     message: texts.tooManyPresets,
   });
@@ -451,10 +445,10 @@ test('snapshot: data only, widened shape, configSnapshot drops instructions', as
     revision: 0,
     instructions: 'Answer in French.',
   });
-  t.true(matches(snapshot, m5Widenings.PresetSnapshot));
+  t.true(matches(snapshot, shapes.PresetSnapshot));
   const config = kit.configSnapshot(snapshot);
   t.false('instructions' in config);
-  t.true(matches(config, m5Widenings.PresetSnapshot));
+  t.true(matches(config, shapes.PresetSnapshot));
   t.false('instructions' in (await E(kit.builtIn('chat-only')).snapshot()));
 });
 
@@ -555,23 +549,23 @@ const wide = units => '€'.repeat(units);
  */
 const maximalRecord = () =>
   harden({
-    label: wide(limitsM5.presetLabelUnits),
+    label: wide(limits.presetLabelUnits),
     template: 'general',
-    description: wide(limitsM5.presetDescriptionUnits),
-    instructions: wide(limitsM5.presetInstructionsUnits),
+    description: wide(limits.presetDescriptionUnits),
+    instructions: wide(limits.presetInstructionsUnits),
     networkPolicy: 'public-internet',
     backend: scripted,
     modelId: wide(limits.modelIdUnits),
     reasoningEffort: wide(limits.effortUnits),
-    objects: Array.from({ length: limitsM5.maxTemplateObjects }, () =>
+    objects: Array.from({ length: limits.maxTemplateObjects }, () =>
       harden({
-        kind: wide(limitsM5.templateKindUnits),
-        label: wide(limitsM5.endowmentLabelUnits),
+        kind: wide(limits.templateKindUnits),
+        label: wide(limits.endowmentLabelUnits),
       }),
     ),
-    endowments: Array.from({ length: limitsM5.maxEndowments }, (_, i) =>
+    endowments: Array.from({ length: limits.maxEndowments }, (_, i) =>
       harden({
-        label: `${i}${wide(limitsM5.endowmentLabelUnits - 2)}`,
+        label: `${i}${wide(limits.endowmentLabelUnits - 2)}`,
         value: notes,
       }),
     ),
@@ -579,12 +573,12 @@ const maximalRecord = () =>
 
 test('guard boundary: the maximal guard-accepted record is refused as too large', async t => {
   const record = maximalRecord();
-  t.true(matches(record, m5FactoryShapes.PresetRecord));
-  t.true(messageBytes(record) > limitsM5.presetRecordBytes);
+  t.true(matches(record, shapes.PresetRecord));
+  t.true(messageBytes(record) > limits.presetRecordBytes);
   // Validation stops at the template objects first; the size is the last
   // check, so measure it with objects the template allows.
   const allowed = harden({ ...record, objects: [] });
-  t.true(matches(allowed, m5FactoryShapes.PresetRecord));
+  t.true(matches(allowed, shapes.PresetRecord));
   t.throws(() => normalizePresetRecord(allowed, { templates }), {
     message: texts.presetTooLarge,
   });
@@ -600,31 +594,31 @@ test('guard boundary: a record of exactly presetRecordBytes is accepted and its 
   // Three-byte text in every field but the instructions, which take the
   // rest (three-byte units, then one or two ASCII units for the remainder).
   const base = harden({
-    label: wide(limitsM5.presetLabelUnits),
+    label: wide(limits.presetLabelUnits),
     template: 'general',
-    description: wide(limitsM5.presetDescriptionUnits),
+    description: wide(limits.presetDescriptionUnits),
     instructions: '',
     networkPolicy: 'public-internet',
     backend: scripted,
     modelId: wide(limits.modelIdUnits),
     reasoningEffort: wide(limits.effortUnits),
     objects: [{ kind: 'git-workspace', label: 'workspace' }],
-    endowments: Array.from({ length: limitsM5.maxEndowments }, (_, i) =>
+    endowments: Array.from({ length: limits.maxEndowments }, (_, i) =>
       harden({
-        label: `${i}${wide(limitsM5.endowmentLabelUnits - 2)}`,
+        label: `${i}${wide(limits.endowmentLabelUnits - 2)}`,
         value: notes,
       }),
     ),
   });
-  const room = limitsM5.presetRecordBytes - messageBytes(base);
+  const room = limits.presetRecordBytes - messageBytes(base);
   const units = Math.floor(room / 3);
   const instructions = `${wide(units)}${'a'.repeat(room - units * 3)}`;
-  t.true(instructions.length <= limitsM5.presetInstructionsUnits);
+  t.true(instructions.length <= limits.presetInstructionsUnits);
   const record = harden({ ...base, instructions });
-  t.true(matches(record, m5FactoryShapes.PresetRecord));
-  t.is(messageBytes(record), limitsM5.presetRecordBytes);
+  t.true(matches(record, shapes.PresetRecord));
+  t.is(messageBytes(record), limits.presetRecordBytes);
   const normal = normalizePresetRecord(record, { templates });
-  t.is(messageBytes(normal), limitsM5.presetRecordBytes);
+  t.is(messageBytes(normal), limits.presetRecordBytes);
   // One byte more is refused.
   t.throws(
     () =>
@@ -649,6 +643,6 @@ test('guard boundary: a record of exactly presetRecordBytes is accepted and its 
   const { preset } = await E(kit.facet).create(record, 0);
   const view = await E(preset).describe();
   t.is(view.unavailableReason, 'r'.repeat(100));
-  t.true(matches(view, m5FactoryShapes.PresetView));
+  t.true(matches(view, shapes.PresetView));
   t.true(fitsFrame(view, limits.frameBytes - 1024));
 });

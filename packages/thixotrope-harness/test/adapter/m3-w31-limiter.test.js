@@ -8,7 +8,7 @@ import test from '@endo/ses-ava/test.js';
 /* eslint-disable import/no-relative-packages */
 import { m3TextOf, m3Texts } from '../../guest/lib/interfaces-m3.js';
 /* eslint-enable import/no-relative-packages */
-import { gatewayLimits } from '../../resources/agent-host/impl/gateway/contract-m3.js';
+import { gatewayLimits } from '../../resources/agent-host/impl/gateway/protocol.js';
 import {
   clientAddress,
   makeSignInLimiter,

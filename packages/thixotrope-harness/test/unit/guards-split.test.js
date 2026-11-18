@@ -2,12 +2,14 @@
 /**
  * X1: the interface tables split per vat program (`guest/lib/guards/*.js`,
  * the chain base < session < factory < `interfaces.js`) and the M2 fold
- * (m2-interfaces.md 1.3). Proof of no behaviour change:
+ * (m2-interfaces.md 1.3); F2: the fold of M5's tables and the removal of the
+ * M1b and M2 views (HR-SYN-1). Proof of no behaviour change:
  * - every guard, shape, method list and fixed text deep-equals its snapshot
- *   from before the split (`test/fixtures/guard-snapshot-before-x1.json`),
- *   where the fold maps `interfaces.X` (and `m1bInterfaces.X`,
- *   `methodNames.X`) of the ten interfaces M2 extends to the old
- *   `m2Interfaces.X` (`m2MethodNames.X`);
+ *   from before the split (`test/fixtures/guard-snapshot-before-x1.json`)
+ *   or, for the M5 texts and names that snapshot lacked, from before the
+ *   fold (`guard-snapshot-before-fold.json`), re-keyed by the committed map
+ *   `test/fixtures/guard-fold-map.json`; every before entry no folded entry
+ *   carries is listed there with the reason;
  * - the gateway's key and method sets are identical;
  * - each guard module's tables answer the same objects as `interfaces.js`;
  * - every name a guest module reads from a guard module's table is in it,
@@ -42,60 +44,61 @@ const before = JSON.parse(
   ),
 );
 
-/** The ten interfaces M2 extends (m2-interfaces.md 1.3). */
-const TEN = [
-  'Session',
-  'SessionInternal',
-  'QueueEntry',
-  'ContextSource',
-  'SessionFactory',
-  'HarnessRoot',
-  'Operator',
-  'AgentHostAdmin',
-  'Backend',
-  'Composer',
-];
-
+/** @type {{ entries: Record<string, string> }} */
+const beforeFold = JSON.parse(
+  readFileSync(
+    path.join(harness, 'test/fixtures/guard-snapshot-before-fold.json'),
+    'utf8',
+  ),
+);
 /**
- * The snapshot key a folded entry is compared with.
- * @param {string} key `table.name`
+ * The fold's rename map (F2, HR-SYN-1; it includes X1's fold of the ten
+ * interfaces M2 extends into `interfaces`).
+ * @type {{
+ *   renamed: Record<string, string>,
+ *   removed: Record<string, string>,
+ *   changed: Record<string, string>,
+ *   exportsRemoved: string[],
+ *   exportsAdded: string[],
+ * }}
  */
-const beforeKeyOf = key => {
-  const dot = key.indexOf('.');
-  if (dot < 0) return key;
-  const table = key.slice(0, dot);
-  const name = key.slice(dot + 1);
-  if (!TEN.includes(name)) return key;
-  if (table === 'interfaces' || table === 'm1bInterfaces')
-    return `m2Interfaces.${name}`;
-  if (table === 'methodNames') return `m2MethodNames.${name}`;
-  return key;
-};
+const foldMap = JSON.parse(
+  readFileSync(path.join(harness, 'test/fixtures/guard-fold-map.json'), 'utf8'),
+);
 
-test('every guard, shape, method list and text equals its snapshot from before the split (M2 versions folded)', t => {
+test('every guard, shape, method list and text equals its snapshot from before the split and the fold, re-keyed by the fold map', t => {
   const after = guardSnapshot();
-  t.deepEqual(
-    Object.keys(after.entries).sort(),
-    Object.keys(before.entries).sort(),
-    'the same entries in every table',
-  );
-  for (const [table, names] of Object.entries(before.order)) {
-    t.deepEqual(
-      [...after.order[table]].sort(),
-      [...names].sort(),
-      `${table}: the same names`,
+  /** @type {Record<string, string>} */
+  const old = { ...before.entries, ...beforeFold.entries };
+  const carried = new Set();
+  for (const [key, digest] of Object.entries(after.entries)) {
+    const from = foldMap.renamed[key] ?? key;
+    t.true(from in old, `${key}: ${from} is a before entry`);
+    if (key in foldMap.changed) {
+      t.not(digest, old[from], `${key} changed: ${foldMap.changed[key]}`);
+    } else {
+      t.is(digest, old[from], `${key} equals the old ${from}`);
+    }
+    carried.add(from);
+  }
+  // Every before entry is carried by a folded one or removed with a reason.
+  for (const key of Object.keys(old)) {
+    t.true(
+      carried.has(key) !== key in foldMap.removed,
+      `${key}: carried or removed, not both`,
     );
   }
-  let folded = 0;
-  for (const [key, digest] of Object.entries(after.entries)) {
-    const old = beforeKeyOf(key);
-    if (old !== key) folded += 1;
-    t.is(digest, before.entries[old], `${key} equals the old ${old}`);
+  for (const key of Object.keys(foldMap.removed)) {
+    t.true(key in old, `removed ${key} is a before entry`);
   }
-  // interfaces (10), m1bInterfaces (ContextSource, AgentHostAdmin,
-  // SessionFactory, HarnessRoot), methodNames (10).
-  t.is(folded, 24);
-  t.deepEqual(after.exports, before.exports, 'interfaces.js exports');
+  t.deepEqual(
+    after.exports,
+    [
+      ...before.exports.filter(name => !foldMap.exportsRemoved.includes(name)),
+      ...foldMap.exportsAdded,
+    ].sort(),
+    'interfaces.js exports',
+  );
 });
 
 test("the gateway's key and method sets are identical", t => {
@@ -135,9 +138,9 @@ test('each guard module answers the same objects as interfaces.js', t => {
       }
     }
   }
-  t.is(full.m2Interfaces.Session, full.interfaces.Session);
-  t.is(full.m1bInterfaces.HarnessRoot, full.interfaces.HarnessRoot);
-  t.is(full.m1bShapes.StagedText, base.shapes.StagedText);
+  t.is(full.interfaces.ExecScope, base.interfaces.ExecScope);
+  t.is(full.interfaces.Session, session.interfaces.Session);
+  t.is(full.interfaces.Preset, factory.interfaces.Preset);
 });
 
 /**

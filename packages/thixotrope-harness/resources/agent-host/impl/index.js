@@ -14,24 +14,28 @@
  * milestone's entry.
  */
 import { dirname } from 'node:path';
-import { env, pid } from 'node:process';
+import { env, pid, stderr } from 'node:process';
 
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { textOf } from '../../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { channelTaps } from './channel-taps.js';
-import { makeChannelRegistry } from './channels.js';
+import { liveProbeFromEnv, makeChannelRegistry } from './channels.js';
 import { makeComposer } from './composer.js';
 import { makeLive } from './live-service.js';
 import { makeAttach, makeOps } from './attach.js';
 import { makeEndpoint } from './endpoint.js';
 import { makeTimerFacet, makeTimers } from './timers.js';
-import { findBlobDir, makeBlobStore } from './blobs.js';
+import { blobDirIn, findStateDir, makeBlobStore } from './blobs.js';
 import { makeContent } from './content.js';
 import { makeContextCache } from './context-cache.js';
 import { archiveDirFor, makeArchiveStore } from './archive/store.js';
 import { makeListChannel } from './list-channel.js';
-import { makeEventLog, makeScriptedProvider } from './providers/scripted.js';
+import {
+  makeEventLog,
+  makeScriptedProvider,
+  scriptedUnexpectedFailure,
+} from './providers/scripted.js';
 import { makeEchoTool } from './tools/echo.js';
 import { openRouterKind } from './providers/openrouter.js';
 import { anthropicKind } from './providers/anthropic.js';
@@ -55,6 +59,10 @@ import {
  * @property {(options: { label: string, spec: any, readKey?: () => Promise<string>, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, subscriptions: any }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
  * @property {readonly string[]} tools names in `adapterTools` this kind
  *   offers in its `TurnPorts.tools`
+ * @property {string} unexpectedFailure the fixed reason of a round whose
+ *   provider threw (R4-79): never the error's message, which may quote a
+ *   provider body. Required: a kind without it is refused when the
+ *   incarnation is made (HR-SYN-12)
  *
  * @typedef {object} AdapterToolKind
  * @property {string} name the tool name the model sees
@@ -72,7 +80,12 @@ import {
  */
 export const backendKinds = harden([
   // M1a W1a.2: the scripted fake provider; offers echo.
-  { kind: 'scripted', makeProvider: makeScriptedProvider, tools: ['echo'] },
+  {
+    kind: 'scripted',
+    makeProvider: makeScriptedProvider,
+    tools: ['echo'],
+    unexpectedFailure: scriptedUnexpectedFailure,
+  },
   // M2 W2.1a: OpenRouter chat completions, streamed (m2-interfaces.md 8.1).
   openRouterKind,
   // M2 W2.1b: the Anthropic Messages API, streamed (m2-interfaces.md 8.1).
@@ -81,6 +94,25 @@ export const backendKinds = harden([
   claudePoolKind,
   codexPoolKind,
 ]);
+
+/**
+ * Refuse a kind table with a kind that names no fixed failure text
+ * (HR-SYN-12): its rounds would otherwise have no reason that keeps provider
+ * bodies out of the turn record.
+ * @param {readonly BackendKind[]} table
+ */
+export const assertBackendKinds = table => {
+  for (const entry of table) {
+    if (
+      typeof entry.unexpectedFailure !== 'string' ||
+      entry.unexpectedFailure === ''
+    )
+      throw Error(
+        `backend kind ${JSON.stringify(entry.kind)} has no unexpectedFailure text`,
+      );
+  }
+};
+harden(assertBackendKinds);
 
 /**
  * Tools that run in this adapter (hook table).
@@ -97,11 +129,49 @@ export const adapterTools = harden([
   },
 ]);
 
+/** @param {Record<string, unknown>} event */
+const stderrLog = event => {
+  stderr.write(
+    `${JSON.stringify({ agentHost: true, at: Date.now(), ...event })}\n`,
+  );
+};
+
+/**
+ * @param {unknown} error
+ * @returns {string}
+ */
+const messageOf = error => {
+  try {
+    const message = /** @type {any} */ (error)?.message;
+    return typeof message === 'string' ? message : String(error);
+  } catch {
+    return 'unprintable error';
+  }
+};
+
+/**
+ * @template T
+ * @param {() => T} compute
+ * @returns {() => T} `compute`'s value, worked out on the first call that
+ *   succeeds and kept
+ */
+const once = compute => {
+  /** @type {{ value: T } | undefined} */
+  let made;
+  return () => {
+    made ??= { value: compute() };
+    return made.value;
+  };
+};
+
 /**
  * One adapter incarnation of the agent host.
  *
  * @param {object} [options]
  * @param {import('./timers.js').Timers} [options.timers]
+ * @param {ReturnType<typeof liveProbeFromEnv>} [options.probe] the live
+ *   probe of the default channel registry (perf; default: the one a perf
+ *   run named in this process's environment, else none; HR-SYN-13)
  * @param {{ channelFor: (session: any) => any }} [options.channels] the
  *   session channel registry (tests may pass their own)
  * @param {readonly BackendKind[]} [options.kinds]
@@ -109,8 +179,12 @@ export const adapterTools = harden([
  * @param {string} [options.incarnation] names this incarnation in the
  *   manager's attach count (default: pid and a random suffix, from the
  *   loader)
+ * @param {string | (() => string)} [options.stateDir] the daemon's state
+ *   directory (default: the blob directory's grandparent when `blobDir` is
+ *   given, else found from argv by `findStateDir`); worked out once, on
+ *   first use, and passed to everything that keeps files (HR-SYN-22)
  * @param {string | (() => string)} [options.blobDir] M1b: where staged
- *   text lives (default: `<state>/agent-host/blobs`, found from argv)
+ *   text lives (default: `<state>/agent-host/blobs`)
  * @param {any} [options.sink] M1b: the manager's sink, when there is no
  *   attach (tests); otherwise `bind` provides it
  * @param {string | (() => string)} [options.archiveDir] M2 (W2.8): the
@@ -122,39 +196,67 @@ export const adapterTools = harden([
  *   first use over `<state>/agent-host/secrets.enc`, so an incarnation that
  *   never meets a secret creates no key file)
  * @param {typeof globalThis.fetch} [options.fetch] M2: the catalogue's fetch
+ * @param {(event: Record<string, unknown>) => void} [options.report] the
+ *   adapter's report of what it cannot do itself (a failed start-up sweep;
+ *   default: one JSON line on stderr)
  */
 export const makeAgentHostImpl = ({
   timers = makeTimers(),
-  channels = makeChannelRegistry({ taps: channelTaps }),
+  probe = liveProbeFromEnv(env),
+  channels = makeChannelRegistry({ taps: channelTaps, probe }),
   kinds = backendKinds,
   tools = adapterTools,
   incarnation = `${pid}`,
-  blobDir = () => findBlobDir(),
+  stateDir = undefined,
+  blobDir = undefined,
   sink: givenSink = undefined,
   archiveDir = undefined,
   catalog = undefined,
   secrets: givenSecrets = undefined,
   fetch = undefined,
+  report = stderrLog,
 } = {}) => {
+  assertBackendKinds(kinds);
+  /**
+   * The state layout, worked out once on first use (HR-SYN-22): the state
+   * directory, and the blob directory in it unless the caller named one.
+   * Lazy, so an incarnation that never keeps a file never asks argv.
+   */
+  const blobDirNow = once(() => {
+    if (blobDir === undefined) {
+      // eslint-disable-next-line no-use-before-define
+      return blobDirIn(stateDirNow());
+    }
+    return typeof blobDir === 'function' ? blobDir() : blobDir;
+  });
+  const stateDirNow = once(() => {
+    if (stateDir !== undefined)
+      return typeof stateDir === 'function' ? stateDir() : stateDir;
+    // A caller that names only the blob directory names
+    // `<state>/agent-host/blobs`.
+    if (blobDir !== undefined) return dirname(dirname(blobDirNow()));
+    return findStateDir();
+  });
   /** The manager's sink, from the attach (M1b blobs mint through it). */
   let sink = givenSink;
+  /** The sink, or `undefined` before the attach (start-up code asks quietly). */
+  const sinkOrUndefined = () => sink;
+  /** The sink; a call before the attach fails. */
+  const requireSink = () => {
+    if (sink === undefined) throw Error('the agent host is not attached');
+    return sink;
+  };
   const blobs = makeBlobStore({
-    dir: blobDir,
-    sink: () => {
-      if (sink === undefined) throw Error('the agent host is not attached');
-      return sink;
-    },
+    dir: blobDirNow,
+    sink: requireSink,
     timers,
   });
   const content = makeContent({ store: blobs });
   // M2 W2.8: the record archive (D-M2-1), next to the blobs.
   const archive = makeArchiveStore({
-    dir:
-      archiveDir ??
-      (() =>
-        archiveDirFor(typeof blobDir === 'function' ? blobDir() : blobDir)),
+    dir: archiveDir ?? (() => archiveDirFor(blobDirNow())),
     blobs,
-    sink: () => sink,
+    sink: sinkOrUndefined,
   });
   const timer = makeTimerFacet(timers);
   // The session list channel (W1b.5's list-channel.js), one per incarnation.
@@ -167,19 +269,15 @@ export const makeAgentHostImpl = ({
   const models = catalog ?? makeCatalog(fetch === undefined ? {} : { fetch });
 
   /**
-   * M2 (W2.3's ops, wired by W2.2, m2-interfaces 2.3): made on first use.
-   * The state directory is the blob directory's grandparent
-   * (`<state>/agent-host/blobs`); the key file comes from
+   * M2 (W2.3's ops, wired by W2.2, m2-interfaces 2.3): made on first use,
+   * in the state directory; the key file comes from
    * THIX_HARNESS_SECRETS_KEY or the user's config directory (9.1).
    * @type {any}
    */
   let secretsMade = givenSecrets;
   const secrets = () => {
     if (secretsMade === undefined) {
-      const stateDir = dirname(
-        dirname(typeof blobDir === 'function' ? blobDir() : blobDir),
-      );
-      const files = findSecretsFiles({ stateDir, env });
+      const files = findSecretsFiles({ stateDir: stateDirNow(), env });
       secretsMade = makeSecretsOps({
         store: makeSecretStore({
           file: files.file,
@@ -188,20 +286,16 @@ export const makeAgentHostImpl = ({
           stateDir: files.stateDir,
         }),
         seal: makeSealKeys({ file: files.keyFile, stateDir: files.stateDir }),
-        sink: () => {
-          if (sink === undefined) throw Error('the agent host is not attached');
-          return sink;
-        },
+        sink: requireSink,
       });
     }
     return secretsMade;
   };
   // M4 W4.6 (H-4 c): pools, credentials and accounts, made lazily.
   const subscriptions = makeSubscriptions({
-    sink: () => sink,
+    sink: sinkOrUndefined,
     secrets,
-    stateDir: () =>
-      dirname(dirname(typeof blobDir === 'function' ? blobDir() : blobDir)),
+    stateDir: stateDirNow,
     timers,
     ...(fetch === undefined ? {} : { fetch }),
   });
@@ -294,6 +388,7 @@ export const makeAgentHostImpl = ({
         timers,
         prepare: req => contextCache.prepare(session, req, { key: archiveKey }),
         owner: session,
+        unexpectedFailure: kind.unexpectedFailure,
       });
       // Per session (J-9361, J-9364): the tools, writers and Content of
       // these ports stage for this session and read only its blobs.
@@ -389,6 +484,7 @@ export const makeAgentHostImpl = ({
     history: () => archive.history(),
     blobs,
     timers,
+    stateDir: stateDirNow,
     // The in-process write path, never the hub's SealedBox-only writer
     // (m3-interfaces A-11).
     secretWriter: async () => {
@@ -401,10 +497,27 @@ export const makeAgentHostImpl = ({
     incarnation,
     onSink: async attachedSink => {
       sink = attachedSink;
-      // Writes that never completed (section 4.6); no state dir in tests.
-      await blobs.sweep().catch(() => {});
-      // M2: half-written segments, manifests and mirrors (4.5).
-      await archive.sweep().catch(() => {});
+      // Writes that never completed (section 4.6), and the daemon quota's
+      // count: once per incarnation (a rebind answers the first sweep). A
+      // failure does not fail the bind, which would stop every session: it
+      // is reported, and the blob store refuses stagings until a later
+      // sweep succeeds (HR-SYN-9).
+      await blobs.sweep().catch(error => {
+        report({
+          event: 'sweep-failed',
+          store: 'blobs',
+          error: messageOf(error),
+        });
+      });
+      // M2: half-written segments, manifests and mirrors (4.5); reported
+      // the same way.
+      await archive.sweep().catch(error => {
+        report({
+          event: 'sweep-failed',
+          store: 'archive',
+          error: messageOf(error),
+        });
+      });
       gateway.attached();
     },
     bindings: { [GATEWAY_KEY]: gateway.binding },

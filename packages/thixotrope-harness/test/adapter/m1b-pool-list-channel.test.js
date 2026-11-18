@@ -10,7 +10,7 @@ import '../unit/_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { m1bShapes } from '../../guest/lib/interfaces.js';
+import { shapes } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { channelLimits } from '../../config/defaults.js';
 import { makeListChannel } from '../../resources/agent-host/impl/list-channel.js';
@@ -70,7 +70,7 @@ const drain = async subscription => {
 };
 /** @param {any} batch */
 const t0Check = batch => {
-  if (!matches(batch, m1bShapes.ListBatch)) throw Error('not a ListBatch');
+  if (!matches(batch, shapes.ListBatch)) throw Error('not a ListBatch');
 };
 
 test('the first delivery is the list snapshot marker; batches follow in rev order', async t => {

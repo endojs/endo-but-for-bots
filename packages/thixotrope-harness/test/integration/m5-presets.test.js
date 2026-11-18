@@ -27,8 +27,8 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
-import { texts } from '../../guest/lib/interfaces-m5-factory.js';
+import { limits } from '../../guest/lib/limits.js';
+import { texts } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { emit } from '../../perf/_harness.mjs';
 import { names } from '../../scripts/provision-steps.js';
@@ -104,13 +104,13 @@ run(
     // Three-byte text just over the whole-record bound: refused, nothing
     // changes.
     const over = harden({
-      label: wide(limitsM5.presetLabelUnits),
+      label: wide(limits.presetLabelUnits),
       template: 'general',
       backend,
-      description: wide(limitsM5.presetDescriptionUnits),
-      instructions: wide(limitsM5.presetInstructionsUnits),
+      description: wide(limits.presetDescriptionUnits),
+      instructions: wide(limits.presetInstructionsUnits),
       modelId: wide(256),
-      endowments: Array.from({ length: limitsM5.maxEndowments }, (_, i) =>
+      endowments: Array.from({ length: limits.maxEndowments }, (_, i) =>
         harden({ label: `${i}${wide(78)}`, value: backend }),
       ),
     });
@@ -119,7 +119,7 @@ run(
     });
     t.is((await E(a.catalog).configuration()).revision, r3);
     t.is(
-      await presetLabelled(a.catalog, wide(limitsM5.presetLabelUnits)),
+      await presetLabelled(a.catalog, wide(limits.presetLabelUnits)),
       undefined,
     );
 

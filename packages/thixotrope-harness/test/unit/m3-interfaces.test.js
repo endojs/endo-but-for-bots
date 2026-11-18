@@ -13,11 +13,7 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
-import {
-  interfaces,
-  m2Interfaces,
-  m2MethodNames,
-} from '../../guest/lib/interfaces.js';
+import { interfaces, methodNames } from '../../guest/lib/interfaces.js';
 import {
   GATEWAY_KEY,
   m3AgentHostAdminMethodNames,
@@ -353,14 +349,14 @@ test('return guards: a status out of shape never leaves the admin', async t => {
 });
 
 test('withGatewayAdmin: one AgentHostAdmin interface with M2 methods then gateway', t => {
-  const base = m2Interfaces.AgentHostAdmin;
+  const base = interfaces.AgentHostAdmin;
   const guard = /** @type {any} */ (withGatewayAdmin(base));
   t.is(guard.payload.interfaceName, 'AgentHostAdmin');
   t.deepEqual(Object.keys(guard.payload.methodGuards), [
-    ...m2MethodNames.AgentHostAdmin,
+    ...methodNames.AgentHostAdmin,
     ...m3AgentHostAdminMethodNames,
   ]);
-  for (const name of m2MethodNames.AgentHostAdmin) {
+  for (const name of methodNames.AgentHostAdmin) {
     t.is(
       guard.payload.methodGuards[name],
       /** @type {any} */ (base).payload.methodGuards[name],
@@ -369,7 +365,7 @@ test('withGatewayAdmin: one AgentHostAdmin interface with M2 methods then gatewa
   }
   // interfaces.js is not edited: neither table gains `gateway`.
   t.false('gateway' in /** @type {any} */ (base).payload.methodGuards);
-  t.false(m2MethodNames.AgentHostAdmin.includes('gateway'));
+  t.false(methodNames.AgentHostAdmin.includes('gateway'));
   t.false(
     'gateway' in
       /** @type {any} */ (interfaces.AgentHostAdmin).payload.methodGuards,
@@ -378,7 +374,7 @@ test('withGatewayAdmin: one AgentHostAdmin interface with M2 methods then gatewa
   // implement it.
   /** @type {Record<string, (...args: any[]) => any>} */
   const methods = {};
-  for (const name of m2MethodNames.AgentHostAdmin)
+  for (const name of methodNames.AgentHostAdmin)
     methods[name] = () => undefined;
   t.throws(() => makeExo('AgentHostAdmin', guard, methods), {
     message: /gateway/,

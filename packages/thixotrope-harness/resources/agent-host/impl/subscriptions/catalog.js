@@ -50,10 +50,10 @@
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
 import { limits } from '../../../../guest/lib/limits.js';
-import { m4Limits } from '../../../../guest/lib/limits-m4.js';
-import { m4Texts } from '../../../../guest/lib/texts-m4.js';
+import { subscriptionLimits } from '../../../../guest/lib/subscription-limits.js';
+import { subscriptionTexts } from '../../../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
-import { subscriptionDefaults } from '../../../../config/defaults-m4.js';
+import { subscriptionDefaults } from '../../../../config/subscription-defaults.js';
 import { ANTHROPIC_VERSION } from '../providers/anthropic.js';
 import {
   anthropicPage,
@@ -92,7 +92,7 @@ const ANTHROPIC_PAGE_LIMIT = 1000;
 const CODEX_SLUG = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const EFFORT = /^[a-z][a-z0-9_-]{0,63}$/;
 /** Members whose observations one incarnation keeps at once. */
-const MAX_OWNERS = 2 * m4Limits.maxMembers;
+const MAX_OWNERS = 2 * subscriptionLimits.maxMembers;
 
 /**
  * One model as a member's catalogue lists it.
@@ -600,7 +600,7 @@ export const makePoolCatalog = ({
     const { spec, modelId, defaults } = options;
     const chosen = modelId ?? defaults?.modelId ?? spec.modelId;
     if (chosen === undefined || chosen === '')
-      throw Error(m4Texts.subscriptionModelRequired);
+      throw Error(subscriptionTexts.subscriptionModelRequired);
     const observation = await combined(options, 'admitting');
     if (observation === undefined) throw Error(texts.catalogUnavailable);
     const index = observation.indexOf.get(chosen);

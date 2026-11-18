@@ -17,7 +17,7 @@
  *   holds the objects afterwards (the queue entry let go of them at the
  *   claim), so they are released (R3-8).
  *
- * `packagesPart` is the `packages` entry of `m5-parts.js`. Its value:
+ * `packagesPart` is the `packages` entry of `runtime-parts.js`. Its value:
  * `{ table, enqueueMessageOnce(submission, requestId, at, attachments) }`.
  * `enqueueMessageOnce` runs inside the Session method's crank (session.js
  * wraps it in `inCrank` after `refuseIfDeleting`): it checks the
@@ -31,8 +31,8 @@
  *
  * Guest rules.
  */
-import { textOf } from '../lib/interfaces-m5.js';
-import { limitsM5 } from '../lib/limits-m5.js';
+import { textOf } from '../lib/guards/session.js';
+import { limits } from '../lib/limits.js';
 import { isValidLabel } from './labels.js';
 
 /**
@@ -52,7 +52,7 @@ import { isValidLabel } from './labels.js';
  * @param {readonly { label: string }[]} attachments
  */
 export const checkAttachments = (submission, attachments) => {
-  if (attachments.length > limitsM5.maxAttachments) {
+  if (attachments.length > limits.maxAttachments) {
     throw Error(textOf.tooManyAttachments(attachments.length));
   }
   /** @type {Set<string>} */
@@ -62,7 +62,7 @@ export const checkAttachments = (submission, attachments) => {
     if (seen.has(label)) throw Error(textOf.duplicateAttachment(label));
     seen.add(label);
   }
-  const max = limitsM5.packageTextUnits;
+  const max = limits.packageTextUnits;
   const { text } = submission;
   if (typeof text === 'string') {
     if (text.length > max) throw Error(textOf.packageTooLong(text.length));

@@ -16,7 +16,7 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
-import { m4Texts } from '../../guest/lib/texts-m4.js';
+import { subscriptionTexts } from '../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
 import {
   codexModels,
@@ -315,7 +315,7 @@ test('creation: resolveModel and efforts (R4-21, R4-22, R4-23; D-M4-5, R4-92)', 
     { reasoningEfforts: ['low', 'medium', 'high', 'max'] },
   );
   await t.throwsAsync(claude.catalog.resolveModel(base), {
-    message: m4Texts.subscriptionModelRequired,
+    message: subscriptionTexts.subscriptionModelRequired,
   });
   await t.throwsAsync(
     claude.catalog.resolveModel({ ...base, modelId: 'claude-none' }),

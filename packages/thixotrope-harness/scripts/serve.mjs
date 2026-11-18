@@ -100,6 +100,10 @@ export const ENV_ALLOWLIST = Object.freeze([
   // M2 W2.3 (m2-interfaces 9.1): the path of the Secrets wrapping key file,
   // outside the state directory. A path, never a secret value.
   'THIX_HARNESS_SECRETS_KEY',
+  // perf/turn.perf.mjs: the directory the agent host's live probe writes to
+  // in the daemon a perf run serves (impl/channels.js; HR-SYN-13). Unset,
+  // there is no probe.
+  'THIX_HARNESS_LIVE_PROBE_DIR',
 ]);
 
 /** Set by the wrapper itself, besides the allowlist. */

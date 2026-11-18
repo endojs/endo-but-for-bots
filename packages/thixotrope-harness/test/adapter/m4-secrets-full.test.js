@@ -10,7 +10,7 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { textOf } from '../../guest/lib/interfaces.js';
-import { m4Limits } from '../../guest/lib/limits-m4.js';
+import { subscriptionLimits } from '../../guest/lib/subscription-limits.js';
 /* eslint-enable import/no-relative-packages */
 import { makeAuditReader } from '../../resources/agent-host/impl/secrets/audit.js';
 import { describeKeys } from '../../resources/agent-host/impl/secrets/catalog.js';
@@ -238,7 +238,7 @@ test('describeKeys: generation, state, bytes or null; never a value', async t =>
   ]);
   t.false(JSON.stringify(infos).includes(value));
   const many = Array.from(
-    { length: m4Limits.describeBatch },
+    { length: subscriptionLimits.describeBatch },
     (_, i) => `k${i}`,
   );
   t.is((await describeKeys({ store, keys: many })).length, 64);
@@ -270,7 +270,7 @@ test('AuditReader: default 100, 1,000 pages with next, secret filter', async t =
     },
   });
   const first = await E(reader).page();
-  t.is(first.events.length, m4Limits.auditReaderDefault);
+  t.is(first.events.length, subscriptionLimits.auditReaderDefault);
   t.is(first.next, first.events[99].at);
   // Every event once across 1,000-event pages.
   const seen = [];

@@ -21,8 +21,7 @@ import '../unit/_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 import { E } from '@endo/far';
 
-import { texts as factoryTexts } from '../../guest/lib/interfaces-m5-factory.js';
-import { texts as m5Texts } from '../../guest/lib/interfaces-m5.js';
+import { texts } from '../../guest/lib/interfaces.js';
 import {
   makeSlice,
   turnWithInput,
@@ -160,7 +159,7 @@ const valueBecomes = async (locator, value) => {
       await pageB.locator('.thix-preset-error').waitFor();
       t.is(
         await pageB.locator('.thix-preset-error').textContent(),
-        factoryTexts.presetStale,
+        texts.presetStale,
       );
       t.is(
         await pageB.locator('textarea[name="instructions"]').inputValue(),
@@ -203,7 +202,7 @@ const valueBecomes = async (locator, value) => {
       await page.locator('.thix-preset-error').waitFor();
       t.is(
         await page.locator('.thix-preset-error').textContent(),
-        factoryTexts.presetTooLarge,
+        texts.presetTooLarge,
       );
       t.is(
         (await E(general).describe()).instructions,
@@ -299,7 +298,7 @@ const valueBecomes = async (locator, value) => {
       await page.locator('.thix-send-error').waitFor();
       t.true(
         (await page.locator('.thix-send-error').textContent()).includes(
-          m5Texts.attachmentsLost,
+          texts.attachmentsLost,
         ),
       );
       t.truthy(

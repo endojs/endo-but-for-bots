@@ -60,6 +60,7 @@ import {
   fitsFrame,
   previewText,
   utf8Bytes,
+  messageOf,
 } from '../lib/bounded.js';
 import { makeSessionArchive } from './archive.js';
 import { makeContextSource } from './context-source.js';
@@ -67,6 +68,9 @@ import { makeHistory } from './history.js';
 import { inCallOrder } from './records.js';
 import { isStaged, submissionField } from './staging.js';
 import { toolSetFor, toolSources, toolTable } from './tool-table.js';
+// The result of a call the turn never ran because it was cancelled first
+// (one text with the exec tool's; tools/exec.js never imports this module).
+import { NOT_RUN_TEXT } from './tools/exec.js';
 import { turnHooks } from './turn-hooks.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -77,29 +81,6 @@ const { E, Fail, defineExoClass, makePromiseKit, matches } =
 
 /** Rejection reason of an engine wait whose turn settled meanwhile. */
 const SETTLED = harden(Error('turn settled'));
-
-/**
- * Result of a call the turn never ran because it was cancelled first
- * (harness text, not a spec text; the model sees it on the next turn).
- */
-export const CANCELLED_BEFORE_RUN =
-  'the turn was cancelled before this call ran';
-
-/** @param {unknown} error */
-const messageOf = error => {
-  if (typeof error === 'object' && error !== null) {
-    try {
-      const { message } = /** @type {{ message?: unknown }} */ (error);
-      if (typeof message === 'string') return message;
-    } catch {
-      // fall through
-    }
-  }
-  return `${error}`;
-};
-
-// Moved to records.js (M2 W2.5); kept here for existing importers.
-export { plainBytes } from './records.js';
 
 /** @param {string} text */
 const reason = text => previewText(text, limits.reasonUnits);
@@ -187,12 +168,9 @@ const zeroUsage = () => ({
  * @param {typeof turnHooks} [options.hooks]
  * @param {readonly any[]} [options.table] tool table
  * @param {number} [options.maxToolRounds]
- * @param {any} [options.contextSource] ignored from M2 on: the runner
- *   builds the session's ContextSource itself (it needs the archive;
- *   m2-interfaces.md 2.4 item 6)
  * @param {readonly any[]} [options.sources] M5 S1: dynamic tool sources
  * @param {() => any} [options.getRuntime] M5 S4: the session's runtime
- *   (`m5-parts.js`), for the tool set and `ToolContext.runtime`
+ *   (`runtime-parts.js`), for the tool set and `ToolContext.runtime`
  */
 export const makeTurnRunner = ({
   config,
@@ -205,7 +183,6 @@ export const makeTurnRunner = ({
   hooks = turnHooks,
   table = toolTable,
   maxToolRounds = limits.maxToolRounds,
-  contextSource: _ignoredContextSource,
   sources = toolSources,
   getRuntime = () => undefined,
 }) => {
@@ -645,12 +622,7 @@ export const makeTurnRunner = ({
     if (active.state === 'cancelling') {
       // Cancel waited for the running calls; the waiting ones never ran.
       for (const intent of calls.waiting.slice(calls.issued)) {
-        recordResult(
-          active,
-          intent,
-          textOf.errorResult(CANCELLED_BEFORE_RUN),
-          true,
-        );
+        recordResult(active, intent, textOf.errorResult(NOT_RUN_TEXT), true);
       }
       calls.waiting = [];
       calls.issued = 0;

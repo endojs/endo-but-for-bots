@@ -9,7 +9,7 @@
  * name order (synchronously, with `require`: no top-level await) and
  * answers the valid `gatewayExtension` exports. A file that throws while
  * loading, has no `gatewayExtension` export, or whose export does not have
- * the contract's shape (`contract-m3.js` `GatewayExtension`) is logged
+ * the contract's shape (`protocol.js` `GatewayExtension`) is logged
  * `{ event: 'gateway-extension-skip', file, error }` and skipped; the
  * gateway still serves. A route on a path the gateway keeps (`/`, `/ws`,
  * `/assets/*`) or that an earlier file took makes its file invalid.
@@ -31,10 +31,10 @@ import { fileURLToPath } from 'node:url';
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
 import { m3Limits } from '../../../../guest/lib/interfaces-m3.js';
 /* eslint-enable import/no-relative-packages */
-import { WS_PATH } from './contract-m3.js';
+import { WS_PATH } from './protocol.js';
 import { markGatewayLocal } from './powers.js';
 
-/** @import { GatewayContext, GatewayExtension, GatewayRoute } from './contract-m3.js' */
+/** @import { GatewayContext, GatewayExtension, GatewayRoute } from './protocol.js' */
 
 const require = createRequire(import.meta.url);
 

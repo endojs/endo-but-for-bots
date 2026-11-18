@@ -20,7 +20,10 @@ import {
   withRetries,
 } from '../../resources/agent-host/impl/providers/retry.js';
 import { ProviderFailure } from '../../resources/agent-host/impl/providers/round.js';
-import { makeOpenRouterProvider } from '../../resources/agent-host/impl/providers/openrouter.js';
+import {
+  makeOpenRouterProvider,
+  openRouterKind,
+} from '../../resources/agent-host/impl/providers/openrouter.js';
 import {
   openRouterChunks,
   startFakeProviderServer,
@@ -161,10 +164,7 @@ test('the last failure says how many attempts; a non-retryable failure is not re
     { events: [{ usage: usage(0) }], fail: busy({ status: 502 }) },
   ]);
   t.is(three.attempts, 3);
-  t.is(
-    three.error.reason,
-    textOf.afterAttempts(textOf.openRouterHttp(503), 3),
-  );
+  t.is(three.error.reason, textOf.afterAttempts(textOf.openRouterHttp(503), 3));
   t.is(three.error.status, 502);
   t.false(three.error.retryable);
   t.deepEqual(three.events, [{ usage: usage(0) }], 'last held events kept');
@@ -187,10 +187,7 @@ test('at most one timeout retry; a thrown non-provider error is not retried', as
     });
   const r = await drive([{ fail: timeout() }, { fail: timeout() }]);
   t.is(r.attempts, 2);
-  t.is(
-    r.error.reason,
-    textOf.afterAttempts(textOf.openRouterTimeout(3600), 2),
-  );
+  t.is(r.error.reason, textOf.afterAttempts(textOf.openRouterTimeout(3600), 2));
   t.true(r.error.timedOut);
   const mixed = await drive([
     { fail: timeout() },
@@ -250,6 +247,7 @@ const openRouter = (server, options = {}) =>
     baseUrl: server.openRouterBaseUrl,
     modelId: 'fake-org/fake-model',
     waitMs: 15_000,
+    unexpectedFailure: openRouterKind.unexpectedFailure,
     ...options,
   });
 

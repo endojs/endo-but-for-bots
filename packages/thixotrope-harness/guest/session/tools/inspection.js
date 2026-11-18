@@ -32,7 +32,6 @@
  * Guest rules.
  */
 import { textOf } from '../../lib/guards/session.js';
-import { textOf as textOfM5 } from '../../lib/interfaces-m5.js';
 import { limits } from '../../lib/limits.js';
 import { argSpecs, parseClosedArgs } from '../../lib/tool-args.js';
 import { fieldBytes, isStaged } from '../staging.js';
@@ -127,7 +126,7 @@ const readArgs = (tool, args, spec) => {
     const bytes = /** @type {number} */ (fieldBytes(args));
     return {
       outcome: failed(
-        textOfM5.argumentsTooLarge(tool, bytes, limits.inlineBytes),
+        textOf.argumentsTooLarge(tool, bytes, limits.inlineBytes),
       ),
     };
   }
@@ -143,12 +142,10 @@ const readArgs = (tool, args, spec) => {
  * @returns {{ binding: any } | { outcome: any }}
  */
 const objectBinding = (context, petName) => {
-  const labels = context?.runtime?.labels;
-  if (labels === undefined)
-    return { outcome: failed(textOf.notBuilt('the label map')) };
+  const { labels } = context.runtime;
   const binding = labels.get(petName);
   if (binding === undefined)
-    return { outcome: failed(textOfM5.unknownLabel(petName)) };
+    return { outcome: failed(textOf.unknownLabel(petName)) };
   if (binding.kind !== 'object')
     return { outcome: failed(notCapabilityText(petName)) };
   return { binding };
@@ -227,7 +224,7 @@ export const inspectionToolEntries = harden([
 ]);
 
 /**
- * The `inspector` runtime part (`m5-parts.js`): `lookup` of an object
+ * The `inspector` runtime part (`runtime-parts.js`): `lookup` of an object
  * binding without cached method names (`objects.js`).
  */
 export const inspectorPart = harden({

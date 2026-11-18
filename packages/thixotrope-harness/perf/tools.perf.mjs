@@ -31,6 +31,7 @@
 import { performance } from 'node:perf_hooks';
 
 import { deliveries, emit, runPerf, single, summarize } from './_harness.mjs';
+import { windowMs as windowLength } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -38,16 +39,14 @@ installGuestPrelude();
 const { E } = await import('@endo/far');
 /* eslint-disable import/no-relative-packages */
 const { textOf } = await import('../guest/lib/interfaces.js');
-const { textOf: textOfM5 } = await import('../guest/lib/interfaces-m5.js');
 const { limits } = await import('../guest/lib/limits.js');
-const { limitsM5 } = await import('../guest/lib/limits-m5.js');
 /* eslint-enable import/no-relative-packages */
 const { makeSlice, requestId } =
   await import('../test/integration/_m1a-slice.js');
 const { execTemplate } = await import('../test/integration/_m1b-exec.js');
 const { runTurn, turnRecords } = await import('../test/integration/_m1b.js');
 
-const WINDOW_MS = Number(process.env.TOOLS_WINDOW_MS ?? 60_000);
+const WINDOW_MS = windowLength('TOOLS_WINDOW_MS', 60_000);
 const PROBE_MS = 30_000;
 const WARMUP = 3;
 const COUNTED = 10;
@@ -128,7 +127,7 @@ const script = harden({
 
 /** The arguments of a `store` whose value is `labelValueBytes + 1` bytes. */
 const bigStore = JSON.stringify({
-  value: 'v'.repeat(limitsM5.labelValueBytes - 1),
+  value: 'v'.repeat(limits.labelValueBytes - 1),
   petName: 'big',
 });
 const bigScript = harden({
@@ -288,7 +287,7 @@ const rows = [
           unit: 'ratio of median turn starts (256 labels / none)',
           full: f,
           empty: e,
-          labels: limitsM5.maxLabels,
+          labels: limits.maxLabels,
           windowMs,
           samples: samples.full.length + samples.empty.length,
           by: 'W5.3',
@@ -341,7 +340,7 @@ const rows = [
           x => x.kind === 'tool-result',
         );
         const expected = textOf.errorResult(
-          textOfM5.argumentsTooLarge(
+          textOf.argumentsTooLarge(
             'store',
             Buffer.byteLength(bigStore),
             limits.inlineBytes,
@@ -368,7 +367,7 @@ const rows = [
         return {
           pass:
             result?.result ===
-              textOf.errorResult(textOfM5.labelsFull(limitsM5.maxLabels)) &&
+              textOf.errorResult(textOf.labelsFull(limits.maxLabels)) &&
             next.end.status === 'completed',
           result: result?.result,
         };
@@ -383,7 +382,7 @@ const rows = [
             harden({ text: 'x' }),
             requestId(),
             Date.now(),
-            harden(Array(limitsM5.maxAttachments + 1).fill(attachment)),
+            harden(Array(limits.maxAttachments + 1).fill(attachment)),
           )
           .then(
             () => undefined,
@@ -489,7 +488,7 @@ const rows = [
       const grants = await E(granted.session).grants();
       /** @type {any[]} */
       const handles = [];
-      for (let i = 0; i < limitsM5.maxGrantedTools; i += 1) {
+      for (let i = 0; i < limits.maxGrantedTools; i += 1) {
         const tool = await E(fixtures.tools).make(`g${i}`);
         handles.push(await E(grants).grantTool(tool));
       }
@@ -569,7 +568,7 @@ const rows = [
       const ports = harden({ tools: harden([]), since: 1 });
       part.entriesFor(ports);
       const { Far } = /** @type {any} */ (globalThis);
-      for (let i = 0; i < limitsM5.maxGrantedTools; i += 1) {
+      for (let i = 0; i < limits.maxGrantedTools; i += 1) {
         part.facet.grantTool(Far(`g${i}`, {}));
       }
       await new Promise(resolve => setImmediate(resolve));
@@ -586,7 +585,7 @@ const rows = [
           runtime,
         );
         sets.push(performance.now() - t0);
-        if (set.descriptions.length < limitsM5.maxGrantedTools)
+        if (set.descriptions.length < limits.maxGrantedTools)
           throw Error('the Node tool set lost grants');
       }
       const s1 = summarize(sets);

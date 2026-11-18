@@ -7,7 +7,7 @@
  * refuses an effort. Factory bundle: imports texts only (1.4).
  */
 import { limits } from '../lib/limits.js';
-import { m4Texts } from '../lib/texts-m4.js';
+import { subscriptionTexts } from '../lib/subscription-texts.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { OptionResolver } from './session-options.js' */
@@ -20,7 +20,7 @@ export const subscriptionEffort = async (options, resolved) => {
   const given = fields.reasoningEffort ?? options.reasoningEffort;
   const kind = resolved.backendKind;
   if (kind !== 'claude-pool' && kind !== 'codex-pool') {
-    if (given !== undefined) throw Error(m4Texts.effortNotSupported);
+    if (given !== undefined) throw Error(subscriptionTexts.effortNotSupported);
     return;
   }
   const answer = await E(resolved.backend).resolveEffort(
@@ -41,7 +41,7 @@ export const subscriptionEffort = async (options, resolved) => {
     (effort !== undefined &&
       (typeof effort !== 'string' || effort.length > limits.effortUnits))
   )
-    throw Error(m4Texts.unsupportedEffort);
+    throw Error(subscriptionTexts.unsupportedEffort);
   if (effort === undefined) delete fields.reasoningEffort;
   else fields.reasoningEffort = effort;
 };

@@ -19,7 +19,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { accountBlocked, chipText } from './labels.js';
 import { useAccountsFeed } from './SubscriptionsPanel.js';
 
-/** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 /**
  * The `Session` presence of the session on screen, or undefined.

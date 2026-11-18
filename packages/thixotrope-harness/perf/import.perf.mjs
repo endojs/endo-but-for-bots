@@ -38,6 +38,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import { emit, loadAvg, runIdentity, runPerf } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -51,8 +52,8 @@ const { importState } = await import('../scripts/export.mjs');
 const { sliceScript } = await import('../test/fixtures/scripts/m1a-slice.js');
 
 const TURNS = Number(process.env.IMPORT_TURNS ?? 5000);
-const WINDOW_MS = Number(process.env.IMPORT_WINDOW_MS ?? 60_000);
-const STRETCH_MS = Number(process.env.IMPORT_STRETCH_MS ?? 15_000);
+const WINDOW_MS = windowMs('IMPORT_WINDOW_MS', 60_000);
+const STRETCH_MS = windowMs('IMPORT_STRETCH_MS', 15_000);
 const WALK_TURNS = Number(process.env.IMPORT_WALK_TURNS ?? 300);
 const SHAPE = process.env.IMPORT_SHAPE === 'plain' ? 'plain' : 'tool';
 

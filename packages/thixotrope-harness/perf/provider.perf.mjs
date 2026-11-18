@@ -46,6 +46,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { windowMs as windowLength } from './_window.mjs';
 
 // Lockdown and the guest prelude before any module that needs them: static
 // imports would be evaluated beside _init.mjs's top-level await.
@@ -62,11 +63,11 @@ const { makeEndpoint } =
 const { makeTimers } = await import('../resources/agent-host/impl/timers.js');
 const { makeChannelRegistry } =
   await import('../resources/agent-host/impl/channels.js');
-const { makeOpenRouterProvider, openRouterAttempt } =
+const { makeOpenRouterProvider, openRouterAttempt, openRouterKind } =
   await import('../resources/agent-host/impl/providers/openrouter.js');
 const { parseSse } =
   await import('../resources/agent-host/impl/providers/sse.js');
-const { anthropicAttempt, makeAnthropicProvider } =
+const { anthropicAttempt, anthropicKind, makeAnthropicProvider } =
   await import('../resources/agent-host/impl/providers/anthropic.js');
 const { makeRetry, openRouterDelay } =
   await import('../resources/agent-host/impl/providers/retry.js');
@@ -75,7 +76,7 @@ const { E, Far, makeExo } = /** @type {any} */ (globalThis);
 
 const DELTAS = Number(process.env.PROVIDER_DELTAS ?? 200);
 const DELTA_MS = Number(process.env.PROVIDER_DELTA_MS ?? 5);
-const WINDOW_MS = Number(process.env.PROVIDER_WINDOW_MS ?? 10_000);
+const WINDOW_MS = windowLength('PROVIDER_WINDOW_MS', 10_000);
 const MIB = 1024 * 1024;
 const timers = makeTimers();
 
@@ -194,6 +195,8 @@ const oneRound = async ({
     provider,
     channel,
     timers,
+    unexpectedFailure: (anthropic ? anthropicKind : openRouterKind)
+      .unexpectedFailure,
     prepare: async () =>
       harden({
         transcript: [{ kind: 'message', role: 'user', content: 'hi' }],
