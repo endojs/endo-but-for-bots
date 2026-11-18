@@ -404,20 +404,21 @@ test('no raw presence outlives its call: E.get through a wrapper answers a wrapp
       harden({ inner: Promise.resolve(x === holder ? leaf : undefined) }),
   });
   const first = makeMembrane({ callE });
-  const inner = await first.E.get(first.wrap(holder)).inner;
+  const firstE = /** @type {any} */ (first.E);
+  const inner = await firstE.get(first.wrap(holder)).inner;
   t.not(inner, leaf);
   t.true(isWrapper(inner));
-  t.is(await first.E(inner).ping(), 'pong');
+  t.is(await firstE(inner).ping(), 'pong');
   // A get through a promise for the wrapper is wrapped too.
   t.true(
-    isWrapper(await first.E.get(Promise.resolve(first.wrap(holder))).inner),
+    isWrapper(await firstE.get(Promise.resolve(first.wrap(holder))).inner),
   );
   // Kept past its call, it is refused under the next call's membrane.
-  const next = makeMembrane({ callE });
-  await t.throwsAsync(() => next.E(inner).ping(), {
+  const nextE = /** @type {any} */ (makeMembrane({ callE }).E);
+  await t.throwsAsync(() => nextE(inner).ping(), {
     message: texts.powersExpired,
   });
-  await t.throwsAsync(() => next.E.get(inner).inner, {
+  await t.throwsAsync(() => nextE.get(inner).inner, {
     message: texts.powersExpired,
   });
 });
