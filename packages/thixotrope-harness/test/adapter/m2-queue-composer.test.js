@@ -112,10 +112,12 @@ test('a staged edit the entry refuses leaves no file (entry gone, oversize guard
   });
 });
 
-test('a staged edit whose session vat is lost leaves no file; another failure keeps it', async t => {
+test('HR-SYN-10: a staged edit whose call breaks keeps its file, as a submission does; another failure keeps it too', async t => {
   const blobs = testBlobs();
   t.teardown(blobs.cleanup);
   const composer = makeComposer({ now: () => 5, blobs: blobs.store });
+  // The break may come after the entry stored the edit (a break never means
+  // "not done"): the file stays, as for submit (one rule).
   const lost = Far('QueueEntry', {
     edit: () => {
       throw Error(`ocapn hub: ${RETIRED_TEXT}`);
@@ -123,8 +125,9 @@ test('a staged edit whose session vat is lost leaves no file; another failure ke
   });
   const text = 'y'.repeat(limits.inlineBytes + 1);
   await t.throwsAsync(() => E(composer).edit(lost, text));
-  await blobsUntil(() => filesIn(blobs.blobDir).length === 0);
-  t.deepEqual(filesIn(blobs.blobDir), []);
+  // Give a discard (sent without waiting) the time it would take.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  t.is(filesIn(blobs.blobDir).length, 1, 'a break keeps the file');
   const odd = Far('QueueEntry', {
     edit: () => {
       throw Error('something else');
@@ -133,7 +136,7 @@ test('a staged edit whose session vat is lost leaves no file; another failure ke
   await t.throwsAsync(() => E(composer).edit(odd, text), {
     message: 'something else',
   });
-  t.is(filesIn(blobs.blobDir).length, 1, 'it may have been kept: it stays');
+  t.is(filesIn(blobs.blobDir).length, 2, 'it may have been kept: it stays');
 });
 
 test('a staged edit without a blob store is refused with stagingFailed and never sent', async t => {
@@ -150,12 +153,14 @@ test('a staged edit without a blob store is refused with stagingFailed and never
   t.deepEqual(edits, []);
 });
 
-test('isEditRefusal: the entry refusals and a lost vat, not other failures', t => {
+test('isEditRefusal: only the entry\'s own refusal, compared whole; not a break, a guard message or a prefix (HR-SYN-10)', t => {
   t.true(isEditRefusal(Error(texts.entryGone)));
-  t.true(isEditRefusal(Error(texts.blankSubmission)));
-  t.true(isEditRefusal(Error(textOf.inlineTooLarge(9000, 8192))));
-  t.true(isEditRefusal(Error('In "edit" method of (QueueEntry): bad')));
-  t.true(isEditRefusal(Error(`ocapn hub: ${RETIRED_TEXT}`)));
+  // Checked before staging, or impossible for a staged edit.
+  t.false(isEditRefusal(Error(texts.blankSubmission)));
+  t.false(isEditRefusal(Error(textOf.inlineTooLarge(9000, 8192))));
+  t.false(isEditRefusal(Error('In "edit" method of (QueueEntry): bad')));
+  t.false(isEditRefusal(Error(`${texts.entryGone} (and more)`)));
+  t.false(isEditRefusal(Error(`ocapn hub: ${RETIRED_TEXT}`)));
   t.false(isEditRefusal(Error('something else')));
   t.false(isEditRefusal(undefined));
 });

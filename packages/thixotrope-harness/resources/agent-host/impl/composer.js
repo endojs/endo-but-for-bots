@@ -22,17 +22,32 @@
  * entry in a receipt (a `WeakMap` from entry to session; after a restart
  * the text is staged without an owner and the session that presents it
  * takes it, M1b 17.3). The staged file is deleted when the entry refuses the
- * edit or its session vat is lost (m2-interfaces.md 11): the vat kept
- * nothing. The text the edit replaced is the session's to drop; a staged
- * one's file stays until the session is deleted or M13's sweep (J-0452).
+ * edit (it kept nothing). The text the edit replaced is the session's to
+ * drop; a staged one's file stays until the session is deleted or M13's
+ * sweep (J-0452).
  *
  * M5 (W5.7; m5-interfaces.md 2.6, H-7): the guard is `m5Interfaces.Composer`
  * and `submit` takes an optional fourth argument `{ attachments }`. With a
- * non-empty list the text is first checked against `packageTextUnits`
- * (before anything is staged), then sent with
+ * non-empty list the text is first checked against `packageTextUnits`, then
+ * the attachments as the session checks them (`checkAttachments`), all
+ * before anything is staged; then sent with
  * `E(session).enqueueMessageOnce(submission, requestId, at, attachments)`;
- * otherwise `enqueueOnce` as before. The session's attachment refusals are
- * refusals before storing (a staged file is deleted).
+ * otherwise `enqueueOnce` as before.
+ *
+ * A staged file's fate after a failed call (HR-SYN-10). Whatever the
+ * Composer can check is checked before staging: blank text, the package
+ * length, the attachments; its own guard has the session's argument shapes
+ * (request id, `at`, attachments), and a staged submission is never inline,
+ * so the session's guard and inline-size refusals cannot meet a staged
+ * call. What is left is the session's state: the refusals of
+ * `SUBMIT_REFUSALS` and `EDIT_REFUSALS`, each the session's own text from
+ * its text table, compared whole (no prefixes, no guard-message format).
+ * Their file is deleted. Every other failure keeps the file, and so does a
+ * retired break, for submit and edit alike: a break never means "not done"
+ * (M0 S9; m2-interfaces 4.4 A3), so the session may have stored the handle
+ * before the break, and deleting a file a record holds loses the user's
+ * text, while keeping one nobody holds costs disk until the session is
+ * deleted or M13's sweep (M1b leak 4.7).
  *
  * Node module (adapter); the guest prelude is on `globalThis`.
  */
@@ -46,6 +61,7 @@ import { limitsM5 } from '../../../guest/lib/limits-m5.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { utf8Bytes } from '../../../guest/lib/bounded.js';
 import { isRetiredBreak } from '../../../guest/lib/retired.js';
+import { checkAttachments } from '../../../guest/session/packages.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -53,63 +69,30 @@ import { isRetiredBreak } from '../../../guest/lib/retired.js';
 const { E, makeExo } = /** @type {GuestGlobals} */ (globalThis);
 
 /**
- * The texts `Session.enqueueOnce` refuses with before it stores anything
- * (guest/session/queue.js `enqueueOnce`: every `refuse` precedes the first
- * write of the submission).
+ * The texts `Session.enqueueOnce` (and `enqueueMessageOnce`, after its
+ * attachment checks) refuses a staged submission with before it stores
+ * anything, from its state (guest/lib/pending-queue.js `enqueue`: every
+ * `refuse` precedes the first write). Blank text never reaches it (checked
+ * here first).
  */
-const QUEUE_REFUSALS = new Set([
-  texts.blankSubmission,
+const SUBMIT_REFUSALS = new Set([
   texts.invalidRequestId,
   texts.requestIdExpired,
   texts.requestIdReused,
   texts.receiptLimit,
   textOf.queueFull(limits.maxWaiting),
 ]);
-/** Text that starts a refusal the session makes before storing anything. */
-const REFUSAL_PREFIXES = [
-  'In "enqueueOnce" method of (Session)',
-  'Inline text of ',
-  // M5: `enqueueMessageOnce`'s guard and its attachment checks
-  // (guest/session/packages.js `checkAttachments`).
-  'In "enqueueMessageOnce" method of (Session)',
-  textOfM5.tooManyAttachments(0).split('(')[0],
-  textOfM5.packageTooLong(0).split('(')[0],
-  textOfM5.reservedLabel(''),
-  textOfM5.duplicateAttachment('').split('"')[0],
-];
-
-/** Text that starts a refusal of `QueueEntry.edit` (its guard or size). */
-const EDIT_PREFIXES = ['In "edit" method of (QueueEntry)', 'Inline text of '];
-const EDIT_REFUSALS = new Set([texts.entryGone, texts.blankSubmission]);
+/** What `QueueEntry.edit` refuses a staged edit with: the entry is gone. */
+const EDIT_REFUSALS = new Set([texts.entryGone]);
 
 /**
- * Whether the entry kept nothing of a refused edit: one of its refusals, or
- * a retired break (its session vat is lost).
+ * The one rule for a staged file after a failed call (HR-SYN-10, module
+ * comment): deleted only for a refusal in `refusals` (the session kept
+ * nothing); kept for a retired break and for anything else.
  * @param {unknown} error
+ * @param {ReadonlySet<string>} refusals
  */
-export const isEditRefusal = error => {
-  if (isRetiredBreak(error)) return true;
-  let message;
-  try {
-    message = /** @type {any} */ (error)?.message;
-  } catch {
-    return false;
-  }
-  if (typeof message !== 'string') return false;
-  return (
-    EDIT_REFUSALS.has(message) ||
-    EDIT_PREFIXES.some(prefix => message.startsWith(prefix))
-  );
-};
-harden(isEditRefusal);
-
-/**
- * Whether `error` is the session's refusal of a submission it did not
- * store: a queue refusal text, or its interface guard's rejection (the
- * method never ran).
- * @param {unknown} error
- */
-export const isRefusal = error => {
+export const keptNothing = (error, refusals) => {
   if (isRetiredBreak(error)) return false;
   let message;
   try {
@@ -117,13 +100,23 @@ export const isRefusal = error => {
   } catch {
     return false;
   }
-  if (typeof message !== 'string') return false;
-  return (
-    QUEUE_REFUSALS.has(message) ||
-    REFUSAL_PREFIXES.some(prefix => message.startsWith(prefix))
-  );
+  return typeof message === 'string' && refusals.has(message);
 };
+harden(keptNothing);
+
+/**
+ * Whether the session refused a staged submission before storing it.
+ * @param {unknown} error
+ */
+export const isRefusal = error => keptNothing(error, SUBMIT_REFUSALS);
 harden(isRefusal);
+
+/**
+ * Whether the entry refused a staged edit before storing it.
+ * @param {unknown} error
+ */
+export const isEditRefusal = error => keptNothing(error, EDIT_REFUSALS);
+harden(isEditRefusal);
 
 /**
  * @param {object} [options]
@@ -182,8 +175,13 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
     async submit(session, text, requestId, options = undefined) {
       if (text.trim() === '') throw Error(texts.blankSubmission);
       const attachments = options?.attachments ?? [];
-      if (attachments.length > 0 && text.length > limitsM5.packageTextUnits) {
-        throw Error(textOfM5.packageTooLong(text.length));
+      if (attachments.length > 0) {
+        if (text.length > limitsM5.packageTextUnits) {
+          throw Error(textOfM5.packageTooLong(text.length));
+        }
+        // The session's own checks, with its texts, before anything is
+        // staged (HR-SYN-10).
+        checkAttachments(harden({ text }), attachments);
       }
       /** @param {any} submission */
       const enqueue = submission =>
@@ -204,10 +202,10 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
       try {
         receipt = await enqueue(staged);
       } catch (error) {
-        // A refusal the session makes before it stores anything (its queue
-        // checks, its guard) leaves this file without a holder: delete it
-        // (J-9361). Anything else (a break, an unknown failure) may come
-        // after the session kept the handle, so the file stays.
+        // A refusal the session makes from its state before it stores
+        // anything leaves this file without a holder: delete it (J-9361).
+        // Anything else (a break, an unknown failure) may come after the
+        // session kept the handle, so the file stays (module comment).
         if (isRefusal(error)) void blobs?.discard(staged.blob);
         throw error;
       }

@@ -1029,6 +1029,14 @@ Changes after the M1b QC (J-0397's open list). Guards: `m1bShapes.StagedText` ga
   or its guard rejects the call, the session stored nothing (every refusal precedes the first write
   in `queue.js`), and the Composer deletes the file. A retired break or any other failure keeps
   it. 4.7's leak is now: a file named whose handle was in a message being sent at a crash.
+  *Amended (harness review HR-SYN-10):* the Composer checks before staging what it can (blank
+  text; M5's package length and attachments with the session's own `checkAttachments`); its own
+  guard has the session's argument shapes and a staged submission is never inline, so a staged
+  call cannot meet the session's guard or inline-size refusal. It deletes the file only for the
+  state refusals (invalid, expired or reused request id, receipt limit, queue full), each compared
+  whole with the session's text, never by prefix. A retired break keeps the file for `submit` and
+  for M2's `edit` alike (one rule): a break never means "not done", and deleting a file a record
+  holds loses the user's text.
 - **Not done: "files no manager handle names".** The manager keeps `WeakMap<Blob, key>` only, and
   vats have no `WeakRef`, so it cannot list which keys still have a holder; a sweep by manager
   liveness would need a strong key table (which would keep every handle alive) or an engine

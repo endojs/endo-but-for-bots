@@ -1122,7 +1122,7 @@ means that vat is lost.
 | factory -> `SessionInternal.importState` (guest, the new vat) | new vat lost | roll the import back (7.2) |
 | adapter -> manager sink `resolveSessions` / `resolveSecrets` / `resolveGrants` (guest) | manager lost | the round fails with `textOf.secretFailed('READ_FAILED')` or `textOf.archiveFailed(message)`; `History` rejects |
 | CLI or hub client -> `SecretWriter` (adapter; as built, XA J-10005: the gateway writes in process, 9.2) | restart | open a new writer |
-| Composer -> `QueueEntry.edit` (guest) | session vat lost | reject; delete a staged file |
+| Composer -> `QueueEntry.edit` (guest) | session vat lost | reject; the staged file stays (amended, HR-SYN-10: one rule with `submit`, M1b 7 and 17.1; the edit may have been stored before the break) |
 | provider -> `TurnSink.dispatching` (session vat) | session vat lost | as M1a: abandon; nothing sent to the provider |
 
 ---

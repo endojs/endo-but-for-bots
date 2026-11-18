@@ -410,7 +410,9 @@ them; `cancel` drops them. Called by the Composer only (as `enqueueOnce`).
 `Inventory.list` and passes them back as the presences it holds; in the browser only the mention
 addon calls the four-argument form (W5.8, section 4.1 item 2), and a resend after a reconnect goes
 through the same addon, so the receipt fingerprint (text and labels) of a resend matches the
-first send or the addon refuses to resend.
+first send or the addon refuses to resend. *Amended (HR-SYN-10):* with attachments the Composer
+runs the session's `checkAttachments` before it stages anything, so an attachment refusal never
+leaves a file and the Composer recognises no attachment text afterwards (M1b 17.1 as amended).
 
 **Packages** (`guest/session/packages.js`): a per-session table `Map<number, Package>`; `number`
 is a per-session counter from 1 (shared with M9's inbox, which opens packages through the same
