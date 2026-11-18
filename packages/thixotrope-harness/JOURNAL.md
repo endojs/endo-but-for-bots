@@ -8525,3 +8525,18 @@ member is CONSUMED. (4) `accountStatus` `refresh` is model-driven with no single
 interval: every call reads every member's usage endpoint. (5) D-M4-9: the model is never offered
 `accountStatus` (session tool table). Fit: object keys (WeakMaps by member, pool and session
 presence) made the adapter side simple; the one-load-per-incarnation rule is what makes (1).
+
+### J-9662 2026-11-18 M4 review, resumed after the restart (M4-QC) - review
+The two integration files the cut-off run had not reached, at 859ecc68bc (no M4 code change since
+J-9660), two slots at once: m4-provision 165.5 s and m4-restart-renewal 173.5 s held, both pass,
+2:54 wall. With J-9660 every M4 integration file has now run and passed; none is near 5 minutes.
+More findings: (6) a provider reset header is accepted up to the year 2100, so one answer can
+mark a member for decades (a newer open reading lifts it, but a marked member is not asked
+again); a cap such as 8 days past now would bound it. (7) A renewal whose answer fails
+`renewedFrom` (account mismatch, bad lifetime) after the POST also drops the rotated refresh
+token; fail closed (`CONSUMED`), but the member needs a new sign-in. (8) K-2's test cannot
+show "none to B"; it asserts at most one per member (W4.8 recorded this). (9) `Secret`
+`setDescription` is not an audit event, and grants keep describing the old text (W4.1's M2
+finding). (10) `designs/milestones.md` gained M4's outcome table: a PM file the other lanes
+also edit. Verdict: accept with fixes; no secret value, key-shaped literal or private name in
+the diff.
