@@ -231,7 +231,16 @@ run(
 
     // A granted tool (the fixture `echo2`), offered from the next round.
     const grant = await E(E(one).grants()).grantTool(fixtures.echoTool);
-    t.truthy(grant);
+    const granted = await waitFor(
+      async () => {
+        const info = await E(grant).describe();
+        return info.state === 'pending' ? undefined : info;
+      },
+      30_000,
+      'the grant leaves pending',
+      100,
+    );
+    t.is(granted.state, 'offered');
 
     const holdings = async () => {
       const report = await state.client.call('reachability');

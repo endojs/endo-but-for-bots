@@ -160,7 +160,9 @@ await runPerf('creation-m5', async ({ provision }) => {
   /** @type {string | undefined} */
   let cursor;
   do {
-    const page = await E(inventory).list(cursor);
+    const page = await (cursor === undefined
+      ? E(inventory).list()
+      : E(inventory).list(cursor));
     rows.push(...page.rows);
     cursor = page.next;
   } while (cursor !== undefined);
