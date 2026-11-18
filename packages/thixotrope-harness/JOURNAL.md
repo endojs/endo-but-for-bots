@@ -13760,3 +13760,55 @@ this unit; SESSION's tree): session 212,483 of 240,000, exec 62,754, factory 156
 the two integration batches, the adapter lane (63 s). Not run: browser lane, gateway perf
 checks, `m1a-channel-bounds` bench outside the adapter lane, power-loss behaviour (only SIGKILL is
 tested). Fit: neutral.
+
+### J-10220 2026-11-18 T3-PROVIDERS wire goldens before the provider seam - verified
+`test/adapter/provider-wire-golden.test.js` records, against the fake servers, every request the
+Anthropic and OpenRouter providers send for six rounds (rich transcript with tool calls and
+results, two-part system, tools, output limits, effort, a 401, a model without its organisation)
+and both model catalogues' and the pool catalogue's reads: method, path and query, header names
+and values in order (credential values replaced), body text as sent, what the round answered and
+the event-log kinds seen (a set: deferred lines interleave by timing, delta counts follow the
+socket's reads). `m4-provider` gained the same for one round of each pool kind (hand-over after a
+429). Goldens in `test/fixtures/provider-wire-golden.json`, `pool-wire-golden.json`; rewritten
+only with `THIX_WRITE_GOLDEN=1`. Commit `0e5d341e2f`. Fit: neutral.
+
+### J-10221 2026-11-18 T3-PROVIDERS one provider shell, makeApiProvider, the event log - decision
+`providers/shell.js` `makeProviderShell({ timers, runRound })` is the one turn -> control map
+(round.js `makeRoundControl`) under the API, pool and scripted providers, with the one
+`Provider` typedef (4 parameters). `providers/api.js` `makeApiProvider` takes a `wire` record
+(`baseUrl`, `timeoutMs`, `path`, `unreachable`, `model`, `body`, `delay`, `attempt`); Anthropic
+and OpenRouter export `anthropicWire` / `openRouterWire`. The scripted double keeps its round
+source (plan item (b)) but uses round.js's control, `stageResult` and `tailText`; its copies went.
+`providers/event-log.js` holds `makeEventLog`. Commit `624dfc8f9b`. Fit: neutral.
+
+### J-10222 2026-11-18 T3-PROVIDERS kinds.js and the catalogue core - decision
+`providers/kinds.js`: `backendKinds`, `assertBackendKinds`, `kindOf(spec, table)` (the one match
+of `spec.kind`), `BackendKind` with `catalog({ models, pools })`, `readModels?({ spec, fetch })`,
+`acceptsModelId?`. Each kind module exports its complete entry (`scriptedKind` new), so the
+identity tests hold. The readers moved to their kinds (`anthropic.js`, `openrouter.js`) to keep the
+module graph acyclic (catalog.js imports kinds.js). `providers/catalog-core.js`:
+`makeCatalogOwner({ read, readKey?, now, log? })`, `makeOwnerTable`, `readJson`, `boundedJson`
+and the row helpers; the pool catalogue reads Claude lists through `readAnthropicCatalog` with
+its OAuth headers and 8 MB bound and chooses its combination through `providerOfKind`. Owner
+diff: the pool owner had no key and no log; both are options. Commit `74d86b8dca`. Fit: neutral.
+
+### J-10223 2026-11-18 T3-PROVIDERS a commit swept in another unit's staged deletion - issue
+`74d86b8dca` was made with `git commit` after `git add` of explicit paths and also carried
+T3-SESSION's staged deletion of `guest/session/turn-hooks.js` while three committed modules
+still imported it. `078f38b1c7` restored the blob through the index only (working tree left
+deleted); T3-SESSION's `89366b1714` then deleted it with its importers. Every later commit used
+`git commit -- <paths>`. Fit: worse (process: commit with a pathspec in a shared worktree).
+
+### J-10224 2026-11-18 T3-PROVIDERS prepare required; usage on usage-counts.js - verified
+Behaviour change (HR-SYN-3 (a)): an API or pool round without `prepare` rejects with
+`PREPARE_REQUIRED` before any key, credential or request; the Endpoint fails it with the kind's
+fixed text; the `req.append` fallback is gone (`b9f1fcf8d3`). No existing test took that path;
+two tests pin the refusal. `messages.js`/`responses.js` keep a now-dead `?? []` (not this unit's
+files). HR-SYN-24 adapter side: `token-usage.js` `emptyUsage` on `zeroCounts`, `addUsage` on
+`addCounts` with its cap and context rule (`dc8ea804f0`); no bundle includes it. Duplicate
+share 1.80 % (this unit's part 718 -> 478 lines), ceiling 2.05 % (`d94ad96129`). Fit: better.
+
+### J-10225 2026-11-18 T3-PROVIDERS time record - verified
+First command 22:56:13Z. Over 60 s: provider adapter lanes 61 s and 62 s; whole adapter lane;
+integration batch (9 files, 3 jobs) 718 s wall, m1a-slice failed once on its parallel-round
+timing ratio (1,863 against 1,078 ms under load) and passed alone (193 s). Fit: neutral.
