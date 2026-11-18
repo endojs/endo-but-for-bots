@@ -20,6 +20,9 @@
  * 6. The socket drops right before or right after a `submit` frame: the
  *    page resends from its saved draft only when no receipt exists, and the
  *    transcript has the message once.
+ * Send now during a running turn (XD): the session cancels the running
+ *    turn (the provider logs `cancelled`) and the entry runs next.
+ * Rule 4a (XD): no call of the page was refused `unknown method`.
  *
  * Gated by THIX_HARNESS_BROWSER=1 and a Chromium (`_harness.mjs`):
  *
@@ -333,6 +336,35 @@ run(
       const shown = (await turnRows(page)).filter(r => r.user === text).length;
       t.is(shown, 1, `${mode}: once on the page`);
     }
+  },
+);
+
+run(
+  'Send now during a running turn: the session cancels it, the entry runs next (XD)',
+  async t => {
+    if (!harness) throw Error('setup failed');
+    // m3-interfaces.md 9.2 Send now: `E(entry).sendNow()` only; the session
+    // cancels the running turn itself (M2 review, J-9491).
+    const page = harness.page;
+    await openSession(page, sessionKey);
+    await send(page, 'stall');
+    await page.locator('.thix-stop').waitFor();
+    const stalled = await turnReaches(page, 'stall', ['running']);
+    await send(page, 'next after stall');
+    const rows = page.locator('.thix-queue [data-entry]');
+    await waitFor(async () => (await rows.count()) === 1, 15_000, 'one row');
+    await rows.first().locator('[data-action="send-now"]').click();
+    await turnReaches(page, 'stall', ['cancelled']);
+    await turnReaches(page, 'next after stall', ['completed']);
+    await waitFor(
+      () =>
+        made
+          ?.log()
+          .some(l => l.kind === 'cancelled' && l.turnId === stalled.turnId),
+      10_000,
+      'the provider saw the cancel',
+    );
+    t.is(await rows.count(), 0, 'the queue is empty');
   },
 );
 
