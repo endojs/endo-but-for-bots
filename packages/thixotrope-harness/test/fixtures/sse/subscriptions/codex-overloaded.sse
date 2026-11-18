@@ -1,0 +1,6 @@
+data: {"type":"response.created","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.in_progress","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.failed","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"failed","output":[],"error":{"code":"server_is_overloaded","message":"FAKE-PROVIDER-BODY-do-not-show failure"}}}
+

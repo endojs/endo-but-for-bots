@@ -1,0 +1,24 @@
+data: {"type":"response.created","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.in_progress","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_fake_0","role":"assistant","content":[]}}
+
+data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg_fake_0","delta":"Let me check."}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_fake_0","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Let me check.","annotations":[]}]}}
+
+data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_fake_1","call_id":"call_fake_1","name":"exec","arguments":"","status":"completed"}}
+
+data: {"type":"response.function_call_arguments.delta","output_index":1,"item_id":"fc_fake_1","delta":"{\"code\":\"1 + 1\"}"}
+
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc_fake_1","call_id":"call_fake_1","name":"exec","arguments":"{\"code\":\"1 + 1\"}","status":"completed"}}
+
+data: {"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc_fake_2","call_id":"call_fake_2","name":"echo","arguments":"","status":"completed"}}
+
+data: {"type":"response.function_call_arguments.delta","output_index":2,"item_id":"fc_fake_2","delta":"{\"text\":\"hi\"}"}
+
+data: {"type":"response.output_item.done","output_index":2,"item":{"type":"function_call","id":"fc_fake_2","call_id":"call_fake_2","name":"echo","arguments":"{\"text\":\"hi\"}","status":"completed"}}
+
+data: {"type":"response.completed","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"completed","output":[],"usage":{"input_tokens":12,"input_tokens_details":{"cached_tokens":0},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":19}}}
+
