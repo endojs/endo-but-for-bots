@@ -503,15 +503,20 @@ export async function* anthropicAttempt({
    * consumed are reported with the round's failure; R4-33).
    * @param {string} reason
    * @param {boolean} retryable
+   * @param {string} [errorType] an `error` event's type (symbolic)
    */
-  async function* fail(reason, retryable) {
+  async function* fail(reason, retryable, errorType) {
     const again = retryable && !delivered;
     if (!again && (startUsage !== undefined || endUsage !== undefined)) {
       const seen = usage();
       if (isDelivery({ usage: seen })) delivered = true;
       yield { usage: seen };
     }
-    throw new ProviderFailure(reason, { retryable: again, delivered });
+    throw new ProviderFailure(reason, {
+      retryable: again,
+      delivered,
+      ...(errorType === undefined ? {} : { errorType }),
+    });
   }
 
   try {
@@ -647,6 +652,7 @@ export async function* anthropicAttempt({
         type === '' ? '' : textOf.servedBy([['type', type]]),
       ),
       RETRYABLE_ERRORS.has(type),
+      type,
     );
   }
   if (!done) {

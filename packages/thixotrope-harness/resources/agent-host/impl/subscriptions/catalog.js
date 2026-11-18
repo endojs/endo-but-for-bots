@@ -47,10 +47,7 @@
  *
  * Node only (adapter).
  */
-import { Buffer } from 'node:buffer';
-
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { messageBytes } from '../../../../guest/lib/bounded.js';
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
 import { limits } from '../../../../guest/lib/limits.js';
 import { m4Limits } from '../../../../guest/lib/limits-m4.js';
@@ -60,14 +57,18 @@ import { subscriptionDefaults } from '../../../../config/defaults-m4.js';
 import { ANTHROPIC_VERSION } from '../providers/anthropic.js';
 import {
   anthropicPage,
+  byTitleThenId,
   CATALOG_FRESH_MS,
   CATALOG_MAX_AGE_MS,
   CATALOG_READ_TIMEOUT_MS,
   CATALOG_RETRY_MS,
   CatalogReadError,
   cutUnits,
+  pageOf,
+  readJson,
+  tokenCount,
 } from '../providers/catalog.js';
-import { discardBody, getJson, providerBaseUrl } from '../providers/http.js';
+import { providerBaseUrl } from '../providers/http.js';
 import {
   CLAUDE_BASE_URL,
   CLAUDE_OAUTH_BETA,
@@ -90,8 +91,6 @@ const ANTHROPIC_PAGES = 16;
 const ANTHROPIC_PAGE_LIMIT = 1000;
 const CODEX_SLUG = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 const EFFORT = /^[a-z][a-z0-9_-]{0,63}$/;
-/** `messageBytes({ rows: [], state: 'ok', next: '' })`: the page's keys. */
-const PAGE_OVERHEAD_BYTES = 15;
 /** Members whose observations one incarnation keeps at once. */
 const MAX_OWNERS = 2 * m4Limits.maxMembers;
 
@@ -113,88 +112,21 @@ const fail = what => {
 };
 
 /**
- * A positive uint32 token count, undefined when absent.
- * @param {unknown} value
- */
-const tokenCount = value => {
-  if (value === undefined || value === null) return undefined;
-  if (
-    typeof value !== 'number' ||
-    !Number.isInteger(value) ||
-    value <= 0 ||
-    value > 0xffff_ffff
-  )
-    fail('model token count');
-  return /** @type {number} */ (value);
-};
-
-/**
- * The JSON of a 2xx body, at most `maxBytes`, decoded as fatal UTF-8.
- * @param {Response} response
- * @param {number} maxBytes
- */
-const boundedJson = async (response, maxBytes) => {
-  /** @type {Uint8Array[]} */
-  const parts = [];
-  let total = 0;
-  if (response.body !== null) {
-    for await (const chunk of /** @type {AsyncIterable<Uint8Array>} */ (
-      /** @type {unknown} */ (response.body)
-    )) {
-      total += chunk.byteLength;
-      if (total > maxBytes) {
-        discardBody(response);
-        fail('body over its bound');
-      }
-      parts.push(chunk);
-    }
-  }
-  let text;
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(
-      Buffer.concat(parts),
-    );
-  } catch {
-    return fail('body is not UTF-8');
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    return fail('body is not JSON');
-  }
-};
-
-/**
- * One GET with the member's headers; its 2xx body as JSON.
+ * One GET with the member's headers; its 2xx body as JSON (M2's bounded
+ * reader, `providers/catalog.js`, with this catalogue's body bound).
  * @param {object} options
  * @param {string} options.url
  * @param {Record<string, string>} options.headers
  * @param {typeof globalThis.fetch | undefined} options.fetch
  */
-const readJson = async ({ url, headers, fetch }) => {
-  /** @type {Response} */
-  let response;
-  try {
-    response = await getJson({
-      url,
-      headers: { accept: 'application/json', ...headers },
-      timeoutMs: CATALOG_READ_TIMEOUT_MS,
-      ...(fetch === undefined ? {} : { fetch }),
-    });
-  } catch {
-    return fail('no response');
-  }
-  if (!response.ok) {
-    discardBody(response);
-    return fail(`HTTP ${response.status}`);
-  }
-  try {
-    return await boundedJson(response, MAX_BODY_BYTES);
-  } catch (error) {
-    if (error instanceof CatalogReadError) throw error;
-    return fail('body unreadable');
-  }
-};
+const readMemberJson = ({ url, headers, fetch }) =>
+  readJson({
+    url,
+    headers,
+    fetch,
+    timeoutMs: CATALOG_READ_TIMEOUT_MS,
+    maxBytes: MAX_BODY_BYTES,
+  });
 
 /**
  * The Codex model list payload as models (hosted-agent
@@ -298,7 +230,7 @@ export const readClaudeModels = async ({ baseUrl, accessToken, fetch }) => {
     const query = new URLSearchParams({ limit: `${ANTHROPIC_PAGE_LIMIT}` });
     if (after !== undefined) query.set('after_id', after);
     // eslint-disable-next-line no-await-in-loop
-    const payload = await readJson({
+    const payload = await readMemberJson({
       url: `${baseUrl}/v1/models?${query}`,
       headers: {
         authorization: `Bearer ${accessToken}`,
@@ -344,7 +276,7 @@ export const readCodexModels = async ({
   fetch,
 }) => {
   const query = new URLSearchParams({ client_version: clientVersion });
-  const payload = await readJson({
+  const payload = await readMemberJson({
     url: `${baseUrl}${CODEX_MODELS_PATH}?${query}`,
     headers: {
       authorization: `Bearer ${credential.accessToken}`,
@@ -427,19 +359,6 @@ const makeMemberOwner = ({ read, now }) => {
     },
     stats: () => harden({ ...counters, failed }),
   });
-};
-
-/**
- * Sort order of R4-20 after the default row: title ignoring case, then id.
- * @param {PoolModel} a
- * @param {PoolModel} b
- */
-const byTitleThenId = (a, b) => {
-  const ta = a.title.toLowerCase();
-  const tb = b.title.toLowerCase();
-  if (ta !== tb) return ta < tb ? -1 : 1;
-  if (a.id !== b.id) return a.id < b.id ? -1 : 1;
-  return 0;
 };
 
 /**
@@ -651,118 +570,17 @@ export const makePoolCatalog = ({
   };
 
   /**
-   * One page of rows (M2 `makeCatalog`'s `pageOf`, with efforts).
-   * @param {object} options
-   * @param {any} options.backend
-   * @param {any} options.spec
-   * @param {PoolModel[]} options.sorted
-   * @param {Map<string, number>} options.indexOf
-   * @param {any} [options.request]
-   * @param {number} [options.maxBytes]
-   * @returns {import('../providers/catalog.js').ModelPage}
+   * A row's efforts (the `ModelRow` bounds) and its default effort when it
+   * is one of them.
+   * @param {PoolModel} model
    */
-  const pageOf = ({
-    backend,
-    spec,
-    sorted,
-    indexOf,
-    request = {},
-    maxBytes = limits.frameBytes,
-  }) => {
-    const isDefault =
-      request.defaultBackend !== undefined &&
-      request.defaultBackend === backend;
-    const configured = isDefault
-      ? (request.defaultModelId ?? spec.modelId)
-      : undefined;
-    const prefix = `${spec.label}:`;
-    /** @param {string} id */
-    const selectionOf = id => (isDefault ? id : `${prefix}${id}`);
-    const defaultIndex =
-      configured === undefined ? undefined : indexOf.get(configured);
-    /** @param {number} position */
-    const modelAt = position => {
-      if (defaultIndex === undefined) return sorted[position];
-      if (position === 0) return sorted[defaultIndex];
-      return sorted[position <= defaultIndex ? position - 1 : position];
-    };
-    /** @param {string} id */
-    const positionOf = id => {
-      const index = indexOf.get(id);
-      if (index === undefined) return undefined;
-      if (defaultIndex === undefined) return index;
-      if (index === defaultIndex) return 0;
-      return index < defaultIndex ? index + 1 : index;
-    };
-    let start = 0;
-    if (request.after !== undefined) {
-      const after = String(request.after);
-      let id;
-      if (isDefault) id = after;
-      else if (after.startsWith(prefix)) id = after.slice(prefix.length);
-      const position = id === undefined ? undefined : positionOf(id);
-      if (position === undefined) return harden({ rows: [], state: 'ok' });
-      start = position + 1;
-    }
-    const limit = Math.min(
-      request.limit ?? limits.modelPageRows,
-      limits.modelPageRows,
-    );
-    /** @type {any[]} */
-    const rows = [];
-    let more = false;
-    let total = 0;
-    for (let position = start; position < sorted.length; position += 1) {
-      const model = modelAt(position);
-      const selectionId = selectionOf(model.id);
-      const fits =
-        model.id.length <= limits.modelIdUnits &&
-        selectionId.length <= limits.modelCursorUnits;
-      if (fits) {
-        if (rows.length >= limit) {
-          more = true;
-          break;
-        }
-        const efforts = rowEfforts(model.reasoningEfforts);
-        const row = harden({
-          backend,
-          modelId: model.id,
-          selectionId,
-          title: model.title,
-          default: model.id === configured,
-          reasoningEfforts: efforts,
-          ...(model.description === ''
-            ? {}
-            : { description: model.description }),
-          ...(model.defaultReasoningEffort !== undefined &&
-          efforts.includes(model.defaultReasoningEffort)
-            ? { defaultReasoningEffort: model.defaultReasoningEffort }
-            : {}),
-          ...(model.contextLength === undefined
-            ? {}
-            : { contextLength: model.contextLength }),
-          ...(model.maxOutputTokens === undefined
-            ? {}
-            : { maxOutputTokens: model.maxOutputTokens }),
-        });
-        const bytes = messageBytes(row);
-        if (
-          rows.length > 0 &&
-          PAGE_OVERHEAD_BYTES + total + bytes + messageBytes(selectionId) >
-            maxBytes
-        ) {
-          more = true;
-          break;
-        }
-        total += bytes;
-        rows.push(row);
-      }
-    }
+  const effortsOf = model => {
+    const efforts = rowEfforts(model.reasoningEfforts);
     return harden({
-      rows: harden(rows),
-      state: 'ok',
-      ...(more && rows.length > 0
-        ? { next: rows[rows.length - 1].selectionId }
+      reasoningEfforts: efforts,
+      ...(model.defaultReasoningEffort !== undefined &&
+      efforts.includes(model.defaultReasoningEffort)
+        ? { defaultReasoningEffort: model.defaultReasoningEffort }
         : {}),
     });
   };
@@ -807,6 +625,7 @@ export const makePoolCatalog = ({
         ...(options.maxBytes === undefined
           ? {}
           : { maxBytes: options.maxBytes }),
+        efforts: effortsOf,
       });
     },
     /**
@@ -840,17 +659,7 @@ export const makePoolCatalog = ({
      * @param {PoolCatalogRequest & { modelId?: string }} options
      * @returns {Promise<{ reasoningEfforts: readonly string[], defaultReasoningEffort?: string }>}
      */
-    efforts: async options => {
-      const { model } = await admitted(options);
-      const efforts = rowEfforts(model.reasoningEfforts);
-      return harden({
-        reasoningEfforts: efforts,
-        ...(model.defaultReasoningEffort !== undefined &&
-        efforts.includes(model.defaultReasoningEffort)
-          ? { defaultReasoningEffort: model.defaultReasoningEffort }
-          : {}),
-      });
-    },
+    efforts: async options => effortsOf((await admitted(options)).model),
     /**
      * Reads and failures of one member's catalogue (tests, perf).
      * @param {any} member the PoolMember presence
