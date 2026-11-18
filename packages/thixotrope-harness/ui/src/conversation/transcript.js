@@ -147,7 +147,13 @@ export const endingOf = entry => {
 export const turnContent = entry => {
   const live = isLive(entry.state);
   const fold = entry.fold;
-  if (fold && (live || !entry.records)) {
+  // Records read while the turn ran (a page re-attached mid-turn read the
+  // newest history page then) stop before its end: until a `turn-settled`
+  // record is in them, the fold is the fuller source (W3.8, J-9605).
+  const settled = (entry.records ?? []).some(
+    (/** @type {any} */ record) => record?.kind === 'turn-settled',
+  );
+  if (fold && (live || !entry.records || !settled)) {
     return {
       messages: fold.messages,
       streamingText: live ? fold.streamingText || '' : '',
