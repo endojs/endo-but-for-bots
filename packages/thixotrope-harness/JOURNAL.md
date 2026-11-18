@@ -11787,3 +11787,83 @@ Evidence: first command 12:51:41Z, last 13:23:00Z (journal commit; the final dat
 lane 175 s (first run, loaded) and 68 s, the integration batch 307.9 s wall, `m3-gateway` alone
 119.9 s.
 Fit: neutral.
+
+### J-10015 2026-11-18 XB retirement reaches the adapter by a push - build
+Evidence: commit `891c4463fc`. `CredentialOps` gains `poolsChanged()` (sendOnly, no argument;
+`interfaces-m4.js` guard and `m4MethodNames`). The manager's `retirePool` and `PoolMember.retire`
+record the retirement first and then send it through `withCredentialOps` without waiting (a
+failure is ignored); with the incarnation's `CredentialOps` already fetched the push leaves in
+the retirement's crank, else after one `ops.credentials()` answer. The adapter
+(`subscriptions/index.js`) calls `bridge.invalidate()` on every pool it loaded; the bridge
+(`pool-state.js`) marks the held answer stale, also one still being asked (it may predate the
+push) and keeps it stale after a failed re-ask; a retired pool's answer stays final. The guard
+snapshot fixture of X1 is updated for the two CredentialOps entries and `poolsChanged` in the
+gateway method set (no other entry changed). New tests: manager unit (one push per retirement,
+none on a repeat, one `credentials()` per ops facet, an undeliverable push does not fail the
+retirement), bridge adapter test (invalidate before, during and after an ask, refresh 0), pool
+provider adapter test (no ask without a push; after the push the retired member is skipped, the
+retired pool fails with `m4Texts.retired` and sends nothing; a later push asks nothing).
+Fit: good: one sendOnly from the system of record, and the adapter's cache stays a cache.
+
+### J-10016 2026-11-18 XB poolStateRefreshMs 30 s -> 600 s - decision
+Evidence: `config/defaults-m4.js` and the bridge default. With the push the periodic re-read is
+only a safety net for a lost push (an adapter between incarnations loads afresh anyway). 600 s is
+twice the default `cacheLifetimeMs`; it costs at most one manager crank per used pool per 10
+minutes (0.1 per 60 s) instead of up to two per pool per 60 s at 30 s, so
+`subscriptions.servedWrites` (<= 1 manager delivery per session per 60 s) is back to the served
+stamps alone. Not measured: `perf/subscriptions.perf.mjs` was not run (no exclusive mode in this
+unit); J-9645's servedWrites miss (2 frames per 60.4 s, one a GC frame) predates the 30 s
+re-read and is a frame-versus-delivery counting question, not changed here.
+Fit: neutral.
+
+### J-10017 2026-11-18 XB catalogue copies removed; ProviderFailure.errorType - build
+Evidence: commit `2fda3d801f`. `providers/catalog.js` exports `pageOf` (module level now, with an
+`efforts` option that pool rows use; M2 rows unchanged: `reasoningEfforts: []`, no default
+effort), `readJson`, `boundedJson`, `tokenCount` and `byTitleThenId`; `subscriptions/catalog.js`
+drops its copies and reads members through `readJson` with its own body bound (8 MiB) and the
+catalogue read timeout. The two files: 183 insertions, 348 deletions (net -165). `anthropicAttempt`
+puts an `error` event's validated type on `ProviderFailure.errorType` (`''` when none); the Claude
+pool's wire (`messages.js`) tests `errorType === 'overloaded_error'` instead of comparing
+`textOf.anthropicApiError(...)` texts. New adapter test: the API client names the type, the pool
+reads overload only from `overloaded_error`, an `invalid_request_error` event is not an overload,
+a 503 has no type. M2 and M4 catalogue and provider adapter tests pass unchanged.
+Fit: good: a symbolic field where a fixed text was being parsed.
+
+### J-10018 2026-11-18 XB acceptance 13 (two-part system), 16 (makeProvision), 17 (retire) - verified
+Evidence: commit `9e6c6b1a26`. `m4-catalog`: a turn with one attachment on the Claude pool sends
+`system` = [billing block, `<stored prompt>\n\n<R4-29 line>`], on the Codex pool `instructions`
+= the same join; the next plain turn sends the stored prompt alone (exact string compares; the
+line is `mentionLine(1, ['notes'])`). `m4-provision`: the step runs through
+`makeProvision({ subscriptions })`; the first run changes only `subscriptions`, the second skips
+it; R8-31, R8-38 and K-1 as before. New `m4-retire`: the member that served (sticky) is retired
+and the next turn, submitted at once, is served by the other member; the pool is retired and the
+next turn fails with `m4Texts.retired`, nothing sent. Measured (shared slots, load about 3.3):
+retire answered in 55 ms, the next turn 633 ms; retirePool 266 ms, the failing turn 576 ms. The
+member retirement was the incarnation's first CredentialOps use (the push waited for one
+`credentials()` answer) and still won the race to the next turn; the window is not closed by
+construction (D-M4-10).
+Held: m4-retire 140.7 s, m4-catalog 154.5 s, m4-provision 170.2 s (3 at once, 170.3 s wall).
+Fit: good.
+
+### J-10019 2026-11-18 XB every M4 integration file on the merged tree - measure
+Evidence: at `9e6c6b1a26` plus another unit's uncommitted Secrets-writer work in the shared
+worktree (the template ids hash the working tree, so it was in the daemon), shared slots, 3 jobs,
+load 2.9-3.8: m4-reachability 87.2 s, m4-accounts 92.3, m4-pools 101.1, m4-renewal 104.7,
+m4-restart-renewal 119.7, m4-secrets 104.7, m4-restart 207.3, m4-wire 143.5; 8 files 355.5 s
+wall, all pass. With J-10018 all eleven M4 integration files pass; none near 5 minutes. The m4
+template was rebuilt once in the first batch (manager and guest/lib sources changed).
+Fit: neutral.
+
+### J-10020 2026-11-18 XB unit, adapter, typecheck, bundles - verified
+Evidence: M4 unit and adapter files with the M2 catalogue and Anthropic tests and
+`guards-split`: 226 passed (before the unit: 184 in the M4 files alone). `tsc`: 0 errors.
+eslint: 0 errors on every changed file (warnings as before). Bundles (`node
+scripts/bundle-guest.mjs`), before and after: session 213,712, exec 62,196, factory 164,810,
+unchanged: no vat program imports `interfaces-m4.js`; the manager (`durable.js`, installed
+natively) carries the change and its size is not measured.
+Fit: neutral.
+
+### J-10021 2026-11-18 XB time record - verified
+Evidence: first command 13:23:35Z. Over 60 s: integration batch 1 (3 files) 170.3 s wall,
+batch 2 (8 files) 355.5 s wall. Unit runs 4-10 s, `tsc` 6 s.
+Fit: neutral.
