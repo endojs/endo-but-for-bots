@@ -151,10 +151,15 @@ run(
       (await turn.locator('.floot-code [class*="floot-tok-"]').count()) > 0,
       'exec source highlighted',
     );
-    await turn.locator('.thix-raw-toggle').first().click();
+    // `</>` replaces the conversation with each turn's raw JSON.
+    await page.locator('.thix-raw-toggle').first().click();
     const raw =
-      (await turn.locator('.thix-raw-view').first().textContent()) ?? '';
+      (await page
+        .locator('.thix-raw-view .floot-tool-pre')
+        .last()
+        .textContent()) ?? '';
     t.notThrows(() => JSON.parse(raw), 'the raw view is JSON');
+    await page.locator('.thix-raw-toggle').first().click();
 
     // 1 MiB reply.
     await send(page, 'mega');

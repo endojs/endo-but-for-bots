@@ -339,7 +339,7 @@ await runPerf('gateway', async ({ provision }) => {
             E(session).rename(
               harden(
                 Object.fromEntries(
-                  Array.from({ length: 2000 }, (_, i) => [`k${i}x`, i]),
+                  Array.from({ length: 2000 }, (_, i) => [`k${i}`, 0]),
                 ),
               ),
             ),
@@ -375,12 +375,15 @@ await runPerf('gateway', async ({ provision }) => {
       const hog = await gateway.connect();
       const t = performance.now();
       let made4097 = 0;
+      /** Kept: a presence the client drops is released (CTP_DROP). */
+      const kept = [];
       for (let i = 0; i < 4097; i += 1) {
         const sub = await E(hog.powers.live)
           .subscribeList()
           .catch(() => undefined);
         if (!sub) break;
         made4097 += 1;
+        kept.push(sub);
         void E(sub)
           .close()
           .catch(() => {});

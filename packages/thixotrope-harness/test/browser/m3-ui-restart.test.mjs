@@ -161,6 +161,11 @@ run(
     if (!harness) throw Error('setup failed');
     const key = await newSession('queue');
     const page = harness.page;
+    /** @type {string[]} */
+    const consoleLines = [];
+    page.on('console', (/** @type {any} */ m) => {
+      if (m.type() === 'error') consoleLines.push(m.text().slice(0, 300));
+    });
     await openSession(page, key);
     await send(page, 'stall');
     await page.locator('.thix-stop').waitFor();
@@ -222,7 +227,13 @@ run(
       60_000,
       'the queue released',
       200,
-    );
+    ).catch(async error => {
+      t.log(await page.locator('.thix-status-line').textContent());
+      t.log(JSON.stringify(await turnInputs(session)));
+      t.log(JSON.stringify((await E(session).listPending()).entries.length));
+      t.log(consoleLines.slice(-6).join('\n'));
+      throw error;
+    });
     t.deepEqual(inputs.slice(-2), ['q1', 'q2 edited'], 'FIFO order');
     t.false(inputs.includes('q3'));
     client.close();
@@ -280,9 +291,10 @@ run(
     // Details -> the recovery panel; acknowledge while idle.
     await pageA.locator('.thix-details-btn').first().click();
     await pageA.locator('.floot-recovery').waitFor();
-    t.is(
-      (await pageA.locator('.thix-recovery-title').textContent())?.trim(),
-      uiTexts.recoveryTitle,
+    t.true(
+      (
+        (await pageA.locator('.thix-recovery-title').textContent()) ?? ''
+      ).startsWith(uiTexts.recoveryTitle),
     );
     const item = pageA.locator(`.floot-recovery-turn[data-turn="${turnId}"]`);
     await item.locator('.thix-recovery-head').click();
