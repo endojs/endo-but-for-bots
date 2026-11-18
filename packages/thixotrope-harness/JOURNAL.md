@@ -8207,3 +8207,79 @@ Fit: poor on bytes. Every module is shipped into every spare exec vat at about 1
 (D-4), and guest code cannot share a library between vats, so the membrane and Fae's rules cost
 about 0.3 s per cold exec vat. Good on cost per call: the measure walk is bounded by the bounds
 themselves and is far below a crank.
+
+### J-0750 2026-11-18 M5 session seams, label map, local object tools - built
+Evidence: commits 1c757e81d9 (the four `m5Widenings` in `interfaces.js`), 8ed04eb4c7 (seams,
+labels, tools), d93e3661b1 and b7c4f0a76c (tests); `guest/lib/tool-args.js`,
+`guest/session/{labels,label-seeds,m5-parts}.js`, `guest/session/tools/objects.js`; edits to
+`turn.js`, `turn-hooks.js`, `tool-table.js`, `session.js`, `AH/providers/{round,scripted}.js`.
+Tests: `m5-interfaces.test.js` (10), `m5-w53-args` (7), `m5-w53-labels` (12), `m5-w53-session`
+(10), all in about 3 s; `m5-labels` integration 148 s wall with a template rebuild (90 s test).
+Reading: `parseClosedArgs` scans the model's text once and compares every key against the spec
+before keeping anything; a 20,000-key flood stops at its first key. The label map is a `Map` in
+the session heap (256 labels, 8,192 bytes per value, 262,144 bytes stored in all; a removal frees
+both). `list`, `store`, `remove` and `lookup` of JSON are `site: 'session'` and settle in the
+round-final crank (the unit test sees round 1 sent without a macrotask). S1 re-reads the tool set
+in `invoke` every round with the built-in name rules; S2 joins the turn's note inline or sends
+`[prompt, note]`; S3 `onClaim` runs after `TurnStarted` (with `attachments` labels); S4 puts the
+runtime in every `ToolContext`. In the daemon: a value stored before a SIGKILL is found after it
+(K3); 256 `store` calls in one round settle (64 run, 63 `labelTaken`, 192 too many) in 6.7 s of
+turn with no halted vat at the 4,000,000-slot ceiling; the 257th label is refused.
+Decision: as described; deviations J-0751.
+
+### J-0751 2026-11-18 M5 W5.3 deviations from the contract - deviation
+Evidence: the files of J-0750.
+Reading: (1) `scripted.js` does not call `round.js` `systemTextOf` (round.js imports scripted.js;
+`import/no-cycle` refuses the pair): it reads the parts itself and joins them with the same blank
+line, so the `context` digest is of the joined prompt as 2.8 S2 wants. (2) Dynamic tool entries
+may carry `refused(state, reason)`; `toolSetFor` calls it and lists `refused` in its answer, so
+W5.6 learns `refused-builtin`/`refused-duplicate` without recomputing; `refused-budget` stays
+W5.6's. (3) Runtime parts are read through getters (`runtime.grants` etc.) so a part made earlier
+reaches one made later; `runtime.session` carries `{ core, queue, runner, inCrank,
+refuseIfDeleting }`. `Session.grants()` answers `runtime.grants.facet`;
+`enqueueMessageOnce(...)` calls `runtime.packages.enqueueMessageOnce(submission, requestId, at,
+attachments)` inside the Session crank. (4) `lookup` of an object without cached names calls
+`runtime.inspector.lookup({ opId, label, binding }, ports, context)` (W5.5 caches with
+`labels.setMethods`). (5) The heaviest-crank QC case is in `m5-labels.test.js` (integration: it
+needs the vat's slot ceiling), not a unit `m5-w53-qc.test.js`; the unit file checks the same
+round's logic. (6) Fae's "Endo directory"/"Endo daemon" wording became "you hold"/"kept by this
+session"; `lookup` drops "(endo_exec on Codex)". (7) Blank arguments read as `{}`; missing or
+mistyped arguments answer `argumentsNotJson` with the field named.
+Decision: reported to the PM (forPM).
+
+### J-0752 2026-11-18 M5 session bundle bytes after W5.3 - perf
+Evidence: `node scripts/bundle-guest.mjs session` (out of tree) at 14761f8279.
+Reading: the session program is 233,182 bytes (189,454 after the widenings alone; 186,448 at
+the M2 base by W5.0). W5.3 adds about 44 KB: `interfaces-m5.js` 11.9 KB stripped, `tool-args`
+7.5, `objects` 6.1, `labels` 2.7, `m5-parts` 0.8, `label-seeds` 0.5, edits about 3, and about
+1.8 KB of module wrapper for each of the six new modules. O-1's raised budget is 240,000: 6.8 KB
+remain for W5.5, W5.6, W5.7 and the inspector client, which the contract estimated at about
+20 KB; the merged session program will be over 240,000 and near the 262,144-byte staged-source
+cap (`execSourceBytes`). `m1a-session-program.test.js` fails at 200,000 in this lane.
+Fit: poor on bytes, as J-0762 found for exec: every module ships into every spare session vat at
+about 10 us a byte, and the contract file the session needs carries the exec and grant shapes
+too. Good on cost per use (Node, 3 s windows): `toolSetFor` 3.7 us static, 44 us with 32
+dynamic entries; `parseClosedArgs` 1.8 us small, 16 us for 8 KB; `labels.list()` of 256 labels
+46 us.
+
+### J-0753 2026-11-18 M5 tools perf rows - perf
+Evidence: `node scripts/run-lock.mjs --exclusive --label tools -- node perf/tools.perf.mjs` at
+14761f8279 (run log: waited 75 s, held 261 s, exit 1 for the miss below); load average 4.3-6.2;
+60 s windows.
+Reading: `tools.local` (budget <= 30 ms added per round, 0 extra deliveries): MISS, +125 ms
+(local-tools turn median 686 ms, n 47; echo turn 561 ms, n 47); deliveries per turn 8.0 local
+against 8.8 echo, so the delivery half passes. Likely cause: the comparison is four calls against
+one, and the cost is outside the session vat: the scripted provider streams four tool calls,
+the session publishes eight live events instead of two and the next round carries five more
+records to project; the vat work itself is microseconds (J-0752). A fair row compares four local
+calls with four echo calls, or reads the session vat's crank time from `status().timings`; not
+changed here (budget and row as the contract states). `labels.full` (budget ratio <= 1.1):
+1.196 (256 labels 189 ms median, n 72; none 158 ms, n 72; minima 107 and 105 ms); over the
+budget as stated, inside the harness's 1.25 slack, so the row printed pass. Nothing on the turn
+start path reads the label map; the medians move with load (p95 402 and 366 ms). Probes (d): an
+8,193-byte value refused with `argumentsTooLarge` (8,219 argument bytes) in 2.8 s, the 257th
+label refused in 13.3 s (with its 256-label fill), 33 attachments refused by the `Session` guard
+in 3.5 s; no vat halted, each session's next turn completed. Probe (e) skipped: `grants()` is
+`notBuilt` until W5.6.
+Fit: good for the vat (a label map of 256 adds nothing a turn can see); the costs a tool round
+shows are the adapter's per-event and per-record path, which grows with calls, not with M5.
