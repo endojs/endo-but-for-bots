@@ -275,6 +275,12 @@ export const environmentTexts = harden({
     'The repository configuration names a filter, merge driver or include; remove it before writing',
   /** exo-shell `Shell.exec` (R3-44). */
   timeoutInvalid: 'timeoutMs must be a positive timer-range integer',
+  /**
+   * D-M6-5: a write forwarded by the manager whose adapter call broke (the
+   * runner restarted); writes are never retried.
+   */
+  outcomeUnknown:
+    "The workspace operation's outcome is unknown: the environment runner restarted while it ran. Check status before retrying.",
 });
 
 /** Fixed texts with parameters. */
