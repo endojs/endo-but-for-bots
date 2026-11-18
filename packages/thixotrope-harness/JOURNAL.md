@@ -13019,3 +13019,141 @@ Reading: left for the PM, not edited because the code falls short of the contrac
 from J-10051, J-10062, J-10125.
 Time: first command 17:48:11Z; no command over 60 s.
 Fit: neutral.
+
+### J-10077 2026-11-18 K2 the restart rows in a file of their own - fix
+Evidence: `d0f22b2569`: `perf/gateway-restart.perf.mjs` (new) holds `ui.restartReady.clean` and
+`.sigkill` (150 s windows, same row names, budget median 2 s); `perf/gateway-session.perf.mjs`
+keeps `ui.snapshot`, `ui.history.newest`, `.archived`, `ui.reconnect`. The restart file starts no
+restart whose window would end after 6 min (`M3_RESTART_END_MS`), times its teardown
+(`gateway-restart.teardown`: clean stop, stray sweep, removal) and reports per restart the
+supervisor's serve time and the journal frames owed a replay. Shared runs (one each, load 2-4):
+`gateway-restart` 373.5 s held, exit 0 (windows 313 s, stop 2.1 s, cleanup 35 ms);
+`gateway-session` 312.0 s held, exit 0 (windows 252 s, teardown 1.7 s). Exclusive (J-10085):
+375.2 s and 310.7 s.
+Reading: both files finish under 8 minutes held. The X-CLOSE teardown that passed the box (at
+least 45 s after the 555 s `fileTime`) was not reproduced: the stop after the SIGKILL series took
+2.1-2.2 s in both runs here. Not known why it was slow there (the stop's 60 s SIGTERM fallback is
+a candidate; not verified).
+Fit: good.
+
+### J-10078 2026-11-18 K2 why serve time grows across SIGKILL restarts - measure
+Evidence: core `daemon.js` startup sweep (every worker whose transport `owesDelivery()` is woken
+before the daemon is handed out), `durable-worker-transport.js` `ensureAwake` (replay of the
+journal from the snapshot cut) and `armCadenceTimer` (CC-026); `gateway-restart` exclusive at
+`46cc84bb16`, idle sleep 1 h, cadence 256.
+{"mode":"sigkill","restarts":24,"servedMs":[3939,3921,4169,4157,4651,4999,4727,5237,5325,6131,5845,6481,6507,7042,7007,7212,7879,7595,8370,8474,7931,7694,7984,8408],"owedReplayFrames":[52,99,158,220,274,320,366,411,458,504,560,605,652,709,757,802,849,906,959,1010,813,860,913,705]}
+{"mode":"clean","restarts":30,"servedMs":"3245..3704","owedReplayFrames":"46..79"}
+Before the last SIGKILL restart the owed frames were registry 184, workspace:default 185,
+workspace:w 178, app:harness 72, native:agentHostAdmin 46, native:clock 32, native:control 8.
+Reading: it is the journal replay. No vat sleeps (idle sleep 1 h) and a SIGKILL takes no
+snapshot, so each restart's sign-in and connect add about 48 journal frames across the awake
+workers, and the next start replays all of them before `serve()` resolves: 52 -> 1,010 frames
+over 20 kills, serve 3.9 -> 8.5 s, about 4.7 ms of serve per owed frame. A clean stop snapshots,
+so the clean series stays at 46-79 owed frames and 3.2-3.7 s. With CC-026 the growth is bounded:
+a wake whose replay leaves a cadence (256) of entries snapshots once quiet, seen twice
+(agentHostAdmin after 251, control after 255: the sum fell 1,010 -> 813 and 913 -> 705, serve
+8.5 -> 7.9 s). The bound is per worker, so with seven awake workers the
+replay can still reach about 7 x 256 frames. C-3 stands as recorded; the row passes because the
+gateway answers before `serve()` resolves (median -1.9 s).
+Fit: neutral: bounded by CC-026, not removed.
+
+### J-10079 2026-11-18 K2 servedWrites: every manager frame in the window, by kind - measure
+Evidence: `44c785a442` (`perf/_m4.mjs` `journalFrames`: the manager journal between the two
+frontiers, each frame's kind by `frameKind`, GC frames by the journal's `gc` flag, cranks as the
+core's `journalCranks` groups them). Shared run at `e554c8ebd9`-dirty (load 1.7-2.4), the row as
+X-CLOSE measured it:
+{"metric":"subscriptions.servedWrites","value":8.944,"windowMs":60374,"managerFrames":9,"turns":139,"managerFramesByKind":{"frames":9,"gcFrames":7,"cranks":2,"byKind":{"gc gc-answers":3,"deliver poolChanged":2,"gc gc-exports":4}}}
+Reading: no extra message per turn. Of 9 frames, 7 are GC frames (3 `gc-answers`, 4
+`gc-exports`), which ride with the next ordinary frame and run no crank; the 2 deliveries are
+both `poolChanged` (served stamps, `E.sendOnly`). No `poolState` ask, no answered `poolsChanged`
+(that one goes from the manager to the adapter, and only on a retirement), no accounts or usage
+traffic, no adapter-tool description. One of the 2 stamps was the warm-up turns' stamp, sent
+`servedFlushMs` (1 s) after them and so inside the window. The frame count moves with when V8
+collects in the adapter (5 at X-CLOSE, 9 here, 2 at W4.8); no lane change added a message, and
+the 600 s `poolStateRefreshMs` was already doing what XB expected.
+Fit: good: one manager crank per session per 60 s, as designed.
+
+### J-10080 2026-11-18 K2 servedWrites counts what the budget names - decision
+Change: `44c785a442`: the row is manager cranks per session per 60 s (`managerCranks`), with
+`managerFrames`, `framesPerMinute` and `managerFramesByKind` beside it; the window starts
+`servedFlushMs + 500` ms after the warm turns so their stamp lands before it. Budget unchanged
+(1). Shared run (load 2.1-4.2) and exclusive (J-10085), the same both times:
+{"metric":"subscriptions.servedWrites","unit":"manager cranks per session per 60 s","value":0.999,"windowMs":60058,"managerCranks":1,"managerFrames":2,"framesPerMinute":1.998,"turns":142,"managerFramesByKind":{"frames":2,"gcFrames":1,"cranks":1,"byKind":{"gc gc-exports":1,"deliver poolChanged":1}},"pass":true}
+Reading: cranks 1.00 per 60 s against 1 (pass); frames 2.00 per 60 s (would be 2.0 x under the
+old row). The M4 major (milestones.md) is a measurement defect, not a manager defect.
+Fit: good.
+
+### J-10081 2026-11-18 K2 the hub row read at a quiescent point - change
+Change: `46cc84bb16`: `perf/_long-session.mjs` `quiescentHubRow` polls the session's hub row
+every 100 ms until it owes no answer, at most 10 s, and the `.hub.row` row reports the first
+read, the wait and `quiescent`. The template key does not cover this file; nothing rebuilt.
+Reading (exclusive, J-10083): at 200 and 1,000 turns the row still owed one answer after 10 s
+(`quiescent: false`, waits 10,001 and 10,077 ms), at 5,000 none (2 ms). So the owed answer is a
+standing one at those points, not a call in flight; both reads that feed the 1,000 ratio now
+see the same state, which is what J-9496 asked for. Costs about 20 s of file time.
+Fit: neutral: the procedure is fairer; "quiescent" was not reached at two of three points.
+
+### J-10082 2026-11-18 K2 checkpoint.stall and archive.stall with CC-026 - perf
+Evidence: exclusive at `46cc84bb16`, load 1.3-2.4, 60 s windows.
+{"metric":"archive.stall.at200","value":1239.2,"median":629.6,"samples":79,"snapshots":4,"snapshotMsEach":236.4,"pass":true}
+{"metric":"history.stall","at200":964.6,"at1000":975.0,"at5000":1010.8,"snapshots":[2,2,2],"samples":[86,87,82]}
+Reading: `archive.stall` (session grown by 200 turns) p99 1,397 -> 1,239 ms against M2-CLOSE
+(1.40 -> 1.24 x, now inside the 1.25 x rule; median 661 -> 630); the slowest turn (208) still
+held one 264 ms snapshot, the next four none. CT's shared pair was 2,170 -> 1,195 ms (J-10112).
+`checkpoint.stall` on imported sessions moved little: 1,050 / 951 / 1,025 -> 965 / 975 / 1,011
+ms; the slowest turn at 200 and at 1,000 held no snapshot (at M2 it was the snapshot turn every
+time), and the window held 2 snapshots at each point (M2 3 / 2 / 3).
+Fit: partial: CC-026 takes the snapshot out of most slow turns; p99 is now set by turns of 9-12
+deliveries with 280-420 ms of hub time.
+
+### J-10083 2026-11-18 K2 acceptance 15 on the combination - perf
+Evidence: `perf/history.perf.mjs`, exclusive, exit 1.
+{"metric":"archive.flat.hubRow.at1000","at200":9292,"at1000":9408,"ratio":1.012,"pass":true}
+{"metric":"archive.flat.hubRow.at5000","at200":9292,"at5000":8825,"ratio":0.95,"pass":true}
+{"metric":"archive.flat.turnStart.at1000","at200":131,"at1000":261,"ratio":1.992,"pass":false}
+{"metric":"archive.flat.turnStart.at5000","at200":131,"at5000":156,"ratio":1.191,"pass":true}
+Turn 0.995 / 1.049 x, snapshot bytes 1.03 / 1.05 x, snapshot ms 0.86 / 1.04 x, slots 1.05 /
+1.04 x, hub row entries 1.01 / 0.95 x.
+Reading: the hub-row fail of J-9496 is gone (1.39 -> 1.01 x). A new fail: turn start at 1,000 is
+261 ms median against 131 at 200 (41 and 40 samples; p99 365 / 351). M2 read 247 / 251 / 264, so
+it is the 200 point that fell (to 131), and 1,000 is where M2 was; the 5,000 point is 156. Not
+explained (the start is about 2 deliveries; which of them got cheaper at 200 and 5,000 and not at
+1,000 is not measured). Recorded, not re-based.
+Fit: neutral.
+
+### J-10084 2026-11-18 K2 hub.growth and frames after CC-027 and CC-028 - perf
+Evidence: exclusive, `perf/hub.growth.perf.mjs` exit 0, `perf/frames.perf.mjs` exit 0.
+{"metric":"hub.growth","value":923416,"msPerDeliveryVsFresh":0.987,"hubPersistMsPerDelivery":[9.253,9.129],"persistCharsPerDelivery":[9572,10660],"pass":true}
+{"metric":"frames","pingFloor":20.1,"inbound":282.0,"outbound":36.6,"halt":614.9,"haltUsedVat":621.9,"evaluateProgram":2114.6,"loopRunaway":223.5}
+Reading: frames did not move with CC-027 (M2: floor 21, inbound 313, outbound 38, evaluate
+2,120 ms; the 49,152-byte halt probes are under the 65,536 ceiling and still reach the vat).
+One row changed kind: `vat.evaluateProgram.oneMessage` (a 150 k source in one message) is now
+refused by the hub (`FRAME_TOO_LARGE`, 86 ms), not by the vat; it carries no budget. `hub.growth`
+after 1,000 turns: 0.92 MB (M2 0.77 MB), 0.99 x fresh per delivery, pass against 2 MB; the size
+swings 0.74-1.20 MB between log compactions within the same run (`hub.size` points), so 0.77
+against 0.92 is inside that spread. CC-028's smaller commits are toward transient observers; this
+file's commits per delivery (9.6-10.7 K characters) have no M2-CLOSE row to compare with in the
+journal, so the shrink was neither seen nor ruled out here.
+Fit: neutral.
+
+### J-10085 2026-11-18 K2 exclusive mini-batch: subscriptions and the gateway rows - perf
+Evidence: 7 files back to back, 17:59:21-18:27:46 UTC, `46cc84bb16`, worker `367e78ad...`, load
+1.0-2.8, 1,704 s held (archive 246, history 236, hub.growth 222, frames 106, subscriptions 209,
+gateway-session 311, gateway-restart 375), slot waits 41-69 ms; templates `long` 200 / 1,000 /
+5,000 and `m3-300` current (keys unchanged; none rebuilt; the keys do not cover the core's JS).
+Against X-CLOSE: `subscriptions.select` 0.090 ms (0.086), `.turnStart` 118 ms (114; 0.014
+manager frames per turn), `.handover` 2.7 ms (3.1; 1.29 frames per refusal), `.servedWrites`
+1.00 cranks (J-10080), probes unchanged; `ui.snapshot` 31 ms (31), `ui.history.newest` 218 ms
+(208), `.archived` 2.2 ms (2.2), `ui.reconnect` 365 ms (360), `ui.restartReady.clean` -2.13 s
+(30 restarts), `.sigkill` -1.92 s (24), both before `serve()` resolves (X-CLOSE -2.2 / -1.9 s).
+Reading: every row of the 7 files passes except `archive.flat.turnStart.at1000` (J-10083).
+Fit: good.
+
+### J-10086 2026-11-18 K2 time record - verified
+Time: first command 17:48:11Z. Over 60 s: `subscriptions` shared 209 s and 213 s; `gateway-restart`
+shared 374 s; `gateway-session` shared 312 s (these three overlapped); unit lane 67 s (1,246
+passed, 116 skipped); exclusive batch 1,705 s (17:59:21-18:27:46Z). `tsc` exit 0; eslint on the
+changed files: no error, warnings of kinds already present; prettier clean. Not run: the rest of
+the perf list, `subscriptions-lifecycle` and `history.restart`/`journal` (which share the changed
+helpers `_m4.mjs` and `_long-session.mjs`). Last command: the commit of this entry.
+Fit: neutral.
