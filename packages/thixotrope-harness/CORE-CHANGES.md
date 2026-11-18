@@ -89,6 +89,7 @@ polyfills, Thixotrope core, Thixotrope tests and tooling, other Endo package, up
 | CC-023 | 2026-11-17 | Thixotrope core | `gcPolicy`, `gcSlotAllowance`, `gcChunkAllowance`, `gcCrankInterval` limits, fixed per state directory; lane tests per schedule | choose CC-022's schedule; a replay must collect after the same cranks | `4d6a84e86f`, `2657c03f53`, `4a42dc711c` |
 | CC-024 | 2026-11-17 | Thixotrope core | hub cost counters say what each persist wrote (`persistChars`, `stats().store`) and how persists cluster (`persistRuns`) | size C-2's per-commit cost; estimate group commit | `a71e5272b5`, `87e13507b5` |
 | CC-025 | 2026-11-17 | Thixotrope core | the hub's state is a write-ahead log of deltas over an image (`hub-log-store.js`, default); `hubStore: 'file'` / `THIXOTROPE_HUB_STORE=file` keeps `hub.json`; migration one way | a commit rewrote and twice fsynced the whole `hub.json` (10-15 ms, C-2) | `72ef46f905` |
+| CC-026 | 2026-11-18 | Thixotrope core | a due cadence snapshot waits until the worker's queue has been empty 50 ms, forced at 4 x the cadence | the turn crossing the cadence waited for a 34 MB snapshot (C-24) | `354e366739` |
 
 ---
 
@@ -765,6 +766,61 @@ The mail experiment scripts (`scripts/measure-mail.mjs` with `THIX_MAIL_HUB=log|
 `hub.json` writes and now need `THIXOTROPE_HUB_STORE=file` to measure what they measured. Stands
 alone; CC-024's counters measure it.
 
+### CC-026 2026-11-18 Thixotrope core - a due cadence snapshot waits for the worker to be idle
+Commits: `354e366739` fix(thixotrope): defer a due cadence snapshot until the worker is idle (CT)
+Files: `pkg/src/core/durable-worker-transport.js`, `pkg/test/durable-worker-cadence.test.js` (new),
+`pkg/test/durable-worker-session.test.js`, `pkg/test/durable-worker-crash-loop.test.js`.
+Motivation: C-24 (M2-FIX, J-9494). The transport queued its cadence snapshot as soon as
+`snapshotEveryDeliveries` (256 under the supervisor) deliveries had passed since the last one,
+between one turn's deliveries, and the turn that crossed the count waited for it: 0.7-5.2 s for the
+session vat's 34 MB heap under load (J-9462), so p99 of per-turn wall time on a grown session missed
+the 1 s budget (`archive.stall.at200` 1,397 ms exclusive, J-9497; 2-6 s under load, J-9408).
+What changed: when the delivery that makes a snapshot due completes, the snapshot is no longer
+queued. It is taken once the transport's operation queue has been empty for `CADENCE_IDLE_MS`
+(50 ms, exported) on the injected timers; any operation queued meanwhile clears the wait, and the
+queue emptying again restarts it. At `CADENCE_FORCE_FACTOR` (4, exported) cadences without such a
+quiet it is queued at once, as before. State: no new flag. Whether a snapshot is due stays derived
+from the journal indices (`deliveredUpTo`, `snapshotCut`, `snapshotFailedAt`: `cadenceBacklog()`),
+so one that falls due during a delivery is found when the queue empties; "the queue is empty" is
+the existing `opGeneration` unchanged since the settling operation was queued; the wait is one timer
+handle beside `idleTimer`, cleared by the same `noteActivity`; `checkpointQueued` is reused.
+AR-CORE-1's single `state` variable would subsume these when it is built.
+Unchanged: `checkpointInternal`, the cut and truncation, replay (`journalCranks`), sleep, crash,
+retire and `end`. A sleep, crash or retirement is an operation, so it clears a pending wait; sleep
+takes its own snapshot as before and nothing is left armed; the timer does nothing once the
+incarnation is gone or the transport is closed, and is unreferenced like the idle timer. A failed
+snapshot still moves the next attempt a cadence on (`snapshotFailedAt`).
+Replay bound: a worker that is never quiet for 50 ms keeps up to 4 x 256 = 1,024 journal entries
+past its cut (plus the deliveries already queued when the forced snapshot is queued, as before),
+about 72 s of replay at the harness's 70 ms per delivery, against 256 entries (about 18 s) before.
+A worker that does go quiet snapshots 50 ms after the queue empties with 256 or more entries
+behind it, so its replay is about what it was. A wake whose replay leaves 256 or more entries now
+also snapshots once quiet, where before it waited for the next delivery to ask.
+Measurement (J-10112, `perf/archive.perf.mjs` with `--shared`, session grown to 200 turns, 60 s
+window, same tree except the transport): before median 689.5 ms, p99 = max 2,170.2 ms, 71 samples,
+4 snapshots (one inside turn 258: 1,561 ms of its 2,170 ms), load 1.2-2.7; after median 785.2 ms,
+p99 = max 1,194.6 ms, 71 samples, 4 snapshots, none among the 5 slowest turns, load 2.1-2.9. Two
+further after runs: 1,252 ms p99 (72 samples, load 2.4-3.4) and 4,024 ms p99 (45 samples, load 4.5),
+the latter with one 2,194 ms snapshot inside a turn.
+Visible to other users: a cadence snapshot happens up to 50 ms after the worker's queue empties
+instead of between deliveries, and a busy worker's journal may hold four times the cadence.
+`CADENCE_IDLE_MS` and `CADENCE_FORCE_FACTOR` are exported from the module (not from `index.js`).
+No option was added; persisted formats and the worker are unchanged.
+Tests: `durable-worker-cadence.test.js` 6 tests on manual timers (due, busy, then one snapshot
+after the quiet; due during a delivery in flight; the forced limit; a crash between due and taken
+replays every frame since the cut; sleep and retirement while deferred), all 6 failing on the
+previous transport. Three tests that pinned the immediate snapshot were updated, meaning kept (crash
+loop's failed-cadence test fires the wait; the session cadence test idles after each write; the
+never-idle test makes 12 calls and bounds the suffix by the forced limit, and fails with forcing
+disabled). The three transport files pass (41 tests in each ses-ava configuration). Core Node suite
+under the run lock: lockdown 436 passed, unsafe 439 passed, endo cut by the 10-minute box (J-10113).
+Upstream notes: the quiet is the worker's, not the turn's: under load a turn can leave the session
+vat's queue empty for more than 50 ms between its deliveries (hub time 1.2 s in the turn that held
+the snapshot at load 4.5), and a snapshot taken then still stalls that turn. Not verified which
+path that snapshot took; the forced limit would need about 110 turns without a quiet. A longer
+quiet (a few hundred ms) or a turn-end hint from the embedder would close it; both are follow-ups.
+The worst-case replay grows to 4 x the cadence. Stands alone.
+
 ### CC-027 2026-11-18 Thixotrope core - the hub refuses a frame too large for its target vat
 Commits: `0edc2ab05a` fix(thixotrope): the hub refuses a frame too large for its target vat (CH)
 Files: `pkg/src/net/hub.js`, `pkg/src/core/daemon.js`, `pkg/src/control/supervisor.js`,
@@ -902,7 +958,7 @@ closed (CC-013, CC-015). C-20 is addressed in part by CC-018 and CC-019; page 6 
 | C-21 | the slot ceiling bounds live heap plus one crank; no collection inside a crank | the harness serves at 4,000,000 slots (persisted per state); a session's heaviest crank sets how large it may grow (J-0392) |
 | C-22 | pattern checks in a vat cost milliseconds per record | import is bounded at 7-13 turns/s; long-session templates take 8-9 min to build (J-0481, J-9464) |
 | C-23 | a Node client's presence for a remote object can be collected while the remote still exports it | adapter caches keyed by a presence must hold it strongly (J-9403) |
-| C-24 | the worker transport's cadence snapshot (every 256 deliveries) runs between a busy turn's deliveries | `checkpoint.stall` p99 2-6 s against 1 s; the turn that crosses the count waits for a 34 MB snapshot (J-9462, J-9494) |
+| C-24 | the worker transport's cadence snapshot (every 256 deliveries) runs between a busy turn's deliveries | `checkpoint.stall` p99 2-6 s against 1 s; the turn that crosses the count waits for a 34 MB snapshot (J-9462, J-9494). Partly addressed by CC-026 (deferred to 50 ms of quiet; `archive.stall.at200` 2,170 -> 1,195 ms shared, J-10112); a snapshot can still land in a gap inside a turn under load |
 | C-25 | a frame over `frameBytes` addressed to a vat is journaled and delivered; only the vat's guard refuses it | a 100 KiB inline string reaches the session vat (no halt below about 94 KB, a halt above); M5's CC-070 is the same change (J-9407, J-9489) |
 
 C-25 is closed by CC-027 (the hub refuses a frame over `THIXOTROPE_VAT_FRAME_BYTES`, default
@@ -1000,6 +1056,7 @@ commits that arrived through the PR 1667 merge map to CC-010.
 - `a71e5272b5` -> CC-024
 - `72ef46f905` -> CC-025
 - `87e13507b5` -> CC-024
+- `354e366739` -> CC-026
 
 Outside that command's paths but outside `packages/thixotrope-harness` too:
 
