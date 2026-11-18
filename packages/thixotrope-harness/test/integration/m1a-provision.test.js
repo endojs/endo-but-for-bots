@@ -136,6 +136,8 @@ run('provision, create, list, lost after restart', async t => {
         // M1b W1b.5 appends these (the exec step runs once W1b.3's program exists).
         ['load exec program', buildReports[4]?.skipped],
         ['pool', false],
+        // M3's registered step, skipped without options.gateway.
+        ['gateway', true],
       ],
     );
     const byName = new Map(buildReports.map(r => [r.name, r]));

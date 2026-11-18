@@ -15,6 +15,7 @@ import { programPieceBytes as guestPieceBytes } from '../../guest/factory/root.j
 import { bundleGuest } from '../../scripts/bundle-guest.mjs';
 import {
   agentHostDirectory,
+  allProvisionSteps,
   factoryEntry,
   guestRoot,
   makeProvision,
@@ -101,6 +102,9 @@ test('the provisioning steps install, load the program, and re-run as a no-op', 
       ['load session program', false],
       ['load exec program', false],
       ['pool', false],
+      // M3's registered step (scripts/provision-steps/30-gateway.js),
+      // skipped without options.gateway.
+      ['gateway', true],
     ],
   );
   t.deepEqual(reports, first);
@@ -162,7 +166,7 @@ test('the template id follows the provisioned code', async t => {
   );
 });
 
-test('the steps table is the M1a list, then M1b W1b.5 appends', t => {
+test('the steps table is the M1a list, then M1b W1b.5 appends', async t => {
   t.deepEqual(
     provisionSteps.map(s => s.name),
     [
@@ -175,6 +179,12 @@ test('the steps table is the M1a list, then M1b W1b.5 appends', t => {
     ],
   );
   t.true(Object.isFrozen(provisionSteps));
+  // Later milestones register files (M2-T1): M3's gateway after the table.
+  const all = await allProvisionSteps();
+  t.deepEqual(
+    all.map(s => s.name),
+    [...provisionSteps.map(s => s.name), 'gateway'],
+  );
 });
 
 test('provision refuses a missing session program', async t => {

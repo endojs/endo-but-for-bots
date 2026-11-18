@@ -491,7 +491,14 @@ export const templateIdFor = async ({
     hash.update(path.relative(harnessRoot, file));
     hash.update(await readFile(file));
   }
-  for (const file of ['durable.js', 'ephemeral.js']) {
+  // Every installed module of the agent host outside impl/ (durable.js,
+  // ephemeral.js and the lanes' durable-*.js beside them): a lane's new
+  // durable module gives a new id without an edit here.
+  const installed = (await readdir(agentHostDirectory, { withFileTypes: true }))
+    .filter(dirent => dirent.isFile() && dirent.name.endsWith('.js'))
+    .map(dirent => dirent.name)
+    .sort();
+  for (const file of installed) {
     hash.update(await readFile(path.join(agentHostDirectory, file)));
   }
   await hashTree(hash, path.join(guestRoot, 'lib'));
