@@ -7523,3 +7523,119 @@ turn id through `History` and the vat: 5,000 in 21.5 s, 30,000 in 78 s (2,140 pa
 Decision: fixtures for W2.9: 5,000 turns in about 11 min (6.5 min plain), 50 sessions x 300 turns
 for `restart.serving` in about 20-35 min, 30,000 plain in about 39 min. Faster needs the core
 candidate of J-0481 or a segment-copy import (J-0483).
+
+### J-0610 2026-11-18 M4 subscriptions contract - good fit
+Evidence: `designs/m4-interfaces.md` 3, 5 (W4.0); hosted-agent `src/subscription-pool.js`
+(1315bef86) keys its marks and last-served records by member id and session id strings and saves
+them through an `onChange` callback into a store the broker owns.
+Reading: on Thixotrope the same state is a few records in the agent-host manager vat keyed by
+objects: marks per `PoolMember`, last-served records in a `Map<Session, ...>` per pool, a pool is a
+`Backend` exo made from member exos, and a member is made from its `Secret` exo. Nothing needs a
+file format, an id scheme or a lookup; a restart keeps them because the heap is the store. The
+adapter keys the same objects by presence (WeakMaps within an incarnation, as D-7 (d) allows), so
+the only strings left are labels people give, provider model and effort names, base URLs in a
+spec, and the credential's store key between the manager and the adapter.
+Decision: build it this way (W4.1, W4.2).
+
+### J-0611 2026-11-18 M4 guest bundles - perf
+Evidence: `node scripts/bundle-guest.mjs` at `3588cab190` (comments stripped, ASCII):
+`{"program":"session","bytes":186448}`, `{"program":"exec","bytes":84354}`,
+`{"program":"factory","bytes":137074}`.
+Reading: the session program has 13,552 bytes left of its 200,000 budget (D-4) for M3, M4 and
+M5 together. Every line added to `guest/lib/interfaces.js` lands in every bundle, because each
+program imports the whole module even though its tables are lazy.
+Decision: M4's guards, texts and limits live in `guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`,
+which import `interfaces.js` one way and are imported only by the manager vat's part, the
+factory's effort resolver (texts only) and the adapter; M4's only change to `interfaces.js` is the
+`BackendKind` widening (about 30 bytes). For the PM: M3 and M5 should state their session-bundle
+growth; three lanes cannot each assume the 13.5 KB.
+
+### J-0612 2026-11-18 M4 interface extension - awkward
+Evidence: `guest/lib/interfaces.js` builds `SecretsAdmin` and `Secret` inline and keeps the
+method records of extensible interfaces in the module-private `methodsOf`/`foldedMethodsOf`;
+`interfaces-m4.js` (W4.0) copies M2's four `SecretsAdmin` and five `Secret` method guards; a Node
+check at `3588cab190` serialised each pair of method guards (smallcaps) and found all nine equal.
+Reading: a guard cannot be extended from outside the module that builds it, because a guard's
+payload is not reachable from the prelude (`interfaces.js` note on `methodNames`). The M2 pattern
+(`m2Interfaces`, versions with the new methods) works for an interface one milestone extends, and
+breaks when two parallel lanes extend the same one: both would define a full version and the exo
+can use only one.
+Decision: M4 extends only interfaces no other lane extends (`SecretsAdmin`, `Secret`), with W4.1's
+unit test comparing the copied method guards to `interfaces.js`; M4 does not extend
+`AgentHostAdmin` (M3 will, for `serveGateway`). For the PM: exporting the method records of the
+extensible interfaces from `interfaces.js` would let each lane spread `{ ...base, ...own }`.
+
+### J-0613 2026-11-18 M4 pool administration - deviation
+Evidence: architecture 3.1 lists `Operator.getAccounts()` (M4) and 3.3 has `AgentHostAdmin`
+make every Backend; both interfaces are ones M3 or M5 may extend in parallel.
+Reading: pools are administered from `SecretsAdmin.subscriptions()` (D-M4-1); pool Backends are
+minted by `SubscriptionsAdmin.makePool` in the manager vat, not by `AgentHostAdmin.makeBackend`,
+so `BackendSpec` is not widened either (the ops guard admits `PoolSpec` beside it, a Node-side
+edit). `Accounts` is an adapter-local object reached through the same path, so no `Operator`
+method and no gateway service is added; `Session.getAccount` (A.4) becomes the gateway-local
+`Accounts.forSession(session)` (D-M4-3).
+Decision: as designed; owner decision 6 in `m4-interfaces.md` 20.
+
+### J-0614 2026-11-18 M4 reachability check - incompatible
+Evidence: `pkg/src/net/hub.js` `inspect()` reports `publishedOrigins` and `holdings` (origin
+session per held ref, its holders); `packages/thixotrope/bin/thix.js` `reachability()`.
+Reading: M4 acceptance 5 asks that a session and its exec vat reach no `SecretsAdmin`,
+`SubscriptionsAdmin`, `Secret` or `PoolMember`. All of them live in the agent-host manager vat,
+which every session reaches legitimately through its Backend and host facet, so reachability by
+origin cannot tell them apart.
+Decision: core request CC-060 (per-holder rows with the exporter's alleged interface name). Until
+then W4.8 checks the interface closure over the return guards (unit) and the session and exec
+vats' holdings by origin and count (integration) (`m4-interfaces.md` 19).
+
+### J-0615 2026-11-18 M4 credential renewal - good fit
+Evidence: hosted-agent `src/provider-broker.js` (1315bef86) refresh: re-read inside a
+single-flight, write a `pendingRefresh` intent conditioned on the generation read, present the
+refresh token, write the answer conditioned on the intent's generation, fail closed ("credential
+consumed") when an intent is found; M2's store has `replace(key, value, expectedGeneration)`.
+Reading: the reference's write-ahead protocol maps onto M2's Secrets store unchanged, and the
+harness's SIGKILL-the-supervisor tests reach the interesting windows directly (after the intent,
+after the token endpoint answered); the renewal object can hold the accessor of one store key
+only, which fixes W-5 without any capability plumbing.
+Decision: D-M4-8 (fail closed; owner decision 4); kill points K-5 and K-6 in W4.8.
+
+### J-0616 2026-11-18 M4 refusal marks - awkward
+Evidence: `m4-interfaces.md` 5.1, 10; D-3 puts marks and last-served records in the manager vat.
+Reading: the adapter decides a mark in the middle of a round, but the vat is the system of
+record, so each mark costs one manager crank (sendOnly at once) and served stamps are coalesced to
+one per session per 60 s. A SIGKILL between the 429 and that crank loses the mark: the member is
+tried once more at a later round and marked again. This is the rule "vats decide, adapters do"
+bending: the decision is the adapter's, only its record is the vat's.
+Decision: accepted; recorded loss window; perf rows `subscriptions.handover` and
+`subscriptions.servedWrites` hold the cost at one delivery per refusal and at most one per session
+per minute.
+
+### J-0617 2026-11-18 M4 frame bounds of operator views - awkward
+Evidence: `m4-interfaces.md` 1.3: an accounts view of 8 pools x 16 members is about 64 KB, an
+audit page of 1,000 events about 120 KB, a 64-entry catalogue page with full-length labels about
+30 KB; `frameBytes` is 24,576 and one inbound message above about 94 KB halts a vat.
+Reading: operator views that the spec sizes generously do not fit a frame; each must either stay
+out of vats or be cut by bytes. The accounts view and the audit reader are adapter-local (0 vat
+deliveries, browser over WS); the catalogue page is answered by the manager and cut with
+`fitsFrame` before `next`.
+Decision: as designed; the too-big probes of the perf table check each.
+
+### J-0618 2026-11-18 M4 performance method - deviation
+Evidence: the 2026-11-18 rule (no test or perf check over 10 minutes; fixed-window rates and
+latencies, 60 s per point; large states by import; 20 minutes per milestone regression on four
+slots); `perf/pool.perf.mjs` exists (M1b's spare pool, `ls perf/`).
+Reading: M4 has no check that depends on session length; every row in `m4-interfaces.md` 18 is a
+60 s window or a handful of restarts, against fake servers answering in 20 ms. The plan's
+`H/perf/pool.perf.mjs` would have overwritten M1b's spare-pool script.
+Decision: M4's scripts are `perf/subscriptions.perf.mjs` and `perf/secrets.perf.mjs`; the plan's
+`accounts.push` budget is restated as 0 vat deliveries (adapter channel) instead of one factory
+publish.
+
+### J-0619 2026-11-18 M4 spec departures - deviation
+Evidence: `m4-interfaces.md` 20.
+Reading: departures M4 builds on until the owner rules: Codex reset credits shown but never
+redeemed (open decision 8); Claude overload retried before delivery (decision 12); Claude
+context window from the pool spec, default 200,000 (decision 13); `auto` selection only, no
+pinned-only members or shares; secret values are UTF-8 text; `accountStatus` is offered on API
+backends too and reports no subscription accounts there; an interrupted renewal fails closed and
+needs a new sign-in; the brokers' role is the agent-host adapter's (credentials never leave it).
+Decision: recorded; the owner decisions are listed with defaults in `m4-interfaces.md` 20.
