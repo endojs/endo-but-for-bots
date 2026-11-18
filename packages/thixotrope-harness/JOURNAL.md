@@ -13591,3 +13591,80 @@ Time: first command 20:52:07Z. Over 60 s: m5-reachability integration 120.2 s (s
 layout-file run went past 120 s in a loop of three. Not run: the full unit lane, other integration
 files, browser files, perf checks, template rebuilds. Scratch `tmp/CL-FIX` removed.
 Fit: neutral.
+
+### J-10190 2026-11-18 CL-CLOSE templates rebuilt under the new keys - measured
+Every template key changed with the fold (guest bundles, manager part, `impl/blobs.js`). Milestone
+templates, six in parallel shared wrappers (`node perf/_pass.mjs templates <name>`): 166 s wall;
+held `m1a` 122 s, `exec` 129, `pool` 130, `m4` 117, `m3-300` 166 (build 66, 71, 72, 58, 107 s
+inside them); `m5o` was current (CL-FIX's run). Long-session chain
+(`node perf/_long-template.mjs history journal throughput`, one shared slot beside the regression
+run and the perf pass), 21:03-22:12 UTC: held long 200 / 1,000 / 5,000 90 / 155 / 481 s, busy
+10..50 382, 384, 355, 355, 356 s (2,558 s held; 69 min of wall, 1,207 s of it waiting while the
+exclusive perf pass ran). X-CLOSE held 89 / 158 / 473 and 440..357 s: the same.
+Fit: neutral: one rebuild per bundle change, as designed (HR-SYN-20).
+
+### J-10191 2026-11-18 CL-CLOSE regression run on the cleaned tree - measured
+At `bd4c811b7b` (only documents edited), 6 jobs, shared slots, load 1.9-5.7, the long chain
+holding one slot. `corepack yarn test:regression:core`: unit and adapter lanes 1,286 passed, 116
+skipped, 67.3 s; 25 files, 4,194 s held, 859 s wall (927 s with the lanes), 24 pass. The failure:
+`m1b-exec-tool` acceptance 11 got `'4'` (the sleeping call's own answer) where the worker killed
+on every attempt should end it with the exec-terminated text (`m1b-exec-tool.test.js:270`); held
+163 s at load 4-5. Alone it passed at once (154 s held, the test 96.7 s), and it passed in every
+earlier recorded run (M2-R3, M2-CLOSE, X-CLOSE). Reading: the killer polls `ps` every 20 ms for
+the vat's incarnation path and missed the 4 s sleep under load; a load flake of a kill-timing test,
+not a cleanup defect; not fixed. `corepack yarn test:regression:milestones` (the browser files
+included): 31 files, 3,301 s held, 703 s wall, all pass; slot waits up to 340 s
+(`m3-ui-history`). Longest held `m2-lifecycle-export` 273 s. Both lists fit the 20-minute rule;
+56 files 7,494 s held against X-CLOSE's 7,263 s. Per file: `process.md` 3.1.
+Fit: good: the fold and the step 1 fixes moved no behaviour any file sees.
+
+### J-10192 2026-11-18 CL-CLOSE exclusive perf mini-pass - measured
+21:30:44-21:51:04 UTC, `70e7be3553`-dirty (documents), load 1.3-3.5, back to back exclusive:
+session 158 s held, turn 128, exec 108, gateway 329 (exit 1), subscriptions 209, exec-m5 275
+(exit 1); 1,207 s held, 1,220 s wall. Against X-CLOSE (J-10061..J-10063) and K2 (J-10085):
+`session.program` 206,907 bytes (214,690); `session.createCold` 6,095 ms median, p99 6,331, n 5
+(6,249, n 5): 154 ms less for 7,783 fewer bytes, about 20 ms per KB against the 26 ms per KB the
+M2 -> X-CLOSE growth cost (719 ms for 27,692 bytes; n 5, so within noise of that rate); `install.factory` 6.32 s (6.55); `turn.start` 118 ms, p99 462,
+2 deliveries (112, p99 352); `turn.delta` 0.20 ms (0.21); `exec.first` 295 ms (299);
+`exec.trivial` 66 ms (68); `exec.sends.answered` 1,089 ms (1,130); `gateway.fetch` 0.51 ms
+(0.52); `gateway.guard` 0.117 ms (0.113); `ui.call` 23 ms (23); `ui.submit` 43 ms (42);
+`ui.deltaFanout` 2 ms (2) but 5 deliveries over 1,100 deltas, 0.0045 per delta against 0 (X-CLOSE
+0; the lane 0.007-0.010): the carried intermittent miss, not the fold; `subscriptions.select`
+0.090 ms (0.090); `.turnStart` 248 ms, p95 321, min 97 (118): rerun alone exclusive 110 ms, p95
+322, min 96 (held 207 s), so one window with more slow turns, not a shift; `.servedWrites` 0.99
+then 1.00 cranks (1.00); `.handover` 3.4 ms (2.7); `exec.powersLookup` 53.5 ms (53);
+`exec.membrane` -9.9 ms (-10.8); `exec.scope1000` 58 ms (60). `exec.tooBig.probe.b` failed its
+check: the 200 KB help is refused by the hub since core CC-027 and `describeCapability` answers
+its methods with documentation unavailable; `m5-objects` accepts that outcome since `385b8a703c`
+(C-VERIFY) but `perf/exec-m5.perf.mjs` was not updated (S2 saw the same at J-10153). Not from the
+fold, not fixed here (the file is outside this unit). `subscriptions.bundles` still compares with
+the stale `3588cab190` baseline (session +20,459, was +28,242).
+Fit: good: the fold moved no number except the session program's size and its cold creation.
+
+### J-10193 2026-11-18 CL-CLOSE what steps 1 and 2 achieved; documents - decision
+From `802bd2767c` to `bd4c811b7b`, 38 commits by G1, S1, S2, F2, CL-QC, CL-FIX. Product source
+(`guest`, `resources`, `ui/src`, JavaScript lines): 55,037 -> 54,756 (guest 20,732 -> 20,174;
+resources 25,362 -> 25,639 with S1's fixes; ui 8,943 both). Milestone-named product files 11 ->
+2 (`interfaces-m3.js`, `interfaces-m4.js`); milestone-named identifier sites (`m1b...`, `m5...`)
+in guest, resources, ui and config 562 -> 222, distinct names 52 -> 35; `notBuilt` stubs in
+guest code 12 -> 0 (the adapter's 5 left); `lazyTable` copies 4 -> 3; guest `messageOf` 7 -> 1.
+Duplicate share 3.9 % (review, `bd9a8ec070`) -> 3.22 % (`802bd2767c`) -> 3.00 % (802 of 26,741
+lines, 37 clusters), ceiling 3.25 % in the lint lane. Bundles: session 214,690 -> 206,907,
+exec 63,826 -> 61,688, factory 164,836 -> 155,427 bytes. Rows (harness.md section 8): done
+HR-SYN-8, -9, -10, -11, -12, -34, -38; partly -1, -7, -13, -17 (by earlier work), -18, -19, -20,
+-21, -22, -23, -27, -33; open -2..-6, -14..-16, -24..-26, -28..-32, -35, -36, HR-GUEST-12; -37
+leave. Documents: `harness.md` section 8 (status of every row), `README.md` (lint, the key
+file, the live probe variable, `test:browser` with no file, the regression scripts and their last
+run, `perf:pass`, template commands, every window through `windowMs`, bundle sizes),
+`process.md` 3.1 (held and waited per file with the X-CLOSE column), 3.2 (`perf:pass`, this
+mini-pass), 6 (ceiling 3.25 %), `milestones.md` (fold notes under M1b-M5; the ceiling).
+Fit: neutral.
+
+### J-10194 2026-11-18 CL-CLOSE time record - verified
+Time: first command 20:59:40Z. Over 60 s: milestone templates 166 s (parallel); unit lanes inside
+the core list 67 s; core list 927 s; `m1b-exec-tool` alone 266 s (112 s of it waiting);
+milestones list 704 s; long-session chain 21:03-22:12 (background); exclusive mini-pass 1,220 s;
+`subscriptions` rerun 506 s (299 s waiting for the chain's step). Read only: harness.md,
+process.md, README, milestones.md status parts, the unit reports. No code, test or perf file
+changed. Scratch `tmp/CL-CLOSE` removed.
+Fit: neutral.
