@@ -9588,3 +9588,42 @@ epoch with `retired: false` that the startup reconciliation skips (AR-NET-1), an
 journal append is not repaired before the next one (AR-NET-11). An inbound `op:abort` half-detaches
 a peer session (AR-NET-10). Each has a fix of 5-10 lines and a named test to add.
 Decision: none.
+
+### J-9959 2026-11-18 AR-APPS review: where the applications sit - fit
+
+Evidence: `designs/arch-review/core-apps-tests.md` (AR-APPS-1, -3..-8, -11, -12, -14, -15); a scratch
+import graph of `packages/thixotrope`.
+Reading: the mail application and its web UI are leaves by their imports (`src/mail` and `src/web`
+use only the shared utilities), but the control plane depends on them: the supervisor, built-ins,
+workspace table and administration facet import mail, a `mail-introductions` host resource exists,
+every workspace is provisioned a mailbox, and `WORKSPACE_VERSION` moves with mail. Mail is 15 % of
+`src` and 10 % of the tests; the harness uses none of it. The clock and HTTP resources depend only on
+the public entry points and are the model. The mail UI service keeps two projections, a dead legacy
+path, and every capability it ever offered (removal does not revoke for an open browser session);
+the mailbox outbox only grows.
+Decision: none; for the core owner: a per-workspace provided-installation list given to the
+supervisor, then mail and its UI as a package of their own.
+
+### J-9960 2026-11-18 AR-APPS review: tests, lane cost and build - fit
+
+Evidence: the same report (AR-APPS-2, -9, -10, -13, and its test map); lane wall times already in this
+journal (1,394 s; 22, 17.6, 15.8, 15.75 and 12.2 min); no run was made.
+Reading: the tests aim at the hub's and the life cycle's real failure points (randomised SIGKILL at
+commit points, commit-failure injection, lane fault phases); the uncovered behaviours are the open
+candidates C-8, C-24 and C-25. The lane's time is inferred to go to cold provisioning (21 supervisor
+starts in one file, 34 cold vat boots in the scenarios) at concurrency 1, and no per-file timing exists
+to confirm it; the Node suite runs everything under three SES configurations. The XS tests never run
+in any lane. Worker discovery and the replay-engine stub are repeated across 8 and 10 test files.
+The Ironhorse bundle script's dependency hook is ignored by compartment-mapper (harmless today), and
+the core lane has no bundle freshness check (only `new-lane.sh` has one). Finished hub-store
+experiments, two worker patches that no longer apply, and 5.3 MB of traces remain in the core.
+Decision: none; recommended first step is per-file lane timing, then a provisioned-template copy.
+
+### J-9961 2026-11-18 AR-APPS time record - process
+
+Evidence: start 2026-11-18T12:07:18Z, end 2026-11-18T12:17:25Z. Reading and small scripts only (import graph,
+duplicate-window finder, grep counts, `git apply --check` of two patches); no test, build or lane
+was run; the report commit is separate from this one.
+Reading: the unit fit in one sitting because the application modules are leaves and the surveys
+needed no repetition.
+Decision: none.
