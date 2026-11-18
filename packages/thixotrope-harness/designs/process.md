@@ -229,7 +229,7 @@ files copy (`m1a`, `exec` and `m5o` through their helpers, `m4`, and `m3-300` wi
 run, load 2-5): long 200 / 1,000 / 5,000 held 89 / 158 / 473 s; busy 10..50 held 440, 391, 381,
 375, 357 s (one chain, 38 minutes of wall with waits); `exec` 58 s, `pool` 57 s, `m3-300` 94 s.
 
-The whole list is now 25 + 12 = 37 files (M0-M2 69.5 minutes, M3-M5 about 55 minutes), more
+The whole list is now 25 + 13 = 38 files (M0-M2 69.5 minutes, M3-M5 about 55 minutes; K2 split `gateway-restart` out of `gateway-session`), more
 than two hours of every lane stopped. **PM ruling (2026-11-18, recorded by K1,
 J-10075):** a milestone's recorded perf pass is its own files plus the cross-check `session`,
 `turn` and `exec` (the cross-check about 7 minutes); the whole list runs only when the PM asks
@@ -245,9 +245,9 @@ missed, each listed):
 | `perf/turn.perf.mjs` | 129 | 0 | - |
 | `perf/exec.perf.mjs` | 111 | 0 | - |
 | `perf/gateway.perf.mjs` | 329 | 0 | - |
-| `perf/gateway-session.perf.mjs` | 602 | **124** | none; every row measured by 555 s, then the clean stop after the SIGKILL window passed the box (a defect: split the restart rows out) |
+| `perf/gateway-session.perf.mjs` | 602 | **124** | none; every row measured by 555 s, then the clean stop after the SIGKILL window passed the box (fixed by K2: the restart rows are `perf/gateway-restart.perf.mjs`; K2 held 311 s, exit 0) |
 | `perf/ui.perf.mjs` | 438 | 1 | `ui.hubGrowth` row 1.91 x |
-| `perf/subscriptions.perf.mjs` | 208 | 1 | `subscriptions.servedWrites` 4.97 x; `subscriptions.bundles` (stale baseline) |
+| `perf/subscriptions.perf.mjs` | 208 | 1 | `subscriptions.servedWrites` 4.97 x (frames, GC included; K2 counts cranks: 1.00 per 60 s, exit 0); `subscriptions.bundles` (stale baseline) |
 | `perf/subscriptions-lifecycle.perf.mjs` | 371 | 0 | - |
 | `perf/secrets.perf.mjs` | 275 | 1 | `secrets.catalog` 2.58 x |
 | `perf/accounts.perf.mjs` | 128 | 0 | - |
@@ -259,6 +259,21 @@ missed, each listed):
 
 Rows and readings: `JOURNAL.md` J-10061..J-10063; verdicts: `milestones.md` M3, M4 and M5
 outcomes.
+
+**K2 mini-batch** (2026-11-18 17:59-18:28 UTC, at `46cc84bb16`, the combination of the lane and
+main with CC-026..CC-028, load 1.0-2.8: 7 files, **1,704 s held (28.4 minutes), 28.4 minutes of
+wall**, slot waits under 0.1 s; templates current, none rebuilt; rows and readings `JOURNAL.md`
+J-10077..J-10086):
+
+| file | held s | exit | budget misses that set the exit |
+|---|---|---|---|
+| `perf/archive.perf.mjs` | 246 | 0 | - (`archive.stall.at200` p99 1,239 ms, 1.24 x: inside the 1.25 x rule; M2 1.40 x) |
+| `perf/history.perf.mjs` | 236 | 1 | `archive.flat.turnStart.at1000` 1.99 x (261 ms against 131 at 200; both under 350) |
+| `perf/hub.growth.perf.mjs` | 222 | 0 | - |
+| `perf/frames.perf.mjs` | 106 | 0 | - |
+| `perf/subscriptions.perf.mjs` | 209 | 0 | - (`subscriptions.bundles` stale baseline, reported, not counted) |
+| `perf/gateway-session.perf.mjs` | 311 | 0 | - |
+| `perf/gateway-restart.perf.mjs` (new, K2) | 375 | 0 | - |
 
 **M0-M2** (last run at the M2 close-out; not rerun at X-CLOSE except the cross-check above):
 
@@ -285,7 +300,7 @@ outcomes.
 | `perf/provider.perf.mjs` | 93 | 0 | - |
 | `perf/import.perf.mjs` | 118 | 0 | - |
 | `perf/archive.perf.mjs` | 238 | 1 | `archive.stall.at200` 1.40 x (C-24) |
-| `perf/history.perf.mjs` | 214 | 1 | `archive.flat.hubRow.at1000` 1.39 x |
+| `perf/history.perf.mjs` | 214 | 1 | `archive.flat.hubRow.at1000` 1.39 x (K2: 1.01 x; both reads still owed one answer after the 10 s quiescent wait; see the K2 mini-batch above) |
 | `perf/history.restart.perf.mjs` | 165 | 0 | - |
 | `perf/journal.perf.mjs` | 143 | 0 | - |
 | `perf/throughput.perf.mjs` | 158 | 0 | - |
