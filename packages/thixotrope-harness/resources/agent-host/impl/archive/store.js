@@ -31,13 +31,20 @@
  * `context.jsonl`, the mirror rewritten from `sealedTo`.
  *
  * Validation (4.7) against a vat state: the acknowledged chain must reach
- * the vat's digest at its segment count, else the files are walked; files
- * off that chain are orphans and deleted (never one answered in this
- * incarnation that the vat may still acknowledge); a segment of the chain
- * that is gone is data loss (`textOf.archiveFailed('segment <n> is
- * missing')`). States older than one already validated are ignored (a
- * history page answered before a seal can arrive after a request that
- * carried the seal).
+ * the vat's digest at its segment count, else the files are walked; a
+ * segment of the chain that is gone is data loss (`textOf.archiveFailed(
+ * 'segment <n> is missing')`). No final-named segment file is ever deleted
+ * here (only session delete, `release`, removes one; J-9485): a file the
+ * manifest records as acknowledged, or one that chains forward from the
+ * vat's state (a seal the vat may still acknowledge), is kept; only a file
+ * at an ordinal the vat's chain already fixes with another digest is an
+ * orphan, and it is renamed `<name>.orphan`, not removed. A file that does
+ * not verify stays where it is and is reported; a read error is thrown.
+ * Staleness follows the persisted acknowledged chain, not memory: a state
+ * that is a prefix of the manifest's acknowledged entries is older than
+ * what the vat already named and changes nothing, so validation does not
+ * depend on the order in which a new incarnation sees the vat's states
+ * (J-0493 (3) no longer holds anything up).
  *
  * Every per-session operation runs in one queue per session, so a seal, an
  * acknowledgment, a validation and the mirror's appends never interleave.
@@ -396,6 +403,7 @@ export const makeArchiveStore = ({
     validations: 0,
     scans: 0,
     orphans: 0,
+    unreadable: 0,
     contextAppends: 0,
     contextRewrites: 0,
     mirrorAppends: 0,
@@ -551,7 +559,11 @@ export const makeArchiveStore = ({
 
   /**
    * Every readable segment file of the session: its manifest entry
-   * (unacknowledged) by file name. Broken files are deleted (half-written).
+   * (unacknowledged) by file name. A final-named file exists only after
+   * fsync and rename, so one that does not verify is damaged, not
+   * half-written: it is kept in place, left out and counted
+   * (`unreadable`); a read error (EMFILE, EIO, ...) is thrown, never taken
+   * for damage (J-9485).
    * @param {SessionArchive} st
    * @returns {Promise<ManifestEntry[]>}
    */
@@ -588,11 +600,14 @@ export const makeArchiveStore = ({
             acknowledged: false,
             ...describeRecords(records),
           });
-        } catch {
-          // Half-written or foreign: never read (4.2).
-          // eslint-disable-next-line no-await-in-loop
-          await unlink(join(st.dir, name)).catch(() => {});
-          counts.orphans += 1;
+        } catch (error) {
+          const code = /** @type {any} */ (error)?.code;
+          if (typeof code === 'string' && code !== 'ENOENT') {
+            throw failed(`segment file ${name} could not be read (${code})`);
+          }
+          // Damaged or foreign: never read (4.2), never removed. (ENOENT:
+          // gone since the listing, nothing to count.)
+          if (code === undefined) counts.unreadable += 1;
         }
       }
     }
@@ -703,17 +718,75 @@ export const makeArchiveStore = ({
   };
 
   /**
-   * Delete the files of `entries` (orphans).
+   * Set orphans aside: `<name>.orphan`, out of every later scan, kept (with
+   * the blob keys it names) until the session is deleted. Never an unlink.
+   * @param {SessionArchive} st
+   * @param {readonly string[]} files
+   */
+  const setAside = async (st, files) => {
+    for (const file of files) {
+      // eslint-disable-next-line no-await-in-loop
+      await rename(join(st.dir, file), join(st.dir, `${file}.orphan`)).catch(
+        () => {},
+      );
+      counts.orphans += 1;
+    }
+  };
+
+  /**
+   * The vat state the manifest's acknowledged prefix stands for.
+   * @param {readonly ManifestEntry[]} entries
+   * @returns {ArchiveState}
+   */
+  const stateOfEntries = entries => {
+    let acked = 0;
+    while (acked < entries.length && entries[acked].acknowledged) acked += 1;
+    if (acked === 0) return emptyState();
+    const last = entries[acked - 1];
+    return harden({
+      sealedTo: last.to,
+      sealedTurns: last.firstTurn + last.turns - 1,
+      segments: acked,
+      digest: last.digest,
+    });
+  };
+
+  /**
+   * The entries that chain forward from `state` (ordinal after its head,
+   * previous linking back to it), every branch.
+   * @param {readonly ManifestEntry[]} candidates
+   * @param {ArchiveState} state
+   */
+  const forwardFrom = (candidates, state) => {
+    /** @type {ManifestEntry[]} */
+    const found = [];
+    let heads = new Set([state.digest]);
+    for (let ordinal = state.segments + 1; heads.size > 0; ordinal += 1) {
+      const next = candidates.filter(
+        e => e.ordinal === ordinal && heads.has(e.previous),
+      );
+      found.push(...next);
+      heads = new Set(next.map(e => e.digest));
+    }
+    return found;
+  };
+
+  /**
+   * Stat `entries`' files; the first ordinal whose file is gone, or 0.
    * @param {SessionArchive} st
    * @param {readonly ManifestEntry[]} entries
    */
-  const deleteFiles = async (st, entries) => {
-    for (const entry of entries) {
-      answered.delete(`${st.key}/${entry.file}`);
-      // eslint-disable-next-line no-await-in-loop
-      await unlink(join(st.dir, entry.file)).catch(() => {});
-      counts.orphans += 1;
-    }
+  const firstAbsent = async (st, entries) => {
+    const present = await Promise.all(
+      entries.map(e =>
+        stat(join(st.dir, e.file)).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    );
+    const at = present.indexOf(false);
+    return at < 0 ? 0 : entries[at].ordinal;
   };
 
   /**
@@ -889,20 +962,32 @@ export const makeArchiveStore = ({
       return;
     }
     const manifest = await loadManifest(st);
+    // Staleness from the persisted acknowledged chain (J-9485): the vat's
+    // chain only grows, so a state that is a proper prefix of what the vat
+    // already named is old (a page answered before a seal, seen after an
+    // eviction or a restart) and changes nothing.
+    const named = stateOfEntries(manifest.segments);
+    if (
+      state.segments < named.segments &&
+      (state.segments === 0 ||
+        manifest.segments[state.segments - 1].digest === state.digest)
+    ) {
+      if (st.validated === undefined) {
+        const acked = manifest.segments.slice(0, named.segments);
+        const absent = await firstAbsent(st, acked);
+        if (absent > 0) throw failed(`segment ${absent} is missing`);
+        st.validated = named;
+      }
+      return;
+    }
     const known = manifest.segments;
     let chain = chainTo(known, state);
     if (chain !== undefined && st.validated === undefined) {
       // First check in this incarnation: the chain's files must be there.
-      const present = await Promise.all(
-        chain.map(e =>
-          stat(join(st.dir, e.file)).then(
-            () => true,
-            () => false,
-          ),
-        ),
-      );
-      if (present.includes(false)) chain = undefined;
+      if ((await firstAbsent(st, chain)) > 0) chain = undefined;
     }
+    /** @type {readonly ManifestEntry[]} */
+    let candidates = known;
     if (chain === undefined) {
       // The manifest does not know the chain: the files decide.
       const scanned = await scanSegments(st);
@@ -911,21 +996,24 @@ export const makeArchiveStore = ({
         const n = await missingOrdinal(st, scanned, state, context);
         throw failed(`segment ${n} is missing`);
       }
-      manifest.segments = scanned;
+      candidates = scanned;
     }
     counts.validations += 1;
     const onChain = new Set(chain.map(e => e.file));
-    // Entries past the chain that the vat may still acknowledge: answered in
-    // this incarnation, chaining to the vat's head (a seal in flight).
-    const pending = manifest.segments.filter(
-      e =>
-        !onChain.has(e.file) &&
-        answered.has(`${st.key}/${e.file}`) &&
-        e.ordinal === state.segments + 1 &&
-        e.previous === state.digest,
+    // Entries past the chain that the vat may still acknowledge: any that
+    // chain forward from its head (a seal answered in this or an earlier
+    // incarnation whose crank Z has not run yet).
+    const pending = forwardFrom(candidates, state).filter(
+      e => !onChain.has(e.file),
     );
-    const keepFiles = new Set([...onChain, ...pending.map(e => e.file)]);
-    // Every other segment file is an orphan (4.5, 4.7).
+    const keepFiles = new Set([
+      ...onChain,
+      ...pending.map(e => e.file),
+      ...known.filter(e => e.acknowledged).map(e => e.file),
+    ]);
+    // Orphans (4.5, 4.7): a file at an ordinal the vat's chain fixes, with
+    // another digest. Set aside, never deleted; anything else is kept.
+    const fixed = new Map(chain.map(e => [e.ordinal, e.digest]));
     /** @type {string[]} */
     let names = [];
     try {
@@ -933,10 +1021,14 @@ export const makeArchiveStore = ({
     } catch {
       names = [];
     }
-    const orphans = names
-      .filter(name => SEGMENT_NAME.test(name) && !keepFiles.has(name))
-      .map(name => /** @type {ManifestEntry} */ ({ file: name }));
-    await deleteFiles(st, orphans);
+    const orphans = names.filter(name => {
+      const match = SEGMENT_NAME.exec(name);
+      if (match === null || keepFiles.has(name)) return false;
+      const digest = fixed.get(Number(match[1]));
+      return digest !== undefined && !digest.startsWith(match[2]);
+    });
+    await setAside(st, orphans);
+    for (const file of orphans) answered.delete(`${st.key}/${file}`);
     const newly = chain.filter(e => !e.acknowledged).length;
     trace('ack', st.key);
     manifest.segments = [
@@ -1051,11 +1143,19 @@ export const makeArchiveStore = ({
     );
     if (written.reused) counts.sealsReused += 1;
     // Entries at or past this ordinal are replaced: the vat's head is the
-    // previous segment, so none of them is acknowledged.
+    // previous segment, so none of them may be acknowledged; they are set
+    // aside, never deleted (J-9485).
     const replaced = manifest.segments.filter(
       e => e.ordinal >= ordinal && e.file !== written.file,
     );
-    await deleteFiles(st, replaced);
+    if (replaced.some(e => e.acknowledged)) {
+      throw failed("the previous segment is not the session's head");
+    }
+    for (const e of replaced) answered.delete(`${st.key}/${e.file}`);
+    await setAside(
+      st,
+      replaced.map(e => e.file),
+    );
     /** @type {ManifestEntry} */
     const entry = {
       ordinal,

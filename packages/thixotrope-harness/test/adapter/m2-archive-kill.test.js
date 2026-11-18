@@ -135,8 +135,24 @@ const verify = async (t, built, label) => {
     { key },
   );
   t.deepEqual(projection.transcript, await oracle(), `${label}: context`);
-  const segments = (await filesOf(dir)).filter(n => n.startsWith('seg-'));
-  t.is(segments.length, vat.entries.length, `${label}: acknowledged only`);
+  /** @param {string[]} names */
+  const finals = names =>
+    names.filter(n => n.startsWith('seg-') && n.endsWith('.jsonl'));
+  const segments = finals(await filesOf(dir));
+  // Every acknowledged segment, plus at most the answered one the vat has
+  // not applied: it chains forward from the vat's head, so it is kept until
+  // the vat seals that ordinal (J-9485: validation deletes no segment).
+  const ordinalOf = (/** @type {string} */ n) => Number(n.slice(4, 10));
+  t.is(
+    segments.filter(n => ordinalOf(n) <= vat.entries.length).length,
+    vat.entries.length,
+    `${label}: acknowledged`,
+  );
+  t.true(
+    segments.length - vat.entries.length <= 1 &&
+      segments.every(n => ordinalOf(n) <= vat.entries.length + 1),
+    `${label}: at most the unapplied answer besides`,
+  );
   // History from the newest turn back to turn 1: every turn once.
   /** @type {string[]} */
   const seen = [];
@@ -171,6 +187,12 @@ const verify = async (t, built, label) => {
     { key },
   );
   t.deepEqual(last.transcript, await oracle(), `${label}: after the next seal`);
+  // Once the vat sealed that ordinal, only its chain is final-named.
+  t.is(
+    finals(await filesOf(dir)).length,
+    vat.entries.length,
+    `${label}: acknowledged only after the next seal`,
+  );
   return { segments: segments.length };
 };
 

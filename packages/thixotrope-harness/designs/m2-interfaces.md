@@ -397,8 +397,11 @@ digest>.jsonl`, written as `<name>.part`, fsynced, renamed, directory fsynced. J
 3. trailer: `{"end":true,"digest":"<hex>"}` with digest = SHA-256 over the previous digest
    (as hex text) followed by every byte of lines 1 and 2.
 
-A file without a trailer, or whose trailer does not verify, is half-written: it is never read,
-and is deleted when found (adapter start, or validation, 4.7).
+A `.part` file is half-written: it is never read and is deleted at adapter start. A final-named
+file exists only after fsync and rename, so one without a trailer, or whose trailer does not
+verify, is damaged: it is never read and never deleted; it stays in place and is counted
+(`unreadable`). A read error (EIO, EMFILE, EACCES) fails the operation with
+`textOf.archiveFailed`; it is never taken for damage (J-9485).
 
 ### 4.3 When the session seals
 
@@ -452,7 +455,7 @@ regenerates the same `seal` frame, and the hub drops the duplicate, M0 S9).
 | S (intent recorded, frame committed), before A1 | the `seal` breaks with the retired text during startup (it wakes the vat, as a lease break) | Z never comes: `sealing` cleared; records kept; seal again later | none / none |
 | A1 (pages pulled) | as above | as above | none / none |
 | A2 partly (`.part` written, not renamed) | as above | the `.part` is deleted at adapter start (M1b 4.6 sweep extended to the archive directory) | none / none (half-written segment discarded) |
-| A2 (renamed, fsynced, unacknowledged in the manifest) | as above | an **orphan** file: the next seal of the same range writes the same content (same digest, the same file name: the adapter verifies it and reuses it) or a different one (new file); validation (4.7) deletes any file the vat's chain does not name | none / none: readers stop at the vat's `ArchiveState` |
+| A2 (renamed, fsynced, unacknowledged in the manifest) | as above | an **orphan** file: the next seal of the same range writes the same content (same digest, the same file name: the adapter verifies it and reuses it) or a different one (new file); validation (4.7) keeps it while it chains forward from the vat's head and sets it aside (`<name>.orphan`) once the vat's chain fixes that ordinal with another digest | none / none: readers stop at the vat's `ArchiveState` |
 | A3 (answered; answer committed by the hub, Z not journaled) | the answer frame reaches the vat, or the retired break does (a break never means "not done", M0 S9) | answer: Z runs, sealed. Break: not sealed; the file is an orphan (row above) | none / none |
 | Z | - | sealed; the adapter's manifest, `context.jsonl` and mirror lag; A4 catches up at the next request (a missing marker is rebuilt from the segment file) | none / none |
 | A4 partly | - | `context.jsonl` without its marker for the segment: the unmarked tail is truncated and rebuilt from the segment file; a mirror rewrite is temp-then-rename | none / none |
@@ -502,9 +505,18 @@ Mode 0700. Inside:
 
 1. `segments` and `digest` equal the manifest's acknowledged prefix: done.
 2. Otherwise walk the segment files' headers and trailers from ordinal 1: the chain of digests
-   must reach the vat's `digest` at ordinal `segments`. Files past it, or off the chain, are
-   orphans: deleted (their blob files are not: those keys are still in the vat's live records or
-   in a later seal). Missing or broken files on the chain: ask the vat
+   must reach the vat's `digest` at ordinal `segments`. **No final-named segment file is deleted
+   outside session delete (4.11; J-9485).** Kept: every file of that chain, every file the
+   manifest records as acknowledged, and every file that chains forward from the vat's head
+   (ordinal past `segments`, `previous` linking back to `digest`: a seal answered, in this or an
+   earlier incarnation, that the vat may still apply). An orphan is only a file at an ordinal the
+   vat's chain fixes, with another digest: it is renamed `<name>.orphan` (out of every later scan,
+   its blob keys still counted live) and removed with the session. Staleness follows the persisted
+   acknowledged chain, not memory: a state that is a proper prefix of the manifest's acknowledged
+   entries (a history page answered before a seal, observed after an eviction or a restart) is
+   older than what the vat already named and changes nothing. So validation does not depend on
+   the order in which a new incarnation sees the vat's states (J-0493 (3)). Missing or broken
+   files on the chain: ask the vat
    `ContextSource.segments()` for its entries to name which; an acknowledged segment that is gone
    is data loss: the round fails with `textOf.archiveFailed('segment <n> is missing')` (never
    expected; journal it).

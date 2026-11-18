@@ -10,6 +10,7 @@ import '../unit/_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 import {
+  chmod,
   mkdir,
   readdir,
   readFile,
@@ -367,7 +368,7 @@ test('history: pages back to turn 1, every turn once; sealed previews and conten
   });
 });
 
-test('validation: orphans deleted, half-written files ignored, a missing segment is data loss', async t => {
+test('validation: no segment file is deleted; an orphan at a fixed ordinal is set aside, a damaged file kept, a missing segment is data loss', async t => {
   const dirs = await makeStateDir('w28v');
   t.teardown(dirs.cleanup);
   const { sink, keyOf } = makeFakeSink();
@@ -382,8 +383,9 @@ test('validation: orphans deleted, half-written files ignored, a missing segment
   const { inc } = await drive(t, { vat, dirs, sink, key, turns: 30 });
   const dir = join(dirs.archiveDir, key);
   t.true(vat.entries.length >= 3);
-  // An orphan: a seal answered by an earlier incarnation and never
-  // acknowledged (the vat got the retired break), plus a half-written one.
+  // A seal answered by an earlier incarnation whose answer the vat never
+  // applied (it got the retired break), plus a damaged final-named file
+  // and a half-written one.
   let req = vat.startSeal();
   while (req === undefined) {
     // eslint-disable-next-line no-await-in-loop
@@ -392,16 +394,17 @@ test('validation: orphans deleted, half-written files ignored, a missing segment
     });
     req = vat.startSeal();
   }
-  const orphan = await inc.archive.portFor({ session: vat.session, key });
-  const answer = await E(orphan).seal(req);
+  const earlier = await inc.archive.portFor({ session: vat.session, key });
+  const answer = await E(earlier).seal(req);
   vat.notSealed();
-  await writeFile(join(dir, 'seg-000099-0123456789abcdef.jsonl'), '{"format"');
+  const damaged = 'seg-000099-0123456789abcdef.jsonl';
+  await writeFile(join(dir, damaged), '{"format"');
   await writeFile(join(dir, `${answer.digest}.part`), 'torn');
   const restart = makeIncarnation(dirs, sink);
   t.is(await restart.archive.sweep(), 1, 'the .part file');
-  const before = (await readdir(dir)).filter(n => n.startsWith('seg-'));
-  t.true(before.some(n => n.includes(answer.digest.slice(0, 16))));
-  // The next request validates: the orphan and the broken file go.
+  // The next request validates. The unapplied seal chains forward from the
+  // vat's head, so the vat may still name it: kept (J-9485). The damaged
+  // file is kept too.
   const projection = await restart.cache.prepare(
     vat.session,
     vat.request('t-v', 0),
@@ -411,25 +414,202 @@ test('validation: orphans deleted, half-written files ignored, a missing segment
     projection.transcript,
     await oracleTranscript(vat.all, restart.blobs),
   );
-  const after = (await readdir(dir)).filter(n => n.startsWith('seg-'));
-  t.is(after.length, vat.entries.length);
-  t.false(after.some(n => n.includes(answer.digest.slice(0, 16))));
-  // The context file and manifest are caches: deleted, rebuilt.
+  const segFiles = async () =>
+    (await readdir(dir))
+      .filter(n => n.startsWith('seg-') && n.endsWith('.jsonl'))
+      .sort();
+  const after = await segFiles();
+  t.true(after.some(n => n.includes(answer.digest.slice(0, 16))));
+  t.true(after.includes(damaged));
+  // The vat seals the same range again: the kept file is reused and named.
+  const again = await E(
+    restart.archive.portFor({ session: vat.session, key }),
+  ).seal(/** @type {any} */ (vat.startSeal()));
+  t.is(again.digest, answer.digest);
+  t.true(vat.sealed(again));
+  await restart.archive.observe(vat.session, key, vat.state());
+  t.is((await restart.archive.entriesOf(key)).length, vat.entries.length);
+  // The context file and manifest are caches: deleted, rebuilt; the scan
+  // reports the damaged file and leaves it.
   await unlink(join(dir, 'context.jsonl'));
   await unlink(join(dir, 'manifest.json'));
   const rebuilt = makeIncarnation(dirs, sink);
-  const again = await rebuilt.cache.prepare(
+  const rebuiltProjection = await rebuilt.cache.prepare(
     vat.session,
     vat.request('t-w', 0),
     { key },
   );
-  t.deepEqual(again.transcript, await oracleTranscript(vat.all, rebuilt.blobs));
+  t.deepEqual(
+    rebuiltProjection.transcript,
+    await oracleTranscript(vat.all, rebuilt.blobs),
+  );
+  t.true(rebuilt.archive.stats().unreadable >= 1);
+  t.true((await segFiles()).includes(damaged));
+  // A real orphan: a verified file at an ordinal the vat's chain fixes with
+  // another digest. Set aside as `<name>.orphan`, not removed.
+  const second = vat.entries[1];
+  const conflict = await writeSegment(
+    dir,
+    {
+      ordinal: 2,
+      from: second.from,
+      to: second.from + 1,
+      firstTurn: second.firstTurn,
+      turns: 1,
+      bytes: 1,
+      epoch: 0,
+    },
+    [{ kind: 'turn-started', turnId: 't-orphan', input: 'x', at: 1 }],
+    vat.entries[0].digest,
+  );
+  const fresh = makeIncarnation(dirs, sink);
+  await fresh.cache.prepare(vat.session, vat.request('t-y', 0), { key });
+  const names = await readdir(dir);
+  t.false(names.includes(conflict.file));
+  t.true(names.includes(`${conflict.file}.orphan`));
   // An acknowledged segment that is gone is data loss.
-  await unlink(join(dir, after.sort()[1]));
+  await unlink(join(dir, (await segFiles())[1]));
   const lost = makeIncarnation(dirs, sink);
   await t.throwsAsync(
     () => lost.cache.prepare(vat.session, vat.request('t-x', 0), { key }),
     { message: textOf.archiveFailed('segment 2 is missing') },
+  );
+});
+
+test('J-9485 (B): an evicted session state and a stale page never delete an acknowledged segment', async t => {
+  const dirs = await makeStateDir('w28e');
+  t.teardown(dirs.cleanup);
+  const { sink, keyOf } = makeFakeSink();
+  const one = makeIncarnation(dirs, sink, { maxSessions: 1 });
+  const vat = makeFakeVat({
+    seed: 12,
+    store: one.blobs,
+    keepTurns: 6,
+    segmentTurns: 3,
+  });
+  const other = makeFakeVat({ seed: 13, store: one.blobs, keepTurns: 6 });
+  const key = keyOf(vat.session);
+  const otherKey = keyOf(other.session);
+  let port = one.archive.portFor({ session: vat.session, key });
+  // Grow until two segments are acknowledged, keeping the state from
+  // before the second seal (a history page answered before crank Z).
+  /** @type {any} */
+  let older;
+  while (vat.entries.length < 2) {
+    // eslint-disable-next-line no-await-in-loop
+    await vat.turn(async (/** @type {any} */ r) => {
+      await one.cache.prepare(vat.session, r, { key });
+    });
+    if (vat.entries.length === 1) older = vat.state();
+    // eslint-disable-next-line no-await-in-loop
+    await vat.maybeSeal(port);
+  }
+  await one.archive.observe(vat.session, key, vat.state());
+  t.is((await one.archive.entriesOf(key)).length, 2);
+  // Another session's observation evicts this one's in-memory state.
+  await one.archive.observe(other.session, otherKey, undefined);
+  t.is(one.archive.stats().sessions, 1);
+  // The stale page arrives now.
+  await one.archive.observe(vat.session, key, older);
+  const dir = join(dirs.archiveDir, key);
+  const files = (await readdir(dir)).filter(n => n.startsWith('seg-'));
+  t.is(files.length, 2);
+  t.is((await one.archive.entriesOf(key)).length, 2);
+  port = one.archive.portFor({ session: vat.session, key });
+  const projection = await one.cache.prepare(
+    vat.session,
+    vat.request('t-e', 0),
+    { key },
+  );
+  t.deepEqual(
+    projection.transcript,
+    await oracleTranscript(vat.all, one.blobs),
+  );
+});
+
+test('J-9485 (A): a seal answered before a restart survives an older state seen first by the next incarnation', async t => {
+  const dirs = await makeStateDir('w28r');
+  t.teardown(dirs.cleanup);
+  const { sink, keyOf } = makeFakeSink();
+  const first = makeIncarnation(dirs, sink);
+  const vat = makeFakeVat({
+    seed: 14,
+    store: first.blobs,
+    keepTurns: 6,
+    segmentTurns: 3,
+  });
+  const key = keyOf(vat.session);
+  const { inc, port } = await drive(t, { vat, dirs, sink, key, turns: 15 });
+  let req = vat.startSeal();
+  while (req === undefined) {
+    // eslint-disable-next-line no-await-in-loop
+    await vat.turn(async (/** @type {any} */ r) => {
+      await inc.cache.prepare(vat.session, r, { key });
+    });
+    req = vat.startSeal();
+  }
+  const older = vat.state();
+  // Incarnation 1 answers (A3 committed); it dies before crank Z.
+  const answer = await E(port).seal(req);
+  const second = makeIncarnation(dirs, sink);
+  // Incarnation 2 sees the vat's state from before Z first.
+  await second.archive.observe(vat.session, key, older);
+  const dir = join(dirs.archiveDir, key);
+  t.true(
+    (await readdir(dir)).some(n => n.includes(answer.digest.slice(0, 16))),
+    'the answered segment is kept',
+  );
+  // Crank Z applies the answer; the next request names it.
+  t.true(vat.sealed(answer));
+  const projection = await second.cache.prepare(
+    vat.session,
+    vat.request('t-r', 0),
+    { key },
+  );
+  t.deepEqual(
+    projection.transcript,
+    await oracleTranscript(vat.all, second.blobs),
+  );
+  t.is((await second.archive.entriesOf(key)).length, vat.entries.length);
+});
+
+test('J-9485: a segment file that cannot be read fails the scan and is kept', async t => {
+  const dirs = await makeStateDir('w28x');
+  t.teardown(dirs.cleanup);
+  const { sink, keyOf } = makeFakeSink();
+  const first = makeIncarnation(dirs, sink);
+  const vat = makeFakeVat({
+    seed: 15,
+    store: first.blobs,
+    keepTurns: 6,
+    segmentTurns: 3,
+  });
+  const key = keyOf(vat.session);
+  await drive(t, { vat, dirs, sink, key, turns: 15 });
+  t.true(vat.entries.length >= 1);
+  const dir = join(dirs.archiveDir, key);
+  const file = (await readdir(dir)).filter(n => n.startsWith('seg-')).sort()[0];
+  // An unreadable file (EACCES stands for EIO or EMFILE) with no manifest:
+  // the scan must not take the error for damage.
+  await unlink(join(dir, 'manifest.json'));
+  await chmod(join(dir, file), 0o000);
+  t.teardown(() => chmod(join(dir, file), 0o600).catch(() => {}));
+  const next = makeIncarnation(dirs, sink);
+  const error = await t.throwsAsync(() =>
+    next.cache.prepare(vat.session, vat.request('t-u', 0), { key }),
+  );
+  t.true(error?.message.startsWith(textOf.archiveFailed('')), error?.message);
+  t.true((await readdir(dir)).includes(file));
+  await chmod(join(dir, file), 0o600);
+  const healed = makeIncarnation(dirs, sink);
+  const projection = await healed.cache.prepare(
+    vat.session,
+    vat.request('t-h', 0),
+    { key },
+  );
+  t.deepEqual(
+    projection.transcript,
+    await oracleTranscript(vat.all, healed.blobs),
   );
 });
 
