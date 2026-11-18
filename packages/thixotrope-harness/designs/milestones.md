@@ -756,8 +756,8 @@ credentials; each one integration test under 5 minutes; files in `m4-interfaces.
     reaches both fake servers joined with a blank line.
 14. Browser (M3's `startBrowserGateway`, after M3's merge): Secrets panel create, replace, revoke,
     delete after revoke, audit, value never in the DOM or a gateway frame; account chips update
-    live; a value of exactly 1,040,384 JSON-escaped bytes is written from the page, one of
-    1,040,385 is refused in the page and nothing is sent.
+    live; a value of exactly 1,040,384 JSON-escaped bytes (quotes included) is written from the
+    page, one byte more is refused in the page and nothing is sent.
 15. No access token, refresh token or API key value anywhere in the state directory, the adapter's
     event log or captured stderr; neither browser size-probe value reached the hub.
 16. Provisioning twice is a no-op; a member label bound to another Secret is refused until
