@@ -8499,3 +8499,29 @@ Reading: waits for slots dominate. M4's own regression is about 5 min of integra
 slots plus 16.4 min of exclusive perf, one file at a time: about 21 min, just over the 20-minute
 rule; shortening `firstOpen`'s 150 s window or running `secrets` and `accounts` in one process
 would bring it under.
+
+### J-9660 2026-11-18 M4 lane independent review (M4-QC) - review
+Read the lane (36b3035e92..7e48d96232, 38 commits, 99 files) against `m4-interfaces.md` and ran
+it. Unit and adapter: 20 M4 files, 185 tests, all pass, each 0-3 s. Integration through the slot
+lock (THIX_AGENT=M4-QC), slot hold per file: m4-secrets 91 s, m4-catalog 98 s, m4-accounts 101
+s, m4-renewal 101 s, m4-wire 108 s, m4-restart 203 s, m4-pools 105 s, m4-reachability 94 s, all
+pass; none near the 10-minute box. Waits for a slot dominated (up to 945 s per file: other lanes'
+exclusive perf runs). Seams: m2-secrets 94 s, m2-providers 172 s, m1a-slice 225 s pass; the unit
+test `m1a-factory` fails one test (the `reasoningEffort` expectation H-6 changes, reported by
+W4.1, not yet applied). Bundles at HEAD: session 186,481 (+33), exec 84,387 (+33), factory
+143,948 (+6,874 against +6,144: miss confirmed). tsc: one error, M3's `contract-m3.js` line 336.
+No secret value, key-shaped literal, private host, address or local path in the diff; the public
+provider endpoints and CLI OAuth client ids of the reference modules are committed (PM ruling).
+
+### J-9661 2026-11-18 M4 review findings - review
+Write-ahead renewal, CONSUMED fail-closed and per-member single flight hold in code and at K-5/K-6.
+Gaps: (1) `retirePool` and `PoolMember.retire` change only the manager; the adapter loads
+`poolState` once per incarnation, so a retired pool keeps serving and a retired member stays
+selectable until the adapter restarts (contract 3.1 says the next turn fails). (2) The sign-in
+helper puts the PKCE verifier in the authorization URL as `state`, so the URL plus the code
+suffice to redeem the code. (3) A token answer whose lifetime is 61-119 s passes the 60 s floor
+but fails the 120 s skew check after the POST: the rotated refresh token is dropped and the
+member is CONSUMED. (4) `accountStatus` `refresh` is model-driven with no single flight or
+interval: every call reads every member's usage endpoint. (5) D-M4-9: the model is never offered
+`accountStatus` (session tool table). Fit: object keys (WeakMaps by member, pool and session
+presence) made the adapter side simple; the one-load-per-incarnation rule is what makes (1).
