@@ -1,0 +1,10 @@
+data: {"type":"response.created","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.in_progress","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_fake_0","role":"assistant","content":[]}}
+
+data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg_fake_0","delta":"Part"}
+
+data: {"type":"response.failed","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"failed","output":[],"error":{"code":"server_is_overloaded","message":"FAKE-PROVIDER-BODY-do-not-show failure"}}}
+

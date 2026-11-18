@@ -138,6 +138,8 @@ run('provision, create, list, lost after restart', async t => {
         ['pool', false],
         // M3's registered step, skipped without options.gateway.
         ['gateway', true],
+        // M4's registered step, skipped without options.subscriptions.
+        ['subscriptions', true],
       ],
     );
     const byName = new Map(buildReports.map(r => [r.name, r]));

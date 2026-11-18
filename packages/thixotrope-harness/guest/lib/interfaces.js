@@ -1232,8 +1232,9 @@ const m1aShapeBuilders = {
       { input: S.SubmissionText },
     ),
   Script: () => record({ turns: list(S.ScriptTurn, limits.scriptRounds) }),
-  /** M2: the backend kinds (R4-12, R4-13); `scripted` is the test double. */
-  BackendKind: () => M.or('scripted', 'openrouter', 'anthropic'),
+  /** M2: the backend kinds (R4-12, R4-13); `scripted` is the test double; M4 (H-1): the pool kinds. */
+  BackendKind: () =>
+    M.or('scripted', 'openrouter', 'anthropic', 'claude-pool', 'codex-pool'),
   /**
    * `AgentHostAdmin.makeBackend` argument. M2 adds the API kinds: the key is
    * a `ReadGrant` (D-6, R7-28), never a value; `modelId` is the slot's

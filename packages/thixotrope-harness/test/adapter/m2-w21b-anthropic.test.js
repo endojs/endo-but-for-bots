@@ -60,12 +60,13 @@ const run = (server, options = {}) =>
     ...options,
   });
 
-test('the anthropic kind is in backendKinds and offers no adapter tool', t => {
+test('the anthropic kind is in backendKinds and offers only accountStatus', t => {
   t.is(
     backendKinds.find(k => k.kind === 'anthropic'),
     anthropicKind,
   );
-  t.deepEqual(anthropicKind.tools, []);
+  // M4 W4.6 (m4-interfaces 8, assumption 8): accountStatus on API kinds.
+  t.deepEqual(anthropicKind.tools, ['accountStatus']);
 });
 
 test('text: more than one delta per reply; usage, served-by and the request', async t => {
@@ -485,9 +486,7 @@ test('cancel mid-stream closes the connection; cancel during a retry wait sends 
   ]);
   const waiting = await run(server, { wait: false });
   t.teardown(waiting.cleanup);
-  await until(() =>
-    waiting.log.some(line => line.kind === 'retry'),
-  );
+  await until(() => waiting.log.some(line => line.kind === 'retry'));
   E.sendOnly(waiting.endpoint).cancelRound(waiting.turn);
   await timers.delay(200);
   t.is(server.requests().length, 2, 'no request after the cancel');

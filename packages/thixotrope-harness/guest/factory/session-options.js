@@ -14,6 +14,7 @@
  */
 import { shapes, textOf, texts } from '../lib/interfaces.js';
 import { promptResolver } from '../session/prompt.js';
+import { subscriptionEffort } from './subscription-options.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -27,7 +28,8 @@ export const DEFAULT_MODEL_ID = 'scripted';
 
 /** Options the guard admits that M1a refuses (later milestones implement them). */
 // M2 W2.6: `systemPrompt` and `spoken` are resolved by `promptResolver`.
-const NOT_YET = harden(['networkPolicy', 'reasoningEffort']);
+// M4 W4.1 (H-6): `reasoningEffort` is resolved by `subscriptionEffort`.
+const NOT_YET = harden(['networkPolicy']);
 
 /**
  * @typedef {object} ResolvedOptions
@@ -44,6 +46,8 @@ const NOT_YET = harden(['networkPolicy', 'reasoningEffort']);
  *   window from the catalogue (R4-33), stored in `SessionConfig`
  * @property {number} [maxOutputTokens] M2 (W2.2): the backend's output
  *   limit (R4-92), stored in `SessionConfig`
+ * @property {string} [reasoningEffort] M4 (W4.1, H-7): the pool's answer
+ *   (R4-23), stored in `SessionConfig`
  */
 
 /**
@@ -160,6 +164,8 @@ export const optionResolvers = harden([
   promptResolver,
   // M2 W2.7: the operator's turn deadline (m2-interfaces.md 10).
   turnDeadline,
+  // M4 W4.1 (H-6): the reasoning effort of a pool backend (R4-23), last.
+  subscriptionEffort,
 ]);
 
 /**

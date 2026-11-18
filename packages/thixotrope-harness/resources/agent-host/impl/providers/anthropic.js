@@ -349,6 +349,9 @@ harden(anthropicTools);
  * @param {readonly any[]} request.tools
  * @param {string} [request.system]
  * @param {number} [request.maxOutputTokens]
+ * @param {Record<string, unknown>} [request.extras] (M4 H-14) fields laid
+ *   over the body last: the Claude pool's billing `system` blocks and its
+ *   adaptive thinking (`AH/subscriptions/messages.js`)
  */
 export const anthropicBody = ({
   model,
@@ -356,6 +359,7 @@ export const anthropicBody = ({
   tools,
   system,
   maxOutputTokens,
+  extras,
 }) => ({
   model,
   max_tokens:
@@ -366,6 +370,7 @@ export const anthropicBody = ({
   messages,
   ...(tools.length ? { tools: anthropicTools(tools) } : {}),
   stream: true,
+  ...extras,
 });
 harden(anthropicBody);
 
@@ -388,7 +393,12 @@ const anthropicRetryAfter = (response, now) => {
  * `ProviderFailure`.
  * @param {object} options
  * @param {string} options.url
- * @param {string} options.key
+ * @param {string} [options.key] the API key (`x-api-key`); not sent when
+ *   `headers` is given
+ * @param {Record<string, string>} [options.headers] (M4 H-14) the
+ *   authorization headers in place of `x-api-key`: the Claude pool's OAuth
+ *   bearer and its R4-30 headers (`anthropic-version` and `accept` are
+ *   still sent)
  * @param {any} options.body
  * @param {AbortSignal} options.signal
  * @param {number} options.timeoutMs 0: no timeout
@@ -399,6 +409,7 @@ const anthropicRetryAfter = (response, now) => {
 export async function* anthropicAttempt({
   url,
   key,
+  headers,
   body,
   signal,
   timeoutMs,
@@ -427,7 +438,7 @@ export async function* anthropicAttempt({
     response = await postJson({
       url,
       headers: {
-        'x-api-key': key,
+        ...(headers ?? { 'x-api-key': String(key) }),
         'anthropic-version': ANTHROPIC_VERSION,
         accept: 'text/event-stream',
       },
@@ -846,5 +857,6 @@ harden(makeAnthropicProvider);
 export const anthropicKind = harden({
   kind: 'anthropic',
   makeProvider: makeAnthropicProvider,
-  tools: harden([]),
+  // M4 W4.6 (H-14, D-M4-9): account status on API backends too.
+  tools: harden(['accountStatus']),
 });

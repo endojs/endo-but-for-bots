@@ -1,0 +1,6 @@
+data: {"type":"response.created","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.in_progress","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.completed","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"completed","output":[],"usage":{"input_tokens":12,"input_tokens_details":{"cached_tokens":0},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":19}}}
+

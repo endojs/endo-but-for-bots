@@ -10127,3 +10127,446 @@ were the two conflicts. The weak point is the gateway's vocabulary and method se
 vat exo that a page reaches must have its guard answered by `vocabularyShapes()` or the gateway
 refuses it with `unknown method`; with fake powers the lanes' UI tests cannot see this, so it
 waits for the cross-lane browser runs.
+### J-0640 2026-11-18 M4 W4.2 pool core built - build
+Evidence: commit `cebe2b0911`; `AH/subscriptions/{pool,rate-limit-headers,pool-state}.js`;
+`test/adapter/m4-pool{,-headers,-state}.test.js`, 26 tests, about 1 s, no supervisor.
+Reading: hosted-agent `subscription-pool.js` and `rate-limit-headers.js` (1315bef86) ported with
+`PoolMember` and `Session` presences as Map keys and no pinning (D-M4-6). Readings are the
+adapter's `Reading` (times in ms, windows `primary`/`secondary`), not the reference's ISO text.
+Additions: `standingOf` reports `blockedDated` and `selectMembers` `earliestDatedBackMs`, so the
+"expected back at" of `m4TextOf.subscriptionsExhausted` uses only provider-named times; tickets
+and the core answer `earliestBackMs()`. `marks.retain` drops a departed member's mark in memory
+only and reports nothing, because a mark is per member and shared by every pool it is in (3.1).
+The bridge loads `poolState` once per sink, forgets a rejected load, sends marks at once with
+any waiting stamps riding along, and coalesces stamps per session (one timer per pool,
+`servedFlushMs` 1 s, chunks of 32, at most 256 waiting).
+Decision: as described.
+
+### J-0641 2026-11-18 M4 W4.2 selection cost - perf
+Evidence: commit `cebe2b0911`; an in-process timing (not a perf file; W4.8 owns
+`subscriptions.select`): 16 members with two windows each, 256 sessions, select plus served per
+sample, 10 s window: 134,156 samples, median 0.058 ms, p99 0.21 ms; budget median <= 0.5 ms,
+0 deliveries (none: the core sends nothing itself).
+Reading: well inside the budget; the 60 s check in `perf/subscriptions.perf.mjs` (W4.8) is the
+record of it.
+Decision: none.
+
+### J-0642 2026-11-18 Pool state in the manager, decisions in the adapter - fit
+Evidence: J-0640; m4-interfaces 5.1; bridge test "core and bridge": one refusal is one
+`poolChanged` delivery, 31 served stamps over 62 s on one sticky member are at most 2.
+Reading: good fit. Selection is a sort of 16 per round and runs in Node at about 0.06 ms; only
+facts that must survive a restart (marks, served stamps) reach the vat, by `sendOnly`, so a round
+costs 0 manager cranks and a refusal one. Object keys need no translation: the presences the
+sink answers are the Map keys, and the guards (`PoolChange`, `PoolState`) accept what the core
+emits unchanged. Cost: a lost `sendOnly` at a crash is silent, so the design must tolerate one
+extra refusal per member after a restart (K-2), which it does.
+Decision: none.
+
+### J-0670 2026-11-18 M4 W4.5 accounts built - build
+Evidence: commit `aaa623d0f9`; `AH/subscriptions/{accounts,account-file,account-tool}.js`;
+`test/adapter/m4-accounts.test.js`, 14 tests, about 1 s, no supervisor.
+Reading: `makeAccounts` keeps readings per `PoolMember` presence (file entries by store key
+only), pools per `Backend` presence and session -> pool in a WeakMap. Provenance: this
+incarnation's reading is `observed`, the file's or a failed refresh's is `remembered`, else the
+member's `DeclaredProfile` (`declared`), else `unavailable`. Every reading, member state or pool
+registration publishes the whole view (`rev` + 1), built once per `rev`; nothing is queued per
+subscriber, so a slow page always gets the newest view. Only a waiting `next()` holds a timer
+(keepalive 30 s); idle viewers (no `next()` call for 60 s, none waiting) are swept at `watch`,
+publish and `next()`. Additions beyond section 12: `register(backend, { kind, label, members })`,
+the `readers` hooks `usage`, `poolOf`, `describe`, and `makeUsageReader` /
+`readingFromClaudeUsage` / `readingFromCodexUsage` (no provider URL in the source: the caller
+gives it). The tool renders Fae's text with each figure labelled by provenance.
+Decision: as described.
+
+### J-0671 2026-11-18 M4 W4.5 accounts fan-out cost - perf
+Evidence: commit `aaa623d0f9`; an in-process probe (not a perf file: W4.8 owns `accounts.push`),
+10 s window, 8 pools x 16 members, 32 subscribers each with a `next()` waiting: 55 samples,
+change -> all 32 answered median 179.5 ms, p99 259.8 ms. Breakdown, 50 calls each: building the
+full view 1.6 ms; `matches(view, AccountsView)` 5.3 ms; one guarded `list()` 5.5 ms. Small view
+(1 pool, 2 members): guarded `list()` 0.32 ms. Budget (`accounts.push`): median <= 5 ms to an
+in-process subscriber.
+Reading: one subscriber on a small pool fits; the largest view misses per subscriber, and the
+miss is the exo return guard (`AccountsSubscription.next` returns `AccountsBatch`), checked
+again for every subscriber though every answer of a `rev` is the same hardened object. A full
+fan-out is about 5.5 ms x subscribers of adapter CPU per change.
+Decision: not changed here (the guard is the W4.0 contract); options for the PM in the report.
+
+### J-0672 2026-11-18 Accounts as an adapter-local channel - fit
+Evidence: J-0670, J-0671; the 40-watcher and 32-live tests.
+Reading: good fit for the data path. Readings are observations, so they stay in Node and cost
+0 vat deliveries per change and per viewer; the manager is asked only for `poolOf` of a session
+this incarnation did not see open a pool. Presences as Map keys made readings shared by every
+pool a member is in for free. Poor fit: guards built for vat boundaries are checked on every
+in-process call of an adapter-local exo, and pattern matching grows with the record (about
+40 us per member account), so the most expensive part of a push is a check of data this module
+just built. Fake-clock tests need a macrotask turn after each `callWhen` call: the method body
+starts a job later, so a timer it arms would otherwise be armed after the clock moved.
+Decision: none.
+
+### J-0660 2026-11-18 M4 W4.4 Secrets adapter additions - build
+Evidence: commit `3b4d10a792`; `test/adapter/m4-secrets-full.test.js` (7 tests).
+Built: `store.auditPage({ key?, limit <= 1,000, before? })`, `store.setDescription`,
+`makeSecretsOps(...).credentialFor(key)` (`secrets/credential-access.js`: read and a replace that
+must name a generation), `secrets/catalog.js` `describeKeys` (64 keys, `null` for an unknown
+key), `secrets/audit.js` `makeAuditReader` (default 100, `next` = time of the page's oldest
+event). Event times now strictly increase (`max(now, last + 1)`, continued across a reload), so
+`before` pages every event exactly once even when 1,000 events share a millisecond.
+Deviation: M2's `store.audit` keeps its 100 bound (M2's test asserts 101 is refused); the
+1,000 bound is the new `auditPage`, which only the reader calls.
+Decision: as described; reported to the PM.
+
+### J-0661 2026-11-18 M4 W4.4 credentials and write-ahead renewal - build
+Evidence: commit `ef14e29b62`; `m4-renewal.test.js` (16 tests), `m4-renewal-kill.test.js`
+(K-5, K-6 in a SIGKILLed child), each file about 1 s.
+Built: `subscriptions/credentials.js` (stored form plus `provider` and `scopes`; Claude and Codex
+login files accepted as the reference importers accept them; 8,192-byte bound) and
+`subscriptions/renewal.js` (port of `makeBrokerOAuthCredential`: single-flight, re-read in the
+flight, `CONSUMED` on an existing intent, intent pinned to the read generation, write-back pinned
+to the intent's, undo only on a provably undispatched request, adopt a newer usable credential
+after a conflict). 16 concurrent rounds near expiry: 1 refresh POST. K-5: 0 refreshes; K-6:
+exactly 1; both leave the member `CONSUMED` in the next incarnation.
+Decision: the token URL and client id are options; no provider host is named in the harness.
+
+### J-0662 2026-11-18 M4 W4.4 credential read and audit page cost - perf
+Evidence: commit `ef14e29b62`; in-process timing (not a perf file: W4.8 owns `secrets.*`), 10 s
+windows. `MemberCredential.current()` on a fresh credential (audited store read, parse):
+194,998 samples, median 0.033 ms, p99 0.18 ms; budget median <= 1 ms. `AuditReader.page({ limit:
+1,000 })` through its exo guard: 255 samples, median 32.5 ms, p99 94.6 ms; budget median <= 50 ms.
+Reading: the credential read is far inside budget. The audit page uses 65% of its budget; the
+likely cost is the return guard checking 1,000 closed records, not the store's scan.
+Decision: none now; W4.8's 60 s window is the record.
+
+### J-0663 2026-11-18 Renewal on a generation-pinned store - fit
+Evidence: J-0661; the two-holder test (intent race gives one `GENERATION_CONFLICT`, one POST)
+and the operator-replace-during-flight test (write-back conflicts, the operator's value is
+adopted, not overwritten).
+Reading: good fit. The store's generation-conditioned replace is the whole compare-and-swap that
+the reference's write-ahead protocol needs, and it lives in the adapter next to the values, so a
+renewal costs 0 vat deliveries and secrets never reach a heap. Poor part: two adapter processes
+over one `secrets.enc` would each keep their own generation in memory and would not conflict;
+the harness has one adapter per state directory, so this is never exercised, but it means the
+fence holds within an incarnation and across a restart, not between concurrent processes.
+Decision: none.
+
+### J-0630 2026-11-18 M4 W4.1 manager part and creation - build
+Evidence: commits `6d85e416f3`, `53f1a6f390`, `5ea23d9cf2`, `dcd76f84bf`;
+`test/unit/m4-{interfaces,manager,effort}.test.js`, 33 tests, about 2 s, no supervisor.
+Built: `durable-subscriptions.js` (`makeSubscriptionsPart`, `forwardSinkMethods`): members by
+`PoolMember` presence, idempotent by label, credential and provider (R8-31); pools by `Backend`
+presence (guard `m4Interfaces.PoolBackend`), idempotent by label and an equal spec, members
+compared by identity in order (R8-23, K-1); refusal marks per member, shared by every pool it is
+in; last-served records per pool in a `Map` in least-recently-served order, 256 kept; retirement
+of members (mark and served records dropped) and pools (refuse with `m4Texts.retired`, slot
+freed); `SecretsAdmin.catalog` (one `describeSecrets` call, cut to one frame by a binary search
+of `fitsFrame`), `auditReader`, `subscriptions`; `Secret.setDescription` (record first, then
+the store). H-1, H-2, H-6, H-7, H-11 as the contract states. `subscriptionEffort` resolver and
+`config/defaults-m4.js`.
+Deviations: `resolveEffort` reads the model's row through the `listModels` forward (at most 8
+pages), because `ResolvedModel` carries no efforts; a pool listing one member twice is refused
+with `m4Texts.poolConflict` (no dedicated text); a member keeps its credential's store key from
+creation, so a deleted Secret leaves the member unreadable rather than keyless.
+Decision: as described; reported to the PM.
+
+### J-0631 2026-11-18 M4 W4.1 manager part costs - perf
+Evidence: commit `dcd76f84bf`; in-process Node timing (not a perf file; W4.8 owns them), 10 s
+windows. `catalog()` of 64 secrets with full-length labels and descriptions: 17,447 samples,
+median 0.52 ms, p99 1.37 ms, page cut to 48 entries. `poolState` of 16 members (full declared
+profiles) and 256 served records: 32,885 samples, median 0.26 ms, p99 1.53 ms, 15,839 bytes.
+`poolChanged` with 32 served stamps: 275,984 samples, median 0.023 ms. Bundles (`bundle-guest`,
+against the lane base `36b3035e92`): session 186,448 -> 186,481 (+33, H-1), exec 84,354 ->
+84,387 (+33), factory 137,074 -> 143,948 (+6,874). Budgets: session/exec + <= 64 met; factory
++ <= 6 KB (6,144) **missed by 730 bytes**.
+Reading: Node figures are a floor; a vat crank costs more, but the shapes are bounded. The
+largest `PoolState` is 15.8 KB, not the contract's ~9 KB (declared profiles of 4 windows and
+256-unit labels), still inside `frameBytes`. The factory miss: `texts-m4.js` is 3,939 bytes of
+bundle, the module map entries of two new modules 1,109, `subscription-options.js` 1,555 (after
+cutting it from 2,567 source bytes), `session-options.js` +133.
+Decision: budget kept; the PM chooses between accepting +6.9 KB and copying the two effort
+texts into the resolver pinned by a test (about +2.6 KB).
+
+### J-0632 2026-11-18 A manager part spread into M2's exos - fit
+Evidence: J-0630; `m4-manager.test.js` "durable.js: the sink, SecretsAdmin and Secret carry the
+M4 methods"; `m2-w23-manager.test.js` and `m1a-agent-host.test.js` unchanged and passing.
+Reading: good fit. Extending a durable exo is a guard swap plus a spread of methods, and a sink
+made before the part reaches it through a getter, so M4 changed `durable.js` by 25 lines and the
+part is testable over a fake `withOps` with no vat. The vat keeps every pool fact in WeakMaps and
+Maps keyed by presences; orthogonal persistence makes them durable with no schema. Poor part: the
+manager cannot tell the adapter that a member or pool was retired (no ops method for it), and
+the adapter loads `poolState` once per incarnation, so a retirement reaches running rounds only
+after an adapter restart.
+Decision: reported to the PM (needs an ops method or a reload rule, W4.6's H-3).
+
+### J-0633 2026-11-18 Effort resolution through the catalogue - fit
+Evidence: `m4-effort.test.js` (7 tests), `m4-manager.test.js` "resolveEffort ...".
+Reading: mixed fit. Creation-time checks belong in the factory's resolver chain, and the pool
+answers with plain records, so the resolver adds no guard to the factory bundle. But the
+contract's `ResolvedModel` has no effort list, so `resolveEffort` pages the catalogue: one
+creation on a pool costs one `resolveModel` and one or more `listModels` manager -> adapter
+calls instead of one. A `ResolvedModel` with `reasoningEfforts` and `defaultReasoningEffort`
+would make it one call.
+Decision: none in this lane; noted for the PM.
+
+### J-0650 2026-11-18 M4 W4.3 wire clients and pool catalogue - build
+Evidence: commits `ac7f8a9234` (H-14: `anthropicAttempt` `headers`, `anthropicBody` `extras`),
+then the W4.3 commits on `claude/thix-m4`: `subscriptions/{wire,messages,responses,catalog}.js`,
+`test/fixtures/fake-subscription-server.mjs` with 20 fixtures under
+`test/fixtures/sse/subscriptions/`, and `m4-wire-claude` (9 tests), `m4-wire-codex` (9),
+`m4-catalog` (7); all 25 pass in about 1 s of test time; `m2-w21b-anthropic` and
+`m2-w22-catalog` unchanged and passing.
+Reading: Claude reuses M2's Messages client whole; the pool's differences (bearer and R4-30
+headers, billing block, adaptive thinking, R4-76 texts, empty answer) are a wrapper that maps
+M2's `ProviderFailure` and observes headers through a wrapping `fetch`, so `anthropic.js` grew
+by two options only. Codex is a port of lal's Responses client onto M2's `sse.js` and round
+events. Overload retry is `withOverloadRetry` over M2's `withRetries`, used by W4.6.
+Decision: one extra file, `subscriptions/wire.js` (shared failure facts, reading fetch, retry),
+reported to the PM.
+
+### J-0651 2026-11-18 Wire and catalogue costs - perf
+Evidence: in-process Node timing against the fake server on loopback (not a perf file; W4.8
+owns them), 3 s windows. Warm `listModels` of a 16-member `codex-pool`: 81,984 samples, median
+0.033 ms, p99 0.135 ms, 0 reads. One attempt to completion (`claude-text.sse`): Claude pool
+client 6,897 samples, median 0.355 ms, p99 1.28 ms; M2's API client on the same stream 5,930,
+median 0.407 ms, p99 4.03 ms; Codex client (`codex-text.sse`) 8,242, median 0.328 ms, p99
+1.24 ms. No budget in the contract's table is W4.3's own; `catalog.pool` warm <= 300 ms and
+`subscriptions.handover` <= 50 ms added are W4.8's, and these leave them almost all.
+Reading: the wrapper costs nothing measurable over M2's client. Windows are 3 s, not 60 s, as
+these are informative only.
+
+### J-0652 2026-11-18 Reusing M2's provider code for subscriptions - fit
+Evidence: J-0650; `messages.js` is 300 lines over `anthropic.js`; `catalog.js` copies M2's
+`pageOf` and `boundedJson` (not exported) and imports `anthropicPage`, the cache constants and
+`cutUnits`.
+Reading: good fit where M2 exported building blocks (attempt, body, messages, retry, SSE). Poor
+where it did not: about 150 lines of `pageOf` and the bounded JSON reader are duplicated because
+`providers/catalog.js` exports neither. The error-event overload is recognised by comparing
+M2's fixed text (`textOf.anthropicApiError(servedBy type overloaded_error)`), since
+`ProviderFailure` carries no error type; it is pinned by a test but brittle.
+Decision: asked the PM to export `pageOf` / `boundedJson` and to let `ProviderFailure` carry a
+symbolic `errorType`.
+
+### J-0653 2026-11-18 Texts the contract lacks for Codex transport failures - fit
+Evidence: `responses.js`; `m4-wire-codex` "empty answer, cut stream, timeout and cancel".
+Reading: `texts-m4.js` has no text for a Codex stream cut before completion, an unreadable
+event, no answer or a timeout. The client uses `m4TextOf.responsesFailed` with pseudo event types
+`stream.incomplete`, `stream.unreadable`, `stream.unreachable`, `stream.timeout` (the
+reference's diagnostic pattern admits `stream.*`). Claude transport failures keep M2's
+Anthropic API texts.
+Decision: works as is; the PM may add fixed texts to `texts-m4.js` (W4.0's file).
+
+### J-0680 2026-11-18 M4 W4.6 composition, wiring and sign-in - build
+Evidence: `subscriptions/{index,provider,credential-ops}.js`, `gateway/extensions/m4-secrets.js`,
+H-3 (`attach.js`), H-4 (`index.js`), H-14 tool lines, H-8 step, `scripts/subscription-login.mjs`;
+tests `m4-provider`, `m4-provider-wiring`, `m4-provider-provision`, `m4-login`,
+`m4-gateway-extension` (19 tests, about 3 s together, no supervisor).
+Reading: `makeSubscriptions` composes W4.1-W4.5 lazily: a pool loads (`poolState`, one crank)
+at its first round, catalogue read or accounts use; members, sessions and pools are keyed by
+their presences only. `makePoolProvider` runs M2's `runProviderRound` with a member loop:
+exhausted 429 before delivery hands the rebuilt request to the next member, 401 renews once and
+retries once, overloads retry on the kind's schedule, anything after a delivery fails the round.
+The system text is read once per round (`systemTextOf`), checked with a staged system and a
+hand-over on both kinds. Sign-in and `--value-file` write sealed boxes only.
+
+### J-0681 2026-11-18 Pool round and hand-over cost - perf
+Evidence: in-process Node rounds through M2's Endpoint against the fake subscription server on
+loopback (not a perf file; W4.8 owns them), 5 s windows, a fresh pool core per round. Plain
+round (one member answers `claude-text.sse`): 446 samples, median 9.01 ms, p99 21.59 ms, 1
+request per round. Hand-over (member A refused 429-exhausted, B answers): 93 samples, median
+17.84 ms, p99 32.99 ms, 2 requests per round, 1 mark send. Budget (W4.8's
+`subscriptions.handover`): <= 50 ms added; measured about 9 ms added (one more loopback request,
+the header reading, one `poolChanged`).
+Reading: the hand-over costs one request; the vat path is untouched. Windows are 5 s, not 60 s:
+informative only.
+
+### J-0682 2026-11-18 Objects as keys across the adapter - fit
+Evidence: `index.js` keeps `Map<Backend, PoolRecord>`, `WeakMap<PoolMember, MemberCredential>`,
+`WeakMap<PoolMember, Reading>`; the accounts oracle and pool core take the same presences.
+Reading: good fit: CapTP keeps one presence per remote object for the incarnation, so the
+adapter needs no ids, and a member shared by two pools shares its credential flight and reading
+for free. Poor fit in three places: (1) `CredentialOps` needs the incarnation's one Secrets store,
+which `makeSecretsOps` does not expose (the facet reads `secrets().store`; until the store is
+exported every `describeSecrets` throws `notBuilt`); (2) the manager does not tell the adapter
+when a member or pool is retired, so a loaded pool keeps a retired member until the adapter
+restarts (W4.1's report); (3) `accountStatus` reaches `TurnPorts.tools`, but the session offers
+the model only tool-table entries (`toolSetFor`), so no model sees the tool yet.
+Decision: all three reported to the PM with the exact change.
+
+### J-0683 2026-11-18 Scripts that import Endo packages statically - fit
+Evidence: `node scripts/provision.mjs` and a first `subscription-login.mjs` both fail at start
+with `assert is not defined` from `eventual-send`: a static import of an Endo package is
+evaluated before `_init.mjs`'s top-level `await import('@endo/init')` settles when the script is
+the entry. Under ses-ava (already locked down) the same files load.
+Reading: `subscription-login.mjs` imports everything after `_init.mjs` dynamically and installs
+the guest prelude itself; its CLI prints its usage line. `provision.mjs` (M1a) still fails as an
+entry.
+Decision: reported to the PM (M1a's file).
+
+### J-9640 2026-11-18 M4 acceptance through the daemon (W4.8) - built
+Evidence: ten integration files from the `m4` template (M1a provisioning, id also hashing
+`durable-subscriptions.js`), against the fake subscription and OAuth servers on loopback; each
+run alone under the slot lock, slot held (s): `m4-pools` (2, 3, 15) 105, `m4-wire` (8, 9) 120,
+`m4-catalog` (6, 13) 135, `m4-secrets` (1, 15) 105, `m4-accounts` (7) 93, `m4-renewal` (10,
+15) 98, `m4-restart` (4, 11: K-2, K-3, K-4) 179, `m4-restart-renewal` (12, 15: K-5, K-6) 110,
+`m4-provision` (16, K-1) 114, `m4-reachability` (5 b) 94; plus the unit closure
+`m4-reachability` (5 a) and `m4-key-race`. All pass at `e0e07caa24`. Sum of holds 1,153 s:
+about 5 min of wall time over four slots. Waits for a slot were 0-1,213 s (other lanes'
+exclusive runs), larger than every hold.
+Reading: every test value is built at run time; acceptance 15 greps for the token prefixes
+(`fake-w48-`, and the fake OAuth server's `fake-access-` / `fake-refresh-`), so tokens the test
+never sees are covered too. Deferred: 14 (browser, after M3), the two-part system text of 13
+(after M5), the model-visible `accountStatus` of 7 (J-9642).
+
+### J-9641 2026-11-18 M4 defects found by the daemon runs - fix
+Evidence and fixes (all in M4 files): (1) `makeSecretsOps` exported no `store`, so catalogue,
+`setDescription` and the audit reader failed `notBuilt('credentials')` (J-0682's (1)); exported
+with `resolveSecret`. (2) The first `openWriter()` loads the wrapping key twice at once (store and
+sealing keys); the loser read the winner's empty file, "must hold exactly 32 bytes"; the key is
+now written under a private name and linked into place (`m4-key-race`, 8 concurrent loads x 20).
+(3) After a restart `Accounts.forBackend` answered `undefined` until the pool's first use;
+an unknown backend is now asked `describe()` and `poolState` (2 manager cranks, once). (4) That
+fix let `refresh` read the provider's default usage URL for a pool whose spec (and test
+`usageUrl`) the incarnation did not have yet: during a 4 s perf smoke run up to about 200 usage GETs went
+to the provider's public usage endpoint with placeholder tokens; fixed before any further run
+(a pool is read only when its spec is known). (5) The Codex catalogue lists efforts in the
+Responses spelling (`max`), so Fae's `ultra` was refused at creation and the `ultra` -> `max`
+wire mapping was unreachable; `resolveEffort` admits `ultra` where `max` is listed.
+
+### J-9642 2026-11-18 accountStatus is not offered to the model - fit
+Evidence: `m4-accounts` records the tools of a pool session's request: `["exec"]`. The session
+offers its tool-table entries only (`toolSetFor`: echo, exec); an adapter tool in
+`TurnPorts.tools` with no entry is neither described nor executable. D-M4-9 assumed otherwise.
+Reading: the adapter side is complete (W4.5, W4.6 tests); the session side needs a generic
+pass-through of `TurnPorts.tools` entries (M5's `tool-table.js`).
+Decision: reported to the PM; acceptance 7's model-call part deferred.
+
+### J-9643 2026-11-18 Renewal happens at session creation - fit
+Evidence: `m4-renewal` first ran the operator race around a turn and saw no refresh: the expired
+member had been renewed by the catalogue read of the session's creation (`resolveModel` reads each
+member's model list with `credentialOf(entry).current()`). K-5 and K-6 are therefore run around a
+creation; a SIGKILL there breaks the creation, no inference request is sent, and after the
+restart the member is `CONSUMED` (event log and accounts view), the token endpoint saw the token
+0 times (K-5) or once (K-6), and a new session is served by the other member.
+Reading: correct (a catalogue read needs a valid token); section 10 names the round as the
+renewal site, which is only one of two.
+
+### J-9644 2026-11-18 Kill points from outside the adapter - fit
+Evidence: K-2..K-4 kill the supervisor and every process under the state directory at once.
+K-2 (kill when a's 429 was answered): b's request had already reached the server (`sent: a, b`):
+the adapter hands over within a millisecond, so "none to b" cannot be placed from outside;
+acceptance 11's "at most once each, nothing after the restart" holds in all three. Restarts:
+8.2-9.1 s serve. The mark of a 429 committed before the kill survived (K-3 and K-4 skipped a).
+Reading: good fit: the journal of the turn (`Dispatched`) is the only thing recovery needs; no
+member attempt was re-sent across 5 kills.
+
+### J-9645 2026-11-18 M4 perf, subscriptions files - perf
+Evidence: commit `0c66afd639`, load average 4-9 (other lanes), exclusive slots, 60 s windows
+(firstOpen 150 s). `perf/subscriptions.perf.mjs` (3.5 min): select median 0.093 ms (n 581,569;
+budget 0.5) pass; turnStart median 270 ms, p99 400 (n 125; 350) pass, manager frames 0.016 per
+turn; servedWrites 2 manager frames per 60.4 s (budget 1) miss: frames are not deliveries (a GC
+frame follows a stamp's delivery; not separated yet); handover added median 2.1 ms (n 31; 50)
+pass, 1.35 manager frames per refusal; bundles session +33, exec +33 (64) pass, factory +6,874
+(6,144) miss: `subscription-options.js` and `texts-m4.js` are larger than the contract's 4 KB
+estimate (lane base and `3588cab190` measure the same 137,074); manager bundle not measurable
+with `bundleGuest` (the package declares dependencies); probes: no halt, credential 8,193
+bytes refused at read (creation answers catalogue unavailable), audit 1,001 and 17 members
+refused by the guards. `perf/subscriptions-lifecycle.perf.mjs` (6.0 min): renewal 1 refresh POST
+for each of 20 expiries of 16 concurrent rounds, round start median 1,478 ms vs 1,507 unexpired
+(16 concurrent rounds queue; added -49 ms; budget 50) pass; firstOpen median 688 ms, p99 1,312
+(13 restarts; 750) pass, 3 manager frames per first turn (poolState, the open, one more);
+catalog.pool cold median 274 ms (2 s) pass, warm 75 ms (300) pass.
+Reading: the round path costs the vats nothing per turn; the split keeps each file far from the
+10-minute box (3.5 and 6.0 min instead of about 9.9).
+
+### J-9646 2026-11-18 M4 perf, secrets and accounts files - perf
+Evidence: code of `0c66afd639`, exclusive slots, 60 s windows. `perf/secrets.perf.mjs` (4.7
+min): credentialRead median 0.034 ms (n 365,531; budget 1) pass, 0 deliveries; auditReader in
+the adapter's process, 1,000 events, median 30 ms, p99 327 (n 1,372; 50) pass, 0 deliveries
+(through the hub from a control client: median 402 ms, informative, 0 manager frames: the 120 KB
+answer is marshalled twice); catalog of 64 Secrets with 215-unit labels median 745 ms, p99 1,226
+(n 80; 300) miss, 2.21 manager frames per page, first page cut to 57 entries by `fitsFrame`.
+Likely cause: the manager's crank measures each entry with `fitsFrame` and waits for one
+`describeSecrets` round trip to the adapter; not broken down yet. `perf/accounts.perf.mjs` (2.2
+min): push median 0.371 ms, p99 1.4 (n 136,597; 5) pass with 4 viewers, 0 vat deliveries;
+refresh of 2 members median 39 ms, p99 74 (n 1,424; 20 + 100) pass, 2 usage reads per refresh,
+0 manager frames.
+Reading: the adapter-local objects (reader, accounts channel) cost the vats nothing, as designed;
+the catalogue is the one Secrets path that runs in a vat and the one miss.
+
+### J-9647 2026-11-18 Where W4.8's time went - time
+Evidence: start 03:45:17Z. Integration: ten files, holds 78-179 s each, waits 0-1,213 s (other
+lanes' exclusive runs; my first run waited 583 s). Perf: four files, 3.5 + 6.0 + 4.7 + 2.2 min
+held, started 04:48:00 and done 05:04:20 including waits. Failed or stale runs: 7 integration
+runs (defects of J-9641, two test design errors: a 3 s stickiness that had expired, a renewal
+race placed after the creation that already renewed) and 2 perf smoke runs (a static Endo import
+before lockdown; a fake server left listening kept the process alive until the 10-minute box
+ended it, exit 124).
+Reading: waits for slots dominate. M4's own regression is about 5 min of integration over four
+slots plus 16.4 min of exclusive perf, one file at a time: about 21 min, just over the 20-minute
+rule; shortening `firstOpen`'s 150 s window or running `secrets` and `accounts` in one process
+would bring it under.
+
+### J-9660 2026-11-18 M4 lane independent review (M4-QC) - review
+Read the lane (36b3035e92..7e48d96232, 38 commits, 99 files) against `m4-interfaces.md` and ran
+it. Unit and adapter: 20 M4 files, 185 tests, all pass, each 0-3 s. Integration through the slot
+lock (THIX_AGENT=M4-QC), slot hold per file: m4-secrets 91 s, m4-catalog 98 s, m4-accounts 101
+s, m4-renewal 101 s, m4-wire 108 s, m4-restart 203 s, m4-pools 105 s, m4-reachability 94 s, all
+pass; none near the 10-minute box. Waits for a slot dominated (up to 945 s per file: other lanes'
+exclusive perf runs). Seams: m2-secrets 94 s, m2-providers 172 s, m1a-slice 225 s pass; the unit
+test `m1a-factory` fails one test (the `reasoningEffort` expectation H-6 changes, reported by
+W4.1, not yet applied). Bundles at HEAD: session 186,481 (+33), exec 84,387 (+33), factory
+143,948 (+6,874 against +6,144: miss confirmed). tsc: one error, M3's `contract-m3.js` line 336.
+No secret value, key-shaped literal, private host, address or local path in the diff; the public
+provider endpoints and CLI OAuth client ids of the reference modules are committed (PM ruling).
+
+### J-9661 2026-11-18 M4 review findings - review
+Write-ahead renewal, CONSUMED fail-closed and per-member single flight hold in code and at K-5/K-6.
+Gaps: (1) `retirePool` and `PoolMember.retire` change only the manager; the adapter loads
+`poolState` once per incarnation, so a retired pool keeps serving and a retired member stays
+selectable until the adapter restarts (contract 3.1 says the next turn fails). (2) The sign-in
+helper puts the PKCE verifier in the authorization URL as `state`, so the URL plus the code
+suffice to redeem the code. (3) A token answer whose lifetime is 61-119 s passes the 60 s floor
+but fails the 120 s skew check after the POST: the rotated refresh token is dropped and the
+member is CONSUMED. (4) `accountStatus` `refresh` is model-driven with no single flight or
+interval: every call reads every member's usage endpoint. (5) D-M4-9: the model is never offered
+`accountStatus` (session tool table). Fit: object keys (WeakMaps by member, pool and session
+presence) made the adapter side simple; the one-load-per-incarnation rule is what makes (1).
+
+### J-9662 2026-11-18 M4 review, resumed after the restart (M4-QC) - review
+The two integration files the cut-off run had not reached, at 859ecc68bc (no M4 code change since
+J-9660), two slots at once: m4-provision 165.5 s and m4-restart-renewal 173.5 s held, both pass,
+2:54 wall. With J-9660 every M4 integration file has now run and passed; none is near 5 minutes.
+More findings: (6) a provider reset header is accepted up to the year 2100, so one answer can
+mark a member for decades (a newer open reading lifts it, but a marked member is not asked
+again); a cap such as 8 days past now would bound it. (7) A renewal whose answer fails
+`renewedFrom` (account mismatch, bad lifetime) after the POST also drops the rotated refresh
+token; fail closed (`CONSUMED`), but the member needs a new sign-in. (8) K-2's test cannot
+show "none to B"; it asserts at most one per member (W4.8 recorded this). (9) `Secret`
+`setDescription` is not an audit event, and grants keep describing the old text (W4.1's M2
+finding). (10) `designs/milestones.md` gained M4's outcome table: a PM file the other lanes
+also edit. Verdict: accept with fixes; no secret value, key-shaped literal or private name in
+the diff.
+
+### J-9670 2026-11-18 M4 review fixes (M4-FIX) - build
+Fixed from J-9661/J-9662: (1) retirement: the pool bridge asks `poolState` again when its answer
+is older than `poolStateRefreshMs` (30 s; a retired answer is final, a failed ask keeps the old
+one), so a retired pool fails and a retired member drops out within 30 s, at a cost of one
+manager crank per used pool per 30 s and none while idle (not the contract's "next turn": that
+needs a push, which the `CredentialOps` guard does not allow; asked of the PM). (2) Sign-in uses an
+independent random OAuth `state`; the PKCE verifier no longer appears in the URL. (3)+(7) After
+the refresh POST no rotated refresh token is dropped: a lifetime within the skew is written and
+served; an answer refused later (token type, lifetime, `exp` past) is written back with the access
+token marked spent; an answer naming another account still keeps nothing. (4) Usage reads are
+single flight per member; the model's `accountStatus {refresh:true}` reads a member at most once
+per 60 s (operator `Accounts.refresh` stays on demand). (6) Dated marks are capped at now + 8 days.
+Tests: one new or strengthened adapter test per fix; M4 unit and adapter files 150 tests pass in
+8.6 s. Fit: the manager deciding and the adapter caching per incarnation is cheap but leaves no
+channel for the vat to tell the adapter; a push needs an interface the contract did not foresee.
+
+### J-9671 2026-11-18 M4-FIX integration re-run - measure
+At 5a9d37cc1c, four files in shared slots at once (THIX_AGENT M4-FIX): m4-pools held 186.5 s,
+m4-renewal 144.2 s, m4-restart 290.3 s, m4-accounts 115.6 s; all pass. Waits for a slot were
+280-1,007 s (other lanes held every slot), so wall time was 468-1,124 s per file; the wait is
+lane contention, not test length. No perf check re-run: the 30 s `poolState` refresh may add up
+to two manager cranks per used pool per 60 s to `subscriptions.servedWrites` and `turnStart`
+(not measured). Not fixed here (reasons in the M4-FIX report): D-M4-9, ReadGrant description
+and the setDescription audit event (M2), K-2's "none to B", m1a-factory's expectation,
+provision-steps template hash, the perf misses, the milestones.md table.

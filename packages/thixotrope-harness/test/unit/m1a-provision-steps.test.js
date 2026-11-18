@@ -105,6 +105,9 @@ test('the provisioning steps install, load the program, and re-run as a no-op', 
       // M3's registered step (scripts/provision-steps/30-gateway.js),
       // skipped without options.gateway.
       ['gateway', true],
+      // M4's registered step (scripts/provision-steps/40-subscriptions.js),
+      // skipped without options.subscriptions.
+      ['subscriptions', true],
     ],
   );
   t.deepEqual(reports, first);
@@ -179,11 +182,12 @@ test('the steps table is the M1a list, then M1b W1b.5 appends', async t => {
     ],
   );
   t.true(Object.isFrozen(provisionSteps));
-  // Later milestones register files (M2-T1): M3's gateway after the table.
+  // Later milestones register files (M2-T1): M3's gateway, then M4's
+  // subscriptions, after the table.
   const all = await allProvisionSteps();
   t.deepEqual(
     all.map(s => s.name),
-    [...provisionSteps.map(s => s.name), 'gateway'],
+    [...provisionSteps.map(s => s.name), 'gateway', 'subscriptions'],
   );
 });
 
