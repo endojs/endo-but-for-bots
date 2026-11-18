@@ -15,7 +15,7 @@
 import { passStyleOf } from '@endo/far';
 
 /**
- * `limitsM5.presetRecordBytes` (`frameBytes` 24,576 - 2,048): the string
+ * `limits.presetRecordBytes` (`frameBytes` 24,576 - 2,048): the string
  * content bytes one `PresetRecord` may carry.
  */
 export const presetRecordBytes = 22_528;

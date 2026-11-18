@@ -22,7 +22,6 @@ import { harnessRoot } from '../_helpers.js';
 import { m5FixtureSource } from '../fixtures/m5-objects.js';
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
 import {
   m5Interfaces,
   m5Shapes,
@@ -295,7 +294,7 @@ test('powers checks labels and values in the exec vat, before sending', async t 
     LABEL_TEXT,
     LABEL_TEXT,
     LABEL_TEXT,
-    textOf.valueTooLarge(9002, limitsM5.labelValueBytes),
+    textOf.valueTooLarge(9002, limits.labelValueBytes),
     NOT_JSON_TEXT,
     NOT_JSON_TEXT,
   ]);
@@ -477,8 +476,8 @@ test('the membrane refuses an oversize argument, a 40-key record and a nested pr
     ].join('\n'),
   );
   t.deepEqual(JSON.parse(outcome.text), [
-    textOf.membraneTooLarge(307_200, limitsM5.membraneArgBytes),
-    textOf.membraneTooManyKeys(40, limitsM5.membraneRecordKeys),
+    textOf.membraneTooLarge(307_200, limits.membraneArgBytes),
+    textOf.membraneTooManyKeys(40, limits.membraneRecordKeys),
     NESTED_PROMISE_TEXT,
     'sent',
     'small',
@@ -494,12 +493,12 @@ test('measureArguments: each bound at its limit passes, one over is refused; the
   const refusal = (/** @type {unknown[]} */ args) =>
     /** @type {any} */ (measureArguments(args)).refusal;
   // Bytes: units x 3.
-  t.true(ok(['x'.repeat(limitsM5.membraneArgBytes / 3)]));
+  t.true(ok(['x'.repeat(limits.membraneArgBytes / 3)]));
   t.is(
-    refusal(['x'.repeat(limitsM5.membraneArgBytes / 3 + 1)]),
+    refusal(['x'.repeat(limits.membraneArgBytes / 3 + 1)]),
     textOf.membraneTooLarge(
-      limitsM5.membraneArgBytes + 3,
-      limitsM5.membraneArgBytes,
+      limits.membraneArgBytes + 3,
+      limits.membraneArgBytes,
     ),
   );
   // Keys of one record.
@@ -771,7 +770,7 @@ test('inspect methods and describe render without calling the object; Fae descri
   // probe b): cut to 8,000 units and flagged.
   const big = await inspect({ op: 'describe', target: fx.bigHelp });
   const bigText = JSON.parse(adapter.textOfOutcome(big.text));
-  t.is(bigText.documentation.length, limitsM5.describeDocumentationUnits);
+  t.is(bigText.documentation.length, limits.describeDocumentationUnits);
   t.true(bigText.truncated);
 });
 
@@ -883,9 +882,7 @@ test('inspect readSources: Fae item rules, SourceReader per item, bounded result
   const wideText = adapter.textOfOutcome(wideOut.text);
   const wideResult = JSON.parse(wideText).results[0];
   t.true(wideResult.outputTruncated);
-  t.true(
-    JSON.stringify(wideResult).length <= limitsM5.inspectResultUnits - 100,
-  );
+  t.true(JSON.stringify(wideResult).length <= limits.inspectResultUnits - 100);
 });
 
 test('inspect toolSchema: a ToolDescription, or refused-schema reasons', async t => {
@@ -942,7 +939,7 @@ test('inspect toolSchema: a ToolDescription, or refused-schema reasons', async t
     ),
   });
   t.is(long.status, 'ok');
-  t.is(long.description.description.length, limitsM5.grantedDescriptionUnits);
+  t.is(long.description.description.length, limits.grantedDescriptionUnits);
   t.true(long.description.description.startsWith('ddd'));
   t.true(matchesOutcome(long));
 });

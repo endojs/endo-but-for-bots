@@ -28,7 +28,6 @@ import {
   textOf as textOfM5,
 } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
 /* eslint-enable import/no-relative-packages */
 import { emit, loadAvg, runIdentity } from '../../perf/_harness.mjs';
 import {
@@ -109,15 +108,15 @@ run('acceptance 10: the membrane and untrusted answers', async t => {
   );
   t.false(tooLarge[1]);
   const largeText = JSON.parse(tooLarge[0]);
-  const prefix = textOfM5.membraneTooLarge(0, limitsM5.membraneArgBytes);
+  const prefix = textOfM5.membraneTooLarge(0, limits.membraneArgBytes);
   t.true(
     largeText.startsWith(prefix.slice(0, prefix.indexOf('0'))) &&
-      largeText.includes(`limit ${limitsM5.membraneArgBytes}`),
+      largeText.includes(`limit ${limits.membraneArgBytes}`),
     largeText,
   );
   t.deepEqual(readBack, [rendered('remember the milk'), false]);
   t.deepEqual(tooManyKeys, [
-    rendered(textOfM5.membraneTooManyKeys(40, limitsM5.membraneRecordKeys)),
+    rendered(textOfM5.membraneTooManyKeys(40, limits.membraneRecordKeys)),
     false,
   ]);
   t.deepEqual(added, ['5', false]);

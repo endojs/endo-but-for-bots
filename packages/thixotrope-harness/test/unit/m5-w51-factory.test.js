@@ -16,7 +16,7 @@ import {
   texts,
   textOf,
 } from '../../guest/lib/interfaces-m5-factory.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
+import { limits } from '../../guest/lib/limits.js';
 import { m4Texts } from '../../guest/lib/texts-m4.js';
 import { makeFactoryKit, stagingSources } from '../../guest/factory/factory.js';
 import { makeProgramStore } from '../../guest/factory/root.js';
@@ -236,15 +236,15 @@ test('a make argument over frameBytes fails the creation with presetTooLarge', a
   const wide = (/** @type {number} */ units) => '€'.repeat(units);
   const { preset } = await E(kit.catalog.facet).create(
     harden({
-      label: wide(limitsM5.presetLabelUnits),
+      label: wide(limits.presetLabelUnits),
       template: 'general',
       // The composed prompt stays inline (under inlineBytes).
       instructions: wide(1300),
       backend,
       modelId: wide(256),
-      endowments: Array.from({ length: limitsM5.maxEndowments }, (_, i) =>
+      endowments: Array.from({ length: limits.maxEndowments }, (_, i) =>
         harden({
-          label: `${i}${wide(limitsM5.endowmentLabelUnits - 2)}`,
+          label: `${i}${wide(limits.endowmentLabelUnits - 2)}`,
           value: notes,
         }),
       ),

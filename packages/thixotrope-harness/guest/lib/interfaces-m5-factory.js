@@ -16,7 +16,6 @@
  * Runs in vats and in Node (after `installGuestPrelude()`).
  */
 import { limits } from './limits.js';
-import { limitsM5 } from './limits-m5.js';
 import { interfaces, methodNames, shapes } from './guards/factory.js';
 import {
   extendInterface,
@@ -107,7 +106,7 @@ export const texts = harden({
   presetChanged:
     'The preset changed while the session was being created; try again',
   /**
-   * A preset record over `limitsM5.presetRecordBytes` (the editor before
+   * A preset record over `limits.presetRecordBytes` (the editor before
    * sending, `PresetCatalog.create` and `Preset.save`), or a new session's
    * `make` argument (config with the snapshot, services with the
    * endowments) that would not fit one frame (rule 12.5).
@@ -154,7 +153,7 @@ export const m5FactoryShapes = lazyTable({
   NetworkPolicyName: () => M.or('off', 'public-internet'),
   TemplateObject: () =>
     record({
-      kind: text(limitsM5.templateKindUnits),
+      kind: text(limits.templateKindUnits),
       label: m5Shapes.EdgeLabel,
     }),
   /** An endowment: a label and the object (F.1 #4). */
@@ -167,38 +166,38 @@ export const m5FactoryShapes = lazyTable({
   PresetRecord: () =>
     record(
       {
-        label: text(limitsM5.presetLabelUnits),
+        label: text(limits.presetLabelUnits),
         template: m5FactoryShapes.TemplateName,
       },
       {
-        description: text(limitsM5.presetDescriptionUnits),
-        instructions: text(limitsM5.presetInstructionsUnits),
+        description: text(limits.presetDescriptionUnits),
+        instructions: text(limits.presetInstructionsUnits),
         networkPolicy: m5FactoryShapes.NetworkPolicyName,
         backend: R('Backend'),
         modelId: shapes.ModelId,
         reasoningEffort: text(limits.effortUnits),
         objects: list(
           m5FactoryShapes.TemplateObject,
-          limitsM5.maxTemplateObjects,
+          limits.maxTemplateObjects,
         ),
-        endowments: list(m5FactoryShapes.Endowment, limitsM5.maxEndowments),
+        endowments: list(m5FactoryShapes.Endowment, limits.maxEndowments),
       },
     ),
   /** `Preset.describe()`: the record as saved, and what the editor shows. */
   PresetView: () =>
     record(
       {
-        label: text(limitsM5.presetLabelUnits),
+        label: text(limits.presetLabelUnits),
         builtIn: M.boolean(),
         template: m5FactoryShapes.TemplateName,
-        description: text(limitsM5.presetDescriptionUnits),
-        instructions: text(limitsM5.presetInstructionsUnits),
+        description: text(limits.presetDescriptionUnits),
+        instructions: text(limits.presetInstructionsUnits),
         networkPolicy: m5FactoryShapes.NetworkPolicyName,
         objects: list(
           m5FactoryShapes.TemplateObject,
-          limitsM5.maxTemplateObjects,
+          limits.maxTemplateObjects,
         ),
-        endowments: list(m5FactoryShapes.Endowment, limitsM5.maxEndowments),
+        endowments: list(m5FactoryShapes.Endowment, limits.maxEndowments),
         revision: count,
         available: M.boolean(),
       },
@@ -213,7 +212,7 @@ export const m5FactoryShapes = lazyTable({
   PresetConfiguration: () =>
     record({
       revision: count,
-      presets: list(R('Preset'), limitsM5.maxPresets),
+      presets: list(R('Preset'), limits.maxPresets),
       defaultPreset: R('Preset'),
     }),
   /** `PresetCatalog.create` answer. */
@@ -231,7 +230,7 @@ export const m5FactoryShapes = lazyTable({
   InventoryPage: () =>
     record(
       {
-        rows: list(m5FactoryShapes.InventoryRow, limitsM5.inventoryPageEntries),
+        rows: list(m5FactoryShapes.InventoryRow, limits.inventoryPageEntries),
         rev: count,
       },
       { next: shapes.Cursor },
@@ -261,7 +260,7 @@ export const m5FactoryInterfaces = lazyTable({
   /** The preset catalogue (A.4 `listPresets`, `getPresetConfiguration`). */
   PresetCatalog: () =>
     M.interface('PresetCatalog', {
-      list: M.call().returns(list(R('Preset'), limitsM5.maxPresets)),
+      list: M.call().returns(list(R('Preset'), limits.maxPresets)),
       configuration: M.call().returns(F.PresetConfiguration),
       create: M.call(F.PresetRecord, count).returns(F.PresetCreated),
       defaultPreset: M.call().returns(R('Preset')),
@@ -288,8 +287,8 @@ export const m5FactoryInterfaces = lazyTable({
         R('InventoryEntry'),
       ),
       addAll: M.call(
-        list(m5Shapes.Attachment, limitsM5.inventoryPageEntries),
-      ).returns(list(R('InventoryEntry'), limitsM5.inventoryPageEntries)),
+        list(m5Shapes.Attachment, limits.inventoryPageEntries),
+      ).returns(list(R('InventoryEntry'), limits.inventoryPageEntries)),
       rev: M.call().returns(count),
     }),
   /** One inventory entry (per-item operations, F.1 #3). */

@@ -27,7 +27,6 @@
  * `interfaces.js`.
  */
 import { limits } from './limits.js';
-import { limitsM5 } from './limits-m5.js';
 import { interfaces, methodNames, shapes } from './guards/session.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -280,10 +279,10 @@ export const textOf = harden({
     `Message #${number} has no attachment "${edgeName}"`,
   /** @param {number} n */
   tooManyAttachments: n =>
-    `A message carries at most ${limitsM5.maxAttachments} attachments (${n} given)`,
+    `A message carries at most ${limits.maxAttachments} attachments (${n} given)`,
   /** @param {number} units */
   packageTooLong: units =>
-    `A message with attachments carries at most ${limitsM5.packageTextUnits} characters (${units} given)`,
+    `A message with attachments carries at most ${limits.packageTextUnits} characters (${units} given)`,
   /** @param {string} label */
   duplicateAttachment: label => `Two attachments are labelled "${label}"`,
   /**
@@ -329,15 +328,15 @@ export const textOf = harden({
 /** M5's shapes (session, exec, adapter side). */
 export const m5Shapes = lazyTable({
   /** An endowment, inventory or attachment label (R3-22: 80 characters). */
-  EdgeLabel: () => text(limitsM5.endowmentLabelUnits),
+  EdgeLabel: () => text(limits.endowmentLabelUnits),
   /** One attachment of a message (R3-8): its label and the object. */
   Attachment: () => record({ label: m5Shapes.EdgeLabel, value: M.remotable() }),
   /** A message's attachments (R4-99: 32 slots). */
-  Attachments: () => list(m5Shapes.Attachment, limitsM5.maxAttachments),
+  Attachments: () => list(m5Shapes.Attachment, limits.maxAttachments),
   /** `Composer.submit`'s optional fourth argument (M5). */
   SubmitOptions: () => record({}, { attachments: m5Shapes.Attachments }),
   /** A stored JSON value as `ExecPowersSource` carries it: the model's text. */
-  JsonValue: () => record({ json: text(limitsM5.labelValueBytes) }),
+  JsonValue: () => record({ json: text(limits.labelValueBytes) }),
   /** `ExecPowersSource.lookup` answer: nothing, an object, or stored JSON. */
   PowersValue: () => M.or(done, M.remotable(), m5Shapes.JsonValue),
   /** `ExecScope.run` argument, M5: + the session's `ExecPowersSource`. */
@@ -371,7 +370,7 @@ export const m5Shapes = lazyTable({
       },
       {
         args: staged(text(limits.inlineBytes)),
-        method: text(limitsM5.methodNameUnits),
+        method: text(limits.methodNameUnits),
         content: R('Content'),
       },
     ),
@@ -381,7 +380,7 @@ export const m5Shapes = lazyTable({
       shapes.ToolOutcome,
       record({
         status: 'ok',
-        methods: list(text(limitsM5.methodNameUnits), limitsM5.maxMethodNames),
+        methods: list(text(limits.methodNameUnits), limits.maxMethodNames),
       }),
       record({ status: 'ok', description: shapes.ToolDescription }),
       record({ status: 'exhausted' }),
@@ -408,14 +407,14 @@ export const m5Shapes = lazyTable({
     record(
       {
         path: list(
-          text(limitsM5.pathSegmentUnits),
-          limitsM5.readSourcesPathSegments,
+          text(limits.pathSegmentUnits),
+          limits.readSourcesPathSegments,
         ),
       },
       {
-        startLine: M.and(count, M.lte(limitsM5.readSourcesMaxStartLine)),
-        lineCount: M.and(count, M.lte(limitsM5.readSourcesLineCount)),
-        search: text(limitsM5.searchUnits),
+        startLine: M.and(count, M.lte(limits.readSourcesMaxStartLine)),
+        lineCount: M.and(count, M.lte(limits.readSourcesLineCount)),
+        search: text(limits.searchUnits),
       },
     ),
   /** `SourceReader.read` answer, bounded by the callee (per-field budget). */
@@ -424,8 +423,8 @@ export const m5Shapes = lazyTable({
       { ok: M.boolean() },
       {
         lines: list(
-          record({ line: count, text: text(limitsM5.readSourcesItemUnits) }),
-          limitsM5.readSourcesLineCount,
+          record({ line: count, text: text(limits.readSourcesItemUnits) }),
+          limits.readSourcesLineCount,
         ),
         scanTruncated: M.boolean(),
         outputTruncated: M.boolean(),
@@ -450,7 +449,7 @@ export const m5Widenings = lazyTable({
         input: staged(shapes.SubmissionText),
         at: count,
       },
-      { attachments: list(m5Shapes.EdgeLabel, limitsM5.maxAttachments) },
+      { attachments: list(m5Shapes.EdgeLabel, limits.maxAttachments) },
     ),
   /**
    * W5.3: `RoundRequest.system` may be two parts (the stored prompt,
@@ -464,25 +463,25 @@ export const m5Widenings = lazyTable({
     record(
       { label: shapes.Label },
       {
-        template: text(limitsM5.templateKindUnits),
-        instructions: text(limitsM5.presetInstructionsUnits),
+        template: text(limits.templateKindUnits),
+        instructions: text(limits.presetInstructionsUnits),
         networkPolicy: M.or('off', 'public-internet'),
         modelId: shapes.ModelId,
         reasoningEffort: text(limits.effortUnits),
         objects: list(
           record({
-            kind: text(limitsM5.templateKindUnits),
+            kind: text(limits.templateKindUnits),
             label: m5Shapes.EdgeLabel,
           }),
-          limitsM5.maxTemplateObjects,
+          limits.maxTemplateObjects,
         ),
-        endowmentLabels: list(m5Shapes.EdgeLabel, limitsM5.maxEndowments),
+        endowmentLabels: list(m5Shapes.EdgeLabel, limits.maxEndowments),
         revision: count,
       },
     ),
   /** W5.1: `shapes.SessionServices` gains optional `endowments`. */
   SessionServicesEndowments: () =>
-    list(m5Shapes.Attachment, limitsM5.maxEndowments),
+    list(m5Shapes.Attachment, limits.maxEndowments),
 });
 
 // ---------------------------------------------------------------- interfaces
@@ -543,7 +542,7 @@ export const m5Interfaces = lazyTable({
   ExecPowersSource: () =>
     M.interface('ExecPowersSource', {
       lookup: M.call(shapes.Label).returns(m5Shapes.PowersValue),
-      list: M.call().returns(list(shapes.Label, limitsM5.maxLabels)),
+      list: M.call().returns(list(shapes.Label, limits.maxLabels)),
       store: M.call(
         shapes.Label,
         M.or(M.remotable(), m5Shapes.JsonValue),
@@ -555,7 +554,7 @@ export const m5Interfaces = lazyTable({
     M.interface('SessionGrants', {
       grantTool: M.call(M.remotable()).returns(R('ToolGrant')),
       list: M.call().returns(
-        list(m5Shapes.ToolGrantInfo, limitsM5.maxGrantedTools),
+        list(m5Shapes.ToolGrantInfo, limits.maxGrantedTools),
       ),
     }),
   /** Session vat: one grant; `withdraw` takes effect at the next round. */

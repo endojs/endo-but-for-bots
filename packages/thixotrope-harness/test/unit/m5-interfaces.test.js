@@ -13,7 +13,6 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
 import {
   interfaces,
   m2Interfaces,
@@ -672,8 +671,8 @@ test('every M5 method refuses an oversize string, an oversize array and an extra
 test('a return outside its shape is refused (33 attachments, a long label)', async t => {
   const exo = /** @type {any} */ (
     makeExo('ExecPowersSource', m5Interfaces.ExecPowersSource, {
-      lookup: () => harden({ json: 'x'.repeat(limitsM5.labelValueBytes + 1) }),
-      list: () => harden(Array(limitsM5.maxLabels + 1).fill('a')),
+      lookup: () => harden({ json: 'x'.repeat(limits.labelValueBytes + 1) }),
+      list: () => harden(Array(limits.maxLabels + 1).fill('a')),
       store: () => undefined,
       remove: () => true,
     })

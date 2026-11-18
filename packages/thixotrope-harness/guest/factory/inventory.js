@@ -17,7 +17,7 @@
  *
  * Guest rules: prelude globals only; no sends.
  */
-import { limitsM5 } from '../lib/limits-m5.js';
+import { limits } from '../lib/limits.js';
 import {
   m5FactoryInterfaces,
   texts,
@@ -115,7 +115,7 @@ export const makeInventory = () => {
   const add = (label, value) => {
     assertLabel(label);
     if (byLabel.has(label)) throw Error(textOf.inventoryLabelTaken(label));
-    if (entries.size >= limitsM5.maxInventoryEntries)
+    if (entries.size >= limits.maxInventoryEntries)
       throw Error(texts.inventoryFull);
     const entry = makeEntry(label, value);
     rev += 1;
@@ -136,7 +136,7 @@ export const makeInventory = () => {
         throw Error(textOf.inventoryLabelTaken(label));
       seen.add(label);
     }
-    if (entries.size + items.length > limitsM5.maxInventoryEntries)
+    if (entries.size + items.length > limits.maxInventoryEntries)
       throw Error(texts.inventoryFull);
     const made = items.map(({ label, value }) => makeEntry(label, value));
     if (made.length > 0) rev += 1;
@@ -146,7 +146,7 @@ export const makeInventory = () => {
   /** @param {string} [cursor] */
   const list = cursor => {
     const start = positionOf(cursor);
-    const pageSize = limitsM5.inventoryPageEntries;
+    const pageSize = limits.inventoryPageEntries;
     /** @type {any[]} */
     const rows = [];
     let position = 0;

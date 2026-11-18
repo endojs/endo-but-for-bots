@@ -6,7 +6,7 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
+import { limits } from '../../guest/lib/limits.js';
 import {
   m5FactoryShapes,
   texts,
@@ -140,17 +140,17 @@ test('addAll is all or nothing; 51 are refused by the guard', async t => {
 
 test('at most maxInventoryEntries entries', async t => {
   const { facet, size } = makeInventory();
-  const pages = Math.floor(limitsM5.maxInventoryEntries / 50);
+  const pages = Math.floor(limits.maxInventoryEntries / 50);
   for (let i = 0; i < pages; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     await E(facet).addAll(batch(i * 50, 50));
   }
-  const rest = limitsM5.maxInventoryEntries - pages * 50;
+  const rest = limits.maxInventoryEntries - pages * 50;
   await t.throwsAsync(E(facet).addAll(batch(5000, rest + 1)), {
     message: texts.inventoryFull,
   });
   await E(facet).addAll(batch(5000, rest));
-  t.is(size(), limitsM5.maxInventoryEntries);
+  t.is(size(), limits.maxInventoryEntries);
   await t.throwsAsync(E(facet).add('one-more', thing(0)), {
     message: texts.inventoryFull,
   });

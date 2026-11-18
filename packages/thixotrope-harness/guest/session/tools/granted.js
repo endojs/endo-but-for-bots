@@ -52,7 +52,6 @@ import {
   textOf as m5TextOf,
 } from '../../lib/interfaces-m5.js';
 import { limits } from '../../lib/limits.js';
-import { limitsM5 } from '../../lib/limits-m5.js';
 import { utf8Bytes } from '../../lib/bounded.js';
 import { isStaged } from '../staging.js';
 import { inspectDeadline, inspectFor } from './inspect-client.js';
@@ -211,10 +210,7 @@ export const makeGrants = (
             m5TextOf.toolNameDuplicate(name),
           );
           entries.push(entry);
-        } else if (
-          over ||
-          bytes + grant.bytes > limitsM5.roundGrantedToolBytes
-        ) {
+        } else if (over || bytes + grant.bytes > limits.roundGrantedToolBytes) {
           over = true;
           setState(grant, 'refused-budget', m5TextOf.toolOverBudget(name));
         } else {
@@ -312,7 +308,7 @@ export const makeGrants = (
    *   checks it)
    */
   const grant = (tool, source, label = undefined) => {
-    if (kept.size >= limitsM5.maxGrantedTools) {
+    if (kept.size >= limits.maxGrantedTools) {
       throw Error(m5Texts.grantsFull);
     }
     /** @type {Grant} */

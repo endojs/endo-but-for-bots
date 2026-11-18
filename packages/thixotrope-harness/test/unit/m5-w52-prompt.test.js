@@ -22,7 +22,6 @@ import {
   powersMethodNames,
 } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
 import { utf8Bytes } from '../../guest/lib/bounded.js';
 import {
   capabilityParagraph,
@@ -261,7 +260,7 @@ test('every prompt is the base plus sections, with no stray value (Fae system-pr
     harden({ label: 'p', template: 'chat-only', instructions: 'Be brief.' }),
     harden({
       label: 'max',
-      instructions: 'é'.repeat(limitsM5.presetInstructionsUnits),
+      instructions: 'é'.repeat(limits.presetInstructionsUnits),
     }),
   ];
   for (const isSpoken of [false, true]) {
@@ -294,7 +293,7 @@ test('sizes: the composed prompt is inline; a maximal preset text may be staged'
   // the resolver stages it (M2's path).
   const snapshot = harden({
     label: 'max',
-    instructions: 'é'.repeat(limitsM5.presetInstructionsUnits),
+    instructions: 'é'.repeat(limits.presetInstructionsUnits),
   });
   const big = promptTextFor({}, { presetSnapshot: snapshot });
   t.true(utf8Bytes(big) > limits.inlineBytes);

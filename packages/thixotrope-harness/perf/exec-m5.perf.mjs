@@ -46,7 +46,7 @@ const { E, Far } = await import('@endo/far');
 const { texts, textOf } = await import('../guest/lib/interfaces.js');
 const { texts: textsM5, textOf: textOfM5 } =
   await import('../guest/lib/interfaces-m5.js');
-const { limitsM5 } = await import('../guest/lib/limits-m5.js');
+const { limits } = await import('../guest/lib/limits.js');
 const { makeMembrane } = await import('../guest/exec/membrane.js');
 /* eslint-enable import/no-relative-packages */
 const { makeSlice } = await import('../test/integration/_m1a-slice.js');
@@ -341,7 +341,7 @@ await runPerf('exec-m5', async ({ provision }) => {
       ? result.slice(0, 200)
       : result?.preview?.slice(0, 200);
 
-  const tooLarge = textOfM5.membraneTooLarge(0, limitsM5.membraneArgBytes);
+  const tooLarge = textOfM5.membraneTooLarge(0, limits.membraneArgBytes);
   await probe(
     'probe a',
     15_000,

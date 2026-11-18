@@ -41,7 +41,6 @@ const { E } = await import('@endo/far');
 const { textOf } = await import('../guest/lib/interfaces.js');
 const { textOf: textOfM5 } = await import('../guest/lib/interfaces-m5.js');
 const { limits } = await import('../guest/lib/limits.js');
-const { limitsM5 } = await import('../guest/lib/limits-m5.js');
 /* eslint-enable import/no-relative-packages */
 const { makeSlice, requestId } =
   await import('../test/integration/_m1a-slice.js');
@@ -129,7 +128,7 @@ const script = harden({
 
 /** The arguments of a `store` whose value is `labelValueBytes + 1` bytes. */
 const bigStore = JSON.stringify({
-  value: 'v'.repeat(limitsM5.labelValueBytes - 1),
+  value: 'v'.repeat(limits.labelValueBytes - 1),
   petName: 'big',
 });
 const bigScript = harden({
@@ -289,7 +288,7 @@ const rows = [
           unit: 'ratio of median turn starts (256 labels / none)',
           full: f,
           empty: e,
-          labels: limitsM5.maxLabels,
+          labels: limits.maxLabels,
           windowMs,
           samples: samples.full.length + samples.empty.length,
           by: 'W5.3',
@@ -369,7 +368,7 @@ const rows = [
         return {
           pass:
             result?.result ===
-              textOf.errorResult(textOfM5.labelsFull(limitsM5.maxLabels)) &&
+              textOf.errorResult(textOfM5.labelsFull(limits.maxLabels)) &&
             next.end.status === 'completed',
           result: result?.result,
         };
@@ -384,7 +383,7 @@ const rows = [
             harden({ text: 'x' }),
             requestId(),
             Date.now(),
-            harden(Array(limitsM5.maxAttachments + 1).fill(attachment)),
+            harden(Array(limits.maxAttachments + 1).fill(attachment)),
           )
           .then(
             () => undefined,
@@ -490,7 +489,7 @@ const rows = [
       const grants = await E(granted.session).grants();
       /** @type {any[]} */
       const handles = [];
-      for (let i = 0; i < limitsM5.maxGrantedTools; i += 1) {
+      for (let i = 0; i < limits.maxGrantedTools; i += 1) {
         const tool = await E(fixtures.tools).make(`g${i}`);
         handles.push(await E(grants).grantTool(tool));
       }
@@ -570,7 +569,7 @@ const rows = [
       const ports = harden({ tools: harden([]), since: 1 });
       part.entriesFor(ports);
       const { Far } = /** @type {any} */ (globalThis);
-      for (let i = 0; i < limitsM5.maxGrantedTools; i += 1) {
+      for (let i = 0; i < limits.maxGrantedTools; i += 1) {
         part.facet.grantTool(Far(`g${i}`, {}));
       }
       await new Promise(resolve => setImmediate(resolve));
@@ -587,7 +586,7 @@ const rows = [
           runtime,
         );
         sets.push(performance.now() - t0);
-        if (set.descriptions.length < limitsM5.maxGrantedTools)
+        if (set.descriptions.length < limits.maxGrantedTools)
           throw Error('the Node tool set lost grants');
       }
       const s1 = summarize(sets);

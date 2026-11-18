@@ -12,7 +12,6 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
 import { fitsFrame, messageBytes } from '../../guest/lib/bounded.js';
 import { m5Widenings } from '../../guest/lib/interfaces-m5.js';
 import {
@@ -192,7 +191,7 @@ test('delete, reset and the built-in rules (Fae)', async t => {
 test('at most maxPresets presets, built-ins included', async t => {
   const kit = makePresetCatalog();
   let revision = 0;
-  const room = limitsM5.maxPresets - BUILTIN_PRESETS.length;
+  const room = limits.maxPresets - BUILTIN_PRESETS.length;
   for (let i = 0; i < room; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     ({ revision } = await E(kit.facet).create(
@@ -200,7 +199,7 @@ test('at most maxPresets presets, built-ins included', async t => {
       revision,
     ));
   }
-  t.is(kit.list().length, limitsM5.maxPresets);
+  t.is(kit.list().length, limits.maxPresets);
   await t.throwsAsync(E(kit.facet).create(custom(), revision), {
     message: texts.tooManyPresets,
   });
@@ -555,23 +554,23 @@ const wide = units => '€'.repeat(units);
  */
 const maximalRecord = () =>
   harden({
-    label: wide(limitsM5.presetLabelUnits),
+    label: wide(limits.presetLabelUnits),
     template: 'general',
-    description: wide(limitsM5.presetDescriptionUnits),
-    instructions: wide(limitsM5.presetInstructionsUnits),
+    description: wide(limits.presetDescriptionUnits),
+    instructions: wide(limits.presetInstructionsUnits),
     networkPolicy: 'public-internet',
     backend: scripted,
     modelId: wide(limits.modelIdUnits),
     reasoningEffort: wide(limits.effortUnits),
-    objects: Array.from({ length: limitsM5.maxTemplateObjects }, () =>
+    objects: Array.from({ length: limits.maxTemplateObjects }, () =>
       harden({
-        kind: wide(limitsM5.templateKindUnits),
-        label: wide(limitsM5.endowmentLabelUnits),
+        kind: wide(limits.templateKindUnits),
+        label: wide(limits.endowmentLabelUnits),
       }),
     ),
-    endowments: Array.from({ length: limitsM5.maxEndowments }, (_, i) =>
+    endowments: Array.from({ length: limits.maxEndowments }, (_, i) =>
       harden({
-        label: `${i}${wide(limitsM5.endowmentLabelUnits - 2)}`,
+        label: `${i}${wide(limits.endowmentLabelUnits - 2)}`,
         value: notes,
       }),
     ),
@@ -580,7 +579,7 @@ const maximalRecord = () =>
 test('guard boundary: the maximal guard-accepted record is refused as too large', async t => {
   const record = maximalRecord();
   t.true(matches(record, m5FactoryShapes.PresetRecord));
-  t.true(messageBytes(record) > limitsM5.presetRecordBytes);
+  t.true(messageBytes(record) > limits.presetRecordBytes);
   // Validation stops at the template objects first; the size is the last
   // check, so measure it with objects the template allows.
   const allowed = harden({ ...record, objects: [] });
@@ -600,31 +599,31 @@ test('guard boundary: a record of exactly presetRecordBytes is accepted and its 
   // Three-byte text in every field but the instructions, which take the
   // rest (three-byte units, then one or two ASCII units for the remainder).
   const base = harden({
-    label: wide(limitsM5.presetLabelUnits),
+    label: wide(limits.presetLabelUnits),
     template: 'general',
-    description: wide(limitsM5.presetDescriptionUnits),
+    description: wide(limits.presetDescriptionUnits),
     instructions: '',
     networkPolicy: 'public-internet',
     backend: scripted,
     modelId: wide(limits.modelIdUnits),
     reasoningEffort: wide(limits.effortUnits),
     objects: [{ kind: 'git-workspace', label: 'workspace' }],
-    endowments: Array.from({ length: limitsM5.maxEndowments }, (_, i) =>
+    endowments: Array.from({ length: limits.maxEndowments }, (_, i) =>
       harden({
-        label: `${i}${wide(limitsM5.endowmentLabelUnits - 2)}`,
+        label: `${i}${wide(limits.endowmentLabelUnits - 2)}`,
         value: notes,
       }),
     ),
   });
-  const room = limitsM5.presetRecordBytes - messageBytes(base);
+  const room = limits.presetRecordBytes - messageBytes(base);
   const units = Math.floor(room / 3);
   const instructions = `${wide(units)}${'a'.repeat(room - units * 3)}`;
-  t.true(instructions.length <= limitsM5.presetInstructionsUnits);
+  t.true(instructions.length <= limits.presetInstructionsUnits);
   const record = harden({ ...base, instructions });
   t.true(matches(record, m5FactoryShapes.PresetRecord));
-  t.is(messageBytes(record), limitsM5.presetRecordBytes);
+  t.is(messageBytes(record), limits.presetRecordBytes);
   const normal = normalizePresetRecord(record, { templates });
-  t.is(messageBytes(normal), limitsM5.presetRecordBytes);
+  t.is(messageBytes(normal), limits.presetRecordBytes);
   // One byte more is refused.
   t.throws(
     () =>

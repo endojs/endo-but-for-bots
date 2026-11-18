@@ -57,7 +57,6 @@ import {
   m5Interfaces,
   textOf as textOfM5,
 } from '../../../guest/lib/interfaces-m5.js';
-import { limitsM5 } from '../../../guest/lib/limits-m5.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { utf8Bytes } from '../../../guest/lib/bounded.js';
 import { isRetiredBreak } from '../../../guest/lib/retired.js';
@@ -176,7 +175,7 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
       if (text.trim() === '') throw Error(texts.blankSubmission);
       const attachments = options?.attachments ?? [];
       if (attachments.length > 0) {
-        if (text.length > limitsM5.packageTextUnits) {
+        if (text.length > limits.packageTextUnits) {
           throw Error(textOfM5.packageTooLong(text.length));
         }
         // The session's own checks, with its texts, before anything is

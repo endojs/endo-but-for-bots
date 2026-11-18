@@ -29,7 +29,7 @@
  *
  * Guest rules: prelude globals only; no clock; no sends.
  */
-import { limitsM5 } from '../lib/limits-m5.js';
+import { limits } from '../lib/limits.js';
 import {
   builtInPresetLabels,
   m5FactoryInterfaces,
@@ -282,7 +282,7 @@ export const makePresetCatalog = ({
    */
   const create = (record, expected) => {
     assertCurrent(expected);
-    if (order.length >= limitsM5.maxPresets) throw Error(texts.tooManyPresets);
+    if (order.length >= limits.maxPresets) throw Error(texts.tooManyPresets);
     const normal = normalize(record);
     const preset = makePreset(normal);
     revision += 1;

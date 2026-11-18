@@ -16,7 +16,6 @@ import { join } from 'node:path';
 import { limits } from '../../guest/lib/limits.js';
 import { texts, textOf } from '../../guest/lib/interfaces.js';
 import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
 /* eslint-enable import/no-relative-packages */
 import {
   isRefusal,
@@ -98,7 +97,7 @@ test('the guard refuses 33 attachments; a long text is refused before staging', 
   await t.throwsAsync(() =>
     E(composer).submit(session, 'x', ID, harden({ attachments: many })),
   );
-  const long = 'x'.repeat(limitsM5.packageTextUnits + 1);
+  const long = 'x'.repeat(limits.packageTextUnits + 1);
   await t.throwsAsync(
     () =>
       E(composer).submit(
@@ -116,7 +115,7 @@ test('the guard refuses 33 attachments; a long text is refused before staging', 
   t.deepEqual(filesIn(blobs.blobDir), [], 'nothing was staged');
 });
 
-test('HR-SYN-10: a staged text with refused attachments is refused before anything is staged or sent, with the session\'s texts', async t => {
+test("HR-SYN-10: a staged text with refused attachments is refused before anything is staged or sent, with the session's texts", async t => {
   const blobs = testBlobs();
   t.teardown(blobs.cleanup);
   const { session, calls } = fakeSession();
@@ -142,7 +141,7 @@ test('HR-SYN-10: a staged text with refused attachments is refused before anythi
   t.deepEqual(filesIn(blobs.blobDir), []);
 });
 
-test('isRefusal: only the session\'s state refusals, compared whole; not attachment texts, guard messages or a break (HR-SYN-10)', t => {
+test("isRefusal: only the session's state refusals, compared whole; not attachment texts, guard messages or a break (HR-SYN-10)", t => {
   for (const message of [
     texts.invalidRequestId,
     texts.requestIdExpired,

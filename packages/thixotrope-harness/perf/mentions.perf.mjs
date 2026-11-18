@@ -23,7 +23,7 @@ const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
 installGuestPrelude();
 const { E } = await import('@endo/far');
 /* eslint-disable import/no-relative-packages */
-const { limitsM5 } = await import('../guest/lib/limits-m5.js');
+const { limits } = await import('../guest/lib/limits.js');
 /* eslint-enable import/no-relative-packages */
 const { makeSlice, requestId, sliceTemplate, waitFor } =
   await import('../test/integration/_m1a-slice.js');
@@ -51,7 +51,7 @@ await runPerf('mentions', async ({ provision }) => {
   /** @type {{ label: string, value: any }[]} */
   const attachments = [];
   const t0 = performance.now();
-  for (let i = 0; i < limitsM5.maxAttachments; i += 1) {
+  for (let i = 0; i < limits.maxAttachments; i += 1) {
     const { backend } = await slice.makeBackend(harden({ turns: [] }));
     attachments.push({ label: `obj${i}`, value: backend });
   }
@@ -132,7 +132,7 @@ await runPerf('mentions', async ({ provision }) => {
     budget: { value: Math.min(350, plain.median + 100) },
     extra: {
       what: 'median turn start (turn-start stamp to provider request), 32 attachments',
-      attachments: limitsM5.maxAttachments,
+      attachments: limits.maxAttachments,
       withAttachments,
       plain,
       addedMs: added,

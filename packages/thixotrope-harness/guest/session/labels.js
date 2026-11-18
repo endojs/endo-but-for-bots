@@ -6,7 +6,7 @@
  * read and write it.
  *
  * A `Map` from label to binding, in the session vat heap, bounded by
- * `limitsM5.maxLabels` labels and, for stored JSON, `labelValueBytes` per
+ * `limits.maxLabels` labels and, for stored JSON, `labelValueBytes` per
  * value and `labelJsonBytes` in all (bounds on retained state: `remove`
  * frees a slot and its bytes). Labels are human text (F.2 a) and are Map
  * keys only, never record keys (rule 12.10). Stored JSON stays the model's
@@ -23,7 +23,7 @@
  * Guest rules.
  */
 import { textOf as textOfM5, reservedLabels } from '../lib/interfaces-m5.js';
-import { limitsM5 } from '../lib/limits-m5.js';
+import { limits } from '../lib/limits.js';
 import { utf8Bytes } from '../lib/bounded.js';
 
 /**
@@ -60,7 +60,7 @@ const sources = harden(['preset', 'endowment', 'adopted', 'stored']);
 export const isValidLabel = label =>
   typeof label === 'string' &&
   label.length > 0 &&
-  label.length <= limitsM5.endowmentLabelUnits &&
+  label.length <= limits.endowmentLabelUnits &&
   label.trim() !== '' &&
   label !== '.' &&
   label !== '..' &&
@@ -89,8 +89,8 @@ export const makeLabels = ({ seeds = [] } = {}) => {
   const admit = label => {
     if (!isValidLabel(label)) throw Error(textOfM5.reservedLabel(label));
     if (map.has(label)) throw Error(textOfM5.labelTaken(label));
-    if (map.size >= limitsM5.maxLabels) {
-      throw Error(textOfM5.labelsFull(limitsM5.maxLabels));
+    if (map.size >= limits.maxLabels) {
+      throw Error(textOfM5.labelsFull(limits.maxLabels));
     }
   };
 
@@ -111,11 +111,11 @@ export const makeLabels = ({ seeds = [] } = {}) => {
     admit(label);
     if (typeof text !== 'string') throw Error('a stored value is JSON text');
     const bytes = utf8Bytes(text);
-    if (bytes > limitsM5.labelValueBytes) {
-      throw Error(textOfM5.valueTooLarge(bytes, limitsM5.labelValueBytes));
+    if (bytes > limits.labelValueBytes) {
+      throw Error(textOfM5.valueTooLarge(bytes, limits.labelValueBytes));
     }
-    if (jsonBytes + bytes > limitsM5.labelJsonBytes) {
-      throw Error(textOfM5.storedValuesFull(limitsM5.labelJsonBytes));
+    if (jsonBytes + bytes > limits.labelJsonBytes) {
+      throw Error(textOfM5.storedValuesFull(limits.labelJsonBytes));
     }
     /** @type {Binding} */
     const binding = harden({ kind: 'json', text, bytes });

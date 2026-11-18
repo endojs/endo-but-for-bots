@@ -33,7 +33,7 @@
  * `run` does.
  */
 import { textOf as m1Text } from '../lib/guards/base.js';
-import { limitsM5 } from '../lib/limits-m5.js';
+import { limits } from '../lib/limits.js';
 import { boundToolOutput } from '../lib/bounded.js';
 import {
   EXHAUSTED,
@@ -118,12 +118,12 @@ const readRequestOf = item => {
   if (
     !Array.isArray(path) ||
     path.length < 1 ||
-    path.length > limitsM5.readSourcesPathSegments ||
+    path.length > limits.readSourcesPathSegments ||
     path.some(
       segment =>
         typeof segment !== 'string' ||
         segment.length < 1 ||
-        segment.length > limitsM5.pathSegmentUnits ||
+        segment.length > limits.pathSegmentUnits ||
         /[/\\\0]/.test(segment) ||
         segment === '.' ||
         segment === '..',
@@ -132,18 +132,18 @@ const readRequestOf = item => {
     throw Error(PATH_TEXT);
   const request = {
     path: harden([...path]),
-    startLine: boundedInteger(startLine, 1, limitsM5.readSourcesMaxStartLine),
+    startLine: boundedInteger(startLine, 1, limits.readSourcesMaxStartLine),
     lineCount: boundedInteger(
       lineCount,
-      limitsM5.readSourcesDefaultLines,
-      limitsM5.readSourcesLineCount,
+      limits.readSourcesDefaultLines,
+      limits.readSourcesLineCount,
     ),
   };
   if (search === undefined) return harden(request);
   if (
     typeof search !== 'string' ||
     search.length < 1 ||
-    search.length > limitsM5.searchUnits
+    search.length > limits.searchUnits
   )
     throw Error(SEARCH_TEXT);
   return harden({ ...request, search });
@@ -237,17 +237,14 @@ const describeTool = schema => {
   }
   if (typeof text !== 'string')
     return { reason: 'the parameters are not JSON' };
-  if (text.length > limitsM5.grantedParametersUnits)
+  if (text.length > limits.grantedParametersUnits)
     return {
-      reason: `the parameters are ${text.length} characters of JSON; the limit is ${limitsM5.grantedParametersUnits}`,
+      reason: `the parameters are ${text.length} characters of JSON; the limit is ${limits.grantedParametersUnits}`,
     };
   return {
     description: harden({
       name,
-      description: boundToolOutput(
-        description,
-        limitsM5.grantedDescriptionUnits,
-      ),
+      description: boundToolOutput(description, limits.grantedDescriptionUnits),
       parameters: text,
     }),
   };
@@ -277,7 +274,7 @@ export const makeInspector = ({ writers, content }) => {
       count: names.length,
       names: names
         .filter(name => typeof name === 'string')
-        .slice(0, limitsM5.maxMethodNames),
+        .slice(0, limits.maxMethodNames),
     };
   };
 
@@ -286,7 +283,7 @@ export const makeInspector = ({ writers, content }) => {
     const { names } = await methodNames(target);
     return harden({
       status: 'ok',
-      methods: names.map(name => name.slice(0, limitsM5.methodNameUnits)),
+      methods: names.map(name => name.slice(0, limits.methodNameUnits)),
     });
   };
 
@@ -323,9 +320,9 @@ export const makeInspector = ({ writers, content }) => {
         }
       }
     }
-    const limit = limitsM5.describeDocumentationUnits;
+    const limit = limits.describeDocumentationUnits;
     const description = {
-      methods: names.map(name => name.slice(0, limitsM5.methodNameUnits)),
+      methods: names.map(name => name.slice(0, limits.methodNameUnits)),
       documentation: documentation.slice(0, limit),
       documentationScope,
       example:
@@ -335,9 +332,9 @@ export const makeInspector = ({ writers, content }) => {
       truncated:
         count > names.length ||
         documentation.length > limit ||
-        names.some(name => name.length > limitsM5.methodNameUnits),
+        names.some(name => name.length > limits.methodNameUnits),
     };
-    while (JSON.stringify(description).length > limitsM5.inspectResultUnits) {
+    while (JSON.stringify(description).length > limits.inspectResultUnits) {
       description.truncated = true;
       if (description.documentation.length > 0) {
         description.documentation = description.documentation.slice(
@@ -371,12 +368,12 @@ export const makeInspector = ({ writers, content }) => {
     if (
       !Array.isArray(items) ||
       items.length < 1 ||
-      items.length > limitsM5.readSourcesItems
+      items.length > limits.readSourcesItems
     )
       return failed(ITEMS_TEXT);
     // Leave 100 characters for the outer result envelope and separators.
     const itemBudget = Math.floor(
-      (limitsM5.inspectResultUnits - 100) / items.length,
+      (limits.inspectResultUnits - 100) / items.length,
     );
     /** @type {object[]} */
     const results = [];
@@ -409,14 +406,14 @@ export const makeInspector = ({ writers, content }) => {
             if (typeof line !== 'number') throw Error('not a line');
             if (
               lines.length === readRequest.lineCount ||
-              characters === limitsM5.readSourcesItemUnits
+              characters === limits.readSourcesItemUnits
             ) {
               outputTruncated = true;
               break;
             }
             const rendered = text.slice(
               0,
-              limitsM5.readSourcesItemUnits - characters,
+              limits.readSourcesItemUnits - characters,
             );
             characters += rendered.length;
             lines.push({ line, text: rendered });

@@ -46,7 +46,7 @@ import {
   texts as factoryTexts,
   textOf as factoryTextOf,
 } from '../../guest/lib/interfaces-m5-factory.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
+import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { emit, loadAvg, runIdentity } from '../../perf/_harness.mjs';
 import {
@@ -169,7 +169,7 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
       label: 'R3',
       template: 'general',
       backend,
-      endowments: Array.from({ length: limitsM5.maxEndowments + 1 }, (_, i) =>
+      endowments: Array.from({ length: limits.maxEndowments + 1 }, (_, i) =>
         endow(`e${i}`),
       ),
     },
@@ -341,7 +341,7 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
   if (!terminated && !hubRefused) {
     t.false(big[1]);
     t.true(isStaged(big[0]), 'a cut answer over inlineBytes is staged');
-    t.true(Number(big[0].bytes) <= 3 * limitsM5.inspectResultUnits);
+    t.true(Number(big[0].bytes) <= 3 * limits.inspectResultUnits);
     t.true(big[0].preview.startsWith('{"methods":'));
   }
   emit({

@@ -27,7 +27,6 @@
 
 import { interfaces, shapes, textOf as m1Text } from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
-import { limitsM5 } from '../lib/limits-m5.js';
 import { boundToolOutput, chunkText, utf8Bytes } from '../lib/bounded.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -391,7 +390,7 @@ export const execGuards = () => {
     },
     {
       args: staged(text(limits.inlineBytes)),
-      method: text(limitsM5.methodNameUnits),
+      method: text(limits.methodNameUnits),
       content: M.remotable('Content'),
     },
   );
@@ -399,7 +398,7 @@ export const execGuards = () => {
     shapes.ToolOutcome,
     record({
       status: 'ok',
-      methods: list(text(limitsM5.methodNameUnits), limitsM5.maxMethodNames),
+      methods: list(text(limits.methodNameUnits), limits.maxMethodNames),
     }),
     record({ status: 'ok', description: shapes.ToolDescription }),
     record({ status: 'exhausted' }),

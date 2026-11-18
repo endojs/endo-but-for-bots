@@ -47,7 +47,6 @@ const { execEntry, guestRoot, programPieceBytes, sessionEntry } =
   await import('../scripts/provision-steps.js');
 /* eslint-disable import/no-relative-packages */
 const { limits } = await import('../guest/lib/limits.js');
-const { limitsM5 } = await import('../guest/lib/limits-m5.js');
 const { composeSystemPrompt } =
   await import('../guest/lib/system-prompt-base.js');
 /* eslint-enable import/no-relative-packages */
@@ -78,7 +77,7 @@ const strictRow = async (row, limit) => {
 };
 
 // The largest preset's instructions: 4,096 units of three-byte text.
-const bigInstructions = '漢'.repeat(limitsM5.presetInstructionsUnits);
+const bigInstructions = '漢'.repeat(limits.presetInstructionsUnits);
 
 await runPerf('creation-m5', async ({ provision }) => {
   // ---- session.program, exec.program
@@ -145,7 +144,7 @@ await runPerf('creation-m5', async ({ provision }) => {
 
   // ---- the largest preset: 4,096-unit instructions, 32 endowments
   const labels = Array.from(
-    { length: limitsM5.maxEndowments },
+    { length: limits.maxEndowments },
     (_, i) => `e${String(i).padStart(2, '0')}`,
   );
   const held = new Set(

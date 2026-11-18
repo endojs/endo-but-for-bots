@@ -20,7 +20,7 @@ import {
   texts as m5Texts,
   textOf as m5TextOf,
 } from '../../guest/lib/interfaces-m5.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
+import { limits } from '../../guest/lib/limits.js';
 import { makeSession } from '../../guest/session/session.js';
 import { m5Parts } from '../../guest/session/m5-parts.js';
 import {
@@ -296,7 +296,7 @@ test('past roundGrantedToolBytes the newest grants are refused-budget', async t 
   await drain();
   const set = roundOf(ports, runtime);
   const fit = Math.floor(
-    limitsM5.roundGrantedToolBytes / (each + 3 + '{"type":"object"}'.length),
+    limits.roundGrantedToolBytes / (each + 3 + '{"type":"object"}'.length),
   );
   const list = states(part);
   t.is(list.filter(([, s]) => s === 'offered').length, fit);
@@ -314,7 +314,7 @@ test('the 33rd grant is refused with grantsFull; withdrawing makes room', t => {
   const { part } = makePart();
   /** @type {any[]} */
   const grants = [];
-  for (let i = 0; i < limitsM5.maxGrantedTools; i += 1) {
+  for (let i = 0; i < limits.maxGrantedTools; i += 1) {
     grants.push(part.facet.grantTool(makeTool(`g${i}`)));
   }
   t.throws(() => part.facet.grantTool(makeTool('extra')), {
@@ -322,7 +322,7 @@ test('the 33rd grant is refused with grantsFull; withdrawing makes room', t => {
   });
   grants[0].withdraw();
   t.notThrows(() => part.facet.grantTool(makeTool('extra')));
-  t.is(part.size(), limitsM5.maxGrantedTools);
+  t.is(part.size(), limits.maxGrantedTools);
 });
 
 test('schema refusals: the inspector text, or wrapped; refused-schema grants are never offered', async t => {

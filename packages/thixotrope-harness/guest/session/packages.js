@@ -32,7 +32,7 @@
  * Guest rules.
  */
 import { textOf } from '../lib/interfaces-m5.js';
-import { limitsM5 } from '../lib/limits-m5.js';
+import { limits } from '../lib/limits.js';
 import { isValidLabel } from './labels.js';
 
 /**
@@ -52,7 +52,7 @@ import { isValidLabel } from './labels.js';
  * @param {readonly { label: string }[]} attachments
  */
 export const checkAttachments = (submission, attachments) => {
-  if (attachments.length > limitsM5.maxAttachments) {
+  if (attachments.length > limits.maxAttachments) {
     throw Error(textOf.tooManyAttachments(attachments.length));
   }
   /** @type {Set<string>} */
@@ -62,7 +62,7 @@ export const checkAttachments = (submission, attachments) => {
     if (seen.has(label)) throw Error(textOf.duplicateAttachment(label));
     seen.add(label);
   }
-  const max = limitsM5.packageTextUnits;
+  const max = limits.packageTextUnits;
   const { text } = submission;
   if (typeof text === 'string') {
     if (text.length > max) throw Error(textOf.packageTooLong(text.length));

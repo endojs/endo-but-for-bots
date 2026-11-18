@@ -13,7 +13,6 @@ import {
   textOf as textOfM5,
 } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
 import { seedsFor } from '../../guest/session/label-seeds.js';
 import { isValidLabel, makeLabels } from '../../guest/session/labels.js';
 import { makeRuntime, requiredParts } from '../../guest/session/m5-parts.js';
@@ -79,7 +78,7 @@ test('no silent overwrite; remove frees the label', t => {
 
 test('256 labels at most; a removal frees a slot', t => {
   const labels = makeLabels();
-  for (let i = 0; i < limitsM5.maxLabels; i += 1) labels.bindJson(`k${i}`, '1');
+  for (let i = 0; i < limits.maxLabels; i += 1) labels.bindJson(`k${i}`, '1');
   t.is(labels.size(), 256);
   t.throws(() => labels.bindJson('one-more', '1'), {
     message: textOfM5.labelsFull(256),

@@ -12,7 +12,6 @@ import test from '@endo/ses-ava/test.js';
 import { textOf } from '../../guest/lib/interfaces.js';
 import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
 import { makeLabels } from '../../guest/session/labels.js';
 import { m5Parts, makeRuntime } from '../../guest/session/m5-parts.js';
 import { makePowersSource } from '../../guest/session/powers-source.js';
@@ -70,11 +69,11 @@ test('ExecPowersSource refusals are the label map texts', t => {
     message: textOfM5.reservedLabel('a/b'),
   });
   // A non-ASCII value: under the guard's unit bound, over the byte bound.
-  const big = 'é'.repeat(limitsM5.labelValueBytes / 2 + 1);
+  const big = 'é'.repeat(limits.labelValueBytes / 2 + 1);
   t.throws(() => source.store('big', harden({ json: big })), {
     message: textOfM5.valueTooLarge(
       Buffer.byteLength(big),
-      limitsM5.labelValueBytes,
+      limits.labelValueBytes,
     ),
   });
   // The guard: a record that is neither an object nor `{ json }`.

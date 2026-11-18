@@ -8,7 +8,6 @@
  * this module's entries and those of `./base.js`, the same objects.
  */
 import { limits } from '../limits.js';
-import { limitsM5 } from '../limits-m5.js';
 import {
   text,
   list,
@@ -324,8 +323,8 @@ const m1aShapeBuilders = {
       // message's attachments (R3-8, R4-29), never the objects.
       {
         attachments: list(
-          text(limitsM5.endowmentLabelUnits),
-          limitsM5.maxAttachments,
+          text(limits.endowmentLabelUnits),
+          limits.maxAttachments,
         ),
       },
     ),
@@ -457,21 +456,21 @@ const m1aShapeBuilders = {
     record(
       { label: S.Label },
       {
-        template: text(limitsM5.templateKindUnits),
-        instructions: text(limitsM5.presetInstructionsUnits),
+        template: text(limits.templateKindUnits),
+        instructions: text(limits.presetInstructionsUnits),
         networkPolicy: M.or('off', 'public-internet'),
         modelId: S.ModelId,
         reasoningEffort: text(limits.effortUnits),
         objects: list(
           record({
-            kind: text(limitsM5.templateKindUnits),
-            label: text(limitsM5.endowmentLabelUnits),
+            kind: text(limits.templateKindUnits),
+            label: text(limits.endowmentLabelUnits),
           }),
-          limitsM5.maxTemplateObjects,
+          limits.maxTemplateObjects,
         ),
         endowmentLabels: list(
-          text(limitsM5.endowmentLabelUnits),
-          limitsM5.maxEndowments,
+          text(limits.endowmentLabelUnits),
+          limits.maxEndowments,
         ),
         revision: count,
       },
@@ -550,10 +549,10 @@ const m1aShapeBuilders = {
         execVat: M.remotable('ExecHandle'),
         endowments: list(
           record({
-            label: text(limitsM5.endowmentLabelUnits),
+            label: text(limits.endowmentLabelUnits),
             value: M.remotable(),
           }),
-          limitsM5.maxEndowments,
+          limits.maxEndowments,
         ),
       },
     ),

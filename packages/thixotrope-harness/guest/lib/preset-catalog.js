@@ -9,13 +9,12 @@
  * `title`; an endowment is `{ label, value }` without Fae's `sourcePath`
  * (the value is the object); a model default names the `Backend` object,
  * not a backend id; empty model and effort texts are left out. The whole
- * record is bounded by `limitsM5.presetRecordBytes` (section 1.3), checked
+ * record is bounded by `limits.presetRecordBytes` (section 1.3), checked
  * last.
  *
  * Pure: no state, no sends. Runs in the factory vat and in Node.
  */
 import { limits } from './limits.js';
-import { limitsM5 } from './limits-m5.js';
 import { fitsFrame } from './bounded.js';
 import { reservedLabels } from './interfaces-m5.js';
 import { texts, textOf } from './interfaces-m5-factory.js';
@@ -129,7 +128,7 @@ const textField = (value, what, max, empty = true) => {
 export const isEdgeLabel = value => {
   if (
     typeof value !== 'string' ||
-    value.length > limitsM5.endowmentLabelUnits ||
+    value.length > limits.endowmentLabelUnits ||
     !value.trim()
   )
     return false;
@@ -149,7 +148,7 @@ harden(isEdgeLabel);
 const edgeLabel = value => {
   if (typeof value !== 'string' || !isEdgeLabel(value)) {
     // Fae checks the text first ("Invalid endowment name"), then the rule.
-    textField(value, 'endowment name', limitsM5.endowmentLabelUnits, false);
+    textField(value, 'endowment name', limits.endowmentLabelUnits, false);
     throw Error(textOf.reservedEndowment(/** @type {string} */ (value)));
   }
   return value;
@@ -192,7 +191,7 @@ export const normalizePresetRecord = (record, { templates, backendKind }) => {
   const label = textField(
     record.label,
     'preset title',
-    limitsM5.presetLabelUnits,
+    limits.presetLabelUnits,
     false,
   );
   const template = templateOf(templates, record.template);
@@ -201,9 +200,9 @@ export const normalizePresetRecord = (record, { templates, backendKind }) => {
   const givenEndowments = record.endowments ?? [];
   if (
     !Array.isArray(givenObjects) ||
-    givenObjects.length > limitsM5.maxTemplateObjects ||
+    givenObjects.length > limits.maxTemplateObjects ||
     !Array.isArray(givenEndowments) ||
-    givenEndowments.length > limitsM5.maxEndowments
+    givenEndowments.length > limits.maxEndowments
   )
     throw Error(texts.invalidEndowments);
   /** @type {Set<string>} */
@@ -274,12 +273,12 @@ export const normalizePresetRecord = (record, { templates, backendKind }) => {
     description: textField(
       record.description ?? '',
       'description',
-      limitsM5.presetDescriptionUnits,
+      limits.presetDescriptionUnits,
     ),
     instructions: textField(
       record.instructions ?? '',
       'instructions',
-      limitsM5.presetInstructionsUnits,
+      limits.presetInstructionsUnits,
     ),
     networkPolicy,
     objects: harden(objects),
@@ -289,7 +288,7 @@ export const normalizePresetRecord = (record, { templates, backendKind }) => {
   if (modelId) result.modelId = modelId;
   if (reasoningEffort) result.reasoningEffort = reasoningEffort;
   const normal = /** @type {PresetData} */ (harden(result));
-  if (!fitsFrame(normal, limitsM5.presetRecordBytes))
+  if (!fitsFrame(normal, limits.presetRecordBytes))
     throw Error(texts.presetTooLarge);
   return normal;
 };

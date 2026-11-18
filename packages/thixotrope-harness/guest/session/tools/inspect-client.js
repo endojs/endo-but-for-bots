@@ -37,7 +37,7 @@
  */
 import { texts, textOf } from '../../lib/guards/session.js';
 import { texts as m5Texts } from '../../lib/interfaces-m5.js';
-import { limitsM5 } from '../../lib/limits-m5.js';
+import { limits } from '../../lib/limits.js';
 import { isRetiredBreak } from '../../lib/retired.js';
 import { NOT_RUN_TEXT, execStateOf, retireScope, takeScope } from './exec.js';
 
@@ -74,7 +74,7 @@ const inFlight = state => {
 
 /** @param {any} state */
 const pump = state => {
-  let room = limitsM5.inspectWindow - inFlight(state);
+  let room = limits.inspectWindow - inFlight(state);
   for (const call of state.inspecting) {
     if (room <= 0) return;
     if (!call.started) {

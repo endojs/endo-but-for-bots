@@ -33,7 +33,6 @@ import { E } from '@endo/far';
 import { textOf } from '../../guest/lib/interfaces.js';
 import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
 /* eslint-enable import/no-relative-packages */
 import {
   crankBudget,
@@ -135,7 +134,7 @@ const script = harden({
 
 /** The arguments of a `store` whose value is `labelValueBytes + 1` bytes. */
 const bigStore = JSON.stringify({
-  value: 'v'.repeat(limitsM5.labelValueBytes - 1),
+  value: 'v'.repeat(limits.labelValueBytes - 1),
   petName: 'big',
 });
 const bigScript = harden({
@@ -249,7 +248,7 @@ run(
     t.is(fillResults.filter(r => r.failed).length, 1);
     t.deepEqual(
       fillResults.filter(r => r.failed).map(r => r.result),
-      [textOf.errorResult(textOfM5.labelsFull(limitsM5.maxLabels))],
+      [textOf.errorResult(textOfM5.labelsFull(limits.maxLabels))],
     );
 
     // ---- a value over labelValueBytes: staged arguments, refused

@@ -47,7 +47,7 @@
  * sequence is not; model code can drip distinct keys into another vat over
  * many calls.
  */
-import { limitsM5 } from '../lib/limits-m5.js';
+import { limits } from '../lib/limits.js';
 import { texts, textOf } from './render.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -131,7 +131,7 @@ const isPromise = value => value instanceof Promise;
  */
 export const measureArguments = (
   args,
-  { bounds = limitsM5, swap = value => value } = {},
+  { bounds = limits, swap = value => value } = {},
 ) => {
   const {
     membraneArgBytes,
@@ -272,10 +272,10 @@ const answerBeyondDepth = value => {
 /**
  * The membrane of one exec call.
  *
- * @param {{ callE: any, limits?: MembraneBounds }} options `callE` is the
+ * @param {{ callE: any, bounds?: MembraneBounds }} options `callE` is the
  *   call's `E` (it sends nowhere once the call is closed)
  */
-export const makeMembrane = ({ callE, limits = limitsM5 }) => {
+export const makeMembrane = ({ callE, bounds = limits }) => {
   /** @type {WeakMap<object, any>} wrapper -> target */
   const targets = new WeakMap();
   /** @type {WeakMap<object, object>} target -> wrapper (one per call) */
@@ -382,7 +382,7 @@ export const makeMembrane = ({ callE, limits = limitsM5 }) => {
     let measured;
     try {
       measured = measureArguments(args, {
-        bounds: limits,
+        bounds,
         swap: real === undefined ? unwrap : unwrapLeaving,
       });
     } catch (error) {

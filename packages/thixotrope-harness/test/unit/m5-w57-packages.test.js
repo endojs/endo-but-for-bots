@@ -13,7 +13,7 @@ import test from '@endo/ses-ava/test.js';
 /* eslint-disable import/no-relative-packages */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
 import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
-import { limitsM5 } from '../../guest/lib/limits-m5.js';
+import { limits } from '../../guest/lib/limits.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeQueue } from '../../guest/session/queue.js';
 import { makeSession } from '../../guest/session/session.js';
@@ -148,7 +148,7 @@ test('checkAttachments refuses before anything is written', t => {
       message: textOfM5.reservedLabel(bad),
     });
   }
-  const max = limitsM5.packageTextUnits;
+  const max = limits.packageTextUnits;
   t.notThrows(() =>
     checkAttachments(harden({ text: 'é'.repeat(max) }), attach(['a'])),
   );
