@@ -8655,3 +8655,43 @@ hundred names, ever" (4.4 rule 4) does not cover. Proposed: a method-name set co
 same interface guards (the keys of `methodGuards`), refusing other names before decode, and
 refusing `symbol` encodings outside it. Whether Ironhorse's name table counts registered symbols
 is the engine's to answer.
+
+### J-9630 2026-11-18 M3-FIX method-name guard (rule 4a) - built
+Evidence: `GW/vocabulary.js` `collectNames` walks the same patterns as the key vocabulary and also
+keeps the keys of every interface guard's `methodGuards`: 258 keys and 140 method names from the
+lane's `interfaces.js` and `interfaces-m*.js` (adapter test, about 40 ms). `GW/guard.js` refuses,
+before decode, `unknown method` for a call or property get toward a target that is not
+gateway-local (vat presences and every pipelined answer) whose name is not in the set, a function
+application toward one, and any `@qclass: 'symbol'` (method position or argument) whose name is
+not in the set. Every method the UI, the integration tests and the browser tests send was checked
+against the set: only the fixture extension's (`ping`, `echoLarge`, `sameWriter`, all on
+gateway-local objects) and the operator's `gateway` (not browser-reachable) are outside it.
+Reading: good fit: the names a page can make a vat register are now the fixed contract set (J-9621
+closed at the gateway). Cost: one Set lookup per call; the guard perf row was not rerun.
+
+### J-9631 2026-11-18 M3-FIX controller race (acceptance 12) and preset rows (R6-39) - built
+Evidence: `openView` unmaps queue entries before its `watch()` answers while the old rows stay on
+screen; Send now, Edit and Delete now wait once for the new snapshot (`viewReady`, settled by
+`applyWatch`, a failed watch or a newer open) and only then report `no queued entry`. A unit
+test re-opens the view and clicks in the window: it fails without the change ("no queued entry")
+and passes with it. Preset rows now copy `description` and `reasoningEffort` from
+`Preset.describe()`; the R6-39 dialog test drops its test-only view and goes through the real
+controller row.
+
+### J-9632 2026-11-18 M3-FIX live 1 MiB reply expands without a reload (acceptance 8) - built
+Evidence: at `end`/`abort` the controller re-reads the newest history page and merges that turn's
+records (the live `turn-start` record and the fold are kept); `transcript.js` shows the fold with
+the records' assistant texts and tool results where they pair one to one (the staged field, so
+Show all reads the full reply), and the records alone otherwise. `m3-ui-history` now checks Show
+all on the live page, with no reload.
+Reading: fair fit: the live channel carries previews by design (bounded deltas), so one extra
+`getHistoryPage` crank per settled turn buys the full text; thoughts stay because the fold keeps
+them.
+
+### J-9633 2026-11-18 M3-FIX typecheck, slot module, test hygiene - built
+Evidence: the UI bundle starts with `// @ts-nocheck`, so a build adds no errors to `lint:types`
+(258 before); the 12 errors in `../captp`, `../ocapn`, `../eventual-send`, `../promise-kit` remain
+(tsconfig is the PM's). `selectSlot` moved to `ui/src/slot-order.js`; the sessions and
+conversation slot copies are now re-exports of the shell's `Slot` (no Node deadlock: the 105 UI
+unit tests load them). Fake `pageFrom` no longer offers Load earlier on an empty session (test
+fails without the fix). `m3-ui-shell` runs serially. Gateway tests use loopback addresses only.
