@@ -55,7 +55,8 @@ const [
   { sealTo },
   { codexAccountOf, formatCredential, jwtClaims },
   { providerEndpoints },
-  { names, secretsByLabel },
+  { names },
+  { secretsByLabel },
 ] = await Promise.all([
   import('@endo/far'),
   // eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
@@ -64,6 +65,7 @@ const [
   import('../resources/agent-host/impl/subscriptions/credentials.js'),
   import('../resources/agent-host/impl/subscriptions/index.js'),
   import('./provision-steps.js'),
+  import('./provision-steps/40-subscriptions.js'),
 ]);
 
 /** Token answers are small JSON; anything larger is refused. */
