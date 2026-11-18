@@ -748,7 +748,7 @@ operator inventory and @-mentions.
   `H/guest/session/{labels,label-seeds,m5-parts,powers-source,packages}.js`,
   `H/guest/session/tools/{objects,inspection,inspect-client,granted,mentions}.js`,
   `H/guest/exec/{powers,membrane,inspect}.js`, `H/test/fixtures/m5-objects.js`, `H/ui/src/presets/`,
-  `H/ui/src/mentions/`, `H/test/*/m5-*`, `H/perf/{tools,exec-m5,presets,mentions}.perf.mjs`;
+  `H/ui/src/mentions/`, `H/test/*/m5-*` (in `test/browser/` only `m5-*.mjs`), `H/perf/{tools,exec-m5,presets,mentions,creation-m5}.perf.mjs`;
   `H/guest/session/prompt.js` (from M2) and `H/guest/lib/system-prompt-base.js`; the M2, M1b and
   M1a files M5 edits are assigned per unit in `m5-interfaces.md` section 7, and the lines it adds
   to files M3 or M4 may also edit are the seams of its section 9.1.
@@ -760,29 +760,30 @@ and answers a bounded, rendered result; D-M5-2), and model code reaches other va
 through a per-call membrane that bounds every message (D-M5-3). Core requests CC-070..CC-073 and
 owner decisions O-1..O-12 are in its section 9.
 
-**Work units** (W5.0 first, done; then group A in parallel; then group B in parallel, W5.8 also
-after M3's W3.0; then W5.9; hours for one Opus agent; files and reasons in the contract,
-section 7)
+**Work units** (W5.0 first, done and settled after the M3/M4/M5 cross-check; then group A in
+parallel; then group B in parallel; then W5.9; hours for one Opus agent; files and reasons in the
+contract, section 7; merge order M3, M4, M5, with W5.3's first commit allowed early)
 
 | id | files | behaviour | tests | hours |
 |---|---|---|---|---|
-| W5.0 contract | `designs/m5-interfaces.md`, `guest/lib/{interfaces-m5,interfaces-m5-factory,limits-m5}.js` | **Done**. Objects, seams, units, acceptance, perf, hotspots | the guards build and match samples (W5.0 check in Node); the contract test is W5.3's | - |
-| W5.1 presets and inventory (A) | `guest/factory/{presets,inventory,preset-templates}.js`, `guest/lib/preset-catalog.js`; edits `factory.js` (H-1..H-3), `services.js` (append), `scripts/export.mjs` | catalogue and `Preset` objects (no ids), revision compare-and-set, built-ins and reset, Fae's validation texts, defaults rule R3-20, creation from a preset (defaults, data snapshot, endowments at the snapshot's revision), minimal inventory, presets in export/import | unit: ported `preset-catalog.test.js`; integration `m5-presets` (acceptance 2, 13, 14; kill points K1, K2) | 6 |
+| W5.0 contract | `designs/m5-interfaces.md`, `guest/lib/{interfaces-m5,interfaces-m5-factory,limits-m5}.js` | **Done**. Objects, seams, units, acceptance, perf, hotspots; settled: `vocabularyShapes()` in both interface files, UI by `feature.js` directories, the mention addon on M3's `composer.addon`, `presetRecordBytes` | the guards build and match samples (W5.0 check in Node); the contract test is W5.3's | - |
+| W5.1 presets and inventory (A) | `guest/factory/{presets,inventory,preset-templates}.js`, `guest/lib/preset-catalog.js`; edits `factory.js` (H-1..H-3), `services.js` (append), `scripts/export.mjs`; `perf/presets.perf.mjs` | catalogue and `Preset` objects (no ids), revision compare-and-set, built-ins and reset, Fae's validation texts plus the whole-record bound `presetRecordBytes`, defaults rule R3-20, creation from a preset (defaults, data snapshot, endowments at the snapshot's revision), minimal inventory, presets in export/import | unit: ported `preset-catalog.test.js`, the guard-boundary test of the maximal record; integration `m5-presets` (acceptance 2, 13, 14; kill points K1, K2) | 6 |
 | W5.2 prompt composition (A) | `guest/session/prompt.js`, `guest/lib/{system-prompt-base,prompt-sections}.js` | parts in order through the section table (1, 2 rewritten for M5's `powers`, 3 empty, 7); parts 4-6 left to M9, M12, M6 | unit: ported `system-prompts.test.js`; integration `m5-prompt` (acceptance 9) | 3 |
-| W5.3 session seams, labels, local object tools (A) | the four widenings in `interfaces.js` (first commit); `guest/lib/tool-args.js`, `guest/session/{labels,label-seeds,m5-parts}.js`, `tools/objects.js`; edits `turn.js`, `turn-hooks.js`, `tool-table.js`, `session.js`, `AH/providers/{round,scripted}.js` | one label map per session; `list`, `lookup`, `store`, `remove` in the session vat with `parseClosedArgs` (no `JSON.parse`); tools re-read every round; the per-turn system note; claim hooks; the M5 `Session` guard with forwards | unit: the contract test, closed-args floods, a 256-call `store` round at the slot ceiling; integration `m5-labels` (acceptance 3, local part) | 7 |
+| W5.3 session seams, labels, local object tools (A) | the four widenings in `interfaces.js` (first commit, may merge early); `guest/lib/tool-args.js`, `guest/session/{labels,label-seeds,m5-parts}.js`, `tools/objects.js`; edits `turn.js`, `turn-hooks.js`, `tool-table.js`, `session.js`, `AH/providers/{round,scripted}.js`; `perf/tools.perf.mjs` (runner and `rows`) | one label map per session; `list`, `lookup`, `store`, `remove` in the session vat with `parseClosedArgs` (no `JSON.parse`); tools re-read every round; the per-turn system note; claim hooks; the M5 `Session` guard with forwards | unit: the contract test (with `vocabularyShapes`), closed-args floods, a 256-call `store` round at the slot ceiling; integration `m5-labels` (acceptance 3, local part) | 7 |
 | W5.4 exec side (A) | edits `guest/exec/{main,render}.js`, `guest/session/tools/exec.js`; `guest/exec/{powers,membrane,inspect}.js`, `guest/session/tools/inspect-client.js`, `test/fixtures/m5-objects.js` | per-call `powers` (`lookup`, `list`, `store`, `remove`) that die with the call; the membrane; `ExecScope.inspect` (`methods`, `describe`, `readSources`, `toolSchema`, `toolExecute`) with Fae's bounds; the session's inspector client | unit (exec program in Node with fakes) | 7 |
-| W5.5 powers and inspection tools (B) | `guest/session/powers-source.js`, `tools/inspection.js`; appends `tool-table.js`, `m5-parts.js`, `provision-steps.js` | `ExecPowersSource`; `describeCapability`, `readSources`, `lookup` of objects through the inspector; endowments seen by the model | integration `m5-objects` (acceptance 3, 4, 5, 8; K7), `m5-security` (acceptance 10) | 5 |
-| W5.6 granted tools (B) | `guest/session/tools/granted.js`; appends `tool-table.js` (`toolSources`), `m5-parts.js` | `Session.grants()`, `grantTool`, `withdraw`; discovery every round (built-in names, duplicates both refused, size budget); calls through the inspector | integration `m5-grants` (acceptance 6), `m5-grants-restart` (acceptance 11b) | 5 |
-| W5.7 packages and mentions (B) | `guest/session/packages.js`, `tools/mentions.js`; edits `queue.js`, `submissions.js`, `guest/lib/pending-queue.js`, `AH/composer.js`; appends `turn-hooks.js`, `tool-table.js`, `m5-parts.js` | `enqueueMessageOnce`, `Composer.submit(..., { attachments })`, packages per turn, the R4-29 line, `adopt`, `adoptTool`, release at settle and in recovery | integration `m5-mentions` (acceptance 7), `m5-mentions-restart` (acceptance 11a) | 6 |
-| W5.8 preset and mention UI (B, after W3.0) | `ui/src/{presets,mentions}/`, entries in M3's `features.js` and key-guard registry | the preset editor (R6-55) shared across devices; composer `@` autocomplete over the inventory with chips | browser `test/browser/m5-*.mjs` (acceptance 15) | 6 |
-| W5.9 integration | every file after group B | the runtime wiring left (no `notBuilt` stub), the bundle budget (O-1), the merge seams with M3 and M4 | integration `m5-snapshot` (acceptance 1, 9 part 7), `m5-reachability` (acceptance 12); every perf row | 6 |
+| W5.5 powers and inspection tools (B) | `guest/session/powers-source.js`, `tools/inspection.js`; appends `tool-table.js`, `m5-parts.js`, `provision-steps.js` (M5 fixture step, a no-op unless `options.m5Fixtures`); `perf/exec-m5.perf.mjs`, the `tools.inspect` row of `tools.perf.mjs` | `ExecPowersSource`; `describeCapability`, `readSources`, `lookup` of objects through the inspector; endowments seen by the model | integration `m5-objects` (acceptance 3, 4, 5, 8; K7), `m5-security` (acceptance 10) | 5 |
+| W5.6 granted tools (B) | `guest/session/tools/granted.js`; appends `tool-table.js` (`toolSources`), `m5-parts.js`, the `grants.round` row of `tools.perf.mjs` | `Session.grants()`, `grantTool`, `withdraw`; discovery every round (built-in names = static table plus the round's adapter tools, duplicates both refused, size budget); calls through the inspector | unit: a grant named `accountStatus` on ports offering it is refused-builtin; integration `m5-grants` (acceptance 6), `m5-grants-restart` (acceptance 11b) | 5 |
+| W5.7 packages and mentions (B) | `guest/session/packages.js`, `tools/mentions.js`; edits `queue.js`, `submissions.js`, `guest/lib/pending-queue.js`, `AH/composer.js`; appends `turn-hooks.js`, `tool-table.js`, `m5-parts.js`; `perf/mentions.perf.mjs` | `enqueueMessageOnce`, `Composer.submit(..., { attachments })`, packages per turn, the R4-29 line, `adopt`, `adoptTool`, release at settle and in recovery | integration `m5-mentions` (acceptance 7), `m5-mentions-restart` (acceptance 11a) | 6 |
+| W5.8 preset and mention UI (B; component tests after M3's W3.4 is in the shared branch, browser test after M3 merges) | new `ui/src/presets/feature.js` (`app.panel`), `ui/src/mentions/feature.js` (`composer.addon` with `send`, `message.renderer` chips); `test/unit/m5-w58-*.test.js`; `test/browser/m5-*.mjs`; no M3 file edited | the preset editor (R6-55) shared across devices, refusing an over-size record before sending; composer `@` autocomplete over the inventory with chips, sent through `Composer.submit`'s fourth argument on first send and resend; attachment chips in the transcript | unit with M3's `_m3-fake-powers.js`; browser on M3's `startBrowserGateway` (acceptance 15) | 6 |
+| W5.9 integration | every file after group B; `perf/creation-m5.perf.mjs` | the runtime wiring left (no `notBuilt` stub), the bundle budget (O-1: the PM raises the limits to 240,000 / 120,000 in the M5 merge commit), the merge seams with M3 and M4 as landed | integration `m5-snapshot` (acceptance 1, 9 part 7), `m5-reachability` (acceptance 12); every perf row; the regression wall time | 6 |
 
 **Acceptance tests** (each one integration test of at most 5 minutes; details and the file of
 each in `m5-interfaces.md` 8.1)
 1. A session keeps its prompt and its endowed labels after its preset is edited; a new session
    gets the edit (R3-7, R4-4, R4-28).
 2. Two clients edit the catalogue: a save at a stale revision is refused with Fae's text; a
-   built-in cannot be deleted, only reset; a save survives a SIGKILL exactly once.
+   built-in cannot be deleted, only reset; an over-size record is refused; a save survives a
+   SIGKILL exactly once.
 3. `list`, `lookup` (a stored value; an object rendered as a remote capability without calling
    it), `store` across a SIGKILL restart, `remove`, an unheld label, the 257th label and an
    unknown argument key are each answered as specified.
@@ -808,29 +809,37 @@ each in `m5-interfaces.md` 8.1)
     catalogue, the inventory, the Operator, the factory or any admin facet (`thix reachability`).
 13. Inventory add, page, relabel and remove; a duplicate label refused.
 14. Export and import carry user presets (without endowments) (M2 acceptance 14's presets).
-15. Browser: a preset saved on one device appears on another; a stale save is refused; `@`
-    autocomplete attaches an inventory object.
+15. Browser (after M3 merges, `THIX_HARNESS_BROWSER=1`): a preset saved on one device appears on
+    another; a stale save is refused; `@` autocomplete attaches an inventory object and the
+    transcript shows its chip; a resend after a reload whose chips were lost is refused with a
+    fixed text and the draft kept.
+
+P-52 mapping rows for M12: named references and directories map to M5 acceptance 3 and 13;
+plugin installation with explicit powers maps to M5 acceptance 8.
 
 **Perf checks** (fixed windows: each measured point is a latency or rate over 60 s unless stated;
-no check builds a long session or runs over 10 minutes; reasons in `m5-interfaces.md` 8.2)
-| check | budget |
-|---|---|
-| `tools.local` four session-local object tools in one round, over an `echo` round (60 s) | median <= +30 ms; 0 extra session deliveries |
-| `tools.inspect` `describeCapability` through the inspector (60 s) | median <= 300 ms |
-| `exec.powersLookup` per `E(powers).lookup` (60 s) | median <= 150 ms |
-| `exec.membrane` wrapped call over a raw call (60 s) | <= +5 ms |
-| `exec.scope1000` trivial call in a scope with 1,000 globals (60 s) | median <= 300 ms |
-| `prompt.compose` Node (1,000 compositions); creation with the largest preset vs `chat-only` (10 creations, pool 4) | <= 5 ms; <= +150 ms and <= 750 ms |
-| `presets.save` round trip (60 s) | median <= 150 ms |
-| `inventory.page` 50 rows of 1,000 entries made by `addAll` (60 s) | median <= 200 ms |
-| `mentions.turnStart` 32 attachments vs none (60 s each) | <= +100 ms, <= 350 ms, <= 3 deliveries |
-| `grants.round` turn start with 32 offered grants (60 s) | median <= 350 ms |
-| `labels.full` turn start with 256 labels vs none (60 s each) | <= 1.1 x |
-| `session.program`, `exec.program` bundle bytes; `session.createCold` (5 creations) | the limits after O-1; <= 6 s |
-| too-big probes (each <= 60 s): 100 KiB through the membrane, 200 KB `help`, 20,000-key answer, oversize `store`, 257th label, 33 attachments, oversize granted schema, exec 300 k iterations ok and 10 x the crank ceiling terminated | no halt of the session vat or the target's vat |
+a comparison alternates both sides in one window unless "each"; no check builds a long session;
+every perf file under 6 minutes; reasons in `m5-interfaces.md` 8.2)
+| check | file | budget |
+|---|---|---|
+| `tools.local` four session-local object tools in one round vs an `echo` round (60 s, alternating) | `tools` | median <= +30 ms; 0 extra session deliveries |
+| `labels.full` turn start with 256 labels vs none (60 s, alternating) | `tools` | <= 1.1 x |
+| `tools.inspect` `describeCapability` through the inspector (60 s) | `tools` | median <= 300 ms |
+| `grants.round` turn start with 32 offered grants (60 s) | `tools` | median <= 350 ms |
+| `exec.powersLookup` per `E(powers).lookup` (60 s) | `exec-m5` | median <= 150 ms |
+| `exec.membrane` wrapped call vs raw call (60 s, alternating) | `exec-m5` | <= +5 ms |
+| `exec.scope1000` trivial call in a scope with 1,000 globals (60 s) | `exec-m5` | median <= 300 ms |
+| `presets.save` round trip (60 s) | `presets` | median <= 150 ms |
+| `inventory.page` 50 rows of 1,000 entries made by `addAll` (60 s) | `presets` | median <= 200 ms |
+| `mentions.turnStart` 32 attachments vs none (60 s each) | `mentions` | <= +100 ms, <= 350 ms, <= 3 deliveries |
+| `prompt.compose` Node: compositions over 10 s; vat: creations over a 120 s window, largest preset and `chat-only` alternating (pool 4) | `creation-m5` | <= 5 ms; <= +150 ms and <= 750 ms |
+| `session.program`, `exec.program` bundle bytes; `session.createCold` cold creations over a 120 s window | `creation-m5` | the limits after O-1; <= 6 s |
+| too-big probes, each capped at 15-30 s: (a) 100 KiB through the membrane, (b) 200 KB `help`, (c) 20,000-key answer, (f) exec 300 k iterations ok and 10 x the crank ceiling terminated | `exec-m5` | no halt of the session vat or the target's vat |
+| too-big probes, each capped at 30 s: (d) oversize `store`, 257th label, 33 attachments; (e) oversize granted schema | `tools` | as above |
 
 The whole M5 regression (11 integration files and the browser file of at most 4 minutes each,
-four perf scripts of at most 6 minutes each) fits 20 minutes on four test slots.
+five perf files of at most 5.5 minutes each) is at most 69 slot-minutes: about 17 minutes on four
+test slots.
 
 **Fit risk:** good. Persistent scope and object endowments are what Thixotrope offers; Appendix F
 drops most of Endo's name plumbing.
