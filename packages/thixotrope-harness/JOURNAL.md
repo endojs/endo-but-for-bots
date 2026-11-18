@@ -12183,3 +12183,61 @@ Fit: neutral.
 Evidence: first command 15:11:18Z. Over 60 s: integration batch (m4-retire, m2-secrets,
 m5-grants-restart, `--jobs 3`) 109 s wall. No browser file and no perf file run; no exclusive mode.
 Fit: neutral.
+
+### J-10050 2026-11-18 X-FIX first-ask retirement push (X-QC finding 1) - fixed
+Change (`92d6ba5e7e`): `pool-state.js` `invalidate()` forgets a load that has no answer yet, so a
+load joined after a push asks `poolState` afresh; loads joined before the push still share the
+first ask. Test: `m4-pool-state` "X-FIX: a push during the first ask" (gated first answer); it
+fails on the old code ("a load joined after the push asked again") and passes now (8 tests).
+Fit: good.
+
+### J-10051 2026-11-18 X-FIX retirement waits for the adapter (X-QC finding 2) - fixed
+Change (`b8ca754892`): `PoolMember.retire` and `SubscriptionsAdmin.retirePool` are `M.callWhen`;
+the record is made first, then the manager awaits an answered `CredentialOps.poolsChanged()`
+(failures ignored), so the operator sees the retirement return only after the adapter marked its
+pool states stale; the next turn no longer races the push. Snapshot re-baselined for
+`m4Interfaces.SubscriptionsAdmin` and `m4Interfaces.PoolMember` only (vocabulary unchanged).
+`m4-manager` XB test now holds the push and asserts the retirement has not returned until it is
+answered. `m4-retire` passes (held 128.1 s; retire 127 ms, retirePool 49 ms, next turns 793 /
+441 ms; load ~2.5). The 600 s re-read stays as the safety net for a lost push. Manager program
+size (durable*.js) not measured.
+Fit: good.
+
+### J-10052 2026-11-18 X-FIX powers.store membrane (X-QC finding 3) - fixed
+Change (`77470fa5af`, guest, batched with J-10051 before any template build): `powers.store`
+refuses any remotable that is not this call's wrapper with `MODEL_OBJECT_TEXT`. The pinning
+"residual" test is flipped: the store is refused, nothing is stored, the keeper receives nothing,
+and a wrapper still stores. Bundles: exec 63,741 -> 63,826 bytes; session 214,690 and factory
+164,836 unchanged. `m5-objects` passes on a rebuilt template (build 55.1 s, held 156.1 s).
+Fit: good.
+
+### J-10053 2026-11-18 X-FIX page storage in acceptance 15 (X-QC finding 4) - fixed
+Change (`66e64c86db`): `test/browser/m4-ui.test.mjs` reads localStorage, sessionStorage and the
+IndexedDB database names before the stop and greps every credential and typed value there. Passes
+(browser file held 84.9 s).
+Fit: good.
+
+### J-10054 2026-11-18 X-FIX gateway writer never leaves (X-QC finding 5) - fixed
+Change (`0edcbaf6cc`): `powers.js` `markNeverLeaves` / `isNeverLeaving`; GW/index.js marks the
+page's writer; the call check refuses a CTP_CALL toward a non-local target whose slots name such
+an object (rule `gatewayObject`, new `gatewayTexts.gatewayObject`). Bridge adapter test: refused
+directly and nested in a record, nothing reaches the vat stand-in, the writer still answers its
+own calls. Residual: a gateway-exported promise (`p-n`) that later resolves to the writer is not
+checked; the writer is only handed out as an object in `extras`, never as a promise.
+Fit: good.
+
+### J-10055 2026-11-18 X-FIX writer refusal never quotes the value (X-QC finding 6) - fixed
+Change (`70bb2bb6c1`): both writers' exo guards take any passable for the value; the method
+checks the shape with `matches` and refuses with `secretFailed("INVALID_SECRET_BYTES")` (an
+existing fixed code; the contract guard `interfaces.SecretWriter` is unchanged, so what is
+accepted is unchanged). Tests assert the fixed text and that the value is absent from the
+message (`m2-secret-writer-paths`, `m2-w23-secrets`, `m2-secrets`).
+Fit: good; neutral: the exo guard is no longer the contract guard object for that argument.
+
+### J-10056 2026-11-18 X-FIX verification and time record
+Ran: unit and adapter lanes 1,245 passed, 115 skipped, 0 failed (66 s); `tsc` exit 0; eslint 0
+errors on touched files. Integration (shared slots): m4-retire, m4-provision, m4-pools,
+m5-objects (`--jobs 4`, 157 s wall); m4-secrets, m2-secrets (124 s wall); browser m4-ui (85 s);
+m2-secrets, m3-gateway, m5-security, m4-accounts after the gateway change (120 s wall); all exit 0,
+load 2.1-2.9. No perf file, no exclusive mode. Time: 15:17:47Z to the journal commit.
+Fit: neutral.
