@@ -8,7 +8,7 @@
  * Where. The default lock lives under `<THIX_HARNESS_HOME>/run-lock/`
  * (`THIX_HARNESS_HOME` defaults to `<home>/.cache/thixotrope-harness`), so
  * every worktree on the machine shares it. It has N slots
- * (`THIX_HARNESS_RUN_SLOTS`, default 4): the files `slot`, `slot.1`, ...,
+ * (`THIX_HARNESS_RUN_SLOTS`, default 6): the files `slot`, `slot.1`, ...,
  * `slot.<N-1>`, and the exclusive intent marker `slot.intent`. Every taker
  * on the machine must use the same N. `--lock PATH` (option `lockPath`)
  * names a private lock instead: one slot at PATH unless `--slots N` says
@@ -100,7 +100,7 @@ import url from 'node:url';
 
 export const RUN_LOCK_ENV = 'THIX_HARNESS_RUN_LOCK';
 export const LOCK_VERSION = 2;
-export const DEFAULT_SLOTS = 4;
+export const DEFAULT_SLOTS = 6;
 export const DEFAULT_MAX_MS = 600_000;
 /** Between SIGTERM and SIGKILL of a timed-out workload's group. */
 export const KILL_GRACE_MS = 10_000;
@@ -413,7 +413,7 @@ const removeIfOurs = async (file, id) => {
  * @typedef {object} RunLockOptions
  * @property {string} [lockPath] a private lock's first slot (default: the
  *   machine-wide lock under THIX_HARNESS_HOME)
- * @property {number} [slots] default THIX_HARNESS_RUN_SLOTS (4) for the
+ * @property {number} [slots] default THIX_HARNESS_RUN_SLOTS (6) for the
  *   machine-wide lock, 1 for a private `lockPath`
  * @property {'shared' | 'exclusive'} [mode] default exclusive when this
  *   process's arguments name a perf check, else shared

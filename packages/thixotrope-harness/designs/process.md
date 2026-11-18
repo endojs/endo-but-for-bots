@@ -67,7 +67,7 @@ run lock `scripts/run-lock.mjs`. It was one exclusive lock per checkout (`tmp/.r
 now a machine-wide pool of slots (the script's header comment is the reference):
 
 - **Where:** `<THIX_HARNESS_HOME>/run-lock/slot`, `slot.1`, ... `slot.<N-1>`, shared by every
-  worktree. N is `THIX_HARNESS_RUN_SLOTS` (default 4); every taker on the machine must use the
+  worktree. N is `THIX_HARNESS_RUN_SLOTS` (default 6 since 2026-11-18, was 4); every taker on the machine must use the
   same N.
 - **Shared** (default): take any free slot, wait while none is. **Exclusive** (`--exclusive`):
   wait until every slot is free and hold all of them. A process whose own arguments name a
