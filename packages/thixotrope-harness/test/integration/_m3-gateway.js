@@ -100,6 +100,9 @@ export const readSignIn = async (root, origin) => {
  * @property {any} [powers] after `serveGateway`'s `connect()`: the powers
  * @property {Promise<{ code: number, reason: string }>} closed
  * @property {(code?: number) => void} close
+ * @property {() => { held: number, peak: number }} answers questions asked
+ *   and not dropped (the gateway's answer table holds at most these)
+ * @property {() => void} resetAnswersPeak
  */
 
 /**
@@ -143,6 +146,8 @@ export const connectGateway = async ({
     signIn: (given = secret) => E(bootstrap).fetch(given),
     closed,
     close: (code = 1000) => ws.close(code),
+    answers: client.answers,
+    resetAnswersPeak: client.resetAnswersPeak,
   };
 };
 

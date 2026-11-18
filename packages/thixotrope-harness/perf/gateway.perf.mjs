@@ -21,6 +21,12 @@
  *   (its `delta` line, `Date.now()` in the adapter) to each client's
  *   arrival (`Date.now()` here, one machine). Budget median 5 ms; vat
  *   deliveries while deltas stream, per delta, budget 0.
+ * - Answers (XA): `ui.call`, `ui.submit` and `ui.deltaFanout` also report
+ *   the most questions a client held at once during the window
+ *   (`answers.peak`: asked and not yet dropped, which bounds the gateway's
+ *   answer table) against `answersPerConnection`; `answers.boundHit` true
+ *   would mean the bridge forgot settled answers during a well-behaved
+ *   window.
  * - `gateway.probes`: one each of a 100 KiB argument, 2,000 fresh keys,
  *   depth 33, 33 calls in flight and 4,097 exports: each refused with its
  *   text (the exports probe closes the connection with `tooManyObjects`),
@@ -48,7 +54,7 @@ const { inspectCall, defaultGuardLimits } =
   await import('../resources/agent-host/impl/gateway/guard.js');
 const { harnessNames } =
   await import('../resources/agent-host/impl/gateway/vocabulary.js');
-const { closeCodes, gatewayTexts } =
+const { closeCodes, gatewayLimits, gatewayTexts } =
   await import('../resources/agent-host/impl/gateway/contract-m3.js');
 
 const usage = {
@@ -88,6 +94,22 @@ const gatewayScript = harden({
 /** @param {string} metric @param {string} why */
 const notMeasured = (metric, why) =>
   emit({ metric, notMeasured: why, pass: null });
+
+/**
+ * The answers a window's clients held at most (see the header).
+ * @param {{ answers: () => { held: number, peak: number } }[]} clients
+ */
+const answersOf = clients => {
+  const peak = Math.max(...clients.map(c => c.answers().peak));
+  return {
+    answers: {
+      peak,
+      held: clients.map(c => c.answers().held),
+      bound: gatewayLimits.answersPerConnection,
+      boundHit: peak >= gatewayLimits.answersPerConnection,
+    },
+  };
+};
 
 /** @param {number[]} samples */
 const sampleFlags = samples => ({
@@ -183,6 +205,7 @@ await runPerf('gateway', async ({ provision }) => {
 
     // ---- ui.call
     if (clock.fits(WINDOW_MS)) {
+      page.resetAnswersPeak();
       const before = await run.counters();
       const { samples } = await measureWindow(WINDOW_MS, () =>
         E(session).listPending(),
@@ -192,12 +215,17 @@ await runPerf('gateway', async ({ provision }) => {
         budget: { median: 150 },
         before,
         after,
-        extra: { ...sampleFlags(samples), call: 'Session.listPending' },
+        extra: {
+          ...sampleFlags(samples),
+          call: 'Session.listPending',
+          ...answersOf([page]),
+        },
       });
     } else notMeasured('ui.call', 'file time');
 
     // ---- ui.submit while a turn runs
     if (clock.fits(WINDOW_MS + 10_000)) {
+      page.resetAnswersPeak();
       const stalled = await E(page.powers.composer).submit(
         session,
         'stall',
@@ -225,6 +253,7 @@ await runPerf('gateway', async ({ provision }) => {
         extra: {
           ...sampleFlags(samples),
           note: 'each entry cancelled after its sample',
+          ...answersOf([page]),
         },
       });
     } else notMeasured('ui.submit', 'file time');
@@ -245,6 +274,7 @@ await runPerf('gateway', async ({ provision }) => {
         const { rev } = await E(own).watch();
         feeds.push(collect(await E(client.powers.live).subscribe(own, rev)));
       }
+      for (const client of clients) client.resetAnswersPeak();
       /** @type {number[]} */
       const latencies = [];
       let deltas = 0;
@@ -286,6 +316,7 @@ await runPerf('gateway', async ({ provision }) => {
         deltas += published.length;
       }
       for (const feed of feeds) await feed.stop();
+      const fanAnswers = answersOf(clients);
       for (const client of clients.slice(1)) client.close();
       await stats('ui.deltaFanout', latencies, {
         budget: { median: 5, deliveriesPerOp: 0 },
@@ -302,6 +333,7 @@ await runPerf('gateway', async ({ provision }) => {
           clock:
             'provider delta line (adapter Date.now) to client arrival (Date.now)',
           note: 'deliveries counted between the first delta and the last delta reaching every client (all vats)',
+          ...fanAnswers,
         },
       });
     } else notMeasured('ui.deltaFanout', 'file time');
