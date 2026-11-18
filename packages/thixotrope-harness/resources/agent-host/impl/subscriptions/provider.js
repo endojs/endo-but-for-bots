@@ -58,7 +58,7 @@ import { withOverloadRetry } from './wire.js';
 /** The fixed text of a round whose pool stream threw something unexpected. */
 const UNEXPECTED = harden({
   claude: m4Texts.claudeInferenceFailed,
-  codex: m4TextOf.responsesFailed('error', []),
+  codex: m4TextOf.responsesFailed('stream.unreachable', []),
 });
 
 /** @param {unknown} error */
