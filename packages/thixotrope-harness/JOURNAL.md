@@ -8540,3 +8540,29 @@ show "none to B"; it asserts at most one per member (W4.8 recorded this). (9) `S
 finding). (10) `designs/milestones.md` gained M4's outcome table: a PM file the other lanes
 also edit. Verdict: accept with fixes; no secret value, key-shaped literal or private name in
 the diff.
+
+### J-9670 2026-11-18 M4 review fixes (M4-FIX) - build
+Fixed from J-9661/J-9662: (1) retirement: the pool bridge asks `poolState` again when its answer
+is older than `poolStateRefreshMs` (30 s; a retired answer is final, a failed ask keeps the old
+one), so a retired pool fails and a retired member drops out within 30 s, at a cost of one
+manager crank per used pool per 30 s and none while idle (not the contract's "next turn": that
+needs a push, which the `CredentialOps` guard does not allow; asked of the PM). (2) Sign-in uses an
+independent random OAuth `state`; the PKCE verifier no longer appears in the URL. (3)+(7) After
+the refresh POST no rotated refresh token is dropped: a lifetime within the skew is written and
+served; an answer refused later (token type, lifetime, `exp` past) is written back with the access
+token marked spent; an answer naming another account still keeps nothing. (4) Usage reads are
+single flight per member; the model's `accountStatus {refresh:true}` reads a member at most once
+per 60 s (operator `Accounts.refresh` stays on demand). (6) Dated marks are capped at now + 8 days.
+Tests: one new or strengthened adapter test per fix; M4 unit and adapter files 150 tests pass in
+8.6 s. Fit: the manager deciding and the adapter caching per incarnation is cheap but leaves no
+channel for the vat to tell the adapter; a push needs an interface the contract did not foresee.
+
+### J-9671 2026-11-18 M4-FIX integration re-run - measure
+At 5a9d37cc1c, four files in shared slots at once (THIX_AGENT M4-FIX): m4-pools held 186.5 s,
+m4-renewal 144.2 s, m4-restart 290.3 s, m4-accounts 115.6 s; all pass. Waits for a slot were
+280-1,007 s (other lanes held every slot), so wall time was 468-1,124 s per file; the wait is
+lane contention, not test length. No perf check re-run: the 30 s `poolState` refresh may add up
+to two manager cranks per used pool per 60 s to `subscriptions.servedWrites` and `turnStart`
+(not measured). Not fixed here (reasons in the M4-FIX report): D-M4-9, ReadGrant description
+and the setDescription audit event (M2), K-2's "none to B", m1a-factory's expectation,
+provision-steps template hash, the perf misses, the milestones.md table.
