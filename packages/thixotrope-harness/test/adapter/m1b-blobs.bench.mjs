@@ -46,7 +46,7 @@ const { makeBlobStore } =
 const { makeContent } =
   await import('../../resources/agent-host/impl/content.js');
 const { makeFakeBlobSink } = await import('./_m1b-blobs.js');
-const { makeScriptedProvider } =
+const { makeScriptedProvider, scriptedUnexpectedFailure } =
   await import('../../resources/agent-host/impl/providers/scripted.js');
 const { makeEndpoint } =
   await import('../../resources/agent-host/impl/endpoint.js');
@@ -234,6 +234,7 @@ try {
       provider: streaming,
       channel: harden({ publishDelta: () => {} }),
       timers,
+      unexpectedFailure: scriptedUnexpectedFailure,
     });
     const t0 = performance.now();
     void E(endpoint).holdTurn(turn);

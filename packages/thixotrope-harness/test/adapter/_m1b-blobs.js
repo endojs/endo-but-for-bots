@@ -11,7 +11,10 @@ import { m1bInterfaces } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { makeBlobStore } from '../../resources/agent-host/impl/blobs.js';
 import { makeEndpoint } from '../../resources/agent-host/impl/endpoint.js';
-import { makeScriptedProvider } from '../../resources/agent-host/impl/providers/scripted.js';
+import {
+  makeScriptedProvider,
+  scriptedUnexpectedFailure,
+} from '../../resources/agent-host/impl/providers/scripted.js';
 import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -187,6 +190,7 @@ export const runRoundFor = async (store, script, owner, turnId = 't1') => {
     channel: harden({ publishDelta: () => {} }),
     timers,
     owner,
+    unexpectedFailure: scriptedUnexpectedFailure,
   });
   const fake = makeFakeSinkTurn();
   void E(endpoint).holdTurn(fake.turn);

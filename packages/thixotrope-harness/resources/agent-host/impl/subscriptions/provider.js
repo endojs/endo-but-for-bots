@@ -2,7 +2,7 @@
 /**
  * The pool provider (M4 W4.6; `designs/m4-interfaces.md` 5.2; R4-24, R4-25,
  * R4-74, R4-75, R4-78, R4-80 (G-07), R4-105; D-M4-4): M2's provider shape
- * (`startRound`, `cancelRound`, `releaseTurn`, `unexpectedFailure`) over
+ * (`startRound`, `cancelRound`, `releaseTurn`; the kinds carry `unexpectedFailure`) over
  * M2's `runProviderRound`, with a `stream` that tries the pool's members in
  * the order the pool core chooses (W4.2) on the wire client of the pool's
  * kind (W4.3).
@@ -310,8 +310,6 @@ export const makePoolProvider = ({
         if (running.get(req.turn) === control) running.delete(req.turn);
       }
     },
-    /** The endpoint's text for a round that threw (R4-79: fixed). */
-    unexpectedFailure: unexpected,
     /** @param {any} turn aborts its request (R4-7); logged `cancelled` */
     cancelRound: turn => running.get(turn)?.stop('cancel'),
     /** @param {any} turn aborts its request silently (lease released) */
@@ -324,6 +322,8 @@ harden(makePoolProvider);
 export const claudePoolKind = harden({
   kind: 'claude-pool',
   makeProvider: makePoolProvider,
+  /** The endpoint's text for a round that threw (R4-79: fixed). */
+  unexpectedFailure: UNEXPECTED.claude,
   tools: harden(['accountStatus']),
 });
 
@@ -331,5 +331,7 @@ export const claudePoolKind = harden({
 export const codexPoolKind = harden({
   kind: 'codex-pool',
   makeProvider: makePoolProvider,
+  /** The endpoint's text for a round that threw (R4-79: fixed). */
+  unexpectedFailure: UNEXPECTED.codex,
   tools: harden(['accountStatus']),
 });

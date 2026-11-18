@@ -32,13 +32,18 @@ import {
   findHarnessRoot,
   loadAgentHost,
 } from '../../resources/agent-host/ephemeral.js';
-import { makeAgentHostImpl } from '../../resources/agent-host/impl/index.js';
+import {
+  assertBackendKinds,
+  backendKinds,
+  makeAgentHostImpl,
+} from '../../resources/agent-host/impl/index.js';
 import { makeEndpoint } from '../../resources/agent-host/impl/endpoint.js';
 import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 import {
   generatedArgs,
   generatedKeys,
   makeScriptedProvider,
+  scriptedUnexpectedFailure,
 } from '../../resources/agent-host/impl/providers/scripted.js';
 import { makeEchoTool } from '../../resources/agent-host/impl/tools/echo.js';
 import { makeTestBlobs } from './_m1b-blobs.js';
@@ -191,7 +196,12 @@ const makeRig = (script, events, { blobs } = {}) => {
       events.push(['delta', event.text]);
     },
   });
-  const endpoint = makeEndpoint({ provider, channel, timers });
+  const endpoint = makeEndpoint({
+    provider,
+    channel,
+    timers,
+    unexpectedFailure: scriptedUnexpectedFailure,
+  });
   return { provider, endpoint, log, deltas };
 };
 
@@ -681,6 +691,7 @@ test('deadlines: armDeadline calls sink.deadline; disarm and release cancel', as
     provider,
     channel: harden({ publishDelta: () => {} }),
     timers: manual.timers,
+    unexpectedFailure: scriptedUnexpectedFailure,
   });
   void E(endpoint).holdTurn(fake.turn);
   E.sendOnly(endpoint).startRound(roundRequest(fake));
@@ -719,22 +730,66 @@ test('deadlines: armDeadline calls sink.deadline; disarm and release cancel', as
   );
 });
 
-test('provider throwing fails the round instead of leaving the session waiting', async t => {
+test("provider throwing fails the round with the kind's fixed text, never the error message (HR-SYN-12)", async t => {
   const fake = makeFakeTurn();
   const endpoint = makeEndpoint({
     provider: harden({
       startRound: async () => {
-        throw Error('boom');
+        throw Error('boom: a provider body');
       },
       cancelRound: () => {},
     }),
     channel: harden({ publishDelta: () => {} }),
     timers,
+    unexpectedFailure: scriptedUnexpectedFailure,
   });
   void E(endpoint).holdTurn(fake.turn);
   E.sendOnly(endpoint).startRound(roundRequest(fake));
   await until(() => fake.failures.length === 1);
-  t.is(fake.failures[0].reason, 'scripted provider failed: boom');
+  t.is(fake.failures[0].reason, 'scripted provider failed');
+  t.is(scriptedUnexpectedFailure, 'scripted provider failed');
+});
+
+test('an Endpoint without the fixed failure text is refused (HR-SYN-12)', t => {
+  const provider = harden({
+    startRound: async () => {},
+    cancelRound: () => {},
+  });
+  const channel = harden({ publishDelta: () => {} });
+  t.throws(
+    () => makeEndpoint(/** @type {any} */ ({ provider, channel, timers })),
+    {
+      message: /unexpectedFailure/,
+    },
+  );
+  t.throws(
+    () => makeEndpoint({ provider, channel, timers, unexpectedFailure: '' }),
+    { message: /unexpectedFailure/ },
+  );
+});
+
+test('every backend kind names its fixed failure text; a kind without one is refused when the incarnation is made (HR-SYN-12)', t => {
+  for (const kind of backendKinds) {
+    t.is(typeof kind.unexpectedFailure, 'string', kind.kind);
+    t.true(kind.unexpectedFailure.length > 0, kind.kind);
+  }
+  const bare = harden({
+    kind: 'bare',
+    makeProvider: () => {
+      throw Error('not made');
+    },
+    tools: [],
+  });
+  t.throws(() => assertBackendKinds(/** @type {any} */ ([bare])), {
+    message: 'backend kind "bare" has no unexpectedFailure text',
+  });
+  t.throws(
+    () =>
+      makeAgentHostImpl({
+        kinds: /** @type {any} */ ([...backendKinds, bare]),
+      }),
+    { message: 'backend kind "bare" has no unexpectedFailure text' },
+  );
 });
 
 /**

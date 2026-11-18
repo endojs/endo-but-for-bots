@@ -32,6 +32,7 @@ import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 import {
   contextDigests,
   makeScriptedProvider,
+  scriptedUnexpectedFailure,
 } from '../../resources/agent-host/impl/providers/scripted.js';
 import { makeTestBlobs } from './_m1b-blobs.js';
 import { makeRandom, makeSessionSim, USAGE } from './_m1b-context.js';
@@ -566,6 +567,7 @@ test('scripted provider through the endpoint: chooses its turn from the projecte
     channel: harden({ publishDelta: () => {} }),
     timers,
     prepare: req => cache.prepare(sim.session, req),
+    unexpectedFailure: scriptedUnexpectedFailure,
   });
   /** @type {any[]} */
   const finals = [];

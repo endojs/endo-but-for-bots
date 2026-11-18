@@ -31,7 +31,11 @@ import { makeContent } from './content.js';
 import { makeContextCache } from './context-cache.js';
 import { archiveDirFor, makeArchiveStore } from './archive/store.js';
 import { makeListChannel } from './list-channel.js';
-import { makeEventLog, makeScriptedProvider } from './providers/scripted.js';
+import {
+  makeEventLog,
+  makeScriptedProvider,
+  scriptedUnexpectedFailure,
+} from './providers/scripted.js';
 import { makeEchoTool } from './tools/echo.js';
 import { openRouterKind } from './providers/openrouter.js';
 import { anthropicKind } from './providers/anthropic.js';
@@ -55,6 +59,10 @@ import {
  * @property {(options: { label: string, spec: any, readKey?: () => Promise<string>, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, subscriptions: any }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
  * @property {readonly string[]} tools names in `adapterTools` this kind
  *   offers in its `TurnPorts.tools`
+ * @property {string} unexpectedFailure the fixed reason of a round whose
+ *   provider threw (R4-79): never the error's message, which may quote a
+ *   provider body. Required: a kind without it is refused when the
+ *   incarnation is made (HR-SYN-12)
  *
  * @typedef {object} AdapterToolKind
  * @property {string} name the tool name the model sees
@@ -72,7 +80,12 @@ import {
  */
 export const backendKinds = harden([
   // M1a W1a.2: the scripted fake provider; offers echo.
-  { kind: 'scripted', makeProvider: makeScriptedProvider, tools: ['echo'] },
+  {
+    kind: 'scripted',
+    makeProvider: makeScriptedProvider,
+    tools: ['echo'],
+    unexpectedFailure: scriptedUnexpectedFailure,
+  },
   // M2 W2.1a: OpenRouter chat completions, streamed (m2-interfaces.md 8.1).
   openRouterKind,
   // M2 W2.1b: the Anthropic Messages API, streamed (m2-interfaces.md 8.1).
@@ -81,6 +94,25 @@ export const backendKinds = harden([
   claudePoolKind,
   codexPoolKind,
 ]);
+
+/**
+ * Refuse a kind table with a kind that names no fixed failure text
+ * (HR-SYN-12): its rounds would otherwise have no reason that keeps provider
+ * bodies out of the turn record.
+ * @param {readonly BackendKind[]} table
+ */
+export const assertBackendKinds = table => {
+  for (const entry of table) {
+    if (
+      typeof entry.unexpectedFailure !== 'string' ||
+      entry.unexpectedFailure === ''
+    )
+      throw Error(
+        `backend kind ${JSON.stringify(entry.kind)} has no unexpectedFailure text`,
+      );
+  }
+};
+harden(assertBackendKinds);
 
 /**
  * Tools that run in this adapter (hook table).
@@ -136,6 +168,7 @@ export const makeAgentHostImpl = ({
   secrets: givenSecrets = undefined,
   fetch = undefined,
 } = {}) => {
+  assertBackendKinds(kinds);
   /** The manager's sink, from the attach (M1b blobs mint through it). */
   let sink = givenSink;
   const blobs = makeBlobStore({
@@ -294,6 +327,7 @@ export const makeAgentHostImpl = ({
         timers,
         prepare: req => contextCache.prepare(session, req, { key: archiveKey }),
         owner: session,
+        unexpectedFailure: kind.unexpectedFailure,
       });
       // Per session (J-9361, J-9364): the tools, writers and Content of
       // these ports stage for this session and read only its blobs.

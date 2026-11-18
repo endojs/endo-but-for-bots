@@ -666,8 +666,6 @@ export const makeOpenRouterProvider = ({
         if (running.get(req.turn) === control) running.delete(req.turn);
       }
     },
-    /** The endpoint's text for a round that threw (R4-79: fixed). */
-    unexpectedFailure: texts.openRouterUnreachable,
     /** @param {any} turn aborts its request (R4-7); logged `cancelled` */
     cancelRound: turn => running.get(turn)?.stop('cancel'),
     /** @param {any} turn aborts its request silently (lease released) */
@@ -680,6 +678,8 @@ harden(makeOpenRouterProvider);
 export const openRouterKind = harden({
   kind: 'openrouter',
   makeProvider: makeOpenRouterProvider,
+  /** The endpoint's text for a round that threw (R4-79: fixed). */
+  unexpectedFailure: texts.openRouterUnreachable,
   // M4 W4.6 (H-14, D-M4-9): account status on API backends too.
   tools: harden(['accountStatus']),
 });

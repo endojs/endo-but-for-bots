@@ -25,6 +25,7 @@ import { makeEndpoint } from '../../resources/agent-host/impl/endpoint.js';
 import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 import {
   makeScriptedProvider,
+  scriptedUnexpectedFailure,
   tailText,
 } from '../../resources/agent-host/impl/providers/scripted.js';
 import { makeEchoTool } from '../../resources/agent-host/impl/tools/echo.js';
@@ -111,6 +112,7 @@ const run = async (script, { input = 'hi' } = {}) => {
     provider,
     channel: harden({ publishDelta: () => {} }),
     timers,
+    unexpectedFailure: scriptedUnexpectedFailure,
   });
   const fake = makeFakeTurn();
   void E(endpoint).holdTurn(fake.turn);
@@ -269,6 +271,7 @@ test('a staged turn input selects its script turn by the full text', async t => 
       provider,
       channel: harden({ publishDelta: () => {} }),
       timers,
+      unexpectedFailure: scriptedUnexpectedFailure,
     });
     const fake = makeFakeTurn();
     void E(endpoint).holdTurn(fake.turn);

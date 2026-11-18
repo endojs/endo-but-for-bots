@@ -175,6 +175,10 @@ const setup = async (t, { kind, settings = {}, tokens, defaults }) => {
     const r = await runApiRound(makeProvider, {
       baseUrl: server.url,
       modelId: spec.modelId,
+      unexpectedFailure: (kind === 'claude-pool'
+        ? claudePoolKind
+        : codexPoolKind
+      ).unexpectedFailure,
       ...more,
     });
     t.teardown(r.cleanup);

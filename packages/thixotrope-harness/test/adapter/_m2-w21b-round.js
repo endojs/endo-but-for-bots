@@ -97,6 +97,8 @@ const testBlobs = () => {
  * @param {boolean} [options.wait]
  * @param {number} [options.waitMs]
  * @param {any} [options.retry]
+ * @param {string} [options.unexpectedFailure] the backend kind's fixed
+ *   reason for a round whose provider threw (the Endpoint's option)
  */
 export const runApiRound = async (
   makeProvider,
@@ -112,6 +114,7 @@ export const runApiRound = async (
     wait = true,
     waitMs = 5000,
     retry,
+    unexpectedFailure = 'api round test: the provider threw',
   },
 ) => {
   const blobs = testBlobs();
@@ -137,6 +140,7 @@ export const runApiRound = async (
     timers,
     prepare: async () => harden({ transcript }),
     owner,
+    unexpectedFailure,
   });
   const fake = makeFakeTurn();
   void E(endpoint).holdTurn(fake.turn);
