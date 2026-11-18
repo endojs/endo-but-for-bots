@@ -42,6 +42,25 @@ const { E, makeExo, defineExoClass } = /** @type {any} */ (globalThis);
 const secretError = code => Error(textOf.secretFailed(code));
 
 /**
+ * A pager's cursor (HR-SYN-11): the creation serial of the last row of the
+ * page before, so a delete or a retirement between pages skips no row
+ * (J-9486). Only canonical decimal digits are one: `Number()` took `1e3`,
+ * ` 5` and `0x10`.
+ * @param {unknown} cursor
+ * @param {string} refusal the text a malformed cursor is refused with
+ * @returns {number} 0 for the first page
+ */
+export const serialCursor = (cursor, refusal) => {
+  if (cursor === undefined) return 0;
+  if (typeof cursor !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(cursor))
+    throw Error(refusal);
+  const serial = Number(cursor);
+  if (!Number.isSafeInteger(serial)) throw Error(refusal);
+  return serial;
+};
+harden(serialCursor);
+
+/**
  * Pages of the pool catalogue `resolveEffort` reads at most to find the
  * model's row (a pool lists tens of models; 8 x 50 rows is ample).
  */
@@ -112,6 +131,8 @@ const sameSpec = (a, b) => {
  * @property {number} weight
  * @property {any} [declared] `DeclaredProfile`
  * @property {'active' | 'retired'} state
+ * @property {number} serial its creation serial, from 1 (`listMembers`
+ *   pages by it, HR-SYN-11)
  *
  * @typedef {object} PoolRecord
  * @property {any} spec the `PoolSpec` as given (hardened)
@@ -184,6 +205,8 @@ export const makeSubscriptionsPart = ({
   const memberRecords = new WeakMap();
   /** Active members in creation order (`maxMembers`; retired ones dropped). @type {any[]} */
   let memberList = [];
+  /** The last member's creation serial (never reused). */
+  let memberSerial = 0;
   /**
    * Refusal marks, per member, shared by every pool the member is in (5.1).
    * @type {WeakMap<any, any>}
@@ -274,6 +297,7 @@ export const makeSubscriptionsPart = ({
     if (memberList.length >= m4Limits.maxMembers)
       throw secretError('CREATE_FAILED');
     const member = makeMemberExo();
+    memberSerial += 1;
     memberRecords.set(
       member,
       harden({
@@ -283,6 +307,7 @@ export const makeSubscriptionsPart = ({
         key: secret.key,
         weight,
         state: 'active',
+        serial: memberSerial,
         ...(declared === undefined ? {} : { declared }),
       }),
     );
@@ -291,16 +316,20 @@ export const makeSubscriptionsPart = ({
   };
 
   /**
-   * @param {string} [cursor] a position in creation order
+   * @param {string} [cursor] the creation serial of the last member of the
+   *   page before (HR-SYN-11: a retirement between pages skips none)
    */
   const listMembers = cursor => {
-    const from = cursor === undefined ? 0 : Number(cursor);
-    if (!Number.isSafeInteger(from) || from < 0)
-      throw Error('not a members cursor');
-    const members = memberList.slice(from, from + m4Limits.poolPageEntries);
-    const next = from + members.length;
+    const after = serialCursor(cursor, 'not a members cursor');
+    const rest = memberList.filter(member => memberOf(member).serial > after);
+    const members = rest.slice(0, m4Limits.poolPageEntries);
     return harden(
-      next < memberList.length ? { members, next: `${next}` } : { members },
+      rest.length > members.length
+        ? {
+            members,
+            next: `${memberOf(members[members.length - 1]).serial}`,
+          }
+        : { members },
     );
   };
 
@@ -560,14 +589,19 @@ export const makeSubscriptionsPart = ({
    * vat's records, generation, state and bytes from one `describeSecrets`
    * call; never a value (R7-26). At most `catalogPageEntries`, then cut to
    * one frame (`fitsFrame`), `next` naming the first entry left out.
-   * @param {string} [cursor] a position in creation order
+   * @param {string} [cursor] the creation serial of the last Secret of the
+   *   page before (HR-SYN-11: a delete between pages skips none, as
+   *   `SecretsAdmin.list`, J-9486)
    */
   const catalog = async cursor => {
-    const from = cursor === undefined ? 0 : Number(cursor);
-    if (!Number.isSafeInteger(from) || from < 0)
-      throw Error('not a secrets cursor');
-    const all = secretList();
-    const secrets = all.slice(from, from + m4Limits.catalogPageEntries);
+    const after = serialCursor(cursor, 'not a secrets cursor');
+    /** A Secret's creation serial: its store key `k<n>`. @param {any} secret */
+    const serialOf = secret =>
+      Number(/** @type {any} */ (secretRecords.get(secret)).key.slice(1));
+    const rest = secretList().filter(secret => serialOf(secret) > after);
+    const secrets = rest.slice(0, m4Limits.catalogPageEntries);
+    // Taken now: a delete during the describe call drops the record.
+    const serials = secrets.map(serialOf);
     const recordsOf = secrets.map(secret => secretRecords.get(secret));
     const keys = harden(
       recordsOf.flatMap(record => (record === undefined ? [] : [record.key])),
@@ -605,10 +639,9 @@ export const makeSubscriptionsPart = ({
     /** @param {number} count entries of this page taken */
     const pageOf = count => {
       const taken = entries.slice(0, count).filter(Boolean);
-      const next = from + count;
       return harden(
-        next < all.length
-          ? { entries: taken, next: `${next}` }
+        count < rest.length
+          ? { entries: taken, next: `${serials[count - 1]}` }
           : { entries: taken },
       );
     };

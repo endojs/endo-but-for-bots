@@ -156,6 +156,10 @@ const makeKit = options => {
     fake.store.set(`k${serial}`, { generation: 1, state: 'active', bytes: 10 });
     return secret;
   };
+  /** As `Secret.delete` in durable.js: out of the list. @param {any} secret */
+  const dropSecret = secret => {
+    secretList = secretList.filter(entry => entry !== secret);
+  };
   /** A session bound to a fresh host facet. */
   const bindSession = () => {
     const host = Far('SessionHostFacet', {});
@@ -177,6 +181,7 @@ const makeKit = options => {
     admin: part.admin,
     sink: part.sinkMethods,
     makeSecret,
+    dropSecret,
     bindSession,
     member,
     secretRecords,
@@ -921,4 +926,68 @@ test('durable.js: the sink, SecretsAdmin and Secret carry the M4 methods (H-2)',
   }));
   t.throws(() => sink.poolChanged(pool, harden({ served: tooMany })));
   t.is(await E(sink).poolOf(session), undefined);
+});
+
+// ---------------------------------------------------------------- pagers by serial (HR-SYN-11)
+
+test('HR-SYN-11: catalog pages by creation serial; a delete between pages skips no secret', async t => {
+  const kit = makeKit();
+  const count = m4Limits.catalogPageEntries + 6;
+  for (let i = 0; i < count; i += 1) kit.makeSecret(`s${i}`);
+  const first = await kit.part.secretsAdminMethods.catalog();
+  t.is(first.entries.length, m4Limits.catalogPageEntries);
+  t.is(first.next, `${m4Limits.catalogPageEntries}`);
+  // A Secret of the first page is deleted between the pages (durable.js
+  // drops it from the list and its record).
+  const [deleted] = first.entries.map(entry => entry.secret);
+  kit.secretRecords.delete(deleted);
+  kit.dropSecret(deleted);
+  const second = await kit.part.secretsAdminMethods.catalog(first.next);
+  t.is(second.next, undefined);
+  t.deepEqual(
+    second.entries.map(entry => entry.label),
+    Array.from({ length: 6 }, (_, i) => `s${m4Limits.catalogPageEntries + i}`),
+    'the first secret after the page is not skipped',
+  );
+});
+
+test('HR-SYN-11: listMembers pages by creation serial; a retirement between pages skips no member', async t => {
+  // maxMembers equals poolPageEntries today, so the members always fit one
+  // page; the cursor is still the serial of the last member a page held.
+  t.true(m4Limits.maxMembers <= m4Limits.poolPageEntries);
+  const kit = makeKit();
+  const members = Array.from({ length: 5 }, (_, i) =>
+    kit.member(i % 2 ? 'codex' : 'claude', `m${i}`),
+  );
+  t.deepEqual(kit.admin.listMembers(), { members });
+  // A page that ended at the second member, then that member retired.
+  await members[1].retire();
+  t.deepEqual(
+    kit.admin.listMembers('2').members,
+    members.slice(2),
+    'the member after the cursor is not skipped',
+  );
+  t.deepEqual(kit.admin.listMembers('5').members, []);
+});
+
+test('HR-SYN-11: the pagers refuse a cursor that is not canonical digits', async t => {
+  const kit = makeKit();
+  kit.makeSecret('one');
+  kit.member('claude', 'one member');
+  for (const cursor of ['1e3', ' 5', '0x10', '-1', '01', '1.5', '']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () => kit.part.secretsAdminMethods.catalog(cursor),
+      { message: 'not a secrets cursor' },
+      JSON.stringify(cursor),
+    );
+    t.throws(
+      () => kit.admin.listMembers(cursor),
+      { message: 'not a members cursor' },
+      JSON.stringify(cursor),
+    );
+  }
+  // The member's credential is a second secret.
+  t.is((await kit.part.secretsAdminMethods.catalog('0')).entries.length, 2);
+  t.is(kit.admin.listMembers('0').members.length, 1);
 });

@@ -41,6 +41,7 @@ import {
 import {
   forwardSinkMethods,
   makeSubscriptionsPart,
+  serialCursor,
 } from './durable-subscriptions.js';
 
 const { E, Far, M, defineExoClass, makeExo, makePromiseKit } =
@@ -59,6 +60,20 @@ const MAX_SECRETS = limits.secretsMax;
 
 /** @param {string} code a `secretCodes` entry */
 const secretError = code => Error(textOf.secretFailed(code));
+
+/**
+ * Whether `error` is the store's refusal with `code` (the secret error
+ * contract: the fixed text of the code, compared whole).
+ * @param {unknown} error
+ * @param {string} code
+ */
+const isSecretFailure = (error, code) => {
+  try {
+    return /** @type {any} */ (error)?.message === textOf.secretFailed(code);
+  } catch {
+    return false;
+  }
+};
 
 /**
  * R7-25: 1-200 characters, no newline (the guard bounds the length).
@@ -223,19 +238,24 @@ export const make = ({ makeManager }) => {
 
   /**
    * Call the current ops facet; a retired one is replaced by reconciling
-   * once and the call is made again.
+   * once and the call is made again, as `retry` when given. A retired break
+   * does not say whether the first call was applied before the adapter
+   * died (HR-SYN-8): a call that is not idempotent passes a `retry` that
+   * accepts the applied outcome (the store answers a repeated create of
+   * the same fresh entry itself).
    * @template T
    * @param {(current: any) => Promise<T>} fn
+   * @param {(current: any) => Promise<T>} [retry]
    * @returns {Promise<T>}
    */
-  const withOps = async fn => {
+  const withOps = async (fn, retry = fn) => {
     if (ops === undefined) await reconcile();
     try {
       return await fn(ops);
     } catch (error) {
       if (!isRetiredBreak(error)) throw error;
       await reconcile();
-      return fn(ops);
+      return retry(ops);
     }
   };
 
@@ -409,8 +429,21 @@ export const make = ({ makeManager }) => {
       },
       async delete() {
         const record = recordOf(this.self);
-        // The store refuses an active secret (`NOT_REVOKED`).
-        await withOps(current => E(current).secretDelete(record.key));
+        // The store refuses an active secret (`NOT_REVOKED`). After a
+        // retired break the delete may have been applied: on the retry, a
+        // key the store no longer has is that delete (HR-SYN-8).
+        await withOps(
+          current => E(current).secretDelete(record.key),
+          current =>
+            E(current)
+              .secretDelete(record.key)
+              .catch(
+                /** @param {unknown} error */ error => {
+                  if (isSecretFailure(error, 'UNKNOWN_SECRET')) return undefined;
+                  throw error;
+                },
+              ),
+        );
         secretRecords.delete(this.self);
         secretList = secretList.filter(secret => secret !== this.self);
         return undefined;
@@ -445,9 +478,8 @@ export const make = ({ makeManager }) => {
      *   page before, so a delete between pages skips none (J-9486)
      */
     list: cursor => {
-      const after = cursor === undefined ? 0 : Number(cursor);
-      if (!Number.isSafeInteger(after) || after < 0)
-        throw Error('not a secrets cursor');
+      // Strict digits (HR-SYN-11): `Number()` took `1e3`, ` 5`, `0x10`.
+      const after = serialCursor(cursor, 'not a secrets cursor');
       const rest = secretList.filter(secret => serialOf(secret) > after);
       const secrets = rest.slice(0, limits.secretPageEntries);
       return harden(

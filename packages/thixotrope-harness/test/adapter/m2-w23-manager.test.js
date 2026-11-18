@@ -60,6 +60,13 @@ const makeKit = () => {
   let current;
   /** @type {any} */
   let desiredSpec;
+  /**
+   * Fault hook (HR-SYN-8): the next call of this ops method is applied,
+   * then the incarnation dies before it answers (the call sees the
+   * retired text), as a SIGKILL between apply and answer.
+   * @type {string | undefined}
+   */
+  let dieAfter;
   const bindFresh = async () => {
     incarnations += 1;
     const store = makeSecretStore({
@@ -79,9 +86,15 @@ const makeKit = () => {
      */
     const guard =
       (name, fn) =>
-      (/** @type {any[]} */ ...args) => {
+      async (/** @type {any[]} */ ...args) => {
         if (incarnation.retired) throw Error(RETIRED);
         calls.push([name, ...args]);
+        if (dieAfter === name) {
+          dieAfter = undefined;
+          await fn(...args);
+          incarnation.retired = true;
+          throw Error(RETIRED);
+        }
         return fn(...args);
       };
     const ops = Far('AgentHostOps', {
@@ -131,6 +144,11 @@ const makeKit = () => {
     restart: () => {
       if (current) current.retired = true;
     },
+    /** @param {string} name the ops method whose next call dies after applying */
+    dieAfter: name => {
+      dieAfter = name;
+    },
+    store: () => /** @type {any} */ (current).store,
     incarnations: () => incarnations,
     done: () => {
       current?.store.close();
@@ -338,4 +356,86 @@ test('manager: release, archive keys, history and writers forward', async t => {
     kit.calls.filter(([name]) => name === 'writersFor').map(c => c.length),
     [1, 2],
   );
+});
+
+test('HR-SYN-8: a create applied before the adapter died is answered, not refused; no orphan entry', async t => {
+  const kit = makeKit();
+  t.teardown(kit.done);
+  const { facet } = makeManagerVat({ makeManager: kit.makeManager });
+  const admin = await E(facet).getSecrets();
+  await E(admin).create(harden({ label: 'first', description: 'd' }));
+  kit.dieAfter('secretCreate');
+  const secret = await E(admin).create(
+    harden({ label: 'second', description: 'the retried one' }),
+  );
+  t.is(kit.incarnations(), 2, 'the adapter died and came back');
+  t.deepEqual(
+    kit.calls.filter(([name]) => name === 'secretCreate').map(c => c[1].key),
+    ['k1', 'k2', 'k2'],
+    'the retry sent the same key',
+  );
+  t.like(await E(secret).describe(), {
+    label: 'second',
+    description: 'the retried one',
+    generation: 0,
+    state: 'active',
+  });
+  const { secrets } = await E(admin).list();
+  t.is(secrets.length, 2);
+  t.is(kit.store().stats().entries, 2, 'one entry per Secret, none orphaned');
+});
+
+test('HR-SYN-8: a delete applied before the adapter died forgets the Secret on the retry', async t => {
+  const kit = makeKit();
+  t.teardown(kit.done);
+  const { facet } = makeManagerVat({ makeManager: kit.makeManager });
+  const admin = await E(facet).getSecrets();
+  const kept = await E(admin).create(harden({ label: 'kept', description: 'd' }));
+  const gone = await E(admin).create(harden({ label: 'gone', description: 'd' }));
+  await E(gone).revoke();
+  kit.dieAfter('secretDelete');
+  await E(gone).delete();
+  t.is(kit.incarnations(), 2);
+  t.deepEqual((await E(admin).list()).secrets, [kept]);
+  await t.throwsAsync(E(gone).describe(), failed('UNKNOWN_SECRET'));
+  // Off the retry path a missing key still fails: the store refuses it.
+  await E(kept).revoke();
+  await E(kept).delete();
+  await t.throwsAsync(
+    E(kit.secrets()).secretDelete('k1'),
+    failed('UNKNOWN_SECRET'),
+  );
+});
+
+test('HR-SYN-8: the store answers a repeated create of a fresh entry and refuses any other', async t => {
+  const kit = makeKit();
+  t.teardown(kit.done);
+  const { facet } = makeManagerVat({ makeManager: kit.makeManager });
+  const admin = await E(facet).getSecrets();
+  const secret = await E(admin).create(
+    harden({ label: 'one', description: 'd' }),
+  );
+  const store = kit.store();
+  await store.create('k1', 'one', 'd');
+  await t.throwsAsync(store.create('k1', 'other', 'd'), failed('CREATE_FAILED'));
+  await t.throwsAsync(store.create('k1', 'one', 'e'), failed('CREATE_FAILED'));
+  await store.replace('k1', makeTestSecretValue('v'));
+  await t.throwsAsync(store.create('k1', 'one', 'd'), failed('CREATE_FAILED'));
+  t.is((await E(secret).describe()).generation, 1);
+  t.is(store.stats().entries, 1);
+});
+
+test('HR-SYN-11: SecretsAdmin.list refuses a cursor that is not canonical digits', async t => {
+  const kit = makeKit();
+  t.teardown(kit.done);
+  const { facet } = makeManagerVat({ makeManager: kit.makeManager });
+  const admin = await E(facet).getSecrets();
+  await E(admin).create(harden({ label: 'one', description: 'd' }));
+  t.deepEqual((await E(admin).list('0')).secrets.length, 1);
+  for (const cursor of ['1e3', ' 5', '0x10', '-1', '01', '1.5', '']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(E(admin).list(cursor), {
+      message: 'not a secrets cursor',
+    }, JSON.stringify(cursor));
+  }
 });
