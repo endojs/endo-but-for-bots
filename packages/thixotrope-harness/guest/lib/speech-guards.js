@@ -53,8 +53,8 @@ export const speechGuardLimits = harden({
 
 /** Method names per interface, in declaration order. */
 export const speechMethodNames = harden({
-  Speech: ['openAudio', 'configuration', 'status'],
-  AudioPort: ['transcribe', 'speak', 'replay', 'close'],
+  Speech: ['openAudio', 'configuration', 'status', 'replay'],
+  AudioPort: ['transcribe', 'speak', 'close'],
 });
 
 /**
@@ -98,7 +98,10 @@ const build = () => {
     TtsOptions,
     OptionRange,
     VoiceEntry,
-    /** A replay piece: an inline text, or the Blob of a staged one (read through Content). */
+    /**
+     * A replay piece: an inline text (at most `inlineBytes` units), or the
+     * Blob of a staged one (read through Content in process).
+     */
     ReplayPiece: M.or(text(speechGuardLimits.replayPieceUnits), R('Blob')),
     /** What `transcribe`, `speak` and `replay` answer: the stream's number on the audio socket. */
     StreamGrant: record({ stream: count }),
@@ -147,6 +150,17 @@ const build = () => {
       openAudio: M.call().returns(shapes.AudioPortGrant),
       configuration: M.callWhen().returns(shapes.SpeechConfiguration),
       status: M.call().returns(shapes.SpeechStatus),
+      /**
+       * A replay of finished text on `port`'s socket (R5-45). On the
+       * service, not the port, so the extension can name it a `LargeCall`
+       * (one target per incarnation): a call up to `wsMessageBytes`.
+       */
+      replay: M.callWhen(
+        R('AudioPort'),
+        list(shapes.ReplayPiece, speechGuardLimits.replayPieces),
+      )
+        .optional(shapes.TtsOptions)
+        .returns(shapes.StreamGrant),
     }),
     /**
      * One page's audio port, bound to one `/audio` socket by its token.
@@ -156,11 +170,6 @@ const build = () => {
     AudioPort: M.interface('AudioPort', {
       transcribe: M.callWhen().returns(shapes.StreamGrant),
       speak: M.callWhen(R('Session'), text(limits.idUnits))
-        .optional(shapes.TtsOptions)
-        .returns(shapes.StreamGrant),
-      replay: M.callWhen(
-        list(shapes.ReplayPiece, speechGuardLimits.replayPieces),
-      )
         .optional(shapes.TtsOptions)
         .returns(shapes.StreamGrant),
       close: M.call().returns(done),

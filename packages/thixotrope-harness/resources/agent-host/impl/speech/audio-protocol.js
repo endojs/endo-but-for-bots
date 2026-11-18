@@ -6,8 +6,9 @@
  * imports, plain frozen data, no Node or browser API.
  *
  * One `/audio` socket per page, bound to one `AudioPort` by a one-time
- * token (HELLO). Streams are opened by CapTP calls on the port
- * (`transcribe`, `speak`, `replay`), which answer the stream number; the
+ * token (HELLO). Streams are opened by CapTP calls (`AudioPort.transcribe`,
+ * `AudioPort.speak`, `Speech.replay(port, ...)`), which answer the stream
+ * number; the
  * stream's data then travels in binary frames on this socket. Audio never
  * travels through CapTP and never through a vat (architecture D-12, rule
  * "vats decide, adapters carry data").
