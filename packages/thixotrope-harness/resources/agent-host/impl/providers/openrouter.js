@@ -674,5 +674,6 @@ harden(makeOpenRouterProvider);
 export const openRouterKind = harden({
   kind: 'openrouter',
   makeProvider: makeOpenRouterProvider,
-  tools: harden([]),
+  // M4 W4.6 (H-14, D-M4-9): account status on API backends too.
+  tools: harden(['accountStatus']),
 });

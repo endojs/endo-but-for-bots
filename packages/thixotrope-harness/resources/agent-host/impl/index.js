@@ -39,17 +39,20 @@ import { makeCatalog } from './providers/catalog.js';
 import { findSecretsFiles, makeSecretStore } from './secrets/store.js';
 import { makeSealKeys } from './secrets/seal.js';
 import { makeSecretsOps } from './secrets/manager.js';
+import { makeSubscriptions } from './subscriptions/index.js';
+import { claudePoolKind, codexPoolKind } from './subscriptions/provider.js';
+import { makeAccountStatusTool } from './subscriptions/account-tool.js';
 
 /**
  * @typedef {object} BackendKind
  * @property {string} kind the `BackendSpec.kind` it serves
- * @property {(options: { label: string, spec: any, readKey?: () => Promise<string>, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
+ * @property {(options: { label: string, spec: any, readKey?: () => Promise<string>, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend?: any, subscriptions?: any }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
  * @property {readonly string[]} tools names in `adapterTools` this kind
  *   offers in its `TurnPorts.tools`
  *
  * @typedef {object} AdapterToolKind
  * @property {string} name the tool name the model sees
- * @property {(options: { timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore }) => any} makeTool
+ * @property {(options: { timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend?: any, session?: any, subscriptions?: any }) => any} makeTool
  */
 
 /**
@@ -63,6 +66,9 @@ export const backendKinds = harden([
   openRouterKind,
   // M2 W2.1b: the Anthropic Messages API, streamed (m2-interfaces.md 8.1).
   anthropicKind,
+  // M4 W4.6: subscription pools (m4-interfaces.md 5.2).
+  claudePoolKind,
+  codexPoolKind,
 ]);
 
 /**
@@ -72,6 +78,8 @@ export const backendKinds = harden([
 export const adapterTools = harden([
   // M1a W1a.2: the echo test tool.
   { name: 'echo', makeTool: makeEchoTool },
+  // M4 W4.6: account status (m4-interfaces.md 6).
+  { name: 'accountStatus', makeTool: makeAccountStatusTool },
 ]);
 
 /**
@@ -173,6 +181,15 @@ export const makeAgentHostImpl = ({
     }
     return secretsMade;
   };
+  // M4 W4.6 (H-4 c): pools, credentials and accounts, made lazily.
+  const subscriptions = makeSubscriptions({
+    sink: () => sink,
+    secrets,
+    stateDir: () =>
+      dirname(dirname(typeof blobDir === 'function' ? blobDir() : blobDir)),
+    timers,
+    ...(fetch === undefined ? {} : { fetch }),
+  });
   /**
    * An API backend's key, through its grant, read at every use (R4-82).
    * @param {any} spec
@@ -243,6 +260,8 @@ export const makeAgentHostImpl = ({
       timers,
       log,
       blobs,
+      backend,
+      subscriptions,
     });
     // The backend's adapter tools, one set per session (J-9364).
     const state = harden({ provider, log, kind, toolsOf: new WeakMap() });
@@ -273,7 +292,14 @@ export const makeAgentHostImpl = ({
               throw Error(`No adapter tool ${name} here`);
             return harden({
               name,
-              tool: entry.makeTool({ timers, log, blobs: sessionBlobs }),
+              tool: entry.makeTool({
+                timers,
+                log,
+                blobs: sessionBlobs,
+                backend,
+                session,
+                subscriptions,
+              }),
             });
           }),
         );
@@ -305,15 +331,20 @@ export const makeAgentHostImpl = ({
     writersFor: session => blobs.writersFor(session),
     // M2 W2.2 (8.4): the catalogue, with the backend's key.
     listModels: ({ backend, spec, request }) =>
-      models.listModels({
-        backend,
-        spec,
-        readKey: readKeyOf(spec),
-        log: backendState(backend, spec).log,
-        ...(request === undefined ? {} : { request }),
-      }),
+      (subscriptions.handles(spec) ? subscriptions.catalog : models).listModels(
+        {
+          backend,
+          spec,
+          readKey: readKeyOf(spec),
+          log: backendState(backend, spec).log,
+          ...(request === undefined ? {} : { request }),
+        },
+      ),
     resolveModel: ({ backend, spec, modelId }) =>
-      models.resolveModel({
+      (subscriptions.handles(spec)
+        ? subscriptions.catalog
+        : models
+      ).resolveModel({
         backend,
         spec,
         readKey: readKeyOf(spec),
@@ -327,6 +358,8 @@ export const makeAgentHostImpl = ({
     secretDelete: secretsHandler('secretDelete'),
     secretAudit: secretsHandler('secretAudit'),
     secretWriter: secretsHandler('secretWriter'),
+    // M4 W4.6 (H-4 f, H-3).
+    credentials: () => subscriptions.credentialOps,
   });
 
   const { bind, unbind } = makeAttach({

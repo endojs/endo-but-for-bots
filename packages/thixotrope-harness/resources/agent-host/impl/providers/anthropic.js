@@ -851,5 +851,6 @@ harden(makeAnthropicProvider);
 export const anthropicKind = harden({
   kind: 'anthropic',
   makeProvider: makeAnthropicProvider,
-  tools: harden([]),
+  // M4 W4.6 (H-14, D-M4-9): account status on API backends too.
+  tools: harden(['accountStatus']),
 });

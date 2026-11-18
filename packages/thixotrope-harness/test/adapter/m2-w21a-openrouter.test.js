@@ -236,12 +236,13 @@ const noBodyOrKey = (t, r) => {
   t.false(seen.includes(KEY), 'no key');
 };
 
-test('the openrouter kind is in backendKinds and offers no adapter tool', t => {
+test('the openrouter kind is in backendKinds and offers only accountStatus', t => {
   t.is(
     backendKinds.find(k => k.kind === 'openrouter'),
     openRouterKind,
   );
-  t.deepEqual(openRouterKind.tools, []);
+  // M4 W4.6 (m4-interfaces 8, assumption 8): accountStatus on API kinds.
+  t.deepEqual(openRouterKind.tools, ['accountStatus']);
 });
 
 test('acceptance 1: a streamed reply publishes more than one delta; the result carries usage and served-by', async t => {
