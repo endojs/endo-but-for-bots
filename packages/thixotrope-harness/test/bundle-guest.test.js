@@ -15,6 +15,7 @@ import {
   guestRoot,
   programPieceBytes,
   sessionEntry,
+  sessionProgramBytes,
 } from '../scripts/provision-steps.js';
 import { harnessRoot, scratch } from './_helpers.js';
 
@@ -206,8 +207,9 @@ test('the session program bundle is ASCII (J-0244: U+034F hidden names)', async 
   // Staged in pieces of programPieceBytes (scripts/provision-steps.js).
   const pieces = Math.ceil(bundle.bytes / programPieceBytes);
   t.log(JSON.stringify({ bytes: bundle.bytes, programPieceBytes, pieces }));
-  // Within the session-program budget (architecture D-4: 200 KB, perf
-  // `session.program`), not a snapshot of one milestone's size.
-  t.true(bundle.bytes <= 200_000);
-  t.true(pieces <= Math.ceil(200_000 / programPieceBytes));
+  // Within the session-program budget (architecture D-4, perf
+  // `session.program`; 240,000 since M5's O-1), not a snapshot of one
+  // milestone's size.
+  t.true(bundle.bytes <= sessionProgramBytes);
+  t.true(pieces <= Math.ceil(sessionProgramBytes / programPieceBytes));
 });

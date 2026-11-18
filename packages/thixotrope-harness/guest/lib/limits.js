@@ -115,8 +115,11 @@ export const limits = harden({
   foldMessages: 4096,
   /** Deliveries in one LiveSubscription.next() answer (adapter to client). */
   liveBatchDeliveries: 256,
-  /** The bundled session program (architecture D-4, perf `session.program`). */
-  sessionProgramBytes: 200_000,
+  /**
+   * The bundled session program (architecture D-4, perf `session.program`);
+   * 200,000 until M5's merge raised it (M5 contract O-1, W5.9).
+   */
+  sessionProgramBytes: 240_000,
 
   // ---- M1b contract settings (W1b.0; designs/m1b-interfaces.md) ----
   /** A piece a vat appends to a BlobWriter, bytes (architecture 6: frameBytes / 2). */
@@ -154,8 +157,8 @@ export const limits = harden({
   blobWriterIdleMs: 60_000,
   /** Exec call deadline (architecture 6; open decision 10); HarnessRoot.configure changes it. */
   execDeadlineMs: 120_000,
-  /** The bundled exec program (perf `exec.program`). */
-  execProgramBytes: 100_000,
+  /** The bundled exec program (perf `exec.program`); 100,000 before M5 (O-1). */
+  execProgramBytes: 120_000,
   /** Spare session vats, spare exec vats, creations in parallel (D-4). */
   spareSessions: 2,
   spareExec: 1,
