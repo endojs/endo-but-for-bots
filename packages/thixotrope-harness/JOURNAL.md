@@ -8830,3 +8830,86 @@ local account name are committed in `designs/architecture.md`, `designs/mileston
 and in `designs/survey/feasibility-probe.mjs`. These are paths of the home directory, of sibling
 checkouts, of the specification and of a session scratch directory.
 Decision: replace them with the names used elsewhere (T, E, H, `<scratch>`) before any push.
+
+### J-9480 2026-11-18 M2 acceptance 3 in a vat as a round rate - perf
+Evidence: `test/integration/m2-turns.test.js` (commit 3ddceecc8a; run at 6adae9ee8e with other
+units' uncommitted files in the worktree, none in the session program), one run under a shared
+slot, load average 5.4-6.0 (four lanes running), m1a template, release worker 367e78ad...,
+crank budget 50 M, slot ceiling 4,000,000, collection `allocation`, hub store `log`.
+Reading: the opt-in 1,024-round test (J-0471, a known failure of about 280 s) is deleted. The
+behaviour at the limit stays proven in Node at a limit of 2 (`test/adapter/m2-w26-turns.test.js`,
+R4-47). The vat test now starts an always-tool turn, measures its rounds over a fixed 60 s window
+from the first provider request, checks that one request is made a round in order and that the
+turn is still running (no early end), cancels it, and derives the 1,024-round time:
+`{"metric":"m2.turns.roundRate","unit":"rounds/s","window":60000,"samples":205,"roundsPerSecond":3.42,"firstRoundsMs":319,"lastRoundsMs":327,"medianRoundMs":318,"limitRounds":1024,"derivedLimitMs":299707,"derivedLimitMsAtLast":334848}`
+Same run: `m2.turns.rounds` 101 rounds in 35.8 s (median 387 ms a round),
+`m2.turns.restart` served 22.3 s, recovered 24.8 s (J-0471 at load 1.7: 272 ms, 7.6 s, 8.7 s).
+The file's three tests took 70.3 s, 60.6 s and 103.1 s; the file held its slot 293 s (J-9409:
+118 s with two tests at lower load). A vat test that runs to a small limit needs a round limit
+in `SessionConfig` (a contract change; not made, see the unit's report to the PM): the session
+program passes no `maxToolRounds` option, so the vat's limit is the constant.
+Decision: acceptance 3 is the Node test at limit 2 plus this rate; the 1,024-round time is
+derived (about 300 s at 3.4 rounds/s under load), not run.
+
+### J-9481 2026-11-18 M2 acceptance 16 under the time box: two files, an imported session - perf
+Evidence: `test/integration/m2-archive-restart.test.js` (S, A3), `m2-archive-restart-2.test.js`
+(A2, Z), helper `_m2-archive-kill.js` (commit 403f08e744); three runs of both files together
+(`--jobs 2`), shared slots, load average 4.2-7.6 (four lanes), identity as J-9480.
+Reading: before, one file grew its session with 159 live turns and killed at S, A2, A3 and Z in
+turn: 274-315 s (J-9409), 366 s held in a run today, 15-minute timeout. Now each file imports one
+session of 159 plain turns (`importState`, process.md 3) and kills at two points; the second
+point's kill lands on the seal the first point's restart retries 8 settles later, so that seal is
+the first point's next-seal check (it was 23 more turns to the next 32-settle seal); the Z point
+waits 3 s for the seal answer and looks again after the next turn (it waited 10 s a turn, and
+after a failed seal every turn looks due: 7 turns cost 70 s). Timeout 8 minutes a file.
+A grown session cannot be a cached state template here: the scripted backend's `logPath` is
+absolute and persisted in the state, so a copy writes into the build directory (M2-P1's
+`perf/_long-template.mjs` solves it with a log directory outside the copies and one user at a
+time, which would serialize these two files).
+Held time per file (part 1 / part 2): run 1 (split only) 330 / 308 s; run 2 (chained seal)
+287 / 294 s; run 3 (Z fix) **198 / 233 s**, both under 4 minutes at load 4.3-4.9. Run 3 parts:
+start 17.5 / 6.4 s, import 28.4 / 20.6 s, S 31.8 s, A3 56.3 s, A2 43.6 s, Z 98.9 s; a restart's
+`servedMs` was 13-35 s (7.6 s at load 1.7, J-0471), so the restarts are most of the time and
+the times move with the machine's load. Slot waits were 2.8-16.5 minutes per file.
+Kill rows reached (m2-interfaces.md 4.5; partAtKill / segment files at kill / vat segments):
+before (J-0460): S orphan segment, vat 0; A2 orphan after the rename, vat unchanged; A3 answer
+committed, vat +1; Z after Z. Run 1: S orphan (0 / 1 / 0); A2 orphan (0 / 1 / 0); A3 vat +1;
+Z vat +1. Runs 2 and 3: S `.part` left (1 / 0 / 0); A2 `.part` left (1 / 0 / 0); A3 vat +1; Z
+vat +1. Which row an S or A2 kill hits depends on when the SIGKILL lands relative to the
+adapter's rename, as before the change: run 1 reached every row J-0460 reached; runs 2-3 reached
+the `.part` row (not reached in J-0460) instead of the orphan row. After every restart: every
+turn once, no `.part` left, the same per-turn digests (159 or 191 turns compared), and a later
+seal acknowledged (A3 and Z rows sealedByVat true; their own next seal after 24 turns).
+Decision: recorded. Each row deterministically needs a test-only pause in the archive adapter
+between A2 and A3 (a PM item); the Node table (`test/adapter/m2-archive-kill.test.js`) covers
+every row.
+
+### J-9482 2026-11-18 Provisioning seam and perf lock mode - good fit
+Evidence: `scripts/provision-steps.js` (commit c37c550222), `test/unit/m2-t1-provision-seam.test.js`
+(3 tests, 1.6 s, run today); `perf/_harness.mjs` (commit b028579c64), a Node smoke of
+`perfLockMode` and `stats` (not committed).
+Reading: `makeProvision` keeps `{ sessionEntry, execEntry, pool, onStep, stepDirectory }` and
+forwards every other option, the same values (not copies), to every step as
+`options: { ...stepOptions, sessionEntry, execEntry, pool }`: the two lines m5-interfaces.md H-10
+asks the first lane to make. Later milestones' steps are files `scripts/provision-steps/NN-name.js`
+exporting `steps`, run after the M1 table in file-name order (30 gateway, 40 subscriptions,
+50 M5 fixtures), a name already taken is refused, so lanes no longer edit one table. The tests
+check the order, that `gateway`, `subscriptions` and `m5Fixtures` arrive identical (`t.is`), and
+that a step not asked for skips. `runPerf` passes `mode` to the run lock explicitly
+(`perfLockMode`: exclusive unless `--shared`), marks shared rows `underLoad`, and `stats` /
+`record` pass `window` and `samples` through only when given (smoke: present when given, absent
+otherwise; exclusive for `x.perf.mjs`, shared with `--shared`).
+Fit: options pass as objects through a step registry keyed by file; the only names are the step
+names (diagnostic labels and the duplicate check), not lookups of the objects themselves.
+Decision: built; the lanes' merge changes are in the unit's report to the PM.
+
+### J-9483 2026-11-18 M2-T1 time record - process
+Evidence: this unit's runs (`runs.jsonl`, agent M2-T1) after the restart, 08:19-09:10 UTC.
+Reading: archive pair run 1 5 min 31 s wall; m2-turns 8 min 46 s wall (3 min 52 s waiting for a
+slot); archive pair run 2 14 min 29 s wall (9 min 40 s waiting); run 3 about 20 min wall (15-16.5
+min waiting). Slot waits were 60-80 % of this unit's wall time: six slots shared by four lanes at
+load 4-6. The earlier run before the machine restart also ran m2-turns (188 s and 294 s held) and
+the split archive files once (163 / 187 s held, part 1 exit 128, cause not recorded).
+Fit: a SIGKILL test on Thixotrope costs one supervisor restart per kill (13-45 s served under
+load), which no test-side change removes; a cheaper restart is a core matter.
+Decision: recorded.
