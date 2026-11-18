@@ -13,7 +13,8 @@
  * (`ListSubscription`) with its own bounded queue; the factory never holds a
  * viewer (feasibility B-4).
  *
- * Numbering and order, as the session channel (`channels.js`): `seq` counts
+ * Numbering and order, as the session channel (`channels.js`; the queue and
+ * the rev order are `channel-subscriber.js`, shared by both): `seq` counts
  * this incarnation's deliveries from 1; a subscription's first delivery is
  * `{ seq, rev, event: { type: 'list-snapshot' } }` with the `seq` of the
  * last delivery it accounts for and `rev` = the latest rev delivered (0 =
@@ -36,133 +37,29 @@
  * Node module (adapter); reads the guest prelude from `globalThis`, which
  * the loader installs before importing `impl/index.js`.
  */
-import { clearTimeout, setTimeout } from 'node:timers';
-
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
 import { interfaces, shapes } from '../../../guest/lib/interfaces.js';
-import { limits as guestLimits } from '../../../guest/lib/limits.js';
 import { messageBytes } from '../../../guest/lib/bounded.js';
 /* eslint-enable import/no-relative-packages */
 import { channelLimits } from '../../../config/defaults.js';
+import {
+  makeRevReorder,
+  makeSubscriber,
+  slowestOf,
+  unrefSchedule,
+} from './channel-subscriber.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { makeExo, makePromiseKit } = /** @type {GuestGlobals} */ (globalThis);
+const { makeExo } = /** @type {GuestGlobals} */ (globalThis);
 /** @type {GuestGlobals['mustMatch']} */
 const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
 
 /**
- * @typedef {'client' | 'queueDeliveries' | 'queueBytes' | 'subscriberLimit'} CloseReason
+ * @typedef {import('./channel-subscriber.js').CloseReason} CloseReason
+ * @typedef {import('./channel-subscriber.js').Schedule} Schedule
+ * @typedef {import('./channel-subscriber.js').Subscriber} ListSubscriber
  * @typedef {{ seq: number, rev: number, event: any }} ListDelivery
- * @typedef {(fn: () => void, ms: number) => () => void} Schedule
- * @typedef {object} ListSubscriber
- * @property {(delivery: ListDelivery, size: number) => void} push
- * @property {(reason: CloseReason) => void} close
- * @property {any} facet the `ListSubscription` exo
- * @property {() => number} queuedBytes
- * @property {() => number} queuedDeliveries
  */
-
-/** @type {Schedule} */
-const defaultSchedule = (fn, ms) => {
-  const timer = setTimeout(fn, ms);
-  timer.unref?.();
-  return () => clearTimeout(timer);
-};
-
-/**
- * One list subscriber.
- * @param {object} options
- * @param {number} options.queueLimit
- * @param {number} options.queueBytes
- * @param {(reason: CloseReason) => void} options.onClose
- * @returns {ListSubscriber}
- */
-const makeListSubscriber = ({ queueLimit, queueBytes, onClose }) => {
-  /** @type {ListDelivery[]} */
-  const queue = [];
-  /** @type {number[]} */
-  const sizes = [];
-  let bytes = 0;
-  /** @type {ReturnType<typeof makePromiseKit>[]} */
-  const waiters = [];
-  /** @type {CloseReason | undefined} */
-  let closedFor;
-  let flushScheduled = false;
-
-  const take = () => {
-    const deliveries = queue.splice(0, guestLimits.liveBatchDeliveries);
-    for (const size of sizes.splice(0, deliveries.length)) bytes -= size;
-    return harden({ deliveries });
-  };
-  const closedBatch = () =>
-    harden({ deliveries: [], closed: true, reason: closedFor });
-
-  const flush = () => {
-    flushScheduled = false;
-    while (waiters.length > 0 && queue.length > 0) {
-      const waiter = /** @type {ReturnType<typeof makePromiseKit>} */ (
-        waiters.shift()
-      );
-      waiter.resolve(take());
-    }
-  };
-
-  /** @param {CloseReason} reason */
-  const close = reason => {
-    if (closedFor !== undefined) return;
-    closedFor = reason;
-    queue.length = 0;
-    sizes.length = 0;
-    bytes = 0;
-    onClose(reason);
-    const batch = closedBatch();
-    for (const waiter of waiters.splice(0)) waiter.resolve(batch);
-  };
-
-  /**
-   * @param {ListDelivery} delivery
-   * @param {number} size
-   */
-  const push = (delivery, size) => {
-    if (closedFor !== undefined) return;
-    queue.push(delivery);
-    sizes.push(size);
-    bytes += size;
-    if (queue.length > queueLimit) {
-      close('queueDeliveries');
-      return;
-    }
-    if (bytes > queueBytes) {
-      close('queueBytes');
-      return;
-    }
-    if (waiters.length > 0 && !flushScheduled) {
-      flushScheduled = true;
-      void Promise.resolve().then(flush);
-    }
-  };
-
-  const facet = makeExo('ListSubscription', interfaces.ListSubscription, {
-    async next() {
-      if (closedFor !== undefined) return closedBatch();
-      if (queue.length > 0 && waiters.length === 0) return take();
-      const waiter = makePromiseKit();
-      waiters.push(waiter);
-      return waiter.promise;
-    },
-    close() {
-      close('client');
-    },
-  });
-
-  return harden({
-    push,
-    close,
-    facet,
-    queuedBytes: () => bytes,
-    queuedDeliveries: () => queue.length,
-  });
-};
 
 /**
  * @param {object} [options]
@@ -172,25 +69,11 @@ const makeListSubscriber = ({ queueLimit, queueBytes, onClose }) => {
  */
 export const makeListChannel = ({
   limits: given = {},
-  schedule = defaultSchedule,
+  schedule = unrefSchedule,
 } = {}) => {
   const lim = { ...channelLimits, ...given };
   let seq = 0;
-  let latestRev = 0;
-  /** @type {number | undefined} */
-  let expectedRev;
-  /** @type {{ rev: number, events: readonly any[] }[]} held batches, arrival order */
-  const backlog = [];
-  let heldDeliveries = 0;
-  /** @type {(() => void) | undefined} */
-  let cancelWait;
-  const counts = {
-    batches: 0,
-    reordered: 0,
-    dropped: 0,
-    gaps: 0,
-    missingRevs: 0,
-  };
+  let batches = 0;
   /** @type {Map<CloseReason, number>} */
   const closes = new Map();
   /** @type {Set<ListSubscriber>} */
@@ -207,99 +90,21 @@ export const makeListChannel = ({
     for (const subscriber of subscribers) subscriber.push(delivery, size);
   };
 
-  /**
-   * @param {number} rev
-   * @param {readonly any[]} events
-   */
-  const deliverBatch = (rev, events) => {
-    counts.batches += 1;
-    latestRev = rev;
-    expectedRev = rev + 1;
-    for (const event of events) deliver(event, rev);
-  };
-
-  const drain = () => {
-    for (;;) {
-      const at = backlog.findIndex(item => item.rev === expectedRev);
-      if (at < 0) break;
-      const [item] = backlog.splice(at, 1);
-      heldDeliveries -= item.events.length;
-      counts.reordered += 1;
-      deliverBatch(item.rev, item.events);
-    }
-    if (backlog.length === 0 && cancelWait !== undefined) {
-      cancelWait();
-      cancelWait = undefined;
-    }
-  };
-
-  const declareGap = () => {
-    let oldest = Infinity;
-    for (const item of backlog) if (item.rev < oldest) oldest = item.rev;
-    if (oldest === Infinity) return;
-    counts.gaps += 1;
-    counts.missingRevs += oldest - /** @type {number} */ (expectedRev);
-    expectedRev = oldest;
-    drain();
-  };
-
-  const armWait = () => {
-    if (cancelWait !== undefined || backlog.length === 0) return;
-    cancelWait = schedule(() => {
-      cancelWait = undefined;
-      declareGap();
-      armWait();
-    }, lim.reorderWaitMs);
-  };
-
-  const enforceWindow = () => {
-    while (
-      backlog.length > 0 &&
-      (backlog.length > lim.reorderWindowBatches ||
-        heldDeliveries > lim.reorderBacklogDeliveries)
-    ) {
-      declareGap();
-    }
-  };
+  const reorder = makeRevReorder({
+    limits: lim,
+    schedule,
+    deliverBatch: (rev, events) => {
+      batches += 1;
+      for (const event of events) deliver(event, rev);
+    },
+  });
 
   const publisher = makeExo('ListPublisher', interfaces.ListPublisher, {
     /** @param {any} batch a ListPublishBatch (the guard checked it) */
     publish({ rev, events }) {
-      const batchRev = /** @type {number} */ (rev);
-      if (expectedRev === undefined || batchRev === expectedRev) {
-        deliverBatch(batchRev, events);
-        drain();
-        return;
-      }
-      if (
-        batchRev < expectedRev ||
-        backlog.some(item => item.rev === batchRev)
-      ) {
-        counts.dropped += 1;
-        return;
-      }
-      backlog.push({ rev: batchRev, events });
-      heldDeliveries += events.length;
-      enforceWindow();
-      armWait();
+      reorder.publish(/** @type {number} */ (rev), events);
     },
   });
-
-  const slowest = () => {
-    /** @type {ListSubscriber | undefined} */
-    let worst;
-    for (const subscriber of subscribers) {
-      if (
-        worst === undefined ||
-        subscriber.queuedBytes() > worst.queuedBytes() ||
-        (subscriber.queuedBytes() === worst.queuedBytes() &&
-          subscriber.queuedDeliveries() > worst.queuedDeliveries())
-      ) {
-        worst = subscriber;
-      }
-    }
-    return worst;
-  };
 
   /**
    * A new subscriber; its first delivery is the list snapshot marker. `rev`
@@ -308,10 +113,12 @@ export const makeListChannel = ({
    */
   const subscribe = _rev => {
     while (subscribers.size >= lim.subscribersPerSession) {
-      slowest()?.close('subscriberLimit');
+      slowestOf(subscribers)?.close('subscriberLimit');
     }
     /** @type {ListSubscriber} */
-    const subscriber = makeListSubscriber({
+    const subscriber = makeSubscriber({
+      exoName: 'ListSubscription',
+      guard: interfaces.ListSubscription,
       queueLimit: lim.subscriberQueueDeliveries,
       queueBytes: lim.subscriberQueueBytes,
       onClose: reason => {
@@ -322,7 +129,7 @@ export const makeListChannel = ({
     subscribers.add(subscriber);
     const first = harden({
       seq,
-      rev: latestRev,
+      rev: reorder.latestRev(),
       event: { type: 'list-snapshot' },
     });
     mustMatch(first, shapes.ListDelivery);
@@ -333,17 +140,11 @@ export const makeListChannel = ({
   return harden({
     publisher,
     subscribe,
-    latestRev: () => latestRev,
+    latestRev: reorder.latestRev,
     /** Subscribers attached (tests, diagnostics). */
     subscriberCount: () => subscribers.size,
     /** Ordering counters (tests, diagnostics). */
-    ordering: () =>
-      harden({
-        ...counts,
-        expectedRev: expectedRev ?? null,
-        heldBatches: backlog.length,
-        heldDeliveries,
-      }),
+    ordering: () => harden({ batches, ...reorder.ordering() }),
     /** Closed subscribers by reason (tests, diagnostics). */
     closes: () => harden(Object.fromEntries(closes)),
   });
