@@ -320,6 +320,7 @@ test('object tool sites and descriptions', t => {
  * A dynamic entry for a source.
  * @param {string} name
  * @param {any[]} [log]
+ * @returns {any}
  */
 const dynamic = (name, log = []) =>
   harden({
@@ -380,6 +381,7 @@ test('toolSetFor: dynamic sources after the table; built-in and duplicate names 
   );
   // The runtime reaches the source.
   const runtime = harden({ marker: 1 });
+  /** @type {any} */
   let seen;
   toolSetFor(
     portsWithout,
