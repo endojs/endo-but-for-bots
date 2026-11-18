@@ -116,8 +116,8 @@ test('the global ceiling: 21 failures in a minute from different addresses', t =
   const clock = makeClock();
   const limiter = makeSignInLimiter({ now: clock.now });
   for (let i = 0; i < 20; i += 1) {
-    t.true(limiter.check(`10.0.1.${i}`).ok);
-    limiter.failed(`10.0.1.${i}`);
+    t.true(limiter.check(`127.10.1.${i}`).ok);
+    limiter.failed(`127.10.1.${i}`);
     clock.advance(1000);
   }
   // 20 failures: not yet over the ceiling.
@@ -155,7 +155,7 @@ test('retained state stays bounded under a long attack', t => {
   // only admitted attempts fail, and the ceiling admits few.
   let admitted = 0;
   for (let i = 0; i < 6000; i += 1) {
-    const address = `10.0.${Math.floor(i / 256)}.${i % 256}`;
+    const address = `127.10.${Math.floor(i / 256)}.${i % 256}`;
     if (limiter.check(address).ok) {
       admitted += 1;
       limiter.failed(address);
