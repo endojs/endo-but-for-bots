@@ -27,7 +27,8 @@
   "scripts": {
     "build": "exit 0",
     "bundle": "node scripts/bundle-guest.mjs",
-    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint": "yarn lint:types && yarn lint:eslint && yarn lint:duplicates",
+    "lint:duplicates": "node scripts/check-duplicates.mjs",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
