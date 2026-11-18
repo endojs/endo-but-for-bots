@@ -9189,3 +9189,187 @@ Time: 08:19:13Z to this commit; 46 runs, 122 min held, 252 min waited; commands 
 lane (72 s), the M2 batch (about 60 min), the kill script (about 66 min), the M1 batch (20 min), the
 archive rerun (4.2 min), m1b-live alone (2.3 min), and the wait loops for them.
 Decision: (1)-(3) for the PM or the owners of those files.
+
+### J-9485 2026-11-18 M2-FIX archive validation deletes no segment (PM ruling 10) - defect
+Evidence: `AH/archive/store.js` `observeNow`, `scanSegments`, `sealNow`; `AH/archive/segment.js`
+`writeSegment`; commit 77585802a7; tests `test/adapter/m2-archive-store.test.js` "J-9485 (B)",
+"J-9485 (A)", "J-9485: a segment file that cannot be read", the rewritten "validation" test, and
+`m2-archive-kill.test.js` (18 tests, about 24 s wall, Node, no supervisor); integration
+`m2-archive-restart-2` passed in a shared slot (209 s) and `m2-archive-restart` (153 s, S
+and A3 kills) at 781c2f3bf0; the whole unit and adapter lane: 727 passed, 0 failed, 65 s wall.
+Reading: M2-R2's J-9445 is fixed in store.js only. (1) No code path outside session delete
+(`release`) unlinks a final-named segment: validation keeps every file of the vat's chain, every
+file the manifest records `acknowledged`, and every file that chains forward from the vat's state
+(any branch, any length: a seal answered in this or an earlier incarnation whose crank Z has not
+run); an orphan is only a file at an ordinal the vat's chain already fixes with another digest, and
+it is renamed `<name>.orphan` (out of scans, its blob keys still counted live, removed with the
+session). `sealNow` sets replaced entries aside the same way and refuses (never deletes) if one is
+acknowledged. (2) Staleness comes from the persisted acknowledged chain: a state that is a proper
+prefix of the manifest's acknowledged entries changes nothing; with no state in memory the
+acknowledged prefix becomes the validated state after its files are stat'ed. So LRU eviction (B)
+and a restart (A) no longer matter, and the J-0493 (3) delivery-order assumption carries nothing.
+(3) `scanSegments` keeps a file that does not verify (counted `unreadable`) and throws on a read
+error with an errno (EACCES in the test stands for EIO/EMFILE); `writeSegment` keeps a damaged file
+of the same name as `<name>.bad` before writing the verified one. The two reviewer scenarios are
+tests now: (B) `maxSessions: 1`, two segments acknowledged, the state evicted by another session,
+the pre-seal page observed: both files kept, the next prepare equals the oracle; (A) incarnation 1
+answers, incarnation 2 observes the older state, then Z: kept, acknowledged, equal to the oracle.
+Behaviour change: an answered seal the vat never applied now stays on disk until the vat seals that
+ordinal again (the same range reuses the file; another range sets it aside), at most one file per
+crash; the kill tests now assert "acknowledged plus at most the unapplied answer", and only the
+chain after the next seal.
+Fit: awkward, and now explicit: an orthogonally persistent vat keeps the acknowledged chain for
+free, while the Node adapter must persist the fact (manifest flags) before it can act on it;
+deciding deletion from adapter memory was the defect. Good: chained digests make "is this a
+prefix of what the vat named" a constant-time check.
+Decision: done; contract 4.2, 4.5 and 4.7 restated (deletion follows only from the persisted
+chain).
+
+### J-9486 2026-11-18 M2-FIX security review fixes (M2-R1) - defect
+Evidence: commits 7fb0d89457 (providers) and 3c111fc57a (secrets); tests
+`test/adapter/m2-w21a-openrouter.test.js` (three J-9486 tests), `m2-w23-secrets.test.js` (key race
+50 runs, torn audit tail), `m2-w23-manager.test.js` (delete between pages), `test/unit/
+m2-interfaces.test.js` (timeoutMs); 89 provider/secrets/interface tests passed in 5.7 s wall;
+integration `m2-secrets` 112 s, `m2-providers` 119 s, `m2-catalog` 118 s, all pass (shared slots,
+load 2.1-2.7).
+Reading: fixed: (a) `providerBaseUrl` (AH/providers/http.js) refuses a base URL that is not
+`https:` or `http:` to localhost/127.0.0.1/[::1], or has user info, a query or a fragment, with a
+fixed text, in the OpenRouter and Anthropic providers and the catalogue; (c) a round's whole
+streamed body is bounded at `limits.roundStreamBytes` (64 MiB; `boundedChunks`), past it the round
+fails with `texts.frameLimit` and the body is cancelled (test: 69.2 MB streamed before the cut,
+under 1 s), and the BackendSpec guard refuses `timeoutMs` 0 or under 1 s; (R7-25) a key over
+`limits.providerTokenBytes` (8,192 bytes) fails the round with `INVALID_SECRET_BYTES` before any
+request, and the catalogue answers unavailable; (d) concurrent loads of one key file share one
+read, and a missing key file is created as a temp file, fsynced, linked into place (EEXIST: the
+other's key wins) and the directory fsynced, so a SIGKILL leaves no empty key file (50 of 50 runs);
+(audit) a torn last audit line is cut at load, so the next event is kept (the probe's 7-of-8 case is
+a test); (e) `SecretsAdmin.list` pages by creation serial (a delete between pages skips none);
+`MAX_SECRETS` and `AUDIT_KEEP` read `limits.secretsMax` and `limits.auditKeepEvents`; `create` counts
+creates in flight. Not fixed: (b) `SecretWriter.replace` still takes a plain string from a remote
+caller: M3's A-11 relies on a page's plain `replace(secret, value)` through the gateway, and M4's
+contract on the same exo, so a SealedBox-only guard is a cross-lane contract change (design in the
+M2-FIX report); the origin binding of a Secret; HKDF subkeys per purpose; `logPath` (tests and the
+M1a slice pass absolute paths in the state root; confining it needs the adapter's state directory in
+`AH/index.js`, a file three lanes edit). Bundles: session 186,448 -> 186,612, exec 84,354 -> 84,518
+bytes (the four limits and the guard).
+Fit: good: the bounds are all in the adapter, so the vat side changed by limits and one guard only.
+Decision: (a), (c) and the R7-25 bound were "before done" items and are in; (b) for the PM.
+
+### J-9487 2026-11-18 M2-FIX PM rulings 1 and 3: the cancel's end event, the audit deviation - decision
+Evidence: commits 0c40bdf4f4 (contract 16 item 11) and 3c111fc57a (contract 9.1); J-9441, J-9486.
+Reading: ruling 1: contract decision 11 records that a cancelled turn ends `end { status:
+'cancelled' }` and no `abort` is added; no code changed. Ruling 3: the review confirmed for SIGKILL
+that no value can leak from the audit log and refuted only the torn-line case (power loss, full
+disk), which J-9486 fixed first; contract 9.1 now says what is built (`secrets-audit.log` beside
+`secrets.enc`, a sealed line per event, appended without fsync, rewritten at twice the bound), that
+a SIGKILL can lose the newest audit lines, that a torn tail is cut at load, and that the 1,024
+Secrets bound is `limits.secretsMax`.
+Decision: applied.
+
+### J-9488 2026-11-18 M2-FIX PM ruling 2: history page records 48 -> 40 - decision
+Evidence: commit 6ec6044aa0; `guest/lib/limits.js` `historyPageRecords`; contract 3, 4.9, 6 and
+decision 6; `test/unit/m2-w25-archive.test.js`, `m2-interfaces.test.js`, adapter
+`m2-archive-store.test.js` (46 tests pass); integration `m2-history` passed (224 s, shared slot)
+with the bound at 40.
+Reading: every test reads the bound from `limits`, so none needed a number changed. Session bundle
+186,612 -> 186,611 bytes.
+Decision: applied; the `history.page` row is the perf pass's to re-read.
+
+### J-9489 2026-11-18 M2-FIX PM ruling 4: the inline too-big case - decision
+Evidence: `designs/m2-interfaces.md` (no client-side size check is in the contract);
+`designs/architecture.md` 12 rule 5 (vat message builders check `frameBytes`); J-9407;
+`test/integration/m2-probes.test.js` (the `test.failing` stays).
+Reading: the milestone row asks that "the client library" refuse a 100 KiB string before sending;
+the M2 contract does not say any client checks sizes (rule 5 binds guest builders, not the control
+client), so nothing was added. The refusal today is the session vat's guard: no halt, but the frame
+is delivered.
+Decision: no change, per the ruling. Core candidate kept from M2-R2: the hub refuses a frame over
+`frameBytes` addressed to a vat before delivery.
+
+### J-9490 2026-11-18 M2-FIX PM rulings 7 and 8; findings not fixed - decision
+Evidence: the M2-FIX commits (git log 6be8e868cf..HEAD, subjects ending "(M2-FIX)").
+Reading: ruling 7: `m2Interfaces` is not folded and no export renamed; files the M3/M4/M5 lanes
+also edit were touched only as follows: `guest/lib/interfaces.js` one line (the BackendSpec
+`timeoutMs` guard); `guest/lib/limits.js` four new bounds in one hunk after `secretValueBytes`
+plus `historyPageRecords` 40 and its comment; `resources/agent-host/durable.js` (`MAX_SECRETS` from
+limits, `list` by creation serial, creates in flight counted); `guest/session/session.js` one line
+(`cancelCurrent` to the queue). `AH/index.js`, `attach.js`, `factory.js` and the texts are
+unchanged (`texts.receiptLimit` is left unused). Ruling 8: the absolute local paths in the design
+documents were accepted by the owner before the first push and are public already: nothing changed,
+no history rewritten. Not fixed, with reasons: usage of a cancelled round (the answer usually
+arrives after the cancel settled the turn and wrote its record; a fix makes settle wait, bounded,
+for the cancelled round's answer); delete racing a session's first seal (needs a release tombstone
+in the archive root or a delete that waits for the seal in flight); export of a busy session
+(retry from a fresh head, or an export lease); one `pending` diff per change (a contract change
+for M3's viewers); the `SecretWriter` plain-string path (J-9486).
+Decision: for the PM, with the designs in the M2-FIX report.
+
+### J-9491 2026-11-18 M2-FIX PM rulings 5 and 9: where the specification wins - decision
+Evidence: SPEC R6-44, R4-47, R4-83, A.4 `getUsage` and the `usage` event (read in the
+specification, not from memory of the reference); commit 8c538130dd; contract 5.1 and decision 12;
+`test/unit/m2-queue-submissions.test.js` (17 pass), `test/integration/m2-queue.test.js`
+(passed, 180 s, shared slot, at 781c2f3bf0).
+Reading: (a) R6-44 states that Send now "for the queue head cancels the running turn so it goes
+next": built. `QueueEntry.sendNow` moves the entry to the head, releases holds, claims when idle;
+when a turn runs and no hold is left it cancels that turn (`runner.cancelCurrent`, as
+`Turn.cancel()`), and the entry is claimed when the cancelled turn settles. The old unit test that
+asserted "a running turn is never cut short" now asserts the cut. (b) Usage `turns`: R4-83, A.4
+and the event say "turns, incomplete turns" only; silent on which turns count, so the contract
+(every settled turn) stands. (c) The R4-47 round-limit text: the specification says only that the
+turn "ends normally with" it; silent on later contexts, so the contract (`TurnSettled.final`, not a
+transcript record) stands. Session bundle 186,611 -> 187,018 bytes.
+Decision: applied.
+
+### J-9492 2026-11-18 M2-FIX PM ruling 6: receipts bounded by eviction - decision
+Evidence: commit 668f054b80 (its subject says 187,173; the bundle measured 187,284 bytes after it,
+from 187,018); `guest/lib/pending-queue.js` (12 lines of vat code); `test/unit/m1a-queue.test.js`,
+`m2-queue-pending.test.js` (63 queue tests pass).
+Reading: R4-98 says "4096 receipts kept" and R4-53 that the queue bounds what is held. A full
+table no longer refuses: the oldest inserted receipt is evicted, and the session keeps one number,
+the latest issue time evicted; an unknown id issued at or before it is refused with
+`texts.requestIdExpired`, so a retry whose receipt was evicted is never run twice. Retained state:
+4,096 receipts plus one number. Cost: a client whose clock lags can see a fresh id refused as
+expired while the table turns over within its lag.
+Decision: applied; contract 5.1 restated.
+
+### J-9493 2026-11-18 M2-FIX import, export and delete findings (M2-R2, M2-R3) - defect
+Evidence: commits 4282731e7d and 781c2f3bf0, `guest/session/{turn,export,archive,records}.js`,
+`scripts/export.mjs`; `test/unit/m2-w25-archive.test.js`, `m2-w27-session-export.test.js` (37 unit
+tests pass); `test/integration/m2-lifecycle.test.js` and the new `m2-lifecycle-export.test.js`
+(`m2-lifecycle` 216 s and `m2-lifecycle-export` 217 s, both pass in shared slots; the export
+file failed once on a wrong expectation of mine, fixed in 62c00f07e1; `m2-turns` 194 s, pass).
+Reading: (1) A turn exported while it ran is settled `outcome-unknown` when the import ends
+(`runner.importEnd`), counted in `turns` and `incompleteTurns`, resolvable, and sealing passes it;
+`importTurns` refuses a settle that is not of the last started, running turn and a resolution
+before its settle. (2) The `archive` import part is refused and `adopt`/`startAt` removed (no
+importer sends it). (3) `scripts/export.mjs importState`: an export that ends, or starts another
+session, inside a session deletes that half-imported session and throws naming it. (4) Acceptance
+13: both delete tests now assert the doomed session's archive directory and blob files are gone;
+the bytes left under `agent-host/archive` are other sessions' directories (the kept session's mirror
+of its live tail), recorded as `otherNewDirs`: the kill run gave
+`doomedDirs: ["h1"]` gone, `archiveAfter: 82` bytes = `otherNewDirs: ["h2"]`, the kept session `s2`.
+So M2-R3's 82 bytes are not a leak. (5) `m2-lifecycle` split: acceptance 14
+and the truncated import moved to `m2-lifecycle-export.test.js`. (6) `blobPage` uses `staging.js`
+`blobsOf`. Session bundle 187,284 -> 187,311 (import fixes) -> 186,998 bytes (one walk).
+Decision: done; the two "before done" items of M2-R2 are in.
+
+### J-9494 2026-11-18 M2-FIX checkpoint.stall: the cause is the core's cadence snapshot - perf
+Evidence: J-9462's per-turn split (engine snapshot count and time per turn, at 200, 1,000 and
+5,000 turns); `packages/thixotrope/src/core/durable-worker-transport.js` (the cadence check after
+each delivery batch), `src/control/supervisor.js` (`snapshotEveryDeliveries = 256`),
+`scripts/serve.mjs` (`--snapshot-every`); J-9463 (snapshot 34.4 MB, flat with length). No new run:
+the earlier split already holds per-phase timing, and the code path explains it.
+Reading: after every delivery batch the worker transport queues a snapshot once 256 deliveries have
+passed since the last one, whether or not a turn is in progress; the snapshot runs behind the
+queued deliveries and holds the next ones for its whole duration (0.7-5.2 s for the session vat's
+34 MB heap under load). A turn of about 9 deliveries meets one every 28 turns, so every 100-turn
+window holds 2-4, and p99 of 100 samples is that turn. It is not a seal crank (no slow turn sealed)
+and nothing in harness code does the work in one turn, so no harness change spreads it. Raising
+`--snapshot-every` would only make a window miss it (a measurement artefact, longer replay).
+Fix size (core candidate): let the cadence defer a due snapshot until the worker has been idle for
+a short time (for example 50 ms with no delivery queued), forced at 4 x the cadence: about 30 lines
+in `durable-worker-transport.js` plus a test; or shrink the session heap (SES baseline and bundle;
+a separate study).
+Fit: poor fit as configured: orthogonal persistence pays its checkpoint on the turn path of
+whichever turn crosses the count; a busy interactive vat wants checkpoints at idle.
+Decision: budget unchanged; core candidate for the PM.
