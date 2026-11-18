@@ -16,7 +16,9 @@
  *
  *   cd packages/thixotrope-harness && node perf/session.perf.mjs
  *
- * INSTALL_N (default 3) fresh provisions; CREATE_N (default 5) creates.
+ * INSTALL_N (default 3) fresh provisions (single events: each is a new
+ * state directory and supervisor, not windowed); SESSION_CREATE_WINDOW_MS
+ * (default 30 s, at least 3 creates; it was CREATE_N = 5 creates).
  */
 import { rm } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
@@ -30,6 +32,7 @@ import {
   single,
   stats,
 } from './_harness.mjs';
+import { runWindow, windowFields, windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -49,7 +52,8 @@ const { perfScript } = await import('../test/fixtures/scripts/m1a-slice.js');
 const { makeSlice } = await import('../test/integration/_m1a-slice.js');
 
 const INSTALL_N = Number(process.env.INSTALL_N ?? 3);
-const CREATE_N = Number(process.env.CREATE_N ?? 5);
+/** session.createCold back to back for this window (it was CREATE_N = 5). */
+const CREATE_WINDOW_MS = windowMs('SESSION_CREATE_WINDOW_MS', 30_000);
 
 await runPerf('session', async ({ root, provision }) => {
   // ---- session.program
@@ -115,19 +119,23 @@ await runPerf('session', async ({ root, provision }) => {
   /** @type {number[]} */
   const createMs = [];
   const before = (await state.client.call('status')).timings;
-  for (let i = 0; i < CREATE_N; i += 1) {
-    const t0 = performance.now();
-    await slice.createSession(backend, `cold ${i}`);
-    createMs.push(performance.now() - t0);
-  }
+  const createWindow = await runWindow(
+    async i => {
+      const t0 = performance.now();
+      await slice.createSession(backend, `cold ${i}`);
+      createMs.push(performance.now() - t0);
+    },
+    { ms: CREATE_WINDOW_MS, min: 3 },
+  );
   const after = (await state.client.call('status')).timings;
   const page = await E(slice.factory).listSessions();
   await stats('session.createCold', createMs, {
     budget: { median: 6000 },
     before,
     after,
-    ops: CREATE_N,
+    ops: createMs.length,
     extra: {
+      ...windowFields(createWindow),
       programBytes: program.bytes,
       listed: page.rows.length,
       depends: 'C-5 (staging cost)',
