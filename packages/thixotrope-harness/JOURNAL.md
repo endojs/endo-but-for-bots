@@ -9481,3 +9481,300 @@ changed the session bundle) and the exclusive pass (70 minutes, during which eve
 stopped). Building the busy chain beside the regression run saved about 30 minutes.
 Decision: for the PM: a guest-bundle change late in a milestone costs a template rebuild before its
 recorded pass; schedule bundle changes before the review units.
+
+### J-9953 2026-11-18 AR-CORE review: structure of the daemon, transport and engine glue - fit
+
+Evidence: designs/arch-review/core-daemon.md (AR-CORE-1..13); 26 source files, 5,435 lines; no
+test run.
+Reading: dependencies point the right way: no cycle in scope, core imports nothing from control,
+and there are two upward edges (daemon to native/adapters, guest prelude to control/names). The
+cost is concentrated in two closures (buildDaemon 936 lines, the transport 838) and in a vat life
+cycle that no module owns. "Given up" is tested at 7 sites in 2 files, image release is written 3
+times, and the daemon's startup loop repeats the transport's retry policy (AR-CORE-1). Other
+modules' private formats are read outside their owners: hub tables in vat-reachability, store file
+names in ironhorse-runtime, which CC-025 had to edit (AR-CORE-8).
+Decision: none; the review recommends making the life cycle explicit in the transport before
+building C-11 (reinstate) or C-8.
+
+### J-9954 2026-11-18 AR-CORE review: names, wire shapes and test-double paths - fit
+
+Evidence: core-daemon.md AR-CORE-3..6.
+Reading: "crash" names three things, "retire" names both deletion and quarantine, and the
+quarantined state has five names. The code says worker where the design says vat. The endpoint is
+a pseudo-worker whose id passes as a worker's. The guest entry every Ironhorse vat runs is named
+and documented for XS (worker-peer-xs.js), and the XS engine cannot run the daemon as composed.
+The duct envelope is hand-coded at 18 sites and slot strings are parsed at 11, although @endo/ocapn
+has an unexported parseSlot. Optional batch seams mean the 29 test files on the replay doubles run
+crank and outbound paths that production never takes. One concrete defect is inferred, not run: a
+retried retirement skips the image release that failed (AR-CORE-2).
+Decision: none.
+
+### J-9955 2026-11-18 AR-CORE time record - process
+
+Evidence: start 2026-11-18T12:07:17Z, end 2026-11-18T12:15:04Z. Reading only, plus greps and a 5-line-window
+duplicate scan (only an option list repeats). Two commits: the report, and this entry.
+Reading: the surveys (survey-engine, survey-ocapn-hub) saved the transport and duct reading. Their
+claims checked at this base hold; one addition: the JavaScript side never sets the worker's timing
+flag.
+Decision: none.
+
+### J-9956 2026-11-18 AR-CTRL review: control plane structure - fit
+
+Evidence: designs/arch-review/core-control.md (AR-CTRL-1..4, 7, 9); serveThixotrope is one
+940-line closure with 15 let bindings in its scope (supervisor.js:182-1122); 12 toString() shipping
+sites guarded by a hand-bumped WORKSPACE_VERSION (21) that no test ties to the shipped source; the
+control socket is served by a native resource and by a host fallback, and the two listeners are the
+same code; stop() only resolves stopped, so all 3 callers repeat "await stopped; await close()".
+Reading: the registry vat with the host index beside it, the idempotent installer and the small
+shared helpers fit the machine well and should stay. The cost is concentrated in one composition
+root that also holds the administration, and in two paths for the control socket (one of which is
+the cause of C-4).
+Decision: none taken here; proposed fixes in the report, in order: split the supervisor, add a
+shipped-source digest golden, share or drop the control-socket listener.
+
+### J-9957 2026-11-18 AR-CTRL review: native resource contract as the harness uses it - fit
+
+Evidence: core-control.md AR-CTRL-5, 6, 8; each kit option has a real user (same 3, replaces 2,
+decorate 2, resolve 1); the agent host registers one key with same: () => true and has its adapter
+call back a manager-owned sink, because the kit does not give the manager the adapter root; the
+ephemeral make() always receives {}, so the harness finds its implementation from argv[1]; three
+framings carry bytes (local admin, Unix netlayer, base64 in JSON over IPC).
+Reading: the kit fits passive resources (alarms, ports, the control listener) closely. It has no
+service shape and no install-time configuration, and the harness's one resource is a service.
+Decision: candidate for the owner: a provideAdapter() on the kit and a config record through
+installNative (needs a WORKSPACE_VERSION bump).
+
+### J-9958 2026-11-18 AR-CTRL time record - process
+
+Evidence: start 2026-11-18T12:07:17Z, end 2026-11-18T12:15:16Z. Reading the code and the background, an import
+graph, export-use counts and a duplicate-window finder (scratch scripts outside the repository);
+no supervisor started.
+Reading: 19 findings (2 major, 7 moderate, 10 minor); platform ports, kits and the registry design
+recorded as worth keeping.
+Decision: none.
+
+### J-9950 2026-11-18 AR-NET: structure of the hub, netlayers and stores - fit
+
+Evidence: `designs/arch-review/core-net.md` (AR-NET-2, -3, -7, -8, -17); import graph and line
+counts of `pkg/src/net/**` and `pkg/src/store/**` (6,077 lines; `hub.js` 2,803).
+Reading: the dependency direction is clean (net and store import nothing from core, control,
+native or mail; all platform access is injected), and the routing core of the hub is about 1,200
+lines. The rest of `hub.js` is gifts (about 460), outbox modes (about 400), diagnostics (about 235)
+and retirement. A session's kind is encoded three ways (key prefix, seven attach flags, three
+outbox loops) for four combinations used in production. Vat GC parses the hub's persisted tables
+instead of a hub query, which ties C-2's row-format work to `core/vat-reachability.js`. There are six
+hub-store implementations, of which the log store is the only one production needs.
+Decision: none; candidates for the core owner in the report.
+
+### J-9951 2026-11-18 AR-NET: what is persisted twice or kept forever - fit
+
+Evidence: AR-NET-4, -5, -6, -13; two scratch runs over `makeHubLogStore` with in-memory files: 200
+commits touching one peer session put 200 copies of its private key into the hub log (appends
+738 -> 3,718 characters); 100 retired peer sessions add 28,700 characters (287 each) to every
+commit's state.
+Reading: peer frames and watermarks live in both the hub log and the session record, and each
+record change is a whole-file atomic replace; retired peers are never forgotten (hub row, session
+directory, netlayer maps, re-retired at every start). For the harness this matters only if remote
+peers come into use; worker and adapter traffic does not take this path. C-1 has a three-line fix
+in the serializer (AR-NET-13).
+Decision: none.
+
+### J-9952 2026-11-18 AR-NET time record and correctness leads - process
+
+Evidence: start 12:07:16Z, report committed 12:16Z, end after this entry. No test suite run;
+duplicate-block finder, grep counts, `git log -S` and two scratch scripts only.
+Reading: two leads are PLAUSIBLE and not reproduced: a crash inside a retirement leaves a bumped
+epoch with `retired: false` that the startup reconciliation skips (AR-NET-1), and a torn single
+journal append is not repaired before the next one (AR-NET-11). An inbound `op:abort` half-detaches
+a peer session (AR-NET-10). Each has a fix of 5-10 lines and a named test to add.
+Decision: none.
+
+### J-9959 2026-11-18 AR-APPS review: where the applications sit - fit
+
+Evidence: `designs/arch-review/core-apps-tests.md` (AR-APPS-1, -3..-8, -11, -12, -14, -15); a scratch
+import graph of `packages/thixotrope`.
+Reading: the mail application and its web UI are leaves by their imports (`src/mail` and `src/web`
+use only the shared utilities), but the control plane depends on them: the supervisor, built-ins,
+workspace table and administration facet import mail, a `mail-introductions` host resource exists,
+every workspace is provisioned a mailbox, and `WORKSPACE_VERSION` moves with mail. Mail is 15 % of
+`src` and 10 % of the tests; the harness uses none of it. The clock and HTTP resources depend only on
+the public entry points and are the model. The mail UI service keeps two projections, a dead legacy
+path, and every capability it ever offered (removal does not revoke for an open browser session);
+the mailbox outbox only grows.
+Decision: none; for the core owner: a per-workspace provided-installation list given to the
+supervisor, then mail and its UI as a package of their own.
+
+### J-9960 2026-11-18 AR-APPS review: tests, lane cost and build - fit
+
+Evidence: the same report (AR-APPS-2, -9, -10, -13, and its test map); lane wall times already in this
+journal (1,394 s; 22, 17.6, 15.8, 15.75 and 12.2 min); no run was made.
+Reading: the tests aim at the hub's and the life cycle's real failure points (randomised SIGKILL at
+commit points, commit-failure injection, lane fault phases); the uncovered behaviours are the open
+candidates C-8, C-24 and C-25. The lane's time is inferred to go to cold provisioning (21 supervisor
+starts in one file, 34 cold vat boots in the scenarios) at concurrency 1, and no per-file timing exists
+to confirm it; the Node suite runs everything under three SES configurations. The XS tests never run
+in any lane. Worker discovery and the replay-engine stub are repeated across 8 and 10 test files.
+The Ironhorse bundle script's dependency hook is ignored by compartment-mapper (harmless today), and
+the core lane has no bundle freshness check (only `new-lane.sh` has one). Finished hub-store
+experiments, two worker patches that no longer apply, and 5.3 MB of traces remain in the core.
+Decision: none; recommended first step is per-file lane timing, then a provisioned-template copy.
+
+### J-9961 2026-11-18 AR-APPS time record - process
+
+Evidence: start 2026-11-18T12:07:18Z, end 2026-11-18T12:17:25Z. Reading and small scripts only (import graph,
+duplicate-window finder, grep counts, `git apply --check` of two patches); no test, build or lane
+was run; the report commit is separate from this one.
+Reading: the unit fit in one sitting because the application modules are leaves and the surveys
+needed no repetition.
+Decision: none.
+
+### J-9962 2026-11-18 AR-ONTO review: the core's vocabulary against its design - fit
+
+Evidence: `designs/arch-review/core-ontology.md` (vocabulary table, AR-ONTO-1..20, glossary);
+term counts over src, test, README, the design and ARCH plus CORE-CHANGES.
+Reading: the design's own vocabulary table holds for most terms (durable, retire, allocation key,
+installation, registration, spec, facet, keeper), and the hub's internal model (row, position,
+origin, epoch) is consistent. The divergences cluster where one mechanism was reused for another:
+the host endpoint is a pseudo-worker, so its records are named for workers (AR-ONTO-5); the hub's
+session retirement implements both vat quarantine and vat removal, so callers see one text for
+both (AR-ONTO-3, C-18); "incarnation" means a worker process in the transport and a session
+epoch in the hub, and the design defines it by the adapter case (AR-ONTO-1).
+Decision: none; findings for the owner.
+
+### J-9963 2026-11-18 AR-ONTO: names that cross the core and the harness - fit
+
+Evidence: AR-ONTO-4, AR-ONTO-6, AR-ONTO-13, AR-ONTO-14; 1,087 identifier tokens with "worker"
+against 229 with "vat" in the core; ARCH uses "session" 35 times for a session vat.
+Reading: the cheapest fix is definitional, not a rename: "worker" in code is the host's record of
+a vat, "delivery" is a frame and "crank" an evaluation, "supervisor" is the process and "daemon"
+the object inside it. Session, workspace, endpoint and lease mean different things in the two
+packages; the harness should write "hub session" whenever it means the core sense, as its
+retired-text matcher does. Persisted names (session keys, refId format, resource names, workerId,
+workspace.json, manager-heap epoch) are listed in the report and should not be renamed casually.
+Decision: none.
+
+### J-9964 2026-11-18 AR-ONTO time record - process
+
+Evidence: start 2026-11-18T12:07:18Z, end 2026-11-18T12:17:50Z. Read-only; no test run. One report commit and
+this journal commit.
+Reading: reading the design and the hub, daemon, store and native modules took most of the time;
+term-count scripts gave the scale, and each divergent site was then read.
+Decision: none.
+
+### J-9965 2026-11-18 AR-DUP review: repeated code across the core - fit
+
+Evidence: designs/arch-review/core-duplication.md section 1; tools/find-duplicates.mjs (8-line
+windows, literal and token mode). Source 86 of 10,199 normalised lines in a repeated block (0.8 %),
+tests 949 of 17,008 (5.6 %); 0 lines shared with 21 sibling Endo packages. Promise kits, the
+serial queue, ids, error text, hex and base64, timers and durable writes each have one home or
+come from an Endo package; no fs outside platform/node.
+Reading: good fit: the core is not copy-pasted and should keep its one-home helpers. What repeats
+is semantic and small: three backoffs, three JSON-lines child clients, five "read JSON if present",
+two length-prefix readers (AR-CTRL-6), the same bytes kept hex in the hub and base64 elsewhere.
+The tests carry the real duplication: 45 files make their own temporary state, and the XS twins
+repeat 31 % of their twins and always skip, since CI never builds thixotrope-xs-worker.
+Decision: none.
+
+### J-9966 2026-11-18 AR-DUP review: excess code paths - fit
+
+Evidence: core-duplication.md AR-DUP-1..4, 6, 7; 0 of 121 exports unused, 9 test-only; 0 of 101
+compared literals without a producer; 146 catches, 32 empty or log-only, all read and deliberate.
+Reading: the excess is in modes and compatibility paths, not dead branches: the whole-file hub
+store and its one-way migration stay selectable (THIXOTROPE_HUB_STORE, undocumented); the mail UI
+probes for mailbox interfaces that WORKSPACE_VERSION and the runtime digest already make
+impossible; a hub session is seven flags with four combinations used, and "transient" is also a
+key prefix parsed at three sites. One defect found on the way: the Unix netlayer reassembles
+continuation frames with no total limit.
+Decision: none; proposed order: AR-DUP-4 (5 lines), AR-DUP-1 and -2 (about 225 lines removed),
+then AR-DUP-3 with the next hub-state version bump.
+
+### J-9967 2026-11-18 AR-DUP time record - process
+
+Evidence: start 2026-11-18T12:07:18Z, end 2026-11-18T12:20:47Z. Read-only; no test or supervisor
+run. Scratch scripts outside the repository (export uses, option keys, compared literals, catch
+classes); the duplicate finder committed at 199 lines after Prettier. Two commits: the report with
+the finder, and this entry.
+Reading: the sibling reports AR-CORE and AR-CTRL, written in parallel, already held the XS engine,
+optional seams, framing and configuration findings; this unit adds their counts and links to them
+instead of repeating them.
+Decision: none.
+
+### J-9968 2026-11-18 AR-SYN synthesis: overall verdict - fit
+
+Evidence: packages/thixotrope-harness/designs/arch-review/core.md sections 1-2, merging six area
+reports (AR-NET, AR-CORE, AR-CTRL, AR-APPS, AR-ONTO, AR-DUP) and the verdicts of AR-VER1 and
+AR-VER2; no finding was refuted.
+Reading: good fit at the centre: dependency direction is clean, platform powers are injected, the
+source is not copy-pasted, and "tables before wire" and "journal before the duct" are tested under
+SIGKILL. The cost is accretion: three closures of 900-2,800 lines, compatibility paths kept behind
+a version gate that already refuses their states, and an application (mail) and an engine (XS)
+inside the core.
+Decision: none; the owner decides from the ranked table (31 rows).
+
+### J-9969 2026-11-18 AR-SYN synthesis: confirmed defects - poor fit
+
+Evidence: core.md AR-SYN-1 (hub retirement persists and sends in pieces at deliveryDepth 0; the
+comment at src/net/hub.js:411 is false on that path; attachSession un-retires at :2420),
+AR-SYN-3 (a retried transport retire returns early and skips the image release), AR-SYN-4 (a
+failed single journal append is not repaired). Three cited sites re-read for the synthesis.
+Reading: all three sit where two owners of a life cycle hand off. AR-SYN-1 needs no crash: a
+throw from setState leaves a live hub half-retired.
+Decision: proposed as step 1 of the order of work, each with a failure-injection test.
+
+### J-9970 2026-11-18 AR-SYN synthesis: life cycles without an owner - awkward
+
+Evidence: core.md AR-SYN-5, -9, -17, -21 (vat state over ten transport flags, meta.failure,
+the daemon map and the hub flag; one retirement text for quarantine, removal and adapter end; stop()
+only requests; the endpoint as a pseudo-worker).
+Reading: C-8, C-10, C-11 and C-18 all land on this split; building them before the vat life cycle
+has one owner would add a fourth and fifth place that knows the states.
+Decision: proposed step 2 (transport-owned state machine, then C-8, C-10, C-11) and C-18 in step 3.
+
+### J-9971 2026-11-18 AR-SYN synthesis: names instead of objects in the hub - awkward
+
+Evidence: core.md AR-SYN-6, -7, -22 (session kind as 14 prefix sites, 7 flags and 3 outbox loops;
+vat GC parsing the hub's persisted tables; duct envelopes at 18 sites and slots parsed at 11).
+Reading: the owner's "pass objects, not names" principle is broken where it costs most: every
+change to the hub row format (C-2's open part, CC-051, CC-060) must also change vat GC. Verification
+showed the kind must be persisted and peers need a resumable parameter.
+Decision: proposed step 3, one hub-state version 3 together with CC-051/CC-060 and C-18.
+
+### J-9972 2026-11-18 AR-SYN synthesis: the version gate - awkward
+
+Evidence: core.md AR-SYN-2, -18, -28 (12 shipped toString() sites guarded by a hand-bumped
+WORKSPACE_VERSION 21; legacySubscribe, mailboxPlacement 'workspace', the ephemeral worker, the
+launcher's pre-bundle message kept although the gate refuses their states).
+Reading: the gate is the right compatibility story, but it is manual, and many fixes in the review
+edit shipped source. A pinned golden digest would churn on formatting; a digest recorded in
+workspace.json and refused on mismatch does not.
+Decision: guard in step 1; batch the shipped-source changes into one bump in step 4.
+
+### J-9973 2026-11-18 AR-SYN synthesis: reconciling the area reports - process
+
+Evidence: core.md section 3.2: eleven proposed fixes corrected by verification (AR-NET-1, -3/-DUP-3,
+-5, -7/-DUP-1 against AR-APPS-7, -12; AR-CORE-2, -6; AR-CTRL-3, -8; AR-APPS-3, -4/-DUP-2, -5;
+AR-ONTO-3). About forty minor findings had no verifier and are listed apart.
+Reading: the parallel units overlapped on XS, framing, session kind and the hub store, and twice
+contradicted each other; a reconciliation pass before any fix was needed, as AR-VER2 said.
+Decision: the hub store's file mode stays while the harness uses it as its perf baseline; the
+mail-hub experiments and stale patches can go now; the handoff-location refusal is an open
+question for the owner.
+
+### J-9974 2026-11-18 AR-SYN synthesis: what the harness gains - fit
+
+Evidence: core.md section 5, five steps.
+Reading: step 1 closes C-1 at rest and makes the lane's cost attributable; step 2 removes the
+20-64 s startup block of a crashing vat and makes a given-up session vat recoverable with its
+transcript; step 3 addresses hub.growth (C-2) and replaces the exact-string restart test (C-18);
+step 4 lets the agent host drop its fake service key and directory walk and makes running state
+directories copyable (C-4); step 5 shrinks the modules core changes touch.
+Decision: none; order proposed to the owner.
+
+### J-9975 2026-11-18 AR-SYN time record - process
+
+Evidence: start 2026-11-18T12:27:14Z, end 2026-11-18T12:32:22Z. Read-only; nothing run. Read the six area
+reports in full and the two verification verdicts; re-read three cited code sites. Report
+463 lines, Prettier clean. Two commits: the report, and these entries.
+Reading: the synthesis is a ranking and reconciliation, not new review; its new claims are the
+three re-read sites and the merged themes.
+Decision: none.
