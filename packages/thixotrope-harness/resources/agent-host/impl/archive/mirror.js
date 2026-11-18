@@ -13,13 +13,9 @@
  *
  * Node only.
  */
-import {
-  appendFile,
-  readFile,
-  rename,
-  unlink,
-  writeFile,
-} from 'node:fs/promises';
+import { appendFile, readFile, unlink } from 'node:fs/promises';
+
+import { writeFileAtomic } from '../files.js';
 
 /**
  * @param {number} from
@@ -54,9 +50,11 @@ harden(appendMirror);
  * @param {readonly any[]} records keyed records
  */
 export const rewriteMirror = async (path, from, records) => {
-  const temp = `${path}.tmp`;
-  await writeFile(temp, linesOf(from, records), { mode: 0o600 });
-  await rename(temp, path);
+  // A cache: neither the file nor the directory is fsynced (module comment).
+  await writeFileAtomic(path, linesOf(from, records), {
+    sync: false,
+    syncDirectory: false,
+  });
 };
 harden(rewriteMirror);
 

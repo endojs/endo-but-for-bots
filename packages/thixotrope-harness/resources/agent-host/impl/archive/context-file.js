@@ -19,18 +19,19 @@
  *
  * Node only.
  */
-import {
-  appendFile,
-  open,
-  readFile,
-  rename,
-  writeFile,
-} from 'node:fs/promises';
+import { appendFile, open, readFile } from 'node:fs/promises';
 
 import { Buffer } from 'node:buffer';
 
 import { projectRecords } from '../projection.js';
 import { decodeRecord } from './segment.js';
+import { writeFileAtomic } from '../files.js';
+
+/**
+ * The file is a cache, rebuilt from the segments when it does not verify:
+ * written through a scratch file and a rename, with neither fsynced.
+ */
+const CACHE_WRITE = harden({ sync: false, syncDirectory: false });
 
 /** `format` of the first line. */
 export const CONTEXT_FORMAT = 'thixotrope-harness-context-1';
@@ -74,13 +75,11 @@ const linesOf = transcript =>
  * @param {{ epoch: number, boundary: number }} head
  */
 export const resetContextFile = async (path, { epoch, boundary }) => {
-  const temp = `${path}.tmp`;
-  await writeFile(
-    temp,
+  await writeFileAtomic(
+    path,
     `${JSON.stringify({ format: CONTEXT_FORMAT, epoch, boundary })}\n`,
-    { mode: 0o600 },
+    CACHE_WRITE,
   );
-  await rename(temp, path);
 };
 harden(resetContextFile);
 
@@ -103,7 +102,6 @@ harden(appendContext);
  * @param {ReadonlyArray<{ transcript: readonly any[], through: number, digest: string }>} parts
  */
 export const writeContextFile = async (path, { epoch, boundary }, parts) => {
-  const temp = `${path}.tmp`;
   let text = `${JSON.stringify({ format: CONTEXT_FORMAT, epoch, boundary })}\n`;
   /** @type {string[]} */
   const pieces = [text];
@@ -114,8 +112,7 @@ export const writeContextFile = async (path, { epoch, boundary }, parts) => {
     );
   }
   text = pieces.join('');
-  await writeFile(temp, text, { mode: 0o600 });
-  await rename(temp, path);
+  await writeFileAtomic(path, text, CACHE_WRITE);
 };
 harden(writeContextFile);
 

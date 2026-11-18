@@ -34,11 +34,12 @@
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { open, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { readFile, rename, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { isStaged } from '../../../../guest/session/staging.js';
 /* eslint-enable import/no-relative-packages */
+import { writeFileAtomic } from '../files.js';
 
 /** `header.format` of a segment file. */
 export const SEGMENT_FORMAT = 'thixotrope-harness-segment-1';
@@ -73,17 +74,6 @@ export const SEGMENT_NAME = /^seg-([0-9]{6})-([0-9a-f]{16})\.jsonl$/;
  *
  * @typedef {'write' | 'fsync' | 'rename' | 'fsync-dir'} SegmentStep
  */
-
-/** @param {string} path */
-export const syncDirectory = async path => {
-  const handle = await open(path, 'r');
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-};
-harden(syncDirectory);
 
 /**
  * The chained digest of a segment: SHA-256 over the previous digest (hex
@@ -275,25 +265,11 @@ export const writeSegment = async (
       await rename(path, `${path}.bad`).catch(() => {});
     }
   }
-  const part = `${path}.part`;
-  const handle = await open(part, 'w', 0o600);
-  try {
-    try {
-      trace('write', name);
-      await handle.writev([body, trailer]);
-      trace('fsync', name);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    trace('rename', name);
-    await rename(part, path);
-  } catch (error) {
-    await unlink(part).catch(() => {});
-    throw error;
-  }
-  trace('fsync-dir', name);
-  await syncDirectory(dir);
+  await writeFileAtomic(path, [body, trailer], {
+    scratch: '.part',
+    removeScratchOnError: true,
+    trace: step => trace(step, name),
+  });
   return harden({ ...entry, reused: false });
 };
 harden(writeSegment);
