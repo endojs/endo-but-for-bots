@@ -3,7 +3,8 @@
  * Provisioning steps (M1a W1a.6; hook table, `designs/m1a-interfaces.md`
  * sections 9 and 12; architecture 3.1).
  *
- * `provisionSteps` is append-only for later milestones: each entry is
+ * `provisionSteps` holds M1a's and M1b's steps; later milestones register
+ * theirs by file (below). Each step is
  * `{ name, run(context) -> Promise<StepResult> }` and must be idempotent
  * (it checks the inventory or the program digest first and answers
  * `{ skipped: true }` when there is nothing to do). `context` is the state
@@ -33,6 +34,18 @@
  *    defaults to no spares (`M1A_POOL`: M1a's states create cold, as their
  *    tests and perf rows expect); `provision` and `m1bTemplateOptions` use
  *    the factory's defaults (2 session spares, 1 exec spare).
+ *
+ * Later milestones' steps (M2-T1; m3-interfaces.md H5, m4-interfaces.md
+ * H-8, m5-interfaces.md H-10): one file each under
+ * `scripts/provision-steps/`, named `<two digits>-<name>.js` and exporting
+ * `steps` (a `ProvisionStep[]`), run after the table above in file-name
+ * order: `30-gateway.js` (M3, `options.gateway`), `40-subscriptions.js`
+ * (M4, `options.subscriptions`), `50-m5-fixtures.js` (M5,
+ * `options.m5Fixtures`); later milestones take further numbers. A lane adds
+ * its file and edits nothing here. `makeProvision` forwards every option it
+ * does not use itself to every step untouched (the same values, not
+ * copies), so a later step's options need no edit of `makeProvision`
+ * either. A step that is not asked for answers `{ skipped: true }`.
  *
  * `provision(context)` runs the steps with the session program
  * `guest/session/main.js` (W1a.4). `makeProvision({ sessionEntry })` runs
@@ -110,7 +123,14 @@ export const sessionProgramBytes = 200_000;
  * @typedef {object} StepContext
  * @property {any} client a control client on the harness workspace
  * @property {(options?: { workspace?: string }) => Promise<any>} [connect]
- * @property {{ sessionEntry: string, execEntry?: string, pool?: PoolOption }} options
+ * @property {StepOptions} options
+ */
+
+/**
+ * @typedef {{ sessionEntry: string, execEntry?: string, pool?: PoolOption } & Record<string, unknown>} StepOptions
+ *   the session and exec entries and the pool `makeProvision` resolved, plus
+ *   every other option given to it, forwarded untouched (M3
+ *   `options.gateway`, M4 `options.subscriptions`, M5 `options.m5Fixtures`)
  */
 
 /**
@@ -131,10 +151,12 @@ export const sessionProgramBytes = 200_000;
  */
 
 /**
+ * Whether the workspace inventory holds `name` (registered steps use it for
+ * their idempotence check).
  * @param {any} client
  * @param {string} name
  */
-const has = async (client, name) =>
+export const has = async (client, name) =>
   (await client.call('lookup', name)) !== undefined;
 
 /** @type {ProvisionStep[]} */
@@ -245,6 +267,63 @@ const m1bSteps = [
 /** Hook table (append-only). */
 export const provisionSteps = harden([...m1aSteps, ...m1bSteps]);
 
+/** Later milestones' step files (see the header): one per lane. */
+export const stepDirectory = path.join(here, 'provision-steps');
+
+const STEP_FILE = /^\d{2}-[a-z0-9-]+\.js$/;
+
+/**
+ * The step files of a registry directory, in run order (none when the
+ * directory does not exist).
+ * @param {string} [directory]
+ * @returns {Promise<string[]>} absolute paths
+ */
+export const stepFiles = async (directory = stepDirectory) => {
+  if (!existsSync(directory)) return [];
+  const entries = await readdir(directory, { withFileTypes: true });
+  return entries
+    .filter(entry => entry.isFile() && STEP_FILE.test(entry.name))
+    .map(entry => entry.name)
+    .sort()
+    .map(name => path.join(directory, name));
+};
+
+/**
+ * The registered steps of a directory, file by file in run order. Each file
+ * must export `steps`, a list of `{ name, run }`; a name already taken (by
+ * the table or an earlier file) is refused, so two lanes cannot shadow each
+ * other's step.
+ * @param {string} [directory]
+ * @returns {Promise<ProvisionStep[]>}
+ */
+export const registeredSteps = async (directory = stepDirectory) => {
+  const taken = new Set(provisionSteps.map(step => step.name));
+  /** @type {ProvisionStep[]} */
+  const out = [];
+  for (const file of await stepFiles(directory)) {
+    const { steps } = await import(url.pathToFileURL(file).href);
+    if (!Array.isArray(steps))
+      throw Error(`${path.basename(file)} must export steps (a list)`);
+    for (const step of steps) {
+      if (typeof step?.name !== 'string' || typeof step?.run !== 'function')
+        throw Error(`${path.basename(file)}: a step is { name, run }`);
+      if (taken.has(step.name))
+        throw Error(`${path.basename(file)}: step ${step.name} exists already`);
+      taken.add(step.name);
+      out.push(step);
+    }
+  }
+  return harden(out);
+};
+
+/**
+ * Every step `makeProvision` runs: the table, then the registered steps.
+ * @param {string} [directory]
+ * @returns {Promise<readonly ProvisionStep[]>}
+ */
+export const allProvisionSteps = async (directory = stepDirectory) =>
+  harden([...provisionSteps, ...(await registeredSteps(directory))]);
+
 /**
  * Load a program source into the factory in pieces.
  * @param {any} harness the HarnessRoot
@@ -309,6 +388,11 @@ const guestBounded = async () => {
  *   the step is skipped while it does not exist)
  * @param {PoolOption} [options.pool] default `M1A_POOL` (no spares)
  * @param {(report: StepReport) => void} [options.onStep]
+ * @param {string} [options.stepDirectory] where the registered steps are
+ *   (default `scripts/provision-steps/`; tests name another)
+ * @param {unknown} [options.gateway] M3 (H5), forwarded untouched
+ * @param {unknown} [options.subscriptions] M4 (H-8), forwarded untouched
+ * @param {unknown} [options.m5Fixtures] M5 (H-10), forwarded untouched
  * @returns {(context: { client: any, connect?: any }) => Promise<StepReport[]>}
  */
 export const makeProvision =
@@ -317,19 +401,22 @@ export const makeProvision =
     execEntry: exec = execEntry,
     pool = M1A_POOL,
     onStep,
+    stepDirectory: directory = stepDirectory,
+    ...stepOptions
   } = {}) =>
   async ({ client, connect }) => {
     if (!existsSync(entry))
       throw Error(`No session program at ${entry} (W1a.4 writes it)`);
+    const steps = await allProvisionSteps(directory);
     /** @type {StepReport[]} */
     const reports = [];
-    for (const step of provisionSteps) {
+    for (const step of steps) {
       const t0 = performance.now();
 
       const result = await step.run({
         client,
         connect,
-        options: { sessionEntry: entry, execEntry: exec, pool },
+        options: { ...stepOptions, sessionEntry: entry, execEntry: exec, pool },
       });
       const report = {
         name: step.name,
@@ -398,6 +485,12 @@ export const templateIdFor = async ({
     hash.update((await bundleGuest(exec, { guestRoot })).digest);
   hash.update(JSON.stringify(pool));
   hash.update(await readFile(path.join(here, 'provision-steps.js')));
+  // The registered steps (none until M3): a new or changed step file gives
+  // a new id; with none the hash input is as before.
+  for (const file of await stepFiles()) {
+    hash.update(path.relative(harnessRoot, file));
+    hash.update(await readFile(file));
+  }
   for (const file of ['durable.js', 'ephemeral.js']) {
     hash.update(await readFile(path.join(agentHostDirectory, file)));
   }
