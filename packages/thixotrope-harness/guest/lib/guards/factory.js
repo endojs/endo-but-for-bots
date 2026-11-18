@@ -323,7 +323,14 @@ const m1bShapeBuilders = {
   HarnessStatus: () =>
     record(
       { sessions: count, program: B.ProgramInfo },
-      { execProgram: B.ProgramInfo, pool: B.PoolStatus },
+      {
+        execProgram: B.ProgramInfo,
+        pool: B.PoolStatus,
+        // HR-GUEST-12: present when the factory's start listener could not
+        // be registered (the factory then has no restart recovery): the
+        // registration's error message.
+        error: B.Reason,
+      },
     ),
 };
 

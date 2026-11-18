@@ -34,6 +34,7 @@ import {
   programPieceBytes,
 } from '../../guest/factory/root.js';
 import { makeRowTable } from '../../guest/factory/rows.js';
+import { makeStartCount } from '../../guest/factory/starts.js';
 import { makeExecScope } from '../../guest/factory/standin-exec.js';
 import {
   STANDIN_WORKING,
@@ -200,14 +201,17 @@ const setupPool = ({ settings: initial, lanes, ...vatOptions } = {}) => {
   loadInto(session, SESSION_SOURCE);
   loadInto(exec, EXEC_SOURCE);
   const settings = makePoolSettings(initial);
+  // The factory's start count, shared with the kit (HR-SYN-36).
+  const starts = makeStartCount();
   const pool = makePool({
     vats: fake.vats,
     programs: { session, exec },
     settings,
     sessionSources: stagingSources,
+    starts,
     ...(lanes === undefined ? {} : { lanes }),
   });
-  return { ...fake, pool, settings, programs: { session, exec } };
+  return { ...fake, pool, settings, starts, programs: { session, exec } };
 };
 
 test('the pool is passive until asked, then fills to its targets', async t => {
@@ -336,7 +340,7 @@ test('repeated creation failures stop the refill until the next take', async t =
 test('a start abandons creations of the previous start and refills', async t => {
   /** @type {ReturnType<typeof makePromiseKit> | undefined} */
   let hold = makePromiseKit();
-  const { pool, workers } = setupPool({
+  const { pool, workers, starts } = setupPool({
     settings: { spareSessions: 1, spareExec: 0 },
     gate: async (_label, step) => {
       if (step === 'evaluate' && hold !== undefined) await hold.promise;
@@ -347,6 +351,8 @@ test('a start abandons creations of the previous start and refills', async t => 
   t.is(pool.status().refilling, 1);
   const first = hold;
   hold = undefined;
+  // A start: the factory counts it before the pool reads it.
+  starts.next();
   pool.onStart();
   await settle();
   t.true(workers[0].retired, 'the half-made vat is retired');
@@ -377,6 +383,7 @@ test('takeExec makes a vat cold when there is no spare, and refuses without a pr
     },
     settings: makePoolSettings(),
     sessionSources: stagingSources,
+    starts: makeStartCount(),
   });
   await t.throwsAsync(() => empty.takeExec(), {
     message: NO_EXEC_PROGRAM_TEXT,
@@ -427,6 +434,7 @@ test('ExecHandle: a failed take rejects and the next scope() tries again', async
     programs: { session: makeProgramStore(), exec: makeProgramStore() },
     settings: makePoolSettings(),
     sessionSources: stagingSources,
+    starts: makeStartCount(),
   });
   const handle = makeExecHandle({ pool, settings: makePoolSettings() });
   await t.throwsAsync(() => E(handle).scope(), {
@@ -465,6 +473,7 @@ const setupFactory = options => {
     pool: made.pool,
     settings: made.settings,
     listFeed,
+    starts: made.starts,
   });
   return { ...made, ...fakeAdmin, rows, listFeed, kit };
 };
@@ -566,12 +575,14 @@ test('a session spare carries a host facet minted with it; the take does not cal
   const session = makeProgramStore();
   loadInto(session, SESSION_SOURCE);
   const settings = makePoolSettings({ spareSessions: 1, spareExec: 0 });
+  const starts = makeStartCount();
   const pool = makePool({
     vats: fake.vats,
     programs: { session, exec: makeProgramStore() },
     settings,
     sessionSources: stagingSources,
     mintHost: () => E(countingAdmin).forSession(),
+    starts,
   });
   await pool.whenSettled();
   t.is(minted, 1, 'minted with the spare');
@@ -582,6 +593,7 @@ test('a session spare carries a host facet minted with it; the take does not cal
     rows: makeRowTable(),
     pool,
     settings,
+    starts,
   });
   const made = await E(kit.factory).createSession(harden({ backend }));
   t.is(fakeAdmin.bindings.length, 1);

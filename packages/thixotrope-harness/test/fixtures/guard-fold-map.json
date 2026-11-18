@@ -231,7 +231,9 @@
  },
  "changed": {
   "m4Shapes.AccountsBatch": "HR-SYN-34 (F2): gains the optional closed and reason fields a closed watch answers (m4-interfaces.md 6); the keys were already in the gateway's vocabulary",
-  "m4Interfaces.AccountsSubscription": "HR-SYN-34 (F2): next() answers the widened AccountsBatch"
+  "m4Interfaces.AccountsSubscription": "HR-SYN-34 (F2): next() answers the widened AccountsBatch",
+  "shapes.HarnessStatus": "HR-GUEST-12 (step 3): gains the optional error field, the factory's failed start-listener registration (no restart recovery); the key was already in the gateway's vocabulary",
+  "interfaces.HarnessRoot": "HR-GUEST-12 (step 3): status() answers the widened HarnessStatus"
  },
  "exportsRemoved": [
   "m1bInterfaces",
