@@ -49,6 +49,7 @@ import {
 } from 'node:fs';
 import {
   chmod,
+  link,
   mkdir,
   open,
   readFile,
@@ -148,18 +149,26 @@ export const loadWrappingKey = async ({ keyFile, stateDir }) => {
   } catch (error) {
     if (/** @type {any} */ (error).code !== 'ENOENT') throw error;
     await mkdir(dirname(keyFile), { recursive: true, mode: 0o700 });
-    const handle = await open(keyFile, 'wx', 0o600).catch(e => {
-      if (e.code === 'EEXIST') return undefined;
-      throw e;
-    });
-    if (handle !== undefined) {
-      try {
-        await handle.writeFile(randomBytes(KEY_BYTES));
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
+    // The key appears whole or not at all (W4.8): written and synced under
+    // a private name, then linked into place. Two first uses at once (the
+    // store and the sealing keys, `secretWriter`) used to meet an empty
+    // file between the other's `open('wx')` and its write; the loser of the
+    // link reads the winner's complete key.
+    const temp = `${keyFile}.tmp-${randomBytes(8).toString("hex")}`;
+    const handle = await open(temp, 'wx', 0o600);
+    try {
+      await handle.writeFile(randomBytes(KEY_BYTES));
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    try {
+      await link(temp, keyFile);
       created = true;
+    } catch (e) {
+      if (/** @type {any} */ (e).code !== 'EEXIST') throw e;
+    } finally {
+      await unlink(temp).catch(() => {});
     }
   }
   const info = await stat(keyFile);
