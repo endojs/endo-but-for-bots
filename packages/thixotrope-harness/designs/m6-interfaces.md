@@ -374,10 +374,44 @@ Label seeds (static table, seam L-1): `{ label: 'workspace', from: services => s
 - `environmentBinder({ services, session, settings })`: `E.sendOnly(admin).bindSession(
   services.environment, session)`.
 - `environmentReleaser({ services, settings })`: `E.sendOnly(admin).release(services.environment)`.
-- `releaseEnvironment({ session })` (an `onDelete` hook): `await E(admin).releaseSession(session)`.
+- `releaseEnvironment({ session, settings })` (an `onDelete` hook; seam F-4 passes `settings`):
+  `await E(settings.environments()).releaseSession(session)`; nothing when no admin is attached.
 - `environmentPromptSections`: part 6 entries (seam P-1), Fae's workspace section
   (`fae/session/system-prompt.js:295-360`) adapted: no `worktree()`, `/workspace` named when the
   session has a shell.
+
+The factory imports no environments guard: it holds the admin as a remotable and reads
+`texts.runnerRequired` from `guards/factory.js` (section 15.2).
+
+### 3.10 Manager internals (`EV/durable.js`, W6.1)
+
+- One registration: `SERVICE_KEY = 'environments'`, spec `{ sink, settings }`; `same(a, b)` is
+  true when the settings are equal field by field (then a reconcile only re-attaches), else the
+  kit replaces the binding and the adapter rebinds with the new settings. Unconfigured: no
+  registration, `status().state === 'unconfigured'`, `provide` refuses with
+  `environmentTexts.notConfigured`.
+- `records: Map<string, EnvironmentRecord>` by key (bounded by `maxEnvironments`), and
+  `recordOf: WeakMap<exo, EnvironmentRecord>` for every exo minted (amplification), `bySession:
+  WeakMap<Session, EnvironmentRecord>` after `bindSession`. `EnvironmentRecord = { key, workspace,
+  shell, stopped, released, git, reader?, shellExo?, control }`.
+- `withOps(fn, { write })`: as the agent host's (reconcile when no ops; on a retired break,
+  reconcile once and call again only when `write` is false; a write rejects with `outcomeUnknown`).
+  Every forwarded answer is checked against the op's shape (`mustMatch`) before it is passed on.
+- `pending: { stops: Set<key>, releases: Set<key> }` (bounded by `maxPendingWork`); `attach`
+  answers them; `stopped`/`released` clear them.
+- No clock, no timers: idle stop is the adapter's timer.
+- Its bundle imports `EV/interfaces.js`, `guest/lib/guards/base.js`, `guards/session.js` (the
+  `SourceReader` shapes), `guest/lib/limits.js`, `guest/lib/retired.js` only.
+
+### 3.11 What the integration helper does (`test/integration/_environments.js`, W6.7)
+
+`environmentsTemplate()` (the `ensureTemplate` options with `options.environments` and the pool),
+`startEnvironmentSession(state, preset)`, `runCommandTurn(session, argv, options)` (a scripted
+round whose tool call is `runCommand`), `execCall(session, code)`, `environmentProcesses(state)`
+(fake groups under `<state>/environments/sessions/*/run/` that are alive),
+`killEnvironmentsAdapter(state)` (CC-092's workaround: the process under the supervisor whose
+argv names the environments ephemeral bundle digest, SIGKILL), and `stateHasPath(state)` (the
+D-M6-14 grep).
 
 ---
 
@@ -596,7 +630,7 @@ that touch the same file. Union merge does not apply to source files: the PM mer
 | F-1 | `guest/factory/preset-templates.js` | `objectProviders = harden([...environmentProviders])`; `ObjectProvider.build` removed from the typedef (never called; fold) | M7 next group (`publicInternetProviders`) |
 | F-2 | `guest/factory/services.js` | `environmentServices` appended to `serviceBuilders`; two new append-only tables `serviceBinders` (`[environmentBinder]`) and `serviceReleasers` (`[environmentReleaser]`), each `({ services, session?, settings }) -> void`, sendOnly only | M9 (subagent services) |
 | F-3 | `guest/factory/factory.js` | (a) `makePresetCatalog({ templates: defaultTemplates, defaultsContext: harden({ settings: harnessSettings }) })`; (b) `settings: harnessSettings` in the `buildSessionServices` context; (c) after `mustMatch(made, shapes.MadeSession)`: `for (const bind of serviceBinders) bind({ services, session: made.session, settings: harnessSettings })`; (d) in `rollBack`: `for (const release of serviceReleasers) release({ services: creation.services, settings: harnessSettings })` when `creation.services` is set | M9 (subagent creation path) |
-| F-4 | `guest/factory/delete.js` | `onDelete = harden([releaseEnvironment])` | M9 (depth-first subagent delete) |
+| F-4 | `guest/factory/delete.js` (+ one line in `factory.js`) | `onDelete = harden([releaseEnvironment])`; `makeDeletions({ admin, rows, settings })` and each hook called with `{ row, session, settings }` (`factory.js` passes `settings: harnessSettings`) | M9 (depth-first subagent delete uses the same context) |
 | F-5 | `guest/factory/root.js` | `makeHarnessSettings` keeps `environments` (set, answer `environments()`, include in `current()`) | none |
 | P-1 | `guest/lib/prompt-sections.js` | part 6 entries `...environmentPromptSections` (text in `guest/lib/environment-prompt.js`, new) | M9 part 4, M12 part 5 |
 
@@ -889,6 +923,9 @@ shellToolArgumentNames = { runCommand: ['command', 'args', 'options'], options: 
 ```js
 // factory.js, HarnessSettings optional part:
 environments: M.remotable('EnvironmentsAdmin'),
+// factory.js texts (R3-21; the same words as EV/interfaces.js environmentTexts.runnerRequired,
+// kept equal by a unit test):
+runnerRequired: 'A preset that provisions a shell needs a configured environment runner',
 // interfaces.js, VatEvent gains:
 record({ type: 'execution', state: M.or('running', 'stopping', 'stopped'), supported: M.boolean() }),
 ```
