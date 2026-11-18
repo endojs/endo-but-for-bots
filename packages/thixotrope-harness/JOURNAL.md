@@ -7523,3 +7523,27 @@ turn id through `History` and the vat: 5,000 in 21.5 s, 30,000 in 78 s (2,140 pa
 Decision: fixtures for W2.9: 5,000 turns in about 11 min (6.5 min plain), 50 sessions x 300 turns
 for `restart.serving` in about 20-35 min, 30,000 plain in about 39 min. Faster needs the core
 candidate of J-0481 or a segment-copy import (J-0483).
+
+### J-9520 2026-11-18 I-3 lane tooling: scripts/new-lane.sh - good fit
+Evidence: `scripts/new-lane.sh scratch` then `--remove scratch` from the infra lane (base
+`3588cab190`, warm yarn cache), worker `367e78ad...`.
+Reading: create 22.6 s (worktree about 5 s, `yarn install --immutable` 16.2 s, worker copy and
+link 0.2 s, boot bundles 0.9 s, identical to the main worktree's by `cmp`); re-run 5.4 s (install
+4.1 s, bundles up to date). Disk: 1.3 GB by `du` (node_modules 1.0 GB), about 0.3 GB of new
+blocks by `df` around the removal (pnpm hard links). Remove 19 s. Refusals checked: untracked
+file in the lane, the worktree the script runs from, a bad name, a plain directory at the lane
+path, a lane path on another branch, a branch one commit ahead of the main branch.
+Decision: the worker is a content-addressed copy under `THIX_HARNESS_HOME/worker/<sha16>/`
+linked from the lane's `target/release`, so the default lookup works without environment and a
+core rebuild never swaps a running lane's binary. Lanes are cheap: create one per line of work.
+
+### J-9521 2026-11-18 I-3 union merge for the append-only logs - good fit, with limits
+Evidence: `.gitattributes` `merge=union` for `JOURNAL.md`, `CORE-CHANGES.md`, `TIMELOG.md`;
+a throwaway repository with the real journal tail, two branches each appending an entry and a
+`CC-002` table row.
+Reading: with the attribute both merges exit 0 and keep both entries and both rows; without it
+the same merge conflicts (exit 1). Limits seen: both `CC-002` rows kept (duplicate numbers pass
+silently), and the blank line before the second appended entry was dropped (the two hunks shared
+it).
+Decision: as built; the PM checks for duplicate numbers and runs prettier after a merge
+(`designs/process.md` section 1).
