@@ -11240,3 +11240,73 @@ Integration: `m1a-provision` with `M1A_REBUILD=1` pass (145 s wall, 85 s test); 
 of its 30,000 ms cap, the next turn completes, no session or workspace vat halted; probes a, b, f1,
 f2 pass. The 60 s-window rows of J-9695/J-9696 are not remeasured.
 Fit: neutral: checking a probe's correctness does not need the exclusive lock; only the timed rows do.
+
+### J-9920 2026-11-18 INT-M5 merge of claude/thix-m5 - merge
+Evidence: `git merge --no-ff claude/thix-m5` onto the INT-M4 tip 34f157e0e7 (base 36b3035e92),
+merge commit f73b6940a4. Four files conflicted: `guest/lib/pending-queue.js`,
+`scripts/provision-steps.js`, `test/unit/m1a-provision-steps.test.js`,
+`test/integration/m1a-provision.test.js`. Everything else auto-merged, among them the guest
+session files the M2 review also changed (`session.js`, `turn.js`, `queue.js`, `submissions.js`,
+`export.mjs`), `interfaces.js` (M5's four widenings beside M4's `BackendKind` line),
+`factory.js` and `limits.js`. JOURNAL, CORE-CHANGES: no duplicate J- or CC- number after the
+union merge. `designs/milestones.md` gained only M5's W5.9 outcome table; README unchanged.
+Fit: good: the hotspot tables held; the seams M5 named landed on lines no other lane touched.
+
+### J-9921 2026-11-18 INT-M5 pending-queue: attachment labels on the evicting receipts - merge
+Evidence: the conflict was one doc comment. M5 adds `sameLabels` and the attachment fields
+(`QueueItem.attachments`, `StoredReceipt.labels`); the M2 review replaced the refusing receipt
+bound by eviction of the oldest receipts. Both kept: the M2 review's comment and eviction loop,
+M5's helper above it; a retry under a known request id must carry the same labels in the same
+order. No code line conflicted.
+Fit: good: eviction and the label fingerprint are independent; an evicted receipt drops its labels
+with it.
+
+### J-9922 2026-11-18 INT-M5 provisioning: the m5 fixtures step becomes a registered file - merge
+Evidence: the M5 lane appended `m5FixtureStep` to the `provisionSteps` table; main has the step
+registry since the M2 review. In the merge commit the step moved to
+`scripts/provision-steps/50-m5-fixtures.js` (imports `has` from the table module, exports
+`steps` and `m5FixtureStep`), the table is back to the M1a/M1b list, and `makeProvision` keeps
+main's `stepDirectory` option with `...stepOptions` forwarding. Expected step order in both
+m1a-provision tests: gateway, subscriptions, m5 fixtures. `m5-w55-powers` imports the step from
+its file and finds it last in `allProvisionSteps()`. The M2-T1 seam test had already reserved
+`50-m5-fixtures.js`.
+Fit: good: the third lane in a row needed the same move, and a file per step made it a move
+rather than an edit of shared lines.
+
+### J-9923 2026-11-18 INT-M5 adaptations to M4 and M3 as merged - fix
+Evidence: (1) `m5-w51-factory` expected the `NOT_YET` refusal of a preset `reasoningEffort`;
+M4 had lifted `NOT_YET` for it, so a non-subscription backend now refuses with
+`m4Texts.effortNotSupported` (the contract's "M4's NOT_YET lift for preset efforts"). (2)
+`m3-w33-bundles` pinned the pre-M5 budgets 200,000 / 100,000; it now reads
+`limits.sessionProgramBytes` / `execProgramBytes`. (3) New adapter test
+`m5-gateway-vocabulary`: both `interfaces-m5*.js` load in M3's vocabulary with no
+`vocabulary-skip` and every name of `m5MethodNames` and `m5FactoryMethodNames` is admitted.
+(4) `test/browser/m5-ui.test.mjs` already seeds an A.4 request id (INT-M3, 6f672b6a0c); the merge
+kept it. Checked with no change: send-now (M5's `onClaim` hook receives the item before
+`leave` drops its attachments; M5 code never cancels a turn itself), receipts evicted,
+historyPageRecords, BackendSpec `timeoutMs`, provider URL rule, the archive rewrite (M5 uses none
+of them directly), `templateIdFor` (hashes the step files and guest/lib).
+Fit: good: the lanes' interfaces are guards, so a cross-lane mismatch shows as a refused text in
+a unit test, not as silent behaviour.
+
+### J-9924 2026-11-18 INT-M5 guest bundle sizes after the merge - measure
+Evidence: `node scripts/bundle-guest.mjs` at the merge: session 236,583 bytes (budget 240,000,
+3,417 left), exec 105,414 (budget 120,000, 14,586 left), factory 178,390 (M5 lane alone 236,218 /
+105,230 / 171,868; INT-M4 187,031 / 84,550 / 144,111). The M2 review and M4 together add +365
+bytes to the M5 session program, so it fits without any change. Largest session modules
+(sources with comments and indentation stripped, approximate): `lib/interfaces.js` 46.9 KB,
+`session/turn.js` 29.0 KB, `lib/interfaces-m5.js` 10.3 KB, `tools/granted.js` 6.3 KB,
+`lib/tool-args.js` 6.0 KB, `tools/inspection.js` 6.0 KB, `tools/exec.js` 5.9 KB. The next cut, if
+needed, is splitting `interfaces.js` per vat (O-1's alternative).
+Fit: poor margin: 1.4 % of the session budget is left; the next milestone that adds session code
+meets the cap again.
+
+### J-9925 2026-11-18 INT-M5 runs - test
+Evidence: unit and adapter lanes (`corepack yarn test`, no supervisor): 1,216 passed, 109 skipped,
+0 failed (65 s); before the adaptations 2 failed (J-9923 items 1 and 2). Package `tsc`: exit 0.
+Prettier clean on touched files; eslint 0 errors on them (warnings only). Shared slots, 2 at once,
+152.5 s wall: `m5-snapshot` (acceptance 1 and 9 part 7) pass in 125.6 s held;
+`m1a-provision` pass in 152.5 s held with steps gateway 0.1 ms, subscriptions 0.1 ms,
+m5 fixtures 0 ms (all skipped) and factory 178,390 bytes in 7,234 ms. Not run: the other ten M5
+integration files, browser files, perf.
+Fit: neutral: no wait for a slot this time.
