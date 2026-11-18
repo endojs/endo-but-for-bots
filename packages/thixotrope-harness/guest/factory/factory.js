@@ -311,6 +311,8 @@ export const makeFactoryKit = ({
         fields.maxOutputTokens = extras.maxOutputTokens;
       if (extras.turnDeadlineMs !== undefined)
         fields.turnDeadlineMs = extras.turnDeadlineMs;
+      if (extras.reasoningEffort !== undefined)
+        fields.reasoningEffort = extras.reasoningEffort;
       const config = harden(fields);
       mustMatch(config, shapes.SessionConfig);
       const makeArgs = harden({
