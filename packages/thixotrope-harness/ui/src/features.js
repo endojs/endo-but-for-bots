@@ -13,11 +13,11 @@
  */
 import { uiSlots } from '../../resources/agent-host/impl/gateway/contract-m3.js';
 import { featureEntries } from './feature-list.js';
+import { DEFAULT_ORDER, selectSlot } from './slot-order.js';
+
+export { DEFAULT_ORDER, selectSlot };
 
 /** @import { UiFeature } from '../../resources/agent-host/impl/gateway/contract-m3.js' */
-
-/** The default `order` of a feature within its slot. */
-export const DEFAULT_ORDER = 100;
 
 const slotSet = new Set(uiSlots);
 
@@ -81,25 +81,6 @@ export const collectFeatures = entries => {
   }
   return collected;
 };
-
-/**
- * The features of one slot, by `order` (default 100), collection order
- * among equals.
- *
- * @param {readonly UiFeature[]} list
- * @param {string} slot
- * @returns {UiFeature[]}
- */
-export const selectSlot = (list, slot) =>
-  list
-    .map((item, index) => ({ item, index }))
-    .filter(({ item }) => item.slot === slot)
-    .sort(
-      (a, b) =>
-        (a.item.order ?? DEFAULT_ORDER) - (b.item.order ?? DEFAULT_ORDER) ||
-        a.index - b.index,
-    )
-    .map(({ item }) => item);
 
 /** Every collected `UiFeature`, in collection order. */
 export const features = Object.freeze(collectFeatures(featureEntries));

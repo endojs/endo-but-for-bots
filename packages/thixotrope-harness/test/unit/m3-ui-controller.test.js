@@ -645,3 +645,11 @@ test('M3-FIX: a queue action while the view re-opens waits for its watch (accept
   await controller.cancelPending('no-such-key');
   t.regex(controller.getState().status, /no queued entry no-such-key/);
 });
+
+test('M3-FIX: an empty session offers no Load earlier (fake pageFrom)', async t => {
+  const { controller } = await setup({ sessions: [{ turns: 0 }] });
+  await controller.selectSession('s1');
+  await flush();
+  t.is(controller.getState().view?.messages.length, 0);
+  t.is(controller.getState().view?.earlier, 'none');
+});

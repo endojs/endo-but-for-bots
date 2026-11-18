@@ -12,7 +12,7 @@
  */
 import { Component, h } from 'preact';
 
-import { selectSlot } from '../features.js';
+import { selectSlot } from '../slot-order.js';
 import { uiTextOf } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
 
 /** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */

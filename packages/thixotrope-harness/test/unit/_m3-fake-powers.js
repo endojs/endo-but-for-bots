@@ -787,7 +787,7 @@ export const makeFakePowers = ({
       /** @param {FakeTurn} t */ t => t.archived,
     ).length;
     const floor = archive ? 1 : sealedTurns + 1;
-    if (!archive && n <= sealedTurns) {
+    if (!archive && sealedTurns > 0 && n <= sealedTurns) {
       return harden({ turns: [], next: `h${n}`, archived: true });
     }
     const turns = [];
