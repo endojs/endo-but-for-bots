@@ -11,8 +11,9 @@
  * `lookup`'s object answers go behind the call's membrane; its `{ json }`
  * answers are parsed here (the exec vat parses model data on purpose: a key
  * flood throws the engine's "key space exhausted" error, which the call
- * answers as `exhausted`, M1b). `store` sends an object (a wrapper is
- * swapped for its target) or `{ json }`: the value rendered as JSON text,
+ * answers as `exhausted`, M1b). `store` sends an object (a wrapper of this
+ * call, swapped for its target; any other remotable is refused with
+ * `MODEL_OBJECT_TEXT`) or `{ json }`: the value rendered as JSON text,
  * big integers as decimals (R3-23), refused here over `labelValueBytes`.
  * Model code calls `E(powers).lookup('x')` or `await powers.lookup('x')`.
  */
@@ -20,7 +21,7 @@ import { limits } from '../lib/limits.js';
 import { limitsM5 } from '../lib/limits-m5.js';
 import { utf8Bytes } from '../lib/bounded.js';
 import { bigintsAsDecimalStrings, texts, textOf } from './render.js';
-import { isWrapper } from './membrane.js';
+import { isWrapper, MODEL_OBJECT_TEXT } from './membrane.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { isRemotable } = /** @type {GuestGlobals} */ (globalThis);
@@ -82,7 +83,10 @@ export const makeCallPowers = ({ source, callE, isOpen, membrane }) => {
       if (target === value) return expired();
       return callE(source).store(label, target);
     }
-    if (isRemotable(value)) return callE(source).store(label, value);
+    // Any other remotable was made by model code (every object `powers`
+    // gave this call is a wrapper): stored, it would come back wrapped in a
+    // later call and could leave the vat from there (rule 12.13, X-FIX).
+    if (isRemotable(value)) return refuse(MODEL_OBJECT_TEXT);
     /** @type {string | undefined} */
     let json;
     try {

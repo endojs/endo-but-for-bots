@@ -610,13 +610,11 @@ test('what a model-made object can receive: nothing from another vat; it never l
   t.is(received.length, 1, 'nothing reached the keeper');
 });
 
-test('residual (rule 12.13, for the PM): a model-made object stored through powers.store comes back wrapped and can then leave', async t => {
-  // `powers.store` (powers.js, not the membrane) passes any remotable to the
-  // session; `lookup` in a later call answers it, and the membrane wraps it
-  // like any other object, so it can then be sent to another vat, whose
-  // calls reach model code after the call that made it ended. A refusal in
-  // `store` of a remotable that is not this call's wrapper closes this; the
-  // assertions below flip then.
+test('rule 12.13 (X-FIX, was the residual): powers.store refuses a model-made object, so it cannot come back wrapped and leave', async t => {
+  // `powers.store` used to pass any remotable to the session; `lookup` in a
+  // later call answered it wrapped, and it could then be sent to another
+  // vat, whose calls reached model code after the call that made it ended.
+  // `store` now takes only this call's wrappers among remotables.
   /** @type {any[]} */
   const received = [];
   const keeper = Far('Keeper', {
@@ -629,26 +627,28 @@ test('residual (rule 12.13, for the PM): a model-made object stored through powe
   const { exec } = await fresh({ keeper });
   t.deepEqual(
     await exec(
-      [FORGE, 'await powers.store("mine", mine);', 'return "stored";'].join(
-        '\n',
-      ),
+      [
+        FORGE,
+        'try { await powers.store("mine", mine); } catch (e) { return e.message; }',
+        'return "stored";',
+      ].join('\n'),
     ),
-    { status: 'ok', text: JSON.stringify('stored') },
+    { status: 'ok', text: JSON.stringify(MODEL_OBJECT_TEXT) },
   );
   t.deepEqual(
     await exec(
       [
         'const w = await powers.lookup("mine");',
         'const k = await powers.lookup("keeper");',
-        'return await E(k).keep(w);',
+        'if (w !== undefined) return await E(k).keep(w);',
+        'await powers.store("again", k);',
+        'return typeof (await powers.lookup("again"));',
       ].join('\n'),
     ),
-    { status: 'ok', text: JSON.stringify('kept') },
+    { status: 'ok', text: JSON.stringify('object') },
+    'nothing was stored under the label; a wrapper of this call still stores',
   );
-  t.is(received.length, 1);
-  t.false(isWrapper(received[0]));
-  // Called after both calls ended: model code runs.
-  t.is(await E(received[0]).hello(), 'hi');
+  t.is(received.length, 0, 'the model-made object never left');
 });
 
 test('tagged values keep their tag through the membrane, both ways (XC)', async t => {
