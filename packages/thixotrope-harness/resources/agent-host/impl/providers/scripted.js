@@ -645,3 +645,13 @@ export const makeScriptedProvider = ({
   return makeProviderShell({ timers, runRound });
 };
 harden(makeScriptedProvider);
+
+/** The `backendKinds` entry (`kinds.js`): M1a's test double; offers echo. */
+export const scriptedKind = harden({
+  kind: 'scripted',
+  makeProvider: makeScriptedProvider,
+  tools: ['echo'],
+  unexpectedFailure: scriptedUnexpectedFailure,
+  /** @type {import('./kinds.js').BackendKind['catalog']} */
+  catalog: ({ models }) => models,
+});

@@ -32,11 +32,11 @@ import {
   findHarnessRoot,
   loadAgentHost,
 } from '../../resources/agent-host/ephemeral.js';
+import { makeAgentHostImpl } from '../../resources/agent-host/impl/index.js';
 import {
   assertBackendKinds,
   backendKinds,
-  makeAgentHostImpl,
-} from '../../resources/agent-host/impl/index.js';
+} from '../../resources/agent-host/impl/providers/kinds.js';
 import { makeEndpoint } from '../../resources/agent-host/impl/endpoint.js';
 import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 import {
@@ -772,6 +772,9 @@ test('every backend kind names its fixed failure text; a kind without one is ref
   for (const kind of backendKinds) {
     t.is(typeof kind.unexpectedFailure, 'string', kind.kind);
     t.true(kind.unexpectedFailure.length > 0, kind.kind);
+    // HR-SYN-3 (a): the kind chooses its catalogue (no kind string is
+    // matched outside the table).
+    t.is(typeof kind.catalog, 'function', kind.kind);
   }
   const bare = harden({
     kind: 'bare',

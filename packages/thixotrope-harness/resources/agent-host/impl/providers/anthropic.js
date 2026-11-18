@@ -88,12 +88,21 @@ import {
   discardBody,
   failureKind,
   postJson,
+  providerBaseUrl,
   retryAfterMs,
 } from './http.js';
 import { parseSseBatches } from './sse.js';
 import { ProviderFailure } from './round.js';
 import { anthropicDelay, isDelivery } from './retry.js';
 import { makeApiProvider } from './api.js';
+import {
+  CATALOG_BODY_BYTES,
+  CATALOG_MAX_MODELS,
+  CATALOG_READ_TIMEOUT_MS,
+  catalogFail,
+  catalogModel,
+  readJson,
+} from './catalog-core.js';
 
 /** The API's base (a spec's `baseUrl` replaces it: the fake server). */
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
@@ -754,7 +763,127 @@ export const makeAnthropicProvider = options =>
   makeApiProvider({ ...options, wire: anthropicWire });
 harden(makeAnthropicProvider);
 
-/** The `backendKinds` entry (AH/index.js hook table). */
+// ---- The model list (M2 W2.2, m2-interfaces.md 8.4; hosted-agent
+// `anthropic-model-read.js`): validated and bounded, failing closed with a
+// fixed text; a refused answer's body is never read. M4's Claude pool reads
+// its members' lists with the same paged reader (its own headers and body
+// bound).
+
+/** Pages one model list read may take, and rows asked per page. */
+const ANTHROPIC_PAGES = 16;
+const ANTHROPIC_PAGE_LIMIT = 1000;
+/** Anthropic model ids (hosted-agent `anthropic-model-read.js`). */
+const ANTHROPIC_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+
+/**
+ * One page of an Anthropic catalogue, validated.
+ * @param {any} payload
+ * @returns {{ models: import('./catalog-core.js').CatalogModel[], next: string | undefined }}
+ */
+export const anthropicPage = payload => {
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    Array.isArray(payload) ||
+    !Array.isArray(payload.data) ||
+    Number(payload.data.length) > CATALOG_MAX_MODELS ||
+    typeof payload.has_more !== 'boolean' ||
+    (payload.last_id != null && typeof payload.last_id !== 'string')
+  )
+    catalogFail('catalogue shape');
+  const models = /** @type {any[]} */ (payload.data).map(row => {
+    if (
+      !row ||
+      typeof row !== 'object' ||
+      row.type !== 'model' ||
+      typeof row.id !== 'string' ||
+      !ANTHROPIC_MODEL_ID.test(row.id) ||
+      typeof row.display_name !== 'string' ||
+      row.display_name === '' ||
+      Number(row.display_name.length) > 1024
+    )
+      catalogFail('model entry');
+    return catalogModel(row.id, row.display_name, '', undefined, undefined);
+  });
+  let next;
+  if (payload.has_more) {
+    if (
+      typeof payload.last_id !== 'string' ||
+      !ANTHROPIC_MODEL_ID.test(payload.last_id)
+    )
+      catalogFail('catalogue page');
+    next = /** @type {string} */ (payload.last_id);
+  }
+  return harden({ models, next });
+};
+harden(anthropicPage);
+
+/**
+ * A paged Anthropic model list (`GET <baseUrl>/v1/models`) with the
+ * caller's headers.
+ * @param {object} options
+ * @param {string} options.baseUrl
+ * @param {Record<string, string>} options.headers
+ * @param {typeof globalThis.fetch} [options.fetch]
+ * @param {number} [options.timeoutMs]
+ * @param {number} [options.maxBytes] one page's body bound
+ * @returns {Promise<import('./catalog-core.js').CatalogModel[]>}
+ */
+export const readAnthropicCatalog = async ({
+  baseUrl,
+  headers,
+  fetch,
+  timeoutMs = CATALOG_READ_TIMEOUT_MS,
+  maxBytes = CATALOG_BODY_BYTES,
+}) => {
+  /** @type {import('./catalog-core.js').CatalogModel[]} */
+  const models = [];
+  /** @type {string | undefined} */
+  let after;
+  for (let page = 0; page < ANTHROPIC_PAGES; page += 1) {
+    const query = new URLSearchParams({ limit: `${ANTHROPIC_PAGE_LIMIT}` });
+    if (after !== undefined) query.set('after_id', after);
+    // eslint-disable-next-line no-await-in-loop
+    const payload = await readJson({
+      url: `${baseUrl}/v1/models?${query}`,
+      headers,
+      fetch,
+      timeoutMs,
+      maxBytes,
+    });
+    const { models: more, next } = anthropicPage(payload);
+    models.push(...more);
+    if (models.length > CATALOG_MAX_MODELS)
+      catalogFail('catalogue over its bound');
+    if (next === undefined) {
+      if (new Set(models.map(model => model.id)).size !== models.length)
+        catalogFail('duplicate model');
+      return harden(models);
+    }
+    after = next;
+  }
+  return catalogFail('catalogue over its page bound');
+};
+harden(readAnthropicCatalog);
+
+/**
+ * An Anthropic API catalogue, read with the key.
+ * @param {object} options
+ * @param {string} options.baseUrl
+ * @param {string} options.key
+ * @param {typeof globalThis.fetch} [options.fetch]
+ * @param {number} [options.timeoutMs]
+ */
+export const readAnthropicModels = ({ baseUrl, key, fetch, timeoutMs }) =>
+  readAnthropicCatalog({
+    baseUrl,
+    headers: { 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION },
+    fetch,
+    timeoutMs,
+  });
+harden(readAnthropicModels);
+
+/** The `backendKinds` entry (`kinds.js`). */
 export const anthropicKind = harden({
   kind: 'anthropic',
   makeProvider: makeAnthropicProvider,
@@ -762,4 +891,11 @@ export const anthropicKind = harden({
   unexpectedFailure: texts.anthropicUnreachable,
   // M4 W4.6 (H-14, D-M4-9): account status on API backends too.
   tools: harden(['accountStatus']),
+  /** @type {import('./kinds.js').BackendKind['catalog']} */
+  catalog: ({ models }) => models,
+  /** @type {import('./kinds.js').BackendKind['readModels']} */
+  readModels: ({ spec, fetch }) => {
+    const baseUrl = providerBaseUrl(spec.baseUrl, ANTHROPIC_BASE_URL);
+    return key => readAnthropicModels({ baseUrl, key, fetch });
+  },
 });

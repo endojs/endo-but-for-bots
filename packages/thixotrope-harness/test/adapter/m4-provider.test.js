@@ -31,7 +31,7 @@ import {
   codexPoolKind,
   makePoolProvider,
 } from '../../resources/agent-host/impl/subscriptions/provider.js';
-import { backendKinds } from '../../resources/agent-host/impl/index.js';
+import { backendKinds } from '../../resources/agent-host/impl/providers/kinds.js';
 import {
   BODY_MARKER,
   exhaustedEntry,

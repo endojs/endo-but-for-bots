@@ -25,7 +25,7 @@ import {
 } from '../../resources/agent-host/impl/providers/anthropic.js';
 import { anthropicDelay } from '../../resources/agent-host/impl/providers/retry.js';
 import { NATIVE_CONTEXT_FORMAT } from '../../resources/agent-host/impl/projection.js';
-import { backendKinds } from '../../resources/agent-host/impl/index.js';
+import { backendKinds } from '../../resources/agent-host/impl/providers/kinds.js';
 import {
   anthropicEvents,
   startFakeProviderServer,

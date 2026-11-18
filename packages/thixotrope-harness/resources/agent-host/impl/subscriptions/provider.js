@@ -300,20 +300,28 @@ export const makePoolProvider = ({
 };
 harden(makePoolProvider);
 
-/** The `backendKinds` entry of `claude-pool` (`AH/index.js` hook table). */
+/**
+ * A pool's models are the pool catalogue's (H-4 (g)).
+ * @type {import('../providers/kinds.js').BackendKind['catalog']}
+ */
+const poolCatalog = ({ pools }) => pools;
+
+/** The `backendKinds` entry of `claude-pool` (`providers/kinds.js`). */
 export const claudePoolKind = harden({
   kind: 'claude-pool',
   makeProvider: makePoolProvider,
   /** The endpoint's text for a round that threw (R4-79: fixed). */
   unexpectedFailure: UNEXPECTED.claude,
   tools: harden(['accountStatus']),
+  catalog: poolCatalog,
 });
 
-/** The `backendKinds` entry of `codex-pool` (`AH/index.js` hook table). */
+/** The `backendKinds` entry of `codex-pool` (`providers/kinds.js`). */
 export const codexPoolKind = harden({
   kind: 'codex-pool',
   makeProvider: makePoolProvider,
   /** The endpoint's text for a round that threw (R4-79: fixed). */
   unexpectedFailure: UNEXPECTED.codex,
   tools: harden(['accountStatus']),
+  catalog: poolCatalog,
 });
