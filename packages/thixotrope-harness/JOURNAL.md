@@ -11865,3 +11865,94 @@ tree; each finding's sites were then read. Report 650 lines; two commits (report
 Reading: HR-GUEST and HR-HOST had already reported several question-4 items; this unit cites them
 and adds only the cross-cutting part.
 Decision: none.
+
+### J-9998 2026-11-18 HR-SYN harness review: sound where it matters, untidy by construction - fit
+
+Evidence: `designs/arch-review/harness.md` sections 1-2; six area reports, two verification passes,
+no finding refuted; no runtime import cycle (the nine cycles HR-DUP counted are JSDoc `@import`
+type references, read); 0 lines copied from the core; 3.9 % of normalised source lines in repeated
+blocks against the core's 0.8 %; session program 3,417 of 240,000 bytes left (J-9933).
+Reading: dependency direction, crank discipline, durability order, rights amplification and the
+gateway's pre-decode guard are right and must be kept. What costs is layering by appending: every
+lane added a table, a view, a stub or a copy and the merges kept them.
+Decision: none; 38 ranked rows (6 major, 28 moderate, 4 minor) for the owner.
+
+### J-9999 2026-11-18 HR-SYN the way the harness was built shows in the code - process
+
+Evidence: harness.md section 4, seven themes: contracts kept as code after the merge (W5.9's "no
+`notBuilt` stub left" unenforced), copies where a lane could not edit another's module (catalogue
+limits already drifted 8 MB against 16 MB), the milestone as a name (546 identifiers, 178 of 196
+test files), texts and file names at seams, fakes built to the contract text, the manager part
+eroded by appending (12 commits to `durable.js`), closures that grow.
+Reading: parallel lanes against contracts worked for merging and left its scaffolding in the
+product. The conventions section of `milestones.md` still prescribes the same for M6 (`m6-*`
+tests, append-only tables).
+Decision: none; proposed for M6-M13: a fold unit at each merge whose done-criterion is deletion,
+helper exports allowed across lanes, a duplicate ceiling in lint, names by vat or concept, fakes
+from real guards, manager changes batched per group.
+
+### J-10100 2026-11-18 HR-SYN order of work - fit
+
+Evidence: harness.md section 5: (1) correctness and guards with no format or manager change;
+(2) fold the contracts inside the per-vat split; (3) turn runner, runtime parts, one API provider
+shell, one catalogue core, secret-write fixes; (4) one manager reinstall; (5) test support layer,
+fakes on guards, UI feature state, new conventions.
+Reading: step 2 must precede the turn-runner split because each new module costs about 1.2 KB of
+the 3.4 KB margin; step 4 should share the core's step-4 bump so the agent host drops its fake
+service key and directory walk in the same reinstall.
+Decision: none.
+
+### J-10101 2026-11-18 HR-SYN verifiers changed many fixes - process
+
+Evidence: harness.md section 3.2: `m5Widenings` is read by `PresetSnapshot`; the M1b views reach 22
+product files; the HR-GUEST-8 import would create a cycle; the durable fix is itself a reinstall;
+benches and two test-only modules are cited evidence or contract oracles, not dead code; some perf
+windows must not scale; the HR-DUP-4 close-reason claim was backwards. The synthesis adds that
+`describeError` and `makeSerialQueue` are already on every vat's and the adapter's `globalThis`
+through the core prelude, so no core export is needed.
+Reading: readers proposed fixes without the import graph or the test users; the refuter pass is
+what made the fixes safe.
+Decision: none.
+
+### J-10102 2026-11-18 HR-SYN the correctness items are few and small - fit
+
+Evidence: HR-SYN-8 (`withOps` retries a non-idempotent secret write: orphan store entry),
+HR-SYN-9 (blob quota: sweep errors swallowed; `diskBytes +=` on every bind, re-read), HR-SYN-10
+(Composer deletes a staged file by matching texts; retired break treated two ways, re-read),
+HR-SYN-11 (two position pagers skip a row after a delete), HR-SYN-12 (endpoint fallback copies
+`error.message` into the turn record for a kind without `unexpectedFailure`, re-read). Also
+HR-HOST-16 (unverified, re-read): the per-session blob view spreads the whole store, which matters
+for the in-flight adapter-tools change.
+Reading: none loses a transcript; each is a string or a count standing in for an object or a fact.
+Decision: none.
+
+### J-10103 2026-11-18 HR-SYN glossary reconciled with the core - fit
+
+Evidence: harness.md section 6; HR-ONTO's 50 terms adjusted: start count and listener handle
+(not epoch, not Registration), archived ref (not HR-HOST-13's `SealedRef`, since "seal" is
+encryption), subscription for a viewer's handle and "subscription plan" in prose (HR-EDGE-16 and
+HR-ONTO-4 disagreed; `Live.subscribe` and `Session.watch` decide it), git workspace for M6's
+directories, live delivery, turn lease, turn endpoint, hub session.
+Reading: the wire vocabulary is exact; the drift is in words the lanes chose for themselves and in
+words shared with the core.
+Decision: none; owner decides the product names (Floot, Familiar, thix).
+
+### J-10104 2026-11-18 HR-SYN index of both reviews - fit
+
+Evidence: `designs/arch-review/README.md`: method (readers, refuters, synthesis; nothing run),
+top ten across core and harness (AR-SYN-1, -2, -3, -5, -6; HR-SYN-1, -2, -3, -4, -7), combined
+order in six steps.
+Reading: the packages meet at three points: the typed retirement break (AR-SYN-9 with the
+harness's `retired.js` and Composer rule), the native service shape (AR-SYN-28 with the manager
+reinstall), and the hub's on-disk format that harness perf modules read (with core step 3).
+Decision: none.
+
+### J-10105 2026-11-18 HR-SYN time record - process
+
+Evidence: start 2026-11-18T13:13:51Z, end 2026-11-18T13:22:14Z. Read-only; nothing run except
+grep and short reads to settle the cycle disagreement and re-read four verifier "missed" sites.
+`harness.md` 464 lines, `README.md` 96 lines, prettier clean; two commits (reports, these
+entries).
+Reading: the area reports and verdicts carried the evidence; the synthesis merged 108 findings
+into 38 rows.
+Decision: none.
