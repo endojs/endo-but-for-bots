@@ -12,12 +12,23 @@
  *   the call in the exec vat waiting on the tool): after the restart the
  *   turn is outcome-unknown with "Tool outcome unknown"; the tool's log
  *   shows one run started and no rerun, even after it is released.
+ * - K5, second kill point (XC): SIGKILL after the tool answered the exec
+ *   vat, before the exec vat's answer reached the session. The session
+ *   vat's worker is held with SIGSTOP (every incarnation of it, as it
+ *   appears) before the tool is released, so the exec vat's answer cannot
+ *   be delivered; the tool's log shows the run finished; then the daemon
+ *   is SIGKILLed. After the restart: outcome-unknown with "Tool outcome
+ *   unknown", the tool ran once, the provider got the turn once, and the
+ *   exec vat's late answer (a guest-to-guest promise that survives the
+ *   restart) changes nothing; the next turn completes.
  *
  *   THIX_AGENT=W5.6 corepack yarn test:integration test/integration/m5-grants-restart.test.js
  */
 import '../unit/_m1a-prelude.js';
 
+import { execFile } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
+import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import test from 'ava';
@@ -39,7 +50,13 @@ import {
   startFromTemplate,
   takeIntegrationLock,
 } from '../template/index.js';
-import { makeSlice, requestId, round1, waitFor } from './_m1a-slice.js';
+import {
+  incarnationNeedle,
+  makeSlice,
+  requestId,
+  round1,
+  waitFor,
+} from './_m1a-slice.js';
 import { execTemplate } from './_m1b-exec.js';
 import { runTurn, turnRecords } from './_m1b.js';
 
@@ -76,6 +93,7 @@ const script = harden({
   turns: [
     callTurn('held', 'held'),
     callTurn('slow', 'slow'),
+    callTurn('slow after', 'slow'),
     { input: 'hello', rounds: [{ chunks: [{ text: 'done' }], usage }] },
   ],
 });
@@ -124,6 +142,60 @@ const heldTool = async client => {
   return client.call('lookup', HELD_NAME);
 };
 
+const execAsync = promisify(execFile);
+
+/**
+ * SIGSTOP every process whose command line names `needle`, as soon as it
+ * appears, until stopped (`startKiller`'s loop with SIGSTOP): holds a vat's
+ * worker, and any new incarnation of it, so no delivery reaches that vat.
+ * @param {string} needle
+ * @param {number} [pollMs]
+ */
+const startStopper = (needle, pollMs = 20) => {
+  /** @type {Set<number>} */
+  const held = new Set();
+  let stopped = false;
+  const done = (async () => {
+    while (!stopped) {
+      // eslint-disable-next-line no-await-in-loop
+      const { stdout } = await execAsync('ps', ['-axo', 'pid=,command='], {
+        maxBuffer: 16 * 1024 * 1024,
+      }).catch(() => ({ stdout: '' }));
+      for (const line of stdout.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed.includes(needle)) {
+          const pid = Number(trimmed.slice(0, trimmed.indexOf(' ')));
+          if (!held.has(pid)) {
+            try {
+              process.kill(pid, 'SIGSTOP');
+              held.add(pid);
+            } catch {
+              // Gone already.
+            }
+          }
+        }
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await delay(pollMs);
+    }
+  })();
+  return {
+    held,
+    /** Stop polling and SIGKILL what it held. */
+    stop: async () => {
+      stopped = true;
+      await done;
+      for (const pid of held) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // Gone already.
+        }
+      }
+    },
+  };
+};
+
 /** @param {any} turn */
 const resultsOf = async turn =>
   (await turnRecords(turn))
@@ -140,7 +212,7 @@ const grantAt = async (session, index) => {
   return list[index];
 };
 
-run('acceptance 11b: K4 and K5', async t => {
+run('acceptance 11b: K4 and K5 (both kill points)', async t => {
   t.timeout(5 * 60_000);
   const template = await execTemplate();
   const state = await startFromTemplate(template, { t });
@@ -272,6 +344,91 @@ run('acceptance 11b: K4 and K5', async t => {
     servedMs: k5.servedMs,
     recoveredReadMs: round1(performance.now() - tKill),
     runs: runsAfter,
+    ...identity,
+  });
+
+  // ---- K5, second kill point: the tool answered the exec vat; the exec
+  // vat's answer has not reached the session (its worker is held stopped).
+  const runsB = await E(fixtures.slowTool).runs();
+  const receiptB = await E(slice.composer).submit(
+    session,
+    'slow after',
+    requestId(),
+  );
+  const turnB = (await E(receiptB.turn).getStatus()).turnId;
+  await waitFor(
+    async () =>
+      Number((await E(fixtures.slowTool).runs()).started) >
+      Number(runsB.started),
+    20_000,
+    'the slow tool to start again',
+    20,
+  );
+  const stopper = startStopper(incarnationNeedle(state.root, `session ${key}`));
+  await waitFor(
+    async () => stopper.held.size > 0,
+    10_000,
+    'the session worker to be held',
+    20,
+  );
+  await E(fixtures.slowTool).release();
+  await waitFor(
+    async () =>
+      Number((await E(fixtures.slowTool).runs()).finished) >
+      Number(runsB.finished),
+    20_000,
+    'the slow tool to answer the exec vat',
+    20,
+  );
+  // The exec vat renders and answers in a crank or two; its answer waits
+  // for the held session.
+  await delay(1500);
+  const heldAtKill = stopper.held.size;
+  const tKillB = performance.now();
+  live.stop().catch(() => {});
+  await state.kill();
+  await stopper.stop();
+  await killStrays(state.root);
+  const k5b = await state.restart();
+  await slice.refresh();
+  session = await E(slice.factory).findSession(key);
+  live = await slice.subscribe(session);
+  fixtures = await makeM5Fixtures(state.client);
+  // Recovery runs when the session meets its new ports; the next turn
+  // opens them.
+  const after = await runTurn(slice, session, live, 'hello');
+  t.is(after.end.status, 'completed');
+  const pageB = await E(session).getHistoryPage();
+  const killedB = pageB.turns.find(
+    (/** @type {any} */ tp) => tp.turnId === turnB,
+  );
+  t.is(killedB?.state, 'outcome-unknown', JSON.stringify(killedB?.state));
+  t.deepEqual(
+    (killedB?.records ?? [])
+      .filter((/** @type {any} */ r) => r.kind === 'tool-result')
+      .map((/** @type {any} */ r) => r.result),
+    [texts.toolOutcomeUnknown],
+    'the late answer of the exec vat is not recorded',
+  );
+  await delay(1000);
+  const runsAfterB = await E(fixtures.slowTool).runs();
+  t.is(runsAfterB.started - runsB.started, 1, 'ran once');
+  t.is(runsAfterB.finished - runsB.finished, 1, 'answered once');
+  t.is(
+    made
+      .log()
+      .filter(
+        (/** @type {any} */ l) => l.kind === 'request' && l.turnId === turnB,
+      ).length,
+    1,
+    'the provider got the killed turn once',
+  );
+  emit({
+    metric: 'm5.grants.restart.k5b',
+    servedMs: k5b.servedMs,
+    heldAtKill,
+    recoveredReadMs: round1(performance.now() - tKillB),
+    runs: runsAfterB,
     ...identity,
   });
   await live.stop();
