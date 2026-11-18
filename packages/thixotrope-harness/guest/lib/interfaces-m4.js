@@ -11,7 +11,7 @@
  * (`resources/agent-host/durable-subscriptions.js`), the adapter
  * (`AH/subscriptions/`, `AH/secrets/`, `AH/attach.js`), the factory's
  * effort resolver (texts only, from `texts-m4.js`), the gateway key guard
- * (M3, through its interface-table seam) and tests. The session and exec
+ * (M3's vocabulary loader reads `vocabularyShapes()` below) and tests. The session and exec
  * programs never import it (their bundles have no room, m4-interfaces 1.4).
  *
  * Rules as `interfaces.js`: closed records with a fixed key vocabulary
@@ -513,6 +513,17 @@ export const m4MethodNames = harden({
 
 /** The sink methods M4 adds (H-3). */
 export const m4SinkMethodNames = harden(['poolState', 'poolChanged', 'poolOf']);
+
+/**
+ * M3's gateway key guard (m3-interfaces.md 4.4, 6.3) admits the record keys
+ * of every pattern reachable from what each `guest/lib/interfaces-m<N>.js`
+ * answers here: M4's shapes and its interface guards (their methods'
+ * argument and return patterns). Called once per adapter incarnation; it
+ * builds every lazy guard of this module. The sink guards are left out: only
+ * the adapter calls them, never a browser.
+ */
+export const vocabularyShapes = () =>
+  harden([...Object.values(m4Shapes), ...Object.values(m4Interfaces)]);
 
 export { m4Limits } from './limits-m4.js';
 export {

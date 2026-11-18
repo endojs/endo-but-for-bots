@@ -134,6 +134,10 @@
  * `{ status?, exhausted?: { untilMs: number | null }, rejected?: true,
  * overloaded?: true, delivered, retryAfterMs? }`. `onReading(reading)` is
  * called with the rate-limit headers of every answer, 2xx or not.
+ * `request.system` is plain text: `provider.js` (W4.6) resolves
+ * `RoundRequest.system` once per round with M2's `systemTextOf(req.system,
+ * blobs, owner)` (m4-interfaces 5.2); a wire client never reads a staged
+ * reference or a blob.
  * @typedef {(options: {
  *   member: MemberEntry,
  *   credential: Credential,
@@ -156,6 +160,12 @@
  * @property {(backend: any, usage: any) => string} statusText the
  *   `accountStatus` text (Fae `session/account-tool.js` rendering)
  * @property {() => Promise<void>} flush the readings file
+ *
+ * The accounts channel behind `accounts.watch()` answers a waiting `next()`
+ * again after `m4Limits.accountsKeepaliveMs` with no change, evicts a
+ * subscriber with no `next()` call for `m4Limits.accountsIdleMs`, and at
+ * the subscriber cap evicts the oldest idle one before refusing
+ * (m4-interfaces 6).
  */
 
 /**

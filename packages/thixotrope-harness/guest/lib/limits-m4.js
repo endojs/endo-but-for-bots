@@ -59,4 +59,29 @@ export const m4Limits = harden({
   accountsBatchMembers: 64,
   /** `accountStatus` tool text into the model (the tool output limit, R4-100). */
   accountTextUnits: 32_768,
+  /**
+   * An accounts-channel subscriber with no `next()` waiting for this long is
+   * idle: evicted when idle this long, and the oldest idle one is evicted
+   * first when a new `watch` meets the subscriber cap (M2's
+   * `channelLimits.subscribersPerSession`, 32). A page that went away
+   * without `close()` therefore never fills the channel.
+   */
+  accountsIdleMs: 60_000,
+  /**
+   * A `next()` that has waited this long with no change answers the current
+   * view again (same `rev`), so a live page always calls `next()` again
+   * within `accountsIdleMs` and an abandoned one stops calling and turns
+   * idle (a pending `next()` of a closed page would otherwise wait forever).
+   */
+  accountsKeepaliveMs: 30_000,
+
+  // ---- browser (M3's gateway; m4-interfaces 9.1) ----
+  /**
+   * The largest secret value the Secrets panel sends: the gateway's
+   * `wsMessageBytes` (1,048,576) less 8 KiB for the CapTP JSON envelope.
+   * Measured on the JSON-escaped value (`JSON.stringify(value)` as UTF-8)
+   * before sending; larger values go through the CLI's sealed-box write
+   * (`scripts/subscription-login.mjs --value-file`, `m4Texts.secretTooLargeForBrowser`).
+   */
+  browserSecretBytes: 1_040_384,
 });

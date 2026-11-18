@@ -58,6 +58,13 @@ export const m4Texts = harden({
   provenanceUnavailable: 'unavailable',
   /** Harness: `Accounts.forSession` for a backend that is not a pool. */
   noSubscriptionAccounts: 'No subscription accounts are behind this backend',
+  /** The Secrets panel, over `m4Limits.browserSecretBytes` (harness). */
+  secretTooLargeForBrowser:
+    'This value is too large to send from the browser; write it from the command line with scripts/subscription-login.mjs --value-file, which sends a sealed box',
+  /** `AccountsSubscription.next()` after eviction or `close()`; the page re-watches. */
+  accountsWatchClosed: 'This accounts watch is closed; watch again',
+  /** The Secrets panel, a file that is not UTF-8 (D-M4-7). */
+  secretNotText: 'This file is not text; secrets hold text',
 });
 
 export const m4TextOf = harden({
