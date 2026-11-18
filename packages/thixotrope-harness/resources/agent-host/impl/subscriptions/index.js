@@ -281,8 +281,16 @@ export const makeSubscriptions = ({
   };
 
   const usageReader = makeUsageReader({
-    url: (backend, member) =>
-      pools.get(backend)?.spec.usageUrl ?? endpoints[member.provider]?.usageUrl,
+    // Only a pool whose spec this incarnation holds is read: a pool the
+    // accounts view described without its spec (after a restart, before its
+    // first open or catalogue read) may name its own `usageUrl`, and the
+    // provider's default must not be read in its place (W4.8). Its readings
+    // stay `remembered` until the pool is used.
+    url: (backend, member) => {
+      const pool = pools.get(backend);
+      if (pool === undefined) return undefined;
+      return pool.spec.usageUrl ?? endpoints[member.provider]?.usageUrl;
+    },
     // Section 7: an account read never renews; it reads what is stored.
     credential: async member => {
       const { value } = await accessOf(member).read();
