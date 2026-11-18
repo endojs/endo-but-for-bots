@@ -19,13 +19,21 @@
  *   `(core) => undefined | { text, at }`, asked in order when the session is
  *   idle and the queue has nothing to claim.
  * - `recoverySteps`: step 6 of `recoverAfterRestart()` (W1a.5; M9).
+ * - `onClaim` (M5 W5.3, seam S3): in the claim crank, after `TurnStarted`
+ *   is appended and before the first round request is built, with
+ *   `{ core, active, item }` (`item` the queue entry, `undefined` for a
+ *   direct start or a `turnSources` turn). W5.7 opens the turn's package
+ *   and sets `active.systemNote` here.
  *
- * In M1a every list is empty. M1b W1b.4 appends the exec tool's hooks.
+ * In M1a every list is empty. M1b W1b.4 appends the exec tool's hooks;
+ * M5 W5.7 the package hooks (`tools/mentions.js`).
  */
 import { execHooks } from './tools/exec.js';
+import { mentionHooks } from './tools/mentions.js';
 
 /**
  * @typedef {(context: { core: any, active: any, round: number }) => void} TurnHook
+ * @typedef {(context: { core: any, active: any, item: any }) => void} ClaimHook
  */
 
 export const turnHooks = harden({
@@ -34,9 +42,11 @@ export const turnHooks = harden({
   /** @type {TurnHook[]} */
   onCancel: [execHooks.onCancel],
   /** @type {TurnHook[]} */
-  onSettle: [],
+  onSettle: [mentionHooks.onSettle],
   /** @type {((core: any) => (undefined | { text: string, at: number }))[]} */
   turnSources: [],
   /** @type {TurnHook[]} */
-  recoverySteps: [execHooks.recoverySteps],
+  recoverySteps: [execHooks.recoverySteps, mentionHooks.recoverySteps],
+  /** @type {ClaimHook[]} M5 S3 */
+  onClaim: [mentionHooks.onClaim],
 });

@@ -337,6 +337,13 @@ Cancel aborts the attempt in flight and stops the member loop (R4-7).
   timeout `PoolSpec.timeoutMs` or 1 h (R4-93); no prompt-cache breakpoints (R4-30); rate-limit
   headers of every answer go to `onReading`; no header value, body or token is ever logged or
   put in a failure text.
+- **Since the lane merge (INT-M4), as M2's providers after its review:** `PoolSpec.timeoutMs` is
+  at least 1,000 and at most `maxTurnDeadlineMs` (guard); `baseUrl`, `tokenUrl` and `usageUrl`
+  pass M2 `http.js` `providerBaseUrl` (https, or http to a loopback host; no user info, query or
+  fragment) before a credential is sent: a refused `baseUrl` fails the round or catalogue read
+  with M2's `BASE_URL_REFUSED`, a refused `tokenUrl` fails renewal with `RENEWAL_FAILED` before
+  any request, a refused `usageUrl` is not read; a Codex round's stream is bounded at
+  `limits.roundStreamBytes` (`texts.frameLimit`).
 
 ### 5.4 Catalogue and creation (W4.3 catalogue, W4.1 resolver)
 
@@ -413,7 +420,8 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   logged; errors carry codes only.
 - **Renewal** (`renewal.js`, port of hosted-agent `provider-broker.js` refresh and
   `managed-renewable-credentials.js`): one `MemberCredential` per member and incarnation, holding
-  only `credentialFor(key)` (W-5 fixed). When the access token is within `refreshSkewMs` of expiry,
+  only `credentialFor(key)` (W-5 fixed). Renewal can also run at session creation, at the
+  creation's catalogue read (J-9643). When the access token is within `refreshSkewMs` of expiry,
   or after a 401 for that exact credential: single-flight per member; **re-read** inside the
   flight (a credential renewed by another flight or replaced by the operator wins); a credential
   already carrying `pendingRefresh` fails closed with code `CONSUMED`
@@ -603,7 +611,7 @@ load lazily at the first `Accounts` use or pool round; the catalogue cache start
 | durable thing | what a SIGKILL can leave | after restart | kill points to test (W4.8) |
 |---|---|---|---|
 | member, pool (manager heap) | the creating call broke before or after its crank | the operator retries; `makeMember` / `makePool` are idempotent by label and argument | K-1: SIGKILL right after `makePool` was sent; restart; `makePool` again answers a Backend that works and `listPools` shows one pool |
-| mark | the adapter saw the 429 but the manager crank of `poolChanged` did not commit | the mark is missing: the member is tried once more at the next round, refuses again and is marked again; no round is retried | K-2: SIGKILL between member A's 429 and member B's request (before `dispatching` of B is irrelevant: the round is already dispatched) -> the turn is outcome-unknown; the fake server saw one request to A and none to B for that round, none after restart for it |
+| mark | the adapter saw the 429 but the manager crank of `poolChanged` did not commit | the mark is missing: the member is tried once more at the next round, refuses again and is marked again; no round is retried | K-2: SIGKILL between member A's 429 and member B's request (before `dispatching` of B is irrelevant: the round is already dispatched) -> the turn is outcome-unknown; the fake server saw one request to A and at most one to B for that round ("none to B" is not placeable from outside, J-9644), none after restart for it |
 | served stamp | up to 60 s of stamps | stickiness may move a session once (cold cache) | - (recorded, not tested) |
 | pool round | a request in flight to some member | M2 recovery: `Dispatched` recorded -> outcome-unknown, never re-sent | K-3: SIGKILL mid-stream from member B; K-4: SIGKILL after B's request left and before its first byte: in both, the fake server saw exactly one request per member attempt and none for that round after restart |
 | credential renewal | an intent written, or a refresh token presented and its answer lost | the credential carries `pendingRefresh`: the member is `unusable` with code `CONSUMED` (fail closed) until the operator signs in again; the other members serve | K-5: SIGKILL after the intent write and before the POST; K-6: SIGKILL after the token endpoint answered and before the write-back (the fake OAuth server holds its answer until killed): the token endpoint saw at most one refresh for that token across the restart; the member reports `CONSUMED`; a turn succeeds on the other member |
@@ -915,6 +923,10 @@ so <= 595 s. W4.8 records each file's wall time in its report; a file over 9 min
 to the PM before the merge instead of shortening a window. The 64 secrets of `secrets.catalog` and the
 1,000 audit events of `secrets.auditReader` are written by the file's setup through the adapter's
 store (not by turns); no M4 check needs a long session.
+
+As built (W4.8), the first row is two files: `perf/subscriptions.perf.mjs` (3.5 min) and
+`perf/subscriptions-lifecycle.perf.mjs` (6.0 min; `catalog.pool` measured in the restart
+window).
 
 Integration budget: eight integration files of 2-4 minutes each, the browser file (about 4
 minutes) and the three perf files above run in four slots within 20 minutes of wall time.

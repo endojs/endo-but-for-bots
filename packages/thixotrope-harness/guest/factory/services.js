@@ -13,6 +13,7 @@
  * Guest rules: prelude globals only.
  */
 import { shapes } from '../lib/interfaces.js';
+import { presetEndowmentsAt } from './presets.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
@@ -29,6 +30,8 @@ const mustMatch = /** @type {GuestGlobals} */ (globalThis).mustMatch;
  *   spare (M1b W1b.5)
  * @property {() => any} [makeExecVat] makes this session's `ExecHandle`
  *   (M1b W1b.5; absent without a pool)
+ * @property {any} [presetSnapshot] the preset's snapshot the creation's
+ *   resolvers read (M5 W5.1, seam H-3)
  */
 
 /**
@@ -55,8 +58,27 @@ const backendAndHost = async ({ admin, backend, host }) => ({
 const execVat = async ({ makeExecVat }) =>
   makeExecVat === undefined ? {} : { execVat: makeExecVat() };
 
+/**
+ * M5 W5.1 (m5-interfaces.md 2.3 step 3; P-53, R3-17, R3-22, R3-270): the
+ * preset's endowment objects, read from its record at the snapshot's
+ * revision (`texts.presetChanged` if it was saved since, which fails and
+ * rolls back the creation). No field when there are none (`chat-only`).
+ * @type {ServiceBuilder}
+ */
+const presetEndowments = async ({ preset, presetSnapshot }) => {
+  const at = presetSnapshot?.revision;
+  if (typeof at !== 'number') return {};
+  const endowments = presetEndowmentsAt(preset, at);
+  if (endowments === undefined || endowments.length === 0) return {};
+  return { endowments };
+};
+
 /** Hook table (append-only). */
-export const serviceBuilders = harden([backendAndHost, execVat]);
+export const serviceBuilders = harden([
+  backendAndHost,
+  execVat,
+  presetEndowments,
+]);
 
 /**
  * Merge every builder's part; the result must be a `shapes.SessionServices`.

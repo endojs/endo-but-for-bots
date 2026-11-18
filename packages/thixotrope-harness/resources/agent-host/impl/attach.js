@@ -26,6 +26,7 @@ import { E } from '@endo/far';
 
 import { shapes, textOf } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
+import { m4Shapes } from '../../../guest/lib/interfaces-m4.js';
 /* eslint-enable import/no-relative-packages */
 
 const { M, makeExo } = /** @type {any} */ (globalThis);
@@ -43,12 +44,11 @@ const makeOpsInterface = () => {
   // Counts cross as numbers (the store's generations, sizes and audit
   // limits); M.nat() is a bigint guard and refused every value (W2.9).
   const count = M.and(M.number(), M.gte(0));
+  // M4 (H-3): a pool Backend forwards its PoolSpec where an API backend
+  // forwards its BackendSpec.
+  const spec = M.or(shapes.BackendSpec, m4Shapes.PoolSpec);
   const backendRequest = (/** @type {Record<string, any>} */ optional) =>
-    M.splitRecord(
-      { backend: M.remotable('Backend'), spec: shapes.BackendSpec },
-      optional,
-      {},
-    );
+    M.splitRecord({ backend: M.remotable('Backend'), spec }, optional, {});
   return M.interface('AgentHostOps', {
     // M2 (W2.8): `archiveKey`, the archive key (`h<n>`) the manager keeps
     // for the session's host facet; the ports then carry `archive`.
@@ -56,7 +56,7 @@ const makeOpsInterface = () => {
       M.splitRecord(
         {
           backend: M.remotable('Backend'),
-          spec: shapes.BackendSpec,
+          spec,
           session: M.remotable('Session'),
         },
         { archiveKey: key },
@@ -117,6 +117,8 @@ const makeOpsInterface = () => {
       M.splitRecord({ limit: count }, { key }, {}),
     ).returns(shapes.AuditPage),
     secretWriter: M.callWhen().returns(M.remotable('SecretWriter')),
+    // M4 W4.6 (H-3): the manager's CredentialOps (m4-interfaces 3.2).
+    credentials: M.call().returns(M.remotable('CredentialOps')),
   });
 };
 
@@ -129,6 +131,7 @@ const M2_FORWARDS = harden([
   'secretDescribe',
   'secretAudit',
   'secretWriter',
+  'credentials',
 ]);
 /** M2 ops methods whose answer is only "done". */
 const M2_DONE = harden([
@@ -165,6 +168,7 @@ const M2_DONE = harden([
  * @property {(key: string) => Promise<unknown>} [secretDelete] M2 (W2.3)
  * @property {(request: any) => Promise<any>} [secretAudit] M2 (W2.3)
  * @property {() => Promise<any>} [secretWriter] M2 (W2.3)
+ * @property {() => any} [credentials] M4 (W4.6, H-3): the `CredentialOps`
  */
 
 /**
@@ -223,25 +227,48 @@ harden(makeOps);
  * @param {(sink: any) => Promise<void> | void} [options.onSink] M1b: told
  *   the manager's sink before attaching (the blob store mints and resolves
  *   handles through it; its `*.part` sweep runs here)
+ * @param {Record<string, { bind: (spec: any) => Promise<unknown> | unknown, unbind: () => unknown }>} [options.bindings]
+ *   M3 (m3-interfaces.md 11, H3): the other registration keys of this
+ *   resource (the gateway's `GATEWAY_KEY`) and what binds each
  */
-export const makeAttach = ({ ops, incarnation, onSink = () => {} }) => {
+export const makeAttach = ({
+  ops,
+  incarnation,
+  onSink = () => {},
+  bindings = {},
+}) => {
+  /** @param {unknown} key */
+  const bindingOf = key =>
+    typeof key === 'string' && Object.hasOwn(bindings, key)
+      ? bindings[key]
+      : undefined;
   /**
    * @param {unknown} key
    * @param {any} spec
    */
   const bind = async (key, spec) => {
-    if (key !== SERVICE_KEY)
-      throw Error(`agent host has no registration ${JSON.stringify(key)}`);
+    if (key !== SERVICE_KEY) {
+      const other = bindingOf(key);
+      if (other === undefined)
+        throw Error(`agent host has no registration ${JSON.stringify(key)}`);
+      await other.bind(spec);
+      return harden({ key });
+    }
     await onSink(spec.sink);
     await E(spec.sink).attach(ops, incarnation);
     return harden({ key });
   };
   /**
-   * Nothing to release: the ops facet dies with this process.
+   * The service key has nothing to release (the ops facet dies with this
+   * process); another key's binding releases what it bound.
    * @param {unknown} _binding
-   * @param {unknown} _key
+   * @param {unknown} key
    */
-  const unbind = (_binding, _key) => undefined;
+  const unbind = async (_binding, key) => {
+    if (key === SERVICE_KEY) return undefined;
+    await bindingOf(key)?.unbind();
+    return undefined;
+  };
   return harden({ bind, unbind });
 };
 harden(makeAttach);

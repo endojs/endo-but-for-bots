@@ -342,8 +342,18 @@ test('R4-43, R4-45, R4-42: an unknown tool, bad JSON and a call without an id; t
   const unknown = results.get(intents[0].opId);
   t.is(
     unknown.result,
-    // The tools this session offered (exec needs an exec vat: none here).
-    textOf.errorResult(textOf.unknownTool('nope', ['echo'])),
+    // The tools this session offered (exec needs an exec vat: none here;
+    // M5's local object tools and `adopt` need none).
+    textOf.errorResult(
+      textOf.unknownTool('nope', [
+        'echo',
+        'list',
+        'lookup',
+        'store',
+        'remove',
+        'adopt',
+      ]),
+    ),
   );
   t.true(unknown.failed);
   t.true(

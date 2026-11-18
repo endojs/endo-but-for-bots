@@ -898,6 +898,37 @@ page drops it and that vat next collects (J-9386, J-9392).
 (M4), Network chip and internet toggle (M7), emergency stop (M6), voice and `/audio` (M11), Home,
 spaces and the admin CLI (M12), assistant launch R6-60 (M11).
 
+**Outcome (W3.8, lane `claude/thix-m3`; not yet marked done: the PM marks M3 after the lanes are
+merged).** Release worker `367e78ad...`, crank budget 50 M, Apple M3 Max with other lanes' agents
+and perf runs (load 2-7); headless Chromium from Playwright's cache (headless shell build 1243).
+Commits up to `22a78eca62` and the W3.8 fixes after it (J-9600..J-9609).
+
+| item | file | result | verdict | entries |
+|---|---|---|---|---|
+| Acceptance 1, 2, 10, 11, 16; K1, K2 | `m3-gateway` (W3.7) | passed in W3.7's runs; not rerun by W3.8 | pass (W3.7) | J-0590, J-0591 |
+| Acceptance 3, 13, 14, 12 (protocol) | `m3-sessions` (W3.7) | passed in W3.7's runs; not rerun by W3.8 | pass (W3.7) | J-0590 |
+| Acceptance 4-7 (protocol); K3, K4, K5 | `m3-reconnect` | 5/5; re-attach 142-180 ms; K3/K4 once at 0 ms, 60 ms and after the answer; K5 outcome-unknown on both pages, 1 request, 1 tool run | pass | J-9602 |
+| Acceptance 1, 2 (page), 4 (socket), 5, 6, 9, 14 (page), 15 | `test/browser/m3-ui` | 4/4 after two UI fixes (request ids, re-attached turn text) | pass | J-9604, J-9605, J-9608 |
+| Acceptance 12, 7 (K5), 4 (60 s down) | `test/browser/m3-ui-restart` | 4/4; the page was back 8.8-13.4 s after the gateway returned (budget 30 s); 12 failed once on a queue wait, then passed | pass (one flaky run) | J-9608 |
+| Acceptance 8 | `test/browser/m3-ui-history` | Load earlier: 300 turns, 37 pages, every turn once; tool group, exec highlight and raw view; 1 MiB reply rendered fully (Show all) after a reload, 3/3 | pass, with the gap of J-9605 (a live-watched long reply needs a reload) | J-9605, J-9609 |
+| `gateway.fetch` (50 ms; 0 deliveries) | `gateway` | median 0.53-0.66 ms; 0 per sign-in | pass | J-9606, J-9609 |
+| `gateway.guard` (2 ms) | `gateway` | median 0.123 ms (24.5 KB call, 446 records) | pass | J-9606 |
+| `ui.call` (150 ms) | `gateway` | median 22-27 ms, p99 187-215 | pass | J-9606, J-9609 |
+| `ui.submit` (150 ms) | `gateway` | median 44-62 ms, p99 227-255 | pass | J-9606, J-9609 |
+| `ui.deltaFanout` (5 ms; 0 deliveries per delta) | `gateway` | median 1 ms, p99 7-11; 8-11 deliveries over 1,100 deltas (the rounds', 0.007-0.010 per delta) | latency pass; deliveries **miss** under the strict 0 (cause: round deliveries counted in the window) | J-9606, J-9609 |
+| too-big probes | `gateway` | 100 KiB, 2,000 keys, depth 33 refused; 33 in flight: 1 refused; 4,097 exports closed 4008; no journal growth; still serving | pass | J-9609 |
+| `ui.snapshot` (300 ms) | `gateway-session` | median 46 ms, 371 characters | pass | J-9607 |
+| `ui.history.newest` / `.archived` (300 ms) | `gateway-session` | median 256 ms (p99 313) / 2.5 ms | pass | J-9607 |
+| `ui.reconnect` (1 s) | `gateway-session` | median 447 ms, p99 704 | pass | J-9607 |
+| `ui.restartReady.clean` / `.sigkill` (2 s after serving) | `gateway-session` | fetch answered 3.1 s / 2.5 s before `serve()` resolved (about 1.8 s / 4.8 s after it began); 21 restarts each | pass (trivially; see J-9607) | J-9607 |
+| `ui.bundle` (600 KB gz) | `ui` | 101,275 bytes gzip (308,374 raw) with every lane's features | pass | J-9609 |
+| `ui.coldLoad` (1.5 s) | `ui` | median 120 ms, p99 327 (n 273) | pass | J-9609 |
+| `ui.hubGrowth` (hub 2 MB; row 1.25 x) | `ui` | hub 0.10 -> 1.16 MB; session row exports 11 -> 21 (1.91 x) | hub pass; row **miss** | J-9609 |
+| Section 5 against M2 as merged in the lane | script check | every object, method and shape listed exists in `interfaces.js` | pass | J-9609 |
+
+Each M3 perf file ran under 10 minutes of slot hold (gateway 5.3-5.5 min, gateway-session 9.3
+min, ui 6.3 min); the windows are fixed (60 s, 150 s restart, 5 min growth).
+
 ---
 
 ## M4. Secrets manager and subscription pools
@@ -1018,6 +1049,46 @@ Files: `perf/subscriptions.perf.mjs` 7 windows, 510 s timed, <= 595 s with setup
 
 **Deferred:** Codex reset-credit redeem (open decision 8), voice preset model (M11).
 
+**Outcome (W4.8, M4 lane, before the lane merges; not marked done).** Fake servers on loopback,
+`m4` template, release worker of the lane, crank budget 50 M, Apple M3 Max shared with other
+lanes (load 4-9). Journal J-9640..J-9647.
+
+| # | acceptance | file | result |
+|---|---|---|---|
+| 1 | Secrets full | `m4-secrets` | pass (found and fixed: no `store` export, key file race; J-9641) |
+| 2, 3 | selection, stickiness, hand-over, all exhausted | `m4-pools` | pass |
+| 4, 11 | marks across SIGKILL; K-2, K-3, K-4 | `m4-restart` | pass; K-2's "none to b" not placeable from outside, at most once holds (J-9644) |
+| 5 | reachability | `m4-reachability` (unit closure a, daemon holdings b) | pass; origin granularity until CC-060; no exec vat in the chat-only session checked |
+| 6, 13 | catalogue; efforts, R4-30 headers | `m4-catalog` | pass (fixed: `ultra` refused on Codex; J-9641); 13's two-part system text **deferred to M5's merge** |
+| 7 | accounts | `m4-accounts` | pass (fixed: nothing shown after a restart until first use); `accountStatus` is **not offered to the model** (session tool table, J-9642) |
+| 8, 9 | Claude and Codex overload and failure texts | `m4-wire` | pass (production delays 5 s, 10 s) |
+| 10 | renewal | `m4-renewal` | pass; the race is the operator's replace during a held refresh |
+| 12 | K-5, K-6 | `m4-restart-renewal` | pass; renewal runs at the creation's catalogue read (J-9643) |
+| 14 | browser | `test/browser/m4-ui.mjs` | **deferred to M3's merge** (not written) |
+| 15 | no credential anywhere | in 1, 2-3, 10, 12 | pass (token prefixes grepped); browser part deferred with 14 |
+| 16 | provisioning, K-1 | `m4-provision` | pass (step called directly: `makeProvision` passes no `subscriptions` yet) |
+
+| perf row | budget | measured (commit `0c66afd639`) | result |
+|---|---|---|---|
+| `subscriptions.select` | median 0.5 ms | 0.093 ms (n 581,569) | pass |
+| `subscriptions.turnStart` | median 350 ms; 0 manager | 270 ms, p99 400 (n 125); 0.016 manager frames per turn | pass |
+| `subscriptions.handover` | 50 ms added; 1 manager per refusal | 2.1 ms (n 31); 1.35 frames per refusal | pass |
+| `subscriptions.servedWrites` | 1 per session per 60 s | 2 manager frames in 60.4 s (frames, not deliveries) | miss (unconfirmed) |
+| `subscriptions.renewal` | 1 POST per expiry; fake + 50 ms | 1 POST for each of 20 expiries; -49 ms vs unexpired | pass |
+| `subscriptions.firstOpen` | median 750 ms | 688 ms, p99 1,312 (13 restarts); 3 manager frames | pass |
+| `catalog.pool` | warm 300 ms; cold 2 s | warm 75 ms; cold 274 ms (n 13) | pass |
+| `subscriptions.bundles` | session, exec +64; factory +6 KB | +33, +33; factory +6,874 | factory miss |
+| too-big probes | no halt, refused | credential 8,193, audit 1,001, 17 members refused; PoolState 15,839 B | pass |
+| `secrets.credentialRead` | median 1 ms | 0.034 ms | pass |
+| `secrets.catalog` | median 300 ms | 745 ms, p99 1,226 (64 secrets, page cut to 57) | **miss** |
+| `secrets.auditReader` | median 50 ms | 30 ms in the adapter (402 ms through the hub, informative) | pass |
+| `accounts.push` | median 5 ms; 0 deliveries | 0.371 ms; 0 | pass |
+| `accounts.refresh` | fake + 100 ms | 39 ms | pass |
+
+Perf files: `subscriptions.perf.mjs` 3.5 min and `subscriptions-lifecycle.perf.mjs` 6.0 min (the
+contract's one file split; `catalog.pool` measured in the restart window), `secrets.perf.mjs` 4.7
+min, `accounts.perf.mjs` 2.2 min.
+
 ---
 
 ## M5. Presets, prompt composition, object and exec tools, grants, mentions
@@ -1129,6 +1200,40 @@ every perf file under 6 minutes; reasons in `m5-interfaces.md` 8.2)
 The whole M5 regression (11 integration files and the browser file of at most 4 minutes each,
 five perf files of at most 5.5 minutes each) is at most 69 slot-minutes: about 17 minutes on four
 test slots.
+
+**Outcome (W5.9, lane m5 before the merge; M5 is not done until the PM merges the lanes).**
+Release worker `367e78ad...`, crank budget 50 M, slot ceiling 4,000,000; Apple M3 Max shared with
+the M2, M3 and M4 lanes (load 2-8). Every daemon run used a copy of the lane with the bundler
+patch of J-9690 applied (whitespace only): without it the session program (272,126 bytes) is over
+the factory's 262,144-byte cap and no session can be created. Verdicts use the 1.25 x rule; a miss
+is kept with its likely cause, not re-based.
+
+| item | result | verdict | entries |
+|---|---|---|---|
+| 1 snapshot isolation; 9 part 7 (`m5-snapshot`) | A keeps X's digest and `notes` after the save; B gets Y and lists nothing (21.8 s) | pass | J-9694 |
+| 2, 13, 14, K1, K2 (`m5-presets`) | as W5.1 wrote them | pass | J-9692 |
+| 3 (`m5-labels`, `m5-objects`), 4, 5, 8, K7 (`m5-objects`) | as written; 5's 200 KB `help` is staged, not terminated (J-0771) | pass | J-9692 |
+| 6 (`m5-grants`) | after the deep-schema fixture fix (the 40-deep fixture halted the workspace vat itself) | pass | J-9692, J-9693 |
+| 7 (`m5-mentions`) | as written | pass | J-9692 |
+| 9 without part 7 (`m5-prompt`) | as written | pass | J-9692 |
+| 10 (`m5-security`) | 300 KB granted answer: `inspectTerminated`, session goes on | pass | J-9692 |
+| 11a K3, K6 (`m5-mentions-restart`); 11b K4, K5 (`m5-grants-restart`) | after test fixes (request id format; a submit behind a restart hold has no turn); K5's tool ran once | pass | J-9692 |
+| 12 reachability (`m5-reachability`) | (a) return-guard closure has no operator or admin interface; (b) session and exec vats hold no other session or exec vat; origin granularity only (CC-060) | pass | J-9694 |
+| 15 browser (W5.8, M3 lane) | needs M3 merged | deferred | |
+| M1a, M1b, M2 unit lanes | 11 tests pinned pre-M5 hook tables; updated. `bundle-guest`, `m1a-session-program` fail on session program bytes | 2 fail until J-9690 is settled | J-9691 |
+| `session.program` / `exec.program` (240,000 / 120,000 after O-1) | 272,126 / 119,760 as the lane bundles; 241,361 / 106,277 with the per-module J-9690 patch (the daemon runs); 236,218 / 104,193 with the bundle-level form of J-9698 (Node only: evaluates and runs a turn; not run in a daemon) | **miss** as the lane bundles and with the per-module patch; pass with J-9698's form, once the PM applies it to `scripts/bundle-guest.mjs` / pass | J-9690, J-9695, J-9698 |
+| `session.createCold` (6 s), O-1 before and after | `creation-m5`: 7,341 ms median, n 17 in 120 s (241 KB program); `session.perf` same method both sides: M2 base 5,619 ms (186,448 bytes, 34.6 deliveries) -> M5 7,220 ms (241,361 bytes, 40.6 deliveries) | pass (1.20-1.22 x) | J-9695, J-9697 |
+| `prompt.compose` Node (5 ms) / vat (`chat-only` + 150, 750 ms; pool 4) | 0.002 ms / largest 1,622 vs `chat-only` 1,277 (+345), n 10 + 10 | pass / **miss** | J-9695 |
+| `tools.local` (+30 ms; 0 extra deliveries) | +109 ms (852 vs 743); -0.9 deliveries | **miss** / pass | J-9696 |
+| `labels.full` (1.1 x) | 1.071 | pass | J-9696 |
+| `tools.inspect` (300 ms) | 339 ms (n 56) | pass (1.13 x) | J-9696 |
+| `grants.round` (350 ms; tool set 10 ms) | 215 ms (n 53, plain 255); tool set 0.018 ms in Node | pass | J-9696 |
+| `exec.powersLookup` (150) / `exec.membrane` (+5) / `exec.scope1000` (300) | 73 ms / -10 ms (Node +0.002) / 100 ms | pass | J-9696 |
+| `presets.save` (150 ms) / `inventory.page` (200 ms) | 264-269 ms with 32 endowments (24-36 ms without) / 801-804 ms (one entry: 24 ms); paging by an array instead of the Map walk changed nothing (tried, reverted) | **miss** / **miss**: about 7-15 ms per handle crossing into or out of a vat | J-9696 |
+| `mentions.turnStart` (+100, 350 ms, 3 deliveries) | 466 vs 144 ms (+322); +0.3 deliveries | **miss** / pass | J-9696 |
+| probes a-f | (a) refused in the exec vat, no halt (the row failed on its own check, fixed in 00e7e848f1); (b) staged, no halt; (c) the workspace vat halted (fixture builds 20,000 keys itself); (d1-d3) refused; (e) `refused-schema` (3,074 characters, limit 2,048), no halt (7.9 s); (f1, f2) pass | (c) **miss** | J-9696 |
+| regression wall time (20 min on four slots) | integration 11 files 22.7 slot-minutes held (each <= 3.5 min); perf 21.8 minutes exclusive (five files); waits for slots 0-29 minutes per run | **miss**: the exclusive perf files alone exceed 20 minutes | J-9696 |
+| seams with M3 and M4 as landed (M4's effort lift, `systemTextOf` on pools, gateway presences) | not in this lane | deferred to the merge | |
 
 **Fit risk:** good. Persistent scope and object endowments are what Thixotrope offers; Appendix F
 drops most of Endo's name plumbing.

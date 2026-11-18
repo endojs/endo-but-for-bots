@@ -11,5 +11,6 @@
     "scripts/**/*.js",
     "test/**/*.js",
     "test/**/*.mjs"
-  ]
+  ],
+  "exclude": ["resources/agent-host/impl/gateway/assets/**"]
 }

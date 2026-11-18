@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 /* eslint-disable import/no-relative-packages */
 import { shapes, textOf, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
+import { m4Texts } from '../../guest/lib/texts-m4.js';
 import {
   INTERRUPTED_CREATION_TEXT,
   NO_PROGRAM_TEXT,
@@ -264,7 +265,6 @@ test('refused options make no row and no vat', async t => {
   }
   for (const [name, value] of /** @type {[string, any][]} */ ([
     ['networkPolicy', 'none'],
-    ['reasoningEffort', 'high'],
   ])) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
@@ -272,6 +272,15 @@ test('refused options make no row and no vat', async t => {
       { message: textOf.optionNotSupported(name) },
     );
   }
+  // M4 (H-6): reasoningEffort is resolved now; a backend that is not a
+  // subscription pool refuses it with M4's text.
+  await t.throwsAsync(
+    () =>
+      E(kit.factory).createSession(
+        harden({ backend, reasoningEffort: 'high' }),
+      ),
+    { message: m4Texts.effortNotSupported },
+  );
   await t.throwsAsync(() => E(kit.factory).createSession(harden({})), {
     message: texts.noBackend,
   });
@@ -554,11 +563,11 @@ test('make registers the start listener and returns the root', async t => {
   const operator = await E(root).getOperator();
   const factory = await E(operator).getFactory();
   const presets = await E(factory).listPresets();
-  t.is(presets.length, 1);
-  t.deepEqual(await E(presets[0]).describe(), {
-    label: 'chat-only',
-    builtIn: true,
-  });
+  // M5 W5.1: the catalogue lists the built-ins, `chat-only` first.
+  t.is(presets.length, 5);
+  const view = await E(presets[0]).describe();
+  t.is(view.label, 'chat-only');
+  t.true(view.builtIn);
   const session = await E(factory).createSession(harden({ backend }));
   t.is((await E(root).status()).sessions, 1);
   t.is(await E(factory).findSession('s1'), session);
@@ -737,8 +746,18 @@ test('start listener: a probe that never settles does not hold back the others',
 test('the hook tables have M1a entries and the services are attenuated', async t => {
   // M1a's three entries first; later milestones append (M2: W2.2, W2.6, W2.7).
   t.true(optionResolvers.length >= 3);
-  // M1b W1b.5 appends the execVat builder (empty without a pool).
-  t.is(serviceBuilders.length, 2);
+  // M1b W1b.5 appends the execVat builder (empty without a pool); M5 W5.1
+  // the presetEndowments builder (empty without a snapshot revision).
+  t.is(serviceBuilders.length, 3);
+  t.deepEqual(
+    await serviceBuilders[2]({
+      admin: makeFakeAdmin().admin,
+      backend,
+      preset: Far('Preset', {}),
+      key: 's1',
+    }),
+    {},
+  );
   t.deepEqual(
     await serviceBuilders[1]({
       admin: makeFakeAdmin().admin,

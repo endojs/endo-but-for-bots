@@ -156,6 +156,95 @@ export const stripComments = (source, where = 'module') => {
 };
 
 /**
+ * A bundle without the blanks and tabs that start its lines (J-9698), except
+ * inside a template literal or a string literal that spans lines, where they
+ * are text. Found by parsing the bundle as a script, never by a pattern.
+ * Line breaks stay, so line numbers and the token stream are unchanged; it
+ * runs once on the whole bundle, so compartment-mapper's own scaffolding
+ * loses its indentation too. Bundle bytes are paid per vat staged (D-4).
+ *
+ * @param {string} source
+ * @param {string} [where] for error messages
+ * @returns {string}
+ */
+export const dropIndentation = (source, where = 'bundle') => {
+  /** @type {any} */
+  let ast;
+  try {
+    ast = loadParser().parse(source, {
+      sourceType: 'script',
+      allowReturnOutsideFunction: true,
+    });
+  } catch (error) {
+    throw Error(`Cannot parse ${where} to drop its indentation: ${error}`, {
+      cause: error,
+    });
+  }
+  const skipped = new Set([
+    'loc',
+    'leadingComments',
+    'trailingComments',
+    'innerComments',
+    'extra',
+  ]);
+  /** @param {any} node */
+  const isTextRange = node =>
+    node.type === 'TemplateLiteral' ||
+    ((node.type === 'StringLiteral' || node.type === 'DirectiveLiteral') &&
+      source.slice(node.start, node.end).includes('\n'));
+  /** @type {Array<[number, number]>} ranges whose line starts are text */
+  const kept = [];
+  /** @type {unknown[]} */
+  const stack = [ast.program];
+  while (stack.length) {
+    const node = /** @type {any} */ (stack.pop());
+    if (Array.isArray(node)) {
+      for (const item of node) stack.push(item);
+    } else if (typeof node === 'object' && node !== null) {
+      if (typeof node.type === 'string' && isTextRange(node)) {
+        // A template whole, expressions included: simpler, and rare.
+        kept.push([node.start, node.end]);
+      } else {
+        for (const key of Object.keys(node)) {
+          const value = node[key];
+          if (!skipped.has(key) && typeof value === 'object' && value !== null)
+            stack.push(value);
+        }
+      }
+    }
+  }
+  kept.sort((a, b) => a[0] - b[0]);
+  /** @type {string[]} */
+  const parts = [];
+  let at = 0;
+  let range = 0;
+  for (let lineStart = 0; lineStart < source.length;) {
+    const breakAt = source.indexOf('\n', lineStart);
+    const lineEnd = breakAt === -1 ? source.length : breakAt + 1;
+    while (range < kept.length && kept[range][1] <= lineStart) range += 1;
+    const inside =
+      range < kept.length &&
+      kept[range][0] < lineStart &&
+      lineStart < kept[range][1];
+    if (!inside) {
+      let first = lineStart;
+      while (
+        first < lineEnd &&
+        (source[first] === ' ' || source[first] === '\t')
+      )
+        first += 1;
+      if (first > lineStart) {
+        parts.push(source.slice(at, lineStart));
+        at = first;
+      }
+    }
+    lineStart = lineEnd;
+  }
+  parts.push(source.slice(at));
+  return parts.join('');
+};
+
+/**
  * @typedef {object} GuestBundle
  * @property {string} entry absolute path of the entry module
  * @property {string} guestRoot the guest package root every module lies in
@@ -251,7 +340,9 @@ export const bundleGuest = async (
     throw Error(
       `Guest bundle ${entryPath} reads modules outside ${root}: ${outside.join(', ')}`,
     );
-  const ascii = escapeNonAscii(source);
+  const ascii = escapeNonAscii(
+    comments ? source : dropIndentation(source, entryPath),
+  );
   const encoded = new TextEncoder().encode(ascii);
   return harden({
     entry: entryPath,

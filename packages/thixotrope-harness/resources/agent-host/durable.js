@@ -30,7 +30,18 @@ import {
 import { limits } from '../../guest/lib/limits.js';
 import { fitsFrame } from '../../guest/lib/bounded.js';
 import { isRetiredBreak } from '../../guest/lib/retired.js';
+import { makeGatewayManager } from './durable-gateway.js';
+import { withGatewayAdmin } from '../../guest/lib/interfaces-m3.js';
+import {
+  m4Interfaces,
+  m4SinkMethodGuards,
+} from '../../guest/lib/interfaces-m4.js';
 /* eslint-enable import/no-relative-packages */
+// M4 W4.1 (H-2): pools, members and the full Secrets manager.
+import {
+  forwardSinkMethods,
+  makeSubscriptionsPart,
+} from './durable-subscriptions.js';
 
 const { E, Far, M, defineExoClass, makeExo, makePromiseKit } =
   /** @type {any} */ (globalThis);
@@ -80,6 +91,7 @@ export const make = ({ makeManager }) => {
     // The key is registered again only to reconcile it; nothing replaces it.
     same: () => true,
   });
+  const gateway = makeGatewayManager({ manager });
 
   // ---- blobs (M1b W1b.1; designs/m1b-interfaces.md section 4) ----
   // Handles are minted here in batches for the adapter's stock; the file
@@ -125,6 +137,8 @@ export const make = ({ makeManager }) => {
           arrayLengthLimit: limits.blobResolveBatch,
         }),
       ).returns(m1bShapes.BlobKeys),
+      // M4 (H-2): poolState, poolChanged, poolOf.
+      ...m4SinkMethodGuards(),
     }),
     {
       /** A stock batch for the adapter (one crank; section 4.1). */
@@ -169,7 +183,11 @@ export const make = ({ makeManager }) => {
        */
       resolveGrants: grants =>
         // eslint-disable-next-line no-use-before-define
-        harden(grants.map(grant => grantRecords.get(grant)?.key ?? null)),
+        harden(
+          grants.map(
+            grant => secretRecords.get(grantSecrets.get(grant))?.key ?? null,
+          ),
+        ),
       /**
        * @param {any} opsFacet
        * @param {string} _incarnation
@@ -187,6 +205,8 @@ export const make = ({ makeManager }) => {
         }
         return attaches;
       },
+      // M4 (H-2): the subscriptions part, made after the sink.
+      ...forwardSinkMethods(() => subscriptions),
     },
   );
 
@@ -323,8 +343,12 @@ export const make = ({ makeManager }) => {
    */
   /** Secret -> its record. @type {WeakMap<any, SecretRecord>} */
   const secretRecords = new WeakMap();
-  /** ReadGrant -> the record of its Secret. @type {WeakMap<any, SecretRecord>} */
-  const grantRecords = new WeakMap();
+  /**
+   * ReadGrant -> its Secret (not a copy of the record: a description set
+   * after the grant was made is what `describe` answers; INT-M4).
+   * @type {WeakMap<any, any>}
+   */
+  const grantSecrets = new WeakMap();
   /** The live Secrets in creation order (`list`). @type {any[]} */
   let secretList = [];
   /** Creates past the bound check, not yet in `secretList`. */
@@ -334,6 +358,14 @@ export const make = ({ makeManager }) => {
     Number(
       /** @type {SecretRecord} */ (secretRecords.get(secret)).key.slice(1),
     );
+  // M4 W4.1 (H-2): pools hang off the Secrets manager (D-M4-1).
+  const subscriptions = makeSubscriptionsPart({
+    withOps,
+    whenBound,
+    archiveKeyOf,
+    secretRecords,
+    secretList: () => secretList,
+  });
 
   /**
    * @param {any} secret
@@ -347,7 +379,7 @@ export const make = ({ makeManager }) => {
 
   const makeSecret = defineExoClass(
     'Secret',
-    interfaces.Secret,
+    m4Interfaces.Secret,
     () => harden({}),
     {
       async describe() {
@@ -364,10 +396,10 @@ export const make = ({ makeManager }) => {
         });
       },
       makeReadGrant() {
-        const record = recordOf(this.self);
+        recordOf(this.self);
         // eslint-disable-next-line no-use-before-define
         const grant = makeReadGrantExo();
-        grantRecords.set(grant, record);
+        grantSecrets.set(grant, this.self);
         return grant;
       },
       async revoke() {
@@ -390,6 +422,7 @@ export const make = ({ makeManager }) => {
           E(current).secretAudit(harden({ key: record.key, limit })),
         );
       },
+      ...subscriptions.secretMethods,
     },
   );
 
@@ -399,14 +432,14 @@ export const make = ({ makeManager }) => {
     () => harden({}),
     {
       describe() {
-        const record = grantRecords.get(this.self);
+        const record = secretRecords.get(grantSecrets.get(this.self));
         if (record === undefined) throw secretError('UNKNOWN_GRANT');
         return harden({ label: record.label, description: record.description });
       },
     },
   );
 
-  const secretsAdmin = makeExo('SecretsAdmin', interfaces.SecretsAdmin, {
+  const secretsAdmin = makeExo('SecretsAdmin', m4Interfaces.SecretsAdmin, {
     /**
      * @param {string} [cursor] the creation serial of the last Secret of the
      *   page before, so a delete between pages skips none (J-9486)
@@ -449,6 +482,7 @@ export const make = ({ makeManager }) => {
     /** @param {number} [limit] */
     audit: async (limit = limits.auditPageEvents) =>
       withOps(current => E(current).secretAudit(harden({ limit }))),
+    ...subscriptions.secretsAdminMethods,
   });
 
   /** @param {any} spec a `shapes.BackendSpec` (checked by the guard) */
@@ -456,7 +490,7 @@ export const make = ({ makeManager }) => {
     if (!fitsFrame(spec)) throw Error(texts.frameLimit);
     // M2: an API backend reads its key through a grant this manager
     // minted (D-6, R7-28); never key text.
-    if (spec.kind !== 'scripted' && !grantRecords.has(spec.keyGrant))
+    if (spec.kind !== 'scripted' && !grantSecrets.has(spec.keyGrant))
       throw secretError('UNKNOWN_GRANT');
     const info = harden(
       spec.modelId === undefined
@@ -553,7 +587,9 @@ export const make = ({ makeManager }) => {
     return undefined;
   };
 
-  const facet = makeExo('AgentHostAdmin', m2Interfaces.AgentHostAdmin, {
+  // M3 (m3-interfaces.md 11, H2): the M2 guard plus `gateway()`.
+  const facetGuard = withGatewayAdmin(m2Interfaces.AgentHostAdmin);
+  const facet = makeExo('AgentHostAdmin', facetGuard, {
     makeBackend,
     forSession,
     bindSession,
@@ -576,6 +612,7 @@ export const make = ({ makeManager }) => {
           ? E(current).writersFor()
           : E(current).writersFor(session),
       ),
+    gateway: () => gateway.admin,
   });
 
   const lifecycle = Far('AgentHostLifecycle', {

@@ -15,9 +15,20 @@
  * the same crank when the session is idle and the queue is not held. The
  * session asks for its adapter ports when it is made (`Backend.open`, once
  * per adapter incarnation; contract 6.1).
+ *
+ * M5 (W5.3; m5-interfaces.md 2.4.1, 2.8, H-4): `make` builds the session's
+ * label map (seeded from `services.endowments`, then `labelSeeds`) and its
+ * runtime (`m5-parts.js`), and the `Session` exo takes the M5 guard:
+ * `grants()` and `enqueueMessageOnce` forward to the runtime's `grants` and
+ * `packages` parts and throw `textOf.notBuilt` until W5.6 and W5.7 register
+ * them.
  */
-import { m2Interfaces, texts } from '../lib/interfaces.js';
+import { m2Interfaces, texts, textOf } from '../lib/interfaces.js';
+import { m5Interfaces } from '../lib/interfaces-m5.js';
 import { limits } from '../lib/limits.js';
+import { labelSeeds as defaultLabelSeeds, seedsFor } from './label-seeds.js';
+import { makeLabels } from './labels.js';
+import { m5Parts, makeRuntime } from './m5-parts.js';
 import { makeQueue as defaultMakeQueue } from './queue.js';
 import {
   isRestartSignal as defaultIsRestartSignal,
@@ -27,9 +38,11 @@ import { makeSessionExport } from './export.js';
 import { makeLivePublishing } from './live.js';
 import { makeRecordLog } from './records.js';
 import { submissionField } from './staging.js';
-import { toolTable } from './tool-table.js';
+import { toolSources, toolTable } from './tool-table.js';
 import { turnHooks } from './turn-hooks.js';
 import { makeTurnRunner } from './turn.js';
+
+/** @import { Runtime } from './m5-parts.js' */
 
 // The exo methods are typed loosely; the interface guards check the values.
 const { makeExo } = /** @type {any} */ (globalThis);
@@ -43,10 +56,13 @@ const { makeExo } = /** @type {any} */ (globalThis);
  * @property {number} [maxToolRounds]
  * @property {readonly any[]} [toolTable]
  * @property {typeof turnHooks} [hooks]
+ * @property {readonly any[]} [toolSources] M5 S1
+ * @property {readonly any[]} [parts] M5 runtime parts (`m5-parts.js`)
+ * @property {readonly any[]} [labelSeeds] M5 (`label-seeds.js`)
  */
 
 /**
- * @param {{ config: any, services: { backend: any, host: any }, rowReporter: any }} makeArgs
+ * @param {{ config: any, services: { backend: any, host: any, endowments?: any[] }, rowReporter: any }} makeArgs
  * @param {SessionOptions} [options]
  */
 export const makeSession = (
@@ -58,9 +74,18 @@ export const makeSession = (
     maxToolRounds = limits.maxToolRounds,
     toolTable: table = toolTable,
     hooks = turnHooks,
+    toolSources: sources = toolSources,
+    parts = m5Parts,
+    labelSeeds = defaultLabelSeeds,
   } = {},
 ) => {
   let { title } = config;
+  // M5 (2.4.1): a seed whose label is taken fails `make`.
+  const labels = makeLabels({
+    seeds: seedsFor(services, config, labelSeeds),
+  });
+  /** @type {Runtime | undefined} */
+  let runtime;
   const records = makeRecordLog();
   const live = makeLivePublishing({
     host: services.host,
@@ -80,6 +105,8 @@ export const makeSession = (
     maxToolRounds,
     // M2 (m2-interfaces.md 2.4 item 6): the runner builds the session's
     // ContextSource itself, over the archive.
+    sources,
+    getRuntime: () => runtime,
   });
   // Receipts keep the turn id; the Turn is minted when one is handed out
   // while the session keeps the turn (J-9152, m2-interfaces.md 5.3).
@@ -103,8 +130,6 @@ export const makeSession = (
     claimNext: runner.claimNext,
   });
   runner.attach({ queue, core });
-  // Contract 6.1: the ports are opened once, here, and held across turns.
-  runner.openPorts();
 
   const info = () => {
     /** @type {Record<string, any>} */
@@ -149,7 +174,18 @@ export const makeSession = (
     }
   };
 
-  const session = makeExo('Session', m2Interfaces.Session, {
+  // M5 (S4): the runtime parts, made once the internals they use exist.
+  runtime = makeRuntime({
+    labels,
+    services,
+    config,
+    session: harden({ core, queue, runner, inCrank, refuseIfDeleting }),
+    parts,
+  });
+  // Contract 6.1: the ports are opened once, here, and held across turns.
+  runner.openPorts();
+
+  const session = makeExo('Session', m5Interfaces.Session, {
     getInfo() {
       return info();
     },
@@ -222,6 +258,30 @@ export const makeSession = (
     /** @param {string} turnId W2.5 (m2-interfaces.md 4.9) */
     findTurn(turnId) {
       return runner.findTurn(turnId);
+    },
+    /**
+     * M5 (2.6, A.4): `enqueueOnce` with attachments; the `packages` part
+     * (W5.7) does the work in this crank.
+     * @param {any} submission inline `{ text }` or a StagedText
+     * @param {string} requestId
+     * @param {number} at
+     * @param {any[]} attachments
+     */
+    enqueueMessageOnce(submission, requestId, at, attachments) {
+      const packages = runtime?.packages;
+      if (packages?.enqueueMessageOnce === undefined) {
+        throw Error(textOf.notBuilt('enqueueMessageOnce'));
+      }
+      refuseIfDeleting();
+      return inCrank(() =>
+        packages.enqueueMessageOnce(submission, requestId, at, attachments),
+      );
+    },
+    /** M5 (2.5): the session's granted tools (W5.6's `grants` part). */
+    grants() {
+      const facet = runtime?.grants?.facet;
+      if (facet === undefined) throw Error(textOf.notBuilt('grants'));
+      return facet;
     },
   });
 

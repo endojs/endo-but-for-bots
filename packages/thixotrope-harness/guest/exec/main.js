@@ -43,37 +43,33 @@
  * through the call's `BlobWriters` in pieces of at most `blobPieceBytes`
  * when it is over `inlineBytes`. Only `{ status, text }` leaves the vat.
  */
-import {
-  execArgumentNames,
-  m1bInterfaces,
-  texts,
-  textOf,
-} from '../lib/interfaces.js';
+import { execArgumentNames, texts, textOf } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
-import { boundToolOutput, chunkText, utf8Bytes } from '../lib/bounded.js';
 import {
+  EXHAUSTED,
+  argumentText,
   describeParseFailure,
+  execGuards,
+  failed,
+  finish,
+  isKeysExhausted,
   messageOf,
   redactHostPaths,
   renderToolResult,
   stripCodeFence,
 } from './render.js';
+import { makeMembrane } from './membrane.js';
+import { makeCallPowers } from './powers.js';
+import { makeInspector } from './inspect.js';
+
+// M1b's exports, kept for its tests.
+export { NO_CONTENT_TEXT, isKeysExhausted } from './render.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
 // The exo methods are typed loosely; the interface guard checks the values.
 const { makeExo } = /** @type {any} */ (globalThis);
 
-/** A staged source whose pages do not reach its end within this many reads. */
-export const MAX_SOURCE_PAGES =
-  4 * Math.ceil(limits.execSourceBytes / limits.blobPageBytes);
-
-/** `ExecRequest.args` is staged but no `Content` came with it. */
-export const NO_CONTENT_TEXT =
-  'exec arguments were staged but no content reader was passed';
-/** A staged source's pages did not reach its end. */
-export const SOURCE_PAGES_TEXT =
-  'exec source could not be read: its pages did not reach the end of the text';
 /** The arguments parsed to something other than a JSON object. */
 export const NOT_AN_OBJECT_TEXT = 'exec arguments must be a JSON object';
 
@@ -111,35 +107,17 @@ export const clampDelay = ms => {
 };
 harden(clampDelay);
 
+/** @import { Outcome, StagedText } from './render.js' */
+
 /**
- * @typedef {{ status: 'ok' | 'failed', text: string | object }} Outcome
- * @typedef {{ blob: object, preview: string, bytes: number }} StagedText
- * @typedef {object} ExecRequest `m1bShapes.ExecRequest` (guard-checked)
+ * @typedef {object} ExecRequest `m5Shapes.ExecRequest` (guard-checked)
  * @property {string | StagedText} args
  * @property {any} writers
  * @property {any} timer
  * @property {any} [content]
  * @property {string} [notice]
+ * @property {any} [powers] the session's `ExecPowersSource` (M5)
  */
-
-/**
- * @param {string} text
- * @returns {Outcome}
- */
-const failed = text => harden({ status: 'failed', text });
-
-/** The engine's text when a vat's name table is full (J-0333). */
-const KEYS_EXHAUSTED = 'property key space exhausted';
-
-/**
- * Whether `error` (or a message) says this vat's name table is full.
- * @param {unknown} error
- */
-export const isKeysExhausted = error =>
-  messageOf(error).includes(KEYS_EXHAUSTED);
-harden(isKeysExhausted);
-
-const EXHAUSTED = harden({ status: 'exhausted' });
 
 /** A promise that never settles (what a dead `sleep` answers). */
 const never = () => new Promise(() => {});
@@ -186,9 +164,16 @@ const hideGlobals = global => {
  * `powers` M1b follow-ups, J-9368). A closed call's `E(x).m()` is an
  * eventual send to a promise that never settles: nothing leaves the vat,
  * nothing answers, and no answer is wrapped while the call is open.
+ *
+ * M5 (W5.4, `m5-interfaces.md` 2.7): with the session's `ExecPowersSource`
+ * the call's `powers` is `{ lookup, list, store, remove }` over it
+ * (`powers.js`), and the model's `E` is the call's membrane (`membrane.js`):
+ * both are built on the call's `E`, so they die with the call. Without it
+ * (an M1b session) `powers` stays `{}` and `E` is the call's `E`.
  * @param {any} timer
+ * @param {any} [powersSource]
  */
-const makeCall = timer => {
+const makeCall = (timer, powersSource) => {
   let open = true;
   /** Where a closed call's sends go: nowhere, forever. */
   const nowhere = never();
@@ -215,13 +200,22 @@ const makeCall = timer => {
     /** @type {any} */ onFulfilled,
     /** @type {any} */ onRejected,
   ) => (open ? E.when(value, onFulfilled, onRejected) : nowhere);
+  const isOpen = () => open;
+  harden(callE);
+  const membrane =
+    powersSource === undefined ? undefined : makeMembrane({ callE });
   return {
     sleep: harden(sleep),
-    E: harden(callE),
-    // M1b: an empty facet; M5 builds the call's capabilities here, per call,
-    // so a closed call holds none that still answer (J-9368).
-    powers: harden({}),
-    isOpen: () => open,
+    E: membrane === undefined ? callE : membrane.E,
+    // Per call, so a closed call holds none that still answer (J-9368).
+    powers:
+      membrane === undefined
+        ? harden({})
+        : makeCallPowers({ source: powersSource, callE, isOpen, membrane }),
+    /** @param {unknown} result a wrapper renders as its target */
+    unwrap: result =>
+      membrane === undefined ? result : membrane.unwrap(result),
+    isOpen,
     abandoned,
     close: () => {
       open = false;
@@ -232,54 +226,6 @@ const makeCall = timer => {
       resolveAbandoned(outcome);
     },
   };
-};
-
-/**
- * The model's argument text: inline, or read from its blob in pages.
- * @param {ExecRequest} request
- * @returns {Promise<{ text: string } | { outcome: Outcome }>}
- */
-const argumentText = async ({ args, content }) => {
-  await null;
-  if (typeof args === 'string') return { text: args };
-  if (args.bytes > limits.execSourceBytes)
-    return {
-      outcome: failed(
-        textOf.execSourceTooLarge(args.bytes, limits.execSourceBytes),
-      ),
-    };
-  if (content === undefined) return { outcome: failed(NO_CONTENT_TEXT) };
-  /** @type {string[]} */
-  const pages = [];
-  let offset = 0;
-  for (let read = 0; read < MAX_SOURCE_PAGES; read += 1) {
-    /** @type {{ text: string, next: number, done: boolean }} */
-    let page;
-    try {
-      // eslint-disable-next-line no-await-in-loop -- one answered page per crank
-      page = await E(content).read(
-        args.blob,
-        harden({ offset, maxBytes: limits.blobPageBytes }),
-      );
-    } catch (error) {
-      // The adapter restarted (its Content is gone) or the blob is unknown.
-      return { outcome: failed(messageOf(error)) };
-    }
-    if (page.next > limits.execSourceBytes)
-      return {
-        outcome: failed(
-          textOf.execSourceTooLarge(
-            Math.max(page.next, args.bytes),
-            limits.execSourceBytes,
-          ),
-        ),
-      };
-    pages.push(page.text);
-    if (page.done) return { text: pages.join('') };
-    if (page.next <= offset) break;
-    offset = page.next;
-  }
-  return { outcome: failed(SOURCE_PAGES_TEXT) };
 };
 
 /**
@@ -313,45 +259,8 @@ const codeOf = argsText => {
 };
 
 /**
- * The outcome for a model-facing text: inline when it is at most
- * `inlineBytes`, else staged through `writers` in pieces of at most
- * `blobPieceBytes` (one answered piece per crank).
- *
- * `ok`: `text` is the rendered result. `failed`: `text` is the error
- * message; inline it stays the message (the session writes `Error: ...`),
- * staged it is the complete model-facing result (`m1b-interfaces.md` 5.3).
- *
- * @param {'ok' | 'failed'} status
- * @param {string} text
- * @param {any} writers
- * @returns {Promise<Outcome>}
- */
-const finish = async (status, text, writers) => {
-  await null;
-  const bounded = boundToolOutput(text);
-  if (bounded === text && utf8Bytes(text) <= limits.inlineBytes)
-    return harden({ status, text });
-  const modelText =
-    status === 'ok' ? bounded : boundToolOutput(textOf.errorResult(text));
-  /** @type {any} */
-  let writer;
-  try {
-    writer = await E(writers).open();
-    for (const piece of chunkText(modelText, limits.blobPieceBytes)) {
-      // eslint-disable-next-line no-await-in-loop -- one answered piece per crank
-      await E(writer).append(piece);
-    }
-    const staged = await E(writer).close();
-    return harden({ status, text: staged });
-  } catch (error) {
-    if (writer !== undefined) E.sendOnly(writer).abort();
-    return failed(textOf.stagingFailed(messageOf(error)));
-  }
-};
-
-/**
  * Make this vat's one persistent scope.
- * @returns {any} the `ExecScope` exo (`m1bInterfaces.ExecScope`)
+ * @returns {any} the `ExecScope` exo (`m5Interfaces.ExecScope`)
  */
 export const makeExecScope = () => {
   const compartment = new Compartment({
@@ -408,7 +317,7 @@ export const makeExecScope = () => {
       text =
         result === undefined
           ? texts.execNoReturn
-          : await renderToolResult(result);
+          : await renderToolResult(call.unwrap(result));
     } catch (error) {
       if (isKeysExhausted(error)) return EXHAUSTED;
       status = 'failed';
@@ -423,14 +332,14 @@ export const makeExecScope = () => {
     return finish(status, text, writers);
   };
 
-  return makeExo('ExecScope', m1bInterfaces.ExecScope, {
+  return makeExo('ExecScope', execGuards().ExecScope, {
     /**
      * @param {ExecRequest} request
      * @returns {Promise<Outcome | { status: 'busy' } | typeof EXHAUSTED>}
      */
     async run(request) {
       if (current !== undefined) return harden({ status: 'busy' });
-      const call = makeCall(request.timer);
+      const call = makeCall(request.timer, request.powers);
       current = call;
       await null;
       try {
@@ -451,6 +360,16 @@ export const makeExecScope = () => {
       if (call === undefined) return;
       current = undefined;
       call.abandon(failed(texts.execAbandoned));
+    },
+    /**
+     * Call `request.target` for the session and answer a bounded, rendered
+     * outcome (D-M5-2; `inspect.js`). Runs beside `run`, never `busy`; the
+     * session's client keeps at most `inspectWindow` in flight.
+     * @param {any} request `m5Shapes.InspectRequest`
+     */
+    inspect(request) {
+      const { writers, content } = request;
+      return makeInspector({ writers, content }).inspect(request);
     },
   });
 };

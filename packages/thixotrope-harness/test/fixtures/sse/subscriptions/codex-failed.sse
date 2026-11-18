@@ -1,0 +1,6 @@
+data: {"type":"response.created","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.in_progress","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.failed","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"failed","output":[],"error":{"code":"context_length_exceeded","type":"invalid_request_error","param":"input","message":"FAKE-PROSE request req_fake_123 echoed input"}}}
+

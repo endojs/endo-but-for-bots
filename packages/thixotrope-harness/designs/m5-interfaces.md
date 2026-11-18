@@ -914,9 +914,18 @@ other lane's edit is the exact line named.
 | H-7 | `AH/composer.js` | M5 (W5.7); M3 none (the fourth argument is optional) | the guard switch to `m5Interfaces.Composer` and one branch in `submit` |
 | H-8 | `AH/providers/round.js` (`systemTextOf`) | M5 (W5.3); M4 calls `systemTextOf` from its `provider.js` and makes no edit | the function body only: an array is joined part by part with a blank line |
 | H-9 | `AH/providers/scripted.js` | M5 (W5.3); M4 none | the `system` read replaced by `systemTextOf` (5 lines) |
-| H-10 | `scripts/provision-steps.js` | append-only hook table, PM-merged; steps in merge order: gateway (M3, gated on `options.gateway`), subscriptions (M4), M5 fixtures | one appended entry (W5.5), a no-op unless `options.m5Fixtures` is given (test templates only). **Option forwarding**: `makeProvision` at `3588cab190` passes its steps only `{ sessionEntry, execEntry, pool }`, so none of `gateway`, `subscriptions` or `m5Fixtures` reaches a step. The seam, made once by the first lane to merge (M3) and identical in all three lanes: the destructured parameter gains `...stepOptions` and the call becomes `options: { ...stepOptions, sessionEntry: entry, execEntry: exec, pool }` (two lines). If M3 has not made it when W5.5 starts, W5.5 makes exactly these two lines |
+| H-10 | `scripts/provision-steps.js` (since the M2 review: the step registry `scripts/provision-steps/`; M5's step is `50-m5-fixtures.js`, moved there at the merge, INT-M5) | append-only hook table, PM-merged; steps in merge order: gateway (M3, gated on `options.gateway`), subscriptions (M4), M5 fixtures | one appended entry (W5.5), a no-op unless `options.m5Fixtures` is given (test templates only). **Option forwarding**: `makeProvision` at `3588cab190` passes its steps only `{ sessionEntry, execEntry, pool }`, so none of `gateway`, `subscriptions` or `m5Fixtures` reaches a step. The seam, made once by the first lane to merge (M3) and identical in all three lanes: the destructured parameter gains `...stepOptions` and the call becomes `options: { ...stepOptions, sessionEntry: entry, execEntry: exec, pool }` (two lines). If M3 has not made it when W5.5 starts, W5.5 makes exactly these two lines |
 | H-11 | `scripts/export.mjs` | M5 (W5.1) | one appended `presets` line in export and its reader in import |
 | H-12 | `H/package.json`, `perf/_harness.mjs`, `JOURNAL.md` (M5 J-0710..J-0729) | PM-merged (convention) | M5 adds no dependency and no harness change |
+
+**As merged (INT-M5).** M5 merged last, onto M3 and M4. Two conflicts, both kept: the attachment
+labels in `pending-queue.js` sit on the M2 review's receipt eviction (a retry under a known request
+id must carry the same labels; the 4,096 receipts are evicted, not refused), and the M5 step moved
+into its registered file. M4 had already lifted `NOT_YET` for `reasoningEffort`, so a preset effort
+on a backend that is not a subscription pool is refused with M4's `effortNotSupported`. Both
+`interfaces-m5*.js` load in M3's gateway vocabulary and every M5 method name is admitted
+(`test/adapter/m5-gateway-vocabulary.test.js`). The O-1 limits (240,000 / 120,000) came with the
+lane; the merged session program is 236,583 bytes and the exec program 105,414.
 
 **Not hotspots** (M5 adds files only): `ui/src/presets/`, `ui/src/mentions/` (one directory per
 lane, collected by M3's `ui/build.mjs`; `ui/src/features.js` is M3's collector and M5 does not
@@ -1009,7 +1018,7 @@ rules; "Node" = adapter or tests.
 | W5.6 | `guest/session/tools/granted.js` (vat) | `grantsPart`, `grantedToolSource` |
 | W5.7 | `guest/session/packages.js` (vat) | `packagesPart`, `makePackages()` (`open({ labels, values, turnId }) -> number`, `take(number, edge)`, `closeTurn(turnId)`) |
 | W5.7 | `guest/session/tools/mentions.js` (vat) | `packageToolEntries`, `mentionHooks` (`onClaim`, `onSettle`) |
-| W5.5 | `scripts/provision-steps.js` (append) | the M5 fixture step `{ name: 'm5 fixtures', run({ client, connect, options }) }`, answering `{ skipped: true }` unless `options.m5Fixtures` (the fixture list of `test/fixtures/m5-objects.js`) is given |
+| W5.5 | `scripts/provision-steps/50-m5-fixtures.js` (a registered step file since the merge; the lane appended to `scripts/provision-steps.js`) | the M5 fixture step `{ name: 'm5 fixtures', run({ client, connect, options }) }`, answering `{ skipped: true }` unless `options.m5Fixtures` (the fixture list of `test/fixtures/m5-objects.js`) is given |
 | W5.8 | `ui/src/presets/feature.js` (browser) | `feature`: `{ id: 'presets', slot: 'app.panel', label: 'Presets', component }` |
 | W5.8 | `ui/src/mentions/feature.js` (browser) | `feature`: `[{ id: 'mentions.addon', slot: 'composer.addon', component, send }, { id: 'mentions.chips', slot: 'message.renderer', component }]` |
 | W5.8 | `ui/src/mentions/texts.js`, `ui/src/presets/size.js` (browser) | `attachmentsLost` (equal to `texts.attachmentsLost`); `presetRecordBytes` (equal to `limitsM5.presetRecordBytes`), `fitsPresetRecord(record) -> boolean` (the `fitsFrame` rule) |

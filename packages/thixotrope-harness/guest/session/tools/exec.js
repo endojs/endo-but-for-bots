@@ -15,6 +15,13 @@
  * `execBusyReset` notice.
  *
  * State per session in a WeakMap keyed by its ExecHandle. Guest rules.
+ *
+ * M5 (W5.4, `m5-interfaces.md` 2.7): `run` carries the session's
+ * `ExecPowersSource` (`ToolContext.runtime.powers`, W5.5's part) as
+ * `ExecRequest.powers`; the inspector client (`inspect-client.js`) shares
+ * this state through `execStateOf`, `takeScope` and `retireScope` (one
+ * scope per session, taken once), and its calls are settled by the same
+ * cancel and recovery hooks, by turn.
  */
 import { execDescription, texts, textOf } from '../../lib/interfaces.js';
 import { limits } from '../../lib/limits.js';
@@ -34,6 +41,9 @@ export const NOT_RUN_TEXT = 'the turn was cancelled before this call ran';
  * @property {number} deadlineMs from the last `ExecHandle.scope()`
  * @property {any} running the call whose run is out, or undefined
  * @property {Set<ExecCall>} waiting calls in issue order
+ * @property {Promise<void> | undefined} taking a `scope()` call in flight
+ * @property {Set<any>} inspecting inspector calls of `inspect-client.js`,
+ *   sent or waiting (`{ context, sent, end(outcome, quiet), ... }`)
  *
  * @typedef {object} ExecCall
  * @property {string} opId
@@ -60,10 +70,56 @@ const stateOf = handle => {
       deadlineMs: limits.execDeadlineMs,
       running: undefined,
       waiting: new Set(),
+      taking: undefined,
+      inspecting: new Set(),
     };
     states.set(handle, state);
   }
   return state;
+};
+
+/**
+ * The exec state of a session's ExecHandle (for `inspect-client.js`).
+ * @param {any} handle
+ * @returns {ExecState}
+ */
+export const execStateOf = handle => stateOf(handle);
+
+/**
+ * Make sure the session holds a scope: one `ExecHandle.scope()` call at a
+ * time, shared by the exec tool and the inspector. Rejects with the
+ * handle's error.
+ * @param {ExecState} state
+ * @param {any} handle
+ * @returns {Promise<void>}
+ */
+export const takeScope = (state, handle) => {
+  if (state.scope !== undefined) return Promise.resolve();
+  if (state.taking === undefined) {
+    const taking = E(handle)
+      .scope()
+      .then(lease => {
+        if (state.scope === undefined) state.scope = lease.scope;
+        state.deadlineMs = lease.deadlineMs;
+      })
+      .finally(() => {
+        if (state.taking === taking) state.taking = undefined;
+      });
+    state.taking = taking;
+  }
+  return /** @type {Promise<void>} */ (state.taking);
+};
+
+/**
+ * Drop `scope` if it is still the session's and have the handle retire it.
+ * @param {ExecState} state
+ * @param {any} handle
+ * @param {any} scope
+ */
+export const retireScope = (state, handle, scope) => {
+  if (scope === undefined || state.scope !== scope) return;
+  state.scope = undefined;
+  E.sendOnly(handle).retire(scope);
 };
 
 /** @param {unknown} error */
@@ -85,11 +141,8 @@ const failed = text => harden({ status: 'failed', text });
  * @param {ExecCall} call
  * @param {any} scope
  */
-const retire = (call, scope) => {
-  if (scope === undefined || call.state.scope !== scope) return;
-  call.state.scope = undefined;
-  E.sendOnly(call.context.services.execVat).retire(scope);
-};
+const retire = (call, scope) =>
+  retireScope(call.state, call.context.services.execVat, scope);
 
 /** @param {ExecState} state */
 const pump = state => {
@@ -141,6 +194,9 @@ const run = (call, notice) => {
   if (isStaged(call.args) && ports.content !== undefined)
     request.content = ports.content;
   if (notice !== undefined) request.notice = notice;
+  // M5: the session's label map as its exec vat reads it (W5.5's part).
+  const powers = call.context.runtime?.powers;
+  if (powers !== undefined) request.powers = powers;
   E(scope)
     .run(harden(request))
     .then(
@@ -192,9 +248,7 @@ const start = async (call, notice) => {
   const { state, context } = call;
   if (state.scope === undefined) {
     try {
-      const lease = await E(context.services.execVat).scope();
-      if (state.scope === undefined) state.scope = lease.scope;
-      state.deadlineMs = lease.deadlineMs;
+      await takeScope(state, context.services.execVat);
     } catch (error) {
       settle(call, failed(textOf.execUnavailable(messageOf(error))));
       return;
@@ -224,6 +278,12 @@ const abandon = (active, ranText, quiet) => {
     if (state === undefined) state = states.get(context?.services?.execVat);
   }
   if (state === undefined) return;
+  // Inspector calls of the turn (M5): never interrupted in the exec vat,
+  // their late answers ignored.
+  for (const call of state.inspecting) {
+    if (call.context.turn === active.turn)
+      call.end(failed(call.sent ? ranText : NOT_RUN_TEXT), quiet);
+  }
   for (const call of state.waiting) {
     if (call.context.turn === active.turn)
       settle(call, failed(NOT_RUN_TEXT), quiet);

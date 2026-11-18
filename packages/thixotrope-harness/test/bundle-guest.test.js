@@ -7,6 +7,7 @@ import path from 'node:path';
 
 import {
   bundleGuest,
+  dropIndentation,
   escapeNonAscii,
   listGuestPrograms,
   parseBundleArgs,
@@ -15,6 +16,7 @@ import {
   guestRoot,
   programPieceBytes,
   sessionEntry,
+  sessionProgramBytes,
 } from '../scripts/provision-steps.js';
 import { harnessRoot, scratch } from './_helpers.js';
 
@@ -198,6 +200,48 @@ test('escapeNonAscii refuses what an escape would change', t => {
   t.is(escapeNonAscii("'\\\\\u00e9'"), "'\\\\\\u00e9'");
 });
 
+test('dropIndentation keeps templates, multi-line strings, lines and tokens (J-9698)', async t => {
+  const source = [
+    'const f = () => {',
+    '    const a = `x',
+    '    y ${1 +',
+    '      2}`;',
+    "\tconst b = 'p\\",
+    "  q';",
+    '  return [a, b];',
+    '};',
+    'f();',
+  ].join('\n');
+  const dropped = dropIndentation(source);
+  t.is(
+    dropped,
+    [
+      'const f = () => {',
+      'const a = `x',
+      '    y ${1 +',
+      '      2}`;',
+      "const b = 'p\\",
+      "  q';",
+      'return [a, b];',
+      '};',
+      'f();',
+    ].join('\n'),
+  );
+  const evaluate = (/** @type {string} */ text) =>
+    new Compartment({ __options__: true }).evaluate(text);
+  t.deepEqual(evaluate(dropped), evaluate(source));
+  t.throws(() => dropIndentation('const = ;'), { message: /Cannot parse/ });
+  // On a real program: same lines, the same text without blanks, smaller.
+  const { source: whole } = await bundleGuest(sessionEntry, {
+    guestRoot,
+    comments: true,
+  });
+  const undented = dropIndentation(whole);
+  t.is(undented.split('\n').length, whole.split('\n').length);
+  t.is(undented.replace(/[ \t]/g, ''), whole.replace(/[ \t]/g, ''));
+  t.true(undented.length < whole.length);
+});
+
 test('the session program bundle is ASCII (J-0244: U+034F hidden names)', async t => {
   const bundle = await bundleGuest(sessionEntry, { guestRoot });
   t.false(/[\u0080-\uffff]/.test(bundle.source));
@@ -206,8 +250,9 @@ test('the session program bundle is ASCII (J-0244: U+034F hidden names)', async 
   // Staged in pieces of programPieceBytes (scripts/provision-steps.js).
   const pieces = Math.ceil(bundle.bytes / programPieceBytes);
   t.log(JSON.stringify({ bytes: bundle.bytes, programPieceBytes, pieces }));
-  // Within the session-program budget (architecture D-4: 200 KB, perf
-  // `session.program`), not a snapshot of one milestone's size.
-  t.true(bundle.bytes <= 200_000);
-  t.true(pieces <= Math.ceil(200_000 / programPieceBytes));
+  // Within the session-program budget (architecture D-4, perf
+  // `session.program`; 240,000 since M5's O-1), not a snapshot of one
+  // milestone's size.
+  t.true(bundle.bytes <= sessionProgramBytes);
+  t.true(pieces <= Math.ceil(sessionProgramBytes / programPieceBytes));
 });

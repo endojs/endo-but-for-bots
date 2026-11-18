@@ -134,6 +134,26 @@ Acceptance 15 (a 5,000-turn session behaves like a 200-turn one) is `perf/histor
 Files that use a Secret set `THIX_HARNESS_SECRETS_KEY` to a key file under
 `tmp/` (outside the state directory) and remove it.
 
+The M3 acceptance files (`designs/m3-interfaces.md` 12): through a Node CapTP client over a real
+loopback WebSocket, `m3-gateway` (1, 2, 10, 11, 16; K1, K2), `m3-sessions` (3, 13, 14, 12
+protocol part) and `m3-reconnect` (4-7 protocol parts; K3-K5); in headless Chromium,
+`test/browser/m3-ui` (1, 2 page parts, 4 socket part, 5, 6, 9, 14 page part, 15),
+`m3-ui-restart` (12, 7 with K5, 4 with the daemon down 60 s) and `m3-ui-history` (8, on the
+`m3-300` template). Browser files are gated by `THIX_HARNESS_BROWSER=1` and run one per
+invocation under the run lock:
+
+```sh
+THIX_AGENT=me corepack yarn test:browser test/browser/m3-ui.test.mjs
+```
+
+They start through `test/browser/_harness.mjs` `startBrowserGateway({ template, provision? })`
+(M4's and M5's browser files use it too). It finds Chromium in `THIX_HARNESS_CHROMIUM`, else
+Playwright's own download, else the newest headless shell or Chromium in Playwright's cache, and
+the files skip with the reason in a test title when none is present (`corepack yarn playwright
+install chromium-headless-shell` installs one; it is never downloaded by a test). The UI is built
+into `GW/assets/` when that is missing or older than `ui/`. The `m3-300` template (one imported
+300-turn session) is built once with `node perf/_m3-client.mjs template`.
+
 **Regression run** (process.md section 3; the M2 close-out at `d7fce8e46c`, 2026-11-18, load
 2.3-5): `corepack yarn test` (unit and adapter lanes: 727 passed, 59 skipped, 66 s), then
 `corepack yarn test:integration --jobs 4` (all 25 files pass, 1,040 s wall; longest held:
@@ -224,6 +244,13 @@ templates exist); the last, the M2 close-out, held 69.5 minutes for 25 files, no
 | `perf/archive.perf.mjs` (W2.5), `perf/import.perf.mjs` (W2.7), `perf/queue.perf.mjs` (W2.4, Node), `perf/provider.perf.mjs` (W2.1a, W2.1b, in process) | a session grown to 200 turns by running turns, then the window, pages, restart and rebuild rows under `archive.` (`ARCHIVE_POINTS`); the import rate over a 60 s window and a 300-turn import walked back (`IMPORT_WINDOW_MS`); queue costs, 10 s per row (`QUEUE_WINDOW_MS`); provider overhead and SSE rates, 10 s per row (`PROVIDER_WINDOW_MS`) | 4.0 min; 2.0 min; 0.6 min; 1.6 min exclusive |
 | `perf/crank.perf.mjs`, `perf/crank.mid.perf.mjs`, `perf/crank.late.perf.mjs` (`perf/_crank.mjs`) | `crank.worker.<heap>[.alloc][.<policy>]` (the worker run directly on a vat image for `CRANK_WORKER_WINDOW_MS`, 10 s per row: per-delivery cost and its collection share), `crank.ping` (20 s), `crank.turn.start.early` (a 60 s `CRANK_WINDOW_MS` window from a new session) with its restart, `crank.context.rebuild.at<n>` and `session<n>` worker rows; `.mid` at 500 and `.late` at `CRANK_TURNS` (1,000) turns built by `importState` (tool turns): `crank.turn.start.<phase>`, `crank.grow` (wall per 100 turns from the window's rate, engine and hub deltas), `crank.history.page[.late]`, `crank.heap`, `crank.context.rebuild` (`CRANK_GC_POLICIES`). The old 2.5 h long-session table (to 5,000 turns grown) does not fit the box: 1,000 is the largest point kept, the slope is late against mid, and `perf/history.perf.mjs` holds the table to 5,000 by import | 2.9 min; 2.0 min; 3.7 min exclusive; 2.9; 2.6; 4.7 min shared under load |
 | `perf/install.perf.mjs`, `perf/frames.perf.mjs` | M0's install rows (`INSTALL_N`, single installs, not windowed) and frame rows (`FRAMES_WINDOW_MS`, 15 s per latency row; `LOOP_N`) | 1.0 min; 1.8 min exclusive; 1.4; 2.8 min shared under load |
+| `perf/gateway.perf.mjs` (M3) | 60 s windows: `gateway.fetch`, `gateway.guard` (in process), `ui.call`, `ui.submit`, `ui.deltaFanout` (5 clients); `gateway.probes` (100 KiB, 2,000 keys, depth 33, 33 in flight, 4,097 exports) | 6 min |
+| `perf/gateway-session.perf.mjs` (M3) | on the cached `m3-300` template (build it first: `node perf/_m3-client.mjs template`): `ui.snapshot`, `ui.history.newest`, `ui.history.archived`, `ui.reconnect` (60 s each), `ui.restartReady.clean` / `.sigkill` (150 s each) | 9-10 min |
+| `perf/ui.perf.mjs` (M3, `THIX_HARNESS_BROWSER=1`) | `ui.bundle`, `ui.coldLoad` (60 s), `ui.hubGrowth` (5 min of reloads and turns) | 7 min |
+
+M3's files never run longer than 10 minutes: before each window a file checks that the window
+ends by 9 min 30 s and otherwise prints the row as `notMeasured: "file time"`; `M3_WINDOW_MS`,
+`M3_RESTART_WINDOW_MS` and `M3_GROWTH_MS` shorten the windows for a trial run.
 
 A vat is woken when its worker row's `wakes` (process-local) is above 0; `journalLength` is the
 delivery frontier, and held GC frames (`heldFrames`) wait in the journal without a crank. `turn.delta`

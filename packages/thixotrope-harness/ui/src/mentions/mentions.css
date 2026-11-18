@@ -1,0 +1,67 @@
+/* The @-mention addon and attachment chips (W5.8; R6-40). */
+.thix-mentions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  width: 100%;
+}
+.thix-mention-menu {
+  display: flex;
+  flex-direction: column;
+  max-height: 14rem;
+  overflow-y: auto;
+  border: 1px solid var(--fl-border);
+  border-radius: 8px;
+  background: var(--fl-surface2);
+  padding: 0.25rem;
+}
+.thix-mention-option {
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fl-text);
+  font: inherit;
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+}
+.thix-mention-option.on,
+.thix-mention-option:hover {
+  background: var(--fl-surface3);
+}
+.thix-mention-note {
+  color: var(--fl-text-muted);
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+}
+.thix-mention-chips,
+.thix-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.thix-attachments {
+  margin: 0.25rem 0;
+}
+.thix-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--fl-border-strong);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.8rem;
+  color: var(--fl-text);
+  background: var(--fl-surface2);
+}
+.thix-attachment-kind {
+  color: var(--fl-text-muted);
+}
+.thix-attachment-remove {
+  border: none;
+  background: none;
+  color: var(--fl-text-muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}

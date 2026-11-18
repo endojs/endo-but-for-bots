@@ -28,6 +28,7 @@ import { limits } from '../../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { secretError } from './store.js';
 import { makeSecretWriter } from './writer.js';
+import { makeCredentialAccess } from './credential-access.js';
 
 /**
  * @template T
@@ -108,6 +109,21 @@ export const makeSecretsOps = ({ store, seal, sink }) => {
       return writer;
     },
     readKey,
+    /**
+     * M4 H-5 (W-5): the accessor of one key, read (audited) and replace
+     * conditioned on a generation, nothing else; the renewal of a pool
+     * member holds this and not the store (m4-interfaces 7).
+     * @param {string} key
+     */
+    credentialFor: key => makeCredentialAccess({ store, key }),
+    /**
+     * M4 W4.8: the incarnation's store and cached resolver, read by the
+     * `CredentialOps` facet (catalogue, description, audit reader;
+     * m4-interfaces 8 assumption 4) and the audit reader's `Secret` filter.
+     * Adapter-local: nothing here reaches a vat.
+     */
+    store,
+    resolveSecret,
   });
 };
 harden(makeSecretsOps);

@@ -1,0 +1,25 @@
+{
+  "models": [
+    {
+      "slug": "gpt-fake-1",
+      "display_name": "GPT Fake 1",
+      "description": "A fake model for tests.",
+      "visibility": "list",
+      "priority": 1,
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        { "effort": "medium", "description": "Balanced" },
+        { "effort": "high", "description": "Deep" },
+        { "effort": "max", "description": "Deepest" }
+      ],
+      "context_window": 200000
+    },
+    {
+      "slug": "gpt-fake-b-only",
+      "display_name": "GPT Fake B",
+      "visibility": "list",
+      "priority": 3,
+      "supported_reasoning_levels": [{ "effort": "low", "description": "Fast" }]
+    }
+  ]
+}

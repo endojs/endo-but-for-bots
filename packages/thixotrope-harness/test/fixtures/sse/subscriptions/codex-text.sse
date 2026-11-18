@@ -1,0 +1,16 @@
+data: {"type":"response.created","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.in_progress","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"in_progress","output":[]}}
+
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_fake_0","role":"assistant","content":[]}}
+
+data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg_fake_0","delta":"Hello"}
+
+data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg_fake_0","delta":", world."}
+
+data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg_fake_0","delta":" How can I help?"}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_fake_0","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Hello, world. How can I help?","annotations":[]}]}}
+
+data: {"type":"response.completed","response":{"id":"resp_fake_1","object":"response","model":"gpt-fake-1","status":"completed","output":[],"usage":{"input_tokens":12,"input_tokens_details":{"cached_tokens":0},"output_tokens":7,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":19}}}
+

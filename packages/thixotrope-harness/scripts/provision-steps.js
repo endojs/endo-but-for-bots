@@ -116,8 +116,12 @@ export const names = harden({
  */
 export const programPieceBytes = limits.frameBytes - 1024;
 
-/** The session program's size budget (architecture D-4, perf `session.program`). */
-export const sessionProgramBytes = 200_000;
+/**
+ * The session program's size budget (architecture D-4, perf
+ * `session.program`): `limits.sessionProgramBytes`, raised from 200,000 by
+ * M5 (contract O-1).
+ */
+export const sessionProgramBytes = 240_000;
 
 /**
  * @typedef {object} StepContext
@@ -491,7 +495,14 @@ export const templateIdFor = async ({
     hash.update(path.relative(harnessRoot, file));
     hash.update(await readFile(file));
   }
-  for (const file of ['durable.js', 'ephemeral.js']) {
+  // Every installed module of the agent host outside impl/ (durable.js,
+  // ephemeral.js and the lanes' durable-*.js beside them): a lane's new
+  // durable module gives a new id without an edit here.
+  const installed = (await readdir(agentHostDirectory, { withFileTypes: true }))
+    .filter(dirent => dirent.isFile() && dirent.name.endsWith('.js'))
+    .map(dirent => dirent.name)
+    .sort();
+  for (const file of installed) {
     hash.update(await readFile(path.join(agentHostDirectory, file)));
   }
   await hashTree(hash, path.join(guestRoot, 'lib'));

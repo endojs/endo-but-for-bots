@@ -38,6 +38,7 @@
  * remove or narrow one another unit relies on.
  */
 import { limits } from './limits.js';
+import { limitsM5 } from './limits-m5.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
@@ -722,12 +723,22 @@ const m1aShapeBuilders = {
   ServedBy: () =>
     record({ label: S.Label, modelId: S.ModelId }, { provider: S.Label }),
   TurnStarted: () =>
-    record({
-      kind: 'turn-started',
-      turnId: S.Id,
-      input: staged(S.SubmissionText),
-      at: count,
-    }),
+    record(
+      {
+        kind: 'turn-started',
+        turnId: S.Id,
+        input: staged(S.SubmissionText),
+        at: count,
+      },
+      // M5 widening (W5.3; m5-interfaces.md 9.1 H-6): the labels of the
+      // message's attachments (R3-8, R4-29), never the objects.
+      {
+        attachments: list(
+          text(limitsM5.endowmentLabelUnits),
+          limitsM5.maxAttachments,
+        ),
+      },
+    ),
   Dispatched: () => record({ kind: 'dispatched', turnId: S.Id, round: count }),
   Partial: () =>
     record({
@@ -819,7 +830,12 @@ const m1aShapeBuilders = {
         ),
       },
       // M2: `system` may be staged (a composed prompt over inlineBytes).
-      { context: M.remotable('ContextSource'), system: staged(S.Text) },
+      // M5 widening (W5.3; H-6): or two parts, the stored prompt and the
+      // turn's R4-29 line, joined by the adapter's `systemTextOf`.
+      {
+        context: M.remotable('ContextSource'),
+        system: M.or(staged(S.Text), list(staged(S.Text), 2)),
+      },
     ),
   /** `TurnSink.roundFinal` argument. */
   RoundResult: () =>
@@ -918,7 +934,30 @@ const m1aShapeBuilders = {
         turnId: S.Id,
       },
     ),
-  PresetSnapshot: () => record({ label: S.Label }),
+  // M5 widening (W5.3 for W5.1; H-6): optional data fields, no objects.
+  PresetSnapshot: () =>
+    record(
+      { label: S.Label },
+      {
+        template: text(limitsM5.templateKindUnits),
+        instructions: text(limitsM5.presetInstructionsUnits),
+        networkPolicy: M.or('off', 'public-internet'),
+        modelId: S.ModelId,
+        reasoningEffort: text(limits.effortUnits),
+        objects: list(
+          record({
+            kind: text(limitsM5.templateKindUnits),
+            label: text(limitsM5.endowmentLabelUnits),
+          }),
+          limitsM5.maxTemplateObjects,
+        ),
+        endowmentLabels: list(
+          text(limitsM5.endowmentLabelUnits),
+          limitsM5.maxEndowments,
+        ),
+        revision: count,
+      },
+    ),
   SessionInfo: () =>
     record(
       {
@@ -1161,7 +1200,17 @@ const m1aShapeBuilders = {
         host: M.remotable('SessionHostFacet'),
       },
       // M1b W1b.5: the session's exec vat lease (architecture 3.2).
-      { execVat: M.remotable('ExecHandle') },
+      // M5 widening (W5.3 for W5.1; H-6): the preset's endowments.
+      {
+        execVat: M.remotable('ExecHandle'),
+        endowments: list(
+          record({
+            label: text(limitsM5.endowmentLabelUnits),
+            value: M.remotable(),
+          }),
+          limitsM5.maxEndowments,
+        ),
+      },
     ),
   MakeArgs: () =>
     record({
@@ -1232,8 +1281,9 @@ const m1aShapeBuilders = {
       { input: S.SubmissionText },
     ),
   Script: () => record({ turns: list(S.ScriptTurn, limits.scriptRounds) }),
-  /** M2: the backend kinds (R4-12, R4-13); `scripted` is the test double. */
-  BackendKind: () => M.or('scripted', 'openrouter', 'anthropic'),
+  /** M2: the backend kinds (R4-12, R4-13); `scripted` is the test double; M4 (H-1): the pool kinds. */
+  BackendKind: () =>
+    M.or('scripted', 'openrouter', 'anthropic', 'claude-pool', 'codex-pool'),
   /**
    * `AgentHostAdmin.makeBackend` argument. M2 adds the API kinds: the key is
    * a `ReadGrant` (D-6, R7-28), never a value; `modelId` is the slot's

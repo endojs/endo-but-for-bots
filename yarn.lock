@@ -3703,16 +3703,24 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/thixotrope-harness@workspace:packages/thixotrope-harness"
   dependencies:
+    "@endo/captp": "workspace:^"
     "@endo/compartment-mapper": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
+    "@endo/marshal": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/thixotrope": "workspace:^"
+    "@playwright/test": "npm:^1.64.1"
     ava: "catalog:dev"
     c8: "catalog:dev"
+    esbuild: "npm:^0.28.2"
     eslint: "catalog:dev"
+    happy-dom: "npm:^20.14.6"
+    preact: "npm:^10.29.8"
+    ses: "workspace:^"
     typescript: "catalog:dev"
+    ws: "npm:^8.22.0"
   languageName: unknown
   linkType: soft
 
