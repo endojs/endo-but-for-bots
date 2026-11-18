@@ -14122,3 +14122,64 @@ Reading: reading the contract, the cross-check entries, `step3-plan.md` and the 
 blocks took most of the time; one bundle probe (under 1 minute). Not run: any supervisor,
 integration test, perf check or cargo. Other contracts not edited.
 Fit: neutral.
+
+### J-0813 2026-11-18 W6.0 settle: the M6 contract against the cross-check and the built step 3 - decision
+Evidence: `designs/m6-interfaces.md` (settle record table after the contents); J-1410..J-1417
+(issues X-01..X-17); `arch-review/step3-plan.md` at `53a8dbb9ea`; the step-3 code at `cecfa12809`
+in the cleanup lane: `runtime-parts.js` (`RuntimePart`, `requiredParts`, `combineHooks`),
+`turn.js` `claimNext` (`hooks.nextTurn` asked only when the queue is unheld), `session.js`
+(`refuseIfDeleting`, one `enqueue`), `queue.js` `sendNow` (releases the hold, then claims),
+`export.js` head and import branches, `tool-table.js` sites, `tools/exec.js` `abandon`,
+`factory/delete.js` `makeDeletions({ admin, rows, starts, hooks })`, `factory.js`, `services.js`.
+Reading: every provisional seam now has its real line (R-1 five lines incl. `requiredParts`; R-2 one
+`claimNext` line; R-3 `refuseIfStopped` beside `refuseIfDeleting`). The part API change itself
+(`PartHooks.admit` and its fan-out) and every shared guard entry are WX.1's (X-02, X-03), so the
+draft's W6.0b is withdrawn. Two seams were missing from the draft: `QueueEntry.sendNow` releases
+the hold before it claims, so a stopped session needs R-4 in `queue.js` (refuse before the
+release), and the export needs X-E (`execution` on the head page). The delete hooks follow the
+built signature: the factory kit passes them (X-05), `delete.js` is unchanged.
+Decision: contract committed (`d7753ef851` and the settle-record commit); no seam left provisional.
+Fit: neutral.
+
+### J-0814 2026-11-18 W6.0 settle: workspace images, withdrawal in the adapter, the table's place - decision
+Evidence: M8 X-1 and 6.2 (`openImage(path)` in the image tool's descent); `guest/lib/
+image-guards.js` `ImageSource`, `guards/images.js` `imageLimits`; J-10126, J-10127 (a call frame
+over the ceiling is refused before it is journaled); `gateway-vocabulary-tables.test.js` (every
+`guest/lib` module that exports guards, listed or excluded, must contribute its interface names).
+Reading: (a) the draft's D-M6-9 said the manager refuses `ShellPort` calls, but a `ShellPort` is an
+adapter object the manager never sees: withdrawal must happen in the adapter too.
+`EnvironmentsOps.stop(key, { withdraw })`, `resume(key)` and `PendingWork.withdrawn` do it, also for
+the adapter-side `ImageSource` of X-1. (b) `openImage` is a read on both Git facets that answers
+one handle through the manager; pages go adapter to adapter. Exec code can reach it, and a 196,608-
+byte page toward the exec vat is over the frame ceiling: the hub is expected to refuse it as it
+refuses a call frame (J-10127, measured for calls only); W6.7 probes it, with a clamp to
+`blobPageBytes` as the fallback. (c) The table moves to `guest/lib/guards/environments.js`
+(the owner's placement rule); one `vocabularyExclusions` line plus WX.1's not-browser-sendable rule
+in the vocabulary test keeps the gateway pin unchanged (the same change serves M8's
+`image-guards.js`). The path shape imports M8's `imageLimits` instead of copying it.
+Decision: guard file updated and probed (prelude loaded under `@endo/init`: every interface's
+method guards equal its `environmentMethodNames` list; `ImagePath`, `StopOptions`, `PendingWork`
+build); eslint and `tsc` clean.
+Fit: neutral.
+
+### J-0815 2026-11-18 W6.0 settle: budgets, windows, core requests - decision
+Evidence: X-13, X-14, X-15; J-0811, J-0494, J-9043, J-9382, J-0193, J-1410, J-10192; `core.md` 5.
+Reading: `cancel`, `stopCleanup` and `coldStart` had no measured basis: now recorded rows.
+`tooBig`, `bundles` and `restart` are counts or N-run checks: now gate rows. The perf file was about
+9 minutes with fixtures: the two git rows move to `perf/environments-git.perf.mjs` (about 3
+minutes), leaving about 6 minutes. M6's integration files get their own regression list
+`environments`. CC-090 and CC-091 are one core-step-4 change (one row under AR-SYN-28); CC-092's
+finder becomes one shared test helper for M6 and M11; CC-100 (M8) is asked for M6's staged output
+and image pages too. The session program share (X-01) stays an owner ruling: M6 derives about
+8.5 K from the stripped peers and asks a 9,000-byte cap.
+Decision: sections 10 and 12 rewritten; O-12 states the default (raise the limit), O-13 added
+(Talk without a runner: refuse with `runnerRequired`).
+Fit: neutral.
+
+### J-0816 2026-11-18 W6.0 settle time record - process
+Evidence: first command 2026-11-18T23:40:35Z; last command logged with the settle report.
+Reading: reading the cross-check, the step-3 plan and the built step-3 code took most of the
+time; one guard-table load probe (seconds), eslint, prettier and `tsc` (under 2 minutes). Not run:
+any supervisor, integration test, perf check or cargo. No other contract edited. Build units use
+journal ranges the PM assigns; J-0817..J-0829 stay with the contract.
+Fit: neutral.
