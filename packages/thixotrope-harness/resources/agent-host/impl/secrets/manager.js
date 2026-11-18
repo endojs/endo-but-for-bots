@@ -3,7 +3,8 @@
  * The adapter's Secrets operations (M2 W2.3; D-6; `designs/m2-interfaces.md`
  * sections 3.3, 3.4 and 9): the ops-facet handlers the manager vat forwards
  * to (`secretCreate`, `secretDescribe`, `secretRevoke`, `secretDelete`,
- * `secretAudit`, `secretWriter`) and the providers' read path (`readKey`).
+ * `secretAudit`, `secretWriter`), the providers' read path (`readKey`) and
+ * the gateway's in-process write path (`replaceLocal`, `publicKeyLocal`).
  *
  * The manager vat holds the durable identities (`SecretsAdmin`, `Secret`,
  * `ReadGrant`) and the map from each to its key `k<n>`; this module holds
@@ -50,8 +51,16 @@ export const makeSecretsOps = ({ store, seal, sink }) => {
   const grantKeys = new WeakMap();
   /** Secret presence -> key, this incarnation. @type {WeakMap<any, string>} */
   const secretKeys = new WeakMap();
-  /** @type {any} */
-  let writer;
+  /** @type {ReturnType<typeof makeSecretWriter> | undefined} */
+  let writerParts;
+  /** The incarnation's one writer and its in-process path, made once ready. */
+  const writerPartsNow = async () => {
+    if (writerParts === undefined) {
+      await Promise.all([store.ready(), seal.ready()]);
+      writerParts ??= makeSecretWriter({ store, seal, resolveSecret });
+    }
+    return writerParts;
+  };
 
   /**
    * @param {WeakMap<any, string>} cache
@@ -100,14 +109,25 @@ export const makeSecretsOps = ({ store, seal, sink }) => {
     /** @param {{ key?: string, limit: number }} request */
     secretAudit: ({ key, limit }) =>
       store.audit(key === undefined ? { limit } : { key, limit }),
-    /** One writer per incarnation, made once the sealing keys are ready. */
-    secretWriter: async () => {
-      if (writer === undefined) {
-        await Promise.all([store.ready(), seal.ready()]);
-        writer ??= makeSecretWriter({ store, seal, resolveSecret });
-      }
-      return writer;
-    },
+    /**
+     * One writer per incarnation, made once the sealing keys are ready: the
+     * remotable `SecretWriter`, whose `replace` takes a `SealedBox` only.
+     */
+    secretWriter: async () => (await writerPartsNow()).writer,
+    /**
+     * The in-process write path (m2-interfaces 9.2, m3-interfaces A-11):
+     * not an ops handler and not a method of any remotable, so nothing
+     * reached through the hub can call it. `AH/index.js` hands it to the
+     * gateway (`GatewayContext.secretWriter()`), which calls it with a value
+     * a page sent over its WebSocket.
+     * @param {any} secret
+     * @param {string | { format: string, publicKey: string, box: string }} value
+     * @param {number} [expectedGeneration]
+     */
+    replaceLocal: async (secret, value, expectedGeneration) =>
+      (await writerPartsNow()).replaceLocal(secret, value, expectedGeneration),
+    /** The sealing public key (as `SecretWriter.publicKey()`), in process. */
+    publicKeyLocal: async () => (await writerPartsNow()).writer.publicKey(),
     readKey,
     /**
      * M4 H-5 (W-5): the accessor of one key, read (audited) and replace

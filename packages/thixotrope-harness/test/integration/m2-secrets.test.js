@@ -17,10 +17,14 @@
  *   blobs, the archive, logs); a control text is found, so the grep reads
  *   those encodings.
  *
- * A plain-string replace (not sealed) of a second Secret is recorded as an
- * observation (`m2.secrets.plainValue`): where a plain value sent from a
- * client lands is reported, not asserted, because the contract's client
- * path is the sealed box (m2-interfaces.md 9.2).
+ * The two write paths (XA; m2-interfaces.md 9.2, m3-interfaces.md A-11):
+ * a plain-string replace sent by a hub client is refused by the
+ * `SecretWriter` guard (SealedBox only) and nothing is written; where that
+ * refused request's text lands (the hub carried it) is recorded as an
+ * observation (`m2.secrets.plainValue`). A page then writes a plain value
+ * through the gateway's in-process writer (`GatewayPowers.extras`), and
+ * after the clean stop that value is found nowhere under the state
+ * directory.
  *
  * The wrapping key file is made under H/tmp (outside the state directory,
  * D-6) through THIX_HARNESS_SECRETS_KEY and removed at the end. Key values
@@ -59,6 +63,8 @@ import {
 } from '../fixtures/fake-provider-server.mjs';
 import { makeSlice, requestId, sliceTemplate, waitFor } from './_m1a-slice.js';
 import { grepState, makeTestSecretValue } from './_m2-secrets.js';
+import { serveGateway } from './_m3-gateway.js';
+import { secretWriterLabel } from '../../resources/agent-host/impl/gateway/contract-m3.js';
 
 takeIntegrationLock(test, 'm2 secrets test');
 
@@ -113,6 +119,7 @@ run(
     const first = makeTestSecretValue('first');
     const second = makeTestSecretValue('second');
     const plain = makeTestSecretValue('plain');
+    const pageValue = makeTestSecretValue('page');
     /** @param {string} value */
     const credentialTag = value =>
       ({ [first]: 'first', [second]: 'second', [plain]: 'plain' })[value] ??
@@ -225,11 +232,34 @@ run(
     t.true(Number(audit.length) > 0);
     t.false(JSON.stringify(audit).includes(first));
 
-    // Observation: a plain string sent by a client.
+    // A plain string sent by a hub client: refused by the writer's guard
+    // before anything is written.
     const other = await E(secrets).create(
       harden({ label: 'plain key', description: 'plain replace' }),
     );
-    await E(writer).replace(other, plain);
+    await t.throwsAsync(() => E(writer).replace(other, plain), {
+      message: /SecretWriter.*Must be a copyRecord/,
+    });
+    t.is((await E(other).describe()).generation, 0, 'nothing written');
+
+    // The browser path: a page writes a plain value through the gateway's
+    // in-process writer; it reaches the store without crossing the hub.
+    const gateway = await serveGateway(state);
+    const client = await gateway.connect();
+    const pageSecrets = await E(client.powers.operator).getSecrets();
+    const pageSecret = await E(pageSecrets).create(
+      harden({ label: 'page key', description: 'browser path' }),
+    );
+    const pageWriter = client.powers.extras.find(
+      (/** @type {any} */ x) => x.label === secretWriterLabel,
+    )?.service;
+    t.truthy(pageWriter, "the gateway offers its writer in the page's extras");
+    t.deepEqual(await E(pageWriter).replace(pageSecret, pageValue, 0), {
+      generation: 1,
+    });
+    t.is((await E(pageSecret).describe()).generation, 1);
+    client.close();
+    await client.closed;
 
     // 5. Clean stop, then grep the whole state directory.
     await state.stop();
@@ -239,6 +269,7 @@ run(
     const hits = [
       ...(await grepState(state.root, first)),
       ...(await grepState(state.root, second)),
+      ...(await grepState(state.root, pageValue)),
     ];
     t.deepEqual(
       hits.map(
@@ -246,7 +277,7 @@ run(
           `${path.relative(state.root, file)} (${encoding})`,
       ),
       [],
-      'no encoding of either key value under the state directory',
+      'no encoding of any written value (CLI or browser path) under the state directory',
     );
     const plainHits = await grepState(state.root, plain);
     await record({

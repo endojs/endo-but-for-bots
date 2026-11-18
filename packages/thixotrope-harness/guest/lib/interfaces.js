@@ -963,7 +963,14 @@ const m2ShapeBuilders = {
       {
         at: count,
         label: S.Label,
-        op: M.or('create', 'read', 'replace', 'revoke', 'delete'),
+        op: M.or(
+          'create',
+          'read',
+          'replace',
+          'revoke',
+          'delete',
+          'setDescription',
+        ),
         outcome: M.or('attempted', 'succeeded', 'failed'),
       },
       { code: text(limits.secretCodeUnits), generation: count },
@@ -1087,10 +1094,16 @@ const m2InterfaceBuilders = {
     M.interface('ReadGrant', {
       describe: M.call().returns(S.ReadGrantInfo),
     }),
-  /** Adapter-local: writes values (D-6); never in a vat. */
+  /**
+   * Adapter-local: writes values (D-6); never in a vat. Reachable through
+   * the hub (`SecretsAdmin.openWriter()`), so `replace` takes a box sealed
+   * to `publicKey()` only: a plain value never crosses the hub. The
+   * gateway's in-process path takes a plain value (`AH/secrets/writer.js`
+   * `replaceLocal`, m3-interfaces A-11).
+   */
   SecretWriter: () =>
     M.interface('SecretWriter', {
-      replace: M.callWhen(R('Secret'), M.or(S.SecretValue, S.SealedBox))
+      replace: M.callWhen(R('Secret'), S.SealedBox)
         .optional(count)
         .returns(record({ generation: count })),
       publicKey: M.call().returns(text(64)),

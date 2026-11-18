@@ -10,7 +10,8 @@
  *
  * Values: read from a password field or a file at the moment of sending,
  * checked (`values.js`: `browserSecretBytes`, UTF-8), passed to the
- * adapter-local `SecretWriter` in one call and cleared from the field. They
+ * gateway's in-process secret writer (`daemon.js`) in one call and cleared
+ * from the field. They
  * are never kept in component state, rendered or logged.
  */
 import { E } from '@endo/far';

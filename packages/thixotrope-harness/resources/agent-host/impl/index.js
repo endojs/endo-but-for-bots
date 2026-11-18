@@ -372,7 +372,12 @@ export const makeAgentHostImpl = ({
     history: () => archive.history(),
     blobs,
     timers,
-    secretWriter: () => secrets().secretWriter(),
+    // The in-process write path, never the hub's SealedBox-only writer
+    // (m3-interfaces A-11).
+    secretWriter: async () => {
+      const { replaceLocal, publicKeyLocal } = secrets();
+      return harden({ replaceLocal, publicKey: publicKeyLocal });
+    },
   });
   const { bind, unbind } = makeAttach({
     ops,
