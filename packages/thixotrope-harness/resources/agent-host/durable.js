@@ -30,6 +30,8 @@ import {
 import { limits } from '../../guest/lib/limits.js';
 import { fitsFrame } from '../../guest/lib/bounded.js';
 import { isRetiredBreak } from '../../guest/lib/retired.js';
+import { makeGatewayManager } from './durable-gateway.js';
+import { withGatewayAdmin } from '../../guest/lib/interfaces-m3.js';
 /* eslint-enable import/no-relative-packages */
 
 const { E, Far, M, defineExoClass, makeExo, makePromiseKit } =
@@ -80,6 +82,7 @@ export const make = ({ makeManager }) => {
     // The key is registered again only to reconcile it; nothing replaces it.
     same: () => true,
   });
+  const gateway = makeGatewayManager({ manager });
 
   // ---- blobs (M1b W1b.1; designs/m1b-interfaces.md section 4) ----
   // Handles are minted here in batches for the adapter's stock; the file
@@ -535,7 +538,9 @@ export const make = ({ makeManager }) => {
     return undefined;
   };
 
-  const facet = makeExo('AgentHostAdmin', m2Interfaces.AgentHostAdmin, {
+  // M3 (m3-interfaces.md 11, H2): the M2 guard plus `gateway()`.
+  const facetGuard = withGatewayAdmin(m2Interfaces.AgentHostAdmin);
+  const facet = makeExo('AgentHostAdmin', facetGuard, {
     makeBackend,
     forSession,
     bindSession,
@@ -558,6 +563,7 @@ export const make = ({ makeManager }) => {
           ? E(current).writersFor()
           : E(current).writersFor(session),
       ),
+    gateway: () => gateway.admin,
   });
 
   const lifecycle = Far('AgentHostLifecycle', {

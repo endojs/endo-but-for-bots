@@ -223,25 +223,48 @@ harden(makeOps);
  * @param {(sink: any) => Promise<void> | void} [options.onSink] M1b: told
  *   the manager's sink before attaching (the blob store mints and resolves
  *   handles through it; its `*.part` sweep runs here)
+ * @param {Record<string, { bind: (spec: any) => Promise<unknown> | unknown, unbind: () => unknown }>} [options.bindings]
+ *   M3 (m3-interfaces.md 11, H3): the other registration keys of this
+ *   resource (the gateway's `GATEWAY_KEY`) and what binds each
  */
-export const makeAttach = ({ ops, incarnation, onSink = () => {} }) => {
+export const makeAttach = ({
+  ops,
+  incarnation,
+  onSink = () => {},
+  bindings = {},
+}) => {
+  /** @param {unknown} key */
+  const bindingOf = key =>
+    typeof key === 'string' && Object.hasOwn(bindings, key)
+      ? bindings[key]
+      : undefined;
   /**
    * @param {unknown} key
    * @param {any} spec
    */
   const bind = async (key, spec) => {
-    if (key !== SERVICE_KEY)
-      throw Error(`agent host has no registration ${JSON.stringify(key)}`);
+    if (key !== SERVICE_KEY) {
+      const other = bindingOf(key);
+      if (other === undefined)
+        throw Error(`agent host has no registration ${JSON.stringify(key)}`);
+      await other.bind(spec);
+      return harden({ key });
+    }
     await onSink(spec.sink);
     await E(spec.sink).attach(ops, incarnation);
     return harden({ key });
   };
   /**
-   * Nothing to release: the ops facet dies with this process.
+   * The service key has nothing to release (the ops facet dies with this
+   * process); another key's binding releases what it bound.
    * @param {unknown} _binding
-   * @param {unknown} _key
+   * @param {unknown} key
    */
-  const unbind = (_binding, _key) => undefined;
+  const unbind = async (_binding, key) => {
+    if (key === SERVICE_KEY) return undefined;
+    await bindingOf(key)?.unbind();
+    return undefined;
+  };
   return harden({ bind, unbind });
 };
 harden(makeAttach);
