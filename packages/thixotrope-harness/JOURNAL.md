@@ -12241,3 +12241,95 @@ m5-objects (`--jobs 4`, 157 s wall); m4-secrets, m2-secrets (124 s wall); browse
 m2-secrets, m3-gateway, m5-security, m4-accounts after the gateway change (120 s wall); all exit 0,
 load 2.1-2.9. No perf file, no exclusive mode. Time: 15:17:47Z to the journal commit.
 Fit: neutral.
+
+### J-10060 2026-11-18 X-CLOSE regression run with M3, M4 and M5 merged - measure
+Evidence: at `717e26789f`, shared slots, load 2.2-4.8, with the long-session template chains
+holding one or two slots beside it. Unit and adapter lanes: 1,244 passed, 115 skipped, 1 failed
+(`run-lock` "in-process takers racing over repeatedly abandoned locks" at load 4; 17/17 alone),
+67 s. Integration `--jobs 5`: 51 files, 6,641 s held, 1,433 s wall, 296 s of waits; 50 pass,
+`m1b-live` acceptance 9 failed once (rename row 638 ms against 500 at load 3-4) and passed alone
+(117 s; rename 61-158 ms). Browser `--jobs 5`: 5 files, 622 s held, 202 s wall, all pass. Held
+by list: M0-M2 and the template test 4,029 s (25 files), M3 391 s + 422 s browser, M4 1,114 s +
+95 s, M5 1,107 s + 105 s. Longest held `m1b-followups` 297 s; no file over 5 minutes, none timed
+out. Wall in all 1,702 s (28.4 min) against the 20-minute rule; even at six slots on an idle
+machine 7,263 s / 6 is 20.2 min before the unit lane, so the rule cannot hold for one run.
+Proposed in process.md 3.1: a core list (M0-M2, about 14 min) and a per-milestone list (M3-M5
+with their browser files, about 10 min), two batches for a merge. Templates first (shared):
+`exec` 58 s, `pool` 57 s, `m3-300` 94 s (`m1a`, `m4`, `m5o` current).
+`m1a-slice-crash` and `perf/_restart.mjs` use the `m1a` template (no spare pool), so their
+`session <key>` needle names the right worker (the run's log shows `session s1` quarantined),
+which answers XC's question.
+Fit: neutral: everything passes on the merged tree; the regression run outgrew its time rule.
+
+### J-10061 2026-11-18 X-CLOSE exclusive perf pass: M3 rows and a 124 exit - measure
+Evidence: 15 files back to back in exclusive mode, 16:12-17:19 UTC at `404e60ea3a` (rows after
+the third file say `-dirty`: only `designs/milestones.md` was being edited), load 1.0-2.8, worker
+`367e78ad...`, 4,004 s held, 66.8 min wall. M3: `gateway.fetch` 0.52 ms (n 55,674, 0
+deliveries); `gateway.guard` 0.113 ms; `ui.call` 23 ms (p99 183; answers peak 1,443 of 4,096);
+`ui.submit` 42 ms; `ui.deltaFanout` 2 ms, p99 15, **0 deliveries** over 1,100 deltas to 5 clients
+(the lane's 0.007-0.010 per delta is gone); probes all refused, 0 journal growth, 4,097 exports
+closed 4008; `ui.snapshot` 31 ms; `ui.history.newest` 208 ms, `.archived` 2.2 ms;
+`ui.reconnect` 360 ms; `ui.restartReady` the gateway answers 2.2 s (clean) / 1.9 s (SIGKILL)
+before `serve()` resolves; `ui.bundle` 101,321 B gz; `ui.coldLoad` 320 ms (lane 120 ms, still
+inside 1.5 s); `ui.hubGrowth` hub 1.17 -> 1.15 MB, row exports 11 -> 21 (**1.91 x**, carried).
+Defect: `perf/gateway-session.perf.mjs` exited **124** (held 602 s): every row was printed by
+555 s (`gateway-session.fileTime`), then `state.cleanup()` (a clean stop after the 24-restart
+SIGKILL window) ran past the box. The file's guard counts windows, not its teardown. Also seen:
+the supervisor's serve time grew from 3.8 to 8.5 s across the SIGKILL series (each restart
+replays a longer unsnapshotted suffix, C-3). Not fixed here (not trivial without changing the
+file's design); proposal: move `ui.restartReady.*` to a file of its own.
+Fit: good for the gateway path; poor for viewer-driven hub row growth (CC-051 + CC-060).
+
+### J-10062 2026-11-18 X-CLOSE exclusive perf pass: M4 rows - measure
+Evidence (same pass): `subscriptions.select` 0.086 ms; `.turnStart` 114 ms (0.035 manager
+frames per turn); `.handover` 3.1 ms, 1.26 frames per refusal; `.servedWrites` **4.97** manager
+frames per session per 60 s (5 in 60.4 s, 143 turns; budget 1; W4.8 measured 2 with the 30 s
+refresh): XB's 600 s `poolStateRefreshMs` was expected to leave served stamps only and did not;
+not diagnosed. `.renewal` 1 refresh POST for each of 24 expiries, -72 ms; `.firstOpen` 827 ms
+(19 restarts; lane 688 ms; 1.10 x), 3 manager frames per first turn; `catalog.pool` warm 66 ms,
+cold 94 ms. `subscriptions.bundles` compares with `3588cab190` (before M3 and M5), so its
+session +28,242 / factory +27,762 are not M4's; the manager bundle is refused by
+`bundle-guest.mjs` (the package declares dependencies). Probes: audit 1,001 and 17 members refused
+by guards; the 8,193-byte credential now fails session creation as "Model catalog unavailable"
+(the creation's catalogue read meets it first); no halt. `secrets.credentialRead` 0.030 ms;
+`secrets.catalog` **775 ms** (57-entry first page, 2.21 manager frames per page; lane 745 ms);
+`secrets.auditReader` 26.7 ms (361 ms through the hub); `accounts.push` 0.345 ms;
+`accounts.refresh` 42 ms.
+Fit: good for the token path (all in process); poor: manager writes per served session and the
+catalogue page.
+
+### J-10063 2026-11-18 X-CLOSE exclusive perf pass: M5 rows and the M0-M2 cross-check - measure
+Evidence (same pass): `tools.local` +126 ms (640 against 513; lane +109); `labels.full` 1.023;
+`tools.inspect` 220 ms (lane 339); `grants.round` 158 ms; `exec.powersLookup` 53 ms;
+`exec.membrane` -10.8 ms (Node +0.001); `exec.scope1000` 60 ms; `presets.save` 248 ms (32
+endowments; 24 ms without); `inventory.page` 729 ms; `mentions.turnStart` 388 against 141 ms
+(+247), +0.6 deliveries per turn; `prompt.compose` Node 0.002 ms, vat largest 1,499 against
+`chat-only` 1,092 (+408); `session.program` 214,690, `exec.program` 63,826 bytes;
+`session.createCold` 6,537 ms (n 19, 120 s) and 6,249 ms (`session.perf`, n 5). Probes a, b, c,
+d, e, f pass; probe (c), a 20,000-key answer, no longer halts the workspace vat. Cross-check:
+`turn.start` 112 ms (p99 352, 2 deliveries; M2 108), `turn.delta` 0.21 ms, `turn.round` 3,
+lease 1, `install.factory` 6.55 s, `exec.first` 299 ms, `exec.trivial` 68 ms, `exec.sends` 1.13 s:
+only `session.createCold` moved (M2 5.53 s at 186,998 bytes), with the session program's size.
+Fit: good for confinement; poor for handle crossings (7-15 ms each, every M5 miss).
+
+### J-10064 2026-11-18 X-CLOSE milestone outcomes and documents - decision
+Change: `designs/milestones.md` M3 and M4 "done with open items", M5 "done" (acceptance 1-15
+pass; perf fails carried as recorded, none rated major), each with its list at the top and its
+outcome table from J-10060..J-10063 and XD's browser files; M2's SecretWriter major closed;
+the header says which milestones are done. M3's major is the 124 exit of J-10061; M4's major is
+`servedWrites` (J-10062). `process.md` 3.1 (51 + 5 files, the split proposal) and 3.2 (this
+pass, templates' times, a proposal to run a milestone's own perf files plus the cross-check);
+README test and perf commands, held times and bundle sizes; `architecture.md` status and short
+"as built" notes for the gateway, subscriptions and M5; `CORE-CHANGES.md` rows for CC-050,
+CC-051 + CC-060 (one change), CC-070..CC-073, marked requested, not built, and the accounting
+check: `git diff --stat bd9a8ec070..HEAD -- . ':!packages/thixotrope-harness'` prints nothing.
+No test or perf file was changed.
+Fit: neutral.
+
+### J-10065 2026-11-18 X-CLOSE time record - verified
+Time: 15:30:47Z to the journal commit (about 17:25Z). Commands over 60 s: milestone templates in
+parallel 94 s; unit lane 67 s; integration batch 1,434 s; long-session templates (background)
+history/journal chain 15:34-15:49, busy chain 15:34-16:12; browser batch 203 s; `m1b-live` alone
+117 s; exclusive perf pass 4,005 s (16:12:20-17:19:05). Scratch under `tmp/X-CLOSE/` removed at
+the end.
+Fit: neutral.
