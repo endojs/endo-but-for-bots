@@ -585,6 +585,6 @@ test('the fixed M4 texts (section 13)', t => {
   ]) {
     const value = /** @type {any} */ (m4Texts)[name];
     t.is(typeof value, 'string', name);
-    t.true(value.length > 0 && !value.includes('\n'), name);
+    t.regex(/** @type {string} */ (value), /^[^\n]+$/, name);
   }
 });

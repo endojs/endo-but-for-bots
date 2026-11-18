@@ -30,7 +30,16 @@ import {
 import { limits } from '../../guest/lib/limits.js';
 import { fitsFrame } from '../../guest/lib/bounded.js';
 import { isRetiredBreak } from '../../guest/lib/retired.js';
+import {
+  m4Interfaces,
+  m4SinkMethodGuards,
+} from '../../guest/lib/interfaces-m4.js';
 /* eslint-enable import/no-relative-packages */
+// M4 W4.1 (H-2): pools, members and the full Secrets manager.
+import {
+  forwardSinkMethods,
+  makeSubscriptionsPart,
+} from './durable-subscriptions.js';
 
 const { E, Far, M, defineExoClass, makeExo, makePromiseKit } =
   /** @type {any} */ (globalThis);
@@ -125,6 +134,8 @@ export const make = ({ makeManager }) => {
           arrayLengthLimit: limits.blobResolveBatch,
         }),
       ).returns(m1bShapes.BlobKeys),
+      // M4 (H-2): poolState, poolChanged, poolOf.
+      ...m4SinkMethodGuards(),
     }),
     {
       /** A stock batch for the adapter (one crank; section 4.1). */
@@ -187,6 +198,8 @@ export const make = ({ makeManager }) => {
         }
         return attaches;
       },
+      // M4 (H-2): the subscriptions part, made after the sink.
+      ...forwardSinkMethods(() => subscriptions),
     },
   );
 
@@ -327,6 +340,14 @@ export const make = ({ makeManager }) => {
   const grantRecords = new WeakMap();
   /** The live Secrets in creation order (`list`). @type {any[]} */
   let secretList = [];
+  // M4 W4.1 (H-2): pools hang off the Secrets manager (D-M4-1).
+  const subscriptions = makeSubscriptionsPart({
+    withOps,
+    whenBound,
+    archiveKeyOf,
+    secretRecords,
+    secretList: () => secretList,
+  });
 
   /**
    * @param {any} secret
@@ -340,7 +361,7 @@ export const make = ({ makeManager }) => {
 
   const makeSecret = defineExoClass(
     'Secret',
-    interfaces.Secret,
+    m4Interfaces.Secret,
     () => harden({}),
     {
       async describe() {
@@ -383,6 +404,7 @@ export const make = ({ makeManager }) => {
           E(current).secretAudit(harden({ key: record.key, limit })),
         );
       },
+      ...subscriptions.secretMethods,
     },
   );
 
@@ -399,7 +421,7 @@ export const make = ({ makeManager }) => {
     },
   );
 
-  const secretsAdmin = makeExo('SecretsAdmin', interfaces.SecretsAdmin, {
+  const secretsAdmin = makeExo('SecretsAdmin', m4Interfaces.SecretsAdmin, {
     /** @param {string} [cursor] a position in creation order */
     list: cursor => {
       const from = cursor === undefined ? 0 : Number(cursor);
@@ -431,6 +453,7 @@ export const make = ({ makeManager }) => {
     /** @param {number} [limit] */
     audit: async (limit = limits.auditPageEvents) =>
       withOps(current => E(current).secretAudit(harden({ limit }))),
+    ...subscriptions.secretsAdminMethods,
   });
 
   /** @param {any} spec a `shapes.BackendSpec` (checked by the guard) */
