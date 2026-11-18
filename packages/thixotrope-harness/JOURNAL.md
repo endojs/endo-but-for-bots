@@ -9373,3 +9373,111 @@ a separate study).
 Fit: poor fit as configured: orthogonal persistence pays its checkpoint on the turn path of
 whichever turn crosses the count; a busy interactive vat wants checkpoints at idle.
 Decision: budget unchanged; core candidate for the PM.
+
+### J-9495 2026-11-18 M2 close-out regression run, and a perf file M2-FIX broke - deviation
+
+Evidence: `d7fce8e46c`, lane `endo-thix-m2r`, THIX_AGENT M2-CLOSE, shared slots, load 2.3-5 (two
+template chains ran beside it). `corepack yarn test`: 727 passed, 0 failed, 59 skipped, 66 s
+wall. `corepack yarn test:integration --jobs 4`: 25 files, all exit 0, 1,040 s wall, 3,792 s
+held, no wait for a slot; longest held `m1b-followups` 266 s, `m2-lifecycle-export` 235 s,
+`m1b-context-restart` 208 s, `m2-history` 202 s, `m2-turns` 196 s (per file in `process.md` 3.1).
+`m2-probes` keeps its one `test.failing` (the inline 100 KiB probe). Perf pass: the first run of
+`perf/queue.perf.mjs` exited 255 after 13 s (`TypeError: Cannot read properties of undefined
+(reading 'entry')` at the send-now window).
+Reading: the regression run fits the 20-minute rule (about 18 minutes) on a machine without other
+lanes; `m1b-live` 9 passed under load this time. The queue failure is a conversion defect left by
+a behaviour change, not a queue bug: since R6-44 (M2-FIX, J-9491) `sendNow` cancels the running
+turn and the moved entry is claimed when it settles, so each timed operation took one entry out of
+the 99, and after 98 the window read past an empty list. Fixed in `7a27c150e5`: before each
+operation (untimed) the queue is topped up to 99 waiting again; the timed part is unchanged. Rerun
+in exclusive mode: exit 0, 33 s held; `queue.sendNow.memory` median 0.204 ms, p99 6.99 ms over
+1,766 samples in 10 s (the row now includes the cancel of the running turn).
+Decision: no other test or perf file changed. The perf pass's unit (M2-P1) could not have seen it:
+the behaviour changed after its run.
+
+### J-9496 2026-11-18 M2 acceptance 15 in the exclusive pass: flat, one hub-row ratio over - perf
+
+Evidence: `perf/history.perf.mjs` and `perf/history.restart.perf.mjs` at `6628dbf8a1` (tree
+differed in `README.md` and `designs/process.md` only), exclusive, load 1.3-1.8, templates of
+200 / 1,000 / 5,000 imported plain turns rebuilt for the M2-FIX bundles (keys `6dca74ca156e`,
+`eda4379741a0`, `4ddc1164ef60`), a 60 s window of turns at each (87 / 87 / 86 samples).
+{"metric":"archive.flat.turn.at1000","at200":634.1,"at1000":637.8,"ratio":1.006,"pass":true}
+{"metric":"archive.flat.turnStart.at1000","at200":247,"at1000":251,"ratio":1.016,"pass":true}
+{"metric":"archive.flat.hubRow.at1000","at200":9374,"at1000":13010,"ratio":1.388,"pass":false}
+{"metric":"archive.flat.hubRowEntries.at1000","at200":193,"at1000":192,"ratio":0.995,"pass":true}
+{"metric":"archive.flat.turn.at5000","at200":634.1,"at5000":647.7,"ratio":1.021,"pass":true}
+{"metric":"archive.flat.turnStart.at5000","at200":247,"at5000":264,"ratio":1.069,"pass":true}
+{"metric":"archive.flat.snapshot.at5000","at200":30916608,"at5000":31989760,"ratio":1.035,"pass":true}
+{"metric":"archive.flat.slots.at5000","at200":761856,"at5000":792064,"ratio":1.04,"pass":true}
+{"metric":"archive.flat.hubRow.at5000","at200":9374,"at5000":9345,"ratio":0.997,"pass":true}
+Reading: every vat-side measure is flat (0.95-1.07 x) at 1,000 and 5,000. The one ratio over 1.25
+x is the hub row's characters at 1,000 while its entries are 0.995 x: the 1,000-turn read caught
+`answersOwed: 1`, the 200-turn read none, so the row was read with a call in flight (J-9461 read
+5,769 / 5,272 characters for the same rows under load). History pages: newest 244 / 244 / 252 ms
+at 200 / 1,000 / 5,000 (15 s windows, 81-85 samples), archived 34 / 35 / 33 ms; walks of 1,003 and
+5,003 turns, each turn once, 358 pages at 5,000, none over `frameBytes`; `context.rebuild` 219 /
+219 / 253 ms with the same context. `checkpoint.stall` p99: 1,050 / 951 / 1,025 ms (3 / 2 / 3
+snapshots in the window, the slowest turn the snapshot turn each time).
+Decision: acceptance 15 passes at 5,000 and fails at 1,000 on the row characters; recorded, not
+re-based. Proposed for the PM: read the hub row at a quiescent point (no answer owed) in
+`perf/history.perf.mjs`, a procedure fix, then re-run that file alone.
+
+### J-9497 2026-11-18 M2 recorded perf pass: 25 files exclusive, what passes and what misses - perf
+
+Evidence: every `perf/*.perf.mjs` as `node scripts/run-lock.mjs --exclusive --label perf-<name> --
+node perf/<name>.perf.mjs`, one batch 10:48-11:58 UTC, `6628dbf8a1-dirty` (docs only), worker
+`367e78ad...`, crank budget 50 M, slot ceiling 4,000,000, `allocation`, `log`, load 1.1-2.4;
+4,171 s held, no exit 124 (per file in `process.md` 3.2; every row in milestones.md M2 outcome).
+{"metric":"throughput","value":41.2,"unit":"deliveries/s","sessions":20,"window":60000,"samples":438,"perDeliveryMs":222,"turnsPerSecond":7,"turnMsP99":54926.6}
+{"metric":"restart.serving.m2","value":3863.8,"runs":[3546.6,3863.8,4180.4],"sessions":50,"turnsEach":300,"woken":[],"pass":true}
+{"metric":"archive.stall.at200","value":1396.9,"median":661.2,"samples":77,"snapshots":4,"pass":false}
+{"metric":"session.create.pool","median":1096.796,"n":8,"window":45000,"budget":{"median":750},"pass":false}
+{"metric":"concurrency.10.turnStart","median":701,"n":120,"window":60000,"budget":{"median":222},"pass":false}
+{"metric":"hub.growth.slope","value":3258370,"projected":true,"msPerDeliveryVsFresh":1.37,"pass":false}
+{"metric":"exec.trivial","median":56,"p99":345,"n":52,"window":30000,"budget":{"median":250},"pass":true}
+{"metric":"journal.snapshot.budget.at1000","msEach":245.1,"snapshotBytes":31883264,"slots":790272,"pass":true}
+{"metric":"import.rate","turnsPerSecond":7.1,"shape":"tool","window":60000,"samples":36}
+Reading: (1) M2-P2's possible regression is cleared: `exec.trivial` is 56 ms median on a quiet
+machine (9 s at load 3-7 was the load). (2) `checkpoint.stall` is at the budget's edge on imported
+sessions (0.95-1.05 x) and over it on the session `archive.perf` grows by running turns (1.40 x,
+4 snapshots in the window): the cause stays the cadence snapshot (C-24, J-9494). (3) Fails carried
+from M1b or set by core limits: `session.create.pool` 1.46 x, `concurrency.10` turn start 3.2 x
+single (M1b 6.5 x) and crank p95 500 ms, `hub.growth` projected to 50 sessions 3.26 MB and 1.37 x
+(20 sessions measured: 1.37 MB, pass), `crash.restart.bound5` 65.9 s (C-8, C-9),
+`vat.evaluateProgram` 2.12 s (1.06 x, C-5), `restart.crashingSession` 18.2 s (1.21 x). (4)
+`throughput` 41.2 deliveries/s, under the 50/s journal mark: 222 ms per delivery, and 14 session
+wakes inside the window (423 s of wake time across vats) make the p99 turn 55 s. (5)
+`disk.session` 41.7 MB (shared, `m2-lifecycle`), of it a 41.1 MB snapshot of an imported session:
+C-22's high-water. (6) Every other row of the M0, M1a, M1b and M2 tables passes.
+Decision: recorded; nothing re-based. M2 is "done with open items".
+
+### J-9498 2026-11-18 M2 close-out fit: what the exclusive numbers say about Thixotrope - fit
+
+Evidence: J-9495..J-9497; the shared-slot runs of M2-P1 and M2-P2 (J-9460..J-9473) for the same
+files.
+Reading: good fit: orthogonal persistence plus the record archive gives a session whose every
+vat-side cost is independent of its length (5,000 against 200 turns at 0.95-1.07 x), restarts
+with 50 sleeping 300-turn sessions serve in under 4.2 s and wake none, and on a quiet machine the
+whole perf pass of 25 files fits in 70 minutes with no file over 5 minutes. Poor fit, measured:
+(a) a busy vat pays its checkpoint inside whichever turn crosses the delivery count (C-24); (b)
+the hub's per-row cost grows with sessions and viewers, not turns (C-2's rest), which is where
+`concurrency.10` and `hub.growth` miss; (c) import is the only way to build long states and costs
+what live turns cost per record (C-22): the template chain is the longest step of a pass (32
+minutes of wall here). Load sensitivity is itself a finding: the same files held 1.3-2.2 x longer
+in shared slots at load 4-7 than here, and some latency rows (exec.trivial 160 x, turn.start p99)
+move far more than load explains, because every crank's host work runs on the supervisor's one
+thread.
+Decision: none beyond the candidates already filed.
+
+### J-9499 2026-11-18 M2-CLOSE time record - process
+
+Evidence: start 10:16:03Z. Unit lane 66 s; integration run 1,040 s (background); template chains
+long 200 / 1,000 / 5,000 148 / 152 / 488 s held and busy 10..50 417 / 392 / 366 / 353 / 352 s held
+(shared, both chains started at 10:16, done 10:29 and 10:48); exclusive perf batch 10:48:28 to
+11:57:29 plus the queue rerun to 11:58:11. Waits for slots: 0 s for every run (no other lane was
+active). The rest was reading and the documents.
+Reading: the close-out is bounded by the template rebuild (31.5 minutes, needed because M2-FIX
+changed the session bundle) and the exclusive pass (70 minutes, during which every lane is
+stopped). Building the busy chain beside the regression run saved about 30 minutes.
+Decision: for the PM: a guest-bundle change late in a milestone costs a template rebuild before its
+recorded pass; schedule bundle changes before the review units.
