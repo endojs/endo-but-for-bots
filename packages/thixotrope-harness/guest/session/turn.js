@@ -68,6 +68,7 @@ import { makeHistory } from './history.js';
 import { inCallOrder } from './records.js';
 import { isStaged, submissionField } from './staging.js';
 import { toolSetFor, toolSources, toolTable } from './tool-table.js';
+import { makeOutbox } from './outbox.js';
 import { makeUsage } from './usage.js';
 // The result of a call the turn never ran because it was cancelled first
 // (one text with the exec tool's; tools/exec.js never imports this module).
@@ -219,57 +220,12 @@ export const makeTurnRunner = ({
 
   // ------------------------------------------------------------ the outbox
 
-  /**
-   * events of this crank, in order
-   * @type {any[]}
-   */
-  let outbox = [];
-  /** a `pending` event is owed (added last, with the queue's view at flush) */
-  let pendingOwed = false;
-  /**
-   * the merged row patch of this crank
-   * @type {Record<string, any> | undefined}
-   */
-  let rowPatch;
-  let flushScheduled = false;
-
-  /** @param {any} event */
-  const emit = event => {
-    outbox.push(harden(event));
-  };
-
-  const takeEvents = () => {
-    const events = outbox;
-    outbox = [];
-    if (pendingOwed) {
-      pendingOwed = false;
-      events.push(harden({ type: 'pending', pending: queue.view() }));
-    }
-    return events;
-  };
-
-  const flushRow = () => {
-    if (rowPatch === undefined) return;
-    const patch = harden({ ...rowPatch });
-    rowPatch = undefined;
-    E.sendOnly(rowReporter).changed(patch);
-  };
-
-  /**
-   * Publish the outbox to these ports (sendOnly) or, without ports, outside
-   * a turn (answered); send the row patch.
-   * @param {any} ports
-   */
-  const flushTo = ports => {
-    flushRow();
-    const events = takeEvents();
-    if (events.length === 0) return;
-    if (ports !== undefined) {
-      live.inTurn(ports, events);
-    } else {
-      void live.outside(events);
-    }
-  };
+  const outbox = makeOutbox({
+    live,
+    rowReporter,
+    pendingView: () => queue.view(),
+  });
+  const { emit, report, flushRow, flushTo } = outbox;
 
   /**
    * End of a crank's work: publish to the current turn's ports; keep the
@@ -282,21 +238,6 @@ export const makeTurnRunner = ({
       return;
     }
     flushTo(current?.ports);
-  };
-
-  /** A flush at the end of this crank's synchronous work, for callers outside this module. */
-  const scheduleFlush = () => {
-    if (flushScheduled) return;
-    flushScheduled = true;
-    void Promise.resolve().then(() => {
-      flushScheduled = false;
-      flush();
-    });
-  };
-
-  /** @param {Record<string, any>} patch RowPatch fields */
-  const report = patch => {
-    rowPatch = { ...(rowPatch ?? {}), ...patch };
   };
 
   // ------------------------------------------------------------ status
@@ -1524,9 +1465,9 @@ export const makeTurnRunner = ({
     see,
     /** The queue changed (Queue onChange): owe a `pending` event and the count. */
     queueChanged: () => {
-      pendingOwed = true;
+      outbox.owePending();
       report({ queuedCount: queue.size() });
-      scheduleFlush();
+      outbox.schedule(flush);
     },
     /** Open this incarnation's ports (at creation; contract 6.1). */
     openPorts: () => {
