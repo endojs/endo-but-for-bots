@@ -194,6 +194,16 @@ export const makeController = ({
 }) => {
   /** @type {UiState} */
   let state = initialState();
+
+  /**
+   * The failure of a resend after a reload or reconnect, by session key,
+   * until that session sends again or its draft is resent: shown when the
+   * session's view opens (the resend runs before the person opens it; M5's
+   * `attachmentsLost`, m5-interfaces.md 4.1 item 2).
+   * @type {Map<string, string>}
+   */
+  const resendErrors = new Map();
+
   /** @type {Set<() => void>} */
   const listeners = new Set();
 
@@ -700,8 +710,27 @@ export const makeController = ({
                   preview.turnId === turnId,
               )
               .map(preview => {
-                // The live `turn-start` record stays the entry's record.
-                const { record: _started, ...entry } = entryOfPreview(preview);
+                // The live `turn-start` record stays the entry's record,
+                // with the `TurnStarted` record's optional fields the live
+                // event does not carry (M5 `attachments`: the transcript's
+                // chips, m5-interfaces.md 4.1 item 3).
+                const { record: started, ...entry } = entryOfPreview(preview);
+                const shown = state.view?.messages.find(
+                  item => item.turnId === turnId,
+                );
+                if (
+                  started?.kind === 'turn-started' &&
+                  started.attachments !== undefined &&
+                  shown?.record !== undefined
+                ) {
+                  return {
+                    ...entry,
+                    record: {
+                      ...shown.record,
+                      attachments: started.attachments,
+                    },
+                  };
+                }
                 return entry;
               }),
           );
@@ -815,6 +844,7 @@ export const makeController = ({
         earlier: 'none',
         status: '',
         input: keptInput,
+        ...(resendErrors.has(key) ? { sendError: resendErrors.get(key) } : {}),
       },
       recovery: null,
     });
@@ -943,9 +973,12 @@ export const makeController = ({
           try {
             await sendThroughChain(session, draft.text, draft.requestId, true);
             clearDraft(storage, sessionKey, draft.requestId);
+            resendErrors.delete(sessionKey);
           } catch (error) {
+            const sendError = uiTextOf.statusError(messageOf(error));
+            resendErrors.set(sessionKey, sendError);
             if (state.activeKey === sessionKey && state.view) {
-              updateView({ sendError: uiTextOf.statusError(messageOf(error)) });
+              updateView({ sendError });
             }
           }
         }).catch(() => {});
@@ -1167,6 +1200,7 @@ export const makeController = ({
         return undefined;
       }
       const session = activeSession(key);
+      resendErrors.delete(key);
       updateView({ sendError: undefined });
       try {
         return await underLock(key, async () => {
