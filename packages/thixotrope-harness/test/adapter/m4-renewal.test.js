@@ -422,6 +422,75 @@ test('an answer naming another account is refused INVALID', async t => {
   t.is(server.requests().length, 1);
 });
 
+test('M4-FIX: a lifetime within the skew is written back and served', async t => {
+  // 90 s: above the 60 s floor, inside the 120 s skew. The rotated refresh
+  // token must reach the store (it used to be dropped: CONSUMED next).
+  const { member, server, issued, stored } = await setup(t, {
+    server: { expiresIn: 90 },
+  });
+  const credential = member();
+  const { credential: renewed } = await credential.current();
+  t.not(renewed.refreshToken, issued.refreshToken);
+  const after = await stored();
+  t.is(after.credential.pendingRefresh, undefined);
+  t.is(after.credential.refreshToken, renewed.refreshToken);
+  // The next round renews again with the rotated token, never the old one.
+  await credential.current();
+  t.is(server.presented(issued.serial), 1, 'old token presented once');
+  t.is(server.requests().length, 2);
+  t.is((await stored()).credential.pendingRefresh, undefined);
+});
+
+test('M4-FIX: an answer refused after the POST keeps its refresh token', async t => {
+  const { member, server, issued, stored } = await setup(t, {
+    accountId: 'acct-1',
+  });
+  const rotated = fakeToken('rot');
+  const answers = [
+    { token_type: 'mac', expires_in: 3600 },
+    { token_type: 'Bearer', expires_in: 30 },
+    { token_type: 'Bearer' },
+  ];
+  let previous = issued.refreshToken;
+  for (const [index, extra] of answers.entries()) {
+    const next = `${rotated}-${index}`;
+    server.setPlan([
+      {
+        status: 200,
+        body: {
+          access_token: fakeToken('acc'),
+          refresh_token: next,
+          ...extra,
+        },
+      },
+    ]);
+    // eslint-disable-next-line no-await-in-loop
+    await rejectsWith(t, member().current(), 'INVALID', [previous, next]);
+    // eslint-disable-next-line no-await-in-loop
+    const after = await stored();
+    t.is(after.credential.pendingRefresh, undefined, 'no intent left');
+    t.is(after.credential.refreshToken, next, 'rotated token kept');
+    t.true(after.credential.expiresAtMs <= Date.now(), 'access spent');
+    t.is(after.credential.accountId, 'acct-1');
+    previous = next;
+  }
+  // An answer naming another account keeps nothing (fail closed).
+  server.setPlan([
+    {
+      status: 200,
+      body: {
+        access_token: fakeToken('acc'),
+        refresh_token: fakeToken('other'),
+        token_type: 'Bearer',
+        expires_in: 3600,
+        account_id: 'acct-2',
+      },
+    },
+  ]);
+  await rejectsWith(t, member().current(), 'INVALID');
+  t.truthy((await stored()).credential.pendingRefresh);
+});
+
 test('a non-rotating provider: the old refresh token is kept (RFC 6749 6)', async t => {
   const { member, issued, stored } = await setup(t, {
     server: { rotate: false },

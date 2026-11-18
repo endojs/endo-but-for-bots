@@ -29,7 +29,11 @@
  * 4. POST the refresh-token grant (redirects refused, bounded answer);
  * 5. write the answer conditioned on the intent's generation; a missing
  *    refresh token keeps the old one (RFC 6749 section 6); an answer naming
- *    another account is refused (`INVALID`).
+ *    another account is refused (`INVALID`). After the POST no refresh
+ *    token the answer carries is dropped: an answer that fails a later check
+ *    (token type, lifetime, an `exp` in the past) still has its refresh
+ *    token written back, with the access token marked spent, before the
+ *    round fails; a lifetime within `refreshSkewMs` is written and served.
  *
  * A failure the request provably never left (connection refused, name not
  * resolved) undoes the intent by restoring the exact value it replaced at
@@ -153,7 +157,14 @@ export const makeMemberCredential = ({
   settings = {},
 }) => {
   const { refreshSkewMs = 120_000, renewalTimeoutMs = 15_000 } = settings;
-  const counters = { reads: 0, flights: 0, posts: 0, adopted: 0, undone: 0 };
+  const counters = {
+    reads: 0,
+    flights: 0,
+    posts: 0,
+    adopted: 0,
+    undone: 0,
+    kept: 0,
+  };
 
   /** @returns {Promise<{ credential: StoredCredential, generation: number, value: string }>} */
   const read = async () => {
@@ -320,6 +331,67 @@ export const makeMemberCredential = ({
   };
 
   /**
+   * What survives an answer `renewedFrom` refused, after the POST: the old
+   * credential with the answer's refresh token (or the old one when the
+   * answer names none, RFC 6749 6), its access token marked spent so the
+   * next round renews. Nothing survives an answer that is not an object,
+   * carries an unusable refresh token, or names another account (that
+   * token is not this member's: fail closed).
+   * @param {StoredCredential} credential
+   * @param {string} refreshToken
+   * @param {any} answer
+   * @returns {StoredCredential | undefined}
+   */
+  const salvaged = (credential, refreshToken, answer) => {
+    if (typeof answer !== 'object' || answer === null) return undefined;
+    let kept = refreshToken;
+    if (answer.refresh_token !== undefined) {
+      try {
+        kept = assertToken(answer.refresh_token);
+      } catch {
+        return undefined;
+      }
+    }
+    if (credential.accountId !== undefined) {
+      const named =
+        typeof answer.account_id === 'string'
+          ? answer.account_id
+          : typeof answer.account?.uuid === 'string'
+            ? answer.account.uuid
+            : undefined;
+      if (named !== undefined && named !== credential.accountId)
+        return undefined;
+      if (provider === 'codex' && typeof answer.access_token === 'string') {
+        const claims = jwtClaims(answer.access_token);
+        const bound = claims === undefined ? undefined : codexAccountOf(claims);
+        if (bound !== undefined && bound !== credential.accountId)
+          return undefined;
+      }
+    }
+    const { pendingRefresh: _intent, ...rest } = credential;
+    return harden({
+      ...rest,
+      refreshToken: kept,
+      expiresAtMs: Math.min(credential.expiresAtMs, now()),
+    });
+  };
+
+  /**
+   * Write a credential over the intent; a failure leaves the intent (the
+   * next read fails `CONSUMED`), a conflict means a newer writer won.
+   * @param {StoredCredential} credential
+   * @param {number} intentGeneration
+   */
+  const keep = async (credential, intentGeneration) => {
+    try {
+      await access.replace(formatCredential(credential), intentGeneration);
+      counters.kept += 1;
+    } catch {
+      // Fail closed: the intent stays.
+    }
+  };
+
+  /**
    * One exchange (single-flight per member).
    * @param {string} [rejected]
    * @returns {Promise<{ credential: StoredCredential, generation: number }>}
@@ -374,8 +446,25 @@ export const makeMemberCredential = ({
       throw error;
     }
 
-    const next = renewedFrom(credential, refreshToken, answer);
-    if (spent(next)) throw credentialError('RENEWAL_FAILED');
+    // From here the old refresh token is spent at the provider, so a
+    // refresh token the answer carries must not be dropped (M4-FIX).
+    /** @type {StoredCredential} */
+    let next;
+    try {
+      next = renewedFrom(credential, refreshToken, answer);
+    } catch (error) {
+      const kept = salvaged(credential, refreshToken, answer);
+      if (kept !== undefined) await keep(kept, intentGeneration);
+      throw error;
+    }
+    if (now() >= next.expiresAtMs) {
+      // Already expired (a `exp` claim in the past): keep the rotated
+      // refresh token for the next round, serve nothing now.
+      await keep(next, intentGeneration);
+      throw credentialError('RENEWAL_FAILED');
+    }
+    // A lifetime within `refreshSkewMs` (61-120 s with the defaults) is
+    // written back and served; the next round renews again.
     try {
       const nextGeneration = await access.replace(
         formatCredential(next),
