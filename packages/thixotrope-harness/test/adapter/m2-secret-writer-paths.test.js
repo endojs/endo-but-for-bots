@@ -30,6 +30,7 @@ import {
   makeSealKeys,
   sealTo,
 } from '../../resources/agent-host/impl/secrets/seal.js';
+import { assertLocalValue } from '../../resources/agent-host/impl/secrets/writer.js';
 import { SECRETS_KEY_VARIABLE } from '../../resources/agent-host/impl/secrets/store.js';
 import { connectGateway } from '../integration/_m3-gateway.js';
 import { makeStoreDirs, openStore } from './_m4-renewal.js';
@@ -79,7 +80,13 @@ test('the remotable SecretWriter refuses a plain value at its guard; a sealed bo
   const writer = await ops.secretWriter();
   const plain = valueOf('plain');
   const error = await t.throwsAsync(() => E(writer).replace(secret, plain));
-  t.regex(String(error?.message), /SecretWriter.*arg 1.*Must be a copyRecord/);
+  t.is(
+    error?.message,
+    textOf.secretFailed('INVALID_SECRET_BYTES'),
+    'a fixed text (X-FIX)',
+  );
+  t.false(String(error?.message).includes(plain), 'never the value');
+  t.false(String(error?.stack).includes(plain), 'not in the stack either');
   t.is((await store.describe('k1')).generation, 0, 'nothing written');
   t.deepEqual(
     (await store.audit({ key: 'k1', limit: 10 })).map(e => e.op),
@@ -96,6 +103,17 @@ test('the remotable SecretWriter refuses a plain value at its guard; a sealed bo
   t.false('replaceLocal' in writer);
   await t.throwsAsync(() => E(writer).replaceLocal(secret, plain), {
     message: /replaceLocal/,
+  });
+});
+
+test("X-FIX: the gateway writer's value check refuses an over-size value with a fixed text", t => {
+  const over = `${valueOf('over')}${'v'.repeat(1_048_576)}`;
+  const error = t.throws(() => assertLocalValue(over));
+  t.is(error?.message, textOf.secretFailed('INVALID_SECRET_BYTES'));
+  t.false(String(error?.message).includes(valueOf('over')));
+  t.notThrows(() => assertLocalValue(valueOf('fits')));
+  t.throws(() => assertLocalValue(harden({ box: 'x' })), {
+    message: textOf.secretFailed('INVALID_SECRET_BYTES'),
   });
 });
 
@@ -198,8 +216,18 @@ test('a page writes a plain value through the gateway in process; never through 
   // refused at its guard (the gateway forwards the call unchanged).
   const viaHub = await E(pageAdmin).openWriter();
   await t.throwsAsync(() => E(viaHub).replace(pageSecret, valueOf('hub')), {
-    message: /Must be a copyRecord/,
+    message: textOf.secretFailed('INVALID_SECRET_BYTES'),
   });
+  // The page's writer refuses a value of the wrong shape with the same
+  // fixed text, never quoting it (X-FIX). A record with a key the
+  // gateway's vocabulary knows, so the call reaches the writer.
+  const wrapped = valueOf('wrapped');
+  const shapeError = await t.throwsAsync(() =>
+    E(writer).replace(pageSecret, harden({ label: wrapped }), 1),
+  );
+  t.is(shapeError?.message, textOf.secretFailed('INVALID_SECRET_BYTES'));
+  t.false(String(shapeError?.message).includes(wrapped));
+  t.is((await store.describe('k1')).generation, 1, 'nothing written');
   t.is((await store.describe('k1')).generation, 1);
 
   // A value over the frame bound still passes (the m4-secrets LargeCall):

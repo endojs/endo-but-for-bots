@@ -7,11 +7,11 @@
  * Two write paths, one store write:
  *
  * - `writer`, the remotable `SecretWriter` (`SecretsAdmin.openWriter()`,
- *   reachable through the hub): its guard takes a `SealedBox` only (a box
+ *   reachable through the hub): it takes a `SealedBox` only (a box
  *   sealed to `publicKey()`, X25519 + AES-256-GCM, `seal.js`), so a value
  *   never travels through the hub, its log or its image in clear. A plain
- *   string from any caller is refused by the exo guard before the method
- *   runs.
+ *   string from any caller is refused before anything is read or written,
+ *   with a fixed text that does not repeat it (X-FIX).
  * - `replaceLocal(secret, value | SealedBox, expectedGeneration?)`, a plain
  *   function of this process that no remotable exposes: the gateway's
  *   in-process writer (`GW/index.js`, `GatewayContext.secretWriter()`)
@@ -27,33 +27,75 @@
  * Node only (adapter).
  */
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { count, record, text } from '../../../../guest/lib/guards/base.js';
-import { interfaces, shapes } from '../../../../guest/lib/interfaces.js';
+import { count, R, record, text } from '../../../../guest/lib/guards/base.js';
+import { shapes } from '../../../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { secretError } from './store.js';
 
-const { M, makeExo } = /** @type {any} */ (globalThis);
+const { M, makeExo, matches } = /** @type {any} */ (globalThis);
+
+/*
+ * The value argument (X-FIX): a guard that refuses a value quotes it in its
+ * pattern error, so the writers' exo guards take any passable there and the
+ * method checks the shape with `matches`, refusing with a fixed text that
+ * never names the value (`secretFailed("INVALID_SECRET_BYTES")`, one
+ * of the fixed `secretCodes`: the store's own code for a value it cannot
+ * take). What is accepted
+ * is unchanged: `interfaces.SecretWriter` (a `SealedBox`) for the hub's
+ * writer, a plain value or a box for the gateway's.
+ */
 
 /** @type {any} */
 let localGuard;
 /**
  * The guard of the gateway's in-process writer (`GW/index.js`): the same
  * arguments as the M2 contract's browser path (a plain value up to
- * `limits.secretValueBytes`, or a `SealedBox`), on an object that is
- * gateway-local and never exported to the hub. Built on first use.
+ * `limits.secretValueBytes`, or a `SealedBox`: `assertLocalValue`), on an
+ * object that is gateway-local and never exported to the hub. Built on
+ * first use.
  */
 export const localWriterGuard = () => {
   localGuard ??= M.interface('GatewaySecretWriter', {
-    replace: M.callWhen(
-      M.remotable('Secret'),
-      M.or(shapes.SecretValue, shapes.SealedBox),
-    )
+    replace: M.callWhen(M.remotable('Secret'), M.any())
       .optional(count)
       .returns(record({ generation: count })),
     publicKey: M.callWhen().returns(text(64)),
   });
   return localGuard;
 };
+
+/** @type {any} */
+let hubGuard;
+/**
+ * The hub writer's exo guard: `interfaces.SecretWriter` with the value
+ * argument checked in the method (`SealedBox` only) instead.
+ */
+const hubWriterGuard = () => {
+  hubGuard ??= M.interface('SecretWriter', {
+    replace: M.callWhen(R('Secret'), M.any())
+      .optional(count)
+      .returns(record({ generation: count })),
+    publicKey: M.call().returns(text(64)),
+  });
+  return hubGuard;
+};
+
+/**
+ * @param {unknown} value
+ * @param {any} shape
+ */
+const assertValueShape = (value, shape) => {
+  if (!matches(value, shape)) throw secretError('INVALID_SECRET_BYTES');
+};
+
+/**
+ * The gateway writer's value check (a plain value up to
+ * `limits.secretValueBytes`, or a `SealedBox`); the refusal never names it.
+ * @param {unknown} value
+ */
+export const assertLocalValue = value =>
+  assertValueShape(value, M.or(shapes.SecretValue, shapes.SealedBox));
+harden(assertLocalValue);
 
 /**
  * @typedef {{ format: string, publicKey: string, box: string }} SealedBox
@@ -79,14 +121,17 @@ export const makeSecretWriter = ({ store, seal, resolveSecret }) => {
     return harden({ generation });
   };
 
-  const writer = makeExo('SecretWriter', interfaces.SecretWriter, {
+  const writer = makeExo('SecretWriter', hubWriterGuard(), {
     /**
      * @param {any} secret
-     * @param {SealedBox} box only a box: the guard refuses a plain value
+     * @param {SealedBox} box only a box: a plain value is refused with a
+     *   fixed text before anything is read or written
      * @param {number} [expectedGeneration]
      */
-    replace: (secret, box, expectedGeneration) =>
-      write(secret, seal.open(box), expectedGeneration),
+    replace: async (secret, box, expectedGeneration) => {
+      assertValueShape(box, shapes.SealedBox);
+      return write(secret, seal.open(box), expectedGeneration);
+    },
     publicKey: () => seal.publicKey(),
   });
 

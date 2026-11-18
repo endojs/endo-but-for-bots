@@ -397,12 +397,14 @@ test('ops: values are re-read every round; one sink call per grant per incarnati
 
   const value1 = makeTestSecretValue('one');
   const value2 = makeTestSecretValue('two');
-  // The hub writer takes sealed boxes only (a plain value is refused by its
-  // guard); the gateway's in-process path (`replaceLocal`) takes either.
+  // The hub writer takes sealed boxes only (a plain value is refused with a
+  // fixed text that never repeats it, X-FIX); the gateway's in-process path
+  // (`replaceLocal`) takes either.
   const publicKey = await E(writer).publicKey();
-  await t.throwsAsync(E(writer).replace(secret, value1), {
-    message: /Must be a copyRecord/,
+  const refused = await t.throwsAsync(E(writer).replace(secret, value1), {
+    message: textOf.secretFailed('INVALID_SECRET_BYTES'),
   });
+  t.false(String(refused?.message).includes(value1));
   t.deepEqual(await E(writer).replace(secret, sealTo(publicKey, value1)), {
     generation: 1,
   });

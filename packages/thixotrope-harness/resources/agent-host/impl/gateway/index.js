@@ -58,7 +58,7 @@ import { fileURLToPath } from 'node:url';
 import { m3Interfaces } from '../../../../guest/lib/interfaces-m3.js';
 /* eslint-enable import/no-relative-packages */
 import { findBlobDir } from '../blobs.js';
-import { localWriterGuard } from '../secrets/writer.js';
+import { assertLocalValue, localWriterGuard } from '../secrets/writer.js';
 import { makeBridge } from './bridge.js';
 import { closeCodes, gatewayTexts, secretWriterLabel } from './contract-m3.js';
 import { cspHeader } from './csp.js';
@@ -168,6 +168,7 @@ export const makeGatewayService = ({
      * @param {number} [expectedGeneration]
      */
     replace: async (secret, value, expectedGeneration) => {
+      assertLocalValue(value);
       if (!isAttached) throw Error(notAttachedText);
       const path = await secretWriter();
       return path.replaceLocal(secret, value, expectedGeneration);

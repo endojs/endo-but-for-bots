@@ -19,7 +19,8 @@
  *
  * The two write paths (XA; m2-interfaces.md 9.2, m3-interfaces.md A-11):
  * a plain-string replace sent by a hub client is refused by the
- * `SecretWriter` guard (SealedBox only) and nothing is written; where that
+ * `SecretWriter` (SealedBox only; a fixed text that does not quote the
+ * value, X-FIX) and nothing is written; where that
  * refused request's text lands (the hub carried it) is recorded as an
  * observation (`m2.secrets.plainValue`). A page then writes a plain value
  * through the gateway's in-process writer (`GatewayPowers.extras`), and
@@ -232,14 +233,18 @@ run(
     t.true(Number(audit.length) > 0);
     t.false(JSON.stringify(audit).includes(first));
 
-    // A plain string sent by a hub client: refused by the writer's guard
-    // before anything is written.
+    // A plain string sent by a hub client: refused before anything is
+    // written, with a fixed text that does not repeat it (X-FIX).
     const other = await E(secrets).create(
       harden({ label: 'plain key', description: 'plain replace' }),
     );
-    await t.throwsAsync(() => E(writer).replace(other, plain), {
-      message: /SecretWriter.*Must be a copyRecord/,
+    const refusal = await t.throwsAsync(() => E(writer).replace(other, plain), {
+      message: textOf.secretFailed('INVALID_SECRET_BYTES'),
     });
+    t.false(
+      String(refusal?.message).includes(plain),
+      'the refusal never quotes the value',
+    );
     t.is((await E(other).describe()).generation, 0, 'nothing written');
 
     // The browser path: a page writes a plain value through the gateway's
