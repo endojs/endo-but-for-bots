@@ -560,6 +560,9 @@ const makeOwner = ({ read, readKey, now, log }) => {
  * @property {(kind: string, fields?: Record<string, unknown>) => void} [log]
  */
 
+/** Backends whose catalogue one adapter incarnation keeps at once. */
+const MAX_OWNERS = 4 * limits.maxBackends;
+
 /**
  * @param {object} [options]
  * @param {typeof globalThis.fetch} [options.fetch]
@@ -568,8 +571,16 @@ const makeOwner = ({ read, readKey, now, log }) => {
  *   accepted and not needed)
  */
 export const makeCatalog = ({ fetch, now = () => Date.now() } = {}) => {
-  /** @type {WeakMap<any, ReturnType<typeof makeOwner>>} */
-  const owners = new WeakMap();
+  /**
+   * The cache per Backend presence. Held strongly (W2.9): with a WeakMap
+   * the adapter's presence was collected between calls, a later call
+   * arrived on a fresh presence of the same Backend, and every such call
+   * read the catalogue again (m2-catalog: a creation and the next listing
+   * 5.5 s apart read twice). Bounded: the oldest owner is dropped past
+   * MAX_OWNERS, which costs only a read.
+   * @type {Map<any, ReturnType<typeof makeOwner>>}
+   */
+  const owners = new Map();
 
   /**
    * @param {CatalogRequest} request
@@ -590,6 +601,10 @@ export const makeCatalog = ({ fetch, now = () => Date.now() } = {}) => {
       now,
       log,
     });
+    if (owners.size >= MAX_OWNERS) {
+      const [oldest] = owners.keys();
+      owners.delete(oldest);
+    }
     owners.set(backend, owner);
     return owner;
   };
