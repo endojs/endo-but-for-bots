@@ -1288,6 +1288,10 @@ missing `sendNow` could not be made on the M2 guard; `textOf.notBuilt` answered 
    retries [inferred]" (R4-77) and G-04's missing timeout (deviation, J-0403).
 9. **Prompt exec paragraph** (10): rewritten for the persistent scope in M2, not M5 (deviation,
    J-0403).
+11. **Acceptance 6, a cancel's end event** (PM ruling, 2026-11-18; J-9487): the event contract
+    stands. A turn cancelled mid-stream ends its live stream with `end { status: 'cancelled' }`;
+    no `abort` event is added. The milestone's "abort emitted" is read as this end event, and the
+    provider's server sees the connection closed (8.1).
 10. **Open for the PM:** the 4,096-receipt rate cap (J-9391) is unchanged; the archive's per-session
     ceiling of 131,072 turns (4,096 segments; sealing stops beyond it); whether R4-106's `[default]`
     values should be re-stated as 128/32 in the architecture; the adapter-side growth of
