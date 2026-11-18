@@ -18,7 +18,8 @@
  * - `echoTool` (`echo2`), `tools.make(name)` (a tool of any name: `exec`
  *   for `refused-builtin`, two `t` for `refused-duplicate`);
  * - hostile granted tools: `badSchemaTool` (not a function schema),
- *   `deepSchemaTool` (parameters nested 40 deep), `bigSchemaTool`
+ *   `deepSchemaTool` (parameters 34 values deep, the inspector's
+ *   bound is 32), `bigSchemaTool`
  *   (parameters of about 3,000 units, probe e), `bigAnswerTool` (answers
  *   300,000 characters), `throwingTool`;
  * - `bigHelp` (`help()` answers 200,000 characters, probe b);
@@ -168,7 +169,10 @@ export const makeFixtures = () => {
   const deepSchemaTool = hostileTool('deep', () =>
     harden({
       type: 'function',
-      function: { name: 'deep', description: 'deep', parameters: nested(40) },
+      // 16 levels put the innermost value at depth 34 (> SCHEMA_DEPTH 32).
+      // 40 (about 80 nested records) overflowed the workspace vat's stack
+      // while it sent its own answer: StackOverflow halted it (J-9693).
+      function: { name: 'deep', description: 'deep', parameters: nested(16) },
     }),
   );
   const bigSchemaTool = hostileTool('big', () =>
