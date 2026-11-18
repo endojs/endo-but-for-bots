@@ -11967,3 +11967,90 @@ Evidence: first command 13:23:35Z. Over 60 s: m2-secrets integration 168.4 s wal
 batch of 5, 321.4 s wall; perf gateway (shared) 332.5 s held; unit lane 68.1 s. Unit and adapter
 subsets 3-10 s; `tsc` 2 s; eslint 5-9 s.
 Fit: neutral.
+
+### J-10025 2026-11-18 XC adapter tools offered to the model (D-M4-9 as amended) - build
+Evidence: XC on claude/thix-int, commit 4212f9aff4. `toolSetFor` now takes, after the static table
+and before the dynamic sources, one generic entry per port tool whose `AdapterToolEntry` carries a
+`description` naming it and whose name no static entry has (`adapterToolEntries`, `site:
+'adapter'`, execute sends `{ opId, args }` to that port's tool object; one entry per port record,
+cached in a WeakMap while the ports live). `AdapterToolEntry` gains the optional `description:
+ToolDescription`; the agent host's `open` passes the `adapterTools` row's description; the
+accountStatus row carries `accountStatusDescription`. Static entries are never shadowed (a port
+`exec` with a description is not offered; `echo` keeps its static description) and a granted tool
+named like an offered adapter tool stays `refused-builtin`. Unit: `m5-xc-tools` (5 tests). Seven
+guard snapshot entries re-baselined: shapes.AdapterToolEntry, shapes.TurnPorts,
+m2Interfaces.Backend, m4Interfaces.PoolBackend (the description) and m5Shapes.ToolGrantInfo,
+m5Interfaces.SessionGrants, m5Interfaces.ToolGrant (the label, J-10026).
+Fit: good: a description that travels with the tool object is all the session needs; no M4 code in
+the vat.
+
+### J-10026 2026-11-18 XC ToolGrantInfo.label and the preset list order - build
+Evidence: commits 4212f9aff4, e8195a5401. The grants part's `grant(tool, source, label?)` keeps
+adoptTool's `toolName` and shows it as `ToolGrantInfo.label` (optional `shapes.Label`); an operator
+grant has none (contract 2.6). Presets `list()` keeps `chat-only` first as built; the contract text
+(2.1) and the presets.js header now say so (PM ruling b).
+Fit: neutral.
+
+### J-10027 2026-11-18 XC the exec membrane: tags kept, no model-made object leaves - fix
+Evidence: commit 46164df52e. (1) A tagged value lost its tag both ways: `measureArguments` and
+`wrapAnswer` rebuilt it from `Object.keys`, so a CopySet became a plain `{ payload }`. Both now
+rebuild it with the same tag (own `Symbol.for('passStyle')` and `Symbol.toStringTag` data
+properties; payload measured or wrapped). (2) What a model-made object could receive: model code has
+no `Far`, but builds a remotable by hand (`Symbol.for('passStyle')` is a shared intrinsic; shown in
+`m5-w54-exec`). Before, the membrane passed such an object to another vat as is; that vat could
+call it after the exec call ended (model code outliving its call, rule 12.13) and hand it raw
+presences, which reached model code unwrapped. Now a message to a wrapper may carry data and this
+call's wrappers only: an ended call's wrapper is refused with `powersExpired`, any other remotable
+with `MODEL_OBJECT_TEXT`, before anything is sent. Both new tests fail on the old membrane and pass
+on the new. (3) Residual, pinned by a test and left for the PM: `powers.store` (powers.js, not this
+unit's file) passes any remotable to the session; `lookup` in a later call answers it as a wrapper
+of itself, which can then leave; the inspector also calls it outside a call. One check in `store`
+closes it.
+Fit: poor for the old contract text ("other objects made in this vat pass as they are"): a vat
+cannot tell its own remotables from presences, so the rule has to be "only this call's wrappers
+leave".
+
+### J-10028 2026-11-18 XC M4 acceptance 7's model part and K5's second kill point - test
+Evidence: commits dc82cc2950, d467cfa893, d1aaffe7c4, d907ea0e35. `m4-accounts`: the first request
+offers `accountStatus`, the fake server answers a tool call, and the next request carries one
+`tool_result` (found by the wire's call id: the Anthropic wire names calls by the session's own id,
+not the provider's) with the rendered pool, both members and their `observed` provenance, not an
+error. First attempts failed on the test's own expectations (provider id; `Plan: max` is not shown
+once the refresh made the declared member observed), not on the product. `m5-grants-restart` K5b: a
+pooled session runs in a spare vat (`spare session 1`), so its worker is found by journal growth in
+a plain turn; vats sleep while they wait, so the worker is woken (`getInfo`, not awaited) and held
+with SIGSTOP (each incarnation as it appears, 20 ms ps poll) before the tool is released. Measured:
+the session's journal grows by 1 while its worker is held (the hub appends the exec vat's answer
+before the worker runs it), and after the SIGKILL the replay records the true result `slow: slow
+after` once; recovery settles the turn outcome-unknown; the tool ran once; one provider request;
+the next turn completes. So "Tool outcome unknown" is only for an answer that never reached the
+hub; the contract's K5 row now says so. First full-batch run hit the 600 s box: a failed step left
+the stopper polling; it now stops in a `finally`.
+Fit: good: SIGSTOP on a vat worker gives a kill point between two vats' cranks without a core hook;
+poor: the session label of a pooled session is not findable by key.
+
+### J-10029 2026-11-18 XC m5-presets split and the M5 integration files on the merged tree - verified
+Evidence: commit 79eb56a721: acceptance 2, K1, K2 stay in `m5-presets`; 13, 14 move to
+`m5-presets-inventory`; helpers in `_m5-presets.js`. Final batch at d907ea0e35, shared slots,
+`--jobs 3`, load 1.7-2.0, templates already built: 13 files, 434.4 s wall, all exit 0. Held s:
+m5-grants-restart 116.9, m5-presets 118.1 (was 334 in one file), m5-presets-inventory 94.0,
+m5-objects 103.4, m5-labels 99.0, m5-mentions-restart 93.9, m5-prompt 89.5, m4-accounts 89.4,
+m5-grants 79.1, m5-security 75.6, m5-mentions 75.5, m5-reachability 74.9, m5-snapshot 72.1. The
+first batch at 3a3d2e229f (templates rebuilt in it: m1b template 55.6 s) passed 11 files and failed
+m4-accounts (test expectation) and m5-grants-restart (box, J-10028). Unit lane (`corepack yarn
+test`): 1,241 passed, 110 skipped, 0 failed, 65 s. `tsc` 0; eslint 0 errors on changed files.
+Fit: good: every M5 file is under 2 minutes held once templates exist.
+
+### J-10030 2026-11-18 XC bundle sizes - measured
+Evidence: `node scripts/bundle-guest.mjs` before (bd9a8ec070 tip with X1/XA/XB) and after: session
+213,712 -> 214,690 (+978: generic adapter entries, grant label), exec 62,196 -> 63,741 (+1,545:
+membrane tags and leaving rule), factory 164,810 -> 164,836 (+26: the ToolGrantInfo shape in
+interfaces-m5.js). Limits unchanged (240,000 / 120,000).
+Fit: neutral; the session stays under X1's 215,000 target with 310 bytes to spare.
+
+### J-10031 2026-11-18 XC time record - verified
+Evidence: first command 13:53:08Z. Over 60 s: unit lane 66 s and 65 s; integration batch 1 (13
+files) 605.4 s wall; m4-accounts alone 130.8 (in batch), 76.1, 88.8 s; m5-grants-restart alone
+101.0, 110.8, 98.8, 99.0, 93.1, 100.9 s (diagnosis runs); a probe run of m5-grants 79 s; final
+batch 434.4 s wall. Everything else under 10 s.
+Fit: neutral.
