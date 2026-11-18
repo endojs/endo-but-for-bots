@@ -223,9 +223,11 @@ run(
     );
     t.deepEqual(held.hold, { reason: 'restart', message: texts.holdRestart });
     live2 = await slice.subscribe(session);
-    const go = await runTurn(slice, session, live2, 'go');
-    t.is(go.end.status, 'completed');
+    // A new message releases the restart hold; it queues behind the held
+    // two, so its receipt carries no turn yet (as in m2-queue.test.js).
+    await slice.submit(session, 'go');
     turns = await settled(session, 6);
+    t.is(turns[5].state, 'completed');
     t.deepEqual(
       turns.map(tp => tp.started.input),
       ['mention', 'check', 'stall', 'w1', 'w2', 'go'],
