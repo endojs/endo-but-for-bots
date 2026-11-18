@@ -430,7 +430,7 @@ export const makeFakePowers = ({
       /** @param {string} [cursor] */
       getContent: cursor => {
         enter('Turn', 'getContent', cursor === undefined ? [] : [cursor]);
-        return harden({ records: t.records });
+        return harden({ records: [...t.records] });
       },
     });
 
@@ -759,7 +759,7 @@ export const makeFakePowers = ({
       turnId: t.turnId,
       state: t.state,
       at: t.at,
-      records: t.records,
+      records: [...t.records],
       ...(t.archived && t.resolution ? { resolution: t.resolution } : {}),
     });
 
@@ -1159,7 +1159,7 @@ export const makeFakePowers = ({
       const t =
         s && s.turns.find(/** @param {FakeTurn} x */ x => x.turnId === turnId);
       if (!t) throw Error('unknown turn');
-      return harden({ records: t.records });
+      return harden({ records: [...t.records] });
     },
   });
 
