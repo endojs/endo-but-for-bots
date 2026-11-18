@@ -7,7 +7,8 @@
  *
  *   cd packages/thixotrope-harness && node perf/frames.perf.mjs
  *
- * FRAMES_N (default 200) samples per latency metric; LOOP_N (default 5)
+ * FRAMES_WINDOW_MS (default 15 s; it was FRAMES_N = 200 samples) per
+ * latency metric (pingFloor, inbound, outbound); LOOP_N (default 5)
  * runaway-loop runs; THIXOTROPE_CRANK_BUDGET overrides the budget.
  */
 import { performance } from 'node:perf_hooks';
@@ -20,6 +21,7 @@ import {
   stats,
   summarize,
 } from './_harness.mjs';
+import { runWindow, windowFields, windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first, J-0131).
 const { limits } = await import('../config/defaults.js');
@@ -27,7 +29,8 @@ const { PROBE_PROGRAM, giveHistory, makeProgram } =
   await import('../test/spikes/_spike.js');
 const { E } = await import('@endo/far');
 
-const N = Number(process.env.FRAMES_N ?? 200);
+/** Per latency metric (it was FRAMES_N = 200 samples). */
+const FRAMES_WINDOW_MS = windowMs('FRAMES_WINDOW_MS', 15_000);
 const LOOP_N = Number(process.env.LOOP_N ?? 5);
 /** M0 perf table: frames at frameBytes cost at most this over the ping floor. */
 const OVER_FLOOR_MS = 300;
@@ -81,6 +84,14 @@ await runPerf('frames', async ({ provision }) => {
     }
     return samples;
   };
+  /**
+   * Samples of `fn` over one window, with the window's fields.
+   * @param {() => Promise<unknown>} fn
+   */
+  const windowed = async fn => {
+    const w = await runWindow(fn, { ms: FRAMES_WINDOW_MS });
+    return { samples: w.samples, fields: windowFields(w) };
+  };
   const settings = {
     frameBytes,
     crankOutBytes: limits.crankOutBytes,
@@ -91,14 +102,15 @@ await runPerf('frames', async ({ provision }) => {
   const probe = await fresh();
   await sample(20, () => E(probe.vat).ping());
   let before = await run.counters();
-  const floorSamples = await sample(N, () => E(probe.vat).ping());
+  const floor = await windowed(() => E(probe.vat).ping());
+  const floorSamples = floor.samples;
   let after = await run.counters();
   const floorMedian = summarize(floorSamples).median;
   await stats('frames.pingFloor', floorSamples, {
     before,
     after,
     root: run.root,
-    extra: settings,
+    extra: { ...settings, ...floor.fields },
   });
 
   const payload = 'x'.repeat(frameBytes);
@@ -109,25 +121,35 @@ await runPerf('frames', async ({ provision }) => {
     extra: { ...settings, ok: first.ok, floorMedian },
   });
   before = await run.counters();
-  const inbound = await sample(N, () => E(probe.vat).len(payload));
+  const inbound = await windowed(() => E(probe.vat).len(payload));
   after = await run.counters();
-  await stats('frames.inbound', inbound, {
+  await stats('frames.inbound', inbound.samples, {
     budget: { median: +(floorMedian + OVER_FLOOR_MS).toFixed(3) },
     before,
     after,
     root: run.root,
-    extra: { ...settings, floorMedian, utf8Bytes: frameBytes },
+    extra: {
+      ...settings,
+      floorMedian,
+      utf8Bytes: frameBytes,
+      ...inbound.fields,
+    },
   });
 
   before = await run.counters();
-  const outbound = await sample(N, () => E(probe.vat).out(frameBytes));
+  const outbound = await windowed(() => E(probe.vat).out(frameBytes));
   after = await run.counters();
-  await stats('frames.outbound', outbound, {
+  await stats('frames.outbound', outbound.samples, {
     budget: { median: +(floorMedian + OVER_FLOOR_MS).toFixed(3) },
     before,
     after,
     root: run.root,
-    extra: { ...settings, floorMedian, utf8Bytes: frameBytes },
+    extra: {
+      ...settings,
+      floorMedian,
+      utf8Bytes: frameBytes,
+      ...outbound.fields,
+    },
   });
   await retire(probe.name);
 

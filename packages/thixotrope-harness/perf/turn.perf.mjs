@@ -43,9 +43,12 @@
  *   followed by a normal turn.
  * - `turn.frames`: the journal's frame kinds per turn kind.
  *
- * TURN_N (default 200) turns for turn.start; STREAM_TURNS (default 5) for
- * turn.delta (50 deltas each); ROUND_N (default 10) tool and plain turns.
- * IDLE_MS defaults to 1 h (perf/_harness.mjs), so the vat never sleeps.
+ * TURN_WINDOW_MS (default 60 s; it was TURN_N = 200 turns) of turns back to
+ * back for the turn.start rows, which carry `window` and `samples`;
+ * STREAM_TURNS (default 5) for turn.delta (50 deltas each); ROUND_N
+ * (default 10) tool and plain turns (frame counts, not latencies). IDLE_MS
+ * defaults to 1 h (perf/_harness.mjs), so the vat never sleeps. About 3
+ * minutes.
  */
 import {
   mkdirSync,
@@ -65,6 +68,7 @@ import {
   single,
   stats,
 } from './_harness.mjs';
+import { runWindow, windowFields, windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -79,7 +83,7 @@ const { makeSlice, sliceTemplate, waitFor } =
 const { liveProbeDir } =
   await import('../resources/agent-host/impl/channels.js');
 
-const TURN_N = Number(process.env.TURN_N ?? 200);
+const TURN_WINDOW_MS = windowMs('TURN_WINDOW_MS', 60_000);
 const STREAM_TURNS = Number(process.env.STREAM_TURNS ?? 5);
 const ROUND_N = Number(process.env.ROUND_N ?? 10);
 
@@ -260,9 +264,12 @@ async function measure(template, provision) {
 
   // ---- turn.start
   const engineBefore = (await run.client.call('status')).timings;
-  /** @type {Awaited<ReturnType<typeof turn>>[]} */
-  const starts = [];
-  for (let i = 0; i < TURN_N; i += 1) starts.push(await turn(perfInputs.start));
+  const startWindow = await runWindow(async () => turn(perfInputs.start), {
+    ms: TURN_WINDOW_MS,
+  });
+  const starts = startWindow.results;
+  const TURN_N = starts.length;
+  const startFields = windowFields(startWindow);
   const engineAfter = (await run.client.call('status')).timings;
   const lines = log();
   const requestAt = atByTurn(lines, 'request');
@@ -284,6 +291,7 @@ async function measure(template, provision) {
     extra: {
       from: 'Composer stamp (adapter clock)',
       to: 'request log line',
+      ...startFields,
       daemonDeliveriesPerTurn: +(
         (engineAfter.delivery.count - engineBefore.delivery.count) /
         TURN_N
@@ -318,6 +326,7 @@ async function measure(template, provision) {
       extra: {
         from: 'Composer stamp',
         to: 'round-start (startRound at the provider)',
+        ...startFields,
       },
     },
   );
@@ -329,12 +338,24 @@ async function measure(template, provision) {
           Number(requestAt.get(s.turnId)) - Number(roundStartAt.get(s.turnId)),
       ),
     ),
-    { extra: { from: 'round-start', to: 'request (dispatching answered)' } },
+    {
+      extra: {
+        from: 'round-start',
+        to: 'request (dispatching answered)',
+        ...startFields,
+      },
+    },
   );
   await stats(
     'turn.start.client',
     assertPaired(starts.map(s => Number(requestAt.get(s.turnId)) - s.clientAt)),
-    { extra: { from: 'control client before submit', to: 'request' } },
+    {
+      extra: {
+        from: 'control client before submit',
+        to: 'request',
+        ...startFields,
+      },
+    },
   );
 
   // Frames into the session from the submit to the request.

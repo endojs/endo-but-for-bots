@@ -9,7 +9,8 @@
  * Phase 1, the burst (one served copy of the m1a template, idle sleep 1 h):
  * one session of the real program on the scripted backend, followed by a
  * Live subscriber in this process (a control client, as J-0272 had it), 3
- * warm-up turns and GC_TURNS (default 150) one-chunk turns, each submitted
+ * warm-up turns, then one-chunk turns back to back for GC_WINDOW_MS
+ * (default 60 s; it was GC_TURNS = 150 turns), each submitted
  * through the Composer and awaited on the subscription. Per turn: the time
  * from the Composer stamp to the provider's `request` line (as
  * `turn.start`), the frames journaled into the session vat (decoded: deliver
@@ -27,8 +28,9 @@
  *
  * Phase 2, the restart wake (a second copy, idle sleep 2 s, crash bound 5):
  * GC_SESSIONS (default 10) sessions each run one turn, so the dying control
- * client and adapter hold their exports; then GC_RESTARTS (default 5)
- * SIGKILL restarts with every session asleep and checkpointed. Run 1 is the
+ * client and adapter hold their exports; then SIGKILL restarts with every
+ * session asleep and checkpointed, back to back for GC_RESTART_WINDOW_MS
+ * (default 90 s, at least 2 runs; it was GC_RESTARTS = 5 runs). Run 1 is the
  * first restart after the setup. A vat counts as woken when its worker row
  * reports `wakes` > 0 since the restart; where the daemon does not report
  * `wakes`, when its journal grew (every journaled frame was then a
@@ -51,6 +53,7 @@ import {
   single,
   stats,
 } from './_harness.mjs';
+import { runWindow, windowFields, windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -63,9 +66,11 @@ const { killStrays, startFromTemplate } =
 const { journalTail, makeSlice, round1, sliceTemplate, untilAsleep } =
   await import('../test/integration/_m1a-slice.js');
 
-const GC_TURNS = Number(process.env.GC_TURNS ?? 150);
+/** The burst: turns back to back for this window (it was GC_TURNS = 150). */
+const GC_WINDOW_MS = windowMs('GC_WINDOW_MS', 60_000);
 const GC_SESSIONS = Number(process.env.GC_SESSIONS ?? 10);
-const GC_RESTARTS = Number(process.env.GC_RESTARTS ?? 5);
+/** SIGKILL restarts for this window, at least 2 (it was GC_RESTARTS = 5). */
+const GC_RESTART_WINDOW_MS = windowMs('GC_RESTART_WINDOW_MS', 90_000);
 
 /** @param {number[]} values */
 /**
@@ -217,9 +222,12 @@ async function burst(template, root) {
     for (let i = 0; i < 3; i += 1) await turn();
     const gcBefore = (await status()).gc;
     const t0 = performance.now();
-    /** @type {Awaited<ReturnType<typeof turn>>[]} */
-    const turns = [];
-    for (let i = 0; i < GC_TURNS; i += 1) turns.push(await turn());
+    const burstWindow = await runWindow(async () => turn(), {
+      ms: GC_WINDOW_MS,
+    });
+    const turns = burstWindow.results;
+    const GC_TURNS = turns.length;
+    const burstFields = windowFields(burstWindow);
     const wallMs = round1(performance.now() - t0);
     const after = await status();
     const name = namer(after.workers);
@@ -237,6 +245,7 @@ async function burst(template, root) {
         from: 'Composer stamp (adapter clock)',
         to: 'request log line',
         turns: GC_TURNS,
+        ...burstFields,
         wallMs,
       },
     });
@@ -264,6 +273,7 @@ async function burst(template, root) {
       metric: 'gc.burst.frames',
       unit: 'frames',
       turns: GC_TURNS,
+      ...burstFields,
       sessionFramesPerTurn: +(
         turns.reduce((s, t) => s + t.frames, 0) / GC_TURNS
       ).toFixed(2),
@@ -297,6 +307,7 @@ async function burst(template, root) {
       metric: 'gc.burst.hub',
       unit: 'frames',
       turns: GC_TURNS,
+      ...burstFields,
       counts: gcDelta(gcBefore, after.gc, name),
       reported: after.gc !== undefined,
       commit: (await runIdentity()).commit,
@@ -341,65 +352,70 @@ async function restarts(template, root) {
       keys.some(k => w.debugLabel === `session ${k}`);
     /** @type {any[]} */
     const runs = [];
-    for (let run = 1; run <= GC_RESTARTS; run += 1) {
-      await untilAsleep(slice.workers, isIdle);
-      const before = new Map(
-        (await slice.workers()).filter(isIdle).map(w => [w.debugLabel, w]),
-      );
-      await served.kill();
-      await killStrays(served.root);
-      const { servedMs } = await served.restart();
-      // Late startup work (the hub's outbox, forgotten sessions' GC).
-      await delay(3000);
-      const status = await served.client.call('status');
-      const name = namer(status.workers);
-      const after = status.workers.filter(isIdle);
-      const counted = after.some(
-        (/** @type {any} */ w) => w.wakes !== undefined,
-      );
-      const woken = after
-        .filter((/** @type {any} */ w) =>
-          counted
-            ? Number(w.wakes) > 0
-            : journaled(w) > journaled(before.get(w.debugLabel)),
-        )
-        .map((/** @type {any} */ w) => w.debugLabel);
-      /** @type {Record<string, Record<string, number>>} */
-      const grown = {};
-      for (const w of after) {
-        const n = journaled(w) - journaled(before.get(w.debugLabel));
-        if (n > 0) {
-          /** @type {Record<string, number>} */
-          const kinds = {};
-          for (const k of journalTail(served.root, w.workerId, n))
-            kinds[k] = (kinds[k] ?? 0) + 1;
-          grown[w.debugLabel] = kinds;
+    const restartWindow = await runWindow(
+      async index => {
+        const run = index + 1;
+        await untilAsleep(slice.workers, isIdle);
+        const before = new Map(
+          (await slice.workers()).filter(isIdle).map(w => [w.debugLabel, w]),
+        );
+        await served.kill();
+        await killStrays(served.root);
+        const { servedMs } = await served.restart();
+        // Late startup work (the hub's outbox, forgotten sessions' GC).
+        await delay(3000);
+        const status = await served.client.call('status');
+        const name = namer(status.workers);
+        const after = status.workers.filter(isIdle);
+        const counted = after.some(
+          (/** @type {any} */ w) => w.wakes !== undefined,
+        );
+        const woken = after
+          .filter((/** @type {any} */ w) =>
+            counted
+              ? Number(w.wakes) > 0
+              : journaled(w) > journaled(before.get(w.debugLabel)),
+          )
+          .map((/** @type {any} */ w) => w.debugLabel);
+        /** @type {Record<string, Record<string, number>>} */
+        const grown = {};
+        for (const w of after) {
+          const n = journaled(w) - journaled(before.get(w.debugLabel));
+          if (n > 0) {
+            /** @type {Record<string, number>} */
+            const kinds = {};
+            for (const k of journalTail(served.root, w.workerId, n))
+              kinds[k] = (kinds[k] ?? 0) + 1;
+            grown[w.debugLabel] = kinds;
+          }
         }
-      }
-      const gate = woken.length === 0;
-      runs.push({ run, woken: woken.length, gate });
-      await single('gc.restart.run', servedMs, {
-        budget: { value: 10_000 },
-        extra: {
-          run,
-          sessions: after.length,
-          wokenSessions: woken,
-          wokenBy: counted ? 'wakes' : 'journal grew',
-          gate,
-          journaledAcrossRestart: grown,
-          heldFrames: Object.fromEntries(
-            after
-              .filter((/** @type {any} */ w) => Number(w.heldFrames ?? 0) > 0)
-              .map((/** @type {any} */ w) => [w.debugLabel, w.heldFrames]),
-          ),
-          engineSinceStart: status.timings,
-          hubGcSinceStart: gcDelta(undefined, status.gc, name),
-          awakeWorkers: status.workers.filter((/** @type {any} */ w) => w.awake)
-            .length,
-        },
-      });
-      await slice.refresh();
-    }
+        const gate = woken.length === 0;
+        runs.push({ run, woken: woken.length, gate });
+        await single('gc.restart.run', servedMs, {
+          budget: { value: 10_000 },
+          extra: {
+            run,
+            sessions: after.length,
+            wokenSessions: woken,
+            wokenBy: counted ? 'wakes' : 'journal grew',
+            gate,
+            journaledAcrossRestart: grown,
+            heldFrames: Object.fromEntries(
+              after
+                .filter((/** @type {any} */ w) => Number(w.heldFrames ?? 0) > 0)
+                .map((/** @type {any} */ w) => [w.debugLabel, w.heldFrames]),
+            ),
+            engineSinceStart: status.timings,
+            hubGcSinceStart: gcDelta(undefined, status.gc, name),
+            awakeWorkers: status.workers.filter(
+              (/** @type {any} */ w) => w.awake,
+            ).length,
+          },
+        });
+        await slice.refresh();
+      },
+      { ms: GC_RESTART_WINDOW_MS, min: 2, few: 3 },
+    );
     // A held GC frame goes with the next real delivery: the vat still works.
     const one = await E(slice.factory).findSession(keys[0]);
     const tTurn = performance.now();
@@ -411,6 +427,7 @@ async function restarts(template, root) {
     emit({
       metric: 'gc.restart',
       runs,
+      ...windowFields(restartWindow),
       gate: runs.every(r2 => r2.gate),
       gateWokenSessions: 0,
       idleSessions: GC_SESSIONS,
