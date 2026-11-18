@@ -9040,3 +9040,66 @@ later takers for 22 minutes (and 46 minutes before the restart) while other lane
 released slots, so a single short run can wait longer than all its work.
 Decision: (1) and (2) to the PM as core candidates; (3) to the lock's owner (a FIFO ticket for
 shared waiters).
+
+### J-9470 2026-11-18 M0/M1 perf checks over fixed windows, each under the box - perf
+Evidence: M2-P2 at a076e24bbb (windows, crank and hub split, long states by `importState`),
+f403bde907 (session and pool create rows windowed), 9fb90081b2 (hub.sessions by import to 20
+sessions with a slope to 50; restart split by part). Each file ran ONCE in a shared slot
+(`node scripts/run-lock.mjs --shared -- node perf/<f>.perf.mjs --shared`), load average 3.3-6.6,
+rows marked under load, not results. Time held in the slot (runs.jsonl), before -> after:
+crank 40-50 min (its long table 2.5 h) -> crank 175 s, crank.mid 157 s, crank.late 284 s; hub
+10-20 min -> hub 139 s, hub.growth 257 s, hub.sessions 354 s; turn 4 min -> 178 s; restart 6 min
+-> 591 s as one file (9 s from the box) -> restart 297 s, restart.crash 227 s; gc 6 min -> 457 s;
+concurrency 3 min -> 255 s; exec 3 min -> 270 s; frames (few min) -> 165 s; session 3 min ->
+236 s; pool 3 min -> 161 s; install 86 s and crash 341 s unchanged (single installs and scenario
+events, not windows). Rows carry `window` and `samples` (`perf/_window.mjs`), row names kept.
+Dropped: crank's long-session table (grown to 5,000 turns; points 200/1,000/4,000): 1,000 imported
+tool turns is the largest point (an import of 4,000 alone is about 9 min, J-9404), slope late vs
+mid, the table to 5,000 is history.perf by template; hub's 50-session point: projected from 10 and
+20 (`hub.growth.slope`, `projected: true`). Kept as counts: exec.first and exec.sends (fresh
+session or a 100-send body per sample), pool.poolAwake and pool.refill (scenarios),
+install.factory.
+Reading: every owned file now fits the box under load with at least 4 minutes to spare except gc
+(457 s, 143 s spare): its time is the 11-session setup and SIGKILL restarts (14-30 s each under
+load). Misses under load (exit 1): restart.serving median 14.0 s (budget 10 s; 5.6-9.0 s unloaded
+earlier), restart.crashingSession 23.4 s (15 s; C-8, C-9, by design), gc.restart.run 14-30 s,
+concurrency.10.turnStart 1,748 ms (562), session.create.pool 2,031 ms (750), exec.first 1,479 ms
+(750), hub.growth 1.49 x fresh. exec.trivial: 3 samples in 35 s, median 9,095 ms, min 7,249 ms
+(budget 250; M1b recorded 179-191 ms): 40 x the M1b figure is more than load explains (turn.start
+in the same hour: 275 ms) and needs the exclusive pass to tell (see forPM).
+Decision: recorded; the exclusive pass belongs to a later unit.
+
+### J-9471 2026-11-18 hub.sessions and restart did not fit; what was changed - perf
+Evidence: hub.sessions as first converted (50 sessions created cold, one turn each) timed out at
+600 s (exit 124) after the 10-session point; built by `importState` instead it timed out again
+(601 s): the 9-session import took 92 s and 88 s in two runs (0.1 sessions/s under load; cold
+creates measured 3-4 s unloaded, 7.0 s median under load in session.perf). With GROWTH_STEPS
+"10,20" it held 354 s: imports 88 s each, `hub.persist` 20.9 / 31.2 / 28.4 ms per delivery
+(fresh / 10 / 20), disk 1.05 MB; slope per 10 sessions +120,643 bytes, projected 1.07 MB at 50
+(budget 2 MB). restart.perf with both parts held 591 s; its setup of 11 sessions took 210 s under
+load (115 s in a later run).
+Reading: a session costs about the same to import as to create (the session vat's creation and
+program evaluation dominate both); the import saves the turn, not the vat. The hub's disk size
+moves with log compaction (the fresh point was not the smallest), so a two-point byte slope is
+noisy; the ms-per-delivery slope under load was negative (-2.8 per 10 sessions) and means
+nothing until the exclusive pass.
+Fit: poor fit for many-session states built per run: the cost is per vat, so the only way to 50
+sessions inside the box is a cached template (`perf/_long-template.mjs` has a "busy" kind of the
+right shape but another backend; a hub variant is a later step, not done here).
+Decision: 20 sessions kept, 50 projected and labelled; restart split into restart.perf.mjs and
+restart.crash.perf.mjs (crash part sets up one idle session).
+
+### J-9472 2026-11-18 Waiting for a shared slot dominates a perf unit - process
+Evidence: runs.jsonl, agent M2-P2, 2026-11-18: 22 shared runs held 5,878 s in all (two cut by the machine restart); waits included
+3,243 s (session), 1,736 s (restart.crash), 2,985 s and 5,002 s (crank and hub before the machine
+restart), 799 s (crank.late). A run that asked at 08:21 was granted at 09:15 while later askers
+were served first.
+Reading: the slot pool is not first come, first served; a long waiter can starve while six slots
+turn over. The unit's wall time was set by waits, not by the boxes.
+Decision: for the PM (a FIFO ticket for shared takers would bound the wait).
+
+### J-9473 2026-11-18 M2-P2 time record - process
+Evidence: resumed run 08:19:14Z to the end of this entry's commit; earlier run cut off by the machine
+restart at about 06:55Z. Commands over 60 s: every perf run above (held times in J-9470, waits in
+J-9472), and the wait loops for them; no cargo, no exclusive mode, no core change.
+Decision: recorded.
