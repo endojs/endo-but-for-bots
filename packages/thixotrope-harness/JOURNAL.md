@@ -8122,3 +8122,38 @@ W5.5 and W5.6), `exec-m5` (W5.5), `presets` (W5.1), `mentions` (W5.7) and a new 
 both sides inside one window, and each probe has a cap, so every file is at most about 5.5
 minutes and the regression at most 69 slot-minutes (about 17 minutes on four slots).
 Decision: as described.
+
+### J-0640 2026-11-18 M4 W4.2 pool core built - build
+Evidence: commit `cebe2b0911`; `AH/subscriptions/{pool,rate-limit-headers,pool-state}.js`;
+`test/adapter/m4-pool{,-headers,-state}.test.js`, 26 tests, about 1 s, no supervisor.
+Reading: hosted-agent `subscription-pool.js` and `rate-limit-headers.js` (1315bef86) ported with
+`PoolMember` and `Session` presences as Map keys and no pinning (D-M4-6). Readings are the
+adapter's `Reading` (times in ms, windows `primary`/`secondary`), not the reference's ISO text.
+Additions: `standingOf` reports `blockedDated` and `selectMembers` `earliestDatedBackMs`, so the
+"expected back at" of `m4TextOf.subscriptionsExhausted` uses only provider-named times; tickets
+and the core answer `earliestBackMs()`. `marks.retain` drops a departed member's mark in memory
+only and reports nothing, because a mark is per member and shared by every pool it is in (3.1).
+The bridge loads `poolState` once per sink, forgets a rejected load, sends marks at once with
+any waiting stamps riding along, and coalesces stamps per session (one timer per pool,
+`servedFlushMs` 1 s, chunks of 32, at most 256 waiting).
+Decision: as described.
+
+### J-0641 2026-11-18 M4 W4.2 selection cost - perf
+Evidence: commit `cebe2b0911`; an in-process timing (not a perf file; W4.8 owns
+`subscriptions.select`): 16 members with two windows each, 256 sessions, select plus served per
+sample, 10 s window: 134,156 samples, median 0.058 ms, p99 0.21 ms; budget median <= 0.5 ms,
+0 deliveries (none: the core sends nothing itself).
+Reading: well inside the budget; the 60 s check in `perf/subscriptions.perf.mjs` (W4.8) is the
+record of it.
+Decision: none.
+
+### J-0642 2026-11-18 Pool state in the manager, decisions in the adapter - fit
+Evidence: J-0640; m4-interfaces 5.1; bridge test "core and bridge": one refusal is one
+`poolChanged` delivery, 31 served stamps over 62 s on one sticky member are at most 2.
+Reading: good fit. Selection is a sort of 16 per round and runs in Node at about 0.06 ms; only
+facts that must survive a restart (marks, served stamps) reach the vat, by `sendOnly`, so a round
+costs 0 manager cranks and a refusal one. Object keys need no translation: the presences the
+sink answers are the Map keys, and the guards (`PoolChange`, `PoolState`) accept what the core
+emits unchanged. Cost: a lost `sendOnly` at a crash is silent, so the design must tolerate one
+extra refusal per member after a restart (K-2), which it does.
+Decision: none.
