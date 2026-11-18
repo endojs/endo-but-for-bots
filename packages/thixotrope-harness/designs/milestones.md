@@ -6,7 +6,8 @@ section 9, budgets in its section 11). All code is written in the harness checko
 `H/` = `packages/thixotrope-harness/`. `pkg/` = `packages/thixotrope/`. `AH/` =
 `H/resources/agent-host/impl/` (the run-time-loaded implementation, D-14).
 Endo reference files are read with `git -C <T> show 1315bef86:<path>`. Spec items are cited as
-SPEC:<line> in `endo-harness-spec.md`. M0 and M1a are done: what M0 measured and changed is in
+SPEC:<line> in `endo-harness-spec.md`. M0, M1a and M1b are done and M2 is done with open items
+(listed at the top of its section): what M0 measured and changed is in
 `m0-results.md` (which also keeps every core-change candidate's status), M1a's outcome table is in its
 section below, and decisions or budgets changed because of them are listed in "Changes after M0 and
 M1a" at the end of this file.
@@ -484,6 +485,34 @@ a session takes at most 4,096 Composer submissions in 24 h (J-9391).
 
 ## M2. Turn loop completeness on API-key backends (with minimal secrets)
 
+**Status: done with open items** (M2-CLOSE, 2026-11-18; the outcome table at the end of this
+section). Every acceptance item passes except one ratio of 15 at 1,000 turns; reviews M2-R1, M2-R2
+(reject, fixed by M2-FIX) and M2-R3 are closed except the items below. Open:
+
+- **major** (security, contract): `SecretWriter.replace` still accepts a plain string from a
+  remote (hub) caller (M2-R1 (b), J-9486). The fix (a SealedBox-only exo guard plus an in-process
+  `replaceLocal` or page-side sealing) changes M3 A-11 and M4's secrets contract: for the lane
+  merge.
+- **major** (perf): `checkpoint.stall` p99 1.40 x on a session grown by turns, 1.05 x on imported
+  ones; the cause is the core's cadence snapshot (C-24, J-9494). Core candidate.
+- **fail** (acceptance 15 at 1,000 turns, `archive.flat.hubRow.at1000`): hub row characters
+  1.39 x the 200-turn row while entries are 1.00 x; the read caught one answer owed (J-9496). Not
+  re-based; a read at a quiescent point is the proposed procedure fix, for the PM.
+- **fail** (perf, carried or recorded): `disk.session` 41.7 MB against 25 MB (C-22's import
+  high-water); `session.create` with the pool 1,097 ms against 750; `concurrency.10` turn start
+  3.2 x single and crank p95 500 ms (C-2's rest); `hub.growth` projected to 50 sessions 3.26 MB
+  (C-2, CC-051/CC-060); `crash.restart.bound5` (C-8, C-9, by design).
+- **known failure, deferred by PM ruling 4**: the 100 KiB inline probe is refused by the vat's
+  guard, not before sending (C-25).
+- **minor** (from M2-FIX, not fixed): delete racing a session's first seal (a leak); delete step 2
+  skipping on any `blobPage` error; export of a busy session failing when a seal lands between
+  pages; usage of a cancelled round dropped when the cancel settles first; one pending diff per
+  change (R4-61, an M3 contract change); origin binding of a Secret's key, per-purpose subkeys and
+  `logPath` confinement; an unapplied seal answer kept on disk until that ordinal is sealed again
+  (deliberate).
+- **not run**: `secrets.read` (no perf file carries it; W2.3 measured 0.02 ms); the repeated
+  SIGKILL series of acceptance 16 after the M2-FIX archive change (one run per point here).
+
 **Goal.** Make the headless core correct and complete for daily use on the API-key backends: real
 streamed providers, the full queue, exactly-once submission, stop, failure handling, usage, paging,
 delete with reclamation, data-only export/import, and fixed prompt composition.
@@ -637,61 +666,96 @@ removes the `interrupted` window); awkward for time-window checks (time stamped 
 `m2-interfaces.md` 4.12), presets (M5), UI (M3). The record archive is **built in M2** (D-M2-1: W2.5
 vat side, W2.8 adapter side), not in M13.
 
-**Outcome (W2.9 integration; not yet reviewed, M2 is not marked done).** Release worker
+**Outcome (M2 close-out, M2-CLOSE; replaces W2.9's table, whose numbers stay in J-9400..J-9414).**
+Regression run at `d7fce8e46c` in shared slots (load 2.3-5, three template builds beside it).
+Recorded perf pass at `6628dbf8a1` (the tree differed only in `README.md` and `designs/process.md`,
+so rows say `-dirty`; `perf/queue.perf.mjs` rerun after the fix of J-9495), every file one after
+another in exclusive mode, 2026-11-18 10:48-11:58 UTC, load 1.1-2.4. Release worker
 `367e78ad...`, crank budget 50 M, slot ceiling 4,000,000, allocation collection schedule, log hub
-store, Node 22.23.4, Apple M3 Max shared with other agents (load 1.6-3.5 for the integration lane,
-6-13 for the second long-session run, throughput and the 10,000/30,000-turn rows, when another
-checkout's lane ran beside this one). Integration at `81911ab991`..`84fc8cb388` (W2.9 fixes in
-J-9401); perf at `84fc8cb388`. Verdicts use the 1.25 x rule: "miss" is over the budget, "**fail**"
-over 1.25 x. JSON lines and readings are in J-9400..J-9414.
+store, Node 22.23.4, Apple M3 Max. Verdicts use the 1.25 x rule: "miss" is over the budget,
+"**fail**" over 1.25 x; misses are recorded, never re-based. JSON lines and readings are in
+J-9495..J-9499.
 
-| item | result | verdict | entries |
+| item | proving test (this run) | result | verdict |
 |---|---|---|---|
-| 1 more than one delta per reply, OpenRouter and Anthropic (`m2-providers`) | 5 deltas each; turn 333-448 ms | pass | J-0423, J-9400 |
-| 2 R4-43 / R4-45 texts, synthesized id, the turn continues (`m2-turns`) | pass | pass | J-0470 |
-| 3 round limit 2 ends with R4-47, completed | pass at limit 2 in Node (real Endpoint, OpenRouter path); a 100-round turn in a vat (270 ms a round, flat); the real 1,024-round limit takes about 280 s alone, over the 5-minute file budget: opt-in `M2_TURNS_ROUND_LIMIT=1`, known failure | pass (Node) / known failure (vat at 1,024) | J-0471 |
-| 4 queue 100 refused, edit / delete / send-now, duplicate request id (`m2-queue`) | pass | pass | J-0450 |
-| 5 held `restart`: a new message or send-now releases in FIFO order | pass | pass | J-0450 |
-| 6 cancel mid-stream: the server sees the close; `cancelled` | pass (close 51 ms after `cancel`); the stream ends `end { status: 'cancelled' }`, not `abort` (contract 6; the milestone's "abort emitted" is for the PM, J-0424) | pass (as contracted) | J-0424 |
-| 7 replace the key, next turn uses it; revoke, next turn fails with no body; no value in the state dir (`m2-secrets`) | pass: the server saw the first, then the second key with no restart; a stale generation refused; a 401 with a body records the status only; revoked: `Secret operation failed: "REVOKED"`, no request; grep of 48 files / 211 MB, every encoding: 0 hits, control found | pass | J-9402 |
-| 8 429 Retry-After retried only while nothing was delivered | pass (1.36 s turn with one 429) | pass | J-0423 |
-| 9 300 turns, pages back to turn 1, every page <= `frameBytes` (`m2-history`) | pass (19 pages, largest 15,601 B) | pass | J-0461 |
-| 10 two clients see the same queue and transcript | pass | pass | J-0450 |
-| 11 default model change reaches new sessions only (`m2-catalog`) | pass: each request names its own model, windows 163,840 / 8,192 from the catalogue, R4-20 order, R4-21 refusals list nothing; one catalogue read for the file after the fix of J-9403 | pass | J-9403 |
-| 12 failed and outcome-unknown turns in the next context; never-dispatched not | pass | pass | J-0470 |
-| 13 SIGKILL during delete and during create; `row-removed` to two viewers <= 500 ms (`m2-lifecycle`; `m1b-live` 9) | pass; row-removed 5 ms after the answer; 6 runs of each SIGKILL case, delete killed 0-800 ms after `deleting`, create 168-3,544 ms after the call | pass | J-0480, J-9409 |
-| 14 export then import into fresh state: same sessions, history, queues | pass (1,370 records; re-export identical). Presets are M5 | pass | J-0483 |
-| 15 a 5,000-turn session behaves like a 200-turn one (`perf/history.perf.mjs`, built by `importState`, logContext digests off) | run 1 / run 2: wall per turn 0.98 / 0.94 x; `turn.start` 1.74 x (262 vs 151 ms) / 0.85 x (275 vs 322), all <= 350 ms; snapshot bytes 0.96 x; slot capacity 1.00 x; hub row 1.01-1.02 x; same at 1,000 (0.95-1.00 x); rebuild 85-359 ms with the same per-turn context digests; history walks newest to turn 1, every turn once, at 1,000 and 5,000 | pass (the one `turn.start` ratio over 1.25 x did not repeat: `turn.start` medians are bimodal at 140 / 270 ms) | J-9404 |
-| 16 SIGKILL during a seal (`m2-archive-restart`) | pass; 6 runs x 4 points (24 kills) | pass | J-0461, J-9409 |
-| M1a and M1b files (regression) | all pass, one file per invocation; `m1b-live` 9 delete now a plain test | pass | J-9409 |
-| SIGKILL repeats (M1a 5, 6, 7, held ports x 5 delays; M1b 3/10 x 6; 8 x 6; 12 x 5 (+6); M2 13 x 6; seal x 6) | 81 kill cases (20 + 6 + 6 + 13 + 12 + 24); no duplicated provider request, tool run or exec evaluation; no lost or duplicated record; one `m1b-pool-restart` case (+1,000 ms) timed out at 4 min with no row, not reproduced in 6 reruns | pass, one unexplained timeout reported | J-9409 |
-| Daemon-level secrets grep | 0 hits | pass | J-9402 |
-| `queue.enqueue` (150 ms) | 126 ms (0-99 waiting), 61 ms shallow; 279 ms at 75-99 waiting | pass (deep end 1.9 x) | J-0450, J-9411 |
-| `history.page` 1,000 turns (300 ms) | newest page 332 ms (run 1); archived page 41 ms | miss (1.11 x) / pass | J-9406 |
-| `context.rebuild` 1,000 / 5,000 turns (5 s) | 290 / 359 ms (354 run 2); 429 ms at 10,000, 540 ms at 30,000 | pass | J-9404, J-9410 |
-| `hub.row` 1,000 / 5,000 turns | 10,193 / 10,260-10,326 chars, 211-212 entries (516 KB, 10,012 without the archive) | recorded; J-9335 (a) not needed for length | J-9404 |
-| `session.heap` 1,000 / 10,000 / 30,000 | 794,880 / 791,552 / 794,624 slots (20 % of 4,000,000; plain turns imported); 1.07 M for imported tool turns, 0.41 M grown | recorded (flat) | J-9405, J-9410 |
-| `journal.snapshot` 1,000 / 10,000 / 30,000 (500 ms / 1 s / recorded) | 429 / 395 / 313 ms; 34.7-34.8 MB snapshot at each | pass / pass / recorded | J-9410 |
-| `checkpoint.stall` p99 (1 s) | 2.2-3.1 s p99 of per-turn wall time in every 100-turn window (one outlier turn per window; snapshot turns <= 1.0 s) | **fail** | J-9408 |
-| `provider.overhead` (5 ms; 0 deliveries) | 0.5-0.6 ms; 0 TurnSink messages while streaming (in process) | pass | J-0423 |
-| `secrets.read` (1 ms) | 0.018-0.025 ms | pass | W2.3 |
-| `restart.serving` 50 x 300 turns by import (15 s; 0 woken) | 4.4-5.6 s, 0 woken, 0 crashes | pass | J-9412 |
-| `throughput` 20 sessions (journal if < 50/s) | 29.3 deliveries/s at load 8-9 (442 ms per delivery, 5.2 turns/s) | recorded, under 50/s | J-9412 |
-| `disk.session` 300 turns (25 MB plus blobs) / after delete | 41.5 MB (40.9 MB the vat snapshot of an imported session) / all returned | **fail** / pass | J-0482, J-9405 |
-| too-big probes | 200,000 characters accepted (turn 1.2 s), 200,001 refused by the Composer's guard; a 100 KiB string to `startTurn` refused by the session vat's guard, no halt, but delivered (known failure: "refused before sending") | pass / known failure | J-9407 |
-| `archive.flat.*` (5,000 against 200, <= 1.25 x) | turn 0.94-0.98, snapshot 0.96, snapshot ms 0.43-0.89, slots 1.00, hub row 1.01-1.02 x, `turn.start` see 15 | pass | J-9404 |
-| `archive.seal` | turns that sealed 633-795 ms against 613-673 ms for others (median); adapter side 17-24 ms (W2.8) | recorded | J-9404, J-0491 |
-| `archive.disk` | 2,255-2,281 B of segment and 1,452-1,459 B of `context.jsonl` per archived turn | recorded | J-9404 |
-| `session.program` (200 KB) | 186,328 bytes | pass (13.7 KB left) | J-0462 |
-| `session.create` with the pool (750 ms) | 1,131 ms at load 6 (`m1b-pool`) | **fail** at that load (849-864 ms at load 2, J-9382) | J-9411 |
-| Unit lane | 691 passed, 0 failed, 56 skipped | pass | J-9400 |
+| 1 more than one delta per reply | `m2-providers` acceptance 1 | 5 deltas each for OpenRouter and Anthropic; turn 481 / 516 ms | pass |
+| 2 R4-43 / R4-45 texts, synthesized id, the turn continues | `m2-turns` "2: tool texts ..." | pass; a 100-round turn at 278 ms a round, flat | pass |
+| 3 round limit ends with the R4-47 text, completed | Node at limit 2 (unit lane); `m2-turns` "3: the round rate ..." in a vat | Node: pass at the limit. Vat: 5.3 rounds/s over a 60 s window (318 rounds, median 240 ms), so a 1,024-round turn takes about 193 s (253 s at the last-20 rate): derived, not run | pass (limit proved in Node; vat rate within the box) |
+| 4 queue at 100 refused, edit / delete / send-now, duplicate id | `m2-queue` "4 and 10" | pass; `queue.enqueue.e2e` median 125 ms over 0-99 waiting, 72 ms shallow | pass |
+| 5 held `restart`: a new message or send-now releases, FIFO | `m2-queue` "5" | pass | pass |
+| 6 cancel mid-stream: the server sees the close; `cancelled`; stream ends `end { status: 'cancelled' }` | `m2-providers` acceptance 6 | close seen 103 ms after `cancel` | pass |
+| 7 replace the key; revoke; no value in the state dir | `m2-secrets` acceptance 7 | pass; grep of 48 files / 207 MB for every encoding: 0 hits, controls found | pass |
+| 8 429 Retry-After retried only while nothing was delivered | `m2-providers` acceptance 8 | 1.52 s turn with one 429 | pass |
+| 9 300 turns, pages back to turn 1, every page <= `frameBytes` | `m2-history` "9" | 21 pages, largest 15,601 B, 5 segments, no `.part` | pass |
+| 10 two clients see the same queue and transcript | `m2-queue` "4 and 10" | pass | pass |
+| 11 default model change reaches new sessions only | `m2-catalog` acceptance 11 | pass; one catalogue read | pass |
+| 12 failed and outcome-unknown turns in the next context; never-dispatched not | `m2-turns` "12" | pass | pass |
+| 13 SIGKILL during delete and create; `row-removed` to two viewers <= 500 ms | `m2-lifecycle` (both tests) | row removed 5 ms after the answer; delete killed at 0 ms: after restart the doomed archive directory and blobs are gone (82 bytes left are the kept session's directory); create killed 320 ms after the call: only `s2` listed | pass |
+| 14 export, import into fresh state: same sessions, history, queues | `m2-lifecycle-export` "14" | 1,370 records; export 18.5 s, import 32.5 s; presets are M5 | pass |
+| 15 a 5,000-turn session behaves like a 200-turn one; the same at 1,000 | `perf/history.perf.mjs`, `perf/history.restart.perf.mjs` (exclusive) | 5,000 / 200: turn 1.02 x, `turn.start` 1.07 x (264 ms), snapshot bytes 1.04 x, ms 0.95 x, slots 1.04 x, hub row 1.00 x (entries 0.98 x); rebuild 253 ms, same context; newest page 252 ms, archived 33 ms; walk 5,003 turns once each, 358 pages, none over `frameBytes`. 1,000 / 200: every ratio 0.96-1.04 x **except hub row characters 1.39 x** (13,010 against 9,374; entries 0.995 x; the 1,000-turn read caught one answer owed, the 200-turn read none); rebuild 219 ms; walk 1,003 once each | pass at 5,000; **fail** at 1,000 on one ratio (row characters), open |
+| 16 SIGKILL during a seal at S, A2, A3, Z | `m2-archive-restart` (S, A3), `m2-archive-restart-2` (A2, Z) | pass, one run each here (M2-R3: 20 kills at the four points before the M2-FIX archive change; not repeated after it) | pass |
+| M1a and M1b files (regression) | all 13 files | all pass; `m1b-live` 9 passed under load this time | pass |
+| Unit and adapter lanes | `corepack yarn test` | 727 passed, 0 failed, 59 skipped, 66 s | pass |
+| Regression run wall time (20 min) | unit lane + `test:integration --jobs 4` | 66 s + 1,040 s (25 files, longest held 266 s); per file in `process.md` 3.1 | pass |
 
-Fit (J-9400): the archive turned a heap that grew with every turn into one of fixed size, and the
-pieces that live in vats (queue, holds, history, the archive's index and intent) fit the persistent
-heap well; providers, secrets and the catalogue fit as adapter code because they are Node work with
-no state worth persisting in a vat. What still grows or misses: the adapter's per-round projection
-(M8), the heap high-water of an imported session (C-22), `checkpoint.stall`, `history.page` at its
-budget's edge, throughput under 50/s at load, and the 100 KiB client-side refusal.
+M2 perf table (exclusive pass unless stated):
+
+| check (budget) | result | verdict |
+|---|---|---|
+| `queue.enqueue` round trip while a turn runs (150 ms) | e2e in a vat (`m2-queue`, shared): median 125 ms over 0-99 waiting, 72 ms shallow; in Node 0.13-0.19 ms | pass |
+| `history.page` 32 turns at 1,000 (300 ms) | newest page 244 ms (vat), archived 35 ms; at 5,000: 252 / 33 ms; `archive.perf` at 200 grown: 301 ms (1.00 x) | pass |
+| `context.rebuild` 1,000 / 5,000 (5 s) | 219 / 253 ms, `sameContext`; grown 200: 435 ms; crank 1,038: 106 ms | pass |
+| `hub.row` 1,000 / 5,000 | 13,010 / 9,345 characters, 192 / 190 entries (at 200: 9,374, 193) | recorded |
+| `session.heap` 1,000 / 10,000 / 30,000 (recorded) | 790,272 / 792,064 slots at 1,000 / 5,000 (20 % of 4,000,000); 10,000 and 30,000 projected 794,304 / 803,264 (`projected: true`, slope from 1,000 to 5,000) | recorded (flat) |
+| `journal.snapshot` 1,000 / 10,000 / 30,000 (500 ms / 1 s / recorded) | 245 ms (31.9 MB) / projected 242 ms / projected 234 ms (32.7 MB); measured at 5,000: 244 ms | pass / pass (projected) / recorded |
+| `checkpoint.stall` p99 (1 s) | p99 of per-turn wall in 60 s windows on imported sessions: 1,050 / 951 / 1,025 ms at 200 / 1,000 / 5,000 (`history`), 1,007 / 959 ms (`journal`); on the session grown by turns (`archive`, 200): **1,397 ms**; the slow turns are the snapshot turns (C-24) | miss (1.05 x) on imported sessions; **fail** (1.40 x) on the grown one |
+| `provider.overhead` (5 ms; 0 deliveries) | 0.64 ms OpenRouter, 0.59 ms Anthropic, 1,800 deltas each; 0 deliveries | pass |
+| `secrets.read` (1 ms) | not re-measured here (no perf file carries it; W2.3: 0.018-0.025 ms) | not run |
+| `restart.serving` 50 x 300 by import (15 s; 0 woken) | 3.5 / 3.9 / 4.2 s, 0 woken, 0 crashes | pass |
+| `throughput` 20 sessions (journal if < 50/s) | 41.2 deliveries/s over a 60 s window (2,582 deliveries, 7 turns/s, turn p99 55 s: 14 wakes in the window) | recorded, under 50/s (J-9497) |
+| `disk.session` 300 turns (25 MB plus blobs) / after delete | 41.7 MB (41.1 MB the vat snapshot of an imported session, C-22) / all returned (`m2-lifecycle`, shared) | **fail** / pass |
+| too-big probes | 200,000 characters accepted (turn 1.06 s), 200,001 refused by the Composer; a 100 KiB inline string refused by the vat's guard after delivery | pass / known failure (PM ruling 4, C-25) |
+| `archive.flat.turn` 5,000 / 1,000 (1.25 x) | 1.02 / 1.01 x | pass |
+| `archive.flat.turnStart` (1.25 x and 350 ms) | 1.07 x (264 ms) / 1.02 x (251 ms) | pass |
+| `archive.flat.snapshot` bytes and ms | 1.04 / 0.95 x at 5,000; 1.03 / 0.96 x at 1,000 | pass |
+| `archive.flat.slots` | 1.04 x at both | pass |
+| `archive.flat.hubRow` characters and entries | 1.00 / 0.98 x at 5,000; **1.39** / 1.00 x at 1,000 (see 15) | pass at 5,000; **fail** at 1,000 (characters) |
+| `archive.seal` | seal turns 747 ms against 587 ms for others at 5,000 (3 seals in the window); 648 / 663 ms at 200 grown | recorded |
+| `archive.disk` | 1,745 B of segment and 1,300 B of `context.jsonl` per archived turn | recorded |
+| `session.program` (200 KB) | 186,998 bytes | pass (13.0 KB left) |
+| import rate (W2.7, recorded) | 7.1 turns/s of tool turns over 60 s (`import.rate`); 300-turn walk back, 42 pages | recorded (C-22) |
+
+M0, M1a and M1b rows in the same pass (their budgets; the M1b and M1a rows were carried):
+
+| check (budget) | result | verdict |
+|---|---|---|
+| `frames.inbound` / `.outbound` at 24,576 (floor + 300 ms = 321) | 313 / 38 ms (floor 21 ms) | pass |
+| `vat.evaluateProgram` 150 k (2 s) | 2,120 ms | miss (1.06 x, C-5) |
+| `loop.runaway` (1 s) | 222 ms | pass |
+| install of a 300 k factory bundle (30 s) / `install.factory` (15 s) | 8.6 s (mixed text 10.9 s) / 5.8 s | pass |
+| `turn.start` (350 ms; <= 3 deliveries) | median 108 ms, p99 364 ms, 111 samples; 2 deliveries | pass |
+| `turn.delta` (5 ms; 0 deliveries) / `turn.round` (3) / lease (1) | 0.21 ms, 0 / 3 / 1 | pass |
+| `session.createCold` (6 s) | 5.53 s (6 samples) | pass |
+| `restart.serving` 10 + 1 (10 s; 1 woken) | median 4.86 s, 13 runs | pass |
+| `restart.crashingSession` (target 15 s, recorded; C-8, C-9) | 18.2 s (5 runs) | miss (1.21 x) |
+| `crash.restart.bound5` (15 s) / `.bound2` / healthy | 65.9 s / 3.4 s / 2.9 s | **fail** by design (C-8, C-9) / pass / pass |
+| `exec.trivial` (250 ms) | median 56 ms (52 samples, 30 s): the 9 s seen under load by M2-P2 was load, not a regression | pass |
+| `exec.first` (750 ms) / `exec.sends` answered (8 s) / `exec.retire` (15 MB) | 299 ms / 1.31 s / 25.5 MB | pass |
+| `session.create` with the pool (750 ms) / cold (6 s) | 1,097 ms (8 samples, 45 s) / 5.71 s | **fail** (1.46 x) / pass |
+| `concurrency.10` turn start (2 x single = 222 ms) / crank p95 (200 ms) / row push (500 ms) | 701 ms (3.2 x single) / 500 ms / 179 ms | **fail** / **fail** / pass (M1b: 6.5 x / 500 / 189) |
+| `hub.growth` 1,000 turns / 20 sessions (2 MB; 1.25 x fresh ms) | 0.77 MB / 1.37 MB, pass; 50 sessions projected 3.26 MB, 1.37 x (`projected: true`) | pass / **fail** (projected) |
+| `hub.gcBurst` (recorded) / `gc.burst.turnStart` (350 ms) / `hub.gcBurst.turnStart` | 4.2 ms per incoming GC frame / 104 ms (p99 1.4 s) / 106 ms | recorded / pass / pass |
+| `crank.turn.start` early / mid / late (350 ms) | 224 / 126 / 236 ms | pass |
+| `crank.history.page` (300 ms) | 269 ms; late 247 ms | pass |
+| `gc.restart` (10 s) | 3.1-3.4 s, 12 runs | pass |
+
+M2 is **done with open items** (top of this section). Fit, from this pass (J-9498): the archive
+holds: a 5,000-turn session costs what a 200-turn one does in every vat-side measure; on an idle
+machine `checkpoint.stall` is at its budget's edge on imported sessions and over it on a grown
+one, both from the engine's cadence snapshot (C-24); what still grows or misses is the hub
+(`concurrency.10`, `hub.growth` toward 50 sessions: C-2's rest, CC-051/CC-060), the pool take
+(`session.create.pool`), a carried imported-session high-water (`disk.session`, C-22) and the
+inline too-big refusal (C-25).
 
 ---
 
