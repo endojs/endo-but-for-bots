@@ -501,11 +501,16 @@ section). Every acceptance item passes except one ratio of 15 at 1,000 turns; re
   grown by turns, 1.05 x on imported ones; the cause is the core's cadence snapshot (C-24, J-9494).
   The core lane's CC-026 (a due snapshot waits for 50 ms of quiet in the worker's queue) is merged
   into this lane (K1, J-10070) and lowers it partly (p99 2,170 -> 1,195 ms at load 2, J-10112); a
-  snapshot can still land in a gap inside a turn under load (4,024 ms once at load 4.5). Not
-  re-measured on the combination: the next exclusive pass does.
-- **fail** (acceptance 15 at 1,000 turns, `archive.flat.hubRow.at1000`): hub row characters
-  1.39 x the 200-turn row while entries are 1.00 x; the read caught one answer owed (J-9496). Not
-  re-based; a read at a quiescent point is the proposed procedure fix, for the PM.
+  snapshot can still land in a gap inside a turn under load (4,024 ms once at load 4.5).
+  Re-measured on the combination (K2, J-10077..J-10086): `archive.stall.at200` p99 1,239 ms
+  (1.24 x, inside the 1.25 x rule; was 1,397 ms), `checkpoint.stall` on imported sessions
+  965 / 975 / 1,011 ms at 200 / 1,000 / 5,000 turns (was 1,050 / 951 / 1,025).
+- **closed** (was fail, acceptance 15 at 1,000 turns, `archive.flat.hubRow.at1000`): read at a
+  quiescent point (`quiescentHubRow` in `perf/_long-session.mjs`) the ratio is 1.01 x at 1,000
+  and 0.95 x at 5,000 (K2); the 1.39 x reading had caught an answer owed (J-9496).
+- **fail** (new, K2): `archive.flat.turnStart.at1000` 1.99 x (261 ms against 131 ms at 200
+  turns, both under the 350 ms budget; the 200-turn point fell from 247 ms, the 1,000-turn point
+  did not move). Not explained, not re-based; `history.perf` exits 1 on this row.
 - **fail** (perf, carried or recorded): `disk.session` 41.7 MB against 25 MB (C-22's import
   high-water); `session.create` with the pool 1,097 ms against 750; `concurrency.10` turn start
   3.2 x single and crank p95 500 ms (C-2's rest); `hub.growth` projected to 50 sessions 3.26 MB
@@ -774,10 +779,11 @@ inline too-big refusal (C-25).
 and M5; the outcome table at the end of this section). Every acceptance item passes in this run.
 Open:
 
-- **major** (test process): `perf/gateway-session.perf.mjs` exited 124 in the recorded pass: every
-  row was measured (`fileTime` 555 s) but the clean stop after the 24-restart SIGKILL window ran
-  past the 10-minute box (held 602 s). Proposed fix: move `ui.restartReady.*` into a file of its
-  own (J-10061).
+- **closed** (was major, test process): `perf/gateway-session.perf.mjs` exited 124 in the
+  recorded pass (J-10061). The `ui.restartReady.*` rows now live in
+  `perf/gateway-restart.perf.mjs`; the two files hold 375 s and 311 s in exclusive mode (K2).
+  The serve time across SIGKILL restarts grows with the journal replay (52 -> 1,010 owed frames
+  over 20 kills, 3.9 -> 8.5 s, about 4.7 ms per frame); CC-026 bounds it per worker (C-3).
 - **fail** (perf, carried): `ui.hubGrowth` session row exports 1.91 x the start (budget 1.25 x)
   while the hub stays at 1.15 MB; the request is CC-051 + CC-060, one hub row-format change
   (`CORE-CHANGES.md`, requested, not built).
@@ -992,10 +998,11 @@ Perf files held: `gateway` 329 s, `gateway-session` 602 s (exit 124), `ui` 438 s
 section). Acceptance 1-17 pass; the `[real-provider]` repeats of 3, 7, 8 and 10 are deferred
 because they need the owner's credentials and an owner's run (never by an agent). Open:
 
-- **major** (perf): `subscriptions.servedWrites` 4.97 manager frames per session per 60 s against
-  1 (W4.8: 2). XB raised `poolStateRefreshMs` from 30 s to 600 s expecting served stamps alone
-  (reasoned, not measured); this pass measured it, and something else still writes. Not
-  diagnosed here (candidates: stamps not coalesced per 60 s, or a re-read after the stale mark).
+- **closed** (was major, perf): `subscriptions.servedWrites` read 4.97 manager frames per session
+  per 60 s against 1. Diagnosed by K2: the row counted journal frames, 7 of 9 of them GC frames
+  whose number moves with when the engine collects, plus one warm-up stamp inside the window; no
+  extra message per turn exists. The row now counts manager cranks, which is what the budget
+  names, from after the warm-up stamp: 1.00 per 60 s, pass (2.00 frames).
 - **fail** (perf, carried): `secrets.catalog` 775 ms against 300 (64 secrets, a 57-entry first
   page, 2.21 manager frames per page; lane 745 ms).
 - **miss** (perf): `subscriptions.firstOpen` median 827 ms against 750 (1.10 x; lane 688 ms), 3
