@@ -8383,3 +8383,42 @@ literals) measures 231,377 bytes, under O-1's 240,000.
 Fit: poor on bytes, as J-0752 found: each M5 unit's modules ship whole into every session vat.
 A whitespace pass in `scripts/bundle-guest.mjs` (AST-aware, like its comment strip) recovers
 about 40 KB at once; splitting `interfaces-m5.js` per vat is the next lever.
+
+### J-0780 2026-11-18 M5 granted tools - built
+Evidence: `guest/session/tools/granted.js` (35f3e00c02), the `grants` part and the `toolSources`
+entry (lines in 40d09eaf84), `test/unit/m5-w56-grants.test.js` (12 tests, about 1 s).
+Reading: `makeGrants(runtime)` keeps up to 32 grants in the session heap with one `ToolGrant` exo
+each, and answers `{ facet, grant(tool, source), schemaRead(grant), entriesFor(ports, builtIns),
+size }`. The schema read is an inspector `toolSchema` sent in the `grantTool` crank on the last
+ports the source saw (the open at creation feeds it, so a grant outside a turn has
+`BlobWriters`). States are set at every round: built-in names (the static table, available or
+not, plus the round's adapter tools) and duplicates are returned for `toolSetFor` to refuse again
+through `entry.refused`, so clashes with another source are caught; budget refusals are the
+source's own (oldest first, then newest refused). A pending read issued on older ports is read
+again on newer ones; a late answer after `withdraw` is ignored. A granted call is an inspector
+`toolExecute` with the exec deadline hook.
+Fit: good. Heap-resident grants need no persistence code; the per-round recompute is a pass over
+at most 32 records.
+
+### J-0781 2026-11-18 M5 W5.6 deviations and measurements - deviation
+Evidence: the files of J-0780; a Node micro-check of `toolSetFor` over 10 s per point, load
+average 7.5-8.9.
+Reading: (1) The `toolSources` entry is an arrow in `tool-table.js` that passes
+`builtInToolNames(ports)` as a fourth argument to `grantedToolSource`: importing the table from
+`granted.js` would be an import cycle that evaluates `toolSources` before `grantedToolSource` is
+bound (session.js imports `m5-parts.js` first). (2) A failed schema read of any kind (refusal,
+thrown error, `inspectTerminated`) is `refused-schema`, its reason wrapped in
+`toolSchemaInvalid` when it is not already. (3) Tool-set cost in Node: 0.0048 ms median with no
+grants, 0.0178 ms with 32 (p99 0.026 ms), against the 10 ms engine budget. (4) W5.6 adds 9,603
+bytes to the session bundle (272,125 with it, 262,522 without, at HEAD 008c12f87c).
+Decision: reported to the PM.
+
+### J-0782 2026-11-18 M5 granted tools not run in a daemon - perf
+Evidence: `corepack yarn test:integration test/integration/m5-grants.test.js`: 368 s wall
+(304 s waiting for the run lock), failed at session creation with "A session program is at
+most 262144 bytes in this build" (J-0792).
+Reading: acceptance 6, 11b (K4, K5) and the `grants.round` row are written but have not run: no
+session can be created in this lane until the bundle is under the factory's cap. Their exec-side
+half (`toolSchema`, `toolExecute` in a real exec vat, presences of workspace-vat tools passed to
+the session through the control client) is untested.
+Fit: poor on bytes (as J-0752, J-0792): every unit's session module ships into every session vat.
