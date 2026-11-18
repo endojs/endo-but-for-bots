@@ -19,7 +19,11 @@
  *   turn's `whenFinished` (the crank and its `seal` frame are committed; the
  *   adapter's A1-A3 may or may not have started);
  * - A2: when a `seg-*.jsonl.part` file appears in the archive directory
- *   (the segment written, not renamed);
+ *   (the segment written, not renamed). The kill often lands after the
+ *   rename (M2-R3: `partAtKill` 1 in 2 of 5 runs), so A2 before the rename
+ *   is covered deterministically by test/adapter/m2-archive-kill.test.js,
+ *   which kills the adapter child at each step; here `partAtKill` records
+ *   which row was hit;
  * - A3: when the archive's `manifest.json` is replaced (the segment durable,
  *   the answer about to go or gone);
  * - Z: once the session reports the new segment (the answer crank ran).
@@ -214,7 +218,7 @@ export const killAt = async (t, ctx, point, { nextSeal = true } = {}) => {
       // 10 s a turn before M2-T1 (J-9481).
       const sealed = await waitFor(
         async () => (await segmentsOf(ctx.session)) > Number(before.segments),
-        due ? 3_000 : 1,
+        due ? 3000 : 1,
         'the seal answer',
       ).then(
         () => true,

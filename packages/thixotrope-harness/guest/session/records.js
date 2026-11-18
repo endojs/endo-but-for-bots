@@ -96,7 +96,6 @@ const shapeOfKind = new Map([
  * @property {(index: number) => string[]} dropBefore drop every record
  *   before `index` (a kept turn's start, or `count()`); returns the ids of
  *   the turns dropped, in start order
- * @property {(index: number, turns: number) => void} startAt an empty log
  *   whose first `index` records and `turns` turns are archived elsewhere
  *   (an imported archive, W2.7)
  */
@@ -194,12 +193,6 @@ export const makeRecordLog = () => {
     base: () => base,
     droppedTurns: () => dropped,
     dropBefore,
-    startAt: (index, turns) => {
-      (log.length === 0 && base === 0 && dropped === 0) ||
-        Fail`startAt needs an empty log`;
-      base = index;
-      dropped = turns;
-    },
   });
 };
 harden(makeRecordLog);

@@ -1518,6 +1518,15 @@ export const makeTurnRunner = ({
       if (record.kind === 'turn-started') {
         record.turnId === `t${turnCounter + 1}` ||
           Fail`imported turn ${record.turnId} is out of order`;
+      } else if (record.kind === 'turn-settled') {
+        // Only the last started turn, once (J-9493): a settle outside its
+        // span would leave a turn running for ever.
+        (record.turnId === `t${turnCounter}` &&
+          turns.get(record.turnId)?.state === 'running') ||
+          Fail`imported settle of ${record.turnId} is out of place`;
+      } else if (record.kind === 'turn-resolved') {
+        turns.get(record.turnId)?.state !== 'running' ||
+          Fail`imported resolution of ${record.turnId} precedes its settle`;
       }
       records.append(record);
       see(record.at);
@@ -1545,6 +1554,29 @@ export const makeTurnRunner = ({
       }
     }
     archive.maybeSeal({ ports: held?.ports, context: contextSource });
+  };
+
+  /**
+   * When importing ends (W2.7; J-9493): a turn exported while it ran has
+   * no settle and would never get one (nothing runs it here), so it is
+   * settled `outcome-unknown`, resolvable as after a restart (R4-32, P-14),
+   * and the archive can seal past it.
+   */
+  const importEnd = () => {
+    for (const info of turns.values()) {
+      if (info.state === 'running') {
+        importTurns([
+          harden({
+            kind: 'turn-settled',
+            turnId: info.turnId,
+            status: 'outcome-unknown',
+            at: lastKnownTime,
+          }),
+        ]);
+        totals.turns += 1;
+        totals.incompleteTurns += 1;
+      }
+    }
   };
 
   // ------------------------------------------------------------ the runner
@@ -1607,14 +1639,7 @@ export const makeTurnRunner = ({
     },
     deleting: () => deleting,
     importTurns,
-    /**
-     * Adopt an archive the adapter imported (W2.7), before any record.
-     * @param {{ archive: any, segments: readonly any[] }} imported
-     */
-    importArchive: imported => {
-      archive.adopt(imported);
-      turnCounter = imported.archive.sealedTurns;
-    },
+    importEnd,
     /** @param {any} imported UsageTotals of an imported session */
     importUsage: imported => {
       totals.inputTokens = imported.inputTokens;

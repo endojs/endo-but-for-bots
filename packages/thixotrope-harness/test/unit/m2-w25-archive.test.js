@@ -529,10 +529,9 @@ test('seams for W2.6: system prompt, output tokens, context window, turn deadlin
   });
 });
 
-test('seams for W2.7: beginDelete, importTurns, importArchive, importUsage', async t => {
+test('seams for W2.7: beginDelete, importTurns, importEnd, importUsage', async t => {
   const source = await makeArchiveSession();
   await mixed(source, 200);
-  const sourceState = source.runner.archive.state();
 
   // importTurns: the whole log, in chunks; the new session seals as it goes.
   const copy = await makeArchiveSession();
@@ -558,21 +557,35 @@ test('seams for W2.7: beginDelete, importTurns, importArchive, importUsage', asy
     source.runner.archive.entries().slice(0, common),
   );
 
-  // importArchive: adopt the source's archive, then its kept records.
-  const adopted = await makeArchiveSession();
-  adopted.runner.importArchive(
-    harden({
-      archive: sourceState,
-      segments: source.runner.archive.entries(),
-    }),
+  // importUsage: the totals as exported.
+  const totalsCopy = await makeArchiveSession();
+  totalsCopy.runner.importUsage(source.runner.usage());
+  t.deepEqual(totalsCopy.runner.usage(), source.runner.usage());
+
+  // J-9493: a turn exported while it ran is settled outcome-unknown at the
+  // end of the import, so it can be resolved and sealed past.
+  const settledAt = all.findIndex(record => record.kind === 'turn-settled');
+  const midTurn = await makeArchiveSession();
+  midTurn.runner.importTurns(all.slice(0, settledAt));
+  midTurn.runner.importEnd();
+  t.is(
+    (await midTurn.runner.findTurn('t1').getStatus()).state,
+    'outcome-unknown',
   );
-  adopted.runner.importTurns(all.slice(sourceState.sealedTo));
-  t.deepEqual(adopted.runner.archive.state(), sourceState);
-  t.is(adopted.records.messageCount(), 200);
-  t.throws(() => adopted.runner.findTurn('t1'), { message: texts.turnSealed });
-  t.is(adopted.runner.historyPage().turns[0].turnId, 't200');
-  adopted.runner.importUsage(source.runner.usage());
-  t.deepEqual(adopted.runner.usage(), source.runner.usage());
+  t.is(midTurn.runner.usage().incompleteTurns, 1);
+  // A settle outside its turn's span is refused.
+  const misplaced = await makeArchiveSession();
+  const t1 = all.slice(0, settledAt);
+  const t2Start = all.findIndex(
+    record => record.kind === 'turn-started' && record.turnId === 't2',
+  );
+  t.throws(() =>
+    misplaced.runner.importTurns([...t1, all[t2Start], all[settledAt]]),
+  );
+  const twice = await makeArchiveSession();
+  t.throws(() =>
+    twice.runner.importTurns([...all.slice(0, settledAt + 1), all[settledAt]]),
+  );
 
   // beginDelete: the current turn is cancelled at once; nothing new starts.
   source.runner.startTurn('going', 1_800_000_000_000);

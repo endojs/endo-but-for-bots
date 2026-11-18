@@ -28,7 +28,7 @@ import { inCallOrder, plainBytes } from './records.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RecordLog } from './records.js' */
-const { E, Fail } = /** @type {GuestGlobals} */ (globalThis);
+const { E } = /** @type {GuestGlobals} */ (globalThis);
 
 /** @type {Map<string, string>} */
 const letterOf = new Map(/** @type {any} */ (archiveKindLetters));
@@ -288,19 +288,6 @@ export const makeSessionArchive = ({
     /** No seal starts from now on (delete, 7.1). */
     fence: () => {
       fenced = true;
-    },
-    /**
-     * Adopt an archive the adapter imported (W2.7): the log must be empty.
-     * @param {{ archive: any, segments: readonly any[] }} imported
-     */
-    adopt: ({ archive, segments: list }) => {
-      (entries.length === 0 && records.count() === 0) ||
-        Fail`only an empty session adopts an archive`;
-      list.length === archive.segments || Fail`the segment list is incomplete`;
-      for (const entry of list) entries.push(harden({ ...entry }));
-      sealedTurns = archive.sealedTurns;
-      digest = archive.digest;
-      records.startAt(archive.sealedTo, archive.sealedTurns);
     },
   });
 };

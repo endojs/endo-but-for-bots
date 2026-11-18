@@ -186,6 +186,10 @@ test('import: a new session only, records in order, resends answered, the queue 
     importTurns: added => {
       for (const record of added) records.append(record);
     },
+    ended: 0,
+    importEnd: () => {
+      runner.ended += 1;
+    },
   };
   const queue = makeQueue();
   const lifecycle = makeSessionExport({
@@ -241,6 +245,10 @@ test('import: a new session only, records in order, resends answered, the queue 
   t.throws(() =>
     lifecycle.importState(harden({ part: 'records', from: 5, records: turn })),
   );
+  // No importer sends an archive part (7.3; J-9493).
+  t.throws(() => lifecycle.importState(harden({ part: 'archive' })), {
+    message: /no archive part/,
+  });
   lifecycle.importState(
     harden({
       part: 'queue',
@@ -255,6 +263,8 @@ test('import: a new session only, records in order, resends answered, the queue 
     records: 2,
     complete: true,
   });
+  t.is(runner.ended, 1, 'the runner settles what ran at export (J-9493)');
+
   await drain();
   t.deepEqual(reported, [{ imported: true, messageCount: 1, queuedCount: 1 }]);
   t.true(matches(reported[0], shapes.RowPatch));

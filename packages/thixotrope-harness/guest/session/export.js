@@ -272,9 +272,9 @@ export const makeSessionExport = ({
     }
     importing === 1 || Fail`no import is open`;
     if (part === 'archive') {
-      runner.importArchive(
-        harden({ archive: chunk.archive, segments: chunk.segments ?? [] }),
-      );
+      // No importer sends one (7.3): an adopted ArchiveState the adapter
+      // cannot validate would fail every later round (J-9493).
+      Fail`an import carries no archive part`;
     } else if (part === 'records') {
       /** @type {any[]} */
       const added = chunk.records ?? [];
@@ -293,6 +293,7 @@ export const makeSessionExport = ({
       if (queue.size() > 0)
         queue.hold(hold.reason, hold.message || holdText(hold.reason));
     } else {
+      runner.importEnd();
       importing = 2;
       E.sendOnly(rowReporter).changed(
         harden({
