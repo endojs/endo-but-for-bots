@@ -11,7 +11,8 @@
  * - `site` says where `execute` calls: `'adapter'` (a transient adapter
  *   object: a retired break from it is a restart and runs recovery, never a
  *   tool failure) or `'guest'` (a guest vat: a retired break means that vat
- *   is lost and is an ordinary failed result). Absent means `'adapter'`;
+ *   is lost and is an ordinary failed result). Every entry names it
+ *   (HR-SYN-23: the absent-means-adapter fallback went);
  * - `available(ports)` is true when the entry can run with this turn's
  *   `TurnPorts`;
  * - `execute` receives the model's argument JSON as text: a vat never
@@ -59,7 +60,7 @@ const { E } = /** @type {GuestGlobals} */ (globalThis);
 /**
  * @typedef {object} ToolTableEntry
  * @property {string} name
- * @property {'adapter' | 'guest' | 'session'} [site]
+ * @property {'adapter' | 'guest' | 'session'} site
  * @property {() => { name: string, description: string, parameters: string }} describe
  * @property {(ports: any, services?: any) => boolean} available
  * @property {(request: { opId: string, args: any, turnId: string }, ports: any, context?: any) => Promise<{ status: 'ok' | 'failed' | 'frame-limit', text: any }>} execute

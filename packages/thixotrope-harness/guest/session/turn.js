@@ -177,7 +177,7 @@ export const makeTurnRunner = ({
   const { emit, report, flushRow, flushTo } = outbox;
 
   /** @param {any} record */
-  const append = record => {
+  const appendRecord = record => {
     records.append(record);
   };
   /**
@@ -187,7 +187,7 @@ export const makeTurnRunner = ({
    * @returns {HookTurn}
    */
   const hookTurn = active =>
-    Object.freeze({ active, round: active.round, append, emit });
+    Object.freeze({ active, round: active.round, append: appendRecord, emit });
 
   // The session's recovery (recovery.js): steps 1-8 in the crank that saw
   // the restart signal.
@@ -549,7 +549,7 @@ export const makeTurnRunner = ({
   const onToolError = (active, calls, intent, entry, error) => {
     if (!stillOurs(active, calls)) return;
     // M5 S5: a `'session'` entry is as `'guest'` here (it cannot meet one).
-    if ((entry.site ?? 'adapter') === 'adapter' && isRestartSignal(error)) {
+    if (entry.site === 'adapter' && isRestartSignal(error)) {
       // A restart, never a tool failure (section 7).
       recovery.recover(active);
       flush();
