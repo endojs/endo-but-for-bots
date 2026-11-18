@@ -28,7 +28,7 @@ test('sign in and call through W3.1 server and the bridge', async t => {
     rename: title => title.length,
   });
   const operator = Far('Operator', { session: () => session });
-  const names = harnessNames({ log: () => {} });
+  const names = harnessNames();
   const bridge = makeBridge({
     makeBootstrap: makeBootstrapFactory({
       signIn: { matches: candidate => candidate === SECRET },

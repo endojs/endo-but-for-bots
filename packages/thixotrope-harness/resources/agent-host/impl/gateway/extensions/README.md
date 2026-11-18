@@ -59,5 +59,5 @@ objects of this adapter incarnation, none a vat facet:
 
 Record keys a page sends to an extension service pass the gateway's key
 guard only if they are in the vocabulary: a milestone admits its keys with
-`export const vocabularyShapes = () => harden([...])` in its own
-`guest/lib/interfaces-m<N>.js` (section 6.3).
+a table module listed in `guest/lib/vocabulary-tables.js` (HR-SYN-7;
+`designs/m3-interfaces.md` section 6.3).

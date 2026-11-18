@@ -139,9 +139,10 @@ export const guardSnapshot = () => {
   for (const [name, value] of Object.entries(wholeOf())) {
     entries[name] = digestOf(value);
   }
+  // A table that fails now throws (HR-SYN-7); nothing is skipped.
   /** @type {unknown[]} */
   const skipped = [];
-  const { keys, methods } = harnessNames({ log: e => skipped.push(e) });
+  const { keys, methods } = harnessNames();
   return {
     entries,
     order,

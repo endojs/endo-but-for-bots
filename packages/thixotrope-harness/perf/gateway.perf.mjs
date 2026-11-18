@@ -162,7 +162,7 @@ await runPerf('gateway', async ({ provision }) => {
 
     // ---- gateway.guard (in process)
     if (clock.fits(WINDOW_MS)) {
-      const { keys: vocabulary, methods } = harnessNames({ log: () => {} });
+      const { keys: vocabulary, methods } = harnessNames();
       // Records of vocabulary keys up to frameBytes.
       const record = { title: 'a title', key: 's1', text: 'some text here' };
       /** @type {any[]} */

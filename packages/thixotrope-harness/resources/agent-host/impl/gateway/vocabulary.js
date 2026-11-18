@@ -16,39 +16,23 @@
  * (M3-FIX; guard.js rule 4a). `harnessNames` answers both sets for one
  * incarnation.
  *
- * `harnessVocabulary({ guestLibDir?, log })` is the gateway's vocabulary for
- * one adapter incarnation: the `shapes`, `interfaces` and (while it exists,
- * until the W2.9 fold) `m2Interfaces` tables of `guest/lib/interfaces.js`,
- * then every `interfaces-m*.js` of `guestLibDir` in name order through its
- * `vocabularyShapes()` export. A file without the export, or whose load or
- * call throws, is logged `{ event: 'vocabulary-skip', file, error }` and
- * skipped. Files are loaded with `require` (synchronous ES module loading),
- * so a file with top-level await is skipped too.
+ * `harnessNames({ tables? })` is the gateway's names for one adapter
+ * incarnation: the patterns of every entry of `guest/lib/vocabulary-tables.js`
+ * `vocabularyTables`, the explicit list of interface tables (HR-SYN-7; it
+ * replaced the `interfaces-m*.js` glob). A table module that fails to load
+ * fails this module's import; an entry whose `patterns()` throws or answers
+ * no array throws here, naming the entry's file, so the gateway's bind fails
+ * rather than serving with a narrower vocabulary.
  *
  * Node module (agent-host adapter); the guest prelude is on `globalThis`.
  */
-import { readdirSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { basename, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
-import * as interfacesModule from '../../../../guest/lib/interfaces.js';
+import { vocabularyTables } from '../../../../guest/lib/vocabulary-tables.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
 const { passStyleOf } = /** @type {GuestGlobals} */ (globalThis);
-
-const require = createRequire(import.meta.url);
-
-/** The harness's guest library directory (default `guestLibDir`). */
-export const defaultGuestLibDir = fileURLToPath(
-  new URL('../../../../guest/lib/', import.meta.url),
-);
-
-/** Contract files the vocabulary reads, besides `interfaces.js`. */
-const contractFilePattern = /^interfaces-m[^/]*\.js$/;
 
 /**
  * Collect the record keys and the method names named by `patterns`
@@ -121,61 +105,31 @@ export const collectRecordKeys = patterns => collectNames(patterns).keys;
 harden(collectRecordKeys);
 
 /**
- * @param {unknown} error
- * @returns {string}
- */
-const messageOf = error =>
-  error instanceof Error ? error.message : String(error);
-
-/**
  * The names of one adapter incarnation (m3-interfaces.md 4.4, 6.3): the
- * record-key vocabulary and the method names of every interface guard.
- * @param {object} options
- * @param {string} [options.guestLibDir] where `interfaces-m*.js` are read
- *   (default: the harness's `guest/lib/`)
- * @param {(event: Record<string, unknown>) => void} options.log
+ * record-key vocabulary and the method names of every interface guard the
+ * listed tables answer.
+ * @param {object} [options]
+ * @param {readonly import('../../../../guest/lib/vocabulary-tables.js').VocabularyTable[]} [options.tables]
+ *   default `vocabularyTables`
  * @returns {{ keys: Set<string>, methods: Set<string> }}
  */
-export const harnessNames = ({ guestLibDir = defaultGuestLibDir, log }) => {
-  /** @type {any} */
-  const base = interfacesModule;
+export const harnessNames = ({ tables = vocabularyTables } = {}) => {
   /** @type {any[]} */
-  const patterns = [
-    ...Object.values(base.shapes),
-    ...Object.values(base.interfaces),
-  ];
-  if (base.m2Interfaces !== undefined) {
-    patterns.push(...Object.values(base.m2Interfaces));
-  }
-  /** @type {string[]} */
-  let names = [];
-  try {
-    names = readdirSync(guestLibDir)
-      .filter(name => contractFilePattern.test(name))
-      .sort();
-  } catch (error) {
-    log({
-      event: 'vocabulary-skip',
-      file: basename(guestLibDir),
-      error: messageOf(error),
-    });
-  }
-  for (const name of names) {
+  const patterns = [];
+  for (const { file, patterns: patternsOf } of tables) {
+    /** @type {unknown} */
+    let more;
     try {
-      // The contract files are found by glob (m3-interfaces.md 6.3).
-      // eslint-disable-next-line import/no-dynamic-require
-      const contract = require(join(guestLibDir, name));
-      if (typeof contract.vocabularyShapes !== 'function') {
-        throw Error('no vocabularyShapes() export');
-      }
-      const more = contract.vocabularyShapes();
-      if (!Array.isArray(more)) {
-        throw Error('vocabularyShapes() did not answer an array');
-      }
-      patterns.push(...more);
+      more = patternsOf();
     } catch (error) {
-      log({ event: 'vocabulary-skip', file: name, error: messageOf(error) });
+      throw Error(`gateway vocabulary: ${file} patterns() threw`, {
+        cause: error,
+      });
     }
+    if (!Array.isArray(more)) {
+      throw Error(`gateway vocabulary: ${file} patterns() answered no array`);
+    }
+    patterns.push(...more);
   }
   return collectNames(patterns);
 };
@@ -183,7 +137,7 @@ harden(harnessNames);
 
 /**
  * The vocabulary of one adapter incarnation (m3-interfaces.md 4.4, 6.3).
- * @param {Parameters<typeof harnessNames>[0]} options
+ * @param {Parameters<typeof harnessNames>[0]} [options]
  * @returns {Set<string>}
  */
 export const harnessVocabulary = options => harnessNames(options).keys;

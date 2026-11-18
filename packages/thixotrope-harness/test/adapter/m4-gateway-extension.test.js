@@ -118,14 +118,8 @@ test("INT-M4: M3's extension loader loads m4-secrets; makeLargeCalls exempts the
 });
 
 test("INT-M4: the gateway's vocabulary admits M4's browser-reachable method names", t => {
-  /** @type {Record<string, unknown>[]} */
-  const events = [];
-  const { keys, methods } = harnessNames({ log: e => events.push(e) });
-  t.deepEqual(
-    events.filter(e => e.event === 'vocabulary-skip'),
-    [],
-    'interfaces-m4.js (and every interfaces-m*.js) loads',
-  );
+  // A listed table that fails throws (HR-SYN-7), so this call is the load check.
+  const { keys, methods } = harnessNames();
   for (const name of [
     'SecretsAdmin',
     'Secret',
