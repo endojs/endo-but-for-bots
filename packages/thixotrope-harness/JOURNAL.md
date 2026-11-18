@@ -8913,3 +8913,130 @@ the split archive files once (163 / 187 s held, part 1 exit 128, cause not recor
 Fit: a SIGKILL test on Thixotrope costs one supervisor restart per kill (13-45 s served under
 load), which no test-side change removes; a cheaper restart is a core matter.
 Decision: recorded.
+
+### J-9460 2026-11-18 M2 perf checks on fixed windows: wall time before and after - perf
+Evidence: one run of each converted file in a shared slot (`node scripts/run-lock.mjs --label X
+--shared -- node perf/X.perf.mjs --shared`), at `35af96bedd`..`7674255082` (perf code of
+`568aa469e7` plus `6e4ae378f6`), worker `367e78ad...`, crank budget 50 M, slot ceiling 4,000,000,
+allocation schedule, log hub store, load 3-7 with other lanes in the other slots. These are
+"under load" smokes, not recorded results (process.md section 2); the exclusive pass is a later
+unit's. Held times from `runs.jsonl`.
+Reading:
+
+| file | before (journal) | after (held) | dropped |
+|---|---|---|---|
+| `history.perf.mjs` | 30-45 min | 329 s | the 50-turn point; the 100-turn windows (now 60 s, 43-50 turns) |
+| `history.restart.perf.mjs` (split from history) | in the above | 388 s | nothing: pages over 15 s windows, walk, restart, rebuild at 200 / 1,000 / 5,000 |
+| `journal.perf.mjs` | 1-1.5 h | 181 s | the 10,000 and 30,000 points (imports 14 and 42 min): 5,000 measured, slope 1,000 -> 5,000 projected |
+| `throughput.perf.mjs` | 30-40 min | 212 s | the in-file 26-minute import: a cached 50 x 300 template |
+| `archive.perf.mjs` | about 1 h | 265 s | the grown 1,000 and 5,000 points (taken by the templates in history) |
+| `import.perf.mjs` | 652 s (5,000 tool turns) + 38.7 min (30,000) | 128 s | full-length imports: a 60 s window of the import rate, and a 300-turn walk |
+| `queue.perf.mjs` | about 1 min | 34 s | nothing (10 s per row) |
+| `provider.perf.mjs` | about 1 min | 93 s | nothing (10 s per row) |
+
+Template steps (`node perf/_long-template.mjs history journal throughput`, one boxed step each):
+long 200: 156 s, 1,000: 159 s, 5,000: 518 s; busy 10/20/30/40/50 x 300: 551 / 520 / 476 / 456 /
+444 s. Each is built once per worker and bundle change.
+Decision: every file fits the 10-minute box with room except the template steps (J-9464).
+
+### J-9461 2026-11-18 M2 acceptance 15 from cached templates: flat at 5,000 against 200 - perf
+Evidence: `perf/history.perf.mjs` as J-9460 (load 4-7), templates of 200 / 1,000 / 5,000 plain
+turns (keys `13d16dc2a049`, `0ef4adeb38bd`, `ac44a8189cc1`), a 60 s window each (49-50 / 49 / 43
+turns: per-turn wall 1,161 / 1,062 / 1,213 ms, 45 / 49 / 43 turns per minute).
+{"metric":"archive.flat.turn.at5000","at200":1161,"at5000":1213,"ratio":1.045,"pass":true}
+{"metric":"archive.flat.turnStart.at5000","at200":346,"at5000":342,"ratio":0.988,"pass":true}
+{"metric":"archive.flat.snapshot.at5000","at200":33513472,"at5000":34451456,"ratio":1.028,"pass":true}
+{"metric":"archive.flat.slots.at5000","at200":761856,"at5000":792064,"ratio":1.04,"pass":true}
+{"metric":"archive.flat.hubRow.at5000","at200":5769,"at5000":5272,"ratio":0.914,"pass":true}
+Reading: every `archive.flat.*` row passes at 1,000 and 5,000 (ratios 0.22-1.05). `history.page`
+newest 321 / 304 / 310 ms median (budget 300; 15 s windows, 59-61 samples), archived 67 / 58 / 63
+ms; walk back to turn 1: 7.4 s (1,003 turns) and 28.0 s (5,003); `context.rebuild` 383 / 410 /
+351 ms, `sameContext` true at all three. The per-turn wall (about 1.1 s) is 1.5 x J-9404's: load
+4-7 against 2-3. `archive.flat.snapshotMs` (0.22, 0.86) only says the snapshot time is noise under
+load: one or two snapshots per window.
+Decision: acceptance 15's flatness holds under load; the exclusive pass records it.
+
+### J-9462 2026-11-18 M2 checkpoint.stall split: the slow turn holds the snapshot - perf
+Evidence: the `slowest` lists of `history.stall.at<n>` and `journal.stall.at<n>` (J-9460's runs),
+each turn with its index, how it started, deliveries, hub time and the engine's snapshot count and
+time inside it.
+Reading: p99 (= the slowest turn of 43-50) was 6.3 / 1.8 / 3.9 s (history at 200 / 1,000 / 5,000)
+and 2.6 / 3.5 s (journal at 1,000 / 5,000), median 0.94-1.07 s. In every window the slowest turn is
+the one during which the engine snapshotted: at 200 turn 253 took 6,324 ms, of which the snapshot
+was 5,181 ms and 8 deliveries 805 ms; at 5,000 turn 5,026 took 3,859 ms with 2,840 ms of snapshot;
+at 1,000 the first Composer turn, 1,849 ms with 721 ms of snapshot. The next slowest turns (1.3-2.8
+s) had no snapshot and high hub time (2.1-2.5 s at 5,000): commits waiting on the supervisor's
+thread while other lanes loaded the machine. No slow turn sealed a segment. This corrects J-9408's
+inference ("not a snapshot turn"): its status poll missed the snapshot; the engine counters do not.
+Decision: budget unchanged (p99 <= 1 s); the fix unit has the cause: the session vat's synchronous
+snapshot (about 33 MB) inside a turn, and hub commit waits second. A snapshot off the turn's path
+(or at idle) is the candidate, a core question.
+
+### J-9463 2026-11-18 M2 journal at 10,000 and 30,000: largest point that fits plus slope - perf
+Evidence: `perf/journal.perf.mjs` as J-9460 (load 4-6).
+{"metric":"journal.snapshot.budget.at1000","msEach":1298.7,"budget":{"value":500},"pass":false}
+{"metric":"journal.slope.snapshot","at1000":1298.7,"at5000":1439.7,"perThousandTurns":35.25,"at10000":1616,"at30000":2321,"projected":true}
+{"metric":"journal.slope.snapshotBytes","at1000":34451456,"at5000":34467840,"perThousandTurns":4096}
+{"metric":"journal.slope.slots","at1000":792064,"at5000":792064,"perThousandTurns":0}
+{"metric":"journal.slope.turn","at1000":1073.4,"at5000":1069,"perThousandTurns":-1.1}
+Reading: the state does not grow with length (slots flat at 792,064, snapshot file +4 KB per
+1,000 turns), so a projection from 1,000 and 5,000 is sound for size. The snapshot time is not: it
+was 1.3-1.4 s each here against 312 ms at 30,000 in J-9410 (load 6-9) and 721 ms-3.3 s in J-9461's
+windows: one or two samples per window under load. The slope of 35 ms per 1,000 turns is noise of
+that size, so the projected fail at 10,000 (1,616 ms) is not evidence.
+Decision: the 10,000 and 30,000 points are replaced by 5,000 plus the slope, stated in the rows
+(`projected: true`). `journal.snapshot` needs more samples per point than a 60 s window of turns
+gives (one snapshot per 256 deliveries, about 28 turns): the exclusive pass should read it with
+`JOURNAL_SNAP_EVERY=64` (4 x the samples) or a longer window at one point.
+
+### J-9464 2026-11-18 M2 long-session templates: the 5,000 and busy steps sit near the box - perf
+Evidence: the template steps of J-9460, shared slots, load 4-7.
+{"metric":"template.long","spec":"long 5000 plain","import":{"turns":5000,"records":20000,"ms":448156,"turnsPerSecond":11.2,"sealWaits":75,"sealWaitMs":44928},"buildMs":469255}
+{"metric":"template.busy","spec":"busy 10x300 plain","import":{"sessions":10,"turns":3000,"ms":438242,"turnsPerSecond":6.8},"buildMs":496364}
+Reading: the 5,000-turn import holds 11.2 turns/s (11.0-11.6 at 200 and 1,000: flat with length,
+as J-0485), so the step is 8.6 min held; a busy step of 10 x 300 imports at 6.8-8.6 turns/s
+(10 sessions in one state import slower per turn than one long session) and holds 7.4-9.2 min.
+Both fit, but a load above about 8 would push them over the box. A step that fails exits 124 and
+the template is simply missing; nothing partial is used (the description is written last).
+Decision: kept as is. If they time out: busy steps of 5 sessions (`THROUGHPUT_BATCH=5`, 10 steps)
+and a 5,000 template chained from the 1,000 one need `importState` to append to an existing
+session (not possible today) or a segment-copy import (J-0483, a core-side candidate).
+
+### J-9465 2026-11-18 M2 provider perf over windows: an idle pooled connection reset - deviation
+Evidence: `perf/provider.perf.mjs` at `35af96bedd` failed `provider.sse.attempt` with
+"OpenRouter could not be reached" on its first request; a debug wrapper around `fetch` showed
+`TypeError: fetch failed` caused by `read ECONNRESET`. Back-to-back attempts without the earlier
+windows passed.
+Reading: the 10 s parse window (no network) sat between two network windows; the fake server's
+Node keep-alive timeout (5 s) closed the pooled connection and the next POST was sent on it. With
+three runs (W2.1a) the gap was 0.1 s, so it never showed. Fix `6e4ae378f6`: the parse row is
+measured first, before the fake server starts. After: all nine rows over 10 s windows, exit 0,
+93 s held; overhead 0.20 ms median (1,800 deltas), parse 314 MiB/s, attempt 147 ms per 10 MiB,
+stream 246 ms, Anthropic 131 / 202 ms, retry pass-through -0.4 ms, retry wait +2.7 ms.
+Decision: test-only fix. The provider itself retries a reset before any delta (J-9442 (2)), so a
+real daemon would not have failed; the bare attempt has no retry by design.
+
+### J-9466 2026-11-18 M2 throughput and restart.serving from the cached 50 x 300 template - perf
+Evidence: `perf/throughput.perf.mjs` as J-9460 (load 5-6), template `c364d231a686` (copy 7.9 s,
+served 11.0 s).
+{"metric":"restart.serving.m2","value":11485.6,"runs":[7282.3,11485.6,14372.7],"sessions":50,"turnsEach":300,"pass":true}
+{"metric":"throughput","value":22.7,"sessions":20,"window":60000,"samples":256,"turnsPerSecond":3.9,"perDeliveryMs":504.8,"turnMsMedian":3473,"turnMsP95":20511,"turnMsP99":64085.8,"engine":{"snapshot":{"count":5,"ms":142719.6},"wake":{"count":13,"ms":245256.5}}}
+Reading: `restart.serving` passes (no idle vat woken) but at 7.3-14.4 s against 4.4-5.6 s in
+J-9412: the shared machine. Throughput 22.7 deliveries/s (J-9412: 29.3) with 13 wakes taking 245 s
+of engine time inside the window and a p99 turn of 64 s: under load a sleeping session's wake
+dominates the tail.
+Decision: recorded under load only; the exclusive pass gives the number. Same suspects as J-9412.
+
+### J-9467 2026-11-18 M2-P1 fit: what suits Thixotrope in windowed checks - fit
+Evidence: J-9460..J-9466; `runs.jsonl` for this unit.
+Reading: good fit: orthogonal persistence makes a state a directory, so a 5,000-turn session or 50
+sessions is built once and copied in 1-18 s (copy) plus 6-11 s (serve), and every measured file
+starts from the same bytes; flatness can be read at any length the import can reach. Awkward:
+(1) building those states is slow (11 turns/s through the vat's per-record checks, J-0481), so the
+largest template steps sit near the box; (2) one snapshot per 256 deliveries gives one or two
+samples per 60 s window, too few for `journal.snapshot` and making `checkpoint.stall` the snapshot
+by construction; (3) a shared slot waiter has no queue: this unit's provider waiter was passed by
+later takers for 22 minutes (and 46 minutes before the restart) while other lanes' runs took and
+released slots, so a single short run can wait longer than all its work.
+Decision: (1) and (2) to the PM as core candidates; (3) to the lock's owner (a FIFO ticket for
+shared waiters).
