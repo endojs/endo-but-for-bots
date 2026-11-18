@@ -116,11 +116,23 @@ export const draftSessionKeys = storage => {
 };
 
 /**
- * A request id: 32 lowercase hex digits from the platform's random source.
+ * A request id in M2's A.4 format, the only one `Composer.submit` accepts
+ * (`guest/lib/pending-queue.js` `REQUEST_ID`): 13 digits of milliseconds, a
+ * dash, and a version-4 UUID from the platform's random source. (The M3
+ * contract's 9.2 said 32 hex digits; the session refuses those with
+ * "Invalid submission request ID", J-9604.)
  *
  * @param {any} [crypto] `globalThis.crypto` or a fake with `getRandomValues`
+ * @param {number} [now] milliseconds
  */
-export const newRequestId = (crypto = globalThis.crypto) => {
+export const newRequestId = (crypto = globalThis.crypto, now = Date.now()) => {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  // Version 4 and the RFC 4122 variant, without bitwise operators.
+  bytes[6] = 0x40 + (bytes[6] % 16);
+  bytes[8] = 0x80 + (bytes[8] % 64);
+  const hex = Array.from(bytes, byte =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
+  const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return `${String(Math.floor(now)).padStart(13, '0')}-${uuid}`;
 };

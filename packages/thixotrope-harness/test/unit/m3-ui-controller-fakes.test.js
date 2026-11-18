@@ -39,8 +39,14 @@ test('fake powers: list, submit, live, play, history', async t => {
   t.is(a1.turns.length, 5);
   t.true(a1.turns[0].sealed);
   t.is(a1.next, undefined);
-  t.deepEqual(features, []);
-  t.deepEqual(featuresFor('app.panel'), []);
+  // M3's own directories export no feature; other lanes' (M4, M5) may be
+  // present in the same tree (W3.8).
+  const m3Dirs = ['sessions', 'conversation', 'shell', 'net', 'controller'];
+  t.false(features.some(f => m3Dirs.includes(f.id.split('.')[0])));
+  t.deepEqual(
+    featuresFor('app.panel'),
+    features.filter(f => f.slot === 'app.panel'),
+  );
   t.throws(
     () =>
       collectFeatures([
