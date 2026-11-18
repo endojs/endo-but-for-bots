@@ -13756,3 +13756,75 @@ Time: first command 22:51:35Z; contract committed 23:18Z. Over 60 s: none (the p
 cargo. tsc and eslint clean on the new files; `lint:duplicates` 3.07 % under the 3.25 % ceiling
 (the other contract writers' new files included).
 Fit: neutral.
+
+### J-1110 2026-11-18 W9.0 what the M9 contract was built from - read
+Evidence: ARCH (facts, D-1..D-18, sections 9 and 12), milestones.md (conventions, the review's
+rules, the M9 section and its dependants M12, M13), process.md, m2 (delete, holds, the archive),
+m5 (packages, labels, the inspector, the membrane, the session seams), the review (harness.md 1-5
+and 8, core.md AR-SYN-15 and -24), CORE-CHANGES (CC-026..028), the step-3 plan as written by P3
+(read in full once it appeared), the core's `src/mail` (mailbox, contact), the spec's R/P items
+of M9 and its A.1/A.3 reshaping rows, and Fae's inbox loop, subagent and workflow tools at
+1315bef86 for the fixed texts. Code read where the contract fixes a seam: `turn.js` claim and
+`claimNext`, `recovery.js` steps, `packages.js`, `runtime-parts.js`, `tool-table.js`,
+`tool-args.js`, factory `factory.js`, `services.js`, `rows.js`, `delete.js`, `AH/blobs.js`
+(`writersFor`), the guard modules and `vocabulary-tables.js` with its test.
+Reading: the inbox, `turnSources`, `recoverySteps`, `onDelete` and `packages.open` seams were all
+anticipated by earlier contracts; step 3 turns the session-side ones into runtime parts. Two
+needs had no seam: a cross-session copy of a staged text (17.3 refuses another session's handle)
+and parsing a staged argument JSON in the session (no `JSON.parse` there).
+Fit: good.
+
+### J-1111 2026-11-18 W9.0 envelope sizes - measure
+Evidence: a Node probe under SES lockdown with the guest prelude (removed after the run):
+`messageBytes` of the largest values the new shapes admit.
+Reading: a package envelope with an 8,192-byte body, 32 attachments of 80-unit labels and a
+256-unit sender title: 11,380 string bytes (J-10125 measured 11,021 encoded bytes for the
+Composer's similar submit). A form envelope at the field bounds alone (32 fields, 64-unit names,
+512-unit descriptions, 256-unit defaults, a 4,096-unit description): 32,061 string bytes, over
+`frameBytes`. Every shape of `guards/mail.js` and `guards/post-office.js` builds (43 entries), a
+`definition` envelope is refused, and the two method-guard spreads make valid interfaces.
+Decision: `mailLimits.envelopeBytes` = `frameBytes` - 2,048 = 22,528 bounds an envelope as a
+whole (as `presetRecordBytes` does), checked by the post office before delivery
+(`mailTextOf.envelopeTooLarge`); form defaults 256 units.
+Fit: good.
+
+### J-1112 2026-11-18 W9.0 fixed texts and their sources - decision
+Evidence: `guest/lib/guards/mail.js` `mailTexts`, `mailTextOf`; `guards/post-office.js`
+`postOfficeTexts`, `postOfficeTextOf`.
+Reading: Fae's words at 1315bef86 for the package note and the request/form turn text
+(`session-factory.js` 1736-1748), the unanswered rejection (1617), the tree limit, name, task,
+timeout, in-flight, no-subagent, timeout and stopped texts (`subagent.js`), the workflow answers
+(`workflow-tools.js`), `sent` and `replied` (`tool-makers.js`), and R3-214's mail-fraud text.
+The harness's own: `spawned` (Fae's names a mail path the harness does not have), the inbox,
+operator-inbox and recipient bounds, `notAnAddress`, `recipientLost`, `bodyCut`,
+`dismissUnhandled`, `answerTooLarge`, `envelopeTooLarge`, `systemPromptTooLong`, the form-kind
+texts, `askAbandoned`, `subagentExists`, `subagentLost`, and the post office's. The em dash is a
+`—` escape (guest ASCII rule).
+Fit: neutral.
+
+### J-1113 2026-11-18 W9.0 the M9 decisions - decision
+Evidence: `designs/m9-interfaces.md` section 2 (D-M9-1..20), sections 6, 7 and 13.
+Reading: the harness builds its own mail rather than reusing or wrapping the core's (placement in
+the session vat, bounded state, typed requests and staged bodies, and independence from
+AR-SYN-15's ruling). All mail goes through one post office in the factory vat, which stamps the
+sender, recognises addresses by amplification (no session calls an object it did not mint), and
+holds the only object that may copy a blob for another owner: `RelayWriters.copy` on the
+ownerless writers `AgentHostAdmin.writersFor()` already answers, an adapter change with no
+manager-part change. Inbox and subagents are runtime parts as the step-3 plan says, but their
+tools are static table entries so a granted tool cannot silence them (a deviation from P3 2.4,
+with the reason). At most one turn per message across a restart (departs from R4-59's re-run);
+an ask across a restart ends with the outcome-unknown text (recovery's step order is fixed).
+Staged tool arguments are split by the exec vat. Core requests CC-110 (C-10), CC-111 (handoff of
+relayed presences), CC-112 (factory idle-sleep exemption). Session program share for M9:
+16,384 bytes, against 25-27 KB left after step 3 for M6, M8 and M9 together (owner question
+O-M9-8).
+Fit: good (every M9 object is a harness object passed by reference; names appear only as labels,
+model-facing numbers and the operator's idempotency key).
+
+### J-1114 2026-11-18 W9.0 time record - process
+Evidence: first command 2026-11-18T22:51:33Z; last command logged with the W9.0 report.
+Reading: commits `fc2edcaa13` (guards, limits, texts) and `cdfcccd18d` (the contract). Over 60 s:
+none (the probes and tsc under 10 s, prettier and eslint under 30 s each). Not run: any
+supervisor, integration test, perf check or cargo. tsc and eslint clean on the new files;
+`lint:duplicates` 3.03 % under the 3.25 % ceiling with the other contract writers' new files.
+Fit: neutral.
