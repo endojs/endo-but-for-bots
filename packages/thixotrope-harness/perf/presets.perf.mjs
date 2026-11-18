@@ -15,7 +15,9 @@
  * Diagnostic rows over shorter windows (PRESETS_PROBE_MS, default 10 s), to
  * attribute a miss: `factory.floor` (`Inventory.rev()`, a factory crank
  * that does nothing), `presets.save.small` (a save with no endowments),
- * `inventory.page1` (a page of one row).
+ * `inventory.page1` (a page of one row), `presets.list64` (`PresetCatalog.list()`
+ * of 64 presets: 64 handles with the lightest guard, to tell the cost of a
+ * handle in a message from the cost of the guard checks).
  *
  * Each row carries the durable-vat deliveries per operation from
  * `status().timings` (every vat's; the factory's crank is the one asked
@@ -138,6 +140,22 @@ await runPerf('presets', async ({ provision }) => {
       revision,
     );
   });
+
+  for (let n = (await E(catalog).list()).length; n < 64; n += 1) {
+    revision = (
+      await E(catalog).create(
+        harden({ label: `Filler ${n}`, template: 'general' }),
+        revision,
+      )
+    ).revision;
+  }
+  await probe(
+    'presets.list64',
+    async () => {
+      await E(catalog).list();
+    },
+    { handles: 64 },
+  );
 
   await E(inventory).add('only', backend);
   await probe('inventory.page1', async () => {
