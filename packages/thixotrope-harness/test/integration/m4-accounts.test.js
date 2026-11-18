@@ -183,19 +183,19 @@ run(
     );
     t.true(offered.includes('accountStatus'), JSON.stringify(offered));
     const answered = posts(server)[before + 1]?.json;
+    // The wire names the call by the session's own id (not the provider's),
+    // so find the call by its name, then its result by that id.
     /** @type {any[]} */
-    const results = [];
-    for (const message of answered?.messages ?? []) {
-      for (const block of Array.isArray(message.content)
-        ? message.content
-        : []) {
-        if (
-          block.type === 'tool_result' &&
-          block.tool_use_id === 'toolu_account_1'
-        )
-          results.push(block);
-      }
-    }
+    const blocks = (answered?.messages ?? []).flatMap((/** @type {any} */ m) =>
+      Array.isArray(m.content) ? m.content : [],
+    );
+    const calls = blocks.filter(
+      b => b.type === 'tool_use' && b.name === 'accountStatus',
+    );
+    t.is(calls.length, 1, 'the call is in the next request');
+    const results = blocks.filter(
+      b => b.type === 'tool_result' && b.tool_use_id === calls[0]?.id,
+    );
     t.is(results.length, 1, 'one result for the call');
     const [result] = results;
     const resultText =
@@ -209,7 +209,9 @@ run(
     );
     t.true(resultText.includes('Account: member obs (claude)'), resultText);
     t.true(resultText.includes('Account: member decl (claude)'), resultText);
-    t.true(resultText.includes('Plan: max'), resultText);
+    // Both members were read by the refresh above: each figure says so.
+    t.true(resultText.includes('observed: read from the provider'), resultText);
+    t.true(resultText.includes('not attributed'), resultText);
     emit({
       metric: 'm4.accounts.toolOffered',
       offered,
