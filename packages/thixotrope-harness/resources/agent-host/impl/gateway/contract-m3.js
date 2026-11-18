@@ -134,13 +134,19 @@ export const uiSlots = Object.freeze([
   'header.chip',
   /** A chip in the status bar (account chips). */
   'statusbar.chip',
-  /** Composer helpers (@-mention autocomplete, voice). */
+  /**
+   * Composer helpers (@-mention autocomplete, voice); props
+   * `ComposerAddonProps`, optional `send` override.
+   */
   'composer.addon',
   /** Extra fields of the "Start a new session" dialog (internet toggle). */
   'newSession.field',
   /** Sections of the session Settings panel (emergency stop). */
   'session.settings',
-  /** Renderers for parts of a settled reply (widgets, mail captions). */
+  /**
+   * Per-turn renderers under the turn's user message (attachment chips,
+   * widgets, mail captions); props `MessageRendererProps`.
+   */
   'message.renderer',
 ]);
 
@@ -234,6 +240,12 @@ export const uiTextOf = Object.freeze({
  * @property {() => any} history the incarnation's `History`
  * @property {(callback: () => void) => void} whenAttached runs once the
  *   agent host is attached (blobs and secrets work from then on)
+ * @property {() => Promise<any>} secretWriter the incarnation's one
+ *   `SecretWriter` (M2 `AH/secrets/manager.js` `secretWriter`: made once
+ *   per incarnation, so the same object a page reaches through
+ *   `SecretsAdmin.openWriter()`, A-11). Call it only after `whenAttached`;
+ *   before that it rejects. M4's `GW/extensions/m4-secrets.js` resolves its
+ *   `LargeCall.target` with it
  * @property {string} stateDir the daemon's state directory (read only)
  * @property {(event: Record<string, unknown>) => void} log a structured
  *   line; never a message body, secret or fragment
@@ -273,9 +285,10 @@ export const uiTextOf = Object.freeze({
  */
 
 /**
- * The default export shape of `AH/gateway/extensions/<name>.js`. Files are
- * loaded in name order at adapter start; a file that throws is logged and
- * skipped, never fatal.
+ * The named export `gatewayExtension` of `AH/gateway/extensions/<name>.js`
+ * (a synchronous ES module: no top-level await, J-0519). Files are loaded
+ * in name order at adapter start; a file that throws, or has no
+ * `gatewayExtension` export, is logged and skipped, never fatal.
  *
  * @typedef {object} GatewayExtension
  * @property {string} name
@@ -286,21 +299,79 @@ export const uiTextOf = Object.freeze({
  */
 
 /**
- * The export `feature` of `ui/src/<dir>/feature.js` (m3-interfaces.md
- * 6.2). Collected by `ui/build.mjs` in directory-name order.
+ * One UI feature (m3-interfaces.md 6.2). The export `feature` of
+ * `ui/src/<dir>/feature.js` is one `UiFeature` or an array of them (one
+ * directory may fill several slots, e.g. a panel and a status-bar chip).
+ * Collected by `ui/build.mjs` in directory-name order, array order within
+ * a file; a duplicate `id` fails the build.
+ *
+ * Props by slot (`component`):
+ * - `composer.addon`: `ComposerAddonProps`;
+ * - `message.renderer`: `MessageRendererProps`;
+ * - every other slot: `{ context }`.
  *
  * @typedef {object} UiFeature
- * @property {string} id unique, the directory name
+ * @property {string} id unique over all features: the directory name, or
+ *   `<dir>.<part>` when a file exports several
  * @property {string} slot one of `uiSlots`
  * @property {string} [label] menu or chip text
  * @property {number} [order] within the slot (default 100)
  * @property {(context: FeatureContext) => boolean} [when] shown only when
  *   true (default: always)
- * @property {(props: { context: FeatureContext }) => any} component a
- *   Preact component
- * @property {(request: { context: FeatureContext, session: any, text: string, requestId: string }) => Promise<any> | undefined} [send]
- *   `composer.addon` only: a submission override; the first addon that
- *   answers a value (a Receipt) sends instead of `Composer.submit`
+ * @property {(props: any) => any} component a Preact component (props as
+ *   above)
+ * @property {(request: ComposerSendRequest) => Promise<any> | undefined} [send]
+ *   `composer.addon` only: a submission override. Addons are asked in slot
+ *   order; the first whose `send` answers a promise sends instead of
+ *   `Composer.submit` (its promise answers the `Receipt`); `undefined`
+ *   passes to the next addon, and after the last one the controller calls
+ *   `Composer.submit(session, text, requestId)`. A rejection keeps the
+ *   draft and shows the error's message in the composer's status line
+ */
+
+/**
+ * What a `composer.addon` component receives. `input` is the composer's
+ * current text and caret (UTF-16 offsets), re-rendered on every change;
+ * `replaceRange` replaces `[start, end)` of the input and puts the caret
+ * after the inserted text (an @-mention completion).
+ *
+ * @typedef {object} ComposerAddonProps
+ * @property {FeatureContext} context
+ * @property {{ text: string, caret: number }} input
+ * @property {(start: number, end: number, text: string) => void} replaceRange
+ */
+
+/**
+ * The argument of `UiFeature.send`. `resend` is true when the controller
+ * resends a saved draft after a reconnect or reload; it does so only after
+ * `E(session).getSubmissionReceipt(requestId)` answered none, and through
+ * the same addon chain as the first send (m3-interfaces.md 9.2).
+ *
+ * @typedef {object} ComposerSendRequest
+ * @property {FeatureContext} context
+ * @property {any} session the `Session` presence
+ * @property {string} text
+ * @property {string} requestId
+ * @property {boolean} resend
+ */
+
+/**
+ * What a `message.renderer` component receives, once per turn of the
+ * conversation, rendered under that turn's user message.
+ * `turn` is the controller's entry for the turn (`turnId`; `turn`, the
+ * `Turn` presence, absent for archived turns; `status`, the last
+ * `TurnStatus` seen). `record` is the turn's `TurnStarted` record exactly
+ * as a history page (`Session.getHistoryPage`, `History.page`) delivered
+ * it; for a turn the page saw start live and has not yet re-read from a
+ * page, it is the `turn-start` `VatEvent` as delivered (`type` instead of
+ * `kind`). Either way every optional field a later milestone adds is kept
+ * (M5's `attachments`): the controller never projects records onto M2's
+ * keys. A renderer with nothing to show returns null.
+ *
+ * @typedef {object} MessageRendererProps
+ * @property {FeatureContext} context
+ * @property {{ turnId: string, turn?: any, status?: any }} turn
+ * @property {Record<string, any>} record
  */
 
 /**

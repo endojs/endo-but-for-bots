@@ -14,18 +14,22 @@
  * holds is an M1a/M1b/M2 object passed through unchanged (m3-interfaces.md
  * section 3): M3 adds no method to any session, factory or turn object.
  *
- * This module imports only `limits.js`, never `interfaces.js`, so that
- * `interfaces.js` can import `m3AgentHostAdminMethods` from here (the one
- * seam M3 needs in the shared contract file, m3-interfaces.md 11) without
- * an import cycle. It builds its guards lazily, as `interfaces.js` does.
+ * This module imports only `limits.js`. `interfaces.js` does NOT import it
+ * (it would put manager-only code into the session and exec bundles): the
+ * manager's facet guard is extended in `durable.js` with
+ * `withGatewayAdmin(m2Interfaces.AgentHostAdmin)` (m3-interfaces.md 11,
+ * hotspot H2), so only the manager bundle carries this file. It builds its
+ * guards lazily, as `interfaces.js` does.
  *
- * Gateway key vocabulary (m3-interfaces.md 4.4): every `guest/lib/
- * interfaces-m<N>.js` exports `vocabularyShapes()`, the patterns whose
- * record keys a browser may send; the gateway walks them together with
- * every shape of `interfaces.js`.
+ * Gateway key vocabulary (m3-interfaces.md 4.4, 6.3): the gateway loads
+ * every `guest/lib/interfaces-m*.js` file and walks the patterns its
+ * `vocabularyShapes()` export answers (shapes and interface guards, whose
+ * method argument patterns are walked too); a file without the export is
+ * logged and skipped.
  *
- * Runs in vats (the manager vat bundles it through `durable-gateway.js`)
- * and in Node (prelude installed first, as for `interfaces.js`).
+ * Runs in vats (the manager vat bundles it through `durable-gateway.js`
+ * and `durable.js`) and in Node (prelude installed first, as for
+ * `interfaces.js`).
  */
 import { limits } from './limits.js';
 
@@ -286,22 +290,40 @@ export const m3MethodNames = harden({
 // ---------------------------------------------------------------- seams
 
 /**
- * The method M3 adds to `AgentHostAdmin` (m3-interfaces.md 11, hotspot H1):
- * `interfaces.js` spreads this into the `AgentHostAdmin` method table the
- * manager's facet uses, and appends `m3AgentHostAdminMethodNames` to that
- * interface's name list. Nothing else of M3 enters `interfaces.js`.
+ * The method M3 adds to `AgentHostAdmin` (m3-interfaces.md 11, hotspot H2).
+ * `interfaces.js` and `m2MethodNames` are not edited: the full name list of
+ * the manager's facet is `[...m2MethodNames.AgentHostAdmin,
+ * ...m3AgentHostAdminMethodNames]` (checked by `m3-interfaces.test.js`).
  */
 export const m3AgentHostAdminMethods = () =>
   harden({ gateway: M.call().returns(R('GatewayAdmin')) });
 export const m3AgentHostAdminMethodNames = harden(['gateway']);
 
 /**
+ * `base` (the `AgentHostAdmin` guard `durable.js`'s facet uses:
+ * `m2Interfaces.AgentHostAdmin`, after the W2.9 fold
+ * `interfaces.AgentHostAdmin`) plus `gateway()`, as one interface guard of
+ * the same name. Reads `base.payload.methodGuards` (an internal shape of
+ * `@endo/patterns`, the technique of M5's D-M5-5, pinned by
+ * `m3-interfaces.test.js`; core request CC-072 asks for
+ * `getInterfaceGuardPayload` in the prelude instead). If a later lane also
+ * extends `AgentHostAdmin` this way, the calls nest:
+ * `withGatewayAdmin(withX(base))`.
+ * @param {any} base an `M.interface` guard named `AgentHostAdmin`
+ */
+export const withGatewayAdmin = base =>
+  M.interface('AgentHostAdmin', {
+    ...base.payload.methodGuards,
+    ...m3AgentHostAdminMethods(),
+  });
+harden(withGatewayAdmin);
+
+/**
  * Patterns whose record keys a browser may send through the gateway
- * (m3-interfaces.md 4.4). Every `interfaces-m<N>.js` exports one.
+ * (m3-interfaces.md 4.4, 6.3): every shape and interface guard of this file
+ * (an interface's method argument patterns are walked). Each
+ * `interfaces-m*.js` file that has browser-reachable records exports one; a
+ * file without it is logged and skipped by the gateway.
  */
 export const vocabularyShapes = () =>
-  harden([
-    m3Shapes.GatewayConfig,
-    m3Shapes.GatewayStatus,
-    m3Shapes.GatewayPowers,
-  ]);
+  harden([...Object.values(m3Shapes), ...Object.values(m3Interfaces)]);
