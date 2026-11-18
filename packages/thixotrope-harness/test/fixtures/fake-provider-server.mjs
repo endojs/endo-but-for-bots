@@ -107,6 +107,8 @@ export const BODY_MARKER = 'FAKE-PROVIDER-BODY-do-not-show';
  * @property {any} json the parsed body, or undefined
  * @property {number} bodyBytes
  * @property {boolean} authorization a credential header was present
+ * @property {string} [credential] the `credentialTag` label of the
+ *   credential, when the server was given one
  * @property {boolean} closed the client closed before the response ended
  * @property {boolean} completed
  * @property {boolean} unplanned
@@ -437,11 +439,16 @@ const ROUTES = {
  *   `fixturesDir`)
  * @param {PlanEntry[]} [options.plan]
  * @param {(entry: { request: number, event: number, at: number }) => void} [options.trace]
+ * @param {(value: string) => string | undefined} [options.credentialTag]
+ *   (W2.9, acceptance 7) maps the credential a request carried (the bearer
+ *   token or `x-api-key`) to a label the test chose, recorded as
+ *   `credential`; the value itself is never recorded
  */
 export const startFakeProviderServer = async ({
   fixtures = fixturesDir,
   plan: initialPlan = [],
   trace,
+  credentialTag,
 } = {}) => {
   /** @type {PlanEntry[]} */
   let plan = [...initialPlan];
@@ -506,6 +513,16 @@ export const startFakeProviderServer = async ({
       authorization:
         req.headers.authorization !== undefined ||
         req.headers['x-api-key'] !== undefined,
+      ...(credentialTag === undefined
+        ? {}
+        : {
+            credential: credentialTag(
+              String(
+                req.headers['x-api-key'] ??
+                  (req.headers.authorization ?? '').replace(/^Bearer /, ''),
+              ),
+            ),
+          }),
       closed: false,
       completed: false,
       unplanned: false,

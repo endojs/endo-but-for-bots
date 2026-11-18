@@ -9,8 +9,8 @@
  *    the session keeps working.
  * 9. Two list-feed subscribers see create and rename within 500 ms; a
  *    closed subscriber is dropped (its `next()` answers closed at once and
- *    stays empty). Delete needs M2's `deleteSession` (16.6): that part is a
- *    known failure (`test.failing`) until M2 builds it.
+ *    stays empty). Delete (M2 `deleteSession`, 16.6; M2 acceptance 13)
+ *    publishes `row-removed`.
  *
  * State: the m1b template (real session and exec programs, default pool).
  *
@@ -377,10 +377,9 @@ run(
   },
 );
 
-// Known failure until M2 (W2.7 `deleteSession`, m1b-interfaces.md 16.6):
-// there is no delete, so no `row-removed` event can be observed.
-(integrationEnabled ? test.failing : test.skip)(
-  '9 (delete): list subscribers see a delete within 500 ms [known failure: deleteSession is M2]',
+// Built in M2 (W2.7 `deleteSession`, m1b-interfaces.md 16.6).
+(integrationEnabled ? test : test.skip)(
+  '9 (delete): list subscribers see a delete within 500 ms',
   async t => {
     t.timeout(2 * 60_000);
     const { slice, made } = await open(t);
