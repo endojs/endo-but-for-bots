@@ -210,140 +210,131 @@ const posts = () =>
     .requests()
     .filter(request => request.method === 'POST');
 
-run(
-  'acceptance 1: OpenRouter and Anthropic sessions stream more than one delta per reply',
-  async t => {
-    const { slice, openRouter, anthropic } = await open(t);
-    const srv = /** @type {NonNullable<typeof server>} */ (server);
-    srv.push({ sse: 'openrouter-text.sse' });
-    const or = await sessionOn(slice, openRouter, OPENROUTER_MODEL);
-    const a = await turn(slice, or.session, or.live, 'hello openrouter');
-    t.is(a.last.type, 'end');
-    t.true(a.deltas.length > 1, `${a.deltas.length} deltas`);
-    t.is(
-      a.deltas.map((/** @type {any} */ e) => e.text).join(''),
-      'Hello, world. How can I help?',
-    );
-    const [request] = posts();
-    t.is(request.path, '/api/v1/chat/completions');
-    t.true(request.authorization);
-    t.is(request.json.model, OPENROUTER_MODEL);
-    t.true(request.json.stream);
-    t.false(JSON.stringify(request.json).includes(KEY));
+run('acceptance 1: OpenRouter and Anthropic sessions stream more than one delta per reply', async t => {
+  const { slice, openRouter, anthropic } = await open(t);
+  const srv = /** @type {NonNullable<typeof server>} */ (server);
+  srv.push({ sse: 'openrouter-text.sse' });
+  const or = await sessionOn(slice, openRouter, OPENROUTER_MODEL);
+  const a = await turn(slice, or.session, or.live, 'hello openrouter');
+  t.is(a.last.type, 'end');
+  t.true(a.deltas.length > 1, `${a.deltas.length} deltas`);
+  t.is(
+    a.deltas.map((/** @type {any} */ e) => e.text).join(''),
+    'Hello, world. How can I help?',
+  );
+  const [request] = posts();
+  t.is(request.path, '/api/v1/chat/completions');
+  t.true(request.authorization);
+  t.is(request.json.model, OPENROUTER_MODEL);
+  t.true(request.json.stream);
+  t.false(JSON.stringify(request.json).includes(KEY));
 
-    srv.push({ sse: 'anthropic-text.sse' });
-    const an = await sessionOn(slice, anthropic, ANTHROPIC_MODEL);
-    const b = await turn(slice, an.session, an.live, 'hello anthropic');
-    t.is(b.last.type, 'end');
-    t.true(b.deltas.length > 1, `${b.deltas.length} deltas`);
-    const anthropicRequest = posts()[1];
-    t.is(anthropicRequest.path, '/v1/messages');
-    t.is(anthropicRequest.json.model, ANTHROPIC_MODEL);
-    t.is(anthropicRequest.json.max_tokens, 4096);
-    await record({
-      metric: 'm2.providers.turn',
-      unit: 'ms',
-      openRouter: Math.round(a.ms),
-      anthropic: Math.round(b.ms),
-      deltas: [a.deltas.length, b.deltas.length],
-    });
-    shared.or = or;
-  },
-);
+  srv.push({ sse: 'anthropic-text.sse' });
+  const an = await sessionOn(slice, anthropic, ANTHROPIC_MODEL);
+  const b = await turn(slice, an.session, an.live, 'hello anthropic');
+  t.is(b.last.type, 'end');
+  t.true(b.deltas.length > 1, `${b.deltas.length} deltas`);
+  const anthropicRequest = posts()[1];
+  t.is(anthropicRequest.path, '/v1/messages');
+  t.is(anthropicRequest.json.model, ANTHROPIC_MODEL);
+  t.is(anthropicRequest.json.max_tokens, 4096);
+  await record({
+    metric: 'm2.providers.turn',
+    unit: 'ms',
+    openRouter: Math.round(a.ms),
+    anthropic: Math.round(b.ms),
+    deltas: [a.deltas.length, b.deltas.length],
+  });
+  shared.or = or;
+});
 
-run(
-  'acceptance 6: cancel mid-stream closes the connection; the turn is cancelled and its stream ends',
-  async t => {
-    const { slice } = await open(t);
-    const srv = /** @type {NonNullable<typeof server>} */ (server);
-    const { session, live } = shared.or;
-    srv.push({
-      events: openRouterChunks({
-        deltas: Array.from({ length: 400 }, (_, i) => `w${i} `),
-      }),
-      delayMs: 20,
-    });
-    const before = posts().length;
-    const from = /** @type {number} */ (live.deliveries.length);
-    const receipt = await E(slice.composer).submit(
-      session,
-      'a long one',
-      requestId(),
-    );
-    const { turnId } = await E(receipt.turn).getStatus();
-    await waitFor(
-      () =>
-        live.deliveries.some(
-          (/** @type {any} */ d, /** @type {number} */ i) =>
-            i >= from && d.event.type === 'delta' && d.event.turnId === turnId,
-        ),
-      30_000,
-      'first delta',
-    );
-    const t0 = performance.now();
-    await E(receipt.turn).cancel();
-    await waitFor(
-      () => posts()[before]?.closed === true,
-      10_000,
-      'the server sees the connection closed',
-    );
-    const closedMs = performance.now() - t0;
-    const last = await waitFor(
-      () =>
-        live.deliveries.find(
-          (/** @type {any} */ d, /** @type {number} */ i) =>
-            i >= from &&
-            (d.event.type === 'end' || d.event.type === 'abort') &&
-            d.event.turnId === turnId,
-        ),
-      30_000,
-      'the turn ends',
-    );
-    t.deepEqual(last.event, { type: 'end', turnId, status: 'cancelled' });
-    const status = await E(receipt.turn).whenFinished();
-    t.is(status.state, 'cancelled');
-    t.false(posts()[before].completed);
-    await record({
-      metric: 'm2.providers.cancel.closed',
-      unit: 'ms',
-      value: Math.round(closedMs),
-    });
-  },
-);
+run('acceptance 6: cancel mid-stream closes the connection; the turn is cancelled and its stream ends', async t => {
+  const { slice } = await open(t);
+  const srv = /** @type {NonNullable<typeof server>} */ (server);
+  const { session, live } = shared.or;
+  srv.push({
+    events: openRouterChunks({
+      deltas: Array.from({ length: 400 }, (_, i) => `w${i} `),
+    }),
+    delayMs: 20,
+  });
+  const before = posts().length;
+  const from = /** @type {number} */ (live.deliveries.length);
+  const receipt = await E(slice.composer).submit(
+    session,
+    'a long one',
+    requestId(),
+  );
+  const { turnId } = await E(receipt.turn).getStatus();
+  await waitFor(
+    () =>
+      live.deliveries.some(
+        (/** @type {any} */ d, /** @type {number} */ i) =>
+          i >= from && d.event.type === 'delta' && d.event.turnId === turnId,
+      ),
+    30_000,
+    'first delta',
+  );
+  const t0 = performance.now();
+  await E(receipt.turn).cancel();
+  await waitFor(
+    () => posts()[before]?.closed === true,
+    10_000,
+    'the server sees the connection closed',
+  );
+  const closedMs = performance.now() - t0;
+  const last = await waitFor(
+    () =>
+      live.deliveries.find(
+        (/** @type {any} */ d, /** @type {number} */ i) =>
+          i >= from &&
+          (d.event.type === 'end' || d.event.type === 'abort') &&
+          d.event.turnId === turnId,
+      ),
+    30_000,
+    'the turn ends',
+  );
+  t.deepEqual(last.event, { type: 'end', turnId, status: 'cancelled' });
+  const status = await E(receipt.turn).whenFinished();
+  t.is(status.state, 'cancelled');
+  t.false(posts()[before].completed);
+  await record({
+    metric: 'm2.providers.cancel.closed',
+    unit: 'ms',
+    value: Math.round(closedMs),
+  });
+});
 
-run(
-  'acceptance 8: a 429 with Retry-After is retried before any delta, never after one',
-  async t => {
-    const { slice } = await open(t);
-    const srv = /** @type {NonNullable<typeof server>} */ (server);
-    const { session, live } = shared.or;
-    srv.push(
-      { status: 429, headers: { 'retry-after': '1' } },
-      { sse: 'openrouter-text.sse' },
-    );
-    const before = posts().length;
-    const retried = await turn(slice, session, live, 'rate limited');
-    t.is(retried.last.type, 'end');
-    t.is(posts().length - before, 2, 'asked twice');
-    t.true(retried.ms >= 1000, `turn took ${Math.round(retried.ms)} ms`);
-    t.true(retried.deltas.length > 1);
+run('acceptance 8: a 429 with Retry-After is retried before any delta, never after one', async t => {
+  const { slice } = await open(t);
+  const srv = /** @type {NonNullable<typeof server>} */ (server);
+  const { session, live } = shared.or;
+  srv.push(
+    { status: 429, headers: { 'retry-after': '1' } },
+    { sse: 'openrouter-text.sse' },
+  );
+  const before = posts().length;
+  const retried = await turn(slice, session, live, 'rate limited');
+  t.is(retried.last.type, 'end');
+  t.is(posts().length - before, 2, 'asked twice');
+  t.true(retried.ms >= 1000, `turn took ${Math.round(retried.ms)} ms`);
+  t.true(retried.deltas.length > 1);
 
-    srv.push(
-      { sse: 'openrouter-text.sse', disconnectAfter: 4 },
-      { status: 429, headers: { 'retry-after': '1' } },
-    );
-    const from = posts().length;
-    const cut = await turn(slice, session, live, 'cut after a delta');
-    t.is(cut.last.type, 'abort');
-    t.is(cut.last.reason, texts.openRouterUnreachable);
-    t.false(JSON.stringify(cut.last).includes(BODY_MARKER));
-    t.is(posts().length - from, 1, 'not asked again after a delta');
-    // Drop the unused 429 so nothing waits on it.
-    srv.setPlan(catalogues());
-    await record({
-      metric: 'm2.providers.retry429',
-      unit: 'ms',
-      value: Math.round(retried.ms),
-    });
-  },
-);
+  srv.push(
+    { sse: 'openrouter-text.sse', disconnectAfter: 4 },
+    { status: 429, headers: { 'retry-after': '1' } },
+  );
+  const from = posts().length;
+  const cut = await turn(slice, session, live, 'cut after a delta');
+  t.is(cut.last.type, 'abort');
+  t.is(cut.last.reason, texts.openRouterUnreachable);
+  t.false(JSON.stringify(cut.last).includes(BODY_MARKER));
+  t.is(posts().length - from, 1, 'not asked again after a delta');
+  // Drop the unused 429 so nothing waits on it.
+  srv.setPlan(catalogues());
+  await record({
+    metric: 'm2.providers.retry429',
+    unit: 'ms',
+    value: Math.round(retried.ms),
+  });
+});
