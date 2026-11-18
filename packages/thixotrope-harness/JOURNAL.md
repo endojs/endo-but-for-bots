@@ -8122,3 +8122,35 @@ W5.5 and W5.6), `exec-m5` (W5.5), `presets` (W5.1), `mentions` (W5.7) and a new 
 both sides inside one window, and each probe has a cap, so every file is at most about 5.5
 minutes and the regression at most 69 slot-minutes (about 17 minutes on four slots).
 Decision: as described.
+
+### J-0740 2026-11-18 M5 prompt composition over a section table - deviation
+Evidence: `guest/lib/prompt-sections.js`, `guest/lib/system-prompt-base.js`,
+`guest/session/prompt.js` (commit 1258d8c2fa); `test/unit/m5-w52-prompt.test.js` (reads Fae's
+`session/system-prompt.js` at 1315bef86 from git and compares).
+Reading: the prompt is now the applying entries of the hook table `promptSections` (parts 1, 2,
+3 and 7), in part order, joined with one blank line and trimmed; M6, M9 and M12 append parts 6,
+4 and 5. For M2's inputs the joins give M2's exact layout (Floot's spoken introduction keeps its
+own trailing line break). Part 2 is Fae's guest section with three changes, all tested against
+Fae's source: the exec paragraph (M2, J-0472); the capability paragraph, rewritten for the
+per-call `powers` (`lookup`, `list`, `store`, `remove`; remove before reusing a petname); and a
+"Petstore tools" list after Fae's, naming `list`, `lookup`, `store`, `remove`,
+`describeCapability`, `readSources`, `adopt`, `adoptTool` and `exec`, with "use the ones in
+your tool list" because the inspection and package tools are not always offered. Fae's visual
+verification paragraph (browser, `viewImage`) is kept word for word though neither exists before
+M6/M8 (R4-26 lists it in part 2). Part 3 is empty (`applies` false). Part 7 is the snapshot's
+`instructions`; M2's `presetText` argument stays as an alias.
+Decision: as described. `m2-w26-prompt.test.js` keeps two M2 assertions on the old guest
+section (for the PM).
+
+### J-0741 2026-11-18 M5 prompt composition cost - perf
+Evidence: commit b9bc73ece9; a Node timing loop (scratch script, 3 s window per case, not a perf
+file: `prompt.compose` is W5.9's row); `test/integration/m5-prompt.test.js` under the run lock.
+Reading: Node composition, median 1.1 us (p99 1.7 us, 2.1 million samples) for the plain prompt,
+1.4 us (p99 2.3 us) with 4,096 three-byte units of instructions; budget <= 5 ms each. The
+composed prompt is 3,765 bytes plain and 4,061 spoken (M2: 2.9 and 3.2 KB), always inline; a
+maximal preset text puts it over `inlineBytes` and it is staged by M2's path (unit-tested). The
+integration file took 127.6 s wall (45 s template copy and start, 22 s for three sessions with
+two turns each and two refused creations).
+Fit: good. The composition runs once per creation in the factory vat and is pure text; the
+section table costs nothing that matters, and storing the result in `SessionConfig` (R4-28)
+means no vat recomposes.
