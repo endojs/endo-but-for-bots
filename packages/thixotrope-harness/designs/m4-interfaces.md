@@ -79,6 +79,8 @@ record keys per vat for life (rule 12.10).
 | `AccountsView` / `AccountsBatch` | 8 pools x 16 members x ~500 B | ~64 KB, adapter-local only |
 | `accountStatus` tool text | rendered for one pool | <= 32,768 units (tool output limit, R4-100); staged by the adapter tool path as any adapter tool result over `inlineBytes` (M1b 5.2) |
 | credential value | provider token JSON | read refused over 8,192 bytes (R7-25, `CREDENTIAL_TOO_LARGE` -> `INVALID`) |
+| secret value from a browser | `SecretWriter.replace` through the gateway (in process) | `m4Limits.browserSecretBytes` 1,040,384 bytes of JSON-escaped value (`wsMessageBytes` 1 MiB less 8 KiB of envelope), checked by the Secrets panel before sending; M2's 1,048,576-byte store bound (`secretValueBytes`) is reached only by the CLI's sealed-box write (9.1 item 4) |
+| accounts subscribers | `Accounts.watch()` viewers | M2's `channelLimits.subscribersPerSession` (32); idle ones (no `next()` call for `accountsIdleMs`, 60 s; a waiting `next()` is answered again every `accountsKeepaliveMs`, 30 s) are evicted (6) |
 
 ### 1.4 Bundle budget (measured at `3588cab190`)
 
@@ -90,6 +92,13 @@ is the `BackendKind` widening (H-1, about 30 bytes). The factory bundle gains
 `guest/factory/subscription-options.js` and `guest/lib/texts-m4.js` (about 4 KB). The manager
 vat's bundle gains `durable-subscriptions.js` and `interfaces-m4.js` (about 30 KB; install time
 only). W4.8 records all four sizes (`subscriptions.bundles` row).
+
+Cross-lane budget (PM, after the three contracts were read together): M3 adds 0 bytes to the
+session and exec programs, M4 at most 64 (H-1), M5 about 25 KB session and 12 KB exec, so the
+merged branch does not fit 200,000 / 100,000. M5's W5.9 measures the merged bundles and the PM
+raises `sessionProgramBytes` to 240,000 and `execProgramBytes` to 120,000 in the M5 merge commit
+(M5's open point O-1, flagged to the owner). M4 builds as stated here either way: its own budget
+is "+ <= 64 bytes" whatever the limit is.
 
 ---
 
@@ -169,7 +178,8 @@ operator's root authority, R7-22; this keeps `AgentHostAdmin`, which M3 extends,
 | `CredentialOps.auditReader()`, `accounts()` | same | manager | answered | tiny | same |
 | `AuditReader.page({ secret?, limit?, before? })` | `SecretsAdmin.auditReader()` | gateway (in process), CLI, tests | answered | <= 1,000 events, never into a vat | restart: get a new reader |
 | `Accounts.list()`, `forBackend(pool)`, `forSession(session)`, `refresh(pool?)`, `watch(rev?)` | `SubscriptionsAdmin.accounts()` | gateway (in process), CLI, tests | answered | adapter-local | restart: get a new one |
-| `AccountsSubscription.next()`, `close()` | `Accounts.watch()` | gateway | answered | one `AccountsBatch` | restart: re-watch |
+| `AccountsSubscription.next()`, `close()` | `Accounts.watch()` | gateway | answered | one `AccountsBatch` | restart: re-watch; idle (no `next()` call for 60 s): evicted, its next `next()` rejects with `m4Texts.accountsWatchClosed` and the page calls `watch(lastRev)` (6) |
+| `gatewayExtension` of `AH/gateway/extensions/m4-secrets.js` (W4.6) | loaded by M3's `GW/extensions.js` at adapter start | M3's bridge | - | - | - |
 | pool provider (`claudePoolKind`, `codexPoolKind` in `backendKinds`) | `backendKinds` hook (H-4) | the endpoint, per round | in process | - | - |
 | `accountStatus` adapter tool | `adapterTools` hook; offered by both pool kinds and both API kinds (`tools` lists) | the session vat through `TurnPorts.tools` (`AdapterTool.execute`, M1a) | answered | text <= 32,768 units, staged over `inlineBytes` | adapter restarted: as any adapter tool on the turn path (M2 11: outcome-unknown recovery) |
 
@@ -233,7 +243,7 @@ Nothing a session or exec vat can call returns a `PoolMember`, a `Secret`, a `Re
 - **No path from a Secret or a grant to its admin**: `ReadGrant` has `describe` only; nothing
   maps a key to a handle (M1b 17.3 rule 1).
 - **Values are UTF-8 text** (D-M4-7): R6-67's "byte-exact file" is a file whose bytes are valid
-  UTF-8; the panel refuses any other file with "This file is not text; secrets hold text".
+  UTF-8; the panel refuses any other file with `m4Texts.secretNotText`.
 - **Bootstrap rule** (R7-31, R8-38): the provisioning step (section 14) imports a value only into
   a Secret it creates in that run; it never writes a Secret that exists, is revoked or was
   deleted (it keeps the labels it created in its own options-file record).
@@ -295,7 +305,13 @@ all members marked or exhausted -> fail m4TextOf.subscriptionsExhausted(earliest
 ```
 
 The round's request is built once per member attempt from the same projection (`prepare()` runs
-once). Round 0 still sends nothing before `dispatching(0)` answered `true` (M1a contract 6).
+once). **System text:** `provider.js` resolves it exactly once per round, before the member loop,
+with M2's `systemTextOf(req.system, blobs, owner)` (`AH/providers/round.js`), and passes the
+resulting plain string (or `undefined`) to the wire builders: `claudeBody(request)` and
+`codexBody(request)` take `request.system` as a string and never read `req.system`, a blob key
+or a staged reference themselves. M5 widens `RoundRequest.system` (a staged text or `[text,
+note]`) and changes only `systemTextOf` (its H-8, `round.js`, M5's file); M4 makes no edit to
+`round.js` or `scripted.js` and inherits the join. Round 0 still sends nothing before `dispatching(0)` answered `true` (M1a contract 6).
 Cancel aborts the attempt in flight and stops the member loop (R4-7).
 
 ### 5.3 Wire clients (W4.3)
@@ -363,6 +379,18 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   bounds (`channelLimits`); `Accounts.watch(rev?)` subscribes (gateway, in process). Zero vat
   deliveries per change and per viewer. `refresh(pool?)` reads the providers now (on demand
   only; never on a first read).
+- **Abandoned viewers** (M3 closes only its own `Live` subscriptions at connection close, M3
+  4.5): the accounts channel itself evicts them. A `next()` that has waited
+  `accountsKeepaliveMs` (30 s) with no change answers the current view again (same `rev`), so a
+  live page calls `next()` at least every 30 s; a subscriber with no `next()` call for
+  `accountsIdleMs` (60 s) is idle and evicted (closed; a later `next()` rejects with
+  `m4Texts.accountsWatchClosed`; the page calls `watch(lastRev)`). A `watch` that meets the
+  subscriber cap (`channelLimits.subscribersPerSession`, 32) evicts the oldest idle subscriber
+  first and refuses only when none is idle. Times come from the injected `timers` (tests use a
+  fake clock). W4.5 test: 40 watchers opened and abandoned (one `next()` each, then nothing),
+  in batches of 16, 16 and 8 with the fake clock moved 61 s after each batch; then a new `watch`
+  succeeds and receives the next change; and 32 live watchers (each keeps a `next()` waiting)
+  make a 33rd `watch` fail (no idle one to evict).
 - **`accountStatus`** (R3-35, R4-84): an adapter tool (`{ refresh?: boolean }`) offered by the
   pool kinds and both API kinds; its text follows Fae's rendering (selection mode, per account
   plan, state, windows with remaining, percent used and reset, each labelled with its provenance;
@@ -404,6 +432,12 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   `SecretsAdmin.openWriter()` -> `SecretWriter.replace(secret, sealedBox)` (sealed to the
   adapter's key, so the hub carries ciphertext only, D-6); it never writes a file. Tests run it
   against the fake OAuth server.
+- **Large values from the command line** (same script, `--value-file <path> --secret-label
+  <label>`, exported as `writeValue`): reads a UTF-8 file of at most M2's `secretValueBytes`
+  (1,048,576 bytes), finds the Secret by label through `SecretsAdmin.list` (the CLI boundary,
+  F.2 c), and writes it as a sealed box with `SecretWriter.replace(secret, sealedBox,
+  expectedGeneration)` (M2's CLI path, "sealed box through the hub"). This is where the Secrets
+  panel sends a person whose value is over `browserSecretBytes`.
 
 ---
 
@@ -462,43 +496,84 @@ report's `assumesFromM2`):
 
 ### 9.1 What M4 needs from M3 (the UI and gateway lane)
 
-M3's W3.0 defines the UI extension seam; M4 uses it only in W4.7, which starts after W3.0 is
-merged. M4 needs, each as an append-only entry:
+M3's seams are **directory registries**: M4 adds files and edits none of M3's collectors
+(`ui/build.mjs`, `ui/src/features.js`, `AH/gateway/extensions.js`, `AH/gateway/vocabulary.js`
+are M3's and nobody else edits them). M4 uses them in W4.6 (one gateway extension file) and W4.7
+(two feature files), each written against M3's W3.0 contract (`contract-m3.js` typedefs
+`UiFeature`, `FeatureContext`, `GatewayExtension`, `LargeCall`, `GatewayContext`).
 
-1. **A panel slot** in `ui/src/features.js` (M3's hook table): M4 registers a **Secrets** panel
-   and a **Subscriptions** panel (R6-54, R6-67) for the settings area.
-2. **A status-bar slot** in the conversation view: M4 registers the account chip, which shows the
-   session's pool accounts (`Accounts.forSession(session)`, live through `Accounts.watch`).
-3. **The gateway key guard reads a list of interface tables** (architecture 7: refuse a record
-   key the target method's shape does not name): M4 appends `m4Interfaces` and `m4MethodNames`
-   (one entry). Without it every browser call to `SecretsAdmin.catalog`,
-   `Secret.setDescription` or `SubscriptionsAdmin.*` is refused.
+1. **UI features** (M3 6.2: `ui/build.mjs` collects every `ui/src/*/feature.js` in
+   directory-name order; each exports `feature`, a `UiFeature` `{ id, slot, label?, order?,
+   when?, component, send? }` or, per M3's 6.2 as settled by the PM, an array of them):
+   - `ui/src/secrets/feature.js`: `feature = { id: 'secrets', slot: 'app.panel', label:
+     'Secrets', component }` (P-58, R6-67, R7-26).
+   - `ui/src/accounts/feature.js`: `feature = [{ id: 'accounts', slot: 'app.panel', label:
+     'Subscriptions', component }, { id: 'account-chip', slot: 'statusbar.chip', when, component
+     }]` (R6-54; the chip shows the active session's pool accounts from
+     `Accounts.forSession(session)`, live through `Accounts.watch`; `when` is false when the
+     session's backend is not a pool). **If M3's collector takes one feature per file**, the chip
+     moves unchanged to `ui/src/account-chip/feature.js` (W4.7 still owns it) and
+     `accounts/feature.js` exports the panel alone.
+   Components reach the daemon only through `FeatureContext.powers` (`Operator` ->
+   `getSecrets()` -> M4 `SecretsAdmin`) and `context.call(fn)`; no feature imports another
+   lane's directory.
+2. **Key-guard vocabulary** (M3 4.4 rule 4, 6.3): M3's `GW/vocabulary.js` loads every
+   `guest/lib/interfaces-m<N>.js` by file name and admits the record keys of the patterns its
+   `vocabularyShapes()` answers (a file without the export is logged and skipped). M4's
+   `interfaces-m4.js` exports `vocabularyShapes = () => harden([...Object.values(m4Shapes),
+   ...Object.values(m4Interfaces)])` (W4.0 follow-up, done). Without it every browser call
+   carrying an M4 record key (`catalog` pages, `setDescription`, `makeMember`, `makePool`,
+   `AuditQuery`, ...) is refused `unexpectedField`. Method checking stays in each exo's own
+   guard; the vocabulary only bounds record keys.
+3. **Gateway extension for large secret writes** (M3 4.4 rule 3, 6.1): the frame guard refuses a
+   call body over `frameBytes` (24,576) unless its target and method are a registered
+   `LargeCall`. W4.6 adds `AH/gateway/extensions/m4-secrets.js`:
+
+   ```js
+   export const gatewayExtension = harden({
+     name: 'm4-secrets',
+     largeCalls: [{ target: context => context.secretWriter(), methods: ['replace'] }],
+   });
+   ```
+
+   `context.secretWriter()` is the adapter's one `SecretWriter` of this incarnation (M3 adds
+   `secretWriter` to `GatewayContext`, fed by the `index.js` line of its own H-seam; the bridge
+   compares identity with the target it resolves). Only `wsMessageBytes` (1,048,576) then holds,
+   and a value plus its CapTP JSON envelope must fit it: the browser bound is
+   `m4Limits.browserSecretBytes` = 1,040,384 bytes (1 MiB less 8 KiB). The Secrets panel
+   measures `new TextEncoder().encode(JSON.stringify(value)).length` before sending and over the
+   bound refuses in the page with `m4Texts.secretTooLargeForBrowser`, which names the CLI path
+   (7, `scripts/subscription-login.mjs --value-file`); nothing is sent. A non-UTF-8 file is
+   refused with `m4Texts.secretNotText` (D-M4-7).
 4. **Adapter-local objects resolve locally in the gateway**: `Accounts`, `AccountsSubscription`,
    `AuditReader` and `SecretWriter` returned through the manager are this adapter's own exports;
-   the CapTP bridge must call them in process (architecture 7, hub.js own-export resolution), so
+   M3's bridge calls them in process (M3 6.4: pass-through, `SecretWriter` adapter-local), so
    secret values typed in the browser never cross the hub (D-6).
-5. **M3 does not extend `SecretsAdmin` or `Secret`** (M4 owns their M4 versions) and does not
-   change the ops guard's `spec` pattern. If M3's sign-in secret needs store access, it uses
-   `makeSecretsOps` additions of its own beside M4's `credentialFor` (H-5).
-
-No new gateway service is needed: the browser reaches everything M4 offers from `Operator` ->
-`getSecrets()` (M2).
+5. **Browser test harness** (M3 W3.8, M3 17): M4's browser files are written against
+   `startBrowserGateway({ template, provision? }) -> { page, url, client, close() }` from M3's
+   `test/browser/_harness.mjs`; M4's component tests (W4.7) use M3's
+   `test/unit/_m3-fake-powers.js` (`makeFakePowers`). Ownership in `test/browser/`: M3 owns
+   `_harness.mjs` and `m3-*.mjs`, M4 owns `m4-*.mjs`, M5 owns `m5-*.mjs`. W4.7's component tests
+   run once M3's group A (W3.4) is on the shared branch; acceptance 14 (browser) runs after M3 is
+   merged; no other M4 acceptance waits on M3.
+6. **M3 does not extend `SecretsAdmin` or `Secret`** (M4 owns their M4 versions) and does not
+   change the ops guard's `spec` pattern. M3 imports the encrypt, decrypt and wrapping-key helpers
+   of `AH/secrets/{store,manager}.js` read-only; M4 is those files' owner (H-5).
+7. **Accounts subscriptions are not closed by M3** at connection close (only its `Live`
+   facade's are, M3 4.5); M4's accounts channel evicts idle viewers itself (6).
 
 ### 9.2 What M4 offers M3
 
-- `m4Interfaces`, `m4Shapes`, `m4MethodNames` for its key guard and its UI types.
+- `vocabularyShapes()` (and `m4Interfaces`, `m4Shapes`, `m4MethodNames`) for its key guard and
+  its UI types.
 - `AccountsBatch` events for any M3 view that wants them; the accounts channel uses M2's channel
-  bounds and is subscribed in process like `Live`.
+  bounds, is subscribed in process like `Live`, and evicts idle viewers (6).
 
 ### 9.3 What M4 needs from M5 (presets, prompts, tools, grants)
 
-1. If M5's preset defaults fill backend, model or effort (R4-21 "with neither backend nor model
-   given, the preset's defaults apply"), its resolver must run **before** W2.2's
-   `catalogueModel` and M4's `subscriptionEffort`, and must leave the chosen model where
-   `catalogueModel` reads it and the effort in `resolved.reasoningEffort`; M4's resolver reads
-   `resolved.reasoningEffort` first, then `options.reasoningEffort`. If M5 inserts its resolver
-   before `catalogueModel`, it edits the array order there (a hotspot M5 lists); M4 only appends
-   at the end.
+1. M5 fills preset defaults into the create options before the resolvers
+   (`catalog.withDefaults`); `subscriptionEffort` reads `resolved.reasoningEffort`, then
+   `options.reasoningEffort`. M4 only appends its resolver at the end of `optionResolvers` (H-6).
 2. M5 does not remove `reasoningEffort` handling from `session-options.js` (M4 removes it from
    `NOT_YET`, H-6).
 
@@ -508,6 +583,14 @@ No new gateway service is needed: the browser reaches everything M4 offers from 
   object tools and the protected built-in names (P-65) are unaffected; M5's prompt composition may
   name it in the tool part if it lists adapter tools.
 - Pool backends are ordinary `Backend` presences: a preset may carry one as its default backend.
+- M4 adds no method to `Operator`, `Session` or `SessionFactory` and exports no `m4Extensions`:
+  M5's `extendInterface` lines for those interfaces have no M4 part, and `factory.js` and
+  `session.js` get no M4 edit besides H-7's one line in `factory.js`.
+- Pool rounds read the system text through `systemTextOf` once per round (5.2), so M5's widening
+  of `RoundRequest.system` reaches both pool kinds with no M4 edit; after the M5 merge, W4.8 adds
+  one case (17, acceptance 13).
+- The `reasoningEffort` lift out of `NOT_YET` (H-6) and the `BackendKind` widening (H-1) are
+  what M5's preset efforts need; H-1 may be merged early as a contract follow-up.
 
 ---
 
@@ -548,7 +631,8 @@ a manager -> adapter call once after a retired break (M2), which for `poolState`
 - **Secrets never in a vat, the hub, a transcript, a log or a journal** (D-6): credentials are read
   and written only in the adapter (`credentialFor`); the manager holds Secret identities and store
   keys; `PoolState` carries keys, never values; the sign-in helper sends sealed boxes; the browser
-  writer is called in process; failure texts and the event log carry fixed texts and codes only;
+  writer is called in process (the `largeCalls` exemption of `m4-secrets.js` keeps it so for
+  values up to `browserSecretBytes`); failure texts and the event log carry fixed texts and codes only;
   `readings.json` holds no token. Acceptance 15 greps for every test credential value.
 - **Renewal holds one key's accessor** (W-5 fixed): `credentialFor(key)`, not the store or the
   Secrets manager.
@@ -571,7 +655,7 @@ allowed; names and signatures are fixed). Types: `resources/agent-host/impl/subs
 
 | file | export |
 |---|---|
-| `guest/lib/interfaces-m4.js` (vat and Node) | `m4Shapes`, `m4Interfaces`, `m4MethodNames`, `m4SinkMethodGuards()`, `m4SinkMethodNames`; re-exports of `texts-m4.js` and `limits-m4.js` |
+| `guest/lib/interfaces-m4.js` (vat and Node) | `m4Shapes`, `m4Interfaces`, `m4MethodNames`, `m4SinkMethodGuards()`, `m4SinkMethodNames`, `vocabularyShapes()` (M3's key guard, 9.1 item 2); re-exports of `texts-m4.js` and `limits-m4.js` |
 | `guest/lib/texts-m4.js` (vat and Node) | `m4Texts`, `m4TextOf`, `codexExplanations`, `m4Codes`, `poolKinds`, `providerOfKind` |
 | `guest/lib/limits-m4.js` (vat and Node) | `m4Limits` |
 | `resources/agent-host/impl/subscriptions/types.js` (Node) | JSDoc types only |
@@ -630,12 +714,17 @@ allowed; names and signatures are fixed). Types: `resources/agent-host/impl/subs
 | `AH/subscriptions/provider.js` | `makePoolProvider({ label, spec, subscriptions, timers, log, blobs, fetch? })`; `claudePoolKind`, `codexPoolKind` (`backendKinds` entries, `tools: ['accountStatus']`) | 5.2 |
 | `AH/subscriptions/index.js` | `makeSubscriptions({ sink: () => any, secrets: () => any, stateDir: () => string, timers, fetch? }) -> Subscriptions` | `types.js` |
 | `AH/subscriptions/credential-ops.js` | `makeCredentialOps({ secrets, accounts, resolveSecret }) -> CredentialOps` | 3.2 |
-| `scripts/subscription-login.mjs` | `signIn({ client, secret, provider, authorizeUrl?, tokenUrl?, prompt })`; CLI | 7 |
+| `scripts/subscription-login.mjs` | `signIn({ client, secret, provider, authorizeUrl?, tokenUrl?, prompt })`, `writeValue({ client, secret, value, expectedGeneration? })`; CLI (`--value-file`) | 7 |
+| `AH/gateway/extensions/m4-secrets.js` | `gatewayExtension` (`GatewayExtension`, `contract-m3.js`) | 9.1 item 3, exactly as written there |
 
 ### W4.7 (browser)
 
-`ui/src/secrets/` (Secrets panel), `ui/src/accounts/` (Subscriptions panel, account chip): free
-module layout, registered through M3's seams (9.1).
+| file | export |
+|---|---|
+| `ui/src/secrets/feature.js` | `feature` (`UiFeature`, slot `app.panel`, label `Secrets`) |
+| `ui/src/accounts/feature.js` | `feature` (array: Subscriptions panel `app.panel`, account chip `statusbar.chip`; or the panel alone if the chip moves to `ui/src/account-chip/feature.js`, 9.1 item 1) |
+
+Other files under those directories: free layout (Preact components as M3 9.2's client rules).
 
 ### W4.8
 
@@ -657,6 +746,9 @@ Exact strings are in `texts-m4.js`; W4.1's test checks them.
 | `m4TextOf.responsesFailed(type, facts, explanation?)`, `codexExplanations` | `Subscription inference ended unsuccessfully (<type>[; facts])[ <explanation>]` | lal `subscription-responses.js` |
 | `m4Texts.unsupportedEffort` | `Unsupported reasoning effort for Fae subscription` | Fae `src/subscription-models.js` (R4-23) |
 | `m4Texts.effortNotSupported`, `subscriptionModelRequired`, `noUsableMember`, `memberConflict`, `poolConflict`, `memberKind`, `unknownMember`, `unknownPool`, `retired`, `credentialConsumed`, `credentialExpired`, `credentialInvalid`, `credentialRejected`, `noSubscriptionAccounts` | see `texts-m4.js` | harness |
+| `m4Texts.secretTooLargeForBrowser` | `This value is too large to send from the browser; write it from the command line with scripts/subscription-login.mjs --value-file, which sends a sealed box` | harness (9.1 item 3) |
+| `m4Texts.secretNotText` | `This file is not text; secrets hold text` | harness (D-M4-7) |
+| `m4Texts.accountsWatchClosed` | `This accounts watch is closed; watch again` | harness (6) |
 | `m4Texts.provenance*` | `observed`, `declared`, `remembered`, `unavailable` | R4-84 |
 | `m4TextOf.memberFailed(label, code)` | `Subscription member "<label>" failed: "<code>"` | harness (event log and account state; codes `m4Codes`) |
 | existing, used | `textOf.secretFailed(code)`, `texts.catalogUnavailable`, `texts.modelRequired`, `textOf.afterAttempts` | M2 |
@@ -671,8 +763,9 @@ Exact strings are in `texts-m4.js`; W4.1's test checks them.
 | `AH/index.js` `adapterTools` | `{ name: 'accountStatus', makeTool }` | W4.6 |
 | `guest/factory/session-options.js` `optionResolvers` | `subscriptionEffort` (last) | W4.1 |
 | `scripts/provision-steps.js` | `subscriptions`: from the provisioning options' `subscriptions: [{ kind, label, members: [{ label, provider, secretLabel, weight? }], contextLength?, ... }]`, find each Secret by label (provisioning boundary, rule 2), `makeMember`, `makePool`, add the pool to `HarnessSettings.backends`; idempotent; never writes a secret value (R8-38) | W4.6 |
-| `ui/src/features.js` (M3) | Secrets panel, Subscriptions panel, account chip | W4.7 |
-| M3's key-guard interface tables | `m4Interfaces` | W4.7 |
+| M3's UI registry `ui/src/<dir>/feature.js` (new files, no edit) | `secrets/`, `accounts/` (and `account-chip/` if needed) | W4.7 |
+| M3's gateway registry `AH/gateway/extensions/<name>.js` (new file, no edit) | `m4-secrets.js` | W4.6 |
+| M3's vocabulary loader (reads `guest/lib/interfaces-m<N>.js`, no edit) | `vocabularyShapes()` in `interfaces-m4.js` | W4.0 (done) |
 | `guest/session/tool-table.js`, `turn-hooks.js`, `holds-table.js`, `services.js`, `projection-hooks.js`, `channel-taps.js` | none | - |
 
 ---
@@ -692,10 +785,30 @@ PM resolves adjacent-line conflicts as for hook tables.
 | H-6 | `guest/factory/session-options.js` (M5: preset resolvers) | W4.1 | (a) `const NOT_YET = harden(['networkPolicy']);` (`reasoningEffort` removed); (b) one import line; (c) `subscriptionEffort,` appended last in `optionResolvers` |
 | H-7 | `guest/factory/factory.js` (M5 possibly) | W4.1 | one line after the `turnDeadlineMs` copy: `if (extras.reasoningEffort !== undefined) fields.reasoningEffort = extras.reasoningEffort;` and one `@property` line in `ResolvedOptions` (`session-options.js`) |
 | H-8 | `scripts/provision-steps.js` (M3, M5: steps) | W4.6 | one appended step (hook table) |
-| H-9 | `ui/src/features.js` (M3's, M5) | W4.7 | appended registrations (hook table) |
-| H-10 | M3's key-guard interface tables (`AH/gateway/`) | W4.7 | one appended entry |
-| H-11 | `config/defaults.js` (M3, M5) | W4.1 | one line at the end: `export { subscriptionDefaults } from './defaults-m4.js';` |
-| H-12 | `H/package.json`, `H/JOURNAL.md` (PM-merged) | W4.8, all | `package.json`: nothing expected (perf scripts are found by `perf/_harness.mjs`); journal: W4.0 holds J-0610..J-0629, build units take the M4 numbers the PM assigns |
+| H-11 | `config/defaults.js` (owner M4; M3 and M5 make no edit) | W4.1 | one line at the end: `export { subscriptionDefaults } from './defaults-m4.js';` |
+| H-12 | `H/package.json`, `H/JOURNAL.md` (PM-merged) | W4.8, all | `package.json`: nothing expected (perf scripts are found by `perf/_harness.mjs`); journal: W4.0 holds J-0610..J-0629 (M3 J-0510..J-0529, M5 J-0710..J-0729), build units take the M4 numbers the PM assigns |
+
+H-9 and H-10 of the first W4.0 commit are withdrawn: M3's seams are directory registries (14),
+so M4 adds `ui/src/{secrets,accounts}/feature.js`, `AH/gateway/extensions/m4-secrets.js` and the
+`vocabularyShapes` export, all new files or M4's own file.
+
+**Single owners of shared files** (PM's table after the cross-check; M4's part):
+
+| file | owner | M4's edit |
+|---|---|---|
+| `guest/lib/interfaces.js` | M5 (W5.3's four widenings) | H-1 only (one line); may be merged early |
+| `resources/agent-host/durable.js` | M4 (H-2, six seams) | M3 adds three lines (merged first): its import, `const gateway = makeGatewayManager({ manager })`, and the guard `withGatewayAdmin(...)` with `gateway: () => gateway.admin` as its last method; M4's six seams are independent of them (none touches `AgentHostAdmin`) |
+| `AH/attach.js` | M3 (`bindings` in `makeAttach`) | H-3 only: `makeOpsInterface` (`spec` `M.or`, `credentials` guard), `M2_FORWARDS`, one `OpsHandlers` `@property` |
+| `AH/index.js` | M4 (H-4) | M3 adds one import, one `makeGatewayService` statement (with `secretWriter`), one `bindings` property and `gateway.attached()` in `onSink` (merged first); M4's H-4 lines go beside them, its `subscriptions` statement after the `secrets` helper |
+| `scripts/provision-steps.js` | PM (append-only) | the `subscriptions` step, second in merge order (gateway M3, subscriptions M4, M5 fixtures) |
+| `guest/factory/factory.js` | M5 | H-7 only (one line after the `turnDeadlineMs` copy) |
+| `guest/factory/session-options.js` | M4 (H-6, and H-7's `ResolvedOptions` `@property`) | M5 makes no edit |
+| `AH/secrets/{store,manager}.js` | M4 (H-5) | M3 imports helpers read-only |
+| `AH/providers/{round,scripted}.js` | M5 | none (M4 calls `systemTextOf`) |
+| `AH/providers/{anthropic,openrouter}.js` | M4 (H-14) | as listed below |
+| `guest/session/*`, `guest/lib/pending-queue.js`, `AH/composer.js` | M5 | none |
+| `config/defaults.js` | M4 | H-11 |
+| `ui/build.mjs`, `ui/src/features.js`, `AH/gateway/{extensions,vocabulary}.js` | M3 | none |
 
 M4-only edits of M2 files (no other lane touches them; listed so the PM can check): H-14
 `AH/providers/anthropic.js` (W4.3: `headers`, `extras` options; W4.6: `tools: ['accountStatus']`
@@ -704,8 +817,10 @@ in `anthropicKind`), `AH/providers/openrouter.js` (W4.6: `tools: ['accountStatus
 
 Not touched by M4: `guest/session/*`, `guest/exec/*`, `guest/lib/limits.js`,
 `guest/lib/interfaces.js` beyond H-1, `AgentHostAdmin`, `Operator`, `SessionFactory`,
-`test/fixtures/fake-provider-server.mjs`, `scripts/serve.mjs`, `perf/pool.perf.mjs` (M1b's spare
-pool; M4's perf scripts are `perf/subscriptions.perf.mjs` and `perf/secrets.perf.mjs`).
+`test/fixtures/fake-provider-server.mjs`, `scripts/serve.mjs`, `ui/src/features.js`,
+`ui/build.mjs`, `AH/gateway/{extensions,vocabulary}.js`, `test/browser/_harness.mjs`,
+`perf/_harness.mjs`, `perf/pool.perf.mjs` (M1b's spare pool; M4's perf scripts are
+`perf/subscriptions.perf.mjs`, `perf/secrets.perf.mjs` and `perf/accounts.perf.mjs`).
 
 ---
 
@@ -713,19 +828,22 @@ pool; M4's perf scripts are `perf/subscriptions.perf.mjs` and `perf/secrets.perf
 
 Order: **group A** = W4.1, W4.2, W4.3, W4.4, W4.5 in parallel (they share no file and import each
 other only through this contract's types and signatures; tests use fakes); **group B** = W4.6 and
-W4.7 in parallel (W4.7 only after M3's W3.0 is merged); then **W4.8**, which owns every file. No
+W4.7 in parallel (W4.7 builds against M3's merged W3.0 contract, and its component tests run once
+M3's group A is on the shared branch); then **W4.8**, which owns every M4 file. Merge order
+(PM): M3, then M4, then M5; M4 applies H-2 and H-4 with M3's lines already in place, and H-1 may
+go to the shared branch early as a contract follow-up. No
 unit needs a running supervisor except W4.8. Estimates are hours of one Opus agent.
 
 | id | owns (disjoint) | depends on | tests | supervisor | est. | slower if |
 |---|---|---|---|---|---|---|
-| W4.1 manager part and creation | `resources/agent-host/durable-subscriptions.js`; H-1, H-2, H-6, H-7, H-11; `guest/factory/subscription-options.js`; `config/defaults-m4.js`; `test/unit/m4-interfaces.test.js`, `test/unit/m4-manager.test.js`, `test/unit/m4-effort.test.js` | W4.0 | unit: every M4 guard accepts a sample and refuses an unbounded string, an oversize array and an unknown key; M4 `SecretsAdmin`/`Secret` keep M2's method guards (payload comparison); the part with a fake `withOps`: idempotent `makeMember`/`makePool`, conflicts, retire, catalogue page cut by `fitsFrame`, served LRU at 256, marks per member; resolver: effort accepted, refused, refused on API backends | no | 6 | M2's fold reorders `durable.js`; manager bundle size needs a vat probe |
+| W4.1 manager part and creation | `resources/agent-host/durable-subscriptions.js`; H-1, H-2, H-6, H-7, H-11; `guest/factory/subscription-options.js`; `config/defaults-m4.js`; `test/unit/m4-interfaces.test.js`, `test/unit/m4-manager.test.js`, `test/unit/m4-effort.test.js` | W4.0 | unit: every M4 guard accepts a sample and refuses an unbounded string, an oversize array and an unknown key; M4 `SecretsAdmin`/`Secret` keep M2's method guards (compared through `guard.payload.methodGuards`, the technique M5's CC-072 asks core to support; until then `.payload` read directly, pinned by this test); `vocabularyShapes()` answers every M4 shape and interface; the part with a fake `withOps`: idempotent `makeMember`/`makePool`, conflicts, retire, catalogue page cut by `fitsFrame`, served LRU at 256, marks per member; resolver: effort accepted, refused, refused on API backends | no | 6 | M2's fold reorders `durable.js`; manager bundle size needs a vat probe |
 | W4.2 pool core | `AH/subscriptions/{pool,rate-limit-headers,pool-state}.js`; `test/adapter/m4-pool*.test.js` | W4.0 | ported hosted-agent `subscription-pool.test.js`, `rate-limit-headers.test.js` (object keys, no pinning); bridge: marks sent at once, served coalesced, load once per incarnation, a retired sink reloads | no | 5 | the reference tests lean on member ids throughout |
 | W4.3 wire clients and catalogue | `AH/subscriptions/{messages,responses,catalog}.js`; H-14 (`anthropic.js` options); `test/fixtures/fake-subscription-server.mjs`; `test/fixtures/sse/subscriptions/`; `test/adapter/m4-wire*.test.js`, `m4-catalog.test.js` | W4.0 | fixtures: Claude deltas, thinking, tool use, SSE error, 529 then success, 529 after a delta, empty; Codex deltas, function calls, encrypted reasoning, `server_is_overloaded` with the schedule (delays scaled), failure facts; R4-30 header names present; ported lal `subscription-responses.test.js`, `subscription-messages.test.js` parts; catalogue: R4-18 intersection, R4-19 `auto`, `unavailable`, cache | no | 9 | lal's Responses mapping needs more adaptation than expected; fixtures written by hand |
 | W4.4 credentials, renewal, Secrets adapter | `AH/subscriptions/{credentials,renewal}.js`; `AH/secrets/{credential-access,audit,catalog}.js`; H-5; `test/fixtures/fake-oauth-server.mjs`; `test/adapter/m4-renewal*.test.js`, `m4-secrets-full.test.js` | W4.0 | renewal: near-expiry renews once for 16 concurrent rounds; write-ahead intent then write-back; a `pendingRefresh` credential fails `CONSUMED`; two stores renewing one credential: one `GENERATION_CONFLICT`, re-read; a killed child process at K-5/K-6 leaves `CONSUMED`; audit reader 1,000 and `before`; describe batch; no value in any error | no | 7 | the store's audit format needs a migration for `before` |
-| W4.5 accounts | `AH/subscriptions/{accounts,account-file,account-tool}.js`; `test/adapter/m4-accounts*.test.js` | W4.0 | provenance per source; push per change, zero per viewer; refresh on demand only; readings file round trip and atomic write; tool text per Fae's rendering (ported `account-tool` expectations); banked credits display | no | 6 | the usage-read formats of the two providers differ more than the reference shows |
-| W4.6 composition and wiring | `AH/subscriptions/{provider,index,credential-ops}.js`; H-3, H-4, H-8; kind tool lines of H-14; `scripts/subscription-login.mjs`; `test/adapter/m4-provider*.test.js`, `m4-login.test.js` | W4.1-W4.5 | adapter (fake servers, fake sink): hand-over on 429 before delivery, none after; one attempt per member; all exhausted text with the reset time; 401 then one renewal then retry; overload schedules; marks reach the sink; `accountStatus` through the ports; login helper writes a sealed box | no | 8 | M2's merged `index.js` differs from `3588cab190` |
-| W4.7 UI | `ui/src/secrets/`, `ui/src/accounts/`; H-9, H-10; `test/unit/m4-ui*.test.js` (component) | M3 W3.0 merged; W4.1, W4.4, W4.5 | component tests with fakes: the Secrets panel never renders a value; replace with expected generation; revoke and delete-after-revoke; audit paging; account chip and Subscriptions panel update from `AccountsBatch` | no | 7 | M3's seam differs from 9.1 |
-| W4.8 integration | everything; `test/integration/m4-*.test.js`, `test/browser/m4-*.mjs`, `perf/{subscriptions,secrets}.perf.mjs` | all | acceptance 1-16, perf section 18, kill points K-1..K-6 | yes | 9 | the run lock's four slots are not there yet (then the files run one after another: about 25 min, over the 20 min rule) |
+| W4.5 accounts | `AH/subscriptions/{accounts,account-file,account-tool}.js`; `test/adapter/m4-accounts*.test.js` | W4.0 | provenance per source; push per change, zero per viewer; refresh on demand only; keepalive and idle eviction (6: 40 abandoned watchers, then a new watch succeeds; 33rd live watcher refused); readings file round trip and atomic write; tool text per Fae's rendering (ported `account-tool` expectations); banked credits display | no | 6 | the usage-read formats of the two providers differ more than the reference shows |
+| W4.6 composition and wiring | `AH/subscriptions/{provider,index,credential-ops}.js`; `AH/gateway/extensions/m4-secrets.js`; H-3, H-4, H-8; kind tool lines of H-14; `scripts/subscription-login.mjs`; `test/adapter/m4-provider*.test.js`, `m4-login.test.js`, `m4-gateway-extension.test.js` | W4.1-W4.5 | adapter (fake servers, fake sink): hand-over on 429 before delivery, none after; one attempt per member; all exhausted text with the reset time; 401 then one renewal then retry; overload schedules; marks reach the sink; system text resolved once per round through `systemTextOf` and passed to both wire builders as a string; `accountStatus` through the ports; login helper and `--value-file` write sealed boxes; `m4-secrets.js` loads as a `GatewayExtension` whose `largeCalls[0].target` answers the context's `secretWriter()` (fake context; the gateway itself is M3's) | no | 8 | M2's merged `index.js` differs from `3588cab190` |
+| W4.7 UI | `ui/src/secrets/` (with `feature.js`), `ui/src/accounts/` (with `feature.js`), `ui/src/account-chip/` only if M3's collector takes one feature per file; `test/unit/m4-ui*.test.js` (component) | M3 W3.0 merged (contract); component tests run once M3's group A (W3.4: `_m3-fake-powers.js`, the collector) is on the shared branch; W4.1, W4.4, W4.5 | component tests (happy-dom, M3's `makeFakePowers`): the Secrets panel never renders a value; replace with expected generation; revoke and delete-after-revoke; audit paging; a value of `browserSecretBytes` + 1 JSON-escaped bytes is refused in the page with `m4Texts.secretTooLargeForBrowser` and nothing is sent, one of exactly `browserSecretBytes` is sent; a non-UTF-8 file refused; account chip and Subscriptions panel update from `AccountsBatch` and re-watch after `accountsWatchClosed`; the features collect through M3's `ui/build.mjs` | no | 7 | M3's collector or `FeatureContext` differs from `contract-m3.js` |
+| W4.8 integration | everything of M4; `test/integration/m4-*.test.js`, `test/browser/m4-*.mjs` (never `_harness.mjs` or another lane's files), `perf/{subscriptions,secrets,accounts}.perf.mjs` | all; acceptance 14 after M3 is merged; the `systemTextOf` case of acceptance 13 after M5 is merged | acceptance 1-16, perf section 18, kill points K-1..K-6 | yes | 9 | the run lock's four slots are not there yet (then the files run one after another: about 25 min, over the 20 min rule) |
 
 Total about 57 hours of agent time; wall time about 9 (group A) + 8 (group B) + 9 (W4.8) hours.
 
@@ -751,9 +869,9 @@ owner's credentials. Each item is one integration test under 5 minutes from
 | 10 | Renewal: an expired access token is renewed once and the round succeeds; a 401 gets one renewal and one retry, then the member is marked unusable and the next serves; a concurrent renewal in a second store fails `GENERATION_CONFLICT` and re-reads | `m4-renewal.test.js` |
 | 11 | SIGKILL during a pool round at K-2, K-3 and K-4: after restart the turn is outcome-unknown and the fake server saw each member attempt at most once and nothing for that round after restart | `m4-restart.test.js` |
 | 12 | SIGKILL during renewal at K-5 and K-6: the token endpoint saw at most one refresh for the token; the member reports `CONSUMED`; a turn succeeds on the other member | `m4-restart.test.js` |
-| 13 | Efforts: an unsupported effort is refused at creation, a supported one is stored and reaches the request (Claude adaptive thinking; Codex `ultra` as `max`); an effort on an API backend is refused; the R4-30 header names are present | `m4-catalog.test.js` |
-| 14 | Secrets panel and Subscriptions panel in a browser (M3's test client): create, replace, revoke, delete after revoke, audit; the value never appears in the DOM or in any frame from the gateway; account chips update live | `test/browser/m4-ui.mjs` |
-| 15 | No credential anywhere: after 3, 10 and 12, a grep of the state directory (heaps, journals, hub image and log, blobs, archive, `readings.json`), the adapter's event log and the test's captured stderr finds no access token, refresh token or API key value | `m4-secrets.test.js` |
+| 13 | Efforts: an unsupported effort is refused at creation, a supported one is stored and reaches the request (Claude adaptive thinking; Codex `ultra` as `max`); an effort on an API backend is refused; the R4-30 header names are present; after the M5 merge, a two-part `system` (`[text, note]`) reaches both fake servers as one string joined with a blank line (Claude `system`, Codex `instructions`) | `m4-catalog.test.js` |
+| 14 | Secrets panel and Subscriptions panel in a browser (`startBrowserGateway({ template, provision })` of M3's `test/browser/_harness.mjs`; runs after M3 is merged): create, replace, revoke, delete after revoke, audit; the value never appears in the DOM or in any frame from the gateway; account chips update live; size probe: a value of exactly `browserSecretBytes` (1,040,384 JSON-escaped bytes) is written from the page and reads back with that length through the test's grant, and one of 1,040,385 is refused in the page with `m4Texts.secretTooLargeForBrowser` and no frame is sent | `test/browser/m4-ui.mjs` |
+| 15 | No credential anywhere: after 3, 10 and 12, a grep of the state directory (heaps, journals, hub image and log, blobs, archive, `readings.json`), the adapter's event log and the test's captured stderr finds no access token, refresh token or API key value; when run after 14, also no 64-byte marker taken from each of the two size-probe values (neither reached the hub) | `m4-secrets.test.js` (the browser part in `test/browser/m4-ui.mjs`) |
 | 16 | Provisioning twice is a no-op; a member label bound to another Secret is refused until that member is retired (R8-31); a revoked Secret is never rewritten by provisioning (R8-38); `makePool` again after K-1 answers the same pool | `m4-provision.test.js` |
 
 ---
@@ -766,25 +884,40 @@ turns; M4's whole regression run (unit, adapter, integration, perf) finishes wit
 wall time with four concurrent test slots. No M4 check depends on a long session. Output as
 architecture 11 (JSON lines, `pass`, budget); fake servers answer at a fixed 20 ms.
 
-| check | measured over | budget | why this budget |
-|---|---|---|---|
-| `subscriptions.select` member order for one round, 16 members, 256 served sessions | 60 s, in process | median <= 0.5 ms; 0 deliveries | the plan's 2 ms per round left room for the request; selection is a sort of 16 |
-| `subscriptions.turnStart` submit to provider request on a pool backend | 60 s of turns, one session | median <= 350 ms; <= 3 session deliveries per turn start; 0 manager deliveries | the M1a turn-start budget: a pool must cost nothing on the vat path |
-| `subscriptions.handover` a 429 on member A then B, over a plain round | 60 s, alternating | <= 50 ms added over the fake server's time; exactly 1 manager delivery per refusal | in-process retry; the mark is the only vat cost (the plan's `pool.markPersist`) |
-| `subscriptions.servedWrites` manager deliveries while one session runs turns on a sticky member | 60 s | <= 1 per session per 60 s | coalesced stamps (5.1) |
-| `subscriptions.firstOpen` the first pool open after a restart | 5 restarts of a small template state | <= 750 ms; 1 manager crank for `poolState` | restart stays dormant and cheap (D-5) |
-| `secrets.credentialRead` audited read and parse per round | 60 s | median <= 1 ms; 0 deliveries | M2's `secrets.read` |
-| `subscriptions.renewal` 16 concurrent rounds on an expired member | 60 s, repeated expiries | exactly 1 refresh POST per expiry; <= the fake's time + 50 ms added | single-flight and write-ahead must not serialise rounds |
-| `secrets.catalog` a 64-secret catalogue page | 60 s | <= 300 ms; 1 manager crank; 1 ops call | the Secrets panel opens at once |
-| `secrets.auditReader` a 1,000-event page | 60 s | <= 50 ms; 0 vat deliveries | R7-63's largest page, adapter-local |
-| `accounts.push` reading to an in-process subscriber | 60 s | median <= 5 ms; 0 vat deliveries per change and per viewer | like live deltas (D-8); replaces the plan's "1 factory publish" |
-| `accounts.refresh` on-demand read of 2 members | 60 s | <= the fake's time + 100 ms | R4-85 on demand |
-| `catalog.pool` listModels through the factory, warm / cold with 2 members | 60 s warm; 5 cold reads | warm <= 300 ms (one factory and one manager crank); cold <= 2 s | R4-104 cache |
-| `subscriptions.bundles` session, exec, factory and manager bundle bytes | one build | session and exec unchanged by M4 (+ <= 64 bytes for H-1); factory <= +6 KB | 1.4 |
-| too-big probes | single runs | no halt; each refused by the sending side: credential 8,193 bytes at read; secret 1 MiB + 1; audit limit 1,001; 17 members; a 16 MiB + 1 SSE line; `poolState` with 256 served records fits `frameBytes`; a 64-entry catalogue page of full-length labels is cut | rules 12.5, 12.10 |
+| check | file | measured over | budget | why this budget |
+|---|---|---|---|---|
+| `subscriptions.select` member order for one round, 16 members, 256 served sessions | subscriptions | 60 s, in process | median <= 0.5 ms; 0 deliveries | the plan's 2 ms per round left room for the request; selection is a sort of 16 |
+| `subscriptions.turnStart` submit to provider request on a pool backend | subscriptions | 60 s of turns, one session | median <= 350 ms; <= 3 session deliveries per turn start; 0 manager deliveries | the M1a turn-start budget: a pool must cost nothing on the vat path |
+| `subscriptions.handover` a 429 on member A then B, over a plain round | subscriptions | 60 s, alternating | <= 50 ms added over the fake server's time; exactly 1 manager delivery per refusal | in-process retry; the mark is the only vat cost (the plan's `pool.markPersist`) |
+| `subscriptions.servedWrites` manager deliveries while one session runs turns on a sticky member | subscriptions | 60 s | <= 1 per session per 60 s | coalesced stamps (5.1) |
+| `subscriptions.renewal` 16 concurrent rounds on an expired member | subscriptions | 60 s, repeated expiries | exactly 1 refresh POST per expiry; <= the fake's time + 50 ms added | single-flight and write-ahead must not serialise rounds |
+| `subscriptions.firstOpen` the first pool open after a restart | subscriptions | restarts of the small `m4` template state over a 150 s window | median <= 750 ms; 1 manager crank for `poolState` per restart | restart stays dormant and cheap (D-5) |
+| `catalog.pool` listModels through the factory, 2 members, warm and cold | subscriptions | one 60 s window of pairs: invalidate the cache, one cold read, one warm read | warm median <= 300 ms (one factory and one manager crank); cold median <= 2 s | R4-104 cache |
+| `subscriptions.bundles` session, exec, factory and manager bundle bytes | subscriptions | one build, no window | session and exec unchanged by M4 (+ <= 64 bytes for H-1); factory <= +6 KB | 1.4 |
+| too-big probes | subscriptions | single runs, no window | no halt; each refused by the sending side: credential 8,193 bytes at read; secret 1 MiB + 1 at the writer; audit limit 1,001; 17 members; a 16 MiB + 1 SSE line; `poolState` with 256 served records fits `frameBytes`; a 64-entry catalogue page of full-length labels is cut (the browser bound is probed in acceptance 14) | rules 12.5, 12.10 |
+| `secrets.credentialRead` audited read and parse per round | secrets | 60 s | median <= 1 ms; 0 deliveries | M2's `secrets.read` |
+| `secrets.catalog` a 64-secret catalogue page | secrets | 60 s | median <= 300 ms; 1 manager crank; 1 ops call | the Secrets panel opens at once |
+| `secrets.auditReader` a 1,000-event page | secrets | 60 s | median <= 50 ms; 0 vat deliveries | R7-63's largest page, adapter-local |
+| `accounts.push` reading to an in-process subscriber | accounts | 60 s | median <= 5 ms; 0 vat deliveries per change and per viewer | like live deltas (D-8); replaces the plan's "1 factory publish" |
+| `accounts.refresh` on-demand read of 2 members | accounts | 60 s | median <= the fake's time + 100 ms | R4-85 on demand |
 
-Integration budget: eight integration files of 2-4 minutes each and the two perf scripts of
-about 8 minutes each (13 rows x 60 s at most, plus setup) run in four slots within 20 minutes.
+Files (each under the 10-minute rule, at most 7 timed windows; each starts from the cached `m4`
+template, about 60 s of setup at most):
+
+| file | windows | timed | with setup |
+|---|---|---|---|
+| `perf/subscriptions.perf.mjs` | select, turnStart, handover, servedWrites, renewal, catalog.pool (60 s each), firstOpen (150 s): 7; bundles and probes untimed (<= 25 s together) | 510 s | <= 595 s |
+| `perf/secrets.perf.mjs` | credentialRead, catalog, auditReader: 3 | 180 s | <= 270 s |
+| `perf/accounts.perf.mjs` | push, refresh: 2 | 120 s | <= 210 s |
+
+`subscriptions.perf.mjs` is the tightest: 510 s timed, setup <= 60 s, bundles and probes <= 25 s,
+so <= 595 s. W4.8 records each file's wall time in its report; a file over 9 minutes is reported
+to the PM before the merge instead of shortening a window. The 64 secrets of `secrets.catalog` and the
+1,000 audit events of `secrets.auditReader` are written by the file's setup through the adapter's
+store (not by turns); no M4 check needs a long session.
+
+Integration budget: eight integration files of 2-4 minutes each, the browser file (about 4
+minutes) and the three perf files above run in four slots within 20 minutes of wall time.
 
 ---
 
@@ -795,10 +928,16 @@ and its exec vat cannot reach `SecretsAdmin`, `SubscriptionsAdmin`, a `Secret` o
 `PoolMember`. `thix reachability` reports which sessions hold references into which origin
 sessions (`pkg/src/net/hub.js` `inspect()`: `publishedOrigins`, `holdings`), and every one of
 those objects lives in the agent-host manager vat, which the session legitimately reaches through
-its Backend, so origin granularity cannot tell them apart. Smallest change: the hub records, per
-export row, the alleged interface name the exporting peer gave when it first exported the object
-(one bounded string per row; the worker's marshal knows the `Alleged: <name>` tag), and
-`reachability({ holder })` lists for one holder its held rows as `{ origin, alleged }`.
+its Backend, so origin granularity cannot tell them apart. Smallest change: the hub records the
+alleged interface name the exporting peer gave when it first exported an object **once per
+exporting object, in the export row of the origin peer**, never per holder entry (one bounded
+string per exported object; the worker's marshal knows the `Alleged: <name>` tag), and
+`reachability({ holder })` joins a holder's entries to those rows to list `{ origin, alleged }`.
+Stored this way it adds nothing to a viewer's holder entries, so M3's `ui.hubGrowth` row does not
+see it. **Do together with CC-051** (M3: per-entry diffs of hub session rows): both change the
+row format of `pkg/src/net/hub.js`, so core makes one format change for the two. M4 files no
+request for the guard-payload technique its W4.1 test uses (`guard.payload.methodGuards`): that
+is M5's CC-072, cited, not duplicated.
 Workaround if refused (what W4.8 builds meanwhile): (a) a unit test computes the interface
 closure reachable from a session's initial capabilities by following every method's return
 guard in `interfaces.js` and `interfaces-m4.js` (`M.remotable(label)` returns) and asserts none
@@ -847,11 +986,15 @@ Owner decisions (the default M4 builds until told otherwise):
    facet: **as designed**.
 7. Pinned-only members and shares (D-M4-6): **not built**.
 
-Open points for the PM:
+Open points for the PM (after the cross-check of the three contracts):
 
-1. The session program has 13,552 bytes left for M3, M4 and M5 (1.4): M3 and M5 should state their
-   session-bundle growth; the 200 KB budget may need re-basing.
+1. Bundle budget: settled as M5's O-1 (1.4): the PM raises the session and exec limits in the
+   M5 merge commit; M4's own budget stays "+ <= 64 bytes". The owner may still overrule O-1.
 2. The run lock's four concurrent slots (the 20 minute rule) are assumed; without them W4.8's
    files run one after another in about 25 minutes.
-3. H-2..H-4 touch `durable.js`, `attach.js` and `AH/index.js`, which M3 edits too; the PM merges
-   M3 first or M4 first, and the second applies its listed lines.
+3. Merge order is settled: M3, then M4, then M5 (15, owners table). H-1 may be merged early.
+4. M3's 6.2 must state that a `feature.js` may export an array of features; until it does, W4.7
+   splits the chip into `ui/src/account-chip/feature.js` (9.1 item 1).
+5. M3 adds `secretWriter` to `GatewayContext` (`contract-m3.js`); `m4-secrets.js` depends on it.
+   M3's 6.4 text still says the writer is resolved through `secretsAdmin.openWriter()`; the
+   settled form is `context.secretWriter()`.

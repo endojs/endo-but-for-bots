@@ -7639,3 +7639,43 @@ pinned-only members or shares; secret values are UTF-8 text; `accountStatus` is 
 backends too and reports no subscription accounts there; an interrupted renewal fails closed and
 needs a new sign-in; the brokers' role is the agent-host adapter's (credentials never leave it).
 Decision: recorded; the owner decisions are listed with defaults in `m4-interfaces.md` 20.
+
+### J-0620 2026-11-18 M4 seams follow M3's directory registries - decision
+Evidence: cross-check of the M3, M4 and M5 contracts; M3's `contract-m3.js` (`UiFeature`,
+`GatewayExtension`, `LargeCall`) and its 4.4 / 6.1-6.3.
+Reading: M4 had planned appended entries in `ui/src/features.js` and in a key-guard table list
+(H-9, H-10); M3 collects `ui/src/*/feature.js` files and reads a `vocabularyShapes()` export of each
+`guest/lib/interfaces-m<N>.js`. Without that export every browser call carrying an M4 record key
+would be refused `unexpectedField`.
+Decision: H-9 and H-10 withdrawn. `interfaces-m4.js` exports `vocabularyShapes()` (M4 shapes and
+interface guards; 39 patterns, built in Node). W4.7 adds `ui/src/secrets/feature.js` and
+`ui/src/accounts/feature.js` (panel and chip as an array; the chip moves to
+`ui/src/account-chip/feature.js` if M3's collector takes one feature per file).
+
+### J-0621 2026-11-18 Browser secret writes get a gateway extension and a page-side bound - decision
+Evidence: M3 4.4 rule 3 (frame guard 24,576 bytes unless a registered `LargeCall`); M2
+`secretValueBytes` 1,048,576; `wsMessageBytes` 1,048,576.
+Reading: M4 had no `LargeCall` for `SecretWriter.replace`, so any browser secret over 24,576 bytes
+was refused, and a 1 MiB value cannot fit a 1 MiB WebSocket message with its CapTP envelope.
+Decision: W4.6 adds `AH/gateway/extensions/m4-secrets.js` (`largeCalls` on
+`context.secretWriter()`, method `replace`); `m4Limits.browserSecretBytes` = 1,040,384 (1 MiB less
+8 KiB), measured by the panel on the JSON-escaped value before sending; over it the page refuses
+with `m4Texts.secretTooLargeForBrowser`, which names `scripts/subscription-login.mjs
+--value-file` (new `writeValue`, a sealed box through M2's CLI path). Acceptance 14 probes both
+sides of the bound; acceptance 15 checks neither value reached the hub.
+
+### J-0622 2026-11-18 Accounts viewers evicted when idle; perf files fit 10 minutes - decision
+Evidence: M3 4.5 closes only its `Live` subscriptions at connection close; M2 `channelLimits`
+(32 subscribers); the 2026-11-18 rule (10 minutes per file, fixed windows).
+Reading: abandoned `Accounts.watch()` viewers would fill the channel after about 32 reloads; a
+pending `next()` of a closed page would never count as idle by itself. `subscriptions.perf.mjs`
+held 13 rows and two rows counted runs.
+Decision: a waiting `next()` is answered again after `accountsKeepaliveMs` (30 s), a subscriber with
+no `next()` call for `accountsIdleMs` (60 s) is evicted, and at the cap the oldest idle one is
+evicted before refusing (W4.5 test: 40 abandoned watchers, then a new watch succeeds). The
+keepalive is this lane's addition to the cross-check's rule, needed for an abandoned `next()` to
+turn idle. Perf rows split over `subscriptions` (7 windows, <= 595 s), `secrets` (3) and the new
+`accounts.perf.mjs` (2); `firstOpen` measures restarts over a 150 s window and `catalog.pool` one
+60 s window of (invalidate, cold read, warm read). Pool rounds resolve the system text once with
+`systemTextOf`; CC-060 stores the alleged name once per exported object and is to be done with
+M3's CC-051; the guard-payload technique cites M5's CC-072.

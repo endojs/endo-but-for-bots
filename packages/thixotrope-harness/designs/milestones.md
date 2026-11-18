@@ -691,10 +691,13 @@ renewal, refusal marks and account status.
   `H/resources/agent-host/durable-subscriptions.js`, `H/guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`,
   `H/guest/factory/subscription-options.js` (registered in `session-options.js`),
   `H/config/defaults-m4.js`, `H/scripts/subscription-login.mjs`, `H/ui/src/secrets/`,
-  `H/ui/src/accounts/`, `H/test/fixtures/{fake-subscription-server,fake-oauth-server}.mjs`,
-  `H/test/fixtures/sse/subscriptions/`, `H/test/*/m4-*`, `H/perf/{subscriptions,secrets}.perf.mjs`
-  (not `perf/pool.perf.mjs`, which is M1b's spare pool). Edits to shared files are the merge
-  hotspots H-1..H-12 of `m4-interfaces.md` 15, each with its exact seam.
+  `H/ui/src/accounts/` (and `H/ui/src/account-chip/` if needed), `AH/gateway/extensions/m4-secrets.js`,
+  `H/test/fixtures/{fake-subscription-server,fake-oauth-server}.mjs`,
+  `H/test/fixtures/sse/subscriptions/`, `H/test/*/m4-*` (in `test/browser/` only `m4-*.mjs`),
+  `H/perf/{subscriptions,secrets,accounts}.perf.mjs` (not `perf/pool.perf.mjs`, which is M1b's
+  spare pool). M3's seams are directory registries: M4 adds files there and edits none of M3's
+  collectors. Edits to shared files are the merge hotspots H-1..H-8, H-11, H-12 and H-14 of
+  `m4-interfaces.md` 15, each with its exact seam and the single owner of each shared file.
 
 **Contract.** `designs/m4-interfaces.md` (W4.0) with `guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`
 and `resources/agent-host/impl/subscriptions/types.js`. Pools hang off `SecretsAdmin.subscriptions()`
@@ -703,20 +706,21 @@ nothing to the session or exec programs (the session program has 13,552 bytes of
 for M3, M4 and M5 together, measured at `3588cab190`).
 
 **Work units** (order: W4.0 done; **group A** = W4.1-W4.5 in parallel; **group B** = W4.6 and
-W4.7 in parallel, W4.7 only after M3's W3.0 is merged; then W4.8, which owns every file; only W4.8
-needs a running supervisor; estimates in hours of one Opus agent, `m4-interfaces.md` 16)
+W4.7 in parallel, W4.7 against M3's merged W3.0 contract with its component tests once M3's group
+A is on the shared branch; then W4.8, which owns every M4 file; only W4.8 needs a running
+supervisor; merge order M3, M4, M5; estimates in hours of one Opus agent, `m4-interfaces.md` 16)
 
 | id | files | behaviour | tests | est. |
 |---|---|---|---|---|
-| W4.0 contract | `designs/m4-interfaces.md`, `guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`, `AH/subscriptions/types.js` | **Done** (J-0610..J-0629) | guards built and sampled in Node | - |
-| W4.1 manager part and creation (A) | `resources/agent-host/durable-subscriptions.js`, `guest/factory/subscription-options.js`, `config/defaults-m4.js`; hotspots H-1, H-2, H-6, H-7, H-11 | `SubscriptionsAdmin` (members from Secrets, pools as Backends, idempotent by label, R8-31 conflicts, retire), pool `Backend` with `resolveEffort`, sink `poolState`/`poolChanged`/`poolOf`, marks per member, served records (256, LRU), Secrets catalogue page, `setDescription`, audit reader forward; the effort resolver (R4-23) and `reasoningEffort` into `SessionConfig` | unit: M4 guards; M4 `SecretsAdmin`/`Secret` keep M2's method guards; the part with fake ops; the resolver | 6 |
+| W4.0 contract | `designs/m4-interfaces.md`, `guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`, `AH/subscriptions/types.js` | **Done** (J-0610..J-0629), including the cross-check follow-ups (`vocabularyShapes`, `browserSecretBytes`, accounts eviction, `m4-secrets.js` seam) | guards built and sampled in Node | - |
+| W4.1 manager part and creation (A) | `resources/agent-host/durable-subscriptions.js`, `guest/factory/subscription-options.js`, `config/defaults-m4.js`; hotspots H-1, H-2, H-6, H-7, H-11 | `SubscriptionsAdmin` (members from Secrets, pools as Backends, idempotent by label, R8-31 conflicts, retire), pool `Backend` with `resolveEffort`, sink `poolState`/`poolChanged`/`poolOf`, marks per member, served records (256, LRU), Secrets catalogue page, `setDescription`, audit reader forward; the effort resolver (R4-23) and `reasoningEffort` into `SessionConfig` | unit: M4 guards and `vocabularyShapes`; M4 `SecretsAdmin`/`Secret` keep M2's method guards (payload comparison, CC-072's technique); the part with fake ops; the resolver | 6 |
 | W4.2 pool core (A) | `AH/subscriptions/{pool,rate-limit-headers,pool-state}.js` | selection R4-24 (object keys, `auto` only), marks R4-25/R4-103, dated marks lifted by newer open readings, the manager bridge (marks at once, served stamps coalesced, one `poolState` per incarnation) | ported `subscription-pool.test.js`, `rate-limit-headers.test.js` | 5 |
-| W4.3 wire clients and catalogue (A) | `AH/subscriptions/{messages,responses,catalog}.js`, `anthropic.js` options (H-14), `test/fixtures/fake-subscription-server.mjs`, `test/fixtures/sse/subscriptions/` | Claude Messages SSE (R4-30 headers and billing block, adaptive thinking efforts, 16,384 output tokens, R4-76 texts, overload retry G-05), Codex Responses SSE (`instructions`, `store:false`, encrypted reasoning, `server_is_overloaded` retry R4-75/R4-105, `ultra` as `max`), pool catalogue R4-18/R4-19 with the R4-104 cache and the configured Claude context window (decision 13) | fixtures; ported lal `subscription-responses`/`subscription-messages` tests | 9 |
+| W4.3 wire clients and catalogue (A) | `AH/subscriptions/{messages,responses,catalog}.js`, `anthropic.js` options (H-14), `test/fixtures/fake-subscription-server.mjs`, `test/fixtures/sse/subscriptions/` | Claude Messages SSE (R4-30 headers and billing block, adaptive thinking efforts, 16,384 output tokens, R4-76 texts, overload retry G-05), Codex Responses SSE (`instructions`, `store:false`, encrypted reasoning, `server_is_overloaded` retry R4-75/R4-105, `ultra` as `max`), both taking the system text as a plain string; pool catalogue R4-18/R4-19 with the R4-104 cache and the configured Claude context window (decision 13) | fixtures; ported lal `subscription-responses`/`subscription-messages` tests | 9 |
 | W4.4 credentials, renewal, Secrets adapter (A) | `AH/subscriptions/{credentials,renewal}.js`, `AH/secrets/{credential-access,audit,catalog}.js`, H-5, `test/fixtures/fake-oauth-server.mjs` | credential parse and bounds (R7-25), write-ahead renewal with generation-conditioned write-back, fail closed `CONSUMED` (D-M4-8), single-flight per member, the one-key accessor (W-5 fix), audit reader to 1,000 (R7-63), describe batch | concurrent renewals, killed child at the renewal kill points, audit paging | 7 |
-| W4.5 accounts (A) | `AH/subscriptions/{accounts,account-file,account-tool}.js` | readings with provenance (observed, declared, remembered, unavailable), pushed on an adapter channel (R4-85), on-demand refresh, readings file, `accountStatus` text (R3-35, R4-84), banked credits shown (R4-86, no redeem) | adapter tests; ported `account-tool` rendering | 6 |
-| W4.6 composition and wiring (B) | `AH/subscriptions/{provider,index,credential-ops}.js`, `scripts/subscription-login.mjs`, H-3, H-4, H-8, kind tool lines (H-14) | the pool round (member hand-over before delivery, one attempt per member plus one renewal retry, "Provider subscriptions exhausted" with the reset time, G-07), `claude-pool`/`codex-pool` kinds, `accountStatus` on pool and API kinds, ops `credentials()`, provisioning step, sign-in helper (sealed box only) | adapter tests over both fake servers and a fake sink | 8 |
-| W4.7 UI (B, after W3.0) | `ui/src/secrets/`, `ui/src/accounts/`, H-9, H-10 | Secrets panel (write-only, R6-67, R7-26), Subscriptions panel and account chip (R6-54) through M3's seams | component tests | 7 |
-| W4.8 integration | everything; `test/integration/m4-*`, `test/browser/m4-*`, `perf/{subscriptions,secrets}.perf.mjs` | acceptance 1-16, kill points K-1..K-6, perf below | all M4 files, four slots, under 20 min | 9 |
+| W4.5 accounts (A) | `AH/subscriptions/{accounts,account-file,account-tool}.js` | readings with provenance (observed, declared, remembered, unavailable), pushed on an adapter channel (R4-85) with keepalive (30 s) and idle eviction (60 s; oldest idle evicted at the cap), on-demand refresh, readings file, `accountStatus` text (R3-35, R4-84), banked credits shown (R4-86, no redeem) | adapter tests; ported `account-tool` rendering; 40 abandoned watchers then a new watch succeeds | 6 |
+| W4.6 composition and wiring (B) | `AH/subscriptions/{provider,index,credential-ops}.js`, `AH/gateway/extensions/m4-secrets.js`, `scripts/subscription-login.mjs`, H-3, H-4, H-8, kind tool lines (H-14) | the pool round (system text once through `systemTextOf`, member hand-over before delivery, one attempt per member plus one renewal retry, "Provider subscriptions exhausted" with the reset time, G-07), `claude-pool`/`codex-pool` kinds, `accountStatus` on pool and API kinds, ops `credentials()`, provisioning step, sign-in helper and `--value-file` (sealed boxes only), the `largeCalls` extension for `SecretWriter.replace` | adapter tests over both fake servers and a fake sink; the extension against a fake `GatewayContext` | 8 |
+| W4.7 UI (B) | `ui/src/secrets/feature.js` (`app.panel`), `ui/src/accounts/feature.js` (`app.panel` Subscriptions and `statusbar.chip`, or the chip in `ui/src/account-chip/feature.js`), their components | Secrets panel (write-only, R6-67, R7-26; refuses values over `browserSecretBytes` and non-text files in the page), Subscriptions panel and account chip (R6-54) | component tests with M3's `_m3-fake-powers.js` | 7 |
+| W4.8 integration | everything of M4; `test/integration/m4-*`, `test/browser/m4-*.mjs`, `perf/{subscriptions,secrets,accounts}.perf.mjs` | acceptance 1-16 (14 after M3's merge, 13's system-text case after M5's), kill points K-1..K-6, perf below | all M4 files, four slots, under 20 min | 9 |
 
 **Acceptance tests** (fake servers; `[real-provider]` repeats 3, 7, 8 and 10 once with owner
 credentials; each one integration test under 5 minutes; files in `m4-interfaces.md` 17)
@@ -748,33 +752,40 @@ credentials; each one integration test under 5 minutes; files in `m4-interfaces.
 12. SIGKILL during renewal (after the write-ahead mark; after the token endpoint answered): at most
     one refresh per token; the member reports `CONSUMED`; the other member serves.
 13. Efforts: unsupported refused at creation, supported stored and sent; an effort on an API
-    backend refused; R4-30 header names present.
-14. Browser: Secrets panel create, replace, revoke, delete after revoke, audit, value never in the
-    DOM or a gateway frame; account chips update live.
+    backend refused; R4-30 header names present; after the M5 merge, a two-part system text
+    reaches both fake servers joined with a blank line.
+14. Browser (M3's `startBrowserGateway`, after M3's merge): Secrets panel create, replace, revoke,
+    delete after revoke, audit, value never in the DOM or a gateway frame; account chips update
+    live; a value of exactly 1,040,384 JSON-escaped bytes is written from the page, one of
+    1,040,385 is refused in the page and nothing is sent.
 15. No access token, refresh token or API key value anywhere in the state directory, the adapter's
-    event log or captured stderr.
+    event log or captured stderr; neither browser size-probe value reached the hub.
 16. Provisioning twice is a no-op; a member label bound to another Secret is refused until
     retired; a revoked Secret is never rewritten; `makePool` again after a SIGKILL answers the
     same pool.
 
-**Perf checks** (each a rate or latency over a fixed 60 s window unless stated, under 10 minutes
-per check, no state built by replaying turns; reasons in `m4-interfaces.md` 18)
-| check | budget |
-|---|---|
-| `subscriptions.select` member order, 16 members, 256 sessions | median <= 0.5 ms; 0 deliveries |
-| `subscriptions.turnStart` on a pool backend | median <= 350 ms; <= 3 session deliveries; 0 manager deliveries |
-| `subscriptions.handover` 429 on A then B | <= 50 ms over the fake server; 1 manager delivery per refusal |
-| `subscriptions.servedWrites` sticky session | <= 1 manager delivery per session per 60 s |
-| `subscriptions.firstOpen` after restart (5 restarts) | <= 750 ms; 1 manager crank |
-| `secrets.credentialRead` per round | median <= 1 ms; 0 deliveries |
-| `subscriptions.renewal` 16 concurrent rounds on an expired member | 1 refresh POST per expiry; <= fake + 50 ms |
-| `secrets.catalog` 64 secrets | <= 300 ms; 1 manager crank |
-| `secrets.auditReader` 1,000 events | <= 50 ms; 0 vat deliveries |
-| `accounts.push` reading to subscriber | median <= 5 ms; 0 vat deliveries per change and per viewer |
-| `accounts.refresh` 2 members | <= fake + 100 ms |
-| `catalog.pool` warm / cold (5 cold reads) | <= 300 ms / <= 2 s |
-| `subscriptions.bundles` | session and exec + <= 64 bytes; factory <= +6 KB |
-| too-big probes (single runs) | no halt; credential 8,193 bytes, secret 1 MiB + 1, audit 1,001, 17 members, 16 MiB + 1 SSE line refused on the sending side; `poolState` at 256 served fits a frame |
+**Perf checks** (each a rate or latency over a fixed window, 60 s unless stated; no state built by
+replaying turns; each file under 10 minutes with at most 7 timed windows; reasons in
+`m4-interfaces.md` 18)
+| check | file | budget |
+|---|---|---|
+| `subscriptions.select` member order, 16 members, 256 sessions | subscriptions | median <= 0.5 ms; 0 deliveries |
+| `subscriptions.turnStart` on a pool backend | subscriptions | median <= 350 ms; <= 3 session deliveries; 0 manager deliveries |
+| `subscriptions.handover` 429 on A then B | subscriptions | <= 50 ms over the fake server; 1 manager delivery per refusal |
+| `subscriptions.servedWrites` sticky session | subscriptions | <= 1 manager delivery per session per 60 s |
+| `subscriptions.renewal` 16 concurrent rounds on an expired member | subscriptions | 1 refresh POST per expiry; <= fake + 50 ms |
+| `subscriptions.firstOpen` restarts over a 150 s window | subscriptions | median <= 750 ms; 1 manager crank per restart |
+| `catalog.pool` one 60 s window of (invalidate, cold read, warm read) | subscriptions | warm median <= 300 ms; cold median <= 2 s |
+| `subscriptions.bundles` (one build) | subscriptions | session and exec + <= 64 bytes; factory <= +6 KB |
+| too-big probes (single runs) | subscriptions | no halt; credential 8,193 bytes, secret 1 MiB + 1, audit 1,001, 17 members, 16 MiB + 1 SSE line refused on the sending side; `poolState` at 256 served fits a frame |
+| `secrets.credentialRead` per round | secrets | median <= 1 ms; 0 deliveries |
+| `secrets.catalog` 64 secrets | secrets | median <= 300 ms; 1 manager crank |
+| `secrets.auditReader` 1,000 events | secrets | median <= 50 ms; 0 vat deliveries |
+| `accounts.push` reading to subscriber | accounts | median <= 5 ms; 0 vat deliveries per change and per viewer |
+| `accounts.refresh` 2 members | accounts | median <= fake + 100 ms |
+
+Files: `perf/subscriptions.perf.mjs` 7 windows, 510 s timed, <= 595 s with setup;
+`perf/secrets.perf.mjs` 3 windows, <= 270 s; `perf/accounts.perf.mjs` 2 windows, <= 210 s.
 
 **Fit risk:** good. All token-bearing code is Node in one process; the vat side is a few handles.
 
