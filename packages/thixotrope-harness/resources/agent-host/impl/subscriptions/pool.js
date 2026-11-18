@@ -206,6 +206,12 @@ harden(standingOf);
  */
 
 /**
+ * The furthest a dated mark reaches: the longest provider window (a week)
+ * plus a day.
+ */
+export const MAX_DATED_MARK_MS = 8 * 86_400_000;
+
+/**
  * The refusals a pool has seen, which outlive the reading that came with
  * them: a member that refused is skipped until the time it named, or, when
  * it named none, for a pause that doubles with each refusal in a row (one
@@ -223,12 +229,6 @@ harden(standingOf);
  * @param {Partial<PoolSettings>} [options.settings]
  * @returns {RefusalMarks}
  */
-/**
- * The furthest a dated mark reaches: the longest provider window (a week)
- * plus a day.
- */
-export const MAX_DATED_MARK_MS = 8 * 86_400_000;
-
 export const makeRefusalMarks = ({
   initial = [],
   onChange = () => {},
