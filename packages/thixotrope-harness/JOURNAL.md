@@ -8357,3 +8357,38 @@ calls a controller action re-ran without end when the shell draws synchronously 
 `schedule`): Preact runs the pending effect again for a draw made from inside its effect pass.
 The tests ran out of heap (a later test in the same worker showed it). The dialog now defers the
 call by a microtask. Fit: good for the object rule; presences stay in the controller.
+
+### J-0580 2026-11-18 M3 W3.6 conversation views - built
+Evidence: commits 8f711e002d (`ui/src/conversation/`), 2402f1cbeb
+(`test/unit/m3-ui-conversation{,-slots}.test.js`).
+Reading: `Conversation`, `Composer`, `Queue`, `Recovery`, `StatusRow` adapt `space-floot`
+`MessageList`, `ComposeBar`, `RecoveryPanel` at 1315bef86 (`highlight.js` copied unchanged). A row
+is one controller `TurnEntry`, keyed by `turnId`: the user message from its `TurnStarted` record
+(or live `turn-start` event), `message.renderer` once under it with `{ context, turn, record }`,
+replies and tool groups from the live fold while the turn runs (or when no page has shown it),
+else from its transcript records (`round-settled`/`partial` text, `tool-intents` paired with
+`tool-result` by `opId`, `turn-settled.final` only when no round had text). Staged and sealed
+fields show their preview and "Show all" reads them through `controller.readContent`. The
+composer keeps the controller's text and caret; Enter sends, Shift+Enter and IME keys do not;
+`view.blocked` (A-5, no Web Locks) disables it.
+
+### J-0581 2026-11-18 M3 W3.6 test time and bundle share - perf
+Evidence: `corepack yarn ses-ava test/unit/m3-ui-conversation.test.js
+test/unit/m3-ui-conversation-slots.test.js` (unit lane, no supervisor), commit 2402f1cbeb; esbuild
+of `ui/src/conversation/index.js`, Preact external, minified.
+Measured: 13 tests in 1.25 s wall time. The views are 23,989 bytes minified / 8,787 gzip with the
+shared texts, plus 1,751 / 702 bytes of CSS; the whole bundle with every lane's views was 101,098
+bytes gzip. Budget (`ui.coldLoad`): 600 KB gzip for the bundle.
+
+### J-0582 2026-11-18 M3 W3.6 fit and contract gaps - deviation
+Reading: (1) A view cannot import `shell/Slot.js` in Node (the `feature-list.js` top-level await
+deadlocks the graph), so `conversation/slots.js` copies the slot rules. (2) Under the unit lane's
+Preact taming a component whose result is a top-level Fragment loses its element children (links
+vanished); returning an array renders the same in both. (3) Preact runs `useEffect` about 100 ms
+late in Node (no `requestAnimationFrame`); the caret and scroll use `useLayoutEffect`, which is
+also the right moment for them. (4) The controller folds live events by preview, so a large reply
+that streamed live shows its preview until a page re-reads the turn; acceptance 8's 1 MiB reply
+needs the controller to keep the staged `final` (asked of the PM). (5) Queue Edit starts from the
+row's `preview`, which M2 cuts; a long queued message cannot be edited whole. Fit: good for records
+kept as received: the renderer test's unknown `attachments` field reached the slot unchanged for
+an archived, a kept and a live turn, with no code in the view naming it.
