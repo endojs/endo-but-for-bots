@@ -131,7 +131,9 @@ export const connectGateway = async ({
     ws.onopen = resolve;
     ws.onerror = () => reject(Error('the WebSocket did not open'));
   });
-  const client = makeClient({ send: bytes => ws.send(bytes) });
+  const client = makeClient({
+    send: bytes => ws.send(/** @type {Uint8Array<ArrayBuffer>} */ (bytes)),
+  });
   ws.onmessage = event => client.receive(new Uint8Array(event.data));
   void closed.then(() => client.close());
   const bootstrap = client.bootstrap();

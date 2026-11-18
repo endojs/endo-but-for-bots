@@ -163,7 +163,7 @@ const settledInputs = (session, count) =>
     100,
   );
 
-run('setup: served state, scripted and catalogue backends', async () => {
+run('setup: served state, scripted and catalogue backends', async t => {
   removeKey = useTestWrappingKey('m3ss').remove;
   server = await startFakeProviderServer({
     plan: [
@@ -175,6 +175,7 @@ run('setup: served state, scripted and catalogue backends', async () => {
     ],
   });
   state = await startFromTemplate(await sliceTemplate());
+  t.truthy(state.client);
 });
 
 run(
