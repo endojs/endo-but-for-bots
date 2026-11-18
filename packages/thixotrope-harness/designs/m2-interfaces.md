@@ -699,8 +699,10 @@ Contract 8 holds. M2 adds, on `QueueEntry` (`m2Interfaces.QueueEntry`; A.4 `edit
   staged file when the edit is refused (M1b 17.1 rule).
 - `cancel() -> boolean`: as contract 8.
 - `sendNow()`: moves the entry to the head and releases every hold except `interrupted` (R4-56;
-  Fae `session-submissions.js`); when idle it is claimed in the same crank (crank A); while a turn
-  runs it waits at the head. An entry no longer waiting throws `texts.entryGone`.
+  Fae `session-submissions.js`); when idle it is claimed in the same crank (crank A). While a turn
+  runs and no hold is left, that turn is cancelled as `Turn.cancel()` would (R6-44: "for the queue
+  head cancels the running turn so it goes next"; PM rulings 5 and 9, J-9491) and the entry is
+  claimed when the cancelled turn settles. An entry no longer waiting throws `texts.entryGone`.
 
 Bounds unchanged: 100 waiting (`textOf.queueFull`), receipts 4,096 kept 24 h (J-9391 records the
 rate cap; the PM rules on it), request ids per A.4.
@@ -1119,7 +1121,7 @@ guest rules; "Node" = adapter or tests.
 | `guest/lib/pending-queue.js` (vat) | from Fae `session/pending-queue.js`: `makePendingQueue({ onChange })`, heap Maps, no pet names | 5 |
 | `guest/session/{submissions,holds}.js` (vat) | `makeSubmissions(...)`, `holdTexts`, `releaseRule` | 5.1, 5.2 |
 | `guest/session/holds-table.js` (vat; hook table) | `holdsTable` | 13 |
-| `guest/session/queue.js` (vat) | `makeQueue({ onChange, turnOf, claim })` (`turnOf(turnId)`, `claim()` for `sendNow`) | 5 |
+| `guest/session/queue.js` (vat) | `makeQueue({ onChange, turnOf, claim, cancelCurrent })` (`turnOf(turnId)`, `claim()` and `cancelCurrent()` for `sendNow`) | 5 |
 | `AH/composer.js` | `Composer.edit` | 5.1 |
 
 ### W2.5
@@ -1296,3 +1298,12 @@ missing `sendNow` could not be made on the M2 guard; `textOf.notBuilt` answered 
     stands. A turn cancelled mid-stream ends its live stream with `end { status: 'cancelled' }`;
     no `abort` event is added. The milestone's "abort emitted" is read as this end event, and the
     provider's server sees the connection closed (8.1).
+12. **Where the contract and the specification were said to differ** (PM ruling 5, 2026-11-18;
+    J-9491; the specification wins where it states the behaviour): (a) send-now on the queue head
+    cancels the running turn (R6-44 states it: built, 5.1). (b) Usage `turns` counts every settled
+    turn, `incompleteTurns` the ones not completed (m1a-interfaces 6.3): R4-83, A.4 `getUsage` and
+    the `usage` event say only "turns, incomplete turns", so the specification is silent on which
+    turns count and the contract stands. (c) The round-limit text (R4-47) is the turn's final
+    answer (`TurnSettled.final`) and not a transcript record, so later contexts do not carry it:
+    R4-47 says only that "the turn ends normally with" the text, and is silent on what later
+    contexts hold, so the contract stands.

@@ -187,20 +187,17 @@ run(
     const rows2 = (await E(session2).listPending()).entries;
     t.true(await E(rows2[2].entry).cancel());
     t.false(await E(receipts[2].entry).cancel(), 'already gone');
-    // Send-now m3 (client 2): it moves to the head.
+    // Send-now m3 (client 2): it moves to the head and the running turn is
+    // cancelled so it goes next (R6-44, PM ruling 9).
     await E(rows2[3].entry).sendNow();
-    t.deepEqual(previews(await E(session).listPending()), [
-      'm3',
-      'm0',
-      'm1 edited',
-    ]);
+    t.deepEqual(previews(await E(session).listPending()), ['m0', 'm1 edited']);
     await t.throwsAsync(() => E(receipts[2].entry).sendNow(), {
       message: texts.entryGone,
     });
 
-    // End the running turn: m3 runs next, then m0, then the edited m1.
-    await E(running.turn).cancel();
+    // m3 ran next, then m0, then the edited m1.
     const turns = await settledTurns(session, 4);
+    t.is((await E(running.turn).getStatus()).state, 'cancelled');
     t.deepEqual(
       turns.map(tp => tp.input),
       [inputs.stall, 'm3', 'm0', 'm1 edited'],

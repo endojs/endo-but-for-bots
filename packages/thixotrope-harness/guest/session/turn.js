@@ -1559,6 +1559,10 @@ export const makeTurnRunner = ({
       core = wiring.core;
     },
     current: () => current,
+    /** Cancel the running turn, if any (R6-44 send-now; as Turn.cancel). */
+    cancelCurrent: () => {
+      if (current !== undefined) cancel(current.info);
+    },
     settle,
     report,
     claimNext,

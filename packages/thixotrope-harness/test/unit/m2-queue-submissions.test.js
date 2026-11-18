@@ -23,8 +23,9 @@
 // - "a queue that cannot be read is a hold, not a refusal": the queue is
 //   the vat's heap; `unavailable` cannot happen (its text is checked in
 //   m2-queue-pending.test.js).
-// - "only the head may cut the running turn short": send-now never cuts a
-//   running turn here (5.1); the entry moves to the head and runs next.
+// - "only the head may cut the running turn short": send-now moves the
+//   entry to the head first, so it is always the head that cuts the running
+//   turn short (R6-44, 5.1; tested below).
 import './_m1a-prelude.js';
 
 import test from '@endo/ses-ava/test.js';
@@ -152,7 +153,7 @@ test('after a restart a new message releases the hold and the old ones go first 
   t.deepEqual(s.sent(), ['one', 'two', 'three']);
 });
 
-test('send-now on a later entry moves it to the head; it runs next, the others keep their order', async t => {
+test('send-now on a later entry moves it to the head; the running turn is cancelled, it runs next, the others keep their order', async t => {
   const s = await makeQueueSession();
   await s.submit('one');
   await s.submit('two');
@@ -160,10 +161,10 @@ test('send-now on a later entry moves it to the head; it runs next, the others k
   await s.submit('four');
   three.entry.sendNow();
   await drain();
-  t.deepEqual(s.sent(), ['one'], 'a running turn is never cut short');
-  t.deepEqual(s.pending(), ['three', 'two', 'four']);
+  t.deepEqual(s.sent(), ['one', 'three'], 'R6-44: the running turn is cut');
+  t.deepEqual(s.pending(), ['two', 'four']);
   await s.finish();
-  t.deepEqual(s.sent(), ['one', 'three']);
+  t.deepEqual(s.sent(), ['one', 'three', 'two']);
   // send-now on an entry no longer waiting
   t.throws(() => three.entry.sendNow(), { message: texts.entryGone });
 });
@@ -296,4 +297,25 @@ test('started receipts keep the turn id; turn is handed out while the session ke
   t.truthy(looked?.turn);
   t.is(looked?.entry, undefined);
   t.is(looked?.duplicate, false);
+});
+
+test('R6-44: send-now while a turn runs cancels it, and the entry goes next', async t => {
+  const s = await withQueueHandle();
+  await s.submit('one');
+  await s.submit('two');
+  await s.submit('three');
+  const running = s.session.getCurrentTurn();
+  t.is(running?.input, 'one');
+  const [, three] = s.session.listPending().entries;
+  three.entry.sendNow();
+  await drain();
+  t.is(s.session.getCurrentTurn()?.input, 'three', 'three runs next');
+  t.deepEqual(s.pending(), ['two']);
+  t.deepEqual(s.sent(), ['one', 'three']);
+  // Held by `interrupted`: send-now neither claims nor cancels.
+  s.queue.hold('interrupted', holdTexts.interrupted());
+  const [two] = s.session.listPending().entries;
+  two.entry.sendNow();
+  await drain();
+  t.is(s.session.getCurrentTurn()?.input, 'three', 'not cancelled');
 });
