@@ -51,6 +51,7 @@ import { createHash } from 'node:crypto';
 
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { texts } from '../../../../guest/lib/interfaces.js';
+import { limits } from '../../../../guest/lib/limits.js';
 import {
   codexExplanations,
   m4Texts,
@@ -62,9 +63,11 @@ import { subscriptionDefaults } from '../../../../config/defaults-m4.js';
 import { anthropicToolId, textDigest } from '../providers/anthropic.js';
 import {
   bodyChunks,
+  boundedChunks,
   discardBody,
   failureKind,
   postJson,
+  providerBaseUrl,
   retryAfterMs,
 } from '../providers/http.js';
 import { ProviderFailure } from '../providers/round.js';
@@ -447,7 +450,9 @@ export async function* codexAttempt({
     tools: request.tools ?? [],
     transcript: projection?.transcript ?? [],
   });
-  const baseUrl = String(spec.baseUrl ?? CODEX_BASE_URL).replace(/\/+$/, '');
+  // INT-M4: the M2 review's base URL rule (https, or http to loopback)
+  // holds for pools too: a credential goes nowhere else.
+  const baseUrl = providerBaseUrl(spec.baseUrl, CODEX_BASE_URL);
   const timeoutMs = spec.timeoutMs ?? settings.requestTimeoutMs;
   const observer = observingFetch({
     ...(fetch === undefined ? {} : { fetch }),
@@ -522,7 +527,12 @@ export async function* codexAttempt({
   let textLength = 0;
 
   try {
-    for await (const batch of parseSseBatches(bodyChunks(response))) {
+    // INT-M4: a round's whole stream is bounded as M2's providers bound it.
+    for await (const batch of parseSseBatches(
+      boundedChunks(bodyChunks(response), limits.roundStreamBytes, () =>
+        wireFailure(texts.frameLimit, { delivered }),
+      ),
+    )) {
       /** @type {string[]} */
       const pieces = [];
       /** @type {any} */

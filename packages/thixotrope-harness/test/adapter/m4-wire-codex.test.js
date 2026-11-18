@@ -23,6 +23,7 @@ import {
 } from '../../guest/lib/texts-m4.js';
 /* eslint-enable import/no-relative-packages */
 import { NATIVE_CONTEXT_FORMAT } from '../../resources/agent-host/impl/projection.js';
+import { BASE_URL_REFUSED } from '../../resources/agent-host/impl/providers/http.js';
 import { ProviderFailure } from '../../resources/agent-host/impl/providers/round.js';
 import {
   codexAttempt,
@@ -497,4 +498,19 @@ test('empty answer, cut stream, timeout and cancel', async t => {
   const aborted = await pending;
   t.false(aborted.error instanceof ProviderFailure);
   for (const result of [empty, cut, timedOut]) clean(t, result);
+});
+
+test('INT-M4: a pool base URL outside https or loopback http is refused before any request (M2 review rule)', async t => {
+  const server = await serverFor(t);
+  for (const baseUrl of [
+    `${server.url}/?q=1`,
+    `${server.url}#frag`,
+    server.url.replace('http://', 'http://user:pw@'),
+    server.url.replace('http://', 'ftp://'),
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const refused = await drain(attempt(server, { spec: { baseUrl } }));
+    t.is(refused.error?.message, BASE_URL_REFUSED, baseUrl);
+  }
+  t.is(server.requests().length, 0);
 });

@@ -50,6 +50,7 @@
  *
  * Node only (adapter).
  */
+import { providerBaseUrl } from '../providers/http.js';
 import {
   credentialError,
   formatCredential,
@@ -221,11 +222,22 @@ export const makeMemberCredential = ({
    * @param {string} refreshToken
    */
   const post = async (credential, refreshToken) => {
+    /** @type {string} */
+    let url;
+    try {
+      // INT-M4: the M2 review's base URL rule (https, or http to loopback)
+      // holds for the token endpoint too; a refused URL is never posted to.
+      url = providerBaseUrl(tokenUrl, '');
+    } catch {
+      throw Object.assign(credentialError('RENEWAL_FAILED'), {
+        undispatched: true,
+      });
+    }
     counters.posts += 1;
     /** @type {Response} */
     let response;
     try {
-      response = await fetch(/** @type {string} */ (tokenUrl), {
+      response = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

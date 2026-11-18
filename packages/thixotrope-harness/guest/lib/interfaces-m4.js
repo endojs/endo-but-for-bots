@@ -148,7 +148,8 @@ const m4ShapeBuilders = {
         modelId: S.ModelId,
         contextLength: count,
         maxOutputTokens: count,
-        timeoutMs: count,
+        // INT-M4: as M2's BackendSpec since its review (at least 1 s).
+        timeoutMs: M.and(count, M.gte(1000), M.lte(limits.maxTurnDeadlineMs)),
         cacheLifetimeMs: count,
         baseUrl: text(limits.urlUnits),
         tokenUrl: text(limits.urlUnits),

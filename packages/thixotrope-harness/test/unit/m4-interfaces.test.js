@@ -15,6 +15,7 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { interfaces, methodNames, shapes } from '../../guest/lib/interfaces.js';
+import { limits } from '../../guest/lib/limits.js';
 import {
   m4Interfaces,
   m4Limits,
@@ -258,6 +259,14 @@ test('bounds that are not strings: 17 members, a 257th served record, an audit l
     ),
   );
   t.false(matches(harden({ limit: 1001 }), m4Shapes.AuditQuery));
+  // INT-M4: timeoutMs as M2's BackendSpec since its review (1 s .. 24 h).
+  t.false(matches(harden({ ...poolSpec, timeoutMs: 999 }), m4Shapes.PoolSpec));
+  t.false(
+    matches(
+      harden({ ...poolSpec, timeoutMs: limits.maxTurnDeadlineMs + 1 }),
+      m4Shapes.PoolSpec,
+    ),
+  );
   t.false(matches(harden({ ...window, usedPercent: 101 }), m4Shapes.Window));
   t.false(
     matches(harden({ ...poolSpec, kind: 'anthropic' }), m4Shapes.PoolSpec),

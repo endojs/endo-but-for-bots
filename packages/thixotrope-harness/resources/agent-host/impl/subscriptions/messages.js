@@ -48,6 +48,7 @@ import {
   anthropicBody,
   anthropicMessages,
 } from '../providers/anthropic.js';
+import { providerBaseUrl } from '../providers/http.js';
 import { ProviderFailure } from '../providers/round.js';
 import { observingFetch, wireFailure } from './wire.js';
 
@@ -211,7 +212,9 @@ export async function* claudeAttempt({
     transcript: projection?.transcript ?? [],
     client,
   });
-  const baseUrl = String(spec.baseUrl ?? CLAUDE_BASE_URL).replace(/\/+$/, '');
+  // INT-M4: the M2 review's base URL rule (https, or http to loopback)
+  // holds for pools too: a credential goes nowhere else.
+  const baseUrl = providerBaseUrl(spec.baseUrl, CLAUDE_BASE_URL);
   const observer = observingFetch({
     ...(fetch === undefined ? {} : { fetch }),
     ...(onReading === undefined ? {} : { onReading }),

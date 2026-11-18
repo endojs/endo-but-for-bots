@@ -67,7 +67,7 @@ import {
   CatalogReadError,
   cutUnits,
 } from '../providers/catalog.js';
-import { discardBody, getJson } from '../providers/http.js';
+import { discardBody, getJson, providerBaseUrl } from '../providers/http.js';
 import {
   CLAUDE_BASE_URL,
   CLAUDE_OAUTH_BETA,
@@ -586,14 +586,13 @@ export const makePoolCatalog = ({
   const ownerOf = (entry, spec) => {
     const known = owners.get(entry.member);
     if (known !== undefined) return known;
-    const trimmed = (/** @type {string} */ url) => url.replace(/\/+$/, '');
     /** @type {() => Promise<PoolModel[]>} */
     const read =
       entry.provider === 'claude'
         ? async () => {
             const credential = await readCredential(entry);
             return readClaudeModels({
-              baseUrl: trimmed(String(spec.baseUrl ?? CLAUDE_BASE_URL)),
+              baseUrl: providerBaseUrl(spec.baseUrl, CLAUDE_BASE_URL),
               accessToken: credential.accessToken,
               ...(fetch === undefined ? {} : { fetch }),
             });
@@ -601,7 +600,7 @@ export const makePoolCatalog = ({
         : async () => {
             const credential = await readCredential(entry);
             return readCodexModels({
-              baseUrl: trimmed(String(spec.baseUrl ?? CODEX_BASE_URL)),
+              baseUrl: providerBaseUrl(spec.baseUrl, CODEX_BASE_URL),
               credential,
               clientVersion,
               ...(fetch === undefined ? {} : { fetch }),

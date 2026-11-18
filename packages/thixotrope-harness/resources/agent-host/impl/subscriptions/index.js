@@ -43,6 +43,7 @@ import { E } from '@endo/far';
 import { poolKinds } from '../../../../guest/lib/texts-m4.js';
 /* eslint-enable import/no-relative-packages */
 import { subscriptionDefaults } from '../../../../config/defaults-m4.js';
+import { providerBaseUrl } from '../providers/http.js';
 import { makeAccounts, makeUsageReader } from './accounts.js';
 import { makePoolCatalog } from './catalog.js';
 import { makeCredentialOps, makeSecretResolver } from './credential-ops.js';
@@ -313,7 +314,15 @@ export const makeSubscriptions = ({
     url: (backend, member) => {
       const pool = pools.get(backend);
       if (pool === undefined) return undefined;
-      return pool.spec.usageUrl ?? endpoints[member.provider]?.usageUrl;
+      const url = pool.spec.usageUrl ?? endpoints[member.provider]?.usageUrl;
+      if (url === undefined) return undefined;
+      // INT-M4: the M2 review's base URL rule (https, or http to loopback);
+      // a refused usage URL is not read, as a pool with no URL.
+      try {
+        return providerBaseUrl(url, url);
+      } catch {
+        return undefined;
+      }
     },
     // Section 7: an account read never renews; it reads what is stored.
     credential: async member => {
