@@ -998,7 +998,7 @@ is kept with its likely cause, not re-based.
 | 12 reachability (`m5-reachability`) | (a) return-guard closure has no operator or admin interface; (b) session and exec vats hold no other session or exec vat; origin granularity only (CC-060) | pass | J-9694 |
 | 15 browser (W5.8, M3 lane) | needs M3 merged | deferred | |
 | M1a, M1b, M2 unit lanes | 11 tests pinned pre-M5 hook tables; updated. `bundle-guest`, `m1a-session-program` fail on session program bytes | 2 fail until J-9690 is settled | J-9691 |
-| `session.program` / `exec.program` (240,000 / 120,000 after O-1) | 272,126 / 119,760 as the lane bundles; 241,361 / 106,277 with the J-9690 patch | **miss** (session, by 1,361 with the patch) / pass | J-9690, J-9695 |
+| `session.program` / `exec.program` (240,000 / 120,000 after O-1) | 272,126 / 119,760 as the lane bundles; 241,361 / 106,277 with the per-module J-9690 patch (the daemon runs); 236,218 / 104,193 with the bundle-level form of J-9698 (Node only: evaluates and runs a turn; not run in a daemon) | **miss** as the lane bundles and with the per-module patch; pass with J-9698's form, once the PM applies it to `scripts/bundle-guest.mjs` / pass | J-9690, J-9695, J-9698 |
 | `session.createCold` (6 s), O-1 before and after | `creation-m5`: 7,341 ms median, n 17 in 120 s (241 KB program); `session.perf` same method both sides: M2 base 5,619 ms (186,448 bytes, 34.6 deliveries) -> M5 7,220 ms (241,361 bytes, 40.6 deliveries) | pass (1.20-1.22 x) | J-9695, J-9697 |
 | `prompt.compose` Node (5 ms) / vat (`chat-only` + 150, 750 ms; pool 4) | 0.002 ms / largest 1,622 vs `chat-only` 1,277 (+345), n 10 + 10 | pass / **miss** | J-9695 |
 | `tools.local` (+30 ms; 0 extra deliveries) | +109 ms (852 vs 743); -0.9 deliveries | **miss** / pass | J-9696 |
