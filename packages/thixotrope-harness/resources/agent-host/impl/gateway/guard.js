@@ -15,6 +15,13 @@
  * 4. keys: every key of every plain record in the arguments, to nesting
  *    depth `argumentDepth`, is in the vocabulary (`unexpectedField`,
  *    `tooDeep`);
+ * 4a. names (M3-FIX): a call to a target that is not gateway-local (a vat
+ *    presence, or an answer a page pipelines on) names a method, or gets a
+ *    property, from `methods` (the method names of every contract interface
+ *    guard; `unknownMethod`); a passable symbol, as an argument or as the
+ *    method of any target, also names one of `methods`. A vat decodes
+ *    every selector and symbol as a registered symbol, so without this a
+ *    page could make a vat register any number of fresh names;
  * 5. calls in flight: at most `callsInFlight` answered calls whose target is
  *    not gateway-local (`tooManyCalls`).
  *
@@ -60,7 +67,7 @@ export const defaultGuardLimits = harden({
 
 /**
  * @typedef {'target' | 'browserObject' | 'frame' | 'keys' | 'depth' |
- *   'inFlight' | 'protocol'} GuardRule
+ *   'method' | 'inFlight' | 'protocol'} GuardRule
  */
 
 /**
@@ -79,7 +86,6 @@ const leafClasses = new Set([
   'Infinity',
   '-Infinity',
   'bigint',
-  'symbol',
 ]);
 
 /** Fixed fields of an error encoding (marshal's capdata). */
@@ -93,13 +99,14 @@ const errorFields = new Set([QCLASS, 'name', 'message', 'errorId']);
 const refuse = (rule, text) => harden({ rule, text });
 
 /**
- * Walk the decoded JSON of a call's arguments (rule 4).
+ * Walk the decoded JSON of a call's arguments (rules 4 and 4a).
  * @param {unknown[]} args
  * @param {Set<string>} vocabulary
+ * @param {Set<string>} methods
  * @param {number} maxDepth
  * @returns {Refusal | undefined}
  */
-const checkKeys = (args, vocabulary, maxDepth) => {
+const checkKeys = (args, vocabulary, methods, maxDepth) => {
   /** @type {[unknown, number][]} */
   const stack = args.map(arg => [arg, 1]);
   /**
@@ -132,6 +139,10 @@ const checkKeys = (args, vocabulary, maxDepth) => {
         }
       } else if (qclass === 'tagged') {
         stack.push([record.payload, depth + 1]);
+      } else if (qclass === 'symbol') {
+        if (typeof record.name !== 'string' || !methods.has(record.name)) {
+          return refuse('method', gatewayTexts.unknownMethod);
+        }
       } else if (qclass === 'error') {
         if (!pushRecord(record, depth, errorFields)) {
           return refuse('keys', gatewayTexts.unexpectedField);
@@ -144,6 +155,37 @@ const checkKeys = (args, vocabulary, maxDepth) => {
     }
   }
   return undefined;
+};
+
+/**
+ * Rule 4a for the method position: a string name toward a target that is
+ * not gateway-local must be in `methods`; an encoded symbol (any target)
+ * must name one of `methods`; anything else toward a vat (`null`, a
+ * function application) is refused. Toward a gateway-local object a
+ * string name is that object's own guard's business (no vat sees it).
+ * @param {unknown} name
+ * @param {boolean} local
+ * @param {Set<string>} methods
+ * @returns {Refusal | undefined}
+ */
+const checkName = (name, local, methods) => {
+  if (typeof name === 'string') {
+    return local || methods.has(name)
+      ? undefined
+      : refuse('method', gatewayTexts.unknownMethod);
+  }
+  if (name !== null && typeof name === 'object') {
+    const encoded = /** @type {Record<string, unknown>} */ (name);
+    if (
+      encoded[QCLASS] === 'symbol' &&
+      typeof encoded.name === 'string' &&
+      methods.has(encoded.name)
+    ) {
+      return undefined;
+    }
+    return refuse('method', gatewayTexts.unknownMethod);
+  }
+  return local ? undefined : refuse('method', gatewayTexts.unknownMethod);
 };
 
 /**
@@ -161,6 +203,8 @@ const isMethodShape = decoded =>
  * @param {(id: string) => GatewayTarget | undefined} options.targetOf the
  *   gateway's value for a browser target or slot id (`o-n`, `p-n`, `q-n`)
  * @param {Set<string>} options.vocabulary
+ * @param {Set<string>} options.methods method names a page may name toward
+ *   a vat (`vocabulary.js` `harnessNames`)
  * @param {(target: unknown, method: string) => boolean} options.isLargeCall
  * @param {number} options.inFlight answered calls to vat targets waiting
  * @param {GuardLimits} [options.limits]
@@ -170,6 +214,7 @@ export const inspectCall = ({
   message,
   targetOf,
   vocabulary,
+  methods,
   isLargeCall,
   inFlight,
   limits = defaultGuardLimits,
@@ -230,8 +275,12 @@ export const inspectCall = ({
     if (!large) return refuse('frame', gatewayTexts.messageTooLarge);
   }
 
-  // 4. Keys and depth.
-  const keyRefusal = checkKeys(args, vocabulary, limits.argumentDepth);
+  // 4a. The method (or property) name.
+  const methodRefusal = checkName(name, held.local, methods);
+  if (methodRefusal !== undefined) return methodRefusal;
+
+  // 4. Keys and depth (4a for symbols in the arguments).
+  const keyRefusal = checkKeys(args, vocabulary, methods, limits.argumentDepth);
   if (keyRefusal !== undefined) return keyRefusal;
 
   // 5. Calls in flight (vat targets only).

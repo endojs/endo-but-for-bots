@@ -108,6 +108,8 @@ const labelOf = value => {
  *   one `GatewayBootstrap` per connection (`powers.js` `makeBootstrapFactory`)
  * @param {Set<string>} options.vocabulary record keys a page may send
  *   (`vocabulary.js` `harnessVocabulary`)
+ * @param {Set<string>} options.methods method names a page may name toward
+ *   a vat (`vocabulary.js` `harnessNames`; guard.js rule 4a)
  * @param {(target: unknown, method: string) => boolean} options.isLargeCall
  *   whether `method` of the gateway-local `target` may exceed `frameBytes`
  * @param {Partial<BridgeLimits>} [options.limits]
@@ -119,6 +121,7 @@ const labelOf = value => {
 export const makeBridge = ({
   makeBootstrap,
   vocabulary,
+  methods,
   isLargeCall,
   limits = {},
   log,
@@ -321,6 +324,7 @@ export const makeBridge = ({
         message,
         targetOf,
         vocabulary,
+        methods,
         isLargeCall,
         inFlight: inFlight.size,
         limits: settings,

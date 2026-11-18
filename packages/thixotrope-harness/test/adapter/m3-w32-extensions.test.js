@@ -19,7 +19,7 @@ import {
 } from '../../resources/agent-host/impl/gateway/extensions.js';
 import { makeBridge } from '../../resources/agent-host/impl/gateway/bridge.js';
 import { makeBootstrapFactory } from '../../resources/agent-host/impl/gateway/powers.js';
-import { harnessVocabulary } from '../../resources/agent-host/impl/gateway/vocabulary.js';
+import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary.js';
 import {
   gatewayTexts,
   WS_PATH,
@@ -223,6 +223,7 @@ test('through the bridge: extras service, its large call, the writer identity', 
   const secret = 'f'.repeat(64);
   // The operator hands out the writer as SecretsAdmin.openWriter() would.
   const operator = Far('Operator', { openWriter: () => writer });
+  const names = harnessNames({ log: () => {} });
   const bridge = makeBridge({
     makeBootstrap: makeBootstrapFactory({
       signIn: { matches: candidate => candidate === secret },
@@ -238,7 +239,8 @@ test('through the bridge: extras service, its large call, the writer identity', 
       history: context.history,
       extras,
     }),
-    vocabulary: harnessVocabulary({ log: () => {} }),
+    vocabulary: names.keys,
+    methods: names.methods,
     isLargeCall,
     log: () => {},
   });

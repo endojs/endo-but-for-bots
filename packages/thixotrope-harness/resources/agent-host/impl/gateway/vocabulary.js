@@ -11,6 +11,11 @@
  * argument, optional, rest and return guards (an `M.await` wrapper is walked
  * through, a raw guard adds nothing).
  *
+ * `collectNames(patterns)` also answers the method names of every interface
+ * guard (the keys of its `methodGuards`): the bridge's method-name set
+ * (M3-FIX; guard.js rule 4a). `harnessNames` answers both sets for one
+ * incarnation.
+ *
  * `harnessVocabulary({ guestLibDir?, log })` is the gateway's vocabulary for
  * one adapter incarnation: the `shapes`, `interfaces` and (while it exists,
  * until the W2.9 fold) `m2Interfaces` tables of `guest/lib/interfaces.js`,
@@ -46,13 +51,19 @@ export const defaultGuestLibDir = fileURLToPath(
 const contractFilePattern = /^interfaces-m[^/]*\.js$/;
 
 /**
- * Collect the record keys named by `patterns` (m3-interfaces.md 4.4).
+ * Collect the record keys and the method names named by `patterns`
+ * (m3-interfaces.md 4.4): `keys` as `collectRecordKeys` describes; `methods`
+ * the keys of every interface guard's `methodGuards` (M3-FIX: the bridge
+ * refuses any other method name, or passable symbol, to a vat target, so a
+ * page cannot make a vat register symbols outside this fixed set).
  * @param {any[]} patterns
- * @returns {Set<string>}
+ * @returns {{ keys: Set<string>, methods: Set<string> }}
  */
-export const collectRecordKeys = patterns => {
+export const collectNames = patterns => {
   /** @type {Set<string>} */
   const keys = new Set();
+  /** @type {Set<string>} */
+  const methods = new Set();
   /** @type {WeakSet<object>} */
   const seen = new WeakSet();
   /** @type {any[]} */
@@ -81,6 +92,7 @@ export const collectRecordKeys = patterns => {
       if (tag === 'guard:interfaceGuard') {
         const methodGuards = payload?.methodGuards;
         if (methodGuards !== undefined && methodGuards !== null) {
+          for (const name of Object.keys(methodGuards)) methods.add(name);
           stack.push(...Object.values(methodGuards));
         }
       } else if (tag === 'guard:methodGuard') {
@@ -96,8 +108,16 @@ export const collectRecordKeys = patterns => {
       }
     }
   }
-  return keys;
+  return { keys, methods };
 };
+harden(collectNames);
+
+/**
+ * Collect the record keys named by `patterns` (m3-interfaces.md 4.4).
+ * @param {any[]} patterns
+ * @returns {Set<string>}
+ */
+export const collectRecordKeys = patterns => collectNames(patterns).keys;
 harden(collectRecordKeys);
 
 /**
@@ -108,17 +128,15 @@ const messageOf = error =>
   error instanceof Error ? error.message : String(error);
 
 /**
- * The vocabulary of one adapter incarnation (m3-interfaces.md 4.4, 6.3).
+ * The names of one adapter incarnation (m3-interfaces.md 4.4, 6.3): the
+ * record-key vocabulary and the method names of every interface guard.
  * @param {object} options
  * @param {string} [options.guestLibDir] where `interfaces-m*.js` are read
  *   (default: the harness's `guest/lib/`)
  * @param {(event: Record<string, unknown>) => void} options.log
- * @returns {Set<string>}
+ * @returns {{ keys: Set<string>, methods: Set<string> }}
  */
-export const harnessVocabulary = ({
-  guestLibDir = defaultGuestLibDir,
-  log,
-}) => {
+export const harnessNames = ({ guestLibDir = defaultGuestLibDir, log }) => {
   /** @type {any} */
   const base = interfacesModule;
   /** @type {any[]} */
@@ -159,6 +177,14 @@ export const harnessVocabulary = ({
       log({ event: 'vocabulary-skip', file: name, error: messageOf(error) });
     }
   }
-  return collectRecordKeys(patterns);
+  return collectNames(patterns);
 };
+harden(harnessNames);
+
+/**
+ * The vocabulary of one adapter incarnation (m3-interfaces.md 4.4, 6.3).
+ * @param {Parameters<typeof harnessNames>[0]} options
+ * @returns {Set<string>}
+ */
+export const harnessVocabulary = options => harnessNames(options).keys;
 harden(harnessVocabulary);

@@ -19,7 +19,7 @@ import {
 import { makeBridge } from '../../resources/agent-host/impl/gateway/bridge.js';
 import { checkCall } from '../../resources/agent-host/impl/gateway/guard.js';
 import { makeBootstrapFactory } from '../../resources/agent-host/impl/gateway/powers.js';
-import { harnessVocabulary } from '../../resources/agent-host/impl/gateway/vocabulary.js';
+import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary.js';
 import { makeClient } from './_m3-captp-client.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -27,7 +27,12 @@ const { E, Far } = /** @type {GuestGlobals} */ (globalThis);
 
 // A sign-in value built at run time (64 hex digits, not a real secret).
 const SECRET = ['0123456789abcdef'].join('').repeat(4);
-const vocabulary = harnessVocabulary({ log: () => {} });
+const { keys: vocabulary, methods: contractMethods } = harnessNames({
+  log: () => {},
+});
+// The stand-ins' test-only methods (not in any contract interface).
+const testOnlyMethods = ['hang', 'many'];
+const methods = new Set([...contractMethods, ...testOnlyMethods]);
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
@@ -176,6 +181,7 @@ const connect = (world, { limits, address = '127.0.0.1' } = {}) => {
   const bridge = makeBridge({
     makeBootstrap: world.makeBootstrap,
     vocabulary,
+    methods,
     isLargeCall: (target, method) =>
       target === world.composer && (method === 'submit' || method === 'edit'),
     limits,
@@ -565,6 +571,7 @@ test('checkCall answers the text, or undefined to dispatch', t => {
       message,
       targetOf,
       vocabulary,
+      methods,
       isLargeCall: () => false,
       inFlight: 0,
     }),
@@ -579,9 +586,79 @@ test('checkCall answers the text, or undefined to dispatch', t => {
       message: fine,
       targetOf,
       vocabulary,
+      methods,
       isLargeCall: () => false,
       inFlight: 0,
     }),
     undefined,
   );
+});
+
+test('M3-FIX: method names and symbols outside the contract are refused', async t => {
+  const world = makeWorld();
+  const pair = connect(world);
+  const powers = await signIn(pair);
+  const factory = await E(powers.operator).getFactory();
+  const before = world.calls.length;
+  // A fresh method name toward a vat target never reaches it.
+  await t.throwsAsync(() => E(factory).inventedMethod0(), {
+    message: gatewayTexts.unknownMethod,
+  });
+  // Nor through a pipelined answer.
+  await t.throwsAsync(() => E(E(powers.operator).getFactory()).invented1(), {
+    message: gatewayTexts.unknownMethod,
+  });
+  // A passable symbol argument with a fresh name.
+  await t.throwsAsync(() => E(factory).listSessions(Symbol.for('freshName0')), {
+    message: gatewayTexts.unknownMethod,
+  });
+  t.is(world.calls.length, before, 'nothing reached the target');
+  t.true(
+    pair.logged.some(e => e.event === 'gateway-refused' && e.rule === 'method'),
+  );
+  // Contract methods still pass, and the connection stays open.
+  await E(factory).listSessions({ limit: 1 });
+  t.deepEqual(world.calls.at(-1), ['listSessions', { limit: 1 }]);
+  // Gateway-local objects keep their own guards' answer.
+  await t.throwsAsync(() => E(powers.composer).inventedLocal(), {
+    message: /inventedLocal/,
+  });
+});
+
+test('M3-FIX: checkCall refuses encoded symbols and unknown names', t => {
+  const value = Far('Session', {});
+  const targetOf = (/** @type {string} */ id) =>
+    id === 'o-1' ? { value, local: false } : undefined;
+  /** @param {unknown[]} decoded */
+  const call = decoded =>
+    checkCall({
+      message: {
+        type: 'CTP_CALL',
+        questionID: 'q-1',
+        target: 'o-1',
+        method: { body: JSON.stringify(decoded), slots: [] },
+      },
+      targetOf,
+      vocabulary,
+      methods,
+      isLargeCall: () => false,
+      inFlight: 0,
+    });
+  t.is(call(['rename', ['title']]), undefined);
+  t.is(call(['renameX', ['title']]), gatewayTexts.unknownMethod);
+  t.is(
+    call([{ '@qclass': 'symbol', name: 'fresh' }, []]),
+    gatewayTexts.unknownMethod,
+  );
+  t.is(
+    call(['rename', [{ '@qclass': 'symbol', name: 'fresh' }]]),
+    gatewayTexts.unknownMethod,
+  );
+  t.is(
+    call(['rename', [[{ '@qclass': 'symbol', name: 'rename' }]]]),
+    undefined,
+    'a symbol naming a contract method is admitted',
+  );
+  t.is(call([null, []]), gatewayTexts.unknownMethod, 'no function call');
+  t.is(call(['renameX']), gatewayTexts.unknownMethod, 'no property get');
 });

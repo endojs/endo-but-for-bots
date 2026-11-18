@@ -73,6 +73,11 @@ export const gatewayTexts = Object.freeze({
   messageTooLarge: 'message too large; use the composer',
   /** Key guard (architecture 7, rule 12.10). */
   unexpectedField: 'unexpected field',
+  /**
+   * Method-name guard (M3-FIX): a method, property or passable symbol name
+   * that no contract interface declares, sent toward a vat.
+   */
+  unknownMethod: 'unknown method',
   /** A call carrying an object or promise the browser exported. */
   browserObject: 'objects made by the page cannot be sent to the daemon',
   /** `callsInFlight` exceeded. */

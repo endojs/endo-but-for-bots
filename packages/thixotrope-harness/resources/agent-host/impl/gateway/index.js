@@ -23,7 +23,7 @@
  * (`extensions.js`, loaded at construction), their services (the
  * `GatewayPowers.extras`), the large-call exemptions (the Composer's
  * `submit` and `edit`, plus each extension's target after attach) and the
- * key vocabulary (`vocabulary.js`). What is made per bind: the sign-in
+ * key vocabulary and the method-name set (`vocabulary.js`). What is made per bind: the sign-in
  * store and limiter (the config's `signInFailuresPerMinute`), the bridge and
  * the server. The operator a signed-in page receives is read from the spec
  * of the current bind at each `fetch`.
@@ -62,7 +62,7 @@ import { makeBootstrapFactory, markGatewayLocal } from './powers.js';
 import { makeGatewayServer } from './server.js';
 import { makeSignInStore } from './signin.js';
 import { makeStaticHandler } from './static.js';
-import { harnessVocabulary } from './vocabulary.js';
+import { harnessNames } from './vocabulary.js';
 
 /** @import { GatewayContext, GatewayExtension } from './contract-m3.js' */
 
@@ -175,7 +175,7 @@ export const makeGatewayService = ({
   /**
    * Made at the first bind (an adapter that never serves loads no
    * vocabulary and makes no services).
-   * @type {{ extras: { label: string, service: any }[], isLargeCall: (target: unknown, method: string) => boolean, vocabulary: Set<string>, csp: string, routes: any[] } | undefined}
+   * @type {{ extras: { label: string, service: any }[], isLargeCall: (target: unknown, method: string) => boolean, vocabulary: Set<string>, methods: Set<string>, csp: string, routes: any[] } | undefined}
    */
   let incarnation;
   const incarnationParts = () => {
@@ -187,13 +187,15 @@ export const makeGatewayService = ({
         builtIn: [{ target: composer, methods: ['submit', 'edit'] }],
         log,
       });
+      const names = harnessNames({
+        ...(guestLibDir === undefined ? {} : { guestLibDir }),
+        log,
+      });
       incarnation = harden({
         extras,
         isLargeCall,
-        vocabulary: harnessVocabulary({
-          ...(guestLibDir === undefined ? {} : { guestLibDir }),
-          log,
-        }),
+        vocabulary: names.keys,
+        methods: names.methods,
         csp: cspHeader(extensionCsp(extensions)),
         routes: extensionRoutes(extensions),
       });
@@ -267,6 +269,7 @@ export const makeGatewayService = ({
           log,
         }),
         vocabulary: parts.vocabulary,
+        methods: parts.methods,
         isLargeCall: parts.isLargeCall,
         log,
       });

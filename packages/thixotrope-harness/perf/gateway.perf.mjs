@@ -46,7 +46,7 @@ const { connectGateway, serveGateway, useTestWrappingKey } =
   await import('../test/integration/_m3-gateway.js');
 const { inspectCall, defaultGuardLimits } =
   await import('../resources/agent-host/impl/gateway/guard.js');
-const { harnessVocabulary } =
+const { harnessNames } =
   await import('../resources/agent-host/impl/gateway/vocabulary.js');
 const { closeCodes, gatewayTexts } =
   await import('../resources/agent-host/impl/gateway/contract-m3.js');
@@ -140,7 +140,7 @@ await runPerf('gateway', async ({ provision }) => {
 
     // ---- gateway.guard (in process)
     if (clock.fits(WINDOW_MS)) {
-      const vocabulary = harnessVocabulary({ log: () => {} });
+      const { keys: vocabulary, methods } = harnessNames({ log: () => {} });
       // Records of vocabulary keys up to frameBytes.
       const record = { title: 'a title', key: 's1', text: 'some text here' };
       /** @type {any[]} */
@@ -164,6 +164,7 @@ await runPerf('gateway', async ({ provision }) => {
           message,
           targetOf: () => held,
           vocabulary,
+          methods,
           isLargeCall: () => false,
           inFlight: 0,
         });

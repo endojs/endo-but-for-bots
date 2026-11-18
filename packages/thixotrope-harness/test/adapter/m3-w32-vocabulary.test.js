@@ -14,7 +14,9 @@ import test from '@endo/ses-ava/test.js';
 import { m3Shapes } from '../../guest/lib/interfaces-m3.js';
 /* eslint-enable import/no-relative-packages */
 import {
+  collectNames,
   collectRecordKeys,
+  harnessNames,
   harnessVocabulary,
 } from '../../resources/agent-host/impl/gateway/vocabulary.js';
 
@@ -144,4 +146,38 @@ export const vocabularyShapes = () => harden([
   t.regex(skipped[1].error, /fixture load failure/);
   t.regex(skipped[2].error, /fixture call failure/);
   t.truthy(pathToFileURL(dir));
+});
+
+test('M3-FIX: method names come from interface guards only', t => {
+  const iface = M.interface('Widget', {
+    paint: M.call(M.splitRecord({ colour: M.string() })).returns(),
+    wait: M.callWhen().returns(),
+  });
+  const { keys, methods } = collectNames([
+    iface,
+    M.splitRecord({ notAMethod: M.string() }),
+  ]);
+  t.deepEqual([...methods].sort(), ['paint', 'wait']);
+  t.true(keys.has('colour'));
+  t.false(keys.has('paint'), 'method names are not record keys');
+  t.false(methods.has('notAMethod'), 'record keys are not method names');
+});
+
+test('M3-FIX: the harness method set is a fixed set of contract names', t => {
+  /** @type {Record<string, unknown>[]} */
+  const logged = [];
+  const { keys, methods } = harnessNames({ log: event => logged.push(event) });
+  t.log(`names: ${keys.size} keys, ${methods.size} methods`);
+  t.deepEqual(
+    [...harnessVocabulary({ log: () => {} })].sort(),
+    [...keys].sort(),
+  );
+  // Methods a page calls on vat objects (M1a-M2 and M3 interfaces).
+  for (const name of ['getFactory', 'listSessions', 'createSession']) {
+    t.true(methods.has(name), name);
+  }
+  for (const name of ['inventedMethod0', 'constructor', '__proto__']) {
+    t.false(methods.has(name), name);
+  }
+  t.true(methods.size < 1000, 'a bounded set');
 });

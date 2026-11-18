@@ -14,7 +14,7 @@ import {
 } from '../../resources/agent-host/impl/gateway/contract-m3.js';
 import { makeBootstrapFactory } from '../../resources/agent-host/impl/gateway/powers.js';
 import { makeGatewayServer } from '../../resources/agent-host/impl/gateway/server.js';
-import { harnessVocabulary } from '../../resources/agent-host/impl/gateway/vocabulary.js';
+import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary.js';
 import { makeClient } from './_m3-captp-client.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -28,6 +28,7 @@ test('sign in and call through W3.1 server and the bridge', async t => {
     rename: title => title.length,
   });
   const operator = Far('Operator', { session: () => session });
+  const names = harnessNames({ log: () => {} });
   const bridge = makeBridge({
     makeBootstrap: makeBootstrapFactory({
       signIn: { matches: candidate => candidate === SECRET },
@@ -42,7 +43,9 @@ test('sign in and call through W3.1 server and the bridge', async t => {
       composer: Far('Composer', {}),
       history: Far('History', {}),
     }),
-    vocabulary: harnessVocabulary({ log: () => {} }),
+    vocabulary: names.keys,
+    // The stand-in operator's `session()` is not a contract method.
+    methods: new Set([...names.methods, 'session']),
     isLargeCall: () => false,
     log: () => {},
   });
