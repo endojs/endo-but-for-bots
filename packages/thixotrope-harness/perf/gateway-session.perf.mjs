@@ -18,9 +18,10 @@
  *   it: `fetch`, `getFactory`, `listSessions` (every page),
  *   `subscribeList(rev)`, `watch`, `subscribe(session, rev)`,
  *   `getCurrentTurn`, newest history page; budget median 1 s.
- * - `ui.restartReady.clean`, `ui.restartReady.sigkill`: from the
- *   supervisor serving to the gateway answering a `fetch`, restarts
- *   repeated over a 150 s window per mode; budget median 2 s.
+ *
+ * `ui.restartReady.clean` and `.sigkill` are `perf/gateway-restart.perf.mjs`
+ * (K2): with them this file measured every row by 555 s and its clean stop
+ * after the SIGKILL series then passed the 10-minute box (X-CLOSE, J-10061).
  *
  * Run (exclusive under the run lock):
  *
@@ -32,7 +33,6 @@ const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
 installGuestPrelude();
 const { E } = await import('@endo/far');
 const { performance } = await import('node:perf_hooks');
-const { setTimeout: delay } = await import('node:timers/promises');
 const {
   FEW_SAMPLES,
   WINDOW_MS,
@@ -47,16 +47,13 @@ const { connectGateway, freePort, serveGateway, useTestWrappingKey } =
 // eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
 const { limits } = await import('../guest/lib/limits.js');
 
-/** Restart window per mode (m3-interfaces.md 13). */
-const RESTART_WINDOW_MS = Number(process.env.M3_RESTART_WINDOW_MS ?? 150_000);
-
 /** @param {string} metric @param {string} why */
 const notMeasured = (metric, why) =>
   emit({ metric, notMeasured: why, pass: null });
 
-/** @param {number[]} samples @param {number} [windowMs] */
-const sampleFlags = (samples, windowMs = WINDOW_MS) => ({
-  windowMs,
+/** @param {number[]} samples */
+const sampleFlags = samples => ({
+  windowMs: WINDOW_MS,
   ...(samples.length < FEW_SAMPLES ? { fewSamples: true } : {}),
 });
 
@@ -197,81 +194,20 @@ await runPerf('gateway-session', async ({ root }) => {
     } else notMeasured('ui.reconnect', 'file time');
     page.close();
 
-    // ---- ui.restartReady (clean, sigkill)
-    for (const mode of ['clean', 'sigkill']) {
-      const metric = `ui.restartReady.${mode}`;
-      if (!clock.fits(RESTART_WINDOW_MS)) {
-        notMeasured(metric, 'file time');
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      /** @type {number[]} */
-      const samples = [];
-      /** @type {number[]} */
-      const served = [];
-      /** Ready time from the start of the supervisor's serve. */
-      /** @type {number[]} */
-      const fromStart = [];
-      const end = performance.now() + RESTART_WINDOW_MS;
-      let lastMs = 0;
-      // Stop early rather than let one more restart pass the file's time.
-      while (performance.now() < end && clock.fits(lastMs)) {
-        const iterationStart = performance.now();
-        const live = /** @type {NonNullable<typeof state>} */ (state);
-        if (mode === 'clean') await live.stop();
-        else await live.kill();
-        let readyAt = 0;
-        let polling = true;
-        const poll = (async () => {
-          while (polling) {
-            try {
-              const client = await connectGateway({
-                port: gateway.port,
-                origin: gateway.origin,
-                secret: gateway.secret,
-              });
-              await client.signIn();
-              readyAt = performance.now();
-              client.close();
-              return;
-            } catch {
-              await delay(25);
-            }
-          }
-        })();
-        const restarted = await live.restart();
-        const resolvedAt = performance.now();
-        const servedAt =
-          resolvedAt - restarted.connectedMs + restarted.servedMs;
-        const deadline = performance.now() + 60_000;
-        while (!readyAt && performance.now() < deadline) await delay(25);
-        polling = false;
-        await poll;
-        if (!readyAt) throw Error(`${metric}: no fetch within 60 s of serving`);
-        samples.push(readyAt - servedAt);
-        fromStart.push(
-          Math.round(readyAt - (resolvedAt - restarted.connectedMs)),
-        );
-        served.push(Math.round(restarted.servedMs));
-        lastMs = performance.now() - iterationStart;
-      }
-      await stats(metric, samples, {
-        budget: { median: 2000 },
-        extra: {
-          ...sampleFlags(samples, RESTART_WINDOW_MS),
-          servedMs: served,
-          readyFromServeStartMs: fromStart,
-          note: 'serving = the supervisor serve() resolving; ready = the first fetch answered (negative: the gateway answered before serve() resolved)',
-        },
-      });
-    }
     emit({
       metric: 'gateway-session.fileTime',
       unit: 'ms',
       value: Math.round(clock.elapsed()),
     });
   } finally {
+    const c0 = performance.now();
     await state?.cleanup();
     key.remove();
+    emit({
+      metric: 'gateway-session.teardown',
+      unit: 'ms',
+      value: Math.round(performance.now() - c0),
+      fileMs: Math.round(clock.elapsed()),
+    });
   }
 });
