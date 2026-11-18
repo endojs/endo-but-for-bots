@@ -115,6 +115,8 @@ export const makePoolProvider = ({
       ? settings.claudeOverloadDelaysMs
       : settings.codexOverloadDelaysMs;
   const unexpected = UNEXPECTED[provider];
+  // Made at the pool's first open: the accounts view can describe it now.
+  subscriptions.know(backend, spec);
   /** turn -> the control of its running round. */
   /** @type {Map<any, import('../providers/round.js').RoundControl>} */
   const running = new Map();

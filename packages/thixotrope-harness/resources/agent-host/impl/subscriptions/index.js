@@ -372,6 +372,16 @@ export const makeSubscriptions = ({
      * @param {any} spec
      */
     pool: loadPool,
+    /**
+     * Know a pool backend and its spec without loading it (the provider is
+     * made at the pool's first `open`), so `Accounts.forBackend` can load it
+     * on demand.
+     * @param {any} backend
+     * @param {any} spec
+     */
+    know: (backend, spec) => {
+      recordOf(backend, spec);
+    },
     observe,
     credentialOf,
     settings,
