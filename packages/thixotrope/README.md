@@ -766,6 +766,7 @@ Per-vat overrides are not implemented yet.
 | `THIXOTROPE_GC_CRANK_INTERVAL` | cranks between collections at most (`allocation`) | 32 | 1 to 2^32−1; fixed per state directory |
 | `THIXOTROPE_REQUEST_TIMEOUT_MS` | milliseconds per worker request | 60,000 | 1 to 2^31−1 |
 | `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` | crashes in a row without progress before a vat is given up on | 5 | 2 to 100 |
+| `THIXOTROPE_VAT_FRAME_BYTES` | bytes of one frame the hub forwards into a vat; a longer message breaks to its sender with `FRAME_TOO_LARGE` before it is journaled | 32,768 | 1,024 to 8,388,608 |
 
 The worker uses Ironhorse’s consensus profile, which bounds the slot and chunk ceilings.
 It rejects settings above those bounds before executing guest code.

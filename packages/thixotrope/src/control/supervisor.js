@@ -150,6 +150,28 @@ const readMaxDeliveryAttempts = environment => {
 };
 
 /**
+ * The longest frame the hub forwards into a vat, from the environment:
+ * THIXOTROPE_VAT_FRAME_BYTES, a decimal integer of bytes, at least 1,024 and
+ * at most 8 MiB (the control socket's own frame ceiling); omitted, the
+ * daemon's default. Raise it only with the crank budget: a frame the vat
+ * cannot decode within its budget halts it.
+ *
+ * @param {EnvironmentPowers} environment
+ * @returns {number | undefined}
+ */
+const readVatFrameBytes = environment => {
+  const text = environment.get('THIXOTROPE_VAT_FRAME_BYTES');
+  if (text === undefined) return undefined;
+  const value = /^[1-9][0-9]{3,6}$/.test(text) ? Number(text) : 0;
+  if (value < 1024 || value > 8 * 1024 * 1024) {
+    throw Error(
+      'THIXOTROPE_VAT_FRAME_BYTES must be a decimal integer between 1024 and 8388608',
+    );
+  }
+  return value;
+};
+
+/**
  * How the hub's state is kept, from the environment: THIXOTROPE_HUB_STORE
  * "log" (the default: one append of what changed per commit, compacted into
  * an image) or "file" (the whole hub.json replaced at every commit). The log
@@ -205,6 +227,7 @@ export const serveThixotrope = async (
     display,
   } = platform;
   const log = logging.sub('thixotrope', 'supervisor');
+  const vatFrameBytes = readVatFrameBytes(environment);
   const randomId = () => randomHex128(random);
   statePath = paths.resolve(statePath);
   const socketPath = paths.join(statePath, 'control.sock');
@@ -366,6 +389,7 @@ export const serveThixotrope = async (
         snapshotEveryDeliveries,
         maxDeliveryAttempts,
         crashRetryDelayMs,
+        vatFrameBytes,
         validateState: async () => {
           try {
             config = JSON.parse(await files.readText(configPath));

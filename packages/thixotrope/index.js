@@ -7,7 +7,11 @@
 // tests reach via relative imports. The `WorkerEngine` type in
 // src/core/worker-engine.js remains the extension seam for future
 // snapshotting JS engines.
-export { makeThixotropeDaemon } from './src/core/daemon.js';
+export {
+  makeThixotropeDaemon,
+  DEFAULT_VAT_FRAME_BYTES,
+} from './src/core/daemon.js';
+export { FRAME_TOO_LARGE } from './src/net/hub.js';
 export { makeXsEngine } from './src/ironhorse/xs-engine.js';
 export { makeIronhorseEngine } from './src/ironhorse/ironhorse-engine.js';
 export { makeFsStore } from './src/store/store-fs.js';
