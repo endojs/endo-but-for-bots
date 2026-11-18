@@ -107,8 +107,11 @@ const setupPowers = ({ extra = 0 } = {}) => {
       const [session, text, requestId] = args;
       return E(fake.powers.composer).submit(session, text, requestId);
     },
-    /** @param {any[]} args */
-    edit: (...args) => E(fake.powers.composer).edit(...args),
+    /**
+     * @param {any} entry
+     * @param {string} text
+     */
+    edit: (entry, text) => E(fake.powers.composer).edit(entry, text),
   });
   const powers = harden({ ...fake.powers, composer });
   return {

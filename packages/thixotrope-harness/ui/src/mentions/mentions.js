@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * The @-mention addon and the attachment chips (W5.8;
+ * The mention addon and the attachment chips (W5.8;
  * `designs/m5-interfaces.md` 4.1 items 2-3; R6-40, P-40).
  *
  * The addon (`composer.addon`) watches the composer's text before the
@@ -436,7 +436,7 @@ export const makeMentions = ({ storage: storageOf = defaultStorage } = {}) => {
     memory.current.open = open;
     const inventory = open
       ? inventoryFor(context.powers, opened)
-      : { state: 'idle', rows: [] };
+      : /** @type {InventoryState} */ ({ state: 'idle', rows: [] });
     const matches = open && query ? matchRows(inventory.rows, query.query) : [];
     const highlight = Math.min(
       memory.current.highlight,
