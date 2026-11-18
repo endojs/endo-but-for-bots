@@ -26,8 +26,19 @@
  * error)` makes the next such call reject.
  *
  * Runs under the test lockdown (`harden` global; `@endo/far`).
+ *
+ * `makeTestDom({ width?, height? })` (also for M4's and M5's component
+ * tests) makes a happy-dom window, sets `globalThis.document` and tames
+ * Preact for the test lockdown: the unit lane locks down with
+ * `overrideTaming: 'min'`, under which Preact's re-render of a component
+ * whose hook state changed copies a vnode's own `constructor` key onto a
+ * plain object and throws (the override mistake). The taming gives vnodes
+ * a null prototype instead of that own key, so hooks re-render as in the
+ * browser (which runs `overrideTaming: 'severe'`, `ui/src/pre-lockdown.js`).
  */
 import { Far } from '@endo/far';
+import { Window } from 'happy-dom';
+import { options as preactOptions } from 'preact';
 
 /* eslint-disable import/no-relative-packages */
 
@@ -1371,3 +1382,44 @@ export const makeFakePowers = ({
   return { powers, control };
 };
 harden(makeFakePowers);
+
+let preactTamed = false;
+/** Tame Preact's vnodes for the test lockdown (see the header). */
+export const tamePreactForTests = () => {
+  if (preactTamed) return;
+  preactTamed = true;
+  const previous = preactOptions.vnode;
+  preactOptions.vnode = vnode => {
+    if (Object.prototype.hasOwnProperty.call(vnode, 'constructor')) {
+      delete (/** @type {any} */ (vnode).constructor);
+    }
+    Object.setPrototypeOf(vnode, null);
+    if (previous) previous(vnode);
+  };
+};
+
+/**
+ * A happy-dom window for component tests; `globalThis.document` is set to
+ * its document until `close()`.
+ *
+ * @param {{ width?: number, height?: number }} [options]
+ */
+export const makeTestDom = ({ width = 1024, height = 768 } = {}) => {
+  tamePreactForTests();
+  const window = new Window({ width, height, url: 'http://127.0.0.1:1/' });
+  const document = /** @type {any} */ (window.document);
+  const globals = /** @type {any} */ (globalThis);
+  const previousDocument = globals.document;
+  globals.document = document;
+  const root = document.createElement('div');
+  document.body.appendChild(root);
+  return {
+    window: /** @type {any} */ (window),
+    document,
+    root,
+    close: async () => {
+      globals.document = previousDocument;
+      await window.happyDOM.close();
+    },
+  };
+};

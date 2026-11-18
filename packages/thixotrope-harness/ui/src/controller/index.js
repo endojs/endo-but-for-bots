@@ -105,6 +105,8 @@ const LIST_MAX_PAGES = 200;
  * @property {boolean} settingsOpen
  * @property {boolean} drawerOpen
  * @property {string} status a page-wide status line ('' when none)
+ * @property {string} [panel] the open `app.panel` feature's id
+ * @property {boolean} newSessionOpen the "Start a new session" dialog
  */
 
 /**
@@ -167,6 +169,7 @@ const initialState = () => ({
   settingsOpen: false,
   drawerOpen: false,
   status: '',
+  newSessionOpen: false,
 });
 
 /**
@@ -999,7 +1002,12 @@ export const makeController = ({
     /** @param {string} key */
     selectSession: key =>
       guarded(async () => {
-        update({ activeKey: key, drawerOpen: false, settingsOpen: false });
+        update({
+          activeKey: key,
+          drawerOpen: false,
+          settingsOpen: false,
+          panel: undefined,
+        });
         await openView(key);
       }),
 
@@ -1047,7 +1055,12 @@ export const makeController = ({
           });
           publishRows();
         }
-        update({ activeKey: info.key, drawerOpen: false });
+        update({
+          activeKey: info.key,
+          drawerOpen: false,
+          newSessionOpen: false,
+          panel: undefined,
+        });
         await openView(info.key);
         return info.key;
       }),
@@ -1266,6 +1279,16 @@ export const makeController = ({
 
     toggleDrawer: () => update({ drawerOpen: !state.drawerOpen }),
     toggleSettings: () => update({ settingsOpen: !state.settingsOpen }),
+
+    /**
+     * Open an `app.panel` feature by its id (the header menu).
+     *
+     * @param {string} id
+     */
+    openPanel: id => update({ panel: id, drawerOpen: false }),
+    closePanel: () => update({ panel: undefined }),
+    openNewSession: () => update({ newSessionOpen: true, drawerOpen: false }),
+    closeNewSession: () => update({ newSessionOpen: false }),
 
     /**
      * Load the first catalogue page of a backend (the new-session dialog).
