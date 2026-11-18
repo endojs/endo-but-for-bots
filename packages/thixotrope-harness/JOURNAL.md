@@ -13551,3 +13551,43 @@ Fit: good.
 Time: first command 20:38:43Z. Over 60 s: unit lane 66.5 s; integration batch 396.9 s wall.
 Not run: browser files, perf checks, the other 43 integration files. Scratch `tmp/CL-QC` removed.
 Fit: neutral.
+
+### J-10185 2026-11-18 CL-FIX HR-SYN-9 release race - fixed
+`impl/blobs.js` `release` now awaits `sweep().catch(() => {})` (start or join the incarnation's one
+sweep) in place of `sweeping?.catch(...)` (a sweep already in flight only). New adapter test in
+`test/adapter/agent-host-state-layout.test.js`: 20 files of an earlier store, then
+`Promise.all([release(10 keys), sweep()])` on a fresh store, 20 times; the daemon count must equal
+the bytes on disk. Before the fix it failed on the first run in 3 of 3 runs, and the count was too
+LOW (4,500 against 5,000): the race refunds twice as well as leaving bytes counted, so the quota
+could also refuse late. After: 7 tests pass, 3 of 3 runs. Commit 97aaf11e4b. Adapter file only:
+a daemon restart, no reinstall.
+Fit: good.
+
+### J-10186 2026-11-18 CL-FIX hygiene findings - fixed
+Duplicate ceiling 3.5 -> 3.25 % (share 3.00 %, 802 of 26,741 lines, 37 clusters), 88f0ee93f0.
+`m5-reachability` walks `Object.values(interfaces)` once, 436b6cb9f8 (3 tests pass, 120.2 s).
+`m3-interfaces.md` W3.2 row gives `harnessNames({ tables? })` / `harnessVocabulary({ tables? })`,
+31a13e6676. Stale `interfaces-m5*.js` / `m5Shapes` / `m5FactoryShapes` / `m5ToolArgumentNames`
+comments in guest, ui and one test renamed to the guard modules, 323e42e5bc.
+Fit: good.
+
+### J-10187 2026-11-18 CL-FIX template keys and bundles - measured
+`perf/_long-template.mjs` and `perf/_m3-client.mjs` sources name `impl/blobs.js` (aaa219050c);
+checked with `templateInputs`: the m3 template's inputs list it now and did not at HEAD before.
+Those templates rebuild once. Bundles before and after the guest comment edits are byte-identical:
+exec 61,688, factory 155,427, session 206,907 bytes, same digests (the bundler drops comments), so
+the guest edits did not need the step-4 batch for bundle bytes.
+Fit: good.
+
+### J-10188 2026-11-18 CL-FIX checks - measured
+tsc exit 0; eslint on the 14 touched files: 0 errors (warnings as before, one new
+safe-await-separator warning in the new test's loop, the pattern of its neighbours); prettier
+clean on every changed hunk (`agent-host-state-layout.test.js` had formatting drift before this
+unit, outside its hunk, left alone). `m5-w58-presets` and the layout file: 13 tests pass.
+Fit: neutral.
+
+### J-10189 2026-11-18 CL-FIX time record - verified
+Time: first command 20:52:07Z. Over 60 s: m5-reachability integration 120.2 s (shared slot); one
+layout-file run went past 120 s in a loop of three. Not run: the full unit lane, other integration
+files, browser files, perf checks, template rebuilds. Scratch `tmp/CL-FIX` removed.
+Fit: neutral.
