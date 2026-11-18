@@ -34,22 +34,22 @@ test('defaults are the contract limits', t => {
 test('a failure delays the next attempt by the penalty (R7-49 text)', t => {
   const clock = makeClock();
   const limiter = makeSignInLimiter({ now: clock.now });
-  t.deepEqual(limiter.check('10.0.0.1'), { ok: true });
-  limiter.failed('10.0.0.1');
-  t.deepEqual(limiter.check('10.0.0.1'), {
+  t.deepEqual(limiter.check('127.10.0.1'), { ok: true });
+  limiter.failed('127.10.0.1');
+  t.deepEqual(limiter.check('127.10.0.1'), {
     ok: false,
     text: m3TextOf.rateLimited(1000),
   });
   t.is(m3TextOf.rateLimited(1000), 'Rate limit exceeded, try in 1000ms');
   clock.advance(400);
-  t.deepEqual(limiter.check('10.0.0.1'), {
+  t.deepEqual(limiter.check('127.10.0.1'), {
     ok: false,
     text: 'Rate limit exceeded, try in 600ms',
   });
   // Another address is not delayed.
-  t.deepEqual(limiter.check('10.0.0.2'), { ok: true });
+  t.deepEqual(limiter.check('127.10.0.2'), { ok: true });
   clock.advance(600);
-  t.deepEqual(limiter.check('10.0.0.1'), { ok: true });
+  t.deepEqual(limiter.check('127.10.0.1'), { ok: true });
 });
 
 test('penalties are cumulative from max(now, previous deadline)', t => {
@@ -121,20 +121,20 @@ test('the global ceiling: 21 failures in a minute from different addresses', t =
     clock.advance(1000);
   }
   // 20 failures: not yet over the ceiling.
-  t.true(limiter.check('10.0.2.1').ok);
-  limiter.failed('10.0.2.1');
+  t.true(limiter.check('127.10.2.1').ok);
+  limiter.failed('127.10.2.1');
   // 21: every address is refused, a fresh one too.
   const refused = { ok: false, text: m3Texts.signInCeiling };
-  t.deepEqual(limiter.check('10.0.9.9'), refused);
+  t.deepEqual(limiter.check('127.10.9.9'), refused);
   t.is(
     m3Texts.signInCeiling,
     'Too many failed sign-ins; try again in a minute',
   );
   // Until the oldest failure (at t0) ages out of the 60 s window.
   clock.advance(60_000 - 20_000 - 1);
-  t.deepEqual(limiter.check('10.0.9.9'), refused);
+  t.deepEqual(limiter.check('127.10.9.9'), refused);
   clock.advance(1);
-  t.true(limiter.check('10.0.9.9').ok);
+  t.true(limiter.check('127.10.9.9').ok);
   t.true(limiter.size().failures <= 21);
 });
 
@@ -177,45 +177,45 @@ test('clientAddress: the peer, IPv4-mapped prefix removed', t => {
 test('clientAddress: an untrusted peer X-Forwarded-For is ignored', t => {
   t.is(
     clientAddress({
-      socketAddress: '192.0.2.7',
-      forwardedFor: '198.51.100.1',
+      socketAddress: '127.0.2.7',
+      forwardedFor: '127.51.100.1',
       trustedProxies: ['127.0.0.1'],
     }),
-    '192.0.2.7',
+    '127.0.2.7',
   );
   t.is(
     clientAddress({
-      socketAddress: '::ffff:192.0.2.7',
-      forwardedFor: '198.51.100.1',
+      socketAddress: '::ffff:127.0.2.7',
+      forwardedFor: '127.51.100.1',
     }),
-    '192.0.2.7',
+    '127.0.2.7',
   );
 });
 
 test('clientAddress: through trusted proxies, the right-most untrusted entry', t => {
-  const trustedProxies = ['127.0.0.1', '10.0.0.5'];
+  const trustedProxies = ['127.0.0.1', '127.10.0.5'];
   t.is(
     clientAddress({
       socketAddress: '::ffff:127.0.0.1',
-      forwardedFor: '203.0.113.9, 198.51.100.1, 10.0.0.5',
+      forwardedFor: '127.0.113.9, 127.51.100.1, 127.10.0.5',
       trustedProxies,
     }),
-    '198.51.100.1',
+    '127.51.100.1',
     'a client-written left entry cannot choose the key',
   );
   t.is(
     clientAddress({
       socketAddress: '127.0.0.1',
-      forwardedFor: ['198.51.100.1', '10.0.0.5'],
+      forwardedFor: ['127.51.100.1', '127.10.0.5'],
       trustedProxies,
     }),
-    '198.51.100.1',
+    '127.51.100.1',
     'repeated headers',
   );
   t.is(
     clientAddress({
       socketAddress: '127.0.0.1',
-      forwardedFor: '10.0.0.5, 127.0.0.1',
+      forwardedFor: '127.10.0.5, 127.0.0.1',
       trustedProxies,
     }),
     '127.0.0.1',
@@ -241,19 +241,19 @@ test('clientAddress: through trusted proxies, the right-most untrusted entry', t
   t.is(
     clientAddress({
       socketAddress: '127.0.0.1',
-      forwardedFor: '[2001:DB8::1]:4711, 198.51.100.2:8080',
+      forwardedFor: '[::FFFF:7F00:1]:4711, 127.51.100.2:8080',
       trustedProxies,
     }),
-    '198.51.100.2',
+    '127.51.100.2',
     'ports stripped',
   );
   t.is(
     clientAddress({
       socketAddress: '127.0.0.1',
-      forwardedFor: '[2001:DB8::1]:4711,',
+      forwardedFor: '[::FFFF:7F00:1]:4711,',
       trustedProxies,
     }),
-    '2001:db8::1',
+    '::ffff:7f00:1',
     'IPv6 literal, lower case, empty entry skipped',
   );
 });

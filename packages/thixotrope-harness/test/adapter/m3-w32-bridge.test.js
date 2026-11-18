@@ -277,8 +277,8 @@ test('fetch: wrong secret refused and penalised, right one gives powers', async 
 
 test('fetch: an address inside its penalty is refused before comparing', async t => {
   const world = makeWorld();
-  world.blocked.add('192.0.2.7');
-  const pair = connect(world, { address: '192.0.2.7' });
+  world.blocked.add('127.0.2.7');
+  const pair = connect(world, { address: '127.0.2.7' });
   await t.throwsAsync(() => signIn(pair), { message: 'blocked for the test' });
   t.deepEqual(world.compared, [], 'the secret was not compared');
 });

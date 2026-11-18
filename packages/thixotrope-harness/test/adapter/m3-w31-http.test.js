@@ -541,19 +541,19 @@ test('connection caps: per client address (trusted proxy) and in all', async t =
       origin: server.origin,
       headers: { 'X-Forwarded-For': forwarded },
     });
-  const a1 = await open('198.51.100.1');
-  const a2 = await open('203.0.113.66, 198.51.100.1');
+  const a1 = await open('127.51.100.1');
+  const a2 = await open('127.0.113.66, 127.51.100.1');
   t.is(a1.status, 101);
   t.is(a2.status, 101);
   t.deepEqual(
     sockets.map(s => s.address),
-    ['198.51.100.1', '198.51.100.1'],
+    ['127.51.100.1', '127.51.100.1'],
   );
-  const a3 = await open('198.51.100.1');
+  const a3 = await open('127.51.100.1');
   t.is(a3.status, 503, 'per address');
-  const b1 = await open('198.51.100.2');
+  const b1 = await open('127.51.100.2');
   t.is(b1.status, 101, 'another address is not limited by the first');
-  const c1 = await open('198.51.100.3');
+  const c1 = await open('127.51.100.3');
   t.is(c1.status, 503, 'in all');
   t.is(server.connections(), 3);
 
@@ -565,7 +565,7 @@ test('connection caps: per client address (trusted proxy) and in all', async t =
     await new Promise(r => setTimeout(r, 10));
   }
   t.is(server.connections(), 2);
-  const a4 = await open('198.51.100.1');
+  const a4 = await open('127.51.100.1');
   t.is(a4.status, 101, 'a closed connection frees its place');
   t.true(logs.some(e => e.event === 'ws-refused' && e.rule === 'connections'));
   for (const res of [a2, b1, a4]) res.client?.socket.destroy();
@@ -577,13 +577,13 @@ test('connection caps: an untrusted peer X-Forwarded-For is ignored', async t =>
   });
   const first = await upgrade(server.port, {
     origin: server.origin,
-    headers: { 'X-Forwarded-For': '198.51.100.1' },
+    headers: { 'X-Forwarded-For': '127.51.100.1' },
   });
   t.is(first.status, 101);
   t.is(sockets[0].address, '127.0.0.1');
   const second = await upgrade(server.port, {
     origin: server.origin,
-    headers: { 'X-Forwarded-For': '198.51.100.2' },
+    headers: { 'X-Forwarded-For': '127.51.100.2' },
   });
   t.is(second.status, 503);
   first.client?.socket.destroy();

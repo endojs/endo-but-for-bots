@@ -231,7 +231,7 @@ test('M3 shapes: required fields, states and the stated bounds', t => {
         port: 1,
         trustedProxies: Array.from(
           { length: m3Limits.trustedProxies },
-          () => '10.0.0.1',
+          () => '127.10.0.1',
         ),
         publicOrigin: 'h'.repeat(m3Limits.originUnits),
       }),
@@ -246,7 +246,7 @@ test('M3 shapes: required fields, states and the stated bounds', t => {
         port: 1,
         trustedProxies: Array.from(
           { length: m3Limits.trustedProxies + 1 },
-          () => '10.0.0.1',
+          () => '127.10.0.1',
         ),
       }),
       GatewayConfig,
