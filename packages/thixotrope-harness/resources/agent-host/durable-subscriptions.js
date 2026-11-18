@@ -370,7 +370,14 @@ export const makeSubscriptionsPart = ({
               : { reasoningEffort: row.defaultReasoningEffort },
           );
         }
-        if (!row.reasoningEfforts.includes(reasoningEffort))
+        // R4-23: the Codex catalogue lists efforts in the Responses
+        // spelling, where Fae's `ultra` is `max` (the wire sends it so);
+        // `ultra` is admitted wherever `max` is (W4.8).
+        const listed =
+          spec.kind === 'codex-pool' && reasoningEffort === 'ultra'
+            ? 'max'
+            : reasoningEffort;
+        if (!row.reasoningEfforts.includes(listed))
           throw Error(m4Texts.unsupportedEffort);
         return harden({ reasoningEffort });
       },
