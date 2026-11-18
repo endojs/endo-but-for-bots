@@ -12969,3 +12969,53 @@ Time: first command 17:25:39Z. Over 60 s: unit lane 67 s; integration batch 842 
 (17:28:42-17:42:44Z); browser batch 197 s. Everything else under 10 s. Last command: the commit
 of this entry, then the final `date`.
 Fit: neutral.
+
+### J-10087 2026-11-18 K3 contract text brought to the code: m2 and m3 - decision
+Evidence: read `designs/process.md`, J-9940..J-9944, J-10000..J-10065, J-10070..J-10076,
+J-10115..J-10129; code read: `guest/lib/interfaces.js` (header, tables, views),
+`guest/lib/guards/base.js` header, `guest/factory/standin-session.js`, `AH/secrets/writer.js`,
+`AH/secrets/manager.js` exports, `GW/index.js`, `GW/guard.js` rule 2, `GW/powers.js`,
+`GW/extensions.js` `makeExtensionServices`, `GW/contract-m3.js` texts and limits, `GW/bridge.js`
+answers bound, `AH/index.js` gateway wiring, `test/integration/m3-gateway.test.js` acceptance 16.
+Change: `m2-interfaces.md` 1.1, 1.3, 2.2 row, 3.4 row, 9.2, the retired-break row, 12 (W2.0,
+W2.3, W2.9) and 16 items 13-14: the M2 fold done (views), the guard chain `guards/` with its rule
+and test, the stand-in session's stubs, the hub writer SealedBox-only with the
+`INVALID_SECRET_BYTES` refusal that never quotes the value, the in-process writer. Commit
+`8c6f3b3348`. `m3-interfaces.md` 4.4 rule 2 (`markNeverLeaves`, `gatewayObject`), 4.4 rule 4
+(the fold), 4.5 (close 4008, `too many answers`), A-11, 6.1 (`secretWriter()` is the gateway's
+writer, first in `extras`), 6.4 M4 row, the W3.7 work-unit row, H4, acceptance 16 (rewritten: the
+context's writer is the extras writer, not `openWriter()`'s), the W3.7 entry table (two ragged
+rows fixed, `notAttachedText`, `markNeverLeaves`), section 14 (five gateway texts). Commit
+`e554c8ebd9`.
+Fit: neutral: every change is an "as built" note naming its journal entry; no redesign.
+
+### J-10088 2026-11-18 K3 contract text brought to the code: m4 and m5 - decision
+Evidence: code read: `guest/lib/interfaces-m4.js` (`retirePool`, `retire` `M.callWhen`,
+`poolsChanged` `M.call`), `durable-subscriptions.js` `announcePoolsChanged`,
+`config/defaults-m4.js` (`poolStateRefreshMs` 600,000), `guest/session/tool-table.js`
+(`adapterToolEntries`, `toolSetFor`), `guest/exec/powers.js` `store`, `guest/exec/membrane.js`,
+`guest/lib/interfaces-m5.js` (`ToolGrantInfo`, imports), `guest/lib/limits.js`, the m5-security and
+m5-objects `hubRefused` checks.
+Change: `m4-interfaces.md` 1.3 (the vat frame ceiling, CC-027, as a backstop), 3.1 retire rows,
+3.2 `poolsChanged` row (answered and awaited), 5.1 (first-ask push), 9.1 item 3, 9.4 and D-M4-9
+(the generic adapter-tool entry; a static tool never shadowed), D-M4-10 (callWhen, the 600 s
+safety net), acceptance 17 (order by construction), the too-big probes row; K1's row 14 kept.
+Commit `ee2279eda8`. `m5-interfaces.md` D-M5-2 (three too-big outcomes: staged cut,
+`inspectTerminated`, hub refusal), D-M5-3, D-M5-5 (guard modules), 2.6 (`ToolGrantInfo.label`),
+2.7 (the `powers.store` check replaces the residual), 4.2, H-5, O-1 (session 214,690 of 240,000,
+exec 63,826 of 120,000), CC-070 as built, probe (b); K1's K5 row, 11 (b), 5 and 10 kept. Commit
+`8219782e67`.
+Fit: neutral.
+
+### J-10089 2026-11-18 K3 what was checked and what is left - verified
+Evidence: `corepack yarn prettier --check` on each of the four documents: clean; table rows
+checked for cell counts (the remaining mismatches are escaped `\|` inside cells); a grep of the
+added lines for absolute paths, hosts, addresses and key-shaped text: none. No code, test or perf
+file was run or changed (documents only).
+Reading: left for the PM, not edited because the code falls short of the contract:
+`m5-interfaces.md` 4.1 item 3 says the chips render from the turn's `TurnStarted` record; as built
+(J-10037) a turn the page watched shows its chips only once it settles, because the vat's live
+`turn-start` event carries no `attachments`. Also not re-measured here: anything numeric quoted
+from J-10051, J-10062, J-10125.
+Time: first command 17:48:11Z; no command over 60 s.
+Fit: neutral.
