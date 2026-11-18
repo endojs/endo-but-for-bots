@@ -155,16 +155,18 @@ test('ops.credentials() answers CredentialOps: describe batch, description, audi
   const s = await setup(t);
   const ops = s.impl.ops.credentials();
   t.is(ops, s.impl.ops.credentials(), 'one facet per incarnation');
+  /** @type {any[]} */
   const described = await E(ops).describeSecrets(harden(['ka', 'kz']));
   t.is(described.length, 2);
   t.is(described[0].key, 'ka');
   t.is(described[0].state, 'active');
-  t.true(described[0].bytes > 0);
+  t.true(Number(described[0].bytes) > 0);
   t.is(described[1], null);
   t.false(JSON.stringify(described).includes('fake-w46'), 'never a value');
   await E(ops).setSecretDescription('ka', 'the first member');
   t.is((await s.store.describe('ka')).description, 'the first member');
   const reader = await E(ops).auditReader();
+  /** @type {{ events: any[] }} */
   const page = await E(reader).page(harden({ secret: s.secretHandle }));
   t.true(page.events.length > 0);
   t.true(page.events.every((/** @type {any} */ e) => e.label === 'member a'));
