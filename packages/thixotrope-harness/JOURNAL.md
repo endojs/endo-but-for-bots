@@ -7523,3 +7523,155 @@ turn id through `History` and the vat: 5,000 in 21.5 s, 30,000 in 78 s (2,140 pa
 Decision: fixtures for W2.9: 5,000 turns in about 11 min (6.5 min plain), 50 sessions x 300 turns
 for `restart.serving` in about 20-35 min, 30,000 plain in about 39 min. Faster needs the core
 candidate of J-0481 or a segment-copy import (J-0483).
+
+### J-0510 2026-11-18 M3 transport - good fit
+Evidence: W3.0 contract (`designs/m3-interfaces.md` D-M3-1, sections 3.3, 6.4);
+`guest/lib/interfaces-m3.js`; the bootstrap answer `GatewayPowers`; `pkg/src/net/hub.js:804-812`
+(an own export comes back local).
+Reading: the gateway can be a pass-through. The agent-host adapter already holds OCapN presences
+of the factory's `Operator` and of everything it hands out, and CapTP exports any remotable, so a
+signed-in page holds the daemon's own objects (Session, Turn, QueueEntry, Backend, Blob) and calls
+them directly; the gateway keeps no per-interface method table. A method M4 or M5 adds to a vat
+object is reachable from the browser with no gateway change, and an adapter-local object handed
+out by a vat (the M2 `SecretWriter` through `SecretsAdmin.openWriter`) comes back to the adapter
+as its own exo, so a page's `replace` never crosses the hub (assumption A-11). Endo's chat needed
+pet names and a gateway formula lookup for the same thing (R6-75: `fetch(id)` returns any local
+object); here `fetch` returns one record of object references and nothing is looked up by name.
+Decision: D-M3-1. Assumption A-1 (presences are passable to captp's marshal) is checked first in
+W3.2; the fallback is a forwarding `Far` per presence, still without method tables.
+
+### J-0511 2026-11-18 M3 engine - awkward
+Evidence: architecture 3 and fact 4 (a guard runs after decoding; every fresh record key costs a
+vat one of about 57,000 names for life, J-0191, J-0333); `guest/lib/interfaces.js`
+`CreateOptions` (`networkPolicy: M.any()`, `model: M.any()`); a W3.0 probe in Node walking every
+pattern of `shapes`, `interfaces` and `m2Interfaces`: 290 distinct record keys (pattern payload
+keys and method names included) in 22 ms.
+Reading: a browser is the first untrusted sender of records into vats, and no exo guard can
+protect a vat from it: the frame is decoded, hardened and its keys interned before the guard
+runs. The checks must therefore run in Node on the encoded CapTP message, before captp decodes it
+(D-M3-2): bytes against `frameBytes`, keys against a vocabulary, depth, page-made objects, calls in
+flight. The vocabulary need not be written by hand: walking the guards' own patterns gives a fixed
+set of a few hundred names every harness vat program already contains, so a page can make a vat
+intern at most those, ever. The walk also closes a hole the contracts left open: `CreateOptions`
+admits any value for `networkPolicy` and `model` (M.any, kept so the factory can refuse `model`
+with the R4-6 text), so before M3 any caller of `createSession` could flood the factory vat's name
+table with one record.
+Decision: D-M3-2 as specified in `m3-interfaces.md` 4.4; each later contract file exports
+`vocabularyShapes()` and is picked up by file name. Narrowing `networkPolicy` is M7's (its shape
+replaces `M.any()`).
+
+### J-0512 2026-11-18 M3 persistence - awkward
+Evidence: J-9386 (a hub session row has one entry per object held from another session; the log
+store rewrites a changed row whole), J-9392 (finalizers and their GC frames wait for the holder's
+next collection, up to 32 cranks), architecture 4.6 ("a long-lived viewer makes the same
+pattern").
+Reading: every object a page holds keeps an OCapN import in the adapter alive, so it is an entry
+in its vat's hub row for as long as the page holds it, and after the page drops it the entry goes
+only when the adapter collects and the vat next cranks. A viewer that pages back through history
+or reloads often grows the rows of the sessions it looks at. Nothing in a browser frees objects
+by itself unless captp runs with `gcImports`.
+Decision: captp `gcImports: true` on the page; at most 4,096 exports per connection (over: close
+and rebuild); the UI keeps only the visible session's pages; `ui.hubGrowth` measures a 5-minute
+reload loop against 2 MB and requires the session row to come back within 1.25 x after the viewer
+leaves. CC-051 (per-entry row diffs, C-2's rest) is filed only if that row misses.
+
+### J-0513 2026-11-18 M3 native - good fit
+Evidence: `pkg/src/native/manager-kit.js` (`register(key, spec) -> { handle, status }`, `restore`
+of every desired key at each new adapter incarnation, `handle.close()`); spike S7 (J-0162: a spec
+may carry a consumer vat's remotable across SIGKILL); `resources/agent-host/durable.js` (one key
+today, `same: () => true`).
+Reading: the gateway's listener is a registration of the agent-host native resource under a
+second key, whose spec carries the operator's `Operator`; the kit restores it whenever it builds
+the adapter (a daemon start or an adapter-only rebuild), so the gateway listens again after a
+restart with no start listener, no factory involvement and no session vat woken (D-5). Replacing
+the configuration is close-then-register, so the existing `same: () => true` needs no change. The
+sign-in secret stays in an adapter file encrypted with the existing wrapping key (M2 9.1 helpers,
+used read-only), so it never enters a vat or the hub.
+Decision: D-M3-3. The manager side is three lines in `durable.js` plus a new module
+`durable-gateway.js` (hotspot H2).
+
+### J-0514 2026-11-18 M3 tooling - awkward
+Evidence: `guest/lib/interfaces.js` (the `AgentHostAdmin` table and its name list), `AH/attach.js`
+(`makeAttach` refuses every key but `agent-host`), `AH/index.js`, `resources/agent-host/durable.js`;
+the parallel lanes M3, M4, M5 cut from one commit.
+Reading: M3 needs one method on one existing vat interface (`AgentHostAdmin.gateway()`), and that
+interface's guard lives in the one shared contract file every lane may touch. Adding guards by
+editing a shared table is what makes parallel lanes collide. The seam chosen: the method guard is a
+thunk in M3's own `interfaces-m3.js` (which imports only `limits.js`, so `interfaces.js` can import
+it without a cycle), spread as the last entry of the table; M4 and M5 can do the same with their
+own files and the three lanes add three adjacent lines. Everything else M3 adds to the gateway or
+UI is a new file; later milestones add theirs as files too (`AH/gateway/extensions/*.js`,
+`ui/src/<dir>/feature.js`), collected by directory, so the conventions' "hook tables"
+`gateway/routes.js` and `ui/src/features.js` become collectors nobody else edits.
+Decision: hotspots H1-H6 with their seams (`m3-interfaces.md` 11). For the PM: offer the
+`m<N>…Methods()` pattern to M4 and M5, and update the conventions list.
+
+### J-0515 2026-11-18 M3 spec - deviation
+Evidence: R2-12, R6-11 (upgrade on any path, `wss://<gateway>/`), R7-47 (no CSP on the app
+origin), R7-48 (no Origin checks), R2-14 (binary frames) against architecture D-12 (text frames,
+`/ws`), W-1, W-8, W-15.
+Reading: M3 departs from the spec where the audit asked it to and nothing of ours depends on the
+old behaviour: the upgrade is accepted on `/ws` only, its Origin must be the configured public
+origin, the shell and assets carry a strict CSP, and the limiter keys on the forwarded client
+address with a global ceiling. It keeps the spec where D-12 had drifted: binary frames carrying
+JSON (R2-14), and the fragment names `gateway` and `agent` (R6-9). The sign-in secret is 32 random
+bytes in an encrypted adapter file instead of the root formula id, generated by the daemon (R8-39)
+and stable across restarts (P-02), rotatable. Remaining exposure: one bearer secret is full
+operator authority (R7-2).
+Decision: owner decisions 1-5 of `m3-interfaces.md` 16, built with these defaults.
+
+### J-0516 2026-11-18 M3 ui - good fit
+Evidence: `packages/space-floot/DESIGN.md` "Controller <-> view contract", `src/types.js`
+(`FlootController`), the M1a channel's snapshot-then-deltas rule (`m1a-interfaces.md` 5), M2's
+receipts (`getSubmissionReceipt`).
+Reading: Floot's view was already written as a pure renderer over a controller; on Thixotrope the
+controller shrinks to calls on objects the page holds: no pet-name resolution, no polling, no
+queue in the page. Every client rule the spec asks for maps to one existing daemon call: re-attach
+is `getCurrentTurn` (R4-62), exactly-once is a saved draft plus `getSubmissionReceipt` (R6-41),
+late joiners get the channel's fold snapshot (P-09), the list is the list feed. The awkward part is
+only the string ids the Floot view uses: the controller keeps them as page-local keys (F.2 d) over
+the objects it received.
+Decision: D-M3-5 (copy and adapt, owner decision 6); controller and views split so the M4, M5, M7,
+M11 and M12 UI arrive as feature files in fixed slots.
+
+### J-0517 2026-11-18 M3 tooling - perf
+Evidence: the owner's rule of 2026-11-18 (no test or perf check over 10 minutes; rates or
+latencies over fixed windows; large states by import; a milestone's regression run within 20
+minutes on four slots); J-0461 (archive flatness: slot capacity, snapshot, hub row and
+`turn.start` flat from 200 to 5,000 turns); J-0485 (import at 7.7 turns/s).
+Reading: M3's checks were written as counts ("1,000 turns viewed with reloads", "1,000-turn watch
+snapshot"). With the archive a session keeps 128-159 turns whatever its length, so a 300-turn
+session imported once (about 40 s, cached as the `m3-300` template) stands for any length, and
+each check becomes a 60 s window of repeated operations (`ui.hubGrowth` a 5-minute window). The
+whole M3 regression run is planned at about 18 minutes: four integration files under 5 minutes
+spread over the slots, then two perf files under 10 minutes in exclusive mode.
+Decision: D-M3-6; `m3-interfaces.md` 13. For the PM: M2's acceptance 15 and `archive.flat.*` as
+written grow or import a 5,000-turn session (import alone about 11 minutes, J-0485); under the new
+rule they should become fixed-window rates on an imported, template-cached state.
+
+### J-0518 2026-11-18 M3 tooling - awkward
+Evidence: `H/tsconfig.json` (no `ui/`), `lint/guest-rules.js` (Node globals for scripts and perf
+only), root `eslint.config.js`; Playwright's Chromium in the user cache and `@playwright/test`,
+`happy-dom`, `preact`, `esbuild`, `ws` already in the workspace (`packages/chat`,
+`packages/space-floot`, `packages/familiar`).
+Reading: the harness has no browser code yet. Giving `ui/` browser globals or DOM types would edit
+the root lint config and the package's `tsconfig.json`, both shared. UI code that reads browser
+APIs as `globalThis.document`, `globalThis.localStorage` needs neither: it lints under the
+existing rules, and `ui/` stays outside `tsc`. The dependencies the UI and the gateway need are
+already in the workspace store, so the package.json change is additive (H6).
+Decision: owner decision 11 (lint only for `ui/`); browser tests gated by
+`THIX_HARNESS_BROWSER=1`, the rest through a Node CapTP client.
+
+### J-0519 2026-11-18 M3 native - awkward
+Evidence: `resources/agent-host/ephemeral.js` (the implementation is loaded with `require`, so no
+top-level await in `impl/`); `AH/index.js` (blobs and secrets need the manager's sink, which
+arrives with the `agent-host` bind); the kit restores keys one at a time in insertion order.
+Reading: the gateway shares the agent-host process, which keeps deltas at zero vat deliveries and
+lets `Live`, `Content`, `Composer` and `History` be local, but the gateway's bind can run before
+or right after the main bind of a fresh incarnation. It must not accept sign-ins until the agent
+host is attached, and it must not await anything at module load (extension files are loaded with
+`require` too). One crash of the agent-host process drops every page, stream and context cache at
+once (architecture 6, blast radius): pages reconnect on the R6-14 schedule.
+Decision: `makeGatewayService` exposes `attached()` (called from `onSink`) and serves `fetch` only
+after it; extension modules must be synchronous ES modules; recorded as the gateway's share of the
+agent-host blast radius.
