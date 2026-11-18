@@ -11706,3 +11706,38 @@ Reading: reading the three manager files, the composition root and the ops facet
 time. A duplicate-window script and a function-length script (TypeScript parser) gave the
 measured counts, and each flagged site was then read.
 Decision: none.
+
+### J-9980 2026-11-18 HR-GUEST vat programs: the build process left in the code - awkward
+
+Evidence: designs/arch-review/harness-guest.md HR-GUEST-2, -3, -9 (the Session guard in three
+versions, M1b views and M5 widenings of folded tables, a test-checked copy of the M5 guards in the
+exec program beside all 47.8 KB of interfaces.js; ten notBuilt stubs no vat program reaches,
+against the M5 contract's "no notBuilt stub left"; 1,754 lines of lib/ that no vat runs;
+limits-m5.js kept only to avoid a merge).
+Reading: every parallel-lane seam did its job at merge time and was then kept. With 3,417 bytes
+of session budget left (J-9933) the leftovers now block growth. The per-vat split of
+interfaces.js now in progress is the place to drop them.
+Decision: proposed; delete the scaffolding with the per-vat split, then lay lib/ out by vat.
+
+### J-9981 2026-11-18 HR-GUEST vat programs: owners inside the session vat - awkward
+
+Evidence: harness-guest.md HR-GUEST-1, -4, -5, -6, -7 (makeTurnRunner: one 1,560-line closure
+with 17 mutable bindings owning ports, outbox, usage, archive, history, import and two exo
+classes; static hook tables plus three module-level WeakMaps beside M5's per-session runtime
+parts; four context bags; usage arithmetic three times with two context rules; enqueue written
+twice; three factory start counters).
+Reading: the queue (queue.js over pending-queue.js) shows the target shape: a narrow interface
+that does not know the runner. Ports, outbox and archive can be cut out of the runner the same
+way, but each new module costs about 1.2 KB of wrapper, so the split must land after the
+deletions.
+Decision: proposed; HR-GUEST-2 and -3 first (bytes), then -1 and -4 together.
+
+### J-9982 2026-11-18 HR-GUEST time record and what to keep - fit
+
+Evidence: started 2026-11-18T12:52:55Z, ended 2026-11-18T13:02:50Z (first and last command).
+Measured: 68 guest modules, no import cycles, no rule-12.1 globals, 2.6 % of 9,680 code lines in
+a repeated 6-line window, 276 exports (26 unused, 58 test-only).
+Fit: good where it matters: intent before effect, one publish per crank, synchronous recovery
+abandoning by generation, durable-before-drop archiving, and retired-break classification by call
+site in one helper are written down and followed. 16 findings (2 major, 7 moderate, 7 minor); no
+correctness defect found.
