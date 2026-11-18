@@ -8392,3 +8392,55 @@ needs the controller to keep the staged `final` (asked of the PM). (5) Queue Edi
 row's `preview`, which M2 cuts; a long queued message cannot be edited whole. Fit: good for records
 kept as received: the renderer test's unknown `attachments` field reached the slot unchanged for
 an archived, a kept and a live turn, with no code in the view naming it.
+
+### J-9680 2026-11-18 M5 W5.8 preset editor - built
+Evidence: commit 66e2374c91; `ui/src/presets/{feature,editor,PresetEditor,size,texts}.js`,
+`presets.css`; `test/unit/m5-w58-{presets,copies}.test.js`.
+Reading: an `app.panel` "Presets" (R6-55) over `E(operator).getPresets()`: the list from
+`configuration().presets` and `describe()`, the selected preset's name, description, template
+(fixed for built-ins), provider (`listBackends`, identity match), model and effort (datalists from
+`listModels`), internet, instructions, default objects picked from every inventory page (one per
+presence, label editable), template objects shown as kept. Save / Save as new / Delete (two
+clicks; user presets) / Reset (built-ins) / Discard / Reload; every edit sends the catalogue
+revision last read, a stale save shows the catalogue's own text and keeps the edits. A record over
+`presetRecordBytes` is refused before sending with `presetTooLarge` by a browser copy of the
+`fitsFrame` rule (`passStyleOf` from `@endo/far`), checked equal to `fitsFrame` and `messageBytes`
+on samples and at the bound (exactly 22,528 bytes fits, 22,529 does not).
+
+### J-9681 2026-11-18 M5 W5.8 mention addon and attachment chips - built
+Evidence: commits 7a102359d9, 24e3ac09f8; `ui/src/mentions/{feature,mentions,texts}.js`,
+`mentions.css`; `test/unit/m5-w58-mentions.test.js`; gated `test/browser/m5-ui.test.mjs`
+(03824d9bb9, acceptance 15, not run: no W3.8 harness or M5 vat side in this lane).
+Reading: `@` at the start or after white space plus up to 80 label characters opens a list of
+inventory labels (all pages, re-read each time the list opens; prefix matches first, 8 shown);
+a choice (mouse down, or Enter/Tab after arrows; Escape closes) calls `replaceRange` with
+`@label ` and keeps a chip `{ label, value }` in memory. `send` answers `undefined` with no chips,
+else `Composer.submit(session, text, requestId, { attachments })` in insertion order, keeping the
+chips by `requestId` until that answers, so a resend after a reconnect carries the same chips; the
+labels alone are kept in `localStorage` (`familiar.mentions:<requestId>`) beside the draft, and a
+resend after a reload whose text still holds one of them throws `attachmentsLost`. The chip
+renderer shows one "Attached object" chip per `record.attachments` label, null without.
+
+### J-9682 2026-11-18 M5 W5.8 test time and bundle share - perf
+Evidence: unit lane, no supervisor, commit 24e3ac09f8; esbuild of each `feature.js`, minified,
+Preact, `@endo/far` and the drafts module external.
+Measured: 17 tests (three files) in 1.1 s wall. Presets 11,267 bytes minified / 3,919 gzip plus
+2,642 bytes of CSS; mentions 6,565 / 2,833 plus 1,361. The lane's whole bundle with six features
+built at 101,175 bytes gzip. Budget (`ui.coldLoad`): 600 KB gzip for the bundle.
+
+### J-9683 2026-11-18 M5 W5.8 fit and contract gaps - deviation
+Reading: (1) `ComposerAddonProps` carries no `requestId` (the controller makes it at Send), so
+chips are keyed by the session's row key while composing and moved to the `requestId` in the
+first `send`; `send` reads `controller.getState().activeKey` for that. (2) The 4.1 rule "a record
+of chosen labels by `requestId`" must survive the reload it detects, so it lives in
+`localStorage` (labels only), pruned to the drafts that exist. (3) A chip whose `@label` was
+deleted from the text is dropped at Send (as a Floot token), a refinement of "the chips in
+insertion order". (4) Bound: with every editable field at its limit, 32 endowments of 80
+three-byte units and a 256-unit model the record is 22,605 bytes, over 22,528 by 77; with 78-unit
+labels it fits (22,413), so the editor refusal is reachable only near every bound. (5) happy-dom
+tests that render must be `test.serial`: `makeTestDom` swaps `globalThis.document`, and two
+concurrent DOM tests in one file put both pages' keyboard listeners on one document (the arrow
+test moved twice per key). Fit: good for objects as values: an endowment chosen twice is found by
+presence identity and the record carries the presence with no id; poor for shared texts: the
+browser cannot import guest modules (they need the vat prelude), so four values are copied and a
+test pins them.
