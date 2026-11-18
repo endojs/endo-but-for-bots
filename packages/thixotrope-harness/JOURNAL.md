@@ -13894,3 +13894,146 @@ supervisor, integration test, perf check or cargo. tsc and eslint clean on the n
 gateway vocabulary test passes with the new modules; `lint:duplicates` 3.03 % under the 3.25 %
 ceiling with the other contract writers' files present.
 Fit: neutral.
+
+### J-1410 2026-11-18 WX.0 what the cross-check of M6, M8, M9 and M11 read and measured - measure
+Evidence: `designs/m6-interfaces.md`, `m8-interfaces.md`, `m9-interfaces.md`, `m11-interfaces.md`
+in full; their committed tables (`resources/environments/interfaces.js`,
+`guest/lib/guards/{context,images,mail,post-office}.js`, `guest/lib/{image-guards,mail-limits,
+speech-guards,voice-preferences}.js`, `AH/speech/{audio-protocol,engine-protocol,engine-types}.js`,
+`AH/providers/compaction-texts.js`, `ui/src/voice/`); `arch-review/step3-plan.md` at `53a8dbb9ea`
+and the step-3 code as built in the cleanup lane at `dbdfa7ee6f` (`runtime-parts.js`, `turn.js`
+`claim`/`claimNext`, `tool-table.js` sites, `factory/starts.js`, `factory/delete.js`,
+`providers/api.js`); `milestones.md` conventions, review rules and the M6-M13 sections;
+`arch-review/core.md` 5; `spike-data-references.md` 1; `CORE-CHANGES.md` CC-026..CC-028.
+Probes (no supervisor): `node scripts/bundle-guest.mjs` in both lanes; comment-stripped sizes
+(`stripComments`, indentation dropped) of the new session-side tables; every new text table
+loaded with the guest prelude and compared key by key.
+Reading: session program 206,907 bytes here, **212,483 bytes on the step-3 tree** (room 27,517 of
+240,000). Stripped: `guards/mail.js` 8,504 + `mail-limits.js` 782, `guards/context.js` 2,351,
+`guards/images.js` 1,412; for scale, existing session modules: `packages.js` 2,312,
+`tools/objects.js` 4,836, `tools/mentions.js` 4,671, `tools/exec.js` 5,757, `tools/granted.js`
+6,129. No text, shape or interface name collides between the new tables and `session.js`/
+`factory.js` (only `mailTextOf` and `environmentTexts` share `timeoutInvalid`, `stopped`, and they
+stay in separate tables). No new tool name collides with a built-in. No host name, address,
+personal path or key-shaped value in the four contracts or their files.
+
+### J-1411 2026-11-18 WX.0 the session program does not hold the four lanes as written - decision
+Evidence: J-1410; `test/unit/m1a-session-program.test.js` asserts `bundle.bytes <=
+limits.sessionProgramBytes`; J-10192 (cold create about 20 ms per KB).
+Reading: the stated shares are M6 9,000 + M8 9,000 + M9 16,384 + M11 0 = 34,384 against 27,517
+of room: 6,867 over before any lane builds. M9's share is not derived: its guards alone strip to
+9,286 bytes, leaving about 7 K for six modules (inbox and subagents parts, three tool modules,
+`mail-text.js`) whose nearest existing peers strip to 2.3-6.1 K each, so 25-35 K is the likely M9
+total; expected sum 257-267 K. M8's Q-7 prices a raise at 10 us a byte; J-10192 measured about
+20 ms per KB.
+Decision: blocker until the owner rules (raise `sessionProgramBytes` in `limits.js` and
+`scripts/provision-steps.js`, about +1.1 s on the 6.1 s cold create per +55 KB and hidden by the
+spare pool; or move M9's factory-checked texts and draft rules from `guards/mail.js` into
+`guards/post-office.js`). The PM then fixes per-lane caps that sum to the ruled limit before
+W6.4, W8.1 and W9.8 start; the group fold measures the sum once.
+
+### J-1412 2026-11-18 WX.0 shared files: one seam unit before the lanes - decision
+Evidence: M6 6.1-6.4 (S-1..S-4, R-1..R-3, T-1, L-1, F-1..F-5, P-1, P-2, K-2); M8 10 (G-1..G-4,
+S-5..S-20); M9 6 (S1..S10, F1..F7, V1, A1); M11 11 (H1..H10); `test/unit/guards-split.test.js`
+(every entry must equal a before-split snapshot entry); `gateway-vocabulary-tables.test.js`
+(key and method sets deep-equal the 258/141 pin).
+Reading: every lane edits `guards/session.js` or `guards/factory.js` (and M6, M8
+`guest/lib/interfaces.js`) in its own "first, alone" unit (W6.0b, W8.G, W9.8/W9.9, W11.7), and
+each such entry fails `guards-split.test.js`, which has no "added" category, and the vocabulary
+pin; only M6 names the snapshot (S-4) and its fix (new digests in a before-split fixture) changes
+what the test proves. Three lanes change the step-3 part API that the built `runtime-parts.js`
+types: M6 `PartHooks.admit`, M8 `HookTurn.reading` and `Runtime.contextWindow`, M9 `nextTurn`
+answering `take`; and three edit `turn.js` on the claim path (M6 admission, M8 `startIndex` and
+`roundRequest`, M9 `claimNext`); M8 says M9 only, M9 says none. Partner names disagree: M8 and M9
+call M6's part `workspace` and its control `envControl` (M6: part `environment`, service
+`environment`); M11 calls M9's method `getInbox` (M9: `getMail`); M6 says no partner on
+`label-seeds.js` (M9 adds `user`). Provisioning numbers: M6 `60-environments.js` and M11
+`60-voice.js`. M8 inside its lane: W8.3 (S-14) and W8.5 (S-18) both own `AH/index.js`.
+Decision: a cross-lane seam unit WX.1, one agent, after step 3 merges and before any lane unit,
+applies every shared guard entry (M6 15, M8 G-1..G-3, M9 S9, S10, F6, M11 appendix A) in one
+commit; replaces the before-split check of `guards-split.test.js` by an `added` list in
+`guard-fold-map.json` (or retires it: its proof is done); re-pins the vocabulary once; adds the
+four part-API members to the typedefs; fixes the part table order `powers, inspector, grants,
+exec, packages, environment, compaction, inbox, subagents` and the tool order shell, `viewImage`,
+mail, requests, subagents; names `environment` everywhere; gives M11 `70-voice.js`. Lanes then
+add only their own part, entries and table lines. W8.5's `index.js` line moves to W8.3.
+
+### J-1413 2026-11-18 WX.0 objects designed twice, and part state an export drops - decision
+Evidence: M6 D-M6-6 (`EVI/blob-access.js`, BlobWriters pieces of 12,288 bytes from the
+environments adapter), O-11; M8 D-M8-10, X-1 (pulled `ImageSource` pages of 262,144 characters),
+CC-100, CC-101; M9 D-M9-4 (hard-link `RelayWriters.copy`); M11 D-M11-3 (`/audio`, never stored);
+spike-data-references 1 (step 1, harness only, names the workspace and containers adapters,
+`runCommand` stdin and `viewImage`; adapter paging measured +2.9-3.0 MB of hub log per MiB);
+step3-plan 2.3 (a part holds no state that must survive export or a restart); `tools/exec.js`
+`abandon` (built).
+Reading: (a) data between two adapters is designed twice (M6 pushes vat-sized pieces, M8 pulls
+large pages) and X-1 is not in M6's contract at all (no `openImage` in `gitWriterMethodNames`).
+The one design is the spike's step 1 (adapter reads the file it is pointed at), M6 first, M8's X-1
+its second user; until the owner adopts it, X-1 is built by M6 W6.2 as M8 specifies, both lanes
+accept the hub-log cost, and CC-100 is asked once for both. (b) In-flight call tables with a
+cancel and a recovery text are built a third time (exec `abandon`, M6 `calls`/`stillOurs`, M9
+asks by generation): WX.1 exports one bounded per-part call table from `tools/exec.js`. (c) M9's
+inbox messages and M6's execution state live only in part heaps: M9 S7 exports the waiting bodies
+but not the messages (an import gets blobs no record names; an M13 upgrade loses waiting mail and
+kept requests); an imported stopped shell session runs again. Both must enter the export (M9
+records or an export section; M6 the hold, already queue state, plus `execution`). (d) Delete hooks:
+the built `makeDeletions({ admin, rows, starts, hooks })` passes `{ row, session }`; M9's
+parameter form fits it, M6's F-4 signature change does not: the kit passes `hooks: [subagents
+.deleteChildren, environment release closed over the settings]`, children first. (e) M11 H2's
+`startCount: () => epoch` becomes the built `starts` object (M9 already uses `starts.next()`).
+
+### J-1414 2026-11-18 WX.0 owner rules, budgets and the box - read
+Evidence: the four contracts' decisions, perf tables and test plans; `milestones.md` "Done means"
+(integration files under 5 minutes); `guest/lib/limits.js` `frameBytes` ("into or out of a vat").
+Reading: no secret path, lifetime cap or deleted transcript content found. Names: `speak(session,
+turnId)` (M11 D-M11-7), `subagents/<name>` (M9), the `voice=` fragment and `responseKey` fall under
+the owner's exceptions (page re-finding, model text, client idempotency key). Placement: M6's
+`resources/environments/interfaces.js` is neither under `guest/lib/guards/` nor listed in
+`vocabulary-tables.js` (M6 O-8); one exclusion line there satisfies the rule's letter; M8's
+`image-guards.js` exclusion should be unconditional. M11 lets a gateway page call
+`Voice.configureSpeech` with engine argv (a page holding the sign-in runs commands); M6 keeps the
+equivalent on the provisioning-only admin: move it there. Budgets: M8 `images.viewFromVat` (1 s)
+assumes 262,144-character pages out of a vat, over `frameBytes`; at 20,480-character pages 1 MiB is
+68 deliveries, about 4.8 s. M9 `mail.inboxCrank` p95 200 ms is below its own basis (32 handles x
+7-15 ms = 224-480 ms). M9 `mail.throughput`/`mail.hubGrowth` post packages, which start turns, so
+1,000 in 120 s overrun the 256-message inboxes. M6 `stopCleanup`, `cancel`, `coldStart` have no
+measured basis; M6 gives no wall time for `perf/environments.perf.mjs` (7 windows plus fixtures).
+Counts and N-run rows (M8 `compaction.record`, M11 `voice.deliveries`, M6 `restart` 5 runs, M9
+`burst8` 3 runs) should be labelled gates or put in windows. M9 `mail-restart` is estimated at 6
+minutes: split it. M6 adds four files to the `core` regression list: give them their own list.
+
+### J-1415 2026-11-18 WX.0 core requests against core.md 5 and the spike - decision
+Evidence: M6 CC-090..CC-092; M8 CC-100, CC-101; M9 CC-110..CC-112; M11 none (CC-120 conditional);
+`arch-review/core.md` 5 steps 2-4; `spike-data-references.md` 1.
+Reading: CC-090 and CC-091 are one core change, AR-SYN-28, already in core step 4 with the
+`WORKSPACE_VERSION` bump: one row. CC-110 is core C-10 (step 2): cite it, do not re-request.
+CC-100 is a policy record of core step 3's persisted session kinds and also covers M6's staged
+output; its condition (adapter frames in `hub-log.jsonl`) is already measured by the spike, so
+M8's P-B4 only confirms it at 128 KiB pages. CC-101 is the spike's step 2, which needs C-1 and C-2
+(core step 3) first and comes after the harness-only step 1: withdraw it from this group. CC-111
+belongs with core step 3's handoff question. CC-092 also serves M11's K11-1 process check (one test
+helper for both). CC-112 stands alone.
+
+### J-1416 2026-11-18 WX.0 acceptance gaps, merge order and folds - decision
+Evidence: the four acceptance lists against the R and P numbers of their milestone sections;
+spec R3-13, R3-30, R4-70, R8-29.
+Reading: cross-lane items nobody proves before the merge: the complete `voice` preset (R3-13: M6
+objects, M11 pin), `viewImage` of a workspace path (R3-30, X-1), a subagent of a shell preset with
+its own workspace and shell (R4-70), mail delivered to a stopped session. Unclaimed: R4-70's
+subscription selector (M9 inherits backend, model, effort, preset only); R8-29 (engines started
+fresh at every start; M11 starts lazily: a departure to record); M11 cites none of R2-6, R2-20,
+R3-244, R3-245, R6-53, R8-17, R8-29 and maps R5-1..R5-62 only through P items; M6 does not state
+R3-10 (M7) and R3-16 (open decision 5) as deferred. A Talk on a state without an environment runner
+fails with `runnerRequired` (the `voice` preset needs a shell): owner question.
+Decision: order WX.1, lanes, then merge M11 (fewest guest seams), M6 (X-1, the `voice` preset),
+M8, M9 (largest runner and factory seams), each followed by its own fold (M11 F-1..F-9, M6 W6.8,
+M8 18, M9 W9.F) and one group fold WX.F: vocabulary and bundle measured once, the four cross-lane
+acceptance tests above, provisional seams re-anchored, regression lists, `architecture.md`,
+`milestones.md` (the four contracts' tables) and the ownership-check row for the group.
+
+### J-1417 2026-11-18 WX.0 time record - process
+Evidence: first command 2026-11-18T23:26:38Z; last command logged with the WX.0 report.
+Reading: reading the four contracts and the step-3 plan and code took most of the time; probes
+(two bundles, size and key comparisons) each under 30 s. Not run: any supervisor, integration
+test, perf check or cargo. No contract changed; journal only.
+Fit: neutral.
