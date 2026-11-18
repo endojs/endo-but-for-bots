@@ -8154,3 +8154,56 @@ two turns each and two refused creations).
 Fit: good. The composition runs once per creation in the factory vat and is pure text; the
 section table costs nothing that matters, and storing the result in `SessionConfig` (R4-28)
 means no vat recomposes.
+
+### J-0760 2026-11-18 M5 exec side: powers, membrane, inspector - built
+Evidence: commits 5b2444f401 (exec program), 0a9e213810 (session client); `guest/exec/{powers,
+membrane,inspect}.js`, `guest/session/tools/inspect-client.js`, `test/fixtures/m5-objects.js`;
+`test/unit/m5-w54-exec.test.js` (12 tests, about 0.3 s each, the bundle in a Node compartment
+with the prelude alone) and `m5-w54-client.test.js` (6 tests, fakes).
+Reading: per call, `powers` is `{ lookup, list, store, remove }` over the session's
+`ExecPowersSource`; after the call every method rejects with `texts.powersExpired` and sends
+nothing. The model's `E` is the call's membrane: a send to any remotable is measured in the exec
+vat (units x 3, keys per record and per message, depth) and refused before it leaves; objects
+`powers` answers are per-call wrappers (empty local remotables, `WeakMap` to the target), so a
+kept wrapper is refused in a later call, answers are wrapped again, and a wrapper returned as the
+result renders as its target. Top-level promise arguments are awaited; a nested one is refused
+(its later resolution would leave unmeasured). The inspector runs the five operations beside
+`run` (never `busy`) and builds every answer itself. The session client shares the exec tool's
+scope (one `scope()` call, `takeScope`), its cancel and recovery hooks, and the exec deadline for
+`readSources` and `toolExecute`; it keeps `inspectWindow` calls in flight.
+Decision: as described; the deviations are J-0761.
+
+### J-0761 2026-11-18 M5 exec side deviations - deviation
+Evidence: `guest/exec/render.js` (the contract copy), `guest/exec/membrane.js`,
+`guest/exec/inspect.js`, `m5-w54-exec.test.js` ("the exec copy equals the contract").
+Reading: (1) the exec program does not import `interfaces-m5.js`: it would be 13.7 KB of the
+bundle with its module wrapper. `render.js` holds a copy of the M5 `ExecScope` guard, its
+request and outcome shapes and the six texts the exec vat writes; a unit test compares each with
+the contract's (guards structurally, `deepEqual`), so a drift fails a test. (2) The shared
+outcome helpers (`argumentText`, `finish`, failed, exhausted) moved from `main.js` to
+`render.js`, not a module of their own: each module costs about 1.5 KB of wrapper. (3) The
+membrane is in the model's `E`, not in callable wrapper objects: wrappers stay empty remotables
+and every send to a remotable goes through the measured path, which also covers presences an
+answer carries inside a tagged value. `E.get` is not measured (no arguments) and its answer is
+not wrapped. (4) `readSources` does not re-check `SourceReadResult` with `matches` (one shape
+less in the bundle): a reader answer of another shape throws in the bounding loop and the item
+answers the unreadable text, as Fae's catch does. (5) The unreadable text names
+`SourceReader.read` instead of Fae's "readable blob streaming". (6) The exec side does not count
+inspector calls; the session client keeps the window.
+Decision: as described; reported to the PM.
+
+### J-0762 2026-11-18 M5 exec bundle bytes and membrane cost - perf
+Evidence: `node scripts/bundle-guest.mjs exec` at 0a9e213810; a Node timing loop (scratch
+script, 5 s window per case; the vat rows are W5.5's `exec.membrane` and W5.9's bundle row).
+Reading: the exec program is 119,760 bytes (base 87,348 at the lane start; budget 100,000 now,
+120,000 after M5's merge by O-1): 240 bytes under the raised budget, so `m1b-exec-vat`'s
+`execProgramBytes` assertion fails in this lane until the PM's raise. The contract estimated
++12 KB; W5.4 added 32.4 KB: inspect 13.1 KB, membrane 6.3, powers 2.5, the outcome helpers and
+contract copy 5.6, and about 1.5 KB of wrapper per new module. Node, per message measured: a
+small record 1.97 us, a 4,096-unit string 0.81 us, 256 keys in 8 records 202 us (the copy
+dominates), a refused 100 KiB string 0.05 us (2.5 million, 6.2 million, 24,800 and 92 million
+calls in 5 s). Budget `exec.membrane` <= +5 ms median per call in a vat.
+Fit: poor on bytes. Every module is shipped into every spare exec vat at about 10 us a byte
+(D-4), and guest code cannot share a library between vats, so the membrane and Fae's rules cost
+about 0.3 s per cold exec vat. Good on cost per call: the measure walk is bounded by the bounds
+themselves and is far below a crank.
