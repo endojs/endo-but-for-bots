@@ -6,15 +6,17 @@
  * and its adapter make. One resource holds a session's git workspace and
  * its development container (D-M6-1).
  *
- * Who reads it: the environments manager vat (`./durable.js`, bundled at
- * installation) and the adapter (`./impl/`, Node). No harness vat program
- * imports it: the session and the factory hold these objects as
- * remotables and call them; the few entries they need (the `Session`
- * methods of emergency stop, `ExecutionState`, the `SessionServices` keys,
- * the shell tool descriptions) are added to `guest/lib/guards/session.js`
- * and `guards/factory.js` by the contract code unit (W6.0b, contract
- * section 6). The gateway never reaches these objects, so this table is
- * not a gateway vocabulary (D-M6-10).
+ * Who reads it: the environments manager vat (`resources/environments/
+ * durable.js`, bundled at installation) and its adapter
+ * (`resources/environments/impl/`, Node). No harness vat program imports
+ * it: the session and the factory hold these objects as remotables and
+ * call them; the few entries they need (the `Session` methods of emergency
+ * stop, `ExecutionState`, the `SessionServices` keys, the shell tool
+ * descriptions, the export page's `execution`) are added to
+ * `guards/session.js` and `guards/factory.js` by the cross-lane seam unit
+ * WX.1 (contract section 15). The gateway never reaches these objects:
+ * `guest/lib/vocabulary-tables.js` lists this module in
+ * `vocabularyExclusions` as not browser-sendable (D-M6-10, seam V-1).
  *
  * Rules (architecture 3, 9, 12): every record that crosses is closed
  * (`record`), every string and list bounded; no data-dependent record key
@@ -31,8 +33,7 @@
  * `contract(thixotrope-harness): ...`, `m6-interfaces.md` in the same
  * commit).
  */
-/* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { limits } from '../../guest/lib/limits.js';
+import { limits } from '../limits.js';
 import {
   text,
   list,
@@ -43,10 +44,12 @@ import {
   done,
   lazyTable,
   shapes as baseShapes,
-} from '../../guest/lib/guards/base.js';
+} from './base.js';
 // M5's SourceReader protocol (`readSources`), which the Git facets serve.
-import { shapes as sessionShapes } from '../../guest/lib/guards/session.js';
-/* eslint-enable import/no-relative-packages */
+import { shapes as sessionShapes } from './session.js';
+// M8's image bounds (seam X-1): `openImage` takes the path M8's image tool
+// checked, by the same rule (imported, not copied: review rule 3).
+import { imageLimits } from './images.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
@@ -166,6 +169,7 @@ export const gitWriterMethodNames = harden([
   'trackingStatus',
   'stashList',
   'read',
+  'openImage',
   'help',
   'add',
   'restore',
@@ -190,6 +194,7 @@ export const gitReaderMethodNames = harden([
   'trackingStatus',
   'stashList',
   'read',
+  'openImage',
   'help',
 ]);
 
@@ -532,7 +537,19 @@ const shapeBuilders = {
     record({
       stops: list(text(limits.idUnits), L.maxPendingWork),
       releases: list(text(limits.idUnits), L.maxPendingWork),
+      // Emergency-stopped environments (D-M6-9): a new incarnation refuses
+      // their ShellPort and ImageSource calls from its first call.
+      withdrawn: list(text(limits.idUnits), L.maxEnvironments),
     }),
+  /**
+   * `openImage(path)` argument (seam X-1): the segments M8's image tool
+   * checked (`image-guards.js` `ImagePath`); the adapter applies the
+   * workspace path rules again (worktree only, never `.git`).
+   */
+  ImagePath: () =>
+    list(text(imageLimits.segmentUnits), imageLimits.pathSegments),
+  /** `EnvironmentsOps.stop` options: `withdraw` for an emergency stop. */
+  StopOptions: () => record({}, { withdraw: M.boolean() }),
 };
 
 /**
@@ -559,6 +576,10 @@ const gitReadGuards = () => ({
   read: M.callWhen(sessionShapes.SourceReadRequest).returns(
     sessionShapes.SourceReadResult,
   ),
+  // Seam X-1 (M8 `viewImage`): an adapter-side `ImageSource` (M8's guard,
+  // `image-guards.js`) over one worktree file; its pages go adapter to
+  // adapter and never through this manager vat.
+  openImage: M.callWhen(S.ImagePath).returns(R('ImageSource')),
   help: M.call()
     .optional(text(limits.methodNameUnits))
     .returns(text(L.helpUnits)),
@@ -611,8 +632,14 @@ const interfaceBuilders = {
         S.CommandOptions,
       ).returns(S.CommandResult),
       inspect: M.callWhen(text(limits.idUnits)).returns(S.ShellInfo),
+      openImage: M.callWhen(text(limits.idUnits), S.ImagePath).returns(
+        R('ImageSource'),
+      ),
       port: M.callWhen(text(limits.idUnits)).returns(R('ShellPort')),
-      stop: M.callWhen(text(limits.idUnits)).returns(done),
+      stop: M.callWhen(text(limits.idUnits))
+        .optional(S.StopOptions)
+        .returns(done),
+      resume: M.callWhen(text(limits.idUnits)).returns(done),
       release: M.callWhen(text(limits.idUnits)).returns(done),
     }),
   /** Manager vat: the writer Git facet, bound in a session as `workspace`. */
@@ -705,8 +732,10 @@ export const environmentMethodNames = harden({
     'git',
     'runCommand',
     'inspect',
+    'openImage',
     'port',
     'stop',
+    'resume',
     'release',
   ]),
   Git: gitWriterMethodNames,

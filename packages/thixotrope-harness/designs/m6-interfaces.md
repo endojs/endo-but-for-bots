@@ -1,18 +1,26 @@
 # M6 interface contract: environments (containers and git workspace)
 
-Unit W6.0 of the M6 milestone (`milestones.md` M6). This file and
-`resources/environments/interfaces.js` (the new resource's guards, shapes, bounds and texts) are
-the contract the M6 builders (W6.0b, then W6.1-W6.6 in parallel, then W6.7) build against without
-talking to each other. Where this file and the guard file disagree, the guard file wins and this
-file is wrong: report it. Paths: `H/` = `packages/thixotrope-harness/`, `AH/` =
-`H/resources/agent-host/impl/`, `EV/` = `H/resources/environments/` (new), `EVI/` = `EV/impl/`.
+Unit W6.0 of the M6 milestone (`milestones.md` M6), settled against the cross-check WX.0
+(journal J-1410..J-1417, issues X-01..X-17) and the step-3 structure (unit W6.0 settle, journal
+J-0813..J-0816). This file and `guest/lib/guards/environments.js` (the new resource's guards,
+shapes, bounds and texts; moved from `resources/environments/interfaces.js` at the settle, X-11)
+are the contract the M6 builders (W6.1-W6.6 in parallel after the cross-lane seam unit WX.1, then
+W6.7) build against without talking to each other. Where this file and the guard file disagree,
+the guard file wins and this file is wrong: report it. Paths: `H/` = `packages/thixotrope-harness/`,
+`AH/` = `H/resources/agent-host/impl/`, `EV/` = `H/resources/environments/` (new), `EVI/` =
+`EV/impl/`, `EVG` = `H/guest/lib/guards/environments.js`.
 Spec items are `P-n`, `R2-n` .. `R8-n`, `A.n` of `endo-harness-spec.md` (outside the repository;
 its deployment details are never copied here); "architecture n" is `designs/architecture.md`
 section n; "Mk n" is `mk-interfaces.md` section n; "step 3" is
-`designs/arch-review/step3-plan.md` (written in the `endo-thix-clean` lane; read at its commit
-`53a8dbb9ea`). Fae, exo-shell, exo-git and agent-tools sources are read at `1315bef86`
+`designs/arch-review/step3-plan.md` (written in the `endo-thix-clean` lane; the plan read at
+`53a8dbb9ea`, the code as built read at `cecfa12809`: `runtime-parts.js`, `turn.js` `claim`/
+`claimNext`, `session.js`, `queue.js` `sendNow`, `export.js`, `tool-table.js`, `tools/exec.js`
+`abandon`, `factory/delete.js`, `factory/factory.js`, `factory/services.js`); "WX.1" and "WX.F" are
+the PM's cross-lane seam unit and group fold (X-02, X-17). Fae, exo-shell, exo-git and agent-tools sources are read at `1315bef86`
 (`git show 1315bef86:<path>`); `@endo/git` and `@endo/exo-git` are workspace packages of this
-checkout. Journal: J-0810..J-0829 (this unit: J-0810..J-0812).
+checkout. Journal: J-0810..J-0829 is the contract's (W6.0: J-0810..J-0812; settle: J-0813..J-0816;
+J-0817..J-0829 kept for the PM and the fold); build units W6.1..W6.8 use the ranges the PM assigns
+(section 8).
 
 M6 runs in parallel with M8 (compaction, images), M9 (mail, subagents) and M11 (voice), each in its
 own lane. Everything here is shaped so the four lanes meet only at the seams of section 6.
@@ -40,7 +48,10 @@ acceptance; 10 performance; 11 too-big and hostile probes; 12 core requests; 13 
 | create a vat | about 4.4 s cold; a spare take 157-176 ms; `session.create` with the pool 849-864 ms | J-9045, J-9382 |
 | healthy restart to serving | 3.3-6.9 s (median 4.1 s), 0 idle vats woken | J-9382 |
 | install rate of a bundle | 11.6 s for 300 k ASCII characters | J-0193 |
-| session program | 206,850 of 240,000 bytes after the fold; step 3 expects 213-216 K | J-10161, step 3 section 5 |
+| session program | 212,483 of 240,000 bytes on the step-3 tree (27,517 left for M6, M8, M9, M11) | J-1410 |
+| existing session modules, comment-stripped | `packages.js` 2,312; `tools/mentions.js` 4,671; `tools/exec.js` 5,757; `tools/granted.js` 6,129 | J-1410 |
+| a call frame over the vat ceiling | refused by the hub before it is journaled (`FRAME_TOO_LARGE`), the next turn served; measured for a call into a vat, not yet for an answer | J-10126, J-10127 |
+| a cold create, per KB of session program | about 20 ms | J-10192 |
 | spawn of `/usr/bin/true` from Node | median 1.02 ms, p95 1.37 ms (n 200) | J-0811 (this unit; load 7.6) |
 | `git status --porcelain=v2` on a 10,000-file repository, 30 modified, 2 untracked | median 30.1 ms (n 30) | J-0811 |
 | `git log` 50 entries of 1,002 commits | median 11.8 ms (n 30) | J-0811 |
@@ -59,7 +70,7 @@ is marked `[real-runtime]` and recorded by the owner's run.
 
 | P / R | what M6 builds | left to |
 |---|---|---|
-| P-19, R3-40, R3-240, R3-246..R3-248 | a per-session git workspace on branch `main` with one empty initial commit; the `Git` writer facet bound in the session as `workspace` (exec code calls it, R3-40), its read-only facet, no rewrite or remote methods; `SourceReader.read` over the worktree (M5's `readSources`) | linked worktrees, tree views, the commit stream, `show`, `revParse`, `detach`, `checkoutConflict` (owner question O-7) |
+| P-19, R3-40, R3-240, R3-246..R3-248 | a per-session git workspace on branch `main` with one empty initial commit; the `Git` writer facet bound in the session as `workspace` (exec code calls it, R3-40), its read-only facet, no rewrite or remote methods; `SourceReader.read` over the worktree (M5's `readSources`); `openImage(path)` on both facets for M8's `viewImage` (seam X-1, R3-30) | linked worktrees, tree views, the commit stream, `show`, `revParse`, `detach`, `checkoutConflict` (owner question O-7) |
 | P-18, R2-7, R3-37, R3-44..R3-47, R3-266, R7-9, R7-36, R7-39 | a per-session container: rootless, unprivileged uid, capabilities dropped, read-only root, no new privileges, `/workspace` = the session's live workspace, a persistent home, no network; `runCommand` and `inspectShell` model tools; the `Shell` bound as `shell` for exec code | public egress and network policy (M7) |
 | P-55, R8-41, R8-42 | image pinned by digest, never pulled; the adapter refuses to run anything when the pin is not a digest or the image is absent; a check function M12's service start calls | building the image (out of band, R8-41) |
 | P-47, R4-8, R6-50, R6-57, R7-65 | emergency stop and resume on shell sessions: fence, hold, stop, withdraw, survive restart; resume leaves the queue held | - |
@@ -69,6 +80,13 @@ is marked `[real-runtime]` and recorded by the owner's run.
 | R6-57, R6-50 UI | Settings: "Sandbox execution" status, Emergency stop, Resume | - |
 | W-12 | memory, process and CPU limits on each container (configurable) | - |
 | G-29 | workspace and home released with the session | - |
+
+Deferred, stated (X-12): R3-10 (presets that turn public internet on) is M7; R3-16
+(`full-control`) waits for open decision 5. Cross-lane items only the group fold can prove (WX.F):
+the complete `voice` preset (R3-13: M6's objects and M11's pin), `viewImage` of a workspace path
+(R3-30: X-1 with M8), a subagent of a shell preset getting its own workspace and shell (R4-70: M9's
+child creation runs M6's service builder), and mail delivered to an emergency-stopped session
+(D-M6-20).
 
 ### 1.2 Departures (journal J-0812)
 
@@ -160,6 +178,17 @@ step 1, that module's backing changes to the blob store directory and the resolv
 in the service spec (`spike-data-references.md` 1, row 1a: `locate(blob) -> { file, length }`), and
 nothing else changes; M6 works without it.
 
+**Data between two adapters is one design with M8 (X-06).** Two directions cross from this
+adapter to the agent-host adapter: staged command output (pushed through `BlobWriters`, above) and
+workspace images (pulled by M8's image tool through an `ImageSource` this adapter answers, seam
+X-1: `Git.openImage(path)`, section 3.4). Both are the case the spike's step 1 names (the
+workspace and containers adapters given the blob store directory and an amplifier). Until the owner
+adopts it, both lanes accept its measured cost (+2.9-3.0 MB of hub log per MiB paged between
+adapters, spike 1; at most 98 KB per command here, at most 2 MiB per image in M8), and CC-100 (M8's
+request, policy for persisted adapter frames in core step 3) is asked once for both (section 12).
+If adopted, `blob-access.js` and `EVI/image-source.js` are the two modules whose backing changes;
+the image source then answers `locate()` instead of pages, and nothing on the vat side changes.
+
 **D-M6-7. Host-side git through `@endo/git`'s native backend.** `EVI/git.js` drives
 `makeNativeGitBackend` (with `makeGitOperations` from `@endo/exo-git` where it fits) over the
 session's workspace directory. That backend already neutralises what a container-written
@@ -181,26 +210,40 @@ process group recorded under `run/`, swept at start; **not a sandbox**), `podman
 (`EVI/runtime-oci.js`, one module, the binary and two flags differ). Every acceptance item is
 provable with `fake` except the isolation properties, marked `[real-runtime]`.
 
-**D-M6-9. Emergency stop is the session's environment part's state, withdrawn in the manager.**
-The session keeps `running | stopping | stopped` in its `environment` runtime part (heap; survives
-restart; step 3 section 2); the manager keeps `stopped` on the environment record and refuses every
-`Git`, `Shell` and `ShellPort` call while it is set (the authority is withdrawn where it lives, not
-only fenced in the session). Sequence in 4.5.
+**D-M6-9. Emergency stop is the session's environment part's state, withdrawn where each
+authority lives, and exported.** The session keeps `running | stopping | stopped` in its
+`environment` runtime part (heap; survives a daemon restart because the vat does); the manager
+keeps `stopped` on the environment record and refuses every `Git`, `GitReader`, `Shell` and
+`EnvironmentControl.port` call while it is set. The adapter-side objects (`ShellPort`, the
+`ImageSource`s of `openImage`) are refused in the adapter: `E(ops).stop(key, { withdraw: true })`
+marks the key withdrawn, `E(ops).resume(key)` clears it, and `attach` answers the withdrawn keys in
+`PendingWork.withdrawn` so a new incarnation refuses from its first call. Export and import (X-07;
+step 3 2.3 forbids part state that must survive export): the export's head page carries
+`execution` (seam X-E) and an import feeds it back to the part, which re-applies the hold `stopped`
+and sends `emergencyStop` to the imported session's new environment (4.5). Rejected: a record kind
+for the execution state (a record per stop and resume in the turn log, read back at every start,
+for one value the export carries anyway). Sequence in 4.5.
 
-**D-M6-10. The resource's guard table lives with the resource** (`EV/interfaces.js`), not in
-`guest/lib/guards/`. Its readers are the environments manager vat and its adapter only; no harness
-vat program bundles it, and the gateway never reaches these objects (no browser path to a `Git` or
-`Shell`), so it is not gateway vocabulary. Precedent: the agent-host's `AgentHostOps` guard lives in
-`AH/attach.js`. Rejected: `guest/lib/guards/environments.js` (it would have to be listed in
-`guest/lib/vocabulary-tables.js`, widening the gateway by about 60 names no browser sends, or be
-excluded, which the vocabulary test refuses for a module whose interfaces the listed tables do not
-cover). The session- and factory-side entries go into their vats' guard modules (section 15).
-Owner question O-8.
+**D-M6-10. The resource's guard table is a per-vat guard module, `guest/lib/guards/
+environments.js` (`EVG`), excluded from the gateway vocabulary** (settled from X-11 (a); the owner's
+rule puts interface guards in `guest/lib/guards/` or in a Node-only module listed in
+`vocabulary-tables.js`). Its readers are the environments manager vat (a vat program, so the module
+keeps prelude globals only) and its adapter; no harness vat program bundles it, and the gateway never
+reaches these objects. Seam V-1: one line in `vocabularyExclusions` (`'guards/environments.js':
+'environments manager vat and adapter table; no browser path reaches these objects'`), and WX.1
+changes `gateway-vocabulary-tables.test.js` once so that an excluded module marked not
+browser-sendable does not have to contribute its names (the same change makes M8's
+`image-guards.js` exclusion unconditional). Rejected: (a) beside the resource
+(`resources/environments/interfaces.js`, the W6.0 draft: outside the rule); (b) listed in
+`vocabularyTables` (about 60 names no browser sends join the gateway pin). The session- and
+factory-side entries go into their vats' guard modules (section 15). Owner question O-8.
 
 **D-M6-11. The per-session job is one runtime part, `environment`** (step 3 2.4 suggests the name
 `workspace`; `environment` is the concept the part owns: shell port, running commands, execution
-state, cancel and recovery hooks; the workspace itself is only a label it seeds). Its tools are
-static tool-table entries reaching `context.runtime.environment`.
+state, cancel and recovery hooks; the workspace itself is only a label it seeds). The name is
+`environment` in every lane (X-04: the part, `runtime.environment`, the service key
+`SessionServices.environment`, `PartName`); `workspace` is only the label of the `Git` writer. Its
+tools are static tool-table entries reaching `context.runtime.environment`.
 
 **D-M6-12. Factory wiring by settings and static tables, no per-session factory state.** The
 operator attaches the installed admin to the factory as a setting (`HarnessRoot.configure({
@@ -208,23 +251,73 @@ environments })`, provisioning step `60-environments.js`), so an existing factor
 reinstall and a state without environments simply has none. The preset template providers ask the
 setting; the services builder calls `provide`; a binder sends `bindSession` after `make`; a releaser
 releases on rollback; a delete hook releases by `Session`. Each is an entry in an existing static
-table (step 3 2.2: factory tables stay static).
+table (step 3 2.2: factory tables stay static), except the delete hook, which the factory kit hands
+to `makeDeletions` with M9's (D-M6-16).
 
 **D-M6-13. The manager is thin and changes in one batch per group.** `EV/durable.js` keeps
-identities, the settings, the pending-work list and the forward-and-reattach helper; policy (path
-rules, allowlist checks, cuts) is in the adapter (T6). M7 and M10 add their manager methods in the
-next group's single batched change of this manager (rule 5).
+identities, the settings, the pending-work list and the withdrawn set; policy (path rules,
+allowlist checks, cuts) is in the adapter (T6). M7 and M10 add their manager methods in the next
+group's single batched change of this manager (rule 5). The forward-and-reattach helper (the agent
+host's `withOps`, about 40 lines) is not copied (X-16, review rule 3): W6.1 writes it once as a new
+concept-named module, `resources/native-attach.js` (`makeAttachedOps({ reconcile, isRetired })
+-> { withOps(fn, { write }), attach(ops), current() }`), which `EV/durable.js` imports and the agent
+host adopts at its step-4 reinstall (its manager part is installed code; section 14).
 
 **D-M6-14. No host path reaches any vat.** `inspect` answers allowlist, timeout and cap only
 (A.3); errors from git or the runtime are rewritten by the adapter to texts without the state path
 (acceptance 17 greps every vat's heap, journal and snapshot for the state directory path).
 
+**D-M6-15. Shared seams are WX.1's, not a lane unit's (X-02, X-03, X-04).** Every entry M6 adds
+to a shared guard module (section 15: `guards/session.js`, `guards/factory.js`,
+`guest/lib/interfaces.js`, the vocabulary exclusion) and the part-API additions (`PartHooks.admit`
+and its fan-out in `combineHooks`) are applied by the cross-lane seam unit WX.1 in one commit for
+the four lanes, which also rebases `guards-split.test.js` and the vocabulary pin once. The W6.0
+draft's own "first, alone" unit W6.0b is withdrawn: it is "done by WX.1". The order WX.1 records,
+and M6 relies on: parts `powers, inspector, grants, exec, packages, environment, compaction,
+inbox, subagents`; static tool entries after the package entries `runCommand, inspectShell`, then
+`viewImage`, mail, requests, subagents. M6's own edits in shared files are then single lines
+(section 6).
+
+**D-M6-16. Delete hooks are handed to `makeDeletions` by the factory kit, unchanged signature
+(X-05).** The built `makeDeletions({ admin, rows, starts, hooks = onDelete })` calls each hook with
+`{ row, session }`. The factory passes `hooks: harden([subagents.deleteChildren, ({ session }) =>
+releaseEnvironment({ session, settings: harnessSettings })])` (children first, so a child's
+environment is released by its own delete; settings by closure, an object, not a context field).
+The W6.0 draft's F-4 (a `settings` parameter and a `{ row, session, settings }` context) is
+withdrawn. Rejected: the static `onDelete` table (it cannot close over the factory's settings).
+
+**D-M6-17. One per-part call table (X-08).** The part's in-flight shell calls use the bounded
+call table WX.1 exports from `tools/exec.js` or a module beside it (settle all calls of a turn
+with a text, quietly or not; ignore late answers), not a third copy of exec's `abandon`. The part
+keeps only its port and execution state of its own.
+
+**D-M6-18. M6's session program share is a cap the PM sets after the owner's ruling (X-01).** On
+the step-3 tree 27,517 bytes are left for four lanes. M6's estimate, from the stripped sizes of the
+nearest peers (J-1410): the part about 4.5 K (exec's part and calls 5.8 K, less the shared call
+table), the two tool entries about 1.2 K (as `tools/mentions.js` entries), the texts, shapes and
+the two tool descriptions in `guards/session.js` about 2.5 K, the export and queue lines 0.3 K:
+about 8.5 K, so M6 asks for at most 9,000 bytes. W6.4 starts only after the PM has set the per-lane
+caps; its bundle check uses M6's cap, the group fold measures the sum (WX.F).
+
+**D-M6-19. Exec-path git answers are hardened twice: a known cost (X-16).** A `Git`/`Shell` answer
+through the manager (up to 16 KB) is decoded and hardened in the manager vat and again in the exec
+vat (about 165 ms each at 10 us/B, J-0193). Accepted for M6: the exec path is not the turn path,
+and the manager checks every answer's shape before it passes it on (D-M6-5). A probe of answer
+forwarding (the manager returning the adapter's answer promise without awaiting it) is optional
+work for W6.1, measured in `environments.gitStatus`; it is adopted only if it keeps the shape check.
+
+**D-M6-20. Mail and turn sources wait while a session is stopped.** `admit()` refuses the
+user-facing starts (`enqueueOnce`, `enqueueMessageOnce`, `startTurn`, `QueueEntry.sendNow`) and
+`claimNext` claims nothing while it refuses (seam R-2), so a turn source (M9's inbox `nextTurn`)
+never starts a turn. A delivery to a stopped session is not refused: the inbox keeps it under its
+own bound and it starts after resume and release. WX.F proves it (X-12).
+
 ---
 
 ## 3. Objects and interfaces
 
-Guards: `EV/interfaces.js` `environmentInterfaces`, shapes `environmentShapes`, bounds
-`environmentLimits`, texts `environmentTexts`/`environmentTextOf`. Session and factory entries:
+Guards: `EVG` (`guest/lib/guards/environments.js`) `environmentInterfaces`, shapes
+`environmentShapes`, bounds `environmentLimits`, texts `environmentTexts`/`environmentTextOf`. Session and factory entries:
 section 15. "Heaviest crank" is the crank in the named vat with the most work per call.
 
 ### 3.1 Map
@@ -262,13 +355,14 @@ The D-7 attach pattern of the agent host, with the work a new incarnation owes:
 
 | method | caller | crank | mode | largest | notes |
 |---|---|---|---|---|---|
-| `EnvironmentsSink.attach(ops, incarnation) -> PendingWork` | adapter `bind` | manager: keep ops, answer pending stops and releases | answered | <= 2 x 1,024 keys, < 12 KB | the adapter then performs them and reports `stopped(keys)` / `released(keys)` (sendOnly) |
+| `EnvironmentsSink.attach(ops, incarnation) -> PendingWork` | adapter `bind` | manager: keep ops, answer pending stops, releases and the withdrawn keys | answered | <= 3 x 1,024 keys, < 18 KB | the adapter then performs them and reports `stopped(keys)` / `released(keys)` (sendOnly); withdrawn keys are refused from the first call |
 | `stopped(keys)`, `released(keys)` | adapter | manager: clear pending, drop released records | sendOnly | <= 1,024 keys | - |
 | `EnvironmentsOps.git(key, { op, args })` | manager (from `Git`/`GitReader`) | adapter: one serial git operation per workspace | answered | answer <= `answerBytes` 16,384 | manager: reads reattach and retry once; writes reject `outcomeUnknown` |
 | `runCommand(key, command, args, options) -> CommandResult` | manager (from `Shell`) | adapter | answered | 16 KB | write semantics: no retry |
 | `inspect(key) -> ShellInfo`, `status()` | manager | adapter | answered | < 2 KB | read: retry once |
 | `port(key) -> ShellPort` | manager (from `EnvironmentControl.port`) | adapter: one `ShellPort` per key per incarnation (same presence on a repeat) | answered | 1 handle | retry once |
-| `stop(key)`, `release(key)` | manager | adapter | answered | tiny | idempotent: on a break the manager keeps it pending and answers its caller after one reattach-and-retry, or rejects |
+| `openImage(key, path) -> ImageSource` | manager (from `Git.openImage`/`GitReader.openImage`) | adapter: path rules, `lstat` (a regular file inside the worktree, no symlink followed), mint an `ImageSource` exo over `(key, path)` | answered | 64 x 255 units in; 1 handle out | read: retry once |
+| `stop(key, { withdraw? })`, `resume(key)`, `release(key)` | manager | adapter; `withdraw` marks the key refused for `ShellPort` and `ImageSource` calls, `resume` clears it | answered | tiny | idempotent: on a break the manager keeps it pending and answers its caller after one reattach-and-retry, or rejects |
 
 ### 3.4 `Git` and `GitReader` (manager vat; label `workspace` in the session)
 
@@ -278,7 +372,8 @@ R3-248), `stashList()`, `read(SourceReadRequest)` (M5's `SourceReader`: Fae's `r
 rules, worktree only), `help(method?)`; writes `add(paths)`, `restore(paths, { staged? })`,
 `commit(message)`, `createBranch(name, { startPoint?, switchAfterCreate? })`, `switchBranch(name)`,
 `renameBranch(from, to)`, `deleteBranch(name, { force? })`, `merge(name, { mode: 'ff-only' |
-'merge-commit', message? })`, `stashPush(message?)`, `stashPop()`, `readOnly() -> GitReader`.
+'merge-commit', message? })`, `stashPush(message?)`, `stashPop()`, `readOnly() -> GitReader`;
+and the read `openImage(path) -> ImageSource` (seam X-1, M8 `viewImage`, below).
 `GitReader` has the read methods only; a write method does not exist on it (the guard refuses the
 name), and the adapter also refuses writes for a reader's calls (`gitReadOnly`). No facet has any of
 `gitAbsentMethodNames`.
@@ -290,6 +385,25 @@ name), and the adapter also refuses writes for a reader's calls (`gitReadOnly`).
 Every answer is a closed record of `environmentShapes` with `truncated` and, for `log`, `next`. A
 git failure becomes a rejection with git's first line of stderr, bounded to `reasonUnits` and with
 the state directory replaced by `/workspace`.
+
+**`openImage(path)` (X-1, R3-30).** Caller: M8's image tool in the agent-host adapter (the
+descent of `viewImage` on the `workspace` label), or exec code. Manager crank: refuse when stopped
+or released; forward `E(ops).openImage(key, path)`; the answer crank passes one handle on (2
+manager deliveries, handles only: no image byte enters the manager vat). Mode: answered. Largest:
+the path (64 segments of 255 units) in, one handle out. Retired break: as any read (retry once).
+The answer is an **adapter-side** `ImageSource` (`EVI/image-source.js`, built with M8's
+`image-guards.js` `ImageSource` guard): `size()` and `readBase64({ offset, maxBytes })` read the
+file at each call (open with no-follow, `fstat`, the path rules re-checked, read at most
+`maxBytes`), so a file changed between reads is read as it is, and a symlink swapped in is refused
+(`gitPathRefused`). The source holds no descriptor and no table entry (its closure keeps the key and
+the segments); it is refused after the key is withdrawn or released and is a tombstone after the
+adapter restarts. Pages go adapter to adapter (M8 asks up to `readPageBytes` 196,608 bytes, about
+262,144 characters per page). An exec-vat caller asking a page above the vat's frame ceiling is
+expected to get the hub's frame refusal as a rejection, as a call frame does (J-10127); W6.7's probe
+(section 11) confirms it for an answer frame. If an answer frame instead halts or hangs the exec
+vat, the fallback is that every `ImageSource` page is clamped to `blobPageBytes` (M8's tool then
+reads a 2 MiB image in about 103 pages, about 2.3 s at 20-25 ms per adapter hop, J-9043), recorded
+as a contract change. Exec code reads images in pages of at most `blobPageBytes`.
 
 ### 3.5 `Shell` (manager vat; label `shell`)
 
@@ -318,45 +432,53 @@ Refusals answer `{ status: 'failed', text }` (the session renders `Error: ...`).
 | `describe() -> EnvironmentInfo` | session (inspect, UI state), tests | manager | answered | < 200 B | guest: environment lost | - |
 | `port() -> ShellPort` | session part, first command per incarnation | manager -> ops `port(key)` | answered | 1 handle | the command has not run: the part answers `environmentTextOf.runtimeFailed` for it and opens again at the next call | refused while stopped/released |
 | `stop()` | session part `onCancel` | manager -> ops `stop(key)`; pending on failure | sendOnly from the session | tiny | - | kills running commands, stops the container; keeps workspace and home (R4-7) |
-| `emergencyStop()` | `Session.emergencyStop` | manager: `stopped = true` first (withdraw), then ops `stop(key)` | answered | tiny | the session stays `stopping`, the caller sees `stopIncomplete` | idempotent |
-| `resume()` | `Session.resume` | manager: `stopped = false` | answered | tiny | guest: environment lost | does not start anything |
+| `emergencyStop()` | `Session.emergencyStop`; an import of a stopped session (4.5) | manager: `stopped = true` first (withdraw in the manager), then ops `stop(key, { withdraw: true })` (withdraw in the adapter) | answered | tiny | the session stays `stopping`, the caller sees `stopIncomplete` | idempotent |
+| `resume()` | `Session.resume` | manager: `stopped = false`, then ops `resume(key)` | answered | tiny | guest: environment lost | does not start anything |
 
 ### 3.8 Session vat (`environment` part, tools, `Session` methods)
 
-Part `environment` (`guest/session/environment.js`, step 3 2.1 signature; **provisional until the
-step-3 SESSION unit merges**):
+Part `environment` (`guest/session/environment.js`), the `RuntimePart` signature of the built
+`runtime-parts.js` (step 3 2.1, as built): `{ name: 'environment', make(runtime) ->
+PartValue }`, `make` synchronous, sending and awaiting nothing; services read from
+`runtime.services`; other parts reached through `runtime` getters at run time only.
 
 ```js
-// RuntimePart { name: 'environment', make(runtime) -> EnvironmentPart }
+// environmentPart = harden({ name: 'environment', make: runtime => EnvironmentPart })
 EnvironmentPart = {
   hooks: {
-    onCancel(turn),   // stop the environment (sendOnly) and settle this turn's shell calls
-    onRecover(turn),  // settle this turn's shell calls quietly; drop the port
-    admit(),          // NEW hook (seam R-2): a refusal text while stopping or stopped, else undefined
+    onCancel(turn),   // HookTurn; send E.sendOnly(control).stop(); settle the turn's shell calls (commandStopped)
+    onRecover(turn),  // settle the turn's shell calls quietly (recovery wrote the unknown results); drop the port
+    admit(),          // PartHooks.admit (added by WX.1): texts.sessionStopped while stopping or stopped, else undefined
   },
   runCommand(request, ports, context) -> Promise<ToolOutcome>,  // the tool entries call these
   inspectShell(request, ports, context) -> Promise<ToolOutcome>,
   executionState() -> ExecutionState,            // { state, supported }
   beginStop() -> Promise<ExecutionState>,        // crank E1's part (4.5)
   resume() -> Promise<ExecutionState>,
+  exportExecution() -> ExecutionState | undefined,  // seam X-E: undefined when running or unsupported
+  importExecution(state) -> void,                    // seam X-E: crank of the head chunk (4.5)
 }
 ```
 
 State in the part's closure: `execution` (`'running' | 'stopping' | 'stopped'`), `port` (a
-`ShellPort`, a promise for one, or `undefined`), `calls: Map<opId, ShellCall>` (at most
-`callWindow` 16 in flight; deleted when settled). No module-level state. Without
-`services.environment` the part answers `supported: false`, its tools are unavailable and
-`beginStop` throws `texts.noEnvironmentToStop`.
+`ShellPort`, a promise for one, or `undefined`) and the part's call table (WX.1's shared table,
+D-M6-17; at most `callWindow` 16 in flight, entries deleted when settled). No module-level state.
+Without `services.environment` the part answers `supported: false`, its tools are unavailable,
+`admit()` answers `undefined` and `beginStop` throws `texts.noEnvironmentToStop`. The part is in
+`requiredParts` (the built `makeRuntime` refuses a table without a required part); a test that
+passes its own `parts` adds `environmentPart` like the others.
 
-Tools (`guest/session/tools/shell.js`, appended to `toolTable`): `runCommand` and `inspectShell`,
-`site: 'guest'` (D-M6-5), `available(ports, services)`: `services.shell !== undefined &&
-ports?.writers !== undefined`; `execute` calls `context.runtime.environment.runCommand(...)`; the
-descriptions are Fae's (`textOf`/`shellToolDescriptions`, section 15).
+Tools (`guest/session/tools/shell.js`, `shellToolEntries`, appended to `toolTable` right after
+`packageToolEntries`, X-04): `runCommand` and `inspectShell`, `site: 'guest'` (every entry names
+its site since HR-SYN-23; D-M6-5), `available(ports, services)`: `services.shell !== undefined &&
+ports?.writers !== undefined`; `execute(request, ports, context)` calls
+`context.runtime.environment.runCommand(request, ports, context)`; the descriptions are Fae's
+(`shellToolDescriptions`, section 15).
 
-`Session` gains (seam S-1): `emergencyStop() -> ExecutionState` (callWhen), `resume() ->
-ExecutionState` (callWhen), `getExecutionState() -> ExecutionState` (call). Callers: the browser
-(Settings, through the gateway's pass-through), tests. The session publishes `{ type: 'execution',
-state, supported }` in the crank that changes the state (seam S-3).
+`Session` gains (seam S-1, applied by WX.1): `emergencyStop() -> ExecutionState` (callWhen),
+`resume() -> ExecutionState` (callWhen), `getExecutionState() -> ExecutionState` (call). Callers:
+the browser (Settings, through the gateway's pass-through), tests. The session publishes `{ type:
+'execution', state, supported }` in the crank that changes the state (seam S-3).
 
 Label seeds (static table, seam L-1): `{ label: 'workspace', from: services => services.workspace
 }`, `{ label: 'shell', from: services => services.shell }`.
@@ -374,8 +496,10 @@ Label seeds (static table, seam L-1): `{ label: 'workspace', from: services => s
 - `environmentBinder({ services, session, settings })`: `E.sendOnly(admin).bindSession(
   services.environment, session)`.
 - `environmentReleaser({ services, settings })`: `E.sendOnly(admin).release(services.environment)`.
-- `releaseEnvironment({ session, settings })` (an `onDelete` hook; seam F-4 passes `settings`):
-  `await E(settings.environments()).releaseSession(session)`; nothing when no admin is attached.
+- `releaseEnvironment({ session, settings })`: `await
+  E(settings.environments()).releaseSession(session)`; nothing when no admin is attached. The
+  factory kit hands it to `makeDeletions` as `({ session }) => releaseEnvironment({ session,
+  settings: harnessSettings })`, after M9's `subagents.deleteChildren` (D-M6-16, seam F-4).
 - `environmentPromptSections`: part 6 entries (seam P-1), Fae's workspace section
   (`fae/session/system-prompt.js:295-360`) adapted: no `worktree()`, `/workspace` named when the
   session has a shell.
@@ -394,14 +518,18 @@ The factory imports no environments guard: it holds the admin as a remotable and
   `recordOf: WeakMap<exo, EnvironmentRecord>` for every exo minted (amplification), `bySession:
   WeakMap<Session, EnvironmentRecord>` after `bindSession`. `EnvironmentRecord = { key, workspace,
   shell, stopped, released, git, reader?, shellExo?, control }`.
-- `withOps(fn, { write })`: as the agent host's (reconcile when no ops; on a retired break,
-  reconcile once and call again only when `write` is false; a write rejects with `outcomeUnknown`).
-  Every forwarded answer is checked against the op's shape (`mustMatch`) before it is passed on.
+- `withOps(fn, { write })` from `resources/native-attach.js` (D-M6-13, X-16): reconcile when no
+  ops; on a retired break, reconcile once and call again only when `write` is false; a write
+  rejects with `outcomeUnknown`. Every forwarded answer is checked against the op's shape
+  (`mustMatch`) before it is passed on.
+- `withdrawn`: the keys of records with `stopped` set (bounded by `maxEnvironments`), answered in
+  `PendingWork.withdrawn`.
 - `pending: { stops: Set<key>, releases: Set<key> }` (bounded by `maxPendingWork`); `attach`
   answers them; `stopped`/`released` clear them.
 - No clock, no timers: idle stop is the adapter's timer.
-- Its bundle imports `EV/interfaces.js`, `guest/lib/guards/base.js`, `guards/session.js` (the
-  `SourceReader` shapes), `guest/lib/limits.js`, `guest/lib/retired.js` only.
+- Its bundle imports `EVG`, `guest/lib/guards/base.js`, `guards/session.js` (the `SourceReader`
+  shapes), `guards/images.js` (M8's path bounds, X-1), `guest/lib/limits.js`,
+  `guest/lib/retired.js` and `resources/native-attach.js` only.
 
 ### 3.11 What the integration helper does (`test/integration/_environments.js`, W6.7)
 
@@ -409,9 +537,11 @@ The factory imports no environments guard: it holds the admin as a remotable and
 `startEnvironmentSession(state, preset)`, `runCommandTurn(session, argv, options)` (a scripted
 round whose tool call is `runCommand`), `execCall(session, code)`, `environmentProcesses(state)`
 (fake groups under `<state>/environments/sessions/*/run/` that are alive),
-`killEnvironmentsAdapter(state)` (CC-092's workaround: the process under the supervisor whose
-argv names the environments ephemeral bundle digest, SIGKILL), and `stateHasPath(state)` (the
-D-M6-14 grep).
+`killEnvironmentsAdapter(state)` (SIGKILL of the process `adapterProcess(state, installation)`
+finds; that finder is CC-092's workaround: the process under the supervisor whose argv names the
+installation's ephemeral bundle digest, exported from `test/integration/_adapter-processes.js`
+(new, W6.7) so M11's K11-1 engine check imports it instead of writing a second one, X-15), and
+`stateHasPath(state)` (the D-M6-14 grep).
 
 ---
 
@@ -454,7 +584,7 @@ answer crank -> exec vat crank. 2 manager deliveries per call.
 
 `Turn.cancel()` crank: `onCancel` hooks in part order; the environment part sends
 `E.sendOnly(control).stop()` and settles every shell call of the turn with
-`texts.commandStopped` (failed); late answers are ignored (`stillOurs`). Manager: forward stop
+`texts.commandStopped` (failed) through its call table, which ignores late answers (D-M6-17). Manager: forward stop
 (kill every command's process group, stop the container). The exec part's hook abandons the exec
 call as today. The turn settles `cancelled` in the same crank once nothing waits.
 
@@ -463,19 +593,33 @@ call as today. The turn settles `cancelled` in the same crank once nothing waits
 - **E1** (`Session.emergencyStop`): no environment -> throw `noEnvironmentToStop`; `stopped` ->
   answer the state. Else: part `execution = 'stopping'`; queue hold `stopped` (M2 5.2, its text);
   cancel the current turn (4.4); publish `execution` and `pending`; `E(control).emergencyStop()`.
-- Manager: `stopped = true` (every `Git`, `Shell`, `ShellPort` call refused from now:
-  `environmentTexts.stopped`); `E(ops).stop(key)`; on failure keep the stop pending and reject.
+- Manager: `stopped = true` (every `Git`, `GitReader`, `Shell` and `port` call refused from now:
+  `environmentTexts.stopped`); `E(ops).stop(key, { withdraw: true })` (the adapter refuses the
+  key's `ShellPort` and `ImageSource` calls from now, and kills and stops); on failure keep the stop
+  pending (and the key in `withdrawn`) and reject.
 - **E2** (answer): ok -> `execution = 'stopped'`, publish, answer `{ state: 'stopped', supported:
   true }`. Failure -> stays `stopping`, publish, throw `stopIncomplete` (the user retries; a retry
   is idempotent).
 - While `stopping` or `stopped`: `admit()` answers `texts.sessionStopped`; `enqueueOnce`,
-  `enqueueMessageOnce` and `startTurn` refuse with it before writing anything; the claim never
-  starts a turn. The Composer counts the text among `SUBMIT_REFUSALS` (seam C-1).
+  `enqueueMessageOnce`, `startTurn` (seam R-3) and `QueueEntry.sendNow` (seam R-4, before it
+  releases the hold) refuse with it before writing anything; `claimNext` claims nothing (seam R-2),
+  so no turn source starts a turn either (D-M6-20). The Composer counts the text among
+  `SUBMIT_REFUSALS` (seam C-1).
 - **Resume**: `stopping` -> throw `finishStopFirst`; `running` -> answer. Else
-  `E(control).resume()` (answered), then `execution = 'running'`, publish. The hold `stopped`
-  stays until a new message or send-now (R4-56, R6-50); nothing is replayed.
+  `E(control).resume()` (answered; the manager clears `stopped` and sends `E(ops).resume(key)`),
+  then `execution = 'running'`, publish. The hold `stopped` stays until a new message or send-now
+  (R4-56, R6-50); nothing is replayed.
 - A restart changes nothing: both states are heap state; containers are stopped by the adapter's
-  sweep anyway.
+  sweep anyway; a new adapter incarnation learns the withdrawn keys from `attach`.
+- **Export and import (X-07, seam X-E).** `exportState`'s head page carries `execution:
+  ExecutionState` when the part is not `running` (a `stopping` session exports `stopped`: nothing
+  of the old environment comes along). The import's head-chunk crank calls
+  `runtime.environment.importExecution(state)`: `execution = 'stopped'`, the queue hold `stopped`
+  set whatever the queue holds (unlike the `restart` default, which applies only to a non-empty
+  queue), and `E.sendOnly(control).emergencyStop()` to the imported session's own new environment,
+  so its authority is withdrawn as well. An import into a state without environments keeps
+  `execution` and refuses with `noEnvironmentToStop` at the next stop; `resume` then answers
+  `running` with `supported: false`.
 
 ### 4.6 Delete (R4-9, G-29)
 
@@ -537,6 +681,8 @@ imported, not copied (rule 3; moved to a shared module at the fold, section 14).
 | `EVI/command-args.js` | `parseCommandArgs(jsonText, allowed) -> { ok, command, args, timeoutMs? } \| { ok: false, text }` |
 | `EVI/command-output.js` | `boundCommandResult(raw, { maxUnits }) -> string` (5.5), `boundCommandRecord(raw, { streamUnits }) -> CommandResult` |
 | `EVI/blob-access.js` | `stageText(text, writers) -> StagedText`, `readStaged(staged, content, maxBytes) -> string` |
+| `EVI/image-source.js` | `makeImageSource({ key, segments, dirsOf, isWithdrawn }) -> ImageSource` (M8's guard, X-1) |
+| `resources/native-attach.js` | `makeAttachedOps({ reconcile, isRetired }) -> { withOps(fn, { write }), attach(ops), current() }` (D-M6-13; manager-vat module, prelude globals only) |
 
 ### 5.3 Runtime contract
 
@@ -602,35 +748,44 @@ exo-shell rejects; the partial output is dropped (as exo-shell does).
 
 Each is the smallest edit; the unit named makes it. "Partners" are the other lanes of the group
 that touch the same file. Union merge does not apply to source files: the PM merges these by hand.
+Line references are to the step-3 code at `cecfa12809`.
 
-### 6.1 Shared guard and limit modules (W6.0b, first, alone)
+### 6.1 Shared guard modules and the part API (done by WX.1, X-02, X-03)
 
-| id | file | exact seam | partners |
+M6 makes none of these edits; WX.1 applies them for all four lanes in one commit, from section 15.
+They are listed so the M6 builders know what exists when they start.
+
+| id | file | what WX.1 adds for M6 | partners in the same WX.1 commit |
 |---|---|---|---|
-| S-1 | `guest/lib/guards/session.js` | the `Session` interface's latest version gains three methods; `shapes.ExecutionState`; `shapes.SessionServices` optional `workspace: M.remotable('Git')`, `shell: M.remotable('Shell')`, `environment: M.remotable('EnvironmentControl')`; texts and tool descriptions of section 15.1 | M8 (`viewImage` description), M9 (mail tools, `Session` methods?) |
-| S-2 | `guest/lib/guards/factory.js` | `shapes.HarnessSettings` optional `environments: M.remotable('EnvironmentsAdmin')` | M9 (factory settings for subagent limits, if any) |
-| S-3 | `guest/lib/interfaces.js` | `shapes.VatEvent` gains `record({ type: 'execution', state: M.or('running', 'stopping', 'stopped'), supported: M.boolean() })` | M8 (a compaction event?), M11 (none) |
-| S-4 | `test/fixtures/guard-snapshot-*.json`, `test/unit/guards-split.test.js` fold map | the new entries' digests (the snapshot test pins every guard) | every lane that adds a guard |
+| S-1 | `guest/lib/guards/session.js` | the `Session` latest version's three methods; `shapes.ExecutionState`; `shapes.SessionServices` optional `workspace`, `shell`, `environment`; `SessionExportPage` optional `execution` (X-E); the texts and tool descriptions of 15.1 | M8 G-1, M9 S9 |
+| S-2 | `guest/lib/guards/factory.js` | `shapes.HarnessSettings` optional `environments`; `texts.runnerRequired` | M9 F6, M11 H1 |
+| S-3 | `guest/lib/interfaces.js` | `VatEvent` alternative `execution` | M8 G-2 |
+| S-4 | `test/unit/guards-split.test.js`, `test/fixtures/guard-fold-map.json`, `gateway-vocabulary-tables.test.js` | the `added` list (or retirement of the before-split check) and one re-pin of the vocabulary; the not-browser-sendable exclusion rule (D-M6-10) | every lane |
+| S-5 | `guest/session/runtime-parts.js` (typedefs and `combineHooks` only) | `PartHooks.admit?: () => string \| undefined`; `RuntimeHooks.admit()` answering the first refusal in part table order | M8 (`HookTurn.reading`, `Runtime.contextWindow`), M9 (`take` into `nextTurn`, the restart-hold condition) |
+| S-6 | `guest/session/tools/exec.js` (or a module beside it) | the exported per-part call table (D-M6-17) | M9 W9.3 uses it |
+| V-1 | `guest/lib/vocabulary-tables.js` | `vocabularyExclusions['guards/environments.js']` with its reason (D-M6-10) | M8 (`image-guards.js` exclusion) |
 
 ### 6.2 Session vat (W6.4)
 
 | id | file | exact seam | partners |
 |---|---|---|---|
-| R-1 | `guest/session/runtime-parts.js` | `PartName` gains `'environment'`; one getter `get environment()`; the part appended to `runtimeParts` after `packages` (step 3 table order: `powers, inspector, grants, exec, packages, environment`) | M8 `compaction`, M9 `inbox`, `subagents` (one getter and one table line each) |
-| R-2 | `guest/session/runtime-parts.js` + `session.js` + `turn.js` | **provisional until step 3 lands**: `PartHooks` gains `admit?: () => string \| undefined`; the combined `runtime.hooks.admit()` answers the first refusal in part order; `session.js` `enqueue` and `startTurn` throw it before any write; `turn.js` claim does not claim while it answers one | M9 (a mail turn source must respect it: `nextTurn` is asked only when admitted) |
-| R-3 | `guest/session/session.js` | `Session.emergencyStop/resume/getExecutionState` delegate to `runtime.environment` plus the queue hold and the current turn's cancel (4.5), about 15 lines | M9 (`Session` methods for mail) |
-| T-1 | `guest/session/tool-table.js` | `...shellToolEntries` appended to `toolTable` after `packageToolEntries` | M8 `viewImage`, M9 mail and subagent tools |
-| L-1 | `guest/session/label-seeds.js` | two entries (`workspace`, `shell`) | none |
-| B-1 | session program bytes | M6 adds at most 9,000 bytes (`environment.js`, `tools/shell.js`, texts); measured by `bundle-guest.mjs` | M8, M9 share the 240,000 budget: the PM keeps the sum (O-12) |
+| R-1 | `guest/session/runtime-parts.js` | `import { environmentPart } from './environment.js';`; `PartName` gains `\| 'environment'`; `'environment'` appended to `requiredParts` after `'packages'`; `environmentPart` appended to `runtimeParts` after `packagesPart`; one getter `get environment() { return made.get('environment'); }`; `Runtime` typedef `@property {any} environment` | M8 `compaction`, M9 `inbox`, `subagents` (the same five lines each, in the WX.1 order) |
+| R-2 | `guest/session/turn.js` `claimNext` | one line after `if (current !== undefined \|\| fence.closed()) return undefined;`: `if (hooks.admit() !== undefined) return undefined;` (every claim path, enqueue, send-now and settle, reaches it) | M9 S2 (its `claimNext` change follows this line), M8 S-5 (not in `claimNext`) |
+| R-3 | `guest/session/session.js` | (a) `refuseIfStopped()` beside `refuseIfDeleting` (`const refusal = runtime.hooks.admit(); if (refusal !== undefined) throw Error(refusal);`), called after `refuseIfDeleting()` in `enqueueOnce`, `enqueueMessageOnce` and `startTurn`; (b) `Session.emergencyStop`, `resume`, `getExecutionState`: delegate to `runtime.environment` plus `queue.hold('stopped', ...)` and `runner.cancelCurrent()` (4.5), about 15 lines; (c) `makeQueue({ ..., admit: () => runtime.hooks.admit() })` (R-4); (d) `makeSessionExport({ ..., execution: runtime.environment })` (X-E) | M9 (`Session` mail methods; its `makeQueue` option if any) |
+| R-4 | `guest/session/queue.js` | `makeQueue` option `admit = () => undefined`; `sendNow()` first line `const refusal = admit(); if (refusal !== undefined) throw Error(refusal);` (before `submissions.sendNow`) | none known |
+| X-E | `guest/session/export.js` | `head()`: `const execution = powers.execution?.exportExecution(); if (execution !== undefined) page.execution = execution;`; the `head` import branch: `if (chunk.execution !== undefined) powers.execution?.importExecution(chunk.execution);` | M9 (its inbox export section, X-07) |
+| T-1 | `guest/session/tool-table.js` | `import { shellToolEntries } from './tools/shell.js';` and `...shellToolEntries` after `...packageToolEntries` in `toolTable` | M8 `viewImage`, M9 mail, requests and subagent tools (after it, X-04) |
+| L-1 | `guest/session/label-seeds.js` | two entries (`workspace`, `shell`) | M9 (`user`) |
+| B-1 | session program bytes | M6 adds at most its cap (D-M6-18: asks 9,000 bytes); measured by `bundle-guest.mjs` in W6.4 | M8, M9 (the PM's caps sum to the ruled limit, X-01) |
 
 ### 6.3 Factory vat (W6.5)
 
 | id | file | exact seam | partners |
 |---|---|---|---|
 | F-1 | `guest/factory/preset-templates.js` | `objectProviders = harden([...environmentProviders])`; `ObjectProvider.build` removed from the typedef (never called; fold) | M7 next group (`publicInternetProviders`) |
-| F-2 | `guest/factory/services.js` | `environmentServices` appended to `serviceBuilders`; two new append-only tables `serviceBinders` (`[environmentBinder]`) and `serviceReleasers` (`[environmentReleaser]`), each `({ services, session?, settings }) -> void`, sendOnly only | M9 (subagent services) |
-| F-3 | `guest/factory/factory.js` | (a) `makePresetCatalog({ templates: defaultTemplates, defaultsContext: harden({ settings: harnessSettings }) })`; (b) `settings: harnessSettings` in the `buildSessionServices` context; (c) after `mustMatch(made, shapes.MadeSession)`: `for (const bind of serviceBinders) bind({ services, session: made.session, settings: harnessSettings })`; (d) in `rollBack`: `for (const release of serviceReleasers) release({ services: creation.services, settings: harnessSettings })` when `creation.services` is set | M9 (subagent creation path) |
-| F-4 | `guest/factory/delete.js` (+ one line in `factory.js`) | `onDelete = harden([releaseEnvironment])`; `makeDeletions({ admin, rows, settings })` and each hook called with `{ row, session, settings }` (`factory.js` passes `settings: harnessSettings`) | M9 (depth-first subagent delete uses the same context) |
+| F-2 | `guest/factory/services.js` | `environmentServices` appended to `serviceBuilders`; two new append-only tables `serviceBinders` (`[environmentBinder]`) and `serviceReleasers` (`[environmentReleaser]`), each `({ services, session?, settings }) -> void`, sendOnly only; `ServicesContext` typedef gains `settings` | M9 (subagent services, its context fields) |
+| F-3 | `guest/factory/factory.js` | (a) `makePresetCatalog({ templates: defaultTemplates, defaultsContext: harden({ settings: harnessSettings }) })` (line 132); (b) `settings: harnessSettings` in the one merged `buildSessionServices` context object (line 284; M9 adds its own fields to the same object, X-05); (c) after `mustMatch(made, shapes.MadeSession)` (line 348): `for (const bind of serviceBinders) bind({ services, session: made.session, settings: harnessSettings })`; (d) in `rollBack` (line 150): `for (const release of serviceReleasers) release({ services: creation.services, settings: harnessSettings })` when `creation.services` is set | M9 (subagent creation path, the same context object) |
+| F-4 | `guest/factory/factory.js` (line 139) | `makeDeletions({ admin, rows, starts, hooks: harden([...M9's subagents.deleteChildren, ({ session }) => releaseEnvironment({ session, settings: harnessSettings })]) })`; `delete.js` unchanged (D-M6-16) | M9 F5 (the first entry; one line both lanes write: the PM merges it) |
 | F-5 | `guest/factory/root.js` | `makeHarnessSettings` keeps `environments` (set, answer `environments()`, include in `current()`) | none |
 | P-1 | `guest/lib/prompt-sections.js` | part 6 entries `...environmentPromptSections` (text in `guest/lib/environment-prompt.js`, new) | M9 part 4, M12 part 5 |
 
@@ -638,27 +793,34 @@ that touch the same file. Union merge does not apply to source files: the PM mer
 
 | id | file | exact seam | partners |
 |---|---|---|---|
-| C-1 | `AH/composer.js` | `SUBMIT_REFUSALS` gains `texts.sessionStopped` (the staged file of a refused submission is deleted) | none |
-| V-1 | none | the environments guard table is not gateway vocabulary (D-M6-10); `vocabulary-tables.js` is untouched | - |
-| P-2 | `scripts/provision-steps/60-environments.js` (new file; registry) | `install-native environments` (skip when present), `configure(options.environments)` (skip when equal), `HarnessRoot.configure({ environments: admin })`; skipped without `options.environments` | M8/M9/M11 take other numbers (`70-`, `80-`, `90-` suggested) |
+| C-1 | `AH/composer.js` (W6.6) | `SUBMIT_REFUSALS` gains `texts.sessionStopped` (the staged file of a refused submission is deleted) | none |
+| P-2 | `scripts/provision-steps/60-environments.js` (new file; registry) | `install-native environments` (skip when present), `configure(options.environments)` (skip when equal), `HarnessRoot.configure({ environments: admin })`; skipped without `options.environments` | M11 takes `70-voice.js` (X-09); M8/M9 other numbers |
 | U-1 | `ui/src/environment/feature.js` (new directory; registry) | slot `session.settings` (M3 4.x) | M11 `ui/src/voice/` |
-| K-1 | `H/package.json` (PM-merged) | dependencies `@endo/git`, `@endo/exo-git` (`workspace:^`) | M11 (speech deps) |
-| K-2 | `scripts/test-integration.mjs` `regressionLists` | the four `environments-*` integration files in the core list | every lane |
+| K-1 | `H/package.json` (W6.2; PM-merged) | dependencies `@endo/git`, `@endo/exo-git` (`workspace:^`) | M11 (speech deps) |
+| K-2 | `scripts/test-integration.mjs` `regressionLists` (W6.7) | a new list `environments` with M6's four integration files (not the `core` list, X-14) | every lane (one list each) |
 | K-3 | `H/perf/_harness.mjs` (PM-merged) | none planned; the perf files use `runWindow` and the template helper as they are | - |
 | M-1 | M7 and M10 (next group) | their manager methods (`setNetworkPolicy`, routes) go into one batched change of `EV/durable.js`; their adapter code under `EVI/egress/` and `EVI/publishing/` (paths move from `resources/containers/egress/` and `resources/workspace/{assets,routes,mime}.js`) | M7, M10 contracts |
 
----
+### 6.5 Merge hotspots (the PM merges these by hand)
+
+`runtime-parts.js` (R-1: five one-line additions per lane, in the WX.1 order), `turn.js`
+`claimNext` (R-2, then M9's lines), `session.js` (R-3, M9's methods), `tool-table.js` (T-1),
+`label-seeds.js` (L-1), `factory.js` (F-3 context object, F-4 hooks list), `services.js` (F-2),
+`prompt-sections.js` (P-1), `package.json` (K-1), `scripts/test-integration.mjs` (K-2). No other
+file of M6 is edited by another lane.
 
 ## 7. What persists where, and what a SIGKILL leaves
 
 | state | lives in | bound | after a supervisor SIGKILL |
 |---|---|---|---|
-| settings, environment records (`e<n>`, flags, session), pending stops and releases | environments manager vat heap | `maxEnvironments` 1,024; `maxPendingWork` 1,024; released records dropped on the adapter's answer | intact up to the last committed crank |
+| settings, environment records (`e<n>`, flags, session), pending stops and releases, the withdrawn set | environments manager vat heap | `maxEnvironments` 1,024; `maxPendingWork` 1,024; released records dropped on the adapter's answer | intact up to the last committed crank |
 | `Git`, `GitReader`, `Shell`, `EnvironmentControl` | manager vat exos; bound as labels and services in session vats | one set per environment | intact; calls work after the adapter re-attaches |
 | `ShellPort` | adapter (per incarnation); held by the session part | one per environment per incarnation | a tombstone; the part drops it at its next use (D-M6-5) |
+| `ImageSource` of `openImage` | adapter (per incarnation); held by M8's image tool for one call | no table: a closure over key and segments, collected when dropped | a tombstone; `viewImage` answers `imageTexts.sourceLost` |
+| withdrawn keys in the adapter | adapter heap, rebuilt from `PendingWork.withdrawn` at each `attach` | `maxEnvironments` | rebuilt at the next bind before any call is served |
 | workspace repository, home | `<state>/environments/sessions/e<n>/` | grows with what the session writes (released on delete) | intact; a stale `.git/index.lock` from a killed git is removed at the next bind's sweep |
 | containers / fake process groups | runtime (podman storage) / host processes | one per running environment | podman containers survive the kill; the next bind's sweep stops and removes them; fake groups are killed by the sweep from `run/` |
-| execution state | session vat heap (`environment` part) | one value | intact |
+| execution state | session vat heap (`environment` part); the export's head page (X-E) | one value | intact; an export carries it, an import re-applies it (4.5) |
 | `environments` setting | factory vat heap | one handle | intact |
 
 | kill point | what the next start finds | what happens |
@@ -671,28 +833,36 @@ that touch the same file. Union merge does not apply to source files: the PM mer
 | K6 between emergency stop E1 and E2 | session `stopping`; manager maybe `stopped` | fenced; the user retries emergency stop (idempotent) and gets `stopped`; resume is refused until then |
 | K7 during release (delete step 1) | the delete record at step 1; maybe `trash/e<n>-*` | the delete resumes; `releaseSession` again (idempotent); trash emptied at bind |
 | K8 the environments adapter alone killed during a command | the session's turn alive | `commandOutcomeUnknown` for that call; the turn continues; the next command reopens the port and the container starts fresh |
+| K9 after the manager set `stopped`, before the adapter's `stop(key, { withdraw })` answered | the key in `pending.stops` and in `withdrawn` | the next bind refuses the key's adapter-side objects from its first call, then performs the stop; the session is `stopping` and the user's retry answers `stopped` |
+| K10 during an import of a stopped session (after the head chunk) | an importing session with `execution = 'stopped'` and the hold set; maybe the `emergencyStop` sendOnly in the hub queue | the import resumes from its progress (M2 7.3); the sendOnly is delivered after the restart (durable guest to guest) |
 
 ---
 
 ## 8. Work units
 
-Units in one lane (one worktree, several agents), disjoint files. W6.0b first and alone; then
-W6.1-W6.6 in parallel; W6.7 last; the fold W6.8 after the merge (rule 2).
+Units in one lane (one worktree, several agents), disjoint files. Prerequisites outside the lane:
+step 3 merged and the PM's cross-lane seam unit WX.1 done (section 6.1: every shared guard entry,
+the part-API typedefs, the call table, the vocabulary exclusion; this replaces the W6.0 draft's
+W6.0b), and the PM's session-program caps set (D-M6-18, before W6.4). Then W6.1-W6.6 in parallel;
+W6.7 last; the fold W6.8 after the merge (rule 2). Journal ranges: each unit's is the range the PM
+assigns at launch ("PM assigns"); J-0817..J-0829 stay with the contract for the PM's notes.
 
-| id | files owned (create or edit) | behaviour | tests | depends on |
-|---|---|---|---|---|
-| W6.0b contract code | edits: `guest/lib/guards/session.js` (S-1), `guest/lib/guards/factory.js` (S-2), `guest/lib/interfaces.js` (S-3), guard snapshot fixtures and fold map (S-4), `guest/session/runtime-parts.js` (R-1's part name and getter; R-2's `admit` member of `PartHooks` and its fan-out in `runtime.hooks`), `AH/composer.js` (C-1), `H/package.json` (K-1, PM-merged) | the shared entries of section 15, nothing else | `guards-split`, gateway vocabulary, guard snapshot, `limits`, composer refusal (unit) | step 3 merged (R-1, R-2) |
-| W6.1 resource core | `EV/durable.js`, `EV/ephemeral.js`, `EVI/index.js`, `EVI/ops.js`, `EVI/layout.js`, `scripts/provision-steps/60-environments.js`, `test/adapter/environments-manager.test.js`, `test/adapter/environments-layout.test.js`, `test/adapter/environments-provision.test.js` | the manager (records, amplification, forward with reattach, read retry and write `outcomeUnknown`, stopped/released refusals, pending work), the loader, the state layout, attach and sweep at bind, provisioning | manager with a fake manager kit built from the real guards (rule 4): mint, bind, release by control and by session, refusals, retries, pending work across a reattach; layout: ensure/release/trash/marker; provisioning idempotence | W6.0b; its `index.js` composition commit after W6.2, W6.3b and W6.3c export their modules |
-| W6.2 git | `EVI/git.js`, `test/adapter/environments-git.test.js`, `test/adapter/environments-git-hostile.test.js` | every `Git` op on `@endo/git`, closed answers cut to `answerBytes`, ref and path checks, read-only refusal, serial per workspace, stale-lock removal, `SourceReader.read` | a ported subset of `exo-git/test/kit-conformance.test.js` (branches, status, diff, log paging, stage, commit, merge both modes, stash), hostile repos (filter driver, include, hooks, fsmonitor), `[real-git]` (always available) | W6.0b |
-| W6.3a OCI runtime | `EVI/runtime-oci.js`, `EVI/images.js`, `test/fixtures/fake-bin/oci-cli.mjs` (a fake `podman`/`docker` that records argv and plays scripted answers), `test/adapter/environments-runtime-oci.test.js` | argv of `start`/`exec`/`stop`/`remove`/`sweep` for both binaries; pin form and presence check; timeout kills by process group | argv golden tests and refusals against the fake CLI everywhere; `[real-runtime]` cases under `THIX_HARNESS_REAL_RUNTIME=podman\|docker` in the same file | W6.0b |
-| W6.3b fake runtime and runner | `EVI/runtime-fake.js`, `EVI/runner.js`, `test/adapter/environments-runner.test.js`, `test/adapter/environments-fake-runtime.test.js` | lazy start, idle stop (`idleStopMs`, adapter timers), stop, release, sweep from `run/` after a simulated SIGKILL, timeout then kill after 2 s, scrubbed env, the allowlist | fake runtime: the result shape, caps, timeouts, kill grace, leftover groups killed at sweep, env has only A.3's variables | W6.0b |
-| W6.3c shell port and output | `EVI/shell-port.js`, `EVI/command-args.js`, `EVI/command-output.js`, `EVI/blob-access.js`, `test/adapter/environments-shell-port.test.js`, `test/adapter/environments-command-output.test.js` | model-JSON parsing with Fae's texts, the 5.5 budget, staging through `BlobWriters`, staged args through `Content`, the exec-path record | output budget property test (random stream sizes and character widths: always valid JSON, at most 32,768 units, markers inside fields); staging with a fake `BlobWriters` built from the real guard | W6.0b |
-| W6.4 session part and tools | `guest/session/environment.js`, `guest/session/tools/shell.js`, edits R-1 (table line), R-2 (`session.js`, `turn.js` admission lines), R-3 (`session.js` methods), T-1 (`tool-table.js`), L-1 (`label-seeds.js`), `test/unit/session-environment.test.js`, `test/unit/session-shell-tool.test.js` | 3.8 and 4.2, 4.4, 4.5 on the session side | crank-order unit tests with a fake control and port built from the real guards: port opened once per incarnation, retired break -> `commandOutcomeUnknown` and reopen, cancel settles and stops, recovery settles quietly, emergency stop states, refusal before any write, resume keeps the hold; the session bundle stays within B-1 | W6.0b, step 3 |
-| W6.5 factory and prompt | `guest/factory/environments.js`, `guest/lib/environment-prompt.js`, edits F-1..F-5, P-1, `test/unit/factory-environments.test.js`, `test/unit/environment-prompt.test.js` | 3.9 and 4.1, 4.6 on the factory side | availability with and without the setting, provide on creation, binder after make, releaser on rollback, delete hook, part 6 text present only with the objects | W6.0b |
-| W6.6 UI | `ui/src/environment/feature.js`, `ui/src/environment/ExecutionPanel.js`, `ui/src/environment/texts.js`, `test/unit/ui-environment.test.js`, `test/browser/environment-ui.test.mjs` | Settings "Sandbox execution": state from `getExecutionState` and the live `execution` event, Emergency stop, Resume, errors shown; hidden when `supported` is false | happy-dom unit; browser (acceptance 19) | W6.0b |
-| W6.7 integration | `test/integration/_environments.js`, `test/integration/environments-shell.test.js`, `environments-restart.test.js`, `environments-stop.test.js`, `environments-presets.test.js`, `perf/environments.perf.mjs`, `perf/environments-restart.perf.mjs`, K-2 (`scripts/test-integration.mjs`), journal entries J-0820..J-0829 | the acceptance list (section 9) and the perf table (section 10) on the combination; the template `environments` | each integration file under 5 minutes; perf files under 10 minutes | all of the above |
+| id | files owned (create or edit) | behaviour | tests | depends on | journal |
+|---|---|---|---|---|---|
+| W6.1 resource core | `EV/durable.js`, `EV/ephemeral.js`, `resources/native-attach.js`, `EVI/index.js`, `EVI/ops.js`, `EVI/layout.js`, `scripts/provision-steps/60-environments.js`, `test/adapter/environments-manager.test.js`, `test/adapter/environments-layout.test.js`, `test/adapter/environments-provision.test.js`, `test/unit/native-attach.test.js` | the manager (records, amplification, forward with reattach through `native-attach.js`, read retry and write `outcomeUnknown`, stopped/released refusals, the withdrawn set, pending work), the loader, the state layout, attach and sweep at bind, provisioning | manager with a fake manager kit built from the real guards (rule 4): mint, bind, release by control and by session, refusals, retries, pending work and withdrawn keys across a reattach; layout: ensure/release/trash/marker; provisioning idempotence; `withOps` read retry and write refusal | WX.1; its `index.js` composition commit after W6.2, W6.3b and W6.3c export their modules | PM assigns |
+| W6.2 git and images | `EVI/git.js`, `EVI/image-source.js`, `H/package.json` (K-1, PM-merged), `test/adapter/environments-git.test.js`, `test/adapter/environments-git-hostile.test.js`, `test/adapter/environments-image-source.test.js` | every `Git` op on `@endo/git`, closed answers cut to `answerBytes`, ref and path checks, read-only refusal, serial per workspace, stale-lock removal, `SourceReader.read`; `openImage` and the adapter-side `ImageSource` (X-1) | a ported subset of `exo-git/test/kit-conformance.test.js` (branches, status, diff, log paging, stage, commit, merge both modes, stash), hostile repos (filter driver, include, hooks, fsmonitor), image source: pages, `size`, a file changed between reads, a symlink swapped in, `.git` and `..` refused, withdrawn key refused, checked against M8's `ImageSource` guard; `[real-git]` (always available) | WX.1 | PM assigns |
+| W6.3a OCI runtime | `EVI/runtime-oci.js`, `EVI/images.js`, `test/fixtures/fake-bin/oci-cli.mjs` (a fake `podman`/`docker` that records argv and plays scripted answers), `test/adapter/environments-runtime-oci.test.js` | argv of `start`/`exec`/`stop`/`remove`/`sweep` for both binaries; pin form and presence check; timeout kills by process group | argv golden tests and refusals against the fake CLI everywhere; `[real-runtime]` cases under `THIX_HARNESS_REAL_RUNTIME=podman\|docker` in the same file | WX.1 | PM assigns |
+| W6.3b fake runtime and runner | `EVI/runtime-fake.js`, `EVI/runner.js`, `test/adapter/environments-runner.test.js`, `test/adapter/environments-fake-runtime.test.js` | lazy start, idle stop (`idleStopMs`, adapter timers), stop, release, sweep from `run/` after a simulated SIGKILL, timeout then kill after 2 s, scrubbed env, the allowlist | fake runtime: the result shape, caps, timeouts, kill grace, leftover groups killed at sweep, env has only A.3's variables | WX.1 | PM assigns |
+| W6.3c shell port and output | `EVI/shell-port.js`, `EVI/command-args.js`, `EVI/command-output.js`, `EVI/blob-access.js`, `test/adapter/environments-shell-port.test.js`, `test/adapter/environments-command-output.test.js` | model-JSON parsing with Fae's texts, the 5.5 budget, staging through `BlobWriters`, staged args through `Content`, the exec-path record, refusal of a withdrawn key | output budget property test (random stream sizes and character widths: always valid JSON, at most 32,768 units, markers inside fields); staging with a fake `BlobWriters` built from the real guard | WX.1 | PM assigns |
+| W6.4 session part and tools | `guest/session/environment.js`, `guest/session/tools/shell.js`, edits R-1 (`runtime-parts.js`), R-2 (`turn.js`), R-3 (`session.js`), R-4 (`queue.js`), X-E (`export.js`), T-1 (`tool-table.js`), L-1 (`label-seeds.js`), `test/unit/session-environment.test.js`, `test/unit/session-shell-tool.test.js`, `test/unit/session-environment-export.test.js` | 3.8 and 4.2, 4.4, 4.5 on the session side, the export and import of the execution state | crank-order unit tests with a fake control and port built from the real guards: port opened once per incarnation, retired break -> `commandOutcomeUnknown` and reopen, cancel settles and stops, recovery settles quietly, emergency stop states, refusal before any write (enqueue, start, send-now), `claimNext` claims nothing while stopped even with a test part's `nextTurn`, resume keeps the hold, export and import of `stopped` re-apply hold and withdrawal; the session bundle within M6's cap (B-1) | WX.1, the PM's caps | PM assigns |
+| W6.5 factory and prompt | `guest/factory/environments.js`, `guest/lib/environment-prompt.js`, edits F-1..F-5, P-1, `test/unit/factory-environments.test.js`, `test/unit/environment-prompt.test.js` | 3.9 and 4.1, 4.6 on the factory side | availability with and without the setting, provide on creation, binder after make, releaser on rollback, the delete hook handed to `makeDeletions` (children first, with a fake M9 hook), part 6 text present only with the objects | WX.1 | PM assigns |
+| W6.6 UI and composer | `ui/src/environment/feature.js`, `ui/src/environment/ExecutionPanel.js`, `ui/src/environment/texts.js`, `AH/composer.js` (C-1), `test/unit/ui-environment.test.js`, `test/browser/environment-ui.test.mjs` | Settings "Sandbox execution": state from `getExecutionState` and the live `execution` event, Emergency stop, Resume, errors shown; hidden when `supported` is false; a refused submission's staged file deleted | happy-dom unit; composer refusal (unit); browser (acceptance 19) | WX.1 | PM assigns |
+| W6.7 integration (last) | `test/integration/_environments.js`, `test/integration/_adapter-processes.js`, `test/integration/environments-shell.test.js`, `environments-restart.test.js`, `environments-stop.test.js`, `environments-presets.test.js`, `perf/environments.perf.mjs`, `perf/environments-git.perf.mjs`, `perf/environments-restart.perf.mjs`, K-2 (`scripts/test-integration.mjs`) | the acceptance list (section 9) and the perf table (section 10) on the combination; the template `environments` | each integration file under 5 minutes; each perf file under its time in section 10 | W6.1-W6.6 | PM assigns |
+| W6.8 fold (after the merge) | the files of section 14 | section 14 | the greps and tests of section 14 | the merge of M6 | PM assigns |
 
----
+Disjointness: no two of W6.1-W6.6 own the same file; the only shared files of the lane are the ones
+W6.4 and W6.5 edit in 6.2 and 6.3, each owned by one of them. `H/package.json` is W6.2's alone
+within the lane.
 
 ## 9. Acceptance (each proved by the named test; `[real-runtime]` repeated in an owner run)
 
@@ -718,11 +888,14 @@ Integration files start from the `environments` template (provisioned with `opti
 5. **Git surface (R3-247, R3-248).** No facet has a method of `gitAbsentMethodNames`; the reader
    has no write method and the adapter refuses a write for a reader (`gitReadOnly`); `trackingStatus`
    reports no upstream. `environments-git.test.js`; exec-path check in `environments-shell.test.js`.
-6. **Emergency stop (R4-8, R6-50).** Stop fences (`enqueueOnce`, `startTurn` refused with
-   `sessionStopped`), holds the queue (`stopped`), cancels the turn, stops the environment (no
-   process of it alive), withdraws authority (`Git`, `Shell` refused with `environmentTexts.stopped`),
-   and all of this holds after a SIGKILL restart; resume answers `running`, the queue stays held, a
-   new message releases it. `environments-stop.test.js`.
+6. **Emergency stop (R4-8, R6-50).** Stop fences (`enqueueOnce`, `startTurn` and a waiting
+   entry's `sendNow` refused with `sessionStopped`), holds the queue (`stopped`), cancels the turn,
+   stops the environment (no process of it alive), withdraws authority (`Git`, `Shell` refused with
+   `environmentTexts.stopped` in the manager; a `ShellPort` and an `ImageSource` held from before
+   refused in the adapter), and all of this holds after a SIGKILL restart; resume answers
+   `running`, the queue stays held, a new message releases it. `environments-stop.test.js`; the
+   crank-level refusals and a test part's `nextTurn` never claimed in
+   `session-environment.test.js`.
 7. **Concurrency (P-18).** A round with one `exec`, one `runCommand` (`sleep 1`) and one `echo`
    (`delayMs` 1,000) completes in under 1.6 x one call and records results in call order.
    `environments-shell.test.js`.
@@ -760,30 +933,54 @@ Integration files start from the `environments` template (provisioned with `opti
     composer blocked with the text; Resume -> running, queue held. `test/browser/environment-ui.test.mjs`.
 20. **Bounded state.** After creating and deleting 20 environment sessions the manager's record
     count and `pendingReleases` are back to before. `environments-stop.test.js` (gate check).
+21. **Workspace images (X-1, R3-30, M8's protocol).** `E(workspace).openImage(['img', 'a.png'])`
+    answers an `ImageSource` whose pages, read through M8's `ImageSource` guard, reassemble the
+    file; `size()` is the file's size; `..`, `.git`, a symlink out of the worktree and a directory
+    are refused with `gitPathRefused`; after emergency stop a source opened before is refused.
+    `environments-image-source.test.js` (adapter) and `environments-shell.test.js` (through the
+    manager, exec code reading pages of 12,288 bytes). The `viewImage` end-to-end case is WX.F's.
+22. **Export and import of a stopped session (X-07).** A session emergency-stopped, exported and
+    imported is `stopped` after the import, its queue held `stopped`, its new environment refuses
+    `Git` and `Shell` calls; resume then works. `session-environment-export.test.js` (crank level)
+    and `environments-stop.test.js` (the M2 export script over the template).
+
+Cross-lane, proved by the group fold WX.F's named integration tests (X-12), not by an M6 file:
+the complete `voice` preset (R3-13, with M11), `viewImage` of a workspace path (R3-30, with M8), a
+subagent of a shell preset with its own workspace and shell (R4-70, with M9), and mail delivered to
+an emergency-stopped session waiting until resume (D-M6-20, with M9).
 
 ---
 
 ## 10. Performance (fixed windows; each file under the 10-minute box)
 
+Rows marked **gate** are counts or N-run checks, not rates: they pass or fail and are recorded, and
+they are not perf rows of the fixed-window kind (X-14). Rows marked **recorded** have no measured
+basis yet: the first run records them and a later unit sets the budget from that number (X-13).
+File times include the template start (about 30 s from a cached template, J-9382 restart times)
+and fixture builds.
+
 | row | file | window | budget | derived from |
 |---|---|---|---|---|
-| `environments.runTrue`: tool_call event to tool_result event minus the runtime's own `ms` (fake, `true`) | `perf/environments.perf.mjs` | 60 s | median <= 150 ms, 1 session delivery per command, 0 manager deliveries | vat -> adapter -> vat 70-76 ms (J-9043), 53 ms guest call (J-9382); spawn 1.0 ms (J-0811) |
+| `environments.runTrue`: tool_call event to tool_result event minus the runtime's own `ms` (fake, `true`) | `perf/environments.perf.mjs` | 60 s | median <= 150 ms; 1 session delivery and 0 manager deliveries per command | vat -> adapter -> vat 70-76 ms (J-9043), 53 ms guest call (J-9382); spawn 1.0 ms (J-0811) |
 | `environments.firstCommand`: first command of an incarnation (port open + workspace init + fake start) | same | 60 s (one fresh session per sample, from the pool) | median <= 500 ms | manager hop 151-175 ms (J-0222) + runCommand path above + git init |
-| `environments.gitStatus`: `E(workspace).status()` from exec code, 10,000-file workspace (built by `runCommand` unpacking a fixture archive, not by turns) | same | 60 s | median <= 1 s | git 30 ms (J-0811) + 2 manager deliveries (2 x 75 ms, J-0494) + exec call 53 ms + <= 16 KB inbound twice (about 330 ms) |
+| `environments.sessionCreate`: `development` minus `chat-only` creation time | same | 60 s (alternating) | median <= 175 ms | one manager crank (J-0494) + 3 handles (7-15 ms each) |
+| `environments.cancel`: cancel during `sleep 600` to `end cancelled` | same | 60 s | **recorded** (expected <= 1 s: one cancel crank, one sendOnly stop, one settle; not measured) | - |
+| `environments.stopCleanup`: `stop()` to no process of the environment | same | 60 s | **recorded** (fake; `[real-runtime]` recorded separately) | - |
+| `environments.tooBig`: 10 MiB stdout command, call to result recorded | same | **gate**, 5 runs | each <= 2 s; result <= 32,768 units, valid JSON; 0 halts; 1 session delivery | 10 MiB drained in 329 ms (J-0811); <= 8 pieces x 20-25 ms (J-9043) |
+| `environments.bundles`: session program growth; manager bundle bytes; manager install | same | **gate**, single | session growth <= M6's cap (D-M6-18); manager bundle <= 80 KB; install <= 5 s | 212,483 B (J-1410); 11.6 s per 300 k (J-0193) |
+| `environments.gitStatus`: `E(workspace).status()` from exec code, 10,000-file workspace (built by `runCommand` unpacking a fixture archive, not by turns) | `perf/environments-git.perf.mjs` | 60 s | median <= 1 s | git 30 ms (J-0811) + 2 manager deliveries (2 x 75 ms, J-0494) + exec call 53 ms + <= 16 KB inbound twice (about 330 ms, D-M6-19) |
 | `environments.gitLog`: 50-entry page of 1,000 commits | same | 60 s | median <= 500 ms | git 12 ms (J-0811) + the same hops with a smaller answer |
-| `environments.cancel`: cancel during `sleep 600` to `end cancelled` | same | 60 s | median <= 1 s | cancel crank + stop + one answer |
-| `environments.stopCleanup`: `stop()` to no process of the environment | same | 60 s | median <= 3 s (fake: expect < 100 ms; `[real-runtime]` recorded) | milestones M6 table |
-| `environments.tooBig`: 10 MiB stdout command, call to result recorded | same | 5 runs | <= 2 s; result <= 32,768 units, valid JSON; 0 halts; 1 session delivery | 10 MiB drained in 329 ms (J-0811); <= 8 pieces x 20-25 ms (J-9043) |
-| `environments.sessionCreate`: `development` minus `chat-only` creation time | same | 60 s (alternating) | <= 175 ms | one manager crank (J-0494) + 3 handles (7-15 ms each) |
-| `environments.bundles`: session program growth; manager bundle bytes; manager install | same | single | session +<= 9,000 B; manager bundle <= 80 KB; install <= 5 s | 206,850 B (J-10161); 11.6 s per 300 k (J-0193) |
-| `environments.restart`: restart to serving with 20 sessions with environments (each ran one command) | `perf/environments-restart.perf.mjs` | 5 runs | <= 15 s; 0 containers started; 0 idle session vats woken | healthy restart 3.3-6.9 s (J-9382) |
-| `environments.coldStart` `[real-runtime]` | `perf/environments.perf.mjs` (gated) | 10 runs | recorded; <= 5 s | milestones M6 |
+| `environments.restart`: restart to serving with 20 sessions with environments (each ran one command) | `perf/environments-restart.perf.mjs` | **gate**, 5 runs | each <= 15 s; 0 containers started; 0 idle session vats woken | healthy restart 3.3-6.9 s (J-9382) |
+| `environments.coldStart` `[real-runtime]` | `perf/environments.perf.mjs` (gated by `THIX_HARNESS_REAL_RUNTIME`) | 10 runs | **recorded** | - |
 
-The 20-session state for `environments.restart` is built by creating 20 `development` sessions from
-the pool and one `runCommand(true)` each through a scripted turn (about 20 x 1.5 s), cached as a
-template keyed like the others (`process.md` 3).
-
----
+File times: `perf/environments.perf.mjs` five 60 s windows, the tooBig and bundle gates (about
+20 s) and the template start: about 6 minutes (the real-runtime row adds about 1 minute when
+gated in). `perf/environments-git.perf.mjs` two windows, the 10,000-file and 1,000-commit fixtures
+unpacked from archives (under 10 s each, J-0811 sizes) and the template start: about 3 minutes.
+`perf/environments-restart.perf.mjs` five restarts (each kill, restart and check under 30 s) on a
+cached 20-session template: about 3 minutes, plus about 30 s for the template's first build (20 x
+1.5 s through scripted turns, cached keyed like the others, `process.md` 3). If a file passes 8
+minutes in its first run, its last row moves to a new file.
 
 ## 11. Too-big and hostile probes (`environments-command-output.test.js`, `environments-git-hostile.test.js`, `environments-shell-port.test.js`; the vat-facing ones in `environments-shell.test.js`)
 
@@ -807,37 +1004,49 @@ template keyed like the others (`process.md` 3).
 | 300 `runCommand` calls in one round | `maxCallsPerRound` 64 refuses the rest; 16 in flight |
 | emergency stop twice, resume twice, resume while stopping | idempotent; `finishStopFirst` |
 | a session that is not a shell preset calls `emergencyStop` | `noEnvironmentToStop` |
+| `openImage` with 65 segments, a 256-unit segment, `['..', 'x']`, `['.git', 'config']`, a FIFO, a 1 GB file | guard refusal; `gitPathRefused`; not a regular file refused; `size()` answers the size and M8 refuses before any read |
+| exec code: `readBase64({ offset: 0, maxBytes: 196_608 })` on a workspace image | expected: the hub's frame refusal reaches exec code as a rejection and the exec vat is not halted (as J-10127 for a call frame); else the clamp fallback of 3.4; at 12,288 bytes the page is answered |
+| a file replaced by a symlink to `/etc/passwd` between two `readBase64` calls | the second read refused with `gitPathRefused`; no byte of the target read |
+| `sendNow` on a waiting entry while stopped; a test part whose `nextTurn` always answers a turn | `sessionStopped`, the hold kept; no turn claimed |
 
 ---
 
 ## 12. Core requests (CC-090..CC-099)
 
-**CC-090. A service shape for native resources (AR-SYN-28, AR-CTRL-5 (a)).** Motivation: the
-environments resource is the second service (after the agent host) that needs its adapter's root,
-not a passive registration; a third (M10's asset listener lives in it, but M11's speech or any
-later resource would follow) would copy the same 40 lines a third time. Smallest change: the
-manager kit's `provideAdapter()` (the keeper's `provide()` under the kit's queue), documented in
-`pkg/src/native/contract.js` as the service shape; a `WORKSPACE_VERSION` bump (batch it with the
-core's step 4). Workaround if refused: the attach pattern with a fake service key, as the agent
-host (`EV/durable.js` keeps its own `withOps`/reattach helper of about 40 lines; listed for the
-duplicate review and for unification at the agent-host reinstall, section 14).
+Settled against `arch-review/core.md` 5 and the spike (X-15): CC-090 and the W6.0 draft's CC-091
+are one change, already in core step 4.
 
-**CC-091. Install-time configuration and a per-installation directory.** Motivation: the adapter
-needs (a) its implementation directory and (b) a directory of its own in the state directory; today
-both are guessed from `argv[1]` and `argv[3]` (HR-SYN-22), and the agent host and this resource
-would each guess. Smallest change: `installNative(name, directory, config)` keeps a passable record
-the launcher hands the ephemeral `make(config)`, and the launcher passes `{ stateDirectory }` (the
-installation's own directory, computed at each start so state directories stay path-independent).
-Workaround: configuration through the service spec (D-M6-3) and `findStateDir`/`findHarnessRoot`
-imported from the agent host.
+**CC-090. A service shape and install-time configuration for native resources (AR-SYN-28,
+AR-CTRL-5 (a); core step 4, with its `WORKSPACE_VERSION` bump).** One row in `CORE-CHANGES.md`
+under AR-SYN-28. Motivation: the environments resource is the second resource (after the agent
+host) whose manager needs its adapter's root, not a passive registration, and whose adapter needs
+(a) its implementation directory and (b) a directory of its own in the state directory; both are
+guessed today from `argv[1]` and `argv[3]` (HR-SYN-22), and a fake service key stands for the
+service. A third resource (M10's listener lives in this one; any later one) would guess a third
+time. What a second and third resource need from the core: (1) the manager kit's
+`provideAdapter()` (the keeper's `provide()` under the kit's queue), documented in
+`pkg/src/native/contract.js` as the service shape; (2) `installNative(name, directory, config)`
+keeping a passable record that the launcher hands the ephemeral `make(config)`; (3) the launcher
+passing `{ stateDirectory }`, the installation's own directory, computed at each start so state
+directories stay path-independent. Workaround if refused or until core step 4: the attach pattern
+with a fake service key, written once in `resources/native-attach.js` (D-M6-13), configuration
+through the service spec (D-M6-3), and `findStateDir`/`findHarnessRoot` imported from the agent
+host.
+
+**CC-091.** Merged into CC-090 (X-15); unused.
 
 **CC-092. Name each adapter process in `status()`** (installation and pid). Motivation: acceptance
-11 kills the environments adapter alone. Workaround: the test finds the process among
-`processesUnder(supervisor)` whose `argv` names the installation's ephemeral bundle digest.
+11 kills the environments adapter alone, and M11's K11-1 checks its engine processes the same way
+(X-15). Workaround: one test helper, `test/integration/_adapter-processes.js` (W6.7), finds the
+process among `processesUnder(supervisor)` whose `argv` names the installation's ephemeral bundle
+digest; M11 imports it.
+
+**CC-100 (M8's number) also covers M6.** Staged command output (D-M6-6) and workspace image pages
+(X-1) are adapter-to-adapter frames that the hub persists in `hub-log.jsonl`; the spike already
+measured +2.9-3.0 MB per MiB. M6 asks CC-100 unconditionally with M8, into core step 3's persisted
+session kinds; no M6 number is reserved for it.
 
 No other core change is needed; CC-093..CC-099 are unused.
-
----
 
 ## 13. Owner questions (the default is what M6 builds)
 
@@ -850,37 +1059,46 @@ No other core change is needed; CC-093..CC-099 are unused.
 | O-5 | Default command timeout | 24 h (R3-47) |
 | O-6 | A failed environment stop: quarantine (R4-81) or retry (D-16)? | retry at the next adapter start and before the next start of that environment |
 | O-7 | Git surface: linked worktrees, tree views, commit stream, `show`, `revParse`, `detach`, `checkoutConflict` | not in M6; backlog |
-| O-8 | The resource's guard table beside the resource (D-M6-10) | beside the resource |
-| O-9 | Export and import of a session with an environment | workspace and home are not exported; an imported shell session gets a fresh empty workspace (stated in the export's notes) |
+| O-8 | Where the resource's guard table lives (D-M6-10) | `guest/lib/guards/environments.js`, excluded from the gateway vocabulary as not browser-sendable (settled from X-11; the W6.0 draft had it beside the resource) |
+| O-9 | Export and import of a session with an environment | workspace and home are not exported; an imported shell session gets a fresh empty workspace (stated in the export's notes); the execution state is exported, and an imported stopped session stays stopped with its new environment withdrawn (X-07, 4.5) |
 | O-10 | Fixed texts: Fae's words where they exist; `noEnvironmentToStop`, `commandOutcomeUnknown`, `commandStopped`, `outcomeUnknown`, `runnerRequired` reworded by the harness | as written in section 15 |
-| O-11 | The data-reference spike's step 1 for this resource | not adopted; the seam is `EVI/blob-access.js` (D-M6-6) |
-| O-12 | The session program budget shared by M6, M8 and M9 (240,000; about 24 K left after step 3) | M6 at most 9,000 bytes; the PM rules if the three exceed it |
+| O-11 | The data-reference spike's step 1 for this resource and M8's images (X-06) | not adopted in this group: M6 W6.2 builds `openImage` with adapter-side pages, both lanes accept the hub-log cost, CC-100 asked once; the seams if adopted are `EVI/blob-access.js` and `EVI/image-source.js` (D-M6-6) |
+| O-12 | The session program limit (240,000; 27,517 left on the step-3 tree for four lanes whose likely sum is 257-267 K, X-01) | raise `sessionProgramBytes` (about +1.1 s on the cold create per +55 KB, hidden by the spare pool, J-10192); M6 asks a cap of 9,000 bytes (D-M6-18); W6.4 waits for the ruling and the PM's caps |
+| O-13 | What Talk does on a state with no environment runner (the `voice` preset needs a shell, X-12) | refuse with `runnerRequired`; the Voice panel offers another shortcut preset (M11's to build) |
 
 ---
 
 ## 14. The fold at merge (W6.8; done-criterion is deletion, checked by grep or test)
 
-- R-2 provisional markers resolved against the merged step 3: the `admit` hook is in
-  `PartHooks`' typedef and documented in `runtime-parts.js`; `grep -n 'provisional until step3'`
-  in `guest/` and `designs/m6-interfaces.md` is empty.
+Merge order of the group (X-17): WX.1, the four lanes, then merge M11, M6, M8, M9, each followed by
+its own fold, then the group fold WX.F. W6.8 is M6's:
+
+- No provisional seam remains: `grep -rn provisional guest/` is empty and sections 3 and 6 of
+  this file name none (the settle resolved them against the built step 3; any WX.1 change of the part API that
+  differs from section 6.1 is folded here).
+- X-1 aligned with M8 after M8 merges: `image-tool.test.js`'s source cases pass against a real
+  `Git.openImage` (M8's fold item 4); the `viewImage` integration case moves to WX.F.
+- The `voice` preset's M6 half: `voice` creates with `workspace` and `shell` (acceptance 14); the
+  complete preset is WX.F's.
 - `ObjectProvider.build` gone from `preset-templates.js` (F-1); `grep -n 'build(context)'` empty.
 - `findStateDir` and `findHarnessRoot` move to one shared module (`resources/native-layout.js`)
   imported by both resources; the agent-host side of that move waits for the step-4 reinstall
   (its `ephemeral.js` is installed code) and is listed there.
-- The environments `withOps`/reattach helper and the agent host's become one exported helper at the
-  agent-host reinstall (step 4) or disappear with CC-090.
-- `designs/architecture.md`: 1 (layout: `resources/environments/`), 2 (process diagram), 3.4
-  (this contract's objects replace `WorkspaceService`/`ContainerService`), D-16 (lazy workspace
-  too), 9 (container output row), 10 (fake runtime path `EVI/runtime-fake.js`, `[real-runtime]`
-  tags); `milestones.md` M6 (status, this file's tables), M7 and M10 ownership paths (6.4 M-1),
-  the ownership check for the group; `process.md` 3.1 (the four integration files).
-- `corepack yarn lint:duplicates` at or below the ceiling; any copy over 15 lines found in review is
-  turned into an export.
-- No `notBuilt`, no empty registry, no unused export in `EV/` (the review's grep).
+- `resources/native-attach.js` is the one attach helper: the agent host's copy is listed for its
+  step-4 reinstall, or both disappear with CC-090.
+- `designs/architecture.md`: 1 (layout: `resources/environments/`, `guards/environments.js`), 2
+  (process diagram), 3.4 (this contract's objects replace `WorkspaceService`/`ContainerService`),
+  D-16 (lazy workspace too), 9 (container output row), 10 (fake runtime path
+  `EVI/runtime-fake.js`, `[real-runtime]` tags); `milestones.md` M6 (status, this file's tables:
+  work units 8, acceptance 9, perf 10), M7 and M10 ownership paths (6.4 M-1); `process.md` 3.1
+  (the `environments` regression list). The group's ownership-check row is WX.F's.
+- `corepack yarn lint:duplicates` at or below the ceiling (2.05 % on the step-3 tree; it may only
+  go down); any copy over 15 lines found in review is turned into an export.
+- No `notBuilt`, no empty registry, no unused export in `EV/` or `EVG` (the review's grep).
 
----
+## 15. Fixed texts and the shared guard entries (WX.1 applies these exactly)
 
-## 15. Fixed texts and the shared guard entries (W6.0b applies these exactly)
+Applied by WX.1, not by an M6 unit (D-M6-15).
 
 ### 15.1 `guest/lib/guards/session.js`
 
@@ -901,6 +1119,9 @@ ExecutionState: () =>
 // SessionServices optional part gains:
 //   workspace: M.remotable('Git'), shell: M.remotable('Shell'),
 //   environment: M.remotable('EnvironmentControl'),
+
+// SessionExportPage optional part gains (X-07, seam X-E):
+//   execution: S.ExecutionState,
 
 // Session (latest version) gains:
 emergencyStop: M.callWhen().returns(S.ExecutionState),
@@ -923,14 +1144,34 @@ shellToolArgumentNames = { runCommand: ['command', 'args', 'options'], options: 
 ```js
 // factory.js, HarnessSettings optional part:
 environments: M.remotable('EnvironmentsAdmin'),
-// factory.js texts (R3-21; the same words as EV/interfaces.js environmentTexts.runnerRequired,
+// factory.js texts (R3-21; the same words as guards/environments.js environmentTexts.runnerRequired,
 // kept equal by a unit test):
 runnerRequired: 'A preset that provisions a shell needs a configured environment runner',
 // interfaces.js, VatEvent gains:
 record({ type: 'execution', state: M.or('running', 'stopping', 'stopped'), supported: M.boolean() }),
 ```
 
-### 15.3 The resource's texts
+### 15.3 The part API (`guest/session/runtime-parts.js`, typedefs and `combineHooks`)
 
-`EV/interfaces.js` `environmentTexts` and `environmentTextOf`, committed with this contract
+```js
+// PartHooks gains:
+//   @property {() => (string | undefined)} [admit]  asked before a user-facing start and by
+//     claimNext; a refusal text, or undefined to admit
+// RuntimeHooks gains:
+//   @property {() => (string | undefined)} admit  the first part's refusal, in table order
+// combineHooks: const admit = listOf('admit');
+//   admit: () => { for (const hook of admit) { const refusal = hook(); if (refusal !== undefined) return refusal; } return undefined; },
+```
+
+### 15.4 `guest/lib/vocabulary-tables.js`
+
+```js
+// vocabularyExclusions gains:
+'guards/environments.js':
+  'environments manager vat and adapter table; no browser path reaches these objects',
+```
+
+### 15.5 The resource's texts
+
+`EVG` `environmentTexts` and `environmentTextOf`, committed with this contract
 (`outcomeUnknown` is D-M6-5's manager rejection of a forwarded write).
