@@ -13668,3 +13668,19 @@ milestones list 704 s; long-session chain 21:03-22:12 (background); exclusive mi
 process.md, README, milestones.md status parts, the unit reports. No code, test or perf file
 changed. Scratch `tmp/CL-CLOSE` removed.
 Fit: neutral.
+
+### J-10200 2026-11-18 P3 step 3 plan written - decision
+Unit P3 of the review's step 3, at `9bb9f4f2ea`: `designs/arch-review/step3-plan.md` (387 lines),
+read from the code (`guest/session/turn.js`, `session.js`, `recovery.js`, `runtime-parts.js`,
+`packages.js`, `tools/exec.js`, `archive.js`, `export.js`; `AH/index.js`, `providers/anthropic.js`,
+`openrouter.js`, `scripted.js`, `round.js`, `catalog.js`, `subscriptions/provider.js`, `catalog.js`,
+`channels.js`, `list-channel.js`, `secrets/store.js`, `seal.js`, `gateway/signin.js`) and the review.
+Decisions: the turn runner keeps the turn's own life (claim, settle, cancel, tools, rounds, lease
+sends) and gives outbox, usage, ports, turn index, import and recovery their own modules; one
+fence; the archive made in `session.js` with `unresolved` hidden; runtime parts are the one
+per-session extension (`PartHooks` with a `HookTurn`, `tools` sources), `turn-hooks.js` and the
+session `WeakMap`s retired, part order `powers, inspector, grants, exec, packages` to keep hook
+order; one provider shell (`makeProviderShell`) under API, pool and scripted providers, scripted
+still its own round source until plan item (b); `kinds.js` the one place `spec.kind` is matched.
+Build units SESSION, PROVIDERS, HOST with two hand-overs (`AH/index.js`, `record-preview.js`).
+Nothing run but reads; no code changed. Fit: neutral.
