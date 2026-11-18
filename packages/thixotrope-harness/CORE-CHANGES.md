@@ -912,3 +912,50 @@ store's image plus log; rows name `gcPolicy` and `hubStore`). Still open: spike 
 The "Open candidates" table above keeps the costs it had when written. Current status, from
 `designs/m0-results.md` page 6: C-7 closed for the per-crank collection (CC-022, CC-023); C-2 partly
 (CC-025); C-20 partly (CC-019, with CC-025 lowering each commit); C-21 open (proposal J-9305).
+
+### CC-083 2026-11-18 Thixotrope core - hub-resident data rows and their store (spike prototype, not merged)
+Commits: `733deabd9b` feat(thixotrope): hub-resident data references (spike prototype); `556596ab1a`
+(copy an emulated byteArray once on write).
+Files: `pkg/src/net/hub.js`, `pkg/src/net/hub-state.js`, `pkg/src/net/hub-data-store.js` (new).
+What changed: a pseudo-origin `hub:data` (never attached, never retired) whose rows the hub serves
+itself; a `data` table (`{ kind, hash, length, sealed }`, no bytes) and `dataNext` in the hub state
+(optional, so `STATE_VERSION` stays 2 in the spike; production bumps it to 3); a content-addressed
+directory of files named by SHA-256, written part file, fsync, rename, directory fsync before a row
+is minted; release of a row's last holder unlinks its file after the next commit; startup recount and
+sweep of unnamed and part files.
+Motivation: the owner's request for references to data no vat reads (spike dataref, track T2,
+`designs/spike-dataref/design-ocapn.md`).
+Visible to other users: none unless a `dataStore` is passed; hub tests pass (33 in `hub*.test.js` and
+`transient-hub-client.test.js`). Boot bundles, worker and goldens unchanged.
+
+### CC-084 2026-11-18 Thixotrope core - data powers and local dispatch (spike prototype, not merged)
+Commits: `733deabd9b`. Files: `pkg/src/net/hub.js`, `pkg/src/core/daemon.js` (a `hubDataStore`
+option and `publishDataPower` / `inspectHubData`, 9 lines, additive).
+What changed: `op:deliver` to a `hub:data` row is answered by the hub: writer (`create`, `put`),
+builder (`append`, `close`), data (`describe`), reader and unsealer (`read`, `locate`); amplification
+by the argument's row identity; sealed data only through the unsealer; `op:listen` on a data row
+fulfils at once.
+Motivation: as CC-083.
+
+### CC-085 2026-11-18 Thixotrope core - the `thix:data` envelope is checked by the hub (spike prototype, not merged)
+Commits: `733deabd9b`. Files: `pkg/src/net/hub.js` (`checkDataEnvelopes`).
+What changed: every `op:deliver` (calls and resolver settlements) is walked for the reserved Tagged
+`thix:data` `{ length, ref, sha256 }`; one that does not name a non-sealed data row with that length
+and hash breaks the message before routing. No codec, marshal or pass-style change.
+Motivation: holders can trust length and hash from their frame (determinism without a round trip).
+
+### CC-086 2026-11-18 Thixotrope core - per-session frame byte counters (spike prototype, not merged)
+Commits: `733deabd9b`. Files: `pkg/src/net/hub.js` (`stats().frameBytes`).
+What changed: process-local counts of bytes and frames each session sent to and received from the
+hub, for the spike's measurements. Not persisted.
+
+### CC-087 2026-11-18 Thixotrope core - worker transport frame-filter seam (spike prototype, not merged)
+Commits: `a86340a6a1`. Files: `pkg/src/core/durable-worker-transport.js` (+30, -4, additive).
+What changed: an optional filter read once from `globalThis[Symbol.for('thixotrope.spike.dataref.frameFilter')]`;
+`inbound(workerId, bytes)` may replace each frame toward a worker before its journal entry is made,
+`outbound(workerId, bytes)` sees each frame the worker emits (live or replayed) before the hub.
+Absent, behaviour is unchanged. Used only by `H/test/spikes/dataref-engine` (preloaded into the
+supervisor child) to move large atoms out of vat frames and check data-reference possession.
+Motivation: spike dataref track T3, `designs/spike-dataref/design-engine.md` (a stand-in for an
+engine-native data handle). Visible to other users: none. Worker, boot bundles and goldens
+unchanged. CC-088 and CC-089 unused (no engine or worker change was made).

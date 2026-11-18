@@ -8400,3 +8400,287 @@ W5.5 and W5.6), `exec-m5` (W5.5), `presets` (W5.1), `mentions` (W5.7) and a new 
 both sides inside one window, and each probe has a cap, so every file is at most about 5.5
 minutes and the regression at most 69 slot-minutes (about 17 minutes on four slots).
 Decision: as described.
+
+### J-9815 2026-11-18 dataref T2 fit: the mechanism belongs in the hub as hub-origin rows - finding
+Evidence: surveys S1-S4; `design-ocapn.md` 1. Reading: a data reference as an ordinary object row
+whose origin is the hub needs no codec, pass-style, bundle or engine change, survives adapter
+restarts (no D-15 minting, no `resolveBlobs`), and keeps bytes beside the hub log. A Tagged
+`thix:data` envelope carries length and hash, checked by the hub. Decision: prototype that
+(CC-083..CC-086); `desc:data` only as negotiated level 2, not built.
+
+### J-9816 2026-11-18 dataref T2 secret use - perf
+Evidence: `bench.mjs` case 1, `7db2a25516` and `4424eff86c`, exclusive. Reading: a sealed 64 B and
+1 MiB secret held in V1's durable state and used by a provider: keyed digest proven; 0 hits of the
+value (raw, hex, base64 x3) in V1's journal, snapshot, the hub log and the data directory; use
+146-243 ms.
+
+### J-9817 2026-11-18 dataref T2 bulk forward - perf
+Evidence: case 2, same runs. Reading: 1 KiB, 1 MiB and 64 MiB cost the same per hop (A -> V1 80-437
+ms, V1 -> V2 165-324, V2 -> B with B's full read 48-172); about 230 bytes into V1 per hop; journals
++0.7-0.9 KB, slot growth below one page, hub log +31-36 KB for three hops (C-2 rows, not payload).
+Creating 64 MiB through frames: 422-950 ms on the hub thread.
+
+### J-9818 2026-11-18 dataref T2 rare read and ByteArray into a vat - finding
+Evidence: case 3. Reading: V1 read 1,024 bytes through a reader: 112-217 ms, 1,164 bytes in, journal
++1,616; ByteArray answers are passable into Ironhorse vats in this build (J-0023 superseded for
+answers).
+
+### J-9819 2026-11-18 dataref T2 restart and SIGKILL - perf
+Evidence: case 4. Reading: after shutdown the stored reference reads back (start 84-101 ms); after a
+SIGKILL mid V1 -> V2 loop, 2 of 3 started passes committed, none duplicated, both stored references
+work; restart 417-500 ms.
+
+### J-9820 2026-11-18 dataref T2 death - perf
+Evidence: case 5. Reading: after V1 and V2 dropped and the adapters closed, the 1 MiB file was
+unlinked within 3 ping rounds (0.6-1.1 s).
+
+### J-9821 2026-11-18 dataref T2 baselines - perf
+Evidence: baselines in `bench.mjs`. Reading: inline 1 KiB passes; inline 1 MiB halts the vat
+(MeterAbort, retired after 0.8-1.0 s). An adapter-exported handle read in 20 KiB pages: 759-1,238 ms
+for 1 MiB. This design's `read` in one 1 MiB frame grows the hub log 1.72 MB (C-1); `locate` reads
+with no hub copy.
+
+### J-9830 2026-11-18 dataref T3 fit: the engine holds the vat-side half only - finding
+Evidence: surveys S1-S4, `design-engine.md` 1, the stand-in benchmark. Reading: zero copy comes from
+bytes never entering a vat frame; identity, persistence, amplification and collection belong to the
+hub (T2 rows). The engine's own part is a cheap methodless handle for data imports with
+collector-reported death (D-1, D-2) and ingest of inline atoms at the edge, which must be the hub
+(D-3). Decision: no engine prototype (weeks, and it would not move the measured bytes); a
+worker-transport stand-in (CC-087) measured instead.
+
+### J-9831 2026-11-18 dataref T3 secret use - perf
+Evidence: `bench.mjs` case 1, `f2fa1a877b`, exclusive. Reading: 64 B and 1 MiB secrets held in V1's
+heap and used by a provider (keyed digest proven), use 53 and 47 ms; 0 hits (raw, base64 x3, hex x2)
+in 119 state files live and 111 after the snapshot. The inline control was found (journal live,
+snapshot after).
+
+### J-9832 2026-11-18 dataref T3 forgery refused - perf
+Evidence: case `security.forge`, same run. Reading: V8 built a reference to a datum it never
+received; the transport's possession check replaced it and B got `refused:thix-dataref-refused`;
+V1's honest pass was correct.
+
+### J-9833 2026-11-18 dataref T3 bulk forward by reference - perf
+Evidence: case 2, same run. Reading: A -> V1 -> V2 -> B with B's full read: 83, 83 and 180 ms per
+pass for 1 KiB, 1 MiB, 64 MiB; 200-370 bytes per vat per direction per pass; journals +370-570 bytes
+per vat per pass; no slot page added. Two copies end to end (store write, consumer read).
+
+### J-9834 2026-11-18 dataref T3 transport ingest leaves the hub copy - finding
+Evidence: `secret.ingestInline`, same run. Reading: a 1 MiB value sent inline and moved out by the
+worker transport is absent from journals and snapshots but present as hex in `hub-image.json` (C-1).
+Decision: ingest must happen in the hub before queueing (D-3, proposed to T2).
+
+### J-9835 2026-11-18 dataref T3 blob-like baseline - perf
+Evidence: case 2 (b), same run. Reading: adapter-held object plus 20 KiB reader pages through the
+hub: 84 ms (1 KiB), 886 ms (1 MiB, 52 pages); 16.4 ms per page, 64 MiB inferred 53.6 s; passing
+alone 86 ms.
+
+### J-9836 2026-11-18 dataref T3 inline 1 MiB ingested at the transport - perf
+Evidence: `bulk.inlineIngest`, same run. Reading: hand-over 1,053 ms (1,048,576 bytes stripped
+before V1's journal), then 84 ms per pass; V1 journal +2.5 KB; hub +2.2 MB.
+
+### J-9837 2026-11-18 dataref T3 rare read - perf
+Evidence: case 3, same run. Reading: V1 reads 1,024 bytes of the 1 MiB datum through a reader: 53
+ms median, 1,177 bytes in, journal +1,632 bytes per read; nothing kept.
+
+### J-9838 2026-11-18 dataref T3 inline baseline - perf
+Evidence: case 2 (a), same run. Reading: inline 1 KiB 107 ms per pass, journals 690 and 1,762 bytes
+per pass; inline 1 MiB retired the vat after 4.5 s.
+
+### J-9839 2026-11-18 dataref T3 cost of 1,000 held references - perf
+Evidence: `holdMany` and the images after a graceful restart, same run. Reading: Tagged references
++71,168 slots capacity, +975 KB snapshot, hub +159 KB (commits only); adapter presences +136,192
+slots, +4,530 KB snapshot, hub +1,170 KB. Upper bounds (slot pages).
+
+### J-9840 2026-11-18 dataref T3 graceful restart - perf
+Evidence: case 4, same run. Reading: the stored 1 MiB reference relays with the right digest after
+a restart (182 ms); the blob-like baseline fails ("unknown blob"). Stop 3.0 s, serve 3.6 s.
+
+### J-9841 2026-11-18 dataref T3 SIGKILL mid-pass - perf
+Evidence: case 4, same run. Reading: in-flight call broke; B took the 64 MiB reference 0 times
+before the kill, 0 after the restart, once for a new pass; V2 still held it. Serve 4.1 s.
+
+### J-9842 2026-11-18 dataref T3 death - perf
+Evidence: case 5, same run. Reading: the stand-in has no death signal: 1,008 segment files before
+and after every reference was dropped and the supervisor restarted.
+
+### J-9843 2026-11-18 dataref T3 recommendation - finding
+Evidence: `design-engine.md` 1, 10, 12. Reading: build T2 rows with hub ingest first, then
+deliver-v2 and the C-5 fix, then a JavaScript methodless data handle in the in-vat client (D-1a);
+the engine-native handle (D-1, D-2, 2-3 weeks) only when vats hold more than about 10^4 data
+references. Decision: for the PM.
+
+### J-9800 2026-11-18 dataref T1 fit: data references with no core change - finding
+Evidence: surveys S1-S4; `designs/spike-dataref/design-harness.md` 1; prototype
+`test/spikes/dataref-harness/` (`4424eff86c`, `c62ab140ff`). Reading: the harness's D-15 pattern,
+generalised, already keeps every byte out of vats and the hub: a registry vat mints methodless
+`Datum`/`Secret` handles, the amplifier `DataUnsealer` goes only into adapter binding specs, and a
+consumer adapter reads a shared store file itself (2 copies end to end). What T1 cannot do: free
+durable data on the last drop, make holding free in the hub, or resolve without a registry crank
+at a new consumer or after a restart. Decision: T1 is the baseline; O handles for vat-held state,
+holder-applied use for secrets.
+
+### J-9801 2026-11-18 dataref T1 bulk forward - perf
+Evidence: `t1.forward`, commit `33bc1a7095`, exclusive, medians of 3. Reading: A -> V1 -> V2 -> B
+for O handles 300 / 385 / 444 ms at 1 KiB / 1 MiB / 64 MiB; S tickets 361 / 199 / 320; inbound
+frames per vat 380-580 bytes whatever the size; B's read of 64 MiB 30 ms; hub log +53-125 KB per
+pass, the same as an inline 1 KiB pass (105 KB): per-message bookkeeping, not data.
+
+### J-9802 2026-11-18 dataref T1 baselines - perf
+Evidence: `t1.baselineA.inline1MiB`, `t1.baselineB.pages`, same run. Reading: (a) 1 MiB inline
+into a vat halts it after 3.5 s (1,048,879 frame bytes journaled, hub +2.46 MB). (b) B pulling
+20,480-byte `Content` pages from A through the hub: 28.5 ms per page, 1 MiB in 1.48 s with
++2.93 MB of hub log, 64 MiB 43.1 MB in a 60 s window (extrapolated 93 s) against 444 ms in T1.
+
+### J-9803 2026-11-18 dataref T1 rare read - perf
+Evidence: `t1.rareRead`, same run. Reading: V1 reads bytes 0..1023 through a Reader in 75 ms
+median; 2 inbound frames, 1,224 bytes, enter its journal and the page enters its heap.
+
+### J-9804 2026-11-18 dataref T1 secret use and scan - perf
+Evidence: `t1.secret.use`, `t1.secret.scan.*`, same run. Reading: 64 B and 1 MiB secrets adopted
+from an inbox outside the state directory, held by V1 as `{ secret }`, used by B: consumer read
+62 / 71 ms, holder-applied 74 / 68 ms; MAC right 12/12. All 80 state files (249 MB) live and 74
+(255 MB) stopped, store excluded: 0 hits in raw, UTF-16, hex and base64 forms; the inline canary
+was found (heap and snapshot; journal in the smoke run).
+
+### J-9805 2026-11-18 dataref T1 revocation - perf
+Evidence: `t1.secret.revoke`, same run. Reading: a durable store tombstone fails the next use
+through any holder (`dataref: revoked`, 83 ms); keys are never reused.
+
+### J-9806 2026-11-18 dataref T1 holding cost in the hub - perf
+Evidence: `t1.hold.hub`, same run, 1,000 references in batches of 20. Reading: an O handle adds 1
+entry and 47 chars to its holder's session row and about 444 chars of persisted hub state; an S
+ticket adds nothing. Producing costs 21 / 17.5 ms per reference at A (two fsyncs).
+
+### J-9807 2026-11-18 dataref T1 holding cost in the vat - perf
+Evidence: `t1.snapshots`, `t1.names`, same run, against a control vat making the same calls.
+Reading: per reference, O 121 slots and 4,166 snapshot bytes (snapshot capacity, 256-slot pages),
+S 23 slots and 578 bytes; 0 property names for either (57,027 left in all vats).
+
+### J-9808 2026-11-18 dataref T1 clean restart - perf
+Evidence: `t1.restart.clean`, same run. Reading: the stored O reference digests correctly at
+first use after a restart in 188 ms (one registry crank), 59 ms cached; S 55 ms with no crank;
+the 1 MiB secret 174 ms; the adapter-origin (L) reference is refused, a tombstone. Nothing wakes
+at restart; resolution is lazy.
+
+### J-9809 2026-11-18 dataref T1 SIGKILL mid-pass - perf
+Evidence: `t1.restart.sigkill`, same run. Reading: killed 40 ms into a 64 MiB pass, no effect
+line written; the pending call broke with the retired text; the re-drive succeeded; one effect
+line in all, no duplicate.
+
+### J-9810 2026-11-18 dataref T1 death of registry handles - finding
+Evidence: `t1.setup` probe and `t1.death.registry`, same run. Reading: guest code has no
+`FinalizationRegistry` or `WeakRef`; a registry handle dropped by every holder leaves its file
+after 40 churn cranks. Durable T1 references are freed only explicitly (session delete,
+revocation).
+
+### J-9811 2026-11-18 dataref T1 death of adapter-origin datums - perf
+Evidence: `t1.death.isolated`, commit `5b2c7a405b` with the test of `c62ab140ff`, shared slot.
+Reading: held only by a vat, freed 412 ms after the drop, after one 50,000-allocation crank (a
+ping does not reach the collection schedule). Once another adapter had received it, not freed in
+60 rounds (15.7 s, 24.4 s) with both adapters forcing Node collections every 50 ms; not diagnosed
+(the consumer's OCapN import or the hub's mention accounting).
+
+### J-9812 2026-11-18 dataref T1 no handoff between adapters today - finding
+Evidence: `pkg/src/net/hub.js` `getInfoForVal` (`isThirdParty: false`). Reading: the hub never
+introduces two of its own sessions to each other, so T1's adapter-to-adapter data path is the
+shared store; control calls between adapters (`resolveLocal`, holder-applied use) take a hub hop.
+
+### J-9813 2026-11-18 dataref T1 two failed benchmark attempts - finding
+Evidence: `runs.jsonl` at 03:46Z and 03:48Z (label `t1-dataref`), while other tracks were editing
+core files in the lane. Reading: one failed at the first serve with "journal cranks disagree with
+the frames written (0 != 1)" (`durable-worker-transport.js` `ensureAwake`), one with the
+supervisor disconnecting during setup; the third, unchanged, passed. Not diagnosed.
+
+### J-9814 2026-11-18 dataref T1 recommendation - finding
+Evidence: J-9800..J-9813; `design-harness.md` 8-12. Reading: adopt T1 now for multi-process
+reads (workspace, containers, export: unsealer and store path in their binding specs), binary
+data and holder-applied secret use, about two weeks of work with no core change. The remaining
+costs (a hub row per held handle, a registry crank per fresh datum, no collection) are what T2 or
+T3 must remove to be worth a core change. Decision: for the PM.
+
+### J-9845 2026-11-18 dataref synthesis: the answer - finding
+Evidence: `designs/spike-data-references.md` 1; T1, T2, T3 and the critique. Reading: keep the bytes
+in files outside the object system that adapters open themselves (all three designs agree), and
+move identity and lifetime of bulk data into the hub as `hub:data` rows after C-1, C-2 and four
+corrections. Secrets stay on holder-applied use (D-6 generalised). No engine change now; no wire
+change. Decision: for the owner (spike-data-references.md 6.3).
+
+### J-9846 2026-11-18 dataref synthesis: order of work - finding
+Evidence: `spike-data-references.md` 1, 5.1. Reading: step 1 harness only (store directory and an
+amplifier in the workspace, containers and export adapters' specs; random keys; binary blobs; a
+`locate`-shaped adapter function); step 2 hub rows with C-1/C-2; step 3 blobs onto hub rows; step
+4 C-5/deliver-v2, engine handles only if measured to matter.
+
+### J-9847 2026-11-18 dataref synthesis: passing is size-independent - perf
+Evidence: T2 `design-ocapn.md` 7.2, T1 `design-harness.md` 7.1, critique 3.3. Reading: about 230
+bytes into a vat per hop (T2) and 380-580 bytes per vat per pass (T1) at 1 KiB and 64 MiB alike;
+the hub log still grows 10-12 KB per hop from whole-row rewrites (C-2), not payload.
+
+### J-9848 2026-11-18 dataref synthesis: secrets case - finding
+Evidence: critique 2.2, 3.1, 4.2; `hub.js` `handleDataDeliver`. Reading: 0 hits of secret values in
+any persisted state in every track and the critique's own searches. T2 sealed rows are not fit for
+secrets (no revocation, every unsealer holds the one key, `locate` names stay valid); keep
+`Secret`/`ReadGrant` in the manager vat and add holder-applied use for consumers outside agent-host.
+
+### J-9849 2026-11-18 dataref synthesis: T1 amplification hole confirmed in code - finding
+Evidence: `test/spikes/dataref-harness/fixture/ephemeral.js` `keyOf` (line 223 `E(peer).resolveLocal`);
+critique 2.1. Reading: the critique is right; a name-returning fallback over a flat sequential store
+lets any holder of the consumer endpoint read any datum. Production: random keys, no fallback,
+separate Reader and admin facets.
+
+### J-9850 2026-11-18 dataref synthesis: T2 envelope depth bound accepts - finding
+Evidence: `pkg/src/net/hub.js` `checkDataEnvelopes` (`if (depth > 64) return;`); critique 3.1.
+Reading: the critique is right; envelopes nested past 64 are delivered unchecked. Vats cannot reach
+that depth (encoding overflows at 63); adapters and remote peers can. Fix: break past the bound.
+
+### J-9851 2026-11-18 dataref synthesis: T2 collection unproven with live adapters - finding
+Evidence: `test/spikes/dataref-ocapn/bench.mjs` lines 693-694 close A and B before case 5;
+`hub.js` `isPinned`, `op:gc-answers` handler; critique 3.2. Reading: the critique is right that
+"lifetime is OCapN GC" is shown only with adapters closed. The hub's release code reads sound; an
+answer route `{ local }` from `close()` pins the row until the creator sends `op:gc-answers`.
+Not diagnosed. Acceptance test required before adoption.
+
+### J-9852 2026-11-18 dataref synthesis: T3 stand-in forgery check one encoding - finding
+Evidence: `test/spikes/dataref-engine/dataref-store.mjs` `refAt` (int only), `fileOf`
+(`id.toString(16)`); critique 4.1. Reading: the critique is right; the stand-in proves nothing
+about unforgeability. D-1 as designed has no readable id, so this does not bear on the design.
+
+### J-9853 2026-11-18 dataref synthesis: D-1a precondition holds - finding
+Evidence: `ocapn/src/captp/finalize.js` (captures `FinalizationRegistry` at load),
+`captp/pairwise.js` import table, `client/ocapn.js` GC emission; T2 case 5. Reading: the in-vat
+OCapN client has `FinalizationRegistry` although guest code does not, and vats released a dropped
+`hub:data` import at their next collection. A JavaScript data handle in the in-vat client (D-1a)
+is feasible on that point.
+
+### J-9854 2026-11-18 dataref synthesis: baselines - finding
+Evidence: critique 5; T2 7.6. Reading: paging between two adapters is not bound by the vat frame
+limit; one 1 MiB answer moves in 210-304 ms, so a fair 64 MiB baseline is about 13-19 s, not 42-93
+s. Its real cost is the hub log (+1.72 MB per MiB in one answer, +2.9-3.0 MB in 20 KiB pages).
+
+### J-9855 2026-11-18 dataref synthesis: holding cost not isolated - finding
+Evidence: critique 2.4, 4.5. Reading: every per-reference slot and snapshot figure is 256-slot page
+capacity over a batch and moves 50-80 % with the batch; T1 and T3 disagree by about 3x. In the hub,
+an O handle costs about 444-503 persisted characters per held reference (measured); a T2 row about
+51 bytes per holder plus 110-130 per datum (code). Nobody measured one held handle in a vat.
+
+### J-9856 2026-11-18 dataref synthesis: protocol departure - finding
+Evidence: OCapN Model draft and CapTP draft (fetched, URLs in spike-data-references.md 4.9);
+critique 3.4. Reading: level 1 is a Tagged value and a hub-served object, no new descriptor. The
+Model says a tag must be a String; Endo writes a Syrup selector; the CapTP draft does not define
+`desc:tagged`. Interop with non-Endo peers is not established. Level 2 not recommended.
+
+### J-9857 2026-11-18 dataref synthesis: harness contracts unchanged - finding
+Evidence: `m4-interfaces.md` 9.1 item 3; `m3-interfaces.md` `Content.read`; `m5-interfaces.md`
+2.4. Reading: M3, M4 and M5 as contracted need no change. The browser large-secret path is
+in-process; only the CLI sealed box crosses the hub and is fixed by adopt-by-file outside M4.
+
+### J-9858 2026-11-18 dataref synthesis: vat-produced data unsolved - finding
+Evidence: critique 7.1; `hub.js` `handleDataDeliver` (builder calls served locally). Reading: no
+design handles bytes a vat produces. An attenuated builder given to the vat would cross its outbound
+frames and one hub decode and land in a file; not built or measured. Measure before deciding.
+
+### J-9859 2026-11-18 dataref synthesis: platform fit - fit
+Evidence: `spike-data-references.md` 7. Reading: Thixotrope is a control plane with persistent
+identity; data-heavy services need a byte store beside it, with identity in the hub. The obstacles
+are C-1 and C-2 (and C-5 for reads), not the protocol or the engine. In Node "zero copy" means
+zero copies inside the object system: two kernel copies between processes.
