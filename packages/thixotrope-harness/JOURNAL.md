@@ -9481,6 +9481,7 @@ changed the session bundle) and the exclusive pass (70 minutes, during which eve
 stopped). Building the busy chain beside the regression run saved about 30 minutes.
 Decision: for the PM: a guest-bundle change late in a milestone costs a template rebuild before its
 recorded pass; schedule bundle changes before the review units.
+
 ### J-0550 2026-11-18 M3 W3.3 manager side - good fit
 Evidence: commits 04e6ac0896, 5ad1954bae; `resources/agent-host/durable-gateway.js`;
 `test/unit/m3-w33-gateway-admin.test.js` (10 tests over the real manager kit, adapter keeper and
@@ -10063,3 +10064,66 @@ Evidence: unit and adapter lane (`test/adapter/m3-*`, `test/unit/m3-*`, `m4-ui-*
 all in sibling packages; none in harness files or the built bundle. Not rerun: perf files.
 Fit: waits exceeded holds (two files waited over 13 min for a slot on a machine shared with the
 M2 and M5 runs); the holds themselves are 2-4 min.
+
+### J-9900 2026-11-18 INT-M3 merge of the M3 lane into the integration lane - good fit
+Evidence: `git merge --no-ff claude/thix-m3` onto `3f67a8e505` (main after the M2 review): 135
+files of the lane, two conflicts. `README.md`: both sides rewrote the M2 acceptance paragraph's
+neighbours and the perf table; kept main's regression run, known failures and fixed-window table,
+added M3's acceptance-files paragraph and its three perf rows (`gateway`, `gateway-session`, `ui`),
+dropped the lane's stale copies of the M2 rows, and moved M3's "never longer than 10 minutes"
+note below the table (the lane had it inside the table). `scripts/provision-steps.js`: main's
+M2-T1 step registry kept; M3's appended `gateway` step moved into
+`scripts/provision-steps/30-gateway.js` (`export const steps`), with its `GatewayOption` typedef.
+Union files: no duplicate `J-` or `CC-` numbers; one join (J-0550 directly under the previous
+entry) given its blank line back; `milestones.md` M3 outcome block had no blank line above the
+section rule (a setext heading in Markdown), fixed. `yarn install --immutable` (4 s) linked
+exactly the H6 packages: `@endo/captp`, `@endo/marshal`, `ses`, `preact`, `ws`, `esbuild`,
+`happy-dom`, `@playwright/test`; `yarn.lock` unchanged by the install.
+Reading: good fit: the hotspot table predicted every shared line; the only real conflict was the
+step table, which the seam built after the lanes were cut had already replaced.
+
+### J-9901 2026-11-18 INT-M3 adaptations to the M2 review - fair fit
+Evidence: send-now. Since the review `QueueEntry.sendNow` on the head cancels the running turn
+itself (J-9491) and that turn's settle starts the entry; the controller still sent its own
+`E(turn).cancel()` after `sendNow`, which could reach the turn that had just started from the
+queue. The controller now sends `sendNow` only; `_m3-fake-powers.js` models the session's cancel;
+`m3-ui-conversation` and `m3-ui-controller` expect no page-side `Turn.cancel` (and one for Stop).
+Contract 9.2 says so. Checked and unaffected: receipts evicted (the UI never relied on a refusal),
+`historyPageRecords` 40 (the UI pages what the vat answers), `timeoutMs >= 1000` and https-or-
+loopback base URLs (M3's tests use the fake provider on 127.0.0.1 and set no timeout), the
+archive store rewrite (M3 reads `History` only through `archive.history()`).
+Reading: fair fit: a behaviour that moved from the page into the session left a duplicate cancel
+that no type or guard can see; only reading the two sides' code found it.
+
+### J-9902 2026-11-18 INT-M3 PM-owned edits for M3 - built
+Evidence: `m1a-provision-steps` (unit) and `m1a-provision` (integration) expect `['gateway',
+true]` after `pool`; the table test also checks `allProvisionSteps()` ends with `gateway`.
+`templateIdFor` hashes every agent-host module outside `impl/` (it named `durable.js` and
+`ephemeral.js` only, so `durable-gateway.js`, and M4's `durable-subscriptions.js` later, did not
+change the template id). `tsconfig.json` excludes `resources/agent-host/impl/gateway/assets/**`:
+the built bundle's top-level `var HandledPromise=...` retyped the global, which gave the 12
+errors in `../captp`, `../ocapn`, `../eventual-send`, `../promise-kit`; with the exclude
+`lint:types` has 0 errors with or without a built UI (no sibling package or skipLibCheck change).
+The JSDoc `@-mention` in `contract-m3.js` no longer breaks tsc; left as is. Contract text: 9.2
+request id is M2's A.4 form; 4.4 rule 4a (method names, `unknownMethod`) and the measured count;
+section 14 row `gatewayTexts.unknownMethod`. `test/browser/m5-ui.test.mjs` (carried by the M3
+lane) seeded a 32-hex request id; now an A.4 id (not run).
+
+### J-9903 2026-11-18 INT-M3 regression after the merge - verified
+Evidence: `corepack yarn test` (unit and adapter): 928 passed, 85 skipped (61 integration, 12
+browser, 9 spikes, 2 serve, 1 template gated), 65 s wall; main had 727 passed. Vocabulary in the
+merged tree: 258 keys, 140 method names, 36 ms. `tsc`: 0 errors. Shared slots: `m3-sessions` 3/3
+in 144 s held (11 ms waited), `m1a-provision` 1/1 in 152 s held (template rebuilt: new id from
+the step file and `durable-gateway.js`; the `gateway` step reported skipped). Guest bundles
+(unchanged by M3, H1: 0 bytes): session 186,998 of 200,000, exec 84,517 of 100,000, factory
+137,237. UI bundle 307,601 bytes (101,123 gzip), 6 features.
+Not run: the other M3 integration files, browser files, perf files.
+
+### J-9904 2026-11-18 INT-M3 fit: three lanes composing - good fit
+Reading: the directory registries (UI feature directories, gateway extensions, `vocabularyShapes`,
+provisioning step files) carried the M4 and M5 UI features in with M3 with no edit to a shared
+list; the two places that were lists (the README perf table and the provisioning step table)
+were the two conflicts. The weak point is the gateway's vocabulary and method set: an M4 or M5
+vat exo that a page reaches must have its guard answered by `vocabularyShapes()` or the gateway
+refuses it with `unknown method`; with fake powers the lanes' UI tests cannot see this, so it
+waits for the cross-lane browser runs.
