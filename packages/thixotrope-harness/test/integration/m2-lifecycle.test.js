@@ -64,6 +64,14 @@ test.after.always(() =>
 
 const run = integrationEnabled ? test.serial : test.skip;
 
+/**
+ * W2.9 repeats acceptance 13's SIGKILL cases at varied kill points: the
+ * delete is killed this long after its row reads `deleting`, the creation
+ * this long after the call (or at its new vat, whichever is first).
+ */
+const DELETE_KILL_DELAY_MS = Number(process.env.M2_DELETE_KILL_DELAY_MS ?? 0);
+const CREATE_KILL_DELAY_MS = Number(process.env.M2_CREATE_KILL_DELAY_MS ?? 300);
+
 /** @type {Awaited<ReturnType<typeof sliceTemplate>> | undefined} */
 let template;
 /** @param {import('ava').ExecutionContext} t */
@@ -277,6 +285,9 @@ run(
       e => e.type === 'row' && e.row.key === key && e.row.state === 'deleting',
       30_000,
     );
+    // W2.9: M2_DELETE_KILL_DELAY_MS moves the kill later into the delete.
+    if (DELETE_KILL_DELAY_MS > 0)
+      await new Promise(resolve => setTimeout(resolve, DELETE_KILL_DELAY_MS));
     await state.kill();
     await state.restart();
     await slice.refresh();
@@ -297,6 +308,7 @@ run(
     );
     emit({
       metric: 'm2.lifecycle.deleteKill',
+      killDelayMs: DELETE_KILL_DELAY_MS,
       archiveBefore: before.archive,
       archiveAfter: after.archive,
       by: 'W2.7',
@@ -307,7 +319,8 @@ run(
     );
 
     // createSession killed while it runs (once a new worker appears, or
-    // 300 ms after the call when a spare was taken): nothing half-made after.
+    // CREATE_KILL_DELAY_MS, default 300 ms, after the call when a spare was
+    // taken): nothing half-made after.
     const workersBefore = new Set(
       (await slice.workers()).map((/** @type {any} */ w) => w.workerId),
     );
@@ -317,7 +330,7 @@ run(
       .catch(() => undefined);
     await waitFor(
       async () =>
-        Date.now() - c0 > 300 ||
+        Date.now() - c0 > CREATE_KILL_DELAY_MS ||
         (await slice.workers()).some(
           (/** @type {any} */ w) => !workersBefore.has(w.workerId),
         ),

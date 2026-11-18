@@ -111,8 +111,19 @@ The M1b acceptance files are `m1b-live` (1, 6, 9), `m1b-content` (2, 7), `m1b-ex
 11), `m1b-exec-tool-restart` (3, 10), `m1b-context-restart` (8: 200 turns, a clean restart then an
 idle SIGKILL; `CONTEXT_TURNS`, `CONTEXT_RESTARTS`), `m1b-pool` and `m1b-pool-restart` (12);
 `m1b-qc` holds the M1b QC regressions (256-call rounds, the exec key flood, an exec background
-loop). Known failures are marked with AVA's `test.failing` and the reason in the title (only
-acceptance 9's delete, which is M2).
+loop). Known failures are marked with AVA's `test.failing` (or `test.skip` behind an opt-in
+variable) and the reason in the title.
+
+The M2 acceptance files (milestones.md M2; each runs alone in under 5 minutes against the fake
+provider server on 127.0.0.1, `test/fixtures/fake-provider-server.mjs`): `m2-providers` (1, 6,
+8), `m2-turns` (2, 12; 3 at the real 1,024-round limit is opt-in with `M2_TURNS_ROUND_LIMIT=1`,
+about 280 s of turn alone, J-0471), `m2-queue` (4, 5, 10), `m2-secrets` (7, and the grep of the
+whole state directory for every encoding of the key values), `m2-history` (9), `m2-catalog`
+(11), `m2-lifecycle` (13, 14; `M2_DELETE_KILL_DELAY_MS` and `M2_CREATE_KILL_DELAY_MS` move its
+SIGKILL points), `m2-archive-restart` (16), `m2-probes` (the too-big probes). Acceptance 15 (a
+5,000-turn session behaves like a 200-turn one) is `perf/history.perf.mjs`, whose sessions are
+built by `importState`. Files that use a Secret set `THIX_HARNESS_SECRETS_KEY` to a key file under
+`tmp/` (outside the state directory) and remove it.
 
 `m1a-slice-restart.test.js` repeats its SIGKILL cases (acceptance 5, 6, 7 and the held-ports
 case) once per kill delay with `M1A_KILL_DELAYS_MS=0,100,500,1500,4000` (20 tests, about 10
@@ -172,7 +183,10 @@ reading and a decision.
 | `perf/exec.perf.mjs` | `exec.first`, `exec.trivial`, `exec.sends.answered` (`.sendOnly` not measurable in M1b), `exec.runaway`, `exec.retire`, the too-big probes `tooBig.*` | 3 min |
 | `perf/pool.perf.mjs` | `session.create.pool` (+ `.poolAwake`), `session.create.cold`, `pool.refill`, `pool.firstTurn` | 3 min |
 | `perf/concurrency.perf.mjs` | `concurrency.single.turnStart`, `concurrency.10.turnStart`, `.turn`, `.crank` (from `status().deliveryHistogram`), `.rowPush`, `.gc` | 3 min |
-| `perf/history.perf.mjs` | `history.page` (+ `.floor`), `history.grow` (with the session vat's slot capacity every 100 turns), `history.heap`, `context.rebuild` of a 1,000-turn session after a clean restart (`HISTORY_TURNS`) | 25-30 min |
+| `perf/history.perf.mjs` | M2: the long-session table (J-9383 form) at 50 / 200 / 1,000 / 5,000 turns, each session built by `importState` (`perf/_long-session.mjs`): `history.turn.at<n>`, `.turn.start`, `.snapshot`, `.stall`, `.seal`, `.history.page` (newest, vat) and `.archived` (`History`), `.hub.row`, `.archive` (disk), `.walk` (newest turn back to turn 1), `.heap`, `.context.rebuild` (with `sameContext`), then `archive.flat.*` (1,000 and 5,000 against 200 turns, <= 1.25 x; acceptance 15) (`HISTORY_POINTS`) | 30-45 min |
+| `perf/journal.perf.mjs` | the same rows under `journal.` at 1,000 / 10,000 / 30,000 imported turns (plain shape), `journal.snapshot.budget.at<n>` (500 ms / 1 s / recorded), `session.heap`, `checkpoint.stall` (`JOURNAL_POINTS`, `JOURNAL_SNAP_EVERY`) | 1-1.5 h |
+| `perf/throughput.perf.mjs` | 50 sessions x 300 turns by `importState`; `restart.serving.m2` (15 s; gate: no idle vat woken) and `throughput` (20 busy sessions, deliveries per second) | 30-40 min |
+| `perf/archive.perf.mjs` (W2.5), `perf/import.perf.mjs` (W2.7), `perf/queue.perf.mjs` (W2.4, Node), `perf/provider.perf.mjs` (W2.1a, W2.1b, in process) | the archive grown by running every turn; the import rate; queue costs; provider overhead and SSE rates | see each file |
 | `perf/crank.perf.mjs` | `crank.worker.<heap>[.alloc][.<policy>]` (the worker run directly on a vat image: per-delivery cost and its collection share), `crank.ping`, `crank.turn.start.early/.mid/.late`, `crank.history.page[.late]`, `crank.context.rebuild`, `crank.grow`, `crank.heap`; with `CRANK_POINTS` also `.at<n>` rows per session length; `crank.grow` carries engine and hub deltas per 100 turns (`CRANK_TURNS`, `CRANK_WORKER_N`, `CRANK_GC_POLICIES`, `CRANK_START`) | 40-50 min at 1,000 turns; the long-session table (`CRANK_TURNS=5000 CRANK_POINTS=200,1000,4000 CRANK_START=mixed`, J-9383) about 2.5 h. A session takes at most 4,096 Composer submissions in 24 h (`maxReceipts`, J-9391): `mixed` starts the unmeasured turns with `startTurn` |
 | `perf/install.perf.mjs`, `perf/frames.perf.mjs` | M0's install and frame rows (`INSTALL_N`, `FRAMES_N`, `LOOP_N`) | a few minutes each |
 
