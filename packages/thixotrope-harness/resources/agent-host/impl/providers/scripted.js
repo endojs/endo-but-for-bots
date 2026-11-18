@@ -38,7 +38,8 @@
  * file) a `context` line records what the provider would have received:
  * `{ records, bytes, digest, turnDigests }` (sha-256 prefixes of the
  * transcript records' JSON, the whole and per turn, a turn starting at each
- * user message), so a test can compare contexts across a restart.
+ * user message), so a test can compare contexts across a restart; while a
+ * file `<logPath>.nodigest` exists the line has no digests (M2 W2.9).
  *
  * M2 W2.6: a script round with `times` stands for that many rounds in a row
  * (`scriptRoundAt`; the round-limit probe), and the `context` line also
@@ -51,7 +52,7 @@
 import { E } from '@endo/far';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { closeSync, fsyncSync, openSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, openSync, writeSync } from 'node:fs';
 import { pid } from 'node:process';
 
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
@@ -417,13 +418,20 @@ export const makeScriptedProvider = ({
         } else if (typeof req.system === 'string') {
           system = req.system;
         }
+        // M2 W2.9 (acceptance 15, m2-interfaces.md 4.13): a perf run that
+        // measures per-turn cost at length creates `<logPath>.nodigest`; the
+        // line then carries the timing only, so digesting the whole
+        // transcript every round (which grows with the session) is not in
+        // the measurement. Default (no such file): unchanged.
+        const digests =
+          logPath === undefined || !existsSync(`${logPath}.nodigest`);
         // Digested off the round's path, as `later` does for its lines.
         timers.after(0, () => {
           try {
             log('context', {
               ...where,
               ms,
-              ...contextDigests(transcript),
+              ...(digests ? contextDigests(transcript) : {}),
               ...systemDigest(system),
               ...(timing === undefined
                 ? {}
