@@ -13408,3 +13408,90 @@ reruns about 70 s; unit lane 67 s (1,284 passed, 116 skipped). `lint:duplicates`
 uncommitted adapter edits). No guest or manager change: bundles exec 63,826, factory 164,836,
 session 214,690 bytes before, unchanged by this unit. Scratch `tmp/S2` removed.
 Fit: neutral.
+
+### J-10160 2026-11-18 F2 HR-SYN-23 guest stubs and seams - built
+Evidence: `319366eb5f`. The session runtime refuses a part table without powers, inspector,
+grants or packages (`makeRuntime` throws `no runtime part <name>`), so the nine guest
+`textOf.notBuilt` sites go (`Session.grants`, `enqueueMessageOnce`, the object, inspection and
+package tools, the prompt resolver). `export.js` loses its `typeof` fallbacks (`records.base`,
+`runner.beginDelete`), the turn runner its ignored `contextSource` option, `turn.js` its
+`plainBytes` re-export, `exec/main.js` its "kept for its tests" re-export. `textOf.notBuilt`
+moves to the Node table: the adapter's ops facets (`attach.js`, `index.js`,
+`credential-ops.js`) still answer it until the step-4 reinstall (HR-SYN-2). Tests that built a
+session with a part subset now pass every real part or a stand-in; the construction test fails
+on the old `m5-parts.js`. Bytes: session 214,690 -> 213,474, exec 63,826 -> 63,590, factory
+164,836 -> 164,613. Not done: `site ?? 'adapter'`, `queue.release`/`assertNoActiveTurn`, the
+factory's optional pool and settings, `context-source.js`'s `archive === undefined`, the
+adapter's empty `channelTaps` and `live-service.js`, the dead exports.
+Fit: good (a missing part is now a construction error, as the review asked).
+
+### J-10161 2026-11-18 F2 HR-SYN-1 one limits table and the M5 fold - built
+Evidence: `46b5602b19`, `a1373d71b9`. `limits-m5.js` `limitsM5` folds into `limits.js` `limits`
+(no collision among 91 + 37 names; derived entries read the module's own `core`).
+`interfaces-m5.js` and `interfaces-m5-factory.js` fold into `guards/base.js` (exec entries),
+`guards/session.js` and `guards/factory.js`: one guard per interface under its plain name, the
+widest version (`Session` +2 methods, `Composer.submit` options, `ExecScope.inspect`, `Operator`
++2, `Preset` M5's five). The M1b and M2 views go from `interfaces.js` (23 readers rewired, the
+manager part `durable.js` among them); the exec program's copy in `render.js` goes;
+`m5Widenings` were already equal to the plain shapes. Proof: `guards-split.test.js` now compares
+through `test/fixtures/guard-fold-map.json` with the X1 snapshot plus a before-fold snapshot of
+the M5 texts and names: 128 entries re-keyed, 96 old entries removed with reasons, every digest
+equal; gateway sets 258 keys and 141 methods, unchanged. Found: the gateway's LiveSubscription
+wrapper read `m1bInterfaces.LiveSubscription`, which the view never held, so it has always run
+unguarded; kept so (behaviour-preserving), reported. Bytes: exec 63,590 -> 61,544, factory
+164,613 -> 154,740, session 213,474 -> 206,850.
+Fit: good (the session program has 33 KB of its 240 KB left, against 25 KB at the start).
+
+### J-10162 2026-11-18 F2 HR-SYN-1 renames by concept - built
+Evidence: `33e726b912`, `93b410bf4b`, `b9b535e034`, `ac3d38e184`, `aefefc1cf0`. `git mv` then
+importers, no compatibility names: `runtime-parts.js` (`runtimeParts`),
+`config/subscription-defaults.js`, `AH/gateway/protocol.js`, `AH/gateway/extensions/secrets.js`
+(its `name` stays `m4-secrets`), `subscription-limits.js` (`subscriptionLimits`; the plan said
+`host-limits.js`, corrected: `hostLimits` is the tests' name for `config/defaults.js`),
+`subscription-texts.js` (`subscriptionTexts`, `subscriptionTextOf`, `subscriptionCodes`), and
+`shapes.ExecScopeInfo` for `ExecLease`. `fold-plan.md` section 6 is the rename map; each contract
+carries a note pointing to it. Left for the step-4 reinstall: `interfaces-m3.js`,
+`interfaces-m4.js` and their `m3*`/`m4*` exports; the guards' build ingredients are still
+exported. Not done: section 4 (test helpers, template ids) and the perf file renames.
+`SealedText` is not renamed: it is an exo name that crosses CapTP. Bytes after the renames:
+factory 155,052, session 206,925 (longer names).
+Fit: neutral (mechanical; the rewriter tool's spread handling had to be fixed once).
+
+### J-10163 2026-11-18 F2 HR-SYN-27 guest helpers - built
+Evidence: `50c997c4cc`. One `messageOf` in `guest/lib/bounded.js` (the guarded form `render.js`
+had) replaces seven copies; the old copies answered the same text for every value they did not
+throw on (a symbol or a hostile `toString`). `turn.js` uses `tools/exec.js` `NOT_RUN_TEXT`
+(no cycle: `tools/exec.js` never imports `turn.js`). New `test/unit/guest-helpers.test.js`.
+Bytes: exec +144, factory +363 (bounded.js now holds it), session -18: removing six small
+functions saved little against the import lines. The adapter's and UI's copies, the serial
+queues and the surrogate-safe cuts (all outside `guest/`) are not touched.
+Fit: neutral for bytes, good for one behaviour.
+
+### J-10164 2026-11-18 F2 HR-SYN-34 closed accounts watch as a field - built
+Evidence: `4eda82d98d`. `AccountsBatch` gains optional `closed` and `reason` (`idle`, `client`,
+`stopped`); a closed watch answers `{ rev, pools: [], closed: true, reason }` instead of
+rejecting with `accountsWatchClosed`, and `ui/src/accounts/feed.js` re-watches on the field
+(bounded, then the same text shown). The gateway's key set is unchanged (both keys existed).
+Contract change: `m4-interfaces.md` 6 and its call table; the fold map lists the two changed
+guards. The Claude overload half was already done by `2fda3d801f` (`ProviderFailure.errorType`).
+Fit: good.
+
+### J-10165 2026-11-18 F2 proofs - verified
+Unit and adapter lane after every code commit: 1,283 then 1,285 passed (116 skipped; the
+baseline's one failure, `run-lock-slots` two CLI takers under load, did not recur). tsc clean;
+eslint 0 errors over guest, resources, ui/src, test, config, scripts, perf (the gitignored
+`gateway/assets/` build output excluded). `lint:duplicates` 3.22 % -> 3.00 % (802 of 26,741).
+Integration, shared, `--jobs 5`: m1a-slice, m1a-provision, m2-queue, m2-lifecycle-export,
+m3-gateway, m3-sessions, m4-pools, m4-accounts, m5-objects, m5-security, m5-snapshot all exit 0
+(387 s wall, 1,772 s held, templates rebuilt). Browser, `--jobs 5`: the five files exit 0 (195 s
+wall, 692 s held). Bundles start -> end: exec 63,826 -> 61,688, factory 164,836 -> 155,427,
+session 214,690 -> 206,907 bytes. Largest left: `guards/session.js`, `turn.js` (35 KB stripped),
+`guards/factory.js`.
+Fit: good.
+
+### J-10166 2026-11-18 F2 time record - verified
+Time: first command 19:44:03Z. Over 60 s: unit lanes about 67 s each (eleven runs); the eleven
+integration files 387 s wall; the five browser files 195 s wall; one before-check of the UI feed
+ran into AVA's 2-minute timeout. Manager part changed (`durable.js`, `durable-subscriptions.js`
+imports; `interfaces-m4.js` shape): one reinstall for the batch. Scratch `tmp/F2` removed.
+Fit: neutral.
