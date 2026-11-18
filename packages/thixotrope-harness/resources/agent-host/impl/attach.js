@@ -40,6 +40,9 @@ export const SERVICE_KEY = 'agent-host';
 const makeOpsInterface = () => {
   const key = shapes.Id;
   const done = M.undefined();
+  // Counts cross as numbers (the store's generations, sizes and audit
+  // limits); M.nat() is a bigint guard and refused every value (W2.9).
+  const count = M.and(M.number(), M.gte(0));
   const backendRequest = (/** @type {Record<string, any>} */ optional) =>
     M.splitRecord(
       { backend: M.remotable('Backend'), spec: shapes.BackendSpec },
@@ -100,9 +103,9 @@ const makeOpsInterface = () => {
     secretDescribe: M.callWhen(key).returns(
       M.splitRecord(
         {
-          generation: M.nat(),
+          generation: count,
           state: M.or('active', 'revoked'),
-          bytes: M.nat(),
+          bytes: count,
         },
         {},
         {},
@@ -111,7 +114,7 @@ const makeOpsInterface = () => {
     secretRevoke: M.callWhen(key).returns(done),
     secretDelete: M.callWhen(key).returns(done),
     secretAudit: M.callWhen(
-      M.splitRecord({ limit: M.nat() }, { key }, {}),
+      M.splitRecord({ limit: count }, { key }, {}),
     ).returns(shapes.AuditPage),
     secretWriter: M.callWhen().returns(M.remotable('SecretWriter')),
   });
