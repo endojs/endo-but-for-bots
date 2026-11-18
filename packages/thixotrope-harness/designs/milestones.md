@@ -898,7 +898,6 @@ page drops it and that vat next collects (J-9386, J-9392).
 (M4), Network chip and internet toggle (M7), emergency stop (M6), voice and `/audio` (M11), Home,
 spaces and the admin CLI (M12), assistant launch R6-60 (M11).
 
-
 **Outcome (W3.8, lane `claude/thix-m3`; not yet marked done: the PM marks M3 after the lanes are
 merged).** Release worker `367e78ad...`, crank budget 50 M, Apple M3 Max with other lanes' agents
 and perf runs (load 2-7); headless Chromium from Playwright's cache (headless shell build 1243).
@@ -929,6 +928,7 @@ Commits up to `22a78eca62` and the W3.8 fixes after it (J-9600..J-9609).
 
 Each M3 perf file ran under 10 minutes of slot hold (gateway 5.3-5.5 min, gateway-session 9.3
 min, ui 6.3 min); the windows are fixed (60 s, 150 s restart, 5 min growth).
+
 ---
 
 ## M4. Secrets manager and subscription pools
