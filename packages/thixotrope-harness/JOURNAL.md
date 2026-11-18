@@ -13495,3 +13495,59 @@ integration files 387 s wall; the five browser files 195 s wall; one before-chec
 ran into AVA's 2-minute timeout. Manager part changed (`durable.js`, `durable-subscriptions.js`
 imports; `interfaces-m4.js` shape): one reinstall for the batch. Scratch `tmp/F2` removed.
 Fit: neutral.
+
+### J-10180 2026-11-18 CL-QC independent review of the step 1-2 cleanup - verified
+Evidence: `802bd2767c..f6a844cbbf` (29 commits, 281 files), read in full for the product
+modules; G1, S1, S2 and F2 reports checked against the code. No file but this journal changed.
+Behaviour-preserving commits: the fold's guard tables equal the base entries digest for digest
+(`guard-fold-map.json`); the plain names that widened (`interfaces.Session`, `Composer`,
+`ExecScope`, `Operator`, `Preset`, `shapes.ExecRequest`) were read at the base only by the stand-in
+programs and through `extendInterface` to the M5 guard, so no product exo changed guard. The seven
+`messageOf` copies answer the same text for every value they answered; `NOT_RUN_TEXT` is the
+removed `CANCELLED_BEFORE_RUN` text byte for byte. The gateway `LiveSubscription` wrapper was
+unguarded at the base too (`m1bInterfaces` never held it). Every old name of the rename map was
+grepped across guest, resources, ui, scripts, perf, test and package.json: no import is left;
+stale mentions remain only in comments (J-10182). `tsc` exit 0; the UI builds (esbuild, no missing
+export); package eslint has no error outside the ignored built asset.
+Fit: good.
+
+### J-10181 2026-11-18 CL-QC correctness fixes tried against the code - verified
+Evidence: scratch probes (removed). HR-SYN-7: the live `harnessNames` at the base (glob, no skip
+logged) and at HEAD (list) give the same 258 keys and 141 methods, compared set for set. HR-SYN-9:
+a `release` that starts before the incarnation's first sweep leaves the deleted bytes counted (9
+of 50 runs: daemon 10,000 with no file left), because `release` awaits only a sweep already in
+flight (`sweeping?.catch`). Over-count only (quota refuses early, never late), for the rest of the
+incarnation. With `await sweep().catch(() => {})` in its place: 0 of 50. HR-SYN-8: the store's
+fresh-entry answer and the delete retry's `UNKNOWN_SECRET` acceptance hold for the retry path; the
+retried create audits a second attempted/succeeded pair. HR-SYN-11: cursors are strict digits;
+member serials and the catalogue serials are heap state rebuilt by a reinstall (D-13), no
+migration needed. HR-SYN-34: no consumer besides the UI feed relied on the rejection.
+Fit: good.
+
+### J-10182 2026-11-18 CL-QC findings - verified
+1. `impl/blobs.js` `release`: start the sweep, not only wait for one in flight (J-10181).
+2. `scripts/check-duplicates.mjs`: the share is 3.00 % (802 of 26,741, 37 clusters) at
+   `f6a844cbbf`, against 3.22 % (865 of 26,895, 41 clusters) at `802bd2767c`; the script's own rule
+   ("lowers the ceiling in the same commit, about 0.25 points of margin") wants 3.25, it is 3.5.
+3. `test/integration/m5-reachability.test.js` walks `[interfaces, interfaces, interfaces,
+   interfaces]` (a mechanical rename): same result, four copies of every guard; one table.
+4. `designs/m3-interfaces.md` W3.2 export table still gives `harnessVocabulary({ guestLibDir?, log })`
+   and the `vocabulary-skip` log.
+5. Stale comments naming `interfaces-m5*.js`, `m5Shapes`, `m5FactoryShapes`: `guest/exec/main.js`,
+   `guest/exec/inspect.js`, `guest/lib/preset-catalog.js`, `guest/lib/tool-args.js`, `ui/src/presets/`,
+   `ui/src/mentions/texts.js`, two tests. Guest ones belong in the step-4 rebuild batch.
+6. Template keys hash `impl/archive` for the turn-running templates (m3-300, long) but not
+   `impl/blobs.js`, whose files those templates carry.
+Fit: good.
+
+### J-10183 2026-11-18 CL-QC runs - measured
+Unit and adapter lane: 1,285 passed, 116 skipped, 66.5 s. Shared slots, `--jobs 4`, 396.9 s wall:
+m2-secrets 127.5 s, m4-accounts 141.5, m4-pools 146.3, m4-wire 156.7, m4-retire 81.0,
+m5-reachability 138.4, m2-queue 156.0, m1b-followups 269.4; all exit 0. Bundles (no guest change
+by this unit): exec 61,688, factory 155,427, session 206,907 bytes, the figures F2 reported.
+Fit: good.
+
+### J-10184 2026-11-18 CL-QC time record - verified
+Time: first command 20:38:43Z. Over 60 s: unit lane 66.5 s; integration batch 396.9 s wall.
+Not run: browser files, perf checks, the other 43 integration files. Scratch `tmp/CL-QC` removed.
+Fit: neutral.
