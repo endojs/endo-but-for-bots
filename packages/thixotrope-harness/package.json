@@ -33,7 +33,7 @@
     "lint:types": "tsc",
     "perf": "node perf/_harness.mjs",
     "test": "ses-ava",
-    "test:integration": "THIX_HARNESS_INTEGRATION=1 node scripts/run-lock.mjs --label integration -- ses-ava -- --serial --concurrency 1 'test/integration/*.test.js' 'test/template/*.test.js'",
+    "test:integration": "THIX_HARNESS_INTEGRATION=1 node scripts/test-integration.mjs",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:xs": "exit 0"
   },

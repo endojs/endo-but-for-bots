@@ -7675,3 +7675,121 @@ once (architecture 6, blast radius): pages reconnect on the R6-14 schedule.
 Decision: `makeGatewayService` exposes `attached()` (called from `onSink`) and serves `fetch` only
 after it; extension modules must be synchronous ES modules; recorded as the gateway's share of the
 agent-host blast radius.
+### J-9520 2026-11-18 I-3 lane tooling: scripts/new-lane.sh - good fit
+Evidence: `scripts/new-lane.sh scratch` then `--remove scratch` from the infra lane (base
+`3588cab190`, warm yarn cache), worker `367e78ad...`.
+Reading: create 22.6 s (worktree about 5 s, `yarn install --immutable` 16.2 s, worker copy and
+link 0.2 s, boot bundles 0.9 s, identical to the main worktree's by `cmp`); re-run 5.4 s (install
+4.1 s, bundles up to date). Disk: 1.3 GB by `du` (node_modules 1.0 GB), about 0.3 GB of new
+blocks by `df` around the removal (pnpm hard links). Remove 19 s. Refusals checked: untracked
+file in the lane, the worktree the script runs from, a bad name, a plain directory at the lane
+path, a lane path on another branch, a branch one commit ahead of the main branch.
+Decision: the worker is a content-addressed copy under `THIX_HARNESS_HOME/worker/<sha16>/`
+linked from the lane's `target/release`, so the default lookup works without environment and a
+core rebuild never swaps a running lane's binary. Lanes are cheap: create one per line of work.
+
+### J-9521 2026-11-18 I-3 union merge for the append-only logs - good fit, with limits
+Evidence: `.gitattributes` `merge=union` for `JOURNAL.md`, `CORE-CHANGES.md`, `TIMELOG.md`;
+a throwaway repository with the real journal tail, two branches each appending an entry and a
+`CC-002` table row.
+Reading: with the attribute both merges exit 0 and keep both entries and both rows; without it
+the same merge conflicts (exit 1). Limits seen: both `CC-002` rows kept (duplicate numbers pass
+silently), and the blank line before the second appended entry was dropped (the two hunks shared
+it).
+Decision: as built; the PM checks for duplicate numbers and runs prettier after a merge
+(`designs/process.md` section 1).
+
+### J-9510 2026-11-18 I-2 process time record: scripts/process-time.mjs - good fit, with limits
+Evidence: `node scripts/process-time.mjs <session-dir> --git-range 48d6f3e08b..HEAD` over the PM
+session (10 workflows, 73 agents, 6,438 shell commands, 276 commits) in under 1 s; unit test
+`test/unit/process-time.test.js` (synthetic transcripts, 5 tests).
+Reading: each tool call is the interval from its request to its result; an agent's wall time is
+cut at every timestamp and each piece goes to the highest-priority call in flight, else model
+time, else idle attributed to the background job in flight. Shell commands are sorted by
+patterns (run-lock workload, probe, cargo, install, unit test, lint, git, read, other); polls by
+their own words, then by the background job. The report carries only durations, counts, agent
+labels, workflow names and category names (the test checks that no command text or path leaks).
+Limits: lock wait before `runs.jsonl` is a lower bound (agents polled queued runs); `nohup`
+jobs are attributed only by keywords; "model" includes API latency.
+Decision: as built. `TIMELOG.md` keeps hand-written text outside the generated block; only the
+PM regenerates it, on the merged branch (it is `merge=union`, J-9521, so two lanes regenerating
+it would interleave blocks).
+
+### J-9511 2026-11-18 I-2 where the first 48 hours went - measurement
+Evidence: `TIMELOG.md` generated 2026-11-18 02:20 UTC, build window 2026-11-16 02:04 to
+2026-11-18 02:20 (48.3 h).
+Reading: agent time 66.3 h (1.4 agents busy on average). Run-lock workloads 36.5 h (55 %), model
+18.5 h (28 %), unit tests 3.8 h, probes 3.4 h, edits 1.6 h, idle 1.0 h, cargo 0.6 h, everything
+else under 0.5 h. Some agent was inside a run-lock workload for 33.3 h of wall time (69 %).
+31 commands ran over 30 min (31.9 h), 11 over an hour (18.8 h). Slowest workflows: core-perf
+12.5 h (10.8 h locked), m1b 10.5 h (7.8 h locked). Nothing running: 16 min in eight gaps; PM
+working time 40 min in all. Lock wait measured 10 min (lower bound).
+Decision: poor fit of the process, not of the tool: the build is bound by one serialised lane and
+by fixed-count perf runs that take hours. Biggest savings: rate-per-fixed-time perf checks and
+concurrent lanes.
+
+### J-9500 2026-11-18 I-1 tooling run lock as a machine-wide slot pool - good fit
+Evidence: `scripts/run-lock.mjs`, `test/run-lock-slots.test.js` (13 tests) and
+`test/run-lock.test.js` (17, unchanged assertions): 30 pass in about 11 s, 10 s of it the
+SIGTERM-ignoring workload's SIGKILL grace.
+Reading: the lock lives in `<THIX_HARNESS_HOME>/run-lock/` (`slot`, `slot.1`..`slot.<N-1>`,
+`slot.intent`), N = `THIX_HARNESS_RUN_SLOTS` (4). Shared takers take any free slot; `--exclusive`
+(default for `perf/*.perf.mjs`, also in process when this process's arguments name one) holds an
+intent marker, then every slot under one generation id, and drops the marker once all are held; a
+shared taker that sees a live marker waits, and one that took a slot as the marker appeared gives
+it back. Every file (slot or marker) keeps the old guarantees: hard-linked creation, generation
+nonce, break-token compare-and-delete, taker or workload alive. Re-entry is per slot and checked
+before the marker. `--max-ms` (600,000; `THIX_HARNESS_RUN_MAX_MS`) runs the workload in its own
+process group, SIGTERM then SIGKILL after 10 s, exit 124; one line per exit to `runs.jsonl`
+(O_APPEND, one write). `--lock PATH` is a private one-slot lock (`--slots N` for more).
+Decision: as built. Every taker on the machine must use the same N; a wrapper killed by SIGKILL
+logs nothing (its slot stays held by the workload record, as before).
+
+### J-9501 2026-11-18 I-1 tooling what several processes share inside one worktree - good fit, with fixes
+Evidence: audit of `test/template/index.js`, `scripts/bundle-guest.mjs`, `perf/_harness.mjs`,
+`test/spikes/_spike.js`, `test/_helpers.js`, `test/adapter/*`, `test/fixtures/fake-provider-server.mjs`.
+Reading: unsafe before: (1) two processes building the same template both renamed into `tmp/t<key>`
+after `rm` of it (the second rename fails, or a copy in progress loses its source); (2)
+`removeTemplates` deleted every `tmp/b<pid>`, including a live build; (3) `bundle-guest.mjs`
+wrote `dist-guest/<program>.js` in place (a reader could see half). Fixed: a private build lock
+`tmp/t<key>.build` with a cache re-check after the wait; the old template is renamed aside before
+the new one is renamed in; live build directories are kept; bundles are written aside and renamed.
+Already safe: copies `tmp/<6 random chars>` (cp `errorOnExist`), build dirs `tmp/b<pid>`, perf
+`tmp/pf<pid>` and `tmp/cw<pid>`, spikes `tmp/<tag><pid>`, `scratch()`/`mkdtemp` names, the fake
+provider server on port 0, sockets inside each state directory. No fixed port or socket path found.
+Left: a copy taken while `rebuild: true` (M1A_REBUILD, spike S8) replaces that template still fails.
+Decision: as built; rebuilds stay a by-hand operation.
+
+### J-9502 2026-11-18 I-1 tooling four integration files in four slots - good fit
+Evidence: `m1b-content`, `m1a-slice-crash`, `m1b-exec-tool-restart`, `m1b-pool-restart`, each
+through `run-lock.mjs --max-ms 300000`, worker `367e78ad...`, this lane's worktree, the M2 build
+running alongside (load 3.3-4.5 before). All 7 tests passed in every run.
+Reading: cold concurrent (three templates built at once): 193 s wall (files 172-193 s), load 3.4 ->
+7.0. Warm sequential: 397 s (93-107 s each). Warm concurrent: 130 s (113-130 s each), load 4.7 ->
+6.4 on 16 cores: 3.1x the throughput; each file slows by 15-25 %. No file failed only when
+concurrent. Waits for a slot 17-54 ms.
+Decision: integration files run four at a time; a milestone's integration lane is about a third of
+its serial time.
+
+### J-9530 2026-11-18 I-FIX tooling run-lock review fixes - good fit
+Evidence: `test/run-lock-slots.test.js` (5 new tests), QC findings of 2026-11-18.
+Reading: blocker fixed: start times are read with `TZ=UTC LC_ALL=C`, so `ps -o lstart` is the same
+text in every zone and locale (before: a TZ=UTC holder read as "02:56" and as "16:56" from
+Pacific/Honolulu, and a waiter broke it). New tests: three zones and locales agree; a UTC waiter
+times out on a Honolulu holder instead of breaking it. Also fixed: in-process takers of the
+machine-wide lock log their run on release (exit code null); the CLI ends processes a workload
+leaves in its group before freeing the slot; temporaries of killed writers are removed after a
+minute. Not fixed: the 10-20 ms window between spawn and the workload record (no way to record a
+pid before it exists); in-process takers still have no time box (documented: run them under the
+CLI). Lock suites: 50 tests in 11 s.
+Decision: as built. Old-format records (local-zone start times) exist only from this lane's
+unmerged I-1 code.
+
+### J-9531 2026-11-18 I-FIX tooling test:integration per file, four at once - good fit
+Evidence: `scripts/test-integration.mjs`; `corepack yarn test:integration --jobs 4` on `m1a-slice`,
+`m1a-provision`, `m1b-pool`, `m2-queue`, M2 build running alongside, load 4.2 -> 5.3.
+Reading: the old script put all 23 files under one 10-minute box (killed at 600 s with exit 124;
+serial runtime 35-70 min). Now each file is its own run-lock run (own slot, box, log line). Trial:
+all 10 tests passed, 196 s wall, files 143-196 s, slot waits 17-52 ms; one run-log line per file,
+none from the nested in-process takers. 23 files at four at a time is about 15-20 min of wall time.
+Decision: as built.
