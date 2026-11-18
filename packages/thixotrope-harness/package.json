@@ -33,6 +33,7 @@
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
     "perf": "node perf/_harness.mjs",
+    "perf:pass": "node perf/_pass.mjs",
     "test": "ses-ava",
     "test:integration": "THIX_HARNESS_INTEGRATION=1 node scripts/test-integration.mjs",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
