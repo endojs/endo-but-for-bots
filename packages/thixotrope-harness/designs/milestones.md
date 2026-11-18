@@ -774,7 +774,7 @@ Open:
 - **major** (test process): `perf/gateway-session.perf.mjs` exited 124 in the recorded pass: every
   row was measured (`fileTime` 555 s) but the clean stop after the 24-restart SIGKILL window ran
   past the 10-minute box (held 602 s). Proposed fix: move `ui.restartReady.*` into a file of its
-  own (J-10062).
+  own (J-10061).
 - **fail** (perf, carried): `ui.hubGrowth` session row exports 1.91 x the start (budget 1.25 x)
   while the hub stays at 1.15 MB; the request is CC-051 + CC-060, one hub row-format change
   (`CORE-CHANGES.md`, requested, not built).
