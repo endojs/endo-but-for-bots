@@ -31,6 +31,7 @@
  * ARCHIVE_PAGE_WINDOW_MS (15,000). About 5 minutes.
  */
 import { runPerf } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 const { runLongSession } = await import('./_long-session.mjs');
 
@@ -46,8 +47,8 @@ await runPerf('archive', async ({ provision, root }) => {
     points,
     shape: 'tool',
     grow: true,
-    windowMs: Number(process.env.ARCHIVE_WINDOW_MS ?? 60_000),
-    pageWindowMs: Number(process.env.ARCHIVE_PAGE_WINDOW_MS ?? 15_000),
+    windowMs: windowMs('ARCHIVE_WINDOW_MS', 60_000),
+    pageWindowMs: windowMs('ARCHIVE_PAGE_WINDOW_MS', 15_000),
     after: 'rebuild',
     archiveRow: 'state',
     provision,

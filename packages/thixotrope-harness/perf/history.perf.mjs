@@ -34,6 +34,7 @@
  * HISTORY_SHAPE (plain), HISTORY_WINDOW_MS (60,000). About 6 minutes.
  */
 import { runPerf } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 const { runLongSession, flatnessRows } = await import('./_long-session.mjs');
 const { shapeOf, specsFor } = await import('./_long-template.mjs');
@@ -45,7 +46,7 @@ await runPerf('history', async ({ provision, root }) => {
     feature: 'history',
     points,
     shape: shapeOf(process.env.HISTORY_SHAPE),
-    windowMs: Number(process.env.HISTORY_WINDOW_MS ?? 60_000),
+    windowMs: windowMs('HISTORY_WINDOW_MS', 60_000),
     after: 'heap',
     provision,
     root,

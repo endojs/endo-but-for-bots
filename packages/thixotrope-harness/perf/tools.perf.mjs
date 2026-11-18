@@ -31,6 +31,7 @@
 import { performance } from 'node:perf_hooks';
 
 import { deliveries, emit, runPerf, single, summarize } from './_harness.mjs';
+import { windowMs as windowLength } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -47,7 +48,7 @@ const { makeSlice, requestId } =
 const { execTemplate } = await import('../test/integration/_m1b-exec.js');
 const { runTurn, turnRecords } = await import('../test/integration/_m1b.js');
 
-const WINDOW_MS = Number(process.env.TOOLS_WINDOW_MS ?? 60_000);
+const WINDOW_MS = windowLength('TOOLS_WINDOW_MS', 60_000);
 const PROBE_MS = 30_000;
 const WARMUP = 3;
 const COUNTED = 10;

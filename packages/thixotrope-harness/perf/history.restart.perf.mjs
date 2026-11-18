@@ -21,6 +21,7 @@
  * HISTORY_PAGE_WINDOW_MS (15,000). About 5 minutes.
  */
 import { runPerf } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 const { runLongSession } = await import('./_long-session.mjs');
 const { shapeOf, specsFor } = await import('./_long-template.mjs');
@@ -33,7 +34,7 @@ await runPerf('history', async ({ provision, root }) => {
     points,
     shape: shapeOf(process.env.HISTORY_SHAPE),
     windowMs: 0,
-    pageWindowMs: Number(process.env.HISTORY_PAGE_WINDOW_MS ?? 15_000),
+    pageWindowMs: windowMs('HISTORY_PAGE_WINDOW_MS', 15_000),
     walk: point => point >= 1000,
     after: 'rebuild',
     provision,

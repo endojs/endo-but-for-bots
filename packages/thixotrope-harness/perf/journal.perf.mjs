@@ -35,6 +35,7 @@
  * JOURNAL_WINDOW_MS (60,000). About 4 minutes.
  */
 import { emit, runPerf } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 if (process.env.JOURNAL_SNAP_EVERY)
   process.env.SNAP_EVERY = process.env.JOURNAL_SNAP_EVERY;
@@ -63,7 +64,7 @@ await runPerf('journal', async ({ provision, root }) => {
     feature: 'journal',
     points,
     shape: shapeOf(process.env.JOURNAL_SHAPE),
-    windowMs: Number(process.env.JOURNAL_WINDOW_MS ?? 60_000),
+    windowMs: windowMs('JOURNAL_WINDOW_MS', 60_000),
     after: 'heap',
     provision,
     root,

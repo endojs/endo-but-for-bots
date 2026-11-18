@@ -18,6 +18,7 @@ import { performance } from 'node:perf_hooks';
 import { E } from '@endo/far';
 
 import { harnessRoot } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 import { m4Template, m4View } from '../test/integration/_m4.js';
 import { frameKind } from '../test/integration/_m1a-slice.js';
 import { startFakeSubscriptionServer } from '../test/fixtures/fake-subscription-server.mjs';
@@ -39,7 +40,7 @@ export const closeServers = async () => {
 };
 
 /** The measured window of one point. */
-export const WINDOW_MS = Number(process.env.M4_WINDOW_MS ?? 60_000);
+export const WINDOW_MS = windowMs('M4_WINDOW_MS', 60_000);
 
 /** The fake servers' fixed answer time (section 18). */
 export const FAKE_MS = 20;

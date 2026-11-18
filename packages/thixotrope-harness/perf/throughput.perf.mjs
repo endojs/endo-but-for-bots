@@ -38,6 +38,7 @@ import {
   runPerf,
   single,
 } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -50,7 +51,7 @@ const { makeSlice, round1, sliceTemplate, untilAsleep } =
 const { specsFor, useTemplate } = await import('./_long-template.mjs');
 
 const BUSY = Number(process.env.THROUGHPUT_BUSY ?? 20);
-const STRETCH_MS = Number(process.env.THROUGHPUT_MS ?? 60_000);
+const STRETCH_MS = windowMs('THROUGHPUT_MS', 60_000);
 const RESTART_N = Number(process.env.RESTART_N ?? 3);
 const spec = /** @type {import('./_long-template.mjs').BusySpec} */ (
   specsFor('throughput').at(-1)

@@ -26,6 +26,7 @@ import { writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import url from 'node:url';
+import { windowMs } from './_window.mjs';
 
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
 installGuestPrelude();
@@ -190,7 +191,7 @@ if (
 /** Every M3 perf file ends its windows by 9 min 30 s (m3-interfaces.md 13). */
 export const FILE_BUDGET_MS = 9.5 * 60_000;
 /** The default window of one measured point. */
-export const WINDOW_MS = Number(process.env.M3_WINDOW_MS ?? 60_000);
+export const WINDOW_MS = windowMs('M3_WINDOW_MS', 60_000);
 /** Fewer samples than this in a window are flagged `fewSamples`. */
 export const FEW_SAMPLES = 30;
 

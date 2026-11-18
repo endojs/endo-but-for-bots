@@ -36,6 +36,7 @@
 import { performance } from 'node:perf_hooks';
 
 import { emit, runPerf, single, summarize } from './_harness.mjs';
+import { windowMs } from './_window.mjs';
 
 // After the harness module (it locks down first).
 const { installGuestPrelude } = await import('../scripts/guest-prelude.js');
@@ -62,8 +63,8 @@ const {
 const { keyFloodName, makeDisposableKeyFlood } =
   await import('../test/fixtures/m5-objects.js');
 
-const WINDOW_MS = Number(process.env.EXEC_M5_WINDOW_MS ?? 60_000);
-const NODE_MS = Number(process.env.EXEC_M5_NODE_MS ?? 10_000);
+const WINDOW_MS = windowMs('EXEC_M5_WINDOW_MS', 60_000);
+const NODE_MS = windowMs('EXEC_M5_NODE_MS', 10_000);
 const WARMUP = 3;
 const PER_CALL = 20;
 
