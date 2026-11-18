@@ -7507,3 +7507,19 @@ test (not W2.7's file). (5) The factory forwards `listModels` with the operator'
 and model when the `ModelRequest` guard admits them (W2.2's widening), and answers `unavailable`
 when the manager is lost.
 Decision: for the PM and W2.9.
+
+### J-0485 2026-11-18 M2 import rate at 5,000 and 30,000 turns - perf
+Evidence: `perf/import.perf.mjs` (commit `dfe63dd39a`, worker `367e78ad...`, crank budget 50 M,
+slot ceiling 4,000,000, collection schedule allocation, hub store log, load 1.2-2.0), each length
+in a fresh state from the m1a template, one session.
+Reading: 5,000 one-tool-call turns (8 records, 11.4 MB of export file): 652 s, 7.7 turns/s. 30,000
+plain turns (4 records, 52.2 MB of export file, `IMPORT_SHAPE=plain`): 2,320 s (38.7 min), 12.9
+turns/s, 2,141 chunks of about 56 records (1.05-1.10 s each), 465 waits for seals (229 s in all),
+933 segments sealed, 124 MB added to the state directory (52.8 MB archive). The rate per 1,000
+turns stays flat from the first stretch to the last (13.3 -> 12.7 turns/s at 30,000; 7.0 -> 7.9 at
+5,000): with the archive the importing vat does not slow down with length. The cost is the vat's
+per-record checks (J-0481), not the archive: seal waits are 9-10 % of the time. Reading back every
+turn id through `History` and the vat: 5,000 in 21.5 s, 30,000 in 78 s (2,140 pages).
+Decision: fixtures for W2.9: 5,000 turns in about 11 min (6.5 min plain), 50 sessions x 300 turns
+for `restart.serving` in about 20-35 min, 30,000 plain in about 39 min. Faster needs the core
+candidate of J-0481 or a segment-copy import (J-0483).
