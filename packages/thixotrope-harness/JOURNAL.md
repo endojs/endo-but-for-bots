@@ -7636,3 +7636,65 @@ become per-turn rates over 60 s windows at two lengths reachable within a few mi
 200 and 1,000 turns) plus the archive's own bounded-retention checks, or wait for a segment-copy
 import (J-0483).
 Decision: M5 as designed; the M2 rows for the PM.
+
+### J-0718 2026-11-18 M5 contract settled against M3 and M4 - deviation
+Evidence: the cross-check of the M3, M4 and M5 contracts (W5.0-settle); M3's `m3-interfaces.md`
+6.2, 6.3, 9.2 and `GW/contract-m3.js` (`UiFeature`, `ComposerAddonProps`, `ComposerSendRequest`,
+`MessageRendererProps`); M4's `m4-interfaces.md` 3.2, 9.3, 9.4, 15; `m5-interfaces.md` 4.1, 4.2,
+9.1.
+Reading: M5 had planned entries in a UI hook table and a key-guard registry that M3 does not
+offer, a composer extension shape M3 does not have, `m4Extensions` spreads for methods M4 does not
+add, and an `accountStatus` tool-table entry M4 does not make. Settled as M3 and M4 designed: the
+UI is two new directories (`ui/src/presets/feature.js`, `ui/src/mentions/feature.js`, the latter
+an array of the `composer.addon` and the `message.renderer` chips); both M5 interface files export
+`vocabularyShapes()`; the gateway is a pass-through bridge, so M5 drops its "undeclared interface
+refused" requirement; the new-session preset picker is M3's (it reads `Preset.describe()`); H-2
+and H-4 lose their M4 half; M5 edits no M3 file. `makeProvision` forwards no step options at
+`3588cab190`, which all three lanes' gated steps need: a two-line seam, made once (9.1 H-10).
+Decision: applied in the contract and the M5 section of milestones; the forwarding seam for the PM.
+
+### J-0719 2026-11-18 M5 mentions on resend - awkward
+Evidence: M3 9.2 (exactly-once drafts keep `{ sessionKey, text, requestId }` only); M5 2.6 (the
+receipt fingerprint covers text and labels); presences do not survive a page reload.
+Reading: a draft resent after a reconnect would have dropped its attachments and so changed its
+fingerprint. M3's resend now goes through the same addon chain with `resend: true`, only after
+`getSubmissionReceipt(requestId)` answered none. The mention addon keeps chips in memory by
+`requestId` and the labels it inserted for the draft's life; a resend with the chips sends the
+same fingerprint, and a resend whose chips a reload lost throws `texts.attachmentsLost`, which
+keeps the draft and asks the person to attach again. Nothing is sent without its objects.
+Decision: as described (`m5-interfaces.md` 4.1 item 2).
+
+### J-0720 2026-11-18 M5 preset record frame margin - perf
+Evidence: a W5.0-settle measurement in Node of a maximal guard-accepted `PresetRecord` (three-byte
+text, 32 endowments, smallcaps encoding): 33,095 bytes with 16 template objects and description
+1,000; 31,595 with description 500; 24,316 with no template objects and description 500. String
+content (`messageBytes`) without template objects: 23,107 bytes three-byte, 7,979 ASCII.
+Reading: the W5.0 estimate (about 24,200 bytes) left out the model id (256 units), the effort,
+the template objects and the keys; the per-field bounds alone cannot keep a preset within a
+frame. The cross-check's fix (description 1,000 -> 500 units, the editor refusing above
+`frameBytes` - 2,048) is applied, and the same bound is made a whole-record rule:
+`limitsM5.presetRecordBytes` = 22,528 string content bytes, checked with `fitsFrame` by the
+editor and by `normalizePresetRecord` (`texts.presetTooLarge`, reworded to fit both uses). An
+ASCII preset at every field bound passes; a three-byte one must trim about 600 bytes. W5.1's
+guard-boundary test pins both.
+Decision: as described; for the PM, since it goes one step past the cross-check's wording.
+
+### J-0721 2026-11-18 M5 granted names and adapter tools - deviation
+Evidence: M4 3.2 and D-M5-9 (`accountStatus` offered through `TurnPorts.tools` on pool and API
+backends); `m5-interfaces.md` 2.5.
+Reading: a grant named like an adapter tool would have been offered beside it under one name. The
+built-in name set of a round is now the static tool table plus the names of that round's
+`active.ports.tools`, so a grant can be refused-builtin on one backend's rounds and offered on
+another's. W5.6 tests a grant named `accountStatus` on both kinds of ports.
+Decision: as described.
+
+### J-0722 2026-11-18 M5 perf files and windows - perf
+Evidence: the owner's rule of 2026-11-18; the cross-check's perf findings; `m5-interfaces.md` 8.2.
+Reading: `grants.round` and `labels.full` had no owning file and two rows counted runs. Now every
+row names its file and owner: `tools` (W5.3, a `rows` hook table with one row each appended by
+W5.5 and W5.6), `exec-m5` (W5.5), `presets` (W5.1), `mentions` (W5.7) and a new `creation-m5`
+(W5.9: `prompt.compose` as compositions over 10 s and creations over a 120 s window,
+`session.createCold` as cold creations over a 120 s window, bundle bytes). Comparisons alternate
+both sides inside one window, and each probe has a cap, so every file is at most about 5.5
+minutes and the regression at most 69 slot-minutes (about 17 minutes on four slots).
+Decision: as described.
