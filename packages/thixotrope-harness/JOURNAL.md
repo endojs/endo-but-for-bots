@@ -7619,3 +7619,26 @@ Reading: cold concurrent (three templates built at once): 193 s wall (files 172-
 concurrent. Waits for a slot 17-54 ms.
 Decision: integration files run four at a time; a milestone's integration lane is about a third of
 its serial time.
+
+### J-9530 2026-11-18 I-FIX tooling run-lock review fixes - good fit
+Evidence: `test/run-lock-slots.test.js` (5 new tests), QC findings of 2026-11-18.
+Reading: blocker fixed: start times are read with `TZ=UTC LC_ALL=C`, so `ps -o lstart` is the same
+text in every zone and locale (before: a TZ=UTC holder read as "02:56" and as "16:56" from
+Pacific/Honolulu, and a waiter broke it). New tests: three zones and locales agree; a UTC waiter
+times out on a Honolulu holder instead of breaking it. Also fixed: in-process takers of the
+machine-wide lock log their run on release (exit code null); the CLI ends processes a workload
+leaves in its group before freeing the slot; temporaries of killed writers are removed after a
+minute. Not fixed: the 10-20 ms window between spawn and the workload record (no way to record a
+pid before it exists); in-process takers still have no time box (documented: run them under the
+CLI). Lock suites: 50 tests in 11 s.
+Decision: as built. Old-format records (local-zone start times) exist only from this lane's
+unmerged I-1 code.
+
+### J-9531 2026-11-18 I-FIX tooling test:integration per file, four at once - good fit
+Evidence: `scripts/test-integration.mjs`; `corepack yarn test:integration --jobs 4` on `m1a-slice`,
+`m1a-provision`, `m1b-pool`, `m2-queue`, M2 build running alongside, load 4.2 -> 5.3.
+Reading: the old script put all 23 files under one 10-minute box (killed at 600 s with exit 124;
+serial runtime 35-70 min). Now each file is its own run-lock run (own slot, box, log line). Trial:
+all 10 tests passed, 196 s wall, files 143-196 s, slot waits 17-52 ms; one run-log line per file,
+none from the nested in-process takers. 23 files at four at a time is about 15-20 min of wall time.
+Decision: as built.
