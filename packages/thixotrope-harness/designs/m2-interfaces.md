@@ -970,11 +970,22 @@ W2.2 additions (contract commit of W2.2):
 `AH/secrets/store.js`: one encrypted file `<state>/agent-host/secrets.enc` (AES-256-GCM, a fresh
 nonce per write, written temp-then-rename with fsync), entries keyed by the manager's `k<n>`:
 `{ label, description, generation, state: 'active' | 'revoked', value }`, plus the audit log
-(R7-24: `{ at, label, op, outcome, code?, generation? }`, bounded: the newest 10,000 events). The
-wrapping key is a 32-byte file **outside the state directory**: the path in the adapter's
+(R7-24: `{ at, label, op, outcome, code?, generation? }`, bounded: the newest
+`limits.auditKeepEvents` = 10,000 events). **As built (deviation accepted by the PM, J-9487):** the
+audit log is not inside `secrets.enc` but its own file `<state>/agent-host/secrets-audit.log`, one
+line per event, each line sealed on its own (AES-256-GCM under the wrapping key, a fresh nonce),
+appended without fsync and rewritten (temp, fsync, rename) when it holds twice the bound. An event
+carries no value, so the log can lose events but never leak one: a SIGKILL can lose the newest
+audit lines that were not yet written back by the system; power loss or a full disk can also leave
+a torn last line, which the next load cuts at its last newline before appending (J-9486), so
+nothing beyond the torn tail is lost. At most `limits.secretsMax` = 1,024 Secrets exist at once
+(`SecretsAdmin.create` counts creates in flight; past it `CREATE_FAILED`). The wrapping key is a
+32-byte file **outside the state directory**: the path in the adapter's
 environment variable `THIX_HARNESS_SECRETS_KEY` (absolute; `scripts/serve.mjs` passes it
 through, W2.3), created 0600 if absent; without it, `~/.config/thixotrope-harness/secrets-<first 16
-hex of sha256(state path)>.key`. Tests set it to a file under `H/tmp/` and delete it with their
+hex of sha256(state path)>.key`. A missing key file is created whole or not at all (temp file
+0600, fsync, link into place, directory fsync), and concurrent first loads in one process share one
+read (J-9486). Tests set it to a file under `H/tmp/` and delete it with their
 state; no test reads a real key file.
 
 ### 9.2 Objects and flows

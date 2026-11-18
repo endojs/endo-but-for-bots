@@ -8,10 +8,12 @@ import '../unit/_m1a-prelude.js';
 
 import { Buffer } from 'node:buffer';
 import {
+  appendFileSync,
   chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -298,6 +300,48 @@ test('store: the audit file stays bounded', async t => {
   t.true(lines < 16, `${lines} lines`);
   t.is((await store.audit({ limit: 100 })).length, 8);
   t.true(store.stats().auditRewrites >= 1);
+});
+
+test('J-9486: concurrent first loads of a fresh key file agree; no temp file is left', async t => {
+  for (let run = 0; run < 50; run += 1) {
+    const dirs = makeDirs();
+    const store = storeOf(dirs.files);
+    const seal = makeSealKeys({
+      file: dirs.files.keyFile,
+      stateDir: dirs.stateDir,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.all([store.ready(), seal.ready()]);
+    t.is(readFileSync(dirs.files.keyFile).length, 32);
+    t.deepEqual(
+      readdirSync(join(dirs.root, 'keys')).filter(n => n.endsWith('.tmp')),
+      [],
+    );
+    store.close();
+    dirs.done();
+  }
+});
+
+test('J-9486: a torn audit tail is cut at load, so the next event is kept', async t => {
+  const dirs = makeDirs();
+  t.teardown(dirs.done);
+  const first = storeOf(dirs.files);
+  await first.create('k1', 'L', 'd');
+  await first.replace('k1', 'v');
+  first.readNow('k1');
+  const before = (await first.audit({ limit: 100 })).length;
+  first.close();
+  const auditFile = join(dirs.stateDir, 'agent-host', 'secrets-audit.log');
+  appendFileSync(auditFile, 'QUJDREVGR0g');
+  const second = storeOf(dirs.files);
+  await second.ready();
+  second.readNow('k1');
+  const afterRead = (await second.audit({ limit: 100 })).length;
+  second.close();
+  t.is(afterRead, before + 2, 'read-start and read events');
+  const third = storeOf(dirs.files);
+  t.teardown(() => third.close());
+  t.is((await third.audit({ limit: 100 })).length, before + 2);
 });
 
 test('seal: a box opens only with the adapter key; defects say nothing', async t => {

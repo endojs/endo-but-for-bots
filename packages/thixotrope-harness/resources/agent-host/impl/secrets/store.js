@@ -49,11 +49,13 @@ import {
 } from 'node:fs';
 import {
   chmod,
+  link,
   mkdir,
   open,
   readFile,
   rename,
   stat,
+  truncate,
   unlink,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -66,7 +68,7 @@ import { limits } from '../../../../guest/lib/limits.js';
 /** The environment variable naming the wrapping key file (serve.mjs passes it). */
 export const SECRETS_KEY_VARIABLE = 'THIX_HARNESS_SECRETS_KEY';
 /** Audit events kept (m2-interfaces 9.1: the newest 10,000). */
-export const AUDIT_KEEP = 10_000;
+export const AUDIT_KEEP = limits.auditKeepEvents;
 const FILE_FORMAT = 'thix-secrets-1';
 const AUDIT_FORMAT = 'thix-secrets-audit-1';
 const KEY_BYTES = 32;
@@ -136,7 +138,64 @@ const isInside = (child, parent) => {
  * @param {string} [options.stateDir]
  * @returns {Promise<Buffer>}
  */
-export const loadWrappingKey = async ({ keyFile, stateDir }) => {
+export const loadWrappingKey = ({ keyFile, stateDir }) => {
+  // Loads of one key file in flight at once share one read: the store and
+  // the sealing keys ask together on a fresh file (J-9486). Nothing is kept
+  // once it settles.
+  const known = keyLoads.get(keyFile);
+  if (known !== undefined) return known;
+  const loading = readWrappingKey({ keyFile, stateDir });
+  keyLoads.set(keyFile, loading);
+  const done = () => keyLoads.delete(keyFile);
+  void loading.then(done, done);
+  return loading;
+};
+harden(loadWrappingKey);
+
+/**
+ * Create the key file whole or not at all: random bytes in a temp file
+ * (0600), fsynced, linked into place (fails if another got there first,
+ * whose key then wins), the directory fsynced. A SIGKILL leaves at most a
+ * temp file, never an empty key file.
+ * @param {string} keyFile
+ */
+const createWrappingKey = async keyFile => {
+  const dir = dirname(keyFile);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const temp = `${keyFile}.${randomBytes(6).toString('hex')}.tmp`;
+  const handle = await open(temp, 'wx', 0o600);
+  try {
+    await handle.writeFile(randomBytes(KEY_BYTES));
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  let created = true;
+  try {
+    await link(temp, keyFile);
+  } catch (error) {
+    if (/** @type {any} */ (error).code !== 'EEXIST') throw error;
+    created = false;
+  } finally {
+    await unlink(temp).catch(() => {});
+  }
+  const dirHandle = await open(dir, 'r');
+  try {
+    await dirHandle.sync();
+  } finally {
+    await dirHandle.close();
+  }
+  return created;
+};
+
+/** @type {Map<string, Promise<Buffer>>} */
+const keyLoads = new Map();
+
+/**
+ * @param {{ keyFile: string, stateDir?: string }} options
+ * @returns {Promise<Buffer>}
+ */
+const readWrappingKey = async ({ keyFile, stateDir }) => {
   if (!isAbsolute(keyFile))
     throw Error('the secrets key file path must be absolute');
   if (stateDir !== undefined && isInside(keyFile, stateDir))
@@ -146,20 +205,7 @@ export const loadWrappingKey = async ({ keyFile, stateDir }) => {
     await stat(keyFile);
   } catch (error) {
     if (/** @type {any} */ (error).code !== 'ENOENT') throw error;
-    await mkdir(dirname(keyFile), { recursive: true, mode: 0o700 });
-    const handle = await open(keyFile, 'wx', 0o600).catch(e => {
-      if (e.code === 'EEXIST') return undefined;
-      throw e;
-    });
-    if (handle !== undefined) {
-      try {
-        await handle.writeFile(randomBytes(KEY_BYTES));
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      created = true;
-    }
+    created = await createWrappingKey(keyFile);
   }
   const info = await stat(keyFile);
   // eslint-disable-next-line no-bitwise
@@ -170,7 +216,6 @@ export const loadWrappingKey = async ({ keyFile, stateDir }) => {
     throw Error('the secrets key file must hold exactly 32 bytes');
   return key;
 };
-harden(loadWrappingKey);
 
 /**
  * AES-256-GCM: nonce | ciphertext | tag.
@@ -373,6 +418,15 @@ export const makeSecretStore = ({
       auditRaw = await readFile(auditFile, 'utf8');
     } catch (error) {
       if (/** @type {any} */ (error).code !== 'ENOENT') throw error;
+    }
+    const end = auditRaw.lastIndexOf('\n') + 1;
+    if (end < auditRaw.length) {
+      // A torn last line (power loss, a full disk; not a SIGKILL, which
+      // cannot split one write): cut it, so the next append starts a line
+      // of its own instead of being glued to it (J-9486). Base64 lines:
+      // characters are bytes.
+      await truncate(auditFile, end);
+      auditRaw = auditRaw.slice(0, end);
     }
     const lines = auditRaw.split('\n').filter(line => line !== '');
     auditLines = lines.length;

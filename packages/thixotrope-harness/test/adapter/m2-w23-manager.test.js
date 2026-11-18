@@ -257,10 +257,15 @@ test('manager: list pages; sink amplification is weak and bounded', async t => {
   }
   const first = await E(admin).list();
   t.is(first.secrets.length, limits.secretPageEntries);
-  t.is(first.next, `${limits.secretPageEntries}`);
+  t.is(typeof first.next, 'string');
   const second = await E(admin).list(first.next);
   t.deepEqual([...first.secrets, ...second.secrets], made);
   t.is(second.next, undefined);
+  // J-9486: a Secret deleted between pages skips none of the others.
+  await E(made[1]).revoke();
+  await E(made[1]).delete();
+  const after = await E(admin).list(first.next);
+  t.deepEqual(after.secrets, second.secrets);
 
   const sink = kit.sink();
   const keys = await E(sink).resolveSecrets(
