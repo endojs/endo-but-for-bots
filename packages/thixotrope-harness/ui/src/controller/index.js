@@ -97,7 +97,7 @@ const LIST_MAX_PAGES = 200;
  * @property {string} [connectionMessage] the refusal text
  * @property {Array<Record<string, any>>} sessions rows without their presence
  * @property {string} [activeKey]
- * @property {Array<{ index: number, label: string, available: boolean, unavailableReason?: string }>} presets
+ * @property {Array<{ index: number, label: string, available: boolean, description?: string, reasoningEffort?: string, unavailableReason?: string }>} presets
  * @property {Array<{ index: number, label: string, kind: string }>} backends
  * @property {{ rows: any[], state: string, next?: string, error?: string, backendIndex?: number }} models
  * @property {ConversationView | null} view
@@ -225,6 +225,21 @@ export const makeController = ({
   let viewRev = 0;
   /** entryKey -> QueueEntry */
   const entriesByKey = new Map();
+  /**
+   * Settles when the view being opened has applied its `watch()` snapshot
+   * (or failed, or was replaced). A queue action whose key is not mapped
+   * waits for it once: `openView` clears `entriesByKey` before its watch
+   * answers, while the rows on screen are still the old ones (M3-FIX,
+   * acceptance 12).
+   */
+  let viewReady = Promise.resolve();
+  let markViewReady = () => {};
+  const resetViewReady = () => {
+    markViewReady();
+    viewReady = new Promise(resolve => {
+      markViewReady = () => resolve(undefined);
+    });
+  };
   /** turnId -> Turn */
   const turnsById = new Map();
   /** @type {string | undefined} */
@@ -385,10 +400,19 @@ export const makeController = ({
         try {
           const description = await E(preset).describe();
           const available = description.available !== false;
+          // M3-FIX: the dialog shows `description` and refuses an
+          // unsupported `reasoningEffort` (R6-39); both come from M5's
+          // PresetView when the preset's record has them.
           return {
             index,
             label: description.label,
             available,
+            ...(typeof description.description === 'string'
+              ? { description: description.description }
+              : {}),
+            ...(typeof description.reasoningEffort === 'string'
+              ? { reasoningEffort: description.reasoningEffort }
+              : {}),
             ...(!available && description.unavailableReason !== undefined
               ? { unavailableReason: description.unavailableReason }
               : {}),
@@ -536,6 +560,7 @@ export const makeController = ({
       busy: Boolean(current && isLive(current.state)),
       blocked: blockedBy(current),
     });
+    markViewReady();
   };
 
   /**
@@ -721,6 +746,7 @@ export const makeController = ({
     const epoch = viewEpoch;
     closeViewSubscription();
     viewSession = session;
+    resetViewReady();
     entriesByKey.clear();
     turnsById.clear();
     earlierCursor = undefined;
@@ -732,7 +758,14 @@ export const makeController = ({
       state.view && state.activeKey === key
         ? state.view.input
         : { text: '', caret: 0 };
-    const snapshot = await E(session).watch();
+    /** @type {Record<string, any>} */
+    let snapshot;
+    try {
+      snapshot = await E(session).watch();
+    } catch (error) {
+      if (epoch === viewEpoch) markViewReady();
+      throw error;
+    }
     if (epoch !== viewEpoch) return;
     update({
       view: {
@@ -928,9 +961,18 @@ export const makeController = ({
     return session;
   };
 
-  /** @param {string} entryKey */
-  const entryOf = entryKey => {
-    const entry = entriesByKey.get(entryKey);
+  /**
+   * The QueueEntry of a row; while a view is being (re)opened, after its
+   * watch snapshot is applied.
+   *
+   * @param {string} entryKey
+   */
+  const entryOf = async entryKey => {
+    let entry = entriesByKey.get(entryKey);
+    if (!entry) {
+      await viewReady;
+      entry = entriesByKey.get(entryKey);
+    }
     if (!entry) throw Error(`no queued entry ${entryKey}`);
     return entry;
   };
@@ -1125,7 +1167,7 @@ export const makeController = ({
     /** @param {string} entryKey */
     sendPendingNow: entryKey =>
       guarded(async () => {
-        const entry = entryOf(entryKey);
+        const entry = await entryOf(entryKey);
         const view = state.view;
         const isHead = Boolean(
           view && view.pending.length > 0 && view.pending[0].key === entryKey,
@@ -1143,10 +1185,13 @@ export const makeController = ({
      * @param {string} text
      */
     editPending: (entryKey, text) =>
-      guarded(() => E(powers.composer).edit(entryOf(entryKey), text)),
+      guarded(async () =>
+        E(powers.composer).edit(await entryOf(entryKey), text),
+      ),
 
     /** @param {string} entryKey */
-    cancelPending: entryKey => guarded(() => E(entryOf(entryKey)).cancel()),
+    cancelPending: entryKey =>
+      guarded(async () => E(await entryOf(entryKey)).cancel()),
 
     /** "Load earlier messages": vat pages until `archived`, then `History`. */
     loadEarlier: () =>

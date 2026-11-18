@@ -590,3 +590,47 @@ test('feature context: extras by label, call reports a failure', async t => {
   );
   t.is(controller.getState().status, uiTextOf.statusError('bad call'));
 });
+
+test('M3-FIX: preset rows keep description and reasoningEffort (R6-39)', async t => {
+  const effortful = {
+    describe: async () => ({
+      label: 'deep',
+      builtIn: false,
+      description: 'Thinks hard',
+      reasoningEffort: 'high',
+    }),
+  };
+  const { controller } = await setup({ presets: [effortful] });
+  t.deepEqual(controller.getState().presets, [
+    {
+      index: 0,
+      label: 'deep',
+      available: true,
+      description: 'Thinks hard',
+      reasoningEffort: 'high',
+    },
+  ]);
+});
+
+test('M3-FIX: a queue action while the view re-opens waits for its watch (acceptance 12)', async t => {
+  const { controller, control } = await setup({
+    sessions: [{ running: 'busy', pending: ['one', 'two'] }],
+  });
+  await controller.selectSession('s1');
+  await flush();
+  const rows = controller.getState().view?.pending ?? [];
+  t.is(rows.length, 2);
+  // Re-open (as a reconnect rebuild does): entries are unmapped until the
+  // new watch() answers, while the old rows are still on screen.
+  const reopened = controller.selectSession('s1');
+  const sent = controller.sendPendingNow(rows[1].key);
+  const edited = controller.editPending(rows[0].key, 'one, edited');
+  await Promise.all([reopened, sent, edited]);
+  await flush();
+  t.is(controller.getState().status, '', 'no "no queued entry" status');
+  t.is(control.callsOf('QueueEntry', 'sendNow').length, 1);
+  t.true(control.pendingTexts('s1').includes('one, edited'));
+  // A key that is not in the new snapshot still fails, after the wait.
+  await controller.cancelPending('no-such-key');
+  t.regex(controller.getState().status, /no queued entry no-such-key/);
+});

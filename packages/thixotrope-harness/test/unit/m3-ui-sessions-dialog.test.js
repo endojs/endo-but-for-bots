@@ -367,29 +367,16 @@ test.serial(
 test.serial(
   'R6-39: the preset effort is refused for a model without it',
   async t => {
-    const fake = makeFakePowers({ presets: [presetOf({ label: 'thinker' })] });
+    // M3-FIX: the saved effort reaches the dialog through the controller's
+    // preset row (Preset.describe's PresetView), not a test-only view.
+    const fake = makeFakePowers({
+      presets: [presetOf({ label: 'thinker', reasoningEffort: 'high' })],
+    });
     fake.control.addBackend('Effortful', { models: ['plain', 'deep'] });
     const powers = await withEfforts(fake, { deep: ['low', 'high'] });
-    // The controller keeps `{ index, label, available, unavailableReason }`
-    // (9.1); the saved effort reaches the dialog as an optional row field.
-    const views = {
-      ...sessionViews,
-      NewSession: (/** @type {any} */ props) =>
-        h(sessionViews.NewSession, {
-          ...props,
-          state: {
-            ...props.state,
-            presets: props.state.presets.map((/** @type {any} */ row) => ({
-              ...row,
-              reasoningEffort: 'high',
-            })),
-          },
-        }),
-    };
     const { open, choose, close, card, $, dialog } = await setup({
       fake,
       powers,
-      views,
     });
     await open();
     await choose('Backend', '1');
