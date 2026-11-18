@@ -34,7 +34,7 @@
  * Vat module: prelude globals only; no record keys from data; every page
  * bounded by `frameBytes`.
  */
-import { texts, textOf } from '../lib/interfaces.js';
+import { texts } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { messageBytes } from '../lib/bounded.js';
 import { holdText } from './holds.js';
@@ -100,15 +100,6 @@ export const makeSessionExport = ({
   /** 0: never imported; 1: an import is open; 2: the import ended. */
   let importing = 0;
 
-  /**
-   * A seam W2.5 builds in turn.js; until then the method says so.
-   * @param {string} name
-   */
-  const seam = name => {
-    const fn = runner[name];
-    if (typeof fn !== 'function') throw Error(textOf.notBuilt(name));
-    return fn;
-  };
   /** @returns {{ sealedTo: number, sealedTurns: number, segments: number, digest: string } | undefined} */
   const archiveState = () => runner.archive?.state();
   /** @returns {number} */
@@ -275,13 +266,13 @@ export const makeSessionExport = ({
         (records.count() === 0 && runner.current() === undefined) ||
           Fail`only a new session imports`;
         importing = 1;
-        if (chunk.usage !== undefined) seam('importUsage')(chunk.usage);
+        if (chunk.usage !== undefined) runner.importUsage(chunk.usage);
       }
       return progress();
     }
     importing === 1 || Fail`no import is open`;
     if (part === 'archive') {
-      seam('importArchive')(
+      runner.importArchive(
         harden({ archive: chunk.archive, segments: chunk.segments ?? [] }),
       );
     } else if (part === 'records') {
@@ -292,7 +283,7 @@ export const makeSessionExport = ({
       const count = records.count();
       if (from + added.length <= count) return progress();
       from === count || Fail`records continue at ${count}, not ${from}`;
-      seam('importTurns')(added);
+      runner.importTurns(added);
     } else if (part === 'queue') {
       for (const { submission, requestId, at } of chunk.entries ?? []) {
         runner.see(at);

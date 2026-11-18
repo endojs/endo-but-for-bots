@@ -96,18 +96,6 @@ export const INTERRUPTED_CREATION_TEXT =
  */
 
 /**
- * Optional creation results a resolver may fill (W2.2 model window, W2.6
- * prompt, W2.7 turn deadline) that the factory copies into the
- * SessionConfig (m2-interfaces.md 1.4).
- */
-const CONFIG_EXTRAS = harden([
-  'systemPrompt',
-  'contextLength',
-  'maxOutputTokens',
-  'turnDeadlineMs',
-]);
-
-/**
  * @param {object} powers
  * @param {any} powers.admin the AgentHostAdmin (`host` grant)
  * @param {any} powers.vats the worker controller (`vats` grant)
@@ -243,7 +231,9 @@ export const makeFactoryKit = ({
     // M2 (R4-21, R4-88; W2.2's resolvers): the operator's default backend
     // and model, and the turn deadline (W2.7).
     /** @type {Record<string, any>} */
-    const context = { defaultPreset: chatOnly };
+    // The admin stages a given system prompt over inlineBytes (W2.6's
+    // resolver; W2.9 wiring).
+    const context = { defaultPreset: chatOnly, admin };
     if (harnessSettings !== undefined) {
       const defaultBackend = harnessSettings.defaultBackend();
       const defaultModelId = harnessSettings.defaultModelId();
@@ -310,10 +300,17 @@ export const makeFactoryKit = ({
         createdAt,
         userInitiated: resolved.userInitiated,
       };
-      for (const name of CONFIG_EXTRAS) {
-        const value = extras[name];
-        if (value !== undefined) fields[name] = value;
-      }
+      // Optional creation results a resolver may fill (W2.2 model window,
+      // W2.6 prompt, W2.7 turn deadline), copied into the SessionConfig
+      // (m2-interfaces.md 1.4), each under a literal key.
+      if (extras.systemPrompt !== undefined)
+        fields.systemPrompt = extras.systemPrompt;
+      if (extras.contextLength !== undefined)
+        fields.contextLength = extras.contextLength;
+      if (extras.maxOutputTokens !== undefined)
+        fields.maxOutputTokens = extras.maxOutputTokens;
+      if (extras.turnDeadlineMs !== undefined)
+        fields.turnDeadlineMs = extras.turnDeadlineMs;
       const config = harden(fields);
       mustMatch(config, shapes.SessionConfig);
       const makeArgs = harden({

@@ -97,6 +97,7 @@ export const makeDeletions = ({ admin, rows, hooks = onDelete }) => {
     }
     while (record.step === 2) {
       /** @type {any} */
+      /** @type {{ blobs: any[], next?: string } | undefined} */
       let page;
       try {
         // eslint-disable-next-line no-await-in-loop

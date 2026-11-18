@@ -57,6 +57,8 @@ const NOT_YET = harden(['networkPolicy', 'reasoningEffort']);
  *   the default backend
  * @property {number} [turnDeadlineMs] M2 (W2.7):
  *   `HarnessSettings.turnDeadlineMs`
+ * @property {any} [admin] M2 (W2.9): the AgentHostAdmin, through which a
+ *   given system prompt over inlineBytes is staged (W2.6's resolver)
  */
 
 /**

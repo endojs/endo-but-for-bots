@@ -8,7 +8,7 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { shapes, texts, textOf } from '../../guest/lib/interfaces.js';
+import { shapes, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { messageBytes } from '../../guest/lib/bounded.js';
 import { makeSessionExport } from '../../guest/session/export.js';
@@ -258,36 +258,6 @@ test('import: a new session only, records in order, resends answered, the queue 
   await drain();
   t.deepEqual(reported, [{ imported: true, messageCount: 1, queuedCount: 1 }]);
   t.true(matches(reported[0], shapes.RowPatch));
-});
-
-test('import seams W2.5 has not built say so', t => {
-  const lifecycle = makeSessionExport({
-    records: makeRecordLog(),
-    queue: makeQueue(),
-    runner: { current: () => undefined },
-    config: harden({}),
-    info: () => harden({}),
-    rowReporter: Far('RowReporter', { changed: () => {} }),
-  });
-  t.throws(
-    () =>
-      lifecycle.importState(
-        harden({
-          part: 'head',
-          usage: harden({
-            inputTokens: 0,
-            outputTokens: 0,
-            cachedInputTokens: 0,
-            cacheWriteInputTokens: 0,
-            reasoningOutputTokens: 0,
-            context: { usedTokens: 0, windowTokens: 0 },
-            turns: 0,
-            incompleteTurns: 0,
-          }),
-        }),
-      ),
-    { message: textOf.notBuilt('importUsage') },
-  );
 });
 
 test('export then import between two real sessions: the same records, usage and queue', async t => {

@@ -16,7 +16,7 @@
  * session asks for its adapter ports when it is made (`Backend.open`, once
  * per adapter incarnation; contract 6.1).
  */
-import { m2Interfaces, texts, textOf } from '../lib/interfaces.js';
+import { m2Interfaces, texts } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { makeQueue as defaultMakeQueue } from './queue.js';
 import {
@@ -220,8 +220,6 @@ export const makeSession = (
     },
     /** @param {string} turnId W2.5 (m2-interfaces.md 4.9) */
     findTurn(turnId) {
-      if (typeof runner.findTurn !== 'function')
-        throw Error(textOf.notBuilt('findTurn'));
       return runner.findTurn(turnId);
     },
   });
