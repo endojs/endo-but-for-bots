@@ -28,7 +28,8 @@
  * directory.
  *
  * The wrapping key file is made under H/tmp (outside the state directory,
- * D-6) through THIX_HARNESS_SECRETS_KEY and removed at the end. Key values
+ * D-6), given to the supervisor only (`secretsKeyFile`, never this
+ * process's environment), and removed at the end. Key values
  * are built at run time (`makeTestSecretValue`).
  *
  *   THIX_HARNESS_INTEGRATION=1 node scripts/run-lock.mjs --label m2-secrets -- \
@@ -115,7 +116,7 @@ run(
     t.timeout(4 * 60_000);
     mkdirSync(keyDir, { recursive: true, mode: 0o700 });
     t.teardown(() => rmSync(keyDir, { recursive: true, force: true }));
-    process.env.THIX_HARNESS_SECRETS_KEY = path.join(keyDir, 'secrets.key');
+    const secretsKeyFile = path.join(keyDir, 'secrets.key');
 
     const first = makeTestSecretValue('first');
     const second = makeTestSecretValue('second');
@@ -139,7 +140,7 @@ run(
     t.teardown(() => server.close());
 
     const template = await sliceTemplate();
-    const state = await startFromTemplate(template, { t });
+    const state = await startFromTemplate(template, { t, secretsKeyFile });
     const slice = await makeSlice(state);
 
     const secrets = await E(slice.admin).getSecrets();
@@ -249,7 +250,7 @@ run(
 
     // The browser path: a page writes a plain value through the gateway's
     // in-process writer; it reaches the store without crossing the hub.
-    const gateway = await serveGateway(state);
+    const gateway = await serveGateway(state, { secretsKeyFile });
     const client = await gateway.connect();
     const pageSecrets = await E(client.powers.operator).getSecrets();
     const pageSecret = await E(pageSecrets).create(

@@ -81,8 +81,12 @@ await runPerf('gateway-session', async ({ root }) => {
     state = await startFromTemplate(template, {
       root,
       idleSleepMs: 3_600_000,
+      secretsKeyFile: key.file,
     });
-    const gateway = await serveGateway(state, { port: await freePort() });
+    const gateway = await serveGateway(state, {
+      port: await freePort(),
+      secretsKeyFile: key.file,
+    });
     const page = await gateway.connect();
     const factory = await E(page.powers.operator).getFactory();
     const row = await m3TemplateSession(factory);
