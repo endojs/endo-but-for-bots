@@ -8494,3 +8494,99 @@ test moved twice per key). Fit: good for objects as values: an endowment chosen 
 presence identity and the record carries the presence with no id; poor for shared texts: the
 browser cannot import guest modules (they need the vat prelude), so four values are copied and a
 test pins them.
+
+### J-9600 2026-11-18 M3 W3.8 integration harness and files - built
+Evidence: commits b49c47155d..adc3dce6b3; `test/browser/_harness.mjs` (`startBrowserGateway`,
+`trackSockets`, `browserSkipReason`), `test/browser/m3-ui{,-restart,-history}.test.mjs`,
+`test/integration/m3-reconnect.test.js`, `perf/_m3-client.mjs` (`ensureM3Template`, CLI
+`template`), `perf/{gateway,gateway-session,ui}.perf.mjs`.
+Reading: `startBrowserGateway` keeps the section 17 signature and adds `state`, `gateway`,
+`browser`, `newPage`, and options `initScript`, `gateway` (a fixed port for restart tests) and
+`lock: false` (a perf file that already holds the run lock in process: a second in-process
+taker without `THIX_HARNESS_RUN_LOCK` waits for itself). No browser was downloaded: Playwright
+1.64.1 wants build 1248, absent; the newest cached headless shell (1243, 195 MB) drives fine, so
+the harness falls back to the newest cached build after `THIX_HARNESS_CHROMIUM` and Playwright's
+own. Without Chromium or the variable each file shows one passing test whose title says why it
+skipped. `ensureM3Template` returns the `Template` (its `dir` is the path), not a bare path:
+`startFromTemplate` needs the crank budget it carries.
+
+### J-9601 2026-11-18 M3 W3.8 m3-300 template and run-lock waits - perf
+Evidence: `node perf/_m3-client.mjs template` under the run lock; `runs.jsonl` rows of W3.8.
+Measured: the template (m1a provisioning, 300 imported tool turns, warm-up turns to the
+archive's steady state: 160 sealed turns in 5 segments) built in 87.9 s (serve 13.4 s, workspace
+6.1 s, provisioning with the import 66.5 s, stop 1.5 s); a cached start copies it in about 0.1 s.
+Waits for a slot dominated this unit: 669 s, 387 s, 427 s, 273 s before shared runs that then
+held 1-3 min, behind other lanes' exclusive perf runs. The first template attempt waited 11 min
+and then failed in 0.5 s (template ids allow `[a-z0-9-]` only).
+
+### J-9602 2026-11-18 M3 W3.8 reconnect and kill points K3-K5 (protocol) - verified
+Evidence: `m3-reconnect.test.js` at 51c29382ff, 5 tests, slot held 142 s.
+Measured: a dropped socket's page re-attached (`watch`, `subscribe`, `getCurrentTurn`) in 142-180
+ms and kept streaming to the turn's end; a page closed mid-turn left it to complete (one provider
+request). Daemon stopped: connections refused; after the restart the same port signed in with the
+same secret 4.3-5.7 s after `restart()` began. K3/K4: SIGKILL 0 ms after a 120,000-unit submit
+(no receipt after restart: resent once), 60 ms and after its answer (receipt present: not resent);
+each time the transcript held the text once. K5: SIGKILL inside an echo call with two pages: both
+saw `outcome-unknown`, one provider request, one echo run; `resolve` on one page was seen on the
+other. Pitfall: one scripted backend serving several sessions logs the same turn ids (`t1`...)
+for each, so a count must start at the log index of its submit.
+
+### J-9603 2026-11-18 M3 W3.8 Playwright and hardened promises in one process - fit
+Evidence: the first browser run: `TypeError: Cannot add property Symbol(async_id_symbol), object
+is not extensible` from the control client's `call` (`local-control.js:158`) after Chromium was
+launched; probes without the supervisor did not reproduce it.
+Reading: poor fit. Playwright's zones use `AsyncLocalStorage`, which on Node 22 turns on async
+hooks; Node then tags each promise it tracks with an async id the first time it sees it, and a
+promise hardened before the hooks were on (the control client's, made by `startFromTemplate`)
+cannot take the symbol. Decision: `startBrowserGateway` launches Chromium before it starts
+anything, which fixed it. A test that hardens promises before calling it (module-level
+`harden(promise)`) can still hit it.
+
+### J-9604 2026-11-18 M3 W3.8 page request ids refused by the session - defect fixed
+Evidence: the first browser send: `Invalid submission request ID`; `guest/lib/pending-queue.js`
+`REQUEST_ID = /^\d{13}-[0-9a-f-]{36}$/` (M2 A.4) against the contract's 9.2 "32 hex digits".
+Reading: every page send was refused; the fake powers accepted any id, so W3.4-W3.6's unit tests
+could not see it. Fixed in `ui/src/controller/drafts.js` `newRequestId` (13 digits of ms, a dash, a
+v4 UUID from `getRandomValues`), `test/unit/m3-ui-request-id.test.js` pins it to `REQUEST_ID`.
+The contract's 9.2 sentence and M5's browser file (a 32-hex draft id) are the PM's to align.
+
+### J-9605 2026-11-18 M3 W3.8 a re-attached turn showed only its question - defect fixed
+Evidence: `m3-ui.test.mjs` acceptance 4 after the socket drop: the completed row's text was
+`stream` only.
+Reading: after a reconnect the controller reads the newest history page while the turn runs, so
+the entry's records stop at `turn-started`; `turnContent` preferred any records over the fold once
+the turn settled. Fixed in `ui/src/conversation/transcript.js`: the fold is used until the records
+hold `turn-settled` (`test/unit/m3-ui-transcript.test.js`). Remaining gap: the controller never
+re-reads a turn's records when it ends, so a live-watched long reply shows the fold's text, not a
+staged field with Show all, until the page reloads; the 1 MiB check reads it after a reload.
+
+### J-9606 2026-11-18 M3 W3.8 gateway perf rows - perf
+Evidence: `perf/gateway.perf.mjs` at 543e6dbd1d (exclusive, 331 s of windows, 6 min 20 s with
+set-up), load 6.9-7.2.
+Measured (60 s windows): `gateway.fetch` median 0.66 ms, p95 4.6, p99 6.3 (n 20,372; 2 vat
+deliveries in the window, 0 per sign-in; budget 50 ms); `gateway.guard` median 0.123 ms, p99
+0.33 for a 24,544-byte call of 446 records against 258 vocabulary keys (n 458,713; budget 2 ms);
+`ui.call` `listPending` median 27 ms, p95 172, p99 215 (n 1,469, 1 delivery each; budget 150);
+`ui.submit` while a turn runs median 62 ms, p95 236, p99 255 (n 380; budget 150);
+`ui.deltaFanout` 5 clients median 1 ms, p95 3, p99 7, max 14 (n 5,500 = 1,100 deltas x 5; budget
+5 ms); 8 vat deliveries over the 11 turns' streaming (0.0073 per delta: the rounds' own
+deliveries, not the deltas', which the strict 0 budget counts as a miss).
+Probes: 100 KiB refused, depth 33 refused, 33 in flight gave 32 answers and 1 refusal, no journal
+growth, the session still served. Two probes were wrong in the file and are fixed (rerun in
+J-9607): 2,000 keys of `k<i>x: i` exceeded `frameBytes` and were refused by the frame guard
+first; the 4,097 exports were dropped by the client's GC before the cap (presences now kept).
+
+### J-9607 2026-11-18 M3 W3.8 gateway-session perf rows - perf
+Evidence: `perf/gateway-session.perf.mjs` at a5ac8e15fe on the cached `m3-300` template
+(exclusive, 557 s of windows, 14 min 37 s with the slot wait).
+Measured (60 s windows): `ui.snapshot` median 46 ms, p95 209, p99 262 (n 783; 371 characters,
+within `frameBytes`; budget 300); `ui.history.newest` median 256 ms, p95 302, p99 313 (n 306,
+14,230 characters; budget 300); `ui.history.archived` median 2.5 ms, p99 8.4, max 5.8 s (n
+14,002; adapter-local); `ui.reconnect` median 447 ms, p95 651, p99 704 (n 136; budget 1 s).
+`ui.restartReady` (150 s per mode, 21 restarts each, `fewSamples`): the gateway answered a
+`fetch` 3.1 s (clean) and 2.5 s (SIGKILL) median before the supervisor's `serve()` resolved,
+that is about 1.8 s (clean) and 4.8 s (SIGKILL) after the serve began (estimated from the
+medians); the budget (2 s after serving) passes
+trivially. The file now also prints `readyFromServeStartMs`. Fit finding: SIGKILL restarts grew
+from 5.3 s to 9.3 s served over the 21 kills in one window (clean restarts stayed 4.3-5.4 s):
+each SIGKILL leaves more to replay or recover.
