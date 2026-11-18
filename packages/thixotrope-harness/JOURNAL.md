@@ -9481,3 +9481,39 @@ changed the session bundle) and the exclusive pass (70 minutes, during which eve
 stopped). Building the busy chain beside the regression run saved about 30 minutes.
 Decision: for the PM: a guest-bundle change late in a milestone costs a template rebuild before its
 recorded pass; schedule bundle changes before the review units.
+
+### J-9953 2026-11-18 AR-CORE review: structure of the daemon, transport and engine glue - fit
+
+Evidence: designs/arch-review/core-daemon.md (AR-CORE-1..13); 26 source files, 5,435 lines; no
+test run.
+Reading: dependencies point the right way: no cycle in scope, core imports nothing from control,
+and there are two upward edges (daemon to native/adapters, guest prelude to control/names). The
+cost is concentrated in two closures (buildDaemon 936 lines, the transport 838) and in a vat life
+cycle that no module owns. "Given up" is tested at 7 sites in 2 files, image release is written 3
+times, and the daemon's startup loop repeats the transport's retry policy (AR-CORE-1). Other
+modules' private formats are read outside their owners: hub tables in vat-reachability, store file
+names in ironhorse-runtime, which CC-025 had to edit (AR-CORE-8).
+Decision: none; the review recommends making the life cycle explicit in the transport before
+building C-11 (reinstate) or C-8.
+
+### J-9954 2026-11-18 AR-CORE review: names, wire shapes and test-double paths - fit
+
+Evidence: core-daemon.md AR-CORE-3..6.
+Reading: "crash" names three things, "retire" names both deletion and quarantine, and the
+quarantined state has five names. The code says worker where the design says vat. The endpoint is
+a pseudo-worker whose id passes as a worker's. The guest entry every Ironhorse vat runs is named
+and documented for XS (worker-peer-xs.js), and the XS engine cannot run the daemon as composed.
+The duct envelope is hand-coded at 18 sites and slot strings are parsed at 11, although @endo/ocapn
+has an unexported parseSlot. Optional batch seams mean the 29 test files on the replay doubles run
+crank and outbound paths that production never takes. One concrete defect is inferred, not run: a
+retried retirement skips the image release that failed (AR-CORE-2).
+Decision: none.
+
+### J-9955 2026-11-18 AR-CORE time record - process
+
+Evidence: start 2026-11-18T12:07:17Z, end 2026-11-18T12:15:04Z. Reading only, plus greps and a 5-line-window
+duplicate scan (only an option list repeats). Two commits: the report, and this entry.
+Reading: the surveys (survey-engine, survey-ocapn-hub) saved the transport and duct reading. Their
+claims checked at this base hold; one addition: the JavaScript side never sets the worker's timing
+flag.
+Decision: none.
