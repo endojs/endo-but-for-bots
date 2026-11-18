@@ -16,6 +16,7 @@ import {
 import { makeQueue } from '../../guest/session/queue.js';
 import { turnHooks } from '../../guest/session/turn-hooks.js';
 import { execHooks } from '../../guest/session/tools/exec.js';
+import { mentionHooks } from '../../guest/session/tools/mentions.js';
 import { shapes, texts, textOf } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 
@@ -753,5 +754,9 @@ test('recovery steps run in order with the context; a failing one is skipped', a
 });
 
 test('M1a has no recovery steps of its own (M1b W1b.4 appends the exec one)', t => {
-  t.deepEqual([...turnHooks.recoverySteps], [execHooks.recoverySteps]);
+  // M5 W5.7 appends closing a recovered turn's package.
+  t.deepEqual(
+    [...turnHooks.recoverySteps],
+    [execHooks.recoverySteps, mentionHooks.recoverySteps],
+  );
 });

@@ -16,10 +16,12 @@ import { texts, textOf } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { utf8Bytes } from '../../guest/lib/bounded.js';
 import {
+  capabilityParagraph,
   composeSystemPrompt,
   execParagraph,
   flootIntroduction,
   guestSection,
+  objectToolsSection,
 } from '../../guest/lib/system-prompt-base.js';
 import { promptResolver, promptTextFor } from '../../guest/session/prompt.js';
 import {
@@ -95,8 +97,18 @@ test('the guest section is Fae’s, word for word, except the exec paragraph', t
   const theirExec = faeExecParagraph(theirs);
   t.true(theirExec.startsWith('A petname'));
   t.true(theirExec.includes('Every exec call is\na fresh function body'));
-  // Everything but the exec paragraph is the same text.
-  t.is(guestSection.replace(execParagraph, theirExec), theirs);
+  // Everything but the exec paragraph is the same text, after M5's rewrite
+  // of the capability paragraph and its appended object-tools section (W5.2,
+  // m5-interfaces.md 2.3.1; m5-w52-prompt.test.js checks those parts).
+  const capabilityAt = theirs.indexOf('How the environment works');
+  const theirCapability = theirs.slice(
+    capabilityAt,
+    theirs.indexOf('\n\n', capabilityAt) + 1,
+  );
+  const ours = guestSection
+    .replace(capabilityParagraph, theirCapability)
+    .replace(execParagraph, theirExec);
+  t.is(ours.slice(0, -(objectToolsSection.length + 1)), theirs);
   t.not(execParagraph, theirExec);
   // The rewrite states the persistent scope and keeps the endowments' list.
   t.regex(execParagraph, /globalThis/);
@@ -127,7 +139,8 @@ test('composition: introduction, a line break, the guest section, trimmed; prese
     'Fae composePresetPrompt with parts 3-6 empty',
   );
   t.true(plain.startsWith('You are Floot, a warm, concise assistant'));
-  t.true(plain.endsWith('JSON) shows as its value.'));
+  // M5 (W5.2) appends the object-tools section after Fae's last paragraph.
+  t.true(plain.endsWith(objectToolsSection.trimEnd()));
   const spoken = composeSystemPrompt({ spoken: true });
   t.true(spoken.startsWith('You are Floot, a warm, concise voice assistant'));
   t.true(spoken.includes('never read code, secrets, or raw tool output aloud'));
