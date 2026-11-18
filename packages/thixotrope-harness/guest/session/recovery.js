@@ -46,7 +46,7 @@
  *
  * Vat module: prelude globals only; no clock, no awaits.
  */
-import { texts } from '../lib/interfaces.js';
+import { texts } from '../lib/guards/session.js';
 import { isRetiredBreak } from '../lib/retired.js';
 import { turnHooks } from './turn-hooks.js';
 

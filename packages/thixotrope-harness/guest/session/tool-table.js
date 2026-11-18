@@ -35,7 +35,7 @@
  *   dynamic entry may carry `refused(state, reason)`, called synchronously
  *   when it is refused that round; the refusals are also in the answer.
  */
-import { echoDescription } from '../lib/interfaces.js';
+import { echoDescription } from '../lib/guards/session.js';
 import { textOf as textOfM5 } from '../lib/interfaces-m5.js';
 import { limits } from '../lib/limits.js';
 import { execEntry } from './tools/exec.js';

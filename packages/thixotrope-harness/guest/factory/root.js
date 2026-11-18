@@ -18,7 +18,7 @@
  * Guest rules: prelude globals only; pieces are kept in a `Map` keyed by
  * index while loading and as an array once complete.
  */
-import { m2Interfaces, shapes } from '../lib/interfaces.js';
+import { interfaces, shapes } from '../lib/guards/factory.js';
 import { limits } from '../lib/limits.js';
 import { utf8Bytes } from '../lib/bounded.js';
 
@@ -41,7 +41,7 @@ export const programPieceBytes = limits.frameBytes - PIECE_ENVELOPE_BYTES;
 export const MAX_PROGRAM_PIECES = 64;
 /**
  * The largest program the store keeps: the staged-source bound. The
- * session program's budget is `sessionProgramBytes` (200,000), checked by
+ * session program's budget is `sessionProgramBytes` (240,000), checked by
  * provisioning and the `session.program` perf row, not here.
  */
 export const maxProgramBytes = limits.execSourceBytes;
@@ -185,8 +185,8 @@ export const NO_EXPORT_TEXT = 'This harness root has no export';
 export const NO_POOL_TEXT = 'This harness root has no spare pool';
 
 /**
- * The harness root (`m1bInterfaces.HarnessRoot` since M1b W1b.5: the exec
- * program, pool settings and `whenSettled`). Without `pool` (M1a tests)
+ * The harness root (`interfaces.HarnessRoot`: M1b W1b.5 added the exec
+ * program, pool settings and `whenSettled`; M2 W2.7 the export and import). Without `pool` (M1a tests)
  * `status()` has no `pool` or `execProgram` and the pool methods throw.
  * @param {object} powers
  * @param {any} powers.operator
@@ -216,7 +216,7 @@ export const makeHarnessRoot = ({
       throw Error(NO_POOL_TEXT);
     return { pool, execPrograms };
   };
-  return makeExo('HarnessRoot', m2Interfaces.HarnessRoot, {
+  return makeExo('HarnessRoot', interfaces.HarnessRoot, {
     getOperator: () => operator,
     status: () => {
       const base = {
@@ -243,7 +243,7 @@ export const makeHarnessRoot = ({
       if (answer.complete) parts.pool.programChanged();
       return answer;
     },
-    /** @param {any} changes `m1bShapes.HarnessSettings` (checked by the guard) */
+    /** @param {any} changes `shapes.HarnessSettings` (checked by the guard) */
     configure: changes => {
       const parts = needPool();
       settings?.set(changes);

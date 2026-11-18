@@ -117,7 +117,9 @@ export const limits = harden({
   liveBatchDeliveries: 256,
   /**
    * The bundled session program (architecture D-4, perf `session.program`);
-   * 200,000 until M5's merge raised it (M5 contract O-1, W5.9).
+   * 200,000 until M5's merge raised it (M5 contract O-1, W5.9). 236,583
+   * bytes after the M3-M5 merge; 213,712 since X1 split the interface
+   * tables per vat program (`guards/`, O-1's alternative).
    */
   sessionProgramBytes: 240_000,
 
@@ -157,7 +159,10 @@ export const limits = harden({
   blobWriterIdleMs: 60_000,
   /** Exec call deadline (architecture 6; open decision 10); HarnessRoot.configure changes it. */
   execDeadlineMs: 120_000,
-  /** The bundled exec program (perf `exec.program`); 100,000 before M5 (O-1). */
+  /**
+   * The bundled exec program (perf `exec.program`); 100,000 before M5 (O-1).
+   * 105,414 bytes after the M3-M5 merge; 62,196 since X1 (`guards/base.js`).
+   */
   execProgramBytes: 120_000,
   /** Spare session vats, spare exec vats, creations in parallel (D-4). */
   spareSessions: 2,

@@ -814,6 +814,12 @@ test('getHistoryPage and getCurrentTurn return through a structural guard (J-915
     });
   const exo = (/** @type {any} */ page, /** @type {any} */ current) =>
     makeExo('Session', /** @type {any} */ (interfaces.Session), {
+      // Methods later milestones added (the folded guard has them).
+      ...Object.fromEntries(
+        /** @type {any} */ (methodNames).Session.map(
+          (/** @type {string} */ method) => [method, () => undefined],
+        ),
+      ),
       ...Object.fromEntries(
         Object.entries(methodSamples.Session).map(([method, { returns }]) => [
           method,

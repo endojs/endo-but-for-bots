@@ -459,6 +459,11 @@ const methodSamples = {
 const stubExo = name => {
   /** @type {Record<string, (...args: any[]) => any>} */
   const methods = {};
+  // Methods M2 added to an M1b interface (the folded guard has them, X1);
+  // m2-interfaces.test.js calls those.
+  for (const method of /** @type {any} */ (methodNames)[name]) {
+    methods[method] = () => undefined;
+  }
   for (const [method, { returns }] of Object.entries(methodSamples[name])) {
     methods[method] = () => harden(returns);
   }
@@ -515,14 +520,17 @@ test('every M1b method refuses an oversize string, an oversize array and an extr
 
 test('an M1b interface under an M1a name keeps every M1a method, in order, first', t => {
   for (const name of Object.keys(m1bMethodNames)) {
-    const old = /** @type {Record<string, readonly string[]>} */ (methodNames)[
-      name
-    ];
-    if (old !== undefined) {
-      t.deepEqual(m1bMethodNames[name].slice(0, old.length), [...old], name);
-      // The M1a guard is unchanged until its implementer switches.
-      t.truthy(/** @type {any} */ (interfaces)[name], name);
-    }
+    // Since the M2 fold (X1) the folded list may be M2's, which keeps every
+    // M1b method first (M1a's first is checked by m2-interfaces.test.js).
+    const folded = /** @type {Record<string, readonly string[]>} */ (
+      methodNames
+    )[name];
+    t.deepEqual(
+      folded.slice(0, m1bMethodNames[name].length),
+      [...m1bMethodNames[name]],
+      name,
+    );
+    t.truthy(/** @type {any} */ (interfaces)[name], name);
   }
   // A guard admits only its own methods: an M1a exo cannot pass for M1b.
   t.throws(() =>
@@ -575,7 +583,8 @@ test('return guards: an exec outcome, a busy answer and a structural record page
       makeExo(
         'ContextSource',
         /** @type {any} */ (m1bInterfaces.ContextSource),
-        { page: () => harden(value) },
+        // `segments`: M2's, in the folded guard (X1).
+        { page: () => harden(value), segments: () => harden({ segments: [] }) },
       )
     );
   const many = Array.from({ length: limits.pageRecords }, () => turnStarted);

@@ -28,12 +28,7 @@
  */
 import { limits } from './limits.js';
 import { limitsM5 } from './limits-m5.js';
-import {
-  interfaces,
-  m2Interfaces,
-  m2MethodNames,
-  shapes,
-} from './interfaces.js';
+import { interfaces, methodNames, shapes } from './guards/session.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
@@ -525,10 +520,10 @@ export const m5Extensions = harden({
 export const m5Interfaces = lazyTable({
   /** M2 Session + `enqueueMessageOnce`, `grants` (W5.3 switches, stubs). */
   Session: () =>
-    extendInterface(m2Interfaces.Session, 'Session', m5Extensions.Session()),
+    extendInterface(interfaces.Session, 'Session', m5Extensions.Session()),
   /** M2 Composer + attachments on `submit` (W5.7). */
   Composer: () =>
-    extendInterface(m2Interfaces.Composer, 'Composer', m5Extensions.Composer()),
+    extendInterface(interfaces.Composer, 'Composer', m5Extensions.Composer()),
   /** M1b ExecScope with the M5 request and `inspect` (W5.4). */
   ExecScope: () =>
     extendInterface(
@@ -579,7 +574,7 @@ export const m5Interfaces = lazyTable({
 
 /** Method names of M5's interfaces, in order (contract test). */
 export const m5MethodNames = harden({
-  Session: harden([...m2MethodNames.Session, 'enqueueMessageOnce', 'grants']),
+  Session: harden([...methodNames.Session, 'enqueueMessageOnce', 'grants']),
   Composer: harden(['submit', 'edit']),
   ExecScope: harden(['run', 'abandon', 'inspect']),
   ExecPowersSource: powersMethodNames,

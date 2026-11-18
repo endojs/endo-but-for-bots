@@ -22,7 +22,7 @@
  *
  * Guest rules: prelude globals only.
  */
-import { shapes, texts } from '../lib/interfaces.js';
+import { shapes, texts } from '../lib/guards/factory.js';
 import { limits } from '../lib/limits.js';
 import { messageBytes } from '../lib/bounded.js';
 

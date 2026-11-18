@@ -301,7 +301,7 @@ absent meanwhile.
 
 | Command | What it does |
 | --- | --- |
-| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js` without comments, refusing any module outside `guest/` |
+| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js` without comments, refusing any module outside `guest/`. Sizes at X1 (bytes, budget): session 213,712 (240,000), exec 62,196 (120,000), factory 164,810 |
 
 ## Disk
 

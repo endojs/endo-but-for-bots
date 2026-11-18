@@ -5,7 +5,7 @@
 // max(compaction boundary, the archive's `sealedTo`). Records below
 // `sealedTo` are in the archive: a cursor there throws `recordsSealed`.
 // `segments(cursor?)` pages the archive's index (`s<n>`).
-import { m2Interfaces, texts } from '../lib/interfaces.js';
+import { interfaces, texts } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { plainBytes } from './records.js';
 
@@ -27,7 +27,7 @@ const noSegments = harden({ segments: harden([]) });
  *   boundary (M8 moves it; until then 0)
  */
 export const makeContextSource = ({ records, archive, boundary = () => 0 }) =>
-  makeExo('ContextSource', m2Interfaces.ContextSource, {
+  makeExo('ContextSource', interfaces.ContextSource, {
     /** @param {string} [cursor] */
     page(cursor) {
       const count = records.count();

@@ -32,7 +32,7 @@
  * Guest rules: prelude globals only; pending rows in a `Map` keyed by the
  * row object; sendOnly only; events are fixed-key records.
  */
-import { m1bShapes } from '../lib/interfaces.js';
+import { shapes } from '../lib/guards/factory.js';
 import { limits } from '../lib/limits.js';
 import { messageBytes } from '../lib/bounded.js';
 
@@ -82,7 +82,7 @@ export const makeListFeed = ({ admin, listed, isListed }) => {
     counts.batches += 1;
     counts.events += events.length;
     const batch = harden({ rev, events });
-    mustMatch(batch, m1bShapes.ListPublishBatch);
+    mustMatch(batch, shapes.ListPublishBatch);
     if (publisher !== undefined) {
       counts.sent += 1;
       E.sendOnly(publisher).publish(batch);

@@ -322,6 +322,9 @@ test('QueueEntry is guarded and describes itself', t => {
   const probe = makeExo('QueueEntry', interfaces.QueueEntry, {
     describe: () => info,
     cancel: () => false,
+    // M2's, in the folded guard (X1).
+    edit: () => undefined,
+    sendNow: () => undefined,
   });
   t.deepEqual(Object.keys(probe).sort(), Object.keys(entry).sort());
 });

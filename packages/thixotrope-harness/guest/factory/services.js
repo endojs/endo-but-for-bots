@@ -12,7 +12,7 @@
  *
  * Guest rules: prelude globals only.
  */
-import { shapes } from '../lib/interfaces.js';
+import { shapes } from '../lib/guards/factory.js';
 import { presetEndowmentsAt } from './presets.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */

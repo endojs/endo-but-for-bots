@@ -12,7 +12,7 @@
  *
  * Guest rules: prelude globals only.
  */
-import { shapes, textOf, texts } from '../lib/interfaces.js';
+import { shapes, textOf, texts } from '../lib/guards/factory.js';
 import { promptResolver } from '../session/prompt.js';
 import { subscriptionEffort } from './subscription-options.js';
 

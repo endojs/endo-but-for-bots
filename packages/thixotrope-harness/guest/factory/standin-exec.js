@@ -15,7 +15,7 @@
  *
  * Guest rules: prelude globals only.
  */
-import { m1bInterfaces } from '../lib/interfaces.js';
+import { interfaces } from '../lib/guards/factory.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { makeExo } = /** @type {GuestGlobals} */ (globalThis);
@@ -23,7 +23,7 @@ const { makeExo } = /** @type {GuestGlobals} */ (globalThis);
 /** The program's entry: the completion value of the evaluating crank. */
 export const makeExecScope = () => {
   let calls = 0;
-  return makeExo('ExecScope', m1bInterfaces.ExecScope, {
+  return makeExo('ExecScope', interfaces.ExecScope, {
     async run() {
       calls += 1;
       return harden({ status: 'ok', text: `calls ${calls}` });

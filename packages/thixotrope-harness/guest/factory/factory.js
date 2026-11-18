@@ -33,12 +33,7 @@
  * `CreateOptions.at`, else the latest one the factory saw); answered sends are sequential in a creation and at most
  * `PROBE_WINDOW` at once in the start listener.
  */
-import {
-  m1bInterfaces,
-  m2Interfaces,
-  shapes,
-  texts,
-} from '../lib/interfaces.js';
+import { interfaces, shapes, texts } from '../lib/guards/factory.js';
 import {
   m5FactoryExtensions,
   texts as factoryTexts,
@@ -403,7 +398,7 @@ export const makeFactoryKit = ({
     }
   };
 
-  const factory = makeExo('SessionFactory', m2Interfaces.SessionFactory, {
+  const factory = makeExo('SessionFactory', interfaces.SessionFactory, {
     createSession,
     /** @param {{ after?: string, limit?: number }} [options] */
     listSessions: options => rows.page(options),
@@ -426,7 +421,7 @@ export const makeFactoryKit = ({
 
   // M5 W5.1 (seam H-2): `m5FactoryInterfaces.Operator`.
   const operatorInterface = extendInterface(
-    m2Interfaces.Operator,
+    interfaces.Operator,
     'Operator',
     m5FactoryExtensions.Operator(),
   );
@@ -532,7 +527,7 @@ export const makeFactoryKit = ({
   /** Settles when the latest start's recovery is done (tests). */
   let recovered = Promise.resolve();
 
-  const startListener = makeExo('StartListener', m1bInterfaces.StartListener, {
+  const startListener = makeExo('StartListener', interfaces.StartListener, {
     started: () => {
       recovered = recover();
       return undefined;

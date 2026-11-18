@@ -489,8 +489,11 @@ test('the folded interfaces keep every M1a and M1b method, in order', t => {
     t.deepEqual(folded.slice(0, own.length), own, `${name}: M1a first`);
   }
   for (const [name, names] of Object.entries(m1bMethodNames)) {
+    // Since the M2 fold (X1) an interface M2 extended holds M2's list,
+    // which keeps the M1b list first.
+    const folded = /** @type {any} */ (methodNames)[name];
     t.deepEqual(
-      /** @type {any} */ (methodNames)[name],
+      name in m2MethodNames ? folded.slice(0, names.length) : folded,
       [...names],
       `${name}: the M1b list`,
     );
@@ -520,11 +523,34 @@ test('each m2Interfaces version keeps every folded method first, then M2s', t =>
     Object.keys(m2Interfaces).sort(),
   );
   for (const [name, names] of Object.entries(m2MethodNames)) {
+    // The list before M2: M1b's where M1b extended it, else M1a's.
     /** @type {string[]} */
-    const folded = /** @type {any} */ (methodNames)[name];
-    t.deepEqual(names.slice(0, folded.length), [...folded], name);
-    t.true(names.length > folded.length, `${name} gains a method`);
+    const earlier =
+      /** @type {any} */ (m1bMethodNames)[name] ??
+      /** @type {any} */ (M1A_METHODS)[name];
+    t.deepEqual(names.slice(0, earlier.length), [...earlier], name);
+    t.true(names.length > earlier.length, `${name} gains a method`);
   }
+});
+
+test('the M2 fold (X1): interfaces and methodNames hold the M2 versions; m2Interfaces is a view', t => {
+  for (const [name, names] of Object.entries(m2MethodNames)) {
+    t.is(
+      /** @type {any} */ (m2Interfaces)[name],
+      /** @type {any} */ (interfaces)[name],
+      `m2Interfaces.${name} is the folded guard`,
+    );
+    t.deepEqual(/** @type {any} */ (methodNames)[name], [...names], name);
+  }
+  // A folded guard is the M2 version: an M1a-only stub is refused.
+  t.throws(
+    () =>
+      makeExo('QueueEntry', /** @type {any} */ (interfaces.QueueEntry), {
+        describe: () => undefined,
+        cancel: () => false,
+      }),
+    { message: /not implemented/ },
+  );
 });
 
 // ---------------------------------------------------------------- shapes

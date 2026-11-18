@@ -22,7 +22,7 @@
  * resolved (at most `maxUnresolvedTurns`; the oldest goes first). No handle
  * per segment: segments are ranges of the session's one archive (4.6).
  */
-import { archiveKindLetters, texts } from '../lib/interfaces.js';
+import { archiveKindLetters, texts } from '../lib/guards/session.js';
 import { limits as defaultLimits } from '../lib/limits.js';
 import { inCallOrder, plainBytes } from './records.js';
 

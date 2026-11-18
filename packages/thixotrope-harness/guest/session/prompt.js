@@ -28,7 +28,7 @@
  *
  * Guest rules: prelude globals only.
  */
-import { texts, textOf } from '../lib/interfaces.js';
+import { texts, textOf } from '../lib/guards/factory.js';
 import { limits } from '../lib/limits.js';
 import { chunkText, utf8Bytes } from '../lib/bounded.js';
 import { composeSystemPrompt } from '../lib/system-prompt-base.js';

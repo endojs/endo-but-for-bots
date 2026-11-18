@@ -36,7 +36,7 @@
  * Vat module: prelude globals only, no clock (`at` comes from the caller),
  * no data-dependent record keys.
  */
-import { m2Interfaces, texts } from '../lib/interfaces.js';
+import { interfaces, texts } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { previewText, utf8Bytes } from '../lib/bounded.js';
 import { makePendingQueue } from '../lib/pending-queue.js';
@@ -135,7 +135,7 @@ export const makeQueue = ({
     if (makeEntryInstance === undefined) {
       makeEntryInstance = defineExoClass(
         'QueueEntry',
-        m2Interfaces.QueueEntry,
+        interfaces.QueueEntry,
         /** @param {Internal} state */
         state => ({ internal: state }),
         {

@@ -10,8 +10,10 @@
  * factory's `main.js`.
  *
  * It satisfies the contract's guards: `makeSpareMaker()` returns a
- * `SpareMaker`; `make` returns a guarded `Session` and `SessionInternal`.
- * Session methods that need the turn machinery throw. Two titles given to
+ * `SpareMaker`; `make` returns a guarded `Session` and `SessionInternal`
+ * (the M2 versions since the M2 fold, X1). Session methods that need the
+ * turn machinery throw; the M2 methods it has no state for (`findTurn`,
+ * `blobPage`, `deleteSelf`, the export and import) refuse. Two titles given to
  * `rename` drive the factory tests:
  * - `STANDIN_WORKING` reports `activity: 'working'` (as a claim would);
  * - `STANDIN_HALT` loops until the crank budget halts the vat (a lost
@@ -20,7 +22,7 @@
  *
  * Guest rules: prelude globals only.
  */
-import { interfaces } from '../lib/interfaces.js';
+import { interfaces } from '../lib/guards/factory.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E, makeExo } = /** @type {GuestGlobals} */ (globalThis);
@@ -28,6 +30,15 @@ const { E, makeExo } = /** @type {GuestGlobals} */ (globalThis);
 export const STANDIN_WORKING = 'stand-in: working';
 export const STANDIN_HALT = 'stand-in: halt';
 const NOT_HERE = 'The stand-in session has no turns';
+
+/**
+ * An M2 method the stand-in does not implement (m2-interfaces.md 1.3: the
+ * folded guard names it, so the exo needs it; a call refuses).
+ * @param {string} method
+ */
+const refuse = method => () => {
+  throw Error(`The stand-in session does not implement ${method}`);
+};
 
 const zeroUsage = harden({
   inputTokens: 0,
@@ -87,10 +98,17 @@ const makeSession = ({ config, rowReporter }) => {
     getCurrentTurn: () => undefined,
     getHistoryPage: () => harden({ turns: [] }),
     getUsage: () => zeroUsage,
+    findTurn: () => {
+      throw Error(NOT_HERE);
+    },
   });
   const internal = makeExo('SessionInternal', interfaces.SessionInternal, {
     rowSnapshot: () =>
       harden({ title, activity, messageCount: 0, queuedCount: 0 }),
+    blobPage: refuse('blobPage'),
+    deleteSelf: refuse('deleteSelf'),
+    exportState: refuse('exportState'),
+    importState: refuse('importState'),
   });
   return harden({ session, internal });
 };
