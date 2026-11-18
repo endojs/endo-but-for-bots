@@ -1,6 +1,8 @@
 // @ts-nocheck - E() generics don't work well with JSDoc types for remote objects
 /* eslint-disable no-await-in-loop */
 
+/** @import {ContextCompactionSettings} from '@endo/lal/providers/index.js' */
+
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
@@ -221,7 +223,7 @@ Example: if a message says "Here is @counter for you", adopt it:
  *   a revoked one stops it. Absent when the caller injected a built provider.
  * @param {string} [options.sessionId] - Stable pool identity, required for subscriptions.
  * @param {boolean} [options.forceCompaction] Explicit/manual trigger; runs even when automatic compaction is disabled.
- * @param {import('@endo/lal/providers/index.js').ContextCompactionSettings} [options.compactionSettings]
+ * @param {ContextCompactionSettings} [options.compactionSettings]
  * @param {string} [options.providerIdentity] Locator of the exact retained provider recipe.
  * @param {typeof DEFAULT_SUBAGENT_LIMITS} [options.subagentLimits]
  * @param {number} [options.maxToolRounds]

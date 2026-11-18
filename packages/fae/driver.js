@@ -39,12 +39,9 @@ import { resolveAuthToken } from './src/credentials.js';
  * @returns {Promise<object>}
  */
 export const make = async (powers, context, { env } = {}) => {
-  const {
-    subagentLimits,
-    maxToolRounds,
-    requestTimeoutMs,
-    compactionSettings,
-  } = readFaeWorkloadConfig(env ?? {});
+  const { subagentLimits, maxToolRounds, requestTimeoutMs } =
+    readFaeWorkloadConfig(env ?? {});
+  const { compactionSettings } = readFaeWorkloadConfig(env ?? {});
   const systemPrompt = env?.FAE_SYSTEM_PROMPT || undefined;
   // Written by this agent's parent, not by the operator, so the loop appends it
   // to the standing prompt rather than letting it take its place.

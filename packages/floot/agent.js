@@ -1,6 +1,8 @@
 // @ts-nocheck - E() generics don't work well with JSDoc types for remote objects
 /* eslint-disable no-await-in-loop */
 
+/** @import {ContextCompactionSettings} from '@endo/lal/providers/index.js' */
+
 // Floot — a streaming agent harness for the Endo daemon.
 //
 // Floot mirrors fae's factory/driver/guest topology (see @endo/fae) but trades
@@ -519,7 +521,7 @@ const provisionPresetObjects = async (
  *   the factory built (see `makeFlootToolRegistry`).
  * @param {number} [options.contextLength] Exact selected-model catalog reading.
  * @param {boolean} [options.forceCompaction] Explicit/manual trigger; runs even when automatic compaction is disabled.
- * @param {import('@endo/lal/providers/index.js').ContextCompactionSettings} [options.compactionSettings]
+ * @param {ContextCompactionSettings} [options.compactionSettings]
  * @param {() => Promise<void>} [options.stopEnvironment] Private execution stop barrier, distinct from inference cancellation.
  * @param {(kind: 'turn-started' | 'turn-settled' | 'turn-resolved', detail?: { input: string, from?: string }) => void} [options.onChange]
  *   Told when this session's turn records change, whoever started the turn —

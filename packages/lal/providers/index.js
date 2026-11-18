@@ -4,6 +4,8 @@
  * Use createProvider(env) to get a provider for the current configuration.
  */
 
+/** @import {ContextCompactionSettings as CompactionSettings} from './context-compaction.js' */
+
 import {
   DEFAULT_WORKLOAD_LIMITS,
   readWorkloadLimit,
@@ -135,7 +137,7 @@ export {
   messageFromResponsesOutput,
   assertSubscriptionResponsesRecipe,
 } from './subscription-responses.js';
-/** @typedef {import('./context-compaction.js').ContextCompactionSettings} ContextCompactionSettings */
+/** @typedef {CompactionSettings} ContextCompactionSettings */
 export {
   defaultContextCompactionSettings,
   planContextCompaction,

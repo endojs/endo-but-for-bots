@@ -1,5 +1,7 @@
 // @ts-check
 
+/** @import {ExecutionContext} from 'ava' */
+
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import { formatLocator } from '@endo/daemon/locator.js';
@@ -1889,7 +1891,7 @@ test('cancelling an image request checkpoints receipts before stop and recovers 
  * Drive three turns through a provider whose second answer reports a nearly
  * full window, so the third turn crosses the automatic compaction threshold
  * with one older completed turn to summarize and one recent turn to keep.
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {object} compactionSettings
  */
 const runOverThreshold = async (t, compactionSettings) => {
