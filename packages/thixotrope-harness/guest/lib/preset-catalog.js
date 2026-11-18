@@ -4,7 +4,7 @@
  * passes (M5 W5.1; `designs/m5-interfaces.md` sections 1.3 and 2.1).
  *
  * Ported from Fae `session/preset-catalog.js` `normalizePreset` at
- * `1315bef86`, with the texts of `interfaces-m5-factory.js`. Differences
+ * `1315bef86`, with the texts of `guards/factory.js`. Differences
  * (D-M5-1): a preset has no id (it is an object); its `label` is Fae's
  * `title`; an endowment is `{ label, value }` without Fae's `sourcePath`
  * (the value is the object); a model default names the `Backend` object,

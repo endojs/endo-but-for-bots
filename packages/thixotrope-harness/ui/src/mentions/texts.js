@@ -10,7 +10,7 @@
 
 /**
  * The resend of a draft whose chips a page reload lost (equal to
- * `texts.attachmentsLost` of `guest/lib/interfaces-m5.js`).
+ * `texts.attachmentsLost` of `guest/lib/guards/session.js`).
  */
 export const attachmentsLost =
   'Attachments were lost when the page reloaded; attach them again';

@@ -96,7 +96,7 @@ export const formOf = view => ({
 harden(formOf);
 
 /**
- * The `PresetRecord` a form sends (`m5FactoryShapes.PresetRecord`): the
+ * The `PresetRecord` a form sends (factory `shapes.PresetRecord`): the
  * optional `backend`, `modelId` and `reasoningEffort` only when set.
  *
  * @param {PresetForm} form

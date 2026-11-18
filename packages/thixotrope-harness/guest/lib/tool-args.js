@@ -361,7 +361,7 @@ const field = (name, kind, required = true) => harden({ name, kind, required });
 
 /**
  * The argument specs of M5's built-in tools, field order as
- * `interfaces-m5.js` `m5ToolArgumentNames` (the R3-26 text lists them in
+ * `guards/session.js` `toolArgumentNames` (the R3-26 text lists them in
  * that order; `m5-w53-args.test.js` keeps the two equal).
  */
 export const argSpecs = harden({

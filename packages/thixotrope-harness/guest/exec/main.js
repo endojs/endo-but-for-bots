@@ -111,7 +111,7 @@ harden(clampDelay);
 /** @import { Outcome, StagedText } from './render.js' */
 
 /**
- * @typedef {object} ExecRequest `m5Shapes.ExecRequest` (guard-checked)
+ * @typedef {object} ExecRequest `guards/base.js` `shapes.ExecRequest` (guard-checked)
  * @property {string | StagedText} args
  * @property {any} writers
  * @property {any} timer
@@ -366,7 +366,7 @@ export const makeExecScope = () => {
      * Call `request.target` for the session and answer a bounded, rendered
      * outcome (D-M5-2; `inspect.js`). Runs beside `run`, never `busy`; the
      * session's client keeps at most `inspectWindow` in flight.
-     * @param {any} request `m5Shapes.InspectRequest`
+     * @param {any} request `guards/base.js` `shapes.InspectRequest`
      */
     inspect(request) {
       const { writers, content } = request;

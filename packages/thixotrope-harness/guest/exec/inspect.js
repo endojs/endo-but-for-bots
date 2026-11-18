@@ -249,7 +249,7 @@ const describeTool = schema => {
 };
 
 /**
- * @typedef {object} InspectRequest `m5Shapes.InspectRequest` (guard-checked)
+ * @typedef {object} InspectRequest `guards/base.js` `shapes.InspectRequest` (guard-checked)
  * @property {'methods' | 'describe' | 'readSources' | 'toolSchema' | 'toolExecute'} op
  * @property {any} target
  * @property {any} writers
