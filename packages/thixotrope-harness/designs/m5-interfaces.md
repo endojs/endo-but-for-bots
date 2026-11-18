@@ -876,7 +876,8 @@ found at run time (W5.7 does not import W5.6); everything else by W5.9.
 5. **`describeCapability` and `readSources`** (R3-32; W5.5 `m5-objects`): bounded help of a
    fixture (<= 48,000 units, then the tool limit); `readSources` of a fixture `SourceReader` with
    a search; a fixture whose `help()` answers 200 KB gives `texts.inspectTerminated` (or, since
-   core CC-027, the hub refuses the answer and `describeCapability` shows the methods with
+   core CC-027, the hub refuses the answer and `describeCapability` answers the inspector's
+   `ANSWER_OVER_FRAME_TEXT` as its error, step 3; before step 3 it showed the methods with
    documentation `unavailable`) and the session's next turn runs normally.
 6. **Granted tools** (P-65, R3-6; W5.6 `m5-grants`): a granted `echo2` is offered at the next
    round and its call returns its result; a grant named `exec` is `refused-builtin` and not
@@ -900,7 +901,11 @@ found at run time (W5.7 does not import W5.6); everything else by W5.9.
     `textOf.membraneTooLarge`, the fixture's vat answers its next call; a record of 40 keys is
     refused; a granted tool answering 300 KB yields a staged, cut result,
     `texts.inspectTerminated` or (since core CC-027, what happens at the harness's 65,536-byte
-    ceiling) the hub's `FRAME_TOO_LARGE` text as the tool's error, and the session keeps working.
+    ceiling: the hub refuses the answer with `FRAME_TOO_LARGE` before the exec vat decodes it)
+    the inspector's `ANSWER_OVER_FRAME_TEXT` as the tool's error (step 3), and the session keeps
+    working. A 200 KB `help()` behind `describeCapability` answers the same text when the hub
+    refuses it. One predicate (`test/integration/_m5-objects.js` `tooBigOutcome`) serves
+    `m5-objects`, `m5-security` and `perf/exec-m5.perf.mjs` probe b.
 11. **SIGKILL** (section 5): (a) K3 and K6 (W5.7 `m5-mentions-restart`); (b) K4 and K5: the
     fixture tool's log shows at most one run, the turn is outcome-unknown, no rerun; at K5's
     first point the call is recorded "Tool outcome unknown", at its second the true result is
@@ -945,7 +950,7 @@ before.
 | `mentions.turnStart` turn start with 32 attachments vs none | `mentions` (W5.7) | 60 s each | median <= +100 ms and <= 350 ms; <= 3 deliveries | M2's turn start budget; 32 handles add one larger frame |
 | `prompt.compose` | `creation-m5` (W5.9) | Node: compositions over 10 s; vat: creations over a 120 s window, the largest preset and `chat-only` alternating (pool 4) | Node <= 5 ms each; vat: creation <= `chat-only` + 150 ms and <= 750 ms | composition is one `join`; the creation budget is M1b's 750 ms with the pool |
 | `session.program` / `exec.program` bundle bytes; `session.createCold` | `creation-m5` (W5.9) | one build; cold creations over a 120 s window | <= the limits after O-1; cold <= 6 s | D-4's basis (10 us per byte); O-1 |
-| too-big probes (a) 100 KiB argument through the membrane, (b) 200 KB `help`, (c) 20,000-key answer, (f) exec body of 300 k iterations ok and 10 x the per-crank ceiling terminated (carried) | `exec-m5` (W5.5) | each capped: (a) 15 s, (b) 30 s, (c) 30 s, (f) 30 s | no halt of the session vat or the target's vat; the refusal texts. As built (CC-027, D-M5-2): (b) may now end refused by the hub (not re-measured on the combination, J-10074) | facts 2 and 4 |
+| too-big probes (a) 100 KiB argument through the membrane, (b) 200 KB `help`, (c) 20,000-key answer, (f) exec body of 300 k iterations ok and 10 x the per-crank ceiling terminated (carried) | `exec-m5` (W5.5) | each capped: (a) 15 s, (b) 30 s, (c) 30 s, (f) 30 s | no halt of the session vat or the target's vat; the refusal texts. As built (CC-027, D-M5-2): (b) may now end refused by the hub (not re-measured on the combination, J-10074); since step 3 probe b accepts that outcome (`ANSWER_OVER_FRAME_TEXT`) through `tooBigOutcome`, the predicate `m5-objects` uses | facts 2 and 4 |
 | too-big probes (d) 8,193-byte `store`, 257th label, 33 attachments; (e) a granted schema with 3,000-unit parameters | `tools` (W5.3) | each capped at 30 s | as above | as above |
 
 Files and their worst time (windows + capped probes + template setup): `tools` 4 windows + 60 s
@@ -1132,3 +1137,4 @@ checks them.
 | `textOf.reservedLabel` | Fae's `Reserved or invalid endowment name: <label>` | R3-22 |
 | `textOf.unknownLabel`, `labelTaken`, `labelsFull`, `valueTooLarge`, `storedValuesFull`, `argumentsTooLarge`, `noPackage`, `noEdge`, `tooManyAttachments`, `packageTooLong`, `duplicateAttachment`, `toolNameBuiltIn`, `toolNameDuplicate`, `toolSchemaInvalid`, `toolOverBudget`, `membraneTooLarge`, `membraneTooManyKeys`, `membraneTooDeep`; `texts.powersExpired`, `inspectTerminated`, `grantWithdrawn`, `grantsFull`, `attachmentsLost` (the browser's mention addon; W5.8 keeps an equal copy) | see the file | harness |
 | tool descriptions and parameter schemas of `list`, `lookup`, `store`, `remove`, `describeCapability`, `readSources`, `adopt`, `adoptTool` | ported word for word by W5.3, W5.5, W5.7 | Fae `src/tool-makers.js`, `src/source-tools.js` |
+| `guest/exec/inspect.js` `ANSWER_OVER_FRAME_TEXT` (step 3) | `The answer was over the frame ceiling: the hub refused it before it reached the sandbox, so nothing of it is available. Ask for a smaller answer.`: a granted tool's `execute` answer or a `help()` answer the hub refused for size (its break text equals `HUB_FRAME_TOO_LARGE`, the guest copy of the core's `FRAME_TOO_LARGE`, pinned by `test/unit/inspector-frame-refusal.test.js`) | harness |

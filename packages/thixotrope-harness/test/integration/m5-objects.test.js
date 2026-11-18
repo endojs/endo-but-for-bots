@@ -21,9 +21,10 @@
  *   call's works;
  * - 5: `describeCapability` (overview and one method) and `readSources`
  *   with a search; a fixture whose `help()` answers 200 KB gives a cut,
- *   staged result or `texts.inspectTerminated` (the contract expected the
- *   latter; this worker decodes the answer, J-0771), and the session's
- *   next turn runs normally.
+ *   staged result, `texts.inspectTerminated` (the contract expected the
+ *   latter; this worker decodes the answer, J-0771) or, since core CC-027,
+ *   the inspector's `ANSWER_OVER_FRAME_TEXT` (the hub refused the answer
+ *   for size), and the session's next turn runs normally.
  *
  *   THIX_AGENT=W5.5 corepack yarn test:integration test/integration/m5-objects.test.js
  */
@@ -58,6 +59,7 @@ import {
   objectsTemplate,
   operatorOf,
   presetSession,
+  tooBigOutcome,
   turnOf,
 } from './_m5-objects.js';
 
@@ -315,35 +317,26 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
   });
   // 200 KB help: either the exec vat decoded it and the inspector cut and
   // staged it (no halt at this worker), or the exec vat stopped and the
-  // session said so. Both keep the session working (J-0771).
-  const terminated =
-    big[0] === textOf.errorResult(texts.inspectTerminated) && big[1];
-  // Since core CC-027 the hub refuses the 200 KB help's frame toward the exec
-  // vat (over THIXOTROPE_VAT_FRAME_BYTES) before the vat decodes it: the
-  // help() call breaks with FRAME_TOO_LARGE, and describeCapability answers
-  // the methods inline with its documentation `unavailable`. Also no halt
+  // session said so (J-0771), or (since core CC-027) the hub refused the
+  // help's frame toward the exec vat (over THIXOTROPE_VAT_FRAME_BYTES)
+  // before the vat decoded it and describeCapability says so
+  // (ANSWER_OVER_FRAME_TEXT). All keep the session working; no halt
   // (J-10124).
-  /** @type {any} */
-  const shown = typeof big[0] === 'string' ? JSON.parse(big[0]) : undefined;
-  const hubRefused =
-    !big[1] &&
-    shown?.documentationScope === 'unavailable' &&
-    Array.isArray(shown.methods) &&
-    shown.methods.includes('help');
-  if (!terminated && !hubRefused) {
+  const outcome = tooBigOutcome(big[0]);
+  t.not(outcome, undefined, JSON.stringify(big).slice(0, 300));
+  const terminated = outcome === 'inspectTerminated';
+  if (outcome === 'staged') {
     t.false(big[1]);
     t.true(isStaged(big[0]), 'a cut answer over inlineBytes is staged');
     t.true(Number(big[0].bytes) <= 3 * limits.inspectResultUnits);
     t.true(big[0].preview.startsWith('{"methods":'));
+  } else {
+    t.true(big[1], 'a stopped vat or a refused answer is a failed result');
   }
   emit({
     metric: 'm5.objects.bigHelp',
-    outcome: terminated
-      ? 'inspectTerminated'
-      : hubRefused
-        ? 'hubRefused'
-        : 'staged',
-    bytes: terminated || hubRefused ? undefined : big[0].bytes,
+    outcome,
+    bytes: outcome === 'staged' ? big[0].bytes : undefined,
     ...identity,
   });
 

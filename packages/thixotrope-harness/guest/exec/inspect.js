@@ -31,6 +31,12 @@
  *
  * Nothing here evaluates model code. A key flood answers `exhausted`, as
  * `run` does.
+ *
+ * An answer the hub refused for size (core CC-027: over this vat's inbound
+ * frame ceiling, refused before this vat decodes it; the call breaks with
+ * `HUB_FRAME_TOO_LARGE`): a granted tool's `execute` answer, or a `help()`
+ * answer of `describe`, answers `failed(ANSWER_OVER_FRAME_TEXT)`, which
+ * tells the model nothing of it reached the sandbox.
  */
 import { textOf } from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
@@ -71,6 +77,33 @@ export const UNREADABLE_TEXT =
   'Could not read this source path. Verify the path and that the capability implements SourceReader.read.';
 /** Tool arguments that are not a JSON object (Fae `assertToolArguments`). */
 export const ARGUMENTS_OBJECT_TEXT = 'Tool arguments must be an object';
+
+/**
+ * The hub's break text for a message it refuses for size: a guest copy of
+ * `@endo/thixotrope`'s `FRAME_TOO_LARGE` (a unit test pins it equal).
+ */
+export const HUB_FRAME_TOO_LARGE =
+  'ocapn hub: the message exceeds the inbound frame ceiling of its target';
+/** A harness text: what the model is told of an answer refused for size. */
+export const ANSWER_OVER_FRAME_TEXT =
+  'The answer was over the frame ceiling: the hub refused it before it reached the sandbox, so nothing of it is available. Ask for a smaller answer.';
+
+/**
+ * Whether `error` is the hub's refusal of an answer for size (an exact
+ * message match). Never throws.
+ * @param {unknown} error
+ */
+const isFrameRefusal = error => {
+  if (typeof error !== 'object' || error === null) return false;
+  try {
+    return (
+      /** @type {{ message?: unknown }} */ (error).message ===
+      HUB_FRAME_TOO_LARGE
+    );
+  } catch {
+    return false;
+  }
+};
 
 const ITEM_KEYS = harden(['path', 'startLine', 'lineCount', 'search']);
 
@@ -303,6 +336,7 @@ export const makeInspector = ({ writers, content }) => {
         }
       } catch (error) {
         if (isKeysExhausted(error)) throw error;
+        if (isFrameRefusal(error)) return failed(ANSWER_OVER_FRAME_TEXT);
         // Some guarded capabilities support only zero-argument help().
         if (method !== undefined) {
           try {
@@ -313,6 +347,7 @@ export const makeInspector = ({ writers, content }) => {
             }
           } catch (again) {
             if (isKeysExhausted(again)) throw again;
+            if (isFrameRefusal(again)) return failed(ANSWER_OVER_FRAME_TEXT);
             // Preserve the discovered callable interface even without docs.
           }
         }
@@ -457,7 +492,14 @@ export const makeInspector = ({ writers, content }) => {
     if (!isPlainObject(parsed.value)) return failed(ARGUMENTS_OBJECT_TEXT);
     const measured = measureArguments([parsed.value]);
     if ('refusal' in measured) return failed(measured.refusal);
-    const answer = await E(request.target).execute(...measured.args);
+    /** @type {unknown} */
+    let answer;
+    try {
+      answer = await E(request.target).execute(...measured.args);
+    } catch (error) {
+      if (isFrameRefusal(error)) return failed(ANSWER_OVER_FRAME_TEXT);
+      throw error;
+    }
     /** @type {string | undefined} */
     let text;
     if (typeof answer === 'string') text = answer;
