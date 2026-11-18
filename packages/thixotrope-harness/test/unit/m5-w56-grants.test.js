@@ -198,7 +198,7 @@ test('a grant named accountStatus: refused-builtin where the ports offer that ad
 
   const b = roundOf(plain, runtime);
   t.true(offered(b).includes('accountStatus'));
-  t.is(b.byName.get('accountStatus').site, 'guest');
+  t.is(b.byName.get('accountStatus')?.site, 'guest');
   t.deepEqual(b.refused, []);
   t.deepEqual(states(part), [['accountStatus', 'offered', undefined]]);
   t.true(builtInToolNames(withAccount).has('accountStatus'));
@@ -257,6 +257,7 @@ test('a clash with another dynamic source is refused through the entry hook', as
   part.entriesFor(ports, builtInToolNames(ports));
   part.facet.grantTool(makeTool('shared'));
   await drain();
+  /** @type {any} */
   const other = harden({
     name: 'shared',
     site: 'guest',
