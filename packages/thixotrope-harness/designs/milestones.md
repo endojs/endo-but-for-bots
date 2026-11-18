@@ -605,6 +605,62 @@ removes the `interrupted` window); awkward for time-window checks (time stamped 
 `m2-interfaces.md` 4.12), presets (M5), UI (M3). The record archive is **built in M2** (D-M2-1: W2.5
 vat side, W2.8 adapter side), not in M13.
 
+**Outcome (W2.9 integration; not yet reviewed, M2 is not marked done).** Release worker
+`367e78ad...`, crank budget 50 M, slot ceiling 4,000,000, allocation collection schedule, log hub
+store, Node 22.23.4, Apple M3 Max shared with other agents (load 1.6-3.5 for the integration lane,
+6-13 for the second long-session run, throughput and the 10,000/30,000-turn rows, when another
+checkout's lane ran beside this one). Integration at `81911ab991`..`84fc8cb388` (W2.9 fixes in
+J-9401); perf at `84fc8cb388`. Verdicts use the 1.25 x rule: "miss" is over the budget, "**fail**"
+over 1.25 x. JSON lines and readings are in J-9400..J-9420.
+
+| item | result | verdict | entries |
+|---|---|---|---|
+| 1 more than one delta per reply, OpenRouter and Anthropic (`m2-providers`) | 5 deltas each; turn 333-448 ms | pass | J-0423, J-9400 |
+| 2 R4-43 / R4-45 texts, synthesized id, the turn continues (`m2-turns`) | pass | pass | J-0470 |
+| 3 round limit 2 ends with R4-47, completed | pass at limit 2 in Node (real Endpoint, OpenRouter path); a 100-round turn in a vat (270 ms a round, flat); the real 1,024-round limit takes about 280 s alone, over the 5-minute file budget: opt-in `M2_TURNS_ROUND_LIMIT=1`, known failure | pass (Node) / known failure (vat at 1,024) | J-0471 |
+| 4 queue 100 refused, edit / delete / send-now, duplicate request id (`m2-queue`) | pass | pass | J-0450 |
+| 5 held `restart`: a new message or send-now releases in FIFO order | pass | pass | J-0450 |
+| 6 cancel mid-stream: the server sees the close; `cancelled` | pass (close 51 ms after `cancel`); the stream ends `end { status: 'cancelled' }`, not `abort` (contract 6; the milestone's "abort emitted" is for the PM, J-0424) | pass (as contracted) | J-0424 |
+| 7 replace the key, next turn uses it; revoke, next turn fails with no body; no value in the state dir (`m2-secrets`) | pass: the server saw the first, then the second key with no restart; a stale generation refused; a 401 with a body records the status only; revoked: `Secret operation failed: "REVOKED"`, no request; grep of 48 files / 211 MB, every encoding: 0 hits, control found | pass | J-9402 |
+| 8 429 Retry-After retried only while nothing was delivered | pass (1.36 s turn with one 429) | pass | J-0423 |
+| 9 300 turns, pages back to turn 1, every page <= `frameBytes` (`m2-history`) | pass (19 pages, largest 15,601 B) | pass | J-0461 |
+| 10 two clients see the same queue and transcript | pass | pass | J-0450 |
+| 11 default model change reaches new sessions only (`m2-catalog`) | pass: each request names its own model, windows 163,840 / 8,192 from the catalogue, R4-20 order, R4-21 refusals list nothing; one catalogue read for the file after the fix of J-9403 | pass | J-9403 |
+| 12 failed and outcome-unknown turns in the next context; never-dispatched not | pass | pass | J-0470 |
+| 13 SIGKILL during delete and during create; `row-removed` to two viewers <= 500 ms (`m2-lifecycle`; `m1b-live` 9) | pass; row-removed 5 ms after the answer; 6 runs of each SIGKILL case, delete killed 0-800 ms after `deleting`, create 168-3,544 ms after the call | pass | J-0480, J-9409 |
+| 14 export then import into fresh state: same sessions, history, queues | pass (1,370 records; re-export identical). Presets are M5 | pass | J-0483 |
+| 15 a 5,000-turn session behaves like a 200-turn one (`perf/history.perf.mjs`, built by `importState`, logContext digests off) | run 1 / run 2: wall per turn 0.98 / 0.94 x; `turn.start` 1.74 x (262 vs 151 ms) / 0.85 x (275 vs 322), all <= 350 ms; snapshot bytes 0.96 x; slot capacity 1.00 x; hub row 1.01-1.02 x; same at 1,000 (0.95-1.00 x); rebuild 85-359 ms with the same per-turn context digests; history walks newest to turn 1, every turn once, at 1,000 and 5,000 | pass (the one `turn.start` ratio over 1.25 x did not repeat: `turn.start` medians are bimodal at 140 / 270 ms) | J-9404 |
+| 16 SIGKILL during a seal (`m2-archive-restart`) | pass; 6 runs x 4 points (24 kills) | pass | J-0461, J-9409 |
+| M1a and M1b files (regression) | all pass, one file per invocation; `m1b-live` 9 delete now a plain test | pass | J-9409 |
+| SIGKILL repeats (M1a 5, 6, 7, held ports x 5 delays; M1b 3/10 x 6; 8 x 6; 12 x 5 (+6); M2 13 x 6; seal x 6) | 81 kill cases (20 + 6 + 6 + 13 + 12 + 24); no duplicated provider request, tool run or exec evaluation; no lost or duplicated record; one `m1b-pool-restart` case (+1,000 ms) timed out at 4 min with no row, not reproduced in 6 reruns | pass, one unexplained timeout reported | J-9409 |
+| Daemon-level secrets grep | 0 hits | pass | J-9402 |
+| `queue.enqueue` (150 ms) | 126 ms (0-99 waiting), 61 ms shallow; 279 ms at 75-99 waiting | pass (deep end 1.9 x) | J-0450, J-9411 |
+| `history.page` 1,000 turns (300 ms) | newest page 332 ms (run 1); archived page 41 ms | miss (1.11 x) / pass | J-9406 |
+| `context.rebuild` 1,000 / 5,000 turns (5 s) | 290 / 359 ms (354 run 2) | pass | J-9404 |
+| `hub.row` 1,000 / 5,000 turns | 10,193 / 10,260-10,326 chars, 211-212 entries (516 KB, 10,012 without the archive) | recorded; J-9335 (a) not needed for length | J-9404 |
+| `session.heap` 1,000 / 10,000 / 30,000 | see J-9410 (1,000 and 5,000: 1.07 M slots imported, 0.41 M grown, of 4,000,000) | recorded | J-9405, J-9410 |
+| `journal.snapshot` 1,000 / 10,000 / 30,000 (500 ms / 1 s / recorded) | see J-9410 | see J-9410 | J-9410 |
+| `checkpoint.stall` p99 (1 s) | 2.2-3.0 s p99 of per-turn wall time in every 100-turn window (one outlier turn per window; snapshot turns <= 1.0 s) | **fail** | J-9408 |
+| `provider.overhead` (5 ms; 0 deliveries) | 0.5-0.6 ms; 0 TurnSink messages while streaming (in process) | pass | J-0423 |
+| `secrets.read` (1 ms) | 0.018-0.025 ms | pass | W2.3 |
+| `restart.serving` 50 x 300 turns by import (15 s; 0 woken) | 4.4-5.6 s, 0 woken, 0 crashes | pass | J-9412 |
+| `throughput` 20 sessions (journal if < 50/s) | 29.3 deliveries/s at load 8-9 (442 ms per delivery, 5.2 turns/s) | recorded, under 50/s | J-9412 |
+| `disk.session` 300 turns (25 MB plus blobs) / after delete | 41.5 MB (40.9 MB the vat snapshot of an imported session) / all returned | **fail** / pass | J-0482, J-9405 |
+| too-big probes | 200,000 characters accepted (turn 1.2 s), 200,001 refused by the Composer's guard; a 100 KiB string to `startTurn` refused by the session vat's guard, no halt, but delivered (known failure: "refused before sending") | pass / known failure | J-9407 |
+| `archive.flat.*` (5,000 against 200, <= 1.25 x) | turn 0.94-0.98, snapshot 0.96, snapshot ms 0.43-0.89, slots 1.00, hub row 1.01-1.02 x, `turn.start` see 15 | pass | J-9404 |
+| `archive.seal` | turns that sealed 633-795 ms against 613-673 ms for others (median); adapter side 17-24 ms (W2.8) | recorded | J-9404, J-0491 |
+| `archive.disk` | 2,255-2,281 B of segment and 1,452-1,459 B of `context.jsonl` per archived turn | recorded | J-9404 |
+| `session.program` (200 KB) | 186,328 bytes | pass (13.7 KB left) | J-0462 |
+| `session.create` with the pool (750 ms) | 1,131 ms at load 6 (`m1b-pool`) | **fail** at that load (849-864 ms at load 2, J-9382) | J-9411 |
+| Unit lane | 691 passed, 0 failed, 56 skipped | pass | J-9400 |
+
+Fit (J-9400): the archive turned a heap that grew with every turn into one of fixed size, and the
+pieces that live in vats (queue, holds, history, the archive's index and intent) fit the persistent
+heap well; providers, secrets and the catalogue fit as adapter code because they are Node work with
+no state worth persisting in a vat. What still grows or misses: the adapter's per-round projection
+(M8), the heap high-water of an imported session (C-22), `checkpoint.stall`, `history.page` at its
+budget's edge, throughput under 50/s at load, and the 100 KiB client-side refusal.
+
 ---
 
 ## M3. Chat UI and gateway
@@ -1311,10 +1367,16 @@ the core work after M1b (C-7, C-2 and their integration, J-9300..J-9399) changed
 | `ContextSource.page` | copied the log's tail per page | reads only its own records (`RecordLog.at`); page bound unchanged (`contextPageBytes`, 512 records) | QC finding 2, J-0392 |
 | M1b acceptance 9 "delete" | M1b | M2 (W2.7, acceptance 13): it needs `deleteSession`; `m1b-live` keeps it as a known failure | m1b-interfaces 16.6, J-0309 |
 | M1b perf misses (QC findings 11-14) | budgets as listed | **kept**, not re-based; each names the core candidate it depends on, for the PM to rule: `session.create` with the pool (C-2, C-7: 7 serial cranks plus a wake), `concurrency.10` turn start and crank p95 (C-2), `history.page` (C-5, C-7; W2.5 record bound), `context.rebuild` (C-5; J-0322 (b)) | M1b outcome table, J-0396, J-0397 |
-| M2 | 7 work units | W2.0 contract step first (folds the M1b tables, adds `blobPage`/`releaseBlobs`/`deleteSession`, record-bounded history pages, heaviest-crank column); W2.5 also measures slot capacity and decides an archive in M2 | this table |
+| M2 | 7 work units | W2.0 contract step first (folds the M1b tables, adds `blobPage`/`releaseBlobs`/`deleteSession`, record-bounded history pages, heaviest-crank column); the record archive is built in M2 (D-M2-1: W2.5 vat side, W2.8 adapter side; W2.9 integration), so 10 work units | this table, J-9400 |
 | Garbage collection in a vat (CORE-11, C-7) | a full collection after every crank (17-126 ms per delivery, growing with the vat) | an allocation schedule: after 131,072 slots or 16 MiB of growth, every 32nd crank, and before the image at close (`THIXOTROPE_GC_POLICY` `allocation`, fixed per state directory); a trivial delivery 0.5-0.6 ms of worker time at any session length; finalizers and their `gc-*` frames leave up to 32 cranks later or in the first crank after a wake | J-9300..J-9307, J-9382 |
 | Hub persistence (CORE-12, C-2) | whole-file `hub.json` rewrite, two fsyncs, 9.8-10.7 ms per commit | write-ahead log of deltas (`hub-image.json` + `hub-log.jsonl`, one append per commit, 5.5-6.8 ms); one-way migration; `THIXOTROPE_HUB_STORE=file` keeps the old store | J-9330..J-9337, J-9382 |
 | Serve environment and template key | crank budget, attempt bound, slot ceiling | also `THIXOTROPE_GC_*` and `THIXOTROPE_HUB_STORE` pass through `scripts/serve.mjs`; templates key on them when set; perf rows name `gcPolicy` and `hubStore` | J-9380 |
 | M1b SIGKILL cases | acceptance 10 checked outcome-unknown and the next exec only; fixed kill points for 8 and 10 | acceptance 10 also checks that the killed exec ran at most once and the provider got the turn once; `EXEC_KILL_DELAY_MS`, `CONTEXT_KILL_DELAYS_MS` (with `POOL_KILL_DELAYS_MS`, `M1A_KILL_DELAYS_MS`) vary the kill point | J-9380 |
 | Scripted backend floods | flood text inside the script | `ScriptChunk.keys` / `ScriptToolCall.argsFreshKeys`: the adapter builds the keys; a script crosses the manager vat and must fit one frame (m1b-interfaces 17.6) | J-9381 |
 | M1b perf misses after the core changes | `session.create` with the pool, `concurrency.10` turn start and crank p95, `history.page`, `context.rebuild`, `hub.growth` | `session.create` with the pool passes (864 ms, 1.15 x); the others still miss, now each with a measured cause: hub commits (`concurrency.10`, `hub.growth`: C-2's rest), page-crank marshalling (`history.page`, `context.rebuild`: C-5, M2 W2.5, J-0322 (b)) | J-9382, J-9386..J-9399 |
+| Record archive (D-M2-1, architecture D-18) | "no archive in M2 unless the numbers say so"; R4-106 256 resident turns, 256-turn chunks | built: 128 kept turns, 32-turn segments, sealed in the settle crank, dropped on the adapter's durable answer; a session's vat, snapshot and hub row are flat from 200 to 5,000 turns | J-0461, J-9404 |
+| Long-session fixtures | built by running every turn (2.5 h for 5,000) | `importState` (`perf/_long-session.mjs`): 5,000 tool turns in 11 min; the per-turn window runs with the scripted context digests off (`<logPath>.nodigest`) | J-0485, J-9404 |
+| Turn deadline | armed in the turn's first crank (seam 4); the Endpoint dropped the arm | the Endpoint keeps an arm that arrives before the turn's first round and arms it when the round brings the sink | J-0475, J-9401 |
+| Catalogue cache key | one owner per Backend presence in a WeakMap | held strongly, at most 64: a collected presence came back as a new object (C-23) | J-9403 |
+| `checkpoint.stall`, `history.page`, `throughput`, `disk.session`, the 100 KiB client refusal | budgets as listed | **kept**, not re-based: `checkpoint.stall` fails (one 2-3 s turn per 100), `history.page` misses by 0-11 % at 1,000/5,000 turns (40 records per page would fit, J-0461), `throughput` 29/s at load 8, `disk.session` 41.5 MB for an imported session (C-22), the 100 KiB string reaches the vat | J-9405..J-9408, J-9412 |
+| Acceptance 3 at 1,024 rounds; acceptance 6 "abort emitted" | in the 5-minute integration lane; `abort` on cancel | opt-in (about 280 s alone); a cancel ends `end { status: 'cancelled' }` as the event contract says; both for the PM | J-0471, J-0424 |

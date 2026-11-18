@@ -7523,3 +7523,246 @@ turn id through `History` and the vat: 5,000 in 21.5 s, 30,000 in 78 s (2,140 pa
 Decision: fixtures for W2.9: 5,000 turns in about 11 min (6.5 min plain), 50 sessions x 300 turns
 for `restart.serving` in about 20-35 min, 30,000 plain in about 39 min. Faster needs the core
 candidate of J-0481 or a segment-copy import (J-0483).
+
+### J-9400 2026-11-18 M2 integration summary - awkward
+Evidence: W2.9 at `81911ab991`..`84fc8cb388` (worker `367e78ad...`, crank budget 50 M, slot
+ceiling 4,000,000, allocation schedule, log hub store); every M1a, M1b and M2 integration file run
+alone under the run lock (all pass; one known failure each in `m2-turns` and `m2-probes`); 81
+SIGKILL cases (J-9409); `perf/history.perf.mjs` twice, `perf/throughput.perf.mjs`,
+`perf/journal.perf.mjs` (J-9404..J-9412); unit lane 691 passed, 0 failed, 56 skipped.
+Reading: what the archive says about an append-only log in an orthogonally persistent heap. The
+heap is a fine place for the part of a log that is still changing (the queue, the open turn, the
+kept tail, the intent of a seal) and a poor place for the settled part: everything a vat keeps is
+marked by every collection, written into every snapshot and named in its hub row, so a log kept
+whole makes every crank pay for the whole history (3.2 s per turn at 5,000 turns, J-9383). Sealing
+settled turns into files the adapter owns, with the vat deciding when and dropping only on the
+durable answer, made the vat's size a constant: 200 to 5,000 turns, flat slot capacity, snapshot,
+per-delivery time, hub time and hub row (0.94-1.02 x, J-9404), and a context rebuild of 85-359 ms
+instead of 4-180 s. The cost moved, it did not vanish: a seal is a two-phase protocol between a vat
+and a process that can die separately (eight SIGKILL points, an orphan rule, a chained digest),
+and an orthogonally persistent heap gives no help with that: the protocol had to be designed like a
+database's log shipping. The persistence is still what makes it simple to reason about: the vat's
+`ArchiveState` survives every crash exactly, so it can be the truth that the adapter's files are
+checked against. What secrets and providers say about the split between vats and adapters: code
+that talks to the outside world (HTTP, SSE, retries, timers, a catalogue cache, an encrypted file)
+belongs in the adapter, holds no state worth persisting, and should be reached from vats only through
+objects (`Backend`, `ReadGrant`, `SecretWriter`); the vat sees one `roundFinal` or `roundFailed`
+per round and never a byte of a secret or a provider body. That split held: no secret value
+anywhere in a state directory (J-9402), 0 vat deliveries per delta. Where it chafed was identity:
+adapters key caches by presences, and a presence can be collected and come back as a new object
+(J-9403, C-23).
+Decision: integration done for review; M2 not marked done. Open for the PM: J-9405..J-9408,
+J-9410..J-9413, the fold of `m2Interfaces` (J-9414), the `m1b-pool-restart` timeout (J-9409).
+
+### J-9401 2026-11-18 M2 integration defects fixed - deviation
+Evidence: commits `0466370545`, `81911ab991`, `d518d2201f`, `634ab36818`.
+Reading: (1) The turn deadline never fired (W2.6 J-0475): seam 4 sends `armDeadline` in the crank
+of `holdTurn` (a `callWhen`, body later) and `startRound`, and the Endpoint dropped an arm that came
+before the lease and the sink. It now keeps early arms per turn (bounded like parked rounds) and
+arms them when the first round brings the sink; W2.6's two `test.failing` tests are plain tests and
+pass (the Endpoint-alone test also sent a malformed `RoundRequest`, which the guard refused; fixed).
+(2) A given system prompt over `inlineBytes` failed creation with `notBuilt`: the factory passed no
+`admin` in the resolver context. (3) The dead `notBuilt` stubs in `session.js` (`findTurn`) and
+`export.js` (the import seams) are gone; `attach.js` keeps its generic fallback for a missing
+handler (every handler is given by `AH/index.js`). (4) The package lint had two errors in guest
+code (a data-made key in `factory.js`, an untyped comparison in `delete.js`). (5) The ops guard of
+`secretDescribe` and `secretAudit` used `M.nat()` (bigint) for counts the store answers as numbers,
+so `Secret.describe()` and `audit()` failed in every daemon; W2.3's tests used a fake ops facet
+(`test/adapter/m2-w29-ops-guard.test.js` now drives the real guard). (6) The catalogue cache
+(J-9403).
+Decision: fixed; each in its own commit.
+
+### J-9402 2026-11-18 M2 acceptance 7: secrets end to end - good fit
+Evidence: `test/integration/m2-secrets.test.js` (run 3 times, pass; 77 s alone), commit
+`4b5dd8b369`.
+{"metric":"m2.secrets.grep","files":48,"bytes":211319057,"controlEncodings":["utf16be","utf8"],"hits":0}
+{"metric":"m2.secrets.plainValue","hits":[]}
+Reading: a Secret is made through `Operator`/`AgentHostAdmin.getSecrets()`, written with a sealed
+box through `SecretWriter`, and granted to an OpenRouter backend; the fake server records which of
+the test's keys it saw (`credentialTag`, never the value): the first, then after a replace the
+second, with no restart; a stale generation is refused with `GENERATION_CONFLICT`; a 401 whose body
+carries the marker records `OpenRouter request failed (HTTP 401)` only; after `revoke` the next
+turn fails `Secret operation failed: "REVOKED"` and no request is made. After a clean stop a grep of
+the whole state directory (48 files, 211 MB: heaps, snapshots, worker journals, the hub image and
+log, blobs, the archive, logs) in UTF-8, UTF-16LE/BE and base64/base64url at three alignments finds
+neither key; the control text is found. A value sent as a plain string by a client (not sealed)
+was not found either in this run (observation only: the contract's client path is the sealed box,
+and C-1 keeps hub frames in clear while they are in flight).
+Decision: acceptance 7 passes.
+
+### J-9403 2026-11-18 M2 catalogue and presence identity - awkward
+Evidence: `test/integration/m2-catalog.test.js` before and after `634ab36818`.
+Reading: with the catalogue keyed by the Backend presence in a WeakMap, a creation and the listing
+5.5 s later each read the provider's catalogue (reads at 5,541 and 11,044 ms of the run); with the
+owners held strongly, one read serves the file. The adapter's presence for the manager's Backend
+was collected between calls and the next message carried a fresh presence of the same object. Any
+adapter cache keyed by a presence in a WeakMap is exposed: `AH/index.js` `backendState` keys a
+backend's provider the same way (an API provider is cheap to rebuild; a scripted backend's turn
+selection would restart between sessions). Acceptance 11 then passes: each request names its own
+model (`deepseek/deepseek-v4.1-flash`, then `acme/alpha-b` after the default changed), the windows
+are the catalogue's (163,840 / 8,192), the default row is first, and the R4-21 refusals leave no
+row. Creation without the pool took 5.4-5.5 s (m1a template).
+Decision: catalogue fixed (bounded strong map, 64); `backendState` left as is and recorded; core
+candidate C-23 added to `m0-results.md`.
+
+### J-9404 2026-11-18 M2 long-session table by importState: 50, 200, 1,000, 5,000 turns - perf
+Evidence: `perf/history.perf.mjs` (`perf/_long-session.mjs`) at `84fc8cb388` (run 1, load 2.0-3.5)
+and again at 200 and 5,000 turns (run 2, load 6.5-12.9, another checkout's lane beside it); worker
+`367e78ad...`, crank budget 50 M, slot ceiling 4,000,000, allocation schedule, log hub store; exec
+template, J-9383's long-session script; sessions of P - 100 synthetic tool turns built by
+`importState` (none at 50), then a 100-turn window (50 `startTurn`, then 50 through the Composer)
+with the scripted context digests off; the reference turn and the turn after a clean restart with
+digests on.
+{"metric":"history.turn.at200","msPerTurn":732,"perDeliveryMs":74.6,"hubMsPerTurn":283.3,"imported":100}
+{"metric":"history.turn.at5000","msPerTurn":713.7,"perDeliveryMs":71.4,"hubMsPerTurn":259.2,"imported":4900}
+{"metric":"history.heap.at5000","value":1065728,"heap":{"slots":1065728,"ofCeiling":0.266,"snapshotBytes":41738240}}
+{"metric":"history.context.rebuild.at5000","value":359,"sameContext":true,"contextTurns":[5001,5002]}
+{"metric":"archive.flat.turn.at5000","at200":732,"at5000":713.7,"ratio":0.975,"pass":true}
+{"metric":"archive.flat.turnStart.at5000","at200":151,"at5000":262,"ratio":1.735,"pass":false}
+{"metric":"archive.flat.turnStart.at5000","at200":322,"at5000":275,"ratio":0.854,"pass":true}
+
+| session length | 50 | 200 | 1,000 | 5,000 | 5,000 / 200 | J-9383 at 5,000 (no archive) |
+|---|---|---|---|---|---|---|
+| wall time per turn (100-turn window) | 671 ms | 732 (896 run 2) ms | 706 ms | 714 (843 run 2) ms | 0.98 / 0.94 | 3.03-3.21 s |
+| wall per delivery (all vats) | 70.6 ms | 74.6 ms | 71.8 ms | 71.4 ms | 0.96 | 281-299 ms |
+| hub time per turn | 278 ms | 283 ms | 262 ms | 259 ms | 0.91 | 0.72 s |
+| `turn.start` median (p95) | 138 (293) | 151 (388); 322 run 2 | 143 (333) | 262 (333); 275 run 2 | 1.74 / 0.85 | 271 (1,781) |
+| `history.page` newest (vat) median | 269 ms | 351 (396 run 2) ms | 332 ms | 300 (301 run 2) ms | 0.85 | 2,003 ms |
+| `history.page` archived (`History`) | - | 44 ms | 41 ms | 41 ms | 0.93 | - |
+| context rebuild after a clean restart | 231 ms | 85 (142) ms | 290 ms | 359 (354) ms | pass (5 s) | 179.6 s |
+| same context digests after the restart | yes | yes | yes | yes | | |
+| history walk newest to turn 1, every turn once | - | - | 1,000 / 95 pages, 8.6 s | 5,000 / 429 pages, 23.0 s, largest 22,982 B | | |
+| slot capacity / of 4,000,000 | 407,808 / 10 % (grown) | 1,065,728 / 27 % | 1,066,496 | 1,065,728 | 1.00 | 1,911,808 / 48 % |
+| session vat snapshot file | 23.9 MB | 43.4 MB | 41.7 MB | 41.7 MB | 0.96 | 114 MB |
+| engine snapshot time each (window) | 310 ms | 404 ms | 348 ms | 358 ms | 0.89 | 1.29 s |
+| hub row chars / entries | 5,462 / 111 | 10,168 / 211 | 10,193 / 211 | 10,260 / 211 | 1.01 / 1.00 | 516 KB / 10,012 |
+| kept turns / segments | 50 / 0 | 136 / 2 | 136 / 27 | 136 / 152 | | |
+| seal turns against others (median) | - | 698 / 673 ms | 714 / 619 ms | 633 / 632 ms | | |
+| archive disk per archived turn (segments / context.jsonl) | - | 2,255 / 1,452 B | 2,269 / 1,455 B | 2,281 / 1,459 B | | |
+| import rate (tool turns) | - | 8.2 turns/s | 7.6 | 7.3 (668 s) | | |
+
+Reading: acceptance 15 holds. Every measure that lives in the session vat or the hub is flat from
+200 to 5,000 turns (0.89-1.01 x), and per-turn wall time is flat too now that the scripted
+provider's per-round digest of the whole transcript is out of the window (J-0461 measured 1.28 x
+with it on). The one ratio over 1.25 x, `turn.start` 262 against 151 ms in run 1, did not repeat
+(run 2: 275 against 322 ms): the `turn.start` median sits at about 140 or about 270 ms from run to
+run (J-0461 measured 127-163), so a ratio of two single-window medians is noisy; every value is
+under 350 ms. The rebuild's sealed part grows with the archive (5.6 / 18.9 / 25.2 / 76.8 ms) and
+its projection (0.9 / 1.7 / 3.4 / 7.5 ms) (J-9413). An imported session is bigger in the heap than a
+grown one (J-9405), which is why the 50-turn column (grown) differs from the others.
+Decision: acceptance 15 passes at 1,000 and 5,000 turns; budgets unchanged.
+
+### J-9405 2026-11-18 M2 an imported session's heap high-water (disk.session) - perf
+Evidence: J-9404's `history.heap` rows; W2.7's `disk.session` (J-0482); J-0461 (grown sessions).
+Reading: a session built by `importState` keeps a slot capacity of 1.07 M (27 % of the ceiling) and a
+41.7-43.4 MB snapshot at 200, 1,000 and 5,000 turns, against 0.41 M and 24.6 MB for a session grown
+by running turns (J-0461) with the same 136 kept turns. The capacity is a high-water mark: the
+import's record chunks (about 56-96 records per crank, each checked by kind, 6-9 ms each, J-0481)
+allocate far more in one crank than any turn does, and the arena does not shrink afterwards. So
+`disk.session` (25 MB plus blobs) fails for imported sessions (41.5 MB at 300 turns) while a grown
+one would pass, and every imported session costs 17 MB more on disk and more snapshot time.
+Decision: recorded (the budget is not re-based). Options for the PM: smaller import chunks (more
+cranks, slower import), a cheaper per-record check (C-22), or an arena that returns pages after a
+collection.
+
+### J-9406 2026-11-18 M2 history.page at its budget's edge - perf
+Evidence: J-9404 (`history.history.page.at<n>`, 30 reads each, the newest page: 6 turns, 42
+records); `m2-history` (300 turns): 273 ms.
+Reading: the session vat's newest page is 269-351 ms at load 2-3 and 300-396 ms at load 7-13,
+independent of session length (the page bound is 48 records); median over 300 ms at 200 and 1,000
+turns in run 1 (1.17 x and 1.11 x) and at 200 in run 2 (1.32 x, load 7). The floor is about 105-115
+ms (min of every row) plus about 4.5 ms per record (J-0461). An archived page through `History` is
+40-52 ms.
+Decision: miss recorded, not re-based; W2.5's proposal stands for the PM: `historyPageRecords` 48 ->
+40 (contract change).
+
+### J-9407 2026-11-18 M2 too-big probes - deviation
+Evidence: `test/integration/m2-probes.test.js`.
+{"metric":"m2.tooBig","exactMs":1151,"overError":"In \"submit\" method of (Composer): arg 1: string (a string) must not be bigger than (a number)","directError":"In \"startTurn\" method of (Session): arg 0: (an object) - Must match one of (a string)","frontier":[51,52]}
+Reading: 200,000 characters through the Composer are staged and the turn completes (1.2 s); 200,001
+are refused by the Composer's guard and nothing reaches the session. A 100 KiB inline string sent
+to `Session.startTurn` from the control client is refused, but by the session vat's own guard: the
+vat's delivery frontier moves by one (the frame of about 100 KiB was delivered without a halt, and
+the next turn completes). The milestone row asks for a refusal by the client library before
+sending; the control client does not check sizes.
+Decision: known failure (`test.failing` with the reason); a client-side bound belongs to the core
+client or to M3's gateway.
+
+### J-9408 2026-11-18 M2 checkpoint.stall - perf
+Evidence: J-9404's `history.stall.at<n>` rows (p99 of the 100 per-turn wall times in each window,
+snapshots every 256 deliveries, 2-4 snapshots per window).
+Reading: p99 1.02 / 2.23 / 2.87 / 2.94 s at 50 / 200 / 1,000 / 5,000 turns (run 2: 2.36 / 3.04 s);
+the median turn is 0.63-0.84 s. With 100 samples p99 is the slowest turn: every window has one turn
+of 2-3 s, while the turns during which a status poll saw a snapshot were at most 1.0 s. The slow
+turn is not the seal turn (seal turns are 0.63-0.80 s) and not a snapshot turn [inferred: the
+first Composer turn of the window, which follows 50 `startTurn` turns, or a collection of the
+1.07 M-slot heap; not split].
+Decision: **fail** recorded (2.9 x), not re-based; needs a split by the next perf owner.
+
+### J-9409 2026-11-18 M2 regression and SIGKILL repeats - good fit
+Evidence: `tmp/w29/reg1`, `tmp/w29/kills` (deleted afterwards), commits up to `84fc8cb388`; each
+file alone under the run lock.
+Reading: every file passes: m2-providers (80 s), m2-turns (118 s), m2-queue (135 s), m2-history
+(184 s), m2-archive-restart (274-315 s, wall time with the template start; two runs over the 5-minute file budget by up to 15 s), m2-lifecycle (295 s), m2-secrets (77 s), m2-catalog (80
+s), m1a-slice, m1a-provision, m1a-slice-crash, m1b-live (4 tests: the delete is a plain test now),
+m1b-content, m1b-exec-tool, m1b-exec-tool-restart, m1b-context-restart, m1b-pool, m1b-pool-restart,
+m1b-qc, m1b-followups, template. SIGKILL cases: M1a 5, 6, 7 and held ports at kill delays 0, 100,
+500, 1,500, 4,000 ms (20); M1b 3/10 at `EXEC_KILL_DELAY_MS` 500, 1,000, 2,000, 3,500, 5,000 and
+the default (6; each checks the killed exec ran at most once and the provider got the turn once);
+M1b 8 with five idle kills at 0-4,000 ms plus the default (6); M1b 12 at 0, 50, 150, 400, 1,000
+ms (5) plus 6 reruns at 800-2,000 ms and the default 2; M2 13 delete killed 0, 100, 250, 500, 800
+ms after `deleting` and create 168-3,544 ms after the call (12 with the default run); the seal at
+S, A2, A3, Z six times (24). No duplicated provider request, tool run or exec evaluation, no lost
+and no duplicated record (the tests' oracles: request logs, echo counts, history walks with every
+turn once, per-turn context digests). One failure: `m1b-pool-restart` "SIGKILL right after a take
+[kill +1,000 ms]" timed out after 4 minutes with no row (load 5); six reruns at 800-2,000 ms passed;
+the test now logs its steps. The seal restarts take 18-46 s to the first completed turn (serving
+5-10 s).
+Decision: no blocking failure found; the pool timeout is reported unexplained.
+
+### J-9411 2026-11-18 M2 queue depth and pool create under load - perf
+Evidence: `m2-queue` (`queue.enqueue.e2e`), `m1b-pool` (`session.create.pool`), regression run.
+Reading: `queue.enqueue` round trip 126 ms median over 0-99 waiting (61 ms with 0-9), but 70 / 93 /
+126 / about 280 ms by quarter of depth: every enqueue publishes the whole pending view (about 2.9
+ms per waiting entry, J-0450). `session.create` with the pool was 1,131 ms median (p95 1,818) at
+load 6 against 849-864 ms at load 2 (J-9382): a pool take is 7 serial cranks plus a wake (C-2, C-7).
+Decision: recorded; the queue's fix (a pending event carrying the change) is a contract change for
+M3's viewers.
+
+### J-9412 2026-11-18 M2 restart.serving and throughput - perf
+Evidence: `perf/throughput.perf.mjs` at `84fc8cb388`, load 6.7-8.9 (another checkout's lane ran
+beside it).
+{"metric":"throughput.import","sessions":50,"turns":15000,"records":60000,"ms":1587115,"turnsPerSecond":9.5,"shape":"plain"}
+{"metric":"restart.serving.m2","value":4817.2,"runs":[4393.4,4817.2,5577.9],"sessions":50,"turnsEach":300,"pass":true}
+{"metric":"throughput","value":29.3,"sessions":20,"seconds":63.2,"deliveries":1853,"perDeliveryMs":442.2,"turnsPerSecond":5.2,"turns":329,"failed":0,"turnMsMedian":2882.5,"turnMsP95":3745.6}
+Reading: 50 checkpointed sessions of 300 turns (imported) serve in 4.4-5.6 s after a SIGKILL, no
+session vat woken, no crash: pass. Throughput with 20 sessions running one-round turns back to back
+is 29.3 deliveries/s (5.2 turns/s, 2.9 s per turn), under the 50/s the row asks a journal for. The
+per-delivery wall time is 442 ms against 71 ms for one busy session (J-9404): the 20 vats' workers
+compete for the CPU (load 9 with the other lane) and every hub commit is serial on the supervisor's
+thread (C-2). Six vats woke inside the stretch (310 s of wake time in all): sessions that slept for
+2 s between turns while others held the hub.
+Decision: `restart.serving` passes; `throughput` recorded under 50/s, to be re-measured on a quiet
+machine; the hub's serial commit (C-2's rest) is the first suspect.
+
+### J-9413 2026-11-18 M2 what still grows with a session's length - perf
+Evidence: J-9404's `history.context.rebuild` timings; W2.8 J-0491; J-0461.
+Reading: with the archive the vat and hub are flat, but the adapter's per-session work is not: the
+rebuild's sealed part 5.6 / 18.9 / 25.2 / 76.8 ms and its projection 0.9 / 1.7 / 3.4 / 7.5 ms at 50
+/ 200 / 1,000 / 5,000 turns; each round's projection copies the whole sealed transcript (7.5 ms per
+prepare at 5,000 turns, 52 ms at 30,000, J-0491), and the provider's request grows with it until a
+real provider's window refuses it. The archive's disk grows by about 3.7 KB per archived turn (2.3
+KB segments, 1.5 KB `context.jsonl`). The per-session ceiling is 131,072 turns (4,096 segments).
+Decision: depends on M8 compaction (the hook is `m2-interfaces.md` 4.12); recorded.
+
+### J-9414 2026-11-18 M2 contract fold not done - deviation
+Evidence: `guest/lib/interfaces.js`; `guest/factory/standin-session.js` (`interfaces.Session`,
+`interfaces.SessionInternal`), `guest/factory/root.js` (`m1bInterfaces.HarnessRoot` for a root
+without a pool).
+Reading: m2-interfaces 12 W2.9 lists "the fold of `m2Interfaces`" (the M2 versions into
+`interfaces`). Two exos still use the pre-M2 guards on purpose: the factory's stand-in for a lost
+session (no `findTurn`, `blobPage`, `deleteSelf`, export) and the M1a-test root without a pool.
+Folding would make their guards demand methods they do not have, so it needs stubs in both first,
+and a session program change that the perf runs in flight would have picked up.
+Decision: not done; for the PM or M3 W3.0 (a contract commit: give the stand-in and the M1a root
+the M2 methods as refusals, then fold).

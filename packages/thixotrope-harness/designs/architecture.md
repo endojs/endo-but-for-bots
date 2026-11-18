@@ -506,6 +506,19 @@ the call stays inside the gateway process; from the CLI the value is sealed to t
 public key (`node:crypto`) before it crosses the control socket and hub. Provider code reads values
 in-process at each round (R4-82). The sign-in secret is an entry in the same store.
 
+As built in M2 (W2.3, W2.9): the store is `<state>/agent-host/secrets.enc` (AES-256-GCM, fresh
+nonce per write, temp file, fsync, rename); the audit log is a separate append-only file of sealed
+lines beside it (`secrets-audit.log`, bounded at about 20,000 lines), because rewriting the encrypted
+file per read cost about 12 ms against the 1 ms `secrets.read` budget (a SIGKILL can lose the newest
+audit lines, never a value). The adapter's X25519 key is derived from the wrapping key, so it is
+stored nowhere. The manager vat holds `Secret`, `ReadGrant` and `SecretsAdmin` exos and maps them to
+store keys only in WeakMaps; an API `Backend` holds a `ReadGrant`, and the adapter reads the value
+through the grant at every round (one sink call per grant per incarnation, then a local read of
+0.02 ms). The operations are built lazily, so an incarnation that never meets a secret creates no key
+file. The daemon-level check (acceptance 7, `m2-secrets`) replaces a key with a sealed box, revokes
+it, and greps the whole state directory (heaps, snapshots, journals, the hub image and log, blobs,
+the archive) for every encoding of both values after a clean stop: no hit, the control text found.
+
 **D-15. Blob handles are manager-minted and pre-minted.** The adapter keeps a stock of minted, empty
 `Blob` handles (minted 32 at a time with one manager crank through its attach sink); it writes and
 fsyncs a file and binds it to a stock handle **before** passing that handle into any vat (feasibility
@@ -758,6 +771,18 @@ handles in batches, and rebuilds. Projection logic (Fae `journal-transcript.js`,
 implementation to keep in byte-for-byte agreement (feasibility A-6). Native context is replayed from
 its Blob, so a rebuild after a restart replays faithfully (R4-31).
 
+Since M2 (D-18 in section 5) the records before `RoundRequest.base.archive.sealedTo` are in the
+record archive, not in the vat: the adapter's cache holds the sealed part as the persisted
+projection (`context.jsonl`) and pages from the vat only from `sealedTo`; a seal moves the base
+with no vat crank. Providers (M2: OpenRouter and Anthropic, streamed, behind `AH/providers/round.js`)
+read the projection, the key through the backend's grant, and the system prompt; they publish
+deltas in-process (0 vat deliveries per delta, `provider.overhead` 0.5-0.6 ms median), retry only
+while nothing was delivered (R4-74), and never put a provider body into a failure text (R4-79): a
+provider is ordinary Node code beside the channels, and the vat sees one `roundFinal` or
+`roundFailed` per round. The model catalogue (R4-104) is a per-Backend cache in the adapter; it
+holds its Backend presences strongly (bounded) because a presence collected between calls comes
+back as a new object (J-9403).
+
 Compaction (P-36, M8): the vat decides from the previous usage reading (R4-34) and records
 `CompactionStarted` before a tool-less summary round; the adapter plans the retained tail on its cache
 and returns the summary as an ordinary round result; the vat records `Compaction`. A restart during
@@ -825,11 +850,29 @@ snapshot by about 3.3 bytes per character and the state directory roughly double
   about 270 slots and the slot capacity about 230 slots per turn (1.14 M live, 1.55 M capacity at
   4,000 turns, J-9389). The session vat's slot capacity per 100 turns is `history.grow` (J-0395) and
   per session length `crank.heap`.
-  **No archive in M2 unless those numbers say so.** M2 measures snapshot time and size at 1,000,
-  10,000 and 30,000 turns (`journal.snapshot`) and the slot capacity at each; if either misses, M2
-  (not M13) adds an adapter-written archive
-  (the adapter writes chunks from its cache, the vat drops resident records only after receiving the
-  chunk's Blob for a matching turn range: 1-2 deliveries per 256 turns).
+  **D-18 (M2, D-M2-1). The record archive: settled turns leave the vat heap.** The numbers said
+  so (J-9383: at 5,000 turns a 114 MB snapshot, 556 ms collections, 3.2 s per turn, a 180 s
+  context rebuild, a 516 KB hub row), so M2 built it (`m2-interfaces.md` 4). The session vat keeps
+  128-159 settled turns (`archiveKeepTurns` 128, segments of `archiveSegmentTurns` 32; R4-106's
+  256/256 defaults were re-stated, J-0403); in the settle crank, when more are kept, it records the
+  seal's intent and sends `ArchivePort.seal` with the range's fingerprint; the agent-host adapter
+  writes the segment file (`.part`, fsync, rename, directory fsync, chained SHA-256 digest) before
+  it answers, and the vat drops the records only in the crank of a matching answer, so a SIGKILL
+  anywhere loses or duplicates nothing (an orphan segment is deleted at the next validation against
+  the vat's `ArchiveState`, which is the truth). The vat keeps an index of `SegmentEntry` ranges and
+  one chained digest, not a handle per segment (every handle a vat holds is a hub row entry). The
+  adapter keeps, per session, the segments, `context.jsonl` (the persisted projection of sealed
+  turns) and `mirror.jsonl` (the kept records); a context rebuild reads them plus one vat page, and
+  `History`/`SealedText` serve archived pages and contents with no vat crank. Sealed turns' blob
+  handles are let go, so the hub row stays bounded. Measured (J-0461, J-9404): from 200 to 5,000
+  turns the session vat's slot capacity, snapshot size and time, per-delivery time, hub time per
+  turn and hub row are flat (0.96-1.01 x), the context rebuild is 85-359 ms (was 4-180 s) and an
+  archived history page 40-55 ms. What still grows with the session is adapter-side: the
+  per-round projection copies the whole sealed transcript (7.5 ms per prepare at 5,000 turns, 52
+  ms at 30,000, J-0491) until M8 compaction bounds it, and the archive's disk (about 2.3 KB of
+  segment and 1.5 KB of `context.jsonl` per archived turn). A session built by `importState` keeps
+  a larger slot capacity than a grown one (1.07 M against 0.41 M slots: the import cranks' high
+  water, J-9405).
 - History pages are 32 turns and at most `frameBytes`; a turn larger than that returns a summary with
   refs (`getTurnContent(ref)`). The browser reads blob content through the gateway's `Content`
   service in-process (0 vat deliveries; one manager crank to resolve handles after a restart).
