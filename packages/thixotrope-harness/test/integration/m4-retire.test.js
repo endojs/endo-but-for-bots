@@ -2,7 +2,9 @@
 /**
  * Retirement on the next turn through the daemon (XB;
  * `designs/m4-interfaces.md` 3.1: `retirePool` and `PoolMember.retire`
- * push `CredentialOps.poolsChanged` to the adapter, sendOnly), against the
+ * push `CredentialOps.poolsChanged` to the adapter and return only after
+ * its answer (X-FIX), so the retirement is known there before the next
+ * turn can be submitted), against the
  * fake subscription server on 127.0.0.1, from the `m4` template:
  *
  * - a Claude pool of two members serves a session from the first member
@@ -17,7 +19,8 @@
  *
  * The first retirement is the manager's first `CredentialOps` use in this
  * adapter incarnation (the push waits for one `ops.credentials()` answer);
- * the second finds it cached (the push leaves in the retirement's crank).
+ * the second finds it cached. Either way the retirement returns after the
+ * adapter answered the push, so the order no longer rests on timing.
  *
  *   corepack yarn test:integration test/integration/m4-retire.test.js
  */

@@ -8,7 +8,8 @@
  * the store's audit labels in step with a description edit
  * (`setSecretDescription`), and hands out the adapter-local `AuditReader`
  * and `Accounts` (R7-63, R4-84). No method answers a value (R7-26).
- * `poolsChanged()` (sendOnly, XB) is the manager's word that it retired a
+ * `poolsChanged()` (answered, XB, X-FIX: the manager's retirement returns
+ * only after this answer) is the manager's word that it retired a
  * pool or a member: every pool this incarnation loaded is asked again at
  * its next use (m4-interfaces 3.1: the next turn fails or skips the member).
  *

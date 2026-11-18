@@ -11,7 +11,8 @@
  *   sinks) is forgotten, so the next `load()` asks again; a new sink (the
  *   adapter re-attached to a restarted manager) is asked again too.
  * - `invalidate()` (XB, m4-interfaces 3.1): the manager retired a pool or a
- *   member and said so (`CredentialOps.poolsChanged`, sendOnly): the
+ *   member and said so (`CredentialOps.poolsChanged`, answered before the
+ *   retirement returns to the operator): the
  *   answer held, or the one being asked, is stale, and the next `load()`
  *   asks again, so the next round sees the retirement. An answer older
  *   than `stateRefreshMs` is asked again too, as a safety net for a push
