@@ -35,7 +35,10 @@ import {
   textOf as execTextOf,
 } from '../../guest/exec/render.js';
 import {
+  ANSWER_DEPTH,
   NESTED_PROMISE_TEXT,
+  isWrapper,
+  makeMembrane,
   measureArguments,
 } from '../../guest/exec/membrane.js';
 import { LABEL_TEXT, NOT_JSON_TEXT } from '../../guest/exec/powers.js';
@@ -335,6 +338,88 @@ test('powers and wrappers die with their call: powersExpired, nothing sent; an M
     ),
     { status: 'ok', text: JSON.stringify([0, true], null, 2) },
   );
+});
+
+test('no raw presence outlives its call: a remotable deeper than ANSWER_DEPTH is refused, plain data passes (M5-FIX)', async t => {
+  const leaf = Far('Leaf', { ping: () => 'pong' });
+  /**
+   * @param {number} depth
+   * @param {boolean} withLeaf
+   */
+  const nestAround = (depth, withLeaf) => {
+    /** @type {any} */
+    let v = withLeaf ? leaf : 1;
+    for (let i = 0; i < depth; i += 1) v = harden([v]);
+    return v;
+  };
+  const { exec } = await fresh({ deep: Far('Deep', { make: nestAround }) });
+  const unnest =
+    'const unnest = v => { while (Array.isArray(v)) v = v[0]; return v; };';
+  t.deepEqual(
+    JSON.parse(
+      (
+        await exec(
+          [
+            unnest,
+            'const d = await powers.lookup("deep");',
+            `globalThis.w = unnest(await E(d).make(${ANSWER_DEPTH - 1}, true));`,
+            'const out = [await E(w).ping(), unnest(await E(d).make(70, false))];',
+            'try { await E(d).make(70, true); out.push("answered"); } catch (e) { out.push(e.message); }',
+            'return out;',
+          ].join('\n'),
+        )
+      ).text,
+    ),
+    ['pong', 1, textOf.membraneTooDeep(ANSWER_DEPTH)],
+  );
+  // The wrapper of the ended call is refused, by a send and by a get.
+  t.deepEqual(
+    JSON.parse(
+      (
+        await exec(
+          [
+            'const out = [];',
+            'for (const f of [() => E(w).ping(), () => E.get(w).ping]) {',
+            '  try { await f(); out.push("sent"); } catch (e) { out.push(e.message); }',
+            '}',
+            'return out;',
+          ].join('\n'),
+        )
+      ).text,
+    ),
+    Array(2).fill(texts.powersExpired),
+  );
+});
+
+test('no raw presence outlives its call: E.get through a wrapper answers a wrapper (M5-FIX)', async t => {
+  const leaf = Far('Leaf', { ping: () => 'pong' });
+  const holder = Far('Holder', {});
+  // A call E whose property get answers a remotable, as a get on another
+  // vat's object may; the local E answers only methods.
+  const callE = Object.assign((/** @type {any} */ x) => E(x), {
+    sendOnly: E.sendOnly,
+    resolve: E.resolve,
+    when: E.when,
+    get: (/** @type {any} */ x) =>
+      harden({ inner: Promise.resolve(x === holder ? leaf : undefined) }),
+  });
+  const first = makeMembrane({ callE });
+  const inner = await first.E.get(first.wrap(holder)).inner;
+  t.not(inner, leaf);
+  t.true(isWrapper(inner));
+  t.is(await first.E(inner).ping(), 'pong');
+  // A get through a promise for the wrapper is wrapped too.
+  t.true(
+    isWrapper(await first.E.get(Promise.resolve(first.wrap(holder))).inner),
+  );
+  // Kept past its call, it is refused under the next call's membrane.
+  const next = makeMembrane({ callE });
+  await t.throwsAsync(() => next.E(inner).ping(), {
+    message: texts.powersExpired,
+  });
+  await t.throwsAsync(() => next.E.get(inner).inner, {
+    message: texts.powersExpired,
+  });
 });
 
 test('the membrane: wrappers stand for their targets, answers are wrapped, a result renders as its target', async t => {

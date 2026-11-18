@@ -15,8 +15,10 @@
  * `WeakMap` wrapper -> target). A send to a wrapper goes to its target
  * through the call's `E`, so a closed call's wrappers send nowhere, and a
  * wrapper of an earlier call used under a later call's `E` is refused with
- * `texts.powersExpired` (rule 12.13). Remotables in an answer are wrapped
- * again; this call's wrappers inside arguments are swapped for their
+ * `texts.powersExpired` (rule 12.13). Remotables in an answer (of a send or
+ * of `E.get`) are wrapped again, and an answer holding one deeper than
+ * `ANSWER_DEPTH` is refused, so no raw presence reaches model code; this
+ * call's wrappers inside arguments are swapped for their
  * targets; other objects (made in this vat) pass as they are. Arguments are
  * copied, never hardened in place: the model's own objects stay its own.
  *
@@ -171,8 +173,40 @@ export const measureArguments = (
 };
 harden(measureArguments);
 
-/** Remotables of an answer are wrapped down to this depth. */
-const ANSWER_DEPTH = 64;
+/**
+ * Remotables of an answer are wrapped down to this depth; below it an answer
+ * holding a remotable or a promise is refused (`answerBeyondDepth`), so no
+ * raw presence reaches model code (rule 12.13).
+ */
+export const ANSWER_DEPTH = 64;
+
+/**
+ * The part of an answer below `ANSWER_DEPTH`, as it is when it holds only
+ * data; refused when it holds a remotable or a promise. Walked with a stack,
+ * not by recursion: the answer is already in this vat, so the walk is bounded
+ * by its size, and a deep one cannot overflow the call stack.
+ * @param {unknown} value
+ */
+const answerBeyondDepth = value => {
+  /** @type {unknown[]} */
+  const stack = [value];
+  while (stack.length) {
+    const item = stack.pop();
+    if (Array.isArray(item)) {
+      for (const element of item) stack.push(element);
+    } else if (
+      typeof item === 'object' &&
+      item !== null &&
+      !(item instanceof Error)
+    ) {
+      if (isRemotable(item) || isPromise(item))
+        throw Error(textOf.membraneTooDeep(ANSWER_DEPTH));
+      for (const name of Object.keys(item))
+        stack.push(/** @type {any} */ (item)[name]);
+    }
+  }
+  return value;
+};
 
 /**
  * The membrane of one exec call.
@@ -218,8 +252,8 @@ export const makeMembrane = ({ callE, limits = limitsM5 }) => {
    * @returns {any}
    */
   const wrapAnswer = (value, depth = 0) => {
-    if (typeof value !== 'object' || value === null || depth > ANSWER_DEPTH)
-      return value;
+    if (typeof value !== 'object' || value === null) return value;
+    if (depth > ANSWER_DEPTH) return answerBeyondDepth(value);
     if (Array.isArray(value))
       return harden(value.map(item => wrapAnswer(item, depth + 1)));
     if (isRemotable(value)) return wrap(value);
@@ -302,9 +336,29 @@ export const makeMembrane = ({ callE, limits = limitsM5 }) => {
   const membraneE = target => methodsOf(target, false);
   membraneE.sendOnly = (/** @type {unknown} */ target) =>
     methodsOf(target, true);
-  // A property get carries no arguments; its answer is not wrapped (a send
-  // to a remotable it holds is still measured, above).
-  membraneE.get = (/** @type {unknown} */ target) => callE.get(unwrap(target));
+  /**
+   * One property get. It carries no arguments, so nothing is measured; an
+   * ended call's wrapper is refused, and the answer of a get through a
+   * wrapper is wrapped like a send's, so no raw presence outlives the call.
+   * @param {unknown} target
+   * @param {string | symbol} name
+   * @returns {Promise<unknown>}
+   */
+  const getProperty = (target, name) => {
+    if (isPromise(target))
+      return /** @type {Promise<unknown>} */ (target).then(resolved =>
+        getProperty(resolved, name),
+      );
+    if (isWrapper(target) && !targets.has(target))
+      return Promise.reject(Error(texts.powersExpired));
+    const real = unwrap(target);
+    const answer = callE.get(real)[name];
+    return real === target ? answer : answer.then(wrapAnswer);
+  };
+  membraneE.get = (/** @type {unknown} */ target) =>
+    new Proxy(methodsHolder, {
+      get: (_holder, name) => getProperty(target, name),
+    });
   membraneE.resolve = callE.resolve;
   membraneE.when = callE.when;
 
