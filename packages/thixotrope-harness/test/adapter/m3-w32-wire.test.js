@@ -69,7 +69,9 @@ test('sign in and call through W3.1 server and the bridge', async t => {
     const closed = new Promise(resolve => {
       ws.onclose = event => resolve(event.code);
     });
-    const client = makeClient({ send: bytes => ws.send(bytes) });
+    const client = makeClient({
+      send: bytes => ws.send(/** @type {Uint8Array<ArrayBuffer>} */ (bytes)),
+    });
     ws.onmessage = event => client.receive(new Uint8Array(event.data));
     return { ws, client, closed };
   };

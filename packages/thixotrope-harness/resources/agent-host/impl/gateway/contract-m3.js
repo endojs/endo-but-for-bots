@@ -332,8 +332,9 @@ export const uiTextOf = Object.freeze({
 /**
  * What a `composer.addon` component receives. `input` is the composer's
  * current text and caret (UTF-16 offsets), re-rendered on every change;
- * `replaceRange` replaces `[start, end)` of the input and puts the caret
- * after the inserted text (an @-mention completion).
+ * `replaceRange` replaces the input from `start` up to (not including)
+ * `end` and puts the caret after the inserted text (a mention
+ * completion).
  *
  * @typedef {object} ComposerAddonProps
  * @property {FeatureContext} context
