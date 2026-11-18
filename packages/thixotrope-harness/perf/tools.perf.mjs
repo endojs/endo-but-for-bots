@@ -422,6 +422,140 @@ const rows = [
       });
     },
   },
+  {
+    // W5.6 (8.2 `grants.round`): turn start (as `labels.full`) of a session
+    // with 32 offered grants against one with none, alternating in one
+    // window; budget median <= 350 ms. The per-round tool set (S1) with 32
+    // grants is also timed in Node over the window's end (the engine's
+    // share is not separable from the turn start; reported as Node ms).
+    name: 'grants.round',
+    by: 'W5.6',
+    setup: async shared => {
+      const { makeM5Fixtures } = await import('../test/fixtures/m5-objects.js');
+      const fixtures = await makeM5Fixtures(shared.run.client);
+      const granted = await shared.newSession();
+      const grants = await E(granted.session).grants();
+      /** @type {any[]} */
+      const handles = [];
+      for (let i = 0; i < limitsM5.maxGrantedTools; i += 1) {
+        const tool = await E(fixtures.tools).make(`g${i}`);
+        handles.push(await E(grants).grantTool(tool));
+      }
+      const t0 = performance.now();
+      for (;;) {
+        const states = (await E(grants).list()).map(
+          (/** @type {any} */ g) => g.state,
+        );
+        if (states.every((/** @type {string} */ s) => s !== 'pending')) {
+          if (!states.every((/** @type {string} */ s) => s === 'offered'))
+            throw Error(`grants not offered: ${states.join(',')}`);
+          break;
+        }
+        if (performance.now() - t0 > PROBE_MS)
+          throw Error('grants still pending after 30 s');
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      const offeredMs = performance.now() - t0;
+      const plain = await shared.newSession();
+      return { granted, plain, shared, offeredMs };
+    },
+    measure: async (windowMs, { granted, plain, shared, offeredMs }) => {
+      /** @param {{ session: any, live: any, made: any }} s */
+      const start = async s => {
+        const r = await runTurn(shared.slice, s.session, s.live, 'hello');
+        const started = s.live.deliveries.find(
+          (/** @type {any} */ d, /** @type {number} */ i) =>
+            i >= r.from &&
+            d.event.type === 'turn-start' &&
+            d.event.turnId === r.turnId,
+        );
+        const request = s.made
+          .log()
+          .find(
+            (/** @type {any} */ l) =>
+              l.kind === 'request' && l.turnId === r.turnId,
+          );
+        return Number(request?.at) - Number(started?.event.at);
+      };
+      const samples = await alternating(windowMs, ['granted', 'plain'], kind =>
+        start(kind === 'granted' ? granted : plain),
+      );
+      const g = summarize(samples.granted);
+      const p = summarize(samples.plain);
+      // S1 in Node: toolSetFor with 32 described grants (fake inspector).
+      /* eslint-disable import/no-relative-packages */
+      const { makeGrants } = await import('../guest/session/tools/granted.js');
+      const { toolSetFor, toolSources, toolTable } =
+        await import('../guest/session/tool-table.js');
+      /* eslint-enable import/no-relative-packages */
+      /** @type {any} */
+      let part;
+      const runtime = harden({
+        services: harden({}),
+        get grants() {
+          return part;
+        },
+      });
+      part = makeGrants(runtime, {
+        inspectFor: () => async (/** @type {any} */ request) =>
+          harden({
+            status: 'ok',
+            description: harden({
+              name: `g${handlesOf(request.target)}`,
+              description: 'The fixture tool: echoes its text argument.',
+              parameters: '{"type":"object"}',
+            }),
+          }),
+      });
+      /** @type {Map<any, number>} */
+      const numbered = new Map();
+      /** @param {any} target */
+      const handlesOf = target => {
+        if (!numbered.has(target)) numbered.set(target, numbered.size);
+        return numbered.get(target);
+      };
+      const ports = harden({ tools: harden([]), since: 1 });
+      part.entriesFor(ports);
+      const { Far } = /** @type {any} */ (globalThis);
+      for (let i = 0; i < limitsM5.maxGrantedTools; i += 1) {
+        part.facet.grantTool(Far(`g${i}`, {}));
+      }
+      await new Promise(resolve => setImmediate(resolve));
+      /** @type {number[]} */
+      const sets = [];
+      const end = performance.now() + Math.min(windowMs, 10_000);
+      while (performance.now() < end) {
+        const t0 = performance.now();
+        const set = toolSetFor(
+          ports,
+          toolTable,
+          harden({}),
+          toolSources,
+          runtime,
+        );
+        sets.push(performance.now() - t0);
+        if (set.descriptions.length < limitsM5.maxGrantedTools)
+          throw Error('the Node tool set lost grants');
+      }
+      const s1 = summarize(sets);
+      await single('grants.round', g.median, {
+        budget: { value: 350 },
+        extra: {
+          unit: 'ms, median turn start (turn-start to provider request) with 32 offered grants',
+          granted: g,
+          plain: p,
+          addedMs: +(g.median - p.median).toFixed(3),
+          toolSetNodeMs: s1,
+          toolSetBudgetMs: 10,
+          toolSetPass: s1.median <= 10,
+          grantsOfferedMs: +offeredMs.toFixed(1),
+          windowMs,
+          samples: samples.granted.length + samples.plain.length,
+          by: 'W5.6',
+        },
+      });
+    },
+  },
 ];
 
 await runPerf('tools', async ({ provision }) => {
