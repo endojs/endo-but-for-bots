@@ -9517,3 +9517,38 @@ Reading: the surveys (survey-engine, survey-ocapn-hub) saved the transport and d
 claims checked at this base hold; one addition: the JavaScript side never sets the worker's timing
 flag.
 Decision: none.
+
+### J-9956 2026-11-18 AR-CTRL review: control plane structure - fit
+
+Evidence: designs/arch-review/core-control.md (AR-CTRL-1..4, 7, 9); serveThixotrope is one
+940-line closure with 15 let bindings in its scope (supervisor.js:182-1122); 12 toString() shipping
+sites guarded by a hand-bumped WORKSPACE_VERSION (21) that no test ties to the shipped source; the
+control socket is served by a native resource and by a host fallback, and the two listeners are the
+same code; stop() only resolves stopped, so all 3 callers repeat "await stopped; await close()".
+Reading: the registry vat with the host index beside it, the idempotent installer and the small
+shared helpers fit the machine well and should stay. The cost is concentrated in one composition
+root that also holds the administration, and in two paths for the control socket (one of which is
+the cause of C-4).
+Decision: none taken here; proposed fixes in the report, in order: split the supervisor, add a
+shipped-source digest golden, share or drop the control-socket listener.
+
+### J-9957 2026-11-18 AR-CTRL review: native resource contract as the harness uses it - fit
+
+Evidence: core-control.md AR-CTRL-5, 6, 8; each kit option has a real user (same 3, replaces 2,
+decorate 2, resolve 1); the agent host registers one key with same: () => true and has its adapter
+call back a manager-owned sink, because the kit does not give the manager the adapter root; the
+ephemeral make() always receives {}, so the harness finds its implementation from argv[1]; three
+framings carry bytes (local admin, Unix netlayer, base64 in JSON over IPC).
+Reading: the kit fits passive resources (alarms, ports, the control listener) closely. It has no
+service shape and no install-time configuration, and the harness's one resource is a service.
+Decision: candidate for the owner: a provideAdapter() on the kit and a config record through
+installNative (needs a WORKSPACE_VERSION bump).
+
+### J-9958 2026-11-18 AR-CTRL time record - process
+
+Evidence: start 2026-11-18T12:07:17Z, end 2026-11-18T12:15:16Z. Reading the code and the background, an import
+graph, export-use counts and a duplicate-window finder (scratch scripts outside the repository);
+no supervisor started.
+Reading: 19 findings (2 major, 7 moderate, 10 minor); platform ports, kits and the registry design
+recorded as worth keeping.
+Decision: none.
