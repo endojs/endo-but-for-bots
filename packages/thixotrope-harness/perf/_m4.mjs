@@ -64,15 +64,18 @@ export const inWindow = async (step, ms = WINDOW_MS) => {
 };
 
 /**
- * The Secrets key file for this process (every supervisor started after
- * this inherits it); removed by the returned function.
+ * A Secrets key file under H/tmp for one served state: pass `file` to
+ * `startPerfM4` (it reaches that supervisor only, never this process's
+ * environment); `remove()` deletes it.
  * @param {string} tag
  */
-export const useKeyFile = tag => {
+export const testKeyFile = tag => {
   const dir = path.join(harnessRoot, 'tmp', `w48-${tag}-${process.pid}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  process.env.THIX_HARNESS_SECRETS_KEY = path.join(dir, 'secrets.key');
-  return () => rmSync(dir, { recursive: true, force: true });
+  return {
+    file: path.join(dir, 'secrets.key'),
+    remove: () => rmSync(dir, { recursive: true, force: true }),
+  };
 };
 
 /**
@@ -80,11 +83,15 @@ export const useKeyFile = tag => {
  * M4 view of it; a fake subscription server answering every route at
  * `FAKE_MS`.
  * @param {(options?: any) => Promise<any>} provision the `runPerf` tool
- * @param {{ credentialTag?: (value: string) => string | undefined }} [options]
+ * @param {{ secretsKeyFile: string, credentialTag?: (value: string) => string | undefined }} options
+ *   `secretsKeyFile` from `testKeyFile`
  */
-export const startPerfM4 = async (provision, { credentialTag } = {}) => {
+export const startPerfM4 = async (
+  provision,
+  { secretsKeyFile, credentialTag },
+) => {
   const template = await m4Template();
-  const run = await provision({ template: template.dir });
+  const run = await provision({ template: template.dir, secretsKeyFile });
   const m4 = await m4View(run);
   const server = await startFakeSubscriptionServer({
     ...(credentialTag === undefined ? {} : { credentialTag }),

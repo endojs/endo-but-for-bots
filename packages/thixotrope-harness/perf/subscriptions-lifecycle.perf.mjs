@@ -35,7 +35,7 @@ const {
   inWindow,
   makeFrameCounter,
   startPerfM4,
-  useKeyFile,
+  testKeyFile,
   closeServers,
 } = await import('./_m4.mjs');
 const {
@@ -65,10 +65,12 @@ const median = values => {
 };
 
 await runPerf('subscriptions-lifecycle', async ({ provision }) => {
-  const dropKey = useKeyFile('perf-life');
+  const keyFile = testKeyFile('perf-life');
   const oauth = await startFakeOAuthServer({ delayMs: FAKE_MS });
   try {
-    const { run, m4, server } = await startPerfM4(provision);
+    const { run, m4, server } = await startPerfM4(provision, {
+      secretsKeyFile: keyFile.file,
+    });
 
     // ---- renewal: 16 concurrent rounds on an expired member ----
     const renewing = await makeValueSecret(
@@ -249,6 +251,6 @@ await runPerf('subscriptions-lifecycle', async ({ provision }) => {
   } finally {
     await oauth.close();
     await closeServers();
-    dropKey();
+    keyFile.remove();
   }
 });

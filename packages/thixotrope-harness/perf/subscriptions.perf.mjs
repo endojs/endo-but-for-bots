@@ -44,7 +44,7 @@ const {
   journalFrames,
   makeFrameCounter,
   startPerfM4,
-  useKeyFile,
+  testKeyFile,
   closeServers,
 } = await import('./_m4.mjs');
 const {
@@ -175,7 +175,7 @@ const measureBundles = async () => {
 };
 
 await runPerf('subscriptions', async ({ provision }) => {
-  const dropKey = useKeyFile('perf-subs');
+  const keyFile = testKeyFile('perf-subs');
   try {
     await measureSelect();
     await measureBundles();
@@ -183,6 +183,7 @@ await runPerf('subscriptions', async ({ provision }) => {
     const tokens = { a: tokenOf('a'), b: tokenOf('b') };
     const tags = new Map(Object.entries(tokens).map(([k, v]) => [v, k]));
     const { m4, server } = await startPerfM4(provision, {
+      secretsKeyFile: keyFile.file,
       credentialTag: value => tags.get(value) ?? 'other',
     });
     const counter = await makeFrameCounter(m4);
@@ -391,6 +392,6 @@ await runPerf('subscriptions', async ({ provision }) => {
     emit({ metric: 'subscriptions.window', windowMs: WINDOW_MS });
   } finally {
     await closeServers();
-    dropKey();
+    keyFile.remove();
   }
 });

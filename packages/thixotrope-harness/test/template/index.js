@@ -27,14 +27,21 @@
  * The run lock (scripts/run-lock.mjs) must be held around Ironhorse work;
  * `takeIntegrationLock(test)` registers before/after hooks that take it.
  *
- * Templates are cached under `tmp/t<key>` (git-ignored). The key covers
- * everything that makes a state directory unusable or different: the worker
- * binary and the Ironhorse boot bundles (a change of either changes the boot
- * digest and the state is refused), the supervisor's WORKSPACE_VERSION, the
- * crank budget, TEMPLATE_VERSION and the caller's provisioning `id`. A
- * template whose key no longer matches is simply not found and a new one is
- * built; `removeTemplates()` deletes all of them (but not a live process's
- * build directory).
+ * Templates are cached under `tmp/t<key>` (git-ignored). `templateKey` is
+ * the one key of every template (these, the `m3-300` and `m4` ones, and the
+ * long-session templates of perf/_long-template.mjs): a digest of what the
+ * state depends on, never a hand-bumped version (HR-SYN-20). It covers the
+ * worker binary and the Ironhorse boot bundles (a change of either changes
+ * the boot digest and the state is refused), the core's supervisor-side
+ * sources (`packages/thixotrope/src`, which holds WORKSPACE_VERSION), the
+ * crank budget, the persisted serve settings and the caller's `id`; for a
+ * provisioned template also every guest program's bundle and the guest
+ * sources, the agent-host manager part, the provisioning steps and
+ * `config/`; and the files and directories the caller's provisioning names
+ * (`sources`: its own module, an importer, a fixture) and its parameters
+ * (`extra`). A missing input throws. A template whose key no longer matches
+ * is simply not found and a new one is built; `removeTemplates()` deletes all
+ * of them (but not a live process's build directory).
  *
  * Several test processes may share one worktree (run-lock slots): a build
  * holds the private lock `tmp/t<key>.build`, and a process that waited on it
@@ -50,16 +57,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants, createReadStream } from 'node:fs';
-import {
-  chmod,
-  cp,
-  mkdir,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-} from 'node:fs/promises';
+import { chmod, cp, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -75,19 +73,36 @@ const repoRoot = path.resolve(harnessRoot, '..', '..');
 const thixotropeRoot = path.join(repoRoot, 'packages', 'thixotrope');
 export const tmpRoot = path.join(harnessRoot, 'tmp');
 
-/** Bump when what a template holds changes shape. */
-export const TEMPLATE_VERSION = 1;
-
 /** The workspace every template provisions and every client selects. */
 export const TEMPLATE_WORKSPACE = 'w';
 
 /**
- * Integration tests (and spikes) run only when asked: they need the release
- * Ironhorse worker and minutes of machine time.
+ * Integration tests run only when asked (THIX_HARNESS_INTEGRATION=1): they
+ * need the release Ironhorse worker and minutes of machine time. Spikes have
+ * their own switch (THIX_HARNESS_SPIKES, test/spikes/_spike.js), which does
+ * not turn the integration files on.
+ * @param {Record<string, string | undefined>} env
  */
-export const integrationEnabled =
-  process.env.THIX_HARNESS_INTEGRATION === '1' ||
-  process.env.THIX_HARNESS_SPIKES === '1';
+export const integrationEnabledIn = env => env.THIX_HARNESS_INTEGRATION === '1';
+
+export const integrationEnabled = integrationEnabledIn(process.env);
+
+/**
+ * The environment of one supervisor child: `env` with the Secrets wrapping
+ * key file set when one is given (an absolute path outside the state
+ * directory, m2-interfaces 9.1). The key reaches that supervisor and its
+ * adapters only; the test process's environment is not changed.
+ * @param {{ secretsKeyFile?: string }} options
+ * @param {Record<string, string | undefined>} [env]
+ */
+export const supervisorEnv = ({ secretsKeyFile }, env = process.env) => {
+  if (secretsKeyFile === undefined) return env;
+  if (!path.isAbsolute(secretsKeyFile))
+    throw Error(
+      `the Secrets key file must be an absolute path, got ${secretsKeyFile}`,
+    );
+  return { ...env, THIX_HARNESS_SECRETS_KEY: secretsKeyFile };
+};
 
 /**
  * The worker binary the supervisor runs.
@@ -134,33 +149,164 @@ export const stateSettingsFromEnv = () => {
 };
 
 /**
- * The cache key of a template: a short hex digest of the runtime identity,
- * the workspace version, the crank budget, TEMPLATE_VERSION and the
- * provisioning id.
- * @param {{ crankBudget: bigint, id: string }} options
+ * Every file under `dir` (sorted, recursively), skipping `skip` names.
+ * @param {string} dir
+ * @param {Set<string>} [skip]
+ * @returns {Promise<string[]>}
  */
-export const templateKey = async ({ crankBudget, id }) => {
-  const hash = createHash('sha256');
-  for (const file of [
-    workerBinary,
+const filesUnder = async (dir, skip = new Set()) => {
+  const entries = await readdir(dir, { withFileTypes: true });
+  /** @type {string[]} */
+  const out = [];
+  for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    const file = path.join(dir, entry.name);
+    if (skip.has(entry.name)) {
+      // Not an input (node_modules, the terminal and web clients).
+    } else if (entry.isDirectory())
+      // eslint-disable-next-line no-await-in-loop
+      out.push(...(await filesUnder(file, skip)));
+    else if (entry.isFile()) out.push(file);
+  }
+  return out;
+};
+
+/**
+ * Files or directories (each directory: every file under it); a missing
+ * one throws, naming it.
+ * @param {string[]} paths
+ */
+const expand = async paths => {
+  /** @type {string[]} */
+  const out = [];
+  for (const given of paths) {
+    // eslint-disable-next-line no-await-in-loop
+    const info = await stat(given).catch(error => {
+      throw Error(`template input ${given} is missing: ${error.message}`);
+    });
+    // eslint-disable-next-line no-await-in-loop
+    if (info.isDirectory()) out.push(...(await filesUnder(given)));
+    else out.push(given);
+  }
+  return out;
+};
+
+/**
+ * The core's supervisor-side sources: everything under
+ * `packages/thixotrope/src` but the terminal and web clients (the guest side
+ * is in the boot bundles, hashed as well). WORKSPACE_VERSION is in
+ * `control/supervisor.js`; there is no parsing of it and no fallback.
+ */
+const coreSources = async () => {
+  const files = await filesUnder(
+    path.join(thixotropeRoot, 'src'),
+    new Set(['tui', 'web']),
+  );
+  const supervisor = path.join(
+    thixotropeRoot,
+    'src',
+    'control',
+    'supervisor.js',
+  );
+  if (!files.includes(supervisor))
+    throw Error(`the core's supervisor source is missing: ${supervisor}`);
+  return files.filter(file => file.endsWith('.js'));
+};
+
+/** The harness files a provisioned state depends on. */
+const harnessSources = async () => [
+  ...(await filesUnder(
+    path.join(harnessRoot, 'guest'),
+    new Set(['node_modules']),
+  )),
+  // The agent-host manager part (durable.js, durable-*.js, ephemeral.js):
+  // the native resource installs these; impl/ is the adapter's, which a
+  // template names in `sources` when its provisioning writes through it.
+  ...(
+    await readdir(path.join(harnessRoot, 'resources', 'agent-host'), {
+      withFileTypes: true,
+    })
+  )
+    .filter(entry => entry.isFile())
+    .map(entry => path.join(harnessRoot, 'resources', 'agent-host', entry.name))
+    .sort(),
+  path.join(harnessRoot, 'scripts', 'provision-steps.js'),
+  ...(await filesUnder(path.join(harnessRoot, 'scripts', 'provision-steps'))),
+  path.join(harnessRoot, 'scripts', 'bundle-guest.mjs'),
+  path.join(harnessRoot, 'scripts', 'guest-prelude.js'),
+  ...(await filesUnder(path.join(harnessRoot, 'config'))),
+];
+
+/**
+ * What a template's key hashes besides its settings, as paths relative to
+ * the repository (the worker binary as `<worker>`, wherever it is): the
+ * runtime and the core, and for a provisioned template the harness sources
+ * and the guest programs whose bundles provisioning installs.
+ * @param {{ provisioned?: boolean, sources?: string[] }} [options]
+ */
+export const templateInputs = async ({
+  provisioned = false,
+  sources = [],
+} = {}) => {
+  const absolute = [
     path.join(thixotropeRoot, 'dist-ironhorse', 'boot.js'),
     path.join(thixotropeRoot, 'dist-ironhorse', 'worker-peer.js'),
-  ]) {
+    ...(await coreSources()),
+    ...(provisioned ? await harnessSources() : []),
+    ...(await expand(sources.map(given => path.resolve(harnessRoot, given)))),
+  ];
+  const { listGuestPrograms } = await import('../../scripts/bundle-guest.mjs');
+  return {
+    absolute: [workerBinary, ...absolute],
+    files: ['<worker>', ...absolute.map(file => path.relative(repoRoot, file))],
+    programs: provisioned ? await listGuestPrograms() : [],
+  };
+};
+
+/**
+ * The full digest behind every template key (`templateKey` shortens it;
+ * perf/_long-template.mjs uses its own length).
+ * @param {object} options
+ * @param {bigint} options.crankBudget
+ * @param {string} options.id the template's name
+ * @param {boolean} [options.provisioned] the template runs harness
+ *   provisioning (guest programs, the agent host): hash the harness sources
+ *   and the guest bundles
+ * @param {string[]} [options.sources] files or directories (absolute, or
+ *   relative to the package) the caller's provisioning reads: its own module,
+ *   an importer, a fixture
+ * @param {Record<string, unknown>} [options.extra] the provisioning's
+ *   parameters (JSON)
+ */
+export const templateDigest = async ({
+  crankBudget,
+  id,
+  provisioned = false,
+  sources = [],
+  extra = {},
+}) => {
+  const hash = createHash('sha256');
+  const inputs = await templateInputs({ provisioned, sources });
+  for (const [i, file] of inputs.absolute.entries()) {
+    hash.update(inputs.files[i]);
+    hash.update('\0');
     // eslint-disable-next-line no-await-in-loop
     await hashInto(hash, file);
     hash.update('\0');
   }
-  const supervisorSource = await readFile(
-    path.join(thixotropeRoot, 'src', 'control', 'supervisor.js'),
-    'utf8',
-  );
-  const workspaceVersion =
-    /WORKSPACE_VERSION\s*=\s*(\d+)/.exec(supervisorSource)?.[1] ?? '?';
+  if (inputs.programs.length) {
+    const { bundleGuest } = await import('../../scripts/bundle-guest.mjs');
+    for (const program of inputs.programs) {
+      // eslint-disable-next-line no-await-in-loop
+      const { digest } = await bundleGuest(
+        path.join(harnessRoot, 'guest', program, 'main.js'),
+        { guestRoot: path.join(harnessRoot, 'guest') },
+      );
+      hash.update(`${program}:${digest}\0`);
+    }
+  }
   hash.update(
     JSON.stringify({
-      workspaceVersion,
       crankBudget: String(crankBudget),
-      templateVersion: TEMPLATE_VERSION,
       id,
       // A state's slot ceiling is persisted and may not decrease (M1b QC):
       // a template served at one ceiling cannot be served at a lower one.
@@ -171,10 +317,18 @@ export const templateKey = async ({ crankBudget, id }) => {
       // hub store's layout (CC-024): the file store refuses a log directory.
       // Only set ones are keyed, so the defaults keep their templates.
       ...stateSettingsFromEnv(),
+      extra,
     }),
   );
-  return hash.digest('hex').slice(0, 10);
+  return hash.digest('hex');
 };
+
+/**
+ * The cache key of a template: 10 hex digits of `templateDigest`.
+ * @param {Parameters<typeof templateDigest>[0]} options
+ */
+export const templateKey = async options =>
+  (await templateDigest(options)).slice(0, 10);
 
 /**
  * A fresh short directory name under tmp/: one letter and five base-36
@@ -222,6 +376,8 @@ export const CRASH_LINE =
  * @param {number} [options.snapshotEveryDeliveries]
  * @param {number} [options.maxDeliveryAttempts] the crash bound
  *   (`THIXOTROPE_MAX_DELIVERY_ATTEMPTS`, 2..100; default the wrapper's)
+ * @param {string} [options.secretsKeyFile] the Secrets wrapping key file of
+ *   this supervisor (`supervisorEnv`)
  * @returns {Supervisor}
  */
 const makeSupervisor = ({
@@ -230,7 +386,9 @@ const makeSupervisor = ({
   idleSleepMs,
   snapshotEveryDeliveries,
   maxDeliveryAttempts,
+  secretsKeyFile,
 }) => {
+  const env = supervisorEnv({ secretsKeyFile });
   /** @type {import('../../scripts/serve.mjs').SupervisorChild | undefined} */
   let started;
   /** @type {CrashLine[]} */
@@ -249,7 +407,7 @@ const makeSupervisor = ({
         snapshotEveryDeliveries,
         ...(maxDeliveryAttempts === undefined ? {} : { maxDeliveryAttempts }),
       },
-      { stdout: 'pipe', stderr: 'pipe' },
+      { env, stdout: 'pipe', stderr: 'pipe' },
     );
     let partial = '';
     started.child.stderr?.on('data', bytes => {
@@ -362,6 +520,10 @@ export const connect = async (root, { workspace } = {}) => {
  *   deterministic for one `id`
  * @param {bigint} [options.crankBudget]
  * @param {boolean} [options.rebuild] build even when a cached one exists
+ * @param {string[]} [options.sources] files or directories `provision` reads
+ *   beyond the harness's own provisioning (part of the key)
+ * @param {Record<string, unknown>} [options.extra] `provision`'s
+ *   parameters (part of the key)
  * @returns {Promise<Template>}
  */
 export const ensureTemplate = async ({
@@ -369,10 +531,18 @@ export const ensureTemplate = async ({
   provision,
   crankBudget = limits.crankBudget,
   rebuild = false,
+  sources = [],
+  extra = {},
 } = {}) => {
   if (!/^[a-z0-9-]{1,32}$/.test(id))
     throw Error(`template id must be [a-z0-9-]{1,32}, got ${id}`);
-  const key = await templateKey({ crankBudget, id });
+  const key = await templateKey({
+    crankBudget,
+    id,
+    provisioned: provision !== undefined,
+    sources,
+    extra,
+  });
   const dir = path.join(tmpRoot, `t${key}`);
   await mkdir(tmpRoot, { recursive: true, mode: 0o700 });
   const cached = async () =>
@@ -529,6 +699,9 @@ export const copyState = async (from, to) => {
  * @param {number} [options.maxDeliveryAttempts] the supervisor's crash bound
  *   (`THIXOTROPE_MAX_DELIVERY_ATTEMPTS`, 2..100) for every (re)start of the
  *   copy; default the serve wrapper's (5)
+ * @param {string} [options.secretsKeyFile] the Secrets wrapping key file
+ *   (absolute, outside the state) for every (re)start of the copy; only
+ *   this supervisor gets it
  * @returns {Promise<TemplateState>}
  */
 export const startFromTemplate = async (
@@ -539,6 +712,7 @@ export const startFromTemplate = async (
     snapshotEveryDeliveries,
     root,
     maxDeliveryAttempts,
+    secretsKeyFile,
   } = {},
 ) => {
   const target = root ?? path.join(tmpRoot, shortName());
@@ -551,6 +725,7 @@ export const startFromTemplate = async (
     idleSleepMs,
     snapshotEveryDeliveries,
     maxDeliveryAttempts,
+    secretsKeyFile,
   });
   /** @type {any} */
   let client;

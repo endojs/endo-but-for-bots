@@ -27,12 +27,15 @@
  * (`useTemplate` holds `l<key>.use` and truncates them). Templates are shared
  * by every lane on the machine.
  *
- * The key covers the base template's key (worker, boot bundles, crank
- * budget, the persisted serve settings, and the provisioned guest bundles),
- * the spec, LONG_TEMPLATE_VERSION, this file, `scripts/export.mjs`, the
- * synthetic export writer and the adapter's archive store: a change of any
- * of them builds a new template. Nothing deletes old templates
- * automatically; `--prune` removes those no current spec names.
+ * The key is the state templates' one key (`templateDigest` of
+ * test/template/index.js, 12 hex digits here): the runtime, the core, the
+ * harness's provisioning and guest bundles, and this file,
+ * `scripts/export.mjs`, the synthetic export writer and the adapter's
+ * archive store as sources, with the base template's key, the spec and the
+ * chain step it copies as parameters. A change of any of them builds a new
+ * template; there is no hand-bumped version (HR-SYN-20). Nothing deletes
+ * old templates automatically; `--prune` removes those no current spec
+ * names.
  *
  * Build the templates of a perf check, each in its own boxed step (one child
  * `scripts/run-lock.mjs` per missing template, shared slot, 10-minute box):
@@ -44,7 +47,6 @@
  * unless LONG_TEMPLATE_BUILD=1.
  */
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { cp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -69,7 +71,7 @@ const { acquireRunLock, harnessHome } = await import('../scripts/run-lock.mjs');
 const { m1aTemplateOptions, m1bTemplateOptions } =
   await import('../scripts/provision-steps.js');
 const { readServeRecord } = await import('../scripts/serve.mjs');
-const { killStrays, startFromTemplate, templateKey } =
+const { killStrays, startFromTemplate, templateDigest, templateKey } =
   await import('../test/template/index.js');
 const { makeSlice, round1, sliceTemplate } =
   await import('../test/integration/_m1a-slice.js');
@@ -80,8 +82,8 @@ const { importState } = await import('../scripts/export.mjs');
 // eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
 const { limits } = await import('../guest/lib/limits.js');
 
-/** Bump when what a template holds changes shape. */
-export const LONG_TEMPLATE_VERSION = 1;
+/** The format of a template's description file (`t<key>.json`); not keyed. */
+const META_VERSION = 1;
 
 const thisFile = url.fileURLToPath(import.meta.url);
 
@@ -245,45 +247,15 @@ const baseKeyOf = kind => {
           kind === 'long'
             ? await m1bTemplateOptions()
             : await m1aTemplateOptions();
+        // As ensureTemplate keys it: a provisioned template.
         return templateKey({
           crankBudget: harnessLimits.crankBudget,
           id: options.id,
+          provisioned: true,
         });
       })(),
     );
   return /** @type {Promise<string>} */ (baseKeys.get(kind));
-};
-
-/** @type {Promise<string> | undefined} */
-let codeDigest;
-/** The code that decides what a template holds. */
-const codeDigestOf = () => {
-  codeDigest ??= (async () => {
-    const hash = createHash('sha256');
-    const archive = path.join(
-      harnessRoot,
-      'resources',
-      'agent-host',
-      'impl',
-      'archive',
-    );
-    const files = [
-      thisFile,
-      path.join(harnessRoot, 'scripts', 'export.mjs'),
-      path.join(harnessRoot, 'test', 'integration', '_m2-lifecycle.js'),
-      ...readdirSync(archive)
-        .sort()
-        .map(name => path.join(archive, name)),
-    ];
-    for (const file of files) {
-      hash.update(path.relative(harnessRoot, file));
-      hash.update('\0');
-      hash.update(await readFile(file));
-      hash.update('\0');
-    }
-    return hash.digest('hex');
-  })();
-  return codeDigest;
 };
 
 /**
@@ -291,19 +263,25 @@ const codeDigestOf = () => {
  * @returns {Promise<string>}
  */
 export const specKey = async spec => {
-  const hash = createHash('sha256');
   const previous = previousOf(spec);
-  hash.update(
-    JSON.stringify({
-      version: LONG_TEMPLATE_VERSION,
+  const digest = await templateDigest({
+    crankBudget: harnessLimits.crankBudget,
+    id: `long-${spec.kind}`,
+    provisioned: true,
+    sources: [
+      thisFile,
+      'scripts/export.mjs',
+      'test/integration/_m2-lifecycle.js',
+      'resources/agent-host/impl/archive',
+    ],
+    extra: {
       base: await baseKeyOf(spec.kind),
-      code: await codeDigestOf(),
       spec,
       // A chain step names the step it copies.
       previous: previous === undefined ? null : await specKey(previous),
-    }),
-  );
-  return hash.digest('hex').slice(0, 12);
+    },
+  });
+  return digest.slice(0, 12);
 };
 
 /** @param {Spec} spec */
@@ -502,7 +480,7 @@ const buildUnlocked = async (spec, paths) => {
     const { commit } = await runIdentity();
     /** @type {TemplateMeta} */
     const meta = {
-      version: LONG_TEMPLATE_VERSION,
+      version: META_VERSION,
       spec,
       key,
       sessionKeys,

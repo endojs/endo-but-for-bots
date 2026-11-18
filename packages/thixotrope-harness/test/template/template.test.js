@@ -3,8 +3,7 @@
  * Tests of the state-template helper (test/template/index.js).
  *
  * The unit tests always run. The lifecycle test needs the release Ironhorse
- * worker and runs only with THIX_HARNESS_INTEGRATION=1 (or
- * THIX_HARNESS_SPIKES=1), under the run lock:
+ * worker and runs only with THIX_HARNESS_INTEGRATION=1, under the run lock:
  *
  *   THIX_HARNESS_INTEGRATION=1 node scripts/run-lock.mjs -- \
  *     corepack yarn test test/template/template.test.js
@@ -20,10 +19,13 @@ import {
   copyState,
   ensureTemplate,
   integrationEnabled,
+  integrationEnabledIn,
   processesUnder,
   shortName,
   startFromTemplate,
+  supervisorEnv,
   takeIntegrationLock,
+  templateInputs,
   templateKey,
 } from './index.js';
 
@@ -67,6 +69,107 @@ test.serial(
     t.is(await templateKey({ crankBudget: 50_000_000n, id: 'base' }), a);
   },
 );
+
+test('integration files run only under THIX_HARNESS_INTEGRATION, never under THIX_HARNESS_SPIKES', t => {
+  t.true(integrationEnabledIn({ THIX_HARNESS_INTEGRATION: '1' }));
+  t.false(integrationEnabledIn({ THIX_HARNESS_SPIKES: '1' }));
+  t.false(integrationEnabledIn({}));
+});
+
+test('a Secrets key file reaches one supervisor, not the test process', t => {
+  const before = process.env.THIX_HARNESS_SECRETS_KEY;
+  const base = { PATH: '/bin', THIX_HARNESS_SECRETS_KEY: '/elsewhere/old.key' };
+  t.deepEqual(supervisorEnv({ secretsKeyFile: '/k/secrets.key' }, base), {
+    PATH: '/bin',
+    THIX_HARNESS_SECRETS_KEY: '/k/secrets.key',
+  });
+  t.is(supervisorEnv({}, base), base);
+  t.is(base.THIX_HARNESS_SECRETS_KEY, '/elsewhere/old.key');
+  t.is(process.env.THIX_HARNESS_SECRETS_KEY, before);
+  t.throws(() => supervisorEnv({ secretsKeyFile: 'relative.key' }, base), {
+    message: /absolute/,
+  });
+});
+
+test('a provisioned template is keyed by the guest bundles, the manager part, provisioning and the core', async t => {
+  const plain = await templateInputs({ provisioned: false });
+  const provisioned = await templateInputs({ provisioned: true });
+  const harness = 'packages/thixotrope-harness';
+  for (const file of [
+    'packages/thixotrope/src/control/supervisor.js',
+    'packages/thixotrope/dist-ironhorse/boot.js',
+    'packages/thixotrope/dist-ironhorse/worker-peer.js',
+  ]) {
+    t.true(plain.files.includes(file), file);
+    t.true(provisioned.files.includes(file), file);
+  }
+  t.true(plain.files.includes('<worker>'));
+  t.deepEqual(plain.programs, []);
+  t.deepEqual(provisioned.programs, ['exec', 'factory', 'session']);
+  for (const file of [
+    `${harness}/guest/session/main.js`,
+    `${harness}/guest/factory/standin-session.js`,
+    `${harness}/guest/lib/limits.js`,
+    `${harness}/resources/agent-host/durable.js`,
+    `${harness}/resources/agent-host/durable-subscriptions.js`,
+    `${harness}/resources/agent-host/ephemeral.js`,
+    `${harness}/scripts/provision-steps.js`,
+    `${harness}/scripts/bundle-guest.mjs`,
+    `${harness}/config/defaults.js`,
+  ]) {
+    t.false(plain.files.includes(file), file);
+    t.true(provisioned.files.includes(file), file);
+  }
+  // Paths only, relative to the repository: keys agree across worktrees.
+  for (const file of provisioned.files) t.false(path.isAbsolute(file), file);
+  t.not(
+    await templateKey({ crankBudget: 50_000_000n, id: 'x', provisioned: true }),
+    await templateKey({ crankBudget: 50_000_000n, id: 'x' }),
+  );
+});
+
+test('a template key follows the files its provisioning names, and a missing one throws', async t => {
+  const dir = await scratch(t, 'k');
+  const file = path.join(dir, 'provisioning.js');
+  await writeFile(file, 'one');
+  const key = () =>
+    templateKey({ crankBudget: 50_000_000n, id: 'src', sources: [file] });
+  const a = await key();
+  t.is(await key(), a);
+  await writeFile(file, 'two');
+  const b = await key();
+  t.not(b, a);
+  await mkdir(path.join(dir, 'sub'));
+  await writeFile(path.join(dir, 'sub', 'more.js'), 'x');
+  const c = await templateKey({
+    crankBudget: 50_000_000n,
+    id: 'src',
+    sources: [dir],
+  });
+  await writeFile(path.join(dir, 'sub', 'more.js'), 'y');
+  t.not(
+    await templateKey({ crankBudget: 50_000_000n, id: 'src', sources: [dir] }),
+    c,
+  );
+  t.not(
+    await templateKey({
+      crankBudget: 50_000_000n,
+      id: 'src',
+      sources: [file],
+      extra: { turns: 300 },
+    }),
+    b,
+  );
+  await t.throwsAsync(
+    () =>
+      templateKey({
+        crankBudget: 50_000_000n,
+        id: 'src',
+        sources: [path.join(dir, 'missing.js')],
+      }),
+    { message: /missing\.js/ },
+  );
+});
 
 test('ensureTemplate refuses an id that is not a short slug', async t => {
   await t.throwsAsync(() => ensureTemplate({ id: '../x' }), {

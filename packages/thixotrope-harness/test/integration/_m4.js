@@ -9,13 +9,15 @@
  *
  * Token values are built at run time (`tokenOf`) and are never shaped like
  * a provider key. The wrapping key file lives under H/tmp, outside the
- * state directory (D-6), through THIX_HARNESS_SECRETS_KEY.
+ * state directory (D-6), and reaches the served state's supervisor through
+ * `startFromTemplate`'s `secretsKeyFile` (`testKeyFile`), never through this
+ * process's environment.
  *
  * The importer must have installed the guest prelude first
  * (`test/unit/_m1a-prelude.js`).
  */
-import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { mkdirSync, rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -25,11 +27,7 @@ import { E } from '@endo/far';
 import { sealTo } from '../../resources/agent-host/impl/secrets/seal.js';
 import { formatCredential } from '../../resources/agent-host/impl/subscriptions/credentials.js';
 /* eslint-enable import/no-relative-packages */
-import {
-  agentHostDirectory,
-  makeProvision,
-  templateIdFor,
-} from '../../scripts/provision-steps.js';
+import { makeProvision } from '../../scripts/provision-steps.js';
 import { steps as m4Steps } from '../../scripts/provision-steps/40-subscriptions.js';
 import {
   ensureTemplate,
@@ -72,19 +70,13 @@ export const TOKEN_PREFIXES = harden([
 
 /**
  * The `m4` template: M1a's provisioning (the real session and exec
- * programs, no spares) under an id that also covers the manager vat's M4
- * part (`durable-subscriptions.js` is bundled into the installed
- * `durable.js`, which `templateIdFor` hashes without its imports).
+ * programs, no spares). The template key covers the manager part, the
+ * guest bundles and the provisioning steps (test/template `templateKey`).
  */
 export const m4Template = async () => {
-  const base = await templateIdFor({ prefix: 'm4' });
-  const hash = createHash('sha256').update(base);
-  hash.update(
-    readFileSync(path.join(agentHostDirectory, 'durable-subscriptions.js')),
-  );
   const run = makeProvision();
   return ensureTemplate({
-    id: `m4-${hash.digest('hex').slice(0, 10)}`,
+    id: 'm4',
     provision: async context => {
       await run(context);
     },
@@ -92,17 +84,18 @@ export const m4Template = async () => {
 };
 
 /**
- * Point the adapter's Secrets store at a key file under H/tmp for this
- * process (every supervisor started afterwards inherits it).
+ * A Secrets key file for one served state (the adapter's wrapping key,
+ * outside the state directory, D-6): a fresh directory under H/tmp removed
+ * at the test's end. Pass the answer to `startFromTemplate` as
+ * `secretsKeyFile`; it reaches that supervisor only.
  * @param {import('ava').ExecutionContext} t
  * @param {string} tag
  */
-export const useKeyFile = (t, tag) => {
+export const testKeyFile = (t, tag) => {
   const keyDir = path.join(harnessTmp, `w48-${tag}-${process.pid}`);
   mkdirSync(keyDir, { recursive: true, mode: 0o700 });
   t.teardown(() => rmSync(keyDir, { recursive: true, force: true }));
-  process.env.THIX_HARNESS_SECRETS_KEY = path.join(keyDir, 'secrets.key');
-  return keyDir;
+  return path.join(keyDir, 'secrets.key');
 };
 
 /**
@@ -112,9 +105,9 @@ export const useKeyFile = (t, tag) => {
  * @param {string} tag
  */
 export const startM4 = async (t, tag) => {
-  useKeyFile(t, tag);
+  const secretsKeyFile = testKeyFile(t, tag);
   const template = await m4Template();
-  const state = await startFromTemplate(template, { t });
+  const state = await startFromTemplate(template, { t, secretsKeyFile });
   return m4View(state);
 };
 

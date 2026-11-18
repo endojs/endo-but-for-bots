@@ -25,7 +25,7 @@ const {
   inWindow,
   makeFrameCounter,
   startPerfM4,
-  useKeyFile,
+  testKeyFile,
   closeServers,
 } = await import('./_m4.mjs');
 const { credentialText, makePool, makeValueSecret, tokenOf } =
@@ -103,9 +103,11 @@ const measurePush = async () => {
 
 await runPerf('accounts', async ({ provision }) => {
   await measurePush();
-  const dropKey = useKeyFile('perf-accounts');
+  const keyFile = testKeyFile('perf-accounts');
   try {
-    const { m4, server } = await startPerfM4(provision);
+    const { m4, server } = await startPerfM4(provision, {
+      secretsKeyFile: keyFile.file,
+    });
     const counter = await makeFrameCounter(m4);
     const members = [];
     for (const tag of ['r1', 'r2']) {
@@ -150,6 +152,6 @@ await runPerf('accounts', async ({ provision }) => {
     });
   } finally {
     await closeServers();
-    dropKey();
+    keyFile.remove();
   }
 });

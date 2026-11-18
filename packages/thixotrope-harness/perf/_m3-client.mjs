@@ -44,8 +44,6 @@ const { limits } = await import('../guest/lib/limits.js');
 export const M3_TEMPLATE_TURNS = 300;
 /** Its title (the perf files and browser tests find it by its row). */
 export const M3_TEMPLATE_TITLE = 'm3-300';
-/** Bumped when the provisioning below changes. */
-const M3_TEMPLATE_VERSION = 1;
 
 const usage = {
   inputTokens: 10,
@@ -65,12 +63,21 @@ export const m3TemplateLog = path.join(tmpRoot, 'm3-300-scripted.log');
 
 /**
  * Template options for `ensureTemplate`: m1a's provisioning plus the
- * imported session.
+ * imported session. The key covers what the import writes through (this
+ * module, the export format, the synthetic export writer and the adapter's
+ * archive store) besides the harness's own provisioning (HR-SYN-20).
  */
 export const m3TemplateOptions = async () => {
   const base = await m1aTemplateOptions();
   return {
-    id: `${base.id}-m3-300-v${M3_TEMPLATE_VERSION}`,
+    id: M3_TEMPLATE_TITLE,
+    sources: [
+      url.fileURLToPath(import.meta.url),
+      'scripts/export.mjs',
+      'test/integration/_m2-lifecycle.js',
+      'resources/agent-host/impl/archive',
+    ],
+    extra: { turns: M3_TEMPLATE_TURNS, script: m3TemplateScript },
     /** @param {import('../test/template/index.js').ProvisionContext} context */
     provision: async context => {
       await base.provision(context);
