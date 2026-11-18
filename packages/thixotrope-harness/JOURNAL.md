@@ -11671,3 +11671,119 @@ M2 review made (one file per step) turned a three-way table conflict into three 
 Fit: good for code (guards make a cross-lane mismatch a refused call in a unit test). Poor for
 size: each lane fits its own program budget, but the session program's margin after all three is
 1.4 %, and only a merge shows it.
+
+### J-9940 2026-11-18 X1 which interface entries each vat program reads - measure
+Evidence: a scratch script parsed `guest/lib/interfaces.js` (Babel, the parser
+compartment-mapper uses) into 397 entries (each builder, method guard table entry, method list,
+fixed text and helper) with their references, then read every module each program bundles
+(`bundleGuest(...).modules`) for the table members it reads, and closed over the references.
+Of about 46.1 KB of entry text (comments and indentation stripped): session 161 entries,
+18.8 KB; exec 31, 3.0 KB; factory 104, 13.5 KB; the stand-in session 48, 6.0 KB; the manager's
+`durable*.js` 59, 6.7 KB; 17.8 KB is read by no vat program (adapter texts, Node-only guards).
+One dynamic read: `session/records.js` `shapes[name]`, by a fixed map of the eight turn record
+kinds. 18 builders were dead: 14 M1a interface builders and 4 M1b ones that a later version
+replaces in every table.
+Fit: good: the vat programs read a small, statically visible part of the contract; only one
+computed read, bounded by a fixed map.
+
+### J-9941 2026-11-18 X1 guard modules chained by program - built
+Evidence: `guest/lib/guards/base.js` (exec's entries and the helpers) < `guards/session.js` <
+`guards/factory.js` (with the stand-in session) < `guest/lib/interfaces.js` (the rest, the full
+tables for Node-side code, tests and the gateway vocabulary). Each entry lives in the module of
+the lowest program that reads it, its text moved unchanged by a generator (comments kept);
+`lazyTable(builders, below)` answers the table below through getters, so every module's
+`shapes`, `interfaces`, `methodNames`, `texts` and `textOf` hold the same objects as the full
+tables. 37 guest modules now import their program's module (exec 4 to `base`, session 20 with
+`interfaces-m5.js` to `session`, factory 13 with `interfaces-m5-factory.js` and
+`session/prompt.js` to `factory`); `interfaces-m4.js` and the manager's modules keep importing
+`interfaces.js`. Stripped module text: `base` 4.3 KB, `session` 17.4, `factory` 7.3,
+`interfaces.js` 21.7 (Node only), against 46.9 KB before. The directory is `guards/`, not
+`interfaces-*.js`: the gateway vocabulary loads every `interfaces-m*.js` by name.
+Fit: fair: a chain fits because the programs' needs nest (exec < session < factory) once shared
+library modules import the lowest module; a program that came to need an entry held higher
+must move the entry down, which `guards-split.test.js` reports.
+
+### J-9942 2026-11-18 X1 the M2 fold - built
+Evidence: m2-interfaces.md 1.3 / W2.9 (J-9414): `interfaces.X` and `methodNames.X` of the ten
+interfaces M2 extends are now the M2 versions; `m2Interfaces`, `m2MethodNames`, `m1bShapes`,
+`m1bInterfaces` stay as views (the same objects), `m1bMethodNames` keeps M1b's lists. Guest
+code reads `interfaces` / `shapes` / `methodNames` instead of the views (about 18 reads in 11 files).
+The stand-in session (`guest/factory/standin-session.js`) gained `findTurn` (throws its existing
+"no turns" text) and refusing `blobPage`, `deleteSelf`, `exportState`, `importState`; the root
+already used the M2 guard, so only its comments changed (and the stale 200,000 budget comment).
+Tests adapted as the M1b fold's were (J-0400): stub exos in `m1a-interfaces`, `m1a-queue`,
+`m1b-interfaces` implement the methods a folded guard names; two `m2-interfaces` assertions
+compare with the lists before M2 instead of `methodNames`; one new test checks the fold.
+Fit: good: the fold needed stubs in one guest exo; nothing in the adapter or the gateway made an
+exo from a pre-M2 guard.
+
+### J-9943 2026-11-18 X1 no behaviour change: guards against a snapshot - verify
+Evidence: `test/unit/_guard-snapshot.js` gives a SHA-256 per entry of a canonical form (records in
+key order, so a method order change shows; text functions by source) of every table of
+`interfaces.js`, `interfaces-m3/m4/m5/m5-factory.js`, the whole exports and
+`withGatewayAdmin(...)`, plus the gateway's `harnessNames` sets. The snapshot of `bd9a8ec070` is
+committed first (`test/fixtures/guard-snapshot-before-x1.json`, 493 entries, 258 keys, 140
+methods). After: all 493 equal, 24 of them through the fold mapping (`interfaces` 10,
+`m1bInterfaces` 4, `methodNames` 10 to the old M2 versions); key set 258 and method set 140
+identical, no file skipped; `interfaces.js` export list identical. `guards-split.test.js` also
+checks each guard module answers the same objects as `interfaces.js`, that every name a guest
+module reads from a guard table is in it (over 100 reads), and that no program bundles
+`lib/interfaces.js`.
+Fit: good: digests of a canonical form make a 63 KB fixture that proves equality of a 91 KB
+module's every guard without keeping a copy of it.
+
+### J-9944 2026-11-18 X1 guest program sizes - measure
+Evidence: `node scripts/bundle-guest.mjs`: session 236,583 -> 213,712 bytes (budget 240,000;
+26,288 left, target 215,000 met), exec 105,414 -> 62,196 (120,000; target 90,000 met), factory
+178,390 -> 164,810. Modules: session 37 -> 38 (`base` + `session` replace `interfaces.js`),
+exec 9, factory 28. Per module (stripped text, approximate): before `interfaces.js` 46.9 KB in
+all three; after, session carries `base` 4.3 + `session` 17.4, exec `base` 4.3, factory all
+three (29.0). Limits unchanged; the limits comments and the README bundle-guest row give the new
+sizes. A later comment-only edit of the guard modules left all three digests unchanged
+(`stripComments` keeps line breaks).
+Fit: good: the per-vat split met both targets with no behaviour change; the next session cut
+would be `session/turn.js` (29.6 KB) or the per-module wrapper (about 1.2 KB a module).
+
+### J-10000 2026-11-18 X1 unit and adapter lanes - test
+Evidence: `corepack yarn test` at the split: 1,220 passed, 2 failed, 109 skipped (68 s wall,
+load 2.4-2.9); the two (`run-lock` abandoned locks, `run-lock-slots` two CLI slots) are timing
+tests and pass on a rerun alone (35 passed). A first run before the test adaptations took 175 s
+under load and also timed out in `m1a-agent-host` (2,000 keys), `m1b-blobs-provider` (2) and
+`m4-renewal`; all pass alone (67 passed). Package `tsc --incremental false` exit 0; eslint 0
+errors on the guest tree and the changed tests; prettier clean.
+Fit: neutral: the lanes are sensitive to load; the X1 changes add 6 tests.
+
+### J-10001 2026-11-18 X1 daemon files in shared slots - test
+Evidence: `corepack yarn test:integration --jobs 6` (templates rebuilt for the new bundles),
+307.9 s wall, load 3.1-4.5. Held: `m1a-slice` 307.6 s (6 pass), `m2-queue` 171.9 s (2 pass,
+waited 121.4 s), `m4-pools` 179.5 s (1, waited 60.6 s), `m5-objects` 243.1 s (1),
+`m5-snapshot` 206.6 s (1; template 120.9 s), `m3-gateway` 120.8 s FAIL (ava timeout with all
+6 tests pending in setup while five files built templates). `m3-gateway` alone right after:
+119.8 s, 6 pass. `m1a.slice.createCold` 14,391 ms under that load (not comparable to a perf row).
+Fit: poor: a guest change rebuilds every template at once, and a file whose setup waits on
+another's build can hit its own test timeout; one file per slot after a guest change would avoid
+it.
+
+### J-10002 2026-11-18 X1 what the split asks of later units - fit
+Evidence: a guest module now imports `guards/<its lowest program>.js`; reading an entry held
+in a higher module fails `guards-split.test.js` (name not in the table), and the fix is to move
+the entry's text down the chain. New contract entries go in the module of the program that
+reads them, or in `interfaces.js` when no vat does. The `m3`/`m4`/`m5` contract files are
+untouched; `interfaces-m5.js` imports `guards/session.js`, `interfaces-m5-factory.js`
+`guards/factory.js`.
+Fit: fair: one more decision per new entry (where it lives), checked by a unit test rather than
+by a bundle that silently grows.
+
+### J-10003 2026-11-18 X1 contract text not updated - deviation
+Evidence: the fold is a contract change (`contract(...)` commit `cfa5802d1e`), but the unit's
+files did not include the designs: `m2-interfaces.md` 1.1, 1.3, the file table (`interfaces.js`
+row) and 16 still describe `m2Interfaces` as the M2 versions to switch to; `m5-interfaces.md`
+O-1 still says no lane splits `interfaces.js`. README had no bundle rows; the size went into the
+`bundle-guest.mjs` row.
+Decision: for the PM (forPM).
+
+### J-10004 2026-11-18 X1 time record - verified
+Evidence: first command 12:51:41Z, last 13:23:00Z (journal commit; the final date follows it); over 60 s: the unit and adapter
+lane 175 s (first run, loaded) and 68 s, the integration batch 307.9 s wall, `m3-gateway` alone
+119.9 s.
+Fit: neutral.
