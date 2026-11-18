@@ -203,7 +203,9 @@ const mailShapeBuilders = {
         attachments: S.Attachments,
         at: count,
       },
-      { systemPrompt: X.MailBody },
+      // Inline only (D-M9-20): the factory composes the child's prompt
+      // as text in the creation's resolver.
+      { systemPrompt: text(limits.inlineBytes) },
     ),
   SpawnAnswer: () =>
     record({ handle: R('SubagentHandle'), title: text(limits.titleUnits) }),
@@ -296,8 +298,6 @@ export const mailTexts = harden({
   /** Harness (R4-49 style): an ask the parent's cancel abandoned. */
   askAbandoned:
     "Subagent ask abandoned: the turn was cancelled; the subagent's turn was cancelled too",
-  /** Fae subagent.js askTool: an answer cut at `answerUnits`. */
-  answerTruncated: '\n\n(truncated)',
 });
 
 /** Fixed texts with parameters; each returns the exact string. */
@@ -463,6 +463,13 @@ export const mailTextOf = harden({
    * @param {string} name
    */
   stopped: name => `Stopped subagent "${name}".`,
+  /**
+   * Harness (D-M9-20): a child's standing instructions are inline.
+   * @param {number} bytes
+   * @param {number} limit
+   */
+  systemPromptTooLong: (bytes, limit) =>
+    `The subagent's systemPrompt is ${bytes} bytes; the limit is ${limit}`,
   /** @param {string} name */
   subagentExists: name => `A subagent named ${q(name)} already exists`,
   /** @param {string} name */

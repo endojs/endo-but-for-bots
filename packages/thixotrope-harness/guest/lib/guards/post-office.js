@@ -156,10 +156,10 @@ const postOfficeShapeBuilders = {
     }),
   /**
    * `RelayWriters.copy` options: `maxUnits` cuts the copy (with the R4-46
-   * marker) and `prefix` is written before it; without either the file is
-   * hard-linked.
+   * marker) and `suffix` is written after it (an ask answer's attachment
+   * note); without either the file is hard-linked.
    */
-  CopyOptions: () => record({}, { maxUnits: count, prefix: text(1024) }),
+  CopyOptions: () => record({}, { maxUnits: count, suffix: text(1024) }),
 };
 
 const P = lazyTable(postOfficeShapeBuilders);
@@ -265,7 +265,7 @@ export const postOfficeTexts = harden({
   /** `addressOf` / `send` with a Session this factory did not make. */
   notASession: 'Not a session of this harness',
   /** `take` of an edge the message does not carry. */
-  noEdge: 'The message has no attachment with that edge name',
+  noAttachment: 'The message has no attachment with that edge name',
 });
 
 /** Texts with parameters. */

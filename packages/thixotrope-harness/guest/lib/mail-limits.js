@@ -100,8 +100,11 @@ export const mailLimits = harden({
   maxAskTimeoutSeconds: 604_800,
   /** A task (R4-102: 1 Mi characters). */
   taskUnits: 1_048_576,
-  /** A child's standing instructions (R3-39: task and system prompt <= 1 Mi). */
-  systemPromptUnits: 1_048_576,
+  /**
+   * A child's standing instructions, UTF-8 bytes: inline only (D-M9-20;
+   * R3-39 allows 1 Mi characters, owner question O-M9-11).
+   */
+  systemPromptBytes: 8192,
   /**
    * An answer before the tool limit (R4-102: 16 Mi characters). The
    * adapter's copy cuts it to the tool limit anyway (`toolOutputUnits`), so
