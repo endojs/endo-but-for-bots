@@ -1,21 +1,10 @@
 // @ts-check
 /**
- * The reasoning-effort resolver of `createSession` (M4 W4.1;
- * `designs/m4-interfaces.md` 5.4, H-6; R4-21..R4-23).
- *
- * Appended last to `optionResolvers` (`session-options.js`), so the
- * backend, its kind and the model are resolved already. The effort is
- * `resolved.reasoningEffort` (a preset default M5 filled) or the caller's
- * `options.reasoningEffort`. On a subscription pool the pool's
- * `resolveEffort` checks it against the model's catalogue row and answers
- * what the session stores (absent: the model's default effort, else none);
- * on any other backend an effort is refused. Stored once, never changed
- * (R4-22).
- *
- * Kept small: it is in the factory bundle and imports only `texts-m4.js`
- * and `limits.js` (m4-interfaces 1.4), not the M4 guards.
- *
- * Guest rules: prelude globals only.
+ * `subscriptionEffort` (M4 W4.1; m4-interfaces 5.4, H-6; R4-21..R4-23): the
+ * last `createSession` resolver. The effort (`resolved.reasoningEffort`, an
+ * M5 preset default, else the option) is checked by a pool's
+ * `resolveEffort`, whose answer is stored (absent: none); any other backend
+ * refuses an effort. Factory bundle: imports texts only (1.4).
  */
 import { limits } from '../lib/limits.js';
 import { m4Texts } from '../lib/texts-m4.js';
@@ -24,35 +13,13 @@ import { m4Texts } from '../lib/texts-m4.js';
 /** @import { OptionResolver } from './session-options.js' */
 const { E } = /** @type {GuestGlobals} */ (globalThis);
 
-/** @param {unknown} kind */
-const isPoolKind = kind => kind === 'claude-pool' || kind === 'codex-pool';
-
-/**
- * The pool's answer, checked without the M4 guards (`EffortAnswer`: a
- * closed record with at most a bounded `reasoningEffort`).
- * @param {any} answer
- * @returns {string | undefined}
- */
-const effortOf = answer => {
-  const keys =
-    answer !== null && typeof answer === 'object' ? Object.keys(answer) : [];
-  const effort = answer?.reasoningEffort;
-  if (
-    keys.length > 1 ||
-    (keys.length === 1 && keys[0] !== 'reasoningEffort') ||
-    (effort !== undefined &&
-      (typeof effort !== 'string' || effort.length > limits.effortUnits))
-  )
-    throw Error(m4Texts.unsupportedEffort);
-  return effort;
-};
-
 /** @type {OptionResolver} */
 export const subscriptionEffort = async (options, resolved) => {
   /** @type {Record<string, any>} */
   const fields = resolved;
   const given = fields.reasoningEffort ?? options.reasoningEffort;
-  if (!isPoolKind(resolved.backendKind)) {
+  const kind = resolved.backendKind;
+  if (kind !== 'claude-pool' && kind !== 'codex-pool') {
     if (given !== undefined) throw Error(m4Texts.effortNotSupported);
     return;
   }
@@ -63,7 +30,18 @@ export const subscriptionEffort = async (options, resolved) => {
         : { modelId: resolved.modelId, reasoningEffort: given },
     ),
   );
-  const effort = effortOf(answer);
+  // `EffortAnswer`, checked without the M4 guards.
+  const keys = Object.keys(answer ?? 0);
+  const effort = answer?.reasoningEffort;
+  if (
+    typeof answer !== 'object' ||
+    answer === null ||
+    keys.length > 1 ||
+    (keys.length === 1 && effort === undefined) ||
+    (effort !== undefined &&
+      (typeof effort !== 'string' || effort.length > limits.effortUnits))
+  )
+    throw Error(m4Texts.unsupportedEffort);
   if (effort === undefined) delete fields.reasoningEffort;
   else fields.reasoningEffort = effort;
 };

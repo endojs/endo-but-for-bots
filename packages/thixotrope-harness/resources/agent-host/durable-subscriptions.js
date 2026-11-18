@@ -143,11 +143,11 @@ export const makeSubscriptionsPart = ({
    * @param {any} ops
    */
   const credentialOpsOf = async ops => {
-    if (credentials?.ops !== ops) {
-      const credentialOps = await E(ops).credentials();
-      credentials = { ops, credentialOps };
-    }
-    return credentials.credentialOps;
+    if (credentials !== undefined && credentials.ops === ops)
+      return credentials.credentialOps;
+    const credentialOps = await E(ops).credentials();
+    credentials = { ops, credentialOps };
+    return credentialOps;
   };
   /**
    * @template T

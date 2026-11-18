@@ -531,8 +531,9 @@ test('served records: newest wins, 256 per pool, least recently served dropped; 
     harden({ served: [{ session: sessions[10], member: b, at: 10_000 }] }),
   );
   state = kit.sink.poolState(pool);
-  t.is(state.served.at(-1).session, sessions[10]);
-  t.is(state.served.at(-1).member, b);
+  const last = state.served[state.served.length - 1];
+  t.is(last.session, sessions[10]);
+  t.is(last.member, b);
   // poolState with 16 members and 256 served records fits one frame.
   t.true(fitsFrame(state));
   a.retire();

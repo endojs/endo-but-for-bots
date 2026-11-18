@@ -155,6 +155,9 @@ test('a malformed pool answer is refused', async t => {
     { reasoningEffort: 3 },
     { effort: 'high' },
     { reasoningEffort: 'high', extra: 1 },
+    'high',
+    5,
+    null,
   ]) {
     const backend = Far('Backend', { resolveEffort: () => harden(answer) });
     // eslint-disable-next-line no-await-in-loop
