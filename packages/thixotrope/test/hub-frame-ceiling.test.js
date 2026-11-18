@@ -191,3 +191,31 @@ test('the ceiling must be a positive integer', t => {
     );
   }
 });
+
+test('a call pipelined on a refused answer still reaches the answer it was sent to', async t => {
+  // The answer to the vat's call is too large, so the vat's promise breaks
+  // with FRAME_TOO_LARGE; but the hub's answer route still points at the
+  // answerer's settled answer, so a message pipelined on that promise is
+  // delivered to the real (oversized) value, by the answerer, rather than
+  // breaking with the same reason. Pinned (review C-QC): here the answer is
+  // a string, so the answerer's own refusal comes back.
+  const { framesToWorker, shell } = await setup(t);
+  const source = Far('Source', { big: () => 'x'.repeat(CEILING * 2) });
+  const caller = await E(shell).evaluate(
+    `Far('Caller', {
+      pipelined: () => {
+        const p = E(src).big();
+        const q = E(p).slice(0, 2);
+        return Promise.allSettled([p, q]).then(rs =>
+          rs.map(r => (r.status === 'fulfilled' ? r.value : r.reason.message)),
+        );
+      },
+    })`,
+    harden({ src: source }),
+  );
+  const [answer, pipelined] = await E(caller).pipelined();
+  t.is(answer, FRAME_TOO_LARGE);
+  t.not(pipelined, FRAME_TOO_LARGE, 'the pipelined call is not refused');
+  t.regex(pipelined, /pass-style string/, 'it reached the settled answer');
+  t.true(framesToWorker.every(bytes => bytes.length <= CEILING));
+});
