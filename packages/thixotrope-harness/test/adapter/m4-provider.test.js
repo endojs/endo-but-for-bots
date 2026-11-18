@@ -492,3 +492,47 @@ test('M4-FIX: a member or pool retired in the manager stops serving once the loa
   await s.round();
   t.is(s.fake.loads(), 3);
 });
+
+test('XB (3.1): CredentialOps.poolsChanged makes the next round see a retired member, then a retired pool, without waiting', async t => {
+  // The default refresh (600 s) never passes here: only the push re-reads.
+  const s = await setup(t, { kind: 'claude-pool' });
+  t.is(subscriptionDefaults.poolStateRefreshMs, 600_000);
+  s.server.setPlan([
+    { sse: 'claude-text.sse' },
+    { sse: 'claude-text.sse' },
+    { sse: 'claude-text.sse' },
+    { sse: 'claude-text.sse' },
+  ]);
+  const first = await s.round();
+  t.is(first.failures.length, 0, JSON.stringify(first.failures));
+  const servedFirst = /** @type {string} */ (s.inference()[0]);
+  t.is(s.fake.loads(), 1);
+  // Retired in the manager but not pushed: the loaded state still serves.
+  s.status.retired.add(s.members[servedFirst]);
+  const unpushed = await s.round();
+  t.is(unpushed.failures.length, 0, JSON.stringify(unpushed.failures));
+  t.is(s.fake.loads(), 1, 'no ask without a push or an old answer');
+  t.is(s.inference()[1], servedFirst);
+  // The manager's push (PoolMember.retire): the next round asks again.
+  t.is(s.subscriptions.credentialOps.poolsChanged(), undefined);
+  const second = await s.round();
+  t.is(second.failures.length, 0, JSON.stringify(second.failures));
+  t.is(s.fake.loads(), 2, 'one ask after the push');
+  t.not(s.inference()[2], servedFirst, 'the retired member is not selected');
+  // No second ask without another push.
+  const third = await s.round();
+  t.is(third.failures.length, 0, JSON.stringify(third.failures));
+  t.is(s.fake.loads(), 2);
+  // SubscriptionsAdmin.retirePool and its push: the next round fails.
+  s.status.pool = 'retired';
+  s.subscriptions.credentialOps.poolsChanged();
+  const before = s.inference().length;
+  const refused = await s.round();
+  t.is(refused.failures[0]?.reason, m4Texts.retired);
+  t.is(s.inference().length, before, 'nothing sent for the retired pool');
+  t.is(s.fake.loads(), 3);
+  // A retired answer is final: a later push asks nothing.
+  s.subscriptions.credentialOps.poolsChanged();
+  await s.round();
+  t.is(s.fake.loads(), 3);
+});

@@ -21,10 +21,16 @@ export const subscriptionDefaults = Object.freeze({
   /** 5.1: served stamps of one pool are sent at most this often. */
   servedFlushMs: 1000,
   /**
-   * 3.1 (M4-FIX): a pool's `poolState` is asked again at its next use when
-   * older than this, so a retired pool or member stops serving within it.
+   * 3.1: a pool's `poolState` is asked again at its next use when older
+   * than this. A safety net only (XB): the manager pushes
+   * `CredentialOps.poolsChanged` when it retires a pool or a member, and the
+   * next round asks again. Ten minutes, twice the default cache lifetime
+   * (`cacheLifetimeMs`), so a used pool costs at most one manager crank per
+   * 600 s for it (0.1 per 60 s, on top of the served stamps' one per
+   * session per 60 s in `subscriptions.servedWrites`); 30 s (M4-FIX, before
+   * the push) cost up to two per pool per 60 s.
    */
-  poolStateRefreshMs: 30_000,
+  poolStateRefreshMs: 600_000,
   /** R4-103: the first undated refusal pause, doubled while refusals come in a row. */
   backoffStartMs: 60_000,
   /** R4-103: the longest undated refusal pause. */

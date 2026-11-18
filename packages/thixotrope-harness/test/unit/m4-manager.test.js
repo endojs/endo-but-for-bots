@@ -77,6 +77,9 @@ const makeFakeOps = ({ rows = [[]] } = {}) => {
     },
     auditReader: () => auditReader,
     accounts: () => accounts,
+    poolsChanged: () => {
+      calls.push(['poolsChanged']);
+    },
   });
   const ops = Far('AgentHostOps', {
     credentials: () => {
@@ -348,6 +351,71 @@ test('at most maxPools active pools; a retired pool frees its slot and refuses u
   }
   t.deepEqual(retired.describe(), { kind: 'codex-pool', label: 'p0' });
   t.is(kit.sink.poolState(retired).state, 'retired');
+});
+
+test('XB (3.1): retirePool and PoolMember.retire push poolsChanged to the adapter once each; a repeat pushes nothing', async t => {
+  const kit = makeKit();
+  const member = kit.member('codex', 'c');
+  const other = kit.member('codex', 'd');
+  const pool = kit.admin.makePool(
+    harden({ kind: 'codex-pool', label: 'p', members: [member, other] }),
+  );
+  /** Settle the part's background sends (fake ops answer locally). */
+  const settle = async () => {
+    for (let i = 0; i < 8; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await null;
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+  const pushes = () =>
+    kit.calls.filter(([name]) => name === 'poolsChanged').length;
+  await settle();
+  t.is(pushes(), 0, 'nothing before a retirement');
+  // The retirement is recorded before the push leaves (it does not wait).
+  t.is(member.retire(), undefined);
+  t.is(member.describe().state, 'retired');
+  await settle();
+  t.is(pushes(), 1, 'one push for the member');
+  member.retire();
+  await settle();
+  t.is(pushes(), 1, 'a repeated retire pushes nothing');
+  t.is(kit.admin.retirePool(pool), undefined);
+  await settle();
+  t.is(pushes(), 2, 'one push for the pool');
+  kit.admin.retirePool(pool);
+  await settle();
+  t.is(pushes(), 2, 'a repeated retirePool pushes nothing');
+  t.is(
+    kit.calls.filter(([name]) => name === 'credentials').length,
+    1,
+    'the CredentialOps is fetched once per ops facet',
+  );
+});
+
+test('XB (3.1): a push that cannot be delivered does not fail the retirement', async t => {
+  const records = new WeakMap();
+  const secret = Far('Secret', {});
+  records.set(secret, harden({ key: 'k1', label: 's', description: 'd' }));
+  const kitPart = makeSubscriptionsPart({
+    withOps: async () => {
+      throw Error('manager lost');
+    },
+    whenBound: async () => undefined,
+    archiveKeyOf: () => null,
+    secretRecords: records,
+    secretList: () => [secret],
+  });
+  const member = kitPart.admin.makeMember(
+    harden({ provider: 'claude', label: 'm', credential: secret }),
+  );
+  const pool = kitPart.admin.makePool(
+    harden({ kind: 'claude-pool', label: 'p', members: [member] }),
+  );
+  t.is(member.retire(), undefined);
+  t.is(kitPart.admin.retirePool(pool), undefined);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.is(kitPart.admin.describePool(pool).state, 'retired');
 });
 
 test('the pool Backend forwards describe, listModels, resolveModel and open with its spec', async t => {

@@ -11,7 +11,9 @@
  * Design rule (architecture 0-3): this vat is the system of record for what
  * persists (members, pools, marks, served records, secret labels and
  * descriptions); the adapter decides per round and does the I/O, and tells
- * this part what changed by `poolChanged` (sendOnly, coalesced). No value,
+ * this part what changed by `poolChanged` (sendOnly, coalesced); this part
+ * tells the adapter of a retirement by `CredentialOps.poolsChanged`
+ * (sendOnly, XB). No value,
  * token or header ever reaches this vat: members hold their credential
  * Secret and its store key `k<n>`, which only the adapter's sink calls see.
  *
@@ -157,6 +159,23 @@ export const makeSubscriptionsPart = ({
   const withCredentialOps = fn =>
     withOps(async ops => fn(await credentialOpsOf(ops)));
 
+  /**
+   * Tell the adapter that a pool or a member was retired (3.1, XB):
+   * `CredentialOps.poolsChanged()`, sendOnly, so the next round of every
+   * pool it loaded asks `poolState` again. The retirement itself is already
+   * recorded here and does not wait: with the CredentialOps of the current
+   * ops facet at hand (fetched by an earlier catalogue, accounts or
+   * description call) the push leaves in this crank; otherwise it leaves
+   * after one `ops.credentials()` answer. A failure (manager lost, adapter
+   * between incarnations) is ignored: a new incarnation loads afresh, and
+   * the adapter re-reads after `poolStateRefreshMs` in any case.
+   */
+  const announcePoolsChanged = () => {
+    void withCredentialOps(async credentialOps => {
+      E.sendOnly(credentialOps).poolsChanged();
+    }).catch(() => {});
+  };
+
   // ---- members (R8-13, R8-31) ----
   /** PoolMember -> its record. @type {WeakMap<any, MemberRecord>} */
   const memberRecords = new WeakMap();
@@ -227,6 +246,7 @@ export const makeSubscriptionsPart = ({
             if (entry.member === member) served.delete(session);
           }
         }
+        announcePoolsChanged();
         return undefined;
       },
     },
@@ -442,6 +462,7 @@ export const makeSubscriptionsPart = ({
     record.state = 'retired';
     record.served.clear();
     poolList = poolList.filter(entry => entry !== pool);
+    announcePoolsChanged();
     return undefined;
   };
 

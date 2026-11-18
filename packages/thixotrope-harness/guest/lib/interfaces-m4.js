@@ -439,6 +439,10 @@ const m4InterfaceBuilders = {
       ).returns(done),
       auditReader: M.call().returns(R('AuditReader')),
       accounts: M.call().returns(R('Accounts')),
+      // 3.1 (XB): the manager retired a pool or a member; sendOnly, no
+      // argument (every pool this incarnation loaded is asked again at its
+      // next use, so the next turn sees the retirement).
+      poolsChanged: M.call().returns(done),
     }),
   /** Adapter-local: audit pages up to 1,000 events, 0 vat deliveries (R7-63). */
   AuditReader: () =>
@@ -506,6 +510,7 @@ export const m4MethodNames = harden({
     'setSecretDescription',
     'auditReader',
     'accounts',
+    'poolsChanged',
   ],
   AuditReader: ['page'],
   Accounts: ['list', 'forBackend', 'forSession', 'refresh', 'watch'],

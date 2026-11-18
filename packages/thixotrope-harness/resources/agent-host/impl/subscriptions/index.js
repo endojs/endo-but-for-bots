@@ -245,8 +245,9 @@ export const makeSubscriptions = ({
 
   /**
    * The pool, loaded: its members, state and core (one `poolState` per
-   * incarnation, asked again when older than `poolStateRefreshMs` so a
-   * retirement reaches the rounds (M4-FIX); a failed load is asked again
+   * incarnation, asked again after the manager's `poolsChanged` push so a
+   * retirement reaches the next round (XB), and when older than
+   * `poolStateRefreshMs` as a safety net; a failed load is asked again
    * next time).
    * @param {any} backend
    * @param {any} spec
@@ -406,6 +407,11 @@ export const makeSubscriptions = ({
     secrets,
     accounts: () => accounts.accounts,
     resolveSecret,
+    // 3.1 (XB): a retirement in the manager; each loaded pool asks
+    // `poolState` again at its next use (one manager crank per used pool).
+    poolsChanged: () => {
+      for (const pool of pools.values()) pool.bridge.invalidate();
+    },
   });
 
   return harden({
