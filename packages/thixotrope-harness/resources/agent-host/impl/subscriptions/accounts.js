@@ -24,7 +24,7 @@
  *   waited `accountsKeepaliveMs` (30 s) with no change is answered the
  *   current view again (same `rev`); a subscriber with no `next()` call for
  *   `accountsIdleMs` (60 s) and none waiting is idle and is evicted (its
- *   next `next()` rejects with `subscriptionTexts.accountsWatchClosed`). Eviction is
+ *   next `next()` answers `{ closed: true, reason: 'idle' }`). Eviction is
  *   swept at each `watch`, publish and `next()`, so no per-subscriber idle
  *   timer runs; only a waiting `next()` holds a timer. A `watch` that meets
  *   the cap (`channelLimits.subscribersPerSession`, 32) after the sweep is
@@ -366,6 +366,7 @@ export const makeAccounts = ({
    * @property {{ resolve: (value: any) => void, reject: (reason: any) => void, promise: Promise<any> } | undefined} waiting
    * @property {(() => void) | undefined} cancelKeepalive
    * @property {boolean} closed
+   * @property {'idle' | 'client' | 'stopped'} [closeReason] why it was closed
    */
 
   // In `watch` order (oldest first).
@@ -376,21 +377,39 @@ export const makeAccounts = ({
   const isIdle = sub =>
     sub.waiting === undefined && now() - sub.lastCallMs >= idleMs;
 
-  /** @param {Subscriber} sub */
-  const closeSubscriber = sub => {
+  /**
+   * The answer of a closed watch: a field, never a text to compare
+   * (HR-SYN-34).
+   * @param {Subscriber} sub
+   */
+  const closedBatch = sub =>
+    harden({
+      rev,
+      pools: [],
+      closed: true,
+      reason: sub.closeReason ?? 'client',
+    });
+
+  /**
+   * @param {Subscriber} sub
+   * @param {'idle' | 'client' | 'stopped'} reason
+   */
+  const closeSubscriber = (sub, reason) => {
     if (sub.closed) return;
     sub.closed = true;
+    sub.closeReason = reason;
     subscribers.delete(sub);
     sub.cancelKeepalive?.();
     sub.cancelKeepalive = undefined;
     const { waiting } = sub;
     sub.waiting = undefined;
-    waiting?.reject(Error(subscriptionTexts.accountsWatchClosed));
+    waiting?.resolve(closedBatch(sub));
   };
 
   /** Evict every idle subscriber (oldest first: `subscribers` is in watch order). */
   const sweep = () => {
-    for (const sub of subscribers) if (isIdle(sub)) closeSubscriber(sub);
+    for (const sub of subscribers)
+      if (isIdle(sub)) closeSubscriber(sub, 'idle');
   };
 
   /** @param {Subscriber} sub */
@@ -424,8 +443,8 @@ export const makeAccounts = ({
     subscribers.add(sub);
     return makeExo('AccountsSubscription', m4Interfaces.AccountsSubscription, {
       next: async () => {
-        if (!sub.closed && isIdle(sub)) closeSubscriber(sub);
-        if (sub.closed) throw Error(subscriptionTexts.accountsWatchClosed);
+        if (!sub.closed && isIdle(sub)) closeSubscriber(sub, 'idle');
+        if (sub.closed) return closedBatch(sub);
         sub.lastCallMs = now();
         if (sub.waiting !== undefined) return sub.waiting.promise;
         const current = view();
@@ -442,7 +461,7 @@ export const makeAccounts = ({
         return kit.promise;
       },
       close: () => {
-        closeSubscriber(sub);
+        closeSubscriber(sub, 'client');
       },
     });
   };
@@ -692,7 +711,7 @@ export const makeAccounts = ({
     rev: () => rev,
     subscriberCount: () => subscribers.size,
     close: async () => {
-      for (const sub of [...subscribers]) closeSubscriber(sub);
+      for (const sub of [...subscribers]) closeSubscriber(sub, 'stopped');
       await writer.close();
     },
   });

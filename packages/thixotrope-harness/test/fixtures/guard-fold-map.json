@@ -1,5 +1,5 @@
 {
- "about": "The fold (F2, HR-SYN-1): each entry of the folded tables and the before entry it equals (digest for digest), and each before entry no folded entry carries, with the reason. Keys not in \"renamed\" compare with the same key. Before entries: test/fixtures/guard-snapshot-before-x1.json and guard-snapshot-before-fold.json.",
+ "about": "The fold (F2, HR-SYN-1): each entry of the folded tables and the before entry it equals (digest for digest), and each before entry no folded entry carries, with the reason. Keys not in \"renamed\" compare with the same key; a key in \"changed\" is a deliberate contract change and must differ. Before entries: test/fixtures/guard-snapshot-before-x1.json and guard-snapshot-before-fold.json.",
  "renamed": {
   "shapes.ExecRequest": "m5Shapes.ExecRequest",
   "shapes.InspectOp": "m5Shapes.InspectOp",
@@ -227,6 +227,10 @@
   "m5Widenings.PresetSnapshot": "a copy of the widened plain shape (or of one of its fields), removed with m5Widenings",
   "m5Widenings.SessionServicesEndowments": "a copy of the widened plain shape (or of one of its fields), removed with m5Widenings",
   "m5FactoryShapes.PresetSnapshot": "a copy of shapes.PresetSnapshot"
+ },
+ "changed": {
+  "m4Shapes.AccountsBatch": "HR-SYN-34 (F2): gains the optional closed and reason fields a closed watch answers (m4-interfaces.md 6); the keys were already in the gateway's vocabulary",
+  "m4Interfaces.AccountsSubscription": "HR-SYN-34 (F2): next() answers the widened AccountsBatch"
  },
  "exportsRemoved": [
   "m1bInterfaces",

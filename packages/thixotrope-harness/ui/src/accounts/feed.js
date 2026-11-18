@@ -9,9 +9,10 @@
  * (same `rev`) is taken as it is.
  *
  * Eviction (m4-interfaces 6): a subscriber the adapter evicted (idle, or
- * closed) answers `next()` with `subscriptionTexts.accountsWatchClosed`; the feed
- * then calls `watch(lastRev)` again. Any other rejection (the connection
- * went away) stops it with the error shown; a reconnect brings new powers
+ * closed) answers `next()` with `{ closed: true, reason }` (HR-SYN-34); the
+ * feed then calls `watch(lastRev)` again, at most `REWATCH_LIMIT` times in a
+ * row (then it stops with `subscriptionTexts.accountsWatchClosed` shown). A
+ * rejection (the connection went away) stops it with the error shown; a reconnect brings new powers
  * and with them a new feed. When the last listener leaves, the feed closes
  * its subscription.
  *
@@ -121,24 +122,22 @@ const makeFeed = powers => {
     if (!watching) return;
     let rewatches = 0;
     while (mine === epoch) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const batch = await E(subscription).next();
-        if (mine !== epoch) return;
-        rewatches = 0;
-        take(batch);
-      } catch (thrown) {
-        if (mine !== epoch) return;
-        if (
-          messageOf(thrown) !== subscriptionTexts.accountsWatchClosed ||
-          rewatches >= REWATCH_LIMIT
-        ) {
-          throw thrown;
+      // eslint-disable-next-line no-await-in-loop
+      const batch = await E(subscription).next();
+      if (mine !== epoch) return;
+      if (batch.closed === true) {
+        // The adapter ended the watch (HR-SYN-34: the field, never the
+        // text): watch again from the last rev, a bounded number of times.
+        if (rewatches >= REWATCH_LIMIT) {
+          throw Error(subscriptionTexts.accountsWatchClosed);
         }
         rewatches += 1;
         // eslint-disable-next-line no-await-in-loop
         const again = await watchFrom(target, mine);
         if (!again) return;
+      } else {
+        rewatches = 0;
+        take(batch);
       }
     }
   };

@@ -345,12 +345,22 @@ const m4ShapeBuilders = {
       rev: count,
       pools: list(T.PoolAccounts, subscriptionLimits.maxPools),
     }),
-  /** One push of the accounts channel (D-8; R4-85: pushed, never polled). */
+  /**
+   * One push of the accounts channel (D-8; R4-85: pushed, never polled).
+   * `closed`: the adapter ended this watch (HR-SYN-34, as the session and
+   * list channels answer `{ closed, reason }`): `reason` is `idle` (evicted
+   * after `accountsIdleMs` without a call), `client` (the viewer's
+   * `close()`) or `stopped` (the adapter's accounts core closed); `pools` is
+   * then empty and the viewer watches again.
+   */
   AccountsBatch: () =>
-    record({
-      rev: count,
-      pools: list(T.PoolAccounts, subscriptionLimits.maxPools),
-    }),
+    record(
+      {
+        rev: count,
+        pools: list(T.PoolAccounts, subscriptionLimits.maxPools),
+      },
+      { closed: M.boolean(), reason: M.or('idle', 'client', 'stopped') },
+    ),
 };
 
 /** Shapes of M4, by name (built on first use). */

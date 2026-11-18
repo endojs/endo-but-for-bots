@@ -192,7 +192,7 @@ operator's root authority, R7-22; this keeps `AgentHostAdmin`, which M3 extends,
 | `CredentialOps.poolsChanged()` | same | manager (`retirePool`, `PoolMember.retire`) | answered, no argument (as built, X-FIX J-10051: guard `M.call().returns(undefined)`; XB had it sendOnly); the retirement awaits the answer | tiny | lost with a retired adapter: harmless (the retirement ignores the failure and returns), a new incarnation loads every pool afresh; the adapter also re-reads a used pool's state when it is older than `poolStateRefreshMs` (600,000 ms), the safety net |
 | `AuditReader.page({ secret?, limit?, before? })` | `SecretsAdmin.auditReader()` | gateway (in process), CLI, tests | answered | <= 1,000 events, never into a vat | restart: get a new reader |
 | `Accounts.list()`, `forBackend(pool)`, `forSession(session)`, `refresh(pool?)`, `watch(rev?)` | `SubscriptionsAdmin.accounts()` | gateway (in process), CLI, tests | answered | adapter-local | restart: get a new one |
-| `AccountsSubscription.next()`, `close()` | `Accounts.watch()` | gateway | answered | one `AccountsBatch` | restart: re-watch; idle (no `next()` call for 60 s): evicted, its next `next()` rejects with `m4Texts.accountsWatchClosed` and the page calls `watch(lastRev)` (6) |
+| `AccountsSubscription.next()`, `close()` | `Accounts.watch()` | gateway | answered | one `AccountsBatch` | restart: re-watch; idle (no `next()` call for 60 s): evicted, its next `next()` answers `{ rev, pools: [], closed: true, reason: 'idle' }` (HR-SYN-34, F2; it rejected with `m4Texts.accountsWatchClosed` before) and the page calls `watch(lastRev)` (6) |
 | `gatewayExtension` of `AH/gateway/extensions/m4-secrets.js` (W4.6) | loaded by M3's `GW/extensions.js` at adapter start | M3's bridge | - | - | - |
 | pool provider (`claudePoolKind`, `codexPoolKind` in `backendKinds`) | `backendKinds` hook (H-4) | the endpoint, per round | in process | - | - |
 | `accountStatus` adapter tool | `adapterTools` hook; offered by both pool kinds and both API kinds (`tools` lists) | the session vat through `TurnPorts.tools` (`AdapterTool.execute`, M1a) | answered | text <= 32,768 units, staged over `inlineBytes` | adapter restarted: as any adapter tool on the turn path (M2 11: outcome-unknown recovery) |
@@ -418,8 +418,12 @@ Port of hosted-agent `account-oracle.js` and `account.js` (normalisation) and Fa
   4.5): the accounts channel itself evicts them. A `next()` that has waited
   `accountsKeepaliveMs` (30 s) with no change answers the current view again (same `rev`), so a
   live page calls `next()` at least every 30 s; a subscriber with no `next()` call for
-  `accountsIdleMs` (60 s) is idle and evicted (closed; a later `next()` rejects with
-  `m4Texts.accountsWatchClosed`; the page calls `watch(lastRev)`). A `watch` that meets the
+  `accountsIdleMs` (60 s) is idle and evicted (closed; a waiting or later `next()` answers an
+  `AccountsBatch` with `closed: true` and `reason` `idle`, `client` after the viewer's own
+  `close()`, `stopped` when the adapter's accounts core closes, and `pools: []`; the page tests
+  the field and calls `watch(lastRev)`, and shows `m4Texts.accountsWatchClosed` only after
+  `REWATCH_LIMIT` closed answers in a row. Amended by HR-SYN-34 (F2): it rejected with that text,
+  which the page compared after CapTP). A `watch` that meets the
   subscriber cap (`channelLimits.subscribersPerSession`, 32) evicts the oldest idle subscriber
   first and refuses only when none is idle. Times come from the injected `timers` (tests use a
   fake clock). W4.5 test: 40 watchers opened and abandoned (one `next()` each, then nothing),

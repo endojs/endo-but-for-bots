@@ -483,10 +483,23 @@ test('idle eviction: 40 abandoned watchers in batches, then a new watch succeeds
   const batch = await waiting;
   t.is(batch.rev, core.rev());
   t.is(batch.pools[0].members[0].windows[0].usedPercent, 50);
-  await t.throwsAsync(() => abandoned[0].next(), {
-    message: subscriptionTexts.accountsWatchClosed,
+  // HR-SYN-34: a closed watch answers a field, never a text to compare.
+  t.deepEqual(await abandoned[0].next(), {
+    rev: core.rev(),
+    pools: [],
+    closed: true,
+    reason: 'idle',
   });
+  // The viewer's own close: a waiting next() is answered closed, 'client'.
+  const pending = sub.next();
   sub.close();
+  t.deepEqual(await pending, {
+    rev: core.rev(),
+    pools: [],
+    closed: true,
+    reason: 'client',
+  });
+  t.like(await sub.next(), { closed: true, reason: 'client' });
 });
 
 test('32 live watchers make a 33rd watch fail; an idle one is evicted for a new one', async t => {
@@ -510,9 +523,7 @@ test('32 live watchers make a 33rd watch fail; an idle one is evicted for a new 
   for (const sub of live.slice(1)) void sub.next().catch(() => {});
   const newcomer = core.accounts.watch();
   t.is(core.subscriberCount(), 32);
-  await t.throwsAsync(() => live[0].next(), {
-    message: subscriptionTexts.accountsWatchClosed,
-  });
+  t.like(await live[0].next(), { closed: true, reason: 'idle', pools: [] });
   newcomer.close();
   for (const sub of live) sub.close();
   t.is(core.subscriberCount(), 0);

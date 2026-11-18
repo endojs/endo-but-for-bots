@@ -57,6 +57,7 @@ const beforeFold = JSON.parse(
  * @type {{
  *   renamed: Record<string, string>,
  *   removed: Record<string, string>,
+ *   changed: Record<string, string>,
  *   exportsRemoved: string[],
  *   exportsAdded: string[],
  * }}
@@ -73,7 +74,11 @@ test('every guard, shape, method list and text equals its snapshot from before t
   for (const [key, digest] of Object.entries(after.entries)) {
     const from = foldMap.renamed[key] ?? key;
     t.true(from in old, `${key}: ${from} is a before entry`);
-    t.is(digest, old[from], `${key} equals the old ${from}`);
+    if (key in foldMap.changed) {
+      t.not(digest, old[from], `${key} changed: ${foldMap.changed[key]}`);
+    } else {
+      t.is(digest, old[from], `${key} equals the old ${from}`);
+    }
     carried.add(from);
   }
   // Every before entry is carried by a folded one or removed with a reason.
