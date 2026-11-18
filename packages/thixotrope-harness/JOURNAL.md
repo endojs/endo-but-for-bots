@@ -11765,3 +11765,62 @@ too-big `test.failing` (J-9407) may now pass or fail differently; any harness me
 bytes into a vat now breaks with `FRAME_TOO_LARGE`.
 Decision: the PM runs the harness integration files (or sets `THIXOTROPE_VAT_FRAME_BYTES=65536`,
 which the harness's 50 M budget allows) before merging.
+
+### J-10110 2026-11-18 CT where the cadence snapshot is decided and what state covers it - read
+Evidence: `pkg/src/core/durable-worker-transport.js` (whole file: the cadence check in the crank
+delivery operation, `checkpointInternal`, `sleepInternal`, the idle timer, `enqueue`);
+`designs/arch-review/core-daemon.md` AR-CORE-1 (the transport's life cycle spread over about ten
+variables) and the snapshot row of its flow table; J-9462, J-9494; `designs/process.md` 2 and 3.
+Reading: whether a snapshot is due is already a function of three journal indices (delivered,
+cut, failed-at), so "due" needs no flag of its own and cannot be lost while a delivery is in
+flight. "The queue is empty" is already expressible: `opGeneration` unchanged since the settling
+operation was queued. The wait is a timer handle like `idleTimer`, cleared by `noteActivity`.
+Decision: no new boolean; a derived `cadenceBacklog()`, one timer handle, `checkpointQueued`
+reused; constants `CADENCE_IDLE_MS` 50 and `CADENCE_FORCE_FACTOR` 4, exported, no option (no caller
+must choose). Sleep, crash, retire and `end` untouched: each is an operation and clears the wait.
+
+### J-10111 2026-11-18 CT cadence deferral tests - test
+Evidence: `pkg/test/durable-worker-cadence.test.js` (new, 6 tests on manual timers), the three
+transport files under ses-ava, `tsc`, eslint and prettier on the changed files; commit `354e366739`.
+Reading: all 6 new tests fail against the previous transport (run on a temporary copy, removed)
+and pass after. Three tests pinned the immediate snapshot: the crash-loop failed-cadence test (now
+fires the wait; still 10 attempts for 40 frames), the session cadence test (idles 150 ms after
+each write; snapshots still at 3 and 6, one for the burst) and the never-idle test (12 calls,
+suffix within 4 x the cadence; with forcing disabled it fails, so it exercises the forced path).
+41 tests pass in each configuration. eslint: no errors, no new warning kind.
+Fit: good.
+
+### J-10112 2026-11-18 CT archive.stall before and after the deferral - measure
+Evidence: `node scripts/run-lock.mjs --shared -- node perf/archive.perf.mjs` (grown to 200 turns,
+60 s window), THIX_AGENT=CT. Before: tree `ff74574cac` with the transport of `354e366739~1` placed
+in the working tree for the run; after: `a205507543` (differs from it only in JOURNAL.md).
+{"run":"before","p99":2170.2,"median":689.5,"max":2170.2,"samples":71,"snapshots":4,"snapshotMsEach":604.9,"snapshotInSlowestTurn":1560.6,"loadAvg":[1.21,2.19,2.74]}
+{"run":"after","p99":1194.6,"median":785.2,"max":1194.6,"samples":71,"snapshots":4,"snapshotMsEach":226.3,"snapshotInSlowestTurn":0,"loadAvg":[2.93,2.08,2.5]}
+Two more after runs, not a pair: at `0edc2ab05a` with another unit's hub file uncommitted, p99 =
+max 1,252.3, median 728.4, 72 samples, 4 snapshots, load 2.4-3.4; at `354e366739` (load 4.5) p99 =
+max 4,023.6, median 1,099.4, 45 samples, 3 snapshots, the slowest turn (241, Composer) holding a
+2,193.6 ms snapshot with 1,188 ms of hub time.
+Reading: with the deferral the snapshots of the paired run fell outside the 5 slowest turns and
+p99 dropped from 2.17 s to 1.19 s; the median is within noise (load differed). One snapshot a
+window is too few to call the stall gone: at load 4.5 one still landed inside a turn, most likely
+in a gap over 50 ms between that turn's deliveries to the session vat (not verified; the forced
+limit would need about 110 turns without a quiet). The "per turn" snapshot attribution is
+status-to-status, so a snapshot in the quiet just after a turn can be counted in it.
+Fit: partial: the cadence no longer cuts a turn whose deliveries are back to back; the quiet is
+the vat's, not the turn's.
+
+### J-10113 2026-11-18 CT what was run and what was not - fit
+Evidence: run-lock `ct-core-node` (`corepack yarn test` in `pkg/`): exit 124 at the 10-minute box;
+lockdown 436 passed, unsafe 439 passed (3 skipped each, the XS files), endo cut at its start, no
+failure in the log. The transport files ran in all three configurations separately (J-10111).
+Not run: the Ironhorse lane (by rule), the harness unit lane and integration files, an exclusive
+perf pass. Not verified: which path took the in-turn snapshot of the load-4.5 run; the worst-case
+replay (1,024 entries, about 72 s at 70 ms per delivery) is computed, not measured.
+Decision: C-24 partly closed (CC-026). Follow-ups for the PM: a longer quiet (a few hundred ms)
+or a turn-end hint from the embedder; a perf row that counts snapshots inside turns by timestamps
+rather than status deltas.
+
+### J-10114 2026-11-18 CT time record - process
+Evidence: first command 12:53:54Z. Over 60 s: core Node suite 10:00 (box, exit 124); archive perf
+8:47, 4:40, 4:15 (before) and 4:16 (after), all in shared slots; no slot wait recorded above a
+few seconds. Last command: the commit of this entry.
