@@ -341,6 +341,53 @@ test('a failed append is retried by the next record, in order', async t => {
   t.is(nodes[1].parentId, nodes[0].id);
 });
 
+test('a failed mail append leaves no dangling parent link', async t => {
+  const { mount, files } = makeMemoryMount();
+  let failNext = false;
+  const flakyMount = makeExo(
+    'FlakyMount',
+    M.interface('FlakyMount', {}, { defaultGuards: 'passable' }),
+    {
+      list: () => mount.list(),
+      maybeReadText: path => mount.maybeReadText(path),
+      writeText: (path, text) => mount.writeText(path, text),
+      makeFile: (path, text) => mount.makeFile(path, text),
+      lookup: path => {
+        const file = mount.lookup(path);
+        return makeExo(
+          'FlakyFile',
+          M.interface('FlakyFile', {}, { defaultGuards: 'passable' }),
+          {
+            append: text => {
+              if (failNext) {
+                failNext = false;
+                throw Error('transient');
+              }
+              return file.append(text);
+            },
+          },
+        );
+      },
+    },
+  );
+  const transcript = await openWorkerTranscript({
+    mount: flakyMount,
+    workerName: 'alice',
+    now: makeClock(),
+  });
+  failNext = true;
+  await t.throwsAsync(() => transcript.recordMail({ number: 1n }), {
+    message: 'transient',
+  });
+  await transcript.recordMessages([user('one')]);
+  const { entries } = loadFromJsonl(
+    /** @type {string} */ (files.get(transcript.fileName)),
+  );
+  const nodes = entries.filter(entry => entry.type !== 'header');
+  t.is(nodes.length, 1);
+  t.is(nodes[0].parentId, null);
+});
+
 /**
  * A PiAgent stand-in: `runRound` appends the round's messages to
  * `state.messages`, as pi-agent-core does, and may throw midway.
@@ -385,7 +432,6 @@ test('the round runner seeds, records mail, and records even a failed round', as
     .map(entry => (entry.type === 'message' ? entry.message.role : entry.type));
   t.deepEqual(kinds, ['custom', 'user', 'assistant', 'custom', 'user']);
 
-  // A restarted worker seeds its PiAgent and appends only the new round.
   const second = await openWorkerTranscript({
     mount,
     workerName: 'alice',

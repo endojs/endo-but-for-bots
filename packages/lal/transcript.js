@@ -1,4 +1,3 @@
-// @ts-nocheck - E() generics don't work well with JSDoc types for remote objects
 /* eslint-disable no-await-in-loop */
 
 // Lal's durable session transcript: a Pi-compatible JSONL file per worker
@@ -9,16 +8,23 @@
 import { E } from '@endo/eventual-send';
 import { encodeHex } from '@endo/hex';
 import { decodeUtf8, encodeUtf8 } from '@endo/utf8';
-import {
-  loadFromJsonl,
-  assemblePath,
-  makeCustomEntry,
-  makeSessionWriter,
-  sessionFileName,
-} from '@endo/jsonl-transcript';
+// The package root's `types.d.ts` declares types only, so the values come
+// from the subpath exports, which carry their own JSDoc types.
+import { makeCustomEntry } from '@endo/jsonl-transcript/entries.js';
+import { sessionFileName } from '@endo/jsonl-transcript/session-path.js';
+import { makeSessionWriter } from '@endo/jsonl-transcript/writer.js';
+import { loadFromJsonl, assemblePath } from '@endo/jsonl-transcript/reader.js';
 
-/** @import { ChatMessage } from '@endo/jsonl-transcript' */
-/** @import { TranscriptMail, TranscriptMount, WorkerTranscript } from './agent.types.js' */
+/** @import { ChatMessage, WriterFs } from '@endo/jsonl-transcript' */
+/**
+ * @import {
+ *   TranscriptFile,
+ *   TranscriptMail,
+ *   TranscriptMount,
+ *   TranscriptsHost,
+ *   WorkerTranscript,
+ * } from './agent.types.js'
+ */
 
 export const TRANSCRIPTS_MOUNT_NAME = 'transcripts-for-lal';
 
@@ -26,13 +32,15 @@ export const TRANSCRIPTS_MOUNT_NAME = 'transcripts-for-lal';
 const PROJECTED_ROLES = harden(['user', 'assistant', 'toolResult']);
 
 /**
- * @param {any} message
- * @returns {boolean}
+ * @param {unknown} message
+ * @returns {message is ChatMessage}
  */
 const isProjected = message =>
   message !== null &&
   typeof message === 'object' &&
-  PROJECTED_ROLES.includes(message.role);
+  PROJECTED_ROLES.includes(
+    /** @type {{ role?: string }} */ (message).role ?? '',
+  );
 
 /**
  * @param {string} path
@@ -52,14 +60,16 @@ const makeEnoent = path => {
  * The file mode is the daemon's concern, not the adapter's.
  *
  * @param {TranscriptMount} mount - A writable `EndoMount`.
+ * @returns {WriterFs}
  */
 export const makeMountWriterFs = mount => {
   /** @param {string} path */
   const readText = path => E(mount).maybeReadText(path);
   return harden({
     async mkdir() {
-      // Session files sit flat at the mount root.
+      // Nothing to create: files sit at the mount root.
     },
+    /** @param {string} path */
     async readFile(path) {
       const text = await readText(path);
       if (text === undefined) {
@@ -70,17 +80,23 @@ export const makeMountWriterFs = mount => {
     // The writer truncates only to the end of the last complete line, so
     // `length` never falls inside a multibyte sequence. The mount has no
     // truncate, so this is a non-atomic read-and-rewrite of the whole file.
+    /**
+     * @param {string} path
+     * @param {number} length
+     */
     async truncate(path, length) {
       const text = (await readText(path)) ?? '';
       const kept = decodeUtf8(encodeUtf8(text).slice(0, length));
       await E(mount).writeText(path, kept);
     },
+    /** @param {string} path */
     async open(path) {
       if ((await readText(path)) === undefined) {
         await E(mount).makeFile(path, '');
       }
-      const file = await E(mount).lookup(path);
+      const file = /** @type {TranscriptFile} */ (await E(mount).lookup(path));
       return harden({
+        /** @param {string} text */
         write: text => E(file).append(text),
         async close() {
           // The mount owns the file; there is no handle to release.
@@ -91,12 +107,17 @@ export const makeMountWriterFs = mount => {
 };
 harden(makeMountWriterFs);
 
+/**
+ * @param {Uint8Array} bytes
+ * @returns {Uint8Array}
+ */
 const defaultFillRandom = bytes => {
   const { crypto } = globalThis;
   if (crypto === undefined) {
     throw Error('uuidv7: no globalThis.crypto; pass fillRandom explicitly');
   }
-  return crypto.getRandomValues(bytes);
+  crypto.getRandomValues(/** @type {Uint8Array<ArrayBuffer>} */ (bytes));
+  return bytes;
 };
 
 const MAX_UUIDV7_MILLISECONDS = 2n ** 48n - 1n;
@@ -158,7 +179,7 @@ const workerPrefix = workerName => `w${encodeHex(encodeUtf8(workerName))}--`;
  */
 export const findLatestSessionFile = async (mount, workerName) => {
   const prefix = workerPrefix(workerName);
-  const names = /** @type {string[]} */ (await E(mount).list());
+  const names = await E(mount).list();
   const candidates = names
     .filter(name => {
       const match = /^\d{14}_(.*)\.jsonl$/.exec(name);
@@ -235,9 +256,9 @@ export const openWorkerTranscript = async ({
     });
 
   const writer = makeSessionWriter({ path: fileName, fs });
-  // Opening repairs any torn tail before we read the file back.
-  // `writeHeader` is a no-op when resuming a non-empty file.
-  await writer.writeHeader({
+  // Pi readers ignore unknown header keys; `HeaderEntry` does not list the
+  // `endo:` extensions, so the header is built apart from the call.
+  const header = {
     sessionId: sessionIdentifier ?? fileName,
     createdAt: now(),
     cwd,
@@ -245,7 +266,8 @@ export const openWorkerTranscript = async ({
     ...(guestIdentifier === undefined
       ? {}
       : { 'endo:guestId': guestIdentifier }),
-  });
+  };
+  await writer.writeHeader(header);
 
   const text = (await E(mount).maybeReadText(fileName)) ?? '';
   const graph = loadFromJsonl(text);
@@ -253,12 +275,14 @@ export const openWorkerTranscript = async ({
   const lastNode = nodes.at(-1);
   if (lastNode !== undefined) {
     lastIdentifier = lastNode.id;
-    seedMessages = assemblePath(graph, lastIdentifier)
-      .filter(entry => entry.type === 'message' && isProjected(entry.message))
-      .map(entry => entry.message);
+    seedMessages = assemblePath(graph, lastIdentifier).flatMap(entry =>
+      entry.type === 'message' && isProjected(entry.message)
+        ? [entry.message]
+        : [],
+    );
   }
 
-  /** Messages already on file, by identity, so a round appends only news. */
+  /** @type {WeakSet<object>} */
   const recorded = new WeakSet();
 
   const link = () => {
@@ -271,14 +295,13 @@ export const openWorkerTranscript = async ({
   /** @type {WorkerTranscript} */
   const transcript = {
     fileName,
-    /** PiAgent `initialState.messages` for a resumed session, as a copy. */
     get seedMessages() {
       return [...seedMessages];
     },
     /**
      * Mark seeded messages as already on file once the PiAgent holds them.
      *
-     * @param {readonly any[]} messages
+     * @param {readonly unknown[]} messages
      */
     markRecorded(messages) {
       for (const message of messages) {
@@ -301,7 +324,15 @@ export const openWorkerTranscript = async ({
       }
       if (mail.replyTo !== undefined) payload.replyTo = mail.replyTo;
       if (mail.number !== undefined) payload.number = String(mail.number);
-      await writer.append(makeCustomEntry('endo:mail', { ...link(), payload }));
+      const parentIdentifier = lastIdentifier;
+      try {
+        await writer.append(
+          makeCustomEntry('endo:mail', { ...link(), payload }),
+        );
+      } catch (error) {
+        lastIdentifier = parentIdentifier;
+        throw error;
+      }
     },
     /**
      * Append every projected PiAgent message not yet on file, in order. A
@@ -309,7 +340,7 @@ export const openWorkerTranscript = async ({
      * write is retried by the next call and the file stays an in-order
      * prefix of the PiAgent's history.
      *
-     * @param {readonly any[]} messages - The PiAgent's `state.messages`.
+     * @param {readonly unknown[]} messages - The PiAgent's `state.messages`.
      */
     async recordMessages(messages) {
       for (const message of messages) {
@@ -339,10 +370,11 @@ harden(openWorkerTranscript);
  * reported to `onError` and never fails the round: a lost transcript line
  * must not take down the worker.
  *
+ * @template {{ state: { messages: readonly unknown[] } }} P
  * @param {object} options
  * @param {WorkerTranscript} options.transcript
- * @param {{ state: { messages: readonly unknown[] } }} options.piAgent
- * @param {(piAgent: any, prompt: string) => Promise<unknown>} options.runRound
+ * @param {P} options.piAgent
+ * @param {(piAgent: P, prompt: string) => Promise<unknown>} options.runRound
  * @param {(error: unknown) => void} [options.onError]
  * @returns {(prompt: string, mail?: TranscriptMail) => Promise<void>}
  */
@@ -383,17 +415,22 @@ harden(makeTranscriptRoundRunner);
  * `provideScratchMount` mints a fresh mount on every call, so an existing
  * name is reused rather than overwritten.
  *
- * @param {any} hostAgent - An `EndoHost` (or anything with `has`,
- *   `lookup`, `provideScratchMount`).
+ * @param {TranscriptsHost} hostAgent - An `EndoHost`, or anything with
+ *   `has`, `lookup`, `provideScratchMount`.
  * @param {string} [petName]
+ * @returns {Promise<TranscriptMount>}
  */
 export const provideTranscriptsMount = async (
   hostAgent,
   petName = TRANSCRIPTS_MOUNT_NAME,
 ) => {
   if (await E(hostAgent).has(petName)) {
-    return E(hostAgent).lookup(petName);
+    return /** @type {Promise<TranscriptMount>} */ (
+      E(hostAgent).lookup(petName)
+    );
   }
-  return E(hostAgent).provideScratchMount(petName);
+  return /** @type {Promise<TranscriptMount>} */ (
+    E(hostAgent).provideScratchMount(petName)
+  );
 };
 harden(provideTranscriptsMount);

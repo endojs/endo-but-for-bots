@@ -80,21 +80,49 @@ export type TranscriptMail = {
   replyTo?: string;
 };
 
-/** The writable mount methods the transcript harness uses. */
+/**
+ * The writable mount methods the transcript harness uses. The mount is a
+ * reference reached only through `E()`, so a method may answer with a
+ * promise; `E()` always yields one.
+ */
 export type TranscriptMount = {
-  list(): string[];
-  maybeReadText(path: string): string | undefined;
-  writeText(path: string, text: string): void;
-  makeFile(path: string, text?: string): void;
-  lookup(path: string): unknown;
+  list(): Eventual<string[]>;
+  maybeReadText(path: string): Eventual<string | undefined>;
+  writeText(path: string, text: string): Eventual<void>;
+  makeFile(path: string, text?: string): Eventual<unknown>;
+  lookup(path: string): Eventual<unknown>;
 };
 
-/** One worker's session transcript, held only by the trusted harness. */
+/** A file in the transcripts mount, as returned by `lookup`. */
+export type TranscriptFile = {
+  append(text: string): Eventual<void>;
+};
+
+/** The host-agent methods `provideTranscriptsMount` uses. */
+export type TranscriptsHost = {
+  has(petName: string): Eventual<boolean>;
+  lookup(petName: string): Eventual<unknown>;
+  provideScratchMount(petName: string): Eventual<unknown>;
+};
+
+/** A local value or a promise for one. */
+type Eventual<T> = T | Promise<T>;
+
+/**
+ * One worker's session transcript, held only by the trusted harness. It
+ * assumes one round at a time: `recordMail` and `recordMessages` share the
+ * parent chain.
+ */
 export type WorkerTranscript = {
   /** The session file's name at the mount root. */
   readonly fileName: string;
   /** A fresh copy of the resumed session's PiAgent seed messages. */
   readonly seedMessages: ChatMessage[];
+  /**
+   * Mark messages as already on file, by object identity; non-objects are
+   * skipped. Call it once the PiAgent holds the seed messages and before the
+   * first `recordMessages`, or seeded messages are appended again.
+   */
   markRecorded(messages: readonly unknown[]): void;
   recordMail(mail: TranscriptMail): Promise<void>;
   recordMessages(messages: readonly unknown[]): Promise<void>;
