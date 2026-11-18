@@ -8348,3 +8348,50 @@ event, no answer or a timeout. The client uses `m4TextOf.responsesFailed` with p
 reference's diagnostic pattern admits `stream.*`). Claude transport failures keep M2's
 Anthropic API texts.
 Decision: works as is; the PM may add fixed texts to `texts-m4.js` (W4.0's file).
+
+### J-0680 2026-11-18 M4 W4.6 composition, wiring and sign-in - build
+Evidence: `subscriptions/{index,provider,credential-ops}.js`, `gateway/extensions/m4-secrets.js`,
+H-3 (`attach.js`), H-4 (`index.js`), H-14 tool lines, H-8 step, `scripts/subscription-login.mjs`;
+tests `m4-provider`, `m4-provider-wiring`, `m4-provider-provision`, `m4-login`,
+`m4-gateway-extension` (19 tests, about 3 s together, no supervisor).
+Reading: `makeSubscriptions` composes W4.1-W4.5 lazily: a pool loads (`poolState`, one crank)
+at its first round, catalogue read or accounts use; members, sessions and pools are keyed by
+their presences only. `makePoolProvider` runs M2's `runProviderRound` with a member loop:
+exhausted 429 before delivery hands the rebuilt request to the next member, 401 renews once and
+retries once, overloads retry on the kind's schedule, anything after a delivery fails the round.
+The system text is read once per round (`systemTextOf`), checked with a staged system and a
+hand-over on both kinds. Sign-in and `--value-file` write sealed boxes only.
+
+### J-0681 2026-11-18 Pool round and hand-over cost - perf
+Evidence: in-process Node rounds through M2's Endpoint against the fake subscription server on
+loopback (not a perf file; W4.8 owns them), 5 s windows, a fresh pool core per round. Plain
+round (one member answers `claude-text.sse`): 446 samples, median 9.01 ms, p99 21.59 ms, 1
+request per round. Hand-over (member A refused 429-exhausted, B answers): 93 samples, median
+17.84 ms, p99 32.99 ms, 2 requests per round, 1 mark send. Budget (W4.8's
+`subscriptions.handover`): <= 50 ms added; measured about 9 ms added (one more loopback request,
+the header reading, one `poolChanged`).
+Reading: the hand-over costs one request; the vat path is untouched. Windows are 5 s, not 60 s:
+informative only.
+
+### J-0682 2026-11-18 Objects as keys across the adapter - fit
+Evidence: `index.js` keeps `Map<Backend, PoolRecord>`, `WeakMap<PoolMember, MemberCredential>`,
+`WeakMap<PoolMember, Reading>`; the accounts oracle and pool core take the same presences.
+Reading: good fit: CapTP keeps one presence per remote object for the incarnation, so the
+adapter needs no ids, and a member shared by two pools shares its credential flight and reading
+for free. Poor fit in three places: (1) `CredentialOps` needs the incarnation's one Secrets store,
+which `makeSecretsOps` does not expose (the facet reads `secrets().store`; until the store is
+exported every `describeSecrets` throws `notBuilt`); (2) the manager does not tell the adapter
+when a member or pool is retired, so a loaded pool keeps a retired member until the adapter
+restarts (W4.1's report); (3) `accountStatus` reaches `TurnPorts.tools`, but the session offers
+the model only tool-table entries (`toolSetFor`), so no model sees the tool yet.
+Decision: all three reported to the PM with the exact change.
+
+### J-0683 2026-11-18 Scripts that import Endo packages statically - fit
+Evidence: `node scripts/provision.mjs` and a first `subscription-login.mjs` both fail at start
+with `assert is not defined` from `eventual-send`: a static import of an Endo package is
+evaluated before `_init.mjs`'s top-level `await import('@endo/init')` settles when the script is
+the entry. Under ses-ava (already locked down) the same files load.
+Reading: `subscription-login.mjs` imports everything after `_init.mjs` dynamically and installs
+the guest prelude itself; its CLI prints its usage line. `provision.mjs` (M1a) still fails as an
+entry.
+Decision: reported to the PM (M1a's file).
