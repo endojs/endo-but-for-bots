@@ -191,7 +191,7 @@ const adoptToolEntry = harden({
 /** The entries appended to `toolTable` (H-5), in `packageToolNames` order. */
 export const packageToolEntries = harden([adoptEntry, adoptToolEntry]);
 
-/** @param {{ core: any, active: any }} context */
+/** @param {{ core: any, active: any, round?: number }} context */
 const closePackages = ({ core, active }) => {
   partOf(core)?.table.closeTurn(active.turnId);
 };
