@@ -13300,3 +13300,111 @@ HR-SYN-22's lasting part (a core state-directory power, AR-SYN-28) and the gatew
 ### J-10143 2026-11-18 S1 time record - verified
 Time: first command 18:52:15Z. Over 60 s: adapter lane 64 s; integration batch 583.6 s wall.
 Scratch `tmp/S1` removed. Last command: the date after this entry's commit. Fit: neutral.
+
+### J-10150 2026-11-18 S2 HR-SYN-19: every perf window through windowMs - built
+Evidence: `f740d47b03`. 24 window reads in 18 perf files (`_m3-client`, `_m4`, `archive` x2,
+`creation-m5` x2, `exec-m5` x2, `gateway-restart` x2, `history`, `history.restart`, `import` x2,
+`journal`, `mentions`, `presets` x2, `provider`, `queue`, `subscriptions-lifecycle`,
+`throughput`, `tools`, `ui`) read `Number(process.env.X ?? n)` and ignored `PERF_WINDOW_SCALE`;
+they now call `windowMs(name, fallback)`. `windowMs` takes `{ scaled, env }`; the one unscaled
+read is `M3_RESTART_END_MS`, the gateway-restart file deadline (a bound inside the box, not a
+window). `test/perf-window.test.js` (new) covers `runWindow` (min, max, back to back),
+`windowFields` and `windowMs`, and scans `perf/*.mjs` for a window variable read outside
+`windowMs`. Before: 2 of its 5 cases failed (the env option, 24 bypassing reads); after: 5 pass.
+At the default scale every window is the same number as before.
+Reading: the reviewer's unscaled candidates (`history.restart`, `gc`, `journal`) did not fail
+falsely at 0.05 (J-10153): their restart windows already hold a `runWindow` minimum (gc 2,
+restart 3, crash 3), so no other window takes `scaled: false`.
+Left for step 5 (not merged here): `_m4.inWindow`, `_m3-client.measureWindow`,
+`_long-session.overWindow` and the other private window helpers and 13 inline loops onto
+`runWindow`; the 14 medians beside `summarize`; `window` as a number in 7 rows; the perf variable
+table (README:217 still says the scale reaches "every window", now true for every read).
+Fit: good.
+
+### J-10151 2026-11-18 S2 HR-SYN-38 and the regression lists as scripts - built
+Evidence: `ab86c27484`. `scripts/test-integration.mjs`: `--dir DIR` (repeatable),
+`defaultFiles(dirs)` with `.test.js` and `.test.mjs`; `test:browser` passes `--dir
+test/browser`, `test:integration` keeps `test/integration` + `test/template` (51 files, same list
+as before). `--list core|milestones|M3|M4|M5` runs a process.md 3.1 list as one batch:
+`corepack yarn test:regression:core` (unit and adapter lanes without a slot, then the 24 M0-M2
+files and the template test) and `test:regression:milestones` (M3, M4, M5: 26 integration + 5
+browser files); integration and browser variables are set per file. Every summary now prints
+held and waited time per file from `runs.jsonl` (the wrapper's line: label, lane, start time) and
+the wall time. `test/integration-runner.test.js` (new, 5 cases; before: import failure) checks
+the defaults, `--dir`, that every integration, template and browser file is in exactly one list,
+and the run-log match.
+Run: `corepack yarn test:browser --jobs 3` with no file ran the 5 browser files, all exit 0,
+634.8 s held, 219.8 s wall (m3-ui 116, m3-ui-history 119, m3-ui-restart 213, m4-ui 86, m5-ui
+100). The two regression scripts were not run whole.
+Fit: good.
+
+### J-10152 2026-11-18 S2 HR-SYN-20, HR-SYN-21: one template key; scoped key file and spike switch - built
+Evidence: `fb6475f421`. `templateDigest`/`templateKey` (`test/template/index.js`) key every
+template: the worker binary, `boot.js`, `worker-peer.js`, every `.js` under
+`packages/thixotrope/src` but `tui/` and `web/` (WORKSPACE_VERSION's file; the regex and its
+`'?'` are gone, a missing input throws naming it), crank budget, slot ceiling and persisted serve
+settings, the id; for a provisioned template also each guest program's bundle digest (exec,
+factory, session), every file under `guest/`, the manager part (`resources/agent-host/*.js`),
+`provision-steps.js` and its step files, `bundle-guest.mjs`, `guest-prelude.js`, `config/`; plus
+the caller's `sources` (files or directories) and `extra` (JSON). Paths are hashed relative to
+the repository, so worktrees with the same content agree. Removed: `TEMPLATE_VERSION`,
+`M3_TEMPLATE_VERSION` (m3-300 now names `_m3-client.mjs`, `scripts/export.mjs`,
+`_m2-lifecycle.js` and `impl/archive`), `LONG_TEMPLATE_VERSION` (the long-session keys are
+`templateDigest` with the same sources, 12 hex digits; the description file keeps a format
+`version: 1`), the `_m4.js` extra hash and the `_m5-objects.js` fixture hash (m5o names
+`test/fixtures/m5-objects.js`). HR-SYN-21: `integrationEnabled` is `THIX_HARNESS_INTEGRATION`
+only; `startFromTemplate` and the perf `provision` take `secretsKeyFile` (`supervisorEnv`: that
+supervisor's environment, every restart of it); `useKeyFile` became `testKeyFile` in
+`test/integration/_m4.js` and `perf/_m4.mjs` and no longer sets `THIX_HARNESS_SECRETS_KEY` in the
+process. Four new cases in `template.test.js` (before: import failure; after: 9 pass).
+Rebuild, once (parallel shared slots, 175 s wall): m1a 67 s, exec 80, pool 76, m4 72, m5o 79,
+m3-300 116 (built, not imported from a cache); long 200 33 s, long 1000 169 s, busy 10x300 358 s.
+Not built: long 5000 and busy 20..50 (about 33 minutes more of chain from the X-CLOSE times).
+Runs: `template.test.js` 121 s, `m4-secrets` 112 s, `m4-restart` 181 s, `m5-objects` 199 s held,
+all exit 0. Reading: S1's manager commit `9d43c8141a` landed between the long 200 and long 1000
+builds and changed the key of long 200, which was rebuilt (26 s): the key follows the manager
+part, as intended. Left: `templateIdFor` and the m1a/m1b template options are still in product
+provisioning with their own hash in the id (HR-SYN-20's "before M6" part, HR-TEST-5); the
+other key-file setters (`useTestWrappingKey`, `m2-secrets`, `m2-providers`, `m2-catalog`) still
+set the process variable (step 3).
+Fit: good.
+
+### J-10153 2026-11-18 S2 every perf check at PERF_WINDOW_SCALE=0.05, shared - measured
+Each file as `node scripts/run-lock.mjs --shared -- node perf/<name>.perf.mjs --shared`, 3 then 2
+at once, load 3-5, beside S1's and other lanes' runs; HISTORY_POINTS=200, JOURNAL_POINTS=1000,
+THROUGHPUT_SESSIONS=10, THROUGHPUT_BUSY=10. 38 files, **4,267 s held** (the full-scale passes
+held about 8,175 s), 19:13-19:41 wall plus the two history files rerun; no time-out, no `.error`
+row, longest 385 s (crash: count-based). Held s: gateway-session 84, gateway 49, ui 106,
+subscriptions 117, secrets 67, gateway-restart 215, accounts 17, creation-m5 68,
+subscriptions-lifecycle 321, exec-m5 134, mentions 50, presets 59, tools 144, gc 219,
+concurrency 88, journal 34, crash 385, throughput 101, restart 204, restart.crash 186, hub 78,
+hub.sessions 220, crank 32, hub.growth 168, crank.mid 68, exec 85, frames 69, crank.late 147,
+turn 79, install 67, queue 4, provider 7, pool 121, session 169, import 72, archive 166,
+history.restart 22, history 45. Several include a template rebuild on demand (S1's manager
+commit invalidated them mid-run). Exit 1 in 16 files are budget misses under load and with few
+samples (the known ones: crash.restart.bound5, session.create.pool, concurrency.10, mentions,
+presets, tools.local, archive.stall); `exec.tooBig.probe.b` failed its result check, not a
+window (left for its owner). The rows are a smoke, not recorded numbers.
+Fit: good (the knob now reaches every file); poor where setup dominates (subscriptions-lifecycle,
+crash, restart, gateway-restart stay over 3 minutes).
+
+### J-10154 2026-11-18 S2 perf:pass <milestone> - built
+Evidence: `5b8d7f1d05`, `43c1fb7997`. `perf/_pass.mjs` (`corepack yarn perf:pass M2|M3|M4|M5|all
+[--no-templates]`): the milestone templates each in a boxed shared wrapper (`node perf/_pass.mjs
+templates <name>`), the long-session ones for M2 and `all`, then the milestone's checks plus
+the cross-check (session, turn, exec) back to back, each `run-lock.mjs --exclusive --label
+perf-<name>` (ui with THIX_HARNESS_BROWSER=1), and a table of held time per file from
+`runs.jsonl` and the wall time. `test/perf-pass.test.js` (new, 3 cases) checks each of the 38
+checks is in exactly one list. Only the template step was run (the six builds of J-10152); the
+exclusive pass itself was not run (it stops every lane).
+Fit: good.
+
+### J-10155 2026-11-18 S2 time record - verified
+Time: first command 18:52:15Z. Over 60 s: six template builds in parallel 175 s; long-session
+templates 19:12-19:27 (33 + 169 + 358 s builds, waits); `test:browser` 220 s wall; four
+integration files 403 s wall; perf smoke 19:13-19:41 (4,267 s held, 489 s waited); history
+reruns about 70 s; unit lane 67 s (1,284 passed, 116 skipped). `lint:duplicates` 3.22 % (869 of
+26,998). tsc: no error in the files of this unit (errors seen came from another unit's
+uncommitted adapter edits). No guest or manager change: bundles exec 63,826, factory 164,836,
+session 214,690 bytes before, unchanged by this unit. Scratch `tmp/S2` removed.
+Fit: neutral.
