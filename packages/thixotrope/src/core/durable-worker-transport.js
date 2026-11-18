@@ -32,6 +32,20 @@ const MAX_CRASH_RETRY_DELAY_MS = 60_000;
 export const GC_FRAMES_PER_CRANK = 64;
 
 /**
+ * A cadence snapshot that falls due waits until the transport has had no
+ * operation queued or running for this long, so it lands between turns
+ * rather than between one turn's deliveries.
+ */
+export const CADENCE_IDLE_MS = 50;
+
+/**
+ * A worker that is never idle that long snapshots anyway once this many
+ * cadences of deliveries have accrued: the bound on the journal a restart
+ * replays.
+ */
+export const CADENCE_FORCE_FACTOR = 4;
+
+/**
  * @typedef {{ b64: string, hubSequence?: string, gc?: true }} JournalEntry
  */
 
@@ -159,9 +173,11 @@ harden(journalCranks);
  *   initiative. An explicit `sleep` is still honoured: residency is the host
  *   declining to take that decision, not a refusal to obey one
  * @param {number} [options.snapshotEveryDeliveries] snapshot an awake worker
- *   once this many deliveries have accrued since its last snapshot, so a
- *   worker that never idles still bounds its journal, and the replay a
- *   restart needs; omitted means an awake worker snapshots only at sleep
+ *   once this many deliveries have accrued since its last snapshot and the
+ *   transport has then been idle for {@link CADENCE_IDLE_MS}, or at once when
+ *   {@link CADENCE_FORCE_FACTOR} times as many have, so a worker that never
+ *   idles still bounds its journal, and the replay a restart needs; omitted
+ *   means an awake worker snapshots only at sleep
  * @param {number} [options.maxDeliveryAttempts] record a failure, as a halt
  *   does, once this many attempts in a row have crashed without progress;
  *   omitted means crashes are not counted, and a worker that crashes on
@@ -271,6 +287,15 @@ export const makeDurableWorkerTransport = (
 
   /** @type {TimerHandle | undefined} */
   let idleTimer;
+  /**
+   * The wait for quiet before a due cadence snapshot. Whether one is due is
+   * not kept apart: it follows from the journal indices (`cadenceBacklog`),
+   * so a snapshot that falls due during a delivery is found when the queue
+   * next empties.
+   *
+   * @type {TimerHandle | undefined}
+   */
+  let cadenceTimer;
   let opGeneration = 0;
 
   const noteActivity = () => {
@@ -278,6 +303,10 @@ export const makeDurableWorkerTransport = (
     if (idleTimer !== undefined) {
       timers.clearTimer(idleTimer);
       idleTimer = undefined;
+    }
+    if (cadenceTimer !== undefined) {
+      timers.clearTimer(cadenceTimer);
+      cadenceTimer = undefined;
     }
   };
 
@@ -327,9 +356,76 @@ export const makeDurableWorkerTransport = (
    */
   const enqueue = operation => {
     noteActivity();
+    const generation = opGeneration;
     const result = serial(operation);
-    result.then(armIdleTimer, armIdleTimer);
+    const settled = () => {
+      armIdleTimer();
+      // The last operation queued has settled: the queue is empty.
+      if (generation === opGeneration) armCadenceTimer();
+    };
+    result.then(settled, settled);
     return result;
+  };
+
+  // --- cadence snapshots ---
+
+  /**
+   * Deliveries since the last snapshot, or since the last failed attempt at
+   * one; 0 where cadence snapshots are not taken.
+   */
+  const cadenceBacklog = () =>
+    snapshotEveryDeliveries === undefined || resident || !engine.canSnapshot
+      ? 0
+      : deliveredUpTo - Math.max(snapshotCut, snapshotFailedAt);
+
+  /**
+   * Queue a cadence snapshot behind the operations already queued, as a
+   * sleep would be; the worker stays awake through it.
+   */
+  const queueCadenceSnapshot = () => {
+    checkpointQueued = true;
+    enqueue(async () => {
+      checkpointQueued = false;
+      await checkpointInternal();
+    }).catch(error => {
+      logging.error(
+        `thixotrope worker transport ${debugName}: cadence snapshot failed`,
+        error,
+      );
+    });
+  };
+
+  /**
+   * With the queue empty and a cadence snapshot due, take it once nothing
+   * has been queued for {@link CADENCE_IDLE_MS}. Any operation queued
+   * meanwhile clears the wait (`noteActivity`), and the queue emptying again
+   * starts it afresh.
+   */
+  const armCadenceTimer = () => {
+    if (
+      snapshotEveryDeliveries === undefined ||
+      destroyed ||
+      incarnation === undefined ||
+      checkpointQueued ||
+      cadenceBacklog() < snapshotEveryDeliveries
+    ) {
+      return;
+    }
+    const generation = opGeneration;
+    const timer = timers.setTimer(() => {
+      cadenceTimer = undefined;
+      if (
+        destroyed ||
+        opGeneration !== generation ||
+        incarnation === undefined ||
+        checkpointQueued
+      ) {
+        return;
+      }
+      queueCadenceSnapshot();
+    }, CADENCE_IDLE_MS);
+    timers.unrefTimer?.(timer);
+    cadenceTimer = timer;
   };
 
   /**
@@ -799,26 +895,15 @@ export const makeDurableWorkerTransport = (
       deliveredUpTo = crankEnd;
       deliveredHubSequence =
         lastHubSequence(crankEntries) ?? deliveredHubSequence;
+      // A due snapshot waits for the queue to go quiet (`armCadenceTimer`),
+      // unless the worker has gone so long without that the journal has
+      // reached its bound.
       if (
         snapshotEveryDeliveries !== undefined &&
-        !resident &&
-        engine.canSnapshot &&
         !checkpointQueued &&
-        deliveredUpTo - Math.max(snapshotCut, snapshotFailedAt) >=
-          snapshotEveryDeliveries
+        cadenceBacklog() >= CADENCE_FORCE_FACTOR * snapshotEveryDeliveries
       ) {
-        // Behind the deliveries already queued, as a sleep would be; the
-        // worker stays awake through it.
-        checkpointQueued = true;
-        enqueue(async () => {
-          checkpointQueued = false;
-          await checkpointInternal();
-        }).catch(error => {
-          logging.error(
-            `thixotrope worker transport ${debugName}: cadence snapshot failed`,
-            error,
-          );
-        });
+        queueCadenceSnapshot();
       }
     }).catch(error => {
       logging.error(

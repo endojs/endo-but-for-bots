@@ -497,10 +497,12 @@ section). Every acceptance item passes except one ratio of 15 at 1,000 turns; re
   vat; a refused plain value is answered `secretFailed("INVALID_SECRET_BYTES")`, which never
   quotes it (XA J-10005..J-10009, X-FIX J-10054, J-10055; `m2-secrets`,
   `m2-secret-writer-paths`, `m4-ui` pass at X-CLOSE, J-10060).
-- **major** (perf): `checkpoint.stall` p99 1.40 x on a session grown by turns, 1.05 x on imported
-  ones; the cause is the core's cadence snapshot (C-24, J-9494). The core lane's CC-026 (snapshot
-  deferral, on main, not in the M3-M5 integration lane) lowers it partly (p99 2,170 -> 1,195 ms at
-  load 2); re-measure in the next exclusive pass after main is merged into the lane.
+- **CC-026 merged, partly closed** (was major, perf): `checkpoint.stall` p99 1.40 x on a session
+  grown by turns, 1.05 x on imported ones; the cause is the core's cadence snapshot (C-24, J-9494).
+  The core lane's CC-026 (a due snapshot waits for 50 ms of quiet in the worker's queue) is merged
+  into this lane (K1, J-10070) and lowers it partly (p99 2,170 -> 1,195 ms at load 2, J-10112); a
+  snapshot can still land in a gap inside a turn under load (4,024 ms once at load 4.5). Not
+  re-measured on the combination: the next exclusive pass does.
 - **fail** (acceptance 15 at 1,000 turns, `archive.flat.hubRow.at1000`): hub row characters
   1.39 x the 200-turn row while entries are 1.00 x; the read caught one answer owed (J-9496). Not
   re-based; a read at a quiescent point is the proposed procedure fix, for the PM.
@@ -508,8 +510,9 @@ section). Every acceptance item passes except one ratio of 15 at 1,000 turns; re
   high-water); `session.create` with the pool 1,097 ms against 750; `concurrency.10` turn start
   3.2 x single and crank p95 500 ms (C-2's rest); `hub.growth` projected to 50 sessions 3.26 MB
   (C-2, CC-051/CC-060); `crash.restart.bound5` (C-8, C-9, by design).
-- **known failure, deferred by PM ruling 4**: the 100 KiB inline probe is refused by the vat's
-  guard, not before sending (C-25).
+- **closed** (was a known failure, deferred by PM ruling 4): the 100 KiB inline probe is now
+  refused by the hub before it reaches the vat (core CC-027, C-25); `m2-probes` asserts it as a
+  plain test: `FRAME_TOO_LARGE`, no growth of the vat's journal, the next turn served (J-10127).
 - **minor** (from M2-FIX, not fixed): delete racing a session's first seal (a leak); delete step 2
   skipping on any `blobPage` error; export of a busy session failing when a seal lands between
   pages; usage of a cancelled round dropped when the cancel settles first; one pending diff per

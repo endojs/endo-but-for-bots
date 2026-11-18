@@ -94,6 +94,9 @@ export const ENV_ALLOWLIST = Object.freeze([
   'THIXOTROPE_GC_CRANK_INTERVAL',
   // How the hub keeps its state (CC-024): `log` (default) or `file`.
   'THIXOTROPE_HUB_STORE',
+  // The hub's ceiling on one frame into a vat (CC-027); the harness default
+  // is `limits.vatFrameBytes` (allowlistEnvironment).
+  'THIXOTROPE_VAT_FRAME_BYTES',
   // M2 W2.3 (m2-interfaces 9.1): the path of the Secrets wrapping key file,
   // outside the state directory. A path, never a secret value.
   'THIX_HARNESS_SECRETS_KEY',
@@ -236,9 +239,11 @@ export const defaultMaxDeliveryAttempts = env => {
 
 /**
  * The supervisor's environment: the allowlisted host variables, the chosen
- * crank budget and the crash bound, and the harness's slot ceiling
- * (`limits.slotCeiling`) unless the host sets `THIXOTROPE_SLOT_CEILING`,
- * nothing else.
+ * crank budget and the crash bound, the harness's slot ceiling
+ * (`limits.slotCeiling`) unless the host sets `THIXOTROPE_SLOT_CEILING`, and
+ * at a crank budget of at least `limits.crankBudget` the harness's vat frame
+ * ceiling (`limits.vatFrameBytes`) unless the host sets
+ * `THIXOTROPE_VAT_FRAME_BYTES`; nothing else.
  * @param {Record<string, string | undefined>} env
  * @param {{ crankBudget: bigint, maxDeliveryAttempts?: number }} options
  * @returns {Record<string, string>}
@@ -254,6 +259,10 @@ export const allowlistEnvironment = (
     if (value !== undefined) out[name] = value;
   }
   out.THIXOTROPE_SLOT_CEILING ??= String(limits.slotCeiling);
+  // An encoded frame may exceed the core's 32,768 default (J-10125); the
+  // harness's ceiling is safe only at its own crank budget or above.
+  if (crankBudget >= limits.crankBudget)
+    out.THIXOTROPE_VAT_FRAME_BYTES ??= String(limits.vatFrameBytes);
   out.THIXOTROPE_CRANK_BUDGET = String(crankBudget);
   out.THIXOTROPE_MAX_DELIVERY_ATTEMPTS = String(
     parseMaxDeliveryAttempts('maxDeliveryAttempts', maxDeliveryAttempts),

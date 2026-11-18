@@ -326,7 +326,19 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
   // session said so. Both keep the session working (J-0771).
   const terminated =
     big[0] === textOf.errorResult(textsM5.inspectTerminated) && big[1];
-  if (!terminated) {
+  // Since core CC-027 the hub refuses the 200 KB help's frame toward the exec
+  // vat (over THIXOTROPE_VAT_FRAME_BYTES) before the vat decodes it: the
+  // help() call breaks with FRAME_TOO_LARGE, and describeCapability answers
+  // the methods inline with its documentation `unavailable`. Also no halt
+  // (J-10124).
+  /** @type {any} */
+  const shown = typeof big[0] === 'string' ? JSON.parse(big[0]) : undefined;
+  const hubRefused =
+    !big[1] &&
+    shown?.documentationScope === 'unavailable' &&
+    Array.isArray(shown.methods) &&
+    shown.methods.includes('help');
+  if (!terminated && !hubRefused) {
     t.false(big[1]);
     t.true(isStaged(big[0]), 'a cut answer over inlineBytes is staged');
     t.true(Number(big[0].bytes) <= 3 * limitsM5.inspectResultUnits);
@@ -334,8 +346,12 @@ run('acceptance 3 (remote), 4, 5, 8 and K7', async t => {
   }
   emit({
     metric: 'm5.objects.bigHelp',
-    outcome: terminated ? 'inspectTerminated' : 'staged',
-    bytes: terminated ? undefined : big[0].bytes,
+    outcome: terminated
+      ? 'inspectTerminated'
+      : hubRefused
+        ? 'hubRefused'
+        : 'staged',
+    bytes: terminated || hubRefused ? undefined : big[0].bytes,
     ...identity,
   });
 

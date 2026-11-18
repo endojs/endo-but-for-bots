@@ -60,6 +60,9 @@ const makeVat = async t => {
     codec: syrupCodec,
     makeNetlayer: ({ handlers, logger }) =>
       makeTcpNetLayer({ handlers, logger }),
+    // These tests send frames of up to 50,000 bytes into the vat, above the
+    // hub's default ceiling, to show what the vat itself does with them.
+    vatFrameBytes: 65_536,
   });
   const vat = await daemon.createWorker({ debugLabel: 'key-space' });
   return vat.evaluate(`Far('keys', {

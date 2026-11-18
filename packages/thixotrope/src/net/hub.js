@@ -111,6 +111,15 @@ import { restoreHubState, serializeHubState } from './hub-state.js';
 const BOOTSTRAP_POSITION = '0';
 
 /**
+ * The break reason for a message the hub refuses because its frame toward
+ * the target session would exceed that session's `maxInboundFrameBytes`.
+ * The text is fixed (no sizes, no session keys): a sender matches it
+ * exactly, as OCapN breaks carry only a message.
+ */
+export const FRAME_TOO_LARGE =
+  'ocapn hub: the message exceeds the inbound frame ceiling of its target';
+
+/**
  * The publications table key for a swissnum in either of its accepted
  * forms.
  *
@@ -278,6 +287,7 @@ export const makeOcapnHub = ({
    *   attached: boolean,
    *   remote: boolean,
    *   onAbort: ((error: unknown) => void) | undefined,
+   *   maxInboundFrameBytes: number | undefined,
    * }} SessionState
    */
 
@@ -653,6 +663,7 @@ export const makeOcapnHub = ({
         attached: false,
         remote: false,
         onAbort: undefined,
+        maxInboundFrameBytes: undefined,
       };
       sessions.set(sessionKey, session);
       dirty = true;
@@ -1907,10 +1918,26 @@ export const makeOcapnHub = ({
       return;
     }
     const destination = row.origin;
+    const { maxInboundFrameBytes } = provideSessionState(destination);
+    let tooLarge = false;
     /** @type {Uint8Array} */
     let bytes;
     try {
-      bytes = withRollback(() => prepare(destination));
+      bytes = withRollback(() => {
+        const prepared = prepare(destination);
+        // Refused before it is queued, committed or sent: the destination
+        // never sees it, and the prepare's routes and listeners roll back.
+        if (
+          maxInboundFrameBytes !== undefined &&
+          prepared.length > maxInboundFrameBytes
+        ) {
+          tooLarge = true;
+          throw Error(
+            `${prepared.length} bytes exceed the ceiling of ${maxInboundFrameBytes}`,
+          );
+        }
+        return prepared;
+      });
     } catch (error) {
       logError(
         `forwarding ${message.type} from ${sessionKey} toward ${destination} failed:`,
@@ -1919,8 +1946,21 @@ export const makeOcapnHub = ({
       breakToSender(
         sessionKey,
         message,
-        `ocapn hub: the ${what} could not be forwarded`,
+        tooLarge
+          ? FRAME_TOO_LARGE
+          : `ocapn hub: the ${what} could not be forwarded`,
       );
+      if (tooLarge && row.resolver) {
+        // A settlement (an answer, a resolution) toward the destination's own
+        // resolver: its caller is waiting on it, so break it there instead.
+        settled?.();
+        settleToResolver(
+          destination,
+          refTokenFor(row.refId),
+          'break',
+          harden(Error(FRAME_TOO_LARGE)),
+        );
+      }
       return;
     }
     settled?.();
@@ -2374,6 +2414,15 @@ export const makeOcapnHub = ({
      *   turn are handled together at the end of it, as one batch with one
      *   commit, instead of one commit each. Requires `discardOnRestart`
      *   (no replay identities, nobody awaits each frame's commit).
+     * @param {number} [powers.maxInboundFrameBytes] the longest frame the
+     *   hub forwards toward this session (a vat, whose engine halts on a
+     *   frame too large to decode). A message from another session whose
+     *   re-encoded frame is longer is refused before it is queued or
+     *   committed: its sender's answer and resolver break with
+     *   `FRAME_TOO_LARGE`, and a settlement aimed at this session's own
+     *   resolver breaks that resolver instead. Hub-made frames (fetch
+     *   answers, breaks, GC) are not bounded. Process-local: give it at
+     *   every attach; omitted, frames are not bounded.
      * @param {{ sessionId: Uint8Array, peerPublicKeyQ: Uint8Array, selfPrivateKeyBytes?: Uint8Array }} [powers.identity]
      *   the session's wire identity from the embedder's handshake
      *   (including the hub side's session private key, which signs
@@ -2393,8 +2442,13 @@ export const makeOcapnHub = ({
         remote = false,
         onAbort = undefined,
         identity = undefined,
+        maxInboundFrameBytes = undefined,
       },
     ) => {
+      maxInboundFrameBytes === undefined ||
+        (Number.isSafeInteger(maxInboundFrameBytes) &&
+          maxInboundFrameBytes > 0) ||
+        Fail`maxInboundFrameBytes must be a positive integer`;
       sendBatch === undefined ||
         deferCleanup ||
         Fail`batched sends require deferred outbox cleanup`;
@@ -2421,6 +2475,7 @@ export const makeOcapnHub = ({
       session.durable = durable;
       session.remote = remote;
       session.onAbort = onAbort;
+      session.maxInboundFrameBytes = maxInboundFrameBytes;
       if (identity !== undefined) {
         session.identity = {
           sessionId: encodeHex(identity.sessionId),

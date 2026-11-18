@@ -9,6 +9,11 @@
  *     before a session's `end` fails the import and leaves no half-imported
  *     session (J-9493).
  *
+ * Also (C-VERIFY, J-10125, J-10126): an import of short turns, whose record
+ * chunks encode to about 38-40 KB though their strings fit `frameBytes`,
+ * completes under the harness's vat frame ceiling (`vatFrameBytes`; core
+ * CC-027's default of 32,768 refuses them).
+ *
  * Runs only with THIX_HARNESS_INTEGRATION=1, under the run lock:
  *
  *   THIX_HARNESS_INTEGRATION=1 node scripts/run-lock.mjs --label m2-lifecycle-export -- \
@@ -245,5 +250,30 @@ run(
     t.deepEqual(keysAfter, [...keysBefore, 's3']);
     const status = await E(target.slice.harness).status();
     t.is(status.sessions, keysAfter.length, 'no half-imported session');
+  },
+);
+
+run(
+  'an import of short turns completes: its record chunks encode over 32,768 bytes, under the harness ceiling',
+  async t => {
+    t.timeout(3 * 60_000);
+    const { state, slice, backend } = await open(t);
+    // 8 records a turn with 1-byte texts: a chunk is 279 records and about
+    // 38.5 KB encoded (J-10125).
+    const turns = 40;
+    const result = await importSynthetic(state, backend, [
+      {
+        title: 'short turns',
+        turns,
+        backendLabel: 'Scripted',
+        inputBytes: 1,
+        answerBytes: 1,
+      },
+    ]);
+    t.is(result.sessions.length, 1);
+    t.is(result.records, turns * 8);
+    const s1 = await E(slice.factory).findSession('s1');
+    t.is((await allTurnIds(slice, s1)).length, turns);
+    await state.cleanup();
   },
 );

@@ -7,10 +7,11 @@
  *   Composer is accepted (staged) and its turn completes; one of 200,001 is
  *   refused by the Composer's guard and nothing reaches the session.
  * - A 100 KiB string sent straight to a vat method through the admin path
- *   (`Session.startTurn` with inline text) is refused. The row asks for a
- *   refusal before sending (the session vat's delivery frontier does not
- *   move): a known failure, the control client sends it and the vat's
- *   guard refuses it (J-9407).
+ *   (`Session.startTurn` with inline text) is refused before it reaches the
+ *   vat: the hub's inbound frame ceiling for vats (core CC-027,
+ *   `FRAME_TOO_LARGE`) breaks the call, so the session vat's delivery
+ *   frontier does not move. Until CC-027 the control client sent it and the
+ *   vat's guard refused it after delivery (J-9407, a known failure).
  * - After each, the next ordinary turn completes (no halt).
  *
  *   THIX_HARNESS_INTEGRATION=1 node scripts/run-lock.mjs --label m2-probes -- \
@@ -21,6 +22,7 @@ import '../unit/_m1a-prelude.js';
 import test from 'ava';
 
 import { E } from '@endo/far';
+import { FRAME_TOO_LARGE } from '@endo/thixotrope';
 
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
@@ -44,6 +46,9 @@ const run = integrationEnabled ? test.serial : test.skip;
 
 /** The session vat's delivery frontier around the 100 KiB call. */
 let frontier = [0, 0];
+/** The 100 KiB call's rejection, and whether the next turn completed. */
+let directMessage = '';
+let servedAfter = false;
 
 const usage = {
   inputTokens: 1,
@@ -117,6 +122,8 @@ run(
     );
     const frontierAfter = Number((await worker())?.journalLength);
     await ordinary('after the 100 KiB refusal');
+    servedAfter = true;
+    directMessage = String(direct?.message);
 
     emit({
       metric: 'm2.tooBig',
@@ -133,14 +140,16 @@ run(
   },
 );
 
-// Known failure (W2.9, J-9407): the milestone row asks that the client
-// library refuse a 100 KiB string before sending. The control client sends
-// it; the session vat's own guard refuses it (no halt, the next turn
-// completes), so the vat's delivery frontier moves by one.
-(integrationEnabled ? test.failing : test.skip)(
-  'a 100 KiB inline string is refused before it is sent [known failure: the control client sends it; the vat guard refuses it]',
+// W2.9's row asks that a 100 KiB string be refused before it reaches the
+// vat. Since core CC-027 the hub refuses it (its frame toward the session
+// vat is over THIXOTROPE_VAT_FRAME_BYTES) before it is queued or journaled;
+// until then the vat's guard refused it after delivery (J-9407).
+(integrationEnabled ? test.serial : test.skip)(
+  'a 100 KiB inline string is refused by the hub before it reaches the session vat; the session still serves',
   t => {
     t.true(frontier[0] > 0, 'the probe above ran');
-    t.is(frontier[1], frontier[0], 'nothing was delivered to the vat');
+    t.is(directMessage, FRAME_TOO_LARGE);
+    t.is(frontier[1], frontier[0], "the vat's journal did not grow");
+    t.true(servedAfter, 'the next ordinary turn completed');
   },
 );

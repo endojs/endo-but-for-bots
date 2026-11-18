@@ -177,8 +177,6 @@ files, about 10 minutes). Per-file times are in process.md section 3.1.
 
 **Known failures** (each marked `test.failing`, or opt-in, with the reason in its title):
 
-- `m2-probes`: a 100 KiB inline string sent straight to a vat method is refused by the session
-  vat's guard after delivery, not by the client before sending (PM ruling 4; core candidate C-25).
 - Latency budgets that are sensitive to load: `m1b-live` acceptance 9 (rename within 500 ms)
   failed once at load 4.5 and passed alone (J-9450); not marked, it passes on a quiet machine.
 - Perf rows that miss by design or by a recorded core limit: `perf/crash.perf.mjs` and
@@ -302,8 +300,10 @@ node scripts/serve.mjs STATE [--crank-budget N] [--max-delivery-attempts N] \
 The wrapper runs the supervisor in a child process whose environment is only an allowlist plus
 `THIXOTROPE_CRANK_BUDGET` (default 50 M), `THIXOTROPE_MAX_DELIVERY_ATTEMPTS` (default 5,
 2..100) and `THIXOTROPE_SLOT_CEILING` (default 4,000,000 from `config/defaults.js`, M1b QC; a
-state persists its ceiling and is refused at a lower one, so test templates key on it). The
-allowlist also passes the collection schedule (`THIXOTROPE_GC_POLICY` `allocation` by default or
+state persists its ceiling and is refused at a lower one, so test templates key on it), and at a
+crank budget of 50 M or more `THIXOTROPE_VAT_FRAME_BYTES` (default 65,536 from `config/defaults.js`
+`vatFrameBytes`: the hub's ceiling on one encoded frame into a vat, core CC-027, whose own default
+of 32,768 refuses an import chunk of short turns; J-10125, J-10126). The allowlist also passes the collection schedule (`THIXOTROPE_GC_POLICY` `allocation` by default or
 `every-crank`, `THIXOTROPE_GC_SLOT_ALLOWANCE`, `THIXOTROPE_GC_CHUNK_ALLOWANCE`,
 `THIXOTROPE_GC_CRANK_INTERVAL`; CC-022, CC-023: fixed per state directory, a change needs fresh
 state) and the hub store (`THIXOTROPE_HUB_STORE`, `log` by default or `file`; CC-025: a log

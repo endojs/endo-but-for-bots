@@ -614,13 +614,15 @@ test('a cadence snapshot that fails is attempted again a cadence later, not afte
         terminate: async () => {},
       }),
   });
-  const { store, transport, settle } = makeKit(t, engine, {
+  const { store, transport, settle, clock } = makeKit(t, engine, {
     snapshotEveryDeliveries: 4,
   });
   for (let index = 0; index < 40; index += 1) {
     transport.write(frame(`frame ${index}`));
     // eslint-disable-next-line no-await-in-loop
     await settle();
+    // A due snapshot waits for quiet; each frame here is followed by it.
+    if (clock.delays().length > 0) clock.fire();
     // eslint-disable-next-line no-await-in-loop
     await settle();
   }
