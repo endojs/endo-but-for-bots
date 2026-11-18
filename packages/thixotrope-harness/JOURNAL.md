@@ -11671,3 +11671,97 @@ M2 review made (one file per step) turned a three-way table conflict into three 
 Fit: good for code (guards make a cross-lane mismatch a refused call in a unit test). Poor for
 size: each lane fits its own program budget, but the session program's margin after all three is
 1.4 %, and only a merge shows it.
+
+### J-10115 2026-11-18 CH where the vat frame ceiling lives - read
+Evidence: read `H/designs/process.md` sections 2-3, `H/designs/arch-review/core-net.md` (AR-NET-3,
+-13, -16, table 2.3), `core.md` AR-SYN-8 and -11, `pkg/designs/ironhorse-limits.md`, m0-results
+`frameBytes` row and C-1, C-5, C-25, `designs/m5-interfaces.md` 9.2 (CC-070), J-9407; `pkg/src/net/hub.js`
+(outbox, routing, attach), `hub-state.js`, `core/daemon.js` (worker attach, startup order, sweep),
+`control/supervisor.js` (environment settings), `ironhorse/ironhorse-limits.js`, `evaluate-source.js`.
+Reading: no host-side ceiling on a frame into a vat existed. The engine limits record has no frame
+setting; the only core constant is `STAGING_FRAME_BYTES` 24,576 (a staging chunk, equal to the
+harness's `frameBytes`); the Unix netlayer bounds fragments only (1 MiB). Halt points: 94,208
+bytes (`HeapExhausted`) at 50 M, meter near 51 KB at 10 M, the core's default budget
+(`ironhorse-limits.js`); `test/ironhorse/key-space.js` serves 50,000-byte frames at 10 M.
+Decision: the ceiling is a hub attach option set by the daemon for worker sessions, read by the
+supervisor from `THIXOTROPE_VAT_FRAME_BYTES` like `THIXOTROPE_MAX_DELIVERY_ATTEMPTS`; default 32,768.
+
+### J-10116 2026-11-18 CH which sessions and messages the ceiling bounds - decision
+Evidence: `pkg/src/net/hub.js` `forwardToRow`, `handleMessage`, `settleToResolver`; `core/daemon.js`
+`provideWorkerSession`; commit `0edc2ab05a`.
+Reading: every message one session sends to another goes through `forwardToRow`; the check runs on
+the frame re-encoded toward the destination, inside the forward's rollback scope, so a refused
+message leaves no answer route or listener. Bounded: worker sessions only. Kinds: `op:deliver` with
+an answer (answer and resolver break with `FRAME_TOO_LARGE`), deliver-only (dropped, logged),
+`op:listen`, `op:get`/`op:index`/`op:untag`, and settlements toward the worker's own resolvers (the
+answer to its call, a promise resolution): the resolver itself breaks, so the calling vat gets a
+rejection. Not bounded: adapters, transient clients, endpoint, peers, and hub-made frames.
+Decision: no persisted state (the option is given at every attach). Known gap: after a restart, a
+frame toward a worker forwarded before that worker reattaches (only the endpoint is attached
+earlier) is not bounded.
+
+### J-10117 2026-11-18 CH hub- and daemon-level ceiling tests - test
+Evidence: `pkg/test/hub-frame-ceiling.test.js` (3 tests), `pkg/test/daemon-frame-ceiling.test.js`
+(3 tests), each in the three ses-ava configurations; the hub file also run against a copy of the
+pre-change hub (scratch, outside the tree).
+Reading: all 6 pass after; the 3 hub tests fail before (the oversized call answered 4,096; the
+oversized answer reached the caller vat; the attach option was ignored). The daemon test shows the
+journal length unchanged across a refused call and the malformed settings refused before the state
+directory exists.
+Fit: good.
+
+### J-10118 2026-11-18 CH Ironhorse ceiling test and key-space - test
+Evidence: `node scripts/run-lock.mjs --label ch-frames` (shared slot), `ava --config
+ava.ironhorse.config.mjs test/ironhorse/frame-ceiling.js test/ironhorse/key-space.js`, 98 s wall
+including the wait, load 2-3.
+Reading: `frame-ceiling` passes (11.1 s): from a transient client to a real vat, 32,768 and 1,000,000
+characters are refused with `FRAME_TOO_LARGE`, the vat's journal length is unchanged, its meta has
+no failure, and the next call is served. `key-space` passes both tests with `vatFrameBytes: 65_536`
+(it sends 49,152..50,000-byte frames on purpose). Not run against the pre-change hub at this level.
+Fit: good.
+
+### J-10119 2026-11-18 CH cost of the ceiling check - measure
+Evidence: scratch loop (outside the tree): a hub over a fake store that stringifies each committed
+state, one client frame (deliver-only, 1,072 bytes) replayed into it toward a durable worker-like
+session with the ceiling, 10 s windows, pre-change and post-change hubs interleaved, 5 windows each,
+no run lock (no supervisor or worker), load 3.2-4.7.
+Reading: pre-change 148.2 / 151.0 / 151.5 / 152.0 / 152.5 us per message (median 151.5),
+post-change 150.4 / 153.1 / 153.3 / 154.6 / 165.9 (median 153.3); 2 commits per message, 2,300
+characters per commit in both.
+Fit: no measurable per-message cost: the medians differ by 1.2 %, inside the run-to-run spread.
+
+### J-10120 2026-11-18 CH disposable frames out of the hub store - test
+Evidence: commit `0ecca1dcb0`; `pkg/test/hub-disposable-outbox.test.js` (11 tests); a run-lock
+batch (`ch-hubfiles`, 33 s) of 16 files: hub, hub-coalesce, hub-disposable-outbox, hub-outbox,
+hub-gc-batch, hub-crash-consistency, hub-log-store, hub-frame-ceiling, daemon-frame-ceiling,
+transient-hub-client, transient-daemon, local-delivery, native-adapter, daemon,
+answerer-retirement-gc, vat-reachability.
+Reading: `discardOnRestart` is set only by native adapters and transient hub clients, with fresh
+`transient:` keys; the daemon forgets every `transient:` key at startup before any reattach, and a
+restored one is detached and not durable, so its persisted queue was never sent or read; no other
+reader of persisted queues exists. The new test (worker peer and observer over the hub log store on
+in-memory files) finds the observer's answer in neither file and fails against the pre-change
+serializer; 3 assertions that pinned the old committed queue were changed to expect it empty. The
+batch passes, 104 tests in each of the three configurations.
+Fit: good; C-1 closed at rest for disposable sessions, the endpoint's frames still pass the log.
+
+### J-10121 2026-11-18 CH disposable commit size and cost - measure
+Evidence: the J-10119 loop toward a `transient:` observer session, 3 windows of 10 s each side,
+interleaved, load 3.2-3.9.
+Reading: pre-change 145.3 / 145.7 / 147.9 us per message, 2,225 characters per commit;
+post-change 137.7 / 139.0 / 140.6 us, 1,151 characters per commit (the 2,144 hex characters of the
+frame are no longer written in the first of each message's two commits).
+Fit: good: about 5 % less per forwarded frame toward an observer, half the characters committed.
+
+### J-10122 2026-11-18 CH what was run and what was not - fit
+Evidence: run-lock `ch-unit` (`corepack yarn test` in `pkg/`, after CC-027 only): exit 124 at the
+10-minute box; the log shows the lockdown and unsafe configurations complete (442 passed, 3 skipped
+each, no failure) and the endo configuration partly run with no failure. `tsc` and eslint (no new
+warning) on the changed files. Time: 12:53:55Z to the end of this unit.
+Reading: the whole core Node suite does not fit one 10-minute box under shared load (three SES
+configurations, about 4 minutes each here). Not run: the Ironhorse lane as a whole (by rule), the
+harness unit lane and integration files (other package). Harness impacts to check: `m2-probes`
+too-big `test.failing` (J-9407) may now pass or fail differently; any harness message above 32,768
+bytes into a vat now breaks with `FRAME_TOO_LARGE`.
+Decision: the PM runs the harness integration files (or sets `THIXOTROPE_VAT_FRAME_BYTES=65536`,
+which the harness's 50 M budget allows) before merging.
