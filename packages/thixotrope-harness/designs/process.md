@@ -137,8 +137,9 @@ template chains (section 3.2) holding one or two slots beside it. Commands from 
 files and 5 browser files: **7,263 s held** (unit lane not counted), and the measured wall time was
 67 s + 1,433 s + 202 s = **1,702 s (28.4 min)** run one part after the other, against the
 20-minute rule. Even on an idle machine with all six slots it cannot fit: 7,263 / 6 = 1,211 s
-(20.2 min) plus the unit lane, before any slot is lost to packing. Proposed split (for the PM to
-adopt; not yet a rule):
+(20.2 min) plus the unit lane, before any slot is lost to packing. **PM ruling (2026-11-18,
+recorded by K1, J-10075): the regression run is split as follows**, each list one batch that
+finishes inside 20 minutes of wall at six slots:
 
 - **Core list** (every lane runs it): unit and adapter lanes, M0-M2 integration files and the
   template test: 25 files, 4,029 s held, about 13-14 minutes at 5-6 jobs (longest file 297 s).
@@ -229,9 +230,10 @@ run, load 2-5): long 200 / 1,000 / 5,000 held 89 / 158 / 473 s; busy 10..50 held
 375, 357 s (one chain, 38 minutes of wall with waits); `exec` 58 s, `pool` 57 s, `m3-300` 94 s.
 
 The whole list is now 25 + 12 = 37 files (M0-M2 69.5 minutes, M3-M5 about 55 minutes), more
-than two hours of every lane stopped. Proposal (as 3.1): a milestone's recorded pass is its own
-files plus the cross-check `session`, `turn` and `exec` (about 7 minutes); the whole list runs
-only when the PM asks for it (a core or worker change).
+than two hours of every lane stopped. **PM ruling (2026-11-18, recorded by K1,
+J-10075):** a milestone's recorded perf pass is its own files plus the cross-check `session`,
+`turn` and `exec` (the cross-check about 7 minutes); the whole list runs only when the PM asks
+for it (a core or worker change).
 
 **M3, M4, M5 and the cross-check** (X-CLOSE, 2026-11-18 16:12-17:19 UTC, at `404e60ea3a`, load
 1.0-2.8: 15 files, **4,004 s held (66.7 minutes), 66.8 minutes of wall**; exit 1 means a budget

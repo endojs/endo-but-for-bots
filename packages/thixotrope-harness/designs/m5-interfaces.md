@@ -714,7 +714,7 @@ its record or answer.
 | inventory entries | factory heap | replay | K1 variant: after `addAll` (`m5-presets`) |
 | label map (`store`, `remove`, `adopt`, `powers.store`) | session heap | replay: the binding and its result record exactly once | K3: after the round-final crank of a `store` round; after an `adopt` (`m5-mentions-restart`) |
 | grants | session heap | replay; a grant whose schema read was in flight is re-read at the next round (2.5) | K4: after `grantTool` before the schema answer (`m5-grants-restart`) |
-| granted tool call | intent in the session (crank D), the call in the exec vat | the tool runs at most once (the hub drops the replayed crank's duplicate send); recovery records "Tool outcome unknown" unless the exec vat's answer was already journaled for the session (then the replay records it, K5 second point); a late answer (guest-to-guest promises survive restart, fact 5) is ignored by generation; never re-sent | K5: after crank D while the fixture tool runs (delay 2 s); after the tool answered the exec vat, before the exec vat's answer (`m5-grants-restart`; XC: the session vat's worker is woken and held with SIGSTOP, every incarnation as it appears, before the tool is released, and the daemon is SIGKILLed once the tool's log shows the run finished. Measured: the exec vat's answer is then already in the session's hub journal (its length grows by one while the worker is held), so the replay runs it: the true result is recorded once, recovery settles the turn outcome-unknown at the next round, the tool ran once, one provider request. "Tool outcome unknown" is recorded only when the answer never reached the hub, the first point) |
+| granted tool call | intent in the session (crank D), the call in the exec vat | the tool runs at most once (the hub drops the replayed crank's duplicate send); recovery records "Tool outcome unknown" unless the exec vat's answer was already journaled for the session (then the replay records it, K5 second point); a late answer (guest-to-guest promises survive restart, fact 5) is ignored by generation; never re-sent | K5: after crank D while the fixture tool runs (delay 2 s); after the tool answered the exec vat, before the exec vat's answer (`m5-grants-restart`; XC: the session vat's worker is woken and held with SIGSTOP, every incarnation as it appears, before the tool is released, and the daemon is SIGKILLed once the tool's log shows the run finished. Measured: the exec vat's answer is then already in the session's hub journal (its length grows by one while the worker is held), so the replay runs it: the true result is recorded once, recovery settles the turn outcome-unknown at the next round, the tool ran once, one provider request. "Tool outcome unknown" is recorded only when the answer never reached the hub, the first point. PM ruling (K1, J-10075): the second kill point recording the true result through replay is accepted as the wanted behaviour) |
 | queue entries' attachments, open packages | session heap | entries held `restart` keep their attachments and run later with their note; a claimed turn recovered `interrupted` or `outcome-unknown` closes its package in recovery's settle | K6: after an `enqueueMessageOnce` that claimed; with two entries waiting (`m5-mentions-restart`) |
 | `ExecPowersSource`, the exec scope | session heap; exec heap | the exec call in flight is abandoned by recovery (M1b); `powers` facets of earlier calls stay dead | K7: during an exec call that awaits `powers.lookup` (`m5-objects`) |
 
@@ -848,8 +848,9 @@ found at run time (W5.7 does not import W5.6); everything else by W5.9.
    `undefined` (J-0472).
 5. **`describeCapability` and `readSources`** (R3-32; W5.5 `m5-objects`): bounded help of a
    fixture (<= 48,000 units, then the tool limit); `readSources` of a fixture `SourceReader` with
-   a search; a fixture whose `help()` answers 200 KB gives `texts.inspectTerminated` and the
-   session's next turn runs normally.
+   a search; a fixture whose `help()` answers 200 KB gives `texts.inspectTerminated` (or, since
+   core CC-027, the hub refuses the answer and `describeCapability` shows the methods with
+   documentation `unavailable`) and the session's next turn runs normally.
 6. **Granted tools** (P-65, R3-6; W5.6 `m5-grants`): a granted `echo2` is offered at the next
    round and its call returns its result; a grant named `exec` is `refused-builtin` and not
    offered; two grants named `t` are both `refused-duplicate`; withdrawing one offers the other at
@@ -870,11 +871,14 @@ found at run time (W5.7 does not import W5.6); everything else by W5.9.
 10. **Untrusted answers and the membrane** (D-M5-2, D-M5-3; W5.5 `m5-security`): exec code sends
     a 100 KiB string to a fixture object through `powers`: refused in the exec vat with
     `textOf.membraneTooLarge`, the fixture's vat answers its next call; a record of 40 keys is
-    refused; a granted tool answering 300 KB yields a staged, cut result or
-    `texts.inspectTerminated`, and the session keeps working.
+    refused; a granted tool answering 300 KB yields a staged, cut result,
+    `texts.inspectTerminated` or (since core CC-027, what happens at the harness's 65,536-byte
+    ceiling) the hub's `FRAME_TOO_LARGE` text as the tool's error, and the session keeps working.
 11. **SIGKILL** (section 5): (a) K3 and K6 (W5.7 `m5-mentions-restart`); (b) K4 and K5: the
-    fixture tool's log shows at most one run, the turn is outcome-unknown with "Tool outcome
-    unknown", no rerun (W5.6 `m5-grants-restart`); (c) K1, K2 in acceptance 2's file.
+    fixture tool's log shows at most one run, the turn is outcome-unknown, no rerun; at K5's
+    first point the call is recorded "Tool outcome unknown", at its second the true result is
+    recorded once through replay (accepted by the PM, K1 J-10075) (W5.6 `m5-grants-restart`);
+    (c) K1, K2 in acceptance 2's file.
 12. **Reachability** (W5.9 `m5-reachability`): `thix reachability` from a session vat holding
     endowments, adopted objects and grants, and from its exec vat, reaches no `PresetCatalog`,
     `Inventory`, `Operator`, factory facet, `AgentHostAdmin`, `SecretsAdmin` or Secret admin.

@@ -1192,9 +1192,16 @@ re-based):
   raise: session 214,690 of 240,000, exec 63,826 of 120,000), 4.1 item 3 (chips from
   `TurnStarted.attachments` after the settled re-read), and a contract row for
   `guest/lib/guards/` (`base < session < factory < interfaces.js`).
-- **after main is merged into this lane**: the core's CC-027 (hub frame ceiling) refuses M5's
-  too-big tool answers (300 KB granted answer, 200 KB `help`) at the hub instead of staging a cut
-  preview; acceptance 5 and 10 and probes a-c must be rerun on the combination.
+- **minor** (since main was merged, K1 J-10071..J-10073): the core's CC-027 (hub frame ceiling,
+  65,536 in the harness) refuses M5's too-big foreign answers at the hub before the exec vat
+  decodes them, the third accepted outcome (`hubRefused`): the 300 KB granted-tool answer reaches
+  the model as `Error: ocapn hub: the message exceeds the inbound frame ceiling of its target`
+  instead of a cut, staged preview, and the 200 KB `help` leaves `describeCapability` with its
+  method names and documentation `unavailable`. No halt, the session goes on; acceptance 5 and 10
+  pass on the combination (`m5-objects` 96 s, `m5-security` 77 s held). The model is told that
+  the answer was refused but not why in its own terms or what to do; a guest-side rendering of
+  the hub's text is proposed to the PM (J-10073), not built. The `perf/exec-m5` and
+  `perf/tools` probes (a, b, c, e) were not rerun on the combination.
 
 **Goal.** Sessions get their authority from presets: built-in and user presets, the grant flow,
 composed prompts frozen at creation, the full exec and object tool sets, granted tools, a minimal
