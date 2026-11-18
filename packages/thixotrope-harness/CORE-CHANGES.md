@@ -90,6 +90,8 @@ polyfills, Thixotrope core, Thixotrope tests and tooling, other Endo package, up
 | CC-024 | 2026-11-17 | Thixotrope core | hub cost counters say what each persist wrote (`persistChars`, `stats().store`) and how persists cluster (`persistRuns`) | size C-2's per-commit cost; estimate group commit | `a71e5272b5`, `87e13507b5` |
 | CC-025 | 2026-11-17 | Thixotrope core | the hub's state is a write-ahead log of deltas over an image (`hub-log-store.js`, default); `hubStore: 'file'` / `THIXOTROPE_HUB_STORE=file` keeps `hub.json`; migration one way | a commit rewrote and twice fsynced the whole `hub.json` (10-15 ms, C-2) | `72ef46f905` |
 | CC-026 | 2026-11-18 | Thixotrope core | a due cadence snapshot waits until the worker's queue has been empty 50 ms, forced at 4 x the cadence | the turn crossing the cadence waited for a 34 MB snapshot (C-24) | `354e366739` |
+| CC-027 | 2026-11-18 | Thixotrope core | the hub refuses a message whose frame toward a vat exceeds `THIXOTROPE_VAT_FRAME_BYTES` (default 32,768), breaking it with `FRAME_TOO_LARGE`; test pins a pipelined call on a refused answer | a frame of any size reached a vat's journal; above about 94 KB it halted the vat (C-25, CC-070) | `0edc2ab05a`, `d705b0006a` |
+| CC-028 | 2026-11-18 | Thixotrope core | frames queued for disposable (`discardOnRestart`) sessions are not persisted | an observer's frames sat in the hub log in clear until compaction (C-1) | `0ecca1dcb0` |
 
 ---
 
@@ -822,7 +824,8 @@ quiet (a few hundred ms) or a turn-end hint from the embedder would close it; bo
 The worst-case replay grows to 4 x the cadence. Stands alone.
 
 ### CC-027 2026-11-18 Thixotrope core - the hub refuses a frame too large for its target vat
-Commits: `0edc2ab05a` fix(thixotrope): the hub refuses a frame too large for its target vat (CH)
+Commits: `0edc2ab05a` fix(thixotrope): the hub refuses a frame too large for its target vat (CH);
+`d705b0006a` test(thixotrope): a call pipelined on a refused answer reaches the answer (C-QC)
 Files: `pkg/src/net/hub.js`, `pkg/src/core/daemon.js`, `pkg/src/control/supervisor.js`,
 `pkg/index.js`, `pkg/README.md` (settings table), `pkg/ava.ironhorse.config.mjs`,
 `pkg/test/hub-frame-ceiling.test.js` (new), `pkg/test/daemon-frame-ceiling.test.js` (new),
@@ -879,7 +882,17 @@ which fits, but no harness integration file was run (J-10122). (3) After a resta
 toward a worker before that worker is reattached in this process is not bounded: the daemon
 attaches the endpoint first, then every worker, before the netlayer starts and before any adapter
 or transient client exists, so only endpoint-originated frames in that window are exposed. Frames
-already queued are not re-checked.
+already queued are not re-checked. (4) When an oversize answer to a vat's own call is refused, the
+vat's promise breaks with `FRAME_TOO_LARGE`, but the hub's answer route still points at the
+answerer's settled answer, so a call the vat pipelined on that promise still reaches the real
+(oversized) value at the answerer instead of breaking with the same reason (pinned by the test in
+`d705b0006a`). (5) Hub-made frames (fetch answers, breaks, GC frames, notably a large GC batch) are
+not bounded by the ceiling. (6) The core default of 32,768 is too low for the harness: `frameBytes`
+bounds a message's string content, not its encoding, and an import chunk of short turns encodes to
+about 38-40 KB (J-10125); the harness serves at `THIXOTROPE_VAT_FRAME_BYTES=65536` (its
+`limits.vatFrameBytes`, set by `scripts/serve.mjs` at a crank budget of 50 M or more, J-10126).
+Risk (1) is settled: `m2-probes` now asserts the hub's refusal (J-10127); risk (2) was checked by the
+probe and the integration files (J-10124, J-10125).
 Upstream notes: CC-070 asked for a default of 65,536, fixed per state directory, and deliver-only
 drops counted in `status()`. Here the default is 32,768 because the core's default crank budget is
 10 M (a 65,536-byte frame can exceed the meter there); the harness, which runs at 50 M, may set
@@ -1057,6 +1070,9 @@ commits that arrived through the PR 1667 merge map to CC-010.
 - `72ef46f905` -> CC-025
 - `87e13507b5` -> CC-024
 - `354e366739` -> CC-026
+- `0edc2ab05a` -> CC-027
+- `0ecca1dcb0` -> CC-028
+- `d705b0006a` -> CC-027 (its review test)
 
 Outside that command's paths but outside `packages/thixotrope-harness` too:
 
