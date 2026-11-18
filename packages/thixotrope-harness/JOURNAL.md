@@ -11671,3 +11671,38 @@ M2 review made (one file per step) turned a three-way table conflict into three 
 Fit: good for code (guards make a cross-lane mismatch a refused call in a unit test). Poor for
 size: each lane fits its own program budget, but the session program's margin after all three is
 1.4 %, and only a merge shows it.
+
+### J-9983 2026-11-18 HR-HOST review: the agent-host manager and adapter core - awkward
+
+Evidence: `designs/arch-review/harness-host.md` (HR-HOST-1..17); 13,470 lines in 33 files; the
+manager part is 1,503 lines in three files and `durable.js` has 12 commits; 85 duplicated 5-line
+windows between `providers/scripted.js` and `round.js`, 81 between the two API providers, 58
+(4-line) between the session and list channels.
+Reading: the vat boundary fits the design well: manager-side WeakMaps amplify Blob, Secret,
+ReadGrant and session objects into file and store keys, and nothing name-shaped reaches a vat. The
+fit is worse in the durable half: D-14 calls it thin and rarely changed, and it now holds adapter
+policy (effort spelling, catalogue paging, frame cuts), each change of which is a reinstall that
+W13.2 cannot yet migrate.
+Decision: none; findings for the owner.
+
+### J-9984 2026-11-18 HR-HOST: building by seams left four provider shells and layout knowledge in the root - awkward
+
+Evidence: HR-HOST-2, -5, -6, -7, -12; m3 H2-H4 and m4 H-2..H-4 seam tables.
+Reading: the append-only seams merged three lanes without conflict, but each lane copied the shape
+it extended. The scripted double re-implements `runProviderRound`, and the pool provider is a
+third copy of the provider shell. The ops facet uses two dispatch styles (flat secret methods,
+then a credentials sub-facet) and keeps a "not built yet" path that can no longer run. Two
+modules find the state directory from `process.argv`. Test accommodations (`logPath` in the
+durable spec, a swallowed sweep, a perf switch file) sit in product code. Composer's blob cleanup
+matches the session's error texts (HR-HOST-3), and two pagers repeat the J-9486 cursor defect
+(HR-HOST-4).
+Decision: none.
+
+### J-9985 2026-11-18 HR-HOST time record - process
+
+Evidence: start 2026-11-18T12:52:57Z, end 2026-11-18T13:01:19Z. Read-only; no test run. One report commit and
+this journal commit.
+Reading: reading the three manager files, the composition root and the ops facet took most of the
+time. A duplicate-window script and a function-length script (TypeScript parser) gave the
+measured counts, and each flagged site was then read.
+Decision: none.
