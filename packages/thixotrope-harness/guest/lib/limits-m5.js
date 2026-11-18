@@ -22,16 +22,30 @@ export const limitsM5 = harden({
   maxPresets: 64,
   /** A preset's label (Fae `title`: 120 characters). */
   presetLabelUnits: 120,
-  /** A preset's description (Fae: 1,000 characters). */
-  presetDescriptionUnits: 1000,
+  /**
+   * A preset's description. Fae allows 1,000 characters; here 500 units, so
+   * that a preset with long instructions and 32 endowments still fits
+   * `presetRecordBytes` (W5.0-settle; the preset record's frame margin).
+   */
+  presetDescriptionUnits: 500,
   /**
    * A preset's free-text instructions (R4-26 part 7). Fae allows 32,768
-   * characters; here 4,096 units, so that `Preset.describe()` with 32
-   * endowment labels stays within one frame at three bytes a unit
-   * (12,288 + 32 x 240 + 3,000 of description < frameBytes). Open decision
-   * O-4 in `m5-interfaces.md`.
+   * characters; here 4,096 units (12,288 bytes at three bytes a unit), so
+   * that one preset fits one frame. Open decision O-4 in `m5-interfaces.md`.
    */
   presetInstructionsUnits: 4096,
+  /**
+   * The string content bytes (UTF-8, keys included; contract rule 4) of one
+   * `PresetRecord` the catalogue accepts, checked with `fitsFrame(record,
+   * presetRecordBytes)` by the editor before sending and by the catalogue's
+   * validation (`texts.presetTooLarge`). The per-field bounds alone allow
+   * about 31.6 KB at three bytes a unit (measured in W5.0-settle with the
+   * smallcaps encoding, 16 template objects); this whole-record bound keeps
+   * 2,048 bytes of `frameBytes` for the CapTP or OCapN envelope, the handles
+   * and the fields `describe()` adds (`builtIn`, `revision`, `available`,
+   * `unavailableReason`), so every saved preset's `PresetView` fits a frame.
+   */
+  presetRecordBytes: limits.frameBytes - 2048,
   /** An endowment's or an inventory entry's label (Fae: 80 characters). */
   endowmentLabelUnits: 80,
   /** Endowments a preset adds (R3-22 default 32). */

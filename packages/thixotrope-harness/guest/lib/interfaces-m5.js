@@ -8,13 +8,16 @@
  * M5 adds no line to `interfaces.js` for its own interfaces: an M5 version
  * of an interface M2 defines is built here from the M2 guard's method
  * guards plus M5's (`extendInterface`), and `m5Extensions` holds M5's
- * method guards alone, keyed by interface name, so that a merge with
- * another milestone that extends the same interface is one line:
- * `extendInterface(base, name, { ...m4Extensions.X(), ...m5Extensions.X() })`
- * (`m5-interfaces.md` section 9.1). The few shapes M5 widens in place
+ * method guards alone, keyed by interface name, so that another milestone
+ * that later extends the same interface adds its guards with one spread
+ * (`m5-interfaces.md` section 9.1; M4 extends neither `Session` nor
+ * `Operator`, so no such merge exists in the M3/M4/M5 round). The few shapes M5 widens in place
  * (`TurnStarted`, `RoundRequest.system`, `PresetSnapshot`,
  * `SessionServices`) are listed in `m5Widenings` with the exact pattern
  * the owning work unit pastes into `interfaces.js` (section 9.1 seams).
+ *
+ * `vocabularyShapes()` gives the gateway's key guard (M3 W3.2) every
+ * pattern of this module, so the browser may send M5's record keys.
  *
  * Rule 12.10 holds: every record here is closed with a fixed key
  * vocabulary; labels, model JSON and tool arguments cross as text; data
@@ -188,6 +191,13 @@ export const texts = harden({
   grantsFull: 'This session already has 32 granted tools; withdraw one first',
   /** The R4-29 line's closing sentence (Fae `session-attachments.js`). */
   packageDismissed: 'The package is dismissed after the turn.',
+  /**
+   * The browser's mention addon on a resend whose chips a page reload lost
+   * (W5.8; `m5-interfaces.md` 4.1 item 2). The UI keeps a copy in
+   * `ui/src/mentions/` and a unit test keeps the two equal.
+   */
+  attachmentsLost:
+    'Attachments were lost when the page reloaded; attach them again',
 });
 
 export const textOf = harden({
@@ -577,3 +587,17 @@ export const m5MethodNames = harden({
   ToolGrant: harden(['describe', 'withdraw']),
   SourceReader: harden(['read']),
 });
+
+/**
+ * Every pattern of this module whose record keys a browser may send: the
+ * gateway's key guard (M3 W3.2, `GW/vocabulary.js` `harnessVocabulary`)
+ * loads every `guest/lib/interfaces-m*.js` and walks the shapes and the
+ * method guards' argument patterns of what this returns. Node only (it
+ * builds every lazy entry); vats never call it.
+ */
+export const vocabularyShapes = () =>
+  harden([
+    ...Object.values(m5Shapes),
+    ...Object.values(m5Widenings),
+    ...Object.values(m5Interfaces),
+  ]);

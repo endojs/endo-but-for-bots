@@ -3,8 +3,9 @@
  * The M5 interface contract, factory side (W5.0;
  * `designs/m5-interfaces.md` sections 2.1-2.3): the preset catalogue,
  * presets, the operator inventory and the M5 Operator. Only the factory
- * program (and Node: the gateway's key guard, tests) imports this module,
- * so the session and exec bundles do not carry these guards.
+ * program (and Node: the gateway's key guard through `vocabularyShapes()`,
+ * tests) imports this module, so the session and exec bundles do not carry
+ * these guards.
  *
  * Presets and inventory entries are objects (F.1 #3): a preset is passed
  * to `createSession({ preset })` and edited through its own methods; the
@@ -106,11 +107,13 @@ export const texts = harden({
   presetChanged:
     'The preset changed while the session was being created; try again',
   /**
-   * The new session's `make` argument (config with the snapshot, services
-   * with the endowments) would not fit one frame (rule 12.5).
+   * A preset record over `limitsM5.presetRecordBytes` (the editor before
+   * sending, `PresetCatalog.create` and `Preset.save`), or a new session's
+   * `make` argument (config with the snapshot, services with the
+   * endowments) that would not fit one frame (rule 12.5).
    */
   presetTooLarge:
-    "This preset is too large for a new session's configuration; shorten its labels or remove objects",
+    'This preset is too large; shorten its instructions, description or labels, or remove objects',
   /** `Inventory.add` with `maxInventoryEntries` entries. */
   inventoryFull: 'The inventory is full',
   /** An inventory entry after `remove()`. */
@@ -306,3 +309,14 @@ export const m5FactoryMethodNames = harden({
   Inventory: harden(['list', 'add', 'addAll', 'rev']),
   InventoryEntry: harden(['describe', 'value', 'relabel', 'remove']),
 });
+
+/**
+ * Every pattern of this module whose record keys a browser may send (the
+ * gateway's key guard, M3 W3.2: see `interfaces-m5.js` `vocabularyShapes`).
+ * Node only.
+ */
+export const vocabularyShapes = () =>
+  harden([
+    ...Object.values(m5FactoryShapes),
+    ...Object.values(m5FactoryInterfaces),
+  ]);
