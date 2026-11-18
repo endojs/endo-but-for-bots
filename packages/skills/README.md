@@ -30,10 +30,15 @@ disable-model-invocation: false
 Run `./scripts/process.sh <input>`. See [API reference](references/api.md).
 ```
 
-`name` must be 1-64 characters of lowercase `a-z`, `0-9`, and single hyphens,
-and match the directory name; `description` is required and at most 1024
-characters. Like Pi, the loader is lenient: a skill without a description is
-not loaded, and every other violation is a warning.
+`name` must be 1-64 characters of lowercase `a-z`, `0-9`, and single hyphens
+(none leading, trailing, or doubled), and match the directory name;
+`description` is required and at most 1024 characters; `compatibility` is at
+most 500 characters; `metadata` is a one-level string map; and
+`disable-model-invocation` is a boolean. Like Pi, the loader is lenient: a
+skill without a description is not loaded, and every other violation
+(including YAML outside the supported subset) is a warning. `allowed-tools`
+is parsed into `Skill.allowedTools` and never enforced: a skill carries
+instructions, not authority. A `SKILL.md` over 1 MiB is rejected.
 
 ## Discovery
 
@@ -58,6 +63,25 @@ Pass `crossHarness: false` to skip the Claude Code and Codex directories.
 `loadSkills` in `@endo/skills/load.js` takes any `SkillSource`, for hosts that
 reach skill directories through something other than Node's filesystem.
 
+## Skills through read-only mounts
+
+A confined agent such as Lal reads no disk. It holds the pet name
+`agent-skills`, a directory of read-only mounts, one per skill source
+directory. The setup script is the user's grant and the only code that reads
+the filesystem:
+
+```sh
+endo-skills-setup <agent-pet-name> [--no-cross-harness]
+```
+
+It mounts each conventional directory above that exists as
+`<agent>/agent-skills/<NN>-<label>` (for example `03-agents-user`), with the
+two-digit prefix preserving precedence, and on rerun replaces only the
+entries it wrote before. The agent loads them with `loadAgentSkills(powers)`
+from `@endo/skills/mount.js`; skill locations are pet-name paths such as
+`agent-skills/03-agents-user/my-skill/SKILL.md` that the model can pass to
+`readText`.
+
 ## System prompt
 
 ```js
@@ -68,6 +92,10 @@ import {
 
 const systemPrompt = `${basePrompt}\n\n${formatSkillsForPrompt(skills)}`;
 ```
+
+The default reading instructions suit a host whose model reads files by path
+with a `read` tool. A host that delivers skills another way passes its own
+`formatSkillsForPrompt(skills, { readHint })`.
 
 The prompt carries only each skill's name, description, and `SKILL.md`
 location; the model reads the body when a task matches. Skills marked

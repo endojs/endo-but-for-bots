@@ -23,13 +23,18 @@
   "type": "module",
   "exports": {
     "./load.js": "./src/load.js",
+    "./mount.js": "./src/mount.js",
     "./node.js": "./src/node.js",
     "./parse.js": "./src/parse.js",
     "./prompt.js": "./src/prompt.js",
+    "./setup.js": "./src/setup.js",
     "./types.js": {
       "types": "./src/types.ts"
     },
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "endo-skills-setup": "./setup-skills.js"
   },
   "scripts": {
     "build": "exit 0",
@@ -41,10 +46,13 @@
     "test:c8": "c8 ${C8_OPTIONS:-} ava"
   },
   "dependencies": {
-    "@endo/harden": "workspace:^"
+    "@endo/daemon": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/harden": "workspace:^",
+    "@endo/init": "workspace:^",
+    "@endo/where": "workspace:^"
   },
   "devDependencies": {
-    "@endo/init": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

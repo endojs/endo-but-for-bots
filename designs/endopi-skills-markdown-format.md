@@ -139,33 +139,13 @@ same in reverse: a setting (or default) instructs the agent to scan
 
 ## Implementation notes
 
-Phases 1, 2, 3, and 5 are built as library functions in the new
-`@endo/skills` package; see its README for usage. Phase 4, the
-daemon-formula bridge, waits on
-[endoclaw-skill-registry](endoclaw-skill-registry.md), and wiring the
-prompt list and `/skill:` command into Lal waits on a way for the agent to
-reach the skill directories, as Chat's prompt templates reach theirs through
-a read-only mount. The build settles what this design left open:
-
-- **Where the loader lives.** A package of its own, `@endo/skills`, rather
-  than `packages/lal/skills.js`, so Chat, Lal, and the CLI can share it. The
-  pure parts (`parse.js`, `load.js`, `prompt.js`) take no filesystem; only
-  `node.js` touches the disk.
-- **Project-local skills: all three.** `.agents/skills` from the
-  repository root down to the working directory, then the working
-  directory's `.claude/skills` and `.pi/skills`.
-- **Precedence.** Later directories override earlier ones, with a warning:
-  Claude Code and Codex user directories, then `~/.pi/agent/skills` and
-  `~/.agents/skills`, then the project directories. This matches the order
-  in `@endo/prompt-templates`. `crossHarness: false` drops the Claude Code
-  and Codex directories.
-- **`allowed-tools` is parsed but not enforced.** Each skill carries the list,
-  so a later capability-grant mapping has it to hand.
-- **No cache, so nothing to invalidate.** Discovery reads the disk each time
-  it runs; a caller that wants hot reload calls it again.
-- **The YAML subset.** Frontmatter is read as top-level `key: value` pairs,
-  quoted values, `|` and `>` block scalars, and one nested level for
-  `metadata`, without a YAML dependency. Anything else is ignored.
+The design revision in
+[#1672](https://github.com/endojs/endo-but-for-bots/pull/1672) supersedes the
+notes this section held. This PR implements its *Delta from #1643* items 1-4:
+the `endo-skills-setup` script, the mount-backed `SkillSource`
+(`@endo/skills/mount.js`), the host-specific `readHint`, and the validator
+checked against the frontmatter table. Wiring Lal (item 5) follows
+separately.
 
 ## Dependencies
 

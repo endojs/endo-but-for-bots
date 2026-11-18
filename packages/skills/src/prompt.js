@@ -18,6 +18,17 @@ const escapeXml = text =>
     .replace(/'/g, '&apos;');
 
 /**
+ * The default reading instructions, for a host whose model reads skills by
+ * filesystem path with a `read` tool. A host that delivers skills some other
+ * way (Lal reads through pet-name paths) passes its own `readHint`.
+ */
+export const FILESYSTEM_READ_HINT = [
+  "Use the read tool to load a skill's file when the task matches its description.",
+  'When a skill file references a relative path, resolve it against the skill directory (the parent of SKILL.md) and use that absolute path in tool calls.',
+].join('\n');
+harden(FILESYSTEM_READ_HINT);
+
+/**
  * Render the compact skill list for a system prompt: each skill's name,
  * description, and location, with instructions to read a skill's file when a
  * task matches. Skill bodies stay on disk until the model reads them. Skills
@@ -25,17 +36,22 @@ const escapeXml = text =>
  * result is empty, so the caller can append it unconditionally.
  *
  * @param {readonly Skill[]} skills
+ * @param {object} [options]
+ * @param {string} [options.readHint] how the model should read a skill and
+ *   resolve its relative references, in the host's own terms
  * @returns {string}
  */
-export const formatSkillsForPrompt = skills => {
+export const formatSkillsForPrompt = (
+  skills,
+  { readHint = FILESYSTEM_READ_HINT } = {},
+) => {
   const visible = skills.filter(skill => !skill.disableModelInvocation);
   if (visible.length === 0) {
     return '';
   }
   return [
     'The following skills provide specialized instructions for specific tasks.',
-    "Use the read tool to load a skill's file when the task matches its description.",
-    'When a skill file references a relative path, resolve it against the skill directory (the parent of SKILL.md) and use that absolute path in tool calls.',
+    readHint,
     '',
     '<available_skills>',
     ...visible.flatMap(skill => [

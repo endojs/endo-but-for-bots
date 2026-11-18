@@ -8,6 +8,8 @@ export const MAX_NAME_LENGTH = 64;
 harden(MAX_NAME_LENGTH);
 export const MAX_DESCRIPTION_LENGTH = 1024;
 harden(MAX_DESCRIPTION_LENGTH);
+export const MAX_COMPATIBILITY_LENGTH = 500;
+harden(MAX_COMPATIBILITY_LENGTH);
 
 const FRONTMATTER_PATTERN = /^---\n([\s\S]*?)\n?---(?:\n|$)/;
 const KEY_PATTERN = /^([A-Za-z0-9_-]+):[ \t]*(.*?)[ \t]*$/;
@@ -15,6 +17,7 @@ const QUOTED_PATTERN = /^(["'])(.*)\1$/;
 const BLOCK_SCALAR_PATTERN = /^([|>])[+-]?$/;
 const INDENTED_PATTERN = /^[ \t]+\S/;
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const FLOW_PATTERN = /^[[{]/;
 
 /** @param {string} text */
 const normalize = text => text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
@@ -49,12 +52,14 @@ harden(splitFrontmatter);
  * Read the YAML subset skill frontmatter uses: top-level `key: value` pairs
  * with optional quotes, `|` and `>` block scalars, and one level of nested
  * `key: value` pairs under a key with no value (for `metadata`). Anything else
- * is ignored rather than rejected, so foreign skills still load.
+ * is ignored rather than rejected, so foreign skills still load; each ignored
+ * construct is reported to `onIgnored` so the caller can warn.
  *
  * @param {string} frontmatter
+ * @param {(message: string) => void} [onIgnored]
  * @returns {Record<string, string | Record<string, string>>}
  */
-export const parseFrontmatter = frontmatter => {
+export const parseFrontmatter = (frontmatter, onIgnored = () => {}) => {
   /** @type {Record<string, string | Record<string, string>>} */
   const fields = {};
   const lines = frontmatter.split('\n');
@@ -75,6 +80,11 @@ export const parseFrontmatter = frontmatter => {
     const block = match && rawValue.match(BLOCK_SCALAR_PATTERN);
     if (!match) {
       // Not a top-level key; skip the line and anything indented under it.
+      if (lines[index - 1].trim() && !lines[index - 1].trim().startsWith('#')) {
+        onIgnored(
+          `ignored unsupported frontmatter line ${JSON.stringify(lines[index - 1].trim())}`,
+        );
+      }
     } else if (block) {
       const contentLines = continuation.map(line => line.trim());
       fields[key] =
@@ -84,10 +94,26 @@ export const parseFrontmatter = frontmatter => {
     } else if (rawValue === '') {
       /** @type {Record<string, string>} */
       const nested = {};
+      const indentOf = (/** @type {string} */ line) =>
+        line.length - line.trimStart().length;
+      const firstNested = continuation.find(line => line.trim());
+      const nestedIndent = firstNested ? indentOf(firstNested) : 0;
       for (const line of continuation) {
-        const nestedMatch = line.trim().match(KEY_PATTERN);
-        if (nestedMatch) {
+        const trimmed = line.trim();
+        const nestedMatch = trimmed.match(KEY_PATTERN);
+        if (indentOf(line) > nestedIndent) {
+          // Deeper nesting belongs to an entry already reported as dropped.
+        } else if (
+          nestedMatch &&
+          nestedMatch[2] !== '' &&
+          !FLOW_PATTERN.test(nestedMatch[2]) &&
+          !BLOCK_SCALAR_PATTERN.test(nestedMatch[2])
+        ) {
           nested[nestedMatch[1]] = unquote(nestedMatch[2]);
+        } else if (trimmed && !trimmed.startsWith('#')) {
+          onIgnored(
+            `ignored non-string ${key} entry ${JSON.stringify(trimmed)}`,
+          );
         }
       }
       fields[key] = nested;
@@ -122,7 +148,7 @@ export const validateSkillName = name => {
   }
   if (!NAME_PATTERN.test(name)) {
     problems.push(
-      'name must be lowercase a-z, 0-9, and single hyphens, neither leading nor trailing',
+      'name must be lowercase a-z, 0-9, and single hyphens, neither leading nor trailing nor doubled',
     );
   }
   return problems;
@@ -159,7 +185,10 @@ export const parseSkill = ({
     diagnostics.push({ severity, source, entryName: directoryName, message });
 
   const { frontmatter } = splitFrontmatter(text);
-  const fields = frontmatter === undefined ? {} : parseFrontmatter(frontmatter);
+  const fields =
+    frontmatter === undefined
+      ? {}
+      : parseFrontmatter(frontmatter, message => report('warning', message));
 
   const description = asString(fields.description) ?? '';
   if (!description.trim()) {
@@ -197,6 +226,29 @@ export const parseSkill = ({
       : {};
   const license = asString(fields.license);
   const compatibility = asString(fields.compatibility);
+  if (
+    compatibility !== undefined &&
+    compatibility.length > MAX_COMPATIBILITY_LENGTH
+  ) {
+    report(
+      'warning',
+      `compatibility exceeds ${MAX_COMPATIBILITY_LENGTH} characters`,
+    );
+  }
+  const disableField = asString(fields['disable-model-invocation']);
+  if (
+    disableField !== undefined &&
+    disableField !== 'true' &&
+    disableField !== 'false'
+  ) {
+    report(
+      'warning',
+      `disable-model-invocation ${JSON.stringify(disableField)} is not a boolean; treating it as false`,
+    );
+  }
+  if (fields.metadata !== undefined && typeof fields.metadata !== 'object') {
+    report('warning', 'metadata is not a map; ignoring it');
+  }
 
   return {
     skill: harden({
@@ -208,8 +260,7 @@ export const parseSkill = ({
       ...(license ? { license } : {}),
       ...(compatibility ? { compatibility } : {}),
       allowedTools,
-      disableModelInvocation:
-        asString(fields['disable-model-invocation']) === 'true',
+      disableModelInvocation: disableField === 'true',
       metadata,
     }),
     diagnostics,

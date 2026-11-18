@@ -62,22 +62,23 @@ const listProjectDirectories = async (workingDirectory, homeDirectory) => {
 
 /**
  * Name the directories that may hold skills, ordered from lowest to highest
- * precedence. With `crossHarness` (the default), Claude Code's and Codex's
- * skill directories come first, so a skill written for those harnesses loads
- * unless an Endo or Pi directory defines the same name. Then come the user's
- * `~/.pi/agent/skills` and `~/.agents/skills`, then `.agents/skills` from the
- * repository root down to the working directory, then the working directory's
- * `.claude/skills` (cross-harness) and `.pi/skills`. A directory named twice
- * keeps its first place, so a skill in it is not reported as overriding itself
- * when the working directory is the home directory.
+ * precedence, each with a short label. With `crossHarness` (the default),
+ * Claude Code's and Codex's skill directories come first, so a skill written
+ * for those harnesses loads unless an Endo or Pi directory defines the same
+ * name. Then come the user's `~/.pi/agent/skills` and `~/.agents/skills`,
+ * then `.agents/skills` from the repository root down to the working
+ * directory, then the working directory's `.claude/skills` (cross-harness)
+ * and `.pi/skills`. A directory named twice keeps its first place, so a skill
+ * in it is not reported as overriding itself when the working directory is
+ * the home directory.
  *
  * @param {object} options
  * @param {string} options.homeDirectory
  * @param {string} options.workingDirectory
  * @param {boolean} [options.crossHarness]
- * @returns {Promise<readonly string[]>}
+ * @returns {Promise<ReadonlyArray<{ label: string, directory: string }>>}
  */
-export const listSkillDirectories = async ({
+export const listLabeledSkillDirectories = async ({
   homeDirectory,
   workingDirectory,
   crossHarness = true,
@@ -86,23 +87,70 @@ export const listSkillDirectories = async ({
     workingDirectory,
     homeDirectory,
   );
-  const directories = [
+  const candidates = [
     ...(crossHarness
       ? [
-          join(homeDirectory, '.claude', 'skills'),
-          join(homeDirectory, '.codex', 'skills'),
+          {
+            label: 'claude-user',
+            directory: join(homeDirectory, '.claude', 'skills'),
+          },
+          {
+            label: 'codex-user',
+            directory: join(homeDirectory, '.codex', 'skills'),
+          },
         ]
       : []),
-    join(homeDirectory, '.pi', 'agent', 'skills'),
-    join(homeDirectory, '.agents', 'skills'),
-    ...projectDirectories
-      .map(directory => join(directory, '.agents', 'skills'))
-      .reverse(),
-    ...(crossHarness ? [join(workingDirectory, '.claude', 'skills')] : []),
-    join(workingDirectory, '.pi', 'skills'),
+    {
+      label: 'pi-user',
+      directory: join(homeDirectory, '.pi', 'agent', 'skills'),
+    },
+    {
+      label: 'agents-user',
+      directory: join(homeDirectory, '.agents', 'skills'),
+    },
+    ...[...projectDirectories].reverse().map((directory, index) => ({
+      label: `agents-project-${index}`,
+      directory: join(directory, '.agents', 'skills'),
+    })),
+    ...(crossHarness
+      ? [
+          {
+            label: 'claude-project',
+            directory: join(workingDirectory, '.claude', 'skills'),
+          },
+        ]
+      : []),
+    { label: 'pi-project', directory: join(workingDirectory, '.pi', 'skills') },
   ];
-  return harden([...new Set(directories)]);
+  const seen = new Set();
+  return harden(
+    candidates.filter(({ directory }) => {
+      if (seen.has(directory)) {
+        return false;
+      }
+      seen.add(directory);
+      return true;
+    }),
+  );
 };
+harden(listLabeledSkillDirectories);
+
+/**
+ * Name the directories that may hold skills, ordered from lowest to highest
+ * precedence (see `listLabeledSkillDirectories`).
+ *
+ * @param {object} options
+ * @param {string} options.homeDirectory
+ * @param {string} options.workingDirectory
+ * @param {boolean} [options.crossHarness]
+ * @returns {Promise<readonly string[]>}
+ */
+export const listSkillDirectories = async options =>
+  harden(
+    (await listLabeledSkillDirectories(options)).map(
+      ({ directory }) => directory,
+    ),
+  );
 harden(listSkillDirectories);
 
 /**
