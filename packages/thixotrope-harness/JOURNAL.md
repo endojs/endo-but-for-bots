@@ -8301,3 +8301,50 @@ creation on a pool costs one `resolveModel` and one or more `listModels` manager
 calls instead of one. A `ResolvedModel` with `reasoningEfforts` and `defaultReasoningEffort`
 would make it one call.
 Decision: none in this lane; noted for the PM.
+
+### J-0650 2026-11-18 M4 W4.3 wire clients and pool catalogue - build
+Evidence: commits `ac7f8a9234` (H-14: `anthropicAttempt` `headers`, `anthropicBody` `extras`),
+then the W4.3 commits on `claude/thix-m4`: `subscriptions/{wire,messages,responses,catalog}.js`,
+`test/fixtures/fake-subscription-server.mjs` with 20 fixtures under
+`test/fixtures/sse/subscriptions/`, and `m4-wire-claude` (9 tests), `m4-wire-codex` (9),
+`m4-catalog` (7); all 25 pass in about 1 s of test time; `m2-w21b-anthropic` and
+`m2-w22-catalog` unchanged and passing.
+Reading: Claude reuses M2's Messages client whole; the pool's differences (bearer and R4-30
+headers, billing block, adaptive thinking, R4-76 texts, empty answer) are a wrapper that maps
+M2's `ProviderFailure` and observes headers through a wrapping `fetch`, so `anthropic.js` grew
+by two options only. Codex is a port of lal's Responses client onto M2's `sse.js` and round
+events. Overload retry is `withOverloadRetry` over M2's `withRetries`, used by W4.6.
+Decision: one extra file, `subscriptions/wire.js` (shared failure facts, reading fetch, retry),
+reported to the PM.
+
+### J-0651 2026-11-18 Wire and catalogue costs - perf
+Evidence: in-process Node timing against the fake server on loopback (not a perf file; W4.8
+owns them), 3 s windows. Warm `listModels` of a 16-member `codex-pool`: 81,984 samples, median
+0.033 ms, p99 0.135 ms, 0 reads. One attempt to completion (`claude-text.sse`): Claude pool
+client 6,897 samples, median 0.355 ms, p99 1.28 ms; M2's API client on the same stream 5,930,
+median 0.407 ms, p99 4.03 ms; Codex client (`codex-text.sse`) 8,242, median 0.328 ms, p99
+1.24 ms. No budget in the contract's table is W4.3's own; `catalog.pool` warm <= 300 ms and
+`subscriptions.handover` <= 50 ms added are W4.8's, and these leave them almost all.
+Reading: the wrapper costs nothing measurable over M2's client. Windows are 3 s, not 60 s, as
+these are informative only.
+
+### J-0652 2026-11-18 Reusing M2's provider code for subscriptions - fit
+Evidence: J-0650; `messages.js` is 300 lines over `anthropic.js`; `catalog.js` copies M2's
+`pageOf` and `boundedJson` (not exported) and imports `anthropicPage`, the cache constants and
+`cutUnits`.
+Reading: good fit where M2 exported building blocks (attempt, body, messages, retry, SSE). Poor
+where it did not: about 150 lines of `pageOf` and the bounded JSON reader are duplicated because
+`providers/catalog.js` exports neither. The error-event overload is recognised by comparing
+M2's fixed text (`textOf.anthropicApiError(servedBy type overloaded_error)`), since
+`ProviderFailure` carries no error type; it is pinned by a test but brittle.
+Decision: asked the PM to export `pageOf` / `boundedJson` and to let `ProviderFailure` carry a
+symbolic `errorType`.
+
+### J-0653 2026-11-18 Texts the contract lacks for Codex transport failures - fit
+Evidence: `responses.js`; `m4-wire-codex` "empty answer, cut stream, timeout and cancel".
+Reading: `texts-m4.js` has no text for a Codex stream cut before completion, an unreadable
+event, no answer or a timeout. The client uses `m4TextOf.responsesFailed` with pseudo event types
+`stream.incomplete`, `stream.unreadable`, `stream.unreachable`, `stream.timeout` (the
+reference's diagnostic pattern admits `stream.*`). Claude transport failures keep M2's
+Anthropic API texts.
+Decision: works as is; the PM may add fixed texts to `texts-m4.js` (W4.0's file).
