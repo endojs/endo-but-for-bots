@@ -96,7 +96,7 @@ one that names `H/test/*/m6-*` or an `interfaces-m6.js`).
    milestone's module instead of copying it; the export is a one-line seam listed in the lane's
    contract and reviewed by the module's owner. Copying more than 15 lines is a review finding.
    `corepack yarn lint:duplicates` fails above the duplicate ceiling (`scripts/check-duplicates.mjs`:
-   3.5 % of normalised lines over `guest`, `resources` and `ui`; measured 3.22 % at `802bd2767c`);
+   3.25 % of normalised lines over `guest`, `resources` and `ui`; measured 3.00 % at `f6a844cbbf`);
    the ceiling only goes down.
 4. **Fakes are built from the real guards** (T5): `makeExo` with the product's interface,
    assemblies exported by the product rather than re-assembled in a fixture; a product branch
@@ -342,6 +342,13 @@ J-9195..J-9200.
 
 ## M1b. Exec scope, staging, context cache, pool, list feed
 
+**Files after the review's fold (CL-CLOSE, 2026-11-18).** The `m1bShapes`, `m1bInterfaces` and
+`m1bMethodNames` views of `guest/lib/interfaces.js` are gone (`a1373d71b9`): read `shapes`,
+`interfaces` and `methodNames` there (Node) or in `guest/lib/guards/*.js` (vats); M1b's method
+lists stay as the build ingredient `m1bMethodLists`. The live probe of `turn.delta` is switched on
+by `THIX_HARNESS_LIVE_PROBE_DIR`, no longer by a file (`84bb177365`). Rename map:
+`arch-review/fold-plan.md` section 6.
+
 **Status: done, with recorded perf misses for the PM to rule on.** Build commits
 `3df16eafd4..4efd2d795c` (W1b.0..W1b.6, the C-20 core change `7efa7fb3e4..a3a2b58da5`, the delivery
 histogram `b45da47b93`); QC fixes `d4241fa77a..e48dffe8f7` plus the documentation commits that follow it. Journal J-0300..J-0370, J-0390..J-0398,
@@ -523,6 +530,10 @@ a session takes at most 4,096 Composer submissions in 24 h (J-9391).
 ---
 
 ## M2. Turn loop completeness on API-key backends (with minimal secrets)
+
+**Files after the review's fold (CL-CLOSE, 2026-11-18).** The `m2Interfaces` and
+`m2MethodNames` views are gone (`a1373d71b9`; read `interfaces`, `methodNames`). Rename map:
+`arch-review/fold-plan.md` section 6.
 
 **Status: done with open items** (M2-CLOSE, 2026-11-18; the outcome table at the end of this
 section). Every acceptance item passes except one ratio of 15 at 1,000 turns; reviews M2-R1, M2-R2
@@ -812,6 +823,12 @@ inline too-big refusal (C-25).
 
 ## M3. Chat UI and gateway
 
+**Files after the review's fold (CL-CLOSE, 2026-11-18).** `AH/gateway/contract-m3.js` is
+`AH/gateway/protocol.js` (exports unchanged, `33e726b912`). The gateway's vocabulary reads the
+explicit list `guest/lib/vocabulary-tables.js`, not the glob `interfaces-m*.js` (`b621c04535`).
+`guest/lib/interfaces-m3.js` keeps its name until the step-4 reinstall. Rename map:
+`arch-review/fold-plan.md` section 6.
+
 **Status: done with open items** (X-CLOSE, 2026-11-18, after the cross-lane integration of M3, M4
 and M5; the outcome table at the end of this section). Every acceptance item passes in this run.
 Open:
@@ -1031,6 +1048,14 @@ Perf files held: `gateway` 329 s, `gateway-session` 602 s (exit 124), `ui` 438 s
 
 ## M4. Secrets manager and subscription pools
 
+**Files after the review's fold (CL-CLOSE, 2026-11-18).** `config/defaults-m4.js` is
+`config/subscription-defaults.js`, `AH/gateway/extensions/m4-secrets.js` is
+`AH/gateway/extensions/secrets.js` (its `name` stays `m4-secrets`; `33e726b912`),
+`guest/lib/limits-m4.js` `m4Limits` is `subscription-limits.js` `subscriptionLimits` and
+`texts-m4.js` `m4Texts` is `subscription-texts.js` `subscriptionTexts` (`93b410bf4b`). A closed
+accounts watch answers `AccountsBatch { closed, reason }` (`4eda82d98d`). `interfaces-m4.js` keeps
+its name until the step-4 reinstall. Rename map: `arch-review/fold-plan.md` section 6.
+
 **Status: done with open items** (X-CLOSE, 2026-11-18; the outcome table at the end of this
 section). Acceptance 1-17 pass; the `[real-provider]` repeats of 3, 7, 8 and 10 are deferred
 because they need the owner's credentials and an owner's run (never by an agent). Open:
@@ -1216,6 +1241,13 @@ Perf files held: `subscriptions` 208 s (exit 1: `servedWrites`, `bundles`),
 ---
 
 ## M5. Presets, prompt composition, object and exec tools, grants, mentions
+
+**Files after the review's fold (CL-CLOSE, 2026-11-18).** `guest/lib/interfaces-m5.js` and
+`interfaces-m5-factory.js` are folded into `guest/lib/guards/base.js`, `session.js` and
+`factory.js` (one guard per interface under its plain name), `limits-m5.js` into `limits.js`, and
+`guest/session/m5-parts.js` is `runtime-parts.js` (`46b5602b19`, `a1373d71b9`, `33e726b912`). The
+session program is 206,907 bytes (was 214,690) and the exec program 61,688 (was 63,826). Rename
+map: `arch-review/fold-plan.md` section 6.
 
 **Status: done** (X-CLOSE, 2026-11-18; the outcome table at the end of this section). Acceptance
 1-15 pass, the browser item included; no blocker or major is open. Recorded and carried (not
