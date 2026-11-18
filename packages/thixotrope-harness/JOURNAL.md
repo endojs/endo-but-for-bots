@@ -9698,3 +9698,83 @@ Reading: the sibling reports AR-CORE and AR-CTRL, written in parallel, already h
 optional seams, framing and configuration findings; this unit adds their counts and links to them
 instead of repeating them.
 Decision: none.
+
+### J-9968 2026-11-18 AR-SYN synthesis: overall verdict - fit
+
+Evidence: packages/thixotrope-harness/designs/arch-review/core.md sections 1-2, merging six area
+reports (AR-NET, AR-CORE, AR-CTRL, AR-APPS, AR-ONTO, AR-DUP) and the verdicts of AR-VER1 and
+AR-VER2; no finding was refuted.
+Reading: good fit at the centre: dependency direction is clean, platform powers are injected, the
+source is not copy-pasted, and "tables before wire" and "journal before the duct" are tested under
+SIGKILL. The cost is accretion: three closures of 900-2,800 lines, compatibility paths kept behind
+a version gate that already refuses their states, and an application (mail) and an engine (XS)
+inside the core.
+Decision: none; the owner decides from the ranked table (31 rows).
+
+### J-9969 2026-11-18 AR-SYN synthesis: confirmed defects - poor fit
+
+Evidence: core.md AR-SYN-1 (hub retirement persists and sends in pieces at deliveryDepth 0; the
+comment at src/net/hub.js:411 is false on that path; attachSession un-retires at :2420),
+AR-SYN-3 (a retried transport retire returns early and skips the image release), AR-SYN-4 (a
+failed single journal append is not repaired). Three cited sites re-read for the synthesis.
+Reading: all three sit where two owners of a life cycle hand off. AR-SYN-1 needs no crash: a
+throw from setState leaves a live hub half-retired.
+Decision: proposed as step 1 of the order of work, each with a failure-injection test.
+
+### J-9970 2026-11-18 AR-SYN synthesis: life cycles without an owner - awkward
+
+Evidence: core.md AR-SYN-5, -9, -17, -21 (vat state over ten transport flags, meta.failure,
+the daemon map and the hub flag; one retirement text for quarantine, removal and adapter end; stop()
+only requests; the endpoint as a pseudo-worker).
+Reading: C-8, C-10, C-11 and C-18 all land on this split; building them before the vat life cycle
+has one owner would add a fourth and fifth place that knows the states.
+Decision: proposed step 2 (transport-owned state machine, then C-8, C-10, C-11) and C-18 in step 3.
+
+### J-9971 2026-11-18 AR-SYN synthesis: names instead of objects in the hub - awkward
+
+Evidence: core.md AR-SYN-6, -7, -22 (session kind as 14 prefix sites, 7 flags and 3 outbox loops;
+vat GC parsing the hub's persisted tables; duct envelopes at 18 sites and slots parsed at 11).
+Reading: the owner's "pass objects, not names" principle is broken where it costs most: every
+change to the hub row format (C-2's open part, CC-051, CC-060) must also change vat GC. Verification
+showed the kind must be persisted and peers need a resumable parameter.
+Decision: proposed step 3, one hub-state version 3 together with CC-051/CC-060 and C-18.
+
+### J-9972 2026-11-18 AR-SYN synthesis: the version gate - awkward
+
+Evidence: core.md AR-SYN-2, -18, -28 (12 shipped toString() sites guarded by a hand-bumped
+WORKSPACE_VERSION 21; legacySubscribe, mailboxPlacement 'workspace', the ephemeral worker, the
+launcher's pre-bundle message kept although the gate refuses their states).
+Reading: the gate is the right compatibility story, but it is manual, and many fixes in the review
+edit shipped source. A pinned golden digest would churn on formatting; a digest recorded in
+workspace.json and refused on mismatch does not.
+Decision: guard in step 1; batch the shipped-source changes into one bump in step 4.
+
+### J-9973 2026-11-18 AR-SYN synthesis: reconciling the area reports - process
+
+Evidence: core.md section 3.2: eleven proposed fixes corrected by verification (AR-NET-1, -3/-DUP-3,
+-5, -7/-DUP-1 against AR-APPS-7, -12; AR-CORE-2, -6; AR-CTRL-3, -8; AR-APPS-3, -4/-DUP-2, -5;
+AR-ONTO-3). About forty minor findings had no verifier and are listed apart.
+Reading: the parallel units overlapped on XS, framing, session kind and the hub store, and twice
+contradicted each other; a reconciliation pass before any fix was needed, as AR-VER2 said.
+Decision: the hub store's file mode stays while the harness uses it as its perf baseline; the
+mail-hub experiments and stale patches can go now; the handoff-location refusal is an open
+question for the owner.
+
+### J-9974 2026-11-18 AR-SYN synthesis: what the harness gains - fit
+
+Evidence: core.md section 5, five steps.
+Reading: step 1 closes C-1 at rest and makes the lane's cost attributable; step 2 removes the
+20-64 s startup block of a crashing vat and makes a given-up session vat recoverable with its
+transcript; step 3 addresses hub.growth (C-2) and replaces the exact-string restart test (C-18);
+step 4 lets the agent host drop its fake service key and directory walk and makes running state
+directories copyable (C-4); step 5 shrinks the modules core changes touch.
+Decision: none; order proposed to the owner.
+
+### J-9975 2026-11-18 AR-SYN time record - process
+
+Evidence: start 2026-11-18T12:27:14Z, end 2026-11-18T12:32:22Z. Read-only; nothing run. Read the six area
+reports in full and the two verification verdicts; re-read three cited code sites. Report
+463 lines, Prettier clean. Two commits: the report, and these entries.
+Reading: the synthesis is a ranking and reconciliation, not new review; its new claims are the
+three re-read sites and the merged themes.
+Decision: none.
