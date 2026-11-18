@@ -136,6 +136,9 @@ run('provision, create, list, lost after restart', async t => {
         // M1b W1b.5 appends these (the exec step runs once W1b.3's program exists).
         ['load exec program', buildReports[4]?.skipped],
         ['pool', false],
+        // M5 W5.5 appends this (H-10), a no-op without options.m5Fixtures;
+        // M3's gateway and M4's subscriptions steps go before it.
+        ['m5 fixtures', true],
       ],
     );
     const byName = new Map(buildReports.map(r => [r.name, r]));
