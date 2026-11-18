@@ -34,6 +34,16 @@
  *   more dynamic entries refuses all of them (`refused-duplicate`). A
  *   dynamic entry may carry `refused(state, reason)`, called synchronously
  *   when it is refused that round; the refusals are also in the answer.
+ *
+ * Adapter tools (D-M4-9 as amended at the cross-lane merge, XC;
+ * m5-interfaces.md 2.8 S1, m4-interfaces.md 6): an adapter tool the ports
+ * offer (`TurnPorts.tools`) with no static entry of its name is offered
+ * through one generic entry (`adapterToolEntries`): the description is the
+ * one its `AdapterToolEntry` carries, `execute` sends to that entry's tool
+ * object, `site: 'adapter'`. A port tool without a description, or whose
+ * description names another tool, is not offered. These entries follow the
+ * static table, so a static entry is never shadowed; their names are in the
+ * round's built-in set, so no granted tool shadows them either.
  */
 import { echoDescription } from '../lib/guards/session.js';
 import { textOf as textOfM5 } from '../lib/interfaces-m5.js';
@@ -85,6 +95,48 @@ const echo = harden({
   execute: ({ opId, args }, ports) =>
     E(adapterTool(ports, 'echo')).execute(harden({ opId, args })),
 });
+
+/**
+ * Generic entries, one per port tool record (the ports are held across
+ * turns, so a round reuses the entries of the last one).
+ * @type {WeakMap<object, ToolTableEntry>}
+ */
+const adapterEntryOf = new WeakMap();
+
+/**
+ * The generic entries of the adapter tools these ports offer that have no
+ * entry in `table` (module comment).
+ * @param {any} ports
+ * @param {readonly ToolTableEntry[]} table
+ * @returns {ToolTableEntry[]}
+ */
+export const adapterToolEntries = (ports, table) => {
+  /** @type {ToolTableEntry[]} */
+  const entries = [];
+  for (const port of ports?.tools ?? []) {
+    const { name, tool, description } = port;
+    if (
+      description?.name === name &&
+      !table.some(entry => entry.name === name)
+    ) {
+      let entry = adapterEntryOf.get(port);
+      if (entry === undefined) {
+        entry = harden({
+          name,
+          site: /** @type {const} */ ('adapter'),
+          describe: () => description,
+          available: () => true,
+          execute: (/** @type {{ opId: string, args: any }} */ request) =>
+            E(tool).execute(harden({ opId: request.opId, args: request.args })),
+        });
+        adapterEntryOf.set(port, entry);
+      }
+      entries.push(entry);
+    }
+  }
+  return entries;
+};
+harden(adapterToolEntries);
 
 /** @type {readonly ToolTableEntry[]} */
 export const toolTable = harden([
@@ -146,7 +198,7 @@ export const toolSetFor = (
   const byName = new Map();
   /** @type {{ entry: ToolTableEntry, state: string, reason: string }[]} */
   const refused = [];
-  for (const entry of table) {
+  for (const entry of [...table, ...adapterToolEntries(ports, table)]) {
     if (
       descriptions.length < limits.maxToolsPerRound &&
       !byName.has(entry.name) &&

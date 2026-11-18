@@ -364,10 +364,15 @@ const m1aShapeBuilders = {
     ),
   /** What `Backend.open(host)` returns: one adapter incarnation's turn ports. */
   AdapterToolEntry: () =>
-    record({
-      name: S.ToolName,
-      tool: M.remotable('AdapterTool'),
-    }),
+    record(
+      {
+        name: S.ToolName,
+        tool: M.remotable('AdapterTool'),
+      },
+      // XC (D-M4-9 as amended): how the model is offered a tool that has
+      // no static tool-table entry (`guest/session/tool-table.js`).
+      { description: S.ToolDescription },
+    ),
   /**
    * `since`: when the adapter incarnation that minted these ports started
    * (ms since the epoch, the adapter's clock). The session holds its ports

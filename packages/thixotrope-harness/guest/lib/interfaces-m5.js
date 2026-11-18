@@ -386,7 +386,11 @@ export const m5Shapes = lazyTable({
       record({ status: 'ok', description: shapes.ToolDescription }),
       record({ status: 'exhausted' }),
     ),
-  /** One granted tool as `SessionGrants.list` / `ToolGrant.describe` show it. */
+  /**
+   * One granted tool as `SessionGrants.list` / `ToolGrant.describe` show it.
+   * `label` (XC, 2.6): the display label `adoptTool` was given (its
+   * `toolName`); `name` is the model-facing name from the schema.
+   */
   ToolGrantInfo: () =>
     record(
       {
@@ -394,7 +398,7 @@ export const m5Shapes = lazyTable({
         state: M.or(...grantStates),
         source: M.or('operator', 'adopted'),
       },
-      { name: shapes.ToolName, reason: shapes.Reason },
+      { name: shapes.ToolName, reason: shapes.Reason, label: shapes.Label },
     ),
   /**
    * The `SourceReader.read` argument: the protocol `readSources` targets

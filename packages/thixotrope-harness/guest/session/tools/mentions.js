@@ -15,8 +15,9 @@
  *   in the issuing crank (kill point K3).
  * - `adoptTool({ messageNumber, edgeName, toolName })`, `site: 'guest'`:
  *   grants the package's object through the runtime's `grants` part (W5.6,
- *   found at run time: `grant(tool, 'adopted')`, then `schemaRead(grant)`),
- *   awaits its schema read, and
+ *   found at run time: `grant(tool, 'adopted', toolName)`, then
+ *   `schemaRead(grant)`; `toolName` is the grant's display label,
+ *   `ToolGrantInfo.label`, XC), awaits its schema read, and
  *   answers `textOf.adoptedTool` when it is offered, else fails with the
  *   refusal. Offered only with an exec vat (the schema read is an inspector
  *   call, D-M5-2).
@@ -177,7 +178,9 @@ const adoptToolEntry = harden({
       return failed(textOf.notBuilt('adoptTool'));
     }
     try {
-      const info = await grants.schemaRead(grants.grant(value, 'adopted'));
+      const info = await grants.schemaRead(
+        grants.grant(value, 'adopted', name),
+      );
       if (info?.state === 'offered') {
         return ok(textOfM5.adoptedTool(name, number));
       }
