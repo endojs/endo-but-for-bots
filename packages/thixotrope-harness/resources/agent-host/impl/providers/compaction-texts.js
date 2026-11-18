@@ -69,3 +69,33 @@ export const scriptedSummary = harden(
     'None',
   ].join('\n'),
 );
+
+/**
+ * The skip reasons of the plan and the summary checks (contract 5.2,
+ * 5.3), recorded by the vat in `CompactionSkipped.reason`; lal threw the
+ * same conditions (`providers/context-compaction.js` lines cited).
+ */
+export const compactionSkipTexts = harden({
+  /** R4-35, lal :98: no complete call-and-result group before the tail. */
+  nothingToSummarize: 'Compaction skipped: no completed work to summarize',
+  /** R4-35, lal :71 (contract D-M8-7): an unresolved unknown outcome holds the boundary. */
+  pinnedByUnknownOutcome:
+    'Compaction skipped: an unresolved unknown tool outcome must stay visible',
+  /** lal :59: the fixed parts alone exceed the headroom. */
+  headroomExceeded:
+    'Compaction skipped: compaction instructions and tools exceed the model headroom',
+  /** lal :196: excerpts halved to nothing still do not fit. */
+  summaryInputTooLarge:
+    'Compaction skipped: the summary input exceeds the model headroom',
+  /** lal :220: empty text or tool calls. */
+  invalidSummary: 'Compaction skipped: the model returned no usable summary',
+  /** `contextLimits.summaryMaxBytes`. */
+  summaryTooLong: 'Compaction skipped: the summary is longer than the limit',
+  /** lal :228: the new context is not smaller. */
+  noReduction: 'Compaction skipped: the summary did not reduce the context',
+  /** lal :230. */
+  stillOverHeadroom:
+    'Compaction skipped: the summary and the retained tail exceed the model headroom',
+  /** The cache held no records for the plan (contract 5.1). */
+  notCached: 'Compaction skipped: the context was not available to plan',
+});

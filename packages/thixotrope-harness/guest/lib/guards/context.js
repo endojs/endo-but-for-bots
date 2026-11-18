@@ -100,36 +100,17 @@ export const compactionKindLetters = harden([
 // ---------------------------------------------------------------- texts
 
 /**
- * Fixed texts. Skip reasons are recorded in `CompactionSkipped.reason` and
- * never quote a provider body (R4-79).
+ * The fixed texts the session vat writes itself. The skip reasons the
+ * adapter produces (the plan and the summary checks) are Node-only, in
+ * `AH/providers/compaction-texts.js` `compactionSkipTexts`; the vat records
+ * whichever reason it is given (`CompactionSkipped.reason`). No reason
+ * quotes a provider body (R4-79).
  */
 export const compactionTexts = harden({
   /** R4-50: the phase while a compaction ask is out. */
   phase: 'compacting context',
-  /** R4-35: no complete call-and-result group lies before the tail. */
-  nothingToSummarize: 'Compaction skipped: no completed work to summarize',
-  /** R4-35: an unresolved unknown tool outcome holds the boundary back. */
-  pinnedByUnknownOutcome:
-    'Compaction skipped: an unresolved unknown tool outcome must stay visible',
-  /** lal `context-compaction.js:59`: the fixed parts alone exceed the headroom. */
-  headroomExceeded:
-    'Compaction skipped: compaction instructions and tools exceed the model headroom',
-  /** lal `context-compaction.js:196`: excerpts halved to nothing still do not fit. */
-  summaryInputTooLarge:
-    'Compaction skipped: the summary input exceeds the model headroom',
-  /** lal `context-compaction.js:220`: empty text or tool calls. */
-  invalidSummary: 'Compaction skipped: the model returned no usable summary',
-  /** `contextLimits.summaryMaxBytes`. */
-  summaryTooLong: 'Compaction skipped: the summary is longer than the limit',
-  /** lal `context-compaction.js:228`: the new context is not smaller. */
-  noReduction: 'Compaction skipped: the summary did not reduce the context',
-  /** lal `context-compaction.js:230`. */
-  stillOverHeadroom:
-    'Compaction skipped: the summary and the retained tail exceed the model headroom',
-  /** The vat refused the boundary the adapter answered (contract 4.3). */
+  /** The vat refused the boundary the adapter answered (contract 4.2). */
   invalidBoundary: 'Compaction skipped: the proposed boundary is not a cut',
-  /** The cache held no records for the plan (contract 5.2). */
-  notCached: 'Compaction skipped: the context was not available to plan',
 });
 
 // ---------------------------------------------------------------- shapes
