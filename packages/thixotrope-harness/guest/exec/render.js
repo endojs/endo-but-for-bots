@@ -11,10 +11,27 @@
  * contains them anywhere, including inside a string, and this module is part
  * of a bundle a vat evaluates; and the result of a remote capability's
  * method-name query is bounded before it is rendered.
+ *
+ * M5 W5.4 adds what `run` and `inspect` share (the failed and exhausted
+ * outcomes, `argumentText`, `finish`) and the exec program's copy of the M5
+ * contract pieces it uses (`execGuards`: the M5 `ExecScope` guard and its
+ * shapes; `texts`, `textOf`), here rather
+ * than in modules of their own: each module costs the exec bundle about
+ * 1.5 KB of wrapper, and the bundle is at its budget (open decision O-1).
+ *
+ * The copy: `interfaces-m5.js` would be about 13.7 KB of the exec bundle;
+ * `m5-w54-exec.test.js` checks that every value of the copy equals its
+ * `interfaces-m5.js` original (guards compared structurally), so the
+ * contract file still wins and a drift fails a test.
  */
 
+import { interfaces, shapes, textOf as m1Text } from '../lib/interfaces.js';
+import { limits } from '../lib/limits.js';
+import { limitsM5 } from '../lib/limits-m5.js';
+import { boundToolOutput, chunkText, utf8Bytes } from '../lib/bounded.js';
+
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { E } = /** @type {GuestGlobals} */ (globalThis);
+const { E, M } = /** @type {GuestGlobals} */ (globalThis);
 
 // SES refuses these sequences anywhere in an evaluated source (Fae writes
 // them literally; a vat bundle cannot).
@@ -106,7 +123,7 @@ harden(describeParseFailure);
  * @param {string} _key
  * @param {unknown} value
  */
-const bigintsAsDecimalStrings = (_key, value) =>
+export const bigintsAsDecimalStrings = (_key, value) =>
   typeof value === 'bigint' ? value.toString() : value;
 
 /** Method names rendered for a remote capability, at most. */
@@ -200,3 +217,237 @@ export const renderToolResult = async result => {
   }
 };
 harden(renderToolResult);
+
+// ---------------------------------------------------------------- outcomes (run and inspect)
+
+/**
+ * @typedef {{ status: 'ok' | 'failed', text: string | object }} Outcome
+ * @typedef {{ blob: object, preview: string, bytes: number }} StagedText
+ */
+
+/** A staged source whose pages do not reach its end within this many reads. */
+export const MAX_SOURCE_PAGES =
+  4 * Math.ceil(limits.execSourceBytes / limits.blobPageBytes);
+
+/** `ExecRequest.args` is staged but no `Content` came with it. */
+export const NO_CONTENT_TEXT =
+  'exec arguments were staged but no content reader was passed';
+/** A staged source's pages did not reach its end. */
+export const SOURCE_PAGES_TEXT =
+  'exec source could not be read: its pages did not reach the end of the text';
+
+/**
+ * @param {string} text
+ * @returns {Outcome}
+ */
+export const failed = text => harden({ status: 'failed', text });
+harden(failed);
+
+/** The engine's text when a vat's name table is full (J-0333). */
+const KEYS_EXHAUSTED = 'property key space exhausted';
+
+/**
+ * Whether `error` (or a message) says this vat's name table is full.
+ * @param {unknown} error
+ */
+export const isKeysExhausted = error =>
+  messageOf(error).includes(KEYS_EXHAUSTED);
+harden(isKeysExhausted);
+
+export const EXHAUSTED = harden({ status: 'exhausted' });
+
+/**
+ * The model's argument text: inline, or read from its blob in pages.
+ * @param {{ args: string | StagedText, content?: any }} request
+ * @returns {Promise<{ text: string } | { outcome: Outcome }>}
+ */
+export const argumentText = async ({ args, content }) => {
+  await null;
+  if (typeof args === 'string') return { text: args };
+  if (args.bytes > limits.execSourceBytes)
+    return {
+      outcome: failed(
+        m1Text.execSourceTooLarge(args.bytes, limits.execSourceBytes),
+      ),
+    };
+  if (content === undefined) return { outcome: failed(NO_CONTENT_TEXT) };
+  /** @type {string[]} */
+  const pages = [];
+  let offset = 0;
+  for (let read = 0; read < MAX_SOURCE_PAGES; read += 1) {
+    /** @type {{ text: string, next: number, done: boolean }} */
+    let page;
+    try {
+      // eslint-disable-next-line no-await-in-loop -- one answered page per crank
+      page = await E(content).read(
+        args.blob,
+        harden({ offset, maxBytes: limits.blobPageBytes }),
+      );
+    } catch (error) {
+      // The adapter restarted (its Content is gone) or the blob is unknown.
+      return { outcome: failed(messageOf(error)) };
+    }
+    if (page.next > limits.execSourceBytes)
+      return {
+        outcome: failed(
+          m1Text.execSourceTooLarge(
+            Math.max(page.next, args.bytes),
+            limits.execSourceBytes,
+          ),
+        ),
+      };
+    pages.push(page.text);
+    if (page.done) return { text: pages.join('') };
+    if (page.next <= offset) break;
+    offset = page.next;
+  }
+  return { outcome: failed(SOURCE_PAGES_TEXT) };
+};
+harden(argumentText);
+
+/**
+ * The outcome for a model-facing text: inline when it is at most
+ * `inlineBytes`, else staged through `writers` in pieces of at most
+ * `blobPieceBytes` (one answered piece per crank).
+ *
+ * `ok`: `text` is the rendered result. `failed`: `text` is the error
+ * message; inline it stays the message (the session writes `Error: ...`),
+ * staged it is the complete model-facing result (`m1b-interfaces.md` 5.3).
+ *
+ * @param {'ok' | 'failed'} status
+ * @param {string} text
+ * @param {any} writers
+ * @returns {Promise<Outcome>}
+ */
+export const finish = async (status, text, writers) => {
+  await null;
+  const bounded = boundToolOutput(text);
+  if (bounded === text && utf8Bytes(text) <= limits.inlineBytes)
+    return harden({ status, text });
+  const modelText =
+    status === 'ok' ? bounded : boundToolOutput(m1Text.errorResult(text));
+  /** @type {any} */
+  let writer;
+  try {
+    writer = await E(writers).open();
+    for (const piece of chunkText(modelText, limits.blobPieceBytes)) {
+      // eslint-disable-next-line no-await-in-loop -- one answered piece per crank
+      await E(writer).append(piece);
+    }
+    const staged = await E(writer).close();
+    return harden({ status, text: staged });
+  } catch (error) {
+    if (writer !== undefined) E.sendOnly(writer).abort();
+    return failed(m1Text.stagingFailed(messageOf(error)));
+  }
+};
+harden(finish);
+
+// ---------------------------------------------------------------- M5 contract copy (W5.4)
+
+/** @param {number} units */
+const text = units => M.string({ stringLengthLimit: units });
+/**
+ * @param {any} shape
+ * @param {number} length
+ */
+const list = (shape, length) => M.arrayOf(shape, { arrayLengthLimit: length });
+/**
+ * @param {Record<string, any>} required
+ * @param {Record<string, any>} [optional]
+ */
+const record = (required, optional = {}) =>
+  M.splitRecord(required, optional, {});
+/** @param {any} inline */
+const staged = inline => M.or(inline, shapes.StagedText);
+
+let built;
+/** Built on first use (an `M.interface` costs a vat about 25 ms). */
+export const execGuards = () => {
+  if (built !== undefined) return built;
+  const ExecRequest = record(
+    {
+      args: staged(text(limits.inlineBytes)),
+      writers: M.remotable('BlobWriters'),
+      timer: M.remotable('Timer'),
+    },
+    {
+      content: M.remotable('Content'),
+      notice: shapes.Reason,
+      powers: M.remotable('ExecPowersSource'),
+    },
+  );
+  const InspectRequest = record(
+    {
+      op: M.or(
+        'methods',
+        'describe',
+        'readSources',
+        'toolSchema',
+        'toolExecute',
+      ),
+      target: M.remotable(),
+      writers: M.remotable('BlobWriters'),
+    },
+    {
+      args: staged(text(limits.inlineBytes)),
+      method: text(limitsM5.methodNameUnits),
+      content: M.remotable('Content'),
+    },
+  );
+  const InspectOutcome = M.or(
+    shapes.ToolOutcome,
+    record({
+      status: 'ok',
+      methods: list(text(limitsM5.methodNameUnits), limitsM5.maxMethodNames),
+    }),
+    record({ status: 'ok', description: shapes.ToolDescription }),
+    record({ status: 'exhausted' }),
+  );
+  const ExecScope = M.interface('ExecScope', {
+    ...interfaces.ExecScope.payload.methodGuards,
+    run: M.callWhen(ExecRequest).returns(shapes.ExecOutcome),
+    inspect: M.callWhen(InspectRequest).returns(InspectOutcome),
+  });
+  built = harden({
+    ExecRequest,
+    InspectRequest,
+    InspectOutcome,
+    ExecScope,
+  });
+  return built;
+};
+harden(execGuards);
+
+/** `interfaces-m5.js` `texts` the exec vat writes. */
+export const texts = harden({
+  powersExpired: 'This exec call has ended; use the powers of the current call',
+});
+
+/** `interfaces-m5.js` `textOf` the exec vat writes. */
+export const textOf = harden({
+  /**
+   * @param {number} bytes
+   * @param {number} limit
+   */
+  valueTooLarge: (bytes, limit) =>
+    `Value too large to store (${bytes} bytes; limit ${limit})`,
+  /** @param {string} reason */
+  toolSchemaInvalid: reason =>
+    `The granted tool's schema was refused: ${reason}`,
+  /**
+   * @param {number} bytes
+   * @param {number} limit
+   */
+  membraneTooLarge: (bytes, limit) =>
+    `Arguments too large to send to another vat (about ${bytes} bytes; limit ${limit}); stage large data in a blob or send it in parts`,
+  /**
+   * @param {number} keys
+   * @param {number} limit
+   */
+  membraneTooManyKeys: (keys, limit) =>
+    `Arguments carry too many record keys to send to another vat (${keys}; limit ${limit})`,
+  /** @param {number} limit */
+  membraneTooDeep: limit =>
+    `Arguments are nested too deeply to send to another vat (limit ${limit})`,
+});
