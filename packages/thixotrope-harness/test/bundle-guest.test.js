@@ -7,6 +7,7 @@ import path from 'node:path';
 
 import {
   bundleGuest,
+  dropIndentation,
   escapeNonAscii,
   listGuestPrograms,
   parseBundleArgs,
@@ -197,6 +198,48 @@ test('escapeNonAscii refuses what an escape would change', t => {
   t.throws(() => escapeNonAscii('a\u00a0b'), { message: /U\+00a0/ });
   // An escaped backslash before the character is fine.
   t.is(escapeNonAscii("'\\\\\u00e9'"), "'\\\\\\u00e9'");
+});
+
+test('dropIndentation keeps templates, multi-line strings, lines and tokens (J-9698)', async t => {
+  const source = [
+    'const f = () => {',
+    '    const a = `x',
+    '    y ${1 +',
+    '      2}`;',
+    "\tconst b = 'p\\",
+    "  q';",
+    '  return [a, b];',
+    '};',
+    'f();',
+  ].join('\n');
+  const dropped = dropIndentation(source);
+  t.is(
+    dropped,
+    [
+      'const f = () => {',
+      'const a = `x',
+      '    y ${1 +',
+      '      2}`;',
+      "const b = 'p\\",
+      "  q';",
+      'return [a, b];',
+      '};',
+      'f();',
+    ].join('\n'),
+  );
+  const evaluate = (/** @type {string} */ text) =>
+    new Compartment({ __options__: true }).evaluate(text);
+  t.deepEqual(evaluate(dropped), evaluate(source));
+  t.throws(() => dropIndentation('const = ;'), { message: /Cannot parse/ });
+  // On a real program: same lines, the same text without blanks, smaller.
+  const { source: whole } = await bundleGuest(sessionEntry, {
+    guestRoot,
+    comments: true,
+  });
+  const undented = dropIndentation(whole);
+  t.is(undented.split('\n').length, whole.split('\n').length);
+  t.is(undented.replace(/[ \t]/g, ''), whole.replace(/[ \t]/g, ''));
+  t.true(undented.length < whole.length);
 });
 
 test('the session program bundle is ASCII (J-0244: U+034F hidden names)', async t => {
