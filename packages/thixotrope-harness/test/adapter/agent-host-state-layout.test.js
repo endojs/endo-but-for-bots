@@ -14,6 +14,7 @@ import {
   mkdtempSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -158,6 +159,38 @@ test('HR-SYN-9: a store nobody swept sweeps before its first staging', async t =
   });
   t.is(store.usage(undefined).daemon, 20_000);
   t.false(existsSync(join(blobDir, 'b900.part')));
+});
+
+test('HR-SYN-9: a release that races the first sweep never leaves deleted bytes counted', async t => {
+  // The race is timing-dependent (CL-QC: 9 of 50 runs before the fix), so
+  // the check is repeated.
+  for (let run = 0; run < 20; run += 1) {
+    const root = mkdtempSync(join(tmpdir(), 'ah-layout-'));
+    try {
+      const blobDir = blobDirIn(root);
+      // eslint-disable-next-line no-await-in-loop
+      await earlierFiles(blobDir, 20, 500);
+      const keys = readdirSync(blobDir).filter(name => /^b\d+$/.test(name));
+      const released = keys.slice(0, 10);
+      const store = makeBlobStore({
+        dir: blobDir,
+        sink: makeFakeBlobSink().sink,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.all([store.release(released), store.sweep()]);
+      const left = readdirSync(blobDir)
+        .filter(name => /^b\d+$/.test(name))
+        .reduce((sum, name) => sum + statSync(join(blobDir, name)).size, 0);
+      t.is(left, 5000, `run ${run}: ten files are left`);
+      t.is(
+        store.usage(undefined).daemon,
+        left,
+        `run ${run}: the count is the bytes left on disk`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
 });
 
 test('HR-SYN-9: a sweep that fails is reported; stagings are refused until a sweep succeeds', async t => {

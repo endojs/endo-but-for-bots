@@ -691,9 +691,11 @@ export const makeBlobStore = ({
 
   /** @type {BlobStore['release']} */
   const release = async keys => {
-    // A sweep in flight counts what it stats; a file deleted under it would
-    // stay counted (HR-SYN-9).
-    await sweeping?.catch(() => {});
+    // The incarnation's one sweep counts what it stats; a file deleted under
+    // it would stay counted, or be refunded twice. Start or join that sweep
+    // before any unlink; a failed sweep still lets the release go on
+    // (HR-SYN-9).
+    await sweep().catch(() => {});
     const path = await directory();
     let removed = 0;
     for (const key of keys) {
