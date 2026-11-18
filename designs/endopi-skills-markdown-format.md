@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-11-03 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Parent** | [endopi](endopi.md) |
 
 ## Motivation
@@ -136,6 +136,16 @@ same in reverse: a setting (or default) instructs the agent to scan
    daemon formula per [endoclaw-skill-registry](endoclaw-skill-registry.md).
 5. **Cross-harness paths.** Default-enable scanning of Claude /
    Codex / Pi skill directories.
+
+## Implementation notes
+
+The design revision in
+[#1672](https://github.com/endojs/endo-but-for-bots/pull/1672) supersedes the
+notes this section held. This PR implements its *Delta from #1643* items 1-4:
+the `endo-skills-setup` script, the mount-backed `SkillSource`
+(`@endo/skills/mount.js`), the host-specific `readHint`, and the validator
+checked against the frontmatter table. Wiring Lal (item 5) follows
+separately.
 
 ## Dependencies
 

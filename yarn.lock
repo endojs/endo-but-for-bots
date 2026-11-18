@@ -2785,6 +2785,7 @@ __metadata:
     "@endo/platform": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/skills": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -3427,6 +3428,24 @@ __metadata:
     c8: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/skills@workspace:^, @endo/skills@workspace:packages/skills":
+  version: 0.0.0-use.local
+  resolution: "@endo/skills@workspace:packages/skills"
+  dependencies:
+    "@endo/daemon": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/where": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  bin:
+    endo-skills-setup: ./setup-skills.js
   languageName: unknown
   linkType: soft
 

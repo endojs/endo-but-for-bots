@@ -59,6 +59,24 @@ Example configuration files are provided:
 - `openai.env.example` - OpenAI API
 - `opus.env.example` - Anthropic Claude (Opus)
 
+## Skills
+
+An agent that holds the pet name `agent-skills` has
+[Agent Skills](../skills/README.md). The name designates a directory of
+read-only mounts, one per skill source, which `endo-skills-setup
+<agent-name>` writes. Lal loads the skills each time the agent starts and
+lists up to 200 of them in its system prompt (name, description, and a
+pet-name location such as `agent-skills/10-user/my-skill/SKILL.md`). The
+model reads a skill with `readText("agent-skills/10-user/my-skill",
+"SKILL.md")`. When an entry is added to or removed from `agent-skills`,
+the list is reloaded and applies from the next round. Edits inside a
+mounted directory apply at the next start.
+
+A message that starts with `/skill:<name> [args]` runs a round with the
+skill's current body in place of the message, followed by the arguments.
+This works for skills marked `disable-model-invocation`, which are not
+listed in the prompt. An unknown name gets an error reply and no round.
+
 ## Usage
 
 ```bash
