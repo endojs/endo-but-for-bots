@@ -31,8 +31,8 @@ import { makeContent } from './content.js';
 import { makeContextCache } from './context-cache.js';
 import { archiveDirFor, makeArchiveStore } from './archive/store.js';
 import { makeListChannel } from './list-channel.js';
+import { makeEventLog } from './providers/event-log.js';
 import {
-  makeEventLog,
   makeScriptedProvider,
   scriptedUnexpectedFailure,
 } from './providers/scripted.js';
@@ -57,7 +57,7 @@ import {
 /**
  * @typedef {object} BackendKind
  * @property {string} kind the `BackendSpec.kind` it serves
- * @property {(options: { label: string, spec: any, readKey?: () => Promise<string>, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, subscriptions: any }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
+ * @property {(options: { label: string, spec: any, readKey?: () => Promise<string>, script: any, logPath?: string, timers: import('./timers.js').Timers, log: import('./providers/event-log.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, subscriptions: any }) => { startRound: (req: any, channel: any, prepare?: () => Promise<import('./projection.js').Projection>) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} makeProvider
  * @property {readonly string[]} tools names in `adapterTools` this kind
  *   offers in its `TurnPorts.tools`
  * @property {string} unexpectedFailure the fixed reason of a round whose
@@ -72,7 +72,7 @@ import {
  *   in each `AdapterToolEntry`. A tool with a static tool-table entry of its
  *   name (`echo`) needs none; any other is offered to the model only with
  *   one (D-M4-9 as amended, XC)
- * @property {(options: { timers: import('./timers.js').Timers, log: import('./providers/scripted.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, session: any, subscriptions: any }) => any} makeTool
+ * @property {(options: { timers: import('./timers.js').Timers, log: import('./providers/event-log.js').EventLog, blobs: import('./blobs.js').BlobStore, backend: any, session: any, subscriptions: any }) => any} makeTool
  */
 
 /**

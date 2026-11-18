@@ -52,8 +52,7 @@
 import { E } from '@endo/far';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, openSync, writeSync } from 'node:fs';
-import { pid } from 'node:process';
+import { existsSync } from 'node:fs';
 
 import { texts, textOf } from '../../../../guest/lib/interfaces.js';
 import {
@@ -63,47 +62,12 @@ import {
 } from '../../../../guest/lib/bounded.js';
 import { limits } from '../../../../guest/lib/limits.js';
 import { isStaged } from '../../../../guest/session/staging.js';
+import { emptyUsage } from '../../../../guest/lib/token-usage.js';
 /* eslint-enable import/no-relative-packages */
 import { isAbandoned } from '../context-cache.js';
-
-/**
- * One JSON line per provider or tool event (section 10):
- * `{ kind, label, pid, at, turnId?, round?, opId?, args?, units? }`.
- * @typedef {(kind: string, fields?: Record<string, unknown>) => void} EventLog
- */
-
-/**
- * The event log of one backend: appended and fsynced line by line, or a
- * no-op without `logPath`.
- *
- * @param {object} options
- * @param {string} options.label the backend's label
- * @param {string} [options.logPath] absolute path of the JSON-lines file
- * @param {() => number} [options.now]
- * @returns {EventLog}
- */
-export const makeEventLog = ({ label, logPath, now = () => Date.now() }) => {
-  if (logPath === undefined) return () => {};
-  return (kind, fields = {}) => {
-    const line = `${JSON.stringify({ kind, label, pid, at: now(), ...fields })}\n`;
-    const fd = openSync(logPath, 'a', 0o600);
-    try {
-      writeSync(fd, line);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-  };
-};
-harden(makeEventLog);
-
-const ZERO_USAGE = harden({
-  inputTokens: 0,
-  outputTokens: 0,
-  cachedInputTokens: 0,
-  cacheWriteInputTokens: 0,
-  reasoningOutputTokens: 0,
-});
+import { makeEventLog } from './event-log.js';
+import { stageResult, tailText } from './round.js';
+import { makeProviderShell } from './shell.js';
 
 /**
  * `JSON.stringify({ data: { k0: 0, k1: 0, ... } })` with `count` keys,
@@ -134,20 +98,6 @@ export const generatedKeys = ({ prefix, from, count }) => {
   return `{${parts.join(',')}}`;
 };
 harden(generatedKeys);
-
-/**
- * The last `units` UTF-16 units of `text`, never starting inside a pair.
- * @param {string} text
- * @param {number} units
- */
-export const tailText = (text, units) => {
-  if (text.length <= units) return text;
-  let start = text.length - units;
-  const code = text.charCodeAt(start);
-  if (code >= 0xdc00 && code <= 0xdfff) start += 1;
-  return text.slice(start);
-};
-harden(tailText);
 
 /** @param {string} text */
 const sha = text => createHash('sha256').update(text).digest('hex');
@@ -225,51 +175,6 @@ const messageOf = error =>
   /** @type {Error} */ (error)?.message ?? String(error);
 
 /**
- * The control of one running round: cancel (logged) or release (silent)
- * stops it; sleeps end early when it stops.
- * @param {import('../timers.js').Timers} timers
- */
-const makeRoundControl = timers => {
-  /** @type {'cancel' | 'release' | undefined} */
-  let stopped;
-  /** @type {() => void} */
-  let wake = () => {};
-  /** @type {Promise<void>} */
-  const whenStopped = new Promise(resolve => {
-    wake = () => resolve(undefined);
-  });
-  return {
-    stopped: () => stopped,
-    whenStopped,
-    /** @param {'cancel' | 'release'} how */
-    stop: how => {
-      if (stopped !== undefined) return;
-      stopped = how;
-      wake();
-    },
-    /**
-     * Wait `ms`; true when the round was stopped meanwhile.
-     * @param {number} ms
-     */
-    sleep: async ms => {
-      if (stopped !== undefined) return true;
-      if (ms > 0) {
-        /** @type {() => void} */
-        let cancel = () => {};
-        await Promise.race([
-          new Promise(resolve => {
-            cancel = timers.after(ms, () => resolve(undefined));
-          }),
-          whenStopped,
-        ]);
-        cancel();
-      }
-      return stopped !== undefined;
-    },
-  };
-};
-
-/**
  * The scripted kind's fixed reason for a round whose provider threw
  * (R4-79, HR-SYN-12): never the error's message.
  */
@@ -281,7 +186,8 @@ export const scriptedUnexpectedFailure = 'scripted provider failed';
  * @param {any} options.script a `shapes.Script`
  * @param {string} [options.logPath]
  * @param {import('../timers.js').Timers} options.timers
- * @param {EventLog} [options.log] shared with the backend's tools
+ * @param {import('./event-log.js').EventLog} [options.log] shared with the
+ *   backend's tools
  * @param {import('../blobs.js').BlobStore} [options.blobs] M1b staging
  *   (without one, text over inlineBytes fails the round)
  * @param {() => number} [options.now]
@@ -327,7 +233,7 @@ export const makeScriptedProvider = ({
    * happened, so the fsync delays nothing on the turn's path (the `delta`
    * and `round-start` lines that perf reads). A late write that fails (the
    * log removed meanwhile) is dropped: it must not take the adapter down.
-   * @param {EventLog} write
+   * @param {import('./event-log.js').EventLog} write
    * @param {string} kind
    * @param {Record<string, unknown>} fields
    */
@@ -341,9 +247,6 @@ export const makeScriptedProvider = ({
     });
   /** turn -> the script turn chosen at its round 0 (this incarnation). */
   const chosen = new WeakMap();
-  /** turn -> the control of its running round. */
-  /** @type {Map<any, ReturnType<typeof makeRoundControl>>} */
-  const running = new Map();
 
   /** @param {string | undefined} input */
   const chooseTurn = input =>
@@ -379,7 +282,7 @@ export const makeScriptedProvider = ({
   /**
    * @param {any} req a RoundRequest
    * @param {any} channel
-   * @param {ReturnType<typeof makeRoundControl>} control
+   * @param {import('./round.js').RoundControl} control
    * @param {(() => Promise<any>) | undefined} prepare
    * @param {any} owner the Session presence served (its disk quota)
    */
@@ -695,16 +598,17 @@ export const makeScriptedProvider = ({
       if (calls.length > limits.maxCallsPerMessage) {
         throw Error(texts.frameLimit);
       }
-      result = await stageRound({
+      result = await stageResult({
         round,
         text,
         textBytes,
         calls,
         stageText,
+        stage: (whole, previewUnits) => stage(whole, previewUnits, owner),
         nativeContext: scripted.nativeContext,
-        usage: scripted.usage ?? ZERO_USAGE,
+        usage: scripted.usage ?? emptyUsage(),
         servedBy: { label, modelId: req.options.modelId },
-        owner,
+        now,
         staged: roundStaged,
       });
       if (control.stopped() === undefined) await commit(roundStaged);
@@ -735,110 +639,9 @@ export const makeScriptedProvider = ({
     E.sendOnly(sink).roundFinal(result);
   };
 
-  /**
-   * The RoundResult with every field over its bound staged (5.2), or a
-   * rejection with `texts.frameLimit` when it still does not fit (5.4).
-   * @param {object} round
-   * @param {number} round.round
-   * @param {string} round.text
-   * @param {number} round.textBytes
-   * @param {Array<{ callId: string, name: string, args: any }>} round.calls
-   * @param {(previewUnits: number) => Promise<any>} round.stageText
-   * @param {string | undefined} round.nativeContext
-   * @param {any} round.usage
-   * @param {any} round.servedBy
-   * @param {any} round.owner the Session presence (its disk quota)
-   * @param {any[]} round.staged collects every StagedText of the result
-   */
-  const stageRound = async ({
-    round,
-    text,
-    textBytes,
-    calls,
-    stageText,
-    nativeContext,
-    usage,
-    servedBy,
-    owner,
-    staged,
-  }) => {
-    /**
-     * @param {Promise<any>} staging
-     */
-    const kept = async staging => {
-      const value = await staging;
-      staged.push(value);
-      return value;
-    };
-    /** @type {any} */
-    let replyText = text;
-    if (textBytes > limits.inlineBytes) {
-      replyText = await kept(stageText(limits.messagePreviewUnits));
-    }
-    await Promise.all(
-      calls.map(async call => {
-        if (utf8Bytes(call.args) > limits.inlineBytes) {
-          call.args = await kept(
-            stage(call.args, limits.toolPreviewUnits, owner),
-          );
-        }
-      }),
-    );
-    /** @type {Record<string, any>} */
-    const fields = { round, text: replyText, usage, at: now(), servedBy };
-    if (nativeContext !== undefined) {
-      fields.nativeContext = await kept(stage(nativeContext, 0, owner));
-    }
-    const build = () =>
-      harden({ ...fields, toolCalls: calls.map(call => harden({ ...call })) });
-    let result = build();
-    while (messageBytes(result) > limits.roundResultBytes) {
-      let largest = -1;
-      let largestBytes = 0;
-      calls.forEach((call, index) => {
-        if (typeof call.args === 'string') {
-          const bytes = /** @type {number} */ (utf8Bytes(call.args));
-          if (bytes > largestBytes) {
-            largest = index;
-            largestBytes = bytes;
-          }
-        }
-      });
-      // Nothing inline worth staging is left (a staged field is ~0.8 KB).
-      if (largest < 0 || largestBytes < 1024) {
-        throw Error(texts.frameLimit);
-      }
-      // eslint-disable-next-line no-await-in-loop
-      calls[largest].args = await kept(
-        stage(calls[largest].args, limits.toolPreviewUnits, owner),
-      );
-      result = build();
-    }
-    return result;
-  };
-
-  return harden({
-    /**
-     * @param {any} req
-     * @param {any} channel
-     * @param {() => Promise<any>} [prepare] the context cache (W1b.2)
-     * @param {any} [owner] the Session presence the round serves (blob
-     *   quota and provenance, J-9361)
-     */
-    startRound: async (req, channel, prepare, owner) => {
-      running.get(req.turn)?.stop('release');
-      const control = makeRoundControl(timers);
-      running.set(req.turn, control);
-      try {
-        await runRound(req, channel, control, prepare, owner);
-      } finally {
-        if (running.get(req.turn) === control) running.delete(req.turn);
-      }
-    },
-    /** @param {any} turn stops its running round; logged `cancelled` */
-    cancelRound: turn => running.get(turn)?.stop('cancel'),
-    /** @param {any} turn stops its running round silently (lease released) */
-    releaseTurn: turn => running.get(turn)?.stop('release'),
-  });
+  // `prepare` is the context cache (W1b.2; optional here: M1a's tests run
+  // rounds without one); `owner` the Session presence the round serves
+  // (blob quota and provenance, J-9361).
+  return makeProviderShell({ timers, runRound });
 };
 harden(makeScriptedProvider);

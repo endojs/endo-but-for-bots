@@ -88,19 +88,12 @@ import {
   discardBody,
   failureKind,
   postJson,
-  providerBaseUrl,
   retryAfterMs,
 } from './http.js';
 import { parseSseBatches } from './sse.js';
-import {
-  makeRoundControl,
-  ProviderFailure,
-  readProviderKey,
-  runProviderRound,
-  systemTextOf,
-} from './round.js';
-import { makeEventLog } from './scripted.js';
-import { anthropicDelay, isDelivery, makeRetry } from './retry.js';
+import { ProviderFailure } from './round.js';
+import { anthropicDelay, isDelivery } from './retry.js';
+import { makeApiProvider } from './api.js';
 
 /** The API's base (a spec's `baseUrl` replaces it: the fake server). */
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
@@ -731,130 +724,34 @@ export async function* anthropicAttempt({
 harden(anthropicAttempt);
 
 /**
- * @param {object} options
- * @param {string} options.label the backend's label
- * @param {any} [options.spec] the BackendSpec (`modelId`, `baseUrl`,
- *   `timeoutMs` (0: none), `maxOutputTokens`, `logPath`)
- * @param {() => Promise<string>} [options.readKey] the key, read through the
- *   backend's grant at every round (R4-82)
- * @param {import('../timers.js').Timers} options.timers
- * @param {import('./scripted.js').EventLog} [options.log]
- * @param {import('../blobs.js').BlobStore} [options.blobs]
- * @param {typeof globalThis.fetch} [options.fetch]
- * @param {() => number} [options.now]
- * @param {(args: { attempt: (signal: AbortSignal) => AsyncIterable<import('./round.js').RoundEvent>, signal: AbortSignal }) => AsyncIterable<import('./round.js').RoundEvent>} [options.retry]
- *   the retry wrapper (default: `makeRetry` with `anthropicDelay`, one per
- *   round, logging each retry)
- * @param {string} [options.logPath] (as the scripted kind's options)
+ * The Messages API's request and answer for the API provider (`api.js`).
+ * @type {import('./api.js').ApiWire}
  */
-export const makeAnthropicProvider = ({
-  label,
-  spec = {},
-  readKey,
-  timers,
-  logPath = spec.logPath,
-  log = makeEventLog({ label, logPath }),
-  blobs,
-  fetch,
-  now = () => Date.now(),
-  retry,
-}) => {
-  const baseUrl = providerBaseUrl(spec.baseUrl, ANTHROPIC_BASE_URL);
-  const timeoutMs = spec.timeoutMs ?? ANTHROPIC_TIMEOUT_MS;
-  /** turn -> the control of its running round. */
-  /** @type {Map<any, import('./round.js').RoundControl>} */
-  const running = new Map();
+export const anthropicWire = harden({
+  baseUrl: ANTHROPIC_BASE_URL,
+  timeoutMs: ANTHROPIC_TIMEOUT_MS,
+  path: '/v1/messages',
+  unreachable: texts.anthropicUnreachable,
+  model: req => String(req.options.modelId),
+  body: ({ model, transcript, system, req, spec }) =>
+    anthropicBody({
+      model,
+      messages: anthropicMessages(transcript, model),
+      tools: req.tools,
+      system,
+      maxOutputTokens: req.options.maxOutputTokens ?? spec.maxOutputTokens,
+    }),
+  delay: anthropicDelay,
+  attempt: anthropicAttempt,
+});
 
-  return harden({
-    /**
-     * @param {any} req
-     * @param {any} channel
-     * @param {() => Promise<any>} [prepare]
-     * @param {any} [owner]
-     */
-    startRound: async (req, channel, prepare, owner) => {
-      running.get(req.turn)?.stop('release');
-      const control = makeRoundControl(timers);
-      running.set(req.turn, control);
-      try {
-        await runProviderRound({
-          req,
-          channel,
-          prepare,
-          blobs,
-          log,
-          owner,
-          control,
-          timers,
-          now,
-          label,
-          unreachable: texts.anthropicUnreachable,
-          stream: async function* anthropicStream({ projection, signal }) {
-            const model = String(req.options.modelId);
-            const key = await readProviderKey(readKey);
-            const system = await systemTextOf(req.system, blobs, owner);
-            const transcript =
-              projection?.transcript ??
-              req.append
-                .filter(
-                  (/** @type {any} */ r) =>
-                    r.kind === 'turn-started' && typeof r.input === 'string',
-                )
-                .map((/** @type {any} */ r) => ({
-                  kind: 'message',
-                  role: 'user',
-                  content: r.input,
-                }));
-            const body = anthropicBody({
-              model,
-              messages: anthropicMessages(transcript, model),
-              tools: req.tools,
-              system,
-              maxOutputTokens:
-                req.options.maxOutputTokens ?? spec.maxOutputTokens,
-            });
-            const retryRound =
-              retry ??
-              makeRetry({
-                timers,
-                delayMs: anthropicDelay,
-                onRetry: ({ attempt, failure, waitMs }) =>
-                  log('retry', {
-                    turnId: req.turnId,
-                    round: req.round,
-                    attempt,
-                    waitMs,
-                    ...(failure.status === undefined
-                      ? {}
-                      : { status: failure.status }),
-                    timedOut: failure.timedOut,
-                  }),
-              });
-            yield* retryRound({
-              signal,
-              attempt: attemptSignal =>
-                anthropicAttempt({
-                  url: `${baseUrl}/v1/messages`,
-                  key,
-                  body,
-                  signal: attemptSignal,
-                  timeoutMs,
-                  ...(fetch === undefined ? {} : { fetch }),
-                  now,
-                }),
-            });
-          },
-        });
-      } finally {
-        if (running.get(req.turn) === control) running.delete(req.turn);
-      }
-    },
-    /** @param {any} turn aborts its request (R4-7); logged `cancelled` */
-    cancelRound: turn => running.get(turn)?.stop('cancel'),
-    /** @param {any} turn aborts its request silently (lease released) */
-    releaseTurn: turn => running.get(turn)?.stop('release'),
-  });
-};
+/**
+ * An Anthropic API backend's provider (`api.js` `makeApiProvider`'s options
+ * but `wire`).
+ * @param {Omit<Parameters<typeof makeApiProvider>[0], 'wire'>} options
+ */
+export const makeAnthropicProvider = options =>
+  makeApiProvider({ ...options, wire: anthropicWire });
 harden(makeAnthropicProvider);
 
 /** The `backendKinds` entry (AH/index.js hook table). */

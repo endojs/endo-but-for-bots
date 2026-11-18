@@ -68,19 +68,12 @@ import {
   discardBody,
   failureKind,
   postJson,
-  providerBaseUrl,
   retryAfterMs,
 } from './http.js';
 import { parseSseBatches } from './sse.js';
-import {
-  makeRoundControl,
-  ProviderFailure,
-  readProviderKey,
-  runProviderRound,
-  systemTextOf,
-} from './round.js';
-import { makeEventLog } from './scripted.js';
-import { isDelivery, makeRetry, openRouterDelay } from './retry.js';
+import { ProviderFailure } from './round.js';
+import { isDelivery, openRouterDelay } from './retry.js';
+import { makeApiProvider } from './api.js';
 
 /** OpenRouter's API base (a spec's `baseUrl` replaces it: the fake server). */
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -546,132 +539,40 @@ export async function* openRouterAttempt({
 harden(openRouterAttempt);
 
 /**
- * @param {object} options
- * @param {string} options.label the backend's label
- * @param {any} [options.spec] the BackendSpec (`modelId`, `baseUrl`,
- *   `timeoutMs`, `maxOutputTokens`, `logPath`)
- * @param {() => Promise<string>} [options.readKey] the key, read through the
- *   backend's grant at every round (R4-82)
- * @param {import('../timers.js').Timers} options.timers
- * @param {import('./scripted.js').EventLog} [options.log]
- * @param {import('../blobs.js').BlobStore} [options.blobs]
- * @param {typeof globalThis.fetch} [options.fetch]
- * @param {() => number} [options.now]
- * @param {(args: { attempt: (signal: AbortSignal) => AsyncIterable<import('./round.js').RoundEvent>, signal: AbortSignal }) => AsyncIterable<import('./round.js').RoundEvent>} [options.retry]
- *   the retry wrapper (default: `makeRetry` with `openRouterDelay`, one per
- *   round, logging each retry)
- * @param {string} [options.logPath] (as the scripted kind's options)
+ * OpenRouter's chat completions request and answer for the API provider
+ * (`api.js`).
+ * @type {import('./api.js').ApiWire}
  */
-export const makeOpenRouterProvider = ({
-  label,
-  spec = {},
-  readKey,
-  timers,
-  logPath = spec.logPath,
-  log = makeEventLog({ label, logPath }),
-  blobs,
-  fetch,
-  now = () => Date.now(),
-  retry,
-}) => {
-  const baseUrl = providerBaseUrl(spec.baseUrl, OPENROUTER_BASE_URL);
-  const timeoutMs = spec.timeoutMs ?? OPENROUTER_TIMEOUT_MS;
-  /** turn -> the control of its running round. */
-  /** @type {Map<any, import('./round.js').RoundControl>} */
-  const running = new Map();
+export const openRouterWire = harden({
+  baseUrl: OPENROUTER_BASE_URL,
+  timeoutMs: OPENROUTER_TIMEOUT_MS,
+  path: '/chat/completions',
+  unreachable: texts.openRouterUnreachable,
+  model: req => {
+    const model = req.options.modelId;
+    if (typeof model !== 'string' || !model.includes('/'))
+      throw new ProviderFailure(texts.openRouterModelPrefix);
+    return model;
+  },
+  body: ({ model, transcript, system, req, spec }) =>
+    openRouterBody({
+      model,
+      messages: openRouterMessages(transcript, system),
+      tools: req.tools,
+      maxOutputTokens: req.options.maxOutputTokens ?? spec.maxOutputTokens,
+      reasoningEffort: req.options.reasoningEffort,
+    }),
+  delay: openRouterDelay,
+  attempt: openRouterAttempt,
+});
 
-  return harden({
-    /**
-     * @param {any} req
-     * @param {any} channel
-     * @param {() => Promise<any>} [prepare]
-     * @param {any} [owner]
-     */
-    startRound: async (req, channel, prepare, owner) => {
-      running.get(req.turn)?.stop('release');
-      const control = makeRoundControl(timers);
-      running.set(req.turn, control);
-      try {
-        await runProviderRound({
-          req,
-          channel,
-          prepare,
-          blobs,
-          log,
-          owner,
-          control,
-          timers,
-          now,
-          label,
-          unreachable: texts.openRouterUnreachable,
-          stream: async function* openRouterStream({ projection, signal }) {
-            const model = req.options.modelId;
-            if (typeof model !== 'string' || !model.includes('/'))
-              throw new ProviderFailure(texts.openRouterModelPrefix);
-            const key = await readProviderKey(readKey);
-            const system = await systemTextOf(req.system, blobs, owner);
-            const transcript =
-              projection?.transcript ??
-              req.append
-                .filter(
-                  (/** @type {any} */ r) =>
-                    r.kind === 'turn-started' && typeof r.input === 'string',
-                )
-                .map((/** @type {any} */ r) => ({
-                  kind: 'message',
-                  role: 'user',
-                  content: r.input,
-                }));
-            const body = openRouterBody({
-              model,
-              messages: openRouterMessages(transcript, system),
-              tools: req.tools,
-              maxOutputTokens:
-                req.options.maxOutputTokens ?? spec.maxOutputTokens,
-              reasoningEffort: req.options.reasoningEffort,
-            });
-            const retryRound =
-              retry ??
-              makeRetry({
-                timers,
-                delayMs: openRouterDelay,
-                onRetry: ({ attempt, failure, waitMs }) =>
-                  log('retry', {
-                    turnId: req.turnId,
-                    round: req.round,
-                    attempt,
-                    waitMs,
-                    ...(failure.status === undefined
-                      ? {}
-                      : { status: failure.status }),
-                    timedOut: failure.timedOut,
-                  }),
-              });
-            yield* retryRound({
-              signal,
-              attempt: attemptSignal =>
-                openRouterAttempt({
-                  url: `${baseUrl}/chat/completions`,
-                  key,
-                  body,
-                  signal: attemptSignal,
-                  timeoutMs,
-                  ...(fetch === undefined ? {} : { fetch }),
-                  now,
-                }),
-            });
-          },
-        });
-      } finally {
-        if (running.get(req.turn) === control) running.delete(req.turn);
-      }
-    },
-    /** @param {any} turn aborts its request (R4-7); logged `cancelled` */
-    cancelRound: turn => running.get(turn)?.stop('cancel'),
-    /** @param {any} turn aborts its request silently (lease released) */
-    releaseTurn: turn => running.get(turn)?.stop('release'),
-  });
-};
+/**
+ * An OpenRouter backend's provider (`api.js` `makeApiProvider`'s options
+ * but `wire`).
+ * @param {Omit<Parameters<typeof makeApiProvider>[0], 'wire'>} options
+ */
+export const makeOpenRouterProvider = options =>
+  makeApiProvider({ ...options, wire: openRouterWire });
 harden(makeOpenRouterProvider);
 
 /** The `backendKinds` entry (AH/index.js hook table). */

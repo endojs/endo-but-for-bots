@@ -42,13 +42,13 @@ import {
   subscriptionTexts,
 } from '../../../../guest/lib/subscription-texts.js';
 /* eslint-enable import/no-relative-packages */
+import { makeEventLog } from '../providers/event-log.js';
 import {
   ProviderFailure,
-  makeRoundControl,
   runProviderRound,
   systemTextOf,
 } from '../providers/round.js';
-import { makeEventLog } from '../providers/scripted.js';
+import { makeProviderShell } from '../providers/shell.js';
 import { claudeAttempt } from './messages.js';
 import { codexAttempt } from './responses.js';
 import { withOverloadRetry } from './wire.js';
@@ -87,7 +87,7 @@ const delivers = event =>
  * @param {any} options.subscriptions this incarnation's `Subscriptions`
  *   (`subscriptions/index.js`)
  * @param {import('../timers.js').Timers} options.timers
- * @param {import('../providers/scripted.js').EventLog} [options.log]
+ * @param {import('../providers/event-log.js').EventLog} [options.log]
  * @param {import('../blobs.js').BlobStore} [options.blobs] the adapter's
  *   store; `systemTextOf` reads a staged system text per owner
  * @param {typeof globalThis.fetch} [options.fetch] default the
@@ -117,9 +117,6 @@ export const makePoolProvider = ({
   const unexpected = UNEXPECTED[provider];
   // Made at the pool's first open: the accounts view can describe it now.
   subscriptions.know(backend, spec);
-  /** turn -> the control of its running round. */
-  /** @type {Map<any, import('../providers/round.js').RoundControl>} */
-  const running = new Map();
 
   /**
    * @param {string} kind
@@ -133,187 +130,172 @@ export const makePoolProvider = ({
     }
   };
 
-  return harden({
-    /**
-     * @param {any} req the RoundRequest
-     * @param {any} channel
-     * @param {() => Promise<any>} [prepare]
-     * @param {any} [owner] the Session presence
-     */
-    startRound: async (req, channel, prepare, owner) => {
-      running.get(req.turn)?.stop('release');
-      const control = makeRoundControl(timers);
-      running.set(req.turn, control);
+  return makeProviderShell({
+    timers,
+    // `owner` is the Session presence the round serves.
+    runRound: async (req, channel, control, prepare, owner) => {
       const where = { turnId: req.turnId, round: req.round };
-      try {
-        await runProviderRound({
-          req,
-          channel,
-          prepare,
-          blobs,
-          log,
-          owner,
-          control,
-          timers,
-          now,
-          label,
-          unreachable: unexpected,
-          stream: async function* poolStream({ projection, signal }) {
-            const pool = await subscriptions.pool(backend, spec);
-            if (pool.state === 'retired')
-              throw new ProviderFailure(subscriptionTexts.retired);
-            if (owner !== undefined)
-              subscriptions.accounts.sessionOpened(backend, owner);
-            if (!pool.members.some(entry => entry.state === 'active'))
-              throw new ProviderFailure(subscriptionTexts.noUsableMember);
-            // 5.2: resolved once per round, passed on as plain text.
-            const system = await systemTextOf(req.system, blobs, owner);
-            const options = req.options ?? {};
-            const modelId = options.modelId ?? spec.modelId;
-            const maxOutputTokens =
-              options.maxOutputTokens ?? spec.maxOutputTokens;
-            const request = harden({
-              modelId: String(modelId),
-              ...(options.reasoningEffort === undefined
-                ? {}
-                : { reasoningEffort: options.reasoningEffort }),
-              ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
-              ...(system === undefined ? {} : { system }),
-              tools: req.tools ?? [],
+      await runProviderRound({
+        req,
+        channel,
+        prepare,
+        blobs,
+        log,
+        owner,
+        control,
+        timers,
+        now,
+        label,
+        unreachable: unexpected,
+        stream: async function* poolStream({ projection, signal }) {
+          const pool = await subscriptions.pool(backend, spec);
+          if (pool.state === 'retired')
+            throw new ProviderFailure(subscriptionTexts.retired);
+          if (owner !== undefined)
+            subscriptions.accounts.sessionOpened(backend, owner);
+          if (!pool.members.some(entry => entry.state === 'active'))
+            throw new ProviderFailure(subscriptionTexts.noUsableMember);
+          // 5.2: resolved once per round, passed on as plain text.
+          const system = await systemTextOf(req.system, blobs, owner);
+          const options = req.options ?? {};
+          const modelId = options.modelId ?? spec.modelId;
+          const maxOutputTokens =
+            options.maxOutputTokens ?? spec.maxOutputTokens;
+          const request = harden({
+            modelId: String(modelId),
+            ...(options.reasoningEffort === undefined
+              ? {}
+              : { reasoningEffort: options.reasoningEffort }),
+            ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+            ...(system === undefined ? {} : { system }),
+            tools: req.tools ?? [],
+          });
+          const core = /** @type {any} */ (pool.core);
+          const ticket = core.forSession(owner);
+
+          /**
+           * @param {MemberEntry} entry
+           * @param {string} code
+           */
+          const unusable = (entry, code) => {
+            ticket.unusable(entry.member);
+            subscriptions.accounts.memberState(
+              backend,
+              entry,
+              'unusable',
+              code,
+            );
+            note('member-failed', {
+              ...where,
+              reason: subscriptionTextOf.memberFailed(entry.label, code),
             });
-            const core = /** @type {any} */ (pool.core);
-            const ticket = core.forSession(owner);
+          };
 
-            /**
-             * @param {MemberEntry} entry
-             * @param {string} code
-             */
-            const unusable = (entry, code) => {
-              ticket.unusable(entry.member);
-              subscriptions.accounts.memberState(
-                backend,
-                entry,
-                'unusable',
-                code,
-              );
-              note('member-failed', {
-                ...where,
-                reason: subscriptionTextOf.memberFailed(entry.label, code),
-              });
-            };
-
-            /**
-             * One member's attempt (with its overload retries and at most
-             * one renewal after a 401).
-             * @param {MemberEntry} entry
-             * @returns {AsyncGenerator<any, 'served' | 'next', undefined>}
-             */
-            async function* tryMember(entry) {
-              const holder = subscriptions.credentialOf(entry, spec);
-              /** @type {any} */
-              let credential;
-              try {
-                ({ credential } = await holder.current());
-              } catch (error) {
-                const code = codeOf(error);
-                if (code === 'GENERATION_CONFLICT') {
-                  // Another holder is renewing it now: skip it this round.
-                  note('member-skipped', { ...where, code });
-                  return 'next';
-                }
-                unusable(entry, code);
+          /**
+           * One member's attempt (with its overload retries and at most
+           * one renewal after a 401).
+           * @param {MemberEntry} entry
+           * @returns {AsyncGenerator<any, 'served' | 'next', undefined>}
+           */
+          async function* tryMember(entry) {
+            const holder = subscriptions.credentialOf(entry, spec);
+            /** @type {any} */
+            let credential;
+            try {
+              ({ credential } = await holder.current());
+            } catch (error) {
+              const code = codeOf(error);
+              if (code === 'GENERATION_CONFLICT') {
+                // Another holder is renewing it now: skip it this round.
+                note('member-skipped', { ...where, code });
                 return 'next';
               }
-              let renewed = false;
-              for (;;) {
-                let delivered = false;
+              unusable(entry, code);
+              return 'next';
+            }
+            let renewed = false;
+            for (;;) {
+              let delivered = false;
+              try {
+                // One attempt at a time, by design (R4-25).
+                // eslint-disable-next-line no-await-in-loop
+                for await (const event of withOverloadRetry({
+                  attempt: attemptSignal =>
+                    wire({
+                      credential,
+                      projection,
+                      request,
+                      spec,
+                      signal: attemptSignal,
+                      ...(fetch === undefined ? {} : { fetch }),
+                      onReading: reading =>
+                        subscriptions.observe(backend, entry, reading),
+                      now,
+                    }),
+                  delaysMs,
+                  timers,
+                  signal,
+                  onRetry: ({ attempt, waitMs }) =>
+                    note('retry', { ...where, attempt, waitMs }),
+                })) {
+                  if (delivers(event)) delivered = true;
+                  yield event;
+                }
+                ticket.served(entry.member);
+                subscriptions.accounts.memberState(backend, entry, 'ok');
+                return 'served';
+              } catch (error) {
+                if (
+                  !(error instanceof ProviderFailure) ||
+                  delivered ||
+                  error.delivered ||
+                  signal.aborted
+                )
+                  throw error;
+                const facts = /** @type {any} */ (error);
+                if (facts.exhausted !== undefined) {
+                  ticket.exhausted(
+                    entry.member,
+                    facts.exhausted.untilMs ?? null,
+                  );
+                  note('member-exhausted', { ...where });
+                  return 'next';
+                }
+                if (facts.rejected === undefined) throw error;
+                if (renewed) {
+                  unusable(entry, 'REJECTED');
+                  return 'next';
+                }
+                renewed = true;
                 try {
-                  // One attempt at a time, by design (R4-25).
                   // eslint-disable-next-line no-await-in-loop
-                  for await (const event of withOverloadRetry({
-                    attempt: attemptSignal =>
-                      wire({
-                        credential,
-                        projection,
-                        request,
-                        spec,
-                        signal: attemptSignal,
-                        ...(fetch === undefined ? {} : { fetch }),
-                        onReading: reading =>
-                          subscriptions.observe(backend, entry, reading),
-                        now,
-                      }),
-                    delaysMs,
-                    timers,
-                    signal,
-                    onRetry: ({ attempt, waitMs }) =>
-                      note('retry', { ...where, attempt, waitMs }),
-                  })) {
-                    if (delivers(event)) delivered = true;
-                    yield event;
-                  }
-                  ticket.served(entry.member);
-                  subscriptions.accounts.memberState(backend, entry, 'ok');
-                  return 'served';
-                } catch (error) {
-                  if (
-                    !(error instanceof ProviderFailure) ||
-                    delivered ||
-                    error.delivered ||
-                    signal.aborted
-                  )
-                    throw error;
-                  const facts = /** @type {any} */ (error);
-                  if (facts.exhausted !== undefined) {
-                    ticket.exhausted(
-                      entry.member,
-                      facts.exhausted.untilMs ?? null,
-                    );
-                    note('member-exhausted', { ...where });
-                    return 'next';
-                  }
-                  if (facts.rejected === undefined) throw error;
-                  if (renewed) {
-                    unusable(entry, 'REJECTED');
-                    return 'next';
-                  }
-                  renewed = true;
-                  try {
-                    // eslint-disable-next-line no-await-in-loop
-                    credential = await holder.renewAfterRejection(credential);
-                  } catch (renewal) {
-                    const code = codeOf(renewal);
-                    if (code === 'GENERATION_CONFLICT') return 'next';
-                    unusable(entry, code);
-                    return 'next';
-                  }
+                  credential = await holder.renewAfterRejection(credential);
+                } catch (renewal) {
+                  const code = codeOf(renewal);
+                  if (code === 'GENERATION_CONFLICT') return 'next';
+                  unusable(entry, code);
+                  return 'next';
                 }
               }
             }
+          }
 
-            for (const entry of ticket.select()) {
-              if (signal.aborted) return;
-              const outcome = yield* tryMember(entry);
-              if (outcome === 'served') return;
-            }
-            const { earliestDatedBackMs } = ticket.earliestBackMs();
-            throw new ProviderFailure(
-              earliestDatedBackMs === null
-                ? subscriptionTextOf.subscriptionsExhausted()
-                : subscriptionTextOf.subscriptionsExhausted(
-                    new Date(earliestDatedBackMs).toISOString(),
-                  ),
-            );
-          },
-        });
-      } finally {
-        if (running.get(req.turn) === control) running.delete(req.turn);
-      }
+          for (const entry of ticket.select()) {
+            if (signal.aborted) return;
+            const outcome = yield* tryMember(entry);
+            if (outcome === 'served') return;
+          }
+          const { earliestDatedBackMs } = ticket.earliestBackMs();
+          throw new ProviderFailure(
+            earliestDatedBackMs === null
+              ? subscriptionTextOf.subscriptionsExhausted()
+              : subscriptionTextOf.subscriptionsExhausted(
+                  new Date(earliestDatedBackMs).toISOString(),
+                ),
+          );
+        },
+      });
     },
-    /** @param {any} turn aborts its request (R4-7); logged `cancelled` */
-    cancelRound: turn => running.get(turn)?.stop('cancel'),
-    /** @param {any} turn aborts its request silently (lease released) */
-    releaseTurn: turn => running.get(turn)?.stop('release'),
   });
 };
 harden(makePoolProvider);

@@ -25,8 +25,8 @@ import { makeTimers } from '../../resources/agent-host/impl/timers.js';
 import {
   makeScriptedProvider,
   scriptedUnexpectedFailure,
-  tailText,
 } from '../../resources/agent-host/impl/providers/scripted.js';
+import { tailText } from '../../resources/agent-host/impl/providers/round.js';
 import { makeEchoTool } from '../../resources/agent-host/impl/tools/echo.js';
 import { makeComposer } from '../../resources/agent-host/impl/composer.js';
 import { makeChannelRegistry } from '../../resources/agent-host/impl/channels.js';

@@ -46,8 +46,9 @@ const MAX_TIMER_MS = 2_147_483_647;
 
 /**
  * @param {object} options
- * @param {{ startRound: (req: any, channel: any, prepare?: () => Promise<any>, owner?: any) => Promise<void>, cancelRound: (turn: any) => void, releaseTurn?: (turn: any) => void }} options.provider
- *   `cancelRound` and `releaseTurn` stop the turn's round; an API provider
+ * @param {import('./providers/shell.js').Provider} options.provider
+ *   the backend's provider (`providers/shell.js`, the one shell of every
+ *   kind); `cancelRound` and `releaseTurn` stop the turn's round; an API provider
  *   aborts its request with them (M2 W2.1a, R4-7: the provider's server
  *   sees the connection close) and sends nothing more to the vat.
  * @param {string} options.unexpectedFailure the fixed reason of a round
