@@ -132,6 +132,9 @@ export const makeSubscriptions = ({
   /** The spec of the first pool a member was loaded in (its `tokenUrl`). */
   /** @type {WeakMap<any, any>} */
   const specOfMember = new WeakMap();
+  /** Backends that answered a non-pool kind (asked once per incarnation). */
+  /** @type {WeakSet<any>} */
+  const notPools = new WeakSet();
   /** The latest reading of each member (selection's `readingOf`). */
   /** @type {WeakMap<any, Reading>} */
   const readings = new WeakMap();
@@ -310,16 +313,38 @@ export const makeSubscriptions = ({
         if (target === undefined) return undefined;
         return E(target).poolOf(session);
       },
-      // A backend this incarnation never saw as a pool is not one here
-      // (API backends' accountStatus asks too): undefined, never a throw.
+      // A backend this incarnation has not used yet (after a restart: D-5,
+      // pools load lazily) is asked what it is: `describe()` (one manager
+      // crank) and, for a pool kind, its members from `poolState` (one
+      // more), so the accounts view shows remembered readings before the
+      // pool's first round (acceptance 7). It is not registered as a pool
+      // record here (its spec, with any test endpoints, arrives with its
+      // first open or catalogue read). Anything else (API backends'
+      // accountStatus asks too) is not a pool: undefined, never a throw.
       describe: async backend => {
         const pool = pools.get(backend);
-        if (pool === undefined) return undefined;
-        const loaded = await loadPool(backend, pool.spec);
+        if (pool !== undefined) {
+          const loaded = await loadPool(backend, pool.spec);
+          return harden({
+            kind: loaded.spec.kind,
+            label: loaded.spec.label,
+            members: loaded.members,
+          });
+        }
+        const target = sinkNow();
+        if (target === undefined || notPools.has(backend)) return undefined;
+        const info = await E(backend)
+          .describe()
+          .catch(() => undefined);
+        if (info === undefined || !poolKinds.includes(info.kind)) {
+          notPools.add(backend);
+          return undefined;
+        }
+        const state = await E(target).poolState(backend);
         return harden({
-          kind: loaded.spec.kind,
-          label: loaded.spec.label,
-          members: loaded.members,
+          kind: info.kind,
+          label: info.label,
+          members: state.members,
         });
       },
     },
