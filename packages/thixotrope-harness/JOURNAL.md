@@ -8590,3 +8590,41 @@ medians); the budget (2 s after serving) passes
 trivially. The file now also prints `readyFromServeStartMs`. Fit finding: SIGKILL restarts grew
 from 5.3 s to 9.3 s served over the 21 kills in one window (clean restarts stayed 4.3-5.4 s):
 each SIGKILL leaves more to replay or recover.
+
+### J-9608 2026-11-18 M3 W3.8 browser acceptance - verified
+Evidence: `corepack yarn test:browser test/browser/m3-ui{,-restart,-history}.test.mjs` at
+a5ac8e15fe..adc3dce6b3 (each file under its own slot; slot holds 2.9-3.6 min, waits up to 24 min
+behind exclusive runs).
+Measured: `m3-ui` 4/4 (the secret in no request line, header or socket URL; 400 page for
+`?agent=`; drawer `closed`/`open`/`none` at 640/641 px; after a page-side socket drop the overlay
+said "Reconnecting…", a new socket opened under 1 s and the turn streamed to its end; reload
+re-attached; a closed page's turn completed; status bar equal to `getUsage()`; Stop logged
+`cancelled`; a socket dropped right before or after a `submit` frame left the message once).
+`m3-ui-restart` 4/4 (queue Edit/Delete, held after restart with the hold line, Send now released
+q1 then the edited q2; K5 with two pages: outcome-unknown rows, Details, Record acknowledgement,
+one request and one tool run; the daemon down 60 s: "Server starting...", the page back 8.8-13.4 s
+after the gateway listened). `m3-ui-history` 3/3 (300 turns back to turn 1 in 37 pages, every
+turn once; two-action tool group, exec source tokens, raw JSON; 1 MiB reply in full).
+Reading: acceptance 12 failed once waiting for the third queued row (three sends typed back to
+back); the file now waits for each row, and the next two runs passed. "Thought for" is not checked
+in the browser: the scripted provider emits no thinking, so the header reads "2 actions" (W3.6's
+unit test covers the label).
+
+### J-9609 2026-11-18 M3 W3.8 gateway rerun, UI perf, section 5 - perf
+Evidence: `perf/gateway.perf.mjs` at 22a78eca62 and `perf/ui.perf.mjs` at adc3dce6b3, both
+exclusive (slot holds 5.5 and 7.3 min); a script check of `m3-interfaces.md` 5 against
+`interfaces.js` (`methodNames`, `m2MethodNames`, shapes).
+Measured: `gateway.fetch` median 0.53 ms (n 50,236), `ui.call` 22 ms (p99 187), `ui.submit` 44 ms
+(p99 227), `ui.deltaFanout` median 1 ms, p99 11 (11 deliveries over 1,100 deltas); probes all
+refused as required (2,000 keys `unexpectedField`; the 4,090th kept export closed the connection
+4008 within 2.5 s), no journal growth, still serving. `ui.bundle` 101,275 bytes gzip (budget 600
+KB). `ui.coldLoad` median 120 ms, p95 325, p99 327 (n 273; budget 1.5 s). `ui.hubGrowth` (5 min,
+29 reloads, 60 turns): hub 98,690 -> 1,155,872 bytes (budget 2 MB, pass); the session's hub row
+11 -> 14 exports while viewed and 21 after the viewer closed and 32 cranks (1.91 x, budget 1.25 x:
+miss). Likely cause, not proven: the perf process's own signed-in client keeps each turn's
+receipt `Turn` presence it submitted (60 turns), so the growth may be the measuring client's, not
+the viewer's; a rerun that drops receipts would tell. Section 5: every object, method and shape it
+lists exists in M2 as merged in the lane.
+Fit: the gateway path is cheap (sign-in under 1 ms, a frame-sized guard check 0.12 ms, deltas to
+five pages in 1 ms with no vat crank); vat-bound calls cost a crank (22-27 ms median, p99 near
+200 ms under load), as architecture 11 predicts.
