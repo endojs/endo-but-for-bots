@@ -218,6 +218,14 @@ export const startBrowserGateway = async ({
       const lock = await acquireRunLock({ label: 'browser gateway' });
       undo.push(() => lock.release());
     }
+    // Chromium first: Playwright turns on Node's async hooks (its zones use
+    // AsyncLocalStorage), after which Node tags each promise it tracks with
+    // an async id; a promise hardened before that point (a control
+    // client's, a presence's) then throws "Cannot add property
+    // Symbol(async_id_symbol)" when it settles (J-9603).
+    const { chromium } = await import('@playwright/test');
+    const browser = await chromium.launch({ executablePath, headless: true });
+    undo.push(() => browser.close());
     await ensureUiBuilt();
     const made = await templateNamed(template);
     const key = useTestWrappingKey('br');
@@ -232,9 +240,6 @@ export const startBrowserGateway = async ({
     const gateway = await serveGateway(state, gatewayOptions);
     const client = await gateway.connect();
     undo.push(async () => client.close());
-    const { chromium } = await import('@playwright/test');
-    const browser = await chromium.launch({ executablePath, headless: true });
-    undo.push(() => browser.close());
     /**
      * @param {string} [at]
      * @param {(page: any) => unknown} [before] runs before the navigation

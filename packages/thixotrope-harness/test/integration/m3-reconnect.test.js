@@ -196,14 +196,28 @@ const countSubmissions = async (session, marker) => {
   return turns.length + queued.length;
 };
 
-/** Requests the provider logged for a turn. @param {string} turnId */
-const requestsFor = turnId =>
-  made.log().filter(l => l.kind === 'request' && l.turnId === turnId).length;
-
-/** Echo runs the provider logged for a turn. @param {string} turnId */
-const echoStarts = turnId =>
+/**
+ * Requests the provider logged for a turn since log line `from` (one
+ * backend serves every session of this file, and turn ids repeat across
+ * sessions, so a turn is named by its id after the index of its submit).
+ * @param {string} turnId
+ * @param {number} from
+ */
+const requestsFor = (turnId, from) =>
   made
     .log()
+    .slice(from)
+    .filter(l => l.kind === 'request' && l.turnId === turnId).length;
+
+/**
+ * Echo runs the provider logged for a turn since log line `from`.
+ * @param {string} turnId
+ * @param {number} from
+ */
+const echoStarts = (turnId, from) =>
+  made
+    .log()
+    .slice(from)
     .filter(
       l => l.kind === 'echo-start' && String(l.opId).startsWith(`${turnId}/`),
     ).length;
@@ -268,6 +282,7 @@ run(
     // 5. Close the page mid-turn; another page later sees it finished.
     const c = await openPage();
     const cSession = await sessionOf(c, key);
+    const logFrom = made.log().length;
     const r2 = await E(c.powers.composer).submit(
       cSession,
       inputs.stream,
@@ -289,7 +304,7 @@ run(
       200,
     );
     t.is(settled.state, 'completed', 'closing the page cancelled nothing');
-    t.is(requestsFor(second), 1);
+    t.is(requestsFor(second, logFrom), 1);
     b.client.close();
     d.client.close();
   },
@@ -415,6 +430,7 @@ run(
     const { key } = await E(session).getInfo();
     const feedA = await attach(a, session);
     const feedB = await attach(b, await sessionOf(b, key));
+    const logFrom = made.log().length;
     const receipt = await E(a.powers.composer).submit(
       session,
       inputs.toolHang,
@@ -424,7 +440,7 @@ run(
     await feedA.feed.until(e => e.type === 'delta' && e.turnId === turnId);
     await feedB.feed.until(e => e.type === 'delta' && e.turnId === turnId);
     await waitFor(
-      () => echoStarts(turnId) > 0,
+      () => echoStarts(turnId, logFrom) > 0,
       30_000,
       'the echo call running',
       50,
@@ -455,8 +471,8 @@ run(
     }
     t.is(seen[0], seen[1], 'both pages show the same recovered state');
     t.is(seen[0], 'outcome-unknown', 'killed inside a tool call');
-    t.is(requestsFor(turnId), 1, 'no provider request twice');
-    t.is(echoStarts(turnId), 1, 'no tool run twice');
+    t.is(requestsFor(turnId, logFrom), 1, 'no provider request twice');
+    t.is(echoStarts(turnId, logFrom), 1, 'no tool run twice');
 
     // Record acknowledgement while idle (R6-51), seen by the other page.
     const s0 = await sessionOf(pages[0], key);
