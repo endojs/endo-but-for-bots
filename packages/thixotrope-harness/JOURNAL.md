@@ -8395,3 +8395,107 @@ Reading: `subscription-login.mjs` imports everything after `_init.mjs` dynamical
 the guest prelude itself; its CLI prints its usage line. `provision.mjs` (M1a) still fails as an
 entry.
 Decision: reported to the PM (M1a's file).
+
+### J-9640 2026-11-18 M4 acceptance through the daemon (W4.8) - built
+Evidence: ten integration files from the `m4` template (M1a provisioning, id also hashing
+`durable-subscriptions.js`), against the fake subscription and OAuth servers on loopback; each
+run alone under the slot lock, slot held (s): `m4-pools` (2, 3, 15) 105, `m4-wire` (8, 9) 120,
+`m4-catalog` (6, 13) 135, `m4-secrets` (1, 15) 105, `m4-accounts` (7) 93, `m4-renewal` (10,
+15) 98, `m4-restart` (4, 11: K-2, K-3, K-4) 179, `m4-restart-renewal` (12, 15: K-5, K-6) 110,
+`m4-provision` (16, K-1) 114, `m4-reachability` (5 b) 94; plus the unit closure
+`m4-reachability` (5 a) and `m4-key-race`. All pass at `e0e07caa24`. Sum of holds 1,153 s:
+about 5 min of wall time over four slots. Waits for a slot were 0-1,213 s (other lanes'
+exclusive runs), larger than every hold.
+Reading: every test value is built at run time; acceptance 15 greps for the token prefixes
+(`fake-w48-`, and the fake OAuth server's `fake-access-` / `fake-refresh-`), so tokens the test
+never sees are covered too. Deferred: 14 (browser, after M3), the two-part system text of 13
+(after M5), the model-visible `accountStatus` of 7 (J-9642).
+
+### J-9641 2026-11-18 M4 defects found by the daemon runs - fix
+Evidence and fixes (all in M4 files): (1) `makeSecretsOps` exported no `store`, so catalogue,
+`setDescription` and the audit reader failed `notBuilt('credentials')` (J-0682's (1)); exported
+with `resolveSecret`. (2) The first `openWriter()` loads the wrapping key twice at once (store and
+sealing keys); the loser read the winner's empty file, "must hold exactly 32 bytes"; the key is
+now written under a private name and linked into place (`m4-key-race`, 8 concurrent loads x 20).
+(3) After a restart `Accounts.forBackend` answered `undefined` until the pool's first use;
+an unknown backend is now asked `describe()` and `poolState` (2 manager cranks, once). (4) That
+fix let `refresh` read the provider's default usage URL for a pool whose spec (and test
+`usageUrl`) the incarnation did not have yet: during a 4 s perf smoke run up to about 200 usage GETs went
+to the provider's public usage endpoint with placeholder tokens; fixed before any further run
+(a pool is read only when its spec is known). (5) The Codex catalogue lists efforts in the
+Responses spelling (`max`), so Fae's `ultra` was refused at creation and the `ultra` -> `max`
+wire mapping was unreachable; `resolveEffort` admits `ultra` where `max` is listed.
+
+### J-9642 2026-11-18 accountStatus is not offered to the model - fit
+Evidence: `m4-accounts` records the tools of a pool session's request: `["exec"]`. The session
+offers its tool-table entries only (`toolSetFor`: echo, exec); an adapter tool in
+`TurnPorts.tools` with no entry is neither described nor executable. D-M4-9 assumed otherwise.
+Reading: the adapter side is complete (W4.5, W4.6 tests); the session side needs a generic
+pass-through of `TurnPorts.tools` entries (M5's `tool-table.js`).
+Decision: reported to the PM; acceptance 7's model-call part deferred.
+
+### J-9643 2026-11-18 Renewal happens at session creation - fit
+Evidence: `m4-renewal` first ran the operator race around a turn and saw no refresh: the expired
+member had been renewed by the catalogue read of the session's creation (`resolveModel` reads each
+member's model list with `credentialOf(entry).current()`). K-5 and K-6 are therefore run around a
+creation; a SIGKILL there breaks the creation, no inference request is sent, and after the
+restart the member is `CONSUMED` (event log and accounts view), the token endpoint saw the token
+0 times (K-5) or once (K-6), and a new session is served by the other member.
+Reading: correct (a catalogue read needs a valid token); section 10 names the round as the
+renewal site, which is only one of two.
+
+### J-9644 2026-11-18 Kill points from outside the adapter - fit
+Evidence: K-2..K-4 kill the supervisor and every process under the state directory at once.
+K-2 (kill when a's 429 was answered): b's request had already reached the server (`sent: a, b`):
+the adapter hands over within a millisecond, so "none to b" cannot be placed from outside;
+acceptance 11's "at most once each, nothing after the restart" holds in all three. Restarts:
+8.2-9.1 s serve. The mark of a 429 committed before the kill survived (K-3 and K-4 skipped a).
+Reading: good fit: the journal of the turn (`Dispatched`) is the only thing recovery needs; no
+member attempt was re-sent across 5 kills.
+
+### J-9645 2026-11-18 M4 perf, subscriptions files - perf
+Evidence: commit `0c66afd639`, load average 4-9 (other lanes), exclusive slots, 60 s windows
+(firstOpen 150 s). `perf/subscriptions.perf.mjs` (3.5 min): select median 0.093 ms (n 581,569;
+budget 0.5) pass; turnStart median 270 ms, p99 400 (n 125; 350) pass, manager frames 0.016 per
+turn; servedWrites 2 manager frames per 60.4 s (budget 1) miss: frames are not deliveries (a GC
+frame follows a stamp's delivery; not separated yet); handover added median 2.1 ms (n 31; 50)
+pass, 1.35 manager frames per refusal; bundles session +33, exec +33 (64) pass, factory +6,874
+(6,144) miss: `subscription-options.js` and `texts-m4.js` are larger than the contract's 4 KB
+estimate (lane base and `3588cab190` measure the same 137,074); manager bundle not measurable
+with `bundleGuest` (the package declares dependencies); probes: no halt, credential 8,193
+bytes refused at read (creation answers catalogue unavailable), audit 1,001 and 17 members
+refused by the guards. `perf/subscriptions-lifecycle.perf.mjs` (6.0 min): renewal 1 refresh POST
+for each of 20 expiries of 16 concurrent rounds, round start median 1,478 ms vs 1,507 unexpired
+(16 concurrent rounds queue; added -49 ms; budget 50) pass; firstOpen median 688 ms, p99 1,312
+(13 restarts; 750) pass, 3 manager frames per first turn (poolState, the open, one more);
+catalog.pool cold median 274 ms (2 s) pass, warm 75 ms (300) pass.
+Reading: the round path costs the vats nothing per turn; the split keeps each file far from the
+10-minute box (3.5 and 6.0 min instead of about 9.9).
+
+### J-9646 2026-11-18 M4 perf, secrets and accounts files - perf
+Evidence: code of `0c66afd639`, exclusive slots, 60 s windows. `perf/secrets.perf.mjs` (4.7
+min): credentialRead median 0.034 ms (n 365,531; budget 1) pass, 0 deliveries; auditReader in
+the adapter's process, 1,000 events, median 30 ms, p99 327 (n 1,372; 50) pass, 0 deliveries
+(through the hub from a control client: median 402 ms, informative, 0 manager frames: the 120 KB
+answer is marshalled twice); catalog of 64 Secrets with 215-unit labels median 745 ms, p99 1,226
+(n 80; 300) miss, 2.21 manager frames per page, first page cut to 57 entries by `fitsFrame`.
+Likely cause: the manager's crank measures each entry with `fitsFrame` and waits for one
+`describeSecrets` round trip to the adapter; not broken down yet. `perf/accounts.perf.mjs` (2.2
+min): push median 0.371 ms, p99 1.4 (n 136,597; 5) pass with 4 viewers, 0 vat deliveries;
+refresh of 2 members median 39 ms, p99 74 (n 1,424; 20 + 100) pass, 2 usage reads per refresh,
+0 manager frames.
+Reading: the adapter-local objects (reader, accounts channel) cost the vats nothing, as designed;
+the catalogue is the one Secrets path that runs in a vat and the one miss.
+
+### J-9647 2026-11-18 Where W4.8's time went - time
+Evidence: start 03:45:17Z. Integration: ten files, holds 78-179 s each, waits 0-1,213 s (other
+lanes' exclusive runs; my first run waited 583 s). Perf: four files, 3.5 + 6.0 + 4.7 + 2.2 min
+held, started 04:48:00 and done 05:04:20 including waits. Failed or stale runs: 7 integration
+runs (defects of J-9641, two test design errors: a 3 s stickiness that had expired, a renewal
+race placed after the creation that already renewed) and 2 perf smoke runs (a static Endo import
+before lockdown; a fake server left listening kept the process alive until the 10-minute box
+ended it, exit 124).
+Reading: waits for slots dominate. M4's own regression is about 5 min of integration over four
+slots plus 16.4 min of exclusive perf, one file at a time: about 21 min, just over the 20-minute
+rule; shortening `firstOpen`'s 150 s window or running `secrets` and `accounts` in one process
+would bring it under.
