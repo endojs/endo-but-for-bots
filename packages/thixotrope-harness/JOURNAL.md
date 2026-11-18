@@ -8628,3 +8628,30 @@ lists exists in M2 as merged in the lane.
 Fit: the gateway path is cheap (sign-in under 1 ms, a frame-sized guard check 0.12 ms, deltas to
 five pages in 1 ms with no vat crank); vat-bound calls cost a crank (22-27 ms median, p99 near
 200 ms under load), as architecture 11 predicts.
+
+### J-9620 2026-11-18 M3 QC review of the M3 lane - verified
+Evidence: review of 36b3035e92..a3f5f125b7 (52 commits, 134 files); unit and adapter lane (189
+tests, 4 s); integration under the slot lock: `m3-gateway` 197 s held, `m3-sessions` 137 s,
+`m3-reconnect` 253 s, `m1a-provision` 205 s, `m1a-slice-restart` 354 s, `m2-lifecycle` 561 s, all
+pass; browser `m3-ui` 105 s (earlier run, same code), `m3-ui-history` 162 s pass,
+`m3-ui-restart` 308 s: acceptance 12 FAILED ("no queued entry q2" after the restart, Send now).
+Reading: the gateway path holds its contract: secret sealed at rest, digest compared in constant
+time, penalty before compare, Origin and CSP, guard before decode, exports cap, no page object
+into a vat; no committed private data. Defects: (1) `openView` clears the pending-entry map
+while the old rows stay on screen, so a Send now in that window fails, which makes acceptance 12
+flaky (1 of 1 here, 1 of 3 for W3.8); (2) H5's appended `gateway` step breaks
+`m1a-provision-steps.test.js` (always) and `m1a-provision.test.js` (whenever the template is
+rebuilt); (3) `lint:types` fails in a clean tree on `../captp`, `../ocapn` (12 errors pulled in
+by the new `@endo/captp` import) and on the built `GW/assets/` (258).
+
+### J-9621 2026-11-18 M3 QC method names and symbols bypass the key vocabulary - fit
+Evidence: `GW/guard.js` checks record keys only (`name` is used only for the large-call test,
+and `@qclass: 'symbol'` is a leaf); `packages/ocapn/src/selector.js` decodes every selector as
+`passableSymbolForName(name)`, a registered symbol in the receiving vat.
+Reading: poor fit, not measured. A signed-in page can send calls with any number of fresh method
+names, or symbol arguments, to a session or factory vat; each becomes a registered symbol and a
+property lookup there, which the contract's "a browser can make a vat intern at most these few
+hundred names, ever" (4.4 rule 4) does not cover. Proposed: a method-name set collected from the
+same interface guards (the keys of `methodGuards`), refusing other names before decode, and
+refusing `symbol` encodings outside it. Whether Ironhorse's name table counts registered symbols
+is the engine's to answer.
