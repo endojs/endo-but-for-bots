@@ -158,3 +158,6 @@ export const blobLimits = Object.freeze({
    */
   daemonBytes: 16 * 1024 * 1024 * 1024,
 });
+
+// M4 (W4.1, H-11): the subscription settings.
+export { subscriptionDefaults } from './defaults-m4.js';
