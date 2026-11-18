@@ -408,6 +408,7 @@ const rows = [
     measure: async (_windowMs, { shared }) => {
       // Needs W5.6's grants part (SessionGrants.grantTool): until it is
       // merged, `Session.grants()` answers notBuilt and the row says so.
+      const { slice } = shared;
       const s = await shared.newSession();
       const grants = await E(s.session)
         .grants()
@@ -423,13 +424,53 @@ const rows = [
         });
         return;
       }
-      // W5.6 / W5.9: grant a fixture tool whose schema parameters are 3,000
-      // units and check `refused-schema` (granted tools are W5.6's fixtures).
-      emit({
-        metric: 'tools.tooBig.grantedSchema3000',
-        pass: null,
-        skipped: 'grants part present: the fixture tool is W5.6s to add here',
-        by: 'W5.3',
+      // W5.9: grant the fixture tool whose schema parameters are about 3,000
+      // units (W5.4's `bigSchemaTool`): `refused-schema` by the inspector
+      // in the exec vat, no halted vat, and the session's next turn runs.
+      const t0 = performance.now();
+      /** @type {Record<string, unknown>} */
+      let detail;
+      try {
+        detail = await capped(async () => {
+          const { makeM5Fixtures } =
+            await import('../test/fixtures/m5-objects.js');
+          const fixtures = await makeM5Fixtures(shared.run.client);
+          const g = await E(grants).grantTool(fixtures.bigSchemaTool);
+          /** @type {any} */
+          let info = await E(g).describe();
+          while (info.state === 'pending') {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            info = await E(g).describe();
+          }
+          const next = await shared.newSession();
+          const hello = await runTurn(slice, next.session, next.live, 'hello');
+          await next.live.stop();
+          return {
+            pass:
+              info.state === 'refused-schema' &&
+              /characters of JSON; the limit is/.test(String(info.reason)) &&
+              hello.end.status === 'completed',
+            state: info.state,
+            reason: String(info.reason).slice(0, 200),
+          };
+        });
+      } catch (error) {
+        detail = {
+          pass: false,
+          error: String(/** @type {any} */ (error)?.message),
+        };
+      }
+      const halted = (await slice.workers()).filter(
+        (/** @type {any} */ w) => w.failure,
+      );
+      await single('tools.tooBig.grantedSchema3000', performance.now() - t0, {
+        budget: { value: PROBE_MS },
+        extra: {
+          ...detail,
+          pass: detail.pass === true && halted.length === 0,
+          halted: halted.map((/** @type {any} */ w) => w.debugLabel),
+          by: 'W5.9',
+        },
       });
     },
   },
