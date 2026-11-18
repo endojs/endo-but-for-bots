@@ -296,12 +296,24 @@ given to CapTP's `dispatch` (captp's `capdata` body format: `@qclass` encodings 
      `guard:awaitArgGuard`, is walked through to its pattern; `guard:rawGuard` adds nothing).
    No harness pattern uses `M.recordOf`; a lane that adds one gets no free keys through the
    gateway (its keys must still be in the vocabulary). Computed once per incarnation (measured in
-   Node at W3.0: 290 keys from the M2 tables in 22 ms). A key outside it is refused `unexpectedField` (rule 12.10; it also closes
+   Node at W3.0: 290 keys from the M2 tables in 22 ms; measured after the M2 review and the M3 merge:
+   258 keys and 140 method names in about 36 ms, J-9630). A key outside it is refused `unexpectedField` (rule 12.10; it also closes
    the `M.any()` fields of `CreateOptions`, `networkPolicy` and `model`, through which a record of
-   invented keys would reach the factory vat). The guard checks keys only: which methods an
-   object has stays the business of that object's own exo guard (an undeclared method is refused
-   by the vat as today). The vocabulary is a fixed set of names every harness vat's program
+   invented keys would reach the factory vat). Rule 4 checks keys; whether a given object has a
+   method stays the business of that object's own exo guard (an undeclared method is refused by
+   the vat as today), and rule 4a below only bounds which names reach a vat. The vocabulary is a fixed set of names every harness vat's program
    already contains, so a browser can make a vat intern at most these few hundred names, ever.
+
+   4a. **Method names** (M3-FIX, J-9630). The same walk also keeps the method names (the keys of
+   every interface guard's `methodGuards`) as a second set, `methods`. A call or property get
+   toward a target that is not gateway-local (a vat presence, or an answer a page pipelines on)
+   must name a method in `methods`; a function application toward one is refused; a passable
+   symbol (`@qclass: 'symbol'`), as an argument or as the method toward any target, must name one
+   of `methods`. Refusal: `unknownMethod`. A vat decodes every selector and symbol as a registered
+   symbol, so without this a page could make a vat register any number of fresh names. Toward a
+   gateway-local object a string name stays that object's own guard's business. Browser-reachable
+   objects of later lanes must have their guards answered by `vocabularyShapes()` (6.3), or the
+   gateway refuses their methods.
 5. **Calls in flight.** At most `callsInFlight` (32) answered calls per connection whose target
    is not a gateway-local object; one more is refused `tooManyCalls`.
 
@@ -606,10 +618,15 @@ it knows and never copies records onto M2's keys, so an optional field a later m
   `requestId` with the composer's current text (no receipt exists for it, so the id is unspent;
   if the lost original lands first, the receipt answers `duplicate: true` and the page shows the
   original). Without `navigator.locks` the composer is disabled with
-  `uiTexts.noWebLocks`. `requestId` = 32 hex digits from `crypto.getRandomValues`.
+  `uiTexts.noWebLocks`. `requestId` is M2's A.4 form (`guest/lib/pending-queue.js` `REQUEST_ID`):
+  13 decimal digits of `Date.now()`, `-`, and a version 4 UUID from `crypto.getRandomValues`
+  (`ui/src/controller/drafts.js` `newRequestId`). The contract's first text said 32 hex digits;
+  a real session refuses that form (J-9604).
 - **Stop** (R6-49): `E(turn).cancel()` on the running turn; leaving the page cancels nothing.
-- **Send now** (R6-44): `E(entry).sendNow()`; for the head entry while a turn runs, also
-  `E(turn).cancel()` (the spec's "cancels the running turn so it goes next").
+- **Send now** (R6-44): `E(entry).sendNow()` only. Since M2's review the session itself cancels
+  the running turn when the head entry is sent now (`guest/session/queue.js` `cancelCurrent`,
+  J-9491; the spec's "cancels the running turn so it goes next"); the page sends no
+  `E(turn).cancel()` of its own, which could reach the turn send-now has just started.
 - **Large content**: a `StagedText` shows its preview and loads the full text with `Content.read`
   in `blobPageBytes` pages on expand (a 1 MiB reply renders fully, acceptance 8).
 
@@ -809,6 +826,7 @@ answers `fetch`) and `contract-m3.js` (`gatewayTexts`, `uiTexts`, `uiTextOf`).
 | `m3Texts.gatewayNotServing`, `gatewayNotAttached`, `m3TextOf.gatewayFailed(m)` | see the file | harness |
 | `gatewayTexts.messageTooLarge` | `message too large; use the composer` | architecture 7 |
 | `gatewayTexts.unexpectedField` | `unexpected field` | architecture 7 |
+| `gatewayTexts.unknownMethod` | `unknown method` | rule 4.4 4a (M3-FIX) |
 | `gatewayTexts.queryConfig` | `Configuration in the query string is not accepted; use the URL fragment` | R6-10, R7-48 (harness wording) |
 | `uiTexts.reconnecting` | `Reconnecting…` | R6-13 |
 | `uiTexts.serverStarting` | `Server starting...` | architecture 7, D-17 |
