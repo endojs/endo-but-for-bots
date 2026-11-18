@@ -101,6 +101,8 @@ test('the provisioning steps install, load the program, and re-run as a no-op', 
       ['load session program', false],
       ['load exec program', false],
       ['pool', false],
+      // M5 W5.5 (seam H-10): a no-op without options.m5Fixtures.
+      ['m5 fixtures', true],
     ],
   );
   t.deepEqual(reports, first);
@@ -172,6 +174,7 @@ test('the steps table is the M1a list, then M1b W1b.5 appends', t => {
       'load session program',
       'load exec program',
       'pool',
+      'm5 fixtures',
     ],
   );
   t.true(Object.isFrozen(provisionSteps));
