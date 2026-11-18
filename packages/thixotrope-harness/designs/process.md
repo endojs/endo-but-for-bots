@@ -75,6 +75,13 @@ now a machine-wide pool of slots (the script's header comment is the reference):
   overrides) or the perf check itself (`node perf/x.perf.mjs`; `yarn perf` starts each check that
   way), so perf numbers are not taken on a loaded machine. An exclusive waiter sets an intent
   marker that stops new shared takers, so it is not starved.
+- **Exclusive mode is for a milestone's recorded numbers only.** While an exclusive taker waits
+  for the slots to drain, and while it runs, every lane is stopped. Measured from `runs.jsonl`
+  over the lanes' first 2.5 hours (2026-11-18): 17 exclusive runs held 37 minutes in all, yet runs
+  waited 4.4 hours against 3.3 hours held. So: a builder's perf smoke during a unit runs with
+  `--shared`, records the load average, and marks the row "under load"; only a lane's integration
+  unit and a review take exclusive mode, and they run their perf files back to back in one batch
+  rather than spread through the work.
 - **Time box (CLI wrapper only):** `--max-ms` (default 600,000; `THIX_HARNESS_RUN_MAX_MS`): a
   workload that runs longer gets SIGTERM, then SIGKILL 10 s later, and the wrapper exits **124**.
   Waiting for a slot does not count. Processes a workload leaves in its group when it exits are
@@ -111,8 +118,9 @@ The owner's rule: we do not test anything that takes hours.
   takes more than a few minutes to import is cached as a template (keyed like
   `test/template/index.js`) and built once per worker and bundle change.
 - **A milestone's whole regression run finishes in 20 minutes of wall time**, using the slots: unit
-  lane, adapter lane, integration files spread over the shared slots, then the perf checks one at
-  a time in exclusive mode. The PM keeps the list of what is in it and its last wall time.
+  lane, adapter lane and integration files spread over the shared slots. The perf checks are a
+  separate pass, one at a time in exclusive mode, each inside its own 10-minute box. The PM keeps
+  the list of what is in each and its last wall time.
 - Anything that cannot fit is redesigned (smaller window, imported state, a Node-level test of the
   logic, a cached template), and the reason goes in the journal.
 
