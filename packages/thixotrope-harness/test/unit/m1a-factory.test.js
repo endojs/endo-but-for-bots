@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 /* eslint-disable import/no-relative-packages */
 import { shapes, textOf, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
+import { m4Texts } from '../../guest/lib/texts-m4.js';
 import {
   INTERRUPTED_CREATION_TEXT,
   NO_PROGRAM_TEXT,
@@ -264,7 +265,6 @@ test('refused options make no row and no vat', async t => {
   }
   for (const [name, value] of /** @type {[string, any][]} */ ([
     ['networkPolicy', 'none'],
-    ['reasoningEffort', 'high'],
   ])) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
@@ -272,6 +272,15 @@ test('refused options make no row and no vat', async t => {
       { message: textOf.optionNotSupported(name) },
     );
   }
+  // M4 (H-6): reasoningEffort is resolved now; a backend that is not a
+  // subscription pool refuses it with M4's text.
+  await t.throwsAsync(
+    () =>
+      E(kit.factory).createSession(
+        harden({ backend, reasoningEffort: 'high' }),
+      ),
+    { message: m4Texts.effortNotSupported },
+  );
   await t.throwsAsync(() => E(kit.factory).createSession(harden({})), {
     message: texts.noBackend,
   });
