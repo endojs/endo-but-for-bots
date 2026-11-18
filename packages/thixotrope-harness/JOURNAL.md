@@ -8122,3 +8122,39 @@ W5.5 and W5.6), `exec-m5` (W5.5), `presets` (W5.1), `mentions` (W5.7) and a new 
 both sides inside one window, and each probe has a cap, so every file is at most about 5.5
 minutes and the regression at most 69 slot-minutes (about 17 minutes on four slots).
 Decision: as described.
+
+### J-0550 2026-11-18 M3 W3.3 manager side - good fit
+Evidence: commits 04e6ac0896, 5ad1954bae; `resources/agent-host/durable-gateway.js`;
+`test/unit/m3-w33-gateway-admin.test.js` (10 tests over the real manager kit, adapter keeper and
+adapter kit, with the real `makeAttach` and a fake gateway binding; about 1 s).
+Reading: the gateway's durable state is four variables in the manager vat (handle, config with its
+`Operator` presence, last ops facet, last status) and the kit does the rest: a rebuilt incarnation
+restores both keys of the resource in insertion order, the gateway's bind re-attaches through
+`GatewaySink`, and a retired ops facet is told apart by `isRetiredBreak` (status `starting`). No
+restart code was written for the gateway; orthogonal persistence keeps the config, the kit keeps
+the desire.
+Decision: as built; `rotateSignIn` on a retired ops facet reconciles once through the handle's
+`status()` (the kit rebuilds and restores) and retries, instead of failing until the next start.
+
+### J-0551 2026-11-18 M3 W3.3 bundle sizes - perf
+Evidence: `test/unit/m3-w33-bundles.test.js` at 5ad1954bae (no window: a size, not a rate).
+Reading: session 186,448 bytes and exec 84,354 (budgets 200,000 and 100,000), factory 137,074:
+all three byte-identical to the lane base, so growth 0 as the contract states; none carries
+`interfaces-m3.js`. The agent-host manager bundle (`durable.js` as the supervisor bundles it)
+grows 136,866 -> 157,211 bytes (+20,345). About 11,400 of that is comments: the supervisor's
+`bundle` keeps them, unlike `scripts/bundle-guest.mjs`, which strips them for guest programs.
+Decision: recorded; the manager vat is one per daemon, so the cost is load time once per start.
+For the PM: stripping comments in the native durable bundle would save about half of M3's (and
+M4's) manager growth; that is a core change (`pkg/src/platform/bundler.js`), not filed.
+
+### J-0552 2026-11-18 M3 W3.3 kit sameness - awkward
+Evidence: `durable.js` registers with `same: () => true` and no `replaces`;
+`pkg/src/native/manager-kit.js` `register` (an existing key whose spec is "same" is reconciled
+with its old spec).
+Reading: under the agent-host manager's sameness rule a second `register(GATEWAY_KEY, newSpec)`
+would keep the old config silently. `serve` therefore closes the old registration (the adapter
+unbinds, closing the listener) and registers anew, so a re-serve has a short window with no
+listener and costs two kit operations. A per-key `same`/`replaces` would let the kit rebind under a
+new epoch in one step; the kit takes one rule per manager.
+Decision: close-then-register, as the contract states; admin operations are serialised in the
+manager so a `status` between the two steps sees the whole change.
