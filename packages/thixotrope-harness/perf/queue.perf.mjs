@@ -23,7 +23,13 @@
  *   entries while a turn runs (moves it to the head).
  * - `queue.view.memory`: `Session.listPending()` of 100 entries.
  *
- * QUEUE_ROUNDS (default 200) sets the samples per row.
+ * Each row samples back to back for a fixed window, QUEUE_WINDOW_MS
+ * (default 10 s; six rows, about a minute), after QUEUE_WARMUP (20)
+ * unrecorded operations, and reports median, p99, operations per second and
+ * the samples the window held (`window`, `windowMs`, `samples`). A row
+ * whose operations add receipts stops early at the receipt bound (a session
+ * keeps at most `maxReceipts` Composer receipts in 24 h) and says so
+ * (`stoppedAt`).
  */
 import '../scripts/_init.mjs';
 
@@ -43,8 +49,36 @@ const { limits } = await import('../guest/lib/limits.js');
 
 const { E, Far } = /** @type {any} */ (globalThis);
 
-const rounds = Number(process.env.QUEUE_ROUNDS ?? 200);
-const WARMUP = 20;
+const WINDOW_MS = Number(process.env.QUEUE_WINDOW_MS ?? 10_000);
+const WARMUP = Number(process.env.QUEUE_WARMUP ?? 20);
+
+/**
+ * Run `op` WARMUP times unrecorded, then back to back for WINDOW_MS or
+ * until `cap` samples; `op` returns the operation's own latency.
+ * @param {() => Promise<number>} op
+ * @param {number} [cap]
+ */
+const overWindow = async (op, cap = Infinity) => {
+  for (let i = 0; i < WARMUP; i += 1) await op();
+  /** @type {number[]} */
+  const samples = [];
+  const t0 = performance.now();
+  while (performance.now() - t0 < WINDOW_MS && samples.length < cap)
+    samples.push(await op());
+  const windowMs = performance.now() - t0;
+  return {
+    samples,
+    fields: {
+      window: WINDOW_MS,
+      windowMs: Math.round(windowMs),
+      samples: samples.length,
+      perSecond: Math.round((samples.length * 1000) / windowMs),
+      ...(samples.length >= cap
+        ? { stoppedAt: `${cap} samples (receipt bound)` }
+        : {}),
+    },
+  };
+};
 const AT = 1_800_000_000_000;
 const extra = {
   mode: 'memory',
@@ -113,20 +147,20 @@ for (const [receipts, waiting] of [
   for (let i = 0; i < waiting; i += 1) {
     session.enqueueOnce(harden({ text: `w${i}` }), rid(AT), AT);
   }
-  /** @type {number[]} */
-  const samples = [];
-  for (let i = 0; i < rounds + WARMUP; i += 1) {
+  // Every submission keeps a receipt: stop below the bound.
+  const cap = limits.maxReceipts - receipts - waiting - WARMUP - 2;
+  const { samples, fields } = await overWindow(async () => {
     clock += 1;
     const t0 = performance.now();
     const receipt = await E(composer).submit(session, 'hello', rid(clock));
     const t1 = performance.now();
-    if (i >= WARMUP) samples.push(t1 - t0);
     // Keep the waiting count where it was: the entry leaves again.
     receipt.entry.cancel();
-  }
+    return t1 - t0;
+  }, cap);
   await stats('queue.enqueue.memory', samples, {
     budget: { median: 150 },
-    extra: { ...extra, receipts, waiting },
+    extra: { ...extra, ...fields, receipts, waiting },
   });
 }
 
@@ -134,15 +168,14 @@ for (const [receipts, waiting] of [
 {
   const session = await busySession();
   const receipt = await E(composer).submit(session, 'draft', rid(clock));
-  /** @type {number[]} */
-  const samples = [];
-  for (let i = 0; i < rounds + WARMUP; i += 1) {
+  let i = 0;
+  const { samples, fields } = await overWindow(async () => {
+    i += 1;
     const t0 = performance.now();
     await E(composer).edit(receipt.entry, `edit ${i}`);
-    const t1 = performance.now();
-    if (i >= WARMUP) samples.push(t1 - t0);
-  }
-  await stats('queue.edit.memory', samples, { extra });
+    return performance.now() - t0;
+  });
+  await stats('queue.edit.memory', samples, { extra: { ...extra, ...fields } });
 }
 
 // ---- QueueEntry.sendNow of the last of 99 waiting entries
@@ -151,18 +184,15 @@ for (const [receipts, waiting] of [
   for (let i = 0; i < limits.maxWaiting - 1; i += 1) {
     session.enqueueOnce(harden({ text: `w${i}` }), rid(AT), AT);
   }
-  /** @type {number[]} */
-  const samples = [];
-  for (let i = 0; i < rounds + WARMUP; i += 1) {
+  const { samples, fields } = await overWindow(async () => {
     const { entries } = session.listPending();
     const last = entries[entries.length - 1].entry;
     const t0 = performance.now();
     await E(last).sendNow();
-    const t1 = performance.now();
-    if (i >= WARMUP) samples.push(t1 - t0);
-  }
+    return performance.now() - t0;
+  });
   await stats('queue.sendNow.memory', samples, {
-    extra: { ...extra, waiting: limits.maxWaiting - 1 },
+    extra: { ...extra, ...fields, waiting: limits.maxWaiting - 1 },
   });
 }
 
@@ -176,15 +206,12 @@ for (const [receipts, waiting] of [
       AT,
     );
   }
-  /** @type {number[]} */
-  const samples = [];
-  for (let i = 0; i < rounds + WARMUP; i += 1) {
+  const { samples, fields } = await overWindow(async () => {
     const t0 = performance.now();
     session.listPending();
-    const t1 = performance.now();
-    if (i >= WARMUP) samples.push(t1 - t0);
-  }
+    return performance.now() - t0;
+  });
   await stats('queue.view.memory', samples, {
-    extra: { ...extra, waiting: limits.maxWaiting },
+    extra: { ...extra, ...fields, waiting: limits.maxWaiting },
   });
 }
