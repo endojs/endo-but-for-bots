@@ -685,45 +685,96 @@ renewal, refusal marks and account status.
   R6-29, R6-54, R6-67, R7-16, R7-22, R7-25, R7-26, R7-29, R7-30, R7-63, R8-13, R8-14, R8-30, R8-31,
   R8-34, R8-35, R8-36, R8-37, R8-38.
 - **Depends on:** M2. Parallel with M3 and M5 (UI units after W3.0).
-- **Owns:** `AH/subscriptions/` (pool, share meter, rate-limit headers, renewal, responses + messages
-  clients, account oracle), `AH/secrets/{audit,catalog}.js`, `H/guest/factory/{backends,accounts}.js`
-  (registered in `session-options.js`), `H/ui/src/secrets/`, `H/ui/src/accounts/`,
-  `H/test/fixtures/sse/subscriptions/`, `H/test/*/m4-*`, `H/perf/pool.perf.mjs`.
+- **Owns:** `AH/subscriptions/` (pool core, rate-limit headers, pool-state bridge, Messages and
+  Responses clients, pool catalogue, credentials, renewal, accounts, account file, `accountStatus`
+  tool, pool provider, composition, credential ops), `AH/secrets/{credential-access,audit,catalog}.js`,
+  `H/resources/agent-host/durable-subscriptions.js`, `H/guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`,
+  `H/guest/factory/subscription-options.js` (registered in `session-options.js`),
+  `H/config/defaults-m4.js`, `H/scripts/subscription-login.mjs`, `H/ui/src/secrets/`,
+  `H/ui/src/accounts/`, `H/test/fixtures/{fake-subscription-server,fake-oauth-server}.mjs`,
+  `H/test/fixtures/sse/subscriptions/`, `H/test/*/m4-*`, `H/perf/{subscriptions,secrets}.perf.mjs`
+  (not `perf/pool.perf.mjs`, which is M1b's spare pool). Edits to shared files are the merge
+  hotspots H-1..H-12 of `m4-interfaces.md` 15, each with its exact seam.
 
-**Work units**
+**Contract.** `designs/m4-interfaces.md` (W4.0) with `guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`
+and `resources/agent-host/impl/subscriptions/types.js`. Pools hang off `SecretsAdmin.subscriptions()`
+(D-M4-1), so `AgentHostAdmin`, `Operator` and every session interface stay as M2 left them; M4 adds
+nothing to the session or exec programs (the session program has 13,552 bytes of its 200 KB left
+for M3, M4 and M5 together, measured at `3588cab190`).
 
-| id | files | behaviour | tests |
-|---|---|---|---|
-| W4.1 secrets full | `AH/secrets/{audit,catalog}.js` | catalogue without values, audit listing 100 (max 1,000), delete only after revoke, size limits R7-25, no path from a Secret to its admin | ported `daemon/test/secret-manager.test.js` parts |
-| W4.2 secrets UI | `ui/src/secrets/` | Secrets view: create, replace (value typed into the adapter-local `SecretWriter`), revoke, audit; never shows a value | UI component test |
-| W4.3 pool and routing | `AH/subscriptions/{pool,share-meter,rate-limit-headers}.js` (adapted from `hosted-agent/src/*`) | member selection R4-24, stickiness 300 s with last-served records keyed by the Session object in the manager vat (at most 256), one attempt per member plus one refresh retry, "Provider subscriptions exhausted" with the reset time (G-07), marks persisted by coalesced sendOnly, a newer open reading lifts a dated mark | ported `subscription-pool.test.js`, `rate-limit-headers.test.js`, `share-meter.test.js` |
-| W4.4 wire clients | `AH/subscriptions/{responses,messages}.js` from `lal/providers/subscription-{responses,messages,events}.js` | Codex Responses SSE, Claude Messages SSE with R4-30 headers, efforts R4-23, Codex overload retry R4-75, Claude overload retry (G-05), other Claude failures R4-76; context window from configuration for Claude (open decision 13); cancel revokes the endpoint (R4-49) | fake-server fixtures; ported `subscription-responses.test.js`, `subscription-messages.test.js` |
-| W4.5 renewal | `AH/subscriptions/renewal.js` | OAuth refresh in the adapter, write-back conditioned on generation, holds only its grant and writer (W-5 fix) | two concurrent renewals: one fails |
-| W4.6 accounts | `AH/subscriptions/account-oracle.js`, `guest/factory/accounts.js`, `ui/src/accounts/` | accounts channel (D-8) with plan/windows/credits labelled observed/declared/remembered/unavailable; `refreshAccounts`; `accountStatus` tool registered in `tool-table.js` | unit + UI test |
+**Work units** (order: W4.0 done; **group A** = W4.1-W4.5 in parallel; **group B** = W4.6 and
+W4.7 in parallel, W4.7 only after M3's W3.0 is merged; then W4.8, which owns every file; only W4.8
+needs a running supervisor; estimates in hours of one Opus agent, `m4-interfaces.md` 16)
 
-**Acceptance tests** (all with the fake server; `[real-provider]` repeats 4-5 once with owner credentials)
-1. Secrets: create, replace with expected generation (stale refused), revoke (next read fails), delete
-   only after revoke, audit lists each read; no API returns a value.
-2. `auto` picks the member resetting soonest; ties by used fraction then declaration order; a session
-   stays on its member for 300 s.
-3. A 429 with exhaustion headers marks the member and retries once on the next; all exhausted fails
-   "Provider subscriptions exhausted" and shows the reset time.
-4. Marks survive restart; a newer open reading lifts a dated mark.
-5. `thix reachability` from a session vat and from its exec vat reaches no `AgentHostAdmin`,
-   `SecretsAdmin`, Secret admin or value, gateway facet, factory or other session.
-6. Catalogue: `fae-codex` intersection rule (R4-18); `fae-claude` synthetic `auto` (R4-19); a failed
-   read reports `unavailable`.
-7. Account chips and the `accountStatus` tool show plan, windows and reset times with provenance
-   labels; refresh updates them (P-45).
-8. A Claude overload (529) before any delivery is retried; after a delivery it fails with the R4-76
-   text.
+| id | files | behaviour | tests | est. |
+|---|---|---|---|---|
+| W4.0 contract | `designs/m4-interfaces.md`, `guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`, `AH/subscriptions/types.js` | **Done** (J-0610..J-0629) | guards built and sampled in Node | - |
+| W4.1 manager part and creation (A) | `resources/agent-host/durable-subscriptions.js`, `guest/factory/subscription-options.js`, `config/defaults-m4.js`; hotspots H-1, H-2, H-6, H-7, H-11 | `SubscriptionsAdmin` (members from Secrets, pools as Backends, idempotent by label, R8-31 conflicts, retire), pool `Backend` with `resolveEffort`, sink `poolState`/`poolChanged`/`poolOf`, marks per member, served records (256, LRU), Secrets catalogue page, `setDescription`, audit reader forward; the effort resolver (R4-23) and `reasoningEffort` into `SessionConfig` | unit: M4 guards; M4 `SecretsAdmin`/`Secret` keep M2's method guards; the part with fake ops; the resolver | 6 |
+| W4.2 pool core (A) | `AH/subscriptions/{pool,rate-limit-headers,pool-state}.js` | selection R4-24 (object keys, `auto` only), marks R4-25/R4-103, dated marks lifted by newer open readings, the manager bridge (marks at once, served stamps coalesced, one `poolState` per incarnation) | ported `subscription-pool.test.js`, `rate-limit-headers.test.js` | 5 |
+| W4.3 wire clients and catalogue (A) | `AH/subscriptions/{messages,responses,catalog}.js`, `anthropic.js` options (H-14), `test/fixtures/fake-subscription-server.mjs`, `test/fixtures/sse/subscriptions/` | Claude Messages SSE (R4-30 headers and billing block, adaptive thinking efforts, 16,384 output tokens, R4-76 texts, overload retry G-05), Codex Responses SSE (`instructions`, `store:false`, encrypted reasoning, `server_is_overloaded` retry R4-75/R4-105, `ultra` as `max`), pool catalogue R4-18/R4-19 with the R4-104 cache and the configured Claude context window (decision 13) | fixtures; ported lal `subscription-responses`/`subscription-messages` tests | 9 |
+| W4.4 credentials, renewal, Secrets adapter (A) | `AH/subscriptions/{credentials,renewal}.js`, `AH/secrets/{credential-access,audit,catalog}.js`, H-5, `test/fixtures/fake-oauth-server.mjs` | credential parse and bounds (R7-25), write-ahead renewal with generation-conditioned write-back, fail closed `CONSUMED` (D-M4-8), single-flight per member, the one-key accessor (W-5 fix), audit reader to 1,000 (R7-63), describe batch | concurrent renewals, killed child at the renewal kill points, audit paging | 7 |
+| W4.5 accounts (A) | `AH/subscriptions/{accounts,account-file,account-tool}.js` | readings with provenance (observed, declared, remembered, unavailable), pushed on an adapter channel (R4-85), on-demand refresh, readings file, `accountStatus` text (R3-35, R4-84), banked credits shown (R4-86, no redeem) | adapter tests; ported `account-tool` rendering | 6 |
+| W4.6 composition and wiring (B) | `AH/subscriptions/{provider,index,credential-ops}.js`, `scripts/subscription-login.mjs`, H-3, H-4, H-8, kind tool lines (H-14) | the pool round (member hand-over before delivery, one attempt per member plus one renewal retry, "Provider subscriptions exhausted" with the reset time, G-07), `claude-pool`/`codex-pool` kinds, `accountStatus` on pool and API kinds, ops `credentials()`, provisioning step, sign-in helper (sealed box only) | adapter tests over both fake servers and a fake sink | 8 |
+| W4.7 UI (B, after W3.0) | `ui/src/secrets/`, `ui/src/accounts/`, H-9, H-10 | Secrets panel (write-only, R6-67, R7-26), Subscriptions panel and account chip (R6-54) through M3's seams | component tests | 7 |
+| W4.8 integration | everything; `test/integration/m4-*`, `test/browser/m4-*`, `perf/{subscriptions,secrets}.perf.mjs` | acceptance 1-16, kill points K-1..K-6, perf below | all M4 files, four slots, under 20 min | 9 |
 
-**Perf checks**
+**Acceptance tests** (fake servers; `[real-provider]` repeats 3, 7, 8 and 10 once with owner
+credentials; each one integration test under 5 minutes; files in `m4-interfaces.md` 17)
+1. Secrets: create, replace with expected generation (stale refused), revoke (next read fails),
+   delete only after revoke, description edit, catalogue without values, audit lists each read
+   (pages to 1,000).
+2. `auto` picks the member resetting soonest; ties by used fraction then declaration order; a
+   session stays on its member within the cache lifetime and moves after it.
+3. A 429 with exhaustion headers marks the member and the same request goes once to the next; all
+   exhausted fails "Provider subscriptions exhausted" with the first reset time; no body in the
+   reason.
+4. Marks survive a SIGKILL restart; a newer open reading lifts a dated mark.
+5. From a session vat and its exec vat no `AgentHostAdmin`, `SecretsAdmin`, `SubscriptionsAdmin`,
+   `Secret`, `PoolMember`, `Accounts`, gateway facet, factory or other session is reachable
+   (method of `m4-interfaces.md` 19 until CC-060).
+6. Catalogue: `codex-pool` intersection (R4-18); `claude-pool` synthetic `auto` with efforts and the
+   configured window; a read with no member answering is `unavailable`; the cache holds 15 min.
+7. `accountStatus` and the account chips show plan, windows and resets with provenance labels;
+   refresh updates them; a watcher gets one batch per change; after a restart they are
+   `remembered`.
+8. Claude 529 before any delivery is retried; after a delivery it fails with an R4-76 text; SSE
+   error, non-200 and empty answer give the three R4-76 texts.
+9. Codex `server_is_overloaded` before visible delivery is retried on the schedule, after it is
+   not; failure texts carry symbolic facts only.
+10. Renewal: an expired token is renewed once; a 401 gets one renewal and one retry, then the
+    member is marked and the next serves; a concurrent renewal fails `GENERATION_CONFLICT`.
+11. SIGKILL mid-round (between a 429 and the next member's request, mid-stream, before the first
+    byte): the turn is outcome-unknown and no member attempt is sent twice.
+12. SIGKILL during renewal (after the write-ahead mark; after the token endpoint answered): at most
+    one refresh per token; the member reports `CONSUMED`; the other member serves.
+13. Efforts: unsupported refused at creation, supported stored and sent; an effort on an API
+    backend refused; R4-30 header names present.
+14. Browser: Secrets panel create, replace, revoke, delete after revoke, audit, value never in the
+    DOM or a gateway frame; account chips update live.
+15. No access token, refresh token or API key value anywhere in the state directory, the adapter's
+    event log or captured stderr.
+16. Provisioning twice is a no-op; a member label bound to another Secret is refused until
+    retired; a revoked Secret is never rewritten; `makePool` again after a SIGKILL answers the
+    same pool.
+
+**Perf checks** (each a rate or latency over a fixed 60 s window unless stated, under 10 minutes
+per check, no state built by replaying turns; reasons in `m4-interfaces.md` 18)
 | check | budget |
 |---|---|
-| `pool.selectAndOpen` per round | <= 2 ms in-process; 0 extra deliveries |
-| `pool.markPersist` per refusal | 1 delivery to the manager vat |
-| `accounts.push` per change | 1 factory publish; 0 per viewer |
+| `subscriptions.select` member order, 16 members, 256 sessions | median <= 0.5 ms; 0 deliveries |
+| `subscriptions.turnStart` on a pool backend | median <= 350 ms; <= 3 session deliveries; 0 manager deliveries |
+| `subscriptions.handover` 429 on A then B | <= 50 ms over the fake server; 1 manager delivery per refusal |
+| `subscriptions.servedWrites` sticky session | <= 1 manager delivery per session per 60 s |
+| `subscriptions.firstOpen` after restart (5 restarts) | <= 750 ms; 1 manager crank |
+| `secrets.credentialRead` per round | median <= 1 ms; 0 deliveries |
+| `subscriptions.renewal` 16 concurrent rounds on an expired member | 1 refresh POST per expiry; <= fake + 50 ms |
+| `secrets.catalog` 64 secrets | <= 300 ms; 1 manager crank |
+| `secrets.auditReader` 1,000 events | <= 50 ms; 0 vat deliveries |
+| `accounts.push` reading to subscriber | median <= 5 ms; 0 vat deliveries per change and per viewer |
+| `accounts.refresh` 2 members | <= fake + 100 ms |
+| `catalog.pool` warm / cold (5 cold reads) | <= 300 ms / <= 2 s |
+| `subscriptions.bundles` | session and exec + <= 64 bytes; factory <= +6 KB |
+| too-big probes (single runs) | no halt; credential 8,193 bytes, secret 1 MiB + 1, audit 1,001, 17 members, 16 MiB + 1 SSE line refused on the sending side; `poolState` at 256 served fits a frame |
 
 **Fit risk:** good. All token-bearing code is Node in one process; the vat side is a few handles.
 
