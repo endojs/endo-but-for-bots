@@ -792,6 +792,13 @@ test('every backend kind names its fixed failure text; a kind without one is ref
   );
 });
 
+/** State directories of the fake manager kits, removed after the file. */
+/** @type {string[]} */
+const kitStateDirs = [];
+test.after.always(() => {
+  for (const dir of kitStateDirs) rmSync(dir, { recursive: true, force: true });
+});
+
 /**
  * A fake of the core's manager kit (pkg/src/native/manager-kit.js): one
  * registration, bound by a fresh implementation per "incarnation". A
@@ -799,6 +806,11 @@ test('every backend kind names its fixed failure text; a kind without one is ref
  * retired text) without telling the manager vat, as a SIGKILL does.
  */
 const makeFakeManagerKit = () => {
+  // Every incarnation keeps its files in one state directory, as a daemon's
+  // do across restarts (HR-SYN-9: a store with no directory reports a
+  // failed sweep).
+  const stateDir = mkdtempSync(join(tmpdir(), 'w1a2-kit-'));
+  kitStateDirs.push(stateDir);
   let registers = 0;
   let incarnations = 0;
   /** @type {{ retired: boolean, impl: any } | undefined} */
@@ -807,7 +819,10 @@ const makeFakeManagerKit = () => {
   let desiredSpec;
   const bindFresh = async () => {
     incarnations += 1;
-    const incarnation = { retired: false, impl: makeAgentHostImpl() };
+    const incarnation = {
+      retired: false,
+      impl: makeAgentHostImpl({ stateDir }),
+    };
     current = incarnation;
     /** @param {() => any} fn */
     const guard = fn => {
@@ -992,7 +1007,7 @@ test('scripted backend writes its event log as fsynced JSON lines', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'w1a2-'));
   t.teardown(() => rmSync(dir, { recursive: true, force: true }));
   const logPath = join(dir, 'events.jsonl');
-  const impl = makeAgentHostImpl();
+  const impl = makeAgentHostImpl({ stateDir: dir });
   const fake = makeFakeTurn();
   const backend = Far('Backend', {});
   const session = Far('Session', {});
@@ -1085,7 +1100,9 @@ test('loader: finds the implementation and returns an adapter that attaches', as
   t.throws(() => findHarnessRoot('/nowhere/a/b/c/d/entry.js'), {
     message: /no implementation under/,
   });
-  const adapter = loadAgentHost({ harnessRoot });
+  const stateDir = mkdtempSync(join(tmpdir(), 'w1a2-load-'));
+  t.teardown(() => rmSync(stateDir, { recursive: true, force: true }));
+  const adapter = loadAgentHost({ harnessRoot, implOptions: { stateDir } });
   /** @type {any[]} */
   const attached = [];
   const sink = Far('AgentHostSink', {

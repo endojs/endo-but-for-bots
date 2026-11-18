@@ -314,8 +314,11 @@ test('stock: refilled below STOCK_LOW with one refill in flight; sweep removes u
     `${fake.counts.mints}`,
   );
   t.true(blobs.store.stats().stock >= STOCK_LOW - 1);
+  // The sweep is the next incarnation's (HR-SYN-9: one per incarnation, and
+  // this one swept before its first staging).
   writeFileSync(join(blobs.blobDir, 'b999.part'), 'half');
-  await blobs.store.sweep();
+  const next = makeBlobStore({ dir: blobs.blobDir, sink: fake.sink });
+  await next.sweep();
   t.false(existsSync(join(blobs.blobDir, 'b999.part')));
   t.true(existsSync(join(blobs.blobDir, 'b1')));
 });

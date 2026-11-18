@@ -25,7 +25,9 @@
  * take its session (`owner`) over `blobLimits.sessionBytes`, or the whole
  * directory over `blobLimits.daemonBytes`, is refused before anything is
  * written (`textOf.blobSessionQuota`, `textOf.blobDaemonQuota`). A writer is
- * checked piece by piece. Deleted files are refunded.
+ * checked piece by piece. Deleted files are refunded. The daemon count
+ * starts from one sweep per incarnation; no staging is reserved before that
+ * sweep has succeeded (HR-SYN-9).
  *
  * Provenance (J-9364; contract 17.3): each bound handle records the session
  * it was staged for; `read`/`readPage`/`claim` with an owner refuse another
@@ -109,8 +111,15 @@ const isContinuation = byte => byte >= 0x80 && byte < 0xc0;
  * @property {any} writers the BlobWriters exo (no owner)
  * @property {(owner: any) => any} writersFor a BlobWriters exo whose
  *   blobs are `owner`'s (its quota; TurnPorts.writers)
- * @property {() => Promise<void>} sweep deletes `*.part` (writes that never
- *   completed or were never committed) and counts the bytes on disk
+ * @property {() => Promise<void>} sweep once per incarnation (HR-SYN-9):
+ *   deletes `*.part` (writes of an earlier incarnation that never completed
+ *   or were never committed) and sets the daemon count to the bytes on
+ *   disk. A later call answers the same settled sweep (a rebind neither
+ *   counts the files again nor deletes this incarnation's `.part` files);
+ *   a failed sweep rejects with its error and is tried again by the next
+ *   call. The first staging runs it if no one has; until one succeeds every
+ *   staging is refused (`blobsUncountedText`), so the daemon quota never
+ *   checks against an uncounted directory.
  * @property {(blob: any) => boolean} knows the handle is bound in this incarnation
  * @property {(blob: any) => Promise<boolean>} discard delete the file of a
  *   handle this incarnation bound (or wrote and did not commit) and the
@@ -141,12 +150,14 @@ const isContinuation = byte => byte >= 0x80 && byte < 0xc0;
  */
 
 /**
- * `<state>/agent-host/blobs`, from the adapter process's bundle path:
+ * The daemon's state directory, from the adapter process's bundle path:
  * `argv[3]` is `<state>/bundles/<digest>.cjs` (pkg store-fs.js `bundlePath`,
- * adapter-process-entry.js), so state copies and templates carry their blobs.
+ * adapter-process-entry.js), so state copies and templates carry their
+ * files. The core gives an adapter no state directory (AR-SYN-28); this is
+ * the one place that reads it from argv (HR-SYN-22).
  * @param {readonly string[]} [argv]
  */
-export const findBlobDir = (argv = processArgv) => {
+export const findStateDir = (argv = processArgv) => {
   const bundle = argv[3];
   if (
     typeof bundle !== 'string' ||
@@ -157,9 +168,35 @@ export const findBlobDir = (argv = processArgv) => {
       'agent host: no state directory (argv[3] is not <state>/bundles/<digest>.cjs)',
     );
   }
-  return join(dirname(dirname(bundle)), 'agent-host', 'blobs');
+  return dirname(dirname(bundle));
 };
+harden(findStateDir);
+
+/**
+ * The blob directory in a state directory.
+ * @param {string} stateDir
+ */
+export const blobDirIn = stateDir => join(stateDir, 'agent-host', 'blobs');
+harden(blobDirIn);
+
+/**
+ * `<state>/agent-host/blobs`, from the adapter process's bundle path
+ * (`findStateDir`).
+ * @param {readonly string[]} [argv]
+ */
+export const findBlobDir = (argv = processArgv) =>
+  blobDirIn(findStateDir(argv));
 harden(findBlobDir);
+
+/**
+ * What a staging is refused with while the store has not counted the files
+ * already on disk (its sweep failed): the daemon quota would check against
+ * a count that leaves them out (HR-SYN-9). The sweep's own error is the
+ * adapter's to report (`impl/index.js`); it may name paths, so it is not
+ * part of this text.
+ */
+export const blobsUncountedText =
+  'the blob directory has not been counted (its start-up sweep failed); staging is refused until a sweep succeeds';
 
 /** @param {string} path */
 const syncDirectory = async path => {
@@ -238,6 +275,12 @@ export const makeBlobStore = ({
   const ownerBytes = new WeakMap();
   /** Bytes of staged text on disk (files counted by `sweep`, then kept up). */
   let diskBytes = 0;
+  /**
+   * This incarnation's one sweep: pending or settled with success; a
+   * failure clears it so the next call tries again (HR-SYN-9).
+   * @type {Promise<void> | undefined}
+   */
+  let sweeping;
   /** @type {Array<{ blob: any, key: string }>} */
   const stock = [];
   /** @type {Promise<void> | undefined} */
@@ -386,6 +429,8 @@ export const makeBlobStore = ({
     { previewUnits = limits.messagePreviewUnits, owner } = {},
   ) => {
     const buffer = Buffer.from(text, 'utf8');
+    // eslint-disable-next-line no-use-before-define
+    await counted();
     reserve(owner, buffer.length);
     try {
       const path = await directory();
@@ -646,6 +691,9 @@ export const makeBlobStore = ({
 
   /** @type {BlobStore['release']} */
   const release = async keys => {
+    // A sweep in flight counts what it stats; a file deleted under it would
+    // stay counted (HR-SYN-9).
+    await sweeping?.catch(() => {});
     const path = await directory();
     let removed = 0;
     for (const key of keys) {
@@ -741,6 +789,8 @@ export const makeBlobStore = ({
           const buffer = Buffer.from(piece, 'utf8');
           // Quotas per piece, before the bytes are written (J-9361); the
           // writer's earlier pieces are already charged.
+          // eslint-disable-next-line no-use-before-define
+          await counted();
           reserve(owner, buffer.length);
           try {
             if (handle === undefined) {
@@ -765,6 +815,9 @@ export const makeBlobStore = ({
         inOrder(async () => {
           if (state !== 'open') throw Error(texts.writerClosed);
           cancelIdle();
+          // No `.part` is written before this incarnation's sweep (HR-SYN-9).
+          // eslint-disable-next-line no-use-before-define
+          await counted();
           const path = await directory();
           if (handle === undefined) {
             part = join(path, `w${pid}-${serial}.part`);
@@ -839,8 +892,7 @@ export const makeBlobStore = ({
     return dropped;
   };
 
-  /** @type {BlobStore['sweep']} */
-  const sweep = async () => {
+  const sweepNow = async () => {
     const path = await directory();
     const names = await readdir(path);
     let total = 0;
@@ -860,8 +912,33 @@ export const makeBlobStore = ({
         }
       }),
     );
-    // Files counted at start, plus whatever this incarnation staged since.
-    diskBytes += total;
+    // No staging reserved anything before this (`counted`), so the files
+    // on disk are the whole count.
+    diskBytes = total;
+  };
+
+  /** @type {BlobStore['sweep']} */
+  const sweep = () => {
+    if (sweeping === undefined) {
+      const attempt = sweepNow();
+      sweeping = attempt;
+      attempt.catch(() => {
+        if (sweeping === attempt) sweeping = undefined;
+      });
+    }
+    return sweeping;
+  };
+
+  /**
+   * Before a reservation: this incarnation's sweep has succeeded (run now
+   * if no one ran it), else the staging is refused (HR-SYN-9).
+   */
+  const counted = async () => {
+    try {
+      await sweep();
+    } catch {
+      throw Error(blobsUncountedText);
+    }
   };
 
   return harden({
