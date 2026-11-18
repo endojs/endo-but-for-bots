@@ -26,13 +26,24 @@
  * gives the origin: `http://` for a loopback host, else `https://`).
  */
 import './_init.mjs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import url from 'node:url';
 
-import { E } from '@endo/far';
-
-import { names } from './provision-steps.js';
+/**
+ * `@endo/far` and the provisioning names, loaded after `_init.mjs` has
+ * locked down: a static import would be evaluated before `_init.mjs`'s
+ * top-level await finishes (sibling modules do not wait for it), and
+ * `@endo/eventual-send` needs `assert` from SES.
+ */
+const loadDeps = async () => {
+  const [{ E }, { names }] = await Promise.all([
+    import('@endo/far'),
+    import('./provision-steps.js'),
+  ]);
+  return { E, names };
+};
 
 /** The control workspace the templates and provisioning use. */
 export const DEFAULT_WORKSPACE = 'w';
@@ -159,8 +170,15 @@ export const gatewayUrl = async ({
   if (base === undefined)
     throw Error('the gateway is not serving; give --host to build the URL');
   const hostPart = host ?? new URL(base).host;
-  const { makeSignInStore } =
+  // The secrets store reads guest/lib modules, which need the prelude.
+  const { installGuestPrelude } = await import('./guest-prelude.js');
+  installGuestPrelude();
+  const { makeSignInStore, signInFile } =
     await import('../resources/agent-host/impl/gateway/signin.js');
+  // Without the file there is nothing to read; and reading would otherwise
+  // create a wrapping key (the store's first use makes one).
+  if (!existsSync(signInFile(state)))
+    throw Error('no sign-in secret in this state; serve the gateway first');
   const store = makeSignInStore({ stateDir: path.resolve(state), env });
   return `${base}/${await store.fragment(hostPart)}`;
 };
@@ -172,6 +190,7 @@ harden(gatewayUrl);
  * @param {string} workspace
  */
 const openAdmin = async (state, workspace) => {
+  const { E, names } = await loadDeps();
   const [{ connectLocalControl }, { makeNodePowers }] = await Promise.all([
     import('@endo/thixotrope/local-control.js'),
     import('@endo/thixotrope/node-powers.js'),
@@ -186,7 +205,7 @@ const openAdmin = async (state, workspace) => {
     if (admin === undefined)
       throw Error(`no ${names.agentHost} in workspace ${workspace}`);
     const gateway = await E(admin).gateway();
-    return { client, gateway };
+    return { client, gateway, E, names };
   } catch (error) {
     client.close();
     throw error;
@@ -201,7 +220,7 @@ export const runGateway = async args => {
   if (args.command === 'url' && args.host !== undefined) {
     // The status only gives the origin; try it, but a stopped daemon is fine.
     const origin = await openAdmin(args.state, args.workspace)
-      .then(async ({ client, gateway }) => {
+      .then(async ({ client, gateway, E }) => {
         try {
           const status = await E(gateway).status();
           return status.state === 'serving' ? status.origin : undefined;
@@ -212,7 +231,10 @@ export const runGateway = async args => {
       .catch(() => undefined);
     return gatewayUrl({ state: args.state, host: args.host, origin });
   }
-  const { client, gateway } = await openAdmin(args.state, args.workspace);
+  const { client, gateway, E, names } = await openAdmin(
+    args.state,
+    args.workspace,
+  );
   try {
     switch (args.command) {
       case 'serve': {

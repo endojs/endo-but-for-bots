@@ -241,6 +241,8 @@ export const makeGatewayService = ({
     serialize(async () => {
       await stopServing();
       const { config } = spec;
+      // Before anything is read or bound (the K1 kill point of the tests).
+      log({ event: 'gateway-binding', port: config.port });
       const parts = incarnationParts();
       const signIn = makeSignInStore({ stateDir: stateDirNow(), env });
       await signIn.ensure();
