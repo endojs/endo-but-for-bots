@@ -61,6 +61,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { textOf } from '../../../../guest/lib/interfaces.js';
 import { limits } from '../../../../guest/lib/limits.js';
+import { m4Limits } from '../../../../guest/lib/limits-m4.js';
 /* eslint-enable import/no-relative-packages */
 
 /** The environment variable naming the wrapping key file (serve.mjs passes it). */
@@ -250,8 +251,15 @@ harden(assertDescription);
  * @property {(key: string) => Promise<void>} revoke drops the value
  * @property {(key: string) => Promise<void>} delete only after revoke
  *   (`NOT_REVOKED`)
- * @property {(request: { key?: string, limit: number }) => Promise<AuditEvent[]>} audit
- *   newest first, at most `auditPageEvents`
+ * @property {(request: { key?: string, limit: number, before?: number }) => Promise<AuditEvent[]>} audit
+ *   newest first, at most `auditPageEvents` (M2's bound); `before` (M4):
+ *   only events older than that event time
+ * @property {(request: { key?: string, limit: number, before?: number }) => Promise<AuditEvent[]>} auditPage
+ *   as `audit`, at most `m4Limits.auditReaderMax` (1,000; R7-63; M4 H-5):
+ *   the adapter-local `AuditReader`'s path
+ * @property {(key: string, description: string) => Promise<void>} setDescription
+ *   M4 H-5: the entry's description (R7-25 rule, `INVALID_DESCRIPTION`);
+ *   not audited (the audit vocabulary has no such operation)
  * @property {() => Promise<void>} ready loads the key and the files
  * @property {() => void} close closes the audit file
  * @property {() => Record<string, number>} stats
@@ -319,15 +327,23 @@ export const makeSecretStore = ({
     counters.auditRewrites += 1;
   };
 
+  /** The newest event's time; event times strictly increase (M4 H-5). */
+  let lastAt = -1;
+
   /**
    * Record one event: in memory, and one sealed line appended (not fsynced:
    * a SIGKILL may lose the newest lines; the value itself never depends on
-   * the log).
+   * the log). Times strictly increase (a second event in the same
+   * millisecond is stamped one millisecond later), so an audit page can
+   * continue from the time of its last event (`before`, M4 4.1) without
+   * losing or repeating an event.
    * @param {Omit<StoredEvent, 'at'>} partial
    */
   const audit = partial => {
+    const at = Math.max(now(), lastAt + 1);
+    lastAt = at;
     /** @type {StoredEvent} */
-    const event = harden({ at: now(), ...partial });
+    const event = harden({ at, ...partial });
     events.push(event);
     if (events.length > auditKeep) events = events.slice(-auditKeep);
     if (auditFd === undefined) auditFd = openSync(auditFile, 'a', 0o600);
@@ -383,7 +399,11 @@ export const makeSecretStore = ({
           Buffer.from(line, 'base64'),
           AUDIT_FORMAT,
         );
-        events.push(harden(JSON.parse(plainEvent.toString('utf8'))));
+        /** @type {StoredEvent} */
+        const event = harden(JSON.parse(plainEvent.toString('utf8')));
+        events.push(event);
+        const { at } = event;
+        if (typeof at === 'number' && at > lastAt) lastAt = at;
       } catch {
         // A torn last line (SIGKILL mid-append) or a foreign line: skipped.
       }
@@ -517,6 +537,41 @@ export const makeSecretStore = ({
     throw secretError(code);
   };
 
+  /**
+   * Events newest first, of one key or all, older than `before` (an event
+   * time) when given; at most `limit` (<= `max`).
+   * @param {{ key?: string, limit: number, before?: number }} request
+   * @param {number} max
+   * @returns {Promise<AuditEvent[]>}
+   */
+  const auditEvents = async ({ key, limit, before }, max) => {
+    await ready();
+    if (!Number.isSafeInteger(limit) || limit < 0 || limit > max)
+      throw secretError('INVALID_LIMIT');
+    if (before !== undefined && !(typeof before === 'number' && before >= 0))
+      throw secretError('INVALID_LIMIT');
+    /** @type {AuditEvent[]} */
+    const out = [];
+    let i = events.length - 1;
+    if (before !== undefined) {
+      // Times strictly increase: binary search for the newest event < before.
+      let lo = 0;
+      let hi = events.length;
+      while (lo < hi) {
+        // eslint-disable-next-line no-bitwise
+        const mid = (lo + hi) >>> 1;
+        if (events[mid].at < before) lo = mid + 1;
+        else hi = mid;
+      }
+      i = lo - 1;
+    }
+    for (; i >= 0 && out.length < limit; i -= 1) {
+      const { key: eventKey, ...event } = events[i];
+      if (key === undefined || eventKey === key) out.push(harden(event));
+    }
+    return harden(out);
+  };
+
   /** @type {SecretStore} */
   const store = {
     ready,
@@ -617,22 +672,19 @@ export const makeSecretStore = ({
           };
         }),
       ),
-    audit: async ({ key, limit }) => {
-      await ready();
-      if (
-        !Number.isSafeInteger(limit) ||
-        limit < 0 ||
-        limit > limits.auditPageEvents
-      )
-        throw secretError('INVALID_LIMIT');
-      /** @type {AuditEvent[]} */
-      const out = [];
-      for (let i = events.length - 1; i >= 0 && out.length < limit; i -= 1) {
-        const { key: eventKey, ...event } = events[i];
-        if (key === undefined || eventKey === key) out.push(harden(event));
-      }
-      return harden(out);
-    },
+    audit: request => auditEvents(request, limits.auditPageEvents),
+    auditPage: request => auditEvents(request, m4Limits.auditReaderMax),
+    setDescription: (key, description) =>
+      mutate(() => {
+        assertDescription(description);
+        const entry = entryOf(key);
+        return {
+          result: undefined,
+          apply: () => {
+            entries.set(key, { ...entry, description });
+          },
+        };
+      }),
     close: () => {
       if (auditFd !== undefined) closeSync(auditFd);
       auditFd = undefined;

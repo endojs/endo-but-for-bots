@@ -28,6 +28,7 @@ import { limits } from '../../../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { secretError } from './store.js';
 import { makeSecretWriter } from './writer.js';
+import { makeCredentialAccess } from './credential-access.js';
 
 /**
  * @template T
@@ -108,6 +109,13 @@ export const makeSecretsOps = ({ store, seal, sink }) => {
       return writer;
     },
     readKey,
+    /**
+     * M4 H-5 (W-5): the accessor of one key, read (audited) and replace
+     * conditioned on a generation, nothing else; the renewal of a pool
+     * member holds this and not the store (m4-interfaces 7).
+     * @param {string} key
+     */
+    credentialFor: key => makeCredentialAccess({ store, key }),
   });
 };
 harden(makeSecretsOps);
