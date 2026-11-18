@@ -10570,3 +10570,95 @@ to two manager cranks per used pool per 60 s to `subscriptions.servedWrites` and
 (not measured). Not fixed here (reasons in the M4-FIX report): D-M4-9, ReadGrant description
 and the setDescription audit event (M2), K-2's "none to B", m1a-factory's expectation,
 provision-steps template hash, the perf misses, the milestones.md table.
+
+### J-9910 2026-11-18 INT-M4 merge of the M4 lane into the integration lane - good fit
+Evidence: `git merge --no-ff claude/thix-m4` onto the INT-M3 tip (`47acf08e6e`): 100 files, three
+conflicts. `durable.js`: M3's gateway imports beside M4's `interfaces-m4.js` imports; the M2
+review's creation-serial `list` cursor (J-9486) kept under M4's guard `m4Interfaces.SecretsAdmin`;
+M3's `creating` counter and `serialOf` beside M4's `makeSubscriptionsPart`. `impl/index.js`: M3's
+gateway imports and M4's subscriptions imports, both kept (the H-4 handler lines merged cleanly).
+`secrets/store.js`: one key-file creation path, the review's `createWrappingKey` (temp, fsync,
+link, directory fsync); M4's inline copy of the same race fix dropped. M4's strictly increasing
+audit times, `before` and `auditPage` merged cleanly beside the review's audit tail and bounds.
+Union files: no duplicate `J-` numbers; `milestones.md` gained M4's outcome block under its own
+section, `README.md` untouched by M4. No dependency change, so no install.
+Reading: good fit: every conflict was two lanes' import lines or two fixes of the same race.
+
+### J-9911 2026-11-18 INT-M4 provisioning step moved to its file - built
+Evidence: M4 appended `m4Steps` to the table in `scripts/provision-steps.js`; in the merge commit
+it became `scripts/provision-steps/40-subscriptions.js` (`export const steps`, with
+`secretsByLabel` and `POOL_SPEC_FIELDS`), leaving `provision-steps.js` equal to main's. Three
+callers looked the step up in the table: `test/adapter/m4-provider-provision.test.js` and
+`test/integration/_m4.js` now import the file's `steps`; `scripts/subscription-login.mjs`
+imported `secretsByLabel` from the table module and failed (`not a function`) in the first unit
+run, fixed as a follow-up. The m1a expected lists gained `['subscriptions', true]` and the
+registry assertion `gateway, subscriptions`. `templateIdFor` already hashes every top-level
+agent-host `.js` (INT-M3), so `durable-subscriptions.js` is covered; `_m4.js`'s extra hash of it
+is now redundant and left.
+Reading: good fit: the registry seam built after the lanes were cut absorbed the step; the only
+cost was a helper exported from the wrong module.
+
+### J-9912 2026-11-18 INT-M4 adaptations to the M2 review - fair fit
+Evidence: M4's pool wire clients built URLs with `String(spec.baseUrl ?? default)` and posted the
+OAuth refresh to `tokenUrl` as given; the review limited provider base URLs to https or loopback
+http (no user info, query or fragment) so a credential cannot leave over clear text. Now
+`messages.js`, `responses.js` and the pool catalogue use `providerBaseUrl`; renewal refuses a bad
+`tokenUrl` with `RENEWAL_FAILED` (undispatched) before any POST; a bad `usageUrl` is not read.
+`PoolSpec.timeoutMs` takes BackendSpec's `>= 1000, <= maxTurnDeadlineMs`. The Codex stream is
+bounded at `roundStreamBytes` as the review's providers are (the Claude pool already goes through
+`anthropicAttempt`). New tests: four refused base URLs and no request at the fake server; 999 and
+over-deadline timeouts refused by the guard. The wire tests' `timeoutMs: 100` bypass the guard
+and still pass. Receipts eviction, `historyPageRecords` and the archive rewrite: not used by M4.
+Reading: fair fit: the review's rule lived in M2's provider files and nothing made a second
+credential sender use it; only reading both found the gap.
+
+### J-9913 2026-11-18 INT-M4 PM-owned edits for M4 - built
+Evidence: `m1a-factory` expects `m4Texts.effortNotSupported` for `reasoningEffort` (H-6).
+`ReadGrant.describe` was stale after `setDescription` (the grant kept a copy of the record): the
+manager now maps a grant to its Secret and reads the record at describe time; unit test added.
+Contract `m4-interfaces.md`: pool URL and timeout rules, K-2 "at most one to B", renewal at session
+creation (J-9643), the perf file split. tsconfig: no change needed. Left for the next workflow:
+`pageOf`/`boundedJson` export, `ProviderFailure` errorType, D-M4-9, `poolsChanged`, the
+SealedBox-only `SecretWriter.replace`.
+
+### J-9914 2026-11-18 INT-M4 M4 through M3's gateway seams - good fit
+Evidence: adapter tests added to `m4-gateway-extension.test.js`: M3's real
+`loadGatewayExtensions` loads `m4-secrets.js` with no skip, `makeLargeCalls` exempts the
+incarnation `SecretWriter`'s `replace` only (not `close`, not another object); M3's
+`harnessNames` loads `interfaces-m4.js` through `vocabularyShapes()` with no skip, and its method
+set holds every method of `m4MethodNames` for SecretsAdmin, Secret, SubscriptionsAdmin,
+PoolMember, PoolBackend, AuditReader, Accounts and AccountsSubscription. No browser run.
+Reading: good fit: two directory registries and one export composed with no edit to an M3 file.
+
+### J-9915 2026-11-18 INT-M4 regression after the merge - verified
+Evidence: unit and adapter lanes: first run 2 failures (subscription-login import, m1a-factory
+effort text), after the fixes 1,082 passed, 95 skipped (66 s). `tsc`: 0 errors. eslint on the
+touched files: no errors. Shared slots: `m4-secrets` 1 passed (2 min 6 s wall, test 67 s),
+`m1a-provision` 1 passed (2 min 32 s wall, test 92 s), both run at once.
+Bundles: session 187,031 (+33), exec 84,550 (+33), factory 144,111 (+6,874) against 200,000 and
+100,000 before M5.
+Reading: verified for what ran; the other nine M4 integration files, browsers and perf did not.
+
+### J-9916 2026-11-18 INT-M4 fit: three lanes composing - good fit
+Evidence: M3 and M4 met only in import lines and in `durable.js`'s Secret section; the shared
+guard table (`interfaces.js`) needed no edit because M4 extends by a separate module with a
+`vocabularyShapes()` export. The review's changes (cursor, key file, URL rule) were all in the
+manager vat or adapter code M4 builds on, and each was a narrower rule M4 could take without an
+interface change.
+Reading: good fit for the machine: durable objects held by identity (a grant to its Secret)
+fixed the staleness more simply than a copied record; the pain points are in Node adapter code,
+where a security rule is a function a second caller must remember to call.
+
+### J-9917 2026-11-18 INT-M4 time record - verified
+Evidence: first command 12:18:00Z; unit runs 66 s each (twice); the two shared-slot files 2 min
+6 s and 2 min 32 s in parallel. No exclusive mode, no cargo, no perf.
+
+### J-9918 2026-11-18 INT-M4 open items handed on - built
+Evidence: cross-lane: browser acceptance 14/15, m4-secrets largeCalls through the real gateway,
+accounts feature calling `SecretsAdmin.subscriptions()`, D-M4-9, `poolsChanged`, SealedBox-only
+replace, folding `m2Interfaces`, CC-051/CC-060, perf misses (`secrets.catalog`, factory bundle).
+
+### J-9919 2026-11-18 INT-M4 hygiene - verified
+Evidence: the follow-up commits add no host name, domain, non-loopback address, e-mail or local
+path; the merge brings the lane's provider endpoint defaults (public https URLs, reviewed in the
+lane). Test URLs are loopback.
