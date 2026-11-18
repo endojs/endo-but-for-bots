@@ -263,8 +263,12 @@ export const m1aMethodNames = harden({
 
 /** M1b's shapes (W1b.0); in `shapes` since M2 W2.0. */
 const m1bShapeBuilders = {
-  /** `ExecHandle.scope()`: the session's current exec scope and its deadline. */
-  ExecLease: () =>
+  /**
+   * `ExecHandle.scope()`: the session's current exec scope and its deadline
+   * (`ExecLease` until HR-SYN-33: it leases nothing; a shape name only, no
+   * record key or wire name changed).
+   */
+  ExecScopeInfo: () =>
     record({ scope: M.remotable('ExecScope'), deadlineMs: count }),
   /** A session-list change (D-8; architecture 3.1). */
   ListEvent: () =>
@@ -352,7 +356,7 @@ const m1bInterfaceBuilders = {
   /** Factory: the session's exec vat lease (architecture 3.2). */
   ExecHandle: () =>
     M.interface('ExecHandle', {
-      scope: M.callWhen().returns(B.ExecLease),
+      scope: M.callWhen().returns(B.ExecScopeInfo),
       retire: M.call(R('ExecScope')).returns(done),
     }),
   /**

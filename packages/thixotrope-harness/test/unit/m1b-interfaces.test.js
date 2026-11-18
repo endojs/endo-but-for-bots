@@ -105,7 +105,7 @@ const shapeSamples = {
   ContentRange: { offset: 0, maxBytes: limits.blobPageBytes },
   ContentPage: { text: 'Hello', next: 5, done: true },
   SleepMs: 1000,
-  ExecLease: { scope: far('ExecScope'), deadlineMs: limits.execDeadlineMs },
+  ExecScopeInfo: { scope: far('ExecScope'), deadlineMs: limits.execDeadlineMs },
   ExecRequest: execRequest,
   ExecOutcome: { status: 'ok', text: staged },
   ContextPage: { from: 0, records: [turnStarted, roundSettled], next: 'p2' },
@@ -391,7 +391,7 @@ const methodSamples = {
     abandon: { args: [], returns: undefined },
   },
   ExecHandle: {
-    scope: { args: [], returns: shapeSamples.ExecLease },
+    scope: { args: [], returns: shapeSamples.ExecScopeInfo },
     retire: { args: [far('ExecScope')], returns: undefined },
   },
   ListPublisher: {

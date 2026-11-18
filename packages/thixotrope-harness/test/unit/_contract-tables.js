@@ -53,7 +53,7 @@ export const m1bShapes = pick(shapes, [
   'ContentRange',
   'ContentPage',
   'SleepMs',
-  'ExecLease',
+  'ExecScopeInfo',
   'ExecRequest',
   'ExecOutcome',
   'ContextPage',

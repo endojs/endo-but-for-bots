@@ -397,7 +397,7 @@ test('ExecHandle: one scope until retired; retire of another scope is ignored', 
   const handle = makeExecHandle({ pool, settings });
   // Two scope() calls at once share one take.
   const [a, b] = await Promise.all([E(handle).scope(), E(handle).scope()]);
-  t.true(matches(a, shapes.ExecLease));
+  t.true(matches(a, shapes.ExecScopeInfo));
   t.is(a.scope, b.scope);
   t.is(a.deadlineMs, 5000);
   t.is(pool.counts().taken, 1);
