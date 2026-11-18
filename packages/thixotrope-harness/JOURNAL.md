@@ -8695,3 +8695,13 @@ Evidence: the UI bundle starts with `// @ts-nocheck`, so a build adds no errors 
 conversation slot copies are now re-exports of the shell's `Slot` (no Node deadlock: the 105 UI
 unit tests load them). Fake `pageFrom` no longer offers Load earlier on an empty session (test
 fails without the fix). `m3-ui-shell` runs serially. Gateway tests use loopback addresses only.
+
+### J-9634 2026-11-18 M3-FIX regression after the fixes - verified
+Evidence: unit and adapter lane (`test/adapter/m3-*`, `test/unit/m3-*`, `m4-ui-*`, `m5-w58-*`,
+`m1a-agent-host`): 198 pass, 2.8 s wall. Under the slot lock (held / waited): `m3-gateway` 184 s /
+93 s, `m3-sessions` 126 / 829, `m3-reconnect` 234 / 16, browser `m3-ui` 104 / 250,
+`m3-ui-history` 108 / 827 (acceptance 8 now checks Show all live, no reload), `m3-ui-restart`
+240 / 426 and a second run: acceptance 12 passed both times. All pass. `lint:types`: 12 errors,
+all in sibling packages; none in harness files or the built bundle. Not rerun: perf files.
+Fit: waits exceeded holds (two files waited over 13 min for a slot on a machine shared with the
+M2 and M5 runs); the holds themselves are 2-4 min.
