@@ -13828,3 +13828,69 @@ none (the probes and tsc under 10 s, prettier and eslint under 30 s each). Not r
 supervisor, integration test, perf check or cargo. tsc and eslint clean on the new files;
 `lint:duplicates` 3.03 % under the 3.25 % ceiling with the other contract writers' new files.
 Fit: neutral.
+
+### J-1010 2026-11-18 W8.0 plan sizing and image envelope costs - measure
+Evidence: scratch Node probe outside the tree (removed with the scratchpad), Node in this checkout,
+load 3.39 / 3.15 / 2.74; 15 repetitions each, median (max). The plan's sizing as lal
+`planContextCompaction` does it (one `JSON.stringify` of the whole history, then one per group from
+the newest back) over synthetic histories of user 300 B, assistant 600 B with one 200 B tool call,
+and a 400 B result per turn: 100 turns (166 KB) 0.26 (0.54) ms; 400 turns (667 KB, about 150,000
+tokens) 0.89 (1.49) ms; 1,600 turns (2.7 MB) 3.42 (4.89) ms. A 2 MiB image: base64 0.12 (0.22) ms;
+the envelope `prefix + JSON.stringify({ mimeType, data })` 6.08 (7.64) ms; `JSON.parse` plus the
+base64 alphabet check 11.63 (12.04) ms; SHA-256 of the envelope 1.11 (1.62) ms.
+Reading: the plan is cheap next to the projection it runs on (7.5 ms per prepare at 5,000 turns,
+J-0491), so `compaction.plan` gets 50 ms, not the milestone's 500 ms. Decoding an image envelope
+costs about 12 ms per image per request; with the 20-image cap a request pays at most about 240 ms
+in the adapter unless `images.js` keeps decoded images (`images.requestBuild` <= 15 ms per image).
+Fit: good.
+
+### J-1011 2026-11-18 W8.0 the M8 contract - design
+Evidence: `designs/m8-interfaces.md` (commits `0b2cd62150`, `3ca6137191`, `748d54b70c` and the
+wording commit after it); `arch-review/step3-plan.md` (read in its worktree, present for this unit);
+the code at `9bb9f4f2ea`: `guest/session/turn.js` (`epoch: 0`, `beforeRound` with no way to shape
+the request), `context-source.js` (the `boundary` option M2 left), `AH/context-cache.js` (the
+sealed part held as projected transcript, no record indices), `AH/projection-hooks.js` (hooks see
+the tail's records only), `guest/lib/interfaces.js` (`Backend.open` returns `S.TurnPorts`,
+`makeBackend` takes `S.BackendSpec`: both checked by the installed manager), `AH/providers/round.js`
+(prepare, dispatch, stream), lal `providers/context-compaction.js` and fae `session-factory.js`.
+Reading: what the code changed in the milestone's plan. (1) A new `TurnPorts.images` or a script
+field would be a manager reinstall, so `viewImage` rides `TurnPorts.tools` and the scripted backend
+answers a fixed summary (D-M8-11, D-M8-13). (2) The cache cannot name cut points in the sealed
+part, so a boundary is always in the kept records (D-M8-4); the sealed part becomes empty at an
+accepted compaction and the cache rebases with no vat page. (3) A `Compaction` record can be
+sealed while it is still the latest, so the summary is placed by a projection marker and one hook
+over the whole transcript (D-M8-5). (4) Parts may not hold the record log (step 3, 2.3), so the
+epoch and boundary live in a context window object made beside the archive, and the part reaches
+it through `runtime.contextWindow`. (5) lal refuses compaction while any unknown outcome is in the
+context, which would end compaction for a session's life; the contract pins the boundary only
+while the turn is kept and unresolved (D-M8-7, Q-1). (6) Images travel as hosted-agent's envelope
+inside an ordinary StagedText (D-M8-8): no blob, archive, delete or export change. (7) The
+milestone's file list (`guest/lib/{context-compaction,compaction-checkpoint,image-result}.js`,
+`guest/session/compaction.js` as a `turn-hooks.js` entry) is replaced by section 11's units, named
+by concept. No manager change (D-M8-15); no core change needed (CC-100 conditional, CC-101 a wish).
+Fit: good: the vat decides and records, the adapter plans, summarizes and carries bytes; the cost
+is about 20 one-line or append-only seams in shared files (section 10).
+
+### J-1012 2026-11-18 W8.0 shared budgets and cross-lane seams with M6 and M9 - read
+Evidence: `designs/m6-interfaces.md` B-1, O-12, 3.4, T-1, L-1; `designs/m9-interfaces.md` D-M9-19,
+O-M9-8, S1, S6 (both written beside this contract); `guest/lib/guards/{context,images}.js`
+measured without comments: 2,860 and 1,516 bytes.
+Reading: the session program limit (240,000) has about 24,000-27,000 bytes left after step 3;
+M6 asks 9,000, M9 16,384 and M8 9,000 (34,384). M8 moved its adapter-only guards and texts into
+the Node-only `guest/lib/image-guards.js` and `AH/providers/compaction-texts.js` to keep its share.
+M6's workspace is a `Git` exo in M6's manager vat with text reads only, so a workspace image needs
+M6 to answer `openImage(path)` with an adapter-side `ImageSource` (seam X-1), or every 196 KB
+page would pass the 65,536-byte frame ceiling into M6's manager vat. Part table order (M6
+`workspace`, M8 `compaction`, M9 `inbox`, `subagents`, all after `packages`) does not matter to
+M8: its hooks touch only its own state. `tool-table.js` gets one appended entry per lane.
+Decision: owner question Q-7 (the shared budget); X-1 requested from M6 in section 10.
+
+### J-1013 2026-11-18 W8.0 time record - process
+Evidence: first command 2026-11-18T22:51:34Z; last command logged with the W8.0 report.
+Reading: commits `0b2cd62150` (guards, texts, limits), `3ca6137191` (the contract), `748d54b70c`
+(module split, X-1), the wording commit, and this journal commit. Over 60 s: none (the probe,
+tsc, eslint, prettier, `lint:duplicates` and the vocabulary test each under 30 s). Not run: any
+supervisor, integration test, perf check or cargo. tsc and eslint clean on the new files; the
+gateway vocabulary test passes with the new modules; `lint:duplicates` 3.03 % under the 3.25 %
+ceiling with the other contract writers' files present.
+Fit: neutral.
