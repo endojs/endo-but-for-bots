@@ -54,8 +54,8 @@ const MAX_TIMER_MS = 2_147_483_647;
  *   sees the connection close) and sends nothing more to the vat.
  * @param {string} options.unexpectedFailure the fixed reason of a round
  *   whose provider threw (R4-79): the backend kind's text (`BackendKind`
- *   in `index.js`), never the error's message, which may quote a provider
- *   body (HR-SYN-12). Required.
+ *   in `providers/kinds.js`), never the error's message, which may quote a
+ *   provider body (HR-SYN-12). Required.
  * @param {any} options.channel the session's channel (deltas go here, in-process)
  * @param {import('./timers.js').Timers} options.timers
  * @param {() => number} [options.now]
