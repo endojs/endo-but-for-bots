@@ -11771,3 +11771,31 @@ and structured close and overload signals instead of text comparison (`messages.
 `accounts/feed.js:133`). `ws` is a declared dependency nobody imports beside a hand-written
 WebSocket server.
 Fit: good for safety, poor for reuse.
+
+### J-9989 2026-11-18 HR-TEST tests and perf: no support layer - awkward
+Evidence: `designs/arch-review/harness-tests.md` (HR-TEST-1, -2, -8). The shared test library is
+27 milestone-named underscore helpers; perf imports `test/integration` 58 times and
+`test/integration` imports perf 44 times; one spawn path (`spawnSupervisorChild`) is wrapped four
+times with two served-state models (`TemplateState`, `Provisioned`), and the crash-line regex has
+already drifted between two of them. 3.3 % of normalised test/perf/script lines sit in repeated
+blocks (core: 0.8 %): 13 poll helpers, 25 event-loop drains, 14 request-id makers.
+Fit: awkward: building against contracts in parallel lanes gave each milestone its own
+scaffolding; the product code's dependency direction stayed clean (nothing in guest, resources,
+ui or config imports test or perf).
+
+### J-9990 2026-11-18 HR-TEST templates, perf windows and the time rule - awkward
+Evidence: HR-TEST-3, -4, -6, -7. Integration files' last passing runs held 8,068 s (53 files),
+at least 22.4 min wall at 6 slots against the 20-minute rule. Three template-key policies; the
+`m3-300` template is keyed by a hand-bumped version, not by the export and archive code it is
+built with. `runWindow` is used by 13 of 37 perf scripts beside 22 other window loops; 22 window
+lengths ignore `PERF_WINDOW_SCALE`. `yarn test:browser` without a file runs no browser test.
+Fit: awkward: the template, run lock, time box and row emitter are right and worth keeping;
+what drifted is everything written around them per milestone.
+
+### J-9991 2026-11-18 HR-TEST time record - process
+Evidence: started 2026-11-18T12:52:57Z, ended 2026-11-18T13:04:12Z. Read-only; no test, supervisor or perf
+check run. Measured with a scratch import-graph script, `designs/arch-review/tools/
+find-duplicates.mjs`, grep counts and one read of the run log. 22 findings (2 major, 10
+moderate, 10 minor). Overlaps with work in hand elsewhere: the interfaces split (the six
+interfaces tests, HR-TEST-8) and sealed secret writes (the Secrets key helpers, HR-TEST-10).
+Fit: process.
