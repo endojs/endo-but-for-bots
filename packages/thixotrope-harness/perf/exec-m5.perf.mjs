@@ -136,12 +136,13 @@ const nodeMembrane = async () => {
     add: (a, b) => a + b,
   });
   const membrane = makeMembrane({ callE: E });
-  const wrapper = membrane.wrap(target);
+  const wrapper = /** @type {any} */ (membrane.wrap(target));
+  const membraneE = /** @type {any} */ (membrane.E);
   /** @param {string} kind */
   const op = async kind => {
     const t0 = performance.now();
     for (let i = 0; i < 100; i += 1) {
-      if (kind === 'membrane') await membrane.E(wrapper).add(1, 2);
+      if (kind === 'membrane') await membraneE(wrapper).add(1, 2);
       else await E(target).add(1, 2);
     }
     return (performance.now() - t0) / 100;
