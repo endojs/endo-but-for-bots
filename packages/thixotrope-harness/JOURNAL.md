@@ -8238,3 +8238,52 @@ Routes on `/`, `/ws`, `/assets/*` or a taken path invalidate their file; service
 `whenAttached` and marks them gateway-local. The fixture's `sameWriter` compares identity in the
 adapter as acceptance 16 needs; a page-made writer is refused by rule 2 before it reaches it.
 Decision: as built.
+
+### J-0560 2026-11-18 M3 W3.4 UI foundation - built
+Evidence: `ui/build.mjs`, `ui/index.html`, `ui/src/{main,pre-lockdown,features,feature-list}.js`,
+`ui/src/{net,controller,shell,styles}/`, `test/unit/_m3-fake-powers.js`,
+`test/unit/m3-ui-{build,controller,controller-net,controller-fakes,shell}.test.js` (35 tests, about
+1 s, no supervisor), commits up to 1775285b12.
+Reading: the controller rebuilds from each connection's powers (all list pages, `subscribeList`,
+`watch`, `subscribe`, `getCurrentTurn`, newest page), folds live events with the same
+`guest/lib/reply-fold.js` the channel uses, and keeps records as received. Region views
+(`sessions`, `conversation` `index.js`) and features are found by directory, so W3.5, W3.6, M4
+and M5 add files and edit none of W3.4's. Decision: as built.
+
+### J-0561 2026-11-18 M3 W3.4 bundle size - perf
+Evidence: `m3-ui-build.test.js` (`t.log` line `ui.bundle`), commit 1775285b12, minified esbuild bundle of
+the shell with no group B views yet.
+Measured: `main-*.js` 211,661 bytes, 73,243 gzip; `app-*.css` 25,608 bytes, 5,461 gzip; shell
+482 bytes; total 78,992 gzip. Build 43-160 ms. Budget (`ui.coldLoad`): bundle <= 600 KB gzip.
+Reading: 13 % of the budget; SES, captp and marshal are most of it. Cold load in a browser is
+W3.8's row.
+
+### J-0562 2026-11-18 M3 W3.4 Preact under the unit lane's lockdown - fit
+Evidence: probe in `m3-ui-shell.test.js`'s helper; browser smoke (below).
+Reading: poor fit, worked around in tests only. The unit lane locks down with `overrideTaming:
+'min'`; Preact's re-render of a component whose hook state changed does `Object.assign({}, vnode)`
+and the vnode's own `constructor` key hits the override mistake ("Cannot assign to read only
+property 'constructor'"). First renders work; every hook `setState` fails. `makeTestDom()` in
+`_m3-fake-powers.js` tames it with `options.vnode` (vnodes get a null prototype instead of that
+own key; the copy keeps `constructor === undefined`), so hooks re-render in Node as in the browser,
+which runs `overrideTaming: 'severe'` (`ui/src/pre-lockdown.js`, as `packages/chat`). Component
+tests of W3.5, W3.6, M4 and M5 must call `makeTestDom()` before rendering.
+
+### J-0563 2026-11-18 M3 W3.4 browser smoke of the bundle - verified
+Evidence: a throwaway script (not committed) served the built assets with a strict CSP and a
+captp WebSocket answering `fetch` with the fake powers, in a cached headless Chromium.
+Measured: the realm is locked down (`Object.prototype` frozen, `harden` present); 14 frames all
+binary; the controller's rebuild calls reached the fake (`getFactory`, `listSessions`,
+`subscribeList`, `listPresets`, `listBackends`, describes); a wrong secret shows "Sign-in
+refused"; a query `?agent=` shows the R6-10 refusal; at 640 px `data-drawer` is `closed`; no page
+error or console error. Not a test: W3.8's browser acceptance replaces it.
+
+### J-0564 2026-11-18 M3 W3.4 contract gaps - deviation
+Reading: (1) the shell's sidebar and conversation regions belong to W3.5 and W3.6, which build
+after W3.4; App finds them as `ui/src/sessions/index.js` and `ui/src/conversation/index.js` (the
+build's generated list, `viewModules`), each view getting `{ state, controller, features, context,
+narrow }` (`Sidebar` also `open`). (2) The controller adds, beyond 9.1: `attach(powers)`,
+`setConnection`, `featureContext()`, `openPanel`/`closePanel` (`state.panel`),
+`openNewSession`/`closeNewSession` (`state.newSessionOpen`), `moreRecovery`, `closeRecovery`,
+`moreModels`, `newSession({ reasoningEffort })`, `state.status` and `view.blocked`. (3) `ui/build.mjs`
+also bundles every directory's `*.css`, so view lanes ship their styles by file.
