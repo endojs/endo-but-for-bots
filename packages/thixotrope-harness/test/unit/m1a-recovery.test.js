@@ -1,7 +1,9 @@
 // @ts-check
-// guest/session/recovery.js (M1a W1a.5): recoverAfterRestart() for every
-// case of architecture 4.4 / m1a-interfaces.md section 7, table-driven, over
-// an in-memory SessionCore that follows the contract (section 11), plus
+// guest/session/recovery.js (M1a W1a.5): a session's recovery
+// (makeRecovery(...).recover) for every case of architecture 4.4 /
+// m1a-interfaces.md section 7, table-driven, over an in-memory session
+// core that follows the contract (section 11), with the runtime parts'
+// combined hooks (exec, then packages) as step 6, plus
 // double recovery, replay determinism, a retired break at a tool call site,
 // and recovery while a guest call stays pending forever.
 import './_m1a-prelude.js';
@@ -9,14 +11,13 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import {
-  isRestartSignal,
-  recoverAfterRestart,
-} from '../../guest/session/recovery.js';
+import { isRestartSignal, makeRecovery } from '../../guest/session/recovery.js';
 import { makeQueue } from '../../guest/session/queue.js';
-import { turnHooks } from '../../guest/session/turn-hooks.js';
-import { execHooks } from '../../guest/session/tools/exec.js';
-import { mentionHooks } from '../../guest/session/tools/mentions.js';
+import { makeLabels } from '../../guest/session/labels.js';
+import {
+  makeRuntime,
+  runtimeParts,
+} from '../../guest/session/runtime-parts.js';
 import { shapes, texts, textOf } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 
@@ -32,13 +33,16 @@ const UUID24 = '0123abcd-4567-89ab-cdef-';
 const rid = n => `${NOW}-${UUID24}${String(n).padStart(12, '0')}`;
 
 /**
- * An in-memory SessionCore (m1a-interfaces.md section 11) with the
+ * An in-memory session core (m1a-interfaces.md section 11) with the
  * semantics recovery relies on: settle appends TurnSettled, clears the
  * current turn, publishes outside the turn when the ports are gone, reports
  * the row, releases the lease only through live ports, and claims the next
  * entry unless the queue is held. Every outbound effect is logged in `sent`.
+ * `core.recover` is the session's recovery over it, with the runtime
+ * parts' hooks (`extraParts` appended to the table).
+ * @param {readonly any[]} [extraParts]
  */
-const makeFakeCore = () => {
+const makeFakeCore = (extraParts = []) => {
   /** @type {any[]} */
   const log = [];
   /** @type {any[]} */
@@ -176,6 +180,28 @@ const makeFakeCore = () => {
     onChange: () => sent.push({ to: 'pending', view: queue.view() }),
   });
 
+  const runtime = makeRuntime({
+    labels: makeLabels(),
+    services: harden({}),
+    config: harden({}),
+    parts: harden([...runtimeParts, ...extraParts]),
+  });
+  const recovery = makeRecovery({
+    records,
+    queue,
+    current: () => current,
+    settle,
+    hooks: runtime.hooks,
+    hookTurn: active =>
+      Object.freeze({
+        active,
+        round: active.round,
+        append: record => {
+          records.append(record);
+        },
+        emit: () => {},
+      }),
+  });
   const core = harden({
     records,
     queue,
@@ -185,6 +211,7 @@ const makeFakeCore = () => {
     publishOutside,
     lastKnownTime: () => time,
     claimNext,
+    recover: recovery.recover,
   });
 
   /** Test drivers: what the session's turn code would do in each crank. */
@@ -458,7 +485,7 @@ for (const c of cases) {
     const before = log.length;
     const sentBefore = sent.length;
 
-    const recovered = recoverAfterRestart(core, active);
+    const recovered = core.recover(active);
 
     if (idle) {
       t.false(recovered);
@@ -548,13 +575,13 @@ test('double recovery: a second break of the same turn does nothing', t => {
   drive.dispatch();
   drive.roundWithCalls(['echo', 'echo']);
   const active = current();
-  t.true(recoverAfterRestart(core, active));
+  t.true(core.recover(active));
   const records = log.length;
   const sends = sent.length;
   // The lease break and both execute breaks arrive; each is a no-op.
-  t.false(recoverAfterRestart(core, active));
-  t.false(recoverAfterRestart(core, active));
-  t.false(recoverAfterRestart(core, { ...active }));
+  t.false(core.recover(active));
+  t.false(core.recover(active));
+  t.false(core.recover({ ...active }));
   t.is(log.length, records);
   t.is(sent.length, sends);
   t.deepEqual(unknownOpIds(log, 't1'), ['t1/r0/c0', 't1/r0/c1']);
@@ -567,10 +594,10 @@ test('a second restart while idle and held changes nothing', t => {
   drive.submit('later', 2);
   drive.portsArrive();
   const active = current();
-  t.true(recoverAfterRestart(core, active));
+  t.true(core.recover(active));
   const snapshot = JSON.stringify(log);
   // The second restart replays the old lease break (or a stray one).
-  t.false(recoverAfterRestart(core, active));
+  t.false(core.recover(active));
   t.is(JSON.stringify(log), snapshot);
   t.is(core.queue.holdReason(), 'restart');
   t.is(core.queue.size(), 1);
@@ -585,7 +612,7 @@ test('a late break of the old turn never recovers the newer turn', t => {
   drive.dispatch();
   drive.roundWithCalls(['echo']);
   const old = current();
-  t.true(recoverAfterRestart(core, old));
+  t.true(core.recover(old));
   // The user sends a new message: the hold is released and the oldest
   // waiting entry runs next as a new generation.
   drive.submit('new', 3);
@@ -597,7 +624,7 @@ test('a late break of the old turn never recovers the newer turn', t => {
   drive.dispatch();
   const before = log.length;
   // The old turn's echo answer breaks only now.
-  t.false(recoverAfterRestart(core, old));
+  t.false(core.recover(old));
   t.is(log.length, before);
   t.is(current(), fresh);
   t.truthy(fresh.ports);
@@ -608,13 +635,13 @@ test('a restart during the turn after a recovery recovers that turn only', t => 
   drive.submit('one', 1);
   drive.submit('two', 2);
   drive.portsArrive();
-  t.true(recoverAfterRestart(core, current()));
+  t.true(core.recover(current()));
   drive.submit('three', 3);
   const second = current();
   drive.portsArrive();
   drive.dispatch();
   drive.roundWithCalls(['echo']);
-  t.true(recoverAfterRestart(core, second));
+  t.true(core.recover(second));
   t.is(settledOf(log, 't1').status, 'interrupted');
   t.is(settledOf(log, 't2').status, 'outcome-unknown');
   t.deepEqual(unknownOpIds(log, 't1'), []);
@@ -637,7 +664,7 @@ test('recovery replayed after a crash mid-crank gives the same records (determin
     drive.dispatch();
     drive.roundWithCalls(['echo', 'echo', 'echo']);
     drive.result(2);
-    recoverAfterRestart(core, current());
+    core.recover(current());
     return JSON.stringify({
       log,
       sent: sent.map(s => s.to),
@@ -663,7 +690,7 @@ test('a retired break at a tool call site is a restart, never a tool failure', t
    */
   const onToolRejection = (ordinal, error) => {
     if (isRestartSignal(error)) {
-      recoverAfterRestart(core, active);
+      core.recover(active);
       return;
     }
     if (core.current()?.generation !== active.generation) return;
@@ -704,7 +731,7 @@ test('recovery completes while a guest call stays pending forever', t => {
   void never.then(() => {
     if (core.current()?.generation === active.generation) lateAnswers += 1;
   });
-  const result = recoverAfterRestart(core, active);
+  const result = core.recover(active);
   // Synchronous: a boolean, not a promise; done within this crank.
   t.is(result, true);
   t.is(typeof result, 'boolean');
@@ -714,7 +741,21 @@ test('recovery completes while a guest call stays pending forever', t => {
 });
 
 test('recovery steps run in order with the context; a failing one is skipped', async t => {
-  const { core, log, drive, current } = makeFakeCore();
+  /** @type {any[]} */
+  const steps = [];
+  // Four test parts after the table; each delegates to its step.
+  const extra = [0, 1, 2, 3].map(i =>
+    harden({
+      name: `step${i}`,
+      make: () =>
+        harden({
+          hooks: harden({
+            onRecover: (/** @type {any} */ turn) => steps[i](turn),
+          }),
+        }),
+    }),
+  );
+  const { core, log, drive, current } = makeFakeCore(extra);
   drive.submit('hello', 1);
   drive.portsArrive();
   drive.dispatch();
@@ -723,13 +764,13 @@ test('recovery steps run in order with the context; a failing one is skipped', a
   const active = current();
   /** @type {any[]} */
   const calls = [];
-  const steps = harden([
+  steps.push(
     (/** @type {any} */ context) => {
       calls.push([
         'a',
         context.round,
         context.active === active,
-        context.core === core,
+        typeof context.append === 'function',
       ]);
       // A step may append records (M9: a child ask's cancellation).
       t.is(context.active.ports, undefined, 'ports already dropped');
@@ -745,18 +786,25 @@ test('recovery steps run in order with the context; a failing one is skipped', a
     () => {
       calls.push(['d', settledOf(log, 't1')]);
     },
-  ]);
-  t.true(recoverAfterRestart(core, active, { steps }));
+  );
+  t.true(core.recover(active));
   t.deepEqual(calls, [['a', 1, true, true], ['b'], ['c'], ['d', undefined]]);
   t.is(settledOf(log, 't1').status, 'outcome-unknown');
   // Let the rejected step's promise settle: no unhandled rejection.
   await null;
 });
 
-test('M1a has no recovery steps of its own (M1b W1b.4 appends the exec one)', t => {
-  // M5 W5.7 appends closing a recovered turn's package.
-  t.deepEqual(
-    [...turnHooks.recoverySteps],
-    [execHooks.recoverySteps, mentionHooks.recoverySteps],
+test('the recovery steps are the exec and packages parts, in that order', t => {
+  // M1b W1b.4's exec step, then M5 W5.7's closing of the turn's package.
+  const runtime = /** @type {any} */ (
+    makeRuntime({
+      labels: makeLabels(),
+      services: harden({}),
+      config: harden({}),
+    })
   );
+  const withRecovery = runtimeParts
+    .filter(part => runtime[part.name].hooks?.onRecover !== undefined)
+    .map(part => part.name);
+  t.deepEqual(withRecovery, ['exec', 'packages']);
 });

@@ -29,7 +29,7 @@
  *   through the turn's publisher; outside a turn it is answered (live.js).
  * - The lease: `E(endpoint).holdTurn(turn)`, one per turn and incarnation,
  *   is answered only by `releaseTurn`; a retired break from it is the
- *   restart signal. After `Dispatched` it runs `recoverAfterRestart` (W1a.5)
+ *   restart signal. After `Dispatched` it runs the session's recovery (W1a.5)
  *   at once. Before `Dispatched` the session cannot tell a turn that was in
  *   flight when the adapter died from one it claimed on ports that were
  *   already dead (a session idle across a restart is never told): it opens
@@ -65,7 +65,8 @@ import {
 import { makeHistory } from './history.js';
 import { inCallOrder } from './records.js';
 import { isStaged, submissionField } from './staging.js';
-import { toolSetFor, toolSources, toolTable } from './tool-table.js';
+import { toolSetFor, toolTable } from './tool-table.js';
+import { makeRecovery } from './recovery.js';
 import { makeOutbox } from './outbox.js';
 import { makePorts } from './ports.js';
 import { makeTurnImport } from './turn-import.js';
@@ -74,12 +75,12 @@ import { makeUsage } from './usage.js';
 // The result of a call the turn never ran because it was cancelled first
 // (one text with the exec tool's; tools/exec.js never imports this module).
 import { NOT_RUN_TEXT } from './tools/exec.js';
-import { turnHooks } from './turn-hooks.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { RecordLog } from './records.js' */
 /** @import { LivePublishing } from './live.js' */
 /** @import { ActiveTurn, TurnInfo, RoundCalls } from './turn-types.js' */
+/** @import { HookTurn, Runtime } from './runtime-parts.js' */
 const { E, Fail, defineExoClass, makePromiseKit, matches } =
   /** @type {GuestGlobals} */ (globalThis);
 
@@ -103,14 +104,12 @@ const reason = text => previewText(text, limits.reasonUnits);
  *   (`context-source.js`) over that archive
  * @param {{ closed: () => boolean }} options.fence the session's delete
  *   fence (7.1): no claim, no direct start once closed
- * @param {(core: any, active: ActiveTurn) => boolean} options.recoverAfterRestart
+ * @param {Runtime} options.runtime the session's runtime parts
+ *   (`runtime-parts.js`): their combined hooks, their tool sources, and
+ *   `ToolContext.runtime`
  * @param {(error: unknown) => boolean} options.isRestartSignal
- * @param {typeof turnHooks} [options.hooks]
  * @param {readonly any[]} [options.table] tool table
  * @param {number} [options.maxToolRounds]
- * @param {readonly any[]} [options.sources] M5 S1: dynamic tool sources
- * @param {() => any} [options.getRuntime] M5 S4: the session's runtime
- *   (`runtime-parts.js`), for the tool set and `ToolContext.runtime`
  */
 export const makeTurnRunner = ({
   config,
@@ -121,14 +120,12 @@ export const makeTurnRunner = ({
   archive,
   contextSource,
   fence,
-  recoverAfterRestart,
+  runtime,
   isRestartSignal,
-  hooks = turnHooks,
   table = toolTable,
   maxToolRounds = limits.maxToolRounds,
-  sources = toolSources,
-  getRuntime = () => undefined,
 }) => {
+  const { hooks } = runtime;
   /**
    * Records before this index went out in a RoundRequest (W1b.2): per
    * session, not per turn, so a round 0 also carries what the previous turn
@@ -138,8 +135,6 @@ export const makeTurnRunner = ({
   let sentUpTo = 0;
   /** @type {any} */
   let queue;
-  /** @type {any} */
-  let core;
 
   let lastKnownTime = /** @type {number} */ (config.createdAt);
   /** M2 seam 4: the turn deadline (0 or absent: off). */
@@ -181,6 +176,36 @@ export const makeTurnRunner = ({
   });
   const { emit, report, flushRow, flushTo } = outbox;
 
+  /** @param {any} record */
+  const append = record => {
+    records.append(record);
+  };
+  /**
+   * What a part's hook gets (runtime-parts.js): frozen, not hardened (the
+   * turn is the runner's mutable record).
+   * @param {ActiveTurn} active
+   * @returns {HookTurn}
+   */
+  const hookTurn = active =>
+    Object.freeze({ active, round: active.round, append, emit });
+
+  // The session's recovery (recovery.js): steps 1-8 in the crank that saw
+  // the restart signal.
+  const recovery = makeRecovery({
+    records,
+    queue: harden({
+      size: () => queue.size(),
+      hold: (/** @type {any} */ why, /** @type {string} */ message) =>
+        queue.hold(why, message),
+    }),
+    current: () => current,
+    settle: (active, outcome) => {
+      settle(active, outcome);
+    },
+    hooks,
+    hookTurn,
+  });
+
   /**
    * End of a crank's work: publish to the current turn's ports; keep the
    * events for crank B when the current turn has none yet; publish outside
@@ -204,7 +229,7 @@ export const makeTurnRunner = ({
     services,
     live,
     toolsFor: ports =>
-      toolSetFor(ports, table, services, sources, getRuntime()),
+      toolSetFor(ports, table, services, runtime),
     onFresh: (set, since) => onOpened(set, since),
     onFailed: error => onOpenFailed(error),
     flush,
@@ -295,9 +320,7 @@ export const makeTurnRunner = ({
     } else {
       emit({ type: 'end', turnId: active.turnId, status });
     }
-    for (const hook of hooks.onSettle) {
-      hook({ core, active, round: active.round });
-    }
+    hooks.onSettle(hookTurn(active));
     restActivity = status === 'failed' ? 'error' : 'passive';
     report({
       activity: restActivity,
@@ -393,7 +416,7 @@ export const makeTurnRunner = ({
       services,
       endpoint: active.ports?.endpoint,
       // M5 S4: the session's runtime parts (labels, powers, inspector, ...).
-      runtime: getRuntime(),
+      runtime,
     });
     calls.running.set(intent.opId, { entry, context });
     /** @type {Promise<any>} */
@@ -528,7 +551,7 @@ export const makeTurnRunner = ({
     // M5 S5: a `'session'` entry is as `'guest'` here (it cannot meet one).
     if ((entry.site ?? 'adapter') === 'adapter' && isRestartSignal(error)) {
       // A restart, never a tool failure (section 7).
-      recoverAfterRestart(core, active);
+      recovery.recover(active);
       flush();
       return;
     }
@@ -697,15 +720,9 @@ export const makeTurnRunner = ({
     active.round = round;
     active.info.round = round;
     if (active.ports === undefined) throw SETTLED;
-    for (const hook of hooks.beforeRound) hook({ core, active, round });
+    hooks.beforeRound(hookTurn(active));
     // M5 S1: the tool set is read again at the start of every round (R3-6).
-    active.tools = toolSetFor(
-      active.ports,
-      table,
-      services,
-      sources,
-      getRuntime(),
-    );
+    active.tools = toolSetFor(active.ports, table, services, runtime);
     if (round > 0) {
       emit({ type: 'phase', turnId: active.turnId, phase: 'thinking' });
     }
@@ -955,7 +972,7 @@ export const makeTurnRunner = ({
       if (active.claimAt < since) {
         // Claimed before this incarnation started: the turn was in flight
         // when the adapter went (R4-66); never sent again.
-        recoverAfterRestart(core, active);
+        recovery.recover(active);
         return;
       }
       // Claimed on ports that were already dead: nothing reached a backend;
@@ -976,7 +993,7 @@ export const makeTurnRunner = ({
     if (active.reopening) {
       // The adapter went and no fresh ports came: nothing was dispatched.
       active.reopening = false;
-      recoverAfterRestart(core, active);
+      recovery.recover(active);
       return;
     }
     // The manager is a guest vat: never a restart signal.
@@ -998,7 +1015,7 @@ export const makeTurnRunner = ({
     if (current !== active || active.ports !== ports) {
       // A settled turn's lease, or ports this turn already gave up: only the
       // generation's recovery may act on it (it does nothing).
-      if (restart) recoverAfterRestart(core, active);
+      if (restart) recovery.recover(active);
       flush();
       return;
     }
@@ -1008,7 +1025,7 @@ export const makeTurnRunner = ({
       return;
     }
     if (active.dispatched) {
-      recoverAfterRestart(core, active);
+      recovery.recover(active);
       flush();
       return;
     }
@@ -1095,7 +1112,7 @@ export const makeTurnRunner = ({
     current = active;
     // M5 S3: after TurnStarted (hooks need the turn id), before the first
     // round request is built.
-    for (const hook of hooks.onClaim ?? []) hook({ core, active, item });
+    hooks.onClaim(hookTurn(active), item);
     report({ activity: 'working' });
     const held = incarnation.held();
     if (held !== undefined) {
@@ -1126,10 +1143,8 @@ export const makeTurnRunner = ({
       );
     }
     if (queue.holdReason() !== undefined) return undefined;
-    for (const source of hooks.turnSources) {
-      const next = source(core);
-      if (next !== undefined) return claim(next.text, next.at);
-    }
+    const next = hooks.nextTurn();
+    if (next !== undefined) return claim(next.text, next.at);
     return undefined;
   };
 
@@ -1168,9 +1183,7 @@ export const makeTurnRunner = ({
     if (active.ports !== undefined) {
       E.sendOnly(active.ports.endpoint).cancelRound(active.turn);
     }
-    for (const hook of hooks.onCancel) {
-      hook({ core, active, round: active.round });
-    }
+    hooks.onCancel(hookTurn(active));
     if (active.calls === undefined || active.calls.inFlight === 0) {
       settle(active, cancelledOutcome(active));
     } else {
@@ -1261,11 +1274,10 @@ export const makeTurnRunner = ({
   return harden({
     /**
      * Late wiring (the queue's onChange needs the runner first).
-     * @param {{ queue: any, core: any }} wiring
+     * @param {{ queue: any }} wiring
      */
     attach: wiring => {
       queue = wiring.queue;
-      core = wiring.core;
     },
     current: () => current,
     /** Cancel the running turn, if any (R6-44 send-now; as Turn.cancel). */

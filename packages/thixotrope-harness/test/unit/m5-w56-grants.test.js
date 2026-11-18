@@ -21,14 +21,9 @@ import { runtimeParts } from '../../guest/session/runtime-parts.js';
 import {
   builtInToolNames,
   toolSetFor,
-  toolSources,
   toolTable,
 } from '../../guest/session/tool-table.js';
-import {
-  grantedToolSource,
-  grantsPart,
-  makeGrants,
-} from '../../guest/session/tools/granted.js';
+import { grantsPart, makeGrants } from '../../guest/session/tools/granted.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -139,6 +134,9 @@ const makePart = () => {
     get grants() {
       return part;
     },
+    get toolSources() {
+      return harden([part.tools]);
+    },
   });
   part = makeGrants(runtime, { inspectFor: inspector.inspectFor });
   return { part, runtime, inspector };
@@ -150,7 +148,7 @@ const makePart = () => {
  * @param {any} runtime
  */
 const roundOf = (ports, runtime) =>
-  toolSetFor(ports, toolTable, harden({}), toolSources, runtime);
+  toolSetFor(ports, toolTable, harden({}), runtime);
 
 /** @param {any} set */
 const offered = set => set.descriptions.map((/** @type {any} */ d) => d.name);
@@ -159,10 +157,11 @@ const offered = set => set.descriptions.map((/** @type {any} */ d) => d.name);
 const states = part =>
   part.facet.list().map((/** @type {any} */ i) => [i.name, i.state, i.reason]);
 
-test('the grants part is registered, and the source is the last toolSources entry', t => {
+test("the grants part is registered, and its tools are the runtime's tool source", t => {
   t.true(runtimeParts.includes(grantsPart));
-  t.is(toolSources.length >= 1, true);
-  t.deepEqual(grantedToolSource(makePorts(), {}, undefined), []);
+  const { part } = makePart();
+  const ports = makePorts();
+  t.deepEqual(part.tools(ports, {}, undefined, builtInToolNames(ports)), []);
 });
 
 test('a grant named accountStatus: refused-builtin where the ports offer that adapter tool, offered where they do not', async t => {
@@ -247,7 +246,7 @@ test('two grants named t are both refused-duplicate; withdrawing one offers the 
 });
 
 test('a clash with another dynamic source is refused through the entry hook', async t => {
-  const { part, runtime } = makePart();
+  const { part } = makePart();
   const ports = makePorts();
   part.entriesFor(ports, builtInToolNames(ports));
   part.facet.grantTool(makeTool('shared'));
@@ -264,8 +263,7 @@ test('a clash with another dynamic source is refused through the entry hook', as
     ports,
     toolTable,
     harden({}),
-    harden([...toolSources, () => harden([other])]),
-    runtime,
+    harden({ toolSources: [part.tools, () => harden([other])] }),
   );
   t.false(offered(set).includes('shared'));
   t.deepEqual(states(part), [

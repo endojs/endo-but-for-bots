@@ -1,7 +1,7 @@
 // @ts-check
 // Test helper for W2.5 (the record archive's vat side and history): the
 // session's turn runner assembled as session.js assembles it (record log,
-// live publishing, queue, recovery), over in-memory fakes of the Backend,
+// live publishing, queue, runtime parts), over in-memory fakes of the Backend,
 // Endpoint, publisher, host facet, row reporter and an echo tool, with
 // W2.8's in-memory fake archive (test/unit/_m2-fake-archive.js) as the
 // ports' ArchivePort. Unlike session.js it hands the runner and the
@@ -21,12 +21,10 @@ import { makeContextSource } from '../../guest/session/context-source.js';
 import { makeLivePublishing } from '../../guest/session/live.js';
 import { makeQueue } from '../../guest/session/queue.js';
 import { inCallOrder, makeRecordLog } from '../../guest/session/records.js';
-import {
-  isRestartSignal,
-  recoverAfterRestart,
-} from '../../guest/session/recovery.js';
+import { makeLabels } from '../../guest/session/labels.js';
+import { isRestartSignal } from '../../guest/session/recovery.js';
+import { makeRuntime } from '../../guest/session/runtime-parts.js';
 import { toolTable } from '../../guest/session/tool-table.js';
-import { turnHooks } from '../../guest/session/turn-hooks.js';
 import { makeTurnRunner } from '../../guest/session/turn.js';
 /* eslint-enable import/no-relative-packages */
 import { encodeRecord } from '../../resources/agent-host/impl/archive/segment.js';
@@ -214,9 +212,8 @@ export const makeArchiveSession = async ({
     archive,
     contextSource,
     fence,
-    recoverAfterRestart,
+    runtime: makeRuntime({ labels: makeLabels(), services, config }),
     isRestartSignal,
-    hooks: turnHooks,
     table: toolTable,
   });
   const queue = makeQueue({
@@ -224,17 +221,7 @@ export const makeArchiveSession = async ({
     turnOf: runner.turnById,
     claim: () => runner.claimNext(),
   });
-  const core = harden({
-    records,
-    queue,
-    current: runner.current,
-    settle: runner.settle,
-    report: runner.report,
-    publishOutside: runner.publishOutside,
-    lastKnownTime: runner.lastKnownTime,
-    claimNext: runner.claimNext,
-  });
-  runner.attach({ queue, core });
+  runner.attach({ queue });
   runner.openPorts();
   await drain();
 

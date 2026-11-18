@@ -4,9 +4,12 @@
  * sections 3.1, 8 and 11).
  *
  * `makeSession({ config, services, rowReporter })` builds one session: the
- * record log (records.js), live publishing (live.js), the turn runner
- * (turn.js), the queue (W1a.5 queue.js), and the `SessionCore` that
- * recovery (W1a.5 recovery.js) works on. It returns the `Session` facet
+ * label map and the runtime parts (runtime-parts.js: every per-session job
+ * besides the turn's own life), the record log (records.js), live
+ * publishing (live.js), the delete fence, the archive (archive.js) and its
+ * ContextSource, the turn runner (turn.js, which makes the session's
+ * recovery), the queue (queue.js) and the export (export.js). It returns
+ * the `Session` facet
  * (held by the factory, the Composer, the gateway) and `SessionInternal`
  * (held only by the factory).
  *
@@ -16,11 +19,11 @@
  * session asks for its adapter ports when it is made (`Backend.open`, once
  * per adapter incarnation; contract 6.1).
  *
- * M5 (W5.3; m5-interfaces.md 2.4.1, 2.8, H-4): `make` builds the session's
- * label map (seeded from `services.endowments`, then `labelSeeds`) and its
- * runtime (`runtime-parts.js`), and the `Session` exo takes the M5 guard:
- * `grants()` and `enqueueMessageOnce` forward to the runtime's `grants` and
- * `packages` parts, which every runtime has.
+ * M5 (W5.3; m5-interfaces.md 2.4.1, 2.8, H-4): the label map is seeded
+ * from `services.endowments`, then `labelSeeds`; the `Session` exo takes
+ * the M5 guard: `grants()` answers the `grants` part's facet;
+ * `enqueueOnce` and `enqueueMessageOnce` share one enqueue, the latter
+ * after `checkAttachments` (packages.js).
  */
 import { interfaces, texts } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
@@ -28,21 +31,16 @@ import { labelSeeds as defaultLabelSeeds, seedsFor } from './label-seeds.js';
 import { makeLabels } from './labels.js';
 import { runtimeParts, makeRuntime } from './runtime-parts.js';
 import { makeQueue as defaultMakeQueue } from './queue.js';
-import {
-  isRestartSignal as defaultIsRestartSignal,
-  recoverAfterRestart as defaultRecoverAfterRestart,
-} from './recovery.js';
+import { isRestartSignal as defaultIsRestartSignal } from './recovery.js';
+import { checkAttachments } from './packages.js';
 import { makeSessionArchive } from './archive.js';
 import { makeContextSource } from './context-source.js';
 import { makeSessionExport } from './export.js';
 import { makeLivePublishing } from './live.js';
 import { makeRecordLog } from './records.js';
 import { submissionField } from './staging.js';
-import { toolSources, toolTable } from './tool-table.js';
-import { turnHooks } from './turn-hooks.js';
+import { toolTable } from './tool-table.js';
 import { makeTurnRunner } from './turn.js';
-
-/** @import { Runtime } from './runtime-parts.js' */
 
 // The exo methods are typed loosely; the interface guards check the values.
 const { makeExo } = /** @type {any} */ (globalThis);
@@ -51,13 +49,11 @@ const { makeExo } = /** @type {any} */ (globalThis);
  * @typedef {object} SessionOptions overrides for tests; the session program
  *   passes none
  * @property {typeof defaultMakeQueue} [makeQueue]
- * @property {(core: any, active: any) => boolean} [recoverAfterRestart]
  * @property {(error: unknown) => boolean} [isRestartSignal]
  * @property {number} [maxToolRounds]
  * @property {readonly any[]} [toolTable]
- * @property {typeof turnHooks} [hooks]
- * @property {readonly any[]} [toolSources] M5 S1
- * @property {readonly any[]} [parts] M5 runtime parts (`runtime-parts.js`)
+ * @property {readonly any[]} [parts] the runtime parts (`runtime-parts.js`;
+ *   a test adds a part with hooks or tools)
  * @property {readonly any[]} [labelSeeds] M5 (`label-seeds.js`)
  */
 
@@ -69,12 +65,9 @@ export const makeSession = (
   { config, services, rowReporter },
   {
     makeQueue = defaultMakeQueue,
-    recoverAfterRestart = defaultRecoverAfterRestart,
     isRestartSignal = defaultIsRestartSignal,
     maxToolRounds = limits.maxToolRounds,
     toolTable: table = toolTable,
-    hooks = turnHooks,
-    toolSources: sources = toolSources,
     parts = runtimeParts,
     labelSeeds = defaultLabelSeeds,
   } = {},
@@ -84,8 +77,8 @@ export const makeSession = (
   const labels = makeLabels({
     seeds: seedsFor(services, config, labelSeeds),
   });
-  /** @type {Runtime | undefined} */
-  let runtime;
+  // The runtime parts (S4), made once, in table order; they send nothing.
+  const runtime = makeRuntime({ labels, services, config, parts });
   const records = makeRecordLog();
   const live = makeLivePublishing({
     host: services.host,
@@ -119,13 +112,10 @@ export const makeSession = (
     archive,
     contextSource,
     fence,
-    recoverAfterRestart,
+    runtime,
     isRestartSignal,
-    hooks,
     table,
     maxToolRounds,
-    sources,
-    getRuntime: () => runtime,
   });
   // Receipts keep the turn id; the Turn is minted when one is handed out
   // while the session keeps the turn (J-9152, m2-interfaces.md 5.3).
@@ -137,18 +127,7 @@ export const makeSession = (
     cancelCurrent: () => runner.cancelCurrent(),
   });
 
-  /** Section 11: what recovery.js (W1a.5) works on. */
-  const core = harden({
-    records,
-    queue,
-    current: runner.current,
-    settle: runner.settle,
-    report: runner.report,
-    publishOutside: runner.publishOutside,
-    lastKnownTime: runner.lastKnownTime,
-    claimNext: runner.claimNext,
-  });
-  runner.attach({ queue, core });
+  runner.attach({ queue });
 
   const info = () => {
     /** @type {Record<string, any>} */
@@ -195,14 +174,26 @@ export const makeSession = (
     }
   };
 
-  // M5 (S4): the runtime parts, made once the internals they use exist.
-  runtime = makeRuntime({
-    labels,
-    services,
-    config,
-    session: harden({ core, queue, runner, inCrank, refuseIfDeleting }),
-    parts,
-  });
+  /**
+   * Crank A of section 6.1 (both enqueue methods): receipt, entry, and the
+   * claim when idle.
+   * @param {any} submission inline `{ text }` or a StagedText
+   * @param {string} requestId
+   * @param {number} at
+   * @param {readonly { label: string, value: any }[]} [attachments]
+   */
+  const enqueue = (submission, requestId, at, attachments) => {
+    runner.see(at);
+    const { receipt, added } = queue.enqueueOnce(
+      submission,
+      requestId,
+      at,
+      attachments,
+    );
+    if (!added) return receipt;
+    if (runner.claimNext() === undefined) return receipt;
+    return queue.receiptFor(requestId) ?? receipt;
+  };
   // Contract 6.1: the ports are opened once, here, and held across turns.
   runner.openPorts();
 
@@ -237,13 +228,7 @@ export const makeSession = (
      */
     enqueueOnce(submission, requestId, at) {
       refuseIfDeleting();
-      return inCrank(() => {
-        runner.see(at);
-        const { receipt, added } = queue.enqueueOnce(submission, requestId, at);
-        if (!added) return receipt;
-        if (runner.claimNext() === undefined) return receipt;
-        return queue.receiptFor(requestId) ?? receipt;
-      });
+      return inCrank(() => enqueue(submission, requestId, at));
     },
     /** @param {string} requestId */
     getSubmissionReceipt(requestId) {
@@ -281,19 +266,19 @@ export const makeSession = (
       return runner.findTurn(turnId);
     },
     /**
-     * M5 (2.6, A.4): `enqueueOnce` with attachments; the `packages` part
-     * (W5.7) does the work in this crank.
+     * M5 (2.6, A.4): `enqueueOnce` with attachments, refused (2.6) before
+     * anything is written; the `packages` part's `onClaim` opens them.
      * @param {any} submission inline `{ text }` or a StagedText
      * @param {string} requestId
      * @param {number} at
      * @param {any[]} attachments
      */
     enqueueMessageOnce(submission, requestId, at, attachments) {
-      const { packages } = runtime;
       refuseIfDeleting();
-      return inCrank(() =>
-        packages.enqueueMessageOnce(submission, requestId, at, attachments),
-      );
+      return inCrank(() => {
+        checkAttachments(submission, attachments);
+        return enqueue(submission, requestId, at, attachments);
+      });
     },
     /** M5 (2.5): the session's granted tools (W5.6's `grants` part). */
     grants() {
