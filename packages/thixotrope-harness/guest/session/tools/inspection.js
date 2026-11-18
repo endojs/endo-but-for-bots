@@ -41,6 +41,7 @@ import { capabilityLine } from './objects.js';
 
 /** @import { ToolTableEntry } from '../tool-table.js' */
 /** @import { ArgSpec } from '../../lib/tool-args.js' */
+/** @import { Labels } from '../labels.js' */
 
 /** @param {string} text */
 const ok = text => harden({ status: 'ok', text });
@@ -231,7 +232,7 @@ export const inspectionToolEntries = harden([
  */
 export const inspectorPart = harden({
   name: /** @type {'inspector'} */ ('inspector'),
-  /** @param {{ labels: import('../labels.js').Labels }} runtime */
+  /** @param {{ labels: Labels }} runtime */
   make: runtime =>
     harden({
       /**
