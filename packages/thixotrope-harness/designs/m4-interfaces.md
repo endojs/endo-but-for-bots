@@ -242,10 +242,13 @@ Nothing a session or exec vat can call returns a `PoolMember`, a `Secret`, a `Re
 ### 4.1 What M4 adds to M2's Secrets
 
 - **Catalogue** (R7-22, R6-67): `SecretsAdmin.catalog(cursor?)` pages the manager's list of
-  Secrets (M2's `secretList`, creation order, cursor = position as in `list`), at most 64 per
-  page and at most `frameBytes` (cut, then `next`); one `CredentialOps.describeSecrets(keys)`
-  call fills generation, state and bytes; labels and descriptions come from the manager's records
-  (the system of record). Never a value (R7-26).
+  Secrets (M2's `secretList`, creation order), at most 64 per page and at most `frameBytes` (cut,
+  then `next`); one `CredentialOps.describeSecrets(keys)` call fills generation, state and bytes;
+  labels and descriptions come from the manager's records (the system of record). Never a value
+  (R7-26). *Amended (HR-SYN-11):* the cursor is the creation serial of the last Secret the page
+  before held, as `list`'s (J-9486), not a position, so a delete between pages skips none;
+  `SubscriptionsAdmin.listMembers` pages by each member's creation serial the same way. A cursor
+  must be canonical decimal digits; anything else is refused with the existing text.
 - **Description edit** (R6-67, R7-23 `setDescription`): `Secret.setDescription(text)`.
 - **Audit reader** (R7-63: default 100, at most 1,000): `SecretsAdmin.auditReader()` returns an
   adapter-local `AuditReader`; `page({ secret?, limit = 100, before? })` answers newest first,
