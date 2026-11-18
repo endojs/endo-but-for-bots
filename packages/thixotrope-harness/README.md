@@ -63,11 +63,16 @@ growth in loops under `guest/`; review still catches what the string rule cannot
 
 ## The run lock
 
-Only one Ironhorse workload may run on this machine at a time: integration tests, spikes, perf
-checks and the `packages/thixotrope` Ironhorse lane all take `tmp/.run.lock`.
+Integration tests, spikes, perf checks and the `packages/thixotrope` Ironhorse lane take the run
+lock: a machine-wide pool of slots under `<THIX_HARNESS_HOME>/run-lock/` (default
+`~/.cache/thixotrope-harness`; `THIX_HARNESS_RUN_SLOTS`, default 4) shared by every worktree. A
+perf check takes every slot (exclusive). The CLI also boxes the workload at 10 minutes (exit 124)
+and logs each run to `<THIX_HARNESS_HOME>/runs.jsonl`; `designs/process.md` section 2 has the
+details and the script's header comment is the reference.
 
 ```sh
-node scripts/run-lock.mjs --label NAME [--timeout-ms N] -- <command> [args...]
+node scripts/run-lock.mjs --label NAME [--timeout-ms N] [--max-ms N] [--exclusive | --shared] \
+  -- <command> [args...]
 ```
 
 The lock is held while the taker or its workload is alive (pid plus start time, so a reused pid
@@ -99,10 +104,11 @@ THIX_HARNESS_INTEGRATION=1 node scripts/run-lock.mjs --label it -- \
 Run one integration file per invocation, or all of them with
 
 ```sh
-corepack yarn test:integration   # every file under test/integration and test/template, one at a time
+corepack yarn test:integration   # every file under test/integration and test/template
 ```
 
-which takes the run lock once and runs AVA with `--serial --concurrency 1`. Never give
+which runs `scripts/test-integration.mjs`: each file under its own run-lock wrapper (its own
+slot, 10-minute box and run-log line), up to four files at once (`--jobs N`). Never give
 `corepack yarn test` several integration files at once: AVA runs files in parallel worker
 processes, and each file's `takeIntegrationLock` passes through the outer lock (a nested taker),
 so their supervisors would run side by side.

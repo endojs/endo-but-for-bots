@@ -667,65 +667,140 @@ budget's edge, throughput under 50/s at load, and the 100 KiB client-side refusa
 
 **Goal.** The daily surface: open the chat page from a desktop or phone browser, sign in by the
 fragment secret, create sessions, chat with streaming, reload and reconnect without losing anything.
+The contract is `m3-interfaces.md` (W3.0); its decisions D-M3-1..D-M3-6 and section numbers are
+cited below.
 
-- **P:** P-01, P-02, P-04 (preset/backend/model; the internet toggle is tested in M7), P-22, P-23,
-  P-24, P-27 (status bar), P-48.
-- **R:** R2-1, R2-12, R2-14, R4-62, R6-1, R6-8, R6-9, R6-10, R6-11, R6-12, R6-13, R6-14, R6-35, R6-36,
-  R6-37, R6-38, R6-39, R6-40 (composer, without @-mention), R6-41, R6-42, R6-43, R6-44, R6-45, R6-46,
-  R6-49, R6-51, R6-52, R6-59, R6-60 (layout only), R6-61, R6-62, R6-75, R6-76, R7-2, R7-17, R7-46,
-  R7-47, R7-48, R7-49, R8-39.
-- **Depends on:** M2. Parallel with M4 and M5. **W3.0 is merged before M4 or M5 start a UI unit.**
-- **Owns:** `AH/gateway/` (server, routes table, ws, captp bridge, frame guard, auth, csp, limiter),
-  `H/ui/build.mjs`, `H/ui/src/{features.js,shell,conversation,sessions}/`, `H/test/browser/`,
-  `H/test/*/m3-*`, `H/perf/ui.perf.mjs`.
+- **P:** P-01, P-02, P-04 (preset/backend/model; the internet toggle is M7's field), P-22, P-23,
+  P-24, P-27 (status bar), P-48; the browser half of P-03, P-09, P-10, P-11, P-12, P-14, P-25.
+- **R:** R2-1, R2-12 (`/ws` only, decision 1), R2-14, R4-62, R6-1, R6-8..R6-14, R6-35..R6-39,
+  R6-40 (composer, without @-mention), R6-41..R6-46, R6-49, R6-51, R6-52, R6-59, R6-61, R6-62,
+  R6-75, R6-76, R7-2, R7-11, R7-13, R7-17, R7-46..R7-49, R8-39; fixes W-1, W-8, W-15.
+- **Depends on:** M2 (built; `m3-interfaces.md` 5 lists every M2 object and method used and the
+  assumptions A-1..A-11). Parallel with M4 and M5. **W3.0 is merged before M4 or M5 start a UI
+  unit**; they add UI features, gateway extensions and browser-sendable record keys by new files
+  only (`m3-interfaces.md` 6, 11 "Not hotspots"). M4's and M5's UI component tests use M3's
+  `test/unit/_m3-fake-powers.js` once M3's group A is merged; their browser acceptance (M4 #14,
+  M5 #15) uses `test/browser/_harness.mjs` `startBrowserGateway` and runs after M3 is merged. Merge
+  order M3, M4, M5.
+- **Owns (new files):** `AH/gateway/` (server, static, csp, signin, limiter, bridge, guard,
+  vocabulary, powers, extensions loader, index, `contract-m3.js`; `extensions/` is a directory
+  others add files to), `H/resources/agent-host/durable-gateway.js`,
+  `H/guest/lib/interfaces-m3.js`, `H/ui/` (`build.mjs`, `index.html`,
+  `src/{main.js,features.js,net,controller,shell,styles,sessions,conversation}`),
+  `H/scripts/gateway.mjs`, `H/test/**/m3-*`, `H/test/unit/_m3-fake-powers.js`,
+  `H/test/browser/_harness.mjs` and `H/test/browser/m3-*.mjs` (M4 and M5 own their own
+  `m4-*`/`m5-*` files there), `H/perf/{ui,gateway,gateway-session}.perf.mjs`,
+  `H/perf/_m3-client.mjs`. **Shared edits** (merge hotspots with their exact seams,
+  `m3-interfaces.md` 11): none in `guest/lib/interfaces.js` (H1 dropped; session and exec bundles
+  grow 0 bytes); `resources/agent-host/durable.js` (H2: two imports, `const gateway =
+  makeGatewayManager({ manager })`, the facet guard `withGatewayAdmin(m2Interfaces.AgentHostAdmin)`
+  with `gateway: () => gateway.admin` as its last method), `AH/attach.js` (H3: `bindings` option
+  of `makeAttach`), `AH/index.js` (H4: two imports, one `makeGatewayService` statement with
+  `secretWriter` before `makeAttach`, one `bindings` property, `gateway.attached()` in `onSink`),
+  `scripts/provision-steps.js` (H5: one appended step, gated on `options.gateway`), `package.json`
+  (H6, PM-merged). Journal J-0510..J-0529 (build units J-0520..J-0529).
 
-**Work units**
+**Design in brief.** The gateway is part of the agent-host adapter and a second manager-kit
+registration (`gateway`) of its native resource, restored at every start (D-M3-3). A page signs in
+over a WebSocket with `fetch(secret)` and receives `GatewayPowers`: the factory's `Operator`,
+passed through, and this incarnation's `Live`, `Content`, `Composer`, `History`. From then on it
+calls the daemon's own objects through a pass-through CapTP bridge (D-M3-1) that checks every
+call on its encoded form before CapTP decodes it: frame bytes, record keys against a vocabulary
+derived from the guards, depth, page-made objects, calls in flight (D-M3-2). The sign-in secret
+lives in an encrypted adapter file and never enters a vat or the hub.
 
-| id | files | behaviour | tests |
+**Work units** (after W3.0 and M2's merge: group A in parallel, then group B in parallel, then
+W3.8 alone; files, entry points and estimates in `m3-interfaces.md` 10, 17)
+
+| id | group | files | behaviour | tests | supervisor |
+|---|---|---|---|---|---|
+| W3.0 contract | - | `designs/m3-interfaces.md`, `guest/lib/interfaces-m3.js`, `AH/gateway/contract-m3.js` | **Done** (J-0510..J-0519), with the M3/M4/M5 cross-check applied (`m3-interfaces.md` "Cross-check"). Objects, protocol, seams, restart and security, units, acceptance, perf | - | no |
+| W3.1 HTTP server, sign-in, limiter | A | `AH/gateway/{server,static,csp,signin,limiter}.js` | loopback listener; shell for every non-upgrade GET, hashed assets, CSP, 400 on query configuration; `/ws` upgrade with the Origin check and connection caps; sign-in secret in `signin.enc` (wrapping key, rotation atomic); +1,000 ms per failure per client address with trusted-proxy forwarding, forget after 10 s, global ceiling | adapter tests (fake clock, child-process kill mid-write) | no |
+| W3.2 CapTP bridge and guards | A | `AH/gateway/{bridge,guard,vocabulary,powers,extensions}.js`, `AH/gateway/extensions/README.md`, the Node CapTP test client | per-connection captp; bootstrap `fetch` -> `GatewayPowers`; pass-through of daemon objects; pre-dispatch frame, key, depth, page-object and in-flight guards; key vocabulary from every `interfaces-m*.js` `vocabularyShapes()` (shapes and interface argument patterns; a file without it logged and skipped); export cap; per-connection `Live` facade; extension loader | adapter tests over an in-memory socket pair | no |
+| W3.3 manager side and seams | A | `resources/agent-host/durable-gateway.js`; seams H2 (`durable.js`), H3 (`AH/attach.js`) | `AgentHostAdmin.gateway()` -> `GatewayAdmin` (`serve`, `status`, `rotateSignIn`, `stop`) over a kit registration carrying the operator, added to the manager facet's guard by `withGatewayAdmin`; `makeAttach` `bindings` | unit: the M3 guards (contract samples), `withGatewayAdmin` methods = M2's plus `gateway` (pins `payload.methodGuards`, CC-072), `GatewayAdmin` with a fake kit, attach dispatch; bundle sizes (session and exec growth 0 bytes) | no |
+| W3.4 UI foundation | A | `ui/build.mjs`, `ui/index.html`, `ui/src/{main.js,features.js,net,controller,shell,styles}`, `test/unit/_m3-fake-powers.js` | esbuild bundle (SES, captp, Preact) into `AH/gateway/assets/`; fragment parsing; connection with the R6-14 schedule and "Server starting..."; controller (sessions, presets with availability, live view, records kept as received, exactly-once drafts with Web Locks sent and resent through the `composer.addon` chain, rebuild and re-attach); shell, overlay, drawer, status bar, feature slots (a `feature.js` exports one feature or an array) | unit with happy-dom | no |
+| W3.5 sessions UI | B | `ui/src/sessions/` | sidebar (circles, two lines, live), rename and delete, new-session dialog (presets from `describe()`, unavailable ones disabled with their reason; backends; catalogue with Factory default; R6-39) | unit with fake powers | no |
+| W3.6 conversation UI | B | `ui/src/conversation/` | streaming bubble, thinking row, tool groups, exec highlight, raw view, links, status rows, recovery panel and acknowledgement, queue rows, Stop, blocked sending, send-error line, usage bar, large content; `composer.addon` props (input, caret, `replaceRange`) and `message.renderer` props (`{ context, turn, record }`) | unit with fake powers | no |
+| W3.7 gateway wiring | B | `AH/gateway/index.js`, seams H4-H5, `scripts/gateway.mjs`, `test/integration/{_m3-gateway,m3-gateway,m3-sessions}*` | `makeGatewayService` composes W3.1-W3.2 for the kit binding, with `GatewayContext.secretWriter` for extensions; provisioning step; operator script (serve, status, rotate, stop, url) | integration: acceptance 1-3, 10-14 (protocol), 16; kill points K1, K2 | **yes** |
+| W3.8 integration | alone | `test/browser/_harness.mjs`, `test/browser/m3-*.mjs`, `test/integration/m3-reconnect.test.js`, `perf/{ui,gateway,gateway-session}.perf.mjs`, `perf/_m3-client.mjs` | `startBrowserGateway({ template, provision? }) -> { page, url, client, close() }` for M3, M4 and M5 browser files; browser acceptance, kill points K3-K5, every perf row; checks `m3-interfaces.md` 5 against M2 as merged | browser (Playwright, `THIX_HARNESS_BROWSER=1`) and integration | **yes** |
+
+**Acceptance tests** (each under 5 minutes; `m3-interfaces.md` 12 says which file and whether
+through the Node client or the browser)
+1. Any non-upgrade path returns the shell with the CSP header; assets carry their type and the
+   immutable cache header; a `/ws` upgrade with the configured Origin succeeds, another Origin is
+   refused (403), another path 404; configuration in the query string is refused (400, and the
+   page says so).
+2. Fragment secret yields the powers; a wrong one is refused and an attempt within 1,000 ms gets
+   the R7-49 text; through a trusted proxy, failures from one forwarded address do not delay
+   another; an untrusted `X-Forwarded-For` is ignored; the global ceiling trips; the secret never
+   appears in an HTTP request (network log).
+3. Session list updates live across two clients within 500 ms; rename and delete propagate; rows
+   show the R6-36 fields.
+4. Kill the WS: "Reconnecting…" overlay, retries on the R6-14 schedule; the running turn
+   reattaches and keeps streaming. With the gateway not listening for 60 s (daemon stopped), the
+   overlay says "Server starting..." and the page reconnects by itself within 30 s of the
+   gateway's return.
+5. Close the tab mid-turn, reopen: the turn finished on the server and is in the transcript.
+   Reload mid-turn: the page re-attaches to the running turn (R4-62).
+6. Drop the connection between send and receipt; resend from the saved draft creates no
+   duplicate (kill points K3, K4).
+7. SIGKILL the daemon mid-turn with two pages open: both show the interrupted or outcome-unknown
+   row; Details opens "Turn journal and recovery"; "Record acknowledgement" works while idle; no
+   provider request or tool run happened twice (K5).
+8. Tool calls fold into "Thought for ..." groups; `exec` shows highlighted source; `</>` raw
+   view; "Load earlier messages" pages a 300-turn imported session back to turn 1 across the
+   archive; a 1 MiB reply renders fully.
+9. At 640 px the sidebar becomes a drawer; at 641 px it does not.
+10. A call carrying a 100 KiB string to a session method, one with a record of 2,000 invented
+    keys, one passing a page-made object, and a `createSession` whose `networkPolicy` is a record
+    of invented keys are each refused by the gateway; the vats receive nothing and keep working.
+11. After a SIGKILL the gateway serves again on the same port with the same secret (K1);
+    `rotateSignIn` closes open pages, the old secret fails and the new one works; a SIGKILL during
+    the rotation leaves exactly one valid secret (K2).
+12. Queue during a turn: Send now, Edit and Delete work; after a restart the queue is held with
+    its hold line and Send now releases it in FIFO order.
+13. New-session dialog: presets, backends, catalogue with "Factory default" and the unavailable
+    text; the session runs on the chosen model.
+14. The status bar shows `↑in ↓out · ctx N%` equal to `getUsage()`.
+15. ■ Stop cancels the running turn; closing the page leaves it running to completion.
+16. A fixture gateway extension and UI feature add a service, a route, a CSP source and a panel
+    with no M3 file edited; the extension's `context.secretWriter()` after attach is the object
+    `SecretsAdmin.openWriter()` answers; a throwing extension file is skipped.
+
+**Perf checks** (each a fixed window, 60 s per point unless stated, median and p95/p99 with the
+sample count; no row counts runs; each file under 10 minutes, a file reports a window it cannot
+finish by 9 min 30 s as not measured; fixtures by import, the cached `m3-300` template; with the
+M2 archive a 300-turn session stands for any length, J-0461). Files (`m3-interfaces.md` 13):
+`perf/gateway.perf.mjs` (about 6 min), `perf/gateway-session.perf.mjs` (about 9 min with the
+template cached), `perf/ui.perf.mjs` (browser, about 7 min).
+| check | file | window | budget |
 |---|---|---|---|
-| W3.0 UI shell + gateway skeleton | `ui/build.mjs`, `ui/src/{features.js,shell/}`, `AH/gateway/{server,routes}.js` | esbuild into `implDir` assets; shell with feature mount points; routes table; app shell for every non-upgrade GET | component smoke test; route table test |
-| W3.1 auth + limiter | `AH/gateway/{auth,csp,limiter}.js` | `serveGateway({port, operator, publicOrigin, trustedProxies})`; `/ws` upgrade only, Origin check; CSP; fragment secret checked over WS (`fetch(secret)`), +1,000 ms per failure per client address with trusted-proxy forwarding and a global ceiling; secret in the secrets store; `rotateSignIn` | adapter: wrong secret delays; two forwarded addresses limited independently; untrusted `X-Forwarded-For` ignored; Origin refused; query-string config refused |
-| W3.2 CapTP bridge | `AH/gateway/{captp-bridge,frame-guard}.js` | `@endo/captp` over WS; bootstrap `fetch` -> `{operator, live, content, composer}`; frame guard refuses calls over `frameBytes`; key guard refuses records with keys the target method's shape in `guest/lib/interfaces.js` does not declare (architecture section 7); 1 MiB WS cap | adapter: browser-side captp client calls `E(factory).listSessions()` through a fake operator; oversize call refused; undeclared-key call refused |
-| W3.3a sessions | `ui/src/sessions/` from `space-floot/src/*` and `chat/floot-*.js` at 1315bef86 | session list (live through the list feed), new-session flow (preset, backend, model from catalogue incl. "factory default") | component tests ported from `chat/test/component/floot*.test.js` |
-| W3.3b conversation | `ui/src/conversation/` | streaming bubble, thinking row, tool groups ("Thought for ..."), highlighted `exec` source, `</>` raw view, status rows, "Load earlier messages", large content through `Content` | component tests with a fake session |
-| W3.3c queue + recovery | `ui/src/conversation/`, `ui/src/shell/` | queue display with Send now / Edit / Delete (through the Composer), reconnect overlay (0,1,2,5,10,30 s, then every 30 s; a refused connection shows "Server starting...", D-17), reload re-attach through `getCurrentTurn`, drawer at <= 640 px, recovery panel with "Record acknowledgement", usage status bar | component tests |
-| W3.4 browser e2e | `test/browser/m3-*.mjs` | Playwright/browser-pane scripts against a local gateway + scripted backend | acceptance below |
+| `gateway.fetch` sign-in to powers | gateway | 60 s | <= 50 ms; 0 vat deliveries |
+| `gateway.guard` pre-dispatch check of a `frameBytes` call | gateway | 60 s | <= 2 ms per call |
+| `ui.call` client `E(session).listPending()` | gateway | 60 s | <= 150 ms |
+| `ui.submit` `Composer.submit` while a turn runs | gateway | 60 s | <= 150 ms |
+| `ui.deltaFanout` 5 clients, adapter chunk to each WS frame | gateway | 60 s | <= 5 ms per delta; 0 vat deliveries per delta |
+| too-big probes: 100 KiB call, 2,000 fresh keys, depth 33, 33 calls in flight, 4,097 exports | gateway | one probe each (correctness) | refused; no halt; 0 deliveries to the target |
+| `ui.snapshot` `watch()` of the 300-turn session | gateway-session | 60 s | <= 300 ms; message <= `frameBytes` |
+| `ui.history.newest` (vat) and `ui.history.archived` (`History`) page through the gateway | gateway-session | 60 s each | <= 300 ms each |
+| `ui.reconnect` socket open to rebuilt state | gateway-session | 60 s | <= 1 s |
+| `ui.restartReady` serving to the gateway answering `fetch` | gateway-session | restarts repeated over 150 s per mode (clean, SIGKILL), sample count reported | <= 2 s |
+| `ui.coldLoad` navigation to sessions listed (browser), bundle size | ui | 60 s | <= 1.5 s; bundle <= 600 KB gz |
+| `ui.hubGrowth` hub state and the session's hub row while a browser reloads every 10 s and turns run | ui | 5 min | hub <= 2 MB; row entries back to <= 1.25 x the start after the viewer closes |
 
-**Acceptance tests**
-1. Any non-upgrade path returns the shell; WS upgrade on `/ws` with the configured Origin succeeds,
-   another Origin is refused; configuration in the query string is rejected.
-2. Fragment secret yields the operator; a wrong one is refused and delays the next attempt by
-   1,000 ms; through a trusted proxy, failures from one forwarded address do not delay another; the
-   secret never appears in an HTTP request (network log).
-3. Session list updates live across two tabs; rename and delete propagate.
-4. Kill the WS: "Reconnecting..." overlay, retries on the schedule; the running turn reattaches and
-   keeps streaming. With the gateway not listening for 60 s (daemon stopped), the overlay says
-   "Server starting..." and the page reconnects by itself within 30 s of the gateway's return.
-5. Close the tab mid-turn, reopen: the turn finished on the server and is in the transcript. Reload
-   mid-turn: the page re-attaches to the running turn (R4-62).
-6. Drop the connection between send and ack; resend from the saved draft creates no duplicate.
-7. Restart the daemon mid-turn: the turn shows the interrupted status row; Details opens "Turn journal
-   and recovery"; "Record acknowledgement" works while idle.
-8. Tool calls fold into "Thought for ..." groups; `exec` shows highlighted source; `</>` raw view;
-   "Load earlier messages" pages history; a 1 MiB reply renders fully.
-9. At 640 px the sidebar becomes a drawer. `[real-browser]` on a phone is optional.
-10. A browser call carrying a 100 KiB string straight to a session method, and one carrying a record
-    with 2,000 invented keys, are both refused by the gateway, and the session keeps working.
-
-**Perf checks**
-| check | budget |
-|---|---|
-| `ui.coldLoad` to interactive (bundle size recorded) | <= 1.5 s on loopback; bundle <= 600 KB gz |
-| `ui.reconnect` to rebuilt UI | <= 1 s after the socket opens |
-| `ui.deltaFanout` 5 viewers, adapter chunk to all WS frames | <= 5 ms per delta |
-| `ui.snapshot` 1,000-turn session watch | <= 300 ms; first message <= `frameBytes` |
-| `ui.call` browser `E(session).listPending()` | <= 150 ms |
-| `ui.hubGrowth` `hub.json` after 1,000 turns viewed in a browser with reloads | <= 2 MB |
+Test files take about 8 minutes on four slots; the three perf files about 22 minutes in exclusive
+mode after them (owner decision 12 in `m3-interfaces.md` 16: whether the 20-minute bound covers
+perf).
 
 **Fit risk:** good. CapTP-through-adapter is the mail-UI bridge pattern
-(`pkg/src/platform/node/mail-ui-server.js`) with object references instead of tokens.
+(`pkg/src/platform/node/mail-ui-server.js`) with object references instead of tokens, and with
+pass-through (D-M3-1) the gateway needs no per-interface tables. Awkward: guards must run in Node
+before decoding (D-M3-2), and every presence a page holds is a hub row entry of its vat until the
+page drops it and that vat next collects (J-9386, J-9392).
 
-**Deferred:** @-mention (M5), preset editor (M5), widgets (M12), secrets view (M4), voice UI (M11).
+**Deferred:** @-mention (M5), preset editor (M5), widgets (M12), secrets view and account chips
+(M4), Network chip and internet toggle (M7), emergency stop (M6), voice and `/audio` (M11), Home,
+spaces and the admin CLI (M12), assistant launch R6-60 (M11).
 
 ---
 
@@ -741,45 +816,107 @@ renewal, refusal marks and account status.
   R6-29, R6-54, R6-67, R7-16, R7-22, R7-25, R7-26, R7-29, R7-30, R7-63, R8-13, R8-14, R8-30, R8-31,
   R8-34, R8-35, R8-36, R8-37, R8-38.
 - **Depends on:** M2. Parallel with M3 and M5 (UI units after W3.0).
-- **Owns:** `AH/subscriptions/` (pool, share meter, rate-limit headers, renewal, responses + messages
-  clients, account oracle), `AH/secrets/{audit,catalog}.js`, `H/guest/factory/{backends,accounts}.js`
-  (registered in `session-options.js`), `H/ui/src/secrets/`, `H/ui/src/accounts/`,
-  `H/test/fixtures/sse/subscriptions/`, `H/test/*/m4-*`, `H/perf/pool.perf.mjs`.
+- **Owns:** `AH/subscriptions/` (pool core, rate-limit headers, pool-state bridge, Messages and
+  Responses clients, pool catalogue, credentials, renewal, accounts, account file, `accountStatus`
+  tool, pool provider, composition, credential ops), `AH/secrets/{credential-access,audit,catalog}.js`,
+  `H/resources/agent-host/durable-subscriptions.js`, `H/guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`,
+  `H/guest/factory/subscription-options.js` (registered in `session-options.js`),
+  `H/config/defaults-m4.js`, `H/scripts/subscription-login.mjs`, `H/ui/src/secrets/`,
+  `H/ui/src/accounts/` (and `H/ui/src/account-chip/` if needed), `AH/gateway/extensions/m4-secrets.js`,
+  `H/test/fixtures/{fake-subscription-server,fake-oauth-server}.mjs`,
+  `H/test/fixtures/sse/subscriptions/`, `H/test/*/m4-*` (in `test/browser/` only `m4-*.mjs`),
+  `H/perf/{subscriptions,secrets,accounts}.perf.mjs` (not `perf/pool.perf.mjs`, which is M1b's
+  spare pool). M3's seams are directory registries: M4 adds files there and edits none of M3's
+  collectors. Edits to shared files are the merge hotspots H-1..H-8, H-11, H-12 and H-14 of
+  `m4-interfaces.md` 15, each with its exact seam and the single owner of each shared file.
 
-**Work units**
+**Contract.** `designs/m4-interfaces.md` (W4.0) with `guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`
+and `resources/agent-host/impl/subscriptions/types.js`. Pools hang off `SecretsAdmin.subscriptions()`
+(D-M4-1), so `AgentHostAdmin`, `Operator` and every session interface stay as M2 left them; M4 adds
+nothing to the session or exec programs (the session program has 13,552 bytes of its 200 KB left
+for M3, M4 and M5 together, measured at `3588cab190`).
 
-| id | files | behaviour | tests |
-|---|---|---|---|
-| W4.1 secrets full | `AH/secrets/{audit,catalog}.js` | catalogue without values, audit listing 100 (max 1,000), delete only after revoke, size limits R7-25, no path from a Secret to its admin | ported `daemon/test/secret-manager.test.js` parts |
-| W4.2 secrets UI | `ui/src/secrets/` | Secrets view: create, replace (value typed into the adapter-local `SecretWriter`), revoke, audit; never shows a value | UI component test |
-| W4.3 pool and routing | `AH/subscriptions/{pool,share-meter,rate-limit-headers}.js` (adapted from `hosted-agent/src/*`) | member selection R4-24, stickiness 300 s with last-served records keyed by the Session object in the manager vat (at most 256), one attempt per member plus one refresh retry, "Provider subscriptions exhausted" with the reset time (G-07), marks persisted by coalesced sendOnly, a newer open reading lifts a dated mark | ported `subscription-pool.test.js`, `rate-limit-headers.test.js`, `share-meter.test.js` |
-| W4.4 wire clients | `AH/subscriptions/{responses,messages}.js` from `lal/providers/subscription-{responses,messages,events}.js` | Codex Responses SSE, Claude Messages SSE with R4-30 headers, efforts R4-23, Codex overload retry R4-75, Claude overload retry (G-05), other Claude failures R4-76; context window from configuration for Claude (open decision 13); cancel revokes the endpoint (R4-49) | fake-server fixtures; ported `subscription-responses.test.js`, `subscription-messages.test.js` |
-| W4.5 renewal | `AH/subscriptions/renewal.js` | OAuth refresh in the adapter, write-back conditioned on generation, holds only its grant and writer (W-5 fix) | two concurrent renewals: one fails |
-| W4.6 accounts | `AH/subscriptions/account-oracle.js`, `guest/factory/accounts.js`, `ui/src/accounts/` | accounts channel (D-8) with plan/windows/credits labelled observed/declared/remembered/unavailable; `refreshAccounts`; `accountStatus` tool registered in `tool-table.js` | unit + UI test |
+**Work units** (order: W4.0 done; **group A** = W4.1-W4.5 in parallel; **group B** = W4.6 and
+W4.7 in parallel, W4.7 against M3's merged W3.0 contract with its component tests once M3's group
+A is on the shared branch; then W4.8, which owns every M4 file; only W4.8 needs a running
+supervisor; merge order M3, M4, M5; estimates in hours of one Opus agent, `m4-interfaces.md` 16)
 
-**Acceptance tests** (all with the fake server; `[real-provider]` repeats 4-5 once with owner credentials)
-1. Secrets: create, replace with expected generation (stale refused), revoke (next read fails), delete
-   only after revoke, audit lists each read; no API returns a value.
-2. `auto` picks the member resetting soonest; ties by used fraction then declaration order; a session
-   stays on its member for 300 s.
-3. A 429 with exhaustion headers marks the member and retries once on the next; all exhausted fails
-   "Provider subscriptions exhausted" and shows the reset time.
-4. Marks survive restart; a newer open reading lifts a dated mark.
-5. `thix reachability` from a session vat and from its exec vat reaches no `AgentHostAdmin`,
-   `SecretsAdmin`, Secret admin or value, gateway facet, factory or other session.
-6. Catalogue: `fae-codex` intersection rule (R4-18); `fae-claude` synthetic `auto` (R4-19); a failed
-   read reports `unavailable`.
-7. Account chips and the `accountStatus` tool show plan, windows and reset times with provenance
-   labels; refresh updates them (P-45).
-8. A Claude overload (529) before any delivery is retried; after a delivery it fails with the R4-76
-   text.
+| id | files | behaviour | tests | est. |
+|---|---|---|---|---|
+| W4.0 contract | `designs/m4-interfaces.md`, `guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`, `AH/subscriptions/types.js` | **Done** (J-0610..J-0629), including the cross-check follow-ups (`vocabularyShapes`, `browserSecretBytes`, accounts eviction, `m4-secrets.js` seam) | guards built and sampled in Node | - |
+| W4.1 manager part and creation (A) | `resources/agent-host/durable-subscriptions.js`, `guest/factory/subscription-options.js`, `config/defaults-m4.js`; hotspots H-1, H-2, H-6, H-7, H-11 | `SubscriptionsAdmin` (members from Secrets, pools as Backends, idempotent by label, R8-31 conflicts, retire), pool `Backend` with `resolveEffort`, sink `poolState`/`poolChanged`/`poolOf`, marks per member, served records (256, LRU), Secrets catalogue page, `setDescription`, audit reader forward; the effort resolver (R4-23) and `reasoningEffort` into `SessionConfig` | unit: M4 guards and `vocabularyShapes`; M4 `SecretsAdmin`/`Secret` keep M2's method guards (payload comparison, CC-072's technique); the part with fake ops; the resolver | 6 |
+| W4.2 pool core (A) | `AH/subscriptions/{pool,rate-limit-headers,pool-state}.js` | selection R4-24 (object keys, `auto` only), marks R4-25/R4-103, dated marks lifted by newer open readings, the manager bridge (marks at once, served stamps coalesced, one `poolState` per incarnation) | ported `subscription-pool.test.js`, `rate-limit-headers.test.js` | 5 |
+| W4.3 wire clients and catalogue (A) | `AH/subscriptions/{messages,responses,catalog}.js`, `anthropic.js` options (H-14), `test/fixtures/fake-subscription-server.mjs`, `test/fixtures/sse/subscriptions/` | Claude Messages SSE (R4-30 headers and billing block, adaptive thinking efforts, 16,384 output tokens, R4-76 texts, overload retry G-05), Codex Responses SSE (`instructions`, `store:false`, encrypted reasoning, `server_is_overloaded` retry R4-75/R4-105, `ultra` as `max`), both taking the system text as a plain string; pool catalogue R4-18/R4-19 with the R4-104 cache and the configured Claude context window (decision 13) | fixtures; ported lal `subscription-responses`/`subscription-messages` tests | 9 |
+| W4.4 credentials, renewal, Secrets adapter (A) | `AH/subscriptions/{credentials,renewal}.js`, `AH/secrets/{credential-access,audit,catalog}.js`, H-5, `test/fixtures/fake-oauth-server.mjs` | credential parse and bounds (R7-25), write-ahead renewal with generation-conditioned write-back, fail closed `CONSUMED` (D-M4-8), single-flight per member, the one-key accessor (W-5 fix), audit reader to 1,000 (R7-63), describe batch | concurrent renewals, killed child at the renewal kill points, audit paging | 7 |
+| W4.5 accounts (A) | `AH/subscriptions/{accounts,account-file,account-tool}.js` | readings with provenance (observed, declared, remembered, unavailable), pushed on an adapter channel (R4-85) with keepalive (30 s) and idle eviction (60 s; oldest idle evicted at the cap), on-demand refresh, readings file, `accountStatus` text (R3-35, R4-84), banked credits shown (R4-86, no redeem) | adapter tests; ported `account-tool` rendering; 40 abandoned watchers then a new watch succeeds | 6 |
+| W4.6 composition and wiring (B) | `AH/subscriptions/{provider,index,credential-ops}.js`, `AH/gateway/extensions/m4-secrets.js`, `scripts/subscription-login.mjs`, H-3, H-4, H-8, kind tool lines (H-14) | the pool round (system text once through `systemTextOf`, member hand-over before delivery, one attempt per member plus one renewal retry, "Provider subscriptions exhausted" with the reset time, G-07), `claude-pool`/`codex-pool` kinds, `accountStatus` on pool and API kinds, ops `credentials()`, provisioning step, sign-in helper and `--value-file` (sealed boxes only), the `largeCalls` extension for `SecretWriter.replace` | adapter tests over both fake servers and a fake sink; the extension against a fake `GatewayContext` | 8 |
+| W4.7 UI (B) | `ui/src/secrets/feature.js` (`app.panel`), `ui/src/accounts/feature.js` (`app.panel` Subscriptions and `statusbar.chip`, or the chip in `ui/src/account-chip/feature.js`), their components | Secrets panel (write-only, R6-67, R7-26; refuses values over `browserSecretBytes` and non-text files in the page), Subscriptions panel and account chip (R6-54) | component tests with M3's `_m3-fake-powers.js` | 7 |
+| W4.8 integration | everything of M4; `test/integration/m4-*`, `test/browser/m4-*.mjs`, `perf/{subscriptions,secrets,accounts}.perf.mjs` | acceptance 1-16 (14 after M3's merge, 13's system-text case after M5's), kill points K-1..K-6, perf below | all M4 files, four slots, under 20 min | 9 |
 
-**Perf checks**
-| check | budget |
-|---|---|
-| `pool.selectAndOpen` per round | <= 2 ms in-process; 0 extra deliveries |
-| `pool.markPersist` per refusal | 1 delivery to the manager vat |
-| `accounts.push` per change | 1 factory publish; 0 per viewer |
+**Acceptance tests** (fake servers; `[real-provider]` repeats 3, 7, 8 and 10 once with owner
+credentials; each one integration test under 5 minutes; files in `m4-interfaces.md` 17)
+1. Secrets: create, replace with expected generation (stale refused), revoke (next read fails),
+   delete only after revoke, description edit, catalogue without values, audit lists each read
+   (pages to 1,000).
+2. `auto` picks the member resetting soonest; ties by used fraction then declaration order; a
+   session stays on its member within the cache lifetime and moves after it.
+3. A 429 with exhaustion headers marks the member and the same request goes once to the next; all
+   exhausted fails "Provider subscriptions exhausted" with the first reset time; no body in the
+   reason.
+4. Marks survive a SIGKILL restart; a newer open reading lifts a dated mark.
+5. From a session vat and its exec vat no `AgentHostAdmin`, `SecretsAdmin`, `SubscriptionsAdmin`,
+   `Secret`, `PoolMember`, `Accounts`, gateway facet, factory or other session is reachable
+   (method of `m4-interfaces.md` 19 until CC-060).
+6. Catalogue: `codex-pool` intersection (R4-18); `claude-pool` synthetic `auto` with efforts and the
+   configured window; a read with no member answering is `unavailable`; the cache holds 15 min.
+7. `accountStatus` and the account chips show plan, windows and resets with provenance labels;
+   refresh updates them; a watcher gets one batch per change; after a restart they are
+   `remembered`.
+8. Claude 529 before any delivery is retried; after a delivery it fails with an R4-76 text; SSE
+   error, non-200 and empty answer give the three R4-76 texts.
+9. Codex `server_is_overloaded` before visible delivery is retried on the schedule, after it is
+   not; failure texts carry symbolic facts only.
+10. Renewal: an expired token is renewed once; a 401 gets one renewal and one retry, then the
+    member is marked and the next serves; a concurrent renewal fails `GENERATION_CONFLICT`.
+11. SIGKILL mid-round (between a 429 and the next member's request, mid-stream, before the first
+    byte): the turn is outcome-unknown and no member attempt is sent twice.
+12. SIGKILL during renewal (after the write-ahead mark; after the token endpoint answered): at most
+    one refresh per token; the member reports `CONSUMED`; the other member serves.
+13. Efforts: unsupported refused at creation, supported stored and sent; an effort on an API
+    backend refused; R4-30 header names present; after the M5 merge, a two-part system text
+    reaches both fake servers joined with a blank line.
+14. Browser (M3's `startBrowserGateway`, after M3's merge): Secrets panel create, replace, revoke,
+    delete after revoke, audit, value never in the DOM or a gateway frame; account chips update
+    live; a value of exactly 1,040,384 JSON-escaped bytes (quotes included) is written from the
+    page, one byte more is refused in the page and nothing is sent.
+15. No access token, refresh token or API key value anywhere in the state directory, the adapter's
+    event log or captured stderr; neither browser size-probe value reached the hub.
+16. Provisioning twice is a no-op; a member label bound to another Secret is refused until
+    retired; a revoked Secret is never rewritten; `makePool` again after a SIGKILL answers the
+    same pool.
+
+**Perf checks** (each a rate or latency over a fixed window, 60 s unless stated; no state built by
+replaying turns; each file under 10 minutes with at most 7 timed windows; reasons in
+`m4-interfaces.md` 18)
+| check | file | budget |
+|---|---|---|
+| `subscriptions.select` member order, 16 members, 256 sessions | subscriptions | median <= 0.5 ms; 0 deliveries |
+| `subscriptions.turnStart` on a pool backend | subscriptions | median <= 350 ms; <= 3 session deliveries; 0 manager deliveries |
+| `subscriptions.handover` 429 on A then B | subscriptions | <= 50 ms over the fake server; 1 manager delivery per refusal |
+| `subscriptions.servedWrites` sticky session | subscriptions | <= 1 manager delivery per session per 60 s |
+| `subscriptions.renewal` 16 concurrent rounds on an expired member | subscriptions | 1 refresh POST per expiry; <= fake + 50 ms |
+| `subscriptions.firstOpen` restarts over a 150 s window | subscriptions | median <= 750 ms; 1 manager crank per restart |
+| `catalog.pool` one 60 s window of (invalidate, cold read, warm read) | subscriptions | warm median <= 300 ms; cold median <= 2 s |
+| `subscriptions.bundles` (one build) | subscriptions | session and exec + <= 64 bytes; factory <= +6 KB |
+| too-big probes (single runs) | subscriptions | no halt; credential 8,193 bytes, secret 1 MiB + 1, audit 1,001, 17 members, 16 MiB + 1 SSE line refused on the sending side; `poolState` at 256 served fits a frame |
+| `secrets.credentialRead` per round | secrets | median <= 1 ms; 0 deliveries |
+| `secrets.catalog` 64 secrets | secrets | median <= 300 ms; 1 manager crank |
+| `secrets.auditReader` 1,000 events | secrets | median <= 50 ms; 0 vat deliveries |
+| `accounts.push` reading to subscriber | accounts | median <= 5 ms; 0 vat deliveries per change and per viewer |
+| `accounts.refresh` 2 members | accounts | median <= fake + 100 ms |
+
+Files: `perf/subscriptions.perf.mjs` 7 windows, 510 s timed, <= 595 s with setup;
+`perf/secrets.perf.mjs` 3 windows, <= 270 s; `perf/accounts.perf.mjs` 2 windows, <= 210 s.
 
 **Fit risk:** good. All token-bearing code is Node in one process; the vat side is a few handles.
 
@@ -799,45 +936,103 @@ operator inventory and @-mentions.
   until M8), R3-31, R3-32, R3-41, R3-42, R3-265, R3-270, R3-271, R3-273, R4-4, R4-26, R4-27, R4-28,
   R4-29, R4-38, R4-99, R6-40, R6-55, R7-6, R7-38, R7-45.
 - **Depends on:** M2 (takes over `guest/session/prompt.js`). Parallel with M3 and M4 (UI units after W3.0).
-- **Owns:** `H/guest/factory/{presets,grants,inventory}.js` (registered in `session-options.js`),
-  `H/guest/lib/{preset-catalog,system-prompt}.js` (pure parts of `fae/session/preset-catalog.js`,
-  `system-prompt.js`), `H/guest/session/prompt.js` (from M2), `H/guest/session/tools/{objects,granted,mentions}.js`,
-  `H/guest/session/labels.js`, `H/guest/exec/powers.js`, `H/ui/src/presets/`, `H/ui/src/mentions/`,
-  `H/test/*/m5-*`, `H/perf/tools.perf.mjs`.
+- **Owns:** new `H/guest/factory/{presets,inventory,preset-templates}.js`,
+  `H/guest/lib/{preset-catalog,prompt-sections,tool-args,interfaces-m5,interfaces-m5-factory,limits-m5}.js`,
+  `H/guest/session/{labels,label-seeds,m5-parts,powers-source,packages}.js`,
+  `H/guest/session/tools/{objects,inspection,inspect-client,granted,mentions}.js`,
+  `H/guest/exec/{powers,membrane,inspect}.js`, `H/test/fixtures/m5-objects.js`, `H/ui/src/presets/`,
+  `H/ui/src/mentions/`, `H/test/*/m5-*` (in `test/browser/` only `m5-*.mjs`), `H/perf/{tools,exec-m5,presets,mentions,creation-m5}.perf.mjs`;
+  `H/guest/session/prompt.js` (from M2) and `H/guest/lib/system-prompt-base.js`; the M2, M1b and
+  M1a files M5 edits are assigned per unit in `m5-interfaces.md` section 7, and the lines it adds
+  to files M3 or M4 may also edit are the seams of its section 9.1.
 
-**Work units**
+**Contract.** `designs/m5-interfaces.md` (W5.0, done) with `guest/lib/interfaces-m5.js`,
+`interfaces-m5-factory.js` and `limits-m5.js`. Two decisions shape the rest: no answer from an
+object the session did not mint enters a session vat (the exec vat's `inspect` calls such objects
+and answers a bounded, rendered result; D-M5-2), and model code reaches other vats' objects only
+through a per-call membrane that bounds every message (D-M5-3). Core requests CC-070..CC-073 and
+owner decisions O-1..O-12 are in its section 9.
 
-| id | files | behaviour | tests |
-|---|---|---|---|
-| W5.1 preset catalogue | `guest/factory/presets.js`, `guest/lib/preset-catalog.js` | built-in table, user presets with revision compare-and-set, snapshot at creation (R4-4), endowments as `{label, value}` objects (32 max), default preset rule R3-20 | ported `preset-catalog.test.js` |
-| W5.2 prompt composition | `guest/lib/system-prompt.js`, `guest/session/prompt.js` | parts R4-26 in order, chosen by snapshot object kinds; the guest part describes the persistent scope (rewritten R4-26 part 2, journaled); systemPrompt override R4-27; stored with the session; built with `join` | ported `system-prompts.test.js`; spoken intro only when `spoken` |
-| W5.3 labels + object tools | `guest/session/{labels.js,tools/objects.js}` | **one** label map per session (the single store); `list`, `lookup`, `store`, `remove` (kept for P-17 / R3-31), `describeCapability` (bounded help), `readSources` (per-field budget under the tool limit) | unit tests |
-| W5.4 exec powers | `guest/exec/powers.js` | `powers` is a live session-vat facet over the label map (`get`, `list`), not a copy | integration: adopt then use in exec in the same turn |
-| W5.5 operator inventory | `guest/factory/inventory.js` | minimal operator inventory in the factory (label -> object, add/remove) used by preset objects and @-mentions; M12 adds the Home view over it | unit |
-| W5.6 granted tools + mentions | `guest/session/tools/{granted,mentions}.js` | granted tool objects appear next round, built-in names protected, duplicates refused (P-65); @-mention attachments (32 slots) reach the turn with the R4-29 line and are released after the turn | unit |
-| W5.7 preset and mention UI | `ui/src/presets/`, `ui/src/mentions/` (after W3.0) | preset editor shared across devices; composer @-mention autocomplete over the inventory | UI tests |
+**Work units** (W5.0 first, done and settled after the M3/M4/M5 cross-check; then group A in
+parallel; then group B in parallel; then W5.9; hours for one Opus agent; files and reasons in the
+contract, section 7; merge order M3, M4, M5, with W5.3's first commit allowed early)
 
-**Acceptance tests**
-1. Edit a preset after creating a session: the session's prompt and objects do not change.
-2. `list` shows held labels; `lookup` renders without calling; `describeCapability` returns bounded
-   help; an unheld label resolves to nothing; `store` then a restart then `lookup` finds the value;
-   `remove` discards it; exec sees the change through `powers` in the same turn.
-3. A granted tool named `exec` is refused; two with one name are both refused; withdrawing removes it.
-4. @-mention an inventory object: the model adopts it during the turn; an un-adopted attachment is
-   released after the turn.
-5. Custom presets may add capabilities from the operator's inventory (P-53).
-6. Preset editor: save on device A, see it on device B; stale revision refused.
-7. Typed (non-spoken) sessions do not get the spoken prompt; the composed prompt describes the
-   persistent exec scope.
+| id | files | behaviour | tests | hours |
+|---|---|---|---|---|
+| W5.0 contract | `designs/m5-interfaces.md`, `guest/lib/{interfaces-m5,interfaces-m5-factory,limits-m5}.js` | **Done**. Objects, seams, units, acceptance, perf, hotspots; settled: `vocabularyShapes()` in both interface files, UI by `feature.js` directories, the mention addon on M3's `composer.addon`, `presetRecordBytes` | the guards build and match samples (W5.0 check in Node); the contract test is W5.3's | - |
+| W5.1 presets and inventory (A) | `guest/factory/{presets,inventory,preset-templates}.js`, `guest/lib/preset-catalog.js`; edits `factory.js` (H-1..H-3), `services.js` (append), `scripts/export.mjs`; `perf/presets.perf.mjs` | catalogue and `Preset` objects (no ids), revision compare-and-set, built-ins and reset, Fae's validation texts plus the whole-record bound `presetRecordBytes`, defaults rule R3-20, creation from a preset (defaults, data snapshot, endowments at the snapshot's revision), minimal inventory, presets in export/import | unit: ported `preset-catalog.test.js`, the guard-boundary test of the maximal record; integration `m5-presets` (acceptance 2, 13, 14; kill points K1, K2) | 6 |
+| W5.2 prompt composition (A) | `guest/session/prompt.js`, `guest/lib/{system-prompt-base,prompt-sections}.js` | parts in order through the section table (1, 2 rewritten for M5's `powers`, 3 empty, 7); parts 4-6 left to M9, M12, M6 | unit: ported `system-prompts.test.js`; integration `m5-prompt` (acceptance 9) | 3 |
+| W5.3 session seams, labels, local object tools (A) | the four widenings in `interfaces.js` (first commit, may merge early); `guest/lib/tool-args.js`, `guest/session/{labels,label-seeds,m5-parts}.js`, `tools/objects.js`; edits `turn.js`, `turn-hooks.js`, `tool-table.js`, `session.js`, `AH/providers/{round,scripted}.js`; `perf/tools.perf.mjs` (runner and `rows`) | one label map per session; `list`, `lookup`, `store`, `remove` in the session vat with `parseClosedArgs` (no `JSON.parse`); tools re-read every round; the per-turn system note; claim hooks; the M5 `Session` guard with forwards | unit: the contract test (with `vocabularyShapes`), closed-args floods, a 256-call `store` round at the slot ceiling; integration `m5-labels` (acceptance 3, local part) | 7 |
+| W5.4 exec side (A) | edits `guest/exec/{main,render}.js`, `guest/session/tools/exec.js`; `guest/exec/{powers,membrane,inspect}.js`, `guest/session/tools/inspect-client.js`, `test/fixtures/m5-objects.js` | per-call `powers` (`lookup`, `list`, `store`, `remove`) that die with the call; the membrane; `ExecScope.inspect` (`methods`, `describe`, `readSources`, `toolSchema`, `toolExecute`) with Fae's bounds; the session's inspector client | unit (exec program in Node with fakes) | 7 |
+| W5.5 powers and inspection tools (B) | `guest/session/powers-source.js`, `tools/inspection.js`; appends `tool-table.js`, `m5-parts.js`, `provision-steps.js` (M5 fixture step, a no-op unless `options.m5Fixtures`); `perf/exec-m5.perf.mjs`, the `tools.inspect` row of `tools.perf.mjs` | `ExecPowersSource`; `describeCapability`, `readSources`, `lookup` of objects through the inspector; endowments seen by the model | integration `m5-objects` (acceptance 3, 4, 5, 8; K7), `m5-security` (acceptance 10) | 5 |
+| W5.6 granted tools (B) | `guest/session/tools/granted.js`; appends `tool-table.js` (`toolSources`), `m5-parts.js`, the `grants.round` row of `tools.perf.mjs` | `Session.grants()`, `grantTool`, `withdraw`; discovery every round (built-in names = static table plus the round's adapter tools, duplicates both refused, size budget); calls through the inspector | unit: a grant named `accountStatus` on ports offering it is refused-builtin; integration `m5-grants` (acceptance 6), `m5-grants-restart` (acceptance 11b) | 5 |
+| W5.7 packages and mentions (B) | `guest/session/packages.js`, `tools/mentions.js`; edits `queue.js`, `submissions.js`, `guest/lib/pending-queue.js`, `AH/composer.js`; appends `turn-hooks.js`, `tool-table.js`, `m5-parts.js`; `perf/mentions.perf.mjs` | `enqueueMessageOnce`, `Composer.submit(..., { attachments })`, packages per turn, the R4-29 line, `adopt`, `adoptTool`, release at settle and in recovery | integration `m5-mentions` (acceptance 7), `m5-mentions-restart` (acceptance 11a) | 6 |
+| W5.8 preset and mention UI (B; component tests after M3's W3.4 is in the shared branch, browser test after M3 merges) | new `ui/src/presets/feature.js` (`app.panel`), `ui/src/mentions/feature.js` (`composer.addon` with `send`, `message.renderer` chips); `test/unit/m5-w58-*.test.js`; `test/browser/m5-*.mjs`; no M3 file edited | the preset editor (R6-55) shared across devices, refusing an over-size record before sending; composer `@` autocomplete over the inventory with chips, sent through `Composer.submit`'s fourth argument on first send and resend; attachment chips in the transcript | unit with M3's `_m3-fake-powers.js`; browser on M3's `startBrowserGateway` (acceptance 15) | 6 |
+| W5.9 integration | every file after group B; `perf/creation-m5.perf.mjs` | the runtime wiring left (no `notBuilt` stub), the bundle budget (O-1: the PM raises the limits to 240,000 / 120,000 in the M5 merge commit), the merge seams with M3 and M4 as landed | integration `m5-snapshot` (acceptance 1, 9 part 7), `m5-reachability` (acceptance 12); every perf row; the regression wall time | 6 |
 
-**Perf checks**
-| check | budget |
-|---|---|
-| `tools.list` / `lookup` | <= 1 delivery each (in the session vat) |
-| `exec.powersGet` from exec | <= 150 ms (one guest-to-guest answer) |
-| `exec.scope1000` scope with 1,000 bindings: trivial call | <= 300 ms |
-| `prompt.compose` largest preset | within one crank, <= 100 ms engine time |
-| too-big probe: exec body of 300 k iterations ok; 10 x the per-crank ceiling gives the terminated result | session unaffected |
+**Acceptance tests** (each one integration test of at most 5 minutes; details and the file of
+each in `m5-interfaces.md` 8.1)
+1. A session keeps its prompt and its endowed labels after its preset is edited; a new session
+   gets the edit (R3-7, R4-4, R4-28).
+2. Two clients edit the catalogue: a save at a stale revision is refused with Fae's text; a
+   built-in cannot be deleted, only reset; an over-size record is refused; a save survives a
+   SIGKILL exactly once.
+3. `list`, `lookup` (a stored value; an object rendered as a remote capability without calling
+   it), `store` across a SIGKILL restart, `remove`, an unheld label, the 257th label and an
+   unknown argument key are each answered as specified.
+4. exec `powers` sees `store` and `remove` from the same turn; `powers` kept from an earlier call
+   is dead; `globalThis` bindings survive a SIGKILL restart.
+5. `describeCapability` and `readSources` answer bounded results; an object whose `help()` answers
+   200 KB costs the exec scope (stated) and never the session.
+6. A granted tool is offered next round and runs; `exec` as a granted name and two grants of one
+   name are not offered; withdrawing one offers the other next round.
+7. A message with two attachments: only that turn's requests carry the R4-29 line; `adopt` keeps
+   one; the other is released after the turn; 33 attachments are refused; `adoptTool` grants a
+   tool.
+8. A user preset's inventory endowments appear in its sessions' `list`; reserved, invalid,
+   duplicate and 33 endowments are refused; `chat-only` takes none (P-53, R3-22).
+9. Typed and spoken sessions get their introductions; the guest section describes the persistent
+   scope and `powers`; a `systemPrompt` replaces the composition; a blank one fails.
+10. Model code cannot send a 100 KiB argument or a 40-key record to another vat's object (the
+    membrane refuses it in the exec vat); a granted tool answering 300 KB never reaches the
+    session vat.
+11. SIGKILL at the kill points of `m5-interfaces.md` 5: no tool runs twice; stored labels and
+    adoptions exist exactly once; held messages keep their attachments.
+12. Neither a session vat holding endowments, adoptions and grants nor its exec vat reaches the
+    catalogue, the inventory, the Operator, the factory or any admin facet (`thix reachability`).
+13. Inventory add, page, relabel and remove; a duplicate label refused.
+14. Export and import carry user presets (without endowments) (M2 acceptance 14's presets).
+15. Browser (after M3 merges, `THIX_HARNESS_BROWSER=1`): a preset saved on one device appears on
+    another; a stale save is refused; `@` autocomplete attaches an inventory object and the
+    transcript shows its chip; a resend after a reload whose chips were lost is refused with a
+    fixed text and the draft kept.
+
+P-52 mapping rows for M12: named references and directories map to M5 acceptance 3 and 13;
+plugin installation with explicit powers maps to M5 acceptance 8.
+
+**Perf checks** (fixed windows: each measured point is a latency or rate over 60 s unless stated;
+a comparison alternates both sides in one window unless "each"; no check builds a long session;
+every perf file under 6 minutes; reasons in `m5-interfaces.md` 8.2)
+| check | file | budget |
+|---|---|---|
+| `tools.local` four session-local object tools in one round vs an `echo` round (60 s, alternating) | `tools` | median <= +30 ms; 0 extra session deliveries |
+| `labels.full` turn start with 256 labels vs none (60 s, alternating) | `tools` | <= 1.1 x |
+| `tools.inspect` `describeCapability` through the inspector (60 s) | `tools` | median <= 300 ms |
+| `grants.round` turn start with 32 offered grants (60 s) | `tools` | median <= 350 ms |
+| `exec.powersLookup` per `E(powers).lookup` (60 s) | `exec-m5` | median <= 150 ms |
+| `exec.membrane` wrapped call vs raw call (60 s, alternating) | `exec-m5` | <= +5 ms |
+| `exec.scope1000` trivial call in a scope with 1,000 globals (60 s) | `exec-m5` | median <= 300 ms |
+| `presets.save` round trip (60 s) | `presets` | median <= 150 ms |
+| `inventory.page` 50 rows of 1,000 entries made by `addAll` (60 s) | `presets` | median <= 200 ms |
+| `mentions.turnStart` 32 attachments vs none (60 s each) | `mentions` | <= +100 ms, <= 350 ms, <= 3 deliveries |
+| `prompt.compose` Node: compositions over 10 s; vat: creations over a 120 s window, largest preset and `chat-only` alternating (pool 4) | `creation-m5` | <= 5 ms; <= +150 ms and <= 750 ms |
+| `session.program`, `exec.program` bundle bytes; `session.createCold` cold creations over a 120 s window | `creation-m5` | the limits after O-1; <= 6 s |
+| too-big probes, each capped at 15-30 s: (a) 100 KiB through the membrane, (b) 200 KB `help`, (c) 20,000-key answer, (f) exec 300 k iterations ok and 10 x the crank ceiling terminated | `exec-m5` | no halt of the session vat or the target's vat |
+| too-big probes, each capped at 30 s: (d) oversize `store`, 257th label, 33 attachments; (e) oversize granted schema | `tools` | as above |
+
+The whole M5 regression (11 integration files and the browser file of at most 4 minutes each,
+five perf files of at most 5.5 minutes each) is at most 69 slot-minutes: about 17 minutes on four
+test slots.
 
 **Fit risk:** good. Persistent scope and object endowments are what Thixotrope offers; Appendix F
 drops most of Endo's name plumbing.

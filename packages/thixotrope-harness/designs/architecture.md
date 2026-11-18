@@ -1128,8 +1128,9 @@ too. The other rows below are design settings, kept in the module that enforces 
   `THIXOTROPE_MAX_DELIVERY_ATTEMPTS`; the child refuses to serve from any other environment. It holds a
   pipe from its parent on fd 3 and closes the supervisor cleanly when the parent dies, even by SIGKILL
   (J-9021). Its record is `<state>/harness-serve.json`.
-- **Run lock.** Integration tests, spikes, perf checks and the Ironhorse lane run under an exclusive
-  lock (`scripts/run-lock.mjs`, `tmp/.run.lock`), one Ironhorse workload at a time. The record holds a
+- **Run lock.** Integration tests, spikes, perf checks and the Ironhorse lane run under the run lock
+  (`scripts/run-lock.mjs`): a machine-wide pool of slots under `<THIX_HARNESS_HOME>/run-lock/`
+  (default 4); perf checks take every slot (designs/process.md section 2). Each slot's record holds a
   random generation id, the taker's pid and start time and the workload's pid and start time; the lock
   is held while either is alive (a reused pid with another start time counts as dead); a new lock is
   hard-linked into place fully written; a stale generation is deleted only by the holder of that

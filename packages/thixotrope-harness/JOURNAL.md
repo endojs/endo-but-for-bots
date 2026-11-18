@@ -7802,3 +7802,601 @@ Folding would make their guards demand methods they do not have, so it needs stu
 and a session program change that the perf runs in flight would have picked up.
 Decision: not done; for the PM or M3 W3.0 (a contract commit: give the stand-in and the M1a root
 the M2 methods as refusals, then fold).
+### J-0510 2026-11-18 M3 transport - good fit
+Evidence: W3.0 contract (`designs/m3-interfaces.md` D-M3-1, sections 3.3, 6.4);
+`guest/lib/interfaces-m3.js`; the bootstrap answer `GatewayPowers`; `pkg/src/net/hub.js:804-812`
+(an own export comes back local).
+Reading: the gateway can be a pass-through. The agent-host adapter already holds OCapN presences
+of the factory's `Operator` and of everything it hands out, and CapTP exports any remotable, so a
+signed-in page holds the daemon's own objects (Session, Turn, QueueEntry, Backend, Blob) and calls
+them directly; the gateway keeps no per-interface method table. A method M4 or M5 adds to a vat
+object is reachable from the browser with no gateway change, and an adapter-local object handed
+out by a vat (the M2 `SecretWriter` through `SecretsAdmin.openWriter`) comes back to the adapter
+as its own exo, so a page's `replace` never crosses the hub (assumption A-11). Endo's chat needed
+pet names and a gateway formula lookup for the same thing (R6-75: `fetch(id)` returns any local
+object); here `fetch` returns one record of object references and nothing is looked up by name.
+Decision: D-M3-1. Assumption A-1 (presences are passable to captp's marshal) is checked first in
+W3.2; the fallback is a forwarding `Far` per presence, still without method tables.
+
+### J-0511 2026-11-18 M3 engine - awkward
+Evidence: architecture 3 and fact 4 (a guard runs after decoding; every fresh record key costs a
+vat one of about 57,000 names for life, J-0191, J-0333); `guest/lib/interfaces.js`
+`CreateOptions` (`networkPolicy: M.any()`, `model: M.any()`); a W3.0 probe in Node walking every
+pattern of `shapes`, `interfaces` and `m2Interfaces`: 290 distinct record keys (pattern payload
+keys and method names included) in 22 ms.
+Reading: a browser is the first untrusted sender of records into vats, and no exo guard can
+protect a vat from it: the frame is decoded, hardened and its keys interned before the guard
+runs. The checks must therefore run in Node on the encoded CapTP message, before captp decodes it
+(D-M3-2): bytes against `frameBytes`, keys against a vocabulary, depth, page-made objects, calls in
+flight. The vocabulary need not be written by hand: walking the guards' own patterns gives a fixed
+set of a few hundred names every harness vat program already contains, so a page can make a vat
+intern at most those, ever. The walk also closes a hole the contracts left open: `CreateOptions`
+admits any value for `networkPolicy` and `model` (M.any, kept so the factory can refuse `model`
+with the R4-6 text), so before M3 any caller of `createSession` could flood the factory vat's name
+table with one record.
+Decision: D-M3-2 as specified in `m3-interfaces.md` 4.4; each later contract file exports
+`vocabularyShapes()` and is picked up by file name. Narrowing `networkPolicy` is M7's (its shape
+replaces `M.any()`).
+
+### J-0512 2026-11-18 M3 persistence - awkward
+Evidence: J-9386 (a hub session row has one entry per object held from another session; the log
+store rewrites a changed row whole), J-9392 (finalizers and their GC frames wait for the holder's
+next collection, up to 32 cranks), architecture 4.6 ("a long-lived viewer makes the same
+pattern").
+Reading: every object a page holds keeps an OCapN import in the adapter alive, so it is an entry
+in its vat's hub row for as long as the page holds it, and after the page drops it the entry goes
+only when the adapter collects and the vat next cranks. A viewer that pages back through history
+or reloads often grows the rows of the sessions it looks at. Nothing in a browser frees objects
+by itself unless captp runs with `gcImports`.
+Decision: captp `gcImports: true` on the page; at most 4,096 exports per connection (over: close
+and rebuild); the UI keeps only the visible session's pages; `ui.hubGrowth` measures a 5-minute
+reload loop against 2 MB and requires the session row to come back within 1.25 x after the viewer
+leaves. CC-051 (per-entry row diffs, C-2's rest) is filed only if that row misses.
+
+### J-0513 2026-11-18 M3 native - good fit
+Evidence: `pkg/src/native/manager-kit.js` (`register(key, spec) -> { handle, status }`, `restore`
+of every desired key at each new adapter incarnation, `handle.close()`); spike S7 (J-0162: a spec
+may carry a consumer vat's remotable across SIGKILL); `resources/agent-host/durable.js` (one key
+today, `same: () => true`).
+Reading: the gateway's listener is a registration of the agent-host native resource under a
+second key, whose spec carries the operator's `Operator`; the kit restores it whenever it builds
+the adapter (a daemon start or an adapter-only rebuild), so the gateway listens again after a
+restart with no start listener, no factory involvement and no session vat woken (D-5). Replacing
+the configuration is close-then-register, so the existing `same: () => true` needs no change. The
+sign-in secret stays in an adapter file encrypted with the existing wrapping key (M2 9.1 helpers,
+used read-only), so it never enters a vat or the hub.
+Decision: D-M3-3. The manager side is three lines in `durable.js` plus a new module
+`durable-gateway.js` (hotspot H2).
+
+### J-0514 2026-11-18 M3 tooling - awkward
+Evidence: `guest/lib/interfaces.js` (the `AgentHostAdmin` table and its name list), `AH/attach.js`
+(`makeAttach` refuses every key but `agent-host`), `AH/index.js`, `resources/agent-host/durable.js`;
+the parallel lanes M3, M4, M5 cut from one commit.
+Reading: M3 needs one method on one existing vat interface (`AgentHostAdmin.gateway()`), and that
+interface's guard lives in the one shared contract file every lane may touch. Adding guards by
+editing a shared table is what makes parallel lanes collide. The seam chosen: the method guard is a
+thunk in M3's own `interfaces-m3.js` (which imports only `limits.js`, so `interfaces.js` can import
+it without a cycle), spread as the last entry of the table; M4 and M5 can do the same with their
+own files and the three lanes add three adjacent lines. Everything else M3 adds to the gateway or
+UI is a new file; later milestones add theirs as files too (`AH/gateway/extensions/*.js`,
+`ui/src/<dir>/feature.js`), collected by directory, so the conventions' "hook tables"
+`gateway/routes.js` and `ui/src/features.js` become collectors nobody else edits.
+Decision: hotspots H1-H6 with their seams (`m3-interfaces.md` 11). For the PM: offer the
+`m<N>…Methods()` pattern to M4 and M5, and update the conventions list.
+
+### J-0515 2026-11-18 M3 spec - deviation
+Evidence: R2-12, R6-11 (upgrade on any path, `wss://<gateway>/`), R7-47 (no CSP on the app
+origin), R7-48 (no Origin checks), R2-14 (binary frames) against architecture D-12 (text frames,
+`/ws`), W-1, W-8, W-15.
+Reading: M3 departs from the spec where the audit asked it to and nothing of ours depends on the
+old behaviour: the upgrade is accepted on `/ws` only, its Origin must be the configured public
+origin, the shell and assets carry a strict CSP, and the limiter keys on the forwarded client
+address with a global ceiling. It keeps the spec where D-12 had drifted: binary frames carrying
+JSON (R2-14), and the fragment names `gateway` and `agent` (R6-9). The sign-in secret is 32 random
+bytes in an encrypted adapter file instead of the root formula id, generated by the daemon (R8-39)
+and stable across restarts (P-02), rotatable. Remaining exposure: one bearer secret is full
+operator authority (R7-2).
+Decision: owner decisions 1-5 of `m3-interfaces.md` 16, built with these defaults.
+
+### J-0516 2026-11-18 M3 ui - good fit
+Evidence: `packages/space-floot/DESIGN.md` "Controller <-> view contract", `src/types.js`
+(`FlootController`), the M1a channel's snapshot-then-deltas rule (`m1a-interfaces.md` 5), M2's
+receipts (`getSubmissionReceipt`).
+Reading: Floot's view was already written as a pure renderer over a controller; on Thixotrope the
+controller shrinks to calls on objects the page holds: no pet-name resolution, no polling, no
+queue in the page. Every client rule the spec asks for maps to one existing daemon call: re-attach
+is `getCurrentTurn` (R4-62), exactly-once is a saved draft plus `getSubmissionReceipt` (R6-41),
+late joiners get the channel's fold snapshot (P-09), the list is the list feed. The awkward part is
+only the string ids the Floot view uses: the controller keeps them as page-local keys (F.2 d) over
+the objects it received.
+Decision: D-M3-5 (copy and adapt, owner decision 6); controller and views split so the M4, M5, M7,
+M11 and M12 UI arrive as feature files in fixed slots.
+
+### J-0517 2026-11-18 M3 tooling - perf
+Evidence: the owner's rule of 2026-11-18 (no test or perf check over 10 minutes; rates or
+latencies over fixed windows; large states by import; a milestone's regression run within 20
+minutes on four slots); J-0461 (archive flatness: slot capacity, snapshot, hub row and
+`turn.start` flat from 200 to 5,000 turns); J-0485 (import at 7.7 turns/s).
+Reading: M3's checks were written as counts ("1,000 turns viewed with reloads", "1,000-turn watch
+snapshot"). With the archive a session keeps 128-159 turns whatever its length, so a 300-turn
+session imported once (about 40 s, cached as the `m3-300` template) stands for any length, and
+each check becomes a 60 s window of repeated operations (`ui.hubGrowth` a 5-minute window). The
+whole M3 regression run is planned at about 18 minutes: four integration files under 5 minutes
+spread over the slots, then two perf files under 10 minutes in exclusive mode.
+Decision: D-M3-6; `m3-interfaces.md` 13. For the PM: M2's acceptance 15 and `archive.flat.*` as
+written grow or import a 5,000-turn session (import alone about 11 minutes, J-0485); under the new
+rule they should become fixed-window rates on an imported, template-cached state.
+
+### J-0518 2026-11-18 M3 tooling - awkward
+Evidence: `H/tsconfig.json` (no `ui/`), `lint/guest-rules.js` (Node globals for scripts and perf
+only), root `eslint.config.js`; Playwright's Chromium in the user cache and `@playwright/test`,
+`happy-dom`, `preact`, `esbuild`, `ws` already in the workspace (`packages/chat`,
+`packages/space-floot`, `packages/familiar`).
+Reading: the harness has no browser code yet. Giving `ui/` browser globals or DOM types would edit
+the root lint config and the package's `tsconfig.json`, both shared. UI code that reads browser
+APIs as `globalThis.document`, `globalThis.localStorage` needs neither: it lints under the
+existing rules, and `ui/` stays outside `tsc`. The dependencies the UI and the gateway need are
+already in the workspace store, so the package.json change is additive (H6).
+Decision: owner decision 11 (lint only for `ui/`); browser tests gated by
+`THIX_HARNESS_BROWSER=1`, the rest through a Node CapTP client.
+
+### J-0519 2026-11-18 M3 native - awkward
+Evidence: `resources/agent-host/ephemeral.js` (the implementation is loaded with `require`, so no
+top-level await in `impl/`); `AH/index.js` (blobs and secrets need the manager's sink, which
+arrives with the `agent-host` bind); the kit restores keys one at a time in insertion order.
+Reading: the gateway shares the agent-host process, which keeps deltas at zero vat deliveries and
+lets `Live`, `Content`, `Composer` and `History` be local, but the gateway's bind can run before
+or right after the main bind of a fresh incarnation. It must not accept sign-ins until the agent
+host is attached, and it must not await anything at module load (extension files are loaded with
+`require` too). One crash of the agent-host process drops every page, stream and context cache at
+once (architecture 6, blast radius): pages reconnect on the R6-14 schedule.
+Decision: `makeGatewayService` exposes `attached()` (called from `onSink`) and serves `fetch` only
+after it; extension modules must be synchronous ES modules; recorded as the gateway's share of the
+agent-host blast radius.
+### J-9520 2026-11-18 I-3 lane tooling: scripts/new-lane.sh - good fit
+Evidence: `scripts/new-lane.sh scratch` then `--remove scratch` from the infra lane (base
+`3588cab190`, warm yarn cache), worker `367e78ad...`.
+Reading: create 22.6 s (worktree about 5 s, `yarn install --immutable` 16.2 s, worker copy and
+link 0.2 s, boot bundles 0.9 s, identical to the main worktree's by `cmp`); re-run 5.4 s (install
+4.1 s, bundles up to date). Disk: 1.3 GB by `du` (node_modules 1.0 GB), about 0.3 GB of new
+blocks by `df` around the removal (pnpm hard links). Remove 19 s. Refusals checked: untracked
+file in the lane, the worktree the script runs from, a bad name, a plain directory at the lane
+path, a lane path on another branch, a branch one commit ahead of the main branch.
+Decision: the worker is a content-addressed copy under `THIX_HARNESS_HOME/worker/<sha16>/`
+linked from the lane's `target/release`, so the default lookup works without environment and a
+core rebuild never swaps a running lane's binary. Lanes are cheap: create one per line of work.
+
+### J-9521 2026-11-18 I-3 union merge for the append-only logs - good fit, with limits
+Evidence: `.gitattributes` `merge=union` for `JOURNAL.md`, `CORE-CHANGES.md`, `TIMELOG.md`;
+a throwaway repository with the real journal tail, two branches each appending an entry and a
+`CC-002` table row.
+Reading: with the attribute both merges exit 0 and keep both entries and both rows; without it
+the same merge conflicts (exit 1). Limits seen: both `CC-002` rows kept (duplicate numbers pass
+silently), and the blank line before the second appended entry was dropped (the two hunks shared
+it).
+Decision: as built; the PM checks for duplicate numbers and runs prettier after a merge
+(`designs/process.md` section 1).
+
+### J-9510 2026-11-18 I-2 process time record: scripts/process-time.mjs - good fit, with limits
+Evidence: `node scripts/process-time.mjs <session-dir> --git-range 48d6f3e08b..HEAD` over the PM
+session (10 workflows, 73 agents, 6,438 shell commands, 276 commits) in under 1 s; unit test
+`test/unit/process-time.test.js` (synthetic transcripts, 5 tests).
+Reading: each tool call is the interval from its request to its result; an agent's wall time is
+cut at every timestamp and each piece goes to the highest-priority call in flight, else model
+time, else idle attributed to the background job in flight. Shell commands are sorted by
+patterns (run-lock workload, probe, cargo, install, unit test, lint, git, read, other); polls by
+their own words, then by the background job. The report carries only durations, counts, agent
+labels, workflow names and category names (the test checks that no command text or path leaks).
+Limits: lock wait before `runs.jsonl` is a lower bound (agents polled queued runs); `nohup`
+jobs are attributed only by keywords; "model" includes API latency.
+Decision: as built. `TIMELOG.md` keeps hand-written text outside the generated block; only the
+PM regenerates it, on the merged branch (it is `merge=union`, J-9521, so two lanes regenerating
+it would interleave blocks).
+
+### J-9511 2026-11-18 I-2 where the first 48 hours went - measurement
+Evidence: `TIMELOG.md` generated 2026-11-18 02:20 UTC, build window 2026-11-16 02:04 to
+2026-11-18 02:20 (48.3 h).
+Reading: agent time 66.3 h (1.4 agents busy on average). Run-lock workloads 36.5 h (55 %), model
+18.5 h (28 %), unit tests 3.8 h, probes 3.4 h, edits 1.6 h, idle 1.0 h, cargo 0.6 h, everything
+else under 0.5 h. Some agent was inside a run-lock workload for 33.3 h of wall time (69 %).
+31 commands ran over 30 min (31.9 h), 11 over an hour (18.8 h). Slowest workflows: core-perf
+12.5 h (10.8 h locked), m1b 10.5 h (7.8 h locked). Nothing running: 16 min in eight gaps; PM
+working time 40 min in all. Lock wait measured 10 min (lower bound).
+Decision: poor fit of the process, not of the tool: the build is bound by one serialised lane and
+by fixed-count perf runs that take hours. Biggest savings: rate-per-fixed-time perf checks and
+concurrent lanes.
+
+### J-9500 2026-11-18 I-1 tooling run lock as a machine-wide slot pool - good fit
+Evidence: `scripts/run-lock.mjs`, `test/run-lock-slots.test.js` (13 tests) and
+`test/run-lock.test.js` (17, unchanged assertions): 30 pass in about 11 s, 10 s of it the
+SIGTERM-ignoring workload's SIGKILL grace.
+Reading: the lock lives in `<THIX_HARNESS_HOME>/run-lock/` (`slot`, `slot.1`..`slot.<N-1>`,
+`slot.intent`), N = `THIX_HARNESS_RUN_SLOTS` (4). Shared takers take any free slot; `--exclusive`
+(default for `perf/*.perf.mjs`, also in process when this process's arguments name one) holds an
+intent marker, then every slot under one generation id, and drops the marker once all are held; a
+shared taker that sees a live marker waits, and one that took a slot as the marker appeared gives
+it back. Every file (slot or marker) keeps the old guarantees: hard-linked creation, generation
+nonce, break-token compare-and-delete, taker or workload alive. Re-entry is per slot and checked
+before the marker. `--max-ms` (600,000; `THIX_HARNESS_RUN_MAX_MS`) runs the workload in its own
+process group, SIGTERM then SIGKILL after 10 s, exit 124; one line per exit to `runs.jsonl`
+(O_APPEND, one write). `--lock PATH` is a private one-slot lock (`--slots N` for more).
+Decision: as built. Every taker on the machine must use the same N; a wrapper killed by SIGKILL
+logs nothing (its slot stays held by the workload record, as before).
+
+### J-9501 2026-11-18 I-1 tooling what several processes share inside one worktree - good fit, with fixes
+Evidence: audit of `test/template/index.js`, `scripts/bundle-guest.mjs`, `perf/_harness.mjs`,
+`test/spikes/_spike.js`, `test/_helpers.js`, `test/adapter/*`, `test/fixtures/fake-provider-server.mjs`.
+Reading: unsafe before: (1) two processes building the same template both renamed into `tmp/t<key>`
+after `rm` of it (the second rename fails, or a copy in progress loses its source); (2)
+`removeTemplates` deleted every `tmp/b<pid>`, including a live build; (3) `bundle-guest.mjs`
+wrote `dist-guest/<program>.js` in place (a reader could see half). Fixed: a private build lock
+`tmp/t<key>.build` with a cache re-check after the wait; the old template is renamed aside before
+the new one is renamed in; live build directories are kept; bundles are written aside and renamed.
+Already safe: copies `tmp/<6 random chars>` (cp `errorOnExist`), build dirs `tmp/b<pid>`, perf
+`tmp/pf<pid>` and `tmp/cw<pid>`, spikes `tmp/<tag><pid>`, `scratch()`/`mkdtemp` names, the fake
+provider server on port 0, sockets inside each state directory. No fixed port or socket path found.
+Left: a copy taken while `rebuild: true` (M1A_REBUILD, spike S8) replaces that template still fails.
+Decision: as built; rebuilds stay a by-hand operation.
+
+### J-9502 2026-11-18 I-1 tooling four integration files in four slots - good fit
+Evidence: `m1b-content`, `m1a-slice-crash`, `m1b-exec-tool-restart`, `m1b-pool-restart`, each
+through `run-lock.mjs --max-ms 300000`, worker `367e78ad...`, this lane's worktree, the M2 build
+running alongside (load 3.3-4.5 before). All 7 tests passed in every run.
+Reading: cold concurrent (three templates built at once): 193 s wall (files 172-193 s), load 3.4 ->
+7.0. Warm sequential: 397 s (93-107 s each). Warm concurrent: 130 s (113-130 s each), load 4.7 ->
+6.4 on 16 cores: 3.1x the throughput; each file slows by 15-25 %. No file failed only when
+concurrent. Waits for a slot 17-54 ms.
+Decision: integration files run four at a time; a milestone's integration lane is about a third of
+its serial time.
+
+### J-9530 2026-11-18 I-FIX tooling run-lock review fixes - good fit
+Evidence: `test/run-lock-slots.test.js` (5 new tests), QC findings of 2026-11-18.
+Reading: blocker fixed: start times are read with `TZ=UTC LC_ALL=C`, so `ps -o lstart` is the same
+text in every zone and locale (before: a TZ=UTC holder read as "02:56" and as "16:56" from
+Pacific/Honolulu, and a waiter broke it). New tests: three zones and locales agree; a UTC waiter
+times out on a Honolulu holder instead of breaking it. Also fixed: in-process takers of the
+machine-wide lock log their run on release (exit code null); the CLI ends processes a workload
+leaves in its group before freeing the slot; temporaries of killed writers are removed after a
+minute. Not fixed: the 10-20 ms window between spawn and the workload record (no way to record a
+pid before it exists); in-process takers still have no time box (documented: run them under the
+CLI). Lock suites: 50 tests in 11 s.
+Decision: as built. Old-format records (local-zone start times) exist only from this lane's
+unmerged I-1 code.
+
+### J-9531 2026-11-18 I-FIX tooling test:integration per file, four at once - good fit
+Evidence: `scripts/test-integration.mjs`; `corepack yarn test:integration --jobs 4` on `m1a-slice`,
+`m1a-provision`, `m1b-pool`, `m2-queue`, M2 build running alongside, load 4.2 -> 5.3.
+Reading: the old script put all 23 files under one 10-minute box (killed at 600 s with exit 124;
+serial runtime 35-70 min). Now each file is its own run-lock run (own slot, box, log line). Trial:
+all 10 tests passed, 196 s wall, files 143-196 s, slot waits 17-52 ms; one run-log line per file,
+none from the nested in-process takers. 23 files at four at a time is about 15-20 min of wall time.
+Decision: as built.
+### J-0610 2026-11-18 M4 subscriptions contract - good fit
+Evidence: `designs/m4-interfaces.md` 3, 5 (W4.0); hosted-agent `src/subscription-pool.js`
+(1315bef86) keys its marks and last-served records by member id and session id strings and saves
+them through an `onChange` callback into a store the broker owns.
+Reading: on Thixotrope the same state is a few records in the agent-host manager vat keyed by
+objects: marks per `PoolMember`, last-served records in a `Map<Session, ...>` per pool, a pool is a
+`Backend` exo made from member exos, and a member is made from its `Secret` exo. Nothing needs a
+file format, an id scheme or a lookup; a restart keeps them because the heap is the store. The
+adapter keys the same objects by presence (WeakMaps within an incarnation, as D-7 (d) allows), so
+the only strings left are labels people give, provider model and effort names, base URLs in a
+spec, and the credential's store key between the manager and the adapter.
+Decision: build it this way (W4.1, W4.2).
+
+### J-0611 2026-11-18 M4 guest bundles - perf
+Evidence: `node scripts/bundle-guest.mjs` at `3588cab190` (comments stripped, ASCII):
+`{"program":"session","bytes":186448}`, `{"program":"exec","bytes":84354}`,
+`{"program":"factory","bytes":137074}`.
+Reading: the session program has 13,552 bytes left of its 200,000 budget (D-4) for M3, M4 and
+M5 together. Every line added to `guest/lib/interfaces.js` lands in every bundle, because each
+program imports the whole module even though its tables are lazy.
+Decision: M4's guards, texts and limits live in `guest/lib/{interfaces-m4,texts-m4,limits-m4}.js`,
+which import `interfaces.js` one way and are imported only by the manager vat's part, the
+factory's effort resolver (texts only) and the adapter; M4's only change to `interfaces.js` is the
+`BackendKind` widening (about 30 bytes). For the PM: M3 and M5 should state their session-bundle
+growth; three lanes cannot each assume the 13.5 KB.
+
+### J-0612 2026-11-18 M4 interface extension - awkward
+Evidence: `guest/lib/interfaces.js` builds `SecretsAdmin` and `Secret` inline and keeps the
+method records of extensible interfaces in the module-private `methodsOf`/`foldedMethodsOf`;
+`interfaces-m4.js` (W4.0) copies M2's four `SecretsAdmin` and five `Secret` method guards; a Node
+check at `3588cab190` serialised each pair of method guards (smallcaps) and found all nine equal.
+Reading: a guard cannot be extended from outside the module that builds it, because a guard's
+payload is not reachable from the prelude (`interfaces.js` note on `methodNames`). The M2 pattern
+(`m2Interfaces`, versions with the new methods) works for an interface one milestone extends, and
+breaks when two parallel lanes extend the same one: both would define a full version and the exo
+can use only one.
+Decision: M4 extends only interfaces no other lane extends (`SecretsAdmin`, `Secret`), with W4.1's
+unit test comparing the copied method guards to `interfaces.js`; M4 does not extend
+`AgentHostAdmin` (M3 will, for `serveGateway`). For the PM: exporting the method records of the
+extensible interfaces from `interfaces.js` would let each lane spread `{ ...base, ...own }`.
+
+### J-0613 2026-11-18 M4 pool administration - deviation
+Evidence: architecture 3.1 lists `Operator.getAccounts()` (M4) and 3.3 has `AgentHostAdmin`
+make every Backend; both interfaces are ones M3 or M5 may extend in parallel.
+Reading: pools are administered from `SecretsAdmin.subscriptions()` (D-M4-1); pool Backends are
+minted by `SubscriptionsAdmin.makePool` in the manager vat, not by `AgentHostAdmin.makeBackend`,
+so `BackendSpec` is not widened either (the ops guard admits `PoolSpec` beside it, a Node-side
+edit). `Accounts` is an adapter-local object reached through the same path, so no `Operator`
+method and no gateway service is added; `Session.getAccount` (A.4) becomes the gateway-local
+`Accounts.forSession(session)` (D-M4-3).
+Decision: as designed; owner decision 6 in `m4-interfaces.md` 20.
+
+### J-0614 2026-11-18 M4 reachability check - incompatible
+Evidence: `pkg/src/net/hub.js` `inspect()` reports `publishedOrigins` and `holdings` (origin
+session per held ref, its holders); `packages/thixotrope/bin/thix.js` `reachability()`.
+Reading: M4 acceptance 5 asks that a session and its exec vat reach no `SecretsAdmin`,
+`SubscriptionsAdmin`, `Secret` or `PoolMember`. All of them live in the agent-host manager vat,
+which every session reaches legitimately through its Backend and host facet, so reachability by
+origin cannot tell them apart.
+Decision: core request CC-060 (per-holder rows with the exporter's alleged interface name). Until
+then W4.8 checks the interface closure over the return guards (unit) and the session and exec
+vats' holdings by origin and count (integration) (`m4-interfaces.md` 19).
+
+### J-0615 2026-11-18 M4 credential renewal - good fit
+Evidence: hosted-agent `src/provider-broker.js` (1315bef86) refresh: re-read inside a
+single-flight, write a `pendingRefresh` intent conditioned on the generation read, present the
+refresh token, write the answer conditioned on the intent's generation, fail closed ("credential
+consumed") when an intent is found; M2's store has `replace(key, value, expectedGeneration)`.
+Reading: the reference's write-ahead protocol maps onto M2's Secrets store unchanged, and the
+harness's SIGKILL-the-supervisor tests reach the interesting windows directly (after the intent,
+after the token endpoint answered); the renewal object can hold the accessor of one store key
+only, which fixes W-5 without any capability plumbing.
+Decision: D-M4-8 (fail closed; owner decision 4); kill points K-5 and K-6 in W4.8.
+
+### J-0616 2026-11-18 M4 refusal marks - awkward
+Evidence: `m4-interfaces.md` 5.1, 10; D-3 puts marks and last-served records in the manager vat.
+Reading: the adapter decides a mark in the middle of a round, but the vat is the system of
+record, so each mark costs one manager crank (sendOnly at once) and served stamps are coalesced to
+one per session per 60 s. A SIGKILL between the 429 and that crank loses the mark: the member is
+tried once more at a later round and marked again. This is the rule "vats decide, adapters do"
+bending: the decision is the adapter's, only its record is the vat's.
+Decision: accepted; recorded loss window; perf rows `subscriptions.handover` and
+`subscriptions.servedWrites` hold the cost at one delivery per refusal and at most one per session
+per minute.
+
+### J-0617 2026-11-18 M4 frame bounds of operator views - awkward
+Evidence: `m4-interfaces.md` 1.3: an accounts view of 8 pools x 16 members is about 64 KB, an
+audit page of 1,000 events about 120 KB, a 64-entry catalogue page with full-length labels about
+30 KB; `frameBytes` is 24,576 and one inbound message above about 94 KB halts a vat.
+Reading: operator views that the spec sizes generously do not fit a frame; each must either stay
+out of vats or be cut by bytes. The accounts view and the audit reader are adapter-local (0 vat
+deliveries, browser over WS); the catalogue page is answered by the manager and cut with
+`fitsFrame` before `next`.
+Decision: as designed; the too-big probes of the perf table check each.
+
+### J-0618 2026-11-18 M4 performance method - deviation
+Evidence: the 2026-11-18 rule (no test or perf check over 10 minutes; fixed-window rates and
+latencies, 60 s per point; large states by import; 20 minutes per milestone regression on four
+slots); `perf/pool.perf.mjs` exists (M1b's spare pool, `ls perf/`).
+Reading: M4 has no check that depends on session length; every row in `m4-interfaces.md` 18 is a
+60 s window or a handful of restarts, against fake servers answering in 20 ms. The plan's
+`H/perf/pool.perf.mjs` would have overwritten M1b's spare-pool script.
+Decision: M4's scripts are `perf/subscriptions.perf.mjs` and `perf/secrets.perf.mjs`; the plan's
+`accounts.push` budget is restated as 0 vat deliveries (adapter channel) instead of one factory
+publish.
+
+### J-0619 2026-11-18 M4 spec departures - deviation
+Evidence: `m4-interfaces.md` 20.
+Reading: departures M4 builds on until the owner rules: Codex reset credits shown but never
+redeemed (open decision 8); Claude overload retried before delivery (decision 12); Claude
+context window from the pool spec, default 200,000 (decision 13); `auto` selection only, no
+pinned-only members or shares; secret values are UTF-8 text; `accountStatus` is offered on API
+backends too and reports no subscription accounts there; an interrupted renewal fails closed and
+needs a new sign-in; the brokers' role is the agent-host adapter's (credentials never leave it).
+Decision: recorded; the owner decisions are listed with defaults in `m4-interfaces.md` 20.
+
+### J-0620 2026-11-18 M4 seams follow M3's directory registries - decision
+Evidence: cross-check of the M3, M4 and M5 contracts; M3's `contract-m3.js` (`UiFeature`,
+`GatewayExtension`, `LargeCall`) and its 4.4 / 6.1-6.3.
+Reading: M4 had planned appended entries in `ui/src/features.js` and in a key-guard table list
+(H-9, H-10); M3 collects `ui/src/*/feature.js` files and reads a `vocabularyShapes()` export of each
+`guest/lib/interfaces-m<N>.js`. Without that export every browser call carrying an M4 record key
+would be refused `unexpectedField`.
+Decision: H-9 and H-10 withdrawn. `interfaces-m4.js` exports `vocabularyShapes()` (M4 shapes and
+interface guards; 39 patterns, built in Node). W4.7 adds `ui/src/secrets/feature.js` and
+`ui/src/accounts/feature.js` (panel and chip as an array; the chip moves to
+`ui/src/account-chip/feature.js` if M3's collector takes one feature per file).
+
+### J-0621 2026-11-18 Browser secret writes get a gateway extension and a page-side bound - decision
+Evidence: M3 4.4 rule 3 (frame guard 24,576 bytes unless a registered `LargeCall`); M2
+`secretValueBytes` 1,048,576; `wsMessageBytes` 1,048,576.
+Reading: M4 had no `LargeCall` for `SecretWriter.replace`, so any browser secret over 24,576 bytes
+was refused, and a 1 MiB value cannot fit a 1 MiB WebSocket message with its CapTP envelope.
+Decision: W4.6 adds `AH/gateway/extensions/m4-secrets.js` (`largeCalls` on
+`context.secretWriter()`, method `replace`); `m4Limits.browserSecretBytes` = 1,040,384 (1 MiB less
+8 KiB), measured by the panel on the JSON-escaped value before sending; over it the page refuses
+with `m4Texts.secretTooLargeForBrowser`, which names `scripts/subscription-login.mjs
+--value-file` (new `writeValue`, a sealed box through M2's CLI path). Acceptance 14 probes both
+sides of the bound; acceptance 15 checks neither value reached the hub.
+
+### J-0622 2026-11-18 Accounts viewers evicted when idle; perf files fit 10 minutes - decision
+Evidence: M3 4.5 closes only its `Live` subscriptions at connection close; M2 `channelLimits`
+(32 subscribers); the 2026-11-18 rule (10 minutes per file, fixed windows).
+Reading: abandoned `Accounts.watch()` viewers would fill the channel after about 32 reloads; a
+pending `next()` of a closed page would never count as idle by itself. `subscriptions.perf.mjs`
+held 13 rows and two rows counted runs.
+Decision: a waiting `next()` is answered again after `accountsKeepaliveMs` (30 s), a subscriber with
+no `next()` call for `accountsIdleMs` (60 s) is evicted, and at the cap the oldest idle one is
+evicted before refusing (W4.5 test: 40 abandoned watchers, then a new watch succeeds). The
+keepalive is this lane's addition to the cross-check's rule, needed for an abandoned `next()` to
+turn idle. Perf rows split over `subscriptions` (7 windows, <= 595 s), `secrets` (3) and the new
+`accounts.perf.mjs` (2); `firstOpen` measures restarts over a 150 s window and `catalog.pool` one
+60 s window of (invalidate, cold read, warm read). Pool rounds resolve the system text once with
+`systemTextOf`; CC-060 stores the alleged name once per exported object and is to be done with
+M3's CC-051; the guard-payload technique cites M5's CC-072.
+### J-0710 2026-11-18 M5 object model - good fit
+Evidence: `designs/m5-interfaces.md` 2.1-2.6 (W5.0, commits `2717d05255`, `827ec02c54`);
+`guest/lib/interfaces-m5-factory.js`; Fae `session/preset-catalog.js` at `1315bef86`.
+Reading: presets, inventory entries, endowments, attachments and grants are all objects passed
+where Endo passed names: `createSession({ preset })` takes the `Preset`, edits are the preset's own
+methods, an endowment is `{ label, value }` with the object itself, a mention hands the object
+through the Composer, a grant is `grantTool(tool) -> ToolGrant`. Fae's preset ids, `sourcePath`,
+the `tools/` pet-name directory, the attachment slots it parked objects in, and the dismissal
+bookkeeping of the package message all disappear: the factory's heap holds the records, the
+session's heap the label map, and a package is closed by dropping a `Map`. The only names left
+are F.2's: labels a human or the model reads, the message number, the catalogue revision and
+inventory cursors. Rights amplification (a catalogue `WeakMap` from `Preset` to its record) lets
+the factory's resolvers read a preset synchronously and refuse a foreign object, as
+`SecretWriter` does for secrets.
+Decision: as designed.
+
+### J-0711 2026-11-18 M5 calling objects the session did not mint - awkward
+Evidence: architecture facts 2 and 4 (J-0193, J-0194, J-0191, J-0333); `m5-interfaces.md` D-M5-2;
+Fae `src/source-tools.js`, `src/tools.js` (`discoverTools` calls `schema()` on every stored tool
+each round).
+Reading: M5 is the first milestone where a session holds objects it did not make and is asked to
+call them (`lookup` renders method names, `describeCapability` calls `help()`, `readSources`
+reads, a granted tool's `schema()` and `execute()`). Any answer above about 94 KB halts the vat
+it enters for good, and an answer record with fresh keys drains its name table; the guard runs
+after decoding, so the session vat cannot protect itself. Endo had the same calls inside one
+unconfined worker, where a large answer is only slow. Here the calls move to the session's exec
+vat (`ExecScope.inspect`), which renders and bounds the answer before the session sees it; a
+hostile answer costs at most the exec vat, which the session already knows how to lose and
+replace. Cost: an extra guest hop per inspection (about 2 x 53 ms) and the model's exec bindings
+when an object misbehaves. CC-070 (refuse an oversize frame instead of halting) would remove the
+reason for the detour.
+Decision: D-M5-2; CC-070 and CC-073 filed in the contract (9.2); open decision O-2.
+
+### J-0712 2026-11-18 M5 model code reaching other vats - awkward
+Evidence: `m5-interfaces.md` D-M5-3, 2.7; `guest/exec/main.js` (`makeCall`, J-0391, J-9368).
+Reading: until M5 model code could reach nothing outside its exec vat but `sleep`. With `powers`
+it holds objects of other vats (another session if the operator endowed one, a fixture vat, a
+manager's handles), and one argument above about 94 KB halts the receiving vat, a guest vat that
+may hold a whole session. A per-call membrane in the exec program checks every outgoing message
+(12,288 estimated bytes, 32 keys per record, 256 per message, depth 32) and wraps remotable
+answers; it is built on the call's own `E`, so it dies with the call as `sleep` does (rule 12.13).
+It cannot stop a sequence of small messages with fresh keys from draining another vat's name table
+over many calls (fact 4: names are never released); only the engine can (CC-071, C-6).
+Decision: D-M5-3, open decision O-9; CC-071 filed.
+
+### J-0713 2026-11-18 M5 tool arguments in the session vat - awkward
+Evidence: `lint/guest-rules.js` `no-data-keys` (forbids `JSON.parse` in session and factory code);
+rule 12.10; Fae `store(value, petName)` takes any JSON.
+Reading: `list`, `lookup`, `store`, `remove` belong in the session vat (they read and write its
+label map, and running them there costs no extra delivery: the result is recorded in the
+round-final crank), but their arguments are model JSON, and parsing it mints property names for
+life. `parseClosedArgs` scans the text once, compares every key with the tool's closed schema as a
+string before building anything, decodes string literals by hand, and keeps `store`'s `value` as
+its source text: the stored value is never parsed in the session vat at all (the exec vat parses
+it when model code asks `powers.lookup`). Thixotrope's per-vat name table turns a convenience
+(`JSON.parse`) into a parser we maintain.
+Decision: as designed (W5.3).
+
+### J-0714 2026-11-18 M5 session program budget - perf
+Evidence: `node scripts/bundle-guest.mjs` in the M5 lane at `3588cab190` (comments stripped):
+session 186,448 bytes of `sessionProgramBytes` 200,000 (24 modules), exec 84,354 of
+`execProgramBytes` 100,000, factory 137,074.
+Reading: 13,552 bytes are left in the session program; M5's session-side code (label map, three
+tool modules, packages, grants, the powers source, the session half of the M5 guards) is
+estimated at about 25 KB, and M4's `accountStatus` and M6's tools come later. `interfaces.js`
+alone is a large share of every bundle (every vat carries every guard). The 200 KB bound came from
+cold creation time (about 10 us per staged byte, D-4), which the spare pool hides.
+Decision: open decision O-1 (default: the PM raises the limits to 240,000 / 120,000 at merge if
+the merged lanes exceed them, with the `session.createCold` row; the alternative is splitting
+`interfaces.js` per vat). Factory-only M5 guards were put in their own file so the session bundle
+does not carry them.
+
+### J-0715 2026-11-18 M5 parallel lanes - deviation
+Evidence: `guest/lib/interfaces-m5.js` `extendInterface`, `m5Extensions`; a probe in W5.0 (an
+`M.interface` guard's `payload.methodGuards` spreads into a new `M.interface`, method order
+kept); `m5-interfaces.md` 9.1.
+Reading: M2 extended interfaces by adding `m2Interfaces` to `interfaces.js`. Three lanes doing that
+at once would all edit the same file and the same exo-construction lines. M5's interfaces are
+therefore built in new files from the M2 guards' method guards, and M5's method guards are also
+exported alone, so where M4 and M5 extend one interface (`Operator`, `Session`) the merge is one
+line that spreads both. M5's remaining edits to shared files are listed as hotspots H-1..H-12 with
+the exact seam; the four shape widenings are the only lines M5 adds to `interfaces.js`. The
+reliance on `payload` is pinned by W5.3's contract test and filed as CC-072.
+Decision: as designed; for the PM at the merge of M3, M4 and M5.
+
+### J-0716 2026-11-18 M5 spec deviations - deviation
+Evidence: SPEC R3-6, R3-22, R3-27, R3-31, R4-26, R6-55; Fae `session/preset-catalog.js`,
+`src/tool-makers.js` at `1315bef86`; `m5-interfaces.md` 9.3.
+Reading: (1) the catalogue revision is a count, not Fae's random UUID text (compare-and-set only);
+(2) preset instructions are at most 4,096 units (Fae 32,768) so a preset fits one frame (O-4); (3)
+`store` keeps values of at most 8,192 bytes and 256 KB per session, and the label map holds 256
+labels (O-3; Endo had no bound); (4) granted tool descriptions are cut to 1,024 units and schemas
+limited to 2,048 (R3-27: 16,384 and 1 MiB) so round requests fit a frame (O-6); (5) grants come
+from the Session holder and `adoptTool`, not from model code binding under `tools` (O-12); (6)
+the label map and queue attachments are not exported (O-8); (7) a preset's endowments are
+re-checked at the snapshot's revision and a creation racing an edit fails instead of mixing two
+revisions; (8) duplicate granted names are refused at discovery each round, so both stay refused
+until one is withdrawn (R3-6 as written).
+Decision: defaults as listed, for the owner.
+
+### J-0717 2026-11-18 M5 perf method - perf
+Evidence: the owner's rule of 2026-11-18 (no test or perf file over 10 minutes; a perf check
+measures a rate or latency over a fixed window; large states by import; a milestone's regression
+within 20 minutes on four slots); J-0485 (5,000 turns by import take 652 s).
+Reading: nothing M5 adds grows with session length (labels, grants and packages are bounded
+retained state), so every M5 row runs on a fresh session from the template over a 60 s window,
+and the regression is about 17 minutes on four slots. The M2 rows that still name 5,000-turn
+sessions (`archive.flat`, acceptance 15) do not fit the new rule even by import (652 s); they can
+become per-turn rates over 60 s windows at two lengths reachable within a few minutes (for example
+200 and 1,000 turns) plus the archive's own bounded-retention checks, or wait for a segment-copy
+import (J-0483).
+Decision: M5 as designed; the M2 rows for the PM.
+
+### J-0718 2026-11-18 M5 contract settled against M3 and M4 - deviation
+Evidence: the cross-check of the M3, M4 and M5 contracts (W5.0-settle); M3's `m3-interfaces.md`
+6.2, 6.3, 9.2 and `GW/contract-m3.js` (`UiFeature`, `ComposerAddonProps`, `ComposerSendRequest`,
+`MessageRendererProps`); M4's `m4-interfaces.md` 3.2, 9.3, 9.4, 15; `m5-interfaces.md` 4.1, 4.2,
+9.1.
+Reading: M5 had planned entries in a UI hook table and a key-guard registry that M3 does not
+offer, a composer extension shape M3 does not have, `m4Extensions` spreads for methods M4 does not
+add, and an `accountStatus` tool-table entry M4 does not make. Settled as M3 and M4 designed: the
+UI is two new directories (`ui/src/presets/feature.js`, `ui/src/mentions/feature.js`, the latter
+an array of the `composer.addon` and the `message.renderer` chips); both M5 interface files export
+`vocabularyShapes()`; the gateway is a pass-through bridge, so M5 drops its "undeclared interface
+refused" requirement; the new-session preset picker is M3's (it reads `Preset.describe()`); H-2
+and H-4 lose their M4 half; M5 edits no M3 file. `makeProvision` forwards no step options at
+`3588cab190`, which all three lanes' gated steps need: a two-line seam, made once (9.1 H-10).
+Decision: applied in the contract and the M5 section of milestones; the forwarding seam for the PM.
+
+### J-0719 2026-11-18 M5 mentions on resend - awkward
+Evidence: M3 9.2 (exactly-once drafts keep `{ sessionKey, text, requestId }` only); M5 2.6 (the
+receipt fingerprint covers text and labels); presences do not survive a page reload.
+Reading: a draft resent after a reconnect would have dropped its attachments and so changed its
+fingerprint. M3's resend now goes through the same addon chain with `resend: true`, only after
+`getSubmissionReceipt(requestId)` answered none. The mention addon keeps chips in memory by
+`requestId` and the labels it inserted for the draft's life; a resend with the chips sends the
+same fingerprint, and a resend whose chips a reload lost throws `texts.attachmentsLost`, which
+keeps the draft and asks the person to attach again. Nothing is sent without its objects.
+Decision: as described (`m5-interfaces.md` 4.1 item 2).
+
+### J-0720 2026-11-18 M5 preset record frame margin - perf
+Evidence: a W5.0-settle measurement in Node of a maximal guard-accepted `PresetRecord` (three-byte
+text, 32 endowments, smallcaps encoding): 33,095 bytes with 16 template objects and description
+1,000; 31,595 with description 500; 24,316 with no template objects and description 500. String
+content (`messageBytes`) without template objects: 23,107 bytes three-byte, 7,979 ASCII.
+Reading: the W5.0 estimate (about 24,200 bytes) left out the model id (256 units), the effort,
+the template objects and the keys; the per-field bounds alone cannot keep a preset within a
+frame. The cross-check's fix (description 1,000 -> 500 units, the editor refusing above
+`frameBytes` - 2,048) is applied, and the same bound is made a whole-record rule:
+`limitsM5.presetRecordBytes` = 22,528 string content bytes, checked with `fitsFrame` by the
+editor and by `normalizePresetRecord` (`texts.presetTooLarge`, reworded to fit both uses). An
+ASCII preset at every field bound passes; a three-byte one must trim about 600 bytes. W5.1's
+guard-boundary test pins both.
+Decision: as described; for the PM, since it goes one step past the cross-check's wording.
+
+### J-0721 2026-11-18 M5 granted names and adapter tools - deviation
+Evidence: M4 3.2 and D-M5-9 (`accountStatus` offered through `TurnPorts.tools` on pool and API
+backends); `m5-interfaces.md` 2.5.
+Reading: a grant named like an adapter tool would have been offered beside it under one name. The
+built-in name set of a round is now the static tool table plus the names of that round's
+`active.ports.tools`, so a grant can be refused-builtin on one backend's rounds and offered on
+another's. W5.6 tests a grant named `accountStatus` on both kinds of ports.
+Decision: as described.
+
+### J-0722 2026-11-18 M5 perf files and windows - perf
+Evidence: the owner's rule of 2026-11-18; the cross-check's perf findings; `m5-interfaces.md` 8.2.
+Reading: `grants.round` and `labels.full` had no owning file and two rows counted runs. Now every
+row names its file and owner: `tools` (W5.3, a `rows` hook table with one row each appended by
+W5.5 and W5.6), `exec-m5` (W5.5), `presets` (W5.1), `mentions` (W5.7) and a new `creation-m5`
+(W5.9: `prompt.compose` as compositions over 10 s and creations over a 120 s window,
+`session.createCold` as cold creations over a 120 s window, bundle bytes). Comparisons alternate
+both sides inside one window, and each probe has a cap, so every file is at most about 5.5
+minutes and the regression at most 69 slot-minutes (about 17 minutes on four slots).
+Decision: as described.

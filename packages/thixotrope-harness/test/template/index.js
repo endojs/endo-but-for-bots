@@ -33,7 +33,14 @@
  * digest and the state is refused), the supervisor's WORKSPACE_VERSION, the
  * crank budget, TEMPLATE_VERSION and the caller's provisioning `id`. A
  * template whose key no longer matches is simply not found and a new one is
- * built; `removeTemplates()` deletes all of them.
+ * built; `removeTemplates()` deletes all of them (but not a live process's
+ * build directory).
+ *
+ * Several test processes may share one worktree (run-lock slots): a build
+ * holds the private lock `tmp/t<key>.build`, and a process that waited on it
+ * finds the template cached. A finished build appears with one rename, and
+ * a rebuild moves the old template aside before it is deleted. Every copy
+ * and build directory has its own name (`tmp/<6 chars>`, `tmp/b<pid>`).
  *
  * The supervisor runs in a child process (`scripts/serve.mjs`
  * `spawnSupervisorChild`: the environment allowlist, and a pipe that stops
@@ -59,7 +66,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import url from 'node:url';
 
 import { limits } from '../../config/defaults.js';
-import { acquireRunLock } from '../../scripts/run-lock.mjs';
+import { acquireRunLock, isProcessAlive } from '../../scripts/run-lock.mjs';
 import { readServeRecord, spawnSupervisorChild } from '../../scripts/serve.mjs';
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
@@ -368,11 +375,39 @@ export const ensureTemplate = async ({
   const key = await templateKey({ crankBudget, id });
   const dir = path.join(tmpRoot, `t${key}`);
   await mkdir(tmpRoot, { recursive: true, mode: 0o700 });
-  if (!rebuild) {
-    const record = await readServeRecord(dir).catch(() => undefined);
-    if (record?.status === 'clean')
+  const cached = async () =>
+    (await readServeRecord(dir).catch(() => undefined))?.status === 'clean';
+  if (!rebuild && (await cached()))
+    return { dir, key, id, crankBudget, built: false };
+  // Several test processes in one worktree may want the same template: one
+  // builds it, the others wait here and then find it cached.
+  const buildLock = await acquireRunLock({
+    lockPath: path.join(tmpRoot, `t${key}.build`),
+    slots: 1,
+    mode: 'shared',
+    env: {},
+    label: `template ${id}`,
+  });
+  try {
+    if (!rebuild && (await cached()))
       return { dir, key, id, crankBudget, built: false };
+    return await buildTemplate({ dir, key, id, provision, crankBudget });
+  } finally {
+    await buildLock.release();
   }
+};
+
+/**
+ * Build a template into `dir` (the caller holds the template's build lock).
+ * @param {object} options
+ * @param {string} options.dir
+ * @param {string} options.key
+ * @param {string} options.id
+ * @param {((context: ProvisionContext) => Promise<void>) | undefined} options.provision
+ * @param {bigint} options.crankBudget
+ * @returns {Promise<Template>}
+ */
+const buildTemplate = async ({ dir, key, id, provision, crankBudget }) => {
   const building = path.join(tmpRoot, `b${process.pid % 100_000}`);
   await rm(building, { recursive: true, force: true });
   await mkdir(building, { recursive: true, mode: 0o700 });
@@ -418,8 +453,16 @@ export const ensureTemplate = async ({
     for (const name of ['control.sock', 'peers.sock'])
       // eslint-disable-next-line no-await-in-loop
       await rm(path.join(building, name), { force: true });
-    await rm(dir, { recursive: true, force: true });
+    // Never delete a template in place: move the old one aside first, so
+    // the new one appears in one rename. A copy being taken from the old one
+    // at this moment fails (rebuild only on request: M1A_REBUILD, spike S8).
+    const old = path.join(tmpRoot, shortName('x'));
+    const moved = await rename(dir, old).then(
+      () => true,
+      () => false,
+    );
     await rename(building, dir);
+    if (moved) await rm(old, { recursive: true, force: true });
   } catch (error) {
     await supervisor.kill();
     if (!process.env.KEEP_STATE)
@@ -632,7 +675,13 @@ export const removeTemplates = async () => {
   const names = await readdir(tmpRoot).catch(() => []);
   const removed = [];
   for (const name of names) {
-    if (/^t[0-9a-f]{10}$/.test(name) || /^b[0-9]+$/.test(name)) {
+    // A build directory is `b<pid>`: leave a live process's build alone.
+    const building = /^b([0-9]+)$/.exec(name);
+    const live =
+      building !== null &&
+      Number(building[1]) !== process.pid % 100_000 &&
+      isProcessAlive(Number(building[1]));
+    if (!live && (/^t[0-9a-f]{10}$/.test(name) || building)) {
       const dir = path.join(tmpRoot, name);
       // eslint-disable-next-line no-await-in-loop
       const info = await stat(dir).catch(() => undefined);

@@ -1,3 +1,8 @@
 * text=auto eol=lf
 *.snap binary
 *.agar binary
+# Append-only logs of packages/thixotrope-harness: every lane appends to
+# them, so merges keep both sides' lines (designs/process.md section 1).
+packages/thixotrope-harness/JOURNAL.md merge=union
+packages/thixotrope-harness/CORE-CHANGES.md merge=union
+packages/thixotrope-harness/TIMELOG.md merge=union

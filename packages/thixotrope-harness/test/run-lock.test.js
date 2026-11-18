@@ -2,7 +2,14 @@
 import test from '@endo/ses-ava/test.js';
 
 import { execFile, spawn } from 'node:child_process';
-import { readFile, readdir, stat, utimes, writeFile } from 'node:fs/promises';
+import {
+  readFile,
+  readdir,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -17,6 +24,8 @@ import {
 import { harnessRoot, scratch } from './_helpers.js';
 
 const runLockScript = path.join(harnessRoot, 'scripts', 'run-lock.mjs');
+// The CLI's run log goes here, never to the machine's real one.
+const testHome = path.join(harnessRoot, 'tmp', `rlh${process.pid}`);
 const takerScript = path.join(
   harnessRoot,
   'test',
@@ -41,11 +50,20 @@ const runCli = (args, env = {}) =>
     const child = execFile(
       process.execPath,
       [runLockScript, ...args],
-      { env: { ...process.env, [RUN_LOCK_ENV]: '', ...env } },
+      {
+        env: {
+          ...process.env,
+          [RUN_LOCK_ENV]: '',
+          THIX_HARNESS_HOME: testHome,
+          ...env,
+        },
+      },
       (_error, _stdout, stderr) =>
         resolve({ code: child.exitCode, stderr: String(stderr) }),
     );
   });
+
+test.after.always(() => rm(testHome, { recursive: true, force: true }));
 
 test('two CLI takers serialise: one command runs at a time', async t => {
   const dir = await scratch(t, 'rl');
@@ -320,7 +338,10 @@ test('the CLI records the workload; killing the wrapper leaves the lock held unt
   const wrapper = spawn(
     process.execPath,
     [runLockScript, '--lock', lockPath, '--', process.execPath, '-e', body],
-    { stdio: 'ignore', env: { ...process.env, [RUN_LOCK_ENV]: '' } },
+    {
+      stdio: 'ignore',
+      env: { ...process.env, [RUN_LOCK_ENV]: '', THIX_HARNESS_HOME: testHome },
+    },
   );
   t.true(
     await waitFor(async () => {
