@@ -13717,3 +13717,42 @@ architecture 3.4's `stdin?: Blob` dropped); the shell tool texts for an unknown 
 cancel and a stop on a session without a shell are the harness's own.
 Decision: as listed; owner questions O-3, O-4, O-6, O-10 in the contract.
 Fit: neutral.
+
+### J-1310 2026-11-18 W11.0 cost of carrying 85 ms PCM blocks - measure
+Evidence: a scratch probe outside the tree (no supervisor, no vat), Node 22.23, `@endo/init` and
+the guest prelude, load 2.0-2.5. (a) 2,720-byte binary frames (85 ms of 16 kHz s16le) echoed
+through M3's `GW/server.js` `makeGatewayServer` (`onSocket` on `/ws`) by a Node `WebSocket`
+client, 10 s window: round trip median 0.055 ms, p95 0.063, p99 0.075, n 177,638; the server's
+`send` 0.003 ms. (b) the same block as base64 inside a JSON record, encode and decode: 0.009 ms
+median, 3,653 bytes (34 % over the raw block). (c) one JSON line with the base64 block through a
+Node child's stdin and its reply line, 10 s: median 0.022 ms (lines may coalesce; read as under
+0.05 ms). (d) spawn of a Node child to its first stdout line: median 20.5 ms, p95 24.5, n 20.
+Reading: the harness side of an audio block costs well under 0.1 ms; the M11 budgets derive from
+these (`speech.audioForward` <= 1 ms, `speech.partialRelay` <= 2 ms, `speech.engineRespawn`
+<= 100 ms). Real engine latencies were not measured (no engine, no credentials; owner rows).
+Fit: good: audio needs no vat and costs the adapter almost nothing per block.
+
+### J-1311 2026-11-18 W11.0 the M11 contract - decision
+Evidence: `designs/m11-interfaces.md` (`dc591b715f`) and its files: `AH/speech/audio-protocol.js`,
+`engine-protocol.js`, `engine-types.js`, `guest/lib/voice-preferences.js`,
+`guest/lib/speech-guards.js`, `ui/src/voice/endpointing-defaults.js`, `texts.js` (`c7e57d0031`,
+`e219e26315`). Read: architecture, milestones conventions and M11, process, m3-m5 contracts as
+built, arch-review harness.md 1-5 and 8, core.md, step3-plan.md (cleanup lane), spec section 5,
+A.5 and the R items M11 cites, Endo voice sources at `1315bef86`.
+Decisions (D-M11-1..20): audio is adapter-only; no manager change (speech settings with
+`ReadGrant`s in the factory's `Voice`, read through the gateway's `Operator`); one binary `/audio`
+socket per page bound by a one-time token, streams opened by guarded CapTP calls; the speech view
+is an in-process `Live` subscriber (no channel tap); engine kinds `process` (Moonshine, Piper) and
+`openai-audio` (key via grant), all acceptance against fakes, fake speech server on loopback; no
+session part; timeouts and backpressure on every stream; spoken prompt only for voice-started
+sessions; replay per turn. Seams H1-H11, of which H2, H5, H7 are provisional until step 3 merges.
+`speech-guards.js` exports builders, not tables, so the zero-skip vocabulary test stays green until
+W11.5 lists it (checked: 3 tests pass). No core request (CC-120..CC-129 unused).
+Fit: good: the only vat traffic M11 adds is a handful of factory calls per page and launch.
+
+### J-1312 2026-11-18 W11.0 time record - process
+Time: first command 22:51:35Z; contract committed 23:18Z. Over 60 s: none (the probe 21 s, tsc
+2 s, lint and prettier under 30 s each). Not run: any supervisor, integration test, perf check or
+cargo. tsc and eslint clean on the new files; `lint:duplicates` 3.07 % under the 3.25 % ceiling
+(the other contract writers' new files included).
+Fit: neutral.
