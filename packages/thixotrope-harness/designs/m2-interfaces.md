@@ -999,10 +999,20 @@ state; no test reads a real key file.
 - `SecretsAdmin.create({ label, description })` -> `Secret` (generation 0, no value: a read fails
   `READ_FAILED` until the first `replace`). Description 1-200 characters, no newline
   (`INVALID_DESCRIPTION`).
-- `SecretWriter.replace(secret, value | SealedBox, expectedGeneration?) -> { generation }`
-  (adapter-local; the gateway calls it in process, the CLI with a box sealed to `publicKey()`
-  (X25519 + AES-256-GCM, `AH/secrets/seal.js`), so the hub carries ciphertext only). The writer
-  maps `secret` to its key by amplification (`sink.resolveSecrets`, never a public key or id). A
+- `SecretWriter.replace(secret, SealedBox, expectedGeneration?) -> { generation }`
+  (adapter-local, reachable through the hub as `SecretsAdmin.openWriter()`): it takes only a box
+  sealed to `publicKey()` (X25519 + AES-256-GCM, `AH/secrets/seal.js`), so the hub carries
+  ciphertext only. **As changed by XA (2026-11-18, the open M2 major of M2-R1 (b)):** the exo guard
+  is `replace: M.callWhen(R('Secret'), S.SealedBox).optional(count)`; a plain string from any
+  caller is refused by the guard before the method runs and nothing is written (the refusal text
+  is the pattern library's, which quotes the refused string back to its sender). The plain-value
+  path is in process only: `makeSecretsOps(...).replaceLocal(secret, value | SealedBox,
+  expectedGeneration?)` (and `publicKeyLocal()`), a function of the adapter that no remotable
+  exposes and no ops handler forwards. `AH/index.js` hands it to the gateway, whose gateway-local
+  `GatewaySecretWriter` (guard `AH/secrets/writer.js` `localWriterGuard`: `replace(Secret,
+  SecretValue | SealedBox, count?)`, `publicKey()`) calls it with a value a page sent over its
+  WebSocket (m3-interfaces A-11). Both paths map `secret` to its key by amplification
+  (`sink.resolveSecrets`, never a public key or id). A
   stale `expectedGeneration` fails `GENERATION_CONFLICT`; a revoked secret `REVOKED`; a value
   over 1 MiB `INVALID_SECRET_BYTES`; a provider token over 8,192 bytes (`limits.providerTokenBytes`)
   is refused by the provider at read with `INVALID_SECRET_BYTES`, before any request, and the
@@ -1015,11 +1025,19 @@ state; no test reads a real key file.
   `textOf.secretFailed('REVOKED')` (acceptance 7: the recorded reason contains no provider body).
 - `Secret.revoke()`, `delete()` (after revoke), `describe()`, `audit(limit?)`;
   `SecretsAdmin.audit(limit?)` over all secrets (newest first, at most 100 per answer).
+- An audit event's `op` is one of `create`, `read`, `replace`, `revoke`, `delete` and (XA, M4's
+  `Secret.setDescription`, J-9662 item 9) `setDescription`: the store audits a description change
+  `attempted`, then `succeeded` or `failed` with its code (`INVALID_DESCRIPTION`,
+  `UNKNOWN_SECRET`); the event carries the label, never the description text.
 - Every read is audited `attempted` then `succeeded` or `failed` with a code (R7-24); errors are
   `textOf.secretFailed(code)` with a code of `secretCodes`, never bytes.
 - Adapters never log tool arguments, results or secret values (W-13). Acceptance 7 greps the state
   directory (heaps, journals, hub image and log, blobs, archive, `secrets.enc`'s plaintext never
-  written) for the test value and finds nothing.
+  written) for the test value and finds nothing. Since XA it also proves the two paths: a
+  plain-string `replace` from a hub client is refused by the guard (generation unchanged), and a
+  value a page wrote through the gateway's in-process writer is found nowhere under the state
+  directory after the clean stop (`test/integration/m2-secrets.test.js`; adapter level:
+  `test/adapter/m2-secret-writer-paths.test.js`).
 
 ---
 

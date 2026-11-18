@@ -273,7 +273,8 @@ given to CapTP's `dispatch` (captp's `capdata` body format: `@qclass` encodings 
    hold a per-connection object (rule 12.7), and the gateway has no use for page callbacks.
 3. **Frame guard.** `Buffer.byteLength(method.body)` must be at most `frameBytes`, unless the
    target is a `LargeCall` local object and the method is one of its `methods` (M3: the
-   Composer's `submit`, `edit`; M4 may add `SecretWriter.replace`); then only `wsMessageBytes`
+   Composer's `submit`, `edit`; M4 adds the gateway's in-process secret writer's `replace`,
+   A-11); then only `wsMessageBytes`
    holds. Refusal: `messageTooLarge` (architecture 7).
 4. **Key guard.** Walking the body's JSON to depth `argumentDepth` (32; deeper: `tooDeep`), every
    key of every plain object that is not a `@qclass` encoding must be in the **vocabulary** (6.3):
@@ -328,6 +329,17 @@ target and the connection stays open. Results flow back unchecked (they come fro
 - More than `exportsPerConnection` (4,096) live exports on one connection: closed with
   `closeCodes.tooManyObjects`; the page rebuilds (9.2). The UI keeps at most the visible session's
   pages and the list, so this is a leak detector, not a working limit.
+- Answers (XA): captp keeps one answer per page question until the page drops it (`CTP_DROP` of
+  `q-n`, sent when the question's promise is collected), and the bridge mirrors that table (rule
+  1 targets, duplicate ids). Both are bounded by `answersPerConnection` (4,096, `gatewayLimits`):
+  when a new question would exceed it, the oldest **settled** answer is forgotten on both sides
+  (the bridge dispatches to the gateway's captp the `CTP_DROP` the page would have sent, so the
+  answer and its payload are released). A well-behaved long-lived page is never closed for it; a
+  later call pipelined on a forgotten answer is refused `notSignedIn` (rule 1). Only when every
+  kept answer is still unsettled is the connection closed with `closeCodes.tooManyObjects`.
+  `stats()` of a connection reports `answers`, `answersPeak`, `answersEvicted`, and the
+  `gateway-connection-closed` log line carries the last two. Measured with `perf/gateway.perf.mjs`
+  (the client's held questions per 60 s window, J-10008).
 - When a connection closes (either side, or the adapter stops it): captp `abort`, every
   subscription its `Live` facade opened is closed, its exports are dropped. Nothing is cancelled
   in any vat: closing a page never stops a turn (R6-49).
@@ -390,11 +402,20 @@ verifies each):
   uses, which is `m2Interfaces.AgentHostAdmin` before the fold and `interfaces.AgentHostAdmin`
   after. Either is an `M.interface` with `payload.methodGuards` (CC-072).
 - A-11. A presence the hub returns for one of the adapter's own exports resolves to the local
-  object (`pkg/src/net/hub.js:804-812`, architecture 7). So the `SecretWriter` a page obtains with
-  `E(secretsAdmin).openWriter()` is the adapter's own exo, and a page's `replace(secret, value)`
-  is dispatched in the agent-host process without crossing the hub (J-0440's condition for a
-  browser path). W3.8 checks it by grepping the hub image and log for a test value written from a
-  client (M4's acceptance repeats it for the Secrets view).
+  object (`pkg/src/net/hub.js:804-812`, architecture 7). **Superseded for the writer by XA
+  (2026-11-18):** the hub-reachable `SecretWriter` (`E(secretsAdmin).openWriter()`) takes a
+  `SealedBox` only (m2-interfaces 9.2), so a plain value can never travel through the hub in
+  clear. A page writes through the gateway's own in-process writer instead: one gateway-local
+  exo per incarnation (`GatewaySecretWriter`: `replace(secret, value | SealedBox,
+  expectedGeneration?)`, `publicKey()`), made by `GW/index.js` over M2's `replaceLocal`, offered
+  first in every page's `GatewayPowers.extras` under `secretWriterLabel` (`'secretWriter'`,
+  `contract-m3.js`) and answered by `GatewayContext.secretWriter()`, so M4's
+  `GW/extensions/m4-secrets.js` `LargeCall` target is the object a page calls. The value goes from
+  the page's WebSocket to the store in the agent-host process (J-0440's condition for a browser
+  path); before the attach the writer's methods reject (`notAttachedText`). Checked by
+  `m2-secrets.test.js` (the state grep after a page's write) and
+  `test/adapter/m2-secret-writer-paths.test.js`; acceptance 16 checks that the context's writer is
+  the page's extras writer and not the hub's.
 
 ---
 
