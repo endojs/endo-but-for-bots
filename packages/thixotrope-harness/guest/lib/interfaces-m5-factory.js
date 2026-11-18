@@ -105,6 +105,12 @@ export const texts = harden({
   /** The preset was saved between the creation's snapshot and its grant. */
   presetChanged:
     'The preset changed while the session was being created; try again',
+  /**
+   * The new session's `make` argument (config with the snapshot, services
+   * with the endowments) would not fit one frame (rule 12.5).
+   */
+  presetTooLarge:
+    "This preset is too large for a new session's configuration; shorten its labels or remove objects",
   /** `Inventory.add` with `maxInventoryEntries` entries. */
   inventoryFull: 'The inventory is full',
   /** An inventory entry after `remove()`. */

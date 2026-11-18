@@ -145,14 +145,19 @@ export const reservedLabels = harden([
 ]);
 /** `ExecPowersSource` methods the exec wrapper exposes as `powers`. */
 export const powersMethodNames = harden(['lookup', 'list', 'store', 'remove']);
-/** `ExecScope.inspect` operations (D-M5-2). */
+/**
+ * `ExecScope.inspect` operations (D-M5-2): `methods` (`__getMethodNames__`,
+ * for `lookup`), `describe` (`describeCapability`: method names and
+ * `help(method?)`), `readSources` (`SourceReader.read` per item),
+ * `toolSchema` (a granted tool's `schema()`, checked and projected to a
+ * `ToolDescription`), `toolExecute` (a granted tool's `execute(args)`).
+ */
 export const inspectOps = harden([
   'methods',
   'describe',
   'readSources',
   'toolSchema',
   'toolExecute',
-  'toolHelp',
 ]);
 /** States of a tool grant (`ToolGrantInfo.state`). */
 export const grantStates = harden([
