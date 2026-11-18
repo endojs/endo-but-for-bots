@@ -8684,3 +8684,71 @@ Evidence: `spike-data-references.md` 7. Reading: Thixotrope is a control plane w
 identity; data-heavy services need a byte store beside it, with identity in the hub. The obstacles
 are C-1 and C-2 (and C-5 for reads), not the protocol or the engine. In Node "zero copy" means
 zero copies inside the object system: two kernel copies between processes.
+
+### J-9445 2026-11-18 M2 review: archive validation deletes an acknowledged segment - defect
+Evidence: review M2-R2 of 6be8e868cf; `AH/archive/store.js` `observeNow` (orphan rule) and
+`stateOf` (LRU of 64 session states); a Node probe over the real store, blob store and context
+cache with the fake vat of `test/adapter/_m2-archive-vat.js` (not committed):
+(A) incarnation 1 answers seal 2, incarnation 2 then observes the vat's state from before crank Z,
+then Z applies the answer: `{"before":2,"after":1,"applied":true,"prepare":"could not archive turns: segment 2 is missing"}`;
+(B) one incarnation, `maxSessions: 1` standing for 65 busy sessions: seal 2 acknowledged, the
+session's in-memory state evicted, a history page answered before Z observed afterwards:
+`{"before":2,"after":1,"vatSegments":2,"prepare":"could not archive turns: segment 2 is missing"}`.
+Reading: validation deletes every segment file not on the chain of the state it is given, except
+one answered in this incarnation (`answered`). It ignores a state older than `st.validated`, but
+`st.validated` is memory only: it is lost when the session's state is evicted (B) and at a restart
+(A). The manifest's `acknowledged` flag, which says the vat already named the file, is not
+consulted. (B) needs no crash; (A) needs a request with the older state to reach the new
+incarnation before the committed answer reaches the vat, which J-0493 (3) assumes cannot happen
+(the vat's inbound order) and acceptance 16 does not exercise (its turns run one at a time and a
+kill at A3 does not control where the answer is). In both, the vat then drops records whose only
+copy was deleted. Neither the store's header nor `m2-interfaces.md` 4.5/4.7 states the ordering
+assumption. Second deletion path: `scanSegments` unlinks any `seg-*.jsonl` whose read throws, so a
+transient read error (EMFILE, EIO) or a damaged acknowledged segment is deleted instead of kept;
+a final-named segment only exists after fsync and rename, so "half-written" cannot be the cause.
+Decision: fix before M2 is marked done: (1) never delete a file whose manifest entry is
+acknowledged or that forward-chains from the given state (ordinal > `state.segments`, previous
+links to `state.digest`); delete only files that conflict with the chain at an ordinal <=
+`state.segments`; (2) treat a state as stale when the manifest's acknowledged prefix already
+extends past it with the same digest at `state.segments`; (3) in `scanSegments` delete only
+`.part` and `.tmp`, rename an unverifiable segment to `.bad` and let a read error propagate;
+(4) a regression test of (A) and (B) as above.
+
+### J-9446 2026-11-18 M2 review: correctness findings besides the archive orphan rule - deviation
+Evidence: review M2-R2 of 6be8e868cf (code read; unit and adapter lanes run).
+Reading: (1) Export of a session with a turn running writes that turn without a `TurnSettled`;
+`importTurns` keeps its info `running` with no current turn, so it never settles, and once it is the
+oldest kept turn `rangeOf` stops at it: the imported session never seals again (a hostile export
+with a `TurnSettled` outside its turn's span does the same). (2) `scripts/export.mjs importState`
+returns success on an export truncated at a line boundary: the last session has no `end`, stays
+unlisted and importing until the next daemon start, then is deleted. (3) An export of a busy
+session fails with `texts.recordsSealed` when a seal lands between its head and its records pages.
+(4) `importState` still accepts an `archive` part (`adopt`) that no importer sends; a fabricated
+`ArchiveState` makes every later round fail with `archiveFailed`. (5) A delete racing a session's
+first seal: `releaseArchive` can run before the seal reaches the adapter, which then re-creates the
+directory (segment and manifest naming released blobs): a leak after delete. (6) Receipts: 4,096
+live receipts in 24 h refuse the next submission (`receiptLimit`), a rate cap against R4-53/R4-98
+("bounds what is held"). (7) Send-now never cancels the running turn; R6-44 says send-now on the
+queue head cancels the running turn so it goes next (J-0456 (1) put this to the owner). (8) Every
+enqueue republishes the whole pending view (J-0454); R4-61 asks one diff per change. (9) A
+cancelled round's usage is dropped (`roundFinal`/`roundFailed` ignored once `cancelling`).
+(10) `export.js` `stagedIn` reimplements `staging.js` `blobsOf`. (11) Delete step 2 skips to step 3
+on any `blobPage` error, not only the retired text, leaking the rest of the live tail's blobs.
+Decision: fixes proposed in the M2-R2 report; (1), (2) and J-9445 before M2 is marked done.
+
+### J-9447 2026-11-18 M2 review: what was verified, and fit - fit
+Evidence: `corepack yarn test test/unit/m2-*.test.js test/adapter/m2-archive-store.test.js
+test/adapter/m2-archive-kill.test.js test/adapter/m2-queue-composer.test.js
+test/adapter/m2-w26-turns.test.js` at 6be8e868cf: 139 tests passed, 61.6 s wall (load from three
+other lanes); no supervisor run. `checkpoint.stall` (J-9408): the window marks a turn
+`snapshotted` only on every tenth turn, so the measurement cannot place a snapshot on its turn and
+records no per-turn index; the only once-per-window event in the loop is the switch to Composer
+turns (i = W - 50 + 1).
+Reading: good fit: intent before effect plus "durable before drop" gives the seal a short crank
+table, and ordinal cursors keep history exactly-once across seals without any coordination.
+Awkward fit: the vat is the system of record but the adapter decides what to delete from a
+possibly stale view of it; transient adapter memory (`answered`, `validated`) carries a safety
+rule, which an orthogonally persistent vat would keep for free and a Node process loses at every
+restart and eviction. Deletion should follow only from a persistent fact (the vat's acknowledged
+chain recorded in the manifest), never from memory.
+Decision: recorded; the stall row needs per-turn indexes and engine deltas before it is split.
