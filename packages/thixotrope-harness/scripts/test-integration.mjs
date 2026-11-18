@@ -8,7 +8,7 @@
  * box, and the suite takes far longer than that run serially. Here each file
  * is its own `run-lock.mjs --label "integration <file>" -- ses-ava -- --serial
  * <file>` run: the box applies per file, every file has its own run-log line,
- * and up to `--jobs` files (default THIX_HARNESS_RUN_SLOTS, 4) run at once,
+ * and up to `--jobs` files (default THIX_HARNESS_RUN_SLOTS, 6) run at once,
  * each in a slot of its own. A file's output is printed in one piece when it
  * ends; a summary of exit codes and times comes last.
  *
