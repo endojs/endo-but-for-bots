@@ -164,9 +164,11 @@ test('endowments seed the label map; the object tools run in the issuing crank',
     services: { endowments: [{ label: 'notes', value: notes }] },
   });
   await s.submit('hi');
+  // W5.7's `adopt` is a session-site entry too; the inspecting tools need
+  // an exec vat (none here).
   t.deepEqual(
     s.last().tools.map((/** @type {any} */ d) => d.name),
-    ['list', 'lookup', 'store', 'remove'],
+    ['list', 'lookup', 'store', 'remove', 'adopt'],
   );
   s.answer([
     { name: 'store', args: '{"value":{"n":1},"petName":"x"}' },
@@ -412,7 +414,8 @@ test('systemTextOf joins a two-part system, each part read as before', async t =
 });
 
 test('Session (M5 guard): grants and enqueueMessageOnce throw notBuilt until their parts exist, then forward', async t => {
-  const s = await makeM5Session();
+  // With no part registered (the merged table registers both).
+  const s = await makeM5Session({ sessionOptions: { parts: harden([]) } });
   t.throws(() => s.session.grants(), { message: textOf.notBuilt('grants') });
   const attachments = harden([{ label: 'notes', value: Far('Notes', {}) }]);
   t.throws(

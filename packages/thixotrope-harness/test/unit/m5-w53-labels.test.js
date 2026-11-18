@@ -308,9 +308,21 @@ test('object tool sites and descriptions', t => {
     t.notThrows(() => JSON.parse(d.parameters));
     t.true(d.description.length <= limits.toolDescriptionUnits);
   }
+  // W5.5 and W5.7 append their entries after W5.3's (hook table H-5).
   t.deepEqual(
     toolTable.map(e => e.name),
-    ['echo', 'exec', 'list', 'lookup', 'store', 'remove'],
+    [
+      'echo',
+      'exec',
+      'list',
+      'lookup',
+      'store',
+      'remove',
+      'describeCapability',
+      'readSources',
+      'adopt',
+      'adoptTool',
+    ],
   );
 });
 
@@ -353,7 +365,7 @@ test('toolSetFor: dynamic sources after the table; built-in and duplicate names 
   const set = toolSetFor(portsWith, toolTable, {}, harden([source]));
   t.deepEqual(
     set.descriptions.map((/** @type {any} */ d) => d.name),
-    ['list', 'lookup', 'store', 'remove', 'echo2'],
+    ['list', 'lookup', 'store', 'remove', 'adopt', 'echo2'],
   );
   t.deepEqual(
     log.map(([name, state]) => [name, state]),
@@ -377,7 +389,19 @@ test('toolSetFor: dynamic sources after the table; built-in and duplicate names 
   );
   t.deepEqual(
     [...builtInToolNames(portsWith)],
-    ['echo', 'exec', 'list', 'lookup', 'store', 'remove', 'accountStatus'],
+    [
+      'echo',
+      'exec',
+      'list',
+      'lookup',
+      'store',
+      'remove',
+      'describeCapability',
+      'readSources',
+      'adopt',
+      'adoptTool',
+      'accountStatus',
+    ],
   );
   // The runtime reaches the source.
   const runtime = harden({ marker: 1 });
