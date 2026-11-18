@@ -14183,3 +14183,68 @@ time; one guard-table load probe (seconds), eslint, prettier and `tsc` (under 2 
 any supervisor, integration test, perf check or cargo. No other contract edited. Build units use
 journal ranges the PM assigns; J-0817..J-0829 stay with the contract.
 Fit: neutral.
+
+### J-1115 2026-11-18 W9.0 settle: what the M9 contract was aligned against - read
+Evidence: the cross-check WX.0 (J-1410..J-1417, issues X-01..X-17); `arch-review/step3-plan.md`
+at `53a8dbb9ea` (present; read in full); the step-3 code as built in the cleanup lane at
+`e5edbed850`: `guest/session/runtime-parts.js` (`PartName`, `requiredParts`, getters,
+`combineHooks`), `turn.js` `claim(input, at, take, item)` and `claimNext`, `session.js` (the fence,
+`inCrank`, `SessionInternal`, `makeSessionExport` call), `export.js` (`extras`, `blobPage`, the
+`queue` page and `importState`), `label-seeds.js`, `tool-table.js` (`site` on every entry),
+`packages.js`, `guest/factory/factory.js` (`makeDeletions` before `create`, `recover` with
+`starts.next()`), `delete.js` (`hooks` parameter, `{ row, session }`), `starts.js`,
+`subscription-options.js`, `guards/session.js` (`SessionExportPage`, `importChunkView`).
+Reading: the built `claim` already takes `take` and `combineHooks.nextTurn` passes the answer
+through, so the two runner changes are two lines of `claimNext` (WX.1's). The built delete hooks
+take the table as a parameter, so `delete.js` needs no edit; `deletions` is made before `create`,
+so the subagents hook closes over `subagents` late. The export page guards admit a closed list of
+parts, so the inbox page needs one shared guard line (S9b). In the harness the subscription
+selector of R4-70 is the pool Backend object itself.
+Fit: good.
+
+### J-1116 2026-11-18 W9.0 settle: the session-side size of M9's tables - measure
+Evidence: a Node probe with `bundle-guest.mjs` `stripComments` and indentation dropped (removed
+after the run); the tables loaded under `@endo/init` and the guest prelude, every shape and
+interface built (44 entries), both method-guard spreads valid, an `InboxExportMessage` checked and
+a `definition` one refused.
+Reading: `guards/mail.js` 8,746 bytes before; the factory-only entries (drafts, answers, the
+subagent list: 713 bytes; the post office's, mailbox's and tree's texts: 1,505 bytes) moved to
+`guards/post-office.js`, which the session program never imports: 6,270; with the export shape and
+the `imported` text added at the settle: 6,698. `mail-limits.js` 910 with `postInFlightBytes`.
+Decision: M9's share 32,768 (7,608 measured + 23,300 estimated from peer modules, rounded up);
+default asked of the owner: `sessionProgramBytes` 270,336 for the four lanes (commits
+`aa28cb219a`, `c05e0d566b`).
+Fit: good.
+
+### J-1117 2026-11-18 W9.0 settle: cross-check issues applied to the M9 contract - decision
+Evidence: `designs/m9-interfaces.md` status table "Cross-check issues", D-M9-18, -19, -21..-24,
+sections 3, 5, 6, 7, 8, 9, 10, 12, 13, 14.
+Reading: X-01 share re-derived and the limit left to the owner (O-M9-8). X-02/X-03 every shared
+guard line and both runner lines moved to WX.1 (section 6.2: S2, S2b, S9, S9b, S10, F6, V1, G1,
+L1, C1); M9 units refuse to make them. X-04 part and tool order fixed, `environment` used. X-05
+`delete.js` untouched, hooks passed by the kit, children first. X-07 the inbox is an export page,
+imported messages kept and read-only (D-M9-21, KM14, acceptance 21). X-08 asks on the shared call
+table. X-10 `starts` passed; `getMail` kept. X-12 subscription selector inherited through the
+Backend (acceptance 7); the two cross-lane items listed for WX.F (8.2). X-13 `inboxCrank` p95 550
+ms, `throughput` >= 3/s with turns and inboxes under their bound, `hubGrowth` from a 120 s window.
+X-14 gate rows apart; `mail-restart` split into `-delivery` and `-turn` (each under 4 minutes).
+X-15 CC-110 recorded as C-10, CC-111 routed to core step 3. X-16 the label lookup imported, the
+in-flight envelopes bounded by 4 MiB. X-17 M9 merges last of the four, then W9.F, then WX.F.
+Not applied here: the M11 text `getInbox` and the Talk question (M11's and the owner's).
+Fit: good.
+
+### J-1118 2026-11-18 W9.0 settle: work units re-read - decision
+Evidence: `designs/m9-interfaces.md` section 7.
+Reading: group A (W9.1..W9.7) own disjoint new files plus `AH/blobs.js` (W9.6) and
+`guest/exec/inspect.js` (W9.7); group B splits the session seams (W9.8) from the factory seams
+(W9.9); W9.10 owns only new test and perf files; W9.F after the merge. Every unit waits for WX.1
+and the PM's program cap. Build units' journal ranges: "PM assigns" (inside J-1100..J-1199);
+J-1110..J-1129 stay with this contract unit.
+Fit: neutral.
+
+### J-1119 2026-11-18 W9.0 settle: time record - process
+Evidence: first command 2026-11-18T23:40:38Z; last command logged with the W9.0 settle report.
+Reading: commits `aa28cb219a` (guards moved, in-flight bytes), `c05e0d566b` (contract and export
+shape) and this journal commit. Over 60 s: none (probes, tsc, eslint and prettier each under 60 s).
+Not run: any supervisor, integration test, perf check or cargo. No other contract edited.
+Fit: neutral.
