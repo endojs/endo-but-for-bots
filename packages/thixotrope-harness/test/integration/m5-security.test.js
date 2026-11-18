@@ -19,6 +19,7 @@ import '../unit/_m1a-prelude.js';
 import test from 'ava';
 
 import { E } from '@endo/far';
+import { FRAME_TOO_LARGE } from '@endo/thixotrope';
 
 /* eslint-disable import/no-relative-packages */
 import { textOf } from '../../guest/lib/interfaces.js';
@@ -144,7 +145,13 @@ run('acceptance 10: the membrane and untrusted answers', async t => {
   const [answer] = await resultsOf(big.turn);
   const terminated =
     answer[0] === textOf.errorResult(textsM5.inspectTerminated) && answer[1];
-  if (!terminated) {
+  // Since core CC-027 the hub refuses the 300 KB answer's frame toward the exec
+  // vat (over THIXOTROPE_VAT_FRAME_BYTES) before the vat decodes it: the
+  // exec vat's call breaks with FRAME_TOO_LARGE and the tool answers that
+  // error. Also no halt (J-10124).
+  const refused =
+    answer[0] === textOf.errorResult(FRAME_TOO_LARGE) && answer[1];
+  if (!terminated && !refused) {
     t.false(answer[1], JSON.stringify(answer).slice(0, 300));
     t.true(isStaged(answer[0]), 'the cut answer is staged');
     t.true(Number(answer[0].bytes) <= 3 * limits.toolOutputUnits);
@@ -152,8 +159,12 @@ run('acceptance 10: the membrane and untrusted answers', async t => {
   }
   emit({
     metric: 'm5.security.bigGrantedAnswer',
-    outcome: terminated ? 'inspectTerminated' : 'staged',
-    bytes: terminated ? undefined : answer[0].bytes,
+    outcome: terminated
+      ? 'inspectTerminated'
+      : refused
+        ? 'hubRefused'
+        : 'staged',
+    bytes: terminated || refused ? undefined : answer[0].bytes,
     ...identity,
   });
 
