@@ -385,21 +385,27 @@ test('pending-queue alone: toHead keeps the others in order; take records the tu
   t.is(pending.receiptCount(), 4);
 });
 
-test('a receipt table that is full of live ids refuses with the A.4 text', t => {
+test('a receipt table full of live ids evicts its oldest; a retry of an evicted id is refused, never run twice (J-9492)', t => {
   const { queue } = counted();
-  for (let i = 0; i < limits.maxReceipts; i += 1) {
+  const first = rid(NOW);
+  queue.enqueueOnce(sub('m0'), first, NOW);
+  claimHead(queue, 't1');
+  for (let i = 1; i < limits.maxReceipts; i += 1) {
     queue.enqueueOnce(sub(`m${i}`), rid(NOW + i), NOW + i);
     claimHead(queue, `t${i + 1}`);
   }
-  t.throws(
-    () =>
-      queue.enqueueOnce(
-        sub('one more'),
-        rid(NOW + limits.maxReceipts),
-        NOW + limits.maxReceipts,
-      ),
-    { message: texts.receiptLimit },
+  const more = queue.enqueueOnce(
+    sub('one more'),
+    rid(NOW + limits.maxReceipts),
+    NOW + limits.maxReceipts,
   );
+  t.true(more.added, 'R4-98 bounds what is kept, not what is sent');
+  t.is(queue.receiptFor(first), undefined);
+  t.throws(
+    () => queue.enqueueOnce(sub('m0'), first, NOW + limits.maxReceipts),
+    { message: texts.requestIdExpired },
+  );
+  claimHead(queue, 't-more');
   // 24 h after the first: its receipt has expired and the next is accepted.
   const later = NOW + limits.retryWindowMs;
   t.true(queue.enqueueOnce(sub('next day'), rid(later), later).added);

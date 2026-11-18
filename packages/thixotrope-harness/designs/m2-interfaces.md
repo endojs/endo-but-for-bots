@@ -704,8 +704,13 @@ Contract 8 holds. M2 adds, on `QueueEntry` (`m2Interfaces.QueueEntry`; A.4 `edit
   head cancels the running turn so it goes next"; PM rulings 5 and 9, J-9491) and the entry is
   claimed when the cancelled turn settles. An entry no longer waiting throws `texts.entryGone`.
 
-Bounds unchanged: 100 waiting (`textOf.queueFull`), receipts 4,096 kept 24 h (J-9391 records the
-rate cap; the PM rules on it), request ids per A.4.
+Bounds: 100 waiting (`textOf.queueFull`); request ids per A.4. Receipts: at most 4,096 kept, each
+at most 24 h (R4-98 "4096 receipts kept"). The bound is on what is kept, not on what is sent (PM
+ruling 6, J-9492; it was a refusal, a rate cap of 4,096 submissions per 24 h, J-9391): when the
+table is full, the oldest inserted receipt is evicted, and the session keeps one number, the latest
+issue time of an evicted receipt; an unknown request id issued at or before it is refused with
+`texts.requestIdExpired`, so a retry whose receipt was evicted is never run twice.
+`texts.receiptLimit` is no longer used.
 
 ### 5.2 Holds
 
@@ -1289,7 +1294,8 @@ missing `sendNow` could not be made on the M2 guard; `textOf.notBuilt` answered 
    retries [inferred]" (R4-77) and G-04's missing timeout (deviation, J-0403).
 9. **Prompt exec paragraph** (10): rewritten for the persistent scope in M2, not M5 (deviation,
    J-0403).
-10. **Open for the PM:** the 4,096-receipt rate cap (J-9391) is unchanged; the archive's per-session
+10. **Open for the PM:** the 4,096-receipt rate cap (J-9391; replaced by eviction, ruling 6,
+    J-9492); the archive's per-session
     ceiling of 131,072 turns (4,096 segments; sealing stops beyond it); whether R4-106's `[default]`
     values should be re-stated as 128/32 in the architecture; the adapter-side growth of
     per-round projection and provider request with session length until M8 (4.13); a `lost`

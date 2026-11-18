@@ -184,6 +184,13 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
   const waiting = new Set();
   /** @type {Map<string, StoredReceipt>} */
   const receipts = new Map();
+  /**
+   * The latest issue time of a receipt evicted to bound the table (R4-98
+   * "4096 receipts kept"; PM ruling 6, J-9492): an id issued at or before
+   * it is refused as expired, so a retry whose receipt is gone is never
+   * taken as new.
+   */
+  let evictedIssued = 0;
   let nextKey = 1;
   /** @type {any} */
   let goneEntry;
@@ -226,10 +233,11 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
   };
 
   /**
-   * The request id is checked, a duplicate answered, then the bounds: the
-   * receipt table (4,096 in the 24 h window) and the waiting entries (100).
-   * Every refusal precedes the first write (the Composer deletes a staged
-   * file the session refused, `composer.js` `isRefusal`).
+   * The request id is checked, a duplicate answered, then the bound on the
+   * waiting entries (100). Every refusal precedes the first write (the
+   * Composer deletes a staged file the session refused, `composer.js`
+   * `isRefusal`). The receipt table keeps at most 4,096: past it the
+   * oldest inserted receipts are evicted, never a submission refused.
    * @param {Submission} submission
    * @param {string} requestId
    * @param {number} at
@@ -248,9 +256,16 @@ export const makePendingQueue = ({ makeEntry, onChange = () => {} }) => {
       return { stored: known, added: false };
     }
     prune(at);
-    receipts.size < limits.maxReceipts || refuse(texts.receiptLimit);
+    issued > evictedIssued || refuse(texts.requestIdExpired);
     waiting.size < limits.maxWaiting ||
       refuse(textOf.queueFull(limits.maxWaiting));
+    while (receipts.size >= limits.maxReceipts) {
+      const oldest = /** @type {StoredReceipt} */ (
+        receipts.values().next().value
+      );
+      receipts.delete(oldest.requestId);
+      if (oldest.issued > evictedIssued) evictedIssued = oldest.issued;
+    }
 
     const key = `q${nextKey}`;
     nextKey += 1;
