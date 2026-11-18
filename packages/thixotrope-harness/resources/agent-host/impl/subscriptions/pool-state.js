@@ -9,7 +9,13 @@
  *   lazily at the pool's first use. The answer is cached; a rejected load
  *   (a retired break: the manager restarted, or the adapter is between
  *   sinks) is forgotten, so the next `load()` asks again; a new sink (the
- *   adapter re-attached to a restarted manager) is asked again too.
+ *   adapter re-attached to a restarted manager) is asked again too. An
+ *   answer older than `stateRefreshMs` is asked again at the next `load()`
+ *   (M4-FIX: the manager retires pools and members without telling the
+ *   adapter, so a retirement reaches the rounds within this bound; one
+ *   manager crank per pool per bound while the pool is used, none while it
+ *   is idle). A failed re-ask keeps the answer it had; a retired pool's
+ *   answer is final.
  * - `record(change)`: marks are sent **at once** (`E.sendOnly(sink)
  *   .poolChanged`, one manager crank per refusal, never more than one per
  *   member per round: the core reports a mark only when it changes), with
@@ -38,10 +44,15 @@ import { m4Limits } from '../../../../guest/lib/limits-m4.js';
  * @typedef {object} BridgeSettings
  * @property {number} servedFlushMs served stamps are sent at most this often
  *   per pool (`subscriptionDefaults.servedFlushMs`, 1,000)
+ * @property {number} stateRefreshMs a loaded `PoolState` is asked again
+ *   when older (`subscriptionDefaults.poolStateRefreshMs`, 30,000; 0: never)
  */
 
 /** @type {BridgeSettings} */
-export const bridgeSettingsDefaults = harden({ servedFlushMs: 1000 });
+export const bridgeSettingsDefaults = harden({
+  servedFlushMs: 1000,
+  stateRefreshMs: 30_000,
+});
 
 /**
  * @template T
@@ -80,13 +91,27 @@ harden(initialFromPoolState);
  * @param {any} options.backend the pool's `Backend` presence
  * @param {import('../timers.js').Timers} options.timers
  * @param {Partial<BridgeSettings>} [options.settings]
+ * @param {() => number} [options.now]
  * @returns {PoolStateBridge & { pending: () => number }}
  */
-export const makePoolStateBridge = ({ sink, backend, timers, settings }) => {
-  const { servedFlushMs } = { ...bridgeSettingsDefaults, ...settings };
+export const makePoolStateBridge = ({
+  sink,
+  backend,
+  timers,
+  settings,
+  now = () => Date.now(),
+}) => {
+  const { servedFlushMs, stateRefreshMs } = {
+    ...bridgeSettingsDefaults,
+    ...settings,
+  };
   const sinkNow = () => (typeof sink === 'function' ? sink() : sink);
 
-  /** @type {{ sink: any, promise: Promise<any> } | undefined} */
+  /**
+   * The current load: its sink, its promise, and once answered the answer
+   * and when it was asked.
+   * @type {{ sink: any, promise: Promise<any>, at: number, state?: any } | undefined}
+   */
   let loaded;
   /**
    * Served stamps waiting, latest per session.
@@ -132,14 +157,44 @@ export const makePoolStateBridge = ({ sink, backend, timers, settings }) => {
   return harden({
     load: () => {
       const target = sinkNow();
-      if (loaded !== undefined && loaded.sink === target) return loaded.promise;
+      if (loaded !== undefined && loaded.sink === target) {
+        const known = loaded;
+        if (
+          known.state === undefined ||
+          known.state.state === 'retired' ||
+          !(stateRefreshMs > 0) ||
+          now() - known.at < stateRefreshMs
+        )
+          return known.promise;
+        // Stale: ask again; until answered, concurrent loads share the ask;
+        // a failed ask keeps the old answer (and waits another bound).
+        const kept = known.state;
+        const promise = E(target)
+          .poolState(backend)
+          .then(
+            state => {
+              const fresh = harden(state);
+              if (loaded === entry) entry.state = fresh;
+              return fresh;
+            },
+            () => kept,
+          );
+        const entry = { sink: target, promise, at: now(), state: kept };
+        loaded = entry;
+        return promise;
+      }
       if (target === undefined) {
         return Promise.reject(Error('No agent-host sink'));
       }
       const promise = E(target)
         .poolState(backend)
-        .then(state => harden(state));
-      const entry = { sink: target, promise };
+        .then(state => {
+          const answer = harden(state);
+          if (loaded === entry) entry.state = answer;
+          return answer;
+        });
+      /** @type {{ sink: any, promise: Promise<any>, at: number, state?: any }} */
+      const entry = { sink: target, promise, at: now() };
       loaded = entry;
       promise.catch(() => {
         if (loaded === entry) loaded = undefined;

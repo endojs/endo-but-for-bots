@@ -123,9 +123,15 @@ const setup = async (t, { kind, settings = {}, tokens, defaults }) => {
     }),
   );
   const backend = Far('Backend', {});
+  // What the fake manager answers; tests retire the pool or members here.
+  const status = { pool: 'active', retired: new Set() };
   const fake = makeFakeSink(() => ({
-    state: 'active',
-    members: entries,
+    state: status.pool,
+    members: entries.map(entry =>
+      status.retired.has(entry.member)
+        ? harden({ ...entry, state: 'retired' })
+        : entry,
+    ),
     served: [],
   }));
   const subscriptions = makeSubscriptions({
@@ -190,6 +196,7 @@ const setup = async (t, { kind, settings = {}, tokens, defaults }) => {
     backend,
     spec,
     fake,
+    status,
     subscriptions,
     round,
     inference,
@@ -452,4 +459,36 @@ test('an unreadable credential marks the member unusable and the next serves; a 
   t.teardown(refused.cleanup);
   t.is(refused.failures[0]?.reason, m4Texts.retired);
   t.is(s.inference().length, 1, 'nothing sent for the retired pool');
+});
+
+test('M4-FIX: a member or pool retired in the manager stops serving once the loaded state is older than poolStateRefreshMs', async t => {
+  const s = await setup(t, {
+    kind: 'claude-pool',
+    settings: { poolStateRefreshMs: 20 },
+  });
+  const wait = (/** @type {number} */ ms) =>
+    new Promise(resolve => setTimeout(resolve, ms));
+  s.server.setPlan([{ sse: 'claude-text.sse' }, { sse: 'claude-text.sse' }]);
+  const first = await s.round();
+  t.is(first.failures.length, 0, JSON.stringify(first.failures));
+  const servedFirst = s.inference()[0];
+  t.is(s.fake.loads(), 1);
+  // The serving member is retired in the manager (PoolMember.retire).
+  s.status.retired.add(s.members[servedFirst]);
+  await wait(30);
+  const second = await s.round();
+  t.is(second.failures.length, 0, JSON.stringify(second.failures));
+  t.is(s.fake.loads(), 2, 'the stale state was asked again');
+  t.not(s.inference()[1], servedFirst, 'the retired member is not selected');
+  // The pool is retired (SubscriptionsAdmin.retirePool): the next round fails.
+  s.status.pool = 'retired';
+  await wait(30);
+  const third = await s.round();
+  t.is(third.failures[0]?.reason, m4Texts.retired);
+  t.is(s.inference().length, 2, 'nothing sent for the retired pool');
+  t.is(s.fake.loads(), 3);
+  // A retired answer is final: no more asks.
+  await wait(30);
+  await s.round();
+  t.is(s.fake.loads(), 3);
 });

@@ -127,6 +127,62 @@ test('load asks the manager once per incarnation and a retired break reloads', a
   t.is(initial.served[0].session, session);
 });
 
+test('M4-FIX: a load older than stateRefreshMs is asked again; a failed ask keeps it; retired is final', async t => {
+  const a = member('A');
+  let state = harden({ state: 'active', members: [a], served: [] });
+  let failNext = false;
+  let loads = 0;
+  const sink = Far('AgentHostSink', {
+    poolState: async () => {
+      loads += 1;
+      if (failNext) {
+        failNext = false;
+        throw Error(RETIRED);
+      }
+      return state;
+    },
+    poolChanged: () => {},
+  });
+  let clock = NOW;
+  const bridge = makePoolStateBridge({
+    sink,
+    backend: Far('Backend', {}),
+    timers: makeFakeTimers().timers,
+    now: () => clock,
+    settings: { stateRefreshMs: 30_000 },
+  });
+  const first = await bridge.load();
+  clock += 29_999;
+  t.is(await bridge.load(), first, 'within the bound: cached');
+  t.is(loads, 1);
+  // The member is retired in the manager; the next load past the bound sees it.
+  state = harden({
+    state: 'active',
+    members: [{ ...a, state: 'retired' }],
+    served: [],
+  });
+  clock += 1;
+  const [x, y] = await Promise.all([bridge.load(), bridge.load()]);
+  t.is(x, y, 'concurrent loads share one ask');
+  t.is(loads, 2);
+  t.is(x.members[0].state, 'retired');
+  // A failed ask keeps what it had and waits another bound.
+  clock += 30_000;
+  failNext = true;
+  t.is(await bridge.load(), x, 'failed ask: the old answer');
+  t.is(loads, 3);
+  t.is(await bridge.load(), x);
+  t.is(loads, 3, 'no ask until the bound passes again');
+  // The pool is retired: that answer is final, never asked again.
+  state = harden({ state: 'retired', members: [], served: [] });
+  clock += 30_000;
+  const retired = await bridge.load();
+  t.is(retired.state, 'retired');
+  clock += 300_000;
+  t.is(await bridge.load(), retired);
+  t.is(loads, 4);
+});
+
 test('a new sink (manager restarted, adapter re-attached) is asked again', async t => {
   const state = harden({ state: 'active', members: [], served: [] });
   const first = makeFakeSink({ state });

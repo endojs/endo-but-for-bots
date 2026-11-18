@@ -189,7 +189,11 @@ export const makeSubscriptions = ({
         sink: sinkNow,
         backend,
         timers,
-        settings: { servedFlushMs: settings.servedFlushMs },
+        now,
+        settings: {
+          servedFlushMs: settings.servedFlushMs,
+          stateRefreshMs: settings.poolStateRefreshMs,
+        },
       }),
       loaded: undefined,
       state: 'active',
@@ -226,8 +230,23 @@ export const makeSubscriptions = ({
   };
 
   /**
+   * Whether two loads name the same members in the same states.
+   * @param {readonly MemberEntry[]} before
+   * @param {readonly MemberEntry[]} after
+   */
+  const sameMembers = (before, after) =>
+    before.length === after.length &&
+    before.every(
+      (entry, index) =>
+        entry.member === after[index].member &&
+        entry.state === after[index].state,
+    );
+
+  /**
    * The pool, loaded: its members, state and core (one `poolState` per
-   * incarnation; a failed load is asked again next time).
+   * incarnation, asked again when older than `poolStateRefreshMs` so a
+   * retirement reaches the rounds (M4-FIX); a failed load is asked again
+   * next time).
    * @param {any} backend
    * @param {any} spec
    */
@@ -235,6 +254,10 @@ export const makeSubscriptions = ({
     const pool = recordOf(backend, spec);
     const loaded = await pool.bridge.load();
     if (pool.loaded !== loaded) {
+      const unchanged =
+        pool.loaded !== undefined &&
+        pool.state === loaded.state &&
+        sameMembers(pool.members, loaded.members);
       pool.loaded = loaded;
       pool.state = loaded.state;
       pool.members = loaded.members;
@@ -256,11 +279,12 @@ export const makeSubscriptions = ({
           settings,
         });
       }
-      accounts.register(backend, {
-        kind: pool.spec.kind,
-        label: pool.spec.label,
-        members: loaded.members,
-      });
+      if (!unchanged)
+        accounts.register(backend, {
+          kind: pool.spec.kind,
+          label: pool.spec.label,
+          members: loaded.members,
+        });
     }
     return pool;
   };

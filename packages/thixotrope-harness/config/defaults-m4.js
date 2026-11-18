@@ -20,6 +20,11 @@ export const subscriptionDefaults = Object.freeze({
   servedStampMs: 60_000,
   /** 5.1: served stamps of one pool are sent at most this often. */
   servedFlushMs: 1000,
+  /**
+   * 3.1 (M4-FIX): a pool's `poolState` is asked again at its next use when
+   * older than this, so a retired pool or member stops serving within it.
+   */
+  poolStateRefreshMs: 30_000,
   /** R4-103: the first undated refusal pause, doubled while refusals come in a row. */
   backoffStartMs: 60_000,
   /** R4-103: the longest undated refusal pause. */
