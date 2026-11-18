@@ -191,7 +191,9 @@ const valueBecomes = async (locator, value) => {
       const factory = await E(operator).getFactory();
       const sessions = await E(factory).listSessions({});
       const key = sessions.rows[0].key;
-      const requestId = `${'0'.repeat(31)}1`;
+      // M2's A.4 form (guest/lib/pending-queue.js REQUEST_ID), as the page
+      // makes it: a 32-hex id is refused by a real session.
+      const requestId = `${Date.now()}-00000000-0000-4000-8000-000000000001`;
       await page.evaluate(
         ([sessionKey, id]) => {
           globalThis.localStorage.setItem(
