@@ -182,7 +182,7 @@ harden(builtInToolNames);
  * @param {readonly ToolTableEntry[]} [table]
  * @param {any} [services] SessionServices (M1b: `available(ports, services)`)
  * @param {readonly ToolSource[]} [sources] M5 dynamic sources
- * @param {any} [runtime] M5 session runtime (`m5-parts.js`)
+ * @param {any} [runtime] M5 session runtime (`runtime-parts.js`)
  */
 export const toolSetFor = (
   ports,

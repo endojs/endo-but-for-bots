@@ -13,7 +13,7 @@
  */
 import { h } from 'preact';
 
-import { uiTexts } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+import { uiTexts } from '../../../resources/agent-host/impl/gateway/protocol.js';
 import { labels } from './labels.js';
 import { ConversationSlot } from './slots.js';
 import { StatusRow } from './StatusRow.js';
@@ -27,7 +27,7 @@ import {
   turnContent,
 } from './transcript.js';
 
-/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 /** @param {{ phase: string }} props */
 export const ThinkingRow = ({ phase }) =>

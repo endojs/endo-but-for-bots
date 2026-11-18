@@ -13,7 +13,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { accountsFeed } from './feed.js';
 import { accountBlocked, accountRows } from './labels.js';
 
-/** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 /** The panel's own words (harness texts). */
 export const subscriptionsTexts = harden({

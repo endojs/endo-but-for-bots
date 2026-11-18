@@ -16,7 +16,7 @@
  *     shows the audit, revokes and deletes after the revoke. Size probe: a
  *     value of 1,040,382 ASCII letters (`browserSecretBytes` JSON-escaped)
  *     is written from the page through the gateway's large-call writer
- *     (`GW/extensions/m4-secrets.js`) and the catalogue shows its bytes and a
+ *     (`GW/extensions/secrets.js`) and the catalogue shows its bytes and a
  *     new generation; one letter more is refused in the page with
  *     `m4Texts.secretTooLargeForBrowser` and no frame is sent. No value
  *     appears in the DOM or in any frame from the gateway.
@@ -42,7 +42,7 @@ import { E } from '@endo/far';
 
 import { m4Limits } from '../../guest/lib/limits-m4.js';
 import { m4Texts } from '../../guest/lib/texts-m4.js';
-import { gatewayTexts } from '../../resources/agent-host/impl/gateway/contract-m3.js';
+import { gatewayTexts } from '../../resources/agent-host/impl/gateway/protocol.js';
 import { sealTo } from '../../resources/agent-host/impl/secrets/seal.js';
 import { startFakeOAuthServer } from '../fixtures/fake-oauth-server.mjs';
 import {

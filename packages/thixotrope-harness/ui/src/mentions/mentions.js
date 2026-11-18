@@ -352,7 +352,7 @@ export const makeMentions = ({ storage: storageOf = defaultStorage } = {}) => {
   /**
    * `UiFeature.send` (m3-interfaces.md 9.2; m5-interfaces.md 4.1 item 2).
    *
-   * @param {import('../../../resources/agent-host/impl/gateway/contract-m3.js').ComposerSendRequest} request
+   * @param {import('../../../resources/agent-host/impl/gateway/protocol.js').ComposerSendRequest} request
    * @returns {Promise<any> | undefined}
    */
   const send = ({ context, session, text, requestId, resend }) => {
@@ -408,7 +408,7 @@ export const makeMentions = ({ storage: storageOf = defaultStorage } = {}) => {
    * The composer addon: the suggestion list while a mention is typed and
    * the chips the next message will carry.
    *
-   * @param {import('../../../resources/agent-host/impl/gateway/contract-m3.js').ComposerAddonProps} props
+   * @param {import('../../../resources/agent-host/impl/gateway/protocol.js').ComposerAddonProps} props
    */
   const MentionAddon = ({ context, input, replaceRange }) => {
     const [, setTick] = useState(0);
@@ -602,7 +602,7 @@ export const makeMentions = ({ storage: storageOf = defaultStorage } = {}) => {
    * The transcript's attachment chips (`message.renderer`): one "Attached
    * object" chip per label of the turn's `TurnStarted.attachments`.
    *
-   * @param {import('../../../resources/agent-host/impl/gateway/contract-m3.js').MessageRendererProps} props
+   * @param {import('../../../resources/agent-host/impl/gateway/protocol.js').MessageRendererProps} props
    */
   const AttachmentChips = ({ record }) => {
     const labels = attachmentLabels(record);

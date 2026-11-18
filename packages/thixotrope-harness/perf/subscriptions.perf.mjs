@@ -61,7 +61,8 @@ const { exhaustedEntry } =
   await import('../test/fixtures/fake-subscription-server.mjs');
 const { makePoolCore } =
   await import('../resources/agent-host/impl/subscriptions/pool.js');
-const { subscriptionDefaults } = await import('../config/defaults-m4.js');
+const { subscriptionDefaults } =
+  await import('../config/subscription-defaults.js');
 const { bundleGuest } = await import('../scripts/bundle-guest.mjs');
 const { agentHostDirectory, execEntry, factoryEntry, guestRoot, sessionEntry } =
   await import('../scripts/provision-steps.js');

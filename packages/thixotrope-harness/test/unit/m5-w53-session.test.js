@@ -21,7 +21,7 @@ import { shapes, textOf } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeQueue } from '../../guest/session/queue.js';
-import { m5Parts } from '../../guest/session/m5-parts.js';
+import { runtimeParts } from '../../guest/session/runtime-parts.js';
 import { makeSession } from '../../guest/session/session.js';
 import { toolTable } from '../../guest/session/tool-table.js';
 import { turnHooks } from '../../guest/session/turn-hooks.js';
@@ -422,7 +422,7 @@ test('Session (M5 guard): a runtime without one of its four parts is refused at 
       message: 'no runtime part powers',
     },
   );
-  const withoutGrants = m5Parts.filter(part => part.name !== 'grants');
+  const withoutGrants = runtimeParts.filter(part => part.name !== 'grants');
   await t.throwsAsync(
     makeM5Session({ sessionOptions: { parts: harden(withoutGrants) } }),
     { message: 'no runtime part grants' },
@@ -442,7 +442,7 @@ test('Session (M5 guard): a runtime without one of its four parts is refused at 
   /** @type {any[]} */
   const calls = [];
   const parts = harden([
-    ...m5Parts.filter(
+    ...runtimeParts.filter(
       part => part.name !== 'grants' && part.name !== 'packages',
     ),
     { name: 'grants', make: () => harden({ facet }) },

@@ -47,7 +47,7 @@
  */
 
 /**
- * The selection settings, as `config/defaults-m4.js` `subscriptionDefaults`
+ * The selection settings, as `config/subscription-defaults.js` `subscriptionDefaults`
  * (W4.1) names them; equal values. A caller passes `subscriptionDefaults` (or
  * a test's shorter times) as `settings`; anything left out falls back here.
  *

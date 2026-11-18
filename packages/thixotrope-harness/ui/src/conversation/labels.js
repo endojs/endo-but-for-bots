@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Texts of the conversation views that `contract-m3.js` `uiTexts` does not
+ * Texts of the conversation views that `protocol.js` `uiTexts` does not
  * fix (W3.6). The R6 texts the contract fixes (`uiTexts`, `uiTextOf`) are
  * used from there; these are Floot's own words at `1315bef86` where it had
  * them, and plain labels otherwise.

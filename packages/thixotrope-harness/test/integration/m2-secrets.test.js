@@ -65,7 +65,7 @@ import {
 import { makeSlice, requestId, sliceTemplate, waitFor } from './_m1a-slice.js';
 import { grepState, makeTestSecretValue } from './_m2-secrets.js';
 import { serveGateway } from './_m3-gateway.js';
-import { secretWriterLabel } from '../../resources/agent-host/impl/gateway/contract-m3.js';
+import { secretWriterLabel } from '../../resources/agent-host/impl/gateway/protocol.js';
 
 takeIntegrationLock(test, 'm2 secrets test');
 

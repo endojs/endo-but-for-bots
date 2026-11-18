@@ -11,7 +11,10 @@ import { textOf, reservedLabels } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { seedsFor } from '../../guest/session/label-seeds.js';
 import { isValidLabel, makeLabels } from '../../guest/session/labels.js';
-import { makeRuntime, requiredParts } from '../../guest/session/m5-parts.js';
+import {
+  makeRuntime,
+  requiredParts,
+} from '../../guest/session/runtime-parts.js';
 import {
   builtInToolNames,
   toolSetFor,

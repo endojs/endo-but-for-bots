@@ -45,7 +45,7 @@ import { packagesPart } from './packages.js';
 /**
  * @typedef {'powers' | 'inspector' | 'grants' | 'packages' | 'inbox'} PartName
  *
- * @typedef {object} M5Part
+ * @typedef {object} RuntimePart
  * @property {PartName} name
  * @property {(runtime: Runtime) => any} make
  *
@@ -72,8 +72,8 @@ export const requiredParts = harden([
   'packages',
 ]);
 
-/** @type {readonly M5Part[]} */
-export const m5Parts = harden([
+/** @type {readonly RuntimePart[]} */
+export const runtimeParts = harden([
   powersPart,
   inspectorPart,
   grantsPart,
@@ -86,7 +86,7 @@ export const m5Parts = harden([
  * @param {any} options.services
  * @param {any} options.config
  * @param {any} [options.session]
- * @param {readonly M5Part[]} [options.parts]
+ * @param {readonly RuntimePart[]} [options.parts]
  * @returns {Runtime}
  */
 export const makeRuntime = ({
@@ -94,7 +94,7 @@ export const makeRuntime = ({
   services,
   config,
   session = undefined,
-  parts = m5Parts,
+  parts = runtimeParts,
 }) => {
   /** @type {Map<string, any>} */
   const made = new Map();

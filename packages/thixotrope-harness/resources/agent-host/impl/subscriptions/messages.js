@@ -40,7 +40,7 @@
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { m4Texts, m4TextOf } from '../../../../guest/lib/texts-m4.js';
 /* eslint-enable import/no-relative-packages */
-import { subscriptionDefaults } from '../../../../config/defaults-m4.js';
+import { subscriptionDefaults } from '../../../../config/subscription-defaults.js';
 import {
   ANTHROPIC_BASE_URL,
   anthropicAttempt,

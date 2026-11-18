@@ -46,7 +46,7 @@ import {
   closeCodes,
   gatewayLimits,
   gatewayTexts,
-} from './contract-m3.js';
+} from './protocol.js';
 import { clientAddress } from './limiter.js';
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -398,7 +398,7 @@ const makeWebSocket = ({ raw, address, maxMessageBytes, gone }) => {
  * @param {number} options.port 0: an ephemeral port
  * @param {string} [options.publicOrigin]
  * @param {string[]} [options.trustedProxies]
- * @param {import('./contract-m3.js').GatewayRoute[]} [options.routes]
+ * @param {import('./protocol.js').GatewayRoute[]} [options.routes]
  * @param {(request: import('node:http').IncomingMessage,
  *   response: import('node:http').ServerResponse) => boolean} options.staticHandler
  * @param {(socket: GatewaySocket) => void} options.onSocket
@@ -429,9 +429,9 @@ export const makeGatewayServer = async ({
     throw Error('publicOrigin must be an http(s) origin');
   }
 
-  /** @type {Map<string, import('./contract-m3.js').GatewayRoute>} */
+  /** @type {Map<string, import('./protocol.js').GatewayRoute>} */
   const httpRoutes = new Map();
-  /** @type {Map<string, import('./contract-m3.js').GatewayRoute>} */
+  /** @type {Map<string, import('./protocol.js').GatewayRoute>} */
   const upgradeRoutes = new Map();
   for (const route of routes) {
     const path = route?.path;

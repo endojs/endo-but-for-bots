@@ -60,7 +60,7 @@ import { m3Interfaces } from '../../../../guest/lib/interfaces-m3.js';
 import { findBlobDir } from '../blobs.js';
 import { assertLocalValue, localWriterGuard } from '../secrets/writer.js';
 import { makeBridge } from './bridge.js';
-import { closeCodes, gatewayTexts, secretWriterLabel } from './contract-m3.js';
+import { closeCodes, gatewayTexts, secretWriterLabel } from './protocol.js';
 import { cspHeader } from './csp.js';
 import {
   extensionCsp,
@@ -80,7 +80,7 @@ import { makeSignInStore } from './signin.js';
 import { makeStaticHandler } from './static.js';
 import { harnessNames } from './vocabulary.js';
 
-/** @import { GatewayContext, GatewayExtension } from './contract-m3.js' */
+/** @import { GatewayContext, GatewayExtension } from './protocol.js' */
 
 const { E, makeExo } = /** @type {any} */ (globalThis);
 

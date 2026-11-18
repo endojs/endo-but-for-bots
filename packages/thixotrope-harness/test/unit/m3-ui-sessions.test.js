@@ -13,7 +13,7 @@ import * as sessionViews from '../../ui/src/sessions/index.js';
 import {
   uiTexts,
   uiTextOf,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 
 const {

@@ -13,9 +13,9 @@
 import { Component, h } from 'preact';
 
 import { selectSlot } from '../slot-order.js';
-import { uiTextOf } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+import { uiTextOf } from '../../../resources/agent-host/impl/gateway/protocol.js';
 
-/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 /**
  * @param {unknown} error

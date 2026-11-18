@@ -3,7 +3,7 @@
  * M4 contract settings (W4.0; `designs/m4-interfaces.md` section 1.3): the
  * bounds of everything M4 adds that crosses into or out of a vat. Node-side
  * settings (stickiness, backoff, retry delays, timeouts) are in
- * `config/defaults-m4.js` (W4.1); where a name is in both, the values must
+ * `config/subscription-defaults.js` (W4.1); where a name is in both, the values must
  * be equal (`test/unit/m4-interfaces.test.js`, W4.1).
  *
  * Kept out of `limits.js` on purpose: `limits.js` is in every vat bundle, and

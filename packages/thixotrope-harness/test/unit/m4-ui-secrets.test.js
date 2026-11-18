@@ -18,7 +18,7 @@ import {
 import { secretsTexts } from '../../ui/src/secrets/SecretsPanel.js';
 import { m4Limits } from '../../guest/lib/limits-m4.js';
 import { m4Texts } from '../../guest/lib/texts-m4.js';
-import { secretWriterLabel } from '../../resources/agent-host/impl/gateway/contract-m3.js';
+import { secretWriterLabel } from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeFakePowers, makeTestDom } from './_m3-fake-powers.js';
 import {
   makeFakeSecrets,

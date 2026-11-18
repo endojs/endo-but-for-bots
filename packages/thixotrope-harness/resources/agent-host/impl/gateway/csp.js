@@ -11,7 +11,7 @@
  *
  * Node only (adapter).
  */
-import { cspDirectives } from './contract-m3.js';
+import { cspDirectives } from './protocol.js';
 
 const DIRECTIVE = /^[a-z][a-z-]{0,63}$/;
 // A CSP source expression: no whitespace, `;` or `,`, at most 512 units.

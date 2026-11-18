@@ -58,7 +58,7 @@ import {
   closeCodes,
   gatewayTexts,
   secretWriterLabel,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { signInFile } from '../../resources/agent-host/impl/gateway/signin.js';
 import { emit } from '../../perf/_harness.mjs';
 import { sliceScript } from '../fixtures/scripts/m1a-slice.js';

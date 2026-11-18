@@ -55,7 +55,7 @@ const { inspectCall, defaultGuardLimits } =
 const { harnessNames } =
   await import('../resources/agent-host/impl/gateway/vocabulary.js');
 const { closeCodes, gatewayLimits, gatewayTexts } =
-  await import('../resources/agent-host/impl/gateway/contract-m3.js');
+  await import('../resources/agent-host/impl/gateway/protocol.js');
 
 const usage = {
   inputTokens: 10,

@@ -27,7 +27,7 @@ import test from 'ava';
 
 import { E } from '@endo/far';
 
-import { uiTexts } from '../../resources/agent-host/impl/gateway/contract-m3.js';
+import { uiTexts } from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeSlice, waitFor } from '../integration/_m1a-slice.js';
 import { freePort } from '../integration/_m3-gateway.js';
 import {

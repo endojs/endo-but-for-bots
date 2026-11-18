@@ -59,7 +59,7 @@ import {
 } from '../../../../guest/lib/texts-m4.js';
 import { usageFromOpenRouter } from '../../../../guest/lib/token-usage.js';
 /* eslint-enable import/no-relative-packages */
-import { subscriptionDefaults } from '../../../../config/defaults-m4.js';
+import { subscriptionDefaults } from '../../../../config/subscription-defaults.js';
 import { anthropicToolId, textDigest } from '../providers/anthropic.js';
 import {
   bodyChunks,

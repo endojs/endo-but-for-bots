@@ -42,7 +42,7 @@ import { E } from '@endo/far';
 
 import { poolKinds } from '../../../../guest/lib/texts-m4.js';
 /* eslint-enable import/no-relative-packages */
-import { subscriptionDefaults } from '../../../../config/defaults-m4.js';
+import { subscriptionDefaults } from '../../../../config/subscription-defaults.js';
 import { providerBaseUrl } from '../providers/http.js';
 import { makeAccounts, makeUsageReader } from './accounts.js';
 import { makePoolCatalog } from './catalog.js';

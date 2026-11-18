@@ -274,7 +274,7 @@ export const uiTextOf = Object.freeze({
  *   finds in `GatewayPowers.extras` under `secretWriterLabel`. It is not
  *   the hub's `SecretWriter` (`SecretsAdmin.openWriter()`), which takes a
  *   `SealedBox` only. Call it only after `whenAttached`; before that it
- *   rejects. M4's `GW/extensions/m4-secrets.js` resolves its
+ *   rejects. M4's `GW/extensions/secrets.js` resolves its
  *   `LargeCall.target` with it
  * @property {string} stateDir the daemon's state directory (read only)
  * @property {(event: Record<string, unknown>) => void} log a structured

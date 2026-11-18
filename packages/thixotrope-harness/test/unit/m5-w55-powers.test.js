@@ -12,7 +12,10 @@ import test from '@endo/ses-ava/test.js';
 import { textOf } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { makeLabels } from '../../guest/session/labels.js';
-import { m5Parts, makeRuntime } from '../../guest/session/m5-parts.js';
+import {
+  runtimeParts,
+  makeRuntime,
+} from '../../guest/session/runtime-parts.js';
 import { makePowersSource } from '../../guest/session/powers-source.js';
 import {
   inspectionToolEntries,
@@ -84,7 +87,9 @@ test('the runtime registers the powers and inspector parts', t => {
   const labels = makeLabels();
   const runtime = makeRuntime({ labels, services: {}, config: {} });
   t.deepEqual(
-    m5Parts.map(p => p.name).filter(n => n === 'powers' || n === 'inspector'),
+    runtimeParts
+      .map(p => p.name)
+      .filter(n => n === 'powers' || n === 'inspector'),
     ['powers', 'inspector'],
   );
   // The powers part is the exo itself (tools/exec.js sends it as is).

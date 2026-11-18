@@ -26,7 +26,7 @@ import { isIP } from 'node:net';
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import { m3TextOf, m3Texts } from '../../../../guest/lib/interfaces-m3.js';
 /* eslint-enable import/no-relative-packages */
-import { gatewayLimits } from './contract-m3.js';
+import { gatewayLimits } from './protocol.js';
 
 const WINDOW_MS = 60_000;
 

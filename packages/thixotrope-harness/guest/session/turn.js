@@ -186,7 +186,7 @@ const zeroUsage = () => ({
  * @param {number} [options.maxToolRounds]
  * @param {readonly any[]} [options.sources] M5 S1: dynamic tool sources
  * @param {() => any} [options.getRuntime] M5 S4: the session's runtime
- *   (`m5-parts.js`), for the tool set and `ToolContext.runtime`
+ *   (`runtime-parts.js`), for the tool set and `ToolContext.runtime`
  */
 export const makeTurnRunner = ({
   config,

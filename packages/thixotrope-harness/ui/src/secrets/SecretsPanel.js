@@ -21,7 +21,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { secretsOf } from './daemon.js';
 import { readSecretFile, refuseBrowserValue } from './values.js';
 
-/** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 
 /** The panel's own words (harness texts). */
 export const secretsTexts = harden({

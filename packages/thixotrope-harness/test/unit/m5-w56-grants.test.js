@@ -17,7 +17,7 @@ import test from '@endo/ses-ava/test.js';
 import { textOf, shapes, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { makeSession } from '../../guest/session/session.js';
-import { m5Parts } from '../../guest/session/m5-parts.js';
+import { runtimeParts } from '../../guest/session/runtime-parts.js';
 import {
   builtInToolNames,
   toolSetFor,
@@ -160,7 +160,7 @@ const states = part =>
   part.facet.list().map((/** @type {any} */ i) => [i.name, i.state, i.reason]);
 
 test('the grants part is registered, and the source is the last toolSources entry', t => {
-  t.true(m5Parts.includes(grantsPart));
+  t.true(runtimeParts.includes(grantsPart));
   t.is(toolSources.length >= 1, true);
   t.deepEqual(grantedToolSource(makePorts(), {}, undefined), []);
 });
@@ -458,7 +458,7 @@ const makeGrantSession = async () => {
     liveChannel: () => Far('LivePublisher', { publish: () => {} }),
   });
   const parts = harden([
-    ...m5Parts.filter(part => part.name !== 'grants'),
+    ...runtimeParts.filter(part => part.name !== 'grants'),
     {
       name: 'grants',
       make: (/** @type {any} */ runtime) =>

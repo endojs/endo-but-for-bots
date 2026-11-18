@@ -19,7 +19,7 @@ import { makeController } from '../../ui/src/controller/index.js';
 import {
   WS_PATH,
   connectDeadlineMs,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeFakePowers } from './_m3-fake-powers.js';
 
 const flush = async (rounds = 20) => {

@@ -35,7 +35,7 @@ import { E } from '@endo/far';
 /* eslint-disable import/no-relative-packages */
 import { m4Texts } from '../../guest/lib/texts-m4.js';
 /* eslint-enable import/no-relative-packages */
-import { subscriptionDefaults } from '../../config/defaults-m4.js';
+import { subscriptionDefaults } from '../../config/subscription-defaults.js';
 import { emit } from '../../perf/_harness.mjs';
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
 import { startFakeSubscriptionServer } from '../fixtures/fake-subscription-server.mjs';

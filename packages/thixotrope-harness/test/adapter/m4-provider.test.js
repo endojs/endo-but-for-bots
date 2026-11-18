@@ -17,7 +17,7 @@ import test from '@endo/ses-ava/test.js';
 /* eslint-disable import/no-relative-packages */
 import { m4Texts, m4TextOf } from '../../guest/lib/texts-m4.js';
 /* eslint-enable import/no-relative-packages */
-import { subscriptionDefaults } from '../../config/defaults-m4.js';
+import { subscriptionDefaults } from '../../config/subscription-defaults.js';
 import { makeCredentialAccess } from '../../resources/agent-host/impl/secrets/credential-access.js';
 import { makeSubscriptions } from '../../resources/agent-host/impl/subscriptions/index.js';
 import {

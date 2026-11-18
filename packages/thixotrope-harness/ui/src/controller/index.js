@@ -25,7 +25,7 @@ import {
 import {
   uiTexts,
   uiTextOf,
-} from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../../resources/agent-host/impl/gateway/protocol.js';
 import {
   LOCK_PREFIX,
   clearDraft,
@@ -35,7 +35,7 @@ import {
   writeDraft,
 } from './drafts.js';
 
-/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { UiFeature, FeatureContext } from '../../../resources/agent-host/impl/gateway/protocol.js' */
 /** @import { DraftStorage } from './drafts.js' */
 
 /** `Content.read` page size (`limits.blobPageBytes`). */

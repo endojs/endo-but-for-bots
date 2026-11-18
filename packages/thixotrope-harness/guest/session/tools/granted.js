@@ -2,7 +2,7 @@
 /**
  * Granted tools (M5 W5.6; `designs/m5-interfaces.md` 2.5, R3-6, P-65).
  *
- * The `grants` runtime part (`grantsPart`, registered in `m5-parts.js`)
+ * The `grants` runtime part (`grantsPart`, registered in `runtime-parts.js`)
  * keeps one session's granted tools in its heap (at most `maxGrantedTools`)
  * and answers:
  *
@@ -112,7 +112,7 @@ const schemaReason = text => {
 
 /**
  * The `grants` part of one session.
- * @param {any} runtime the session's runtime (`m5-parts.js`)
+ * @param {any} runtime the session's runtime (`runtime-parts.js`)
  * @param {GrantsOptions} [options]
  */
 export const makeGrants = (
@@ -396,7 +396,7 @@ export const makeGrants = (
 };
 harden(makeGrants);
 
-/** The `m5-parts.js` entry. */
+/** The `runtime-parts.js` entry. */
 export const grantsPart = harden({
   name: /** @type {const} */ ('grants'),
   /** @param {any} runtime */

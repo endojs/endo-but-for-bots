@@ -33,7 +33,7 @@ import { build, transform } from 'esbuild';
 import {
   GATEWAY_PROTOCOL,
   uiTexts,
-} from '../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../resources/agent-host/impl/gateway/protocol.js';
 
 const uiDir = path.dirname(url.fileURLToPath(import.meta.url));
 export const defaultSrcDir = path.join(uiDir, 'src');

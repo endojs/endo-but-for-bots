@@ -52,7 +52,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 
 import { makeCapTP, makeDefaultCapTPImportExportTables } from '@endo/captp';
 
-import { closeCodes, gatewayLimits, gatewayTexts } from './contract-m3.js';
+import { closeCodes, gatewayLimits, gatewayTexts } from './protocol.js';
 import { defaultGuardLimits, inspectCall } from './guard.js';
 import { isGatewayLocal, isNeverLeaving } from './powers.js';
 

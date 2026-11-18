@@ -72,7 +72,7 @@ const MAX_LIFETIME_S = 366 * 86_400;
 const UNDISPATCHED = harden(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN']);
 
 /**
- * The renewal settings (`config/defaults-m4.js` `subscriptionDefaults`,
+ * The renewal settings (`config/subscription-defaults.js` `subscriptionDefaults`,
  * W4.1: `refreshSkewMs` 120,000).
  * @typedef {object} RenewalSettings
  * @property {number} [refreshSkewMs]

@@ -18,7 +18,7 @@
  *
  * M5 (W5.3; m5-interfaces.md 2.4.1, 2.8, H-4): `make` builds the session's
  * label map (seeded from `services.endowments`, then `labelSeeds`) and its
- * runtime (`m5-parts.js`), and the `Session` exo takes the M5 guard:
+ * runtime (`runtime-parts.js`), and the `Session` exo takes the M5 guard:
  * `grants()` and `enqueueMessageOnce` forward to the runtime's `grants` and
  * `packages` parts, which every runtime has.
  */
@@ -26,7 +26,7 @@ import { interfaces, texts } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { labelSeeds as defaultLabelSeeds, seedsFor } from './label-seeds.js';
 import { makeLabels } from './labels.js';
-import { m5Parts, makeRuntime } from './m5-parts.js';
+import { runtimeParts, makeRuntime } from './runtime-parts.js';
 import { makeQueue as defaultMakeQueue } from './queue.js';
 import {
   isRestartSignal as defaultIsRestartSignal,
@@ -40,7 +40,7 @@ import { toolSources, toolTable } from './tool-table.js';
 import { turnHooks } from './turn-hooks.js';
 import { makeTurnRunner } from './turn.js';
 
-/** @import { Runtime } from './m5-parts.js' */
+/** @import { Runtime } from './runtime-parts.js' */
 
 // The exo methods are typed loosely; the interface guards check the values.
 const { makeExo } = /** @type {any} */ (globalThis);
@@ -55,7 +55,7 @@ const { makeExo } = /** @type {any} */ (globalThis);
  * @property {readonly any[]} [toolTable]
  * @property {typeof turnHooks} [hooks]
  * @property {readonly any[]} [toolSources] M5 S1
- * @property {readonly any[]} [parts] M5 runtime parts (`m5-parts.js`)
+ * @property {readonly any[]} [parts] M5 runtime parts (`runtime-parts.js`)
  * @property {readonly any[]} [labelSeeds] M5 (`label-seeds.js`)
  */
 
@@ -73,7 +73,7 @@ export const makeSession = (
     toolTable: table = toolTable,
     hooks = turnHooks,
     toolSources: sources = toolSources,
-    parts = m5Parts,
+    parts = runtimeParts,
     labelSeeds = defaultLabelSeeds,
   } = {},
 ) => {

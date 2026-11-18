@@ -18,7 +18,7 @@ import { useRef, useState } from 'preact/hooks';
 import {
   uiTexts,
   uiTextOf,
-} from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../../resources/agent-host/impl/gateway/protocol.js';
 import {
   countsLabel,
   lifecycleNote,

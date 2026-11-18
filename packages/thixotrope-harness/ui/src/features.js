@@ -11,13 +11,13 @@
  * feature files while this module waits for it); slot components receive
  * what they need through their props.
  */
-import { uiSlots } from '../../resources/agent-host/impl/gateway/contract-m3.js';
+import { uiSlots } from '../../resources/agent-host/impl/gateway/protocol.js';
 import { featureEntries } from './feature-list.js';
 import { DEFAULT_ORDER, selectSlot } from './slot-order.js';
 
 export { DEFAULT_ORDER, selectSlot };
 
-/** @import { UiFeature } from '../../resources/agent-host/impl/gateway/contract-m3.js' */
+/** @import { UiFeature } from '../../resources/agent-host/impl/gateway/protocol.js' */
 
 const slotSet = new Set(uiSlots);
 

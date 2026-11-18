@@ -17,7 +17,7 @@
  *   holds the objects afterwards (the queue entry let go of them at the
  *   claim), so they are released (R3-8).
  *
- * `packagesPart` is the `packages` entry of `m5-parts.js`. Its value:
+ * `packagesPart` is the `packages` entry of `runtime-parts.js`. Its value:
  * `{ table, enqueueMessageOnce(submission, requestId, at, attachments) }`.
  * `enqueueMessageOnce` runs inside the Session method's crank (session.js
  * wraps it in `inCrank` after `refuseIfDeleting`): it checks the

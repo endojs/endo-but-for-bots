@@ -53,7 +53,7 @@ import { limits } from '../../../../guest/lib/limits.js';
 import { m4Limits } from '../../../../guest/lib/limits-m4.js';
 import { m4Texts } from '../../../../guest/lib/texts-m4.js';
 /* eslint-enable import/no-relative-packages */
-import { subscriptionDefaults } from '../../../../config/defaults-m4.js';
+import { subscriptionDefaults } from '../../../../config/subscription-defaults.js';
 import { ANTHROPIC_VERSION } from '../providers/anthropic.js';
 import {
   anthropicPage,

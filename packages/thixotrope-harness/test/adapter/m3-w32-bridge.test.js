@@ -15,7 +15,7 @@ import {
   closeCodes,
   gatewayLimits,
   gatewayTexts,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeBridge } from '../../resources/agent-host/impl/gateway/bridge.js';
 import { checkCall } from '../../resources/agent-host/impl/gateway/guard.js';
 import {

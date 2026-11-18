@@ -224,7 +224,7 @@ export const inspectionToolEntries = harden([
 ]);
 
 /**
- * The `inspector` runtime part (`m5-parts.js`): `lookup` of an object
+ * The `inspector` runtime part (`runtime-parts.js`): `lookup` of an object
  * binding without cached method names (`objects.js`).
  */
 export const inspectorPart = harden({

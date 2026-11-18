@@ -23,7 +23,7 @@ import {
   makeGatewayService,
   notAttachedText,
 } from '../../resources/agent-host/impl/gateway/index.js';
-import { secretWriterLabel } from '../../resources/agent-host/impl/gateway/contract-m3.js';
+import { secretWriterLabel } from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeSignInStore } from '../../resources/agent-host/impl/gateway/signin.js';
 import { makeSecretsOps } from '../../resources/agent-host/impl/secrets/manager.js';
 import {

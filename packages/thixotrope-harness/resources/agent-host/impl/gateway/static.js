@@ -24,7 +24,7 @@ import { Buffer } from 'node:buffer';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 
-import { gatewayTexts } from './contract-m3.js';
+import { gatewayTexts } from './protocol.js';
 
 const ASSET_PREFIX = '/assets/';
 const SHELL = 'index.html';

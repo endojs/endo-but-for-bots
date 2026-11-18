@@ -14,7 +14,7 @@ import {
   GATEWAY_PROTOCOL,
   WS_PATH,
   uiTexts,
-} from '../../resources/agent-host/impl/gateway/contract-m3.js';
+} from '../../resources/agent-host/impl/gateway/protocol.js';
 import { makeController } from './controller/index.js';
 import { features } from './features.js';
 import { viewModules } from './feature-list.js';

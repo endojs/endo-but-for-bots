@@ -27,7 +27,7 @@ import {
 } from '../../guest/session/tools/mentions.js';
 import { toolTable } from '../../guest/session/tool-table.js';
 import { turnHooks } from '../../guest/session/turn-hooks.js';
-import { m5Parts } from '../../guest/session/m5-parts.js';
+import { runtimeParts } from '../../guest/session/runtime-parts.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -189,7 +189,7 @@ test('makePackages: numbers from 1, take by turn, closeTurn releases', t => {
 });
 
 test('tables: packages part, hooks and tool entries are registered', t => {
-  t.true(m5Parts.includes(packagesPart));
+  t.true(runtimeParts.includes(packagesPart));
   t.true(turnHooks.onClaim.includes(mentionHooks.onClaim));
   t.true(turnHooks.onSettle.includes(mentionHooks.onSettle));
   t.true(turnHooks.recoverySteps.includes(mentionHooks.recoverySteps));
@@ -284,7 +284,7 @@ const makeM5Session = async ({ parts = [], services = {} } = {}) => {
     },
     harden({
       parts: harden([
-        ...m5Parts.filter(
+        ...runtimeParts.filter(
           part => !parts.some((/** @type {any} */ p) => p.name === part.name),
         ),
         ...parts,

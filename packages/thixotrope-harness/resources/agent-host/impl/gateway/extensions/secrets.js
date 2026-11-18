@@ -1,7 +1,7 @@
 // @ts-check
 /**
  * M4's gateway extension (W4.6; `designs/m4-interfaces.md` 9.1 item 3; M3's
- * registry `AH/gateway/extensions/<name>.js`, `contract-m3.js`
+ * registry `AH/gateway/extensions/<name>.js`, `protocol.js`
  * `GatewayExtension`).
  *
  * The frame guard refuses a call body over `frameBytes` unless its target
@@ -17,7 +17,7 @@
  * A synchronous module with no imports, as M3's loader asks.
  */
 
-/** @type {import('../contract-m3.js').GatewayExtension} */
+/** @type {import('../protocol.js').GatewayExtension} */
 export const gatewayExtension = harden({
   name: 'm4-secrets',
   largeCalls: [

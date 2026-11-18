@@ -12,7 +12,7 @@
  */
 import { E } from '@endo/far';
 
-import { secretWriterLabel } from '../../../resources/agent-host/impl/gateway/contract-m3.js';
+import { secretWriterLabel } from '../../../resources/agent-host/impl/gateway/protocol.js';
 
 /** When the gateway offers no secret writer (an older gateway). */
 export const noWriterText = 'this gateway offers no secret writer';
