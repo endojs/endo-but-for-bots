@@ -29,7 +29,7 @@ export const mailLimits = harden({
   inboxMessages: 256,
   /**
    * A body of a message that starts no turn (a reply, a value) is kept
-   * inline, cut to this many UTF-8 bytes with `mailTextOf.bodyCut`, so the
+   * inline, cut to this many UTF-8 bytes with `postOfficeTextOf.bodyCut`, so the
    * inbox never holds a staged file that nothing else names (17.1).
    */
   strayBodyBytes: 8192,
@@ -62,7 +62,7 @@ export const mailLimits = harden({
    * String content of one Envelope, AskAnswer or PostReceipt a vat sends
    * (keys included, units x 3 in a vat): `frameBytes` - 2,048 for the
    * envelope and up to 34 handles, as `presetRecordBytes`. The post office
-   * refuses a draft whose envelope would not fit (`mailTextOf.
+   * refuses a draft whose envelope would not fit (`postOfficeTextOf.
    * envelopeTooLarge`) before it delivers; the hub's 65,536-byte ceiling
    * (CC-027) is the backstop.
    */
@@ -75,6 +75,14 @@ export const mailLimits = harden({
   // ---- the post office (factory vat heap) ----
   /** Deliveries posted and not yet answered by their recipient. */
   postInFlight: 1024,
+  /**
+   * String bytes (`messageBytes`) of the envelopes those deliveries keep
+   * for a re-drive, summed: a post that would pass it is refused with
+   * `postOfficeTextOf.postOfficeBusy`, as a full count is. 4 MiB of factory
+   * heap, where 1,024 envelopes of `envelopeBytes` would be 23 MB (WX.0
+   * X-16); a staged body is kept as its handle, never its bytes.
+   */
+  postInFlightBytes: 4_194_304,
   /**
    * Postmarks the post office remembers for reply correlation and the
    * forged-reply check (a ring): recipient, sender and open ask.

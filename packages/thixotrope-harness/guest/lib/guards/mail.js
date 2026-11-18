@@ -2,9 +2,13 @@
 /**
  * The shapes, method guards, tool names and fixed texts of mail and
  * subagents that the session program reaches (designs/m9-interfaces.md
- * sections 2 and 9). The factory's own guards (the post office, the
- * operator's mailbox, the subagent handles and the adapter's relay
- * writers) are in `./post-office.js`, which builds on this module.
+ * sections 2 and 15). Only what a session vat checks or composes is here:
+ * the shapes of what it receives through `SessionInternal` and from its
+ * exec vat, and the texts its parts and tools build. What the factory
+ * checks (drafts, answers, the subagent list) and the texts it composes
+ * (the post office's refusals, the tree limit, a child's title, an ask's
+ * attachment note) are in `./post-office.js`, which builds on this module
+ * (D-M9-19: the session program carries no factory-only entry).
  *
  * Contract artefact of M9 (W9.0). The fold unit of the M9 merge (W9.F)
  * moves every entry into the vat tables (`./session.js` for what the
@@ -133,13 +137,6 @@ const mailShapeBuilders = {
         default: text(ML.formDefaultUnits),
       },
     ),
-  /** One submitted value: JSON text of the field's kind (no data keys). */
-  FormValue: () =>
-    record({
-      name: text(ML.formFieldNameUnits),
-      json: text(ML.requestAnswerBytes),
-    }),
-  FormSubmission: () => list(X.FormValue, ML.formFields),
   /**
    * What the post office delivers into a session (`SessionInternal.
    * deliverMail`). `seq` orders deliveries to this recipient (duplicates
@@ -171,66 +168,6 @@ const mailShapeBuilders = {
   /** `deliverMail`'s answer: the message number, or a refusal (no throw). */
   Delivery: () =>
     record({}, { number: count, duplicate: M.boolean(), refused: S.Reason }),
-  /**
-   * What a session posts (`Outbox.post`): recipients are objects (a
-   * MailAddress or a SubagentHandle; anything else is refused by the post
-   * office without being called).
-   */
-  MailDraft: () =>
-    record(
-      {
-        to: list(M.remotable(), ML.recipientsPerSend),
-        body: X.MailBody,
-        attachments: S.Attachments,
-      },
-      { inReplyTo: count },
-    ),
-  /** One recipient's outcome, in `to` order. */
-  PostResult: () => record({}, { postmark: count, refused: S.Reason }),
-  PostReceipt: () =>
-    record({ results: list(X.PostResult, ML.recipientsPerSend) }),
-  /** A typed answer to a request (JSON text) or its rejection. */
-  RequestAnswer: () =>
-    M.or(
-      record({ json: text(ML.requestAnswerBytes) }),
-      record({ rejected: S.Reason }),
-    ),
-  /** `Delegation.spawn` argument (R4-70). */
-  SpawnRequest: () =>
-    record(
-      {
-        name: text(ML.subagentNameUnits),
-        attachments: S.Attachments,
-        at: count,
-      },
-      // Inline only (D-M9-20): the factory composes the child's prompt
-      // as text in the creation's resolver.
-      { systemPrompt: text(limits.inlineBytes) },
-    ),
-  SpawnAnswer: () =>
-    record({ handle: R('SubagentHandle'), title: text(limits.titleUnits) }),
-  /** `SubagentHandle.ask` argument (R4-72). */
-  AskRequest: () =>
-    record({ task: X.MailBody, attachments: S.Attachments, at: count }),
-  /**
-   * The answer, already cut to the tool limit by the adapter's copy
-   * (`cutFrom`: the answer's length in units when cut); `edges` are the
-   * reply's attachment labels, reported, never kept (R4-72).
-   */
-  AskAnswer: () =>
-    record(
-      { text: X.MailBody, edges: list(S.EdgeLabel, limits.maxAttachments) },
-      { cutFrom: count },
-    ),
-  SubagentState: () => M.or('ready', 'asking', 'lost', 'stopping'),
-  SubagentInfo: () =>
-    record({
-      name: text(ML.subagentNameUnits),
-      handle: R('SubagentHandle'),
-      state: X.SubagentState,
-    }),
-  /** `Delegation.children()`: a parent's live children (<= 64 by guard). */
-  SubagentList: () => list(X.SubagentInfo, 64),
   /**
    * The exec vat's `splitArgs` answer: the arguments' JSON with every long
    * string replaced by a placeholder (`"\u0000s<k>"`), and the staged
@@ -277,8 +214,6 @@ const q = value => JSON.stringify(value);
 export const mailTexts = harden({
   /** R4-59 (Fae session-factory.js:1617). */
   unansweredRequest: 'Agent ended the turn without a typed answer',
-  /** R3-214 (daemon mail.js:1252-1258): a reply naming a postmark that was not delivered to the replier. */
-  mailFraud: 'Mail fraud: unrecognized parcel',
   /** Fae workflow-tools.js:42. */
   expectedDecimal: 'Expected a decimal message number',
   /** Fae workflow-tools.js:46. */
@@ -291,10 +226,6 @@ export const mailTexts = harden({
   requestAnswered: 'Request answered.',
   requestRejected: 'Request rejected.',
   formSubmitted: 'Form submitted.',
-  /** Harness: `send` to an object the post office did not mint (never called). */
-  notAnAddress: 'The recipient is not a mail address',
-  /** Harness: a settled or cancelled request answered again. */
-  requestClosed: 'This request is already settled or was cancelled',
   /** Harness (R4-49 style): an ask the parent's cancel abandoned. */
   askAbandoned:
     "Subagent ask abandoned: the turn was cancelled; the subagent's turn was cancelled too",
@@ -352,9 +283,6 @@ export const mailTextOf = harden({
    */
   inboxFull: limit =>
     `The recipient's inbox is full (${limit} messages); it must handle or dismiss some first`,
-  /** @param {number} limit */
-  operatorInboxFull: limit =>
-    `The operator's inbox is full (${limit} messages); try again after the operator dismisses some`,
   /**
    * @param {number} units
    * @param {number} limit
@@ -370,27 +298,12 @@ export const mailTextOf = harden({
   /** @param {string} label */
   unknownRecipient: label =>
     `No mail recipient is held under the petname ${q(label)}`,
-  /** @param {string} title */
-  recipientLost: title =>
-    `The recipient ${q(title)} stopped working (its session was lost); the message was not delivered`,
-  /**
-   * Harness: a stray body (a reply, a value) kept inline (strayBodyBytes).
-   * @param {number} units the original length
-   */
-  bodyCut: units =>
-    `\n[Message cut from ${units} characters; only this prefix was kept]`,
   /**
    * @param {number} bytes
    * @param {number} limit
    */
   answerTooLarge: (bytes, limit) =>
     `The answer is ${bytes} bytes of JSON; the limit is ${limit}`,
-  /**
-   * @param {number} bytes
-   * @param {number} limit
-   */
-  envelopeTooLarge: (bytes, limit) =>
-    `The message is ${bytes} bytes with its form fields and attachment labels; the limit is ${limit}`,
   /** @param {string} name */
   formFieldMissing: name => `Form field ${q(name)} is required`,
   /**
@@ -409,12 +322,6 @@ export const mailTextOf = harden({
     }`,
 
   // ---- subagents ----
-  /**
-   * R4-71 (Fae subagent-admission.js).
-   * @param {number} limit
-   */
-  treeLimit: limit =>
-    `Subagent tree limit of ${limit} reached; use existing helpers or finish the task yourself.`,
   /**
    * Fae subagent.js:159.
    * @param {string} name
@@ -472,23 +379,4 @@ export const mailTextOf = harden({
     `The subagent's systemPrompt is ${bytes} bytes; the limit is ${limit}`,
   /** @param {string} name */
   subagentExists: name => `A subagent named ${q(name)} already exists`,
-  /** @param {string} name */
-  subagentLost: name =>
-    `Subagent ${q(name)} stopped working (its session was lost); stop it and spawn another`,
-  /**
-   * Fae subagent.js askTool, non-retaining form (R4-72).
-   * @param {readonly string[]} edges
-   */
-  answerAttachments: edges =>
-    `\n\n(System: the reply attached object(s) with edge name(s) ${edges
-      .map(edge => `"${edge}"`)
-      .join(
-        ', ',
-      )}, which this session does not retain. To keep one, ask the subagent to store it under a pet name and tell you the name.)`,
-  /**
-   * R4-70: a child's title.
-   * @param {string} parentTitle
-   * @param {string} name
-   */
-  childTitle: (parentTitle, name) => `${parentTitle} / ${name}`,
 });
