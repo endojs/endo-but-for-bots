@@ -14037,3 +14037,41 @@ Reading: reading the four contracts and the step-3 plan and code took most of th
 (two bundles, size and key comparisons) each under 30 s. Not run: any supervisor, integration
 test, perf check or cargo. No contract changed; journal only.
 Fit: neutral.
+
+### J-1014 2026-11-18 W8.0 settle: M8 seams against the step-3 code as built - read
+Evidence: `arch-review/step3-plan.md` at `53a8dbb9ea`; the cleanup lane at `cecfa12809`:
+`guest/session/runtime-parts.js` (`PartName`, `requiredParts`, `runtimeParts`, `makeRuntime`,
+`combineHooks`), `turn.js` (`hookTurn`, `roundRequest`'s `base: { count, epoch: 0, ... }`,
+`invoke`'s `beforeRound` before the `round > 0` `thinking` emit, `claim`'s
+`records.append(started)`), `records.js` (`append` answers the index), `session.js`
+(`makeRuntime` before `makeRecordLog`), `turn-import.js` (`importTurns`), `archive.js` (seal
+`epoch: 0`), `tools/objects.js` (`readArgs` private, label lookup `runtime.labels.get`),
+`usage.js`, `providers/api.js` (`apiStream`, `wire.body({ ..., req })`), `anthropic.js`
+(`anthropicKind.readModels`), `endpoint.js`, `index.js` (`adapterTools`, open handler).
+Reading: every [step 3] seam of the M8 contract names a real function; none stays provisional.
+Three changed: S-6 must move the record log above `makeRuntime` (the window needs only the log,
+so `makeContextWindow({ records })`); S-10c reduces to the `export` keyword on `readArgs`; S-20
+lives in `anthropic.js`, which W8.6 already owns for S-19, so it moves to W8.6. `compaction` goes
+into `requiredParts` (the runner calls the part).
+
+### J-1015 2026-11-18 W8.0 settle: the cross-check issues assigned to M8 - decision
+Evidence: J-1410..J-1417 (X-01, X-02, X-03, X-04, X-06, X-10, X-11, X-12, X-13, X-14, X-15, X-16,
+X-17); J-10192 (cold create about 20 ms per KB); J-0461, J-9043 (about 70 ms per delivery).
+Decision: `m8-interfaces.md` gains D-M8-17..D-M8-21 and table 2.1. Shared guard lines,
+the part-API typedefs, the `makeRuntime` `contextWindow` option, the part and tool orders, the
+split-test change, the vocabulary re-pin and the `readArgs` export are WX.1's; W8.G is done by
+WX.1. The session-program share is a request (9,000, derived from J-1410's stripped 3,763 plus
+peers); W8.1 and W8.4 wait for the owner's ruling and the PM's cap, the adapter units do not. X-1
+is built by M6 W6.2 as specified (owner question Q-8 for the spike's step 1). A source in a vat
+answers pages of at most 20,480 characters, so `images.viewFromVat` is re-derived: 69 pages x
+70 ms = 4.8 s, budget 6 s recorded. Count rows are gate rows; `compaction.rebuild` is measured
+over a 60 s window. CC-100 is asked unconditionally for M6 and M8 into core step 3; CC-101 is
+withdrawn and recorded as spike step 2. Acceptance 19 (viewImage of a workspace path) belongs to
+WX.F. The S-18 `index.js` line moves to W8.3; W8.5's first commit is the `makeImageTool` export.
+Merge order M11, M6, M8, M9; build-unit journal ranges: PM assigns.
+Fit: good; no M8 behaviour changed, only who applies which seam and when.
+
+### J-1016 2026-11-18 W8.0 settle time record - process
+Evidence: first command 2026-11-18T23:40:38Z, last 2026-11-18T23:47:40Z (before this commit).
+Reading: reading the step-3 code and editing the contract; no probe needed beyond reading.
+Commit `15f86101eb`. Not run: any supervisor, integration test, perf check or cargo.
