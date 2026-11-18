@@ -23,7 +23,6 @@
  * Pure; runs in vats and in Node.
  */
 import { textOf } from './interfaces.js';
-import { m5ToolArgumentNames } from './interfaces-m5.js';
 
 /**
  * @typedef {'string' | 'integer' | 'raw' | ArgObjectSpec} ArgKind
@@ -362,7 +361,8 @@ const field = (name, kind, required = true) => harden({ name, kind, required });
 
 /**
  * The argument specs of M5's built-in tools, field order as
- * `m5ToolArgumentNames` (the R3-26 text lists them in that order).
+ * `interfaces-m5.js` `m5ToolArgumentNames` (the R3-26 text lists them in
+ * that order; `m5-w53-args.test.js` keeps the two equal).
  */
 export const argSpecs = harden({
   list: harden({ tool: 'list', fields: harden([]) }),
@@ -406,15 +406,3 @@ export const argSpecs = harden({
     ]),
   }),
 });
-
-// The specs and the contract's closed names agree (checked at load: a
-// mismatch is a build error, not a runtime surprise).
-for (const [tool, spec] of Object.entries(argSpecs)) {
-  const names = /** @type {Record<string, readonly string[]>} */ (
-    m5ToolArgumentNames
-  )[tool];
-  const mine = spec.fields.map(f => f.name);
-  if (names === undefined || names.join(',') !== mine.join(',')) {
-    throw Error(`tool-args: argSpecs.${tool} disagrees with the contract`);
-  }
-}
