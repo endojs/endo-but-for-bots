@@ -55,13 +55,18 @@ import { m1bInterfaces, shapes, texts, textOf } from '../lib/interfaces.js';
 import { limits } from '../lib/limits.js';
 import { runAgenticTurn } from '../lib/turn-engine.js';
 import { checkSubmission } from '../lib/pending-queue.js';
-import { boundToolOutput, fitsFrame, previewText } from '../lib/bounded.js';
+import {
+  boundToolOutput,
+  fitsFrame,
+  previewText,
+  utf8Bytes,
+} from '../lib/bounded.js';
 import { makeSessionArchive } from './archive.js';
 import { makeContextSource } from './context-source.js';
 import { makeHistory } from './history.js';
 import { inCallOrder } from './records.js';
 import { isStaged, submissionField } from './staging.js';
-import { toolSetFor, toolTable } from './tool-table.js';
+import { toolSetFor, toolSources, toolTable } from './tool-table.js';
 import { turnHooks } from './turn-hooks.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -165,6 +170,9 @@ const zeroUsage = () => ({
  *   appended as one Partial only if the round ends without roundFinal
  * @property {number} [deadlineMs] the turn deadline fired (M2 seam 4): the
  *   cancel settles `failed` with `textOf.turnDeadline`
+ * @property {string | undefined} systemNote M5 S2: a line every round
+ *   request of this turn adds to the stored prompt (W5.7's R4-29 line, set
+ *   by an `onClaim` hook)
  */
 
 /**
@@ -182,6 +190,9 @@ const zeroUsage = () => ({
  * @param {any} [options.contextSource] ignored from M2 on: the runner
  *   builds the session's ContextSource itself (it needs the archive;
  *   m2-interfaces.md 2.4 item 6)
+ * @param {readonly any[]} [options.sources] M5 S1: dynamic tool sources
+ * @param {() => any} [options.getRuntime] M5 S4: the session's runtime
+ *   (`m5-parts.js`), for the tool set and `ToolContext.runtime`
  */
 export const makeTurnRunner = ({
   config,
@@ -195,6 +206,8 @@ export const makeTurnRunner = ({
   table = toolTable,
   maxToolRounds = limits.maxToolRounds,
   contextSource: _ignoredContextSource,
+  sources = toolSources,
+  getRuntime = () => undefined,
 }) => {
   /**
    * Records before this index went out in a RoundRequest (W1b.2): per
@@ -569,6 +582,8 @@ export const makeTurnRunner = ({
       round: active.round,
       services,
       endpoint: active.ports?.endpoint,
+      // M5 S4: the session's runtime parts (labels, powers, inspector, ...).
+      runtime: getRuntime(),
     });
     calls.running.set(intent.opId, { entry, context });
     /** @type {Promise<any>} */
@@ -705,6 +720,7 @@ export const makeTurnRunner = ({
    */
   const onToolError = (active, calls, intent, entry, error) => {
     if (!stillOurs(active, calls)) return;
+    // M5 S5: a `'session'` entry is as `'guest'` here (it cannot meet one).
     if ((entry.site ?? 'adapter') === 'adapter' && isRestartSignal(error)) {
       // A restart, never a tool failure (section 7).
       recoverAfterRestart(core, active);
@@ -800,6 +816,26 @@ export const makeTurnRunner = ({
   // ------------------------------------------------------------ rounds
 
   /**
+   * M5 S2: the round's system prompt: the stored prompt alone, or with the
+   * turn's note. Inline: one text joined with a blank line when it stays
+   * within `inlineBytes`; otherwise (a staged prompt, or a joined text over
+   * `inlineBytes`) the two-part list `[prompt, note]`, which the adapter's
+   * `systemTextOf` joins the same way.
+   * @param {ActiveTurn} active
+   */
+  const systemFor = active => {
+    const prompt = config.systemPrompt;
+    const note = active.systemNote;
+    if (note === undefined) return prompt;
+    if (prompt === undefined) return note;
+    if (typeof prompt === 'string') {
+      const joined = `${prompt}\n\n${note}`;
+      if (utf8Bytes(joined) <= limits.inlineBytes) return joined;
+    }
+    return harden([prompt, note]);
+  };
+
+  /**
    * The round request: records appended since the previous `startRound`
    * (results in call order), or none when they do not fit (the adapter then
    * pulls them through `context`, contract 9).
@@ -821,6 +857,7 @@ export const makeTurnRunner = ({
       options.maxOutputTokens = config.maxOutputTokens;
     }
     const archived = archive.any() ? { archive: archive.state() } : {};
+    const system = systemFor(active);
     const make = (/** @type {number} */ count, /** @type {any[]} */ append) =>
       harden({
         turn: active.turn,
@@ -832,10 +869,9 @@ export const makeTurnRunner = ({
         tools: active.tools.descriptions,
         options: harden(options),
         context: contextSource,
-        // M2 seam 1: the composed prompt, inline or staged.
-        ...(config.systemPrompt === undefined
-          ? {}
-          : { system: config.systemPrompt }),
+        // M2 seam 1: the composed prompt, inline or staged; M5 S2 with
+        // the turn's note.
+        ...(system === undefined ? {} : { system }),
       });
     const append = inCallOrder(records.since(from));
     if (append.length <= limits.maxAppendRecords) {
@@ -857,6 +893,14 @@ export const makeTurnRunner = ({
     active.info.round = round;
     if (active.ports === undefined) throw SETTLED;
     for (const hook of hooks.beforeRound) hook({ core, active, round });
+    // M5 S1: the tool set is read again at the start of every round (R3-6).
+    active.tools = toolSetFor(
+      active.ports,
+      table,
+      services,
+      sources,
+      getRuntime(),
+    );
     if (round > 0) {
       emit({ type: 'phase', turnId: active.turnId, phase: 'thinking' });
     }
@@ -1170,7 +1214,10 @@ export const makeTurnRunner = ({
       return;
     }
     reopens = 0;
-    held = harden({ ports, tools: toolSetFor(ports, table, services) });
+    held = harden({
+      ports,
+      tools: toolSetFor(ports, table, services, sources, getRuntime()),
+    });
     const active = current;
     if (active === undefined || active.ports !== undefined) return;
     if (active.state !== 'running') return;
@@ -1256,8 +1303,10 @@ export const makeTurnRunner = ({
    * @param {any} input a string or a StagedText
    * @param {number} at
    * @param {(info: TurnInfo) => void} [take]
+   * @param {any} [item] the queue entry (M5 S3: `onClaim` hooks and the
+   *   attachments' labels); undefined for a direct start or a turn source
    */
-  const claim = (input, at, take = () => {}) => {
+  const claim = (input, at, take = () => {}, item = undefined) => {
     current === undefined || Fail`a turn is current`;
     const turnId = `t${turnCounter + 1}`;
     /** @type {TurnInfo} */
@@ -1296,21 +1345,29 @@ export const makeTurnRunner = ({
       roundKit: undefined,
       usage: undefined,
       checkpoint: undefined,
+      systemNote: undefined,
     };
     const turn = makeTurn(info);
     take(info);
     turnCounter += 1;
     generation += 1;
-    records.append({
-      kind: 'turn-started',
-      turnId,
-      input,
-      at,
-    });
+    /** @type {Record<string, any>} */
+    const started = { kind: 'turn-started', turnId, input, at };
+    // M5 S3: the labels of the entry's attachments (never the objects).
+    const attachments = /** @type {any[] | undefined} */ (item?.attachments);
+    if (attachments !== undefined && attachments.length > 0) {
+      started.attachments = harden(
+        attachments.map((/** @type {any} */ a) => a.label),
+      );
+    }
+    records.append(started);
     active.turn = turn;
     active.sink = makeSink(active);
     turns.set(turnId, info);
     current = active;
+    // M5 S3: after TurnStarted (hooks need the turn id), before the first
+    // round request is built.
+    for (const hook of hooks.onClaim ?? []) hook({ core, active, item });
     report({ activity: 'working' });
     if (held !== undefined) {
       attachPorts(active, held, false);
@@ -1332,8 +1389,11 @@ export const makeTurnRunner = ({
     const item = queue.first();
     if (item !== undefined) {
       // The receipt keeps the turn id, not the turn (m2-interfaces.md 5.3).
-      return claim(submissionField(item.submission), lastKnownTime, info =>
-        queue.claim(item, info.turnId),
+      return claim(
+        submissionField(item.submission),
+        lastKnownTime,
+        info => queue.claim(item, info.turnId),
+        item,
       );
     }
     if (queue.holdReason() !== undefined) return undefined;

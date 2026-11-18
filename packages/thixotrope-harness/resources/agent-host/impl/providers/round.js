@@ -160,13 +160,27 @@ harden(readProviderKey);
 
 /**
  * The round's system prompt as text (inline, or staged: read in process),
- * or undefined; a read that fails is `textOf.stagingFailed`.
+ * or undefined; a read that fails is `textOf.stagingFailed`. M5 (W5.3, S2,
+ * H-8): `system` may be a list of parts (the stored prompt and the turn's
+ * R4-29 line), each inline or staged; they are read in order and joined
+ * with a blank line.
  * @param {any} system
  * @param {import('../blobs.js').BlobStore | undefined} blobs
  * @param {any} owner
+ * @returns {Promise<string | undefined>}
  */
 export const systemTextOf = async (system, blobs, owner) => {
   if (system === undefined) return undefined;
+  if (Array.isArray(system)) {
+    /** @type {string[]} */
+    const parts = [];
+    for (const part of system) {
+      // eslint-disable-next-line no-await-in-loop -- at most two parts, in order
+      const text = await systemTextOf(part, blobs, owner);
+      if (text !== undefined) parts.push(text);
+    }
+    return parts.join('\n\n');
+  }
   if (!isStaged(system)) return system;
   try {
     if (blobs === undefined) throw Error('no blob store');
