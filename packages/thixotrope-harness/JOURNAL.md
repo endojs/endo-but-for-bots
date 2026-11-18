@@ -12128,3 +12128,58 @@ file changed (no bundle change, no template rebuild from XD). Time: first comman
 Over 60 s: M3 batch 1 172 s; m5-ui 67, 111, 111 s; batch of three 187 s; m4+m5 85, 92 s; m4-ui
 80 s; final batch 198 s; m3-ui 97 s.
 Fit: neutral.
+
+### J-10045 2026-11-18 X-QC secret paths after the merge - review
+Evidence: read the diff `bd9a8ec070..a3ab56ac25` of `AH/secrets/{writer,manager,store}.js`,
+`AH/index.js`, `GW/index.js`, `GW/extensions.js`, `GW/extensions/m4-secrets.js`,
+`ui/src/secrets/*`. The hub `SecretWriter` guard is `replace(R('Secret'), S.SealedBox, count?)`;
+`replaceLocal`/`publicKeyLocal` are not in the explicit ops handler list (`AH/index.js`,
+`attach.js` `M2_FORWARDS`), so no hub path reaches them; the page's writer is the gateway-local
+`GatewaySecretWriter` in `extras` (label taken first, an extension cannot claim it) and is the
+`LargeCall` target. `setDescription` events carry the label, never the text. Ran: 19 unit and
+adapter files directly (180 tests pass, 4.1 s wall), and `m2-secrets` in a shared slot (exit 0,
+82.4 s): grep of 49 files, 221.0 MB, 0 hits; `m2.secrets.plainValue` hits []. No path found by
+which a value leaves the adapter or the encrypted store. Residuals: a page could pass the
+gateway-local writer to a vat as an argument (integrity only; the value would originate in the
+vat); `m4-ui` greps the network log, DOM and state but not the page's `localStorage` /
+`sessionStorage`.
+Fit: good.
+
+### J-10046 2026-11-18 X-QC retirement push and K5 second kill point - review
+Evidence: `m4-retire` and `m5-grants-restart` pass in shared slots (81.0 s and 109.0 s held;
+batch of three 109.0 s wall, load 2.4). Duplicate push: `invalidate` is idempotent. Lost push
+after a manager or adapter restart: a new sink or incarnation loads afresh. Finding (probe under
+tmp, removed): a push that arrives while the bridge's FIRST `poolState` ask is in flight is not
+seen by a load that joins that ask (`known.state === undefined` returns the shared promise), so the
+next round got the retired member as `active`; the load after that re-asks (stale kept). With
+`poolStateRefreshMs` now 600 s and D-M4-10 (push may wait one `ops.credentials()` answer and
+travels a different path than the turn), "next turn" is not guaranteed. K5b: tool ran once,
+provider got the turn once, true result recorded once by replay; no duplicated work.
+Fit: neutral; poor: the next-turn guarantee rests on message timing.
+
+### J-10047 2026-11-18 X-QC interface split - review
+Evidence: `guards-split` (snapshot of 493 entries, 24 folded keys, vocabulary identical apart from
+XB's intended `poolsChanged`), `m1a/m1b/m2/m4-interfaces` pass. `lazyTable` throws on a name
+defined twice in the chain, so base, session and factory cannot answer different guards for one
+name. Every exo that changed table maps to the same guard object as before (M1b-only names) or to
+the old `m2Interfaces` version; the stand-in session gained `findTurn` and four refusing stubs
+because its guard is now the M2 one. Fixture re-baselines (XA 9, XB 3, XC 7 entries) all follow
+an intended guard change. Bundles at a3ab56ac25: session 214,690, exec 63,741, factory 164,836
+bytes (limits 240,000 / 120,000 unchanged).
+Fit: good.
+
+### J-10048 2026-11-18 X-QC tests and owner's rules - review
+Evidence: removed assertions are all replaced by stronger ones (sealed writes, audited
+`setDescription`, accountStatus result asserted, makeProvision path). Over 5 minutes in this lane's
+`runs.jsonl`: `m1a-slice` 307.6 s (X1, during template builds) and one `m5-grants-restart` time-out
+at 600 s while XC iterated (7 failing runs before 2 passes; 100-117 s now). Public hygiene grep of
+every added line: no absolute local path, host, non-loopback address, email or key-shaped literal.
+Adapter tools reach the model only from the session's own ports (`kind.tools` per backend) and
+never shadow a static entry or yield to a granted one. Membrane residual (powers.store) open, pinned
+by a test.
+Fit: neutral.
+
+### J-10049 2026-11-18 X-QC time record - verified
+Evidence: first command 15:11:18Z. Over 60 s: integration batch (m4-retire, m2-secrets,
+m5-grants-restart, `--jobs 3`) 109 s wall. No browser file and no perf file run; no exclusive mode.
+Fit: neutral.
