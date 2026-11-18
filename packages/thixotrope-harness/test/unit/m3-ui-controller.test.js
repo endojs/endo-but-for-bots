@@ -211,6 +211,17 @@ test('selectSession opens the view; a sent message streams and settles', async t
   t.is(last?.record.type, 'turn-start', 'a live turn keeps its live record');
   t.deepEqual(last?.fold?.messages, [{ role: 'assistant', text: 'Hello' }]);
   t.is(view.usage.turns, 4);
+  // M3-FIX (acceptance 8): the settled turn's records are re-read, so a
+  // long reply's staged text can be expanded without a reload.
+  await flush();
+  const settled = controller.getState().view?.messages.at(-1);
+  t.true(
+    (settled?.records ?? []).some(
+      (/** @type {any} */ record) => record.kind === 'turn-settled',
+    ),
+  );
+  t.is(settled?.record.type, 'turn-start', 'the live record is kept');
+  t.truthy(settled?.fold, 'and the fold');
 });
 
 test('re-attach: a reconnect rebuilds the view, the running turn and Stop', async t => {

@@ -11,8 +11,9 @@
  * `records` (transcript records in call order, text fields as previews or
  * staged fields). A live turn, or one with no records, shows its fold; a
  * settled turn with records shows its records, whose staged fields can be
- * read in full (thoughts are not transcript records, so a re-read settled
- * turn shows none, as after a reload).
+ * read in full (thoughts are not transcript records: a settled turn this
+ * page watched keeps its fold, with the records' texts where they pair,
+ * `withRecordTexts`; one read after a reload shows no thoughts).
  */
 
 /** @import { ShownMessage } from './ToolGroup.js' */
@@ -139,6 +140,48 @@ export const endingOf = entry => {
 };
 
 /**
+ * A settled turn this page watched live has both its fold and its records
+ * (the controller re-reads the newest history page at `end`/`abort`, M3-FIX
+ * acceptance 8). Its records are the fuller source of text (staged fields
+ * can be read in full); its fold alone has the thoughts and the live
+ * order. When the fold's assistant messages pair one to one with the
+ * records', the fold is shown with each assistant text, and each tool
+ * message whose `id` the records also have, taken from the records;
+ * otherwise the records alone, as after a reload.
+ *
+ * @param {readonly ShownMessage[]} foldMessages
+ * @param {ShownMessage[]} recordMessages
+ * @returns {ShownMessage[]}
+ */
+const withRecordTexts = (foldMessages, recordMessages) => {
+  const texts = recordMessages.filter(message => message.role === 'assistant');
+  const foldTexts = foldMessages.filter(
+    message => message.role === 'assistant',
+  );
+  if (texts.length !== foldTexts.length) return recordMessages;
+  /** @type {Map<unknown, ShownMessage>} */
+  const tools = new Map();
+  for (const message of recordMessages) {
+    if (message.role === 'tool' && message.id !== undefined) {
+      tools.set(message.id, message);
+    }
+  }
+  let next = 0;
+  return foldMessages.map(message => {
+    if (message.role === 'assistant') {
+      const paired = texts[next];
+      next += 1;
+      return { ...message, text: paired.text };
+    }
+    const tool =
+      message.role === 'tool' && message.id !== undefined
+        ? tools.get(message.id)
+        : undefined;
+    return tool ? { ...message, ...tool } : message;
+  });
+};
+
+/**
  * The messages a turn shows, and its live streaming text and phase.
  *
  * @param {Record<string, any>} entry a `TurnEntry`
@@ -161,8 +204,9 @@ export const turnContent = entry => {
       fromFold: true,
     };
   }
+  const fromRecords = messagesOfRecords(entry.records ?? []);
   return {
-    messages: messagesOfRecords(entry.records ?? []),
+    messages: fold ? withRecordTexts(fold.messages, fromRecords) : fromRecords,
     streamingText: '',
     phase: '',
     fromFold: false,

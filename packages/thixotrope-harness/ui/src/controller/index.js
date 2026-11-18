@@ -652,6 +652,7 @@ export const makeController = ({
         });
         attachFold(event.turnId);
         updateView({ current, busy: false, blocked: blockedBy(current) });
+        rereadSettled(event.turnId);
         break;
       }
       case 'usage':
@@ -674,6 +675,41 @@ export const makeController = ({
         }
     }
     return gap;
+  };
+
+  /**
+   * Re-read a turn this page watched settle (M3-FIX, acceptance 8): the
+   * newest history page holds its records, whose staged fields (a long
+   * reply's full text) can be read; the live fold has only previews. The
+   * entry keeps its fold and live record; the transcript takes the texts
+   * from the records (`withRecordTexts`).
+   *
+   * @param {string} turnId
+   */
+  const rereadSettled = turnId => {
+    const epoch = viewEpoch;
+    E(viewSession)
+      .getHistoryPage()
+      .then(
+        /** @param {Record<string, any>} page */ page => {
+          if (epoch !== viewEpoch) return;
+          mergeTurns(
+            page.turns
+              .filter(
+                /** @param {any} preview */ preview =>
+                  preview.turnId === turnId,
+              )
+              .map(preview => {
+                // The live `turn-start` record stays the entry's record.
+                const { record: _started, ...entry } = entryOfPreview(preview);
+                return entry;
+              }),
+          );
+        },
+        () => {
+          // A failed re-read leaves the fold; a reload reads the records.
+        },
+      );
   };
 
   /**

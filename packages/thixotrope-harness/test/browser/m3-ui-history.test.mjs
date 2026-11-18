@@ -9,7 +9,7 @@
  *   its `code` highlighted; `</>` shows the raw JSON;
  * - "Load earlier messages" pages the 300-turn session back to turn 1
  *   across the archive with every turn once;
- * - a 1 MiB reply renders fully (Show all reads it in pages).
+ * - a 1 MiB reply watched live renders fully (Show all reads it in pages).
  *
  * Gated by THIX_HARNESS_BROWSER=1 and a Chromium (`_harness.mjs`):
  *
@@ -173,10 +173,9 @@ run(
       200,
     );
     // The live fold keeps a bounded text; the settled transcript holds the
-    // reply as a staged field. Reload, so the turn is read from its records,
-    // and Show all pages the whole reply in (J-9605).
-    await page.reload();
-    await openSession(page, liveKey);
+    // reply as a staged field. The page re-reads the turn's records when it
+    // settles (M3-FIX), so Show all pages the whole reply in without a
+    // reload (J-9605 needed one).
     const showAll = mega.locator('.thix-show-all');
     await showAll.first().waitFor({ timeout: 30_000 });
     await showAll.first().click();
