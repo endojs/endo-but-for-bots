@@ -7523,3 +7523,116 @@ turn id through `History` and the vat: 5,000 in 21.5 s, 30,000 in 78 s (2,140 pa
 Decision: fixtures for W2.9: 5,000 turns in about 11 min (6.5 min plain), 50 sessions x 300 turns
 for `restart.serving` in about 20-35 min, 30,000 plain in about 39 min. Faster needs the core
 candidate of J-0481 or a segment-copy import (J-0483).
+
+### J-0710 2026-11-18 M5 object model - good fit
+Evidence: `designs/m5-interfaces.md` 2.1-2.6 (W5.0, commits `2717d05255`, `827ec02c54`);
+`guest/lib/interfaces-m5-factory.js`; Fae `session/preset-catalog.js` at `1315bef86`.
+Reading: presets, inventory entries, endowments, attachments and grants are all objects passed
+where Endo passed names: `createSession({ preset })` takes the `Preset`, edits are the preset's own
+methods, an endowment is `{ label, value }` with the object itself, a mention hands the object
+through the Composer, a grant is `grantTool(tool) -> ToolGrant`. Fae's preset ids, `sourcePath`,
+the `tools/` pet-name directory, the attachment slots it parked objects in, and the dismissal
+bookkeeping of the package message all disappear: the factory's heap holds the records, the
+session's heap the label map, and a package is closed by dropping a `Map`. The only names left
+are F.2's: labels a human or the model reads, the message number, the catalogue revision and
+inventory cursors. Rights amplification (a catalogue `WeakMap` from `Preset` to its record) lets
+the factory's resolvers read a preset synchronously and refuse a foreign object, as
+`SecretWriter` does for secrets.
+Decision: as designed.
+
+### J-0711 2026-11-18 M5 calling objects the session did not mint - awkward
+Evidence: architecture facts 2 and 4 (J-0193, J-0194, J-0191, J-0333); `m5-interfaces.md` D-M5-2;
+Fae `src/source-tools.js`, `src/tools.js` (`discoverTools` calls `schema()` on every stored tool
+each round).
+Reading: M5 is the first milestone where a session holds objects it did not make and is asked to
+call them (`lookup` renders method names, `describeCapability` calls `help()`, `readSources`
+reads, a granted tool's `schema()` and `execute()`). Any answer above about 94 KB halts the vat
+it enters for good, and an answer record with fresh keys drains its name table; the guard runs
+after decoding, so the session vat cannot protect itself. Endo had the same calls inside one
+unconfined worker, where a large answer is only slow. Here the calls move to the session's exec
+vat (`ExecScope.inspect`), which renders and bounds the answer before the session sees it; a
+hostile answer costs at most the exec vat, which the session already knows how to lose and
+replace. Cost: an extra guest hop per inspection (about 2 x 53 ms) and the model's exec bindings
+when an object misbehaves. CC-070 (refuse an oversize frame instead of halting) would remove the
+reason for the detour.
+Decision: D-M5-2; CC-070 and CC-073 filed in the contract (9.2); open decision O-2.
+
+### J-0712 2026-11-18 M5 model code reaching other vats - awkward
+Evidence: `m5-interfaces.md` D-M5-3, 2.7; `guest/exec/main.js` (`makeCall`, J-0391, J-9368).
+Reading: until M5 model code could reach nothing outside its exec vat but `sleep`. With `powers`
+it holds objects of other vats (another session if the operator endowed one, a fixture vat, a
+manager's handles), and one argument above about 94 KB halts the receiving vat, a guest vat that
+may hold a whole session. A per-call membrane in the exec program checks every outgoing message
+(12,288 estimated bytes, 32 keys per record, 256 per message, depth 32) and wraps remotable
+answers; it is built on the call's own `E`, so it dies with the call as `sleep` does (rule 12.13).
+It cannot stop a sequence of small messages with fresh keys from draining another vat's name table
+over many calls (fact 4: names are never released); only the engine can (CC-071, C-6).
+Decision: D-M5-3, open decision O-9; CC-071 filed.
+
+### J-0713 2026-11-18 M5 tool arguments in the session vat - awkward
+Evidence: `lint/guest-rules.js` `no-data-keys` (forbids `JSON.parse` in session and factory code);
+rule 12.10; Fae `store(value, petName)` takes any JSON.
+Reading: `list`, `lookup`, `store`, `remove` belong in the session vat (they read and write its
+label map, and running them there costs no extra delivery: the result is recorded in the
+round-final crank), but their arguments are model JSON, and parsing it mints property names for
+life. `parseClosedArgs` scans the text once, compares every key with the tool's closed schema as a
+string before building anything, decodes string literals by hand, and keeps `store`'s `value` as
+its source text: the stored value is never parsed in the session vat at all (the exec vat parses
+it when model code asks `powers.lookup`). Thixotrope's per-vat name table turns a convenience
+(`JSON.parse`) into a parser we maintain.
+Decision: as designed (W5.3).
+
+### J-0714 2026-11-18 M5 session program budget - perf
+Evidence: `node scripts/bundle-guest.mjs` in the M5 lane at `3588cab190` (comments stripped):
+session 186,448 bytes of `sessionProgramBytes` 200,000 (24 modules), exec 84,354 of
+`execProgramBytes` 100,000, factory 137,074.
+Reading: 13,552 bytes are left in the session program; M5's session-side code (label map, three
+tool modules, packages, grants, the powers source, the session half of the M5 guards) is
+estimated at about 25 KB, and M4's `accountStatus` and M6's tools come later. `interfaces.js`
+alone is a large share of every bundle (every vat carries every guard). The 200 KB bound came from
+cold creation time (about 10 us per staged byte, D-4), which the spare pool hides.
+Decision: open decision O-1 (default: the PM raises the limits to 240,000 / 120,000 at merge if
+the merged lanes exceed them, with the `session.createCold` row; the alternative is splitting
+`interfaces.js` per vat). Factory-only M5 guards were put in their own file so the session bundle
+does not carry them.
+
+### J-0715 2026-11-18 M5 parallel lanes - deviation
+Evidence: `guest/lib/interfaces-m5.js` `extendInterface`, `m5Extensions`; a probe in W5.0 (an
+`M.interface` guard's `payload.methodGuards` spreads into a new `M.interface`, method order
+kept); `m5-interfaces.md` 9.1.
+Reading: M2 extended interfaces by adding `m2Interfaces` to `interfaces.js`. Three lanes doing that
+at once would all edit the same file and the same exo-construction lines. M5's interfaces are
+therefore built in new files from the M2 guards' method guards, and M5's method guards are also
+exported alone, so where M4 and M5 extend one interface (`Operator`, `Session`) the merge is one
+line that spreads both. M5's remaining edits to shared files are listed as hotspots H-1..H-12 with
+the exact seam; the four shape widenings are the only lines M5 adds to `interfaces.js`. The
+reliance on `payload` is pinned by W5.3's contract test and filed as CC-072.
+Decision: as designed; for the PM at the merge of M3, M4 and M5.
+
+### J-0716 2026-11-18 M5 spec deviations - deviation
+Evidence: SPEC R3-6, R3-22, R3-27, R3-31, R4-26, R6-55; Fae `session/preset-catalog.js`,
+`src/tool-makers.js` at `1315bef86`; `m5-interfaces.md` 9.3.
+Reading: (1) the catalogue revision is a count, not Fae's random UUID text (compare-and-set only);
+(2) preset instructions are at most 4,096 units (Fae 32,768) so a preset fits one frame (O-4); (3)
+`store` keeps values of at most 8,192 bytes and 256 KB per session, and the label map holds 256
+labels (O-3; Endo had no bound); (4) granted tool descriptions are cut to 1,024 units and schemas
+limited to 2,048 (R3-27: 16,384 and 1 MiB) so round requests fit a frame (O-6); (5) grants come
+from the Session holder and `adoptTool`, not from model code binding under `tools` (O-12); (6)
+the label map and queue attachments are not exported (O-8); (7) a preset's endowments are
+re-checked at the snapshot's revision and a creation racing an edit fails instead of mixing two
+revisions; (8) duplicate granted names are refused at discovery each round, so both stay refused
+until one is withdrawn (R3-6 as written).
+Decision: defaults as listed, for the owner.
+
+### J-0717 2026-11-18 M5 perf method - perf
+Evidence: the owner's rule of 2026-11-18 (no test or perf file over 10 minutes; a perf check
+measures a rate or latency over a fixed window; large states by import; a milestone's regression
+within 20 minutes on four slots); J-0485 (5,000 turns by import take 652 s).
+Reading: nothing M5 adds grows with session length (labels, grants and packages are bounded
+retained state), so every M5 row runs on a fresh session from the template over a 60 s window,
+and the regression is about 17 minutes on four slots. The M2 rows that still name 5,000-turn
+sessions (`archive.flat`, acceptance 15) do not fit the new rule even by import (652 s); they can
+become per-turn rates over 60 s windows at two lengths reachable within a few minutes (for example
+200 and 1,000 turns) plus the archive's own bounded-retention checks, or wait for a segment-copy
+import (J-0483).
+Decision: M5 as designed; the M2 rows for the PM.
