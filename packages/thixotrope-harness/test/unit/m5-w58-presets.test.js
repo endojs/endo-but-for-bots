@@ -394,69 +394,72 @@ const fire = (window, element, type) => {
   element.dispatchEvent(new EventClass(type, { bubbles: true }));
 };
 
-test('the panel in happy-dom: list, built-in controls, edit and save, a refusal shown', async t => {
-  const dom = makeTestDom();
-  const fake = makeFakeCatalog();
-  const { powers } = pageOver(fake);
-  const context = harden({
-    powers,
-    extra: () => undefined,
-    controller: {},
-    call: (/** @type {() => Promise<unknown>} */ fn) => fn(),
-  });
-  const draw = () => render(h(PresetEditor, { context }), dom.root);
-  draw();
-  const q = (/** @type {string} */ selector) =>
-    dom.document.querySelector(selector);
-  await waitFor(
-    () => dom.document.querySelectorAll('.thix-preset-item').length === 3,
-  );
-  const items = [...dom.document.querySelectorAll('.thix-preset-item')];
-  t.true(items[0].textContent.includes(presetTexts.builtIn));
-  t.true(items[2].textContent.includes(presetTexts.unavailable));
+test.serial(
+  'the panel in happy-dom: list, built-in controls, edit and save, a refusal shown',
+  async t => {
+    const dom = makeTestDom();
+    const fake = makeFakeCatalog();
+    const { powers } = pageOver(fake);
+    const context = harden({
+      powers,
+      extra: () => undefined,
+      controller: {},
+      call: (/** @type {() => Promise<unknown>} */ fn) => fn(),
+    });
+    const draw = () => render(h(PresetEditor, { context }), dom.root);
+    draw();
+    const q = (/** @type {string} */ selector) =>
+      dom.document.querySelector(selector);
+    await waitFor(
+      () => dom.document.querySelectorAll('.thix-preset-item').length === 3,
+    );
+    const items = [...dom.document.querySelectorAll('.thix-preset-item')];
+    t.true(items[0].textContent.includes(presetTexts.builtIn));
+    t.true(items[2].textContent.includes(presetTexts.unavailable));
 
-  // A built-in: template fixed, Reset offered, Delete not.
-  t.true(q('select[name="template"]').disabled);
-  t.truthy(q('button[name="reset"]'));
-  t.is(q('button[name="delete"]'), null);
-  t.true(q('button[name="save"]').disabled, 'nothing to save yet');
+    // A built-in: template fixed, Reset offered, Delete not.
+    t.true(q('select[name="template"]').disabled);
+    t.truthy(q('button[name="reset"]'));
+    t.is(q('button[name="delete"]'), null);
+    t.true(q('button[name="save"]').disabled, 'nothing to save yet');
 
-  const instructions = q('textarea[name="instructions"]');
-  instructions.value = 'Typed in the panel';
-  fire(dom.window, instructions, 'input');
-  await waitFor(() => !q('button[name="save"]').disabled);
-  fire(dom.window, q('button[name="save"]'), 'click');
-  await waitFor(() => q('.thix-preset-notice') !== null);
-  t.is(q('.thix-preset-notice').textContent, presetTexts.saved);
-  t.is(fake.presets[0].state.record.instructions, 'Typed in the panel');
+    const instructions = q('textarea[name="instructions"]');
+    instructions.value = 'Typed in the panel';
+    fire(dom.window, instructions, 'input');
+    await waitFor(() => !q('button[name="save"]').disabled);
+    fire(dom.window, q('button[name="save"]'), 'click');
+    await waitFor(() => q('.thix-preset-notice') !== null);
+    t.is(q('.thix-preset-notice').textContent, presetTexts.saved);
+    t.is(fake.presets[0].state.record.instructions, 'Typed in the panel');
 
-  // Add an object from the inventory picker.
-  const picker = q('select[name="addObject"]');
-  picker.value = '1';
-  fire(dom.window, picker, 'change');
-  await waitFor(() => q('input[name="endowment-0"]') !== null);
-  t.is(q('input[name="endowment-0"]').value, 'calc');
+    // Add an object from the inventory picker.
+    const picker = q('select[name="addObject"]');
+    picker.value = '1';
+    fire(dom.window, picker, 'change');
+    await waitFor(() => q('input[name="endowment-0"]') !== null);
+    t.is(q('input[name="endowment-0"]').value, 'calc');
 
-  // Another page saves first: this page's save shows the refusal.
-  const other = await openEditor(pageOver(fake).powers);
-  other.setField('description', 'elsewhere');
-  await other.save();
-  fire(dom.window, q('button[name="save"]'), 'click');
-  await waitFor(() => q('.thix-preset-error') !== null);
-  t.is(q('.thix-preset-error').textContent, STALE);
-  t.is(q('input[name="endowment-0"]').value, 'calc', 'edits kept');
+    // Another page saves first: this page's save shows the refusal.
+    const other = await openEditor(pageOver(fake).powers);
+    other.setField('description', 'elsewhere');
+    await other.save();
+    fire(dom.window, q('button[name="save"]'), 'click');
+    await waitFor(() => q('.thix-preset-error') !== null);
+    t.is(q('.thix-preset-error').textContent, STALE);
+    t.is(q('input[name="endowment-0"]').value, 'calc', 'edits kept');
 
-  // A user preset: Delete offered, Reset not.
-  fire(dom.window, q('button[name="reload"]'), 'click');
-  await waitFor(() => q('input[name="endowment-0"]') === null);
-  fire(dom.window, q('button[name="saveAsNew"]'), 'click');
-  await waitFor(
-    () => dom.document.querySelectorAll('.thix-preset-item').length === 4,
-  );
-  await waitFor(() => q('button[name="delete"]') !== null);
-  t.is(q('button[name="reset"]'), null);
-  t.false(q('select[name="template"]').disabled);
+    // A user preset: Delete offered, Reset not.
+    fire(dom.window, q('button[name="reload"]'), 'click');
+    await waitFor(() => q('input[name="endowment-0"]') === null);
+    fire(dom.window, q('button[name="saveAsNew"]'), 'click');
+    await waitFor(
+      () => dom.document.querySelectorAll('.thix-preset-item').length === 4,
+    );
+    await waitFor(() => q('button[name="delete"]') !== null);
+    t.is(q('button[name="reset"]'), null);
+    t.false(q('select[name="template"]').disabled);
 
-  render(null, dom.root);
-  await dom.close();
-});
+    render(null, dom.root);
+    await dom.close();
+  },
+);
