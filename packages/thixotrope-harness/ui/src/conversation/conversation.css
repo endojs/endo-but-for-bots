@@ -1,0 +1,105 @@
+/* Conversation views (W3.6): what floot.css (Floot at 1315bef86) has no
+   rule for. Colours come from Floot's variables. */
+
+.thix-conversation-tools {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.thix-raw-toggle,
+.thix-details-btn,
+.thix-show-all,
+.thix-recovery-close,
+.thix-recovery-more,
+.floot-history-earlier {
+  font: inherit;
+  font-size: 0.8rem;
+  border: 1px solid var(--fl-border);
+  background: var(--fl-surface2);
+  color: var(--fl-text-muted);
+  border-radius: 6px;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+}
+
+.thix-raw-toggle.on {
+  color: var(--fl-accent);
+  border-color: var(--fl-accent);
+}
+
+.floot-history-earlier {
+  align-self: center;
+  margin: 0.25rem auto;
+}
+
+.thix-show-all {
+  margin-left: 0.5rem;
+}
+
+.thix-text-error,
+.thix-send-error {
+  color: #dc2626;
+  font-size: 0.85rem;
+}
+
+.thix-send-error,
+.thix-composer-blocked {
+  padding: 0.25rem 0.75rem;
+}
+
+.thix-composer-blocked,
+.thix-turn-status-reason,
+.thix-turn-status-note,
+.thix-phase {
+  color: var(--fl-text-muted);
+  font-size: 0.85rem;
+}
+
+.thix-turn-status-reason {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thix-thinking-row {
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.thix-turn.sealed .floot-msg {
+  opacity: 0.92;
+}
+
+.thix-recovery-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.thix-recovery-head {
+  font: inherit;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0.35rem 0;
+}
+
+.thix-recovery-error {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thix-recovery-note {
+  display: block;
+  width: 100%;
+  min-height: 4rem;
+  font: inherit;
+}
+
+.thix-stop {
+  width: auto;
+  border-radius: 22px;
+  padding: 0 0.9rem;
+}
