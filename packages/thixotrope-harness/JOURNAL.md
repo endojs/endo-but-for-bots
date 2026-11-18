@@ -13220,3 +13220,83 @@ Time: first command 18:38:18Z. Over 60 s: unit lane 65 s; `m3-gateway` integrati
 files (no guest or manager change; the gateway bind is covered by `m3-gateway`), perf. Scratch
 `tmp/G1` removed. Last command: the date after the commit of this entry.
 Fit: neutral.
+
+### J-10135 2026-11-18 S1 HR-SYN-12: every backend kind names its fixed failure text - built
+Evidence: `48bb1848e9`. `BackendKind.unexpectedFailure` is required: `makeAgentHostImpl` refuses a
+kind table with a kind that has none (`assertBackendKinds`), and `makeEndpoint` takes the text
+as a required option instead of falling back to `scripted provider failed: <error.message>`. The
+scripted kind's text is the fixed `scripted provider failed`; the OpenRouter, Anthropic and pool
+kinds carry the texts their providers carried before (the providers no longer do). 13 test and
+perf call sites pass the kind's text. Before: with the old `endpoint.js` in place the two new
+endpoint tests failed (the record carried the error's message; an endpoint without the text was
+made). Fit: good; one source for the text.
+
+### J-10136 2026-11-18 S1 HR-SYN-22 and HR-SYN-9: the state layout once; one blob sweep per incarnation - built
+Evidence: `1c4f5a3a64`. `findStateDir` is the one reader of `argv[3]`; `makeAgentHostImpl` takes
+`stateDir` and works the layout out once, lazily (a caller naming only `blobDir` names
+`<state>/agent-host/blobs`); secrets, subscriptions and the gateway get that value; one quiet and
+one throwing sink getter. `BlobStore.sweep` runs once per incarnation and sets the daemon count
+(no more `+=` per bind; a rebind no longer deletes this incarnation's `.part` files, `w<pid>-<n>`
+writers included). The first staging sweeps when no bind did; until a sweep succeeds every
+staging is refused with `blobsUncountedText`. The bind reports a failed blob or archive sweep
+(`report` option, a JSON line on stderr by default) and goes on. The archive sweep stays per
+bind, now reported. New `test/adapter/agent-host-state-layout.test.js` (6 tests). Before (old
+`blobs.js`, `index.js`, old API only): a double bind counted 10,000 bytes as 20,000 and the
+`stateDir` option was ignored. Reading: an unreadable blob directory also failed staging before,
+at the directory fsync, so the old under-count needed a `readdir`-only failure. Fit: good.
+
+### J-10137 2026-11-18 S1 HR-SYN-10: Composer pre-check and one retired-break rule - built
+Evidence: `aea8c600a0`. With attachments `submit` runs the session's own `checkAttachments`
+(`guest/session/packages.js`, pure, adapter import; no bundle change) before staging. The guard
+prefixes, the inline-size prefix and the M5 texts cut at `(` are gone: the Composer's guard has
+the session's argument shapes and a staged call is never inline. A file is deleted only for the
+session's state refusals compared whole (request id invalid, expired, reused; receipt limit;
+queue full; for edit, entry gone). The shared retired-break rule is **keep**, for submit and
+edit: a break never means "not done" (M0 S9), so deleting could lose text a record holds, while
+keeping costs disk until delete or M13's sweep (M1b leak 4.7). Edit used to delete; m2-interfaces
+11 amended, with m1b 17.1 and the m5 Composer paragraph. Before: 4 new or changed tests failed on
+the old `composer.js`. Fit: good; residue is exact texts from the session's table, the
+`isRetiredBreak` idiom.
+
+### J-10138 2026-11-18 S1 HR-SYN-13 first half: the live probe injected - built
+Evidence: `84bb177365`. No file switches the probe on. `makeChannelRegistry` has none unless
+passed; `makeAgentHostImpl({ probe })` defaults to `liveProbeFromEnv(env)`, which reads
+`THIX_HARNESS_LIVE_PROBE_DIR` (added to the supervisor allowlist). `perf/turn.perf.mjs` names it
+through a new `provision({ env })` option, so only the daemon a perf run serves has it. A process
+boundary leaves launch configuration as the only injection. `BackendSpec.logPath` left for step 4.
+Not run: `perf/turn.perf.mjs` (perf, exclusive).
+Fit: neutral; the environment route is the narrowest the core allows today.
+
+### J-10139 2026-11-18 S1 HR-SYN-8: secret writes safe across a retired break - built
+Evidence: `39ab65a208` (store), `9d43c8141a` (manager). The store answers a repeated create of an
+entry that is exactly a fresh create (same label and description, generation 0, active, no
+value) without a second write; any other is `CREATE_FAILED`. `withOps(fn, retry)`: Secret.delete's
+retry takes `UNKNOWN_SECRET` as the applied delete. `m2-w23-manager` kit gained a fault hook
+(apply, then die before answering). Before: the 3 HR-SYN-8 tests failed (create threw, orphan
+entry; deleted Secret stayed listed). Fit: good.
+
+### J-10140 2026-11-18 S1 HR-SYN-11: pagers by creation serial, strict cursors - built
+Evidence: `9d43c8141a`, `088647510a` (m4-interfaces amended). `serialCursor` accepts canonical
+digits only; `list`, `catalog` and `listMembers` use it with their old refusal texts. The
+catalogue pages by the Secret's serial; members carry a `serial`. Before: 4 tests failed (a delete
+between catalogue pages skipped the first secret after the page; `1e3` was a cursor). Reading:
+`maxMembers` (64) equals `poolPageEntries` (64), so members fit one page today and the member
+skip was latent. Manager rows 8 and 11 are one batch: one reinstall. Fit: good.
+
+### J-10141 2026-11-18 S1 tests and lanes - test
+Adapter lane: 446 passed (64 s). Unit lane with `test/*.test.js`: 814 passed (15 s). Integration,
+shared slots, `--jobs 4`: m1a-slice, m1b-live, m2-secrets, m2-lifecycle, m2-queue, m4-secrets,
+m4-catalog, m4-pools all exit 0, 583.6 s wall, 1,286.9 s held, no `sweep-failed` line. `tsc` 0;
+eslint no error on changed files; prettier clean; `lint:duplicates` 3.22 % (869 of 26,998).
+Bundles (no guest file changed by S1): session 214,690, exec 63,826, factory 164,836 bytes, same
+before and after. Fit: good.
+
+### J-10142 2026-11-18 S1 rows not built here - reading
+Swallowed errors kept as do-now rows on the adapter side: only the two start-up sweeps
+(HR-SYN-9), now reported. HR-GUEST-12 (factory start listener) is guest side, not built.
+HR-SYN-22's lasting part (a core state-directory power, AR-SYN-28) and the gateway's own default
+(`gateway/index.js` still guesses when called alone) are outside S1's files. Fit: neutral.
+
+### J-10143 2026-11-18 S1 time record - verified
+Time: first command 18:52:15Z. Over 60 s: adapter lane 64 s; integration batch 583.6 s wall.
+Scratch `tmp/S1` removed. Last command: the date after this entry's commit. Fit: neutral.
