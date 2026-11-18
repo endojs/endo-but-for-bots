@@ -14075,3 +14075,50 @@ Fit: good; no M8 behaviour changed, only who applies which seam and when.
 Evidence: first command 2026-11-18T23:40:38Z, last 2026-11-18T23:47:40Z (before this commit).
 Reading: reading the step-3 code and editing the contract; no probe needed beyond reading.
 Commit `15f86101eb`. Not run: any supervisor, integration test, perf check or cargo.
+
+### J-1313 2026-11-18 W11.0 settle: the M11 session share and the step-3 anchors - measure
+Evidence: `node scripts/bundle-guest.mjs --out <scratch>` on this tree (module lists);
+`step3-plan.md` at `53a8dbb9ea`; the cleanup lane at `cecfa12809`: `guest/factory/starts.js`,
+`factory.js` (`createSession` l.361, `Operator` l.420, kit return l.539), `main.js`
+(`makeHarnessRoot` call), `root.js` (`makeHarnessRoot`), `GW/server.js` upgrade handler after
+HR-SYN-35, `GW/index.js` `incarnationParts`, `GW/extensions.js` `makeExtensionServices`,
+`makeLargeCalls`, `AH/index.js` `makeGatewayService` call (l.439-453) and `secrets().readKey`
+(l.264).
+Reading: session 206,907 bytes bundles `guards/base.js` and `guards/session.js` only; factory
+155,427 bundles `guards/factory.js`; exec 61,688. So appendix A grows the factory program only:
+M11's session share is 0 (cross-check X-01), checked as byte identity, not a cap. Step 3 built the
+start count as an object (`current()`, `next()`), keeps the Origin check before extension upgrade
+routes, and passes one shared `context` to every extension's `make` and `target`. No seam of M11
+touches a runtime part or the provider shell; no anchor stays provisional.
+
+### J-1314 2026-11-18 W11.0 settle: speech settings authority and the key reader - decision
+Evidence: cross-check X-11 (b), (c); `vocabulary.js` `collectNames` (method names are a union of
+all interface guards); `root.js` `HarnessRoot.configure` (sets the pool, answers `PoolStatus`);
+`Operator.getSecrets` (a page already holds `SecretsAdmin`).
+Decision: D-M11-21: `configureSpeech` leaves `Voice` for `HarnessRoot.configureSpeech` (provisioning
+step `70-voice.js`); `Voice.speechSettings()` stays readable (no new authority: the page holds
+`SecretsAdmin` and no gateway method reads a key through a grant). D-M11-22: the gateway service
+takes `extensionPowers` `[{ extension, powers }]`; the speech extension object imported by
+`AH/index.js` is matched by identity against the loader's, and only its `make`/`target` receive
+`readGrant`. Assumption A-5 (one module instance for `require` and `import`) proved first by W11.5;
+if it fails W11.5 stops and the PM rules on a file-name fallback. Rejected: a `SpeechAdmin` facet,
+a `HarnessSettings.speech` field, a `serve` config field (manager part), a method-name exclusion.
+
+### J-1315 2026-11-18 W11.0 settle: the other cross-check items for M11 - decision
+Evidence: X-02, X-09, X-10, X-12, X-14, X-17; spec R2-6, R2-20, R3-13, R3-244, R3-245, R5-1..R5-71,
+R6-53, R8-17, R8-29, R8-43.
+Decision: H1 (appendix A, now with `HarnessRoot.configureSpeech`), H3 and H4 are WX.1's; W11.7 and
+W11.8 start from WX.1. Provisioning step `70-voice.js`. `makeVoice({ ..., starts })`; partner text
+`getMail`. Appendix C maps every voice spec item to an acceptance item, a departure or an owner;
+R8-29 recorded as departure D-M11-23 (engines fresh per incarnation, started at first use; O-12).
+Talk without a runner: D-M11-25, O-11 (default refuse). New acceptance 19-22; the cross-lane
+`voice-preset.test.js` is WX.F's. `voice.deliveries` is a gate row inside the `voice.speakOpen`
+window. Merge M11 first; F-7 waits for M6 or moves to WX.F. Work-unit journal ranges: PM assigns.
+`GW/extensions/README.md` has one owner (W11.9). None of the issues was declined.
+
+### J-1316 2026-11-18 W11.0 settle: time record - process
+Evidence: first command 2026-11-18T23:40:37Z; last command logged with the settle report.
+Reading: reading the contract, the cross-check entries, `step3-plan.md` and the built step-3
+blocks took most of the time; one bundle probe (under 1 minute). Not run: any supervisor,
+integration test, perf check or cargo. Other contracts not edited.
+Fit: neutral.
