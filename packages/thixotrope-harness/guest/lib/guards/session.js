@@ -821,8 +821,8 @@ export const m1bMethodLists = harden({
 // ================================================================ M2
 //
 // The M2 contract (W2.0; designs/m2-interfaces.md). New shapes and new
-// interfaces go into the folded tables; `m2Interfaces` holds the M2 versions
-// of interfaces M2 extends (m2-interfaces.md 1.3).
+// interfaces go into the folded tables, and so do the M2 versions of the
+// interfaces M2 extends (`m2Versions`; the fold, m2-interfaces.md 1.3).
 
 /** M2's shapes (W2.0). */
 const m2ShapeBuilders = {
