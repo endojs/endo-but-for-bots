@@ -35,20 +35,30 @@
     "test": "ses-ava",
     "test:integration": "THIX_HARNESS_INTEGRATION=1 node scripts/test-integration.mjs",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
-    "test:xs": "exit 0"
+    "test:xs": "exit 0",
+    "build:ui": "node ui/build.mjs",
+    "test:browser": "THIX_HARNESS_BROWSER=1 THIX_HARNESS_INTEGRATION=1 node scripts/test-integration.mjs"
   },
   "dependencies": {
+    "@endo/captp": "workspace:^",
     "@endo/compartment-mapper": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/init": "workspace:^",
-    "@endo/thixotrope": "workspace:^"
+    "@endo/marshal": "workspace:^",
+    "@endo/thixotrope": "workspace:^",
+    "preact": "^10.29.8",
+    "ses": "workspace:^",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@endo/ses-ava": "workspace:^",
+    "@playwright/test": "^1.64.1",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
+    "esbuild": "^0.28.2",
     "eslint": "catalog:dev",
+    "happy-dom": "^20.14.6",
     "typescript": "catalog:dev"
   },
   "files": [],
