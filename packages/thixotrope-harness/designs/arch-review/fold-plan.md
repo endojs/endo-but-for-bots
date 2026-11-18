@@ -124,7 +124,7 @@ rebuilds the template once.
 
 ## 6. Applied by F2 (the rename map)
 
-F2 applied part of this plan on `claude/thix-clean` (commits `319366eb5f`..`4eda82d98d`). This
+F2 applied part of this plan on `claude/thix-clean` (commits `319366eb5f`..`b9b535e034`). This
 table is the reference for every contract, journal entry or test that names an old path or export.
 Contract text is not rewritten; each contract carries a note pointing here.
 
@@ -148,6 +148,7 @@ Contract text is not rewritten; each contract carries a note pointing here.
 | `guest/lib/limits-m4.js` `m4Limits` | `guest/lib/subscription-limits.js` `subscriptionLimits` | `93b410bf4b` |
 | `guest/lib/texts-m4.js` `m4Texts`, `m4TextOf`, `m4Codes` | `guest/lib/subscription-texts.js` `subscriptionTexts`, `subscriptionTextOf`, `subscriptionCodes` (the rest unchanged) | `93b410bf4b` |
 | `session/turn.js` `CANCELLED_BEFORE_RUN`; seven `messageOf` copies | `session/tools/exec.js` `NOT_RUN_TEXT`; `guest/lib/bounded.js` `messageOf` | `50c997c4cc` |
+| `shapes.ExecLease` (`guards/factory.js`) | `shapes.ExecScopeInfo` (a shape name only) | `b9b535e034` |
 
 Every guard, shape, method list and text kept its digest except the two HR-SYN-34 changed on
 purpose; `test/fixtures/guard-fold-map.json` maps each entry to its old key and lists every old
