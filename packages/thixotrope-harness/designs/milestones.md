@@ -6,8 +6,9 @@ section 9, budgets in its section 11). All code is written in the harness checko
 `H/` = `packages/thixotrope-harness/`. `pkg/` = `packages/thixotrope/`. `AH/` =
 `H/resources/agent-host/impl/` (the run-time-loaded implementation, D-14).
 Endo reference files are read with `git -C <T> show 1315bef86:<path>`. Spec items are cited as
-SPEC:<line> in `endo-harness-spec.md`. M0, M1a and M1b are done and M2 is done with open items
-(listed at the top of its section): what M0 measured and changed is in
+SPEC:<line> in `endo-harness-spec.md`. M0, M1a, M1b and M5 are done; M2, M3 and M4 are done with
+open items (listed at the top of each section; M3-M5 closed by X-CLOSE after the cross-lane
+integration): what M0 measured and changed is in
 `m0-results.md` (which also keeps every core-change candidate's status), M1a's outcome table is in its
 section below, and decisions or budgets changed because of them are listed in "Changes after M0 and
 M1a" at the end of this file.
@@ -87,7 +88,8 @@ check at the end lists every file and hook point each group touches.
 row, C-2's rest) and CC-060 (M4, `m4-interfaces.md` 19: the alleged interface name stored once per
 export row, for object-granular reachability) both change the hub's row format in
 `pkg/src/net/hub.js` and its log store. They must be made as **one** core change (one format, one
-migration, one `CORE-CHANGES.md` entry), whichever lane asks first.
+migration, one `CORE-CHANGES.md` entry), whichever lane asks first. Status (X-CLOSE): requested,
+not built; the row is in `CORE-CHANGES.md` "Core requests from the M3, M4 and M5 contracts".
 
 ---
 
@@ -489,12 +491,16 @@ a session takes at most 4,096 Composer submissions in 24 h (J-9391).
 section). Every acceptance item passes except one ratio of 15 at 1,000 turns; reviews M2-R1, M2-R2
 (reject, fixed by M2-FIX) and M2-R3 are closed except the items below. Open:
 
-- **major** (security, contract): `SecretWriter.replace` still accepts a plain string from a
-  remote (hub) caller (M2-R1 (b), J-9486). The fix (a SealedBox-only exo guard plus an in-process
-  `replaceLocal` or page-side sealing) changes M3 A-11 and M4's secrets contract: for the lane
-  merge.
+- **closed** (was major, security): `SecretWriter.replace` from a remote (hub) caller now takes
+  only a `SealedBox`; the gateway writes a page's value through its own in-process writer
+  (`replaceLocal`), handed to pages in `GatewayPowers.extras` and refused as an argument toward a
+  vat; a refused plain value is answered `secretFailed("INVALID_SECRET_BYTES")`, which never
+  quotes it (XA J-10005..J-10009, X-FIX J-10054, J-10055; `m2-secrets`,
+  `m2-secret-writer-paths`, `m4-ui` pass at X-CLOSE, J-10060).
 - **major** (perf): `checkpoint.stall` p99 1.40 x on a session grown by turns, 1.05 x on imported
-  ones; the cause is the core's cadence snapshot (C-24, J-9494). Core candidate.
+  ones; the cause is the core's cadence snapshot (C-24, J-9494). The core lane's CC-026 (snapshot
+  deferral, on main, not in the M3-M5 integration lane) lowers it partly (p99 2,170 -> 1,195 ms at
+  load 2); re-measure in the next exclusive pass after main is merged into the lane.
 - **fail** (acceptance 15 at 1,000 turns, `archive.flat.hubRow.at1000`): hub row characters
   1.39 x the 200-turn row while entries are 1.00 x; the read caught one answer owed (J-9496). Not
   re-based; a read at a quiescent point is the proposed procedure fix, for the PM.
@@ -761,6 +767,34 @@ inline too-big refusal (C-25).
 
 ## M3. Chat UI and gateway
 
+**Status: done with open items** (X-CLOSE, 2026-11-18, after the cross-lane integration of M3, M4
+and M5; the outcome table at the end of this section). Every acceptance item passes in this run.
+Open:
+
+- **major** (test process): `perf/gateway-session.perf.mjs` exited 124 in the recorded pass: every
+  row was measured (`fileTime` 555 s) but the clean stop after the 24-restart SIGKILL window ran
+  past the 10-minute box (held 602 s). Proposed fix: move `ui.restartReady.*` into a file of its
+  own (J-10062).
+- **fail** (perf, carried): `ui.hubGrowth` session row exports 1.91 x the start (budget 1.25 x)
+  while the hub stays at 1.15 MB; the request is CC-051 + CC-060, one hub row-format change
+  (`CORE-CHANGES.md`, requested, not built).
+- **minor**: the bridge's answers table (bounded at 4,096 since XA) holds about 1,000 questions per
+  busy minute in the Node client (`gcImports` drops wait for V8 GC; peak 1,443 in this pass's
+  `ui.call` window), so a page that goes about 4 minutes without a major GC can see evictions;
+  Chrome's drop cadence is not measured. Close code 4008 is shared by the exports cap and an
+  answers table of only unsettled answers.
+- **minor**: a gateway-exported promise (`p-n`) that later resolves to the page's secret writer
+  is not checked by rule `gatewayObject` (the writer is only ever handed out as an object).
+- **minor**: the browser tests read refusals from a 16 KB stderr tail polled every 200 ms; per-rule
+  counts in the bridge's `stats()` would be exact. Every vat presence reaches a page with the
+  alleged interface `Remote Object N`.
+- **minor** (carried, J-9605): a long reply watched live needs a reload to show in full.
+- **contract text owed** (rule: a contract change updates the design in the same series):
+  `m3-interfaces.md` 4.4 rule 2 and section 14 (`gatewayTexts.gatewayObject`, rule
+  `gatewayObject`), 6.1 `GatewayContext.secretWriter()` (now the gateway-local writer in
+  `extras`, not `SecretsAdmin.openWriter()`), acceptance 16 wording, the section 6 M4 row, the
+  W3.7 row and the H4 seam text.
+
 **Goal.** The daily surface: open the chat page from a desktop or phone browser, sign in by the
 fragment secret, create sessions, chat with streaming, reload and reconnect without losing anything.
 The contract is `m3-interfaces.md` (W3.0); its decisions D-M3-1..D-M3-6 and section numbers are
@@ -898,40 +932,82 @@ page drops it and that vat next collects (J-9386, J-9392).
 (M4), Network chip and internet toggle (M7), emergency stop (M6), voice and `/audio` (M11), Home,
 spaces and the admin CLI (M12), assistant launch R6-60 (M11).
 
-**Outcome (W3.8, lane `claude/thix-m3`; not yet marked done: the PM marks M3 after the lanes are
-merged).** Release worker `367e78ad...`, crank budget 50 M, Apple M3 Max with other lanes' agents
-and perf runs (load 2-7); headless Chromium from Playwright's cache (headless shell build 1243).
-Commits up to `22a78eca62` and the W3.8 fixes after it (J-9600..J-9609).
+**Outcome (X-CLOSE, cross-lane close-out; replaces W3.8's lane table, whose numbers stay in
+J-9600..J-9609).** Regression run at `717e26789f` (lane `endo-thix-int`, M3, M4 and M5 merged),
+shared slots, load 2.2-4.8; browser files in the same run (headless Chromium from Playwright's
+cache). Recorded perf pass at `404e60ea3a`, every file one after another in exclusive mode,
+2026-11-18 16:12-17:19 UTC, load 1.0-2.8 (rows after the first three say `-dirty`: only this
+file was being edited). Release worker `367e78ad...`, crank budget 50 M, slot ceiling 4,000,000.
+Verdicts use the 1.25 x rule ("miss" over the budget, "**fail**" over 1.25 x); misses are recorded,
+never re-based. Rows and readings: J-10060..J-10064.
 
-| item | file | result | verdict | entries |
-|---|---|---|---|---|
-| Acceptance 1, 2, 10, 11, 16; K1, K2 | `m3-gateway` (W3.7) | passed in W3.7's runs; not rerun by W3.8 | pass (W3.7) | J-0590, J-0591 |
-| Acceptance 3, 13, 14, 12 (protocol) | `m3-sessions` (W3.7) | passed in W3.7's runs; not rerun by W3.8 | pass (W3.7) | J-0590 |
-| Acceptance 4-7 (protocol); K3, K4, K5 | `m3-reconnect` | 5/5; re-attach 142-180 ms; K3/K4 once at 0 ms, 60 ms and after the answer; K5 outcome-unknown on both pages, 1 request, 1 tool run | pass | J-9602 |
-| Acceptance 1, 2 (page), 4 (socket), 5, 6, 9, 14 (page), 15 | `test/browser/m3-ui` | 4/4 after two UI fixes (request ids, re-attached turn text) | pass | J-9604, J-9605, J-9608 |
-| Acceptance 12, 7 (K5), 4 (60 s down) | `test/browser/m3-ui-restart` | 4/4; the page was back 8.8-13.4 s after the gateway returned (budget 30 s); 12 failed once on a queue wait, then passed | pass (one flaky run) | J-9608 |
-| Acceptance 8 | `test/browser/m3-ui-history` | Load earlier: 300 turns, 37 pages, every turn once; tool group, exec highlight and raw view; 1 MiB reply rendered fully (Show all) after a reload, 3/3 | pass, with the gap of J-9605 (a live-watched long reply needs a reload) | J-9605, J-9609 |
-| `gateway.fetch` (50 ms; 0 deliveries) | `gateway` | median 0.53-0.66 ms; 0 per sign-in | pass | J-9606, J-9609 |
-| `gateway.guard` (2 ms) | `gateway` | median 0.123 ms (24.5 KB call, 446 records) | pass | J-9606 |
-| `ui.call` (150 ms) | `gateway` | median 22-27 ms, p99 187-215 | pass | J-9606, J-9609 |
-| `ui.submit` (150 ms) | `gateway` | median 44-62 ms, p99 227-255 | pass | J-9606, J-9609 |
-| `ui.deltaFanout` (5 ms; 0 deliveries per delta) | `gateway` | median 1 ms, p99 7-11; 8-11 deliveries over 1,100 deltas (the rounds', 0.007-0.010 per delta) | latency pass; deliveries **miss** under the strict 0 (cause: round deliveries counted in the window) | J-9606, J-9609 |
-| too-big probes | `gateway` | 100 KiB, 2,000 keys, depth 33 refused; 33 in flight: 1 refused; 4,097 exports closed 4008; no journal growth; still serving | pass | J-9609 |
-| `ui.snapshot` (300 ms) | `gateway-session` | median 46 ms, 371 characters | pass | J-9607 |
-| `ui.history.newest` / `.archived` (300 ms) | `gateway-session` | median 256 ms (p99 313) / 2.5 ms | pass | J-9607 |
-| `ui.reconnect` (1 s) | `gateway-session` | median 447 ms, p99 704 | pass | J-9607 |
-| `ui.restartReady.clean` / `.sigkill` (2 s after serving) | `gateway-session` | fetch answered 3.1 s / 2.5 s before `serve()` resolved (about 1.8 s / 4.8 s after it began); 21 restarts each | pass (trivially; see J-9607) | J-9607 |
-| `ui.bundle` (600 KB gz) | `ui` | 101,275 bytes gzip (308,374 raw) with every lane's features | pass | J-9609 |
-| `ui.coldLoad` (1.5 s) | `ui` | median 120 ms, p99 327 (n 273) | pass | J-9609 |
-| `ui.hubGrowth` (hub 2 MB; row 1.25 x) | `ui` | hub 0.10 -> 1.16 MB; session row exports 11 -> 21 (1.91 x) | hub pass; row **miss** | J-9609 |
-| Section 5 against M2 as merged in the lane | script check | every object, method and shape listed exists in `interfaces.js` | pass | J-9609 |
+| item | proving test (this run) | result | verdict |
+|---|---|---|---|
+| 1 shell, CSP, assets, Origin, 404, query refused | `m3-gateway` (client), `test/browser/m3-ui` (page part) | pass; held 114 s / 110 s | pass |
+| 2 fragment secret, limiter, proxy, ceiling, secret in no request | `m3-gateway`, `m3-ui` (network log) | pass | pass |
+| 3 list live across two clients, rename, delete | `m3-sessions` | pass; held 118 s | pass |
+| 4 reconnect overlay, R6-14 schedule, re-attach; 60 s down | `m3-reconnect` (protocol), `m3-ui` (socket), `m3-ui-restart` (60 s down) | pass; held 159 s / 202 s | pass |
+| 5 close and reopen mid-turn; reload re-attaches | `m3-reconnect`, `m3-ui` | pass | pass |
+| 6 resend from the saved draft, no duplicate (K3, K4) | `m3-reconnect`, `m3-ui` | pass | pass |
+| 7 SIGKILL mid-turn with two pages (K5) | `m3-reconnect`, `m3-ui-restart` | pass | pass |
+| 8 tool groups, exec highlight, raw view, 300-turn paging, 1 MiB reply | `m3-ui-history` (`m3-300` template) | pass; held 110 s | pass (J-9605's live-watch gap open, minor) |
+| 9 drawer at 640 px, none at 641 px | `m3-ui` | pass | pass |
+| 10 100 KiB, 2,000 keys, page-made object, invented `networkPolicy` refused | `m3-gateway` | pass; no delivery for the refused calls | pass |
+| 11 K1 same port and secret; rotation; K2 one valid secret | `m3-gateway` | pass | pass |
+| 12 queue: Send now, Edit, Delete; held after a restart, FIFO release | `m3-sessions` (protocol), `m3-ui-restart`, `m3-ui` (Send now during a running turn, XD) | pass | pass |
+| 13 new-session dialog, catalogue, chosen model | `m3-sessions` | pass | pass |
+| 14 status bar equals `getUsage()` | `m3-sessions`, `m3-ui` | pass | pass |
+| 15 Stop cancels; closing leaves the turn running | `m3-ui` | pass | pass |
+| 16 fixture extension and feature; `secretWriter()` is the page's writer; a throwing extension skipped | `m3-gateway` | pass (the writer is now the gateway-local one in `extras`, XA) | pass |
+| Rule 4a: no admitted call refused for its method | every browser file asserts `gatewayLog.refused('method')` empty; `m4-ui` probes three vat presences | pass | pass |
+| M0-M2 files (regression) | 25 files | all pass; `m1b-live` 9 failed once at load 3-4 (rename row 638 ms against 500) and passed alone (61-158 ms) | pass (load-sensitive, as recorded before) |
 
-Each M3 perf file ran under 10 minutes of slot hold (gateway 5.3-5.5 min, gateway-session 9.3
-min, ui 6.3 min); the windows are fixed (60 s, 150 s restart, 5 min growth).
+| check (budget) | result (exclusive pass) | verdict |
+|---|---|---|
+| `gateway.fetch` (50 ms; 0 deliveries) | median 0.52 ms (n 55,674); 0 per sign-in | pass |
+| `gateway.guard` (2 ms) | median 0.113 ms (24,544-byte call, 446 records, 258 vocabulary keys) | pass |
+| `ui.call` (150 ms) | median 23 ms, p99 183 (n 1,690); answers peak 1,443 of 4,096 | pass |
+| `ui.submit` (150 ms) | median 42 ms, p99 223 (n 493) | pass |
+| `ui.deltaFanout` (5 ms; 0 deliveries per delta) | median 2 ms, p99 15 (5 clients, 1,100 deltas); 0 deliveries | pass (the lane's 0.007-0.010 per delta is gone) |
+| too-big probes | 100 KiB, 2,000 keys, depth 33 refused with 0 journal growth; 33 in flight: 1 refused; 4,097 exports: closed 4008 after 4,089; still serving | pass |
+| `ui.snapshot` (300 ms; within `frameBytes`) | median 31 ms, 371 characters | pass |
+| `ui.history.newest` / `.archived` (300 ms) | median 208 ms (p99 275) / 2.2 ms | pass |
+| `ui.reconnect` (1 s) | median 360 ms, p99 561 (n 169) | pass |
+| `ui.restartReady.clean` / `.sigkill` (2 s) | the gateway answered `fetch` 2.2 s / 1.9 s before `serve()` resolved (29 / 24 restarts); the supervisor's serve time grew from 3.8 to 8.5 s over the SIGKILL series | pass (trivially, as J-9607); the file then exited 124 (open, major) |
+| `ui.bundle` (600 KB gz) | 101,321 bytes gzip (308,059 raw) | pass |
+| `ui.coldLoad` (1.5 s) | median 320 ms, p99 825 (n 181) | pass |
+| `ui.hubGrowth` (hub 2 MB; row 1.25 x) | hub 1.17 -> 1.15 MB over 5 min (60 turns, 29 reloads); session row exports 11 -> 21 (**1.91 x**) | hub pass; row **fail** (carried; CC-051 + CC-060) |
+
+Perf files held: `gateway` 329 s, `gateway-session` 602 s (exit 124), `ui` 438 s (exit 1:
+`ui.hubGrowth`). Section 5 against M2 as merged was checked by W3.8 (J-9609) and not rerun.
 
 ---
 
 ## M4. Secrets manager and subscription pools
+
+**Status: done with open items** (X-CLOSE, 2026-11-18; the outcome table at the end of this
+section). Acceptance 1-17 pass; the `[real-provider]` repeats of 3, 7, 8 and 10 are deferred
+because they need the owner's credentials and an owner's run (never by an agent). Open:
+
+- **major** (perf): `subscriptions.servedWrites` 4.97 manager frames per session per 60 s against
+  1 (W4.8: 2). XB raised `poolStateRefreshMs` from 30 s to 600 s expecting served stamps alone
+  (reasoned, not measured); this pass measured it, and something else still writes. Not
+  diagnosed here (candidates: stamps not coalesced per 60 s, or a re-read after the stale mark).
+- **fail** (perf, carried): `secrets.catalog` 775 ms against 300 (64 secrets, a 57-entry first
+  page, 2.21 manager frames per page; lane 745 ms).
+- **miss** (perf): `subscriptions.firstOpen` median 827 ms against 750 (1.10 x; lane 688 ms), 3
+  manager frames on each first turn against 1 crank.
+- **stale row**: `subscriptions.bundles` compares with `3588cab190` (before M3 and M5), so its
+  session +28,242 and factory +27,762 measure M3 and M5 as well; the manager bundle is not
+  measurable by `bundle-guest.mjs` (it refuses the package's dependencies). M4's own share stays
+  W4.8's (+33, +33, factory +6,874: a miss).
+- **minor**: the 8,193-byte credential probe is now refused at session creation as "Model catalog
+  unavailable" (the creation's catalogue read fails on the credential), not by its own bound text;
+  no halt. `accountStatus` was exercised on the Claude pool only (Codex and OpenRouter wires not).
+- **contract text owed**: `m4-interfaces.md` 3.1 and D-M4-10 (`retire` and `retirePool` are
+  `M.callWhen` and wait for an answered `poolsChanged`), 9.4 first bullet and D-M4-9 (the generic
+  adapter-tool entry), 17 row 14 (the file is `test/browser/m4-ui.test.mjs`; "no frame carries the
+  value and no Secrets call is sent" instead of "no frame is sent").
 
 **Goal.** Full Secrets manager and UI, and the two subscription backends with pooled accounts,
 renewal, refusal marks and account status.
@@ -1049,49 +1125,73 @@ Files: `perf/subscriptions.perf.mjs` 7 windows, 510 s timed, <= 595 s with setup
 
 **Deferred:** Codex reset-credit redeem (open decision 8), voice preset model (M11).
 
-**Outcome (W4.8, M4 lane, before the lane merges; not marked done).** Fake servers on loopback,
-`m4` template, release worker of the lane, crank budget 50 M, Apple M3 Max shared with other
-lanes (load 4-9). Journal J-9640..J-9647.
+**Outcome (X-CLOSE, cross-lane close-out; replaces W4.8's lane table, whose numbers stay in
+J-9640..J-9647).** The same regression run and exclusive perf pass as M3's outcome (commits, load
+and worker there). Rows and readings: J-10060..J-10064.
 
-| # | acceptance | file | result |
+| # | acceptance | proving test (this run) | result |
 |---|---|---|---|
-| 1 | Secrets full | `m4-secrets` | pass (found and fixed: no `store` export, key file race; J-9641) |
-| 2, 3 | selection, stickiness, hand-over, all exhausted | `m4-pools` | pass |
-| 4, 11 | marks across SIGKILL; K-2, K-3, K-4 | `m4-restart` | pass; K-2's "none to b" not placeable from outside, at most once holds (J-9644) |
-| 5 | reachability | `m4-reachability` (unit closure a, daemon holdings b) | pass; origin granularity until CC-060; no exec vat in the chat-only session checked |
-| 6, 13 | catalogue; efforts, R4-30 headers | `m4-catalog` | pass (fixed: `ultra` refused on Codex; J-9641); 13's two-part system text **deferred to M5's merge** |
-| 7 | accounts | `m4-accounts` | pass (fixed: nothing shown after a restart until first use); `accountStatus` is **not offered to the model** (session tool table, J-9642) |
-| 8, 9 | Claude and Codex overload and failure texts | `m4-wire` | pass (production delays 5 s, 10 s) |
-| 10 | renewal | `m4-renewal` | pass; the race is the operator's replace during a held refresh |
-| 12 | K-5, K-6 | `m4-restart-renewal` | pass; renewal runs at the creation's catalogue read (J-9643) |
-| 14 | browser | `test/browser/m4-ui.mjs` | **deferred to M3's merge** (not written) |
-| 15 | no credential anywhere | in 1, 2-3, 10, 12 | pass (token prefixes grepped); browser part deferred with 14 |
-| 16 | provisioning, K-1 | `m4-provision` | pass (step called directly: `makeProvision` passes no `subscriptions` yet) |
+| 1 | Secrets full | `m4-secrets` (and `m2-secrets` for the sealed hub writer) | pass; held 89 s |
+| 2, 3 | selection, stickiness, hand-over, all exhausted | `m4-pools` | pass; held 101 s |
+| 4, 11 | marks across SIGKILL; K-2, K-3, K-4 | `m4-restart` | pass; held 180 s |
+| 5 | reachability | `m4-reachability` (return-guard closure; origin-granular holdings until CC-060) | pass; held 86 s |
+| 6, 13 | catalogue; efforts, R4-30 headers, two-part system text to both fake servers | `m4-catalog` | pass; held 86 s (13's system-text case added by XB after the M5 merge) |
+| 7 | accounts, including the model calling `accountStatus` (generic adapter-tool entry, XC) | `m4-accounts` | pass; held 86 s |
+| 8, 9 | Claude and Codex overload and failure texts | `m4-wire` | pass; held 110 s |
+| 10 | renewal | `m4-renewal` | pass; held 93 s |
+| 12 | K-5, K-6 | `m4-restart-renewal` | pass; held 101 s |
+| 14 | browser: Secrets and Subscriptions panels, chips live, 1,040,384-byte value, one byte more refused in the page | `test/browser/m4-ui.test.mjs` | pass; held 95 s |
+| 15 | no credential anywhere (state directory, event log, stderr, page storage, frames, DOM) | in 1, 2-3, 10, 12 and `m4-ui` | pass |
+| 16 | provisioning twice, R8-31, R8-38, K-1 through `makeProvision({ subscriptions })` | `m4-provision` | pass; held 103 s |
+| 17 | retirement seen by the next turn (now waits for the adapter's answer, X-FIX) | `m4-retire` | pass; held 79 s |
+| `[real-provider]` 3, 7, 8, 10 | owner's credentials | not run | deferred (owner's run) |
 
-| perf row | budget | measured (commit `0c66afd639`) | result |
-|---|---|---|---|
-| `subscriptions.select` | median 0.5 ms | 0.093 ms (n 581,569) | pass |
-| `subscriptions.turnStart` | median 350 ms; 0 manager | 270 ms, p99 400 (n 125); 0.016 manager frames per turn | pass |
-| `subscriptions.handover` | 50 ms added; 1 manager per refusal | 2.1 ms (n 31); 1.35 frames per refusal | pass |
-| `subscriptions.servedWrites` | 1 per session per 60 s | 2 manager frames in 60.4 s (frames, not deliveries) | miss (unconfirmed) |
-| `subscriptions.renewal` | 1 POST per expiry; fake + 50 ms | 1 POST for each of 20 expiries; -49 ms vs unexpired | pass |
-| `subscriptions.firstOpen` | median 750 ms | 688 ms, p99 1,312 (13 restarts); 3 manager frames | pass |
-| `catalog.pool` | warm 300 ms; cold 2 s | warm 75 ms; cold 274 ms (n 13) | pass |
-| `subscriptions.bundles` | session, exec +64; factory +6 KB | +33, +33; factory +6,874 | factory miss |
-| too-big probes | no halt, refused | credential 8,193, audit 1,001, 17 members refused; PoolState 15,839 B | pass |
-| `secrets.credentialRead` | median 1 ms | 0.034 ms | pass |
-| `secrets.catalog` | median 300 ms | 745 ms, p99 1,226 (64 secrets, page cut to 57) | **miss** |
-| `secrets.auditReader` | median 50 ms | 30 ms in the adapter (402 ms through the hub, informative) | pass |
-| `accounts.push` | median 5 ms; 0 deliveries | 0.371 ms; 0 | pass |
-| `accounts.refresh` | fake + 100 ms | 39 ms | pass |
+| check (budget) | result (exclusive pass) | verdict |
+|---|---|---|
+| `subscriptions.select` (0.5 ms; 0 deliveries) | median 0.086 ms (16 members, 256 served); 0 | pass |
+| `subscriptions.turnStart` (350 ms; <= 3 session, 0 manager deliveries) | median 114 ms, p99 565 (n 143); 0.035 manager frames per turn | pass (frames are served stamps) |
+| `subscriptions.handover` (50 ms; 1 manager per refusal) | 3.1 ms (n 31); 1.26 frames per refusal including the turn's stamp | pass |
+| `subscriptions.servedWrites` (1 per session per 60 s) | **4.97** (5 manager frames in 60.4 s, 143 turns) | **fail** (open, major) |
+| `subscriptions.renewal` (1 POST per expiry; +50 ms) | 1 POST for each of 24 expiries; -72 ms against unexpired (384 rounds) | pass |
+| `subscriptions.firstOpen` (750 ms; 1 manager crank) | median 827 ms, p99 866 (19 restarts over 158 s); 3 manager frames per first turn | miss (1.10 x) |
+| `catalog.pool` (warm 300 ms; cold 2 s) | warm 66 ms, cold 94 ms (n 19) | pass |
+| `subscriptions.bundles` (session, exec +64; factory +6 KB) | not comparable: the baseline predates M3 and M5 (session +28,242, exec -20,528, factory +27,762); manager not measurable | stale row (open) |
+| too-big probes (no halt; refused on the sending side) | audit 1,001 and 17 members refused by the guards; credential 8,193 refused at creation by the catalogue read; `poolState` at 256 served 15,839 B (unit); no halt | pass (credential indirect, minor) |
+| `secrets.credentialRead` (1 ms; 0 deliveries) | median 0.030 ms (n 1.4 M); 0 | pass |
+| `secrets.catalog` (300 ms; 1 manager crank) | median **775 ms**, p99 961 (n 77); 2.21 manager frames per page | **fail** (carried) |
+| `secrets.auditReader` (50 ms; 0 deliveries) | 26.7 ms in the adapter (361 ms through the hub, informative) | pass |
+| `accounts.push` (5 ms; 0 deliveries) | median 0.345 ms, 4 viewers; 0 | pass |
+| `accounts.refresh` (fake + 100 ms) | median 42 ms (2 usage reads, 0 manager frames) | pass |
 
-Perf files: `subscriptions.perf.mjs` 3.5 min and `subscriptions-lifecycle.perf.mjs` 6.0 min (the
-contract's one file split; `catalog.pool` measured in the restart window), `secrets.perf.mjs` 4.7
-min, `accounts.perf.mjs` 2.2 min.
+Perf files held: `subscriptions` 208 s (exit 1: `servedWrites`, `bundles`),
+`subscriptions-lifecycle` 371 s, `secrets` 275 s (exit 1: `catalog`), `accounts` 128 s.
 
 ---
 
 ## M5. Presets, prompt composition, object and exec tools, grants, mentions
+
+**Status: done** (X-CLOSE, 2026-11-18; the outcome table at the end of this section). Acceptance
+1-15 pass, the browser item included; no blocker or major is open. Recorded and carried (not
+re-based):
+
+- **fail** (perf, carried; cause about 7-15 ms per handle crossing into or out of a vat, J-9696):
+  `presets.save` 248 ms against 150 (32 endowments), `inventory.page` 729 ms against 200,
+  `tools.local` +126 ms against +30, `prompt.compose` largest preset +408 ms against +150 and
+  1,499 ms against 750, `mentions.turnStart` 388 ms against 350 and +247 ms against +100 with
+  0.6 extra deliveries per turn (the file's bound 0.5).
+- **miss** (perf): `session.createCold` 6.25-6.54 s against 6 s (1.04-1.09 x) with the 214,690-byte
+  session program (M2: 5.53 s at 186,998 bytes; the staging cost, C-5).
+- **minor**: attachment chips show once the turn settles, not while it runs (the vat's turn-start
+  event carries no `attachments`; a guest change, for the PM to decide). K5's second kill point
+  records the true result through replay before recovery marks the turn outcome-unknown (the
+  contract rows say so; the PM to confirm that this is the wanted behaviour).
+- **contract text owed**: `m5-interfaces.md` O-1 (the interface split was done after the limit
+  raise: session 214,690 of 240,000, exec 63,826 of 120,000), 4.1 item 3 (chips from
+  `TurnStarted.attachments` after the settled re-read), and a contract row for
+  `guest/lib/guards/` (`base < session < factory < interfaces.js`).
+- **after main is merged into this lane**: the core's CC-027 (hub frame ceiling) refuses M5's
+  too-big tool answers (300 KB granted answer, 200 KB `help`) at the hub instead of staging a cut
+  preview; acceptance 5 and 10 and probes a-c must be rerun on the combination.
 
 **Goal.** Sessions get their authority from presets: built-in and user presets, the grant flow,
 composed prompts frozen at creation, the full exec and object tool sets, granted tools, a minimal
@@ -1201,39 +1301,48 @@ The whole M5 regression (11 integration files and the browser file of at most 4 
 five perf files of at most 5.5 minutes each) is at most 69 slot-minutes: about 17 minutes on four
 test slots.
 
-**Outcome (W5.9, lane m5 before the merge; M5 is not done until the PM merges the lanes).**
-Release worker `367e78ad...`, crank budget 50 M, slot ceiling 4,000,000; Apple M3 Max shared with
-the M2, M3 and M4 lanes (load 2-8). Every daemon run used a copy of the lane with the bundler
-patch of J-9690 applied (whitespace only): without it the session program (272,126 bytes) is over
-the factory's 262,144-byte cap and no session can be created. Verdicts use the 1.25 x rule; a miss
-is kept with its likely cause, not re-based.
+**Outcome (X-CLOSE, cross-lane close-out; replaces W5.9's lane table, whose numbers stay in
+J-9690..J-9698).** The same regression run and exclusive perf pass as M3's outcome (commits, load
+and worker there). Rows and readings: J-10060..J-10064.
 
-| item | result | verdict | entries |
+| item | proving test (this run) | result | verdict |
 |---|---|---|---|
-| 1 snapshot isolation; 9 part 7 (`m5-snapshot`) | A keeps X's digest and `notes` after the save; B gets Y and lists nothing (21.8 s) | pass | J-9694 |
-| 2, 13, 14, K1, K2 (`m5-presets`) | as W5.1 wrote them | pass | J-9692 |
-| 3 (`m5-labels`, `m5-objects`), 4, 5, 8, K7 (`m5-objects`) | as written; 5's 200 KB `help` is staged, not terminated (J-0771) | pass | J-9692 |
-| 6 (`m5-grants`) | after the deep-schema fixture fix (the 40-deep fixture halted the workspace vat itself) | pass | J-9692, J-9693 |
-| 7 (`m5-mentions`) | as written | pass | J-9692 |
-| 9 without part 7 (`m5-prompt`) | as written | pass | J-9692 |
-| 10 (`m5-security`) | 300 KB granted answer: `inspectTerminated`, session goes on | pass | J-9692 |
-| 11a K3, K6 (`m5-mentions-restart`); 11b K4, K5 (`m5-grants-restart`) | after test fixes (request id format; a submit behind a restart hold has no turn); K5's tool ran once | pass | J-9692 |
-| 12 reachability (`m5-reachability`) | (a) return-guard closure has no operator or admin interface; (b) session and exec vats hold no other session or exec vat; origin granularity only (CC-060) | pass | J-9694 |
-| 15 browser (W5.8, M3 lane) | needs M3 merged | deferred | |
-| M1a, M1b, M2 unit lanes | 11 tests pinned pre-M5 hook tables; updated. `bundle-guest`, `m1a-session-program` fail on session program bytes | 2 fail until J-9690 is settled | J-9691 |
-| `session.program` / `exec.program` (240,000 / 120,000 after O-1) | 272,126 / 119,760 as the lane bundles; 241,361 / 106,277 with the per-module J-9690 patch (the daemon runs); 236,218 / 104,193 with the bundle-level form of J-9698 (Node only: evaluates and runs a turn; not run in a daemon) | **miss** as the lane bundles and with the per-module patch; pass with J-9698's form, once the PM applies it to `scripts/bundle-guest.mjs` / pass | J-9690, J-9695, J-9698 |
-| `session.createCold` (6 s), O-1 before and after | `creation-m5`: 7,341 ms median, n 17 in 120 s (241 KB program); `session.perf` same method both sides: M2 base 5,619 ms (186,448 bytes, 34.6 deliveries) -> M5 7,220 ms (241,361 bytes, 40.6 deliveries) | pass (1.20-1.22 x) | J-9695, J-9697 |
-| `prompt.compose` Node (5 ms) / vat (`chat-only` + 150, 750 ms; pool 4) | 0.002 ms / largest 1,622 vs `chat-only` 1,277 (+345), n 10 + 10 | pass / **miss** | J-9695 |
-| `tools.local` (+30 ms; 0 extra deliveries) | +109 ms (852 vs 743); -0.9 deliveries | **miss** / pass | J-9696 |
-| `labels.full` (1.1 x) | 1.071 | pass | J-9696 |
-| `tools.inspect` (300 ms) | 339 ms (n 56) | pass (1.13 x) | J-9696 |
-| `grants.round` (350 ms; tool set 10 ms) | 215 ms (n 53, plain 255); tool set 0.018 ms in Node | pass | J-9696 |
-| `exec.powersLookup` (150) / `exec.membrane` (+5) / `exec.scope1000` (300) | 73 ms / -10 ms (Node +0.002) / 100 ms | pass | J-9696 |
-| `presets.save` (150 ms) / `inventory.page` (200 ms) | 264-269 ms with 32 endowments (24-36 ms without) / 801-804 ms (one entry: 24 ms); paging by an array instead of the Map walk changed nothing (tried, reverted) | **miss** / **miss**: about 7-15 ms per handle crossing into or out of a vat | J-9696 |
-| `mentions.turnStart` (+100, 350 ms, 3 deliveries) | 466 vs 144 ms (+322); +0.3 deliveries | **miss** / pass | J-9696 |
-| probes a-f | (a) refused in the exec vat, no halt (the row failed on its own check, fixed in 00e7e848f1); (b) staged, no halt; (c) the workspace vat halted (fixture builds 20,000 keys itself); (d1-d3) refused; (e) `refused-schema` (3,074 characters, limit 2,048), no halt (7.9 s); (f1, f2) pass | (c) **miss** | J-9696 |
-| regression wall time (20 min on four slots) | integration 11 files 22.7 slot-minutes held (each <= 3.5 min); perf 21.8 minutes exclusive (five files); waits for slots 0-29 minutes per run | **miss**: the exclusive perf files alone exceed 20 minutes | J-9696 |
-| seams with M3 and M4 as landed (M4's effort lift, `systemTextOf` on pools, gateway presences) | not in this lane | deferred to the merge | |
+| 1 snapshot isolation; 9 part 7 | `m5-snapshot` | pass; held 75 s | pass |
+| 2, 13, 14, K1, K2 | `m5-presets`, `m5-presets-inventory` (the split file, XC) | pass; held 110 s / 98 s | pass |
+| 3 local object tools | `m5-labels`, `m5-objects` | pass; held 106 s / 95 s | pass |
+| 4, 5, 8, K7 | `m5-objects` (`powers.store` refuses a model-made remotable, X-FIX) | pass | pass |
+| 6 granted tools | `m5-grants` | pass; held 86 s | pass |
+| 7 attachments, `adopt`, `adoptTool` (grant label kept) | `m5-mentions` | pass; held 74 s | pass |
+| 9 introductions, guest section, `systemPrompt` | `m5-prompt` | pass; held 95 s | pass |
+| 10 membrane bounds; 300 KB granted answer never reaches the session | `m5-security` | pass; held 77 s | pass |
+| 11a K3, K6; 11b K4, K5 (second kill point included) | `m5-mentions-restart`, `m5-grants-restart` | pass; held 93 s / 118 s | pass |
+| 12 reachability | `m5-reachability` (origin granularity until CC-060) | pass; held 81 s | pass |
+| 15 browser: preset on two devices, stale save refused, `@` chip, lost chips refused on resend | `test/browser/m5-ui.test.mjs` | pass; held 105 s | pass |
+| Seams with M3 and M4 as landed (`systemTextOf` on pools, adapter tools offered to the model, gateway presences) | `m4-catalog` 13, `m4-accounts` 7, browser files | pass | pass |
+
+| check (budget) | result (exclusive pass) | verdict |
+|---|---|---|
+| `tools.local` (+30 ms; 0 extra deliveries) | +126 ms (640 against 513, n 52 + 52); -0.8 deliveries | **fail** / pass |
+| `labels.full` (1.1 x) | 1.023 (135 against 132 ms) | pass |
+| `tools.inspect` (300 ms) | median 220 ms (n 83) | pass (lane 339) |
+| `grants.round` (350 ms; tool set 10 ms) | 158 ms with 32 grants (plain 139); tool set 0.017 ms in Node | pass |
+| `exec.powersLookup` (150 ms) / `exec.membrane` (+5 ms) / `exec.scope1000` (300 ms) | 53 ms / -10.8 ms (Node +0.001) / 60 ms | pass |
+| `presets.save` (150 ms) / `inventory.page` (200 ms) | 248 ms with 32 endowments (24 ms without) / 729 ms (one entry 24 ms) | **fail** / **fail** (carried) |
+| `mentions.turnStart` (+100 ms, 350 ms, deliveries) | 388 against 141 ms (+247); +0.6 deliveries per turn | **fail** (carried) |
+| `prompt.compose` Node (5 ms) / vat (+150 ms, 750 ms; pool 4) | 0.002 ms / largest 1,499 against `chat-only` 1,092 (+408), n 11 + 11 | pass / **fail** (carried) |
+| `session.program` / `exec.program` (240,000 / 120,000) | 214,690 / 63,826 bytes | pass |
+| `session.createCold` (6 s) | 6,537 ms (n 19, 120 s; `creation-m5`), 6,249 ms (n 5, 30 s; `session.perf`) | miss (1.09 / 1.04 x) |
+| probes a, b, c, f (no halt) | (a) refused in the exec vat; (b) staged, 8,194 characters; (c) answered "Documentation is unavailable", no halt (the lane's halt is gone); (f1) 300 k iterations; (f2) terminated | pass |
+| probes d, e | oversize `store`, 257th label, 33 attachments refused; granted schema of 3,074 characters `refused-schema`; no halt | pass |
+
+Perf files held: `presets` 199 s, `creation-m5` 285 s, `exec-m5` 277 s, `tools` 348 s, `mentions`
+148 s (each exit 1 except `exec-m5`: the fails above).
+
+M0-M2 cross-check in the same pass (did the M2 rows move?): `turn.start` median 112 ms, p99 352,
+2 deliveries (M2 108 ms); `turn.delta` 0.21 ms, 0 deliveries; `turn.round` 3, lease 1;
+`install.factory` 6.55 s (M2 5.8 s); `exec.first` 299 ms (299), `exec.trivial` 68 ms (56),
+`exec.sends.answered` 1.13 s (1.31), `exec.retire` 78 MB; `session.createCold` above. Only
+`session.createCold` moved, with the session program's size.
 
 **Fit risk:** good. Persistent scope and object endowments are what Thixotrope offers; Appendix F
 drops most of Endo's name plumbing.

@@ -220,9 +220,45 @@ milestone templates were built in shared slots (`exec` 58 s, `pool` 57 s, `m3-30
 
 Every `perf/*.perf.mjs`, one after another, each as
 `node scripts/run-lock.mjs --exclusive --label perf-<name> -- node perf/<name>.perf.mjs`, in one
-batch (it stops every lane). The long-session templates must exist first (`node
-perf/_long-template.mjs history journal throughput`, shared slots; they are rebuilt after any
-guest-bundle change: about 2.5 + 2.5 + 8 min for the long ones and 5 x 7 min for the busy chain).
+batch (it stops every lane); `perf/ui.perf.mjs` also needs `THIX_HARNESS_BROWSER=1`. Templates
+must exist first, built in shared slots: the long-session ones (`node perf/_long-template.mjs
+history journal throughput`; rebuilt after any guest-bundle change) and the milestone ones the
+files copy (`m1a`, `exec` and `m5o` through their helpers, `m4`, and `m3-300` with
+`node perf/_m3-client.mjs template`). Measured at X-CLOSE (shared slots, beside the regression
+run, load 2-5): long 200 / 1,000 / 5,000 held 89 / 158 / 473 s; busy 10..50 held 440, 391, 381,
+375, 357 s (one chain, 38 minutes of wall with waits); `exec` 58 s, `pool` 57 s, `m3-300` 94 s.
+
+The whole list is now 25 + 12 = 37 files (M0-M2 69.5 minutes, M3-M5 about 55 minutes), more
+than two hours of every lane stopped. Proposal (as 3.1): a milestone's recorded pass is its own
+files plus the cross-check `session`, `turn` and `exec` (about 7 minutes); the whole list runs
+only when the PM asks for it (a core or worker change).
+
+**M3, M4, M5 and the cross-check** (X-CLOSE, 2026-11-18 16:12-17:19 UTC, at `404e60ea3a`, load
+1.0-2.8: 15 files, **4,004 s held (66.7 minutes), 66.8 minutes of wall**; exit 1 means a budget
+missed, each listed):
+
+| file | held s | exit | budget misses that set the exit |
+|---|---|---|---|
+| `perf/session.perf.mjs` | 156 | 0 | - (`session.createCold` 1.04 x is inside the 1.25 x rule) |
+| `perf/turn.perf.mjs` | 129 | 0 | - |
+| `perf/exec.perf.mjs` | 111 | 0 | - |
+| `perf/gateway.perf.mjs` | 329 | 0 | - |
+| `perf/gateway-session.perf.mjs` | 602 | **124** | none; every row measured by 555 s, then the clean stop after the SIGKILL window passed the box (a defect: split the restart rows out) |
+| `perf/ui.perf.mjs` | 438 | 1 | `ui.hubGrowth` row 1.91 x |
+| `perf/subscriptions.perf.mjs` | 208 | 1 | `subscriptions.servedWrites` 4.97 x; `subscriptions.bundles` (stale baseline) |
+| `perf/subscriptions-lifecycle.perf.mjs` | 371 | 0 | - |
+| `perf/secrets.perf.mjs` | 275 | 1 | `secrets.catalog` 2.58 x |
+| `perf/accounts.perf.mjs` | 128 | 0 | - |
+| `perf/presets.perf.mjs` | 199 | 1 | `presets.save` 1.66 x, `inventory.page` 3.65 x |
+| `perf/creation-m5.perf.mjs` | 285 | 1 | `prompt.compose` (+408 ms, 1,499 ms) |
+| `perf/exec-m5.perf.mjs` | 277 | 0 | - |
+| `perf/tools.perf.mjs` | 348 | 1 | `tools.local` +126 ms |
+| `perf/mentions.perf.mjs` | 148 | 1 | `mentions.turnStart` 388 ms, +247 ms, +0.6 deliveries |
+
+Rows and readings: `JOURNAL.md` J-10061..J-10063; verdicts: `milestones.md` M3, M4 and M5
+outcomes.
+
+**M0-M2** (last run at the M2 close-out; not rerun at X-CLOSE except the cross-check above):
 
 | file | held s | exit | budget misses that set the exit |
 |---|---|---|---|

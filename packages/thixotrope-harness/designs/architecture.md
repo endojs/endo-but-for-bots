@@ -1,9 +1,11 @@
 # Architecture: the Endo daemon harness on Thixotrope
 
-Status: plan for M3 onward. M0 (groundwork), M1a (the headless session slice), M1b (exec scope,
+Status: plan for M6 onward. M0 (groundwork), M1a (the headless session slice), M1b (exec scope,
 staging, context cache, pool, list feed) and M2 (real providers, secrets, the full queue, the record
-archive, delete, export; done with open items, `milestones.md` M2) are built, and so are two core
-changes after M1b: the
+archive, delete, export; done with open items, `milestones.md` M2) are built; so are M3 (chat UI
+and gateway), M4 (Secrets manager and subscription pools) and M5 (presets, prompt composition,
+object and exec tools, grants, mentions), integrated across lanes and closed by X-CLOSE (M3 and M4
+done with open items, M5 done; J-10060..J-10064); and so are two core changes after M1b: the
 allocation collection schedule (CORE-11, C-7) and the hub write-ahead log (CORE-12, C-2). M0's
 measurements are summarised in `m0-results.md` (which also keeps the core-change candidates current),
 M1a's and M1b's in `milestones.md` (outcome tables); all are recorded in `../JOURNAL.md` (M0:
@@ -528,9 +530,20 @@ creation serial; the Secret and audit bounds are `limits.secretsMax` (1,024) and
 `limits.auditKeepEvents`. Providers and the catalogue refuse a base URL that is not `https:` or
 `http:` to a loopback host, or carries user info, a query or a fragment; a key over 8,192 bytes
 fails the round before any request; a round's streamed body is bounded at 64 MiB
-(`limits.roundStreamBytes`); a request timeout is at least 1 s. Open: `SecretWriter.replace`
-still accepts a plain string from a remote caller (a cross-lane contract decision with M3 A-11 and
-M4), the origin binding of a Secret's key, and per-purpose subkeys.
+(`limits.roundStreamBytes`); a request timeout is at least 1 s. Open: the origin binding of a
+Secret's key, and per-purpose subkeys.
+
+As built after M4 and the cross-lane integration (XA, X-FIX): `SecretWriter.replace` from any hub
+caller takes only a `SealedBox`; a plain value is refused with `secretFailed("INVALID_SECRET_BYTES")`,
+which never quotes it. A page writes through the gateway's own in-process writer (`replaceLocal`,
+offered first in `GatewayPowers.extras` and returned by `GatewayContext.secretWriter()`); the bridge
+refuses that writer as an argument toward any vat (rule `gatewayObject`). M4 adds the catalogue,
+`setDescription` (audited), the audit reader (pages to 1,000) and the subscription pools: pools
+hang off `SecretsAdmin.subscriptions()` (D-M4-1) as manager-vat `Backend`s whose members are
+Secrets; tokens, renewal (write-ahead, generation-conditioned, single-flight per member), member
+selection, refusal marks and account readings live in the agent-host process, and the vat side is
+a few handles. The adapter caches each pool's state and re-reads it when the manager pushes
+`poolsChanged()` (retirement waits for that answer), with a 600 s re-read as the safety net.
 
 **D-15. Blob handles are manager-minted and pre-minted.** The adapter keeps a stock of minted, empty
 `Blob` handles (minted 32 at a time with one manager crank through its attach sink); it writes and
@@ -975,6 +988,21 @@ G-19): `runCommand` returns `{ exit, stdout, stderr, truncated }` where stdout a
 `askSubagent` budget their fields the same way. Granted tools are remotables with `describe()` and
 `execute(args)` (P-65); built-in names are protected.
 
+As built in M5 (and the cross-lane integration): sessions take their authority from presets
+(built-in and user presets, revision compare-and-set, endowments snapshotted at creation, prompts
+composed and frozen at creation); a session holds one label map (`list`, `lookup`, `store`,
+`remove`, at most 256 labels) and the exec vat gets a per-call `powers` facet over it that dies with
+the call. No answer from an object the session did not mint enters a session vat: the exec vat's
+`inspect` calls such objects and answers a bounded, rendered result (D-M5-2). Model code reaches
+other vats' objects only through a per-call membrane (D-M5-3: 12,288 bytes, 32 keys per record,
+depth 32; tagged values keep their tag; only data and this call's wrappers may be sent or stored,
+a hand-built remotable is refused). Granted tools are discovered every round; adapter tools that
+carry a description (`accountStatus`) reach the model through one generic tool-table entry, and a
+static name is never shadowed. Guards live in a chain of modules (`guest/lib/guards/base.js` <
+`session.js` < `factory.js` < `interfaces.js`), each entry in the module of the lowest program that
+reads it; bundles at X-CLOSE: session 214,690 of 240,000 bytes, exec 63,826 of 120,000. The cost
+that shows in every M5 perf miss is about 7-15 ms per handle crossing into or out of a vat.
+
 Reachability: neither a session vat nor an exec vat can reach `AgentHostAdmin`, `SecretsAdmin`, any
 `Secret` admin or value, the factory, the gateway or another session's facets. M4 tests this with
 `thix reachability` from both vats (coverage 28).
@@ -1027,6 +1055,19 @@ Restart: sockets drop; the client shows the reconnect overlay (0, 1, 2, 5, 10, 3
 `getCurrentTurn` (R4-62). A refused connection means "server starting": while a crashing vat holds
 startup (D-17) nothing listens for 30 s to several minutes, so the overlay says "Server starting..."
 and keeps retrying; no server-side page is needed.
+
+As built (M3, then the cross-lane integration): the bootstrap's `fetch(secret)` answers
+`GatewayPowers`: the factory's `Operator` passed through and this incarnation's `Live`, `Content`,
+`Composer` and `History`, plus `extras` from extensions (the page's secret writer first). The
+bridge is pass-through CapTP (D-M3-1): every call is checked on its encoded form before decoding
+(frame bytes, record keys against a vocabulary built from every `interfaces-m*.js`
+`vocabularyShapes()`, method names (rule 4a), depth, page-made objects, calls in flight, exports
+and answers per connection, 4,096 each). Extensions and UI features are directory registries
+(`AH/gateway/extensions/`, `ui/src/<feature>/feature.js`), so M4 and M5 added panels, chips, the
+preset editor and `@` mentions without editing M3 files. Measured (X-CLOSE): sign-in 0.5 ms, guard
+0.11 ms per 24 KB call, a session call 23 ms, a delta fan-out to 5 clients 2 ms with no vat
+delivery; a viewer's presences still grow its vats' hub rows (`ui.hubGrowth` 1.91 x, CC-051 +
+CC-060 requested).
 
 **D-13. Native reinstall indirection.** D-14 makes reinstalls rare. When one is needed, objects minted
 by the old manager vat (Secrets, Backends, Blobs, Routes) break; sessions receive their

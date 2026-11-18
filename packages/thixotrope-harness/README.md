@@ -154,12 +154,26 @@ install chromium-headless-shell` installs one; it is never downloaded by a test)
 into `GW/assets/` when that is missing or older than `ui/`. The `m3-300` template (one imported
 300-turn session) is built once with `node perf/_m3-client.mjs template`.
 
-**Regression run** (process.md section 3; the M2 close-out at `d7fce8e46c`, 2026-11-18, load
-2.3-5): `corepack yarn test` (unit and adapter lanes: 727 passed, 59 skipped, 66 s), then
-`corepack yarn test:integration --jobs 4` (all 25 files pass, 1,040 s wall; longest held:
-`m1b-followups` 266 s, `m2-lifecycle-export` 235 s, `m1b-context-restart` 208 s, `m2-history`
-202 s). About 18 minutes in all, inside the 20-minute rule. Per-file times are in process.md
-section 3.
+The M4 acceptance files (`designs/m4-interfaces.md` 17, the `m4` template, the fake subscription
+and OAuth servers on loopback): `m4-secrets` (1), `m4-pools` (2, 3), `m4-restart` (4, 11),
+`m4-restart-renewal` (12: K-5, K-6), `m4-reachability` (5), `m4-catalog` (6, 13), `m4-accounts` (7),
+`m4-wire` (8, 9), `m4-renewal` (10), `m4-provision` (16), `m4-retire` (17), and in the browser
+`test/browser/m4-ui.test.mjs` (14, 15's browser part). The M5 acceptance files
+(`designs/m5-interfaces.md` 8.1): `m5-snapshot` (1), `m5-presets` and `m5-presets-inventory` (2,
+13, 14), `m5-labels` and `m5-objects` (3, 4, 5, 8), `m5-grants` (6), `m5-mentions` (7),
+`m5-prompt` (9), `m5-security` (10), `m5-mentions-restart` and `m5-grants-restart` (11),
+`m5-reachability` (12), and in the browser `test/browser/m5-ui.test.mjs` (15).
+
+**Regression run** (process.md section 3.1; the cross-lane close-out X-CLOSE at `717e26789f`,
+2026-11-18, load 2.2-4.8): `corepack yarn test` (unit and adapter lanes: 1,244 passed, 115
+skipped, 67 s; one load-sensitive run-lock test failed and passed alone), then
+`corepack yarn test:integration --jobs 5` (51 files, 6,641 s held, 1,433 s wall; all pass but
+`m1b-live` 9 at load 3-4, which passed alone; longest held `m1b-followups` 297 s,
+`m2-lifecycle-export` 252 s, `m1b-context-restart` 226 s), then
+`corepack yarn test:browser --jobs 5 test/browser/*.test.mjs` (5 files, 622 s held, 202 s wall;
+longest `m3-ui-restart` 202 s). 28.4 minutes in all: over the 20-minute rule, so process.md 3.1
+proposes a core list (M0-M2, about 14 minutes) and a per-milestone list (M3-M5 with the browser
+files, about 10 minutes). Per-file times are in process.md section 3.1.
 
 **Known failures** (each marked `test.failing`, or opt-in, with the reason in its title):
 
@@ -222,7 +236,8 @@ reading and a decision.
 
 The recorded pass runs every file one after another in exclusive mode (`node scripts/run-lock.mjs
 --exclusive --label perf-<name> -- node perf/<name>.perf.mjs`, one batch, after the long-session
-templates exist); the last, the M2 close-out, held 69.5 minutes for 25 files, none over 5 minutes
+templates exist); the M2 close-out held 69.5 minutes for the 25 M0-M2 files, none over 5 minutes,
+and X-CLOSE held 66.7 minutes for the 12 M3-M5 files plus `session`, `turn` and `exec`
 (`designs/process.md` 3.2). The times below are held time per file.
 
 | script | rows | about |
@@ -244,12 +259,17 @@ templates exist); the last, the M2 close-out, held 69.5 minutes for 25 files, no
 | `perf/archive.perf.mjs` (W2.5), `perf/import.perf.mjs` (W2.7), `perf/queue.perf.mjs` (W2.4, Node), `perf/provider.perf.mjs` (W2.1a, W2.1b, in process) | a session grown to 200 turns by running turns, then the window, pages, restart and rebuild rows under `archive.` (`ARCHIVE_POINTS`); the import rate over a 60 s window and a 300-turn import walked back (`IMPORT_WINDOW_MS`); queue costs, 10 s per row (`QUEUE_WINDOW_MS`); provider overhead and SSE rates, 10 s per row (`PROVIDER_WINDOW_MS`) | 4.0 min; 2.0 min; 0.6 min; 1.6 min exclusive |
 | `perf/crank.perf.mjs`, `perf/crank.mid.perf.mjs`, `perf/crank.late.perf.mjs` (`perf/_crank.mjs`) | `crank.worker.<heap>[.alloc][.<policy>]` (the worker run directly on a vat image for `CRANK_WORKER_WINDOW_MS`, 10 s per row: per-delivery cost and its collection share), `crank.ping` (20 s), `crank.turn.start.early` (a 60 s `CRANK_WINDOW_MS` window from a new session) with its restart, `crank.context.rebuild.at<n>` and `session<n>` worker rows; `.mid` at 500 and `.late` at `CRANK_TURNS` (1,000) turns built by `importState` (tool turns): `crank.turn.start.<phase>`, `crank.grow` (wall per 100 turns from the window's rate, engine and hub deltas), `crank.history.page[.late]`, `crank.heap`, `crank.context.rebuild` (`CRANK_GC_POLICIES`). The old 2.5 h long-session table (to 5,000 turns grown) does not fit the box: 1,000 is the largest point kept, the slope is late against mid, and `perf/history.perf.mjs` holds the table to 5,000 by import | 2.9 min; 2.0 min; 3.7 min exclusive; 2.9; 2.6; 4.7 min shared under load |
 | `perf/install.perf.mjs`, `perf/frames.perf.mjs` | M0's install rows (`INSTALL_N`, single installs, not windowed) and frame rows (`FRAMES_WINDOW_MS`, 15 s per latency row; `LOOP_N`) | 1.0 min; 1.8 min exclusive; 1.4; 2.8 min shared under load |
-| `perf/gateway.perf.mjs` (M3) | 60 s windows: `gateway.fetch`, `gateway.guard` (in process), `ui.call`, `ui.submit`, `ui.deltaFanout` (5 clients); `gateway.probes` (100 KiB, 2,000 keys, depth 33, 33 in flight, 4,097 exports) | 6 min |
-| `perf/gateway-session.perf.mjs` (M3) | on the cached `m3-300` template (build it first: `node perf/_m3-client.mjs template`): `ui.snapshot`, `ui.history.newest`, `ui.history.archived`, `ui.reconnect` (60 s each), `ui.restartReady.clean` / `.sigkill` (150 s each) | 9-10 min |
-| `perf/ui.perf.mjs` (M3, `THIX_HARNESS_BROWSER=1`) | `ui.bundle`, `ui.coldLoad` (60 s), `ui.hubGrowth` (5 min of reloads and turns) | 7 min |
+| `perf/gateway.perf.mjs` (M3) | 60 s windows: `gateway.fetch`, `gateway.guard` (in process), `ui.call`, `ui.submit`, `ui.deltaFanout` (5 clients); `gateway.probes` (100 KiB, 2,000 keys, depth 33, 33 in flight, 4,097 exports) | 5.5 min exclusive (X-CLOSE) |
+| `perf/gateway-session.perf.mjs` (M3) | on the cached `m3-300` template (build it first: `node perf/_m3-client.mjs template`): `ui.snapshot`, `ui.history.newest`, `ui.history.archived`, `ui.reconnect` (60 s each), `ui.restartReady.clean` / `.sigkill` (150 s each) | 10.0 min exclusive (X-CLOSE): every row by 555 s, then the clean stop after the SIGKILL window passed the box, exit 124 (open: split the restart rows out) |
+| `perf/ui.perf.mjs` (M3, `THIX_HARNESS_BROWSER=1`) | `ui.bundle`, `ui.coldLoad` (60 s), `ui.hubGrowth` (5 min of reloads and turns) | 7.3 min exclusive (X-CLOSE) |
+| `perf/subscriptions.perf.mjs`, `perf/subscriptions-lifecycle.perf.mjs` (M4, `perf/_m4.mjs`, the `m4` template) | `subscriptions.select`, `.turnStart`, `.servedWrites`, `.handover`, `.bundles`, too-big probes; lifecycle: `subscriptions.renewal`, `.firstOpen` (restarts over 150 s), `catalog.pool` cold and warm | 3.5 min; 6.2 min exclusive (X-CLOSE) |
+| `perf/secrets.perf.mjs`, `perf/accounts.perf.mjs` (M4) | `secrets.credentialRead`, `.auditReader` (and `.viaHub`), `.catalog` (64 secrets); `accounts.push`, `accounts.refresh` | 4.6 min; 2.1 min exclusive (X-CLOSE) |
+| `perf/presets.perf.mjs`, `perf/creation-m5.perf.mjs` (M5) | `presets.save` (32 endowments), `inventory.page` (1,000 entries) with diagnostic rows; `session.program`, `exec.program`, `prompt.compose` (Node 10 s; vat 120 s, pool 4), `session.createCold` (120 s) | 3.3 min; 4.8 min exclusive (X-CLOSE) |
+| `perf/exec-m5.perf.mjs`, `perf/tools.perf.mjs`, `perf/mentions.perf.mjs` (M5) | `exec.powersLookup`, `exec.membrane` (vat and Node), `exec.scope1000`, probes a, b, c, f; `tools.local`, `labels.full`, `tools.inspect`, `grants.round`, probes d, e; `mentions.turnStart` (32 attachments) | 4.6 min; 5.8 min; 2.5 min exclusive (X-CLOSE) |
 
-M3's files never run longer than 10 minutes: before each window a file checks that the window
-ends by 9 min 30 s and otherwise prints the row as `notMeasured: "file time"`; `M3_WINDOW_MS`,
+M3's files check before each window that it ends by 9 min 30 s and otherwise print the row as
+`notMeasured: "file time"` (the teardown after the last window is not counted, which is how
+`gateway-session` passed the box at X-CLOSE); `M3_WINDOW_MS`,
 `M3_RESTART_WINDOW_MS` and `M3_GROWTH_MS` shorten the windows for a trial run.
 
 A vat is woken when its worker row's `wakes` (process-local) is above 0; `journalLength` is the
@@ -301,7 +321,7 @@ absent meanwhile.
 
 | Command | What it does |
 | --- | --- |
-| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js` without comments, refusing any module outside `guest/`. Sizes at X1 (bytes, budget): session 213,712 (240,000), exec 62,196 (120,000), factory 164,810 |
+| `node scripts/bundle-guest.mjs [program ...]` | Bundles `guest/<program>/main.js` into `dist-guest/<program>.js` without comments, refusing any module outside `guest/`. Sizes at X-CLOSE (`717e26789f`; bytes, budget): session 214,690 (240,000), exec 63,826 (120,000), factory 164,836 (X1: 213,712, 62,196, 164,810) |
 
 ## Disk
 
