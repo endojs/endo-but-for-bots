@@ -464,14 +464,14 @@ test('an unreadable credential marks the member unusable and the next serves; a 
 test('M4-FIX: a member or pool retired in the manager stops serving once the loaded state is older than poolStateRefreshMs', async t => {
   const s = await setup(t, {
     kind: 'claude-pool',
-    settings: { poolStateRefreshMs: 20 },
+    settings: /** @type {any} */ ({ poolStateRefreshMs: 20 }),
   });
   const wait = (/** @type {number} */ ms) =>
     new Promise(resolve => setTimeout(resolve, ms));
   s.server.setPlan([{ sse: 'claude-text.sse' }, { sse: 'claude-text.sse' }]);
   const first = await s.round();
   t.is(first.failures.length, 0, JSON.stringify(first.failures));
-  const servedFirst = s.inference()[0];
+  const servedFirst = /** @type {string} */ (s.inference()[0]);
   t.is(s.fake.loads(), 1);
   // The serving member is retired in the manager (PoolMember.retire).
   s.status.retired.add(s.members[servedFirst]);
