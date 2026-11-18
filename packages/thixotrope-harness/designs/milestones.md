@@ -866,6 +866,46 @@ Files: `perf/subscriptions.perf.mjs` 7 windows, 510 s timed, <= 595 s with setup
 
 **Deferred:** Codex reset-credit redeem (open decision 8), voice preset model (M11).
 
+**Outcome (W4.8, M4 lane, before the lane merges; not marked done).** Fake servers on loopback,
+`m4` template, release worker of the lane, crank budget 50 M, Apple M3 Max shared with other
+lanes (load 4-9). Journal J-9640..J-9647.
+
+| # | acceptance | file | result |
+|---|---|---|---|
+| 1 | Secrets full | `m4-secrets` | pass (found and fixed: no `store` export, key file race; J-9641) |
+| 2, 3 | selection, stickiness, hand-over, all exhausted | `m4-pools` | pass |
+| 4, 11 | marks across SIGKILL; K-2, K-3, K-4 | `m4-restart` | pass; K-2's "none to b" not placeable from outside, at most once holds (J-9644) |
+| 5 | reachability | `m4-reachability` (unit closure a, daemon holdings b) | pass; origin granularity until CC-060; no exec vat in the chat-only session checked |
+| 6, 13 | catalogue; efforts, R4-30 headers | `m4-catalog` | pass (fixed: `ultra` refused on Codex; J-9641); 13's two-part system text **deferred to M5's merge** |
+| 7 | accounts | `m4-accounts` | pass (fixed: nothing shown after a restart until first use); `accountStatus` is **not offered to the model** (session tool table, J-9642) |
+| 8, 9 | Claude and Codex overload and failure texts | `m4-wire` | pass (production delays 5 s, 10 s) |
+| 10 | renewal | `m4-renewal` | pass; the race is the operator's replace during a held refresh |
+| 12 | K-5, K-6 | `m4-restart-renewal` | pass; renewal runs at the creation's catalogue read (J-9643) |
+| 14 | browser | `test/browser/m4-ui.mjs` | **deferred to M3's merge** (not written) |
+| 15 | no credential anywhere | in 1, 2-3, 10, 12 | pass (token prefixes grepped); browser part deferred with 14 |
+| 16 | provisioning, K-1 | `m4-provision` | pass (step called directly: `makeProvision` passes no `subscriptions` yet) |
+
+| perf row | budget | measured (commit `0c66afd639`) | result |
+|---|---|---|---|
+| `subscriptions.select` | median 0.5 ms | 0.093 ms (n 581,569) | pass |
+| `subscriptions.turnStart` | median 350 ms; 0 manager | 270 ms, p99 400 (n 125); 0.016 manager frames per turn | pass |
+| `subscriptions.handover` | 50 ms added; 1 manager per refusal | 2.1 ms (n 31); 1.35 frames per refusal | pass |
+| `subscriptions.servedWrites` | 1 per session per 60 s | 2 manager frames in 60.4 s (frames, not deliveries) | miss (unconfirmed) |
+| `subscriptions.renewal` | 1 POST per expiry; fake + 50 ms | 1 POST for each of 20 expiries; -49 ms vs unexpired | pass |
+| `subscriptions.firstOpen` | median 750 ms | 688 ms, p99 1,312 (13 restarts); 3 manager frames | pass |
+| `catalog.pool` | warm 300 ms; cold 2 s | warm 75 ms; cold 274 ms (n 13) | pass |
+| `subscriptions.bundles` | session, exec +64; factory +6 KB | +33, +33; factory +6,874 | factory miss |
+| too-big probes | no halt, refused | credential 8,193, audit 1,001, 17 members refused; PoolState 15,839 B | pass |
+| `secrets.credentialRead` | median 1 ms | 0.034 ms | pass |
+| `secrets.catalog` | median 300 ms | 745 ms, p99 1,226 (64 secrets, page cut to 57) | **miss** |
+| `secrets.auditReader` | median 50 ms | 30 ms in the adapter (402 ms through the hub, informative) | pass |
+| `accounts.push` | median 5 ms; 0 deliveries | 0.371 ms; 0 | pass |
+| `accounts.refresh` | fake + 100 ms | 39 ms | pass |
+
+Perf files: `subscriptions.perf.mjs` 3.5 min and `subscriptions-lifecycle.perf.mjs` 6.0 min (the
+contract's one file split; `catalog.pool` measured in the restart window), `secrets.perf.mjs` 4.7
+min, `accounts.perf.mjs` 2.2 min.
+
 ---
 
 ## M5. Presets, prompt composition, object and exec tools, grants, mentions
