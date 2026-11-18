@@ -8158,3 +8158,30 @@ listener and costs two kit operations. A per-key `same`/`replaces` would let the
 new epoch in one step; the kit takes one rule per manager.
 Decision: close-then-register, as the contract states; admin operations are serialised in the
 manager so a `status` between the two steps sees the whole change.
+
+### J-0530 2026-11-18 M3 gateway HTTP, sign-in and limiter - built
+Evidence: W3.1 at 5e86a5e3a8: `AH/gateway/{server,static,csp,signin,limiter}.js`; adapter tests
+`test/adapter/m3-w31-{http,limiter,signin}.test.js`, 40 tests in about 1 s, no supervisor.
+Reading: the HTTP rules of 4.1 and the upgrade rules of 4.2 are in `server.js`; the limiter is a
+deadline map plus a failure window, both swept on every call, so its state is bounded by what the
+ceiling admits (a ten-minute attack from 6,000 addresses keeps at most 21 failures and 32 entries).
+The sign-in secret is sealed with the M2 wrapping key (store helpers used read-only); a child
+process SIGKILLed between the temporary write and the rename leaves the old secret, after the
+rename the new one (K2 at the adapter level). Undici's `WebSocket` in Node 22 accepts a
+`headers` option, so W3.7's Node client can set `Origin` with no dependency.
+Decision: as described.
+
+### J-0531 2026-11-18 M3 gateway WebSocket without `ws` - deviation
+Evidence: `ws` is not a dependency of the harness (H6 is W3.4's request through the PM); rule 4
+forbids an install in this unit. Server-side RFC 6455 is about 200 lines of `server.js`.
+Reading: the server speaks the protocol itself: masked client frames only, binary only (a text
+frame closes with `closeCodes.protocol`), messages over `wsMessageBytes` close with 1009 before
+buffering (a declared 2^40-byte frame is refused at its header), fragments summed, pings
+answered, half-open peers released at `end`, and a reader that lets more than 8 MiB pile up in
+the send buffer closed with 1008 (a bound on retained state the contract did not state). The
+`onSocket` interface of section 17 is unchanged, so W3.2 and W3.7 do not care which carries it.
+Measured in Node over 10 s windows (5e86a5e3a8, loopback, undici client): echo of 200 bytes
+median 0.021 ms, p99 0.051 ms (428,524 samples); echo of 1 MiB median 9.98 ms, p99 12.85 ms (987
+samples); limiter check plus failure 0.88 us per call. The 5 ms `ui.deltaFanout` budget is not at
+risk from the framing.
+Decision: keep the built-in framing; if H6 lands `ws`, swapping is local to `server.js`.
