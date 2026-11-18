@@ -148,10 +148,10 @@ operator's root authority, R7-22; this keeps `AgentHostAdmin`, which M3 extends,
 | `SubscriptionsAdmin.listMembers(cursor?)` | operator, UI | answered | <= 64 handles | manager lost | none | - |
 | `SubscriptionsAdmin.makePool(PoolSpec) -> Backend` | operator, provisioning | answered | ~7 KB | manager lost: retry (idempotent) | one record | pool record. 1..16 active members of the kind's provider (`m4Texts.memberKind`, `noUsableMember`); same label and equal spec answers the same Backend; same label, other spec: `m4Texts.poolConflict` (R8-23); more than `maxPools`: `m4Texts.poolConflict` |
 | `SubscriptionsAdmin.listPools()`, `describePool(pool)` | operator, UI | answered | small | manager lost | none | - |
-| `SubscriptionsAdmin.retirePool(pool)` | operator | answered | tiny | manager lost | drops its served records | pool `retired`: its `open`, `listModels`, `resolveModel` refuse with `m4Texts.retired`; sessions on it fail their next turn with that text (R4-22: no fallback) |
+| `SubscriptionsAdmin.retirePool(pool)` | operator | answered | tiny | manager lost | drops its served records; sends `CredentialOps.poolsChanged()` (sendOnly, 3.2) | pool `retired`: its `open`, `listModels`, `resolveModel` refuse with `m4Texts.retired`; sessions on it fail their next turn with that text (R4-22: no fallback): the push makes the adapter ask `poolState` again at the pool's next round (XB) |
 | `SubscriptionsAdmin.accounts() -> Accounts` | operator, gateway | answered | tiny | manager lost | none | - (forwards `ops.credentials()` -> `accounts()`) |
 | `PoolMember.describe()` | operator, UI | answered | tiny | manager lost | none | - |
-| `PoolMember.retire()` | operator | answered | tiny | manager lost | removes it from every pool's selection | member `retired`; its mark and served records dropped; a pool left with no active member answers `noUsableMember` at its next round |
+| `PoolMember.retire()` | operator | answered | tiny | manager lost | removes it from every pool's selection; sends `CredentialOps.poolsChanged()` (sendOnly, 3.2) | member `retired`; its mark and served records dropped; it is not chosen at its pools' next round (XB); a pool left with no active member answers `noUsableMember` at its next round |
 | pool `Backend.describe()` | factory (creation resolver) | answered | tiny | manager lost | none | - (`{ kind, label, modelId? }`) |
 | pool `Backend.open(host) -> TurnPorts` | session (creation-time open, reopen after a restart) | answered | TurnPorts | manager lost | waits for the bind (as M2), records session -> pool in a WeakMap (for `poolOf`) | nothing durable beyond the WeakMap entry; forwards `ops.open({ backend, spec, session, archiveKey })` with the pool spec |
 | pool `Backend.listModels(request?)`, `resolveModel(modelId?)` | factory | answered | <= frameBytes | manager lost | an answer passed through | - (forward `ops.listModels` / `ops.resolveModel` with the pool spec; the adapter routes pool specs to the pool catalogue, H-4) |
@@ -176,6 +176,7 @@ operator's root authority, R7-22; this keeps `AgentHostAdmin`, which M3 extends,
 | `CredentialOps.describeSecrets(keys)` | `ops.credentials()` (H-3) | manager | answered | 64 keys | adapter restarted: the manager reconciles and calls again (`withOps`) |
 | `CredentialOps.setSecretDescription(key, text)` | same | manager | answered | tiny | same |
 | `CredentialOps.auditReader()`, `accounts()` | same | manager | answered | tiny | same |
+| `CredentialOps.poolsChanged()` | same | manager (`retirePool`, `PoolMember.retire`) | sendOnly, no argument | tiny | lost with a retired adapter: harmless, a new incarnation loads every pool afresh; the adapter also re-reads a used pool's state when it is older than `poolStateRefreshMs` (600 s), the safety net |
 | `AuditReader.page({ secret?, limit?, before? })` | `SecretsAdmin.auditReader()` | gateway (in process), CLI, tests | answered | <= 1,000 events, never into a vat | restart: get a new reader |
 | `Accounts.list()`, `forBackend(pool)`, `forSession(session)`, `refresh(pool?)`, `watch(rev?)` | `SubscriptionsAdmin.accounts()` | gateway (in process), CLI, tests | answered | adapter-local | restart: get a new one |
 | `AccountsSubscription.next()`, `close()` | `Accounts.watch()` | gateway | answered | one `AccountsBatch` | restart: re-watch; idle (no `next()` call for 60 s): evicted, its next `next()` rejects with `m4Texts.accountsWatchClosed` and the page calls `watch(lastRev)` (6) |
@@ -275,7 +276,11 @@ Port of hosted-agent `subscription-pool.js` (`standingOf`, `makeRefusalMarks`, `
   `unusable` (credential unreadable, rejected after one renewal, consumed, expired) is an undated
   mark.
 - **Persistence**: the adapter loads `poolState` once per pool per incarnation (lazily: at the
-  pool's first `open`, `listModels` or accounts use) and sends `poolChanged` **at once** for a
+  pool's first `open`, `listModels` or accounts use) and asks it again only after the manager's
+  `CredentialOps.poolsChanged()` push (a retirement, 3.1; XB) or when the answer is older than
+  `poolStateRefreshMs` (600 s, a safety net for a lost push: at most one manager crank per used
+  pool per 10 minutes, 0.1 per 60 s, so `subscriptions.servedWrites` keeps its budget; the 30 s of
+  M4-FIX cost up to two per pool per 60 s). It sends `poolChanged` **at once** for a
   mark change (one manager crank per refusal, never more than one per member per round) and
   **coalesced** for served stamps: a stamp is sent when the session moved to another member, or
   the kept stamp is 60 s old (`servedStampMs`, the reference's `SERVED_STAMP_MS`), batched at
@@ -324,6 +329,9 @@ Cancel aborts the attempt in flight and stops the member loop (R4-7).
   Failures (R4-76): SSE `error` event -> `m4Texts.claudeInferenceFailed`; non-200 ->
   `m4TextOf.subscriptionHttp(status)`; empty output -> `m4Texts.emptyMessagesOutput`. Overload
   (529 or an `overloaded_error` event) before any delivery is retried (open decision 12, D-M4-4).
+  The event is told by its type: M2's `anthropicAttempt` sets `ProviderFailure.errorType` (the
+  event's symbolic type, `''` when none) and `messages.js` compares that, never the failure
+  text (XB).
   Efforts: lal `providers/subscription-messages.js` `claudeMessagesEfforts(model)`.
 - **`codex-pool`**: OpenAI Responses SSE, request builder and output mapping ported from lal
   `providers/subscription-responses.js` (`instructions` = the system text, `store: false`,
@@ -349,7 +357,9 @@ Cancel aborts the attempt in flight and stops the member loop (R4-7).
 
 - **Catalogue** (`AH/subscriptions/catalog.js`, same request and answer shapes as M2's
   `makeCatalog`, its timing constants reused: fresh 15 min, never older than 24 h, a failed read
-  retried after 60 s, R4-104): each active member's model list is read with its credential;
+  retried after 60 s, R4-104; its pages are M2's `pageOf` with an `efforts` option and its reads
+  M2's bounded `readJson`, both exported by `AH/providers/catalog.js`, XB): each active member's
+  model list is read with its credential;
   `codex-pool` lists the models of members whose reading is current or stale, a model offered by
   several gets the intersection of their efforts and the smallest context length and output
   limit (R4-18, Fae `src/subscription-models.js` `pooledSubscriptionModels`); `claude-pool` lists
@@ -595,8 +605,9 @@ are M3's and nobody else edits them). M4 uses them in W4.6 (one gateway extensio
   M5's `extendInterface` lines for those interfaces have no M4 part, and `factory.js` and
   `session.js` get no M4 edit besides H-7's one line in `factory.js`.
 - Pool rounds read the system text through `systemTextOf` once per round (5.2), so M5's widening
-  of `RoundRequest.system` reaches both pool kinds with no M4 edit; after the M5 merge, W4.8 adds
-  one case (17, acceptance 13).
+  of `RoundRequest.system` reaches both pool kinds with no M4 edit; after the M5 merge the case
+  is in `m4-catalog.test.js` (17, acceptance 13; XB): a turn with an attachment carries
+  `[stored prompt, R4-29 line]`.
 - The `reasoningEffort` lift out of `NOT_YET` (H-6) and the `BackendKind` widening (H-1) are
   what M5's preset efforts need; H-1 may be merged early as a contract follow-up.
 
@@ -880,7 +891,8 @@ owner's credentials. Each item is one integration test under 5 minutes from
 | 13 | Efforts: an unsupported effort is refused at creation, a supported one is stored and reaches the request (Claude adaptive thinking; Codex `ultra` as `max`); an effort on an API backend is refused; the R4-30 header names are present; after the M5 merge, a two-part `system` (`[text, note]`) reaches both fake servers as one string joined with a blank line (Claude `system`, Codex `instructions`) | `m4-catalog.test.js` |
 | 14 | Secrets panel and Subscriptions panel in a browser (`startBrowserGateway({ template, provision })` of M3's `test/browser/_harness.mjs`; runs after M3 is merged): create, replace, revoke, delete after revoke, audit; the value never appears in the DOM or in any frame from the gateway; account chips update live; size probe: a value of 1,040,382 ASCII letters (exactly `browserSecretBytes` = 1,040,384 bytes JSON-escaped, the two quotes included) is written from the page and the catalogue then shows `bytes` 1,040,382 and a new generation; one letter more is refused in the page with `m4Texts.secretTooLargeForBrowser` and no frame is sent (the harness counts outgoing WebSocket frames) | `test/browser/m4-ui.mjs` |
 | 15 | No credential anywhere: after 3, 10 and 12, a grep of the state directory (heaps, journals, hub image and log, blobs, archive, `readings.json`), the adapter's event log and the test's captured stderr finds no access token, refresh token or API key value; when run after 14, also no 64-byte marker taken from each of the two size-probe values (neither reached the hub) | `m4-secrets.test.js` (the browser part in `test/browser/m4-ui.mjs`) |
-| 16 | Provisioning twice is a no-op; a member label bound to another Secret is refused until that member is retired (R8-31); a revoked Secret is never rewritten by provisioning (R8-38); `makePool` again after K-1 answers the same pool | `m4-provision.test.js` |
+| 16 | Provisioning twice is a no-op; a member label bound to another Secret is refused until that member is retired (R8-31); a revoked Secret is never rewritten by provisioning (R8-38); `makePool` again after K-1 answers the same pool. Provisioning runs through `makeProvision({ subscriptions })` (the registered step `scripts/provision-steps/40-subscriptions.js`; XB) | `m4-provision.test.js` |
+| 17 | Retirement on the next turn (3.1, XB): a retired member is not chosen at the session's next turn, submitted at once (the session was sticky on it); a retired pool fails the next turn with `m4Texts.retired` and sends nothing; neither waits for `poolStateRefreshMs` | `m4-retire.test.js` |
 
 ---
 
@@ -984,6 +996,13 @@ M4 decisions (journaled J-0610..J-0629):
   token twice.
 - **D-M4-9** `accountStatus` is an adapter tool offered on pool and API backends (not on the
   scripted test backend), so no tool-table entry and no session code is added.
+- **D-M4-10** (XB) A retirement reaches the adapter by a push: `retirePool` and
+  `PoolMember.retire` send `CredentialOps.poolsChanged()` (sendOnly, no argument: the adapter
+  marks every pool state it loaded stale and asks `poolState` again at each pool's next round).
+  The retirement does not wait for the push; when the manager has not yet fetched the
+  incarnation's `CredentialOps` the push leaves after one `ops.credentials()` answer. The
+  periodic re-read of M4-FIX stays as a safety net, raised from 30 s to 600 s
+  (`poolStateRefreshMs`).
 
 Owner decisions (the default M4 builds until told otherwise):
 
