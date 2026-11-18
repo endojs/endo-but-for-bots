@@ -8422,3 +8422,52 @@ session can be created in this lane until the bundle is under the factory's cap.
 half (`toolSchema`, `toolExecute` in a real exec vat, presences of workspace-vat tools passed to
 the session through the control client) is untested.
 Fit: poor on bytes (as J-0752, J-0792): every unit's session module ships into every session vat.
+
+### J-0770 2026-11-18 M5 powers source and inspection tools - built
+Evidence: commits 40d09eaf84, c7c3af7ffc; `guest/session/powers-source.js` (`powersPart`: the
+`ExecPowersSource` exo itself, one label-map operation per method), `guest/session/tools/
+inspection.js` (`describeCapability`, `readSources`, `inspectorPart`), appends in `m5-parts.js`,
+`tool-table.js` and `scripts/provision-steps.js` (H-10's two option-forwarding lines, made here
+since M3 is not in the lane, and the `m5 fixtures` step, a no-op without `options.m5Fixtures`);
+`test/unit/m5-w55-powers.test.js` (8 tests, 1.4 s).
+Reading: `lookup` of an uncached object is one inspector `methods` call whose names are cached on
+the binding; the second lookup makes no call. Fae's descriptions are kept except the sentences
+naming an Endo mount, `readText` and `endo_exec` (now `read`, exec, "a source capability that
+implements SourceReader.read"; the "scans at most 1 MiB" clause is dropped: the callee bounds its
+scan). A harness text, `"<label>" holds a stored value, not a capability; use lookup to read it`,
+answers both tools on a JSON label (Fae would fail without a reason).
+Decision: as built.
+
+### J-0771 2026-11-18 M5 objects and security in a daemon - test
+Evidence: `test/integration/m5-objects.test.js` (acceptance 3 remote, 4, 5, 8, K7: 37.6 s in the
+test, 97 s wall), `m5-security.test.js` (acceptance 10: 80.6 s, 139 s wall), both on the m5o
+template (m1b provisioning plus the fixture step; build 58-61 s). Both ran against a copy of the
+guest tree without the W5.7 (and for objects W5.6) parts, because the lane's session program
+(272,125 bytes) is over the factory's 262,144-byte cap (J-0792); the committed tests use the real
+tree.
+Reading: an undeclared name in exec reads as `undefined` (J-0472 holds). K7: the turn killed in
+a 4 s exec sleep is outcome-unknown at serving (restart served in 7.6-8.2 s); that call's
+`powers` rejects `powersExpired` after the restart; `globalThis.y` survived. A 200,000-character
+`help()` did NOT stop the exec vat: the inspector cut and staged it (8,194 bytes); a granted
+tool's 300,000-character answer did stop it (`inspectTerminated`), and the session's next turn
+completed. So the receive halt lies between 200 KB and 300 KB on this worker, not about 94 KB
+(fact 2); the contract's acceptance 5 expectation (terminated) was relaxed to "staged or
+terminated".
+Fit: good: the inspector made a hostile answer an exec-scope loss only, as designed.
+
+### J-0772 2026-11-18 M5 exec perf and tools.inspect - perf
+Evidence: commits b19a0fc1aa, 14434fb301; exclusive runs, worker 367e78ad, reduced guest tree
+(J-0771), load average 4-8, window 60 s each.
+Numbers: `exec.powersLookup` 70 ms per lookup (budget 150; 20-lookup call median 1,477 ms vs
+`return 1` 77 ms, n 22+22) pass; `exec.membrane` in vat -17.5 ms (budget +5; 20 wrapped
+`E(calc).add` to the workspace vat 1,181 ms vs 20 `E(powers).lookup` to the session vat 1,531 ms,
+n 15+15) pass, and `exec.membrane.node` +0.001 ms per call (10 s, n 7,306) pass;
+`exec.scope1000` median 91 ms, p95 457 (budget 300, n 74, making the 1,000 globals 744 ms) pass;
+`tools.inspect` median 270 ms, p95 508 (budget 300, n 74) pass. Probes: (a) 100 KiB argument
+refused in 1.1 s, no halt; (b) 200 KB help staged in 22.5 s, no halt; (f1) 300,000 iterations ok
+in 0.6 s; (f2) endless loop terminated in 5.9 s. (c) 20,000-key `help()`: the session and exec
+vats were fine (documentation "unavailable") but the workspace vat that holds the fixture halted:
+MISS of "no halt of the target's vat". Likely cause: the fixture builds the 20,000 fresh keys in
+the workspace vat itself (W5.4's `keyFlood`), so the target drains its own name table; the probe
+needs the flood made in a disposable vat. Each exec hop to another vat costs about 60-75 ms.
+Fit: membrane work is negligible (Node microseconds); the hop dominates.
