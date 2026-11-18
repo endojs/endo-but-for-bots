@@ -26,7 +26,7 @@
  * drop; a staged one's file stays until the session is deleted or M13's
  * sweep (J-0452).
  *
- * M5 (W5.7; m5-interfaces.md 2.6, H-7): the guard is `m5Interfaces.Composer`
+ * M5 (W5.7; m5-interfaces.md 2.6, H-7): the guard is `interfaces.Composer`
  * and `submit` takes an optional fourth argument `{ attachments }`. With a
  * non-empty list the text is first checked against `packageTextUnits`, then
  * the attachments as the session checks them (`checkAttachments`), all
@@ -52,11 +52,7 @@
  * Node module (adapter); the guest prelude is on `globalThis`.
  */
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
-import { texts, textOf } from '../../../guest/lib/interfaces.js';
-import {
-  m5Interfaces,
-  textOf as textOfM5,
-} from '../../../guest/lib/interfaces-m5.js';
+import { texts, textOf, interfaces } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { utf8Bytes } from '../../../guest/lib/bounded.js';
 import { isRetiredBreak } from '../../../guest/lib/retired.js';
@@ -164,7 +160,7 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
     return receipt;
   };
 
-  return makeExo('Composer', m5Interfaces.Composer, {
+  return makeExo('Composer', interfaces.Composer, {
     /**
      * @param {any} session
      * @param {string} text
@@ -176,7 +172,7 @@ export const makeComposer = ({ now = () => Date.now(), blobs } = {}) => {
       const attachments = options?.attachments ?? [];
       if (attachments.length > 0) {
         if (text.length > limits.packageTextUnits) {
-          throw Error(textOfM5.packageTooLong(text.length));
+          throw Error(textOf.packageTooLong(text.length));
         }
         // The session's own checks, with its texts, before anything is
         // staged (HR-SYN-10).

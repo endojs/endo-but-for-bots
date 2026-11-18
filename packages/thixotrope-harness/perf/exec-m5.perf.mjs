@@ -44,8 +44,6 @@ installGuestPrelude();
 const { E, Far } = await import('@endo/far');
 /* eslint-disable import/no-relative-packages */
 const { texts, textOf } = await import('../guest/lib/interfaces.js');
-const { texts: textsM5, textOf: textOfM5 } =
-  await import('../guest/lib/interfaces-m5.js');
 const { limits } = await import('../guest/lib/limits.js');
 const { makeMembrane } = await import('../guest/exec/membrane.js');
 /* eslint-enable import/no-relative-packages */
@@ -341,7 +339,7 @@ await runPerf('exec-m5', async ({ provision }) => {
       ? result.slice(0, 200)
       : result?.preview?.slice(0, 200);
 
-  const tooLarge = textOfM5.membraneTooLarge(0, limits.membraneArgBytes);
+  const tooLarge = textOf.membraneTooLarge(0, limits.membraneArgBytes);
   await probe(
     'probe a',
     15_000,
@@ -352,7 +350,7 @@ await runPerf('exec-m5', async ({ provision }) => {
       r.startsWith(`"${tooLarge.slice(0, tooLarge.indexOf('0'))}`),
     text,
   );
-  const terminated = textOf.errorResult(textsM5.inspectTerminated);
+  const terminated = textOf.errorResult(texts.inspectTerminated);
   await probe(
     'probe b',
     30_000,

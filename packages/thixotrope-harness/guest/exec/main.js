@@ -43,13 +43,17 @@
  * through the call's `BlobWriters` in pieces of at most `blobPieceBytes`
  * when it is over `inlineBytes`. Only `{ status, text }` leaves the vat.
  */
-import { execArgumentNames, texts, textOf } from '../lib/guards/base.js';
+import {
+  execArgumentNames,
+  interfaces,
+  texts,
+  textOf,
+} from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
 import {
   EXHAUSTED,
   argumentText,
   describeParseFailure,
-  execGuards,
   failed,
   finish,
   isKeysExhausted,
@@ -257,7 +261,7 @@ const codeOf = argsText => {
 
 /**
  * Make this vat's one persistent scope.
- * @returns {any} the `ExecScope` exo (`m5Interfaces.ExecScope`)
+ * @returns {any} the `ExecScope` exo (`interfaces.ExecScope`)
  */
 export const makeExecScope = () => {
   const compartment = new Compartment({
@@ -329,7 +333,7 @@ export const makeExecScope = () => {
     return finish(status, text, writers);
   };
 
-  return makeExo('ExecScope', execGuards().ExecScope, {
+  return makeExo('ExecScope', interfaces.ExecScope, {
     /**
      * @param {ExecRequest} request
      * @returns {Promise<Outcome | { status: 'busy' } | typeof EXHAUSTED>}

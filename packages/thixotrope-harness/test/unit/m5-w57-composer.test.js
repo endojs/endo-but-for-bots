@@ -15,7 +15,6 @@ import { join } from 'node:path';
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
 import { texts, textOf } from '../../guest/lib/interfaces.js';
-import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 /* eslint-enable import/no-relative-packages */
 import {
   isRefusal,
@@ -106,7 +105,7 @@ test('the guard refuses 33 attachments; a long text is refused before staging', 
         ID,
         harden({ attachments: [{ label: 'notes', value: notes }] }),
       ),
-    { message: textOfM5.packageTooLong(long.length) },
+    { message: textOf.packageTooLong(long.length) },
   );
   await t.throwsAsync(() => E(composer).submit(session, '  ', ID), {
     message: texts.blankSubmission,
@@ -131,10 +130,10 @@ test("HR-SYN-10: a staged text with refused attachments is refused before anythi
         { label: 'a', value: notes },
         { label: 'a', value: notes },
       ]),
-    { message: textOfM5.duplicateAttachment('a') },
+    { message: textOf.duplicateAttachment('a') },
   );
   await t.throwsAsync(() => submit([{ label: 'user', value: notes }]), {
-    message: textOfM5.reservedLabel('user'),
+    message: textOf.reservedLabel('user'),
   });
   t.deepEqual(calls, [], 'the session was never called');
   t.is(blobs.store.stats().staged, 0, 'nothing was staged');
@@ -153,10 +152,10 @@ test("isRefusal: only the session's state refusals, compared whole; not attachme
   }
   for (const message of [
     // Checked before staging now.
-    textOfM5.tooManyAttachments(40),
-    textOfM5.duplicateAttachment('x'),
-    textOfM5.reservedLabel('user'),
-    textOfM5.packageTooLong(70_000),
+    textOf.tooManyAttachments(40),
+    textOf.duplicateAttachment('x'),
+    textOf.reservedLabel('user'),
+    textOf.packageTooLong(70_000),
     // A staged call cannot meet these.
     'In "enqueueMessageOnce" method of (Session): arg 3: ...',
     `${texts.requestIdReused} and more`,

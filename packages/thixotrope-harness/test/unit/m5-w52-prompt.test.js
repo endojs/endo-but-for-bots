@@ -15,12 +15,12 @@ import { readFileSync } from 'node:fs';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { texts } from '../../guest/lib/interfaces.js';
 import {
+  texts,
   objectToolNames,
   packageToolNames,
   powersMethodNames,
-} from '../../guest/lib/interfaces-m5.js';
+} from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { utf8Bytes } from '../../guest/lib/bounded.js';
 import {

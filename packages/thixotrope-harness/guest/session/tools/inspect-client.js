@@ -36,7 +36,6 @@
  * issue order. Guest rules.
  */
 import { texts, textOf } from '../../lib/guards/session.js';
-import { texts as m5Texts } from '../../lib/interfaces-m5.js';
 import { limits } from '../../lib/limits.js';
 import { isRetiredBreak } from '../../lib/retired.js';
 import { NOT_RUN_TEXT, execStateOf, retireScope, takeScope } from './exec.js';
@@ -148,7 +147,7 @@ const start = async call => {
         if (isRetiredBreak(error)) {
           // The exec vat is lost (a hostile answer, or a crash give-up).
           retireScope(state, handle, scope);
-          settle(call, failed(m5Texts.inspectTerminated), false);
+          settle(call, failed(texts.inspectTerminated), false);
         } else {
           settle(call, failed(messageOf(error)), false);
         }

@@ -32,7 +32,7 @@
  * Nothing here evaluates model code. A key flood answers `exhausted`, as
  * `run` does.
  */
-import { textOf as m1Text } from '../lib/guards/base.js';
+import { textOf } from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
 import { boundToolOutput } from '../lib/bounded.js';
 import {
@@ -44,7 +44,6 @@ import {
   isKeysExhausted,
   messageOf,
   redactHostPaths,
-  textOf,
 } from './render.js';
 import { measureArguments } from './membrane.js';
 
@@ -356,7 +355,7 @@ export const makeInspector = ({ writers, content }) => {
       return { value: JSON.parse(source.text) };
     } catch (error) {
       if (isKeysExhausted(error)) throw error;
-      return { outcome: failed(m1Text.argumentsNotJson(messageOf(error))) };
+      return { outcome: failed(textOf.argumentsNotJson(messageOf(error))) };
     }
   };
 

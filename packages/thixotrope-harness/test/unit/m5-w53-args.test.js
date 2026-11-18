@@ -10,8 +10,7 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { textOf } from '../../guest/lib/interfaces.js';
-import { m5ToolArgumentNames } from '../../guest/lib/interfaces-m5.js';
+import { textOf, toolArgumentNames } from '../../guest/lib/interfaces.js';
 import {
   argSpecs,
   maxArgDepth,
@@ -44,7 +43,7 @@ test('the specs follow the contract names, in order', t => {
     t.is(spec.tool, tool);
     t.deepEqual(
       spec.fields.map(f => f.name),
-      [.../** @type {any} */ (m5ToolArgumentNames)[tool]],
+      [.../** @type {any} */ (toolArgumentNames)[tool]],
     );
   }
 });

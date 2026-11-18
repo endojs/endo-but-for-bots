@@ -48,7 +48,7 @@
  * many calls.
  */
 import { limits } from '../lib/limits.js';
-import { texts, textOf } from './render.js';
+import { texts, textOf } from '../lib/guards/base.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { Far, isRemotable } = /** @type {GuestGlobals} */ (globalThis);

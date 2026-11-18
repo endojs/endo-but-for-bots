@@ -1,12 +1,11 @@
 // @ts-check
 // The M5 interface contract (W5.0; designs/m5-interfaces.md), checked by
-// W5.3: every M5 shape and method guard accepts a sample and refuses, at
-// every place in the sample, an oversize string, an oversize array and an
-// extra record key; the M5 interfaces keep every M2 method first; the four
-// widenings W5.3 made in interfaces.js agree with `m5Widenings` and still
-// refuse what M2 refused; `extendInterface` reads `payload.methodGuards`
-// (pinned here; CC-072); the fixed texts are exact; and both modules'
-// `vocabularyShapes()` build and carry M5's record keys (M3's key guard).
+// W5.3 and, since the fold (F2, HR-SYN-1), against the plain tables: every
+// M5 shape and method guard accepts a sample and refuses, at every place in
+// the sample, an oversize string, an oversize array and an extra record
+// key; the interfaces M5 widened keep every M2 method first; the widened
+// shapes still refuse what M2 refused; the fixed texts are exact; and the
+// gateway's vocabulary carries M5's record keys (M3's key guard).
 import './_m1a-prelude.js';
 
 import test from '@endo/ses-ava/test.js';
@@ -15,34 +14,17 @@ import test from '@endo/ses-ava/test.js';
 import { limits } from '../../guest/lib/limits.js';
 import {
   interfaces,
-  m2Interfaces,
-  m2MethodNames,
-  shapes,
-} from '../../guest/lib/interfaces.js';
-import {
-  extendInterface,
-  m5Extensions,
-  m5Interfaces,
-  m5MethodNames,
-  m5Shapes,
-  m5ToolArgumentNames,
-  m5Widenings,
+  methodNames,
   objectToolNames,
   packageToolNames,
   powersMethodNames,
   reservedLabels,
+  shapes,
   textOf,
   texts,
-  vocabularyShapes,
-} from '../../guest/lib/interfaces-m5.js';
-import {
-  m5FactoryInterfaces,
-  m5FactoryMethodNames,
-  m5FactoryShapes,
-  textOf as factoryTextOf,
-  texts as factoryTexts,
-  vocabularyShapes as factoryVocabularyShapes,
-} from '../../guest/lib/interfaces-m5-factory.js';
+  toolArgumentNames,
+} from '../../guest/lib/interfaces.js';
+import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary.js';
 /* eslint-enable import/no-relative-packages */
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -200,7 +182,7 @@ const m5ShapeSamples = {
   },
 };
 
-/** Samples of `m5Widenings`, by name. */
+/** Samples of `shapes`, by name. */
 const widenedSamples = {
   TurnStarted: {
     kind: 'turn-started',
@@ -258,7 +240,9 @@ const factoryShapeSamples = {
  * @param {Record<string, unknown>} samples
  */
 const checkShapes = (t, table, samples) => {
-  t.deepEqual(Object.keys(samples).sort(), Object.keys(table).sort());
+  for (const name of Object.keys(samples)) {
+    t.true(name in table, `${name} is a shape`);
+  }
   let refused = 0;
   for (const [name, sample] of Object.entries(samples)) {
     const shape = table[name];
@@ -274,33 +258,41 @@ const checkShapes = (t, table, samples) => {
 // ---------------------------------------------------------------- shapes
 
 test('every M5 shape accepts its sample and refuses every oversize string, array and extra key', t => {
-  let refused = checkShapes(t, m5Shapes, m5ShapeSamples);
-  refused += checkShapes(t, m5Widenings, widenedSamples);
-  refused += checkShapes(t, m5FactoryShapes, factoryShapeSamples);
+  // The widened TurnStarted and PresetSnapshot are the plain shapes since
+  // the fold (F2); RoundRequest.system and SessionServices.endowments are
+  // checked through their records in the next test.
+  const {
+    RoundRequestSystem: _r,
+    SessionServicesEndowments: _e,
+    ...widened
+  } = widenedSamples;
+  let refused = checkShapes(t, shapes, m5ShapeSamples);
+  refused += checkShapes(t, shapes, widened);
+  refused += checkShapes(t, shapes, factoryShapeSamples);
   t.true(refused >= 100, `${refused} variants refused`);
   // The other alternatives of InspectOutcome.
   t.true(
     matches(
       harden({ status: 'ok', description: toolDescription }),
-      m5Shapes.InspectOutcome,
+      shapes.InspectOutcome,
     ),
   );
-  t.true(matches(harden({ status: 'exhausted' }), m5Shapes.InspectOutcome));
+  t.true(matches(harden({ status: 'exhausted' }), shapes.InspectOutcome));
   t.true(
-    matches(harden({ status: 'failed', text: 'x' }), m5Shapes.InspectOutcome),
+    matches(harden({ status: 'failed', text: 'x' }), shapes.InspectOutcome),
   );
-  t.true(matches(undefined, m5Shapes.PowersValue));
-  t.true(matches(notes, m5Shapes.PowersValue));
+  t.true(matches(undefined, shapes.PowersValue));
+  t.true(matches(notes, shapes.PowersValue));
   // Bounds stated by the contract.
   const many = (/** @type {number} */ n, /** @type {any} */ item) =>
     harden(Array.from({ length: n }, () => item));
-  t.true(matches(many(32, attachment), m5Shapes.Attachments));
-  t.false(matches(many(33, attachment), m5Shapes.Attachments));
-  t.false(matches('x'.repeat(81), m5Shapes.EdgeLabel));
-  t.false(matches(harden({ json: 'x'.repeat(8193) }), m5Shapes.JsonValue));
+  t.true(matches(many(32, attachment), shapes.Attachments));
+  t.false(matches(many(33, attachment), shapes.Attachments));
+  t.false(matches('x'.repeat(81), shapes.EdgeLabel));
+  t.false(matches(harden({ json: 'x'.repeat(8193) }), shapes.JsonValue));
 });
 
-test('the widenings in interfaces.js agree with m5Widenings and still refuse what M2 refused', t => {
+test('the widenings in interfaces.js agree with shapes and still refuse what M2 refused', t => {
   const started = widenedSamples.TurnStarted;
   t.true(matches(harden(started), shapes.TurnStarted));
   t.true(matches(harden(started), shapes.TurnRecord));
@@ -339,7 +331,6 @@ test('the widenings in interfaces.js agree with m5Widenings and still refuse wha
       matches(harden({ ...round, system }), shapes.RoundRequest),
       JSON.stringify(system === staged ? 'staged' : system),
     );
-    t.true(matches(harden(system), m5Widenings.RoundRequestSystem));
   }
   t.false(
     matches(harden({ ...round, system: ['a', 'b', 'c'] }), shapes.RoundRequest),
@@ -384,19 +375,13 @@ test('the widenings in interfaces.js agree with m5Widenings and still refuse wha
 
 // ---------------------------------------------------------------- guards
 
-test('extendInterface reads payload.methodGuards (CC-072 workaround pinned)', t => {
-  const base = /** @type {any} */ (m2Interfaces.Session);
-  const guards = base.payload.methodGuards;
-  t.is(typeof guards, 'object');
-  t.deepEqual(
-    Object.keys({ ...guards }).sort(),
-    [...m2MethodNames.Session].sort(),
-  );
-  const extended = /** @type {any} */ (
-    extendInterface(base, 'Session', m5Extensions.Session())
-  );
-  t.deepEqual(Object.keys(extended.payload.methodGuards), [
-    ...m5MethodNames.Session,
+test('one Session guard: the M2 methods first, then enqueueMessageOnce and grants (F2 fold)', t => {
+  const guards = /** @type {any} */ (interfaces.Session).payload.methodGuards;
+  t.deepEqual(Object.keys(guards), [...methodNames.Session]);
+  t.deepEqual(methodNames.Session.slice(-3), [
+    'findTurn',
+    'enqueueMessageOnce',
+    'grants',
   ]);
 });
 
@@ -417,17 +402,14 @@ const checkNames = (t, guards, names) => {
 };
 
 test('M5 interfaces keep every earlier method first, then M5s, in the stated order', t => {
-  checkNames(t, m5Interfaces, m5MethodNames);
-  checkNames(t, m5FactoryInterfaces, m5FactoryMethodNames);
-  const session = m5MethodNames.Session;
-  t.deepEqual(session.slice(0, m2MethodNames.Session.length), [
-    ...m2MethodNames.Session,
+  checkNames(t, interfaces, methodNames);
+  t.deepEqual(methodNames.ExecScope, ['run', 'abandon', 'inspect']);
+  t.deepEqual(methodNames.Composer, ['submit', 'edit']);
+  t.deepEqual(methodNames.Operator.slice(-3), [
+    'getSecrets',
+    'getPresets',
+    'getInventory',
   ]);
-  t.deepEqual(m5MethodNames.ExecScope.slice(0, 2), ['run', 'abandon']);
-  t.deepEqual(
-    Object.keys(/** @type {any} */ (interfaces.ExecScope).payload.methodGuards),
-    ['run', 'abandon'],
-  );
 });
 
 const receipt = { requestId: 'r1', duplicate: false, state: 'queued' };
@@ -439,19 +421,19 @@ const receipt = { requestId: 'r1', duplicate: false, state: 'queued' };
 const methodSamples = {
   Session: {
     enqueueMessageOnce: {
-      guard: m5Interfaces.Session,
+      guard: interfaces.Session,
       args: [{ text: 'look at @notes' }, 'r1', 5, [attachment]],
       returns: receipt,
     },
     grants: {
-      guard: m5Interfaces.Session,
+      guard: interfaces.Session,
       args: [],
       returns: far('SessionGrants'),
     },
   },
   Composer: {
     submit: {
-      guard: m5Interfaces.Composer,
+      guard: interfaces.Composer,
       args: [
         far('Session'),
         'look at @notes',
@@ -463,146 +445,146 @@ const methodSamples = {
   },
   ExecScope: {
     inspect: {
-      guard: m5Interfaces.ExecScope,
+      guard: interfaces.ExecScope,
       args: [m5ShapeSamples.InspectRequest],
       returns: { status: 'exhausted' },
     },
     run: {
-      guard: m5Interfaces.ExecScope,
+      guard: interfaces.ExecScope,
       args: [m5ShapeSamples.ExecRequest],
       returns: { status: 'ok', text: '1' },
     },
   },
   ExecPowersSource: {
     lookup: {
-      guard: m5Interfaces.ExecPowersSource,
+      guard: interfaces.ExecPowersSource,
       args: ['x'],
       returns: { json: '1' },
     },
-    list: { guard: m5Interfaces.ExecPowersSource, args: [], returns: ['x'] },
+    list: { guard: interfaces.ExecPowersSource, args: [], returns: ['x'] },
     store: {
-      guard: m5Interfaces.ExecPowersSource,
+      guard: interfaces.ExecPowersSource,
       args: ['x', { json: '{"a":1}' }],
       returns: undefined,
     },
     remove: {
-      guard: m5Interfaces.ExecPowersSource,
+      guard: interfaces.ExecPowersSource,
       args: ['x'],
       returns: true,
     },
   },
   SessionGrants: {
     grantTool: {
-      guard: m5Interfaces.SessionGrants,
+      guard: interfaces.SessionGrants,
       args: [far('Tool')],
       returns: far('ToolGrant'),
     },
     list: {
-      guard: m5Interfaces.SessionGrants,
+      guard: interfaces.SessionGrants,
       args: [],
       returns: [m5ShapeSamples.ToolGrantInfo],
     },
   },
   ToolGrant: {
     describe: {
-      guard: m5Interfaces.ToolGrant,
+      guard: interfaces.ToolGrant,
       args: [],
       returns: m5ShapeSamples.ToolGrantInfo,
     },
-    withdraw: { guard: m5Interfaces.ToolGrant, args: [], returns: undefined },
+    withdraw: { guard: interfaces.ToolGrant, args: [], returns: undefined },
   },
   SourceReader: {
     read: {
-      guard: m5Interfaces.SourceReader,
+      guard: interfaces.SourceReader,
       args: [m5ShapeSamples.SourceReadRequest],
       returns: m5ShapeSamples.SourceReadResult,
     },
   },
   Operator: {
     getPresets: {
-      guard: m5FactoryInterfaces.Operator,
+      guard: interfaces.Operator,
       args: [],
       returns: far('PresetCatalog'),
     },
     getInventory: {
-      guard: m5FactoryInterfaces.Operator,
+      guard: interfaces.Operator,
       args: [],
       returns: far('Inventory'),
     },
   },
   PresetCatalog: {
-    list: { guard: m5FactoryInterfaces.PresetCatalog, args: [], returns: [] },
+    list: { guard: interfaces.PresetCatalog, args: [], returns: [] },
     configuration: {
-      guard: m5FactoryInterfaces.PresetCatalog,
+      guard: interfaces.PresetCatalog,
       args: [],
       returns: factoryShapeSamples.PresetConfiguration,
     },
     create: {
-      guard: m5FactoryInterfaces.PresetCatalog,
+      guard: interfaces.PresetCatalog,
       args: [presetRecord, 3],
       returns: factoryShapeSamples.PresetCreated,
     },
     defaultPreset: {
-      guard: m5FactoryInterfaces.PresetCatalog,
+      guard: interfaces.PresetCatalog,
       args: [],
       returns: far('Preset'),
     },
   },
   Preset: {
     describe: {
-      guard: m5FactoryInterfaces.Preset,
+      guard: interfaces.Preset,
       args: [],
       returns: factoryShapeSamples.PresetView,
     },
     snapshot: {
-      guard: m5FactoryInterfaces.Preset,
+      guard: interfaces.Preset,
       args: [],
       returns: presetSnapshot,
     },
     save: {
-      guard: m5FactoryInterfaces.Preset,
+      guard: interfaces.Preset,
       args: [presetRecord, 3],
       returns: 4,
     },
-    delete: { guard: m5FactoryInterfaces.Preset, args: [3], returns: 4 },
-    reset: { guard: m5FactoryInterfaces.Preset, args: [3], returns: 4 },
+    delete: { guard: interfaces.Preset, args: [3], returns: 4 },
+    reset: { guard: interfaces.Preset, args: [3], returns: 4 },
   },
   Inventory: {
     list: {
-      guard: m5FactoryInterfaces.Inventory,
+      guard: interfaces.Inventory,
       args: ['i50'],
       returns: factoryShapeSamples.InventoryPage,
     },
     add: {
-      guard: m5FactoryInterfaces.Inventory,
+      guard: interfaces.Inventory,
       args: ['notes', notes],
       returns: far('InventoryEntry'),
     },
     addAll: {
-      guard: m5FactoryInterfaces.Inventory,
+      guard: interfaces.Inventory,
       args: [[attachment]],
       returns: [far('InventoryEntry')],
     },
-    rev: { guard: m5FactoryInterfaces.Inventory, args: [], returns: 1 },
+    rev: { guard: interfaces.Inventory, args: [], returns: 1 },
   },
   InventoryEntry: {
     describe: {
-      guard: m5FactoryInterfaces.InventoryEntry,
+      guard: interfaces.InventoryEntry,
       args: [],
       returns: { label: 'notes' },
     },
     value: {
-      guard: m5FactoryInterfaces.InventoryEntry,
+      guard: interfaces.InventoryEntry,
       args: [],
       returns: notes,
     },
     relabel: {
-      guard: m5FactoryInterfaces.InventoryEntry,
+      guard: interfaces.InventoryEntry,
       args: ['notes2'],
       returns: undefined,
     },
     remove: {
-      guard: m5FactoryInterfaces.InventoryEntry,
+      guard: interfaces.InventoryEntry,
       args: [],
       returns: undefined,
     },
@@ -670,7 +652,7 @@ test('every M5 method refuses an oversize string, an oversize array and an extra
 
 test('a return outside its shape is refused (33 attachments, a long label)', async t => {
   const exo = /** @type {any} */ (
-    makeExo('ExecPowersSource', m5Interfaces.ExecPowersSource, {
+    makeExo('ExecPowersSource', interfaces.ExecPowersSource, {
       lookup: () => harden({ json: 'x'.repeat(limits.labelValueBytes + 1) }),
       list: () => harden(Array(limits.maxLabels + 1).fill('a')),
       store: () => undefined,
@@ -703,9 +685,9 @@ test('M5 names and the closed argument lists', t => {
     [...reservedLabels],
     ['user', 'tools', 'subagents', '__proto__', 'constructor', 'prototype'],
   );
-  t.deepEqual([...m5ToolArgumentNames.store], ['value', 'petName']);
+  t.deepEqual([...toolArgumentNames.store], ['value', 'petName']);
   t.deepEqual(
-    [...m5ToolArgumentNames.adopt],
+    [...toolArgumentNames.adopt],
     ['messageNumber', 'edgeName', 'petName'],
   );
 });
@@ -732,7 +714,7 @@ test('the fixed M5 texts', t => {
     'Reserved or invalid endowment name: user',
   );
   t.is(
-    factoryTextOf.reservedEndowment('user'),
+    textOf.reservedEndowment('user'),
     textOf.reservedLabel('user'),
     'the session and the catalogue say the same',
   );
@@ -749,21 +731,46 @@ test('the fixed M5 texts', t => {
     'Attachments were lost when the page reloaded; attach them again',
   );
   t.is(
-    factoryTexts.presetStale,
+    texts.presetStale,
     'Preset settings changed elsewhere. Reload before saving.',
   );
+  t.is(texts.shellNeedsWorkspace, 'An isolated shell requires a workspace');
   t.is(
-    factoryTexts.shellNeedsWorkspace,
-    'An isolated shell requires a workspace',
-  );
-  t.is(
-    factoryTexts.chatOnlyRule,
+    texts.chatOnlyRule,
     'Chat only requires internet off and no additional objects',
   );
-  for (const value of [
-    ...Object.values(texts),
-    ...Object.values(factoryTexts),
+  // The M5 fixed texts (session and factory side), now entries of the
+  // plain table.
+  for (const name of [
+    'powersExpired',
+    'inspectTerminated',
+    'grantWithdrawn',
+    'grantsFull',
+    'packageDismissed',
+    'attachmentsLost',
+    'invalidPreset',
+    'unknownTemplate',
+    'invalidEndowments',
+    'invalidTemplateObject',
+    'templateObjectsRequired',
+    'shellNeedsWorkspace',
+    'invalidNetworkPolicy',
+    'chatOnlyRule',
+    'backendForDefaults',
+    'modelForBackend',
+    'presetStale',
+    'tooManyPresets',
+    'builtInTemplateFixed',
+    'builtInNotDeletable',
+    'onlyBuiltInReset',
+    'unknownPreset',
+    'presetDeleted',
+    'presetChanged',
+    'presetTooLarge',
+    'inventoryFull',
+    'entryRemoved',
   ]) {
+    const value = /** @type {Record<string, string>} */ (texts)[name];
     t.is(typeof value, 'string');
     t.true(value.length > 0 && value.length <= limits.reasonUnits);
   }
@@ -771,46 +778,16 @@ test('the fixed M5 texts', t => {
 
 // ---------------------------------------------------------------- vocabulary
 
-/**
- * Every record key reachable in these patterns.
- * @param {readonly any[]} patterns
- */
-const keysOf = patterns => {
-  const keys = new Set();
-  const seen = new WeakSet();
-  /** @param {any} value */
-  const walk = value => {
-    if (value === null || typeof value !== 'object') return;
-    if (seen.has(value)) return;
-    seen.add(value);
-    for (const key of Object.keys(value)) {
-      keys.add(key);
-      walk(value[key]);
-    }
-  };
-  for (const pattern of patterns) walk(pattern);
-  return keys;
-};
-
-test('both vocabularyShapes() build and carry M5 record keys', t => {
-  const session = vocabularyShapes();
-  const factory = factoryVocabularyShapes();
-  t.true(session.length > 20);
-  t.true(factory.length > 10);
-  const sessionKeys = keysOf(session);
-  const factoryKeys = keysOf(factory);
+test("the gateway's vocabulary carries M5 record keys", t => {
+  const { keys } = harnessNames();
   for (const key of ['attachments', 'label', 'value', 'json', 'op', 'target']) {
-    t.true(sessionKeys.has(key), `session vocabulary has ${key}`);
+    t.true(keys.has(key), `vocabulary has ${key}`);
   }
-  t.true(keysOf([m5Widenings.SessionServicesEndowments]).has('label'));
-  t.true(factoryKeys.has('endowments'), 'factory vocabulary has endowments');
+  t.true(keys.has('endowments'), 'vocabulary has endowments');
   for (const key of Object.keys(presetRecord)) {
-    t.true(factoryKeys.has(key), `factory vocabulary has PresetRecord.${key}`);
+    t.true(keys.has(key), `vocabulary has PresetRecord.${key}`);
   }
   for (const key of Object.keys(presetSnapshot)) {
-    t.true(
-      sessionKeys.has(key),
-      `session vocabulary has PresetSnapshot.${key}`,
-    );
+    t.true(keys.has(key), `vocabulary has PresetSnapshot.${key}`);
   }
 });

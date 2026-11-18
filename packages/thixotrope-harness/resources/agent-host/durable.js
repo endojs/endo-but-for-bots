@@ -21,11 +21,9 @@
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
 import {
   interfaces,
-  m1bInterfaces,
-  m1bShapes,
-  m2Interfaces,
-  texts,
+  shapes,
   textOf,
+  texts,
 } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { fitsFrame } from '../../guest/lib/bounded.js';
@@ -118,7 +116,7 @@ export const make = ({ makeManager }) => {
   const blobKeys = new WeakMap();
   const makeBlob = defineExoClass(
     'Blob',
-    m1bInterfaces.Blob,
+    interfaces.Blob,
     () => harden({}),
     {},
   );
@@ -130,28 +128,28 @@ export const make = ({ makeManager }) => {
         M.remotable('AgentHostOps'),
         M.string({ stringLengthLimit: 128 }),
       ).returns(M.number()),
-      mintBlobs: M.call().returns(m1bShapes.BlobStock),
+      mintBlobs: M.call().returns(shapes.BlobStock),
       resolveBlobs: M.call(
         M.arrayOf(M.remotable('Blob'), {
           arrayLengthLimit: limits.blobResolveBatch,
         }),
-      ).returns(m1bShapes.BlobKeys),
+      ).returns(shapes.BlobKeys),
       // M2 (m2-interfaces 3.3): keys by amplification, at most 64 a call.
       resolveSessions: M.call(
         M.arrayOf(M.remotable('Session'), {
           arrayLengthLimit: limits.blobResolveBatch,
         }),
-      ).returns(m1bShapes.BlobKeys),
+      ).returns(shapes.BlobKeys),
       resolveSecrets: M.call(
         M.arrayOf(M.remotable('Secret'), {
           arrayLengthLimit: limits.blobResolveBatch,
         }),
-      ).returns(m1bShapes.BlobKeys),
+      ).returns(shapes.BlobKeys),
       resolveGrants: M.call(
         M.arrayOf(M.remotable('ReadGrant'), {
           arrayLengthLimit: limits.blobResolveBatch,
         }),
-      ).returns(m1bShapes.BlobKeys),
+      ).returns(shapes.BlobKeys),
       // M4 (H-2): poolState, poolChanged, poolOf.
       ...m4SinkMethodGuards(),
     }),
@@ -439,7 +437,8 @@ export const make = ({ makeManager }) => {
               .secretDelete(record.key)
               .catch(
                 /** @param {unknown} error */ error => {
-                  if (isSecretFailure(error, 'UNKNOWN_SECRET')) return undefined;
+                  if (isSecretFailure(error, 'UNKNOWN_SECRET'))
+                    return undefined;
                   throw error;
                 },
               ),
@@ -529,7 +528,7 @@ export const make = ({ makeManager }) => {
         ? { kind: spec.kind, label: spec.label }
         : { kind: spec.kind, label: spec.label, modelId: spec.modelId },
     );
-    const backend = makeExo('Backend', m2Interfaces.Backend, {
+    const backend = makeExo('Backend', interfaces.Backend, {
       describe: () => info,
       /** @param {any} [request] a `shapes.ModelRequest` */
       listModels: async request =>
@@ -620,7 +619,7 @@ export const make = ({ makeManager }) => {
   };
 
   // M3 (m3-interfaces.md 11, H2): the M2 guard plus `gateway()`.
-  const facetGuard = withGatewayAdmin(m2Interfaces.AgentHostAdmin);
+  const facetGuard = withGatewayAdmin(interfaces.AgentHostAdmin);
   const facet = makeExo('AgentHostAdmin', facetGuard, {
     makeBackend,
     forSession,

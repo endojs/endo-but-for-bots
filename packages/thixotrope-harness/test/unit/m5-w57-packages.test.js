@@ -12,7 +12,6 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
-import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeQueue } from '../../guest/session/queue.js';
@@ -138,14 +137,14 @@ test('checkAttachments refuses before anything is written', t => {
         text,
         attach(Array.from({ length: 33 }, (_, i) => `a${i}`)),
       ),
-    { message: textOfM5.tooManyAttachments(33) },
+    { message: textOf.tooManyAttachments(33) },
   );
   t.throws(() => checkAttachments(text, attach(['a', 'a'])), {
-    message: textOfM5.duplicateAttachment('a'),
+    message: textOf.duplicateAttachment('a'),
   });
   for (const bad of ['user', 'a/b', 'x@y', '..', ' ', 'tools']) {
     t.throws(() => checkAttachments(text, attach([bad])), {
-      message: textOfM5.reservedLabel(bad),
+      message: textOf.reservedLabel(bad),
     });
   }
   const max = limits.packageTextUnits;
@@ -155,13 +154,13 @@ test('checkAttachments refuses before anything is written', t => {
   t.throws(
     () =>
       checkAttachments(harden({ text: 'x'.repeat(max + 1) }), attach(['a'])),
-    { message: textOfM5.packageTooLong(max + 1) },
+    { message: textOf.packageTooLong(max + 1) },
   );
   const staged = (/** @type {number} */ bytes) =>
     harden({ blob: Far('Blob', {}), bytes, preview: 'p', digest: 'd' });
   t.notThrows(() => checkAttachments(staged(3 * max), attach(['a'])));
   t.throws(() => checkAttachments(staged(3 * max + 1), attach(['a'])), {
-    message: textOfM5.packageTooLong(max + 1),
+    message: textOf.packageTooLong(max + 1),
   });
 });
 
@@ -178,15 +177,15 @@ test('makePackages: numbers from 1, take by turn, closeTurn releases', t => {
   t.is(table.take(1, 'notes', 't1'), notes);
   t.is(table.take(1, 'notes'), notes, 'an edge can be taken twice');
   t.throws(() => table.take(1, 'notes', 't2'), {
-    message: textOfM5.noPackage(1),
+    message: textOf.noPackage(1),
   });
   t.throws(() => table.take(1, 'calc', 't1'), {
-    message: textOfM5.noEdge(1, 'calc'),
+    message: textOf.noEdge(1, 'calc'),
   });
-  t.throws(() => table.take(9, 'notes'), { message: textOfM5.noPackage(9) });
+  t.throws(() => table.take(9, 'notes'), { message: textOf.noPackage(9) });
   table.closeTurn('t1');
   t.is(table.size(), 1);
-  t.throws(() => table.take(1, 'notes'), { message: textOfM5.noPackage(1) });
+  t.throws(() => table.take(1, 'notes'), { message: textOf.noPackage(1) });
 });
 
 test('tables: packages part, hooks and tool entries are registered', t => {
@@ -357,7 +356,7 @@ test('a mention: the line on every round of its turn, adopt, noPackage after', a
   const [notes, calc] = attach(['notes', 'calc']);
   const receipt = await s.send('look at these', [notes, calc]);
   t.is(receipt.state, 'started');
-  const line = textOfM5.mentionLine(1, ['notes', 'calc']);
+  const line = textOf.mentionLine(1, ['notes', 'calc']);
   const round0 = s.last();
   t.is(round0.system, `You are helpful.\n\n${line}`);
   const started = round0.append.find(
@@ -402,10 +401,10 @@ test('a mention: the line on every round of its turn, adopt, noPackage after', a
   t.is(round1.system, `You are helpful.\n\n${line}`, 'every round of the turn');
   const results = resultsIn(round1);
   t.deepEqual(results.slice(0, 4), [
-    [textOfM5.adopted('notes', 1, 'n'), false],
-    [textOf.errorResult(textOfM5.noEdge(1, 'nope')), true],
-    [textOf.errorResult(textOfM5.noPackage(2)), true],
-    [textOf.errorResult(textOfM5.reservedLabel('user')), true],
+    [textOf.adopted('notes', 1, 'n'), false],
+    [textOf.errorResult(textOf.noEdge(1, 'nope')), true],
+    [textOf.errorResult(textOf.noPackage(2)), true],
+    [textOf.errorResult(textOf.reservedLabel('user')), true],
   ]);
   t.true(results[4][1]);
   t.is(
@@ -438,7 +437,7 @@ test('a mention: the line on every round of its turn, adopt, noPackage after', a
   ]);
   await drain();
   t.deepEqual(resultsIn(s.last()), [
-    [textOf.errorResult(textOfM5.noPackage(1)), true],
+    [textOf.errorResult(textOf.noPackage(1)), true],
     [JSON.stringify(['n'], null, 2), false],
   ]);
   s.answer();
@@ -448,7 +447,7 @@ test('a mention: the line on every round of its turn, adopt, noPackage after', a
   await s.send('more', attach(['calc']));
   t.is(
     s.last().system,
-    `You are helpful.\n\n${textOfM5.mentionLine(2, ['calc'])}`,
+    `You are helpful.\n\n${textOf.mentionLine(2, ['calc'])}`,
   );
 });
 
@@ -462,7 +461,7 @@ test('enqueueMessageOnce refuses before storing; a retry is a duplicate', async 
         AT,
         attach(['a', 'a']),
       ),
-    { message: textOfM5.duplicateAttachment('a') },
+    { message: textOf.duplicateAttachment('a') },
   );
   t.throws(
     () =>
@@ -472,7 +471,7 @@ test('enqueueMessageOnce refuses before storing; a retry is a duplicate', async 
         AT,
         attach(['user']),
       ),
-    { message: textOfM5.reservedLabel('user') },
+    { message: textOf.reservedLabel('user') },
   );
   t.is(s.session.listPending().entries.length, 0);
   t.is(s.rounds.length, 0, 'no turn started');
@@ -512,10 +511,7 @@ test('queued entries keep their attachments behind a turn and a restart hold; re
   );
   // A new message releases the hold; the held entry runs with its line.
   await s.send('third');
-  t.is(
-    s.last().system,
-    `You are helpful.\n\n${textOfM5.mentionLine(2, ['b'])}`,
-  );
+  t.is(s.last().system, `You are helpful.\n\n${textOf.mentionLine(2, ['b'])}`);
   t.is(s.runtime().packages.table.size(), 1);
 });
 
@@ -577,9 +573,9 @@ test('adoptTool grants through the grants part and answers by its schema read', 
   ]);
   await drain();
   t.deepEqual(resultsIn(s.last()), [
-    [textOfM5.adoptedTool('echo', 1), false],
+    [textOf.adoptedTool('echo', 1), false],
     [textOf.errorResult('bad schema'), true],
-    [textOf.errorResult(textOfM5.reservedLabel('a/b')), true],
+    [textOf.errorResult(textOf.reservedLabel('a/b')), true],
   ]);
   t.deepEqual(granted, [
     [good.value, 'adopted'],

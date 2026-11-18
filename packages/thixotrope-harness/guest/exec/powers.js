@@ -19,7 +19,8 @@
  */
 import { limits } from '../lib/limits.js';
 import { utf8Bytes } from '../lib/bounded.js';
-import { bigintsAsDecimalStrings, texts, textOf } from './render.js';
+import { texts, textOf } from '../lib/guards/base.js';
+import { bigintsAsDecimalStrings } from './render.js';
 import { isWrapper, MODEL_OBJECT_TEXT } from './membrane.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */

@@ -36,10 +36,10 @@ import test from '@endo/ses-ava/test.js';
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
 import {
-  m2Interfaces,
+  interfaces,
   shapes,
-  texts,
   textOf,
+  texts,
 } from '../../guest/lib/interfaces.js';
 import {
   fingerprintOf,
@@ -216,7 +216,7 @@ test('QueueEntry is on the M2 guard: edit and sendNow exist; an oversize edit is
   t.throws(() => receipt.entry.edit(harden({ text: 'z', extra: 1 })));
   // The guard is the M2 one.
   t.notThrows(() =>
-    makeExo('QueueEntry', /** @type {any} */ (m2Interfaces.QueueEntry), {
+    makeExo('QueueEntry', /** @type {any} */ (interfaces.QueueEntry), {
       describe: () => undefined,
       cancel: () => false,
       edit: () => undefined,

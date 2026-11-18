@@ -18,11 +18,7 @@
  * Guest rules: prelude globals only; no sends.
  */
 import { limits } from '../lib/limits.js';
-import {
-  m5FactoryInterfaces,
-  texts,
-  textOf,
-} from '../lib/interfaces-m5-factory.js';
+import { interfaces, textOf, texts } from '../lib/guards/factory.js';
 import { isEdgeLabel } from '../lib/preset-catalog.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
@@ -76,33 +72,29 @@ export const makeInventory = () => {
    * @param {any} value
    */
   const makeEntry = (label, value) => {
-    const entry = makeExo(
-      'InventoryEntry',
-      m5FactoryInterfaces.InventoryEntry,
-      {
-        describe: () => harden({ label: liveOf(entry).label }),
-        value: () => liveOf(entry).value,
-        /** @param {string} next */
-        relabel: next => {
-          const state = liveOf(entry);
-          if (next === state.label) return undefined;
-          assertLabel(next);
-          if (byLabel.has(next)) throw Error(textOf.inventoryLabelTaken(next));
-          byLabel.delete(state.label);
-          byLabel.set(next, entry);
-          state.label = next;
-          rev += 1;
-          return undefined;
-        },
-        remove: () => {
-          const state = liveOf(entry);
-          entries.delete(entry);
-          byLabel.delete(state.label);
-          rev += 1;
-          return undefined;
-        },
+    const entry = makeExo('InventoryEntry', interfaces.InventoryEntry, {
+      describe: () => harden({ label: liveOf(entry).label }),
+      value: () => liveOf(entry).value,
+      /** @param {string} next */
+      relabel: next => {
+        const state = liveOf(entry);
+        if (next === state.label) return undefined;
+        assertLabel(next);
+        if (byLabel.has(next)) throw Error(textOf.inventoryLabelTaken(next));
+        byLabel.delete(state.label);
+        byLabel.set(next, entry);
+        state.label = next;
+        rev += 1;
+        return undefined;
       },
-    );
+      remove: () => {
+        const state = liveOf(entry);
+        entries.delete(entry);
+        byLabel.delete(state.label);
+        rev += 1;
+        return undefined;
+      },
+    });
     entries.set(entry, { label, value });
     byLabel.set(label, entry);
     return entry;
@@ -161,7 +153,7 @@ export const makeInventory = () => {
     return harden(page);
   };
 
-  const facet = makeExo('Inventory', m5FactoryInterfaces.Inventory, {
+  const facet = makeExo('Inventory', interfaces.Inventory, {
     list,
     add,
     addAll,

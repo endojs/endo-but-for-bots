@@ -31,7 +31,7 @@
  *
  * Guest rules.
  */
-import { textOf } from '../lib/interfaces-m5.js';
+import { textOf } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { isValidLabel } from './labels.js';
 

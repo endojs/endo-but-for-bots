@@ -55,7 +55,7 @@ import {
 import { dirname, basename, join } from 'node:path';
 import { argv as processArgv, pid } from 'node:process';
 
-import { m1bInterfaces, texts, textOf } from '../../../guest/lib/interfaces.js';
+import { interfaces, textOf, texts } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { previewText } from '../../../guest/lib/bounded.js';
 import { blobLimits } from '../../../config/defaults.js';
@@ -780,7 +780,7 @@ export const makeBlobStore = ({
       return result;
     };
 
-    return makeExo('BlobWriter', m1bInterfaces.BlobWriter, {
+    return makeExo('BlobWriter', interfaces.BlobWriter, {
       /** @param {string} piece */
       append: piece =>
         inOrder(async () => {
@@ -845,7 +845,7 @@ export const makeBlobStore = ({
 
   /** @param {any} [owner] */
   const writersFor = owner =>
-    makeExo('BlobWriters', m1bInterfaces.BlobWriters, {
+    makeExo('BlobWriters', interfaces.BlobWriters, {
       open: async () => makeWriter(owner),
     });
   const writers = writersFor(undefined);

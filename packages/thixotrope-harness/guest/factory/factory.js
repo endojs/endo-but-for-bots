@@ -34,11 +34,6 @@
  * `PROBE_WINDOW` at once in the start listener.
  */
 import { interfaces, shapes, texts } from '../lib/guards/factory.js';
-import {
-  m5FactoryExtensions,
-  texts as factoryTexts,
-} from '../lib/interfaces-m5-factory.js';
-import { extendInterface } from '../lib/interfaces-m5.js';
 import { fitsFrame } from '../lib/bounded.js';
 import { limits } from '../lib/limits.js';
 import { isRetiredBreak } from '../lib/retired.js';
@@ -330,7 +325,7 @@ export const makeFactoryKit = ({
       // M5 W5.1 (2.3 step 4): the snapshot and the endowments travel in
       // `make`'s one message (rule 12.5).
       if (!fitsFrame(makeArgs, limits.frameBytes))
-        throw Error(factoryTexts.presetTooLarge);
+        throw Error(texts.presetTooLarge);
       /** @type {any} */
       let made;
       try {
@@ -419,13 +414,7 @@ export const makeFactoryKit = ({
     listModels,
   });
 
-  // M5 W5.1 (seam H-2): `m5FactoryInterfaces.Operator`.
-  const operatorInterface = extendInterface(
-    interfaces.Operator,
-    'Operator',
-    m5FactoryExtensions.Operator(),
-  );
-  const operator = makeExo('Operator', operatorInterface, {
+  const operator = makeExo('Operator', interfaces.Operator, {
     getFactory: () => factory,
     /** M2 W2.7: the agent host's Secrets manager (m2-interfaces.md 9). */
     getSecrets: () => E(admin).getSecrets(),

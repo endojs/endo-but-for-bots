@@ -23,7 +23,6 @@
  * `packages` parts, which every runtime has.
  */
 import { interfaces, texts } from '../lib/guards/session.js';
-import { m5Interfaces } from '../lib/interfaces-m5.js';
 import { limits } from '../lib/limits.js';
 import { labelSeeds as defaultLabelSeeds, seedsFor } from './label-seeds.js';
 import { makeLabels } from './labels.js';
@@ -184,7 +183,7 @@ export const makeSession = (
   // Contract 6.1: the ports are opened once, here, and held across turns.
   runner.openPorts();
 
-  const session = makeExo('Session', m5Interfaces.Session, {
+  const session = makeExo('Session', interfaces.Session, {
     getInfo() {
       return info();
     },

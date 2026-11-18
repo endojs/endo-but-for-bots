@@ -96,11 +96,7 @@ import { pid } from 'node:process';
 import { clearTimeout, setTimeout } from 'node:timers';
 
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
-import {
-  interfaces,
-  m1bShapes,
-  shapes,
-} from '../../../guest/lib/interfaces.js';
+import { interfaces, shapes } from '../../../guest/lib/interfaces.js';
 import { limits } from '../../../guest/lib/limits.js';
 import { messageBytes } from '../../../guest/lib/bounded.js';
 import {
@@ -152,7 +148,7 @@ export const LIVE_SUBSCRIPTION_GUARD = M.interface('LiveSubscription', {
         }),
       },
       // `reason` (M1b W1b.1, J-9172): the closeReasons key.
-      { closed: M.boolean(), reason: m1bShapes.CloseReason },
+      { closed: M.boolean(), reason: shapes.CloseReason },
     ),
   ),
   close: M.call().returns(M.undefined()),

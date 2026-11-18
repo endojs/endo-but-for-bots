@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { m1bShapes, texts, textOf } from '../../guest/lib/interfaces.js';
+import { shapes, textOf, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { HUB_RETIRED_MESSAGE } from '../../guest/lib/retired.js';
 import { makeRecordLog } from '../../guest/session/records.js';
@@ -55,7 +55,7 @@ test('J-9363: every StagedText carries the SHA-256 of its UTF-8 bytes', async t 
   const text = `${'é'.repeat(5000)}\u{1F600}`;
   const staged = await blobs.store.stage(text);
   t.is(staged.digest, sha256(text));
-  t.true(matches(staged, m1bShapes.StagedText));
+  t.true(matches(staged, shapes.StagedText));
   const pending = await blobs.store.stagePending(`${text}x`);
   t.is(pending.digest, sha256(`${text}x`));
   const writer = await E(blobs.store.writers).open();
@@ -63,7 +63,7 @@ test('J-9363: every StagedText carries the SHA-256 of its UTF-8 bytes', async t 
   await E(writer).append('b'.repeat(5000));
   const written = await E(writer).close();
   t.is(written.digest, sha256(`${'a'.repeat(5000)}${'b'.repeat(5000)}`));
-  t.true(matches(written, m1bShapes.StagedText));
+  t.true(matches(written, shapes.StagedText));
 });
 
 // ---------------------------------------------------------------- quotas

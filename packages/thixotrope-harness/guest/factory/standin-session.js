@@ -11,9 +11,10 @@
  *
  * It satisfies the contract's guards: `makeSpareMaker()` returns a
  * `SpareMaker`; `make` returns a guarded `Session` and `SessionInternal`
- * (the M2 versions since the M2 fold, X1). Session methods that need the
- * turn machinery throw; the M2 methods it has no state for (`findTurn`,
- * `blobPage`, `deleteSelf`, the export and import) refuse. Two titles given to
+ * (the one `Session` guard since the fold, F2). Session methods that need
+ * the turn machinery throw; the methods it has no state for (`findTurn`,
+ * `enqueueMessageOnce`, `grants`, `blobPage`, `deleteSelf`, the export and
+ * import) refuse. Two titles given to
  * `rename` drive the factory tests:
  * - `STANDIN_WORKING` reports `activity: 'working'` (as a claim would);
  * - `STANDIN_HALT` loops until the crank budget halts the vat (a lost
@@ -101,6 +102,10 @@ const makeSession = ({ config, rowReporter }) => {
     findTurn: () => {
       throw Error(NOT_HERE);
     },
+    enqueueMessageOnce: () => {
+      throw Error(NOT_HERE);
+    },
+    grants: refuse('grants'),
   });
   const internal = makeExo('SessionInternal', interfaces.SessionInternal, {
     rowSnapshot: () =>

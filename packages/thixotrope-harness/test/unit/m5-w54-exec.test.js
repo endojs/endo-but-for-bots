@@ -22,17 +22,8 @@ import { harnessRoot } from '../_helpers.js';
 import { m5FixtureSource } from '../fixtures/m5-objects.js';
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
-import {
-  m5Interfaces,
-  m5Shapes,
-  texts,
-  textOf,
-} from '../../guest/lib/interfaces-m5.js';
-import {
-  execGuards,
-  texts as execTexts,
-  textOf as execTextOf,
-} from '../../guest/exec/render.js';
+import { shapes, texts, textOf } from '../../guest/lib/interfaces.js';
+import * as render from '../../guest/exec/render.js';
 import {
   ANSWER_DEPTH,
   MODEL_OBJECT_TEXT,
@@ -211,7 +202,7 @@ const fresh = async (extra = {}) => {
   return { scope, adapter, fx, powers, mirror, exec, inspect };
 };
 
-test('the exec bundle with W5.4 fits the budget M5 raises it to (O-1); the exec copy equals the contract', async t => {
+test('the exec bundle with W5.4 fits the budget M5 raises it to (O-1); it reads the guards from guards/base.js, not a copy', async t => {
   const { bundle } = await load();
   t.log(
     JSON.stringify({
@@ -224,19 +215,13 @@ test('the exec bundle with W5.4 fits the budget M5 raises it to (O-1); the exec 
   );
   const bytes = /** @type {number} */ (bundle.bytes);
   t.true(bytes <= EXEC_BUDGET_AFTER_M5, `${bytes}`);
-  t.false(bundle.modules.includes('lib/interfaces-m5.js'));
-  // The copy is the contract's, value for value.
-  const guards = execGuards();
-  t.deepEqual(guards.ExecScope, m5Interfaces.ExecScope);
-  t.deepEqual(guards.ExecRequest, m5Shapes.ExecRequest);
-  t.deepEqual(guards.InspectRequest, m5Shapes.InspectRequest);
-  t.deepEqual(guards.InspectOutcome, m5Shapes.InspectOutcome);
-  t.is(execTexts.powersExpired, texts.powersExpired);
-  t.is(execTextOf.valueTooLarge(9, 8), textOf.valueTooLarge(9, 8));
-  t.is(execTextOf.toolSchemaInvalid('r'), textOf.toolSchemaInvalid('r'));
-  t.is(execTextOf.membraneTooLarge(9, 8), textOf.membraneTooLarge(9, 8));
-  t.is(execTextOf.membraneTooManyKeys(9, 8), textOf.membraneTooManyKeys(9, 8));
-  t.is(execTextOf.membraneTooDeep(8), textOf.membraneTooDeep(8));
+  // The exec program reads the contract's own guards and texts from
+  // guards/base.js (F2, HR-SYN-1): no copy of them is left in render.js.
+  t.false(bundle.modules.includes('lib/interfaces.js'));
+  t.true(bundle.modules.includes('lib/guards/base.js'));
+  for (const name of ['execGuards', 'texts', 'textOf']) {
+    t.false(name in render, `render.js exports no ${name}`);
+  }
 });
 
 test('powers forwards lookup, list, store and remove to the session source; JSON values parse in the exec vat', async t => {
@@ -776,7 +761,7 @@ test('inspect methods and describe render without calling the object; Fae descri
 
 /** @param {unknown} outcome */
 const matchesOutcome = outcome =>
-  /** @type {any} */ (globalThis).matches(outcome, m5Shapes.InspectOutcome);
+  /** @type {any} */ (globalThis).matches(outcome, shapes.InspectOutcome);
 
 test('inspect readSources: Fae item rules, SourceReader per item, bounded results, staged arguments', async t => {
   const { inspect, fx, adapter } = await fresh();

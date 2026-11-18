@@ -21,7 +21,7 @@
  *
  * Guest rules.
  */
-import { m5Interfaces } from '../lib/interfaces-m5.js';
+import { interfaces } from '../lib/guards/session.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { Labels } from './labels.js' */
@@ -33,7 +33,7 @@ const { makeExo } = /** @type {any} */ (globalThis);
  * @param {Labels} labels
  */
 export const makePowersSource = labels =>
-  makeExo('ExecPowersSource', m5Interfaces.ExecPowersSource, {
+  makeExo('ExecPowersSource', interfaces.ExecPowersSource, {
     /** @param {string} label */
     lookup(label) {
       const binding = labels.get(label);

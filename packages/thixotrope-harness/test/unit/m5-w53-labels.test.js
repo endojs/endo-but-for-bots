@@ -7,11 +7,7 @@ import './_m1a-prelude.js';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { textOf } from '../../guest/lib/interfaces.js';
-import {
-  reservedLabels,
-  textOf as textOfM5,
-} from '../../guest/lib/interfaces-m5.js';
+import { textOf, reservedLabels } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { seedsFor } from '../../guest/session/label-seeds.js';
 import { isValidLabel, makeLabels } from '../../guest/session/labels.js';
@@ -54,10 +50,10 @@ test('labels follow the endowment rule (R3-22)', t => {
   }
   const labels = makeLabels();
   t.throws(() => labels.bindJson('user', '1'), {
-    message: textOfM5.reservedLabel('user'),
+    message: textOf.reservedLabel('user'),
   });
   t.throws(() => labels.bindObject('a/b', notes, 'adopted'), {
-    message: textOfM5.reservedLabel('a/b'),
+    message: textOf.reservedLabel('a/b'),
   });
 });
 
@@ -65,10 +61,10 @@ test('no silent overwrite; remove frees the label', t => {
   const labels = makeLabels();
   labels.bindJson('x', '1');
   t.throws(() => labels.bindJson('x', '2'), {
-    message: textOfM5.labelTaken('x'),
+    message: textOf.labelTaken('x'),
   });
   t.throws(() => labels.bindObject('x', notes, 'stored'), {
-    message: textOfM5.labelTaken('x'),
+    message: textOf.labelTaken('x'),
   });
   t.true(labels.remove('x'));
   t.false(labels.remove('x'));
@@ -81,7 +77,7 @@ test('256 labels at most; a removal frees a slot', t => {
   for (let i = 0; i < limits.maxLabels; i += 1) labels.bindJson(`k${i}`, '1');
   t.is(labels.size(), 256);
   t.throws(() => labels.bindJson('one-more', '1'), {
-    message: textOfM5.labelsFull(256),
+    message: textOf.labelsFull(256),
   });
   labels.remove('k7');
   labels.bindObject('one-more', notes, 'adopted');
@@ -94,18 +90,18 @@ test('stored values: 8,192 bytes each (UTF-8), 262,144 bytes in all', t => {
   const labels = makeLabels();
   labels.bindJson('ok', `"${'x'.repeat(8190)}"`);
   t.throws(() => labels.bindJson('big', `"${'x'.repeat(8191)}"`), {
-    message: textOfM5.valueTooLarge(8193, 8192),
+    message: textOf.valueTooLarge(8193, 8192),
   });
   // Three-byte characters count as three bytes.
   t.throws(() => labels.bindJson('wide', '中'.repeat(2731)), {
-    message: textOfM5.valueTooLarge(8193, 8192),
+    message: textOf.valueTooLarge(8193, 8192),
   });
   const full = makeLabels();
   const value = 'x'.repeat(8192);
   for (let i = 0; i < 32; i += 1) full.bindJson(`v${i}`, value);
   t.is(full.jsonBytes(), 262_144);
   t.throws(() => full.bindJson('v32', '1'), {
-    message: textOfM5.storedValuesFull(262_144),
+    message: textOf.storedValuesFull(262_144),
   });
   full.remove('v0');
   t.is(full.jsonBytes(), 262_144 - 8192);
@@ -223,21 +219,21 @@ test('object tools: list, store, lookup of JSON, remove (Fae texts)', async t =>
   });
   t.deepEqual(await run('lookup', '{"petName":"x"}', context), {
     status: 'failed',
-    text: textOfM5.unknownLabel('x'),
+    text: textOf.unknownLabel('x'),
   });
   t.deepEqual(await run('remove', '{"petName":"x"}', context), {
     status: 'failed',
-    text: textOfM5.unknownLabel('x'),
+    text: textOf.unknownLabel('x'),
   });
   // Refusals of the label map are failed results.
   await run('store', '{"value":1,"petName":"y"}', context);
   t.deepEqual(await run('store', '{"value":2,"petName":"y"}', context), {
     status: 'failed',
-    text: textOfM5.labelTaken('y'),
+    text: textOf.labelTaken('y'),
   });
   t.deepEqual(await run('store', '{"value":2,"petName":"user"}', context), {
     status: 'failed',
-    text: textOfM5.reservedLabel('user'),
+    text: textOf.reservedLabel('user'),
   });
 });
 
@@ -257,7 +253,7 @@ test('object tools refuse unknown keys, odd JSON and staged arguments', async t 
   });
   t.deepEqual(await run('store', staged, context), {
     status: 'failed',
-    text: textOfM5.argumentsTooLarge('store', 9000, limits.inlineBytes),
+    text: textOf.argumentsTooLarge('store', 9000, limits.inlineBytes),
   });
 });
 
@@ -378,8 +374,8 @@ test('toolSetFor: dynamic sources after the table; built-in and duplicate names 
       ['t', 'refused-duplicate'],
     ],
   );
-  t.is(log[0][2], textOfM5.toolNameBuiltIn('exec'));
-  t.is(log[2][2], textOfM5.toolNameDuplicate('t'));
+  t.is(log[0][2], textOf.toolNameBuiltIn('exec'));
+  t.is(log[2][2], textOf.toolNameDuplicate('t'));
   t.is(set.refused.length, 4);
   // On ports without the adapter tool, accountStatus is offered.
   log.length = 0;

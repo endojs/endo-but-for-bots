@@ -45,8 +45,7 @@
  * static table, so a static entry is never shadowed; their names are in the
  * round's built-in set, so no granted tool shadows them either.
  */
-import { echoDescription } from '../lib/guards/session.js';
-import { textOf as textOfM5 } from '../lib/interfaces-m5.js';
+import { echoDescription, textOf } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { execEntry } from './tools/exec.js';
 import { objectToolEntries } from './tools/objects.js';
@@ -231,12 +230,12 @@ export const toolSetFor = (
     };
     for (const entry of dynamic) {
       if (builtIn.has(entry.name)) {
-        refuse(entry, 'refused-builtin', textOfM5.toolNameBuiltIn(entry.name));
+        refuse(entry, 'refused-builtin', textOf.toolNameBuiltIn(entry.name));
       } else if (/** @type {number} */ (claims.get(entry.name)) > 1) {
         refuse(
           entry,
           'refused-duplicate',
-          textOfM5.toolNameDuplicate(entry.name),
+          textOf.toolNameDuplicate(entry.name),
         );
       } else if (
         descriptions.length < limits.maxToolsPerRound &&

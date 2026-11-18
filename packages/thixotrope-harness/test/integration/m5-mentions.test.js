@@ -29,7 +29,6 @@ import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
 import { textOf } from '../../guest/lib/interfaces.js';
-import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 /* eslint-enable import/no-relative-packages */
 import { emit, loadAvg, runIdentity } from '../../perf/_harness.mjs';
 import {
@@ -156,13 +155,13 @@ run('acceptance 7: mentions through the Composer', async t => {
   const records = await turnRecords(first.turn);
   t.deepEqual(records[0].attachments, ['notes', 'calc']);
   t.deepEqual(await resultsOf(first.turn), [
-    [textOfM5.adopted('notes', 1, 'n'), false],
+    [textOf.adopted('notes', 1, 'n'), false],
   ]);
 
   const second = await runTurn(slice, session, live, 'after');
   t.is(second.end.status, 'completed');
   t.deepEqual(await resultsOf(second.turn), [
-    [textOf.errorResult(textOfM5.noPackage(1)), true],
+    [textOf.errorResult(textOf.noPackage(1)), true],
     [JSON.stringify(['n'], null, 2), false],
   ]);
   const secondRecords = await turnRecords(second.turn);
@@ -185,7 +184,7 @@ run('acceptance 7: mentions through the Composer', async t => {
     plainSystems.map(s => s[0]),
     [0, 1],
   );
-  const line = textOfM5.mentionLine(1, ['notes', 'calc']);
+  const line = textOf.mentionLine(1, ['notes', 'calc']);
   const [, plainBytes] = plainSystems[0];
   t.true(plainSystems.every(s => s[2] === plainSystems[0][2]));
   for (const [, bytes, digest] of firstSystems) {

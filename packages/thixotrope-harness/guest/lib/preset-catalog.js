@@ -16,8 +16,7 @@
  */
 import { limits } from './limits.js';
 import { fitsFrame } from './bounded.js';
-import { reservedLabels } from './interfaces-m5.js';
-import { texts, textOf } from './interfaces-m5-factory.js';
+import { reservedLabels, textOf, texts } from './guards/factory.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 /** @import { Templates, PresetTemplate } from '../factory/preset-templates.js' */

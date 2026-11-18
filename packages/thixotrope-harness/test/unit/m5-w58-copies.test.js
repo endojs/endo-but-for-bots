@@ -10,11 +10,10 @@ import { Far } from '@endo/far';
 
 import { fitsFrame, messageBytes } from '../../guest/lib/bounded.js';
 import { limits } from '../../guest/lib/limits.js';
-import { texts as m5Texts } from '../../guest/lib/interfaces-m5.js';
 import {
   presetTemplateNames as guestTemplateNames,
-  texts as factoryTexts,
-} from '../../guest/lib/interfaces-m5-factory.js';
+  texts,
+} from '../../guest/lib/interfaces.js';
 import {
   attachmentsLost,
   labelUnits,
@@ -33,8 +32,8 @@ import {
 import { recordOf } from '../../ui/src/presets/editor.js';
 
 test('browser copies equal the contract values', t => {
-  t.is(attachmentsLost, m5Texts.attachmentsLost);
-  t.is(presetTooLarge, factoryTexts.presetTooLarge);
+  t.is(attachmentsLost, texts.attachmentsLost);
+  t.is(presetTooLarge, texts.presetTooLarge);
   t.deepEqual([...presetTemplateNames], [...guestTemplateNames]);
   t.is(presetRecordBytes, limits.presetRecordBytes);
   t.is(maxAttachments, limits.maxAttachments);

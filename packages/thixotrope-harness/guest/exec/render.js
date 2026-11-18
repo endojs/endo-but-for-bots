@@ -13,24 +13,17 @@
  * method-name query is bounded before it is rendered.
  *
  * M5 W5.4 adds what `run` and `inspect` share (the failed and exhausted
- * outcomes, `argumentText`, `finish`) and the exec program's copy of the M5
- * contract pieces it uses (`execGuards`: the M5 `ExecScope` guard and its
- * shapes; `texts`, `textOf`), here rather
- * than in modules of their own: each module costs the exec bundle about
- * 1.5 KB of wrapper, and the bundle is at its budget (open decision O-1).
- *
- * The copy: `interfaces-m5.js` would be about 13.7 KB of the exec bundle;
- * `m5-w54-exec.test.js` checks that every value of the copy equals its
- * `interfaces-m5.js` original (guards compared structurally), so the
- * contract file still wins and a drift fails a test.
+ * outcomes, `argumentText`, `finish`). The M5 `ExecScope` guard, its shapes
+ * and the exec program's texts are in `../lib/guards/base.js` since the
+ * fold (F2, HR-SYN-1), which replaced this module's copy of them.
  */
 
-import { interfaces, shapes, textOf as m1Text } from '../lib/guards/base.js';
+import { textOf } from '../lib/guards/base.js';
 import { limits } from '../lib/limits.js';
 import { boundToolOutput, chunkText, utf8Bytes } from '../lib/bounded.js';
 
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { E, M } = /** @type {GuestGlobals} */ (globalThis);
+const { E } = /** @type {GuestGlobals} */ (globalThis);
 
 // SES refuses these sequences anywhere in an evaluated source (Fae writes
 // them literally; a vat bundle cannot).
@@ -266,7 +259,7 @@ export const argumentText = async ({ args, content }) => {
   if (args.bytes > limits.execSourceBytes)
     return {
       outcome: failed(
-        m1Text.execSourceTooLarge(args.bytes, limits.execSourceBytes),
+        textOf.execSourceTooLarge(args.bytes, limits.execSourceBytes),
       ),
     };
   if (content === undefined) return { outcome: failed(NO_CONTENT_TEXT) };
@@ -289,7 +282,7 @@ export const argumentText = async ({ args, content }) => {
     if (page.next > limits.execSourceBytes)
       return {
         outcome: failed(
-          m1Text.execSourceTooLarge(
+          textOf.execSourceTooLarge(
             Math.max(page.next, args.bytes),
             limits.execSourceBytes,
           ),
@@ -324,7 +317,7 @@ export const finish = async (status, text, writers) => {
   if (bounded === text && utf8Bytes(text) <= limits.inlineBytes)
     return harden({ status, text });
   const modelText =
-    status === 'ok' ? bounded : boundToolOutput(m1Text.errorResult(text));
+    status === 'ok' ? bounded : boundToolOutput(textOf.errorResult(text));
   /** @type {any} */
   let writer;
   try {
@@ -337,116 +330,7 @@ export const finish = async (status, text, writers) => {
     return harden({ status, text: staged });
   } catch (error) {
     if (writer !== undefined) E.sendOnly(writer).abort();
-    return failed(m1Text.stagingFailed(messageOf(error)));
+    return failed(textOf.stagingFailed(messageOf(error)));
   }
 };
 harden(finish);
-
-// ---------------------------------------------------------------- M5 contract copy (W5.4)
-
-/** @param {number} units */
-const text = units => M.string({ stringLengthLimit: units });
-/**
- * @param {any} shape
- * @param {number} length
- */
-const list = (shape, length) => M.arrayOf(shape, { arrayLengthLimit: length });
-/**
- * @param {Record<string, any>} required
- * @param {Record<string, any>} [optional]
- */
-const record = (required, optional = {}) =>
-  M.splitRecord(required, optional, {});
-/** @param {any} inline */
-const staged = inline => M.or(inline, shapes.StagedText);
-
-let built;
-/** Built on first use (an `M.interface` costs a vat about 25 ms). */
-export const execGuards = () => {
-  if (built !== undefined) return built;
-  const ExecRequest = record(
-    {
-      args: staged(text(limits.inlineBytes)),
-      writers: M.remotable('BlobWriters'),
-      timer: M.remotable('Timer'),
-    },
-    {
-      content: M.remotable('Content'),
-      notice: shapes.Reason,
-      powers: M.remotable('ExecPowersSource'),
-    },
-  );
-  const InspectRequest = record(
-    {
-      op: M.or(
-        'methods',
-        'describe',
-        'readSources',
-        'toolSchema',
-        'toolExecute',
-      ),
-      target: M.remotable(),
-      writers: M.remotable('BlobWriters'),
-    },
-    {
-      args: staged(text(limits.inlineBytes)),
-      method: text(limits.methodNameUnits),
-      content: M.remotable('Content'),
-    },
-  );
-  const InspectOutcome = M.or(
-    shapes.ToolOutcome,
-    record({
-      status: 'ok',
-      methods: list(text(limits.methodNameUnits), limits.maxMethodNames),
-    }),
-    record({ status: 'ok', description: shapes.ToolDescription }),
-    record({ status: 'exhausted' }),
-  );
-  const ExecScope = M.interface('ExecScope', {
-    ...interfaces.ExecScope.payload.methodGuards,
-    run: M.callWhen(ExecRequest).returns(shapes.ExecOutcome),
-    inspect: M.callWhen(InspectRequest).returns(InspectOutcome),
-  });
-  built = harden({
-    ExecRequest,
-    InspectRequest,
-    InspectOutcome,
-    ExecScope,
-  });
-  return built;
-};
-harden(execGuards);
-
-/** `interfaces-m5.js` `texts` the exec vat writes. */
-export const texts = harden({
-  powersExpired: 'This exec call has ended; use the powers of the current call',
-});
-
-/** `interfaces-m5.js` `textOf` the exec vat writes. */
-export const textOf = harden({
-  /**
-   * @param {number} bytes
-   * @param {number} limit
-   */
-  valueTooLarge: (bytes, limit) =>
-    `Value too large to store (${bytes} bytes; limit ${limit})`,
-  /** @param {string} reason */
-  toolSchemaInvalid: reason =>
-    `The granted tool's schema was refused: ${reason}`,
-  /**
-   * @param {number} bytes
-   * @param {number} limit
-   */
-  membraneTooLarge: (bytes, limit) =>
-    `Arguments too large to send to another vat (about ${bytes} bytes; limit ${limit}); stage large data in a blob or send it in parts`,
-  /**
-   * @param {number} keys
-   * @param {number} limit
-   */
-  membraneTooManyKeys: (keys, limit) =>
-    `Arguments carry too many record keys to send to another vat (${keys}; limit ${limit})`,
-  /** @param {number} limit */
-  membraneTooDeep: limit =>
-    `Arguments are nested too deeply to send to another vat (limit ${limit})`,
-});

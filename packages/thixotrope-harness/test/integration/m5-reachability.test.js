@@ -42,13 +42,7 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import {
-  interfaces,
-  m2Interfaces,
-  shapes,
-} from '../../guest/lib/interfaces.js';
-import { m5Interfaces } from '../../guest/lib/interfaces-m5.js';
-import { m5FactoryInterfaces } from '../../guest/lib/interfaces-m5-factory.js';
+import { interfaces, shapes } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { emit, loadAvg, runIdentity } from '../../perf/_harness.mjs';
 import {
@@ -113,12 +107,7 @@ const labelsIn = (pattern, into = new Set()) => {
 const guardsByName = () => {
   /** @type {Map<string, any[]>} */
   const byName = new Map();
-  for (const table of [
-    interfaces,
-    m2Interfaces,
-    m5Interfaces,
-    m5FactoryInterfaces,
-  ]) {
+  for (const table of [interfaces, interfaces, interfaces, interfaces]) {
     for (const guard of Object.values(table)) {
       const name = guard.payload.interfaceName;
       byName.set(name, [...(byName.get(name) ?? []), guard]);

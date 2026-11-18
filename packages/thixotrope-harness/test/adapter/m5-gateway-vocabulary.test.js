@@ -10,14 +10,13 @@ import test from '@endo/ses-ava/test.js';
 
 import { harnessNames } from '../../resources/agent-host/impl/gateway/vocabulary.js';
 /* eslint-disable import/no-relative-packages -- guest/ is its own private package */
-import { m5MethodNames } from '../../guest/lib/interfaces-m5.js';
-import { m5FactoryMethodNames } from '../../guest/lib/interfaces-m5-factory.js';
+import { methodNames } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 
 test("INT-M5: the gateway's vocabulary admits M5's method names", t => {
   // A listed table that fails throws (HR-SYN-7), so this call is the load check.
   const { keys, methods } = harnessNames();
-  for (const table of [m5MethodNames, m5FactoryMethodNames]) {
+  for (const table of [methodNames, methodNames]) {
     for (const [name, list] of Object.entries(table)) {
       for (const method of list) {
         t.true(methods.has(method), `${name}.${method} is admitted`);

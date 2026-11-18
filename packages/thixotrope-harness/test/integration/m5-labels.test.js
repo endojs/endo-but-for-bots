@@ -31,7 +31,6 @@ import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
 import { textOf } from '../../guest/lib/interfaces.js';
-import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import {
@@ -175,7 +174,7 @@ run(
     t.is(stored.end.status, 'completed');
     t.deepEqual(
       (await resultsOf(stored.turn)).map(r => r.result),
-      [textOfM5.stored('x')],
+      [textOf.stored('x')],
     );
     await live.stop();
     await state.kill();
@@ -193,15 +192,15 @@ run(
       [
         ['{"a":[1,2]}', false],
         [JSON.stringify(['x'], null, 2), false],
-        [textOf.errorResult(textOfM5.unknownLabel('nope')), true],
+        [textOf.errorResult(textOf.unknownLabel('nope')), true],
         [
           textOf.errorResult(
             textOf.unexpectedArgument('method', 'lookup', ['petName']),
           ),
           true,
         ],
-        [textOfM5.removed('x'), false],
-        [textOf.errorResult(textOfM5.unknownLabel('x')), true],
+        [textOf.removed('x'), false],
+        [textOf.errorResult(textOf.unknownLabel('x')), true],
       ],
     );
     emit({
@@ -220,10 +219,10 @@ run(
     const tooMany = textOf.tooManyCalls(CALLS, limits.maxCallsPerRound);
     t.is(qcResults.filter(r => r.result === tooMany).length, CALLS - 64);
     // Refusals are recorded when the intents are; results in completion order.
-    t.is(qcResults.filter(r => r.result === textOfM5.stored('q')).length, 1);
+    t.is(qcResults.filter(r => r.result === textOf.stored('q')).length, 1);
     t.is(
       qcResults.filter(
-        r => r.result === textOf.errorResult(textOfM5.labelTaken('q')),
+        r => r.result === textOf.errorResult(textOf.labelTaken('q')),
       ).length,
       limits.maxCallsPerRound - 1,
     );
@@ -248,7 +247,7 @@ run(
     t.is(fillResults.filter(r => r.failed).length, 1);
     t.deepEqual(
       fillResults.filter(r => r.failed).map(r => r.result),
-      [textOf.errorResult(textOfM5.labelsFull(limits.maxLabels))],
+      [textOf.errorResult(textOf.labelsFull(limits.maxLabels))],
     );
 
     // ---- a value over labelValueBytes: staged arguments, refused
@@ -262,7 +261,7 @@ run(
     t.is(
       bigResult.result,
       textOf.errorResult(
-        textOfM5.argumentsTooLarge(
+        textOf.argumentsTooLarge(
           'store',
           Buffer.byteLength(bigStore),
           limits.inlineBytes,

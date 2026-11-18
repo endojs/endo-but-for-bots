@@ -22,11 +22,7 @@ import { E } from '@endo/far';
 import { FRAME_TOO_LARGE } from '@endo/thixotrope';
 
 /* eslint-disable import/no-relative-packages */
-import { textOf } from '../../guest/lib/interfaces.js';
-import {
-  texts as textsM5,
-  textOf as textOfM5,
-} from '../../guest/lib/interfaces-m5.js';
+import { textOf, texts } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { emit, loadAvg, runIdentity } from '../../perf/_harness.mjs';
@@ -108,7 +104,7 @@ run('acceptance 10: the membrane and untrusted answers', async t => {
   );
   t.false(tooLarge[1]);
   const largeText = JSON.parse(tooLarge[0]);
-  const prefix = textOfM5.membraneTooLarge(0, limits.membraneArgBytes);
+  const prefix = textOf.membraneTooLarge(0, limits.membraneArgBytes);
   t.true(
     largeText.startsWith(prefix.slice(0, prefix.indexOf('0'))) &&
       largeText.includes(`limit ${limits.membraneArgBytes}`),
@@ -116,7 +112,7 @@ run('acceptance 10: the membrane and untrusted answers', async t => {
   );
   t.deepEqual(readBack, [rendered('remember the milk'), false]);
   t.deepEqual(tooManyKeys, [
-    rendered(textOfM5.membraneTooManyKeys(40, limits.membraneRecordKeys)),
+    rendered(textOf.membraneTooManyKeys(40, limits.membraneRecordKeys)),
     false,
   ]);
   t.deepEqual(added, ['5', false]);
@@ -143,7 +139,7 @@ run('acceptance 10: the membrane and untrusted answers', async t => {
   t.is(big.end.status, 'completed');
   const [answer] = await resultsOf(big.turn);
   const terminated =
-    answer[0] === textOf.errorResult(textsM5.inspectTerminated) && answer[1];
+    answer[0] === textOf.errorResult(texts.inspectTerminated) && answer[1];
   // Since core CC-027 the hub refuses the 300 KB answer's frame toward the exec
   // vat (over THIXOTROPE_VAT_FRAME_BYTES) before the vat decodes it: the
   // exec vat's call breaks with FRAME_TOO_LARGE and the tool answers that

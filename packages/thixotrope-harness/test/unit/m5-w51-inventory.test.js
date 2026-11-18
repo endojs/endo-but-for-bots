@@ -7,11 +7,7 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
-import {
-  m5FactoryShapes,
-  texts,
-  textOf,
-} from '../../guest/lib/interfaces-m5-factory.js';
+import { shapes, textOf, texts } from '../../guest/lib/interfaces.js';
 import {
   UNKNOWN_CURSOR_TEXT,
   makeInventory,
@@ -88,7 +84,7 @@ test('pages of 50 in insertion order with position cursors', async t => {
   }
   await E(facet).add('last', thing(999));
   const first = await E(facet).list();
-  t.true(matches(first, m5FactoryShapes.InventoryPage));
+  t.true(matches(first, shapes.InventoryPage));
   t.is(first.rows.length, 50);
   t.is(first.rows[0].label, 'item-0');
   t.is(first.next, 'i50');

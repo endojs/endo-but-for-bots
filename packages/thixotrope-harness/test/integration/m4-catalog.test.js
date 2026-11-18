@@ -29,8 +29,7 @@ import test from 'ava';
 import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
-import { texts } from '../../guest/lib/interfaces.js';
-import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
+import { texts, textOf } from '../../guest/lib/interfaces.js';
 import { m4Texts } from '../../guest/lib/texts-m4.js';
 /* eslint-enable import/no-relative-packages */
 import { integrationEnabled, takeIntegrationLock } from '../template/index.js';
@@ -260,7 +259,7 @@ run(
     // A turn with an attachment carries `[stored prompt, R4-29 line]`; the
     // pool provider joins it once per round with a blank line and both
     // wires send one string. The line names the session's first package.
-    const line = textOfM5.mentionLine(1, ['notes']);
+    const line = textOf.mentionLine(1, ['notes']);
     const attachments = [{ label: 'notes', value: scripted.backend }];
     const claudeSystem = /** @type {any[]} */ (claudePost.json.system);
     t.is(claudeSystem.length, 2, 'the billing block, then the system text');

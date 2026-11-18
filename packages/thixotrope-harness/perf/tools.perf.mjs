@@ -39,7 +39,6 @@ installGuestPrelude();
 const { E } = await import('@endo/far');
 /* eslint-disable import/no-relative-packages */
 const { textOf } = await import('../guest/lib/interfaces.js');
-const { textOf: textOfM5 } = await import('../guest/lib/interfaces-m5.js');
 const { limits } = await import('../guest/lib/limits.js');
 /* eslint-enable import/no-relative-packages */
 const { makeSlice, requestId } =
@@ -341,7 +340,7 @@ const rows = [
           x => x.kind === 'tool-result',
         );
         const expected = textOf.errorResult(
-          textOfM5.argumentsTooLarge(
+          textOf.argumentsTooLarge(
             'store',
             Buffer.byteLength(bigStore),
             limits.inlineBytes,
@@ -368,7 +367,7 @@ const rows = [
         return {
           pass:
             result?.result ===
-              textOf.errorResult(textOfM5.labelsFull(limits.maxLabels)) &&
+              textOf.errorResult(textOf.labelsFull(limits.maxLabels)) &&
             next.end.status === 'completed',
           result: result?.result,
         };

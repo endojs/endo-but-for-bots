@@ -11,9 +11,40 @@ import { limits } from '../limits.js';
 import { text, list, record, count, R, done, lazyTable } from './base.js';
 import * as below from './session.js';
 
+export { reservedLabels } from './session.js';
+
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 
 const { M } = /** @type {GuestGlobals} */ (globalThis);
+
+// ---------------------------------------------------------------- names
+
+/**
+ * Preset templates (R3-11..R3-17; Fae `preset-catalog.js` templates).
+ * M5 provisions `chat-only` and `general` (no shell); the others are
+ * listed and refused at creation until a later milestone registers their
+ * object kinds in `guest/factory/preset-templates.js` (M6). `full-control`
+ * waits for open decision 5; `rsi` and `machine-admin` are context only.
+ */
+export const presetTemplateNames = harden([
+  'chat-only',
+  'general',
+  'development',
+  'new-project',
+]);
+/** Built-in presets (R3-11..R3-15; Fae `BUILTIN_PRESETS`), in list order. */
+export const builtInPresetLabels = harden([
+  'development',
+  'chat-only',
+  'general',
+  'new-project',
+  'voice',
+]);
+/** Object kinds templates name (Fae); M5 provisions none of them. */
+export const templateObjectKinds = harden([
+  'git-workspace',
+  'development-environment',
+]);
 
 // ---------------------------------------------------------------- texts
 
@@ -42,6 +73,44 @@ export const texts = harden({
    * a model, or on an API backend that has no configured model.
    */
   modelRequired: 'A model must be chosen for this backend',
+
+  // ---- presets and the operator inventory (M5, m5-interfaces.md) ----
+
+  invalidPreset: 'Invalid preset',
+  unknownTemplate: 'Unknown preset template',
+  invalidEndowments: 'Invalid preset endowments',
+  invalidTemplateObject: 'Invalid template object',
+  templateObjectsRequired: 'This preset requires all of its template objects',
+  shellNeedsWorkspace: 'An isolated shell requires a workspace',
+  invalidNetworkPolicy: 'Invalid network policy',
+  chatOnlyRule: 'Chat only requires internet off and no additional objects',
+  backendForDefaults: 'Choose a backend for model defaults',
+  modelForBackend: 'Choose a model for this backend',
+  presetStale: 'Preset settings changed elsewhere. Reload before saving.',
+  tooManyPresets: 'Too many assistant presets',
+  builtInTemplateFixed: 'This built-in preset cannot change its template',
+  builtInNotDeletable: 'Built-in presets can be reset, not deleted',
+  onlyBuiltInReset: 'Only built-in presets can be reset',
+  /** Fae `Unknown preset`: an object the catalogue did not make. */
+  unknownPreset: 'Unknown preset',
+  // ---- harness ----
+  /** A preset object after `delete()`. */
+  presetDeleted: 'This preset was deleted',
+  /** The preset was saved between the creation's snapshot and its grant. */
+  presetChanged:
+    'The preset changed while the session was being created; try again',
+  /**
+   * A preset record over `limits.presetRecordBytes` (the editor before
+   * sending, `PresetCatalog.create` and `Preset.save`), or a new session's
+   * `make` argument (config with the snapshot, services with the
+   * endowments) that would not fit one frame (rule 12.5).
+   */
+  presetTooLarge:
+    'This preset is too large; shorten its instructions, description or labels, or remove objects',
+  /** `Inventory.add` with `maxInventoryEntries` entries. */
+  inventoryFull: 'The inventory is full',
+  /** An inventory entry after `remove()`. */
+  entryRemoved: 'This inventory entry was removed',
 });
 
 /**
@@ -55,6 +124,32 @@ export const textOf = harden({
    */
   optionNotSupported: name =>
     `createSession option "${name}" is not supported yet`,
+
+  // ---- presets and the operator inventory (M5, m5-interfaces.md) ----
+
+  /**
+   * Fae `text()`.
+   * @param {string} label
+   */
+  invalidField: label => `Invalid ${label}`,
+  /**
+   * R3-22 (Fae `name()`).
+   * @param {string} name
+   */
+  reservedEndowment: name => `Reserved or invalid endowment name: ${name}`,
+  /** @param {string} name */
+  duplicateEndowment: name => `Duplicate endowment name: ${name}`,
+  /** @param {string} name */
+  endowmentNotObject: name => `Endowment ${name} must be an object capability`,
+  /**
+   * R3-21 and templates whose object kinds no milestone has registered.
+   * @param {string} kind
+   */
+  presetNeeds: kind =>
+    `This preset needs a ${kind}, which this harness cannot provide yet`,
+  /** @param {string} label */
+  inventoryLabelTaken: label =>
+    `The inventory already has an entry labelled "${label}"`,
 });
 
 // ---------------------------------------------------------------- shapes
@@ -360,6 +455,132 @@ const m2ShapeBuilders = {
     ),
 };
 
+/** Presets and the operator inventory (M5, `m5-interfaces.md` section 6). */
+const presetShapeBuilders = {
+  TemplateName: () => M.or(...presetTemplateNames),
+  NetworkPolicyName: () => M.or('off', 'public-internet'),
+  TemplateObject: () =>
+    record({
+      kind: text(limits.templateKindUnits),
+      label: S.EdgeLabel,
+    }),
+  /** An endowment: a label and the object (S.1 #4). */
+  Endowment: () => S.Attachment,
+  /**
+   * What `PresetCatalog.create` and `Preset.save` take (R6-55): every
+   * editable field. A `backend` is the Backend object; model and effort
+   * are text (S.2 c).
+   */
+  PresetRecord: () =>
+    record(
+      {
+        label: text(limits.presetLabelUnits),
+        template: S.TemplateName,
+      },
+      {
+        description: text(limits.presetDescriptionUnits),
+        instructions: text(limits.presetInstructionsUnits),
+        networkPolicy: S.NetworkPolicyName,
+        backend: R('Backend'),
+        modelId: S.ModelId,
+        reasoningEffort: text(limits.effortUnits),
+        objects: list(S.TemplateObject, limits.maxTemplateObjects),
+        endowments: list(S.Endowment, limits.maxEndowments),
+      },
+    ),
+  /** `Preset.describe()`: the record as saved, and what the editor shows. */
+  PresetView: () =>
+    record(
+      {
+        label: text(limits.presetLabelUnits),
+        builtIn: M.boolean(),
+        template: S.TemplateName,
+        description: text(limits.presetDescriptionUnits),
+        instructions: text(limits.presetInstructionsUnits),
+        networkPolicy: S.NetworkPolicyName,
+        objects: list(S.TemplateObject, limits.maxTemplateObjects),
+        endowments: list(S.Endowment, limits.maxEndowments),
+        revision: count,
+        available: M.boolean(),
+      },
+      {
+        backend: R('Backend'),
+        modelId: S.ModelId,
+        reasoningEffort: text(limits.effortUnits),
+        unavailableReason: S.Reason,
+      },
+    ),
+  /** `PresetCatalog.configuration()` (A.4 `getPresetConfiguration`). */
+  PresetConfiguration: () =>
+    record({
+      revision: count,
+      presets: list(R('Preset'), limits.maxPresets),
+      defaultPreset: R('Preset'),
+    }),
+  /** `PresetCatalog.create` answer. */
+  PresetCreated: () => record({ preset: R('Preset'), revision: count }),
+  /** One inventory entry as a page shows it. */
+  InventoryRow: () =>
+    record({
+      entry: R('InventoryEntry'),
+      label: S.EdgeLabel,
+      value: M.remotable(),
+    }),
+  /** `Inventory.list` page (cursor is text, S.2 d). */
+  InventoryPage: () =>
+    record(
+      {
+        rows: list(S.InventoryRow, limits.inventoryPageEntries),
+        rev: count,
+      },
+      { next: S.Cursor },
+    ),
+};
+
+/** Interfaces of presets and the operator inventory (M5). */
+const presetInterfaceBuilders = {
+  /** The preset catalogue (A.4 `listPresets`, `getPresetConfiguration`). */
+  PresetCatalog: () =>
+    M.interface('PresetCatalog', {
+      list: M.call().returns(list(R('Preset'), limits.maxPresets)),
+      configuration: M.call().returns(S.PresetConfiguration),
+      create: M.call(S.PresetRecord, count).returns(S.PresetCreated),
+      defaultPreset: M.call().returns(R('Preset')),
+    }),
+  /**
+   * One preset, for its life (M1a's `describe`, `snapshot`, widened; the
+   * A.4 `savePreset`, `deletePreset`, `resetPreset` as its own methods).
+   * Each edit takes the catalogue revision the caller saw and answers the
+   * new one (S.2 e).
+   */
+  Preset: () =>
+    M.interface('Preset', {
+      describe: M.call().returns(S.PresetView),
+      snapshot: M.call().returns(S.PresetSnapshot),
+      save: M.call(S.PresetRecord, count).returns(count),
+      delete: M.call(count).returns(count),
+      reset: M.call(count).returns(count),
+    }),
+  /** The operator's inventory (minimal; M12's Home adds the live view). */
+  Inventory: () =>
+    M.interface('Inventory', {
+      list: M.call().optional(S.Cursor).returns(S.InventoryPage),
+      add: M.call(S.EdgeLabel, M.remotable()).returns(R('InventoryEntry')),
+      addAll: M.call(list(S.Attachment, limits.inventoryPageEntries)).returns(
+        list(R('InventoryEntry'), limits.inventoryPageEntries),
+      ),
+      rev: M.call().returns(count),
+    }),
+  /** One inventory entry (per-item operations, S.1 #3). */
+  InventoryEntry: () =>
+    M.interface('InventoryEntry', {
+      describe: M.call().returns(record({ label: S.EdgeLabel })),
+      value: M.call().returns(M.remotable()),
+      relabel: M.call(S.EdgeLabel).returns(done),
+      remove: M.call().returns(done),
+    }),
+};
+
 /** M2 versions of the interfaces M2 extends (folded methods first). */
 const m2Versions = {
   /** + `deleteSession` (W2.7), `listBackends`, `listModels` (W2.7 for W2.2). */
@@ -382,18 +603,30 @@ const m2Versions = {
     M.interface('Operator', {
       ...methodsOf.Operator(),
       getSecrets: M.callWhen().returns(R('SecretsAdmin')),
+      // M5 (W5.1): the preset catalogue and the operator inventory.
+      getPresets: M.call().returns(R('PresetCatalog')),
+      getInventory: M.call().returns(R('Inventory')),
     }),
 };
 
-/** M2's new interfaces' method names. */
+/** Method names of the interfaces M2 and M5 added, in declaration order. */
 export const m2NewMethodNames = harden({
   ...below.m2NewMethodNames,
+  PresetCatalog: ['list', 'configuration', 'create', 'defaultPreset'],
+  Preset: ['describe', 'snapshot', 'save', 'delete', 'reset'],
+  Inventory: ['list', 'add', 'addAll', 'rev'],
+  InventoryEntry: ['describe', 'value', 'relabel', 'remove'],
 });
 
 /** Method names of `m2Interfaces`: the folded ones first, then M2's. */
 export const m2VersionMethodNames = harden({
   ...below.m2VersionMethodNames,
-  Operator: [...m1aMethodNames.Operator, 'getSecrets'],
+  Operator: [
+    ...m1aMethodNames.Operator,
+    'getSecrets',
+    'getPresets',
+    'getInventory',
+  ],
 });
 
 // ================================================================ tables
@@ -403,7 +636,12 @@ export const m2VersionMethodNames = harden({
  * first use and kept (see `lazyTable`).
  */
 export const shapes = lazyTable(
-  { ...m1aShapeBuilders, ...m1bShapeBuilders, ...m2ShapeBuilders },
+  {
+    ...m1aShapeBuilders,
+    ...m1bShapeBuilders,
+    ...m2ShapeBuilders,
+    ...presetShapeBuilders,
+  },
   below.shapes,
 );
 /** Shorthands inside this module. */
@@ -416,7 +654,12 @@ const B = shapes;
  * interface this is the latest version (the M2 fold, m2-interfaces.md 1.3).
  */
 export const interfaces = lazyTable(
-  { ...m1aInterfaceBuilders, ...m1bInterfaceBuilders, ...m2Versions },
+  {
+    ...m1aInterfaceBuilders,
+    ...m1bInterfaceBuilders,
+    ...m2Versions,
+    ...presetInterfaceBuilders,
+  },
   below.interfaces,
 );
 

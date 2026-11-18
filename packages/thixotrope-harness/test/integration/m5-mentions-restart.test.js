@@ -26,7 +26,6 @@ import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
-import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 /* eslint-enable import/no-relative-packages */
 import { emit, loadAvg, runIdentity } from '../../perf/_harness.mjs';
 import {
@@ -196,7 +195,7 @@ run(
       [JSON.stringify(['n'], null, 2)],
     );
     let turns = await turnsOf(session);
-    t.deepEqual(turns[0].results, [[textOfM5.adopted('notes', 1, 'n'), false]]);
+    t.deepEqual(turns[0].results, [[textOf.adopted('notes', 1, 'n'), false]]);
     emit({
       metric: 'm5.mentions.restart.k3',
       restartMs: round1(performance.now() - t0),
@@ -238,8 +237,8 @@ run(
     t.deepEqual(turns[4].started.attachments, ['c']);
     t.false('attachments' in turns[5].started);
     t.deepEqual(turns[3].results, [
-      [textOf.errorResult(textOfM5.noPackage(2)), true],
-      [textOfM5.adopted('b', 3, 'b'), false],
+      [textOf.errorResult(textOf.noPackage(2)), true],
+      [textOf.adopted('b', 3, 'b'), false],
     ]);
     t.deepEqual(turns[4].results, [
       [JSON.stringify(['b', 'n'], null, 2), false],
@@ -255,7 +254,7 @@ run(
       [3, 3, 'b'],
       [4, 4, 'c'],
     ])) {
-      const line = textOfM5.mentionLine(n, [label]);
+      const line = textOf.mentionLine(n, [label]);
       for (const bytes of bytesOf(turns[i].turnId)) {
         t.is(bytes, plain + 2 + Buffer.byteLength(line));
       }

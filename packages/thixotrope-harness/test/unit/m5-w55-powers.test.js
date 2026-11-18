@@ -10,7 +10,6 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { textOf } from '../../guest/lib/interfaces.js';
-import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
 import { makeLabels } from '../../guest/session/labels.js';
 import { m5Parts, makeRuntime } from '../../guest/session/m5-parts.js';
@@ -60,18 +59,18 @@ test('ExecPowersSource refusals are the label map texts', t => {
   const source = makePowersSource(labels);
   source.store('x', harden({ json: '1' }));
   t.throws(() => source.store('x', harden({ json: '2' })), {
-    message: textOfM5.labelTaken('x'),
+    message: textOf.labelTaken('x'),
   });
   t.throws(() => source.store('user', harden({ json: '2' })), {
-    message: textOfM5.reservedLabel('user'),
+    message: textOf.reservedLabel('user'),
   });
   t.throws(() => source.store('a/b', harden({ json: '2' })), {
-    message: textOfM5.reservedLabel('a/b'),
+    message: textOf.reservedLabel('a/b'),
   });
   // A non-ASCII value: under the guard's unit bound, over the byte bound.
   const big = 'é'.repeat(limits.labelValueBytes / 2 + 1);
   t.throws(() => source.store('big', harden({ json: big })), {
-    message: textOfM5.valueTooLarge(
+    message: textOf.valueTooLarge(
       Buffer.byteLength(big),
       limits.labelValueBytes,
     ),
@@ -194,7 +193,7 @@ test('the inspecting tools refuse before any call: unknown label, stored value, 
     describe.execute({ opId: 'o', args, turnId: 't1' }, s.ports, s.context);
   t.deepEqual(await call('{"petName":"nope"}'), {
     status: 'failed',
-    text: textOfM5.unknownLabel('nope'),
+    text: textOf.unknownLabel('nope'),
   });
   t.deepEqual(await call('{"petName":"stored"}'), {
     status: 'failed',

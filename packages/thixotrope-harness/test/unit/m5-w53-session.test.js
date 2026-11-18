@@ -18,7 +18,6 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { shapes, textOf } from '../../guest/lib/interfaces.js';
-import { textOf as textOfM5 } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
 import { RETIRED_TEXT } from '../../guest/lib/retired.js';
 import { makeQueue } from '../../guest/session/queue.js';
@@ -189,7 +188,7 @@ test('endowments seed the label map; the object tools run in the issuing crank',
       ['lookup', '{"n":1}', false],
       ['list', JSON.stringify(['notes', 'x'], null, 2), false],
       ['remove', 'Removed "x"', false],
-      ['lookup', textOf.errorResult(textOfM5.unknownLabel('nope')), true],
+      ['lookup', textOf.errorResult(textOf.unknownLabel('nope')), true],
     ],
   );
 });
@@ -200,7 +199,7 @@ test('a seed with a reserved or taken label fails make', async t => {
     makeM5Session({
       services: { endowments: [{ label: 'user', value: notes }] },
     }),
-    { message: textOfM5.reservedLabel('user') },
+    { message: textOf.reservedLabel('user') },
   );
   await t.throwsAsync(
     makeM5Session({
@@ -211,7 +210,7 @@ test('a seed with a reserved or taken label fails make', async t => {
         ],
       },
     }),
-    { message: textOfM5.labelTaken('a') },
+    { message: textOf.labelTaken('a') },
   );
 });
 
@@ -279,7 +278,7 @@ test('S2, S3: onClaim sees the entry; the note joins every round of that turn on
       (/** @type {any} */ { active, item }) => {
         claimed.push(item);
         if (item?.attachments !== undefined) {
-          active.systemNote = textOfM5.mentionLine(
+          active.systemNote = textOf.mentionLine(
             1,
             item.attachments.map((/** @type {any} */ a) => a.label),
           );
@@ -322,7 +321,7 @@ test('S2, S3: onClaim sees the entry; the note joins every round of that turn on
     sessionOptions: { hooks, makeQueue: wrapQueue },
   });
   await s.submit('look');
-  const note = textOfM5.mentionLine(1, ['notes', 'calc']);
+  const note = textOf.mentionLine(1, ['notes', 'calc']);
   t.is(claimed.length, 1);
   t.deepEqual(
     claimed[0].attachments.map((/** @type {any} */ a) => a.label),

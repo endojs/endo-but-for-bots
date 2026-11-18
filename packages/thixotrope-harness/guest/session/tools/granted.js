@@ -46,11 +46,7 @@
  *
  * Guest rules.
  */
-import {
-  m5Interfaces,
-  texts as m5Texts,
-  textOf as m5TextOf,
-} from '../../lib/interfaces-m5.js';
+import { interfaces, textOf, texts } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { utf8Bytes } from '../../lib/bounded.js';
 import { isStaged } from '../staging.js';
@@ -76,7 +72,7 @@ const messageOf = error => {
 };
 
 /** The prefix of every `refused-schema` reason. */
-const SCHEMA_PREFIX = m5TextOf.toolSchemaInvalid('');
+const SCHEMA_PREFIX = textOf.toolSchemaInvalid('');
 
 /**
  * The `refused-schema` reason of a failed schema read: the inspector's text
@@ -85,11 +81,11 @@ const SCHEMA_PREFIX = m5TextOf.toolSchemaInvalid('');
  */
 const schemaReason = text => {
   if (typeof text !== 'string' || isStaged(text)) {
-    return m5TextOf.toolSchemaInvalid('the schema could not be read');
+    return textOf.toolSchemaInvalid('the schema could not be read');
   }
   const reason = text.startsWith(SCHEMA_PREFIX)
     ? text
-    : m5TextOf.toolSchemaInvalid(text);
+    : textOf.toolSchemaInvalid(text);
   return reason.slice(0, limits.reasonUnits);
 };
 
@@ -201,18 +197,14 @@ export const makeGrants = (
       if (description !== undefined && entry !== undefined) {
         const { name } = description;
         if (builtIns.has(name)) {
-          setState(grant, 'refused-builtin', m5TextOf.toolNameBuiltIn(name));
+          setState(grant, 'refused-builtin', textOf.toolNameBuiltIn(name));
           entries.push(entry);
         } else if (/** @type {number} */ (claims.get(name)) > 1) {
-          setState(
-            grant,
-            'refused-duplicate',
-            m5TextOf.toolNameDuplicate(name),
-          );
+          setState(grant, 'refused-duplicate', textOf.toolNameDuplicate(name));
           entries.push(entry);
         } else if (over || bytes + grant.bytes > limits.roundGrantedToolBytes) {
           over = true;
-          setState(grant, 'refused-budget', m5TextOf.toolOverBudget(name));
+          setState(grant, 'refused-budget', textOf.toolOverBudget(name));
         } else {
           bytes += grant.bytes;
           setState(grant, 'offered');
@@ -309,7 +301,7 @@ export const makeGrants = (
    */
   const grant = (tool, source, label = undefined) => {
     if (kept.size >= limits.maxGrantedTools) {
-      throw Error(m5Texts.grantsFull);
+      throw Error(texts.grantsFull);
     }
     /** @type {Grant} */
     const record = {
@@ -321,14 +313,14 @@ export const makeGrants = (
       waiters: [],
       handle: undefined,
     };
-    const handle = makeExo('ToolGrant', m5Interfaces.ToolGrant, {
+    const handle = makeExo('ToolGrant', interfaces.ToolGrant, {
       describe() {
         return infoOf(record);
       },
       withdraw() {
         if (record.state === 'withdrawn') return;
         record.state = 'withdrawn';
-        record.reason = m5Texts.grantWithdrawn;
+        record.reason = texts.grantWithdrawn;
         kept.delete(handle);
         wake(record);
       },
@@ -340,7 +332,7 @@ export const makeGrants = (
     return handle;
   };
 
-  const facet = makeExo('SessionGrants', m5Interfaces.SessionGrants, {
+  const facet = makeExo('SessionGrants', interfaces.SessionGrants, {
     /** @param {any} tool */
     grantTool(tool) {
       return grant(tool, 'operator');

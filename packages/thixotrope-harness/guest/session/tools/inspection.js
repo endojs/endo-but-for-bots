@@ -32,7 +32,6 @@
  * Guest rules.
  */
 import { textOf } from '../../lib/guards/session.js';
-import { textOf as textOfM5 } from '../../lib/interfaces-m5.js';
 import { limits } from '../../lib/limits.js';
 import { argSpecs, parseClosedArgs } from '../../lib/tool-args.js';
 import { fieldBytes, isStaged } from '../staging.js';
@@ -127,7 +126,7 @@ const readArgs = (tool, args, spec) => {
     const bytes = /** @type {number} */ (fieldBytes(args));
     return {
       outcome: failed(
-        textOfM5.argumentsTooLarge(tool, bytes, limits.inlineBytes),
+        textOf.argumentsTooLarge(tool, bytes, limits.inlineBytes),
       ),
     };
   }
@@ -146,7 +145,7 @@ const objectBinding = (context, petName) => {
   const { labels } = context.runtime;
   const binding = labels.get(petName);
   if (binding === undefined)
-    return { outcome: failed(textOfM5.unknownLabel(petName)) };
+    return { outcome: failed(textOf.unknownLabel(petName)) };
   if (binding.kind !== 'object')
     return { outcome: failed(notCapabilityText(petName)) };
   return { binding };

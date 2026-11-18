@@ -28,7 +28,7 @@ import { E } from '@endo/far';
 
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
-import { texts } from '../../guest/lib/interfaces-m5-factory.js';
+import { texts } from '../../guest/lib/interfaces.js';
 /* eslint-enable import/no-relative-packages */
 import { emit } from '../../perf/_harness.mjs';
 import { names } from '../../scripts/provision-steps.js';

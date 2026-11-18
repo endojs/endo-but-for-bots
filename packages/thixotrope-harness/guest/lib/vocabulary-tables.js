@@ -22,8 +22,6 @@
 import * as base from './interfaces.js';
 import * as m3 from './interfaces-m3.js';
 import * as m4 from './interfaces-m4.js';
-import * as m5 from './interfaces-m5.js';
-import * as m5Factory from './interfaces-m5-factory.js';
 
 /**
  * @typedef {object} VocabularyTable
@@ -36,20 +34,15 @@ import * as m5Factory from './interfaces-m5-factory.js';
 export const vocabularyTables = harden([
   {
     file: 'interfaces.js',
-    // `m2Interfaces` is a view over `interfaces` (X1): it adds no name.
+    // The session's and the factory's tables, M5's included since the
+    // fold (F2, HR-SYN-1).
     patterns: () => [
       ...Object.values(base.shapes),
       ...Object.values(base.interfaces),
-      ...Object.values(base.m2Interfaces),
     ],
   },
   { file: 'interfaces-m3.js', patterns: () => m3.vocabularyShapes() },
   { file: 'interfaces-m4.js', patterns: () => m4.vocabularyShapes() },
-  { file: 'interfaces-m5.js', patterns: () => m5.vocabularyShapes() },
-  {
-    file: 'interfaces-m5-factory.js',
-    patterns: () => m5Factory.vocabularyShapes(),
-  },
 ]);
 
 /**

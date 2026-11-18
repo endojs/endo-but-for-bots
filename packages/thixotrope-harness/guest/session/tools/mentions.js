@@ -29,7 +29,7 @@
  * Guest rules.
  */
 
-import { textOf as textOfM5 } from '../../lib/interfaces-m5.js';
+import { textOf } from '../../lib/guards/session.js';
 import { limits } from '../../lib/limits.js';
 import { argSpecs, parseClosedArgs } from '../../lib/tool-args.js';
 import { isValidLabel } from '../labels.js';
@@ -121,7 +121,7 @@ const readPackage = (tool, { args, turnId }, context, nameKey) => {
     const bytes = /** @type {number} */ (fieldBytes(args));
     return {
       outcome: failed(
-        textOfM5.argumentsTooLarge(tool, bytes, limits.inlineBytes),
+        textOf.argumentsTooLarge(tool, bytes, limits.inlineBytes),
       ),
     };
   }
@@ -155,7 +155,7 @@ const adoptEntry = harden({
     } catch (error) {
       return Promise.resolve(failed(messageOf(error)));
     }
-    return Promise.resolve(ok(textOfM5.adopted(edge, number, name)));
+    return Promise.resolve(ok(textOf.adopted(edge, number, name)));
   },
 });
 
@@ -169,14 +169,14 @@ const adoptToolEntry = harden({
     const read = readPackage('adoptTool', request, context, 'toolName');
     if ('outcome' in read) return read.outcome;
     const { number, name, value, runtime } = read;
-    if (!isValidLabel(name)) return failed(textOfM5.reservedLabel(name));
+    if (!isValidLabel(name)) return failed(textOf.reservedLabel(name));
     const { grants } = runtime;
     try {
       const info = await grants.schemaRead(
         grants.grant(value, 'adopted', name),
       );
       if (info?.state === 'offered') {
-        return ok(textOfM5.adoptedTool(name, number));
+        return ok(textOf.adoptedTool(name, number));
       }
       return failed(info?.reason ?? `${info?.state}`);
     } catch (error) {
@@ -207,7 +207,7 @@ export const mentionHooks = harden({
       values: new Map(attachments.map(a => [a.label, a.value])),
       turnId: active.turnId,
     });
-    active.systemNote = textOfM5.mentionLine(number, labels);
+    active.systemNote = textOf.mentionLine(number, labels);
   },
   onSettle: closePackages,
   recoverySteps: closePackages,

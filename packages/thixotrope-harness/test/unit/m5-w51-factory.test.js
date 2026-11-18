@@ -10,12 +10,12 @@ import test from '@endo/ses-ava/test.js';
 import { createHash } from 'node:crypto';
 
 /* eslint-disable import/no-relative-packages */
-import { shapes } from '../../guest/lib/interfaces.js';
 import {
-  m5FactoryMethodNames,
-  texts,
+  shapes,
+  methodNames,
   textOf,
-} from '../../guest/lib/interfaces-m5-factory.js';
+  texts,
+} from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { m4Texts } from '../../guest/lib/texts-m4.js';
 import { makeFactoryKit, stagingSources } from '../../guest/factory/factory.js';
@@ -96,7 +96,7 @@ test('the M5 Operator answers the one catalogue and inventory', async t => {
   t.is(await E(kit.operator).getPresets(), catalog);
   t.is(await E(kit.operator).getInventory(), kit.inventory.facet);
   t.truthy(await E(kit.operator).getFactory());
-  for (const name of m5FactoryMethodNames.Operator) {
+  for (const name of methodNames.Operator) {
     t.is(typeof (/** @type {any} */ (kit.operator)[name]), 'function', name);
   }
   const listed = await E(kit.factory).listPresets();

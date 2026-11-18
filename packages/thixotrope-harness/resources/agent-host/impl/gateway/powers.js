@@ -31,7 +31,7 @@
  * Node module (agent-host adapter); the guest prelude is on `globalThis`.
  */
 /* eslint-disable import/no-relative-packages -- the guest tree is its own private package */
-import { m1bInterfaces } from '../../../../guest/lib/interfaces.js';
+import { interfaces } from '../../../../guest/lib/interfaces.js';
 import { m3Interfaces, m3Texts } from '../../../../guest/lib/interfaces-m3.js';
 /* eslint-enable import/no-relative-packages */
 
@@ -135,19 +135,23 @@ const makeLiveFacade = live => {
     return subscription;
   };
 
-  const facade = makeExo('Live', m1bInterfaces.Live, {
+  const facade = makeExo('Live', interfaces.Live, {
     /**
      * @param {any} session
      * @param {number} [rev]
      */
     async subscribe(session, rev) {
       const inner = await E(live).subscribe(session, rev);
-      return wrap('LiveSubscription', m1bInterfaces.LiveSubscription, inner);
+      // Unguarded, as before the fold: the M1b view this read
+      // (`m1bInterfaces.LiveSubscription`) never held LiveSubscription, so
+      // the wrapper had no guard. Guarding it is a behaviour change left to
+      // its own fix (F2 report); `interfaces.LiveSubscription` is the guard.
+      return wrap('LiveSubscription', undefined, inner);
     },
     /** @param {number} [rev] */
     async subscribeList(rev) {
       const inner = await E(live).subscribeList(rev);
-      return wrap('ListSubscription', m1bInterfaces.ListSubscription, inner);
+      return wrap('ListSubscription', interfaces.ListSubscription, inner);
     },
   });
   markGatewayLocal(facade);

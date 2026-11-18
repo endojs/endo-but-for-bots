@@ -13,12 +13,7 @@ import test from '@endo/ses-ava/test.js';
 /* eslint-disable import/no-relative-packages */
 import { limits } from '../../guest/lib/limits.js';
 import { fitsFrame, messageBytes } from '../../guest/lib/bounded.js';
-import { m5Widenings } from '../../guest/lib/interfaces-m5.js';
-import {
-  m5FactoryShapes,
-  texts,
-  textOf,
-} from '../../guest/lib/interfaces-m5-factory.js';
+import { shapes, textOf, texts } from '../../guest/lib/interfaces.js';
 import {
   BUILTIN_PRESETS,
   isEdgeLabel,
@@ -71,7 +66,7 @@ test('built-ins: listed with chat-only first, availability by template objects',
       ['voice', false, textOf.presetNeeds('git-workspace')],
     ],
   );
-  for (const view of views) t.true(matches(view, m5FactoryShapes.PresetView));
+  for (const view of views) t.true(matches(view, shapes.PresetView));
   const configuration = await E(kit.facet).configuration();
   t.is(configuration.revision, 0);
   t.is(configuration.defaultPreset, kit.builtIn('chat-only'));
@@ -450,10 +445,10 @@ test('snapshot: data only, widened shape, configSnapshot drops instructions', as
     revision: 0,
     instructions: 'Answer in French.',
   });
-  t.true(matches(snapshot, m5Widenings.PresetSnapshot));
+  t.true(matches(snapshot, shapes.PresetSnapshot));
   const config = kit.configSnapshot(snapshot);
   t.false('instructions' in config);
-  t.true(matches(config, m5Widenings.PresetSnapshot));
+  t.true(matches(config, shapes.PresetSnapshot));
   t.false('instructions' in (await E(kit.builtIn('chat-only')).snapshot()));
 });
 
@@ -578,12 +573,12 @@ const maximalRecord = () =>
 
 test('guard boundary: the maximal guard-accepted record is refused as too large', async t => {
   const record = maximalRecord();
-  t.true(matches(record, m5FactoryShapes.PresetRecord));
+  t.true(matches(record, shapes.PresetRecord));
   t.true(messageBytes(record) > limits.presetRecordBytes);
   // Validation stops at the template objects first; the size is the last
   // check, so measure it with objects the template allows.
   const allowed = harden({ ...record, objects: [] });
-  t.true(matches(allowed, m5FactoryShapes.PresetRecord));
+  t.true(matches(allowed, shapes.PresetRecord));
   t.throws(() => normalizePresetRecord(allowed, { templates }), {
     message: texts.presetTooLarge,
   });
@@ -620,7 +615,7 @@ test('guard boundary: a record of exactly presetRecordBytes is accepted and its 
   const instructions = `${wide(units)}${'a'.repeat(room - units * 3)}`;
   t.true(instructions.length <= limits.presetInstructionsUnits);
   const record = harden({ ...base, instructions });
-  t.true(matches(record, m5FactoryShapes.PresetRecord));
+  t.true(matches(record, shapes.PresetRecord));
   t.is(messageBytes(record), limits.presetRecordBytes);
   const normal = normalizePresetRecord(record, { templates });
   t.is(messageBytes(normal), limits.presetRecordBytes);
@@ -648,6 +643,6 @@ test('guard boundary: a record of exactly presetRecordBytes is accepted and its 
   const { preset } = await E(kit.facet).create(record, 0);
   const view = await E(preset).describe();
   t.is(view.unavailableReason, 'r'.repeat(100));
-  t.true(matches(view, m5FactoryShapes.PresetView));
+  t.true(matches(view, shapes.PresetView));
   t.true(fitsFrame(view, limits.frameBytes - 1024));
 });

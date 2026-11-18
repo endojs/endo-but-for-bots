@@ -12,11 +12,10 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import {
-  m1bInterfaces,
-  m1bShapes,
+  interfaces,
   shapes,
-  texts,
   textOf,
+  texts,
 } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 import { messageBytes } from '../../guest/lib/bounded.js';
@@ -66,7 +65,7 @@ const makeFakeTurn = () => {
   const failures = [];
   /** @type {any[]} */
   const progress = [];
-  const turn = makeExo('Turn', m1bInterfaces.Turn, {
+  const turn = makeExo('Turn', interfaces.Turn, {
     getStatus: () =>
       harden({ turnId: 't1', state: 'running', round: 0, at: 0 }),
     cancel: () => undefined,
@@ -76,7 +75,7 @@ const makeFakeTurn = () => {
     getContent: () => harden({ records: [] }),
   });
   // The M1b guard checks every message as a vat would.
-  const sink = makeExo('TurnSink', m1bInterfaces.TurnSink, {
+  const sink = makeExo('TurnSink', interfaces.TurnSink, {
     dispatching: () => true,
     roundFinal: (/** @type {any} */ r) => {
       finals.push(r);
@@ -153,7 +152,7 @@ test('a 1 MiB reply is staged; progress checkpoints stage the text so far and re
   // One checkpoint at a time; each is the whole text so far.
   t.true(r.progress.length >= 1);
   for (const p of r.progress) {
-    t.true(matches(p, m1bShapes.Progress));
+    t.true(matches(p, shapes.Progress));
     t.is(p.tail, 'r'.repeat(limits.messagePreviewUnits));
     t.is(p.partial.bytes % 65_536, 0);
   }

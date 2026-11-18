@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
-import { m2MethodNames, textOf } from '../../guest/lib/interfaces.js';
+import { methodNames, textOf } from '../../guest/lib/interfaces.js';
 import { limits } from '../../guest/lib/limits.js';
 /* eslint-enable import/no-relative-packages */
 import { make as makeManagerVat } from '../../resources/agent-host/durable.js';
@@ -161,7 +161,7 @@ test('manager: the admin facet has every M2 method', async t => {
   const kit = makeKit();
   t.teardown(kit.done);
   const { facet } = makeManagerVat({ makeManager: kit.makeManager });
-  for (const name of m2MethodNames.AgentHostAdmin)
+  for (const name of methodNames.AgentHostAdmin)
     t.is(typeof (/** @type {any} */ (facet)[name]), 'function', name);
   t.is(await E(facet).getSecrets(), await E(facet).getSecrets());
 });
@@ -390,8 +390,12 @@ test('HR-SYN-8: a delete applied before the adapter died forgets the Secret on t
   t.teardown(kit.done);
   const { facet } = makeManagerVat({ makeManager: kit.makeManager });
   const admin = await E(facet).getSecrets();
-  const kept = await E(admin).create(harden({ label: 'kept', description: 'd' }));
-  const gone = await E(admin).create(harden({ label: 'gone', description: 'd' }));
+  const kept = await E(admin).create(
+    harden({ label: 'kept', description: 'd' }),
+  );
+  const gone = await E(admin).create(
+    harden({ label: 'gone', description: 'd' }),
+  );
   await E(gone).revoke();
   kit.dieAfter('secretDelete');
   await E(gone).delete();
@@ -417,7 +421,10 @@ test('HR-SYN-8: the store answers a repeated create of a fresh entry and refuses
   );
   const store = kit.store();
   await store.create('k1', 'one', 'd');
-  await t.throwsAsync(store.create('k1', 'other', 'd'), failed('CREATE_FAILED'));
+  await t.throwsAsync(
+    store.create('k1', 'other', 'd'),
+    failed('CREATE_FAILED'),
+  );
   await t.throwsAsync(store.create('k1', 'one', 'e'), failed('CREATE_FAILED'));
   await store.replace('k1', makeTestSecretValue('v'));
   await t.throwsAsync(store.create('k1', 'one', 'd'), failed('CREATE_FAILED'));
@@ -434,8 +441,12 @@ test('HR-SYN-11: SecretsAdmin.list refuses a cursor that is not canonical digits
   t.deepEqual((await E(admin).list('0')).secrets.length, 1);
   for (const cursor of ['1e3', ' 5', '0x10', '-1', '01', '1.5', '']) {
     // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(E(admin).list(cursor), {
-      message: 'not a secrets cursor',
-    }, JSON.stringify(cursor));
+    await t.throwsAsync(
+      E(admin).list(cursor),
+      {
+        message: 'not a secrets cursor',
+      },
+      JSON.stringify(cursor),
+    );
   }
 });

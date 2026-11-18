@@ -14,7 +14,6 @@ import test from '@endo/ses-ava/test.js';
 
 /* eslint-disable import/no-relative-packages */
 import { texts, textOf } from '../../guest/lib/interfaces.js';
-import { texts as m5Texts } from '../../guest/lib/interfaces-m5.js';
 import { limits } from '../../guest/lib/limits.js';
 import { HUB_RETIRED_MESSAGE } from '../../guest/lib/retired.js';
 import {
@@ -174,7 +173,7 @@ test('a retired break retires the scope and answers inspectTerminated; exhausted
   });
   await drain();
   s.scopes[0].inspects[0].kit.reject(Error(HUB_RETIRED_MESSAGE));
-  t.deepEqual(await lost, failed(m5Texts.inspectTerminated));
+  t.deepEqual(await lost, failed(texts.inspectTerminated));
   t.deepEqual(s.retired, [0]);
   // The next call takes a fresh scope.
   const flood = inspect({

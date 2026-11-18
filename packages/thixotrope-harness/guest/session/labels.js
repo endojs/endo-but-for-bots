@@ -22,7 +22,7 @@
  * Not a record, not in the transcript, not exported (open decision O-8).
  * Guest rules.
  */
-import { textOf as textOfM5, reservedLabels } from '../lib/interfaces-m5.js';
+import { reservedLabels, textOf } from '../lib/guards/session.js';
 import { limits } from '../lib/limits.js';
 import { utf8Bytes } from '../lib/bounded.js';
 
@@ -87,10 +87,10 @@ export const makeLabels = ({ seeds = [] } = {}) => {
    * @param {string} label
    */
   const admit = label => {
-    if (!isValidLabel(label)) throw Error(textOfM5.reservedLabel(label));
-    if (map.has(label)) throw Error(textOfM5.labelTaken(label));
+    if (!isValidLabel(label)) throw Error(textOf.reservedLabel(label));
+    if (map.has(label)) throw Error(textOf.labelTaken(label));
     if (map.size >= limits.maxLabels) {
-      throw Error(textOfM5.labelsFull(limits.maxLabels));
+      throw Error(textOf.labelsFull(limits.maxLabels));
     }
   };
 
@@ -112,10 +112,10 @@ export const makeLabels = ({ seeds = [] } = {}) => {
     if (typeof text !== 'string') throw Error('a stored value is JSON text');
     const bytes = utf8Bytes(text);
     if (bytes > limits.labelValueBytes) {
-      throw Error(textOfM5.valueTooLarge(bytes, limits.labelValueBytes));
+      throw Error(textOf.valueTooLarge(bytes, limits.labelValueBytes));
     }
     if (jsonBytes + bytes > limits.labelJsonBytes) {
-      throw Error(textOfM5.storedValuesFull(limits.labelJsonBytes));
+      throw Error(textOf.storedValuesFull(limits.labelJsonBytes));
     }
     /** @type {Binding} */
     const binding = harden({ kind: 'json', text, bytes });
