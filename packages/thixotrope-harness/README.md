@@ -131,6 +131,26 @@ SIGKILL points), `m2-archive-restart` (16), `m2-probes` (the too-big probes). Ac
 built by `importState`. Files that use a Secret set `THIX_HARNESS_SECRETS_KEY` to a key file under
 `tmp/` (outside the state directory) and remove it.
 
+The M3 acceptance files (`designs/m3-interfaces.md` 12): through a Node CapTP client over a real
+loopback WebSocket, `m3-gateway` (1, 2, 10, 11, 16; K1, K2), `m3-sessions` (3, 13, 14, 12
+protocol part) and `m3-reconnect` (4-7 protocol parts; K3-K5); in headless Chromium,
+`test/browser/m3-ui` (1, 2 page parts, 4 socket part, 5, 6, 9, 14 page part, 15),
+`m3-ui-restart` (12, 7 with K5, 4 with the daemon down 60 s) and `m3-ui-history` (8, on the
+`m3-300` template). Browser files are gated by `THIX_HARNESS_BROWSER=1` and run one per
+invocation under the run lock:
+
+```sh
+THIX_AGENT=me corepack yarn test:browser test/browser/m3-ui.test.mjs
+```
+
+They start through `test/browser/_harness.mjs` `startBrowserGateway({ template, provision? })`
+(M4's and M5's browser files use it too). It finds Chromium in `THIX_HARNESS_CHROMIUM`, else
+Playwright's own download, else the newest headless shell or Chromium in Playwright's cache, and
+the files skip with the reason in a test title when none is present (`corepack yarn playwright
+install chromium-headless-shell` installs one; it is never downloaded by a test). The UI is built
+into `GW/assets/` when that is missing or older than `ui/`. The `m3-300` template (one imported
+300-turn session) is built once with `node perf/_m3-client.mjs template`.
+
 `m1a-slice-restart.test.js` repeats its SIGKILL cases (acceptance 5, 6, 7 and the held-ports
 case) once per kill delay with `M1A_KILL_DELAYS_MS=0,100,500,1500,4000` (20 tests, about 10
 minutes); each run prints an `m1a.slice.restart.case` line before its assertions. The M1b SIGKILL
@@ -193,6 +213,13 @@ reading and a decision.
 | `perf/journal.perf.mjs` | the same rows under `journal.` at 1,000 / 10,000 / 30,000 imported turns (plain shape), `journal.snapshot.budget.at<n>` (500 ms / 1 s / recorded), `session.heap`, `checkpoint.stall` (`JOURNAL_POINTS`, `JOURNAL_SNAP_EVERY`) | 1-1.5 h |
 | `perf/throughput.perf.mjs` | 50 sessions x 300 turns by `importState`; `restart.serving.m2` (15 s; gate: no idle vat woken) and `throughput` (20 busy sessions, deliveries per second) | 30-40 min |
 | `perf/archive.perf.mjs` (W2.5), `perf/import.perf.mjs` (W2.7), `perf/queue.perf.mjs` (W2.4, Node), `perf/provider.perf.mjs` (W2.1a, W2.1b, in process) | the archive grown by running every turn; the import rate; queue costs; provider overhead and SSE rates | see each file |
+| `perf/gateway.perf.mjs` (M3) | 60 s windows: `gateway.fetch`, `gateway.guard` (in process), `ui.call`, `ui.submit`, `ui.deltaFanout` (5 clients); `gateway.probes` (100 KiB, 2,000 keys, depth 33, 33 in flight, 4,097 exports) | 6 min |
+| `perf/gateway-session.perf.mjs` (M3) | on the cached `m3-300` template (build it first: `node perf/_m3-client.mjs template`): `ui.snapshot`, `ui.history.newest`, `ui.history.archived`, `ui.reconnect` (60 s each), `ui.restartReady.clean` / `.sigkill` (150 s each) | 9-10 min |
+| `perf/ui.perf.mjs` (M3, `THIX_HARNESS_BROWSER=1`) | `ui.bundle`, `ui.coldLoad` (60 s), `ui.hubGrowth` (5 min of reloads and turns) | 7 min |
+
+M3's files never run longer than 10 minutes: before each window a file checks that the window
+ends by 9 min 30 s and otherwise prints the row as `notMeasured: "file time"`; `M3_WINDOW_MS`,
+`M3_RESTART_WINDOW_MS` and `M3_GROWTH_MS` shorten the windows for a trial run.
 | `perf/crank.perf.mjs` | `crank.worker.<heap>[.alloc][.<policy>]` (the worker run directly on a vat image: per-delivery cost and its collection share), `crank.ping`, `crank.turn.start.early/.mid/.late`, `crank.history.page[.late]`, `crank.context.rebuild`, `crank.grow`, `crank.heap`; with `CRANK_POINTS` also `.at<n>` rows per session length; `crank.grow` carries engine and hub deltas per 100 turns (`CRANK_TURNS`, `CRANK_WORKER_N`, `CRANK_GC_POLICIES`, `CRANK_START`) | 40-50 min at 1,000 turns; the long-session table (`CRANK_TURNS=5000 CRANK_POINTS=200,1000,4000 CRANK_START=mixed`, J-9383) about 2.5 h. A session takes at most 4,096 Composer submissions in 24 h (`maxReceipts`, J-9391): `mixed` starts the unmeasured turns with `startTurn` |
 | `perf/install.perf.mjs`, `perf/frames.perf.mjs` | M0's install and frame rows (`INSTALL_N`, `FRAMES_N`, `LOOP_N`) | a few minutes each |
 

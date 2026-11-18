@@ -210,7 +210,10 @@ await runPerf('gateway-session', async ({ root }) => {
       /** @type {number[]} */
       const served = [];
       const end = performance.now() + RESTART_WINDOW_MS;
-      while (performance.now() < end) {
+      let lastMs = 0;
+      // Stop early rather than let one more restart pass the file's time.
+      while (performance.now() < end && clock.fits(lastMs)) {
+        const iterationStart = performance.now();
         const live = /** @type {NonNullable<typeof state>} */ (state);
         if (mode === 'clean') await live.stop();
         else await live.kill();
@@ -244,6 +247,7 @@ await runPerf('gateway-session', async ({ root }) => {
         if (!readyAt) throw Error(`${metric}: no fetch within 60 s of serving`);
         samples.push(readyAt - servedAt);
         served.push(Math.round(restarted.servedMs));
+        lastMs = performance.now() - iterationStart;
       }
       await stats(metric, samples, {
         budget: { median: 2000 },
