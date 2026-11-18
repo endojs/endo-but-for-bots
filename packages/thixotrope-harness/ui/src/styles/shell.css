@@ -1,0 +1,84 @@
+/*
+ * The shell's own rules (W3.4): page root, connection overlay, slots, the
+ * feature error line, panels and the empty state. The drawer layout at
+ * 640 px and less is floot.css's (`.floot-sidebar`, `.floot-backdrop`,
+ * `.floot-menu-btn`); the shell also renders the menu button only when
+ * narrow, so the layout holds without the media query.
+ */
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: #0f0f10;
+}
+.thix-app .floot-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.thix-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+.thix-overlay-box {
+  padding: 1rem 1.5rem;
+  border-radius: 10px;
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+  font-size: 1rem;
+  max-width: min(90vw, 32rem);
+  text-align: center;
+}
+.thix-overlay.final .thix-overlay-box {
+  border: 1px solid var(--fl-red);
+}
+.thix-slot,
+.thix-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.thix-feature-error {
+  color: var(--fl-red);
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+}
+.thix-panel,
+.thix-settings {
+  flex: 1;
+  overflow: auto;
+  padding: 1rem;
+}
+.thix-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.thix-start-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 0.6rem 1.1rem;
+  background: var(--fl-accent);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.thix-status-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thix-app.narrow .thix-menu-btn {
+  display: flex;
+}

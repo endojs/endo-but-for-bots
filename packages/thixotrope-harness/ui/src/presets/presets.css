@@ -1,0 +1,137 @@
+/* The preset editor panel (W5.8; R6-55). */
+.thix-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 56rem;
+}
+.thix-presets-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.thix-presets-head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.thix-presets-body {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.thix-preset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.thix-preset-item {
+  width: 100%;
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--fl-text);
+  font: inherit;
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  cursor: pointer;
+}
+.thix-preset-item.on {
+  border-color: var(--fl-border-strong);
+  background: var(--fl-surface3);
+}
+.thix-preset-tag {
+  font-size: 0.7rem;
+  color: var(--fl-text-muted);
+}
+.thix-preset-tag.unavailable {
+  color: var(--fl-amber);
+}
+.thix-preset-form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+.thix-preset-field,
+.thix-preset-objects {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--fl-text-muted);
+}
+.thix-preset-field input,
+.thix-preset-field textarea,
+.thix-preset-field select,
+.thix-preset-objects input,
+.thix-preset-objects select {
+  font: inherit;
+  color: var(--fl-text);
+  background: var(--fl-surface2);
+  border: 1px solid var(--fl-border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+}
+.thix-preset-check {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+.thix-preset-endowments {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.thix-preset-endowments li {
+  display: flex;
+  gap: 0.4rem;
+}
+.thix-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.thix-preset-actions button,
+.thix-presets-head button,
+.thix-preset-remove {
+  font: inherit;
+  border: 1px solid var(--fl-border-strong);
+  border-radius: 6px;
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+.thix-preset-actions button.danger {
+  border-color: var(--fl-red);
+}
+.thix-preset-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.thix-preset-error {
+  color: var(--fl-red);
+  font-size: 0.85rem;
+}
+.thix-preset-notice,
+.thix-preset-muted {
+  color: var(--fl-text-muted);
+  font-size: 0.85rem;
+}
+@media (max-width: 640px) {
+  .thix-presets-body {
+    flex-direction: column;
+  }
+}

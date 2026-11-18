@@ -39,6 +39,9 @@ import { makeCatalog } from './providers/catalog.js';
 import { findSecretsFiles, makeSecretStore } from './secrets/store.js';
 import { makeSealKeys } from './secrets/seal.js';
 import { makeSecretsOps } from './secrets/manager.js';
+import { makeGatewayService } from './gateway/index.js';
+// eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
+import { GATEWAY_KEY } from '../../../guest/lib/interfaces-m3.js';
 
 /**
  * @typedef {object} BackendKind
@@ -329,6 +332,15 @@ export const makeAgentHostImpl = ({
     secretWriter: secretsHandler('secretWriter'),
   });
 
+  const gateway = makeGatewayService({
+    live,
+    composer,
+    content,
+    history: () => archive.history(),
+    blobs,
+    timers,
+    secretWriter: () => secrets().secretWriter(),
+  });
   const { bind, unbind } = makeAttach({
     ops,
     incarnation,
@@ -338,7 +350,9 @@ export const makeAgentHostImpl = ({
       await blobs.sweep().catch(() => {});
       // M2: half-written segments, manifests and mirrors (4.5).
       await archive.sweep().catch(() => {});
+      gateway.attached();
     },
+    bindings: { [GATEWAY_KEY]: gateway.binding },
   });
   return harden({
     bind,

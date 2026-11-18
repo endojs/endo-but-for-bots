@@ -1,0 +1,32 @@
+/*
+ * The sessions views' own rules (W3.5); the rest is floot.css's
+ * (`.floot-session-*`, `.floot-modal*`, `.floot-preset-*`).
+ */
+.thix-session-note {
+  font-size: 0.7rem;
+  color: var(--fl-text-muted);
+}
+.floot-preset-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.floot-preset-card:disabled:hover {
+  background: var(--fl-surface2);
+  border-color: var(--fl-border);
+}
+.thix-preset-reason {
+  color: var(--fl-red);
+}
+.thix-new-session-error {
+  color: var(--fl-red);
+  font-size: 0.8rem;
+  margin-bottom: 0.75rem;
+}
+.floot-discovery-note {
+  display: block;
+  color: var(--fl-text-muted);
+  margin-bottom: 0.85rem;
+}
+.thix-more-models {
+  align-self: flex-start;
+}

@@ -898,6 +898,37 @@ page drops it and that vat next collects (J-9386, J-9392).
 (M4), Network chip and internet toggle (M7), emergency stop (M6), voice and `/audio` (M11), Home,
 spaces and the admin CLI (M12), assistant launch R6-60 (M11).
 
+
+**Outcome (W3.8, lane `claude/thix-m3`; not yet marked done: the PM marks M3 after the lanes are
+merged).** Release worker `367e78ad...`, crank budget 50 M, Apple M3 Max with other lanes' agents
+and perf runs (load 2-7); headless Chromium from Playwright's cache (headless shell build 1243).
+Commits up to `22a78eca62` and the W3.8 fixes after it (J-9600..J-9609).
+
+| item | file | result | verdict | entries |
+|---|---|---|---|---|
+| Acceptance 1, 2, 10, 11, 16; K1, K2 | `m3-gateway` (W3.7) | passed in W3.7's runs; not rerun by W3.8 | pass (W3.7) | J-0590, J-0591 |
+| Acceptance 3, 13, 14, 12 (protocol) | `m3-sessions` (W3.7) | passed in W3.7's runs; not rerun by W3.8 | pass (W3.7) | J-0590 |
+| Acceptance 4-7 (protocol); K3, K4, K5 | `m3-reconnect` | 5/5; re-attach 142-180 ms; K3/K4 once at 0 ms, 60 ms and after the answer; K5 outcome-unknown on both pages, 1 request, 1 tool run | pass | J-9602 |
+| Acceptance 1, 2 (page), 4 (socket), 5, 6, 9, 14 (page), 15 | `test/browser/m3-ui` | 4/4 after two UI fixes (request ids, re-attached turn text) | pass | J-9604, J-9605, J-9608 |
+| Acceptance 12, 7 (K5), 4 (60 s down) | `test/browser/m3-ui-restart` | 4/4; the page was back 8.8-13.4 s after the gateway returned (budget 30 s); 12 failed once on a queue wait, then passed | pass (one flaky run) | J-9608 |
+| Acceptance 8 | `test/browser/m3-ui-history` | Load earlier: 300 turns, 37 pages, every turn once; tool group, exec highlight and raw view; 1 MiB reply rendered fully (Show all) after a reload, 3/3 | pass, with the gap of J-9605 (a live-watched long reply needs a reload) | J-9605, J-9609 |
+| `gateway.fetch` (50 ms; 0 deliveries) | `gateway` | median 0.53-0.66 ms; 0 per sign-in | pass | J-9606, J-9609 |
+| `gateway.guard` (2 ms) | `gateway` | median 0.123 ms (24.5 KB call, 446 records) | pass | J-9606 |
+| `ui.call` (150 ms) | `gateway` | median 22-27 ms, p99 187-215 | pass | J-9606, J-9609 |
+| `ui.submit` (150 ms) | `gateway` | median 44-62 ms, p99 227-255 | pass | J-9606, J-9609 |
+| `ui.deltaFanout` (5 ms; 0 deliveries per delta) | `gateway` | median 1 ms, p99 7-11; 8-11 deliveries over 1,100 deltas (the rounds', 0.007-0.010 per delta) | latency pass; deliveries **miss** under the strict 0 (cause: round deliveries counted in the window) | J-9606, J-9609 |
+| too-big probes | `gateway` | 100 KiB, 2,000 keys, depth 33 refused; 33 in flight: 1 refused; 4,097 exports closed 4008; no journal growth; still serving | pass | J-9609 |
+| `ui.snapshot` (300 ms) | `gateway-session` | median 46 ms, 371 characters | pass | J-9607 |
+| `ui.history.newest` / `.archived` (300 ms) | `gateway-session` | median 256 ms (p99 313) / 2.5 ms | pass | J-9607 |
+| `ui.reconnect` (1 s) | `gateway-session` | median 447 ms, p99 704 | pass | J-9607 |
+| `ui.restartReady.clean` / `.sigkill` (2 s after serving) | `gateway-session` | fetch answered 3.1 s / 2.5 s before `serve()` resolved (about 1.8 s / 4.8 s after it began); 21 restarts each | pass (trivially; see J-9607) | J-9607 |
+| `ui.bundle` (600 KB gz) | `ui` | 101,275 bytes gzip (308,374 raw) with every lane's features | pass | J-9609 |
+| `ui.coldLoad` (1.5 s) | `ui` | median 120 ms, p99 327 (n 273) | pass | J-9609 |
+| `ui.hubGrowth` (hub 2 MB; row 1.25 x) | `ui` | hub 0.10 -> 1.16 MB; session row exports 11 -> 21 (1.91 x) | hub pass; row **miss** | J-9609 |
+| Section 5 against M2 as merged in the lane | script check | every object, method and shape listed exists in `interfaces.js` | pass | J-9609 |
+
+Each M3 perf file ran under 10 minutes of slot hold (gateway 5.3-5.5 min, gateway-session 9.3
+min, ui 6.3 min); the windows are fixed (60 s, 150 s restart, 5 min growth).
 ---
 
 ## M4. Secrets manager and subscription pools

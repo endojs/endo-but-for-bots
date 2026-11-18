@@ -9481,3 +9481,585 @@ changed the session bundle) and the exclusive pass (70 minutes, during which eve
 stopped). Building the busy chain beside the regression run saved about 30 minutes.
 Decision: for the PM: a guest-bundle change late in a milestone costs a template rebuild before its
 recorded pass; schedule bundle changes before the review units.
+### J-0550 2026-11-18 M3 W3.3 manager side - good fit
+Evidence: commits 04e6ac0896, 5ad1954bae; `resources/agent-host/durable-gateway.js`;
+`test/unit/m3-w33-gateway-admin.test.js` (10 tests over the real manager kit, adapter keeper and
+adapter kit, with the real `makeAttach` and a fake gateway binding; about 1 s).
+Reading: the gateway's durable state is four variables in the manager vat (handle, config with its
+`Operator` presence, last ops facet, last status) and the kit does the rest: a rebuilt incarnation
+restores both keys of the resource in insertion order, the gateway's bind re-attaches through
+`GatewaySink`, and a retired ops facet is told apart by `isRetiredBreak` (status `starting`). No
+restart code was written for the gateway; orthogonal persistence keeps the config, the kit keeps
+the desire.
+Decision: as built; `rotateSignIn` on a retired ops facet reconciles once through the handle's
+`status()` (the kit rebuilds and restores) and retries, instead of failing until the next start.
+
+### J-0551 2026-11-18 M3 W3.3 bundle sizes - perf
+Evidence: `test/unit/m3-w33-bundles.test.js` at 5ad1954bae (no window: a size, not a rate).
+Reading: session 186,448 bytes and exec 84,354 (budgets 200,000 and 100,000), factory 137,074:
+all three byte-identical to the lane base, so growth 0 as the contract states; none carries
+`interfaces-m3.js`. The agent-host manager bundle (`durable.js` as the supervisor bundles it)
+grows 136,866 -> 157,211 bytes (+20,345). About 11,400 of that is comments: the supervisor's
+`bundle` keeps them, unlike `scripts/bundle-guest.mjs`, which strips them for guest programs.
+Decision: recorded; the manager vat is one per daemon, so the cost is load time once per start.
+For the PM: stripping comments in the native durable bundle would save about half of M3's (and
+M4's) manager growth; that is a core change (`pkg/src/platform/bundler.js`), not filed.
+
+### J-0552 2026-11-18 M3 W3.3 kit sameness - awkward
+Evidence: `durable.js` registers with `same: () => true` and no `replaces`;
+`pkg/src/native/manager-kit.js` `register` (an existing key whose spec is "same" is reconciled
+with its old spec).
+Reading: under the agent-host manager's sameness rule a second `register(GATEWAY_KEY, newSpec)`
+would keep the old config silently. `serve` therefore closes the old registration (the adapter
+unbinds, closing the listener) and registers anew, so a re-serve has a short window with no
+listener and costs two kit operations. A per-key `same`/`replaces` would let the kit rebind under a
+new epoch in one step; the kit takes one rule per manager.
+Decision: close-then-register, as the contract states; admin operations are serialised in the
+manager so a `status` between the two steps sees the whole change.
+
+### J-0530 2026-11-18 M3 gateway HTTP, sign-in and limiter - built
+Evidence: W3.1 at 5e86a5e3a8: `AH/gateway/{server,static,csp,signin,limiter}.js`; adapter tests
+`test/adapter/m3-w31-{http,limiter,signin}.test.js`, 40 tests in about 1 s, no supervisor.
+Reading: the HTTP rules of 4.1 and the upgrade rules of 4.2 are in `server.js`; the limiter is a
+deadline map plus a failure window, both swept on every call, so its state is bounded by what the
+ceiling admits (a ten-minute attack from 6,000 addresses keeps at most 21 failures and 32 entries).
+The sign-in secret is sealed with the M2 wrapping key (store helpers used read-only); a child
+process SIGKILLed between the temporary write and the rename leaves the old secret, after the
+rename the new one (K2 at the adapter level). Undici's `WebSocket` in Node 22 accepts a
+`headers` option, so W3.7's Node client can set `Origin` with no dependency.
+Decision: as described.
+
+### J-0531 2026-11-18 M3 gateway WebSocket without `ws` - deviation
+Evidence: `ws` is not a dependency of the harness (H6 is W3.4's request through the PM); rule 4
+forbids an install in this unit. Server-side RFC 6455 is about 200 lines of `server.js`.
+Reading: the server speaks the protocol itself: masked client frames only, binary only (a text
+frame closes with `closeCodes.protocol`), messages over `wsMessageBytes` close with 1009 before
+buffering (a declared 2^40-byte frame is refused at its header), fragments summed, pings
+answered, half-open peers released at `end`, and a reader that lets more than 8 MiB pile up in
+the send buffer closed with 1008 (a bound on retained state the contract did not state). The
+`onSocket` interface of section 17 is unchanged, so W3.2 and W3.7 do not care which carries it.
+Measured in Node over 10 s windows (5e86a5e3a8, loopback, undici client): echo of 200 bytes
+median 0.021 ms, p99 0.051 ms (428,524 samples); echo of 1 MiB median 9.98 ms, p99 12.85 ms (987
+samples); limiter check plus failure 0.88 us per call. The 5 ms `ui.deltaFanout` budget is not at
+risk from the framing.
+Decision: keep the built-in framing; if H6 lands `ws`, swapping is local to `server.js`.
+
+### J-0540 2026-11-18 M3 W3.2 CapTP bridge and guards - built
+Evidence: e5b5a6c5c0, 2dd747655b: `AH/gateway/{bridge,guard,powers,vocabulary,extensions}.js`,
+`test/adapter/m3-w32-{bridge,vocabulary,extensions,wire}.test.js` (27 tests, about 1.5 s, no
+supervisor), `test/adapter/_m3-captp-client.js`, `test/fixtures/gateway-extension/`.
+Reading: one captp connection per socket; the bridge parses every frame and checks each
+`CTP_CALL` on its capdata form before `dispatch`. Rule 1 needs the exact export table, and
+captp's `exportHook` sees exports but not their release, so the bridge passes captp its own
+default tables through the `makeCapTPImportExportTables` option and observes `markAsExported`
+and `deleteExport` (exact slot-to-value map and count; the 4,096 cap closes 4008 without sending
+the over-limit answer). Answers are mirrored by the page's question ids; a refused question is
+never an answer, so pipelining on it is refused too. Before sign-in only `CTP_BOOTSTRAP` and a
+`fetch` on the bootstrap pass; sign-in is detected from the `CTP_RETURN` result of a `fetch`
+question, so the bootstrap needs no callback. Calls in flight are question ids of forwarded calls
+to non-local targets, released when captp sends their `CTP_RETURN`. Gateway-local objects are a
+process-wide `WeakSet` in `powers.js` (bootstrap, Live facade and its wrapped subscriptions,
+content, composer, history, extras, every LargeCall target): the CC-050 workaround as stated,
+costing one `WeakSet` lookup per call.
+Decision: as built; W3.7 wires `makeBridge` with `isLargeCall` from `makeLargeCalls`.
+
+### J-0541 2026-11-18 M3 W3.2 guard and vocabulary - perf
+Evidence: 2dd747655b, in-process Node, one shared run-lock slot, 60 s window: `checkCall` of a
+23,983-byte call (rows of 40 vocabulary keys) median 0.099 ms, p95 0.110, p99 0.205, max 9.19
+(585,099 samples); budget `gateway.guard` median <= 2 ms (W3.8's row measures it formally).
+`harnessVocabulary` builds 258 keys in 34-36 ms from `interfaces.js` plus `interfaces-m3/m4/m5/
+m5-factory.js` (no file skipped). The contract quoted 290 keys from the M2 tables alone at W3.0;
+the walk here does not collect interface payload keys or method names (4.4), which is the likely
+difference.
+Reading: the guard is about 600 times under budget; a vat crank is tens of ms, so the guard
+never dominates.
+
+### J-0542 2026-11-18 M3 W3.2 captp in the adapter - fit
+Evidence: `m3-w32-bridge.test.js` pass-through test; `m3-w32-wire.test.js`.
+Reading: good fit where it matters: the prelude's `Far`, `E` and captp share one
+`@endo/pass-style` and one `HandledPromise` through the workspace links, so a `Far` stand-in
+passes through unchanged with identity kept per connection (A-1 holds for local remotables; a
+real OCapN presence is W3.7's to confirm). Awkward points: captp's capdata body has no depth or
+key bound of its own, a malformed slot in a call makes captp abort the whole connection
+(`rejectMalformed`) and an unknown target leaves the question unanswered, so the bridge must
+validate every slot first; marshal logs every error it sends ("Temporary logging of sent
+error"), which would put vat error texts in the adapter's log, so the bridge passes a no-op
+`marshalSaveError`. A pipelined answer as an argument (`q-n` slot) is undecodable by captp and is
+refused as an unknown target.
+
+### J-0543 2026-11-18 M3 W3.2 extensions and vocabulary by file - built
+Evidence: `extensions.js`, `GW/extensions/README.md`, fixture `fixture.js` and `throwing.js`.
+Reading: both registries are directory globs loaded with `require` (Node 22 loads ES modules
+synchronously); a file with top-level await fails `require` and is skipped like a throwing one.
+Routes on `/`, `/ws`, `/assets/*` or a taken path invalidate their file; services are capped at
+32 and a duplicate label is skipped; `makeLargeCalls` resolves extension targets after
+`whenAttached` and marks them gateway-local. The fixture's `sameWriter` compares identity in the
+adapter as acceptance 16 needs; a page-made writer is refused by rule 2 before it reaches it.
+Decision: as built.
+
+### J-0560 2026-11-18 M3 W3.4 UI foundation - built
+Evidence: `ui/build.mjs`, `ui/index.html`, `ui/src/{main,pre-lockdown,features,feature-list}.js`,
+`ui/src/{net,controller,shell,styles}/`, `test/unit/_m3-fake-powers.js`,
+`test/unit/m3-ui-{build,controller,controller-net,controller-fakes,shell}.test.js` (35 tests, about
+1 s, no supervisor), commits up to 1775285b12.
+Reading: the controller rebuilds from each connection's powers (all list pages, `subscribeList`,
+`watch`, `subscribe`, `getCurrentTurn`, newest page), folds live events with the same
+`guest/lib/reply-fold.js` the channel uses, and keeps records as received. Region views
+(`sessions`, `conversation` `index.js`) and features are found by directory, so W3.5, W3.6, M4
+and M5 add files and edit none of W3.4's. Decision: as built.
+
+### J-0561 2026-11-18 M3 W3.4 bundle size - perf
+Evidence: `m3-ui-build.test.js` (`t.log` line `ui.bundle`), commit 1775285b12, minified esbuild bundle of
+the shell with no group B views yet.
+Measured: `main-*.js` 211,661 bytes, 73,243 gzip; `app-*.css` 25,608 bytes, 5,461 gzip; shell
+482 bytes; total 78,992 gzip. Build 43-160 ms. Budget (`ui.coldLoad`): bundle <= 600 KB gzip.
+Reading: 13 % of the budget; SES, captp and marshal are most of it. Cold load in a browser is
+W3.8's row.
+
+### J-0562 2026-11-18 M3 W3.4 Preact under the unit lane's lockdown - fit
+Evidence: probe in `m3-ui-shell.test.js`'s helper; browser smoke (below).
+Reading: poor fit, worked around in tests only. The unit lane locks down with `overrideTaming:
+'min'`; Preact's re-render of a component whose hook state changed does `Object.assign({}, vnode)`
+and the vnode's own `constructor` key hits the override mistake ("Cannot assign to read only
+property 'constructor'"). First renders work; every hook `setState` fails. `makeTestDom()` in
+`_m3-fake-powers.js` tames it with `options.vnode` (vnodes get a null prototype instead of that
+own key; the copy keeps `constructor === undefined`), so hooks re-render in Node as in the browser,
+which runs `overrideTaming: 'severe'` (`ui/src/pre-lockdown.js`, as `packages/chat`). Component
+tests of W3.5, W3.6, M4 and M5 must call `makeTestDom()` before rendering.
+
+### J-0563 2026-11-18 M3 W3.4 browser smoke of the bundle - verified
+Evidence: a throwaway script (not committed) served the built assets with a strict CSP and a
+captp WebSocket answering `fetch` with the fake powers, in a cached headless Chromium.
+Measured: the realm is locked down (`Object.prototype` frozen, `harden` present); 14 frames all
+binary; the controller's rebuild calls reached the fake (`getFactory`, `listSessions`,
+`subscribeList`, `listPresets`, `listBackends`, describes); a wrong secret shows "Sign-in
+refused"; a query `?agent=` shows the R6-10 refusal; at 640 px `data-drawer` is `closed`; no page
+error or console error. Not a test: W3.8's browser acceptance replaces it.
+
+### J-0564 2026-11-18 M3 W3.4 contract gaps - deviation
+Reading: (1) the shell's sidebar and conversation regions belong to W3.5 and W3.6, which build
+after W3.4; App finds them as `ui/src/sessions/index.js` and `ui/src/conversation/index.js` (the
+build's generated list, `viewModules`), each view getting `{ state, controller, features, context,
+narrow }` (`Sidebar` also `open`). (2) The controller adds, beyond 9.1: `attach(powers)`,
+`setConnection`, `featureContext()`, `openPanel`/`closePanel` (`state.panel`),
+`openNewSession`/`closeNewSession` (`state.newSessionOpen`), `moreRecovery`, `closeRecovery`,
+`moreModels`, `newSession({ reasoningEffort })`, `state.status` and `view.blocked`. (3) `ui/build.mjs`
+also bundles every directory's `*.css`, so view lanes ship their styles by file.
+
+### J-0590 2026-11-18 M3 W3.7 gateway wiring - built
+Evidence: commits 7f6f76130b, ab254aaa81, 78d240c887; `resources/agent-host/impl/gateway/index.js`
+(`makeGatewayService`), seams H4 (`AH/index.js`, as the contract states) and H5
+(`scripts/provision-steps.js` step `gateway`, plus a `gateway` option threaded through
+`makeProvision`), `scripts/gateway.mjs`, `test/integration/{_m3-gateway,m3-gateway,m3-sessions}*`.
+Reading: the gateway is the second registration of the agent-host resource; `bind` reads (or
+mints) the sign-in secret, listens, then attaches `GatewayOps` with the serving status, so `serve`
+answers a bound gateway. Extensions, extras, large-call targets and the vocabulary are made once
+per incarnation at the first bind; sign-in store, limiter, bridge and server per bind. An in-process
+bind (no supervisor) takes 59-79 ms. Acceptance 1, 2, 3, 10, 11, 12 (protocol), 13, 14, 16 and K1,
+K2 pass through the daemon: `m3-gateway` held its slot 138 s (both with and without W3.4's built
+shell in `GW/assets/`; with it, an asset answered with the immutable cache header), `m3-sessions`
+102-129 s. One run waited 645 s for a slot behind other lanes' exclusive perf runs.
+Decision: as built. `scripts/gateway.mjs url` refuses a state without `signin.enc` instead of
+reading it, because the secrets store's first use creates a wrapping key.
+
+### J-0591 2026-11-18 M3 W3.7 restore and kill points - perf
+Evidence: `m3-gateway.test.js` at 78d240c887 (single events, not windows: no rate is claimed).
+Reading: after SIGKILL the supervisor served again in 11.6-14.3 s (two runs) and the restored
+gateway answered `serving` on the same port 1.2-1.4 s later, with the same secret (A-3 holds: the kit restores
+`gateway` after `agent-host` with no caller). K1 (SIGKILL when the adapter logged
+`gateway-binding`, after the register crank): restored and served after restart. K2 (SIGKILL 0 and
+15 ms into `rotateSignIn`): at 0 ms the old secret stayed, at 15 ms the new one; each time exactly
+one secret signed in and no `signin.enc.tmp` was left. List feed through the gateway (acceptance
+3): a created row reached the other page 0-1 ms after the creator's answer, a rename 20-25 ms, a
+removal 0-1 ms (budget 500 ms).
+Decision: recorded. `ui.restartReady` (W3.8) measures the serving-to-fetch time properly.
+
+### J-0592 2026-11-18 M3 W3.7 pass-through in the real daemon - fit
+Evidence: acceptance 2, 10, 13 in `m3-gateway.test.js` and `m3-sessions.test.js`.
+Reading: good fit. A-1 holds for real OCapN presences: the Operator, factory, sessions, turns,
+queue entries, backends and presets passed through `@endo/captp` in the adapter with no wrapper,
+and the page saw one presence per object across calls (A-2). Refused calls (100 KiB, 2,000 keys,
+a page object, invented `networkPolicy` keys) left every worker's journal length unchanged. The
+pitfall is the same property seen from a test: a presence the test got over the control socket
+is, to the gateway, an object the page made (refused `browserObject`); a page must reach every
+object through its own connection. Objects-not-names holds end to end, and identity is per
+connection.
+Decision: tests take backends from `listBackends()` over the gateway, never from the control
+client.
+
+### J-0593 2026-11-18 M3 W3.7 hook-table seams - awkward
+Evidence: H5 at 7f6f76130b; `test/unit/m1a-provision-steps.test.js`; `templateIdFor`.
+Reading: appending a step to `provisionSteps` has two costs outside the unit. (1) The M1a unit test
+pins the table and the first run's reports, so it fails until `gateway` is added to its lists
+(owned by M1a; a PM change). (2) `templateIdFor` hashes `provision-steps.js`, so every state
+template id changes and each lane's next integration run rebuilds the m1a template once. Neither
+needs a core change.
+Decision: reported to the PM with the exact test change.
+
+### J-0690 2026-11-18 M4 W4.7 Secrets panel, Subscriptions panel, account chips - built
+Evidence: commits 5847645cee (`ui/src/secrets/`), d5b35eaa73 (`ui/src/accounts/`), 3a9ee096c2
+(`m4-ui-secrets`, `m4-ui-accounts`, `m4-ui-build` tests, `_m4-ui-fakes.js`).
+Reading: three features through M3's directory registry, no M3 file edited: `secrets`
+(`app.panel`), `accounts` (`app.panel`, "Subscriptions") and `accounts.chip` (`statusbar.chip`).
+The Secrets panel reads a value from a password field or a file only when sending, checks it
+(`browserSecretBytes` on `JSON.stringify(value)` as UTF-8; UTF-8 files only, BOM kept), passes it
+in one `SecretWriter.replace(secret, value, generationShown)` and clears the field; the value is
+never in component state or markup (the tests look for a marker in `innerHTML` and every input).
+One accounts feed per connection: `list()`, then `watch(rev)` with exactly one `next()` waiting,
+`watch(lastRev)` again after `accountsWatchClosed` (at most 3 in a row), `close()` when no
+component listens.
+
+### J-0691 2026-11-18 M4 W4.7 test times and bundle share - perf
+Evidence: `corepack yarn test test/unit/m4-ui-*.test.js` (unit lane, no supervisor); a throwaway
+build of `ui/src` with and without `secrets/` and `accounts/` (not committed), commit d5b35eaa73.
+Measured: 18 tests in about 1.5 s wall for the three files; the 1,040,382-letter size probe runs
+in the page test in well under a second. Bundle: +19,356 bytes minified, +6,314 gzip (288,393 /
+94,737 -> 307,749 / 101,051 with the other lanes' in-progress views). Budget (`ui.coldLoad`):
+600 KB gzip for the bundle; M4's share is 1 %.
+
+### J-0692 2026-11-18 M4 W4.7 fit and contract gaps - deviation
+Reading: (1) the chip's id is `accounts.chip`, not `account-chip`: M3's collector takes only
+`<dir>` or `<dir>.<part>`; one file still exports both features. (2) `UiFeature.when` is
+synchronous and the chip needs `Accounts.forSession(session)`, an answered call, so `when` only
+checks that a session is on screen and the component renders nothing for a non-pool backend.
+(3) The feature context has no `Session` object of the session on screen (`activeKey` only): the
+chip uses `controller.activeSession()` when present, else `SessionFactory.findSession(activeKey)`
+(F.2 d), one factory call per session switch. (4) Preact runs `useEffect` after an animation
+frame or a 35 ms timer; in Node the tests set `options.requestAnimationFrame` to `setImmediate`
+(`runEffectsPromptly`), and they run serially because `makeTestDom` swaps one global `document`.
+Fit: good for the object rule. The chip finds its pool in each `AccountsBatch` by the `Backend`
+presence that `forSession` answered (identity, no label); the panel holds `Secret` presences from
+the catalogue and calls them directly, so no key or label lookup exists in the page.
+
+### J-0570 2026-11-18 M3 W3.5 sessions sidebar and new-session dialog - built
+Evidence: commit 32573634f4 (`ui/src/sessions/`, `test/unit/m3-ui-sessions{,-dialog}.test.js`).
+Reading: `Sidebar` and `NewSession` adapt `space-floot` `SessionSidebar` and the preset modal of
+`FlootApp`. Rows are the controller's `state.sessions`, named by their `key`; the circle is Working
+while `creating`/`deleting`, Error for any other non-ready state, else the activity (A-7). Rename is
+inline (✎ or double-click; Enter, blur save, Esc cancels; a blank or unchanged title sends
+nothing); delete asks `confirm(Delete "<title>"?)`. The dialog picks a preset by its row `index`,
+a backend by its row `index` and a model as a row of the loaded catalogue page, so no string id
+reaches the controller except the `modelId` its `newSession` takes. "Factory default" passes
+neither backend nor model. The catalogue is read when the dialog opens and on a backend change;
+the search filters loaded rows (A-9) and "More models" loads the next page.
+
+### J-0571 2026-11-18 M3 W3.5 test time and bundle share - perf
+Evidence: `corepack yarn test test/unit/m3-ui-sessions.test.js
+test/unit/m3-ui-sessions-dialog.test.js` (unit lane, no supervisor), commit 32573634f4; esbuild
+of `ui/src/sessions/index.js` with Preact external, minified.
+Measured: 14 tests in about 1.1 s of wall time for the two files. The views are 10,339 bytes
+minified / 4,202 gzip with the shared texts (`contract-m3.js` alone: 3,241 / 1,622), so about
+2.6 KB gzip of the 101,089-byte bundle the build test reported with every lane's views in it.
+Budget (`ui.coldLoad`): 600 KB gzip for the bundle.
+
+### J-0572 2026-11-18 M3 W3.5 fit and contract gaps - deviation
+Reading: (1) The controller keeps preset rows as `{ index, label, available, unavailableReason }`
+(9.1), so the preset's description (R6-38) and saved effort (R6-39) do not reach the dialog. The
+dialog reads optional `description` and `reasoningEffort` row fields; the controller must copy
+them from `describe()` (asked of the PM). R6-39 is tested with a view that adds the field. (2) The
+dialog refuses an effort only against an explicitly chosen model: with "Factory default" the page
+does not know which model the factory (or an M5 preset's own model) resolves. (3) A view that
+imports `shell/Slot.js` deadlocks the Node module graph (`features.js` -> `feature-list.js`
+top-level await -> the view): `sessions/slot.js` is a local copy, as W3.6's. (4) An effect that
+calls a controller action re-ran without end when the shell draws synchronously (the tests'
+`schedule`): Preact runs the pending effect again for a draw made from inside its effect pass.
+The tests ran out of heap (a later test in the same worker showed it). The dialog now defers the
+call by a microtask. Fit: good for the object rule; presences stay in the controller.
+
+### J-0580 2026-11-18 M3 W3.6 conversation views - built
+Evidence: commits 8f711e002d (`ui/src/conversation/`), 2402f1cbeb
+(`test/unit/m3-ui-conversation{,-slots}.test.js`).
+Reading: `Conversation`, `Composer`, `Queue`, `Recovery`, `StatusRow` adapt `space-floot`
+`MessageList`, `ComposeBar`, `RecoveryPanel` at 1315bef86 (`highlight.js` copied unchanged). A row
+is one controller `TurnEntry`, keyed by `turnId`: the user message from its `TurnStarted` record
+(or live `turn-start` event), `message.renderer` once under it with `{ context, turn, record }`,
+replies and tool groups from the live fold while the turn runs (or when no page has shown it),
+else from its transcript records (`round-settled`/`partial` text, `tool-intents` paired with
+`tool-result` by `opId`, `turn-settled.final` only when no round had text). Staged and sealed
+fields show their preview and "Show all" reads them through `controller.readContent`. The
+composer keeps the controller's text and caret; Enter sends, Shift+Enter and IME keys do not;
+`view.blocked` (A-5, no Web Locks) disables it.
+
+### J-0581 2026-11-18 M3 W3.6 test time and bundle share - perf
+Evidence: `corepack yarn ses-ava test/unit/m3-ui-conversation.test.js
+test/unit/m3-ui-conversation-slots.test.js` (unit lane, no supervisor), commit 2402f1cbeb; esbuild
+of `ui/src/conversation/index.js`, Preact external, minified.
+Measured: 13 tests in 1.25 s wall time. The views are 23,989 bytes minified / 8,787 gzip with the
+shared texts, plus 1,751 / 702 bytes of CSS; the whole bundle with every lane's views was 101,098
+bytes gzip. Budget (`ui.coldLoad`): 600 KB gzip for the bundle.
+
+### J-0582 2026-11-18 M3 W3.6 fit and contract gaps - deviation
+Reading: (1) A view cannot import `shell/Slot.js` in Node (the `feature-list.js` top-level await
+deadlocks the graph), so `conversation/slots.js` copies the slot rules. (2) Under the unit lane's
+Preact taming a component whose result is a top-level Fragment loses its element children (links
+vanished); returning an array renders the same in both. (3) Preact runs `useEffect` about 100 ms
+late in Node (no `requestAnimationFrame`); the caret and scroll use `useLayoutEffect`, which is
+also the right moment for them. (4) The controller folds live events by preview, so a large reply
+that streamed live shows its preview until a page re-reads the turn; acceptance 8's 1 MiB reply
+needs the controller to keep the staged `final` (asked of the PM). (5) Queue Edit starts from the
+row's `preview`, which M2 cuts; a long queued message cannot be edited whole. Fit: good for records
+kept as received: the renderer test's unknown `attachments` field reached the slot unchanged for
+an archived, a kept and a live turn, with no code in the view naming it.
+
+### J-9680 2026-11-18 M5 W5.8 preset editor - built
+Evidence: commit 66e2374c91; `ui/src/presets/{feature,editor,PresetEditor,size,texts}.js`,
+`presets.css`; `test/unit/m5-w58-{presets,copies}.test.js`.
+Reading: an `app.panel` "Presets" (R6-55) over `E(operator).getPresets()`: the list from
+`configuration().presets` and `describe()`, the selected preset's name, description, template
+(fixed for built-ins), provider (`listBackends`, identity match), model and effort (datalists from
+`listModels`), internet, instructions, default objects picked from every inventory page (one per
+presence, label editable), template objects shown as kept. Save / Save as new / Delete (two
+clicks; user presets) / Reset (built-ins) / Discard / Reload; every edit sends the catalogue
+revision last read, a stale save shows the catalogue's own text and keeps the edits. A record over
+`presetRecordBytes` is refused before sending with `presetTooLarge` by a browser copy of the
+`fitsFrame` rule (`passStyleOf` from `@endo/far`), checked equal to `fitsFrame` and `messageBytes`
+on samples and at the bound (exactly 22,528 bytes fits, 22,529 does not).
+
+### J-9681 2026-11-18 M5 W5.8 mention addon and attachment chips - built
+Evidence: commits 7a102359d9, 24e3ac09f8; `ui/src/mentions/{feature,mentions,texts}.js`,
+`mentions.css`; `test/unit/m5-w58-mentions.test.js`; gated `test/browser/m5-ui.test.mjs`
+(03824d9bb9, acceptance 15, not run: no W3.8 harness or M5 vat side in this lane).
+Reading: `@` at the start or after white space plus up to 80 label characters opens a list of
+inventory labels (all pages, re-read each time the list opens; prefix matches first, 8 shown);
+a choice (mouse down, or Enter/Tab after arrows; Escape closes) calls `replaceRange` with
+`@label ` and keeps a chip `{ label, value }` in memory. `send` answers `undefined` with no chips,
+else `Composer.submit(session, text, requestId, { attachments })` in insertion order, keeping the
+chips by `requestId` until that answers, so a resend after a reconnect carries the same chips; the
+labels alone are kept in `localStorage` (`familiar.mentions:<requestId>`) beside the draft, and a
+resend after a reload whose text still holds one of them throws `attachmentsLost`. The chip
+renderer shows one "Attached object" chip per `record.attachments` label, null without.
+
+### J-9682 2026-11-18 M5 W5.8 test time and bundle share - perf
+Evidence: unit lane, no supervisor, commit 24e3ac09f8; esbuild of each `feature.js`, minified,
+Preact, `@endo/far` and the drafts module external.
+Measured: 17 tests (three files) in 1.1 s wall. Presets 11,267 bytes minified / 3,919 gzip plus
+2,642 bytes of CSS; mentions 6,565 / 2,833 plus 1,361. The lane's whole bundle with six features
+built at 101,175 bytes gzip. Budget (`ui.coldLoad`): 600 KB gzip for the bundle.
+
+### J-9683 2026-11-18 M5 W5.8 fit and contract gaps - deviation
+Reading: (1) `ComposerAddonProps` carries no `requestId` (the controller makes it at Send), so
+chips are keyed by the session's row key while composing and moved to the `requestId` in the
+first `send`; `send` reads `controller.getState().activeKey` for that. (2) The 4.1 rule "a record
+of chosen labels by `requestId`" must survive the reload it detects, so it lives in
+`localStorage` (labels only), pruned to the drafts that exist. (3) A chip whose `@label` was
+deleted from the text is dropped at Send (as a Floot token), a refinement of "the chips in
+insertion order". (4) Bound: with every editable field at its limit, 32 endowments of 80
+three-byte units and a 256-unit model the record is 22,605 bytes, over 22,528 by 77; with 78-unit
+labels it fits (22,413), so the editor refusal is reachable only near every bound. (5) happy-dom
+tests that render must be `test.serial`: `makeTestDom` swaps `globalThis.document`, and two
+concurrent DOM tests in one file put both pages' keyboard listeners on one document (the arrow
+test moved twice per key). Fit: good for objects as values: an endowment chosen twice is found by
+presence identity and the record carries the presence with no id; poor for shared texts: the
+browser cannot import guest modules (they need the vat prelude), so four values are copied and a
+test pins them.
+
+### J-9600 2026-11-18 M3 W3.8 integration harness and files - built
+Evidence: commits b49c47155d..adc3dce6b3; `test/browser/_harness.mjs` (`startBrowserGateway`,
+`trackSockets`, `browserSkipReason`), `test/browser/m3-ui{,-restart,-history}.test.mjs`,
+`test/integration/m3-reconnect.test.js`, `perf/_m3-client.mjs` (`ensureM3Template`, CLI
+`template`), `perf/{gateway,gateway-session,ui}.perf.mjs`.
+Reading: `startBrowserGateway` keeps the section 17 signature and adds `state`, `gateway`,
+`browser`, `newPage`, and options `initScript`, `gateway` (a fixed port for restart tests) and
+`lock: false` (a perf file that already holds the run lock in process: a second in-process
+taker without `THIX_HARNESS_RUN_LOCK` waits for itself). No browser was downloaded: Playwright
+1.64.1 wants build 1248, absent; the newest cached headless shell (1243, 195 MB) drives fine, so
+the harness falls back to the newest cached build after `THIX_HARNESS_CHROMIUM` and Playwright's
+own. Without Chromium or the variable each file shows one passing test whose title says why it
+skipped. `ensureM3Template` returns the `Template` (its `dir` is the path), not a bare path:
+`startFromTemplate` needs the crank budget it carries.
+
+### J-9601 2026-11-18 M3 W3.8 m3-300 template and run-lock waits - perf
+Evidence: `node perf/_m3-client.mjs template` under the run lock; `runs.jsonl` rows of W3.8.
+Measured: the template (m1a provisioning, 300 imported tool turns, warm-up turns to the
+archive's steady state: 160 sealed turns in 5 segments) built in 87.9 s (serve 13.4 s, workspace
+6.1 s, provisioning with the import 66.5 s, stop 1.5 s); a cached start copies it in about 0.1 s.
+Waits for a slot dominated this unit: 669 s, 387 s, 427 s, 273 s before shared runs that then
+held 1-3 min, behind other lanes' exclusive perf runs. The first template attempt waited 11 min
+and then failed in 0.5 s (template ids allow `[a-z0-9-]` only).
+
+### J-9602 2026-11-18 M3 W3.8 reconnect and kill points K3-K5 (protocol) - verified
+Evidence: `m3-reconnect.test.js` at 51c29382ff, 5 tests, slot held 142 s.
+Measured: a dropped socket's page re-attached (`watch`, `subscribe`, `getCurrentTurn`) in 142-180
+ms and kept streaming to the turn's end; a page closed mid-turn left it to complete (one provider
+request). Daemon stopped: connections refused; after the restart the same port signed in with the
+same secret 4.3-5.7 s after `restart()` began. K3/K4: SIGKILL 0 ms after a 120,000-unit submit
+(no receipt after restart: resent once), 60 ms and after its answer (receipt present: not resent);
+each time the transcript held the text once. K5: SIGKILL inside an echo call with two pages: both
+saw `outcome-unknown`, one provider request, one echo run; `resolve` on one page was seen on the
+other. Pitfall: one scripted backend serving several sessions logs the same turn ids (`t1`...)
+for each, so a count must start at the log index of its submit.
+
+### J-9603 2026-11-18 M3 W3.8 Playwright and hardened promises in one process - fit
+Evidence: the first browser run: `TypeError: Cannot add property Symbol(async_id_symbol), object
+is not extensible` from the control client's `call` (`local-control.js:158`) after Chromium was
+launched; probes without the supervisor did not reproduce it.
+Reading: poor fit. Playwright's zones use `AsyncLocalStorage`, which on Node 22 turns on async
+hooks; Node then tags each promise it tracks with an async id the first time it sees it, and a
+promise hardened before the hooks were on (the control client's, made by `startFromTemplate`)
+cannot take the symbol. Decision: `startBrowserGateway` launches Chromium before it starts
+anything, which fixed it. A test that hardens promises before calling it (module-level
+`harden(promise)`) can still hit it.
+
+### J-9604 2026-11-18 M3 W3.8 page request ids refused by the session - defect fixed
+Evidence: the first browser send: `Invalid submission request ID`; `guest/lib/pending-queue.js`
+`REQUEST_ID = /^\d{13}-[0-9a-f-]{36}$/` (M2 A.4) against the contract's 9.2 "32 hex digits".
+Reading: every page send was refused; the fake powers accepted any id, so W3.4-W3.6's unit tests
+could not see it. Fixed in `ui/src/controller/drafts.js` `newRequestId` (13 digits of ms, a dash, a
+v4 UUID from `getRandomValues`), `test/unit/m3-ui-request-id.test.js` pins it to `REQUEST_ID`.
+The contract's 9.2 sentence and M5's browser file (a 32-hex draft id) are the PM's to align.
+
+### J-9605 2026-11-18 M3 W3.8 a re-attached turn showed only its question - defect fixed
+Evidence: `m3-ui.test.mjs` acceptance 4 after the socket drop: the completed row's text was
+`stream` only.
+Reading: after a reconnect the controller reads the newest history page while the turn runs, so
+the entry's records stop at `turn-started`; `turnContent` preferred any records over the fold once
+the turn settled. Fixed in `ui/src/conversation/transcript.js`: the fold is used until the records
+hold `turn-settled` (`test/unit/m3-ui-transcript.test.js`). Remaining gap: the controller never
+re-reads a turn's records when it ends, so a live-watched long reply shows the fold's text, not a
+staged field with Show all, until the page reloads; the 1 MiB check reads it after a reload.
+
+### J-9606 2026-11-18 M3 W3.8 gateway perf rows - perf
+Evidence: `perf/gateway.perf.mjs` at 543e6dbd1d (exclusive, 331 s of windows, 6 min 20 s with
+set-up), load 6.9-7.2.
+Measured (60 s windows): `gateway.fetch` median 0.66 ms, p95 4.6, p99 6.3 (n 20,372; 2 vat
+deliveries in the window, 0 per sign-in; budget 50 ms); `gateway.guard` median 0.123 ms, p99
+0.33 for a 24,544-byte call of 446 records against 258 vocabulary keys (n 458,713; budget 2 ms);
+`ui.call` `listPending` median 27 ms, p95 172, p99 215 (n 1,469, 1 delivery each; budget 150);
+`ui.submit` while a turn runs median 62 ms, p95 236, p99 255 (n 380; budget 150);
+`ui.deltaFanout` 5 clients median 1 ms, p95 3, p99 7, max 14 (n 5,500 = 1,100 deltas x 5; budget
+5 ms); 8 vat deliveries over the 11 turns' streaming (0.0073 per delta: the rounds' own
+deliveries, not the deltas', which the strict 0 budget counts as a miss).
+Probes: 100 KiB refused, depth 33 refused, 33 in flight gave 32 answers and 1 refusal, no journal
+growth, the session still served. Two probes were wrong in the file and are fixed (rerun in
+J-9607): 2,000 keys of `k<i>x: i` exceeded `frameBytes` and were refused by the frame guard
+first; the 4,097 exports were dropped by the client's GC before the cap (presences now kept).
+
+### J-9607 2026-11-18 M3 W3.8 gateway-session perf rows - perf
+Evidence: `perf/gateway-session.perf.mjs` at a5ac8e15fe on the cached `m3-300` template
+(exclusive, 557 s of windows, 14 min 37 s with the slot wait).
+Measured (60 s windows): `ui.snapshot` median 46 ms, p95 209, p99 262 (n 783; 371 characters,
+within `frameBytes`; budget 300); `ui.history.newest` median 256 ms, p95 302, p99 313 (n 306,
+14,230 characters; budget 300); `ui.history.archived` median 2.5 ms, p99 8.4, max 5.8 s (n
+14,002; adapter-local); `ui.reconnect` median 447 ms, p95 651, p99 704 (n 136; budget 1 s).
+`ui.restartReady` (150 s per mode, 21 restarts each, `fewSamples`): the gateway answered a
+`fetch` 3.1 s (clean) and 2.5 s (SIGKILL) median before the supervisor's `serve()` resolved,
+that is about 1.8 s (clean) and 4.8 s (SIGKILL) after the serve began (estimated from the
+medians); the budget (2 s after serving) passes
+trivially. The file now also prints `readyFromServeStartMs`. Fit finding: SIGKILL restarts grew
+from 5.3 s to 9.3 s served over the 21 kills in one window (clean restarts stayed 4.3-5.4 s):
+each SIGKILL leaves more to replay or recover.
+
+### J-9608 2026-11-18 M3 W3.8 browser acceptance - verified
+Evidence: `corepack yarn test:browser test/browser/m3-ui{,-restart,-history}.test.mjs` at
+a5ac8e15fe..adc3dce6b3 (each file under its own slot; slot holds 2.9-3.6 min, waits up to 24 min
+behind exclusive runs).
+Measured: `m3-ui` 4/4 (the secret in no request line, header or socket URL; 400 page for
+`?agent=`; drawer `closed`/`open`/`none` at 640/641 px; after a page-side socket drop the overlay
+said "Reconnecting…", a new socket opened under 1 s and the turn streamed to its end; reload
+re-attached; a closed page's turn completed; status bar equal to `getUsage()`; Stop logged
+`cancelled`; a socket dropped right before or after a `submit` frame left the message once).
+`m3-ui-restart` 4/4 (queue Edit/Delete, held after restart with the hold line, Send now released
+q1 then the edited q2; K5 with two pages: outcome-unknown rows, Details, Record acknowledgement,
+one request and one tool run; the daemon down 60 s: "Server starting...", the page back 8.8-13.4 s
+after the gateway listened). `m3-ui-history` 3/3 (300 turns back to turn 1 in 37 pages, every
+turn once; two-action tool group, exec source tokens, raw JSON; 1 MiB reply in full).
+Reading: acceptance 12 failed once waiting for the third queued row (three sends typed back to
+back); the file now waits for each row, and the next two runs passed. "Thought for" is not checked
+in the browser: the scripted provider emits no thinking, so the header reads "2 actions" (W3.6's
+unit test covers the label).
+
+### J-9609 2026-11-18 M3 W3.8 gateway rerun, UI perf, section 5 - perf
+Evidence: `perf/gateway.perf.mjs` at 22a78eca62 and `perf/ui.perf.mjs` at adc3dce6b3, both
+exclusive (slot holds 5.5 and 7.3 min); a script check of `m3-interfaces.md` 5 against
+`interfaces.js` (`methodNames`, `m2MethodNames`, shapes).
+Measured: `gateway.fetch` median 0.53 ms (n 50,236), `ui.call` 22 ms (p99 187), `ui.submit` 44 ms
+(p99 227), `ui.deltaFanout` median 1 ms, p99 11 (11 deliveries over 1,100 deltas); probes all
+refused as required (2,000 keys `unexpectedField`; the 4,090th kept export closed the connection
+4008 within 2.5 s), no journal growth, still serving. `ui.bundle` 101,275 bytes gzip (budget 600
+KB). `ui.coldLoad` median 120 ms, p95 325, p99 327 (n 273; budget 1.5 s). `ui.hubGrowth` (5 min,
+29 reloads, 60 turns): hub 98,690 -> 1,155,872 bytes (budget 2 MB, pass); the session's hub row
+11 -> 14 exports while viewed and 21 after the viewer closed and 32 cranks (1.91 x, budget 1.25 x:
+miss). Likely cause, not proven: the perf process's own signed-in client keeps each turn's
+receipt `Turn` presence it submitted (60 turns), so the growth may be the measuring client's, not
+the viewer's; a rerun that drops receipts would tell. Section 5: every object, method and shape it
+lists exists in M2 as merged in the lane.
+Fit: the gateway path is cheap (sign-in under 1 ms, a frame-sized guard check 0.12 ms, deltas to
+five pages in 1 ms with no vat crank); vat-bound calls cost a crank (22-27 ms median, p99 near
+200 ms under load), as architecture 11 predicts.
+
+### J-9620 2026-11-18 M3 QC review of the M3 lane - verified
+Evidence: review of 36b3035e92..a3f5f125b7 (52 commits, 134 files); unit and adapter lane (189
+tests, 4 s); integration under the slot lock: `m3-gateway` 197 s held, `m3-sessions` 137 s,
+`m3-reconnect` 253 s, `m1a-provision` 205 s, `m1a-slice-restart` 354 s, `m2-lifecycle` 561 s, all
+pass; browser `m3-ui` 105 s (earlier run, same code), `m3-ui-history` 162 s pass,
+`m3-ui-restart` 308 s: acceptance 12 FAILED ("no queued entry q2" after the restart, Send now).
+Reading: the gateway path holds its contract: secret sealed at rest, digest compared in constant
+time, penalty before compare, Origin and CSP, guard before decode, exports cap, no page object
+into a vat; no committed private data. Defects: (1) `openView` clears the pending-entry map
+while the old rows stay on screen, so a Send now in that window fails, which makes acceptance 12
+flaky (1 of 1 here, 1 of 3 for W3.8); (2) H5's appended `gateway` step breaks
+`m1a-provision-steps.test.js` (always) and `m1a-provision.test.js` (whenever the template is
+rebuilt); (3) `lint:types` fails in a clean tree on `../captp`, `../ocapn` (12 errors pulled in
+by the new `@endo/captp` import) and on the built `GW/assets/` (258).
+
+### J-9621 2026-11-18 M3 QC method names and symbols bypass the key vocabulary - fit
+Evidence: `GW/guard.js` checks record keys only (`name` is used only for the large-call test,
+and `@qclass: 'symbol'` is a leaf); `packages/ocapn/src/selector.js` decodes every selector as
+`passableSymbolForName(name)`, a registered symbol in the receiving vat.
+Reading: poor fit, not measured. A signed-in page can send calls with any number of fresh method
+names, or symbol arguments, to a session or factory vat; each becomes a registered symbol and a
+property lookup there, which the contract's "a browser can make a vat intern at most these few
+hundred names, ever" (4.4 rule 4) does not cover. Proposed: a method-name set collected from the
+same interface guards (the keys of `methodGuards`), refusing other names before decode, and
+refusing `symbol` encodings outside it. Whether Ironhorse's name table counts registered symbols
+is the engine's to answer.
+
+### J-9630 2026-11-18 M3-FIX method-name guard (rule 4a) - built
+Evidence: `GW/vocabulary.js` `collectNames` walks the same patterns as the key vocabulary and also
+keeps the keys of every interface guard's `methodGuards`: 258 keys and 140 method names from the
+lane's `interfaces.js` and `interfaces-m*.js` (adapter test, about 40 ms). `GW/guard.js` refuses,
+before decode, `unknown method` for a call or property get toward a target that is not
+gateway-local (vat presences and every pipelined answer) whose name is not in the set, a function
+application toward one, and any `@qclass: 'symbol'` (method position or argument) whose name is
+not in the set. Every method the UI, the integration tests and the browser tests send was checked
+against the set: only the fixture extension's (`ping`, `echoLarge`, `sameWriter`, all on
+gateway-local objects) and the operator's `gateway` (not browser-reachable) are outside it.
+Reading: good fit: the names a page can make a vat register are now the fixed contract set (J-9621
+closed at the gateway). Cost: one Set lookup per call; the guard perf row was not rerun.
+
+### J-9631 2026-11-18 M3-FIX controller race (acceptance 12) and preset rows (R6-39) - built
+Evidence: `openView` unmaps queue entries before its `watch()` answers while the old rows stay on
+screen; Send now, Edit and Delete now wait once for the new snapshot (`viewReady`, settled by
+`applyWatch`, a failed watch or a newer open) and only then report `no queued entry`. A unit
+test re-opens the view and clicks in the window: it fails without the change ("no queued entry")
+and passes with it. Preset rows now copy `description` and `reasoningEffort` from
+`Preset.describe()`; the R6-39 dialog test drops its test-only view and goes through the real
+controller row.
+
+### J-9632 2026-11-18 M3-FIX live 1 MiB reply expands without a reload (acceptance 8) - built
+Evidence: at `end`/`abort` the controller re-reads the newest history page and merges that turn's
+records (the live `turn-start` record and the fold are kept); `transcript.js` shows the fold with
+the records' assistant texts and tool results where they pair one to one (the staged field, so
+Show all reads the full reply), and the records alone otherwise. `m3-ui-history` now checks Show
+all on the live page, with no reload.
+Reading: fair fit: the live channel carries previews by design (bounded deltas), so one extra
+`getHistoryPage` crank per settled turn buys the full text; thoughts stay because the fold keeps
+them.
+
+### J-9633 2026-11-18 M3-FIX typecheck, slot module, test hygiene - built
+Evidence: the UI bundle starts with `// @ts-nocheck`, so a build adds no errors to `lint:types`
+(258 before); the 12 errors in `../captp`, `../ocapn`, `../eventual-send`, `../promise-kit` remain
+(tsconfig is the PM's). `selectSlot` moved to `ui/src/slot-order.js`; the sessions and
+conversation slot copies are now re-exports of the shell's `Slot` (no Node deadlock: the 105 UI
+unit tests load them). Fake `pageFrom` no longer offers Load earlier on an empty session (test
+fails without the fix). `m3-ui-shell` runs serially. Gateway tests use loopback addresses only.
+
+### J-9634 2026-11-18 M3-FIX regression after the fixes - verified
+Evidence: unit and adapter lane (`test/adapter/m3-*`, `test/unit/m3-*`, `m4-ui-*`, `m5-w58-*`,
+`m1a-agent-host`): 198 pass, 2.8 s wall. Under the slot lock (held / waited): `m3-gateway` 184 s /
+93 s, `m3-sessions` 126 / 829, `m3-reconnect` 234 / 16, browser `m3-ui` 104 / 250,
+`m3-ui-history` 108 / 827 (acceptance 8 now checks Show all live, no reload), `m3-ui-restart`
+240 / 426 and a second run: acceptance 12 passed both times. All pass. `lint:types`: 12 errors,
+all in sibling packages; none in harness files or the built bundle. Not rerun: perf files.
+Fit: waits exceeded holds (two files waited over 13 min for a slot on a machine shared with the
+M2 and M5 runs); the holds themselves are 2-4 min.

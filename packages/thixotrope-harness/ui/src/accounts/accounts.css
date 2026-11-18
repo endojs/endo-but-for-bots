@@ -1,0 +1,60 @@
+/* M4 Subscriptions panel and account chips (W4.7); base m4-* classes are in secrets/secrets.css. */
+.m4-pool {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--fl-border);
+}
+.m4-pool-head,
+.m4-account-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.m4-account-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.m4-account {
+  padding: 0.4rem 0;
+}
+.m4-account-label {
+  font-weight: 600;
+}
+.m4-account.blocked .m4-account-label {
+  color: var(--fl-red);
+}
+.m4-account-rows {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 0.8rem;
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+}
+.m4-account-rows dt {
+  color: var(--fl-text-muted);
+}
+.m4-account-rows dd {
+  margin: 0;
+}
+.m4-chips {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+.m4-chip {
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 999px;
+  color: var(--fl-text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.m4-chip.blocked {
+  color: var(--fl-amber);
+}
+.m4-chips.all-blocked .m4-chip {
+  border-color: var(--fl-red);
+  color: var(--fl-red);
+}
