@@ -8637,3 +8637,41 @@ evaluates it with the prelude alone and completes a turn. Not run in a daemon; `
 after the patch is unmeasured (expected below J-9697's 7,220 ms by about 36 KB of staging).
 Fit: good: a whitespace pass that keeps line numbers buys 13 % of the session program; the
 program bytes are paid per vat (D-4), so it is worth doing in the bundler, not by hand.
+
+### J-9710 2026-11-18 M5 lane review (M5-QC): verdict and findings - review
+Evidence: M5-QC read `git log -p 36b3035e92..2f7920418f` (84 files, all under the harness
+package; none in `packages/thixotrope` or `rust/`), ran the unit, integration and seam files
+(J-9711). Verdict: accept with fixes; no security hole, no duplicated provider request or tool run
+across the kill points, no private data in a committed line (scan for paths, hosts, addresses,
+key shapes: clean). Fixes before the merge: (1) lane HEAD cannot create a session: the session
+program is 272,129 bytes, over the factory's 262,144 cap and O-1's 240,000 (`bundle-guest`,
+`m1a-session-program` fail); W5.9's bundle-level indentation pass (J-9698, not applied) gives
+236,218, only 3,782 bytes of room. (2) `test/integration/m1a-provision.test.js` line ~129 fails
+whenever the template is rebuilt: its expected step list lacks `['m5 fixtures', true]`.
+(3) The membrane lets a presence outlive its call: `membraneE.get` answers and answer parts nested
+deeper than 64 are returned unwrapped (`membrane.js` lines 221, 307), so the model keeps a raw
+presence on `globalThis` and later calls send to it (still measured, never `powersExpired`). No
+authority is gained (the model could `store` it), but rule 12.13's "dies with the call" does not
+hold; wrap `get` answers and refuse past the depth. Minor: the TS1003 that stops `lint:types` is
+`@-mention` in `contract-m3.js` line 336 (a JSDoc tag), not `[start, end)`; commit 40d09eaf84
+holds W5.6/W5.7 seam lines before their modules (unbuildable until fdd58c2a2e); acceptance 12
+is shown by guard closure plus vat edges, not object reachability; K5's second kill point is
+not written; W5.8 (acceptance 15) is not built.
+
+### J-9711 2026-11-18 M5 lane test runs and wall times (M5-QC) - test
+Evidence: M5-QC, lane 2f7920418f cloned (APFS copy, no git) to a short path with J-9698's pass
+applied to the copy's `scripts/bundle-guest.mjs` (and `@-mention` reworded in the copy's
+`contract-m3.js` for `tsc`), worker 367e78ad, 6 slots shared with three other lanes' runs.
+Unit and adapter (lane itself, no supervisor, 62 s): every M5 file and the M1a/M1b/M2 seam files
+pass except `bundle-guest` and `m1a-session-program` (272,129 bytes); both pass on the copy.
+`tsc` on the copy: clean except the copy's own patch placement. Integration, 11 M5 files, 6 at
+once, 1,695 s wall, all pass; held s: presets 334 (over the 5-minute acceptance box), security
+252, grants 258, mentions 198, labels 180, objects 192, grants-restart 177, mentions-restart 136,
+prompt 110, snapshot 98, reachability 85; waits 77-1,307 s. Seam files, 4 at once, 1,553 s
+wall: m1a-slice-restart (267), m1b-exec-tool-restart (124), m1b-qc (124), m2-catalog (89),
+m2-queue (177), m2-turns (173), m2-lifecycle (426, over 5 minutes) pass; m1a-provision (116)
+fails (J-9710 fix 2). Perf files were read, not rerun (exclusive mode stops every lane; J-9695,
+J-9696 hold the numbers): each row is a fixed window; probe c halts the workspace vat that holds
+the fixtures, so it cannot show what it names.
+Fit: poor for the shared machine: 1,695 s of wall for 2,020 s of held work at six slots, most of
+it waiting behind other lanes.
