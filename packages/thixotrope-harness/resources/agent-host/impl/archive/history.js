@@ -22,9 +22,10 @@
  *   does; `describe()` its bytes, preview and digest. Minted per key and
  *   kept (bounded) for this incarnation.
  *
- * The preview rules are the vat's (`guest/session/turn.js` `previewRecord`,
- * `previewTurn`, `historyPage`; constants copied: PAGE_SLACK 512,
- * PREVIEW_INTENTS_BYTES 6144, TURN_PREVIEW_KEYS_BYTES 64).
+ * The preview rule and its bounds are the vat's own
+ * (`guest/lib/record-preview.js`, HR-SYN-28), so a turn previews the same
+ * kept and archived; the page and turn assembly follows the vat's
+ * `guest/session/history.js`.
  *
  * Node only.
  */
@@ -35,19 +36,17 @@ import { join } from 'node:path';
 
 import { interfaces, texts } from '../../../../guest/lib/interfaces.js';
 import { limits } from '../../../../guest/lib/limits.js';
-import { previewText } from '../../../../guest/lib/bounded.js';
+import {
+  PAGE_SLACK,
+  TURN_PREVIEW_KEYS_BYTES,
+  previewRecord as previewOf,
+} from '../../../../guest/lib/record-preview.js';
 import { inCallOrder } from '../../../../guest/session/records.js';
 /* eslint-enable import/no-relative-packages */
 import { decodeRecord, isKeyedStaged, readSegment } from './segment.js';
 
 const { makeExo } = /** @type {any} */ (globalThis);
 
-/** Bytes kept free in a history page for its wrapper (turn.js). */
-const PAGE_SLACK = 512;
-/** Bytes one ToolIntents record may take in a preview (turn.js). */
-const PREVIEW_INTENTS_BYTES = 6144;
-/** Bytes of a turn preview besides its records (turn.js). */
-const TURN_PREVIEW_KEYS_BYTES = 64;
 /** Bytes kept free in a content page for its wrapper. */
 const CONTENT_SLACK = 2048;
 /** SealedText exos kept per incarnation. */
@@ -275,62 +274,17 @@ export const makeHistory = ({
   };
 
   /**
-   * A keyed record cut to its preview, as the vat's `previewRecord`.
+   * A keyed record cut to its preview (the vat's rule), in its shown form.
    * @param {any} keyed
    * @returns {{ record: any, cut: boolean, bytes: number }}
    */
   const previewRecord = keyed => {
-    const message = (/** @type {any} */ t) =>
-      isKeyedStaged(t) ? t : previewText(t, limits.messagePreviewUnits);
-    const tool = (/** @type {any} */ t) =>
-      isKeyedStaged(t) ? t : previewText(t, limits.toolPreviewUnits);
-    /** @type {any} */
-    let cutRecord = keyed;
-    switch (keyed.kind) {
-      case 'turn-started': {
-        const input = message(keyed.input);
-        if (input !== keyed.input) cutRecord = { ...keyed, input };
-        break;
-      }
-      case 'partial':
-      case 'round-settled': {
-        const t = message(keyed.text);
-        if (t !== keyed.text) cutRecord = { ...keyed, text: t };
-        break;
-      }
-      case 'turn-settled': {
-        if (keyed.final === undefined) break;
-        const final = message(keyed.final);
-        if (final !== keyed.final) cutRecord = { ...keyed, final };
-        break;
-      }
-      case 'tool-result': {
-        const result = tool(keyed.result);
-        if (result !== keyed.result) cutRecord = { ...keyed, result };
-        break;
-      }
-      case 'tool-intents': {
-        let bytes = 0;
-        let changed = false;
-        /** @type {any[]} */
-        const intents = [];
-        for (const intent of keyed.intents) {
-          const args = tool(intent.args);
-          const one = args === intent.args ? intent : { ...intent, args };
-          if (one !== intent) changed = true;
-          bytes += plainBytes(toShown(one));
-          if (bytes > PREVIEW_INTENTS_BYTES && intents.length > 0) {
-            changed = true;
-            break;
-          }
-          intents.push(one);
-        }
-        if (changed) cutRecord = { ...keyed, intents };
-        break;
-      }
-      default:
-        break;
-    }
+    // Not hardened here: the shown form is built from it next.
+    const cutRecord = previewOf(keyed, {
+      isStaged: isKeyedStaged,
+      intentBytes: one => plainBytes(toShown(one)),
+      finish: value => value,
+    });
     const shown = toShown(cutRecord);
     let hasStaged = false;
     const visit = (/** @type {any} */ v) => {
