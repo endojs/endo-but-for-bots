@@ -20,6 +20,7 @@ import {
 } from './model-resolution.js';
 import { runRound } from './round-runner.js';
 import { runInboxLoop } from './inbox-loop.js';
+import { makeAgentSkills } from './skills.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
 /** @import { GuestPowers, LalContext } from './agent.types.js' */
@@ -45,6 +46,51 @@ const LalInterface = M.interface('Lal', {
 // ============================================================================
 // Worker Loop
 // ============================================================================
+
+/**
+ * Pass system messages through to the model along with the conversation.
+ * Pi 0.87 carries the system prompt, and later changes to it, as system
+ * messages in the transcript; the harness default keeps only user,
+ * assistant, and tool-result messages.
+ *
+ * @param {any[]} messages
+ */
+export const convertToLlmWithSystem = messages =>
+  messages.filter(
+    m =>
+      m.role === 'system' ||
+      m.role === 'user' ||
+      m.role === 'assistant' ||
+      m.role === 'toolResult',
+  );
+harden(convertToLlmWithSystem);
+
+/**
+ * Set the `skills` section of the agent's system prompt by appending a
+ * system message. Sections are patched by name when the transcript is
+ * replayed, so the latest message replaces the earlier list rather than
+ * adding to it. An empty list removes the section.
+ *
+ * @param {any} piAgent
+ * @param {string} section
+ */
+export const setSkillsSection = (piAgent, section) => {
+  const messages = piAgent.state.messages;
+  const current = messages.some(
+    m => m.role === 'system' && m.sections && 'skills' in m.sections,
+  );
+  if (section === '' && !current) return;
+  piAgent.state.messages = [
+    ...messages,
+    {
+      role: 'system',
+      content: '',
+      sections: { skills: section === '' ? null : section },
+      timestamp: Date.now(),
+    },
+  ];
+};
+harden(setSkillsSection);
 
 /**
  * Spawn a worker loop that follows a guest's inbox and processes messages
@@ -110,12 +156,31 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
     isOllama,
   );
 
+  // Load the agent's skills once for this incarnation, then follow the
+  // `agent-skills` directory so an added or removed source applies from the
+  // next round on.
+  const agentSkills = makeAgentSkills({ powers });
+  await agentSkills.start();
+  agentSkills.follow();
+
   const piAgent = makePiAgent({
     systemPrompt,
     model: resolvedModel,
     tools: agentTools,
     getApiKey,
+    convertToLlm: convertToLlmWithSystem,
   });
+  setSkillsSection(piAgent, agentSkills.promptSection());
+
+  /**
+   * Adopt a reloaded skill list, if `agent-skills` changed since the last
+   * round. Called only between rounds, so a running round keeps its prompt.
+   */
+  const refreshSkills = async () => {
+    if (await agentSkills.refresh()) {
+      setSkillsSection(piAgent, agentSkills.promptSection());
+    }
+  };
 
   /**
    * Run one chat round on the PiAgent, forwarding tool-call activity to
@@ -123,9 +188,22 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
    *
    * @param {string} prompt - User-role content for this round.
    */
-  const runOneRound = prompt => runRound(piAgent, prompt);
+  const runOneRound = async prompt => {
+    await refreshSkills();
+    return runRound(piAgent, prompt);
+  };
 
-  await runInboxLoop({ powers, getCancelled, runOneRound });
+  /** @param {string} text */
+  const expandCommand = async text => {
+    await refreshSkills();
+    return agentSkills.expand(text);
+  };
+
+  try {
+    await runInboxLoop({ powers, getCancelled, runOneRound, expandCommand });
+  } finally {
+    agentSkills.stop();
+  }
 };
 harden(spawnWorkerLoop);
 

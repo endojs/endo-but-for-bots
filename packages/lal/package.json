@@ -51,6 +51,7 @@
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/promise-kit": "workspace:^",
+    "@endo/skills": "workspace:^",
     "ollama": "^0.6.4",
     "openai": "^7.43.0"
   },

@@ -31,9 +31,17 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
  *   cancellation surface is configured).
  * @param {(prompt: string) => Promise<void>} args.runOneRound
  *   Per-round runner, bound to this worker's `PiAgent`.
+ * @param {(text: string) => Promise<string | undefined>} [args.expandCommand]
+ *   Expands a `/skill:<name> [args]` message to the skill's body, returns
+ *   `undefined` for any other message, and throws for an unknown skill.
  * @returns {Promise<void>}
  */
-export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
+export const runInboxLoop = async ({
+  powers,
+  getCancelled,
+  runOneRound,
+  expandCommand,
+}) => {
   /**
    * Build the user-role content for an inbound message. lal's prompt is
    * intentionally minimal: the LLM is expected to call listMessages() to
@@ -135,8 +143,33 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
       }
       seenInboundNumbers.add(number);
       console.log(`[mail] New message #${number} (type: ${type || 'package'})`);
+      let prompt = formatInboundMessage();
+      if (expandCommand && (type === undefined || type === 'package')) {
+        const text = (inboxMessage.strings ?? []).join('');
+        /** @type {string | undefined} */
+        let expanded;
+        try {
+          expanded = await expandCommand(text);
+        } catch (error) {
+          // An unknown or unreadable skill is the sender's error to see; no
+          // model round runs for it.
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          console.warn(`[skills] Message #${number}: ${errorMessage}`);
+          try {
+            await E(powers).reply(number, [errorMessage], [], []);
+          } catch (replyError) {
+            console.error('[agent] Failed to notify sender:', replyError);
+          }
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        if (expanded !== undefined) {
+          prompt = `${prompt}\n\nMessage #${number} invokes a skill:\n\n${expanded}`;
+        }
+      }
       try {
-        await runOneRound(formatInboundMessage());
+        await runOneRound(prompt);
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
