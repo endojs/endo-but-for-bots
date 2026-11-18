@@ -13,6 +13,7 @@ import url from 'node:url';
 import test from '@endo/ses-ava/test.js';
 
 import { bundleGuest } from '../../scripts/bundle-guest.mjs';
+// eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
 import { limits } from '../../guest/lib/limits.js';
 
 const harnessRoot = path.resolve(
