@@ -95,6 +95,10 @@ export const makePackages = () => {
       open.set(number, { number, labels, values, turnId });
       return number;
     },
+    /** Retain imported numbering without consuming a number on replay. @param {number} number */
+    raiseTo: number => {
+      last = Math.max(last, number);
+    },
     /** @param {number} [above] */
     reserve: (above = 0) => {
       last = Math.max(last, above) + 1;

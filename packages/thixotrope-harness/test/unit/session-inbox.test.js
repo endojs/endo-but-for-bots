@@ -575,9 +575,9 @@ test('export pages round-trip into a new inbox: kept, read-only, nothing starts,
     values: new Map(),
     turnId: 'queued',
   });
-  // Above 5 (the page applied again above skipped one number: harmless).
-  t.is(opened, 7);
-  t.deepEqual(target.internal.deliverMail(envelope(1)), { number: 8 });
+  // The next package follows the largest imported number, even after a replay.
+  t.is(opened, 6);
+  t.deepEqual(target.internal.deliverMail(envelope(1)), { number: 7 });
   t.is(target.runtime.hooks.nextTurn().text, 'message 1');
   // ... and the session is not new any more.
   t.throws(() => target.inbox.importPage(pages[0]), {
@@ -609,7 +609,21 @@ test('importPage refuses an unknown type or state, more than 256 messages, a pag
       ),
     { message: /not an inbox message/ },
   );
-  const { inbox } = makeInboxRuntime();
+  const target = makeInboxRuntime();
+  const { inbox } = target;
+  t.throws(() =>
+    inbox.importPage(page([item, { ...item, number: 2, state: 'bad' }])),
+  );
+  t.deepEqual(inbox.views(), [], 'invalid pages are atomic');
+  t.throws(() => inbox.importPage(page([{ ...item, number: 2 }, item])));
+  t.deepEqual(inbox.views(), [], 'out-of-order entries leave no partial page');
+  inbox.importPage(page([item]));
+  inbox.importPage(page([item]));
+  t.is(
+    target.runtime.packages.table.reserve(),
+    2,
+    'page replay consumes no numbers',
+  );
   for (let n = 1; n <= limits.inboxMessages; n += 1) {
     inbox.importPage(page([{ ...item, number: n }]));
   }
