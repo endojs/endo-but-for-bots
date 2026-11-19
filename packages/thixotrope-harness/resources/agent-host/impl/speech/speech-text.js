@@ -28,8 +28,9 @@
  *   bounded number of units;
  * - the forced cut of step 4 (the source had none);
  * - `lineBreak()`: a tool call between rounds ends the current message, so
- *   no sentence spans it, and starts a fresh code filter (a fence left open
- *   by one message does not silence the next);
+ *   no sentence spans it (a chunk under `MIN_SENTENCE_UNITS` is released
+ *   alone rather than merged across it), and starts a fresh code filter (a
+ *   fence left open by one message does not silence the next);
  * - `pendingUnits()` for the caller's backlog bound.
  *
  * Node module of the agent-host adapter (no vat runs it: D-M11-6).
@@ -89,7 +90,11 @@ const isDigit = code => code >= 0x30 && code <= 0x39;
  */
 const afterAbbreviation = (text, i, from) => {
   let j = i;
-  while (j > from && i - j <= ABBREVIATION_UNITS && isLetter(text.charCodeAt(j - 1))) {
+  while (
+    j > from &&
+    i - j <= ABBREVIATION_UNITS &&
+    isLetter(text.charCodeAt(j - 1))
+  ) {
     j -= 1;
   }
   if (j === i || i - j > ABBREVIATION_UNITS) return false;
@@ -231,7 +236,11 @@ export const makeSpeechText = ({
     lineBreak: () => {
       buffer += `${filter.finish()}\n`;
       filter = makeCodeFilter();
-      return scan();
+      const out = scan();
+      // No sentence spans a tool call: a short chunk is released alone.
+      if (pending) out.push(pending);
+      pending = '';
+      return out;
     },
     finish: () => {
       /** @type {string[]} */

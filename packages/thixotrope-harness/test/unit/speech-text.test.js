@@ -68,7 +68,10 @@ test('a shorter closing fence does not end an outer example (Endo)', t => {
 test('only the first 128 units of a line can close a fence', t => {
   const filter = makeCodeFilter();
   const long = `${' '.repeat(INSPECTED_LINE_UNITS)}\`\`\``;
-  t.is(filter.push(`\`\`\`js\ncode\n${long}\nstill code\n\`\`\`\nSpoken.`), '\nSpoken.');
+  t.is(
+    filter.push(`\`\`\`js\ncode\n${long}\nstill code\n\`\`\`\nSpoken.`),
+    '\nSpoken.',
+  );
 });
 
 // ---------------------------------------------------------------- sentences
@@ -100,7 +103,10 @@ test('acceptance 3: a fenced block split across deltas, inline code, links and m
 
 test('abbreviations and numbered-list markers do not split', t => {
   t.deepEqual(
-    speak(['Ask Dr. Smith and Mrs. Jones about St. Ives, etc. today. ', 'Next one is here.']),
+    speak([
+      'Ask Dr. Smith and Mrs. Jones about St. Ives, etc. today. ',
+      'Next one is here.',
+    ]),
     [
       'Ask Dr. Smith and Mrs. Jones about St. Ives, etc. today.',
       'Next one is here.',
@@ -150,6 +156,11 @@ test('a line break between rounds ends the sentence and a fence left open', t =>
   t.deepEqual(text.lineBreak(), []);
   t.deepEqual(text.push('Found it, here it is.'), []);
   t.deepEqual(text.finish(), ['Found it, here it is.']);
+  // A short chunk is not merged across the break.
+  const short = makeSpeechText();
+  t.deepEqual(short.push('One. '), []);
+  t.deepEqual(short.lineBreak(), ['One.']);
+  t.deepEqual(short.push('Two words. '), ['Two words.']);
 });
 
 test('pendingUnits counts the held text', t => {
@@ -165,7 +176,10 @@ test('pendingUnits counts the held text', t => {
 });
 
 test('stripMarkdown leaves plain prose unchanged', t => {
-  t.is(stripMarkdown('Plain words, nothing else.'), 'Plain words, nothing else.');
+  t.is(
+    stripMarkdown('Plain words, nothing else.'),
+    'Plain words, nothing else.',
+  );
   t.is(stripMarkdown('a ```x``` b'), 'a   b');
 });
 
