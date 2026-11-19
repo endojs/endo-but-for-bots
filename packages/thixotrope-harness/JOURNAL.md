@@ -15046,3 +15046,78 @@ Evidence: first command 2026-11-19T02:23:32Z; last 2026-11-19T02:35Z.
 Reading: no command over 60 s; no supervisor, browser or run lock used; nothing pushed; no
 change to `packages/thixotrope` or `rust/**`; no shared file edited.
 Fit: neutral.
+
+### J-1170 2026-11-19 W9.3 the subagents part and the three subagent tools - built
+Evidence: `e9a7cd8232`; `guest/session/subagents.js` (`subagentsPart`), `guest/session/tools/
+subagents.js` (`subagentToolEntries`, `readStagedArgs`, `heldObject`), `test/unit/subagent-tools.
+test.js` (13 tests: fakes `Delegation`, `SubagentHandle` from `postOfficeTables().interfaces`,
+`Endpoint`, `ExecScope`, `ExecHandle` from `interfaces`).
+Reading: (1) The part holds the name -> handle map, the names whose spawn is out (uniqueness
+within a round), the open asks in WX.1's `makeCallTable` (D-M9-22) and the claim time read in
+`onClaim` (the only clock a tool can use, for the requests' `at`). (2) `spawnSubagent`: name rule
+(`nameInvalid`), `subagentExists` among live children and spawns in flight, inline `systemPrompt`
+(`systemPromptTooLong` over 8,192 bytes, staged refused), attachments by label; the factory's
+refusals (tree limit) arrive as the rejection's message and the name is freed. (3)
+`askSubagent`: `noSubagent`, `askInFlight` (one per child), `timeoutInvalid` (1..604,800),
+`taskInvalid`; deadline armed at `timeoutSeconds x 1000` on the turn's endpoint, disarmed at
+any ending but the deadline; the `deadline` entry sends `cancelAsk` and ends with `askTimeout`;
+a late answer is ignored. (4) `stopSubagent`: `stop()` then unbind. (5) `onCancel`: the turn's
+asks end with `askAbandoned` and each child gets `cancelAsk`; `onRecover`: `cancelAsk`, the asks
+end quietly with the outcome-unknown text, the turn's spawns in flight are dropped, and
+`Delegation.children()` replaces the map only when the part held or was making a child (a
+session that never delegated sends nothing). (6) Staged arguments go to the exec vat as
+`splitArgs`; placeholders `"\u0000s<k>"` are replaced by the staged texts.
+Fit: good. The part's closure state replays with the vat, so asks and the map need no record;
+the call table's generation rule is what makes a pending ask across a restart safe.
+
+### J-1171 2026-11-19 W9.3 session program and Node timings - measured
+Evidence: `e9a7cd8232`; `bundleGuest` over a scratch copy of `guest/` with an entry re-exporting
+`session/main.js` and the two modules (nothing registered: S1 and S6 are W9.8's); Node probe over
+`perf/_window.mjs` `runWindow`, PERF_WINDOW_SCALE 0.5 (5 s windows), load average 6.0.
+Reading: in the bundle `session/subagents.js` 3,477 bytes, `session/tools/subagents.js` 10,005,
+and `session/tools/call-table.js` 1,570 (WX.1's, first imported here; M6's shell part imports
+it too, so the group pays it once): +16,944 over the base entry with the re-export wrapping,
+about +15,000 once registered. The contract estimated 6,500 for the two modules (D-M9-19); with
+W9.1's +11,461 (J-1132) the lane is past its 21,500 before W9.2 and W9.8. Of the tool module,
+about 1,590 bytes are the bundle's import wrapping of 13 imports, about 1,000 the three
+descriptions, about 1,700 the attachment-list reader. `subagent.askTool.node` (an ask with 32
+attachments, the fake child answering at once): median 0.744 ms, p95 1.794 ms (5,536 samples,
+1,107/s); `subagent.spawnTool.node` (spawn with 32 attachments): median 0.658 ms, p95 1.919 ms
+(6,252 samples, 1,250/s). Unit file: 13 tests in about 2 s.
+Fit: the session-side compute is negligible beside the handle crossings (7-15 ms each, ARCH 6);
+the cost that matters here is program bytes, which the vat pays at every spare (about 10 us a
+byte, D-4).
+
+### J-1172 2026-11-19 W9.3 what the tools needed that the shared readers lack - finding
+Evidence: `guest/lib/tool-args.js` (kinds `string`, `integer`, `raw`, nested object; S4 adds
+`strings`); `guards/mail.js` `mailToolArgumentNames.attachment` (`[{ name, petName }]`, Fae's
+A.3 schema); `guards/base.js` `InspectRequest` (`target` required); the W9.2 module
+`tools/mail.js` in the same worktree (uncommitted when read).
+Reading: (1) The closed reader has no list of objects, so `attachments` is read as a raw span,
+split at top-level commas (the span is already checked JSON) and each element read by
+`parseClosedArgs`: a `'records'` kind in `tool-args.js` would serve this and any later list of
+objects. (2) `InspectRequest.target` is required although `splitArgs` calls no target; the
+writers stand in for it (W9.2 does the same). (3) W9.2 and W9.3 each built a `splitArgs` reader
+and a label lookup with `subagents/<name>` (`readStagedArgs`/`heldObject` here,
+`mailObjectOf` and its staged reader there): about 40 lines in two copies, built in parallel.
+One should import the other (fold item; about 1-2 KB of session program back).
+Fit: neutral; the costs are program bytes and one more scanner, not runtime.
+
+### J-1173 2026-11-19 W9.3 time and defaults a tool cannot reach - finding
+Evidence: `guest/session/turn.js` `issue` (`ToolContext` = `{ turn, turnId, generation, round,
+services, endpoint, runtime }`); `runtime-parts.js` `HookTurn.active.claimAt`; `guards/
+factory.js` `HarnessSettings.askTimeoutSeconds` (WX.1, F6).
+Reading: a tool has no clock (architecture 12.1) and the context carries none, so the
+`SpawnRequest.at` and `AskRequest.at` are the current turn's claim time, read by the part's
+`onClaim` (a number; no send, no record). The settings' `askTimeoutSeconds` has no path into a
+session (neither `SessionServices` nor `SessionConfig` carries it): the default is
+`mailLimits.askTimeoutSeconds` until W9.9's services or config pass it.
+Fit: fair: the claim time is a monotone and replayed reading, but an ask late in a long turn
+carries a time up to the turn's length old.
+
+### J-1174 2026-11-19 W9.3 time record - process
+Evidence: first command 2026-11-19T02:23:30Z; last 2026-11-19T02:36Z.
+Reading: no command over 60 s; no supervisor, browser or run lock used; nothing pushed; no
+change to `packages/thixotrope` or `rust/**`; no shared file edited (the part and the entries are
+not registered: S1 and S6 are W9.8's).
+Fit: neutral.
