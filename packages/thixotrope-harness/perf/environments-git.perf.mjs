@@ -2,9 +2,9 @@
 /**
  * Environments git perf from exec code (`designs/m6-interfaces.md` section
  * 10), on the `environments` template with the fake runtime. The fixtures
- * are made by `runCommand` in the session's own workspace, not by turns of
- * file edits: `node` writes 10,000 files in one process and `git` commits
- * them; a shell loop of empty commits makes the 1,000-commit history.
+ * are made by `runCommand` in the session's own workspace. One Python
+ * process writes the 10,000 files. Git commits the tree and imports the
+ * 1,000 additional commits in a single stream.
  *
  * - `environments.gitStatus`: exec code's `E(workspace).status()` on a
  *   10,000-file workspace with 30 modified and 2 untracked files, the exec
@@ -47,30 +47,43 @@ const identity = [
   'user.email=perf@example.invalid',
 ];
 
-/** 10,000 files of about 40 bytes in 100 directories, one `node` process. */
-const writeFiles = `const fs = require('fs'); for (let d = 0; d < 100; d += 1) { fs.mkdirSync('tree/d' + d, { recursive: true }); for (let f = 0; f < 100; f += 1) fs.writeFileSync('tree/d' + d + '/f' + f + '.txt', 'file ' + d + ' ' + f + ' of the status fixture\\n'); }`;
+/** 10,000 files of about 40 bytes in 100 directories, one Python process. */
+const writeFiles = `
+from pathlib import Path
+for d in range(100):
+    folder = Path('tree') / ('d%d' % d)
+    folder.mkdir(parents=True)
+    for f in range(100):
+        (folder / ('f%d.txt' % f)).write_text('file %d %d of the status fixture\\n' % (d, f))
+`;
 /** 30 modified tracked files and 2 untracked ones. */
-const touchFiles = `const fs = require('fs'); for (let f = 0; f < 30; f += 1) fs.appendFileSync('tree/d0/f' + f + '.txt', 'changed\\n'); fs.writeFileSync('new-a.txt', 'a'); fs.writeFileSync('new-b.txt', 'b');`;
+const touchFiles = `
+from pathlib import Path
+for f in range(30):
+    with (Path('tree/d0') / ('f%d.txt' % f)).open('a') as out:
+        out.write('changed\\n')
+Path('new-a.txt').write_text('a')
+Path('new-b.txt').write_text('b')
+`;
 // Import the same linear history in one Git process during fixture setup.
 // Each commit inherits the tree from its parent, including the 10,000 files.
 const commits = `
-  const { execFileSync } = require('node:child_process');
-  const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
-  const ref = git('symbolic-ref', 'HEAD');
-  const base = git('rev-parse', 'HEAD');
-  const stream = [];
-  for (let i = 1; i <= 1000; i += 1) {
-    const message = 'commit ' + i;
-    stream.push('commit ' + ref, 'committer perf <perf@example.invalid> ' + (1700000000 + i) + ' +0000',
-      'data ' + message.length, message);
-    if (i === 1) stream.push('from ' + base);
-    stream.push('');
-  }
-  execFileSync('git', ['fast-import', '--quiet'], { input: stream.join('\\n') + '\\ndone\\n' });
-  if (git('rev-list', '--count', base + '..HEAD') !== '1000' ||
-      git('rev-parse', base + '^{tree}') !== git('rev-parse', 'HEAD^{tree}')) {
-    throw Error('Git fixture history or tree mismatch');
-  }
+import subprocess
+def git(*args):
+    return subprocess.check_output(['git', *args], text=True).strip()
+ref = git('symbolic-ref', 'HEAD')
+base = git('rev-parse', 'HEAD')
+stream = []
+for i in range(1, 1001):
+    message = 'commit %d' % i
+    stream.extend(['commit ' + ref, 'committer perf <perf@example.invalid> %d +0000' % (1700000000 + i),
+                   'data %d' % len(message), message])
+    if i == 1:
+        stream.append('from ' + base)
+    stream.append('')
+subprocess.run(['git', 'fast-import', '--quiet'], input='\\n'.join(stream) + '\\ndone\\n', text=True, check=True)
+if git('rev-list', '--count', base + '..HEAD') != '1000' or git('rev-parse', base + '^{tree}') != git('rev-parse', 'HEAD^{tree}'):
+    raise ValueError('Git fixture history or tree mismatch')
 `;
 
 const workspace = "const w = await E(powers).lookup('workspace');";
@@ -78,11 +91,11 @@ const workspace = "const w = await E(powers).lookup('workspace');";
 const script = harden({
   turns: [
     commandTurn('fixture', [
-      [commandCall('node', ['-e', writeFiles])],
+      [commandCall('python3', ['-c', writeFiles])],
       [commandCall('git', ['add', '-A'])],
       [commandCall('git', [...identity, 'commit', '-q', '-m', 'tree'])],
-      [commandCall('node', ['-e', commits])],
-      [commandCall('node', ['-e', touchFiles])],
+      [commandCall('python3', ['-c', commits])],
+      [commandCall('python3', ['-c', touchFiles])],
     ]),
     commandTurn('status', [
       [
@@ -114,7 +127,13 @@ await runPerf('environments-git', async ({ provision }) => {
    * @param {string} input
    */
   const toolTurn = async input => {
-    const r = await runTurn(slice, session, live, input, 120_000);
+    const r = await runTurn(
+      slice,
+      session,
+      live,
+      input,
+      input === 'fixture' ? 5 * 60_000 : 120_000,
+    );
     const of = (/** @type {string} */ type) =>
       live.deliveries.find(
         (/** @type {any} */ d, /** @type {number} */ i) =>
@@ -125,8 +144,8 @@ await runPerf('environments-git', async ({ provision }) => {
       .slice(r.from)
       .map(d => d.event)
       .filter(e => e.type === 'tool_result' && e.turnId === r.turnId);
-    if (outcomes.some(e => e.failed))
-      throw Error(`${input} returned a failed tool result`);
+    const failed = outcomes.find(e => e.failed);
+    if (failed) throw Error(`${input} tool failed: ${failed.result}`);
     if (
       input === 'fixture' &&
       (outcomes.length !== 5 ||
