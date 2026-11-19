@@ -17151,3 +17151,16 @@ The unmodified WX.1 vocabulary pin and the voice UI state suite passed together
 `test/browser/voice-ui.test.mjs`. The browser UI build collected nine features
 and produced digest 9cfe83b9c353. The original source paths in the historical
 reuse survey identify upstream artifacts and remain available for provenance.
+
+### J-1441 2026-11-19 WX.F session program encoding - measured
+
+Evidence: at the M8 fold the session was 251,935 bytes with image registration and before
+mail registration. Printing the session script from the compartment mapper's paired Babel
+parser and generator produced a 219,892-byte ASCII program on the same intake. The 270,336-byte
+limit and the 24,576-byte staging frame remain in force. The 13 bundle and session-program
+tests passed. Cold-create and combined mail measurements follow on the completed tree.
+
+Reading: whitespace and comments in the staged session script consumed 32,043 bytes on that
+input. A compact print retains binding names and the final expression that evaluates to the
+module namespace. The diagnostic build with comments retains the original generated source.
+The exec and factory programs keep their existing print path.

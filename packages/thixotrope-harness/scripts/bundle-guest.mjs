@@ -96,21 +96,30 @@ export const escapeNonAscii = source =>
     return `\\u${code}`;
   });
 
-/**
- * The parser compartment-mapper's module transform uses (`@endo/module-source`
- * depends on it), reached through that package so this package declares no
- * second copy.
- */
-const loadParser = () => {
-  const requireHere = createRequire(import.meta.url);
-  const requireMapper = createRequire(
-    requireHere.resolve('@endo/compartment-mapper/package.json'),
-  );
-  const requireSource = createRequire(
-    requireMapper.resolve('@endo/module-source/package.json'),
-  );
-  return /** @type {{ parse: (source: string, options: object) => any }} */ (
+// Use the parser and printer paired by compartment-mapper's module transform.
+const requireHere = createRequire(import.meta.url);
+const requireMapper = createRequire(
+  requireHere.resolve('@endo/compartment-mapper/package.json'),
+);
+const requireSource = createRequire(
+  requireMapper.resolve('@endo/module-source/package.json'),
+);
+const loadParser = () =>
+  /** @type {{ parse: (source: string, options: object) => any }} */ (
     requireSource('@babel/parser')
+  );
+
+/**
+ * Print the final session program from its syntax tree. The generated script
+ * must still evaluate to the module namespace. Its bindings, literal values
+ * and capability-sized property names are visible to the guest.
+ * @param {string} source
+ */
+const compactSession = source => {
+  const ast = loadParser().parse(source, { sourceType: 'script' });
+  const { default: generate } = requireSource('@babel/generator');
+  return /** @type {string} */ (
+    generate(ast, { compact: true, comments: false }, source).code
   );
 };
 
@@ -340,9 +349,14 @@ export const bundleGuest = async (
     throw Error(
       `Guest bundle ${entryPath} reads modules outside ${root}: ${outside.join(', ')}`,
     );
-  const ascii = escapeNonAscii(
-    comments ? source : dropIndentation(source, entryPath),
-  );
+  let program = source;
+  if (!comments) {
+    program =
+      path.relative(root, entryPath) === path.join('session', 'main.js')
+        ? compactSession(source)
+        : dropIndentation(source, entryPath);
+  }
+  const ascii = escapeNonAscii(program);
   const encoded = new TextEncoder().encode(ascii);
   return harden({
     entry: entryPath,
