@@ -17,6 +17,30 @@
 //! persistence. See `rust/engine/ARCHITECTURE.md` for the four seams, and the schema
 //! perspectives in `designs/ironhorse-snapshot-schema*.md` for field-change obligations.
 //! This crate forbids unsafe Rust; the outer SQLite backend is outside that scope.
+//!
+//! Snapshots and stores are untrusted input: their read paths must never panic,
+//! hang, or allocate unboundedly, and memory safety alone does not rule out a
+//! panic (which kills a worker) or an `as` cast that silently truncates (which
+//! `overflow-checks` does not catch). The restriction lints below gate the
+//! whole crate; each remaining `#[expect]` states the invariant that makes its
+//! site safe. Tests build their own fixtures: `clippy.toml` relaxes the
+//! unwrap/expect/indexing/panic lints inside them, and the cast and
+//! `unreachable` lints (which have no such switch) gate only non-test builds.
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unreachable,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap
+    )
+)]
 
 mod stored_slots;
 
@@ -34,10 +58,22 @@ pub mod store_file;
 pub mod store_sections;
 mod stream;
 pub mod versions;
+mod wire;
 // Backend-parameterized acceptance suites (metamorphic determinism,
 // checkpoint locks) for OTHER crates' backends to instantiate; test
 // support only, hence feature-gated.
+//
+// Test support in the tests' own idiom (fixtures it builds and asserts on),
+// never a read path for untrusted bytes, so the panic-family and cast gates
+// above do not apply to it; `clippy.toml` grants tests the same.
 #[cfg(feature = "store-suite")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 pub mod store_suite;
 // Scratch-dir guard for the src test modules only (integration
 // binaries carry their own copy in tests/common/).

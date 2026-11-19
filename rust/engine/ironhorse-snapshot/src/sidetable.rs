@@ -204,6 +204,12 @@ macro_rules! define_side_tables {
         }
         impl SideTable {
             /// Every table in the existing public enumeration order.
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "evaluated at compile time: the loop bound is both arrays' \
+                          asserted common length, and an out-of-range index would be \
+                          a build error, never a runtime panic"
+            )]
             pub const ALL: &'static [Self] = &{
                 let mut tables = [$(Self::$variant,)*];
                 assert!(tables.len() == ironhorse_vm::SIDE_TABLES.len());

@@ -477,7 +477,7 @@ fn every_named_corruption_is_asserted_or_explicitly_allowlisted() {
             path.file_name().unwrap() == "store_sections.rs",
         );
         let expected: &[(&str, &str, usize)] = match path.file_name().unwrap().to_str().unwrap() {
-            "image.rs" => &[("Corrupt", "self.what", 7), ("Corrupt", "what", 2)],
+            "image.rs" => &[("Corrupt", "self.what", 5), ("Corrupt", "what", 2)],
             "store.rs" => &[("Corrupt", "name", 2)],
             "snapshot_roster.rs" => &[("Corrupt", "name", 2)],
             "store_sections.rs" => &[("Corrupt", "message", 1)],

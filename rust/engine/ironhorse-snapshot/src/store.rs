@@ -55,6 +55,7 @@ use crate::format::{Signature, SnapshotError, Version};
 use crate::image::encode_names;
 use crate::image::{decode_strings, CreationParams, MachineImage, MeterImage};
 use crate::slot_codec::{decode_slots, encode_slot, SLOT_RECORD_BYTES};
+use crate::wire::{be_u32_at, chunk_at, wire_len};
 use ironhorse_vm::SymbolName;
 use ironhorse_vm::{Slot, COST_TABLE_VERSION};
 
@@ -517,9 +518,14 @@ impl CommitToken {
     /// Lowercase hex, 32 characters.
     pub fn to_hex(&self) -> String {
         let mut s = String::with_capacity(32);
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
         for b in self.0 {
-            s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
-            s.push(char::from_digit((b & 0xf) as u32, 16).unwrap());
+            for nibble in [b >> 4, b & 0xf] {
+                // A nibble is below 16, so the lookup always succeeds.
+                if let Some(&digit) = DIGITS.get(usize::from(nibble)) {
+                    s.push(char::from(digit));
+                }
+            }
         }
         s
     }
@@ -535,12 +541,13 @@ impl CommitToken {
         let nibble = |c: u8| -> Result<u8, StoreError> {
             (c as char)
                 .to_digit(16)
-                .map(|d| d as u8)
+                .and_then(|d| u8::try_from(d).ok())
                 .ok_or(SnapshotError::Corrupt("store manifest seal not hex").into())
         };
         let mut token = [0u8; 16];
-        for (i, byte) in token.iter_mut().enumerate() {
-            *byte = (nibble(digits[2 * i])? << 4) | nibble(digits[2 * i + 1])?;
+        // At least 32 digits (checked above): the first 16 pairs.
+        for (byte, [hi, lo]) in token.iter_mut().zip(digits.as_chunks::<2>().0) {
+            *byte = (nibble(*hi)? << 4) | nibble(*lo)?;
         }
         Ok(CommitToken(token))
     }
@@ -704,7 +711,8 @@ pub fn slot_page_len(slot_count: u32, page: u32) -> usize {
     let start = (page as u64) * (SLOTS_PER_PAGE as u64);
     let end = ((page as u64) + 1) * (SLOTS_PER_PAGE as u64);
     let count = slot_count as u64;
-    (count.min(end).saturating_sub(start)) as usize
+    // At most `SLOTS_PER_PAGE`, a `u32`.
+    usize::try_from(count.min(end).saturating_sub(start)).unwrap_or(usize::MAX)
 }
 
 /// The byte length of chunk extent `ext` under `chunk_len`.
@@ -712,7 +720,8 @@ pub fn chunk_extent_len(chunk_len: u64, ext: u32) -> usize {
     let per = CHUNK_EXTENT_BYTES as u64;
     let start = (ext as u64) * per;
     let end = ((ext as u64) + 1) * per;
-    (chunk_len.min(end).saturating_sub(start)) as usize
+    // At most `CHUNK_EXTENT_BYTES`, a `u32`.
+    usize::try_from(chunk_len.min(end).saturating_sub(start)).unwrap_or(usize::MAX)
 }
 
 impl StoreManifest {
@@ -733,7 +742,7 @@ impl StoreManifest {
         v.extend_from_slice(&self.version.encode());
         v.extend_from_slice(&self.store_schema.to_be_bytes());
         let sig = self.signature.encode();
-        v.extend_from_slice(&(sig.len() as u32).to_be_bytes());
+        v.extend_from_slice(&wire_len(sig.len()).to_be_bytes());
         v.extend_from_slice(&sig);
         v.extend_from_slice(&self.creation.encode());
         v.extend_from_slice(&self.slot_count.to_be_bytes());
@@ -751,7 +760,7 @@ impl StoreManifest {
         // The legacy layout: an empty root, then the seal.
         v.extend_from_slice(&0u32.to_be_bytes());
         let seal = self.token.to_legacy_seal();
-        v.extend_from_slice(&(seal.len() as u32).to_be_bytes());
+        v.extend_from_slice(&wire_len(seal.len()).to_be_bytes());
         v.extend_from_slice(seal.as_bytes());
         // Schema 8 tail, appended AFTER the seal and ONLY when the
         // stamp says 8 — symmetric with the decoder, which reads it
@@ -773,31 +782,17 @@ impl StoreManifest {
     /// length is bounds-checked before any reservation (the
     /// malformed-count discipline).
     pub fn decode(p: &[u8]) -> Result<StoreManifest, StoreError> {
-        if p.len() < 10 {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest truncated",
-            )));
-        }
-        let version = Version::decode(&p[0..10]).map_err(SnapshotError::Version)?;
+        let truncated = || StoreError::Snapshot(SnapshotError::Corrupt("store manifest truncated"));
+        let vers = chunk_at::<10>(p, 0).ok_or_else(truncated)?;
+        let version = Version::decode(vers).map_err(SnapshotError::Version)?;
         let mut i = 10usize;
         let take4 = |i: &mut usize| -> Result<[u8; 4], StoreError> {
-            if *i + 4 > p.len() {
-                return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "store manifest truncated",
-                )));
-            }
-            let a = [p[*i], p[*i + 1], p[*i + 2], p[*i + 3]];
+            let a = *chunk_at::<4>(p, *i).ok_or_else(truncated)?;
             *i += 4;
             Ok(a)
         };
         let take8 = |i: &mut usize| -> Result<[u8; 8], StoreError> {
-            if *i + 8 > p.len() {
-                return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "store manifest truncated",
-                )));
-            }
-            let mut a = [0u8; 8];
-            a.copy_from_slice(&p[*i..*i + 8]);
+            let a = *chunk_at::<8>(p, *i).ok_or_else(truncated)?;
             *i += 8;
             Ok(a)
         };
@@ -810,9 +805,11 @@ impl StoreManifest {
         let sig_len = u32::from_be_bytes(take4(&mut i)?) as usize;
         let sig_end = i
             .checked_add(sig_len)
-            .filter(|&end| end <= p.len())
             .ok_or(SnapshotError::Corrupt("store manifest signature truncated"))?;
-        let signature = Signature::decode(&p[i..sig_end]).map_err(SnapshotError::Signature)?;
+        let sig = p
+            .get(i..sig_end)
+            .ok_or(SnapshotError::Corrupt("store manifest signature truncated"))?;
+        let signature = Signature::decode(sig).map_err(SnapshotError::Signature)?;
         i = sig_end;
         let crea_hi = take4(&mut i)?;
         let crea_lo = take4(&mut i)?;
@@ -861,17 +858,21 @@ impl StoreManifest {
         let root_len = u32::from_be_bytes(take4(&mut i)?) as usize;
         let root_end = i
             .checked_add(root_len)
-            .filter(|&end| end <= p.len())
             .ok_or(SnapshotError::Corrupt("store manifest root truncated"))?;
-        std::str::from_utf8(&p[i..root_end])
+        let root = p
+            .get(i..root_end)
+            .ok_or(SnapshotError::Corrupt("store manifest root truncated"))?;
+        std::str::from_utf8(root)
             .map_err(|_| SnapshotError::Corrupt("store manifest root not utf8"))?;
         i = root_end;
         let seal_len = u32::from_be_bytes(take4(&mut i)?) as usize;
         let seal_end = i
             .checked_add(seal_len)
-            .filter(|&end| end <= p.len())
             .ok_or(SnapshotError::Corrupt("store manifest seal truncated"))?;
-        let seal = std::str::from_utf8(&p[i..seal_end])
+        let seal = p
+            .get(i..seal_end)
+            .ok_or(SnapshotError::Corrupt("store manifest seal truncated"))?;
+        let seal = std::str::from_utf8(seal)
             .map_err(|_| SnapshotError::Corrupt("store manifest seal not utf8"))?
             .to_string();
         i = seal_end;
@@ -891,13 +892,10 @@ impl StoreManifest {
             let len = u32::from_be_bytes(take4(&mut i)?);
             // Compared in u64, where the end cannot overflow, so every
             // target refuses an oversized length as truncation.
-            if u64::from(len) > (p.len() - i) as u64 {
-                return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "manifest parent seal truncated",
-                )));
-            }
-            let end = i + len as usize;
-            let bytes = &p[i..end];
+            let parent_truncated =
+                || StoreError::Snapshot(SnapshotError::Corrupt("manifest parent seal truncated"));
+            let end = i.checked_add(len as usize).ok_or_else(parent_truncated)?;
+            let bytes = p.get(i..end).ok_or_else(parent_truncated)?;
             std::str::from_utf8(bytes)
                 .map_err(|_| SnapshotError::Corrupt("manifest parent seal not utf8"))?;
             i = end;
@@ -1006,7 +1004,8 @@ pub fn free_seg_count(free_len: u32) -> u32 {
 pub fn free_seg_len(free_len: u32, seg: u32) -> usize {
     let start = (seg as u64) * (FREE_SEG_ENTRIES as u64);
     let end = ((seg as u64) + 1) * (FREE_SEG_ENTRIES as u64);
-    ((free_len as u64).min(end).saturating_sub(start)) as usize
+    // At most `FREE_SEG_ENTRIES`, a `u32`.
+    usize::try_from((free_len as u64).min(end).saturating_sub(start)).unwrap_or(usize::MAX)
 }
 
 /// Encode one free-list segment (big-endian u32 entries).
@@ -1020,13 +1019,11 @@ pub fn encode_free_seg(entries: &[u32]) -> Vec<u8> {
 
 /// Split a full free list into `(segment index, encoded bytes)` rows.
 pub fn encode_all_free_segs(free: &[u32]) -> Vec<(u32, Vec<u8>)> {
-    let n = free_seg_count(free.len() as u32);
-    (0..n)
-        .map(|seg| {
-            let start = (seg * FREE_SEG_ENTRIES) as usize;
-            let end = free.len().min(start + FREE_SEG_ENTRIES as usize);
-            (seg, encode_free_seg(&free[start..end]))
-        })
+    // Segment `seg` is the `seg`-th `FREE_SEG_ENTRIES`-entry chunk (the
+    // last one short): `free_seg_count(len)` rows in all.
+    (0..=u32::MAX)
+        .zip(free.chunks(FREE_SEG_ENTRIES as usize))
+        .map(|(seg, entries)| (seg, encode_free_seg(entries)))
         .collect()
 }
 
@@ -1072,14 +1069,14 @@ pub fn check_batch(
     batch: &CheckpointBatch,
 ) -> Result<(), StoreError> {
     check_chunk_len(batch.manifest.chunk_len)?;
-    let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
-    let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
-    let n_frees = free_seg_count(batch.manifest.free_len) as usize;
+    let n_pages = slot_page_count(batch.manifest.slot_count);
+    let n_exts = chunk_extent_count(batch.manifest.chunk_len);
+    let n_frees = free_seg_count(batch.manifest.free_len);
     let [prior_pages_len, prior_exts_len, prior_frees_len] = prior.map_or([0, 0, 0], |prev| {
         [
-            slot_page_count(prev.slot_count) as usize,
-            chunk_extent_count(prev.chunk_len) as usize,
-            free_seg_count(prev.free_len) as usize,
+            slot_page_count(prev.slot_count),
+            chunk_extent_count(prev.chunk_len),
+            free_seg_count(prev.free_len),
         ]
     });
 
@@ -1109,7 +1106,7 @@ pub fn check_batch(
             batch.page_edges.iter().map(|(i, _)| *i).collect(),
         ),
     ] {
-        if let Some(&index) = indices.iter().find(|&&i| i as usize >= count) {
+        if let Some(&index) = indices.iter().find(|&&i| i >= count) {
             return Err(StoreError::MissingRow(kind, index));
         }
     }
@@ -1120,17 +1117,17 @@ pub fn check_batch(
         batch.chunk_extents.iter().map(|(e, _)| *e).collect();
     let batch_frees: std::collections::HashSet<u32> =
         batch.free_segs.iter().map(|(f, _)| *f).collect();
-    for page in prior_pages_len as u32..n_pages as u32 {
+    for page in prior_pages_len..n_pages {
         if !batch_pages.contains(&page) {
             return Err(StoreError::MissingRow("slot page", page));
         }
     }
-    for ext in prior_exts_len as u32..n_exts as u32 {
+    for ext in prior_exts_len..n_exts {
         if !batch_exts.contains(&ext) {
             return Err(StoreError::MissingRow("chunk extent", ext));
         }
     }
-    for seg in prior_frees_len as u32..n_frees as u32 {
+    for seg in prior_frees_len..n_frees {
         if !batch_frees.contains(&seg) {
             return Err(StoreError::MissingRow("free segment", seg));
         }
@@ -1177,7 +1174,7 @@ pub fn check_batch(
         require_boundaries(
             "slot page",
             slot_page_count(prev.slot_count),
-            n_pages as u32,
+            n_pages,
             |i| slot_page_len(prev.slot_count, i),
             |i| slot_page_len(batch.manifest.slot_count, i),
             &batch_pages,
@@ -1185,7 +1182,7 @@ pub fn check_batch(
         require_boundaries(
             "chunk extent",
             chunk_extent_count(prev.chunk_len),
-            n_exts as u32,
+            n_exts,
             |e| chunk_extent_len(prev.chunk_len, e),
             |e| chunk_extent_len(batch.manifest.chunk_len, e),
             &batch_exts,
@@ -1193,7 +1190,7 @@ pub fn check_batch(
         require_boundaries(
             "free segment",
             free_seg_count(prev.free_len),
-            n_frees as u32,
+            n_frees,
             |s| free_seg_len(prev.free_len, s),
             |s| free_seg_len(batch.manifest.free_len, s),
             &batch_frees,
@@ -1247,7 +1244,9 @@ pub fn check_batch(
         let rows_by_page: std::collections::HashMap<u32, &Vec<u8>> =
             batch.slot_pages.iter().map(|(p, b)| (*p, b)).collect();
         for (i, targets) in &batch.page_edges {
-            let bytes = rows_by_page[i];
+            let bytes = rows_by_page
+                .get(i)
+                .ok_or(StoreError::MissingRow("slot page", *i))?;
             let records = decode_slots(bytes).map_err(|_| {
                 StoreError::Snapshot(SnapshotError::Corrupt("store slot page record"))
             })?;
@@ -1336,7 +1335,7 @@ impl SmallState {
     pub fn encode(&self) -> Vec<u8> {
         let mut v = Vec::new();
         for s in self.encode_sections() {
-            v.extend_from_slice(&(s.len() as u32).to_be_bytes());
+            v.extend_from_slice(&wire_len(s.len()).to_be_bytes());
             v.extend_from_slice(&s);
         }
         v
@@ -1490,7 +1489,7 @@ pub trait HeapStore {
     /// backends answer from metadata (the SQLite backend's
     /// `COUNT(*)`).
     fn summary_page_count(&self) -> Result<u32, StoreError> {
-        Ok(self.page_edges()?.len() as u32)
+        Ok(wire_len(self.page_edges()?.len()))
     }
     /// Page reachability from `roots` over the stored summaries — the
     /// decision query of summary-driven partial collection. Provided:
@@ -1571,8 +1570,8 @@ pub trait HeapStore {
         let tset: std::collections::BTreeSet<u32> = targets.iter().copied().collect();
         let edges = self.page_edges()?;
         let mut hit: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-        for (page, outs) in edges.iter().enumerate() {
-            if tset.contains(&(page as u32)) {
+        for (page, outs) in (0..=u32::MAX).zip(edges.iter()) {
+            if tset.contains(&page) {
                 continue;
             }
             for t in outs {
@@ -1624,17 +1623,18 @@ pub trait HeapStore {
 fn peek_cost_table_version(p: &[u8]) -> Result<String, StoreError> {
     let mut i = 0usize;
     let mut read_small_section = |name: &'static str| -> Result<&[u8], StoreError> {
-        if p.len() - i < 4 {
+        let Some(len) = be_u32_at(p, i) else {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
-        }
-        let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
+        };
+        let len = len as usize;
         i += 4;
         // The wire length can exhaust usize on 32-bit targets.
-        let end = match i.checked_add(len).filter(|&end| end <= p.len()) {
-            Some(end) => end,
-            None => return Err(StoreError::Snapshot(SnapshotError::Corrupt(name))),
+        let Some((end, s)) = i
+            .checked_add(len)
+            .and_then(|end| Some((end, p.get(i..end)?)))
+        else {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
         };
-        let s = &p[i..end];
         i = end;
         Ok(s)
     };
@@ -1785,7 +1785,7 @@ fn migrate_step(manifest: &mut StoreManifest, small: &mut Vec<u8>) -> Result<(),
         // canonicalized by the 26 → 27 step, which this step comes after.
         36 => {
             for payload in crate::store_sections::weak_sections_empty() {
-                small.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+                small.extend_from_slice(&wire_len(payload.len()).to_be_bytes());
                 small.extend_from_slice(&payload);
             }
         }
@@ -1843,10 +1843,9 @@ fn names_to_cesu8(small: &[u8]) -> Result<Vec<u8>, StoreError> {
     let mut cursor = 0usize;
     let mut new_small = Vec::new();
     for index in 0..4 {
-        let header = small
-            .get(cursor..cursor + 4)
-            .ok_or(SnapshotError::Corrupt("name migration header"))?;
-        let len = u32::from_be_bytes(header.try_into().unwrap()) as usize;
+        let header =
+            chunk_at::<4>(small, cursor).ok_or(SnapshotError::Corrupt("name migration header"))?;
+        let len = u32::from_be_bytes(*header) as usize;
         cursor += 4;
         let end = name_migration_section_end(cursor, len)?;
         let section = small
@@ -1858,7 +1857,7 @@ fn names_to_cesu8(small: &[u8]) -> Result<Vec<u8>, StoreError> {
                 .map(SymbolName::from)
                 .collect();
             let encoded = encode_names(&names);
-            new_small.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
+            new_small.extend_from_slice(&wire_len(encoded.len()).to_be_bytes());
             new_small.extend_from_slice(&encoded);
         } else {
             new_small.extend_from_slice(header);
@@ -1866,7 +1865,7 @@ fn names_to_cesu8(small: &[u8]) -> Result<Vec<u8>, StoreError> {
         }
         cursor = end;
     }
-    new_small.extend_from_slice(&small[cursor..]);
+    new_small.extend_from_slice(small.get(cursor..).unwrap_or_default());
     Ok(new_small)
 }
 
@@ -1964,7 +1963,7 @@ pub fn check_epoch(stored: Option<u64>, batch_epoch: u64) -> Result<(), StoreErr
 /// the full (epoch-1) batch shape. `checkpoint_to_store` produces dirty
 /// subsets from the arena's dirty bitmap instead.
 pub fn encode_all_slot_pages(slots: &[Slot]) -> Vec<(u32, Vec<u8>)> {
-    let count = slots.len() as u32;
+    let count = wire_len(slots.len());
     let pages = slot_page_count(count);
     let mut out = Vec::with_capacity(pages as usize);
     for page in 0..pages {
@@ -1975,11 +1974,17 @@ pub fn encode_all_slot_pages(slots: &[Slot]) -> Vec<(u32, Vec<u8>)> {
 
 /// Encode one slot page from the flat record array.
 pub fn encode_slot_page(slots: &[Slot], page: u32) -> Vec<u8> {
-    let count = slots.len() as u32;
+    let count = wire_len(slots.len());
     let len = slot_page_len(count, page);
-    let start = (page * SLOTS_PER_PAGE) as usize;
+    // Widened so a page past the end cannot overflow; such a page is empty
+    // (`slot_page_len` is 0 there).
+    let start = usize::try_from(u64::from(page) * u64::from(SLOTS_PER_PAGE)).unwrap_or(usize::MAX);
+    let page_slots = slots
+        .get(start..)
+        .and_then(|tail| tail.get(..len))
+        .unwrap_or_default();
     let mut bytes = Vec::with_capacity(len * SLOT_RECORD_BYTES);
-    for slot in &slots[start..start + len] {
+    for slot in page_slots {
         encode_slot(slot, &mut bytes);
     }
     bytes
@@ -2000,8 +2005,13 @@ pub fn encode_all_chunk_extents(chunks: &[u8]) -> Vec<(u32, Vec<u8>)> {
 /// Slice one chunk extent out of the arena's raw bytes.
 pub fn encode_chunk_extent(chunks: &[u8], ext: u32) -> Vec<u8> {
     let len = chunk_extent_len(chunks.len() as u64, ext);
-    let start = (ext as u64 * CHUNK_EXTENT_BYTES as u64) as usize;
-    chunks[start..start + len].to_vec()
+    // An extent past the end is empty (`chunk_extent_len` is 0 there).
+    let start = usize::try_from(ext as u64 * CHUNK_EXTENT_BYTES as u64).unwrap_or(usize::MAX);
+    chunks
+        .get(start..)
+        .and_then(|tail| tail.get(..len))
+        .unwrap_or_default()
+        .to_vec()
 }
 
 /// The full-write batch of a [`MachineImage`] at `epoch` — every page,
@@ -2044,7 +2054,15 @@ pub fn image_to_batch_unchecked(
 /// A token from [`RandomTokens`] for the batch builders that cannot return
 /// its refusal.
 fn random_token(prev_token: CommitToken) -> CommitToken {
-    mint_token(&mut RandomTokens, prev_token).unwrap_or_else(|e| panic!("{e}"))
+    mint_token(&mut RandomTokens, prev_token).unwrap_or_else(
+        #[expect(
+            clippy::panic,
+            reason = "the system RNG failing (or returning the predecessor 64 times) \
+                      leaves no token to commit under, and these builders' documented \
+                      contract is infallible"
+        )]
+        |e| panic!("{e}"),
+    )
 }
 
 /// The full-write batch of `image`, carrying `token`, already minted
@@ -2071,10 +2089,10 @@ fn encode_image_batch(
         store_schema: STORE_SCHEMA_VERSION,
         signature: image.signature.clone(),
         creation: image.creation.clone(),
-        slot_count: image.slots.len() as u32,
+        slot_count: wire_len(image.slots.len()),
         slot_live: image.slot_live,
         chunk_len: image.chunks.len() as u64,
-        free_len: image.slot_free.len() as u32,
+        free_len: wire_len(image.slot_free.len()),
         epoch,
         // A container carries no crank history — importing one starts
         // the cadence schedule from zero, exactly like a fresh store.
@@ -2088,12 +2106,11 @@ fn encode_image_batch(
     let slot_pages = encode_all_slot_pages(&image.slots);
     let chunk_extents = encode_all_chunk_extents(&image.chunks);
     let free_segs = encode_all_free_segs(&image.slot_free);
-    let page_edges: Vec<(u32, Vec<u32>)> = (0..slot_page_count(manifest.slot_count))
-        .map(|page| {
-            let start = (page * SLOTS_PER_PAGE) as usize;
-            let end = image.slots.len().min(start + SLOTS_PER_PAGE as usize);
-            (page, derive_page_edges(page, &image.slots[start..end]))
-        })
+    // Page `page` is the `page`-th `SLOTS_PER_PAGE`-record chunk (the last
+    // one short): `slot_page_count(slot_count)` pages in all.
+    let page_edges: Vec<(u32, Vec<u32>)> = (0..=u32::MAX)
+        .zip(image.slots.chunks(SLOTS_PER_PAGE as usize))
+        .map(|(page, records)| (page, derive_page_edges(page, records)))
         .collect();
     CheckpointBatch {
         prev_token,
@@ -2275,8 +2292,10 @@ fn read_free_list(store: &dyn HeapStore, manifest: &StoreManifest) -> Result<Vec
         }
         free.extend(
             bytes
-                .chunks_exact(4)
-                .map(|c| u32::from_be_bytes(c.try_into().unwrap())),
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_be_bytes(*c)),
         );
     }
     Ok(free)
@@ -2347,7 +2366,11 @@ pub(crate) fn store_to_image_at(
 
     let exts = chunk_extent_count(manifest.chunk_len);
     // Same clamp discipline as the slot reservation above.
-    let mut chunks: Vec<u8> = Vec::with_capacity((manifest.chunk_len as usize).min(1 << 24));
+    let mut chunks: Vec<u8> = Vec::with_capacity(
+        usize::try_from(manifest.chunk_len)
+            .unwrap_or(usize::MAX)
+            .min(1 << 24),
+    );
     for ext in 0..exts {
         let bytes = store.read_chunk_extent(ext)?;
         let expected = chunk_extent_len(manifest.chunk_len, ext);
@@ -2464,14 +2487,17 @@ fn validate_state(
     let (page_lens, ext_lens) = store.inventory()?;
     let n_pages = slot_page_count(manifest.slot_count);
     if page_lens.len() != n_pages as usize {
-        return Err(StoreError::MissingRow("slot page", page_lens.len() as u32));
+        return Err(StoreError::MissingRow(
+            "slot page",
+            wire_len(page_lens.len()),
+        ));
     }
-    for (page, found) in page_lens.iter().enumerate() {
-        let expected = slot_page_len(manifest.slot_count, page as u32) * SLOT_RECORD_BYTES;
+    for (page, found) in (0..=u32::MAX).zip(page_lens.iter()) {
+        let expected = slot_page_len(manifest.slot_count, page) * SLOT_RECORD_BYTES;
         if *found != expected {
             return Err(StoreError::RowLength {
                 kind: "slot page",
-                index: page as u32,
+                index: page,
                 expected,
                 found: *found,
             });
@@ -2481,15 +2507,15 @@ fn validate_state(
     if ext_lens.len() != n_exts as usize {
         return Err(StoreError::MissingRow(
             "chunk extent",
-            ext_lens.len() as u32,
+            wire_len(ext_lens.len()),
         ));
     }
-    for (ext, found) in ext_lens.iter().enumerate() {
-        let expected = chunk_extent_len(manifest.chunk_len, ext as u32);
+    for (ext, found) in (0..=u32::MAX).zip(ext_lens.iter()) {
+        let expected = chunk_extent_len(manifest.chunk_len, ext);
         if *found != expected {
             return Err(StoreError::RowLength {
                 kind: "chunk extent",
-                index: ext as u32,
+                index: ext,
                 expected,
                 found: *found,
             });
@@ -2527,12 +2553,15 @@ fn validate_state(
     // runs after the free-list checks so the free set is sound: a
     // side-table row owned by a free slot is refused, while freed heap
     // records stay opaque.
-    crate::image::check_small_state_bounds(
-        &small,
-        manifest.slot_count,
-        manifest.chunk_len as usize,
-    )
-    .map_err(StoreError::Snapshot)?;
+    // Bounded by the `u32` chunk offset space at manifest decode; checked
+    // rather than cast so it can never truncate.
+    let chunk_len = usize::try_from(manifest.chunk_len).map_err(|_| {
+        StoreError::Snapshot(SnapshotError::Corrupt(
+            "store manifest chunk length exceeds the chunk offset space",
+        ))
+    })?;
+    crate::image::check_small_state_bounds(&small, manifest.slot_count, chunk_len)
+        .map_err(StoreError::Snapshot)?;
 
     Ok(ValidatedStoreState { manifest, small })
 }
@@ -2565,14 +2594,16 @@ pub fn validate_store_content(
     if edges.len() != slot_page_count(state.manifest.slot_count) as usize {
         return Err(StoreError::SummaryCount {
             expected: slot_page_count(state.manifest.slot_count),
-            found: edges.len() as u32,
+            found: wire_len(edges.len()),
         });
     }
-    for (page, targets) in edges.iter().enumerate() {
-        let start = page * SLOTS_PER_PAGE as usize;
-        let end = image.slots.len().min(start + SLOTS_PER_PAGE as usize);
-        if derive_page_edges(page as u32, &image.slots[start..end]) != *targets {
-            return Err(StoreError::SummaryMismatch { page: page as u32 });
+    // One summary per `SLOTS_PER_PAGE`-record chunk (checked just above).
+    for ((page, targets), records) in (0..=u32::MAX)
+        .zip(edges.iter())
+        .zip(image.slots.chunks(SLOTS_PER_PAGE as usize))
+    {
+        if derive_page_edges(page, records) != *targets {
+            return Err(StoreError::SummaryMismatch { page });
         }
     }
     let derived = crate::store_sections::SectionLeaves::from_payloads(
@@ -2738,7 +2769,7 @@ impl HeapStore for MemoryStore {
         check_migration_baseline(&self.manifest()?, from)?;
         let sections = if to.store_schema >= crate::store_sections::WEAK_SECTIONS_SCHEMA {
             let refs = crate::store_sections::split_small_state(small)?;
-            Some(std::array::from_fn(|id| refs[id].to_vec()))
+            Some(refs.map(<[u8]>::to_vec))
         } else {
             if to.store_schema >= crate::store_sections::SECTIONED_SCHEMA {
                 // Framed at its schema's own count, which this build keeps
@@ -2748,9 +2779,7 @@ impl HeapStore for MemoryStore {
             None
         };
         self.section_leaves = sections.as_ref().map(|rows| {
-            crate::store_sections::SectionLeaves::from_payloads(&std::array::from_fn(|id| {
-                rows[id].as_slice()
-            }))
+            crate::store_sections::SectionLeaves::from_payloads(&rows.each_ref().map(Vec::as_slice))
         });
         self.sections = sections;
         self.small = if self.sections.is_some() {
@@ -2767,9 +2796,7 @@ impl HeapStore for MemoryStore {
             return Err(StoreError::Empty);
         }
         if let Some(sections) = &self.sections {
-            crate::store_sections::frame_small_state(&std::array::from_fn(|id| {
-                sections[id].as_slice()
-            }))
+            crate::store_sections::frame_small_state(&sections.each_ref().map(Vec::as_slice))
         } else {
             Ok(self.small.clone())
         }
@@ -2857,7 +2884,10 @@ impl HeapStore for MemoryStore {
         let mut edges = self.edges.clone();
         edges.resize(pages as usize, Vec::new());
         for (page, targets) in &batch.page_edges {
-            edges[*page as usize] = targets.clone();
+            // The commit gate refused any summary index past the geometry.
+            *edges
+                .get_mut(*page as usize)
+                .ok_or(StoreError::MissingRow("page-edge summary", *page))? = targets.clone();
         }
         for (page, bytes) in &batch.slot_pages {
             self.slot_pages.insert(*page, bytes.clone());
@@ -2881,7 +2911,7 @@ impl HeapStore for MemoryStore {
         let small_sections_written = updates.len();
         let small_bytes_written = updates.iter().map(|u| u.bytes.len()).sum();
         for update in updates {
-            rows[update.section.id() as usize] = update.bytes;
+            *update.section.of_mut(rows) = update.bytes;
         }
         self.section_leaves = Some(next_sections);
         self.small.clear();
@@ -2903,6 +2933,27 @@ mod tests {
     use crate::image::{encode_strings, read_machine};
     use crate::machine::MachineSnapshot;
     use ironhorse_vm::Interp;
+
+    /// Regression: the public row encoders sliced `slots[start..start + len]`
+    /// with `start = page * SLOTS_PER_PAGE`, so a page past the arena panicked
+    /// (an empty arena's page 1: `start` 256 > 0), and `page * SLOTS_PER_PAGE`
+    /// overflowed `u32` for `page = u32::MAX`. A page or extent past the end
+    /// is empty, as `slot_page_len`/`chunk_extent_len` already said.
+    #[test]
+    fn row_encoders_return_empty_rows_past_the_arena() {
+        assert_eq!(encode_slot_page(&[], 1), Vec::<u8>::new());
+        assert_eq!(
+            encode_slot_page(&[Slot::integer(1)], u32::MAX),
+            Vec::<u8>::new()
+        );
+        assert_eq!(
+            encode_slot_page(&[Slot::integer(1)], 0),
+            crate::slot_codec::encode_slots(&[Slot::integer(1)])
+        );
+        assert_eq!(encode_chunk_extent(&[], 1), Vec::<u8>::new());
+        assert_eq!(encode_chunk_extent(&[7; 3], u32::MAX), Vec::<u8>::new());
+        assert_eq!(encode_chunk_extent(&[7; 3], 0), vec![7; 3]);
+    }
 
     #[test]
     fn name_floor_section_has_exact_width() {

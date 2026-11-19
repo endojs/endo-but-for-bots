@@ -124,7 +124,7 @@ impl Row<'_> {
     fn len(&self) -> u32 {
         match self {
             // The writers bound new rows with `row_len` first.
-            Row::New(bytes) => bytes.len() as u32,
+            Row::New(bytes) => crate::wire::wire_len(bytes.len()),
             Row::Prior(entry) => entry.length,
         }
     }
@@ -166,17 +166,27 @@ impl Layout<'_> {
             + 12 * n_rows
             + edges_bytes
             + free_bytes;
+        // Every length the file frames must fit its `u32` field; one that
+        // does not is refused rather than written wrapped.
         out.write_all(&FILE_MAGIC).map_err(io_err)?;
-        out.write_all(&(self.manifest.len() as u32).to_be_bytes())
-            .map_err(io_err)?;
+        out.write_all(
+            &row_len(self.manifest.len(), "file store header length exceeds u32")?.to_be_bytes(),
+        )
+        .map_err(io_err)?;
         out.write_all(&self.manifest).map_err(io_err)?;
-        out.write_all(&(self.small.len() as u32).to_be_bytes())
-            .map_err(io_err)?;
+        out.write_all(
+            &row_len(self.small.len(), "file store header length exceeds u32")?.to_be_bytes(),
+        )
+        .map_err(io_err)?;
         out.write_all(self.small).map_err(io_err)?;
-        out.write_all(&(self.pages.len() as u32).to_be_bytes())
-            .map_err(io_err)?;
-        out.write_all(&(self.extents.len() as u32).to_be_bytes())
-            .map_err(io_err)?;
+        out.write_all(
+            &row_len(self.pages.len(), "file store header length exceeds u32")?.to_be_bytes(),
+        )
+        .map_err(io_err)?;
+        out.write_all(
+            &row_len(self.extents.len(), "file store header length exceeds u32")?.to_be_bytes(),
+        )
+        .map_err(io_err)?;
         let mut cursor = header_len;
         for row in rows() {
             out.write_all(&cursor.to_be_bytes()).map_err(io_err)?;
@@ -184,16 +194,20 @@ impl Layout<'_> {
             cursor += row.len() as u64;
         }
         for ts in self.edges {
-            out.write_all(&(ts.len() as u32).to_be_bytes())
-                .map_err(io_err)?;
+            out.write_all(
+                &row_len(ts.len(), "file store header length exceeds u32")?.to_be_bytes(),
+            )
+            .map_err(io_err)?;
             for t in ts {
                 out.write_all(&t.to_be_bytes()).map_err(io_err)?;
             }
         }
-        out.write_all(&(self.free_segs.len() as u32).to_be_bytes())
-            .map_err(io_err)?;
+        out.write_all(
+            &row_len(self.free_segs.len(), "file store header length exceeds u32")?.to_be_bytes(),
+        )
+        .map_err(io_err)?;
         for b in self.free_segs {
-            out.write_all(&(b.len() as u32).to_be_bytes())
+            out.write_all(&row_len(b.len(), "file store header length exceeds u32")?.to_be_bytes())
                 .map_err(io_err)?;
             out.write_all(b).map_err(io_err)?;
         }
@@ -202,7 +216,9 @@ impl Layout<'_> {
                 Row::New(bytes) => out.write_all(bytes).map_err(io_err)?,
                 Row::Prior(entry) => {
                     // Stream the clean row from the durable previous file.
-                    let file = prior.expect("a prior row implies a prior file");
+                    let file = prior.ok_or_else(|| {
+                        StoreError::EngineInvariant("a prior row without a prior file".to_string())
+                    })?;
                     let mut f = file.borrow_mut();
                     f.seek(SeekFrom::Start(entry.offset)).map_err(io_err)?;
                     let mut buf = vec![0u8; entry.length as usize];
@@ -396,10 +412,13 @@ impl FileStore {
         let skip_leaves = |file: &mut File, n: u64, what: &'static str| -> Result<(), StoreError> {
             let len = n * 32;
             let at = file.stream_position().map_err(io_err)?;
-            if at.checked_add(len).is_none_or(|end| end > file_len) {
-                return Err(file_corrupt(what));
-            }
-            file.seek(SeekFrom::Current(len as i64)).map_err(io_err)?;
+            let end = match at.checked_add(len) {
+                Some(end) if end <= file_len => end,
+                _ => return Err(file_corrupt(what)),
+            };
+            // An absolute seek to the checked end: the same position the
+            // relative skip reached, with no `u64` to `i64` cast.
+            file.seek(SeekFrom::Start(end)).map_err(io_err)?;
             Ok(())
         };
 
@@ -407,20 +426,22 @@ impl FileStore {
         let manifest = StoreManifest::decode(&manifest_bytes)?;
         let small = read_block(file, "file store small-state block")?;
 
-        let n_pages = read_u32(file)? as u64;
-        let n_exts = read_u32(file)? as u64;
+        let n_pages = read_u32(file)?;
+        let n_exts = read_u32(file)?;
+        let n_rows = u64::from(n_pages) + u64::from(n_exts);
         // Each directory entry is 12 bytes; a count the file cannot
         // hold is corruption, refused before any reservation.
-        if (n_pages + n_exts) * 12 > file_len {
+        if n_rows * 12 > file_len {
             return Err(file_corrupt("file store directory truncated"));
         }
-        let mut read_dir = |n: u64| -> Result<Vec<DirEntry>, StoreError> {
+        let mut read_dir = |n: u32| -> Result<Vec<DirEntry>, StoreError> {
             let mut dir = Vec::with_capacity(n as usize);
             for _ in 0..n {
                 let mut b = [0u8; 12];
                 read_or_corrupt(file, &mut b, "file store directory truncated")?;
-                let offset = u64::from_be_bytes(b[0..8].try_into().unwrap());
-                let length = u32::from_be_bytes(b[8..12].try_into().unwrap());
+                let [o0, o1, o2, o3, o4, o5, o6, o7, l0, l1, l2, l3] = b;
+                let offset = u64::from_be_bytes([o0, o1, o2, o3, o4, o5, o6, o7]);
+                let length = u32::from_be_bytes([l0, l1, l2, l3]);
                 let end = offset
                     .checked_add(length as u64)
                     .ok_or_else(|| file_corrupt("file store directory entry overflows"))?;
@@ -434,7 +455,7 @@ impl FileStore {
         let pages = read_dir(n_pages)?;
         let extents = read_dir(n_exts)?;
         if legacy {
-            skip_leaves(file, n_pages + n_exts, "file store leaf hashes truncated")?;
+            skip_leaves(file, n_rows, "file store leaf hashes truncated")?;
         }
 
         // Page-edge summaries: u32 length + targets per
@@ -445,8 +466,8 @@ impl FileStore {
         // the encoded bytes, as in the free-segment read below.
         let mut edges: Vec<Vec<u32>> = Vec::new();
         for _ in 0..n_pages {
-            let len = read_u32(file)? as u64;
-            if len * 4 > file_len {
+            let len = read_u32(file)?;
+            if u64::from(len) * 4 > file_len {
                 return Err(file_corrupt("file store page edges truncated"));
             }
             let mut ts = Vec::with_capacity(len as usize);
@@ -458,14 +479,14 @@ impl FileStore {
 
         // Free-list segments, clamp-checked; the outer vector grows
         // against real reads (see the edges note).
-        let n_frees = read_u32(file)? as u64;
-        if n_frees * 4 > file_len {
+        let n_frees = read_u32(file)?;
+        if u64::from(n_frees) * 4 > file_len {
             return Err(file_corrupt("file store free segments truncated"));
         }
         let mut free_segs: Vec<Vec<u8>> = Vec::new();
         for _ in 0..n_frees {
-            let len = read_u32(file)? as u64;
-            if len > file_len {
+            let len = read_u32(file)?;
+            if u64::from(len) > file_len {
                 return Err(file_corrupt("file store free segments truncated"));
             }
             let mut b = vec![0u8; len as usize];
@@ -473,7 +494,11 @@ impl FileStore {
             free_segs.push(b);
         }
         if legacy {
-            skip_leaves(file, n_frees, "file store free leaf hashes truncated")?;
+            skip_leaves(
+                file,
+                u64::from(n_frees),
+                "file store free leaf hashes truncated",
+            )?;
         }
 
         // The directories must cover exactly the manifest's geometry —
@@ -643,7 +668,10 @@ impl HeapStore for FileStore {
             .unwrap_or_default();
         edges.resize(n_pages as usize, Vec::new());
         for (page, targets) in &batch.page_edges {
-            edges[*page as usize] = targets.clone();
+            // The commit gate refused any summary index past the geometry.
+            *edges
+                .get_mut(*page as usize)
+                .ok_or(StoreError::MissingRow("page-edge summary", *page))? = targets.clone();
         }
 
         // Resolve every row of the NEW geometry: a batch row wins;
@@ -749,6 +777,27 @@ mod tests {
 
     fn tmp_dir(name: &str) -> crate::test_dir::TempDir {
         crate::test_dir::TempDir::new(&format!("ironhorse-file-store-{name}"))
+    }
+
+    /// The file header's own framings (manifest, small state, directory
+    /// and summary counts) refuse a length past their `u32` field instead
+    /// of writing it wrapped; the conversion is the rows' `row_len`.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn header_lengths_refuse_values_outside_the_wire_domain() {
+        assert_eq!(
+            row_len(u32::MAX as usize, "file store header length exceeds u32"),
+            Ok(u32::MAX)
+        );
+        assert_eq!(
+            row_len(
+                u32::MAX as usize + 1,
+                "file store header length exceeds u32"
+            ),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "file store header length exceeds u32"
+            )))
+        );
     }
 
     #[test]

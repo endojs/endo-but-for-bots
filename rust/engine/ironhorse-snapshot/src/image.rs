@@ -28,6 +28,7 @@ use crate::format::{
 };
 use crate::sink::Sink;
 use crate::slot_codec::{decode_slots, SLOT_RECORD_BYTES};
+use crate::wire::{be_u32_at, be_u64_at, chunk_at, wire_len};
 use ironhorse_vm::snapshot_api::{
     CollatorData, DateTimeFormatData, IntlTables, IteratorRow, ListFormatData, LocaleData,
     NumberFormatData, PluralRulesData, SegmentIteratorData, SegmenterData, SegmentsData,
@@ -95,7 +96,7 @@ impl MeterImage {
         v.put(&self.interval.to_be_bytes());
         v.put(&self.count.to_be_bytes());
         let vb = self.cost_table_version.as_bytes();
-        v.put(&(vb.len() as u32).to_be_bytes());
+        v.put(&wire_len(vb.len()).to_be_bytes());
         v.put(vb);
         v.put(&self.cost_table_digest);
     }
@@ -104,20 +105,28 @@ impl MeterImage {
         if p.len() < 28 {
             return Err(SnapshotError::Corrupt("METR header"));
         }
-        let index = u64::from_be_bytes(p[0..8].try_into().unwrap());
-        let interval = u64::from_be_bytes(p[8..16].try_into().unwrap());
-        let count = u64::from_be_bytes(p[16..24].try_into().unwrap());
-        let vlen = u32::from_be_bytes([p[24], p[25], p[26], p[27]]) as usize;
+        let header = || SnapshotError::Corrupt("METR header");
+        let index = be_u64_at(p, 0).ok_or_else(header)?;
+        let interval = be_u64_at(p, 8).ok_or_else(header)?;
+        let count = be_u64_at(p, 16).ok_or_else(header)?;
+        let vlen = be_u32_at(p, 24).ok_or_else(header)? as usize;
         // Exact consumption: this decoder also reads the small state's
         // length-delimited meter section, where tolerated trailing
         // bytes would defeat the store decoders' fail-closed rule.
         if vlen.checked_add(60) != Some(p.len()) {
             return Err(SnapshotError::Corrupt("METR version string"));
         }
-        let cost_table_version = std::str::from_utf8(&p[28..28 + vlen])
+        // `vlen + 60 == p.len()` (checked above): the version string, then
+        // exactly the 32-byte digest.
+        let version_string = || SnapshotError::Corrupt("METR version string");
+        let (version_bytes, digest) = p
+            .get(28..)
+            .and_then(|rest| rest.split_at_checked(vlen))
+            .ok_or_else(version_string)?;
+        let cost_table_version = std::str::from_utf8(version_bytes)
             .map_err(|_| SnapshotError::Corrupt("METR version not utf8"))?
             .to_string();
-        let cost_table_digest = p[28 + vlen..].try_into().unwrap();
+        let cost_table_digest = <[u8; 32]>::try_from(digest).map_err(|_| version_string())?;
         let meter = MeterImage {
             cost_table_version,
             cost_table_digest,
@@ -172,9 +181,12 @@ impl CreationParams {
         if p.len() != 8 {
             return Err(SnapshotError::Corrupt("CREA trailing bytes"));
         }
+        let Ok([s0, s1, s2, s3, c0, c1, c2, c3]) = <[u8; 8]>::try_from(p) else {
+            return Err(SnapshotError::Corrupt("CREA payload too short"));
+        };
         Ok(CreationParams {
-            initial_slot_count: u32::from_be_bytes([p[0], p[1], p[2], p[3]]),
-            initial_chunk_bytes: u32::from_be_bytes([p[4], p[5], p[6], p[7]]),
+            initial_slot_count: u32::from_be_bytes([s0, s1, s2, s3]),
+            initial_chunk_bytes: u32::from_be_bytes([c0, c1, c2, c3]),
         })
     }
 }
@@ -584,7 +596,7 @@ macro_rules! define_image_constructor {
                 signature,
                 creation: CreationParams {
                     initial_slot_count: slots.capacity(),
-                    initial_chunk_bytes: chunks.byte_size() as u32,
+                    initial_chunk_bytes: wire_len(chunks.byte_size()),
                 },
                 chunks: chunks.raw_vec(),
                 slots: slots.records(),
@@ -835,19 +847,16 @@ pub(crate) fn encode_strings(list: &[String]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_strings_into<S: Sink>(list: &[String], v: &mut S) {
-    v.put(&(list.len() as u32).to_be_bytes());
+    v.put(&wire_len(list.len()).to_be_bytes());
     for s in list {
         let b = s.as_bytes();
-        v.put(&(b.len() as u32).to_be_bytes());
+        v.put(&wire_len(b.len()).to_be_bytes());
         v.put(b);
     }
 }
 
 pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
-    if p.len() < 4 {
-        return Err(SnapshotError::Corrupt("string list header"));
-    }
-    let count = u32::from_be_bytes([p[0], p[1], p[2], p[3]]) as usize;
+    let count = be_u32_at(p, 0).ok_or(SnapshotError::Corrupt("string list header"))? as usize;
     // Reserve no more than the payload could possibly hold: every entry
     // carries at least a 4-byte length header, so a valid `count` never
     // exceeds `p.len() / 4`. Clamping the pre-reservation keeps a malformed
@@ -857,10 +866,8 @@ pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
     let mut out = Vec::with_capacity(count.min(p.len() / 4));
     let mut i = 4;
     for _ in 0..count {
-        if i + 4 > p.len() {
-            return Err(SnapshotError::Corrupt("string list entry header"));
-        }
-        let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
+        let len =
+            be_u32_at(p, i).ok_or(SnapshotError::Corrupt("string list entry header"))? as usize;
         i += 4;
         // checked_add: `len` is attacker-sized (a full u32), so on a
         // 32-bit usize `i + len` can wrap past the gate and panic at
@@ -869,10 +876,10 @@ pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
         let end = i
             .checked_add(len)
             .ok_or(SnapshotError::Corrupt("string list entry body"))?;
-        if end > p.len() {
-            return Err(SnapshotError::Corrupt("string list entry body"));
-        }
-        let s = std::str::from_utf8(&p[i..end])
+        let body = p
+            .get(i..end)
+            .ok_or(SnapshotError::Corrupt("string list entry body"))?;
+        let s = std::str::from_utf8(body)
             .map_err(|_| SnapshotError::Corrupt("string list entry not utf8"))?;
         out.push(s.to_string());
         i = end;
@@ -890,19 +897,16 @@ pub(crate) fn encode_names(list: &[SymbolName]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_names_into<S: Sink>(list: &[SymbolName], v: &mut S) {
-    v.put(&(list.len() as u32).to_be_bytes());
+    v.put(&wire_len(list.len()).to_be_bytes());
     for s in list {
         let b = s.as_bytes();
-        v.put(&(b.len() as u32).to_be_bytes());
+        v.put(&wire_len(b.len()).to_be_bytes());
         v.put(b);
     }
 }
 
 pub(crate) fn decode_names(p: &[u8]) -> Result<Vec<SymbolName>, SnapshotError> {
-    if p.len() < 4 {
-        return Err(SnapshotError::Corrupt("string list header"));
-    }
-    let count = u32::from_be_bytes([p[0], p[1], p[2], p[3]]) as usize;
+    let count = be_u32_at(p, 0).ok_or(SnapshotError::Corrupt("string list header"))? as usize;
     // Reserve no more than the payload could possibly hold: every entry
     // carries at least a 4-byte length header, so a valid `count` never
     // exceeds `p.len() / 4`. Clamping the pre-reservation keeps a malformed
@@ -912,10 +916,8 @@ pub(crate) fn decode_names(p: &[u8]) -> Result<Vec<SymbolName>, SnapshotError> {
     let mut out = Vec::with_capacity(count.min(p.len() / 4));
     let mut i = 4;
     for _ in 0..count {
-        if i + 4 > p.len() {
-            return Err(SnapshotError::Corrupt("string list entry header"));
-        }
-        let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
+        let len =
+            be_u32_at(p, i).ok_or(SnapshotError::Corrupt("string list entry header"))? as usize;
         i += 4;
         // checked_add: `len` is attacker-sized (a full u32), so on a
         // 32-bit usize `i + len` can wrap past the gate and panic at
@@ -924,10 +926,10 @@ pub(crate) fn decode_names(p: &[u8]) -> Result<Vec<SymbolName>, SnapshotError> {
         let end = i
             .checked_add(len)
             .ok_or(SnapshotError::Corrupt("string list entry body"))?;
-        if end > p.len() {
-            return Err(SnapshotError::Corrupt("string list entry body"));
-        }
-        let s = SymbolName::from_cesu8(&p[i..end])
+        let body = p
+            .get(i..end)
+            .ok_or(SnapshotError::Corrupt("string list entry body"))?;
+        let s = SymbolName::from_cesu8(body)
             .ok_or(SnapshotError::Corrupt("name list entry not CESU-8"))?;
         out.push(s);
         i = end;
@@ -945,17 +947,14 @@ pub(crate) fn encode_u32s(list: &[u32]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_u32s_into<S: Sink>(list: &[u32], v: &mut S) {
-    v.put(&(list.len() as u32).to_be_bytes());
+    v.put(&wire_len(list.len()).to_be_bytes());
     for &x in list {
         v.put(&x.to_be_bytes());
     }
 }
 
 pub(crate) fn decode_u32s(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
-    if p.len() < 4 {
-        return Err(SnapshotError::Corrupt("u32 list header"));
-    }
-    let count = u32::from_be_bytes([p[0], p[1], p[2], p[3]]) as usize;
+    let count = be_u32_at(p, 0).ok_or(SnapshotError::Corrupt("u32 list header"))? as usize;
     // Clamp the pre-reservation to what the payload can hold (4 bytes per
     // entry); a malformed `count` must not reserve gigabytes before the
     // per-entry bounds check below rejects it (fuzz trophy
@@ -963,10 +962,7 @@ pub(crate) fn decode_u32s(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
     let mut out = Vec::with_capacity(count.min(p.len() / 4));
     let mut i = 4;
     for _ in 0..count {
-        if i + 4 > p.len() {
-            return Err(SnapshotError::Corrupt("u32 list entry"));
-        }
-        out.push(u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]));
+        out.push(be_u32_at(p, i).ok_or(SnapshotError::Corrupt("u32 list entry"))?);
         i += 4;
     }
     if i != p.len() {
@@ -979,7 +975,7 @@ pub(crate) fn decode_u32s(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
 fn encode_heap(image: &MachineImage) -> Vec<u8> {
     let mut v = Vec::new();
     encode_heap_into(
-        image.slots.len() as u32,
+        wire_len(image.slots.len()),
         &image.slot_free,
         image.slot_live,
         image.slots.iter().copied(),
@@ -1000,7 +996,7 @@ pub(crate) fn encode_heap_into<S: Sink>(
     v: &mut S,
 ) {
     v.put(&slot_count.to_be_bytes());
-    v.put(&(slot_free.len() as u32).to_be_bytes());
+    v.put(&wire_len(slot_free.len()).to_be_bytes());
     v.put(&slot_live.to_be_bytes());
     for &f in slot_free {
         v.put(&f.to_be_bytes());
@@ -1017,12 +1013,10 @@ pub(crate) fn heap_payload_len(slot_count: u32, free_count: usize) -> u64 {
 }
 
 fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
-    if p.len() < 12 {
-        return Err(SnapshotError::Corrupt("HEAP header"));
-    }
-    let slot_count = u32::from_be_bytes([p[0], p[1], p[2], p[3]]) as usize;
-    let free_count = u32::from_be_bytes([p[4], p[5], p[6], p[7]]) as usize;
-    let live = u32::from_be_bytes([p[8], p[9], p[10], p[11]]);
+    let header = || SnapshotError::Corrupt("HEAP header");
+    let slot_count = be_u32_at(p, 0).ok_or_else(header)? as usize;
+    let free_count = be_u32_at(p, 4).ok_or_else(header)? as usize;
+    let live = be_u32_at(p, 8).ok_or_else(header)?;
     let mut i = 12;
     // Clamp the free-list pre-reservation to what the payload can hold (4
     // bytes per entry); a malformed `free_count` must not reserve gigabytes
@@ -1030,10 +1024,7 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
     // `malformed_heap_free_count_does_not_over_allocate`).
     let mut free = Vec::with_capacity(free_count.min(p.len() / 4));
     for _ in 0..free_count {
-        if i + 4 > p.len() {
-            return Err(SnapshotError::Corrupt("HEAP free list"));
-        }
-        free.push(u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]));
+        free.push(be_u32_at(p, i).ok_or(SnapshotError::Corrupt("HEAP free list"))?);
         i += 4;
     }
     // Sized in u64, where a u32 count times the record width cannot
@@ -1043,12 +1034,12 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
     // depends on. Every target refuses an oversized count as truncation,
     // with the same message, and `want` fits in usize once it is known to
     // be at most the payload's length.
+    let records = p.get(i..).unwrap_or_default();
     let want = slot_count as u64 * SLOT_RECORD_BYTES as u64;
-    if ((p.len() - i) as u64) < want {
+    if (records.len() as u64) < want {
         return Err(SnapshotError::Corrupt("HEAP records truncated"));
     }
-    let want = want as usize;
-    if p.len() - i != want {
+    if records.len() as u64 != want {
         return Err(SnapshotError::Corrupt("HEAP trailing bytes"));
     }
     // Semantic gates on the free list, matching the store validator's
@@ -1063,16 +1054,15 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
     // scratch cannot be attacker-sized.
     let mut seen = vec![false; slot_count];
     for &f in &free {
-        if (f as usize) >= slot_count || seen[f as usize] {
-            return Err(SnapshotError::Corrupt("HEAP free list entry"));
+        match seen.get_mut(f as usize) {
+            Some(seen) if !*seen => *seen = true,
+            _ => return Err(SnapshotError::Corrupt("HEAP free list entry")),
         }
-        seen[f as usize] = true;
     }
     if free.len() as u64 + live as u64 != slot_count as u64 {
         return Err(SnapshotError::Corrupt("HEAP live/free accounting"));
     }
-    let slots =
-        decode_slots(&p[i..i + want]).map_err(|_| SnapshotError::Corrupt("HEAP slot record"))?;
+    let slots = decode_slots(records).map_err(|_| SnapshotError::Corrupt("HEAP slot record"))?;
     Ok((slots, free, live))
 }
 
@@ -1091,29 +1081,20 @@ impl<'a> Cursor<'a> {
     fn new(p: &'a [u8], what: &'static str) -> Cursor<'a> {
         Cursor { p, i: 0, what }
     }
-    fn u32(&mut self) -> Result<u32, SnapshotError> {
-        if self.i + 4 > self.p.len() {
-            return Err(SnapshotError::Corrupt(self.what));
-        }
-        let x = u32::from_be_bytes(self.p[self.i..self.i + 4].try_into().unwrap());
-        self.i += 4;
+    /// The next `N` bytes as a fixed array, advancing past them.
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], SnapshotError> {
+        let x = *chunk_at::<N>(self.p, self.i).ok_or(SnapshotError::Corrupt(self.what))?;
+        self.i += N;
         Ok(x)
+    }
+    fn u32(&mut self) -> Result<u32, SnapshotError> {
+        self.array().map(u32::from_be_bytes)
     }
     fn u16(&mut self) -> Result<u16, SnapshotError> {
-        if self.i + 2 > self.p.len() {
-            return Err(SnapshotError::Corrupt(self.what));
-        }
-        let x = u16::from_be_bytes(self.p[self.i..self.i + 2].try_into().unwrap());
-        self.i += 2;
-        Ok(x)
+        self.array().map(u16::from_be_bytes)
     }
     fn u8(&mut self) -> Result<u8, SnapshotError> {
-        if self.i >= self.p.len() {
-            return Err(SnapshotError::Corrupt(self.what));
-        }
-        let x = self.p[self.i];
-        self.i += 1;
-        Ok(x)
+        self.array().map(|[x]| x)
     }
     fn bytes(&mut self, len: usize) -> Result<&'a [u8], SnapshotError> {
         // checked_add: `len` is attacker-sized, so `i + len` can wrap
@@ -1122,10 +1103,10 @@ impl<'a> Cursor<'a> {
             .i
             .checked_add(len)
             .ok_or(SnapshotError::Corrupt(self.what))?;
-        if end > self.p.len() {
-            return Err(SnapshotError::Corrupt(self.what));
-        }
-        let b = &self.p[self.i..end];
+        let b = self
+            .p
+            .get(self.i..end)
+            .ok_or(SnapshotError::Corrupt(self.what))?;
         self.i = end;
         Ok(b)
     }
@@ -1218,11 +1199,11 @@ impl ArrayRowLike for ironhorse_vm::snapshot_api::ArrayRowView<'_> {
 /// owner-ascending and items index-ascending as the vm's snapshots order
 /// them; the encoder writes what it is given.
 pub(crate) fn encode_array_rows_into<S: Sink, R: ArrayRowLike>(rows: &[R], v: &mut S) {
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for a in rows {
         v.put(&a.owner().to_be_bytes());
         v.put(&a.length().to_be_bytes());
-        v.put(&(a.item_count() as u32).to_be_bytes());
+        v.put(&wire_len(a.item_count()).to_be_bytes());
         a.for_each_item(&mut |index, value| {
             v.put(&index.to_be_bytes());
             crate::slot_codec::put_slot(value, v);
@@ -1459,12 +1440,12 @@ impl CollectionRowLike for ironhorse_vm::snapshot_api::CollectionRowView<'_> {
 /// The `COLL` payload: `[row_count]` then per row
 /// `[owner][kind][table_length][entry_count]([key record][value record])*`.
 pub(crate) fn encode_collection_rows_into<S: Sink, R: CollectionRowLike>(rows: &[R], v: &mut S) {
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for coll in rows {
         v.put(&coll.owner().to_be_bytes());
         v.put_u8(coll.kind());
         v.put(&coll.table_length().to_be_bytes());
-        v.put(&(coll.entry_count() as u32).to_be_bytes());
+        v.put(&wire_len(coll.entry_count()).to_be_bytes());
         coll.for_each_entry(&mut |key, value| {
             crate::slot_codec::put_slot(key, v);
             crate::slot_codec::put_slot(value, v);
@@ -1570,7 +1551,7 @@ pub(crate) fn encode_symbol_keys_into<S: Sink>(symbols: &SymbolKeyImage, v: &mut
         return;
     }
     v.put(&symbols.next_id.to_be_bytes());
-    v.put(&(symbols.pairs.len() as u32).to_be_bytes());
+    v.put(&wire_len(symbols.pairs.len()).to_be_bytes());
     for &(id, desc) in &symbols.pairs {
         v.put(&id.to_be_bytes());
         v.put(&desc.to_be_bytes());
@@ -1637,9 +1618,9 @@ pub(crate) fn encode_registry(registry: &[RegistryImage]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_registry_into<S: Sink>(registry: &[RegistryImage], v: &mut S) {
-    v.put(&(registry.len() as u32).to_be_bytes());
+    v.put(&wire_len(registry.len()).to_be_bytes());
     for e in registry {
-        v.put(&(e.key.len() as u32).to_be_bytes());
+        v.put(&wire_len(e.key.len()).to_be_bytes());
         v.put(&e.key);
         v.put(&e.descriptor.to_be_bytes());
     }
@@ -1701,11 +1682,11 @@ pub(crate) fn encode_errors(errors: &[ErrorImage]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_errors_into<S: Sink>(errors: &[ErrorImage], v: &mut S) {
-    v.put(&(errors.len() as u32).to_be_bytes());
+    v.put(&wire_len(errors.len()).to_be_bytes());
     for e in errors {
         v.put(&e.owner.to_be_bytes());
         let name = e.name.as_bytes();
-        v.put(&(name.len() as u32).to_be_bytes());
+        v.put(&wire_len(name.len()).to_be_bytes());
         v.put(name);
         match &e.message {
             Some(m) => {
@@ -1714,7 +1695,7 @@ pub(crate) fn encode_errors_into<S: Sink>(errors: &[ErrorImage], v: &mut S) {
                 let m = scalar
                     .as_ref()
                     .map_or_else(|| m.as_bytes(), |s| s.as_bytes());
-                v.put(&(m.len() as u32).to_be_bytes());
+                v.put(&wire_len(m.len()).to_be_bytes());
                 v.put(m);
             }
             None => v.put_u8(0),
@@ -1807,13 +1788,13 @@ pub(crate) fn encode_error_frames(errors: &[ErrorImage]) -> Vec<u8> {
 
 pub(crate) fn encode_error_frames_into<S: Sink>(errors: &[ErrorImage], v: &mut S) {
     let rows: Vec<&ErrorImage> = errors.iter().filter(|e| !e.frames.is_empty()).collect();
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for e in rows {
         v.put(&e.owner.to_be_bytes());
-        v.put(&(e.frames.len() as u32).to_be_bytes());
+        v.put(&wire_len(e.frames.len()).to_be_bytes());
         for f in &e.frames {
             let f = f.as_bytes();
-            v.put(&(f.len() as u32).to_be_bytes());
+            v.put(&wire_len(f.len()).to_be_bytes());
             v.put(f);
         }
     }
@@ -1865,7 +1846,7 @@ pub(crate) fn encode_buffers(buffers: &[BufferImage]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_buffers_into<S: Sink>(buffers: &[BufferImage], v: &mut S) {
-    v.put(&(buffers.len() as u32).to_be_bytes());
+    v.put(&wire_len(buffers.len()).to_be_bytes());
     for b in buffers {
         v.put(&b.owner.to_be_bytes());
         v.put(&b.data.to_be_bytes());
@@ -1937,7 +1918,7 @@ pub(crate) fn encode_typed_arrays(views: &[TypedArrayImage]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_typed_arrays_into<S: Sink>(views: &[TypedArrayImage], v: &mut S) {
-    v.put(&(views.len() as u32).to_be_bytes());
+    v.put(&wire_len(views.len()).to_be_bytes());
     for t in views {
         v.put(&t.owner.to_be_bytes());
         v.put_u8(t.kind);
@@ -1994,7 +1975,7 @@ pub(crate) fn encode_data_views(views: &[DataViewImage]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_data_views_into<S: Sink>(views: &[DataViewImage], v: &mut S) {
-    v.put(&(views.len() as u32).to_be_bytes());
+    v.put(&wire_len(views.len()).to_be_bytes());
     for d in views {
         v.put(&d.owner.to_be_bytes());
         v.put(&d.buffer.to_be_bytes());
@@ -2041,7 +2022,7 @@ pub(crate) fn encode_wrappers(wrappers: &[WrapperImage]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_wrappers_into<S: Sink>(wrappers: &[WrapperImage], v: &mut S) {
-    v.put(&(wrappers.len() as u32).to_be_bytes());
+    v.put(&wire_len(wrappers.len()).to_be_bytes());
     for w in wrappers {
         v.put(&w.owner.to_be_bytes());
         crate::slot_codec::put_slot(&w.value, v);
@@ -2079,7 +2060,7 @@ pub(crate) fn encode_regexps(regexps: &[RegExpImage]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_regexps_into<S: Sink>(regexps: &[RegExpImage], v: &mut S) {
-    v.put(&(regexps.len() as u32).to_be_bytes());
+    v.put(&wire_len(regexps.len()).to_be_bytes());
     for r in regexps {
         v.put(&r.owner.to_be_bytes());
         // Retain legacy UTF-8 bytes for scalar sources. Non-scalar sources
@@ -2088,10 +2069,10 @@ pub(crate) fn encode_regexps_into<S: Sink>(regexps: &[RegExpImage], v: &mut S) {
         let src = scalar
             .as_ref()
             .map_or_else(|| r.source.as_bytes(), |s| s.as_bytes());
-        v.put(&(src.len() as u32).to_be_bytes());
+        v.put(&wire_len(src.len()).to_be_bytes());
         v.put(src);
         let flags = r.flags.as_bytes();
-        v.put(&(flags.len() as u32).to_be_bytes());
+        v.put(&wire_len(flags.len()).to_be_bytes());
         v.put(flags);
         v.put(
             &canonicalize_nan(f64::from_bits(r.last_index_bits))
@@ -2146,7 +2127,7 @@ pub(crate) fn encode_dates(dates: &[DateImage]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_dates_into<S: Sink>(dates: &[DateImage], v: &mut S) {
-    v.put(&(dates.len() as u32).to_be_bytes());
+    v.put(&wire_len(dates.len()).to_be_bytes());
     for d in dates {
         v.put(&d.owner.to_be_bytes());
         v.put(
@@ -2192,15 +2173,15 @@ pub(crate) fn encode_function_state_into<S: Sink>(
     v: &mut S,
 ) {
     let text = |v: &mut S, value: &str| {
-        v.put(&(value.len() as u32).to_be_bytes());
+        v.put(&wire_len(value.len()).to_be_bytes());
         v.put(value.as_bytes());
     };
-    v.put(&(state.segments.len() as u32).to_be_bytes());
+    v.put(&wire_len(state.segments.len()).to_be_bytes());
     for segment in &state.segments {
-        v.put(&(segment.len() as u32).to_be_bytes());
+        v.put(&wire_len(segment.len()).to_be_bytes());
         v.put(segment);
     }
-    v.put(&(state.functions.len() as u32).to_be_bytes());
+    v.put(&wire_len(state.functions.len()).to_be_bytes());
     for row in &state.functions {
         v.put(&row.owner.to_be_bytes());
         match (row.segment, row.body_start) {
@@ -2211,6 +2192,11 @@ pub(crate) fn encode_function_state_into<S: Sink>(
                 v.put(&row.body_len.to_be_bytes());
             }
             (None, None) => v.put_u8(0),
+            #[expect(
+                clippy::unreachable,
+                reason = "the function-state gate refuses a row whose body and segment \
+                          disagree, so only `write_machine_unchecked` tooling can reach this"
+            )]
             _ => unreachable!("function snapshot body and segment must travel together"),
         }
         v.put(&row.closures.to_be_bytes());
@@ -2225,28 +2211,28 @@ pub(crate) fn encode_function_state_into<S: Sink>(
             Some(true) => 2,
         });
     }
-    v.put(&(state.bound_functions.len() as u32).to_be_bytes());
+    v.put(&wire_len(state.bound_functions.len()).to_be_bytes());
     for row in &state.bound_functions {
         v.put(&row.owner.to_be_bytes());
         v.put(&row.target.to_be_bytes());
         crate::slot_codec::put_slot(&row.this_arg, v);
-        v.put(&(row.args.len() as u32).to_be_bytes());
+        v.put(&wire_len(row.args.len()).to_be_bytes());
         for arg in &row.args {
             crate::slot_codec::put_slot(arg, v);
         }
     }
-    v.put(&(state.ctor_prototypes.len() as u32).to_be_bytes());
+    v.put(&wire_len(state.ctor_prototypes.len()).to_be_bytes());
     for &(owner, prototype) in &state.ctor_prototypes {
         v.put(&owner.to_be_bytes());
         v.put(&prototype.to_be_bytes());
     }
-    v.put(&(state.deleted_meta.len() as u32).to_be_bytes());
+    v.put(&wire_len(state.deleted_meta.len()).to_be_bytes());
     for &(owner, id) in &state.deleted_meta {
         v.put(&owner.to_be_bytes());
         v.put(&id.to_be_bytes());
     }
     if let Some(rows) = &state.native_names {
-        v.put(&(rows.len() as u32).to_be_bytes());
+        v.put(&wire_len(rows.len()).to_be_bytes());
         for &(owner, offset) in rows {
             v.put(&owner.to_be_bytes());
             v.put(&offset.to_be_bytes());
@@ -2425,14 +2411,14 @@ pub(crate) fn encode_proxy_state_into<S: Sink>(
     state: &ironhorse_vm::snapshot_api::ProxyStateSnapshot,
     v: &mut S,
 ) {
-    v.put(&(state.proxies.len() as u32).to_be_bytes());
+    v.put(&wire_len(state.proxies.len()).to_be_bytes());
     for row in &state.proxies {
         v.put(&row.owner.to_be_bytes());
         v.put(&row.target.to_be_bytes());
         v.put(&row.handler.to_be_bytes());
         v.put_u8(row.revoked as u8);
     }
-    v.put(&(state.revokers.len() as u32).to_be_bytes());
+    v.put(&wire_len(state.revokers.len()).to_be_bytes());
     for row in &state.revokers {
         v.put(&row.owner.to_be_bytes());
         v.put(&row.proxy.to_be_bytes());
@@ -2502,7 +2488,7 @@ pub(crate) fn encode_accessors_into<S: Sink>(
     rows: &[ironhorse_vm::snapshot_api::AccessorRow],
     v: &mut S,
 ) {
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for row in rows {
         v.put(&row.owner.to_be_bytes());
         v.put(&row.id.to_be_bytes());
@@ -2569,12 +2555,12 @@ pub(crate) fn encode_intl_bound_functions_into<S: Sink>(
     rows: &[ironhorse_vm::snapshot_api::IntlBoundFunctionRow],
     v: &mut S,
 ) {
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for row in rows {
         v.put_u8(row.kind);
         v.put(&row.function.to_be_bytes());
         v.put(&row.owner.to_be_bytes());
-        v.put(&(row.name.len() as u32).to_be_bytes());
+        v.put(&wire_len(row.name.len()).to_be_bytes());
         v.put(row.name.as_bytes());
         v.put(&row.name_chunk.to_be_bytes());
         v.put(&row.arity.to_be_bytes());
@@ -2642,13 +2628,13 @@ pub(crate) fn encode_private_elements_into<S: Sink>(
     state: &ironhorse_vm::snapshot_api::PrivateElementSnapshot,
     v: &mut S,
 ) {
-    v.put(&(state.values.len() as u32).to_be_bytes());
+    v.put(&wire_len(state.values.len()).to_be_bytes());
     for row in &state.values {
         v.put(&row.receiver.to_be_bytes());
         v.put(&row.brand.to_be_bytes());
         crate::slot_codec::put_slot(&row.value, v);
     }
-    v.put(&(state.accessors.len() as u32).to_be_bytes());
+    v.put(&wire_len(state.accessors.len()).to_be_bytes());
     for row in &state.accessors {
         v.put(&row.receiver.to_be_bytes());
         v.put(&row.brand.to_be_bytes());
@@ -2734,12 +2720,12 @@ pub(crate) fn encode_disposable_stacks_into<S: Sink>(
     rows: &[ironhorse_vm::snapshot_api::DisposableStackRow],
     v: &mut S,
 ) {
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for row in rows {
         v.put(&row.owner.to_be_bytes());
         v.put_u8(row.disposed as u8);
         v.put_u8(row.asynchronous as u8);
-        v.put(&(row.records.len() as u32).to_be_bytes());
+        v.put(&wire_len(row.records.len()).to_be_bytes());
         for record in &row.records {
             crate::slot_codec::put_slot(&record.resource, v);
             crate::slot_codec::put_slot(&record.method, v);
@@ -2758,7 +2744,7 @@ pub(crate) fn encode_weak_refs_into<S: Sink>(
     rows: &[ironhorse_vm::snapshot_api::WeakRefRow],
     v: &mut S,
 ) {
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for row in rows {
         v.put(&row.owner.to_be_bytes());
         v.put(&row.target.to_be_bytes());
@@ -2800,12 +2786,12 @@ pub(crate) fn encode_finalization_registries_into<S: Sink>(
     rows: &[ironhorse_vm::snapshot_api::FinalizationRegistryRow],
     v: &mut S,
 ) {
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for row in rows {
         v.put(&row.owner.to_be_bytes());
         crate::slot_codec::put_slot(&row.callback, v);
         v.put_u8(row.changed as u8);
-        v.put(&(row.cells.len() as u32).to_be_bytes());
+        v.put(&wire_len(row.cells.len()).to_be_bytes());
         for cell in &row.cells {
             v.put(&cell.target.to_be_bytes());
             crate::slot_codec::put_slot(&cell.holdings, v);
@@ -2925,13 +2911,13 @@ pub(crate) fn decode_disposable_stacks(
 }
 
 fn encode_frame_slots<S: Sink>(v: &mut S, rows: &[Slot]) {
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for row in rows {
         crate::slot_codec::put_slot(row, v);
     }
 }
 fn encode_frame_id_map<S: Sink>(v: &mut S, rows: &[(u16, u64)]) {
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for &(id, index) in rows {
         v.put(&id.to_be_bytes());
         v.put(&index.to_be_bytes());
@@ -2958,7 +2944,7 @@ fn encode_saved_frame<S: Sink>(
     v.put_u8(row.strict as u8);
     crate::slot_codec::put_slot(&row.result, v);
     encode_frame_slots(v, &row.stack_slice);
-    v.put(&(row.jumps.len() as u32).to_be_bytes());
+    v.put(&wire_len(row.jumps.len()).to_be_bytes());
     for jump in &row.jumps {
         v.put(&jump.target_pc.to_be_bytes());
         if explicit_segments {
@@ -2991,7 +2977,7 @@ pub(crate) fn encode_generators_into<S: Sink>(
     if explicit_segments {
         v.put(&u32::MAX.to_be_bytes());
     }
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for row in rows {
         v.put(&row.owner.to_be_bytes());
         v.put_u8(row.state);
@@ -3171,7 +3157,7 @@ pub(crate) fn encode_async_section_into<S: Sink>(
     if explicit_segments {
         v.put(&u32::MAX.to_be_bytes());
     }
-    v.put(&(instances.len() as u32).to_be_bytes());
+    v.put(&wire_len(instances.len()).to_be_bytes());
     for row in instances {
         v.put(&row.owner.to_be_bytes());
         v.put(&row.result_promise.to_be_bytes());
@@ -3189,7 +3175,7 @@ pub(crate) fn encode_async_section_into<S: Sink>(
             crate::slot_codec::put_slot(&request.resolve, v);
             crate::slot_codec::put_slot(&request.reject, v);
         };
-    v.put(&(generators.len() as u32).to_be_bytes());
+    v.put(&wire_len(generators.len()).to_be_bytes());
     for row in generators {
         v.put(&row.owner.to_be_bytes());
         v.put_u8(row.state);
@@ -3200,7 +3186,7 @@ pub(crate) fn encode_async_section_into<S: Sink>(
                 encode_saved_frame(v, frame, explicit_segments);
             }
         }
-        v.put(&(row.requests.len() as u32).to_be_bytes());
+        v.put(&wire_len(row.requests.len()).to_be_bytes());
         for request in &row.requests {
             encode_request(v, request);
         }
@@ -3220,7 +3206,7 @@ pub(crate) fn encode_async_section_into<S: Sink>(
     if from_async.is_empty() {
         return;
     }
-    v.put(&(from_async.len() as u32).to_be_bytes());
+    v.put(&wire_len(from_async.len()).to_be_bytes());
     for row in from_async {
         crate::slot_codec::put_slot(&row.resolve, v);
         crate::slot_codec::put_slot(&row.reject, v);
@@ -3486,13 +3472,13 @@ pub(crate) fn encode_promise_cluster_into<S: Sink>(
     c: &ironhorse_vm::snapshot_api::PromiseClusterSnapshot,
     v: &mut S,
 ) {
-    v.put(&(c.promises.len() as u32).to_be_bytes());
+    v.put(&wire_len(c.promises.len()).to_be_bytes());
     for row in &c.promises {
         v.put(&row.owner.to_be_bytes());
         v.put_u8(row.state);
         crate::slot_codec::put_slot(&row.result, v);
         v.put_u8(row.ever_handled as u8);
-        v.put(&(row.reactions.len() as u32).to_be_bytes());
+        v.put(&wire_len(row.reactions.len()).to_be_bytes());
         for r in &row.reactions {
             crate::slot_codec::put_slot(&r.on_fulfilled, v);
             crate::slot_codec::put_slot(&r.on_rejected, v);
@@ -3503,7 +3489,7 @@ pub(crate) fn encode_promise_cluster_into<S: Sink>(
             v.put(&r.b.to_be_bytes());
         }
     }
-    v.put(&(c.functions.len() as u32).to_be_bytes());
+    v.put(&wire_len(c.functions.len()).to_be_bytes());
     for row in &c.functions {
         v.put(&row.function.to_be_bytes());
         v.put(&row.promise.to_be_bytes());
@@ -3511,11 +3497,11 @@ pub(crate) fn encode_promise_cluster_into<S: Sink>(
         v.put(&row.guard.to_be_bytes());
         v.put(&row.name_chunk.to_be_bytes());
     }
-    v.put(&(c.guards.len() as u32).to_be_bytes());
+    v.put(&wire_len(c.guards.len()).to_be_bytes());
     for &g in &c.guards {
         v.put_u8(g as u8);
     }
-    v.put(&(c.combinators.len() as u32).to_be_bytes());
+    v.put(&wire_len(c.combinators.len()).to_be_bytes());
     for row in &c.combinators {
         v.put_u8(row.kind);
         crate::slot_codec::put_slot(&row.resolve, v);
@@ -3765,7 +3751,7 @@ pub(crate) fn decode_promise_cluster_payload(
             Payload::Reference(function) if slot.kind == Kind::Reference => functions
                 .binary_search_by_key(&function.0, |row| row.function)
                 .ok()
-                .map(|index| &functions[index]),
+                .and_then(|index| functions.get(index)),
             _ => None,
         };
         matches!((row_for(resolve), row_for(reject)), (Some(a), Some(b))
@@ -3889,7 +3875,7 @@ pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_arguments_brands_into<S: Sink>(owners: &[u32], v: &mut S) {
-    v.put(&(owners.len() as u32).to_be_bytes());
+    v.put(&wire_len(owners.len()).to_be_bytes());
     for o in owners {
         v.put(&o.to_be_bytes());
     }
@@ -3923,19 +3909,19 @@ pub(crate) fn encode_temporal(t: &TemporalImage) -> Vec<u8> {
 }
 
 pub(crate) fn encode_temporal_into<S: Sink>(t: &TemporalImage, v: &mut S) {
-    v.put(&(t.instants.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.instants.len()).to_be_bytes());
     for (owner, ns) in &t.instants {
         v.put(&owner.to_be_bytes());
         v.put(&ns.to_be_bytes());
     }
-    v.put(&(t.durations.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.durations.len()).to_be_bytes());
     for (owner, f) in &t.durations {
         v.put(&owner.to_be_bytes());
         for x in f {
             v.put(&x.to_be_bytes());
         }
     }
-    v.put(&(t.plains.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.plains.len()).to_be_bytes());
     for (owner, kind, year, f) in &t.plains {
         v.put(&owner.to_be_bytes());
         v.put_u8(*kind);
@@ -3944,12 +3930,12 @@ pub(crate) fn encode_temporal_into<S: Sink>(t: &TemporalImage, v: &mut S) {
             v.put(&x.to_be_bytes());
         }
     }
-    v.put(&(t.zoneds.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.zoneds.len()).to_be_bytes());
     for (owner, ns, tz, off) in &t.zoneds {
         v.put(&owner.to_be_bytes());
         v.put(&ns.to_be_bytes());
         let tzb = tz.as_bytes();
-        v.put(&(tzb.len() as u32).to_be_bytes());
+        v.put(&wire_len(tzb.len()).to_be_bytes());
         v.put(tzb);
         v.put(&off.to_be_bytes());
     }
@@ -4063,7 +4049,7 @@ pub(crate) fn encode_intl(t: &IntlTables) -> Vec<u8> {
 pub(crate) fn encode_intl_into<S: Sink>(t: &IntlTables, v: &mut S) {
     fn s<S: Sink>(v: &mut S, s: &str) {
         let b = s.as_bytes();
-        v.put(&(b.len() as u32).to_be_bytes());
+        v.put(&wire_len(b.len()).to_be_bytes());
         v.put(b);
     }
     fn os<S: Sink>(v: &mut S, o: &Option<String>) {
@@ -4084,24 +4070,24 @@ pub(crate) fn encode_intl_into<S: Sink>(t: &IntlTables, v: &mut S) {
             None => v.put_u8(0),
         }
     }
-    v.put(&(t.locales.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.locales.len()).to_be_bytes());
     for (owner, r) in &t.locales {
         v.put(&owner.to_be_bytes());
         s(v, &r.tag);
         s(v, &r.language);
         os(v, &r.script);
         os(v, &r.region);
-        v.put(&(r.variants.len() as u32).to_be_bytes());
+        v.put(&wire_len(r.variants.len()).to_be_bytes());
         for x in &r.variants {
             s(v, x);
         }
-        v.put(&(r.unicode.len() as u32).to_be_bytes());
+        v.put(&wire_len(r.unicode.len()).to_be_bytes());
         for (k, val) in &r.unicode {
             s(v, k);
             s(v, val);
         }
     }
-    v.put(&(t.collators.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.collators.len()).to_be_bytes());
     for (owner, r) in &t.collators {
         v.put(&owner.to_be_bytes());
         s(v, &r.locale);
@@ -4112,14 +4098,14 @@ pub(crate) fn encode_intl_into<S: Sink>(t: &IntlTables, v: &mut S) {
         s(v, &r.case_first);
         v.put_u8(r.ignore_punctuation as u8);
     }
-    v.put(&(t.list_formats.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.list_formats.len()).to_be_bytes());
     for (owner, r) in &t.list_formats {
         v.put(&owner.to_be_bytes());
         s(v, &r.locale);
         s(v, &r.kind);
         s(v, &r.style);
     }
-    v.put(&(t.plural_rules.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.plural_rules.len()).to_be_bytes());
     for (owner, r) in &t.plural_rules {
         v.put(&owner.to_be_bytes());
         s(v, &r.locale);
@@ -4136,7 +4122,7 @@ pub(crate) fn encode_intl_into<S: Sink>(t: &IntlTables, v: &mut S) {
         v.put(&r.rounding_increment.to_be_bytes());
         s(v, &r.trailing_zero_display);
     }
-    v.put(&(t.number_formats.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.number_formats.len()).to_be_bytes());
     for (owner, r) in &t.number_formats {
         v.put(&owner.to_be_bytes());
         s(v, &r.locale);
@@ -4162,34 +4148,34 @@ pub(crate) fn encode_intl_into<S: Sink>(t: &IntlTables, v: &mut S) {
         v.put(&r.rounding_increment.to_be_bytes());
         s(v, &r.trailing_zero_display);
     }
-    v.put(&(t.segmenters.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.segmenters.len()).to_be_bytes());
     for (owner, r) in &t.segmenters {
         v.put(&owner.to_be_bytes());
         s(v, &r.locale);
         s(v, &r.granularity);
     }
-    v.put(&(t.segments.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.segments.len()).to_be_bytes());
     for (owner, r) in &t.segments {
         v.put(&owner.to_be_bytes());
-        v.put(&(r.units.len() as u32).to_be_bytes());
+        v.put(&wire_len(r.units.len()).to_be_bytes());
         for u in &r.units {
             v.put(&u.to_be_bytes());
         }
-        v.put(&(r.segments.len() as u32).to_be_bytes());
+        v.put(&wire_len(r.segments.len()).to_be_bytes());
         for &(start, end, word) in &r.segments {
-            v.put(&(start as u32).to_be_bytes());
-            v.put(&(end as u32).to_be_bytes());
+            v.put(&wire_len(start).to_be_bytes());
+            v.put(&wire_len(end).to_be_bytes());
             v.put_u8(word as u8);
         }
         s(v, &r.granularity);
     }
-    v.put(&(t.segment_iterators.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.segment_iterators.len()).to_be_bytes());
     for (owner, r) in &t.segment_iterators {
         v.put(&owner.to_be_bytes());
         v.put(&r.segments_inst.0.to_be_bytes());
-        v.put(&(r.pos as u32).to_be_bytes());
+        v.put(&wire_len(r.pos).to_be_bytes());
     }
-    v.put(&(t.date_time_formats.len() as u32).to_be_bytes());
+    v.put(&wire_len(t.date_time_formats.len()).to_be_bytes());
     for (owner, r) in &t.date_time_formats {
         v.put(&owner.to_be_bytes());
         s(v, &r.locale);
@@ -4198,7 +4184,7 @@ pub(crate) fn encode_intl_into<S: Sink>(t: &IntlTables, v: &mut S) {
         s(v, &r.time_zone);
         v.put(&r.offset_minutes.to_be_bytes());
         os(v, &r.hour_cycle);
-        v.put(&(r.components.len() as u32).to_be_bytes());
+        v.put(&wire_len(r.components.len()).to_be_bytes());
         for (k, val) in &r.components {
             s(v, k);
             s(v, val);
@@ -4502,7 +4488,7 @@ pub(crate) fn encode_iterators(rows: &[IteratorRow]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_iterators_into<S: Sink>(rows: &[IteratorRow], v: &mut S) {
-    v.put(&(rows.len() as u32).to_be_bytes());
+    v.put(&wire_len(rows.len()).to_be_bytes());
     for r in rows {
         v.put(&r.owner.to_be_bytes());
         v.put_u8(r.kind);
@@ -4510,12 +4496,12 @@ pub(crate) fn encode_iterators_into<S: Sink>(rows: &[IteratorRow], v: &mut S) {
         v.put(&r.index.to_be_bytes());
         v.put_u8(r.done as u8);
         v.put(&r.result.to_be_bytes());
-        v.put(&(r.enum_keys.len() as u32).to_be_bytes());
+        v.put(&wire_len(r.enum_keys.len()).to_be_bytes());
         for &(id, idx) in &r.enum_keys {
             v.put(&id.to_be_bytes());
             v.put(&idx.to_be_bytes());
         }
-        v.put(&(r.str_bytes.len() as u32).to_be_bytes());
+        v.put(&wire_len(r.str_bytes.len()).to_be_bytes());
         v.put(&r.str_bytes);
     }
 }
@@ -4809,7 +4795,13 @@ const CHUNK_HEADER: usize = 4;
 /// minted ids with those operands, but that is an engine hazard in raw
 /// mode, not a persistence one, and it is not what this gate is about.)
 pub fn runtime_intern_floor(program_names: usize) -> Option<u16> {
-    (program_names > 0).then(|| (program_names as u16).saturating_add(1))
+    // Saturating, not truncating: a table past `u16::MAX` names (only
+    // crafted bytes carry one) addresses every id, so the floor is the top.
+    (program_names > 0).then(|| {
+        u16::try_from(program_names)
+            .unwrap_or(u16::MAX)
+            .saturating_add(1)
+    })
 }
 
 /// The first UNREGISTERED property id stored anywhere in `slots` — an
@@ -4846,9 +4838,9 @@ pub(crate) fn check_buffer_chunk_lengths(
         let start = buffer.data as usize;
         let header = start
             .checked_sub(CHUNK_HEADER)
-            .and_then(|offset| chunks.get(offset..start))
+            .and_then(|offset| chunk_at::<CHUNK_HEADER>(chunks, offset))
             .ok_or(SnapshotError::Corrupt("buffer chunk header out of bounds"))?;
-        let length = u32::from_le_bytes(header.try_into().unwrap()) as usize;
+        let length = u32::from_le_bytes(*header) as usize;
         if length > chunks.len().saturating_sub(start)
             || if buffer.flags & 1 != 0 {
                 buffer.length != 0
@@ -4937,8 +4929,14 @@ fn generator_body_starts(
         ));
     };
     let mut set = std::collections::BTreeSet::new();
-    let mut pc = body_start as usize;
-    while pc < body_end as usize {
+    // The caller's function-state gate bounded the body inside `code`, so
+    // both ends fit `usize`; an end that does not is malformed all the same.
+    let (Ok(mut pc), Ok(end)) = (usize::try_from(body_start), usize::try_from(body_end)) else {
+        return Err(SnapshotError::Corrupt(
+            "generator frame: malformed body bytecode",
+        ));
+    };
+    while pc < end {
         let Some(len) = ironhorse_vm::instruction_len(code, pc) else {
             return Err(SnapshotError::Corrupt(
                 "generator frame: malformed body bytecode",
@@ -4971,7 +4969,10 @@ pub(crate) fn check_machine_image_bounds(image: &MachineImage) -> Result<(), Sna
         &image.bounds_tables(),
         image.names.len(),
         &image.symbols,
-        image.slots.len() as u32,
+        // Saturating is exact here: an arena of `u32::MAX` or more records
+        // admits every non-NULL `u32` index, which is what a saturated
+        // bound admits too.
+        wire_len(image.slots.len()),
         image.chunks.len(),
         &image.slot_free,
     )
@@ -5126,30 +5127,29 @@ pub(crate) fn encode_stack(stack: &[Slot]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_stack_into<S: Sink>(stack: &[Slot], v: &mut S) {
-    v.put(&(stack.len() as u32).to_be_bytes());
+    v.put(&wire_len(stack.len()).to_be_bytes());
     for slot in stack {
         crate::slot_codec::put_slot(slot, v);
     }
 }
 
 pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
-    if p.len() < 4 {
-        return Err(SnapshotError::Corrupt("STAC header"));
-    }
-    let count = u32::from_be_bytes([p[0], p[1], p[2], p[3]]) as usize;
+    let (count, records) = p
+        .split_first_chunk::<4>()
+        .ok_or(SnapshotError::Corrupt("STAC header"))?;
+    let count = u32::from_be_bytes(*count);
     // Sized in u64 for the same reason as `decode_heap`'s twin gate: in
     // usize the product can wrap on a 32-bit host to a small `want` that
     // satisfies the truncation gate below, silently short-decoding the
     // stack. Every target refuses an oversized count with the same message.
-    let want = count as u64 * SLOT_RECORD_BYTES as u64;
-    if ((p.len() - 4) as u64) < want {
+    let want = u64::from(count) * SLOT_RECORD_BYTES as u64;
+    if (records.len() as u64) < want {
         return Err(SnapshotError::Corrupt("STAC records truncated"));
     }
-    let want = want as usize;
-    if p.len() - 4 != want {
+    if records.len() as u64 != want {
         return Err(SnapshotError::Corrupt("STAC trailing bytes"));
     }
-    decode_slots(&p[4..4 + want]).map_err(|_| SnapshotError::Corrupt("STAC slot record"))
+    decode_slots(records).map_err(|_| SnapshotError::Corrupt("STAC slot record"))
 }
 
 /// Serialize a machine image into an `XS_M` atom container. Atoms are
@@ -5167,6 +5167,11 @@ pub fn write_machine(image: &GatedImage) -> Result<Vec<u8>, SnapshotError> {
 /// [`write_machine`] with a [`GatedImage`].
 #[cfg(any(test, feature = "unchecked-tooling"))]
 pub fn write_machine_unchecked(image: &MachineImage) -> Vec<u8> {
+    #[expect(
+        clippy::expect_used,
+        reason = "fuzz/test tooling only (never a read path): an image past the u32 atom \
+                  domain is a harness bug, and this public signature returns plain bytes"
+    )]
     encode_machine(image).expect("tooling image fits the atom container")
 }
 
@@ -5218,12 +5223,8 @@ fn encode_machine(image: &MachineImage) -> Result<Vec<u8>, SnapshotError> {
         // This only detects the format requirement; malformed block lengths
         // retain the existing deferred-validation policy.
         let mut cursor = 0usize;
-        while let Some(header) = image
-            .chunks
-            .get(cursor..)
-            .and_then(|tail| tail.get(..CHUNK_HEADER))
-        {
-            let length = u32::from_le_bytes(header.try_into().unwrap());
+        while let Some(header) = chunk_at::<CHUNK_HEADER>(&image.chunks, cursor) {
+            let length = u32::from_le_bytes(*header);
             if length == u32::MAX {
                 version.format_version = 17;
                 break;
@@ -5379,18 +5380,14 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
     // SIGN gates so a newer-format container — the one honest source
     // of tags this reader does not know — refuses by VERSION, and the
     // grammar refusal is reserved for what can only be crafted.
-    let mut order_cursor = 0usize;
+    // `any` consumes the roster through the matching tag, so the next atom
+    // searches only the tags after it.
+    let mut remaining = crate::format::CANONICAL_ATOM_ORDER.iter();
     for atom in r.atoms() {
-        match crate::format::CANONICAL_ATOM_ORDER[order_cursor..]
-            .iter()
-            .position(|tag| *tag == atom.tag)
-        {
-            Some(advance) => order_cursor += advance + 1,
-            None => {
-                return Err(SnapshotError::Corrupt(
-                    "container atoms out of canonical order or unknown",
-                ))
-            }
+        if !remaining.any(|tag| *tag == atom.tag) {
+            return Err(SnapshotError::Corrupt(
+                "container atoms out of canonical order or unknown",
+            ));
         }
     }
 
@@ -6613,6 +6610,23 @@ mod tests {
         let mut oob = cursor(1, 0);
         oob.result = 9;
         assert!(check(&[oob], std::slice::from_ref(&coll), 0).is_err());
+    }
+
+    /// Regression: `runtime_intern_floor` cast the name count with `as u16`,
+    /// so a table of `65536` names wrapped to a floor of 1 (and `65536 + k`
+    /// to `k + 1`). The read path refuses such a table earlier (the symbol
+    /// counter must clear it), but the public helper and the live streaming
+    /// writer took any count; past the id space the floor now saturates.
+    #[test]
+    fn runtime_intern_floor_saturates_past_the_u16_id_space() {
+        assert_eq!(runtime_intern_floor(0), None);
+        assert_eq!(runtime_intern_floor(3), Some(4));
+        assert_eq!(
+            runtime_intern_floor(usize::from(u16::MAX) - 1),
+            Some(u16::MAX)
+        );
+        assert_eq!(runtime_intern_floor(1 << 16), Some(u16::MAX));
+        assert_eq!(runtime_intern_floor((1 << 16) + 5), Some(u16::MAX));
     }
 
     #[test]
@@ -8073,7 +8087,7 @@ mod tests {
         let arm = |free: &[u32], live: u32, slot_count: u32| {
             let mut heap = Vec::new();
             heap.extend_from_slice(&slot_count.to_be_bytes());
-            heap.extend_from_slice(&(free.len() as u32).to_be_bytes());
+            heap.extend_from_slice(&wire_len(free.len()).to_be_bytes());
             heap.extend_from_slice(&live.to_be_bytes());
             for f in free {
                 heap.extend_from_slice(&f.to_be_bytes());

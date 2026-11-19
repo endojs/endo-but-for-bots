@@ -257,7 +257,19 @@ pub const IRONHORSE_FORMAT_VERSION_MIN_READ: u32 = 1;
 /// image is a fixed [`crate::slot_codec::SLOT_RECORD_BYTES`]-byte record
 /// (its own encoding, not XS's 32-byte in-memory `txSlot`), recorded so a
 /// reader can reject a snapshot whose record width it cannot decode.
-pub const SLOT_WIDTH_TAG: u8 = crate::slot_codec::SLOT_RECORD_BYTES as u8;
+pub const SLOT_WIDTH_TAG: u8 = {
+    let width = crate::slot_codec::SLOT_RECORD_BYTES;
+    assert!(
+        width <= u8::MAX as usize,
+        "slot record width must fit its u8 tag"
+    );
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the const assertion above proves the width fits a u8"
+    )]
+    let tag = width as u8;
+    tag
+};
 
 /// Endianness marker (multi-byte integers in the atom grammar are always
 /// big-endian, as in `xsSnapshot.c`; the byte records this explicitly so a
@@ -303,12 +315,17 @@ impl Version {
         if payload.len() != 10 {
             return Err(VersionError::TrailingBytes);
         }
-        if payload[0..4] != IRONHORSE_MAGIC {
-            let mut m = [0u8; 4];
-            m.copy_from_slice(&payload[0..4]);
-            return Err(VersionError::NotIronhorse(m));
+        // Exactly ten bytes (checked above): magic, version, width, endian.
+        let Ok([m0, m1, m2, m3, v0, v1, v2, v3, slot_width, endian]) =
+            <[u8; 10]>::try_from(payload)
+        else {
+            return Err(VersionError::Truncated);
+        };
+        let magic = [m0, m1, m2, m3];
+        if magic != IRONHORSE_MAGIC {
+            return Err(VersionError::NotIronhorse(magic));
         }
-        let format_version = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+        let format_version = u32::from_be_bytes([v0, v1, v2, v3]);
         // The read RANGE, not the write stamp: an older readable
         // version decodes (its atoms are a subset with the same
         // encodings), while a NEWER one is refused — its atoms may
@@ -317,14 +334,12 @@ impl Version {
         {
             return Err(VersionError::UnsupportedVersion(format_version));
         }
-        let slot_width = payload[8];
         if slot_width != SLOT_WIDTH_TAG {
             return Err(VersionError::SlotWidthMismatch {
                 expected: SLOT_WIDTH_TAG,
                 found: slot_width,
             });
         }
-        let endian = payload[9];
         if endian != ENDIAN_BIG {
             return Err(VersionError::UnsupportedEndian(endian));
         }
@@ -428,8 +443,11 @@ impl Signature {
 
     pub fn decode(payload: &[u8]) -> Result<Signature, SignatureError> {
         let (boot, host) = if payload.starts_with(b"IHB1") {
-            let digest = payload.get(4..36).ok_or(SignatureError::Truncated)?;
-            (Some(digest.try_into().unwrap()), &payload[36..])
+            let (digest, host) = payload
+                .get(4..)
+                .and_then(<[u8]>::split_first_chunk::<32>)
+                .ok_or(SignatureError::Truncated)?;
+            (Some(*digest), host)
         } else {
             (None, payload)
         };
