@@ -40,6 +40,7 @@ import { makeSealKeys } from './secrets/seal.js';
 import { makeWrappingKey } from './secrets/wrapping-key.js';
 import { makeSecretsOps } from './secrets/manager.js';
 import { makeGatewayService } from './gateway/index.js';
+import { gatewayExtension as speechExtension } from './gateway/extensions/speech.js';
 // eslint-disable-next-line import/no-relative-packages -- guest/ is its own private package
 import { GATEWAY_KEY } from '../../../guest/lib/interfaces-m3.js';
 import { makeSubscriptions } from './subscriptions/index.js';
@@ -450,6 +451,15 @@ export const makeAgentHostImpl = ({
       const { replaceLocal, publicKeyLocal } = secrets();
       return harden({ replaceLocal, publicKey: publicKeyLocal });
     },
+    // The key reader goes to the speech extension only, picked by its
+    // object (m11-interfaces.md D-M11-22): API backends read keys the same
+    // way (`readKeyOf`).
+    extensionPowers: [
+      {
+        extension: speechExtension,
+        powers: { readGrant: grant => secrets().readKey(grant) },
+      },
+    ],
   });
   const { bind, unbind } = makeAttach({
     ops,
