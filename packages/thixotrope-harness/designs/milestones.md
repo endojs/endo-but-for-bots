@@ -30,7 +30,7 @@ M1a" at the end of this file.
   - **Directory registries** (a milestone adds its own new files; nobody edits a list; the collector
     is the only shared code and belongs to the milestone in brackets; `m3-interfaces.md` 11):
     `AH/gateway/extensions/` [M3 W3.2] (one `<milestone>-<name>.js` per lane, loaded in name order by
-    `AH/gateway/extensions.js`: M4 `m4-secrets.js`, M11 `m11-audio.js`), `H/ui/src/<dir>/feature.js`
+    `AH/gateway/extensions.js`: M4 `m4-secrets.js`; M11's is `speech.js` by review rule 1), `H/ui/src/<dir>/feature.js`
     [M3 W3.4] (one directory per lane feature group, collected in directory-name order by
     `H/ui/build.mjs` and `H/ui/src/features.js`), and `H/test/browser/`. These replace the hook
     tables `AH/gateway/routes.js` and `H/ui/src/features.js` this list named before M3's contract.
@@ -41,7 +41,8 @@ M1a" at the end of this file.
   - **Provisioning seam** [M2-T1, `scripts/provision-steps.js` header]: a later milestone's
     provisioning step is a file `H/scripts/provision-steps/<two digits>-<name>.js` exporting
     `steps` (a `ProvisionStep[]`), run after the table in file-name order (M3 `30-gateway.js`,
-    M4 `40-subscriptions.js`, M5 `50-m5-fixtures.js`; later milestones take further numbers);
+    M4 `40-subscriptions.js`, M5 `50-m5-fixtures.js`, M6 `60-environments.js`, M11 `70-voice.js`;
+    later milestones take further numbers);
     `makeProvision` forwards every option it does not use itself to every step unchanged, and a step
     that is not asked for answers `{ skipped: true }`; `has` is exported for idempotence checks.
   - **PM-merged files**: `H/package.json`, `H/perf/_harness.mjs`, `H/JOURNAL.md`. Builders append;
@@ -114,12 +115,29 @@ one that names `H/test/*/m6-*` or an `interfaces-m6.js`).
 
 ```
 M0 -> M1a -> M1b -> M2 -> { M3 | M4 | M5 }      (M3 W3.0 merged before any M4/M5 UI unit starts)
-M5 -> { M6 | M8 | M9 } ;  { M3, M4 } -> M11 (parallel with M6, M8, M9)
+M5 -> cleanup step 3 -> WX.1 -> { M6 | M8 | M9 | M11 }
+     -> merge M11 + fold -> merge M6 + W6.8 -> merge M8 + fold -> merge M9 + W9.F -> WX.F
 M6 -> { M7 | M10 } ;  { M3, M4, M5 } -> M12 (parallel with M7, M10) ;  everything -> M13
 ```
 
 Parallel groups: **{M3, M4, M5}**, then **{M6, M8, M9, M11}**, then **{M7, M10, M12}**. The ownership
 check at the end lists every file and hook point each group touches.
+
+**The group {M6, M8, M9, M11}** (contracts settled; X-17). Before the lanes: cleanup step 3
+merged, then the PM's cross-lane seam unit WX.1 (every shared guard entry, the part-API typedefs,
+the part and tool order, the call table and label-lookup exports, one vocabulary re-pin; see
+"The group {M6, M8, M9, M11}" above M6), then the owner's ruling on the session program (G-1) and
+the PM's per-lane caps before W6.4, W8.1, W8.4 and W9.8. The four lanes then run in parallel, each
+in its own worktree. They merge one at a time, in this order, each merge followed by its own fold
+(review rule 2) before the next lane rebases:
+
+| step | merge | hand-merged shared files (seams) | fold right after it |
+|---|---|---|---|
+| 1 | M11 (no `guest/session/` file) | `guest/factory/factory.js` (H2), `root.js` and `main.js` (H2b), `GW/server.js` (H5), `GW/index.js`, `extensions.js`, `protocol.js` (H6), `AH/index.js` (H7), `scripts/test-integration.mjs` (H8), `perf/_pass.mjs` (H9), `UI/src/controller/index.js` (H10) | F-1..F-11 (F-7 waits for M6 or moves to WX.F) |
+| 2 | M6 | `runtime-parts.js` (R-1), `turn.js` `claimNext` (R-2), `session.js` (R-3), `queue.js` (R-4), `export.js` (X-E), `tool-table.js` (T-1), `label-seeds.js` (L-1), `preset-templates.js` (F-1), `services.js` (F-2), `factory.js` (F-3, F-4 after M11's H2), `root.js` (F-5 after H2b), `prompt-sections.js` (P-1), `AH/composer.js` (C-1), `package.json` (K-1), `scripts/test-integration.mjs` (K-2) | W6.8 (section 14 of its contract; X-1 alignment after M8) |
+| 3 | M8 | `turn.js` (S-5), `session.js` (S-6), `runtime-parts.js` (S-7, after `environment`), `turn-import.js` (S-8), `archive.js` (S-9), `tool-table.js` (S-10b, after the shell entries), `tool-args.js` (S-10d), `AH/index.js` (S-14, S-18 after H7), adapter seams S-10..S-20 | items 1-3 and 6 of its section 18 |
+| 4 | M9 | `runtime-parts.js` (S1, after `compaction`), `packages.js` (S3), `tool-args.js` (S4, after S-10d), `session.js` (S5), `tool-table.js` (S6, last), `export.js` (S7), `label-seeds.js` (S8, `user` last), `factory.js` (F1, F2 in the object M6's F-3 made, F3, F5 first in M6's hooks array), `services.js` (F4, after F-2), `prompt-sections.js` (F7), `AH/blobs.js` (A1), `guest/exec/inspect.js` (X1) | W9.F (section 12 of its contract) |
+| 5 | - | - | WX.F: vocabulary and session bundle measured once against the ruled limit; the four cross-lane tests; M8 fold items 4 and 5; regression and perf lists; `architecture.md`; the ownership-check row below |
 
 **Core requests across lanes.** CC-051 (M3, `m3-interfaces.md` 13: per-entry diffs of a hub session
 row, C-2's rest) and CC-060 (M4, `m4-interfaces.md` 19: the alleged interface name stored once per
@@ -1437,65 +1455,221 @@ drops most of Endo's name plumbing.
 
 ---
 
+## The group {M6, M8, M9, M11}: shared units, owner questions, core requests
+
+**Status: contracts settled, not built** (2026-11-18). The four contracts are the reference:
+`m6-interfaces.md`, `m8-interfaces.md`, `m9-interfaces.md`, `m11-interfaces.md`, settled against
+the cross-check WX.0 (journal J-1410..J-1417, issues X-01..X-17) and against cleanup step 3
+(`arch-review/step3-plan.md` and the step-3 code as built in the cleanup lane). No seam is
+provisional. Each milestone section below keeps only the goal, the P and R numbers, its
+dependencies, what it owns and its three tables, condensed: where a section and its contract
+disagree, the contract wins. Paths in these sections: `EV/` = `H/resources/environments/`,
+`EVI/` = `EV/impl/`, `GW/` = `AH/gateway/`, `UI/` = `H/ui/`; other paths are relative to `H/`.
+Test files in the tables are named without their directory and `.test.js` suffix where the
+column says which kind they are.
+
+**Two units outside the lanes.**
+
+- **WX.1, the cross-lane seam unit** (the PM's; one agent, after step 3 merges, before any lane
+  unit). It applies, in one commit, every lane's entries in shared guard modules and part-API
+  typedefs, and rebases the two tests those entries would break: M6 section 15 (15.1 `Session`
+  methods, `ExecutionState`, `SessionServices` fields, `SessionExportPage.execution`; 15.2
+  `HarnessSettings.environments`, `runnerRequired`, `VatEvent` `execution`; 15.3 `PartHooks.admit`
+  with the `RuntimeHooks.admit` fan-out; 15.4 the `guards/environments.js` exclusion); M8 G-1..G-5,
+  T-1, T-2, S-10c; M9 S2, S2b, S9, S9b, S10, F6, V1, G1, L1, C1; M11 appendix A (H1), H3, H4. It
+  owns `guest/lib/guards/{session,factory,base}.js`, `guest/lib/interfaces.js`,
+  `guest/session/records.js`, `guest/session/turn-types.js`, `guest/session/runtime-parts.js`
+  (typedefs, `combineHooks`, the part-order comment), `guest/session/turn.js` (`claimNext`: M9 S2
+  only), `guest/session/tools/objects.js` (the `readArgs` and label-lookup export),
+  `guest/session/tools/exec.js` (the per-part call table export), `guest/lib/vocabulary-tables.js`,
+  `test/unit/guards-split.test.js` with `test/fixtures/guard-fold-map.json` (an `added` list
+  replaces the before-split check) and `test/adapter/gateway-vocabulary-tables.test.js` (one
+  re-pin, plus the not-browser-sendable exclusion rule). It fixes the part order `powers,
+  inspector, grants, exec, packages, environment, compaction, inbox, subagents` and the tool order
+  shell entries, `viewImage`, mail, requests, subagents. No lane unit edits a line WX.1 makes; a
+  lane that finds WX.1 missing stops.
+- **WX.F, the group fold** (after the four merges and their own folds). It measures the gateway
+  vocabulary and the session bundle once against the ruled limit
+  (`test/unit/m1a-session-program.test.js`), owns the four cross-lane acceptance tests
+  (`test/integration/voice-preset.test.js`: R3-13 complete `voice` preset and Talk without a
+  runner; `test/integration/view-image-workspace.test.js`: R3-30, M8 acceptance 19;
+  `test/integration/subagents-environment.test.js`: R4-70; `test/integration/mail-stopped-session.test.js`:
+  D-M6-20, D-M9-5), M8's fold items 4 and 5, M11's F-7 if M6 had not merged when M11's fold
+  ended, the regression and perf lists, `architecture.md`, and the ownership-check row of this
+  group below (rewritten from what was built).
+
+**Merge order** (X-17): step 3, WX.1, the four lanes in parallel, then merge **M11** (no
+`guest/session/` file) and its fold F-1..F-11; **M6** and W6.8 (X-1 exists for M8; the `voice`
+preset's M6 half); **M8** and its fold items 1-3 and 6; **M9** (the most runner and factory seams;
+its delete hook stands first in the shared array) and W9.F; then WX.F. The shared files each merge
+touches are in "Ownership check for parallel groups".
+
+**Session program caps.** 212,483 of the 240,000-byte `sessionProgramBytes` are used on the
+step-3 tree (27,517 left, J-1410). Asked: M6 9,000 (D-M6-18), M8 9,000 (D-M8-19, can give back
+about 400), M9 32,768 (D-M9-19, derived from its measured guards and peer-sized modules), M11 0
+(D-M11-24: no session-side code). Sum 50,768: 263,251 bytes, over the limit. W6.4, W8.1, W8.4 and
+W9.8 wait for the owner's ruling (question G-1) and the PM's per-lane caps, which sum to the ruled
+limit.
+
+**Owner questions of the group** (the default is what the lanes build until the owner rules).
+
+| id | question | default |
+|---|---|---|
+| G-1 (M6 O-12, M8 Q-7, M9 O-M9-8; X-01) | The session program limit cannot hold the four lanes. Raise `sessionProgramBytes` (cold create about 20 ms per KB, J-10192, hidden by the spare pool) or cut features? | raise to 270,336 (about +1.2 s of cold create); PM caps M6 9,000, M8 9,000, M9 32,768, M11 0; ruled before W6.4, W8.1, W8.4, W9.8 |
+| G-2 (M6 O-11, M8 Q-8; X-06) | Build the data-reference spike's step 1 now as the one adapter-to-adapter data path for M6 and M8? | later: M6 W6.2 builds `openImage` with adapter-side pages (X-1), both lanes accept the hub-log cost, CC-100 asked once |
+| G-3 (M6 O-13, M11 O-11; X-12) | Talk on a state with no environment runner, where the built-in `voice` preset needs a shell | refuse with `runnerRequired`; the Voice panel offers another shortcut preset |
+| M6 O-1 | One `environments` resource instead of `workspace` and `containers`? | one (D-M6-1) |
+| M6 O-2 | May a served state use the `fake` runtime (unconfined host processes)? | yes when configured so; `status()` and `inspectShell` say `fake`; provisioning never picks it unasked |
+| M6 O-3 | Delete home with the session (R3-46: until admin disposal)? | delete with the session |
+| M6 O-4 | Container limits (W-12; R7-39 found none) | 4 GiB memory, 1,024 processes, 2 CPUs, configurable |
+| M6 O-5 | Default command timeout | 24 h (R3-47) |
+| M6 O-6 | A failed environment stop: quarantine (R4-81) or retry (D-16)? | retry at the next adapter start and before the environment runs again |
+| M6 O-7 | Git surface: linked worktrees, tree views, commit stream, `show`, `revParse`, `detach`, `checkoutConflict` | not in M6; backlog |
+| M6 O-8 | Where the resource's guard table lives | `guest/lib/guards/environments.js`, excluded from the gateway vocabulary as not browser-sendable |
+| M6 O-9 | Export and import of a session with an environment | workspace and home not exported (an import gets a fresh workspace); the execution state is, and an imported stopped session stays stopped |
+| M6 O-10 | Fixed texts | Fae's words where they exist; five reworded texts as in contract section 15 |
+| M8 Q-1 | Pin the compaction boundary at an unknown tool outcome only while its turn is kept and unresolved (lal refuses to compact at all)? | pin while kept and unresolved |
+| M8 Q-2 | Send at most the newest 20 images natively per request? | 20 |
+| M8 Q-3 | Backfill a window for Anthropic API sessions created before M8? | leave them; new sessions get 200,000 |
+| M8 Q-4 | A plan or summary that cannot reduce: skip or fail the turn? | skip |
+| M8 Q-5 | Image sources speak the harness's page read only, not Endo's `streamBase64`? | page read only |
+| M8 Q-6 | One Anthropic window for every model, or a per-model table? | one value, 200,000 |
+| M9 O-M9-1 | Own mail rather than reusing or wrapping core mail (AR-SYN-15)? | own mail; P-62 interop later through a bridge |
+| M9 O-M9-2 | Mail cut off by shutdown: handled again (R4-59) or at most one turn per message (R4-57)? | at most one turn; the sender gets `Error: ...` |
+| M9 O-M9-3 | `definition` messages and `endow` (R3-218) | not built |
+| M9 O-M9-4 | 65,536 retained closed asks (R4-102) | a 4,096-postmark ring and the transcript |
+| M9 O-M9-5 | Inbox bound (G-13) | 256 messages per session, refuse when full |
+| M9 O-M9-6 | Mail waiting across a restart | dormant until the session next wakes (D-5) |
+| M9 O-M9-7 | The operator's mail UI | M12's Home view |
+| M9 O-M9-9 | Should `adopt` reach a subagent's reply attachments? | reported only |
+| M9 O-M9-10 | `dismiss` as a model tool (not in A.3) | offered, for `kept` messages only |
+| M9 O-M9-11 | A child's `systemPrompt` inline (8,192 bytes) where R3-39 allows 1 Mi characters | inline; large input goes in the task |
+| M9 O-M9-12 | Should an M13 upgrade re-bind imported mail through postmarks? | imported mail is read-only in M9; M13 decides |
+| M11 O-1 | Build the `openai-audio` kind now, with partials by re-transcription? | build; partials on every 1.5 s, interval in the settings |
+| M11 O-2 | Speak only voice-started sessions (R5-52 says every UI session)? | voice-started only |
+| M11 O-3 | Replay per turn or per message? | per turn |
+| M11 O-4 | Harness downloads of Piper voices or Moonshine weights (R8-43)? | none; the operator and `uv` do it |
+| M11 O-5 | Audio on its own binary `/audio` route instead of CapTP? | binary route |
+| M11 O-6 | A warm spare Piper process (R5-66 improved) | on |
+| M11 O-7 | Re-speak a running turn after a reconnect? | no; the page offers Replay |
+| M11 O-8 | A launch interrupted inside the creation window may leave one extra session (K11-4) | accept |
+| M11 O-9 | Where the voice-shortcut preset is chosen | the Voice panel |
+| M11 O-10 | Speech keys from API-key `Secret`s only | API keys only |
+| M11 O-12 | Start speech engines at first use in each incarnation instead of at every start (R8-29 departure) | first use |
+
+**Core requests of the group** (none is reserved unbuilt work for a lane: every one has a harness
+workaround the lanes build).
+
+| id | asked by | change | same change as | status |
+|---|---|---|---|---|
+| CC-090 | M6 | a service shape for native resources: the manager kit's `provideAdapter()`, `installNative(name, directory, config)` with a passable config record, the launcher passing `{ stateDirectory }`; workaround `resources/native-attach.js`, configuration through the service spec | AR-SYN-28, core step 4 (with its `WORKSPACE_VERSION` bump); CC-091 merged into it | requested, not built |
+| CC-091 | M6 (draft) | install-time configuration | merged into CC-090; unused | - |
+| CC-092 | M6, used by M11 K11-1 | name each adapter process (installation, pid) in `status()`; workaround the shared helper `test/integration/_adapter-processes.js` | - | requested, not built |
+| CC-100 | M8 and M6 (one row) | frames between two transient adapter sessions are not persisted in `hub-log.jsonl` (+2.9-3.0 MB per MiB measured); workaround bounded base64 pages and log compaction | a policy of core step 3's persisted session kinds | requested, not built |
+| CC-101 | M8 | a large binary as a data reference | the data-reference spike's step 2 (after core C-1, C-2) | withdrawn from this group |
+| CC-110 | M9 | a call pending into a vat given up during startup never settles; workaround re-drive at each start, asks stamped with an earlier start closed | core candidate C-10 (core step 2), not a new request | recorded as C-10 |
+| CC-111 | M9 | third-party handoff of relayed presences inside one hub; workaround at most 32 attachments, references dropped after delivery, `mail.hubGrowth` | core step 3's handoff question | routed there, not built |
+| CC-112 | M9 | a per-vat idle-sleep exemption for the factory vat; not needed for the budgets | - | requested, not built (low) |
+| CC-120 | M11 (conditional) | an adapter process exits when its supervisor dies even if its IPC channel stays open; asked only if K11-1 finds an engine alive | - | reserved, not asked |
+
+The PM writes the rows of `CORE-CHANGES.md`: one for CC-090 under AR-SYN-28, one for CC-100
+naming M6 and M8, CC-101 as spike step 2, CC-110 as C-10.
+
+---
+
 ## M6. Containers and git workspace
+
+**Status: contract settled, not built.** Reference: `m6-interfaces.md` (work units 8, acceptance
+9, perf 10, probes 11, fold 14); guards and texts `guest/lib/guards/environments.js`.
 
 **Goal.** Development sessions: a per-session rootless container with `/workspace` backed by the
 session's live git workspace, a branch-tracking git capability, emergency stop.
 
-- **P:** P-19, P-18, P-55, P-47, P-12 (shell part), P-20 (shell presets `general` with shell,
-  `development`, `new-project`; `voice` objects). `full-control` waits for open decision 5.
-- **R:** R2-7, R3-10, R3-12, R3-13, R3-14, R3-15, R3-16, R3-21, R3-37, R3-40, R3-44, R3-45, R3-46,
-  R3-47, R3-240, R3-246, R3-247, R3-248, R3-266, R4-7, R4-8, R4-81 (improved, D-16), R6-50, R6-57,
-  R7-9, R7-36, R7-39, R8-41, R8-42.
-- **Depends on:** M5. Parallel with M8, M9, M11.
-- **Owns:** `H/resources/workspace/{durable,ephemeral,dirs,git}.js`,
-  `H/resources/containers/{durable,ephemeral,runtime-podman,runtime-fake,images,lifecycle}.js`,
-  `H/guest/session/tools/{shell,git,environment}.js`, `H/guest/factory/presets-shell.js`,
-  entries in `turn-hooks.js` (`onCancel`: stop environment), `session-options.js`, `services.js`,
-  `provision-steps.js`, `H/test/fixtures/fake-bin/`, `H/test/*/m6-*`, `H/perf/{container,git}.perf.mjs`.
+- **P:** P-19, P-18, P-55, P-47, P-12 (shell part), P-20 (shell presets `development`,
+  `new-project`, `voice` objects, `general` as selected). `full-control` waits for open decision 5.
+- **R:** R2-7, R3-12, R3-13 (M6 half), R3-14, R3-15, R3-21, R3-30 (`openImage`, X-1), R3-37,
+  R3-40, R3-44..R3-47, R3-240, R3-246, R3-247, R3-248, R3-266, R4-7, R4-8, R4-49, R4-81 (improved,
+  D-16), R6-50, R6-57, R7-9, R7-36, R7-39, R7-65, R8-41, R8-42; W-12, G-29. Deferred: R3-10 (M7),
+  R3-16 (open decision 5).
+- **Depends on:** M5, cleanup step 3, WX.1; W6.4 also on the session-program ruling (G-1). Parallel
+  with M8, M9, M11; merges second.
+- **Owns:** `H/resources/environments/` (`durable.js`, `ephemeral.js`, `impl/`),
+  `H/resources/native-attach.js`, `H/guest/lib/guards/environments.js`,
+  `H/guest/session/environment.js`, `H/guest/session/tools/shell.js`,
+  `H/guest/factory/environments.js`, `H/guest/lib/environment-prompt.js`, `H/ui/src/environment/`,
+  `H/scripts/provision-steps/60-environments.js`, `H/test/fixtures/fake-bin/oci-cli.mjs`, the test
+  and perf files of the table; seams R-1..R-4, X-E, T-1, L-1 (session), F-1..F-5, P-1 (factory),
+  C-1 (`AH/composer.js`), K-1 (`package.json`), K-2 (`scripts/test-integration.mjs`).
 
-**Work units**
+**Work units** (W6.1-W6.6 in parallel after WX.1, disjoint files; journal ranges PM assigns;
+J-0817..J-0829 kept for the PM's notes)
 
-| id | files | behaviour | tests |
-|---|---|---|---|
-| W6.1 workspace resource | `resources/workspace/{durable,ephemeral,dirs}.js` | per-session directory registration under the daemon-owned root; `Workspace` object; released on session delete (G-29) | adapter tests |
-| W6.2 git capability | `resources/workspace/git.js` (`exo-git` `makeGitOperations` with the native git backend in Node), `guest/session/tools/git.js` | `main` with an empty initial commit; branches create/switch/rename/delete; status/diff/log/stage/commit/merge (ff-only and merge commit)/stash; `trackingStatus` = no upstream; no rewrite or remote methods; read-only facet; outputs per-field bounded | ported `exo-git/test/kit-conformance.test.js` subset `[real-git]` |
-| W6.3a runner | `resources/containers/{runtime-podman,images}.js` | image pinned by digest, never pulled; start-up gate refuses missing pins (P-55); rootless, unprivileged uid, caps dropped, read-only root, memory/pids/CPU limits (W-12), workspace bind-mounted from the workspace dir (no sudo mount, W-2), persistent home volume; `runCommand(argv)` allowlist, per-call timeout then kill after 2 s, 64 KiB per stream, then per-field budget so the result is valid JSON under the tool limit (G-19) | `[real-podman]` tests tagged |
-| W6.3b fake runtime + lifecycle | `resources/containers/{runtime-fake,lifecycle,durable,ephemeral}.js` | fake runtime with the same shape; lazy desired state (D-16): `restore` starts nothing, first `runCommand` starts, idle stop after `envIdleStopMs`; a failed stop is retried at the next adapter start instead of quarantining the session | fake-runtime tests |
-| W6.4 session wiring | `guest/session/tools/{shell,environment}.js`, `guest/factory/presets-shell.js` | `runCommand`, `inspectShell`; cancel stops the environment (R4-7); emergency stop fences, holds the queue, survives restart; resume leaves the queue held; a retired break of `runCommand` is outcome-unknown (rule 12.8) | integration with the fake runtime |
+| id | files owned | behaviour | tests | depends on |
+|---|---|---|---|---|
+| W6.1 resource core | `EV/durable.js`, `EV/ephemeral.js`, `resources/native-attach.js`, `EVI/index.js`, `EVI/ops.js`, `EVI/layout.js`, `scripts/provision-steps/60-environments.js` | manager records, amplification, forwarding with reattach, read retry and write `outcomeUnknown`, stopped and released refusals, withdrawn set, pending work; loader; state layout; attach and sweep at bind; provisioning | `environments-manager`, `environments-layout`, `environments-provision` (adapter), `native-attach` (unit) | WX.1; its `index.js` composition after W6.2, W6.3b, W6.3c export |
+| W6.2 git and images | `EVI/git.js`, `EVI/image-source.js`, `H/package.json` (K-1) | every `Git` op on `@endo/git`, answers cut to `answerBytes`, ref and path checks, read-only refusal, serial per workspace, stale-lock removal, `SourceReader.read`; `openImage` and the adapter-side `ImageSource` (X-1) | `environments-git` (exo-git conformance subset, `[real-git]`), `environments-git-hostile`, `environments-image-source` | WX.1 |
+| W6.3a OCI runtime | `EVI/runtime-oci.js`, `EVI/images.js`, `test/fixtures/fake-bin/oci-cli.mjs` | argv of start, exec, stop, remove, sweep for podman and docker; pin form and presence; timeout kills by process group | `environments-runtime-oci` (fake CLI everywhere; `[real-runtime]` gated) | WX.1 |
+| W6.3b fake runtime and runner | `EVI/runtime-fake.js`, `EVI/runner.js` | lazy start, idle stop, stop, release, sweep from `run/`, timeout then kill after 2 s, scrubbed env, allowlist | `environments-runner`, `environments-fake-runtime` | WX.1 |
+| W6.3c shell port and output | `EVI/shell-port.js`, `EVI/command-args.js`, `EVI/command-output.js`, `EVI/blob-access.js` | model-JSON parsing with Fae's texts, the tool-path output budget, staging through `BlobWriters`, staged args through `Content`, refusal of a withdrawn key | `environments-shell-port`, `environments-command-output` (property test: valid JSON, at most 32,768 units) | WX.1 |
+| W6.4 session part and tools | `guest/session/environment.js`, `guest/session/tools/shell.js`; seams R-1 (`runtime-parts.js`), R-2 (`turn.js` `claimNext`), R-3 (`session.js`), R-4 (`queue.js`), X-E (`export.js`), T-1 (`tool-table.js`), L-1 (`label-seeds.js`) | the `environment` part, `runCommand` and `inspectShell`, cancel, recovery, emergency stop and resume, admission refusals, export and import of the execution state | `session-environment`, `session-shell-tool`, `session-environment-export` (unit, crank order; bundle within M6's cap) | WX.1; the PM's caps |
+| W6.5 factory and prompt | `guest/factory/environments.js`, `guest/lib/environment-prompt.js`; seams F-1 (`preset-templates.js`), F-2 (`services.js`), F-3, F-4 (`factory.js`), F-5 (`root.js`), P-1 (`prompt-sections.js`) | availability by setting, provide on creation, binder after make, releaser on rollback, the delete hook (children first), prompt part 6 | `factory-environments`, `environment-prompt` (unit) | WX.1 |
+| W6.6 UI and composer | `ui/src/environment/{feature,ExecutionPanel,texts}.js`; seam C-1 (`AH/composer.js`) | Settings "Sandbox execution": state, Emergency stop, Resume; hidden when unsupported; a refused submission's staged file deleted | `ui-environment` (unit), `test/browser/environment-ui.test.mjs` | WX.1 |
+| W6.7 integration (last) | `test/integration/{_environments,_adapter-processes}.js`, `environments-{shell,restart,stop,presets}.test.js`, `perf/environments{,-git,-restart}.perf.mjs`; seam K-2 | acceptance and perf on the combination; the `environments` template and regression list | each integration file under 5 min; each perf file under its time | W6.1-W6.6 |
+| W6.8 fold (after the merge) | contract section 14 | deletion of every seam, copy and stub; X-1 aligned after M8; documents | the greps and tests of section 14 | the M6 merge |
 
-**Acceptance tests**
-1. Start-up refuses when a pin is not a digest or the image is absent `[real-podman]` (fake: missing
-   pin refused).
-2. `runCommand(['git','status'])` in the environment and `git().status()` see the same repository;
-   a commit in one is visible in the other.
-3. Non-allowlisted program refused; non-zero exit returned as data; > 64 KiB output cut; timeout
-   terminates then kills after 2 s; a command printing 10 MiB returns a result that parses as JSON and
-   is at most 32,768 units.
-4. Home survives turns and a restart; the workspace is deleted with the session.
-5. Git facet has no rebase/amend/cherry-pick/push; read-only facet refuses writes.
-6. Emergency stop fences new work, holds the queue, stops the environment, survives restart.
-7. A round with one `exec`, one `runCommand` and one object tool call runs them concurrently and
-   records results in call order.
-8. After a restart, no container is running until a session's first `runCommand`.
-9. `[real-podman]` the process runs as a non-root uid with no capabilities.
+**Acceptance** (test files under `test/integration/` unless named; `[real-runtime]` repeated in an
+owner run)
 
-**Perf checks**
-| check | budget |
-|---|---|
-| `container.coldStart` `[real-podman]` | <= 5 s (record) |
-| `container.runTrue` harness overhead over runtime | <= 150 ms |
-| `git.status` 10 k-file repo through the capability | <= 1 s |
-| `git.log` 1,000 commits page | <= 500 ms |
-| `container.stopCleanup` | <= 3 s |
-| `restart.environments` 20 sessions with environments | <= 15 s; 0 containers started |
-| too-big probe: 10 MiB stdout | cut in the adapter; valid JSON; no vat halt |
+1. Pin refusal: a non-digest pin refused; an absent image puts the runner in `refused`. `environments-runtime-oci.test.js` (fake CLI); `[real-runtime]`.
+2. One repository: `runCommand(git ...)` and `E(workspace)` see each other's commits. `environments-shell.test.js`.
+3. Command contract: allowlist, exit as data, 64 KiB per stream, timeout then SIGKILL after 2 s, 10 MiB stdout gives valid JSON of at most 32,768 units, staged. `environments-shell-port.test.js`, `environments-command-output.test.js`, `environments-shell.test.js`.
+4. Home survives turns and a SIGKILL restart; delete removes directory, container and records. `environments-restart.test.js`, `environments-stop.test.js`.
+5. Git surface: no `gitAbsentMethodNames` method; the reader refuses writes; `trackingStatus` has no upstream. `environments-git.test.js`, `environments-shell.test.js`.
+6. Emergency stop fences, holds, cancels, stops, withdraws (manager and adapter), survives SIGKILL; resume keeps the queue held. `environments-stop.test.js`, `session-environment.test.js`.
+7. One `exec`, one `runCommand`, one `echo` in a round run concurrently (under 1.6 x one call), results in call order. `environments-shell.test.js`.
+8. After a SIGKILL and restart no container runs until a first command; leftovers are gone. `environments-restart.test.js`.
+9. `[real-runtime]` isolation: uid 1000, `CapEff` 0, read-only outside the three paths, only `lo`. `environments-runtime-oci.test.js` (gated).
+10. Cancel during `sleep 600` ends `cancelled` within 1 s and kills the process. `environments-shell.test.js`.
+11. Killing the environments adapter alone gives `commandOutcomeUnknown`; the turn continues. `environments-restart.test.js`.
+12. SIGKILL during a command: turn `outcome-unknown`, process gone, next command works. `environments-restart.test.js`.
+13. Delete during a command completes; directory and process gone. `environments-stop.test.js`.
+14. Presets: without the setting `development`, `voice`, `new-project`, `general` with objects are unavailable (`runnerRequired`); with it, available with the right objects. `environments-presets.test.js`.
+15. `inspectShell` answers its three fields and no host path. `environments-shell.test.js`.
+16. `readSources` over the workspace; `..` refused. `environments-shell.test.js`.
+17. Reachability: no `EnvironmentsAdmin` or other session's objects reachable; no state path in any vat heap, journal or snapshot. `environments-presets.test.js`.
+18. `sh -c env` lists only A.3's variables. `environments-shell.test.js`; `[real-runtime]`.
+19. UI: Sandbox execution, Emergency stop, Resume. `test/browser/environment-ui.test.mjs`.
+20. Bounded state: 20 sessions created and deleted leave the record count as before (gate). `environments-stop.test.js`.
+21. Workspace images (X-1): `openImage` pages reassemble the file; bad paths refused; withdrawn after stop. `environments-image-source.test.js`, `environments-shell.test.js`.
+22. Export and import of a stopped session keep it stopped, held and withdrawn; resume works. `session-environment-export.test.js`, `environments-stop.test.js`.
 
-**Fit risk:** awkward. Registrations fit, but `restore` re-binds every registration, so containers
-need a lazy desired state; workspace projection on macOS without root (bind mounts into the Podman
-machine VM) is environment-specific (journal).
+Cross-lane (WX.F): the complete `voice` preset, `viewImage` of a workspace path, a shell-preset
+subagent's own workspace and shell, mail to an emergency-stopped session.
 
-**Deferred:** network policy and egress (M7), publishing (M10), `full-control` (open decision 5).
+**Perf** (60 s windows; gate rows pass or fail; recorded rows set their budget from the first run)
+
+| row | file | window | budget | derived from |
+|---|---|---|---|---|
+| `environments.runTrue` (overhead over the runtime) | `perf/environments.perf.mjs` | 60 s | median <= 150 ms; 1 session, 0 manager deliveries | 70-76 ms vat-adapter-vat (J-9043), spawn 1.0 ms (J-0811) |
+| `environments.firstCommand` | same | 60 s | median <= 500 ms | manager hop 151-175 ms (J-0222) |
+| `environments.sessionCreate` (`development` minus `chat-only`) | same | 60 s | median <= 175 ms | one manager crank (J-0494) + 3 handles at 7-15 ms |
+| `environments.cancel` | same | 60 s | recorded (expected <= 1 s) | - |
+| `environments.stopCleanup` | same | 60 s | recorded | - |
+| `environments.tooBig` (10 MiB stdout) | same | gate, 5 runs | each <= 2 s; <= 32,768 units; 0 halts | 329 ms drain (J-0811) |
+| `environments.bundles` | same | gate | session growth <= M6's cap; manager bundle <= 80 KB; install <= 5 s | J-1410, J-0193 |
+| `environments.gitStatus` (10,000 files, from exec code) | `perf/environments-git.perf.mjs` | 60 s | median <= 1 s | git 30 ms (J-0811) + 2 x 75 ms + 53 ms + inbound bytes |
+| `environments.gitLog` (50 of 1,000 commits) | same | 60 s | median <= 500 ms | git 12 ms (J-0811) + the same hops |
+| `environments.restart` (20 sessions with environments) | `perf/environments-restart.perf.mjs` | gate, 5 runs | each <= 15 s; 0 containers started; 0 idle vats woken | restart 3.3-6.9 s (J-9382) |
+| `environments.coldStart` `[real-runtime]` | `perf/environments.perf.mjs` (gated) | 10 runs | recorded | - |
+
+File times: about 6, 3 and 3 minutes. Probes: contract section 11.
+
+**Fit risk:** awkward. Lazy desired state (D-16) because `restore` re-binds every registration;
+workspace projection into a Podman machine VM on macOS without root is environment-specific; no
+container number is measured yet (docker and podman not available at contract time).
+
+**Deferred:** network policy and egress (M7), publishing (M10), `full-control` (open decision 5),
+the git surface of O-7.
 
 ---
 
@@ -1507,9 +1681,17 @@ requests and operator approval, and public-only egress for shells.
 - **P:** P-38, P-39, P-04 (internet toggle in the new-session flow).
 - **R:** R2-8, R2-21, R3-10, R3-36, R3-48, R3-49, R6-56, R7-10, R7-41, R7-54, R7-55, R7-56, R8-15.
 - **Depends on:** M6. Parallel with M10 and M12.
-- **Owns:** `H/resources/containers/egress/` (proxy, DNS, policy), `H/guest/session/network-policy.js`,
+- **Owns:** `H/resources/environments/impl/egress/` (proxy, DNS, policy; moved from
+  `resources/containers/egress/` by the M6 contract, 6.4 M-1, because M6 builds one
+  `environments` resource), `H/guest/session/network-policy.js`,
   `H/guest/session/tools/network.js`, `H/ui/src/network/`, entries in `session-options.js` and
-  `provision-steps.js`, `H/test/*/m7-*`, `H/perf/egress.perf.mjs`.
+  a file under `scripts/provision-steps/`, test files named by subject (review rule 1),
+  `H/perf/egress.perf.mjs`.
+- **Moved here by the {M6, M8, M9, M11} contracts:** R3-10 and the internet-dependent preset
+  parts M6 leaves (`general`'s shell "because internet is on", `new-project`'s shell while
+  internet is on, the default preset `general`, R3-20); `setNetworkPolicy` goes into one batched
+  change of `EV/durable.js` with M10's route methods (M6 M-1, review rule 5); M9's seam N1
+  (`networkPolicy` in `SpawnRequest`, so a subagent inherits the parent's current policy).
 
 **Work units:** W7.1 egress proxy + DNS in the containers adapter (adapted from
 `hosted-agent/src/public-egress*.js`, `public-dns-listener.js`, policy from `hosted-agent-policy.js`):
@@ -1538,93 +1720,184 @@ policy change to next turn <= environment restart time + 1 s.
 
 ## M8. Compaction, images and context window
 
-**Goal.** Long sessions keep working: automatic compaction at a share of the context window, image
-input through `viewImage`, and the context reading shown to the user.
+**Status: contract settled, not built.** Reference: `m8-interfaces.md` (seams 10, work units 11,
+acceptance 12, perf 13, probes 14, fold 18); constants and guards in `guest/lib/guards/context.js`,
+`guest/lib/guards/images.js`, `guest/lib/image-guards.js` (Node only) and
+`AH/providers/compaction-texts.js`, frozen until the fold.
+
+**Goal.** Long sessions keep working: automatic compaction at 70 % of the context window,
+`viewImage` image input, the window known for every backend kind.
 
 - **P:** P-36, P-37, P-27 (window share).
-- **R:** R3-30, R4-34, R4-35, R4-36, R4-37 (configured window for Claude/Anthropic, open decision 13),
-  R4-39, R4-100.
-- **Depends on:** M5. Parallel with M6, M9, M11.
-- **Owns:** `AH/providers/{compaction,images}.js` (registered in `projection-hooks.js`),
-  `H/guest/lib/{context-compaction,compaction-checkpoint,image-result}.js`,
-  `H/guest/session/compaction.js` (registered as a `beforeRound` hook), `H/guest/session/tools/view-image.js`,
-  `H/test/*/m8-*`, `H/perf/compaction.perf.mjs`.
+- **R:** R3-30, R4-32 (images), R4-33, R4-34, R4-35, R4-36, R4-37 (open decision 13), R4-39,
+  R4-100, R6-52.
+- **Depends on:** M5, cleanup step 3, WX.1; W8.1 and W8.4 also on the session-program ruling (G-1).
+  Parallel with M6, M9, M11; merges third, after M6 (so X-1 exists).
+- **Owns:** `guest/session/compaction.js`, `guest/session/tools/view-image.js`,
+  `AH/providers/{compaction,compaction-round,images}.js`, `AH/tools/view-image.js`,
+  `guest/lib/guards/{context,images}.js`, `guest/lib/image-guards.js` and
+  `AH/providers/compaction-texts.js` (until the fold), the test and perf files of the table; seams
+  S-5..S-20 (G-1..G-5, T-1, T-2 and S-10c are WX.1's). X-1 (`Git.openImage`) is built by M6 W6.2.
 
-**Work units:** W8.1 compaction decision in the vat from the previous usage reading (R4-34),
-`CompactionStarted` recorded before a tool-less summary round, retained-tail plan computed by the
-adapter on its cache (`lal/providers/context-compaction.js`), `Compaction` record with the summary
-and boundary; last user directive verbatim; unknown outcomes never hidden; postponed one round after
-new images. W8.2 `viewImage`: image bytes read by the workspace/blob adapter and attached by the
-provider adapter as native image input; the vat sees only a text receipt and the image's handle (bytes
-never enter a vat); 2 MiB limit; exempt from truncation.
+**Work units** (W8.2, W8.3, W8.5, W8.6 start right after WX.1; W8.1 and W8.4 after the ruling and
+M8's cap; disjoint files; journal ranges PM assigns, at least 20 each)
 
-**Acceptance tests**
-1. With a forced small window a turn crosses 70 %: a summary with the fixed headings is inserted as an
-   assistant message; the last user directive is kept verbatim; later turns start from it; unknown tool
-   outcomes stay visible.
-2. SIGKILL during the summary round: after restart the compaction round is outcome-unknown and the
-   next turn starts from the uncompacted context.
-3. `viewImage` of a 1 MiB PNG reaches the fake provider as image input; a 3 MiB image is refused; the
-   transcript shows a text receipt.
+| id | files owned | behaviour | tests | depends on |
+|---|---|---|---|---|
+| W8.1 session compaction | `guest/session/compaction.js`; seams S-5 (`turn.js`), S-6 (`session.js`), S-7 (`runtime-parts.js`), S-8 (`turn-import.js`), S-9 (`archive.js`) | the decision (crank X), the ask, the adapter's answer (crank Y), the context window object, export and import | `context-guards`, `compaction-decision`, `compaction-sink`, `compaction-import` (unit); step 3's crank-order suites unchanged | WX.1; ruling and cap |
+| W8.2 plan and summary | `AH/providers/compaction.js` (pure) | the plan, the summary request and its checks, the projection hook | `compaction-plan`, `compaction-summary`, `compaction-hook` (adapter) | WX.1; `imageReceiptText` (W8.6 first commit) |
+| W8.3 adapter wiring | `AH/providers/compaction-round.js`; seams S-10 (`projection.js`), S-11 (`projection-hooks.js`), S-12 (`archive/store.js`), S-13 (`context-cache.js`), S-14 and S-18 (`endpoint.js`, `AH/index.js`), S-15 (`round.js`, `api.js`, `subscriptions/provider.js`), S-16 (`scripted.js`), S-17 (`transcript-records.js`) | round step 2b, cache rebase, projection, the `viewImage` adapter-tool registration | `compaction-round`, `context-cache-compaction`, `compaction-scripted`, `image-tool-offered` (adapter) | WX.1; W8.2 functions (stubs); W8.5 first commit |
+| W8.4 viewImage entry | `guest/session/tools/view-image.js`; seams S-10b (`tool-table.js`), S-10d (`tool-args.js`) | the session's `viewImage` entry: argument checks before any send, the request carries the object | `view-image-entry` (unit) | WX.1; ruling and cap; W8.1's part API (fake) |
+| W8.5 image tool | `AH/tools/view-image.js`; `test/spikes/byte-array-passing.test.js` | `ImageTool`: sources, 2 MiB and magic-byte checks, staging; the byte-array probe | `image-tool` (adapter), the spike | WX.1 |
+| W8.6 image wire and window | `AH/providers/images.js`; seams S-19 (`anthropic.js`, `openrouter.js`, `subscriptions/responses.js`), S-20 (`anthropic.js` `readModels`) | native image input per wire, 20-image cap, receipts; the Anthropic 200,000-token window | `image-wire` (adapter); one case in `m2-w22-catalog.test.js` | WX.1; W8.3's `incomplete` flag (fixture until then) |
+| W8.7 integration (last) | `test/integration/{compaction,compaction-archive,view-image}.test.js`, `perf/{compaction,images}.perf.mjs` | acceptance 1-18 end to end, perf, probes | integration files under 5 min; perf files under 10 | W8.1-W8.6 |
+| M8 fold (after the merge) | contract section 18 items 1-3, 6 | guard and text modules folded into the vat tables and `limits.js`; `compaction-texts.js` merged | greps of section 18 | the M8 merge |
 
-**Perf checks:** `compaction.plan` 150 k-token context <= 500 ms in the adapter; `compaction.record`
-1 delivery; `viewImage` adds 0 vat deliveries beyond the tool result.
+**Acceptance** (`[owner]` = a real-provider repeat)
 
-**Fit risk:** good, because the projection is adapter-side (D-9).
+1. A forced small window crossing 70 % writes a `compaction` record with the R4-36 headings; the next request starts with the summary, the last directive verbatim, then the tail; unknown outcomes stay visible. `compaction.test.js`.
+2. SIGKILL during the summary call: turn `outcome-unknown`, no `compaction` record, next request uncompacted. `compaction.test.js`.
+3. `viewImage` of a 1 MiB PNG reaches the fake Anthropic server as an image block; 3 MiB refused with the fixed text; the transcript shows the receipt. `view-image.test.js`.
+4. A round with a new image is not followed by a compaction ask. `compaction-decision.test.js`.
+5. No ask when the reading or window is unknown, below threshold, after a skip, right after a compaction, past 4 per turn. `compaction-decision.test.js`.
+6. The plan keeps complete groups, a tail within half the headroom, the directive, and never passes an unresolved unknown outcome. `compaction-plan.test.js`.
+7. Summary tokens charged to the turn and the session; the reading after it is the next real round's. `compaction-sink.test.js`, `compaction.test.js`.
+8. Phases `compacting context` then `thinking`, in order. `compaction-sink.test.js`, `compaction.test.js`.
+9. A 300-turn imported session compacts, is killed and restarted: same context, archive starts at the boundary, history from turn 1. `compaction-archive.test.js`.
+10. Export and import of a compacted session keep summary and tail. `compaction-import.test.js`, `compaction-archive.test.js`.
+11. Kill points K1-K7 and I1-I4 give the contract's outcomes; never two `compaction` records. `compaction.test.js`, `context-cache-compaction.test.js`, `image-tool.test.js`, `view-image.test.js`.
+12. Each wire carries the image natively. `image-wire.test.js`; `[owner]` once per real backend kind.
+13. An incomplete turn's image and the 21st image go as receipts. `image-wire.test.js`.
+14. `viewImage` argument errors, unknown label, non-image, over the limit, 65 empty pages, lost source: fixed texts, the turn continues. `view-image-entry.test.js`, `image-tool.test.js`.
+15. A new Anthropic API session stores a 200,000-token window; `getUsage().context` reports it. `m2-w22-catalog.test.js`, `compaction.test.js`.
+16. Image bytes never enter a vat: largest frame into the session vat under 4 KB (perf gate row). `perf/images.perf.mjs`.
+17. A plan that cannot reduce records `compaction-skipped` and the turn completes. `compaction-round.test.js`, `compaction.test.js`.
+18. `[owner]` A Claude pool session passes 70 % in normal use, compacts and continues coherently.
+19. Cross-lane (WX.F): `viewImage` of a PNG in the session's workspace through `Git.openImage`; no frame over 4 KB into M6's manager or the session vat. `test/integration/view-image-workspace.test.js`.
 
-**Deferred:** forced-compaction switch beyond tests.
+**Perf** (60 s windows; templates, never replayed turns)
+
+| row | file | window | budget | derived from |
+|---|---|---|---|---|
+| `compaction.plan` (150,000 tokens, adapter only) | `perf/compaction.perf.mjs` | 60 s | <= 50 ms | sizing 0.9-3.4 ms (J-1010), projection 7.5 ms (J-0491) |
+| `compaction.overhead` (crank X to the real request, minus the summary call) | same | 60 s | <= 300 ms; +1 session delivery per compaction | answered call 70-76 ms (J-0161, J-9043) |
+| `compaction.record` | same | gate, in that window | exactly 1 delivery per compaction | D-M8-1 |
+| `compaction.prepareAfter` | same | in that window | <= 15 ms; 0 vat pages | prepare 0.6-7.5 ms (J-0491) |
+| `compaction.flat` (5,000 against 200 turns) | same | 60 s per length | ratio <= 1.25 | J-0491, J-9413 |
+| `compaction.rebuild` (300-turn compacted session after restart) | same | 60 s of cycles | <= 1.25 x M2's 200-turn rebuild | 85-359 ms (J-9404, J-0461) |
+| `images.view` (1 MiB, adapter-held source) | `perf/images.perf.mjs` | 60 s | <= 400 ms; 0 extra session deliveries | 6 pages x 20-25 ms (J-0161) + staging + 70 ms |
+| `images.viewFromVat` (source in a guest vat, 20,480-character pages) | same | 60 s | recorded; <= 6 s | 69 pages x about 70 ms = 4.8 s (J-0461, J-9043) |
+| `images.requestBuild` | same | 60 s | <= 15 ms per 2 MiB image | 12 ms parse and check (J-1010) |
+| `images.contextPrepare` (20 images of 2 MiB) | same | 60 s | <= 50 ms; under `maxTextUnits` | 56 M of 128 M units |
+| `images.frameIntoVat` | same | gate, every view | < 4 KB | StagedText about 3.5 KB |
+| `session.program` | `perf/session.perf.mjs` | gate | M8 adds <= its cap (asked 9,000) | J-1410, J-10192 |
+
+File times: about 7 and 6 minutes. Probes: contract section 14.
+
+**Fit risk:** good. The vat decides and records; the adapter plans, summarizes and carries bytes;
+nothing large enters a vat. The risk is the number of small seams in shared files, all
+append-only or one statement.
+
+**Deferred:** a forced-compaction switch beyond tests; a `readBytes` image page (probe 6.6);
+images shown to the user (R6-62).
 
 ---
 
 ## M9. Mail and subagents
 
+**Status: contract settled, not built.** Reference: `m9-interfaces.md` (seams 6, work units 7,
+acceptance 8, restart files 9, perf 10, probes 11, fold 12); guards and limits in
+`guest/lib/guards/mail.js` (session vat), `guest/lib/guards/post-office.js` (factory) and
+`guest/lib/mail-limits.js`, until W9.F.
+
 **Goal.** Agents talk to each other and to the operator: mail with packages and typed requests,
-mail-started turns, and subagents with tree/depth limits that survive restart.
+mail-started turns, and subagents with tree and depth limits that survive restart.
 
-- **P:** P-41, P-42.
-- **R:** R3-33, R3-34, R3-39, R3-214, R3-215, R3-216, R3-217, R3-218, R3-272, R4-5, R4-57, R4-58,
-  R4-59, R4-67, R4-69, R4-70, R4-71, R4-72, R4-73, R4-101, R4-102, R7-43, R7-44.
-- **Depends on:** M5. Parallel with M6, M8, M11.
-- **Owns:** `H/guest/session/{inbox,mail-turns}.js` (registered in `turn-hooks.js` `turnSources`
-  and `recoverySteps`, and `holds-table.js`), `H/guest/session/tools/{mail,requests,subagents}.js`,
-  `H/guest/factory/{subagents,operator-inbox}.js`, `H/guest/lib/{workload-limits,subagent-admission}.js`,
-  `H/test/*/m9-*`, `H/perf/mail.perf.mjs`.
+- **P:** P-41, P-42; prompt part 4 (delegation).
+- **R:** R3-33, R3-34, R3-39, R3-214, R3-215, R3-216, R3-217, R3-218 (no `define`/`endow`),
+  R3-272, R4-5, R4-57, R4-58, R4-59, R4-67, R4-69, R4-70, R4-71, R4-72, R4-73, R4-101, R4-102,
+  R7-43, R7-44.
+- **Depends on:** M5, cleanup step 3, WX.1; W9.8 also on the session-program ruling (G-1).
+  Parallel with M6, M8, M11; merges last of the four.
+- **Owns:** `guest/session/{inbox,subagents}.js`, `guest/session/tools/{mail,requests,subagents}.js`,
+  `guest/factory/{post-office,operator-mail,subagents}.js`, `guest/lib/{mail-text,mail-prompt}.js`,
+  `guest/exec/split-args.js`, `guest/lib/guards/{mail,post-office}.js` and `guest/lib/mail-limits.js`
+  (until W9.F), the test, fixture and perf files of the table; seams S1, S3-S8 (session), X1
+  (`guest/exec/inspect.js`), F1-F5, F7 (factory), A1 (`AH/blobs.js`). N1 (`networkPolicy` in
+  `SpawnRequest`) is M7's.
 
-**Work units:** W9.1 per-session inbox in the session vat (bounded backlog; G-13 bound), contact
-objects passed directly (`E(otherInbox).deliver(package)`), packages with attachments adopted with
-`take`, typed requests/forms answered with `resolveRequest`/`rejectRequest`/`submitForm`, each inbox
-message starts at most one turn including across restarts; subagent replies claimed first and own
-echoes dismissed (R4-57). W9.2 operator inbox in the factory vat. W9.3 subagents: `spawnSubagent`
-creates a hidden session from the spare pool inheriting backend, model, effort, preset snapshot and
-current network policy; tree limit 8 counting in-flight spawns and depth 2 with the R4-71 text; at most
-65,536 retained asks (R4-102); answer cap 16 Mi characters, staged, then the tool limit; `askSubagent`
-with an adapter-timer timeout; `stopSubagent` deletes depth-first; recovery cancels in-flight child
-asks (architecture 4.4) and never waits for them to break: an ask pending into a child vat that was
-given up during startup never settles (J-9048); a retired break from a child session means the child
-is lost (D-17), not a restart.
+**Work units** (group A in parallel, then group B, then W9.10; journal ranges PM assigns inside
+J-1100..J-1199; J-1110..J-1129 are the contract's)
 
-**Acceptance tests**
-1. The operator sends a package with an attachment; a turn starts from the inbox; the model `adopt`s
-   it; an un-adopted attachment is released after the turn.
-2. A typed request sent to a session is answered with `resolveRequest`; a turn that ends without
-   answering rejects with "Agent ended the turn without a typed answer".
-3. Each inbox message starts at most one turn, including across a restart mid-handling.
-4. Spawn a subagent; it inherits backend/model/preset; `askSubagent` returns its answer; tree limit 8
-   (counting in-flight spawns) and depth 2 refuse with the R4-71 text; `stopSubagent` deletes the
-   subtree.
-5. An ask in progress across a restart fails with the R4-67 text and does not hang; the child's turn
-   is outcome-unknown and was cancelled.
-6. A subagent reply arriving while the parent waits is claimed by the ask; the parent's own echo is
-   dismissed (R4-57).
+| id | files owned | behaviour | tests | depends on |
+|---|---|---|---|---|
+| W9.1 inbox (A) | `guest/session/inbox.js`, `guest/lib/mail-text.js` | the `inbox` part: delivery rule, duplicate ring, 256 bound, states, `nextTurn` with `take`, claim and settle, cancel, views, dismiss, export and import pages | `session-inbox`, `mail-text` (unit) | WX.1 |
+| W9.2 mail tools (A) | `guest/session/tools/{mail,requests}.js` | `listMessages`, `send`, `reply`, `dismiss`, `resolveRequest`, `rejectRequest`, `submitForm`; refusals before any send | `mail-tools`, `request-tools` (unit) | WX.1 (L1) |
+| W9.3 subagent tools (A) | `guest/session/{subagents,tools/subagents}.js` | the `subagents` part on WX.1's call table; spawn, ask, stop; deadlines; cancel and recovery | `subagent-tools` (unit) | WX.1 (C1, L1) |
+| W9.4 post office (A) | `guest/factory/{post-office,operator-mail}.js` | addresses, outboxes, `post`, postmarks, in-flight count and bytes, receipts, reply correlation, restart re-drive; operator mailbox and tickets | `post-office`, `operator-mail` (unit) | WX.1 |
+| W9.5 subagent tree (A) | `guest/factory/subagents.js` | `Delegation`, admission counting spawns in flight, depth, hidden children, inheritance (backend, model, effort, preset snapshot), depth-first stop, `deleteChildren`, restart | `subagent-tree` (unit) | WX.1; W9.4's `post` (stand-in) |
+| W9.6 relay copy (A) | `AH/blobs.js` (A1) | `RelayWriters.copy`: link, cut, suffix; quota; fsync through `AH/files.js` | `blob-copy` (adapter) | WX.1 |
+| W9.7 split arguments (A) | `guest/exec/split-args.js`; seam X1 | the `splitArgs` inspector op | `exec-split-args` (unit) | WX.1 (S10) |
+| W9.8 session wiring (B) | seams S1 (`runtime-parts.js`), S3 (`packages.js`), S4 (`tool-args.js`), S5 (`session.js`), S6 (`tool-table.js`), S7 (`export.js`), S8 (`label-seeds.js`) | the two parts and tool entries registered; `deliverMail`, `cancelMail`; inbox export; the `user` seed; bundle within M9's cap | `session-mail-wiring`, `session-mail-export` (unit) | W9.1, W9.2, W9.3 |
+| W9.9 factory wiring (B) | seams F1-F3, F5 (`factory.js`, `rows.js`), F4 (`services.js`), F7 (`prompt-sections.js`); `guest/lib/mail-prompt.js` | post office, operator mail, subagents in the kit; builders; hidden rows; the delete hook (first); start steps; `Operator.getMail`; prompt parts 2 and 4 | `factory-mail-wiring`, `mail-prompt` (unit) | W9.4, W9.5 |
+| W9.10 integration (C, last) | `test/integration/{mail,mail-restart-delivery,mail-restart-turn,subagents,subagents-restart}.test.js`, `perf/{mail,subagents}.perf.mjs`, mail fixtures under `test/fixtures/` | acceptance 1-22, perf and gate rows, probes; the `test:regression:mail` list | integration files under 5 min (restart files split by kill point); perf files under 10 | W9.6-W9.9 |
+| W9.F fold (after the merge) | contract section 12 | guard modules and limits folded into the vat tables and `limits.js`; V1 entries removed | greps; guards-split and vocabulary tests | the M9 merge |
 
-**Perf checks:** `mail.sessionToSession` <= 300 ms (compare 145 ms Thixotrope mail);
-`subagent.spawn` with spare pool <= 1.5 s; `subagent.burst8` 8 spawns against a pool of 2 (record;
-<= 30 s); `subagent.ask` overhead over the child turn <= 300 ms.
+**Acceptance** (`[real-provider]` repeats of 1, 5 and 9 in an owner run)
 
-**Fit risk:** good (contacts are objects; Thixotrope mail showed the pattern); spare-pool sizing under
-subagent bursts and surviving child work after a restart are the risks.
+1. An operator package with an attachment starts a turn; `adopt` binds it; an un-adopted attachment is released. `mail.test.js`.
+2. A typed request answered with `resolveRequest`; an unanswered completed turn rejects with "Agent ended the turn without a typed answer"; a failed turn keeps it listed. `mail.test.js`.
+3. Forms: wrong kind, missing field (default or refusal), valid submission posts a `value` message. `mail.test.js`.
+4. At most one turn per message across SIGKILL at KM2-KM5; the sender gets `Error: ...` at KM4 and KM5. `mail-restart-delivery.test.js`, `mail-restart-turn.test.js`.
+5. B `send`s to A: A's turn runs; B receives one `reply` that starts no turn; a failing turn replies `Error: ...`. `mail.test.js`.
+6. Senders cannot be forged; a foreign postmark is "Mail fraud: unrecognized parcel"; a non-address recipient is refused without a call. `mail.test.js`.
+7. A child is hidden, titled `<parent> / <name>`, inherits backend, model, effort, preset snapshot (a pool parent's child gets the same Backend), holds only `user` and its attachments. `subagents.test.js`.
+8. Nine spawns in one round admit eight (R4-71 text); depth 2 gets no subagent tools; `maxDepth` 0 removes them. `subagents.test.js`.
+9. `askSubagent` answers; 100,000 characters cut with the R4-46 marker; one ask per child; timeout cancels the child's turn. `subagents.test.js`.
+10. `stopSubagent` deletes deepest first; deleting the parent deletes both children and their blobs. `subagents.test.js`.
+11. An ask across a SIGKILL (KM7, KM8) ends outcome-unknown, no reply reaches the parent. `subagents-restart.test.js`.
+12. Replies claimed by their ask; own mail never in the own inbox; a late reply stays listed. `mail.test.js`.
+13. Bounds: the 257th delivery `inboxFull`; a 20,000-character reply cut; `dismissUnhandled`; an oversized form refused. `mail.test.js`.
+14. A 1 MiB task reaches the child as its own copy; the parent's handle is refused to the child. `subagents.test.js`.
+15. Twenty idle sessions with waiting mail restart with no vat woken; a UI message runs, then the mail turn. `mail-restart-turn.test.js`.
+16. Spawn across a restart (KM9, KM10): no half-made child; the completed one is found by name. `subagents-restart.test.js`.
+17. A gateway CapTP client calls `getMail().send`; an unexpected field is refused before decode. `mail.test.js`.
+18. Session delete releases staged bodies and drops the address (`recipientLost`). `mail.test.js`.
+19. Relay copies are hard links and survive the source's delete. `blob-copy.test.js`.
+20. KM12 leaves at most one unreferenced file and no handle without its file. `blob-copy.test.js`.
+21. Export and import carry the inbox: listed `kept`, bodies readable, read-only, no turn; KM14 leaves nothing half-imported. `mail-restart-delivery.test.js`, `session-mail-export.test.js`.
+22. The in-flight bound holds in bytes: `postOfficeBusy` before 4 MiB of kept envelopes. `post-office.test.js`.
 
-**Deferred:** interop with Thixotrope workspace mail between daemons (P-62, open decision 7).
+Cross-lane (WX.F): a shell-preset subagent's own environment
+(`subagents-environment.test.js`), mail to an emergency-stopped session waiting until resume
+(`mail-stopped-session.test.js`), the session program of all four lanes under the ruled limit.
+
+**Perf** (60 s windows unless stated)
+
+| row | file | window | budget | derived from |
+|---|---|---|---|---|
+| `mail.sessionToSession` | `perf/mail.perf.mjs` | 60 s | median <= 300 ms; <= 4 deliveries per mail | 2 x 33 ms + 118 ms turn start (J-10192) |
+| `mail.post.operator` | same | 60 s | median <= 200 ms | 37 ms + 2 x 66 ms (J-9333, J-10192) |
+| `mail.throughput` (4 senders, 8 recipients, each post starts a turn) | same | 60 s | >= 3 per second | about 7 deliveries per mail at 29 deliveries/s (J-9408) |
+| `mail.inboxCrank` (32 attachments into an inbox of 255, prefilled by import) | same | 60 s | p95 <= 550 ms | 32 x 7-15 ms + about 70 ms (J-0161) |
+| `mail.copy` (1 MiB plain / cut) | `test/adapter/blob-copy.test.js` | 200 samples | median <= 5 ms / <= 20 ms | J-0313 |
+| `mail.hubGrowth` (120 s of posts with 2 attachments, all settled and dismissed) | `perf/mail.perf.mjs` | 120 s, one measurement | <= 1.25 x fresh | M3 `hub.growth`; finalizers within 32 cranks |
+| `subagent.spawn` (pool of 2) | `perf/subagents.perf.mjs` | 60 s | median <= 1.5 s | spare take 864 ms (J-9382) |
+| `subagent.ask` overhead | same | 60 s | median <= 300 ms | 4 x 33 ms + 70 ms copy |
+| `subagent.burst8` | same | gate, 3 runs | each <= 30 s | 2 spares + 6 cold creates of 6.1 s (J-10192) |
+| `subagent.stop` (subtree of 3) | same | gate, 3 runs | deepest first; recorded | m2 7.1 |
+| `restart.mailIdle` (20 idle sessions) | `mail-restart-turn.test.js` | gate, 1 run | <= 15 s; 0 vats woken | architecture 11 |
+| `session.program` with M9 | `bundle-guest.mjs` in W9.8, W9.10 | gate | under the PM's cap (32,768 by default) | J-1410, J-1116 |
+
+File times: about 7 and 5.5 minutes; restart files 3-3.75 minutes each. Probes: contract
+section 11.
+
+**Fit risk:** good (contacts are objects; Thixotrope mail showed the pattern); spare-pool sizing
+under subagent bursts and asks into a child given up at startup (core C-10, worked around) are
+the risks.
+
+**Deferred:** interop with Thixotrope core mail between daemons (P-62, open decision 7); workflow
+services (P-59); the operator's mail UI (M12); network-policy inheritance until M7 (N1).
 
 ---
 
@@ -1636,8 +1909,12 @@ straight from disk, revocable and released on delete.
 - **P:** P-43, P-44, P-64.
 - **R:** R2-5, R2-13, R3-38, R3-50, R3-241, R6-3, R6-78, R7-18, R7-40, R7-52, R8-16, R8-27, R8-50.
 - **Depends on:** M6. Parallel with M7, M12.
-- **Owns:** `H/resources/workspace/{assets,routes,mime}.js`, `H/guest/session/tools/publish.js`,
-  entries in `provision-steps.js` (asset listener port), `H/test/*/m10-*`, `H/perf/assets.perf.mjs`.
+- **Owns:** `H/resources/environments/impl/publishing/` (the asset listener, routes, MIME; moved
+  from `resources/workspace/{assets,routes,mime}.js` by the M6 contract, 6.4 M-1: the listener
+  lives in the environments adapter process, D-M6-1), `H/guest/session/tools/publish.js`, a file
+  under `scripts/provision-steps/` (asset listener port), test files named by subject (review
+  rule 1), `H/perf/assets.perf.mjs`. Its manager methods (routes) join M7's in one batched change
+  of `EV/durable.js`.
 
 **Work units:** W10.1 asset listener in the workspace adapter (copied
 `endo-fs-asset-server/src/{serve-tree,mime,type-guards}.js`), 192-bit tokens minted in Node, routes as
@@ -1661,63 +1938,99 @@ read-only static site (P-64).
 
 ## M11. Voice
 
+**Status: contract settled, not built.** Reference: `m11-interfaces.md` (seams 11, work units 12,
+acceptance 13, perf and probes 14, fold 17, appendix A for WX.1, appendix C item by item); fixed
+files `AH/speech/{audio-protocol,engine-protocol,engine-types}.js`,
+`guest/lib/{voice-preferences,speech-guards}.js`, `UI/src/voice/{endpointing-defaults,texts}.js`.
+
 **Goal.** Speak to the assistant and hear replies: streamed STT with partials, sentence-pipelined TTS
 fed from the live turn, client endpointing, gapless playback, barge-in, and timeouts on every stream.
+Audio never reaches a vat; voice keeps no per-session vat state.
 
 - **P:** P-30, P-31, P-32, P-33, P-34, P-35, P-49 (voice shortcut preset), P-61, P-66.
-- **R:** R2-6, R2-20, R3-13, R3-244, R3-245, R4-89, R5-1..R5-62 (contract and default items), R5-67
-  (fixed: timeouts), R6-53, R8-17, R8-29, R8-43.
-- **Depends on:** M3 (gateway) and M4 (voice preset backend). Parallel with M6, M8, M9.
-- **Owns:** `AH/speech/` (stt, tts, engine supervision, speech view, audio route registered in
-  `gateway/routes.js`, a tap registered in `channel-taps.js`, fakes), `H/guest/factory/voice.js`,
-  `H/guest/lib/{speech-code-filter,voice-preferences}.js`, `H/ui/src/voice/`, `H/test/*/m11-*`,
-  `H/perf/voice.perf.mjs`.
+- **R:** R2-6, R2-20, R3-13 (M11 half), R3-244, R3-245, R4-89, R5-1..R5-62 (appendix C), R5-67,
+  R5-68, R6-53, R6-60, R8-17, R8-29 (departure: engines at first use, O-12), R8-43.
+- **Depends on:** M3, M4, cleanup step 3, WX.1 (H1, H3, H4). Parallel with M6, M8, M9; merges
+  first.
+- **Owns:** `AH/speech/`, `GW/extensions/speech.js`, `guest/factory/voice.js`,
+  `guest/lib/{voice-preferences,speech-guards}.js`, `UI/src/voice/`,
+  `scripts/provision-steps/70-voice.js`, the test, fixture and perf files of the table; seams H2
+  (`factory.js`), H2b (`main.js`, `root.js`), H5 (`GW/server.js`), H6 (`GW/index.js`,
+  `GW/extensions.js`, `GW/protocol.js`), H7 (`AH/index.js`), H8 (`scripts/test-integration.mjs`),
+  H9 (`perf/_pass.mjs`), H10 (`UI/src/controller/index.js`), H12 (`GW/extensions/README.md`). No
+  `guest/session/` file, runtime part, `channel-taps.js` or `projection-hooks.js`.
 
-**Work units:** W11.1 STT engine supervision in the adapter (moonshine via `uv run`, a supervised child
-process kept loaded, respawn on next use, startup failure isolated, response timeout) with fake-stt.
-W11.2 TTS (Piper) with sentence split, code-fence and markdown stripping, chunks under 10 chars merged,
-voice catalogue with range checks, synthesis timeout, fake-tts. W11.3 speech view of a turn **in the
-adapter**: live turns from the channel tap; finished turns replayed from the transcript through
-`Content` (the channel no longer holds them). W11.4a `/audio` WS route (binary frames, capability
-token, inactivity timeouts: no audio for `sttIdleMs` (default 30 s) ends the utterance with an error;
-no engine output for `engineTimeoutMs` (default 10 s) fails the utterance and restarts the engine).
-W11.4b client audio extracted from `chat/floot-component.js` l.2019-2774: calibration, threshold,
-silence, grace, min speech, pre-roll, junk filter, gapless playback, soft barge-in, wake lock,
-level meter. W11.5 voice preferences in the factory vat; `voice` preset (P-61) with fallback and
-warning when its model leaves the catalogue (G-11); the preset used by the voice shortcut (P-49);
-per-message replay (P-35); spoken prompt only for voice-started sessions.
+**Work units** ({W11.1, W11.3-W11.7} in parallel after WX.1; W11.2 after W11.1's first commit;
+W11.8 after WX.1; journal ranges PM assigns, 30 or more each)
 
-**Acceptance tests** (1-2 and 5 run with fakes everywhere and `[real-moonshine]` / `[real-piper]`
-once; 6 with synthetic audio in the browser)
-1. STT: a fixed 16 kHz clip streamed in 85 ms blocks yields cumulative partials (each replaces the
-   previous) and a final after `end`; an odd trailing byte is dropped; closing the reader aborts.
-2. The STT engine stays loaded between utterances; killing it respawns on next use; an STT failure at
-   start is logged and does not block TTS or other services.
-3. TTS: text with a fenced code block and markdown is spoken without the code and without markup;
-   sentence split respects abbreviations; chunks under 10 chars merge.
-4. `speak` on a turn plays already-finished messages then live deltas; tool calls insert a sentence
-   break; a finished turn replays to the end.
-5. Out-of-range `speed` or an unknown voice makes `synthesize` throw; the catalogue skips broken voices.
-6. Endpointing: calibration 1 s sets the floor; 400 ms bursts discarded; junk phrases discarded;
-   1,200 ms silence then 800 ms grace sends; speech during grace joins the message.
-7. Barge-in during playback stops audio and synthesis but the turn completes and is recorded; the new
-   utterance queues behind it.
-8. Voice preferences written on device A are used on device B; the voice shortcut uses the chosen
-   preset.
-9. Typed sessions do not get the spoken prompt.
-10. A hanging fake STT engine fails the utterance after `engineTimeoutMs` with a visible error and is
-    restarted; an open audio stream with no frames for `sttIdleMs` is closed; a hanging fake TTS fails
-    that sentence and playback continues with the next.
-11. Per-message replay plays a finished message again; the level meter moves with input.
+| id | files owned | behaviour | tests | depends on |
+|---|---|---|---|---|
+| W11.1 speech in, `process` | `AH/speech/{child-engine,stt-process}.js`, `AH/speech/engines/moonshine_daemon.py`, `test/fixtures/fake-stt.mjs` | resident engine, timeouts, backlog and utterance bounds, respawn and pacing, exit at stdin EOF | `speech-child-engine`, `speech-stt-process` (adapter; `[real-moonshine]` gated) | WX.1 |
+| W11.2 speech out, `process` | `AH/speech/{tts-process,voice-catalogue}.js`, `test/fixtures/fake-tts.mjs`, `test/fixtures/voices/` | Piper, catalogue with range checks, synthesis timeout, warm spare, backpressure | `speech-voice-catalogue` (unit), `speech-tts-process` (`[real-piper]` gated) | W11.1's `child-engine.js` |
+| W11.3 speech text and view | `AH/speech/{code-filter,speech-text,turn-view}.js` | code and markdown removed, sentence split, the speech view from the live channel | `speech-text` (unit), `speech-turn-view` (adapter) | WX.1 |
+| W11.4 `openai-audio` | `AH/speech/openai-audio.js`, `test/fixtures/fake-speech-server.mjs` | HTTP speech provider; key through `readGrant` per request | `speech-openai-audio` (`[real-provider]` gated) | WX.1 |
+| W11.5 host, route, extension | `AH/speech/{host,kinds,route,playback}.js`, `GW/extensions/speech.js`; seams H5, H6, H7 | `Speech` and `AudioPort`, the `/audio` socket, bounds, timeouts, per-extension powers | `speech-audio-route`, `speech-host`, `speech-timeouts`, `gateway-speech-extension` (adapter) | WX.1 |
+| W11.6 client audio | `AH/speech/capture-worklet.js`, `UI/src/voice/{capture,endpointing,audio-socket,playback,wake-lock}.js` | capture, endpointing, socket client, gapless playback, wake lock | `voice-endpointing`, `voice-audio-socket`, `voice-playback` (unit) | WX.1 |
+| W11.7 factory `Voice` | `guest/factory/voice.js`, `scripts/provision-steps/70-voice.js`; seams H2, H2b | preferences, launch claims, `HarnessRoot.configureSpeech`, the `voice` preset pin | `factory-voice` (unit), `voice-session`, `voice-restart` (integration) | WX.1 |
+| W11.8 voice UI | `UI/src/voice/{feature,state,VoiceControls,VoicePanel,ReplayButton}.js`, `UI/src/voice/voice.css`; seam H10 | the voice feature, settings, slots, launch link | `voice-state` (unit); browser cases in W11.9 | WX.1; W11.6 signatures |
+| W11.9 integration (last) | `test/integration/{voice-speak,voice-provider}.test.js`, `test/browser/voice-ui.mjs`, `test/fixtures/voice-clip.mjs`, `perf/{voice,voice-session}.perf.mjs`; seams H8, H9, H12 | wiring, acceptance, perf; session and exec bundles byte-identical | the files named; M11 regression list under 20 min | W11.1-W11.8 |
+| M11 fold (after the merge) | contract section 17 F-1..F-11 | documents, plain exports in `speech-guards.js`, no in-test engines; F-7 after M6 (or WX.F) | greps and tests of section 17 | the M11 merge |
 
-**Perf checks:** audio frames 0 vat deliveries (engine counters); STT partial <= 300 ms after 0.5 s of
-new audio `[real-moonshine]`; final <= 500 ms after `end`; TTS first audio <= 1 s warm `[real-piper]`;
-adapter audio forwarding <= 2 ms per 85 ms block.
+**Acceptance** (fakes everywhere; owner runs `[real-moonshine]` 1, 2; `[real-piper]` 5;
+`[real-provider]` 15; `[real-browser]` 6, 7)
+
+1. A 16 kHz clip in 85 ms frames gives cumulative partials and a final after END; an odd byte dropped; ABORT and close abort. `speech-stt-process.test.js`, `speech-audio-route.test.js`.
+2. One engine load for three utterances; a killed engine respawns; a speech-in start failure leaves speech out working. `speech-stt-process.test.js`, `speech-host.test.js`.
+3. Code blocks and markup not spoken; abbreviations and lists do not split; short chunks merge. `speech-text.test.js`.
+4. `speak` plays finished messages then live deltas; a tool call breaks the sentence; the last finished turn replays; older answers `turnNotLive`. `speech-turn-view.test.js`, `voice-speak.test.js`.
+5. Out-of-range or non-finite speed, unknown voice: R5-41 texts, no stream; broken voices skipped. `speech-tts-process.test.js`, `speech-voice-catalogue.test.js`, `speech-host.test.js`.
+6. Endpointing: calibration, 400 ms burst, junk, 1,200 ms silence then 800 ms grace, speech during grace. `voice-endpointing.test.js`, `voice-ui.mjs`.
+7. Barge-in stops audio and synthesis; the turn completes; the new utterance queues. `voice-ui.mjs`, `voice-speak.test.js`.
+8. Preferences shared between connections; a stale shortcut revision refused; Talk uses the chosen preset. `voice-session.test.js`, `voice-ui.mjs`.
+9. Only voice-started sessions get the spoken introduction. `voice-session.test.js`.
+10. Timeouts: engine, `sttIdle`, a hanging TTS sentence skipped, no HELLO, token expiry. `speech-timeouts.test.js`.
+11. Replay of a finished turn (inline and staged pieces); the level meter moves. `speech-audio-route.test.js`, `voice-ui.mjs`.
+12. Auto-speak on the sending page only, also for a queued message. `voice-ui.mjs`.
+13. Launch claims: one session per invocation id, 32 kept, survives a restart. `voice-session.test.js`, `voice-restart.test.js`.
+14. G-11: a pinned model missing from the catalogue falls back with `voiceModelUnavailable`. `voice-session.test.js`.
+15. The provider key reaches the fake server as a bearer and never the state or a log; 401 aborts. `voice-provider.test.js`.
+16. Restart kill points K11-1..K11-5 as the contract's section 8 states. `voice-restart.test.js`.
+17. Security: token, HELLO and Origin checks; no `Voice`, `Speech` or port reachable from a session vat. `speech-audio-route.test.js`, `voice-session.test.js`.
+18. The wake lock is held while mic, speech or turn are active. `voice-ui.mjs`.
+19. No `configureSpeech` on `Voice`; `HarnessRoot.configureSpeech` changes the settings revision. `factory-voice.test.js`, `voice-session.test.js`.
+20. Only the speech extension's context has `readGrant`. `gateway-speech-extension.test.js`.
+21. After a clean restart the engine starts at the first `openAudio` with the earlier settings. `voice-restart.test.js`.
+22. Talk with the `voice` preset unavailable rejects with its reason; a user shortcut preset works. `voice-session.test.js`.
+
+Cross-lane (WX.F): the complete built-in `voice` preset and Talk without a runner,
+`test/integration/voice-preset.test.js`.
+
+**Perf** (60 s windows)
+
+| row | file | window | budget | derived from |
+|---|---|---|---|---|
+| `speech.audioForward` | `perf/voice.perf.mjs` | 60 s real-time | median <= 1 ms, p99 <= 3 ms | 0.055 + 0.009 + 0.022 ms (J-1310) |
+| `speech.audioForward.load` (16 utterances) | same | 60 s | p99 <= 5 ms | as above |
+| `speech.partialRelay` | same | 60 s | median <= 2 ms | J-1310 |
+| `speech.firstAudio` (fake TTS) | same | 60 s | median <= 20 ms, p99 <= 50 | delta 0.2 ms (J-9173), pipe and socket (J-1310) |
+| `speech.engineRespawn` | same | 60 s | <= 100 ms | spawn to ready 20.5 ms (J-1310) |
+| `voice.deliveries` | `perf/voice-session.perf.mjs` | gate, inside `voice.speakOpen` | 0 on every spoken turn | D-M11-1 |
+| `voice.speakOpen` | same | 60 s | median <= 10 ms; 0 deliveries | gateway-local call |
+| `voice.preferences` | same | 60 s | median <= 50 ms; 1 delivery | `ui.call` 23 ms (J-10192) |
+| `voice.startSession` | same | 60 s | median <= 950 ms | 864 ms pool take (J-9382) + 76 ms |
+| `voice.launchDuplicate` | same | 60 s | median <= 50 ms | one factory crank, 23 ms |
+| `voice.settingsRead` | same | 60 s | median <= 100 ms; 2 deliveries | two factory calls of 23-37 ms |
+| `stt.partialLatency`, `stt.finalLatency` `[real-moonshine]` | `perf/voice.perf.mjs` (gated) | 60 s | <= 300 ms, <= 500 ms (recorded) | architecture 11 |
+| `tts.firstAudio` `[real-piper]` | gated | 60 s | warm <= 1 s; cold recorded | architecture 11 |
+| `provider.*` `[real-provider]` | gated | 60 s | recorded | - |
+
+File times: about 6 minutes each. Session and exec bundles unchanged; the factory bundle's growth
+(estimated 8-12 KB) recorded. Probes: contract section 14.2.
 
 **Fit risk:** good, because audio never touches a vat; audio decoding shares the agent-host process
 with tokens (blast radius, journal).
 
-**Deferred:** Android (P-60, open decision 7).
+**Deferred:** Android (P-60, open decision 7), wake word (R5-71), per-message replay (O-3).
 
 ---
 
@@ -1734,6 +2047,11 @@ an environment allowlist, an attach-only admin CLI, diagnostics, and the remaini
 - **Owns:** `H/bin/harness.js`, `H/scripts/{provision,serve}.mjs` (the runners; steps stay in the
   append-only table), `H/guest/factory/{home,spaces,diagnostics}.js`, `H/ui/src/{home,spaces,widgets}/`,
   `H/test/*/m12-*`, `H/perf/admin.perf.mjs`.
+- **From the {M6, M8, M9, M11} contracts:** the operator's mail UI in the Home view and the CLI's
+  mail commands read M9's `Operator.getMail` API (M9 O-M9-7); the service start calls M6's image
+  pin check before serving (P-55, R8-42); orphaned adapter-owned containers are M6's sweep at
+  bind, which W12.1's leftover clearing relies on; prompt part 5 is M12's slot in
+  `guest/lib/prompt-sections.js` beside M9's parts 2 and 4 and M6's part 6.
 
 **P-54 and P-52 mapping (owner principle 2: CLI for admin only).**
 
@@ -1792,6 +2110,11 @@ losing sessions, native reinstalls without breaking references, reclaimed state,
 - **Depends on:** all earlier milestones.
 - **Owns:** `H/guest/factory/upgrade.js`, `H/scripts/{upgrade,soak}.mjs`, `H/test/*/m13-*`,
   `H/perf/soak.perf.mjs`. (The record archive moved to M2, D-M2-1.)
+- **From the {M6, M8, M9, M11} contracts:** the upgrade carries M11's `Voice` records
+  (preferences, the shortcut preset by label at the export boundary, speech settings with key
+  labels; M11 F-6); it decides whether imported mail is re-bound through the post office's
+  postmarks (M9 O-M9-12; M9 imports it read-only); a session export already carries M6's
+  execution state and M9's inbox (X-07), while workspace and home are not exported (M6 O-9).
 
 **Work units:** W13.1 `upgrade.mjs`: automates M2's `exportState`/`importState` into new program
 versions and swaps references in the factory. W13.2 native reinstall migration: re-mint
@@ -1837,20 +2160,54 @@ Whylip or irrelevant slash commands). They are scheduled after M13 by default on
   `guest/exec/powers.js`, `ui/src/{presets,mentions}`. Hook points: M4 and M5 add entries to
   `session-options.js` (backend/model resolution; preset snapshot), `services.js`, `tool-table.js`
   (`accountStatus`; object tools), `features.js`. Disjoint otherwise.
-- **{M6, M8, M9, M11}:** M6 `resources/{workspace,containers}/` (except assets/egress),
-  `guest/session/tools/{shell,git,environment}.js`, `guest/factory/presets-shell.js`; M8
-  `AH/providers/{compaction,images}.js`, `guest/lib/{context-compaction,compaction-checkpoint,image-result}.js`,
-  `guest/session/compaction.js`, `tools/view-image.js`; M9 `guest/session/{inbox,mail-turns}.js`,
-  `tools/{mail,requests,subagents}.js`, `guest/factory/{subagents,operator-inbox}.js`,
-  `guest/lib/{workload-limits,subagent-admission}.js`; M11 `AH/speech/`, `guest/factory/voice.js`,
-  `guest/lib/{speech-code-filter,voice-preferences}.js`, `ui/src/voice/`. Hook points: M6 `turn-hooks.js`
-  `onCancel`, `session-options.js`, `services.js`, `provision-steps.js`; M8 `turn-hooks.js`
-  `beforeRound`, `projection-hooks.js`; M9 `turn-hooks.js` `turnSources` and `recoverySteps`,
-  `holds-table.js`; M11 `channel-taps.js`, `gateway/routes.js`, `features.js`. Nobody edits `turn.js`,
-  `context-cache.js`, `channels.js` or `gateway/server.js`.
-- **{M7, M10, M12}:** M7 `resources/containers/egress/`, `guest/session/{network-policy}.js`,
-  `tools/network.js`, `ui/src/network/`; M10 `resources/workspace/{assets,routes,mime}.js`,
-  `tools/publish.js`; M12 `bin/`, `scripts/{provision,serve}.mjs`, `guest/factory/{home,spaces,diagnostics}.js`,
+- **{M6, M8, M9, M11}** (from the settled contracts; WX.F rewrites this row from what was
+  built). Own files: M6 `EV/` (`durable.js`, `ephemeral.js`, `impl/`), `resources/native-attach.js`,
+  `guest/lib/guards/environments.js`, `guest/session/{environment,tools/shell}.js`,
+  `guest/factory/environments.js`, `guest/lib/environment-prompt.js`, `ui/src/environment/`,
+  `scripts/provision-steps/60-environments.js`; M8 `guest/session/{compaction,tools/view-image}.js`,
+  `AH/providers/{compaction,compaction-round,images,compaction-texts}.js`, `AH/tools/view-image.js`,
+  `guest/lib/guards/{context,images}.js`, `guest/lib/image-guards.js`; M9
+  `guest/session/{inbox,subagents}.js`, `guest/session/tools/{mail,requests,subagents}.js`,
+  `guest/factory/{post-office,operator-mail,subagents}.js`, `guest/lib/{mail-text,mail-prompt,mail-limits}.js`,
+  `guest/lib/guards/{mail,post-office}.js`, `guest/exec/split-args.js`; M11 `AH/speech/`,
+  `GW/extensions/speech.js`, `guest/factory/voice.js`, `guest/lib/{voice-preferences,speech-guards}.js`,
+  `UI/src/voice/`, `scripts/provision-steps/70-voice.js`. Each lane also owns its test, fixture and
+  perf files, named by subject. **WX.1 alone** edits `guest/lib/guards/{session,factory,base}.js`,
+  `guest/lib/interfaces.js`, `guest/session/records.js`, `turn-types.js`, the typedefs and
+  `combineHooks` of `runtime-parts.js`, `turn.js` `claimNext` (M9 S2), `tools/objects.js` and
+  `tools/exec.js` (exports), `guest/lib/vocabulary-tables.js`, `test/unit/guards-split.test.js`,
+  `test/fixtures/guard-fold-map.json`, `test/adapter/gateway-vocabulary-tables.test.js`. Shared
+  files the lanes edit, with the editors in merge order (each one statement or line at a position
+  WX.1 fixed; the PM merges them by hand):
+
+  | file | M11 | M6 | M8 | M9 |
+  |---|---|---|---|---|
+  | `guest/session/runtime-parts.js` (five places: import, `PartName`, `requiredParts`, `runtimeParts`, getter) | - | R-1 `environment` | S-7 `compaction` | S1 `inbox`, `subagents` |
+  | `guest/session/turn.js` | - | R-2: one `admit` line in `claimNext` | S-5: `claim`, `roundRequest`, `invoke`, `makeSink`, `hookTurn` | (S2 is WX.1's) |
+  | `guest/session/session.js` | - | R-3: `refuseIfStopped`, three `Session` methods, `makeQueue` option, export power | S-6: record log above `makeRuntime`, the window | S5: `deliverMail`, `cancelMail`, export `inbox` |
+  | `guest/session/export.js` | - | X-E: head page `execution` | - | S7: inbox page, `extras` |
+  | `guest/session/tool-table.js` | - | T-1 shell entries | S-10b `viewImage` | S6 mail, requests, subagents |
+  | `guest/session/label-seeds.js` | - | L-1 `workspace`, `shell` | - | S8 `user` (last) |
+  | `guest/lib/tool-args.js` | - | - | S-10d `viewImage` | S4 `'strings'` kind |
+  | `guest/factory/factory.js` | H2: `makeVoice`, `getVoice`, `configureSpeech` | F-3: settings in the one `buildSessionServices` context, binders, releasers; F-4: its hook second | - | F1, F2 (same context object), F3, F5: its hook first |
+  | `guest/factory/services.js` | - | F-2: builder, `serviceBinders`, `serviceReleasers` | - | F4: two builders |
+  | `guest/factory/root.js` | H2b: `configureSpeech` | F-5: `makeHarnessSettings` | - | - |
+  | `guest/lib/prompt-sections.js` | - | P-1 part 6 | - | F7 parts 2 and 4 (M12 part 5 later) |
+  | `AH/index.js` | H7: speech `extensionPowers` | - | S-14 `prepare` options, S-18 `adapterTools` | - |
+  | `AH/blobs.js` | - | - | (image bytes if read through the blob store) | A1 `RelayWriters.copy` |
+  | `H/package.json` (PM-merged) | - | K-1 `@endo/git`, `@endo/exo-git` | - | - |
+  | `scripts/test-integration.mjs` (one list each) | H8 | K-2 `environments` | its W8.7 list | `mail` |
+  | `perf/_pass.mjs` (PM-merged) | H9 | its perf files | its perf files | its perf files |
+
+  Files no lane of the group edits: `channels.js`, `AH/channel-taps.js` (M8's S-11 is the only
+  edit of `AH/projection-hooks.js`), the agent-host manager part (`resources/agent-host/*.js` outside
+  `impl/`), `guest/factory/delete.js` and `starts.js`, `config/defaults.js` until M8's fold,
+  `limits.js` until the folds. M11's H8 and H9 name their lists `M11`; review rule 1 asks a
+  concept name (`voice`), which M11's fold applies.
+- **{M7, M10, M12}:** M7 `EVI/egress/` (moved from `resources/containers/egress/` by the M6
+  contract), `guest/session/{network-policy}.js`, `tools/network.js`, `ui/src/network/`; M10
+  `EVI/publishing/` (moved from `resources/workspace/{assets,routes,mime}.js` by the M6 contract),
+  `tools/publish.js`; M7 and M10 make one batched change of `EV/durable.js` (M6 M-1); M12 `bin/`, `scripts/{provision,serve}.mjs`, `guest/factory/{home,spaces,diagnostics}.js`,
   `ui/src/{home,spaces,widgets}`. Hook points: M7 and M10 append to `provision-steps.js` and
   `session-options.js`; M12 changes only the provisioning runner. Disjoint otherwise.
 - All groups: `H/package.json`, `H/perf/_harness.mjs` and `H/JOURNAL.md` are PM-merged; integration
