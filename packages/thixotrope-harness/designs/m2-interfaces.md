@@ -208,7 +208,7 @@ by the group B owner of the file; otherwise by W2.9. The known cases:
 | W2.3 read path (`readKey` per backend) | `AH/index.js` `makeProvider` options | W2.2 |
 | W2.1a `openrouter` kind | `backendKinds` (W2.1a's own line) | W2.1a |
 | W2.2 `catalog.js` | `AH/index.js` handlers `listModels`, `resolveModel` | W2.2 |
-| W2.5 `runner.findTurn`, `runner.archive` | `session.js` (W2.7 forwards) | group B, runtime objects |
+| W2.5 `runner.findTurn`, `archive` (as built after step 3: made in `session.js`, passed to the runner) | `session.js` (W2.7 forwards) | group B, runtime objects |
 | W2.6 resolvers | `session-options.js` (W2.6's own lines) | W2.6 |
 | everything | the acceptance tests needing several units (7, 11, 15) | W2.9 |
 
@@ -229,7 +229,8 @@ So that W2.6 and W2.7 never edit `turn.js`, W2.5 builds these, exactly:
    settles the turn `failed` with `textOf.turnDeadline(ms)` instead of `cancelled`; the settle
    disarms it.
 5. **Runner accessors** for W2.7's `session.js` and `export.js` (runtime objects, no imports):
-   `runner.findTurn(turnId) -> Turn` (section 4.9); `runner.archive` = `{ state() ->
+   `runner.findTurn(turnId) -> Turn` (section 4.9); `archive` (as built after step 3: made in
+   `session.js` by `makeSessionArchive` and passed to the runner, not a runner member) = `{ state() ->
    ArchiveState, segments(cursor?) -> SegmentPage, entries() -> SegmentEntry[] }`;
    `runner.beginDelete()` (the fence of `SessionInternal.deleteSelf`, section 7.1);
    `runner.importTurns(records)` (append imported records, rebuild the turn infos, advance the

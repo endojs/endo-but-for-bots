@@ -609,8 +609,10 @@ no longer pinned by digest; the directory is trusted operator input (journal).
 The session vat drives the loop (it decides and records); the agent-host adapter does the heavy text
 work (it projects context, calls the provider and streams). The loop body is Fae's `runAgenticTurn`
 (`fae/src/turn-engine.js`, 86 lines, callback-only) copied into `guest/lib/turn-engine.js`, with
-hook tables (`guest/session/turn-hooks.js`: `beforeRound`, `onCancel`, `onSettle`, turn sources) so
-later milestones plug in without editing `turn.js`.
+per-session runtime parts (`guest/session/runtime-parts.js`; each part's value may carry `hooks`
+{ `onClaim`, `beforeRound`, `onCancel`, `onSettle`, `onRecover`, `nextTurn` } and `tools`; the
+static `turn-hooks.js` lists were deleted in step 3 of the harness review) so later milestones plug
+in without editing `turn.js`.
 
 ### 4.1 Sequence for one turn
 

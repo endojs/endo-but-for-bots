@@ -20,8 +20,13 @@ M1a" at the end of this file.
   - **Hook tables** (append-only: a milestone adds registration lines or table entries, never edits
     another milestone's entries; the PM resolves trivial merges). Each is created by the milestone
     named in brackets:
-    `H/guest/session/tool-table.js` [M1a], `H/guest/session/turn-hooks.js` [M1a] (`beforeRound`,
-    `onCancel`, `onSettle`, `turnSources`, `recoverySteps`), `H/guest/session/holds-table.js` [M2],
+    `H/guest/session/tool-table.js` [M1a] (`toolTable`, static entries only),
+    `H/guest/session/runtime-parts.js` [M5] (the runtime parts: since step 3 of the harness review
+    the one per-session extension point, replacing the deleted `turn-hooks.js` lists and
+    `toolSources`; a part is one name in `PartName` and `requiredParts`, one getter and one entry
+    in `runtimeParts`, and its value carries `hooks` { `onClaim`, `beforeRound`, `onCancel`,
+    `onSettle`, `onRecover`, `nextTurn` } and `tools`; `arch-review/step3-plan.md` section 2),
+    `H/guest/session/holds-table.js` [M2],
     `H/guest/factory/services.js` [M1a] (per-session `SessionServices` builders),
     `H/guest/factory/session-options.js` [M1a] (`createSession` option resolvers),
     `AH/index.js` [M1a] (implementation registrations), `AH/channel-taps.js` [M1a],
@@ -1451,7 +1456,7 @@ session's live git workspace, a branch-tracking git capability, emergency stop.
 - **Owns:** `H/resources/workspace/{durable,ephemeral,dirs,git}.js`,
   `H/resources/containers/{durable,ephemeral,runtime-podman,runtime-fake,images,lifecycle}.js`,
   `H/guest/session/tools/{shell,git,environment}.js`, `H/guest/factory/presets-shell.js`,
-  entries in `turn-hooks.js` (`onCancel`: stop environment), `session-options.js`, `services.js`,
+  a `workspace` part in `runtime-parts.js` (`hooks.onCancel`: stop environment), `session-options.js`, `services.js`,
   `provision-steps.js`, `H/test/fixtures/fake-bin/`, `H/test/*/m6-*`, `H/perf/{container,git}.perf.mjs`.
 
 **Work units**
@@ -1547,7 +1552,7 @@ input through `viewImage`, and the context reading shown to the user.
 - **Depends on:** M5. Parallel with M6, M9, M11.
 - **Owns:** `AH/providers/{compaction,images}.js` (registered in `projection-hooks.js`),
   `H/guest/lib/{context-compaction,compaction-checkpoint,image-result}.js`,
-  `H/guest/session/compaction.js` (registered as a `beforeRound` hook), `H/guest/session/tools/view-image.js`,
+  `H/guest/session/compaction.js` (a `compaction` part in `runtime-parts.js` with `hooks.beforeRound`), `H/guest/session/tools/view-image.js`,
   `H/test/*/m8-*`, `H/perf/compaction.perf.mjs`.
 
 **Work units:** W8.1 compaction decision in the vat from the previous usage reading (R4-34),
@@ -1585,8 +1590,8 @@ mail-started turns, and subagents with tree/depth limits that survive restart.
 - **R:** R3-33, R3-34, R3-39, R3-214, R3-215, R3-216, R3-217, R3-218, R3-272, R4-5, R4-57, R4-58,
   R4-59, R4-67, R4-69, R4-70, R4-71, R4-72, R4-73, R4-101, R4-102, R7-43, R7-44.
 - **Depends on:** M5. Parallel with M6, M8, M11.
-- **Owns:** `H/guest/session/{inbox,mail-turns}.js` (registered in `turn-hooks.js` `turnSources`
-  and `recoverySteps`, and `holds-table.js`), `H/guest/session/tools/{mail,requests,subagents}.js`,
+- **Owns:** `H/guest/session/{inbox,mail-turns}.js` (an `inbox` part in `runtime-parts.js` with
+  `hooks.nextTurn` and `hooks.onRecover`, and `holds-table.js`), `H/guest/session/tools/{mail,requests,subagents}.js`,
   `H/guest/factory/{subagents,operator-inbox}.js`, `H/guest/lib/{workload-limits,subagent-admission}.js`,
   `H/test/*/m9-*`, `H/perf/mail.perf.mjs`.
 
@@ -1843,9 +1848,10 @@ Whylip or irrelevant slash commands). They are scheduled after M13 by default on
   `guest/session/compaction.js`, `tools/view-image.js`; M9 `guest/session/{inbox,mail-turns}.js`,
   `tools/{mail,requests,subagents}.js`, `guest/factory/{subagents,operator-inbox}.js`,
   `guest/lib/{workload-limits,subagent-admission}.js`; M11 `AH/speech/`, `guest/factory/voice.js`,
-  `guest/lib/{speech-code-filter,voice-preferences}.js`, `ui/src/voice/`. Hook points: M6 `turn-hooks.js`
-  `onCancel`, `session-options.js`, `services.js`, `provision-steps.js`; M8 `turn-hooks.js`
-  `beforeRound`, `projection-hooks.js`; M9 `turn-hooks.js` `turnSources` and `recoverySteps`,
+  `guest/lib/{speech-code-filter,voice-preferences}.js`, `ui/src/voice/`. Hook points: M6 a `runtime-parts.js`
+  part with `hooks.onCancel`, `session-options.js`, `services.js`, `provision-steps.js`; M8 a
+  `runtime-parts.js` part with `hooks.beforeRound`, `projection-hooks.js`; M9 a `runtime-parts.js`
+  part with `hooks.nextTurn` and `hooks.onRecover`,
   `holds-table.js`; M11 `channel-taps.js`, `gateway/routes.js`, `features.js`. Nobody edits `turn.js`,
   `context-cache.js`, `channels.js` or `gateway/server.js`.
 - **{M7, M10, M12}:** M7 `resources/containers/egress/`, `guest/session/{network-policy}.js`,
@@ -1872,7 +1878,7 @@ against the code or the spec before acting.
 | F B-5 startup wakes workers with an unsnapshotted journal | `pkg/src/core/daemon.js:826-847`; `supervisor.js:141` (`idleSleepMs` option) | Accepted. Restart tests use `idleSleepMs: 2000`, wait for checkpoint and `pool.whenSettled()` before SIGKILL; "0 idle vats woken" is a gate counting checkpointed vats only. |
 | F B-6 1 s `sleep` exec acceptance impossible | native.md:39-40 (`clock.after(0n)` 989 ms) | Accepted. M1a acceptance 3 uses the adapter `echo` tool with `delayMs` and asserts overlap (< 1.6 x one call). Interactive timers are adapter timers (architecture section 8). |
 | F B-7 `exec.sends100 <= 2 s` ignores answer deliveries | tooling.md 4.5; J-0017 | Accepted. Budget split: 100 answered <= 8 s, 100 `sendOnly` <= 1 s (M1b). |
-| F B-8 parallel groups not disjoint; no run lock | old ownership lists | Accepted. Hook tables (`turn-hooks.js`, `holds-table.js`, `session-options.js`, `services.js`, `projection-hooks.js`, `channel-taps.js`, `gateway/routes.js`, `provision-steps.js`, `features.js`), sequential ownership transfers (`prompt.js`, `provision.mjs`), W3.0 merged before M4/M5 UI units, PM-merged files with pre-allocated journal number ranges, and the run lock. |
+| F B-8 parallel groups not disjoint; no run lock | old ownership lists | Accepted. Hook tables (`runtime-parts.js`, `holds-table.js`, `session-options.js`, `services.js`, `projection-hooks.js`, `channel-taps.js`, `gateway/routes.js`, `provision-steps.js`, `features.js`), sequential ownership transfers (`prompt.js`, `provision.mjs`), W3.0 merged before M4/M5 UI units, PM-merged files with pre-allocated journal number ranges, and the run lock. |
 | C queue entry lifecycle can post twice | SPEC:1619-1620 (A.4 `dispatching` row); R4-54 SPEC:527 | Accepted. Atomic claim: the entry is removed in the crank that records `TurnStarted`; a never-dispatched turn is closed with the R4-66 text and not re-queued (architecture 4.3-4.4). Test: M1a acceptance 6. Journal: atomic claim is a good fit. |
 | C cancel retires the exec vat | R4-49 SPEC:519 | Accepted. Cancel abandons the answer by generation; the vat is retired only on the exec deadline, a MeterAbort, or when still busy at the next call, always with a stated scope loss (architecture section 6). Test: M1b acceptance 3. |
 | C more than about 200 tool calls in one round quarantine the session | baseline (e) 500 sends MeterAbort | Accepted. `maxCallsPerRound` 64 with an error result for extras, `callWindow` 16 in flight; probe of 300 calls in M1b. Open decision 11. |
