@@ -15388,3 +15388,88 @@ prettier and eslint about 10 s each). No integration test, supervisor or browser
 `THIX_AGENT=W6.4` in every test shell. Commits `35ee60034b`, `8c9a12bbfd` and this journal
 commit; nothing pushed; no change to `packages/thixotrope`, `rust/**` or other packages.
 Fit: neutral.
+
+### J-0830 2026-11-19 W6.1 environments resource core - built
+Evidence: `resources/native-attach.js`, `resources/environments/durable.js`,
+`resources/environments/ephemeral.js`, `resources/environments/impl/{attach,ops,layout,index}.js`,
+`scripts/provision-steps/60-environments.js`; tests `test/unit/native-attach.test.js` (6),
+`test/adapter/environments-manager.test.js` (18), `test/adapter/environments-layout.test.js` (6),
+`test/adapter/environments-provision.test.js` (4), and the three step names added to
+`test/unit/m1a-provision-steps.test.js`; commits `48ca1ced89`, `cc1dfa5ce5`, `4dca082a73`,
+`952ded39e2`, `e974d14b1f`, `b3b20f1303`. All 39 tests pass in about 5 s (no supervisor).
+Reading: the manager keeps one record per environment (`e<n>` from a counter; `records` bounded
+by `maxEnvironments`; `recordOf` and `bySession` are `WeakMap`s), mints `Git` (reader on
+`readOnly()`), `Shell` and `EnvironmentControl` with the guards of `guards/environments.js`, and
+forwards through `makeAttachedOps` (`native-attach.js`): no ops facet, reconcile first (one
+reconcile shared by a burst); a retired break drops the facet; a read is sent once more, a write
+rejects with `outcomeUnknown` and is never sent twice. The read and write op lists are derived
+from `gitOps` and `gitReaderMethodNames` (no second list). Every answer passes the exo's return
+guard (a git answer with an extra key is refused in the manager). Released records refuse every
+call with `released` and are dropped when the adapter answers the release (directly or through
+`sink.released` after the next attach); a failed stop or release stays pending (both subsets of
+the records, so bounded) and is sent again by the next attach, and a pending stop is sent again
+before a key's next `port()` or `Shell.runCommand`. Emergency stop marks the record first (every
+manager call refused with `stopped`), then `ops.stop(key, { withdraw: true })`; a failure keeps it
+pending and rejects `stopIncomplete`. `attach` answers `PendingWork` with the withdrawn keys; the
+adapter's binding (`impl/attach.js`) fills its withdrawn set before the ops facet serves any call
+(`ready`), then performs the pending stops and releases after `bind` answers and reports them
+sendOnly. At an incarnation's first bind only: the runner's sweep, the trash, and
+`git.removeStaleLock` for every key on disk; a bind under new settings follows the unbind of the
+old binding, which sweeps its runner. The ops facet hides host paths in every failure (workspace
+to `/workspace`, home to `/home/node`, the state directory and its real path to `<state>`). The
+layout makes a workspace once behind its marker with W6.2's `initWorkspaceRepository` (a directory
+without the marker is wiped and made again, K5), releases through `trash/` with a directory fsync,
+and writes the tag (`sha256(realpath(state))[0:16]`) atomically. `impl/index.js` composes W6.2's
+git and image source, W6.3a's OCI runtimes, W6.3b's fake runtime and runner and W6.3c's shell
+port and exec-path record; the composition test runs real git and the fake runtime through the
+manager, and an emergency stop turns the `ShellPort` the session holds into `stopped`.
+Differences from the contract, kept compatible with the other units: (a) the bind and unbind live
+in a new module `impl/attach.js` (the agent host's name for the same job); `index.js` is only the
+composition, so the binding is tested with fakes; (b) `makeOps` takes `check` (the image check)
+instead of `status`, and `images`, `commandRecord`, `withdrawn`, `ready`, `hiddenPaths`; adapter-side
+makers receive `{ isWithdrawn(key), redact(text) }`, the shapes W6.2 and W6.3c built;
+(c) `makeLayout` takes an optional `incarnation` (trash names) and answers `keys()`; a key `e0` is
+accepted because the runner names the sessions directory through `dirsOf('e0')`;
+(d) `makeAttachedOps` takes an optional `writeBroken(error)` (the resource's own rejection text);
+(e) the provisioning file has three steps (install, configure, attach), each skipped without
+`options.environments`; a refused image is reported in the step's detail, not thrown.
+Fit: good.
+
+### J-0831 2026-11-19 W6.1 manager bundle and manager-path costs - measured
+Evidence: `b3b20f1303`; the manager bundle made as the supervisor makes it
+(`@endo/compartment-mapper` `makeBundle` of `durable.js`, as `m3-w33-bundles.test.js` does);
+a scratch script (not committed) over `perf/_window.mjs` `runWindow`, 10 s windows, the manager
+in Node over the real composition and the fake runtime, load average 2.61.
+Reading: `environments.bundles` manager bundle **179,555 bytes against the 80 KB budget: a
+miss**. Likely cause, measured per module: `guards/environments.js` alone bundles to 154,229 bytes
+because it imports `guards/session.js` (122,000 bytes alone) for the two `SourceReader` shapes;
+`durable.js` adds about 25 KB (its own code, help texts, `native-attach.js` 5,762). The fix is in
+the guard module (the contract's, not W6.1's): take `SourceReadRequest`/`SourceReadResult` from a
+small module both vats can import, which should bring the manager near 60 KB. Install time not
+measured here (W6.7's row). Node-level rows (no vat, no hub; they bound what the manager and
+adapter code cost, not the crank cost): `{"row":"environments.provide.node","median":0.636,"p95":1.22,
+"samples":12000}` (four exos and a record per provide, releases every 1,000);
+`{"row":"environments.firstGit.node","ms":134.4}` (workspace creation and the first status);
+`{"row":"environments.gitStatus.node","median":44.831,"p95":52.339,"samples":220}` (W6.2's checks
+and git spawns dominate; manager and ops add well under 1 ms);
+`{"row":"environments.runTrue.node","median":1.352,"p95":1.887,"samples":6855}` (exec path
+through the manager, fake runtime). Session program: W6.1 adds 0 bytes (no file under `guest/`;
+the session bundle, 241,283 bytes on the working tree at this time, names no W6.1 module).
+Fit: neutral.
+
+### J-0832 2026-11-19 W6.1 fit: one forwarding manager on Thixotrope's native kit
+Reading: what suits Thixotrope here: the manager kit's `same`/`replaces` give `configure` its
+meaning with no code of ours (equal settings: nothing happens; other settings: the adapter unbinds
+and rebinds under a new epoch); amplification by `WeakMap` keeps every key out of session and exec
+vats; one registration means restart cost does not grow with environments (the restore binds one
+key). What does not: (1) no install-time configuration (CC-090): settings ride in the service
+spec, and the loader finds its state directory from `argv[3]` through the agent host's
+`findStateDir`; (2) the author's `bind(key, spec)` gets no epoch and no "first bind of this
+process" signal, so the binding keeps a flag to sweep only once per incarnation; (3) a guard
+module's transitive imports, not the manager's code, decide the manager's bundle size (J-0831);
+(4) the shared guards make `releaseSession` and `resume` synchronous `M.call`s, so a delete cannot
+wait for the adapter's removal: the manager marks the record released (every call refused at
+once) and a failed removal is retried at the next attach, rather than holding the delete record at
+step 1 as contract 4.6 says. Commands over 60 s: none (the longest: `tsc` about 3 s, the perf
+script about 35 s).
+Fit: neutral.
