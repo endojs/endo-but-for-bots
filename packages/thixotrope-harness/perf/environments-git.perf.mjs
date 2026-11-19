@@ -101,8 +101,31 @@ await runPerf('environments-git', async ({ provision }) => {
           i >= r.from && d.event.type === type && d.event.turnId === r.turnId,
       );
     if (r.end.status !== 'completed') throw Error(`${input}: ${r.end.status}`);
+    const outcomes = live.deliveries
+      .slice(r.from)
+      .map(d => d.event)
+      .filter(e => e.type === 'tool_result' && e.turnId === r.turnId);
+    if (outcomes.some(e => e.failed))
+      throw Error(`${input} returned a failed tool result`);
+    if (
+      input === 'fixture' &&
+      (outcomes.length !== 5 ||
+        outcomes.some(e => JSON.parse(e.result).exitCode !== 0))
+    )
+      throw Error('Git workload fixture did not complete all five commands');
     const call = /** @type {any} */ (of('tool_call'));
     const result = /** @type {any} */ (of('tool_result'));
+    if (
+      input === 'status' &&
+      JSON.stringify(JSON.parse(result.event.result)) !== '[32,false]'
+    )
+      throw Error(
+        `Unexpected git status fixture result: ${result.event.result}`,
+      );
+    if (input === 'log' && JSON.parse(result.event.result) !== 50)
+      throw Error(
+        `Unexpected git history fixture result: ${result.event.result}`,
+      );
     return {
       ms: result.arrivedAt - call.arrivedAt,
       result: result.event.result,

@@ -119,6 +119,11 @@ await runPerf('environments-restart', async () => {
     for (let run = 0; run < RUNS; run += 1) {
       // eslint-disable-next-line no-await-in-loop
       await untilAsleep(workers, isSession);
+      const before = new Map(
+        (await workers())
+          .filter(isSession)
+          .map(row => [row.workerId, Number(row.journalLength)]),
+      );
       // eslint-disable-next-line no-await-in-loop
       await state.kill();
       // eslint-disable-next-line no-await-in-loop
@@ -134,8 +139,16 @@ await runPerf('environments-restart', async () => {
       // eslint-disable-next-line no-await-in-loop
       const rows = (await workers()).filter(isSession);
       const woken = rows
-        .filter(w => Number(w.wakes ?? 0) > 0)
+        .filter(w =>
+          w.wakes === undefined
+            ? Number(w.journalLength) !== before.get(w.workerId)
+            : Number(w.wakes) > 0,
+        )
         .map(w => w.debugLabel);
+      if (servedMs > 15_000)
+        wrong.push(`run ${run}: serving after ${servedMs} ms`);
+      if (rows.length < SESSIONS)
+        wrong.push(`run ${run}: only ${rows.length} session vats`);
       if (groups.length > 0) wrong.push(`run ${run}: ${groups.length} groups`);
       if (woken.length > 0) wrong.push(`run ${run}: woken ${woken.join(', ')}`);
       served.push(servedMs);
@@ -161,8 +174,7 @@ await runPerf('environments-restart', async () => {
         sessions: SESSIONS,
       },
     });
-    if (wrong.length > 0)
-      emit({ metric: 'environments.restart.gate', pass: false, wrong });
+    if (wrong.length > 0) throw Error(wrong.join(' / '));
   } finally {
     await state.cleanup();
   }
