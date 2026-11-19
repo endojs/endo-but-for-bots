@@ -15188,3 +15188,77 @@ Reading: no command over 60 s; no supervisor, browser or run lock used; nothing 
 change to `packages/thixotrope`, `rust/**` or any shared file; `corepack yarn lint:duplicates`
 1.74 % (ceiling 2.05 %); eslint 0 errors on the unit's files, `tsc` clean for the package.
 Fit: neutral.
+
+### J-1150 2026-11-19 W9.2 the mail and request tools - built
+Evidence: `05759d7e79`; `guest/session/tools/mail.js`, `guest/session/tools/requests.js`;
+`test/unit/mail-tools.test.js` (12 tests), `test/unit/request-tools.test.js` (6 tests), fakes in
+`test/unit/_mail-tool-fakes.js` (Outbox, MailAddress, SubagentHandle, RequestTicket from
+`postOfficeTables().interfaces`; ExecScope, ExecHandle, Blob from `interfaces.js`).
+Reading: seven static entries in D-M9-24 order, exported as `mailToolEntries` and
+`requestToolEntries` for W9.8's S6 lines (not registered here). `listMessages` and `dismiss` are
+`site: 'session'`; `send`, `reply` and the three request tools `site: 'guest'` (one answered call
+to a factory exo each). `available` is `services.mail` present (D-M9-17). `send` takes `recipient`
+as a string or a list (at most 8): `user` is `services.operatorAddress`, `subagents/<name>` and
+labels resolve through W9.3's exported `heldObject` (D-M9-23; no copy of the lookup). Edge and pet
+names pair by position (a missing one is the other); the body is the strings with `@edge` after
+each (R4-58). Every refusal precedes the post: argument shape (closed parser), recipient count and
+lookup, attachment count, duplicate, unknown or stored-value label, body over `inlineBytes`. The
+post office's per-recipient refusals are forwarded line by line; the result fails only when every
+recipient refused. Staged arguments: refused over `mailBodyUnits` bytes before any split (probe
+"1,048,577-character body"); otherwise one `splitArgs` inspector call (no deadline; `target` is the
+round's writers, the guard asks for one), the residual read by the same closed spec, placeholders
+`"\u0000s<k>"` answered by the staged strings. Request tools: `messageNumber` a decimal string or
+an integer (`expectedDecimal`); `resolveRequest` sends the value's JSON source span
+(`answerTooLarge` over 8,192 bytes), `rejectRequest` the reason cut to `reasonUnits`;
+`submitForm` reads `values` with a closed spec built from the form's fields (an unknown name is
+`unexpectedArgument` listing the fields), applies defaults, checks each kind from the source span
+and sends `{ name, json }` pairs, a decimal as a digit string. The inbox marks a request settled
+(`settleRequest`) before the ticket call; an already settled one goes to its ticket, whose refusal
+is forwarded. `listMessages` renders W9.1's `views` with `mail-text.js` `listingText`.
+Fit: good: the closed parser plus raw spans let the session read lists of strings and form values
+without `JSON.parse` or a data-derived key.
+
+### J-1151 2026-11-19 W9.2 session program - measured
+Evidence: `05759d7e79`; `bundleGuest` over a scratch copy of `guest/` with W9.8's S6 lines added to
+the copy's `tool-table.js` (mail, requests) and, for the lane figure, W9.1's `inboxPart`, W9.3's
+`subagentsPart` and `subagentToolEntries` imported there too; `node scripts/bundle-guest.mjs
+session` on the tree itself: 233,126 before and after (nothing registered yet).
+Reading: bundle spans `session/tools/mail.js` 10,602 bytes, `session/tools/requests.js` 5,029
+(stripped sources 9,493 and 4,063; the import wrapping of 14 + 8 imports is about 1,900 of it).
+Marginal cost of this unit with the rest of the lane present: 278,810 - 261,150 = 17,660 bytes
+(the modules, their registry cells and export setters). The whole group A of M9 registered:
+278,810 bytes, 45,684 over the 233,126 base: twice the lane's 21,500 and 8,474 over the
+270,336-byte limit, before W9.8's seams. The contract estimated 8,500 stripped for this unit
+(D-M9-19); a first draft was 22,438 bundle bytes, cut to 17,660 by literal parameter schemas, one
+shared reader for the three list arguments, fewer exports and reuse of `heldObject`. Unit files: 18
+tests in 0.8 s wall time.
+Fit: poor on this axis: an ESM bundle pays about 85 bytes per import binding and a cell per
+export in every vat program, so small concept modules that import a dozen helpers each cost
+20-25 % over their stripped text; the budget arithmetic of D-M9-19 counted stripped sources only.
+
+### J-1152 2026-11-19 W9.2 where the contract and the built code disagree - finding
+Evidence: `guest/session/labels.js` `makeLabels` (seeds go through `bindObject`, which refuses
+`reservedLabels`, `user` among them); m9-interfaces.md 6.1 S4, S8, 3.3; W9.3's
+`tools/subagents.js` `readStagedArgs`.
+Reading: (1) S8's `user` seed cannot be bound: `makeLabels` throws `reservedLabel('user')` for it,
+so the session would fail to start. The tools resolve `user` to `services.operatorAddress`
+directly; W9.8 should drop the S8 seed or teach `labels.js` to accept preset seeds of reserved
+labels (acceptance 7's "holds exactly `user`" then needs restating). (2) S4 (a `strings` kind in
+`tool-args.js`) is not needed by this unit: `readStrings` in `mail.js` reads a raw span that the
+closed parser already checked, decoding each literal through `parseClosedArgs` (no copy of the
+decoder). (3) `InspectRequest.target` is required, but `splitArgs` calls nothing: the tools pass
+the round's `writers` (W9.3 does the same); W9.7 must ignore it. (4) A staged string can be a
+message body only alone (empty strings and edges beside it): composing it with other text would
+copy its bytes through the session vat; mixed composition is refused with `bodyTooLong` over
+`inlineBytes`. (5) W9.3's `readStagedArgs` does not answer the `staged` list, so the mail tools,
+whose placeholders sit inside arrays, keep their own split call (12 lines): answering `staged`
+there would let both share one reader and save about 700 bytes. (6) An edge label over 80 units is
+refused by the Outbox's guard (a failed result, no post) rather than by the tool.
+Fit: fair: each is a small seam fix; (1) is a real defect in the contract's S8.
+
+### J-1153 2026-11-19 W9.2 time record - process
+Evidence: first command 2026-11-19T02:23:29Z; last 2026-11-19T02:42Z (this entry's commit).
+Reading: no command over 60 s; no supervisor, browser or run lock; nothing pushed; no change to a
+shared file, `packages/thixotrope` or `rust/**`; eslint 0 problems on the unit's five files,
+`tsc` clean for the package, `corepack yarn lint:duplicates` 1.75 % (ceiling 2.05 %).
+Fit: neutral.
