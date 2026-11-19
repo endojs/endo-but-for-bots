@@ -142,7 +142,7 @@ test('part 2 describes M5’s per-call powers and names the tools M5 offers', t 
   t.true(plain.includes(objectToolsSection.trimEnd()));
 });
 
-test('the section table: parts 1, 2, 3 and 7 in part order; part 3 empty (R4-26)', t => {
+test('the section table: parts 1, 2, 3, 7 and 6 in table order; part 3 empty (R4-26)', t => {
   t.deepEqual(
     promptSections.map(s => [s.part, s.name]),
     [
@@ -150,6 +150,7 @@ test('the section table: parts 1, 2, 3 and 7 in part order; part 3 empty (R4-26)
       [2, 'guestSection'],
       [3, 'environment'],
       [7, 'instructions'],
+      [6, 'workspace'],
     ],
   );
   t.true(Object.isFrozen(promptSections));
