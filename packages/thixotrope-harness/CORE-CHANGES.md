@@ -1185,3 +1185,24 @@ X-CLOSE; checked at X-CLOSE's last commit). Command:
 `git log --oneline bd9a8ec070..HEAD -- . ':!packages/thixotrope-harness'` lists no commit. The
 cross-lane work changed nothing outside the harness, so no CC entry was added; the requests above
 are rows only.
+
+## Core requests from the M6, M8, M9 and M11 contracts (requested, not built)
+
+Numbers CC-090..CC-129 are reserved to the four lanes' contracts (`m6-interfaces.md` 12,
+`m8-interfaces.md` 15, `m9-interfaces.md` 13, `m11-interfaces.md` 15); rows written by the
+cross-lane seam unit WX.1 from `milestones.md`, the group's section (cross-check J-1415). None is
+built; each harness workaround named is what the lanes build. A row becomes an entry above only
+when the core lane makes the change.
+
+| id | from | request | status | harness workaround meanwhile |
+|---|---|---|---|---|
+| CC-090 (CC-091 merged into it) | M6 | a service shape for native resources and install-time configuration: the manager kit's `provideAdapter()`, `installNative(name, directory, config)` with a passable config record, the launcher passing `{ stateDirectory }`; one row under the core review's AR-SYN-28 (core step 4, with its `WORKSPACE_VERSION` bump) | requested, not built | `resources/native-attach.js`; configuration through the service spec |
+| CC-092 | M6, used by M11 (K11-1) | name each adapter process (installation, pid) in `status()` | requested, not built | the shared test helper `test/integration/_adapter-processes.js` |
+| CC-100 | M6 and M8 (one row) | frames between two transient adapter sessions are not persisted in `hub-log.jsonl` (+2.9-3.0 MB of hub log per MiB measured by the data-reference spike); a policy of core step 3's persisted session kinds | requested, not built | bounded base64 pages and hub-log compaction |
+| CC-101 | M8 | a large binary as a data reference: recorded as the data-reference spike's step 2 (after core C-1 and C-2), not a request of this group | requested, not built (spike step 2) | as CC-100 |
+| CC-110 | M9 | a call pending into a vat given up during startup never settles: recorded as core candidate C-10 (core step 2), not a new request | requested, not built (core candidate C-10) | re-drive at each start; asks stamped with an earlier start are closed |
+| CC-111 | M9 | third-party handoff of relayed presences inside one hub (core step 3's handoff question) | requested, not built | at most 32 attachments, references dropped after delivery, `mail.hubGrowth` measured |
+| CC-112 | M9 | a per-vat idle-sleep exemption for the factory vat; not needed for the budgets (low) | requested, not built | none needed |
+| CC-120 | M11 (conditional) | an adapter process exits when its supervisor dies even if its IPC channel stays open; reserved, asked only if K11-1 finds an engine alive | requested, not built (reserved) | K11-1's process check |
+
+CC-093..CC-099, CC-102..CC-109, CC-113..CC-119 and CC-121..CC-129 are not used.
