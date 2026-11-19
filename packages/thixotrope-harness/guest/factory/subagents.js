@@ -143,7 +143,10 @@ export const makeSubagents = ({
 }) => {
   const I = factoryInterfaces;
 
-  /** @param {string} name */
+  /**
+   * @param {'maxDepth' | 'maxDescendants'} name
+   * @returns {number}
+   */
   const setting = name => {
     const value = settings?.current()[name];
     return typeof value === 'number' ? value : ML[name];
