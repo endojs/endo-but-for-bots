@@ -391,9 +391,10 @@ export const openAudioSocket = async ({ port, origin }) => {
     /**
      * @param {number} stream
      * @param {string} type
+     * @param {number} [ms] default 5,000
      */
-    event: (stream, type) =>
-      until(() => eventsOf(stream).find(e => e.type === type)),
+    event: (stream, type, ms) =>
+      until(() => eventsOf(stream).find(e => e.type === type), ms),
     /** @param {number} stream */
     pcmBytes: stream =>
       frames
