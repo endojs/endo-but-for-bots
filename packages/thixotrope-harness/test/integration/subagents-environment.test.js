@@ -34,12 +34,14 @@ run(
   'a child has its own workspace and shell while the parent is stopped',
   async t => {
     t.timeout(5 * 60_000);
-  const state = await startFromTemplate(await environmentsTemplate(), { t });
+    const state = await startFromTemplate(await environmentsTemplate(), { t });
     const slice = await makeSlice(state);
     const script = harden({
       turns: [
-        commandTurn('create child', [
+        commandTurn('mark parent', [
           [commandCall('sh', ['-c', 'printf parent > owner'])],
+        ]),
+        commandTurn('create child', [
           [toolCall('spawnSubagent', { name: 'helper' })],
           [
             toolCall('send', {
@@ -69,12 +71,22 @@ run(
     const parent = await startEnvironmentSession(slice, backend);
     const live = await slice.subscribe(parent);
     t.teardown(() => live.stop());
+    const workspace = (/** @type {string} */ key) =>
+      path.join(state.root, 'environments', 'sessions', key, 'workspace');
+    const baselineKeys = new Set(environmentKeys(state.root));
+    await runTurn(slice, parent, live, 'mark parent');
+    const newKeys = environmentKeys(state.root).filter(
+      key => !baselineKeys.has(key),
+    );
+    t.is(newKeys.length, 1);
+    const [parentKey] = newKeys;
+    const parentDir = workspace(parentKey);
+    t.is(await readFile(path.join(parentDir, 'owner'), 'utf8'), 'parent');
     const turn = await runTurn(slice, parent, live, 'create child');
     t.deepEqual(
       toolResultsOf(await turnRecords(turn.turn)).map(result => result.failed),
-      [false, false, false],
+      [false, false],
     );
-    const [parentKey] = environmentKeys(state.root);
     const mailbox = await E(E(slice.harness).getOperator()).getMail();
     const { messages } = await E(mailbox).list();
     const helper = await E(messages[0].message).take('helper');
@@ -83,13 +95,12 @@ run(
       harden({ task: 'record ownership', attachments: [], at: Date.now() }),
     );
     t.is(answer.text, 'done');
-    const keys = environmentKeys(state.root);
+    const keys = environmentKeys(state.root).filter(
+      key => !baselineKeys.has(key),
+    );
     t.is(keys.length, 2);
     const childKey = keys.find(key => key !== parentKey);
     t.truthy(childKey);
-    const workspace = (/** @type {string} */ key) =>
-      path.join(state.root, 'environments', 'sessions', key, 'workspace');
-    const parentDir = workspace(parentKey);
     const childDir = workspace(/** @type {string} */ (childKey));
     t.is(await readFile(path.join(parentDir, 'owner'), 'utf8'), 'parent');
     t.is(await readFile(path.join(childDir, 'owner'), 'utf8'), 'child');
