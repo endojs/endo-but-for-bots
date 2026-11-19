@@ -15218,3 +15218,97 @@ Reading: no command over 60 s (the package typecheck about 2 s; the unit test un
 integration file, supervisor or perf run (W8.4 has no perf row). Commit `7255a27223` and this
 journal commit; nothing pushed.
 Fit: neutral.
+
+### J-12200 2026-11-19 W8.3 the adapter's compaction step and its seams - built
+Evidence: `546ad9fab5` (behaviour), `f419a604f6` (tests); new
+`resources/agent-host/impl/providers/compaction-round.js`; seams S-10 (`projection.js`), S-11
+(`projection-hooks.js`), S-12 (`archive/store.js`), S-13 (`context-cache.js`), S-14
+(`endpoint.js`, `index.js`), S-15 (`round.js`, `api.js`, `subscriptions/provider.js`), S-16
+(`scripted.js`), S-17 (`guest/lib/transcript-records.js`), S-18 (`index.js`). New tests:
+`test/adapter/compaction-round.test.js` (14), `context-cache-compaction.test.js` (6),
+`compaction-scripted.test.js` (2), `image-tool-offered.test.js` (1), helper
+`test/adapter/_compaction-session.js`.
+Reading: a round whose request carries `compaction` runs step 2b after dispatch: the plan over
+the cache's plan input (`planInputOf`, kept once per projection when the endpoint prepares a
+request with an ask), the summary on the backend's own stream with `tools: []` (deltas not
+published, a tool call refuses, the text kept to one piece past `summaryMaxBytes`), the checks,
+the summary staged pending and named right before `compacted`, then `prepare` again with the
+session's `{ base, append }`. Skips report `skipped` and stream uncompacted; a failed summary
+call fails the round with the provider's fixed text; a stop, `go: false` or a break sends
+nothing more. The cache rebases in place (records and texts below the boundary and the whole
+sealed part dropped, then an ordinary append; `archive.compacted` off the path) and, on a
+rebuild with `epoch > 0`, reconciles the manifest first and starts the tail at max(`sealedTo`,
+boundary); `store.compacted` returns at once when the manifest agrees. The projection turns a
+`compaction` record into a marker at the end of its turn, marks results of turns settled other
+than `completed` `incomplete`, and counts a turn cut by the boundary as dispatched. Every kind's
+ports carry `viewImage` after the kind's tools. The scripted double answers `scriptedSummary`
+with no usage and logs its `context` line after the compaction (one line per round).
+Tests (direct, `THIX_AGENT=W8.3`): the four new files 23 tests and the affected suites
+(projection, cache, archive store, plan, hook, summary, oracle, scripted, Anthropic, OpenRouter,
+pools, wires, images, agent host, catalogue) 275 tests in one run, 62 s; all pass.
+Fit: good (see J-12203).
+
+### J-12201 2026-11-19 W8.3 cache prepares around a compaction - measured
+Evidence: scratch script over `perf/_window.mjs` `runWindow`/`windowMs` and `perf/_harness.mjs`
+`summarize` at `f419a604f6`, Node only (no supervisor), `PERF_WINDOW_SCALE=0.15` (9 s windows),
+a 400-turn session (about 2,800 records, about 1.1 KB of text a turn), under load from other
+lanes (load average 2.3-2.7).
+Reading: `cache.prepare.inStep` (one record appended, no ask) median 2.34 ms, p95 3.90, n 2,000;
+`cache.prepare.planInput` (the same with the plan input kept) median 3.30 ms, p95 4.97, n 2,000:
++1.0 ms on compaction rounds only (the slice and harden of the kept records); the rebase prepare
+after `compacted` median 2.16 ms, p95 4.63, n 398, 0 vat pages, 398 rebases, 1 rebuild (the
+first prepare) - inside the contract's `compaction.prepareAfter` budget (15 ms, 0 pages) with
+room. Rounds that do not compact are unchanged: no new message, crank or page; the only cost on
+them is one `next.compaction` read in the endpoint. Session program: W8.3 adds 0 bytes (no vat
+module changed; `transcript-records.js` is not in the session bundle); `node
+scripts/bundle-guest.mjs session` answers 239,354 at `f419a604f6`, the same as at W8.4's
+`7255a27223`.
+Fit: good.
+
+### J-12202 2026-11-19 W8.3 differences from the contract - finding
+Evidence: `546ad9fab5`, `f419a604f6`; `corepack yarn eslint` (`import/no-cycle` is on).
+Reading: (1) Import cycles. `projection.js -> projection-hooks.js -> compaction.js ->
+projection.js` (S-11) fails `import/no-cycle`; `projection.js` no longer imports the hook table:
+`projectRecords`' default `hooks` is now `[]` (every product caller already passed its hooks;
+the context cache runs `projectionHooks` once over sealed part and tail), so only tests that
+relied on the empty default see the change, with identical output for transcripts without
+markers. `round.js <-> compaction-round.js` likewise: `compactBeforeRound` does not import
+`round.js`; its caller resolves the system text (`systemTextOf`) and passes `system` and
+`failureOf(error)` (a `ProviderFailure`'s reason, else the kind's unexpected text). (2) The
+signature therefore has three options beyond the contract's: `system`, `failureOf`, and
+`label` (with it the result carries `servedBy`; the scripted double passes none). (3) The
+summary is staged with `stagePending` and named (`commit`) right before `compacted`, not with
+`stage`: a stop between the two deletes the `.part` (K3) instead of leaving a named orphan. (4)
+K3 and K4 are driven by faults of the fake session (`beforeCompacted`/`afterCompacted` in
+`_compaction-session.js`) and the blob store's trace hook, not by a fault hook in
+`compaction-round.js` (rule 4: no product branch only tests take). (5) A plan that throws (a
+defect) is reported `skipped` with `notCached` and logged `compaction-plan-failed` by error
+class. (6) Existing tests changed by the seams: `m1b-context-cache.test.js` pins
+`projectionHooks` to `[compactionHook]`; `m1a-agent-host.test.js` and
+`m4-provider-wiring.test.js` expect `viewImage` after the kind's tools. (7) `incomplete` changes
+the projection of every tool result of a failed, cancelled or outcome-unknown turn: a
+`context.jsonl` written before M8 lacks it, so a rebuild from it differs from an incremental
+projection by that flag until the file is rewritten; only the image receipts read it, and no
+image result predates M8. (8) The plan's own `dispatched` marker in `compaction.js`
+`projectSlice` is now redundant with the projection's cut-turn rule (W8.2's file, left).
+Fit: neutral.
+
+### J-12203 2026-11-19 W8.3 fit - finding
+Evidence: `context-cache-compaction.test.js` (the property: 3 seeds x 40 turns, 15-19 compactions
+each, every one a rebase, 78-87 comparisons of incremental, rebuild and oracle per seed),
+J-12201.
+Reading: what suits Thixotrope: the vat's base is the one truth and every adapter structure is a
+cache of it (the entry, the manifest, `context.jsonl`), so a restart at any of K3-K6 is a
+rebuild that reconciles, never a repair; the answered `compacted` call carries the next
+`{ base, append }`, so the rebase needs no vat page and the summary costs exactly one extra
+session delivery. What does not: the archive's `context.jsonl` stores per-segment projections,
+so a projection change (here `incomplete`) silently differs from files written before it; and
+the shared index makes the import graph a hazard (two cycles the contract's seams implied).
+Fit: good.
+
+### J-12204 2026-11-19 W8.3 time record - process
+Evidence: first command 2026-11-19T02:39:24Z, last 2026-11-19T03:06Z.
+Reading: commands over 60 s: the affected adapter suites (17 files, 62 s; 26 files, 62 s). No
+integration file, supervisor or run lock; no exclusive mode. Commits `546ad9fab5`, `f419a604f6`
+and this journal commit; nothing pushed.
+Fit: neutral.
