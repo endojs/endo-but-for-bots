@@ -18487,6 +18487,7 @@ operator acknowledgment (98 sends; 200 ms limit) and 176 posts in 61.369 s
 300 ms target). Inbox p95 was 500 ms (550 ms limit). Fresh hub bytes went
 from 272,283 to 572,539 (2.103×, limit 1.25×) after 325 attachment posts.
 The file exited 1. The short comparison and the full row are both retained.
+
 ### J-12551 2026-11-19 WX.F one-address admission and ordinary reply results
 
 d333ba1833 awaits the same admitted delivery for a one-address post,
@@ -18517,3 +18518,12 @@ in 121.605 s. The image grew 178,203 to 216,894 bytes and log 94,080
 to 355,645 bytes, total 272,283 to 572,539. Fresh log records were
 seven on this run and 82 in J-12550. There were 34 natural compactions
 during the window. Raw rows are in `/private/tmp/thix-qc-mail-single-final.log`.
+
+### J-1479 2026-11-19 WX.F single-recipient mail regression
+
+On the integrated source for `d333ba1833`, the full unit and adapter suite passed 2,005
+tests, skipped 168 and reported three TODOs. Type checking and lint
+completed with zero errors and 925 warnings. The three installed-daemon
+files passed all ten tests, including both mail restart cases. They held
+test slots for 492.2 s in total and finished in 645.2 s wall time including
+their waits. These checks used the pinned release worker.

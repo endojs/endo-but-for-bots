@@ -22,6 +22,10 @@ In the 19 collecting reply cranks the factory had a median of 83,242 allocated s
 2. Split `Interp::collect_garbage` into root enumeration, mark and ephemeron closure, dead-slot sweep, live chunk offset gathering and remapping, side-table cleanup and post-collection accounting. Record live slots before and after, arena capacity, edges visited and whether any offsets moved. The sweep and live chunk gathering traverse the arena's capacity. The offset rewrite runs when a remap exists. [VM collection entry point](../../../rust/engine/ironhorse-vm/src/interp/gc.rs) · [Collector](../../../rust/engine/ironhorse-vm/src/gc.rs) · [Slot arena](../../../rust/engine/ironhorse-vm/src/value.rs)
 3. Compare heaps with the same live graph and different prior high-water marks, then compare graphs with similar capacity and different numbers of outgoing edges. Preserve root and finalizer order and the persisted collection schedule. Check reclamation, replayed outbound frames, worker latency and complete mail throughput. The worker drains finalizers before taking outbound frames, and recovery must emit the same frames at the same journal sequence numbers. [Existing design and replay constraints, CC-022/023](../CORE-CHANGES.md#cc-022-2026-11-17-ironhorse-worker---collect-garbage-on-an-allocation-schedule)
 
+## Read the hub and the worker meters separately
+
+The hub image and write-ahead log describe persisted hub storage. In three full mail runs, the fresh-state growth ratios were 0.605×, 1.101× and 2.103×. In the last run the starting log was only seven records past compaction. Its physical log ended 261,565 bytes larger after 325 posts, while its image grew 38,691 bytes. Compare each component at both ends, including the number of natural compactions and pending log records. For a VM collection question, use per-worker slot, chunk and timing measurements instead. [Full mail baseline](../JOURNAL.md#j-12549-2026-11-19-wxf-fresh-mail-growth-baseline) · [Single-recipient follow-up](../JOURNAL.md#j-1478-2026-11-19-wxf-single-recipient-mail-comparison)
+
 ## Two local implementation experiments
 
 **Reuse mark traversal storage.** In `collect_full`, a visited slot's outgoing edges are gathered before the mutable mark step. Local commit `59dabaf09a` reuses one vector and drains it in the same order. The buffer stays alive until collection returns, so a wide node can determine its peak capacity. The change leaves the collection schedule, finalizer order and slot sweep order intact. The branch `codex/mail-gc-edge-scratch` is available in the harness Git repository. [Collector source](../../../rust/engine/ironhorse-vm/src/gc.rs) · [Existing heap benchmark](../../../rust/engine/ironhorse-snapshot/tests/gc_bench.rs)
@@ -39,6 +43,13 @@ The synthetic first collection improved 5.5–6.8%, and immediate repeats improv
 **Observe individual sweeps.** Local worker commit `3646bd8307` adds `timing.gcRounds` to timing-enabled deliveries. Each item gives `collectUs` and `notifyUs`; a null notification duration means the round ran no notification pass. It uses the clock readings that already produce the totals. An ordinary delivery allocates no vector storage for these fields. The bounded host test produced the same ordered frames for timed and untimed delivery. Two fresh worker processes also agreed under both the allocation and every-crank policies. The per-round figures summed to the existing collection and notification totals. The diagnostic is available on the local branch `codex/thix-worker-sweep-timing` (CC-131), independently of the mark-buffer experiment (CC-130). Read either patch with `git show 3646bd8307` or `git show 59dabaf09a` in the harness checkout. [Worker delivery and finalizer code](../../../rust/thixotrope-ironhorse-worker/src/main.rs)
 
 ## Reproducing the workload
+
+In each isolated core checkout, this runs the existing collector benchmark used above. Build the baseline and candidate first, then time the two resulting executables in counterbalanced order under the same machine reservation.
+
+```sh
+RUST_MIN_STACK=33554432 cargo test --offline --release -p ironhorse-snapshot \
+  --test gc_bench -- gc_cost_across_heap_sizes --ignored --nocapture --test-threads=1
+```
 
 For a repeatable starting point in the harness package, `corepack yarn exec node perf/crank.perf.mjs` measures direct-worker boot and session costs. The mid/late variants exercise larger sessions. `corepack yarn exec node perf/mail.perf.mjs` runs the release workload. Use the documented pinned worker, dependencies and a short `THIX_HARNESS_TMP` path. Keep the native worker timing, host request-to-reply time, outbound processing and end-to-end receipt time as separate measurements. [Worker benchmark](../perf/_crank.mjs) · [Run and fixture conventions](process.md)
 

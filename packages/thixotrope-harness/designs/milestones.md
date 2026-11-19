@@ -1959,29 +1959,29 @@ at `1881601aab`, load 1.9-3.2, 690.9 s held, 786 s of wall for the files; J-1226
 
 ## M9. Mail and subagents
 
-**Status: integrated with open performance gates.** The five daemon regression files passed
-12 tests across the recorded runs (J-12544). The combined branch also passed the stopped-mail
-and child-environment cases. On the linked build, all eight mail daemon tests passed
-(J-1461). In the exclusive full benchmark on `17bbccdfed`, operator acknowledgment
-passed at 146.447 ms median (95 sends, target 200 ms). Four senders and eight recipients
-completed and dismissed 164 replies in 61.420 s, or 2.670 posts/s against 3.
-Session-to-session delivery measured 349 ms against 300 ms. Inbox p95 passed at
-500 ms against 550 ms. The contractual fresh hub comparison passed at 0.605×
-(301 posts, 31 natural compactions, limit 1.25×). J-12549 records the image and log
-sizes; the earlier J-12547 ratio used the post-throughput state as its denominator.
-J-1458 traces time spent in collection on the previous acknowledgment path.
-The four-deliveries-per-forwarded-mail limit still needs a causally attributed count.
-A subsequent full run on `ecc7171aa2` reused the guarded operator-message
-class. It completed and dismissed 182 posts in 60.786 s (2.994131/s) and took
-205.186 ms median to acknowledge a send (104 samples). Both strict targets
-were still open. A collector microbenchmark overlapped part of the acknowledgment
-window. Session delivery measured 335 ms and fresh hub growth was 1.101× after
-353 posts. In the next full run, single-recipient admission at `d333ba1833`
-passed acknowledgment at 196.128 ms (98 sends) and missed throughput at
-2.868 posts/s (176 in 61.369 s). Fresh growth was 2.103× after 325 posts
-(J-1478). J-1476 records the collector measurements and isolated Ironhorse experiments.
-All three eight-child bursts and subtree stops passed. Ask overhead was 363 ms
-against 300 ms and spawn was 1,513 ms against 1,500 ms (J-12549).
+**Integrated with open performance gates.** On the latest unscaled run, operator
+acknowledgment passed at 196.128 ms. Four clients and eight recipients completed
+and dismissed 176 posts in 61.369 s, or 2.868 posts/s against the target of 3.
+
+| Full run on the pinned worker | Operator ACK median (limit 200 ms) | Completed posts / elapsed | Posts/s (target 3) | Session delivery (limit 300 ms) | Fresh hub growth (limit 1.25×) |
+|---|---:|---:|---:|---:|---:|
+| `17bbccdfed` (J-12549) | 146.447 ms, n=95 | 164 / 61.420 s | 2.670121 | 349 ms | 0.605× |
+| `ecc7171aa2` (J-12550) | 205.186 ms, n=104 | 182 / 60.786 s | 2.994131 | 335 ms | 1.101× |
+| `d333ba1833` (J-12551) | 196.128 ms, n=98 | 176 / 61.369 s | 2.867906 | 345 ms | 2.103× |
+
+A collector microbenchmark shared the host during part of the second run's ACK
+window. All three inbox p95 upper bounds were 500 ms (limit 550 ms). J-12549
+corrected the fresh hub denominator used in J-12547. J-1478 compares the
+single-recipient diagnostic with the full run. The factory and VM measurements
+are in the [Ironhorse performance note](ironhorse-performance.md).
+
+The five daemon regression files passed 12 tests across the recorded runs
+(J-12544). The combined branch also passed the stopped-mail and child-environment
+cases. All eight installed mail tests and both restart files passed on the latest
+source (J-1479). The four-deliveries-per-forwarded-mail gate still needs a causally
+attributed count. All three eight-child bursts and subtree stops passed. Ask
+overhead was 363 ms against 300 ms and spawn was 1,513 ms against 1,500 ms
+(J-12549).
 The ten mail, request and subagent tools are registered. With the production session
 linker, M9 adds 21,430 bytes to the WX.1 base of 115,502, within its 21,500-byte
 allocation. J-1460 gives both Git inputs, the exact command and the earlier J-12541 miss.
