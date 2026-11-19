@@ -34,6 +34,19 @@
  * session's handle (`texts.blobNotOwned`). A handle resolved after a restart
  * has no owner until the first session presents it.
  *
+ * Relay copies (m9-interfaces.md D-M9-4, 3.3, seam A1): `writersFor()`
+ * with no session answers the one `RelayWriters` exo, which only the
+ * factory holds (`AgentHostAdmin.writersFor()`); a session's
+ * `TurnPorts.writers` stays a `BlobWriters` without `copy`, so a session
+ * holding another session's handle cannot launder it. `copy(blob, {})`
+ * binds a fresh stock handle to a hard link of the blob's file (link to
+ * `<key>.part`, rename, directory fsync: a kill leaves a `.part` the sweep
+ * deletes, or one named file nothing refers to); with `maxUnits` or
+ * `suffix` it streams the text into a new file, cut with the R4-46 marker
+ * and followed by the suffix. A copy has no owner until the first session
+ * presents it (17.3 item 4), counts against the daemon quota only, and the
+ * source keeps its owner. Bytes never enter a vat.
+ *
  * Node only. Reading is in process (`read`, `readPage`); the `Content`
  * exo (content.js) answers vats from `readPage`; `writers` is the
  * `BlobWriters` exo of `TurnPorts.writers` (the exec vat writes large
@@ -45,6 +58,7 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import {
   open,
+  link,
   mkdir,
   readdir,
   readFile,
@@ -54,16 +68,18 @@ import {
 } from 'node:fs/promises';
 import { dirname, basename, join } from 'node:path';
 import { argv as processArgv, pid } from 'node:process';
+import { StringDecoder } from 'node:string_decoder';
 
 import { interfaces, textOf, texts } from '../../../guest/lib/interfaces.js';
+import { postOfficeTables } from '../../../guest/lib/guards/post-office.js';
 import { limits } from '../../../guest/lib/limits.js';
-import { previewText } from '../../../guest/lib/bounded.js';
+import { chunkText, previewText } from '../../../guest/lib/bounded.js';
 import { blobLimits } from '../../../config/defaults.js';
 import { makeTimers } from './timers.js';
 import { syncDirectory } from './files.js';
 /* eslint-enable import/no-relative-packages */
 
-const { makeExo } = /** @type {any} */ (globalThis);
+const { makeExo, Fail } = /** @type {any} */ (globalThis);
 
 /** The stock is refilled when it holds fewer handles than this (section 4.1). */
 export const STOCK_LOW = 8;
@@ -111,7 +127,12 @@ const isContinuation = byte => byte >= 0x80 && byte < 0xc0;
  *   one (resolved after a restart) becomes `owner`'s (J-9364)
  * @property {any} writers the BlobWriters exo (no owner)
  * @property {(owner: any) => any} writersFor a BlobWriters exo whose
- *   blobs are `owner`'s (its quota; TurnPorts.writers)
+ *   blobs are `owner`'s (its quota; TurnPorts.writers); with no owner, the
+ *   one `RelayWriters` exo (`open` and `copy`; the factory's, D-M9-4)
+ * @property {(blob: any, options?: CopyOptions) => Promise<StagedText>} copy
+ *   M9: a new ownerless handle bound to a copy of `blob`'s file (a hard
+ *   link, or with `maxUnits`/`suffix` a cut copy); `texts.blobUnknown` for
+ *   a handle it cannot resolve; the source keeps its owner
  * @property {() => Promise<void>} sweep once per incarnation (HR-SYN-9):
  *   deletes `*.part` (writes of an earlier incarnation that never completed
  *   or were never committed) and sets the daemon count to the bytes on
@@ -147,8 +168,53 @@ const isContinuation = byte => byte >= 0x80 && byte < 0xc0;
  *   a session's sealed blob bytes against its quota (once per incarnation,
  *   when its archive is first validated; 4.10 item 4)
  *
- * @typedef {'write' | 'fsync' | 'rename' | 'fsync-dir' | 'bind'} Step
+ * @typedef {{ maxUnits?: number, suffix?: string }} CopyOptions
+ *   `maxUnits`: at most that many units of the source before the suffix,
+ *   the R4-46 marker included when it is cut; `suffix`: written after it
+ *
+ * @typedef {'write' | 'fsync' | 'link' | 'rename' | 'fsync-dir' | 'bind'} Step
  */
+
+/** Bytes per read of a relay copy's source (its digest and preview pass). */
+const COPY_READ_BYTES = 65_536;
+
+/**
+ * Read the file at `path` in order, `chunkBytes` at a time; `onChunk` gets
+ * a view of a reused buffer (copy what it keeps).
+ * @param {string} path
+ * @param {number} chunkBytes
+ * @param {(chunk: Buffer) => unknown} onChunk
+ */
+const eachChunk = async (path, chunkBytes, onChunk) => {
+  const handle = await open(path, 'r');
+  try {
+    const buffer = Buffer.alloc(chunkBytes);
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const { bytesRead } = await handle.read(buffer, 0, chunkBytes, null);
+      if (bytesRead === 0) return;
+      // eslint-disable-next-line no-await-in-loop
+      await onChunk(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    await handle.close();
+  }
+};
+
+/**
+ * R4-46 for a text read as a stream: `prefix` (at least the first
+ * `maxUnits` units of a text of `total` units) bounded as `boundToolOutput`
+ * bounds a whole text.
+ * @param {string} prefix
+ * @param {number} total
+ * @param {number} maxUnits
+ */
+const boundStreamed = (prefix, total, maxUnits) => {
+  if (total <= maxUnits) return prefix;
+  const marker = textOf.truncationMarker(total);
+  if (marker.length >= maxUnits) return previewText(marker, maxUnits);
+  return `${previewText(prefix, maxUnits - marker.length)}${marker}`;
+};
 
 /**
  * The daemon's state directory, from the adapter process's bundle path:
@@ -293,6 +359,9 @@ export const makeBlobStore = ({
     swept: 0,
     released: 0,
     releasedBytes: 0,
+    linked: 0,
+    cutCopies: 0,
+    copiedBytes: 0,
   };
 
   /** @param {any} owner */
@@ -725,8 +794,12 @@ export const makeBlobStore = ({
   };
 
   let writerSerial = 0;
-  /** @param {any} owner */
-  const makeWriter = owner => {
+  /**
+   * A writer and its `drop` (a relay copy awaits the drop when it fails,
+   * so its bytes are refunded before it rejects).
+   * @param {any} owner
+   */
+  const openWriter = owner => {
     writerSerial += 1;
     const serial = writerSerial;
     /** @type {'open' | 'closed'} */
@@ -773,7 +846,7 @@ export const makeBlobStore = ({
       return result;
     };
 
-    return makeExo('BlobWriter', interfaces.BlobWriter, {
+    const writer = makeExo('BlobWriter', interfaces.BlobWriter, {
       /** @param {string} piece */
       append: piece =>
         inOrder(async () => {
@@ -818,7 +891,15 @@ export const makeBlobStore = ({
           }
           const { blob, key } = await take();
           await syncPart(key, handle);
-          await name([{ key, part: /** @type {string} */ (part) }]);
+          try {
+            await name([{ key, part: /** @type {string} */ (part) }]);
+          } catch (error) {
+            // Renamed but the directory fsync failed: the handle never
+            // leaves, so its named file goes too (`abort` removes the part
+            // file and refunds the bytes).
+            await unlink(join(path, key)).catch(() => {});
+            throw error;
+          }
           handle = undefined;
           state = 'closed';
           counts.writersOpen -= 1;
@@ -834,14 +915,149 @@ export const makeBlobStore = ({
         void drop();
       },
     });
+    return { writer, drop };
+  };
+  /** @param {any} owner */
+  const makeWriter = owner => openWriter(owner).writer;
+
+  /**
+   * A plain relay copy: a hard link of the source's file under a fresh
+   * stock key, named and the directory fsynced before the handle is bound
+   * (D-15). The digest and preview are the source's, read from its file.
+   * @param {{ path: string, bytes: number }} source
+   */
+  const linkCopy = async ({ path: from, bytes }) => {
+    const hash = createHash('sha256');
+    const headWant = limits.messagePreviewUnits * 3;
+    /** @type {Buffer[]} */
+    const head = [];
+    let headBytes = 0;
+    await eachChunk(from, COPY_READ_BYTES, chunk => {
+      hash.update(chunk);
+      if (headBytes < headWant) {
+        const piece = Buffer.from(chunk.subarray(0, headWant - headBytes));
+        head.push(piece);
+        headBytes += piece.length;
+      }
+    });
+    const preview = previewText(
+      new StringDecoder('utf8').write(Buffer.concat(head)),
+      limits.messagePreviewUnits,
+    );
+    await counted();
+    reserve(undefined, bytes);
+    try {
+      const path = await directory();
+      const { blob, key } = await take();
+      const part = join(path, `${key}.part`);
+      trace('link', key);
+      await link(from, part);
+      try {
+        await name([{ key, part }]);
+      } catch (error) {
+        await unlink(part).catch(() => {});
+        await unlink(join(path, key)).catch(() => {});
+        throw error;
+      }
+      bind(blob, { key, bytes });
+      counts.linked += 1;
+      counts.copiedBytes += bytes;
+      return harden({ blob, preview, bytes, digest: hash.digest('hex') });
+    } catch (error) {
+      charge(undefined, -bytes);
+      throw error;
+    }
   };
 
+  /**
+   * A cut relay copy: the source decoded as it is read, at most `maxUnits`
+   * of it kept (the R4-46 marker when cut), then `suffix`, written through
+   * an ownerless writer (piece quotas, fsync, rename, directory fsync). Without
+   * `maxUnits` every piece goes to the writer as it is read.
+   * @param {{ path: string }} source
+   * @param {CopyOptions} options
+   */
+  const cutCopy = async ({ path: from }, { maxUnits, suffix = '' }) => {
+    const { writer, drop: dropWriter } = openWriter(undefined);
+    const decoder = new StringDecoder('utf8');
+    /** @type {string[]} */
+    const kept = [];
+    let keptUnits = 0;
+    let total = 0;
+    /** @param {string} piece */
+    const accept = async piece => {
+      total += piece.length;
+      if (maxUnits === undefined) {
+        if (piece !== '') await writer.append(piece);
+      } else if (keptUnits <= maxUnits) {
+        kept.push(piece);
+        keptUnits += piece.length;
+      }
+    };
+    try {
+      // A piece of blobPieceBytes bytes decodes to at most as many units.
+      await eachChunk(from, limits.blobPieceBytes, chunk =>
+        accept(decoder.write(chunk)),
+      );
+      await accept(decoder.end());
+      const rest = `${
+        maxUnits === undefined
+          ? ''
+          : boundStreamed(kept.join(''), total, maxUnits)
+      }${suffix}`;
+      for (const piece of chunkText(rest, limits.blobPieceBytes)) {
+        // eslint-disable-next-line no-await-in-loop
+        await writer.append(piece);
+      }
+      const staged = await writer.close();
+      counts.cutCopies += 1;
+      counts.copiedBytes += staged.bytes;
+      return staged;
+    } catch (error) {
+      await dropWriter();
+      throw error;
+    }
+  };
+
+  /** @type {BlobStore['copy']} */
+  const copy = async (blob, { maxUnits, suffix } = {}) => {
+    maxUnits === undefined ||
+      (Number.isSafeInteger(maxUnits) && maxUnits >= 0) ||
+      Fail`copy maxUnits must be a non-negative integer`;
+    suffix === undefined ||
+      typeof suffix === 'string' ||
+      Fail`copy suffix must be a string`;
+    // No owner: the source is neither claimed nor checked (the factory
+    // relays a handle its sender holds; D-M9-4).
+    const source = await locate(blob);
+    if (maxUnits === undefined && (suffix === undefined || suffix === '')) {
+      return linkCopy(source);
+    }
+    return cutCopy(source, { maxUnits, suffix });
+  };
+
+  const relayWriters = makeExo(
+    'RelayWriters',
+    postOfficeTables().interfaces.RelayWriters,
+    {
+      open: async () => makeWriter(undefined),
+      /**
+       * @param {any} blob
+       * @param {CopyOptions} options
+       */
+      copy: (blob, options) => copy(blob, options),
+    },
+  );
+
   /** @param {any} [owner] */
-  const writersFor = owner =>
+  const sessionWriters = owner =>
     makeExo('BlobWriters', interfaces.BlobWriters, {
       open: async () => makeWriter(owner),
     });
-  const writers = writersFor(undefined);
+  /** @param {any} [owner] */
+  const writersFor = owner =>
+    owner === undefined ? relayWriters : sessionWriters(owner);
+  const writers = sessionWriters(undefined);
 
   /** @type {BlobStore['discard']} */
   const discard = async blob => {
@@ -950,6 +1166,7 @@ export const makeBlobStore = ({
     claim,
     writers,
     writersFor,
+    copy,
     sweep,
     knows: blob => known.has(blob),
     discard,
