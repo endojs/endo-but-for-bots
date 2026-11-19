@@ -32,7 +32,15 @@ thread_local! {
 ///
 /// Computes SHA-256 of the UTF-8 encoded input string.
 /// Returns the hash as a lowercase hex string.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sha256(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         let data = arg_str(the, 0);
         let hash = Sha256::digest(data.as_bytes());
@@ -43,7 +51,15 @@ pub unsafe extern "C" fn host_sha256(the: *mut XsMachine) {
 /// `sha256Bytes(uint8Array) -> ArrayBuffer`
 ///
 /// Computes SHA-256 over binary input and returns the 32 raw digest bytes.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sha256_bytes(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Argument 0 is copied out
+    // by `read_typed_array_bytes` (argc unchecked, UNVERIFIED there);
+    // `fxArrayBuffer` copies the 32 digest bytes from `hash`, which is live
+    // for the call.
     crate::worker_io::guard_ffi(|| unsafe {
         let data_slot = (*the).frame.sub(1);
         let data = crate::worker_io::read_typed_array_bytes(the, data_slot).unwrap_or_default();
@@ -64,7 +80,15 @@ pub unsafe extern "C" fn host_sha256_bytes(the: *mut XsMachine) {
 ///
 /// Returns 256 bits of cryptographically secure random data
 /// as a 64-character hex string.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_random_hex256(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads argument none (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         let mut buf = [0u8; 32];
         rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
@@ -78,7 +102,16 @@ pub unsafe extern "C" fn host_random_hex256(the: *mut XsMachine) {
 /// cryptographically secure random data — the byte-level primitive
 /// under the archive `crypto.getRandomValues` veneer, so it populates
 /// the caller's view directly with no hexadecimal round-trip.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_random_fill(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Argument 0 (argc
+    // unchecked, UNVERIFIED in `read_typed_array_bytes`) is measured, then
+    // filled by `write_typed_array_bytes`, which re-reads `byteLength` and
+    // writes only if `buf` still covers it, so a getter that changes its
+    // answer cannot cause an over-read of `buf`.
     crate::worker_io::guard_ffi(|| unsafe {
         let slot = (*the).frame.sub(1);
         let byte_length = crate::worker_io::typed_array_byte_length(the, slot);
@@ -95,7 +128,15 @@ pub unsafe extern "C" fn host_random_fill(the: *mut XsMachine) {
 ///
 /// Generates an Ed25519 keypair. Returns JSON:
 /// `{"publicKey":"<hex>","privateKey":"<hex>"}`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_ed25519_keygen(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads argument none (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
@@ -113,7 +154,15 @@ pub unsafe extern "C" fn host_ed25519_keygen(the: *mut XsMachine) {
 ///
 /// Signs a message with an Ed25519 private key.
 /// Both inputs are hex-encoded. Returns the signature as hex.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_ed25519_sign(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         let private_key_hex = arg_str(the, 0);
         let message_hex = arg_str(the, 1);
@@ -149,7 +198,15 @@ pub unsafe extern "C" fn host_ed25519_sign(the: *mut XsMachine) {
 /// `sha256Init() -> number`
 ///
 /// Creates a new incremental SHA-256 hasher and returns its handle.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads argument none (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         HASHER_MAP.with(|hasher_map| {
             let handle = NEXT_HASHER_HANDLE.fetch_add(1, Ordering::SeqCst);
@@ -164,7 +221,15 @@ pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
 /// `sha256Update(handle, data) -> undefined`
 ///
 /// Feeds data into an incremental SHA-256 hasher.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sha256_update(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         HASHER_MAP.with(|hasher_map| {
             let handle_slot = (*the).frame.sub(1);
@@ -184,7 +249,15 @@ pub unsafe extern "C" fn host_sha256_update(the: *mut XsMachine) {
 ///
 /// Feeds binary data (Uint8Array) into an incremental SHA-256 hasher.
 /// This bypasses the slow TextDecoder path used by `sha256Update`.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sha256_update_bytes(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         HASHER_MAP.with(|hasher_map| {
             let handle_slot = (*the).frame.sub(1);
@@ -205,7 +278,15 @@ pub unsafe extern "C" fn host_sha256_update_bytes(the: *mut XsMachine) {
 ///
 /// Finalizes the incremental SHA-256 hasher and returns the hex digest.
 /// The handle is consumed and cannot be reused.
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sha256_finish(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         HASHER_MAP.with(|hasher_map| {
             let handle_slot = (*the).frame.sub(1);
@@ -247,6 +328,12 @@ pub const CALLBACKS: &[crate::ffi::XsCallback] = &[
 ];
 
 /// Register all crypto host functions on the machine.
+///
+/// # Safety
+/// Nothing here is itself unsafe: it only calls `define_function`. The
+/// callbacks it installs dereference the machine's context as `HostPowers`,
+/// so call it (through `Machine::register_powers`) only once that context
+/// points at a `HostPowers` that outlives the machine.
 pub unsafe fn register(machine: &crate::Machine) {
     machine.define_function("sha256", host_sha256, 1);
     machine.define_function("randomHex256", host_random_hex256, 0);

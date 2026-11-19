@@ -243,7 +243,15 @@ fn query_all(conn: &Connection, sql: &str, params: &ParamSet) -> Result<JsonValu
 // ---------------------------------------------------------------------------
 
 /// `sqliteOpen(path) -> number | "Error: ..."`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sqlite_open(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         DB_MAP.with(|db_map| {
             let path = arg_str(the, 0);
@@ -281,7 +289,15 @@ pub unsafe extern "C" fn host_sqlite_open(the: *mut XsMachine) {
 }
 
 /// `sqliteClose(dbH) -> undefined`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sqlite_close(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         DB_MAP.with(|db_map| {
             STMT_MAP.with(|stmt_map| {
@@ -303,7 +319,15 @@ pub unsafe extern "C" fn host_sqlite_close(the: *mut XsMachine) {
 }
 
 /// `sqliteExec(dbH, sql) -> undefined | "Error: ..."`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sqlite_exec(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         DB_MAP.with(|db_map| {
             let handle_slot = (*the).frame.sub(1);
@@ -327,7 +351,15 @@ pub unsafe extern "C" fn host_sqlite_exec(the: *mut XsMachine) {
 }
 
 /// `sqlitePrepare(dbH, sql) -> number | "Error: ..."`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sqlite_prepare(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         DB_MAP.with(|db_map| {
             STMT_MAP.with(|stmt_map| {
@@ -359,7 +391,15 @@ pub unsafe extern "C" fn host_sqlite_prepare(the: *mut XsMachine) {
 }
 
 /// `sqliteStmtRun(stmtH, paramsJson) -> JSON | "Error: ..."`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sqlite_stmt_run(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         DB_MAP.with(|db_map| {
             STMT_MAP.with(|stmt_map| {
@@ -419,7 +459,15 @@ pub unsafe extern "C" fn host_sqlite_stmt_run(the: *mut XsMachine) {
 }
 
 /// `sqliteStmtGet(stmtH, paramsJson) -> JSON | "null" | "Error: ..."`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sqlite_stmt_get(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         DB_MAP.with(|db_map| {
             STMT_MAP.with(|stmt_map| {
@@ -476,7 +524,15 @@ pub unsafe extern "C" fn host_sqlite_stmt_get(the: *mut XsMachine) {
 }
 
 /// `sqliteStmtAll(stmtH, paramsJson) -> JSON | "Error: ..."`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sqlite_stmt_all(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads arguments 0, 1 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         DB_MAP.with(|db_map| {
             STMT_MAP.with(|stmt_map| {
@@ -530,7 +586,15 @@ pub unsafe extern "C" fn host_sqlite_stmt_all(the: *mut XsMachine) {
 }
 
 /// `sqliteStmtColumns(stmtH) -> JSON | "Error: ..."`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sqlite_stmt_columns(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         DB_MAP.with(|db_map| {
             STMT_MAP.with(|stmt_map| {
@@ -586,7 +650,15 @@ pub unsafe extern "C" fn host_sqlite_stmt_columns(the: *mut XsMachine) {
 }
 
 /// `sqliteStmtFinalize(stmtH) -> undefined`
+///
+/// # Safety
+/// An XS host callback: only XS may call it, under the host-callback
+/// contract described in `worker_io`.
 pub unsafe extern "C" fn host_sqlite_stmt_finalize(the: *mut XsMachine) {
+    // SAFETY: host-callback contract (`worker_io`). Reads argument 0 (argc
+    // unchecked, UNVERIFIED in `arg_str`); strings are copied into Rust before
+    // the next XS call, and results reach `xsResult` through helpers that copy
+    // into the XS heap.
     crate::worker_io::guard_ffi(|| unsafe {
         STMT_MAP.with(|stmt_map| {
             let handle_slot = (*the).frame.sub(1);
@@ -618,6 +690,12 @@ pub const CALLBACKS: &[crate::ffi::XsCallback] = &[
 ];
 
 /// Register all SQLite host functions on the machine.
+///
+/// # Safety
+/// Nothing here is itself unsafe: it only calls `define_function`. The
+/// callbacks it installs dereference the machine's context as `HostPowers`,
+/// so call it (through `Machine::register_powers`) only once that context
+/// points at a `HostPowers` that outlives the machine.
 pub unsafe fn register(machine: &crate::Machine) {
     machine.define_function("sqliteOpen", host_sqlite_open, 1);
     machine.define_function("sqliteClose", host_sqlite_close, 1);

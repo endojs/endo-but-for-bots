@@ -189,6 +189,10 @@ pub extern "C" fn rust_debug_recv(buffer: *mut c_char, capacity: c_int) -> c_int
             if n == 0 {
                 return 0;
             }
+            // SAFETY: XS's `fxReceive` passes a writable buffer of `capacity`
+            // bytes and `n <= capacity`. UNVERIFIED as an API: this is a safe
+            // `pub extern "C" fn`, so safe Rust may call it with any pointer;
+            // it should be `unsafe extern "C"`.
             let dst = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, n) };
             for (i, byte) in s.inbound.drain(..n).enumerate() {
                 dst[i] = byte;
@@ -206,6 +210,10 @@ pub extern "C" fn rust_debug_send(data: *const c_char, length: c_int) {
         if length <= 0 {
             return;
         }
+        // SAFETY: XS's `fxSend` passes `length` readable bytes at `data`, and
+        // `length > 0` was checked. UNVERIFIED as an API: a safe
+        // `pub extern "C" fn` dereferencing a caller's pointer; it should be
+        // `unsafe extern "C"`.
         let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, length as usize) };
         DEBUG_STATE.with(|cell| {
             cell.borrow_mut().outbound.extend(bytes);
