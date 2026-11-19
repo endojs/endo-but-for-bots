@@ -154,6 +154,14 @@ passed the 1,997 unit and adapter tests, with 167 skipped and three TODOs.
 | mail | `subagents-environment.test.js` | 117.5 | 246.6 |
 | mail | `mail-stopped-session.test.js` | 107.9 | 1,643.7 |
 
+Both full lists also ran during the fold, alongside exclusive measurements (J-1451).
+The 54-file milestone batch held the slots for 7,579.4 s and took 7,945.1 s elapsed.
+All 54 files have a passing result across the batch and six corrected reruns.
+The 25-file core batch held the slots for 6,188.7 s and took 8,230.1 s elapsed including
+its unit lane. Twenty-two files passed in full across the runs. The two remaining
+individual failures in `m1b-live` and `m2-turns` passed focused reruns. The modified
+`m1b-qc` file has no standalone pass. Both list times exceeded 20 minutes.
+
 Earlier full-list baseline: the step 3 close-out (T3-CLOSE, J-10251), 2026-11-19 00:09-00:37 UTC, at
 `804398c4d9` (lane `endo-thix-clean`, after the review's step 3, documents edited), 6 jobs in
 shared slots, load 2.0-4.3, with the long-session template chain (section 3.2) holding one slot

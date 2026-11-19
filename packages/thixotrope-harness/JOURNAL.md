@@ -17636,3 +17636,24 @@ failed result, recovered turn state, probe history digest, record count and
 exclusion of the never-dispatched turn. Recovery took 21.818 s. The test
 held its shared slot 199.8 s and waited 1,006.0 s. All 20 projection/cache
 and 11 provider image-wire tests passed.
+
+### J-1451 2026-11-19 WX.F wider regression lists and reruns
+
+Both original batches ran on the integration checkout as fixes landed. The milestone list
+returned exit 1 with 48 of 54 files passing. The six M3 files that failed in that batch
+all passed on corrected reruns, giving all 54 a passing file result. All four group
+acceptance files also passed together in the original list. Slot times were 85.6 s for
+voice preset, 74.7 s for workspace image, 79.2 s for child isolation and 74.7 s for
+stopped-session mail.
+
+The core batch returned exit 1 with 18 of 25 files passing. Four of the seven red files
+passed on rerun. The rename and recovered-history files each had one failing case, and
+both cases passed focused reruns (J-1470, J-1472). The remaining legacy worker-retirement
+file has no passing full rerun after its observer change. The combined exec benchmark
+observed one worker retire and the next turn complete. An isolated check of the new
+observer covered delayed removal and timeout. The original core batch's unit lane also
+failed on its intermediate checkout. The canonical unit and adapter run passed in J-1447.
+
+Core held slots for 6,188.7 s and took 8,230.1 s elapsed including units. The milestone
+list held slots for 7,579.4 s and took 7,945.1 s elapsed. Both exceeded the 20-minute
+list target. Shared wait and exclusive performance measurements overlapped these batches.

@@ -1476,8 +1476,10 @@ drops most of Endo's name plumbing.
 
 ## The group {M6, M8, M9, M11}: shared units, owner questions, core requests
 
-**Integrated locally (2026-11-19, J-1440..J-1450).** The first-parent merges are M11, M6, M8
-and M9. All four cross-lane tests passed on the combined daemon. Session and native manager
+**Integrated locally (2026-11-19, J-1440..J-1451).** The first-parent merges are M11, M6, M8
+and M9. All four cross-lane tests passed on the combined daemon, and all 54 milestone
+regression files passed across the wide run and reruns. J-1451 records the remaining
+core verification gap and elapsed-time misses. Session and native manager
 sizes met their whole-program limits. The individual outcomes and journal retain the missed
 performance gates, per-lane growth overage and remaining verification. The four contracts are the reference:
 `m6-interfaces.md`, `m8-interfaces.md`, `m9-interfaces.md`, `m11-interfaces.md`, settled against
