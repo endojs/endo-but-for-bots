@@ -152,12 +152,15 @@ export const regressionLists = Object.freeze({
     'test/browser/environment-ui.test.mjs',
   ]),
   context: Object.freeze(
-    ['compaction', 'compaction-restart', 'compaction-archive'].map(
-      name => `test/integration/${name}.test.js`,
-    ),
+    [
+      'compaction',
+      'compaction-restart',
+      'compaction-archive',
+      'view-image-workspace',
+    ].map(name => `test/integration/${name}.test.js`),
   ),
   mail: Object.freeze(
-    ['mail', 'mail-restart-delivery'].map(
+    ['mail', 'mail-restart-delivery', 'mail-stopped-session'].map(
       name => `test/integration/${name}.test.js`,
     ),
   ),

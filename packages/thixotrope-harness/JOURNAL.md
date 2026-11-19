@@ -17164,3 +17164,16 @@ Reading: whitespace and comments in the staged session script consumed 32,043 by
 input. A compact print retains binding names and the final expression that evaluates to the
 module namespace. The diagnostic build with comments retains the original generated source.
 The exec and factory programs keep their existing print path.
+
+### J-1442 2026-11-19 WX.F the four session parts together - measured
+
+Evidence: `c93de75818`, with M9's registration after the environment and compaction parts.
+The provisioner builds an ASCII session of 254,890 bytes (15,446 below the 270,336 limit),
+a factory of 245,846 and an exec program of 72,643. The smaller session is the program
+delivered to the guest. J-1441 describes its encoding.
+
+Reading: the merged recovery order includes subagents after the environment; the fixed tool
+table includes the shell pair, viewImage, mail, requests and subagents after the package tools.
+The original per-lane environment size experiment is J-12041; the combined test checks the
+environment and call-table modules in the bundle manifest and measures the whole installed
+session against the shared limit. The seven selected regression files passed 67 tests.

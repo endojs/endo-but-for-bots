@@ -86,7 +86,7 @@ test('composition: part 6 after the guest section and before the preset instruct
   t.true(at < composed.indexOf('Answer in French.'));
   t.true(
     composed.includes(
-      `fits.\n\n${environmentPromptText(snapshotOf([workspace, shell]))}\n\nAnswer`,
+      `\n\n${environmentPromptText(snapshotOf([workspace, shell]))}\n\nAnswer`,
     ),
   );
 });

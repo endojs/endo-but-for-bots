@@ -265,8 +265,12 @@ test('lookup of an object: one inspector methods call, then the cached names', a
 });
 
 test('the m5 fixture step is a no-op without options.m5Fixtures', async t => {
-  // A registered step file since the M5 merge (INT-M5): the last step run.
-  t.is((await allProvisionSteps()).at(-1), m5FixtureStep);
+  t.deepEqual(
+    (await allProvisionSteps()).filter(
+      step => step.name === m5FixtureStep.name,
+    ),
+    [m5FixtureStep],
+  );
   /** @type {any[]} */
   const calls = [];
   const client = {

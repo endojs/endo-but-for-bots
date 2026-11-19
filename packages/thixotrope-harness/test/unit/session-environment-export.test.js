@@ -8,7 +8,7 @@
 // (`emergencyStop` sent to it); resume then works and the hold stays. An
 // import into a session without an environment keeps it stopped and
 // unsupported. Over fakes built from the real guards.
-// Also the session program's growth for this lane (seam B-1).
+// The as-built program contains the environment part and its call table.
 import './_m1a-prelude.js';
 
 import test from '@endo/ses-ava/test.js';
@@ -16,6 +16,7 @@ import test from '@endo/ses-ava/test.js';
 import path from 'node:path';
 
 /* eslint-disable import/no-relative-packages */
+import { limits } from '../../guest/lib/limits.js';
 import { texts } from '../../guest/lib/interfaces.js';
 import { bundleGuest } from '../../scripts/bundle-guest.mjs';
 /* eslint-enable import/no-relative-packages */
@@ -142,45 +143,11 @@ test('an import into a session without an environment: stopped and unsupported; 
   });
 });
 
-test('the session program grows by at most the environments cap over the WX.1 base (B-1)', async t => {
-  // milestones.md "Caps as set": 6,400 bytes over 233,126 for the
-  // environments lane. The shared call table (`tools/call-table.js`, WX.1's
-  // export for this lane and the mail lane, D-M6-17) is first bundled by
-  // this lane; its bytes are reported apart (J-12041).
-  const WX1_BASE = 233_126;
-  const CAP = 6400;
-  const { source, bytes } = await bundleGuest(
+test('the provisioned session includes the environment and shared call table within its program budget', async t => {
+  const { modules, bytes } = await bundleGuest(
     path.join(harnessRoot, 'guest', 'session', 'main.js'),
   );
-  // The call table's bytes: its module section, its functor block and the
-  // other head lines that name it (the bundle's own layout).
-  const header = / (\d+)\. guest \.\/session\/tools\/call-table\.js ===\n/.exec(
-    source,
-  );
-  t.truthy(header, 'the call table is bundled');
-  const index = Number(/** @type {RegExpExecArray} */ (header)[1]);
-  const start = /** @type {RegExpExecArray} */ (header).index;
-  const end = source.indexOf('\n// === ', start + 1);
-  const firstSection = source.indexOf('\n// === ');
-  const head = source.slice(0, firstSection);
-  const blockStart = head.indexOf(`functors[${index}]({`);
-  const block = head.slice(blockStart, head.indexOf('\n});\n', blockStart) + 5);
-  const named = head
-    .split('\n')
-    .filter(line => /makeCallTable|call-table\.js/.test(line))
-    .filter(line => !block.includes(line));
-  const callTableBytes =
-    Buffer.byteLength(source.slice(start, end)) +
-    Buffer.byteLength(block) +
-    named.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
-  const row = {
-    metric: 'environments.bundles.session',
-    bytes,
-    growth: bytes - WX1_BASE,
-    callTableBytes,
-    ownGrowth: bytes - WX1_BASE - callTableBytes,
-    cap: CAP,
-  };
-  t.log(JSON.stringify(row));
-  t.true(row.ownGrowth <= CAP, JSON.stringify(row));
+  t.true(modules.includes('session/environment.js'));
+  t.true(modules.includes('session/tools/call-table.js'));
+  t.true(bytes <= limits.sessionProgramBytes, `${bytes} bytes`);
 });

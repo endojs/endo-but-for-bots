@@ -29,7 +29,7 @@ const runtimeOf = parts =>
     parts: harden(parts),
   });
 
-test('the table: powers, inspector, grants, exec, packages, environment, compaction; all required', t => {
+test('the table: powers, inspector, grants, exec, packages, environment, compaction, inbox, subagents; all required', t => {
   t.deepEqual(
     runtimeParts.map(part => part.name),
     [
@@ -40,6 +40,8 @@ test('the table: powers, inspector, grants, exec, packages, environment, compact
       'packages',
       'environment',
       'compaction',
+      'inbox',
+      'subagents',
     ],
   );
   t.deepEqual(
@@ -52,6 +54,8 @@ test('the table: powers, inspector, grants, exec, packages, environment, compact
       'packages',
       'environment',
       'compaction',
+      'inbox',
+      'subagents',
     ],
   );
   const runtime = /** @type {any} */ (runtimeOf(runtimeParts));
@@ -233,9 +237,6 @@ test('the context window option is the runtime member, undefined by default (WX.
     contextWindow,
   });
   t.is(runtime.contextWindow, contextWindow);
-  for (const name of ['inbox', 'subagents']) {
-    t.is(/** @type {any} */ (runtime)[name], undefined, name);
-  }
 });
 
 test('the static tool table follows the fixed tool order after the package entries (WX.1)', t => {
