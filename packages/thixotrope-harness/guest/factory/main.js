@@ -117,6 +117,7 @@ export const make = ({ host, vats }) => {
     pool,
     settings: harnessSettings,
     exports: kit.exports,
+    configureSpeech: kit.configureSpeech,
     startListenerFailure: () => held.failure,
   });
 };

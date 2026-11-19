@@ -203,6 +203,9 @@ export const NO_POOL_TEXT = 'This harness root has no spare pool';
  * @param {HarnessSettings} [powers.settings] the M2 settings (W2.7)
  * @param {{ exportPage: (cursor?: string) => any, importSession: (options: any) => Promise<any> }} [powers.exports]
  *   data-only export and importing (W2.7, `export.js`)
+ * @param {(settings: any) => any} [powers.configureSpeech] the factory's
+ *   `Voice` settings writer (M11 D-M11-21, `voice.js`); without it (M1a
+ *   tests) `configureSpeech` refuses with `voiceTexts.speechNotWired`
  * @param {() => string | undefined} [powers.startListenerFailure] the error
  *   of a failed start-listener registration (HR-GUEST-12): `status()`
  *   reports it, since the factory then has no restart recovery
@@ -215,8 +218,13 @@ export const makeHarnessRoot = ({
   pool,
   settings,
   exports,
+  configureSpeech,
   startListenerFailure = () => undefined,
 }) => {
+  const needSpeech = () => {
+    if (configureSpeech === undefined) throw Error(voiceTexts.speechNotWired);
+    return configureSpeech;
+  };
   const needExports = () => {
     if (exports === undefined) throw Error(NO_EXPORT_TEXT);
     return exports;
@@ -267,12 +275,12 @@ export const makeHarnessRoot = ({
     exportState: cursor => needExports().exportPage(cursor),
     /** @param {any} options M2 W2.7: a creation listed once imported */
     importSession: options => needExports().importSession(options),
-    // WX.1: the guard's speech method (m11-interfaces.md appendix A); the
-    // voice lane wires it (seam H2b) and keeps this refusal for a root
-    // made without it.
-    configureSpeech: () => {
-      throw Error(voiceTexts.speechNotWired);
-    },
+    /**
+     * M11 (D-M11-21, seam H2b): the speech settings, written on the
+     * provisioning path only (a page holds the `Operator`, not the root).
+     * @param {any} speech `shapes.SpeechSettings` (checked by the guard)
+     */
+    configureSpeech: speech => needSpeech()(speech),
   });
 };
 harden(makeHarnessRoot);
