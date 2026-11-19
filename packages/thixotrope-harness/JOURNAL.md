@@ -14950,3 +14950,77 @@ Reading: no command over 60 s (the longest, the related unit tests, 4 s; tsc 7 s
 `6fe72ae125`, `6eb43b9ced` and this journal commit; nothing pushed; no change to
 `packages/thixotrope` or `rust/**`.
 Fit: neutral.
+
+### J-12000 2026-11-19 W6.3b fake runtime and runner - built
+Evidence: `resources/environments/impl/runtime-fake.js`, `resources/environments/impl/runner.js`,
+`test/adapter/environments-fake-runtime.test.js` (10 tests), `test/adapter/environments-runner.test.js`
+(12 tests), commits `5499dd9974`, `3bffeb6bd5`; 22 tests pass, three runs in a row, about 3 s a run.
+Reading: the fake runtime (contract 5.3) spawns each command as a host child in its own process
+group (`detached`), in the workspace directory, stdin closed, with exactly A.3's six variables
+(`HOME` the session's home, `CARGO_HOME`, `RUSTUP_HOME`, `CARGO_TARGET_DIR`, `PATH` the home's
+`.cargo/bin` then `/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`); keeps the first `streamBytes` of
+each stream and drains the rest; on `timeoutMs` SIGTERM to the group, SIGKILL `killGraceMs` later;
+answers `RawResult` 200 ms after the leader exits even when a background process still holds the
+pipes (R3-46: it dies at the next stop). Each live group is one file `run/<pgid>`, written
+synchronously after the spawn and removed once the group has no live member, so `run/` holds live
+groups only; `stop`/`remove` SIGKILL every recorded and held group and wait (at most 2 s) until
+they are gone; `sweep(tag, { runDirs })` does the same for the records an earlier incarnation left,
+and removes without a signal a record older than the host's boot (its number may be anyone's now).
+Spawn failures reject with `runtimeFailed('<program>: <code>')`, never a host path. The runner
+(5.2) checks the allowlist (exact names) and the timeout (exo-shell's rule) before anything runs;
+starts a key lazily (owed stop, `layout.ensureWorkspace`, home 0700, `runtime.start`, shared by
+concurrent first commands); passes the 2 s grace and the 64 KiB cap from `environmentLimits`;
+schedules the idle stop on the adapter timers' `after` when a key's last command ends (cancelled by
+the next command); `stop` kills and stops and forgets the key; a failed stop leaves the key owed and
+the stop is retried before the key runs again (D-16; no quarantine); `release` is stop then
+`runtime.remove`; `sweep` lists `sessions/e<n>` and hands the run directories to the runtime.
+Retained state: one entry per started key and the owed keys, both bounded by `maxEnvironments`.
+Fit: good.
+
+### J-12001 2026-11-19 W6.3b fake runtime rates - measured
+Evidence: a scratch probe through `perf/_window.mjs` `runWindow` and `perf/_harness.mjs` `stats`,
+`node scripts/run-lock.mjs --shared`, three 10 s windows, at `6eb43b9ced` (dirty tree: other units'
+files), load 8.8-9.3.
+Reading: `runner.exec(['true'])` on a started key median 1.56 ms, p95 4.77 ms (n 5,203);
+a key's first command plus its stop (start, spawn, record, kill probe) median 1.92 ms, p95 5.65 ms
+(n 3,916); a command writing 10 MiB to stdout, drained with 64 KiB kept, median 29.0 ms, p95
+39.8 ms (n 325) - against 329 ms for J-0811's drain that kept everything. The runtime's own cost is
+two orders under `environments.runTrue`'s 150 ms budget, which is the vat and hub path's.
+Kill grace measured in the test: a script ignoring SIGTERM with `timeoutMs` 300 ends `SIGKILL`
+after 2.3 s; `stop` of a running `sleep 30` returns with the group gone in under 1 s (160-390 ms
+in the test runs).
+Fit: good.
+
+### J-12002 2026-11-19 W6.3b contract differences - finding
+Reading: (1) the fake's `sweep(tag)` cannot find its records from the tag alone (they live under
+each `sessions/e<n>/run/`, 5.1), and the layout of 5.2 has no listing: `Runtime.sweep` takes a
+second, optional argument `{ runDirs }` (the OCI runtimes ignore it), and the runner finds the
+sessions directory as two levels above `layout.dirsOf('e0').run` (5.1's shape, read from the layout
+rather than rebuilt). A layout method listing the keys would remove that derivation. (2)
+`makeFakeRuntime` takes two more optional options, `hostPath` and `bootTime`. (3) The runner's
+`release` stops and removes the container only: renaming the directory to `trash/` is
+`layout.release`, which the ops facet calls after it (4.6). (4) The runner's start-phase and stop
+errors are rewritten to `runtimeFailed(<code>)` with no `cause`: marshal would carry a cause, and
+its path, to the vat (D-M6-14). (5) A.3's variable list holds for the program run directly; `sh -c
+env` adds the shell's own `PWD`, `SHLVL` and `_`, so acceptance 18's integration check must allow
+those three.
+Fit: neutral.
+
+### J-12003 2026-11-19 W6.3b fit - finding
+Reading: what suits Thixotrope here: the runner is per incarnation and keeps nothing that must
+survive one: the next bind's `sweep` stops everything the last incarnation left, from records on
+disk, so a SIGKILL of the adapter or the supervisor loses nothing that matters, and no vat or crank
+takes part (idle stop is an adapter timer, as architecture 8 puts interactive timers). What does
+not suit: process groups are host state the object system cannot see or bound; the fake proves the
+lifecycle but not the isolation, a group number in a record can be reused within one boot after its
+group died (the boot-time check covers only an earlier boot), and between the spawn and the record
+write a SIGKILL can leave one unrecorded group (a window of one synchronous write).
+Fit: awkward.
+
+### J-12004 2026-11-19 W6.3b bundles and time record - process
+Evidence: `node scripts/bundle-guest.mjs session`; first command 2026-11-19T02:23:29Z.
+Reading: W6.3b adds no guest code (both modules are adapter modules): 0 of M6's 6,400 bytes (base
+233,126). The session program measured 242,048 in the shared working tree, all of it other units'
+uncommitted session edits. `lint:duplicates` 1.86 % (ceiling 2.05 %). No command over 60 s (the
+longest, the perf probe, 33 s). Nothing pushed; no change to `packages/thixotrope` or `rust/**`.
+Fit: neutral.
